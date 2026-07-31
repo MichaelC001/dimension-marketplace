@@ -8,6 +8,6 @@
 // boundary.
 import { mock } from "bun:test";
 
-mock.module("../../../fraym/packages/ui/src/features/file-view/pdf-view.tsx", () => ({
+mock.module("../../../../fraym/packages/ui/src/features/file-view/pdf-view.tsx", () => ({
 	PdfView: () => null,
 }));

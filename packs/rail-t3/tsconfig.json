@@ -1,5 +1,5 @@
 {
-	"extends": "../../fraym/tsconfig.base.json",
+	"extends": "../../../fraym/tsconfig.base.json",
 	"compilerOptions": {
 		"jsx": "react-jsx",
 		"lib": ["ES2024", "DOM", "DOM.Iterable"],
@@ -15,24 +15,24 @@
 		// tsconfig.typecheck.json — same config, paths overridden to `@types`.
 		"paths": {
 			"react": [
-				"../../fraym/packages/ui/node_modules/react/index.js",
-				"../../node_modules/@types/react/index.d.ts"
+				"../../../fraym/packages/ui/node_modules/react/index.js",
+				"../../../node_modules/@types/react/index.d.ts"
 			],
 			"react/jsx-runtime": [
-				"../../fraym/packages/ui/node_modules/react/jsx-runtime.js",
-				"../../node_modules/@types/react/jsx-runtime.d.ts"
+				"../../../fraym/packages/ui/node_modules/react/jsx-runtime.js",
+				"../../../node_modules/@types/react/jsx-runtime.d.ts"
 			],
 			"react/jsx-dev-runtime": [
-				"../../fraym/packages/ui/node_modules/react/jsx-dev-runtime.js",
-				"../../node_modules/@types/react/jsx-dev-runtime.d.ts"
+				"../../../fraym/packages/ui/node_modules/react/jsx-dev-runtime.js",
+				"../../../node_modules/@types/react/jsx-dev-runtime.d.ts"
 			],
 			"react-dom": [
-				"../../fraym/packages/ui/node_modules/react-dom/index.js",
-				"../../node_modules/@types/react-dom/index.d.ts"
+				"../../../fraym/packages/ui/node_modules/react-dom/index.js",
+				"../../../node_modules/@types/react-dom/index.d.ts"
 			],
 			"react-dom/client": [
-				"../../fraym/packages/ui/node_modules/react-dom/client.js",
-				"../../node_modules/@types/react-dom/client.d.ts"
+				"../../../fraym/packages/ui/node_modules/react-dom/client.js",
+				"../../../node_modules/@types/react-dom/client.d.ts"
 			]
 		}
 	},
