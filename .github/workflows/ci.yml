@@ -1,0 +1,17 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      # Packs consume @fraym/ui as a workspace dependency, so their tests run
+      # inside the Dimension monorepo (this repo is mounted there as the
+      # marketplace/ submodule). Standalone CI validates what is checkable
+      # standalone: the catalog and every pack's layout.
+      - run: bun scripts/validate-marketplace.mjs

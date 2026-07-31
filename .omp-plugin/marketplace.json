@@ -1,0 +1,25 @@
+{
+	"name": "dimension-marketplace",
+	"owner": {
+		"name": "Dimension"
+	},
+	"metadata": {
+		"description": "Community components, instruments, artifactories and spaces for the Dimension platform. Contracts closed, implementations open.",
+		"version": "0.1.0"
+	},
+	"plugins": [
+		{
+			"name": "rail-t3",
+			"source": "./packs/rail-t3",
+			"description": "A T3-Code-style session rail: live cards, quiet rows, a settled shelf. Implementation #2 of the rail slot contract, built entirely against Dimension's public contracts.",
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-marketplace",
+			"license": "MIT",
+			"category": "component",
+			"tags": ["rail", "implementation", "sessions"]
+		}
+	]
+}
