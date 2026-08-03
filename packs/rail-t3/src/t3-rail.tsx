@@ -65,13 +65,16 @@ function railActionIntent(
 	}
 }
 
-/** Color and label for a T3Status — T3's rule: color is reserved for
- *  act-now; Ready is the unlabeled resting state. */
+/** Status treatment — OURS, not T3's (owner 2026-08-03: "don't copy blatantly;
+ *  we have a vibr that shows working"). Color stays reserved for act-now, and
+ *  only act-now gets WORDS: attention/failed speak, working is a quiet breathing
+ *  dot (the product's own dot language — the Vibr narrates activity elsewhere),
+ *  done is a bare check glyph. Ready stays unmarked. */
 function statusDisplay(status: T3Status): {
 	color?: string;
-	label: string;
+	label?: string;
+	dot?: boolean;
 	icon?: IconName;
-	animate?: boolean;
 } {
 	switch (status) {
 		case "attention":
@@ -79,11 +82,11 @@ function statusDisplay(status: T3Status): {
 		case "failed":
 			return { color: "var(--fr-del)", label: "Failed" };
 		case "working":
-			return { color: "var(--fr-blue)", label: "Working", animate: true };
+			return { color: "var(--fr-blue)", dot: true };
 		case "done":
-			return { color: "var(--fr-add)", label: "Done", icon: "check" };
+			return { color: "var(--fr-add)", icon: "check" };
 		default:
-			return { label: "" };
+			return {};
 	}
 }
 
@@ -104,13 +107,7 @@ const LiveCard = memo(function LiveCard({
 	readonly onContextMenu: (item: SessionItem, event: MouseEvent<HTMLButtonElement>) => void;
 }) {
 	const display = statusDisplay(status);
-	const hasLabel = display.label !== "";
-	const fontWeight =
-		status === "attention" || status === "failed" || status === "done" || item.active ? "font-medium" : "font-normal";
-	const textColor =
-		status === "attention" || status === "failed" || status === "done" || item.active
-			? "text-fr-text"
-			: "text-fr-text-2";
+	const emphatic = status === "attention" || status === "failed" || item.active;
 
 	return (
 		<button
@@ -120,61 +117,57 @@ const LiveCard = memo(function LiveCard({
 				onContextMenu(item, e as unknown as MouseEvent<HTMLButtonElement>);
 			}}
 			className={cn(
-				"w-full rounded-md px-2.5 py-2 text-left transition-colors duration-[var(--fr-motion-fast)]",
-				"hover:bg-fr-surface-2/60",
-				isActive && "bg-fr-surface-2",
+				// a CARD — its own surface and hairline, so the live band reads as
+				// a division of the rail rather than a run of rows
+				"w-full rounded-lg border px-2.5 py-2 text-left transition-colors duration-[var(--fr-motion-fast)]",
+				isActive
+					? "border-fr-border bg-fr-surface-2"
+					: "border-fr-border-soft bg-fr-surface-1/50 hover:bg-fr-surface-2/60",
 			)}
 			style={{ contentVisibility: "auto" }}
 		>
-			{/* Line 1: group glyph + repo label + status */}
-			<div className="flex items-center justify-between gap-2 mb-1">
-				<div className="flex items-center gap-1.5 min-w-0">
+			{/* Line 1: group glyph + repo label · right: the status voice */}
+			<div className="mb-1 flex items-center justify-between gap-2">
+				<div className="flex min-w-0 items-center gap-1.5">
 					{group.image ? (
-						<img src={group.image} alt="" className="w-4 h-4 shrink-0 rounded" />
+						<img src={group.image} alt="" className="h-4 w-4 shrink-0 rounded" />
 					) : group.emoji ? (
-						<span className="w-4 h-4 shrink-0 text-center text-xs leading-4">{group.emoji}</span>
-					) : group.icon ? (
-						<Icon name={group.icon} className="w-4 h-4 shrink-0" />
+						<span className="h-4 w-4 shrink-0 text-center text-xs leading-4">{group.emoji}</span>
 					) : (
-						<Icon name="folder" className="w-4 h-4 shrink-0" />
+						<Icon name={group.icon ?? "folder"} className="h-4 w-4 shrink-0" />
 					)}
-					<span className="text-[10px] text-fr-text-3 truncate font-secondary">{group.repo}</span>
+					<span className="truncate font-secondary text-[10px] text-fr-text-3">{group.repo}</span>
 				</div>
-				{hasLabel && (
-					<div
-						className={cn(
-							"text-[10px] font-medium shrink-0 font-secondary flex items-center gap-1",
-							status === "working" && "flex items-center gap-1",
-						)}
-						style={{ color: display.color }}
-					>
-						{display.icon && status === "done" ? (
-							// Done pill: check icon + label in a pill
-							<div className="flex items-center gap-1 rounded px-1 bg-fr-add/10">
-								<Icon name={display.icon} className="w-3 h-3" />
-								<span>{display.label}</span>
-							</div>
-						) : display.icon && status === "working" ? (
-							// Working: pulsing dot + label
-							<>
-								<div className="w-1.5 h-1.5 rounded-full bg-fr-blue animate-pulse motion-reduce:animate-none" />
-								<span>{display.label}</span>
-							</>
-						) : (
-							// Attention, Failed: label only
-							<span>{display.label}</span>
-						)}
-					</div>
-				)}
+				<div className="flex shrink-0 items-center gap-1.5">
+					{display.label ? (
+						<span className="font-secondary text-[10px] font-medium" style={{ color: display.color }}>
+							{display.label}
+						</span>
+					) : display.icon ? (
+						<Icon name={display.icon} className="h-3 w-3" style={{ color: display.color }} />
+					) : display.dot ? (
+						<span
+							className="h-1.5 w-1.5 rounded-full animate-pulse motion-reduce:animate-none"
+							style={{ background: display.color }}
+						/>
+					) : null}
+					{item.time && <span className="font-secondary text-fr-2xs text-fr-text-3">{item.time}</span>}
+				</div>
 			</div>
 
 			{/* Line 2: title */}
-			<div className={cn("text-fr-sm mb-1 truncate", fontWeight, textColor)}>{item.title}</div>
+			<div
+				className={cn(
+					"mb-1 truncate text-fr-sm",
+					emphatic ? "font-medium text-fr-text" : "font-normal text-fr-text-2",
+				)}
+			>
+				{item.title}
+			</div>
 
-			{/* Line 3: branch + time */}
-			<div className="flex items-center justify-between gap-2 text-fr-2xs text-fr-text-3 font-secondary">
-				<span className="truncate">{item.worktreeBranch || item.branch || group.branch || ""}</span>
-				{item.time && <span className="shrink-0">{item.time}</span>}
+			{/* Line 3: branch, mono, quiet */}
+			<div className="truncate font-secondary text-fr-2xs text-fr-text-3">
+				{item.worktreeBranch || item.branch || group.branch || ""}
 			</div>
 		</button>
 	);
@@ -200,14 +193,20 @@ const QuietRow = memo(function QuietRow({
 				onContextMenu(item, e as unknown as MouseEvent<HTMLButtonElement>);
 			}}
 			className={cn(
-				"h-9 w-full rounded-md px-2.5 flex items-center gap-2",
-				"opacity-70 hover:opacity-100 transition-opacity duration-[var(--fr-motion-fast)]",
+				"flex h-8 w-full items-center gap-2 rounded-md px-2.5 text-left",
+				"opacity-65 transition-opacity duration-[var(--fr-motion-fast)] hover:opacity-100",
 			)}
 			style={{ contentVisibility: "auto" }}
 		>
-			<span className="w-1.5 h-1.5 rounded-full bg-fr-text-3/40 shrink-0" />
-			<span className="text-fr-xs text-fr-text-2 truncate flex-1">{item.title}</span>
-			{item.time && <span className="text-fr-2xs text-fr-text-3 font-secondary shrink-0">{item.time}</span>}
+			{group.image ? (
+				<img src={group.image} alt="" className="h-3.5 w-3.5 shrink-0 rounded" />
+			) : group.emoji ? (
+				<span className="h-3.5 w-3.5 shrink-0 text-center text-[10px] leading-[14px]">{group.emoji}</span>
+			) : (
+				<Icon name={group.icon ?? "folder"} className="h-3.5 w-3.5 shrink-0 text-fr-text-3" />
+			)}
+			<span className="min-w-0 flex-1 truncate text-left text-fr-xs text-fr-text-2">{item.title}</span>
+			{item.time && <span className="shrink-0 font-secondary text-fr-2xs text-fr-text-3">{item.time}</span>}
 		</button>
 	);
 });
@@ -291,7 +290,10 @@ const QuietPager = memo(function QuietPager({
 export function T3Rail(props: RailSlotProps): ReactElement {
 	const compact = props.railMode === "compact";
 	const actions = props.spaces.find(s => s.id === props.appMode)?.rail.actions ?? [];
-	const partition = partitionSessions(props.groups, props.sessionSearch);
+	// Project chips — the up-front division: All, or one project's slice.
+	const [projectFilter, setProjectFilter] = useState<string | null>(null);
+	const visibleGroups = projectFilter ? props.groups.filter(g => g.repo === projectFilter) : props.groups;
+	const partition = partitionSessions(visibleGroups, props.sessionSearch);
 
 	const handleActionClick = useCallback(
 		(action: RailActionDef) => {
@@ -342,27 +344,66 @@ export function T3Rail(props: RailSlotProps): ReactElement {
 				})}
 			</div>
 
-			{/* Search */}
+			{/* Search — reads as a FIELD even closed, opening into the real input */}
 			{!compact && (
-				<div className="px-1.5 py-2 border-b border-fr-border-soft">
+				<div className="px-1.5 pb-1 pt-2">
 					{props.sessionSearchOpen ? (
 						<input
 							ref={props.searchInputRef as RefObject<HTMLInputElement>}
 							type="text"
 							value={props.sessionSearch}
 							onChange={e => props.onSessionSearchChange(e.target.value)}
-							placeholder="Search sessions..."
-							className="w-full h-7 px-2.5 rounded-md bg-fr-surface-2 text-fr-xs text-fr-text placeholder-fr-text-3 border border-fr-border focus:outline-none focus:border-fr-accent"
+							placeholder="Search sessions…"
+							className="h-7 w-full rounded-md border border-fr-border bg-fr-surface-2 px-2.5 text-fr-xs text-fr-text placeholder-fr-text-3 focus:border-fr-accent focus:outline-none"
 							autoFocus
 						/>
 					) : (
 						<button
 							onClick={() => props.onSessionSearchOpenChange(true)}
-							className="h-7 w-full rounded-md px-2.5 flex items-center justify-center hover:bg-fr-surface-2/60 transition-colors"
+							className="flex h-7 w-full items-center gap-2 rounded-md border border-fr-border-soft bg-fr-surface-1/60 px-2.5 text-fr-xs text-fr-text-3 transition-colors hover:border-fr-border hover:text-fr-text-2"
 						>
-							<Icon name="search" className="w-4 h-4 text-fr-text-2" />
+							<Icon name="search" className="h-3.5 w-3.5" />
+							<span>Search</span>
 						</button>
 					)}
+				</div>
+			)}
+
+			{/* Project chips: the first division — what the list is ABOUT */}
+			{!compact && props.groups.length > 1 && (
+				<div className="flex items-center gap-1 overflow-x-auto border-b border-fr-border-soft px-1.5 pb-2 pt-1 [scrollbar-width:none]">
+					<button
+						onClick={() => setProjectFilter(null)}
+						className={cn(
+							"h-6 shrink-0 rounded-full px-2.5 text-fr-2xs transition-colors",
+							projectFilter === null
+								? "bg-fr-surface-3 text-fr-text"
+								: "text-fr-text-3 hover:bg-fr-surface-2 hover:text-fr-text-2",
+						)}
+					>
+						All
+					</button>
+					{props.groups.map(group => (
+						<button
+							key={group.repo}
+							onClick={() => setProjectFilter(current => (current === group.repo ? null : group.repo))}
+							className={cn(
+								"flex h-6 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-fr-2xs transition-colors",
+								projectFilter === group.repo
+									? "bg-fr-surface-3 text-fr-text"
+									: "text-fr-text-3 hover:bg-fr-surface-2 hover:text-fr-text-2",
+							)}
+						>
+							{group.image ? (
+								<img src={group.image} alt="" className="h-3 w-3 rounded-sm" />
+							) : group.emoji ? (
+								<span className="text-[10px] leading-none">{group.emoji}</span>
+							) : (
+								<Icon name={group.icon ?? "folder"} className="h-3 w-3" />
+							)}
+							<span className="max-w-[9ch] truncate">{group.repo}</span>
+						</button>
+					))}
 				</div>
 			)}
 
@@ -392,7 +433,9 @@ export function T3Rail(props: RailSlotProps): ReactElement {
 					) : null}
 
 					{partition.quiet.length > 0 && (
-						<div className="space-y-1 pt-2">
+						<div className="pt-1">
+							{/* the second division: a hairline, then the receded stream */}
+							{partition.live.length > 0 && <div className="mx-2.5 my-2 border-t border-fr-border-soft" />}
 							<QuietPager
 								rows={partition.quiet}
 								onSelect={props.onSessionSelect}
