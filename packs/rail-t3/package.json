@@ -11,15 +11,12 @@
 		"check:types": "tsc -p tsconfig.typecheck.json --noEmit",
 		"test": "bun test"
 	},
-	"dependencies": {
-		"@fraym/driver": "workspace:*",
-		"@fraym/ui": "workspace:*"
-	},
 	"peerDependencies": {
 		"react": "*",
 		"react-dom": "*"
 	},
 	"devDependencies": {
+		"@fraym/ui": "workspace:*",
 		"@types/bun": "catalog:"
 	}
 }

@@ -1,7 +1,18 @@
 {
+	// The AUTHORING config: `@fraym/ui` resolves to the VENDORED contract
+	// declarations, not to the monorepo. This is the config that proves the
+	// claim in `types/README.md` — a pack can be typed against the real slot
+	// contracts with no `fraym/` checkout on disk.
+	//
+	// `tsconfig.json` (the RUNTIME config Bun reads for `bun test`) deliberately
+	// still points at the real library: mounting the shipped rail in a
+	// conformance test needs executable React, and a `.d.ts` is not executable.
+	// That split is the honest shape of the fence (doc 44 §15): authorable
+	// standalone, not installable standalone.
 	"extends": "./tsconfig.json",
 	"compilerOptions": {
 		"paths": {
+			"@fraym/ui": ["./types/fraym-ui.d.ts"],
 			"react": ["../../../node_modules/@types/react/index.d.ts"],
 			"react/jsx-runtime": ["../../../node_modules/@types/react/jsx-runtime.d.ts"],
 			"react/jsx-dev-runtime": ["../../../node_modules/@types/react/jsx-dev-runtime.d.ts"],
