@@ -1,0 +1,17 @@
+{
+	"name": "@dimension/session-board",
+	"author": "Dimension",
+	"version": "0.1.0",
+	"description": "Sessions - a mission-control dock instrument: every session partitioned by urgency (needs you / working / idle), switchable in one click. Contributed through @dimension/sdk/instrument; import surface: react only.",
+	"type": "module",
+	"main": "./src/index.ts",
+	"types": "./src/index.ts",
+	"private": true,
+	"scripts": {
+		"test": "bun test"
+	},
+	"peerDependencies": {
+		"react": ">=19"
+	},
+	"keywords": ["instrument", "dock", "sessions", "store", "assembly"]
+}
