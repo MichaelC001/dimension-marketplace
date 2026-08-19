@@ -1,0 +1,7 @@
+{
+	"plugin": "mochi-mark",
+	"contractVersion": 1,
+	"title": "Mochi Mark",
+	"type": "component",
+	"slot": "mark"
+}

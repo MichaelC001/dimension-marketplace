@@ -1,0 +1,17 @@
+{
+	"name": "@dimension/three-lane",
+	"author": "Dimension",
+	"version": "0.1.0",
+	"description": "Three Lane — a demo LAYOUT plugin that declares its own slots (doc 68 §4.1). The assembly-spine thesis pack: geography from a plugin nobody hand-wired.",
+	"type": "module",
+	"main": "./src/index.ts",
+	"types": "./src/index.ts",
+	"private": true,
+	"omp": {
+		"name": "three-lane",
+		"description": "Three Lane — a demo layout declaring its own slots, plus the Demo Lane space that assembles on it.",
+		"defaultEnabled": true,
+		"category": "layout",
+		"keywords": ["layout", "space", "demo", "assembly"]
+	}
+}

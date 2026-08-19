@@ -1,0 +1,53 @@
+{
+	"plugin": "three-lane",
+	"contractVersion": 1,
+	"title": "Three Lane",
+	"type": "layout",
+	"slots": [
+		{ "id": "lane-left", "contract": "rail", "items": "sessions" },
+		{ "id": "lane-main", "contract": "workspace" },
+		{ "id": "lane-dock", "contract": "dock" },
+		{ "id": "badge", "contract": "mark" }
+	],
+	"spaces": [
+		{
+			"specVersion": 1,
+			"id": "demo-lane",
+			"label": "Demo Lane",
+			"icon": "layers",
+			"order": 90,
+			"description": "The assembly-spine thesis demo: a space assembled from parts nobody in this repo hand-wired — this plugin's own layout, filled by another plugin's mark.",
+			"mark": {
+				"fill": "mochi-mark",
+				"accent": "#f2a3c2",
+				"label": "Demo Lane"
+			},
+			"layout": "three-lane",
+			"components": {
+				"badge": "mochi-mark"
+			},
+			"rail": {
+				"preferredMode": "compact",
+				"actions": [
+					{
+						"id": "demo-new-session",
+						"label": "New session",
+						"icon": "plus",
+						"target": "new-session",
+						"primary": true
+					}
+				]
+			},
+			"workspace": {
+				"surfaces": ["session"],
+				"start": "session",
+				"session": "session",
+				"switchPolicy": "remember"
+			},
+			"generalAgents": {
+				"list": "discoverable",
+				"default": "coding"
+			}
+		}
+	]
+}
