@@ -1,0 +1,20 @@
+{
+	"name": "@dimension/pulse-mark",
+	"author": "Dimension",
+	"version": "0.1.0",
+	"description": "Pulse Mark — the Store's demo COMPONENT: a mark that glows while any session is working, drawn with the author's OWN styling (zero Fraym UI), fed by read/watch through the one granted binding.",
+	"type": "module",
+	"main": "./src/index.ts",
+	"types": "./src/index.ts",
+	"private": true,
+	"peerDependencies": {
+		"react": ">=19"
+	},
+	"omp": {
+		"name": "pulse-mark",
+		"description": "Pulse Mark — a demo mark component: an activity beacon that pulses while any session is running.",
+		"defaultEnabled": true,
+		"category": "component",
+		"keywords": ["component", "mark", "demo", "store"]
+	}
+}
