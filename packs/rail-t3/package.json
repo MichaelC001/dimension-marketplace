@@ -18,5 +18,16 @@
 	"devDependencies": {
 		"@fraym/ui": "workspace:*",
 		"@types/bun": "catalog:"
+	},
+	"omp": {
+		"name": "rail-t3",
+		"description": "T3 Rail - a T3-Code-style session rail: live cards, quiet rows, a settled shelf. A production alternative to rail-classic.",
+		"defaultEnabled": true,
+		"category": "component",
+		"keywords": [
+			"component",
+			"rail",
+			"sessions"
+		]
 	}
 }
