@@ -13,5 +13,23 @@
 	"peerDependencies": {
 		"react": ">=19"
 	},
-	"keywords": ["instrument", "dock", "sessions", "store", "assembly"]
+	"keywords": [
+		"instrument",
+		"dock",
+		"sessions",
+		"store",
+		"assembly"
+	],
+	"omp": {
+		"name": "session-board",
+		"description": "Sessions - mission control in the dock: blocked / working / idle, one-click switching. The first contributed instrument.",
+		"defaultEnabled": true,
+		"category": "instrument",
+		"keywords": [
+			"instrument",
+			"dock",
+			"sessions",
+			"store"
+		]
+	}
 }

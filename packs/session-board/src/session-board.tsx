@@ -99,6 +99,16 @@ function Row({
 				event.currentTarget.style.background = "transparent";
 				event.currentTarget.style.borderColor = "transparent";
 			}}
+			// Keyboard parity for the hover affordance (review 2026-08-19): a
+			// tabbing user gets the same highlight, not only the UA focus ring.
+			onFocus={event => {
+				event.currentTarget.style.background = "var(--fr-surface-2, rgba(127,127,127,0.08))";
+				event.currentTarget.style.borderColor = "var(--fr-border-soft, transparent)";
+			}}
+			onBlur={event => {
+				event.currentTarget.style.background = "transparent";
+				event.currentTarget.style.borderColor = "transparent";
+			}}
 		>
 			<span
 				data-kind={kind}
@@ -109,7 +119,7 @@ function Row({
 					flexShrink: 0,
 					background: kind === "idle" ? "transparent" : dot,
 					border: kind === "idle" ? `1.5px solid ${dot}` : "none",
-					animation: kind === "working" ? "sb-breathe 2.4s ease-in-out infinite" : "none",
+					animation: kind === "working" ? "dimension-session-board-breathe 2.4s ease-in-out infinite" : "none",
 				}}
 			/>
 			<span style={{ minWidth: 0, flex: 1 }}>
@@ -176,7 +186,10 @@ export function SessionBoard({ store }: SessionBoardProps): ReactNode {
 	const empty = partition.needsYou.length + partition.working.length + partition.idle.length === 0;
 	return (
 		<div data-slot="session-board" style={{ height: "100%", overflowY: "auto", padding: "4px 8px 12px" }}>
-			<style>{`@keyframes sb-breathe{0%,100%{opacity:1}50%{opacity:.45}}@media (prefers-reduced-motion: reduce){[data-slot="session-board"] [data-kind="working"]{animation:none !important}}`}</style>
+			{/* `precedence` makes React HOIST and DEDUPE this tag (one copy however
+			    many boards mount); the keyframes name is package-namespaced so no
+			    other pack's `breathe` can silently win (review 2026-08-19). */}
+			<style href="dimension-session-board" precedence="low">{`@keyframes dimension-session-board-breathe{0%,100%{opacity:1}50%{opacity:.45}}@media (prefers-reduced-motion: reduce){[data-slot="session-board"] [data-kind="working"]{animation:none !important}}`}</style>
 			{empty ? (
 				<div style={{ padding: "24px 8px", fontSize: 12, textAlign: "center", ...text(3) }}>
 					No sessions yet — the board fills as you open them.

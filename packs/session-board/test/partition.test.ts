@@ -20,6 +20,17 @@ describe("partitionBoard", () => {
 		expect(p.idle.map(r => r.id)).toEqual(["c"]);
 	});
 
+	test("every LIVE state counts as working - running, background, attached", () => {
+		const p = partitionBoard([
+			session({ id: "r", liveStatus: "running" }),
+			session({ id: "b", liveStatus: "background" }),
+			session({ id: "a", liveStatus: "attached" }),
+			session({ id: "i", liveStatus: "settled" }),
+		]);
+		expect(p.working.map(r => r.id).sort()).toEqual(["a", "b", "r"]);
+		expect(p.idle.map(r => r.id)).toEqual(["i"]);
+	});
+
 	test("archived sessions never appear, whatever their state", () => {
 		const p = partitionBoard([
 			session({ id: "a", archivedAt: 5, blockedOnInput: true }),

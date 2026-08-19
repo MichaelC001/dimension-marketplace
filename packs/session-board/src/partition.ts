@@ -63,9 +63,13 @@ const byRecency = (a: BoardRow, b: BoardRow) => b.updatedAt - a.updatedAt;
 
 /**
  * Partition the catalog: blocked → working → idle, each newest-first.
- * Archived sessions are the board's one exclusion — a board that lists the
- * closed shelf stops being "what needs me" and becomes history, which the
- * rail's settled shelf already owns.
+ * "Working" is any LIVE state — `running`, `background` (grinding without
+ * the foreground), `attached` (a live engine child) — because the board's
+ * question is "who needs me / who is busy", and a session doing background
+ * work reading as Idle answers it wrongly (review 2026-08-19). Archived
+ * sessions are the one exclusion — a board that lists the closed shelf
+ * stops being "what needs me" and becomes history, which the rail's
+ * settled shelf already owns.
  */
 export function partitionBoard(sessions: readonly BoardSession[]): BoardPartition {
 	const needsYou: BoardRow[] = [];
@@ -76,7 +80,12 @@ export function partitionBoard(sessions: readonly BoardSession[]): BoardPartitio
 		const row = toRow(session);
 		if (!row) continue;
 		if (session.blockedOnInput === true) needsYou.push(row);
-		else if (session.liveStatus === "running") working.push(row);
+		else if (
+			session.liveStatus === "running" ||
+			session.liveStatus === "background" ||
+			session.liveStatus === "attached"
+		)
+			working.push(row);
 		else idle.push(row);
 	}
 	needsYou.sort(byRecency);
