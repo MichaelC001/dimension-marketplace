@@ -1,53 +1,62 @@
-// Pulse Mark — the STORE's demo component, and the answer to "what does a
-// third-party author import?" (doc 68 §3 + §9.1 Q1). This file is written the
-// way a stranger with their own design system (shadcn, their own tokens,
-// whatever) would write it:
+// Pulse Mark — the Store's demo component, and the answer to "what does a
+// third-party author import?" (doc 68 §3 + §3.5).
 //
-//   THE ENTIRE IMPORT SURFACE — three lines, two grants and a type:
+//   THE ENTIRE IMPORT SURFACE: `react`. Nothing else. Look at line 1.
 //
-//   1. `react`                       — the runtime grant every component gets.
-//   2. `useStoreKey` from `@fraym/ui` — the ONE granted binding. This is not
-//      "using Fraym's UI": no Fraym component, class, token, or style is
-//      imported — the kit here is only the door the HOST's Store arrives
-//      through (doc 68 §3.7: the kit holds the ~20-line React binding; the
-//      instance, the key space, and every writer live in the product).
-//   3. `type SessionSnapshot` from `@fraym/driver` — TYPES ONLY, erased at
-//      compile; the contract package has zero dependencies precisely so a
-//      pack can lean on it without inheriting anything.
+// The author's UI library is their own business — the inline styles below
+// stand in for shadcn, their tokens, anything. The HOST's facts arrive the
+// same way the rest of their props do: the mount boundary (`SlotFill`) hands
+// the Store IN as the `store` prop, and React's BUILT-IN
+// `useSyncExternalStore` consumes the contract's `{getSnapshot, subscribe}`
+// shape directly — the contract is framework-free on purpose (doc 68 §3.4),
+// so no kit binding is required to read it. (`useStoreKey` from `@fraym/ui`
+// exists as optional sugar — selector-gated re-renders — for authors who
+// WANT a dependency; this file demonstrates the floor: zero.)
 //
-// Everything drawn below is the author's own: inline styles standing in for
-// their design system. Swap them for shadcn primitives and nothing else in
-// this file changes — that is the point.
-//
-// Data flow (the three verbs, doc 68 §3.2): this component NAMES A KEY —
-// `sessions/list`, root scope — and selects "is anything running" out of it.
-// It re-renders only when that boolean flips (selector-gated), never per
-// session event. It never writes: a mark has NO intent channel by contract
-// (the host owns the click), so `act` does not appear here.
+// Both the store handle and the props are typed STRUCTURALLY: matching is by
+// slot NAME and published shape (doc 68 §4.1/§3.3), never by a shared type
+// import. A component written against a newer host degrades honestly — an
+// unknown key reads `undefined`, never a throw.
 
-import type { SessionSnapshot } from "@fraym/driver";
-import type { ReactNode } from "react";
-import { useStoreKey } from "@fraym/ui";
+import { type ReactNode, useMemo, useSyncExternalStore } from "react";
 
-/** The `mark` slot contract's data, restated STRUCTURALLY — matching is by
- *  slot NAME (doc 68 §4.1), never by a shared type import. */
+/** The Store's contract shape, restated structurally (doc 68 §3.4 [S-10]). */
+interface HostStoreShape {
+	watch<T>(key: string): { getSnapshot(): T | undefined; subscribe(listener: () => void): () => void };
+}
+
+/** The `mark` slot contract's data + the mount-boundary store hand-in. */
 export interface PulseMarkProps {
 	readonly item: { readonly id: string; readonly label: string };
 	readonly size: number;
 	readonly active: boolean;
 	readonly hovered: boolean;
 	readonly animate: boolean;
+	/** Handed in by the host's mount boundary; absent on a storeless mount —
+	 *  the beacon then rests dark, which is its honest absence UI. */
+	readonly store?: HostStoreShape;
 }
+
+const NO_SESSIONS: readonly { readonly status?: string }[] = [];
+const noopSubscribe = () => () => {};
 
 /** An activity beacon: a quiet ring that ignites while ANY session is
  *  working. Fact from the Store; pixels the author's own. */
-export function PulseMark({ size, active, hovered, animate }: PulseMarkProps): ReactNode {
-	// read + watch in one hook, selector-gated: an unrelated catalog change
-	// (a rename, a pin, a new idle row) re-renders this component ZERO times.
-	const working = useStoreKey<readonly SessionSnapshot[], boolean>(
-		"sessions/list",
-		sessions => (sessions ?? []).some(session => session.status === "running"),
+export function PulseMark({ size, active, hovered, animate, store }: PulseMarkProps): ReactNode {
+	// read + watch with BARE React: the observable IS what
+	// useSyncExternalStore wants (memoized — `watch` may mint a handle per
+	// call, and a stable `subscribe` identity is the subscriber's manners).
+	// No host, no key → undefined → rest state.
+	const observable = useMemo(
+		() => store?.watch<readonly { readonly status?: string }[]>("sessions/list"),
+		[store],
 	);
+	const sessions = useSyncExternalStore(
+		observable?.subscribe ?? noopSubscribe,
+		() => observable?.getSnapshot() ?? NO_SESSIONS,
+		() => NO_SESSIONS,
+	);
+	const working = sessions.some(session => session.status === "running");
 
 	const glow = working ? "#34d399" : hovered ? "#a3a3a3" : "#525252";
 	return (
