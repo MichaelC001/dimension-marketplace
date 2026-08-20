@@ -19,7 +19,7 @@
 	"devDependencies": {
 		"@fraym/ui": "workspace:*",
 		"@types/bun": "catalog:",
-		"vite": "^8.1.5"
+		"vite": "8.1.5"
 	},
 	"omp": {
 		"name": "rail-t3",
