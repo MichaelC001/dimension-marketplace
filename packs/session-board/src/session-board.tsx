@@ -1,13 +1,14 @@
-// Sessions — a mission-control dock instrument, and the worked example of the
-// CONTRIBUTED INSTRUMENT lane (doc 44 §4.3; doc 68 §16.4 row 4, opened
-// 2026-08-19).
+// Sessions — a mission-control dock panel, and the worked example of the
+// contributed dock-COMPONENT lane ("type": "component", "slot": "dock").
+// "Instrument" is the ROLE you say out loud (doc 68 §1 ruling 3) — never a
+// manifest type.
 //
 //   THE ENTIRE IMPORT SURFACE: `react`. Nothing else.
 //
-// An instrument's props ARE its context: the kit loader wraps this component
-// in one `createElement(Component, ctx)`, so the host's Store arrives the
-// same way a slot component's `store` prop does (doc 68 §3.5) — read with
-// React's BUILT-IN `useSyncExternalStore` over the contract's
+// A dock component's props ARE its context: the kit loader wraps this
+// component in one `createElement(Component, ctx)`, so the host's Store
+// arrives the same way a slot component's `store` prop does (doc 68 §3.5) —
+// read with React's BUILT-IN `useSyncExternalStore` over the contract's
 // `{getSnapshot, subscribe}` shape. Zero kit imports; the styling is the
 // author's own, drawn on the host's `--fr-*` custom properties so it sits in
 // either theme without importing anything (the marketplace house rule:

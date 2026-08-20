@@ -63,7 +63,7 @@
 		{
 			"name": "session-board",
 			"source": "./packs/session-board",
-			"description": "Sessions - mission control in the dock: every session partitioned by urgency (needs you / working / idle), one-click switching. The first contributed dock component (the fourteenth contribution type), at the zero-import floor.",
+			"description": "Sessions - mission control in the dock: every session partitioned by urgency (needs you / working / idle), one-click switching. The first contributed dock component (\"type\": \"component\", \"slot\": \"dock\"), at the zero-import floor.",
 			"version": "0.1.0",
 			"author": {
 				"name": "Dimension"

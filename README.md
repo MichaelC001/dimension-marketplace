@@ -19,8 +19,9 @@ packs/
                   surface (react + cn/Icon/SURFACE from @fraym/ui) settled
                   the externals contract.
   session-board/  Sessions — mission control in the dock. The first
-                  contributed INSTRUMENT (the fourteenth contribution type),
-                  at the zero-import floor: react only, facts from the Store.
+                  contributed dock COMPONENT ("type": "component",
+                  "slot": "dock"), at the zero-import floor: react only,
+                  facts from the Store.
   three-lane/     A LAYOUT declaring its own slots, shipping Demo Lane — the
                   assembly-spine thesis demo (three plugins, nobody hand-wired).
   mochi-mark/     A mark component: the import-surface FLOOR (react only).
