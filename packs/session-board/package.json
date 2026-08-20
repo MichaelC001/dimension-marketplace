@@ -2,7 +2,7 @@
 	"name": "@dimension/session-board",
 	"author": "Dimension",
 	"version": "0.1.0",
-	"description": "Sessions - a mission-control dock instrument: every session partitioned by urgency (needs you / working / idle), switchable in one click. Contributed through @dimension/sdk/instrument; import surface: react only.",
+	"description": "Sessions - a mission-control dock component: every session partitioned by urgency (needs you / working / idle), switchable in one click. Contributed through @dimension/sdk/component; import surface: react only.",
 	"type": "module",
 	"main": "./src/index.ts",
 	"types": "./src/index.ts",
@@ -14,7 +14,7 @@
 		"react": ">=19"
 	},
 	"keywords": [
-		"instrument",
+		"component",
 		"dock",
 		"sessions",
 		"store",
@@ -22,11 +22,11 @@
 	],
 	"omp": {
 		"name": "session-board",
-		"description": "Sessions - mission control in the dock: blocked / working / idle, one-click switching. The first contributed instrument.",
+		"description": "Sessions - mission control in the dock: blocked / working / idle, one-click switching. The first contributed dock component.",
 		"defaultEnabled": true,
-		"category": "instrument",
+		"category": "component",
 		"keywords": [
-			"instrument",
+			"component",
 			"dock",
 			"sessions",
 			"store"

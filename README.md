@@ -19,8 +19,9 @@ packs/
                   surface (react + cn/Icon/SURFACE from @fraym/ui) settled
                   the externals contract.
   session-board/  Sessions — mission control in the dock. The first
-                  contributed INSTRUMENT (the fourteenth contribution type),
-                  at the zero-import floor: react only, facts from the Store.
+                  contributed dock COMPONENT ("type": "component",
+                  "slot": "dock"), at the zero-import floor: react only,
+                  facts from the Store.
   three-lane/     A LAYOUT declaring its own slots, shipping Demo Lane — the
                   assembly-spine thesis demo (three plugins, nobody hand-wired).
   mochi-mark/     A mark component: the import-surface FLOOR (react only).
@@ -32,7 +33,7 @@ packs/
 Each pack declares itself in ONE file — `dimension.plugin.json` — validated by
 the engine at plugin load with the same pure validators `@dimension/sdk`
 re-exports (`validateComponentDecl`, `validateLayoutDef`,
-`validateInstrumentDecl`, `validateSpaceDefs`). The full authoring walkthrough
+`validateSpaceDefs`). The full authoring walkthrough
 lives in the Dimension repository: `docs/guides/building-a-custom-space.md`.
 
 ## The three tiers, by import surface
@@ -45,8 +46,8 @@ lives in the Dimension repository: `docs/guides/building-a-custom-space.md`.
 
 ## How a pack gets in
 
-1. **Declare it.** `dimension.plugin.json` with `"type": "component"` (+ `slot`),
-   `"type": "layout"` (+ `slots`), `"type": "instrument"`, or `spaces`.
+1. **Declare it.** `dimension.plugin.json` with `"type": "component"` (+ `slot`)
+   or `"type": "layout"` (+ `slots`) or `spaces`.
 2. **Build against the published surface.** Facts come from the Store's
    published key table (`catalogue.json` in the Dimension repo — typed via
    `readFact`/`watchFact`); pixels are yours, drawn on `--fr-*` design tokens
