@@ -3,6 +3,7 @@
 	"contractVersion": 1,
 	"title": "T3 Rail",
 	"type": "component",
+	"entry": "dist/index.mjs",
 	"slot": "rail",
 	"description": "A T3-Code-style session rail: urgency-partitioned sessions (live / quiet / settled), repo group chips, and the full rail duty set - a production alternative to rail-classic, assembled by name."
 }

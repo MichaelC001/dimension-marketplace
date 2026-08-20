@@ -15,6 +15,17 @@
 		"description": "Pulse Mark — a demo mark component: an activity beacon that pulses while any session is running.",
 		"defaultEnabled": true,
 		"category": "component",
-		"keywords": ["component", "mark", "demo", "store"]
+		"keywords": [
+			"component",
+			"mark",
+			"demo",
+			"store"
+		]
+	},
+	"scripts": {
+		"build": "vite build"
+	},
+	"devDependencies": {
+		"vite": "^8.1.5"
 	}
 }

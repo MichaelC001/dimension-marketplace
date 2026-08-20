@@ -3,6 +3,7 @@
 	"contractVersion": 1,
 	"title": "Sessions",
 	"type": "component",
+	"entry": "dist/index.mjs",
 	"slot": "dock",
 	"icon": "layers",
 	"order": 100,

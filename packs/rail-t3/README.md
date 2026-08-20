@@ -75,3 +75,13 @@ Registered through the ONE slot-component registry (`slotComponents`) via the
 standard contribution loader. The legacy `RailImplementation` export
 (`T3_RAIL`) survives for the two legacy seats that still cycle it (the holding
 page and the Space Designer's static catalogue); it dies with them.
+
+## Build
+
+`bun run build` (vite lib mode) emits `dist/index.mjs` — the ESM bundle the
+host loads at runtime, externalising exactly `react`, `react-dom`,
+`react/jsx-runtime`, `@fraym/ui`. `dist/` is **committed**: a pack must be
+installable with no build step.
+
+The bundle's **default export is the component** (`T3Rail`) — that is the
+loader's whole contract; the named exports stay for in-tree and test importers.

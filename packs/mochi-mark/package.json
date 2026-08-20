@@ -15,6 +15,17 @@
 		"description": "Mochi Mark — a demo mark component: a soft blinking mochi that draws one switcher cell.",
 		"defaultEnabled": true,
 		"category": "component",
-		"keywords": ["component", "mark", "demo", "assembly"]
+		"keywords": [
+			"component",
+			"mark",
+			"demo",
+			"assembly"
+		]
+	},
+	"scripts": {
+		"build": "vite build"
+	},
+	"devDependencies": {
+		"vite": "^8.1.5"
 	}
 }

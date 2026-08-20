@@ -8,6 +8,7 @@
 	"types": "./src/index.ts",
 	"private": true,
 	"scripts": {
+		"build": "vite build",
 		"test": "bun test"
 	},
 	"peerDependencies": {
@@ -31,5 +32,8 @@
 			"sessions",
 			"store"
 		]
+	},
+	"devDependencies": {
+		"vite": "^8.1.5"
 	}
 }
