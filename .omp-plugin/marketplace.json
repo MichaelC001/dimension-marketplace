@@ -63,15 +63,15 @@
 		{
 			"name": "session-board",
 			"source": "./packs/session-board",
-			"description": "Sessions - mission control in the dock: every session partitioned by urgency (needs you / working / idle), one-click switching. The first contributed dock instrument (the fourteenth contribution type), at the zero-import floor.",
+			"description": "Sessions - mission control in the dock: every session partitioned by urgency (needs you / working / idle), one-click switching. The first contributed dock component (the fourteenth contribution type), at the zero-import floor.",
 			"version": "0.1.0",
 			"author": {
 				"name": "Dimension"
 			},
 			"repository": "https://github.com/insodimension/dimension-marketplace",
 			"license": "MIT",
-			"category": "instrument",
-			"tags": ["instrument", "dock", "sessions", "store"]
+			"category": "component",
+			"tags": ["component", "dock", "sessions", "store"]
 		}
 	]
 }

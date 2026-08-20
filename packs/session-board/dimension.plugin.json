@@ -2,8 +2,9 @@
 	"plugin": "session-board",
 	"contractVersion": 1,
 	"title": "Sessions",
-	"type": "instrument",
+	"type": "component",
+	"slot": "dock",
 	"icon": "layers",
 	"order": 100,
-	"description": "Mission control in the dock: every session partitioned by what it needs from you - blocked ones first, then working, then idle - with one-click switching. The first contributed dock instrument, at the zero-import floor: react only, facts from the Store, pixels its own."
+	"description": "Mission control in the dock: every session partitioned by what it needs from you - blocked ones first, then working, then idle - with one-click switching. The first contributed dock component, at the zero-import floor: react only, facts from the Store, pixels its own."
 }

@@ -32,7 +32,7 @@ packs/
 Each pack declares itself in ONE file — `dimension.plugin.json` — validated by
 the engine at plugin load with the same pure validators `@dimension/sdk`
 re-exports (`validateComponentDecl`, `validateLayoutDef`,
-`validateInstrumentDecl`, `validateSpaceDefs`). The full authoring walkthrough
+`validateSpaceDefs`). The full authoring walkthrough
 lives in the Dimension repository: `docs/guides/building-a-custom-space.md`.
 
 ## The three tiers, by import surface
@@ -45,8 +45,8 @@ lives in the Dimension repository: `docs/guides/building-a-custom-space.md`.
 
 ## How a pack gets in
 
-1. **Declare it.** `dimension.plugin.json` with `"type": "component"` (+ `slot`),
-   `"type": "layout"` (+ `slots`), `"type": "instrument"`, or `spaces`.
+1. **Declare it.** `dimension.plugin.json` with `"type": "component"` (+ `slot`)
+   or `"type": "layout"` (+ `slots`) or `spaces`.
 2. **Build against the published surface.** Facts come from the Store's
    published key table (`catalogue.json` in the Dimension repo — typed via
    `readFact`/`watchFact`); pixels are yours, drawn on `--fr-*` design tokens
