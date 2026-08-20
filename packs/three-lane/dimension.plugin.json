@@ -16,7 +16,7 @@
 			"label": "Demo Lane",
 			"icon": "layers",
 			"order": 90,
-			"description": "The assembly-spine thesis demo: a space assembled from parts nobody in this repo hand-wired — this plugin's own layout, another plugin's mark in the badge slot, and a third plugin's rail (rail-t3) filling the session lane.",
+			"description": "The assembly-spine thesis demo: a space assembled from parts nobody in this repo hand-wired — this plugin's own layout, another plugin's mark in the badge slot, and a third plugin's rail (rail-t3) filling the left lane.",
 			"mark": {
 				"fill": "mochi-mark",
 				"accent": "#f2a3c2",
@@ -25,8 +25,7 @@
 			"layout": "three-lane",
 			"components": {
 				"badge": "mochi-mark",
-				"lane-left": "rail-t3",
-				"rail": "rail-t3"
+				"lane-left": "rail-t3"
 			},
 			"rail": {
 				"preferredMode": "compact",
