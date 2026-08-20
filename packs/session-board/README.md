@@ -67,3 +67,13 @@ working dot's breathe) honors `prefers-reduced-motion`.
   (the manifest passes engine validation) and
   `fraym/packages/ui/test/component-loader.test.tsx` (the loader lane:
   registration, defaults, ctx-as-props, disposal).
+
+## Build
+
+`bun run build` (vite lib mode) emits `dist/index.mjs` — the ESM bundle the
+host loads at runtime, externalising exactly `react`, `react-dom`,
+`react/jsx-runtime`, `@fraym/ui`. `dist/` is **committed**: a pack must be
+installable with no build step.
+
+The bundle's **default export is the component** (`SessionBoard`) — that is the
+loader's whole contract; the named exports stay for in-tree and test importers.

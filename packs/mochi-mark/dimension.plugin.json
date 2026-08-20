@@ -3,5 +3,6 @@
 	"contractVersion": 1,
 	"title": "Mochi Mark",
 	"type": "component",
+	"entry": "dist/index.mjs",
 	"slot": "mark"
 }

@@ -39,6 +39,32 @@ for (const plugin of catalog.plugins ?? []) {
 			} else if (!existsSync(join(packDir, "package.json"))) {
 				errors.push(`plugin "${label}": ${plugin.source}/package.json is missing`);
 			}
+			// A declared bundle entry is a shipping commitment: dist/ is the ONLY
+			// delivery path (the app holds no static pack imports), so a missing
+			// or empty committed bundle must fail HERE, not as a dropped
+			// component at runtime.
+			const manifestPath = join(packDir, "dimension.plugin.json");
+			if (existsSync(manifestPath)) {
+				try {
+					const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+					if (manifest.entry !== undefined) {
+						if (typeof manifest.entry !== "string" || manifest.entry.length === 0) {
+							errors.push(`plugin "${label}": entry must be a non-empty relative path`);
+						} else if (manifest.entry.startsWith("/") || manifest.entry.split(/[\\/]/).includes("..")) {
+							errors.push(`plugin "${label}": entry must be relative with no ".." segment`);
+						} else {
+							const bundlePath = join(packDir, manifest.entry);
+							if (!existsSync(bundlePath) || !statSync(bundlePath).isFile()) {
+								errors.push(`plugin "${label}": declared entry ${manifest.entry} does not exist — run \`bun run build\` in ${plugin.source} and commit dist/`);
+							} else if (statSync(bundlePath).size === 0) {
+								errors.push(`plugin "${label}": declared entry ${manifest.entry} is empty`);
+							}
+						}
+					}
+				} catch {
+					errors.push(`plugin "${label}": dimension.plugin.json is not parseable JSON`);
+				}
+			}
 		}
 	} else if (typeof plugin.source !== "object" || plugin.source === null) {
 		errors.push(`plugin "${label}": source must be a relative path or a source object`);
