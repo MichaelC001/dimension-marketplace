@@ -34,11 +34,10 @@ A component ships as data + code + (optionally) an assembly that uses it:
    module imports — the externals contract, enforced by the bundler.
 
 3. **A space that assembles it** — Demo Lane (`packs/three-lane`) binds
-   `components: { "lane-left": "rail-t3", "rail": "rail-t3" }`. Two spellings,
-   one component, deliberately: `lane-left` is the three-lane layout's OWN slot
-   (the binding the geography resolver honors); `rail` is the classic-grid
-   interim key the shell reads today (`useRailComponent`). When the resolver
-   lands, the second key becomes redundant and dies.
+   `components: { "lane-left": "rail-t3", "badge": "mochi-mark" }`. It honors
+   the three-lane layout's own slots: `lane-left` (the rail seat the geography
+   resolver honors) is filled with this component's `rail-t3`, and the mark
+   seat with another plugin's `mochi-mark`.
 
 ## The import surface — a contract, not a convenience
 
