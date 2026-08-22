@@ -72,6 +72,19 @@
 			"license": "MIT",
 			"category": "component",
 			"tags": ["component", "dock", "sessions", "store"]
+		},
+		{
+			"name": "thread-minimal",
+			"source": "./packs/thread-minimal",
+			"description": "Minimal Thread - a compact transcript replacing the classic thread SECTION of the session surface by space binding (workspace.sections.thread, doc 69 §3.5). The first contributed thread section, at the zero-import floor: react only, facts from the Store's published session/<id>/transcript + verb cells.",
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-marketplace",
+			"license": "MIT",
+			"category": "component",
+			"tags": ["component", "thread", "store"]
 		}
 	]
 }
