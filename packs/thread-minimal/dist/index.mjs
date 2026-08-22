@@ -2,7 +2,7 @@ import { useMemo, useSyncExternalStore } from "react";
 import { jsx, jsxs } from "react/jsx-runtime";
 //#region src/thread-minimal.tsx
 var NO_ROWS = [];
-var noopSubscribe = () => () => {};
+var noop = () => {};
 var text = (tone) => ({ color: tone === 1 ? "var(--fr-text)" : `var(--fr-text-${tone})` });
 /** One transcript row: a quiet role label and the row's text. Tool cards,
 *  reasoning, images — deliberately not rendered; this is the MINIMAL thread. */
@@ -56,8 +56,8 @@ function MinimalThread({ sessionRef, store }) {
 	const sessionId = sessionRef?.sessionId;
 	const transcriptObservable = useMemo(() => store && sessionId ? store.watch(`session/${sessionId}/transcript`) : null, [store, sessionId]);
 	const verbObservable = useMemo(() => store && sessionId ? store.watch(`session/${sessionId}/verb`) : null, [store, sessionId]);
-	const rows = useSyncExternalStore(transcriptObservable?.subscribe ?? noopSubscribe, () => transcriptObservable?.getSnapshot() ?? NO_ROWS, () => NO_ROWS);
-	const verb = useSyncExternalStore(verbObservable?.subscribe ?? noopSubscribe, () => verbObservable?.getSnapshot() ?? null, () => null);
+	const rows = useSyncExternalStore((listener) => transcriptObservable?.subscribe(listener) ?? noop, () => transcriptObservable?.getSnapshot() ?? NO_ROWS, () => NO_ROWS);
+	const verb = useSyncExternalStore((listener) => verbObservable?.subscribe(listener) ?? noop, () => verbObservable?.getSnapshot() ?? null, () => null);
 	if (!store || !sessionId) return /* @__PURE__ */ jsx("div", {
 		style: {
 			padding: 16,
@@ -91,7 +91,7 @@ function MinimalThread({ sessionRef, store }) {
 					...text(3)
 				},
 				children: "No messages yet — the transcript fills as the session works."
-			}) : rows.map((row) => /* @__PURE__ */ jsx(Row, { row }, row.id)), verb?.message && /* @__PURE__ */ jsxs("div", {
+			}) : rows.map((row) => /* @__PURE__ */ jsx(Row, { row }, row.id)), verb?.visible && verb.message && /* @__PURE__ */ jsxs("div", {
 				style: {
 					padding: "10px 0 0",
 					fontSize: 11,

@@ -44,7 +44,7 @@ export interface MinimalThreadProps {
 }
 
 const NO_ROWS: readonly TranscriptRow[] = [];
-const noopSubscribe = () => () => {};
+const noop = () => {};
 
 const text = (tone: 1 | 2 | 3): CSSProperties => ({
 	color: tone === 1 ? "var(--fr-text)" : `var(--fr-text-${tone})`,
@@ -100,13 +100,17 @@ export function MinimalThread({ sessionRef, store }: MinimalThreadProps): ReactN
 		() => (store && sessionId ? store.watch<VerbFact | null>(`session/${sessionId}/verb`) : null),
 		[store, sessionId],
 	);
+	// `subscribe` is invoked THROUGH the observable, never detached: the
+	// published contract is an interface, and a host implementing `watch` with
+	// a bound method would throw on a detached reference. This pack is the
+	// exemplar for the zero-import floor — model the pattern, not the accident.
 	const rows = useSyncExternalStore(
-		transcriptObservable?.subscribe ?? noopSubscribe,
+		listener => transcriptObservable?.subscribe(listener) ?? noop,
 		() => transcriptObservable?.getSnapshot() ?? NO_ROWS,
 		() => NO_ROWS,
 	);
 	const verb = useSyncExternalStore(
-		verbObservable?.subscribe ?? noopSubscribe,
+		listener => verbObservable?.subscribe(listener) ?? noop,
 		() => verbObservable?.getSnapshot() ?? null,
 		() => null,
 	);
@@ -137,7 +141,7 @@ export function MinimalThread({ sessionRef, store }: MinimalThreadProps): ReactN
 				) : (
 					rows.map(row => <Row key={row.id} row={row} />)
 				)}
-				{verb?.message && (
+				{verb?.visible && verb.message && (
 					<div style={{ padding: "10px 0 0", fontSize: 11, fontStyle: "italic", color: "var(--fr-accent)" }}>
 						{verb.message}…
 					</div>
