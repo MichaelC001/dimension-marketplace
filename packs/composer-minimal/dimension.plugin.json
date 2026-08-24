@@ -1,0 +1,10 @@
+{
+	"plugin": "composer-minimal",
+	"contractVersion": 1,
+	"title": "Minimal Composer",
+	"type": "component",
+	"entry": "dist/index.mjs",
+	"slot": "composer",
+	"icon": "messageSquare",
+	"description": "A composer for the session surface's composer section: Enter sends, Shift+Enter newlines, and the control becomes Stop while the session streams. Data in, intents out — it reads the published session/<id>/isStreaming cell and sends ONLY through act(\"sendMessage\") / act(\"stopSession\"), never a driver. Bind it with workspace.sections.composer."
+}

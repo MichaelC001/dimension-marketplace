@@ -19,7 +19,11 @@
 			"repository": "https://github.com/insodimension/dimension-marketplace",
 			"license": "MIT",
 			"category": "component",
-			"tags": ["rail", "component", "sessions"]
+			"tags": [
+				"rail",
+				"component",
+				"sessions"
+			]
 		},
 		{
 			"name": "three-lane",
@@ -32,7 +36,11 @@
 			"repository": "https://github.com/insodimension/dimension-marketplace",
 			"license": "MIT",
 			"category": "layout",
-			"tags": ["layout", "space", "demo"]
+			"tags": [
+				"layout",
+				"space",
+				"demo"
+			]
 		},
 		{
 			"name": "mochi-mark",
@@ -45,7 +53,11 @@
 			"repository": "https://github.com/insodimension/dimension-marketplace",
 			"license": "MIT",
 			"category": "component",
-			"tags": ["mark", "component", "demo"]
+			"tags": [
+				"mark",
+				"component",
+				"demo"
+			]
 		},
 		{
 			"name": "pulse-mark",
@@ -58,7 +70,11 @@
 			"repository": "https://github.com/insodimension/dimension-marketplace",
 			"license": "MIT",
 			"category": "component",
-			"tags": ["mark", "component", "store"]
+			"tags": [
+				"mark",
+				"component",
+				"store"
+			]
 		},
 		{
 			"name": "session-board",
@@ -71,7 +87,12 @@
 			"repository": "https://github.com/insodimension/dimension-marketplace",
 			"license": "MIT",
 			"category": "component",
-			"tags": ["component", "dock", "sessions", "store"]
+			"tags": [
+				"component",
+				"dock",
+				"sessions",
+				"store"
+			]
 		},
 		{
 			"name": "thread-minimal",
@@ -84,7 +105,65 @@
 			"repository": "https://github.com/insodimension/dimension-marketplace",
 			"license": "MIT",
 			"category": "component",
-			"tags": ["component", "thread", "store"]
+			"tags": [
+				"component",
+				"thread",
+				"store"
+			]
+		},
+		{
+			"name": "composer-minimal",
+			"source": "./packs/composer-minimal",
+			"description": "Minimal Composer - the session surface's composer SECTION at the zero-import floor: Enter sends, Shift+Enter newlines, and the control becomes Stop while the session streams. Reads the published session/<id>/isStreaming cell; sends ONLY through act(\"sendMessage\") / act(\"stopSession\"). Bound by workspace.sections.composer.",
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-marketplace",
+			"license": "MIT",
+			"category": "component",
+			"tags": [
+				"component",
+				"composer",
+				"section",
+				"store"
+			]
+		},
+		{
+			"name": "env-minimal",
+			"source": "./packs/env-minimal",
+			"description": "Minimal Environment - a pinned environment card for a workspace corner post: checkout identity, this session's SCM ledger and task roll-up, drawn from the host props the shell already publishes. Bound by widgets.pinned; react is the entire import surface.",
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-marketplace",
+			"license": "MIT",
+			"category": "component",
+			"tags": [
+				"component",
+				"widget",
+				"environment",
+				"store"
+			]
+		},
+		{
+			"name": "forge",
+			"source": "./packs/forge",
+			"description": "Forge - a LAYOUT declaring four slots plus the Forge space that assembles a coding surface ENTIRELY from marketplace parts (rail-t3, session-board, mochi-mark, thread-minimal, composer-minimal, env-minimal). The workspace host filling forge-main is the one non-marketplace piece, stated on purpose.",
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-marketplace",
+			"license": "MIT",
+			"category": "layout",
+			"tags": [
+				"layout",
+				"space",
+				"assembly",
+				"marketplace"
+			]
 		}
 	]
 }

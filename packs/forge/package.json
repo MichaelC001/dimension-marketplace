@@ -1,0 +1,17 @@
+{
+	"name": "@dimension/forge",
+	"author": "Dimension",
+	"version": "0.1.0",
+	"description": "Forge — a LAYOUT plugin declaring its own four slots, plus the Forge space that assembles a coding surface entirely from marketplace parts (rail-t3 · session-board · mochi-mark · thread-minimal · composer-minimal · env-minimal).",
+	"type": "module",
+	"main": "./src/index.ts",
+	"types": "./src/index.ts",
+	"private": true,
+	"omp": {
+		"name": "forge",
+		"description": "Forge — a marketplace-assembled coding space: this plugin's layout plus six contributed parts filling it.",
+		"defaultEnabled": true,
+		"category": "layout",
+		"keywords": ["layout", "space", "assembly", "marketplace"]
+	}
+}
