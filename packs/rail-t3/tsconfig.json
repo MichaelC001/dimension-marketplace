@@ -3,37 +3,42 @@
 	"compilerOptions": {
 		"jsx": "react-jsx",
 		"lib": ["ES2024", "DOM", "DOM.Iterable"],
-		// Bun honours tsconfig `paths` at RUNTIME. The first candidate of every
-		// entry is the real React inside fraym's own install: `@fraym/ui` sources
-		// resolve React by walking up to that same copy, so `bun test` runs on
-		// ONE React instance. Mapping to the root copy instead split the world in
-		// two ("Invalid hook call"), and mapping to `@types/*.d.ts` made Bun
-		// execute type declarations as the JSX runtime.
+		// Bun honours tsconfig `paths` at RUNTIME, and it applies the tsconfig
+		// nearest each SOURCE FILE — so this file decides what React a bundle links
+		// for this pack's sources even when the build is driven by another package
+		// (`artifactory-space` bundles this pack, and inherited this map's failure).
 		//
-		// tsc does NOT fall through to the `@types` second candidate (it resolves
-		// the .js and reports TS7016), which is why `check:types` runs
-		// tsconfig.typecheck.json — same config, paths overridden to `@types`.
+		// One candidate each, naming the SUPERPROJECT's React — the only copy the
+		// supported topology installs. These used to name
+		// `../../../fraym/packages/ui/node_modules/react` with `@types/react/*.d.ts`
+		// as a second candidate; both halves were wrong by 2026-08-24. The root
+		// `package.json` claims `fraym/packages/*` as workspaces and hoists one
+		// React (19.2.7), and all that remained at the old address was a dangling
+		// Windows junction into a vanished `fraym/node_modules/.bun` store. Bun then
+		// fell through to the `@types` candidate and bundled type declarations as
+		// the JSX runtime (`Unexpected as` in `index.d.ts`, `Could not resolve: "./"`
+		// in `jsx-runtime.d.ts`) — naming neither React nor the install.
+		//
+		// No `@types` fallback, the reasoning `artifactory-space` wrote down first: a
+		// fallback that can only engage when the real answer is absent, and emits
+		// garbage when it does, is not a fallback.
+		//
+		// The `*` entries are load-bearing: `paths` keys match EXACTLY, so any other
+		// React subpath a dependency imports escapes the map and resolves by walking
+		// up from its own directory — into `node_modules` trees still full of
+		// dangling junctions.
+		//
+		// tsc does NOT resolve these to types (it reads the .js and reports TS7016),
+		// which is why `check:types` runs tsconfig.typecheck.json — same config with
+		// paths overridden to `@types`.
 		"paths": {
-			"react": [
-				"../../../fraym/packages/ui/node_modules/react/index.js",
-				"../../../node_modules/@types/react/index.d.ts"
-			],
-			"react/jsx-runtime": [
-				"../../../fraym/packages/ui/node_modules/react/jsx-runtime.js",
-				"../../../node_modules/@types/react/jsx-runtime.d.ts"
-			],
-			"react/jsx-dev-runtime": [
-				"../../../fraym/packages/ui/node_modules/react/jsx-dev-runtime.js",
-				"../../../node_modules/@types/react/jsx-dev-runtime.d.ts"
-			],
-			"react-dom": [
-				"../../../fraym/packages/ui/node_modules/react-dom/index.js",
-				"../../../node_modules/@types/react-dom/index.d.ts"
-			],
-			"react-dom/client": [
-				"../../../fraym/packages/ui/node_modules/react-dom/client.js",
-				"../../../node_modules/@types/react-dom/client.d.ts"
-			]
+			"react": ["../../../node_modules/react/index.js"],
+			"react/jsx-runtime": ["../../../node_modules/react/jsx-runtime.js"],
+			"react/jsx-dev-runtime": ["../../../node_modules/react/jsx-dev-runtime.js"],
+			"react/*": ["../../../node_modules/react/*"],
+			"react-dom": ["../../../node_modules/react-dom/index.js"],
+			"react-dom/client": ["../../../node_modules/react-dom/client.js"],
+			"react-dom/*": ["../../../node_modules/react-dom/*"]
 		}
 	},
 	"include": ["src"]
