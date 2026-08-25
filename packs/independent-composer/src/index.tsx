@@ -90,7 +90,11 @@ export default function IndependentComposer(props: ComposerSectionProps) {
 		text: string,
 		attachments: readonly { readonly data: string; readonly mimeType: string; readonly name?: string }[] = [],
 	) => {
-		if (!actions || blocked || running) return;
+		// NO `running` guard: `actions.sendMessage` is the ONE behavior path and
+		// the HOST resolves queue-vs-send (a send while streaming QUEUES, the
+		// same as the reference). Blocking here vaporized the composed text —
+		// the draft was already cleared, so the words were gone with no
+		// symptom. Found by the thread phase's queue-while-streaming test.
 		// Composer.submitValue hands (text, attachments) and then clears the
 		// pills — dropping the second argument silently discarded every pasted
 		// image behind an "[Image #N]" marker. Map them to the wire shape the

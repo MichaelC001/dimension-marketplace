@@ -1,0 +1,29 @@
+{
+	"name": "@dimension/independent-thread",
+	"author": "Dimension",
+	"version": "0.1.0",
+	"description": "Independent thread — built from the published PARTS (Thread, SectionSessionScope, PresenceSurface, OpeningThreadSkeleton), not from the shipped section.",
+	"type": "module",
+	"main": "./src/index.tsx",
+	"omp": {
+		"name": "independent-thread",
+		"description": "Independent thread built on the parts tier.",
+		"defaultEnabled": true,
+		"category": "component",
+		"keywords": [
+			"component",
+			"thread",
+			"independent"
+		]
+	},
+	"private": true,
+	"scripts": {
+		"build": "vite build"
+	},
+	"peerDependencies": {
+		"react": ">=19"
+	},
+	"devDependencies": {
+		"vite": "8.1.5"
+	}
+}
