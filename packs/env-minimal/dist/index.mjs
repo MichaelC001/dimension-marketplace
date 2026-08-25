@@ -56,8 +56,9 @@ function MinimalEnvironment(props) {
 	const snapshot = ref ? props.sessionCatalog?.find((row) => row.ref?.sessionId === ref.sessionId && row.ref?.workspaceId === ref.workspaceId) : void 0;
 	const checkout = snapshot?.workspace ?? props.workspace ?? null;
 	const ledger = snapshot?.scmLedger ?? null;
-	const items = (snapshot?.tasks ?? []).flatMap((phase) => phase.tasks ?? []);
-	const running = items.filter((task) => task.status === "in_progress").length;
+	const items = props.tasks ?? [];
+	let running = 0;
+	for (const task of items) if (task.status === "in_progress") running += 1;
 	return /* @__PURE__ */ jsxs("div", {
 		style: card,
 		"data-slot": "env-minimal",
@@ -77,7 +78,7 @@ function MinimalEnvironment(props) {
 				}),
 				/* @__PURE__ */ jsx(Line, {
 					name: "worktree",
-					value: checkout.git?.worktree ? "yes" : "no"
+					value: checkout.git?.worktree === void 0 ? "—" : checkout.git.worktree ? "yes" : "no"
 				})
 			] }) : /* @__PURE__ */ jsx("span", {
 				style: quiet,

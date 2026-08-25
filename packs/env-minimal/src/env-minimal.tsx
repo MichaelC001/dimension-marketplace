@@ -14,6 +14,10 @@
 
 import type { CSSProperties, ReactNode } from "react";
 
+/** The published task status union (`TaskStatus`, types.ts:1483) — restated
+ *  rather than left stringly-typed, so a typo is a type error here too. */
+type TaskStatusName = "pending" | "in_progress" | "completed" | "abandoned";
+
 /** Structural subset of the published `SessionScmLedgerSummary`
  *  (scm-ledger.ts:43-59), restated FROM THE SOURCE. `available` comes first
  *  because it is the field that decides whether any of the rest may be shown:
@@ -24,34 +28,37 @@ interface LedgerShape {
 	readonly touchedCount?: number;
 	readonly unpushedCount?: number;
 	readonly recentTouchedPaths?: readonly string[];
-	readonly updatedAt?: string;
 }
 
-/** Structural subset of one catalogue snapshot row. `tasks` is a list of
- *  PHASES (`TaskPhase`, types.ts:1493-1496) — each holding the items that
- *  carry `status`; counting phases as tasks is how a live signal becomes a
- *  confident zero. */
+/** Structural subset of one catalogue snapshot row — only the fields the
+ *  catalog reducer's snapshot merge actually keeps current (session-catalog.ts's
+ *  allowlist: scmLedger, recap, hasBackgroundWork, workspace, …). `tasks` is
+ *  deliberately NOT read from here: it is absent from that allowlist, so a row's
+ *  task list never advances after the first listing. The live one arrives on
+ *  this widget's own props instead. */
 interface SnapshotShape {
 	readonly ref?: { readonly sessionId?: string; readonly workspaceId?: string };
-	readonly title?: string;
 	readonly scmLedger?: LedgerShape | null;
 	readonly recap?: { readonly text?: string } | null;
-	readonly tasks?: readonly { readonly name?: string; readonly tasks?: readonly { readonly status?: string }[] }[] | null;
 	readonly hasBackgroundWork?: boolean;
 	readonly workspace?: WorkspaceShape | null;
 }
 
 interface WorkspaceShape {
-	readonly workspaceId?: string;
 	readonly path?: string;
 	readonly displayName?: string;
 	readonly git?: { readonly worktree?: boolean; readonly currentBranch?: string } | null;
 }
 
-/** The structural subset of the widget host props this card reads. */
+/** The structural subset of the widget host props this card reads.
+ *  `tasks` is the host's LIVE flattened roll-up (`useFlattenedTasks` off the
+ *  session fold, delivered on the surface host props) — the same prop the
+ *  shipped environment card reads, and the only source that moves during a
+ *  turn. */
 export interface MinimalEnvironmentProps {
 	readonly sessionRef?: { readonly sessionId: string; readonly workspaceId: string } | null;
 	readonly sessionCatalog?: readonly SnapshotShape[];
+	readonly tasks?: readonly { readonly name?: string; readonly status?: TaskStatusName }[];
 	readonly workspace?: WorkspaceShape | null;
 }
 
@@ -100,8 +107,9 @@ export function MinimalEnvironment(props: MinimalEnvironmentProps) {
 		: undefined;
 	const checkout = snapshot?.workspace ?? props.workspace ?? null;
 	const ledger = snapshot?.scmLedger ?? null;
-	const items = (snapshot?.tasks ?? []).flatMap(phase => phase.tasks ?? []);
-	const running = items.filter(task => task.status === "in_progress").length;
+	const items = props.tasks ?? [];
+	let running = 0;
+	for (const task of items) if (task.status === "in_progress") running += 1;
 
 	return (
 		<div style={card} data-slot="env-minimal">
@@ -110,7 +118,10 @@ export function MinimalEnvironment(props: MinimalEnvironmentProps) {
 				<>
 					<Line name="checkout" value={checkout.displayName ?? checkout.path ?? "unknown"} />
 					<Line name="branch" value={checkout.git?.currentBranch ?? "—"} />
-					<Line name="worktree" value={checkout.git?.worktree ? "yes" : "no"} />
+					<Line
+						name="worktree"
+						value={checkout.git?.worktree === undefined ? "—" : checkout.git.worktree ? "yes" : "no"}
+					/>
 				</>
 			) : (
 				<span style={quiet}>No workspace bound.</span>

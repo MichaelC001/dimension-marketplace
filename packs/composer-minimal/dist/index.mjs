@@ -2,6 +2,8 @@ import { useCallback, useMemo, useRef, useState, useSyncExternalStore } from "re
 import { jsx, jsxs } from "react/jsx-runtime";
 //#region src/composer-minimal.tsx
 var noop = () => {};
+/** Module-stable so the server/hydration arm is not a fresh identity per render. */
+var serverSnapshot = () => void 0;
 var surface = {
 	display: "flex",
 	flexDirection: "column",
@@ -47,6 +49,14 @@ function button(tone, enabled) {
 		background: "var(--fr-surface-2)"
 	};
 }
+/** The session's state in one line — honest about what is happening rather than
+*  a decorative hint. Pure derivation, so it lives outside the component. */
+function hint(sessionId, opening, streaming) {
+	if (!sessionId) return "no session bound";
+	if (opening) return "connecting — input is queued";
+	if (streaming) return "the agent is working";
+	return "Enter sends · Shift+Enter newline";
+}
 /**
 * A composer at the zero-import floor.
 *
@@ -64,15 +74,16 @@ function MinimalComposer(props) {
 		if (!store || !sessionId) return null;
 		return store.watch(`session/${sessionId}/isStreaming`);
 	}, [store, sessionId]);
-	const streaming = useSyncExternalStore((listener) => streamingSource?.subscribe(listener) ?? noop, () => streamingSource?.getSnapshot(), () => void 0)?.isStreaming === true;
+	const streaming = useSyncExternalStore(useCallback((listener) => streamingSource?.subscribe(listener) ?? noop, [streamingSource]), useCallback(() => streamingSource?.getSnapshot(), [streamingSource]), serverSnapshot)?.isStreaming === true;
 	const continued = props.continuation?.continued === true;
+	const successor = props.continuation?.toSessionTitle ?? props.continuation?.toSessionId;
+	const continuedInto = successor ? `"${successor.slice(0, 40)}"` : null;
 	const blocked = props.disabled === true || continued || !sessionId;
 	const canSend = !blocked && text.trim().length > 0;
 	const send = useCallback(() => {
 		const body = text.trim();
 		if (!body || !sessionId) return;
-		if (props.actions?.sendMessage) props.actions.sendMessage(body);
-		else store?.act("sendMessage", {
+		store?.act("sendMessage", {
 			sessionId,
 			workspaceId: props.sessionRef?.workspaceId,
 			text: body
@@ -82,20 +93,17 @@ function MinimalComposer(props) {
 	}, [
 		text,
 		sessionId,
-		props.actions,
 		props.sessionRef?.workspaceId,
 		store
 	]);
 	const stop = useCallback(() => {
 		if (!sessionId) return;
-		if (props.actions?.interruptRunForQueuedMessage) props.actions.interruptRunForQueuedMessage();
-		else store?.act("stopSession", {
+		store?.act("stopSession", {
 			sessionId,
 			workspaceId: props.sessionRef?.workspaceId
 		});
 	}, [
 		sessionId,
-		props.actions,
 		props.sessionRef?.workspaceId,
 		store
 	]);
@@ -111,7 +119,7 @@ function MinimalComposer(props) {
 			ref: areaRef,
 			style: field,
 			value: text,
-			placeholder: continued ? `This session continued${props.continuation?.toSessionTitle ? ` into "${props.continuation.toSessionTitle}"` : ""} — it is read-only.` : props.placeholder ?? "Message the agent…",
+			placeholder: continued ? `This session continued${continuedInto ? ` into ${continuedInto}` : ""} — it is read-only.` : props.placeholder ?? "Message the agent…",
 			onChange: (event) => setText(event.target.value),
 			onKeyDown,
 			disabled: blocked,
@@ -120,7 +128,7 @@ function MinimalComposer(props) {
 			style: row,
 			children: [/* @__PURE__ */ jsx("span", {
 				style: badge,
-				children: !sessionId ? "no session bound" : props.opening ? "connecting — input is queued" : streaming ? "the agent is working" : "Enter sends · Shift+Enter newline"
+				children: hint(sessionId, props.opening === true, streaming)
 			}), streaming ? /* @__PURE__ */ jsx("button", {
 				type: "button",
 				style: button("stop", true),

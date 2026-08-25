@@ -20,21 +20,12 @@ interface HostStoreShape {
 	act(intent: string, payload?: unknown): void;
 }
 
-/** The registered session action set, structurally — present when the host
- *  mounted a provider. Preferred over the raw verb when both exist: it carries
- *  the optimistic echo and queue awareness the provider owns. */
-interface SessionActionsShape {
-	readonly sendMessage?: (text: string) => unknown;
-	readonly interruptRunForQueuedMessage?: () => unknown;
-}
-
 /** Structural subset of the published `session/<id>/isStreaming` fact
  *  (`StreamingFact`, store-types.ts:176-179). It is an OBJECT, not a boolean —
  *  restated from the source, because a restatement invented from memory is a
  *  false claim about the host and every read against it is dead. */
 interface StreamingShape {
 	readonly isStreaming?: boolean;
-	readonly hasRunningTool?: boolean;
 }
 
 /** A continued session is terminal — the contract's duty is to BLOCK sends and
@@ -50,7 +41,6 @@ interface ContinuationShape {
 export interface MinimalComposerProps {
 	readonly sessionRef?: { readonly sessionId: string; readonly workspaceId?: string } | null;
 	readonly store?: HostStoreShape | null;
-	readonly actions?: SessionActionsShape | null;
 	readonly placeholder?: string;
 	readonly disabled?: boolean;
 	readonly opening?: boolean;
@@ -58,6 +48,8 @@ export interface MinimalComposerProps {
 }
 
 const noop = () => {};
+/** Module-stable so the server/hydration arm is not a fresh identity per render. */
+const serverSnapshot = (): StreamingShape | undefined => undefined;
 
 const surface: CSSProperties = {
 	display: "flex",
@@ -101,6 +93,15 @@ function button(tone: "send" | "stop", enabled: boolean): CSSProperties {
 	};
 }
 
+/** The session's state in one line — honest about what is happening rather than
+ *  a decorative hint. Pure derivation, so it lives outside the component. */
+function hint(sessionId: string | undefined, opening: boolean, streaming: boolean): string {
+	if (!sessionId) return "no session bound";
+	if (opening) return "connecting — input is queued";
+	if (streaming) return "the agent is working";
+	return "Enter sends · Shift+Enter newline";
+}
+
 /**
  * A composer at the zero-import floor.
  *
@@ -121,39 +122,49 @@ export function MinimalComposer(props: MinimalComposerProps) {
 		if (!store || !sessionId) return null;
 		return store.watch<StreamingShape>(`session/${sessionId}/isStreaming`);
 	}, [store, sessionId]);
-	// `subscribe` is invoked THROUGH the observable, never detached: the
-	// published contract is an interface, and a host implementing `watch` with a
-	// bound method would throw on a torn-off reference (thread-minimal states the
-	// same rule — model the pattern, not the accident). The no-source fallback is
-	// module-stable so React does not tear down and re-subscribe every render.
-	const streaming =
-		useSyncExternalStore(
-			listener => streamingSource?.subscribe(listener) ?? noop,
-			() => streamingSource?.getSnapshot(),
-			() => undefined,
-		)?.isStreaming === true;
+	// Two rules, both load-bearing. (1) `subscribe` is invoked THROUGH the
+	// observable, never detached: the published contract is an interface, and a
+	// host implementing `watch` with a bound method would throw on a torn-off
+	// reference. (2) The closures are MEMOIZED, because React keys its
+	// subscription effect on `subscribe` identity alone — a fresh arrow per
+	// render unsubscribes and resubscribes on every commit, and this component
+	// re-renders on every keystroke. `use-session.ts` does the same thing for
+	// the same reason.
+	const subscribe = useCallback(
+		(listener: () => void) => streamingSource?.subscribe(listener) ?? noop,
+		[streamingSource],
+	);
+	const getSnapshot = useCallback(() => streamingSource?.getSnapshot(), [streamingSource]);
+	const streaming = useSyncExternalStore(subscribe, getSnapshot, serverSnapshot)?.isStreaming === true;
 
 	const continued = props.continuation?.continued === true;
+	// Name where the conversation went: the successor's title when the live
+	// `sessionSwitched` carried one, else its short id — after a reopen the
+	// journal divider carries only the id (session-types.ts:160-164). Saying
+	// "read-only" without a destination is the half of the duty that strands the
+	// user.
+	const successor = props.continuation?.toSessionTitle ?? props.continuation?.toSessionId;
+	const continuedInto = successor ? `"${successor.slice(0, 40)}"` : null;
 	const blocked = props.disabled === true || continued || !sessionId;
 	const canSend = !blocked && text.trim().length > 0;
 
 	const send = useCallback(() => {
 		const body = text.trim();
 		if (!body || !sessionId) return;
-		// The provider's action first (optimistic echo + queue awareness), the
-		// published verb as the honest fallback. Both are messages; neither is a
-		// driver handle.
-		if (props.actions?.sendMessage) props.actions.sendMessage(body);
-		else store?.act("sendMessage", { sessionId, workspaceId: props.sessionRef?.workspaceId, text: body });
+		// ONE path out: the published verb. The host's executor resolves the
+		// provider's registered action set itself (host-store.ts SESSION_VERBS is
+		// `actions ? actions.sendMessage(text) : driver.sendUserMessage(...)`), so a
+		// pack that reached for the action directly would duplicate that decision
+		// and skip whatever the executor adds later — the traceId it mints today.
+		store?.act("sendMessage", { sessionId, workspaceId: props.sessionRef?.workspaceId, text: body });
 		setText("");
 		areaRef.current?.focus();
-	}, [text, sessionId, props.actions, props.sessionRef?.workspaceId, store]);
+	}, [text, sessionId, props.sessionRef?.workspaceId, store]);
 
 	const stop = useCallback(() => {
 		if (!sessionId) return;
-		if (props.actions?.interruptRunForQueuedMessage) props.actions.interruptRunForQueuedMessage();
-		else store?.act("stopSession", { sessionId, workspaceId: props.sessionRef?.workspaceId });
-	}, [sessionId, props.actions, props.sessionRef?.workspaceId, store]);
+		store?.act("stopSession", { sessionId, workspaceId: props.sessionRef?.workspaceId });
+	}, [sessionId, props.sessionRef?.workspaceId, store]);
 
 	const onKeyDown = useCallback(
 		(event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -172,7 +183,7 @@ export function MinimalComposer(props: MinimalComposerProps) {
 				value={text}
 				placeholder={
 					continued
-						? `This session continued${props.continuation?.toSessionTitle ? ` into "${props.continuation.toSessionTitle}"` : ""} — it is read-only.`
+						? `This session continued${continuedInto ? ` into ${continuedInto}` : ""} — it is read-only.`
 						: (props.placeholder ?? "Message the agent…")
 				}
 				onChange={event => setText(event.target.value)}
@@ -181,16 +192,7 @@ export function MinimalComposer(props: MinimalComposerProps) {
 				aria-label="Message the agent"
 			/>
 			<div style={row}>
-				<span style={badge}>
-					{/* Honest about the session's state rather than a decorative hint. */}
-					{!sessionId
-						? "no session bound"
-						: props.opening
-							? "connecting — input is queued"
-							: streaming
-								? "the agent is working"
-								: "Enter sends · Shift+Enter newline"}
-				</span>
+				<span style={badge}>{hint(sessionId, props.opening === true, streaming)}</span>
 				{streaming ? (
 					<button type="button" style={button("stop", true)} onClick={stop}>
 						Stop
