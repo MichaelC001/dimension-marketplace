@@ -26,7 +26,7 @@ import {
 	useSlashCommands,
 	UsageLimitComposerSurface,
 } from "@fraym/ui";
-import { useState, type KeyboardEvent, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
 /** The prop shape this composer uses, declared structurally — a marketplace
  *  author has no path into the host's internal contract modules, and none is
@@ -50,6 +50,11 @@ interface ComposerProps {
 
 type ComposerSectionProps = ComposerProps;
 
+/** Stable identity for the no-session case: `useObservable` is a
+ *  useSyncExternalStore wrapper, so a fresh fallback object per render would
+ *  unsubscribe/resubscribe on every render. */
+const NO_SESSION = { subscribe: () => () => {}, getSnapshot: () => null };
+
 /** Per-session draft persistence — the same BEHAVIOR as the reference's
  *  session-scoped drafts: switch away mid-sentence, come back, the words are
  *  still here. Module-level on purpose: it outlives the component, scoped by
@@ -60,7 +65,7 @@ export default function IndependentComposer(props: ComposerSectionProps) {
 	const { sessionRef, placeholder, actions, session, disabled, opening, continuation, leftSlot, rightSlot } = props;
 	const draftKey = sessionRef ? `${sessionRef.workspaceId}\0${sessionRef.sessionId}` : "";
 	const [draft, setDraft] = useState(() => drafts.get(draftKey) ?? "");
-	const facts = (useObservable(session ?? { subscribe: () => () => {}, getSnapshot: () => null }) ?? null) as {
+	const facts = (useObservable(session ?? NO_SESSION) ?? null) as {
 		readonly isStreaming?: boolean;
 		readonly turnPhase?: "streaming" | "settled";
 		readonly goal?: unknown;
@@ -81,30 +86,32 @@ export default function IndependentComposer(props: ComposerSectionProps) {
 	const running = Boolean(facts?.isStreaming) || facts?.turnPhase === "streaming";
 	const goal = (facts?.goal ?? null) as { readonly objective?: string } | null | undefined;
 
-	const send = (text: string) => {
+	const send = (
+		text: string,
+		attachments: readonly { readonly data: string; readonly mimeType: string; readonly name?: string }[] = [],
+	) => {
 		if (!actions || blocked || running) return;
-		void actions.sendMessage(text);
+		// Composer.submitValue hands (text, attachments) and then clears the
+		// pills — dropping the second argument silently discarded every pasted
+		// image behind an "[Image #N]" marker. Map them to the wire shape the
+		// reference's sendComposed produces.
+		const images = attachments.map(a => ({ kind: "image", mimeType: a.mimeType, data: a.data, name: a.name }));
+		void actions.sendMessage(images.length > 0 ? { text, attachments: images } : text);
 	};
 	const stop = () => {
 		if (!actions) return;
 		void actions.interruptRunForQueuedMessage();
 	};
 
-	const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-		if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-			event.preventDefault();
-			send(draft);
-		}
-	};
-
 	return (
 		<Composer
 			value={draft}
 			onChange={setDraftPersisted}
-			onSubmit={text => {
+			onSubmit={(text, attachments) => {
 				setDraftPersisted("");
-				send(text);
+				send(text, attachments);
 			}}
+			onStashSend={(text, attachments) => send(text, attachments)}
 			onStop={stop}
 			streaming={Boolean(running)}
 			disabled={blocked}
@@ -114,7 +121,6 @@ export default function IndependentComposer(props: ComposerSectionProps) {
 			showTips
 			leftSlot={leftSlot}
 			rightSlot={rightSlot}
-			onKeyDown={onKeyDown}
 			slashCommands={slashCommands}
 			fileCompletionSource={fileCompletionSource}
 			argumentCompletionSource={argumentCompletionSource}

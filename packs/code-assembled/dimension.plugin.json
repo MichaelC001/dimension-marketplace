@@ -29,7 +29,7 @@
 			"label": "Code (Assembled)",
 			"icon": "grid",
 			"order": 31,
-			"description": "The Code space, reproduced from marketplace parts ONLY. Every filling — switcher, rail, workspace host, dock column, thread section, composer section and the pinned environment card — is an installed pack, and each pack re-exports the SHIPPED implementation from @fraym/ui (a granted pack external) rather than a reduced lookalike, so there is no second implementation anywhere to drift from the product. Every other field mirrors Dimension's compiled-in CODE definition field for field. The acceptance test is a structural diff against the built-in Code space on the same session: identical, or this pack has failed.",
+			"description": "The marketplace-assembly TEST SPACE. Its switcher, rail, workspace host, dock column, thread section and environment card are packs re-exporting the SHIPPED implementations from @fraym/ui (a granted pack external), so those fills are byte-identical to the built-in Code space by construction. Its COMPOSER is deliberately the odd one out: independent-composer, a second implementation assembled from the published PARTS (Composer, ComposerTips, the goal/usage surfaces, the capability adapters) and wired to the slim store channels \u2014 the owner-directed experiment that pressure-tests the parts decomposition. The acceptance gate is a live structural and behavioral comparison against the built-in Code space on the same session; any divergence is a finding against the parts surface, to be fixed in the part, not in this space.",
 			"mark": {
 				"accent": "#f59e0b"
 			},

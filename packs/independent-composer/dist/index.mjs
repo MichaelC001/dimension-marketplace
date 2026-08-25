@@ -2,6 +2,13 @@ import { Composer, GoalComposerSurface, UsageLimitComposerSurface, useArgumentCo
 import { useState } from "react";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
 //#region src/index.tsx
+/** Stable identity for the no-session case: `useObservable` is a
+*  useSyncExternalStore wrapper, so a fresh fallback object per render would
+*  unsubscribe/resubscribe on every render. */
+var NO_SESSION = {
+	subscribe: () => () => {},
+	getSnapshot: () => null
+};
 /** Per-session draft persistence — the same BEHAVIOR as the reference's
 *  session-scoped drafts: switch away mid-sentence, come back, the words are
 *  still here. Module-level on purpose: it outlives the component, scoped by
@@ -11,10 +18,7 @@ function IndependentComposer(props) {
 	const { sessionRef, placeholder, actions, session, disabled, opening, continuation, leftSlot, rightSlot } = props;
 	const draftKey = sessionRef ? `${sessionRef.workspaceId}\0${sessionRef.sessionId}` : "";
 	const [draft, setDraft] = useState(() => drafts.get(draftKey) ?? "");
-	const facts = useObservable(session ?? {
-		subscribe: () => () => {},
-		getSnapshot: () => null
-	}) ?? null;
+	const facts = useObservable(session ?? NO_SESSION) ?? null;
 	const slashCommands = useSlashCommands(draft);
 	const fileCompletionSource = useFileCompletions();
 	const argumentCompletionSource = useArgumentCompletions();
@@ -26,27 +30,31 @@ function IndependentComposer(props) {
 	const blocked = disabled || !sessionRef || !actions || continuation.continued;
 	const running = Boolean(facts?.isStreaming) || facts?.turnPhase === "streaming";
 	const goal = facts?.goal ?? null;
-	const send = (text) => {
+	const send = (text, attachments = []) => {
 		if (!actions || blocked || running) return;
-		actions.sendMessage(text);
+		const images = attachments.map((a) => ({
+			kind: "image",
+			mimeType: a.mimeType,
+			data: a.data,
+			name: a.name
+		}));
+		actions.sendMessage(images.length > 0 ? {
+			text,
+			attachments: images
+		} : text);
 	};
 	const stop = () => {
 		if (!actions) return;
 		actions.interruptRunForQueuedMessage();
 	};
-	const onKeyDown = (event) => {
-		if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-			event.preventDefault();
-			send(draft);
-		}
-	};
 	return /* @__PURE__ */ jsx(Composer, {
 		value: draft,
 		onChange: setDraftPersisted,
-		onSubmit: (text) => {
+		onSubmit: (text, attachments) => {
 			setDraftPersisted("");
-			send(text);
+			send(text, attachments);
 		},
+		onStashSend: (text, attachments) => send(text, attachments),
 		onStop: stop,
 		streaming: Boolean(running),
 		disabled: blocked,
@@ -56,7 +64,6 @@ function IndependentComposer(props) {
 		showTips: true,
 		leftSlot,
 		rightSlot,
-		onKeyDown,
 		slashCommands,
 		fileCompletionSource,
 		argumentCompletionSource,
