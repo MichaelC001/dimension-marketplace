@@ -64,8 +64,8 @@ function MinimalComposer(props) {
 		if (!store || !sessionId) return null;
 		return store.watch(`session/${sessionId}/isStreaming`);
 	}, [store, sessionId]);
-	const streaming = useSyncExternalStore(streamingSource?.subscribe ?? (() => noop), () => streamingSource?.getSnapshot() ?? false, () => false) === true;
-	const continued = props.continuation?.canOpen === true;
+	const streaming = useSyncExternalStore((listener) => streamingSource?.subscribe(listener) ?? noop, () => streamingSource?.getSnapshot(), () => void 0)?.isStreaming === true;
+	const continued = props.continuation?.continued === true;
 	const blocked = props.disabled === true || continued || !sessionId;
 	const canSend = !blocked && text.trim().length > 0;
 	const send = useCallback(() => {
@@ -111,7 +111,7 @@ function MinimalComposer(props) {
 			ref: areaRef,
 			style: field,
 			value: text,
-			placeholder: continued ? `This session continued${props.continuation?.targetTitle ? ` into "${props.continuation.targetTitle}"` : ""} — it is read-only.` : props.placeholder ?? "Message the agent…",
+			placeholder: continued ? `This session continued${props.continuation?.toSessionTitle ? ` into "${props.continuation.toSessionTitle}"` : ""} — it is read-only.` : props.placeholder ?? "Message the agent…",
 			onChange: (event) => setText(event.target.value),
 			onKeyDown,
 			disabled: blocked,

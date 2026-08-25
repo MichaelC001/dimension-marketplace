@@ -28,11 +28,22 @@ interface SessionActionsShape {
 	readonly interruptRunForQueuedMessage?: () => unknown;
 }
 
+/** Structural subset of the published `session/<id>/isStreaming` fact
+ *  (`StreamingFact`, store-types.ts:176-179). It is an OBJECT, not a boolean —
+ *  restated from the source, because a restatement invented from memory is a
+ *  false claim about the host and every read against it is dead. */
+interface StreamingShape {
+	readonly isStreaming?: boolean;
+	readonly hasRunningTool?: boolean;
+}
+
 /** A continued session is terminal — the contract's duty is to BLOCK sends and
- *  say where the conversation went, never to silently swallow input. */
+ *  say where the conversation went, never to silently swallow input.
+ *  Fields from `SessionContinuation` (session-types.ts:156-165). */
 interface ContinuationShape {
-	readonly canOpen?: boolean;
-	readonly targetTitle?: string | null;
+	readonly continued?: boolean;
+	readonly toSessionId?: string;
+	readonly toSessionTitle?: string;
 }
 
 /** The structural subset of `ComposerSectionProps` this section reads. */
@@ -108,16 +119,21 @@ export function MinimalComposer(props: MinimalComposerProps) {
 	// session, read with React's own store hook. No provider, no context.
 	const streamingSource = useMemo(() => {
 		if (!store || !sessionId) return null;
-		return store.watch<boolean>(`session/${sessionId}/isStreaming`);
+		return store.watch<StreamingShape>(`session/${sessionId}/isStreaming`);
 	}, [store, sessionId]);
+	// `subscribe` is invoked THROUGH the observable, never detached: the
+	// published contract is an interface, and a host implementing `watch` with a
+	// bound method would throw on a torn-off reference (thread-minimal states the
+	// same rule — model the pattern, not the accident). The no-source fallback is
+	// module-stable so React does not tear down and re-subscribe every render.
 	const streaming =
 		useSyncExternalStore(
-			streamingSource?.subscribe ?? (() => noop),
-			() => streamingSource?.getSnapshot() ?? false,
-			() => false,
-		) === true;
+			listener => streamingSource?.subscribe(listener) ?? noop,
+			() => streamingSource?.getSnapshot(),
+			() => undefined,
+		)?.isStreaming === true;
 
-	const continued = props.continuation?.canOpen === true;
+	const continued = props.continuation?.continued === true;
 	const blocked = props.disabled === true || continued || !sessionId;
 	const canSend = !blocked && text.trim().length > 0;
 
@@ -156,7 +172,7 @@ export function MinimalComposer(props: MinimalComposerProps) {
 				value={text}
 				placeholder={
 					continued
-						? `This session continued${props.continuation?.targetTitle ? ` into "${props.continuation.targetTitle}"` : ""} — it is read-only.`
+						? `This session continued${props.continuation?.toSessionTitle ? ` into "${props.continuation.toSessionTitle}"` : ""} — it is read-only.`
 						: (props.placeholder ?? "Message the agent…")
 				}
 				onChange={event => setText(event.target.value)}

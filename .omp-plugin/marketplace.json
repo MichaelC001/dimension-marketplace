@@ -19,11 +19,7 @@
 			"repository": "https://github.com/insodimension/dimension-marketplace",
 			"license": "MIT",
 			"category": "component",
-			"tags": [
-				"rail",
-				"component",
-				"sessions"
-			]
+			"tags": ["rail", "component", "sessions"]
 		},
 		{
 			"name": "three-lane",
@@ -36,11 +32,7 @@
 			"repository": "https://github.com/insodimension/dimension-marketplace",
 			"license": "MIT",
 			"category": "layout",
-			"tags": [
-				"layout",
-				"space",
-				"demo"
-			]
+			"tags": ["layout", "space", "demo"]
 		},
 		{
 			"name": "mochi-mark",
@@ -53,11 +45,7 @@
 			"repository": "https://github.com/insodimension/dimension-marketplace",
 			"license": "MIT",
 			"category": "component",
-			"tags": [
-				"mark",
-				"component",
-				"demo"
-			]
+			"tags": ["mark", "component", "demo"]
 		},
 		{
 			"name": "pulse-mark",
@@ -70,11 +58,7 @@
 			"repository": "https://github.com/insodimension/dimension-marketplace",
 			"license": "MIT",
 			"category": "component",
-			"tags": [
-				"mark",
-				"component",
-				"store"
-			]
+			"tags": ["mark", "component", "store"]
 		},
 		{
 			"name": "session-board",
@@ -87,12 +71,7 @@
 			"repository": "https://github.com/insodimension/dimension-marketplace",
 			"license": "MIT",
 			"category": "component",
-			"tags": [
-				"component",
-				"dock",
-				"sessions",
-				"store"
-			]
+			"tags": ["component", "dock", "sessions", "store"]
 		},
 		{
 			"name": "thread-minimal",
@@ -105,11 +84,7 @@
 			"repository": "https://github.com/insodimension/dimension-marketplace",
 			"license": "MIT",
 			"category": "component",
-			"tags": [
-				"component",
-				"thread",
-				"store"
-			]
+			"tags": ["component", "thread", "store"]
 		},
 		{
 			"name": "composer-minimal",

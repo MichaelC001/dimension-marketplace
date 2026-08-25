@@ -29,7 +29,7 @@
 			"label": "Forge",
 			"icon": "layers",
 			"order": 95,
-			"description": "A coding space assembled ENTIRELY from marketplace parts: this plugin's layout, rail-t3 in the rail, session-board in the dock, mochi-mark as the badge, thread-minimal and composer-minimal as the session surface's two sections, and env-minimal pinned top-right. The one piece that is NOT from the marketplace is the workspace host filling forge-main, because no contributed workspace component exists yet — that is the honest gap this space exists to expose.",
+			"description": "A coding space assembled from marketplace parts: this plugin's layout, rail-t3 in the rail, mochi-mark as the badge, thread-minimal and composer-minimal as the session surface's two sections, and env-minimal pinned top-right. TWO pieces are NOT from the marketplace, stated rather than hidden: the workspace host filling forge-main (no contributed workspace component exists), and the dock COLUMN (dock-classic) — session-board is a dock TAB, i.e. the instrument role, so it appears inside that dock rather than replacing it. Those two gaps are the measurement this space exists to take.",
 			"mark": {
 				"fill": "mochi-mark",
 				"accent": "#22d3ee",
@@ -38,7 +38,6 @@
 			"layout": "forge",
 			"components": {
 				"forge-rail": "rail-t3",
-				"forge-dock": "session-board",
 				"forge-badge": "mochi-mark"
 			},
 			"rail": {

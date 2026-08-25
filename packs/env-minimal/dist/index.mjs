@@ -56,8 +56,8 @@ function MinimalEnvironment(props) {
 	const snapshot = ref ? props.sessionCatalog?.find((row) => row.ref?.sessionId === ref.sessionId && row.ref?.workspaceId === ref.workspaceId) : void 0;
 	const checkout = snapshot?.workspace ?? props.workspace ?? null;
 	const ledger = snapshot?.scmLedger ?? null;
-	const tasks = snapshot?.tasks ?? [];
-	const running = tasks.filter((task) => task.status === "in_progress" || task.status === "running").length;
+	const items = (snapshot?.tasks ?? []).flatMap((phase) => phase.tasks ?? []);
+	const running = items.filter((task) => task.status === "in_progress").length;
 	return /* @__PURE__ */ jsxs("div", {
 		style: card,
 		"data-slot": "env-minimal",
@@ -87,14 +87,18 @@ function MinimalEnvironment(props) {
 				style: label,
 				children: "This session"
 			}),
-			ledger ? /* @__PURE__ */ jsxs(Fragment, { children: [
+			ledger?.available ? /* @__PURE__ */ jsxs(Fragment, { children: [
 				/* @__PURE__ */ jsx(Line, {
 					name: "commits",
-					value: ledger.commits ?? 0
+					value: ledger.committedCount ?? 0
 				}),
 				/* @__PURE__ */ jsx(Line, {
 					name: "files touched",
-					value: ledger.filesTouched ?? ledger.touchedCount ?? 0
+					value: ledger.touchedCount ?? 0
+				}),
+				/* @__PURE__ */ jsx(Line, {
+					name: "unpushed",
+					value: ledger.unpushedCount ?? 0
 				}),
 				ledger.recentTouchedPaths && ledger.recentTouchedPaths.length > 0 ? /* @__PURE__ */ jsx("div", {
 					style: {
@@ -110,9 +114,9 @@ function MinimalEnvironment(props) {
 				style: quiet,
 				children: "No source-control facts recorded yet."
 			}),
-			tasks.length > 0 ? /* @__PURE__ */ jsx(Line, {
+			items.length > 0 ? /* @__PURE__ */ jsx(Line, {
 				name: "tasks",
-				value: `${running} running / ${tasks.length}`
+				value: `${running} running / ${items.length}`
 			}) : null,
 			snapshot?.hasBackgroundWork ? /* @__PURE__ */ jsx("span", {
 				style: quiet,

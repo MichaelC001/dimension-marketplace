@@ -14,23 +14,29 @@
 
 import type { CSSProperties, ReactNode } from "react";
 
-/** Structural subset of the published `SessionScmLedgerSummary`. */
+/** Structural subset of the published `SessionScmLedgerSummary`
+ *  (scm-ledger.ts:43-59), restated FROM THE SOURCE. `available` comes first
+ *  because it is the field that decides whether any of the rest may be shown:
+ *  a summary can exist while carrying nothing verified for this session. */
 interface LedgerShape {
-	readonly commits?: number;
-	readonly filesTouched?: number;
+	readonly available?: boolean;
+	readonly committedCount?: number;
 	readonly touchedCount?: number;
-	readonly updatedAt?: string;
+	readonly unpushedCount?: number;
 	readonly recentTouchedPaths?: readonly string[];
-	readonly recentCommits?: readonly { readonly subject?: string }[];
+	readonly updatedAt?: string;
 }
 
-/** Structural subset of one catalogue snapshot row. */
+/** Structural subset of one catalogue snapshot row. `tasks` is a list of
+ *  PHASES (`TaskPhase`, types.ts:1493-1496) — each holding the items that
+ *  carry `status`; counting phases as tasks is how a live signal becomes a
+ *  confident zero. */
 interface SnapshotShape {
 	readonly ref?: { readonly sessionId?: string; readonly workspaceId?: string };
 	readonly title?: string;
 	readonly scmLedger?: LedgerShape | null;
 	readonly recap?: { readonly text?: string } | null;
-	readonly tasks?: readonly { readonly name?: string; readonly status?: string }[] | null;
+	readonly tasks?: readonly { readonly name?: string; readonly tasks?: readonly { readonly status?: string }[] }[] | null;
 	readonly hasBackgroundWork?: boolean;
 	readonly workspace?: WorkspaceShape | null;
 }
@@ -94,8 +100,8 @@ export function MinimalEnvironment(props: MinimalEnvironmentProps) {
 		: undefined;
 	const checkout = snapshot?.workspace ?? props.workspace ?? null;
 	const ledger = snapshot?.scmLedger ?? null;
-	const tasks = snapshot?.tasks ?? [];
-	const running = tasks.filter(task => task.status === "in_progress" || task.status === "running").length;
+	const items = (snapshot?.tasks ?? []).flatMap(phase => phase.tasks ?? []);
+	const running = items.filter(task => task.status === "in_progress").length;
 
 	return (
 		<div style={card} data-slot="env-minimal">
@@ -110,10 +116,11 @@ export function MinimalEnvironment(props: MinimalEnvironmentProps) {
 				<span style={quiet}>No workspace bound.</span>
 			)}
 			<div style={label}>This session</div>
-			{ledger ? (
+			{ledger?.available ? (
 				<>
-					<Line name="commits" value={ledger.commits ?? 0} />
-					<Line name="files touched" value={ledger.filesTouched ?? ledger.touchedCount ?? 0} />
+					<Line name="commits" value={ledger.committedCount ?? 0} />
+					<Line name="files touched" value={ledger.touchedCount ?? 0} />
+					<Line name="unpushed" value={ledger.unpushedCount ?? 0} />
 					{ledger.recentTouchedPaths && ledger.recentTouchedPaths.length > 0 ? (
 						<div style={{ ...quiet, ...mono, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
 							{ledger.recentTouchedPaths.slice(0, 3).join(" · ")}
@@ -125,7 +132,7 @@ export function MinimalEnvironment(props: MinimalEnvironmentProps) {
 				// rather than rendering zeros that read as "nothing changed".
 				<span style={quiet}>No source-control facts recorded yet.</span>
 			)}
-			{tasks.length > 0 ? <Line name="tasks" value={`${running} running / ${tasks.length}`} /> : null}
+			{items.length > 0 ? <Line name="tasks" value={`${running} running / ${items.length}`} /> : null}
 			{snapshot?.hasBackgroundWork ? <span style={quiet}>Background work in flight.</span> : null}
 			{snapshot?.recap?.text ? <span style={quiet}>{snapshot.recap.text.slice(0, 140)}</span> : null}
 		</div>
