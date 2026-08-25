@@ -1,10 +1,16 @@
-import { Composer, useArgumentCompletions, useFileCompletions, useObservable, useSlashCommands } from "@fraym/ui";
+import { Composer, GoalComposerSurface, UsageLimitComposerSurface, useArgumentCompletions, useFileCompletions, useObservable, useSlashCommands } from "@fraym/ui";
 import { useState } from "react";
-import { jsx, jsxs } from "react/jsx-runtime";
+import { Fragment, jsx, jsxs } from "react/jsx-runtime";
 //#region src/index.tsx
+/** Per-session draft persistence — the same BEHAVIOR as the reference's
+*  session-scoped drafts: switch away mid-sentence, come back, the words are
+*  still here. Module-level on purpose: it outlives the component, scoped by
+*  `workspaceId\0sessionId`, and never leaves the page. */
+var drafts = /* @__PURE__ */ new Map();
 function IndependentComposer(props) {
 	const { sessionRef, placeholder, actions, session, disabled, opening, continuation, leftSlot, rightSlot } = props;
-	const [draft, setDraft] = useState("");
+	const draftKey = sessionRef ? `${sessionRef.workspaceId}\0${sessionRef.sessionId}` : "";
+	const [draft, setDraft] = useState(() => drafts.get(draftKey) ?? "");
 	const facts = useObservable(session ?? {
 		subscribe: () => () => {},
 		getSnapshot: () => null
@@ -12,8 +18,14 @@ function IndependentComposer(props) {
 	const slashCommands = useSlashCommands(draft);
 	const fileCompletionSource = useFileCompletions();
 	const argumentCompletionSource = useArgumentCompletions();
+	const setDraftPersisted = (text) => {
+		setDraft(text);
+		if (draftKey) if (text) drafts.set(draftKey, text);
+		else drafts.delete(draftKey);
+	};
 	const blocked = disabled || !sessionRef || !actions || continuation.continued;
 	const running = Boolean(facts?.isStreaming) || facts?.turnPhase === "streaming";
+	const goal = facts?.goal ?? null;
 	const send = (text) => {
 		if (!actions || blocked || running) return;
 		actions.sendMessage(text);
@@ -28,34 +40,34 @@ function IndependentComposer(props) {
 			send(draft);
 		}
 	};
-	return /* @__PURE__ */ jsxs("div", {
-		"data-slot": "composer",
-		className: "relative z-[2] flex-none bg-fr-bg px-7 pb-[18px] pt-2",
-		children: [continuation.continued && /* @__PURE__ */ jsx("div", {
-			className: "mx-auto mb-2 max-w-[780px]",
-			children: /* @__PURE__ */ jsx("div", {
-				className: "rounded-fr-md border border-fr-warn/40 bg-fr-surface-2/95 px-3 py-1.5 font-secondary text-fr-xs text-fr-text-2",
-				children: "This session was continued — open the new session to keep working."
-			})
-		}), /* @__PURE__ */ jsx(Composer, {
-			"data-slot": "independent-composer",
-			value: draft,
-			onChange: setDraft,
-			onSubmit: (text) => send(text),
-			onStop: stop,
-			streaming: Boolean(running),
+	return /* @__PURE__ */ jsx(Composer, {
+		value: draft,
+		onChange: setDraftPersisted,
+		onSubmit: (text) => {
+			setDraftPersisted("");
+			send(text);
+		},
+		onStop: stop,
+		streaming: Boolean(running),
+		disabled: blocked,
+		connecting: opening && !continuation.continued,
+		focusWhenEnabled: !continuation.continued,
+		placeholder,
+		showTips: true,
+		leftSlot,
+		rightSlot,
+		onKeyDown,
+		slashCommands,
+		fileCompletionSource,
+		argumentCompletionSource,
+		topSlot: /* @__PURE__ */ jsxs(Fragment, { children: [/* @__PURE__ */ jsx(UsageLimitComposerSurface, {}), goal?.objective ? /* @__PURE__ */ jsx(GoalComposerSurface, {
+			goal,
 			disabled: blocked,
-			connecting: opening && !continuation.continued,
-			focusWhenEnabled: !continuation.continued,
-			placeholder,
-			showTips: true,
-			leftSlot,
-			rightSlot,
-			onKeyDown,
-			slashCommands,
-			fileCompletionSource,
-			argumentCompletionSource
-		})]
+			onEditGoal: (objective) => send(`/goal set ${objective}`),
+			onPauseGoal: () => send("/goal pause"),
+			onResumeGoal: () => send("/goal resume"),
+			onClearGoal: () => send("/goal drop")
+		}) : null] })
 	});
 }
 //#endregion

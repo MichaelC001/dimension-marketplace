@@ -1,22 +1,31 @@
 // An INDEPENDENT composer, assembled from published parts and the store.
 //
-// Imports from @fraym/ui: Composer (the field assembly PART — editor, mention
-// pills, attachments, slash menu, chips, send/stop row), ComposerTips, the
-// slim-channel completion adapters (useSlashCommands / useFileCompletions /
-// useArgumentCompletions — they read the promoted capabilities, never a
+// Parts from @fraym/ui: Composer (the field assembly — editor, mention pills,
+// attachments, slash menu, chips, voice mic + dictation, send/stop row),
+// ComposerTips, GoalComposerSurface + UsageLimitComposerSurface (top surfaces),
+// and the slim-channel completion adapters (useSlashCommands /
+// useFileCompletions / useArgumentCompletions — capabilities in, never a
 // driver). Imports from our section implementations: NOTHING.
 //
 // THE STORE ANSWER: send -> actions.sendMessage (the ONE behavior path — the
 // host executor resolves the live provider registry first, so this composer
 // gets the same optimistic echo, queue awareness and steer-ghost as the
 // shipped one). stop -> actions.interruptRunForQueuedMessage. state ->
-// useObservable(session), the folded facts. No driver anywhere.
+// useObservable(session), the folded facts (isStreaming, goal). No driver.
 //
-// What is OURS here is the SECTION wiring — draft state, the send mapping, the
-// streaming read — exactly the part a marketplace author is meant to own. The
-// field itself is the published part the reference also composes, so field
-// parity is structural, not aspirational.
-import { Composer, useArgumentCompletions, useFileCompletions, useObservable, useSlashCommands } from "@fraym/ui";
+// What is OURS here is the SECTION wiring — draft persistence, the send
+// mapping, the surfaces' placement — exactly the part a marketplace author
+// owns. The field, the tips, the surfaces and the voice subsystem are the
+// published parts the reference also composes, so parity is structural.
+import {
+	Composer,
+	GoalComposerSurface,
+	useArgumentCompletions,
+	useFileCompletions,
+	useObservable,
+	useSlashCommands,
+	UsageLimitComposerSurface,
+} from "@fraym/ui";
 import { useState, type KeyboardEvent, type ReactNode } from "react";
 
 /** The prop shape this composer uses, declared structurally — a marketplace
@@ -41,24 +50,36 @@ interface ComposerProps {
 
 type ComposerSectionProps = ComposerProps;
 
-interface ImageAttachment {
-	readonly id: string;
-	readonly dataUrl: string;
-}
+/** Per-session draft persistence — the same BEHAVIOR as the reference's
+ *  session-scoped drafts: switch away mid-sentence, come back, the words are
+ *  still here. Module-level on purpose: it outlives the component, scoped by
+ *  `workspaceId\0sessionId`, and never leaves the page. */
+const drafts = new Map<string, string>();
 
 export default function IndependentComposer(props: ComposerSectionProps) {
 	const { sessionRef, placeholder, actions, session, disabled, opening, continuation, leftSlot, rightSlot } = props;
-	const [draft, setDraft] = useState("");
+	const draftKey = sessionRef ? `${sessionRef.workspaceId}\0${sessionRef.sessionId}` : "";
+	const [draft, setDraft] = useState(() => drafts.get(draftKey) ?? "");
 	const facts = (useObservable(session ?? { subscribe: () => () => {}, getSnapshot: () => null }) ?? null) as {
 		readonly isStreaming?: boolean;
 		readonly turnPhase?: "streaming" | "settled";
+		readonly goal?: unknown;
 	} | null;
 	const slashCommands = useSlashCommands(draft);
 	const fileCompletionSource = useFileCompletions();
 	const argumentCompletionSource = useArgumentCompletions();
 
+	const setDraftPersisted = (text: string) => {
+		setDraft(text);
+		if (draftKey) {
+			if (text) drafts.set(draftKey, text);
+			else drafts.delete(draftKey);
+		}
+	};
+
 	const blocked = disabled || !sessionRef || !actions || continuation.continued;
 	const running = Boolean(facts?.isStreaming) || facts?.turnPhase === "streaming";
+	const goal = (facts?.goal ?? null) as { readonly objective?: string } | null | undefined;
 
 	const send = (text: string) => {
 		if (!actions || blocked || running) return;
@@ -77,33 +98,41 @@ export default function IndependentComposer(props: ComposerSectionProps) {
 	};
 
 	return (
-		<div data-slot="composer" className="relative z-[2] flex-none bg-fr-bg px-7 pb-[18px] pt-2">
-			{continuation.continued && (
-				<div className="mx-auto mb-2 max-w-[780px]">
-					<div className="rounded-fr-md border border-fr-warn/40 bg-fr-surface-2/95 px-3 py-1.5 font-secondary text-fr-xs text-fr-text-2">
-						This session was continued — open the new session to keep working.
-					</div>
-				</div>
-			)}
-			<Composer
-				data-slot="independent-composer"
-				value={draft}
-				onChange={setDraft}
-				onSubmit={text => send(text)}
-				onStop={stop}
-				streaming={Boolean(running)}
-				disabled={blocked}
-				connecting={opening && !continuation.continued}
-				focusWhenEnabled={!continuation.continued}
-				placeholder={placeholder}
-				showTips
-				leftSlot={leftSlot}
-				rightSlot={rightSlot}
-				onKeyDown={onKeyDown}
-				slashCommands={slashCommands}
-				fileCompletionSource={fileCompletionSource}
-				argumentCompletionSource={argumentCompletionSource}
-			/>
-		</div>
+		<Composer
+			value={draft}
+			onChange={setDraftPersisted}
+			onSubmit={text => {
+				setDraftPersisted("");
+				send(text);
+			}}
+			onStop={stop}
+			streaming={Boolean(running)}
+			disabled={blocked}
+			connecting={opening && !continuation.continued}
+			focusWhenEnabled={!continuation.continued}
+			placeholder={placeholder}
+			showTips
+			leftSlot={leftSlot}
+			rightSlot={rightSlot}
+			onKeyDown={onKeyDown}
+			slashCommands={slashCommands}
+			fileCompletionSource={fileCompletionSource}
+			argumentCompletionSource={argumentCompletionSource}
+			topSlot={
+				<>
+					<UsageLimitComposerSurface />
+					{goal?.objective ? (
+						<GoalComposerSurface
+							goal={goal as never}
+							disabled={blocked}
+							onEditGoal={objective => send(`/goal set ${objective}`)}
+							onPauseGoal={() => send("/goal pause")}
+							onResumeGoal={() => send("/goal resume")}
+							onClearGoal={() => send("/goal drop")}
+						/>
+					) : null}
+				</>
+			}
+		/>
 	);
 }
