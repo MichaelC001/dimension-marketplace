@@ -1,9 +1,9 @@
-import { Badge, Button, ComposerTips, Icon, Textarea, cn, useObservable } from "@fraym/ui";
+import { Badge, ComposerTips, Icon, IconButton, Textarea, cn, useObservable } from "@fraym/ui";
 import { useState } from "react";
 import { jsx, jsxs } from "react/jsx-runtime";
 //#region src/index.tsx
 function IndependentComposer(props) {
-	const { sessionRef, placeholder, actions, session, disabled, opening, continuation } = props;
+	const { sessionRef, placeholder, actions, session, disabled, opening, continuation, leftSlot, rightSlot } = props;
 	const [draft, setDraft] = useState("");
 	const facts = useObservable(session ?? {
 		subscribe: () => () => {},
@@ -53,28 +53,35 @@ function IndependentComposer(props) {
 					className: "max-h-[240px] min-h-[44px] w-full resize-none border-0 bg-transparent px-4 py-3 text-fr-sm text-fr-text focus:outline-none disabled:opacity-50"
 				}),
 				/* @__PURE__ */ jsx(ComposerTips, { className: "mx-auto mt-2.5 max-w-[780px] px-2" }),
-				/* @__PURE__ */ jsx("div", {
-					className: "flex items-center justify-end gap-2 px-3 pb-2.5",
-					children: running ? /* @__PURE__ */ jsxs(Button, {
-						variant: "secondary",
-						size: "sm",
-						onClick: stop,
-						"data-slot": "independent-composer-stop",
-						children: [/* @__PURE__ */ jsx(Icon, {
-							name: "square",
-							className: "size-3.5"
-						}), "Stop"]
-					}) : /* @__PURE__ */ jsxs(Button, {
-						variant: "primary",
-						size: "sm",
-						onClick: send,
-						disabled: !canSend,
-						"data-slot": "independent-composer-send",
-						children: [/* @__PURE__ */ jsx(Icon, {
-							name: "send",
-							className: "size-3.5"
-						}), "Send"]
-					})
+				/* @__PURE__ */ jsxs("div", {
+					className: "flex items-center gap-2 px-2.5 pb-[9px] pt-2",
+					children: [
+						leftSlot,
+						/* @__PURE__ */ jsx("span", { className: "flex-1" }),
+						rightSlot,
+						running ? /* @__PURE__ */ jsx(IconButton, {
+							variant: "accent",
+							"aria-label": "Stop response",
+							onClick: stop,
+							"data-slot": "independent-composer-stop",
+							children: /* @__PURE__ */ jsx(Icon, {
+								name: "square",
+								size: 16,
+								strokeWidth: 2
+							})
+						}) : /* @__PURE__ */ jsx(IconButton, {
+							variant: "accent",
+							"aria-label": "Send",
+							onClick: send,
+							disabled: !canSend,
+							"data-slot": "independent-composer-send",
+							children: /* @__PURE__ */ jsx(Icon, {
+								name: "send",
+								size: 16,
+								strokeWidth: 2
+							})
+						})
+					]
 				})
 			]
 		})]

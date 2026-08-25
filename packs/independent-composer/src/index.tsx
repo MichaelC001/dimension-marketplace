@@ -16,8 +16,8 @@
 //   store.watch("session/<id>/verb")       the published cell, watched directly
 //
 // Styling: the fr-* token classes. theme.css is host-loaded, so the tokens are
-import { Badge, Button, ComposerTips, Icon, Textarea, cn, useObservable } from "@fraym/ui";
-import { useState, type KeyboardEvent } from "react";
+import { Badge, ComposerTips, IconButton, Icon, Textarea, cn, useObservable } from "@fraym/ui";
+import { useState, type KeyboardEvent, type ReactNode } from "react";
 
 /** The prop shape this composer uses, declared structurally — a marketplace
  *  author has no path into the host's internal contract modules, and none is
@@ -35,12 +35,17 @@ interface ComposerProps {
 	readonly disabled: boolean;
 	readonly opening: boolean;
 	readonly continuation: { readonly continued: boolean };
+	/** Host chrome: the permission chip + mode pills (left), the model picker +
+	 *  context radial cluster (right). Rendered where the shipped composer puts
+	 *  them — the host builds them, the pack only places them. */
+	readonly leftSlot?: ReactNode;
+	readonly rightSlot?: ReactNode;
 }
 
 type ComposerSectionProps = ComposerProps;
 
 export default function IndependentComposer(props: ComposerSectionProps) {
-	const { sessionRef, placeholder, actions, session, disabled, opening, continuation } = props;
+	const { sessionRef, placeholder, actions, session, disabled, opening, continuation, leftSlot, rightSlot } = props;
 	const [draft, setDraft] = useState("");
 	const facts = useObservable(
 		session ?? { subscribe: () => () => {}, getSnapshot: () => null },
@@ -94,17 +99,24 @@ export default function IndependentComposer(props: ComposerSectionProps) {
 					className="max-h-[240px] min-h-[44px] w-full resize-none border-0 bg-transparent px-4 py-3 text-fr-sm text-fr-text focus:outline-none disabled:opacity-50"
 				/>
 				<ComposerTips className="mx-auto mt-2.5 max-w-[780px] px-2" />
-				<div className="flex items-center justify-end gap-2 px-3 pb-2.5">
+				<div className="flex items-center gap-2 px-2.5 pb-[9px] pt-2">
+					{leftSlot}
+					<span className="flex-1" />
+					{rightSlot}
 					{running ? (
-						<Button variant="secondary" size="sm" onClick={stop} data-slot="independent-composer-stop">
-							<Icon name="square" className="size-3.5" />
-							Stop
-						</Button>
+						<IconButton variant="accent" aria-label="Stop response" onClick={stop} data-slot="independent-composer-stop">
+							<Icon name="square" size={16} strokeWidth={2} />
+						</IconButton>
 					) : (
-						<Button variant="primary" size="sm" onClick={send} disabled={!canSend} data-slot="independent-composer-send">
-							<Icon name="send" className="size-3.5" />
-							Send
-						</Button>
+						<IconButton
+							variant="accent"
+							aria-label="Send"
+							onClick={send}
+							disabled={!canSend}
+							data-slot="independent-composer-send"
+						>
+							<Icon name="send" size={16} strokeWidth={2} />
+						</IconButton>
 					)}
 				</div>
 			</div>
