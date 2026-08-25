@@ -231,6 +231,23 @@
 				"switcher",
 				"assembly"
 			]
+		},
+		{
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-marketplace",
+			"license": "MIT",
+			"name": "independent-composer",
+			"source": "./packs/independent-composer",
+			"description": "A composer built independently on the bricks tier — Fraym primitives + tokens + the store channels. Ships no shipped-implementation import.",
+			"category": "component",
+			"tags": [
+				"component",
+				"composer",
+				"independent"
+			]
 		}
 	]
 }

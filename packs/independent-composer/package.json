@@ -1,0 +1,29 @@
+{
+	"name": "@dimension/independent-composer",
+	"author": "Dimension",
+	"version": "0.1.0",
+	"description": "Independent composer — built from Fraym primitives and the store, not from the shipped composer.",
+	"type": "module",
+	"main": "./src/index.ts",
+	"omp": {
+		"name": "independent-composer",
+		"description": "Independent composer built on the bricks tier.",
+		"defaultEnabled": true,
+		"category": "component",
+		"keywords": [
+			"component",
+			"composer",
+			"independent"
+		]
+	},
+	"private": true,
+	"scripts": {
+		"build": "vite build"
+	},
+	"peerDependencies": {
+		"react": ">=19"
+	},
+	"devDependencies": {
+		"vite": "8.1.5"
+	}
+}

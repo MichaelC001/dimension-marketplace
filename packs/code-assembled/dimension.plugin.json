@@ -88,7 +88,7 @@
 				],
 				"sections": {
 					"thread": "classic-thread",
-					"composer": "classic-composer"
+					"composer": "independent-composer"
 				}
 			},
 			"generalAgents": {
