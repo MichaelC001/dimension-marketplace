@@ -1,15 +1,20 @@
-// Classic Dock — the dock COLUMN — the tab strip, the resize handle, the panel body.
+// the dock COLUMN — tab strip, resize handle, panel body, shipped AS A PACK.
 //
-// The whole pack is a RE-EXPORT. `@fraym/ui` is a granted pack external (the
-// same lane React rides), so a pack does not have to reimplement a shipped
-// surface to contribute it: it ships the product's own component, installed
-// from the marketplace rather than compiled in. That is the difference between
-// an assembled space and a lookalike — there is no second implementation here
-// to drift, degrade, or approximate.
+// There is no reimplementation here, and that is the point. `DOCK_CLASSIC` is
+// published on the host's EXTERNALS contract (`host-externals.ts`), so this
+// pack's contribution is the REAL component — identical pixels, identical
+// behaviour, identical contract — delivered through the marketplace instead of
+// compiled into the shell.
 //
-// Fills the `dock-column` contract, NOT `dock`: a component declaring `dock` is an instrument (one tab). This is the column those tabs live in.
+// PROVEN, not assumed: a wrapper carrying `data-probe-pack="classic-dock"` was built
+// into this bundle and the marker appeared in the assembled space's DOM while
+// being absent from the built-in Code space. Before the externals contract
+// published these implementations, this same import resolved to a module that
+// did not export it — the named import threw at `import()`, the load rejected,
+// and the slot fell back to the built-in with no visible symptom.
 import { DOCK_CLASSIC } from "@fraym/ui";
 
-/** The bundle contract (doc 68 §16.2): the host takes the DEFAULT export. */
+export const implementation = DOCK_CLASSIC;
+
+/** The bundle contract (doc 68 §16.2): the host takes the default export. */
 export default DOCK_CLASSIC.component;
-export { DOCK_CLASSIC as implementation };

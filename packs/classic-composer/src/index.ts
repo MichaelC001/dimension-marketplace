@@ -1,16 +1,17 @@
-// Classic Composer — the session surface's composer section, shipped AS A PACK.
+// the session surface's composer section, shipped AS A PACK.
 //
-// There is no reimplementation here, and that is the entire point. The shipped
-// implementation is exported from `@fraym/ui` (a granted pack external), so this
+// There is no reimplementation here, and that is the point. `COMPOSER_CLASSIC` is
+// published on the host's EXTERNALS contract (`host-externals.ts`), so this
 // pack's contribution is the REAL component — identical pixels, identical
 // behaviour, identical contract — delivered through the marketplace instead of
-// hardcoded into the shell. A space that binds this is assembled, not
-// approximated: the difference between "looks like the product" and "is the
-// product, installed".
+// compiled into the shell.
 //
-// The reduced `*-minimal` packs prove a DIFFERENT thing (that the contract can
-// carry a stranger's part at the zero-import floor). This proves the contract
-// can carry the product itself.
+// PROVEN, not assumed: a wrapper carrying `data-probe-pack="classic-composer"` was built
+// into this bundle and the marker appeared in the assembled space's DOM while
+// being absent from the built-in Code space. Before the externals contract
+// published these implementations, this same import resolved to a module that
+// did not export it — the named import threw at `import()`, the load rejected,
+// and the slot fell back to the built-in with no visible symptom.
 import { COMPOSER_CLASSIC } from "@fraym/ui";
 
 export const implementation = COMPOSER_CLASSIC;
