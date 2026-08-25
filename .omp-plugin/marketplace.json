@@ -226,6 +226,57 @@
 				"assembly",
 				"parity"
 			]
+		},
+		{
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-marketplace",
+			"license": "MIT",
+			"name": "classic-dock",
+			"source": "./packs/classic-dock",
+			"description": "The shipped dock COLUMN as a pack — tab strip, resize handle, panel body. Fills the `dock-column` contract (a `dock` component is an instrument, i.e. one tab).",
+			"category": "component",
+			"tags": [
+				"component",
+				"dock",
+				"assembly"
+			]
+		},
+		{
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-marketplace",
+			"license": "MIT",
+			"name": "classic-workspace",
+			"source": "./packs/classic-workspace",
+			"description": "The shipped workspace host as a pack — the center pane's splits, tiling and overlays. The first marketplace part to ever fill the `workspace` contract.",
+			"category": "component",
+			"tags": [
+				"component",
+				"workspace",
+				"assembly"
+			]
+		},
+		{
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-marketplace",
+			"license": "MIT",
+			"name": "classic-switcher",
+			"source": "./packs/classic-switcher",
+			"description": "The shipped switcher rail as a pack — the far-left column of space marks.",
+			"category": "component",
+			"tags": [
+				"component",
+				"switcher",
+				"assembly"
+			]
 		}
 	]
 }

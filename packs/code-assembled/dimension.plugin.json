@@ -5,6 +5,10 @@
 	"type": "layout",
 	"slots": [
 		{
+			"id": "ca-switcher",
+			"contract": "switcher"
+		},
+		{
 			"id": "ca-rail",
 			"contract": "rail",
 			"items": "sessions"
@@ -25,13 +29,16 @@
 			"label": "Code (Assembled)",
 			"icon": "braces",
 			"order": 31,
-			"description": "The Code space, reproduced 1:1 from marketplace parts. Every field below mirrors Dimension's compiled-in CODE definition (packages/app/src/spaces/index.ts) - the same four rail actions, the same three surfaces, the same five workspace actions, the same generalAgents policy, the same amber mark - and every filling is an installed pack that re-exports the SHIPPED implementation from @fraym/ui rather than a reduced lookalike. The comparison target is the built-in Code space: identical, or this pack has failed.",
+			"description": "The Code space, reproduced from marketplace parts ONLY. Every filling — switcher, rail, workspace host, dock column, thread section, composer section and the pinned environment card — is an installed pack, and each pack re-exports the SHIPPED implementation from @fraym/ui (a granted pack external) rather than a reduced lookalike, so there is no second implementation anywhere to drift from the product. Every other field mirrors Dimension's compiled-in CODE definition field for field. The acceptance test is a structural diff against the built-in Code space on the same session: identical, or this pack has failed.",
 			"mark": {
 				"accent": "#f59e0b"
 			},
 			"layout": "code-assembled",
 			"components": {
-				"ca-rail": "classic-rail"
+				"ca-switcher": "classic-switcher",
+				"ca-rail": "classic-rail",
+				"ca-workspace": "classic-workspace",
+				"ca-dock": "classic-dock"
 			},
 			"rail": {
 				"actions": [
@@ -87,6 +94,15 @@
 			"generalAgents": {
 				"list": "discoverable",
 				"default": "coding"
+			},
+			"widgets": {
+				"pinned": [
+					{
+						"fill": "classic-environment",
+						"post": "top-right",
+						"station": "environment"
+					}
+				]
 			}
 		}
 	]
