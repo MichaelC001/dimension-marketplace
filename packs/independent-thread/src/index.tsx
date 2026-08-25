@@ -27,21 +27,24 @@ import { memo, type ComponentProps, type ReactNode } from "react";
  *  needed: the host passes these fields, types are erased at build. */
 interface ThreadSectionProps {
 	readonly sessionRef: { readonly workspaceId: string; readonly sessionId: string } | null;
+	/** The host Store (contract prop declared for completeness; this section
+	 *  takes the SectionSessionScope path, exactly like the reference). */
+	readonly store?: unknown;
 	readonly session?: { subscribe: (fn: () => void) => () => void; getSnapshot: () => unknown } | null;
 	readonly actions?: Record<string, unknown> | null;
 	readonly capabilities?: Record<string, unknown> | null;
-	readonly avatar: string;
+	readonly avatar: ComponentProps<typeof PresenceSurface>["avatar"];
 	readonly bridgedPresences?: readonly unknown[];
 	readonly vibrState: ComponentProps<typeof PresenceSurface>["state"];
 	readonly vibrMode?: string;
 	readonly energy: number;
 	readonly emotion?: ComponentProps<typeof PresenceSurface>["emotion"];
-	readonly behaviour?: unknown;
-	readonly signals?: unknown;
+	readonly behaviour?: ComponentProps<typeof PresenceSurface>["behaviour"];
+	readonly signals?: ComponentProps<typeof PresenceSurface>["signals"];
 	readonly verb?: string;
 	readonly showPresence: boolean;
-	readonly showAvatar?: boolean;
-	readonly agentMetaFallback?: string;
+	readonly showAvatar: boolean;
+	readonly agentMetaFallback: string;
 	readonly opening: boolean;
 	readonly enterOnMount?: boolean;
 	readonly contentClassName?: string;
@@ -69,7 +72,7 @@ function IndependentThreadSection(props: ThreadSectionProps) {
 						emotion={props.emotion}
 						behaviour={props.behaviour}
 						signals={props.signals}
-						bridgedPresences={props.bridgedPresences as never}
+						bridgedPresences={props.bridgedPresences}
 						size={config.vibrSize}
 					/>
 				}
