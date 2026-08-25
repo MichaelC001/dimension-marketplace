@@ -27,7 +27,7 @@
 			"specVersion": 1,
 			"id": "code-assembled",
 			"label": "Code (Assembled)",
-			"icon": "braces",
+			"icon": "grid",
 			"order": 31,
 			"description": "The Code space, reproduced from marketplace parts ONLY. Every filling — switcher, rail, workspace host, dock column, thread section, composer section and the pinned environment card — is an installed pack, and each pack re-exports the SHIPPED implementation from @fraym/ui (a granted pack external) rather than a reduced lookalike, so there is no second implementation anywhere to drift from the product. Every other field mirrors Dimension's compiled-in CODE definition field for field. The acceptance test is a structural diff against the built-in Code space on the same session: identical, or this pack has failed.",
 			"mark": {
