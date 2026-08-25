@@ -139,6 +139,93 @@
 				"assembly",
 				"marketplace"
 			]
+		},
+		{
+			"name": "classic-thread",
+			"source": "./packs/classic-thread",
+			"description": "The shipped thread section, installable: re-exports THREAD_CLASSIC from @fraym/ui, so a space that binds it renders the REAL transcript (tool cards, metrics, presence) rather than a reduced lookalike.",
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-marketplace",
+			"license": "MIT",
+			"category": "component",
+			"tags": [
+				"component",
+				"thread",
+				"classic"
+			]
+		},
+		{
+			"name": "classic-composer",
+			"source": "./packs/classic-composer",
+			"description": "The shipped composer section, installable: re-exports COMPOSER_CLASSIC from @fraym/ui - model picker, permission pill, attachments, mic, stop, slash catalog, all of it.",
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-marketplace",
+			"license": "MIT",
+			"category": "component",
+			"tags": [
+				"component",
+				"composer",
+				"classic"
+			]
+		},
+		{
+			"name": "classic-rail",
+			"source": "./packs/classic-rail",
+			"description": "The shipped session rail, installable: re-exports RAIL_CLASSIC from @fraym/ui - project grouping, rail actions, search, the full row model.",
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-marketplace",
+			"license": "MIT",
+			"category": "component",
+			"tags": [
+				"component",
+				"rail",
+				"classic"
+			]
+		},
+		{
+			"name": "classic-environment",
+			"source": "./packs/classic-environment",
+			"description": "The shipped environment card, installable: re-exports ENVIRONMENT_CLASSIC from @fraym/ui - live SCM scan, submodule pins, worktree verbs, Push.",
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-marketplace",
+			"license": "MIT",
+			"category": "component",
+			"tags": [
+				"component",
+				"widget",
+				"environment",
+				"classic"
+			]
+		},
+		{
+			"name": "code-assembled",
+			"source": "./packs/code-assembled",
+			"description": "Code (Assembled) - the Code space reproduced 1:1 from marketplace parts. Its space document mirrors Dimension's compiled-in CODE field for field, and every filling is a pack shipping the real component. The parity harness: put it beside Code and any visible difference is a hole in the assembly contract.",
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-marketplace",
+			"license": "MIT",
+			"category": "layout",
+			"tags": [
+				"layout",
+				"space",
+				"assembly",
+				"parity"
+			]
 		}
 	]
 }

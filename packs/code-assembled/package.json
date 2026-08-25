@@ -1,0 +1,22 @@
+{
+	"name": "@dimension/code-assembled",
+	"author": "Dimension",
+	"version": "0.1.0",
+	"description": "Code (Assembled) - the Code space reproduced 1:1 from marketplace parts: a layout declaring its own slots, plus a space whose fillings are packs that ship the real components.",
+	"type": "module",
+	"main": "./src/index.ts",
+	"types": "./src/index.ts",
+	"private": true,
+	"omp": {
+		"name": "code-assembled",
+		"description": "Code (Assembled) - the Code space, marketplace-built. Compare it against Code; they should be identical.",
+		"defaultEnabled": true,
+		"category": "layout",
+		"keywords": [
+			"layout",
+			"space",
+			"assembly",
+			"parity"
+		]
+	}
+}

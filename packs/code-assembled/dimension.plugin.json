@@ -1,0 +1,93 @@
+{
+	"plugin": "code-assembled",
+	"contractVersion": 1,
+	"title": "Code (Assembled)",
+	"type": "layout",
+	"slots": [
+		{
+			"id": "ca-rail",
+			"contract": "rail",
+			"items": "sessions"
+		},
+		{
+			"id": "ca-workspace",
+			"contract": "workspace"
+		},
+		{
+			"id": "ca-dock",
+			"contract": "dock"
+		}
+	],
+	"spaces": [
+		{
+			"specVersion": 1,
+			"id": "code-assembled",
+			"label": "Code (Assembled)",
+			"icon": "braces",
+			"order": 31,
+			"description": "The Code space, reproduced 1:1 from marketplace parts. Every field below mirrors Dimension's compiled-in CODE definition (packages/app/src/spaces/index.ts) - the same four rail actions, the same three surfaces, the same five workspace actions, the same generalAgents policy, the same amber mark - and every filling is an installed pack that re-exports the SHIPPED implementation from @fraym/ui rather than a reduced lookalike. The comparison target is the built-in Code space: identical, or this pack has failed.",
+			"mark": {
+				"accent": "#f59e0b"
+			},
+			"layout": "code-assembled",
+			"components": {
+				"ca-rail": "classic-rail"
+			},
+			"rail": {
+				"actions": [
+					{
+						"id": "new-session",
+						"label": "New session",
+						"icon": "plus",
+						"target": "new-session",
+						"kbd": "Cmd+N",
+						"primary": true
+					},
+					{
+						"id": "loops",
+						"label": "Autonomy",
+						"icon": "orbit",
+						"target": "loops"
+					},
+					{
+						"id": "models",
+						"label": "Models",
+						"icon": "bot",
+						"target": "models"
+					},
+					{
+						"id": "plugins",
+						"label": "Capabilities",
+						"icon": "box",
+						"target": "plugins"
+					}
+				]
+			},
+			"workspace": {
+				"surfaces": [
+					"session",
+					"autonomy",
+					"models"
+				],
+				"start": "session",
+				"session": "session",
+				"switchPolicy": "remember",
+				"actions": [
+					"jobs",
+					"refresh",
+					"environment",
+					"dock",
+					"sound"
+				],
+				"sections": {
+					"thread": "classic-thread",
+					"composer": "classic-composer"
+				}
+			},
+			"generalAgents": {
+				"list": "discoverable",
+				"default": "coding"
+			}
+		}
+	]
+}

@@ -1,0 +1,36 @@
+{
+	"name": "@dimension/classic-rail",
+	"author": "Dimension",
+	"version": "0.1.0",
+	"description": "Classic Rail - the session rail as Dimension ships it, delivered as a marketplace component (re-exports the shipped implementation from @fraym/ui; no reimplementation).",
+	"type": "module",
+	"main": "./src/index.ts",
+	"types": "./src/index.ts",
+	"private": true,
+	"scripts": {
+		"build": "vite build"
+	},
+	"peerDependencies": {
+		"react": ">=19"
+	},
+	"keywords": [
+		"component",
+		"rail",
+		"classic",
+		"assembly"
+	],
+	"omp": {
+		"name": "classic-rail",
+		"description": "Classic Rail - the shipped the session rail, installable.",
+		"defaultEnabled": true,
+		"category": "component",
+		"keywords": [
+			"component",
+			"rail",
+			"classic"
+		]
+	},
+	"devDependencies": {
+		"vite": "8.1.5"
+	}
+}
