@@ -19,7 +19,11 @@
 			"repository": "https://github.com/insodimension/dimension-marketplace",
 			"license": "MIT",
 			"category": "component",
-			"tags": ["rail", "component", "sessions"]
+			"tags": [
+				"rail",
+				"component",
+				"sessions"
+			]
 		},
 		{
 			"name": "three-lane",
@@ -32,7 +36,11 @@
 			"repository": "https://github.com/insodimension/dimension-marketplace",
 			"license": "MIT",
 			"category": "layout",
-			"tags": ["layout", "space", "demo"]
+			"tags": [
+				"layout",
+				"space",
+				"demo"
+			]
 		},
 		{
 			"name": "mochi-mark",
@@ -45,7 +53,11 @@
 			"repository": "https://github.com/insodimension/dimension-marketplace",
 			"license": "MIT",
 			"category": "component",
-			"tags": ["mark", "component", "demo"]
+			"tags": [
+				"mark",
+				"component",
+				"demo"
+			]
 		},
 		{
 			"name": "pulse-mark",
@@ -58,7 +70,11 @@
 			"repository": "https://github.com/insodimension/dimension-marketplace",
 			"license": "MIT",
 			"category": "component",
-			"tags": ["mark", "component", "store"]
+			"tags": [
+				"mark",
+				"component",
+				"store"
+			]
 		},
 		{
 			"name": "session-board",
@@ -71,12 +87,17 @@
 			"repository": "https://github.com/insodimension/dimension-marketplace",
 			"license": "MIT",
 			"category": "component",
-			"tags": ["component", "dock", "sessions", "store"]
+			"tags": [
+				"component",
+				"dock",
+				"sessions",
+				"store"
+			]
 		},
 		{
-			"name": "thread-minimal",
-			"source": "./packs/thread-minimal",
-			"description": "Minimal Thread - a compact transcript replacing the classic thread SECTION of the session surface by space binding (workspace.sections.thread, doc 69 §3.5). The first contributed thread section, at the zero-import floor: react only, facts from the Store's published session/<id>/transcript + verb cells.",
+			"name": "classic-thread",
+			"source": "./packs/classic-thread",
+			"description": "The shipped thread section, installable: re-exports THREAD_CLASSIC from @fraym/ui, so a space that binds it renders the REAL transcript (tool cards, metrics, presence) rather than a reduced lookalike.",
 			"version": "0.1.0",
 			"author": {
 				"name": "Dimension"
@@ -84,7 +105,149 @@
 			"repository": "https://github.com/insodimension/dimension-marketplace",
 			"license": "MIT",
 			"category": "component",
-			"tags": ["component", "thread", "store"]
+			"tags": [
+				"component",
+				"thread",
+				"classic"
+			]
+		},
+		{
+			"name": "classic-composer",
+			"source": "./packs/classic-composer",
+			"description": "The shipped composer section, installable: re-exports COMPOSER_CLASSIC from @fraym/ui - model picker, permission pill, attachments, mic, stop, slash catalog, all of it.",
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-marketplace",
+			"license": "MIT",
+			"category": "component",
+			"tags": [
+				"component",
+				"composer",
+				"classic"
+			]
+		},
+		{
+			"name": "classic-rail",
+			"source": "./packs/classic-rail",
+			"description": "The shipped session rail, installable: re-exports RAIL_CLASSIC from @fraym/ui - project grouping, rail actions, search, the full row model.",
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-marketplace",
+			"license": "MIT",
+			"category": "component",
+			"tags": [
+				"component",
+				"rail",
+				"classic"
+			]
+		},
+		{
+			"name": "classic-environment",
+			"source": "./packs/classic-environment",
+			"description": "The shipped environment card, installable: re-exports ENVIRONMENT_CLASSIC from @fraym/ui - live SCM scan, submodule pins, worktree verbs, Push.",
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-marketplace",
+			"license": "MIT",
+			"category": "component",
+			"tags": [
+				"component",
+				"widget",
+				"environment",
+				"classic"
+			]
+		},
+		{
+			"name": "code-assembled",
+			"source": "./packs/code-assembled",
+			"description": "Code (Assembled) - the Code space reproduced 1:1 from marketplace parts. Its space document mirrors Dimension's compiled-in CODE field for field, and every filling is a pack shipping the real component. The parity harness: put it beside Code and any visible difference is a hole in the assembly contract.",
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-marketplace",
+			"license": "MIT",
+			"category": "layout",
+			"tags": [
+				"layout",
+				"space",
+				"assembly",
+				"parity"
+			]
+		},
+		{
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-marketplace",
+			"license": "MIT",
+			"name": "classic-dock",
+			"source": "./packs/classic-dock",
+			"description": "The shipped dock COLUMN as a pack — tab strip, resize handle, panel body. Fills the `dock-column` contract (a `dock` component is an instrument, i.e. one tab).",
+			"category": "component",
+			"tags": [
+				"component",
+				"dock",
+				"assembly"
+			]
+		},
+		{
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-marketplace",
+			"license": "MIT",
+			"name": "classic-workspace",
+			"source": "./packs/classic-workspace",
+			"description": "The shipped workspace host as a pack — the center pane's splits, tiling and overlays. The first marketplace part to ever fill the `workspace` contract.",
+			"category": "component",
+			"tags": [
+				"component",
+				"workspace",
+				"assembly"
+			]
+		},
+		{
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-marketplace",
+			"license": "MIT",
+			"name": "classic-switcher",
+			"source": "./packs/classic-switcher",
+			"description": "The shipped switcher rail as a pack — the far-left column of space marks.",
+			"category": "component",
+			"tags": [
+				"component",
+				"switcher",
+				"assembly"
+			]
+		},
+		{
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-marketplace",
+			"license": "MIT",
+			"name": "independent-composer",
+			"source": "./packs/independent-composer",
+			"description": "A composer built independently on the bricks tier — Fraym primitives + tokens + the store channels. Ships no shipped-implementation import.",
+			"category": "component",
+			"tags": [
+				"component",
+				"composer",
+				"independent"
+			]
 		}
 	]
 }

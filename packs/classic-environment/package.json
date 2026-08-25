@@ -1,0 +1,36 @@
+{
+	"name": "@dimension/classic-environment",
+	"author": "Dimension",
+	"version": "0.1.0",
+	"description": "Classic Environment - the environment card as Dimension ships it, delivered as a marketplace component (re-exports the shipped implementation from @fraym/ui; no reimplementation).",
+	"type": "module",
+	"main": "./src/index.ts",
+	"types": "./src/index.ts",
+	"private": true,
+	"scripts": {
+		"build": "vite build"
+	},
+	"peerDependencies": {
+		"react": ">=19"
+	},
+	"keywords": [
+		"component",
+		"workspace-surface",
+		"classic",
+		"assembly"
+	],
+	"omp": {
+		"name": "classic-environment",
+		"description": "Classic Environment - the shipped the environment card, installable.",
+		"defaultEnabled": true,
+		"category": "component",
+		"keywords": [
+			"component",
+			"workspace-surface",
+			"classic"
+		]
+	},
+	"devDependencies": {
+		"vite": "8.1.5"
+	}
+}

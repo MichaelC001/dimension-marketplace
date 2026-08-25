@@ -1,0 +1,10 @@
+{
+	"plugin": "classic-thread",
+	"contractVersion": 1,
+	"title": "Classic Thread",
+	"type": "component",
+	"entry": "dist/index.mjs",
+	"slot": "thread",
+	"icon": "messageSquare",
+	"description": "the session surface's thread section exactly as Dimension ships it, delivered as a marketplace component. It re-exports the shipped implementation from @fraym/ui (a granted pack external) rather than reimplementing it, so a space that binds this pack is pixel- and behaviour-identical to the built-in — assembled, not approximated."
+}

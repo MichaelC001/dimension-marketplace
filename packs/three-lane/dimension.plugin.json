@@ -4,10 +4,23 @@
 	"title": "Three Lane",
 	"type": "layout",
 	"slots": [
-		{ "id": "lane-left", "contract": "rail", "items": "sessions" },
-		{ "id": "lane-main", "contract": "workspace" },
-		{ "id": "lane-dock", "contract": "dock" },
-		{ "id": "badge", "contract": "mark" }
+		{
+			"id": "lane-left",
+			"contract": "rail",
+			"items": "sessions"
+		},
+		{
+			"id": "lane-main",
+			"contract": "workspace"
+		},
+		{
+			"id": "lane-dock",
+			"contract": "dock"
+		},
+		{
+			"id": "badge",
+			"contract": "mark"
+		}
 	],
 	"spaces": [
 		{
@@ -40,11 +53,12 @@
 				]
 			},
 			"workspace": {
-				"surfaces": ["session"],
+				"surfaces": [
+					"session"
+				],
 				"start": "session",
 				"session": "session",
-				"switchPolicy": "remember",
-				"sections": { "thread": "thread-minimal" }
+				"switchPolicy": "remember"
 			},
 			"generalAgents": {
 				"list": "discoverable",
