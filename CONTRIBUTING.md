@@ -22,8 +22,12 @@ review is the taste check.** No pack merges red.
    out). It holds no session state and talks to no engine. If you find
    yourself needing a capability the contract lacks, that is a FINDING: open
    an issue naming it.
-4. **Pass the conformance suite** for your slot kind, in-pack
-   (`bun test` inside your pack directory, run from the Dimension monorepo).
+4. **Prove it.** For pure logic, tests in-pack (`packs/session-board/test/`
+   is the shape; run from the Dimension monorepo if your pack takes workspace
+   deps). For a slot fill claiming parity with a shipped surface, the gate is a
+   live structural + behavioral comparison against that surface — the portable
+   template ships no test directory precisely because its gate is that
+   comparison, not a self-written assertion.
 5. **Add your catalog entry** to `.omp-plugin/marketplace.json`: name, source
    (`./packs/<your-pack>`), description, version, author, license, category.
 6. **Open the PR.** CI validates the catalog and pack layout; the monorepo CI

@@ -29,7 +29,7 @@
 			"label": "Demo Lane",
 			"icon": "layers",
 			"order": 90,
-			"description": "The assembly-spine thesis demo: a space assembled from parts nobody in this repo hand-wired \u2014 this plugin's own layout, another plugin's mark in the badge slot, a third plugin's rail (classic-rail) filling the left lane, and a fourth plugin's thread (thread-minimal) filling the session surface's thread section.",
+			"description": "The assembly-spine thesis demo: a space assembled from parts nobody in this repo hand-wired \u2014 this plugin's own layout, another plugin's mark in the badge slot, and a third plugin's rail (classic-rail) filling the left lane. Its session surface takes the host's own sections; a contributed thread once filled them and the pack that did is gone, so the description no longer promises one.",
 			"mark": {
 				"fill": "mochi-mark",
 				"accent": "#f2a3c2",

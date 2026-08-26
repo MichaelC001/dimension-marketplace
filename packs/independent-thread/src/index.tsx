@@ -26,10 +26,11 @@ import { memo, type ComponentProps, type ReactNode } from "react";
  *  author has no path into the host's internal contract modules, and none is
  *  needed: the host passes these fields, types are erased at build.
  *
- *  NO tsconfig on purpose (and so no typecheck of these shapes). The in-tree
- *  rail-t3 pack types itself by extending ../../../fraym/tsconfig.base.json,
- *  which only resolves while the pack sits beside the fraym checkout — that
- *  coupling is what this pack deliberately does not have: it builds byte
+ *  NO tsconfig on purpose (and so no typecheck of these shapes). The pattern
+ *  this avoids: the retired rail-t3 pack typed itself by extending
+ *  ../../../fraym/tsconfig.base.json, which only resolves while the pack sits
+ *  beside the fraym checkout — that coupling is what this pack deliberately
+ *  does not have: it builds byte
  *  identically from a bare directory with vite and nothing else (verified),
  *  which is the property that lets a third party host it anywhere. The
  *  alternative — a hand-written @fraym/ui ambient declaration — would be a
