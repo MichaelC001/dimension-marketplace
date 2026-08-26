@@ -10,8 +10,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
-      # Packs consume @fraym/ui as a workspace dependency, so their tests run
-      # inside the Dimension monorepo (this repo is mounted there as the
-      # marketplace/ submodule). Standalone CI validates what is checkable
-      # standalone: the catalog and every pack's layout.
+      # @fraym/ui is a HOST-RESOLVED external, not a dependency a pack installs:
+      # the portable packs (independent-*) build here with vite alone. Packs that
+      # still take workspace deps run their tests inside the Dimension monorepo
+      # (this repo is mounted there as the marketplace/ submodule). Standalone CI
+      # validates what is checkable standalone: the catalog and every pack's layout.
       - run: bun scripts/validate-marketplace.mjs
