@@ -24,7 +24,19 @@ import { memo, type ComponentProps, type ReactNode } from "react";
 
 /** The prop shape this section uses, declared structurally — a marketplace
  *  author has no path into the host's internal contract modules, and none is
- *  needed: the host passes these fields, types are erased at build. */
+ *  needed: the host passes these fields, types are erased at build.
+ *
+ *  NO tsconfig on purpose (and so no typecheck of these shapes). The in-tree
+ *  rail-t3 pack types itself by extending ../../../fraym/tsconfig.base.json,
+ *  which only resolves while the pack sits beside the fraym checkout — that
+ *  coupling is what this pack deliberately does not have: it builds byte
+ *  identically from a bare directory with vite and nothing else (verified),
+ *  which is the property that lets a third party host it anywhere. The
+ *  alternative — a hand-written @fraym/ui ambient declaration — would be a
+ *  SECOND source of truth for the contract, free to drift from the real one
+ *  silently. Until the host publishes real types for the granted surface,
+ *  these shapes are documentation plus the live parity gate, and the gate is
+ *  what actually catches divergence. */
 interface ThreadSectionProps {
 	readonly sessionRef: { readonly workspaceId: string; readonly sessionId: string } | null;
 	/** The host Store (contract prop declared for completeness; this section
@@ -34,7 +46,7 @@ interface ThreadSectionProps {
 	readonly actions?: Record<string, unknown> | null;
 	readonly capabilities?: Record<string, unknown> | null;
 	readonly avatar: ComponentProps<typeof PresenceSurface>["avatar"];
-	readonly bridgedPresences?: readonly unknown[];
+	readonly bridgedPresences?: ComponentProps<typeof PresenceSurface>["bridgedPresences"];
 	readonly vibrState: ComponentProps<typeof PresenceSurface>["state"];
 	readonly vibrMode?: string;
 	readonly energy: number;

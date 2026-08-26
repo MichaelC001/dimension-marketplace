@@ -2,7 +2,7 @@
 	"name": "@dimension/independent-thread",
 	"author": "Dimension",
 	"version": "0.1.0",
-	"description": "Independent thread — built from the published PARTS (Thread, SectionSessionScope, PresenceSurface, OpeningThreadSkeleton), not from the shipped section.",
+	"description": "Independent thread \u2014 built from the published PARTS (Thread, SectionSessionScope, PresenceSurface, OpeningThreadSkeleton), not from the shipped section.",
 	"type": "module",
 	"main": "./src/index.tsx",
 	"omp": {
