@@ -1,5 +1,0 @@
-[test]
-# Preload browser-boundary adapters before test files load: the duties test
-# imports the `@fraym/ui` barrel, whose graph carries Vite-only asset imports
-# (pdf worker `?url`) and browser-guarded web-component modules.
-preload = ["./test/test-globals.ts", "./test/pdfjs-test-adapter.ts"]

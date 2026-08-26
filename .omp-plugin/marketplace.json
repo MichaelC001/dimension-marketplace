@@ -9,23 +9,6 @@
 	},
 	"plugins": [
 		{
-			"name": "rail-t3",
-			"source": "./packs/rail-t3",
-			"description": "A T3-Code-style session rail: live cards, quiet rows, a settled shelf. A production alternative to rail-classic filling the well-known `rail` slot — the in-tree tier's worked example (react + three @fraym/ui values).",
-			"version": "0.1.0",
-			"author": {
-				"name": "Dimension"
-			},
-			"repository": "https://github.com/insodimension/dimension-marketplace",
-			"license": "MIT",
-			"category": "component",
-			"tags": [
-				"rail",
-				"component",
-				"sessions"
-			]
-		},
-		{
 			"name": "three-lane",
 			"source": "./packs/three-lane",
 			"description": "A layout that declares its OWN slots (lane-left / lane-main / lane-dock / badge) and ships Demo Lane — the assembly-spine thesis demo: a space assembled from three plugins nobody hand-wired together.",
