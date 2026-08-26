@@ -31,7 +31,7 @@ function IndependentComposer(props) {
 	const running = Boolean(facts?.isStreaming) || facts?.turnPhase === "streaming";
 	const goal = facts?.goal ?? null;
 	const send = (text, attachments = []) => {
-		if (!actions || blocked || running) return;
+		if (!actions || blocked) return;
 		const images = attachments.map((a) => ({
 			kind: "image",
 			mimeType: a.mimeType,

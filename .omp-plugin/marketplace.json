@@ -248,6 +248,23 @@
 				"composer",
 				"independent"
 			]
+		},
+		{
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-marketplace",
+			"license": "MIT",
+			"name": "independent-thread",
+			"source": "./packs/independent-thread",
+			"description": "Independent thread section assembled from the published PARTS (Thread, SectionSessionScope, PresenceSurface, OpeningThreadSkeleton) — no shipped implementation imported.",
+			"category": "component",
+			"tags": [
+				"component",
+				"thread",
+				"independent"
+			]
 		}
 	]
 }

@@ -29,7 +29,7 @@
 			"label": "Code (Assembled)",
 			"icon": "grid",
 			"order": 31,
-			"description": "The marketplace-assembly TEST SPACE. Its switcher, rail, workspace host, dock column, thread section and environment card are packs re-exporting the SHIPPED implementations from @fraym/ui (a granted pack external), so those fills are byte-identical to the built-in Code space by construction. Its COMPOSER is deliberately the odd one out: independent-composer, a second implementation assembled from the published PARTS (Composer, ComposerTips, the goal/usage surfaces, the capability adapters) and wired to the slim store channels \u2014 the owner-directed experiment that pressure-tests the parts decomposition. The acceptance gate is a live structural and behavioral comparison against the built-in Code space on the same session; any divergence is a finding against the parts surface, to be fixed in the part, not in this space.",
+			"description": "The marketplace-assembly TEST SPACE. Both of its session-surface sections are INDEPENDENT implementations assembled from the published PARTS: independent-composer (Composer, ComposerTips, the goal/usage surfaces, the capability adapters) and independent-thread (Thread, SectionSessionScope, PresenceSurface, OpeningThreadSkeleton). Its switcher, rail, workspace host, dock column and environment card are packs re-exporting the SHIPPED implementations from @fraym/ui (a granted pack external), byte-identical to the built-in Code space by construction. This space is the owner-directed experiment that pressure-tests the parts decomposition. The acceptance gate is a live structural and behavioral comparison against the built-in Code space on the same session; any divergence is a finding against the parts surface, to be fixed in the part, not in this space.",
 			"mark": {
 				"accent": "#f59e0b"
 			},
@@ -87,7 +87,7 @@
 					"sound"
 				],
 				"sections": {
-					"thread": "classic-thread",
+					"thread": "independent-thread",
 					"composer": "independent-composer"
 				}
 			},
