@@ -1,5 +1,5 @@
 import { FraymRailActions, FraymRailBrand, FraymRailFooter, FraymRailSessionBar, SessionRail, StoreMigrationCard, useObservable, useRailActionSet, useRailGroupAction, useRailSessionPresence, useSettings } from "@fraym/ui";
-import { memo, useRef } from "react";
+import { memo, useMemo, useRef } from "react";
 import { jsx } from "react/jsx-runtime";
 //#region src/index.tsx
 /** The rail section, assembled from the parts.
@@ -21,13 +21,17 @@ var IndependentRailSection = memo(function IndependentRailSection({ rail, action
 	const renderSessionPresence = useRailSessionPresence(facts.presence);
 	const railActions = useRailActionSet(facts.spaces, facts.mode.app);
 	return /* @__PURE__ */ jsx(SessionRail, {
-		brand: /* @__PURE__ */ jsx(FraymRailBrand, {
+		brand: useMemo(() => /* @__PURE__ */ jsx(FraymRailBrand, {
 			version: facts.identity.version,
 			compact,
 			onToggle: actions.toggleCompact
-		}),
+		}), [
+			facts.identity.version,
+			compact,
+			actions.toggleCompact
+		]),
 		tabs: switcher,
-		actions: /* @__PURE__ */ jsx(FraymRailActions, {
+		actions: useMemo(() => /* @__PURE__ */ jsx(FraymRailActions, {
 			actions: railActions,
 			onNewSession: actions.newSession,
 			newSessionAgents: capabilities.agents,
@@ -36,8 +40,14 @@ var IndependentRailSection = memo(function IndependentRailSection({ rail, action
 			onNewSessionAs: actions.newSessionAs,
 			onIntent: actions.intent,
 			activeSurface: facts.mode.activeSurface
-		}),
-		sessionBar: /* @__PURE__ */ jsx(FraymRailSessionBar, {
+		}), [
+			railActions,
+			actions,
+			capabilities.agents,
+			capabilities.bodies,
+			facts.mode.activeSurface
+		]),
+		sessionBar: useMemo(() => /* @__PURE__ */ jsx(FraymRailSessionBar, {
 			projectLabel: facts.projectLabel,
 			menu: facts.menu,
 			sessionSearchOpen: facts.search.open,
@@ -46,7 +56,16 @@ var IndependentRailSection = memo(function IndependentRailSection({ rail, action
 			onSessionSearchChange: actions.setSearch,
 			onSessionSearchOpenChange: actions.setSearchOpen,
 			onOpenFilterMenu: actions.openFilterMenu
-		}),
+		}), [
+			facts.projectLabel,
+			facts.menu,
+			facts.search.open,
+			facts.search.value,
+			searchInputRef,
+			actions.setSearch,
+			actions.setSearchOpen,
+			actions.openFilterMenu
+		]),
 		notice: /* @__PURE__ */ jsx(StoreMigrationCard, {
 			snapshot: facts.storeMigration,
 			compact

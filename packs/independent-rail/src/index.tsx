@@ -39,7 +39,7 @@ import {
 	useRailSessionPresence,
 	useSettings,
 } from "@fraym/ui";
-import { type ComponentProps, memo, type ReactNode, useRef } from "react";
+import { type ComponentProps, memo, type ReactNode, useMemo, useRef } from "react";
 
 /** The prop shape this section uses, declared structurally.
  *
@@ -142,38 +142,61 @@ export const IndependentRailSection = memo(function IndependentRailSection({
 		facts.mode.app as Parameters<typeof useRailActionSet>[1],
 	);
 
+	// The three sockets are MEMOIZED, matching the reference exactly
+	// (fraym-frame-rail-core.tsx memoizes brand, actions and sessionBar). Built
+	// inline they would hand `SessionRail` fresh element identities every render
+	// where the shipped rail hands it stable ones — identical pixels, but the
+	// parity claim would be visual rather than structural, in the component this
+	// pack calls the most frequently moving fold in the app. Found in review.
+	const brand = useMemo(
+		() => <FraymRailBrand version={facts.identity.version} compact={compact} onToggle={actions.toggleCompact} />,
+		[facts.identity.version, compact, actions.toggleCompact],
+	);
+	const railActionsNode = useMemo(
+		() => (
+			<FraymRailActions
+				actions={railActions}
+				onNewSession={actions.newSession as ComponentProps<typeof FraymRailActions>["onNewSession"]}
+				newSessionAgents={capabilities.agents as ComponentProps<typeof FraymRailActions>["newSessionAgents"]}
+				newSessionBodies={capabilities.bodies as ComponentProps<typeof FraymRailActions>["newSessionBodies"]}
+				onNewSessionOn={actions.newSessionOn as ComponentProps<typeof FraymRailActions>["onNewSessionOn"]}
+				onNewSessionAs={actions.newSessionAs as ComponentProps<typeof FraymRailActions>["onNewSessionAs"]}
+				onIntent={actions.intent as ComponentProps<typeof FraymRailActions>["onIntent"]}
+				activeSurface={facts.mode.activeSurface as ComponentProps<typeof FraymRailActions>["activeSurface"]}
+			/>
+		),
+		[railActions, actions, capabilities.agents, capabilities.bodies, facts.mode.activeSurface],
+	);
+	const sessionBar = useMemo(
+		() => (
+			<FraymRailSessionBar
+				projectLabel={facts.projectLabel}
+				menu={facts.menu as ComponentProps<typeof FraymRailSessionBar>["menu"]}
+				sessionSearchOpen={facts.search.open}
+				sessionSearch={facts.search.value}
+				searchInputRef={searchInputRef}
+				onSessionSearchChange={actions.setSearch}
+				onSessionSearchOpenChange={actions.setSearchOpen}
+				onOpenFilterMenu={actions.openFilterMenu as ComponentProps<typeof FraymRailSessionBar>["onOpenFilterMenu"]}
+			/>
+		),
+		[
+			facts.projectLabel,
+			facts.menu,
+			facts.search.open,
+			facts.search.value,
+			searchInputRef,
+			actions.setSearch,
+			actions.setSearchOpen,
+			actions.openFilterMenu,
+		],
+	);
 	return (
 		<SessionRail
-			brand={
-				<FraymRailBrand version={facts.identity.version} compact={compact} onToggle={actions.toggleCompact} />
-			}
+			brand={brand}
 			tabs={switcher}
-			actions={
-				<FraymRailActions
-					actions={railActions}
-					onNewSession={actions.newSession as ComponentProps<typeof FraymRailActions>["onNewSession"]}
-					newSessionAgents={capabilities.agents as ComponentProps<typeof FraymRailActions>["newSessionAgents"]}
-					newSessionBodies={capabilities.bodies as ComponentProps<typeof FraymRailActions>["newSessionBodies"]}
-					onNewSessionOn={actions.newSessionOn as ComponentProps<typeof FraymRailActions>["onNewSessionOn"]}
-					onNewSessionAs={actions.newSessionAs as ComponentProps<typeof FraymRailActions>["onNewSessionAs"]}
-					onIntent={actions.intent as ComponentProps<typeof FraymRailActions>["onIntent"]}
-					activeSurface={facts.mode.activeSurface as ComponentProps<typeof FraymRailActions>["activeSurface"]}
-				/>
-			}
-			sessionBar={
-				<FraymRailSessionBar
-					projectLabel={facts.projectLabel}
-					menu={facts.menu as ComponentProps<typeof FraymRailSessionBar>["menu"]}
-					sessionSearchOpen={facts.search.open}
-					sessionSearch={facts.search.value}
-					searchInputRef={searchInputRef}
-					onSessionSearchChange={actions.setSearch}
-					onSessionSearchOpenChange={actions.setSearchOpen}
-					onOpenFilterMenu={
-						actions.openFilterMenu as ComponentProps<typeof FraymRailSessionBar>["onOpenFilterMenu"]
-					}
-				/>
-			}
+			actions={railActionsNode}
+			sessionBar={sessionBar}
 			notice={
 				<StoreMigrationCard
 					snapshot={facts.storeMigration as ComponentProps<typeof StoreMigrationCard>["snapshot"]}
