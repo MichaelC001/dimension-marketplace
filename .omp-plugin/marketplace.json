@@ -248,6 +248,23 @@
 				"thread",
 				"independent"
 			]
+		},
+		{
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-marketplace",
+			"license": "MIT",
+			"name": "independent-rail",
+			"source": "./packs/independent-rail",
+			"description": "Independent session rail assembled from the published PARTS (SessionRail, the rail chrome, and the three assembly hooks) - imports no shipped rail implementation. Speaks the rail slot's specVersion 2 channel contract.",
+			"category": "component",
+			"tags": [
+				"component",
+				"rail",
+				"independent"
+			]
 		}
 	]
 }
