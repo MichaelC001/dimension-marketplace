@@ -1,0 +1,29 @@
+{
+	"name": "@dimension/independent-rail",
+	"author": "Dimension",
+	"version": "0.1.0",
+	"description": "Independent rail — built from the published PARTS (SessionRail, the rail chrome pieces, and the three assembly hooks), not from the shipped rail implementation.",
+	"type": "module",
+	"main": "./src/index.tsx",
+	"omp": {
+		"name": "independent-rail",
+		"description": "Independent session rail built on the parts tier.",
+		"defaultEnabled": true,
+		"category": "component",
+		"keywords": [
+			"component",
+			"rail",
+			"independent"
+		]
+	},
+	"private": true,
+	"scripts": {
+		"build": "vite build"
+	},
+	"peerDependencies": {
+		"react": ">=19"
+	},
+	"devDependencies": {
+		"vite": "8.1.5"
+	}
+}
