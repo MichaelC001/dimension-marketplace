@@ -24,6 +24,7 @@
 				"space",
 				"demo"
 			],
+			"pluginId": "three-lane",
 			"spaces": [
 				{
 					"id": "demo-lane",
@@ -49,7 +50,8 @@
 				"mark",
 				"component",
 				"demo"
-			]
+			],
+			"pluginId": "mochi-mark"
 		},
 		{
 			"name": "pulse-mark",
@@ -66,7 +68,8 @@
 				"mark",
 				"component",
 				"store"
-			]
+			],
+			"pluginId": "pulse-mark"
 		},
 		{
 			"name": "session-board",
@@ -84,7 +87,8 @@
 				"dock",
 				"sessions",
 				"store"
-			]
+			],
+			"pluginId": "session-board"
 		},
 		{
 			"name": "classic-thread",
@@ -101,7 +105,8 @@
 				"component",
 				"thread",
 				"classic"
-			]
+			],
+			"pluginId": "classic-thread"
 		},
 		{
 			"name": "classic-composer",
@@ -118,7 +123,8 @@
 				"component",
 				"composer",
 				"classic"
-			]
+			],
+			"pluginId": "classic-composer"
 		},
 		{
 			"name": "classic-rail",
@@ -135,7 +141,8 @@
 				"component",
 				"rail",
 				"classic"
-			]
+			],
+			"pluginId": "classic-rail"
 		},
 		{
 			"name": "classic-environment",
@@ -153,7 +160,8 @@
 				"widget",
 				"environment",
 				"classic"
-			]
+			],
+			"pluginId": "classic-environment"
 		},
 		{
 			"name": "code-assembled",
@@ -172,6 +180,7 @@
 				"assembly",
 				"parity"
 			],
+			"pluginId": "code-assembled",
 			"spaces": [
 				{
 					"id": "code-assembled",
@@ -210,7 +219,8 @@
 				"component",
 				"dock",
 				"assembly"
-			]
+			],
+			"pluginId": "classic-dock"
 		},
 		{
 			"version": "0.1.0",
@@ -227,7 +237,8 @@
 				"component",
 				"workspace",
 				"assembly"
-			]
+			],
+			"pluginId": "classic-workspace"
 		},
 		{
 			"version": "0.1.0",
@@ -244,7 +255,8 @@
 				"component",
 				"switcher",
 				"assembly"
-			]
+			],
+			"pluginId": "classic-switcher"
 		},
 		{
 			"version": "0.1.0",
@@ -261,7 +273,8 @@
 				"component",
 				"composer",
 				"independent"
-			]
+			],
+			"pluginId": "independent-composer"
 		},
 		{
 			"version": "0.1.0",
@@ -278,7 +291,8 @@
 				"component",
 				"thread",
 				"independent"
-			]
+			],
+			"pluginId": "independent-thread"
 		},
 		{
 			"version": "0.1.0",
@@ -295,7 +309,8 @@
 				"component",
 				"rail",
 				"independent"
-			]
+			],
+			"pluginId": "independent-rail"
 		}
 	]
 }

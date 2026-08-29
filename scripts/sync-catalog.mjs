@@ -55,21 +55,26 @@ function spaceListing(space, packSource) {
 	return listing;
 }
 
-/** Every space listing a pack contributes, or undefined when it contributes none. */
-function listingsFor(plugin) {
-	if (typeof plugin.source !== "string") return undefined; // typed sources carry no local tree here
+/** The pack's manifest on disk, or undefined when this entry has no local tree
+ *  (a typed/remote source) or the file is unreadable — the validator is what
+ *  reports an unparseable manifest, not this projector. */
+function manifestOf(plugin) {
+	if (typeof plugin.source !== "string") return undefined;
 	const manifestPath = join(root, plugin.source, "dimension.plugin.json");
 	if (!existsSync(manifestPath)) return undefined;
-	let manifest;
 	try {
-		manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+		return JSON.parse(readFileSync(manifestPath, "utf8"));
 	} catch {
-		return undefined; // the validator is what reports an unparseable manifest
+		return undefined;
 	}
+}
+
+/** Every space listing a pack contributes, or undefined when it contributes none. */
+function listingsFor(manifest, packSource) {
 	if (!Array.isArray(manifest.spaces) || manifest.spaces.length === 0) return undefined;
 	const listings = manifest.spaces
 		.filter(space => typeof space?.id === "string" && typeof space?.label === "string")
-		.map(space => spaceListing(space, plugin.source));
+		.map(space => spaceListing(space, packSource));
 	return listings.length > 0 ? listings : undefined;
 }
 
@@ -80,11 +85,20 @@ export function projectedCatalog(catalog) {
 	return {
 		...catalog,
 		plugins: catalog.plugins.map(plugin => {
-			const spaces = listingsFor(plugin);
-			// Rebuilt without the old key so a pack that STOPS declaring spaces
+			const manifest = manifestOf(plugin);
+			const spaces = manifest ? listingsFor(manifest, plugin.source) : undefined;
+			// A space declares its dependencies by PLUGIN ID, but the engine installs
+			// by pack NAME — so an installer that cannot read the id off the index has
+			// to guess that the two match. Stating it here removes the guess.
+			const pluginId = typeof manifest?.plugin === "string" ? manifest.plugin : undefined;
+			// Rebuilt without the old keys so a pack that STOPS declaring spaces
 			// drops its stale listing instead of keeping it forever.
-			const { spaces: _previous, ...rest } = plugin;
-			return spaces ? { ...rest, spaces } : rest;
+			const { spaces: _previousSpaces, pluginId: _previousId, ...rest } = plugin;
+			return {
+				...rest,
+				...(pluginId ? { pluginId } : {}),
+				...(spaces ? { spaces } : {}),
+			};
 		}),
 	};
 }
