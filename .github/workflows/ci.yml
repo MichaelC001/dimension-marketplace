@@ -16,3 +16,8 @@ jobs:
       # (this repo is mounted there as the marketplace/ submodule). Standalone CI
       # validates what is checkable standalone: the catalog and every pack's layout.
       - run: bun scripts/validate-marketplace.mjs
+      # The catalog is a DERIVED index: `spaces[]` listings are projected from
+      # each pack's dimension.plugin.json so a store can browse this marketplace
+      # by fetching ONE file. A manifest edited without re-syncing would leave
+      # the store showing stale copy or a screenshot that no longer exists.
+      - run: bun scripts/sync-catalog.mjs --check
