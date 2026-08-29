@@ -102,6 +102,17 @@
 				"list": "discoverable",
 				"default": "coding"
 			},
+			"requires": {
+				"plugins": [
+					"classic-switcher",
+					"independent-rail",
+					"classic-workspace",
+					"classic-dock",
+					"independent-thread",
+					"independent-composer",
+					"classic-environment"
+				]
+			},
 			"widgets": {
 				"pinned": [
 					{
