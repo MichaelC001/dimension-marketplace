@@ -87,11 +87,7 @@
 				"session": "session",
 				"switchPolicy": "remember",
 				"actions": [
-					"jobs",
-					"refresh",
-					"environment",
-					"dock",
-					"sound"
+					"environment"
 				],
 				"sections": {
 					"thread": "independent-thread",
