@@ -31,7 +31,11 @@
 					"label": "Demo Lane",
 					"tagline": "The assembly-spine thesis demo: a space assembled from parts nobody in this repo hand-wired — this plugin's own layout, another plugin's mark in the badge slot, and a third plugin's rail (classic-rail) filling the left lane. Its session surface takes the host's own sections; a contributed thread once filled them and the pack that did is gone, so the description no longer promises one.",
 					"icon": "layers",
-					"accent": "#f2a3c2"
+					"accent": "#f2a3c2",
+					"requires": [
+						"mochi-mark",
+						"classic-rail"
+					]
 				}
 			]
 		},
