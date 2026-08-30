@@ -11,7 +11,7 @@
 //
 // The catalog is a DERIVED index, never hand-authored: each pack's
 // `dimension.plugin.json` `spaces[]` is the single source of truth, and this
-// script projects the LISTING subset of it. `validate-marketplace.mjs --check`
+// script projects the LISTING subset of it. This script's own `--check` mode
 // (run in CI) fails when the projection drifts from the manifests.
 //
 // Screenshot paths are rewritten CATALOG-ROOT-RELATIVE (`packs/x/assets/…`),
@@ -36,8 +36,29 @@ function spaceListing(space, packSource) {
 	// "./" and join with posix separators so the emitted path is a URL path on
 	// every platform (this repo is cloned on Windows too).
 	const base = packSource.replace(/^\.\//, "");
-	const asCatalogPath = value =>
-		typeof value === "string" && value.startsWith("data:") ? value : posix.join(base, value);
+	// A screenshot is a data-URI or a PACK-RELATIVE path, and nothing else (the
+	// engine's own contract, `space-contributions.ts` `parsePreview`). Anything
+	// else is refused BY NAME here rather than silently mangled: an absolute URL
+	// used to project to `packs/x/https:/cdn…/a.png`, and a non-string threw a
+	// bare TypeError out of `posix.join` naming neither the pack nor the space.
+	const asCatalogPath = value => {
+		if (typeof value !== "string" || value.length === 0) {
+			throw new Error(`${space.id}: a preview screenshot must be a non-empty string, got ${typeof value}`);
+		}
+		if (value.startsWith("data:")) return value;
+		if (/^[a-z][a-z0-9+.-]*:/i.test(value) || value.startsWith("//") || value.startsWith("/")) {
+			throw new Error(`${space.id}: preview screenshot "${value}" must be pack-relative, not an absolute URL or path`);
+		}
+		const catalogPath = posix.join(base, value);
+		// The gate CI actually needs: a manifest edit must not be able to leave the
+		// store pointing at an image that is not there. `--check` compares text, so
+		// without this a deleted screenshot ships green and the card paints a broken
+		// tile (proven in review by deleting start.webp — both scripts exited 0).
+		if (!existsSync(join(root, catalogPath))) {
+			throw new Error(`${space.id}: preview screenshot "${catalogPath}" does not exist`);
+		}
+		return catalogPath;
+	};
 
 	const listing = { id: space.id, label: space.label };
 	const tagline = space.preview?.tagline ?? space.description;
@@ -86,6 +107,12 @@ export function projectedCatalog(catalog) {
 		...catalog,
 		plugins: catalog.plugins.map(plugin => {
 			const manifest = manifestOf(plugin);
+			// No local tree (a typed/remote source): there is nothing to project
+			// FROM, so the entry's OWN listing stands. Clearing it instead deleted a
+			// hand-authored remote listing on every run, and `--check` then failed CI
+			// forever, because re-adding the listing is exactly what the projector
+			// undid. Latent today (no remote entry in this catalog), fixed anyway.
+			if (!manifest && typeof plugin.source !== "string") return plugin;
 			const spaces = manifest ? listingsFor(manifest, plugin.source) : undefined;
 			// A space declares its dependencies by PLUGIN ID, but the engine installs
 			// by pack NAME — so an installer that cannot read the id off the index has
@@ -108,7 +135,16 @@ function serialize(catalog) {
 }
 
 const catalog = JSON.parse(readFileSync(catalogPath, "utf8"));
-const next = serialize(projectedCatalog(catalog));
+// A refused projection is a CONTENT error a contributor must fix (a screenshot
+// that is not there, a path that is not pack-relative), so it is reported as one
+// sentence and an exit code — not a stack trace CI readers have to decode.
+let next;
+try {
+	next = serialize(projectedCatalog(catalog));
+} catch (error) {
+	console.error(`marketplace.json: ${error instanceof Error ? error.message : String(error)}`);
+	process.exit(1);
+}
 const current = readFileSync(catalogPath, "utf8");
 
 if (process.argv.includes("--check")) {
