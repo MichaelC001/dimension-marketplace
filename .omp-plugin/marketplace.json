@@ -23,6 +23,16 @@
 				"layout",
 				"space",
 				"demo"
+			],
+			"pluginId": "three-lane",
+			"spaces": [
+				{
+					"id": "demo-lane",
+					"label": "Demo Lane",
+					"tagline": "The assembly-spine thesis demo: a space assembled from parts nobody in this repo hand-wired — this plugin's own layout, another plugin's mark in the badge slot, and a third plugin's rail (classic-rail) filling the left lane. Its session surface takes the host's own sections; a contributed thread once filled them and the pack that did is gone, so the description no longer promises one.",
+					"icon": "layers",
+					"accent": "#f2a3c2"
+				}
 			]
 		},
 		{
@@ -40,7 +50,8 @@
 				"mark",
 				"component",
 				"demo"
-			]
+			],
+			"pluginId": "mochi-mark"
 		},
 		{
 			"name": "pulse-mark",
@@ -57,7 +68,8 @@
 				"mark",
 				"component",
 				"store"
-			]
+			],
+			"pluginId": "pulse-mark"
 		},
 		{
 			"name": "session-board",
@@ -75,7 +87,8 @@
 				"dock",
 				"sessions",
 				"store"
-			]
+			],
+			"pluginId": "session-board"
 		},
 		{
 			"name": "classic-thread",
@@ -92,7 +105,8 @@
 				"component",
 				"thread",
 				"classic"
-			]
+			],
+			"pluginId": "classic-thread"
 		},
 		{
 			"name": "classic-composer",
@@ -109,7 +123,8 @@
 				"component",
 				"composer",
 				"classic"
-			]
+			],
+			"pluginId": "classic-composer"
 		},
 		{
 			"name": "classic-rail",
@@ -126,7 +141,8 @@
 				"component",
 				"rail",
 				"classic"
-			]
+			],
+			"pluginId": "classic-rail"
 		},
 		{
 			"name": "classic-environment",
@@ -144,7 +160,8 @@
 				"widget",
 				"environment",
 				"classic"
-			]
+			],
+			"pluginId": "classic-environment"
 		},
 		{
 			"name": "code-assembled",
@@ -162,6 +179,29 @@
 				"space",
 				"assembly",
 				"parity"
+			],
+			"pluginId": "code-assembled",
+			"spaces": [
+				{
+					"id": "code-assembled",
+					"label": "Code (Assembled)",
+					"tagline": "The full Code experience, assembled entirely from marketplace parts — pixel-identical to the built-in.",
+					"screenshots": [
+						"packs/code-assembled/assets/preview/start.webp",
+						"packs/code-assembled/assets/preview/session.webp"
+					],
+					"icon": "grid",
+					"accent": "#f59e0b",
+					"requires": [
+						"classic-switcher",
+						"independent-rail",
+						"classic-workspace",
+						"classic-dock",
+						"independent-thread",
+						"independent-composer",
+						"classic-environment"
+					]
+				}
 			]
 		},
 		{
@@ -179,7 +219,8 @@
 				"component",
 				"dock",
 				"assembly"
-			]
+			],
+			"pluginId": "classic-dock"
 		},
 		{
 			"version": "0.1.0",
@@ -196,7 +237,8 @@
 				"component",
 				"workspace",
 				"assembly"
-			]
+			],
+			"pluginId": "classic-workspace"
 		},
 		{
 			"version": "0.1.0",
@@ -213,7 +255,8 @@
 				"component",
 				"switcher",
 				"assembly"
-			]
+			],
+			"pluginId": "classic-switcher"
 		},
 		{
 			"version": "0.1.0",
@@ -230,7 +273,8 @@
 				"component",
 				"composer",
 				"independent"
-			]
+			],
+			"pluginId": "independent-composer"
 		},
 		{
 			"version": "0.1.0",
@@ -247,7 +291,8 @@
 				"component",
 				"thread",
 				"independent"
-			]
+			],
+			"pluginId": "independent-thread"
 		},
 		{
 			"version": "0.1.0",
@@ -264,7 +309,8 @@
 				"component",
 				"rail",
 				"independent"
-			]
+			],
+			"pluginId": "independent-rail"
 		}
 	]
 }
