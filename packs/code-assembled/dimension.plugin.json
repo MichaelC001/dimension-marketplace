@@ -29,7 +29,7 @@
 			"label": "Code (Assembled)",
 			"icon": "grid",
 			"order": 31,
-			"description": "The marketplace-assembly TEST SPACE. All THREE of its session-surface sections are INDEPENDENT implementations assembled from the published PARTS: independent-composer (Composer, ComposerTips, the goal/usage surfaces, the capability adapters), independent-thread (Thread, SectionSessionScope, PresenceSurface, OpeningThreadSkeleton) and independent-rail (SessionRail, the rail chrome pieces, and the three assembly hooks that carry the presence/reorder/primary-action judgement). Its switcher, workspace host, dock column and environment card are packs re-exporting the SHIPPED implementations from @fraym/ui (a granted pack external), byte-identical to the built-in Code space by construction. Its top-bar chrome is DELIBERATELY not: `workspace.actions` is `[\"environment\"]`, so this space draws only the environment affordance (owner-directed 2026-08-30). The dock and the other controls are absent by choice, not by defect — and the dock SURFACE is still reachable by intent, because a control and a surface are separate questions (doc 69 §7.1). This space is the owner-directed experiment that pressure-tests the parts decomposition. The acceptance gate is a live structural and behavioral comparison against the built-in Code space on the same session, SCOPED TO THE SESSION SURFACE (rail, thread, composer, workspace host): DOM multiset equality, byte-identical geometry, and a behavior matrix — with fiber provenance proving the pack renders rather than a silent fallback to the built-in.",
+			"description": "The marketplace-assembly TEST SPACE. All THREE of its session-surface sections are INDEPENDENT implementations assembled from the published PARTS: independent-composer (Composer, ComposerTips, the goal/usage surfaces, the capability adapters), independent-thread (Thread, SectionSessionScope, PresenceSurface, OpeningThreadSkeleton) and independent-rail (SessionRail, the rail chrome pieces, and the three assembly hooks that carry the presence/reorder/primary-action judgement). Its switcher, workspace host, dock column and environment card are packs re-exporting the SHIPPED implementations from @fraym/ui (a granted pack external), byte-identical to the built-in Code space by construction. Its top-bar chrome is at PARITY too: `workspace.actions` is [\"jobs\",\"refresh\",\"environment\",\"dock\",\"sound\"] — the SAME five the built-in Code space declares (`packages/app/src/spaces/index.ts`), so the dock toggle and every other top-bar control draw here exactly as they do there (parity restored 2026-09-02, closeout PR-3; the earlier `[\"environment\"]`-only bar was a deliberate narrowing that is no longer wanted). The control and the surface stay separate questions (doc 69 §7.1): the dock SURFACE was reachable by intent even while no toggle was drawn, and listing the action adds the toggle without changing that. This space is the owner-directed experiment that pressure-tests the parts decomposition. The acceptance gate is a live structural and behavioral comparison against the built-in Code space on the same session, SCOPED TO THE SESSION SURFACE (rail, thread, composer, workspace host): DOM multiset equality, byte-identical geometry, and a behavior matrix — with fiber provenance proving the pack renders rather than a silent fallback to the built-in.",
 			"preview": {
 				"screenshots": [
 					"assets/preview/start.webp",
@@ -87,7 +87,11 @@
 				"session": "session",
 				"switchPolicy": "remember",
 				"actions": [
-					"environment"
+					"jobs",
+					"refresh",
+					"environment",
+					"dock",
+					"sound"
 				],
 				"sections": {
 					"thread": "independent-thread",
