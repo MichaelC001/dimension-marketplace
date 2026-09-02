@@ -1,0 +1,34 @@
+{
+	"name": "@inso/taste",
+	"author": "Dimension",
+	"version": "0.1.0",
+	"description": "Taste — anti-slop frontend skill: brief-first design reads, real design systems, no templated AI aesthetics",
+	"type": "module",
+	"scripts": {
+		"check": "biome check . --no-errors-on-unmatched"
+	},
+	"omp": {
+		"name": "taste",
+		"description": "Taste — anti-slop frontend skill: brief-first design reads, real design systems, no templated AI aesthetics",
+		"defaultEnabled": true,
+		"category": "skills",
+		"keywords": [
+			"design",
+			"frontend",
+			"taste",
+			"anti-slop",
+			"landing-page",
+			"portfolio",
+			"redesign",
+			"ui",
+			"skill"
+		]
+	},
+	"files": [
+		"skills/",
+		"assets/",
+		"dimension.plugin.json",
+		"LICENSE"
+	],
+	"license": "MIT"
+}

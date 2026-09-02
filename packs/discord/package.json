@@ -1,0 +1,42 @@
+{
+	"name": "@inso/discord",
+	"author": "Dimension",
+	"version": "0.1.2",
+	"description": "Discord connector — list servers/channels, read and post messages over the Discord REST API (bot token)",
+	"type": "module",
+	"main": "index.ts",
+	"scripts": {
+		"check": "biome check . --no-errors-on-unmatched"
+	},
+	"omp": {
+		"name": "discord",
+		"description": "Discord connector — list servers/channels, read and send messages via a bot token",
+		"defaultEnabled": false,
+		"category": "connector",
+		"keywords": [
+			"discord",
+			"chat",
+			"bot",
+			"messaging",
+			"connector"
+		],
+		"sharedModule": true,
+		"extensions": [
+			"index.ts"
+		],
+		"bundle": true
+	},
+	"files": [
+		"skills/",
+		"rules/",
+		"connect/",
+		"assets/",
+		"index.ts",
+		"dimension.plugin.json"
+	],
+	"peerDependencies": {
+		"arktype": "^2.2.0",
+		"@oh-my-pi/pi-coding-agent": "*"
+	},
+	"license": "MIT"
+}

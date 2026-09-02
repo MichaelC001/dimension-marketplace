@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
+  <defs>
+    <linearGradient id="fr-google-meet" x1="4" y1="4" x2="44" y2="44" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#43dcea"/>
+      <stop offset="0.5" stop-color="#5b8cff"/>
+      <stop offset="1" stop-color="#8f7bff"/>
+    </linearGradient>
+  </defs>
+  <rect x="6" y="14" width="26" height="20" rx="5" fill="url(#fr-google-meet)"/>
+  <path d="M36 21.2 L42 16.4 C43 15.6 44.4 16.3 44.4 17.6 L44.4 30.4 C44.4 31.7 43 32.4 42 31.6 L36 26.8 Z" fill="url(#fr-google-meet)" opacity="0.72"/>
+</svg>

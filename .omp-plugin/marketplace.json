@@ -315,6 +315,470 @@
 				"independent"
 			],
 			"pluginId": "independent-rail"
+		},
+		{
+			"name": "discord",
+			"source": "./packs/discord",
+			"description": "Discord connector — list servers/channels, read and send messages via a bot token",
+			"version": "0.1.2",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-marketplace",
+			"license": "MIT",
+			"category": "connector",
+			"tags": [
+				"discord",
+				"chat",
+				"bot",
+				"messaging",
+				"connector"
+			],
+			"pluginId": "discord"
+		},
+		{
+			"name": "github",
+			"source": "./packs/github",
+			"description": "GitHub connector — issues, PRs, releases, repos, and search via the gh CLI",
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-marketplace",
+			"license": "MIT",
+			"category": "connector",
+			"tags": [
+				"github",
+				"git",
+				"gh",
+				"issues",
+				"pull-requests",
+				"releases",
+				"connector"
+			],
+			"pluginId": "github"
+		},
+		{
+			"name": "gmail",
+			"source": "./packs/gmail",
+			"description": "Email connector — read/search/compose/reply over IMAP/SMTP via himalaya",
+			"version": "0.1.1",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-marketplace",
+			"license": "MIT",
+			"category": "connector",
+			"tags": [
+				"email",
+				"gmail",
+				"imap",
+				"smtp",
+				"himalaya",
+				"connector"
+			],
+			"pluginId": "gmail"
+		},
+		{
+			"name": "google-calendar",
+			"source": "./packs/google-calendar",
+			"description": "Manage Google Calendar events and schedules",
+			"version": "0.1.2",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-marketplace",
+			"license": "MIT",
+			"category": "connector",
+			"tags": [
+				"google-calendar",
+				"calendar",
+				"agenda",
+				"daily-brief",
+				"scheduling",
+				"productivity"
+			],
+			"pluginId": "google-calendar"
+		},
+		{
+			"name": "google-drive",
+			"source": "./packs/google-drive",
+			"description": "Google Drive connector — list/search/read files via OAuth",
+			"version": "0.1.1",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-marketplace",
+			"license": "MIT",
+			"category": "connector",
+			"tags": [
+				"google",
+				"drive",
+				"oauth",
+				"files",
+				"connector"
+			],
+			"pluginId": "google-drive"
+		},
+		{
+			"name": "google-meet",
+			"source": "./packs/google-meet",
+			"description": "Create Google Meet spaces, read conference records/recordings/transcripts, and live-transcribe a call",
+			"version": "0.1.1",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-marketplace",
+			"license": "MIT",
+			"category": "connector",
+			"tags": [
+				"google-meet",
+				"meet",
+				"meetings",
+				"transcription",
+				"conference-records",
+				"recordings",
+				"productivity"
+			],
+			"pluginId": "google-meet"
+		},
+		{
+			"name": "google-workspace",
+			"source": "./packs/google-workspace",
+			"description": "Google Workspace connector — read/write Sheets, Docs, and Slides via OAuth",
+			"version": "0.1.1",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-marketplace",
+			"license": "MIT",
+			"category": "connector",
+			"tags": [
+				"google",
+				"workspace",
+				"sheets",
+				"docs",
+				"slides",
+				"oauth",
+				"connector",
+				"productivity"
+			],
+			"pluginId": "google-workspace"
+		},
+		{
+			"name": "reddit",
+			"source": "./packs/reddit",
+			"description": "Reddit connector — feeds, posts, comments, search, submit, vote, and inbox via the Reddit OAuth API",
+			"version": "0.1.2",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-marketplace",
+			"license": "MIT",
+			"category": "connector",
+			"tags": [
+				"reddit",
+				"social",
+				"forum",
+				"news",
+				"connector"
+			],
+			"pluginId": "reddit"
+		},
+		{
+			"name": "slack",
+			"source": "./packs/slack",
+			"description": "Slack connector — list channels, read messages, and post via the Slack Web API",
+			"version": "0.1.1",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-marketplace",
+			"license": "MIT",
+			"category": "connector",
+			"tags": [
+				"slack",
+				"chat",
+				"messaging",
+				"webhook",
+				"connector"
+			],
+			"pluginId": "slack"
+		},
+		{
+			"name": "teams",
+			"source": "./packs/teams",
+			"description": "Microsoft Teams connector — list teams/channels and post channel messages via Microsoft Graph",
+			"version": "0.1.2",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-marketplace",
+			"license": "MIT",
+			"category": "connector",
+			"tags": [
+				"microsoft",
+				"teams",
+				"graph",
+				"azure",
+				"channel",
+				"connector"
+			],
+			"pluginId": "teams"
+		},
+		{
+			"name": "telegram",
+			"source": "./packs/telegram",
+			"description": "Telegram connector — send messages, read updates, inspect chats via the Bot API",
+			"version": "0.1.2",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-marketplace",
+			"license": "MIT",
+			"category": "connector",
+			"tags": [
+				"telegram",
+				"bot",
+				"messaging",
+				"chat",
+				"connector"
+			],
+			"pluginId": "telegram"
+		},
+		{
+			"name": "watch",
+			"source": "./packs/watch",
+			"description": "Watch a video by URL or local path: ffmpeg frame sampling plus a timestamped transcript (captions, local Whisper, or a consent-gated cloud API)",
+			"version": "0.2.1",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-marketplace",
+			"license": "MIT",
+			"category": "connector",
+			"tags": [
+				"video",
+				"youtube",
+				"transcription",
+				"multimodal",
+				"ffmpeg",
+				"yt-dlp",
+				"connector"
+			],
+			"pluginId": "watch"
+		},
+		{
+			"name": "whatsapp",
+			"source": "./packs/whatsapp",
+			"description": "WhatsApp connector — send text messages and templates via the Meta WhatsApp Cloud API",
+			"version": "0.1.1",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-marketplace",
+			"license": "MIT",
+			"category": "connector",
+			"tags": [
+				"whatsapp",
+				"meta",
+				"messaging",
+				"cloud-api",
+				"connector"
+			],
+			"pluginId": "whatsapp"
+		},
+		{
+			"name": "x",
+			"source": "./packs/x",
+			"description": "X (Twitter) connector — mentions, timelines, search, threads, and posting via the official X API v2",
+			"version": "0.2.3",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-marketplace",
+			"license": "MIT",
+			"category": "connector",
+			"tags": [
+				"x",
+				"twitter",
+				"social",
+				"posts",
+				"mentions",
+				"connector"
+			],
+			"pluginId": "x"
+		},
+		{
+			"name": "youtube",
+			"source": "./packs/youtube",
+			"description": "Search YouTube, inspect videos and channels, manage playlists, and read/post comments",
+			"version": "0.1.2",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-marketplace",
+			"license": "MIT",
+			"category": "connector",
+			"tags": [
+				"youtube",
+				"video",
+				"channel",
+				"playlist",
+				"comments",
+				"media"
+			],
+			"pluginId": "youtube"
+		},
+		{
+			"name": "agents-best-practices",
+			"source": "./packs/agents-best-practices",
+			"description": "Agents Best Practices — provider-neutral agent-harness architecture: loops, tools, permissions, planning, memory, compaction, evals, safety",
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-marketplace",
+			"license": "MIT",
+			"category": "skills",
+			"tags": [
+				"agents",
+				"harness",
+				"architecture",
+				"tools",
+				"mcp",
+				"evals",
+				"prompt-caching",
+				"memory",
+				"compaction",
+				"skill"
+			],
+			"pluginId": "agents-best-practices"
+		},
+		{
+			"name": "impeccable",
+			"source": "./packs/impeccable",
+			"description": "Impeccable — design guidance for AI agents: 23 design commands (craft, polish, audit, critique, bolder, quieter, distill…), anti-slop rules, and a deterministic anti-pattern detector",
+			"version": "3.9.1",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-marketplace",
+			"license": "Apache-2.0",
+			"category": "skills",
+			"tags": [
+				"design",
+				"frontend",
+				"impeccable",
+				"polish",
+				"audit",
+				"critique",
+				"anti-slop",
+				"ui",
+				"skill",
+				"detector"
+			],
+			"pluginId": "impeccable"
+		},
+		{
+			"name": "last30days",
+			"source": "./packs/last30days",
+			"description": "last30days — research what people actually said about any topic in the last 30 days across Reddit, X, YouTube, TikTok, Hacker News, and the web",
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-marketplace",
+			"license": "MIT",
+			"category": "skills",
+			"tags": [
+				"research",
+				"trends",
+				"reddit",
+				"x",
+				"youtube",
+				"tiktok",
+				"hackernews",
+				"news",
+				"social",
+				"skill"
+			],
+			"pluginId": "last30days"
+		},
+		{
+			"name": "product-psychology",
+			"source": "./packs/product-psychology",
+			"description": "Product Psychology — audit conversion & comprehension, map remembered journeys, research users, and ethics-gate persuasion",
+			"version": "0.1.1",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-marketplace",
+			"license": "MIT",
+			"category": "skills",
+			"tags": [
+				"psychology",
+				"conversion",
+				"ux",
+				"ethics",
+				"persuasion",
+				"friction",
+				"journey",
+				"empathy",
+				"design",
+				"skill"
+			],
+			"pluginId": "product-psychology"
+		},
+		{
+			"name": "taste",
+			"source": "./packs/taste",
+			"description": "Taste — anti-slop frontend skill: brief-first design reads, real design systems, no templated AI aesthetics",
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-marketplace",
+			"license": "MIT",
+			"category": "skills",
+			"tags": [
+				"design",
+				"frontend",
+				"taste",
+				"anti-slop",
+				"landing-page",
+				"portfolio",
+				"redesign",
+				"ui",
+				"skill"
+			],
+			"pluginId": "taste"
+		},
+		{
+			"name": "ui-skills",
+			"source": "./packs/ui-skills",
+			"description": "UI Skills — opinionated interface-polish skills: baseline UI discipline, accessibility fixes, metadata audits, motion performance",
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-marketplace",
+			"license": "MIT",
+			"category": "skills",
+			"tags": [
+				"ui",
+				"design",
+				"accessibility",
+				"a11y",
+				"motion",
+				"animation",
+				"metadata",
+				"seo",
+				"tailwind",
+				"polish",
+				"skill"
+			],
+			"pluginId": "ui-skills"
 		}
 	]
 }

@@ -1,0 +1,35 @@
+{
+	"name": "@inso/last30days",
+	"author": "Dimension",
+	"version": "0.1.0",
+	"description": "last30days — research what people actually said about any topic in the last 30 days across Reddit, X, YouTube, TikTok, Hacker News, and the web",
+	"type": "module",
+	"scripts": {
+		"check": "biome check . --no-errors-on-unmatched"
+	},
+	"omp": {
+		"name": "last30days",
+		"description": "last30days — research what people actually said about any topic in the last 30 days across Reddit, X, YouTube, TikTok, Hacker News, and the web",
+		"defaultEnabled": true,
+		"category": "skills",
+		"keywords": [
+			"research",
+			"trends",
+			"reddit",
+			"x",
+			"youtube",
+			"tiktok",
+			"hackernews",
+			"news",
+			"social",
+			"skill"
+		]
+	},
+	"files": [
+		"skills/",
+		"assets/",
+		"dimension.plugin.json",
+		"LICENSE"
+	],
+	"license": "MIT"
+}
