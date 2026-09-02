@@ -3,35 +3,57 @@
 // "Instrument" is the ROLE you say out loud (doc 68 §1 ruling 3) — never a
 // manifest type.
 //
-//   THE ENTIRE IMPORT SURFACE: `react`. Nothing else.
+//   THE IMPORT SURFACE: `react`, plus ONE granted host hook.
 //
 // A dock component's props ARE its context: the kit loader wraps this
 // component in one `createElement(Component, ctx)`, so the host's Store
-// arrives the same way a slot component's `store` prop does (doc 68 §3.5) —
-// read with React's BUILT-IN `useSyncExternalStore` over the contract's
-// `{getSnapshot, subscribe}` shape. Zero kit imports; the styling is the
-// author's own, drawn on the host's `--fr-*` custom properties so it sits in
-// either theme without importing anything (the marketplace house rule:
-// design tokens only, color-is-meaning stays the host's).
+// arrives the same way a slot component's `store` prop does (doc 68 §3.5).
+// The board no longer WATCHES a key through it, though — the session list is
+// read through channel 3, `useStandardRootFacts()`, the host's ambient
+// standard-fact door (doc 68 §3.5 channel 3, granted in `host-externals.ts`).
+// Two reasons that is the right channel and the raw watch was not:
+//
+//  * The fact NAME is the host's (`sessions`), so the pack stops hardcoding a
+//    key literal (`"sessions/list"`) it does not own — the key can move and
+//    this pack does not care.
+//  * The fact arrives already fenced by the dock seat, merged and deduped by
+//    the host's one `useSyncExternalStore`, so the pack keeps no subscription
+//    machinery of its own.
+//
+// The `store` prop STAYS, because `act("selectSession", …)` is the board's
+// intent channel and channel 3 is read-only. The styling is the author's own,
+// drawn on the host's `--fr-*` custom properties so it sits in either theme
+// without importing anything (the marketplace house rule: design tokens only,
+// color-is-meaning stays the host's).
 
-import { type CSSProperties, type ReactNode, useMemo, useSyncExternalStore } from "react";
+import { useStandardRootFacts } from "@fraym/ui";
+import { type CSSProperties, type ReactNode, useMemo } from "react";
 import { type BoardRow, type BoardSession, partitionBoard } from "./partition";
 
-/** The Store's contract shape, restated structurally (doc 68 §3.4). */
+/** The Store's contract shape, restated structurally (doc 68 §3.4). Reduced to
+ *  the intent channel: reads come from `useStandardRootFacts` now. */
 interface HostStoreShape {
-	watch<T>(key: string): { getSnapshot(): T | undefined; subscribe(listener: () => void): () => void };
 	act(intent: string, payload?: unknown): void;
+}
+
+/** Channel 3's ambient ROOT facts, restated structurally for the same reason
+ *  `HostStoreShape` is: the host's `StandardRootFacts` augmentation lives in
+ *  `@fraym/driver`, which a pack does not import. So the pack names the ONE
+ *  member it reads, and `BoardSession` (its own structural view of a catalog
+ *  entry, in `./partition`) stays the shape it partitions. */
+interface RootFacts {
+	readonly sessions?: readonly BoardSession[];
 }
 
 /** The structural subset of `InstrumentContext` this instrument reads. */
 export interface SessionBoardProps {
-	/** Handed in by the dock's mount boundary; absent on a storeless mount —
-	 *  the board then states that honestly instead of rendering nothing. */
+	/** Handed in by the dock's mount boundary — the board's INTENT channel
+	 *  (`act("selectSession", …)`). Absent on a storeless mount: the board then
+	 *  states that honestly instead of rendering unclickable rows. */
 	readonly store?: HostStoreShape;
 }
 
 const NO_SESSIONS: readonly BoardSession[] = [];
-const noopSubscribe = () => () => {};
 
 const text = (tone: 1 | 2 | 3): CSSProperties => ({
 	color: tone === 1 ? "var(--fr-text)" : `var(--fr-text-${tone})`,
@@ -158,18 +180,15 @@ function Row({
 /**
  * Every session, partitioned by what it needs from you: blocked first (the
  * reason to glance here), then working, then idle — one click switches.
- * Facts from the Store's published `sessions/list`; pixels the author's own.
+ * Facts from the host's ambient `sessions` standard fact; pixels the author's
+ * own.
  */
 export function SessionBoard({ store }: SessionBoardProps): ReactNode {
-	// One watch, one snapshot: the catalog value already carries liveStatus +
-	// blockedOnInput per entry, so the board needs no per-session keys.
-	const observable = useMemo(() => store?.watch<readonly BoardSession[]>("sessions/list"), [store]);
-	const sessions = useSyncExternalStore(
-		observable?.subscribe ?? noopSubscribe,
-		() => observable?.getSnapshot() ?? NO_SESSIONS,
-		() => NO_SESSIONS,
-	);
-	const partition = useMemo(() => partitionBoard(sessions), [sessions]);
+	// ONE fact, already merged and deduped by the host: the catalog value carries
+	// liveStatus + blockedOnInput per entry, so the board needs no per-session
+	// facts and no subscription of its own.
+	const { sessions } = useStandardRootFacts() as RootFacts;
+	const partition = useMemo(() => partitionBoard(sessions ?? NO_SESSIONS), [sessions]);
 	const select = (row: BoardRow) =>
 		store?.act("selectSession", {
 			id: row.id,
@@ -177,6 +196,9 @@ export function SessionBoard({ store }: SessionBoardProps): ReactNode {
 			...(row.harness ? { harness: row.harness } : {}),
 		});
 
+	// A mount with no Store has no intent channel AND no fact channel — the host
+	// hands both down together, and `useStandardRootFacts` reads the same ambient
+	// instance. So this is one honest notice, not two.
 	if (!store) {
 		return (
 			<div style={{ padding: 16, fontSize: 12, ...text(3) }}>

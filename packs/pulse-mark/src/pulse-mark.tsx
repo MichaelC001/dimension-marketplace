@@ -37,7 +37,17 @@ export interface PulseMarkProps {
 	readonly store?: HostStoreShape;
 }
 
-const NO_SESSIONS: readonly { readonly status?: string }[] = [];
+/** The structural subset of ONE `sessions/list` entry this beacon reads.
+ *
+ *  `liveStatus`, not `status` — and that distinction is the whole reason this
+ *  pack sat broken. The published field is `CatalogEntry.liveStatus`
+ *  (`packages/app/src/session-catalog.ts:36`, written by
+ *  `publishSessionCatalog`); this file read `status`, which no entry carries.
+ *  Invisible for as long as the mark path passed no store at all — `undefined`
+ *  store and wrong field name produce the SAME resting beacon, so the second
+ *  defect could only surface once the first was fixed (2026-09-02). A
+ *  structural type is not a spelling checker; the host's key is. */
+const NO_SESSIONS: readonly { readonly liveStatus?: string }[] = [];
 const noopSubscribe = () => () => {};
 
 /** An activity beacon: a quiet ring that ignites while ANY session is
@@ -48,7 +58,7 @@ export function PulseMark({ size, active, hovered, animate, store }: PulseMarkPr
 	// call, and a stable `subscribe` identity is the subscriber's manners).
 	// No host, no key → undefined → rest state.
 	const observable = useMemo(
-		() => store?.watch<readonly { readonly status?: string }[]>("sessions/list"),
+		() => store?.watch<readonly { readonly liveStatus?: string }[]>("sessions/list"),
 		[store],
 	);
 	const sessions = useSyncExternalStore(
@@ -56,7 +66,7 @@ export function PulseMark({ size, active, hovered, animate, store }: PulseMarkPr
 		() => observable?.getSnapshot() ?? NO_SESSIONS,
 		() => NO_SESSIONS,
 	);
-	const working = sessions.some(session => session.status === "running");
+	const working = sessions.some(session => session.liveStatus === "running");
 
 	const glow = working ? "#34d399" : hovered ? "#a3a3a3" : "#525252";
 	return (
