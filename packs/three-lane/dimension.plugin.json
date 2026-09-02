@@ -57,8 +57,7 @@
 					"session"
 				],
 				"start": "session",
-				"session": "session",
-				"switchPolicy": "remember"
+				"session": "session"
 			},
 			"generalAgents": {
 				"list": "discoverable",
