@@ -170,7 +170,7 @@
 		{
 			"name": "code-assembled",
 			"source": "./packs/code-assembled",
-			"description": "Code (Assembled) - the Code space's SESSION SURFACE reproduced 1:1 from marketplace parts. Its space document mirrors Dimension's compiled-in CODE field for field, and every filling is a pack shipping the real component. The parity harness: put its session surface beside Code's and any visible difference is a hole in the assembly contract. Its top-bar chrome is deliberately reduced to the environment affordance and is not part of that comparison.",
+			"description": "Code (Assembled) - the Code space's SESSION SURFACE reproduced 1:1 from marketplace parts. Its space document mirrors Dimension's compiled-in CODE field for field, and every filling is a pack shipping the real component. The parity harness: put its session surface beside Code's and any visible difference is a hole in the assembly contract. Its top-bar chrome is at parity too: the same five controls the built-in Code space declares, so the dock toggle draws here as it does there.",
 			"version": "0.1.0",
 			"author": {
 				"name": "Dimension"
