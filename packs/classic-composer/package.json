@@ -19,7 +19,7 @@
 		"classic",
 		"assembly"
 	],
-	"omp": {
+	"dimension": {
 		"name": "classic-composer",
 		"description": "Classic Composer - the shipped the session surface's composer section, installable.",
 		"defaultEnabled": true,

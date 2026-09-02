@@ -10,7 +10,7 @@
 	"peerDependencies": {
 		"react": ">=19"
 	},
-	"omp": {
+	"dimension": {
 		"name": "mochi-mark",
 		"description": "Mochi Mark — a demo mark component: a soft blinking mochi that draws one switcher cell.",
 		"defaultEnabled": true,

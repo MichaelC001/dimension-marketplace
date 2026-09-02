@@ -1,4 +1,4 @@
-// The access-token cache's credential key. This module is `omp.sharedModule`, so
+// The access-token cache's credential key. This module is `dimension.sharedModule`, so
 // `tokenCache` is evaluated ONCE PER PROCESS and outlives a session: a user who
 // reconnects mid-process (a different tenant, a rotated secret) must not keep
 // calling Graph with the old tenant's token until it expires. A wrong-but-still-

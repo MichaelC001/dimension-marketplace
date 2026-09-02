@@ -7,7 +7,7 @@
 	"scripts": {
 		"check": "biome check . --no-errors-on-unmatched"
 	},
-	"omp": {
+	"dimension": {
 		"name": "product-psychology",
 		"description": "Product Psychology — audit conversion & comprehension, map remembered journeys, research users, and ethics-gate persuasion",
 		"defaultEnabled": false,

@@ -6,10 +6,22 @@ import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const catalogPath = join(root, ".omp-plugin", "marketplace.json");
+const catalogPath = join(root, ".dimension-plugin", "marketplace.json");
+/** One-release compatibility copy for clients that only know `.omp-plugin`. */
+const legacyCatalogPath = join(root, ".omp-plugin", "marketplace.json");
 const errors = [];
 
-const catalog = JSON.parse(readFileSync(catalogPath, "utf8"));
+const catalogRaw = readFileSync(catalogPath, "utf8");
+const catalog = JSON.parse(catalogRaw);
+
+// The copy is what every pre-#158 client actually fetches. A shelf whose two
+// catalogs disagree serves two different marketplaces depending on the client's
+// build date, which is worse than either being wrong on its own.
+if (!existsSync(legacyCatalogPath)) {
+	errors.push(".omp-plugin/marketplace.json is missing — pre-#158 clients read only that path (run scripts/sync-catalog.mjs)");
+} else if (readFileSync(legacyCatalogPath, "utf8") !== catalogRaw) {
+	errors.push(".omp-plugin/marketplace.json differs from .dimension-plugin/marketplace.json (run scripts/sync-catalog.mjs)");
+}
 
 if (typeof catalog.name !== "string" || !/^[a-z0-9-]+$/.test(catalog.name)) {
 	errors.push("catalog.name must be a kebab-case string");

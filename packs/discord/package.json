@@ -8,7 +8,7 @@
 	"scripts": {
 		"check": "biome check . --no-errors-on-unmatched"
 	},
-	"omp": {
+	"dimension": {
 		"name": "discord",
 		"description": "Discord connector — list servers/channels, read and send messages via a bot token",
 		"defaultEnabled": false,

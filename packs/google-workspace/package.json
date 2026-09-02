@@ -8,7 +8,7 @@
 	"scripts": {
 		"check": "biome check . --no-errors-on-unmatched"
 	},
-	"omp": {
+	"dimension": {
 		"name": "google-workspace",
 		"description": "Google Workspace connector — read/write Sheets, Docs, and Slides via OAuth",
 		"defaultEnabled": false,

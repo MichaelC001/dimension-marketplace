@@ -8,7 +8,7 @@
 		"check": "biome check . --no-errors-on-unmatched",
 		"sync": "bun scripts/sync.ts"
 	},
-	"omp": {
+	"dimension": {
 		"name": "impeccable",
 		"description": "Impeccable — design guidance for AI agents: 23 design commands (craft, polish, audit, critique, bolder, quieter, distill…), anti-slop rules, and a deterministic anti-pattern detector",
 		"defaultEnabled": true,

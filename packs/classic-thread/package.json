@@ -19,7 +19,7 @@
 		"classic",
 		"assembly"
 	],
-	"omp": {
+	"dimension": {
 		"name": "classic-thread",
 		"description": "Classic Thread - the shipped the session surface's thread section, installable.",
 		"defaultEnabled": true,

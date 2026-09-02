@@ -5,7 +5,7 @@
 	"description": "Independent rail — built from the published PARTS (SessionRail, the rail chrome pieces, and the three assembly hooks), not from the shipped rail implementation.",
 	"type": "module",
 	"main": "./src/index.tsx",
-	"omp": {
+	"dimension": {
 		"name": "independent-rail",
 		"description": "Independent session rail built on the parts tier.",
 		"defaultEnabled": true,

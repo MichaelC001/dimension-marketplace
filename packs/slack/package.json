@@ -8,7 +8,7 @@
 	"scripts": {
 		"check": "biome check . --no-errors-on-unmatched"
 	},
-	"omp": {
+	"dimension": {
 		"name": "slack",
 		"description": "Slack connector — list channels, read messages, and post via the Slack Web API",
 		"defaultEnabled": false,

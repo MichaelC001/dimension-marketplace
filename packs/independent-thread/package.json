@@ -5,7 +5,7 @@
 	"description": "Independent thread \u2014 built from the published PARTS (Thread, SectionSessionScope, PresenceSurface, OpeningThreadSkeleton), not from the shipped section.",
 	"type": "module",
 	"main": "./src/index.tsx",
-	"omp": {
+	"dimension": {
 		"name": "independent-thread",
 		"description": "Independent thread built on the parts tier.",
 		"defaultEnabled": true,

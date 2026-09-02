@@ -19,7 +19,7 @@
 		"classic",
 		"assembly"
 	],
-	"omp": {
+	"dimension": {
 		"name": "classic-rail",
 		"description": "Classic Rail - the shipped the session rail, installable.",
 		"defaultEnabled": true,

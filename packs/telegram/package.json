@@ -8,7 +8,7 @@
 	"scripts": {
 		"check": "biome check . --no-errors-on-unmatched"
 	},
-	"omp": {
+	"dimension": {
 		"name": "telegram",
 		"description": "Telegram connector — send messages, read updates, inspect chats via the Bot API",
 		"defaultEnabled": false,

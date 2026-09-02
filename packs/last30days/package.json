@@ -7,7 +7,7 @@
 	"scripts": {
 		"check": "biome check . --no-errors-on-unmatched"
 	},
-	"omp": {
+	"dimension": {
 		"name": "last30days",
 		"description": "last30days — research what people actually said about any topic in the last 30 days across Reddit, X, YouTube, TikTok, Hacker News, and the web",
 		"defaultEnabled": true,

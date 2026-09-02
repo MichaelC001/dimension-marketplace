@@ -19,13 +19,23 @@
 // origin turns out to be (raw repo host, CDN, a local path). A data-URI
 // screenshot is carried through untouched.
 //
+// The catalog is written TWICE: to `.dimension-plugin/marketplace.json` (the
+// namespace this shelf publishes under since 2026-09) and, byte-identical, to
+// the pre-rename `.omp-plugin/marketplace.json`. Every Dimension built before
+// oh-my-pi #158 looks only at the second path, so dropping it now would make
+// this shelf disappear for every already-installed client. `--check` covers
+// BOTH files, so the copy can never silently rot. Delete the copy (and this
+// paragraph) when the `omp` read fallback is dropped — CHANGELOG `[Unreleased]`.
+//
 // No dependencies — runs on bare node or bun, like its sibling validator.
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { resolve, dirname, join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const catalogPath = join(root, ".omp-plugin", "marketplace.json");
+const catalogPath = join(root, ".dimension-plugin", "marketplace.json");
+/** One-release compatibility copy for clients that only know `.omp-plugin`. */
+const legacyCatalogPath = join(root, ".omp-plugin", "marketplace.json");
 
 /** The listing projection of one `dimension.plugin.json` space declaration.
  *  Deliberately NOT the whole space: a listing answers "what is this and what
@@ -146,6 +156,7 @@ try {
 	process.exit(1);
 }
 const current = readFileSync(catalogPath, "utf8");
+const legacyCurrent = existsSync(legacyCatalogPath) ? readFileSync(legacyCatalogPath, "utf8") : undefined;
 
 if (process.argv.includes("--check")) {
 	if (next !== current) {
@@ -155,13 +166,23 @@ if (process.argv.includes("--check")) {
 		);
 		process.exit(1);
 	}
-	console.log("marketplace.json: space listings in sync");
+	// The compatibility copy is load-bearing for pre-#158 clients, so a drifted
+	// or missing copy is the same failure as a stale catalog, not a warning.
+	if (legacyCurrent !== next) {
+		console.error(
+			`.omp-plugin/marketplace.json: compatibility copy is ${legacyCurrent === undefined ? "MISSING" : "STALE"} — pre-#158 clients read only this path.\n` +
+				"  Run \`node scripts/sync-catalog.mjs\` and commit the result.",
+		);
+		process.exit(1);
+	}
+	console.log("marketplace.json: space listings in sync (+ .omp-plugin compatibility copy)");
 } else {
-	if (next === current) {
+	if (next === current && legacyCurrent === next) {
 		console.log("marketplace.json: space listings already in sync - no change");
 	} else {
 		writeFileSync(catalogPath, next);
+		writeFileSync(legacyCatalogPath, next);
 		const count = projectedCatalog(catalog).plugins.filter(plugin => plugin.spaces).length;
-		console.log(`marketplace.json: synced space listings for ${count} pack(s)`);
+		console.log(`marketplace.json: synced space listings for ${count} pack(s) (+ .omp-plugin compatibility copy)`);
 	}
 }

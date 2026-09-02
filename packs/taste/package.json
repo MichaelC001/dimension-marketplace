@@ -7,7 +7,7 @@
 	"scripts": {
 		"check": "biome check . --no-errors-on-unmatched"
 	},
-	"omp": {
+	"dimension": {
 		"name": "taste",
 		"description": "Taste — anti-slop frontend skill: brief-first design reads, real design systems, no templated AI aesthetics",
 		"defaultEnabled": true,

@@ -6,7 +6,7 @@
 	"scripts": {
 		"check": "biome check . --no-errors-on-unmatched"
 	},
-	"omp": {
+	"dimension": {
 		"name": "watch",
 		"toolLoading": "eager",
 		"description": "Watch a video by URL or local path: ffmpeg frame sampling plus a timestamped transcript (captions, local Whisper, or a consent-gated cloud API)",
