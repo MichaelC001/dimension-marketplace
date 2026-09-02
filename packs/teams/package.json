@@ -8,7 +8,7 @@
 	"scripts": {
 		"check": "biome check . --no-errors-on-unmatched"
 	},
-	"omp": {
+	"dimension": {
 		"name": "teams",
 		"description": "Microsoft Teams connector — list teams/channels and post channel messages via Microsoft Graph",
 		"defaultEnabled": false,

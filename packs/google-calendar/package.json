@@ -8,7 +8,7 @@
 	"scripts": {
 		"check": "biome check . --no-errors-on-unmatched"
 	},
-	"omp": {
+	"dimension": {
 		"name": "google-calendar",
 		"description": "Manage Google Calendar events and schedules",
 		"defaultEnabled": false,

@@ -19,7 +19,7 @@
 		"classic",
 		"assembly"
 	],
-	"omp": {
+	"dimension": {
 		"name": "classic-environment",
 		"description": "Classic Environment - the shipped the environment card, installable.",
 		"defaultEnabled": true,

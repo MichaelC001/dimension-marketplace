@@ -11,7 +11,7 @@ review is the taste check.** No pack merges red.
    there; this file only adds the marketplace mechanics.
 2. **Scaffold your pack** under `packs/<your-pack>/` mirroring
    `packs/independent-thread/`: `package.json` (name it under your own npm
-   scope) with an `omp` block, `dimension.plugin.json`, `src/`, `vite.config.ts`
+   scope) with a `dimension` block, `dimension.plugin.json`, `src/`, `vite.config.ts`
    declaring the four granted externals, and a committed `dist/`. That pack
    builds byte-identically from a bare directory with vite and nothing else —
    copy it if you want your pack to stay portable. If you instead need in-repo
@@ -28,7 +28,7 @@ review is the taste check.** No pack merges red.
    live structural + behavioral comparison against that surface — the portable
    template ships no test directory precisely because its gate is that
    comparison, not a self-written assertion.
-5. **Add your catalog entry** to `.omp-plugin/marketplace.json`: name, source
+5. **Add your catalog entry** to `.dimension-plugin/marketplace.json`: name, source
    (`./packs/<your-pack>`), description, version, author, license, category.
 6. **Open the PR.** CI validates the catalog and pack layout; the monorepo CI
    runs your tests; a maintainer reviews for craft (design-token discipline,

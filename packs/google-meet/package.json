@@ -8,7 +8,7 @@
 	"scripts": {
 		"check": "biome check . --no-errors-on-unmatched"
 	},
-	"omp": {
+	"dimension": {
 		"name": "google-meet",
 		"description": "Create Google Meet spaces, read conference records/recordings/transcripts, and live-transcribe a call",
 		"defaultEnabled": false,

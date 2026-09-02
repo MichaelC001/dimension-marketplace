@@ -8,7 +8,7 @@
 	"scripts": {
 		"check": "biome check . --no-errors-on-unmatched"
 	},
-	"omp": {
+	"dimension": {
 		"name": "whatsapp",
 		"description": "WhatsApp connector — send text messages and templates via the Meta WhatsApp Cloud API",
 		"defaultEnabled": false,

@@ -1,4 +1,4 @@
-// The bearer-token cache's credential key. This module is `omp.sharedModule`, so
+// The bearer-token cache's credential key. This module is `dimension.sharedModule`, so
 // `tokenCache` is evaluated ONCE PER PROCESS and outlives a session: a user who
 // reconnects mid-process (new account, rotated secret) must not keep acting as
 // the old account until the old token expires. A wrong-but-still-valid token

@@ -8,7 +8,7 @@
 	"scripts": {
 		"check": "biome check . --no-errors-on-unmatched"
 	},
-	"omp": {
+	"dimension": {
 		"name": "google-drive",
 		"description": "Google Drive connector — list/search/read files via OAuth",
 		"defaultEnabled": false,

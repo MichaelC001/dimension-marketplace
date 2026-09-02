@@ -8,7 +8,7 @@
 	"scripts": {
 		"check": "biome check . --no-errors-on-unmatched"
 	},
-	"omp": {
+	"dimension": {
 		"name": "youtube",
 		"description": "Search YouTube, inspect videos and channels, manage playlists, and read/post comments",
 		"defaultEnabled": false,

@@ -10,7 +10,7 @@
 	"peerDependencies": {
 		"react": ">=19"
 	},
-	"omp": {
+	"dimension": {
 		"name": "pulse-mark",
 		"description": "Pulse Mark — a demo mark component: an activity beacon that pulses while any session is running.",
 		"defaultEnabled": true,

@@ -21,7 +21,7 @@
 		"store",
 		"assembly"
 	],
-	"omp": {
+	"dimension": {
 		"name": "session-board",
 		"description": "Sessions - mission control in the dock: blocked / working / idle, one-click switching. The first contributed dock component.",
 		"defaultEnabled": true,

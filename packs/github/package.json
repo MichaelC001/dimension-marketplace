@@ -7,7 +7,7 @@
 	"scripts": {
 		"check": "biome check . --no-errors-on-unmatched"
 	},
-	"omp": {
+	"dimension": {
 		"name": "github",
 		"description": "GitHub connector — issues, PRs, releases, repos, and search via the gh CLI",
 		"defaultEnabled": false,

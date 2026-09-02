@@ -22,7 +22,7 @@ packs/
                   assembly-spine thesis demo (three plugins, nobody hand-wired).
   mochi-mark/     A mark component: the import-surface FLOOR (react only).
   pulse-mark/     The Store's demo mark: zero Fraym UI, one granted binding.
-.omp-plugin/
+.dimension-plugin/
   marketplace.json  The catalog Dimension's plugin system reads.
 ```
 
@@ -54,7 +54,7 @@ lives in the Dimension repository: `docs/guides/building-a-custom-space.md`.
    For a section that claims parity with a shipped surface, the gate is a live
    structural + behavioral comparison against it, not a self-written test.
 4. Open a PR adding your pack under `packs/` plus a catalog entry in
-   `.omp-plugin/marketplace.json`. Review + green gates = merged = published.
+   `.dimension-plugin/marketplace.json`. Review + green gates = merged = published.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
 

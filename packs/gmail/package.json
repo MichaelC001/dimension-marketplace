@@ -7,7 +7,7 @@
 	"scripts": {
 		"check": "biome check . --no-errors-on-unmatched"
 	},
-	"omp": {
+	"dimension": {
 		"name": "gmail",
 		"description": "Email connector — read/search/compose/reply over IMAP/SMTP via himalaya",
 		"defaultEnabled": false,
