@@ -1,7 +1,7 @@
 # dimension-marketplace
 
 The public marketplace for the **Dimension** platform: community components,
-layouts, instruments, artifactories and spaces.
+layouts, instruments and spaces.
 
 Dimension's UI is assembled from **slots**. The slot set is **open and
 layout-owned** (doc 68 §4.1): a layout plugin declares its own slots;
@@ -38,7 +38,7 @@ lives in the Dimension repository: `docs/guides/building-a-custom-space.md`.
 |---|---|---|
 | **Zero-import floor** | `react` only — the Store arrives as a prop/context value; styling on the host's `--fr-*` custom properties | `pulse-mark`, `session-board` |
 | **In-tree** | `react` + enumerated `@fraym/ui` VALUES (each one a permanent capability grant, settled per component) | `independent-composer` · `independent-thread` (granted PARTS + bricks) |
-| **Sandboxed** | zero imports — the wire is the contract (MCP Apps transport; platform Phase 4) | artifactory packs |
+| **Sandboxed** | zero imports — the wire is the contract (MCP Apps transport; platform Phase 4) | none yet — see the retirement note below |
 
 ## How a pack gets in
 
@@ -68,6 +68,11 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
   load time. Some older packs still take workspace dependencies and therefore
   build inside the Dimension checkout; that is their limitation, not the
   contract's.
+- The **artifactory** contribution kind was **retired 2026-09-02**: the lane
+  never worked, so it was deleted rather than propped up. Sandboxed packs
+  return as **MCP Apps / web MCP apps on the open standard**; until that lands
+  there is nothing to ship in the sandboxed tier, and nothing here accepts an
+  `artifactory` pack.
 - Runtime installation of UI component packs WORKS: a pack ships a committed
   `dist/` bundle, the app installs it from a marketplace source, and the loader
   resolves its imports through the host externals contract. `@dimension/sdk`

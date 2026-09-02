@@ -4,7 +4,7 @@
 		"name": "Dimension"
 	},
 	"metadata": {
-		"description": "Community components, layouts, instruments, artifactories and spaces for the Dimension platform. Slots are open and layout-owned; well-known names are published conventions (doc 68 §4.1).",
+		"description": "Community components, layouts, instruments and spaces for the Dimension platform. Slots are open and layout-owned; well-known names are published conventions (doc 68 §4.1).",
 		"version": "0.2.0"
 	},
 	"plugins": [
