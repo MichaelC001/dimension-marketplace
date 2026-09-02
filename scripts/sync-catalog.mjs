@@ -28,7 +28,7 @@
 // paragraph) when the `omp` read fallback is dropped — CHANGELOG `[Unreleased]`.
 //
 // No dependencies — runs on bare node or bun, like its sibling validator.
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { resolve, dirname, join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -181,6 +181,12 @@ if (process.argv.includes("--check")) {
 		console.log("marketplace.json: space listings already in sync - no change");
 	} else {
 		writeFileSync(catalogPath, next);
+		// mkdir first: --check's MISSING branch tells the reader to run this script,
+		// and the copy is normally missing because the DIRECTORY is gone (a git
+		// clean, a partial checkout, someone deleting the stale dir to "fix" the
+		// drift error). A bare write would ENOENT — the one stated recovery from
+		// that branch failing is worse than the drift it reports.
+		mkdirSync(dirname(legacyCatalogPath), { recursive: true });
 		writeFileSync(legacyCatalogPath, next);
 		const count = projectedCatalog(catalog).plugins.filter(plugin => plugin.spaces).length;
 		console.log(`marketplace.json: synced space listings for ${count} pack(s) (+ .omp-plugin compatibility copy)`);
