@@ -167,7 +167,8 @@
 						"classic-dock",
 						"independent-thread",
 						"independent-composer",
-						"classic-environment"
+						"classic-environment",
+						"session-tools"
 					]
 				}
 			]
