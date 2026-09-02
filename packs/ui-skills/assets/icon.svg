@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
+  <defs>
+    <linearGradient id="fr-uiskills" x1="4" y1="4" x2="44" y2="44" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#43dcea"/>
+      <stop offset="0.5" stop-color="#5b8cff"/>
+      <stop offset="1" stop-color="#8f7bff"/>
+    </linearGradient>
+  </defs>
+  <rect x="6" y="6" width="24" height="24" rx="5" fill="url(#fr-uiskills)" opacity="0.55"/>
+  <rect x="12" y="12" width="24" height="24" rx="5" fill="url(#fr-uiskills)" opacity="0.75"/>
+  <rect x="18" y="18" width="24" height="24" rx="5" fill="url(#fr-uiskills)"/>
+  <path d="M25 30h10M25 34h6" stroke="#0b1020" stroke-width="2.4" stroke-linecap="round"/>
+</svg>
