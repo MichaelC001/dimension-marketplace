@@ -95,42 +95,6 @@
 			"pluginId": "session-board"
 		},
 		{
-			"name": "classic-thread",
-			"source": "./packs/classic-thread",
-			"description": "The shipped thread section, installable: re-exports THREAD_CLASSIC from @fraym/ui, so a space that binds it renders the REAL transcript (tool cards, metrics, presence) rather than a reduced lookalike.",
-			"version": "0.1.0",
-			"author": {
-				"name": "Dimension"
-			},
-			"repository": "https://github.com/insodimension/dimension-marketplace",
-			"license": "MIT",
-			"category": "component",
-			"tags": [
-				"component",
-				"thread",
-				"classic"
-			],
-			"pluginId": "classic-thread"
-		},
-		{
-			"name": "classic-composer",
-			"source": "./packs/classic-composer",
-			"description": "The shipped composer section, installable: re-exports COMPOSER_CLASSIC from @fraym/ui - model picker, permission pill, attachments, mic, stop, slash catalog, all of it.",
-			"version": "0.1.0",
-			"author": {
-				"name": "Dimension"
-			},
-			"repository": "https://github.com/insodimension/dimension-marketplace",
-			"license": "MIT",
-			"category": "component",
-			"tags": [
-				"component",
-				"composer",
-				"classic"
-			],
-			"pluginId": "classic-composer"
-		},
-		{
 			"name": "classic-rail",
 			"source": "./packs/classic-rail",
 			"description": "The shipped session rail, installable: re-exports RAIL_CLASSIC from @fraym/ui - project grouping, rail actions, search, the full row model.",
