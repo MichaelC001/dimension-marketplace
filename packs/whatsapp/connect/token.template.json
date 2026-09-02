@@ -1,0 +1,4 @@
+{
+	"access": "${accessToken}",
+	"phoneNumberId": "${phoneNumberId}"
+}

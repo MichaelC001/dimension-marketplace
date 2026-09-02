@@ -7,7 +7,7 @@
 	"main": "./src/index.ts",
 	"types": "./src/index.ts",
 	"private": true,
-	"omp": {
+	"dimension": {
 		"name": "code-assembled",
 		"description": "Code (Assembled) - the Code space, marketplace-built. Compare it against Code; they should be identical.",
 		"defaultEnabled": true,

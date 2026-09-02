@@ -5,7 +5,7 @@
 	"description": "Independent composer — built from Fraym primitives and the store, not from the shipped composer.",
 	"type": "module",
 	"main": "./src/index.ts",
-	"omp": {
+	"dimension": {
 		"name": "independent-composer",
 		"description": "Independent composer built on the bricks tier.",
 		"defaultEnabled": true,

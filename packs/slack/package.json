@@ -1,0 +1,42 @@
+{
+	"name": "@inso/slack",
+	"author": "Dimension",
+	"version": "0.1.1",
+	"description": "Slack connector — list channels, read messages, and post messages via the Slack Web API (bot token)",
+	"type": "module",
+	"main": "index.ts",
+	"scripts": {
+		"check": "biome check . --no-errors-on-unmatched"
+	},
+	"dimension": {
+		"name": "slack",
+		"description": "Slack connector — list channels, read messages, and post via the Slack Web API",
+		"defaultEnabled": false,
+		"category": "connector",
+		"keywords": [
+			"slack",
+			"chat",
+			"messaging",
+			"webhook",
+			"connector"
+		],
+		"sharedModule": true,
+		"extensions": [
+			"index.ts"
+		],
+		"bundle": true
+	},
+	"files": [
+		"skills/",
+		"rules/",
+		"connect/",
+		"assets/",
+		"index.ts",
+		"dimension.plugin.json"
+	],
+	"peerDependencies": {
+		"arktype": "^2.2.0",
+		"@oh-my-pi/pi-coding-agent": "*"
+	},
+	"license": "MIT"
+}

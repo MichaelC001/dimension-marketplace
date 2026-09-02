@@ -1,4 +1,5 @@
-import { useMemo, useSyncExternalStore } from "react";
+import { useStandardRootFacts } from "@fraym/ui";
+import { useMemo } from "react";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
 //#region src/partition.ts
 function toRow(session) {
@@ -50,7 +51,6 @@ function partitionBoard(sessions) {
 //#endregion
 //#region src/session-board.tsx
 var NO_SESSIONS = [];
-var noopSubscribe = () => () => {};
 var text = (tone) => ({ color: tone === 1 ? "var(--fr-text)" : `var(--fr-text-${tone})` });
 /** Section header: a quiet label with a count, the divider the content is. */
 function SectionHead({ label, count, accent }) {
@@ -153,12 +153,12 @@ function Row({ row, kind, onSelect }) {
 /**
 * Every session, partitioned by what it needs from you: blocked first (the
 * reason to glance here), then working, then idle — one click switches.
-* Facts from the Store's published `sessions/list`; pixels the author's own.
+* Facts from the host's ambient `sessions` standard fact; pixels the author's
+* own.
 */
 function SessionBoard({ store }) {
-	const observable = useMemo(() => store?.watch("sessions/list"), [store]);
-	const sessions = useSyncExternalStore(observable?.subscribe ?? noopSubscribe, () => observable?.getSnapshot() ?? NO_SESSIONS, () => NO_SESSIONS);
-	const partition = useMemo(() => partitionBoard(sessions), [sessions]);
+	const { sessions } = useStandardRootFacts();
+	const partition = useMemo(() => partitionBoard(sessions ?? NO_SESSIONS), [sessions]);
 	const select = (row) => store?.act("selectSession", {
 		id: row.id,
 		...row.workspaceId ? { workspaceId: row.workspaceId } : {},
