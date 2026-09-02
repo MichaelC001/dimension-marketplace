@@ -167,6 +167,7 @@
 						"classic-dock",
 						"independent-thread",
 						"independent-composer",
+						"classic-start",
 						"classic-environment"
 					]
 				}
@@ -225,6 +226,24 @@
 				"assembly"
 			],
 			"pluginId": "classic-switcher"
+		},
+		{
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-marketplace",
+			"license": "MIT",
+			"name": "classic-start",
+			"source": "./packs/classic-start",
+			"description": "The shipped START SURFACE as a pack — the session surface's front door: hero composer, Project · Work strip, popover menus. Fills the `start` contract (a SECTION like `thread`/`composer`, resolved inside the session surface). The hero sentence comes from the space's `workspace.startCopy`, never from the kit.",
+			"category": "component",
+			"tags": [
+				"component",
+				"start",
+				"assembly"
+			],
+			"pluginId": "classic-start"
 		},
 		{
 			"version": "0.1.0",
