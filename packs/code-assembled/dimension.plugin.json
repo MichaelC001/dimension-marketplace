@@ -115,7 +115,8 @@
 					"independent-composer",
 					"classic-start",
 					"classic-environment",
-					"board"
+					"board",
+					"analytics"
 				]
 			},
 			"widgets": {
