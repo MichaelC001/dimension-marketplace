@@ -168,7 +168,8 @@
 						"independent-thread",
 						"independent-composer",
 						"classic-start",
-						"classic-environment"
+						"classic-environment",
+						"board"
 					]
 				}
 			]
