@@ -117,7 +117,8 @@
 					"classic-environment",
 					"board",
 					"analytics",
-					"workbench"
+					"workbench",
+					"session-tools"
 				]
 			},
 			"widgets": {
