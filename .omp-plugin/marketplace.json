@@ -132,9 +132,9 @@
 			"pluginId": "classic-environment"
 		},
 		{
-			"name": "code-assembled",
-			"source": "./packs/code-assembled",
-			"description": "Code (Assembled) - the Code space's SESSION SURFACE reproduced 1:1 from marketplace parts. Its space document mirrors Dimension's compiled-in CODE field for field, and every filling is a pack shipping the real component. The parity harness: put its session surface beside Code's and any visible difference is a hole in the assembly contract. Its top bar now declares the same five actions Code does, so the chrome is part of the comparison too. The session surface's thread, composer and start surface are all packs; the start surface joined them with the `start` slot contract, and its words come from the space document rather than the kit.",
+			"name": "build",
+			"source": "./packs/build",
+			"description": "Build - the assembled workspace. The Code space rebuilt entirely from marketplace packs: rail, thread, composer, start surface, dock, environment and switcher are all replaceable parts. Install it beside Code and swap any one of them without touching the app.",
 			"version": "0.1.0",
 			"author": {
 				"name": "Dimension"
@@ -146,19 +146,19 @@
 				"layout",
 				"space",
 				"assembly",
-				"parity"
+				"build"
 			],
-			"pluginId": "code-assembled",
+			"pluginId": "build",
 			"spaces": [
 				{
-					"id": "code-assembled",
-					"label": "Code (Assembled)",
-					"tagline": "The full Code experience, assembled entirely from marketplace parts — pixel-identical to the built-in.",
+					"id": "build",
+					"label": "Build",
+					"tagline": "Every part of this workspace is a pack you can swap.",
 					"screenshots": [
-						"packs/code-assembled/assets/preview/start.webp",
-						"packs/code-assembled/assets/preview/session.webp"
+						"packs/build/assets/preview/start.webp",
+						"packs/build/assets/preview/session.webp"
 					],
-					"icon": "grid",
+					"icon": "hammer",
 					"accent": "#f59e0b",
 					"requires": [
 						"classic-switcher",

@@ -1,0 +1,22 @@
+{
+	"name": "@dimension/build",
+	"author": "Dimension",
+	"version": "0.1.0",
+	"description": "Build - the assembled workspace: a layout declaring its own slots, plus a space whose every filling is a marketplace pack shipping the real component.",
+	"type": "module",
+	"main": "./src/index.ts",
+	"types": "./src/index.ts",
+	"private": true,
+	"dimension": {
+		"name": "build",
+		"description": "Build - the Code space rebuilt entirely from marketplace packs. Every part is replaceable.",
+		"defaultEnabled": true,
+		"category": "layout",
+		"keywords": [
+			"layout",
+			"space",
+			"assembly",
+			"build"
+		]
+	}
+}
