@@ -84,7 +84,6 @@
 				"session": "session",
 				"actions": [
 					"jobs",
-					"refresh",
 					"environment",
 					"dock",
 					"sound"
