@@ -22,7 +22,7 @@ review is the taste check.** No pack merges red.
    out). It holds no session state and talks to no engine. If you find
    yourself needing a capability the contract lacks, that is a FINDING: open
    an issue naming it.
-4. **Prove it.** For pure logic, tests in-pack (`packs/session-board/test/`
+4. **Prove it.** For pure logic, tests in-pack (`packs/reddit/test/`
    is the shape; run from the Dimension monorepo if your pack takes workspace
    deps). For a slot fill claiming parity with a shipped surface, the gate is a
    live structural + behavioral comparison against that surface — the portable

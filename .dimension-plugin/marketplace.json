@@ -764,27 +764,6 @@
 			]
 		},
 		{
-			"name": "session-board",
-			"source": "./packs/session-board",
-			"pluginId": "session-board",
-			"title": "Sessions",
-			"icon": "layers",
-			"description": "Sessions - mission control in the dock: every session partitioned by urgency (needs you / working / idle), one-click switching. The first contributed dock component (\"type\": \"component\", \"slot\": \"dock\"), at the zero-import floor.",
-			"version": "0.1.0",
-			"author": {
-				"name": "Dimension"
-			},
-			"repository": "https://github.com/insodimension/dimension-marketplace",
-			"license": "MIT",
-			"category": "component",
-			"tags": [
-				"component",
-				"dock",
-				"sessions",
-				"store"
-			]
-		},
-		{
 			"name": "slack",
 			"source": "./packs/slack",
 			"pluginId": "slack",

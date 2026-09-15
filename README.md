@@ -14,10 +14,6 @@ layout, or a whole space, and Dimension installs it as a plugin.
 
 ```
 packs/
-  session-board/  Sessions — mission control in the dock. The first
-                  contributed dock COMPONENT ("type": "component",
-                  "slot": "dock"), at the zero-import floor: react only,
-                  facts from the Store.
   three-lane/     A LAYOUT declaring its own slots, shipping Demo Lane — the
                   assembly-spine thesis demo (three plugins, nobody hand-wired).
   mochi-mark/     A mark component: the import-surface FLOOR (react only).
@@ -46,7 +42,7 @@ lives in the Dimension repository: `docs/guides/building-a-custom-space.md`.
 
 | Tier | Import surface | Worked example |
 |---|---|---|
-| **Zero-import floor** | `react` only — the Store arrives as a prop/context value; styling on the host's `--fr-*` custom properties | `pulse-mark`, `session-board` |
+| **Zero-import floor** | `react` only — the Store arrives as a prop/context value; styling on the host's `--fr-*` custom properties | `pulse-mark` |
 | **In-tree** | `react` + enumerated `@fraym/ui` VALUES (each one a permanent capability grant, settled per component) | `independent-composer` · `independent-thread` (granted PARTS + bricks) |
 | **Sandboxed** | zero imports — the wire is MCP Apps (`io.modelcontextprotocol/ui`), the platform's Phase 4; a pack is a real MCP server plus a `ui://` View, and the engine hosts it | `artifactory-threejs` · `artifactory-system-monitor` (both `defaultEnabled: false`) |
 
