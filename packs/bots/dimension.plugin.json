@@ -69,7 +69,7 @@
 				"surfaces": ["session", "models"],
 				"start": "session",
 				"session": "session",
-				"actions": ["refresh", "dock"],
+				"actions": ["dock"],
 				"sections": {
 					"thread": "independent-thread",
 					"composer": "independent-composer",

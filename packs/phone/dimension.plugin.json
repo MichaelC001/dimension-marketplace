@@ -88,7 +88,6 @@
 				"session": "session",
 				"switchPolicy": "remember",
 				"actions": [
-					"refresh",
 					"environment",
 					"dock"
 				],
