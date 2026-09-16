@@ -9,7 +9,7 @@
 //
 // The pack files are the source of truth, per pack directory `packs/<name>/`:
 //   name / source / pluginId  ← the directory name + `dimension.plugin.json.plugin`
-//   title / icon / requires / spaces  ← `dimension.plugin.json`
+//   title / icon / requires / channel / spaces  ← `dimension.plugin.json`
 //   version / description / author / license / repository / category / tags
 //                             ← `package.json` (its `dimension` block first,
 //                               then top-level fields; `omp` is read as the
@@ -202,6 +202,13 @@ function entryFor(dir: string): Json {
 	if (tags) entry.tags = tags;
 	const requires = requirements(manifest);
 	if (requires) entry.requires = requires;
+	// The RELEASE RING a pack restricts itself to. It must ride the INDEX, not
+	// just the pack: a stable-ring client filters what it BROWSES, and it browses
+	// this one file. Carried verbatim (the engine's `release-ring.ts` owns the
+	// meaning, and treats anything but "canary" as unrestricted), so a pack that
+	// declares nothing keeps a byte-identical entry.
+	const channel = asString(manifest.channel);
+	if (channel) entry.channel = channel;
 	const spaces = spaceListings(manifest, packDir);
 	if (spaces) entry.spaces = spaces;
 	return entry;
