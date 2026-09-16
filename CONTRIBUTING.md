@@ -87,7 +87,14 @@ fact has to live in the index — and why the index has to be generated.
    `"@dimension/sdk": "workspace:*"`.
 2. **Copy a template.** `packs/build` is the LAYOUT template (it declares
    its own slots and ships the `build` space); `packs/mochi-mark` is the
-   COMPONENT template (it fills one slot). A copy must edit, at minimum:
+   COMPONENT template (it fills one slot). `build` is a real product pack
+   rather than a stripped example, so copy its `plugin` / `type` / `slots` /
+   `spaces[]` shape and DROP what your space does not need: `preview`,
+   `widgets`, `workspace.sections` / `workspace.startCopy` and
+   `requires.dimension` are decoration, and five ids in its
+   `requires.plugins` (`board`, `analytics`, `workbench`, `session-tools`,
+   `general-chat`) are host-bundled plugins with no directory under `packs/`
+   — do not go looking for them. A copy must edit, at minimum:
    - `package.json` — `name`, `description`, and the `dimension` block (`name`,
      `description`, `category`, `keywords`); it is what the generated catalog
      entry quotes, so this copy is your store copy (`omp` is the pre-rename
