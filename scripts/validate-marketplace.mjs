@@ -157,6 +157,16 @@ for (const plugin of catalog.plugins ?? []) {
 			}
 		}
 	}
+	// `channel` restricts a pack to a RELEASE RING (`canary` = work in progress,
+	// testers only). The engine treats any unrecognised value as UNRESTRICTED,
+	// deliberately — a typo must never delete a shipping pack from every stable
+	// install — which means a typo here is SILENT at runtime. This is the one
+	// place it can still be loud, so it fails the shelf.
+	if (plugin.channel !== undefined && !["stable", "canary"].includes(plugin.channel)) {
+		errors.push(
+			`plugin "${label}": channel must be "stable" or "canary" (got ${JSON.stringify(plugin.channel)}); omit it for a pack that ships to everyone`,
+		);
+	}
 }
 
 // A pack that exists but is not listed is invisible to the store: it can only

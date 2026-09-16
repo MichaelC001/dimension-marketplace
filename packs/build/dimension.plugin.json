@@ -3,6 +3,7 @@
 	"contractVersion": 1,
 	"title": "Build",
 	"type": "layout",
+	"channel": "canary",
 	"requires": {
 		"dimension": ">=0.10.5"
 	},

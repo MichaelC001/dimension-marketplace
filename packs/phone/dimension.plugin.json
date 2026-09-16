@@ -3,6 +3,7 @@
 	"contractVersion": 1,
 	"title": "Phone",
 	"type": "layout",
+	"channel": "canary",
 	"slots": [
 		{
 			"id": "ph-switcher",

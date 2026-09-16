@@ -186,6 +186,7 @@
 			"requires": {
 				"dimension": ">=0.10.5"
 			},
+			"channel": "canary",
 			"spaces": [
 				{
 					"id": "build",
@@ -650,6 +651,7 @@
 				"phone",
 				"mobile"
 			],
+			"channel": "canary",
 			"spaces": [
 				{
 					"id": "phone",
