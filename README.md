@@ -14,8 +14,9 @@ layout, or a whole space, and Dimension installs it as a plugin.
 
 ```
 packs/
-  three-lane/     A LAYOUT declaring its own slots, shipping Demo Lane — the
-                  assembly-spine thesis demo (three plugins, nobody hand-wired).
+  build/          A LAYOUT declaring its own slots (ca-switcher / ca-rail /
+                  ca-workspace / ca-dock), shipping the Build space — the Code
+                  space rebuilt entirely from marketplace packs.
   mochi-mark/     A mark component: the import-surface FLOOR (react only).
   pulse-mark/     The Store's demo mark: zero Fraym UI, one granted binding.
   artifactory-threejs/

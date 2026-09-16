@@ -85,9 +85,16 @@ fact has to live in the index — and why the index has to be generated.
    command 404s today. Until it lands, an author working inside the Dimension
    monorepo takes the workspace dependency instead:
    `"@dimension/sdk": "workspace:*"`.
-2. **Copy a template.** `packs/three-lane` is the LAYOUT template (it declares
-   its own slots and ships the `demo-lane` space); `packs/mochi-mark` is the
-   COMPONENT template (it fills one slot). A copy must edit, at minimum:
+2. **Copy a template.** `packs/build` is the LAYOUT template (it declares
+   its own slots and ships the `build` space); `packs/mochi-mark` is the
+   COMPONENT template (it fills one slot). `build` is a real product pack
+   rather than a stripped example, so copy its `plugin` / `type` / `slots` /
+   `spaces[]` shape and DROP what your space does not need: `preview`,
+   `widgets`, `workspace.sections` / `workspace.startCopy` and
+   `requires.dimension` are decoration, and five ids in its
+   `requires.plugins` (`board`, `analytics`, `workbench`, `session-tools`,
+   `general-chat`) are host-bundled plugins with no directory under `packs/`
+   — do not go looking for them. A copy must edit, at minimum:
    - `package.json` — `name`, `description`, and the `dimension` block (`name`,
      `description`, `category`, `keywords`); it is what the generated catalog
      entry quotes, so this copy is your store copy (`omp` is the pre-rename
@@ -101,9 +108,10 @@ fact has to live in the index — and why the index has to be generated.
    Then they diverge:
    - `"type": "component"` (mochi-mark) adds `entry` (`"dist/index.mjs"`) and
      `slot` (`"mark"`) — the slot contract it fills.
-   - `"type": "layout"` (three-lane) adds `slots`, each with an `id`
-     (`"lane-left"`, `"lane-main"`, `"lane-dock"`, `"badge"`) and a `contract`
-     (`"rail"`, `"workspace"`, `"dock"`, `"mark"`), plus an optional `items`.
+   - `"type": "layout"` (build) adds `slots`, each with an `id`
+     (`"ca-switcher"`, `"ca-rail"`, `"ca-workspace"`, `"ca-dock"`) and a
+     `contract` (`"switcher"`, `"rail"`, `"workspace"`, `"dock"`), plus an
+     optional `items`.
    - A layout may also ship `spaces`, and an entry there IS the space:
      `specVersion`, `id`, `label`, `icon`, `order`, `description`, `mark`
      (`fill` / `accent` / `label`), `layout`, `components` (slot id → plugin
