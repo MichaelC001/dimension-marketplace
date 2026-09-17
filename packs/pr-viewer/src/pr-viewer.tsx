@@ -44,6 +44,7 @@ import {
 	type ReviewDiffFile,
 	type ReviewRef,
 	type ReviewRequest,
+	type ReviewState,
 	type ReviewSummary,
 	type ReviewThread,
 	type SessionReviewLink,
@@ -129,7 +130,6 @@ function ReviewRow({
 	link,
 	depth,
 	stack,
-	selected,
 	onSelect,
 	menu,
 }: {
@@ -137,7 +137,6 @@ function ReviewRow({
 	readonly link?: SessionReviewLink;
 	readonly depth: number;
 	readonly stack: { readonly kind: "native" | "derived"; readonly size: number } | null;
-	readonly selected: boolean;
 	readonly onSelect: () => void;
 	readonly menu: ReactNode;
 }) {
@@ -145,7 +144,7 @@ function ReviewRow({
 	const ref = summary?.ref ?? link?.ref;
 	const label = summary?.label ?? "review";
 	return (
-		<ChainRow depth={depth} className={cn("group rounded-sm", selected && "bg-fr-surface-2")} data-selected={selected}>
+		<ChainRow depth={depth} className="group rounded-sm">
 			<button type="button" onClick={onSelect} className="flex min-w-0 flex-1 flex-col gap-0.5 py-1.5 text-left">
 				<span className="flex min-w-0 items-center gap-1.5">
 					<StateGlyph tone={glyph.tone} icon={<Icon name={glyph.icon} size={13} />} label={glyph.label} />
@@ -176,9 +175,13 @@ function ReviewRow({
 	);
 }
 
+function LayerGlyph({ state, isDraft }: { readonly state: ReviewState; readonly isDraft: boolean }) {
+	const glyph = stateGlyph({ state, isDraft });
+	return <StateGlyph {...glyph} icon={<Icon name={glyph.icon} size={11} />} />;
+}
+
 function RowMenu({ actions }: { readonly actions: readonly { readonly label: string; readonly onClick: () => void }[] }) {
 	const [open, setOpen] = useState(false);
-	if (actions.length === 0) return null;
 	return (
 		<span className="relative">
 			<Button size="icon" variant="ghost" aria-label="Row actions" onClick={() => setOpen(v => !v)}>
@@ -340,7 +343,7 @@ function DetailView({
 								<span className="font-secondary text-fr-2xs text-fr-text-3">Stack · {stack.layers.length} layers on {stack.base}</span>
 								{[...stack.layers].reverse().map(layer => (
 									<span key={layer.number} className={cn("flex items-center gap-2 text-fr-xs", layer.number === ref.number ? "text-fr-text" : "text-fr-text-2")}>
-										<StateGlyph {...stateGlyph({ state: layer.state, isDraft: layer.isDraft ?? false })} icon={<Icon name={stateGlyph({ state: layer.state, isDraft: layer.isDraft ?? false }).icon} size={11} />} />
+										<LayerGlyph state={layer.state} isDraft={layer.isDraft ?? false} />
 										<span className="tabular-nums">#{layer.number}</span>
 										<span className="min-w-0 flex-1 truncate">{layer.title ?? layer.headBranch}</span>
 									</span>
@@ -571,7 +574,6 @@ export function PrViewer({ sessionId, workspace, workspaceDriver, store }: PrVie
 							link={line.link}
 							depth={line.depth}
 							stack={line.stack}
-							selected={false}
 							onSelect={() => setSelected(line.link.ref)}
 							menu={rowMenu(line.link.ref, line.link.url, line.link)}
 						/>
@@ -581,7 +583,7 @@ export function PrViewer({ sessionId, workspace, workspaceDriver, store }: PrVie
 					<>
 						<div className="px-2 pt-2 pb-1 font-secondary text-fr-2xs text-fr-text-3 uppercase">Also in this checkout</div>
 						{others.map(row => (
-							<ReviewRow key={refKey(row.ref)} summary={row} depth={0} stack={null} selected={false} onSelect={() => setSelected(row.ref)} menu={rowMenu(row.ref, row.url, undefined)} />
+							<ReviewRow key={refKey(row.ref)} summary={row} depth={0} stack={null} onSelect={() => setSelected(row.ref)} menu={rowMenu(row.ref, row.url, undefined)} />
 						))}
 					</>
 				) : null}

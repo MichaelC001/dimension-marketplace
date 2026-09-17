@@ -124,14 +124,13 @@ function checksGlyph(state) {
 function sourceLabel(source) {
 	return source === "created" ? "created by this session" : source === "pushed" ? "this session pushed to it" : source === "agent" ? "the agent acted on it" : source === "stack" ? "a stack sibling" : "linked by you";
 }
-function ReviewRow({ summary, link, depth, stack, selected, onSelect, menu }) {
+function ReviewRow({ summary, link, depth, stack, onSelect, menu }) {
 	const glyph = stateGlyph(summary);
 	const ref = summary?.ref ?? link?.ref;
 	const label = summary?.label ?? "review";
 	return /* @__PURE__ */ jsxs(ChainRow, {
 		depth,
-		className: cn("group rounded-sm", selected && "bg-fr-surface-2"),
-		"data-selected": selected,
+		className: "group rounded-sm",
 		children: [/* @__PURE__ */ jsxs("button", {
 			type: "button",
 			onClick: onSelect,
@@ -201,9 +200,21 @@ function ReviewRow({ summary, link, depth, stack, selected, onSelect, menu }) {
 		})]
 	});
 }
+function LayerGlyph({ state, isDraft }) {
+	const glyph = stateGlyph({
+		state,
+		isDraft
+	});
+	return /* @__PURE__ */ jsx(StateGlyph, {
+		...glyph,
+		icon: /* @__PURE__ */ jsx(Icon, {
+			name: glyph.icon,
+			size: 11
+		})
+	});
+}
 function RowMenu({ actions }) {
 	const [open, setOpen] = useState(false);
-	if (actions.length === 0) return null;
 	return /* @__PURE__ */ jsxs("span", {
 		className: "relative",
 		children: [/* @__PURE__ */ jsx(Button, {
@@ -433,18 +444,9 @@ function DetailView({ ref, summary, link, workspace, driver, act, onBack }) {
 								[...stack.layers].reverse().map((layer) => /* @__PURE__ */ jsxs("span", {
 									className: cn("flex items-center gap-2 text-fr-xs", layer.number === ref.number ? "text-fr-text" : "text-fr-text-2"),
 									children: [
-										/* @__PURE__ */ jsx(StateGlyph, {
-											...stateGlyph({
-												state: layer.state,
-												isDraft: layer.isDraft ?? false
-											}),
-											icon: /* @__PURE__ */ jsx(Icon, {
-												name: stateGlyph({
-													state: layer.state,
-													isDraft: layer.isDraft ?? false
-												}).icon,
-												size: 11
-											})
+										/* @__PURE__ */ jsx(LayerGlyph, {
+											state: layer.state,
+											isDraft: layer.isDraft ?? false
 										}),
 										/* @__PURE__ */ jsxs("span", {
 											className: "tabular-nums",
@@ -751,7 +753,6 @@ function PrViewer({ sessionId, workspace, workspaceDriver, store }) {
 					link: line.link,
 					depth: line.depth,
 					stack: line.stack,
-					selected: false,
 					onSelect: () => setSelected(line.link.ref),
 					menu: rowMenu(line.link.ref, line.link.url, line.link)
 				}, refKey(line.link.ref))), others.length > 0 ? /* @__PURE__ */ jsxs(Fragment, { children: [/* @__PURE__ */ jsx("div", {
@@ -761,7 +762,6 @@ function PrViewer({ sessionId, workspace, workspaceDriver, store }) {
 					summary: row,
 					depth: 0,
 					stack: null,
-					selected: false,
 					onSelect: () => setSelected(row.ref),
 					menu: rowMenu(row.ref, row.url, void 0)
 				}, refKey(row.ref)))] }) : null]

@@ -9,11 +9,8 @@ import { defineConfig } from "vite";
 // pinned explicitly — the committed output must keep the automatic runtime
 // (`react/jsx-runtime` is one of the four granted externals).
 //
-// ONE entry, ONE default export — the manifest.s flat spelling, so
-// the loader takes `module.default`.
-// `default` export: the loader reads `module[record.export]`, so the bundle must
-// publish those two names and the host fetches, hashes and imports these bytes
-// exactly once for both instruments.
+// ONE entry, ONE default export — the manifest's flat spelling, so the loader
+// takes `module.default`.
 export default defineConfig({
 	esbuild: { jsx: "automatic" },
 	build: {

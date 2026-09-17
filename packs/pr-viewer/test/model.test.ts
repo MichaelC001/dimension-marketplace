@@ -26,7 +26,7 @@ function link(number: number, state: "open" | "merged" | null, syncedAt = "2026-
 						baseBranch: "main",
 						updatedAt: syncedAt,
 						syncedAt,
-						capabilities: { merge: true, draft: true, checks: true, reviewThreads: true, labels: true, reviewers: true, stacks: true, stackActions: true, diff: true },
+						capabilities: { merge: true, draft: true, stackActions: true },
 					},
 	};
 }

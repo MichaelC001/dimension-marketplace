@@ -23,7 +23,7 @@ export interface ReviewSummary {
 	readonly isDraft: boolean;
 	readonly headBranch: string;
 	readonly baseBranch: string;
-	readonly author?: { readonly login: string; readonly avatarUrl?: string };
+	readonly author?: { readonly login: string };
 	readonly additions?: number;
 	readonly deletions?: number;
 	readonly checksState?: ChecksState | null;
@@ -33,13 +33,7 @@ export interface ReviewSummary {
 	readonly capabilities: {
 		readonly merge: boolean;
 		readonly draft: boolean;
-		readonly checks: boolean;
-		readonly reviewThreads: boolean;
-		readonly labels: boolean;
-		readonly reviewers: boolean;
-		readonly stacks: boolean;
 		readonly stackActions: boolean;
-		readonly diff: boolean;
 	};
 }
 
@@ -56,7 +50,6 @@ export interface StackLayer {
 
 export interface Stack {
 	readonly kind: "native";
-	readonly id: string;
 	readonly number: number;
 	readonly base: string;
 	readonly layers: readonly StackLayer[];
@@ -66,8 +59,6 @@ export interface SessionReviewLink {
 	readonly ref: ReviewRef;
 	readonly url: string;
 	readonly source: LinkSource;
-	readonly evidence: readonly { readonly source: LinkSource; readonly at: string; readonly detail?: string }[];
-	readonly linkedAt: string;
 	readonly snapshot: (ReviewSummary & { readonly syncedAt: string }) | null;
 	readonly stack: Stack | null;
 }
@@ -88,17 +79,16 @@ export interface ReviewThread {
 
 export interface ReviewDetail extends ReviewSummary {
 	readonly body: string;
-	readonly labels: readonly { readonly name: string; readonly color?: string }[];
-	readonly reviewers: readonly { readonly login: string; readonly avatarUrl?: string }[];
-	readonly checks: readonly { readonly name: string; readonly status: string; readonly url?: string }[];
-	readonly viewer: { readonly merge: boolean; readonly stackRebase: boolean; readonly comment: boolean };
+	readonly labels: readonly { readonly name: string }[];
+	readonly reviewers: readonly { readonly login: string }[];
+	readonly checks: readonly { readonly name: string; readonly status: string }[];
+	readonly viewer: { readonly merge: boolean; readonly stackRebase: boolean };
 	readonly allowedMergeMethods: readonly ("merge" | "squash" | "rebase")[];
 	readonly stack: Stack | null;
 }
 
 export interface ReviewDiffFile {
 	readonly path: string;
-	readonly kind: string;
 	readonly additions: number;
 	readonly deletions: number;
 	readonly patch?: string;
@@ -107,8 +97,6 @@ export interface ReviewDiffFile {
 /** The host's request cell (doc 73 §7) — what a rail chip asked this viewer to show. */
 export interface ReviewRequest {
 	readonly ref: ReviewRef;
-	readonly url: string;
-	readonly requestedAt: number;
 }
 
 export function refKey(ref: ReviewRef): string {
