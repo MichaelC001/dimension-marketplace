@@ -161,8 +161,8 @@ function ReviewRow({
 	const glyph = stateGlyph(summary);
 	const ref = summary?.ref ?? link?.ref;
 	return (
-		<ChainRow depth={depth} flag={glyph.tone === "warning" ? "warning" : undefined} className="group rounded-sm hover:bg-fr-surface">
-			<button type="button" onClick={onSelect} className="flex min-w-0 flex-1 flex-col gap-0.5 py-1.5 text-left">
+		<ChainRow depth={depth} flag={glyph.tone === "warning" ? "warning" : undefined} className="group rounded-md pr-3 hover:bg-fr-surface">
+			<button type="button" onClick={onSelect} className="flex min-w-0 flex-1 flex-col gap-1 py-2.5 text-left">
 				<span className="flex min-w-0 items-center gap-1.5 text-fr-xs text-fr-text-2">
 					<StateGlyph tone={glyph.tone} icon={<GitHubPullRequestIcon state={summary ? reviewPillState(summary) : "open"} size={13} />} label={glyph.label} />
 					<span className="tabular-nums" title={link ? sourceLabel(link.source) : undefined}>
@@ -853,7 +853,7 @@ export function PrViewer({ sessionId, workspace, workspaceDriver, store }: PrVie
 					}}
 				/>
 			) : null}
-			<div className="min-h-0 flex-1 overflow-y-auto px-1 py-1">
+			<div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
 				{lines.length === 0 ? (
 					<div className="flex flex-col items-start gap-2 p-3">
 						<span className="text-fr-sm text-fr-text-3">
@@ -867,7 +867,7 @@ export function PrViewer({ sessionId, workspace, workspaceDriver, store }: PrVie
 					</div>
 				) : (
 					<>
-						{others.length > 0 ? <div className="px-2 pt-1 pb-1 text-fr-sm font-semibold text-fr-text">Linked to this session</div> : null}
+						{others.length > 0 ? <div className="px-2 pt-2 pb-2 text-fr-sm font-semibold text-fr-text">Linked to this session</div> : null}
 						{lines.map(line => (
 						<ReviewRow
 							key={refKey(line.link.ref)}
@@ -885,14 +885,14 @@ export function PrViewer({ sessionId, workspace, workspaceDriver, store }: PrVie
 				)}
 				{others.length > 0 ? (
 					<>
-						<div className="px-2 pt-3 pb-1 text-fr-sm font-semibold text-fr-text">Also in this checkout</div>
+						<div className="px-2 pt-5 pb-2 text-fr-sm font-semibold text-fr-text">Also in this checkout</div>
 						{others.map(row => (
 							<ReviewRow key={refKey(row.ref)} summary={row} depth={0} stack={null} sharedBase={sharedBase} sharedOwner={sharedOwner} onSelect={() => setSelected(row.ref)} menu={rowMenu(row.ref, row.url, undefined, row)} />
 						))}
 					</>
 				) : null}
 			</div>
-			<footer className="flex items-center justify-between border-fr-border border-t px-3 py-1 text-fr-2xs text-fr-text-2">
+			<footer className="flex items-center justify-between border-fr-border border-t px-4 py-2 text-fr-2xs text-fr-text-2">
 				<span className="truncate">
 					{footerLine(links)}
 					{sharedOwner ? ` · by ${sharedOwner}` : ""}

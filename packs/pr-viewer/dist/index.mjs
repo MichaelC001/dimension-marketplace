@@ -117,11 +117,11 @@ function ReviewRow({ summary, link, depth, stack, sharedBase, sharedOwner, onSel
 	return /* @__PURE__ */ jsxs(ChainRow, {
 		depth,
 		flag: glyph.tone === "warning" ? "warning" : void 0,
-		className: "group rounded-sm hover:bg-fr-surface",
+		className: "group rounded-md pr-3 hover:bg-fr-surface",
 		children: [/* @__PURE__ */ jsxs("button", {
 			type: "button",
 			onClick: onSelect,
-			className: "flex min-w-0 flex-1 flex-col gap-0.5 py-1.5 text-left",
+			className: "flex min-w-0 flex-1 flex-col gap-1 py-2.5 text-left",
 			children: [
 				/* @__PURE__ */ jsxs("span", {
 					className: "flex min-w-0 items-center gap-1.5 text-fr-xs text-fr-text-2",
@@ -988,7 +988,7 @@ function PrViewer({ sessionId, workspace, workspaceDriver, store }) {
 				}
 			}) : null,
 			/* @__PURE__ */ jsxs("div", {
-				className: "min-h-0 flex-1 overflow-y-auto px-1 py-1",
+				className: "min-h-0 flex-1 overflow-y-auto px-2 py-2",
 				children: [lines.length === 0 ? /* @__PURE__ */ jsxs("div", {
 					className: "flex flex-col items-start gap-2 p-3",
 					children: [/* @__PURE__ */ jsx("span", {
@@ -1004,7 +1004,7 @@ function PrViewer({ sessionId, workspace, workspaceDriver, store }) {
 						}), " Link a review"]
 					}) : null]
 				}) : /* @__PURE__ */ jsxs(Fragment, { children: [others.length > 0 ? /* @__PURE__ */ jsx("div", {
-					className: "px-2 pt-1 pb-1 text-fr-sm font-semibold text-fr-text",
+					className: "px-2 pt-2 pb-2 text-fr-sm font-semibold text-fr-text",
 					children: "Linked to this session"
 				}) : null, lines.map((line) => /* @__PURE__ */ jsx(ReviewRow, {
 					summary: summaryFor(line.link),
@@ -1016,7 +1016,7 @@ function PrViewer({ sessionId, workspace, workspaceDriver, store }) {
 					onSelect: () => setSelected(line.link.ref),
 					menu: rowMenu(line.link.ref, line.link.url, line.link)
 				}, refKey(line.link.ref)))] }), others.length > 0 ? /* @__PURE__ */ jsxs(Fragment, { children: [/* @__PURE__ */ jsx("div", {
-					className: "px-2 pt-3 pb-1 text-fr-sm font-semibold text-fr-text",
+					className: "px-2 pt-5 pb-2 text-fr-sm font-semibold text-fr-text",
 					children: "Also in this checkout"
 				}), others.map((row) => /* @__PURE__ */ jsx(ReviewRow, {
 					summary: row,
@@ -1029,7 +1029,7 @@ function PrViewer({ sessionId, workspace, workspaceDriver, store }) {
 				}, refKey(row.ref)))] }) : null]
 			}),
 			/* @__PURE__ */ jsxs("footer", {
-				className: "flex items-center justify-between border-fr-border border-t px-3 py-1 text-fr-2xs text-fr-text-2",
+				className: "flex items-center justify-between border-fr-border border-t px-4 py-2 text-fr-2xs text-fr-text-2",
 				children: [/* @__PURE__ */ jsxs("span", {
 					className: "truncate",
 					children: [footerLine(links), sharedOwner ? ` · by ${sharedOwner}` : ""]
