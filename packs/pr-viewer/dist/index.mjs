@@ -1,4 +1,4 @@
-import { Badge, Button, ChainRow, ConfirmDialog, DiffStat, GitHubPullRequestIcon, Icon, Input, REVIEW_PILL_LABEL, StateGlyph, StreamingMarkdown, ThreadCard, cn, resolveReviewChains, reviewListLines, reviewPillState, useObservable, useStandardSessionFacts, visibleReviews } from "@fraym/ui";
+import { Badge, Button, ChainRow, ConfirmDialog, DiffStat, GitHubPullRequestIcon, Icon, Input, REVIEW_PILL_LABEL, REVIEW_PILL_TINT, StateGlyph, StreamingMarkdown, ThreadCard, cn, resolveReviewChains, reviewListLines, reviewPillState, useObservable, useStandardSessionFacts, visibleReviews } from "@fraym/ui";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
 //#region src/model.ts
@@ -77,6 +77,18 @@ var NONE = {
 	getSnapshot: () => void 0,
 	subscribe: () => () => {}
 };
+/** THE pill: gray ground, neutral ink, `h-5 rounded-full` like the rail's
+*  review pills. A state never colors the text — it washes the ground
+*  (`tint`), so a row is calm until something needs the eye. */
+function Pill({ tint, className, children, ...props }) {
+	return /* @__PURE__ */ jsx(Badge, {
+		variant: "soft",
+		tone: "mute",
+		className: cn("gap-1 rounded-full normal-case text-fr-text-2", tint, className),
+		...props,
+		children
+	});
+}
 /** State → ink, ONE place: a review cannot look like two things in two rows. */
 function stateGlyph(summary) {
 	if (summary === null) return {
@@ -124,35 +136,28 @@ function ReviewRow({ summary, link, depth, stack, sharedBase, sharedOwner, onSel
 				/* @__PURE__ */ jsxs("span", {
 					className: "flex min-w-0 flex-wrap items-center gap-1.5",
 					children: [
-						/* @__PURE__ */ jsxs(Badge, {
-							variant: "soft",
-							tone: state === "merged" ? "accent" : state === "closed" ? "del" : state === "draft" ? "mute" : state === "conflicting" ? "warn" : "add",
-							className: "gap-1 rounded-full normal-case tabular-nums",
+						/* @__PURE__ */ jsxs(Pill, {
+							tint: REVIEW_PILL_TINT[state],
+							className: "tabular-nums",
 							title: link ? sourceLabel(link.source) : void 0,
 							children: [
 								/* @__PURE__ */ jsx(GitHubPullRequestIcon, {
 									state,
 									size: 12
 								}),
-								"#",
-								ref?.number,
 								/* @__PURE__ */ jsxs("span", {
-									className: "opacity-80",
-									children: ["· ", glyph.label]
-								})
+									className: "text-fr-text",
+									children: ["#", ref?.number]
+								}),
+								/* @__PURE__ */ jsxs("span", { children: ["· ", glyph.label] })
 							]
 						}),
-						summary?.reviewDecision === "changes-requested" ? /* @__PURE__ */ jsx(Badge, {
-							variant: "soft",
-							tone: "warn",
-							className: "rounded-full normal-case",
+						summary?.reviewDecision === "changes-requested" ? /* @__PURE__ */ jsx(Pill, {
+							tint: "bg-fr-warn/15",
 							children: "Changes requested"
 						}) : null,
 						checksGlyph(summary?.checksState),
-						stack ? /* @__PURE__ */ jsxs(Badge, {
-							variant: "code",
-							tone: "mute",
-							className: "gap-1 rounded-full",
+						stack ? /* @__PURE__ */ jsxs(Pill, {
 							title: stack.kind === "native" ? `Host stack of ${stack.size}: merging a layer lands the ones below it` : `${stack.size} reviews chained by base branch`,
 							children: [/* @__PURE__ */ jsx(Icon, {
 								name: stack.kind === "native" ? "layers" : "branch",
@@ -160,10 +165,8 @@ function ReviewRow({ summary, link, depth, stack, sharedBase, sharedOwner, onSel
 								strokeWidth: 1.6
 							}), stack.size]
 						}) : null,
-						summary ? /* @__PURE__ */ jsxs(Badge, {
-							variant: "code",
-							tone: "mute",
-							className: "ml-auto gap-1 rounded-full tabular-nums",
+						summary ? /* @__PURE__ */ jsxs(Pill, {
+							className: "ml-auto tabular-nums",
 							children: [/* @__PURE__ */ jsx(Icon, {
 								name: "clock",
 								size: 12,
@@ -179,20 +182,13 @@ function ReviewRow({ summary, link, depth, stack, sharedBase, sharedOwner, onSel
 				/* @__PURE__ */ jsxs("span", {
 					className: "flex min-w-0 items-center gap-1.5",
 					children: [
-						summary?.author && summary.author.login !== sharedOwner ? /* @__PURE__ */ jsxs(Badge, {
-							variant: "code",
-							tone: "mute",
-							className: "gap-1 rounded-full",
-							children: [/* @__PURE__ */ jsx(Icon, {
-								name: "user",
-								size: 12,
-								strokeWidth: 1.6
-							}), summary.author.login]
-						}) : null,
-						/* @__PURE__ */ jsxs(Badge, {
-							variant: "soft",
-							tone: "accent",
-							className: "min-w-0 max-w-full justify-start gap-1 rounded-full",
+						summary?.author && summary.author.login !== sharedOwner ? /* @__PURE__ */ jsxs(Pill, { children: [/* @__PURE__ */ jsx(Icon, {
+							name: "user",
+							size: 12,
+							strokeWidth: 1.6
+						}), summary.author.login] }) : null,
+						/* @__PURE__ */ jsxs(Pill, {
+							className: "min-w-0 max-w-full justify-start",
 							children: [/* @__PURE__ */ jsx(Icon, {
 								name: "git-branch",
 								size: 12,
@@ -202,10 +198,8 @@ function ReviewRow({ summary, link, depth, stack, sharedBase, sharedOwner, onSel
 								children: summary ? summary.baseBranch === sharedBase ? summary.headBranch : `${summary.headBranch} → ${summary.baseBranch}` : ref ? `${ref.host}/${ref.repository}` : ""
 							})]
 						}),
-						summary && (summary.additions !== void 0 || summary.deletions !== void 0) ? /* @__PURE__ */ jsx(Badge, {
-							variant: "code",
-							tone: "mute",
-							className: "ml-auto rounded-full",
+						summary && (summary.additions !== void 0 || summary.deletions !== void 0) ? /* @__PURE__ */ jsx(Pill, {
+							className: "ml-auto",
 							children: /* @__PURE__ */ jsx(DiffStat, {
 								className: "text-fr-2xs",
 								additions: summary.additions,
@@ -219,16 +213,6 @@ function ReviewRow({ summary, link, depth, stack, sharedBase, sharedOwner, onSel
 			className: "opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100",
 			children: menu
 		})]
-	});
-}
-/** The " · " between two facts on one line. */
-function LayerGlyph({ state, isDraft }) {
-	return /* @__PURE__ */ jsx(StateGlyph, {
-		...stateGlyph({
-			state,
-			isDraft
-		}),
-		icon: /* @__PURE__ */ jsx(GitHubPullRequestIcon, { size: 11 })
 	});
 }
 function RowMenu({ actions }) {
@@ -370,9 +354,8 @@ function DetailView({ ref, summary, link, workspace, driver, act, onBack }) {
 	const canStackMerge = canMerge && stack !== null && head?.capabilities.stackActions === true && stackLayersBelow.length > 1 && stackLayersBelow.every((layer) => layer.headSha && !layer.isDraft);
 	const canStackRebase = stack !== null && head?.capabilities.stackActions === true && (detail.value?.viewer.stackRebase ?? false) && stackHeads.length > 0;
 	const conflicting = head?.state === "open" && head.mergeability === "conflicting";
-	const glyphInk = head?.state === "merged" ? "text-fr-accent" : head?.state === "closed" ? "text-fr-del" : head?.isDraft ? "text-fr-text-3" : "text-fr-add";
 	const statusLabel = head?.state === "merged" ? "Merged" : head?.state === "closed" ? "Closed" : head?.isDraft ? "Draft" : head?.reviewDecision === "approved" ? "Approved" : head?.reviewDecision === "changes-requested" ? "Changes requested" : "Ready for review";
-	const statusTone = head?.state === "merged" ? "accent" : head?.state === "closed" ? "del" : head?.isDraft ? "mute" : head?.reviewDecision === "approved" ? "add" : head?.reviewDecision === "changes-requested" ? "warn" : "add";
+	const statusTint = head?.state === "merged" ? "bg-fr-accent-dim" : head?.state === "closed" ? "bg-fr-del-bg" : head?.reviewDecision === "approved" ? "bg-fr-add-bg" : head?.reviewDecision === "changes-requested" ? "bg-fr-warn/15" : void 0;
 	const mergeBlocker = head?.state !== "open" ? null : head.isDraft ? "Draft — mark ready for review first" : conflicting ? `Conflicts with ${head.baseBranch} — resolve them first` : detail.value && !detail.value.viewer.merge ? "You cannot merge this review on the host" : null;
 	const checksLabel = head?.checksState === "passing" ? "All checks passed" : head?.checksState === "failing" ? "Some checks failed" : head?.checksState === "pending" ? "Checks running" : "None";
 	const checksTone = head?.checksState === "passing" ? "positive" : head?.checksState === "failing" ? "negative" : head?.checksState === "pending" ? "warning" : "neutral";
@@ -403,8 +386,8 @@ function DetailView({ ref, summary, link, workspace, driver, act, onBack }) {
 					/* @__PURE__ */ jsxs("span", {
 						className: "flex items-center gap-1.5 text-fr-sm text-fr-text-2 tabular-nums",
 						children: [/* @__PURE__ */ jsx(GitHubPullRequestIcon, {
-							size: 13,
-							className: glyphInk
+							state: head ? reviewPillState(head) : "open",
+							size: 12
 						}), /* @__PURE__ */ jsxs("span", { children: ["#", ref.number] })]
 					}),
 					/* @__PURE__ */ jsx("span", { className: "flex-1" }),
@@ -509,37 +492,26 @@ function DetailView({ ref, summary, link, workspace, driver, act, onBack }) {
 								}), /* @__PURE__ */ jsxs("span", {
 									className: "flex flex-wrap items-center gap-1.5",
 									children: [
-										head?.author ? /* @__PURE__ */ jsxs(Badge, {
-											variant: "code",
-											tone: "mute",
-											className: "gap-1 rounded-full pl-1",
-											children: [/* @__PURE__ */ jsx("span", {
-												"aria-hidden": "true",
-												className: "inline-flex size-3.5 items-center justify-center rounded-full bg-fr-surface-3 text-[9px] uppercase text-fr-text",
-												children: head.author.login.slice(0, 1)
-											}), head.author.login]
-										}) : null,
-										head?.updatedAt ? /* @__PURE__ */ jsxs(Badge, {
-											variant: "code",
-											tone: "mute",
-											className: "gap-1 rounded-full tabular-nums",
+										head?.author ? /* @__PURE__ */ jsxs(Pill, { children: [/* @__PURE__ */ jsx(Icon, {
+											name: "user",
+											size: 12,
+											strokeWidth: 1.6
+										}), head.author.login] }) : null,
+										head?.updatedAt ? /* @__PURE__ */ jsxs(Pill, {
+											className: "tabular-nums",
 											children: [/* @__PURE__ */ jsx(Icon, {
 												name: "clock",
 												size: 12,
 												strokeWidth: 1.6
 											}), relativeTime(head.updatedAt)]
 										}) : null,
-										/* @__PURE__ */ jsx(Badge, {
-											variant: "soft",
-											tone: conflicting && statusTone === "add" ? "mute" : statusTone,
-											className: "rounded-full normal-case",
+										/* @__PURE__ */ jsx(Pill, {
+											tint: conflicting ? void 0 : statusTint,
 											children: statusLabel
 										}),
-										conflicting ? /* @__PURE__ */ jsxs(Badge, {
+										conflicting ? /* @__PURE__ */ jsxs(Pill, {
 											id: "pr-viewer-merge-blocker",
-											variant: "soft",
-											tone: "warn",
-											className: "gap-1 rounded-full normal-case",
+											tint: "bg-fr-warn/15",
 											children: [
 												/* @__PURE__ */ jsx(Icon, {
 													name: "warnTri",
@@ -559,10 +531,8 @@ function DetailView({ ref, summary, link, workspace, driver, act, onBack }) {
 								children: [
 									/* @__PURE__ */ jsxs("span", {
 										className: "flex min-w-0 items-center gap-1.5",
-										children: [/* @__PURE__ */ jsxs(Badge, {
-											variant: "soft",
-											tone: "accent",
-											className: "min-w-0 max-w-full justify-start gap-1 rounded-full",
+										children: [/* @__PURE__ */ jsxs(Pill, {
+											className: "min-w-0 max-w-full justify-start",
 											title: `${head?.headBranch ?? "—"} → ${head?.baseBranch ?? "—"}`,
 											children: [
 												/* @__PURE__ */ jsx(Icon, {
@@ -575,14 +545,12 @@ function DetailView({ ref, summary, link, workspace, driver, act, onBack }) {
 													children: head?.headBranch ?? "—"
 												}),
 												/* @__PURE__ */ jsxs("span", {
-													className: "opacity-70",
+													className: "text-fr-text-3",
 													children: ["→ ", head?.baseBranch ?? "—"]
 												})
 											]
-										}), head && (head.additions !== void 0 || head.deletions !== void 0) ? /* @__PURE__ */ jsx(Badge, {
-											variant: "code",
-											tone: "mute",
-											className: "ml-auto rounded-full",
+										}), head && (head.additions !== void 0 || head.deletions !== void 0) ? /* @__PURE__ */ jsx(Pill, {
+											className: "ml-auto",
 											children: /* @__PURE__ */ jsx(DiffStat, {
 												className: "text-fr-2xs",
 												additions: head.additions,
@@ -593,10 +561,8 @@ function DetailView({ ref, summary, link, workspace, driver, act, onBack }) {
 									/* @__PURE__ */ jsxs("span", {
 										className: "flex flex-wrap items-center gap-1.5",
 										children: [
-											reviewers.length > 0 ? /* @__PURE__ */ jsxs(Badge, {
-												variant: "code",
-												tone: "mute",
-												className: "min-w-0 gap-1 rounded-full",
+											reviewers.length > 0 ? /* @__PURE__ */ jsxs(Pill, {
+												className: "min-w-0",
 												children: [/* @__PURE__ */ jsx(Icon, {
 													name: "user",
 													size: 12,
@@ -606,40 +572,28 @@ function DetailView({ ref, summary, link, workspace, driver, act, onBack }) {
 													children: reviewers.join(", ")
 												})]
 											}) : null,
-											openThreads ? /* @__PURE__ */ jsxs(Badge, {
-												variant: "code",
-												tone: "mute",
-												className: "gap-1 rounded-full",
-												children: [
-													/* @__PURE__ */ jsx(Icon, {
-														name: "chat",
-														size: 12,
-														strokeWidth: 1.6
-													}),
-													openThreads,
-													" open"
-												]
-											}) : null,
-											head?.checksState ? /* @__PURE__ */ jsxs(Badge, {
-												variant: "soft",
-												tone: checksTone === "positive" ? "add" : checksTone === "negative" ? "del" : "warn",
-												className: "gap-1 rounded-full normal-case",
+											openThreads ? /* @__PURE__ */ jsxs(Pill, { children: [
+												/* @__PURE__ */ jsx(Icon, {
+													name: "chat",
+													size: 12,
+													strokeWidth: 1.6
+												}),
+												openThreads,
+												" open"
+											] }) : null,
+											head?.checksState ? /* @__PURE__ */ jsxs(Pill, {
+												tint: checksTone === "positive" ? "bg-fr-add-bg" : checksTone === "negative" ? "bg-fr-del-bg" : "bg-fr-warn/15",
 												children: [/* @__PURE__ */ jsx(Icon, {
 													name: head.checksState === "failing" ? "x" : head.checksState === "pending" ? "clock" : "check",
 													size: 12,
 													strokeWidth: 1.6
 												}), checksLabel]
 											}) : null,
-											detail.value?.labels.map((label) => /* @__PURE__ */ jsxs(Badge, {
-												variant: "code",
-												tone: "mute",
-												className: "gap-1 rounded-full",
-												children: [/* @__PURE__ */ jsx(Icon, {
-													name: "pin",
-													size: 12,
-													strokeWidth: 1.6
-												}), label.name]
-											}, label.name))
+											detail.value?.labels.map((label) => /* @__PURE__ */ jsxs(Pill, { children: [/* @__PURE__ */ jsx(Icon, {
+												name: "pin",
+												size: 12,
+												strokeWidth: 1.6
+											}), label.name] }, label.name))
 										]
 									}),
 									emptyFacets.length > 0 ? /* @__PURE__ */ jsx("span", {
@@ -663,9 +617,12 @@ function DetailView({ ref, summary, link, workspace, driver, act, onBack }) {
 									[...stack.layers].reverse().map((layer) => /* @__PURE__ */ jsxs("span", {
 										className: cn("flex items-center gap-2 text-fr-xs", layer.number === ref.number ? "text-fr-text" : "text-fr-text-2"),
 										children: [
-											/* @__PURE__ */ jsx(LayerGlyph, {
-												state: layer.state,
-												isDraft: layer.isDraft ?? false
+											/* @__PURE__ */ jsx(GitHubPullRequestIcon, {
+												state: reviewPillState({
+													state: layer.state,
+													isDraft: layer.isDraft ?? false
+												}),
+												size: 12
 											}),
 											/* @__PURE__ */ jsxs("span", {
 												className: "tabular-nums",

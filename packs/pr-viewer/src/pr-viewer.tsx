@@ -24,6 +24,7 @@ import {
 	Button,
 	GitHubPullRequestIcon,
 	REVIEW_PILL_LABEL,
+	REVIEW_PILL_TINT,
 	reviewPillState,
 	StreamingMarkdown,
 	ChainRow,
@@ -92,7 +93,16 @@ const NO_LINKS: readonly SessionReviewLink[] = [];
 const NO_ROWS: readonly ReviewSummary[] = [];
 const NONE = { getSnapshot: () => undefined, subscribe: () => () => {} };
 
-type BadgeTone = NonNullable<ComponentProps<typeof Badge>["tone"]>;
+/** THE pill: gray ground, neutral ink, `h-5 rounded-full` like the rail's
+ *  review pills. A state never colors the text — it washes the ground
+ *  (`tint`), so a row is calm until something needs the eye. */
+function Pill({ tint, className, children, ...props }: ComponentProps<"span"> & { readonly tint?: string }) {
+	return (
+		<Badge variant="soft" tone="mute" className={cn("gap-1 rounded-full normal-case text-fr-text-2", tint, className)} {...props}>
+			{children}
+		</Badge>
+	);
+}
 type Tone = ComponentProps<typeof StateGlyph>["tone"];
 
 /** State → ink, ONE place: a review cannot look like two things in two rows. */
@@ -163,46 +173,43 @@ function ReviewRow({
 	const glyph = stateGlyph(summary);
 	const ref = summary?.ref ?? link?.ref;
 	const state = summary ? reviewPillState(summary) : "open";
-	const stateTone: BadgeTone =
-		state === "merged" ? "accent" : state === "closed" ? "del" : state === "draft" ? "mute" : state === "conflicting" ? "warn" : "add";
 	return (
 		<ChainRow depth={depth} className="group rounded-md pr-3 hover:bg-fr-surface">
 			<button type="button" onClick={onSelect} className="flex min-w-0 flex-1 flex-col gap-1.5 py-2.5 text-left">
 				{/* Every fact is a pill (owner ruling 2026-09-17): the review's
 				    number carries its state's ink; the rest are quiet chips. */}
 				<span className="flex min-w-0 flex-wrap items-center gap-1.5">
-					<Badge variant="soft" tone={stateTone} className="gap-1 rounded-full normal-case tabular-nums" title={link ? sourceLabel(link.source) : undefined}>
-						<GitHubPullRequestIcon state={state} size={12} />#{ref?.number}
-						<span className="opacity-80">· {glyph.label}</span>
-					</Badge>
+					<Pill tint={REVIEW_PILL_TINT[state]} className="tabular-nums" title={link ? sourceLabel(link.source) : undefined}>
+						<GitHubPullRequestIcon state={state} size={12} />
+						<span className="text-fr-text">#{ref?.number}</span>
+						<span>· {glyph.label}</span>
+					</Pill>
 					{summary?.reviewDecision === "changes-requested" ? (
-						<Badge variant="soft" tone="warn" className="rounded-full normal-case">
-							Changes requested
-						</Badge>
+						<Pill tint="bg-fr-warn/15">Changes requested</Pill>
 					) : null}
 					{checksGlyph(summary?.checksState)}
 					{stack ? (
-						<Badge variant="code" tone="mute" className="gap-1 rounded-full" title={stack.kind === "native" ? `Host stack of ${stack.size}: merging a layer lands the ones below it` : `${stack.size} reviews chained by base branch`}>
+						<Pill title={stack.kind === "native" ? `Host stack of ${stack.size}: merging a layer lands the ones below it` : `${stack.size} reviews chained by base branch`}>
 							<Icon name={stack.kind === "native" ? "layers" : "branch"} size={12} strokeWidth={1.6} />
 							{stack.size}
-						</Badge>
+						</Pill>
 					) : null}
 					{summary ? (
-						<Badge variant="code" tone="mute" className="ml-auto gap-1 rounded-full tabular-nums">
+						<Pill className="ml-auto tabular-nums">
 							<Icon name="clock" size={12} strokeWidth={1.6} />
 							{relativeTime(summary.updatedAt)}
-						</Badge>
+						</Pill>
 					) : null}
 				</span>
 				<span className="line-clamp-2 min-w-0 whitespace-normal break-words text-fr-md font-medium text-fr-text">{summary?.title ?? link?.url ?? ""}</span>
 				<span className="flex min-w-0 items-center gap-1.5">
 					{summary?.author && summary.author.login !== sharedOwner ? (
-						<Badge variant="code" tone="mute" className="gap-1 rounded-full">
+						<Pill>
 							<Icon name="user" size={12} strokeWidth={1.6} />
 							{summary.author.login}
-						</Badge>
+						</Pill>
 					) : null}
-					<Badge variant="soft" tone="accent" className="min-w-0 max-w-full justify-start gap-1 rounded-full">
+					<Pill className="min-w-0 max-w-full justify-start">
 						<Icon name="git-branch" size={12} strokeWidth={1.6} />
 						<span className="truncate">
 							{summary
@@ -213,23 +220,17 @@ function ReviewRow({
 									? `${ref.host}/${ref.repository}`
 									: ""}
 						</span>
-					</Badge>
+					</Pill>
 					{summary && (summary.additions !== undefined || summary.deletions !== undefined) ? (
-						<Badge variant="code" tone="mute" className="ml-auto rounded-full">
+						<Pill className="ml-auto">
 							<DiffStat className="text-fr-2xs" additions={summary.additions} deletions={summary.deletions} />
-						</Badge>
+						</Pill>
 					) : null}
 				</span>
 			</button>
 			<span className="opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">{menu}</span>
 		</ChainRow>
 	);
-}
-
-/** The " · " between two facts on one line. */
-function LayerGlyph({ state, isDraft }: { readonly state: ReviewState; readonly isDraft: boolean }) {
-	const glyph = stateGlyph({ state, isDraft });
-	return <StateGlyph {...glyph} icon={<GitHubPullRequestIcon size={11} />} />;
 }
 
 function RowMenu({ actions }: { readonly actions: readonly { readonly label: string; readonly onClick: () => void }[] }) {
@@ -370,8 +371,6 @@ function DetailView({
 	const canStackRebase = stack !== null && head?.capabilities.stackActions === true && (detail.value?.viewer.stackRebase ?? false) && stackHeads.length > 0;
 
 	const conflicting = head?.state === "open" && head.mergeability === "conflicting";
-	const glyphInk =
-		head?.state === "merged" ? "text-fr-accent" : head?.state === "closed" ? "text-fr-del" : head?.isDraft ? "text-fr-text-3" : "text-fr-add";
 	const statusLabel =
 		head?.state === "merged"
 			? "Merged"
@@ -384,18 +383,17 @@ function DetailView({
 						: head?.reviewDecision === "changes-requested"
 							? "Changes requested"
 							: "Ready for review";
-	const statusTone: BadgeTone =
+	// The ground tint the status pill wears — none for the plain cases.
+	const statusTint =
 		head?.state === "merged"
-			? "accent"
+			? "bg-fr-accent-dim"
 			: head?.state === "closed"
-				? "del"
-				: head?.isDraft
-					? "mute"
-					: head?.reviewDecision === "approved"
-						? "add"
-						: head?.reviewDecision === "changes-requested"
-							? "warn"
-							: "add";
+				? "bg-fr-del-bg"
+				: head?.reviewDecision === "approved"
+					? "bg-fr-add-bg"
+					: head?.reviewDecision === "changes-requested"
+						? "bg-fr-warn/15"
+						: undefined;
 	const mergeBlocker =
 		head?.state !== "open"
 			? null
@@ -433,7 +431,7 @@ function DetailView({
 					</Button>
 				) : null}
 				<span className="flex items-center gap-1.5 text-fr-sm text-fr-text-2 tabular-nums">
-					<GitHubPullRequestIcon size={13} className={glyphInk} />
+					<GitHubPullRequestIcon state={head ? reviewPillState(head) : "open"} size={12} />
 					<span>#{ref.number}</span>
 				</span>
 				<span className="flex-1" />
@@ -520,66 +518,62 @@ function DetailView({
 							    the list rows wear, so the head and the list read as one surface. */}
 							<span className="flex flex-wrap items-center gap-1.5">
 								{head?.author ? (
-									<Badge variant="code" tone="mute" className="gap-1 rounded-full pl-1">
-										<span aria-hidden="true" className="inline-flex size-3.5 items-center justify-center rounded-full bg-fr-surface-3 text-[9px] uppercase text-fr-text">
-											{head.author.login.slice(0, 1)}
-										</span>
+									<Pill>
+										<Icon name="user" size={12} strokeWidth={1.6} />
 										{head.author.login}
-									</Badge>
+									</Pill>
 								) : null}
 								{head?.updatedAt ? (
-									<Badge variant="code" tone="mute" className="gap-1 rounded-full tabular-nums">
+									<Pill className="tabular-nums">
 										<Icon name="clock" size={12} strokeWidth={1.6} />
 										{relativeTime(head.updatedAt)}
-									</Badge>
+									</Pill>
 								) : null}
-								<Badge variant="soft" tone={conflicting && statusTone === "add" ? "mute" : statusTone} className="rounded-full normal-case">
-									{statusLabel}
-								</Badge>
+								<Pill tint={conflicting ? undefined : statusTint}>{statusLabel}</Pill>
 								{conflicting ? (
-									<Badge id="pr-viewer-merge-blocker" variant="soft" tone="warn" className="gap-1 rounded-full normal-case">
+									<Pill id="pr-viewer-merge-blocker" tint="bg-fr-warn/15">
 										<Icon name="warnTri" size={12} strokeWidth={1.6} aria-hidden="true" /> Conflicts with {head?.baseBranch}
-									</Badge>
+									</Pill>
 								) : null}
 							</span>
 						</div>
 						<div className="flex flex-col gap-1.5">
 							<span className="flex min-w-0 items-center gap-1.5">
-								<Badge variant="soft" tone="accent" className="min-w-0 max-w-full justify-start gap-1 rounded-full" title={`${head?.headBranch ?? "—"} → ${head?.baseBranch ?? "—"}`}>
+								<Pill className="min-w-0 max-w-full justify-start" title={`${head?.headBranch ?? "—"} → ${head?.baseBranch ?? "—"}`}>
 									<Icon name="git-branch" size={12} strokeWidth={1.6} />
 									<span className="truncate">{head?.headBranch ?? "—"}</span>
-									<span className="opacity-70">→ {head?.baseBranch ?? "—"}</span>
-								</Badge>
+									<span className="text-fr-text-3">→ {head?.baseBranch ?? "—"}</span>
+								</Pill>
 								{head && (head.additions !== undefined || head.deletions !== undefined) ? (
-									<Badge variant="code" tone="mute" className="ml-auto rounded-full">
+									<Pill className="ml-auto">
 										<DiffStat className="text-fr-2xs" additions={head.additions} deletions={head.deletions} />
-									</Badge>
+									</Pill>
 								) : null}
 							</span>
 							<span className="flex flex-wrap items-center gap-1.5">
 								{reviewers.length > 0 ? (
-									<Badge variant="code" tone="mute" className="min-w-0 gap-1 rounded-full">
+									<Pill className="min-w-0">
 										<Icon name="user" size={12} strokeWidth={1.6} />
 										<span className="truncate">{reviewers.join(", ")}</span>
-									</Badge>
+									</Pill>
 								) : null}
 								{openThreads ? (
-									<Badge variant="code" tone="mute" className="gap-1 rounded-full">
+									<Pill>
 										<Icon name="chat" size={12} strokeWidth={1.6} />
 										{openThreads} open
-									</Badge>
+									</Pill>
 								) : null}
 								{head?.checksState ? (
-									<Badge variant="soft" tone={checksTone === "positive" ? "add" : checksTone === "negative" ? "del" : "warn"} className="gap-1 rounded-full normal-case">
+									<Pill tint={checksTone === "positive" ? "bg-fr-add-bg" : checksTone === "negative" ? "bg-fr-del-bg" : "bg-fr-warn/15"}>
 										<Icon name={head.checksState === "failing" ? "x" : head.checksState === "pending" ? "clock" : "check"} size={12} strokeWidth={1.6} />
 										{checksLabel}
-									</Badge>
+									</Pill>
 								) : null}
 								{detail.value?.labels.map(label => (
-									<Badge key={label.name} variant="code" tone="mute" className="gap-1 rounded-full">
+									<Pill key={label.name}>
 										<Icon name="pin" size={12} strokeWidth={1.6} />
 										{label.name}
-									</Badge>
+									</Pill>
 								))}
 							</span>
 							{/* The facets that are EMPTY, on one legible line — three dim rows
@@ -593,7 +587,7 @@ function DetailView({
 								<span className="text-fr-sm font-semibold text-fr-text">Stack · {stack.layers.length} layers on {stack.base}</span>
 								{[...stack.layers].reverse().map(layer => (
 									<span key={layer.number} className={cn("flex items-center gap-2 text-fr-xs", layer.number === ref.number ? "text-fr-text" : "text-fr-text-2")}>
-										<LayerGlyph state={layer.state} isDraft={layer.isDraft ?? false} />
+										<GitHubPullRequestIcon state={reviewPillState({ state: layer.state, isDraft: layer.isDraft ?? false })} size={12} />
 										<span className="tabular-nums">#{layer.number}</span>
 										<span className="min-w-0 flex-1 truncate">{layer.title ?? layer.headBranch}</span>
 									</span>
