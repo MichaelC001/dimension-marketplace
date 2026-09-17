@@ -1,6 +1,6 @@
-import { Button, ChainRow, DiffStat, Icon, Input, StateGlyph, ThreadCard, cn, resolveReviewChains, reviewListLines, useObservable, useStandardSessionFacts, visibleReviews } from "@fraym/ui";
-import { useCallback, useEffect, useMemo, useState } from "react";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
+import { Button, ChainRow, ConfirmDialog, DiffStat, Icon, Input, StateGlyph, StreamingMarkdown, ThreadCard, cn, resolveReviewChains, reviewListLines, useObservable, useStandardSessionFacts, visibleReviews } from "@fraym/ui";
+import { useCallback, useEffect, useMemo, useState } from "react";
 //#region src/model.ts
 function refKey(ref) {
 	return `${ref.provider}:${ref.host}/${ref.repository}#${ref.number}`;
@@ -70,6 +70,20 @@ function parseLinkInput(raw, own) {
 	};
 }
 //#endregion
+//#region src/github-pr-icon.tsx
+/** GitHub's `git-pull-request` octicon (16×16, filled) in `currentColor`. */
+function GitHubPullRequestIcon({ size = 12, className }) {
+	return /* @__PURE__ */ jsx("svg", {
+		width: size,
+		height: size,
+		viewBox: "0 0 16 16",
+		fill: "currentColor",
+		"aria-hidden": "true",
+		className,
+		children: /* @__PURE__ */ jsx("path", { d: "M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.25 0 0 1 10 .854V2.5h1A2.5 2.5 0 0 1 13.5 5v5.628a2.251 2.251 0 1 1-1.5 0V5a1 1 0 0 0-1-1h-1v1.646a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 0-.354ZM3.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm0 9.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm8.25.75a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Z" })
+	});
+}
+//#endregion
 //#region src/pr-viewer.tsx
 var NO_LINKS = [];
 var NO_ROWS = [];
@@ -124,53 +138,51 @@ function checksGlyph(state) {
 function sourceLabel(source) {
 	return source === "created" ? "created by this session" : source === "pushed" ? "this session pushed to it" : source === "agent" ? "the agent acted on it" : source === "stack" ? "a stack sibling" : "linked by you";
 }
-function ReviewRow({ summary, link, depth, stack, onSelect, menu }) {
+/** Glyph + number column; the meta line indents to it. */
+var ROW_GUTTER = "3.5rem";
+/** Right-aligned relative time, so every row's diff stat shares one right edge. */
+var TIME_COLUMN = "3.5rem";
+function ReviewRow({ summary, link, depth, stack, sharedBase, onSelect, menu }) {
 	const glyph = stateGlyph(summary);
 	const ref = summary?.ref ?? link?.ref;
-	const label = summary?.label ?? "review";
 	return /* @__PURE__ */ jsxs(ChainRow, {
 		depth,
-		className: "group rounded-sm",
+		flag: glyph.tone === "warning" ? "warning" : void 0,
+		className: "group rounded-sm hover:bg-fr-surface",
 		children: [/* @__PURE__ */ jsxs("button", {
 			type: "button",
 			onClick: onSelect,
 			className: "flex min-w-0 flex-1 flex-col gap-0.5 py-1.5 text-left",
 			children: [/* @__PURE__ */ jsxs("span", {
-				className: "flex min-w-0 items-center gap-1.5",
+				className: "flex min-w-0 items-start gap-1.5",
 				children: [
-					/* @__PURE__ */ jsx(StateGlyph, {
-						tone: glyph.tone,
-						icon: /* @__PURE__ */ jsx(Icon, {
-							name: glyph.icon,
-							size: 13
-						}),
-						label: glyph.label
-					}),
 					/* @__PURE__ */ jsxs("span", {
-						className: "font-secondary text-fr-xs text-fr-text-3 tabular-nums",
-						title: link ? sourceLabel(link.source) : void 0,
-						children: [
-							label,
-							" #",
-							ref?.number
-						]
+						className: "flex shrink-0 items-start gap-1.5",
+						style: { width: ROW_GUTTER },
+						children: [/* @__PURE__ */ jsx(StateGlyph, {
+							tone: glyph.tone,
+							icon: /* @__PURE__ */ jsx(GitHubPullRequestIcon, { size: 13 }),
+							label: glyph.label,
+							className: "mt-0.5"
+						}), /* @__PURE__ */ jsxs("span", {
+							className: "min-w-0 flex-1 text-right text-fr-md text-fr-text-2 tabular-nums",
+							title: link ? sourceLabel(link.source) : void 0,
+							children: ["#", ref?.number]
+						})]
 					}),
 					/* @__PURE__ */ jsx("span", {
-						className: "min-w-0 flex-1 truncate text-fr-sm text-fr-text",
+						className: "line-clamp-2 min-w-0 flex-1 whitespace-normal break-words text-fr-md font-medium text-fr-text",
 						children: summary?.title ?? link?.url ?? ""
 					}),
 					summary?.reviewDecision === "changes-requested" ? /* @__PURE__ */ jsx("span", {
-						className: "font-secondary text-fr-2xs text-fr-warn",
+						className: "shrink-0 text-fr-2xs text-fr-warn",
 						children: "changes requested"
 					}) : null,
-					checksGlyph(summary?.checksState),
-					/* @__PURE__ */ jsx(DiffStat, {
-						additions: summary?.additions,
-						deletions: summary?.deletions
-					})
+					checksGlyph(summary?.checksState)
 				]
 			}), /* @__PURE__ */ jsxs("span", {
-				className: "flex min-w-0 items-center gap-2 font-secondary text-fr-2xs text-fr-text-3",
+				className: "flex min-w-0 items-center gap-2 text-fr-2xs text-fr-text-2",
+				style: { paddingLeft: ROW_GUTTER },
 				children: [
 					stack ? /* @__PURE__ */ jsxs("span", {
 						className: "inline-flex items-center gap-0.5",
@@ -185,11 +197,17 @@ function ReviewRow({ summary, link, depth, stack, onSelect, menu }) {
 						children: summary.author.login
 					}) : null,
 					/* @__PURE__ */ jsx("span", {
-						className: "truncate font-mono",
-						children: summary ? `${summary.headBranch} → ${summary.baseBranch}` : ref ? `${ref.host}/${ref.repository}` : ""
+						className: "truncate",
+						children: summary ? summary.baseBranch === sharedBase ? summary.headBranch : `${summary.headBranch} → ${summary.baseBranch}` : ref ? `${ref.host}/${ref.repository}` : ""
+					}),
+					/* @__PURE__ */ jsx(DiffStat, {
+						className: "ml-auto text-fr-2xs",
+						additions: summary?.additions,
+						deletions: summary?.deletions
 					}),
 					summary ? /* @__PURE__ */ jsx("span", {
-						className: "ml-auto shrink-0",
+						className: "shrink-0 text-right tabular-nums",
+						style: { width: TIME_COLUMN },
 						children: relativeTime(summary.updatedAt)
 					}) : null
 				]
@@ -200,17 +218,44 @@ function ReviewRow({ summary, link, depth, stack, onSelect, menu }) {
 		})]
 	});
 }
-function LayerGlyph({ state, isDraft }) {
-	const glyph = stateGlyph({
-		state,
-		isDraft
+/** One metadata row of the detail head — label column fixed by an inline
+*  width, because a pack ships no CSS and can rely only on utilities the host
+*  already generates (an arbitrary-value grid class did not exist, live). */
+function MetaRow({ icon, label, column = true, children }) {
+	return /* @__PURE__ */ jsxs("span", {
+		className: "flex min-w-0 items-center gap-2",
+		children: [/* @__PURE__ */ jsxs("span", {
+			className: "flex shrink-0 items-center gap-1.5 text-fr-sm text-fr-text-2",
+			style: column ? { width: "4.75rem" } : void 0,
+			children: [
+				/* @__PURE__ */ jsx(Icon, {
+					name: icon,
+					size: 12
+				}),
+				" ",
+				label
+			]
+		}), /* @__PURE__ */ jsx("span", {
+			className: "flex min-w-0 flex-1 items-center",
+			children
+		})]
 	});
+}
+/** The " · " between two facts on one line. */
+function Dot() {
+	return /* @__PURE__ */ jsx("span", {
+		"aria-hidden": "true",
+		className: "text-fr-text-3",
+		children: "·"
+	});
+}
+function LayerGlyph({ state, isDraft }) {
 	return /* @__PURE__ */ jsx(StateGlyph, {
-		...glyph,
-		icon: /* @__PURE__ */ jsx(Icon, {
-			name: glyph.icon,
-			size: 11
-		})
+		...stateGlyph({
+			state,
+			isDraft
+		}),
+		icon: /* @__PURE__ */ jsx(GitHubPullRequestIcon, { size: 11 })
 	});
 }
 function RowMenu({ actions }) {
@@ -258,7 +303,7 @@ function LinkDialog({ own, onSubmit, onClose }) {
 				}
 			}),
 			reason ? /* @__PURE__ */ jsx("span", {
-				className: "font-secondary text-fr-2xs text-fr-warn",
+				className: "text-fr-2xs text-fr-warn",
 				children: reason
 			}) : null,
 			/* @__PURE__ */ jsxs("div", {
@@ -337,11 +382,11 @@ function DetailView({ ref, summary, link, workspace, driver, act, onBack }) {
 	]);
 	const detail = useRead(driver.getReview ? readDetail : null, key);
 	const [tab, setTab] = useState("summary");
-	const threads = useRead(tab === "threads" && driver.getReviewThreads ? readThreads : null, `${key}:threads`);
+	const [pending, setPending] = useState(null);
+	const threads = useRead(driver.getReviewThreads ? readThreads : null, `${key}:threads`);
 	const diff = useRead(tab === "diff" && driver.getReviewDiff ? readDiff : null, `${key}:diff`);
 	const [folded, setFolded] = useState({});
 	const head = detail.value ?? summary;
-	const glyph = stateGlyph(head);
 	const stack = detail.value?.stack ?? link?.stack ?? null;
 	const canMerge = head?.state === "open" && !head.isDraft && (detail.value?.viewer.merge ?? false) && (head.capabilities.merge ?? false);
 	const stackHeads = stack?.layers.filter((layer) => layer.state === "open" && layer.headSha).map((layer) => ({
@@ -351,15 +396,30 @@ function DetailView({ ref, summary, link, workspace, driver, act, onBack }) {
 	const stackLayersBelow = stack ? stack.layers.slice(0, stack.layers.findIndex((layer) => layer.number === ref.number) + 1).filter((layer) => layer.state !== "merged") : [];
 	const canStackMerge = canMerge && stack !== null && head?.capabilities.stackActions === true && stackLayersBelow.length > 1 && stackLayersBelow.every((layer) => layer.headSha && !layer.isDraft);
 	const canStackRebase = stack !== null && head?.capabilities.stackActions === true && (detail.value?.viewer.stackRebase ?? false) && stackHeads.length > 0;
+	const conflicting = head?.state === "open" && head.mergeability === "conflicting";
+	const glyphInk = head?.state === "merged" ? "text-fr-accent" : head?.state === "closed" ? "text-fr-del" : head?.isDraft ? "text-fr-text-3" : "text-fr-add";
+	const statusLabel = head?.state === "merged" ? "Merged" : head?.state === "closed" ? "Closed" : head?.isDraft ? "Draft" : head?.reviewDecision === "approved" ? "Approved" : head?.reviewDecision === "changes-requested" ? "Changes requested" : "Ready for review";
+	const mergeBlocker = head?.state !== "open" ? null : head.isDraft ? "Draft — mark ready for review first" : conflicting ? `Conflicts with ${head.baseBranch} — resolve them first` : detail.value && !detail.value.viewer.merge ? "You cannot merge this review on the host" : null;
+	const checksLabel = head?.checksState === "passing" ? "All checks passed" : head?.checksState === "failing" ? "Some checks failed" : head?.checksState === "pending" ? "Checks running" : "None";
+	const checksTone = head?.checksState === "passing" ? "positive" : head?.checksState === "failing" ? "negative" : head?.checksState === "pending" ? "warning" : "neutral";
+	const reviewers = detail.value?.reviewers.map((r) => r.login) ?? [];
+	const openThreads = threads.value?.filter((thread) => !thread.isResolved).length;
+	const labeledRows = 1 + (reviewers.length > 0 ? 1 : 0) + (openThreads ? 1 : 0) + (head?.checksState ? 1 : 0) + (detail.value && detail.value.labels.length > 0 ? 1 : 0);
+	const emptyFacets = [
+		...detail.value && reviewers.length === 0 ? ["No reviewers"] : [],
+		...threads.value && !threads.value.some((thread) => !thread.isResolved) ? ["no open threads"] : [],
+		...head && !head.checksState ? ["no checks"] : []
+	];
 	return /* @__PURE__ */ jsxs("div", {
-		className: "flex min-h-0 flex-1 flex-col",
+		className: "flex min-h-0 min-w-0 flex-1 flex-col",
 		children: [
 			/* @__PURE__ */ jsxs("header", {
-				className: "flex items-center gap-2 border-fr-border border-b px-2 py-1.5",
+				className: "flex min-w-0 items-center gap-1.5 overflow-hidden border-fr-border-soft border-b px-3 py-1.5",
 				children: [
 					onBack ? /* @__PURE__ */ jsx(Button, {
 						size: "icon",
 						variant: "ghost",
+						className: "-ml-2.5",
 						"aria-label": "Back to this session's reviews",
 						onClick: onBack,
 						children: /* @__PURE__ */ jsx(Icon, {
@@ -367,31 +427,14 @@ function DetailView({ ref, summary, link, workspace, driver, act, onBack }) {
 							size: 13
 						})
 					}) : null,
-					/* @__PURE__ */ jsx(StateGlyph, {
-						tone: glyph.tone,
-						icon: /* @__PURE__ */ jsx(Icon, {
-							name: glyph.icon,
-							size: 13
-						}),
-						label: glyph.label
-					}),
 					/* @__PURE__ */ jsxs("span", {
-						className: "font-secondary text-fr-xs text-fr-text-3 tabular-nums",
-						children: [
-							head?.label ?? "review",
-							" #",
-							ref.number
-						]
+						className: "flex items-center gap-1.5 text-fr-sm text-fr-text-2 tabular-nums",
+						children: [/* @__PURE__ */ jsx(GitHubPullRequestIcon, {
+							size: 13,
+							className: glyphInk
+						}), /* @__PURE__ */ jsxs("span", { children: ["#", ref.number] })]
 					}),
-					/* @__PURE__ */ jsx("span", {
-						className: "min-w-0 flex-1 truncate text-fr-sm text-fr-text",
-						children: head?.title ?? ""
-					}),
-					checksGlyph(head?.checksState),
-					/* @__PURE__ */ jsx(DiffStat, {
-						additions: head?.additions,
-						deletions: head?.deletions
-					}),
+					/* @__PURE__ */ jsx("span", { className: "flex-1" }),
 					/* @__PURE__ */ jsx(Button, {
 						size: "icon",
 						variant: "ghost",
@@ -404,186 +447,354 @@ function DetailView({ ref, summary, link, workspace, driver, act, onBack }) {
 							name: "external",
 							size: 13
 						})
-					})
+					}),
+					head?.state === "open" ? /* @__PURE__ */ jsx(Button, {
+						size: "sm",
+						variant: "ghost",
+						className: "hover:border-fr-del hover:text-fr-del",
+						onClick: () => setPending({
+							title: `Close #${ref.number} without merging?`,
+							description: `The review closes on ${ref.host}. Its branch stays; you can reopen it from here.`,
+							confirmLabel: "Close review",
+							intent: "danger",
+							input: {
+								ref,
+								action: "close"
+							}
+						}),
+						children: "Close"
+					}) : null,
+					canMerge && !canStackMerge ? /* @__PURE__ */ jsx(Button, {
+						size: "sm",
+						title: `Merge (${detail.value?.allowedMergeMethods[0] ?? "merge"})`,
+						onClick: () => setPending({
+							title: `Merge #${ref.number}?`,
+							description: `${head?.headBranch ?? "This branch"} lands on ${head?.baseBranch ?? "its base"} via ${detail.value?.allowedMergeMethods[0] ?? "merge"} on ${ref.host}. This cannot be undone from here.`,
+							confirmLabel: "Merge",
+							intent: "default",
+							input: {
+								ref,
+								action: "merge",
+								mergeMethod: detail.value?.allowedMergeMethods[0]
+							}
+						}),
+						children: "Merge"
+					}) : head?.state === "open" && !head.isDraft && mergeBlocker ? /* @__PURE__ */ jsx(Button, {
+						size: "sm",
+						variant: "outline",
+						disabled: true,
+						className: "cursor-not-allowed border-transparent bg-fr-accent-dim text-fr-text-2 disabled:opacity-100",
+						"aria-describedby": "pr-viewer-merge-blocker",
+						children: "Merge"
+					}) : head?.state === "open" && head.isDraft && head.capabilities.draft ? /* @__PURE__ */ jsx(Button, {
+						size: "sm",
+						variant: "outline",
+						onClick: () => act("reviewAction", {
+							ref,
+							action: "ready"
+						}),
+						children: "Ready for review"
+					}) : head?.state === "closed" ? /* @__PURE__ */ jsx(Button, {
+						size: "sm",
+						variant: "outline",
+						onClick: () => act("reviewAction", {
+							ref,
+							action: "reopen"
+						}),
+						children: "Reopen"
+					}) : null
 				]
 			}),
 			/* @__PURE__ */ jsx("nav", {
-				className: "flex gap-1 border-fr-border border-b px-2 py-1 font-secondary text-fr-xs",
+				className: "flex gap-0.5 border-fr-border border-b px-3 py-1.5 text-fr-sm",
 				children: [
 					"summary",
 					"threads",
 					"diff"
-				].map((name) => /* @__PURE__ */ jsx("button", {
+				].map((name, index) => /* @__PURE__ */ jsx("button", {
 					type: "button",
 					onClick: () => setTab(name),
-					className: cn("rounded-sm px-2 py-0.5 capitalize", tab === name ? "bg-fr-surface-2 text-fr-text" : "text-fr-text-3 hover:text-fr-text"),
+					className: cn("rounded-sm px-2 py-0.5 capitalize transition-colors", index === 0 && "-ml-2", tab === name ? "bg-fr-accent-dim text-fr-text" : "text-fr-text-2 hover:bg-fr-surface hover:text-fr-text"),
 					children: name
 				}, name))
 			}),
 			/* @__PURE__ */ jsxs("div", {
-				className: "min-h-0 flex-1 overflow-y-auto p-2",
+				className: "min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden",
 				children: [
 					detail.error ? /* @__PURE__ */ jsx("p", {
-						className: "text-fr-del text-fr-sm",
+						className: "p-3 text-fr-del text-fr-sm",
 						children: detail.error
 					}) : null,
 					tab === "summary" ? /* @__PURE__ */ jsxs("div", {
-						className: "flex flex-col gap-3",
-						children: [stack ? /* @__PURE__ */ jsxs("section", {
-							className: "flex flex-col gap-1 rounded-md border border-fr-border p-2",
-							children: [
-								/* @__PURE__ */ jsxs("span", {
-									className: "font-secondary text-fr-2xs text-fr-text-3",
-									children: [
-										"Stack · ",
-										stack.layers.length,
-										" layers on ",
-										stack.base
-									]
-								}),
-								[...stack.layers].reverse().map((layer) => /* @__PURE__ */ jsxs("span", {
-									className: cn("flex items-center gap-2 text-fr-xs", layer.number === ref.number ? "text-fr-text" : "text-fr-text-2"),
-									children: [
-										/* @__PURE__ */ jsx(LayerGlyph, {
-											state: layer.state,
-											isDraft: layer.isDraft ?? false
-										}),
-										/* @__PURE__ */ jsxs("span", {
-											className: "tabular-nums",
-											children: ["#", layer.number]
-										}),
-										/* @__PURE__ */ jsx("span", {
-											className: "min-w-0 flex-1 truncate",
-											children: layer.title ?? layer.headBranch
-										})
-									]
-								}, layer.number)),
-								/* @__PURE__ */ jsxs("span", {
-									className: "flex gap-1 pt-1",
-									children: [canStackMerge ? /* @__PURE__ */ jsxs(Button, {
-										size: "sm",
-										variant: "outline",
-										onClick: () => act("reviewAction", {
-											ref,
-											action: "merge",
-											stackNumber: stack.number,
-											expectedStackHeads: stackLayersBelow.map((layer) => ({
-												number: layer.number,
-												headSha: layer.headSha
-											}))
-										}),
-										children: [
-											"Merge stack (",
-											stackLayersBelow.length,
-											")"
-										]
-									}) : null, canStackRebase ? /* @__PURE__ */ jsx(Button, {
-										size: "sm",
-										variant: "outline",
-										onClick: () => act("reviewAction", {
-											ref,
-											action: "update-branch",
-											stackNumber: stack.number,
-											expectedStackHeads: stackHeads
-										}),
-										children: "Rebase stack"
-									}) : null]
-								})
-							]
-						}) : null, detail.value ? /* @__PURE__ */ jsxs(Fragment, { children: [
-							detail.value.labels.length > 0 ? /* @__PURE__ */ jsx("div", {
-								className: "flex flex-wrap gap-1",
-								children: detail.value.labels.map((label) => /* @__PURE__ */ jsx("span", {
-									className: "rounded-full border border-fr-border px-2 font-secondary text-fr-2xs text-fr-text-2",
-									children: label.name
-								}, label.name))
-							}) : null,
-							detail.value.reviewers.length > 0 ? /* @__PURE__ */ jsxs("span", {
-								className: "font-secondary text-fr-2xs text-fr-text-3",
-								children: ["Reviewers · ", detail.value.reviewers.map((r) => r.login).join(", ")]
-							}) : null,
-							detail.value.checks.length > 0 ? /* @__PURE__ */ jsx("ul", {
-								className: "flex flex-col gap-0.5 font-secondary text-fr-xs",
-								children: detail.value.checks.map((check) => /* @__PURE__ */ jsxs("li", {
-									className: "flex items-center gap-2",
-									children: [/* @__PURE__ */ jsx("span", {
-										className: cn("tabular-nums", check.status === "success" ? "text-fr-add" : check.status === "failure" ? "text-fr-del" : "text-fr-text-3"),
-										children: check.status
-									}), /* @__PURE__ */ jsx("span", {
-										className: "min-w-0 truncate",
-										children: check.name
-									})]
-								}, check.name))
-							}) : null,
-							/* @__PURE__ */ jsx("pre", {
-								className: "whitespace-pre-wrap font-primary text-fr-sm text-fr-text-2",
-								children: detail.value.body
-							}),
-							/* @__PURE__ */ jsxs("span", {
-								className: "flex flex-wrap gap-1",
+						className: "flex flex-col gap-4 p-3",
+						children: [
+							/* @__PURE__ */ jsxs("div", {
+								className: "flex flex-col gap-1",
 								children: [
-									canMerge && !canStackMerge ? /* @__PURE__ */ jsx(Button, {
-										size: "sm",
-										onClick: () => act("reviewAction", {
-											ref,
-											action: "merge",
-											mergeMethod: detail.value?.allowedMergeMethods[0]
-										}),
-										children: "Merge"
-									}) : null,
-									head?.state === "open" && head.isDraft && head.capabilities.draft ? /* @__PURE__ */ jsx(Button, {
-										size: "sm",
-										variant: "outline",
-										onClick: () => act("reviewAction", {
-											ref,
-											action: "ready"
-										}),
-										children: "Ready for review"
-									}) : null,
-									head?.state === "open" ? /* @__PURE__ */ jsx(Button, {
-										size: "sm",
-										variant: "ghost",
-										onClick: () => act("reviewAction", {
-											ref,
-											action: "close"
-										}),
-										children: "Close"
-									}) : null,
-									head?.state === "closed" ? /* @__PURE__ */ jsx(Button, {
-										size: "sm",
-										variant: "ghost",
-										onClick: () => act("reviewAction", {
-											ref,
-											action: "reopen"
-										}),
-										children: "Reopen"
+									/* @__PURE__ */ jsx("h1", {
+										className: "font-primary text-fr-xl font-semibold leading-tight tracking-[-0.01em] text-fr-text",
+										children: head?.title ?? `#${ref.number}`
+									}),
+									/* @__PURE__ */ jsxs("span", {
+										className: "flex flex-wrap items-center gap-1.5 text-fr-xs text-fr-text-2",
+										children: [
+											head?.author ? /* @__PURE__ */ jsxs("span", {
+												className: "flex items-center gap-1.5",
+												children: [/* @__PURE__ */ jsx("span", {
+													"aria-hidden": "true",
+													className: "inline-flex size-4 items-center justify-center rounded-full bg-fr-surface-3 text-fr-2xs uppercase text-fr-text",
+													children: head.author.login.slice(0, 1)
+												}), /* @__PURE__ */ jsx("span", {
+													className: "text-fr-text",
+													children: head.author.login
+												})]
+											}) : null,
+											head?.updatedAt ? /* @__PURE__ */ jsx(Dot, {}) : null,
+											head?.updatedAt ? /* @__PURE__ */ jsx("span", { children: relativeTime(head.updatedAt) }) : null,
+											/* @__PURE__ */ jsx(Dot, {}),
+											/* @__PURE__ */ jsx("span", { children: statusLabel })
+										]
+									}),
+									conflicting ? /* @__PURE__ */ jsxs("span", {
+										id: "pr-viewer-merge-blocker",
+										className: "mt-1 flex items-center gap-1 self-start rounded-sm border-l-2 border-fr-warn bg-fr-surface px-2 py-1 text-fr-xs text-fr-warn",
+										children: [
+											/* @__PURE__ */ jsx(Icon, {
+												name: "warnTri",
+												size: 11,
+												"aria-hidden": "true"
+											}),
+											" Conflicts with ",
+											head?.baseBranch
+										]
 									}) : null
 								]
-							})
-						] }) : detail.loading ? /* @__PURE__ */ jsx("span", {
-							className: "font-secondary text-fr-xs text-fr-text-3",
-							children: "Loading…"
-						}) : null]
+							}),
+							/* @__PURE__ */ jsxs("div", {
+								className: "flex flex-col gap-1.5 text-fr-sm",
+								children: [
+									/* @__PURE__ */ jsx(MetaRow, {
+										icon: "branch",
+										label: "Branch",
+										column: labeledRows > 1,
+										children: /* @__PURE__ */ jsxs("span", {
+											className: "flex min-w-0 flex-1 items-center gap-1.5 text-fr-sm",
+											children: [
+												/* @__PURE__ */ jsx("span", {
+													className: "truncate text-fr-text",
+													children: head?.headBranch ?? "—"
+												}),
+												/* @__PURE__ */ jsx("span", {
+													className: "text-fr-text-3",
+													children: "›"
+												}),
+												/* @__PURE__ */ jsx("span", {
+													className: "shrink-0 text-fr-text-2",
+													children: head?.baseBranch ?? "—"
+												}),
+												/* @__PURE__ */ jsx(DiffStat, {
+													className: "ml-auto",
+													additions: head?.additions,
+													deletions: head?.deletions
+												})
+											]
+										})
+									}),
+									reviewers.length > 0 ? /* @__PURE__ */ jsx(MetaRow, {
+										icon: "user",
+										label: "Reviewers",
+										column: labeledRows > 1,
+										children: /* @__PURE__ */ jsx("span", {
+											className: "truncate text-fr-text-2",
+											children: reviewers.join(", ")
+										})
+									}) : null,
+									openThreads ? /* @__PURE__ */ jsx(MetaRow, {
+										icon: "chat",
+										label: "Threads",
+										column: labeledRows > 1,
+										children: /* @__PURE__ */ jsxs("span", {
+											className: "text-fr-text-2",
+											children: [openThreads, " open"]
+										})
+									}) : null,
+									head?.checksState ? /* @__PURE__ */ jsx(MetaRow, {
+										icon: "check",
+										label: "Checks",
+										column: labeledRows > 1,
+										children: /* @__PURE__ */ jsxs("span", {
+											className: "flex items-center gap-1.5 text-fr-text-2",
+											children: [/* @__PURE__ */ jsx(StateGlyph, {
+												tone: checksTone,
+												icon: /* @__PURE__ */ jsx(Icon, {
+													name: head.checksState === "failing" ? "x" : head.checksState === "pending" ? "clock" : "check",
+													size: 11
+												}),
+												label: ""
+											}), /* @__PURE__ */ jsx("span", { children: checksLabel })]
+										})
+									}) : null,
+									emptyFacets.length > 0 ? /* @__PURE__ */ jsx("span", {
+										className: "text-fr-xs text-fr-text-2",
+										children: emptyFacets.join(" · ")
+									}) : null,
+									detail.value && detail.value.labels.length > 0 ? /* @__PURE__ */ jsx(MetaRow, {
+										icon: "pin",
+										label: "Labels",
+										column: labeledRows > 1,
+										children: /* @__PURE__ */ jsx("span", {
+											className: "flex flex-wrap gap-1",
+											children: detail.value.labels.map((label) => /* @__PURE__ */ jsx("span", {
+												className: "rounded-full border border-fr-border px-2 text-fr-2xs text-fr-text-2",
+												children: label.name
+											}, label.name))
+										})
+									}) : null
+								]
+							}),
+							stack ? /* @__PURE__ */ jsxs("section", {
+								className: "flex flex-col gap-1 rounded-md border border-fr-border bg-fr-surface p-2",
+								children: [
+									/* @__PURE__ */ jsxs("span", {
+										className: "text-fr-sm font-semibold text-fr-text",
+										children: [
+											"Stack · ",
+											stack.layers.length,
+											" layers on ",
+											stack.base
+										]
+									}),
+									[...stack.layers].reverse().map((layer) => /* @__PURE__ */ jsxs("span", {
+										className: cn("flex items-center gap-2 text-fr-xs", layer.number === ref.number ? "text-fr-text" : "text-fr-text-2"),
+										children: [
+											/* @__PURE__ */ jsx(LayerGlyph, {
+												state: layer.state,
+												isDraft: layer.isDraft ?? false
+											}),
+											/* @__PURE__ */ jsxs("span", {
+												className: "tabular-nums",
+												children: ["#", layer.number]
+											}),
+											/* @__PURE__ */ jsx("span", {
+												className: "min-w-0 flex-1 truncate",
+												children: layer.title ?? layer.headBranch
+											})
+										]
+									}, layer.number)),
+									canStackMerge || canStackRebase ? /* @__PURE__ */ jsxs("span", {
+										className: "flex gap-1 pt-1",
+										children: [canStackMerge ? /* @__PURE__ */ jsxs(Button, {
+											size: "sm",
+											onClick: () => setPending({
+												title: `Merge the stack under #${ref.number}?`,
+												description: `${stackLayersBelow.length} reviews land on ${ref.host} in order, bottom first. This cannot be undone from here.`,
+												confirmLabel: `Merge ${stackLayersBelow.length}`,
+												intent: "default",
+												input: {
+													ref,
+													action: "merge",
+													stackNumber: stack.number,
+													expectedStackHeads: stackLayersBelow.map((layer) => ({
+														number: layer.number,
+														headSha: layer.headSha
+													}))
+												}
+											}),
+											children: [
+												"Merge stack (",
+												stackLayersBelow.length,
+												")"
+											]
+										}) : null, canStackRebase ? /* @__PURE__ */ jsx(Button, {
+											size: "sm",
+											variant: "outline",
+											onClick: () => act("reviewAction", {
+												ref,
+												action: "update-branch",
+												stackNumber: stack.number,
+												expectedStackHeads: stackHeads
+											}),
+											children: "Rebase stack"
+										}) : null]
+									}) : null
+								]
+							}) : null,
+							detail.value ? /* @__PURE__ */ jsxs("section", {
+								className: "flex flex-col gap-2",
+								children: [
+									/* @__PURE__ */ jsx("span", {
+										"aria-hidden": "true",
+										className: "border-fr-border-soft border-t"
+									}),
+									detail.value.body.trim() ? /* @__PURE__ */ jsx(StreamingMarkdown, {
+										text: detail.value.body,
+										className: "text-fr-sm text-fr-text"
+									}) : /* @__PURE__ */ jsx("span", {
+										className: "text-fr-sm text-fr-text-3",
+										children: "No description."
+									}),
+									detail.value.checks.length > 0 ? /* @__PURE__ */ jsx("ul", {
+										className: "mt-2 flex flex-col gap-0.5 rounded-md border border-fr-border bg-fr-surface p-2 text-fr-xs",
+										children: detail.value.checks.map((check) => /* @__PURE__ */ jsxs("li", {
+											className: "flex items-center gap-2",
+											children: [/* @__PURE__ */ jsx("span", {
+												className: cn("w-14 shrink-0 tabular-nums", check.status === "success" ? "text-fr-add" : check.status === "failure" ? "text-fr-del" : "text-fr-text-3"),
+												children: check.status
+											}), /* @__PURE__ */ jsx("span", {
+												className: "min-w-0 truncate text-fr-text-2",
+												children: check.name
+											})]
+										}, check.name))
+									}) : null
+								]
+							}) : detail.loading ? /* @__PURE__ */ jsx("span", {
+								className: "text-fr-xs text-fr-text-3",
+								children: "Loading…"
+							}) : null
+						]
 					}) : null,
 					tab === "threads" ? /* @__PURE__ */ jsxs("div", {
-						className: "flex flex-col gap-2",
+						className: "flex flex-col gap-2 p-3",
 						children: [
 							threads.loading ? /* @__PURE__ */ jsx("span", {
-								className: "font-secondary text-fr-xs text-fr-text-3",
+								className: "text-fr-xs text-fr-text-3",
 								children: "Loading…"
 							}) : null,
 							threads.error ? /* @__PURE__ */ jsx("p", {
 								className: "text-fr-del text-fr-sm",
 								children: threads.error
 							}) : null,
+							threads.value && threads.value.length > 0 ? /* @__PURE__ */ jsxs("span", {
+								className: "text-fr-2xs text-fr-text-3",
+								children: [
+									threads.value.filter((thread) => !thread.isResolved).length,
+									" open · ",
+									threads.value.filter((thread) => thread.isResolved).length,
+									" resolved"
+								]
+							}) : null,
 							(threads.value ?? []).map((thread) => /* @__PURE__ */ jsxs("div", {
 								className: "flex flex-col gap-1",
 								children: [/* @__PURE__ */ jsxs("span", {
-									className: "font-secondary text-fr-2xs text-fr-text-3",
+									className: "flex items-center gap-1.5 text-fr-2xs text-fr-text-3",
 									children: [
-										thread.path ? `${thread.path}${thread.line ? `:${thread.line}` : ""}` : "no longer on a line",
-										thread.isResolved ? " · resolved" : "",
-										thread.isOutdated ? " · outdated" : ""
+										/* @__PURE__ */ jsx(Icon, {
+											name: "file",
+											size: 11,
+											"aria-hidden": "true"
+										}),
+										/* @__PURE__ */ jsx("span", {
+											className: "min-w-0 truncate text-fr-text-2",
+											children: thread.path ? `${thread.path}${thread.line ? `:${thread.line}` : ""}` : "no longer on a line"
+										}),
+										thread.isResolved ? /* @__PURE__ */ jsx("span", {
+											className: "rounded-[3px] border border-fr-border px-1 text-fr-text-3",
+											children: "resolved"
+										}) : null,
+										thread.isOutdated ? /* @__PURE__ */ jsx("span", {
+											className: "rounded-[3px] border border-fr-border px-1 text-fr-text-3",
+											children: "outdated"
+										}) : null
 									]
 								}), /* @__PURE__ */ jsx(ThreadCard, {
 									comments: thread.comments.map((comment) => ({
@@ -600,49 +811,89 @@ function DetailView({ ref, summary, link, workspace, driver, act, onBack }) {
 								})]
 							}, thread.id)),
 							threads.value && threads.value.length === 0 ? /* @__PURE__ */ jsx("span", {
-								className: "font-secondary text-fr-xs text-fr-text-3",
+								className: "text-fr-xs text-fr-text-3",
 								children: "No review conversations."
 							}) : null
 						]
 					}) : null,
 					tab === "diff" ? /* @__PURE__ */ jsxs("div", {
-						className: "flex flex-col gap-2",
+						className: "flex flex-col gap-2 p-3",
 						children: [
 							diff.loading ? /* @__PURE__ */ jsx("span", {
-								className: "font-secondary text-fr-xs text-fr-text-3",
+								className: "text-fr-xs text-fr-text-3",
 								children: "Loading…"
 							}) : null,
 							diff.error ? /* @__PURE__ */ jsx("p", {
 								className: "text-fr-del text-fr-sm",
 								children: diff.error
 							}) : null,
+							diff.value && diff.value.files.length > 0 ? /* @__PURE__ */ jsxs("span", {
+								className: "flex items-center gap-2 text-fr-2xs text-fr-text-3",
+								children: [/* @__PURE__ */ jsxs("span", { children: [
+									diff.value.files.length,
+									" file",
+									diff.value.files.length === 1 ? "" : "s",
+									" changed"
+								] }), /* @__PURE__ */ jsx(DiffStat, {
+									additions: diff.value.files.reduce((sum, file) => sum + file.additions, 0),
+									deletions: diff.value.files.reduce((sum, file) => sum + file.deletions, 0)
+								})]
+							}) : null,
 							(diff.value?.files ?? []).map((file) => /* @__PURE__ */ jsxs("details", {
-								className: "rounded-md border border-fr-border",
+								className: "group rounded-md border border-fr-border bg-fr-surface",
+								open: diff.value !== null && diff.value.files.length <= 3,
 								children: [/* @__PURE__ */ jsxs("summary", {
-									className: "flex cursor-pointer items-center gap-2 px-2 py-1 font-secondary text-fr-xs",
-									children: [/* @__PURE__ */ jsx("span", {
-										className: "min-w-0 flex-1 truncate font-mono",
-										children: file.path
-									}), /* @__PURE__ */ jsx(DiffStat, {
-										additions: file.additions,
-										deletions: file.deletions
-									})]
-								}), file.patch ? /* @__PURE__ */ jsx("pre", {
-									className: "overflow-x-auto px-2 py-1 font-mono text-fr-2xs text-fr-text-2",
-									children: file.patch
+									className: "flex cursor-pointer list-none items-center gap-2 px-3 py-1.5 text-fr-xs hover:bg-fr-surface-2",
+									children: [
+										/* @__PURE__ */ jsx(Icon, {
+											name: "file",
+											size: 12,
+											"aria-hidden": "true"
+										}),
+										/* @__PURE__ */ jsx("span", {
+											className: "min-w-0 flex-1 truncate text-fr-text",
+											children: file.path
+										}),
+										/* @__PURE__ */ jsx(DiffStat, {
+											additions: file.additions,
+											deletions: file.deletions
+										})
+									]
+								}), file.patch ? /* @__PURE__ */ jsx("div", {
+									className: "border-fr-border-soft border-t",
+									children: /* @__PURE__ */ jsx(StreamingMarkdown, {
+										text: `\`\`\`diff\n${file.patch}\n\`\`\``,
+										className: "text-fr-2xs"
+									})
 								}) : /* @__PURE__ */ jsx("span", {
-									className: "px-2 py-1 font-secondary text-fr-2xs text-fr-text-3",
+									className: "block border-fr-border-soft border-t px-3 py-1.5 text-fr-2xs text-fr-text-2",
 									children: "Hunks withheld by the host."
 								})]
 							}, file.path)),
+							diff.value && diff.value.files.length === 0 ? /* @__PURE__ */ jsx("span", {
+								className: "text-fr-xs text-fr-text-3",
+								children: "No file changes."
+							}) : null,
 							diff.value?.truncated ? /* @__PURE__ */ jsx("span", {
-								className: "font-secondary text-fr-2xs text-fr-text-3",
+								className: "text-fr-2xs text-fr-text-3",
 								children: "More files than the host returned — open on the host for the rest."
 							}) : null
 						]
 					}) : null
 				]
-			})
+			}),
+			pending ? /* @__PURE__ */ jsx(ConfirmDialog, {
+				title: pending.title,
+				description: pending.description,
+				confirmLabel: pending.confirmLabel,
+				intent: pending.intent,
+				icon: pending.intent === "danger" ? "x" : "git-pr",
+				onConfirm: () => {
+					act("reviewAction", pending.input);
+					setPending(null);
+				},
+				onClose: () => setPending(null)
+			}) : null
 		]
 	});
 }
@@ -680,11 +931,24 @@ function PrViewer({ sessionId, workspace, workspaceDriver, store }) {
 		} : null;
 	}, [links, checkout]);
 	if (!store) return /* @__PURE__ */ jsx("p", {
-		className: "p-3 font-secondary text-fr-sm text-fr-text-3",
+		className: "p-3 text-fr-sm text-fr-text-3",
 		children: "No store on this mount — the viewer needs the host's facts."
 	});
 	const selectedLink = selected ? links.find((link) => refKey(link.ref) === refKey(selected)) : void 0;
 	const summaryFor = (link) => link.snapshot ?? checkout?.find((row) => refKey(row.ref) === refKey(link.ref)) ?? null;
+	const sharedBase = useMemo(() => {
+		const bases = /* @__PURE__ */ new Set();
+		for (const line of lines) {
+			const base = summaryFor(line.link)?.baseBranch;
+			if (base) bases.add(base);
+		}
+		for (const row of others) bases.add(row.baseBranch);
+		return bases.size === 1 ? [...bases][0] : null;
+	}, [
+		lines,
+		others,
+		summaryFor
+	]);
 	const selectedSummary = selected ? selectedLink ? summaryFor(selectedLink) : checkout?.find((row) => refKey(row.ref) === refKey(selected)) ?? null : null;
 	if (selected && workspace && workspaceDriver) return /* @__PURE__ */ jsx(DetailView, {
 		ref: selected,
@@ -695,7 +959,7 @@ function PrViewer({ sessionId, workspace, workspaceDriver, store }) {
 		act,
 		onBack: links.length + others.length > 1 || !selectedLink ? () => setSelected(null) : null
 	});
-	const rowMenu = (ref, url, link) => /* @__PURE__ */ jsx(RowMenu, { actions: [
+	const rowMenu = (ref, url, link, summary) => /* @__PURE__ */ jsx(RowMenu, { actions: [
 		{
 			label: "Open on the host",
 			onClick: () => act("openReview", {
@@ -714,30 +978,33 @@ function PrViewer({ sessionId, workspace, workspaceDriver, store }) {
 			label: "Link to this session",
 			onClick: () => act("linkReview", {
 				ref,
-				url
+				url,
+				...summary ? { snapshot: summary } : {}
 			})
 		}] : []
 	] });
 	return /* @__PURE__ */ jsxs("div", {
-		className: "flex min-h-0 flex-1 flex-col",
+		className: "flex min-h-0 min-w-0 flex-1 flex-col",
 		children: [
 			linking ? /* @__PURE__ */ jsx(LinkDialog, {
 				own,
 				onClose: () => setLinking(false),
 				onSubmit: (ref, url) => {
+					const known = checkout?.find((row) => refKey(row.ref) === refKey(ref));
 					act("linkReview", {
 						ref,
-						url
+						url,
+						...known ? { snapshot: known } : {}
 					});
 					setLinking(false);
 				}
 			}) : null,
 			/* @__PURE__ */ jsxs("div", {
-				className: "min-h-0 flex-1 overflow-y-auto py-1",
+				className: "min-h-0 flex-1 overflow-y-auto px-1 py-1",
 				children: [lines.length === 0 ? /* @__PURE__ */ jsxs("div", {
 					className: "flex flex-col items-start gap-2 p-3",
 					children: [/* @__PURE__ */ jsx("span", {
-						className: "font-secondary text-fr-sm text-fr-text-3",
+						className: "text-fr-sm text-fr-text-3",
 						children: sessionId ? "No reviews linked to this session yet." : "Start a session to link reviews to it."
 					}), sessionId ? /* @__PURE__ */ jsxs(Button, {
 						size: "sm",
@@ -748,26 +1015,31 @@ function PrViewer({ sessionId, workspace, workspaceDriver, store }) {
 							size: 12
 						}), " Link a review"]
 					}) : null]
-				}) : lines.map((line) => /* @__PURE__ */ jsx(ReviewRow, {
+				}) : /* @__PURE__ */ jsxs(Fragment, { children: [others.length > 0 ? /* @__PURE__ */ jsx("div", {
+					className: "px-2 pt-1 pb-1 text-fr-xs font-semibold text-fr-text-2",
+					children: "Linked to this session"
+				}) : null, lines.map((line) => /* @__PURE__ */ jsx(ReviewRow, {
 					summary: summaryFor(line.link),
 					link: line.link,
 					depth: line.depth,
 					stack: line.stack,
+					sharedBase,
 					onSelect: () => setSelected(line.link.ref),
 					menu: rowMenu(line.link.ref, line.link.url, line.link)
-				}, refKey(line.link.ref))), others.length > 0 ? /* @__PURE__ */ jsxs(Fragment, { children: [/* @__PURE__ */ jsx("div", {
-					className: "px-2 pt-2 pb-1 font-secondary text-fr-2xs text-fr-text-3 uppercase",
+				}, refKey(line.link.ref)))] }), others.length > 0 ? /* @__PURE__ */ jsxs(Fragment, { children: [/* @__PURE__ */ jsx("div", {
+					className: "px-2 pt-3 pb-1 text-fr-xs font-semibold text-fr-text-2",
 					children: "Also in this checkout"
 				}), others.map((row) => /* @__PURE__ */ jsx(ReviewRow, {
 					summary: row,
 					depth: 0,
 					stack: null,
+					sharedBase,
 					onSelect: () => setSelected(row.ref),
-					menu: rowMenu(row.ref, row.url, void 0)
+					menu: rowMenu(row.ref, row.url, void 0, row)
 				}, refKey(row.ref)))] }) : null]
 			}),
 			/* @__PURE__ */ jsxs("footer", {
-				className: "flex items-center justify-between border-fr-border border-t px-2 py-1 font-secondary text-fr-2xs text-fr-text-3",
+				className: "flex items-center justify-between border-fr-border border-t px-2 py-1 text-fr-2xs text-fr-text-2",
 				children: [/* @__PURE__ */ jsx("span", { children: footerLine(links) }), sessionId ? /* @__PURE__ */ jsxs(Button, {
 					size: "sm",
 					variant: "ghost",

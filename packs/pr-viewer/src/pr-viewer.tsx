@@ -19,10 +19,13 @@
 // resolvers, granted, so the rail, the card and this list agree on what a
 // stack is. This file only decides how a line looks.
 
+import { GitHubPullRequestIcon } from "./github-pr-icon";
 import {
 	Button,
+	StreamingMarkdown,
 	ChainRow,
 	cn,
+	ConfirmDialog,
 	DiffStat,
 	Icon,
 	Input,
@@ -125,40 +128,52 @@ function sourceLabel(source: SessionReviewLink["source"]): string {
 // The list
 // ---------------------------------------------------------------------------
 
+/** Glyph + number column; the meta line indents to it. */
+const ROW_GUTTER = "3.5rem";
+/** Right-aligned relative time, so every row's diff stat shares one right edge. */
+const TIME_COLUMN = "3.5rem";
+
 function ReviewRow({
 	summary,
 	link,
 	depth,
 	stack,
+	sharedBase,
 	onSelect,
 	menu,
 }: {
 	readonly summary: ReviewSummary | null;
 	readonly link?: SessionReviewLink;
 	readonly depth: number;
+	/** The base branch every listed review targets — omitted from the row,
+	 *  since the list itself proves it is this checkout's trunk. */
+	readonly sharedBase: string | null;
 	readonly stack: { readonly kind: "native" | "derived"; readonly size: number } | null;
 	readonly onSelect: () => void;
 	readonly menu: ReactNode;
 }) {
 	const glyph = stateGlyph(summary);
 	const ref = summary?.ref ?? link?.ref;
-	const label = summary?.label ?? "review";
 	return (
-		<ChainRow depth={depth} className="group rounded-sm">
+		<ChainRow depth={depth} flag={glyph.tone === "warning" ? "warning" : undefined} className="group rounded-sm hover:bg-fr-surface">
 			<button type="button" onClick={onSelect} className="flex min-w-0 flex-1 flex-col gap-0.5 py-1.5 text-left">
-				<span className="flex min-w-0 items-center gap-1.5">
-					<StateGlyph tone={glyph.tone} icon={<Icon name={glyph.icon} size={13} />} label={glyph.label} />
-					<span className="font-secondary text-fr-xs text-fr-text-3 tabular-nums" title={link ? sourceLabel(link.source) : undefined}>
-						{label} #{ref?.number}
+				<span className="flex min-w-0 items-start gap-1.5">
+					{/* A fixed gutter for glyph + number, so the meta line below can
+					    indent to the same title column — inline width is this pack's
+					    device for a column (see MetaRow); it ships no CSS. */}
+					<span className="flex shrink-0 items-start gap-1.5" style={{ width: ROW_GUTTER }}>
+						<StateGlyph tone={glyph.tone} icon={<GitHubPullRequestIcon size={13} />} label={glyph.label} className="mt-0.5" />
+						<span className="min-w-0 flex-1 text-right text-fr-md text-fr-text-2 tabular-nums" title={link ? sourceLabel(link.source) : undefined}>
+							#{ref?.number}
+						</span>
 					</span>
-					<span className="min-w-0 flex-1 truncate text-fr-sm text-fr-text">{summary?.title ?? link?.url ?? ""}</span>
+					<span className="line-clamp-2 min-w-0 flex-1 whitespace-normal break-words text-fr-md font-medium text-fr-text">{summary?.title ?? link?.url ?? ""}</span>
 					{summary?.reviewDecision === "changes-requested" ? (
-						<span className="font-secondary text-fr-2xs text-fr-warn">changes requested</span>
+						<span className="shrink-0 text-fr-2xs text-fr-warn">changes requested</span>
 					) : null}
 					{checksGlyph(summary?.checksState)}
-					<DiffStat additions={summary?.additions} deletions={summary?.deletions} />
 				</span>
-				<span className="flex min-w-0 items-center gap-2 font-secondary text-fr-2xs text-fr-text-3">
+				<span className="flex min-w-0 items-center gap-2 text-fr-2xs text-fr-text-2" style={{ paddingLeft: ROW_GUTTER }}>
 					{stack ? (
 						<span className="inline-flex items-center gap-0.5" title={stack.kind === "native" ? `Host stack of ${stack.size}: merging a layer lands the ones below it` : `${stack.size} reviews chained by base branch`}>
 							<Icon name={stack.kind === "native" ? "layers" : "branch"} size={11} />
@@ -166,8 +181,21 @@ function ReviewRow({
 						</span>
 					) : null}
 					{summary?.author ? <span className="truncate">{summary.author.login}</span> : null}
-					<span className="truncate font-mono">{summary ? `${summary.headBranch} → ${summary.baseBranch}` : ref ? `${ref.host}/${ref.repository}` : ""}</span>
-					{summary ? <span className="ml-auto shrink-0">{relativeTime(summary.updatedAt)}</span> : null}
+					<span className="truncate">
+						{summary
+							? summary.baseBranch === sharedBase
+								? summary.headBranch
+								: `${summary.headBranch} → ${summary.baseBranch}`
+							: ref
+								? `${ref.host}/${ref.repository}`
+								: ""}
+					</span>
+					<DiffStat className="ml-auto text-fr-2xs" additions={summary?.additions} deletions={summary?.deletions} />
+					{summary ? (
+						<span className="shrink-0 text-right tabular-nums" style={{ width: TIME_COLUMN }}>
+							{relativeTime(summary.updatedAt)}
+						</span>
+					) : null}
 				</span>
 			</button>
 			<span className="opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">{menu}</span>
@@ -175,9 +203,43 @@ function ReviewRow({
 	);
 }
 
+/** One metadata row of the detail head — label column fixed by an inline
+ *  width, because a pack ships no CSS and can rely only on utilities the host
+ *  already generates (an arbitrary-value grid class did not exist, live). */
+function MetaRow({
+	icon,
+	label,
+	column = true,
+	children,
+}: {
+	readonly icon: ComponentProps<typeof Icon>["name"];
+	readonly label: string;
+	/** Align the label into the shared column; off when this is the only labeled row. */
+	readonly column?: boolean;
+	readonly children: ReactNode;
+}) {
+	return (
+		<span className="flex min-w-0 items-center gap-2">
+			<span className="flex shrink-0 items-center gap-1.5 text-fr-sm text-fr-text-2" style={column ? { width: "4.75rem" } : undefined}>
+				<Icon name={icon} size={12} /> {label}
+			</span>
+			<span className="flex min-w-0 flex-1 items-center">{children}</span>
+		</span>
+	);
+}
+
+/** The " · " between two facts on one line. */
+function Dot() {
+	return (
+		<span aria-hidden="true" className="text-fr-text-3">
+			·
+		</span>
+	);
+}
+
 function LayerGlyph({ state, isDraft }: { readonly state: ReviewState; readonly isDraft: boolean }) {
 	const glyph = stateGlyph({ state, isDraft });
-	return <StateGlyph {...glyph} icon={<Icon name={glyph.icon} size={11} />} />;
+	return <StateGlyph {...glyph} icon={<GitHubPullRequestIcon size={11} />} />;
 }
 
 function RowMenu({ actions }: { readonly actions: readonly { readonly label: string; readonly onClick: () => void }[] }) {
@@ -239,7 +301,7 @@ function LinkDialog({
 					if (event.key === "Enter" && parsed) onSubmit(parsed.ref, parsed.url);
 				}}
 			/>
-			{reason ? <span className="font-secondary text-fr-2xs text-fr-warn">{reason}</span> : null}
+			{reason ? <span className="text-fr-2xs text-fr-warn">{reason}</span> : null}
 			<div className="flex justify-end gap-1">
 				<Button size="sm" variant="ghost" onClick={onClose}>
 					Cancel
@@ -296,11 +358,20 @@ function DetailView({
   const readDiff = useCallback(() => (driver.getReviewDiff ? driver.getReviewDiff(workspace, ref) : Promise.resolve({ files: [] as readonly ReviewDiffFile[], truncated: false })), [driver, workspace, ref]);
 	const detail = useRead(driver.getReview ? readDetail : null, key);
 	const [tab, setTab] = useState<"summary" | "threads" | "diff">("summary");
-	const threads = useRead(tab === "threads" && driver.getReviewThreads ? readThreads : null, `${key}:threads`);
+	// A world-touching action is confirmed first — one click closed a live PR
+	// on the host during a design pass (2026-09-17). The dialog holds the
+	// exact `reviewAction` input it will send, so confirm fires it verbatim.
+	const [pending, setPending] = useState<{
+		readonly title: string;
+		readonly description: string;
+		readonly confirmLabel: string;
+		readonly intent: "default" | "danger";
+		readonly input: Record<string, unknown>;
+	} | null>(null);
+	const threads = useRead(driver.getReviewThreads ? readThreads : null, `${key}:threads`);
 	const diff = useRead(tab === "diff" && driver.getReviewDiff ? readDiff : null, `${key}:diff`);
 	const [folded, setFolded] = useState<Record<string, boolean>>({});
 	const head = detail.value ?? summary;
-	const glyph = stateGlyph(head);
 	const stack = detail.value?.stack ?? link?.stack ?? null;
 	const canMerge = head?.state === "open" && !head.isDraft && (detail.value?.viewer.merge ?? false) && (head.capabilities.merge ?? false);
 	const stackHeads = stack?.layers.filter(layer => layer.state === "open" && layer.headSha).map(layer => ({ number: layer.number, headSha: layer.headSha as string })) ?? [];
@@ -308,39 +379,220 @@ function DetailView({
 	const canStackMerge = canMerge && stack !== null && head?.capabilities.stackActions === true && stackLayersBelow.length > 1 && stackLayersBelow.every(layer => layer.headSha && !layer.isDraft);
 	const canStackRebase = stack !== null && head?.capabilities.stackActions === true && (detail.value?.viewer.stackRebase ?? false) && stackHeads.length > 0;
 
+	const conflicting = head?.state === "open" && head.mergeability === "conflicting";
+	const glyphInk =
+		head?.state === "merged" ? "text-fr-accent" : head?.state === "closed" ? "text-fr-del" : head?.isDraft ? "text-fr-text-3" : "text-fr-add";
+	const statusLabel =
+		head?.state === "merged"
+			? "Merged"
+			: head?.state === "closed"
+				? "Closed"
+				: head?.isDraft
+					? "Draft"
+					: head?.reviewDecision === "approved"
+						? "Approved"
+						: head?.reviewDecision === "changes-requested"
+							? "Changes requested"
+							: "Ready for review";
+	const mergeBlocker =
+		head?.state !== "open"
+			? null
+			: head.isDraft
+				? "Draft — mark ready for review first"
+				: conflicting
+					? `Conflicts with ${head.baseBranch} — resolve them first`
+					: detail.value && !detail.value.viewer.merge
+						? "You cannot merge this review on the host"
+						: null;
+	const checksLabel =
+		head?.checksState === "passing"
+			? "All checks passed"
+			: head?.checksState === "failing"
+				? "Some checks failed"
+				: head?.checksState === "pending"
+					? "Checks running"
+					: "None";
+	const checksTone: Tone =
+		head?.checksState === "passing" ? "positive" : head?.checksState === "failing" ? "negative" : head?.checksState === "pending" ? "warning" : "neutral";
+	const reviewers = detail.value?.reviewers.map(r => r.login) ?? [];
+	const openThreads = threads.value?.filter(thread => !thread.isResolved).length;
+	const labeledRows =
+		1 +
+		(reviewers.length > 0 ? 1 : 0) +
+		(openThreads ? 1 : 0) +
+		(head?.checksState ? 1 : 0) +
+		(detail.value && detail.value.labels.length > 0 ? 1 : 0);
+	const emptyFacets = [
+		...(detail.value && reviewers.length === 0 ? ["No reviewers"] : []),
+		...(threads.value && !threads.value.some(thread => !thread.isResolved) ? ["no open threads"] : []),
+		...(head && !head.checksState ? ["no checks"] : []),
+	];
+
 	return (
-		<div className="flex min-h-0 flex-1 flex-col">
-			<header className="flex items-center gap-2 border-fr-border border-b px-2 py-1.5">
+		<div className="flex min-h-0 min-w-0 flex-1 flex-col">
+			<header className="flex min-w-0 items-center gap-1.5 overflow-hidden border-fr-border-soft border-b px-3 py-1.5">
 				{onBack ? (
-					<Button size="icon" variant="ghost" aria-label="Back to this session's reviews" onClick={onBack}>
+					<Button size="icon" variant="ghost" className="-ml-2.5" aria-label="Back to this session's reviews" onClick={onBack}>
 						<Icon name="back" size={13} />
 					</Button>
 				) : null}
-				<StateGlyph tone={glyph.tone} icon={<Icon name={glyph.icon} size={13} />} label={glyph.label} />
-				<span className="font-secondary text-fr-xs text-fr-text-3 tabular-nums">
-					{head?.label ?? "review"} #{ref.number}
+				<span className="flex items-center gap-1.5 text-fr-sm text-fr-text-2 tabular-nums">
+					<GitHubPullRequestIcon size={13} className={glyphInk} />
+					<span>#{ref.number}</span>
 				</span>
-				<span className="min-w-0 flex-1 truncate text-fr-sm text-fr-text">{head?.title ?? ""}</span>
-				{checksGlyph(head?.checksState)}
-				<DiffStat additions={head?.additions} deletions={head?.deletions} />
+				<span className="flex-1" />
 				<Button size="icon" variant="ghost" aria-label="Open on the host" onClick={() => act("openReview", { ref, url: head?.url ?? link?.url ?? "" })}>
 					<Icon name="external" size={13} />
 				</Button>
+				{head?.state === "open" ? (
+					// Closes the REVIEW, not the panel: the danger treatment DESIGN
+					// reserves for an action the user cannot take back lightly.
+					<Button
+						size="sm"
+						variant="ghost"
+						className="hover:border-fr-del hover:text-fr-del"
+						onClick={() =>
+							setPending({
+								title: `Close #${ref.number} without merging?`,
+								description: `The review closes on ${ref.host}. Its branch stays; you can reopen it from here.`,
+								confirmLabel: "Close review",
+								intent: "danger",
+								input: { ref, action: "close" },
+							})
+						}
+					>
+						Close
+					</Button>
+				) : null}
+				{canMerge && !canStackMerge ? (
+					<Button
+						size="sm"
+						title={`Merge (${detail.value?.allowedMergeMethods[0] ?? "merge"})`}
+						onClick={() =>
+							setPending({
+								title: `Merge #${ref.number}?`,
+								description: `${head?.headBranch ?? "This branch"} lands on ${head?.baseBranch ?? "its base"} via ${detail.value?.allowedMergeMethods[0] ?? "merge"} on ${ref.host}. This cannot be undone from here.`,
+								confirmLabel: "Merge",
+								intent: "default",
+								input: { ref, action: "merge", mergeMethod: detail.value?.allowedMergeMethods[0] },
+							})
+						}
+					>
+						Merge
+					</Button>
+				) : head?.state === "open" && !head.isDraft && mergeBlocker ? (
+					// The reason is the amber status line one row below (a disabled
+					// button cannot show a tooltip); the header stays one width.
+					<Button
+						size="sm"
+						variant="outline"
+						disabled
+						className="cursor-not-allowed border-transparent bg-fr-accent-dim text-fr-text-2 disabled:opacity-100"
+						aria-describedby="pr-viewer-merge-blocker"
+					>
+						Merge
+					</Button>
+				) : head?.state === "open" && head.isDraft && head.capabilities.draft ? (
+					<Button size="sm" variant="outline" onClick={() => act("reviewAction", { ref, action: "ready" })}>
+						Ready for review
+					</Button>
+				) : head?.state === "closed" ? (
+					<Button size="sm" variant="outline" onClick={() => act("reviewAction", { ref, action: "reopen" })}>
+						Reopen
+					</Button>
+				) : null}
 			</header>
-			<nav className="flex gap-1 border-fr-border border-b px-2 py-1 font-secondary text-fr-xs">
-				{(["summary", "threads", "diff"] as const).map(name => (
-					<button key={name} type="button" onClick={() => setTab(name)} className={cn("rounded-sm px-2 py-0.5 capitalize", tab === name ? "bg-fr-surface-2 text-fr-text" : "text-fr-text-3 hover:text-fr-text")}>
+			<nav className="flex gap-0.5 border-fr-border border-b px-3 py-1.5 text-fr-sm">
+				{(["summary", "threads", "diff"] as const).map((name, index) => (
+					<button
+						key={name}
+						type="button"
+						onClick={() => setTab(name)}
+						className={cn("rounded-sm px-2 py-0.5 capitalize transition-colors", index === 0 && "-ml-2", tab === name ? "bg-fr-accent-dim text-fr-text" : "text-fr-text-2 hover:bg-fr-surface hover:text-fr-text")}
+					>
 						{name}
 					</button>
 				))}
 			</nav>
-			<div className="min-h-0 flex-1 overflow-y-auto p-2">
-				{detail.error ? <p className="text-fr-del text-fr-sm">{detail.error}</p> : null}
+			<div className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden">
+				{detail.error ? <p className="p-3 text-fr-del text-fr-sm">{detail.error}</p> : null}
 				{tab === "summary" ? (
-					<div className="flex flex-col gap-3">
+					<div className="flex flex-col gap-4 p-3">
+						<div className="flex flex-col gap-1">
+							<h1 className="font-primary text-fr-xl font-semibold leading-tight tracking-[-0.01em] text-fr-text">{head?.title ?? `#${ref.number}`}</h1>
+							<span className="flex flex-wrap items-center gap-1.5 text-fr-xs text-fr-text-2">
+								{head?.author ? (
+									<span className="flex items-center gap-1.5">
+										<span aria-hidden="true" className="inline-flex size-4 items-center justify-center rounded-full bg-fr-surface-3 text-fr-2xs uppercase text-fr-text">
+											{head.author.login.slice(0, 1)}
+										</span>
+										<span className="text-fr-text">{head.author.login}</span>
+									</span>
+								) : null}
+								{head?.updatedAt ? <Dot /> : null}
+								{head?.updatedAt ? <span>{relativeTime(head.updatedAt)}</span> : null}
+								<Dot />
+								<span>{statusLabel}</span>
+							</span>
+							{conflicting ? (
+								// Its own row: the one sentence that explains the blocked Merge
+								// never strands a separator or wraps out of sight.
+								<span id="pr-viewer-merge-blocker" className="mt-1 flex items-center gap-1 self-start rounded-sm border-l-2 border-fr-warn bg-fr-surface px-2 py-1 text-fr-xs text-fr-warn">
+									<Icon name="warnTri" size={11} aria-hidden="true" /> Conflicts with {head?.baseBranch}
+								</span>
+							) : null}
+						</div>
+						<div className="flex flex-col gap-1.5 text-fr-sm">
+							<MetaRow icon="branch" label="Branch" column={labeledRows > 1}>
+								<span className="flex min-w-0 flex-1 items-center gap-1.5 text-fr-sm">
+									<span className="truncate text-fr-text">{head?.headBranch ?? "—"}</span>
+									<span className="text-fr-text-3">›</span>
+									<span className="shrink-0 text-fr-text-2">{head?.baseBranch ?? "—"}</span>
+									<DiffStat className="ml-auto" additions={head?.additions} deletions={head?.deletions} />
+								</span>
+							</MetaRow>
+							{reviewers.length > 0 ? (
+								<MetaRow icon="user" label="Reviewers" column={labeledRows > 1}>
+									<span className="truncate text-fr-text-2">{reviewers.join(", ")}</span>
+								</MetaRow>
+							) : null}
+							{openThreads ? (
+								<MetaRow icon="chat" label="Threads" column={labeledRows > 1}>
+									<span className="text-fr-text-2">{openThreads} open</span>
+								</MetaRow>
+							) : null}
+							{head?.checksState ? (
+								<MetaRow icon="check" label="Checks" column={labeledRows > 1}>
+									<span className="flex items-center gap-1.5 text-fr-text-2">
+										<StateGlyph
+											tone={checksTone}
+											icon={<Icon name={head.checksState === "failing" ? "x" : head.checksState === "pending" ? "clock" : "check"} size={11} />}
+											label=""
+										/>
+										<span>{checksLabel}</span>
+									</span>
+								</MetaRow>
+							) : null}
+							{/* The facets that are EMPTY, on one legible line — three dim rows
+							    of "None" were a dead band under the branch. */}
+							{emptyFacets.length > 0 ? (
+								<span className="text-fr-xs text-fr-text-2">{emptyFacets.join(" · ")}</span>
+							) : null}
+							{detail.value && detail.value.labels.length > 0 ? (
+								<MetaRow icon="pin" label="Labels" column={labeledRows > 1}>
+									<span className="flex flex-wrap gap-1">
+										{detail.value.labels.map(label => (
+											<span key={label.name} className="rounded-full border border-fr-border px-2 text-fr-2xs text-fr-text-2">
+												{label.name}
+											</span>
+										))}
+									</span>
+								</MetaRow>
+							) : null}
+						</div>
 						{stack ? (
-							<section className="flex flex-col gap-1 rounded-md border border-fr-border p-2">
-								<span className="font-secondary text-fr-2xs text-fr-text-3">Stack · {stack.layers.length} layers on {stack.base}</span>
+							<section className="flex flex-col gap-1 rounded-md border border-fr-border bg-fr-surface p-2">
+								<span className="text-fr-sm font-semibold text-fr-text">Stack · {stack.layers.length} layers on {stack.base}</span>
 								{[...stack.layers].reverse().map(layer => (
 									<span key={layer.number} className={cn("flex items-center gap-2 text-fr-xs", layer.number === ref.number ? "text-fr-text" : "text-fr-text-2")}>
 										<LayerGlyph state={layer.state} isDraft={layer.isDraft ?? false} />
@@ -348,83 +600,73 @@ function DetailView({
 										<span className="min-w-0 flex-1 truncate">{layer.title ?? layer.headBranch}</span>
 									</span>
 								))}
-								<span className="flex gap-1 pt-1">
-									{canStackMerge ? (
-										<Button size="sm" variant="outline" onClick={() => act("reviewAction", { ref, action: "merge", stackNumber: stack.number, expectedStackHeads: stackLayersBelow.map(layer => ({ number: layer.number, headSha: layer.headSha })) })}>
-											Merge stack ({stackLayersBelow.length})
-										</Button>
-									) : null}
-									{canStackRebase ? (
-										<Button size="sm" variant="outline" onClick={() => act("reviewAction", { ref, action: "update-branch", stackNumber: stack.number, expectedStackHeads: stackHeads })}>
-											Rebase stack
-										</Button>
-									) : null}
-								</span>
+								{canStackMerge || canStackRebase ? (
+									<span className="flex gap-1 pt-1">
+										{canStackMerge ? (
+											<Button
+												size="sm"
+												onClick={() =>
+													setPending({
+														title: `Merge the stack under #${ref.number}?`,
+														description: `${stackLayersBelow.length} reviews land on ${ref.host} in order, bottom first. This cannot be undone from here.`,
+														confirmLabel: `Merge ${stackLayersBelow.length}`,
+														intent: "default",
+														input: { ref, action: "merge", stackNumber: stack.number, expectedStackHeads: stackLayersBelow.map(layer => ({ number: layer.number, headSha: layer.headSha })) },
+													})
+												}
+											>
+												Merge stack ({stackLayersBelow.length})
+											</Button>
+										) : null}
+										{canStackRebase ? (
+											<Button size="sm" variant="outline" onClick={() => act("reviewAction", { ref, action: "update-branch", stackNumber: stack.number, expectedStackHeads: stackHeads })}>
+												Rebase stack
+											</Button>
+										) : null}
+									</span>
+								) : null}
 							</section>
 						) : null}
 						{detail.value ? (
-							<>
-								{detail.value.labels.length > 0 ? (
-									<div className="flex flex-wrap gap-1">
-										{detail.value.labels.map(label => (
-											<span key={label.name} className="rounded-full border border-fr-border px-2 font-secondary text-fr-2xs text-fr-text-2">
-												{label.name}
-											</span>
-										))}
-									</div>
-								) : null}
-								{detail.value.reviewers.length > 0 ? (
-									<span className="font-secondary text-fr-2xs text-fr-text-3">Reviewers · {detail.value.reviewers.map(r => r.login).join(", ")}</span>
-								) : null}
+							<section className="flex flex-col gap-2">
+								<span aria-hidden="true" className="border-fr-border-soft border-t" />
+								{detail.value.body.trim() ? (
+									<StreamingMarkdown text={detail.value.body} className="text-fr-sm text-fr-text" />
+								) : (
+									<span className="text-fr-sm text-fr-text-3">No description.</span>
+								)}
 								{detail.value.checks.length > 0 ? (
-									<ul className="flex flex-col gap-0.5 font-secondary text-fr-xs">
+									<ul className="mt-2 flex flex-col gap-0.5 rounded-md border border-fr-border bg-fr-surface p-2 text-fr-xs">
 										{detail.value.checks.map(check => (
 											<li key={check.name} className="flex items-center gap-2">
-												<span className={cn("tabular-nums", check.status === "success" ? "text-fr-add" : check.status === "failure" ? "text-fr-del" : "text-fr-text-3")}>{check.status}</span>
-												<span className="min-w-0 truncate">{check.name}</span>
+												<span className={cn("w-14 shrink-0 tabular-nums", check.status === "success" ? "text-fr-add" : check.status === "failure" ? "text-fr-del" : "text-fr-text-3")}>{check.status}</span>
+												<span className="min-w-0 truncate text-fr-text-2">{check.name}</span>
 											</li>
 										))}
 									</ul>
 								) : null}
-								<pre className="whitespace-pre-wrap font-primary text-fr-sm text-fr-text-2">{detail.value.body}</pre>
-								<span className="flex flex-wrap gap-1">
-									{canMerge && !canStackMerge ? (
-										<Button size="sm" onClick={() => act("reviewAction", { ref, action: "merge", mergeMethod: detail.value?.allowedMergeMethods[0] })}>
-											Merge
-										</Button>
-									) : null}
-									{head?.state === "open" && head.isDraft && head.capabilities.draft ? (
-										<Button size="sm" variant="outline" onClick={() => act("reviewAction", { ref, action: "ready" })}>
-											Ready for review
-										</Button>
-									) : null}
-									{head?.state === "open" ? (
-										<Button size="sm" variant="ghost" onClick={() => act("reviewAction", { ref, action: "close" })}>
-											Close
-										</Button>
-									) : null}
-									{head?.state === "closed" ? (
-										<Button size="sm" variant="ghost" onClick={() => act("reviewAction", { ref, action: "reopen" })}>
-											Reopen
-										</Button>
-									) : null}
-								</span>
-							</>
+							</section>
 						) : detail.loading ? (
-							<span className="font-secondary text-fr-xs text-fr-text-3">Loading…</span>
+							<span className="text-fr-xs text-fr-text-3">Loading…</span>
 						) : null}
 					</div>
 				) : null}
 				{tab === "threads" ? (
-					<div className="flex flex-col gap-2">
-						{threads.loading ? <span className="font-secondary text-fr-xs text-fr-text-3">Loading…</span> : null}
+					<div className="flex flex-col gap-2 p-3">
+						{threads.loading ? <span className="text-fr-xs text-fr-text-3">Loading…</span> : null}
 						{threads.error ? <p className="text-fr-del text-fr-sm">{threads.error}</p> : null}
+						{threads.value && threads.value.length > 0 ? (
+							<span className="text-fr-2xs text-fr-text-3">
+								{threads.value.filter(thread => !thread.isResolved).length} open · {threads.value.filter(thread => thread.isResolved).length} resolved
+							</span>
+						) : null}
 						{(threads.value ?? []).map(thread => (
 							<div key={thread.id} className="flex flex-col gap-1">
-								<span className="font-secondary text-fr-2xs text-fr-text-3">
-									{thread.path ? `${thread.path}${thread.line ? `:${thread.line}` : ""}` : "no longer on a line"}
-									{thread.isResolved ? " · resolved" : ""}
-									{thread.isOutdated ? " · outdated" : ""}
+								<span className="flex items-center gap-1.5 text-fr-2xs text-fr-text-3">
+									<Icon name="file" size={11} aria-hidden="true" />
+									<span className="min-w-0 truncate text-fr-text-2">{thread.path ? `${thread.path}${thread.line ? `:${thread.line}` : ""}` : "no longer on a line"}</span>
+									{thread.isResolved ? <span className="rounded-[3px] border border-fr-border px-1 text-fr-text-3">resolved</span> : null}
+									{thread.isOutdated ? <span className="rounded-[3px] border border-fr-border px-1 text-fr-text-3">outdated</span> : null}
 								</span>
 								<ThreadCard
 									comments={thread.comments.map(comment => ({ id: comment.id, author: comment.author, body: comment.body, at: relativeTime(comment.createdAt) }))}
@@ -433,26 +675,59 @@ function DetailView({
 								/>
 							</div>
 						))}
-						{threads.value && threads.value.length === 0 ? <span className="font-secondary text-fr-xs text-fr-text-3">No review conversations.</span> : null}
+						{threads.value && threads.value.length === 0 ? <span className="text-fr-xs text-fr-text-3">No review conversations.</span> : null}
 					</div>
 				) : null}
 				{tab === "diff" ? (
-					<div className="flex flex-col gap-2">
-						{diff.loading ? <span className="font-secondary text-fr-xs text-fr-text-3">Loading…</span> : null}
+					<div className="flex flex-col gap-2 p-3">
+						{diff.loading ? <span className="text-fr-xs text-fr-text-3">Loading…</span> : null}
 						{diff.error ? <p className="text-fr-del text-fr-sm">{diff.error}</p> : null}
+						{diff.value && diff.value.files.length > 0 ? (
+							<span className="flex items-center gap-2 text-fr-2xs text-fr-text-3">
+								<span>
+									{diff.value.files.length} file{diff.value.files.length === 1 ? "" : "s"} changed
+								</span>
+								<DiffStat
+									additions={diff.value.files.reduce((sum, file) => sum + file.additions, 0)}
+									deletions={diff.value.files.reduce((sum, file) => sum + file.deletions, 0)}
+								/>
+							</span>
+						) : null}
 						{(diff.value?.files ?? []).map(file => (
-							<details key={file.path} className="rounded-md border border-fr-border">
-								<summary className="flex cursor-pointer items-center gap-2 px-2 py-1 font-secondary text-fr-xs">
-									<span className="min-w-0 flex-1 truncate font-mono">{file.path}</span>
+							<details key={file.path} className="group rounded-md border border-fr-border bg-fr-surface" open={diff.value !== null && diff.value.files.length <= 3}>
+								<summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-1.5 text-fr-xs hover:bg-fr-surface-2">
+									<Icon name="file" size={12} aria-hidden="true" />
+									<span className="min-w-0 flex-1 truncate text-fr-text">{file.path}</span>
 									<DiffStat additions={file.additions} deletions={file.deletions} />
 								</summary>
-								{file.patch ? <pre className="overflow-x-auto px-2 py-1 font-mono text-fr-2xs text-fr-text-2">{file.patch}</pre> : <span className="px-2 py-1 font-secondary text-fr-2xs text-fr-text-3">Hunks withheld by the host.</span>}
+								{file.patch ? (
+									<div className="border-fr-border-soft border-t">
+										<StreamingMarkdown text={`\`\`\`diff\n${file.patch}\n\`\`\``} className="text-fr-2xs" />
+									</div>
+								) : (
+									<span className="block border-fr-border-soft border-t px-3 py-1.5 text-fr-2xs text-fr-text-2">Hunks withheld by the host.</span>
+								)}
 							</details>
 						))}
-						{diff.value?.truncated ? <span className="font-secondary text-fr-2xs text-fr-text-3">More files than the host returned — open on the host for the rest.</span> : null}
+						{diff.value && diff.value.files.length === 0 ? <span className="text-fr-xs text-fr-text-3">No file changes.</span> : null}
+						{diff.value?.truncated ? <span className="text-fr-2xs text-fr-text-3">More files than the host returned — open on the host for the rest.</span> : null}
 					</div>
 				) : null}
 			</div>
+			{pending ? (
+				<ConfirmDialog
+					title={pending.title}
+					description={pending.description}
+					confirmLabel={pending.confirmLabel}
+					intent={pending.intent}
+					icon={pending.intent === "danger" ? "x" : "git-pr"}
+					onConfirm={() => {
+						act("reviewAction", pending.input);
+						setPending(null);
+					}}
+					onClose={() => setPending(null)}
+				/>
+			) : null}
 		</div>
 	);
 }
@@ -498,7 +773,7 @@ export function PrViewer({ sessionId, workspace, workspaceDriver, store }: PrVie
 	}, [links, checkout]);
 
 	if (!store) {
-		return <p className="p-3 font-secondary text-fr-sm text-fr-text-3">No store on this mount — the viewer needs the host's facts.</p>;
+		return <p className="p-3 text-fr-sm text-fr-text-3">No store on this mount — the viewer needs the host's facts.</p>;
 	}
 	const selectedLink = selected ? links.find(link => refKey(link.ref) === refKey(selected)) : undefined;
 	// A link's own snapshot first (the sync stamps one on stack/pushed links);
@@ -507,6 +782,17 @@ export function PrViewer({ sessionId, workspace, workspaceDriver, store }: PrVie
 	// beside a fully-titled sibling in "Also in this checkout" (live 2026-09-17).
 	const summaryFor = (link: SessionReviewLink): ReviewSummary | null =>
 		link.snapshot ?? checkout?.find(row => refKey(row.ref) === refKey(link.ref)) ?? null;
+	// The base every listed review targets, when they all agree — the list is
+	// its own proof of the checkout's trunk, so "→ main" on every row says nothing.
+	const sharedBase = useMemo(() => {
+		const bases = new Set<string>();
+		for (const line of lines) {
+			const base = summaryFor(line.link)?.baseBranch;
+			if (base) bases.add(base);
+		}
+		for (const row of others) bases.add(row.baseBranch);
+		return bases.size === 1 ? [...bases][0]! : null;
+	}, [lines, others, summaryFor]);
 	const selectedSummary = selected ? (selectedLink ? summaryFor(selectedLink) : (checkout?.find(row => refKey(row.ref) === refKey(selected)) ?? null)) : null;
 
 	if (selected && workspace && workspaceDriver) {
@@ -526,7 +812,7 @@ export function PrViewer({ sessionId, workspace, workspaceDriver, store }: PrVie
 	// A link needs a session to land on (doc 73 §4): on the start surface there
 	// is none yet, so the link/unlink rows are absent rather than offered and
 	// then dropped by the fence. Measured live 2026-09-17.
-	const rowMenu = (ref: ReviewRef, url: string, link: SessionReviewLink | undefined) => (
+	const rowMenu = (ref: ReviewRef, url: string, link: SessionReviewLink | undefined, summary?: ReviewSummary | null) => (
 		<RowMenu
 			actions={[
 				{ label: "Open on the host", onClick: () => act("openReview", { ref, url }) },
@@ -535,7 +821,7 @@ export function PrViewer({ sessionId, workspace, workspaceDriver, store }: PrVie
 					? [
 							link
 								? { label: link.source === "stack" ? "Dismiss from session" : "Unlink from session", onClick: () => act("unlinkReview", { ref }) }
-								: { label: "Link to this session", onClick: () => act("linkReview", { ref, url }) },
+								: { label: "Link to this session", onClick: () => act("linkReview", { ref, url, ...(summary ? { snapshot: summary } : {}) }) },
 						]
 					: []),
 			]}
@@ -543,21 +829,22 @@ export function PrViewer({ sessionId, workspace, workspaceDriver, store }: PrVie
 	);
 
 	return (
-		<div className="flex min-h-0 flex-1 flex-col">
+		<div className="flex min-h-0 min-w-0 flex-1 flex-col">
 			{linking ? (
 				<LinkDialog
 					own={own}
 					onClose={() => setLinking(false)}
 					onSubmit={(ref, url) => {
-						act("linkReview", { ref, url });
+						const known = checkout?.find(row => refKey(row.ref) === refKey(ref));
+						act("linkReview", { ref, url, ...(known ? { snapshot: known } : {}) });
 						setLinking(false);
 					}}
 				/>
 			) : null}
-			<div className="min-h-0 flex-1 overflow-y-auto py-1">
+			<div className="min-h-0 flex-1 overflow-y-auto px-1 py-1">
 				{lines.length === 0 ? (
 					<div className="flex flex-col items-start gap-2 p-3">
-						<span className="font-secondary text-fr-sm text-fr-text-3">
+						<span className="text-fr-sm text-fr-text-3">
 							{sessionId ? "No reviews linked to this session yet." : "Start a session to link reviews to it."}
 						</span>
 						{sessionId ? (
@@ -567,28 +854,32 @@ export function PrViewer({ sessionId, workspace, workspaceDriver, store }: PrVie
 						) : null}
 					</div>
 				) : (
-					lines.map(line => (
+					<>
+						{others.length > 0 ? <div className="px-2 pt-1 pb-1 text-fr-xs font-semibold text-fr-text-2">Linked to this session</div> : null}
+						{lines.map(line => (
 						<ReviewRow
 							key={refKey(line.link.ref)}
 							summary={summaryFor(line.link)}
 							link={line.link}
 							depth={line.depth}
 							stack={line.stack}
+							sharedBase={sharedBase}
 							onSelect={() => setSelected(line.link.ref)}
 							menu={rowMenu(line.link.ref, line.link.url, line.link)}
 						/>
-					))
+					))}
+					</>
 				)}
 				{others.length > 0 ? (
 					<>
-						<div className="px-2 pt-2 pb-1 font-secondary text-fr-2xs text-fr-text-3 uppercase">Also in this checkout</div>
+						<div className="px-2 pt-3 pb-1 text-fr-xs font-semibold text-fr-text-2">Also in this checkout</div>
 						{others.map(row => (
-							<ReviewRow key={refKey(row.ref)} summary={row} depth={0} stack={null} onSelect={() => setSelected(row.ref)} menu={rowMenu(row.ref, row.url, undefined)} />
+							<ReviewRow key={refKey(row.ref)} summary={row} depth={0} stack={null} sharedBase={sharedBase} onSelect={() => setSelected(row.ref)} menu={rowMenu(row.ref, row.url, undefined, row)} />
 						))}
 					</>
 				) : null}
 			</div>
-			<footer className="flex items-center justify-between border-fr-border border-t px-2 py-1 font-secondary text-fr-2xs text-fr-text-3">
+			<footer className="flex items-center justify-between border-fr-border border-t px-2 py-1 text-fr-2xs text-fr-text-2">
 				<span>{footerLine(links)}</span>
 				{sessionId ? (
 					<Button size="sm" variant="ghost" onClick={() => setLinking(true)}>
