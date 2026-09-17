@@ -498,7 +498,13 @@ export function PrViewer({ sessionId, workspace, workspaceDriver, store }: PrVie
 		return <p className="p-3 font-secondary text-fr-sm text-fr-text-3">No store on this mount — the viewer needs the host's facts.</p>;
 	}
 	const selectedLink = selected ? links.find(link => refKey(link.ref) === refKey(selected)) : undefined;
-	const selectedSummary = selected ? (selectedLink?.snapshot ?? checkout?.find(row => refKey(row.ref) === refKey(selected)) ?? null) : null;
+	// A link's own snapshot first (the sync stamps one on stack/pushed links);
+	// otherwise the checkout sweep's row for the same ref — a MANUAL link
+	// carries no snapshot, and without this it drew as a bare number + URL
+	// beside a fully-titled sibling in "Also in this checkout" (live 2026-09-17).
+	const summaryFor = (link: SessionReviewLink): ReviewSummary | null =>
+		link.snapshot ?? checkout?.find(row => refKey(row.ref) === refKey(link.ref)) ?? null;
+	const selectedSummary = selected ? (selectedLink ? summaryFor(selectedLink) : (checkout?.find(row => refKey(row.ref) === refKey(selected)) ?? null)) : null;
 
 	if (selected && workspace && workspaceDriver) {
 		return (
@@ -561,7 +567,7 @@ export function PrViewer({ sessionId, workspace, workspaceDriver, store }: PrVie
 					lines.map(line => (
 						<ReviewRow
 							key={refKey(line.link.ref)}
-							summary={line.link.snapshot}
+							summary={summaryFor(line.link)}
 							link={line.link}
 							depth={line.depth}
 							stack={line.stack}

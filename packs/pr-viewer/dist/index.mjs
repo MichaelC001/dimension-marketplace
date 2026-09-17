@@ -682,7 +682,8 @@ function PrViewer({ sessionId, workspace, workspaceDriver, store }) {
 		children: "No store on this mount — the viewer needs the host's facts."
 	});
 	const selectedLink = selected ? links.find((link) => refKey(link.ref) === refKey(selected)) : void 0;
-	const selectedSummary = selected ? selectedLink?.snapshot ?? checkout?.find((row) => refKey(row.ref) === refKey(selected)) ?? null : null;
+	const summaryFor = (link) => link.snapshot ?? checkout?.find((row) => refKey(row.ref) === refKey(link.ref)) ?? null;
+	const selectedSummary = selected ? selectedLink ? summaryFor(selectedLink) : checkout?.find((row) => refKey(row.ref) === refKey(selected)) ?? null : null;
 	if (selected && workspace && workspaceDriver) return /* @__PURE__ */ jsx(DetailView, {
 		ref: selected,
 		summary: selectedSummary,
@@ -746,7 +747,7 @@ function PrViewer({ sessionId, workspace, workspaceDriver, store }) {
 						}), " Link a review"]
 					}) : null]
 				}) : lines.map((line) => /* @__PURE__ */ jsx(ReviewRow, {
-					summary: line.link.snapshot,
+					summary: summaryFor(line.link),
 					link: line.link,
 					depth: line.depth,
 					stack: line.stack,
