@@ -13,7 +13,7 @@
 	"dimension": {
 		"name": "mochi-mark",
 		"description": "A mark component drawn in a declared slot of a plugin layout — the import-surface FLOOR: react only, zero @fraym/ui.",
-		"defaultEnabled": true,
+		"defaultEnabled": false,
 		"category": "component",
 		"keywords": [
 			"component",
