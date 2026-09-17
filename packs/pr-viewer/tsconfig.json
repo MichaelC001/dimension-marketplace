@@ -1,0 +1,18 @@
+{
+	"extends": "../../../fraym/tsconfig.base.json",
+	"compilerOptions": {
+		"jsx": "react-jsx",
+		"lib": ["ES2024", "DOM", "DOM.Iterable"],
+		"paths": {
+			"react": ["../../../node_modules/@types/react/index.d.ts"],
+			"react/jsx-runtime": ["../../../node_modules/@types/react/jsx-runtime.d.ts"],
+			"react/jsx-dev-runtime": ["../../../node_modules/@types/react/jsx-dev-runtime.d.ts"],
+			"react-dom": ["../../../node_modules/@types/react-dom/index.d.ts"]
+		}
+	},
+	// The kit's own ambient declarations for CSS / `?url` asset imports. Without
+	// them, typechecking anything that reaches into `@fraym/ui`'s SOURCE reports
+	// thousands of TS2882s from the kit rather than anything about this pack
+	// (the same noise `packages/app/tsconfig.json` carries today).
+	"include": ["src", "../../../fraym/packages/ui/src/asset-imports.d.ts", "../../../fraym/packages/ui/src/globals.d.ts"]
+}
