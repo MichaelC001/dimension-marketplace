@@ -9,8 +9,6 @@ function link(number: number, state: "open" | "merged" | null, syncedAt = "2026-
 		ref,
 		url: `https://github.com/insodimension/dimension/pull/${number}`,
 		source: "manual",
-		evidence: [],
-		linkedAt: "2026-09-14T09:00:00.000Z",
 		stack: null,
 		snapshot:
 			state === null

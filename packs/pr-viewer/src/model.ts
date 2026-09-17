@@ -43,6 +43,10 @@ export interface ReviewSummary {
 		readonly merge: boolean;
 		readonly draft: boolean;
 		readonly stackActions: boolean;
+		/** Line threads are readable at all (`getReviewThreads`). */
+		readonly reviewThreads?: boolean;
+		/** The file diff is readable at all (`getReviewDiff`). */
+		readonly diff?: boolean;
 		/** Reply / resolve inside a line thread. */
 		readonly threadReplies?: boolean;
 		/** A whole-review verdict. */
