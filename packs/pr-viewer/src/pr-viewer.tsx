@@ -19,9 +19,11 @@
 // resolvers, granted, so the rail, the card and this list agree on what a
 // stack is. This file only decides how a line looks.
 
-import { GitHubPullRequestIcon } from "./github-pr-icon";
 import {
 	Button,
+	GitHubPullRequestIcon,
+	REVIEW_PILL_LABEL,
+	reviewPillState,
 	StreamingMarkdown,
 	ChainRow,
 	cn,
@@ -98,11 +100,10 @@ function stateGlyph(summary: Pick<ReviewSummary, "state" | "isDraft" | "mergeabi
 	readonly label: string;
 } {
 	if (summary === null) return { tone: "muted", icon: "branch", label: "Not synced yet" };
-	if (summary.state === "merged") return { tone: "accent", icon: "check", label: "Merged" };
-	if (summary.state === "closed") return { tone: "negative", icon: "x", label: "Closed" };
-	if (summary.isDraft) return { tone: "muted", icon: "edit", label: "Draft" };
-	if (summary.mergeability === "conflicting") return { tone: "warning", icon: "warnTri", label: "Conflicts" };
-	return { tone: "positive", icon: "branch", label: "Open" };
+	const state = reviewPillState(summary);
+	const tone: Tone =
+		state === "merged" ? "accent" : state === "closed" ? "negative" : state === "draft" ? "muted" : state === "conflicting" ? "warning" : "positive";
+	return { tone, icon: "branch", label: REVIEW_PILL_LABEL[state] };
 }
 
 function checksGlyph(state: ReviewSummary["checksState"]): ReactNode {
@@ -128,17 +129,20 @@ function sourceLabel(source: SessionReviewLink["source"]): string {
 // The list
 // ---------------------------------------------------------------------------
 
-/** Glyph + number column; the meta line indents to it. */
-const ROW_GUTTER = "3.5rem";
 /** Right-aligned relative time, so every row's diff stat shares one right edge. */
-const TIME_COLUMN = "3.5rem";
+const TIME_COLUMN = "2.5rem";
 
+/** A list row is STACKED (owner ruling 2026-09-17): the review's number line
+ *  on top — state octicon, `#N`, then time and check/decision badges at the
+ *  right edge — the title full-width beneath it, and the branch + diff stat
+ *  under that. Every line starts on the same left edge. */
 function ReviewRow({
 	summary,
 	link,
 	depth,
 	stack,
 	sharedBase,
+	sharedOwner,
 	onSelect,
 	menu,
 }: {
@@ -148,6 +152,8 @@ function ReviewRow({
 	/** The base branch every listed review targets — omitted from the row,
 	 *  since the list itself proves it is this checkout's trunk. */
 	readonly sharedBase: string | null;
+	/** Likewise the author every listed review shares — named once, in the footer. */
+	readonly sharedOwner: string | null;
 	readonly stack: { readonly kind: "native" | "derived"; readonly size: number } | null;
 	readonly onSelect: () => void;
 	readonly menu: ReactNode;
@@ -157,30 +163,32 @@ function ReviewRow({
 	return (
 		<ChainRow depth={depth} flag={glyph.tone === "warning" ? "warning" : undefined} className="group rounded-sm hover:bg-fr-surface">
 			<button type="button" onClick={onSelect} className="flex min-w-0 flex-1 flex-col gap-0.5 py-1.5 text-left">
-				<span className="flex min-w-0 items-start gap-1.5">
-					{/* A fixed gutter for glyph + number, so the meta line below can
-					    indent to the same title column — inline width is this pack's
-					    device for a column (see MetaRow); it ships no CSS. */}
-					<span className="flex shrink-0 items-start gap-1.5" style={{ width: ROW_GUTTER }}>
-						<StateGlyph tone={glyph.tone} icon={<GitHubPullRequestIcon size={13} />} label={glyph.label} className="mt-0.5" />
-						<span className="min-w-0 flex-1 text-right text-fr-md text-fr-text-2 tabular-nums" title={link ? sourceLabel(link.source) : undefined}>
-							#{ref?.number}
-						</span>
+				<span className="flex min-w-0 items-center gap-1.5 text-fr-xs text-fr-text-2">
+					<StateGlyph tone={glyph.tone} icon={<GitHubPullRequestIcon state={summary ? reviewPillState(summary) : "open"} size={13} />} label={glyph.label} />
+					<span className="tabular-nums" title={link ? sourceLabel(link.source) : undefined}>
+						#{ref?.number}
 					</span>
-					<span className="line-clamp-2 min-w-0 flex-1 whitespace-normal break-words text-fr-md font-medium text-fr-text">{summary?.title ?? link?.url ?? ""}</span>
+					<span className="text-fr-text-3">·</span>
+					<span>{glyph.label}</span>
 					{summary?.reviewDecision === "changes-requested" ? (
-						<span className="shrink-0 text-fr-2xs text-fr-warn">changes requested</span>
+						<span className="shrink-0 text-fr-warn">· changes requested</span>
 					) : null}
 					{checksGlyph(summary?.checksState)}
+					{summary ? (
+						<span className="ml-auto shrink-0 text-right tabular-nums" style={{ width: TIME_COLUMN }}>
+							{relativeTime(summary.updatedAt)}
+						</span>
+					) : null}
 				</span>
-				<span className="flex min-w-0 items-center gap-2 text-fr-2xs text-fr-text-2" style={{ paddingLeft: ROW_GUTTER }}>
+				<span className="line-clamp-2 min-w-0 whitespace-normal break-words text-fr-md font-medium text-fr-text">{summary?.title ?? link?.url ?? ""}</span>
+				<span className="flex min-w-0 items-center gap-2 text-fr-xs text-fr-text-2">
 					{stack ? (
 						<span className="inline-flex items-center gap-0.5" title={stack.kind === "native" ? `Host stack of ${stack.size}: merging a layer lands the ones below it` : `${stack.size} reviews chained by base branch`}>
 							<Icon name={stack.kind === "native" ? "layers" : "branch"} size={11} />
 							{stack.size}
 						</span>
 					) : null}
-					{summary?.author ? <span className="truncate">{summary.author.login}</span> : null}
+					{summary?.author && summary.author.login !== sharedOwner ? <span className="truncate">{summary.author.login}</span> : null}
 					<span className="truncate">
 						{summary
 							? summary.baseBranch === sharedBase
@@ -191,11 +199,6 @@ function ReviewRow({
 								: ""}
 					</span>
 					<DiffStat className="ml-auto text-fr-2xs" additions={summary?.additions} deletions={summary?.deletions} />
-					{summary ? (
-						<span className="shrink-0 text-right tabular-nums" style={{ width: TIME_COLUMN }}>
-							{relativeTime(summary.updatedAt)}
-						</span>
-					) : null}
 				</span>
 			</button>
 			<span className="opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">{menu}</span>
@@ -793,6 +796,15 @@ export function PrViewer({ sessionId, workspace, workspaceDriver, store }: PrVie
 		for (const row of others) bases.add(row.baseBranch);
 		return bases.size === 1 ? [...bases][0]! : null;
 	}, [lines, others, summaryFor]);
+	const sharedOwner = useMemo(() => {
+		const owners = new Set<string>();
+		for (const line of lines) {
+			const owner = summaryFor(line.link)?.author?.login;
+			if (owner) owners.add(owner);
+		}
+		for (const row of others) if (row.author) owners.add(row.author.login);
+		return owners.size === 1 ? [...owners][0]! : null;
+	}, [lines, others, summaryFor]);
 	const selectedSummary = selected ? (selectedLink ? summaryFor(selectedLink) : (checkout?.find(row => refKey(row.ref) === refKey(selected)) ?? null)) : null;
 
 	if (selected && workspace && workspaceDriver) {
@@ -855,7 +867,7 @@ export function PrViewer({ sessionId, workspace, workspaceDriver, store }: PrVie
 					</div>
 				) : (
 					<>
-						{others.length > 0 ? <div className="px-2 pt-1 pb-1 text-fr-xs font-semibold text-fr-text-2">Linked to this session</div> : null}
+						{others.length > 0 ? <div className="px-2 pt-1 pb-1 text-fr-sm font-semibold text-fr-text">Linked to this session</div> : null}
 						{lines.map(line => (
 						<ReviewRow
 							key={refKey(line.link.ref)}
@@ -864,6 +876,7 @@ export function PrViewer({ sessionId, workspace, workspaceDriver, store }: PrVie
 							depth={line.depth}
 							stack={line.stack}
 							sharedBase={sharedBase}
+							sharedOwner={sharedOwner}
 							onSelect={() => setSelected(line.link.ref)}
 							menu={rowMenu(line.link.ref, line.link.url, line.link)}
 						/>
@@ -872,15 +885,18 @@ export function PrViewer({ sessionId, workspace, workspaceDriver, store }: PrVie
 				)}
 				{others.length > 0 ? (
 					<>
-						<div className="px-2 pt-3 pb-1 text-fr-xs font-semibold text-fr-text-2">Also in this checkout</div>
+						<div className="px-2 pt-3 pb-1 text-fr-sm font-semibold text-fr-text">Also in this checkout</div>
 						{others.map(row => (
-							<ReviewRow key={refKey(row.ref)} summary={row} depth={0} stack={null} sharedBase={sharedBase} onSelect={() => setSelected(row.ref)} menu={rowMenu(row.ref, row.url, undefined, row)} />
+							<ReviewRow key={refKey(row.ref)} summary={row} depth={0} stack={null} sharedBase={sharedBase} sharedOwner={sharedOwner} onSelect={() => setSelected(row.ref)} menu={rowMenu(row.ref, row.url, undefined, row)} />
 						))}
 					</>
 				) : null}
 			</div>
-			<footer className="flex items-center justify-between border-fr-border border-t px-2 py-1 text-fr-2xs text-fr-text-2">
-				<span>{footerLine(links)}</span>
+			<footer className="flex items-center justify-between border-fr-border border-t px-3 py-1 text-fr-2xs text-fr-text-2">
+				<span className="truncate">
+					{footerLine(links)}
+					{sharedOwner ? ` · by ${sharedOwner}` : ""}
+				</span>
 				{sessionId ? (
 					<Button size="sm" variant="ghost" onClick={() => setLinking(true)}>
 						<Icon name="plus" size={12} /> Link

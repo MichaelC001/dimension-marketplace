@@ -66,7 +66,7 @@ describe("parseLinkInput", () => {
 describe("footerLine", () => {
 	test("counts an unsynced link as open and reports the newest sync", () => {
 		const now = Date.parse("2026-09-14T10:00:20.000Z");
-		expect(footerLine([link(1, "open"), link(2, "merged"), link(3, null)], now)).toBe("2 open · 3 linked · synced just now");
+		expect(footerLine([link(1, "open"), link(2, "merged"), link(3, null)], now)).toBe("2 open · 3 linked · synced now");
 	});
 	test("omits the sync segment when nothing has synced", () => {
 		expect(footerLine([link(3, null)])).toBe("1 open · 1 linked");
