@@ -20,6 +20,7 @@
 // stack is. This file only decides how a line looks.
 
 import {
+	Badge,
 	Button,
 	GitHubPullRequestIcon,
 	REVIEW_PILL_LABEL,
@@ -91,6 +92,7 @@ const NO_LINKS: readonly SessionReviewLink[] = [];
 const NO_ROWS: readonly ReviewSummary[] = [];
 const NONE = { getSnapshot: () => undefined, subscribe: () => () => {} };
 
+type BadgeTone = NonNullable<ComponentProps<typeof Badge>["tone"]>;
 type Tone = ComponentProps<typeof StateGlyph>["tone"];
 
 /** State → ink, ONE place: a review cannot look like two things in two rows. */
@@ -160,45 +162,63 @@ function ReviewRow({
 }) {
 	const glyph = stateGlyph(summary);
 	const ref = summary?.ref ?? link?.ref;
+	const state = summary ? reviewPillState(summary) : "open";
+	const stateTone: BadgeTone =
+		state === "merged" ? "accent" : state === "closed" ? "del" : state === "draft" ? "mute" : state === "conflicting" ? "warn" : "add";
 	return (
-		<ChainRow depth={depth} flag={glyph.tone === "warning" ? "warning" : undefined} className="group rounded-md pr-3 hover:bg-fr-surface">
-			<button type="button" onClick={onSelect} className="flex min-w-0 flex-1 flex-col gap-1 py-2.5 text-left">
-				<span className="flex min-w-0 items-center gap-1.5 text-fr-xs text-fr-text-2">
-					<StateGlyph tone={glyph.tone} icon={<GitHubPullRequestIcon state={summary ? reviewPillState(summary) : "open"} size={13} />} label={glyph.label} />
-					<span className="tabular-nums" title={link ? sourceLabel(link.source) : undefined}>
-						#{ref?.number}
-					</span>
-					<span className="text-fr-text-3">·</span>
-					<span>{glyph.label}</span>
+		<ChainRow depth={depth} className="group rounded-md pr-3 hover:bg-fr-surface">
+			<button type="button" onClick={onSelect} className="flex min-w-0 flex-1 flex-col gap-1.5 py-2.5 text-left">
+				{/* Every fact is a pill (owner ruling 2026-09-17): the review's
+				    number carries its state's ink; the rest are quiet chips. */}
+				<span className="flex min-w-0 flex-wrap items-center gap-1.5">
+					<Badge variant="soft" tone={stateTone} className="gap-1 rounded-full normal-case tabular-nums" title={link ? sourceLabel(link.source) : undefined}>
+						<GitHubPullRequestIcon state={state} size={12} />#{ref?.number}
+						<span className="opacity-80">· {glyph.label}</span>
+					</Badge>
 					{summary?.reviewDecision === "changes-requested" ? (
-						<span className="shrink-0 text-fr-warn">· changes requested</span>
+						<Badge variant="soft" tone="warn" className="rounded-full normal-case">
+							Changes requested
+						</Badge>
 					) : null}
 					{checksGlyph(summary?.checksState)}
+					{stack ? (
+						<Badge variant="code" tone="mute" className="gap-1 rounded-full" title={stack.kind === "native" ? `Host stack of ${stack.size}: merging a layer lands the ones below it` : `${stack.size} reviews chained by base branch`}>
+							<Icon name={stack.kind === "native" ? "layers" : "branch"} size={12} strokeWidth={1.6} />
+							{stack.size}
+						</Badge>
+					) : null}
 					{summary ? (
-						<span className="ml-auto shrink-0 text-right tabular-nums" style={{ width: TIME_COLUMN }}>
+						<Badge variant="code" tone="mute" className="ml-auto gap-1 rounded-full tabular-nums">
+							<Icon name="clock" size={12} strokeWidth={1.6} />
 							{relativeTime(summary.updatedAt)}
-						</span>
+						</Badge>
 					) : null}
 				</span>
 				<span className="line-clamp-2 min-w-0 whitespace-normal break-words text-fr-md font-medium text-fr-text">{summary?.title ?? link?.url ?? ""}</span>
-				<span className="flex min-w-0 items-center gap-2 text-fr-xs text-fr-text-2">
-					{stack ? (
-						<span className="inline-flex items-center gap-0.5" title={stack.kind === "native" ? `Host stack of ${stack.size}: merging a layer lands the ones below it` : `${stack.size} reviews chained by base branch`}>
-							<Icon name={stack.kind === "native" ? "layers" : "branch"} size={11} />
-							{stack.size}
-						</span>
+				<span className="flex min-w-0 items-center gap-1.5">
+					{summary?.author && summary.author.login !== sharedOwner ? (
+						<Badge variant="code" tone="mute" className="gap-1 rounded-full">
+							<Icon name="user" size={12} strokeWidth={1.6} />
+							{summary.author.login}
+						</Badge>
 					) : null}
-					{summary?.author && summary.author.login !== sharedOwner ? <span className="truncate">{summary.author.login}</span> : null}
-					<span className="truncate">
-						{summary
-							? summary.baseBranch === sharedBase
-								? summary.headBranch
-								: `${summary.headBranch} → ${summary.baseBranch}`
-							: ref
-								? `${ref.host}/${ref.repository}`
-								: ""}
-					</span>
-					<DiffStat className="ml-auto text-fr-2xs" additions={summary?.additions} deletions={summary?.deletions} />
+					<Badge variant="soft" tone="accent" className="min-w-0 max-w-full justify-start gap-1 rounded-full">
+						<Icon name="git-branch" size={12} strokeWidth={1.6} />
+						<span className="truncate">
+							{summary
+								? summary.baseBranch === sharedBase
+									? summary.headBranch
+									: `${summary.headBranch} → ${summary.baseBranch}`
+								: ref
+									? `${ref.host}/${ref.repository}`
+									: ""}
+						</span>
+					</Badge>
+					{summary && (summary.additions !== undefined || summary.deletions !== undefined) ? (
+						<Badge variant="code" tone="mute" className="ml-auto rounded-full">
+							<DiffStat className="text-fr-2xs" additions={summary.additions} deletions={summary.deletions} />
+						</Badge>
+					) : null}
 				</span>
 			</button>
 			<span className="opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">{menu}</span>
@@ -206,40 +226,7 @@ function ReviewRow({
 	);
 }
 
-/** One metadata row of the detail head — label column fixed by an inline
- *  width, because a pack ships no CSS and can rely only on utilities the host
- *  already generates (an arbitrary-value grid class did not exist, live). */
-function MetaRow({
-	icon,
-	label,
-	column = true,
-	children,
-}: {
-	readonly icon: ComponentProps<typeof Icon>["name"];
-	readonly label: string;
-	/** Align the label into the shared column; off when this is the only labeled row. */
-	readonly column?: boolean;
-	readonly children: ReactNode;
-}) {
-	return (
-		<span className="flex min-w-0 items-center gap-2">
-			<span className="flex shrink-0 items-center gap-1.5 text-fr-sm text-fr-text-2" style={column ? { width: "4.75rem" } : undefined}>
-				<Icon name={icon} size={12} /> {label}
-			</span>
-			<span className="flex min-w-0 flex-1 items-center">{children}</span>
-		</span>
-	);
-}
-
 /** The " · " between two facts on one line. */
-function Dot() {
-	return (
-		<span aria-hidden="true" className="text-fr-text-3">
-			·
-		</span>
-	);
-}
-
 function LayerGlyph({ state, isDraft }: { readonly state: ReviewState; readonly isDraft: boolean }) {
 	const glyph = stateGlyph({ state, isDraft });
 	return <StateGlyph {...glyph} icon={<GitHubPullRequestIcon size={11} />} />;
@@ -397,6 +384,18 @@ function DetailView({
 						: head?.reviewDecision === "changes-requested"
 							? "Changes requested"
 							: "Ready for review";
+	const statusTone: BadgeTone =
+		head?.state === "merged"
+			? "accent"
+			: head?.state === "closed"
+				? "del"
+				: head?.isDraft
+					? "mute"
+					: head?.reviewDecision === "approved"
+						? "add"
+						: head?.reviewDecision === "changes-requested"
+							? "warn"
+							: "add";
 	const mergeBlocker =
 		head?.state !== "open"
 			? null
@@ -419,12 +418,6 @@ function DetailView({
 		head?.checksState === "passing" ? "positive" : head?.checksState === "failing" ? "negative" : head?.checksState === "pending" ? "warning" : "neutral";
 	const reviewers = detail.value?.reviewers.map(r => r.login) ?? [];
 	const openThreads = threads.value?.filter(thread => !thread.isResolved).length;
-	const labeledRows =
-		1 +
-		(reviewers.length > 0 ? 1 : 0) +
-		(openThreads ? 1 : 0) +
-		(head?.checksState ? 1 : 0) +
-		(detail.value && detail.value.labels.length > 0 ? 1 : 0);
 	const emptyFacets = [
 		...(detail.value && reviewers.length === 0 ? ["No reviewers"] : []),
 		...(threads.value && !threads.value.some(thread => !thread.isResolved) ? ["no open threads"] : []),
@@ -523,74 +516,76 @@ function DetailView({
 					<div className="flex flex-col gap-4 p-3">
 						<div className="flex flex-col gap-1">
 							<h1 className="font-primary text-fr-xl font-semibold leading-tight tracking-[-0.01em] text-fr-text">{head?.title ?? `#${ref.number}`}</h1>
-							<span className="flex flex-wrap items-center gap-1.5 text-fr-xs text-fr-text-2">
+							{/* Every fact is a pill (owner ruling 2026-09-17), the same chips
+							    the list rows wear, so the head and the list read as one surface. */}
+							<span className="flex flex-wrap items-center gap-1.5">
 								{head?.author ? (
-									<span className="flex items-center gap-1.5">
-										<span aria-hidden="true" className="inline-flex size-4 items-center justify-center rounded-full bg-fr-surface-3 text-fr-2xs uppercase text-fr-text">
+									<Badge variant="code" tone="mute" className="gap-1 rounded-full pl-1">
+										<span aria-hidden="true" className="inline-flex size-3.5 items-center justify-center rounded-full bg-fr-surface-3 text-[9px] uppercase text-fr-text">
 											{head.author.login.slice(0, 1)}
 										</span>
-										<span className="text-fr-text">{head.author.login}</span>
-									</span>
+										{head.author.login}
+									</Badge>
 								) : null}
-								{head?.updatedAt ? <Dot /> : null}
-								{head?.updatedAt ? <span>{relativeTime(head.updatedAt)}</span> : null}
-								<Dot />
-								<span>{statusLabel}</span>
+								{head?.updatedAt ? (
+									<Badge variant="code" tone="mute" className="gap-1 rounded-full tabular-nums">
+										<Icon name="clock" size={12} strokeWidth={1.6} />
+										{relativeTime(head.updatedAt)}
+									</Badge>
+								) : null}
+								<Badge variant="soft" tone={conflicting && statusTone === "add" ? "mute" : statusTone} className="rounded-full normal-case">
+									{statusLabel}
+								</Badge>
+								{conflicting ? (
+									<Badge id="pr-viewer-merge-blocker" variant="soft" tone="warn" className="gap-1 rounded-full normal-case">
+										<Icon name="warnTri" size={12} strokeWidth={1.6} aria-hidden="true" /> Conflicts with {head?.baseBranch}
+									</Badge>
+								) : null}
 							</span>
-							{conflicting ? (
-								// Its own row: the one sentence that explains the blocked Merge
-								// never strands a separator or wraps out of sight.
-								<span id="pr-viewer-merge-blocker" className="mt-1 flex items-center gap-1 self-start rounded-sm border-l-2 border-fr-warn bg-fr-surface px-2 py-1 text-fr-xs text-fr-warn">
-									<Icon name="warnTri" size={11} aria-hidden="true" /> Conflicts with {head?.baseBranch}
-								</span>
-							) : null}
 						</div>
-						<div className="flex flex-col gap-1.5 text-fr-sm">
-							<MetaRow icon="branch" label="Branch" column={labeledRows > 1}>
-								<span className="flex min-w-0 flex-1 items-center gap-1.5 text-fr-sm">
-									<span className="truncate text-fr-text">{head?.headBranch ?? "—"}</span>
-									<span className="text-fr-text-3">›</span>
-									<span className="shrink-0 text-fr-text-2">{head?.baseBranch ?? "—"}</span>
-									<DiffStat className="ml-auto" additions={head?.additions} deletions={head?.deletions} />
-								</span>
-							</MetaRow>
-							{reviewers.length > 0 ? (
-								<MetaRow icon="user" label="Reviewers" column={labeledRows > 1}>
-									<span className="truncate text-fr-text-2">{reviewers.join(", ")}</span>
-								</MetaRow>
-							) : null}
-							{openThreads ? (
-								<MetaRow icon="chat" label="Threads" column={labeledRows > 1}>
-									<span className="text-fr-text-2">{openThreads} open</span>
-								</MetaRow>
-							) : null}
-							{head?.checksState ? (
-								<MetaRow icon="check" label="Checks" column={labeledRows > 1}>
-									<span className="flex items-center gap-1.5 text-fr-text-2">
-										<StateGlyph
-											tone={checksTone}
-											icon={<Icon name={head.checksState === "failing" ? "x" : head.checksState === "pending" ? "clock" : "check"} size={11} />}
-											label=""
-										/>
-										<span>{checksLabel}</span>
-									</span>
-								</MetaRow>
-							) : null}
+						<div className="flex flex-col gap-1.5">
+							<span className="flex min-w-0 items-center gap-1.5">
+								<Badge variant="soft" tone="accent" className="min-w-0 max-w-full justify-start gap-1 rounded-full" title={`${head?.headBranch ?? "—"} → ${head?.baseBranch ?? "—"}`}>
+									<Icon name="git-branch" size={12} strokeWidth={1.6} />
+									<span className="truncate">{head?.headBranch ?? "—"}</span>
+									<span className="opacity-70">→ {head?.baseBranch ?? "—"}</span>
+								</Badge>
+								{head && (head.additions !== undefined || head.deletions !== undefined) ? (
+									<Badge variant="code" tone="mute" className="ml-auto rounded-full">
+										<DiffStat className="text-fr-2xs" additions={head.additions} deletions={head.deletions} />
+									</Badge>
+								) : null}
+							</span>
+							<span className="flex flex-wrap items-center gap-1.5">
+								{reviewers.length > 0 ? (
+									<Badge variant="code" tone="mute" className="min-w-0 gap-1 rounded-full">
+										<Icon name="user" size={12} strokeWidth={1.6} />
+										<span className="truncate">{reviewers.join(", ")}</span>
+									</Badge>
+								) : null}
+								{openThreads ? (
+									<Badge variant="code" tone="mute" className="gap-1 rounded-full">
+										<Icon name="chat" size={12} strokeWidth={1.6} />
+										{openThreads} open
+									</Badge>
+								) : null}
+								{head?.checksState ? (
+									<Badge variant="soft" tone={checksTone === "positive" ? "add" : checksTone === "negative" ? "del" : "warn"} className="gap-1 rounded-full normal-case">
+										<Icon name={head.checksState === "failing" ? "x" : head.checksState === "pending" ? "clock" : "check"} size={12} strokeWidth={1.6} />
+										{checksLabel}
+									</Badge>
+								) : null}
+								{detail.value?.labels.map(label => (
+									<Badge key={label.name} variant="code" tone="mute" className="gap-1 rounded-full">
+										<Icon name="pin" size={12} strokeWidth={1.6} />
+										{label.name}
+									</Badge>
+								))}
+							</span>
 							{/* The facets that are EMPTY, on one legible line — three dim rows
 							    of "None" were a dead band under the branch. */}
 							{emptyFacets.length > 0 ? (
 								<span className="text-fr-xs text-fr-text-2">{emptyFacets.join(" · ")}</span>
-							) : null}
-							{detail.value && detail.value.labels.length > 0 ? (
-								<MetaRow icon="pin" label="Labels" column={labeledRows > 1}>
-									<span className="flex flex-wrap gap-1">
-										{detail.value.labels.map(label => (
-											<span key={label.name} className="rounded-full border border-fr-border px-2 text-fr-2xs text-fr-text-2">
-												{label.name}
-											</span>
-										))}
-									</span>
-								</MetaRow>
 							) : null}
 						</div>
 						{stack ? (

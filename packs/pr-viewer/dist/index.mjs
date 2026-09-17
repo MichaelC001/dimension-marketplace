@@ -1,4 +1,4 @@
-import { Button, ChainRow, ConfirmDialog, DiffStat, GitHubPullRequestIcon, Icon, Input, REVIEW_PILL_LABEL, StateGlyph, StreamingMarkdown, ThreadCard, cn, resolveReviewChains, reviewListLines, reviewPillState, useObservable, useStandardSessionFacts, visibleReviews } from "@fraym/ui";
+import { Badge, Button, ChainRow, ConfirmDialog, DiffStat, GitHubPullRequestIcon, Icon, Input, REVIEW_PILL_LABEL, StateGlyph, StreamingMarkdown, ThreadCard, cn, resolveReviewChains, reviewListLines, reviewPillState, useObservable, useStandardSessionFacts, visibleReviews } from "@fraym/ui";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
 //#region src/model.ts
@@ -105,8 +105,6 @@ function checksGlyph(state) {
 function sourceLabel(source) {
 	return source === "created" ? "created by this session" : source === "pushed" ? "this session pushed to it" : source === "agent" ? "the agent acted on it" : source === "stack" ? "a stack sibling" : "linked by you";
 }
-/** Right-aligned relative time, so every row's diff stat shares one right edge. */
-var TIME_COLUMN = "2.5rem";
 /** A list row is STACKED (owner ruling 2026-09-17): the review's number line
 *  on top — state octicon, `#N`, then time and check/decision badges at the
 *  right edge — the title full-width beneath it, and the branch + diff stat
@@ -114,45 +112,63 @@ var TIME_COLUMN = "2.5rem";
 function ReviewRow({ summary, link, depth, stack, sharedBase, sharedOwner, onSelect, menu }) {
 	const glyph = stateGlyph(summary);
 	const ref = summary?.ref ?? link?.ref;
+	const state = summary ? reviewPillState(summary) : "open";
 	return /* @__PURE__ */ jsxs(ChainRow, {
 		depth,
-		flag: glyph.tone === "warning" ? "warning" : void 0,
 		className: "group rounded-md pr-3 hover:bg-fr-surface",
 		children: [/* @__PURE__ */ jsxs("button", {
 			type: "button",
 			onClick: onSelect,
-			className: "flex min-w-0 flex-1 flex-col gap-1 py-2.5 text-left",
+			className: "flex min-w-0 flex-1 flex-col gap-1.5 py-2.5 text-left",
 			children: [
 				/* @__PURE__ */ jsxs("span", {
-					className: "flex min-w-0 items-center gap-1.5 text-fr-xs text-fr-text-2",
+					className: "flex min-w-0 flex-wrap items-center gap-1.5",
 					children: [
-						/* @__PURE__ */ jsx(StateGlyph, {
-							tone: glyph.tone,
-							icon: /* @__PURE__ */ jsx(GitHubPullRequestIcon, {
-								state: summary ? reviewPillState(summary) : "open",
-								size: 13
-							}),
-							label: glyph.label
-						}),
-						/* @__PURE__ */ jsxs("span", {
-							className: "tabular-nums",
+						/* @__PURE__ */ jsxs(Badge, {
+							variant: "soft",
+							tone: state === "merged" ? "accent" : state === "closed" ? "del" : state === "draft" ? "mute" : state === "conflicting" ? "warn" : "add",
+							className: "gap-1 rounded-full normal-case tabular-nums",
 							title: link ? sourceLabel(link.source) : void 0,
-							children: ["#", ref?.number]
+							children: [
+								/* @__PURE__ */ jsx(GitHubPullRequestIcon, {
+									state,
+									size: 12
+								}),
+								"#",
+								ref?.number,
+								/* @__PURE__ */ jsxs("span", {
+									className: "opacity-80",
+									children: ["· ", glyph.label]
+								})
+							]
 						}),
-						/* @__PURE__ */ jsx("span", {
-							className: "text-fr-text-3",
-							children: "·"
-						}),
-						/* @__PURE__ */ jsx("span", { children: glyph.label }),
-						summary?.reviewDecision === "changes-requested" ? /* @__PURE__ */ jsx("span", {
-							className: "shrink-0 text-fr-warn",
-							children: "· changes requested"
+						summary?.reviewDecision === "changes-requested" ? /* @__PURE__ */ jsx(Badge, {
+							variant: "soft",
+							tone: "warn",
+							className: "rounded-full normal-case",
+							children: "Changes requested"
 						}) : null,
 						checksGlyph(summary?.checksState),
-						summary ? /* @__PURE__ */ jsx("span", {
-							className: "ml-auto shrink-0 text-right tabular-nums",
-							style: { width: TIME_COLUMN },
-							children: relativeTime(summary.updatedAt)
+						stack ? /* @__PURE__ */ jsxs(Badge, {
+							variant: "code",
+							tone: "mute",
+							className: "gap-1 rounded-full",
+							title: stack.kind === "native" ? `Host stack of ${stack.size}: merging a layer lands the ones below it` : `${stack.size} reviews chained by base branch`,
+							children: [/* @__PURE__ */ jsx(Icon, {
+								name: stack.kind === "native" ? "layers" : "branch",
+								size: 12,
+								strokeWidth: 1.6
+							}), stack.size]
+						}) : null,
+						summary ? /* @__PURE__ */ jsxs(Badge, {
+							variant: "code",
+							tone: "mute",
+							className: "ml-auto gap-1 rounded-full tabular-nums",
+							children: [/* @__PURE__ */ jsx(Icon, {
+								name: "clock",
+								size: 12,
+								strokeWidth: 1.6
+							}), relativeTime(summary.updatedAt)]
 						}) : null
 					]
 				}),
@@ -161,29 +177,41 @@ function ReviewRow({ summary, link, depth, stack, sharedBase, sharedOwner, onSel
 					children: summary?.title ?? link?.url ?? ""
 				}),
 				/* @__PURE__ */ jsxs("span", {
-					className: "flex min-w-0 items-center gap-2 text-fr-xs text-fr-text-2",
+					className: "flex min-w-0 items-center gap-1.5",
 					children: [
-						stack ? /* @__PURE__ */ jsxs("span", {
-							className: "inline-flex items-center gap-0.5",
-							title: stack.kind === "native" ? `Host stack of ${stack.size}: merging a layer lands the ones below it` : `${stack.size} reviews chained by base branch`,
+						summary?.author && summary.author.login !== sharedOwner ? /* @__PURE__ */ jsxs(Badge, {
+							variant: "code",
+							tone: "mute",
+							className: "gap-1 rounded-full",
 							children: [/* @__PURE__ */ jsx(Icon, {
-								name: stack.kind === "native" ? "layers" : "branch",
-								size: 11
-							}), stack.size]
+								name: "user",
+								size: 12,
+								strokeWidth: 1.6
+							}), summary.author.login]
 						}) : null,
-						summary?.author && summary.author.login !== sharedOwner ? /* @__PURE__ */ jsx("span", {
-							className: "truncate",
-							children: summary.author.login
-						}) : null,
-						/* @__PURE__ */ jsx("span", {
-							className: "truncate",
-							children: summary ? summary.baseBranch === sharedBase ? summary.headBranch : `${summary.headBranch} → ${summary.baseBranch}` : ref ? `${ref.host}/${ref.repository}` : ""
+						/* @__PURE__ */ jsxs(Badge, {
+							variant: "soft",
+							tone: "accent",
+							className: "min-w-0 max-w-full justify-start gap-1 rounded-full",
+							children: [/* @__PURE__ */ jsx(Icon, {
+								name: "git-branch",
+								size: 12,
+								strokeWidth: 1.6
+							}), /* @__PURE__ */ jsx("span", {
+								className: "truncate",
+								children: summary ? summary.baseBranch === sharedBase ? summary.headBranch : `${summary.headBranch} → ${summary.baseBranch}` : ref ? `${ref.host}/${ref.repository}` : ""
+							})]
 						}),
-						/* @__PURE__ */ jsx(DiffStat, {
-							className: "ml-auto text-fr-2xs",
-							additions: summary?.additions,
-							deletions: summary?.deletions
-						})
+						summary && (summary.additions !== void 0 || summary.deletions !== void 0) ? /* @__PURE__ */ jsx(Badge, {
+							variant: "code",
+							tone: "mute",
+							className: "ml-auto rounded-full",
+							children: /* @__PURE__ */ jsx(DiffStat, {
+								className: "text-fr-2xs",
+								additions: summary.additions,
+								deletions: summary.deletions
+							})
+						}) : null
 					]
 				})
 			]
@@ -193,37 +221,7 @@ function ReviewRow({ summary, link, depth, stack, sharedBase, sharedOwner, onSel
 		})]
 	});
 }
-/** One metadata row of the detail head — label column fixed by an inline
-*  width, because a pack ships no CSS and can rely only on utilities the host
-*  already generates (an arbitrary-value grid class did not exist, live). */
-function MetaRow({ icon, label, column = true, children }) {
-	return /* @__PURE__ */ jsxs("span", {
-		className: "flex min-w-0 items-center gap-2",
-		children: [/* @__PURE__ */ jsxs("span", {
-			className: "flex shrink-0 items-center gap-1.5 text-fr-sm text-fr-text-2",
-			style: column ? { width: "4.75rem" } : void 0,
-			children: [
-				/* @__PURE__ */ jsx(Icon, {
-					name: icon,
-					size: 12
-				}),
-				" ",
-				label
-			]
-		}), /* @__PURE__ */ jsx("span", {
-			className: "flex min-w-0 flex-1 items-center",
-			children
-		})]
-	});
-}
 /** The " · " between two facts on one line. */
-function Dot() {
-	return /* @__PURE__ */ jsx("span", {
-		"aria-hidden": "true",
-		className: "text-fr-text-3",
-		children: "·"
-	});
-}
 function LayerGlyph({ state, isDraft }) {
 	return /* @__PURE__ */ jsx(StateGlyph, {
 		...stateGlyph({
@@ -374,12 +372,12 @@ function DetailView({ ref, summary, link, workspace, driver, act, onBack }) {
 	const conflicting = head?.state === "open" && head.mergeability === "conflicting";
 	const glyphInk = head?.state === "merged" ? "text-fr-accent" : head?.state === "closed" ? "text-fr-del" : head?.isDraft ? "text-fr-text-3" : "text-fr-add";
 	const statusLabel = head?.state === "merged" ? "Merged" : head?.state === "closed" ? "Closed" : head?.isDraft ? "Draft" : head?.reviewDecision === "approved" ? "Approved" : head?.reviewDecision === "changes-requested" ? "Changes requested" : "Ready for review";
+	const statusTone = head?.state === "merged" ? "accent" : head?.state === "closed" ? "del" : head?.isDraft ? "mute" : head?.reviewDecision === "approved" ? "add" : head?.reviewDecision === "changes-requested" ? "warn" : "add";
 	const mergeBlocker = head?.state !== "open" ? null : head.isDraft ? "Draft — mark ready for review first" : conflicting ? `Conflicts with ${head.baseBranch} — resolve them first` : detail.value && !detail.value.viewer.merge ? "You cannot merge this review on the host" : null;
 	const checksLabel = head?.checksState === "passing" ? "All checks passed" : head?.checksState === "failing" ? "Some checks failed" : head?.checksState === "pending" ? "Checks running" : "None";
 	const checksTone = head?.checksState === "passing" ? "positive" : head?.checksState === "failing" ? "negative" : head?.checksState === "pending" ? "warning" : "neutral";
 	const reviewers = detail.value?.reviewers.map((r) => r.login) ?? [];
 	const openThreads = threads.value?.filter((thread) => !thread.isResolved).length;
-	const labeledRows = 1 + (reviewers.length > 0 ? 1 : 0) + (openThreads ? 1 : 0) + (head?.checksState ? 1 : 0) + (detail.value && detail.value.labels.length > 0 ? 1 : 0);
 	const emptyFacets = [
 		...detail.value && reviewers.length === 0 ? ["No reviewers"] : [],
 		...threads.value && !threads.value.some((thread) => !thread.isResolved) ? ["no open threads"] : [],
@@ -505,125 +503,148 @@ function DetailView({ ref, summary, link, workspace, driver, act, onBack }) {
 						children: [
 							/* @__PURE__ */ jsxs("div", {
 								className: "flex flex-col gap-1",
-								children: [
-									/* @__PURE__ */ jsx("h1", {
-										className: "font-primary text-fr-xl font-semibold leading-tight tracking-[-0.01em] text-fr-text",
-										children: head?.title ?? `#${ref.number}`
-									}),
-									/* @__PURE__ */ jsxs("span", {
-										className: "flex flex-wrap items-center gap-1.5 text-fr-xs text-fr-text-2",
-										children: [
-											head?.author ? /* @__PURE__ */ jsxs("span", {
-												className: "flex items-center gap-1.5",
-												children: [/* @__PURE__ */ jsx("span", {
-													"aria-hidden": "true",
-													className: "inline-flex size-4 items-center justify-center rounded-full bg-fr-surface-3 text-fr-2xs uppercase text-fr-text",
-													children: head.author.login.slice(0, 1)
-												}), /* @__PURE__ */ jsx("span", {
-													className: "text-fr-text",
-													children: head.author.login
-												})]
-											}) : null,
-											head?.updatedAt ? /* @__PURE__ */ jsx(Dot, {}) : null,
-											head?.updatedAt ? /* @__PURE__ */ jsx("span", { children: relativeTime(head.updatedAt) }) : null,
-											/* @__PURE__ */ jsx(Dot, {}),
-											/* @__PURE__ */ jsx("span", { children: statusLabel })
-										]
-									}),
-									conflicting ? /* @__PURE__ */ jsxs("span", {
-										id: "pr-viewer-merge-blocker",
-										className: "mt-1 flex items-center gap-1 self-start rounded-sm border-l-2 border-fr-warn bg-fr-surface px-2 py-1 text-fr-xs text-fr-warn",
-										children: [
-											/* @__PURE__ */ jsx(Icon, {
-												name: "warnTri",
-												size: 11,
-												"aria-hidden": "true"
-											}),
-											" Conflicts with ",
-											head?.baseBranch
-										]
-									}) : null
-								]
+								children: [/* @__PURE__ */ jsx("h1", {
+									className: "font-primary text-fr-xl font-semibold leading-tight tracking-[-0.01em] text-fr-text",
+									children: head?.title ?? `#${ref.number}`
+								}), /* @__PURE__ */ jsxs("span", {
+									className: "flex flex-wrap items-center gap-1.5",
+									children: [
+										head?.author ? /* @__PURE__ */ jsxs(Badge, {
+											variant: "code",
+											tone: "mute",
+											className: "gap-1 rounded-full pl-1",
+											children: [/* @__PURE__ */ jsx("span", {
+												"aria-hidden": "true",
+												className: "inline-flex size-3.5 items-center justify-center rounded-full bg-fr-surface-3 text-[9px] uppercase text-fr-text",
+												children: head.author.login.slice(0, 1)
+											}), head.author.login]
+										}) : null,
+										head?.updatedAt ? /* @__PURE__ */ jsxs(Badge, {
+											variant: "code",
+											tone: "mute",
+											className: "gap-1 rounded-full tabular-nums",
+											children: [/* @__PURE__ */ jsx(Icon, {
+												name: "clock",
+												size: 12,
+												strokeWidth: 1.6
+											}), relativeTime(head.updatedAt)]
+										}) : null,
+										/* @__PURE__ */ jsx(Badge, {
+											variant: "soft",
+											tone: conflicting && statusTone === "add" ? "mute" : statusTone,
+											className: "rounded-full normal-case",
+											children: statusLabel
+										}),
+										conflicting ? /* @__PURE__ */ jsxs(Badge, {
+											id: "pr-viewer-merge-blocker",
+											variant: "soft",
+											tone: "warn",
+											className: "gap-1 rounded-full normal-case",
+											children: [
+												/* @__PURE__ */ jsx(Icon, {
+													name: "warnTri",
+													size: 12,
+													strokeWidth: 1.6,
+													"aria-hidden": "true"
+												}),
+												" Conflicts with ",
+												head?.baseBranch
+											]
+										}) : null
+									]
+								})]
 							}),
 							/* @__PURE__ */ jsxs("div", {
-								className: "flex flex-col gap-1.5 text-fr-sm",
+								className: "flex flex-col gap-1.5",
 								children: [
-									/* @__PURE__ */ jsx(MetaRow, {
-										icon: "branch",
-										label: "Branch",
-										column: labeledRows > 1,
-										children: /* @__PURE__ */ jsxs("span", {
-											className: "flex min-w-0 flex-1 items-center gap-1.5 text-fr-sm",
+									/* @__PURE__ */ jsxs("span", {
+										className: "flex min-w-0 items-center gap-1.5",
+										children: [/* @__PURE__ */ jsxs(Badge, {
+											variant: "soft",
+											tone: "accent",
+											className: "min-w-0 max-w-full justify-start gap-1 rounded-full",
+											title: `${head?.headBranch ?? "—"} → ${head?.baseBranch ?? "—"}`,
 											children: [
+												/* @__PURE__ */ jsx(Icon, {
+													name: "git-branch",
+													size: 12,
+													strokeWidth: 1.6
+												}),
 												/* @__PURE__ */ jsx("span", {
-													className: "truncate text-fr-text",
+													className: "truncate",
 													children: head?.headBranch ?? "—"
 												}),
-												/* @__PURE__ */ jsx("span", {
-													className: "text-fr-text-3",
-													children: "›"
-												}),
-												/* @__PURE__ */ jsx("span", {
-													className: "shrink-0 text-fr-text-2",
-													children: head?.baseBranch ?? "—"
-												}),
-												/* @__PURE__ */ jsx(DiffStat, {
-													className: "ml-auto",
-													additions: head?.additions,
-													deletions: head?.deletions
+												/* @__PURE__ */ jsxs("span", {
+													className: "opacity-70",
+													children: ["→ ", head?.baseBranch ?? "—"]
 												})
 											]
-										})
+										}), head && (head.additions !== void 0 || head.deletions !== void 0) ? /* @__PURE__ */ jsx(Badge, {
+											variant: "code",
+											tone: "mute",
+											className: "ml-auto rounded-full",
+											children: /* @__PURE__ */ jsx(DiffStat, {
+												className: "text-fr-2xs",
+												additions: head.additions,
+												deletions: head.deletions
+											})
+										}) : null]
 									}),
-									reviewers.length > 0 ? /* @__PURE__ */ jsx(MetaRow, {
-										icon: "user",
-										label: "Reviewers",
-										column: labeledRows > 1,
-										children: /* @__PURE__ */ jsx("span", {
-											className: "truncate text-fr-text-2",
-											children: reviewers.join(", ")
-										})
-									}) : null,
-									openThreads ? /* @__PURE__ */ jsx(MetaRow, {
-										icon: "chat",
-										label: "Threads",
-										column: labeledRows > 1,
-										children: /* @__PURE__ */ jsxs("span", {
-											className: "text-fr-text-2",
-											children: [openThreads, " open"]
-										})
-									}) : null,
-									head?.checksState ? /* @__PURE__ */ jsx(MetaRow, {
-										icon: "check",
-										label: "Checks",
-										column: labeledRows > 1,
-										children: /* @__PURE__ */ jsxs("span", {
-											className: "flex items-center gap-1.5 text-fr-text-2",
-											children: [/* @__PURE__ */ jsx(StateGlyph, {
-												tone: checksTone,
-												icon: /* @__PURE__ */ jsx(Icon, {
+									/* @__PURE__ */ jsxs("span", {
+										className: "flex flex-wrap items-center gap-1.5",
+										children: [
+											reviewers.length > 0 ? /* @__PURE__ */ jsxs(Badge, {
+												variant: "code",
+												tone: "mute",
+												className: "min-w-0 gap-1 rounded-full",
+												children: [/* @__PURE__ */ jsx(Icon, {
+													name: "user",
+													size: 12,
+													strokeWidth: 1.6
+												}), /* @__PURE__ */ jsx("span", {
+													className: "truncate",
+													children: reviewers.join(", ")
+												})]
+											}) : null,
+											openThreads ? /* @__PURE__ */ jsxs(Badge, {
+												variant: "code",
+												tone: "mute",
+												className: "gap-1 rounded-full",
+												children: [
+													/* @__PURE__ */ jsx(Icon, {
+														name: "chat",
+														size: 12,
+														strokeWidth: 1.6
+													}),
+													openThreads,
+													" open"
+												]
+											}) : null,
+											head?.checksState ? /* @__PURE__ */ jsxs(Badge, {
+												variant: "soft",
+												tone: checksTone === "positive" ? "add" : checksTone === "negative" ? "del" : "warn",
+												className: "gap-1 rounded-full normal-case",
+												children: [/* @__PURE__ */ jsx(Icon, {
 													name: head.checksState === "failing" ? "x" : head.checksState === "pending" ? "clock" : "check",
-													size: 11
-												}),
-												label: ""
-											}), /* @__PURE__ */ jsx("span", { children: checksLabel })]
-										})
-									}) : null,
+													size: 12,
+													strokeWidth: 1.6
+												}), checksLabel]
+											}) : null,
+											detail.value?.labels.map((label) => /* @__PURE__ */ jsxs(Badge, {
+												variant: "code",
+												tone: "mute",
+												className: "gap-1 rounded-full",
+												children: [/* @__PURE__ */ jsx(Icon, {
+													name: "pin",
+													size: 12,
+													strokeWidth: 1.6
+												}), label.name]
+											}, label.name))
+										]
+									}),
 									emptyFacets.length > 0 ? /* @__PURE__ */ jsx("span", {
 										className: "text-fr-xs text-fr-text-2",
 										children: emptyFacets.join(" · ")
-									}) : null,
-									detail.value && detail.value.labels.length > 0 ? /* @__PURE__ */ jsx(MetaRow, {
-										icon: "pin",
-										label: "Labels",
-										column: labeledRows > 1,
-										children: /* @__PURE__ */ jsx("span", {
-											className: "flex flex-wrap gap-1",
-											children: detail.value.labels.map((label) => /* @__PURE__ */ jsx("span", {
-												className: "rounded-full border border-fr-border px-2 text-fr-2xs text-fr-text-2",
-												children: label.name
-											}, label.name))
-										})
 									}) : null
 								]
 							}),
