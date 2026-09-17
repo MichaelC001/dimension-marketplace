@@ -1,0 +1,21 @@
+{
+	"extends": "../../../fraym/tsconfig.base.json",
+	"compilerOptions": {
+		"jsx": "react-jsx",
+		"types": ["bun"],
+		"lib": ["ES2024", "DOM", "DOM.Iterable"]
+	},
+	// The kit's own ambient declarations for CSS / `?url` asset imports. Without
+	// them, typechecking anything that reaches into `@fraym/ui`'s SOURCE reports
+	// thousands of TS2882s from the kit rather than anything about this pack
+	// (the same noise `packages/app/tsconfig.json` carries today).
+	//
+	// `test` is INCLUDED: the pack's fixtures restate the host's facts, and a
+	// fixture that drifts from `src/model.ts` must be a typecheck failure rather
+	// than a test that still passes against a shape the pack no longer has.
+	// No `paths` remap for react: the worktree's hoisted `node_modules` resolves
+	// both the module and its types, and a remap onto `@types/react`'s `.d.ts`
+	// made Bun's own resolver (which honours tsconfig paths) fail to find the
+	// JSX runtime when running this pack's tests.
+	"include": ["src", "test", "../../../fraym/packages/ui/src/asset-imports.d.ts", "../../../fraym/packages/ui/src/globals.d.ts"]
+}
