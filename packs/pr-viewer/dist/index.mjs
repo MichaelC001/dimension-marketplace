@@ -1,4 +1,4 @@
-import { Badge, Button, ChainRow, ConfirmDialog, DiffStat, GitHubPullRequestIcon, Icon, Input, REVIEW_PILL_LABEL, REVIEW_PILL_TINT, StateGlyph, StreamingMarkdown, ThreadCard, cn, resolveReviewChains, reviewListLines, reviewPillState, useObservable, useStandardSessionFacts, visibleReviews } from "@fraym/ui";
+import { Badge, Button, ChainRow, ConfirmDialog, DiffStat, GitHubPullRequestIcon, Icon, Input, REVIEW_PILL_LABEL, REVIEW_PILL_TINT, StateGlyph, StreamingMarkdown, ThreadCard, cn, resolveReviewChains, reviewListLines, reviewPillState, reviewsUnavailableAdvice, useObservable, useStandardSessionFacts, visibleReviews } from "@fraym/ui";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
 //#region src/model.ts
@@ -77,14 +77,14 @@ var NONE = {
 	getSnapshot: () => void 0,
 	subscribe: () => () => {}
 };
-/** THE pill: gray ground, neutral ink, `h-5 rounded-md` with a hairline edge, like the rail's
+/** THE pill: gray ground, neutral ink, `h-5 rounded-sm` (6px on a 20px pill is the same proportion as 8px on the 31px button, and the tabs' own radius) with a hairline edge, like the rail's
 *  review pills. A state never colors the text — it washes the ground
 *  (`tint`), so a row is calm until something needs the eye. */
 function Pill({ tint, className, children, ...props }) {
 	return /* @__PURE__ */ jsx(Badge, {
 		variant: "soft",
 		tone: "mute",
-		className: cn("gap-1 rounded-md border border-fr-border normal-case text-fr-text-2", tint, className),
+		className: cn("gap-1 rounded-sm border border-fr-border normal-case text-fr-text-2", tint, className),
 		...props,
 		children
 	});
@@ -213,6 +213,41 @@ function ReviewRow({ summary, link, depth, stack, sharedBase, sharedOwner, onSel
 			className: "opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100",
 			children: menu
 		})]
+	});
+}
+/** The list failed for a stated reason (doc 73 §9): the fix, with the
+*  command in hand, instead of an empty list that reads as "no reviews". */
+function UnavailableState({ unavailable }) {
+	const advice = reviewsUnavailableAdvice(unavailable);
+	const [copied, setCopied] = useState(false);
+	return /* @__PURE__ */ jsxs("div", {
+		className: "flex flex-col items-start gap-2 p-3",
+		"data-slot": "pr-viewer-unavailable",
+		"data-reason": unavailable.reason,
+		children: [
+			/* @__PURE__ */ jsx("span", {
+				className: "text-fr-md font-medium text-fr-text",
+				children: advice.title
+			}),
+			/* @__PURE__ */ jsx("span", {
+				className: "text-fr-sm text-fr-text-2",
+				children: advice.detail
+			}),
+			advice.command ? /* @__PURE__ */ jsxs("span", {
+				className: "inline-flex max-w-full items-center gap-2 rounded-md border border-fr-border bg-fr-surface-3 py-1 pr-1 pl-2.5 text-fr-xs text-fr-text-2",
+				children: [/* @__PURE__ */ jsx("code", {
+					className: "truncate font-code",
+					children: advice.command
+				}), /* @__PURE__ */ jsx(Button, {
+					size: "sm",
+					variant: "ghost",
+					onClick: () => {
+						navigator.clipboard?.writeText(advice.command ?? "").then(() => setCopied(true));
+					},
+					children: copied ? "Copied" : "Copy"
+				})]
+			}) : null
+		]
 	});
 }
 function RowMenu({ actions }) {
@@ -854,6 +889,7 @@ function PrViewer({ sessionId, workspace, workspaceDriver, store }) {
 	const facts = useStandardSessionFacts(sessionId);
 	const links = useMemo(() => visibleReviews(facts.reviews ?? NO_LINKS), [facts.reviews]);
 	const checkout = useObservable(useMemo(() => store && workspace ? store.watch(`workspace/${workspace.workspaceId}/reviews`) : NONE, [store, workspace]));
+	const unavailable = useObservable(useMemo(() => store && workspace ? store.watch(`workspace/${workspace.workspaceId}/reviewsUnavailable`) : NONE, [store, workspace]));
 	const lines = useMemo(() => reviewListLines(resolveReviewChains(links)), [links]);
 	const linkedKeys = useMemo(() => new Set(links.map((link) => refKey(link.ref))), [links]);
 	const others = useMemo(() => (checkout ?? NO_ROWS).filter((row) => !linkedKeys.has(refKey(row.ref))), [checkout, linkedKeys]);
@@ -967,7 +1003,7 @@ function PrViewer({ sessionId, workspace, workspaceDriver, store }) {
 			}) : null,
 			/* @__PURE__ */ jsxs("div", {
 				className: "min-h-0 flex-1 overflow-y-auto px-2 py-2",
-				children: [lines.length === 0 ? /* @__PURE__ */ jsxs("div", {
+				children: [lines.length === 0 && others.length === 0 && unavailable ? /* @__PURE__ */ jsx(UnavailableState, { unavailable }) : lines.length === 0 ? /* @__PURE__ */ jsxs("div", {
 					className: "flex flex-col items-start gap-2 p-3",
 					children: [/* @__PURE__ */ jsx("span", {
 						className: "text-fr-sm text-fr-text-3",

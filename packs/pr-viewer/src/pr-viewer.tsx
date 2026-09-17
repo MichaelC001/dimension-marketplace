@@ -23,6 +23,7 @@ import {
 	Badge,
 	Button,
 	GitHubPullRequestIcon,
+	reviewsUnavailableAdvice,
 	REVIEW_PILL_LABEL,
 	REVIEW_PILL_TINT,
 	reviewPillState,
@@ -52,6 +53,7 @@ import {
 	type ReviewRef,
 	type ReviewRequest,
 	type ReviewState,
+	type ReviewsUnavailable,
 	type ReviewSummary,
 	type ReviewThread,
 	type SessionReviewLink,
@@ -93,12 +95,12 @@ const NO_LINKS: readonly SessionReviewLink[] = [];
 const NO_ROWS: readonly ReviewSummary[] = [];
 const NONE = { getSnapshot: () => undefined, subscribe: () => () => {} };
 
-/** THE pill: gray ground, neutral ink, `h-5 rounded-md` with a hairline edge, like the rail's
+/** THE pill: gray ground, neutral ink, `h-5 rounded-sm` (6px on a 20px pill is the same proportion as 8px on the 31px button, and the tabs' own radius) with a hairline edge, like the rail's
  *  review pills. A state never colors the text — it washes the ground
  *  (`tint`), so a row is calm until something needs the eye. */
 function Pill({ tint, className, children, ...props }: ComponentProps<"span"> & { readonly tint?: string }) {
 	return (
-		<Badge variant="soft" tone="mute" className={cn("gap-1 rounded-md border border-fr-border normal-case text-fr-text-2", tint, className)} {...props}>
+		<Badge variant="soft" tone="mute" className={cn("gap-1 rounded-sm border border-fr-border normal-case text-fr-text-2", tint, className)} {...props}>
 			{children}
 		</Badge>
 	);
@@ -230,6 +232,33 @@ function ReviewRow({
 			</button>
 			<span className="opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">{menu}</span>
 		</ChainRow>
+	);
+}
+
+/** The list failed for a stated reason (doc 73 §9): the fix, with the
+ *  command in hand, instead of an empty list that reads as "no reviews". */
+function UnavailableState({ unavailable }: { readonly unavailable: ReviewsUnavailable }) {
+	const advice = reviewsUnavailableAdvice(unavailable);
+	const [copied, setCopied] = useState(false);
+	return (
+		<div className="flex flex-col items-start gap-2 p-3" data-slot="pr-viewer-unavailable" data-reason={unavailable.reason}>
+			<span className="text-fr-md font-medium text-fr-text">{advice.title}</span>
+			<span className="text-fr-sm text-fr-text-2">{advice.detail}</span>
+			{advice.command ? (
+				<span className="inline-flex max-w-full items-center gap-2 rounded-md border border-fr-border bg-fr-surface-3 py-1 pr-1 pl-2.5 text-fr-xs text-fr-text-2">
+					<code className="truncate font-code">{advice.command}</code>
+					<Button
+						size="sm"
+						variant="ghost"
+						onClick={() => {
+							void navigator.clipboard?.writeText(advice.command ?? "").then(() => setCopied(true));
+						}}
+					>
+						{copied ? "Copied" : "Copy"}
+					</Button>
+				</span>
+			) : null}
+		</div>
 	);
 }
 
@@ -739,6 +768,13 @@ export function PrViewer({ sessionId, workspace, workspaceDriver, store }: PrVie
 		[store, workspace],
 	);
 	const checkout = useObservable(workspaceCell as never) as readonly ReviewSummary[] | undefined;
+	// WHY the checkout's list could not be read, when it could not — the same
+	// catalogue-published cell the environment card draws its fix from.
+	const unavailableCell = useMemo(
+		() => (store && workspace ? store.watch<ReviewsUnavailable>(`workspace/${workspace.workspaceId}/reviewsUnavailable`) : NONE),
+		[store, workspace],
+	);
+	const unavailable = useObservable(unavailableCell as never) as ReviewsUnavailable | undefined;
 	const lines = useMemo(() => reviewListLines(resolveReviewChains(links as never)) as readonly { link: SessionReviewLink; depth: number; chainKey: string; stack: { kind: "native" | "derived"; size: number } | null }[], [links]);
 	const linkedKeys = useMemo(() => new Set(links.map(link => refKey(link.ref))), [links]);
 	const others = useMemo(() => (checkout ?? NO_ROWS).filter(row => !linkedKeys.has(refKey(row.ref))), [checkout, linkedKeys]);
@@ -843,7 +879,9 @@ export function PrViewer({ sessionId, workspace, workspaceDriver, store }: PrVie
 				/>
 			) : null}
 			<div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
-				{lines.length === 0 ? (
+				{lines.length === 0 && others.length === 0 && unavailable ? (
+					<UnavailableState unavailable={unavailable} />
+				) : lines.length === 0 ? (
 					<div className="flex flex-col items-start gap-2 p-3">
 						<span className="text-fr-sm text-fr-text-3">
 							{sessionId ? "No reviews linked to this session yet." : "Start a session to link reviews to it."}

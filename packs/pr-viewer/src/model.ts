@@ -14,6 +14,15 @@ export interface ReviewRef {
 export type ReviewState = "open" | "closed" | "merged";
 export type ChecksState = "passing" | "failing" | "pending";
 
+/** Why the checkout's reviews cannot be read (`workspace/<id>/reviewsUnavailable`). */
+export interface ReviewsUnavailable {
+	readonly reason: "no-provider" | "missing-tool" | "unauthenticated" | "rate-limited" | "failed";
+	readonly message: string;
+	readonly command?: string;
+	readonly host?: string;
+	readonly at: string;
+}
+
 export interface ReviewSummary {
 	readonly ref: ReviewRef;
 	readonly url: string;
