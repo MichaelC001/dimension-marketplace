@@ -77,14 +77,14 @@ var NONE = {
 	getSnapshot: () => void 0,
 	subscribe: () => () => {}
 };
-/** THE pill: gray ground, neutral ink, `h-5 rounded-full` like the rail's
+/** THE pill: gray ground, neutral ink, `h-5 rounded-md` with a hairline edge, like the rail's
 *  review pills. A state never colors the text — it washes the ground
 *  (`tint`), so a row is calm until something needs the eye. */
 function Pill({ tint, className, children, ...props }) {
 	return /* @__PURE__ */ jsx(Badge, {
 		variant: "soft",
 		tone: "mute",
-		className: cn("gap-1 rounded-full normal-case text-fr-text-2", tint, className),
+		className: cn("gap-1 rounded-md border border-fr-border normal-case text-fr-text-2", tint, className),
 		...props,
 		children
 	});
