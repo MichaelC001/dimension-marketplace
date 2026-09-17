@@ -514,14 +514,21 @@ export function PrViewer({ sessionId, workspace, workspaceDriver, store }: PrVie
 		);
 	}
 
+	// A link needs a session to land on (doc 73 §4): on the start surface there
+	// is none yet, so the link/unlink rows are absent rather than offered and
+	// then dropped by the fence. Measured live 2026-09-17.
 	const rowMenu = (ref: ReviewRef, url: string, link: SessionReviewLink | undefined) => (
 		<RowMenu
 			actions={[
 				{ label: "Open on the host", onClick: () => act("openReview", { ref, url }) },
 				{ label: "Refresh", onClick: () => act("refreshReviews", { ref }) },
-				link
-					? { label: link.source === "stack" ? "Dismiss from session" : "Unlink from session", onClick: () => act("unlinkReview", { ref }) }
-					: { label: "Link to this session", onClick: () => act("linkReview", { ref, url }) },
+				...(sessionId
+					? [
+							link
+								? { label: link.source === "stack" ? "Dismiss from session" : "Unlink from session", onClick: () => act("unlinkReview", { ref }) }
+								: { label: "Link to this session", onClick: () => act("linkReview", { ref, url }) },
+						]
+					: []),
 			]}
 		/>
 	);
@@ -541,10 +548,14 @@ export function PrViewer({ sessionId, workspace, workspaceDriver, store }: PrVie
 			<div className="min-h-0 flex-1 overflow-y-auto py-1">
 				{lines.length === 0 ? (
 					<div className="flex flex-col items-start gap-2 p-3">
-						<span className="font-secondary text-fr-sm text-fr-text-3">No reviews linked to this session yet.</span>
-						<Button size="sm" variant="outline" onClick={() => setLinking(true)}>
-							<Icon name="plus" size={12} /> Link a review
-						</Button>
+						<span className="font-secondary text-fr-sm text-fr-text-3">
+							{sessionId ? "No reviews linked to this session yet." : "Start a session to link reviews to it."}
+						</span>
+						{sessionId ? (
+							<Button size="sm" variant="outline" onClick={() => setLinking(true)}>
+								<Icon name="plus" size={12} /> Link a review
+							</Button>
+						) : null}
 					</div>
 				) : (
 					lines.map(line => (
@@ -571,9 +582,11 @@ export function PrViewer({ sessionId, workspace, workspaceDriver, store }: PrVie
 			</div>
 			<footer className="flex items-center justify-between border-fr-border border-t px-2 py-1 font-secondary text-fr-2xs text-fr-text-3">
 				<span>{footerLine(links)}</span>
-				<Button size="sm" variant="ghost" onClick={() => setLinking(true)}>
-					<Icon name="plus" size={12} /> Link
-				</Button>
+				{sessionId ? (
+					<Button size="sm" variant="ghost" onClick={() => setLinking(true)}>
+						<Icon name="plus" size={12} /> Link
+					</Button>
+				) : null}
 			</footer>
 		</div>
 	);

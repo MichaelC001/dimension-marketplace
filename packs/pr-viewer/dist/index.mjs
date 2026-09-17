@@ -704,7 +704,7 @@ function PrViewer({ sessionId, workspace, workspaceDriver, store }) {
 			label: "Refresh",
 			onClick: () => act("refreshReviews", { ref })
 		},
-		link ? {
+		...sessionId ? [link ? {
 			label: link.source === "stack" ? "Dismiss from session" : "Unlink from session",
 			onClick: () => act("unlinkReview", { ref })
 		} : {
@@ -713,7 +713,7 @@ function PrViewer({ sessionId, workspace, workspaceDriver, store }) {
 				ref,
 				url
 			})
-		}
+		}] : []
 	] });
 	return /* @__PURE__ */ jsxs("div", {
 		className: "flex min-h-0 flex-1 flex-col",
@@ -735,8 +735,8 @@ function PrViewer({ sessionId, workspace, workspaceDriver, store }) {
 					className: "flex flex-col items-start gap-2 p-3",
 					children: [/* @__PURE__ */ jsx("span", {
 						className: "font-secondary text-fr-sm text-fr-text-3",
-						children: "No reviews linked to this session yet."
-					}), /* @__PURE__ */ jsxs(Button, {
+						children: sessionId ? "No reviews linked to this session yet." : "Start a session to link reviews to it."
+					}), sessionId ? /* @__PURE__ */ jsxs(Button, {
 						size: "sm",
 						variant: "outline",
 						onClick: () => setLinking(true),
@@ -744,7 +744,7 @@ function PrViewer({ sessionId, workspace, workspaceDriver, store }) {
 							name: "plus",
 							size: 12
 						}), " Link a review"]
-					})]
+					}) : null]
 				}) : lines.map((line) => /* @__PURE__ */ jsx(ReviewRow, {
 					summary: line.link.snapshot,
 					link: line.link,
@@ -767,7 +767,7 @@ function PrViewer({ sessionId, workspace, workspaceDriver, store }) {
 			}),
 			/* @__PURE__ */ jsxs("footer", {
 				className: "flex items-center justify-between border-fr-border border-t px-2 py-1 font-secondary text-fr-2xs text-fr-text-3",
-				children: [/* @__PURE__ */ jsx("span", { children: footerLine(links) }), /* @__PURE__ */ jsxs(Button, {
+				children: [/* @__PURE__ */ jsx("span", { children: footerLine(links) }), sessionId ? /* @__PURE__ */ jsxs(Button, {
 					size: "sm",
 					variant: "ghost",
 					onClick: () => setLinking(true),
@@ -775,7 +775,7 @@ function PrViewer({ sessionId, workspace, workspaceDriver, store }) {
 						name: "plus",
 						size: 12
 					}), " Link"]
-				})]
+				}) : null]
 			})
 		]
 	});
