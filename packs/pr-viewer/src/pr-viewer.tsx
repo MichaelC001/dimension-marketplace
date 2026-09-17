@@ -20,7 +20,7 @@
 // stack is. This file only decides how a line looks.
 
 import {
-	Badge,
+	Pill,
 	Button,
 	GitHubPullRequestIcon,
 	reviewsUnavailableAdvice,
@@ -28,6 +28,7 @@ import {
 	REVIEW_PILL_TINT,
 	reviewPillState,
 	StreamingMarkdown,
+	Textarea,
 	ChainRow,
 	cn,
 	ConfirmDialog,
@@ -95,16 +96,6 @@ const NO_LINKS: readonly SessionReviewLink[] = [];
 const NO_ROWS: readonly ReviewSummary[] = [];
 const NONE = { getSnapshot: () => undefined, subscribe: () => () => {} };
 
-/** THE pill: gray ground, neutral ink, `h-5 rounded-sm` (6px on a 20px pill is the same proportion as 8px on the 31px button, and the tabs' own radius) with a hairline edge, like the rail's
- *  review pills. A state never colors the text — it washes the ground
- *  (`tint`), so a row is calm until something needs the eye. */
-function Pill({ tint, className, children, ...props }: ComponentProps<"span"> & { readonly tint?: string }) {
-	return (
-		<Badge variant="soft" tone="mute" className={cn("gap-1 rounded-sm border border-fr-border normal-case text-fr-text-2", tint, className)} {...props}>
-			{children}
-		</Badge>
-	);
-}
 type Tone = ComponentProps<typeof StateGlyph>["tone"];
 
 /** State → ink, ONE place: a review cannot look like two things in two rows. */
@@ -262,6 +253,112 @@ function UnavailableState({ unavailable }: { readonly unavailable: ReviewsUnavai
 	);
 }
 
+/** Reply into a line thread, or flip its resolution. One field, one send;
+ *  the settle re-reads the threads so the reply appears where it landed. */
+function ThreadWrite({
+	resolved,
+	onReply,
+	onResolve,
+}: {
+	readonly resolved: boolean;
+	readonly onReply: (body: string) => void;
+	readonly onResolve: () => void;
+}) {
+	const [body, setBody] = useState("");
+	const [open, setOpen] = useState(false);
+	return (
+		<div className="flex flex-col gap-1.5 pl-1" data-slot="pr-viewer-thread-write">
+			{open ? (
+				<Textarea
+					autoFocus
+					value={body}
+					rows={2}
+					placeholder="Reply…"
+					onChange={event => setBody(event.target.value)}
+					onKeyDown={event => {
+						if (event.key === "Escape") setOpen(false);
+						if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && body.trim()) {
+							onReply(body.trim());
+							setBody("");
+							setOpen(false);
+						}
+					}}
+				/>
+			) : null}
+			<span className="flex items-center gap-1.5">
+				{open ? (
+					<Button
+						size="sm"
+						disabled={!body.trim()}
+						onClick={() => {
+							onReply(body.trim());
+							setBody("");
+							setOpen(false);
+						}}
+					>
+						Reply
+					</Button>
+				) : (
+					<Button size="sm" variant="ghost" onClick={() => setOpen(true)}>
+						Reply
+					</Button>
+				)}
+				<Button size="sm" variant="ghost" onClick={onResolve}>
+					{resolved ? "Unresolve" : "Resolve"}
+				</Button>
+			</span>
+		</div>
+	);
+}
+
+/** The review's own composer: a comment, or a verdict with an optional body.
+ *  Approve / Request changes confirm nothing — they are the reviewer's word,
+ *  reversible on the host; Merge and Close stay behind the dialog. */
+function ReviewWrite({
+	verdicts,
+	onComment,
+	onReview,
+}: {
+	readonly verdicts: boolean;
+	readonly onComment: (body: string) => void;
+	readonly onReview: (verdict: "approve" | "request-changes" | "comment", body?: string) => void;
+}) {
+	const [body, setBody] = useState("");
+	const send = (fn: () => void) => {
+		fn();
+		setBody("");
+	};
+	return (
+		<div className="flex flex-col gap-2 border-fr-border border-t p-3" data-slot="pr-viewer-review-write">
+			<Textarea
+				value={body}
+				rows={3}
+				placeholder="Comment, or say why you approve or want changes…"
+				onChange={event => setBody(event.target.value)}
+				onKeyDown={event => {
+					if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && body.trim()) send(() => onComment(body.trim()));
+				}}
+			/>
+			<span className="flex flex-wrap items-center gap-1.5">
+				<Button size="sm" variant="outline" disabled={!body.trim()} onClick={() => send(() => onComment(body.trim()))}>
+					Comment
+				</Button>
+				{verdicts ? (
+					<>
+						<span className="flex-1" />
+						<Button size="sm" variant="outline" disabled={!body.trim()} onClick={() => send(() => onReview("request-changes", body.trim()))}>
+							Request changes
+						</Button>
+						<Button size="sm" onClick={() => send(() => onReview("approve", body.trim() || undefined))}>
+							Approve
+						</Button>
+					</>
+				) : null}
+			</span>
+		</div>
+	);
+}
+
 function RowMenu({ actions }: { readonly actions: readonly { readonly label: string; readonly onClick: () => void }[] }) {
 	const [open, setOpen] = useState(false);
 	return (
@@ -363,6 +460,8 @@ function DetailView({
 	driver,
 	act,
 	onBack,
+	settledActions,
+	actionNotice,
 }: {
 	readonly ref: ReviewRef;
 	readonly summary: ReviewSummary | null;
@@ -371,8 +470,11 @@ function DetailView({
 	readonly driver: WorkspaceDriverShape;
 	readonly act: (intent: string, payload: Record<string, unknown>) => void;
 	readonly onBack: (() => void) | null;
+	/** The workspace's action cell — a settled `reviewAction` re-reads what it changed. */
+	readonly settledActions: number;
+	readonly actionNotice: string | null;
 }) {
-	const key = refKey(ref);
+	const key = `${refKey(ref)}@${settledActions}`;
   const readDetail = useCallback(() => (driver.getReview ? driver.getReview(workspace, ref) : Promise.reject(new Error("This host offers no detail"))), [driver, workspace, ref]);
   const readThreads = useCallback(() => (driver.getReviewThreads ? driver.getReviewThreads(workspace, ref) : Promise.resolve([] as readonly ReviewThread[])), [driver, workspace, ref]);
   const readDiff = useCallback(() => (driver.getReviewDiff ? driver.getReviewDiff(workspace, ref) : Promise.resolve({ files: [] as readonly ReviewDiffFile[], truncated: false })), [driver, workspace, ref]);
@@ -694,6 +796,13 @@ function DetailView({
 									folded={folded[thread.id] ?? thread.isResolved}
 									onToggleFolded={() => setFolded(prev => ({ ...prev, [thread.id]: !(prev[thread.id] ?? thread.isResolved) }))}
 								/>
+								{head?.capabilities.threadReplies ? (
+									<ThreadWrite
+										resolved={thread.isResolved}
+										onReply={body => act("reviewAction", { ref, action: "reply", threadId: thread.id, body })}
+										onResolve={() => act("reviewAction", { ref, action: thread.isResolved ? "unresolve" : "resolve", threadId: thread.id })}
+									/>
+								) : null}
 							</div>
 						))}
 						{threads.value && threads.value.length === 0 ? <span className="text-fr-xs text-fr-text-3">No review conversations.</span> : null}
@@ -735,6 +844,18 @@ function DetailView({
 					</div>
 				) : null}
 			</div>
+			{actionNotice ? (
+				<p className="border-fr-border border-t px-3 py-2 text-fr-xs text-fr-del" data-slot="pr-viewer-action-notice">
+					{actionNotice}
+				</p>
+			) : null}
+			{tab === "summary" && head?.state === "open" ? (
+				<ReviewWrite
+					verdicts={head.capabilities.verdicts === true}
+					onComment={body => act("reviewAction", { ref, action: "comment", body })}
+					onReview={(verdict, body) => act("reviewAction", { ref, action: "submit-review", verdict, ...(body ? { body } : {}) })}
+				/>
+			) : null}
 			{pending ? (
 				<ConfirmDialog
 					title={pending.title}
@@ -770,6 +891,26 @@ export function PrViewer({ sessionId, workspace, workspaceDriver, store }: PrVie
 	const checkout = useObservable(workspaceCell as never) as readonly ReviewSummary[] | undefined;
 	// WHY the checkout's list could not be read, when it could not — the same
 	// catalogue-published cell the environment card draws its fix from.
+	// A settled `reviewAction` (a reply, a resolve, a verdict) re-reads the
+	// detail it changed: the action cell is the host's one lane for outcomes,
+	// so watching it is how the viewer learns the write landed.
+	const actionCell = useMemo(
+		() => (store && workspace ? store.watch<{ readonly action?: string; readonly state?: string; readonly settledAt?: number }>(`workspace/${workspace.workspaceId}/scmAction`) : NONE),
+		[store, workspace],
+	);
+	const actionFact = useObservable(actionCell as never) as
+		| { readonly action?: string; readonly state?: string; readonly settledAt?: number; readonly error?: string; readonly result?: unknown }
+		| undefined;
+	const settledActions = actionFact?.action === "reviewAction" && actionFact.state === "settled" ? (actionFact.settledAt ?? 0) : 0;
+	// A refused write says why, in the host's words — the result's own
+	// `message` (a provider refusal) or the executor's error.
+	const actionNotice =
+		actionFact?.action === "reviewAction" && actionFact.state === "settled"
+			? (actionFact.error ??
+				(actionFact.result && typeof actionFact.result === "object" && (actionFact.result as { ok?: boolean }).ok === false
+					? ((actionFact.result as { message?: string }).message ?? "refused")
+					: null))
+			: null;
 	const unavailableCell = useMemo(
 		() => (store && workspace ? store.watch<ReviewsUnavailable>(`workspace/${workspace.workspaceId}/reviewsUnavailable`) : NONE),
 		[store, workspace],
@@ -842,6 +983,8 @@ export function PrViewer({ sessionId, workspace, workspaceDriver, store }: PrVie
 				driver={workspaceDriver}
 				act={act}
 				onBack={links.length + others.length > 1 || !selectedLink ? () => setSelected(null) : null}
+				settledActions={settledActions}
+				actionNotice={actionNotice}
 			/>
 		);
 	}

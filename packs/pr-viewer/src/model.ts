@@ -43,6 +43,10 @@ export interface ReviewSummary {
 		readonly merge: boolean;
 		readonly draft: boolean;
 		readonly stackActions: boolean;
+		/** Reply / resolve inside a line thread. */
+		readonly threadReplies?: boolean;
+		/** A whole-review verdict. */
+		readonly verdicts?: boolean;
 	};
 }
 

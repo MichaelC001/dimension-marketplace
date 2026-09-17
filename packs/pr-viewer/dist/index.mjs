@@ -1,4 +1,4 @@
-import { Badge, Button, ChainRow, ConfirmDialog, DiffStat, GitHubPullRequestIcon, Icon, Input, REVIEW_PILL_LABEL, REVIEW_PILL_TINT, StateGlyph, StreamingMarkdown, ThreadCard, cn, resolveReviewChains, reviewListLines, reviewPillState, reviewsUnavailableAdvice, useObservable, useStandardSessionFacts, visibleReviews } from "@fraym/ui";
+import { Button, ChainRow, ConfirmDialog, DiffStat, GitHubPullRequestIcon, Icon, Input, Pill, REVIEW_PILL_LABEL, REVIEW_PILL_TINT, StateGlyph, StreamingMarkdown, Textarea, ThreadCard, cn, resolveReviewChains, reviewListLines, reviewPillState, reviewsUnavailableAdvice, useObservable, useStandardSessionFacts, visibleReviews } from "@fraym/ui";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
 //#region src/model.ts
@@ -77,18 +77,6 @@ var NONE = {
 	getSnapshot: () => void 0,
 	subscribe: () => () => {}
 };
-/** THE pill: gray ground, neutral ink, `h-5 rounded-sm` (6px on a 20px pill is the same proportion as 8px on the 31px button, and the tabs' own radius) with a hairline edge, like the rail's
-*  review pills. A state never colors the text — it washes the ground
-*  (`tint`), so a row is calm until something needs the eye. */
-function Pill({ tint, className, children, ...props }) {
-	return /* @__PURE__ */ jsx(Badge, {
-		variant: "soft",
-		tone: "mute",
-		className: cn("gap-1 rounded-sm border border-fr-border normal-case text-fr-text-2", tint, className),
-		...props,
-		children
-	});
-}
 /** State → ink, ONE place: a review cannot look like two things in two rows. */
 function stateGlyph(summary) {
 	if (summary === null) return {
@@ -250,6 +238,99 @@ function UnavailableState({ unavailable }) {
 		]
 	});
 }
+/** Reply into a line thread, or flip its resolution. One field, one send;
+*  the settle re-reads the threads so the reply appears where it landed. */
+function ThreadWrite({ resolved, onReply, onResolve }) {
+	const [body, setBody] = useState("");
+	const [open, setOpen] = useState(false);
+	return /* @__PURE__ */ jsxs("div", {
+		className: "flex flex-col gap-1.5 pl-1",
+		"data-slot": "pr-viewer-thread-write",
+		children: [open ? /* @__PURE__ */ jsx(Textarea, {
+			autoFocus: true,
+			value: body,
+			rows: 2,
+			placeholder: "Reply…",
+			onChange: (event) => setBody(event.target.value),
+			onKeyDown: (event) => {
+				if (event.key === "Escape") setOpen(false);
+				if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && body.trim()) {
+					onReply(body.trim());
+					setBody("");
+					setOpen(false);
+				}
+			}
+		}) : null, /* @__PURE__ */ jsxs("span", {
+			className: "flex items-center gap-1.5",
+			children: [open ? /* @__PURE__ */ jsx(Button, {
+				size: "sm",
+				disabled: !body.trim(),
+				onClick: () => {
+					onReply(body.trim());
+					setBody("");
+					setOpen(false);
+				},
+				children: "Reply"
+			}) : /* @__PURE__ */ jsx(Button, {
+				size: "sm",
+				variant: "ghost",
+				onClick: () => setOpen(true),
+				children: "Reply"
+			}), /* @__PURE__ */ jsx(Button, {
+				size: "sm",
+				variant: "ghost",
+				onClick: onResolve,
+				children: resolved ? "Unresolve" : "Resolve"
+			})]
+		})]
+	});
+}
+/** The review's own composer: a comment, or a verdict with an optional body.
+*  Approve / Request changes confirm nothing — they are the reviewer's word,
+*  reversible on the host; Merge and Close stay behind the dialog. */
+function ReviewWrite({ verdicts, onComment, onReview }) {
+	const [body, setBody] = useState("");
+	const send = (fn) => {
+		fn();
+		setBody("");
+	};
+	return /* @__PURE__ */ jsxs("div", {
+		className: "flex flex-col gap-2 border-fr-border border-t p-3",
+		"data-slot": "pr-viewer-review-write",
+		children: [/* @__PURE__ */ jsx(Textarea, {
+			value: body,
+			rows: 3,
+			placeholder: "Comment, or say why you approve or want changes…",
+			onChange: (event) => setBody(event.target.value),
+			onKeyDown: (event) => {
+				if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && body.trim()) send(() => onComment(body.trim()));
+			}
+		}), /* @__PURE__ */ jsxs("span", {
+			className: "flex flex-wrap items-center gap-1.5",
+			children: [/* @__PURE__ */ jsx(Button, {
+				size: "sm",
+				variant: "outline",
+				disabled: !body.trim(),
+				onClick: () => send(() => onComment(body.trim())),
+				children: "Comment"
+			}), verdicts ? /* @__PURE__ */ jsxs(Fragment, { children: [
+				/* @__PURE__ */ jsx("span", { className: "flex-1" }),
+				/* @__PURE__ */ jsx(Button, {
+					size: "sm",
+					variant: "outline",
+					disabled: !body.trim(),
+					onClick: () => send(() => onReview("request-changes", body.trim())),
+					children: "Request changes"
+				}),
+				/* @__PURE__ */ jsx(Button, {
+					size: "sm",
+					onClick: () => send(() => onReview("approve", body.trim() || void 0)),
+					children: "Approve"
+				})
+			] }) : null]
+		})]
+	});
+}
 function RowMenu({ actions }) {
 	const [open, setOpen] = useState(false);
 	return /* @__PURE__ */ jsxs("span", {
@@ -352,8 +433,8 @@ function useRead(read, key) {
 		loading: read !== null
 	};
 }
-function DetailView({ ref, summary, link, workspace, driver, act, onBack }) {
-	const key = refKey(ref);
+function DetailView({ ref, summary, link, workspace, driver, act, onBack, settledActions, actionNotice }) {
+	const key = `${refKey(ref)}@${settledActions}`;
 	const readDetail = useCallback(() => driver.getReview ? driver.getReview(workspace, ref) : Promise.reject(/* @__PURE__ */ new Error("This host offers no detail")), [
 		driver,
 		workspace,
@@ -763,40 +844,57 @@ function DetailView({ ref, summary, link, workspace, driver, act, onBack }) {
 							}) : null,
 							(threads.value ?? []).map((thread) => /* @__PURE__ */ jsxs("div", {
 								className: "flex flex-col gap-1",
-								children: [/* @__PURE__ */ jsxs("span", {
-									className: "flex items-center gap-1.5 text-fr-2xs text-fr-text-3",
-									children: [
-										/* @__PURE__ */ jsx(Icon, {
-											name: "file",
-											size: 11,
-											"aria-hidden": "true"
+								children: [
+									/* @__PURE__ */ jsxs("span", {
+										className: "flex items-center gap-1.5 text-fr-2xs text-fr-text-3",
+										children: [
+											/* @__PURE__ */ jsx(Icon, {
+												name: "file",
+												size: 11,
+												"aria-hidden": "true"
+											}),
+											/* @__PURE__ */ jsx("span", {
+												className: "min-w-0 truncate text-fr-text-2",
+												children: thread.path ? `${thread.path}${thread.line ? `:${thread.line}` : ""}` : "no longer on a line"
+											}),
+											thread.isResolved ? /* @__PURE__ */ jsx("span", {
+												className: "rounded-[3px] border border-fr-border px-1 text-fr-text-3",
+												children: "resolved"
+											}) : null,
+											thread.isOutdated ? /* @__PURE__ */ jsx("span", {
+												className: "rounded-[3px] border border-fr-border px-1 text-fr-text-3",
+												children: "outdated"
+											}) : null
+										]
+									}),
+									/* @__PURE__ */ jsx(ThreadCard, {
+										comments: thread.comments.map((comment) => ({
+											id: comment.id,
+											author: comment.author,
+											body: comment.body,
+											at: relativeTime(comment.createdAt)
+										})),
+										folded: folded[thread.id] ?? thread.isResolved,
+										onToggleFolded: () => setFolded((prev) => ({
+											...prev,
+											[thread.id]: !(prev[thread.id] ?? thread.isResolved)
+										}))
+									}),
+									head?.capabilities.threadReplies ? /* @__PURE__ */ jsx(ThreadWrite, {
+										resolved: thread.isResolved,
+										onReply: (body) => act("reviewAction", {
+											ref,
+											action: "reply",
+											threadId: thread.id,
+											body
 										}),
-										/* @__PURE__ */ jsx("span", {
-											className: "min-w-0 truncate text-fr-text-2",
-											children: thread.path ? `${thread.path}${thread.line ? `:${thread.line}` : ""}` : "no longer on a line"
-										}),
-										thread.isResolved ? /* @__PURE__ */ jsx("span", {
-											className: "rounded-[3px] border border-fr-border px-1 text-fr-text-3",
-											children: "resolved"
-										}) : null,
-										thread.isOutdated ? /* @__PURE__ */ jsx("span", {
-											className: "rounded-[3px] border border-fr-border px-1 text-fr-text-3",
-											children: "outdated"
-										}) : null
-									]
-								}), /* @__PURE__ */ jsx(ThreadCard, {
-									comments: thread.comments.map((comment) => ({
-										id: comment.id,
-										author: comment.author,
-										body: comment.body,
-										at: relativeTime(comment.createdAt)
-									})),
-									folded: folded[thread.id] ?? thread.isResolved,
-									onToggleFolded: () => setFolded((prev) => ({
-										...prev,
-										[thread.id]: !(prev[thread.id] ?? thread.isResolved)
-									}))
-								})]
+										onResolve: () => act("reviewAction", {
+											ref,
+											action: thread.isResolved ? "unresolve" : "resolve",
+											threadId: thread.id
+										})
+									}) : null
+								]
 							}, thread.id)),
 							threads.value && threads.value.length === 0 ? /* @__PURE__ */ jsx("span", {
 								className: "text-fr-xs text-fr-text-3",
@@ -870,6 +968,25 @@ function DetailView({ ref, summary, link, workspace, driver, act, onBack }) {
 					}) : null
 				]
 			}),
+			actionNotice ? /* @__PURE__ */ jsx("p", {
+				className: "border-fr-border border-t px-3 py-2 text-fr-xs text-fr-del",
+				"data-slot": "pr-viewer-action-notice",
+				children: actionNotice
+			}) : null,
+			tab === "summary" && head?.state === "open" ? /* @__PURE__ */ jsx(ReviewWrite, {
+				verdicts: head.capabilities.verdicts === true,
+				onComment: (body) => act("reviewAction", {
+					ref,
+					action: "comment",
+					body
+				}),
+				onReview: (verdict, body) => act("reviewAction", {
+					ref,
+					action: "submit-review",
+					verdict,
+					...body ? { body } : {}
+				})
+			}) : null,
 			pending ? /* @__PURE__ */ jsx(ConfirmDialog, {
 				title: pending.title,
 				description: pending.description,
@@ -889,6 +1006,9 @@ function PrViewer({ sessionId, workspace, workspaceDriver, store }) {
 	const facts = useStandardSessionFacts(sessionId);
 	const links = useMemo(() => visibleReviews(facts.reviews ?? NO_LINKS), [facts.reviews]);
 	const checkout = useObservable(useMemo(() => store && workspace ? store.watch(`workspace/${workspace.workspaceId}/reviews`) : NONE, [store, workspace]));
+	const actionFact = useObservable(useMemo(() => store && workspace ? store.watch(`workspace/${workspace.workspaceId}/scmAction`) : NONE, [store, workspace]));
+	const settledActions = actionFact?.action === "reviewAction" && actionFact.state === "settled" ? actionFact.settledAt ?? 0 : 0;
+	const actionNotice = actionFact?.action === "reviewAction" && actionFact.state === "settled" ? actionFact.error ?? (actionFact.result && typeof actionFact.result === "object" && actionFact.result.ok === false ? actionFact.result.message ?? "refused" : null) : null;
 	const unavailable = useObservable(useMemo(() => store && workspace ? store.watch(`workspace/${workspace.workspaceId}/reviewsUnavailable`) : NONE, [store, workspace]));
 	const lines = useMemo(() => reviewListLines(resolveReviewChains(links)), [links]);
 	const linkedKeys = useMemo(() => new Set(links.map((link) => refKey(link.ref))), [links]);
@@ -959,7 +1079,9 @@ function PrViewer({ sessionId, workspace, workspaceDriver, store }) {
 		workspace,
 		driver: workspaceDriver,
 		act,
-		onBack: links.length + others.length > 1 || !selectedLink ? () => setSelected(null) : null
+		onBack: links.length + others.length > 1 || !selectedLink ? () => setSelected(null) : null,
+		settledActions,
+		actionNotice
 	});
 	const rowMenu = (ref, url, link, summary) => /* @__PURE__ */ jsx(RowMenu, { actions: [
 		{
