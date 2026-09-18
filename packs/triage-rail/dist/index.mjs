@@ -679,7 +679,7 @@ function NeedsYouStrip({ rows, actions, now }) {
 	});
 }
 var SWEEP_PREVIEW = 4;
-function SweepCard({ candidates, bulk, onConfirm, onCancel }) {
+function SweepCard({ candidates, onConfirm, onCancel }) {
 	const n = candidates.length;
 	const shown = candidates.slice(0, SWEEP_PREVIEW);
 	const more = n - shown.length;
@@ -718,19 +718,23 @@ function SweepCard({ candidates, bulk, onConfirm, onCancel }) {
 			}),
 			/* @__PURE__ */ jsx("span", {
 				className: "tr-sweep-note",
-				children: bulk ? "Archived sessions stay searchable and can be unarchived from their menu." : "This host archives one at a time: each step opens the session's menu — pick Archive."
+				children: "Archived sessions stay searchable and can be unarchived from their menu."
 			}),
 			/* @__PURE__ */ jsxs("div", {
 				className: "tr-sweep-actions",
 				children: [/* @__PURE__ */ jsxs(Button, {
 					size: "sm",
 					onClick: onConfirm,
-					children: [/* @__PURE__ */ jsx(Icon, {
-						name: "archive",
-						size: 13,
-						strokeWidth: 1.8,
-						"aria-hidden": "true"
-					}), bulk ? `Archive ${n}` : "Start"]
+					children: [
+						/* @__PURE__ */ jsx(Icon, {
+							name: "archive",
+							size: 13,
+							strokeWidth: 1.8,
+							"aria-hidden": "true"
+						}),
+						"Archive ",
+						n
+					]
 				}), /* @__PURE__ */ jsx(Button, {
 					size: "sm",
 					variant: "ghost",
@@ -858,41 +862,13 @@ var TriageRailSection = memo(function TriageRailSection({ rail, actions, switche
 			return next;
 		});
 	}, []);
-	const [sweep, setSweep] = useState({ kind: "idle" });
-	const bulk = actions.archiveSessions !== void 0;
-	const candidateIds = useMemo(() => new Set(candidates.map(({ item }) => item.id)), [candidates]);
-	const stepping = sweep.kind === "stepping" ? sweep.remaining.filter((id) => candidateIds.has(id)) : null;
-	useEffect(() => {
-		if (stepping !== null && stepping.length === 0) setSweep({ kind: "idle" });
-	}, [stepping]);
-	const onSweepClick = useCallback((event) => {
-		if (stepping !== null && stepping.length > 0) {
-			const next = candidates.find(({ item }) => item.id === stepping[0]);
-			if (next) actions.sessionContextMenu(next.item, event);
-			return;
-		}
-		setSweep((current) => current.kind === "confirm" ? { kind: "idle" } : { kind: "confirm" });
-	}, [
-		actions,
-		candidates,
-		stepping
-	]);
+	const [sweep, setSweep] = useState("idle");
+	const onSweepClick = useCallback(() => setSweep((current) => current === "confirm" ? "idle" : "confirm"), []);
 	const onSweepConfirm = useCallback(() => {
-		if (bulk) {
-			actions.archiveSessions?.(candidates.map(({ item }) => item));
-			setSweep({ kind: "idle" });
-			return;
-		}
-		setSweep({
-			kind: "stepping",
-			remaining: candidates.map(({ item }) => item.id)
-		});
-	}, [
-		actions,
-		bulk,
-		candidates
-	]);
-	const onSweepCancel = useCallback(() => setSweep({ kind: "idle" }), []);
+		actions.archiveSessions?.(candidates.map(({ item }) => item));
+		setSweep("idle");
+	}, [actions, candidates]);
+	const onSweepCancel = useCallback(() => setSweep("idle"), []);
 	const onSearchChange = useCallback((event) => actions.setSearch(event.currentTarget.value), [actions]);
 	const onSearchFocus = useCallback(() => actions.setSearchOpen(true), [actions]);
 	const onSearchKey = useCallback((event) => {
@@ -908,24 +884,28 @@ var TriageRailSection = memo(function TriageRailSection({ rail, actions, switche
 	}, [actions]);
 	const initials = facts.identity.userName.trim().slice(0, 1).toUpperCase() || "·";
 	const searching = facts.search.value.trim().length > 0;
-	const sweepButton = candidates.length > 0 ? /* @__PURE__ */ jsxs(Tooltip, { children: [/* @__PURE__ */ jsx(TooltipTrigger, {
+	const sweepButton = actions.archiveSessions !== void 0 && candidates.length > 0 ? /* @__PURE__ */ jsxs(Tooltip, { children: [/* @__PURE__ */ jsx(TooltipTrigger, {
 		asChild: true,
 		children: /* @__PURE__ */ jsxs(Button, {
 			size: "sm",
 			variant: "ghost",
-			"aria-pressed": sweep.kind === "confirm",
+			"aria-pressed": sweep === "confirm",
 			onClick: onSweepClick,
 			style: {
 				padding: "2px 7px",
 				fontSize: "var(--fr-fs-2xs)",
 				fontFamily: "var(--fr-font-secondary)"
 			},
-			children: [/* @__PURE__ */ jsx(Icon, {
-				name: "archive",
-				size: 11,
-				strokeWidth: 1.8,
-				"aria-hidden": "true"
-			}), stepping !== null && stepping.length > 0 ? `Sweep · ${stepping.length} left` : `Sweep · ${candidates.length}`]
+			children: [
+				/* @__PURE__ */ jsx(Icon, {
+					name: "archive",
+					size: 11,
+					strokeWidth: 1.8,
+					"aria-hidden": "true"
+				}),
+				"Sweep · ",
+				candidates.length
+			]
 		})
 	}), /* @__PURE__ */ jsx(TooltipContent, {
 		side: "right",
@@ -1112,9 +1092,8 @@ var TriageRailSection = memo(function TriageRailSection({ rail, actions, switche
 							open: !closed[section.bucket],
 							onToggle: toggleSection,
 							action: section.bucket === "earlier" ? sweepButton : void 0,
-							children: section.bucket === "earlier" && sweep.kind === "confirm" ? /* @__PURE__ */ jsx(SweepCard, {
+							children: section.bucket === "earlier" && sweep === "confirm" ? /* @__PURE__ */ jsx(SweepCard, {
 								candidates,
-								bulk,
 								onConfirm: onSweepConfirm,
 								onCancel: onSweepCancel
 							}) : null

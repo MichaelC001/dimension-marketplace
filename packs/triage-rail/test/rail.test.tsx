@@ -1,8 +1,8 @@
 /** WHAT BREAKS IN THE PRODUCT IF THIS GOES RED: the strip shouts about nothing
  *  (or stays silent about a session parked on you), or Sweep archives rows the
- *  user never confirmed — on a host with the bulk verb it must hand the host
- *  EXACTLY the confirmed candidates, and on a host without it must never
- *  archive anything itself and instead open the host's own session menu.
+ *  user never confirmed — it must hand the host EXACTLY the confirmed
+ *  candidates, and on a host without the bulk verb it must not exist at all
+ *  (a dead control is worse than no control).
  *
  *  Model rules live in `model.test.ts`; this file defends the WIRING between
  *  the fold and the three channels, which no pure test can see. */
@@ -176,7 +176,7 @@ describe("Sweep", () => {
 	const sweepButton = () =>
 		[...container.querySelectorAll('[data-bucket="earlier"] button')].find(b => b.textContent?.includes("Sweep"));
 	const confirmButton = () =>
-		[...container.querySelectorAll(".tr-sweep-card button")].find(b => /^Archive|^Start/.test(b.textContent ?? ""));
+		[...container.querySelectorAll(".tr-sweep-card button")].find(b => /^Archive/.test(b.textContent ?? ""));
 
 	test("with the bulk verb: nothing is archived until confirmed, then exactly the candidates go to the host", async () => {
 		const { actions, calls } = actionsWith({ archiveSessions: (...args: unknown[]) => (calls.archiveSessions ??= []).push(args) });
@@ -190,15 +190,11 @@ describe("Sweep", () => {
 		expect(calls.sessionContextMenu).toBeUndefined();
 	});
 
-	test("without the bulk verb: the rail never archives, it opens the host's menu for the oldest wait first", async () => {
-		const { actions, calls } = actionsWith();
+	test("without the bulk verb the affordance is hidden, even with candidates", async () => {
+		const { actions } = actionsWith();
 		await mount(stale, actions);
-		await click(sweepButton());
-		await click(confirmButton());
-		expect(sweepButton()?.textContent).toContain("2 left");
-		await click(sweepButton());
-		expect(calls.sessionContextMenu).toHaveLength(1);
-		expect((calls.sessionContextMenu?.[0]?.[0] as Row).id).toBe("a");
+		expect(sweepButton()).toBeUndefined();
+		expect(container.querySelector(".tr-sweep-card")).toBeNull();
 	});
 
 	test("is hidden when no row is old enough", async () => {

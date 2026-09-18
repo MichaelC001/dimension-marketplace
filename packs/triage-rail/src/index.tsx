@@ -8,6 +8,7 @@
 //   what needs me      → the violet "Needs you · N" strip, oldest wait first
 //   what is recent     → Now · Today · Yesterday · This week · Earlier
 //   what can go        → one Sweep on Earlier: archive idle rows older than 7d
+//                        (shown only when the host grants `archiveSessions`)
 //
 // No options and no filter menu — it renders exactly that recommendation.
 //
@@ -98,7 +99,8 @@ interface RailActions {
 	readonly newSession?: Verb<[]>;
 	readonly selectSession?: Verb<[item: RailRow]>;
 	/** Bulk archive — arrives with the shipped rail's triage change. Absent ⇒
-	 *  Sweep degrades to stepping through the host's per-row session menu. */
+	 *  the Sweep affordance is hidden (the scope's optionality rule); the rail
+	 *  never archives anything itself. */
 	readonly archiveSessions?: Verb<[items: readonly RailRow[]]>;
 }
 
@@ -206,24 +208,17 @@ function NeedsYouStrip({ rows, actions, now }: { readonly rows: readonly Placed<
 
 // ── Sweep ───────────────────────────────────────────────────────────────────
 
-/** Sweep runs in one of three states: idle (the button), confirming (the
- *  inline card), or stepping (no bulk verb on this host — one host menu per
- *  row, the button counts down). */
-type SweepState =
-	| { readonly kind: "idle" }
-	| { readonly kind: "confirm" }
-	| { readonly kind: "stepping"; readonly remaining: readonly string[] };
+/** Sweep is either the button (idle) or the inline confirm card. */
+type SweepState = "idle" | "confirm";
 
 const SWEEP_PREVIEW = 4;
 
 function SweepCard({
 	candidates,
-	bulk,
 	onConfirm,
 	onCancel,
 }: {
 	readonly candidates: readonly Placed<RailRow>[];
-	readonly bulk: boolean;
 	readonly onConfirm: () => void;
 	readonly onCancel: () => void;
 }) {
@@ -243,15 +238,11 @@ function SweepCard({
 				))}
 				{more > 0 ? <li className="tr-row-meta">and {more} more</li> : null}
 			</ul>
-			<span className="tr-sweep-note">
-				{bulk
-					? "Archived sessions stay searchable and can be unarchived from their menu."
-					: "This host archives one at a time: each step opens the session's menu — pick Archive."}
-			</span>
+			<span className="tr-sweep-note">Archived sessions stay searchable and can be unarchived from their menu.</span>
 			<div className="tr-sweep-actions">
 				<Button size="sm" onClick={onConfirm}>
 					<Icon name="archive" size={13} strokeWidth={1.8} aria-hidden="true" />
-					{bulk ? `Archive ${n}` : "Start"}
+					Archive {n}
 				</Button>
 				<Button size="sm" variant="ghost" onClick={onCancel}>
 					Keep
@@ -388,39 +379,13 @@ export const TriageRailSection = memo(function TriageRailSection({ rail, actions
 	}, []);
 
 	// ── Sweep ──
-	const [sweep, setSweep] = useState<SweepState>({ kind: "idle" });
-	const bulk = actions.archiveSessions !== undefined;
-	const candidateIds = useMemo(() => new Set(candidates.map(({ item }) => item.id)), [candidates]);
-	// A stepping sweep is finished when nothing it named is still a candidate:
-	// the host archived them (facts moved) or the user archived/kept them by
-	// hand. Derived, never stored, so it cannot drift from the facts.
-	const stepping = sweep.kind === "stepping" ? sweep.remaining.filter(id => candidateIds.has(id)) : null;
-	useEffect(() => {
-		if (stepping !== null && stepping.length === 0) setSweep({ kind: "idle" });
-	}, [stepping]);
-	const onSweepClick = useCallback(
-		(event: MouseEvent<HTMLButtonElement>) => {
-			if (stepping !== null && stepping.length > 0) {
-				// Next row: the host's own menu, anchored on the Sweep button, so
-				// "Archive session" is one click away and the rail never archives
-				// anything itself.
-				const next = candidates.find(({ item }) => item.id === stepping[0]);
-				if (next) actions.sessionContextMenu(next.item, event);
-				return;
-			}
-			setSweep(current => (current.kind === "confirm" ? { kind: "idle" } : { kind: "confirm" }));
-		},
-		[actions, candidates, stepping],
-	);
+	const [sweep, setSweep] = useState<SweepState>("idle");
+	const onSweepClick = useCallback(() => setSweep(current => (current === "confirm" ? "idle" : "confirm")), []);
 	const onSweepConfirm = useCallback(() => {
-		if (bulk) {
-			actions.archiveSessions?.(candidates.map(({ item }) => item));
-			setSweep({ kind: "idle" });
-			return;
-		}
-		setSweep({ kind: "stepping", remaining: candidates.map(({ item }) => item.id) });
-	}, [actions, bulk, candidates]);
-	const onSweepCancel = useCallback(() => setSweep({ kind: "idle" }), []);
+		actions.archiveSessions?.(candidates.map(({ item }) => item));
+		setSweep("idle");
+	}, [actions, candidates]);
+	const onSweepCancel = useCallback(() => setSweep("idle"), []);
 
 	// ── Search ──
 	const onSearchChange = useCallback(
@@ -449,18 +414,18 @@ export const TriageRailSection = memo(function TriageRailSection({ rail, actions
 	const searching = facts.search.value.trim().length > 0;
 
 	const sweepButton =
-		candidates.length > 0 ? (
+		actions.archiveSessions !== undefined && candidates.length > 0 ? (
 			<Tooltip>
 				<TooltipTrigger asChild>
 					<Button
 						size="sm"
 						variant="ghost"
-						aria-pressed={sweep.kind === "confirm"}
+						aria-pressed={sweep === "confirm"}
 						onClick={onSweepClick}
 						style={{ padding: "2px 7px", fontSize: "var(--fr-fs-2xs)", fontFamily: "var(--fr-font-secondary)" }}
 					>
 						<Icon name="archive" size={11} strokeWidth={1.8} aria-hidden="true" />
-						{stepping !== null && stepping.length > 0 ? `Sweep · ${stepping.length} left` : `Sweep · ${candidates.length}`}
+						Sweep · {candidates.length}
 					</Button>
 				</TooltipTrigger>
 				<TooltipContent side="right">Archive idle sessions untouched for 7+ days</TooltipContent>
@@ -579,8 +544,8 @@ export const TriageRailSection = memo(function TriageRailSection({ rail, actions
 							onToggle={toggleSection}
 							action={section.bucket === "earlier" ? sweepButton : undefined}
 						>
-							{section.bucket === "earlier" && sweep.kind === "confirm" ? (
-								<SweepCard candidates={candidates} bulk={bulk} onConfirm={onSweepConfirm} onCancel={onSweepCancel} />
+							{section.bucket === "earlier" && sweep === "confirm" ? (
+								<SweepCard candidates={candidates} onConfirm={onSweepConfirm} onCancel={onSweepCancel} />
 							) : null}
 						</Section>
 					))}
