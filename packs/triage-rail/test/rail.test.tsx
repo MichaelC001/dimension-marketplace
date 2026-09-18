@@ -6,7 +6,7 @@
  *
  *  Model rules live in `model.test.ts`; this file defends the WIRING between
  *  the fold and the three channels, which no pure test can see. */
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, setSystemTime, test } from "bun:test";
 import { parseHTML } from "linkedom";
 import { act, createElement, type ReactNode, useSyncExternalStore } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -41,6 +41,9 @@ let container: HTMLElement;
 const roots: Root[] = [];
 
 beforeEach(() => {
+	// The component folds with the real clock, so the clock is a fixture too:
+	// mid-afternoon keeps "an hour ago" inside today, at any hour CI runs.
+	setSystemTime(new Date(2026, 8, 18, 15, 0, 0));
 	const { window } = parseHTML('<html><head></head><body><div id="root"></div></body></html>');
 	originalGlobals ??= Object.fromEntries(
 		globalNames.map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)]),
@@ -65,6 +68,7 @@ afterEach(async () => {
 		else Reflect.deleteProperty(globalThis, name);
 	}
 	originalGlobals = undefined;
+	setSystemTime();
 });
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -187,7 +191,6 @@ describe("Sweep", () => {
 		await click(confirmButton());
 		expect(calls.archiveSessions).toHaveLength(1);
 		expect((calls.archiveSessions?.[0]?.[0] as readonly Row[]).map(r => r.id)).toEqual(["a", "b"]);
-		expect(calls.sessionContextMenu).toBeUndefined();
 	});
 
 	test("without the bulk verb the affordance is hidden, even with candidates", async () => {

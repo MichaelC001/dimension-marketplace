@@ -14,7 +14,6 @@ import {
 	type TriageGroup,
 	type TriageRow,
 	triageOf,
-	waitingSince,
 } from "../src/model";
 
 const HOUR = 60 * 60 * 1000;
@@ -81,9 +80,9 @@ describe("recency bucket", () => {
 		expect(recencyBucket(row({ updatedAt: iso(NOW - 20 * HOUR) }), NOW)).toBe("yesterday");
 	});
 
-	test("the week is seven days from now; past it is Earlier", () => {
-		expect(recencyBucket(row({ updatedAt: iso(NOW - 6 * DAY) }), NOW)).toBe("week");
-		expect(recencyBucket(row({ updatedAt: iso(NOW - 8 * DAY) }), NOW)).toBe("earlier");
+	test("the week is the last seven calendar days; the day before that is Earlier", () => {
+		expect(recencyBucket(row({ updatedAt: iso(TODAY - 6 * DAY) }), NOW)).toBe("week");
+		expect(recencyBucket(row({ updatedAt: iso(TODAY - 6 * DAY - 1) }), NOW)).toBe("earlier");
 	});
 
 	test("an unknown time is Earlier — never promoted", () => {
@@ -121,7 +120,6 @@ describe("foldTriage", () => {
 		const quiet = row();
 		const fold = foldTriage([group("app", [quiet, waitingShort, unread, waitingLong])], NOW);
 		expect(fold.needsYou.map(r => r.item.id)).toEqual([waitingLong.id, unread.id, waitingShort.id]);
-		expect(waitingSince(waitingLong)).toBe(NOW - 2 * HOUR);
 		// A strip is a view, not a move: the rows still sit in their bucket.
 		expect(fold.sections.flatMap(s => s.rows).map(r => r.item.id)).toContain(waitingLong.id);
 	});

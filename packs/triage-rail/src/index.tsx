@@ -386,6 +386,13 @@ export const TriageRailSection = memo(function TriageRailSection({ rail, actions
 		setSweep("idle");
 	}, [actions, candidates]);
 	const onSweepCancel = useCallback(() => setSweep("idle"), []);
+	// The card is a question about rows, so it dies with them: facts move while
+	// it is open (a row archived elsewhere, a time crossing the age line) and
+	// "Archive 0 idle sessions?" is not a question. Dropping the state too
+	// keeps a later candidate from springing the card open unasked.
+	useEffect(() => {
+		if (candidates.length === 0) setSweep("idle");
+	}, [candidates.length]);
 
 	// ── Search ──
 	const onSearchChange = useCallback(
@@ -544,7 +551,7 @@ export const TriageRailSection = memo(function TriageRailSection({ rail, actions
 							onToggle={toggleSection}
 							action={section.bucket === "earlier" ? sweepButton : undefined}
 						>
-							{section.bucket === "earlier" && sweep === "confirm" ? (
+							{section.bucket === "earlier" && sweep === "confirm" && candidates.length > 0 ? (
 								<SweepCard candidates={candidates} onConfirm={onSweepConfirm} onCancel={onSweepCancel} />
 							) : null}
 						</Section>

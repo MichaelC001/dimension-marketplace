@@ -9,7 +9,10 @@
 // contrast knob and the UI-scale knob all flow through untouched.
 //
 // Injected once per document (`ensureStyles`), keyed on `data-slot`, so a
-// remount or a second instance never duplicates it.
+// remount or a second instance never duplicates it. Every rule is scoped
+// under the root's `[data-slot="triage-rail"]` rather than trusting a short
+// `.tr-` prefix to stay unique: another pack may pick the same two letters,
+// and a sheet on `document.head` outlives the tree that installed it.
 export const STYLE_SLOT = "triage-rail-styles";
 
 export const TRIAGE_RAIL_CSS = `
@@ -24,20 +27,20 @@ export const TRIAGE_RAIL_CSS = `
 	font-family: var(--fr-font-rail);
 	font-size: var(--fr-fs-base);
 }
-.tr-head {
+[data-slot="triage-rail"] .tr-head {
 	display: flex;
 	align-items: center;
 	gap: 6px;
 	padding: 12px 10px 6px 14px;
 }
-.tr-brand {
+[data-slot="triage-rail"] .tr-brand {
 	display: flex;
 	min-width: 0;
 	flex: 1;
 	flex-direction: column;
 	gap: 1px;
 }
-.tr-brand-name {
+[data-slot="triage-rail"] .tr-brand-name {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
@@ -46,7 +49,7 @@ export const TRIAGE_RAIL_CSS = `
 	letter-spacing: -0.01em;
 	color: var(--fr-text);
 }
-.tr-eyebrow {
+[data-slot="triage-rail"] .tr-eyebrow {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
@@ -57,11 +60,11 @@ export const TRIAGE_RAIL_CSS = `
 	text-transform: uppercase;
 	color: var(--fr-text-3);
 }
-.tr-search {
+[data-slot="triage-rail"] .tr-search {
 	position: relative;
 	padding: 4px 10px 6px;
 }
-.tr-search > svg {
+[data-slot="triage-rail"] .tr-search > svg {
 	position: absolute;
 	left: 19px;
 	top: 50%;
@@ -69,36 +72,36 @@ export const TRIAGE_RAIL_CSS = `
 	color: var(--fr-text-3);
 	pointer-events: none;
 }
-.tr-search input {
+[data-slot="triage-rail"] .tr-search input {
 	padding-left: 28px;
 	background: transparent;
 }
-.tr-search input:focus-visible {
+[data-slot="triage-rail"] .tr-search input:focus-visible {
 	background: var(--fr-surface);
 }
-.tr-list {
+[data-slot="triage-rail"] .tr-list {
 	flex: 1;
 	min-height: 0;
 	overflow-y: auto;
 	padding: 2px 8px 12px;
 }
-.tr-strip {
+[data-slot="triage-rail"] .tr-strip {
 	margin: 4px 0 8px;
 	padding: 3px;
 	border-radius: 10px;
 	border: 1px solid color-mix(in srgb, var(--fr-iris) 26%, transparent);
 	background: color-mix(in srgb, var(--fr-iris) 6%, transparent);
 }
-.tr-strip-head {
+[data-slot="triage-rail"] .tr-strip-head {
 	display: flex;
 	align-items: center;
 	gap: 8px;
 	padding: 6px 8px 4px;
 }
-.tr-strip-head .tr-eyebrow {
+[data-slot="triage-rail"] .tr-strip-head .tr-eyebrow {
 	color: var(--fr-iris);
 }
-.tr-strip-dot {
+[data-slot="triage-rail"] .tr-strip-dot {
 	width: 6px;
 	height: 6px;
 	flex-shrink: 0;
@@ -106,24 +109,24 @@ export const TRIAGE_RAIL_CSS = `
 	background: var(--fr-iris);
 	box-shadow: 0 0 0 3px color-mix(in srgb, var(--fr-iris) 24%, transparent);
 }
-.tr-strip .tr-row-time {
+[data-slot="triage-rail"] .tr-strip .tr-row-time {
 	color: var(--fr-iris);
 }
-.tr-strip .tr-row:hover,
-.tr-strip .tr-row:focus-visible,
-.tr-strip .tr-row[data-active] {
+[data-slot="triage-rail"] .tr-strip .tr-row:hover,
+[data-slot="triage-rail"] .tr-strip .tr-row:focus-visible,
+[data-slot="triage-rail"] .tr-strip .tr-row[data-active] {
 	background: color-mix(in srgb, var(--fr-iris) 12%, transparent);
 }
-.tr-section {
+[data-slot="triage-rail"] .tr-section {
 	margin-top: 4px;
 }
-.tr-section-head {
+[data-slot="triage-rail"] .tr-section-head {
 	display: flex;
 	align-items: center;
 	gap: 6px;
 	padding: 8px 4px 3px 8px;
 }
-.tr-section-toggle {
+[data-slot="triage-rail"] .tr-section-toggle {
 	display: flex;
 	min-width: 0;
 	flex: 1;
@@ -136,19 +139,19 @@ export const TRIAGE_RAIL_CSS = `
 	color: var(--fr-text-3);
 	transition: color var(--fr-motion-fast);
 }
-.tr-section-toggle:hover,
-.tr-section-toggle:focus-visible {
+[data-slot="triage-rail"] .tr-section-toggle:hover,
+[data-slot="triage-rail"] .tr-section-toggle:focus-visible {
 	color: var(--fr-text-2);
 	outline: none;
 }
-.tr-section-toggle > svg {
+[data-slot="triage-rail"] .tr-section-toggle > svg {
 	flex-shrink: 0;
 	transition: transform var(--fr-motion-fast);
 }
-.tr-section[data-open] .tr-section-toggle > svg.tr-caret {
+[data-slot="triage-rail"] .tr-section[data-open] .tr-section-toggle > svg.tr-caret {
 	transform: rotate(90deg);
 }
-.tr-count {
+[data-slot="triage-rail"] .tr-count {
 	margin-left: auto;
 	padding-left: 8px;
 	font-family: var(--fr-font-secondary);
@@ -156,7 +159,7 @@ export const TRIAGE_RAIL_CSS = `
 	font-variant-numeric: tabular-nums;
 	color: var(--fr-text-3);
 }
-.tr-row {
+[data-slot="triage-rail"] .tr-row {
 	position: relative;
 	display: flex;
 	width: 100%;
@@ -172,17 +175,17 @@ export const TRIAGE_RAIL_CSS = `
 	cursor: pointer;
 	transition: background-color var(--fr-motion-fast), color var(--fr-motion-fast);
 }
-.tr-row:hover,
-.tr-row:focus-visible {
+[data-slot="triage-rail"] .tr-row:hover,
+[data-slot="triage-rail"] .tr-row:focus-visible {
 	background: var(--fr-surface-2);
 	color: var(--fr-text);
 	outline: none;
 }
-.tr-row[data-active] {
+[data-slot="triage-rail"] .tr-row[data-active] {
 	background: var(--fr-surface-2);
 	color: var(--fr-text);
 }
-.tr-row[data-active]::before {
+[data-slot="triage-rail"] .tr-row[data-active]::before {
 	content: "";
 	position: absolute;
 	left: 0;
@@ -192,11 +195,11 @@ export const TRIAGE_RAIL_CSS = `
 	border-radius: 999px;
 	background: var(--fr-accent);
 }
-.tr-row:disabled {
+[data-slot="triage-rail"] .tr-row:disabled {
 	cursor: default;
 	opacity: 0.6;
 }
-.tr-row-lead {
+[data-slot="triage-rail"] .tr-row-lead {
 	display: flex;
 	width: 16px;
 	height: 16px;
@@ -205,27 +208,27 @@ export const TRIAGE_RAIL_CSS = `
 	justify-content: center;
 	color: var(--fr-text-3);
 }
-.tr-row-body {
+[data-slot="triage-rail"] .tr-row-body {
 	display: flex;
 	min-width: 0;
 	flex: 1;
 	flex-direction: column;
 }
-.tr-row-title {
+[data-slot="triage-rail"] .tr-row-title {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 	line-height: 1.35;
 	font-weight: 400;
 }
-.tr-row[data-unread] .tr-row-title {
+[data-slot="triage-rail"] .tr-row[data-unread] .tr-row-title {
 	font-weight: 500;
 	color: var(--fr-text);
 }
-.tr-row[data-frozen] .tr-row-title {
+[data-slot="triage-rail"] .tr-row[data-frozen] .tr-row-title {
 	color: var(--fr-text-3);
 }
-.tr-row-meta {
+[data-slot="triage-rail"] .tr-row-meta {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
@@ -234,14 +237,14 @@ export const TRIAGE_RAIL_CSS = `
 	line-height: 1.3;
 	color: var(--fr-text-3);
 }
-.tr-row-time {
+[data-slot="triage-rail"] .tr-row-time {
 	flex-shrink: 0;
 	font-family: var(--fr-font-secondary);
 	font-size: var(--fr-fs-2xs);
 	font-variant-numeric: tabular-nums;
 	color: var(--fr-text-3);
 }
-.tr-more {
+[data-slot="triage-rail"] .tr-more {
 	display: block;
 	width: 100%;
 	border: 0;
@@ -254,12 +257,12 @@ export const TRIAGE_RAIL_CSS = `
 	cursor: pointer;
 	transition: color var(--fr-motion-fast);
 }
-.tr-more:hover,
-.tr-more:focus-visible {
+[data-slot="triage-rail"] .tr-more:hover,
+[data-slot="triage-rail"] .tr-more:focus-visible {
 	color: var(--fr-text-2);
 	outline: none;
 }
-.tr-sweep-card {
+[data-slot="triage-rail"] .tr-sweep-card {
 	margin: 2px 0 6px;
 	padding: 9px 10px 8px;
 	border-radius: 8px;
@@ -269,12 +272,12 @@ export const TRIAGE_RAIL_CSS = `
 	flex-direction: column;
 	gap: 6px;
 }
-.tr-sweep-title {
+[data-slot="triage-rail"] .tr-sweep-title {
 	font-size: var(--fr-fs-sm);
 	font-weight: 500;
 	color: var(--fr-text);
 }
-.tr-sweep-list {
+[data-slot="triage-rail"] .tr-sweep-list {
 	display: flex;
 	flex-direction: column;
 	gap: 2px;
@@ -284,47 +287,47 @@ export const TRIAGE_RAIL_CSS = `
 	font-size: var(--fr-fs-xs);
 	color: var(--fr-text-2);
 }
-.tr-sweep-list li {
+[data-slot="triage-rail"] .tr-sweep-list li {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
-.tr-sweep-note {
+[data-slot="triage-rail"] .tr-sweep-note {
 	font-family: var(--fr-font-secondary);
 	font-size: var(--fr-fs-2xs);
 	color: var(--fr-text-3);
 }
-.tr-sweep-actions {
+[data-slot="triage-rail"] .tr-sweep-actions {
 	display: flex;
 	gap: 6px;
 	padding-top: 2px;
 }
-.tr-empty {
+[data-slot="triage-rail"] .tr-empty {
 	padding: 28px 12px;
 	text-align: center;
 	font-size: var(--fr-fs-sm);
 	color: var(--fr-text-3);
 }
-.tr-empty strong {
+[data-slot="triage-rail"] .tr-empty strong {
 	display: block;
 	margin-bottom: 4px;
 	font-weight: 500;
 	color: var(--fr-text-2);
 }
-.tr-foot {
+[data-slot="triage-rail"] .tr-foot {
 	display: flex;
 	align-items: center;
 	gap: 8px;
 	padding: 8px 10px 10px 14px;
 	border-top: 1px solid var(--fr-border-soft);
 }
-.tr-foot-user {
+[data-slot="triage-rail"] .tr-foot-user {
 	display: flex;
 	min-width: 0;
 	flex: 1;
 	flex-direction: column;
 }
-.tr-avatar {
+[data-slot="triage-rail"] .tr-avatar {
 	width: 22px;
 	height: 22px;
 	flex-shrink: 0;
@@ -338,7 +341,7 @@ export const TRIAGE_RAIL_CSS = `
 	font-weight: 600;
 	color: var(--fr-text);
 }
-.tr-foot-user .tr-brand-name {
+[data-slot="triage-rail"] .tr-foot-user .tr-brand-name {
 	font-weight: 500;
 }
 
@@ -347,14 +350,14 @@ export const TRIAGE_RAIL_CSS = `
 	flex-direction: column;
 	padding: 10px 0 6px;
 }
-.tr-compact-list {
+[data-slot="triage-rail"] .tr-compact-list {
 	display: flex;
 	flex-direction: column;
 	align-items: center;
 	gap: 2px;
 	padding: 2px 0 10px;
 }
-.tr-compact-badge {
+[data-slot="triage-rail"] .tr-compact-badge {
 	margin: 2px 0 6px;
 	padding: 2px 7px;
 	border-radius: 999px;
@@ -365,7 +368,7 @@ export const TRIAGE_RAIL_CSS = `
 	color: var(--fr-iris);
 	background: color-mix(in srgb, var(--fr-iris) 12%, transparent);
 }
-.tr-compact-row {
+[data-slot="triage-rail"] .tr-compact-row {
 	display: flex;
 	width: 32px;
 	height: 32px;
@@ -377,13 +380,13 @@ export const TRIAGE_RAIL_CSS = `
 	cursor: pointer;
 	transition: background-color var(--fr-motion-fast);
 }
-.tr-compact-row:hover,
-.tr-compact-row:focus-visible,
-.tr-compact-row[data-active] {
+[data-slot="triage-rail"] .tr-compact-row:hover,
+[data-slot="triage-rail"] .tr-compact-row:focus-visible,
+[data-slot="triage-rail"] .tr-compact-row[data-active] {
 	background: var(--fr-surface-2);
 	outline: none;
 }
-.tr-compact-rule {
+[data-slot="triage-rail"] .tr-compact-rule {
 	width: 24px;
 	height: 1px;
 	margin: 4px 0;
@@ -391,10 +394,10 @@ export const TRIAGE_RAIL_CSS = `
 }
 
 @media (prefers-reduced-motion: reduce) {
-	.tr-row,
-	.tr-compact-row,
-	.tr-section-toggle,
-	.tr-section-toggle > svg {
+	[data-slot="triage-rail"] .tr-row,
+	[data-slot="triage-rail"] .tr-compact-row,
+	[data-slot="triage-rail"] .tr-section-toggle,
+	[data-slot="triage-rail"] .tr-section-toggle > svg {
 		transition: none;
 	}
 }

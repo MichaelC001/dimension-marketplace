@@ -136,7 +136,9 @@ export function recencyBucket(row: TriageRow, now: number, dayStart = startOfDay
 	if (!Number.isFinite(updated)) return "earlier";
 	if (updated >= dayStart) return "today";
 	if (updated >= dayStart - DAY_MS) return "yesterday";
-	if (updated >= now - 7 * DAY_MS) return "week";
+	// Last seven CALENDAR days, today included — the host's own boundary
+	// (`recencyBucketKey`), not a rolling seven days from this instant.
+	if (updated >= dayStart - 6 * DAY_MS) return "week";
 	return "earlier";
 }
 
