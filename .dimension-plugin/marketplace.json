@@ -795,6 +795,27 @@
 			]
 		},
 		{
+			"name": "triage-rail",
+			"source": "./packs/triage-rail",
+			"pluginId": "triage-rail",
+			"title": "Triage Rail",
+			"icon": "bolt",
+			"description": "A session rail for threads, not folders: a violet Needs-you strip (oldest wait first), Now / Today / Yesterday / This week / Earlier groups, unread rows emphasised, and one Sweep that archives idle sessions older than a week. Built from @fraym/ui primitives and the rail slot's specVersion 2 channels only - no shipped rail inside.",
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-community",
+			"license": "MIT",
+			"category": "component",
+			"tags": [
+				"component",
+				"rail",
+				"triage",
+				"community"
+			]
+		},
+		{
 			"name": "ui-skills",
 			"source": "./packs/ui-skills",
 			"pluginId": "ui-skills",
