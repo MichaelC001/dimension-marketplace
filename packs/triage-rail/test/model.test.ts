@@ -14,6 +14,7 @@ import {
 	type TriageGroup,
 	type TriageRow,
 	triageOf,
+	waitLabel,
 } from "../src/model";
 
 const HOUR = 60 * 60 * 1000;
@@ -124,17 +125,38 @@ describe("foldTriage", () => {
 		expect(fold.sections.flatMap(s => s.rows).map(r => r.item.id)).toContain(waitingLong.id);
 	});
 
-	test("the host's published strip joins the pack's: hidden rows appear once, merged rows keep their project", () => {
+	test("the host's strip is authoritative: seeded in the host's order, kept whole, credited where it is on screen", () => {
 		const visible = row({ status: "needs-you", updatedAt: iso(NOW - HOUR) });
 		const hiddenByWindow = row({ status: "needs-you", updatedAt: iso(NOW - 14 * DAY) });
-		const notNeedsYou = row();
-		const fold = foldTriage([group("app", [visible])], NOW, [visible, hiddenByWindow, notNeedsYou]);
+		// A reason only the host can name — a pending permission it tracks its
+		// own way. The pack's predicate reads this row as idle; the host says it
+		// needs you, and the host is the one with the whole session.
+		const hostOnlyReason = row();
+		const fold = foldTriage([group("app", [visible])], NOW, [visible, hostOnlyReason, hiddenByWindow]);
 		expect(fold.needsYou.map(r => [r.item.id, r.repo])).toEqual([
-			[hiddenByWindow.id, ""],
 			[visible.id, "app"],
+			[hostOnlyReason.id, ""],
+			[hiddenByWindow.id, ""],
 		]);
 		// A host-only row is strip-only: it was never in a section to bucket.
 		expect(fold.total).toBe(1);
+	});
+
+	test("rows the host did not publish are appended behind its own, oldest wait first", () => {
+		const published = row({ status: "needs-you", updatedAt: iso(NOW - 5 * 60_000) });
+		const packOlder = row({ status: "failed", updatedAt: iso(NOW - 3 * HOUR) });
+		const packNewer = row({ unread: true, updatedAt: iso(NOW - HOUR) });
+		const fold = foldTriage([group("app", [packNewer, published, packOlder])], NOW, [published]);
+		expect(fold.needsYou.map(r => r.item.id)).toEqual([published.id, packOlder.id, packNewer.id]);
+	});
+
+	test("a needs-you row of unknown wait sorts LAST and prints no age", () => {
+		const unknown = row({ status: "needs-you", updatedAt: undefined });
+		const known = row({ status: "needs-you", updatedAt: iso(NOW - HOUR) });
+		const fold = foldTriage([group("app", [unknown, known])], NOW);
+		expect(fold.needsYou.map(r => r.item.id)).toEqual([known.id, unknown.id]);
+		expect(waitLabel(known, NOW)).toBe("1h");
+		expect(waitLabel(unknown, NOW)).toBe("");
 	});
 
 	test("the lifted Autonomy group stays whole and never buckets", () => {

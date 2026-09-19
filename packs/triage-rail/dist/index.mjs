@@ -47,10 +47,20 @@ function triageOf(row) {
 	return "idle";
 }
 /** The instant a needs-you row started waiting. `attention.since` when the
-*  host says so, else the last activity. */
+*  host says so, else the last activity. An unparseable time yields
+*  `+Infinity`, so a row of unknown wait sorts LAST in an oldest-first strip
+*  and never displaces a genuine oldest wait — the same rule
+*  {@link sweepCandidates} applies to age: an unknown age is not an old one. */
 function waitingSince(row) {
 	const since = parseTime(row.attention?.since ?? row.updatedAt);
-	return Number.isFinite(since) ? since : 0;
+	return Number.isFinite(since) ? since : Number.POSITIVE_INFINITY;
+}
+/** Oldest wait first. Written as an ordering rather than a subtraction so two
+*  unknown waits compare equal instead of `Infinity - Infinity` ⇒ NaN. */
+function byWait(a, b) {
+	const left = waitingSince(a.item);
+	const right = waitingSince(b.item);
+	return left === right ? 0 : left < right ? -1 : 1;
 }
 /** Local midnight for `now` — recency buckets follow the user's calendar, not
 *  a rolling 24 h window: "Today" is the day you are in. */
@@ -69,30 +79,39 @@ function recencyBucket(row, now, dayStart = startOfDay(now)) {
 	return "earlier";
 }
 /** Sort key inside a bucket: live rows first, then newest activity first,
-*  pinned rows ahead of everything. */
-function recencyValue(row, now) {
-	if (isLive(row)) return now;
+*  pinned rows ahead of everything. Live work is `+Infinity` rather than
+*  "now" so the key needs no clock — which is what lets the rail fold once per
+*  day instead of once per minute tick. */
+function recencyValue(row) {
+	if (isLive(row)) return Number.POSITIVE_INFINITY;
 	const updated = parseTime(row.updatedAt);
 	return Number.isFinite(updated) ? updated : 0;
 }
-function byRecency(now) {
-	return (a, b) => {
-		const pin = Number(b.item.pinned === true) - Number(a.item.pinned === true);
-		if (pin !== 0) return pin;
-		return recencyValue(b.item, now) - recencyValue(a.item, now);
-	};
+function byRecency(a, b) {
+	const pin = Number(b.item.pinned === true) - Number(a.item.pinned === true);
+	if (pin !== 0) return pin;
+	const left = recencyValue(b.item);
+	const right = recencyValue(a.item);
+	return left === right ? 0 : left < right ? -1 : 1;
 }
-/** @param hostStrip the host's own needs-you fold (`facts.triage`), when it
-*  publishes one. The pack derives its strip from the rows it renders, but the
-*  host's fold sees rows the activity window hid from `sessions` — a session
-*  parked on your permission for a fortnight is exactly the one the window
-*  hides and exactly the one that needs you. Merged, never substituted: a row
-*  the pack already triaged keeps its group credit; a host-only row joins
-*  with no project caption. */
+/** @param now any instant inside the day being rendered. The fold reads the
+*  clock ONLY for the midnight boundary of the recency buckets, so a caller
+*  that re-renders on a minute tick can key this on local midnight and keep
+*  every `Placed` wrapper's identity (and every memoised row) stable.
+*  @param hostStrip the host's own needs-you fold (`facts.triage`), when it
+*  publishes one. That fact is AUTHORITATIVE — already deduped and
+*  oldest-wait-first, and it sees rows the activity window hid from
+*  `sessions` plus reasons the pack cannot name (a pending permission the host
+*  tracks its own way). So the strip is SEEDED from it, in the host's order,
+*  and never re-tested against the pack's predicate; a seeded row that is also
+*  on screen keeps its group credit, a host-only row joins with no project
+*  caption. The pack's own predicate is the FALLBACK, appended for rows the
+*  host did not publish — which on a host that publishes none is the whole
+*  strip, oldest wait first. */
 function foldTriage(groups, now = Date.now(), hostStrip = []) {
 	const dayStart = startOfDay(now);
 	const seen = /* @__PURE__ */ new Set();
-	const needsYou = [];
+	const derived = [];
 	const loops = [];
 	const buckets = {
 		now: [],
@@ -101,6 +120,7 @@ function foldTriage(groups, now = Date.now(), hostStrip = []) {
 		week: [],
 		earlier: []
 	};
+	const onScreen = hostStrip.length > 0 ? /* @__PURE__ */ new Map() : void 0;
 	for (const group of groups) {
 		const isLoopGroup = group.branch === LOOPS_BRANCH;
 		for (const item of group.items) {
@@ -110,27 +130,34 @@ function foldTriage(groups, now = Date.now(), hostStrip = []) {
 				item,
 				repo: group.repo
 			};
+			onScreen?.set(item.id, placed);
 			if (isLoopGroup) loops.push(placed);
 			else buckets[recencyBucket(item, now, dayStart)].push(placed);
-			if (triageOf(item) === "needs-you") needsYou.push(placed);
+			if (triageOf(item) === "needs-you") derived.push(placed);
 		}
 	}
-	for (const item of hostStrip) {
-		if (seen.has(item.id) || triageOf(item) !== "needs-you") continue;
-		seen.add(item.id);
-		needsYou.push({
-			item,
-			repo: ""
-		});
+	let needsYou;
+	if (onScreen === void 0) needsYou = derived.sort(byWait);
+	else {
+		needsYou = [];
+		const striped = /* @__PURE__ */ new Set();
+		for (const item of hostStrip) {
+			if (striped.has(item.id)) continue;
+			striped.add(item.id);
+			needsYou.push(onScreen.get(item.id) ?? {
+				item,
+				repo: ""
+			});
+		}
+		const extra = derived.filter((placed) => !striped.has(placed.item.id));
+		if (extra.length > 0) needsYou.push(...extra.sort(byWait));
 	}
-	needsYou.sort((a, b) => waitingSince(a.item) - waitingSince(b.item));
-	const sort = byRecency(now);
 	const sections = [];
 	let total = 0;
 	for (const bucket of RECENCY_ORDER) {
 		const rows = buckets[bucket];
 		if (rows.length === 0) continue;
-		rows.sort(sort);
+		rows.sort(byRecency);
 		sections.push({
 			bucket,
 			rows
@@ -160,10 +187,12 @@ function sweepCandidates(rows, now = Date.now(), ageMs = SWEEP_AGE_MS) {
 	}
 	return out;
 }
-/** Compact wait age for the needs-you strip: `now` · `5m` · `2h` · `3d`. */
+/** Compact wait age for the needs-you strip: `now` · `5m` · `2h` · `3d`. An
+*  unknown wait has no age to print, so it prints nothing — never the
+*  `-Infinity` the sentinel would otherwise render. */
 function waitLabel(row, now = Date.now()) {
 	const since = waitingSince(row);
-	if (since === 0) return "";
+	if (!Number.isFinite(since)) return "";
 	const seconds = Math.max(0, Math.round((now - since) / 1e3));
 	if (seconds < 60) return "now";
 	const minutes = Math.round(seconds / 60);
@@ -579,8 +608,11 @@ var SECTION_ICON = {
 	week: "clock",
 	earlier: "history"
 };
-var Row = memo(function Row({ placed, trailing, actions }) {
-	const { item, repo } = placed;
+/** Memoised on `item` IDENTITY, not on a wrapper: the host's row objects are
+*  stable between facts, so a re-render of the rail (a minute tick, a search
+*  keystroke) reconciles nothing. Taking `placed` whole would defeat that —
+*  every fold allocates fresh wrappers. */
+var Row = memo(function Row({ item, repo, trailing, actions }) {
 	const onClick = useCallback(() => actions.selectSession?.(item), [actions, item]);
 	const onContextMenu = useCallback((event) => {
 		event.preventDefault();
@@ -665,7 +697,8 @@ function NeedsYouStrip({ rows, actions, now }) {
 				]
 			}),
 			shown.map((placed) => /* @__PURE__ */ jsx(Row, {
-				placed,
+				item: placed.item,
+				repo: placed.repo,
 				trailing: waitLabel(placed.item, now),
 				actions
 			}, placed.item.id)),
@@ -794,7 +827,8 @@ function Section({ id, title, icon, rows, actions, open, onToggle, action, child
 		}), open ? /* @__PURE__ */ jsxs(Fragment, { children: [
 			children,
 			shown.map((placed) => /* @__PURE__ */ jsx(Row, {
-				placed,
+				item: placed.item,
+				repo: placed.repo,
 				trailing: placed.item.time,
 				actions
 			}, placed.item.id)),
@@ -834,8 +868,8 @@ function CompactRows({ rows, actions }) {
 		]
 	})] }, item.id)) });
 }
-/** Re-fold on a clock so "Today" becomes "Yesterday" at midnight and the wait
-*  ages tick without a facts change. One minute is the host's own cadence. */
+/** The strip's wait ages tick without a facts change, and midnight moves
+*  "Today" to "Yesterday". One minute is the host's own cadence. */
 var TICK_MS = 6e4;
 var TriageRailSection = memo(function TriageRailSection({ rail, actions, switcher }) {
 	const facts = useObservable(rail);
@@ -846,10 +880,11 @@ var TriageRailSection = memo(function TriageRailSection({ rail, actions, switche
 		const timer = setInterval(() => setNow(Date.now()), TICK_MS);
 		return () => clearInterval(timer);
 	}, []);
-	const fold = useMemo(() => foldTriage(facts.sessions, now, facts.triage), [
+	const dayStart = startOfDay(now);
+	const fold = useMemo(() => foldTriage(facts.sessions, dayStart, facts.triage), [
 		facts.sessions,
 		facts.triage,
-		now
+		dayStart
 	]);
 	const earlier = fold.sections.find((section) => section.bucket === "earlier");
 	const candidates = useMemo(() => earlier ? sweepCandidates(earlier.rows, now) : [], [earlier, now]);
@@ -1082,7 +1117,7 @@ var TriageRailSection = memo(function TriageRailSection({ rail, actions, switche
 							actions,
 							now
 						}),
-						fold.total === 0 ? /* @__PURE__ */ jsxs("div", {
+						fold.total === 0 && fold.needsYou.length === 0 ? /* @__PURE__ */ jsxs("div", {
 							className: "tr-empty",
 							children: [/* @__PURE__ */ jsx("strong", { children: searching ? "No sessions match" : "Nothing to triage" }), searching ? "Try a shorter query." : "New work lands here the moment it starts."]
 						}) : null,

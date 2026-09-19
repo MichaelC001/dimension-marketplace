@@ -5,7 +5,8 @@
 // rail that is not a re-skin of the shipped one but a different OPINION about
 // what a rail is for. This one answers three questions and nothing else:
 //
-//   what needs me      → the violet "Needs you · N" strip, oldest wait first
+//   what needs me      → the violet "Needs you · N" strip, the host's own
+//                        `facts.triage` fold first, the pack's finds appended
 //   what is recent     → Now · Today · Yesterday · This week · Earlier
 //   what can go        → one Sweep on Earlier: archive idle rows older than 7d
 //                        (shown only when the host grants `archiveSessions`)
@@ -15,8 +16,9 @@
 // Parts from @fraym/ui, ALL primitives:
 //   ActivityDot · Button · IconButton · Icon · Input · Tooltip* · useObservable
 // Imports from the shipped rail (SessionRail, features/session-rail/*): NONE,
-// and that is the point. The folds are the pack's own (`./model.ts`), computed
-// from `facts.sessions` — the host's grouped, filtered, loop-lifted fold.
+// and that is the point. The recency and sweep folds are the pack's own
+// (`./model.ts`), computed from `facts.sessions` — the host's grouped,
+// filtered, loop-lifted fold. The strip consumes `facts.triage` as published.
 import {
 	ActivityDot,
 	Button,
@@ -48,6 +50,7 @@ import {
 	RECENCY_LABEL,
 	type RecencyBucket,
 	type RecencySection,
+	startOfDay,
 	sweepCandidates,
 	type TriageGroup,
 	type TriageRow,
@@ -121,17 +124,23 @@ const SECTION_ICON: Record<RecencyBucket, ComponentProps<typeof Icon>["name"]> =
 
 // ── Rows ────────────────────────────────────────────────────────────────────
 
+/** Memoised on `item` IDENTITY, not on a wrapper: the host's row objects are
+ *  stable between facts, so a re-render of the rail (a minute tick, a search
+ *  keystroke) reconciles nothing. Taking `placed` whole would defeat that —
+ *  every fold allocates fresh wrappers. */
 const Row = memo(function Row({
-	placed,
+	item,
+	repo,
 	trailing,
 	actions,
 }: {
-	readonly placed: Placed<RailRow>;
+	readonly item: RailRow;
+	/** The project caption — the recency groups drop the project heading. */
+	readonly repo: string;
 	/** The right-hand caption: the host's relative time, or the wait age. */
 	readonly trailing: string;
 	readonly actions: RailActions;
 }) {
-	const { item, repo } = placed;
 	const onClick = useCallback(() => actions.selectSession?.(item), [actions, item]);
 	const onContextMenu = useCallback(
 		(event: MouseEvent<HTMLButtonElement>) => {
@@ -195,7 +204,7 @@ function NeedsYouStrip({ rows, actions, now }: { readonly rows: readonly Placed<
 				</span>
 			</div>
 			{shown.map(placed => (
-				<Row key={placed.item.id} placed={placed} trailing={waitLabel(placed.item, now)} actions={actions} />
+				<Row key={placed.item.id} item={placed.item} repo={placed.repo} trailing={waitLabel(placed.item, now)} actions={actions} />
 			))}
 			{rows.length > STRIP_FOLD ? (
 				<button type="button" className="tr-more" onClick={() => setExpanded(current => !current)}>
@@ -301,7 +310,7 @@ function Section({
 				<>
 					{children}
 					{shown.map(placed => (
-						<Row key={placed.item.id} placed={placed} trailing={placed.item.time} actions={actions} />
+						<Row key={placed.item.id} item={placed.item} repo={placed.repo} trailing={placed.item.time} actions={actions} />
 					))}
 					{foldable ? (
 						<button type="button" className="tr-more" onClick={() => setExpanded(current => !current)}>
@@ -347,8 +356,8 @@ function CompactRows({ rows, actions }: { readonly rows: readonly Placed<RailRow
 
 // ── The rail ────────────────────────────────────────────────────────────────
 
-/** Re-fold on a clock so "Today" becomes "Yesterday" at midnight and the wait
- *  ages tick without a facts change. One minute is the host's own cadence. */
+/** The strip's wait ages tick without a facts change, and midnight moves
+ *  "Today" to "Yesterday". One minute is the host's own cadence. */
 const TICK_MS = 60_000;
 
 export const TriageRailSection = memo(function TriageRailSection({ rail, actions, switcher }: RailSectionProps) {
@@ -362,7 +371,13 @@ export const TriageRailSection = memo(function TriageRailSection({ rail, actions
 		return () => clearInterval(timer);
 	}, []);
 
-	const fold = useMemo(() => foldTriage(facts.sessions, now, facts.triage), [facts.sessions, facts.triage, now]);
+	// The tick feeds the strip's wait captions and the Sweep's age window ONLY.
+	// The fold is keyed on local midnight, because the midnight boundary is the
+	// only clock `foldTriage` reads: re-folding every minute would hand every
+	// row a fresh `Placed` wrapper and re-render the whole rail through
+	// `memo(Row)` on a home with hundreds of sessions.
+	const dayStart = startOfDay(now);
+	const fold = useMemo(() => foldTriage(facts.sessions, dayStart, facts.triage), [facts.sessions, facts.triage, dayStart]);
 	const earlier = fold.sections.find(section => section.bucket === "earlier");
 	const candidates = useMemo(() => (earlier ? sweepCandidates(earlier.rows, now) : []), [earlier, now]);
 
@@ -533,7 +548,7 @@ export const TriageRailSection = memo(function TriageRailSection({ rail, actions
 				</div>
 				<div className="tr-list" data-slot="triage-list">
 					<NeedsYouStrip rows={fold.needsYou} actions={actions} now={now} />
-					{fold.total === 0 ? (
+					{fold.total === 0 && fold.needsYou.length === 0 ? (
 						<div className="tr-empty">
 							<strong>{searching ? "No sessions match" : "Nothing to triage"}</strong>
 							{searching ? "Try a shorter query." : "New work lands here the moment it starts."}

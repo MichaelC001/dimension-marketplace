@@ -14,8 +14,14 @@ import { createRoot, type Root } from "react-dom/client";
 // ── The granted parts, replaced by stand-ins ─────────────────────────────────
 
 const passthrough = ({ children }: { readonly children?: ReactNode }) => createElement("span", null, children);
+/** Every row renders one dot, so this counts ROW RENDERS — the only way a test
+ *  can see `memo(Row)` being defeated. */
+let dotRenders = 0;
 mock.module("@fraym/ui", () => ({
-	ActivityDot: ({ state }: { readonly state: string }) => createElement("i", { "data-dot": state }),
+	ActivityDot: ({ state }: { readonly state: string }) => {
+		dotRenders += 1;
+		return createElement("i", { "data-dot": state });
+	},
 	Button: ({ children, onClick, ...rest }: { readonly children?: ReactNode; readonly onClick?: () => void }) =>
 		createElement("button", { type: "button", onClick, ...rest }, children),
 	Icon: () => null,
@@ -41,6 +47,7 @@ let container: HTMLElement;
 const roots: Root[] = [];
 
 beforeEach(() => {
+	dotRenders = 0;
 	// The component folds with the real clock, so the clock is a fixture too:
 	// mid-afternoon keeps "an hour ago" inside today, at any hour CI runs.
 	setSystemTime(new Date(2026, 8, 18, 15, 0, 0));
@@ -127,12 +134,32 @@ function actionsWith(extra: Record<string, unknown> = {}) {
 	};
 }
 
-async function mount(rows: readonly Row[], actions: Record<string, unknown>) {
-	const snapshot = facts(rows);
+async function mount(rows: readonly Row[], actions: Record<string, unknown>, extra: Record<string, unknown> = {}) {
+	const snapshot = { ...facts(rows), ...extra };
 	const rail = { subscribe: () => () => {}, getSnapshot: () => snapshot };
 	const root = createRoot(container);
 	roots.push(root);
 	await act(async () => root.render(createElement(TriageRail, { rail, actions, capabilities: {} })));
+}
+
+/** The rail's own minute tick, captured instead of waited on: the interval is
+ *  the component's, and a test that slept 60 s would be a test nobody runs. */
+async function withCapturedTick(body: (tick: () => Promise<void>) => Promise<void>) {
+	const realSet = globalThis.setInterval;
+	const realClear = globalThis.clearInterval;
+	const pending: Array<() => void> = [];
+	globalThis.setInterval = ((fn: () => void) => pending.push(fn)) as unknown as typeof globalThis.setInterval;
+	globalThis.clearInterval = (() => {}) as typeof globalThis.clearInterval;
+	try {
+		await body(async () => {
+			await act(async () => {
+				for (const fn of pending) fn();
+			});
+		});
+	} finally {
+		globalThis.setInterval = realSet;
+		globalThis.clearInterval = realClear;
+	}
 }
 
 const click = async (el: Element | null | undefined) => {
@@ -204,5 +231,48 @@ describe("Sweep", () => {
 		const { actions } = actionsWith({ archiveSessions: () => {} });
 		await mount([row("fresh", "idle", 2 * DAY)], actions);
 		expect(sweepButton()).toBeUndefined();
+	});
+});
+
+describe("the minute tick", () => {
+	test("re-renders no row when only the clock moved", async () => {
+		const { actions } = actionsWith();
+		await withCapturedTick(async tick => {
+			await mount([row("a", "idle", HOUR), row("b", "idle", 2 * HOUR), row("c", "idle", 3 * DAY)], actions);
+			const mounted = dotRenders;
+			expect(mounted).toBe(3);
+			setSystemTime(new Date(Date.now() + 60_000));
+			await tick();
+			// A re-fold would hand every row a fresh wrapper and reconcile the
+			// whole rail once a minute on a home with hundreds of sessions.
+			expect(dotRenders).toBe(mounted);
+		});
+	});
+
+	test("still moves the strip's wait caption", async () => {
+		const { actions } = actionsWith();
+		await withCapturedTick(async tick => {
+			await mount([row("wait", "needs-you", 30 * 60_000)], actions);
+			expect(container.querySelector('[data-slot="triage-needs-you"] .tr-row-time')?.textContent).toBe("30m");
+			setSystemTime(new Date(Date.now() + 10 * 60_000));
+			await tick();
+			expect(container.querySelector('[data-slot="triage-needs-you"] .tr-row-time')?.textContent).toBe("40m");
+		});
+	});
+});
+
+describe("the empty card", () => {
+	test("never renders under a populated strip", async () => {
+		const { actions } = actionsWith();
+		const parked = row("parked", "needs-you", 2 * DAY);
+		await mount([], actions, { triage: [parked], search: { open: true, value: "zzz" } });
+		expect(titles('[data-slot="triage-needs-you"]')).toEqual(["title parked"]);
+		expect(container.querySelector(".tr-empty")).toBeNull();
+	});
+
+	test("still names an empty rail when nothing needs you either", async () => {
+		const { actions } = actionsWith();
+		await mount([], actions);
+		expect(container.querySelector(".tr-empty strong")?.textContent).toBe("Nothing to triage");
 	});
 });

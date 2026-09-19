@@ -1,10 +1,15 @@
 // The triage fold — pure functions over the rail's published `sessions` fact.
 //
-// Everything here is computed LOCALLY from `RailFacts.sessions` (the host's
-// grouped, filtered, loop-lifted `RepoGroup[]`). The pack never sees a session
-// snapshot: it sees rows, and it re-derives "what needs me / what is recent /
+// The recency and sweep rules are computed LOCALLY from `RailFacts.sessions`
+// (the host's grouped, filtered, loop-lifted `RepoGroup[]`). The pack never
+// sees a session snapshot: it sees rows, and it re-derives "what is recent /
 // what is stale" from the row fields alone. That is the point of the pack — a
 // third party with nothing but the facts channel can build a whole rail.
+//
+// "What needs me" is the one fact it does NOT re-derive: `RailFacts.triage` is
+// the host's own fold over whole sessions, so it is consumed as published and
+// the local predicate ({@link triageOf}) is only the fallback for a host that
+// publishes none. Consuming a channel beats out-guessing it.
 //
 // Typed STRUCTURALLY, on purpose. `SessionItem` grows on the host's schedule:
 // `unread`, `interrupted` and `attention` arrive from a parallel change, so
@@ -57,13 +62,15 @@ export interface RecencySection<Row extends TriageRow = TriageRow> {
 }
 
 export interface TriageFold<Row extends TriageRow = TriageRow> {
-	/** Every `needs-you` row, deduped, oldest wait first. */
+	/** The needs-you strip: the host's published fold in its own order, then
+	 *  the rows only the pack found, oldest wait first. Deduped. */
 	readonly needsYou: readonly Placed<Row>[];
 	/** Recency sections in fixed order; empty buckets omitted. */
 	readonly sections: readonly RecencySection<Row>[];
 	/** The host's lifted Autonomy group, kept whole — loop rows never bucket. */
 	readonly loops: readonly Placed<Row>[];
-	/** Rows in every section, in render order. Drives the compact rail. */
+	/** Rows in every section plus loops, in render order — NOT the strip, which
+	 *  can carry host-only rows no section holds. Drives the compact rail. */
 	readonly total: number;
 }
 
@@ -116,10 +123,21 @@ export function triageOf(row: TriageRow): RailTriage {
 }
 
 /** The instant a needs-you row started waiting. `attention.since` when the
- *  host says so, else the last activity. */
+ *  host says so, else the last activity. An unparseable time yields
+ *  `+Infinity`, so a row of unknown wait sorts LAST in an oldest-first strip
+ *  and never displaces a genuine oldest wait — the same rule
+ *  {@link sweepCandidates} applies to age: an unknown age is not an old one. */
 export function waitingSince(row: TriageRow): number {
 	const since = parseTime(row.attention?.since ?? row.updatedAt);
-	return Number.isFinite(since) ? since : 0;
+	return Number.isFinite(since) ? since : Number.POSITIVE_INFINITY;
+}
+
+/** Oldest wait first. Written as an ordering rather than a subtraction so two
+ *  unknown waits compare equal instead of `Infinity - Infinity` ⇒ NaN. */
+function byWait(a: Placed, b: Placed): number {
+	const left = waitingSince(a.item);
+	const right = waitingSince(b.item);
+	return left === right ? 0 : left < right ? -1 : 1;
 }
 
 /** Local midnight for `now` — recency buckets follow the user's calendar, not
@@ -143,28 +161,37 @@ export function recencyBucket(row: TriageRow, now: number, dayStart = startOfDay
 }
 
 /** Sort key inside a bucket: live rows first, then newest activity first,
- *  pinned rows ahead of everything. */
-function recencyValue(row: TriageRow, now: number): number {
-	if (isLive(row)) return now;
+ *  pinned rows ahead of everything. Live work is `+Infinity` rather than
+ *  "now" so the key needs no clock — which is what lets the rail fold once per
+ *  day instead of once per minute tick. */
+function recencyValue(row: TriageRow): number {
+	if (isLive(row)) return Number.POSITIVE_INFINITY;
 	const updated = parseTime(row.updatedAt);
 	return Number.isFinite(updated) ? updated : 0;
 }
 
-function byRecency(now: number) {
-	return (a: Placed, b: Placed): number => {
-		const pin = Number(b.item.pinned === true) - Number(a.item.pinned === true);
-		if (pin !== 0) return pin;
-		return recencyValue(b.item, now) - recencyValue(a.item, now);
-	};
+function byRecency(a: Placed, b: Placed): number {
+	const pin = Number(b.item.pinned === true) - Number(a.item.pinned === true);
+	if (pin !== 0) return pin;
+	const left = recencyValue(b.item);
+	const right = recencyValue(a.item);
+	return left === right ? 0 : left < right ? -1 : 1;
 }
 
-/** @param hostStrip the host's own needs-you fold (`facts.triage`), when it
- *  publishes one. The pack derives its strip from the rows it renders, but the
- *  host's fold sees rows the activity window hid from `sessions` — a session
- *  parked on your permission for a fortnight is exactly the one the window
- *  hides and exactly the one that needs you. Merged, never substituted: a row
- *  the pack already triaged keeps its group credit; a host-only row joins
- *  with no project caption. */
+/** @param now any instant inside the day being rendered. The fold reads the
+ *  clock ONLY for the midnight boundary of the recency buckets, so a caller
+ *  that re-renders on a minute tick can key this on local midnight and keep
+ *  every `Placed` wrapper's identity (and every memoised row) stable.
+ *  @param hostStrip the host's own needs-you fold (`facts.triage`), when it
+ *  publishes one. That fact is AUTHORITATIVE — already deduped and
+ *  oldest-wait-first, and it sees rows the activity window hid from
+ *  `sessions` plus reasons the pack cannot name (a pending permission the host
+ *  tracks its own way). So the strip is SEEDED from it, in the host's order,
+ *  and never re-tested against the pack's predicate; a seeded row that is also
+ *  on screen keeps its group credit, a host-only row joins with no project
+ *  caption. The pack's own predicate is the FALLBACK, appended for rows the
+ *  host did not publish — which on a host that publishes none is the whole
+ *  strip, oldest wait first. */
 export function foldTriage<Row extends TriageRow>(
 	groups: readonly TriageGroup<Row>[],
 	now: number = Date.now(),
@@ -172,9 +199,11 @@ export function foldTriage<Row extends TriageRow>(
 ): TriageFold<Row> {
 	const dayStart = startOfDay(now);
 	const seen = new Set<string>();
-	const needsYou: Placed<Row>[] = [];
+	const derived: Placed<Row>[] = [];
 	const loops: Placed<Row>[] = [];
 	const buckets: Record<RecencyBucket, Placed<Row>[]> = { now: [], today: [], yesterday: [], week: [], earlier: [] };
+	// Only a host that publishes a strip pays for the lookup table.
+	const onScreen = hostStrip.length > 0 ? new Map<string, Placed<Row>>() : undefined;
 	for (const group of groups) {
 		const isLoopGroup = group.branch === LOOPS_BRANCH;
 		for (const item of group.items) {
@@ -183,27 +212,35 @@ export function foldTriage<Row extends TriageRow>(
 			if (seen.has(item.id)) continue;
 			seen.add(item.id);
 			const placed: Placed<Row> = { item, repo: group.repo };
+			onScreen?.set(item.id, placed);
 			if (isLoopGroup) {
 				loops.push(placed);
 			} else {
 				buckets[recencyBucket(item, now, dayStart)].push(placed);
 			}
-			if (triageOf(item) === "needs-you") needsYou.push(placed);
+			if (triageOf(item) === "needs-you") derived.push(placed);
 		}
 	}
-	for (const item of hostStrip) {
-		if (seen.has(item.id) || triageOf(item) !== "needs-you") continue;
-		seen.add(item.id);
-		needsYou.push({ item, repo: "" });
+	let needsYou: Placed<Row>[];
+	if (onScreen === undefined) {
+		needsYou = derived.sort(byWait);
+	} else {
+		needsYou = [];
+		const striped = new Set<string>();
+		for (const item of hostStrip) {
+			if (striped.has(item.id)) continue;
+			striped.add(item.id);
+			needsYou.push(onScreen.get(item.id) ?? { item, repo: "" });
+		}
+		const extra = derived.filter(placed => !striped.has(placed.item.id));
+		if (extra.length > 0) needsYou.push(...extra.sort(byWait));
 	}
-	needsYou.sort((a, b) => waitingSince(a.item) - waitingSince(b.item));
-	const sort = byRecency(now);
 	const sections: RecencySection<Row>[] = [];
 	let total = 0;
 	for (const bucket of RECENCY_ORDER) {
 		const rows = buckets[bucket];
 		if (rows.length === 0) continue;
-		rows.sort(sort);
+		rows.sort(byRecency);
 		sections.push({ bucket, rows });
 		total += rows.length;
 	}
@@ -231,10 +268,12 @@ export function sweepCandidates<Row extends TriageRow>(
 	return out;
 }
 
-/** Compact wait age for the needs-you strip: `now` · `5m` · `2h` · `3d`. */
+/** Compact wait age for the needs-you strip: `now` · `5m` · `2h` · `3d`. An
+ *  unknown wait has no age to print, so it prints nothing — never the
+ *  `-Infinity` the sentinel would otherwise render. */
 export function waitLabel(row: TriageRow, now: number = Date.now()): string {
 	const since = waitingSince(row);
-	if (since === 0) return "";
+	if (!Number.isFinite(since)) return "";
 	const seconds = Math.max(0, Math.round((now - since) / 1000));
 	if (seconds < 60) return "now";
 	const minutes = Math.round(seconds / 60);
