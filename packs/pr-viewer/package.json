@@ -20,7 +20,7 @@
 	"dimension": {
 		"name": "pr-viewer",
 		"description": "PR Viewer — reviews in the dock, from the Store's review keys. Installable and removable like any pack: with it a rail chip opens the review here, without it the browser.",
-		"defaultEnabled": false,
+		"defaultEnabled": true,
 		"category": "component",
 		"keywords": ["component", "dock", "reviews", "pull-request", "store"]
 	},
