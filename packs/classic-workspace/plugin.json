@@ -1,7 +1,7 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "classic-workspace",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "The shipped workspace host as a pack — the center pane's splits, tiling and overlays. The first marketplace part to ever fill the `workspace` contract.",
 	"author": {
 		"name": "Dimension"

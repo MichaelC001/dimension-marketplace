@@ -1,7 +1,7 @@
 {
 	"name": "@dimension/independent-thread",
 	"author": "Dimension",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "Independent thread — built from the published PARTS (Thread, SectionSessionScope, PresenceSurface, OpeningThreadSkeleton), not from the shipped section.",
 	"type": "module",
 	"main": "./src/index.tsx",

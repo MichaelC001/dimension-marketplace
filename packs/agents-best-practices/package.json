@@ -1,7 +1,7 @@
 {
 	"name": "@inso/agents-best-practices",
 	"author": "Dimension",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "Agents Best Practices — provider-neutral agent-harness architecture: loops, tools, permissions, planning, memory, compaction, evals, safety",
 	"type": "module",
 	"scripts": {

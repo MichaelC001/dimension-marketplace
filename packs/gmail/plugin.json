@@ -1,7 +1,7 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "gmail",
-	"version": "0.1.1",
+	"version": "0.1.2",
 	"description": "Email connector — read/search/compose/reply over IMAP/SMTP via himalaya",
 	"author": {
 		"name": "Dimension"

@@ -1,7 +1,7 @@
 {
 	"name": "@inso/gmail",
 	"author": "Dimension",
-	"version": "0.1.1",
+	"version": "0.1.2",
 	"description": "Email connector — read/search/compose/reply over IMAP/SMTP (Gmail) via the himalaya CLI",
 	"type": "module",
 	"scripts": {

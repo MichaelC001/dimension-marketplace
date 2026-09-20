@@ -1,7 +1,7 @@
 {
 	"name": "@dimension/classic-workspace",
 	"author": "Dimension",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "Classic Workspace Host — the workspace host — the pane container with splits, tiling, chat-presence backdrop and room overlays, as a marketplace pack.",
 	"type": "module",
 	"main": "./src/index.ts",

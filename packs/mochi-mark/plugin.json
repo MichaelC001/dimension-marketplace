@@ -1,7 +1,7 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "mochi-mark",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "A mark component drawn in a declared slot of a plugin layout — the import-surface FLOOR: react only, zero @fraym/ui.",
 	"author": {
 		"name": "Dimension"

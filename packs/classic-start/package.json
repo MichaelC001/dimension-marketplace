@@ -1,7 +1,7 @@
 {
 	"name": "@dimension/classic-start",
 	"author": "Dimension",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "Classic Start — the session surface's front door (hero composer, Project · Work strip, popover menus), as a marketplace pack.",
 	"type": "module",
 	"main": "./src/index.ts",

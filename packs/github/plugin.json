@@ -1,7 +1,7 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "github",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "GitHub connector — issues, PRs, releases, repos, and search via the gh CLI",
 	"author": {
 		"name": "Dimension"

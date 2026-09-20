@@ -1,7 +1,7 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "product-psychology",
-	"version": "0.1.1",
+	"version": "0.1.2",
 	"description": "Product Psychology — audit conversion & comprehension, map remembered journeys, research users, and ethics-gate persuasion",
 	"author": {
 		"name": "Dimension"

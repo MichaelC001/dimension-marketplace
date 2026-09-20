@@ -1,7 +1,7 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "agents-best-practices",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "Agents Best Practices — provider-neutral agent-harness architecture: loops, tools, permissions, planning, memory, compaction, evals, safety",
 	"author": {
 		"name": "Dimension"

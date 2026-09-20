@@ -1,7 +1,7 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "slack",
-	"version": "0.1.1",
+	"version": "0.1.2",
 	"description": "Slack connector — list channels, read messages, and post via the Slack Web API",
 	"author": {
 		"name": "Dimension"

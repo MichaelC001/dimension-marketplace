@@ -1,7 +1,7 @@
 {
 	"name": "@dimension/classic-dock",
 	"author": "Dimension",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "Classic Dock — the dock COLUMN — the tab strip, the resize handle, the panel body, as a marketplace pack.",
 	"type": "module",
 	"main": "./src/index.ts",

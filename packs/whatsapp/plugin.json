@@ -1,7 +1,7 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "whatsapp",
-	"version": "0.1.1",
+	"version": "0.1.2",
 	"description": "WhatsApp connector — send text messages and templates via the Meta WhatsApp Cloud API",
 	"author": {
 		"name": "Dimension"

@@ -1,7 +1,7 @@
 {
 	"name": "@dimension/phone",
 	"author": "Dimension",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "Phone - the Code session surface laid out for a 360-430px phone: a layout with no switcher column, plus a space binding the same shared components Code (Assembled) uses.",
 	"type": "module",
 	"main": "./src/index.ts",

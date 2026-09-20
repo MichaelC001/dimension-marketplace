@@ -1,7 +1,7 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "classic-switcher",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "The shipped switcher rail as a pack — the far-left column of space marks.",
 	"author": {
 		"name": "Dimension"

@@ -1,7 +1,7 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "google-meet",
-	"version": "0.1.1",
+	"version": "0.1.2",
 	"description": "Create Google Meet spaces, read conference records/recordings/transcripts, and live-transcribe a call",
 	"author": {
 		"name": "Dimension"

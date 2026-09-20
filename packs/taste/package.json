@@ -1,7 +1,7 @@
 {
 	"name": "@inso/taste",
 	"author": "Dimension",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "Taste — anti-slop frontend skill: brief-first design reads, real design systems, no templated AI aesthetics",
 	"type": "module",
 	"scripts": {

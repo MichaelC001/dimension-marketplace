@@ -1,7 +1,7 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "impeccable",
-	"version": "3.9.1",
+	"version": "3.9.2",
 	"description": "Impeccable — design guidance for AI agents: 23 design commands (craft, polish, audit, critique, bolder, quieter, distill…), anti-slop rules, and a deterministic anti-pattern detector",
 	"author": {
 		"name": "Paul Bakaus (upstream) / Dimension (port)"
