@@ -17,14 +17,6 @@
 		"vite": "8.1.5"
 	},
 	"dimension": {
-		"name": "classic-workspace",
-		"description": "The shipped workspace host as a pack — the center pane's splits, tiling and overlays. The first marketplace part to ever fill the `workspace` contract.",
-		"defaultEnabled": true,
-		"category": "component",
-		"keywords": [
-			"component",
-			"workspace",
-			"classic"
-		]
+		"name": "classic-workspace"
 	}
 }

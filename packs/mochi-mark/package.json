@@ -11,16 +11,7 @@
 		"react": ">=19"
 	},
 	"dimension": {
-		"name": "mochi-mark",
-		"description": "A mark component drawn in a declared slot of a plugin layout — the import-surface FLOOR: react only, zero @fraym/ui.",
-		"defaultEnabled": false,
-		"category": "component",
-		"keywords": [
-			"component",
-			"mark",
-			"demo",
-			"assembly"
-		]
+		"name": "mochi-mark"
 	},
 	"scripts": {
 		"build": "vite build"

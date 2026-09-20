@@ -10,27 +10,17 @@
 	},
 	"dimension": {
 		"name": "google-drive",
-		"description": "Google Drive connector — list/search/read files via OAuth",
-		"defaultEnabled": false,
-		"category": "connector",
-		"keywords": [
-			"google",
-			"drive",
-			"oauth",
-			"files",
-			"connector"
-		],
-		"sharedModule": true,
 		"extensions": [
 			"index.ts"
-		]
+		],
+		"sharedModule": true
 	},
 	"files": [
 		"skills/",
 		"rules/",
 		"index.ts",
 		"assets/",
-		"dimension.plugin.json"
+		"plugin.json"
 	],
 	"peerDependencies": {
 		"arktype": "^2.2.0",

@@ -20,15 +20,7 @@
 		"assembly"
 	],
 	"dimension": {
-		"name": "classic-rail",
-		"description": "The shipped session rail, installable: re-exports RAIL_CLASSIC from @fraym/ui - project grouping, rail actions, search, the full row model.",
-		"defaultEnabled": true,
-		"category": "component",
-		"keywords": [
-			"component",
-			"rail",
-			"classic"
-		]
+		"name": "classic-rail"
 	},
 	"devDependencies": {
 		"vite": "8.1.5"

@@ -11,16 +11,7 @@
 		"react": ">=19"
 	},
 	"dimension": {
-		"name": "pulse-mark",
-		"description": "The Store's demo component: a mark with zero Fraym UI reading `sessions/list` through the one granted binding, selector-gated to a single boolean — the zero-import tier demonstrated.",
-		"defaultEnabled": false,
-		"category": "component",
-		"keywords": [
-			"component",
-			"mark",
-			"demo",
-			"store"
-		]
+		"name": "pulse-mark"
 	},
 	"scripts": {
 		"build": "vite build"

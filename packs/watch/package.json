@@ -8,23 +8,10 @@
 	},
 	"dimension": {
 		"name": "watch",
-		"toolLoading": "eager",
-		"description": "Watch a video by URL or local path: ffmpeg frame sampling plus a timestamped transcript (captions, local Whisper, or a consent-gated cloud API)",
-		"defaultEnabled": false,
-		"category": "connector",
-		"keywords": [
-			"video",
-			"youtube",
-			"transcription",
-			"multimodal",
-			"ffmpeg",
-			"yt-dlp",
-			"connector"
-		],
-		"sharedModule": true,
 		"extensions": [
 			"index.ts"
-		]
+		],
+		"sharedModule": true
 	},
 	"files": [
 		"index.ts",
@@ -32,7 +19,7 @@
 		"skills/",
 		"rules/",
 		"assets/",
-		"dimension.plugin.json",
+		"plugin.json",
 		"PROVENANCE.md"
 	],
 	"author": "Dimension",

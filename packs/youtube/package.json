@@ -10,28 +10,17 @@
 	},
 	"dimension": {
 		"name": "youtube",
-		"description": "Search YouTube, inspect videos and channels, manage playlists, and read/post comments",
-		"defaultEnabled": false,
-		"category": "connector",
-		"keywords": [
-			"youtube",
-			"video",
-			"channel",
-			"playlist",
-			"comments",
-			"media"
-		],
-		"sharedModule": true,
 		"extensions": [
 			"index.ts"
-		]
+		],
+		"sharedModule": true
 	},
 	"files": [
 		"skills/",
 		"rules/",
 		"assets/",
 		"index.ts",
-		"dimension.plugin.json"
+		"plugin.json"
 	],
 	"peerDependencies": {
 		"arktype": "^2.2.0",

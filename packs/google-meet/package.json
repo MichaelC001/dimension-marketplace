@@ -10,18 +10,6 @@
 	},
 	"dimension": {
 		"name": "google-meet",
-		"description": "Create Google Meet spaces, read conference records/recordings/transcripts, and live-transcribe a call",
-		"defaultEnabled": false,
-		"category": "connector",
-		"keywords": [
-			"google-meet",
-			"meet",
-			"meetings",
-			"transcription",
-			"conference-records",
-			"recordings",
-			"productivity"
-		],
 		"extensions": [
 			"index.ts"
 		]
@@ -38,7 +26,7 @@
 		"index.ts",
 		"rest.ts",
 		"bot.ts",
-		"dimension.plugin.json"
+		"plugin.json"
 	],
 	"peerDependencies": {
 		"arktype": "^2.2.0",

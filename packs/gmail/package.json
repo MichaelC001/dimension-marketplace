@@ -8,25 +8,14 @@
 		"check": "biome check . --no-errors-on-unmatched"
 	},
 	"dimension": {
-		"name": "gmail",
-		"description": "Email connector — read/search/compose/reply over IMAP/SMTP via himalaya",
-		"defaultEnabled": false,
-		"category": "connector",
-		"keywords": [
-			"email",
-			"gmail",
-			"imap",
-			"smtp",
-			"himalaya",
-			"connector"
-		]
+		"name": "gmail"
 	},
 	"files": [
 		"skills/",
 		"rules/",
 		"connect/",
 		"assets/",
-		"dimension.plugin.json"
+		"plugin.json"
 	],
 	"license": "MIT"
 }

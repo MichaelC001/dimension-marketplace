@@ -10,20 +10,10 @@
 	},
 	"dimension": {
 		"name": "reddit",
-		"description": "Reddit connector — feeds, posts, comments, search, submit, vote, and inbox via the Reddit OAuth API",
-		"defaultEnabled": false,
-		"category": "connector",
-		"keywords": [
-			"reddit",
-			"social",
-			"forum",
-			"news",
-			"connector"
-		],
-		"sharedModule": true,
 		"extensions": [
 			"index.ts"
-		]
+		],
+		"sharedModule": true
 	},
 	"files": [
 		"skills/",
@@ -31,7 +21,7 @@
 		"connect/",
 		"assets/",
 		"index.ts",
-		"dimension.plugin.json"
+		"plugin.json"
 	],
 	"peerDependencies": {
 		"arktype": "^2.2.0",
