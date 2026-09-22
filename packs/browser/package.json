@@ -1,0 +1,44 @@
+{
+  "name": "@dimension/community-browser",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "author": "Dimension",
+  "description": "A browser MCP App with named profiles, human-approved actions and visual annotations for the same agent session.",
+  "engines": { "node": ">=22.12.0" },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check:types": "tsc --noEmit",
+    "test": "bun test test/",
+    "start": "node app/server.mjs"
+  },
+  "dimension": {
+    "name": "browser",
+    "description": "See and annotate the browser your agent uses. Persistent profiles, an MCP Apps View and human approval before browser mutations.",
+    "defaultEnabled": false,
+    "category": "artifactory",
+    "keywords": ["browser", "mcp-apps", "profiles", "annotations"]
+  },
+  "dependencies": {
+    "@modelcontextprotocol/ext-apps": "1.7.5",
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "pngjs": "7.0.0",
+    "puppeteer-core": "25.11.0",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@dimension/sdk": "0.9.6",
+    "@fraym/ui": "0.9.6",
+    "@types/bun": "1.3.14",
+    "@types/node": "^22.0.0",
+    "@types/pngjs": "6.0.5",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.2",
+    "esbuild": "^0.27.0",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "typescript": "7.0.2",
+    "vite": "8.1.4"
+  }
+}

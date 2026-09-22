@@ -1,0 +1,725 @@
+// src/engines/browser4.ts
+import { spawn } from "node:child_process";
+import { existsSync, readdirSync as readdirSync2, readFileSync as readFileSync2, statSync as statSync2 } from "node:fs";
+import { mkdir, writeFile } from "node:fs/promises";
+import { homedir as homedir2, platform } from "node:os";
+import { basename, join as join2, resolve as resolve2 } from "node:path";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+
+// src/image.ts
+import { PNG } from "pngjs";
+
+// src/store.ts
+import { randomBytes } from "node:crypto";
+import {
+  closeSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  unlinkSync,
+  writeSync
+} from "node:fs";
+import { open, rename, stat } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
+var JOURNAL_MAX_BYTES = 8 * 1024 * 1024;
+var JOURNAL_MAX_RECORD = 8 * 1024;
+var BrowserRuntimeError = class extends Error {
+  code;
+  constructor(code, message) {
+    super(message);
+    this.name = "BrowserRuntimeError";
+    this.code = code;
+  }
+};
+function fail(code, message) {
+  throw new BrowserRuntimeError(code, message);
+}
+
+// src/image.ts
+var MAX_FRAME_BYTES = 8 * 1024 * 1024;
+var PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+
+// src/engines/page-scripts.ts
+var PAGE_TEXT_SCRIPT = (limit) => {
+  const parts = [`# ${document.title}`, document.location.href, ""];
+  const body = document.body?.innerText ?? "";
+  parts.push(body.replace(/\n{3,}/g, "\n\n").trim());
+  const controls = [];
+  const nodes = document.querySelectorAll("a[href], button, input, textarea, select, [role='button'], [role='link']");
+  for (let i = 0; i < nodes.length && controls.length < 200; i += 1) {
+    const el = nodes[i];
+    const rect = el.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) continue;
+    const input = el;
+    const type = (input.type ?? "").toLowerCase();
+    const secret = el.tagName === "INPUT" && (type === "password" || type === "hidden");
+    const editable = el.tagName === "INPUT" || el.tagName === "TEXTAREA";
+    const value = secret ? "[redacted]" : editable ? input.value ?? "" : "";
+    const label = ((editable ? value || el.getAttribute("aria-label") || "" : el.getAttribute("aria-label") || el.innerText || "") || el.getAttribute("name") || el.getAttribute("placeholder") || "").trim().replace(/\s+/g, " ").slice(0, 80);
+    const id = el.id ? `#${el.id}` : "";
+    controls.push(`${el.tagName.toLowerCase()}${id} "${label}" @${Math.round(rect.x)},${Math.round(rect.y)}`);
+  }
+  if (controls.length > 0) parts.push("", "## interactive", controls.join("\n"));
+  const text = parts.join("\n");
+  return text.length > limit ? `${text.slice(0, limit)}
+\u2026 [truncated]` : text;
+};
+var ELEMENTS_IN_REGION_SCRIPT = (region, limit) => {
+  const out = [];
+  const nodes = document.querySelectorAll("body *");
+  for (let i = 0; i < nodes.length && out.length < 60; i += 1) {
+    const el = nodes[i];
+    const r = el.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0) continue;
+    const intersects = r.left < region.x + region.width && r.right > region.x && r.top < region.y + region.height && r.bottom > region.y;
+    if (!intersects) continue;
+    if (el.children.length > 0 && r.width * r.height > region.width * region.height * 4) continue;
+    const input = el;
+    const secret = el.tagName === "INPUT" && ["password", "hidden"].includes((input.type ?? "").toLowerCase());
+    const editable = el.tagName === "INPUT" || el.tagName === "TEXTAREA";
+    const label = secret ? "[redacted input]" : ((editable ? input.value || "" : "") || el.getAttribute("aria-label") || el.innerText || "").trim().replace(/\s+/g, " ").slice(0, 100);
+    const id = el.id ? `#${el.id}` : "";
+    out.push(
+      `${el.tagName.toLowerCase()}${id} [${Math.round(r.x)},${Math.round(r.y)} ${Math.round(r.width)}x${Math.round(r.height)}] ${label}`
+    );
+  }
+  const text = out.join("\n");
+  return text.length > limit ? `${text.slice(0, limit)}
+\u2026 [truncated]` : text;
+};
+
+// src/engines/browser4.ts
+var READ_TIMEOUT_MS = 3e4;
+var SNAPSHOT_TIMEOUT_MS = 6e4;
+var INPUT_TIMEOUT_MS = 9e4;
+var NAVIGATE_TIMEOUT_MS = 12e4;
+var CONNECT_TIMEOUT_MS = 18e4;
+var PROCESS_EXIT_TIMEOUT_MS = 3e4;
+var PROCESS_TOOL_TIMEOUT_MS = 2e4;
+var STDERR_KEEP = 4096;
+var STDERR_REPORT = 600;
+var RUNNER_CLASS = "ai.platon.pulsar.agentic.mcp.server.Browser4MCPServerRunnerKt";
+var MIN_BUNDLE_VERSION = "4.14.0-rc.6";
+var PNG_SIGNATURE2 = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+var PROBE_SCRIPT = (selector) => {
+  const entries = performance.getEntriesByType("navigation");
+  const nav = entries.length > 0 ? entries[0] : void 0;
+  const state = {
+    documentId: [
+      performance.timeOrigin.toFixed(3),
+      nav ? nav.startTime.toFixed(3) : "0",
+      nav ? nav.type : "?",
+      document.location.href
+    ].join("|"),
+    url: document.location.href,
+    title: document.title,
+    width: Math.round(window.innerWidth),
+    height: Math.round(window.innerHeight),
+    target: null
+  };
+  if (selector !== null) {
+    const matches = document.querySelectorAll(selector);
+    const el = matches.length > 0 ? matches[0] : void 0;
+    if (el) {
+      const rect = el.getBoundingClientRect();
+      const input = el;
+      const type = (input.type ?? "").toLowerCase();
+      const secret = el.tagName === "INPUT" && (type === "password" || type === "hidden");
+      const editable = el.tagName === "INPUT" || el.tagName === "TEXTAREA";
+      state.target = {
+        matches: matches.length,
+        tag: el.tagName,
+        id: el.id || "",
+        name: el.getAttribute("name") || "",
+        type,
+        valueLength: !editable || secret ? -1 : (input.value ?? "").length,
+        label: editable ? "" : (el.getAttribute("aria-label") || el.innerText || "").trim().replace(/\s+/g, " ").slice(0, 80),
+        x: Math.round(rect.x),
+        y: Math.round(rect.y),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height)
+      };
+    }
+  }
+  return JSON.stringify(state);
+};
+function expression(fn, ...args) {
+  return `(${fn.toString()})(${args.map((arg) => JSON.stringify(arg) ?? "undefined").join(",")})`;
+}
+function runtimeDataDir() {
+  const override = process.env.BROWSER4_RUNTIME_DIR?.trim();
+  if (override) return resolve2(override);
+  if (platform() === "win32") {
+    const appData = process.env.APPDATA?.trim();
+    if (appData) return join2(appData, "browser4");
+    return join2(homedir2(), "AppData", "Roaming", "browser4");
+  }
+  if (platform() === "darwin") return join2(homedir2(), "Library", "Application Support", "browser4");
+  const xdg = process.env.XDG_DATA_HOME?.trim();
+  return join2(xdg || join2(homedir2(), ".local", "share"), "browser4");
+}
+function readInstall(dir) {
+  const libDir = join2(dir, "lib");
+  const javaPath = join2(dir, "runtime", "bin", platform() === "win32" ? "java.exe" : "java");
+  try {
+    if (!statSync2(javaPath).isFile()) return void 0;
+  } catch {
+    return void 0;
+  }
+  let jars;
+  try {
+    jars = readdirSync2(libDir).filter((name) => name.endsWith(".jar"));
+  } catch {
+    return void 0;
+  }
+  const agentic = jars.find((name) => name.startsWith("browser4-agentic-"));
+  if (agentic === void 0) return void 0;
+  const version = agentic.slice("browser4-agentic-".length, -".jar".length);
+  if (version.length === 0) return void 0;
+  return { installDir: dir, javaPath, libDir, version };
+}
+function findRuntime() {
+  const versionsDir = join2(runtimeDataDir(), "runtime");
+  const tagFile = join2(versionsDir, "current.tag");
+  if (existsSync(tagFile)) {
+    let tag = "";
+    try {
+      tag = readFileSync2(tagFile, "utf8").trim();
+    } catch {
+      tag = "";
+    }
+    if (tag) {
+      const install = readInstall(join2(versionsDir, tag));
+      if (install) return install;
+    }
+  }
+  let candidates = [];
+  try {
+    candidates = readdirSync2(versionsDir).filter((name) => name.startsWith("v"));
+  } catch {
+    candidates = [];
+  }
+  const complete = candidates.map((name) => readInstall(join2(versionsDir, name))).filter((install) => install !== void 0).sort((a, b) => compareVersions(basename(b.installDir).replace(/^v/, ""), basename(a.installDir).replace(/^v/, "")));
+  if (complete.length > 0) return complete[0];
+  return fail(
+    "browser4_not_installed",
+    `No Browser4 runtime bundle under ${versionsDir}. Install one with \`browser4-cli install\`, or unpack the official browser4-bundle-runtime archive of ${MIN_BUNDLE_VERSION} (or newer) there, or point BROWSER4_RUNTIME_DIR at an existing bundle. Opening a browser never installs anything.`
+  );
+}
+function compareVersions(a, b) {
+  const parse = (version) => {
+    const [core = "", pre = ""] = version.split("-", 2);
+    const parts = core.split(".").map((part) => {
+      const value = Number.parseInt(part, 10);
+      return Number.isFinite(value) ? value : 0;
+    });
+    if (pre === "") return { parts, pre: Number.POSITIVE_INFINITY };
+    const rank = Number.parseInt(pre.replace(/^[^0-9]*/, ""), 10);
+    return { parts, pre: Number.isFinite(rank) ? rank : 0 };
+  };
+  const left = parse(a);
+  const right = parse(b);
+  for (let i = 0; i < Math.max(left.parts.length, right.parts.length); i += 1) {
+    const diff = (left.parts[i] ?? 0) - (right.parts[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  if (left.pre === right.pre) return 0;
+  return left.pre < right.pre ? -1 : 1;
+}
+function loggingConfig(logDirectory) {
+  const dir = logDirectory.replace(/\\/g, "/").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!-- Generated by the Dimension browser plugin. Edits are overwritten. -->
+<configuration>
+    <statusListener class="ch.qos.logback.core.status.NopStatusListener" />
+
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <File>${dir}/browser4.log</File>
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level %logger{36} - %msg%n</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+            <fileNamePattern>${dir}/browser4.log.%d{yyyy-MM-dd}</fileNamePattern>
+            <maxHistory>3</maxHistory>
+        </rollingPolicy>
+    </appender>
+
+    <!-- stdout belongs to the MCP transport: no console appender exists here. -->
+    <root level="WARN">
+        <appender-ref ref="FILE"/>
+    </root>
+
+    <!-- Tool-call lines carry argument values (including typed text). -->
+    <logger name="ai.platon.pulsar.agentic.tools.ToolInvocationLogger" level="OFF"/>
+</configuration>
+`;
+}
+function describe(error) {
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
+async function withTimeout(work, ms, what) {
+  let timer;
+  const expiry = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${what} timed out after ${ms}ms`)), ms);
+  });
+  try {
+    return await Promise.race([work, expiry]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function waitForExit(pid, ms) {
+  if (pid === void 0) return true;
+  const deadline = Date.now() + ms;
+  for (; ; ) {
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      if (error.code === "ESRCH") return true;
+    }
+    if (Date.now() >= deadline) return false;
+    await new Promise((done) => setTimeout(done, 100));
+  }
+}
+async function capture(command, args) {
+  return await new Promise((done) => {
+    let settled = false;
+    let timer;
+    let out = "";
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      done(value);
+    };
+    const child = spawn(command, args, { stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
+    timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      finish(void 0);
+    }, PROCESS_TOOL_TIMEOUT_MS);
+    child.stdout?.on("data", (chunk) => {
+      out += chunk.toString("utf8");
+    });
+    child.on("error", () => finish(void 0));
+    child.on("close", (code) => finish(code === 0 ? out : void 0));
+  });
+}
+async function killTree(pid) {
+  if (pid === void 0) return;
+  if (platform() === "win32") {
+    await capture("taskkill", ["/PID", String(pid), "/T", "/F"]);
+    return;
+  }
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch {
+  }
+}
+async function profileHolders(directory) {
+  const win32 = platform() === "win32";
+  const needle = (win32 ? directory.toLowerCase() : directory).replace(/\\/g, "/");
+  const self = process.pid;
+  const holders = [];
+  if (win32) {
+    const json = await capture("powershell.exe", [
+      "-NoProfile",
+      "-NonInteractive",
+      "-NoLogo",
+      "-Command",
+      "Get-CimInstance Win32_Process | Where-Object CommandLine | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress"
+    ]);
+    if (json === void 0) return void 0;
+    let rows;
+    try {
+      const parsed = JSON.parse(json);
+      rows = Array.isArray(parsed) ? parsed : [parsed];
+    } catch {
+      return void 0;
+    }
+    for (const row of rows) {
+      const pid = row?.ProcessId;
+      const line = row?.CommandLine;
+      if (typeof pid !== "number" || pid === self || typeof line !== "string") continue;
+      if (line.toLowerCase().replace(/\\/g, "/").includes(needle)) holders.push(pid);
+    }
+    return holders;
+  }
+  const table = await capture("ps", ["-A", "-o", "pid=,args="]);
+  if (table === void 0) return void 0;
+  for (const line of table.split("\n")) {
+    const match = /^\s*(\d+)\s+(.*)$/.exec(line);
+    if (match === null) continue;
+    const pid = Number.parseInt(match[1], 10);
+    if (!Number.isFinite(pid) || pid === self) continue;
+    if (match[2].includes(needle)) holders.push(pid);
+  }
+  return holders;
+}
+async function releaseProfile(directory) {
+  const holders = await profileHolders(directory);
+  if (holders === void 0) return true;
+  if (holders.length === 0) return true;
+  for (const pid of holders) await killTree(pid);
+  for (const pid of holders) await waitForExit(pid, PROCESS_EXIT_TIMEOUT_MS);
+  const left = await profileHolders(directory);
+  return left !== void 0 && left.length === 0;
+}
+function requireString(value, code, message) {
+  if (typeof value !== "string" || value.length === 0) fail(code, message);
+  return value;
+}
+function requireFiniteNumber(value, code, message) {
+  if (typeof value !== "number" || !Number.isFinite(value)) fail(code, message);
+  return value;
+}
+async function createBrowser4Driver(options) {
+  const profileDirectory = resolve2(
+    requireString(options.profileDirectory, "bad_profile_directory", "profileDirectory must be a non-empty path")
+  );
+  const viewport = {
+    height: requireFiniteNumber(options.viewport?.height, "bad_viewport", "viewport.height must be a number"),
+    width: requireFiniteNumber(options.viewport?.width, "bad_viewport", "viewport.width must be a number")
+  };
+  let releasedLock = false;
+  const releaseLock = () => {
+    if (releasedLock) return;
+    releasedLock = true;
+    options.onClosed();
+  };
+  if (options.relayUrl?.trim()) {
+    releaseLock();
+    fail(
+      "browser4_relay_unsupported",
+      "Browser4 runs as this plugin's own stdio MCP server on a private profile; it has no endpoint to attach to. Use the chrome-relay engine to drive a browser somebody else owns."
+    );
+  }
+  let runtime;
+  try {
+    runtime = findRuntime();
+    if (compareVersions(runtime.version, MIN_BUNDLE_VERSION) < 0) {
+      fail(
+        "browser4_runtime_too_old",
+        `The Browser4 bundle at ${runtime.installDir} is ${runtime.version}; ${MIN_BUNDLE_VERSION} or newer is required, because only those honour \`browser.profile.path\` and would otherwise silently open a shared pooled profile instead of this one.`
+      );
+    }
+  } catch (error) {
+    releaseLock();
+    throw error;
+  }
+  const browser4Dir = join2(profileDirectory, "browser4");
+  const logDirectory = join2(browser4Dir, "logs");
+  const loggingPath = join2(browser4Dir, "logging.xml");
+  let client;
+  let transport;
+  let jvmPid;
+  let stderr = "";
+  const stderrDetail = () => {
+    const detail = stderr.trim().slice(-STDERR_REPORT);
+    return detail ? ` (browser4: ${detail})` : "";
+  };
+  const teardown = async () => {
+    jvmPid ??= transport?.pid ?? void 0;
+    if (client || transport) {
+      const stop = client ? client.close() : transport.close();
+      client = void 0;
+      transport = void 0;
+      try {
+        await withTimeout(stop, PROCESS_EXIT_TIMEOUT_MS, "browser4 server close");
+      } catch {
+      }
+    }
+    let jvmGone = await waitForExit(jvmPid, PROCESS_EXIT_TIMEOUT_MS);
+    if (!jvmGone) {
+      await killTree(jvmPid);
+      jvmGone = await waitForExit(jvmPid, PROCESS_EXIT_TIMEOUT_MS);
+    }
+    const profileFree = await releaseProfile(profileDirectory);
+    return jvmGone && profileFree;
+  };
+  try {
+    await mkdir(logDirectory, { recursive: true });
+    await writeFile(loggingPath, loggingConfig(logDirectory), "utf8");
+    const jvmOptions = [
+      // stdout is the JSON-RPC stream: no log line and no stray `println`
+      // may ever reach it. Both switches are the product's own.
+      `-Dlogback.configurationFile=${loggingPath.replace(/\\/g, "/")}`,
+      "-Dlogging.printlnPro.enabled=false",
+      // The Pulsar SDK derives its app data root from `app.name`; the CLI
+      // daemon launches with the same value so config, WebDB and caches land
+      // in the user's normal ~/.browser4 rather than ~/.pulsar.
+      "-Dapp.name=browser4",
+      // THE isolation switch: B4Constants.BROWSER_PROFILE_PATH, read by
+      // AbstractPulsarSession.createBoundDriver, which launches Chrome on a
+      // BrowserProfile rooted here instead of a pooled SEQUENTIAL profile.
+      `-Dbrowser.profile.path=${profileDirectory.replace(/\\/g, "/")}`,
+      // The standard MCP server rejects a call that violates its published
+      // spec, and the built-in specs are generated from the WebDriver
+      // interface, so they disagree with what the executors actually read
+      // (`navigate` advertises `entry: NavigateEntry` while the executor
+      // takes `url`; `screenshot` advertises a required `rect` while the
+      // viewport capture takes no argument at all). The executors do their
+      // own argument validation, which is the one this driver is written
+      // against.
+      "-Dmcp.validateArgs=false"
+    ];
+    if (options.headless === false) {
+      jvmOptions.push("-Dbrowser.display.mode=GUI");
+    }
+    if (options.executablePath) {
+      jvmOptions.push(`-Dchrome.path=${options.executablePath.replace(/\\/g, "/")}`);
+    }
+    const appDataDir = process.env.BROWSER4_APP_DATA_DIR?.trim();
+    if (appDataDir) jvmOptions.push(`-Dapp.data.dir=${resolve2(appDataDir).replace(/\\/g, "/")}`);
+    const args = [
+      ...jvmOptions,
+      // The wildcard classpath keeps the command line far below the Windows
+      // 32k limit that an enumerated ~250-jar classpath would blow past.
+      "-cp",
+      join2(runtime.libDir, "*"),
+      RUNNER_CLASS,
+      "--transport",
+      "stdio",
+      ...options.headless === void 0 ? [] : [options.headless ? "--headless" : "--headed"]
+    ];
+    transport = new StdioClientTransport({
+      args,
+      command: runtime.javaPath,
+      // A curated inherit list, not the whole environment: this child hosts
+      // an agentic runtime and has no business seeing this process's model
+      // provider keys.
+      env: getDefaultEnvironment(),
+      // Anything the JVM writes relative to its working directory lands
+      // inside the profile rather than in the shared runtime install.
+      cwd: browser4Dir,
+      stderr: "pipe"
+    });
+    transport.stderr?.on("data", (chunk) => {
+      stderr = (stderr + chunk.toString("utf8")).slice(-STDERR_KEEP);
+    });
+    client = new Client({ name: "dimension-browser", version: "0.1.0" }, { capabilities: {} });
+    await withTimeout(client.connect(transport), CONNECT_TIMEOUT_MS, "browser4 server start");
+    jvmPid = transport.pid ?? void 0;
+  } catch (error) {
+    const confirmed = await teardown();
+    const reason = `${describe(error)}${stderrDetail()}`;
+    if (confirmed) {
+      releaseLock();
+      fail("browser4_start_failed", `The Browser4 MCP server failed to start: ${reason}`);
+    }
+    fail(
+      "browser4_start_leaked",
+      `The Browser4 MCP server failed to start and could not be cleaned up: ${reason}`
+    );
+  }
+  const connected = client;
+  const invoke = async (tool, args, timeoutMs) => {
+    let result;
+    try {
+      result = await connected.callTool(
+        // `cache` is a transport control argument: the server consumes it
+        // and never forwards it to an executor. Bypassing the shared result
+        // cache is what makes every read in this driver a real read.
+        { arguments: { ...args, cache: false }, name: tool },
+        void 0,
+        { timeout: timeoutMs }
+      );
+    } catch (error) {
+      return fail("browser4_unreachable", `Browser4 tool ${tool} failed: ${describe(error)}${stderrDetail()}`);
+    }
+    const text = (result.content ?? []).filter((part) => part.type === "text" && typeof part.text === "string").map((part) => part.text).join("");
+    if (result.isError === true) fail("browser4_tool_error", `Browser4 tool ${tool} failed: ${text || "no detail"}`);
+    return text;
+  };
+  let closed = false;
+  let closing;
+  const call = (tool, args, timeoutMs) => {
+    if (closed) fail("browser_closed", "The Browser4 session is closed.");
+    return invoke(tool, args, timeoutMs);
+  };
+  try {
+    await invoke("navigate", { url: "about:blank" }, NAVIGATE_TIMEOUT_MS);
+    await invoke("resize", { height: viewport.height, width: viewport.width }, READ_TIMEOUT_MS);
+    await invoke(
+      "execute_cdp_command",
+      {
+        method: "Emulation.setDeviceMetricsOverride",
+        params: { deviceScaleFactor: 1, height: viewport.height, mobile: false, width: viewport.width }
+      },
+      READ_TIMEOUT_MS
+    );
+  } catch (error) {
+    const confirmed = await teardown();
+    if (confirmed) {
+      releaseLock();
+      throw error;
+    }
+    fail(
+      "browser4_start_leaked",
+      `The Browser4 session could not be initialized or cleaned up: ${describe(error)}${stderrDetail()}`
+    );
+  }
+  const probe = async (selector) => {
+    const text = await call("evaluate_value", { expression: expression(PROBE_SCRIPT, selector) }, READ_TIMEOUT_MS);
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch (error) {
+      return fail("browser4_bad_response", `The page probe returned malformed JSON: ${describe(error)}`);
+    }
+    if (typeof parsed?.documentId !== "string" || parsed.documentId.length === 0) {
+      fail("browser4_bad_response", "The page probe returned no document identity.");
+    }
+    return parsed;
+  };
+  const targetSelector = (action) => {
+    if (action.kind === "type") return requireString(action.selector, "bad_action", "type requires a selector");
+    if (action.kind === "click" && action.selector !== void 0) {
+      return requireString(action.selector, "bad_action", "click selector must be a non-empty string");
+    }
+    return null;
+  };
+  const assertUnchanged = async (selector, expected) => {
+    if (closed) fail("browser_closed", "The browser closed before dispatch.");
+    const now = await probe(selector);
+    if (now.documentId !== expected.documentId) {
+      fail("stale_document", "Stale approval: the document changed between preparation and dispatch.");
+    }
+    if (selector !== null) {
+      if (now.target === null) fail("stale_target", `The element for ${selector} no longer exists.`);
+      if (JSON.stringify(now.target) !== JSON.stringify(expected.target)) {
+        fail("stale_target", `The element for ${selector} changed between preparation and dispatch.`);
+      }
+    }
+  };
+  return {
+    async close() {
+      if (closed) return;
+      closing ??= teardown();
+      const confirmed = await closing;
+      closing = void 0;
+      if (!confirmed) {
+        fail(
+          "browser4_shutdown_unconfirmed",
+          "The Browser4 shutdown could not be confirmed; the profile stays locked. Close again to retry."
+        );
+      }
+      closed = true;
+      releaseLock();
+    },
+    async elements(region, limit) {
+      return await call(
+        "evaluate_value",
+        { expression: expression(ELEMENTS_IN_REGION_SCRIPT, region, limit) },
+        SNAPSHOT_TIMEOUT_MS
+      );
+    },
+    async prepare(action, documentId) {
+      const selector = targetSelector(action);
+      const observed = await probe(selector);
+      if (observed.documentId !== documentId) {
+        fail("stale_document", "Stale request: prepared for a document the page has already left.");
+      }
+      if (selector !== null && observed.target === null) {
+        fail("element_not_found", `No element matches ${selector}.`);
+      }
+      switch (action.kind) {
+        case "navigate": {
+          const url = requireString(action.url, "bad_action", "navigate requires a url");
+          return {
+            dispatch: async () => {
+              await assertUnchanged(selector, observed);
+              await call("navigate", { url }, NAVIGATE_TIMEOUT_MS);
+            }
+          };
+        }
+        case "click": {
+          if (selector !== null) {
+            return {
+              dispatch: async () => {
+                await assertUnchanged(selector, observed);
+                await call("click", { selector }, NAVIGATE_TIMEOUT_MS);
+              }
+            };
+          }
+          const x = requireFiniteNumber(action.x, "bad_action", "click requires a selector or x/y");
+          const y = requireFiniteNumber(action.y, "bad_action", "click requires a selector or x/y");
+          return {
+            dispatch: async () => {
+              await assertUnchanged(selector, observed);
+              await call("mouse_move", { x, y }, INPUT_TIMEOUT_MS);
+              await call("mouse_down", { button: "left", clickCount: 1 }, INPUT_TIMEOUT_MS);
+              await call("mouse_up", { button: "left", clickCount: 1 }, INPUT_TIMEOUT_MS);
+            }
+          };
+        }
+        case "type": {
+          const text = action.text;
+          if (typeof text !== "string") fail("bad_action", "type requires text");
+          return {
+            dispatch: async () => {
+              await assertUnchanged(selector, observed);
+              await call("fill", { selector, text }, INPUT_TIMEOUT_MS);
+            }
+          };
+        }
+        case "press": {
+          const key = requireString(action.key, "bad_action", "press requires a key");
+          return {
+            dispatch: async () => {
+              await assertUnchanged(selector, observed);
+              await call("press", { key }, NAVIGATE_TIMEOUT_MS);
+            }
+          };
+        }
+        case "scroll": {
+          const deltaX = action.deltaX ?? 0;
+          const deltaY = action.deltaY ?? 0;
+          requireFiniteNumber(deltaX, "bad_action", "scroll deltaX must be a number");
+          requireFiniteNumber(deltaY, "bad_action", "scroll deltaY must be a number");
+          return {
+            dispatch: async () => {
+              await assertUnchanged(selector, observed);
+              await call("mouse_wheel", { deltaX, deltaY }, INPUT_TIMEOUT_MS);
+            }
+          };
+        }
+        default:
+          return fail("bad_action", `Unsupported action kind ${JSON.stringify(action.kind)}`);
+      }
+    },
+    async screenshot() {
+      const encoded = await call("screenshot", {}, SNAPSHOT_TIMEOUT_MS);
+      const bytes = Buffer.from(encoded.trim(), "base64");
+      if (bytes.length === 0) fail("browser4_bad_response", "screenshot returned no image data.");
+      if (!bytes.subarray(0, PNG_SIGNATURE2.length).equals(PNG_SIGNATURE2)) {
+        fail("browser4_bad_response", "screenshot did not return a PNG.");
+      }
+      if (bytes.length > MAX_FRAME_BYTES) {
+        fail("frame_too_large", `frame is ${bytes.length} bytes, above the ${MAX_FRAME_BYTES} byte limit`);
+      }
+      return bytes;
+    },
+    async snapshot(limit) {
+      return await call("evaluate_value", { expression: expression(PAGE_TEXT_SCRIPT, limit) }, SNAPSHOT_TIMEOUT_MS);
+    },
+    async state() {
+      const observed = await probe(null);
+      return {
+        documentId: observed.documentId,
+        title: observed.title,
+        url: observed.url,
+        viewport: { height: observed.height, width: observed.width }
+      };
+    }
+  };
+}
+export {
+  createBrowser4Driver
+};

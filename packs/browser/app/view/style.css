@@ -1,0 +1,434 @@
+/* Layout for the browser View. Colour, type and motion come from Fraym's
+   --fr-* tokens (loaded from @fraym/ui/theme.css and, where the host sends
+   them, overridden live by the host's own style variables through
+   useHostStyles). No literal colour values live here. */
+
+:root {
+	color-scheme: light dark;
+}
+
+html,
+body,
+#root {
+	height: 100%;
+	margin: 0;
+}
+
+body {
+	background: var(--fr-bg);
+	color: var(--fr-text);
+	font-family: var(--fr-font-primary, var(--fr-sans));
+	font-size: var(--fr-fs-sm);
+}
+
+.bx-root,
+.bx-app {
+	height: 100%;
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+}
+
+.bx-boot {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	align-items: center;
+	justify-content: center;
+	height: 100%;
+	padding: 24px;
+	text-align: center;
+	color: var(--fr-text-2);
+}
+
+/* ── header ─────────────────────────────────────────────────────────── */
+
+.bx-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 10px 14px;
+	border-bottom: 1px solid var(--fr-border);
+	background: var(--fr-surface);
+}
+
+.bx-head-line {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+}
+
+.bx-head h1 {
+	margin: 0;
+	font-size: var(--fr-fs-md);
+	font-weight: 600;
+}
+
+.bx-head-actions {
+	display: flex;
+	gap: 8px;
+	flex: none;
+}
+
+.bx-title {
+	color: var(--fr-text-2);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	max-width: 32ch;
+}
+
+.bx-url {
+	color: var(--fr-text-3);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	max-width: 48ch;
+}
+
+/* ── body split ─────────────────────────────────────────────────────── */
+
+.bx-body {
+	display: flex;
+	flex: 1;
+	min-height: 0;
+}
+
+.bx-left {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	padding: 10px;
+	overflow: auto;
+}
+
+.bx-right {
+	width: 360px;
+	flex: none;
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	padding: 10px;
+	border-left: 1px solid var(--fr-border);
+	background: var(--fr-surface);
+	overflow: auto;
+}
+
+.bx-toolbar {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex-wrap: wrap;
+}
+
+.bx-spacer {
+	flex: 1;
+}
+
+/* ── canvas ─────────────────────────────────────────────────────────── */
+
+.bx-canvas {
+	border: 1px solid var(--fr-border);
+	border-radius: var(--fr-r, 8px);
+	background: var(--fr-surface-2);
+	overflow: hidden;
+	position: relative;
+}
+
+.bx-canvas[data-frozen="true"] {
+	border-color: var(--fr-accent-line);
+}
+
+.bx-canvas-empty {
+	padding: 48px 12px;
+	text-align: center;
+	color: var(--fr-text-3);
+}
+
+.bx-surface {
+	position: relative;
+	display: block;
+	touch-action: none;
+	user-select: none;
+}
+
+.bx-frame {
+	display: block;
+	width: 100%;
+	height: auto;
+}
+
+.bx-overlay {
+	position: absolute;
+	inset: 0;
+	width: 100%;
+	height: 100%;
+	pointer-events: none;
+}
+
+.bx-region {
+	fill: var(--fr-accent-dim);
+	stroke: var(--fr-accent);
+	stroke-width: 2;
+	vector-effect: non-scaling-stroke;
+}
+
+.bx-mark {
+	fill: none;
+	stroke: var(--fr-accent-2, var(--fr-accent));
+	stroke-width: 3;
+	stroke-linecap: round;
+	stroke-linejoin: round;
+	vector-effect: non-scaling-stroke;
+}
+
+.bx-frozen-note {
+	margin: 0;
+	padding: 6px 10px;
+	font-size: var(--fr-fs-xs);
+	color: var(--fr-text-2);
+	background: var(--fr-surface-3);
+}
+
+/* The keyboard caret: where Enter will click when no pointer is used. */
+.bx-caret line {
+	stroke: var(--fr-accent);
+	stroke-width: 2;
+	vector-effect: non-scaling-stroke;
+}
+
+.bx-caret-note {
+	margin: 0;
+	padding: 6px 10px;
+	font-size: var(--fr-fs-xs);
+	color: var(--fr-text-2);
+}
+
+/* The pointer-free route to a crop. */
+.bx-numeric {
+	display: flex;
+	align-items: flex-end;
+	gap: 8px;
+	flex-wrap: wrap;
+	padding: 8px 10px;
+	border-top: 1px solid var(--fr-border-soft);
+}
+
+/* ── forms and rows ─────────────────────────────────────────────────── */
+
+.bx-controls,
+.bx-open {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.bx-open {
+	padding: 14px;
+}
+
+.bx-row {
+	display: flex;
+	align-items: flex-end;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+
+.bx-grow {
+	flex: 1 1 14rem;
+	min-width: 10rem;
+}
+
+.bx-narrow {
+	flex: 0 0 7rem;
+}
+
+.bx-mask {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding-bottom: 6px;
+	font-size: var(--fr-fs-xs);
+	color: var(--fr-text-2);
+}
+
+/* ── queue, annotation, history ─────────────────────────────────────── */
+
+.bx-queue-head,
+.bx-annotate h2,
+.bx-history h2,
+.bx-open h2 {
+	margin: 0 0 6px;
+	font-size: var(--fr-fs-sm);
+	font-weight: 600;
+}
+
+.bx-queue-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+}
+
+.bx-queue-list,
+.bx-history-list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.bx-queue-item {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 8px;
+	border: 1px solid var(--fr-border-soft);
+	border-radius: var(--fr-r, 8px);
+	background: var(--fr-surface-2);
+}
+
+.bx-queue-item[data-status="pending"] {
+	border-color: var(--fr-accent-line);
+}
+
+.bx-queue-main {
+	min-width: 0;
+}
+
+.bx-queue-what {
+	margin: 0 0 4px;
+	overflow-wrap: anywhere;
+}
+
+.bx-queue-meta {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex-wrap: wrap;
+	margin: 0;
+	font-size: var(--fr-fs-2xs);
+	color: var(--fr-text-3);
+}
+
+.bx-queue-actions {
+	display: flex;
+	gap: 6px;
+	flex: none;
+}
+
+/* The exact executable payload, revealed for one approval and never kept. */
+.bx-queue-exact {
+	display: grid;
+	grid-template-columns: max-content minmax(0, 1fr);
+	gap: 2px 8px;
+	margin: 6px 0 0;
+	padding: 6px 8px;
+	border: 1px solid var(--fr-accent-line);
+	border-radius: var(--fr-r, 8px);
+	background: var(--fr-surface-3);
+	font-size: var(--fr-fs-xs);
+}
+
+.bx-queue-exact > div {
+	display: contents;
+}
+
+.bx-queue-exact dt,
+.bx-queue-exact dd {
+	margin: 0;
+	overflow-wrap: anywhere;
+	white-space: pre-wrap;
+}
+
+.bx-queue-error,
+.bx-error {
+	margin: 4px 0 0;
+	color: var(--fr-del);
+	font-size: var(--fr-fs-xs);
+	overflow-wrap: anywhere;
+}
+
+.bx-annotate,
+.bx-history {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.bx-history-list li {
+	font-size: var(--fr-fs-xs);
+	color: var(--fr-text-2);
+	overflow-wrap: anywhere;
+}
+
+.bx-history-list li[data-tone="del"] {
+	color: var(--fr-del);
+}
+
+.bx-history-list li[data-tone="add"] {
+	color: var(--fr-add);
+}
+
+.bx-snapshot pre {
+	max-height: 14rem;
+	overflow: auto;
+	white-space: pre-wrap;
+	font-size: var(--fr-fs-2xs);
+	background: var(--fr-surface-2);
+	border: 1px solid var(--fr-border-soft);
+	border-radius: var(--fr-r, 8px);
+	padding: 8px;
+}
+
+.bx-note,
+.bx-empty,
+.bx-status {
+	margin: 0;
+	font-size: var(--fr-fs-xs);
+	color: var(--fr-text-3);
+}
+
+.bx-status[data-kind="error"] {
+	color: var(--fr-del);
+}
+
+.bx-status[data-kind="partial"] {
+	color: var(--fr-warn);
+}
+
+.bx-status[data-kind="sent"] {
+	color: var(--fr-add);
+}
+
+.bx-mono {
+	font-family: var(--fr-font-mono, var(--fr-mono));
+}
+
+.bx-dim {
+	color: var(--fr-text-3);
+}
+
+/* Focus is never removed; it is drawn with the accent line token. */
+:where(button, input, textarea, select, summary):focus-visible {
+	outline: 2px solid var(--fr-accent-line);
+	outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.01ms !important;
+		scroll-behavior: auto !important;
+	}
+}

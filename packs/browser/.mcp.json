@@ -1,0 +1,5 @@
+{
+  "mcpServers": {
+    "browser": { "command": "node", "args": ["app/server.mjs"] }
+  }
+}
