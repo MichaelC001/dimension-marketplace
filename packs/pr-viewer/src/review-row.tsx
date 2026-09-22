@@ -1,7 +1,7 @@
 // A list row. One place decides how a review looks in a line, so the rail, the
 // card and this list cannot read as three different reviews.
 
-import { ChainRow, DiffStat, GitHubPullRequestIcon, Icon, Pill, REVIEW_PILL_LABEL, REVIEW_PILL_TINT, reviewPillState, StateGlyph } from "@fraym/ui";
+import { ChainRow, cn, DiffStat, GitHubPullRequestIcon, Icon, Pill, REVIEW_PILL_LABEL, REVIEW_PILL_TINT, reviewPillState, StateGlyph } from "@fraym/ui";
 import type { ReactNode } from "react";
 import { relativeTime, type ReviewSummary, type SessionReviewLink } from "./model";
 import type { Tone } from "./shapes";
@@ -26,9 +26,12 @@ export function sourceLabel(source: SessionReviewLink["source"]): string {
 }
 
 /** A list row is STACKED (owner ruling 2026-09-17): the review's number line
- *  on top — state octicon, `#N`, then time and check/decision badges at the
- *  right edge — the title full-width beneath it, and the branch + diff stat
- *  under that. Every line starts on the same left edge. */
+ *  on top — a fixed state glyph box, `#N`, then time and check/decision
+ *  badges at the right edge — the title full-width beneath it, and the branch
+ *  + diff stat under that. Every line starts on the same left edge. The row
+ *  itself is a `ChainRow` card, so one review reads as one block at rest; the
+ *  glyph box is the rail hover card's idiom (`size-5`, state tint), giving the
+ *  status column a fixed x every row scans on. */
 export function ReviewRow({
 	summary,
 	link,
@@ -55,13 +58,15 @@ export function ReviewRow({
 	const state = summary ? reviewPillState(summary) : "open";
 	const label = summary ? REVIEW_PILL_LABEL[state] : "Not synced yet";
 	return (
-		<ChainRow depth={depth} className="group rounded-md pr-3 hover:bg-fr-surface">
-			<button type="button" onClick={onSelect} className="flex min-w-0 flex-1 flex-col gap-1.5 py-2.5 text-left">
+		<ChainRow depth={depth} variant="card" className="group pr-3">
+			<button type="button" onClick={onSelect} className="flex min-w-0 flex-1 flex-col gap-1 py-2 text-left">
 				{/* Every fact is a pill (owner ruling 2026-09-17): the review's
 				    number carries its state's ink; the rest are quiet chips. */}
 				<span className="flex min-w-0 flex-wrap items-center gap-1.5">
-					<Pill tint={REVIEW_PILL_TINT[state]} className="tabular-nums" title={link ? sourceLabel(link.source) : undefined}>
+					<span className={cn("inline-flex size-5 shrink-0 items-center justify-center rounded-sm border border-fr-border", REVIEW_PILL_TINT[state])} aria-hidden>
 						<GitHubPullRequestIcon state={state} size={12} />
+					</span>
+					<Pill tint={REVIEW_PILL_TINT[state]} className="tabular-nums" title={link ? sourceLabel(link.source) : undefined}>
 						<span className="text-fr-text">#{ref?.number}</span>
 						<span>· {label}</span>
 					</Pill>
@@ -82,7 +87,7 @@ export function ReviewRow({
 						</Pill>
 					) : null}
 				</span>
-				<span className="line-clamp-2 min-w-0 whitespace-normal break-words text-fr-md font-medium text-fr-text">{summary?.title ?? link?.url ?? ""}</span>
+				<span className="min-w-0 truncate text-fr-sm font-semibold text-fr-text" title={summary?.title ?? link?.url ?? ""}>{summary?.title ?? link?.url ?? ""}</span>
 				<span className="flex min-w-0 items-center gap-1.5">
 					{summary?.author && summary.author.login !== sharedOwner ? (
 						<Pill>
