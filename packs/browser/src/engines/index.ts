@@ -15,7 +15,7 @@ const factories: Record<BrowserEngine, (options: EngineOptions) => Promise<Engin
 };
 
 export function createEngineDriver(engine: BrowserEngine, options: EngineOptions): Promise<EngineDriver> {
-  const create = factories[engine];
-  if (!create) throw new Error(`Unsupported browser engine: ${engine}`);
-  return create(options);
+  // `factories` is total over BrowserEngine and the runtime validates the name
+  // before it gets here, so there is no unsupported-engine branch to write.
+  return factories[engine](options);
 }

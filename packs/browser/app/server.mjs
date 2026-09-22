@@ -3,7 +3,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 
 // src/server.ts
 import { readFile as readFile2, readdir } from "node:fs/promises";
-import { extname, join as join6 } from "node:path";
+import { extname, join as join5 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 import { registerAppResource, registerAppTool, RESOURCE_MIME_TYPE } from "@modelcontextprotocol/ext-apps/server";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -15,7 +15,7 @@ var MAX_ANNOTATION_BYTES = 2097152;
 
 // src/runtime.ts
 import { createHmac, randomBytes as randomBytes2 } from "node:crypto";
-import { join as join5 } from "node:path";
+import { join as join4 } from "node:path";
 
 // src/image.ts
 import { PNG } from "pngjs";
@@ -483,11 +483,29 @@ var PuppeteerDriver = class {
     if (this.#closed || this.#page.isClosed()) fail("browser_closed", "The browser is closed.");
     const documentId = await this.#documentId();
     const url = this.#page.url();
-    const history = await this.#cdp.send("Page.getNavigationHistory");
+    const history = await this.#read(() => this.#cdp.send("Page.getNavigationHistory"));
     const current = history.entries[history.currentIndex];
     if (!current) fail("no_document", "The browser did not report a current navigation entry.");
     const title = current.title;
     return { url, title, documentId, viewport: this.#viewport };
+  }
+  /**
+   * One read-only CDP call, retried once. While a cross-document navigation
+   * commits, the session's target is briefly not an active page and the send
+   * rejects; a read has no effect, so re-reading is safe and a transient
+   * protocol error must not fail a state read or void a human's approval.
+   */
+  async #read(send) {
+    try {
+      return await send();
+    } catch (error) {
+      if (this.#closed || this.#page.isClosed()) fail("browser_closed", "The browser closed during inspection.");
+      try {
+        return await send();
+      } catch {
+        throw error;
+      }
+    }
   }
   async screenshot() {
     const shot = await this.#page.screenshot({ type: "png", captureBeyondViewport: false });
@@ -651,7 +669,7 @@ var PuppeteerDriver = class {
   // -----------------------------------------------------------------------
   /** Live document identity, read from the browser, never from a cache. */
   async #documentId() {
-    const { frameTree } = await this.#cdp.send("Page.getFrameTree");
+    const { frameTree } = await this.#read(() => this.#cdp.send("Page.getFrameTree"));
     const loaderId = frameTree.frame.loaderId;
     if (typeof loaderId !== "string" || loaderId.length === 0) {
       fail("no_document", "the tab did not report a document identity; it may be closing");
@@ -711,509 +729,25 @@ async function withTimeout(promise, ms, label) {
 }
 
 // src/engines/abp.ts
-import { spawn } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
-import { createRequire } from "node:module";
-import { createServer } from "node:net";
-import { dirname, join as join2 } from "node:path";
-var ENGINE_SUBDIR = "abp";
-var READY_TIMEOUT_MS = 6e4;
-var READY_POLL_INTERVAL_MS = 150;
-var STATUS_TIMEOUT_MS = 2e3;
-var READ_TIMEOUT_MS = 3e4;
-var SCREENSHOT_TIMEOUT_MS = 6e4;
-var MUTATION_TIMEOUT_MS = 6e4;
-var NAVIGATE_TIMEOUT_MS2 = 12e4;
-var SHUTDOWN_REQUEST_TIMEOUT_MS = 5e3;
-var SHUTDOWN_GRACE_MS = 8e3;
-var KILL_GRACE_MS = 5e3;
-var MAX_SCREENSHOT_BYTES = 8 * 1024 * 1024;
-var DISCARDED_SCREENSHOT = { format: "jpeg", quality: 1, markup: [] };
-var WAIT_IMMEDIATE = { type: "immediate" };
-function refuse(options) {
-  options.onClosed();
-  fail(
-    "abp_unauthenticated_control_port",
-    "The ABP browser is not available: it exposes an unauthenticated local control port, so any web page it visits could drive it (open tabs, navigate, shut it down) without this pack's approval. Upstream offers no authentication, origin check or private transport for those routes, so a browser holding your logins is not started. Use the chromium, chrome-relay, jev or browser-use engine."
-  );
-}
-var KEY_NAMES = {
-  " ": "Space",
-  ",": "Comma",
-  ".": "Period",
-  "/": "Slash",
-  "\\": "Backslash",
-  ";": "Semicolon",
-  "'": "Quote",
-  "[": "BracketLeft",
-  "]": "BracketRight",
-  "-": "Minus",
-  "=": "Equal",
-  "`": "Backquote"
-};
-var LOCATE_FAILURES = {
-  invalid_selector: "is not a valid CSS selector",
-  not_found: "matched no element",
-  not_visible: "matched an element with no layout box",
-  outside_viewport: "matched an element outside the viewport; scroll it into view first",
-  obscured: "matched an element covered by another element at its centre point"
-};
-var HARDENING_ARGS = [
-  "--no-first-run",
-  "--no-default-browser-check",
-  "--no-pings",
-  "--disable-background-networking",
-  "--disable-breakpad",
-  "--disable-client-side-phishing-detection",
-  "--disable-component-update",
-  "--disable-default-apps",
-  "--disable-domain-reliability",
-  "--disable-extensions",
-  "--disable-sync",
-  "--use-mock-keychain",
-  "--disable-features=Translate,OptimizationHints,MediaRouter,AutofillServerCommunication,CalculateNativeWinOcclusion"
-];
-var PLATFORM_EXECUTABLE = {
-  win32: "abp-chrome/abp.exe",
-  linux: "abp-chrome/abp",
-  darwin: "ABP.app/Contents/MacOS/ABP"
-};
-var ABP_EXECUTABLE_ENV = "DIMENSION_BROWSER_ABP_EXECUTABLE";
-var INSTALL_HINT = `Set ${ABP_EXECUTABLE_ENV} (or upstream's ABP_BROWSER_PATH) to an installed \`abp\` binary, or install the browser with \`npm i agent-browser-protocol@0.1.11\`, whose postinstall downloads the matching native build. The ABP engine cannot run on a stock Chrome/Chromium executable.`;
-var AbpError = class extends Error {
-  status;
-  code;
-  constructor(message, status, code) {
-    super(message);
-    this.name = "AbpError";
-    this.status = status;
-    this.code = code;
-  }
-};
-var PROBE_SCRIPT = () => JSON.stringify({
-  url: document.location.href,
-  title: document.title,
-  origin: performance.timeOrigin,
-  width: Math.round(window.innerWidth),
-  height: Math.round(window.innerHeight)
-});
-var LOCATE_SCRIPT = (selector2) => {
-  let el;
-  try {
-    el = document.querySelector(selector2);
-  } catch {
-    return JSON.stringify({ ok: false, reason: "invalid_selector", origin: performance.timeOrigin });
-  }
-  if (!el) return JSON.stringify({ ok: false, reason: "not_found", origin: performance.timeOrigin });
-  const rect = el.getBoundingClientRect();
-  if (rect.width <= 0 || rect.height <= 0) {
-    return JSON.stringify({ ok: false, reason: "not_visible", origin: performance.timeOrigin });
-  }
-  const x = rect.left + rect.width / 2;
-  const y = rect.top + rect.height / 2;
-  const width = window.innerWidth;
-  const height = window.innerHeight;
-  if (x < 0 || y < 0 || x >= width || y >= height) {
-    return JSON.stringify({ ok: false, reason: "outside_viewport", origin: performance.timeOrigin });
-  }
-  const top = document.elementFromPoint(x, y);
-  const hits = top !== null && (top === el || el.contains(top) || top.contains(el));
-  if (!hits) return JSON.stringify({ ok: false, reason: "obscured", origin: performance.timeOrigin });
-  return JSON.stringify({ ok: true, x: Math.round(x), y: Math.round(y), origin: performance.timeOrigin });
-};
-function callScript(fn, ...args) {
-  return `(${fn.toString()})(${args.map((arg) => JSON.stringify(arg)).join(",")})`;
-}
-function resolveExecutable(explicit) {
-  const configured = process.env[ABP_EXECUTABLE_ENV] ?? process.env.ABP_BROWSER_PATH ?? explicit;
-  if (configured) return configured;
-  const relative = PLATFORM_EXECUTABLE[process.platform];
-  if (!relative) throw new Error(`The ABP engine has no published build for ${process.platform}. ${INSTALL_HINT}`);
-  try {
-    const manifest = createRequire(import.meta.url).resolve("agent-browser-protocol/package.json");
-    return join2(dirname(manifest), "browsers", relative);
-  } catch {
-    throw new Error(`The ABP browser binary could not be located. ${INSTALL_HINT}`);
-  }
-}
-function reservePort() {
-  const { promise, resolve: resolve4, reject } = Promise.withResolvers();
-  const server2 = createServer();
-  server2.once("error", reject);
-  server2.listen(0, "127.0.0.1", () => {
-    const address = server2.address();
-    if (address === null || typeof address === "string") {
-      server2.close();
-      reject(new Error("Could not reserve a loopback port for the ABP browser"));
-      return;
-    }
-    const { port } = address;
-    server2.close((error) => error ? reject(error) : resolve4(port));
-  });
-  return promise;
-}
-function describeFailure(status, body) {
-  try {
-    const parsed = JSON.parse(body);
-    const code = typeof parsed.error === "string" ? parsed.error : void 0;
-    const message = typeof parsed.message === "string" ? parsed.message : void 0;
-    if (code && message) return new AbpError(`ABP ${code}: ${message}`, status, code);
-    if (code) return new AbpError(`ABP request failed (${status}): ${code}`, status, code);
-  } catch {
-  }
-  return new AbpError(`ABP request failed (${status}): ${body.slice(0, 200)}`, status);
-}
 async function createAbpDriver(options) {
-  refuse(options);
-  const home = join2(options.profileDirectory, ENGINE_SUBDIR);
-  const userDataDir = join2(home, "user-data");
-  const sessionDir = join2(home, "session");
-  const configPath = join2(home, "abp-config.json");
-  let released = false;
-  const release = () => {
-    if (released) return;
-    released = true;
-    options.onClosed();
-  };
-  let executable;
-  let port;
-  try {
-    executable = resolveExecutable(options.executablePath);
-    await mkdir(userDataDir, { recursive: true, mode: 448 });
-    await mkdir(sessionDir, { recursive: true, mode: 448 });
-    await writeFile(
-      configPath,
-      JSON.stringify({
-        history: {
-          enabled: false,
-          database_path: join2(sessionDir, "history.db"),
-          screenshots: { enabled: false, directory: join2(sessionDir, "screenshots") }
-        }
-      }),
-      { mode: 384 }
-    );
-    port = await reservePort();
-  } catch (error) {
-    release();
-    throw error;
-  }
-  const args = [
-    `--abp-port=${port}`,
-    `--abp-config=${configPath}`,
-    `--abp-session-dir=${sessionDir}`,
-    `--abp-window-size=${options.viewport.width},${options.viewport.height}`,
-    `--user-data-dir=${userDataDir}`,
-    ...HARDENING_ARGS
-  ];
-  if (options.headless === true) args.push("--headless=new");
-  let child;
-  try {
-    child = spawn(executable, args, { stdio: "ignore", windowsHide: true, detached: false });
-  } catch (error) {
-    release();
-    throw error;
-  }
-  let exited = false;
-  const exitWatchers = /* @__PURE__ */ new Set();
-  const markExited = () => {
-    if (exited) return;
-    exited = true;
-    for (const watcher of exitWatchers) watcher();
-    exitWatchers.clear();
-    release();
-  };
-  child.once("exit", markExited);
-  child.on("error", () => {
-    if (child.pid === void 0) markExited();
-  });
-  const waitForExit3 = async (timeoutMs) => {
-    if (exited) return true;
-    const { promise, resolve: resolve4 } = Promise.withResolvers();
-    const timer = setTimeout(() => {
-      exitWatchers.delete(watcher);
-      resolve4(false);
-    }, timeoutMs);
-    const watcher = () => {
-      clearTimeout(timer);
-      resolve4(true);
-    };
-    exitWatchers.add(watcher);
-    return await promise;
-  };
-  const base = `http://127.0.0.1:${port}/api/v1`;
-  async function request(path, init, timeoutMs) {
-    let response;
-    try {
-      response = await fetch(`${base}${path}`, { ...init, signal: AbortSignal.timeout(timeoutMs) });
-    } catch (error) {
-      if (exited) throw new AbpError("The ABP browser process is no longer running", 0);
-      throw error;
-    }
-    const body = await response.text();
-    if (!response.ok) throw describeFailure(response.status, body);
-    return body.length === 0 ? {} : JSON.parse(body);
-  }
-  async function post(path, payload, timeoutMs) {
-    return await request(
-      path,
-      { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) },
-      timeoutMs
-    );
-  }
-  const stop2 = async () => {
-    if (exited) return true;
-    try {
-      await post("/browser/shutdown", { timeout_ms: SHUTDOWN_REQUEST_TIMEOUT_MS }, SHUTDOWN_REQUEST_TIMEOUT_MS);
-    } catch {
-    }
-    if (await waitForExit3(SHUTDOWN_GRACE_MS)) return true;
-    child.kill();
-    if (await waitForExit3(KILL_GRACE_MS)) return true;
-    child.kill("SIGKILL");
-    return await waitForExit3(KILL_GRACE_MS);
-  };
-  const deadline = Date.now() + READY_TIMEOUT_MS;
-  let ready = false;
-  while (Date.now() < deadline && !exited) {
-    try {
-      const status = await request("/browser/status", {}, STATUS_TIMEOUT_MS);
-      if (status.data?.ready === true) {
-        ready = true;
-        break;
-      }
-    } catch {
-    }
-    const { promise, resolve: resolve4 } = Promise.withResolvers();
-    setTimeout(resolve4, READY_POLL_INTERVAL_MS);
-    await promise;
-  }
-  if (!ready) {
-    const cause = new Error(
-      exited ? `The ABP browser at ${executable} exited before becoming ready (code ${child.exitCode ?? "unknown"})` : `The ABP browser at ${executable} was not ready within ${READY_TIMEOUT_MS}ms`
-    );
-    await stop2();
-    throw cause;
-  }
-  let tabId;
-  try {
-    const tabs = await request("/tabs", {}, READ_TIMEOUT_MS);
-    const existing = tabs.find((tab) => tab.active) ?? tabs[0];
-    tabId = existing ? existing.id : (await post("/tabs", {}, READ_TIMEOUT_MS)).id;
-  } catch (error) {
-    await stop2();
-    throw error;
-  }
-  const tabPath = `/tabs/${encodeURIComponent(tabId)}`;
-  async function evaluate(script, timeoutMs) {
-    const envelope = await post(
-      `${tabPath}/execute`,
-      { script, wait_until: WAIT_IMMEDIATE, screenshot: DISCARDED_SCREENSHOT },
-      timeoutMs
-    );
-    const result2 = envelope.result;
-    if (!result2 || result2.type !== "string" || typeof result2.value !== "string") {
-      throw new AbpError(`ABP returned a ${result2?.type ?? "missing"} value where a string was expected`, 0);
-    }
-    return result2.value;
-  }
-  async function probe() {
-    const raw = await evaluate(callScript(PROBE_SCRIPT), READ_TIMEOUT_MS);
-    const parsed = JSON.parse(raw);
-    return {
-      url: parsed.url,
-      title: parsed.title,
-      origin: parsed.origin,
-      // The measured box, not the requested one: `--abp-window-size` sizes the
-      // window, so the content box is whatever is left after browser chrome,
-      // and the screenshot is scaled to exactly this.
-      viewport: { width: parsed.width, height: parsed.height }
-    };
-  }
-  async function requireDocument(documentId) {
-    const current = await probe();
-    if (`${tabId}|${current.origin}` !== documentId) {
-      throw new AbpError(
-        `The page changed since this action was prepared (expected document ${documentId}, found ${tabId}|${current.origin})`,
-        409,
-        "STALE_DOCUMENT"
-      );
-    }
-    return current;
-  }
-  async function locate(selector2, documentId) {
-    const raw = await evaluate(callScript(LOCATE_SCRIPT, selector2), READ_TIMEOUT_MS);
-    const parsed = JSON.parse(raw);
-    if (`${tabId}|${parsed.origin}` !== documentId) {
-      throw new AbpError(
-        `The page changed while resolving ${JSON.stringify(selector2)} (expected document ${documentId})`,
-        409,
-        "STALE_DOCUMENT"
-      );
-    }
-    if (!parsed.ok || parsed.x === void 0 || parsed.y === void 0) {
-      const reason = parsed.reason ?? "unresolved";
-      throw new AbpError(
-        `${JSON.stringify(selector2)} ${LOCATE_FAILURES[reason] ?? `could not be resolved (${reason})`}`,
-        404,
-        "SELECTOR_NOT_FOUND"
-      );
-    }
-    return { x: parsed.x, y: parsed.y };
-  }
-  async function act(path, payload, timeoutMs) {
-    return await post(`${tabPath}/${path}`, { ...payload, screenshot: DISCARDED_SCREENSHOT }, timeoutMs);
-  }
-  return {
-    async state() {
-      const current = await probe();
-      return {
-        url: current.url,
-        title: current.title,
-        documentId: `${tabId}|${current.origin}`,
-        viewport: current.viewport
-      };
-    },
-    async screenshot() {
-      const envelope = await post(
-        `${tabPath}/screenshot`,
-        // No markup overlays: the frame must be what a person would see.
-        { wait_until: WAIT_IMMEDIATE, screenshot: { format: "png", markup: [] } },
-        SCREENSHOT_TIMEOUT_MS
-      );
-      const captured = envelope.screenshot_after;
-      if (!captured?.data) throw new AbpError("ABP returned no screenshot data", 0);
-      if (captured.format !== void 0 && captured.format !== "png") {
-        throw new AbpError(`ABP encoded the screenshot as ${captured.format} instead of png`, 0);
-      }
-      const bytes = Buffer.from(captured.data, "base64");
-      if (bytes.byteLength > MAX_SCREENSHOT_BYTES) {
-        throw new AbpError(
-          `The ${captured.width ?? "?"}x${captured.height ?? "?"} screenshot is ${bytes.byteLength} bytes, over the ${MAX_SCREENSHOT_BYTES} byte limit`,
-          0
-        );
-      }
-      return bytes;
-    },
-    async snapshot(limit) {
-      return await evaluate(callScript(PAGE_TEXT_SCRIPT, limit), READ_TIMEOUT_MS);
-    },
-    async elements(region, limit) {
-      return await evaluate(callScript(ELEMENTS_IN_REGION_SCRIPT, region, limit), READ_TIMEOUT_MS);
-    },
-    async prepare(action, documentId) {
-      switch (action.kind) {
-        case "navigate": {
-          if (typeof action.url !== "string") throw new AbpError("navigate needs a url", 400, "INVALID_ARGUMENT");
-          const target = new URL(action.url);
-          if (target.protocol !== "http:" && target.protocol !== "https:") {
-            throw new AbpError(`ABP navigation refuses the ${target.protocol} scheme`, 400, "INVALID_ARGUMENT");
-          }
-          const url = target.toString();
-          await requireDocument(documentId);
-          return {
-            dispatch: async () => {
-              await requireDocument(documentId);
-              await act("navigate", { url }, NAVIGATE_TIMEOUT_MS2);
-            }
-          };
-        }
-        case "click": {
-          let point;
-          if (typeof action.selector === "string") {
-            point = await locate(action.selector, documentId);
-          } else {
-            if (typeof action.x !== "number" || typeof action.y !== "number") {
-              throw new AbpError("click needs a selector or x/y coordinates", 400, "INVALID_ARGUMENT");
-            }
-            point = { x: action.x, y: action.y };
-            await requireDocument(documentId);
-          }
-          return {
-            dispatch: async () => {
-              await requireDocument(documentId);
-              await act("click", { x: point.x, y: point.y, button: "left", click_count: 1 }, MUTATION_TIMEOUT_MS);
-            }
-          };
-        }
-        case "type": {
-          if (typeof action.selector !== "string" || typeof action.text !== "string") {
-            throw new AbpError("type needs a selector and text", 400, "INVALID_ARGUMENT");
-          }
-          const text = action.text;
-          const point = await locate(action.selector, documentId);
-          return {
-            dispatch: async () => {
-              await requireDocument(documentId);
-              const cleared = await act("clear_text", { x: point.x, y: point.y }, MUTATION_TIMEOUT_MS);
-              if (text.length === 0) return;
-              if (cleared.tab_changed === true || (cleared.events ?? []).some((event) => event.type === "navigation")) {
-                throw new AbpError(
-                  "The page navigated while the field was being cleared; the text was not typed",
-                  409,
-                  "STALE_DOCUMENT"
-                );
-              }
-              await act("type", { text }, MUTATION_TIMEOUT_MS);
-            }
-          };
-        }
-        case "press": {
-          if (typeof action.key !== "string") throw new AbpError("press needs a key", 400, "INVALID_ARGUMENT");
-          const key = KEY_NAMES[action.key] ?? action.key;
-          await requireDocument(documentId);
-          return {
-            dispatch: async () => {
-              await requireDocument(documentId);
-              await act("keyboard/press", { key, modifiers: [] }, MUTATION_TIMEOUT_MS);
-            }
-          };
-        }
-        case "scroll": {
-          const deltaX = action.deltaX ?? 0;
-          const deltaY = action.deltaY ?? 0;
-          if (deltaX === 0 && deltaY === 0) {
-            throw new AbpError("scroll needs a non-zero deltaX or deltaY", 400, "INVALID_ARGUMENT");
-          }
-          const prepared = await requireDocument(documentId);
-          return {
-            dispatch: async () => {
-              const current = await requireDocument(documentId);
-              const viewport = current.viewport.width > 0 ? current.viewport : prepared.viewport;
-              const scrolls = [];
-              if (deltaY !== 0) scrolls.push({ delta_px: deltaY, direction: "y" });
-              if (deltaX !== 0) scrolls.push({ delta_px: deltaX, direction: "x" });
-              await act(
-                "scroll",
-                { x: Math.floor(viewport.width / 2), y: Math.floor(viewport.height / 2), scrolls },
-                MUTATION_TIMEOUT_MS
-              );
-            }
-          };
-        }
-        default:
-          throw new AbpError(`Unsupported action kind ${JSON.stringify(action.kind)}`, 400);
-      }
-    },
-    async close() {
-      if (await stop2()) return;
-      throw new Error(
-        `The ABP browser process ${child.pid ?? "?"} did not exit; the ${options.profileDirectory} profile stays locked`
-      );
-    }
-  };
+  options.onClosed();
+  return fail(
+    "abp_unauthenticated_control_port",
+    "The ABP browser is not available: it exposes an unauthenticated local control port, so any page it visits could drive it (open tabs, navigate, shut it down) without this pack's approval. Upstream offers no authentication, origin check or private transport for those routes, so a browser holding your logins is not started. Use the chromium, chrome-relay, jev or browser-use engine."
+  );
 }
 
 // src/engines/browser4.ts
-import { spawn as spawn2 } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync, readdirSync as readdirSync2, readFileSync as readFileSync2, statSync as statSync2 } from "node:fs";
-import { mkdir as mkdir2, readFile, rm, writeFile as writeFile2 } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir as homedir2, platform } from "node:os";
-import { basename, join as join3, resolve as resolve2 } from "node:path";
+import { basename, join as join2, resolve as resolve2 } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import puppeteer2 from "puppeteer-core";
-var READ_TIMEOUT_MS2 = 3e4;
+var READ_TIMEOUT_MS = 3e4;
 var CONNECT_TIMEOUT_MS = 18e4;
 var ENDPOINT_TIMEOUT_MS = 6e4;
 var PROCESS_EXIT_TIMEOUT_MS = 3e4;
@@ -1245,12 +779,12 @@ function runtimeDataDir() {
   if (override) return resolve2(override);
   if (platform() === "win32") {
     const appData = process.env.APPDATA?.trim();
-    if (appData) return join3(appData, "browser4");
-    return join3(homedir2(), "AppData", "Roaming", "browser4");
+    if (appData) return join2(appData, "browser4");
+    return join2(homedir2(), "AppData", "Roaming", "browser4");
   }
-  if (platform() === "darwin") return join3(homedir2(), "Library", "Application Support", "browser4");
+  if (platform() === "darwin") return join2(homedir2(), "Library", "Application Support", "browser4");
   const xdg = process.env.XDG_DATA_HOME?.trim();
-  return join3(xdg || join3(homedir2(), ".local", "share"), "browser4");
+  return join2(xdg || join2(homedir2(), ".local", "share"), "browser4");
 }
 function jarVersion(jars, artifact) {
   const prefix = `${artifact}-`;
@@ -1260,8 +794,8 @@ function jarVersion(jars, artifact) {
   return version.length > 0 ? version : void 0;
 }
 function readInstall(dir) {
-  const libDir = join3(dir, "lib");
-  const javaPath = join3(dir, "runtime", "bin", platform() === "win32" ? "java.exe" : "java");
+  const libDir = join2(dir, "lib");
+  const javaPath = join2(dir, "runtime", "bin", platform() === "win32" ? "java.exe" : "java");
   try {
     if (!statSync2(javaPath).isFile()) return void 0;
   } catch {
@@ -1279,8 +813,8 @@ function readInstall(dir) {
   return { coreVersion, installDir: dir, javaPath, libDir, version };
 }
 function findRuntime() {
-  const versionsDir = join3(runtimeDataDir(), "runtime");
-  const tagFile = join3(versionsDir, "current.tag");
+  const versionsDir = join2(runtimeDataDir(), "runtime");
+  const tagFile = join2(versionsDir, "current.tag");
   if (existsSync(tagFile)) {
     let tag = "";
     try {
@@ -1289,7 +823,7 @@ function findRuntime() {
       tag = "";
     }
     if (tag) {
-      const install = readInstall(join3(versionsDir, tag));
+      const install = readInstall(join2(versionsDir, tag));
       if (install) return install;
     }
   }
@@ -1299,7 +833,7 @@ function findRuntime() {
   } catch {
     candidates = [];
   }
-  const complete = candidates.map((name) => readInstall(join3(versionsDir, name))).filter((install) => install !== void 0).sort((a, b) => compareVersions(basename(b.installDir).replace(/^v/, ""), basename(a.installDir).replace(/^v/, "")));
+  const complete = candidates.map((name) => readInstall(join2(versionsDir, name))).filter((install) => install !== void 0).sort((a, b) => compareVersions(basename(b.installDir).replace(/^v/, ""), basename(a.installDir).replace(/^v/, "")));
   if (complete.length > 0) return complete[0];
   return fail(
     "browser4_not_installed",
@@ -1390,7 +924,7 @@ async function capture(command, args) {
     clearTimeout(timer);
     resolve4(value);
   };
-  const child = spawn2(command, args, { stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
+  const child = spawn(command, args, { stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
   const timer = setTimeout(() => {
     child.kill("SIGKILL");
     finish(void 0);
@@ -1419,7 +953,7 @@ function normalizeCommandLine(text) {
 async function profileHolders(directory) {
   const needles = [
     normalizeCommandLine(`-Dbrowser.profile.path=${directory}`),
-    normalizeCommandLine(`--user-data-dir=${join3(directory, CHROME_DATA_DIR)}`)
+    normalizeCommandLine(`--user-data-dir=${join2(directory, CHROME_DATA_DIR)}`)
   ];
   const self = process.pid;
   const holders = [];
@@ -1473,7 +1007,7 @@ async function releaseProfile(directory) {
   return left !== void 0 && left.length === 0;
 }
 async function readOwnedEndpoint(userDataDir) {
-  const marker = join3(userDataDir, DEVTOOLS_PORT_FILE);
+  const marker = join2(userDataDir, DEVTOOLS_PORT_FILE);
   const deadline = Date.now() + ENDPOINT_TIMEOUT_MS;
   for (; ; ) {
     let text;
@@ -1552,9 +1086,9 @@ async function createBrowser4Driver(options) {
       "Browser4 runs as this plugin's own stdio MCP server on a private profile; it has no endpoint to attach to. Use the chrome-relay engine to drive a browser somebody else owns."
     );
   }
-  const userDataDir = join3(profileDirectory, CHROME_DATA_DIR);
-  const browser4Dir = join3(profileDirectory, "browser4");
-  const loggingPath = join3(browser4Dir, "logging.xml");
+  const userDataDir = join2(profileDirectory, CHROME_DATA_DIR);
+  const browser4Dir = join2(profileDirectory, "browser4");
+  const loggingPath = join2(browser4Dir, "logging.xml");
   let runtime;
   try {
     runtime = findRuntime();
@@ -1640,10 +1174,10 @@ async function createBrowser4Driver(options) {
     return text;
   };
   try {
-    await mkdir2(browser4Dir, { recursive: true });
-    await writeFile2(loggingPath, loggingConfig(), "utf8");
-    await mkdir2(join3(userDataDir, CHROME_DEFAULT_PROFILE_DIR), { recursive: true });
-    await rm(join3(userDataDir, DEVTOOLS_PORT_FILE), { force: true });
+    await mkdir(browser4Dir, { recursive: true });
+    await writeFile(loggingPath, loggingConfig(), "utf8");
+    await mkdir(join2(userDataDir, CHROME_DEFAULT_PROFILE_DIR), { recursive: true });
+    await rm(join2(userDataDir, DEVTOOLS_PORT_FILE), { force: true });
     const jvmOptions = [
       // stdout is the JSON-RPC stream: no log line and no stray `println`
       // may ever reach it. Both switches are the product's own.
@@ -1677,7 +1211,7 @@ async function createBrowser4Driver(options) {
       // The wildcard classpath keeps the command line far below the Windows
       // 32k limit that an enumerated ~250-jar classpath would blow past.
       "-cp",
-      join3(runtime.libDir, "*"),
+      join2(runtime.libDir, "*"),
       RUNNER_CLASS,
       "--transport",
       "stdio",
@@ -1731,7 +1265,7 @@ async function createBrowser4Driver(options) {
       await invoke(
         "evaluate_value",
         { expression: `(${IDENTITY_SCRIPT.toString()})()` },
-        READ_TIMEOUT_MS2
+        READ_TIMEOUT_MS
       ),
       "The Browser4 tab probe"
     );
@@ -1789,9 +1323,10 @@ async function createBrowser4Driver(options) {
   return {
     async close() {
       if (closed) return;
-      closing ??= shutdown();
+      closing ??= shutdown().finally(() => {
+        closing = void 0;
+      });
       const confirmed = await closing;
-      closing = void 0;
       if (!confirmed) {
         fail(
           "browser4_shutdown_unconfirmed",
@@ -1821,21 +1356,21 @@ async function createBrowser4Driver(options) {
 
 // src/engines/python.ts
 import { createHash, randomUUID } from "node:crypto";
-import { access, mkdir as mkdir3, rm as rm2, writeFile as writeFile3 } from "node:fs/promises";
-import { dirname as dirname2, join as join4, resolve as resolve3 } from "node:path";
+import { access, mkdir as mkdir2, rm as rm2, writeFile as writeFile2 } from "node:fs/promises";
+import { dirname, join as join3, resolve as resolve3 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client as Client2 } from "@modelcontextprotocol/sdk/client/index.js";
 import { getDefaultEnvironment as getDefaultEnvironment2, StdioClientTransport as StdioClientTransport2 } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { launch } from "puppeteer-core";
-var HERE = dirname2(fileURLToPath(import.meta.url));
+var HERE = dirname(fileURLToPath(import.meta.url));
 var CONNECT_TIMEOUT_MS2 = 6e4;
 var OPEN_TIMEOUT_MS = 12e4;
-var READ_TIMEOUT_MS3 = 3e4;
-var SCREENSHOT_TIMEOUT_MS2 = 6e4;
+var READ_TIMEOUT_MS2 = 3e4;
+var SCREENSHOT_TIMEOUT_MS = 6e4;
 var DISPATCH_TIMEOUT_MS = 6e4;
 var SHUTDOWN_TIMEOUT_MS = 45e3;
 var PROCESS_EXIT_TIMEOUT_MS2 = 15e3;
-var MAX_SCREENSHOT_BYTES2 = 8 * 1024 * 1024;
+var MAX_SCREENSHOT_BYTES = 8 * 1024 * 1024;
 var STDERR_KEEP2 = 4096;
 var STDERR_REPORT2 = 600;
 var CHROME_ARGS = [
@@ -1879,7 +1414,7 @@ var exists = async (path) => {
 };
 var workerDirectory = async () => {
   for (const candidate of [resolve3(HERE, "python"), resolve3(HERE, "..", "python")]) {
-    if (await exists(join4(candidate, "pyproject.toml"))) return candidate;
+    if (await exists(join3(candidate, "pyproject.toml"))) return candidate;
   }
   throw new Error("browser bridge is not installed: dim_browser_bridge was not found next to the engine");
 };
@@ -1890,7 +1425,7 @@ var interpreter = async (workerDir) => {
     if (await exists(explicit)) return { command: explicit, args: module };
     throw new Error(`DIM_BROWSER_PYTHON points at ${explicit}, which does not exist`);
   }
-  const venv = process.platform === "win32" ? join4(workerDir, ".venv/Scripts/python.exe") : join4(workerDir, ".venv/bin/python");
+  const venv = process.platform === "win32" ? join3(workerDir, ".venv/Scripts/python.exe") : join3(workerDir, ".venv/bin/python");
   if (await exists(venv)) return { command: venv, args: module };
   throw new Error(
     `the Python browser bridge has no prepared environment: ${venv} does not exist. Create it once, by hand: \`uv sync --python 3.12\` in ${workerDir}, where the pins and the lockfile live. Alternatively point DIM_BROWSER_PYTHON at an interpreter that already has this package's pinned dependencies. Opening a browser never installs dependencies.`
@@ -1943,9 +1478,9 @@ async function createPythonDriver(engine, options) {
     options.onClosed();
     throw new Error(`${engine} engine failed to start: ${error.message}`);
   });
-  const userDataDir = join4(options.profileDirectory, "chrome");
-  const harnessHome = join4(options.profileDirectory, "harness");
-  const configPath = join4(options.profileDirectory, "bridge", `config-${randomUUID()}.json`);
+  const userDataDir = join3(options.profileDirectory, "chrome");
+  const harnessHome = join3(options.profileDirectory, "harness");
+  const configPath = join3(options.profileDirectory, "bridge", `config-${randomUUID()}.json`);
   let chrome;
   let chromeProcess;
   let transport;
@@ -1995,8 +1530,8 @@ async function createPythonDriver(engine, options) {
     return confirmed;
   };
   try {
-    await mkdir3(dirname2(configPath), { recursive: true });
-    await mkdir3(userDataDir, { recursive: true });
+    await mkdir2(dirname(configPath), { recursive: true });
+    await mkdir2(userDataDir, { recursive: true });
     let cdpEndpoint;
     if (engine === "jev") {
       chrome = await withTimeout3(
@@ -2013,7 +1548,7 @@ async function createPythonDriver(engine, options) {
       );
       cdpEndpoint = chrome.wsEndpoint();
     }
-    await writeFile3(
+    await writeFile2(
       configPath,
       JSON.stringify({
         engine,
@@ -2025,7 +1560,7 @@ async function createPythonDriver(engine, options) {
         // Strictly below the caller's deadline, so the worker always
         // finishes its own cleanup before this side gives up on it.
         openTimeout: (OPEN_TIMEOUT_MS - SHUTDOWN_TIMEOUT_MS) / 1e3,
-        callTimeout: READ_TIMEOUT_MS3 / 1e3,
+        callTimeout: READ_TIMEOUT_MS2 / 1e3,
         // The only scripts the worker will ever evaluate, fixed at
         // initialization and identical to the ones the other engines run.
         scripts: {
@@ -2047,17 +1582,17 @@ async function createPythonDriver(engine, options) {
       // two profiles never share a socket, a tab or a browser.
       BU_NAME: `dim-${createHash("sha1").update(options.profileDirectory).digest("hex").slice(0, 12)}`,
       BH_HOME: harnessHome,
-      BH_CONFIG_DIR: join4(harnessHome, "config"),
-      BH_RUNTIME_DIR: join4(harnessHome, "runtime"),
-      BH_TMP_DIR: join4(harnessHome, "tmp"),
-      BH_AGENT_WORKSPACE: join4(harnessHome, "workspace"),
+      BH_CONFIG_DIR: join3(harnessHome, "config"),
+      BH_RUNTIME_DIR: join3(harnessHome, "runtime"),
+      BH_TMP_DIR: join3(harnessHome, "tmp"),
+      BH_AGENT_WORKSPACE: join3(harnessHome, "workspace"),
       BH_UPDATE_CHECK: "0",
       BH_OPEN_LIVE_URL: "0",
       // No telemetry, no cloud sync, no bundled extension downloads.
       ANONYMIZED_TELEMETRY: "false",
       BROWSER_USE_CLOUD_SYNC: "false",
       BROWSER_USE_DISABLE_EXTENSIONS: "1",
-      BROWSER_USE_CONFIG_DIR: join4(options.profileDirectory, "browseruse"),
+      BROWSER_USE_CONFIG_DIR: join3(options.profileDirectory, "browseruse"),
       BROWSER_USE_LOGGING_LEVEL: "error",
       CDP_LOGGING_LEVEL: "ERROR"
     };
@@ -2094,24 +1629,24 @@ async function createPythonDriver(engine, options) {
   let closing;
   return {
     async state() {
-      return await call("state", {}, READ_TIMEOUT_MS3);
+      return await call("state", {}, READ_TIMEOUT_MS2);
     },
     async screenshot() {
-      const { data } = await call("screenshot", {}, SCREENSHOT_TIMEOUT_MS2);
+      const { data } = await call("screenshot", {}, SCREENSHOT_TIMEOUT_MS);
       const bytes = Buffer.from(data, "base64");
-      if (bytes.byteLength > MAX_SCREENSHOT_BYTES2) throw new Error("screenshot exceeds the frame size limit");
+      if (bytes.byteLength > MAX_SCREENSHOT_BYTES) throw new Error("screenshot exceeds the frame size limit");
       return new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     },
     async snapshot(limit) {
-      const { text } = await call("snapshot", { limit }, READ_TIMEOUT_MS3);
+      const { text } = await call("snapshot", { limit }, READ_TIMEOUT_MS2);
       return text;
     },
     async elements(region, limit) {
-      const { text } = await call("elements", { region, limit }, READ_TIMEOUT_MS3);
+      const { text } = await call("elements", { region, limit }, READ_TIMEOUT_MS2);
       return text;
     },
     async prepare(action, documentId) {
-      const { token } = await call("prepare", { action, documentId }, READ_TIMEOUT_MS3);
+      const { token } = await call("prepare", { action, documentId }, READ_TIMEOUT_MS2);
       let spent = false;
       return {
         async dispatch() {
@@ -2122,16 +1657,17 @@ async function createPythonDriver(engine, options) {
         async dispose() {
           if (spent) return;
           spent = true;
-          await call("dispose", { token }, READ_TIMEOUT_MS3).catch(() => {
+          await call("dispose", { token }, READ_TIMEOUT_MS2).catch(() => {
           });
         }
       };
     },
     async close() {
       if (closed) return;
-      closing ??= teardown();
+      closing ??= teardown().finally(() => {
+        closing = void 0;
+      });
       const confirmed = await closing;
-      closing = void 0;
       if (!confirmed) {
         throw new Error(`${engine} engine shutdown could not be confirmed; the profile stays locked`);
       }
@@ -2151,9 +1687,7 @@ var factories = {
   "browser-use": (options) => createPythonDriver("browser-use", options)
 };
 function createEngineDriver(engine, options) {
-  const create = factories[engine];
-  if (!create) throw new Error(`Unsupported browser engine: ${engine}`);
-  return create(options);
+  return factories[engine](options);
 }
 
 // src/runtime.ts
@@ -2198,6 +1732,13 @@ var BrowserRuntime = class {
   byProfile = /* @__PURE__ */ new Map();
   /** In-flight launches, so a second open cannot race a first one. */
   opening = /* @__PURE__ */ new Map();
+  /**
+   * Drivers whose rollback close failed during launch. Their shutdown is
+   * unconfirmed, so their profile lock is deliberately retained; keeping the
+   * driver here is what makes that close retryable instead of orphaning a
+   * process the runtime can no longer name.
+   */
+  stranded = /* @__PURE__ */ new Set();
   /**
    * Per-runtime HMAC key for action fingerprints. Keyed so a fingerprint is
    * never a guessable digest of a typed password, and process-local so it
@@ -2263,13 +1804,13 @@ var BrowserRuntime = class {
       if (entry) this.detach(entry);
     };
     try {
-      const profileDirectory = engine === "chromium" ? this.store.userDataDir(profile2) : engine === "abp" ? this.store.profileDir(profile2) : join5(this.store.profileDir(profile2), engine);
+      const profileDirectory = engine === "chromium" ? this.store.userDataDir(profile2) : join4(this.store.profileDir(profile2), engine);
       driver = await createEngineDriver(engine, {
         profileDirectory,
         viewport,
         onClosed: release,
         ...this.options.headless === void 0 ? {} : { headless: this.options.headless },
-        ...this.options.executablePath && engine !== "abp" ? { executablePath: this.options.executablePath } : {},
+        ...this.options.executablePath ? { executablePath: this.options.executablePath } : {},
         ...this.options.relayUrl && engine === "chrome-relay" ? { relayUrl: this.options.relayUrl } : {}
       });
       const initial = await driver.state();
@@ -2296,8 +1837,13 @@ var BrowserRuntime = class {
       return entry;
     } catch (error) {
       if (driver) {
-        await driver.close();
-        release();
+        const orphan = driver;
+        try {
+          await orphan.close();
+          release();
+        } catch {
+          this.stranded.add({ driver: orphan, release });
+        }
       }
       throw error;
     }
@@ -2324,6 +1870,15 @@ var BrowserRuntime = class {
       await this.serialize(entry, () => this.teardown(entry), { evenIfClosed: true }).catch(
         (err) => errors.push(describe3(err))
       );
+    }
+    for (const orphan of [...this.stranded]) {
+      try {
+        await orphan.driver.close();
+        orphan.release();
+        this.stranded.delete(orphan);
+      } catch (err) {
+        errors.push(describe3(err));
+      }
     }
     if (errors.length > 0) fail("dispose_incomplete", `some browsers did not shut down cleanly: ${errors.join("; ")}`);
   }
@@ -2470,10 +2025,6 @@ var BrowserRuntime = class {
         status: "pending",
         revision: entry.revision
       };
-      entry.payloads.set(pending.id, normalized);
-      entry.actions.push(pending);
-      entry.byRequest.set(requestId2, { action: pending, fingerprint });
-      this.prune(entry);
       await this.store.journal(entry.profile, {
         at: (/* @__PURE__ */ new Date()).toISOString(),
         session: entry.sessionId,
@@ -2483,6 +2034,10 @@ var BrowserRuntime = class {
         revision: pending.revision,
         kind: normalized.kind
       });
+      entry.payloads.set(pending.id, normalized);
+      entry.actions.push(pending);
+      entry.byRequest.set(requestId2, { action: pending, fingerprint });
+      this.prune(entry);
       return clone(pending);
     });
   }
@@ -2758,7 +2313,7 @@ async function createBrowserServer(options = {}) {
   const closing = new AbortController();
   const confirmations = /* @__PURE__ */ new Set();
   const viewDir = options.viewDir ?? fileURLToPath2(new URL("./dist/", import.meta.url));
-  const html = await readFile2(join6(viewDir, "index.html"), "utf8");
+  const html = await readFile2(join5(viewDir, "index.html"), "utf8");
   const metadata = { ui: { prefersBorder: false } };
   registerAppResource(server2, "Browser", BROWSER_VIEW_URI, { _meta: metadata }, async () => ({
     contents: [{ uri: BROWSER_VIEW_URI, mimeType: RESOURCE_MIME_TYPE, text: html, _meta: metadata }]
@@ -2768,7 +2323,7 @@ async function createBrowserServer(options = {}) {
     const extension = extname(entry.name);
     const mimeType = MIME[extension];
     if (!mimeType) throw new Error(`Unsupported browser View asset: ${entry.name}`);
-    const path = join6(entry.parentPath, entry.name);
+    const path = join5(entry.parentPath, entry.name);
     const relative = path.slice(viewDir.replace(/[\\/]$/, "").length + 1).replaceAll("\\", "/");
     const uri = `ui://browser/${relative}`;
     server2.registerResource(relative, uri, { mimeType }, async () => ({ contents: [{ uri, mimeType, blob: (await readFile2(path)).toString("base64") }] }));

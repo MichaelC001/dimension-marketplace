@@ -79,7 +79,7 @@ into `app/`.
 Opening a browser never installs anything. Prepare the environment once:
 
 ```bash
-cd src/engines/python
+cd app/python
 uv sync --python 3.12
 ```
 

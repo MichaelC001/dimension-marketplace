@@ -281,12 +281,32 @@ class PuppeteerDriver implements EngineDriver {
 		const url = this.#page.url();
 		// Read browser-maintained metadata, not document JavaScript: the latter
 		// loses its execution context during an ordinary in-flight navigation.
-		const history = await this.#cdp.send("Page.getNavigationHistory");
+		const history = await this.#read(() => this.#cdp.send("Page.getNavigationHistory"));
 		const current = history.entries[history.currentIndex];
 		if (!current) fail("no_document", "The browser did not report a current navigation entry.");
 		const title = current.title;
 		return { url, title, documentId, viewport: this.#viewport };
 	}
+
+	/**
+	 * One read-only CDP call, retried once. While a cross-document navigation
+	 * commits, the session's target is briefly not an active page and the send
+	 * rejects; a read has no effect, so re-reading is safe and a transient
+	 * protocol error must not fail a state read or void a human's approval.
+	 */
+	async #read<T>(send: () => Promise<T>): Promise<T> {
+		try {
+			return await send();
+		} catch (error) {
+			if (this.#closed || this.#page.isClosed()) fail("browser_closed", "The browser closed during inspection.");
+			try {
+				return await send();
+			} catch {
+				throw error;
+			}
+		}
+	}
+
 
 	async screenshot(): Promise<Uint8Array> {
 		const shot = await this.#page.screenshot({ type: "png", captureBeyondViewport: false });
@@ -474,7 +494,7 @@ class PuppeteerDriver implements EngineDriver {
 
 	/** Live document identity, read from the browser, never from a cache. */
 	async #documentId(): Promise<string> {
-		const { frameTree } = await this.#cdp.send("Page.getFrameTree");
+		const { frameTree } = await this.#read(() => this.#cdp.send("Page.getFrameTree"));
 		const loaderId = frameTree.frame.loaderId;
 		if (typeof loaderId !== "string" || loaderId.length === 0) {
 			fail("no_document", "the tab did not report a document identity; it may be closing");

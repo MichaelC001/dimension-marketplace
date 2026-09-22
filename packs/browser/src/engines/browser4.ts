@@ -1062,9 +1062,11 @@ export async function createBrowser4Driver(options: EngineOptions): Promise<Engi
 	return {
 		async close(): Promise<void> {
 			if (closed) return;
-			closing ??= shutdown();
+			// Cleared however it settles: a cached rejection would replay the same
+			// stale failure forever instead of re-attempting the shutdown the
+			// retained profile lock depends on.
+			closing ??= shutdown().finally(() => { closing = undefined; });
 			const confirmed = await closing;
-			closing = undefined;
 			if (!confirmed) {
 				// The lock stays held and this driver stays usable for another
 				// attempt: a surviving JVM may still own a Chrome that holds the

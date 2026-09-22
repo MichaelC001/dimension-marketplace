@@ -403,9 +403,10 @@ export async function createPythonDriver(
 		},
 		async close(): Promise<void> {
 			if (closed) return;
-			closing ??= teardown();
+			// Cleared however it settles: a cached rejection would make every later
+			// close replay it instead of retrying the shutdown.
+			closing ??= teardown().finally(() => { closing = undefined; });
 			const confirmed = await closing;
-			closing = undefined;
 			if (!confirmed) {
 				throw new Error(`${engine} engine shutdown could not be confirmed; the profile stays locked`);
 			}

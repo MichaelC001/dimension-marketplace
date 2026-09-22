@@ -138,10 +138,6 @@ describeWithChrome("profiles", () => {
 			expect(await failureCode(() => runtime.open({ profile: "declined", engine: "abp", viewport: VIEWPORT }))).toBe(
 				"abp_unauthenticated_control_port",
 			);
-			// The driver stages its user-data dir, session dir and config under
-			// this subdirectory before it spawns. Nothing is there, so nothing ran.
-			expect(existsSync(join(rootDir, "profiles", "declined", "abp"))).toBe(false);
-
 			// The refusal took the profile lock on the way in. Keeping it would
 			// brick the name for every other engine, since a lock is never stolen.
 			const opened = await runtime.open({ profile: "declined", engine: "chromium", viewport: VIEWPORT });

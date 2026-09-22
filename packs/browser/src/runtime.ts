@@ -148,6 +148,13 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	/** In-flight launches, so a second open cannot race a first one. */
 	private readonly opening = new Map<string, Promise<Entry>>();
 	/**
+	 * Drivers whose rollback close failed during launch. Their shutdown is
+	 * unconfirmed, so their profile lock is deliberately retained; keeping the
+	 * driver here is what makes that close retryable instead of orphaning a
+	 * process the runtime can no longer name.
+	 */
+	private readonly stranded = new Set<{ driver: EngineDriver; release: () => void }>();
+	/**
 	 * Per-runtime HMAC key for action fingerprints. Keyed so a fingerprint is
 	 * never a guessable digest of a typed password, and process-local so it
 	 * never reaches disk.
@@ -226,13 +233,13 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		};
 		try {
 			// Native backends never reuse an incompatible engine's cookie store.
-			const profileDirectory = engine === "chromium" ? this.store.userDataDir(profile)
-				: engine === "abp" ? this.store.profileDir(profile)
+			const profileDirectory = engine === "chromium"
+				? this.store.userDataDir(profile)
 				: join(this.store.profileDir(profile), engine);
 			driver = await createEngineDriver(engine, {
 				profileDirectory, viewport, onClosed: release,
 				...(this.options.headless === undefined ? {} : { headless: this.options.headless }),
-				...(this.options.executablePath && engine !== "abp" ? { executablePath: this.options.executablePath } : {}),
+				...(this.options.executablePath ? { executablePath: this.options.executablePath } : {}),
 				...(this.options.relayUrl && engine === "chrome-relay" ? { relayUrl: this.options.relayUrl } : {}),
 			});
 			const initial = await driver.state();
@@ -251,8 +258,17 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			// A factory owns rollback until it returns; only its confirmed-close
 			// callback may release a failed launch. Never infer exit from failure.
 			if (driver) {
-				await driver.close();
-				release();
+				const orphan = driver;
+				try {
+					await orphan.close();
+					release();
+				} catch {
+					// Shutdown unconfirmed: keep the lock, and keep the driver
+					// reachable so dispose() retries instead of losing a process
+					// that may still hold the profile. The launch error is what
+					// the caller needs; the close failure is ours to retry.
+					this.stranded.add({ driver: orphan, release });
+				}
 			}
 			throw error;
 		}
@@ -286,6 +302,15 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			await this.serialize(entry, () => this.teardown(entry), { evenIfClosed: true }).catch((err) =>
 				errors.push(describe(err)),
 			);
+		}
+		for (const orphan of [...this.stranded]) {
+			try {
+				await orphan.driver.close();
+				orphan.release();
+				this.stranded.delete(orphan);
+			} catch (err) {
+				errors.push(describe(err));
+			}
 		}
 		if (errors.length > 0) fail("dispose_incomplete", `some browsers did not shut down cleanly: ${errors.join("; ")}`);
 	}
@@ -460,12 +485,9 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				status: "pending",
 				revision: entry.revision,
 			};
-			// The executable payload stays in memory, keyed by action id, and is
-			// discarded the moment the action reaches a terminal status.
-			entry.payloads.set(pending.id, normalized);
-			entry.actions.push(pending);
-			entry.byRequest.set(requestId, { action: pending, fingerprint });
-			this.prune(entry);
+			// Durable first: a request that is visible in the queue — and therefore
+			// approvable by a human — must already have its trail on disk. A failed
+			// append must leave nothing behind for anyone to approve.
 			await this.store.journal(entry.profile, {
 				at: new Date().toISOString(),
 				session: entry.sessionId,
@@ -475,6 +497,12 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				revision: pending.revision,
 				kind: normalized.kind,
 			});
+			// The executable payload stays in memory, keyed by action id, and is
+			// discarded the moment the action reaches a terminal status.
+			entry.payloads.set(pending.id, normalized);
+			entry.actions.push(pending);
+			entry.byRequest.set(requestId, { action: pending, fingerprint });
+			this.prune(entry);
 			return clone(pending);
 		});
 	}
