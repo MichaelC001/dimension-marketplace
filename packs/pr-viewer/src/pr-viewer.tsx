@@ -222,8 +222,17 @@ export function PrViewer({ sessionId, workspace, workspaceDriver, store }: PrVie
 	// otherwise the checkout sweep's row for the same ref — a MANUAL link
 	// carries no snapshot, and without this it drew as a bare number + URL
 	// beside a fully-titled sibling in "Also in this checkout" (live 2026-09-17).
-	const summaryFor = (link: SessionReviewLink): ReviewSummary | null =>
-		link.snapshot ?? checkout?.find(row => refKey(row.ref) === refKey(link.ref)) ?? null;
+	// Identity is a `useCallback` on `checkout` (review round, dimension#909):
+	// the filtered memos below resolve snapshots through this closure, so a
+	// sweep update for a snapshot-less link must recompute their membership —
+	// a fresh plain closure every render would keep the stale array while the
+	// row repaints with the new state, and the filter would disagree with the
+	// list about the same review.
+	const summaryFor = useCallback(
+		(link: SessionReviewLink): ReviewSummary | null =>
+			link.snapshot ?? checkout?.find(row => refKey(row.ref) === refKey(link.ref)) ?? null,
+		[checkout],
+	);
 	// THE REQUEST CELL (doc 73 §7): a rail chip asked for a review. The host
 	// only writes it when THIS instrument is mounted, so answering it is the
 	// whole reason `opens: ["review"]` is in the manifest.
@@ -238,7 +247,7 @@ export function PrViewer({ sessionId, workspace, workspaceDriver, store }: PrVie
 	}, [links, checkout]);
 	// The two groups still apply WITHIN a filtered view (dimension#909) — filter
 	// first, then split linked/also, never flatten.
-	const visibleLines = useMemo(() => lines.filter(line => reviewMatchesFilter(summaryFor(line.link), filter)), [lines, filter]);
+	const visibleLines = useMemo(() => lines.filter(line => reviewMatchesFilter(summaryFor(line.link), filter)), [lines, filter, summaryFor]);
 	const visibleOthers = useMemo(() => others.filter(row => reviewMatchesFilter(row, filter)), [others, filter]);
 	// Counts ride the same in-memory summaries the rows draw, so no chip costs
 	// a request — "Open 6" tells you whether clicking is worth it, for free.
@@ -246,7 +255,7 @@ export function PrViewer({ sessionId, workspace, workspaceDriver, store }: PrVie
 		const count = (f: ReviewStateFilter) =>
 			lines.filter(line => reviewMatchesFilter(summaryFor(line.link), f)).length + others.filter(row => reviewMatchesFilter(row, f)).length;
 		return { all: lines.length + others.length, open: count("open"), draft: count("draft"), merged: count("merged"), closed: count("closed") };
-	}, [lines, others]);
+	}, [lines, others, summaryFor]);
 
 	if (!store) {
 		return <p className="p-3 text-fr-sm text-fr-text-3">No store on this mount — the viewer needs the host's facts.</p>;
@@ -363,10 +372,10 @@ export function PrViewer({ sessionId, workspace, workspaceDriver, store }: PrVie
 							</Button>
 						) : null}
 					</div>
-				) : visibleLines.length === 0 && visibleOthers.length === 0 ? (
+				) : filter !== "all" && visibleLines.length === 0 && visibleOthers.length === 0 ? (
 					<div className="flex flex-col items-start gap-2 p-3" data-slot="pr-viewer-filter-empty" data-filter={filter}>
 						<span className="text-fr-sm text-fr-text-3">
-							{filter === "all" ? "No reviews in this checkout" : `No ${REVIEW_PILL_LABEL[filter].toLowerCase()} reviews in this checkout`}
+							{`No ${REVIEW_PILL_LABEL[filter].toLowerCase()} reviews in this checkout`}
 						</span>
 					</div>
 				) : (
