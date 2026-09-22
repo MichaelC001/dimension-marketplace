@@ -9,28 +9,6 @@
 	},
 	"plugins": [
 		{
-			"name": ".mutant-main",
-			"source": "./packs/.mutant-main",
-			"pluginId": "pr-viewer",
-			"title": "PR Viewer",
-			"icon": "branch",
-			"description": "PR Viewer — reviews in the dock, from the Store's review keys. Installable and removable like any pack: with it a rail chip opens the review here, without it the browser.",
-			"version": "0.1.3",
-			"author": {
-				"name": "Dimension"
-			},
-			"repository": "https://github.com/insodimension/dimension-community",
-			"license": "MIT",
-			"category": "component",
-			"tags": [
-				"component",
-				"dock",
-				"reviews",
-				"pull-request",
-				"store"
-			]
-		},
-		{
 			"name": "agents-best-practices",
 			"source": "./packs/agents-best-practices",
 			"pluginId": "agents-best-practices",
