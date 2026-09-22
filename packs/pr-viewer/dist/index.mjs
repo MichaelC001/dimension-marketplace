@@ -896,39 +896,44 @@ function sourceLabel(source) {
 	return source === "created" ? "created by this session" : source === "pushed" ? "this session pushed to it" : source === "agent" ? "the agent acted on it" : source === "stack" ? "a stack sibling" : "linked by you";
 }
 /** A list row is STACKED (owner ruling 2026-09-17): the review's number line
-*  on top — state octicon, `#N`, then time and check/decision badges at the
-*  right edge — the title full-width beneath it, and the branch + diff stat
-*  under that. Every line starts on the same left edge. */
+*  on top — a fixed state glyph box, `#N`, then time and check/decision
+*  badges at the right edge — the title full-width beneath it, and the branch
+*  + diff stat under that. Every line starts on the same left edge. The row
+*  itself is a `ChainRow` card, so one review reads as one block at rest; the
+*  glyph box is the rail hover card's idiom (`size-5`, state tint), giving the
+*  status column a fixed x every row scans on. */
 function ReviewRow({ summary, link, depth, stack, sharedBase, sharedOwner, onSelect, menu }) {
 	const ref = summary?.ref ?? link?.ref;
 	const state = summary ? reviewPillState(summary) : "open";
 	const label = summary ? REVIEW_PILL_LABEL[state] : "Not synced yet";
 	return /* @__PURE__ */ jsxs(ChainRow, {
 		depth,
-		className: "group rounded-md pr-3 hover:bg-fr-surface",
+		variant: "card",
+		className: "group pr-3",
 		children: [/* @__PURE__ */ jsxs("button", {
 			type: "button",
 			onClick: onSelect,
-			className: "flex min-w-0 flex-1 flex-col gap-1.5 py-2.5 text-left",
+			className: "flex min-w-0 flex-1 flex-col gap-1 py-2 text-left",
 			children: [
 				/* @__PURE__ */ jsxs("span", {
 					className: "flex min-w-0 flex-wrap items-center gap-1.5",
 					children: [
+						/* @__PURE__ */ jsx("span", {
+							className: cn("inline-flex size-5 shrink-0 items-center justify-center rounded-sm border border-fr-border", REVIEW_PILL_TINT[state]),
+							"aria-hidden": true,
+							children: /* @__PURE__ */ jsx(GitHubPullRequestIcon, {
+								state,
+								size: 12
+							})
+						}),
 						/* @__PURE__ */ jsxs(Pill, {
 							tint: REVIEW_PILL_TINT[state],
 							className: "tabular-nums",
 							title: link ? sourceLabel(link.source) : void 0,
-							children: [
-								/* @__PURE__ */ jsx(GitHubPullRequestIcon, {
-									state,
-									size: 12
-								}),
-								/* @__PURE__ */ jsxs("span", {
-									className: "text-fr-text",
-									children: ["#", ref?.number]
-								}),
-								/* @__PURE__ */ jsxs("span", { children: ["· ", label] })
-							]
+							children: [/* @__PURE__ */ jsxs("span", {
+								className: "text-fr-text",
+								children: ["#", ref?.number]
+							}), /* @__PURE__ */ jsxs("span", { children: ["· ", label] })]
 						}),
 						summary?.reviewDecision === "changes-requested" ? /* @__PURE__ */ jsx(Pill, {
 							tint: "bg-fr-warn/15",
@@ -954,7 +959,8 @@ function ReviewRow({ summary, link, depth, stack, sharedBase, sharedOwner, onSel
 					]
 				}),
 				/* @__PURE__ */ jsx("span", {
-					className: "line-clamp-2 min-w-0 whitespace-normal break-words text-fr-md font-medium text-fr-text",
+					className: "min-w-0 truncate text-fr-sm font-semibold text-fr-text",
+					title: summary?.title ?? link?.url ?? "",
 					children: summary?.title ?? link?.url ?? ""
 				}),
 				/* @__PURE__ */ jsxs("span", {
@@ -1189,7 +1195,8 @@ function PrViewer({ sessionId, workspace, workspaceDriver, store }) {
 			label: "Open on the host",
 			onClick: () => act("openReview", {
 				ref,
-				url
+				url,
+				external: true
 			})
 		},
 		{
@@ -1243,27 +1250,33 @@ function PrViewer({ sessionId, workspace, workspaceDriver, store }) {
 				}) : /* @__PURE__ */ jsxs(Fragment, { children: [others.length > 0 ? /* @__PURE__ */ jsx("div", {
 					className: "px-2 pt-2 pb-2 text-fr-sm font-semibold text-fr-text",
 					children: "Linked to this session"
-				}) : null, lines.map((line) => /* @__PURE__ */ jsx(ReviewRow, {
-					summary: summaryFor(line.link),
-					link: line.link,
-					depth: line.depth,
-					stack: line.stack,
-					sharedBase,
-					sharedOwner,
-					onSelect: () => setSelected(line.link.ref),
-					menu: rowMenu(line.link.ref, line.link.url, line.link)
-				}, refKey(line.link.ref)))] }), others.length > 0 ? /* @__PURE__ */ jsxs(Fragment, { children: [/* @__PURE__ */ jsx("div", {
+				}) : null, /* @__PURE__ */ jsx("div", {
+					className: "flex flex-col gap-2",
+					children: lines.map((line) => /* @__PURE__ */ jsx(ReviewRow, {
+						summary: summaryFor(line.link),
+						link: line.link,
+						depth: line.depth,
+						stack: line.stack,
+						sharedBase,
+						sharedOwner,
+						onSelect: () => setSelected(line.link.ref),
+						menu: rowMenu(line.link.ref, line.link.url, line.link)
+					}, refKey(line.link.ref)))
+				})] }), others.length > 0 ? /* @__PURE__ */ jsxs(Fragment, { children: [/* @__PURE__ */ jsx("div", {
 					className: "px-2 pt-5 pb-2 text-fr-sm font-semibold text-fr-text",
 					children: "Also in this checkout"
-				}), others.map((row) => /* @__PURE__ */ jsx(ReviewRow, {
-					summary: row,
-					depth: 0,
-					stack: null,
-					sharedBase,
-					sharedOwner,
-					onSelect: () => setSelected(row.ref),
-					menu: rowMenu(row.ref, row.url, void 0, row)
-				}, refKey(row.ref)))] }) : null]
+				}), /* @__PURE__ */ jsx("div", {
+					className: "flex flex-col gap-2",
+					children: others.map((row) => /* @__PURE__ */ jsx(ReviewRow, {
+						summary: row,
+						depth: 0,
+						stack: null,
+						sharedBase,
+						sharedOwner,
+						onSelect: () => setSelected(row.ref),
+						menu: rowMenu(row.ref, row.url, void 0, row)
+					}, refKey(row.ref)))
+				})] }) : null]
 			}),
 			/* @__PURE__ */ jsxs("footer", {
 				className: "flex items-center justify-between border-fr-border border-t px-4 py-2 text-fr-2xs text-fr-text-2",

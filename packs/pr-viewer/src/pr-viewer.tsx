@@ -253,7 +253,7 @@ export function PrViewer({ sessionId, workspace, workspaceDriver, store }: PrVie
 	const rowMenu = (ref: ReviewRef, url: string, link: SessionReviewLink | undefined, summary?: ReviewSummary | null) => (
 		<RowMenu
 			actions={[
-				{ label: "Open on the host", onClick: () => act("openReview", { ref, url }) },
+				{ label: "Open on the host", onClick: () => act("openReview", { ref, url, external: true }) },
 				{ label: "Refresh", onClick: () => act("refreshReviews", { ref }) },
 				...(sessionId
 					? [

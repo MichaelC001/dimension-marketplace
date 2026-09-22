@@ -220,9 +220,14 @@ describe("ReviewRow's gesture", () => {
 // the class off the element the row actually lands in, which a grep of the
 // source could never catch.
 
-/** A host store by key: one snapshot per cell, never moving. */
-function fakeStore(cells: Readonly<Record<string, unknown>>): HostStoreShape {
+/** A host store by key: one snapshot per cell, never moving. `read` IS
+ *  `watch().getSnapshot()` (the driver's own identity), so the provider seat
+ *  and the prop-drilled store can never disagree. */
+function fakeStore(cells: Readonly<Record<string, unknown>>): HostStoreShape & { read<T>(key: string): T | undefined } {
 	return {
+		read<T>(key: string) {
+			return cells[key] as T | undefined;
+		},
 		watch<T>(key: string) {
 			return { getSnapshot: () => cells[key] as T | undefined, subscribe: () => () => {} };
 		},
