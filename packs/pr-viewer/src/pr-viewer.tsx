@@ -153,8 +153,11 @@ function NoDetailView({
 					</span>
 				</Pill>
 				<span className="text-fr-sm text-fr-text-2">This mount has no checkout behind it, so the review's detail, threads and diff cannot be read here.</span>
-				<Button size="sm" variant="outline" onClick={() => act("openReview", { ref: reviewRef, url: summary?.url ?? link?.url ?? "" })}>
-					<Icon name="external" size={12} /> Open on the host
+				{/* Same self-routing as the detail header: this button is inside the
+				// mounted review instrument, so a bare `openReview` would publish a
+				// request the viewer answers itself. `external: true` goes to the browser. */}
+				<Button size="sm" variant="outline" aria-label={`Open on ${reviewRef.host}`} onClick={() => act("openReview", { ref: reviewRef, url: summary?.url ?? link?.url ?? "", external: true })}>
+					<Icon name="external" size={12} /> Open on {reviewRef.host}
 				</Button>
 			</div>
 		</div>
@@ -283,6 +286,10 @@ export function PrViewer({ sessionId, workspace, workspaceDriver, store }: PrVie
 		const back = links.length + others.length > 1 || !selectedLink ? () => setSelected(null) : null;
 		return workspace && workspaceDriver ? (
 			<DetailView
+				// A review switch must REMOUNT: otherwise useRead's key-change path keeps
+				// the previous review painted as loading (#902 stale-keep), so head =
+				// detail.value ?? summary shows the OLD review's facts under the NEW one.
+				key={refKey(selected)}
 				reviewRef={selected}
 				summary={selectedSummary}
 				link={selectedLink}

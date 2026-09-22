@@ -1,4 +1,4 @@
-import { Button, ChainRow, ConfirmDialog, DiffStat, GitHubPullRequestIcon, Icon, Input, Pill, REVIEW_PILL_LABEL, REVIEW_PILL_TINT, StateGlyph, StreamingMarkdown, Textarea, ThreadCard, cn, resolveReviewChains, reviewListLines, reviewPillState, reviewsUnavailableAdvice, useObservable, useStandardSessionFacts, visibleReviews } from "@fraym/ui";
+import { Button, ChainRow, ConfirmDialog, DiffStat, GitHubPullRequestIcon, Icon, Input, Pill, REVIEW_PILL_LABEL, REVIEW_PILL_TINT, Skeleton, SkeletonGroup, SkeletonText, Spinner, StateGlyph, StreamingMarkdown, Textarea, ThreadCard, cn, resolveReviewChains, reviewListLines, reviewPillState, reviewsUnavailableAdvice, useObservable, useStandardSessionFacts, visibleReviews } from "@fraym/ui";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
 //#region src/model.ts
@@ -233,7 +233,13 @@ function LinkDialog({ own, onSubmit, onClose }) {
 //#region src/use-read.ts
 /** One request/response read, keyed: detail, threads and the diff are large and
 *  on demand, never a cell (doc 73 §3). A new `key` (a new ref, or a settled
-*  write) re-reads; `read === null` means this host cannot answer at all. */
+*  write) re-reads; `read === null` means this host cannot answer at all.
+*
+*  Stale-while-revalidate (dimension#902): a re-read over a painted value keeps
+*  the old value with `loading: true` so callers can dim it instead of swapping
+*  it for a spinner. Only a first-ever read (nothing painted yet) reports
+*  `value: null` with `loading: true`. An errored re-read still blanks to `null`
+*  so the error surfaces instead of a quietly stale number. */
 function useRead(read, key) {
 	const [state, setState] = useState({
 		key,
@@ -244,12 +250,12 @@ function useRead(read, key) {
 	useEffect(() => {
 		if (!read) return;
 		let live = true;
-		setState({
+		setState((prev) => ({
 			key,
-			value: null,
+			value: prev.value,
 			error: null,
 			loading: true
-		});
+		}));
 		read().then((value) => live && setState({
 			key,
 			value,
@@ -265,11 +271,12 @@ function useRead(read, key) {
 			live = false;
 		};
 	}, [key, read]);
-	return state.key === key ? state : {
-		value: null,
+	if (state.key !== key) return {
+		value: state.value,
 		error: null,
 		loading: read !== null
 	};
+	return state;
 }
 //#endregion
 //#region src/diff-tab.tsx
@@ -280,68 +287,81 @@ function DiffTab({ reviewRef, workspace, getReviewDiff, cacheKey }) {
 		reviewRef
 	]), cacheKey);
 	const files = diff.value?.files ?? [];
+	const firstLoad = diff.value === null && diff.loading;
+	const stale = diff.value !== null && diff.loading;
 	return /* @__PURE__ */ jsxs("div", {
 		className: "flex flex-col gap-2 p-3",
+		"aria-busy": diff.loading || void 0,
 		children: [
-			diff.loading ? /* @__PURE__ */ jsx("span", {
-				className: "text-fr-xs text-fr-text-3",
-				children: "Loading…"
+			firstLoad ? /* @__PURE__ */ jsxs("div", {
+				className: "flex items-center gap-2 text-fr-xs text-fr-text-3",
+				"aria-label": "Loading diff",
+				children: [/* @__PURE__ */ jsx(Spinner, {
+					kind: "dots",
+					size: "xs",
+					label: "Loading diff"
+				}), /* @__PURE__ */ jsx("span", { children: "Loading diff…" })]
 			}) : null,
 			diff.error ? /* @__PURE__ */ jsx("p", {
 				className: "text-fr-del text-fr-sm",
 				children: diff.error
 			}) : null,
-			files.length > 0 ? /* @__PURE__ */ jsxs("span", {
-				className: "flex items-center gap-2 text-fr-2xs text-fr-text-3",
-				children: [/* @__PURE__ */ jsxs("span", { children: [
-					files.length,
-					" file",
-					files.length === 1 ? "" : "s",
-					" changed"
-				] }), /* @__PURE__ */ jsx(DiffStat, {
-					additions: files.reduce((sum, file) => sum + file.additions, 0),
-					deletions: files.reduce((sum, file) => sum + file.deletions, 0)
-				})]
-			}) : null,
-			files.map((file) => /* @__PURE__ */ jsxs("details", {
-				className: "group rounded-md border border-fr-border bg-fr-surface",
-				open: files.length <= 3,
-				children: [/* @__PURE__ */ jsxs("summary", {
-					className: "flex cursor-pointer list-none items-center gap-2 px-3 py-1.5 text-fr-xs hover:bg-fr-surface-2",
-					children: [
-						/* @__PURE__ */ jsx(Icon, {
-							name: "file",
-							size: 12,
-							"aria-hidden": "true"
-						}),
-						/* @__PURE__ */ jsx("span", {
-							className: "min-w-0 flex-1 truncate text-fr-text",
-							children: file.path
-						}),
-						/* @__PURE__ */ jsx(DiffStat, {
-							additions: file.additions,
-							deletions: file.deletions
-						})
-					]
-				}), file.patch ? /* @__PURE__ */ jsx("div", {
-					className: "border-fr-border-soft border-t",
-					children: /* @__PURE__ */ jsx(StreamingMarkdown, {
-						text: `\`\`\`diff\n${file.patch}\n\`\`\``,
-						className: "text-fr-2xs"
-					})
-				}) : /* @__PURE__ */ jsx("span", {
-					className: "block border-fr-border-soft border-t px-3 py-1.5 text-fr-2xs text-fr-text-2",
-					children: "Hunks withheld by the host."
-				})]
-			}, file.path)),
-			diff.value && diff.value.files.length === 0 ? /* @__PURE__ */ jsx("span", {
-				className: "text-fr-xs text-fr-text-3",
-				children: "No file changes."
-			}) : null,
-			diff.value?.truncated ? /* @__PURE__ */ jsx("span", {
-				className: "text-fr-2xs text-fr-text-3",
-				children: "More files than the host returned — open on the host for the rest."
-			}) : null
+			/* @__PURE__ */ jsxs("div", {
+				className: stale ? "flex flex-col gap-2 opacity-60" : "flex flex-col gap-2",
+				children: [
+					files.length > 0 ? /* @__PURE__ */ jsxs("span", {
+						className: "flex items-center gap-2 text-fr-2xs text-fr-text-3",
+						children: [/* @__PURE__ */ jsxs("span", { children: [
+							files.length,
+							" file",
+							files.length === 1 ? "" : "s",
+							" changed"
+						] }), /* @__PURE__ */ jsx(DiffStat, {
+							additions: files.reduce((sum, file) => sum + file.additions, 0),
+							deletions: files.reduce((sum, file) => sum + file.deletions, 0)
+						})]
+					}) : null,
+					files.map((file) => /* @__PURE__ */ jsxs("details", {
+						className: "group rounded-md border border-fr-border bg-fr-surface",
+						open: files.length <= 3,
+						children: [/* @__PURE__ */ jsxs("summary", {
+							className: "flex cursor-pointer list-none items-center gap-2 px-3 py-1.5 text-fr-xs hover:bg-fr-surface-2",
+							children: [
+								/* @__PURE__ */ jsx(Icon, {
+									name: "file",
+									size: 12,
+									"aria-hidden": "true"
+								}),
+								/* @__PURE__ */ jsx("span", {
+									className: "min-w-0 flex-1 truncate text-fr-text",
+									children: file.path
+								}),
+								/* @__PURE__ */ jsx(DiffStat, {
+									additions: file.additions,
+									deletions: file.deletions
+								})
+							]
+						}), file.patch ? /* @__PURE__ */ jsx("div", {
+							className: "border-fr-border-soft border-t",
+							children: /* @__PURE__ */ jsx(StreamingMarkdown, {
+								text: `\`\`\`diff\n${file.patch}\n\`\`\``,
+								className: "text-fr-2xs"
+							})
+						}) : /* @__PURE__ */ jsx("span", {
+							className: "block border-fr-border-soft border-t px-3 py-1.5 text-fr-2xs text-fr-text-2",
+							children: "Hunks withheld by the host."
+						})]
+					}, file.path)),
+					diff.value && diff.value.files.length === 0 && !diff.loading ? /* @__PURE__ */ jsx("span", {
+						className: "text-fr-xs text-fr-text-3",
+						children: "No file changes."
+					}) : null,
+					diff.value?.truncated ? /* @__PURE__ */ jsx("span", {
+						className: "text-fr-2xs text-fr-text-3",
+						children: "More files than the host returned — open on the host for the rest."
+					}) : null
+				]
+			})
 		]
 	});
 }
@@ -549,7 +569,8 @@ function SummaryTab({ reviewRef, head, detail, loading, stack, threads, conflict
 				]
 			}) : null,
 			detail ? /* @__PURE__ */ jsxs("section", {
-				className: "flex flex-col gap-2",
+				className: cn("flex flex-col gap-2", loading && "opacity-60"),
+				"aria-busy": loading || void 0,
 				children: [
 					/* @__PURE__ */ jsx("span", {
 						"aria-hidden": "true",
@@ -576,9 +597,40 @@ function SummaryTab({ reviewRef, head, detail, loading, stack, threads, conflict
 						}, check.name))
 					}) : null
 				]
-			}) : loading ? /* @__PURE__ */ jsx("span", {
-				className: "text-fr-xs text-fr-text-3",
-				children: "Loading…"
+			}) : loading ? /* @__PURE__ */ jsxs("section", {
+				className: "flex flex-col gap-2",
+				"aria-label": "Loading review details",
+				children: [
+					/* @__PURE__ */ jsx("span", {
+						"aria-hidden": "true",
+						className: "border-fr-border-soft border-t"
+					}),
+					/* @__PURE__ */ jsx(SkeletonText, {
+						lines: 4,
+						lineHeight: 12,
+						gap: 8
+					}),
+					/* @__PURE__ */ jsxs("div", {
+						className: "mt-2 flex flex-col gap-2 rounded-md border border-fr-border bg-fr-surface p-2",
+						children: [
+							/* @__PURE__ */ jsx(Skeleton, {
+								h: 10,
+								rounded: "sm",
+								w: "100%"
+							}),
+							/* @__PURE__ */ jsx(Skeleton, {
+								h: 10,
+								rounded: "sm",
+								w: "100%"
+							}),
+							/* @__PURE__ */ jsx(Skeleton, {
+								h: 10,
+								rounded: "sm",
+								w: "70%"
+							})
+						]
+					})
+				]
 			}) : null
 		]
 	});
@@ -589,82 +641,118 @@ function ThreadsTab({ reviewRef, threads, loading, error, canWrite, act }) {
 	const [folded, setFolded] = useState({});
 	return /* @__PURE__ */ jsxs("div", {
 		className: "flex flex-col gap-2 p-3",
+		"aria-busy": loading || void 0,
 		children: [
-			loading ? /* @__PURE__ */ jsx("span", {
-				className: "text-fr-xs text-fr-text-3",
-				children: "Loading…"
+			threads === null && loading ? /* @__PURE__ */ jsx(SkeletonGroup, {
+				label: "Loading review threads",
+				children: /* @__PURE__ */ jsxs("div", {
+					className: "flex flex-col gap-3",
+					children: [
+						/* @__PURE__ */ jsx(Skeleton, {
+							h: 10,
+							rounded: "sm",
+							w: "45%"
+						}),
+						/* @__PURE__ */ jsx("div", {
+							className: "flex flex-col gap-1 rounded-md border border-fr-border bg-fr-surface p-2",
+							children: /* @__PURE__ */ jsx(SkeletonText, {
+								lines: 3,
+								lineHeight: 10,
+								gap: 6
+							})
+						}),
+						/* @__PURE__ */ jsx(Skeleton, {
+							h: 10,
+							rounded: "sm",
+							w: "35%"
+						}),
+						/* @__PURE__ */ jsx("div", {
+							className: "flex flex-col gap-1 rounded-md border border-fr-border bg-fr-surface p-2",
+							children: /* @__PURE__ */ jsx(SkeletonText, {
+								lines: 2,
+								lineHeight: 10,
+								gap: 6
+							})
+						})
+					]
+				})
 			}) : null,
 			error ? /* @__PURE__ */ jsx("p", {
 				className: "text-fr-del text-fr-sm",
 				children: error
 			}) : null,
-			threads && threads.length > 0 ? /* @__PURE__ */ jsxs("span", {
-				className: "text-fr-2xs text-fr-text-3",
+			/* @__PURE__ */ jsxs("div", {
+				className: loading && threads !== null ? "flex flex-col gap-2 opacity-60" : "flex flex-col gap-2",
 				children: [
-					threads.filter((thread) => !thread.isResolved).length,
-					" open · ",
-					threads.filter((thread) => thread.isResolved).length,
-					" resolved"
-				]
-			}) : null,
-			(threads ?? []).map((thread) => /* @__PURE__ */ jsxs("div", {
-				className: "flex flex-col gap-1",
-				children: [
-					/* @__PURE__ */ jsxs("span", {
-						className: "flex items-center gap-1.5 text-fr-2xs text-fr-text-3",
+					threads && threads.length > 0 ? /* @__PURE__ */ jsxs("span", {
+						className: "text-fr-2xs text-fr-text-3",
 						children: [
-							/* @__PURE__ */ jsx(Icon, {
-								name: "file",
-								size: 11,
-								"aria-hidden": "true"
+							threads.filter((thread) => !thread.isResolved).length,
+							" open · ",
+							threads.filter((thread) => thread.isResolved).length,
+							" resolved"
+						]
+					}) : null,
+					(threads ?? []).map((thread) => /* @__PURE__ */ jsxs("div", {
+						className: "flex flex-col gap-1",
+						children: [
+							/* @__PURE__ */ jsxs("span", {
+								className: "flex items-center gap-1.5 text-fr-2xs text-fr-text-3",
+								children: [
+									/* @__PURE__ */ jsx(Icon, {
+										name: "file",
+										size: 11,
+										"aria-hidden": "true"
+									}),
+									/* @__PURE__ */ jsx("span", {
+										className: "min-w-0 truncate text-fr-text-2",
+										children: thread.path ? `${thread.path}${thread.line ? `:${thread.line}` : ""}` : "no longer on a line"
+									}),
+									thread.isResolved ? /* @__PURE__ */ jsx("span", {
+										className: "rounded-[3px] border border-fr-border px-1 text-fr-text-3",
+										children: "resolved"
+									}) : null,
+									thread.isOutdated ? /* @__PURE__ */ jsx("span", {
+										className: "rounded-[3px] border border-fr-border px-1 text-fr-text-3",
+										children: "outdated"
+									}) : null
+								]
 							}),
-							/* @__PURE__ */ jsx("span", {
-								className: "min-w-0 truncate text-fr-text-2",
-								children: thread.path ? `${thread.path}${thread.line ? `:${thread.line}` : ""}` : "no longer on a line"
+							/* @__PURE__ */ jsx(ThreadCard, {
+								comments: thread.comments.map((comment) => ({
+									id: comment.id,
+									author: comment.author,
+									body: comment.body,
+									at: relativeTime(comment.createdAt)
+								})),
+								folded: folded[thread.id] ?? thread.isResolved,
+								onToggleFolded: () => setFolded((prev) => ({
+									...prev,
+									[thread.id]: !(prev[thread.id] ?? thread.isResolved)
+								}))
 							}),
-							thread.isResolved ? /* @__PURE__ */ jsx("span", {
-								className: "rounded-[3px] border border-fr-border px-1 text-fr-text-3",
-								children: "resolved"
-							}) : null,
-							thread.isOutdated ? /* @__PURE__ */ jsx("span", {
-								className: "rounded-[3px] border border-fr-border px-1 text-fr-text-3",
-								children: "outdated"
+							canWrite ? /* @__PURE__ */ jsx(ThreadWrite, {
+								resolved: thread.isResolved,
+								onReply: (body) => act("reviewAction", {
+									ref: reviewRef,
+									action: "reply",
+									threadId: thread.id,
+									body
+								}),
+								onResolve: () => act("reviewAction", {
+									ref: reviewRef,
+									action: thread.isResolved ? "unresolve" : "resolve",
+									threadId: thread.id
+								})
 							}) : null
 						]
-					}),
-					/* @__PURE__ */ jsx(ThreadCard, {
-						comments: thread.comments.map((comment) => ({
-							id: comment.id,
-							author: comment.author,
-							body: comment.body,
-							at: relativeTime(comment.createdAt)
-						})),
-						folded: folded[thread.id] ?? thread.isResolved,
-						onToggleFolded: () => setFolded((prev) => ({
-							...prev,
-							[thread.id]: !(prev[thread.id] ?? thread.isResolved)
-						}))
-					}),
-					canWrite ? /* @__PURE__ */ jsx(ThreadWrite, {
-						resolved: thread.isResolved,
-						onReply: (body) => act("reviewAction", {
-							ref: reviewRef,
-							action: "reply",
-							threadId: thread.id,
-							body
-						}),
-						onResolve: () => act("reviewAction", {
-							ref: reviewRef,
-							action: thread.isResolved ? "unresolve" : "resolve",
-							threadId: thread.id
-						})
+					}, thread.id)),
+					threads && threads.length === 0 && !loading ? /* @__PURE__ */ jsx("span", {
+						className: "text-fr-xs text-fr-text-3",
+						children: "No review conversations."
 					}) : null
 				]
-			}, thread.id)),
-			threads && threads.length === 0 ? /* @__PURE__ */ jsx("span", {
-				className: "text-fr-xs text-fr-text-3",
-				children: "No review conversations."
-			}) : null
+			})
 		]
 	});
 }
@@ -732,31 +820,31 @@ function DetailView({ reviewRef, summary, link, workspace, driver, act, onBack, 
 					/* @__PURE__ */ jsx(Button, {
 						size: "icon",
 						variant: "ghost",
-						"aria-label": "Open on the host",
+						"aria-label": `Open on ${reviewRef.host}`,
 						onClick: () => act("openReview", {
 							ref: reviewRef,
-							url: head?.url ?? link?.url ?? ""
+							url: head?.url ?? link?.url ?? "",
+							external: true
 						}),
 						children: /* @__PURE__ */ jsx(Icon, {
 							name: "external",
 							size: 13
 						})
 					}),
-					head?.state === "open" ? /* @__PURE__ */ jsx(Button, {
+					head?.state === "open" ? /* @__PURE__ */ jsxs(Button, {
 						size: "sm",
-						variant: "ghost",
-						className: "hover:border-fr-del hover:text-fr-del",
+						variant: "destructive",
 						onClick: () => setPending({
 							title: `Close #${reviewRef.number} without merging?`,
 							description: `The review closes on ${reviewRef.host}. Its branch stays; you can reopen it from here.`,
-							confirmLabel: "Close review",
+							confirmLabel: `Close ${head.label}`,
 							intent: "danger",
 							input: {
 								ref: reviewRef,
 								action: "close"
 							}
 						}),
-						children: "Close"
+						children: ["Close ", head.label]
 					}) : null,
 					canMerge && !canStackMerge ? /* @__PURE__ */ jsx(Button, {
 						size: "sm",
@@ -1123,14 +1211,20 @@ function NoDetailView({ reviewRef, summary, link, act, onBack }) {
 				/* @__PURE__ */ jsxs(Button, {
 					size: "sm",
 					variant: "outline",
+					"aria-label": `Open on ${reviewRef.host}`,
 					onClick: () => act("openReview", {
 						ref: reviewRef,
-						url: summary?.url ?? link?.url ?? ""
+						url: summary?.url ?? link?.url ?? "",
+						external: true
 					}),
-					children: [/* @__PURE__ */ jsx(Icon, {
-						name: "external",
-						size: 12
-					}), " Open on the host"]
+					children: [
+						/* @__PURE__ */ jsx(Icon, {
+							name: "external",
+							size: 12
+						}),
+						" Open on ",
+						reviewRef.host
+					]
 				})
 			]
 		})]
@@ -1228,7 +1322,7 @@ function PrViewer({ sessionId, workspace, workspaceDriver, store }) {
 			onBack: back,
 			settledActions,
 			actionNotice
-		}) : /* @__PURE__ */ jsx(NoDetailView, {
+		}, refKey(selected)) : /* @__PURE__ */ jsx(NoDetailView, {
 			reviewRef: selected,
 			summary: selectedSummary,
 			link: selectedLink,

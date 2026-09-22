@@ -1,6 +1,6 @@
 // The summary tab: the review's facts as pills, its stack, its body and checks.
 
-import { Button, cn, DiffStat, GitHubPullRequestIcon, Icon, Pill, reviewPillState, StreamingMarkdown } from "@fraym/ui";
+import { Button, cn, DiffStat, GitHubPullRequestIcon, Icon, Pill, reviewPillState, Skeleton, SkeletonText, StreamingMarkdown } from "@fraym/ui";
 import { relativeTime, type ReviewDetail, type ReviewRef, type ReviewSummary, type ReviewThread, type Stack, type StackLayer } from "./model";
 import type { PendingAction, ReviewAct, Tone } from "./shapes";
 
@@ -183,7 +183,10 @@ export function SummaryTab({
 				</section>
 			) : null}
 			{detail ? (
-				<section className="flex flex-col gap-2">
+				// Stale-while-revalidate (#902): a refetch over painted content keeps
+				// it dimmed (the context-popover `opacity-60` idiom) instead of
+				// swapping it for a spinner.
+				<section className={cn("flex flex-col gap-2", loading && "opacity-60")} aria-busy={loading || undefined}>
 					<span aria-hidden="true" className="border-fr-border-soft border-t" />
 					{detail.body.trim() ? (
 						<StreamingMarkdown text={detail.body} className="text-fr-sm text-fr-text" />
@@ -202,7 +205,17 @@ export function SummaryTab({
 					) : null}
 				</section>
 			) : loading ? (
-				<span className="text-fr-xs text-fr-text-3">Loading…</span>
+				// First load with nothing painted: a skeleton mirroring the body +
+				// checks layout so nothing reflows when content lands.
+				<section className="flex flex-col gap-2" aria-label="Loading review details">
+					<span aria-hidden="true" className="border-fr-border-soft border-t" />
+					<SkeletonText lines={4} lineHeight={12} gap={8} />
+					<div className="mt-2 flex flex-col gap-2 rounded-md border border-fr-border bg-fr-surface p-2">
+						<Skeleton h={10} rounded="sm" w="100%" />
+						<Skeleton h={10} rounded="sm" w="100%" />
+						<Skeleton h={10} rounded="sm" w="70%" />
+					</div>
+				</section>
 			) : null}
 		</div>
 	);
