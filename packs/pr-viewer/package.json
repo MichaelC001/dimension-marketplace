@@ -1,7 +1,7 @@
 {
 	"name": "@dimension/pr-viewer",
 	"author": "Dimension",
-	"version": "0.1.2",
+	"version": "0.1.3",
 	"description": "PR Viewer — a dock component for the version-control lane (doc 73): linked reviews, stacks, detail with threads and diff, link/unlink, merge and rebase-stack. Contributed through the component lane; import surface: react + @fraym/ui.",
 	"type": "module",
 	"main": "./src/index.ts",
