@@ -1,7 +1,7 @@
 // The diff tab. The fetch lives HERE, so the host is asked for a large diff
 // only while this tab is on screen (doc 73 §3) — mounting is the guard.
 
-import { DiffStat, Icon, StreamingMarkdown } from "@fraym/ui";
+import { DiffStat, Icon, Spinner, StreamingMarkdown } from "@fraym/ui";
 import { useCallback } from "react";
 import type { ReviewRef } from "./model";
 import type { ReviewDiffPayload, WorkspaceRefShape } from "./shapes";
@@ -22,10 +22,21 @@ export function DiffTab({
 	const read = useCallback(() => getReviewDiff(workspace, reviewRef), [getReviewDiff, workspace, reviewRef]);
 	const diff = useRead(read, cacheKey);
 	const files = diff.value?.files ?? [];
+	const firstLoad = diff.value === null && diff.loading;
+	const stale = diff.value !== null && diff.loading;
 	return (
-		<div className="flex flex-col gap-2 p-3">
-			{diff.loading ? <span className="text-fr-xs text-fr-text-3">Loading…</span> : null}
+		<div className="flex flex-col gap-2 p-3" aria-busy={diff.loading || undefined}>
+			{firstLoad ? (
+				// First load with no diff painted: the shape is unpredictable (file
+				// count, patch sizes), so a skeleton would lie — the dot-matrix
+				// loader (Spinner `dots`, the onboarding labour-illusion idiom).
+				<div className="flex items-center gap-2 text-fr-xs text-fr-text-3" aria-label="Loading diff">
+					<Spinner kind="dots" size="xs" label="Loading diff" />
+					<span>Loading diff…</span>
+				</div>
+			) : null}
 			{diff.error ? <p className="text-fr-del text-fr-sm">{diff.error}</p> : null}
+			<div className={stale ? "flex flex-col gap-2 opacity-60" : "flex flex-col gap-2"}>
 			{files.length > 0 ? (
 				<span className="flex items-center gap-2 text-fr-2xs text-fr-text-3">
 					<span>
@@ -50,8 +61,9 @@ export function DiffTab({
 					)}
 				</details>
 			))}
-			{diff.value && diff.value.files.length === 0 ? <span className="text-fr-xs text-fr-text-3">No file changes.</span> : null}
+			{diff.value && diff.value.files.length === 0 && !diff.loading ? <span className="text-fr-xs text-fr-text-3">No file changes.</span> : null}
 			{diff.value?.truncated ? <span className="text-fr-2xs text-fr-text-3">More files than the host returned — open on the host for the rest.</span> : null}
+			</div>
 		</div>
 	);
 }
