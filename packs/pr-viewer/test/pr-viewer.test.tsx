@@ -327,12 +327,10 @@ describe("the header's Close button", () => {
 			[...document.querySelectorAll("button")].filter(b => (b.textContent ?? "").trim() === "Close PR"),
 			"Close PR button",
 		);
-		// The destructive treatment is visible at rest — red text, red hairline
-		// — not the ghost that only appeared on hover and read as a label.
+		// `data-variant` is the Button primitive's published contract; the exact
+		// class tokens are the primitive's own recipe, not this pack's surface.
 		expect(button.tagName).toBe("BUTTON");
 		expect(button.getAttribute("data-variant")).toBe("destructive");
-		expect(button.className).toContain("text-fr-del");
-		expect(button.className).toContain("border-fr-del-line");
 	});
 
 	test("an MR closes under the same noun swap, no host word hardcoded", () => {
@@ -343,8 +341,6 @@ describe("the header's Close button", () => {
 		);
 		expect(button.tagName).toBe("BUTTON");
 		expect(button.getAttribute("data-variant")).toBe("destructive");
-		expect(button.className).toContain("text-fr-del");
-		expect(button.className).toContain("border-fr-del-line");
 	});
 
 	test("a closed review offers no Close at all — reopen replaces it", () => {

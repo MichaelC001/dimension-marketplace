@@ -749,7 +749,7 @@ function DetailView({ reviewRef, summary, link, workspace, driver, act, onBack, 
 						onClick: () => setPending({
 							title: `Close #${reviewRef.number} without merging?`,
 							description: `The review closes on ${reviewRef.host}. Its branch stays; you can reopen it from here.`,
-							confirmLabel: "Close review",
+							confirmLabel: `Close ${head.label}`,
 							intent: "danger",
 							input: {
 								ref: reviewRef,
