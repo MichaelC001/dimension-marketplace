@@ -304,13 +304,14 @@ describe("the threads tab's loaders", () => {
 		await dom.click(tabButton(dom, "threads"));
 
 		expect(gates).toHaveLength(1);
-		expect(one(dom.find('[aria-label="Loading review threads"]'), "threads skeleton")).toBeTruthy();
+		expect(one(dom.find('[data-slot="skeleton-group"]'), "threads skeleton")).toBeTruthy();
+		expect(dom.find('[data-slot="skeleton-group"]')[0].textContent).toContain("Loading review threads");
 		// The host has not answered: the empty list is NOT a fact yet.
 		expect(dom.text()).not.toContain("No review conversations.");
 
 		settle();
 		await act(async () => {});
-		expect(dom.find('[aria-label="Loading review threads"]')).toHaveLength(0);
+		expect(dom.find('[data-slot="skeleton-group"]')).toHaveLength(0);
 		expect(dom.text()).toContain("src/rail.tsx:12");
 		expect(dom.text()).toContain("1 open · 0 resolved");
 	});
@@ -331,7 +332,7 @@ describe("the threads tab's loaders", () => {
 		await dom.render(<DetailView {...detailProps} settledActions={1} summary={summaryOf(capabilities)} driver={driver} />);
 		const dimmed = one(dom.find('[class*="opacity-60"]'), "dimmed threads container");
 		expect(dimmed.textContent).toContain("1 open · 0 resolved");
-		expect(dom.find('[aria-label="Loading review threads"]')).toHaveLength(0);
+		expect(dom.find('[data-slot="skeleton-group"]')).toHaveLength(0);
 
 		settle();
 		await act(async () => {});

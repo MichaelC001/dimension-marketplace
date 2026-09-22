@@ -232,6 +232,10 @@ export function PrViewer({ sessionId, workspace, workspaceDriver, store }: PrVie
 		const back = links.length + others.length > 1 || !selectedLink ? () => setSelected(null) : null;
 		return workspace && workspaceDriver ? (
 			<DetailView
+				// A review switch must REMOUNT: otherwise useRead's key-change path keeps
+				// the previous review painted as loading (#902 stale-keep), so head =
+				// detail.value ?? summary shows the OLD review's facts under the NEW one.
+				key={refKey(selected)}
 				reviewRef={selected}
 				summary={selectedSummary}
 				link={selectedLink}

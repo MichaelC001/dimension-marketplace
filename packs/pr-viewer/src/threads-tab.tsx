@@ -1,7 +1,7 @@
 // The threads tab: the review's line conversations, each foldable, each with
 // a reply/resolve composer when the host admits thread writes.
 
-import { Icon, Skeleton, SkeletonText, ThreadCard } from "@fraym/ui";
+import { Icon, Skeleton, SkeletonGroup, SkeletonText, ThreadCard } from "@fraym/ui";
 import { useState } from "react";
 import { ThreadWrite } from "./compose";
 import { relativeTime, type ReviewRef, type ReviewThread } from "./model";
@@ -29,16 +29,20 @@ export function ThreadsTab({
 			{threads === null && loading ? (
 				// First load with no threads painted: skeletons mirroring the
 				// file-line + ThreadCard shape so the list does not reflow.
-				<div className="flex flex-col gap-3" aria-label="Loading review threads">
-					<Skeleton h={10} rounded="sm" w="45%" />
-					<div className="flex flex-col gap-1 rounded-md border border-fr-border bg-fr-surface p-2">
-						<SkeletonText lines={3} lineHeight={10} gap={6} />
+				// SkeletonGroup (role=status) announces the busy state once;
+				// a bare aria-label on a div would be inert.
+				<SkeletonGroup label="Loading review threads">
+					<div className="flex flex-col gap-3">
+						<Skeleton h={10} rounded="sm" w="45%" />
+						<div className="flex flex-col gap-1 rounded-md border border-fr-border bg-fr-surface p-2">
+							<SkeletonText lines={3} lineHeight={10} gap={6} />
+						</div>
+						<Skeleton h={10} rounded="sm" w="35%" />
+						<div className="flex flex-col gap-1 rounded-md border border-fr-border bg-fr-surface p-2">
+							<SkeletonText lines={2} lineHeight={10} gap={6} />
+						</div>
 					</div>
-					<Skeleton h={10} rounded="sm" w="35%" />
-					<div className="flex flex-col gap-1 rounded-md border border-fr-border bg-fr-surface p-2">
-						<SkeletonText lines={2} lineHeight={10} gap={6} />
-					</div>
-				</div>
+				</SkeletonGroup>
 			) : null}
 			{error ? <p className="text-fr-del text-fr-sm">{error}</p> : null}
 			<div className={stale ? "flex flex-col gap-2 opacity-60" : "flex flex-col gap-2"}>
