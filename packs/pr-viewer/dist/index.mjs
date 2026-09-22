@@ -732,20 +732,20 @@ function DetailView({ reviewRef, summary, link, workspace, driver, act, onBack, 
 					/* @__PURE__ */ jsx(Button, {
 						size: "icon",
 						variant: "ghost",
-						"aria-label": "Open on the host",
+						"aria-label": `Open on ${reviewRef.host}`,
 						onClick: () => act("openReview", {
 							ref: reviewRef,
-							url: head?.url ?? link?.url ?? ""
+							url: head?.url ?? link?.url ?? "",
+							external: true
 						}),
 						children: /* @__PURE__ */ jsx(Icon, {
 							name: "external",
 							size: 13
 						})
 					}),
-					head?.state === "open" ? /* @__PURE__ */ jsx(Button, {
+					head?.state === "open" ? /* @__PURE__ */ jsxs(Button, {
 						size: "sm",
-						variant: "ghost",
-						className: "hover:border-fr-del hover:text-fr-del",
+						variant: "destructive",
 						onClick: () => setPending({
 							title: `Close #${reviewRef.number} without merging?`,
 							description: `The review closes on ${reviewRef.host}. Its branch stays; you can reopen it from here.`,
@@ -756,7 +756,7 @@ function DetailView({ reviewRef, summary, link, workspace, driver, act, onBack, 
 								action: "close"
 							}
 						}),
-						children: "Close"
+						children: ["Close ", head.label]
 					}) : null,
 					canMerge && !canStackMerge ? /* @__PURE__ */ jsx(Button, {
 						size: "sm",
@@ -1092,14 +1092,20 @@ function NoDetailView({ reviewRef, summary, link, act, onBack }) {
 				/* @__PURE__ */ jsxs(Button, {
 					size: "sm",
 					variant: "outline",
+					"aria-label": `Open on ${reviewRef.host}`,
 					onClick: () => act("openReview", {
 						ref: reviewRef,
-						url: summary?.url ?? link?.url ?? ""
+						url: summary?.url ?? link?.url ?? "",
+						external: true
 					}),
-					children: [/* @__PURE__ */ jsx(Icon, {
-						name: "external",
-						size: 12
-					}), " Open on the host"]
+					children: [
+						/* @__PURE__ */ jsx(Icon, {
+							name: "external",
+							size: 12
+						}),
+						" Open on ",
+						reviewRef.host
+					]
 				})
 			]
 		})]

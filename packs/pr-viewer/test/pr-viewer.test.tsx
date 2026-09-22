@@ -278,6 +278,87 @@ describe("DetailView's reads", () => {
 	});
 });
 
+// ── 2b. the detail header's outward affordances ─────────────────────────────
+//
+// The header's external glyph used to emit a BARE `openReview`, which the
+// mounted viewer answered itself (a refresh, not a browser). The fix names the
+// destination with `external: true` — asserted exactly, so a dropped key
+// reddens — and the Close button borrows the host's own noun (`PR`/`MR`) and
+// the destructive treatment, verified on static markup where the word "Close"
+// would otherwise match any of the panel's other chrome.
+
+describe("DetailView's header", () => {
+	test("the external glyph asks for the browser, naming the destination exactly", async () => {
+		const { driver } = spyDriver({});
+		const acts: Act[] = [];
+		const dom = mount();
+		await dom.render(
+			<DetailView
+				{...detailProps}
+				summary={summaryOf()}
+				driver={driver}
+				act={(intent, payload) => {
+					acts.push({ intent, payload });
+				}}
+			/>,
+		);
+
+		const open = one(dom.find('button[aria-label="Open on example.test"]'), "open-on-host button");
+		await dom.click(open);
+		expect(acts).toHaveLength(1);
+		expect(acts[0]?.intent).toBe("openReview");
+		expect(acts[0]?.payload).toEqual({ ref: REF, url: URL, external: true });
+	});
+});
+
+describe("the header's Close button", () => {
+	/** DetailView with everything else identical except the host's noun. The
+	 *  read is driven by the driver fixture, so a live mount is unnecessary. */
+	function markupFor(label: ReviewSummary["label"]): string {
+		const { driver } = spyDriver({});
+		return renderToStaticMarkup(
+			<DetailView {...detailProps} summary={{ ...summaryOf(), label }} driver={driver} />,
+		);
+	}
+
+	test("a PR closes under the host's own noun, with the destructive treatment", () => {
+		const { document } = parseHTML(`<!doctype html><html><body>${markupFor("PR")}</body></html>`);
+		const button = one(
+			[...document.querySelectorAll("button")].filter(b => (b.textContent ?? "").trim() === "Close PR"),
+			"Close PR button",
+		);
+		// The destructive treatment is visible at rest — red text, red hairline
+		// — not the ghost that only appeared on hover and read as a label.
+		expect(button.tagName).toBe("BUTTON");
+		expect(button.getAttribute("data-variant")).toBe("destructive");
+		expect(button.className).toContain("text-fr-del");
+		expect(button.className).toContain("border-fr-del-line");
+	});
+
+	test("an MR closes under the same noun swap, no host word hardcoded", () => {
+		const { document } = parseHTML(`<!doctype html><html><body>${markupFor("MR")}</body></html>`);
+		const button = one(
+			[...document.querySelectorAll("button")].filter(b => (b.textContent ?? "").trim() === "Close MR"),
+			"Close MR button",
+		);
+		expect(button.tagName).toBe("BUTTON");
+		expect(button.getAttribute("data-variant")).toBe("destructive");
+		expect(button.className).toContain("text-fr-del");
+		expect(button.className).toContain("border-fr-del-line");
+	});
+
+	test("a closed review offers no Close at all — reopen replaces it", () => {
+		const { driver } = spyDriver({});
+		const markup = renderToStaticMarkup(
+			<DetailView {...detailProps} summary={{ ...summaryOf(), state: "closed" }} driver={driver} />,
+		);
+		const { document } = parseHTML(`<!doctype html><html><body>${markup}</body></html>`);
+		const texts = [...document.querySelectorAll("button")].map(b => (b.textContent ?? "").trim());
+		expect(texts.filter(text => text.startsWith("Close"))).toHaveLength(0);
+		expect(texts).toContain("Reopen");
+	});
+});
+
 // ── 3. a selection with no checkout behind it ───────────────────────────────
 
 const reviewsKey = `workspace/${WORKSPACE.workspaceId}/reviews`;
@@ -304,11 +385,15 @@ describe("PrViewer with a workspace but no driver", () => {
 		// The list is GONE: the selection was answered, not swallowed.
 		expect(dom.text()).not.toContain("Also in this checkout");
 
-		const open = one(byText([...fallback.querySelectorAll("button")], "Open on the host"), "open-on-host button");
+		const open = one(dom.find('button[aria-label="Open on example.test"]'), "open-on-host button");
 		await dom.click(open);
 		expect(acts).toHaveLength(1);
 		expect(acts[0]?.intent).toBe("openReview");
-		expect(acts[0]?.payload).toMatchObject({ ref: REF, url: URL, env: WORKSPACE });
+		// Exact, not a subset: the whole point of the fix is that `external`
+		// NAMES the destination, so a payload without it routes to the viewer
+		// itself — and `env` rides along only because the provider's `act`
+		// folds it in, not the button. A dropped or renamed key must fail here.
+		expect(acts[0]?.payload).toEqual({ ref: REF, url: URL, env: WORKSPACE, external: true });
 	});
 });
 

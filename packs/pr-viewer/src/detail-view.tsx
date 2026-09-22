@@ -92,16 +92,25 @@ export function DetailView({
 					<span>#{reviewRef.number}</span>
 				</span>
 				<span className="flex-1" />
-				<Button size="icon" variant="ghost" aria-label="Open on the host" onClick={() => act("openReview", { ref: reviewRef, url: head?.url ?? link?.url ?? "" })}>
+				{/* From INSIDE the viewer an external glyph means the browser, always:
+				// `openReview` without `external` prefers the mounted instrument that
+				// declares `opens: ["review"]` — which is this panel — so the click
+				// re-requested itself and read as a refresh. `external: true` names
+				// the DESTINATION (the verb's own override); the request cell the
+				// in-app path writes is never touched. */}
+				<Button size="icon" variant="ghost" aria-label={`Open on ${reviewRef.host}`} onClick={() => act("openReview", { ref: reviewRef, url: head?.url ?? link?.url ?? "", external: true })}>
 					<Icon name="external" size={13} />
 				</Button>
 				{head?.state === "open" ? (
-					// Closes the REVIEW, not the panel: the danger treatment DESIGN
-					// reserves for an action the user cannot take back lightly.
+					// Closes the REVIEW, not the panel: `head.label` is the host's
+					// own noun ("PR" · "MR" · "review" · "CL", written by the
+					// provider, never a string in a component — doc 73 §1), so a
+					// hostname branch here would mislabel a self-hosted host.
+					// `destructive` is a visible-at-rest peer of Merge in shape —
+					// the ghost that only appeared on hover read as a label.
 					<Button
 						size="sm"
-						variant="ghost"
-						className="hover:border-fr-del hover:text-fr-del"
+						variant="destructive"
 						onClick={() =>
 							setPending({
 								title: `Close #${reviewRef.number} without merging?`,
@@ -112,7 +121,7 @@ export function DetailView({
 							})
 						}
 					>
-						Close
+						Close {head.label}
 					</Button>
 				) : null}
 				{canMerge && !canStackMerge ? (
