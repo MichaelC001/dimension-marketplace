@@ -128,8 +128,11 @@ function NoDetailView({
 					</span>
 				</Pill>
 				<span className="text-fr-sm text-fr-text-2">This mount has no checkout behind it, so the review's detail, threads and diff cannot be read here.</span>
-				<Button size="sm" variant="outline" onClick={() => act("openReview", { ref: reviewRef, url: summary?.url ?? link?.url ?? "" })}>
-					<Icon name="external" size={12} /> Open on the host
+				{/* Same self-routing as the detail header: this button is inside the
+				// mounted review instrument, so a bare `openReview` would publish a
+				// request the viewer answers itself. `external: true` goes to the browser. */}
+				<Button size="sm" variant="outline" aria-label={`Open on ${reviewRef.host}`} onClick={() => act("openReview", { ref: reviewRef, url: summary?.url ?? link?.url ?? "", external: true })}>
+					<Icon name="external" size={12} /> Open on {reviewRef.host}
 				</Button>
 			</div>
 		</div>
