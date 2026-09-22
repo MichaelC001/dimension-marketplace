@@ -1,21 +1,26 @@
-// The restyled review LIST row (dimension#896). One review reads as ONE card
-// block: a fixed state-glyph box in the gutter, `#N · state` beside it, the
-// title truncated to a single line beneath it.
+// The review LIST row (dimension#896 restyle, dimension#909 split). One review
+// reads as ONE card block: a fixed state-glyph box in the gutter, `#N` as its
+// own plain tag, the state as the SEPARATE tag beside it, the title truncated
+// to a single line beneath it.
 //
 // WHAT BREAKS IN THE PRODUCT IF THIS GOES RED: the list is the surface a
 // person scans review after review. If the row stops being a card
 // (`data-variant`), the reviews stop reading as blocks and the list dissolves
 // into loose text. If the octicon moves back INSIDE the number pill, the pill
 // grows an icon-sized notch and the gutter's fixed x — the whole point of the
-// restyle — is gone while the pill still LOOKS roughly right. If the title
-// wraps to two lines (`line-clamp-2`), rows stop aligning on their branch
-// line and a long title shoves every row's height around.
+// restyle — is gone while the pill still LOOKS roughly right. If the state
+// label is fused back into the number pill (the pre-#909 shape), the one
+// thing that never changes — `#N` — repaints whenever the state changes and a
+// column of numbers stops reading as a column. If the title wraps to two
+// lines (`line-clamp-2`), rows stop aligning on their branch line and a long
+// title shoves every row's height around.
 //
 // Seam: the rendered DOM of the row component itself — `ReviewRow` is pure
 // (props in, tree out), so no store is mounted. The list GROUPS (the two
 // `gap-2` columns in `pr-viewer.tsx`) are proven on a live `PrViewer` mount,
 // because a structural grep of the source would pass while the wrapper is
-// deleted; a row's parent element is the cheapest seam that reddens.
+// deleted; a row's parent element is the cheapest seam that reddens. The
+// state FILTER chips live next door, in `state-filter.test.tsx`.
 import { afterEach, describe, expect, test } from "bun:test";
 import { parseHTML } from "linkedom";
 import type { ReactNode } from "react";
@@ -136,9 +141,19 @@ function titleSpan(row: HTMLElement): HTMLElement {
 	const span = [...row.querySelectorAll("span")]
 		.filter(el => (el.getAttribute("class") ?? "").split(/\s+/).includes("truncate"))
 		.find(el => (el.getAttribute("class") ?? "").split(/\s+/).includes("font-semibold"));
-	if (!span) throw new Error("ReviewRow rendered no truncated title span");
+
 	return span as HTMLElement;
 }
+/** The state tag (dimension#909): the pill whose WHOLE text is the given label
+ *  — the review's state, or the unsynced link's honest "Not synced yet". The
+ *  number pill leads with `#N` and never carries a state word, so an exact
+ *  text match cannot collide with it. */
+function statePillOf(row: HTMLElement, label: string): HTMLElement {
+	const pill = [...row.querySelectorAll('[data-slot="pill"]')].find(el => (el.textContent ?? "").trim() === label);
+	if (!pill) throw new Error(`ReviewRow rendered no "${label}" pill`);
+	return pill as HTMLElement;
+}
+
 
 // ── the row is one card ─────────────────────────────────────────────────────
 
@@ -148,15 +163,21 @@ describe("ReviewRow is one card row", () => {
 		const row = chainRow(doc);
 
 		expect(row.getAttribute("data-variant")).toBe("card");
-
 		// The state glyph lives in the gutter box, NOT in the number pill: a
 		// duplicated octicon is exactly the pre-restyle regression this pins.
 		const glyph = glyphBox(row);
 		expect(glyph.querySelector("svg")).not.toBeNull();
+
+		// The number is the number (dimension#909): it leads with `#N` and
+		// carries NO state word — the state is the SEPARATE tag beside it.
 		const pill = numberPill(row);
-		expect(pill.textContent).toMatch(/^#101/);
-		expect(pill.textContent).toContain(REVIEW_PILL_LABEL.open);
-		expect(pill.querySelector("svg")).toBeNull();
+		expect(pill.textContent).toMatch(/^#101$/);
+		expect(pill.textContent).not.toContain(REVIEW_PILL_LABEL.open);
+
+		// The state tag carries the shared table's label. `open`'s tint is the
+		// table's empty string, so here the pill is asserted by text alone.
+		const state = statePillOf(row, REVIEW_PILL_LABEL.open);
+		expect(state.textContent).toBe(REVIEW_PILL_LABEL.open);
 	});
 
 	test("a merged review tints the gutter glyph with the state's own tint", () => {
@@ -168,7 +189,16 @@ describe("ReviewRow is one card row", () => {
 		// rail and dark here.
 		const glyph = glyphBox(row);
 		expect(glyph.getAttribute("class")).toContain(REVIEW_PILL_TINT.merged);
-		expect(numberPill(row).textContent).toContain(REVIEW_PILL_LABEL.merged);
+
+		// The state is its OWN tag beside the plain number (dimension#909): the
+		// number carries no state word, and the state tag carries the shared
+		// table's label AND tint — the same wash the rail's chip reads.
+		const pill = numberPill(row);
+		expect(pill.textContent).toMatch(/^#101$/);
+		expect(pill.textContent).not.toContain(REVIEW_PILL_LABEL.merged);
+		const state = statePillOf(row, REVIEW_PILL_LABEL.merged);
+		expect(state.textContent).toBe(REVIEW_PILL_LABEL.merged);
+		expect(state.getAttribute("class")).toContain(REVIEW_PILL_TINT.merged);
 	});
 });
 
@@ -191,7 +221,15 @@ describe("ReviewRow's title truncates to one line", () => {
 		const doc = render(<ReviewRow {...rowProps({ summary: null, link })} />);
 		const row = chainRow(doc);
 
-		expect(numberPill(row).textContent).toContain("Not synced yet");
+		// The number names itself; the unsynced state is the plain, untinted
+		// pill BESIDE it — not fused into the number pill (dimension#909), and
+		// wearing none of the shared table's state tints.
+		const pill = numberPill(row);
+		expect(pill.textContent).toMatch(/^#202$/);
+		const unsynced = statePillOf(row, "Not synced yet");
+		expect(unsynced.textContent).toBe("Not synced yet");
+		const classes = unsynced.getAttribute("class") ?? "";
+		expect(Object.values(REVIEW_PILL_TINT).filter(Boolean).some(tint => classes.includes(tint))).toBe(false);
 		const title = titleSpan(row);
 		expect(title.getAttribute("title")).toBe(link.url);
 		expect(title.textContent).toBe(link.url);
