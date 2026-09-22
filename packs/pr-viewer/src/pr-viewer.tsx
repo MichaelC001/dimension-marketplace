@@ -128,8 +128,11 @@ function NoDetailView({
 					</span>
 				</Pill>
 				<span className="text-fr-sm text-fr-text-2">This mount has no checkout behind it, so the review's detail, threads and diff cannot be read here.</span>
-				<Button size="sm" variant="outline" onClick={() => act("openReview", { ref: reviewRef, url: summary?.url ?? link?.url ?? "" })}>
-					<Icon name="external" size={12} /> Open on the host
+				{/* Same self-routing as the detail header: this button is inside the
+				// mounted review instrument, so a bare `openReview` would publish a
+				// request the viewer answers itself. `external: true` goes to the browser. */}
+				<Button size="sm" variant="outline" aria-label={`Open on ${reviewRef.host}`} onClick={() => act("openReview", { ref: reviewRef, url: summary?.url ?? link?.url ?? "", external: true })}>
+					<Icon name="external" size={12} /> Open on {reviewRef.host}
 				</Button>
 			</div>
 		</div>
@@ -257,7 +260,7 @@ export function PrViewer({ sessionId, workspace, workspaceDriver, store }: PrVie
 	const rowMenu = (ref: ReviewRef, url: string, link: SessionReviewLink | undefined, summary?: ReviewSummary | null) => (
 		<RowMenu
 			actions={[
-				{ label: "Open on the host", onClick: () => act("openReview", { ref, url }) },
+				{ label: "Open on the host", onClick: () => act("openReview", { ref, url, external: true }) },
 				{ label: "Refresh", onClick: () => act("refreshReviews", { ref }) },
 				...(sessionId
 					? [
@@ -300,27 +303,31 @@ export function PrViewer({ sessionId, workspace, workspaceDriver, store }: PrVie
 				) : (
 					<>
 						{others.length > 0 ? <div className="px-2 pt-2 pb-2 text-fr-sm font-semibold text-fr-text">Linked to this session</div> : null}
-						{lines.map(line => (
-							<ReviewRow
-								key={refKey(line.link.ref)}
-								summary={summaryFor(line.link)}
-								link={line.link}
-								depth={line.depth}
-								stack={line.stack}
-								sharedBase={sharedBase}
-								sharedOwner={sharedOwner}
-								onSelect={() => setSelected(line.link.ref)}
-								menu={rowMenu(line.link.ref, line.link.url, line.link)}
-							/>
-						))}
+						<div className="flex flex-col gap-2">
+							{lines.map(line => (
+								<ReviewRow
+									key={refKey(line.link.ref)}
+									summary={summaryFor(line.link)}
+									link={line.link}
+									depth={line.depth}
+									stack={line.stack}
+									sharedBase={sharedBase}
+									sharedOwner={sharedOwner}
+									onSelect={() => setSelected(line.link.ref)}
+									menu={rowMenu(line.link.ref, line.link.url, line.link)}
+								/>
+							))}
+						</div>
 					</>
 				)}
 				{others.length > 0 ? (
 					<>
 						<div className="px-2 pt-5 pb-2 text-fr-sm font-semibold text-fr-text">Also in this checkout</div>
-						{others.map(row => (
-							<ReviewRow key={refKey(row.ref)} summary={row} depth={0} stack={null} sharedBase={sharedBase} sharedOwner={sharedOwner} onSelect={() => setSelected(row.ref)} menu={rowMenu(row.ref, row.url, undefined, row)} />
-						))}
+						<div className="flex flex-col gap-2">
+							{others.map(row => (
+								<ReviewRow key={refKey(row.ref)} summary={row} depth={0} stack={null} sharedBase={sharedBase} sharedOwner={sharedOwner} onSelect={() => setSelected(row.ref)} menu={rowMenu(row.ref, row.url, undefined, row)} />
+							))}
+						</div>
 					</>
 				) : null}
 			</div>
