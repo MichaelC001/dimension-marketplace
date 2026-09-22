@@ -24,6 +24,8 @@ import {
 	GitHubPullRequestIcon,
 	Icon,
 	Pill,
+	REVIEW_PILL_LABEL,
+	REVIEW_PILL_TINT,
 	resolveReviewChains,
 	reviewListLines,
 	reviewPillState,
@@ -64,6 +66,29 @@ const NO_LINKS: readonly SessionReviewLink[] = [];
 const NO_ROWS: readonly ReviewSummary[] = [];
 const NONE = { getSnapshot: () => undefined, subscribe: () => () => {} };
 
+/** The list's state filter (dimension#909): GitHub's Open/Closed filters are the
+ *  DIRECTION — a review list is nearly always read with a state in mind — not a
+ *  spec to transplant. No GitHub chrome or colours: the chips are the same `Pill`
+ *  + `REVIEW_PILL_TINT` vocabulary the rows use, so a filter chip and a state tag
+ *  are visibly the same language. `open` covers `conflicting` because a conflict
+ *  REFINES open (`reviewPillState`): the review is still open and still
+ *  actionable. Drafts are their own chip, not folded into open: a draft's whole
+ *  point is that it is not yet a review. */
+export type ReviewStateFilter = "all" | "open" | "draft" | "merged" | "closed";
+
+const REVIEW_STATE_FILTERS: readonly ReviewStateFilter[] = ["all", "open", "draft", "merged", "closed"];
+
+/** Whether a row survives the filter. An unsynced link reads as `open` — the
+ *  same fallback the row itself draws with, so the filter can never hide a row
+ *  the list would show as open. Counts are free: every summary here is already
+ *  in memory (the link's snapshot or the checkout sweep's row), so no chip
+ *  costs a request. */
+export function reviewMatchesFilter(summary: ReviewSummary | null, filter: ReviewStateFilter): boolean {
+	if (filter === "all") return true;
+	const state = summary ? reviewPillState(summary) : "open";
+	if (filter === "open") return state === "open" || state === "conflicting";
+	return state === filter;
+}
 /** The list failed for a stated reason (doc 73 §9): the fix, with the
  *  command in hand, instead of an empty list that reads as "no reviews". */
 function UnavailableState({ unavailable }: { readonly unavailable: ReviewsUnavailable }) {
@@ -180,6 +205,12 @@ export function PrViewer({ sessionId, workspace, workspaceDriver, store }: PrVie
 	const others = useMemo(() => (checkout ?? NO_ROWS).filter(row => !linkedKeys.has(refKey(row.ref))), [checkout, linkedKeys]);
 	const [selected, setSelected] = useState<ReviewRef | null>(null);
 	const [linking, setLinking] = useState(false);
+	// The state filter is EPHEMERAL (dimension#909): `useState` defaulting to
+	// `all`, reset whenever the panel remounts. A filter is a transient reading
+	// aid — persisting it would reopen the panel on a narrowed list with no
+	// evidence anything is hidden, which is exactly the blank-panel failure the
+	// empty copy exists to prevent.
+	const [filter, setFilter] = useState<ReviewStateFilter>("all");
 	const act = useCallback(
 		(intent: string, payload: Record<string, unknown>) => {
 			if (!store) return;
@@ -187,6 +218,12 @@ export function PrViewer({ sessionId, workspace, workspaceDriver, store }: PrVie
 		},
 		[store, workspace, sessionId],
 	);
+	// A link's own snapshot first (the sync stamps one on stack/pushed links);
+	// otherwise the checkout sweep's row for the same ref — a MANUAL link
+	// carries no snapshot, and without this it drew as a bare number + URL
+	// beside a fully-titled sibling in "Also in this checkout" (live 2026-09-17).
+	const summaryFor = (link: SessionReviewLink): ReviewSummary | null =>
+		link.snapshot ?? checkout?.find(row => refKey(row.ref) === refKey(link.ref)) ?? null;
 	// THE REQUEST CELL (doc 73 §7): a rail chip asked for a review. The host
 	// only writes it when THIS instrument is mounted, so answering it is the
 	// whole reason `opens: ["review"]` is in the manifest.
@@ -199,17 +236,22 @@ export function PrViewer({ sessionId, workspace, workspaceDriver, store }: PrVie
 		const first = links[0]?.ref ?? checkout?.[0]?.ref;
 		return first ? { provider: first.provider, host: first.host, repository: first.repository } : null;
 	}, [links, checkout]);
+	// The two groups still apply WITHIN a filtered view (dimension#909) — filter
+	// first, then split linked/also, never flatten.
+	const visibleLines = useMemo(() => lines.filter(line => reviewMatchesFilter(summaryFor(line.link), filter)), [lines, filter]);
+	const visibleOthers = useMemo(() => others.filter(row => reviewMatchesFilter(row, filter)), [others, filter]);
+	// Counts ride the same in-memory summaries the rows draw, so no chip costs
+	// a request — "Open 6" tells you whether clicking is worth it, for free.
+	const counts = useMemo(() => {
+		const count = (f: ReviewStateFilter) =>
+			lines.filter(line => reviewMatchesFilter(summaryFor(line.link), f)).length + others.filter(row => reviewMatchesFilter(row, f)).length;
+		return { all: lines.length + others.length, open: count("open"), draft: count("draft"), merged: count("merged"), closed: count("closed") };
+	}, [lines, others]);
 
 	if (!store) {
 		return <p className="p-3 text-fr-sm text-fr-text-3">No store on this mount — the viewer needs the host's facts.</p>;
 	}
 	const selectedLink = selected ? links.find(link => refKey(link.ref) === refKey(selected)) : undefined;
-	// A link's own snapshot first (the sync stamps one on stack/pushed links);
-	// otherwise the checkout sweep's row for the same ref — a MANUAL link
-	// carries no snapshot, and without this it drew as a bare number + URL
-	// beside a fully-titled sibling in "Also in this checkout" (live 2026-09-17).
-	const summaryFor = (link: SessionReviewLink): ReviewSummary | null =>
-		link.snapshot ?? checkout?.find(row => refKey(row.ref) === refKey(link.ref)) ?? null;
 	// The base every listed review targets, when they all agree — the list is
 	// its own proof of the checkout's trunk, so "→ main" on every row says nothing.
 	const bases = new Set<string>();
@@ -279,10 +321,38 @@ export function PrViewer({ sessionId, workspace, workspaceDriver, store }: PrVie
 					}}
 				/>
 			) : null}
+			{/* State filters (dimension#909): GitHub's Open/Closed filters are the
+			    DIRECTION, not a transplant — no GitHub chrome or colours. The chips
+			    are the rows' own `Pill` + `REVIEW_PILL_TINT` vocabulary, so a filter
+			    chip and a state tag are visibly the same language. The bar renders
+			    only when there is something to narrow, and it WRAPS instead of
+			    squeezing: the dock is narrow and five chips in one row may not fit
+			    at the real dock width. The ACTIVE chip wears its state's tint —
+			    pixel-identical to the row's state tag — while the rest stay plain;
+			    `All` marks itself with semibold ink, the neutral position. */}
+			{counts.all > 0 ? (
+				<div role="group" aria-label="Filter reviews by state" className="flex flex-wrap items-center gap-1.5 border-fr-border-soft border-b px-3 py-2">
+					{REVIEW_STATE_FILTERS.map(f => {
+						const active = filter === f;
+						return (
+							<Pill
+								key={f}
+								asChild
+								tint={f === "all" ? undefined : active ? REVIEW_PILL_TINT[f] : undefined}
+								className={active ? "font-semibold text-fr-text" : undefined}
+							>
+								<button type="button" aria-pressed={active} data-active={active} onClick={() => setFilter(f)}>
+									{f === "all" ? "All" : REVIEW_PILL_LABEL[f]} {counts[f]}
+								</button>
+							</Pill>
+						);
+					})}
+				</div>
+			) : null}
 			<div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
 				{lines.length === 0 && others.length === 0 && unavailable ? (
 					<UnavailableState unavailable={unavailable} />
-				) : lines.length === 0 ? (
+				) : filter === "all" && lines.length === 0 ? (
 					<div className="flex flex-col items-start gap-2 p-3">
 						<span className="text-fr-sm text-fr-text-3">
 							{sessionId ? "No reviews linked to this session yet." : "Start a session to link reviews to it."}
@@ -293,11 +363,17 @@ export function PrViewer({ sessionId, workspace, workspaceDriver, store }: PrVie
 							</Button>
 						) : null}
 					</div>
+				) : visibleLines.length === 0 && visibleOthers.length === 0 ? (
+					<div className="flex flex-col items-start gap-2 p-3" data-slot="pr-viewer-filter-empty" data-filter={filter}>
+						<span className="text-fr-sm text-fr-text-3">
+							{filter === "all" ? "No reviews in this checkout" : `No ${REVIEW_PILL_LABEL[filter].toLowerCase()} reviews in this checkout`}
+						</span>
+					</div>
 				) : (
 					<>
-						{others.length > 0 ? <div className="px-2 pt-2 pb-2 text-fr-sm font-semibold text-fr-text">Linked to this session</div> : null}
+						{visibleOthers.length > 0 ? <div className="px-2 pt-2 pb-2 text-fr-sm font-semibold text-fr-text">Linked to this session</div> : null}
 						<div className="flex flex-col gap-2">
-							{lines.map(line => (
+							{visibleLines.map(line => (
 								<ReviewRow
 									key={refKey(line.link.ref)}
 									summary={summaryFor(line.link)}
@@ -313,11 +389,11 @@ export function PrViewer({ sessionId, workspace, workspaceDriver, store }: PrVie
 						</div>
 					</>
 				)}
-				{others.length > 0 ? (
+				{visibleOthers.length > 0 ? (
 					<>
 						<div className="px-2 pt-5 pb-2 text-fr-sm font-semibold text-fr-text">Also in this checkout</div>
 						<div className="flex flex-col gap-2">
-							{others.map(row => (
+							{visibleOthers.map(row => (
 								<ReviewRow key={refKey(row.ref)} summary={row} depth={0} stack={null} sharedBase={sharedBase} sharedOwner={sharedOwner} onSelect={() => setSelected(row.ref)} menu={rowMenu(row.ref, row.url, undefined, row)} />
 							))}
 						</div>
