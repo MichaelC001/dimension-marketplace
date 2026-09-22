@@ -11,6 +11,10 @@
 // from every state view while still drawing as an open row at `all`. If the
 // empty copy went missing, a narrowed view with no matches would read as a
 // broken blank panel.
+// If filter membership went stale while the rows repainted (dimension#909
+// review round), a sweep update for a snapshot-less link would land a merged
+// row that the still-selected Merged chip refused to show — one mount, two
+// truths about the same review.
 //
 // Seam: the predicate is tested directly (it is exported, pure, and the chips'
 // counts and the rows' survival both go through it); the chip bar and the
@@ -24,7 +28,7 @@ import { parseHTML } from "linkedom";
 import { act, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
-import { HostStoreProvider, REVIEW_PILL_TINT, registerStandardFact } from "@fraym/ui";
+import { HostStoreProvider, REVIEW_PILL_LABEL, REVIEW_PILL_TINT, registerStandardFact } from "@fraym/ui";
 import type { ReviewRef, ReviewSummary, SessionReviewLink } from "../src/model";
 import { PrViewer, reviewMatchesFilter, type ReviewStateFilter } from "../src/pr-viewer";
 import type { HostStoreShape, WorkspaceRefShape } from "../src/shapes";
@@ -122,6 +126,39 @@ function fakeStore(cells: Readonly<Record<string, unknown>>): HostStoreShape & {
 			return { getSnapshot: () => cells[key] as T | undefined, subscribe: () => () => {} };
 		},
 		act() {},
+	};
+}
+
+/** `fakeStore` with a live lane, scoped to the sweep-update test: the frozen
+ *  cells subscribe noop, so they cannot deliver a LATER checkout sweep. This
+ *  one keeps a listener set and a `publish` that moves a cell and notifies the
+ *  subscribers `useSyncExternalStore` registered — the same shape a real host
+ *  store presents, without ever moving the other cells. */
+function liveStore(cells: Record<string, unknown>): HostStoreShape & {
+	read<T>(key: string): T | undefined;
+	publish(key: string, value: unknown): void;
+} {
+	const listeners = new Set<() => void>();
+	return {
+		read<T>(key: string) {
+			return cells[key] as T | undefined;
+		},
+		watch<T>(key: string) {
+			return {
+				getSnapshot: () => cells[key] as T | undefined,
+				subscribe: (listener: () => void) => {
+					listeners.add(listener);
+					return () => {
+						listeners.delete(listener);
+					};
+				},
+			};
+		},
+		act() {},
+		publish(key: string, value: unknown) {
+			cells[key] = value;
+			for (const listener of [...listeners]) listener();
+		},
 	};
 }
 
@@ -300,5 +337,53 @@ describe("PrViewer's state filter chips", () => {
 		expect(empty).toHaveLength(1);
 		expect((empty[0] as HTMLElement).getAttribute("data-filter")).toBe("closed");
 		expect((empty[0] as HTMLElement).textContent).toContain("No closed reviews in this checkout");
+	});
+
+	test("a sweep update joins a snapshot-less link into the still-selected filter on the same mount", async () => {
+		factHandles.push(
+			registerStandardFact({ name: "reviews", scope: "session", key: id => `session/${id}/reviews` }),
+		);
+		const store = liveStore({
+			"session/s-1/reviews": [linkOf(41, null)],
+			"workspace/ws-1/reviews": [],
+		});
+		const doc = await render(
+			<HostStoreProvider store={store}>
+				<PrViewer sessionId="s-1" workspace={WORKSPACE} workspaceDriver={null} store={store} />
+			</HostStoreProvider>,
+		);
+		const group = filterGroup(doc);
+
+		// At rest the link reads as open through the row's own fallback, so
+		// Merged is reachable with an honest zero.
+		const labels = chips(group).map(el => (el.textContent ?? "").replace(/\s+/g, " ").trim());
+		expect(labels).toEqual(["All 1", "Open 1", "Draft 0", "Merged 0", "Closed 0"]);
+
+		await act(async () => chip(group, "Merged").dispatchEvent(new Event("click", { bubbles: true })));
+
+		// No merged reviews exist yet: the narrowed view says so.
+		expect(rows(doc)).toHaveLength(0);
+		expect(doc.querySelectorAll('[data-slot="pr-viewer-filter-empty"]')).toHaveLength(1);
+
+		// The checkout sweep resolves the SAME ref, on the SAME mount, while
+		// Merged stays selected — the desync the pre-fix memo had: cached
+		// membership from the old closure while the row repaints with the new
+		// state.
+		const sweep = [summaryOf({ ref: { ...REF, number: 41 }, state: "merged" })];
+		await act(async () => store.publish("workspace/ws-1/reviews", sweep));
+
+		expect(doc.querySelectorAll('[data-slot="pr-viewer-filter-empty"]')).toHaveLength(0);
+		const visible = rows(doc);
+		expect(visible).toHaveLength(1);
+		expect(visible[0]!.textContent ?? "").toContain("#41");
+		const stateTag = [...visible[0]!.querySelectorAll('[data-slot="pill"]')].find(
+			el => (el.textContent ?? "").trim() === REVIEW_PILL_LABEL.merged,
+		);
+		expect(stateTag).toBeDefined();
+		expect(stateTag!.getAttribute("class")).toContain(REVIEW_PILL_TINT.merged);
+
+		// The chip's count rides the same recomputed membership: 0 → 1 without
+		// any remount or re-click.
+		expect((chip(filterGroup(doc), "Merged").textContent ?? "").replace(/\s+/g, " ").trim()).toBe("Merged 1");
 	});
 });
