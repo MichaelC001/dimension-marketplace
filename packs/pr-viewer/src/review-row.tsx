@@ -107,7 +107,12 @@ export function ReviewRow({
 							{summary.author.login}
 						</Pill>
 					) : null}
-					<Pill className="min-w-0 max-w-full justify-start">
+					{/* `shrink` overrides Pill's `shrink-0`: the branch is the ONE fact on
+					    this line that may give way, so it truncates and the diff stat
+					    keeps its size. Without it `min-w-0` was inert, the branch took
+					    the whole line, and at a narrow dock the `+N −M` pill overflowed
+					    the card's edge (measured live at a 304px dock, 14 of 17 rows). */}
+					<Pill className="min-w-0 max-w-full shrink justify-start">
 						<Icon name="git-branch" size={12} strokeWidth={1.6} />
 						<span className="truncate">
 							{summary

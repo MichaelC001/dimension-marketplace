@@ -979,7 +979,7 @@ function ReviewRow({ summary, link, depth, stack, sharedBase, sharedOwner, onSel
 							strokeWidth: 1.6
 						}), summary.author.login] }) : null,
 						/* @__PURE__ */ jsxs(Pill, {
-							className: "min-w-0 max-w-full justify-start",
+							className: "min-w-0 max-w-full shrink justify-start",
 							children: [/* @__PURE__ */ jsx(Icon, {
 								name: "git-branch",
 								size: 12,
