@@ -896,12 +896,16 @@ function sourceLabel(source) {
 	return source === "created" ? "created by this session" : source === "pushed" ? "this session pushed to it" : source === "agent" ? "the agent acted on it" : source === "stack" ? "a stack sibling" : "linked by you";
 }
 /** A list row is STACKED (owner ruling 2026-09-17): the review's number line
-*  on top — a fixed state glyph box, `#N`, then time and check/decision
-*  badges at the right edge — the title full-width beneath it, and the branch
-*  + diff stat under that. Every line starts on the same left edge. The row
-*  itself is a `ChainRow` card, so one review reads as one block at rest; the
-*  glyph box is the rail hover card's idiom (`size-5`, state tint), giving the
-*  status column a fixed x every row scans on. */
+*  on top — a fixed state glyph box, `#N`, the state tag, then time and
+*  check/decision badges at the right edge — the title full-width beneath it,
+*  and the branch + diff stat under that. Every line starts on the same left
+*  edge. The row itself is a `ChainRow` card, so one review reads as one block
+*  at rest; the glyph box is the rail hover card's idiom (`size-5`, state
+*  tint), giving the status column a fixed x every row scans on. The number is
+*  its own tag and the state is a SEPARATE tag (owner revision 2026-09-22,
+*  dimension#909): a number is an identifier and a state is a property, so
+*  fusing them made the thing that never changes look unstable as the state
+*  changed, and a column of numbers could not be scanned as a column. */
 function ReviewRow({ summary, link, depth, stack, sharedBase, sharedOwner, onSelect, menu }) {
 	const ref = summary?.ref ?? link?.ref;
 	const state = summary ? reviewPillState(summary) : "open";
@@ -926,15 +930,18 @@ function ReviewRow({ summary, link, depth, stack, sharedBase, sharedOwner, onSel
 								size: 12
 							})
 						}),
-						/* @__PURE__ */ jsxs(Pill, {
-							tint: REVIEW_PILL_TINT[state],
+						/* @__PURE__ */ jsx(Pill, {
 							className: "tabular-nums",
 							title: link ? sourceLabel(link.source) : void 0,
-							children: [/* @__PURE__ */ jsxs("span", {
+							children: /* @__PURE__ */ jsxs("span", {
 								className: "text-fr-text",
 								children: ["#", ref?.number]
-							}), /* @__PURE__ */ jsxs("span", { children: ["· ", label] })]
+							})
 						}),
+						summary ? /* @__PURE__ */ jsx(Pill, {
+							tint: REVIEW_PILL_TINT[state],
+							children: label
+						}) : /* @__PURE__ */ jsx(Pill, { children: "Not synced yet" }),
 						summary?.reviewDecision === "changes-requested" ? /* @__PURE__ */ jsx(Pill, {
 							tint: "bg-fr-warn/15",
 							children: "Changes requested"
@@ -1007,6 +1014,24 @@ var NONE = {
 	getSnapshot: () => void 0,
 	subscribe: () => () => {}
 };
+var REVIEW_STATE_FILTERS = [
+	"all",
+	"open",
+	"draft",
+	"merged",
+	"closed"
+];
+/** Whether a row survives the filter. An unsynced link reads as `open` — the
+*  same fallback the row itself draws with, so the filter can never hide a row
+*  the list would show as open. Counts are free: every summary here is already
+*  in memory (the link's snapshot or the checkout sweep's row), so no chip
+*  costs a request. */
+function reviewMatchesFilter(summary, filter) {
+	if (filter === "all") return true;
+	const state = summary ? reviewPillState(summary) : "open";
+	if (filter === "open") return state === "open" || state === "conflicting";
+	return state === filter;
+}
 /** The list failed for a stated reason (doc 73 §9): the fix, with the
 *  command in hand, instead of an empty list that reads as "no reviews". */
 function UnavailableState({ unavailable }) {
@@ -1126,6 +1151,7 @@ function PrViewer({ sessionId, workspace, workspaceDriver, store }) {
 	const others = useMemo(() => (checkout ?? NO_ROWS).filter((row) => !linkedKeys.has(refKey(row.ref))), [checkout, linkedKeys]);
 	const [selected, setSelected] = useState(null);
 	const [linking, setLinking] = useState(false);
+	const [filter, setFilter] = useState("all");
 	const act = useCallback((intent, payload) => {
 		if (!store) return;
 		store.act(intent, {
@@ -1138,6 +1164,7 @@ function PrViewer({ sessionId, workspace, workspaceDriver, store }) {
 		workspace,
 		sessionId
 	]);
+	const summaryFor = useCallback((link) => link.snapshot ?? checkout?.find((row) => refKey(row.ref) === refKey(link.ref)) ?? null, [checkout]);
 	const request = facts.reviewRequest;
 	useEffect(() => {
 		if (request) setSelected(request.ref);
@@ -1150,12 +1177,31 @@ function PrViewer({ sessionId, workspace, workspaceDriver, store }) {
 			repository: first.repository
 		} : null;
 	}, [links, checkout]);
+	const visibleLines = useMemo(() => lines.filter((line) => reviewMatchesFilter(summaryFor(line.link), filter)), [
+		lines,
+		filter,
+		summaryFor
+	]);
+	const visibleOthers = useMemo(() => others.filter((row) => reviewMatchesFilter(row, filter)), [others, filter]);
+	const counts = useMemo(() => {
+		const count = (f) => lines.filter((line) => reviewMatchesFilter(summaryFor(line.link), f)).length + others.filter((row) => reviewMatchesFilter(row, f)).length;
+		return {
+			all: lines.length + others.length,
+			open: count("open"),
+			draft: count("draft"),
+			merged: count("merged"),
+			closed: count("closed")
+		};
+	}, [
+		lines,
+		others,
+		summaryFor
+	]);
 	if (!store) return /* @__PURE__ */ jsx("p", {
 		className: "p-3 text-fr-sm text-fr-text-3",
 		children: "No store on this mount — the viewer needs the host's facts."
 	});
 	const selectedLink = selected ? links.find((link) => refKey(link.ref) === refKey(selected)) : void 0;
-	const summaryFor = (link) => link.snapshot ?? checkout?.find((row) => refKey(row.ref) === refKey(link.ref)) ?? null;
 	const bases = /* @__PURE__ */ new Set();
 	const owners = /* @__PURE__ */ new Set();
 	for (const line of lines) {
@@ -1231,9 +1277,33 @@ function PrViewer({ sessionId, workspace, workspaceDriver, store }) {
 					setLinking(false);
 				}
 			}) : null,
+			counts.all > 0 ? /* @__PURE__ */ jsx("div", {
+				role: "group",
+				"aria-label": "Filter reviews by state",
+				className: "flex flex-wrap items-center gap-1.5 border-fr-border-soft border-b px-3 py-2",
+				children: REVIEW_STATE_FILTERS.map((f) => {
+					const active = filter === f;
+					return /* @__PURE__ */ jsx(Pill, {
+						asChild: true,
+						tint: f === "all" ? void 0 : active ? REVIEW_PILL_TINT[f] : void 0,
+						className: active ? "font-semibold text-fr-text" : void 0,
+						children: /* @__PURE__ */ jsxs("button", {
+							type: "button",
+							"aria-pressed": active,
+							"data-active": active,
+							onClick: () => setFilter(f),
+							children: [
+								f === "all" ? "All" : REVIEW_PILL_LABEL[f],
+								" ",
+								counts[f]
+							]
+						})
+					}, f);
+				})
+			}) : null,
 			/* @__PURE__ */ jsxs("div", {
 				className: "min-h-0 flex-1 overflow-y-auto px-2 py-2",
-				children: [lines.length === 0 && others.length === 0 && unavailable ? /* @__PURE__ */ jsx(UnavailableState, { unavailable }) : lines.length === 0 ? /* @__PURE__ */ jsxs("div", {
+				children: [lines.length === 0 && others.length === 0 && unavailable ? /* @__PURE__ */ jsx(UnavailableState, { unavailable }) : filter === "all" && lines.length === 0 ? /* @__PURE__ */ jsxs("div", {
 					className: "flex flex-col items-start gap-2 p-3",
 					children: [/* @__PURE__ */ jsx("span", {
 						className: "text-fr-sm text-fr-text-3",
@@ -1247,12 +1317,20 @@ function PrViewer({ sessionId, workspace, workspaceDriver, store }) {
 							size: 12
 						}), " Link a review"]
 					}) : null]
-				}) : /* @__PURE__ */ jsxs(Fragment, { children: [others.length > 0 ? /* @__PURE__ */ jsx("div", {
+				}) : filter !== "all" && visibleLines.length === 0 && visibleOthers.length === 0 ? /* @__PURE__ */ jsx("div", {
+					className: "flex flex-col items-start gap-2 p-3",
+					"data-slot": "pr-viewer-filter-empty",
+					"data-filter": filter,
+					children: /* @__PURE__ */ jsx("span", {
+						className: "text-fr-sm text-fr-text-3",
+						children: `No ${REVIEW_PILL_LABEL[filter].toLowerCase()} reviews in this checkout`
+					})
+				}) : /* @__PURE__ */ jsxs(Fragment, { children: [visibleOthers.length > 0 ? /* @__PURE__ */ jsx("div", {
 					className: "px-2 pt-2 pb-2 text-fr-sm font-semibold text-fr-text",
 					children: "Linked to this session"
 				}) : null, /* @__PURE__ */ jsx("div", {
 					className: "flex flex-col gap-2",
-					children: lines.map((line) => /* @__PURE__ */ jsx(ReviewRow, {
+					children: visibleLines.map((line) => /* @__PURE__ */ jsx(ReviewRow, {
 						summary: summaryFor(line.link),
 						link: line.link,
 						depth: line.depth,
@@ -1262,12 +1340,12 @@ function PrViewer({ sessionId, workspace, workspaceDriver, store }) {
 						onSelect: () => setSelected(line.link.ref),
 						menu: rowMenu(line.link.ref, line.link.url, line.link)
 					}, refKey(line.link.ref)))
-				})] }), others.length > 0 ? /* @__PURE__ */ jsxs(Fragment, { children: [/* @__PURE__ */ jsx("div", {
+				})] }), visibleOthers.length > 0 ? /* @__PURE__ */ jsxs(Fragment, { children: [/* @__PURE__ */ jsx("div", {
 					className: "px-2 pt-5 pb-2 text-fr-sm font-semibold text-fr-text",
 					children: "Also in this checkout"
 				}), /* @__PURE__ */ jsx("div", {
 					className: "flex flex-col gap-2",
-					children: others.map((row) => /* @__PURE__ */ jsx(ReviewRow, {
+					children: visibleOthers.map((row) => /* @__PURE__ */ jsx(ReviewRow, {
 						summary: row,
 						depth: 0,
 						stack: null,
