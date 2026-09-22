@@ -26,6 +26,7 @@
 //      "No file changes." appear only when the read has SETTLED — during the
 //      load they assert a fact nobody has.
 
+import { afterEach, describe, expect, test } from "bun:test";
 import { parseHTML } from "linkedom";
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -304,8 +305,9 @@ describe("the threads tab's loaders", () => {
 		await dom.click(tabButton(dom, "threads"));
 
 		expect(gates).toHaveLength(1);
-		expect(one(dom.find('[data-slot="skeleton-group"]'), "threads skeleton")).toBeTruthy();
-		expect(dom.find('[data-slot="skeleton-group"]')[0].textContent).toContain("Loading review threads");
+		expect(one(dom.find('[data-slot="skeleton-group"]'), "threads skeleton").textContent).toContain(
+			"Loading review threads",
+		);
 		// The host has not answered: the empty list is NOT a fact yet.
 		expect(dom.text()).not.toContain("No review conversations.");
 
