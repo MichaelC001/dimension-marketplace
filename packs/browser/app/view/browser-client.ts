@@ -18,9 +18,8 @@ import type {
 } from "../../src/contracts";
 import { isRecord, readNumber, readString } from "./json";
 
-/** `browser_task` runs a whole agent loop; the SDK's default 60 s timeout would
- *  abandon the call mid-task. Progress is shown by the poll loop, not this call. */
-const TASK_TIMEOUT_MS = 60 * 60 * 1000;
+/** `browser_task` and `browser_task_wait` answer within 25 s; this bounds one call. */
+const TASK_CALL_TIMEOUT_MS = 40_000;
 
 const TASK_STATUSES: readonly TaskStatus[] = ["running", "done", "blocked", "failed", "cancelled"];
 
@@ -231,10 +230,13 @@ export class BrowserClient {
 		return readState(tool, (await this.call(tool, { browserId, action })).state);
 	}
 
-	/** Runs an upstream agent loop on this browser until it ends. */
+	/** Runs an upstream agent loop on this browser and follows it until it ends. */
 	async task(browserId: string, agent: TaskAgent, task: string): Promise<TaskRun> {
-		const tool = "browser_task";
-		return readTask(tool, await this.call(tool, { browserId, agent, task }, TASK_TIMEOUT_MS));
+		let run = readTask("browser_task", await this.call("browser_task", { browserId, agent, task }, TASK_CALL_TIMEOUT_MS));
+		while (run.status === "running") {
+			run = readTask("browser_task_wait", await this.call("browser_task_wait", { browserId }, TASK_CALL_TIMEOUT_MS));
+		}
+		return run;
 	}
 
 	/** Asks the running task to stop; answers once it has. */

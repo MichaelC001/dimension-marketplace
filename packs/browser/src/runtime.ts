@@ -450,13 +450,27 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	 * the agent working. Resolves with the finished run.
 	 */
 	async runTask(browserId: string, request: TaskRequest, onStep?: (step: TaskStep, run: TaskRun) => void): Promise<TaskRun> {
+		return await (await this.beginTask(browserId, request, onStep)).finished;
+	}
+
+	/** Start a task and return as soon as it runs; follow it with `waitTask`. */
+	async startTask(browserId: string, request: TaskRequest): Promise<TaskRun> {
+		const { run } = await this.beginTask(browserId, request);
+		return cloneTask(run);
+	}
+
+	private async beginTask(
+		browserId: string,
+		request: TaskRequest,
+		onStep?: (step: TaskStep, run: TaskRun) => void,
+	): Promise<{ run: TaskRun; finished: Promise<TaskRun> }> {
 		const entry = this.require(browserId);
 		if (!TASK_AGENTS.includes(request.agent)) fail("bad_agent", `agent must be one of: ${TASK_AGENTS.join(", ")}`);
 		const task = typeof request.task === "string" ? request.task.trim() : "";
 		if (task.length === 0 || task.length > MAX_TASK_CHARS) fail("bad_task", `task must be 1-${MAX_TASK_CHARS} characters`);
 		const maxSteps = Math.min(MAX_TASK_STEPS, Math.max(1, Math.floor(request.maxSteps ?? DEFAULT_TASK_STEPS)));
 
-		const started = await this.serialize(entry, async () => {
+		return await this.serialize(entry, async () => {
 			if (entry.worker) fail("task_running", `a ${entry.task?.agent} task is already running on this browser`);
 			const state = await this.refreshState(entry);
 			const run: TaskRun = {
@@ -499,11 +513,28 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			});
 			entry.task = run;
 			entry.worker = { process: worker, finished };
-			// Wrapped so the serializer is released now: the task runs outside
-			// the page queue, and frames keep flowing while it works.
-			return { finished };
+			// Returned wrapped so the serializer is released now: the task runs
+			// outside the page queue, and frames keep flowing while it works.
+			return { run, finished };
 		});
-		return await started.finished;
+	}
+
+	/**
+	 * The current task, once it has finished or `ms` has passed — whichever is
+	 * first. Lets a caller follow a long task in bounded calls instead of one
+	 * call a host may time out.
+	 */
+	async waitTask(browserId: string, ms: number): Promise<TaskRun> {
+		const entry = this.require(browserId);
+		if (!entry.task) fail("no_task", "no task has run on this browser");
+		const worker = entry.worker;
+		if (worker) {
+			const { promise: elapsed, resolve } = Promise.withResolvers<void>();
+			const timer = setTimeout(resolve, Math.max(0, ms));
+			await Promise.race([worker.finished, elapsed]);
+			clearTimeout(timer);
+		}
+		return cloneTask(entry.task);
 	}
 
 	async cancelTask(browserId: string): Promise<TaskRun> {

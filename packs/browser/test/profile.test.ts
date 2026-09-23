@@ -8,6 +8,7 @@
  *  directory, so these tests use both.
  */
 import { existsSync } from "node:fs";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, test } from "bun:test";
 import type { BrowserState } from "../src/contracts";
@@ -109,6 +110,44 @@ describeWithChrome("profiles", () => {
 	);
 
 	test(
+		"a lock left by a dead engine is reclaimed; a lock held by a live process is not",
+		async () => {
+			const { runtime, rootDir } = await createRuntime();
+			const writeLock = async (slug: string, pid: number) => {
+				await mkdir(join(rootDir, "profiles", slug), { recursive: true });
+				await writeFile(
+					join(rootDir, "profiles", slug, "runtime.lock"),
+					`${JSON.stringify({ pid, token: "foreign", at: new Date().toISOString() })}\n`,
+				);
+			};
+
+			// The engine was killed mid-session: its lock stays on disk, its pid is
+			// gone. Refusing forever would brick the profile until a human deletes
+			// the file.
+			const dead = Bun.spawn([process.execPath, "-e", ""]);
+			await dead.exited;
+			await writeLock("orphaned", dead.pid);
+			const reclaimed = await runtime.open({ profile: "orphaned", viewport: VIEWPORT });
+			expect(reclaimed.profile).toBe("orphaned");
+			await runtime.close(reclaimed.browserId);
+
+			// Another process still owns it: never take it over. The child stays
+			// alive until we kill it, blocked on a stdin that never closes.
+			const live = Bun.spawn([process.execPath, "-e", "process.stdin.resume()"], { stdin: "pipe" });
+			try {
+				await writeLock("held", live.pid);
+				expect(await failureCode(() => runtime.open({ profile: "held", viewport: VIEWPORT }))).toBe(
+					"profile_locked",
+				);
+			} finally {
+				live.kill();
+				await live.exited;
+			}
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
 		"a launch that never started a browser leaves the profile openable",
 		async () => {
 			const rootDir = await createRoot();
@@ -116,8 +155,8 @@ describeWithChrome("profiles", () => {
 
 			// Nothing was launched, so nothing of ours can still be writing this
 			// profile. Holding its lock anyway would brick the profile for good:
-			// the store never steals a lock, so only a human deleting the file
-			// would ever get it back.
+			// a live runtime's lock is never taken over, so only closing this
+			// runtime would ever get it back.
 			await expect(broken.open({ profile: "recovered", viewport: VIEWPORT })).rejects.toThrow();
 
 			const survivor = newRuntime(rootDir);

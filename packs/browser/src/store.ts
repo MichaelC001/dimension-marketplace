@@ -100,11 +100,13 @@ export class ProfileStore {
 	}
 
 	/**
-	 * Acquire the per-profile lock atomically (`O_CREAT | O_EXCL`). A pre-existing
-	 * lock is ALWAYS honoured: we never probe-and-kill the recorded pid and never
-	 * auto-steal a lock we believe is stale — a human removes the file. The only
-	 * reclaim is a lock this very process wrote and still owns in memory, which
-	 * callers handle by reusing the live browser entry rather than re-locking.
+	 * Acquire the per-profile lock atomically (`O_CREAT | O_EXCL`). A lock held
+	 * by a LIVE process is always honoured: we never kill its owner. A lock whose
+	 * owning process is provably gone (the engine was killed, the machine
+	 * restarted) is reclaimed once — otherwise every hard stop would strand the
+	 * profile until a human deleted a file. A Chrome that outlived its runtime
+	 * still holds Chrome's own profile lock, so the launch that follows fails
+	 * rather than forking the profile.
 	 */
 	acquireLock(slug: string): LockHandle {
 		this.ensureProfile(slug);
@@ -116,13 +118,16 @@ export class ProfileStore {
 			fd = openSync(path, "wx", 0o600);
 		} catch (err) {
 			const existing = readLock(path);
+			if (existing?.pid !== undefined && existing.pid !== process.pid && !processAlive(existing.pid)) {
+				unlinkSync(path);
+				return this.acquireLock(slug);
+			}
 			const who = existing
 				? `pid ${existing.pid} since ${existing.at}`
 				: `code ${(err as NodeJS.ErrnoException).code ?? "unknown"}`;
 			fail(
 				"profile_locked",
-				`profile "${slug}" is already in use (${who}). This runtime never steals locks or kills the owning process; ` +
-					`close the other session, or remove ${path} by hand once you have verified nothing is using it.`,
+				`profile "${slug}" is already in use (${who}). Close that browser first (browser_close), or use another profile.`,
 			);
 		}
 		try {
@@ -156,6 +161,16 @@ function readLock(path: string): { pid?: number; token?: string; at?: string } |
 		};
 	} catch {
 		return undefined;
+	}
+}
+
+/** Signal 0 probes existence only. EPERM means it exists but is not ours to signal. */
+function processAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code === "EPERM";
 	}
 }
 

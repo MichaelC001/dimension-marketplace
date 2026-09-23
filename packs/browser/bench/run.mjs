@@ -148,12 +148,13 @@ for (const agent of agents) {
     try {
       await call("browser_act", { browserId, action: { kind: "navigate", url: `${base}/` } });
       console.log(`[${agent}/${site}] task started`);
-      const taskRun = await call("browser_task", { browserId, agent, task: taskText(url), maxSteps }, {
-        onprogress: (p) => console.log(`[${agent}/${site}] ${p.progress}: ${p.message ?? ""}`),
-        resetTimeoutOnProgress: true,
-        timeout: 5 * 60_000,
-        maxTotalTimeout: taskTimeoutMs,
-      });
+      const progress = { onprogress: (p) => console.log(`[${agent}/${site}] ${p.progress}: ${p.message ?? ""}`), timeout: 60_000 };
+      const deadline = performance.now() + taskTimeoutMs;
+      let taskRun = await call("browser_task", { browserId, agent, task: taskText(url), maxSteps }, progress);
+      while (taskRun.status === "running") {
+        if (performance.now() > deadline) throw new Error(`task exceeded ${taskTimeoutMs / 1000}s`);
+        taskRun = await call("browser_task_wait", { browserId }, progress);
+      }
       Object.assign(run, { status: taskRun.status, stepCount: taskRun.stepCount, usage: taskRun.usage, summary: taskRun.summary, taskMs: taskRun.elapsedMs });
     } catch (error) {
       run.error = error.message;

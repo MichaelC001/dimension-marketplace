@@ -110,26 +110,50 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
       return { ...(outcome.status === "completed" ? {} : { isError: true }), content: [{ type: "text" as const, text }], structuredContent: outcome as unknown as Record<string, unknown> };
     } catch (error) { return { isError: true, content: [{ type: "text" as const, text: error instanceof Error ? error.message : String(error) }] }; }
   });
-  server.registerTool("browser_task", {
-    description: "Hand a whole task to a fast browser agent working in this same browser while the human watches: jev (TypeSafe Jev, one model decision per step) or browser-use. Blocks until it is done, blocked, failed or cancelled, streaming each step as progress. Returns steps, time, model calls and tokens. browser_act is refused while a task runs.",
-    inputSchema: { browserId: capability, agent: z.enum(TASK_AGENTS), task: z.string().min(1).max(8192), maxSteps: z.number().int().min(1).max(200).optional() },
-    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
-  }, ({ browserId, agent, task, maxSteps }, extra) => result(async () => {
+  // Hosts time tool calls out (the desktop at 30 s), and a task can take
+  // minutes. So a task call returns after at most WAIT_CAP_S with the task's
+  // progress, the task keeps running, and browser_task_wait follows it. A call
+  // ending never cancels the task; browser_task_cancel does.
+  const WAIT_CAP_S = 25;
+  const waitSeconds = z.number().int().min(0).max(WAIT_CAP_S).optional();
+  const follow = async (browserId: string, seconds: number | undefined, extra: { _meta?: { progressToken?: string | number }; sendNotification: (n: { method: "notifications/progress"; params: { progressToken: string | number; progress: number; message: string } }) => Promise<void> }) => {
     const progressToken = extra._meta?.progressToken;
-    const cancel = (): void => void runtime.cancelTask(browserId).catch(() => undefined);
-    extra.signal.addEventListener("abort", cancel, { once: true });
+    let active = true;
+    // Steps from earlier calls were reported by those calls.
+    let reported = (await runtime.waitTask(browserId, 0).catch(() => null))?.stepCount ?? 0;
+    const report = (run: { stepCount: number; steps: { n: number; action: string }[] }): void => {
+      if (!active || progressToken === undefined) return;
+      for (const step of run.steps.filter((s) => s.n > reported)) {
+        void extra.sendNotification({ method: "notifications/progress", params: { progressToken, progress: step.n, message: step.action } }).catch(() => undefined);
+      }
+      reported = Math.max(reported, run.stepCount);
+    };
     try {
-      return await runtime.runTask(browserId, { agent, task, ...(maxSteps ? { maxSteps } : {}) }, (step) => {
-        if (progressToken === undefined) return;
-        void extra.sendNotification({
-          method: "notifications/progress",
-          params: { progressToken, progress: step.n, message: step.action },
-        }).catch(() => undefined);
-      });
+      const deadline = Date.now() + (seconds ?? WAIT_CAP_S) * 1000;
+      let run = await runtime.waitTask(browserId, 0);
+      while (run.status === "running" && Date.now() < deadline) {
+        report(run);
+        run = await runtime.waitTask(browserId, Math.min(1_000, deadline - Date.now()));
+      }
+      report(run);
+      return run;
     } finally {
-      extra.signal.removeEventListener("abort", cancel);
+      active = false;
     }
+  };
+  server.registerTool("browser_task", {
+    description: `Hand a whole task to a fast browser agent working in this same browser while the human watches: jev (TypeSafe Jev, one model decision per step) or browser-use. Put every fact the agent needs in task — it cannot ask you. Returns within waitSeconds (default and max ${WAIT_CAP_S}) with the task's status, steps, time, model calls and tokens; while status is "running", call browser_task_wait. browser_act is refused while a task runs.`,
+    inputSchema: { browserId: capability, agent: z.enum(TASK_AGENTS), task: z.string().min(1).max(8192), maxSteps: z.number().int().min(1).max(200).optional(), waitSeconds },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  }, ({ browserId, agent, task, maxSteps, waitSeconds }, extra) => result(async () => {
+    await runtime.startTask(browserId, { agent, task, ...(maxSteps ? { maxSteps } : {}) });
+    return await follow(browserId, waitSeconds, extra);
   }));
+  server.registerTool("browser_task_wait", {
+    description: `Follow the task in this browser: returns when it finishes or after waitSeconds (default and max ${WAIT_CAP_S}), with its status, recent steps, time, model calls and tokens.`,
+    inputSchema: { browserId: capability, waitSeconds },
+    annotations: READ_ONLY,
+  }, ({ browserId, waitSeconds }, extra) => result(() => follow(browserId, waitSeconds, extra)));
   server.registerTool("browser_task_cancel", {
     description: "Stop the task running in this browser. Resolves once the agent has stopped.",
     inputSchema: { browserId: capability },

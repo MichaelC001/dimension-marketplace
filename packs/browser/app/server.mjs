@@ -86,11 +86,13 @@ var ProfileStore = class {
     }).sort().slice(0, 256);
   }
   /**
-   * Acquire the per-profile lock atomically (`O_CREAT | O_EXCL`). A pre-existing
-   * lock is ALWAYS honoured: we never probe-and-kill the recorded pid and never
-   * auto-steal a lock we believe is stale — a human removes the file. The only
-   * reclaim is a lock this very process wrote and still owns in memory, which
-   * callers handle by reusing the live browser entry rather than re-locking.
+   * Acquire the per-profile lock atomically (`O_CREAT | O_EXCL`). A lock held
+   * by a LIVE process is always honoured: we never kill its owner. A lock whose
+   * owning process is provably gone (the engine was killed, the machine
+   * restarted) is reclaimed once — otherwise every hard stop would strand the
+   * profile until a human deleted a file. A Chrome that outlived its runtime
+   * still holds Chrome's own profile lock, so the launch that follows fails
+   * rather than forking the profile.
    */
   acquireLock(slug) {
     this.ensureProfile(slug);
@@ -103,10 +105,14 @@ var ProfileStore = class {
       fd = openSync(path, "wx", 384);
     } catch (err) {
       const existing = readLock(path);
+      if (existing?.pid !== void 0 && existing.pid !== process.pid && !processAlive(existing.pid)) {
+        unlinkSync(path);
+        return this.acquireLock(slug);
+      }
       const who = existing ? `pid ${existing.pid} since ${existing.at}` : `code ${err.code ?? "unknown"}`;
       fail(
         "profile_locked",
-        `profile "${slug}" is already in use (${who}). This runtime never steals locks or kills the owning process; close the other session, or remove ${path} by hand once you have verified nothing is using it.`
+        `profile "${slug}" is already in use (${who}). Close that browser first (browser_close), or use another profile.`
       );
     }
     try {
@@ -137,6 +143,14 @@ function readLock(path) {
     };
   } catch {
     return void 0;
+  }
+}
+function processAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === "EPERM";
   }
 }
 function defaultRootDir() {
@@ -1103,12 +1117,20 @@ var BrowserRuntime = class {
    * the agent working. Resolves with the finished run.
    */
   async runTask(browserId, request, onStep) {
+    return await (await this.beginTask(browserId, request, onStep)).finished;
+  }
+  /** Start a task and return as soon as it runs; follow it with `waitTask`. */
+  async startTask(browserId, request) {
+    const { run } = await this.beginTask(browserId, request);
+    return cloneTask(run);
+  }
+  async beginTask(browserId, request, onStep) {
     const entry = this.require(browserId);
     if (!TASK_AGENTS.includes(request.agent)) fail("bad_agent", `agent must be one of: ${TASK_AGENTS.join(", ")}`);
     const task = typeof request.task === "string" ? request.task.trim() : "";
     if (task.length === 0 || task.length > MAX_TASK_CHARS) fail("bad_task", `task must be 1-${MAX_TASK_CHARS} characters`);
     const maxSteps = Math.min(MAX_TASK_STEPS, Math.max(1, Math.floor(request.maxSteps ?? DEFAULT_TASK_STEPS)));
-    const started = await this.serialize(entry, async () => {
+    return await this.serialize(entry, async () => {
       if (entry.worker) fail("task_running", `a ${entry.task?.agent} task is already running on this browser`);
       const state = await this.refreshState(entry);
       const run = {
@@ -1157,9 +1179,25 @@ var BrowserRuntime = class {
       });
       entry.task = run;
       entry.worker = { process: worker, finished };
-      return { finished };
+      return { run, finished };
     });
-    return await started.finished;
+  }
+  /**
+   * The current task, once it has finished or `ms` has passed — whichever is
+   * first. Lets a caller follow a long task in bounded calls instead of one
+   * call a host may time out.
+   */
+  async waitTask(browserId, ms) {
+    const entry = this.require(browserId);
+    if (!entry.task) fail("no_task", "no task has run on this browser");
+    const worker = entry.worker;
+    if (worker) {
+      const { promise: elapsed, resolve: resolve2 } = Promise.withResolvers();
+      const timer = setTimeout(resolve2, Math.max(0, ms));
+      await Promise.race([worker.finished, elapsed]);
+      clearTimeout(timer);
+    }
+    return cloneTask(entry.task);
   }
   async cancelTask(browserId) {
     const entry = this.require(browserId);
@@ -1434,26 +1472,45 @@ async function createBrowserServer(options = {}) {
       return { isError: true, content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }] };
     }
   });
-  server2.registerTool("browser_task", {
-    description: "Hand a whole task to a fast browser agent working in this same browser while the human watches: jev (TypeSafe Jev, one model decision per step) or browser-use. Blocks until it is done, blocked, failed or cancelled, streaming each step as progress. Returns steps, time, model calls and tokens. browser_act is refused while a task runs.",
-    inputSchema: { browserId: capability, agent: z.enum(TASK_AGENTS), task: z.string().min(1).max(8192), maxSteps: z.number().int().min(1).max(200).optional() },
-    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true }
-  }, ({ browserId, agent, task, maxSteps }, extra) => result(async () => {
+  const WAIT_CAP_S = 25;
+  const waitSeconds = z.number().int().min(0).max(WAIT_CAP_S).optional();
+  const follow = async (browserId, seconds, extra) => {
     const progressToken = extra._meta?.progressToken;
-    const cancel = () => void runtime.cancelTask(browserId).catch(() => void 0);
-    extra.signal.addEventListener("abort", cancel, { once: true });
+    let active = true;
+    let reported = (await runtime.waitTask(browserId, 0).catch(() => null))?.stepCount ?? 0;
+    const report = (run) => {
+      if (!active || progressToken === void 0) return;
+      for (const step of run.steps.filter((s) => s.n > reported)) {
+        void extra.sendNotification({ method: "notifications/progress", params: { progressToken, progress: step.n, message: step.action } }).catch(() => void 0);
+      }
+      reported = Math.max(reported, run.stepCount);
+    };
     try {
-      return await runtime.runTask(browserId, { agent, task, ...maxSteps ? { maxSteps } : {} }, (step) => {
-        if (progressToken === void 0) return;
-        void extra.sendNotification({
-          method: "notifications/progress",
-          params: { progressToken, progress: step.n, message: step.action }
-        }).catch(() => void 0);
-      });
+      const deadline = Date.now() + (seconds ?? WAIT_CAP_S) * 1e3;
+      let run = await runtime.waitTask(browserId, 0);
+      while (run.status === "running" && Date.now() < deadline) {
+        report(run);
+        run = await runtime.waitTask(browserId, Math.min(1e3, deadline - Date.now()));
+      }
+      report(run);
+      return run;
     } finally {
-      extra.signal.removeEventListener("abort", cancel);
+      active = false;
     }
+  };
+  server2.registerTool("browser_task", {
+    description: `Hand a whole task to a fast browser agent working in this same browser while the human watches: jev (TypeSafe Jev, one model decision per step) or browser-use. Put every fact the agent needs in task \u2014 it cannot ask you. Returns within waitSeconds (default and max ${WAIT_CAP_S}) with the task's status, steps, time, model calls and tokens; while status is "running", call browser_task_wait. browser_act is refused while a task runs.`,
+    inputSchema: { browserId: capability, agent: z.enum(TASK_AGENTS), task: z.string().min(1).max(8192), maxSteps: z.number().int().min(1).max(200).optional(), waitSeconds },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true }
+  }, ({ browserId, agent, task, maxSteps, waitSeconds: waitSeconds2 }, extra) => result(async () => {
+    await runtime.startTask(browserId, { agent, task, ...maxSteps ? { maxSteps } : {} });
+    return await follow(browserId, waitSeconds2, extra);
   }));
+  server2.registerTool("browser_task_wait", {
+    description: `Follow the task in this browser: returns when it finishes or after waitSeconds (default and max ${WAIT_CAP_S}), with its status, recent steps, time, model calls and tokens.`,
+    inputSchema: { browserId: capability, waitSeconds },
+    annotations: READ_ONLY
+  }, ({ browserId, waitSeconds: waitSeconds2 }, extra) => result(() => follow(browserId, waitSeconds2, extra)));
   server2.registerTool("browser_task_cancel", {
     description: "Stop the task running in this browser. Resolves once the agent has stopped.",
     inputSchema: { browserId: capability },

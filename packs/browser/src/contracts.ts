@@ -86,5 +86,7 @@ export interface BrowserRuntimePort {
   annotate(browserId: string, frameId: string, region: BrowserRegion, note: string): Promise<BrowserAnnotation>;
   profiles(): Promise<string[]>;
   close(browserId: string): Promise<void>;
+  waitTask(browserId: string, ms: number): Promise<TaskRun>;
+  startTask(browserId: string, request: TaskRequest): Promise<TaskRun>;
   dispose(): Promise<void>;
 }

@@ -222,7 +222,7 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 		}
 	};
 
-	/** The call lasts as long as the task; the poll loop shows it live meanwhile. */
+	/** Follows the task until it ends; the poll loop shows it live meanwhile. */
 	const startTask = async (agent: TaskAgent, task: string) => {
 		const bound = browserId;
 		if (bound === null) return;
