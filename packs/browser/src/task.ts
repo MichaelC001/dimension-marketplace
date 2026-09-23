@@ -27,6 +27,7 @@ export interface WorkerJob {
   task: string;
   maxSteps: number;
   startUrl: string;
+  password?: string;
 }
 export interface RunningWorker {
   /** Settles with the worker's final result; never rejects. */

@@ -149,18 +149,27 @@ const fullStages = [
 First name: ${a.firstName}
 Last name: ${a.lastName}
 Birthday: ${birthday}
-Address: ${mailAddress} (the username is ${a.mailUsername})
+Choose your Mail address: ${a.mailUsername} (the page adds @mail.test itself, so the field holds only ${a.mailUsername}; your address becomes ${mailAddress})
 Password: ${a.password} (enter it in both password fields)
-Tick the "I'm not a robot" check, wait for it to turn into a check mark, and create the account. You are done when the Mail inbox is shown.`,
+Then tick "I'm not a robot" and wait until it shows a check mark (it takes about a second) before pressing "Create account". You are done when the Mail inbox is shown.`,
   },
   {
-    id: "network", start: `${base}/network`, score: (r) => r.stages.networkAccount,
+    id: "network", start: `${base}/network`,
+    score: (r) => {
+      const s = r.stages.networkAccount;
+      const success = s.created && s.emailMatchesMail && (s.missing ?? []).length === 0 && (s.wrong ?? []).length === 0;
+      return { ...s, success, reason: success ? "ok" : s.reason };
+    },
     task: `Join the professional network at ${base}/network ("Join now") with:
 Email: ${mailAddress}
 Password: ${a.password}
 First name: ${a.firstName}
 Last name: ${a.lastName}
-Network then emails a verification link to ${mailAddress}. Open the Mail inbox at ${base}/mail (you are signed in; if asked, sign in with ${mailAddress} / ${a.password}), open the email "Confirm your email address" and click its confirm link. You are done when Network says your email is verified.`,
+You are done when Network says it sent a verification email. Do not click "Resend email".`,
+  },
+  {
+    id: "verify", start: `${base}/mail/inbox`, score: (r) => r.stages.networkAccount,
+    task: `In the Mail inbox at ${base}/mail/inbox, open the email "Confirm your email address" from Network and click its confirm link. You are done when Network says your email is verified.`,
   },
   {
     id: "profile", start: `${base}/network/onboarding`, score: (r) => r.stages.profile,
@@ -235,7 +244,9 @@ async function runStage(agent, browserId, stage) {
     console.log(`[${label}] task started`);
     const progress = { onprogress: (p) => { console.log(`[${label}] ${p.progress}: ${p.message ?? ""}`); pollSolved(); }, timeout: 60_000 };
     const deadline = performance.now() + taskTimeoutMs;
-    let taskRun = take(await call("browser_task", { browserId, agent, task: stage.task, maxSteps }, progress));
+    // The password goes in its own field: the browser fills password inputs
+    // itself (jev never reads them). Kept in the task text too for browser-use.
+    let taskRun = take(await call("browser_task", { browserId, agent, task: stage.task, maxSteps, password: applicant.password }, progress));
     while (taskRun.status === "running") {
       if (performance.now() > deadline) {
         run.status = "timeout";

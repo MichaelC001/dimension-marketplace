@@ -149,11 +149,11 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     }
   };
   server.registerTool("browser_task", {
-    description: `Hand a whole task to a fast browser agent working in this same browser while the human watches: jev (TypeSafe Jev, one model decision per step) or browser-use. Put every fact the agent needs in task — it cannot ask you. Returns within waitSeconds (default and max ${WAIT_CAP_S}) with the task's status, steps, time, model calls and tokens; while status is "running", call browser_task_wait. browser_act is refused while a task runs.`,
-    inputSchema: { browserId: capability, agent: z.enum(TASK_AGENTS), task: z.string().min(1).max(8192), maxSteps: z.number().int().min(1).max(200).optional(), waitSeconds },
+    description: `Hand a whole task to a fast browser agent working in this same browser while the human watches: jev (TypeSafe Jev, one model decision per step) or browser-use. Put every fact the agent needs in task — it cannot ask you. For sign-ups and logins pass the password in password (not in task): the browser fills password fields itself, because jev never reads them. Returns within waitSeconds (default and max ${WAIT_CAP_S}) with the task's status, steps, time, model calls and tokens; while status is "running", call browser_task_wait. browser_act is refused while a task runs.`,
+    inputSchema: { browserId: capability, agent: z.enum(TASK_AGENTS), task: z.string().min(1).max(8192), maxSteps: z.number().int().min(1).max(200).optional(), password: z.string().min(1).max(256).optional(), waitSeconds },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
-  }, ({ browserId, agent, task, maxSteps, waitSeconds }, extra) => result(async () => {
-    await runtime.startTask(browserId, { agent, task, ...(maxSteps ? { maxSteps } : {}) });
+  }, ({ browserId, agent, task, maxSteps, password, waitSeconds }, extra) => result(async () => {
+    await runtime.startTask(browserId, { agent, task, ...(maxSteps ? { maxSteps } : {}), ...(password ? { password } : {}) });
     return await follow(browserId, waitSeconds, extra);
   }));
   server.registerTool("browser_task_wait", {

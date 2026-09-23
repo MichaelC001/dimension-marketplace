@@ -60,7 +60,12 @@ export interface TaskRun {
   elapsedMs: number;
   usage: TaskUsage;
 }
-export interface TaskRequest { agent: TaskAgent; task: string; maxSteps?: number }
+/**
+ * `password`: filled into empty password fields by the worker itself. jev never
+ * reads or types password inputs (upstream excludes them), so a signup or login
+ * needs the browser to fill them; the value never enters the agent's model calls.
+ */
+export interface TaskRequest { agent: TaskAgent; task: string; maxSteps?: number; password?: string }
 export interface BrowserState {
   browserId: string;
   profile: string;

@@ -554,7 +554,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				usage: { modelCalls: 0, inputTokens: 0, outputTokens: 0, costUsd: null },
 			};
 			const worker: RunningWorker = startWorker(
-				{ agent: request.agent, cdpUrl: entry.driver.cdpEndpoint(), task, maxSteps, startUrl: state.url },
+				{ agent: request.agent, cdpUrl: entry.driver.cdpEndpoint(), task, maxSteps, startUrl: state.url, ...(request.password ? { password: request.password } : {}) },
 				(step) => {
 					const record: TaskStep = { n: step.n, action: step.action, url: step.url, elapsedMs: step.elapsedMs };
 					run.steps.push(record);
