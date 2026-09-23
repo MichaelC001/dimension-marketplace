@@ -1,9 +1,0 @@
-{
-  "plugin": "browser",
-  "contractVersion": 1,
-  "title": "Browser",
-  "icon": "globe",
-  "artifactories": [
-    { "mcpServer": "browser", "label": "Browser", "icon": "globe", "modelSpaces": ["code", "build", "chat", "labor", "watch"] }
-  ]
-}
