@@ -7,10 +7,12 @@ export type TaskAgent = (typeof TASK_AGENTS)[number];
 /** Maximum encoded PNG accepted by the host's image model-context contract. */
 export const MAX_ANNOTATION_BYTES = 2_097_152;
 export interface Viewport { width: number; height: number }
+export type MouseButton = "left" | "right" | "middle";
 export interface BrowserAction {
-  kind: "navigate" | "click" | "type" | "select" | "press" | "scroll";
+  kind: "navigate" | "click" | "type" | "select" | "press" | "scroll" | "back" | "forward" | "reload" | "stop" | "insert" | "hover";
   url?: string;
   selector?: string;
+  /** `type`: replaces the field's value. `insert`: typed into whatever is focused. */
   text?: string;
   /** `select`: the option's value or visible text. */
   value?: string;
@@ -19,7 +21,25 @@ export interface BrowserAction {
   y?: number;
   deltaX?: number;
   deltaY?: number;
+  /** `click` only; default "left". */
+  button?: MouseButton;
+  /** `click` only; 2 = double-click, 3 = triple-click. Default 1. */
+  clickCount?: 1 | 2 | 3;
 }
+export interface TabInfo {
+  /** Stable opaque id for the tab's lifetime. */
+  id: string;
+  title: string;
+  url: string;
+  active: boolean;
+  loading: boolean;
+  /** data: URL (≤ 32 KB, fetched server-side, cached per origin) or null. */
+  favicon: string | null;
+}
+export type TabOp = "new" | "activate" | "close";
+export interface TabRequest { op: TabOp; tabId?: string; url?: string }
+/** `jpeg`: the latest live screencast frame (not annotatable). `png`: a fresh capture, retained for annotation. */
+export type FrameFormat = "jpeg" | "png";
 /** `failed`: provably nothing happened. `unknown`: dispatched, then errored — may have taken effect. */
 export type ActionStatus = "completed" | "failed" | "unknown";
 export interface ActionResult { status: ActionStatus; error?: string; state: BrowserState }
@@ -51,11 +71,18 @@ export interface BrowserState {
   viewport: Viewport;
   /** The running or most recent task on this browser. */
   task: TaskRun | null;
+  /** Every page tab this browser owns, in opening order. */
+  tabs: TabInfo[];
+  activeTabId: string;
+  /** The active tab is loading. */
+  loading: boolean;
+  canGoBack: boolean;
+  canGoForward: boolean;
 }
 export interface BrowserFrame {
   state: BrowserState;
   frameId: string;
-  mimeType: "image/png";
+  mimeType: "image/png" | "image/jpeg";
   data: string;
   capturedAt: string;
 }
@@ -78,7 +105,9 @@ export interface BrowserOpenOptions {
 export interface BrowserRuntimePort {
   open(options: BrowserOpenOptions): Promise<BrowserState>;
   state(browserId: string): Promise<BrowserState>;
-  frame(browserId: string): Promise<BrowserFrame>;
+  frame(browserId: string, format?: FrameFormat): Promise<BrowserFrame>;
+  tab(browserId: string, request: TabRequest): Promise<BrowserState>;
+  resize(browserId: string, viewport: Viewport, scale?: number): Promise<BrowserState>;
   snapshot(browserId: string): Promise<{ state: BrowserState; text: string }>;
   act(browserId: string, action: BrowserAction): Promise<ActionResult>;
   runTask(browserId: string, request: TaskRequest, onStep?: (step: TaskStep, run: TaskRun) => void): Promise<TaskRun>;

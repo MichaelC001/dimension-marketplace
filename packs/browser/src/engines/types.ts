@@ -1,32 +1,56 @@
-import type { BrowserAction, BrowserRegion, Viewport } from "../contracts.js";
+import type { BrowserAction, BrowserRegion, TabInfo, Viewport } from "../contracts.js";
 
+/** Everything below describes the ACTIVE tab unless it says otherwise. */
 export interface EngineState {
   url: string;
   title: string;
-  /** Stable for one document; MUST change on reload and same-URL navigation. */
+  /** Stable for one document; MUST change on reload, same-URL navigation and tab switch. */
   documentId: string;
   viewport: Viewport;
+  /** Every page tab this driver owns, in opening order. */
+  tabs: TabInfo[];
+  activeTabId: string;
+  loading: boolean;
+  canGoBack: boolean;
+  canGoForward: boolean;
+}
+
+/** The latest live frame of the active tab. */
+export interface LiveFrame {
+  /** Changes whenever the frame does. */
+  id: string;
+  /** Base64 JPEG. */
+  data: string;
+  capturedAt: string;
 }
 
 export interface EngineDriver {
   state(): Promise<EngineState>;
-  /** Viewport PNG, not a full-page image; device scale factor is one. */
+  /** Viewport PNG of the active tab, not a full-page image; device scale factor is one. */
   screenshot(): Promise<Uint8Array>;
+  /**
+   * The newest screencast frame of the active tab, from memory. The first call
+   * starts the screencast and waits for its first frame.
+   */
+  liveFrame(): Promise<LiveFrame>;
   snapshot(limit: number): Promise<string>;
   elements(region: BrowserRegion, limit: number): Promise<string>;
   /**
-   * Perform one action now, once, never retried. Throws `ActionNotDispatched`
-   * when provably nothing reached the page; any other error means the effect
-   * may have happened.
+   * Perform one action on the active tab now, once, never retried. Throws
+   * `ActionNotDispatched` when provably nothing reached the page; any other
+   * error means the effect may have happened.
    */
   perform(action: BrowserAction): Promise<void>;
+  /** Open a tab, make it the active one, and navigate it to `url` (already validated) when given. */
+  openTab(url?: string): Promise<void>;
+  /** Make `tabId` the driven and shown tab. Throws `ActionNotDispatched` for an unknown id. */
+  activateTab(tabId: string): Promise<void>;
+  /** Close `tabId`. Closing the last tab opens a blank one first: the browser never ends from a tab close. */
+  closeTab(tabId: string): Promise<void>;
+  /** Set every tab's viewport and pixel ratio (both validated) and restart the live cast at that size. */
+  resize(viewport: Viewport, scale: number): Promise<void>;
   /** CDP websocket endpoint of this browser, for an upstream task agent to attach to. */
   cdpEndpoint(): string;
-  /**
-   * While a task agent runs, show the page it works in: a page it opens becomes
-   * the current page. Returns a function that stops following.
-   */
-  followNewPages(): () => void;
   /** Resolve only after owned resources shut down. Never close foreign browsers. */
   close(): Promise<void>;
 }

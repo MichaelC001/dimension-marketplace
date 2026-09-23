@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "author": "Dimension",
-  "description": "A browser MCP App with named profiles, human-approved actions and visual annotations for the same agent session.",
+  "description": "A browser MCP App the agent and the human share: tabs, named persistent profiles, visual annotations into the same session, and whole tasks handed to jev or browser-use.",
   "engines": { "node": ">=22.12.0" },
   "scripts": {
     "build": "node scripts/build.mjs",
@@ -14,7 +14,7 @@
   },
   "dimension": {
     "name": "browser",
-    "description": "See and annotate the browser your agent uses. Persistent profiles, an MCP Apps View and human approval before browser mutations.",
+    "description": "A real browser beside your chat that your agent drives while you watch. Tabs, persistent logged-in profiles, circle-to-annotate, and fast task agents (jev, browser-use).",
     "defaultEnabled": false,
     "category": "artifactory",
     "keywords": ["browser", "mcp-apps", "profiles", "annotations"]

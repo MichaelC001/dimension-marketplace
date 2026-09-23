@@ -189,8 +189,20 @@ const GUARDED_BODY = `${FORM_BODY}
   });
 </script>`;
 
-function page(title: string, body: string): string {
-	return `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title></head><body>${body}</body></html>`;
+/** A link that opens in a new tab — the way sites hand you a second tab. */
+const OPENER_BODY = `<h1>opener</h1><a id="blank" href="/page2" target="_blank" style="display:block;padding:40px">open page 2 in a new tab</a>`;
+
+/** A 1x1 PNG, served as this fixture's declared favicon. */
+export const FAVICON_PNG = Buffer.from(
+	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+	"base64",
+);
+
+/** How long `/slow` keeps its navigation in flight. */
+export const SLOW_PAGE_MS = 2_000;
+
+function page(title: string, body: string, head = ""): string {
+	return `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>${head}</head><body>${body}</body></html>`;
 }
 
 function html(markup: string, headers: Record<string, string> = {}): Response {
@@ -214,6 +226,14 @@ export function startFixture(): Fixture {
 			if (pathname === "/page2") return html(page("second page", "<p>second page</p>"));
 			if (pathname === "/signup") return html(page("signup", SIGNUP_BODY));
 			if (pathname === "/guarded") return html(page("guarded form", GUARDED_BODY));
+			if (pathname === "/opener") return html(page("opener", OPENER_BODY));
+			if (pathname === "/with-icon") return html(page("with icon", "<p>has an icon</p>", `<link rel="icon" href="/brand.png">`));
+			if (pathname === "/brand.png") return new Response(FAVICON_PNG, { headers: { "content-type": "image/png" } });
+			// Answers only after SLOW_PAGE_MS: a navigation that stays in flight long enough to observe.
+			if (pathname === "/slow") {
+				await Bun.sleep(SLOW_PAGE_MS);
+				return html(page("slow page", "<p>finally</p>"));
+			}
 			// Hit only if a `javascript:` URL were ever executed in the page.
 			if (pathname === "/js-ran") return new Response("ran", { headers: { "cache-control": "no-store" } });
 			// `/bounce?left=N` navigates itself to the OTHER host's `/bounce?left=N-1`
@@ -293,6 +313,23 @@ export async function waitUntil<T>(
 		seen = await probe();
 	}
 	return seen;
+}
+
+/**
+ * Settle `work` within `ms` or fail naming `what`. A real-clock DEADLINE, not a
+ * wait: the regression under test is a hang inside real Chrome, which no fake
+ * clock can advance, and it must go red rather than stall the suite.
+ */
+export async function within<T>(ms: number, what: string, work: Promise<T>): Promise<T> {
+	let timer: Timer | undefined;
+	const expired = new Promise<never>((_, reject) => {
+		timer = setTimeout(() => reject(new Error(`${what} did not settle within ${ms}ms`)), ms);
+	});
+	try {
+		return await Promise.race([work, expired]);
+	} finally {
+		clearTimeout(timer);
+	}
 }
 
 /**

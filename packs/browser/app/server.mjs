@@ -161,7 +161,100 @@ function defaultRootDir() {
 
 // src/engines/puppeteer.ts
 import { mkdirSync as mkdirSync2 } from "node:fs";
+import { setTimeout as sleep } from "node:timers/promises";
 import puppeteer from "puppeteer-core";
+
+// src/favicon.ts
+var MAX_FAVICON_DATA_URL = 32 * 1024;
+var MAX_ORIGINS = 256;
+var FETCH_TIMEOUT_MS = 4e3;
+var MAX_FAVICON_BYTES = Math.floor((MAX_FAVICON_DATA_URL - 64) * 3 / 4);
+var FaviconCache = class {
+  /** Insertion-ordered, so the oldest origin is evicted first. `undefined` = not looked up yet. */
+  #icons = /* @__PURE__ */ new Map();
+  #pending = /* @__PURE__ */ new Map();
+  /** The cached icon for `pageUrl`'s origin, or null (unknown yet, none, or not http/https). */
+  get(pageUrl) {
+    const origin = originOf(pageUrl);
+    return origin === null ? null : this.#icons.get(origin) ?? null;
+  }
+  /**
+   * Resolve and cache the icon for `pageUrl`'s origin once. `declared` is the
+   * page's `<link rel=icon>` href, if it has one; otherwise `/favicon.ico`.
+   * A `declared` that throws (the document was mid-navigation) caches nothing,
+   * so the next load retries.
+   */
+  async load(pageUrl, declared) {
+    const origin = originOf(pageUrl);
+    if (origin === null || this.#icons.has(origin)) return;
+    const inFlight = this.#pending.get(origin);
+    if (inFlight) return await inFlight;
+    const work = (async () => {
+      const href = await declared();
+      const icon = await fetchIcon(href ? resolve2(href, pageUrl) : `${origin}/favicon.ico`);
+      this.#icons.set(origin, icon);
+      while (this.#icons.size > MAX_ORIGINS) this.#icons.delete(this.#icons.keys().next().value);
+    })().finally(() => this.#pending.delete(origin));
+    this.#pending.set(origin, work);
+    await work;
+  }
+};
+function originOf(url) {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.origin : null;
+  } catch {
+    return null;
+  }
+}
+function resolve2(href, base) {
+  try {
+    return new URL(href, base).toString();
+  } catch {
+    return null;
+  }
+}
+async function fetchIcon(url) {
+  if (!url) return null;
+  if (url.startsWith("data:image/")) return url.length <= MAX_FAVICON_DATA_URL ? url : null;
+  if (!url.startsWith("http:") && !url.startsWith("https:")) return null;
+  try {
+    const response = await fetch(url, { redirect: "follow", credentials: "omit", signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+    if (!response.ok || !response.body) return null;
+    const mime = (response.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
+    const type = mime.startsWith("image/") ? mime : sniff(url);
+    if (!type) return null;
+    const declaredLength = Number(response.headers.get("content-length") ?? "0");
+    if (declaredLength > MAX_FAVICON_BYTES) {
+      await response.body.cancel().catch(() => void 0);
+      return null;
+    }
+    const chunks = [];
+    let size = 0;
+    const reader = response.body.getReader();
+    for (; ; ) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > MAX_FAVICON_BYTES) {
+        await reader.cancel().catch(() => void 0);
+        return null;
+      }
+      chunks.push(value);
+    }
+    if (size === 0) return null;
+    return `data:${type};base64,${Buffer.concat(chunks).toString("base64")}`;
+  } catch {
+    return null;
+  }
+}
+function sniff(url) {
+  const path = url.split(/[?#]/)[0].toLowerCase();
+  if (path.endsWith(".ico")) return "image/x-icon";
+  if (path.endsWith(".png")) return "image/png";
+  if (path.endsWith(".svg")) return "image/svg+xml";
+  return null;
+}
 
 // src/image.ts
 import { PNG } from "pngjs";
@@ -280,13 +373,25 @@ var SELECT_ALL_SCRIPT = (el) => {
   field.select();
   return true;
 };
+var FAVICON_HREF_SCRIPT = () => {
+  const links = document.querySelectorAll("link[rel~='icon' i], link[rel='apple-touch-icon' i]");
+  for (let i = 0; i < links.length; i += 1) {
+    const href = links[i].href;
+    if (href) return href;
+  }
+  return null;
+};
 
 // src/engines/puppeteer.ts
 var NAVIGATE_TIMEOUT_MS = 3e4;
 var ACTION_TIMEOUT_MS = 15e3;
 var LAUNCH_TIMEOUT_MS = 6e4;
 var CLOSE_TIMEOUT_MS = 15e3;
+var FAVICON_SCRIPT_TIMEOUT_MS = 2e3;
+var FIRST_FRAME_WAIT_MS = 500;
+var SCREENCAST_QUALITY = 80;
 var DEFAULT_RELAY_URL = "http://127.0.0.1:9224";
+var FAVICONS = new FaviconCache();
 var CHROMIUM_ARGS = [
   "--no-first-run",
   "--no-default-browser-check",
@@ -327,16 +432,8 @@ async function attachRelay(options, release) {
       );
     }
     page = await browser.newPage();
-    const cdp = await attachSession(page);
-    await page.setViewport({ ...options.viewport, deviceScaleFactor: 1 });
-    return new PuppeteerDriver({
-      browser,
-      page,
-      cdp,
-      viewport: options.viewport,
-      ownsBrowser: false,
-      release
-    });
+    const tab = await prepareTab(page, options.viewport);
+    return new PuppeteerDriver({ browser, tabs: [tab], viewport: options.viewport, ownsBrowser: false, release });
   } catch (err) {
     if (page && !page.isClosed()) await page.close().catch(() => void 0);
     if (browser) await browser.disconnect().catch(() => void 0);
@@ -365,10 +462,11 @@ async function launchChromium(options, release) {
   }
   browser.process()?.once("exit", release);
   try {
-    const page = (await browser.pages())[0] ?? await browser.newPage();
-    const cdp = await attachSession(page);
-    await page.setViewport({ ...options.viewport, deviceScaleFactor: 1 });
-    return new PuppeteerDriver({ browser, page, cdp, viewport: options.viewport, ownsBrowser: true, release });
+    const pages = await browser.pages();
+    if (pages.length === 0) pages.push(await browser.newPage());
+    const tabs = [];
+    for (const page of pages) tabs.push(await prepareTab(page, options.viewport));
+    return new PuppeteerDriver({ browser, tabs, viewport: options.viewport, ownsBrowser: true, release });
   } catch (err) {
     try {
       await withTimeout(browser.close(), CLOSE_TIMEOUT_MS, "failed-launch cleanup");
@@ -385,36 +483,66 @@ async function launchChromium(options, release) {
     throw err;
   }
 }
-async function attachSession(page) {
-  const cdp = await page.createCDPSession();
-  await cdp.send("Page.enable");
-  return cdp;
-}
 var READ_RETRY_DELAYS_MS = [25, 50, 100, 200, 400, 800];
+async function prepareTab(page, viewport, scale = 1) {
+  await page.setViewport({ ...viewport, deviceScaleFactor: scale });
+  const cdp = await page.createCDPSession();
+  const tab = { id: "", documentId: "", page, target: page.target(), cdp, loading: false };
+  cdp.on("Page.frameNavigated", ({ frame }) => {
+    if (frame.parentId === void 0) tab.documentId = frame.loaderId;
+  });
+  try {
+    await cdp.send("Page.enable");
+    await cdp.send("Emulation.setFocusEmulationEnabled", { enabled: true });
+    const { frameTree } = await cdp.send("Page.getFrameTree");
+    tab.id = frameTree.frame.id;
+    tab.documentId = frameTree.frame.loaderId;
+    if (!tab.documentId) fail("no_document", "the tab did not report a document identity; it may be closing");
+    return tab;
+  } catch (err) {
+    await cdp.detach().catch(() => void 0);
+    throw err;
+  }
+}
 var PuppeteerDriver = class {
   #browser;
-  /** The tab this driver opened; its closing ends the session. */
-  #home;
-  /** The tab being shown and driven: `#home`, or the tab a task agent opened. */
-  #page;
-  #cdp;
+  /** Every tab this driver owns, in opening order. */
+  #tabs = [];
+  /** The tab being shown and driven. */
+  #active;
+  /** In-flight and finished adoptions, so one target never becomes two tabs. */
+  #adopting = /* @__PURE__ */ new Map();
   #viewport;
+  /** Device pixel ratio the page renders at, so the live view is crisp on HiDPI. */
+  #scale = 1;
   #ownsBrowser;
   #release;
-  #onHomeClosed;
+  #onTargetCreated;
   #onDisconnected;
+  /** Set once the live view asked for frames; from then on the active tab is always cast. */
+  #liveWanted = false;
+  #cast;
+  /** Screencast start/stop run in order; a tab switch never interleaves with another. */
+  #castChain = Promise.resolve();
+  #frameSeq = 0;
   #closed = false;
   #closing;
   constructor(parts) {
     this.#browser = parts.browser;
-    this.#home = parts.page;
-    this.#page = parts.page;
-    this.#cdp = parts.cdp;
     this.#viewport = parts.viewport;
     this.#ownsBrowser = parts.ownsBrowser;
     this.#release = parts.release;
-    this.#onHomeClosed = () => {
-      void this.close().catch(() => void 0);
+    const first = parts.tabs[0];
+    if (!first) fail("no_tab", "the browser has no page tab");
+    this.#active = first;
+    for (const tab of parts.tabs) {
+      this.#tabs.push(tab);
+      this.#adopting.set(tab.target, Promise.resolve(tab));
+      this.#wire(tab);
+    }
+    this.#onTargetCreated = (target) => {
+      if (target.type() !== "page" || this.#closed || !this.#owns(target)) return;
+      void this.#adopt(target, true).catch(() => void 0);
     };
     this.#onDisconnected = () => {
       if (this.#ownsBrowser) {
@@ -424,64 +552,145 @@ var PuppeteerDriver = class {
       this.#closed = true;
       this.#release();
     };
-    parts.page.on("close", this.#onHomeClosed);
+    parts.browser.on("targetcreated", this.#onTargetCreated);
     parts.browser.on("disconnected", this.#onDisconnected);
+    void first.page.bringToFront().catch(() => void 0);
   }
   // -----------------------------------------------------------------------
   // Reads
   // -----------------------------------------------------------------------
   async state() {
-    const documentId = await this.#documentId();
-    const history = await this.#read(() => this.#cdp.send("Page.getNavigationHistory"));
+    const active = this.#activeTab();
+    const history = await this.#read(() => active.cdp.send("Page.getNavigationHistory"));
     const current = history.entries[history.currentIndex];
     if (!current) fail("no_document", "The browser did not report a current navigation entry.");
-    return { url: current.url, title: current.title, documentId, viewport: this.#viewport };
+    const tabs = await Promise.all(
+      this.#tabs.map(async (tab) => {
+        let url = current.url;
+        let title = current.title;
+        if (tab !== active) {
+          const other = await tab.cdp.send("Page.getNavigationHistory").catch(() => null);
+          const entry = other?.entries[other.currentIndex];
+          url = entry?.url ?? tab.page.url();
+          title = entry?.title ?? "";
+        }
+        return { id: tab.id, title, url, active: tab === active, loading: tab.loading, favicon: FAVICONS.get(url) };
+      })
+    );
+    return {
+      url: current.url,
+      title: current.title,
+      // A tab switch is a document change for everything pinned to one.
+      documentId: `${active.id}:${active.documentId}`,
+      viewport: this.#viewport,
+      tabs,
+      activeTabId: active.id,
+      loading: active.loading,
+      canGoBack: history.currentIndex > 0,
+      canGoForward: history.currentIndex < history.entries.length - 1
+    };
   }
   async screenshot() {
-    const shot = await this.#page.screenshot({ type: "png", captureBeyondViewport: false });
+    const { width, height } = this.#viewport;
+    const shot = await this.#activeTab().page.screenshot({
+      type: "png",
+      captureBeyondViewport: false,
+      ...this.#scale === 1 ? {} : { clip: { x: 0, y: 0, width, height, scale: 1 / this.#scale } }
+    });
     if (shot.length > MAX_FRAME_BYTES) {
       fail("frame_too_large", `screenshot is ${shot.length} bytes, above the ${MAX_FRAME_BYTES} byte limit`);
     }
     return shot;
   }
+  async liveFrame() {
+    const active = this.#activeTab();
+    this.#liveWanted = true;
+    if (this.#cast?.tab !== active) await this.#restartScreencast();
+    const cast = this.#cast;
+    if (!cast || cast.tab !== active) fail("tab_switched", "The active tab changed while starting the live view; ask again.");
+    if (!cast.frame) {
+      const { promise: waited, resolve: resolve3 } = Promise.withResolvers();
+      const timer = setTimeout(resolve3, FIRST_FRAME_WAIT_MS);
+      await Promise.race([cast.first.promise, waited]);
+      clearTimeout(timer);
+    }
+    if (!cast.frame) {
+      const shot = await this.#read(
+        () => active.cdp.send("Page.captureScreenshot", { format: "jpeg", quality: SCREENCAST_QUALITY })
+      );
+      cast.frame ??= { id: `live-${active.id}-${++this.#frameSeq}`, data: shot.data, capturedAt: (/* @__PURE__ */ new Date()).toISOString() };
+    }
+    return cast.frame;
+  }
   async snapshot(limit) {
-    return await this.#page.evaluate(PAGE_TEXT_SCRIPT, limit);
+    return await this.#activeTab().page.evaluate(PAGE_TEXT_SCRIPT, limit);
   }
   async elements(region, limit) {
-    return await this.#page.evaluate(ELEMENTS_IN_REGION_SCRIPT, region, limit);
+    return await this.#activeTab().page.evaluate(ELEMENTS_IN_REGION_SCRIPT, region, limit);
   }
   // -----------------------------------------------------------------------
   // Actions
   // -----------------------------------------------------------------------
   /**
-   * One native dispatch, never retried. Everything that can fail without
-   * touching the page (validation, element resolution) throws
+   * One native dispatch, never retried, and bounded: an action that has not
+   * settled in time is reported as an error (the runtime classifies it
+   * `unknown` — it may still land). Everything that can fail without touching
+   * the page (validation, element resolution, empty history) throws
    * ActionNotDispatched before the first input event.
    */
   async perform(action) {
-    this.#assertOpen();
-    const page = this.#page;
+    await withTimeout(this.#dispatch(action), NAVIGATE_TIMEOUT_MS + 5e3, `${action.kind}`);
+  }
+  async #dispatch(action) {
+    const tab = this.#activeTab();
+    const page = tab.page;
     switch (action.kind) {
       case "navigate": {
-        await page.goto(requireField(action.url, "navigate.url"), { waitUntil: "domcontentloaded", timeout: NAVIGATE_TIMEOUT_MS });
+        const url = requireField(action.url, "navigate.url");
+        await navigating(tab, page.goto(url, { waitUntil: "domcontentloaded", timeout: NAVIGATE_TIMEOUT_MS }));
         return;
       }
+      case "back":
+      case "forward": {
+        const history = await this.#read(() => tab.cdp.send("Page.getNavigationHistory"));
+        const target = history.currentIndex + (action.kind === "back" ? -1 : 1);
+        if (target < 0 || target >= history.entries.length) {
+          throw new ActionNotDispatched("no_history", `there is no page to go ${action.kind} to`);
+        }
+        const options = { waitUntil: "domcontentloaded", timeout: NAVIGATE_TIMEOUT_MS };
+        await navigating(tab, action.kind === "back" ? page.goBack(options) : page.goForward(options));
+        return;
+      }
+      case "reload":
+        await navigating(tab, page.reload({ waitUntil: "domcontentloaded", timeout: NAVIGATE_TIMEOUT_MS }));
+        return;
+      case "stop":
+        await tab.cdp.send("Page.stopLoading");
+        tab.loading = false;
+        return;
       case "click": {
+        const options = { button: action.button ?? "left", count: action.clickCount ?? 1 };
         if (action.selector === void 0) {
-          await page.mouse.click(requireNumber(action.x, "click.x"), requireNumber(action.y, "click.y"));
+          await page.mouse.click(requireNumber(action.x, "click.x"), requireNumber(action.y, "click.y"), options);
           return;
         }
-        const handle = await this.#resolve(action.selector);
+        const handle = await this.#resolve(page, action.selector);
         try {
-          await handle.click();
+          await handle.click(options);
         } finally {
           await handle.dispose().catch(() => void 0);
         }
         return;
       }
+      case "hover":
+        await page.mouse.move(requireNumber(action.x, "hover.x"), requireNumber(action.y, "hover.y"));
+        return;
+      case "insert":
+        await page.keyboard.sendCharacter(requireField(action.text, "insert.text"));
+        return;
       case "type": {
         const text = requireField(action.text, "type.text", true);
-        const handle = await this.#resolve(requireField(action.selector, "type.selector"));
+        const handle = await this.#resolve(page, requireField(action.selector, "type.selector"));
         try {
           await handle.focus();
           if (!await handle.evaluate(SELECT_ALL_SCRIPT)) {
@@ -502,7 +711,7 @@ var PuppeteerDriver = class {
       }
       case "select": {
         const wanted = requireField(action.value, "select.value", true);
-        const handle = await this.#resolve(requireField(action.selector, "select.selector"));
+        const handle = await this.#resolve(page, requireField(action.selector, "select.selector"));
         try {
           const value = await handle.evaluate((el, wanted2) => {
             if (!(el instanceof HTMLSelectElement)) return null;
@@ -528,42 +737,31 @@ var PuppeteerDriver = class {
         throw new ActionNotDispatched("bad_action", `unsupported action kind ${JSON.stringify(action.kind)}`);
     }
   }
+  // -----------------------------------------------------------------------
+  // Tabs
+  // -----------------------------------------------------------------------
+  async openTab(url) {
+    this.#assertOpen();
+    const page = await this.#browser.newPage();
+    const tab = await this.#adopt(page.target(), true);
+    if (!tab) fail("tab_closed", "the new tab closed before it could be shown");
+    if (url === void 0) return;
+    await navigating(tab, page.goto(url, { waitUntil: "domcontentloaded", timeout: NAVIGATE_TIMEOUT_MS }));
+    await tab.cdp.send("Page.resetNavigationHistory").catch(() => void 0);
+  }
+  async activateTab(tabId) {
+    this.#assertOpen();
+    await this.#activate(this.#tabById(tabId));
+  }
+  async closeTab(tabId) {
+    this.#assertOpen();
+    const tab = this.#tabById(tabId);
+    if (this.#tabs.length === 1) await this.openTab();
+    await tab.page.close();
+    this.#forget(tab);
+  }
   cdpEndpoint() {
     return this.#browser.wsEndpoint();
-  }
-  /**
-   * A task agent drives the same Chrome over CDP and may open its own tab
-   * (jev does). The newest page it opens becomes the page this driver shows,
-   * so the human watches the agent work. A followed tab that closes hands the
-   * view back to the home tab.
-   */
-  followNewPages() {
-    const onCreated = (target) => {
-      if (target.type() !== "page") return;
-      void (async () => {
-        const page = await target.page();
-        if (!page || this.#closed || page.isClosed()) return;
-        await page.setViewport({ ...this.#viewport, deviceScaleFactor: 1 }).catch(() => void 0);
-        await page.bringToFront().catch(() => void 0);
-        const cdp = await attachSession(page).catch(() => void 0);
-        if (!cdp || this.#closed || page.isClosed()) return;
-        const previous = this.#cdp;
-        this.#page = page;
-        this.#cdp = cdp;
-        if (previous !== cdp) await previous.detach().catch(() => void 0);
-        page.once("close", () => {
-          if (this.#page !== page || this.#closed || this.#home.isClosed()) return;
-          void attachSession(this.#home).then((home) => {
-            if (this.#page !== page) return void home.detach().catch(() => void 0);
-            this.#page = this.#home;
-            void this.#home.bringToFront().catch(() => void 0);
-            this.#cdp = home;
-          }, () => void 0);
-        });
-      })().catch(() => void 0);
-    };
-    this.#browser.on("targetcreated", onCreated);
-    return () => this.#browser.off("targetcreated", onCreated);
   }
   // -----------------------------------------------------------------------
   // Shutdown
@@ -571,7 +769,7 @@ var PuppeteerDriver = class {
   /**
    * Stop everything this driver owns, bounded, and release the profile lease
    * only on a CONFIRMED stop. Owned browser: await `browser.close()` (resolves
-   * once the process is gone). Relay: close our own tab, disconnect, release.
+   * once the process is gone). Relay: close our own tabs, disconnect, release.
    * A failed close is not memoized, so a caller may try again.
    */
   close() {
@@ -583,11 +781,13 @@ var PuppeteerDriver = class {
   }
   async #shutdown() {
     this.#closed = true;
-    this.#home.off("close", this.#onHomeClosed);
+    this.#browser.off("targetcreated", this.#onTargetCreated);
     this.#browser.off("disconnected", this.#onDisconnected);
-    await this.#cdp.detach().catch(() => void 0);
+    await this.#stopScreencast();
+    const tabs = [...this.#tabs];
+    await Promise.all(tabs.map((tab) => tab.cdp.detach().catch(() => void 0)));
     if (!this.#ownsBrowser) {
-      if (!this.#home.isClosed()) await this.#home.close().catch(() => void 0);
+      await Promise.all(tabs.map((tab) => tab.page.isClosed() ? void 0 : tab.page.close().catch(() => void 0)));
       await this.#browser.disconnect().catch(() => void 0);
       this.#release();
       return;
@@ -607,20 +807,169 @@ var PuppeteerDriver = class {
     this.#release();
   }
   // -----------------------------------------------------------------------
-  // Internals
+  // Internals — tabs
   // -----------------------------------------------------------------------
+  /**
+   * Whether a new page target is ours. Everything in a Chrome we launched is.
+   * In the human's Chrome only pages our tabs opened (popups, target=_blank —
+   * `opener` is set even for noopener links). Task agents never run there.
+   */
+  #owns(target) {
+    if (this.#ownsBrowser) return true;
+    const opener = target.opener();
+    return opener !== void 0 && this.#tabs.some((tab) => tab.target === opener);
+  }
+  /** Make `target` one of our tabs, once, however many paths race to adopt it. */
+  #adopt(target, activate) {
+    const known = this.#adopting.get(target);
+    if (known) return known;
+    const work = (async () => {
+      const page = await target.page();
+      if (!page || this.#closed || page.isClosed()) return void 0;
+      const tab = await prepareTab(page, this.#viewport, this.#scale);
+      if (this.#closed || page.isClosed()) {
+        await tab.cdp.detach().catch(() => void 0);
+        return void 0;
+      }
+      this.#tabs.push(tab);
+      this.#wire(tab);
+      if (activate) await this.#activate(tab);
+      return tab;
+    })();
+    this.#adopting.set(target, work);
+    work.catch(() => this.#adopting.delete(target));
+    return work;
+  }
+  /**
+   * Loading, favicon and close tracking for one tab. Chrome reports
+   * `frameStartedLoading` only once the new document commits, so a page
+   * waiting on a slow server would look idle: a navigation the page requests
+   * (link, form, script) marks the tab loading at once, as `perform` does for
+   * navigations it starts.
+   */
+  #wire(tab) {
+    const start = (event) => {
+      if (event.frameId === tab.id) tab.loading = true;
+    };
+    tab.cdp.on("Page.frameStartedLoading", start);
+    tab.cdp.on("Page.frameRequestedNavigation", start);
+    tab.cdp.on("Page.downloadWillBegin", (event) => {
+      if (event.frameId === tab.id) tab.loading = false;
+    });
+    tab.cdp.on("Page.frameStoppedLoading", (event) => {
+      if (event.frameId !== tab.id) return;
+      tab.loading = false;
+      this.#loadFavicon(tab);
+    });
+    tab.page.once("close", () => this.#forget(tab));
+    this.#loadFavicon(tab);
+  }
+  #loadFavicon(tab) {
+    if (this.#closed || tab.page.isClosed()) return;
+    void FAVICONS.load(
+      tab.page.url(),
+      () => withTimeout(tab.page.evaluate(FAVICON_HREF_SCRIPT), FAVICON_SCRIPT_TIMEOUT_MS, "favicon lookup")
+    ).catch(() => void 0);
+  }
+  /**
+   * A closed tab leaves the model. If it was the active one, its right
+   * neighbour (else left) takes over, as in every browser. If it was the
+   * last one, a blank tab replaces it: the browser never ends from a tab close.
+   */
+  #forget(tab) {
+    const index = this.#tabs.indexOf(tab);
+    if (index < 0) return;
+    this.#tabs.splice(index, 1);
+    this.#adopting.delete(tab.target);
+    void tab.cdp.detach().catch(() => void 0);
+    if (this.#closed || this.#active !== tab) return;
+    const next = this.#tabs[index] ?? this.#tabs[index - 1];
+    if (next) void this.#activate(next).catch(() => void 0);
+    else void this.openTab().catch((err) => console.error("Could not replace the last closed tab:", err));
+  }
+  async #activate(tab) {
+    this.#active = tab;
+    await tab.page.bringToFront().catch(() => void 0);
+    if (this.#liveWanted) await this.#restartScreencast();
+  }
+  #tabById(tabId) {
+    const tab = this.#tabs.find((candidate) => candidate.id === tabId);
+    if (!tab) throw new ActionNotDispatched("unknown_tab", `no tab ${JSON.stringify(tabId)} in this browser`);
+    return tab;
+  }
+  /** The active tab, or a clear refusal when the browser or that tab is gone. */
+  #activeTab() {
+    this.#assertOpen();
+    if (this.#active.page.isClosed()) fail("tab_closed", "The active tab just closed; read the state again.");
+    return this.#active;
+  }
   #assertOpen() {
-    if (this.#closed || this.#page.isClosed()) fail("browser_closed", "The browser is closed.");
+    if (this.#closed) fail("browser_closed", "The browser is closed.");
   }
-  /** Live document identity, read from the browser, never from a cache. */
-  async #documentId() {
-    const { frameTree } = await this.#read(() => this.#cdp.send("Page.getFrameTree"));
-    const loaderId = frameTree.frame.loaderId;
-    if (typeof loaderId !== "string" || loaderId.length === 0) {
-      fail("no_document", "the tab did not report a document identity; it may be closing");
+  // -----------------------------------------------------------------------
+  // Internals — live screencast
+  // -----------------------------------------------------------------------
+  /**
+   * Fit the page to the View: every tab gets the new viewport and pixel ratio
+   * (so a tab switch never shows a stale size) and the live cast restarts.
+   */
+  async resize(viewport, scale) {
+    this.#assertOpen();
+    if (viewport.width === this.#viewport.width && viewport.height === this.#viewport.height && scale === this.#scale) return;
+    this.#viewport = viewport;
+    this.#scale = scale;
+    await Promise.all(this.#tabs.map((tab) => tab.page.setViewport({ ...viewport, deviceScaleFactor: scale }).catch(() => void 0)));
+    if (this.#liveWanted) {
+      await this.#stopScreencast();
+      await this.#restartScreencast();
     }
-    return loaderId;
   }
+  /** Cast the CURRENT active tab, stopping whatever was cast before. Ordered. */
+  #restartScreencast() {
+    const step = this.#castChain.then(async () => {
+      const tab = this.#active;
+      if (this.#cast?.tab === tab) return;
+      await this.#stopScreencastNow();
+      if (this.#closed || tab.page.isClosed()) return;
+      const cast = {
+        tab,
+        frame: null,
+        first: Promise.withResolvers(),
+        onFrame: (event) => {
+          void tab.cdp.send("Page.screencastFrameAck", { sessionId: event.sessionId }).catch(() => void 0);
+          if (this.#cast !== cast) return;
+          cast.frame = { id: `live-${tab.id}-${++this.#frameSeq}`, data: event.data, capturedAt: (/* @__PURE__ */ new Date()).toISOString() };
+          cast.first.resolve();
+        }
+      };
+      this.#cast = cast;
+      tab.cdp.on("Page.screencastFrame", cast.onFrame);
+      await tab.cdp.send("Page.startScreencast", {
+        format: "jpeg",
+        quality: SCREENCAST_QUALITY,
+        maxWidth: Math.round(this.#viewport.width * this.#scale),
+        maxHeight: Math.round(this.#viewport.height * this.#scale),
+        everyNthFrame: 1
+      }).catch(() => void 0);
+    });
+    this.#castChain = step.catch(() => void 0);
+    return step;
+  }
+  #stopScreencast() {
+    const step = this.#castChain.then(() => this.#stopScreencastNow());
+    this.#castChain = step.catch(() => void 0);
+    return step;
+  }
+  async #stopScreencastNow() {
+    const cast = this.#cast;
+    if (!cast) return;
+    this.#cast = void 0;
+    cast.tab.cdp.off("Page.screencastFrame", cast.onFrame);
+    if (!cast.tab.page.isClosed()) await cast.tab.cdp.send("Page.stopScreencast").catch(() => void 0);
+  }
+  // -----------------------------------------------------------------------
+  // Internals — reads
+  // -----------------------------------------------------------------------
   /**
    * One read-only CDP call, retried with backoff across a navigation's
    * detach window. Reads have no effect, so re-reading is safe; the last
@@ -632,19 +981,28 @@ var PuppeteerDriver = class {
       try {
         return await send();
       } catch {
-        await new Promise((resolve2) => setTimeout(resolve2, delay));
+        await sleep(delay);
       }
     }
     this.#assertOpen();
     return await send();
   }
   /** Element resolution is read-only, so a miss here is a certain non-event. */
-  async #resolve(selector2) {
-    const handle = await this.#page.waitForSelector(selector2, { timeout: ACTION_TIMEOUT_MS }).catch(() => null);
+  async #resolve(page, selector2) {
+    const handle = await page.waitForSelector(selector2, { timeout: ACTION_TIMEOUT_MS }).catch(() => null);
     if (!handle) throw new ActionNotDispatched("no_element", `selector ${JSON.stringify(selector2)} did not resolve to an element`);
     return handle;
   }
 };
+async function navigating(tab, navigation) {
+  tab.loading = true;
+  try {
+    return await navigation;
+  } catch (err) {
+    tab.loading = false;
+    throw err;
+  }
+}
 function requireField(value, name, allowEmpty = false) {
   if (typeof value !== "string" || !allowEmpty && value.length === 0) {
     throw new ActionNotDispatched("bad_action", `${name} is required`);
@@ -665,14 +1023,10 @@ function describe(err) {
   return err instanceof Error ? err.message : String(err);
 }
 async function withTimeout(promise, ms, label) {
-  let timer;
+  const { promise: expired, reject } = Promise.withResolvers();
+  const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
   try {
-    return await Promise.race([
-      promise,
-      new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
-      })
-    ]);
+    return await Promise.race([promise, expired]);
   } finally {
     clearTimeout(timer);
   }
@@ -776,10 +1130,10 @@ function startWorker(job, onStep) {
   child.stdin.write(`${JSON.stringify(job)}
 `);
   let killTimer;
-  const done = new Promise((resolve2) => {
+  const done = new Promise((resolve3) => {
     const finish = (reason) => {
       clearTimeout(killTimer);
-      resolve2(result2 ?? { status: "failed", summary: `${reason}${stderr ? `: ${stderr.trim().slice(-600)}` : ""}`, steps: 0, elapsedMs: 0, usage: usageOf({}) });
+      resolve3(result2 ?? { status: "failed", summary: `${reason}${stderr ? `: ${stderr.trim().slice(-600)}` : ""}`, steps: 0, elapsedMs: 0, usage: usageOf({}) });
     };
     child.once("error", (error) => finish(`task worker failed to start (${error.message})`));
     child.once("close", (code, signal) => finish(`task worker exited (${signal ?? code})`));
@@ -801,6 +1155,8 @@ var MAX_ELEMENT_CHARS = 4e3;
 var MAX_TEXT_INPUT = 4096;
 var MAX_NOTE_CHARS = 8192;
 var MAX_SELECTOR_CHARS = 512;
+var MAX_TAB_ID_CHARS = 128;
+var MOUSE_BUTTONS = ["left", "right", "middle"];
 var MAX_URL_LENGTH = 2048;
 var MAX_SCROLL_DELTA = 5e3;
 var MAX_TASK_CHARS = 8192;
@@ -848,9 +1204,6 @@ var BrowserRuntime = class {
     this.options = options;
     this.store = new ProfileStore(options.rootDir);
   }
-  // -----------------------------------------------------------------------
-  // Lifecycle
-  // -----------------------------------------------------------------------
   // -----------------------------------------------------------------------
   // Lifecycle
   // -----------------------------------------------------------------------
@@ -996,7 +1349,19 @@ var BrowserRuntime = class {
   async state(browserId) {
     return await this.serialize(this.require(browserId), (entry) => this.buildState(entry));
   }
-  async frame(browserId) {
+  /**
+   * `png` (default): a fresh capture, retained so it can be annotated.
+   * `jpeg`: the live screencast's newest frame, straight from memory. It is
+   * deliberately NOT queued behind page work — the live view keeps moving
+   * while a navigation or action is in flight — and is not annotatable.
+   */
+  async frame(browserId, format = "png") {
+    if (format === "jpeg") {
+      const entry = this.require(browserId);
+      const live = await entry.driver.liveFrame();
+      return { state: await this.buildState(entry), frameId: live.id, mimeType: "image/jpeg", data: live.data, capturedAt: live.capturedAt };
+    }
+    if (format !== "png") fail("bad_format", `format must be "jpeg" or "png"`);
     return await this.serialize(this.require(browserId), async (entry) => {
       const before = await this.refreshState(entry);
       const revision = entry.revision;
@@ -1087,6 +1452,55 @@ var BrowserRuntime = class {
     return this.store.list();
   }
   // -----------------------------------------------------------------------
+  // Tabs
+  // -----------------------------------------------------------------------
+  /** Fit the page to the View's size and pixel ratio (bounded like open's viewport; ratio 1-2). */
+  async resize(browserId, viewport, scale = 1) {
+    const entry = this.require(browserId);
+    const size = normalizeViewport(viewport);
+    const ratio = Number.isFinite(scale) ? Math.min(2, Math.max(1, Math.round(scale * 4) / 4)) : 1;
+    return await this.serialize(entry, async () => {
+      await entry.driver.resize(size, ratio);
+      return await this.buildState(entry);
+    });
+  }
+  /**
+   * Open, show or close a tab. Every read and action works on the active tab.
+   * Refused while a task runs: switching away from the agent's tab hides it,
+   * and a hidden tab renders no frames, so the agent would stall.
+   */
+  async tab(browserId, request) {
+    const entry = this.require(browserId);
+    if (!request || typeof request !== "object") fail("bad_tab", "tab request must be an object");
+    const navigate = request.op === "new" && request.url !== void 0 ? normalizeAction({ kind: "navigate", url: request.url }, entry.viewport) : void 0;
+    if ((request.op === "activate" || request.op === "close") && (typeof request.tabId !== "string" || request.tabId.length === 0 || request.tabId.length > MAX_TAB_ID_CHARS)) {
+      fail("bad_tab", `${request.op} needs the tabId from state.tabs`);
+    }
+    return await this.serialize(entry, async () => {
+      if (entry.task?.status === "running") {
+        fail("task_running", `a ${entry.task.agent} task is driving this browser; wait for it or cancel it first`);
+      }
+      switch (request.op) {
+        case "new":
+          try {
+            await entry.driver.openTab(navigate?.url);
+          } catch (error) {
+            fail("tab_failed", `opening a new tab${navigate ? ` at ${navigate.url}` : ""} failed: ${describe2(error)}`);
+          }
+          break;
+        case "activate":
+          await entry.driver.activateTab(request.tabId);
+          break;
+        case "close":
+          await entry.driver.closeTab(request.tabId);
+          break;
+        default:
+          fail("bad_tab", `op must be one of: new, activate, close`);
+      }
+      return await this.buildState(entry);
+    });
+  }
+  // -----------------------------------------------------------------------
   // Actions
   // -----------------------------------------------------------------------
   async act(browserId, input) {
@@ -1115,8 +1529,8 @@ var BrowserRuntime = class {
   // -----------------------------------------------------------------------
   /**
    * Run a whole task on an upstream agent loop. The agent attaches to this
-   * browser's Chrome; the driver follows the tab it works in, so frames show
-   * the agent working. Resolves with the finished run.
+   * browser's Chrome; tabs it opens become the active tab, so frames show the
+   * agent working. Resolves with the finished run.
    */
   async runTask(browserId, request, onStep) {
     return await (await this.beginTask(browserId, request, onStep)).finished;
@@ -1129,6 +1543,9 @@ var BrowserRuntime = class {
   async beginTask(browserId, request, onStep) {
     const entry = this.require(browserId);
     if (!TASK_AGENTS.includes(request.agent)) fail("bad_agent", `agent must be one of: ${TASK_AGENTS.join(", ")}`);
+    if (entry.engine === "chrome-relay") {
+      fail("task_unsupported_engine", "task agents drive a whole browser, and chrome-relay is your own Chrome \u2014 open a chromium profile for browser_task");
+    }
     const task = typeof request.task === "string" ? request.task.trim() : "";
     if (task.length === 0 || task.length > MAX_TASK_CHARS) fail("bad_task", `task must be 1-${MAX_TASK_CHARS} characters`);
     const maxSteps = Math.min(MAX_TASK_STEPS, Math.max(1, Math.floor(request.maxSteps ?? DEFAULT_TASK_STEPS)));
@@ -1147,27 +1564,19 @@ var BrowserRuntime = class {
         elapsedMs: 0,
         usage: { modelCalls: 0, inputTokens: 0, outputTokens: 0, costUsd: null }
       };
-      const unfollow = entry.driver.followNewPages();
-      let worker;
-      try {
-        worker = startWorker(
-          { agent: request.agent, cdpUrl: entry.driver.cdpEndpoint(), task, maxSteps, startUrl: state.url },
-          (step) => {
-            const record = { n: step.n, action: step.action, url: step.url, elapsedMs: step.elapsedMs };
-            run.steps.push(record);
-            if (run.steps.length > TASK_STEPS_RETAINED) run.steps.shift();
-            run.stepCount = Math.max(run.stepCount, step.n);
-            run.elapsedMs = step.elapsedMs;
-            run.usage = step.usage;
-            onStep?.(record, run);
-          }
-        );
-      } catch (error) {
-        unfollow();
-        throw error;
-      }
+      const worker = startWorker(
+        { agent: request.agent, cdpUrl: entry.driver.cdpEndpoint(), task, maxSteps, startUrl: state.url },
+        (step) => {
+          const record = { n: step.n, action: step.action, url: step.url, elapsedMs: step.elapsedMs };
+          run.steps.push(record);
+          if (run.steps.length > TASK_STEPS_RETAINED) run.steps.shift();
+          run.stepCount = Math.max(run.stepCount, step.n);
+          run.elapsedMs = step.elapsedMs;
+          run.usage = step.usage;
+          onStep?.(record, run);
+        }
+      );
       const finished = worker.done.then((result2) => {
-        unfollow();
         Object.assign(run, {
           status: result2.status,
           summary: result2.summary,
@@ -1194,8 +1603,8 @@ var BrowserRuntime = class {
     if (!entry.task) fail("no_task", "no task has run on this browser");
     const worker = entry.worker;
     if (worker) {
-      const { promise: elapsed, resolve: resolve2 } = Promise.withResolvers();
-      const timer = setTimeout(resolve2, Math.max(0, ms));
+      const { promise: elapsed, resolve: resolve3 } = Promise.withResolvers();
+      const timer = setTimeout(resolve3, Math.max(0, ms));
       await Promise.race([worker.finished, elapsed]);
       clearTimeout(timer);
     }
@@ -1261,7 +1670,12 @@ var BrowserRuntime = class {
       title: state.title,
       revision: entry.revision,
       viewport: state.viewport,
-      task: entry.task ? cloneTask(entry.task) : null
+      task: entry.task ? cloneTask(entry.task) : null,
+      tabs: state.tabs,
+      activeTabId: state.activeTabId,
+      loading: state.loading,
+      canGoBack: state.canGoBack,
+      canGoForward: state.canGoForward
     };
   }
   /** State when the page cannot be read (it may be mid-navigation after a failed action). */
@@ -1274,7 +1688,12 @@ var BrowserRuntime = class {
       title: "",
       revision: entry.revision,
       viewport: entry.viewport,
-      task: entry.task ? cloneTask(entry.task) : null
+      task: entry.task ? cloneTask(entry.task) : null,
+      tabs: [],
+      activeTabId: "",
+      loading: false,
+      canGoBack: false,
+      canGoForward: false
     };
   }
 };
@@ -1314,13 +1733,34 @@ function normalizeAction(action, viewport) {
       return { kind: "navigate", url: parsed.toString() };
     }
     case "click": {
+      const button = action.button ?? "left";
+      if (!MOUSE_BUTTONS.includes(button)) fail("bad_action", `click.button must be one of: ${MOUSE_BUTTONS.join(", ")}`);
+      const clickCount = action.clickCount ?? 1;
+      if (clickCount !== 1 && clickCount !== 2 && clickCount !== 3) fail("bad_action", "click.clickCount must be 1, 2 or 3");
+      const options = { ...button === "left" ? {} : { button }, ...clickCount === 1 ? {} : { clickCount } };
       if (typeof action.selector === "string") {
-        return { kind: "click", selector: requireSelector(action.selector) };
+        return { kind: "click", selector: requireSelector(action.selector), ...options };
       }
-      const x = requireCoordinate(action.x, "x", viewport.width);
-      const y = requireCoordinate(action.y, "y", viewport.height);
-      return { kind: "click", x, y };
+      const x = requireCoordinate(action.x, "click", "x", viewport.width);
+      const y = requireCoordinate(action.y, "click", "y", viewport.height);
+      return { kind: "click", x, y, ...options };
     }
+    case "hover": {
+      const x = requireCoordinate(action.x, "hover", "x", viewport.width);
+      const y = requireCoordinate(action.y, "hover", "y", viewport.height);
+      return { kind: "hover", x, y };
+    }
+    case "insert": {
+      if (typeof action.text !== "string" || action.text.length === 0 || action.text.length > MAX_TEXT_INPUT) {
+        fail("bad_action", `insert.text must be a string of 1-${MAX_TEXT_INPUT} characters`);
+      }
+      return { kind: "insert", text: action.text };
+    }
+    case "back":
+    case "forward":
+    case "reload":
+    case "stop":
+      return { kind: action.kind };
     case "type": {
       if (typeof action.text !== "string" || action.text.length > MAX_TEXT_INPUT) {
         fail("bad_action", `type.text must be a string of at most ${MAX_TEXT_INPUT} characters`);
@@ -1356,13 +1796,13 @@ function requireSelector(selector2) {
   }
   return selector2.trim();
 }
-function requireCoordinate(value, name, bound) {
+function requireCoordinate(value, kind, name, bound) {
   if (typeof value !== "number" || !Number.isFinite(value)) {
-    fail("bad_action", `click needs a selector or finite ${name} coordinate`);
+    fail("bad_action", `${kind} needs ${kind === "click" ? "a selector or " : ""}a finite ${name} coordinate`);
   }
   const rounded = Math.floor(value);
   if (rounded < 0 || rounded >= bound) {
-    fail("bad_action", `click.${name}=${rounded} is outside the ${bound}px viewport`);
+    fail("bad_action", `${kind}.${name}=${rounded} is outside the ${bound}px viewport`);
   }
   return rounded;
 }
@@ -1383,13 +1823,20 @@ var capability = z.string().min(16).max(128);
 var profile = z.string().regex(/^[a-z0-9][a-z0-9_-]{0,47}$/);
 var coordinate = z.number().finite().min(0).max(4096);
 var selector = z.string().trim().min(1).max(512);
+var point = { x: coordinate, y: coordinate };
 var actionSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("navigate"), url: z.url().max(2048).refine((value) => ["http:", "https:"].includes(new URL(value).protocol), "Only HTTP and HTTPS navigation is supported") }).strict(),
-  z.object({ kind: z.literal("click"), selector: selector.optional(), x: coordinate.optional(), y: coordinate.optional() }).strict().refine((value) => value.selector !== void 0 ? value.x === void 0 && value.y === void 0 : value.x !== void 0 && value.y !== void 0, "Choose a selector OR both coordinates"),
+  z.object({ kind: z.literal("click"), selector: selector.optional(), x: coordinate.optional(), y: coordinate.optional(), button: z.enum(["left", "right", "middle"]).optional(), clickCount: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional() }).strict().refine((value) => value.selector !== void 0 ? value.x === void 0 && value.y === void 0 : value.x !== void 0 && value.y !== void 0, "Choose a selector OR both coordinates"),
   z.object({ kind: z.literal("type"), selector, text: z.string().max(4096) }).strict(),
   z.object({ kind: z.literal("select"), selector, value: z.string().max(4096) }).strict(),
   z.object({ kind: z.literal("press"), key: z.string().min(1).max(64) }).strict(),
-  z.object({ kind: z.literal("scroll"), deltaX: z.number().finite().min(-5e3).max(5e3), deltaY: z.number().finite().min(-5e3).max(5e3) }).strict()
+  z.object({ kind: z.literal("scroll"), deltaX: z.number().finite().min(-5e3).max(5e3), deltaY: z.number().finite().min(-5e3).max(5e3) }).strict(),
+  z.object({ kind: z.literal("insert"), text: z.string().min(1).max(4096) }).strict(),
+  z.object({ kind: z.literal("hover"), ...point }).strict(),
+  z.object({ kind: z.literal("back") }).strict(),
+  z.object({ kind: z.literal("forward") }).strict(),
+  z.object({ kind: z.literal("reload") }).strict(),
+  z.object({ kind: z.literal("stop") }).strict()
 ]);
 var MIME = { ".js": "text/javascript", ".mjs": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".png": "image/png", ".woff": "font/woff", ".woff2": "font/woff2", ".json": "application/json" };
 var APP_ONLY = { ui: { visibility: ["app"] } };
@@ -1440,7 +1887,7 @@ async function createBrowserServer(options = {}) {
     return navigated.state;
   }));
   server2.registerTool("browser_state", {
-    description: "This browser's URL, title, profile and its running or most recent task. Never lists other browsers.",
+    description: "This browser's active-tab URL and title, its tabs (id, title, url, active, loading), back/forward availability, profile and its running or most recent task. Never lists other browsers.",
     inputSchema: { browserId: capability },
     annotations: READ_ONLY
   }, ({ browserId }) => result(() => runtime.state(browserId)));
@@ -1462,7 +1909,7 @@ async function createBrowserServer(options = {}) {
     }
   });
   server2.registerTool("browser_act", {
-    description: `Do one thing in the browser now: navigate (http/https), click (selector or x,y), type (replaces the field's value), select (a <select> option by value or text), press a key, or scroll. Status "failed" means nothing happened; "unknown" means it was sent and then errored, so it may have taken effect \u2014 look at the page before retrying a submission.`,
+    description: `Do one thing in the active tab now: navigate (http/https), back, forward, reload, stop, click (selector or x,y; optional button left/right/middle and clickCount 1-3), hover (x,y), type (replaces the field's value), insert (types text into whatever is focused), select (a <select> option by value or text), press a key, or scroll. Status "failed" means nothing happened; "unknown" means it was sent and then errored, so it may have taken effect \u2014 look at the page before retrying a submission.`,
     inputSchema: { browserId: capability, action: actionSchema },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true }
   }, async ({ browserId, action }) => {
@@ -1518,12 +1965,17 @@ async function createBrowserServer(options = {}) {
     inputSchema: { browserId: capability },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false }
   }, ({ browserId }) => result(() => runtime.cancelTask(browserId)));
+  server2.registerTool("browser_tab", {
+    description: `Manage this browser's tabs: op "new" opens a tab (navigating to url when given, http/https only) and makes it active; "activate" makes tabId (from state.tabs) the shown and driven tab; "close" closes tabId \u2014 closing the last tab leaves a blank one. Every other browser tool works on the active tab. Pages a site opens (target=_blank, popups) become the active tab on their own. Refused while a task runs. Returns the browser state.`,
+    inputSchema: { browserId: capability, op: z.enum(["new", "activate", "close"]), tabId: z.string().min(1).max(128).optional(), url: z.string().max(2048).optional() },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true }
+  }, ({ browserId, op, tabId, url }) => result(() => runtime.tab(browserId, { op, ...tabId === void 0 ? {} : { tabId }, ...url === void 0 ? {} : { url } })));
   registerAppTool(server2, "browser_frame", {
-    description: "Read the rendered browser frame for the View. Not a continuous stream; callers must bound polling and pause while annotating.",
-    inputSchema: { browserId: capability },
+    description: "Read the active tab's rendered frame for the View. jpeg (default): the newest live screencast frame, returned from memory \u2014 poll it for live view; its frameId is not annotatable. png: a fresh full-quality capture retained for browser_annotate.",
+    inputSchema: { browserId: capability, format: z.enum(["jpeg", "png"]).optional() },
     annotations: READ_ONLY,
     _meta: APP_ONLY
-  }, ({ browserId }) => result(() => runtime.frame(browserId)));
+  }, ({ browserId, format }) => result(() => runtime.frame(browserId, format ?? "jpeg")));
   registerAppTool(server2, "browser_annotate", {
     description: "Crop a retained frame and describe the selected region. Does not send anything to an agent; the View explicitly updates its model context afterward.",
     inputSchema: {
@@ -1535,6 +1987,12 @@ async function createBrowserServer(options = {}) {
     annotations: READ_ONLY,
     _meta: APP_ONLY
   }, ({ browserId, frameId, region, note }) => result(() => runtime.annotate(browserId, frameId, region, note)));
+  registerAppTool(server2, "browser_viewport", {
+    description: "Fit the page to the View: set every tab's viewport to the page area's CSS size (bounded 320-2560 \xD7 240-2000) at the View's pixel ratio (1-2) so the live view is crisp. The View calls this on resize, debounced.",
+    inputSchema: { browserId: capability, width: z.number().int().min(1).max(8192), height: z.number().int().min(1).max(8192), scale: z.number().min(1).max(4).optional() },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    _meta: APP_ONLY
+  }, ({ browserId, width, height, scale }) => result(() => runtime.resize(browserId, { width, height }, scale)));
   registerAppTool(server2, "browser_profiles", {
     description: "List named managed profile labels, never browser capabilities, cookies or secrets. Relay Chrome profiles are managed in Chrome, not here.",
     inputSchema: {},

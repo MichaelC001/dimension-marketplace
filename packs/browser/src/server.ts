@@ -14,13 +14,20 @@ const capability = z.string().min(16).max(128);
 const profile = z.string().regex(/^[a-z0-9][a-z0-9_-]{0,47}$/);
 const coordinate = z.number().finite().min(0).max(4096);
 const selector = z.string().trim().min(1).max(512);
+const point = { x: coordinate, y: coordinate };
 const actionSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("navigate"), url: z.url().max(2048).refine(value => ["http:", "https:"].includes(new URL(value).protocol), "Only HTTP and HTTPS navigation is supported") }).strict(),
-  z.object({ kind: z.literal("click"), selector: selector.optional(), x: coordinate.optional(), y: coordinate.optional() }).strict().refine(value => value.selector !== undefined ? value.x === undefined && value.y === undefined : value.x !== undefined && value.y !== undefined, "Choose a selector OR both coordinates"),
+  z.object({ kind: z.literal("click"), selector: selector.optional(), x: coordinate.optional(), y: coordinate.optional(), button: z.enum(["left", "right", "middle"]).optional(), clickCount: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional() }).strict().refine(value => value.selector !== undefined ? value.x === undefined && value.y === undefined : value.x !== undefined && value.y !== undefined, "Choose a selector OR both coordinates"),
   z.object({ kind: z.literal("type"), selector, text: z.string().max(4096) }).strict(),
   z.object({ kind: z.literal("select"), selector, value: z.string().max(4096) }).strict(),
   z.object({ kind: z.literal("press"), key: z.string().min(1).max(64) }).strict(),
   z.object({ kind: z.literal("scroll"), deltaX: z.number().finite().min(-5000).max(5000), deltaY: z.number().finite().min(-5000).max(5000) }).strict(),
+  z.object({ kind: z.literal("insert"), text: z.string().min(1).max(4096) }).strict(),
+  z.object({ kind: z.literal("hover"), ...point }).strict(),
+  z.object({ kind: z.literal("back") }).strict(),
+  z.object({ kind: z.literal("forward") }).strict(),
+  z.object({ kind: z.literal("reload") }).strict(),
+  z.object({ kind: z.literal("stop") }).strict(),
 ]);
 const MIME: Record<string, string> = { ".js": "text/javascript", ".mjs": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".png": "image/png", ".woff": "font/woff", ".woff2": "font/woff2", ".json": "application/json" };
 const APP_ONLY = { ui: { visibility: ["app"] as const } };
@@ -81,7 +88,7 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     return navigated.state;
   }));
   server.registerTool("browser_state", {
-    description: "This browser's URL, title, profile and its running or most recent task. Never lists other browsers.",
+    description: "This browser's active-tab URL and title, its tabs (id, title, url, active, loading), back/forward availability, profile and its running or most recent task. Never lists other browsers.",
     inputSchema: { browserId: capability }, annotations: READ_ONLY,
   }, ({ browserId }) => result(() => runtime.state(browserId)));
   server.registerTool("browser_snapshot", {
@@ -98,7 +105,7 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     } catch (error) { return { isError: true, content: [{ type: "text" as const, text: error instanceof Error ? error.message : String(error) }] }; }
   });
   server.registerTool("browser_act", {
-    description: "Do one thing in the browser now: navigate (http/https), click (selector or x,y), type (replaces the field's value), select (a <select> option by value or text), press a key, or scroll. Status \"failed\" means nothing happened; \"unknown\" means it was sent and then errored, so it may have taken effect — look at the page before retrying a submission.",
+    description: "Do one thing in the active tab now: navigate (http/https), back, forward, reload, stop, click (selector or x,y; optional button left/right/middle and clickCount 1-3), hover (x,y), type (replaces the field's value), insert (types text into whatever is focused), select (a <select> option by value or text), press a key, or scroll. Status \"failed\" means nothing happened; \"unknown\" means it was sent and then errored, so it may have taken effect — look at the page before retrying a submission.",
     inputSchema: { browserId: capability, action: actionSchema },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   }, async ({ browserId, action }) => {
@@ -159,10 +166,15 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     inputSchema: { browserId: capability },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   }, ({ browserId }) => result(() => runtime.cancelTask(browserId)));
+  server.registerTool("browser_tab", {
+    description: "Manage this browser's tabs: op \"new\" opens a tab (navigating to url when given, http/https only) and makes it active; \"activate\" makes tabId (from state.tabs) the shown and driven tab; \"close\" closes tabId — closing the last tab leaves a blank one. Every other browser tool works on the active tab. Pages a site opens (target=_blank, popups) become the active tab on their own. Refused while a task runs. Returns the browser state.",
+    inputSchema: { browserId: capability, op: z.enum(["new", "activate", "close"]), tabId: z.string().min(1).max(128).optional(), url: z.string().max(2048).optional() },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  }, ({ browserId, op, tabId, url }) => result(() => runtime.tab(browserId, { op, ...(tabId === undefined ? {} : { tabId }), ...(url === undefined ? {} : { url }) })));
   registerAppTool(server, "browser_frame", {
-    description: "Read the rendered browser frame for the View. Not a continuous stream; callers must bound polling and pause while annotating.",
-    inputSchema: { browserId: capability }, annotations: READ_ONLY, _meta: APP_ONLY,
-  }, ({ browserId }) => result(() => runtime.frame(browserId)));
+    description: "Read the active tab's rendered frame for the View. jpeg (default): the newest live screencast frame, returned from memory — poll it for live view; its frameId is not annotatable. png: a fresh full-quality capture retained for browser_annotate.",
+    inputSchema: { browserId: capability, format: z.enum(["jpeg", "png"]).optional() }, annotations: READ_ONLY, _meta: APP_ONLY,
+  }, ({ browserId, format }) => result(() => runtime.frame(browserId, format ?? "jpeg")));
   registerAppTool(server, "browser_annotate", {
     description: "Crop a retained frame and describe the selected region. Does not send anything to an agent; the View explicitly updates its model context afterward.",
     inputSchema: {
@@ -171,6 +183,11 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
       note: z.string().max(8192),
     }, annotations: READ_ONLY, _meta: APP_ONLY,
   }, ({ browserId, frameId, region, note }) => result(() => runtime.annotate(browserId, frameId, region, note)));
+  registerAppTool(server, "browser_viewport", {
+    description: "Fit the page to the View: set every tab's viewport to the page area's CSS size (bounded 320-2560 × 240-2000) at the View's pixel ratio (1-2) so the live view is crisp. The View calls this on resize, debounced.",
+    inputSchema: { browserId: capability, width: z.number().int().min(1).max(8192), height: z.number().int().min(1).max(8192), scale: z.number().min(1).max(4).optional() },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false }, _meta: APP_ONLY,
+  }, ({ browserId, width, height, scale }) => result(() => runtime.resize(browserId, { width, height }, scale)));
   registerAppTool(server, "browser_profiles", {
     description: "List named managed profile labels, never browser capabilities, cookies or secrets. Relay Chrome profiles are managed in Chrome, not here.",
     inputSchema: {}, annotations: READ_ONLY, _meta: APP_ONLY,

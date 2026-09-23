@@ -21,11 +21,28 @@ tool needs it.
   and cookies survive restarts; profiles never share cookies. One caller holds a
   profile at a time — close it before reopening.
 - `engine`: `chromium` (default, a Chrome this pack manages) or `chrome-relay`
-  (the user's own running Chrome, profile must be `relay`). `abp` and `browser4`
+  (the user's own running Chrome, profile must be `relay`; `browser_task` is
+  refused there — use a chromium profile for task agents). `abp` and `browser4`
   are refused with the reason.
 - The user logs in by hand, once, in the View. Never type a password the user
   did not give you for this purpose; never create accounts that require
   defeating CAPTCHAs or phone verification — hand that step to the user.
+
+## Tabs
+
+The browser has real tabs. `browser_state` lists them (`tabs[]` with `id`,
+`title`, `url`, `active`, `loading`) plus `activeTabId`, `canGoBack` and
+`canGoForward`. Every read and action works on the **active** tab.
+
+- `browser_tab({ browserId, op: "new", url? })` opens a tab and makes it active.
+- `browser_tab({ browserId, op: "activate", tabId })` switches to a tab.
+- `browser_tab({ browserId, op: "close", tabId })` closes one; closing the last
+  tab leaves a blank tab, never a closed browser.
+- A link or script that opens a new tab/window (target=_blank, popups) becomes
+  the active tab on its own — after such a click, check `browser_state` and
+  keep working there. Tabs a task agent opens become active the same way.
+- The user can switch tabs in the View; if the page is not what you expect,
+  read `browser_state` first.
 
 ## Two ways to drive
 
@@ -34,9 +51,11 @@ tool needs it.
 1. `browser_snapshot` → page text plus the interactive controls, each with a
    selector (`#email`, `input[name="city"]`, `input[name="role"][value="fe"]`)
    and center coordinates.
-2. `browser_act` with one action: `navigate`, `click` (selector or x/y),
-   `type` (replaces the field's value), `select` (a `<select>` option by value
-   or visible text), `press` (`Enter`, `Tab`…), `scroll`.
+2. `browser_act` with one action: `navigate`, `back`, `forward`, `reload`,
+   `stop`, `click` (selector or x/y; optional `button` and `clickCount` for
+   right/double clicks), `hover` (x/y), `type` (replaces the field's value),
+   `insert` (types text into whatever is focused), `select` (a `<select>`
+   option by value or visible text), `press` (`Enter`, `Tab`…), `scroll`.
 3. Snapshot again after anything that changes the page.
 
 Result status: `completed`; `failed` = nothing happened (fix the selector);
@@ -51,9 +70,15 @@ runs that agent in this same browser while the user watches; it returns
 status (`done`, `blocked`, `failed`, `cancelled`), a summary, steps, elapsed
 time, model calls and tokens. Put every fact the agent needs in `task` (names,
 emails, answers) — it cannot ask you. `jev` is the fastest (one TypeSafe
-decision per step); `browser-use` is a general LLM agent. `browser_act` is
-refused while a task runs; `browser_task_cancel` stops it. After a task,
+decision per step); `browser-use` is a general LLM agent. `browser_act` and
+`browser_tab` are refused while a task runs; `browser_task_cancel` stops it. After a task,
 `browser_snapshot` to verify the outcome yourself.
+
+Give a task **one clear goal with all its data**, start to finish. If a task
+ends unfinished (`blocked`, `failed`, out of steps, or `done` but the snapshot
+shows it is not), do NOT start a second task that says "continue the half-done
+form" — jev loops on that. Inspect with `browser_snapshot` and finish the
+remaining steps yourself with `browser_act`.
 
 ## Annotations
 

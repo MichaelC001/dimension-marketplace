@@ -84,5 +84,14 @@ const SELECT_ALL_SCRIPT = (el: Element): boolean => {
 	field.select();
 	return true;
 };
+/** The page's declared icon href (resolved by the browser), or null. Read only; nothing is fetched here. */
+const FAVICON_HREF_SCRIPT = (): string | null => {
+	const links = document.querySelectorAll("link[rel~='icon' i], link[rel='apple-touch-icon' i]");
+	for (let i = 0; i < links.length; i += 1) {
+		const href = (links[i] as HTMLLinkElement).href;
+		if (href) return href;
+	}
+	return null;
+};
 
-export { PAGE_TEXT_SCRIPT, ELEMENTS_IN_REGION_SCRIPT, SELECT_ALL_SCRIPT };
+export { PAGE_TEXT_SCRIPT, ELEMENTS_IN_REGION_SCRIPT, SELECT_ALL_SCRIPT, FAVICON_HREF_SCRIPT };

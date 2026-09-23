@@ -1,7 +1,7 @@
-/* Layout for the browser View. Colour, type and motion come from Fraym's
-   --fr-* tokens (loaded from @fraym/ui/theme.css and, where the host sends
-   them, overridden live by the host's own style variables through
-   useHostStyles). No literal colour values live here. */
+/* The browser's chrome. Colour, type and motion come from Fraym's --fr-*
+   tokens (loaded from @fraym/ui/theme.css and, where the host sends them,
+   overridden live by the host's own variables through useHostStyles). The
+   few derived colours below are mixes of those tokens, never literals. */
 
 :root {
 	color-scheme: light dark;
@@ -12,21 +12,85 @@ body,
 #root {
 	height: 100%;
 	margin: 0;
+	overflow: hidden;
 }
 
 body {
 	background: var(--fr-bg);
 	color: var(--fr-text);
-	font-family: var(--fr-font-primary, var(--fr-sans));
-	font-size: var(--fr-fs-sm);
+	font-family: var(--fr-font-primary, var(--fr-sans, system-ui, sans-serif));
+	font-size: 13px;
+	line-height: 1.4;
+	-webkit-font-smoothing: antialiased;
+	text-rendering: optimizeLegibility;
 }
 
-.bx-root,
-.bx-app {
+/* The host's theme lands on this element (`data-theme`), so the tokens the
+   chrome reads are resolved here, not on <body>. */
+.bx-root {
+	background: var(--fr-bg);
+	color: var(--fr-text);
+}
+button {
+	font: inherit;
+	color: inherit;
+}
+
+kbd {
+	font-family: inherit;
+	font-size: 11px;
+	line-height: 1;
+	padding: 3px 5px;
+	border-radius: 4px;
+	background: var(--fr-surface-3);
+	border: 1px solid var(--fr-border);
+	color: var(--fr-text-2);
+}
+
+.bx-root {
 	height: 100%;
 	display: flex;
 	flex-direction: column;
 	min-height: 0;
+
+	/* Derived surfaces. The strip sits BEHIND the toolbar: it is the frame,
+	   the toolbar and the active tab are the sheet lying on it. */
+	--bx-frame: color-mix(in oklab, var(--fr-bg) 82%, var(--fr-surface));
+	--bx-sheet: var(--fr-surface);
+	--bx-field: var(--fr-surface-2);
+	--bx-field-hover: color-mix(in oklab, var(--fr-surface-2) 88%, var(--fr-text));
+	--bx-field-focus: var(--fr-surface-3);
+	--bx-hover: color-mix(in oklab, var(--fr-text) 7%, transparent);
+	--bx-press: color-mix(in oklab, var(--fr-text) 12%, transparent);
+	--bx-hairline: color-mix(in oklab, var(--fr-border) 70%, transparent);
+	--bx-ring: color-mix(in oklab, var(--fr-accent) 55%, transparent);
+	--bx-glass: color-mix(in oklab, var(--fr-surface) 86%, transparent);
+	--bx-shadow: 0 1px 2px color-mix(in oklab, var(--fr-bg) 60%, transparent), 0 12px 32px -12px color-mix(in oklab, var(--fr-bg) 90%, transparent);
+	--bx-ease: var(--fr-ease-standard, cubic-bezier(0.2, 0, 0, 1));
+	--bx-ease-enter: var(--fr-ease-enter, cubic-bezier(0.16, 1, 0.3, 1));
+	--bx-fast: var(--fr-motion-fast, 130ms);
+	--bx-base: var(--fr-motion-base, 220ms);
+	--bx-slow: var(--fr-motion-slow, 360ms);
+	--bx-num: var(--fr-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+
+/* Light: the frame needs a real step down from the white sheet. */
+.bx-root[data-theme="light"],
+[data-theme="light"] .bx-root {
+	--bx-frame: var(--fr-surface-2);
+	--bx-shadow: 0 1px 2px color-mix(in oklab, var(--fr-text) 8%, transparent), 0 12px 32px -12px color-mix(in oklab, var(--fr-text) 22%, transparent);
+	--bx-glass: color-mix(in oklab, var(--fr-surface) 93%, transparent);
+	--bx-hairline: var(--fr-border);
+}
+
+.bx-num {
+	font-variant-numeric: tabular-nums;
+}
+
+/* Focus: one ring, everywhere, only for the keyboard. */
+:where(.bx-root) :focus-visible {
+	outline: 2px solid var(--fr-accent);
+	outline-offset: 1px;
 }
 
 .bx-boot {
@@ -41,143 +105,742 @@ body {
 	color: var(--fr-text-2);
 }
 
-/* ── header ─────────────────────────────────────────────────────────── */
-
-.bx-head {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: 12px;
-	padding: 10px 14px;
-	border-bottom: 1px solid var(--fr-border);
-	background: var(--fr-surface);
-}
-
-.bx-head-line {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	min-width: 0;
-}
-
-.bx-head h1 {
+.bx-boot h1 {
 	margin: 0;
-	font-size: var(--fr-fs-md);
+	font-size: 15px;
 	font-weight: 600;
+	color: var(--fr-text);
 }
 
-.bx-head-actions {
+/* ── shell ──────────────────────────────────────────────────────────── */
+
+.bx-browser {
+	height: 100%;
 	display: flex;
-	gap: 8px;
-	flex: none;
+	flex-direction: column;
+	min-height: 0;
+	background: var(--bx-frame);
+	container-type: inline-size;
 }
 
-.bx-title {
-	color: var(--fr-text-2);
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	max-width: 32ch;
-}
-
-.bx-url {
-	color: var(--fr-text-3);
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	max-width: 48ch;
-}
-
-/* ── body split ─────────────────────────────────────────────────────── */
-
-.bx-body {
-	display: flex;
+.bx-content {
+	position: relative;
 	flex: 1;
 	min-height: 0;
+	display: flex;
+	background: var(--fr-bg);
 }
 
-.bx-left {
+/* ── tab strip ──────────────────────────────────────────────────────── */
+
+.bx-strip {
+	display: flex;
+	align-items: flex-end;
+	height: 38px;
+	padding: 0 8px 0 8px;
+	background: var(--bx-frame);
+	flex: none;
+	user-select: none;
+	-webkit-app-region: drag;
+}
+
+.bx-tabs {
+	display: flex;
+	align-items: flex-end;
+	min-width: 0;
+	flex: 0 1 auto;
+	overflow-x: auto;
+	overflow-y: hidden;
+	scrollbar-width: none;
+	padding: 0 2px;
+	-webkit-app-region: no-drag;
+}
+
+.bx-tabs::-webkit-scrollbar {
+	display: none;
+}
+
+/* More tabs than fit: the strip scrolls (wheel, keyboard, drag) and the
+   clipped edge fades so the overflow is visible as such. */
+.bx-tabs[data-overflow="end"],
+.bx-tabs[data-overflow="both"] {
+	mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+	-webkit-mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+}
+
+.bx-tabs[data-overflow="start"] {
+	mask-image: linear-gradient(to right, transparent, #000 32px);
+	-webkit-mask-image: linear-gradient(to right, transparent, #000 32px);
+}
+
+.bx-tabs[data-overflow="both"] {
+	mask-image: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent);
+	-webkit-mask-image: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent);
+}
+
+.bx-tab {
+	position: relative;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	height: 32px;
+	flex: 1 1 224px;
+	min-width: 48px;
+	max-width: 224px;
+	padding: 0 8px 0 12px;
+	border-radius: 10px 10px 0 0;
+	color: var(--fr-text-2);
+	cursor: default;
+	transition:
+		background-color var(--bx-fast) var(--bx-ease),
+		color var(--bx-fast) var(--bx-ease);
+}
+
+/* Hairlines between resting tabs, gone next to hover and selection. */
+.bx-tab + .bx-tab:not([aria-selected="true"])::before {
+	content: "";
+	position: absolute;
+	left: -1px;
+	top: 8px;
+	bottom: 8px;
+	width: 1px;
+	background: var(--bx-hairline);
+	transition: opacity var(--bx-fast) var(--bx-ease);
+}
+
+.bx-tab:hover + .bx-tab:not([aria-selected="true"])::before,
+.bx-tab[aria-selected="true"] + .bx-tab:not([aria-selected="true"])::before,
+.bx-tab:not([aria-selected="true"]):hover::before {
+	opacity: 0;
+}
+
+.bx-tab:hover {
+	background: var(--bx-hover);
+	color: var(--fr-text);
+}
+
+.bx-tab[aria-selected="true"] {
+	background: var(--bx-sheet);
+	color: var(--fr-text);
+	z-index: 1;
+}
+
+/* The active tab's feet: it belongs to the sheet below, not the frame. */
+.bx-tab[aria-selected="true"]::before,
+.bx-tab[aria-selected="true"]::after {
+	content: "";
+	position: absolute;
+	bottom: 0;
+	width: 10px;
+	height: 10px;
+	background: var(--bx-sheet);
+}
+
+.bx-tab[aria-selected="true"]::before {
+	left: -10px;
+	mask: radial-gradient(circle at 0 0, transparent 10px, #000 10.5px);
+}
+
+.bx-tab[aria-selected="true"]::after {
+	right: -10px;
+	mask: radial-gradient(circle at 100% 0, transparent 10px, #000 10.5px);
+}
+
+.bx-tab[aria-disabled="true"] {
+	opacity: 0.55;
+}
+
+.bx-tab-icon {
+	flex: none;
+	width: 16px;
+	height: 16px;
+	display: grid;
+	place-items: center;
+	color: var(--fr-text-3);
+}
+
+.bx-tab[aria-selected="true"] .bx-tab-icon {
+	color: var(--fr-text-2);
+}
+
+.bx-tab-icon img {
+	width: 16px;
+	height: 16px;
+	border-radius: 3px;
+	object-fit: contain;
+}
+
+.bx-tab-title {
+	flex: 1;
+	min-width: 0;
+	font-size: 12px;
+	font-weight: 400;
+	white-space: nowrap;
+	overflow: hidden;
+	mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent);
+	-webkit-mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent);
+}
+
+.bx-tab[aria-selected="true"] .bx-tab-title {
+	font-weight: 500;
+}
+
+.bx-tab-close {
+	flex: none;
+	width: 24px;
+	height: 24px;
+	margin-right: -4px;
+	display: grid;
+	place-items: center;
+	border: 0;
+	border-radius: 8px;
+	background: transparent;
+	color: var(--fr-text-3);
+	opacity: 0;
+	cursor: pointer;
+	transition:
+		opacity var(--bx-fast) var(--bx-ease),
+		background-color var(--bx-fast) var(--bx-ease),
+		color var(--bx-fast) var(--bx-ease);
+}
+
+.bx-tab:hover .bx-tab-close,
+.bx-tab[aria-selected="true"] .bx-tab-close,
+.bx-tab-close:focus-visible {
+	opacity: 1;
+}
+
+.bx-tab-close:hover {
+	background: var(--bx-press);
+	color: var(--fr-text);
+}
+
+.bx-tab-close:disabled {
+	opacity: 0;
+	pointer-events: none;
+}
+
+/* Narrow seats start tabs smaller. */
+@container (max-width: 640px) {
+	.bx-tab {
+		flex-basis: 160px;
+		max-width: 160px;
+	}
+}
+
+.bx-tab-spinner {
+	display: inline-block;
+	width: 14px;
+	height: 14px;
+	border-radius: 50%;
+	border: 2px solid color-mix(in oklab, var(--fr-accent) 25%, transparent);
+	border-top-color: var(--fr-accent);
+	animation: bx-spin 0.8s linear infinite;
+}
+
+.bx-newtab {
+	flex: none;
+	width: 28px;
+	height: 28px;
+	margin: 0 0 2px 4px;
+	display: grid;
+	place-items: center;
+	border: 0;
+	border-radius: 8px;
+	background: transparent;
+	color: var(--fr-text-2);
+	cursor: pointer;
+	-webkit-app-region: no-drag;
+	transition: background-color var(--bx-fast) var(--bx-ease), color var(--bx-fast) var(--bx-ease);
+}
+
+.bx-newtab:hover:not(:disabled) {
+	background: var(--bx-hover);
+	color: var(--fr-text);
+}
+
+.bx-newtab:disabled {
+	opacity: 0.4;
+}
+
+.bx-strip-drag {
+	flex: 1;
+	align-self: stretch;
+}
+
+/* ── toolbar ────────────────────────────────────────────────────────── */
+
+.bx-toolbar {
+	position: relative;
+	z-index: 20;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	height: 44px;
+	padding: 0 8px;
+	background: var(--bx-sheet);
+	border-bottom: 1px solid var(--bx-hairline);
+	flex: none;
+}
+
+.bx-nav,
+.bx-actions {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	flex: none;
+}
+
+.bx-tb {
+	width: 30px;
+	height: 30px;
+	display: grid;
+	place-items: center;
+	border: 0;
+	border-radius: 8px;
+	background: transparent;
+	color: var(--fr-text-2);
+	cursor: pointer;
+	transition:
+		background-color var(--bx-fast) var(--bx-ease),
+		color var(--bx-fast) var(--bx-ease),
+		transform var(--bx-fast) var(--bx-ease);
+}
+
+.bx-tb:hover:not(:disabled) {
+	background: var(--bx-hover);
+	color: var(--fr-text);
+}
+
+.bx-tb:active:not(:disabled) {
+	background: var(--bx-press);
+	transform: scale(0.94);
+}
+
+.bx-tb:disabled {
+	color: var(--fr-text-3);
+	opacity: 0.5;
+	cursor: default;
+}
+
+.bx-tb[data-on] {
+	background: color-mix(in oklab, var(--fr-accent) 18%, transparent);
+	color: var(--fr-accent);
+}
+
+.bx-tb[data-on]:hover:not(:disabled) {
+	background: color-mix(in oklab, var(--fr-accent) 26%, transparent);
+	color: var(--fr-accent);
+}
+
+/* omnibox */
+
+.bx-omni {
+	position: relative;
 	flex: 1;
 	min-width: 0;
 	display: flex;
-	flex-direction: column;
-	gap: 8px;
-	padding: 10px;
-	overflow: auto;
+	align-items: center;
+	height: 32px;
+	margin: 0 4px;
+	padding: 0 12px;
+	border-radius: 16px;
+	background: var(--bx-field);
+	color: var(--fr-text);
+	transition:
+		background-color var(--bx-fast) var(--bx-ease),
+		box-shadow var(--bx-base) var(--bx-ease);
 }
 
-.bx-right {
-	width: 360px;
+.bx-omni:hover {
+	background: var(--bx-field-hover);
+}
+
+.bx-omni[data-focused] {
+	background: var(--bx-field-focus);
+	box-shadow:
+		0 0 0 1px var(--fr-accent),
+		0 0 0 3px var(--bx-ring);
+}
+
+.bx-omni[data-error] {
+	box-shadow:
+		0 0 0 1px var(--fr-del),
+		0 0 0 4px color-mix(in oklab, var(--fr-del) 35%, transparent);
+}
+
+.bx-omni-lead {
 	flex: none;
+	display: grid;
+	place-items: center;
+	width: 16px;
+	margin-right: 8px;
+	color: var(--fr-text-3);
+}
+
+.bx-omni[data-focused] .bx-omni-lead {
+	color: var(--fr-text-2);
+}
+
+.bx-omni-input {
+	flex: 1;
+	min-width: 0;
+	height: 100%;
+	border: 0;
+	padding: 0;
+	background: transparent;
+	color: inherit;
+	font: inherit;
+	font-size: 13px;
+	outline: none;
+}
+
+.bx-omni-input::placeholder {
+	color: var(--fr-text-3);
+}
+
+.bx-omni-input::selection {
+	background: color-mix(in oklab, var(--fr-accent) 40%, transparent);
+}
+
+.bx-omni-input[data-masked] {
+	color: transparent;
+	caret-color: transparent;
+}
+
+.bx-omni-display {
+	position: absolute;
+	left: 34px;
+	right: 10px;
+	top: 0;
+	bottom: 0;
+	display: flex;
+	align-items: center;
+	pointer-events: none;
+	white-space: nowrap;
+	overflow: hidden;
+	font-size: 13px;
+	mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+	-webkit-mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+}
+
+.bx-omni-host {
+	color: var(--fr-text);
+}
+
+.bx-omni-rest {
+	color: var(--fr-text-2);
+}
+
+.bx-omni-flag {
+	flex: none;
+	margin-right: 8px;
+	font-size: 11px;
+	font-weight: 500;
+	color: var(--fr-text-2);
+	white-space: nowrap;
+}
+
+.bx-omni-progress {
+	position: absolute;
+	left: 10px;
+	right: 10px;
+	bottom: 0;
+	height: 2px;
+	border-radius: 2px;
+	overflow: hidden;
+	background: color-mix(in oklab, var(--fr-accent) 18%, transparent);
+}
+
+.bx-omni-progress::after {
+	content: "";
+	position: absolute;
+	inset: 0;
+	width: 40%;
+	border-radius: 2px;
+	background: var(--fr-accent);
+	animation: bx-indeterminate 1.1s var(--bx-ease) infinite;
+}
+
+.bx-omni-error {
+	position: absolute;
+	left: 0;
+	right: 0;
+	top: calc(100% + 6px);
+	margin: 0;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 8px 12px;
+	border-radius: 12px;
+	background: var(--bx-sheet);
+	border: 1px solid var(--bx-hairline);
+	box-shadow: var(--bx-shadow);
+	color: var(--fr-text);
+	font-size: 12px;
+	animation: bx-pop var(--bx-fast) var(--bx-ease-enter);
+	z-index: 5;
+}
+
+.bx-omni-error svg {
+	color: var(--fr-del);
+	flex: none;
+}
+
+/* hero omnibox (start page, blank tab) */
+
+.bx-omni[data-size="hero"] {
+	height: 52px;
+	margin: 0;
+	padding: 0 16px;
+	border-radius: 26px;
+	background: var(--bx-sheet);
+	border: 1px solid var(--bx-hairline);
+	box-shadow: var(--bx-shadow);
+}
+
+.bx-omni[data-size="hero"] .bx-omni-lead {
+	width: 20px;
+	margin-right: 12px;
+}
+
+.bx-omni[data-size="hero"] .bx-omni-input {
+	font-size: 15px;
+}
+
+.bx-omni[data-size="hero"]:hover {
+	background: var(--bx-sheet);
+	border-color: var(--fr-border);
+}
+
+.bx-omni[data-size="hero"][data-focused] {
+	border-color: transparent;
+	box-shadow:
+		0 0 0 1.5px var(--fr-accent),
+		0 0 0 6px var(--bx-ring),
+		var(--bx-shadow);
+}
+
+.bx-omni[data-size="hero"] .bx-omni-error {
+	top: calc(100% + 10px);
+}
+
+/* profile chip + menu */
+
+.bx-profile {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	height: 30px;
+	margin: 0 2px;
+	padding: 0 10px 0 4px;
+	border: 0;
+	border-radius: 999px;
+	background: var(--bx-hover);
+	color: var(--fr-text-2);
+	white-space: nowrap;
+	cursor: pointer;
+	transition: background-color var(--bx-fast) var(--bx-ease);
+}
+
+.bx-profile:hover,
+.bx-profile[aria-expanded="true"],
+.bx-tb[aria-expanded="true"] {
+	background: var(--bx-press);
+	color: var(--fr-text);
+}
+
+.bx-avatar {
+	flex: none;
+	width: 22px;
+	height: 22px;
+	display: grid;
+	place-items: center;
+	border-radius: 50%;
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0.02em;
+	color: var(--fr-accent-ink, #fff);
+	/* The accent token, re-hued per profile: same lightness and chroma, its own hue. */
+	background: linear-gradient(145deg, oklch(from var(--fr-accent) l c var(--hue, 280)), oklch(from var(--fr-accent) calc(l - 0.1) c calc(var(--hue, 280) + 30)));
+	box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--fr-accent-ink, #fff) 18%, transparent);
+}
+
+.bx-profile-text {
 	display: flex;
 	flex-direction: column;
-	gap: 12px;
-	padding: 10px;
-	border-left: 1px solid var(--fr-border);
-	background: var(--fr-surface);
-	overflow: auto;
+	line-height: 1.1;
 }
 
-/* A docked seat is often narrower than the page: the page gets the full width
-   and the task/annotation panel follows it, instead of squeezing the page. */
-@media (max-width: 900px) {
-	.bx-body {
-		flex-direction: column;
-		overflow: auto;
+.bx-profile-name {
+	font-size: 12px;
+	font-weight: 500;
+	color: var(--fr-text);
+}
+
+.bx-profile-engine {
+	font-size: 11px;
+	color: var(--fr-text-2);
+}
+
+@container (max-width: 720px) {
+	.bx-profile {
+		padding-right: 4px;
+		gap: 0;
 	}
-	.bx-left,
-	.bx-right {
-		overflow: visible;
-	}
-	.bx-right {
-		width: auto;
-		border-left: none;
-		border-top: 1px solid var(--fr-border);
+	.bx-profile-text {
+		display: none;
 	}
 }
 
-.bx-toolbar {
+.bx-offline {
 	display: flex;
 	align-items: center;
 	gap: 6px;
-	flex-wrap: wrap;
+	padding: 0 8px;
+	font-size: 11px;
+	font-weight: 600;
+	color: var(--fr-warn);
 }
 
-.bx-spacer {
-	flex: 1;
+.bx-dot {
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: currentColor;
+	animation: bx-pulse 1.6s ease-in-out infinite;
 }
 
-/* ── canvas ─────────────────────────────────────────────────────────── */
-
-.bx-canvas {
-	border: 1px solid var(--fr-border);
-	border-radius: var(--fr-r, 8px);
-	background: var(--fr-surface-2);
-	overflow: hidden;
+.bx-menu-wrap {
 	position: relative;
+	display: flex;
+	align-items: center;
+	gap: 2px;
 }
 
-.bx-canvas[data-frozen="true"] {
-	border-color: var(--fr-accent-line);
+.bx-menu {
+	position: absolute;
+	right: 0;
+	top: calc(100% + 6px);
+	min-width: 220px;
+	padding: 8px;
+	border-radius: 12px;
+	background: var(--bx-sheet);
+	border: 1px solid var(--bx-hairline);
+	box-shadow: var(--bx-shadow);
+	animation: bx-pop var(--bx-fast) var(--bx-ease-enter);
+	transform-origin: top right;
+	z-index: 10;
 }
 
-.bx-canvas-empty {
-	padding: 48px 12px;
-	text-align: center;
+.bx-menu-item {
+	width: 100%;
+	display: flex;
+	align-items: center;
+	white-space: nowrap;
+	gap: 8px;
+	padding: 8px 12px;
+	border: 0;
+	border-radius: 8px;
+	background: transparent;
+	color: var(--fr-text);
+	font-size: 12px;
+	text-align: left;
+	cursor: pointer;
+}
+
+.bx-menu-item svg {
 	color: var(--fr-text-3);
 }
 
-.bx-surface {
+.bx-menu-item:hover {
+	background: var(--bx-hover);
+}
+
+.bx-menu-item:focus-visible {
+	background: var(--bx-hover);
+	outline: none;
+	box-shadow: inset 0 0 0 2px var(--fr-accent);
+}
+
+.bx-menu-item[data-tone="danger"]:hover {
+	background: color-mix(in oklab, var(--fr-del) 14%, transparent);
+	color: var(--fr-del);
+}
+
+.bx-menu-item[data-tone="danger"]:hover svg {
+	color: var(--fr-del);
+}
+
+.bx-menu-sep {
+	height: 1px;
+	margin: 6px 4px;
+	background: var(--bx-hairline);
+}
+
+/* ── the page ───────────────────────────────────────────────────────── */
+
+.bx-stage {
+	flex: 1;
+	min-width: 0;
+	min-height: 0;
+	display: grid;
+	place-items: center;
+	container-type: size;
+	background: var(--fr-bg);
+	background-image: radial-gradient(color-mix(in oklab, var(--fr-text) 6%, transparent) 1px, transparent 1px);
+	background-size: 18px 18px;
+	background-position: center;
+}
+
+.bx-page {
 	position: relative;
-	display: block;
+	width: min(100cqw, calc(100cqh * var(--vw) / var(--vh)));
+	aspect-ratio: var(--vw) / var(--vh);
+	background: #fff;
+	overflow: hidden;
+	outline: none;
+	box-shadow: 0 0 0 1px var(--bx-hairline);
+	cursor: default;
 	touch-action: none;
 	user-select: none;
+	transition: box-shadow var(--bx-base) var(--bx-ease);
+}
+
+.bx-page:focus-visible,
+.bx-page:focus {
+	box-shadow:
+		0 0 0 1px var(--bx-hairline),
+		inset 0 0 0 2px var(--fr-accent);
+}
+
+.bx-stage[data-mode="annotate"] .bx-page {
+	cursor: crosshair;
+	box-shadow:
+		0 0 0 1px var(--fr-accent),
+		0 0 0 6px var(--bx-ring),
+		0 24px 64px -24px color-mix(in oklab, var(--fr-accent) 60%, transparent);
+}
+
+.bx-stage[data-mode="locked"] .bx-page {
+	cursor: progress;
 }
 
 .bx-frame {
 	display: block;
 	width: 100%;
-	height: auto;
+	height: 100%;
+	object-fit: fill;
+	image-rendering: auto;
+}
+
+.bx-page-skeleton {
+	position: absolute;
+	inset: 0;
+	background:
+		linear-gradient(100deg, transparent 30%, color-mix(in oklab, var(--fr-text) 7%, transparent) 50%, transparent 70%) 0 0 / 300% 100%,
+		var(--fr-surface-2);
+	animation: bx-shimmer 1.6s linear infinite;
 }
 
 .bx-overlay {
@@ -189,246 +852,994 @@ body {
 }
 
 .bx-region {
-	fill: var(--fr-accent-dim);
+	fill: color-mix(in oklab, var(--fr-accent) 16%, transparent);
 	stroke: var(--fr-accent);
 	stroke-width: 2;
+	stroke-dasharray: 6 4;
 	vector-effect: non-scaling-stroke;
 }
 
 .bx-mark {
 	fill: none;
-	stroke: var(--fr-accent-2, var(--fr-accent));
+	stroke: var(--fr-accent);
 	stroke-width: 3;
 	stroke-linecap: round;
 	stroke-linejoin: round;
 	vector-effect: non-scaling-stroke;
 }
 
-.bx-frozen-note {
-	margin: 0;
-	padding: 6px 10px;
-	font-size: var(--fr-fs-xs);
-	color: var(--fr-text-2);
-	background: var(--fr-surface-3);
+.bx-ripple {
+	position: absolute;
+	width: 28px;
+	height: 28px;
+	margin: -14px 0 0 -14px;
+	border-radius: 50%;
+	border: 2px solid var(--fr-accent);
+	pointer-events: none;
+	animation: bx-ripple 0.5s var(--bx-ease) forwards;
 }
 
-/* The keyboard caret: where Enter will click when no pointer is used. */
-.bx-caret line {
-	stroke: var(--fr-accent);
-	stroke-width: 2;
-	vector-effect: non-scaling-stroke;
+.bx-ripple[data-kind="right"] {
+	border-color: var(--fr-text-2);
 }
 
-.bx-caret-note {
-	margin: 0;
-	padding: 6px 10px;
-	font-size: var(--fr-fs-xs);
-	color: var(--fr-text-2);
+.bx-ripple[data-kind="middle"] {
+	border-color: var(--fr-blue);
 }
 
-/* The pointer-free route to a crop. */
-.bx-numeric {
+/* The agent is driving: a breathing accent edge on the page. */
+.bx-drive {
+	position: absolute;
+	inset: 0;
+	pointer-events: none;
+	box-shadow: inset 0 0 0 2px var(--fr-accent);
+	animation: bx-breathe 2.4s ease-in-out infinite;
+}
+
+/* ── floating layers ────────────────────────────────────────────────── */
+
+/* Floats live INSIDE the page box, so they compose with the page, not the
+   letterbox. The container is inert; each float is its own hit target. */
+.bx-floats {
+	position: absolute;
+	inset: 0;
+	pointer-events: none;
+	cursor: default;
+	user-select: text;
+}
+
+.bx-float {
+	position: absolute;
+	z-index: 4;
 	display: flex;
-	align-items: flex-end;
-	gap: 8px;
-	flex-wrap: wrap;
-	padding: 8px 10px;
-	border-top: 1px solid var(--fr-border-soft);
+	justify-content: center;
+	pointer-events: none;
 }
 
-/* ── forms and rows ─────────────────────────────────────────────────── */
+.bx-float > * {
+	pointer-events: auto;
+}
 
-.bx-controls,
-.bx-open {
+.bx-float-top {
+	top: 12px;
+	left: 12px;
+	right: 12px;
+}
+
+.bx-float-bottom {
+	bottom: 12px;
+	left: 12px;
+	right: 12px;
+}
+
+/* Toasts live over everything, including an open menu. */
+.bx-float-corner {
+	z-index: 30;
+	top: 12px;
+	right: 12px;
+	left: auto;
+	width: min(360px, calc(100% - 24px));
+	justify-content: flex-end;
+}
+
+/* Corner toasts stack in flow, so their heights never collide. */
+.bx-stack {
 	display: flex;
 	flex-direction: column;
-	gap: 8px;
-}
-
-.bx-open {
-	padding: 14px;
-}
-
-.bx-row {
-	display: flex;
 	align-items: flex-end;
 	gap: 8px;
-	flex-wrap: wrap;
+	width: 100%;
 }
 
-.bx-grow {
-	flex: 1 1 14rem;
-	min-width: 10rem;
+/* Toasts step below the annotation strip and the reconnect banner. */
+.bx-browser[data-annotating] .bx-float-corner {
+	top: 68px;
 }
 
-.bx-narrow {
-	flex: 0 0 7rem;
+.bx-content:has(> .bx-banner) .bx-float-top,
+.bx-content:has(> .bx-banner) .bx-float-corner {
+	top: 46px;
 }
 
-.bx-mask {
+/* A closed browser: the chrome goes quiet under the notice. */
+.bx-browser[data-connection="gone"] .bx-toolbar,
+.bx-browser[data-connection="gone"] .bx-strip {
+	opacity: 0.5;
+	pointer-events: none;
+}
+
+/* annotation strip */
+
+.bx-annotate {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	max-width: 100%;
+	padding: 6px;
+	border-radius: 16px;
+	background: var(--bx-glass);
+	backdrop-filter: blur(18px) saturate(1.4);
+	-webkit-backdrop-filter: blur(18px) saturate(1.4);
+	border: 1px solid var(--bx-hairline);
+	box-shadow: var(--bx-shadow);
+	animation: bx-drop var(--bx-slow) var(--bx-ease-enter);
+}
+
+.bx-seg {
+	display: flex;
+	padding: 2px;
+	border-radius: 9px;
+	background: var(--bx-hover);
+}
+
+.bx-seg-item {
 	display: flex;
 	align-items: center;
 	gap: 6px;
-	padding-bottom: 6px;
-	font-size: var(--fr-fs-xs);
+	height: 26px;
+	padding: 0 9px;
+	border: 0;
+	border-radius: 8px;
+	background: transparent;
 	color: var(--fr-text-2);
+	font-size: 12px;
+	font-weight: 500;
+	cursor: pointer;
+	transition:
+		background-color var(--bx-fast) var(--bx-ease),
+		color var(--bx-fast) var(--bx-ease);
 }
 
-/* ── task, annotation, history ──────────────────────────────────────── */
-
-.bx-task-head h2,
-.bx-annotate h2,
-.bx-history h2,
-.bx-open h2 {
-	margin: 0 0 6px;
-	font-size: var(--fr-fs-sm);
-	font-weight: 600;
+.bx-seg-item:hover {
+	color: var(--fr-text);
 }
 
-.bx-task-head {
+.bx-seg-item[aria-checked="true"] {
+	background: var(--bx-sheet);
+	color: var(--fr-accent);
+	box-shadow: 0 1px 2px color-mix(in oklab, var(--fr-bg) 40%, transparent);
+}
+
+.bx-annotate-hint {
+	flex: none;
+	padding: 0 6px;
+	font-size: 11px;
+	color: var(--fr-text-2);
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+
+.bx-annotate-note {
+	flex: 1 1 160px;
+	min-width: 100px;
+	height: 30px;
+	padding: 0 10px;
+	border: 0;
+	border-radius: 8px;
+	background: var(--bx-field);
+	color: var(--fr-text);
+	font: inherit;
+	font-size: 12px;
+	outline: none;
+	transition: box-shadow var(--bx-fast) var(--bx-ease);
+}
+
+.bx-annotate-note::placeholder {
+	color: var(--fr-text-3);
+}
+
+.bx-annotate-note:focus {
+	box-shadow: 0 0 0 1px var(--fr-accent), 0 0 0 3px var(--bx-ring);
+}
+
+.bx-annotate-send {
 	display: flex;
 	align-items: center;
-	justify-content: space-between;
-	gap: 8px;
+	gap: 6px;
+	height: 30px;
+	padding: 0 12px;
+	border: 0;
+	border-radius: 8px;
+	background: var(--fr-accent);
+	color: var(--fr-accent-ink, #fff);
+	font-size: 12px;
+	font-weight: 600;
+	white-space: nowrap;
+	cursor: pointer;
+	transition:
+		filter var(--bx-fast) var(--bx-ease),
+		opacity var(--bx-fast) var(--bx-ease);
 }
 
-.bx-task-steps,
-.bx-history-list {
+.bx-annotate-send:hover:not(:disabled) {
+	filter: brightness(1.1);
+}
+
+.bx-annotate-send:disabled {
+	opacity: 0.45;
+	cursor: default;
+}
+
+@container (max-width: 640px) {
+	.bx-annotate {
+		flex-wrap: wrap;
+	}
+	.bx-seg-label {
+		display: none;
+	}
+	.bx-seg-item {
+		padding: 0 8px;
+	}
+	.bx-annotate-hint {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		padding: 0;
+		overflow: hidden;
+		clip-path: inset(50%);
+	}
+}
+
+/* agent pill */
+
+.bx-agent {
+	display: flex;
+	flex-direction: column;
+	width: min(100%, 640px);
+	border-radius: 16px;
+	background: var(--bx-glass);
+	backdrop-filter: blur(18px) saturate(1.4);
+	-webkit-backdrop-filter: blur(18px) saturate(1.4);
+	border: 1px solid var(--bx-hairline);
+	box-shadow:
+		var(--bx-shadow),
+		0 0 0 1px color-mix(in oklab, var(--fr-accent) 25%, transparent);
+	animation: bx-rise var(--bx-slow) var(--bx-ease-enter);
+	overflow: hidden;
+}
+
+.bx-agent-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	height: 44px;
+	padding: 0 8px 0 12px;
+	min-width: 0;
+}
+
+.bx-agent-mark {
+	flex: none;
+	width: 26px;
+	height: 26px;
+	display: grid;
+	place-items: center;
+	border-radius: 8px;
+	color: var(--fr-accent);
+	background: color-mix(in oklab, var(--fr-accent) 16%, transparent);
+	animation: bx-breathe 2.4s ease-in-out infinite;
+}
+
+.bx-agent-name {
+	flex: none;
+	font-size: 12px;
+	font-weight: 600;
+	color: var(--fr-text);
+}
+
+.bx-agent-step {
+	flex: 1;
+	min-width: 0;
+	font-size: 12px;
+	color: var(--fr-text-2);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	animation: bx-fade var(--bx-base) var(--bx-ease-enter);
+}
+
+.bx-agent-meta {
+	flex: none;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-size: 11px;
+	color: var(--fr-text-2);
+	white-space: nowrap;
+}
+
+.bx-agent-sep {
+	width: 3px;
+	height: 3px;
+	border-radius: 50%;
+	background: currentColor;
+	opacity: 0.6;
+}
+
+.bx-agent-toggle {
+	flex: none;
+	width: 26px;
+	height: 26px;
+	display: grid;
+	place-items: center;
+	border: 0;
+	border-radius: 8px;
+	background: transparent;
+	color: var(--fr-text-3);
+	cursor: pointer;
+	transition: transform var(--bx-base) var(--bx-ease), background-color var(--bx-fast) var(--bx-ease);
+}
+
+.bx-agent-toggle:hover {
+	background: var(--bx-hover);
+	color: var(--fr-text);
+}
+
+.bx-agent[data-expanded] .bx-agent-toggle {
+	transform: rotate(180deg);
+}
+
+.bx-agent-stop {
+	flex: none;
+	height: 28px;
+	padding: 0 12px;
+	border: 0;
+	border-radius: 8px;
+	background: color-mix(in oklab, var(--fr-del) 16%, transparent);
+	color: var(--fr-del);
+	font-size: 12px;
+	font-weight: 600;
+	cursor: pointer;
+	transition: background-color var(--bx-fast) var(--bx-ease);
+}
+
+.bx-agent-stop:hover:not(:disabled) {
+	background: color-mix(in oklab, var(--fr-del) 26%, transparent);
+}
+
+.bx-agent-stop:disabled {
+	opacity: 0.6;
+	cursor: default;
+}
+
+.bx-agent-body {
+	border-top: 1px solid var(--bx-hairline);
+	padding: 12px;
+	max-height: 240px;
+	overflow: auto;
+	animation: bx-fade var(--bx-base) var(--bx-ease-enter);
+}
+
+.bx-agent-goal {
+	margin: 0 0 8px;
+	font-size: 12px;
+	color: var(--fr-text);
+}
+
+.bx-agent-empty {
+	margin: 0;
+	font-size: 12px;
+	color: var(--fr-text-3);
+}
+
+.bx-agent-steps {
 	list-style: none;
 	margin: 0;
 	padding: 0;
 	display: flex;
 	flex-direction: column;
-	gap: 6px;
-}
-
-.bx-task-buttons {
-	display: flex;
-	gap: 6px;
-}
-
-.bx-task-meta,
-.bx-task-goal,
-.bx-task-summary {
-	margin: 0;
-	font-size: var(--fr-fs-xs);
-	overflow-wrap: anywhere;
-}
-
-.bx-task-meta {
-	color: var(--fr-text-3);
-}
-
-.bx-task-summary {
-	padding: 6px 8px;
-	border: 1px solid var(--fr-border-soft);
-	border-radius: var(--fr-r, 8px);
-	background: var(--fr-surface-2);
-}
-
-.bx-task-summary[data-status="failed"] {
-	color: var(--fr-del);
-}
-
-.bx-task-summary[data-status="blocked"] {
-	color: var(--fr-warn);
-}
-
-/* Newest step first; the list scrolls rather than pushing the panels below away. */
-.bx-task-steps {
-	max-height: 14rem;
-	overflow: auto;
 	gap: 4px;
 }
 
-.bx-task-steps li {
-	font-size: var(--fr-fs-xs);
+.bx-agent-steps li {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	font-size: 12px;
 	color: var(--fr-text-2);
-	overflow-wrap: anywhere;
 }
 
-.bx-error {
-	margin: 4px 0 0;
+.bx-agent-steps li:first-child {
+	color: var(--fr-text);
+}
+
+.bx-agent-steps li > .bx-num:first-child {
+	flex: none;
+	min-width: 18px;
+	text-align: right;
+	color: var(--fr-text-3);
+}
+
+.bx-agent-steptext {
+	flex: 1;
+	min-width: 0;
+}
+
+.bx-agent-steptime {
+	flex: none;
+	color: var(--fr-text-3);
+}
+
+@container (max-width: 640px) {
+	.bx-agent-meta span:first-child,
+	.bx-agent-meta .bx-agent-sep {
+		display: none;
+	}
+}
+
+/* toasts */
+
+.bx-toast {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	width: 100%;
+	padding: 12px;
+	border-radius: 16px;
+	background: var(--bx-glass);
+	backdrop-filter: blur(18px) saturate(1.4);
+	-webkit-backdrop-filter: blur(18px) saturate(1.4);
+	border: 1px solid var(--bx-hairline);
+	box-shadow: var(--bx-shadow);
+	animation: bx-drop var(--bx-slow) var(--bx-ease-enter);
+	font-size: 12px;
+	color: var(--fr-text);
+}
+
+.bx-toast-icon {
+	flex: none;
+	width: 22px;
+	height: 22px;
+	display: grid;
+	place-items: center;
+	border-radius: 8px;
+	color: var(--fr-add);
+	background: color-mix(in oklab, var(--fr-add) 16%, transparent);
+}
+
+.bx-toast[data-tone="error"] .bx-toast-icon,
+.bx-toast[data-status="failed"] .bx-toast-icon {
 	color: var(--fr-del);
-	font-size: var(--fr-fs-xs);
+	background: color-mix(in oklab, var(--fr-del) 16%, transparent);
+}
+
+.bx-toast[data-status="blocked"] .bx-toast-icon {
+	color: var(--fr-warn);
+	background: color-mix(in oklab, var(--fr-warn) 16%, transparent);
+}
+
+.bx-toast[data-status="cancelled"] .bx-toast-icon {
+	color: var(--fr-text-2);
+	background: var(--bx-hover);
+}
+
+.bx-toast-text {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	padding-top: 2px;
 	overflow-wrap: anywhere;
 }
 
-.bx-task,
-.bx-task-form,
-.bx-annotate,
-.bx-history {
+.bx-toast-title {
+	font-weight: 600;
+}
+
+.bx-toast-meta {
+	font-weight: 400;
+	color: var(--fr-text-3);
+}
+
+.bx-toast-summary {
+	color: var(--fr-text-2);
+	display: -webkit-box;
+	-webkit-line-clamp: 3;
+	-webkit-box-orient: vertical;
+	overflow: hidden;
+}
+
+.bx-toast-close {
+	flex: none;
+	width: 24px;
+	height: 24px;
+	display: grid;
+	place-items: center;
+	border: 0;
+	border-radius: 8px;
+	background: transparent;
+	color: var(--fr-text-3);
+	cursor: pointer;
+}
+
+.bx-toast-close:hover {
+	background: var(--bx-hover);
+	color: var(--fr-text);
+}
+
+/* connection */
+
+.bx-banner {
+	position: absolute;
+	top: 0;
+	left: 0;
+	right: 0;
+	z-index: 5;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 10px;
+	padding: 6px 12px;
+	font-size: 12px;
+	color: var(--fr-text);
+	background: color-mix(in oklab, var(--fr-warn) 14%, var(--bx-sheet));
+	border-bottom: 1px solid color-mix(in oklab, var(--fr-warn) 30%, transparent);
+	animation: bx-drop var(--bx-base) var(--bx-ease-enter);
+}
+
+.bx-banner .bx-tab-spinner {
+	border-color: color-mix(in oklab, var(--fr-warn) 25%, transparent);
+	border-top-color: var(--fr-warn);
+}
+
+.bx-banner-detail {
+	color: var(--fr-text-2);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	max-width: 50%;
+}
+
+.bx-gone {
+	position: absolute;
+	inset: 0;
+	z-index: 6;
+	display: grid;
+	place-items: center;
+	background: color-mix(in oklab, var(--fr-bg) 80%, transparent);
+	backdrop-filter: blur(6px);
+	-webkit-backdrop-filter: blur(6px);
+	animation: bx-fade var(--bx-base) var(--bx-ease-enter);
+}
+
+.bx-gone-card {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 6px;
+	max-width: 320px;
+	padding: 28px 28px 24px;
+	border-radius: 16px;
+	background: var(--bx-sheet);
+	border: 1px solid var(--bx-hairline);
+	box-shadow: var(--bx-shadow);
+	text-align: center;
+}
+
+.bx-gone-card h2 {
+	margin: 8px 0 0;
+	font-size: 15px;
+	font-weight: 600;
+}
+
+.bx-gone-card p {
+	margin: 0 0 16px;
+	font-size: 12px;
+	color: var(--fr-text-2);
+}
+
+/* ── start page & blank tab ─────────────────────────────────────────── */
+
+.bx-start,
+.bx-blank {
+	position: relative;
+	height: 100%;
+	flex: 1;
+	min-height: 0;
+	overflow: auto;
+	display: grid;
+	place-items: center;
+	background: var(--fr-bg);
+	container-type: inline-size;
+}
+
+.bx-start-glow {
+	position: absolute;
+	inset: 0 0 auto;
+	height: 60%;
+	pointer-events: none;
+	background: radial-gradient(55% 60% at 50% -10%, color-mix(in oklab, var(--fr-accent) 14%, transparent), transparent 100%);
+}
+
+.bx-start-body,
+.bx-blank-body {
+	position: relative;
+	width: min(100% - 48px, 620px);
+	display: flex;
+	flex-direction: column;
+	gap: 24px;
+	padding: 48px 0;
+	animation: bx-rise var(--bx-slow) var(--bx-ease-enter);
+}
+
+.bx-blank-body {
+	align-items: center;
+	gap: 18px;
+	width: min(100% - 48px, 560px);
+}
+
+.bx-blank .bx-omni {
+	width: 100%;
+}
+
+.bx-blank-hint {
+	margin: 0;
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	font-size: 11px;
+	color: var(--fr-text-2);
+}
+
+.bx-start-head {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 8px;
+	text-align: center;
+}
+
+.bx-start-head h1 {
+	margin: 8px 0 0;
+	font-size: 28px;
+	font-weight: 600;
+	letter-spacing: -0.02em;
+	line-height: 1.1;
+}
+
+.bx-start-head p {
+	margin: 0;
+	font-size: 13px;
+	color: var(--fr-text-2);
+}
+
+.bx-start-mark {
+	width: 44px;
+	height: 44px;
+	display: grid;
+	place-items: center;
+	border-radius: 12px;
+	color: var(--fr-accent);
+	background: color-mix(in oklab, var(--fr-accent) 14%, var(--bx-sheet));
+	border: 1px solid color-mix(in oklab, var(--fr-accent) 30%, transparent);
+	box-shadow: 0 8px 24px -12px var(--fr-accent);
+}
+
+.bx-start-section {
 	display: flex;
 	flex-direction: column;
 	gap: 8px;
 }
 
-.bx-history-list li {
-	font-size: var(--fr-fs-xs);
-	color: var(--fr-text-2);
-	overflow-wrap: anywhere;
-}
-
-.bx-history-list li[data-tone="del"] {
-	color: var(--fr-del);
-}
-
-.bx-history-list li[data-tone="add"] {
-	color: var(--fr-add);
-}
-
-.bx-snapshot pre {
-	max-height: 14rem;
-	overflow: auto;
-	white-space: pre-wrap;
-	font-size: var(--fr-fs-2xs);
-	background: var(--fr-surface-2);
-	border: 1px solid var(--fr-border-soft);
-	border-radius: var(--fr-r, 8px);
-	padding: 8px;
-}
-
-.bx-note,
-.bx-empty,
-.bx-status {
+.bx-start-label {
 	margin: 0;
-	font-size: var(--fr-fs-xs);
-	color: var(--fr-text-3);
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: var(--fr-text-2);
+	text-align: center;
 }
 
-.bx-status[data-kind="error"] {
+.bx-start-note {
+	margin: 0;
+	font-size: 12px;
+	color: var(--fr-text-2);
+}
+
+.bx-engines {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 8px;
+}
+
+.bx-engine {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 3px;
+	padding: 12px 14px;
+	border-radius: 12px;
+	border: 1px solid var(--bx-hairline);
+	background: var(--bx-sheet);
+	text-align: left;
+	cursor: pointer;
+	transition:
+		border-color var(--bx-fast) var(--bx-ease),
+		background-color var(--bx-fast) var(--bx-ease),
+		box-shadow var(--bx-base) var(--bx-ease);
+}
+
+.bx-engine:hover {
+	border-color: var(--fr-border);
+	background: var(--fr-surface-2);
+}
+
+.bx-engine[aria-checked="true"] {
+	border-color: var(--fr-accent);
+	box-shadow: 0 0 0 3px var(--bx-ring);
+}
+
+.bx-engine-label {
+	font-size: 13px;
+	font-weight: 600;
+}
+
+.bx-engine[aria-checked="true"] .bx-engine-label {
+	color: var(--fr-accent);
+}
+
+.bx-engine-detail {
+	font-size: 11px;
+	color: var(--fr-text-2);
+}
+
+@container (max-width: 480px) {
+	.bx-engines {
+		grid-template-columns: 1fr;
+	}
+}
+
+.bx-chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	justify-content: center;
+}
+
+.bx-chip {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	height: 34px;
+	padding: 0 12px 0 6px;
+	border-radius: 999px;
+	border: 1px solid var(--bx-hairline);
+	background: var(--bx-sheet);
+	color: var(--fr-text);
+	font-size: 12px;
+	font-weight: 500;
+	cursor: pointer;
+	transition:
+		border-color var(--bx-fast) var(--bx-ease),
+		background-color var(--bx-fast) var(--bx-ease),
+		box-shadow var(--bx-base) var(--bx-ease);
+}
+
+.bx-chip:hover {
+	border-color: var(--fr-border);
+	background: var(--fr-surface-2);
+}
+
+.bx-chip[aria-checked="true"] {
+	border-color: var(--fr-accent);
+	box-shadow: 0 0 0 3px var(--bx-ring);
+}
+
+.bx-chip-new {
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	color: var(--fr-accent);
+}
+
+.bx-chip-add {
+	padding-left: 10px;
+	color: var(--fr-text-2);
+	border-style: dashed;
+}
+
+.bx-chip-input {
+	width: 160px;
+	padding: 0 12px;
+	outline: none;
+	border-color: var(--fr-accent);
+	box-shadow: 0 0 0 3px var(--bx-ring);
+	font: inherit;
+	font-size: 12px;
+}
+
+.bx-chip-skeleton {
+	width: 110px;
+	border-color: transparent;
+	background: var(--fr-surface-2);
+	animation: bx-pulse 1.6s ease-in-out infinite;
+}
+
+.bx-start-foot {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 16px;
+	margin-top: 8px;
+}
+
+.bx-start-open {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	height: 40px;
+	padding: 0 18px 0 20px;
+	border: 0;
+	border-radius: 12px;
+	background: var(--fr-accent);
+	color: var(--fr-accent-ink, #fff);
+	font-size: 13px;
+	font-weight: 600;
+	cursor: pointer;
+	box-shadow: 0 8px 24px -10px var(--fr-accent);
+	transition:
+		filter var(--bx-fast) var(--bx-ease),
+		transform var(--bx-fast) var(--bx-ease),
+		opacity var(--bx-fast) var(--bx-ease);
+}
+
+.bx-start-open kbd {
+	background: color-mix(in oklab, var(--fr-accent-ink, #fff) 18%, transparent);
+	border-color: transparent;
+	color: inherit;
+}
+
+.bx-start-open:hover:not(:disabled) {
+	filter: brightness(1.08);
+}
+
+.bx-start-open:active:not(:disabled) {
+	transform: scale(0.98);
+}
+
+.bx-start-open:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+
+.bx-start-open .bx-tab-spinner {
+	border-color: color-mix(in oklab, var(--fr-accent-ink, #fff) 30%, transparent);
+	border-top-color: var(--fr-accent-ink, #fff);
+}
+
+.bx-start-error {
+	margin: 0;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-size: 12px;
 	color: var(--fr-del);
 }
 
-.bx-status[data-kind="partial"] {
-	color: var(--fr-warn);
+/* ── motion ─────────────────────────────────────────────────────────── */
+
+@keyframes bx-spin {
+	to {
+		transform: rotate(360deg);
+	}
 }
 
-.bx-status[data-kind="sent"] {
-	color: var(--fr-add);
+@keyframes bx-indeterminate {
+	0% {
+		transform: translateX(-100%);
+	}
+	100% {
+		transform: translateX(260%);
+	}
 }
 
-.bx-mono {
-	font-family: var(--fr-font-mono, var(--fr-mono));
+@keyframes bx-pop {
+	from {
+		opacity: 0;
+		transform: scale(0.96);
+	}
 }
 
-.bx-dim {
-	color: var(--fr-text-3);
+@keyframes bx-drop {
+	from {
+		opacity: 0;
+		transform: translateY(-8px);
+	}
 }
 
-/* Focus is never removed; it is drawn with the accent line token. */
-:where(button, input, textarea, select, summary):focus-visible {
-	outline: 2px solid var(--fr-accent-line);
-	outline-offset: 2px;
+@keyframes bx-rise {
+	from {
+		opacity: 0;
+		transform: translateY(10px);
+	}
+}
+
+@keyframes bx-fade {
+	from {
+		opacity: 0;
+	}
+}
+
+@keyframes bx-ripple {
+	from {
+		opacity: 0.9;
+		transform: scale(0.35);
+	}
+	to {
+		opacity: 0;
+		transform: scale(1.4);
+	}
+}
+
+@keyframes bx-breathe {
+	0%,
+	100% {
+		opacity: 0.55;
+	}
+	50% {
+		opacity: 1;
+	}
+}
+
+@keyframes bx-pulse {
+	0%,
+	100% {
+		opacity: 0.5;
+	}
+	50% {
+		opacity: 1;
+	}
+}
+
+@keyframes bx-shimmer {
+	from {
+		background-position: 100% 0, 0 0;
+	}
+	to {
+		background-position: -100% 0, 0 0;
+	}
 }
 
 @media (prefers-reduced-motion: reduce) {
-	*,
-	*::before,
-	*::after {
+	.bx-root *,
+	.bx-root *::before,
+	.bx-root *::after {
 		animation-duration: 0.01ms !important;
 		animation-iteration-count: 1 !important;
 		transition-duration: 0.01ms !important;
-		scroll-behavior: auto !important;
 	}
+	.bx-tab-spinner {
+		border-top-color: color-mix(in oklab, var(--fr-accent) 25%, transparent);
+		border-right-color: var(--fr-accent);
+	}
+}
+
+[data-fr-motion="reduced"] .bx-root *,
+[data-fr-motion="reduced"] .bx-root *::before,
+[data-fr-motion="reduced"] .bx-root *::after {
+	animation-duration: 0.01ms !important;
+	animation-iteration-count: 1 !important;
+	transition-duration: 0.01ms !important;
 }

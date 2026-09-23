@@ -32,6 +32,9 @@ def _label(entry):
 
 
 def run(request, cancel, report):
+    missing = [k for k in ("TYPESAFE_API_KEY", "TEXT_MODEL_API_KEY") if not os.environ.get(k)]
+    if missing:
+        return "failed", f"jev needs {' and '.join(missing)} in the browser server's environment."
     name = f"dim-{uuid.uuid4().hex[:12]}"
     # browser_harness reads both at import time, so they are set before jev is imported.
     os.environ["BU_CDP_WS"] = request["cdpUrl"]
@@ -41,7 +44,16 @@ def run(request, cancel, report):
 
         if cancel.is_set():
             return "cancelled", "Cancelled before start."
-        agent = Agent(request.get("startUrl") or "about:blank", request["task"])
+        try:
+            agent = Agent(request.get("startUrl") or "about:blank", request["task"])
+        except RuntimeError as exc:
+            # The harness daemon's first CDP calls sometimes miss its 5 s IPC
+            # budget while Chrome is busy adopting the new tab. Starting is
+            # read-only (a blank tab, then navigation), so one retry is safe.
+            if "timed out" not in str(exc):
+                raise
+            print(f"jev start retried after: {exc}", flush=True)
+            agent = Agent(request.get("startUrl") or "about:blank", request["task"])
         state = agent.state
         try:
             while state["status"] not in ("done", "blocked"):

@@ -25,6 +25,7 @@ import {
 	startFixture,
 	teardown,
 	waitUntil,
+	within,
 } from "./fixture";
 
 const VIEWPORT = { width: 640, height: 480 };
@@ -54,23 +55,6 @@ function stepsSeen(count: number): { seen: TaskStep[]; reached: Promise<void>; o
 			if (seen.length === count) reach();
 		},
 	};
-}
-
-/**
- * Settle `work` within `ms` or fail naming `what`. A real-clock DEADLINE, not a
- * wait: the regression under test is a hang inside real Chrome, which no fake
- * clock can advance, and it must go red rather than stall the suite.
- */
-async function within<T>(ms: number, what: string, work: Promise<T>): Promise<T> {
-	let timer: Timer | undefined;
-	const expired = new Promise<never>((_, reject) => {
-		timer = setTimeout(() => reject(new Error(`${what} did not settle within ${ms}ms`)), ms);
-	});
-	try {
-		return await Promise.race([work, expired]);
-	} finally {
-		clearTimeout(timer);
-	}
 }
 
 const ENV_KEYS = ["DIM_BROWSER_PYTHON", "PYTHONPATH", "PYTHONDONTWRITEBYTECODE"] as const;

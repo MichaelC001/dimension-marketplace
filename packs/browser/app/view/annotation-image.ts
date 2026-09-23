@@ -159,7 +159,8 @@ function markTreatment(): { stroke: string; width: number } {
 		const computed = getComputedStyle(probe);
 		const width = Number.parseFloat(computed.strokeWidth);
 		return {
-			stroke: computed.stroke.length > 0 && computed.stroke !== "none" ? computed.stroke : "#ff3d81",
+			// Canvas needs a concrete colour; the accent token is the overlay's own stroke.
+			stroke: computed.stroke.length > 0 && computed.stroke !== "none" ? computed.stroke : getComputedStyle(document.documentElement).getPropertyValue("--fr-accent").trim() || "#7a60c1",
 			width: Number.isFinite(width) && width > 0 ? width : 3,
 		};
 	} finally {

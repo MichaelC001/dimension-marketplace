@@ -27,6 +27,9 @@ import type {
 	BrowserRegion,
 	BrowserRuntimePort,
 	BrowserState,
+	FrameFormat,
+	MouseButton,
+	TabRequest,
 	TaskRequest,
 	TaskRun,
 	TaskStep,
@@ -49,6 +52,8 @@ const MAX_ELEMENT_CHARS = 4_000;
 const MAX_TEXT_INPUT = 4_096;
 const MAX_NOTE_CHARS = 8_192;
 const MAX_SELECTOR_CHARS = 512;
+const MAX_TAB_ID_CHARS = 128;
+const MOUSE_BUTTONS: readonly MouseButton[] = ["left", "right", "middle"];
 const MAX_URL_LENGTH = 2_048;
 const MAX_SCROLL_DELTA = 5_000;
 const MAX_TASK_CHARS = 8_192;
@@ -145,9 +150,6 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		this.store = new ProfileStore(options.rootDir);
 	}
 
-	// -----------------------------------------------------------------------
-	// Lifecycle
-	// -----------------------------------------------------------------------
 	// -----------------------------------------------------------------------
 	// Lifecycle
 	// -----------------------------------------------------------------------
@@ -314,7 +316,19 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		return await this.serialize(this.require(browserId), (entry) => this.buildState(entry));
 	}
 
-	async frame(browserId: string): Promise<BrowserFrame> {
+	/**
+	 * `png` (default): a fresh capture, retained so it can be annotated.
+	 * `jpeg`: the live screencast's newest frame, straight from memory. It is
+	 * deliberately NOT queued behind page work — the live view keeps moving
+	 * while a navigation or action is in flight — and is not annotatable.
+	 */
+	async frame(browserId: string, format: FrameFormat = "png"): Promise<BrowserFrame> {
+		if (format === "jpeg") {
+			const entry = this.require(browserId);
+			const live = await entry.driver.liveFrame();
+			return { state: await this.buildState(entry), frameId: live.id, mimeType: "image/jpeg", data: live.data, capturedAt: live.capturedAt };
+		}
+		if (format !== "png") fail("bad_format", `format must be "jpeg" or "png"`);
 		return await this.serialize(this.require(browserId), async (entry) => {
 			const before = await this.refreshState(entry);
 			const revision = entry.revision;
@@ -412,6 +426,61 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	async profiles(): Promise<string[]> {
 		return this.store.list();
 	}
+
+	// -----------------------------------------------------------------------
+	// Tabs
+	// -----------------------------------------------------------------------
+
+	/** Fit the page to the View's size and pixel ratio (bounded like open's viewport; ratio 1-2). */
+	async resize(browserId: string, viewport: Viewport, scale = 1): Promise<BrowserState> {
+		const entry = this.require(browserId);
+		const size = normalizeViewport(viewport);
+		const ratio = Number.isFinite(scale) ? Math.min(2, Math.max(1, Math.round(scale * 4) / 4)) : 1;
+		return await this.serialize(entry, async () => {
+			await entry.driver.resize(size, ratio);
+			return await this.buildState(entry);
+		});
+	}
+
+	/**
+	 * Open, show or close a tab. Every read and action works on the active tab.
+	 * Refused while a task runs: switching away from the agent's tab hides it,
+	 * and a hidden tab renders no frames, so the agent would stall.
+	 */
+	async tab(browserId: string, request: TabRequest): Promise<BrowserState> {
+		const entry = this.require(browserId);
+		if (!request || typeof request !== "object") fail("bad_tab", "tab request must be an object");
+		const navigate = request.op === "new" && request.url !== undefined
+			? normalizeAction({ kind: "navigate", url: request.url }, entry.viewport)
+			: undefined;
+		if ((request.op === "activate" || request.op === "close") && (typeof request.tabId !== "string" || request.tabId.length === 0 || request.tabId.length > MAX_TAB_ID_CHARS)) {
+			fail("bad_tab", `${request.op} needs the tabId from state.tabs`);
+		}
+		return await this.serialize(entry, async () => {
+			if (entry.task?.status === "running") {
+				fail("task_running", `a ${entry.task.agent} task is driving this browser; wait for it or cancel it first`);
+			}
+			switch (request.op) {
+				case "new":
+					try {
+						await entry.driver.openTab(navigate?.url);
+					} catch (error) {
+						fail("tab_failed", `opening a new tab${navigate ? ` at ${navigate.url}` : ""} failed: ${describe(error)}`);
+					}
+					break;
+				case "activate":
+					await entry.driver.activateTab(request.tabId as string);
+					break;
+				case "close":
+					await entry.driver.closeTab(request.tabId as string);
+					break;
+				default:
+					fail("bad_tab", `op must be one of: new, activate, close`);
+			}
+			return await this.buildState(entry);
+		});
+	}
+
 	// -----------------------------------------------------------------------
 	// Actions
 	// -----------------------------------------------------------------------
@@ -446,8 +515,8 @@ export class BrowserRuntime implements BrowserRuntimePort {
 
 	/**
 	 * Run a whole task on an upstream agent loop. The agent attaches to this
-	 * browser's Chrome; the driver follows the tab it works in, so frames show
-	 * the agent working. Resolves with the finished run.
+	 * browser's Chrome; tabs it opens become the active tab, so frames show the
+	 * agent working. Resolves with the finished run.
 	 */
 	async runTask(browserId: string, request: TaskRequest, onStep?: (step: TaskStep, run: TaskRun) => void): Promise<TaskRun> {
 		return await (await this.beginTask(browserId, request, onStep)).finished;
@@ -466,6 +535,12 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	): Promise<{ run: TaskRun; finished: Promise<TaskRun> }> {
 		const entry = this.require(browserId);
 		if (!TASK_AGENTS.includes(request.agent)) fail("bad_agent", `agent must be one of: ${TASK_AGENTS.join(", ")}`);
+		// The task agents take a browser-level CDP endpoint and act on the whole
+		// browser (browser-use focuses the oldest tab). On the relay that is the
+		// human's own Chrome, which this pack owns only one tab of.
+		if (entry.engine === "chrome-relay") {
+			fail("task_unsupported_engine", "task agents drive a whole browser, and chrome-relay is your own Chrome — open a chromium profile for browser_task");
+		}
 		const task = typeof request.task === "string" ? request.task.trim() : "";
 		if (task.length === 0 || task.length > MAX_TASK_CHARS) fail("bad_task", `task must be 1-${MAX_TASK_CHARS} characters`);
 		const maxSteps = Math.min(MAX_TASK_STEPS, Math.max(1, Math.floor(request.maxSteps ?? DEFAULT_TASK_STEPS)));
@@ -478,10 +553,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				steps: [], stepCount: 0, startedAt: new Date().toISOString(), elapsedMs: 0,
 				usage: { modelCalls: 0, inputTokens: 0, outputTokens: 0, costUsd: null },
 			};
-			const unfollow = entry.driver.followNewPages();
-			let worker: RunningWorker;
-			try {
-				worker = startWorker(
+			const worker: RunningWorker = startWorker(
 				{ agent: request.agent, cdpUrl: entry.driver.cdpEndpoint(), task, maxSteps, startUrl: state.url },
 				(step) => {
 					const record: TaskStep = { n: step.n, action: step.action, url: step.url, elapsedMs: step.elapsedMs };
@@ -492,13 +564,8 @@ export class BrowserRuntime implements BrowserRuntimePort {
 					run.usage = step.usage;
 					onStep?.(record, run);
 				},
-				);
-			} catch (error) {
-				unfollow();
-				throw error;
-			}
+			);
 			const finished = worker.done.then((result) => {
-				unfollow();
 				Object.assign(run, {
 					status: result.status,
 					summary: result.summary,
@@ -605,6 +672,8 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			browserId: entry.browserId, profile: entry.profile, engine: entry.engine,
 			url: state.url, title: state.title, revision: entry.revision,
 			viewport: state.viewport, task: entry.task ? cloneTask(entry.task) : null,
+			tabs: state.tabs, activeTabId: state.activeTabId, loading: state.loading,
+			canGoBack: state.canGoBack, canGoForward: state.canGoForward,
 		};
 	}
 
@@ -613,6 +682,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		return {
 			browserId: entry.browserId, profile: entry.profile, engine: entry.engine, url: "", title: "",
 			revision: entry.revision, viewport: entry.viewport, task: entry.task ? cloneTask(entry.task) : null,
+			tabs: [], activeTabId: "", loading: false, canGoBack: false, canGoForward: false,
 		};
 	}
 }
@@ -662,13 +732,34 @@ function normalizeAction(action: BrowserAction, viewport: Viewport): BrowserActi
 			return { kind: "navigate", url: parsed.toString() };
 		}
 		case "click": {
+			const button = action.button ?? "left";
+			if (!MOUSE_BUTTONS.includes(button)) fail("bad_action", `click.button must be one of: ${MOUSE_BUTTONS.join(", ")}`);
+			const clickCount = action.clickCount ?? 1;
+			if (clickCount !== 1 && clickCount !== 2 && clickCount !== 3) fail("bad_action", "click.clickCount must be 1, 2 or 3");
+			const options = { ...(button === "left" ? {} : { button }), ...(clickCount === 1 ? {} : { clickCount }) };
 			if (typeof action.selector === "string") {
-				return { kind: "click", selector: requireSelector(action.selector) };
+				return { kind: "click", selector: requireSelector(action.selector), ...options };
 			}
-			const x = requireCoordinate(action.x, "x", viewport.width);
-			const y = requireCoordinate(action.y, "y", viewport.height);
-			return { kind: "click", x, y };
+			const x = requireCoordinate(action.x, "click", "x", viewport.width);
+			const y = requireCoordinate(action.y, "click", "y", viewport.height);
+			return { kind: "click", x, y, ...options };
 		}
+		case "hover": {
+			const x = requireCoordinate(action.x, "hover", "x", viewport.width);
+			const y = requireCoordinate(action.y, "hover", "y", viewport.height);
+			return { kind: "hover", x, y };
+		}
+		case "insert": {
+			if (typeof action.text !== "string" || action.text.length === 0 || action.text.length > MAX_TEXT_INPUT) {
+				fail("bad_action", `insert.text must be a string of 1-${MAX_TEXT_INPUT} characters`);
+			}
+			return { kind: "insert", text: action.text };
+		}
+		case "back":
+		case "forward":
+		case "reload":
+		case "stop":
+			return { kind: action.kind };
 		case "type": {
 			// An empty string is legal and means "clear the field".
 			if (typeof action.text !== "string" || action.text.length > MAX_TEXT_INPUT) {
@@ -707,13 +798,13 @@ function requireSelector(selector: unknown): string {
 	return selector.trim();
 }
 
-function requireCoordinate(value: unknown, name: string, bound: number): number {
+function requireCoordinate(value: unknown, kind: string, name: string, bound: number): number {
 	if (typeof value !== "number" || !Number.isFinite(value)) {
-		fail("bad_action", `click needs a selector or finite ${name} coordinate`);
+		fail("bad_action", `${kind} needs ${kind === "click" ? "a selector or " : ""}a finite ${name} coordinate`);
 	}
 	const rounded = Math.floor(value);
 	if (rounded < 0 || rounded >= bound) {
-		fail("bad_action", `click.${name}=${rounded} is outside the ${bound}px viewport`);
+		fail("bad_action", `${kind}.${name}=${rounded} is outside the ${bound}px viewport`);
 	}
 	return rounded;
 }

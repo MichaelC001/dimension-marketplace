@@ -84,7 +84,7 @@
 			"pluginId": "browser",
 			"title": "Browser",
 			"icon": "globe",
-			"description": "See and annotate the browser your agent uses. Persistent profiles, an MCP Apps View and human approval before browser mutations.",
+			"description": "A real browser beside your chat that your agent drives while you watch. Tabs, persistent logged-in profiles, circle-to-annotate, and fast task agents (jev, browser-use).",
 			"version": "0.1.0",
 			"author": {
 				"name": "Dimension"

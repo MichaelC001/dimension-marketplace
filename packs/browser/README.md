@@ -43,7 +43,7 @@ Nothing upstream is copied or forked. Updating an upstream is a version bump.
 | Engine | Status |
 | --- | --- |
 | `chromium` | Default. A Chrome this pack manages, on a profile it owns. |
-| `chrome-relay` | Attaches to the Chrome you are signed in to (profile `relay`); owns only the tab it opens and never closes your browser. |
+| `chrome-relay` | Attaches to the Chrome you are signed in to (profile `relay`); owns only the tabs it opens (and the pages they open) and never closes your browser. `browser_task` is refused here: the task agents drive a whole browser, and this one is yours. |
 | `abp` | **Refused**: its control server authenticates nothing, so any page it visits could drive it. theredsix/agent-browser-protocol#16 |
 | `browser4` | **Refused**: every published bundle disables HTTPS certificate verification. platonai/Browser4#602 |
 
@@ -92,8 +92,8 @@ default):
 ## Tools
 
 Model-callable: `browser_open`, `browser_state`, `browser_snapshot`,
-`browser_screenshot`, `browser_act`, `browser_task`, `browser_task_cancel`,
-`browser_close`. View-only: `browser_frame`, `browser_annotate`,
+`browser_screenshot`, `browser_act`, `browser_tab`, `browser_task`, `browser_task_cancel`,
+`browser_close`. View-only: `browser_frame` (live JPEG by default, PNG for annotation), `browser_annotate`,
 `browser_profiles`.
 
 Page content is untrusted data, never instructions.

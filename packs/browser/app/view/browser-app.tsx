@@ -1,48 +1,37 @@
-// The View proper: open a profile, watch it, act on it, hand it a task,
-// crop things. Every capability comes from one opaque `browserId` that arrives
-// in this View's own `browser_open` tool result — there is no listing, and the
-// id is held in React state only (never storage, never a URL).
+// The browser. Tab strip, toolbar, the page, and what floats over it: agent
+// activity, annotation, notices. Every capability comes from one opaque
+// `browserId` that arrives in this View's own `browser_open` tool result —
+// there is no listing, and the id is held in React state only (never storage,
+// never a URL).
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { App } from "@modelcontextprotocol/ext-apps";
-import type { BrowserAction, BrowserEngine, BrowserState, TaskAgent } from "../../src/contracts";
-import { BROWSER_ENGINES } from "../../src/contracts";
-import { AnnotatePanel } from "./annotate-panel";
-import { BrowserClient, BrowserToolError, describeAction } from "./browser-client";
-import { Controls } from "./controls";
-import { Badge, Button, Field, Input, Select, Separator, Spinner } from "@fraym/ui/elements"
-import { TaskPanel } from "./task-panel";
+import type { BrowserAction, BrowserEngine, BrowserFrame, BrowserState, TabOp } from "../../src/contracts";
+import { Icon } from "@fraym/ui/icons";
+import { addressParts, tabLabel } from "./address";
+import { AgentPill, ResultToast } from "./agent-activity";
+import { AnnotateBar } from "./annotate-bar";
+import { BrowserClient, failureText } from "./browser-client";
+import { type DrawTool, EMPTY_SKETCH, PageView, type Sketch } from "./page-view";
+import { BlankTab, RELAY_PROFILE, StartPage } from "./start-page";
+import { TabStrip } from "./tab-strip";
+import { type OmniboxHandle, Toolbar } from "./toolbar";
 import { useBrowserPoll } from "./use-browser-poll";
-import { type CanvasTool, type SketchState, ViewportCanvas } from "./viewport-canvas";
+import { usePageInput } from "./use-page-input";
 
-const TOOLS: readonly { value: CanvasTool; label: string }[] = [
-	{ value: "interact", label: "Interact" },
-	{ value: "region", label: "Region" },
-	{ value: "circle", label: "Circle" },
-	{ value: "freehand", label: "Freehand" },
-];
-
-/** Engines the runtime refuses to start (upstream security defects). */
-const REFUSED_ENGINES: readonly BrowserEngine[] = ["abp", "browser4"];
-
-/** The runtime's reserved slug for attached Chrome; other engines refuse it. */
-const RELAY_PROFILE = "relay";
-
-interface Step {
+interface Notice {
 	readonly id: number;
-	readonly at: string;
+	readonly tone: "ok" | "error" | "info";
 	readonly text: string;
-	readonly tone: "accent" | "add" | "warn" | "del" | "mute";
 }
+
+/** Actions that start a page load; the View shows them loading immediately. */
+const NAVIGATION: Record<string, true> = { navigate: true, reload: true, back: true, forward: true };
 
 export interface BrowserAppProps {
 	readonly app: App;
 	/** The state carried by the tool result that mounted (or re-targeted) this
 	 *  View — the only place a browserId may come from. */
 	readonly toolState: { state: BrowserState; seq: number } | null;
-}
-
-function failureText(cause: unknown): string {
-	return cause instanceof BrowserToolError ? `${cause.tool}: ${cause.message}` : cause instanceof Error ? cause.message : String(cause);
 }
 
 export function BrowserApp({ app, toolState }: BrowserAppProps) {
@@ -54,23 +43,24 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 	const [profilesError, setProfilesError] = useState<string | null>(null);
 	const [profile, setProfile] = useState("default");
 	const [engine, setEngine] = useState<BrowserEngine>("chromium");
-	const [openUrl, setOpenUrl] = useState("");
 	const [opening, setOpening] = useState(false);
 	const [openError, setOpenError] = useState<string | null>(null);
-	const [tool, setTool] = useState<CanvasTool>("interact");
-	const [sketch, setSketch] = useState<SketchState>({ region: null, marks: [] });
-	const [clearToken, setClearToken] = useState(0);
-	const [busy, setBusy] = useState(false);
-	const [taskStarting, setTaskStarting] = useState(false);
-	const [cancelling, setCancelling] = useState(false);
-	const [snapshot, setSnapshot] = useState<{ browserId: string; text: string } | null>(null);
-	const [steps, setSteps] = useState<readonly Step[]>([]);
-	const [actionError, setActionError] = useState<string | null>(null);
 
-	// The browser the UI is bound to; awaited results for anything else are dropped.
+	const [annotating, setAnnotating] = useState(false);
+	const [tool, setTool] = useState<DrawTool>("region");
+	const [sketch, setSketch] = useState<Sketch>(EMPTY_SKETCH);
+	const [still, setStill] = useState<BrowserFrame | null>(null);
+
+	const [cancelling, setCancelling] = useState(false);
+	/** Navigations this View started that the runtime has not yet reported. */
+	const [navPending, setNavPending] = useState(0);
+	const [notice, setNotice] = useState<Notice | null>(null);
+	const [dismissedTask, setDismissedTask] = useState<string | null>(null);
+	const [offline, setOffline] = useState(() => typeof navigator !== "undefined" && !navigator.onLine);
+
+	const omniRef = useRef<OmniboxHandle | null>(null);
 	const boundRef = useRef<string | null>(null);
 	boundRef.current = browserId;
-	// False once this View is torn down: no awaited callback may set state after.
 	const mountedRef = useRef(true);
 	useEffect(() => {
 		mountedRef.current = true;
@@ -78,35 +68,40 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 			mountedRef.current = false;
 		};
 	}, []);
-	// The browser whose arrival has already been written to History, so a
-	// re-delivered tool result for the SAME browser never logs a second "opened".
-	const loggedOpenRef = useRef<string | null>(null);
+	/** Tasks this View watched run: only those get a result toast when they end. */
+	const watchedTaskRef = useRef<string | null>(null);
 
-	const annotating = tool !== "interact";
 	const poll = useBrowserPoll(client, browserId, annotating);
 	const state = poll.state ?? opened;
-	// While an agent drives the page the runtime refuses browser_act; so does the UI.
-	const taskRunning = state?.task?.status === "running";
-	// chrome-relay has exactly one identity — the signed-in Chrome it attaches to.
-	const relay = engine === "chrome-relay";
+	const task = state?.task ?? null;
+	const taskRunning = task?.status === "running";
+	// An agent drives, or the browser is gone: no input, no tab ops.
+	const locked = taskRunning || poll.connection === "gone";
+	const loading = (state?.loading ?? false) || navPending > 0;
+	const viewport = state?.viewport ?? { width: 1280, height: 800 };
 
-	const log = useCallback((text: string, tone: Step["tone"]) => {
-		setSteps(current =>
-			[{ id: Date.now() + current.length, at: new Date().toLocaleTimeString(), text, tone }, ...current].slice(0, 60),
-		);
+	const say = useCallback((tone: Notice["tone"], text: string) => setNotice({ id: Date.now(), tone, text }), []);
+	useEffect(() => {
+		if (notice === null) return;
+		const timer = window.setTimeout(() => setNotice(current => (current?.id === notice.id ? null : current)), notice.tone === "error" ? 8000 : 4500);
+		return () => window.clearTimeout(timer);
+	}, [notice]);
+
+	useEffect(() => {
+		const on = () => setOffline(false);
+		const off = () => setOffline(true);
+		window.addEventListener("online", on);
+		window.addEventListener("offline", off);
+		return () => {
+			window.removeEventListener("online", on);
+			window.removeEventListener("offline", off);
+		};
 	}, []);
 
 	// A tool result is the ONLY source of a browserId, and it is folded in DURING
-	// RENDER (React's "adjust state when a prop changes" pattern) rather than in
-	// an effect: a View mounted by `browser_open` must paint the live browser on
-	// its first frame, not flash the open form and then replace it.
-	//
-	// The host's `ui/notifications/tool-result` carries no tool name, so a
-	// `browser_state` or `browser_snapshot` result for the browser already on
-	// screen arrives here looking exactly like a re-target. Only a CHANGE of
-	// browserId is one: everything destructive (the sketch, the
-	// armed drawing tool, the form fields) is gated on that, so a model turn
-	// cannot wipe a half-drawn crop out from under the human.
+	// RENDER so a View mounted by `browser_open` paints the live browser on its
+	// first frame. Only a CHANGE of browserId resets the annotation: a model turn
+	// must not wipe a half-drawn crop out from under the human.
 	const [seenSeq, setSeenSeq] = useState(0);
 	if (toolState !== null && toolState.seq !== seenSeq) {
 		setSeenSeq(toolState.seq);
@@ -116,28 +111,21 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 			setBrowserId(toolState.state.browserId);
 			setProfile(toolState.state.profile);
 			setEngine(toolState.state.engine);
-			setSnapshot(null);
-			setClearToken(token => token + 1);
-			setTool("interact");
+			setAnnotating(false);
+			setSketch(EMPTY_SKETCH);
+			setStill(null);
 		}
 	}
-	// The history line for that arrival is a side effect, so it stays in one —
-	// and it is written once per browser, not once per notification.
-	useEffect(() => {
-		if (toolState === null) return;
-		const arrived = toolState.state;
-		if (loggedOpenRef.current === arrived.browserId) return;
-		loggedOpenRef.current = arrived.browserId;
-		log(`opened ${arrived.profile} (${arrived.engine})`, "accent");
-	}, [toolState, log]);
 
 	useEffect(() => {
 		let current = true;
 		void client.bindBrowser(browserId).catch(cause => {
-			if (current) log(`conversation binding failed — ${failureText(cause)}`, "del");
+			if (current) say("error", `The agent could not be told about this browser: ${failureText(cause)}`);
 		});
-		return () => { current = false; };
-	}, [client, browserId, log]);
+		return () => {
+			current = false;
+		};
+	}, [client, browserId, say]);
 
 	// The profile list is app-only: it names profiles, never live browsers.
 	useEffect(() => {
@@ -161,32 +149,44 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 		};
 	}, [client]);
 
-	// An awaited result may land after this View was torn down, or after a tool
-	// result re-targeted it at another browser: either way it is dropped rather
-	// than painted over the page that is on screen now.
+	// Remember which task this View saw running, so its end gets a toast.
+	useEffect(() => {
+		if (task?.status === "running") watchedTaskRef.current = task.id;
+	}, [task?.id, task?.status]);
+
 	const live = (bound: string) => mountedRef.current && boundRef.current === bound;
 
-	const open = async () => {
-		// chrome-relay attaches to the ONE Chrome identity already signed in; the
-		// runtime reserves the literal profile "relay" for it and refuses that slug
-		// for other engines, which own isolated persistent profiles.
+	// A navigation this View started shows as loading at once: the runtime only
+	// reports `loading` on the next poll, which lands after the action returns.
+	const input = usePageInput(client, browserId, {
+		onState: (next, action) => {
+			if (NAVIGATION[action.kind]) setNavPending(count => Math.max(0, count - 1));
+			poll.push(next);
+			poll.refresh();
+		},
+		onError: (message, action) => {
+			if (NAVIGATION[action.kind]) setNavPending(count => Math.max(0, count - 1));
+			// Back/forward at the end of history is a no-op, not a failure worth a toast.
+			if ((action.kind === "back" || action.kind === "forward") && /history/i.test(message)) return;
+			say("error", message);
+			poll.refresh();
+		},
+	});
+
+	const open = async (url: string) => {
 		const target = engine === "chrome-relay" ? RELAY_PROFILE : profile.trim();
 		if (target.length === 0) return;
 		setOpening(true);
 		setOpenError(null);
 		try {
-			const next = await client.open({ profile: target, engine, url: openUrl.trim() || undefined });
-			// The browser exists whatever happened here meanwhile, so an unmounted
-			// View simply stops: it must not paint, and it has nothing to undo.
+			const next = await client.open({ profile: target, engine, url: url.length > 0 ? url : undefined });
 			if (!mountedRef.current) return;
 			setBrowserId(next.browserId);
 			setOpened(next);
 			if (next.engine !== "chrome-relay") setProfiles(current => [...new Set([...(current ?? []), next.profile])].sort());
-			setSnapshot(null);
-			setClearToken(token => token + 1);
-			setTool("interact");
-			loggedOpenRef.current = next.browserId;
-			log(`opened ${next.profile} (${next.engine})`, "accent");
+			setAnnotating(false);
+			setSketch(EMPTY_SKETCH);
+			setStill(null);
 		} catch (cause) {
 			if (mountedRef.current) setOpenError(failureText(cause));
 		} finally {
@@ -194,59 +194,61 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 		}
 	};
 
-	/** Runs one action now. Answers true only when it completed, so a control
-	 *  can keep the human's draft when it did not. */
-	const act = async (action: BrowserAction): Promise<boolean> => {
+	// The page area's size becomes the browser's viewport, so the page fills
+	// it edge to edge and every click maps 1:1. Debounced: a drag-resize sends
+	// one call, not sixty; the last frame stays on screen, fitted, meanwhile.
+	const resizeTimerRef = useRef<number | undefined>(undefined);
+	const sentSizeRef = useRef<{ width: number; height: number } | null>(null);
+	const onStageResize = useCallback(
+		(width: number, height: number) => {
+			window.clearTimeout(resizeTimerRef.current);
+			resizeTimerRef.current = window.setTimeout(() => {
+				const bound = boundRef.current;
+				if (bound === null || width < 320 || height < 240) return;
+				const sent = sentSizeRef.current;
+				if (sent !== null && sent.width === width && sent.height === height) return;
+				sentSizeRef.current = { width, height };
+				client.viewport(bound, width, height).then(
+					next => {
+						if (!live(bound)) return;
+						poll.push(next);
+						poll.refresh();
+					},
+					cause => {
+						if (live(bound)) say("error", `Couldn't resize the page: ${failureText(cause)}`);
+						sentSizeRef.current = null;
+					},
+				);
+			}, 150);
+		},
+		[client],
+	);
+	useEffect(() => {
+		sentSizeRef.current = null;
+	}, [browserId]);
+
+	const tabOp = async (op: TabOp, options: { tabId?: string; url?: string } = {}) => {
 		const bound = browserId;
-		if (bound === null) return false;
-		const what = describeAction(action);
-		setBusy(true);
-		setActionError(null);
+		if (bound === null || locked) return;
 		try {
-			const next = await client.act(bound, action);
-			if (!live(bound)) return false;
+			const next = await client.tab(bound, op, options);
+			if (!live(bound)) return;
 			poll.push(next);
 			poll.refresh();
-			log(what, "accent");
-			return true;
 		} catch (cause) {
-			if (!live(bound)) return false;
-			const detail = failureText(cause);
-			setActionError(detail);
-			log(`${what} failed — ${detail}`, "del");
-			// A failure may still have moved the page; show what is there now.
-			poll.refresh();
-			return false;
-		} finally {
-			if (mountedRef.current) setBusy(false);
+			if (live(bound)) say("error", failureText(cause));
 		}
 	};
 
-	/** Follows the task until it ends; the poll loop shows it live meanwhile. */
-	const startTask = async (agent: TaskAgent, task: string) => {
-		const bound = browserId;
-		if (bound === null) return;
-		setTaskStarting(true);
-		setActionError(null);
-		log(`task started (${agent})`, "accent");
-		// Poll shortly so the running task (and the faster cadence) shows at once.
-		window.setTimeout(() => poll.refresh(), 300);
-		try {
-			const run = await client.task(bound, agent, task);
-			if (!live(bound)) return;
-			log(
-				`task ${run.status} after ${run.stepCount} steps${run.summary.length > 0 ? ` — ${run.summary}` : ""}`,
-				run.status === "done" ? "add" : run.status === "failed" ? "del" : "mute",
-			);
-		} catch (cause) {
-			if (!live(bound)) return;
-			const detail = failureText(cause);
-			setActionError(detail);
-			log(`task failed — ${detail}`, "del");
-		} finally {
-			if (mountedRef.current) setTaskStarting(false);
-			if (live(bound)) poll.refresh();
-		}
+	const act = (action: BrowserAction) => {
+		if (browserId === null || locked) return;
+		if (NAVIGATION[action.kind]) setNavPending(count => count + 1);
+		input.send(action);
+	};
+
+	const navigate = (url: string) => {
+		if (url.length === 0) return;
+		act({ kind: "navigate", url });
 	};
 
 	const cancelTask = async () => {
@@ -257,280 +259,288 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 			await client.cancelTask(bound);
 			if (live(bound)) poll.refresh();
 		} catch (cause) {
-			if (live(bound)) setActionError(failureText(cause));
+			if (live(bound)) say("error", failureText(cause));
 		} finally {
 			if (mountedRef.current) setCancelling(false);
-		}
-	};
-
-	const takeSnapshot = async () => {
-		const bound = browserId;
-		if (bound === null) return;
-		setBusy(true);
-		try {
-			const result = await client.snapshot(bound);
-			if (!live(bound)) return;
-			setSnapshot({ browserId: bound, text: result.text });
-			poll.push(result.state);
-			log(`snapshot taken (${result.text.length} chars)`, "accent");
-		} catch (cause) {
-			if (!live(bound)) return;
-			const detail = failureText(cause);
-			setActionError(detail);
-			log(`snapshot failed — ${detail}`, "del");
-		} finally {
-			if (mountedRef.current) setBusy(false);
 		}
 	};
 
 	const closeBrowser = async () => {
 		const bound = browserId;
 		if (bound === null) return;
-		setBusy(true);
 		try {
 			await client.close(bound);
-			if (!live(bound)) return;
-			log("browser closed", "mute");
-			setBrowserId(null);
-			setOpened(null);
-			setSnapshot(null);
-			setClearToken(token => token + 1);
-			// The drawing tools belong to the browser that is gone: leaving one
-			// armed pauses the frame loop of whatever opens next.
-			setTool("interact");
 		} catch (cause) {
-			if (live(bound)) setActionError(failureText(cause));
-		} finally {
-			if (mountedRef.current) setBusy(false);
+			if (live(bound)) say("error", failureText(cause));
+			return;
+		}
+		if (!live(bound)) return;
+		leave();
+	};
+
+	/** Back to the start page, whatever happened to the browser. */
+	const leave = () => {
+		setBrowserId(null);
+		setNavPending(0);
+		setOpened(null);
+		setAnnotating(false);
+		setSketch(EMPTY_SKETCH);
+		setStill(null);
+		input.reset();
+	};
+
+	const enterAnnotation = async () => {
+		const bound = browserId;
+		if (bound === null || annotating) return;
+		setAnnotating(true);
+		setSketch(EMPTY_SKETCH);
+		setStill(null);
+		try {
+			const frame = await client.frame(bound, "png");
+			if (live(bound)) setStill(frame);
+		} catch (cause) {
+			if (!live(bound)) return;
+			say("error", `Couldn't capture the page for annotation: ${failureText(cause)}`);
+			setAnnotating(false);
 		}
 	};
 
-	// A crop that reached the host is spent: drop the drawing and let the
-	// picture move again.
-	const onSketchConsumed = useCallback(() => {
-		setClearToken(token => token + 1);
-		setTool("interact");
-	}, []);
+	const refreshPoll = poll.refresh;
+	const exitAnnotation = useCallback(() => {
+		setAnnotating(false);
+		setSketch(EMPTY_SKETCH);
+		setStill(null);
+		// The loop is on its slow, frozen cadence: pull the first live frame now.
+		window.setTimeout(refreshPoll, 0);
+	}, [refreshPoll]);
 
-	const onSketchChange = useCallback((next: SketchState) => setSketch(next), []);
+	const forgetAnnotation = async () => {
+		const bound = browserId;
+		if (bound === null) return;
+		try {
+			if (await client.bindBrowser(bound)) say("ok", "Annotation removed — the agent keeps the browser, not the picture.");
+		} catch (cause) {
+			if (live(bound)) say("error", failureText(cause));
+		}
+	};
 
-	const viewport = state?.viewport ?? { width: 0, height: 0 };
-	const shownSnapshot = snapshot !== null && snapshot.browserId === browserId ? snapshot.text : null;
+	const copyAddress = async () => {
+		const url = state?.url ?? "";
+		if (url.length === 0) return;
+		try {
+			await navigator.clipboard.writeText(url);
+			say("ok", "Address copied.");
+		} catch {
+			say("error", "The clipboard is not available here.");
+		}
+	};
 
-	return (
-		<main className="bx-app">
-			<header className="bx-head">
-				<div className="bx-head-line">
-					<h1>Browser</h1>
-					{state !== null && (
-						<>
-							<Badge tone="mute" variant="code">
-								{state.profile}
-							</Badge>
-							<Badge tone="blue" variant="soft">
-								{state.engine}
-							</Badge>
-							<span className="bx-title">{state.title.length > 0 ? state.title : "(untitled)"}</span>
-							<span className="bx-url bx-mono">{state.url.length > 0 ? state.url : "about:blank"}</span>
-						</>
-					)}
-				</div>
-				{browserId !== null && (
-					<div className="bx-head-actions">
-						<Button size="sm" variant="outline" disabled={busy} onClick={() => void takeSnapshot()}>
-							Snapshot
-						</Button>
-						<Button size="sm" variant="destructive" disabled={busy} onClick={() => void closeBrowser()}>
-							Close browser
-						</Button>
-					</div>
-				)}
-			</header>
+	// Browser shortcuts, wherever focus is inside the View.
+	useEffect(() => {
+		if (browserId === null) return;
+		const onKey = (event: KeyboardEvent) => {
+			const mod = event.ctrlKey || event.metaKey;
+			const inField = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement;
+			const tabs = state?.tabs ?? [];
+			const index = tabs.findIndex(tab => tab.id === state?.activeTabId);
+			const handled = () => {
+				event.preventDefault();
+				event.stopPropagation();
+			};
+			if (mod && !event.shiftKey && event.key.toLowerCase() === "l") {
+				handled();
+				omniRef.current?.focus();
+			} else if (mod && !event.shiftKey && event.key.toLowerCase() === "t") {
+				handled();
+				void tabOp("new");
+				omniRef.current?.focus();
+			} else if (mod && !event.shiftKey && event.key.toLowerCase() === "w") {
+				handled();
+				if (state) void tabOp("close", { tabId: state.activeTabId });
+			} else if ((mod && event.key.toLowerCase() === "r") || event.key === "F5") {
+				handled();
+				act({ kind: "reload" });
+			} else if (event.altKey && event.key === "ArrowLeft") {
+				handled();
+				if (state?.canGoBack) act({ kind: "back" });
+			} else if (event.altKey && event.key === "ArrowRight") {
+				handled();
+				if (state?.canGoForward) act({ kind: "forward" });
+			} else if (mod && event.key === "Tab" && tabs.length > 1 && index >= 0) {
+				handled();
+				const next = (index + (event.shiftKey ? -1 : 1) + tabs.length) % tabs.length;
+				void tabOp("activate", { tabId: tabs[next].id });
+			} else if (mod && !event.shiftKey && /^[1-9]$/.test(event.key) && tabs.length > 0) {
+				handled();
+				const target = event.key === "9" ? tabs[tabs.length - 1] : tabs[Number(event.key) - 1];
+				if (target) void tabOp("activate", { tabId: target.id });
+			} else if (mod && event.shiftKey && event.key.toLowerCase() === "a") {
+				handled();
+				if (annotating) exitAnnotation();
+				else void enterAnnotation();
+			} else if (event.key === "Escape" && !inField && document.querySelector(".bx-menu") === null) {
+				if (annotating) {
+					handled();
+					exitAnnotation();
+				} else if (loading) {
+					handled();
+					act({ kind: "stop" });
+				}
+			}
+		};
+		window.addEventListener("keydown", onKey, true);
+		return () => window.removeEventListener("keydown", onKey, true);
+	});
 
-			{browserId === null ? (
-				<section className="bx-open" aria-label="Open a browser">
-					<h2>Open a profile</h2>
-					{profiles === null ? (
-						<p className="bx-empty">
-							<Spinner size="sm" label="Loading profiles" /> Loading profiles…
-						</p>
-					) : (
-						<div className="bx-row">
-							<Field
-								label="Profile"
-								helper={
-									relay
-										? "Uses the identity already signed in to the attached Chrome."
-										: profiles.length === 0
-											? "No saved profiles — type a name to create one."
-											: undefined
-								}
-								className="bx-grow"
-							>
-								{relay ? (
-									<Input value={RELAY_PROFILE} readOnly disabled aria-label="Profile" />
-								) : (
-									<>
-										<Input value={profile} list="browser-profile-names" placeholder="Choose or create a profile" autoComplete="off" onChange={event => setProfile(event.target.value)} />
-										<datalist id="browser-profile-names">
-											{profiles.map(name => <option key={name} value={name} />)}
-										</datalist>
-									</>
-								)}
-							</Field>
-							<Field label="Engine" className="bx-narrow">
-								<Select
-									value={engine}
-									onChange={event => {
-										const selected = BROWSER_ENGINES.find(value => value === event.target.value);
-										if (selected) setEngine(selected);
-									}}
-									options={BROWSER_ENGINES.map(value => ({
-										value,
-										label: REFUSED_ENGINES.includes(value) ? `${value} — unavailable` : value,
-										// Refused by the runtime over unfixed upstream security defects.
-										disabled: REFUSED_ENGINES.includes(value),
-									}))}
-								/>
-							</Field>
-							<Field label="Open at (optional)" className="bx-grow">
-								<Input
-									type="url"
-									value={openUrl}
-									placeholder="https://example.com"
-									autoComplete="off"
-									spellCheck={false}
-									onChange={event => setOpenUrl(event.target.value)}
-								/>
-							</Field>
-							<Button
-								loading={opening}
-								loadingText="Opening…"
-								disabled={!relay && profile.trim().length === 0}
-								onClick={() => void open()}
-							>
-								Open
-							</Button>
-						</div>
-					)}
-					{profilesError !== null && (
-						<p className="bx-error" role="alert">
-							Could not list profiles ({profilesError}). Type a profile name to open one anyway.
-						</p>
-					)}
-					{openError !== null && (
-						<p className="bx-error" role="alert">
-							{openError}
-						</p>
-					)}
-					<p className="bx-note">
-						{relay
-							? "chrome-relay attaches to the Chrome you are already signed in to — there are no separate identities to choose. "
-							: "A named profile is persistent, isolated, and held by one caller at a time: opening one that is already active is refused rather than shared. "}
-						An address given here is opened straight away.
-					</p>
-				</section>
-			) : (
-				<div className="bx-body">
-					<div className="bx-left">
-						<div className="bx-toolbar" role="group" aria-label="Pointer tool">
-							{TOOLS.map(entry => (
-								<Button
-									key={entry.value}
-									size="sm"
-									variant={tool === entry.value ? "default" : "ghost"}
-									aria-pressed={tool === entry.value}
-									onClick={() => setTool(entry.value)}
-								>
-									{entry.label}
-								</Button>
-							))}
-							<Button size="sm" variant="ghost" onClick={() => setClearToken(token => token + 1)}>
-								Clear drawing
-							</Button>
-							<span className="bx-spacer" />
-							{poll.loading && <Spinner size="sm" label="Loading frame" />}
-							<span className="bx-mono bx-dim">
-								{viewport.width}×{viewport.height} px
-							</span>
-						</div>
+	if (browserId === null || state === null) {
+		return (
+			<StartPage
+				profiles={profiles}
+				profilesError={profilesError}
+				profile={profile}
+				engine={engine}
+				opening={opening}
+				error={openError}
+				onProfile={setProfile}
+				onEngine={setEngine}
+				onOpen={url => void open(url)}
+			/>
+		);
+	}
 
-						{poll.error !== null && (
-							<p className="bx-error" role="alert">
-								Frame updates failing — retrying with backoff. {poll.error}
-							</p>
-						)}
+	const parts = addressParts(state.url);
+	const blank = parts.blank && !state.loading && !annotating;
+	const frame = annotating ? (still ?? poll.frame) : poll.frame;
+	const mode = annotating ? "annotate" : locked ? "locked" : "live";
+	const label = `${tabLabel(state.title, state.url)}${state.url.length > 0 ? ` — ${state.url}` : ""}`;
+	const ended = task !== null && task.status !== "running" && watchedTaskRef.current === task.id && dismissedTask !== task.id;
 
-						<ViewportCanvas
-							key={browserId}
-							frame={poll.frame}
-							viewport={viewport}
-							tool={tool}
-							url={state?.url ?? ""}
-							title={state?.title ?? ""}
-							frozen={annotating}
-							disabled={busy || taskRunning}
-							onPoint={point => void act({ kind: "click", x: point.x, y: point.y })}
-							onSketchChange={onSketchChange}
-							clearToken={clearToken}
-						/>
-
-						<Controls url={state?.url ?? ""} disabled={state === null || taskRunning} busy={busy} onAct={act} />
-						{actionError !== null && (
-							<p className="bx-error" role="alert">
-								{actionError}
-							</p>
-						)}
-					</div>
-
-					<aside className="bx-right">
-						<TaskPanel
-							key={browserId}
-							task={state?.task ?? null}
-							disabled={state === null || busy}
-							starting={taskStarting}
-							cancelling={cancelling}
-							onStart={(agent, task) => void startTask(agent, task)}
-							onCancel={() => void cancelTask()}
-						/>
-						<Separator />
-						<AnnotatePanel
-							key={browserId}
-							app={app}
-							client={client}
-							browserId={browserId}
-							frameId={poll.frame?.frameId ?? null}
-							region={sketch.region}
-							marks={sketch.marks}
-							disabled={busy}
-							onSent={text => log(text, "add")}
-							onFailed={text => log(text, "del")}
-							onSketchConsumed={onSketchConsumed}
-						/>
-						<Separator />
-						<section className="bx-history" aria-label="Step history">
-							<h2>History</h2>
-							{steps.length === 0 ? (
-								<p className="bx-empty">No steps yet.</p>
-							) : (
-								<ol className="bx-history-list">
-									{steps.map(step => (
-										<li key={step.id} data-tone={step.tone}>
-											<span className="bx-mono bx-dim">{step.at}</span> {step.text}
-										</li>
-									))}
-								</ol>
-							)}
-							{shownSnapshot !== null && (
-								<details className="bx-snapshot">
-									<summary>Latest snapshot text</summary>
-									<pre className="bx-mono">{shownSnapshot}</pre>
-								</details>
-							)}
-						</section>
-					</aside>
+	const floats = (
+		<>
+			{annotating && (
+				<div className="bx-float bx-float-top">
+					<AnnotateBar
+						app={app}
+						client={client}
+						browserId={browserId}
+						frameId={still?.frameId ?? null}
+						tool={tool}
+						onTool={setTool}
+						sketch={sketch}
+						onClear={() => setSketch(EMPTY_SKETCH)}
+						onExit={exitAnnotation}
+						onNotice={say}
+						onSent={exitAnnotation}
+					/>
 				</div>
 			)}
-		</main>
+
+			{taskRunning && task !== null && (
+				<div className="bx-float bx-float-bottom">
+					<AgentPill task={task} cancelling={cancelling} onCancel={() => void cancelTask()} />
+				</div>
+			)}
+		</>
+	);
+
+	return (
+		<div className="bx-browser" data-locked={locked || undefined} data-annotating={annotating || undefined} data-connection={poll.connection}>
+			<TabStrip
+				tabs={navPending > 0 ? state.tabs.map(tab => (tab.id === state.activeTabId ? { ...tab, loading: true } : tab)) : state.tabs}
+				activeTabId={state.activeTabId}
+				locked={locked}
+				onActivate={tabId => void tabOp("activate", { tabId })}
+				onClose={tabId => void tabOp("close", { tabId })}
+				onNew={() => {
+					void tabOp("new");
+					omniRef.current?.focus();
+				}}
+			/>
+			<Toolbar
+				ref={omniRef}
+				url={state.url}
+				loading={loading}
+				canGoBack={state.canGoBack}
+				canGoForward={state.canGoForward}
+				locked={locked}
+				annotating={annotating}
+				profile={state.profile}
+				engine={state.engine}
+				offline={offline}
+				onBack={() => act({ kind: "back" })}
+				onForward={() => act({ kind: "forward" })}
+				onReload={() => act({ kind: "reload" })}
+				onStop={() => act({ kind: "stop" })}
+				onNavigate={navigate}
+				onAnnotate={() => (annotating ? exitAnnotation() : void enterAnnotation())}
+				onCopyAddress={() => void copyAddress()}
+				onForgetAnnotation={() => void forgetAnnotation()}
+				onCloseBrowser={() => void closeBrowser()}
+			/>
+			<div className="bx-content">
+				{blank ? (
+					<BlankTab disabled={locked} onNavigate={navigate}>
+						{floats}
+					</BlankTab>
+				) : (
+					<PageView
+						frame={frame}
+						viewport={viewport}
+						mode={mode}
+						tool={tool}
+						sketch={sketch}
+						onSketch={setSketch}
+						onAction={act}
+						onResize={onStageResize}
+						label={label}
+					>
+						{taskRunning && <span className="bx-drive" aria-hidden="true" />}
+						{floats}
+					</PageView>
+				)}
+
+
+			{((ended && task !== null) || notice !== null) && (
+				<div className="bx-float bx-float-corner">
+					<div className="bx-stack">
+						{ended && task !== null && <ResultToast task={task} onDismiss={() => setDismissedTask(task.id)} />}
+						{notice !== null && (
+							<div className="bx-toast" data-tone={notice.tone} role={notice.tone === "error" ? "alert" : "status"} key={notice.id}>
+								<span className="bx-toast-icon" aria-hidden="true">
+									<Icon name={notice.tone === "error" ? "warnTri" : "check"} size={14} strokeWidth={2.25} />
+								</span>
+								<span className="bx-toast-text">{notice.text}</span>
+								<button type="button" className="bx-toast-close" aria-label="Dismiss" onClick={() => setNotice(null)}>
+									<Icon name="x" size={13} strokeWidth={2.25} />
+								</button>
+							</div>
+						)}
+					</div>
+				</div>
+			)}
+				{poll.connection === "reconnecting" && (
+					<div className="bx-banner" role="status">
+						<span className="bx-tab-spinner" aria-hidden="true" />
+						Reconnecting to the browser…
+						{poll.error !== null && <span className="bx-banner-detail">{poll.error}</span>}
+					</div>
+				)}
+
+				{poll.connection === "gone" && (
+					<div className="bx-gone" role="alert">
+						<div className="bx-gone-card">
+							<span className="bx-start-mark" aria-hidden="true">
+								<Icon name="logout" size={20} strokeWidth={1.75} />
+							</span>
+							<h2>This browser was closed</h2>
+							<p>It was shut down elsewhere — by the agent, or by the session ending.</p>
+							<button type="button" className="bx-start-open" onClick={leave}>
+								Open another
+							</button>
+						</div>
+					</div>
+				)}
+			</div>
+		</div>
 	);
 }
