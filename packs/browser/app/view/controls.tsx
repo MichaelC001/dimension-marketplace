@@ -1,8 +1,7 @@
-// Every human intent in this View becomes a REQUEST, never an execution: each
-// button queues `browser_request_action` and the page does not move until a
-// human approves it in the queue. Typed text is ephemeral — it lives in the
-// input until the request is queued, is cleared immediately after, is masked on
-// demand for credentials, and is never written to storage of any kind.
+// Direct controls: every button runs `browser_act` NOW and the frame follows.
+// Typed text is ephemeral — it lives in the input until the action ran, is
+// cleared immediately after, is masked on demand for credentials, and is never
+// written to storage of any kind.
 import { type FormEvent, useState } from "react";
 import type { BrowserAction } from "../../src/contracts";
 import { Button, Field, Input, Label } from "@fraym/ui/elements"
@@ -11,12 +10,12 @@ export interface ControlsProps {
 	readonly url: string;
 	readonly disabled: boolean;
 	readonly busy: boolean;
-	/** Queues the request and resolves true only when the runtime accepted it —
-	 *  a refused request keeps the human's draft so it can be corrected. */
-	readonly onRequest: (action: BrowserAction) => Promise<boolean>;
+	/** Runs the action and answers true only when it completed — a failed
+	 *  action keeps the human's draft so it can be corrected. */
+	readonly onAct: (action: BrowserAction) => Promise<boolean>;
 }
 
-export function Controls({ url, disabled, busy, onRequest }: ControlsProps) {
+export function Controls({ url, disabled, busy, onAct }: ControlsProps) {
 	const [address, setAddress] = useState(url);
 	const [addressDirty, setAddressDirty] = useState(false);
 	const [selector, setSelector] = useState("");
@@ -28,32 +27,28 @@ export function Controls({ url, disabled, busy, onRequest }: ControlsProps) {
 
 	// The address bar follows the page until the human starts editing it.
 	const shownAddress = addressDirty ? address : url;
+	const noSelector = disabled || busy || selector.trim().length === 0;
 
 	const submitNavigate = async (event: FormEvent) => {
 		event.preventDefault();
 		const target = shownAddress.trim();
 		if (target.length === 0) return;
-		if (await onRequest({ kind: "navigate", url: target })) setAddressDirty(false);
+		if (await onAct({ kind: "navigate", url: target })) setAddressDirty(false);
 	};
 
 	// The server's type action REQUIRES a selector (it has no focused-element
-	// form), and an empty text is a legitimate request: it clears the field.
+	// form), and an empty text is legitimate: it clears the field.
 	const submitType = async (event: FormEvent) => {
 		event.preventDefault();
 		const target = selector.trim();
 		if (target.length === 0) return;
-		const accepted = await onRequest({ kind: "type", selector: target, text });
-		// Ephemeral by contract: the typed value leaves this View with the
-		// request and is dropped the moment it does — but only once it is
-		// actually queued, so a refusal does not cost the human the draft.
-		if (accepted) setText("");
+		if (await onAct({ kind: "type", selector: target, text })) setText("");
 	};
 
-	// press and scroll are unscoped in the server's schema (strict objects with
-	// no selector member), so the shared selector box must not ride along.
+	// press and scroll act on the page, so the shared selector box must not ride along.
 	const scroll = (event: FormEvent) => {
 		event.preventDefault();
-		void onRequest({
+		void onAct({
 			kind: "scroll",
 			deltaX: Number.parseInt(deltaX, 10) || 0,
 			deltaY: Number.parseInt(deltaY, 10) || 0,
@@ -78,12 +73,12 @@ export function Controls({ url, disabled, busy, onRequest }: ControlsProps) {
 					/>
 				</Field>
 				<Button type="submit" disabled={disabled || busy || shownAddress.trim().length === 0}>
-					Request navigation
+					Go
 				</Button>
 			</form>
 
 			<form className="bx-row" onSubmit={event => void submitType(event)}>
-				<Field label="CSS selector" helper="Required to type; also used by Request click on selector. Key press and scroll act on the page." className="bx-grow">
+				<Field label="CSS selector" helper="Used by Type, Select option and Click selector. Key press and scroll act on the page." className="bx-grow">
 					<Input
 						value={selector}
 						placeholder="input[name=q]"
@@ -93,7 +88,7 @@ export function Controls({ url, disabled, busy, onRequest }: ControlsProps) {
 						onChange={event => setSelector(event.target.value)}
 					/>
 				</Field>
-				<Field label="Text to type" helper="Empty replaces the field's value with nothing — that is how you clear it." className="bx-grow">
+				<Field label="Text / option" helper="Type replaces the field's value (empty clears it); Select picks the option with this value or label." className="bx-grow">
 					<Input
 						type={masked ? "password" : "text"}
 						value={text}
@@ -113,16 +108,24 @@ export function Controls({ url, disabled, busy, onRequest }: ControlsProps) {
 					/>
 					<Label htmlFor="bx-mask-toggle">Credential (mask)</Label>
 				</div>
-				<Button type="submit" variant="outline" disabled={disabled || busy || selector.trim().length === 0}>
-					Request type
+				<Button type="submit" variant="outline" disabled={noSelector}>
+					Type
 				</Button>
 				<Button
 					type="button"
 					variant="outline"
-					disabled={disabled || busy || selector.trim().length === 0}
-					onClick={() => void onRequest({ kind: "click", selector: selector.trim() })}
+					disabled={noSelector || text.length === 0}
+					onClick={() => void onAct({ kind: "select", selector: selector.trim(), value: text })}
 				>
-					Request click on selector
+					Select option
+				</Button>
+				<Button
+					type="button"
+					variant="outline"
+					disabled={noSelector}
+					onClick={() => void onAct({ kind: "click", selector: selector.trim() })}
+				>
+					Click selector
 				</Button>
 			</form>
 
@@ -140,9 +143,9 @@ export function Controls({ url, disabled, busy, onRequest }: ControlsProps) {
 					type="button"
 					variant="outline"
 					disabled={disabled || busy || key.trim().length === 0}
-					onClick={() => void onRequest({ kind: "press", key: key.trim() })}
+					onClick={() => void onAct({ kind: "press", key: key.trim() })}
 				>
-					Request key press
+					Press key
 				</Button>
 				<Field label="Scroll Δx" className="bx-narrow">
 					<Input
@@ -161,7 +164,7 @@ export function Controls({ url, disabled, busy, onRequest }: ControlsProps) {
 					/>
 				</Field>
 				<Button type="submit" variant="outline" disabled={disabled || busy}>
-					Request scroll
+					Scroll
 				</Button>
 			</form>
 		</section>

@@ -44,7 +44,7 @@ export interface ViewportCanvasProps {
 	/** Frozen while annotating: the loop is paused, so say so on the picture. */
 	readonly frozen: boolean;
 	readonly disabled: boolean;
-	/** A click the human made on the page — queued as a pending action, never run here. */
+	/** A click the human made on the page — the app runs it as browser_act. */
 	readonly onPoint: (point: Point) => void;
 	readonly onSketchChange: (sketch: SketchState) => void;
 	/** Bumping this token clears every drawing (after a send, or a browser switch). */
@@ -171,7 +171,7 @@ export function ViewportCanvas({
 
 	// The keyboard route onto the picture: arrows move a caret in viewport
 	// pixels (Shift for a coarse step), Enter/Space places it and — in Interact
-	// — queues the click that a pointer would have made. A region has no
+	// — clicks where a pointer would have. A region has no
 	// pointer-free gesture, so it is entered as four numbers below the picture.
 	const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
 		if (disabled || frame === null) return;
@@ -291,7 +291,7 @@ export function ViewportCanvas({
 				<p className="bx-caret-note" role="status">
 					Caret at {caret.x}, {caret.y} (viewport px)
 					{tool === "interact"
-						? " — press Enter to request a click there."
+						? " — press Enter to click there."
 						: " — switch to Interact to click, or set a crop by number below."}
 				</p>
 			)}

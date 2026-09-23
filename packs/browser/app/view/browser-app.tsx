@@ -1,16 +1,16 @@
-// The View proper: open a profile, watch it, request things, approve things,
+// The View proper: open a profile, watch it, act on it, hand it a task,
 // crop things. Every capability comes from one opaque `browserId` that arrives
 // in this View's own `browser_open` tool result — there is no listing, and the
 // id is held in React state only (never storage, never a URL).
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { App } from "@modelcontextprotocol/ext-apps";
-import type { BrowserAction, BrowserEngine, BrowserState } from "../../src/contracts";
+import type { BrowserAction, BrowserEngine, BrowserState, TaskAgent } from "../../src/contracts";
 import { BROWSER_ENGINES } from "../../src/contracts";
-import { ActionQueue } from "./action-queue";
 import { AnnotatePanel } from "./annotate-panel";
-import { BrowserClient, BrowserToolError, describeAction, REDACTED_TEXT } from "./browser-client";
+import { BrowserClient, BrowserToolError, describeAction } from "./browser-client";
 import { Controls } from "./controls";
 import { Badge, Button, Field, Input, Select, Separator, Spinner } from "@fraym/ui/elements"
+import { TaskPanel } from "./task-panel";
 import { useBrowserPoll } from "./use-browser-poll";
 import { type CanvasTool, type SketchState, ViewportCanvas } from "./viewport-canvas";
 
@@ -20,6 +20,9 @@ const TOOLS: readonly { value: CanvasTool; label: string }[] = [
 	{ value: "circle", label: "Circle" },
 	{ value: "freehand", label: "Freehand" },
 ];
+
+/** Engines the runtime refuses to start (upstream security defects). */
+const REFUSED_ENGINES: readonly BrowserEngine[] = ["abp", "browser4"];
 
 /** The runtime's reserved slug for attached Chrome; other engines refuse it. */
 const RELAY_PROFILE = "relay";
@@ -58,7 +61,8 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 	const [sketch, setSketch] = useState<SketchState>({ region: null, marks: [] });
 	const [clearToken, setClearToken] = useState(0);
 	const [busy, setBusy] = useState(false);
-	const [resolving, setResolving] = useState<string | null>(null);
+	const [taskStarting, setTaskStarting] = useState(false);
+	const [cancelling, setCancelling] = useState(false);
 	const [snapshot, setSnapshot] = useState<{ browserId: string; text: string } | null>(null);
 	const [steps, setSteps] = useState<readonly Step[]>([]);
 	const [actionError, setActionError] = useState<string | null>(null);
@@ -77,13 +81,12 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 	// The browser whose arrival has already been written to History, so a
 	// re-delivered tool result for the SAME browser never logs a second "opened".
 	const loggedOpenRef = useRef<string | null>(null);
-	// One request id per distinct intent, reused on retry so a re-press can never
-	// become a second claim for the same thing.
-	const requestIds = useRef(new Map<string, string>());
 
 	const annotating = tool !== "interact";
 	const poll = useBrowserPoll(client, browserId, annotating);
 	const state = poll.state ?? opened;
+	// While an agent drives the page the runtime refuses browser_act; so does the UI.
+	const taskRunning = state?.task?.status === "running";
 	// chrome-relay has exactly one identity — the signed-in Chrome it attaches to.
 	const relay = engine === "chrome-relay";
 
@@ -101,7 +104,7 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 	// The host's `ui/notifications/tool-result` carries no tool name, so a
 	// `browser_state` or `browser_snapshot` result for the browser already on
 	// screen arrives here looking exactly like a re-target. Only a CHANGE of
-	// browserId is one: everything destructive (the retry map, the sketch, the
+	// browserId is one: everything destructive (the sketch, the
 	// armed drawing tool, the form fields) is gated on that, so a model turn
 	// cannot wipe a half-drawn crop out from under the human.
 	const [seenSeq, setSeenSeq] = useState(0);
@@ -114,7 +117,6 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 			setProfile(toolState.state.profile);
 			setEngine(toolState.state.engine);
 			setSnapshot(null);
-			requestIds.current.clear();
 			setClearToken(token => token + 1);
 			setTool("interact");
 		}
@@ -181,15 +183,10 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 			setOpened(next);
 			if (next.engine !== "chrome-relay") setProfiles(current => [...new Set([...(current ?? []), next.profile])].sort());
 			setSnapshot(null);
-			requestIds.current.clear();
 			setClearToken(token => token + 1);
 			setTool("interact");
-			const queued = next.actions.filter(action => action.status === "pending").length;
 			loggedOpenRef.current = next.browserId;
-			log(
-				`opened ${next.profile} (${next.engine})${queued > 0 ? ` — ${queued} navigation queued for your approval` : ""}`,
-				"accent",
-			);
+			log(`opened ${next.profile} (${next.engine})`, "accent");
 		} catch (cause) {
 			if (mountedRef.current) setOpenError(failureText(cause));
 		} finally {
@@ -197,89 +194,72 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 		}
 	};
 
-	const refreshState = async (bound: string) => {
-		try {
-			const next = await client.state(bound);
-			if (live(bound)) poll.push(next);
-		} catch {
-			// The poll loop owns error reporting for state reads.
-		}
-	};
-
-	/** Queues one action. Resolves true only when the runtime accepted it, so a
-	 *  control can keep the human's draft when it did not. */
-	const request = async (action: BrowserAction): Promise<boolean> => {
+	/** Runs one action now. Answers true only when it completed, so a control
+	 *  can keep the human's draft when it did not. */
+	const act = async (action: BrowserAction): Promise<boolean> => {
 		const bound = browserId;
 		if (bound === null) return false;
-		// Retain only a fingerprint for retries, never typed credentials. Equal
-		// length text is NOT the same intent.
-		const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(action)));
-		if (!live(bound)) return false;
-		const intent = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
-		let requestId = requestIds.current.get(intent);
-		if (requestId === undefined) {
-			requestId = `view-${crypto.randomUUID()}`;
-			requestIds.current.set(intent, requestId);
-		}
-		// The History never holds a typed value, not even its length: a refusal
-		// happens before the runtime ever made its redacted copy, so this View
-		// makes one itself before it writes the line.
-		const logged = action.kind === "type" ? { ...action, text: REDACTED_TEXT } : action;
+		const what = describeAction(action);
 		setBusy(true);
 		setActionError(null);
 		try {
-			const pending = await client.requestAction(bound, requestId, action);
+			const next = await client.act(bound, action);
 			if (!live(bound)) return false;
-			requestIds.current.delete(intent);
-			// The QUEUE's copy, not the local one: History and the approval line
-			// must describe the same thing, and the local action still holds the
-			// typed value the runtime redacts.
-			log(`requested: ${describeAction(pending.action)} → ${pending.status}`, pending.status === "pending" ? "warn" : "accent");
-			await refreshState(bound);
+			poll.push(next);
+			poll.refresh();
+			log(what, "accent");
 			return true;
 		} catch (cause) {
 			if (!live(bound)) return false;
 			const detail = failureText(cause);
 			setActionError(detail);
-			log(`request refused: ${describeAction(logged)} — ${detail}`, "del");
+			log(`${what} failed — ${detail}`, "del");
+			// A failure may still have moved the page; show what is there now.
+			poll.refresh();
 			return false;
 		} finally {
 			if (mountedRef.current) setBusy(false);
 		}
 	};
 
-	/** The exact executable payload behind a pending action, for the human to
-	 *  read before approving. It is returned to the queue component and nowhere
-	 *  else: it never reaches the History, the model context or the runtime. */
-	const previewAction = async (actionId: string): Promise<BrowserAction> => {
-		const bound = browserId;
-		if (bound === null) throw new BrowserToolError("browser_action_preview", "no browser is bound to this View");
-		const action = await client.previewAction(bound, actionId);
-		if (!live(bound)) {
-			throw new BrowserToolError("browser_action_preview", "the browser changed before the payload arrived; nothing is shown");
-		}
-		return action;
-	};
-
-	const resolve = async (actionId: string, approve: boolean) => {
+	/** The call lasts as long as the task; the poll loop shows it live meanwhile. */
+	const startTask = async (agent: TaskAgent, task: string) => {
 		const bound = browserId;
 		if (bound === null) return;
-		setResolving(actionId);
+		setTaskStarting(true);
 		setActionError(null);
+		log(`task started (${agent})`, "accent");
+		// Poll shortly so the running task (and the faster cadence) shows at once.
+		window.setTimeout(() => poll.refresh(), 300);
 		try {
-			// The approval names the immutable action id only — never a payload
-			// this View read back, so what is approved is what was queued.
-			const pending = await client.resolveAction(bound, actionId, approve);
+			const run = await client.task(bound, agent, task);
 			if (!live(bound)) return;
-			log(`${approve ? "approved" : "denied"}: ${describeAction(pending.action)} → ${pending.status}`, approve ? "add" : "mute");
-			await refreshState(bound);
+			log(
+				`task ${run.status} after ${run.stepCount} steps${run.summary.length > 0 ? ` — ${run.summary}` : ""}`,
+				run.status === "done" ? "add" : run.status === "failed" ? "del" : "mute",
+			);
 		} catch (cause) {
 			if (!live(bound)) return;
 			const detail = failureText(cause);
 			setActionError(detail);
-			log(`${approve ? "approval" : "denial"} failed — ${detail}`, "del");
+			log(`task failed — ${detail}`, "del");
 		} finally {
-			if (mountedRef.current) setResolving(null);
+			if (mountedRef.current) setTaskStarting(false);
+			if (live(bound)) poll.refresh();
+		}
+	};
+
+	const cancelTask = async () => {
+		const bound = browserId;
+		if (bound === null) return;
+		setCancelling(true);
+		try {
+			await client.cancelTask(bound);
+			if (live(bound)) poll.refresh();
+		} catch (cause) {
+			if (live(bound)) setActionError(failureText(cause));
+		} finally {
+			if (mountedRef.current) setCancelling(false);
 		}
 	};
 
@@ -314,7 +294,6 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 			setBrowserId(null);
 			setOpened(null);
 			setSnapshot(null);
-			requestIds.current.clear();
 			setClearToken(token => token + 1);
 			// The drawing tools belong to the browser that is gone: leaving one
 			// armed pauses the frame loop of whatever opens next.
@@ -408,10 +387,9 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 									}}
 									options={BROWSER_ENGINES.map(value => ({
 										value,
-										label: value === "abp" ? "abp — unavailable" : value,
-										// ABP's control port takes unauthenticated commands from any page
-										// it visits, so this pack refuses to start that browser at all.
-										disabled: value === "abp",
+										label: REFUSED_ENGINES.includes(value) ? `${value} — unavailable` : value,
+										// Refused by the runtime over unfixed upstream security defects.
+										disabled: REFUSED_ENGINES.includes(value),
 									}))}
 								/>
 							</Field>
@@ -449,8 +427,7 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 						{relay
 							? "chrome-relay attaches to the Chrome you are already signed in to — there are no separate identities to choose. "
 							: "A named profile is persistent, isolated, and held by one caller at a time: opening one that is already active is refused rather than shared. "}
-						An address given here is queued as a navigation for your approval — the browser starts blank until
-						you approve it.
+						An address given here is opened straight away.
 					</p>
 				</section>
 			) : (
@@ -492,13 +469,13 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 							url={state?.url ?? ""}
 							title={state?.title ?? ""}
 							frozen={annotating}
-							disabled={busy}
-							onPoint={point => void request({ kind: "click", x: point.x, y: point.y })}
+							disabled={busy || taskRunning}
+							onPoint={point => void act({ kind: "click", x: point.x, y: point.y })}
 							onSketchChange={onSketchChange}
 							clearToken={clearToken}
 						/>
 
-						<Controls url={state?.url ?? ""} disabled={state === null} busy={busy} onRequest={request} />
+						<Controls url={state?.url ?? ""} disabled={state === null || taskRunning} busy={busy} onAct={act} />
 						{actionError !== null && (
 							<p className="bx-error" role="alert">
 								{actionError}
@@ -507,13 +484,14 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 					</div>
 
 					<aside className="bx-right">
-						<ActionQueue
+						<TaskPanel
 							key={browserId}
-							actions={state?.actions ?? []}
-							resolving={resolving}
-							disabled={busy}
-							onResolve={(actionId, approve) => void resolve(actionId, approve)}
-							onPreview={previewAction}
+							task={state?.task ?? null}
+							disabled={state === null || busy}
+							starting={taskStarting}
+							cancelling={cancelling}
+							onStart={(agent, task) => void startTask(agent, task)}
+							onCancel={() => void cancelTask()}
 						/>
 						<Separator />
 						<AnnotatePanel

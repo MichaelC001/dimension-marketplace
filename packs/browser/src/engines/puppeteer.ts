@@ -1,18 +1,10 @@
 /**
  * Puppeteer engine driver — the `chromium` and `chrome-relay` engines.
  *
- * This is the real driver behind both Chrome-backed engines, extracted from
- * BrowserRuntime so the runtime keeps exactly one copy of the lifecycle,
- * approval and claim logic and the engines keep none of it.
- *
- * What lives here (and only here):
- *  - launching / attaching, and the ownership rules that go with each,
- *  - the document identity a claim is pinned to,
- *  - read-only target resolution plus the single native dispatch per action.
- *
- * What deliberately does NOT live here: approval, journalling, idempotency,
- * frame storage, cropping, action normalization. The runtime owns those, calls
- * `prepare` once and `dispatch` once, and classifies whatever bubbles out.
+ * What lives here: launching / attaching and the ownership rules that go with
+ * each, the document identity frames and annotations are pinned to, and one
+ * native dispatch per action. Frame storage, cropping and validation live in
+ * the runtime.
  *
  * Ownership rules, restated because they are the whole safety story:
  *  - `chromium` owns the Chrome it launched AND the persistent profile
@@ -21,25 +13,22 @@
  *    keeps the lock, because a lock claiming "free" while a Chrome may still be
  *    writing the user-data dir is how one profile ends up with two Chromes.
  *  - `chrome-relay` owns NOTHING of the human's browser except the one blank
- *    tab it opened. It never adopts the tab the human is looking at, never
- *    navigates one, and never closes the browser — only its own tab, then it
+ *    tab it opened (and tabs a task agent opens from it). It never adopts the
+ *    tab the human is looking at and never closes the browser — only
  *    disconnects. For the relay the leased resource is the attachment itself,
  *    so a confirmed disconnect IS a confirmed release.
  *
  * Every page script executed here is a fixed compiled function from
- * `page-scripts.ts` (or the tiny literal guards below). Caller-supplied
- * JavaScript never reaches `evaluate`, and typed text never reaches argv, a
- * log line or a journal record — it is delivered with `Input.insertText` via
- * `keyboard.sendCharacter`.
+ * `page-scripts.ts`. Caller-supplied JavaScript never reaches `evaluate`.
  */
 import { mkdirSync } from "node:fs";
 import puppeteer from "puppeteer-core";
-import type { Browser, CDPSession, ElementHandle, KeyInput, Page } from "puppeteer-core";
+import type { Browser, CDPSession, ElementHandle, KeyInput, Page, Target } from "puppeteer-core";
 import type { BrowserAction, BrowserRegion, Viewport } from "../contracts.js";
 import { MAX_FRAME_BYTES } from "../image.js";
-import { fail } from "../store.js";
+import { ActionNotDispatched, fail } from "../store.js";
 import { ELEMENTS_IN_REGION_SCRIPT, PAGE_TEXT_SCRIPT, SELECT_ALL_SCRIPT } from "./page-scripts.js";
-import type { EngineDriver, EngineOptions, EngineState, PreparedAction } from "./types.js";
+import type { EngineDriver, EngineOptions, EngineState } from "./types.js";
 
 const NAVIGATE_TIMEOUT_MS = 30_000;
 const ACTION_TIMEOUT_MS = 15_000;
@@ -194,12 +183,9 @@ async function launchChromium(options: EngineOptions, release: () => void): Prom
 }
 
 /**
- * A private CDP session on the page's target.
- *
- * `Page.getFrameTree` is the driver's document identity source: the main
- * frame's `loaderId` is a fresh value for every committed document, including a
- * reload and a navigation to the same URL, and it is read live from the browser
- * rather than inferred from an event that may still be in flight.
+ * A private CDP session on the page's target. `Page.getFrameTree` is the
+ * document identity source: the main frame's `loaderId` is fresh for every
+ * committed document, including a reload and a same-URL navigation.
  */
 async function attachSession(page: Page): Promise<CDPSession> {
 	const cdp = await page.createCDPSession();
@@ -207,20 +193,12 @@ async function attachSession(page: Page): Promise<CDPSession> {
 	return cdp;
 }
 
-/** Attach native, non-replaying input to the exact page owned by another
- * backend. The backend retains process ownership and final lock release. */
-export async function createAttachedPageDriver(
-	browser: Browser,
-	page: Page,
-	options: Pick<EngineOptions, "viewport" | "onClosed">,
-): Promise<EngineDriver> {
-	await page.setViewport({ ...options.viewport, deviceScaleFactor: 1 });
-	const cdp = await attachSession(page);
-	return new PuppeteerDriver({
-		browser, page, cdp, viewport: options.viewport,
-		ownsBrowser: false, release: options.onClosed,
-	});
-}
+/**
+ * While a cross-process navigation commits, the page's CDP session is briefly
+ * detached ("Not attached to an active page", "Target closed" on the swapped
+ * renderer). Reads have no effect, so they are retried across that window.
+ */
+const READ_RETRY_DELAYS_MS = [25, 50, 100, 200, 400, 800];
 
 interface DriverParts {
 	browser: Browser;
@@ -233,24 +211,28 @@ interface DriverParts {
 
 class PuppeteerDriver implements EngineDriver {
 	readonly #browser: Browser;
-	readonly #page: Page;
-	readonly #cdp: CDPSession;
+	/** The tab this driver opened; its closing ends the session. */
+	readonly #home: Page;
+	/** The tab being shown and driven: `#home`, or the tab a task agent opened. */
+	#page: Page;
+	#cdp: CDPSession;
 	readonly #viewport: Viewport;
 	readonly #ownsBrowser: boolean;
 	readonly #release: () => void;
-	readonly #onPageClosed: () => void;
+	readonly #onHomeClosed: () => void;
 	readonly #onDisconnected: () => void;
 	#closed = false;
 	#closing: Promise<void> | undefined;
 
 	constructor(parts: DriverParts) {
 		this.#browser = parts.browser;
+		this.#home = parts.page;
 		this.#page = parts.page;
 		this.#cdp = parts.cdp;
 		this.#viewport = parts.viewport;
 		this.#ownsBrowser = parts.ownsBrowser;
 		this.#release = parts.release;
-		this.#onPageClosed = (): void => {
+		this.#onHomeClosed = (): void => {
 			// Our tab going away ends the session. For a browser we own that means
 			// shutting it down; the lease still waits for the process to exit.
 			void this.close().catch(() => undefined);
@@ -267,7 +249,7 @@ class PuppeteerDriver implements EngineDriver {
 			this.#closed = true;
 			this.#release();
 		};
-		parts.page.on("close", this.#onPageClosed);
+		parts.page.on("close", this.#onHomeClosed);
 		parts.browser.on("disconnected", this.#onDisconnected);
 	}
 
@@ -276,37 +258,14 @@ class PuppeteerDriver implements EngineDriver {
 	// -----------------------------------------------------------------------
 
 	async state(): Promise<EngineState> {
-		if (this.#closed || this.#page.isClosed()) fail("browser_closed", "The browser is closed.");
 		const documentId = await this.#documentId();
-		const url = this.#page.url();
-		// Read browser-maintained metadata, not document JavaScript: the latter
-		// loses its execution context during an ordinary in-flight navigation.
 		const history = await this.#read(() => this.#cdp.send("Page.getNavigationHistory"));
 		const current = history.entries[history.currentIndex];
 		if (!current) fail("no_document", "The browser did not report a current navigation entry.");
-		const title = current.title;
-		return { url, title, documentId, viewport: this.#viewport };
+		// Browser-maintained metadata, not document JavaScript: the latter loses
+		// its execution context during an ordinary in-flight navigation.
+		return { url: current.url, title: current.title, documentId, viewport: this.#viewport };
 	}
-
-	/**
-	 * One read-only CDP call, retried once. While a cross-document navigation
-	 * commits, the session's target is briefly not an active page and the send
-	 * rejects; a read has no effect, so re-reading is safe and a transient
-	 * protocol error must not fail a state read or void a human's approval.
-	 */
-	async #read<T>(send: () => Promise<T>): Promise<T> {
-		try {
-			return await send();
-		} catch (error) {
-			if (this.#closed || this.#page.isClosed()) fail("browser_closed", "The browser closed during inspection.");
-			try {
-				return await send();
-			} catch {
-				throw error;
-			}
-		}
-	}
-
 
 	async screenshot(): Promise<Uint8Array> {
 		const shot = await this.#page.screenshot({ type: "png", captureBeyondViewport: false });
@@ -329,105 +288,118 @@ class PuppeteerDriver implements EngineDriver {
 	// -----------------------------------------------------------------------
 
 	/**
-	 * Resolve everything the action needs, read-only, and hand back the single
-	 * dispatch that performs it.
-	 *
-	 * Nothing here navigates, focuses, scrolls or types. The element a selector
-	 * names is resolved ONCE, and the returned dispatch uses that exact handle —
-	 * never a second query — so the target identity the human approved is the
-	 * target that gets clicked or typed into. `documentId` is the document the
-	 * approval is pinned to, and every native step re-reads the live loaderId
-	 * before touching the page.
+	 * One native dispatch, never retried. Everything that can fail without
+	 * touching the page (validation, element resolution) throws
+	 * ActionNotDispatched before the first input event.
 	 */
-	async prepare(action: BrowserAction, documentId: string): Promise<PreparedAction> {
-		await this.#assertDocument(documentId);
+	async perform(action: BrowserAction): Promise<void> {
+		this.#assertOpen();
+		const page = this.#page;
 		switch (action.kind) {
 			case "navigate": {
-				const url = requireField(action.url, "navigate.url");
-				return {
-					dispatch: async () => {
-						await this.#assertDocument(documentId);
-						await this.#page.goto(url, { waitUntil: "domcontentloaded", timeout: NAVIGATE_TIMEOUT_MS });
-					},
-				};
+				await page.goto(requireField(action.url, "navigate.url"), { waitUntil: "domcontentloaded", timeout: NAVIGATE_TIMEOUT_MS });
+				return;
 			}
 			case "click": {
 				if (action.selector === undefined) {
-					const x = requireNumber(action.x, "click.x");
-					const y = requireNumber(action.y, "click.y");
-					return {
-						dispatch: async () => {
-							await this.#assertDocument(documentId);
-							await this.#page.mouse.click(x, y);
-						},
-					};
+					await page.mouse.click(requireNumber(action.x, "click.x"), requireNumber(action.y, "click.y"));
+					return;
 				}
 				const handle = await this.#resolve(action.selector);
-				return {
-					dispatch: async () => {
-						await this.#assertDocument(documentId);
-						await handle.click();
-					},
-					dispose: () => handle.dispose(),
-				};
+				try {
+					await handle.click();
+				} finally {
+					await handle.dispose().catch(() => undefined);
+				}
+				return;
 			}
 			case "type": {
-				const handle = await this.#resolve(requireField(action.selector, "type.selector"));
 				const text = requireField(action.text, "type.text", true);
-				return {
-					dispose: () => handle.dispose(),
-					dispatch: async () => {
-						// Typing is the one multi-step native sequence, so the document
-						// is re-checked between EVERY step: a navigation landing halfway
-						// through must not deliver the rest of the text into whatever
-						// document replaced the approved one.
-						await this.#assertDocument(documentId);
-						await handle.focus();
-						await this.#assertDocument(documentId);
-						const selected = await handle.evaluate(SELECT_ALL_SCRIPT);
-						await this.#assertDocument(documentId);
-						if (!selected) {
-							const modifier = process.platform === "darwin" ? "Meta" : "Control";
-							await this.#page.keyboard.down(modifier);
-							try {
-								await this.#assertDocument(documentId);
-								await this.#page.keyboard.press("KeyA");
-							} finally {
-								await this.#page.keyboard.up(modifier);
-							}
-							await this.#assertDocument(documentId);
+				const handle = await this.#resolve(requireField(action.selector, "type.selector"));
+				try {
+					await handle.focus();
+					if (!(await handle.evaluate(SELECT_ALL_SCRIPT))) {
+						const modifier = process.platform === "darwin" ? "Meta" : "Control";
+						await page.keyboard.down(modifier);
+						try {
+							await page.keyboard.press("KeyA");
+						} finally {
+							await page.keyboard.up(modifier);
 						}
-						// Replace the selection in ONE native input operation: no
-						// transient empty value, and no per-character typing that could
-						// straddle two documents. The text is inserted as data and never
-						// appears in argv or any log.
-						if (text.length > 0) await this.#page.keyboard.sendCharacter(text);
-						else await this.#page.keyboard.press("Backspace");
-					},
-				};
+					}
+					// Replace the selection in ONE native input operation: no transient
+					// empty value, and the text never appears in argv or a log.
+					if (text.length > 0) await page.keyboard.sendCharacter(text);
+					else await page.keyboard.press("Backspace");
+				} finally {
+					await handle.dispose().catch(() => undefined);
+				}
+				return;
 			}
-			case "press": {
-				const key = requireField(action.key, "press.key") as KeyInput;
-				return {
-					dispatch: async () => {
-						await this.#assertDocument(documentId);
-						await this.#page.keyboard.press(key);
-					},
-				};
+			case "select": {
+				const wanted = requireField(action.value, "select.value", true);
+				const handle = await this.#resolve(requireField(action.selector, "select.selector"));
+				try {
+					const value = await handle.evaluate((el, wanted) => {
+						if (!(el instanceof HTMLSelectElement)) return null;
+						const option = Array.from(el.options).find((o) => o.value === wanted || o.text.trim() === wanted);
+						return option ? option.value : null;
+					}, wanted);
+					if (value === null) {
+						throw new ActionNotDispatched("no_option", `${JSON.stringify(action.selector)} is not a <select> with an option ${JSON.stringify(wanted)}`);
+					}
+					await handle.select(value);
+				} finally {
+					await handle.dispose().catch(() => undefined);
+				}
+				return;
 			}
-			case "scroll": {
-				const deltaX = action.deltaX ?? 0;
-				const deltaY = action.deltaY ?? 0;
-				return {
-					dispatch: async () => {
-						await this.#assertDocument(documentId);
-						await this.#page.mouse.wheel({ deltaX, deltaY });
-					},
-				};
-			}
+			case "press":
+				await page.keyboard.press(requireField(action.key, "press.key") as KeyInput);
+				return;
+			case "scroll":
+				await page.mouse.wheel({ deltaX: action.deltaX ?? 0, deltaY: action.deltaY ?? 0 });
+				return;
 			default:
-				fail("bad_action", `unsupported action kind ${JSON.stringify((action as BrowserAction).kind)}`);
+				throw new ActionNotDispatched("bad_action", `unsupported action kind ${JSON.stringify((action as BrowserAction).kind)}`);
 		}
+	}
+
+	cdpEndpoint(): string {
+		return this.#browser.wsEndpoint();
+	}
+
+	/**
+	 * A task agent drives the same Chrome over CDP and may open its own tab
+	 * (jev does). The newest page it opens becomes the page this driver shows,
+	 * so the human watches the agent work. A followed tab that closes hands the
+	 * view back to the home tab.
+	 */
+	followNewPages(): () => void {
+		const onCreated = (target: Target): void => {
+			if (target.type() !== "page") return;
+			void (async () => {
+				const page = await target.page();
+				if (!page || this.#closed || page.isClosed()) return;
+				await page.setViewport({ ...this.#viewport, deviceScaleFactor: 1 }).catch(() => undefined);
+				const cdp = await attachSession(page).catch(() => undefined);
+				if (!cdp || this.#closed || page.isClosed()) return;
+				const previous = this.#cdp;
+				this.#page = page;
+				this.#cdp = cdp;
+				if (previous !== cdp) await previous.detach().catch(() => undefined);
+				page.once("close", () => {
+					if (this.#page !== page || this.#closed || this.#home.isClosed()) return;
+					void attachSession(this.#home).then((home) => {
+						if (this.#page !== page) return void home.detach().catch(() => undefined);
+						this.#page = this.#home;
+						this.#cdp = home;
+					}, () => undefined);
+				});
+			})().catch(() => undefined);
+		};
+		this.#browser.on("targetcreated", onCreated);
+		return () => this.#browser.off("targetcreated", onCreated);
 	}
 
 	// -----------------------------------------------------------------------
@@ -436,37 +408,26 @@ class PuppeteerDriver implements EngineDriver {
 
 	/**
 	 * Stop everything this driver owns, bounded, and release the profile lease
-	 * only on a CONFIRMED stop.
-	 *
-	 * Owned browser: await `browser.close()` (resolves once the process is gone)
-	 * and only then release. A timeout with a still-living process keeps the
-	 * lease and says so. Relay: close our own tab, disconnect, release.
-	 *
-	 * Idempotent while it succeeds; a failed close is not memoized, so a caller
-	 * may try again.
+	 * only on a CONFIRMED stop. Owned browser: await `browser.close()` (resolves
+	 * once the process is gone). Relay: close our own tab, disconnect, release.
+	 * A failed close is not memoized, so a caller may try again.
 	 */
 	close(): Promise<void> {
 		if (this.#closing) return this.#closing;
-		const attempt = this.#shutdown();
-		this.#closing = attempt.catch((err: unknown) => {
+		this.#closing = this.#shutdown().finally(() => {
 			this.#closing = undefined;
-			throw err;
 		});
 		return this.#closing;
 	}
 
 	async #shutdown(): Promise<void> {
 		this.#closed = true;
-		// Detach first: closing the browser fires `close`/`disconnected`, and a
-		// re-entrant teardown from our own listeners helps nobody. The child
-		// process `exit` listener deliberately stays — it is a release
-		// confirmation, and releasing is idempotent.
-		this.#page.off("close", this.#onPageClosed);
+		this.#home.off("close", this.#onHomeClosed);
 		this.#browser.off("disconnected", this.#onDisconnected);
 		await this.#cdp.detach().catch(() => undefined);
 
 		if (!this.#ownsBrowser) {
-			if (!this.#page.isClosed()) await this.#page.close().catch(() => undefined);
+			if (!this.#home.isClosed()) await this.#home.close().catch(() => undefined);
 			await this.#browser.disconnect().catch(() => undefined);
 			this.#release();
 			return;
@@ -474,8 +435,7 @@ class PuppeteerDriver implements EngineDriver {
 		try {
 			await withTimeout(this.#browser.close(), CLOSE_TIMEOUT_MS, "browser.close");
 		} catch (err) {
-			// A confirmed-dead process is still a confirmed release, however ugly
-			// the close path was.
+			// A confirmed-dead process is still a confirmed release.
 			if (hasExited(this.#browser)) {
 				this.#release();
 				return;
@@ -492,6 +452,10 @@ class PuppeteerDriver implements EngineDriver {
 	// Internals
 	// -----------------------------------------------------------------------
 
+	#assertOpen(): void {
+		if (this.#closed || this.#page.isClosed()) fail("browser_closed", "The browser is closed.");
+	}
+
 	/** Live document identity, read from the browser, never from a cache. */
 	async #documentId(): Promise<string> {
 		const { frameTree } = await this.#read(() => this.#cdp.send("Page.getFrameTree"));
@@ -503,22 +467,27 @@ class PuppeteerDriver implements EngineDriver {
 	}
 
 	/**
-	 * The guard that stands between an approval and a native effect. One live
-	 * read, no retry, no repair: a mismatch means the approved document is gone
-	 * and the action must not happen at all.
+	 * One read-only CDP call, retried with backoff across a navigation's
+	 * detach window. Reads have no effect, so re-reading is safe; the last
+	 * error is rethrown once the window is exhausted.
 	 */
-	async #assertDocument(expected: string): Promise<void> {
-		if (this.#closed || this.#page.isClosed()) fail("browser_closed", "the browser closed before dispatch");
-		const current = await this.#documentId();
-		if (current !== expected) {
-			fail("stale_document", `the page changed document: this action was prepared for ${expected}, the tab now holds ${current}`);
+	async #read<T>(send: () => Promise<T>): Promise<T> {
+		for (const delay of READ_RETRY_DELAYS_MS) {
+			this.#assertOpen();
+			try {
+				return await send();
+			} catch {
+				await new Promise((resolve) => setTimeout(resolve, delay));
+			}
 		}
+		this.#assertOpen();
+		return await send();
 	}
 
 	/** Element resolution is read-only, so a miss here is a certain non-event. */
 	async #resolve(selector: string): Promise<ElementHandle<Element>> {
 		const handle = await this.#page.waitForSelector(selector, { timeout: ACTION_TIMEOUT_MS }).catch(() => null);
-		if (!handle) fail("no_element", `selector ${JSON.stringify(selector)} did not resolve to an element`);
+		if (!handle) throw new ActionNotDispatched("no_element", `selector ${JSON.stringify(selector)} did not resolve to an element`);
 		return handle;
 	}
 }
@@ -527,22 +496,16 @@ class PuppeteerDriver implements EngineDriver {
 // Small helpers
 // ---------------------------------------------------------------------------
 
-/**
- * The runtime normalizes and validates every action before it is ever stored,
- * so these only assert the shape the prepared dispatch closes over — they do
- * not re-validate ranges, protocols or lengths, and they never substitute a
- * default for something the caller omitted.
- */
 function requireField(value: unknown, name: string, allowEmpty = false): string {
 	if (typeof value !== "string" || (!allowEmpty && value.length === 0)) {
-		fail("bad_action", `${name} is missing from the prepared action`);
+		throw new ActionNotDispatched("bad_action", `${name} is required`);
 	}
 	return value;
 }
 
 function requireNumber(value: unknown, name: string): number {
 	if (typeof value !== "number" || !Number.isFinite(value)) {
-		fail("bad_action", `${name} is missing from the prepared action`);
+		throw new ActionNotDispatched("bad_action", `${name} is required`);
 	}
 	return value;
 }

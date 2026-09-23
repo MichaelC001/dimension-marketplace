@@ -1,27 +1,46 @@
-export const BROWSER_ENGINES = ["chromium", "chrome-relay", "abp", "browser4", "jev", "browser-use"] as const;
+/** What the browser IS. `abp` and `browser4` are refused with the reason (see engines/refused.ts). */
+export const BROWSER_ENGINES = ["chromium", "chrome-relay", "abp", "browser4"] as const;
 export type BrowserEngine = (typeof BROWSER_ENGINES)[number];
+/** Who drives a whole task at its own speed: upstream agent loops, used as published. */
+export const TASK_AGENTS = ["jev", "browser-use"] as const;
+export type TaskAgent = (typeof TASK_AGENTS)[number];
 /** Maximum encoded PNG accepted by the host's image model-context contract. */
 export const MAX_ANNOTATION_BYTES = 2_097_152;
 export interface Viewport { width: number; height: number }
 export interface BrowserAction {
-  kind: "navigate" | "click" | "type" | "press" | "scroll";
+  kind: "navigate" | "click" | "type" | "select" | "press" | "scroll";
   url?: string;
   selector?: string;
   text?: string;
+  /** `select`: the option's value or visible text. */
+  value?: string;
   key?: string;
   x?: number;
   y?: number;
   deltaX?: number;
   deltaY?: number;
 }
-export interface PendingAction {
+/** `failed`: provably nothing happened. `unknown`: dispatched, then errored — may have taken effect. */
+export type ActionStatus = "completed" | "failed" | "unknown";
+export interface ActionResult { status: ActionStatus; error?: string; state: BrowserState }
+export interface TaskStep { n: number; action: string; url: string; elapsedMs: number }
+export interface TaskUsage { modelCalls: number; inputTokens: number; outputTokens: number; costUsd: number | null }
+export type TaskStatus = "running" | "done" | "blocked" | "failed" | "cancelled";
+export interface TaskRun {
   id: string;
-  requestId: string;
-  action: BrowserAction;
-  status: "pending" | "denied" | "claimed" | "completed" | "failed" | "unknown";
-  revision: number;
-  error?: string;
+  agent: TaskAgent;
+  task: string;
+  status: TaskStatus;
+  /** The agent's final message, or the failure reason. */
+  summary: string;
+  /** The most recent steps (bounded); `stepCount` is the total. */
+  steps: TaskStep[];
+  stepCount: number;
+  startedAt: string;
+  elapsedMs: number;
+  usage: TaskUsage;
 }
+export interface TaskRequest { agent: TaskAgent; task: string; maxSteps?: number }
 export interface BrowserState {
   browserId: string;
   profile: string;
@@ -30,7 +49,8 @@ export interface BrowserState {
   title: string;
   revision: number;
   viewport: Viewport;
-  actions: PendingAction[];
+  /** The running or most recent task on this browser. */
+  task: TaskRun | null;
 }
 export interface BrowserFrame {
   state: BrowserState;
@@ -60,9 +80,9 @@ export interface BrowserRuntimePort {
   state(browserId: string): Promise<BrowserState>;
   frame(browserId: string): Promise<BrowserFrame>;
   snapshot(browserId: string): Promise<{ state: BrowserState; text: string }>;
-  requestAction(browserId: string, requestId: string, action: BrowserAction): Promise<PendingAction>;
-  previewAction(browserId: string, actionId: string): Promise<BrowserAction>;
-  resolveAction(browserId: string, actionId: string, approve: boolean, signal?: AbortSignal): Promise<PendingAction>;
+  act(browserId: string, action: BrowserAction): Promise<ActionResult>;
+  runTask(browserId: string, request: TaskRequest, onStep?: (step: TaskStep, run: TaskRun) => void): Promise<TaskRun>;
+  cancelTask(browserId: string): Promise<TaskRun>;
   annotate(browserId: string, frameId: string, region: BrowserRegion, note: string): Promise<BrowserAnnotation>;
   profiles(): Promise<string[]>;
   close(browserId: string): Promise<void>;

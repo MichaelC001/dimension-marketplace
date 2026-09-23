@@ -1,29 +1,24 @@
 /**
- * BrowserRuntime — shared capabilities, approval and durable claims for six engines.
+ * BrowserRuntime — the browsers this pack holds, shared by the agent and the View.
  *
- * Design rules this file is built around (see also README/issue #87):
- *
- *  - The model may REQUEST a mutating action; only a human approval through
- *    `resolveAction(.., true)` (an app-only tool on the server side) executes
- *    one. There is no arbitrary-JS escape hatch: every page script here is a
- *    fixed, internal function, never caller-supplied.
- *  - A claim is journalled and fsync'd BEFORE the effect. Anything that can go
- *    wrong AFTER dispatch ends `unknown` — never retried, never auto-repaired.
- *  - `browserId` is an opaque capability minted per open. It is never returned
- *    for an already-open profile (the engine server is shared across sessions,
- *    so handing back a live token would leak the capability), never journalled
- *    and never listed; `profiles()` lists profile names only.
+ * Design rules:
+ *  - Actions execute when asked. The agent session (its permission mode, its
+ *    own `ask`) decides whether to act; this runtime never second-guesses it.
+ *  - One safety property is kept: an action that errors AFTER it was
+ *    dispatched is reported `unknown` — it may have taken effect — and is never
+ *    retried here. Only a caller that knows the page can decide to retry.
+ *  - `browserId` is an opaque capability minted per open, never listed and
+ *    never re-handed-out; `profiles()` lists profile names only.
  *  - Persistent profiles are never deleted, foreign locks are never stolen, a
- *    profile lock is released only once the owned Chrome process is gone, and
- *    a relay (the human's own Chrome) is never closed — we own exactly the one
- *    blank tab we created.
- *
- * Deliberately NOT implemented (future work, not faked here): ABP/ad-blocking,
- * Browser4 / Jev / browser-use style autonomous agents.
+ *    profile lock is released only once the owned Chrome process is gone, and a
+ *    relay (the human's own Chrome) is never closed.
+ *  - Whole tasks run on upstream agent loops (jev, browser-use) against the
+ *    same Chrome, through `task.ts`. We keep their progress, not their logic.
  */
-import { createHmac, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import type {
+	ActionResult,
 	BrowserAction,
 	BrowserAnnotation,
 	BrowserEngine,
@@ -32,28 +27,22 @@ import type {
 	BrowserRegion,
 	BrowserRuntimePort,
 	BrowserState,
-	PendingAction,
+	TaskRequest,
+	TaskRun,
+	TaskStep,
 	Viewport,
-} from "./contracts";
-import { cropRegion, MAX_FRAME_BYTES } from "./image";
-import { fail, ProfileStore, validateProfile } from "./store";
-import { BROWSER_ENGINES } from "./contracts.js";
-import { createEngineDriver } from "./engines/index.js";
-import type { EngineDriver, EngineState, PreparedAction } from "./engines/types.js";
+} from "./contracts.js";
+import { BROWSER_ENGINES, TASK_AGENTS } from "./contracts.js";
+import { assertEngineAvailable, createEngineDriver } from "./engines/index.js";
+import type { EngineDriver, EngineState } from "./engines/types.js";
+import { cropRegion, MAX_FRAME_BYTES } from "./image.js";
+import { ActionNotDispatched, fail, ProfileStore, validateProfile } from "./store.js";
+import { type RunningWorker, startWorker } from "./task.js";
 
 // ---------------------------------------------------------------------------
 // Bounds. Every unbounded thing in a long-lived runtime is a leak or a weapon.
 // ---------------------------------------------------------------------------
 const MAX_BROWSERS = 4;
-/** Actions kept in the visible history. Idempotency records outlive these. */
-const MAX_ACTIONS_RETAINED = 64;
-/**
- * Idempotency tombstones kept per browser. Reaching this limit REFUSES new
- * requestIds rather than forgetting old ones — forgetting an id would let an
- * already-executed request be requested (and approved) a second time.
- */
-const MAX_REQUEST_RECORDS = 4_096;
-const MAX_PENDING_ACTIONS = 16;
 const MAX_FRAMES_RETAINED = 8;
 const MAX_SNAPSHOT_CHARS = 20_000;
 const MAX_ELEMENT_CHARS = 4_000;
@@ -62,6 +51,10 @@ const MAX_NOTE_CHARS = 8_192;
 const MAX_SELECTOR_CHARS = 512;
 const MAX_URL_LENGTH = 2_048;
 const MAX_SCROLL_DELTA = 5_000;
+const MAX_TASK_CHARS = 8_192;
+const MAX_TASK_STEPS = 200;
+const DEFAULT_TASK_STEPS = 60;
+const TASK_STEPS_RETAINED = 100;
 const MIN_WIDTH = 320;
 const MAX_WIDTH = 2_560;
 const MIN_HEIGHT = 240;
@@ -111,18 +104,9 @@ interface FrameRecord {
 	capturedAt: string;
 }
 
-/** Idempotency record. Survives history pruning; holds no secret payload. */
-interface RequestRecord {
-	action: PendingAction;
-	fingerprint: string;
-}
-
-
 interface Entry {
-	/** Opaque capability. Never journalled, never listed, never re-handed-out. */
+	/** Opaque capability. Never listed, never re-handed-out. */
 	browserId: string;
-	/** Non-secret id used in durable records in place of the capability. */
-	sessionId: string;
 	profile: string;
 	engine: BrowserEngine;
 	viewport: Viewport;
@@ -130,14 +114,14 @@ interface Entry {
 	documentId: string;
 	release(): void;
 	revision: number;
-	actions: PendingAction[];
-	/** Memory-only executable payloads (may contain typed secrets), by action id. */
-	payloads: Map<string, BrowserAction>;
-	byRequest: Map<string, RequestRecord>;
 	frames: FrameRecord[];
-	/** Per-browser serializer: all page work and all approvals run in order. */
+	/** Per-browser serializer: page reads and actions run in order. */
 	queue: Promise<unknown>;
 	closed: boolean;
+	/** The running or most recent task. */
+	task: TaskRun | null;
+	/** The live task worker, while one runs. */
+	worker: { process: RunningWorker; finished: Promise<TaskRun> } | null;
 }
 
 export class BrowserRuntime implements BrowserRuntimePort {
@@ -154,12 +138,6 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	 * process the runtime can no longer name.
 	 */
 	private readonly stranded = new Set<{ driver: EngineDriver; release: () => void }>();
-	/**
-	 * Per-runtime HMAC key for action fingerprints. Keyed so a fingerprint is
-	 * never a guessable digest of a typed password, and process-local so it
-	 * never reaches disk.
-	 */
-	private readonly fingerprintKey = randomBytes(32);
 	private disposed = false;
 
 	constructor(options: BrowserRuntimeOptions = {}) {
@@ -167,6 +145,9 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		this.store = new ProfileStore(options.rootDir);
 	}
 
+	// -----------------------------------------------------------------------
+	// Lifecycle
+	// -----------------------------------------------------------------------
 	// -----------------------------------------------------------------------
 	// Lifecycle
 	// -----------------------------------------------------------------------
@@ -214,6 +195,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			fail("too_many_browsers", `at most ${MAX_BROWSERS} browsers may be open at once; close one first`);
 		}
 
+		assertEngineAvailable(engine);
 		const started = this.launch(profile, engine, viewport).finally(() => this.opening.delete(profile));
 		this.opening.set(profile, started);
 		const entry = await started;
@@ -246,10 +228,9 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			if (released) fail("browser_closed", "The browser closed during initialization.");
 			entry = {
 				browserId: randomBytes(24).toString("base64url"),
-				sessionId: randomBytes(8).toString("hex"),
 				profile, engine, viewport: initial.viewport, documentId: initial.documentId,
-				driver, release, revision: 1, actions: [], payloads: new Map(),
-				byRequest: new Map(), frames: [], queue: Promise.resolve(), closed: false,
+				driver, release, revision: 1, frames: [], queue: Promise.resolve(), closed: false,
+				task: null, worker: null,
 			};
 			this.byId.set(entry.browserId, entry);
 			this.byProfile.set(profile, entry);
@@ -287,7 +268,8 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		if (this.byId.get(entry.browserId) !== entry) return;
 		entry.closed = true;
 		entry.frames.length = 0;
-		entry.payloads.clear();
+		// A task agent drives this Chrome; it stops before the browser does.
+		await this.stopTask(entry);
 		await entry.driver.close();
 		entry.release();
 	}
@@ -319,13 +301,10 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	private detach(entry: Entry): void {
 		entry.closed = true;
 		entry.frames.length = 0;
-		// Any still-unapproved typed text dies with the browser; it is memory-only
-		// and there is nothing on disk to reconstruct it from.
-		entry.payloads.clear();
+		entry.worker?.process.cancel();
 		this.byId.delete(entry.browserId);
 		if (this.byProfile.get(entry.profile) === entry) this.byProfile.delete(entry.profile);
 	}
-
 
 	// -----------------------------------------------------------------------
 	// Read paths
@@ -433,181 +412,117 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	async profiles(): Promise<string[]> {
 		return this.store.list();
 	}
-
 	// -----------------------------------------------------------------------
-	// Action ledger
+	// Actions
 	// -----------------------------------------------------------------------
 
-	async requestAction(browserId: string, requestId: string, action: BrowserAction): Promise<PendingAction> {
+	async act(browserId: string, input: BrowserAction): Promise<ActionResult> {
 		const entry = this.require(browserId);
-		if (typeof requestId !== "string" || !/^[\w:.-]{1,128}$/.test(requestId)) {
-			fail("bad_request_id", "requestId must be 1-128 chars of [A-Za-z0-9_:.-]");
-		}
-
-		// Same serializer as approvals: a request must not interleave with the
-		// approval that is currently mutating this browser's ledger.
 		return await this.serialize(entry, async () => {
-		const normalized = normalizeAction(action, entry.viewport);
-		// Keyed fingerprint, memory-only: never a bare digest of typed text, never
-		// persisted, and useless to anyone who did not launch this process.
-		const fingerprint = createHmac("sha256", this.fingerprintKey).update(JSON.stringify(normalized)).digest("hex");
-			// Idempotency is scoped to this browser: same requestId + same payload is
-			// the same action; same requestId + different payload is a bug, not a new
-			// request, and is refused rather than silently queued twice.
-			const prior = entry.byRequest.get(requestId);
-			if (prior) {
-				if (prior.fingerprint !== fingerprint) {
-					fail("request_conflict", `requestId ${requestId} was already used with a different action payload`);
-				}
-				return clone(prior.action);
+			if (entry.task?.status === "running") {
+				fail("task_running", `a ${entry.task.agent} task is driving this browser; wait for it or cancel it first`);
 			}
-			await this.refreshState(entry);
-			if (entry.byRequest.size >= MAX_REQUEST_RECORDS) {
-				// Refusing is the safe end of this road. Forgetting an id instead would
-				// let an already-executed request be re-requested and re-approved.
-				fail(
-					"request_ledger_full",
-					`this browser has recorded ${MAX_REQUEST_RECORDS} request ids; close it and open a new one`,
-				);
-			}
-			const pendingCount = entry.actions.filter((a) => a.status === "pending").length;
-			if (pendingCount >= MAX_PENDING_ACTIONS) {
-				fail("too_many_pending", `at most ${MAX_PENDING_ACTIONS} pending actions per browser; resolve some first`);
-			}
-
-			const pending: PendingAction = {
-				id: randomBytes(12).toString("hex"),
-				requestId,
-				// The ledger — and therefore every state/receipt the caller ever sees —
-				// holds the REDACTED action. The UI already knows what the human typed;
-				// the receipt intentionally does not repeat it.
-				action: redact(normalized),
-				status: "pending",
-				revision: entry.revision,
-			};
-			// Durable first: a request that is visible in the queue — and therefore
-			// approvable by a human — must already have its trail on disk. A failed
-			// append must leave nothing behind for anyone to approve.
-			await this.store.journal(entry.profile, {
-				at: new Date().toISOString(),
-				session: entry.sessionId,
-				actionId: pending.id,
-				requestId,
-				status: "pending",
-				revision: pending.revision,
-				kind: normalized.kind,
-			});
-			// The executable payload stays in memory, keyed by action id, and is
-			// discarded the moment the action reaches a terminal status.
-			entry.payloads.set(pending.id, normalized);
-			entry.actions.push(pending);
-			entry.byRequest.set(requestId, { action: pending, fingerprint });
-			this.prune(entry);
-			return clone(pending);
-		});
-	}
-
-	async previewAction(browserId: string, actionId: string): Promise<BrowserAction> {
-		return this.serialize(this.require(browserId), async entry => {
-			await this.refreshState(entry);
-			const pending = entry.actions.find(action => action.id === actionId) ?? this.tombstone(entry, actionId);
-			if (!pending) fail("unknown_action", "The action does not belong to this browser.");
-			if (pending.status !== "pending") fail("action_settled", "The action is no longer pending.");
-			if (pending.revision !== entry.revision) fail("stale_action", "The page changed after this action was requested.");
-			const payload = entry.payloads.get(actionId);
-			if (!payload) fail("missing_payload", "The pending action payload is unavailable.");
-			return { ...payload };
-		});
-	}
-
-	/**
-	 * Approve or deny a pending action. Approval is the ONLY path that touches
-	 * the page, runs exactly once, and is serialized per browser.
-	 */
-	async resolveAction(browserId: string, actionId: string, approve: boolean, signal?: AbortSignal): Promise<PendingAction> {
-		return this.serialize(this.require(browserId), async entry => {
-			const pending = entry.actions.find(action => action.id === actionId) ?? this.tombstone(entry, actionId);
-			if (!pending) fail("unknown_action", `No action ${actionId} on this browser.`);
-			if (pending.status !== "pending") fail("action_settled", `Action ${actionId} is already ${pending.status}.`);
-			if (!approve) {
-				pending.status = "denied";
-				entry.payloads.delete(pending.id);
-				await this.record(entry, pending, "denied");
-				return clone(pending);
-			}
-
-			let prepared: PreparedAction | undefined;
-			let dispatched = false;
+			const action = normalizeAction(input, entry.viewport);
 			try {
-				signal?.throwIfAborted();
-				await this.assertRevision(entry, pending.revision);
-				const payload = entry.payloads.get(pending.id);
-				if (!payload) fail("missing_payload", "The executable action payload is no longer held in memory.");
-				prepared = await entry.driver.prepare(payload, entry.documentId);
-				signal?.throwIfAborted();
-				await this.assertRevision(entry, pending.revision);
-				// Persist the claim before any input. Page-originated navigation can
-				// happen during either preparation or fsync, despite our serializer.
-				pending.status = "claimed";
-				await this.record(entry, pending, "claimed");
-				await this.assertRevision(entry, pending.revision);
-				signal?.throwIfAborted();
-				dispatched = true;
-				await prepared.dispatch();
-				pending.status = "completed";
+				await entry.driver.perform(action);
 			} catch (error) {
-				// Backend errors can echo the entire input (including passwords).
-				// Keep execution status, never publish third-party details for typing.
-				const detail = entry.payloads.get(pending.id)?.kind === "type"
-					? "Typed-input error details withheld to protect the entered text."
-					: describe(error);
-				pending.status = dispatched ? "unknown" : "failed";
-				pending.error = dispatched
-					? `Dispatched, then failed; the effect may or may not have occurred: ${detail}`
-					: `Not dispatched: ${detail}`;
-			} finally {
+				const dispatched = !(error instanceof ActionNotDispatched);
 				if (dispatched) entry.revision += 1;
-				entry.payloads.delete(pending.id);
-				await prepared?.dispose?.().catch(() => undefined);
+				return {
+					status: dispatched ? "unknown" : "failed",
+					error: dispatched
+						? `The action was sent to the page, then failed; it may or may not have taken effect. Check the page before retrying. (${describe(error)})`
+						: describe(error),
+					state: await this.buildState(entry).catch(() => this.staleState(entry)),
+				};
 			}
-			await this.record(entry, pending, pending.status);
-			return clone(pending);
+			return { status: "completed", state: await this.buildState(entry) };
 		});
 	}
 
-
-	private async record(entry: Entry, pending: PendingAction, status: string): Promise<void> {
-		await this.store.journal(entry.profile, {
-			at: new Date().toISOString(),
-			session: entry.sessionId,
-			actionId: pending.id,
-			requestId: pending.requestId,
-			status,
-			revision: entry.revision,
-			kind: pending.action.kind,
-		});
-	}
-
-	/** An action pruned from the visible history but still known by requestId. */
-	private tombstone(entry: Entry, actionId: string): PendingAction | undefined {
-		for (const record of entry.byRequest.values()) {
-			if (record.action.id === actionId) return record.action;
-		}
-		return undefined;
-	}
+	// -----------------------------------------------------------------------
+	// Tasks — upstream agent loops on this browser
+	// -----------------------------------------------------------------------
 
 	/**
-	 * Keep the VISIBLE history bounded by dropping the oldest settled actions.
-	 * Their idempotency records stay in `byRequest`, so a pruned requestId is
-	 * still recognized and can never be executed a second time.
+	 * Run a whole task on an upstream agent loop. The agent attaches to this
+	 * browser's Chrome; the driver follows the tab it works in, so frames show
+	 * the agent working. Resolves with the finished run.
 	 */
-	private prune(entry: Entry): void {
-		while (entry.actions.length > MAX_ACTIONS_RETAINED) {
-			const index = entry.actions.findIndex((a) => a.status !== "pending" && a.status !== "claimed");
-			if (index < 0) return;
-			const [dropped] = entry.actions.splice(index, 1);
-			entry.payloads.delete(dropped.id);
+	async runTask(browserId: string, request: TaskRequest, onStep?: (step: TaskStep, run: TaskRun) => void): Promise<TaskRun> {
+		const entry = this.require(browserId);
+		if (!TASK_AGENTS.includes(request.agent)) fail("bad_agent", `agent must be one of: ${TASK_AGENTS.join(", ")}`);
+		const task = typeof request.task === "string" ? request.task.trim() : "";
+		if (task.length === 0 || task.length > MAX_TASK_CHARS) fail("bad_task", `task must be 1-${MAX_TASK_CHARS} characters`);
+		const maxSteps = Math.min(MAX_TASK_STEPS, Math.max(1, Math.floor(request.maxSteps ?? DEFAULT_TASK_STEPS)));
+
+		const started = await this.serialize(entry, async () => {
+			if (entry.worker) fail("task_running", `a ${entry.task?.agent} task is already running on this browser`);
+			const state = await this.refreshState(entry);
+			const run: TaskRun = {
+				id: randomBytes(8).toString("hex"), agent: request.agent, task, status: "running", summary: "",
+				steps: [], stepCount: 0, startedAt: new Date().toISOString(), elapsedMs: 0,
+				usage: { modelCalls: 0, inputTokens: 0, outputTokens: 0, costUsd: null },
+			};
+			const unfollow = entry.driver.followNewPages();
+			let worker: RunningWorker;
+			try {
+				worker = startWorker(
+				{ agent: request.agent, cdpUrl: entry.driver.cdpEndpoint(), task, maxSteps, startUrl: state.url },
+				(step) => {
+					const record: TaskStep = { n: step.n, action: step.action, url: step.url, elapsedMs: step.elapsedMs };
+					run.steps.push(record);
+					if (run.steps.length > TASK_STEPS_RETAINED) run.steps.shift();
+					run.stepCount = Math.max(run.stepCount, step.n);
+					run.elapsedMs = step.elapsedMs;
+					run.usage = step.usage;
+					onStep?.(record, run);
+				},
+				);
+			} catch (error) {
+				unfollow();
+				throw error;
+			}
+			const finished = worker.done.then((result) => {
+				unfollow();
+				Object.assign(run, {
+					status: result.status,
+					summary: result.summary,
+					stepCount: Math.max(run.stepCount, result.steps),
+					elapsedMs: result.elapsedMs || Date.now() - Date.parse(run.startedAt),
+					usage: result.usage.modelCalls > 0 || result.usage.inputTokens > 0 ? result.usage : run.usage,
+				});
+				// The agent navigated this Chrome: whatever frame was retained is stale.
+				entry.revision += 1;
+				entry.worker = null;
+				return run;
+			});
+			entry.task = run;
+			entry.worker = { process: worker, finished };
+			// Wrapped so the serializer is released now: the task runs outside
+			// the page queue, and frames keep flowing while it works.
+			return { finished };
+		});
+		return await started.finished;
+	}
+
+	async cancelTask(browserId: string): Promise<TaskRun> {
+		const entry = this.require(browserId);
+		const worker = entry.worker;
+		if (!worker) {
+			if (!entry.task) fail("no_task", "no task has run on this browser");
+			return entry.task;
 		}
+		worker.process.cancel();
+		return await worker.finished;
+	}
+
+	/** Stop a running task and wait for its worker to exit. */
+	private async stopTask(entry: Entry): Promise<void> {
+		const worker = entry.worker;
+		if (!worker) return;
+		worker.process.cancel();
+		await worker.finished;
 	}
 
 	// -----------------------------------------------------------------------
@@ -623,9 +538,9 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	}
 
 	/**
-	 * All work for one browser runs strictly in order, never concurrently. The
-	 * closed check is re-taken when the work actually starts: the browser may
-	 * have been closed (or have crashed) while this call sat in the queue.
+	 * All page work for one browser runs strictly in order, never concurrently.
+	 * The closed check is re-taken when the work actually starts: the browser
+	 * may have been closed (or have crashed) while this call sat in the queue.
 	 */
 	private serialize<T>(
 		entry: Entry,
@@ -653,17 +568,20 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		return state;
 	}
 
-	private async assertRevision(entry: Entry, expected: number): Promise<void> {
-		await this.refreshState(entry);
-		if (entry.revision !== expected) fail("stale_action", `Stale approval: requested at revision ${expected}, page is at ${entry.revision}`);
-	}
-
 	private async buildState(entry: Entry): Promise<BrowserState> {
 		const state = await this.refreshState(entry);
 		return {
 			browserId: entry.browserId, profile: entry.profile, engine: entry.engine,
 			url: state.url, title: state.title, revision: entry.revision,
-			viewport: state.viewport, actions: entry.actions.map(clone),
+			viewport: state.viewport, task: entry.task ? cloneTask(entry.task) : null,
+		};
+	}
+
+	/** State when the page cannot be read (it may be mid-navigation after a failed action). */
+	private staleState(entry: Entry): BrowserState {
+		return {
+			browserId: entry.browserId, profile: entry.profile, engine: entry.engine, url: "", title: "",
+			revision: entry.revision, viewport: entry.viewport, task: entry.task ? cloneTask(entry.task) : null,
 		};
 	}
 }
@@ -688,10 +606,7 @@ function normalizeViewport(viewport: Viewport | undefined): Viewport {
 	};
 }
 
-/**
- * Validate and canonicalize an action. Everything the ledger stores is already
- * checked; the dispatch path re-validates nothing and invents nothing.
- */
+/** Validate and canonicalize an action before anything touches the page. */
 function normalizeAction(action: BrowserAction, viewport: Viewport): BrowserAction {
 	if (!action || typeof action !== "object") fail("bad_action", "action must be an object");
 	switch (action.kind) {
@@ -729,6 +644,12 @@ function normalizeAction(action: BrowserAction, viewport: Viewport): BrowserActi
 				fail("bad_action", `type.text must be a string of at most ${MAX_TEXT_INPUT} characters`);
 			}
 			return { kind: "type", selector: requireSelector(action.selector), text: action.text };
+		}
+		case "select": {
+			if (typeof action.value !== "string" || action.value.length > MAX_TEXT_INPUT) {
+				fail("bad_action", `select.value must be a string of at most ${MAX_TEXT_INPUT} characters`);
+			}
+			return { kind: "select", selector: requireSelector(action.selector), value: action.value };
 		}
 		case "press": {
 			const key = action.key;
@@ -771,27 +692,14 @@ function requireDelta(value: unknown, name: string): number {
 	return Math.max(-MAX_SCROLL_DELTA, Math.min(MAX_SCROLL_DELTA, Math.floor(value)));
 }
 
-
 // ---------------------------------------------------------------------------
 // Small helpers
 // ---------------------------------------------------------------------------
 
-function clone(action: PendingAction): PendingAction {
-	return { ...action, action: { ...action.action } };
-}
-
-/**
- * The ledger copy of an action, safe to persist and to hand back in state or a
- * receipt. Typed text is a credential boundary: the UI already showed the human
- * what they typed, so the receipt deliberately does not repeat it, and no hash
- * of it is stored either (an offline guessing target).
- */
-function redact(action: BrowserAction): BrowserAction {
-	if (action.kind !== "type") return { ...action };
-	return { ...action, text: "[redacted]" };
+function cloneTask(run: TaskRun): TaskRun {
+	return { ...run, steps: run.steps.map((step) => ({ ...step })), usage: { ...run.usage } };
 }
 
 function describe(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
 }
-

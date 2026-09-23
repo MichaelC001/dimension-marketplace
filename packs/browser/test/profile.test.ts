@@ -13,13 +13,13 @@ import { afterEach, expect, test } from "bun:test";
 import type { BrowserState } from "../src/contracts";
 import { BrowserRuntimeError } from "../src/store";
 import {
-	approve,
 	BROWSER_TEST_TIMEOUT_MS,
 	createRoot,
 	createRuntime,
 	describeWithChrome,
 	failureCode,
 	newRuntime,
+	perform,
 	startFixture,
 	teardown,
 } from "./fixture";
@@ -38,17 +38,17 @@ describeWithChrome("profiles", () => {
 			const { runtime } = await createRuntime();
 
 			const first = await runtime.open({ profile: "signed-in", viewport: VIEWPORT });
-			await approve(runtime, first.browserId, "nav-1", { kind: "navigate", url: fixture.url("/set-cookie") });
+			await perform(runtime, first.browserId, { kind: "navigate", url: fixture.url("/set-cookie") });
 			await runtime.close(first.browserId);
 
 			const reopened = await runtime.open({ profile: "signed-in", viewport: VIEWPORT });
 			expect(reopened.browserId).not.toBe(first.browserId);
-			await approve(runtime, reopened.browserId, "nav-2", { kind: "navigate", url: fixture.url("/show-cookie") });
+			await perform(runtime, reopened.browserId, { kind: "navigate", url: fixture.url("/show-cookie") });
 			const persisted = await runtime.snapshot(reopened.browserId);
 			expect(persisted.text).toContain(`COOKIE:${fixture.cookieValue}`);
 
 			const other = await runtime.open({ profile: "other", viewport: VIEWPORT });
-			await approve(runtime, other.browserId, "nav-3", { kind: "navigate", url: fixture.url("/show-cookie") });
+			await perform(runtime, other.browserId, { kind: "navigate", url: fixture.url("/show-cookie") });
 			const isolated = await runtime.snapshot(other.browserId);
 			expect(isolated.text).toContain("COOKIE:none");
 			expect(isolated.text).not.toContain(fixture.cookieValue);

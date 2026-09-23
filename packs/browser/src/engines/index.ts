@@ -1,21 +1,15 @@
 import type { BrowserEngine } from "../contracts.js";
-import type { EngineDriver, EngineOptions } from "./types.js";
+import { fail } from "../store.js";
 import { createPuppeteerDriver } from "./puppeteer.js";
-import { createAbpDriver } from "./abp.js";
-import { createBrowser4Driver } from "./browser4.js";
-import { createPythonDriver } from "./python.js";
+import { isRefused, REFUSED_ENGINES } from "./refused.js";
+import type { EngineDriver, EngineOptions } from "./types.js";
 
-const factories: Record<BrowserEngine, (options: EngineOptions) => Promise<EngineDriver>> = {
-  chromium: options => createPuppeteerDriver("chromium", options),
-  "chrome-relay": options => createPuppeteerDriver("chrome-relay", options),
-  abp: createAbpDriver,
-  browser4: createBrowser4Driver,
-  jev: options => createPythonDriver("jev", options),
-  "browser-use": options => createPythonDriver("browser-use", options),
-};
+/** Refused engines are rejected before anything is locked or launched. */
+export function assertEngineAvailable(engine: BrowserEngine): void {
+  if (isRefused(engine)) fail(REFUSED_ENGINES[engine].code, REFUSED_ENGINES[engine].message);
+}
 
 export function createEngineDriver(engine: BrowserEngine, options: EngineOptions): Promise<EngineDriver> {
-  // `factories` is total over BrowserEngine and the runtime validates the name
-  // before it gets here, so there is no unsupported-engine branch to write.
-  return factories[engine](options);
+  assertEngineAvailable(engine);
+  return createPuppeteerDriver(engine === "chrome-relay" ? "chrome-relay" : "chromium", options);
 }

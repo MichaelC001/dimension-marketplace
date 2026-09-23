@@ -1,0 +1,12 @@
+{
+  "firstName": "Ada",
+  "lastName": "Lovelock",
+  "email": "ada@example.test",
+  "phone": "+1 555 010 4477",
+  "city": "Riverton",
+  "yearsExperience": 7,
+  "linkedin": "https://linkedin.example.test/in/ada-lovelock",
+  "workAuthorized": true,
+  "skills": ["JavaScript", "TypeScript", "React"],
+  "coverLetter": "I build fast, accessible web interfaces and enjoy turning rough product ideas into polished frontends. I would love to bring seven years of React and TypeScript experience to your team."
+}

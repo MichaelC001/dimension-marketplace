@@ -1,4 +1,4 @@
-import { cp, mkdir, readFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build as buildServer } from "esbuild";
@@ -22,10 +22,6 @@ await buildServer({
   target: "node22",
   packages: "external",
   sourcemap: false,
-});
-await cp(resolve(root, "src/engines/python"), resolve(root, "app/python"), {
-  recursive: true,
-  filter: path => !path.split(/[\\/]/).some(part => part === ".venv" || part === "__pycache__"),
 });
 await buildView({
   configFile: false,

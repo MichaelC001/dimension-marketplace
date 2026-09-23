@@ -7,3 +7,6 @@ dist/
 # Local verification harnesses and cached upstream sources: developer scratch,
 # never part of the published pack.
 .dev/
+# The browser pack's Python task worker environment (`cd packs/browser/python && uv sync`).
+packs/browser/python/.venv/
+__pycache__/

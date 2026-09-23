@@ -8,21 +8,25 @@ export interface EngineState {
   viewport: Viewport;
 }
 
-export interface PreparedAction {
-  /** Execute once, never retry. Recheck documentId before any native input. */
-  dispatch(): Promise<void>;
-  /** Release observed element handles even when no dispatch occurs. */
-  dispose?(): Promise<void>;
-}
-
 export interface EngineDriver {
   state(): Promise<EngineState>;
   /** Viewport PNG, not a full-page image; device scale factor is one. */
   screenshot(): Promise<Uint8Array>;
   snapshot(limit: number): Promise<string>;
   elements(region: BrowserRegion, limit: number): Promise<string>;
-  /** Read-only target preparation. Never navigate, focus, scroll or type here. */
-  prepare(action: BrowserAction, documentId: string): Promise<PreparedAction>;
+  /**
+   * Perform one action now, once, never retried. Throws `ActionNotDispatched`
+   * when provably nothing reached the page; any other error means the effect
+   * may have happened.
+   */
+  perform(action: BrowserAction): Promise<void>;
+  /** CDP websocket endpoint of this browser, for an upstream task agent to attach to. */
+  cdpEndpoint(): string;
+  /**
+   * While a task agent runs, show the page it works in: a page it opens becomes
+   * the current page. Returns a function that stops following.
+   */
+  followNewPages(): () => void;
   /** Resolve only after owned resources shut down. Never close foreign browsers. */
   close(): Promise<void>;
 }

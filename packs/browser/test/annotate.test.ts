@@ -3,16 +3,16 @@
  *  other than the frame that was captured (wrong offset, or a fresh screenshot
  *  silently substituted), or a frame from BEFORE a navigation is still
  *  annotatable — so the model points at coordinates on a page that no longer
- *  exists and the human approves something else entirely.
+ *  exists and acts on something else entirely.
  */
 import { afterEach, expect, test } from "bun:test";
 import { PNG } from "pngjs";
 import {
-	approve,
 	BROWSER_TEST_TIMEOUT_MS,
 	createRuntime,
 	describeWithChrome,
 	failureCode,
+	perform,
 	startFixture,
 	teardown,
 } from "./fixture";
@@ -31,7 +31,7 @@ describeWithChrome("annotate", () => {
 			const fixture = startFixture();
 			const { runtime } = await createRuntime();
 			const opened = await runtime.open({ profile: "annot", viewport: VIEWPORT });
-			await approve(runtime, opened.browserId, "nav-1", { kind: "navigate", url: fixture.url("/") });
+			await perform(runtime, opened.browserId, { kind: "navigate", url: fixture.url("/") });
 
 			const frame = await runtime.frame(opened.browserId);
 			const captured = PNG.sync.read(Buffer.from(frame.data, "base64"));
@@ -70,10 +70,10 @@ describeWithChrome("annotate", () => {
 			const fixture = startFixture();
 			const { runtime } = await createRuntime();
 			const opened = await runtime.open({ profile: "annot-stale", viewport: VIEWPORT });
-			await approve(runtime, opened.browserId, "nav-1", { kind: "navigate", url: fixture.url("/") });
+			await perform(runtime, opened.browserId, { kind: "navigate", url: fixture.url("/") });
 
 			const frame = await runtime.frame(opened.browserId);
-			await approve(runtime, opened.browserId, "nav-2", { kind: "navigate", url: fixture.url("/page2") });
+			await perform(runtime, opened.browserId, { kind: "navigate", url: fixture.url("/page2") });
 
 			expect(
 				await failureCode(() =>

@@ -2,10 +2,10 @@
  * Shared fixtures for the browser pack's tests.
  *
  * These tests drive a REAL Chrome against a local HTTP server we own, because
- * every contract worth defending here (nothing moves without approval, a write
- * happens at most once, a credential never lands on disk, a profile's cookies
- * are its own) is a property of the actual browser and the actual bytes on the
- * wire. A mocked page would let all of those break silently.
+ * every contract worth defending here (a write happens exactly once, an action
+ * that errored after dispatch is never repeated, a profile's cookies are its
+ * own) is a property of the actual browser and the actual bytes on the wire. A
+ * mocked page would let all of those break silently.
  *
  * Two hard rules baked in here:
  *  - We never touch the human's Chrome profile. Every runtime gets a fresh
@@ -19,7 +19,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe } from "bun:test";
-import type { BrowserAction, PendingAction } from "../src/contracts";
+import type { BrowserAction, BrowserState } from "../src/contracts";
 import { BrowserRuntime, type BrowserRuntimeOptions } from "../src/runtime";
 import { BrowserRuntimeError } from "../src/store";
 
@@ -129,23 +129,22 @@ export async function teardown(): Promise<void> {
 // The local HTTP fixture
 // ---------------------------------------------------------------------------
 
+/**
+ * The two hosts the one fixture server answers on. They are different SITES,
+ * so Chrome's site isolation moves a navigation between them to a new renderer
+ * process — the cross-process swap that briefly detaches a page's CDP session.
+ */
+export type FixtureHost = "127.0.0.1" | "localhost";
+
 export interface Fixture {
-	/** Absolute URL for a fixture path, e.g. `/page2`. */
-	url(path: string): string;
-	/** How many times the server was asked for `path` (favicon noise excluded). */
+	/** Absolute URL for a fixture path, e.g. `/page2`, on `host` (default 127.0.0.1). */
+	url(path: string, host?: FixtureHost): string;
+	/** How many times the server was asked for `path` (query excluded). */
 	hits(path: string): number;
 	/** Every accepted form POST, in order. This is the write count. */
 	submissions(): ReadonlyArray<Record<string, string>>;
 	/** The value `/set-cookie` persists; `/show-cookie` echoes it back. */
 	readonly cookieValue: string;
-	/**
-	 * Answer the `/hold` request that the `/leave` page is waiting on. That page
-	 * is fully loaded with NO navigation in flight, so it stays a live execution
-	 * context; answering its held subresource is what makes it navigate to
-	 * `/gate`. A test can therefore place a real navigation at a moment it
-	 * chose, with no sleep and without ever holding a document half-committed.
-	 */
-	releaseHold(): void;
 	stop(): Promise<void>;
 }
 
@@ -156,25 +155,36 @@ const FORM_BODY = `<h1>fixture form</h1>
   <button id="go" type="submit">Submit</button>
 </form>`;
 
+/** A form that already holds a value, plus a `<select>` whose visible text differs from its values. */
+const SIGNUP_BODY = `<h1>signup</h1>
+<form method="POST" action="/submit">
+  <input id="user" name="user" type="text" value="old name" />
+  <select id="plan" name="plan">
+    <option value="free">Free</option>
+    <option value="pro">Pro plan</option>
+  </select>
+  <button id="go" type="submit">Submit</button>
+</form>`;
+
 /**
- * The same form, plus a page-side guard on the password field that FAILS — and
- * quotes the field's contents inside its own diagnostic — when the field is
- * re-selected while it already holds text. Third-party code that echoes the
- * input it choked on is ordinary (validation layers, autofill bridges and
- * error reporters all do it), and it is how a typed secret can reach the
- * runtime inside somebody else's error message. The guard pings `/guard-fired`
- * before throwing, so a test can prove from the SERVER that this path really
- * ran rather than trusting a message it is not allowed to read.
+ * The form, plus a page-side guard on the password field that THROWS when the
+ * field is re-selected while it already holds text — the kind of third-party
+ * script (validation layer, autofill bridge) that fails in the middle of an
+ * input the browser has already delivered. Typing into the filled field focuses
+ * it (dispatched) and then trips the guard (error). Each run of the guard
+ * sets the title to `guard fired <n>`, so the live document counts how often
+ * that page code ran.
  */
 const GUARDED_BODY = `${FORM_BODY}
 <script>
+  var fired = 0;
   var field = document.getElementById("pass");
   var native = HTMLInputElement.prototype.select;
   Object.defineProperty(field, "select", {
     value: function () {
       if (this.value.length === 0) return native.call(this);
-      fetch("/guard-fired");
-      throw new Error("autofill bridge rejected the stored entry: " + this.value);
+      document.title = "guard fired " + ++fired;
+      throw new Error("autofill bridge rejected the stored entry");
     },
   });
 </script>`;
@@ -187,64 +197,35 @@ function html(markup: string, headers: Record<string, string> = {}): Response {
 	return new Response(markup, { headers: { "content-type": "text/html; charset=utf-8", ...headers } });
 }
 
-/**
- * A held request is answered at the latest after this, with a status the page
- * deliberately does NOT navigate on: an expired bound must fail the test that
- * forgot to release it, never fire the effect it was holding.
- */
-const HELD_REQUEST_MAX_MS = 30_000;
-
 export function startFixture(): Fixture {
 	const hits = new Map<string, number>();
 	const submissions: Record<string, string>[] = [];
 	const cookieValue = randomBytes(8).toString("hex");
-	// `/hold` answers nothing until `releaseHold()`. It is a SUBRESOURCE of the
-	// already-committed `/leave` document rather than that document's own
-	// response, so holding it never leaves Chrome sitting on a provisional
-	// navigation that an aborted request would turn into an error page.
-	let openHold: (released: boolean) => void = () => undefined;
-	const held = new Promise<boolean>((resolve) => {
-		openHold = resolve;
-	});
-	const holdBound = setTimeout(() => openHold(false), HELD_REQUEST_MAX_MS);
+	const origin = (host: FixtureHost): string => `http://${host}:${server.port}`;
 
 	const server = Bun.serve({
 		hostname: "127.0.0.1",
 		port: 0,
-		// A deliberately held request must be released by the test, not killed by
-		// the server's own idle timer.
-		idleTimeout: 0,
 		async fetch(request) {
-			const { pathname } = new URL(request.url);
+			const url = new URL(request.url);
+			const { pathname } = url;
 			hits.set(pathname, (hits.get(pathname) ?? 0) + 1);
 			if (pathname === "/") return html(page("fixture form", FORM_BODY));
 			if (pathname === "/page2") return html(page("second page", "<p>second page</p>"));
-			// Page A: carries no form control at all. It finishes loading and then
-			// holds one `fetch("/hold")` open. Answering that fetch — and nothing
-			// else — sends it to `/gate`, so the navigation lands exactly when the
-			// test says so while page A stays a valid, committed execution context
-			// for the whole wait.
-			if (pathname === "/leave") {
-				return html(
-					page(
-						"leaving",
-						'<p id="leaving">leaving</p><script>fetch("/hold").then((res) => { if (res.ok) location.href = "/gate"; });</script>',
-					),
-				);
-			}
-			if (pathname === "/hold") {
-				return (await held)
-					? new Response("released", { headers: { "cache-control": "no-store" } })
-					: new Response("hold expired", { status: 503 });
-			}
-			// Page B: the same form as `/`, so `#go` on the document that replaces
-			// page A is a live submission target and a click landing there is a
-			// real write the server would count.
-			if (pathname === "/gate") return html(page("gated form", FORM_BODY));
-			// The same form behind a page script that throws, with the typed text
-			// inside the thrown message, on a second entry into the password field.
+			if (pathname === "/signup") return html(page("signup", SIGNUP_BODY));
 			if (pathname === "/guarded") return html(page("guarded form", GUARDED_BODY));
-			if (pathname === "/guard-fired") return new Response("ok", { headers: { "cache-control": "no-store" } });
+			// Hit only if a `javascript:` URL were ever executed in the page.
+			if (pathname === "/js-ran") return new Response("ran", { headers: { "cache-control": "no-store" } });
+			// `/bounce?left=N` navigates itself to the OTHER host's `/bounce?left=N-1`
+			// as soon as it loads, until `left` reaches 0: a chain of page-initiated
+			// cross-site navigations the runtime did not start and cannot serialize.
+			if (pathname === "/bounce") {
+				const left = Number(url.searchParams.get("left") ?? "0");
+				if (left <= 0) return html(page("bounced", "<p id='done'>bounced</p>"));
+				const other: FixtureHost = url.hostname === "localhost" ? "127.0.0.1" : "localhost";
+				const next = `${origin(other)}/bounce?left=${left - 1}`;
+				return html(page(`bounce ${left}`, `<script>addEventListener("load", () => location.replace(${JSON.stringify(next)}));</script>`));
+			}
 			if (pathname === "/submit" && request.method === "POST") {
 				const fields: Record<string, string> = {};
 				for (const [key, value] of new URLSearchParams(await request.text())) fields[key] = value;
@@ -265,15 +246,11 @@ export function startFixture(): Fixture {
 	});
 
 	const fixture: Fixture = {
-		url: (path) => `http://127.0.0.1:${server.port}${path}`,
+		url: (path, host = "127.0.0.1") => `${origin(host)}${path}`,
 		hits: (path) => hits.get(path) ?? 0,
 		submissions: () => submissions,
 		cookieValue,
-		releaseHold: () => openHold(true),
 		stop: async () => {
-			// Nothing this fixture holds may outlive the test that held it.
-			clearTimeout(holdBound);
-			openHold(false);
 			await server.stop(true);
 		},
 	};
@@ -285,15 +262,13 @@ export function startFixture(): Fixture {
 // Small test helpers
 // ---------------------------------------------------------------------------
 
-/** Request an action and approve it, returning the settled receipt. */
-export async function approve(
-	runtime: BrowserRuntime,
-	browserId: string,
-	requestId: string,
-	action: BrowserAction,
-): Promise<PendingAction> {
-	const pending = await runtime.requestAction(browserId, requestId, action);
-	return await runtime.resolveAction(browserId, pending.id, true);
+/** Perform an action that is expected to complete; anything else fails the test with its error. */
+export async function perform(runtime: BrowserRuntime, browserId: string, action: BrowserAction): Promise<BrowserState> {
+	const result = await runtime.act(browserId, action);
+	if (result.status !== "completed") {
+		throw new Error(`expected ${action.kind} to complete, got ${result.status}: ${result.error ?? ""}`);
+	}
+	return result.state;
 }
 
 /**
@@ -321,12 +296,12 @@ export async function waitUntil<T>(
 }
 
 /**
- * Wait for the form round trip that `resolveAction` deliberately does NOT
- * await. A click reports `completed` once the browser dispatched it; the POST
- * travels to the server and the response comes back to the page afterwards.
- * Landing on the `/submit` response is the observable END of that round trip:
- * the server has accepted the write and the submitting page is gone, so the
- * submission count is settled and "exactly once" can be asserted honestly.
+ * Wait for the form round trip that a `click` deliberately does NOT await. A
+ * click reports `completed` once the browser dispatched it; the POST travels to
+ * the server and the response comes back to the page afterwards. Landing on
+ * the `/submit` response is the observable END of that round trip: the server
+ * has accepted the write and the submitting page is gone, so the submission
+ * count is settled and "exactly once" can be asserted honestly.
  */
 export async function submissionLanded(
 	runtime: BrowserRuntime,

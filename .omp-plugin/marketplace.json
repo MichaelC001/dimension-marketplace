@@ -79,6 +79,27 @@
 			]
 		},
 		{
+			"name": "browser",
+			"source": "./packs/browser",
+			"pluginId": "browser",
+			"title": "Browser",
+			"icon": "globe",
+			"description": "See and annotate the browser your agent uses. Persistent profiles, an MCP Apps View and human approval before browser mutations.",
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-community",
+			"license": "MIT",
+			"category": "artifactory",
+			"tags": [
+				"browser",
+				"mcp-apps",
+				"profiles",
+				"annotations"
+			]
+		},
+		{
 			"name": "build",
 			"source": "./packs/build",
 			"pluginId": "build",

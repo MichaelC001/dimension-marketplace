@@ -1,36 +1,15 @@
 /**
- * Durable, per-profile filesystem state for the browser runtime.
+ * Per-profile filesystem state for the browser runtime.
  *
- * Owns three things and nothing else:
+ * Owns two things and nothing else:
  *   1. Profile directory layout + filesystem-safe slug validation.
  *   2. The per-profile process lock (atomic create, owner-token release,
  *      NEVER steals a stale lock and NEVER kills a foreign process).
- *   3. The append-only action journal, serialized per profile and fsync'd
- *      before the caller is allowed to cause the real-world effect.
- *
- * No puppeteer here — this module is pure Node fs/path/crypto so the durable
- * write-path can be reasoned about (and unit-tested) without a browser.
  */
 import { randomBytes } from "node:crypto";
-import {
-	closeSync,
-	fsyncSync,
-	mkdirSync,
-	openSync,
-	readdirSync,
-	readFileSync,
-	statSync,
-	unlinkSync,
-	writeSync,
-} from "node:fs";
-import { open, rename, stat } from "node:fs/promises";
+import { closeSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-
-/** Max bytes of a single journal file before it is rotated to `.1`. */
-const JOURNAL_MAX_BYTES = 8 * 1024 * 1024;
-/** Max bytes of a single journal record; an oversized record is refused. */
-const JOURNAL_MAX_RECORD = 8 * 1024;
 
 /** Matches the server's input schema exactly: 1-48 chars, no dots. */
 const SLUG_RE = /^[a-z0-9][a-z0-9_-]{0,47}$/;
@@ -47,6 +26,9 @@ export class BrowserRuntimeError extends Error {
 export function fail(code: string, message: string): never {
 	throw new BrowserRuntimeError(code, message);
 }
+
+/** Thrown by a driver when provably nothing reached the page (no target, bad input). */
+export class ActionNotDispatched extends BrowserRuntimeError {}
 
 /**
  * Validate a profile name into a filesystem-safe slug. Rejects (never rewrites)
@@ -70,29 +52,8 @@ export interface LockHandle {
 	readonly token: string;
 }
 
-/**
- * One durable line of the action journal.
- *
- * Credential boundary: this record NEVER carries the opaque `browserId`
- * capability (a non-secret per-browser `session` id stands in for it) and
- * NEVER carries action payloads or browser exception strings.
- */
-export interface JournalRecord {
-	at: string;
-	/** Non-secret per-browser id; deliberately NOT the browserId capability. */
-	session: string;
-	actionId: string;
-	requestId: string;
-	status: string;
-	revision: number;
-	kind: string;
-}
-
 export class ProfileStore {
 	readonly rootDir: string;
-	/** One serialization chain per profile so journal writes never interleave. */
-	private readonly journalQueues = new Map<string, Promise<void>>();
-
 	constructor(rootDir?: string) {
 		this.rootDir = resolve(rootDir ?? defaultRootDir());
 		mkdirSync(this.profilesRoot, { recursive: true, mode: 0o700 });
@@ -181,57 +142,6 @@ export class ProfileStore {
 			unlinkSync(lock.path);
 		} catch {
 			/* already gone */
-		}
-	}
-
-	/**
-	 * Append one journal record, fsync'd, serialized per profile. Resolves only
-	 * after the bytes are durable — callers MUST await this before performing a
-	 * mutating browser action so a crash can never hide a claimed write.
-	 */
-	journal(slug: string, record: JournalRecord): Promise<void> {
-		const path = join(this.profileDir(slug), "actions.jsonl");
-		const prev = this.journalQueues.get(slug) ?? Promise.resolve();
-		const next = prev.then(
-			() => this.writeJournal(path, record),
-			() => this.writeJournal(path, record),
-		);
-		this.journalQueues.set(
-			slug,
-			next.catch(() => undefined),
-		);
-		return next;
-	}
-
-	/**
-	 * Async throughout: an fsync is a multi-millisecond disk stall, and doing it
-	 * synchronously would block every other profile's event-loop work on one
-	 * profile's claim.
-	 */
-	private async writeJournal(path: string, record: JournalRecord): Promise<void> {
-		const line = `${JSON.stringify(record)}\n`;
-		if (Buffer.byteLength(line) > JOURNAL_MAX_RECORD) {
-			throw new Error("Browser action receipt exceeds the journal record limit");
-		}
-		let size = 0;
-		try {
-			size = (await stat(path)).size;
-		} catch (err) {
-			// ENOENT is the first write. Anything else means we cannot reason about
-			// this file's size, and we do not claim a durable bound we did not check.
-			if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
-		}
-		if (size + line.length > JOURNAL_MAX_BYTES) {
-			// A failed rotation is reported, not swallowed: the caller is about to
-			// rely on this file for a claim.
-			await rename(path, `${path}.1`);
-		}
-		const handle = await open(path, "a", 0o600);
-		try {
-			await handle.appendFile(line);
-			await handle.sync();
-		} finally {
-			await handle.close();
 		}
 	}
 }

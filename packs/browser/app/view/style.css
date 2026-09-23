@@ -118,6 +118,24 @@ body {
 	overflow: auto;
 }
 
+/* A docked seat is often narrower than the page: the page gets the full width
+   and the task/annotation panel follows it, instead of squeezing the page. */
+@media (max-width: 900px) {
+	.bx-body {
+		flex-direction: column;
+		overflow: auto;
+	}
+	.bx-left,
+	.bx-right {
+		overflow: visible;
+	}
+	.bx-right {
+		width: auto;
+		border-left: none;
+		border-top: 1px solid var(--fr-border);
+	}
+}
+
 .bx-toolbar {
 	display: flex;
 	align-items: center;
@@ -256,9 +274,9 @@ body {
 	color: var(--fr-text-2);
 }
 
-/* ── queue, annotation, history ─────────────────────────────────────── */
+/* ── task, annotation, history ──────────────────────────────────────── */
 
-.bx-queue-head,
+.bx-task-head h2,
 .bx-annotate h2,
 .bx-history h2,
 .bx-open h2 {
@@ -267,14 +285,14 @@ body {
 	font-weight: 600;
 }
 
-.bx-queue-head {
+.bx-task-head {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
 	gap: 8px;
 }
 
-.bx-queue-list,
+.bx-task-steps,
 .bx-history-list {
 	list-style: none;
 	margin: 0;
@@ -284,71 +302,51 @@ body {
 	gap: 6px;
 }
 
-.bx-queue-item {
+.bx-task-buttons {
 	display: flex;
-	align-items: flex-start;
-	justify-content: space-between;
-	gap: 8px;
-	padding: 8px;
+	gap: 6px;
+}
+
+.bx-task-meta,
+.bx-task-goal,
+.bx-task-summary {
+	margin: 0;
+	font-size: var(--fr-fs-xs);
+	overflow-wrap: anywhere;
+}
+
+.bx-task-meta {
+	color: var(--fr-text-3);
+}
+
+.bx-task-summary {
+	padding: 6px 8px;
 	border: 1px solid var(--fr-border-soft);
 	border-radius: var(--fr-r, 8px);
 	background: var(--fr-surface-2);
 }
 
-.bx-queue-item[data-status="pending"] {
-	border-color: var(--fr-accent-line);
+.bx-task-summary[data-status="failed"] {
+	color: var(--fr-del);
 }
 
-.bx-queue-main {
-	min-width: 0;
+.bx-task-summary[data-status="blocked"] {
+	color: var(--fr-warn);
 }
 
-.bx-queue-what {
-	margin: 0 0 4px;
-	overflow-wrap: anywhere;
+/* Newest step first; the list scrolls rather than pushing the panels below away. */
+.bx-task-steps {
+	max-height: 14rem;
+	overflow: auto;
+	gap: 4px;
 }
 
-.bx-queue-meta {
-	display: flex;
-	align-items: center;
-	gap: 6px;
-	flex-wrap: wrap;
-	margin: 0;
-	font-size: var(--fr-fs-2xs);
-	color: var(--fr-text-3);
-}
-
-.bx-queue-actions {
-	display: flex;
-	gap: 6px;
-	flex: none;
-}
-
-/* The exact executable payload, revealed for one approval and never kept. */
-.bx-queue-exact {
-	display: grid;
-	grid-template-columns: max-content minmax(0, 1fr);
-	gap: 2px 8px;
-	margin: 6px 0 0;
-	padding: 6px 8px;
-	border: 1px solid var(--fr-accent-line);
-	border-radius: var(--fr-r, 8px);
-	background: var(--fr-surface-3);
+.bx-task-steps li {
 	font-size: var(--fr-fs-xs);
-}
-
-.bx-queue-exact > div {
-	display: contents;
-}
-
-.bx-queue-exact dt,
-.bx-queue-exact dd {
-	margin: 0;
+	color: var(--fr-text-2);
 	overflow-wrap: anywhere;
-	white-space: pre-wrap;
 }
 
-.bx-queue-error,
 .bx-error {
 	margin: 4px 0 0;
 	color: var(--fr-del);
@@ -356,6 +354,8 @@ body {
 	overflow-wrap: anywhere;
 }
 
+.bx-task,
+.bx-task-form,
 .bx-annotate,
 .bx-history {
 	display: flex;

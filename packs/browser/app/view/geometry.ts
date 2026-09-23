@@ -65,7 +65,7 @@ export function toViewportPoint(box: Box, clientX: number, clientY: number, view
 /** A point that must name a rendered pixel — a click, or the keyboard caret.
  *  A `width × height` viewport addresses `0 .. width-1`, so the boundary
  *  coordinate `width` is off-page: clamp it back to the last real pixel rather
- *  than queue a click the engine resolves somewhere outside the picture. */
+ *  than send a click the engine lands somewhere outside the picture. */
 export function toPixelPoint(point: Point, viewport: Viewport): Point {
 	return {
 		x: Math.max(0, Math.min(Math.max(0, viewport.width - 1), Math.round(point.x))),

@@ -32,8 +32,15 @@ const PAGE_TEXT_SCRIPT = (limit: number): string => {
 			.trim()
 			.replace(/\s+/g, " ")
 			.slice(0, 80);
-		const id = el.id ? `#${el.id}` : "";
-		controls.push(`${el.tagName.toLowerCase()}${id} "${label}" @${Math.round(rect.x)},${Math.round(rect.y)}`);
+		// A selector the agent can pass straight back to browser_act.
+		const name = el.getAttribute("name");
+		const choice = (type === "radio" || type === "checkbox") && input.getAttribute("value") ? `[value="${input.getAttribute("value")!.replace(/"/g, '\\"')}"]` : "";
+		const target = el.id ? `#${CSS.escape(el.id)}` : name ? `${el.tagName.toLowerCase()}[name="${name.replace(/"/g, '\\"')}"]${choice}` : el.tagName.toLowerCase();
+		const kind = el.tagName === "INPUT" ? ` (${type || "text"})` : "";
+		const options = el.tagName === "SELECT"
+			? ` options: ${Array.from((el as HTMLSelectElement).options).slice(0, 12).map((o) => o.text.trim()).join(" | ")}`
+			: "";
+		controls.push(`${target}${kind} "${label}"${options} @${Math.round(rect.x + rect.width / 2)},${Math.round(rect.y + rect.height / 2)}`);
 	}
 	if (controls.length > 0) parts.push("", "## interactive", controls.join("\n"));
 	const text = parts.join("\n");
