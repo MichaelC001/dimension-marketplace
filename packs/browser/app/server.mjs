@@ -544,6 +544,7 @@ var PuppeteerDriver = class {
         const page = await target.page();
         if (!page || this.#closed || page.isClosed()) return;
         await page.setViewport({ ...this.#viewport, deviceScaleFactor: 1 }).catch(() => void 0);
+        await page.bringToFront().catch(() => void 0);
         const cdp = await attachSession(page).catch(() => void 0);
         if (!cdp || this.#closed || page.isClosed()) return;
         const previous = this.#cdp;
@@ -555,6 +556,7 @@ var PuppeteerDriver = class {
           void attachSession(this.#home).then((home) => {
             if (this.#page !== page) return void home.detach().catch(() => void 0);
             this.#page = this.#home;
+            void this.#home.bringToFront().catch(() => void 0);
             this.#cdp = home;
           }, () => void 0);
         });

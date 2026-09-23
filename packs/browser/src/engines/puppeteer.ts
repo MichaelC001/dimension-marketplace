@@ -382,6 +382,9 @@ class PuppeteerDriver implements EngineDriver {
 				const page = await target.page();
 				if (!page || this.#closed || page.isClosed()) return;
 				await page.setViewport({ ...this.#viewport, deviceScaleFactor: 1 }).catch(() => undefined);
+				// Agents open background tabs (jev does). A hidden tab renders no
+				// frames, so screenshots crawl and input waits forever for one.
+				await page.bringToFront().catch(() => undefined);
 				const cdp = await attachSession(page).catch(() => undefined);
 				if (!cdp || this.#closed || page.isClosed()) return;
 				const previous = this.#cdp;
@@ -393,6 +396,7 @@ class PuppeteerDriver implements EngineDriver {
 					void attachSession(this.#home).then((home) => {
 						if (this.#page !== page) return void home.detach().catch(() => undefined);
 						this.#page = this.#home;
+						void this.#home.bringToFront().catch(() => undefined);
 						this.#cdp = home;
 					}, () => undefined);
 				});

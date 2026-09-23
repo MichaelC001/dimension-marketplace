@@ -56,6 +56,23 @@ function stepsSeen(count: number): { seen: TaskStep[]; reached: Promise<void>; o
 	};
 }
 
+/**
+ * Settle `work` within `ms` or fail naming `what`. A real-clock DEADLINE, not a
+ * wait: the regression under test is a hang inside real Chrome, which no fake
+ * clock can advance, and it must go red rather than stall the suite.
+ */
+async function within<T>(ms: number, what: string, work: Promise<T>): Promise<T> {
+	let timer: Timer | undefined;
+	const expired = new Promise<never>((_, reject) => {
+		timer = setTimeout(() => reject(new Error(`${what} did not settle within ${ms}ms`)), ms);
+	});
+	try {
+		return await Promise.race([work, expired]);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
 const ENV_KEYS = ["DIM_BROWSER_PYTHON", "PYTHONPATH", "PYTHONDONTWRITEBYTECODE"] as const;
 const savedEnv: Partial<Record<(typeof ENV_KEYS)[number], string>> = {};
 
@@ -203,6 +220,48 @@ describeTasks("tasks", () => {
 
 			await runtime.cancelTask(browserId);
 			expect((await running).status).toBe("cancelled");
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"a BACKGROUND tab the task agent opened still takes input and yields frames after the task ends",
+		async () => {
+			const fixture = startFixture();
+			const { runtime, rootDir } = await createRuntime();
+			const { browserId } = await runtime.open({ profile: "task-bg-tab", viewport: VIEWPORT });
+			const gate = join(rootDir, "finish-task");
+			const progress = stepsSeen(1);
+
+			const finished = runtime.runTask(
+				browserId,
+				{
+					agent: "jev",
+					task: JSON.stringify({
+						openTab: fixture.url("/signup"),
+						background: true,
+						steps: [{ action: "opened tab", url: fixture.url("/signup") }],
+						gate,
+						result: { status: "done", summary: "opened", steps: 1 },
+					}),
+				},
+				progress.onStep,
+			);
+			await progress.reached;
+			// The driver has switched to the agent's tab before the task (and its follow) ends.
+			await waitUntil(
+				"state to show the agent's tab",
+				() => runtime.state(browserId),
+				(state) => state.url === fixture.url("/signup"),
+			);
+			await writeFile(gate, "");
+			expect((await finished).status).toBe("done");
+
+			// A hidden tab renders no frames: input waits forever for one and screenshots crawl.
+			const scrolled = await within(8_000, "scroll on the followed tab", runtime.act(browserId, { kind: "scroll", deltaY: 200 }));
+			expect(scrolled.status).toBe("completed");
+			const frame = await within(8_000, "frame of the followed tab", runtime.frame(browserId));
+			expect(frame.state.url).toBe(fixture.url("/signup"));
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);

@@ -5,6 +5,7 @@ The request's `task` field is a JSON script:
    "gate": "<path>",          # after the steps, wait for this file (or stdin EOF)
    "hold": true,              # after the steps, wait for stdin EOF only
    "openTab": "<url>",        # before the steps, Target.createTarget over request.cdpUrl
+   "background": true,        # ...opening that tab in the background, as jev does
    "crash": {"stderr": "...", "exit": 3},   # write stderr, exit with no result
    "result": {"status", "summary", "steps", "modelCalls", "inputTokens", "outputTokens"}}
 Stdin EOF while waiting => a `cancelled` result, as the protocol requires.
@@ -21,11 +22,12 @@ def emit(line):
     sys.stdout.flush()
 
 
-def open_tab(cdp_url, url):
+def open_tab(cdp_url, url, background):
     from websockets.sync.client import connect
 
     with connect(cdp_url, max_size=None) as ws:
-        ws.send(json.dumps({"id": 1, "method": "Target.createTarget", "params": {"url": url}}))
+        params = {"url": url, "background": bool(background)}
+        ws.send(json.dumps({"id": 1, "method": "Target.createTarget", "params": params}))
         while True:
             reply = json.loads(ws.recv())
             if reply.get("id") == 1:
@@ -54,7 +56,7 @@ def main():
     threading.Thread(target=watch_stdin, daemon=True).start()
 
     if script.get("openTab"):
-        open_tab(request["cdpUrl"], script["openTab"])
+        open_tab(request["cdpUrl"], script["openTab"], script.get("background"))
 
     for n, step in enumerate(script.get("steps", []), start=1):
         emit({"type": "step", "n": n, "elapsedMs": n * 10, "costUsd": None, **step})
