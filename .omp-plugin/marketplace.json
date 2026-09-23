@@ -79,6 +79,27 @@
 			]
 		},
 		{
+			"name": "browser",
+			"source": "./packs/browser",
+			"pluginId": "browser",
+			"title": "Browser",
+			"icon": "globe",
+			"description": "A real browser beside your chat that your agent drives while you watch. Tabs, persistent logged-in profiles, circle-to-annotate, and fast task agents (jev, browser-use).",
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-community",
+			"license": "MIT",
+			"category": "artifactory",
+			"tags": [
+				"browser",
+				"mcp-apps",
+				"profiles",
+				"annotations"
+			]
+		},
+		{
 			"name": "build",
 			"source": "./packs/build",
 			"pluginId": "build",
