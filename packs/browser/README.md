@@ -74,8 +74,8 @@ uv sync --python 3.12
 
 Or point `DIM_BROWSER_PYTHON` at an interpreter that already has it. Keys are
 read from the environment of the pack's server, which inherits the engine's
-environment (`.mcp.json` declares an `env`, which widens the host's minimal
-default):
+environment (`ai.insodimension.dimension/mcp.json` declares an `env`, which
+widens the host's minimal default):
 
 | Agent | Needs |
 | --- | --- |

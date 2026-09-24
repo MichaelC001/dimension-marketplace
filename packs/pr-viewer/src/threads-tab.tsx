@@ -1,7 +1,7 @@
 // The threads tab: the review's line conversations, each foldable, each with
 // a reply/resolve composer when the host admits thread writes.
 
-import { Icon, ThreadCard } from "@fraym/ui";
+import { Icon, Skeleton, SkeletonGroup, SkeletonText, ThreadCard } from "@fraym/ui";
 import { useState } from "react";
 import { ThreadWrite } from "./compose";
 import { relativeTime, type ReviewRef, type ReviewThread } from "./model";
@@ -23,10 +23,29 @@ export function ThreadsTab({
 	readonly act: ReviewAct;
 }) {
 	const [folded, setFolded] = useState<Record<string, boolean>>({});
+	const stale = loading && threads !== null;
 	return (
-		<div className="flex flex-col gap-2 p-3">
-			{loading ? <span className="text-fr-xs text-fr-text-3">Loading…</span> : null}
+		<div className="flex flex-col gap-2 p-3" aria-busy={loading || undefined}>
+			{threads === null && loading ? (
+				// First load with no threads painted: skeletons mirroring the
+				// file-line + ThreadCard shape so the list does not reflow.
+				// SkeletonGroup (role=status) announces the busy state once;
+				// a bare aria-label on a div would be inert.
+				<SkeletonGroup label="Loading review threads">
+					<div className="flex flex-col gap-3">
+						<Skeleton h={10} rounded="sm" w="45%" />
+						<div className="flex flex-col gap-1 rounded-md border border-fr-border bg-fr-surface p-2">
+							<SkeletonText lines={3} lineHeight={10} gap={6} />
+						</div>
+						<Skeleton h={10} rounded="sm" w="35%" />
+						<div className="flex flex-col gap-1 rounded-md border border-fr-border bg-fr-surface p-2">
+							<SkeletonText lines={2} lineHeight={10} gap={6} />
+						</div>
+					</div>
+				</SkeletonGroup>
+			) : null}
 			{error ? <p className="text-fr-del text-fr-sm">{error}</p> : null}
+			<div className={stale ? "flex flex-col gap-2 opacity-60" : "flex flex-col gap-2"}>
 			{threads && threads.length > 0 ? (
 				<span className="text-fr-2xs text-fr-text-3">
 					{threads.filter(thread => !thread.isResolved).length} open · {threads.filter(thread => thread.isResolved).length} resolved
@@ -54,7 +73,8 @@ export function ThreadsTab({
 					) : null}
 				</div>
 			))}
-			{threads && threads.length === 0 ? <span className="text-fr-xs text-fr-text-3">No review conversations.</span> : null}
+			{threads && threads.length === 0 && !loading ? <span className="text-fr-xs text-fr-text-3">No review conversations.</span> : null}
+			</div>
 		</div>
 	);
 }
