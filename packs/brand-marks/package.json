@@ -1,0 +1,28 @@
+{
+	"name": "@dimension/brand-marks",
+	"author": "Dimension",
+	"version": "0.1.0",
+	"description": "Brand Marks — four presence avatars (X, Reddit, YouTube, Discord) for the avatar slot: the official mark, unmodified at rest, with container-only motion that follows the session.",
+	"license": "MIT",
+	"type": "module",
+	"main": "./src/avatar.ts",
+	"private": true,
+	"dimension": {
+		"name": "brand-marks",
+		"description": "Brand Marks — four presence avatars (X, Reddit, YouTube, Discord) for the avatar slot: the official mark, unmodified at rest, with container-only motion that follows the session.",
+		"category": "component",
+		"keywords": [
+			"avatar",
+			"vibr",
+			"presence",
+			"brand",
+			"x",
+			"reddit",
+			"youtube",
+			"discord"
+		]
+	},
+	"scripts": {
+		"build": "bun build src/avatar.ts --outfile dist/avatar.js --format esm --target browser"
+	}
+}
