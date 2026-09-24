@@ -380,6 +380,32 @@ describeWithBoth("the password fill in a real page", () => {
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);
+
+	test(
+		"a handler's property-only copy into a text input is emptied by the same fill",
+		async () => {
+			const fixture = startFixture();
+			const page = await openPage(fixture.url("/"));
+			const password = "copied-by-the-page-handler";
+			// The page's own input handler mirrors the field by property: no DOM mutation for an observer to see.
+			await page.$eval("#pass", (el) =>
+				el.addEventListener("input", () => {
+					const user = document.querySelector("#user");
+					if (user instanceof HTMLInputElement && el instanceof HTMLInputElement) user.value = el.value;
+				}),
+			);
+			const script = fillScript({ origin: new URL(fixture.url("/")).origin, password });
+
+			// Read inside the fill's own evaluate, before any timer can run: only a synchronous scrub passes.
+			const read = await page.evaluate(
+				`[${script}, document.querySelector("#user").value, document.querySelector("#pass").value]`,
+			);
+
+			// [fields filled, the handler's copy, the password field]
+			expect(read).toEqual([1, "", password]);
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
 });
 
 // ---------------------------------------------------------------------------
