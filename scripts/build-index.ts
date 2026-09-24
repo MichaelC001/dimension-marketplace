@@ -181,30 +181,29 @@ function generalAgentListings(packRoot: string, packDir: string): Json[] | undef
 		}
 		const file = join(agentsRoot, dirName, GENERAL_AGENT_FILE);
 		if (!existsSync(file)) throw new Error(`${where}: ${GENERAL_AGENT_FILE} is missing`);
+		const at = `${where}/${GENERAL_AGENT_FILE}`;
 		let frontmatter: Json | undefined;
 		try {
 			frontmatter = frontmatterOf(readFileSync(file, "utf8"));
 		} catch (error) {
-			throw new Error(`${where}/${GENERAL_AGENT_FILE}: frontmatter is not valid YAML (${error instanceof Error ? error.message : String(error)})`);
+			throw new Error(`${at}: frontmatter is not valid YAML (${error instanceof Error ? error.message : String(error)})`);
 		}
-		if (!frontmatter) throw new Error(`${where}/${GENERAL_AGENT_FILE}: YAML frontmatter is required`);
+		if (!frontmatter) throw new Error(`${at}: YAML frontmatter is required`);
 		const name = frontmatter.name ?? dirName;
 		if (name !== dirName) {
-			throw new Error(`${where}/${GENERAL_AGENT_FILE}: name ${JSON.stringify(name)} must equal its directory name "${dirName}"`);
+			throw new Error(`${at}: name ${JSON.stringify(name)} must equal its directory name "${dirName}"`);
 		}
 		if (frontmatter.specVersion === undefined) {
-			throw new Error(`${where}/${GENERAL_AGENT_FILE}: specVersion is required (specVersion: 1)`);
+			throw new Error(`${at}: specVersion is required (specVersion: 1)`);
 		}
 		if (asObject(frontmatter.autonomy)?.trigger !== undefined) {
-			throw new Error(
-				`${where}/${GENERAL_AGENT_FILE}: carries autonomy.trigger — a triggered agent is a Loop, not a General Agent`,
-			);
+			throw new Error(`${at}: carries autonomy.trigger — a triggered agent is a Loop, not a General Agent`);
 		}
 		const description = asString(frontmatter.description);
-		if (!description) throw new Error(`${where}/${GENERAL_AGENT_FILE}: a description is required`);
+		if (!description) throw new Error(`${at}: a description is required`);
 		const defaultEnabled = frontmatter.defaultEnabled ?? true;
 		if (typeof defaultEnabled !== "boolean") {
-			throw new Error(`${where}/${GENERAL_AGENT_FILE}: defaultEnabled must be a boolean`);
+			throw new Error(`${at}: defaultEnabled must be a boolean`);
 		}
 		listings.push({ name: dirName, description, defaultEnabled });
 	}
