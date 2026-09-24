@@ -114,7 +114,11 @@ function mount(root, mark) {
   stage.innerHTML = `<div class="bm-halo"></div><div class="bm-sweep"></div><div class="bm-ring"></div>` + `<div class="bm-motion"><div class="bm-pop">${markSvg(mark)}</div></div>`;
   root.replaceChildren(stage);
   const pop = stage.querySelector(".bm-pop");
-  pop?.addEventListener("animationend", () => delete stage.dataset.pop);
+  const clearPop = () => {
+    delete stage.dataset.pop;
+  };
+  pop?.addEventListener("animationend", clearPop);
+  pop?.addEventListener("animationcancel", clearPop);
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
   let lastPresence;
   let lastTheme;
@@ -139,8 +143,10 @@ function mount(root, mark) {
     stage.style.setProperty("--bm-bob", `${((1 + 2.5 * energy) * damp).toFixed(2)}%`);
     stage.style.setProperty("--bm-orbit", `${(2.4 - 1.2 * energy).toFixed(2)}s`);
     const emotion = presence?.emotion ?? "";
-    if (live && state !== "idle" && emotion !== lastEmotion && POP_EMOTIONS[emotion] === true) {
-      delete stage.dataset.pop;
+    if (!live || state === "idle")
+      clearPop();
+    else if (emotion !== lastEmotion && POP_EMOTIONS[emotion] === true) {
+      clearPop();
       stage.offsetWidth;
       stage.dataset.pop = "1";
     }
@@ -151,7 +157,7 @@ function mount(root, mark) {
 }
 function boot() {
   const root = document.getElementById("fraym-pack-root");
-  const requested = new URL(import.meta.url).searchParams.get("avatar");
+  const requested = root?.dataset.avatar ?? null;
   const mark = requested === null ? MARKS[0] : MARKS.find((m) => m.id === requested);
   if (!root) {
     post({ kind: "error", message: "brand-marks: #fraym-pack-root is missing from the host document" });

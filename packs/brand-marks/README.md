@@ -13,20 +13,22 @@ brand's official mark and follows the session with container-only motion.
 `slot: "avatar"`. The engine publishes each as a presence record
 `plugin:brand-marks/<id>`; the host mounts the bundle in a sandboxed iframe
 (`allow-scripts allow-popups`, opaque origin) whose document holds a single
-`#fraym-pack-root` and a `<script type="module">` pointing at the bundle.
+`#fraym-pack-root` and a `<script type="module">` carrying the bundle's SOURCE
+(the host fetches the bundle itself, so no asset URL or token ever reaches the
+frame).
 
-### Which avatar am I? — the `avatar` query param
+### Which avatar am I? — `data-avatar`
 
-The host appends `?avatar=<component id>` to the bundle URL. The module reads it:
+The host writes the component id onto the root it hands the bundle:
 
 ```ts
-new URL(import.meta.url).searchParams.get("avatar"); // "x" | "reddit" | "youtube" | "discord"
+document.getElementById("fraym-pack-root")?.dataset.avatar; // "x" | "reddit" | "youtube" | "discord"
 ```
 
-No param → the first mark (`x`). An unknown id → the bundle posts an `error` frame
-and paints nothing. Because the URL also carries the host's access token, the bundle
-is ONE self-contained ES module with no imports (a relative import would lose the token
-and 404).
+No attribute → the first mark (`x`). An unknown id → the bundle posts an `error`
+frame and paints nothing. The bundle is ONE self-contained ES module with no
+imports: it boots from a `data:` URL, so a relative import has nothing to resolve
+against.
 
 ### Protocol (pack bridge v5)
 

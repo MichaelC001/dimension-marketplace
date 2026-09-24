@@ -7,8 +7,8 @@
 // because a pack bundles its own copy and must import nothing).
 //
 // ONE bundle, FOUR avatars: the manifest declares four `avatar` components off
-// this single entry, and the host appends `?avatar=<component id>` to the
-// bundle URL so the module knows which one it is.
+// this single entry, and the host writes `data-avatar="<component id>"` on
+// `#fraym-pack-root` so the module knows which one it is.
 //
 // THE BRAND RULE, which every line of CSS below obeys:
 //   - At rest (state `idle`, or no presence offered yet) the mark is painted
@@ -148,8 +148,15 @@ function mount(root: HTMLElement, mark: Mark): (presence: Presence | undefined, 
 		`<div class="bm-motion"><div class="bm-pop">${markSvg(mark)}</div></div>`;
 	root.replaceChildren(stage);
 
+	// The pop is one-shot. `animationcancel` fires instead of `animationend` when
+	// the session goes idle or motion stops mid-pop; clearing on both keeps a
+	// stale `data-pop` from replaying at the start of the next turn.
 	const pop = stage.querySelector<HTMLElement>(".bm-pop");
-	pop?.addEventListener("animationend", () => delete stage.dataset.pop);
+	const clearPop = (): void => {
+		delete stage.dataset.pop;
+	};
+	pop?.addEventListener("animationend", clearPop);
+	pop?.addEventListener("animationcancel", clearPop);
 
 	const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 	let lastPresence: Presence | undefined;
@@ -195,8 +202,9 @@ function mount(root: HTMLElement, mark: Mark): (presence: Presence | undefined, 
 		// A flourish on the EDGE into a success-ish emotion, mid-turn only — a
 		// pop at rest would break the unmodified-at-rest rule.
 		const emotion = presence?.emotion ?? "";
-		if (live && state !== "idle" && emotion !== lastEmotion && POP_EMOTIONS[emotion] === true) {
-			delete stage.dataset.pop;
+		if (!live || state === "idle") clearPop();
+		else if (emotion !== lastEmotion && POP_EMOTIONS[emotion] === true) {
+			clearPop();
 			void stage.offsetWidth; // restart the one-shot animation
 			stage.dataset.pop = "1";
 		}
@@ -211,7 +219,10 @@ function mount(root: HTMLElement, mark: Mark): (presence: Presence | undefined, 
 
 function boot(): void {
 	const root = document.getElementById("fraym-pack-root");
-	const requested = new URL(import.meta.url).searchParams.get("avatar");
+	// Which of this pack's avatars THIS frame is: the host writes the component
+	// id onto the root it hands us. (Not the module URL — the host boots the
+	// bundle from its source, so no asset URL or token ever reaches this realm.)
+	const requested = root?.dataset.avatar ?? null;
 	const mark = requested === null ? MARKS[0] : MARKS.find(m => m.id === requested);
 	if (!root) {
 		post({ kind: "error", message: "brand-marks: #fraym-pack-root is missing from the host document" });
