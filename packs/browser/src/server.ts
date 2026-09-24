@@ -6,7 +6,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import type { BrowserRuntimePort } from "./contracts.js";
-import { BROWSER_ENGINES, TASK_AGENTS } from "./contracts.js";
+import { BROWSER_ENGINES, CREDENTIAL_MODES, TASK_AGENTS } from "./contracts.js";
 import { BrowserRuntime } from "./runtime.js";
 
 export const BROWSER_VIEW_URI = "ui://browser/index.html";
@@ -149,11 +149,15 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     }
   };
   server.registerTool("browser_task", {
-    description: `Hand a whole task to a fast browser agent working in this same browser while the human watches: jev (TypeSafe Jev, one model decision per step) or browser-use. Put every fact the agent needs in task — it cannot ask you. Returns within waitSeconds (default and max ${WAIT_CAP_S}) with the task's status, steps, time, model calls and tokens; while status is "running", call browser_task_wait. browser_act is refused while a task runs.`,
-    inputSchema: { browserId: capability, agent: z.enum(TASK_AGENTS), task: z.string().min(1).max(8192), maxSteps: z.number().int().min(1).max(200).optional(), waitSeconds },
+    description: `Hand a whole task to a fast browser agent working in this same browser while the human watches: jev (TypeSafe Jev, one model decision per step) or browser-use. Put every fact the agent needs in task — it cannot ask you. Never put a password in task: you do not know one and must not invent one. For a jev sign-up or login pass credential {origin, mode}: the browser fills that origin's password fields itself with a password it holds for this profile — "signup" uses the saved one or creates and saves a strong one, "login" uses the saved one (there is none for an account the user made; the user signs in by hand in the View). The value is never shown to you, to jev or in results. Returns within waitSeconds (default and max ${WAIT_CAP_S}) with the task's status, steps, time, model calls and tokens (and credential {origin, created} when one was used); while status is "running", call browser_task_wait. browser_act is refused while a task runs.`,
+    inputSchema: {
+      browserId: capability, agent: z.enum(TASK_AGENTS), task: z.string().min(1).max(8192), maxSteps: z.number().int().min(1).max(200).optional(),
+      credential: z.object({ origin: z.string().min(1).max(2048), mode: z.enum(CREDENTIAL_MODES) }).strict().optional(),
+      waitSeconds,
+    },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
-  }, ({ browserId, agent, task, maxSteps, waitSeconds }, extra) => result(async () => {
-    await runtime.startTask(browserId, { agent, task, ...(maxSteps ? { maxSteps } : {}) });
+  }, ({ browserId, agent, task, maxSteps, credential, waitSeconds }, extra) => result(async () => {
+    await runtime.startTask(browserId, { agent, task, ...(maxSteps ? { maxSteps } : {}), ...(credential ? { credential } : {}) });
     return await follow(browserId, waitSeconds, extra);
   }));
   server.registerTool("browser_task_wait", {

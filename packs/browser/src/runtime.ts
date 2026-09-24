@@ -36,6 +36,7 @@ import type {
 	Viewport,
 } from "./contracts.js";
 import { BROWSER_ENGINES, TASK_AGENTS } from "./contracts.js";
+import { credentialOrigin, resolveCredential } from "./credentials.js";
 import { assertEngineAvailable, createEngineDriver } from "./engines/index.js";
 import type { EngineDriver, EngineState } from "./engines/types.js";
 import { cropRegion, MAX_FRAME_BYTES } from "./image.js";
@@ -544,17 +545,26 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		const task = typeof request.task === "string" ? request.task.trim() : "";
 		if (task.length === 0 || task.length > MAX_TASK_CHARS) fail("bad_task", `task must be 1-${MAX_TASK_CHARS} characters`);
 		const maxSteps = Math.min(MAX_TASK_STEPS, Math.max(1, Math.floor(request.maxSteps ?? DEFAULT_TASK_STEPS)));
+		if (request.credential !== undefined) {
+			// browser-use reads password fields like any other and would put a
+			// filled value in front of its model; only jev never reads them.
+			if (request.agent !== "jev") fail("credential_unsupported", "credential is supported with agent jev only; with browser-use the user signs in by hand in the View");
+			credentialOrigin(request.credential?.origin);
+		}
 
 		return await this.serialize(entry, async () => {
 			if (entry.worker) fail("task_running", `a ${entry.task?.agent} task is already running on this browser`);
 			const state = await this.refreshState(entry);
+			// Resolved (and, for a sign-up, minted) only once the task will run.
+			const credential = request.credential ? resolveCredential(this.store.profileDir(entry.profile), request.credential) : undefined;
 			const run: TaskRun = {
 				id: randomBytes(8).toString("hex"), agent: request.agent, task, status: "running", summary: "",
 				steps: [], stepCount: 0, startedAt: new Date().toISOString(), elapsedMs: 0,
 				usage: { modelCalls: 0, inputTokens: 0, outputTokens: 0, costUsd: null },
+				...(credential ? { credential: { origin: credential.origin, created: credential.created } } : {}),
 			};
 			const worker: RunningWorker = startWorker(
-				{ agent: request.agent, cdpUrl: entry.driver.cdpEndpoint(), task, maxSteps, startUrl: state.url },
+				{ agent: request.agent, cdpUrl: entry.driver.cdpEndpoint(), task, maxSteps, startUrl: state.url, ...(credential ? { credential: { origin: credential.origin, password: credential.password } } : {}) },
 				(step) => {
 					const record: TaskStep = { n: step.n, action: step.action, url: step.url, elapsedMs: step.elapsedMs };
 					run.steps.push(record);

@@ -24,9 +24,11 @@ tool needs it.
   (the user's own running Chrome, profile must be `relay`; `browser_task` is
   refused there — use a chromium profile for task agents). `abp` and `browser4`
   are refused with the reason.
-- The user logs in by hand, once, in the View. Never type a password the user
-  did not give you for this purpose; never create accounts that require
-  defeating CAPTCHAs or phone verification — hand that step to the user.
+- The user logs in by hand, once, in the View. Never type or put in `task` a
+  password — you never know one, and anything you write lands in the session
+  transcript. For a jev sign-up or login use `credential` (below). Never
+  create accounts that require defeating CAPTCHAs or phone verification — hand
+  that step to the user.
 
 ## Tabs
 
@@ -65,7 +67,7 @@ submission**, never resubmit blindly.
 **Whole task (a fast agent drives).** Best for well-specified, repetitive
 flows (forms, applications, sign-ups with given data).
 
-`browser_task({ browserId, agent: "jev" | "browser-use", task, maxSteps? })`
+`browser_task({ browserId, agent: "jev" | "browser-use", task, maxSteps?, credential? })`
 runs that agent in this same browser while the user watches; it returns
 status (`done`, `blocked`, `failed`, `cancelled`), a summary, steps, elapsed
 time, model calls and tokens. Put every fact the agent needs in `task` (names,
@@ -73,6 +75,16 @@ emails, answers) — it cannot ask you. `jev` is the fastest (one TypeSafe
 decision per step); `browser-use` is a general LLM agent. `browser_act` and
 `browser_tab` are refused while a task runs; `browser_task_cancel` stops it. After a task,
 `browser_snapshot` to verify the outcome yourself.
+
+**Passwords are the browser's, not yours.** For a jev sign-up pass
+`credential: { origin: "https://site.example", mode: "signup" }`: the browser
+creates a strong password, saves it in this profile for that origin and fills
+that origin's password fields itself; jev, you and the results never see it
+(the result says `credential: { origin, created }`). To sign in again later to
+an account the browser created, `mode: "login"`. It fills only pages of that
+exact origin (https, or http on localhost). An account the user made has no
+saved password — the user signs in by hand. `credential` is refused for
+`browser-use`, which reads password fields.
 
 Give a task **one clear goal with all its data**, start to finish. If a task
 ends unfinished (`blocked`, `failed`, out of steps, or `done` but the snapshot

@@ -59,7 +59,8 @@ export function renderReport(run) {
         const r = runs.filter((x) => x.agent === a)[i];
         return r ? `${r.success ? "pass" : "FAIL"} ${secs(r.seconds)}${r.solvedSeconds == null ? "" : ` (achieved ${secs(r.solvedSeconds)})`}` : "-";
       });
-      lines.push(`| ${i < 3 ? s.id : `${s.id} (job)`} | ${cells.join(" | ")} |`);
+      const isAccount = s.account ?? (["mail", "verify", "profile"].includes(s.id) || (s.id === "network" && !stages.slice(0, i).some((p) => p.id === "network")));
+      lines.push(`| ${isAccount ? s.id : `${s.id} (job)`} | ${cells.join(" | ")} |`);
     });
   }
 

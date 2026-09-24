@@ -4,6 +4,7 @@ jev reaches Chrome through a browser-harness daemon named by BU_NAME and pointed
 websocket by BU_CDP_WS; the daemon is stopped on exit. jev's own background tab stays open.
 """
 
+import json
 import os
 import uuid
 
@@ -44,8 +45,10 @@ def run(request, cancel, report):
 
         if cancel.is_set():
             return "cancelled", "Cancelled before start."
+        credential = request.get("credential")
+        goal = _jev_goal(request["task"], credential)
         try:
-            agent = Agent(request.get("startUrl") or "about:blank", request["task"])
+            agent = Agent(request.get("startUrl") or "about:blank", goal)
         except RuntimeError as exc:
             # The harness daemon's first CDP calls sometimes miss its 5 s IPC
             # budget while Chrome is busy adopting the new tab. Starting is
@@ -53,7 +56,7 @@ def run(request, cancel, report):
             if "timed out" not in str(exc):
                 raise
             print(f"jev start retried after: {exc}", flush=True)
-            agent = Agent(request.get("startUrl") or "about:blank", request["task"])
+            agent = Agent(request.get("startUrl") or "about:blank", goal)
         state = agent.state
         try:
             while state["status"] not in ("done", "blocked"):
@@ -62,6 +65,8 @@ def run(request, cancel, report):
                 if len(state["history"]) >= request["maxSteps"]:
                     return "blocked", f"Stopped at the {request['maxSteps']}-action limit."
                 seen = len(state["history"])
+                if credential and _fill_passwords(agent.browser, credential):
+                    report.step(f"fill password fields on {credential['origin']} (by the browser, never shown to jev)", state["page"]["url"])
                 agent.command("tick")
                 report.usage = _tally(state)
                 for entry in state["history"][seen:]:
@@ -74,6 +79,82 @@ def run(request, cancel, report):
         return "blocked", f"jev could not make progress at {url}."
     finally:
         _stop_daemon(name)
+
+
+def _jev_goal(task, credential):
+    """jev cannot see password fields, so a goal that asks it to enter a
+    password makes it keep refilling the field before them. When the browser
+    fills passwords, jev is told so. The goal never carries the value: the
+    caller never had it to put there."""
+    if not credential:
+        return task
+    return (
+        task
+        + f"\nPassword fields on {credential['origin']} are filled automatically by the browser and are not shown to you."
+        " Never try to enter a password: after the other fields, continue to the next step or submit."
+    )
+
+
+# jev's page scanner excludes password inputs by design, so it can never type a
+# password. The browser fills empty password fields itself: the value goes
+# straight into the page and never into a model call. Fixed script; value and
+# origin are passed as JSON literals, never interpolated as code.
+#  - Origin: checked INSIDE the page, atomically with the fill, so a redirect or
+#    a link to another site between ticks can never receive the password
+#    (`location` is unforgeable by page script). Only the top document is read.
+#  - Visibility: the same predicate jev's scanner uses, so a field a person
+#    cannot see (honeypot, opacity 0, aria-hidden, inert) is never filled.
+#  - A "show password" toggle puts the value where jev WOULD read it (and where
+#    its screenshot shows it): the field's own type flips to text, or the page
+#    swaps in / mirrors into a separate text input. One document-wide observer
+#    empties any non-password input or textarea holding the value, on the same
+#    microtask as the change, so it is gone before jev's post-action observe.
+#    Run again on every fill for a swap that landed while nothing was watching.
+_FILL_PASSWORDS = """((value, origin) => {
+  if (location.origin !== origin) return 0;
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+  const guard = window[Symbol.for("dimension.browser.password-guard")] ||= (() => {
+    const g = { value: "" };
+    g.scrub = () => {
+      if (!g.value) return;
+      for (const el of document.querySelectorAll("input, textarea")) {
+        if (el.type !== "password" && el.value === g.value) el.value = "";
+      }
+    };
+    new MutationObserver(g.scrub).observe(document.documentElement, {
+      subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ["type", "value"],
+    });
+    return g;
+  })();
+  guard.value = value;
+  guard.scrub();
+  const visible = (el) => !el.closest('[aria-hidden="true"],[inert]') &&
+    el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
+  let filled = 0;
+  for (const el of document.querySelectorAll('input[type="password"]')) {
+    if (el.value || el.disabled || el.readOnly || !visible(el)) continue;
+    el.focus();
+    setter.call(el, value);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+    el.blur();
+    filled += 1;
+  }
+  return filled;
+})(%s, %s)"""
+
+
+def fill_script(credential):
+    return _FILL_PASSWORDS % (json.dumps(credential["password"]), json.dumps(credential["origin"]))
+
+
+def _fill_passwords(browser, credential):
+    try:
+        return bool(browser.evaluate(fill_script(credential)))
+    except Exception as exc:  # a navigation mid-fill: the next tick tries again
+        # The type only: an evaluate error must never be able to echo the script.
+        print(f"password fill skipped: {type(exc).__name__}", flush=True)
+        return False
 
 
 def _stop_daemon(name):
