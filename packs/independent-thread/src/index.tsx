@@ -48,6 +48,9 @@ interface ThreadSectionProps {
 	readonly capabilities?: Record<string, unknown> | null;
 	readonly avatar: ComponentProps<typeof PresenceSurface>["avatar"];
 	readonly bridgedPresences?: ComponentProps<typeof PresenceSurface>["bridgedPresences"];
+	/** Mochi's colour axes when the session's General Agent pinned them. */
+	readonly avatarSkin?: ComponentProps<typeof PresenceSurface>["skin"];
+	readonly avatarAccent?: ComponentProps<typeof PresenceSurface>["accent"];
 	readonly vibrState: ComponentProps<typeof PresenceSurface>["state"];
 	readonly vibrMode?: string;
 	readonly energy: number;
@@ -86,6 +89,9 @@ function IndependentThreadSection(props: ThreadSectionProps) {
 						behaviour={props.behaviour}
 						signals={props.signals}
 						bridgedPresences={props.bridgedPresences}
+						// The session's General Agent may pin Mochi's look (dimension#1041).
+						skin={props.avatarSkin}
+						accent={props.avatarAccent}
 						size={config.vibrSize}
 					/>
 				}
