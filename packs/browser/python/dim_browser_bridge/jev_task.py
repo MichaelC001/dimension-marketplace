@@ -109,7 +109,13 @@ def _jev_goal(task, credential):
 #    swaps in / mirrors into a separate text input. One document-wide observer
 #    empties any non-password input or textarea holding the value, on the same
 #    microtask as the change, so it is gone before jev's post-action observe.
-#    Run again on every fill for a swap that landed while nothing was watching.
+#    A page may also copy the value by PROPERTY alone (no mutation to observe),
+#    from its own input/change handler: the fill therefore scrubs before it
+#    fills (a copy left over from the last tick), right after (a handler that
+#    ran synchronously inside our events) and once more on the next task (a
+#    framework that re-renders asynchronously; best effort: a timer is not
+#    ordered against jev's next CDP read). A page that echoes the value into
+#    its own visible text is outside what an input scrub can reach.
 _FILL_PASSWORDS = """((value, origin) => {
   if (location.origin !== origin) return 0;
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
@@ -140,6 +146,8 @@ _FILL_PASSWORDS = """((value, origin) => {
     el.blur();
     filled += 1;
   }
+  guard.scrub();
+  setTimeout(guard.scrub, 0);
   return filled;
 })(%s, %s)"""
 
