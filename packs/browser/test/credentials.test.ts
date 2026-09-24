@@ -22,6 +22,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "b
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import puppeteer, { type Browser, type Page } from "puppeteer-core";
+import { resolveCredential } from "../src/credentials";
 import type { BrowserRuntime } from "../src/runtime";
 import { createBrowserServer } from "../src/server";
 import { BrowserRuntimeError } from "../src/store";
@@ -335,6 +336,72 @@ describeWithBoth("the password fill in a real page", () => {
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);
+
+	test(
+		"a show-password toggle that swaps in a text input carrying the value is emptied before a later read",
+		async () => {
+			const fixture = startFixture();
+			const page = await openPage(fixture.url("/"));
+			const password = "swapped-into-plain-text";
+			expect(await page.evaluate(fillScript({ origin: new URL(fixture.url("/")).origin, password }))).toBe(1);
+
+			// The page's own toggle: one task replaces the field with a new text input holding its value.
+			await page.$eval("#pass", (el) => {
+				if (!(el instanceof HTMLInputElement)) return;
+				const shown = document.createElement("input");
+				shown.id = "shown";
+				shown.type = "text";
+				shown.value = el.value;
+				el.replaceWith(shown);
+			});
+
+			expect(await valueOf(page, "#shown")).toBe("");
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"a value mirrored into a text input by property alone is emptied by the next fill",
+		async () => {
+			const fixture = startFixture();
+			const page = await openPage(fixture.url("/"));
+			const credential = { origin: new URL(fixture.url("/")).origin, password: "mirrored-without-a-mutation" };
+			const script = fillScript(credential);
+			expect(await page.evaluate(script)).toBe(1);
+			// A property write is no DOM mutation: nothing observes it.
+			await page.$eval("#user", (el, value) => {
+				if (el instanceof HTMLInputElement) el.value = value;
+			}, credential.password);
+
+			await page.evaluate(script);
+
+			expect(await valueOf(page, "#user")).toBe("");
+			expect(await valueOf(page, "#pass")).toBe(credential.password);
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+});
+
+// ---------------------------------------------------------------------------
+// The credential store: a file it cannot read as passwords is never rewritten
+// ---------------------------------------------------------------------------
+
+describe("the credential store", () => {
+	test.each([
+		{ name: "no origins object", body: `{"version":1,"passwords":{"https://old.example":"Old-Secret-1"}}` },
+		{ name: "origins is an array", body: `{"version":1,"origins":["Old-Secret-1"]}` },
+		{ name: "a non-string password", body: `{"version":1,"origins":{"https://old.example":"Old-Secret-1","https://odd.example":7}}` },
+	])("a well-formed store of the wrong shape ($name) is refused and left byte-identical", async ({ body }) => {
+		const profileDir = await createRoot();
+		const file = join(profileDir, "credentials.json");
+		await writeFile(file, body);
+
+		const refused = await refusal(async () => resolveCredential(profileDir, { origin: "https://new.example", mode: "signup" }));
+
+		expect(refused.code).toBe("credentials_unreadable");
+		expect(refused.message).not.toContain("Old-Secret-1");
+		expect(readFileSync(file, "utf8")).toBe(body);
+	});
 });
 
 // ---------------------------------------------------------------------------
