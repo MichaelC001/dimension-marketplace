@@ -1,7 +1,8 @@
 """Task worker entry point: `python -m dim_browser_bridge`.
 
-stdin:  one JSON request line {"agent","cdpUrl","task","maxSteps","startUrl"}; stdin then stays
-        open, and EOF on it is a cancel request.
+stdin:  one JSON request line {"agent","cdpUrl","task","maxSteps","startUrl"[,"credential":{"origin","password"}]};
+        stdin then stays open, and EOF on it is a cancel request. `credential` is jev-only and
+        is never echoed: not to stdout, stderr, a step or the result.
 stdout: JSON lines only — `step` lines with cumulative usage, then exactly one `result` line.
 stderr: logs.
 """

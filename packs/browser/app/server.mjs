@@ -3,7 +3,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 
 // src/server.ts
 import { readFile, readdir } from "node:fs/promises";
-import { extname, join as join4 } from "node:path";
+import { extname, join as join5 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 import { registerAppResource, registerAppTool, RESOURCE_MIME_TYPE } from "@modelcontextprotocol/ext-apps/server";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -12,11 +12,17 @@ import { z } from "zod";
 // src/contracts.ts
 var BROWSER_ENGINES = ["chromium", "chrome-relay", "abp", "browser4"];
 var TASK_AGENTS = ["jev", "browser-use"];
+var CREDENTIAL_MODES = ["signup", "login"];
 var MAX_ANNOTATION_BYTES = 2097152;
 
 // src/runtime.ts
 import { randomBytes as randomBytes2 } from "node:crypto";
-import { join as join3 } from "node:path";
+import { join as join4 } from "node:path";
+
+// src/credentials.ts
+import { randomInt } from "node:crypto";
+import { readFileSync as readFileSync2, renameSync, writeFileSync } from "node:fs";
+import { join as join2 } from "node:path";
 
 // src/store.ts
 import { randomBytes } from "node:crypto";
@@ -157,6 +163,67 @@ function defaultRootDir() {
   const insoHome = process.env.INSO_HOME?.trim();
   if (insoHome) return join(insoHome, "browser");
   return join(homedir(), ".inso", "browser");
+}
+
+// src/credentials.ts
+var FILE = "credentials.json";
+var LOOPBACK = { localhost: true, "127.0.0.1": true, "[::1]": true };
+var LOWER = "abcdefghijkmnopqrstuvwxyz";
+var UPPER = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+var DIGIT = "23456789";
+var SYMBOL = "!#%+-=?@_";
+var ALL = LOWER + UPPER + DIGIT + SYMBOL;
+var GENERATED_LENGTH = 20;
+function credentialOrigin(raw) {
+  let url;
+  try {
+    url = new URL(typeof raw === "string" ? raw : "");
+  } catch {
+    fail("bad_credential", "credential.origin must be a URL such as https://example.com");
+  }
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && LOOPBACK[url.hostname])) {
+    fail("bad_credential", "credential.origin must be https (http only for localhost)");
+  }
+  return url.origin;
+}
+function generatePassword() {
+  const pick = (set) => set[randomInt(set.length)];
+  const chars = [pick(LOWER), pick(UPPER), pick(DIGIT), pick(SYMBOL)];
+  while (chars.length < GENERATED_LENGTH) chars.push(pick(ALL));
+  for (let i = chars.length - 1; i > 0; i--) {
+    const j = randomInt(i + 1);
+    [chars[i], chars[j]] = [chars[j], chars[i]];
+  }
+  return chars.join("");
+}
+function read(file) {
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync2(file, "utf8"));
+  } catch (error) {
+    if (error.code === "ENOENT") return {};
+    fail("credentials_unreadable", "this profile's saved passwords could not be read");
+  }
+  const origins = parsed?.origins;
+  if (!origins || typeof origins !== "object") return {};
+  return Object.fromEntries(Object.entries(origins).filter((e) => typeof e[1] === "string"));
+}
+function resolveCredential(profileDir, request) {
+  if (!CREDENTIAL_MODES.includes(request.mode)) fail("bad_credential", `credential.mode must be one of: ${CREDENTIAL_MODES.join(", ")}`);
+  const origin = credentialOrigin(request.origin);
+  const file = join2(profileDir, FILE);
+  const origins = read(file);
+  const saved = origins[origin];
+  if (saved) return { origin, password: saved, created: false };
+  if (request.mode === "login") {
+    fail("no_credential", `this profile has no saved password for ${origin}; the user signs in by hand in the View`);
+  }
+  const password = generatePassword();
+  const tmp = `${file}.${process.pid}.tmp`;
+  writeFileSync(tmp, `${JSON.stringify({ version: 1, origins: { ...origins, [origin]: password } })}
+`, { mode: 384 });
+  renameSync(tmp, file);
+  return { origin, password, created: true };
 }
 
 // src/engines/puppeteer.ts
@@ -1061,14 +1128,14 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
-import { join as join2 } from "node:path";
+import { join as join3 } from "node:path";
 var PYTHON_DIR = fileURLToPath(new URL("../python/", import.meta.url));
 var CANCEL_GRACE_MS = 15e3;
 var STDERR_KEEP = 4096;
 function interpreter() {
   const configured = process.env.DIM_BROWSER_PYTHON?.trim();
   if (configured) return configured;
-  const venv = process.platform === "win32" ? join2(PYTHON_DIR, ".venv", "Scripts", "python.exe") : join2(PYTHON_DIR, ".venv", "bin", "python");
+  const venv = process.platform === "win32" ? join3(PYTHON_DIR, ".venv", "Scripts", "python.exe") : join3(PYTHON_DIR, ".venv", "bin", "python");
   if (!existsSync(venv)) {
     fail(
       "python_env_missing",
@@ -1259,7 +1326,7 @@ var BrowserRuntime = class {
       if (entry) this.detach(entry);
     };
     try {
-      const profileDirectory = engine === "chromium" ? this.store.userDataDir(profile2) : join3(this.store.profileDir(profile2), engine);
+      const profileDirectory = engine === "chromium" ? this.store.userDataDir(profile2) : join4(this.store.profileDir(profile2), engine);
       driver = await createEngineDriver(engine, {
         profileDirectory,
         viewport,
@@ -1549,9 +1616,14 @@ var BrowserRuntime = class {
     const task = typeof request.task === "string" ? request.task.trim() : "";
     if (task.length === 0 || task.length > MAX_TASK_CHARS) fail("bad_task", `task must be 1-${MAX_TASK_CHARS} characters`);
     const maxSteps = Math.min(MAX_TASK_STEPS, Math.max(1, Math.floor(request.maxSteps ?? DEFAULT_TASK_STEPS)));
+    if (request.credential !== void 0) {
+      if (request.agent !== "jev") fail("credential_unsupported", "credential is supported with agent jev only; with browser-use the user signs in by hand in the View");
+      credentialOrigin(request.credential?.origin);
+    }
     return await this.serialize(entry, async () => {
       if (entry.worker) fail("task_running", `a ${entry.task?.agent} task is already running on this browser`);
       const state = await this.refreshState(entry);
+      const credential = request.credential ? resolveCredential(this.store.profileDir(entry.profile), request.credential) : void 0;
       const run = {
         id: randomBytes2(8).toString("hex"),
         agent: request.agent,
@@ -1562,10 +1634,11 @@ var BrowserRuntime = class {
         stepCount: 0,
         startedAt: (/* @__PURE__ */ new Date()).toISOString(),
         elapsedMs: 0,
-        usage: { modelCalls: 0, inputTokens: 0, outputTokens: 0, costUsd: null }
+        usage: { modelCalls: 0, inputTokens: 0, outputTokens: 0, costUsd: null },
+        ...credential ? { credential: { origin: credential.origin, created: credential.created } } : {}
       };
       const worker = startWorker(
-        { agent: request.agent, cdpUrl: entry.driver.cdpEndpoint(), task, maxSteps, startUrl: state.url, ...request.password ? { password: request.password } : {} },
+        { agent: request.agent, cdpUrl: entry.driver.cdpEndpoint(), task, maxSteps, startUrl: state.url, ...credential ? { credential: { origin: credential.origin, password: credential.password } } : {} },
         (step) => {
           const record = { n: step.n, action: step.action, url: step.url, elapsedMs: step.elapsedMs };
           run.steps.push(record);
@@ -1858,7 +1931,7 @@ async function createBrowserServer(options = {}) {
   });
   const server2 = new McpServer({ name: "dimension-community-browser", version: "0.1.0" });
   const viewDir = options.viewDir ?? fileURLToPath2(new URL("./dist/", import.meta.url));
-  const html = await readFile(join4(viewDir, "index.html"), "utf8");
+  const html = await readFile(join5(viewDir, "index.html"), "utf8");
   const metadata = { ui: { prefersBorder: false } };
   registerAppResource(server2, "Browser", BROWSER_VIEW_URI, { _meta: metadata }, async () => ({
     contents: [{ uri: BROWSER_VIEW_URI, mimeType: RESOURCE_MIME_TYPE, text: html, _meta: metadata }]
@@ -1868,7 +1941,7 @@ async function createBrowserServer(options = {}) {
     const extension = extname(entry.name);
     const mimeType = MIME[extension];
     if (!mimeType) throw new Error(`Unsupported browser View asset: ${entry.name}`);
-    const path = join4(entry.parentPath, entry.name);
+    const path = join5(entry.parentPath, entry.name);
     const relative = path.slice(viewDir.replace(/[\\/]$/, "").length + 1).replaceAll("\\", "/");
     const uri = `ui://browser/${relative}`;
     server2.registerResource(relative, uri, { mimeType }, async () => ({ contents: [{ uri, mimeType, blob: (await readFile(path)).toString("base64") }] }));
@@ -1948,11 +2021,18 @@ async function createBrowserServer(options = {}) {
     }
   };
   server2.registerTool("browser_task", {
-    description: `Hand a whole task to a fast browser agent working in this same browser while the human watches: jev (TypeSafe Jev, one model decision per step) or browser-use. Put every fact the agent needs in task \u2014 it cannot ask you. For sign-ups and logins pass the password in password (not in task): the browser fills password fields itself, because jev never reads them. Returns within waitSeconds (default and max ${WAIT_CAP_S}) with the task's status, steps, time, model calls and tokens; while status is "running", call browser_task_wait. browser_act is refused while a task runs.`,
-    inputSchema: { browserId: capability, agent: z.enum(TASK_AGENTS), task: z.string().min(1).max(8192), maxSteps: z.number().int().min(1).max(200).optional(), password: z.string().min(1).max(256).optional(), waitSeconds },
+    description: `Hand a whole task to a fast browser agent working in this same browser while the human watches: jev (TypeSafe Jev, one model decision per step) or browser-use. Put every fact the agent needs in task \u2014 it cannot ask you. Never put a password in task: you do not know one and must not invent one. For a jev sign-up or login pass credential {origin, mode}: the browser fills that origin's password fields itself with a password it holds for this profile \u2014 "signup" uses the saved one or creates and saves a strong one, "login" uses the saved one (there is none for an account the user made; the user signs in by hand in the View). The value is never shown to you, to jev or in results. Returns within waitSeconds (default and max ${WAIT_CAP_S}) with the task's status, steps, time, model calls and tokens (and credential {origin, created} when one was used); while status is "running", call browser_task_wait. browser_act is refused while a task runs.`,
+    inputSchema: {
+      browserId: capability,
+      agent: z.enum(TASK_AGENTS),
+      task: z.string().min(1).max(8192),
+      maxSteps: z.number().int().min(1).max(200).optional(),
+      credential: z.object({ origin: z.string().min(1).max(2048), mode: z.enum(CREDENTIAL_MODES) }).strict().optional(),
+      waitSeconds
+    },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true }
-  }, ({ browserId, agent, task, maxSteps, password, waitSeconds: waitSeconds2 }, extra) => result(async () => {
-    await runtime.startTask(browserId, { agent, task, ...maxSteps ? { maxSteps } : {}, ...password ? { password } : {} });
+  }, ({ browserId, agent, task, maxSteps, credential, waitSeconds: waitSeconds2 }, extra) => result(async () => {
+    await runtime.startTask(browserId, { agent, task, ...maxSteps ? { maxSteps } : {}, ...credential ? { credential } : {} });
     return await follow(browserId, waitSeconds2, extra);
   }));
   server2.registerTool("browser_task_wait", {

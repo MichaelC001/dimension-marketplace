@@ -45,7 +45,8 @@ def run(request, cancel, report):
 
         if cancel.is_set():
             return "cancelled", "Cancelled before start."
-        goal = _jev_goal(request["task"], request.get("password"))
+        credential = request.get("credential")
+        goal = _jev_goal(request["task"], credential)
         try:
             agent = Agent(request.get("startUrl") or "about:blank", goal)
         except RuntimeError as exc:
@@ -64,8 +65,8 @@ def run(request, cancel, report):
                 if len(state["history"]) >= request["maxSteps"]:
                     return "blocked", f"Stopped at the {request['maxSteps']}-action limit."
                 seen = len(state["history"])
-                if request.get("password") and _fill_passwords(agent.browser, request["password"]):
-                    report.step("fill password fields (by the browser, never shown to jev)", state["page"]["url"])
+                if credential and _fill_passwords(agent.browser, credential):
+                    report.step(f"fill password fields on {credential['origin']} (by the browser, never shown to jev)", state["page"]["url"])
                 agent.command("tick")
                 report.usage = _tally(state)
                 for entry in state["history"][seen:]:
@@ -80,44 +81,67 @@ def run(request, cancel, report):
         _stop_daemon(name)
 
 
-def _jev_goal(task, password):
+def _jev_goal(task, credential):
     """jev cannot see password fields, so a goal that asks it to enter a
     password makes it keep refilling the field before them. When the browser
-    fills passwords, the password leaves jev's goal and jev is told it is done."""
-    if not password:
+    fills passwords, jev is told so. The goal never carries the value: the
+    caller never had it to put there."""
+    if not credential:
         return task
     return (
-        task.replace(password, "[filled by the browser]")
-        + "\nPassword fields are filled automatically by the browser and are not shown to you."
+        task
+        + f"\nPassword fields on {credential['origin']} are filled automatically by the browser and are not shown to you."
         " Never try to enter a password: after the other fields, continue to the next step or submit."
     )
 
 
 # jev's page scanner excludes password inputs by design, so it can never type a
-# password. The browser fills empty, visible password fields itself: the value
-# goes straight into the page and never into a model call. Fixed script; the
-# password is passed as a JSON literal, never interpolated as code.
-_FILL_PASSWORDS = """((value) => {
+# password. The browser fills empty password fields itself: the value goes
+# straight into the page and never into a model call. Fixed script; value and
+# origin are passed as JSON literals, never interpolated as code.
+#  - Origin: checked INSIDE the page, atomically with the fill, so a redirect or
+#    a link to another site between ticks can never receive the password
+#    (`location` is unforgeable by page script). Only the top document is read.
+#  - Visibility: the same predicate jev's scanner uses, so a field a person
+#    cannot see (honeypot, opacity 0, aria-hidden, inert) is never filled.
+#  - A "show password" toggle turns the field into a text input jev WOULD read:
+#    a filled field that stops being type=password is emptied on the spot.
+_FILL_PASSWORDS = """((value, origin) => {
+  if (location.origin !== origin) return 0;
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+  const watched = window[Symbol.for("dimension.browser.filled")] ||= new WeakSet();
+  const visible = (el) => !el.closest('[aria-hidden="true"],[inert]') &&
+    el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
   let filled = 0;
   for (const el of document.querySelectorAll('input[type="password"]')) {
-    if (el.value || el.disabled || el.readOnly || !el.checkVisibility()) continue;
+    if (el.value || el.disabled || el.readOnly || !visible(el)) continue;
     el.focus();
     setter.call(el, value);
     el.dispatchEvent(new Event("input", { bubbles: true }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
     el.blur();
+    if (!watched.has(el)) {
+      watched.add(el);
+      new MutationObserver(() => {
+        if (el.type !== "password") setter.call(el, "");
+      }).observe(el, { attributes: true, attributeFilter: ["type"] });
+    }
     filled += 1;
   }
   return filled;
-})(%s)"""
+})(%s, %s)"""
 
 
-def _fill_passwords(browser, password):
+def fill_script(credential):
+    return _FILL_PASSWORDS % (json.dumps(credential["password"]), json.dumps(credential["origin"]))
+
+
+def _fill_passwords(browser, credential):
     try:
-        return bool(browser.evaluate(_FILL_PASSWORDS % json.dumps(password)))
+        return bool(browser.evaluate(fill_script(credential)))
     except Exception as exc:  # a navigation mid-fill: the next tick tries again
-        print(f"password fill skipped: {exc!r}", flush=True)
+        # The type only: an evaluate error must never be able to echo the script.
+        print(f"password fill skipped: {type(exc).__name__}", flush=True)
         return False
 
 

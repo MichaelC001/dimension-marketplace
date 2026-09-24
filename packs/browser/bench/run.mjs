@@ -3,7 +3,9 @@
 // via the pack's MCP server (app/server.mjs over stdio), scores every stage from /__results and writes a
 // markdown report plus raw JSON to bench/results/.
 import { mkdir, writeFile } from "node:fs/promises";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { renderReport, summarize } from "./report.mjs";
@@ -106,6 +108,13 @@ const resetWorld = () => fetch(`${base}/__reset`, { method: "POST" });
 // ---------------------------------------------------------------- stages
 
 const a = applicant;
+// Task text names the password by this token, resolved per agent in runStage.
+// jev never receives it: the browser fills password fields from the credential
+// it holds for the bench profile (seeded below with the fixture). browser-use
+// cannot take a credential (it reads password fields), so it gets the fixture
+// in its task text; the value is a practice-site fixture, never a real secret.
+const PASSWORD = "{{password}}";
+
 const mailAddress = `${a.mailUsername}@mail.test`;
 const birthday = new Date(`${a.birthday}T00:00:00Z`).toLocaleDateString("en-US", { timeZone: "UTC", month: "long", day: "numeric", year: "numeric" });
 
@@ -139,7 +148,7 @@ function fullJobTask(site) {
   return `${jobGoal(site)} using this applicant:
 ${applicantBlock(mailAddress)}
 Fill in every field the application asks for using exactly this data, accept any required consent or cookie choice, and submit. The email address is ${mailAddress}.
-You already have accounts, signed in in this browser: Mail at ${base}/mail and Network at ${base}/network, both ${mailAddress} with password ${a.password}.
+You already have accounts, signed in in this browser: Mail at ${base}/mail and Network at ${base}/network, both ${mailAddress} with password ${PASSWORD}.
 If the site offers "Apply with Network", use it and allow access. If the site emails you a confirmation link, open the Mail inbox at ${base}/mail, open that email and click its link.
 You are done when the site confirms the application was received.`;
 }
@@ -152,7 +161,7 @@ First name: ${a.firstName}
 Last name: ${a.lastName}
 Birthday: ${birthday}
 Choose your Mail address: ${a.mailUsername} (the page adds @mail.test itself, so the field holds only ${a.mailUsername}; your address becomes ${mailAddress})
-Password: ${a.password} (enter it in both password fields)
+Password: ${PASSWORD} (enter it in both password fields)
 Then tick "I'm not a robot" and wait until it shows a check mark (it takes about a second) before pressing "Create account". You are done when the Mail inbox is shown.`,
   },
   {
@@ -164,7 +173,7 @@ Then tick "I'm not a robot" and wait until it shows a check mark (it takes about
     },
     task: `Join the professional network at ${base}/network ("Join now") with:
 Email: ${mailAddress}
-Password: ${a.password}
+Password: ${PASSWORD}
 First name: ${a.firstName}
 Last name: ${a.lastName}
 You are done when Network says it sent a verification email. Do not click "Resend email".`,
@@ -175,7 +184,7 @@ You are done when Network says it sent a verification email. Do not click "Resen
   },
   {
     id: "profile", account: true, start: `${base}/network/onboarding`, score: (r) => r.stages.profile,
-    task: `Complete your Network profile wizard at ${base}/network/onboarding (you are signed in as ${mailAddress}; if asked, the password is ${a.password}).
+    task: `Complete your Network profile wizard at ${base}/network/onboarding (you are signed in as ${mailAddress}; if asked, the password is ${PASSWORD}).
 Headline: ${a.headline}
 Location: ${a.city}, OR
 Years of professional experience: ${a.yearsExperience}
@@ -248,9 +257,8 @@ async function runStage(agent, browserId, stage, label = `${agent}/${stage.id}`)
     console.log(`[${label}] task started`);
     const progress = { onprogress: (p) => { console.log(`[${label}] ${p.progress}: ${p.message ?? ""}`); pollSolved(); }, timeout: 60_000 };
     const deadline = performance.now() + taskTimeoutMs;
-    // The password goes in its own field: the browser fills password inputs
-    // itself (jev never reads them). Kept in the task text too for browser-use.
-    let taskRun = take(await call("browser_task", { browserId, agent, task: stage.task, maxSteps, password: applicant.password, waitSeconds: 3 }, progress));
+    const credential = agent === "jev" && stage.task.includes(PASSWORD) ? { origin: base, mode: stage.account ? "signup" : "login" } : undefined;
+    let taskRun = take(await call("browser_task", { browserId, agent, task: stage.task.replaceAll(PASSWORD, agent === "jev" ? "(filled by the browser)" : a.password), maxSteps, ...(credential ? { credential } : {}), waitSeconds: 3 }, progress));
     while (taskRun.status === "running") {
       if (performance.now() > deadline) {
         run.status = "timeout";
@@ -284,6 +292,7 @@ for (const agent of agents) {
   console.log(`\n## ${agent}`);
   if (full) await resetWorld();
   let browserId = null;
+  seedCredential(`bench-${agent}`);
   try {
     browserId = (await call("browser_open", { profile: `bench-${agent}`, engine: opts.engine, url: `${base}/` })).browserId;
   } catch (error) {
@@ -310,6 +319,26 @@ for (const agent of agents) {
     runs.push({ ...run, agent: "hybrid", by: run === first ? first.agent : "jev→browser-use" });
   }
   await call("browser_close", { browserId }).catch((error) => console.error(`[bench] ${agent}: browser_close failed: ${error.message}`));
+}
+
+/**
+ * The practice sites score the fixture password, so the bench profile holds it
+ * as the browser's saved credential for the practice origin before the browser
+ * opens (the profile lock is not held yet). Same root and file the pack uses:
+ * src/store.ts defaultRootDir, src/credentials.ts credentials.json.
+ */
+function seedCredential(profile) {
+  const insoHome = process.env.INSO_HOME?.trim();
+  const dir = join(insoHome ? join(insoHome, "browser") : join(homedir(), ".inso", "browser"), "profiles", profile);
+  const file = join(dir, "credentials.json");
+  let origins = {};
+  try {
+    origins = JSON.parse(readFileSync(file, "utf8")).origins ?? {};
+  } catch {
+    /* none saved yet */
+  }
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  writeFileSync(file, `${JSON.stringify({ version: 1, origins: { ...origins, [new URL(base).origin]: a.password } })}\n`, { mode: 0o600 });
 }
 
 function sumUsage(a, b) {

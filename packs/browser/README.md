@@ -25,6 +25,9 @@ standard MCP and MCP Apps. No host internals, no browser fork.
   [jev-ultrafast](https://github.com/browser-use/jev-ultrafast) or
   [browser-use](https://github.com/browser-use/browser-use), running in the same
   browser while you watch, and reports steps, time, model calls and tokens.
+  For a jev sign-up or login the browser fills password fields itself from a
+  password it holds per profile and origin (`credential: { origin, mode }`);
+  no model and no transcript ever sees the value.
 
 ## What we maintain, and what we do not
 

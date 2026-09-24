@@ -27,7 +27,8 @@ export interface WorkerJob {
   task: string;
   maxSteps: number;
   startUrl: string;
-  password?: string;
+  /** Resolved by the runtime; travels only on the worker's stdin. */
+  credential?: { origin: string; password: string };
 }
 export interface RunningWorker {
   /** Settles with the worker's final result; never rejects. */

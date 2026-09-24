@@ -4,6 +4,16 @@ export type BrowserEngine = (typeof BROWSER_ENGINES)[number];
 /** Who drives a whole task at its own speed: upstream agent loops, used as published. */
 export const TASK_AGENTS = ["jev", "browser-use"] as const;
 export type TaskAgent = (typeof TASK_AGENTS)[number];
+/**
+ * `signup`: the password the browser saved for this profile + origin, or a
+ * strong one it mints and saves. `login`: the saved one only. See credentials.ts.
+ */
+export const CREDENTIAL_MODES = ["signup", "login"] as const;
+export type CredentialMode = (typeof CREDENTIAL_MODES)[number];
+/** A password by REFERENCE: the caller names the origin, never the value. */
+export interface CredentialRequest { origin: string; mode: CredentialMode }
+/** What a task reports about the credential it used — never the value. */
+export interface CredentialUse { origin: string; created: boolean }
 /** Maximum encoded PNG accepted by the host's image model-context contract. */
 export const MAX_ANNOTATION_BYTES = 2_097_152;
 export interface Viewport { width: number; height: number }
@@ -59,13 +69,15 @@ export interface TaskRun {
   startedAt: string;
   elapsedMs: number;
   usage: TaskUsage;
+  /** Which saved password the browser used for this task, and whether it minted it. */
+  credential?: CredentialUse;
 }
 /**
- * `password`: filled into empty password fields by the worker itself. jev never
- * reads or types password inputs (upstream excludes them), so a signup or login
- * needs the browser to fill them; the value never enters the agent's model calls.
+ * `credential`: the browser fills that origin's password fields itself (jev
+ * never reads or types password inputs). The value is held by the browser and
+ * never passes through a tool argument, a result or a model call.
  */
-export interface TaskRequest { agent: TaskAgent; task: string; maxSteps?: number; password?: string }
+export interface TaskRequest { agent: TaskAgent; task: string; maxSteps?: number; credential?: CredentialRequest }
 export interface BrowserState {
   browserId: string;
   profile: string;
