@@ -1,0 +1,52 @@
+{
+	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+	"name": "brand-marks",
+	"version": "0.1.0",
+	"description": "Brand Marks — four presence avatars (X, Reddit, YouTube, Discord) for the avatar slot: the official mark, unmodified at rest, with container-only motion that follows the session.",
+	"author": {
+		"name": "Dimension"
+	},
+	"license": "MIT",
+	"keywords": [
+		"avatar",
+		"vibr",
+		"presence",
+		"component",
+		"brand"
+	],
+	"extensions": {
+		"ai.insodimension.dimension": {
+			"contractVersion": 1,
+			"title": "Brand Marks",
+			"category": "component",
+			"icon": "assets/icon.svg",
+			"requires": {
+				"dimension": ">=0.10.22"
+			},
+			"entry": "dist/avatar.js",
+			"type": "component",
+			"components": [
+				{
+					"id": "x",
+					"slot": "avatar",
+					"label": "X"
+				},
+				{
+					"id": "reddit",
+					"slot": "avatar",
+					"label": "Reddit"
+				},
+				{
+					"id": "youtube",
+					"slot": "avatar",
+					"label": "YouTube"
+				},
+				{
+					"id": "discord",
+					"slot": "avatar",
+					"label": "Discord"
+				}
+			]
+		}
+	}
+}
