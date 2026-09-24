@@ -21,7 +21,7 @@ import { join as join4 } from "node:path";
 
 // src/credentials.ts
 import { randomInt } from "node:crypto";
-import { readFileSync as readFileSync2, renameSync, writeFileSync } from "node:fs";
+import { readFileSync as readFileSync2, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join as join2 } from "node:path";
 
 // src/store.ts
@@ -205,8 +205,10 @@ function read(file) {
     fail("credentials_unreadable", "this profile's saved passwords could not be read");
   }
   const origins = parsed?.origins;
-  if (!origins || typeof origins !== "object") return {};
-  return Object.fromEntries(Object.entries(origins).filter((e) => typeof e[1] === "string"));
+  if (!origins || typeof origins !== "object" || Array.isArray(origins) || Object.values(origins).some((v) => typeof v !== "string")) {
+    fail("credentials_unreadable", "this profile's saved passwords could not be read");
+  }
+  return origins;
 }
 function resolveCredential(profileDir, request) {
   if (!CREDENTIAL_MODES.includes(request.mode)) fail("bad_credential", `credential.mode must be one of: ${CREDENTIAL_MODES.join(", ")}`);
@@ -220,9 +222,13 @@ function resolveCredential(profileDir, request) {
   }
   const password = generatePassword();
   const tmp = `${file}.${process.pid}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify({ version: 1, origins: { ...origins, [origin]: password } })}
+  try {
+    writeFileSync(tmp, `${JSON.stringify({ version: 1, origins: { ...origins, [origin]: password } })}
 `, { mode: 384 });
-  renameSync(tmp, file);
+    renameSync(tmp, file);
+  } finally {
+    rmSync(tmp, { force: true });
+  }
   return { origin, password, created: true };
 }
 

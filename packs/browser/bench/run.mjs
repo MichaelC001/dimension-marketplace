@@ -324,12 +324,14 @@ for (const agent of agents) {
 /**
  * The practice sites score the fixture password, so the bench profile holds it
  * as the browser's saved credential for the practice origin before the browser
- * opens (the profile lock is not held yet). Same root and file the pack uses:
- * src/store.ts defaultRootDir, src/credentials.ts credentials.json.
+ * opens (the profile lock is not held yet). Same root, in the same order, and
+ * file the pack uses: DIMENSION_BROWSER_ROOT (src/server.ts), else
+ * src/store.ts defaultRootDir; src/credentials.ts credentials.json.
  */
 function seedCredential(profile) {
   const insoHome = process.env.INSO_HOME?.trim();
-  const dir = join(insoHome ? join(insoHome, "browser") : join(homedir(), ".inso", "browser"), "profiles", profile);
+  const root = process.env.DIMENSION_BROWSER_ROOT || (insoHome ? join(insoHome, "browser") : join(homedir(), ".inso", "browser"));
+  const dir = join(root, "profiles", profile);
   const file = join(dir, "credentials.json");
   let origins = {};
   try {

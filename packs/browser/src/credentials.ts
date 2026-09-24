@@ -17,7 +17,7 @@
  * beside the Chrome profile whose cookies are the same class of secret.
  */
 import { randomInt } from "node:crypto";
-import { readFileSync, renameSync, writeFileSync } from "node:fs";
+import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { CREDENTIAL_MODES, type CredentialRequest } from "./contracts.js";
 import { fail } from "./store.js";
@@ -71,9 +71,13 @@ function read(file: string): Record<string, string> {
     // Never echo the file: it holds the values this module exists to keep.
     fail("credentials_unreadable", "this profile's saved passwords could not be read");
   }
+  // A file of any other shape is refused, never treated as empty: the next
+  // sign-up would rewrite it and silently drop every password it held.
   const origins = (parsed as { origins?: unknown } | null)?.origins;
-  if (!origins || typeof origins !== "object") return {};
-  return Object.fromEntries(Object.entries(origins).filter((e): e is [string, string] => typeof e[1] === "string"));
+  if (!origins || typeof origins !== "object" || Array.isArray(origins) || Object.values(origins).some((v) => typeof v !== "string")) {
+    fail("credentials_unreadable", "this profile's saved passwords could not be read");
+  }
+  return origins as Record<string, string>;
 }
 
 /**
@@ -92,7 +96,13 @@ export function resolveCredential(profileDir: string, request: CredentialRequest
   }
   const password = generatePassword();
   const tmp = `${file}.${process.pid}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify({ version: 1, origins: { ...origins, [origin]: password } })}\n`, { mode: 0o600 });
-  renameSync(tmp, file);
+  try {
+    writeFileSync(tmp, `${JSON.stringify({ version: 1, origins: { ...origins, [origin]: password } })}\n`, { mode: 0o600 });
+    renameSync(tmp, file);
+  } finally {
+    // A failed rename (a scanner holding the file on Windows) must not strand a
+    // second copy of every saved password; after a good rename this is a no-op.
+    rmSync(tmp, { force: true });
+  }
   return { origin, password, created: true };
 }

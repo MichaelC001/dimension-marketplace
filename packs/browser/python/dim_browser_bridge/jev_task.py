@@ -104,12 +104,30 @@ def _jev_goal(task, credential):
 #    (`location` is unforgeable by page script). Only the top document is read.
 #  - Visibility: the same predicate jev's scanner uses, so a field a person
 #    cannot see (honeypot, opacity 0, aria-hidden, inert) is never filled.
-#  - A "show password" toggle turns the field into a text input jev WOULD read:
-#    a filled field that stops being type=password is emptied on the spot.
+#  - A "show password" toggle puts the value where jev WOULD read it (and where
+#    its screenshot shows it): the field's own type flips to text, or the page
+#    swaps in / mirrors into a separate text input. One document-wide observer
+#    empties any non-password input or textarea holding the value, on the same
+#    microtask as the change, so it is gone before jev's post-action observe.
+#    Run again on every fill for a swap that landed while nothing was watching.
 _FILL_PASSWORDS = """((value, origin) => {
   if (location.origin !== origin) return 0;
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
-  const watched = window[Symbol.for("dimension.browser.filled")] ||= new WeakSet();
+  const guard = window[Symbol.for("dimension.browser.password-guard")] ||= (() => {
+    const g = { value: "" };
+    g.scrub = () => {
+      if (!g.value) return;
+      for (const el of document.querySelectorAll("input, textarea")) {
+        if (el.type !== "password" && el.value === g.value) el.value = "";
+      }
+    };
+    new MutationObserver(g.scrub).observe(document.documentElement, {
+      subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ["type", "value"],
+    });
+    return g;
+  })();
+  guard.value = value;
+  guard.scrub();
   const visible = (el) => !el.closest('[aria-hidden="true"],[inert]') &&
     el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
   let filled = 0;
@@ -120,12 +138,6 @@ _FILL_PASSWORDS = """((value, origin) => {
     el.dispatchEvent(new Event("input", { bubbles: true }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
     el.blur();
-    if (!watched.has(el)) {
-      watched.add(el);
-      new MutationObserver(() => {
-        if (el.type !== "password") setter.call(el, "");
-      }).observe(el, { attributes: true, attributeFilter: ["type"] });
-    }
     filled += 1;
   }
   return filled;
