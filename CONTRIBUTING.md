@@ -153,7 +153,8 @@ spawns), and nothing there ever becomes a General Agent. The reference pack is
    `"generalAgents": { "list": ["<name>"], "default": "<name>" }`; only the
    listed agents appear in that space's picker, and a space-claimed agent never
    leaks into Code. `"list": "discoverable"` (or no declaration) offers every
-   enabled agent no space has claimed.
+   enabled agent no space has claimed, except `home`-policy residents such as
+   Aether, which are reached through their own doors.
 4. **Regenerate.** `bun scripts/build-index.ts` lists each agent on the pack's
    catalog entry as `generalAgents: [{ name, description, defaultEnabled }]`,
    and fails the build on any rule above.
