@@ -36,6 +36,30 @@
 						"ca-workspace": "classic-workspace",
 						"ca-dock": "classic-dock"
 					},
+					"rail": {
+						"actions": [
+							{
+								"id": "new-session",
+								"label": "New session",
+								"icon": "plus",
+								"target": "new-session",
+								"kbd": "Cmd+N",
+								"primary": true
+							},
+							{
+								"id": "models",
+								"label": "Models",
+								"icon": "bot",
+								"target": "models"
+							},
+							{
+								"id": "plugins",
+								"label": "Capabilities",
+								"icon": "box",
+								"target": "plugins"
+							}
+						]
+					},
 					"workspace": {
 						"surfaces": [
 							"session",
