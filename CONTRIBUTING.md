@@ -131,6 +131,35 @@ fact has to live in the index — and why the index has to be generated.
 5. **Open the PR.** One pack per PR, against `main`. CI reruns both scripts;
    a maintainer reviews against the house rules below.
 
+## Contribute a General Agent
+
+A **General Agent** is the conversational identity a session is opened AS —
+`coding`, `aether`, a space's marketing lead. It is NOT a subagent: a pack's
+`agents/` directory stays the open subagent standard (what a `task` tool
+spawns), and nothing there ever becomes a General Agent. The reference pack is
+[`packs/example-agents`](packs/example-agents) — copy it.
+
+1. **One directory per agent** at the pack root:
+   `general-agents/<name>/agent.md`. Directory form only — a flat
+   `general-agents/<name>.md` is refused. Siblings (an `AGENTS.md`, notes) may
+   sit beside `agent.md`.
+2. **Frontmatter.** Required: `name` (must equal the directory name),
+   `description` (the picker and store copy) and `specVersion: 1`. Optional:
+   `defaultEnabled: false` to ship it off until a user turns it on (the default
+   is `true`), plus any agent-manifest section (`identity`, `workspace`, …).
+   Never `autonomy.trigger` — a triggered agent is a Loop, not a General Agent.
+   The body is the persona prompt.
+3. **Scope it to a space.** A space claims its agents with
+   `"generalAgents": { "list": ["<name>"], "default": "<name>" }`; only the
+   listed agents appear in that space's picker, and a space-claimed agent never
+   leaks into Code. `"list": "discoverable"` (or no declaration) offers every
+   enabled agent no space has claimed.
+4. **Regenerate.** `bun scripts/build-index.ts` lists each agent on the pack's
+   catalog entry as `generalAgents: [{ name, description, defaultEnabled }]`,
+   and fails the build on any rule above.
+
+Users enable and disable General Agents in **Capabilities → General Agents**.
+
 ## House rules that will come up in review
 
 - Design tokens only (`--fr-*` variables / `fr-` utility classes). No raw hex.

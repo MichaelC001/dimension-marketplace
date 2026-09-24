@@ -294,6 +294,60 @@
 			]
 		},
 		{
+			"name": "example-agents",
+			"source": "./packs/example-agents",
+			"pluginId": "example-agents",
+			"title": "Example Agents",
+			"description": "Example Agents - the reference pack for contributing a General Agent: one space, Example Hub, scoped to one sample marketing lead that ships off by default.",
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-community",
+			"license": "MIT",
+			"category": "layout",
+			"tags": [
+				"general-agents",
+				"space",
+				"example"
+			],
+			"requires": {
+				"dimension": ">=0.10.5"
+			},
+			"channel": "canary",
+			"spaces": [
+				{
+					"id": "example-hub",
+					"label": "Example Hub",
+					"tagline": "A reference space for contributors: the Build workspace, scoped to one General Agent — the Example Hub's marketing lead.",
+					"icon": "megaphone",
+					"requires": [
+						"build",
+						"classic-switcher",
+						"independent-rail",
+						"classic-workspace",
+						"classic-dock",
+						"independent-thread",
+						"independent-composer",
+						"classic-start",
+						"classic-environment",
+						"board",
+						"analytics",
+						"workbench",
+						"session-tools",
+						"general-chat"
+					]
+				}
+			],
+			"generalAgents": [
+				{
+					"name": "example-cmo",
+					"description": "A sample marketing lead for the Example Hub — ships off by default; enable it in Capabilities → General Agents",
+					"defaultEnabled": false
+				}
+			]
+		},
+		{
 			"name": "github",
 			"source": "./packs/github",
 			"pluginId": "github",

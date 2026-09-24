@@ -1,0 +1,90 @@
+{
+	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+	"name": "example-agents",
+	"version": "0.1.0",
+	"description": "Example Agents - the reference pack for contributing a General Agent: one space, Example Hub, scoped to one sample marketing lead that ships off by default.",
+	"author": {
+		"name": "Dimension"
+	},
+	"keywords": [
+		"general-agents",
+		"space",
+		"example"
+	],
+	"extensions": {
+		"ai.insodimension.dimension": {
+			"contractVersion": 1,
+			"title": "Example Agents",
+			"category": "layout",
+			"defaultEnabled": true,
+			"requires": {
+				"dimension": ">=0.10.5"
+			},
+			"channel": "canary",
+			"spaces": [
+				{
+					"specVersion": 1,
+					"id": "example-hub",
+					"label": "Example Hub",
+					"icon": "megaphone",
+					"order": 90,
+					"description": "A reference space for contributors: the Build workspace, scoped to one General Agent — the Example Hub's marketing lead.",
+					"layout": "build",
+					"components": {
+						"ca-switcher": "classic-switcher",
+						"ca-rail": "independent-rail",
+						"ca-workspace": "classic-workspace",
+						"ca-dock": "classic-dock"
+					},
+					"workspace": {
+						"surfaces": [
+							"session",
+							"autonomy",
+							"models"
+						],
+						"start": "session",
+						"session": "session",
+						"actions": [
+							"jobs",
+							"environment",
+							"dock",
+							"sound"
+						],
+						"sections": {
+							"thread": "independent-thread",
+							"composer": "independent-composer",
+							"start": "classic-start"
+						},
+						"startCopy": {
+							"heading": "What are we launching in {workspace}?"
+						}
+					},
+					"generalAgents": {
+						"list": [
+							"example-cmo"
+						],
+						"default": "example-cmo"
+					},
+					"requires": {
+						"plugins": [
+							"build",
+							"classic-switcher",
+							"independent-rail",
+							"classic-workspace",
+							"classic-dock",
+							"independent-thread",
+							"independent-composer",
+							"classic-start",
+							"classic-environment",
+							"board",
+							"analytics",
+							"workbench",
+							"session-tools",
+							"general-chat"
+						]
+					}
+				}
+			]
+		}
+	}
+}
