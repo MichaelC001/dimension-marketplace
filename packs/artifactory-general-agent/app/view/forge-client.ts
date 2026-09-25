@@ -101,6 +101,7 @@ export function previewBackend(): ForgeBackend {
 		mode: "preview",
 		listAgents: async () => ({
 			workspace: null,
+			configDir: ".inso",
 			agents: drafts.map(listed),
 			notices: ["Preview: seeded agents kept in this browser. Inside Dimension the Forge reads and writes real agent.md files."],
 		}),
