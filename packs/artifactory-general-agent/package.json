@@ -1,0 +1,28 @@
+{
+  "name": "@dimension/community-general-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "author": "Dimension",
+  "description": "The Forge — build a General Agent by hand or by talking to the workshop: a three.js orrery where tools, skills, memory and lineage orbit the agent's core, and the agent.md is written live beside it.",
+  "scripts": {
+    "dev": "vite --config vite.config.ts",
+    "build": "node scripts/build.mjs",
+    "check:types": "tsc --noEmit",
+    "test": "bun test test/"
+  },
+  "dependencies": {
+    "three": "0.186.1"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.14",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "@types/three": "0.186.0",
+    "@vitejs/plugin-react": "6.0.4",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "typescript": "7.0.2",
+    "vite": "8.1.5"
+  }
+}
