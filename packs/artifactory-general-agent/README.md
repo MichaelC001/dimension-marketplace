@@ -59,9 +59,10 @@ typography on the stage, not fields in a form.
 
 - It only emits keys `omp/packages/coding-agent/src/config/agent-manifest.ts`
   accepts. That parser rejects unknown keys (`identity.vibr` → "vibr must be
-  removed"), so the vibr is written as a YAML comment until the schema slice
-  lands. Every preview agent's output was round-tripped through the real
-  `parseAgentManifest` with zero failures.
+  removed"), so the vibr is written as a `# avatar:` YAML comment until
+  dimension#1042 lands the top-level `avatar:` field. Every preview agent's
+  output was round-tripped through the real `parseAgentManifest` with zero
+  failures.
 - Preview forging keeps agents in `localStorage` and says nothing was written.
 - The preview catalog names real tools, skills, MCP servers and agents; the
   agents' loadouts are illustrative, labelled so in `catalog.ts`.
@@ -73,7 +74,8 @@ typography on the stage, not fields in a form.
    View swaps its preview store for the ext-apps bridge.
 2. Engine `POST /agent/create` — the trigger-less sibling of `/loop/create`.
    `capabilities.tools` and `gate.approval` are human-confirmed writes.
-3. `identity.vibr` in the manifest schema.
+3. The avatar field is dimension#1042's (`avatar: id | { id, skin?, accent? }`);
+   the Forge writes it once that lands — no second field.
 4. The General Agents rail door + surface seating this View, with a
    Machinist-style workshop session in the dock.
 5. Live proof on the dev desktop, twice green.

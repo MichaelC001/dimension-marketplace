@@ -5,7 +5,7 @@
 // unknown keys inside a known section, so this serializer only ever emits keys
 // the schema accepts today. The one field the Forge needs that the schema does
 // not have yet — the agent's vibr — is written as a YAML comment until
-// `identity.vibr` lands (board: "Manifest schema: identity.vibr").
+// dimension#1042 lands its top-level `avatar:` (id | { id, skin?, accent? }).
 
 export type Personality = "default" | "friendly" | "pragmatic" | "none";
 export type PromptMode = "replace" | "append";
@@ -215,11 +215,11 @@ export function manifestLines(draft: AgentDraft): ManifestLine[] {
 	push("fence", "---");
 	push("name", `name: ${scalar(draft.name || "unnamed")}`);
 	push("description", `description: ${scalar(draft.description || "…")}`);
+	push("avatar", `# avatar: ${draft.vibr}  (dimension#1042 — pending)`);
 	push("specVersion", "specVersion: 1");
 	if (draft.lineage.length > 0) push("extends", `extends: ${list(draft.lineage)}`);
 
 	push("identity", "identity:");
-	push("identity.vibr", `  # vibr: ${draft.vibr}  (identity.vibr — pending schema)`);
 	if (draft.personality !== "default") push("identity.personality", `  personality: ${draft.personality}`);
 	push("identity.prompt", `  prompt: ${draft.promptMode}`);
 
