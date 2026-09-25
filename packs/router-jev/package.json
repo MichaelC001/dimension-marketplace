@@ -1,0 +1,21 @@
+{
+	"name": "@dimension/community-router-jev",
+	"author": "Dimension",
+	"version": "0.1.0",
+	"description": "Room router backed by TypeSafe's Jev: when a room post addresses nobody, one System One request decides which agent leads the reply and who else should chime in",
+	"type": "module",
+	"main": "index.ts",
+	"scripts": {
+		"check": "biome check . --no-errors-on-unmatched"
+	},
+	"files": [
+		"connect/",
+		"assets/",
+		"index.ts",
+		"plugin.json"
+	],
+	"devDependencies": {
+		"@dimension/sdk": "workspace:*"
+	},
+	"license": "MIT"
+}

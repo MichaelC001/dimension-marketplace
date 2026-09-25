@@ -1,0 +1,61 @@
+{
+	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+	"name": "router-jev",
+	"version": "0.1.0",
+	"description": "Room router backed by TypeSafe's Jev: when a room post addresses nobody, one System One request decides which agent leads the reply and who else should chime in",
+	"author": {
+		"name": "Dimension"
+	},
+	"license": "MIT",
+	"keywords": [
+		"rooms",
+		"router",
+		"typesafe",
+		"jev",
+		"provider"
+	],
+	"extensions": {
+		"ai.insodimension.dimension": {
+			"contractVersion": 1,
+			"title": "Jev room router",
+			"icon": "assets/icon.svg",
+			"category": "connector",
+			"defaultEnabled": false,
+			"entry": "index.ts",
+			"providers": {
+				"router": [
+					{
+						"id": "jev"
+					}
+				]
+			},
+			"connect": {
+				"kind": [
+					"form"
+				],
+				"setup": [
+					{
+						"title": "Get a TypeSafe API key",
+						"detail": "Create an API key in your TypeSafe account. It stays on this machine and is sent only to api.typesafe.ai.",
+						"url": "https://docs.typesafe.ai",
+						"urlLabel": "TypeSafe docs"
+					},
+					{
+						"title": "Choose the rooms that use it",
+						"detail": "Connecting sends nothing. A room's text goes to TypeSafe only after its owner sets that room's router to \"jev\". Every other room keeps the built-in mentions router, which runs offline."
+					}
+				],
+				"form": [
+					{
+						"id": "apiKey",
+						"label": "TypeSafe API key",
+						"secret": true,
+						"help": "Used only for rooms whose router is set to jev."
+					}
+				],
+				"configTemplate": "connect/key.template.json",
+				"configTarget": "~/.config/dimension-router-jev/key.json"
+			}
+		}
+	}
+}
