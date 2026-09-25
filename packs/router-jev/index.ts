@@ -48,14 +48,25 @@ export interface JevRouterOptions {
 	readonly respondProbabilityMin?: number;
 }
 
-async function keyFromConnect(): Promise<string> {
+/** Read the API key the connect form wrote. Every error names the problem and
+ *  never the file's content. `path` is the test seam; production reads the
+ *  connect form's configTarget. */
+export async function readConnectKey(path: string = CONFIG_TARGET): Promise<string> {
 	let raw: string;
 	try {
-		raw = await readFile(CONFIG_TARGET, "utf8");
+		raw = await readFile(path, "utf8");
 	} catch {
 		throw new Error("router-jev is not connected — add a TypeSafe API key on the pack's Connect page");
 	}
-	const stored: unknown = JSON.parse(raw);
+	// A parse error quotes the offending token — which in a hand-edited file IS
+	// the key — and the host records a router's error on the room's receipt. So
+	// the parse error is replaced, never passed on.
+	let stored: unknown;
+	try {
+		stored = JSON.parse(raw);
+	} catch {
+		throw new Error("router-jev's stored key is not valid JSON — reconnect the pack");
+	}
 	const access = isRecord(stored) ? stored.access : undefined;
 	if (typeof access !== "string" || access.trim() === "") {
 		throw new Error("router-jev's stored key is empty — reconnect the pack");
@@ -73,8 +84,10 @@ export function buildJevRequest(request: RouterRequest): {
 	readonly none: string;
 } {
 	const ids = request.candidates.map(candidate => candidate.id);
-	// The "nobody" option must not collide with a real agent id.
-	const none = ["none", "nobody", "no-agent"].find(key => !ids.includes(key)) ?? `none-${ids.length}`;
+	// The "nobody" option must not collide with a real agent id — including the
+	// generated fallbacks, which an agent could also be named.
+	let none = "none";
+	for (let i = 0; ids.includes(none); i++) none = ["nobody", "no-agent"][i] ?? `none-${i}`;
 	const questions: Record<string, unknown> = {};
 	// One question per candidate, keyed by index. Question ids are never sent to
 	// the model, so each question's instructions name their candidate themselves.
@@ -160,7 +173,7 @@ export function mapJevAnswers(
 }
 
 export function createJevRouter(options: JevRouterOptions = {}): RouterProvider {
-	const apiKey = options.apiKey ?? keyFromConnect;
+	const apiKey = options.apiKey ?? (() => readConnectKey());
 	const doFetch = options.fetch ?? fetch;
 	const thresholds = {
 		lead: options.leadConfidenceMin ?? LEAD_CONFIDENCE_MIN,

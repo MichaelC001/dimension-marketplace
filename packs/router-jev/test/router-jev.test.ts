@@ -3,9 +3,19 @@
 // and the one HTTP call it makes. Every case runs on an injected fetch and key:
 // no network, no real credential.
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { RouterRequest } from "@dimension/sdk/provider";
-import { buildJevRequest, createJevRouter, JEV_MODEL, mapJevAnswers, TYPESAFE_ENDPOINT } from "../index.ts";
+import {
+	buildJevRequest,
+	createJevRouter,
+	JEV_MODEL,
+	mapJevAnswers,
+	readConnectKey,
+	TYPESAFE_ENDPOINT,
+} from "../index.ts";
 
 function requestFor(...ids: string[]): RouterRequest {
 	return {
@@ -48,6 +58,61 @@ describe("buildJevRequest", () => {
 		for (const ids of [["a1"], ["none"], ["none", "nobody"], ["none", "nobody", "no-agent"]]) {
 			expect(ids).not.toContain(buildJevRequest(requestFor(...ids)).none);
 		}
+	});
+
+	test("the nobody key also avoids the generated fallbacks, and every candidate keeps its own card", () => {
+		for (const ids of [
+			["none", "nobody", "no-agent", "none-0", "none-1"],
+			// An earlier version's fallback was `none-${ids.length}`: here `none-4`.
+			["none", "nobody", "no-agent", "none-4"],
+		]) {
+			const { questions, none } = questionsOf(requestFor(...ids));
+			expect(ids).not.toContain(none);
+			const criteria = questions.lead?.criteria ?? {};
+			expect(Object.keys(criteria).length).toBe(ids.length + 1);
+			expect(ids.map(id => criteria[id])).toEqual(ids.map(id => `${id} card`));
+		}
+	});
+});
+
+describe("readConnectKey", () => {
+	const SECRET = "apikey_SECRET_DO_NOT_LEAK";
+	const dirs: string[] = [];
+	afterEach(async () => {
+		for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true });
+	});
+	/** Where a key file may be written, in a fresh temp dir; `content` null writes nothing. */
+	async function keyPath(content: string | null): Promise<string> {
+		const dir = await mkdtemp(join(tmpdir(), "router-jev-key-"));
+		dirs.push(dir);
+		const path = join(dir, "key.json");
+		if (content !== null) await writeFile(path, content);
+		return path;
+	}
+
+	const refused: [string, string | null][] = [
+		["a missing file", null],
+		["a file that is not JSON", SECRET],
+		["JSON with an empty `access`", JSON.stringify({ access: "", note: SECRET })],
+		["JSON with a blank `access`", JSON.stringify({ access: "   ", note: SECRET })],
+	];
+	for (const [name, content] of refused) {
+		test(`${name} rejects without quoting the file`, async () => {
+			const path = await keyPath(content);
+			const error = await readConnectKey(path).then(
+				key => new Error(`resolved with a key of ${key.length} characters`),
+				(err: unknown) => err,
+			);
+			expect(error).toBeInstanceOf(Error);
+			const { message } = error as Error;
+			expect(message).toContain("router-jev");
+			expect(message).not.toContain("SECRET");
+			if (content !== null) expect(message).not.toContain(content);
+		});
+	}
+
+	test("a valid key is returned trimmed", async () => {
+		expect(await readConnectKey(await keyPath(JSON.stringify({ access: " k " })))).toBe("k");
 	});
 });
 
