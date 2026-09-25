@@ -6922,7 +6922,7 @@ var gateSchema = type({
 });
 var memorySchema = type({
   "backend?": "string",
-  "vault?": "string",
+  "vault?": "'global' | 'project'",
   "namespace?": "string",
   "+": "reject"
 });
@@ -7463,7 +7463,7 @@ function parseGeneralAgent(content, filePath, dirName) {
 }
 
 // src/store.ts
-var WRITE_DIR = ".inso";
+var WRITE_DIR = process.env.PI_CONFIG_DIR?.trim() || ".inso";
 var LEGACY_DIR = ".omp";
 async function installedPluginRoots(pluginsDir) {
   const roots = /* @__PURE__ */ new Map();
@@ -7643,7 +7643,7 @@ async function listAgents(options) {
       }
     }
   }
-  return { workspace: options.workspace, agents, notices };
+  return { workspace: options.workspace, configDir: WRITE_DIR, agents, notices };
 }
 var SaveRefused = class extends Error {
   name = "SaveRefused";
@@ -7896,7 +7896,7 @@ async function createForgeServer(options = {}) {
     "forge_open",
     {
       title: "Forge",
-      description: "Open the Forge in the artifact view: every General Agent in the workspace (and the ones installed packs ship) as a constellation the user can open, reshape and forge \u2014 or one agent, by name. Pass `workspace`: the absolute path of the directory you are working in; the Forge reads and writes `<workspace>/.inso/agents/<name>/agent.md` there. It writes nothing itself \u2014 the user forges.",
+      description: `Open the Forge in the artifact view: every General Agent in the workspace (and the ones installed packs ship) as a constellation the user can open, reshape and forge \u2014 or one agent, by name. Pass \`workspace\`: the absolute path of the directory you are working in; the Forge reads and writes \`<workspace>/${WRITE_DIR}/agents/<name>/agent.md\` there. It writes nothing itself \u2014 the user forges.`,
       inputSchema: {
         agent: agentName.optional().describe("open this agent directly"),
         workspace: z.string().min(1).max(1024).optional().describe("absolute path of your working directory")
@@ -7958,7 +7958,7 @@ async function createForgeServer(options = {}) {
   server2.registerTool(
     "save_agent",
     {
-      description: "Write the draft to <workspace>/.inso/agents/<name>/agent.md. `create: true` refuses a name that is taken; `create: false` rewrites an existing editable workspace agent.",
+      description: `Write the draft to <workspace>/${WRITE_DIR}/agents/<name>/agent.md. \`create: true\` refuses a name that is taken; \`create: false\` rewrites an existing editable workspace agent.`,
       inputSchema: { draft: draftSchema, create: z.boolean() },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       _meta: APP_ONLY
