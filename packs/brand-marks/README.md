@@ -12,10 +12,10 @@ brand's official mark and follows the session with container-only motion.
 `plugin.json` declares four components off one entry (`dist/avatar.js`), each with
 `slot: "avatar"`. The engine publishes each as a presence record
 `plugin:brand-marks/<id>`; the host mounts the bundle in a sandboxed iframe
-(`allow-scripts allow-popups`, opaque origin) whose document holds a single
-`#fraym-pack-root` and a `<script type="module">` carrying the bundle's SOURCE
-(the host fetches the bundle itself, so no asset URL or token ever reaches the
-frame).
+(`allow-scripts allow-popups`, opaque origin) navigated to the engine's
+`/pack-shell` document, which holds a single `#fraym-pack-root`. The host fetches
+the bundle itself and posts its SOURCE to the shell, which imports it from a
+`blob:` URL, so no asset URL or token ever reaches the frame.
 
 ### Which avatar am I? — `data-avatar`
 
