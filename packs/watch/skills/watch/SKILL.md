@@ -171,4 +171,3 @@ Use today's absolute date (the user's current date) — never relative.
 
 - [`PROVENANCE.md`](../../PROVENANCE.md) — what this replaced upstream and why the vendor policy was dropped.
 - [`DESIGN.md`](../../../../DESIGN.md) — the accent-token rule the icon follows.
-- [`AGENTS.md`](../../../../AGENTS.md) § Delivery Integrity — the honesty rules G1/G3 above enforce.
