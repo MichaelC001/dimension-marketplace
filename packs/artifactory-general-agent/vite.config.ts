@@ -7,6 +7,7 @@ export default defineConfig({
 	root: "app/view",
 	base: "./",
 	plugins: [react()],
+	resolve: { dedupe: ["react", "react-dom"] },
 	server: { port: 5197, strictPort: true },
 	build: { outDir: "../dist", emptyOutDir: true, target: "es2022" },
 });

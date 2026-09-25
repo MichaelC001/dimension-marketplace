@@ -77,6 +77,22 @@ button {
 	outline-offset: 2px;
 }
 
+.fg-boot {
+	display: grid;
+	place-content: center;
+	height: 100%;
+	padding: 24px;
+	font-size: 13px;
+	color: var(--fg-text-2);
+	text-align: center;
+}
+
+.fg-boot h1 {
+	margin: 0 0 8px;
+	font-size: 16px;
+	color: var(--fg-text);
+}
+
 .fg-root {
 	position: fixed;
 	inset: 0;
@@ -329,6 +345,24 @@ button {
 	line-height: 1.55;
 	color: var(--fg-text-2);
 	text-wrap: pretty;
+}
+
+.fg-notes {
+	margin: 12px 0 0;
+	padding: 0;
+	list-style: none;
+	pointer-events: auto;
+}
+
+.fg-notes li {
+	font-size: 11.5px;
+	line-height: 1.45;
+	color: var(--fg-text-3);
+	overflow-wrap: anywhere;
+}
+
+.fg-notes li + li {
+	margin-top: 4px;
 }
 
 .fg-roster {
@@ -611,6 +645,14 @@ button {
 	color: var(--fg-text-2);
 }
 
+.fg-tray-note {
+	margin: 0;
+	padding: 6px 14px 0;
+	font-size: 11.5px;
+	line-height: 1.45;
+	color: var(--fg-text-3);
+}
+
 .fg-filter {
 	margin: 10px 10px 6px;
 	height: 30px;
@@ -819,6 +861,11 @@ button {
 	font-style: italic;
 }
 
+.fg-line[data-proposed] {
+	box-shadow: inset 2px 0 0 var(--fg-accent);
+	color: var(--fg-text);
+}
+
 .fg-line[data-flash] {
 	background: var(--fg-accent-dim);
 	color: var(--fg-text);
@@ -1025,6 +1072,56 @@ button {
 	right: var(--fg-gutter);
 }
 
+.fg-forge-actions {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-end;
+	gap: 10px;
+}
+
+.fg-proposal {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-end;
+	gap: 4px;
+	max-width: 260px;
+	padding: 10px 12px;
+	border: 1px solid var(--fg-accent-line);
+	border-radius: 12px;
+	background: var(--fg-surface-2);
+	text-align: right;
+	animation: fg-drop-in 0.4s var(--fg-ease);
+}
+
+.fg-proposal-mark {
+	font-size: 12.5px;
+	font-weight: 600;
+}
+
+.fg-proposal-fields {
+	font-size: 11.5px;
+	line-height: 1.45;
+	color: var(--fg-text-2);
+}
+
+.fg-proposal-actions {
+	display: flex;
+	gap: 6px;
+	margin-top: 4px;
+}
+
+.fg-chip-accept {
+	border-color: var(--fg-accent-line);
+	background: var(--fg-accent-dim);
+}
+
+@keyframes fg-drop-in {
+	from {
+		opacity: 0;
+		transform: translateY(-6px);
+	}
+}
+
 .fg-forge {
 	display: flex;
 	flex-direction: column;
@@ -1093,6 +1190,10 @@ button {
 	font-size: 13px;
 	line-height: 1.5;
 	animation: fg-drop 0.4s var(--fg-ease);
+}
+
+.fg-notice[data-tone="error"] {
+	border-color: var(--fg-danger);
 }
 
 @keyframes fg-drop {

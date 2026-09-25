@@ -1,5 +1,6 @@
 import { Color } from "three";
-import type { PartKind, Vibr } from "../model";
+import type { Vibr } from "../../../src/agent-md";
+import type { PartKind } from "../../../src/contracts";
 
 /**
  * The Stage paints with the host's own tokens. A canvas cannot resolve CSS,

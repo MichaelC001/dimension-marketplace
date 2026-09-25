@@ -1,35 +1,55 @@
 import { type DragEvent, type KeyboardEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { PREVIEW_AGENTS, PREVIEW_PARTS } from "./catalog";
 import {
 	type AgentDraft,
+	type AgentProposal,
 	APPROVALS,
 	type Approval,
-	attachPart,
+	applyProposal,
 	blankDraft,
-	detachPart,
 	draftProblems,
 	HABITATS,
 	type Habitat,
-	hasPart,
 	manifestLines,
 	manifestPath,
-	type Part,
-	type PartKind,
-	type Personality,
-	type Satellite,
 	normalizeTypedName,
+	PERSONALITIES,
+	PROPOSABLE_FIELDS,
 	THINKING_STEPS,
 	type Thinking,
 	VIBRS,
 	type Vibr,
-} from "./model";
+} from "../../src/agent-md";
+import type { AgentListing, ListedAgent, Part, PartKind, PartListing } from "../../src/contracts";
+import type { ForgeBackend, ForgeEvent } from "./forge-client";
+import { attachPart, detachPart, hasPart, type Satellite } from "./model";
 import { VIBR_STYLES } from "./stage/palette";
 import { NEW_AGENT_KEY, type OrbAgent, Stage, type StageEvents } from "./stage/stage";
 
-const STORE_KEY = "dimension.forge.preview.v1";
 const PART_MIME = "application/x-forge-part";
 
-type View = { readonly kind: "constellation" } | { readonly kind: "forge"; readonly draft: AgentDraft; readonly isNew: boolean };
+/** A tool result routed to this View, numbered so the same event twice is two events. */
+export interface IncomingEvent {
+	readonly event: ForgeEvent;
+	readonly seq: number;
+}
+
+/** A workshop proposal the human has not yet accepted: what it changed, and
+ *  the draft to go back to if they discard it (null = it started from nothing). */
+interface PendingProposal {
+	readonly fields: readonly string[];
+	readonly before: AgentDraft | null;
+}
+
+type View =
+	| { readonly kind: "constellation" }
+	| {
+			readonly kind: "forge";
+			readonly draft: AgentDraft;
+			readonly isNew: boolean;
+			/** Why this agent cannot be forged here, when it cannot. */
+			readonly readOnly?: string;
+			readonly proposal?: PendingProposal;
+	  };
 
 const TRAY_GROUPS: readonly { kind: PartKind; label: string; lede: string }[] = [
 	{ kind: "tool", label: "Tools", lede: "Leave the orbit empty and it keeps every tool. Add one and it becomes an allowlist." },
@@ -58,28 +78,35 @@ const HABITAT_LABEL: Record<Habitat, { label: string; hint: string }> = {
 	home: { label: "Own home", hint: "Always runs in its own managed workspace" },
 	ephemeral: { label: "Scratch", hint: "A fresh throwaway worktree every session" },
 };
-const PERSONALITIES: readonly Personality[] = ["default", "friendly", "pragmatic", "none"];
+/** The manifest line ids each proposable field renders, so a proposal's lines are marked. */
+const PROPOSAL_LINES: Record<(typeof PROPOSABLE_FIELDS)[number], readonly string[]> = {
+	name: ["name"],
+	description: ["description"],
+	charter: ["body"],
+	vibr: ["avatar"],
+	skills: ["capabilities.skills"],
+	mcp: ["capabilities.mcp"],
+	memory: ["memory.backend"],
+	lineage: ["extends"],
+	thinking: ["engine.thinkingLevel"],
+	personality: ["identity.personality"],
+	habitat: ["workspace.policy", "workspace.id"],
+};
 
-function loadAgents(): AgentDraft[] {
-	try {
-		const raw = localStorage.getItem(STORE_KEY);
-		if (raw) {
-			const parsed = JSON.parse(raw) as AgentDraft[];
-			if (Array.isArray(parsed)) return parsed;
-		}
-	} catch {
-		// A corrupt preview store is not worth an error screen — start from the seeds.
-	}
-	return [...PREVIEW_AGENTS];
-}
-
-function orbOf(draft: AgentDraft): OrbAgent {
+function orbOf(agent: ListedAgent): OrbAgent {
+	const { draft } = agent;
 	const families = [draft.tools, draft.skills, draft.mcp].filter(list => list.length > 0).length + (draft.memory === "inherit" ? 0 : 1);
 	return { key: draft.key, name: draft.name, description: draft.description, vibr: draft.vibr, lineage: draft.lineage, rings: families };
 }
 
-export function ForgeApp() {
-	const [agents, setAgents] = useState<AgentDraft[]>(loadAgents);
+function newKey(): string {
+	return `draft-${Date.now().toString(36)}`;
+}
+
+export function ForgeApp({ backend, incoming }: { backend: ForgeBackend; incoming: IncomingEvent | null }) {
+	const [listing, setListing] = useState<AgentListing | null>(null);
+	const [partListing, setPartListing] = useState<PartListing | null>(null);
+	const [loadError, setLoadError] = useState<string | null>(null);
 	const [view, setView] = useState<View>({ kind: "constellation" });
 	const [picking, setPicking] = useState(false);
 	const [panelOpen, setPanelOpen] = useState(false);
@@ -89,21 +116,36 @@ export function ForgeApp() {
 	const [filter, setFilter] = useState("");
 	const [panel, setPanel] = useState<"charter" | "manifest">("manifest");
 	const [dragKind, setDragKind] = useState<PartKind | null>(null);
-	const [notice, setNotice] = useState<string | null>(null);
+	const [notice, setNotice] = useState<{ text: string; tone: "info" | "error" } | null>(null);
 	const [incantation, setIncantation] = useState("");
 	const [flash, setFlash] = useState<ReadonlySet<string>>(new Set());
+	const [saving, setSaving] = useState(false);
+	/** An agent the model asked to open, waiting for the listing that has it. */
+	const [pendingOpen, setPendingOpen] = useState<string | null>(null);
 
 	const canvasRef = useRef<HTMLCanvasElement>(null);
 	const overlayRef = useRef<HTMLDivElement>(null);
 	const stageRef = useRef<Stage | null>(null);
+	const agents = useMemo(() => listing?.agents ?? [], [listing]);
+
+	const refresh = useCallback(async () => {
+		try {
+			const [nextAgents, nextParts] = await Promise.all([backend.listAgents(), backend.listParts()]);
+			setListing(nextAgents);
+			setPartListing(nextParts);
+			setLoadError(null);
+		} catch (error) {
+			setLoadError(error instanceof Error ? error.message : String(error));
+		}
+	}, [backend]);
 
 	useEffect(() => {
-		localStorage.setItem(STORE_KEY, JSON.stringify(agents));
-	}, [agents]);
+		void refresh();
+	}, [refresh]);
 
 	useEffect(() => {
 		if (notice === null) return;
-		const timer = setTimeout(() => setNotice(null), 5200);
+		const timer = setTimeout(() => setNotice(null), notice.tone === "error" ? 9000 : 6500);
 		return () => clearTimeout(timer);
 	}, [notice]);
 
@@ -112,23 +154,33 @@ export function ForgeApp() {
 		setView(current => (current.kind === "forge" ? { ...current, draft: change(current.draft) } : current));
 	}, []);
 
+	const openListed = useCallback((agent: ListedAgent) => {
+		setSelected(null);
+		setPicking(false);
+		setView({ kind: "forge", draft: { ...agent.draft }, isNew: false, ...(agent.editable ? {} : { readOnly: agent.readOnlyReason ?? "This agent is read-only here." }) });
+		setPanel("manifest");
+	}, []);
+
 	const openAgent = useCallback(
 		(key: string) => {
 			setSelected(null);
 			setPicking(false);
 			if (key === NEW_AGENT_KEY) {
-				setView({ kind: "forge", draft: blankDraft(`draft-${Date.now().toString(36)}`), isNew: true });
+				setView({ kind: "forge", draft: blankDraft(newKey()), isNew: true });
 				setPanel("charter");
 				return;
 			}
-			const agent = agents.find(candidate => candidate.key === key);
-			if (agent) {
-				setView({ kind: "forge", draft: { ...agent }, isNew: false });
-				setPanel("manifest");
-			}
+			const agent = agents.find(candidate => candidate.draft.key === key);
+			if (agent) openListed(agent);
 		},
-		[agents],
+		[agents, openListed],
 	);
+
+	/** A read-only agent's way forward: a new agent that extends it. */
+	const extendAgent = (base: AgentDraft) => {
+		setView({ kind: "forge", draft: { ...blankDraft(newKey()), vibr: base.vibr, lineage: [base.name] }, isNew: true });
+		setPanel("charter");
+	};
 
 	const backToConstellation = useCallback(() => {
 		setPicking(false);
@@ -136,6 +188,77 @@ export function ForgeApp() {
 		setSelected(null);
 		setView({ kind: "constellation" });
 	}, []);
+
+	// ── what the agent sends: forge_open lands, forge_propose drafts ─────────
+
+	const receiveProposal = useCallback(
+		(proposal: AgentProposal) => {
+			const fields = PROPOSABLE_FIELDS.filter(field => field !== "name" && proposal[field] !== undefined);
+			setSelected(null);
+			setPicking(false);
+			setPanel("manifest");
+			setView(current => {
+				// The open draft is the one being talked about when it is this agent, or
+				// a new one still without a name; otherwise the listed agent of that
+				// name; otherwise a new agent.
+				const listed = agents.find(agent => agent.name === proposal.name);
+				let base: AgentDraft;
+				let isNew: boolean;
+				let readOnly: string | undefined;
+				let before: AgentDraft | null;
+				if (current.kind === "forge" && (current.draft.name === proposal.name || (current.isNew && current.draft.name === ""))) {
+					base = current.draft;
+					isNew = current.isNew;
+					readOnly = current.readOnly;
+					before = current.proposal?.before ?? current.draft;
+				} else if (listed !== undefined && listed.editable) {
+					base = listed.draft;
+					isNew = false;
+					before = listed.draft;
+				} else {
+					base = blankDraft(newKey());
+					isNew = true;
+					before = null;
+				}
+				const merged = new Set([...(current.kind === "forge" ? (current.proposal?.fields ?? []) : []), ...fields]);
+				return {
+					kind: "forge",
+					draft: applyProposal(base, proposal),
+					isNew,
+					...(readOnly !== undefined ? { readOnly } : {}),
+					proposal: { fields: [...merged], before },
+				};
+			});
+		},
+		[agents],
+	);
+
+	useEffect(() => {
+		if (incoming === null) return;
+		const { event } = incoming;
+		if (event.kind === "proposal") receiveProposal(event.proposal);
+		else {
+			// forge_open may have just told the server which workspace this is.
+			void refresh();
+			if (event.opened.agent !== null) setPendingOpen(event.opened.agent);
+		}
+		// Only a NEW event acts; the listing changing must not replay it.
+	}, [incoming]);
+
+	useEffect(() => {
+		if (pendingOpen === null || listing === null) return;
+		const agent = agents.find(candidate => candidate.name === pendingOpen);
+		if (agent) openListed(agent);
+		setPendingOpen(null);
+	}, [pendingOpen, listing, agents, openListed]);
+
+	const acceptProposal = () => setView(current => (current.kind === "forge" ? { kind: "forge", draft: current.draft, isNew: current.isNew, ...(current.readOnly !== undefined ? { readOnly: current.readOnly } : {}) } : current));
+	const discardProposal = () => {
+		if (view.kind !== "forge" || view.proposal === undefined) return;
+		const { before } = view.proposal;
+		if (before === null) backToConstellation();
+		else setView({ kind: "forge", draft: before, isNew: view.isNew, ...(view.readOnly !== undefined ? { readOnly: view.readOnly } : {}) });
+	};
 
 	// The Stage calls back through a ref so it is created exactly once.
 	const handlers = useRef<StageEvents | null>(null);
@@ -219,14 +342,17 @@ export function ForgeApp() {
 		return () => clearTimeout(timer);
 	}, [lines, draftKey]);
 
+	const proposal = view.kind === "forge" ? view.proposal : undefined;
+	const proposedLines = useMemo(() => new Set((proposal?.fields ?? []).flatMap(field => PROPOSAL_LINES[field as keyof typeof PROPOSAL_LINES] ?? [])), [proposal]);
+
 	// ── parts ────────────────────────────────────────────────────────────────
 
 	const parts = useMemo<Part[]>(() => {
 		const lineage: Part[] = agents
-			.filter(agent => agent.name !== "" && agent.key !== draft?.key)
+			.filter(agent => agent.draft.key !== draft?.key)
 			.map(agent => ({ kind: "lineage", id: agent.name, label: agent.name, hint: agent.description }));
-		return [...PREVIEW_PARTS, ...lineage];
-	}, [agents, draft?.key]);
+		return [...(partListing?.parts ?? []), ...lineage];
+	}, [agents, partListing, draft?.key]);
 	const needle = filter.trim().toLowerCase();
 	const trayParts = parts.filter(part => part.kind === trayKind && (needle === "" || part.label.toLowerCase().includes(needle) || part.hint.toLowerCase().includes(needle)));
 	const counts = useMemo(() => {
@@ -267,26 +393,47 @@ export function ForgeApp() {
 	// ── forging ────────────────────────────────────────────────────────────────
 
 	const problems = draft ? draftProblems(draft) : [];
-	const nameTaken = draft !== null && agents.some(agent => agent.name === draft.name && agent.key !== draft.key);
-	const blockers = nameTaken ? [`An agent named “${draft?.name}” already exists.`, ...problems] : problems;
+	const nameTaken = draft !== null && view.kind === "forge" && view.isNew && agents.some(agent => agent.name === draft.name);
+	const blockers = [
+		...(view.kind === "forge" && view.readOnly !== undefined ? [view.readOnly] : []),
+		...(proposal !== undefined ? ["Accept or discard the workshop's proposal first."] : []),
+		...(nameTaken ? [`An agent named “${draft?.name}” already exists.`] : []),
+		...problems,
+	];
 
-	const forge = () => {
-		if (!draft || blockers.length > 0) return;
-		setAgents(current => {
-			const index = current.findIndex(agent => agent.key === draft.key);
-			if (index === -1) return [...current, draft];
-			const next = [...current];
-			next[index] = draft;
-			return next;
-		});
-		setNotice(`${view.kind === "forge" && view.isNew ? "Forged" : "Reforged"} ${draft.name}. Preview only — kept in this browser; nothing was written to ${manifestPath(draft)}.`);
-		backToConstellation();
+	const forge = async () => {
+		if (!draft || view.kind !== "forge" || blockers.length > 0 || saving) return;
+		setSaving(true);
+		try {
+			const outcome = await backend.save(draft, view.isNew);
+			const verb = outcome.created ? "Forged" : "Reforged";
+			setNotice({
+				tone: "info",
+				text:
+					backend.mode === "host"
+						? `${verb} ${draft.name} → ${outcome.path}`
+						: `${verb} ${draft.name} in the preview — kept in this browser only; nothing was written to ${outcome.relativePath}.`,
+			});
+			await refresh();
+			backToConstellation();
+		} catch (error) {
+			setNotice({ tone: "error", text: `${draft.name} was not forged: ${error instanceof Error ? error.message : String(error)}` });
+		} finally {
+			setSaving(false);
+		}
 	};
 
-	const speak = () => {
-		if (incantation.trim() === "") return;
-		setNotice("Talk-to-build runs inside Dimension: this line goes to the workshop session, and the agent it builds appears here as it is forged.");
-		setIncantation("");
+	const speak = async () => {
+		const text = incantation.trim();
+		if (text === "") return;
+		const about = draft === null ? "" : `\n\n(Said in the Forge about ${draft.name ? `the agent “${draft.name}”` : "a new agent"} — propose the change with forge_propose.)`;
+		try {
+			await backend.speak(`${text}${about}`);
+			setIncantation("");
+			setNotice({ tone: "info", text: "Sent to your agent. Its proposal appears here, marked as the workshop's, for you to accept." });
+		} catch (error) {
+			setNotice({ tone: "error", text: error instanceof Error ? error.message : String(error) });
+		}
 	};
 
 	const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -306,6 +453,7 @@ export function ForgeApp() {
 	};
 
 	const shownVibr = draft ? (previewVibr ?? draft.vibr) : null;
+	const trayNote = trayKind === "tool" ? partListing?.omitted.find(note => note.startsWith("The full tool list")) : undefined;
 
 	return (
 		<div className="fg-root" data-view={view.kind} data-panel-open={panelOpen || undefined} onKeyDown={onKeyDown}>
@@ -319,7 +467,15 @@ export function ForgeApp() {
 			</div>
 
 			{view.kind === "constellation" ? (
-				<ConstellationHud agents={agents} onOpen={openAgent} incantation={incantation} setIncantation={setIncantation} speak={speak} />
+				<ConstellationHud
+					listing={listing}
+					loadError={loadError}
+					preview={backend.mode === "preview"}
+					onOpen={openAgent}
+					incantation={incantation}
+					setIncantation={setIncantation}
+					speak={speak}
+				/>
 			) : (
 				draft && (
 					<>
@@ -333,6 +489,8 @@ export function ForgeApp() {
 									value={draft.name}
 									placeholder="name-your-agent"
 									spellCheck={false}
+									readOnly={!view.isNew}
+									title={view.isNew ? undefined : "An agent's name is its directory; forge a new agent to use another."}
 									aria-label="Agent name"
 									onChange={event => updateDraft(current => ({ ...current, name: normalizeTypedName(event.target.value) }))}
 								/>
@@ -343,7 +501,7 @@ export function ForgeApp() {
 									aria-label="What this agent is for"
 									onChange={event => updateDraft(current => ({ ...current, description: event.target.value }))}
 								/>
-								<span className="fg-path">{manifestPath(draft)}</span>
+								<span className="fg-path">{listing?.workspace ? `${listing.workspace.replace(/[\\/]$/, "")}/${manifestPath(draft)}` : manifestPath(draft)}</span>
 								<button type="button" className="fg-chip fg-panel-toggle" aria-expanded={panelOpen} onClick={() => setPanelOpen(open => !open)}>
 									{panelOpen ? "Hide charter & agent.md" : "Charter & agent.md"}
 								</button>
@@ -369,6 +527,7 @@ export function ForgeApp() {
 								))}
 							</div>
 							<p className="fg-tray-lede">{TRAY_GROUPS.find(group => group.kind === trayKind)?.lede}</p>
+							{trayNote !== undefined && <p className="fg-tray-note">{trayNote}</p>}
 							<input className="fg-filter" value={filter} placeholder="Filter" aria-label="Filter parts" onChange={event => setFilter(event.target.value)} />
 							<div className="fg-parts">
 								{trayParts.map(part => {
@@ -396,7 +555,7 @@ export function ForgeApp() {
 										</button>
 									);
 								})}
-								{trayParts.length === 0 && <p className="fg-empty">Nothing matches “{filter}”.</p>}
+								{trayParts.length === 0 && <p className="fg-empty">{needle === "" ? "Nothing to offer here yet." : `Nothing matches “${filter}”.`}</p>}
 							</div>
 						</aside>
 
@@ -422,7 +581,7 @@ export function ForgeApp() {
 									<textarea
 										className="fg-charter-text"
 										value={draft.charter}
-										placeholder={"Who is it, and how does it work?\n\nWrite it the way you would brief a new colleague — or tell the workshop below and watch it appear."}
+										placeholder={"Who is it, and how does it work?\n\nWrite it the way you would brief a new colleague — or tell your agent below and watch it appear."}
 										aria-label="Charter"
 										onChange={event => updateDraft(current => ({ ...current, charter: event.target.value }))}
 									/>
@@ -430,7 +589,14 @@ export function ForgeApp() {
 							) : (
 								<pre className="fg-manifest" aria-label="The agent.md this writes">
 									{lines.map((line, index) => (
-										<span key={`${line.field}-${index}`} className="fg-line" data-field={line.field} data-flash={flash.has(line.field) || undefined} data-comment={line.text.trimStart().startsWith("#") || undefined}>
+										<span
+											key={`${line.field}-${index}`}
+											className="fg-line"
+											data-field={line.field}
+											data-flash={flash.has(line.field) || undefined}
+											data-proposed={proposedLines.has(line.field) || undefined}
+											data-comment={line.text.trimStart().startsWith("#") || undefined}
+										>
 											{line.text || " "}
 										</span>
 									))}
@@ -497,52 +663,89 @@ export function ForgeApp() {
 						)}
 
 						<div className="fg-forge-actions">
-							<ForgeButton blockers={blockers} onForge={forge} isNew={view.isNew} />
+							{proposal !== undefined && (
+								<div className="fg-proposal" role="status" aria-live="polite">
+									<span className="fg-proposal-mark">Proposed by the workshop</span>
+									<span className="fg-proposal-fields">{proposal.fields.length > 0 ? proposal.fields.join(" · ") : "a name"}</span>
+									<div className="fg-proposal-actions">
+										<button type="button" className="fg-chip" onClick={discardProposal}>
+											Discard
+										</button>
+										<button type="button" className="fg-chip fg-chip-accept" onClick={acceptProposal}>
+											Accept
+										</button>
+									</div>
+								</div>
+							)}
+							<ForgeButton blockers={blockers} onForge={() => void forge()} isNew={view.isNew} saving={saving} />
+							{view.readOnly !== undefined && !view.isNew && (
+								<button type="button" className="fg-chip" onClick={() => extendAgent(draft)}>
+									Extend it as a new agent
+								</button>
+							)}
 						</div>
 
-						<Incantation value={incantation} onChange={setIncantation} onSubmit={speak} placeholder={draft.name ? `Tell the workshop how ${draft.name} should change…` : "Describe the agent you want — the workshop builds it here…"} />
+						<Incantation value={incantation} onChange={setIncantation} onSubmit={() => void speak()} placeholder={draft.name ? `Tell your agent how ${draft.name} should change…` : "Describe the agent you want — your agent drafts it here…"} />
 					</>
 				)
 			)}
 
 			{notice && (
-				<div className="fg-notice" role="status" aria-live="polite">
-					{notice}
+				<div className="fg-notice" role="status" aria-live="polite" data-tone={notice.tone}>
+					{notice.text}
 				</div>
 			)}
-			<span className="fg-preview-pill" title="Running on its own, with seeded agents. Inside Dimension this View reads and writes real agent.md files.">
-				Preview
-			</span>
+			{backend.mode === "preview" && (
+				<span className="fg-preview-pill" title="Running on its own with seeded agents kept in this browser. Inside Dimension this View reads and writes real agent.md files.">
+					Preview · nothing is written
+				</span>
+			)}
 		</div>
 	);
 }
 
 function ConstellationHud({
-	agents,
+	listing,
+	loadError,
+	preview,
 	onOpen,
 	incantation,
 	setIncantation,
 	speak,
 }: {
-	agents: readonly AgentDraft[];
+	listing: AgentListing | null;
+	loadError: string | null;
+	preview: boolean;
 	onOpen: (key: string) => void;
 	incantation: string;
 	setIncantation: (value: string) => void;
 	speak: () => void;
 }) {
+	const agents = listing?.agents ?? [];
+	const lede =
+		loadError !== null
+			? `The agents could not be read: ${loadError}`
+			: listing === null
+				? "Reading the agents…"
+				: `${agents.length} ${agents.length === 1 ? "mind" : "minds"}${listing.workspace ? ` in ${listing.workspace}` : preview ? " in this preview" : ""}. Lines between them are lineage — who extends whom.`;
 	return (
 		<>
 			<header className="fg-hero">
 				<h1>General Agents</h1>
-				<p>
-					{agents.length} {agents.length === 1 ? "mind" : "minds"} in this workbench. Lines between them are lineage — who extends whom.
-				</p>
+				<p>{lede}</p>
+				{listing !== null && listing.notices.length > 0 && (
+					<ul className="fg-notes">
+						{listing.notices.map(note => (
+							<li key={note}>{note}</li>
+						))}
+					</ul>
+				)}
 			</header>
 			<nav className="fg-roster" aria-label="Agents">
 				{agents.map(agent => (
-					<button key={agent.key} type="button" onClick={() => onOpen(agent.key)}>
+					<button key={agent.draft.key} type="button" onClick={() => onOpen(agent.draft.key)} title={agent.editable ? agent.path : `${agent.path} — ${agent.readOnlyReason ?? "read-only"}`}>
 						<span className="fg-roster-name">{agent.name}</span>
-						<span className="fg-roster-sub">{VIBR_STYLES[agent.vibr].label}</span>
+						<span className="fg-roster-sub">{agent.source === "pack" ? "pack" : agent.editable ? VIBR_STYLES[agent.draft.vibr].label : "read-only"}</span>
 					</button>
 				))}
 				<button type="button" className="fg-roster-new" onClick={() => onOpen(NEW_AGENT_KEY)}>
@@ -607,14 +810,14 @@ function Meter<T extends string>({ steps, value, labels, onChange }: { steps: re
 	);
 }
 
-function ForgeButton({ blockers, onForge, isNew }: { blockers: readonly string[]; onForge: () => void; isNew: boolean }) {
-	const ready = blockers.length === 0;
+function ForgeButton({ blockers, onForge, isNew, saving }: { blockers: readonly string[]; onForge: () => void; isNew: boolean; saving: boolean }) {
+	const ready = blockers.length === 0 && !saving;
 	return (
 		<div className="fg-forge">
 			<button type="button" className="fg-forge-button" disabled={!ready} onClick={onForge}>
-				{isNew ? "Forge it" : "Reforge"}
+				{saving ? "Forging…" : isNew ? "Forge it" : "Reforge"}
 			</button>
-			{!ready && (
+			{blockers.length > 0 && (
 				<ul className="fg-blockers" aria-label="Before it can exist">
 					{blockers.map(blocker => (
 						<li key={blocker}>{blocker}</li>

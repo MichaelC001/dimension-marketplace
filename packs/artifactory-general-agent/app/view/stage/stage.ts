@@ -35,7 +35,9 @@ import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
-import { type AgentDraft, type Approval, type Habitat, type PartKind, type Satellite, satellitesOf, type Thinking, VIBRS, type Vibr } from "../model";
+import { type AgentDraft, type Approval, type Habitat, type Thinking, VIBRS, type Vibr } from "../../../src/agent-md";
+import type { PartKind } from "../../../src/contracts";
+import { type Satellite, satellitesOf } from "../model";
 import { type AgentCore, createCore } from "./core";
 import { readPalette, ringColor, type StagePalette, VIBR_STYLES } from "./palette";
 

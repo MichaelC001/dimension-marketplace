@@ -1,11 +1,11 @@
-import { type AgentDraft, blankDraft, type Part } from "./model";
+import { type AgentDraft, blankDraft } from "../../src/agent-md";
+import type { Part } from "../../src/contracts";
 
 /**
- * PREVIEW DATA. The Forge runs standalone (vite dev) before the pack's MCP
- * server exists; in that mode these are what the tray and the constellation
- * show. Every name below is a real tool, skill, MCP server or agent in this
- * workbench — the server slice replaces the lists with the live ones
- * (`list_agents`, `list_parts`), never with a second hand-kept copy.
+ * PREVIEW DATA — used ONLY when the View runs without a host (vite dev,
+ * `?preview`). Inside Dimension the tray and the constellation come from the
+ * pack's server (`list_parts`, `list_agents`), never from this file. Every
+ * name below is a real tool, skill, MCP server or agent in this workbench.
  */
 export const PREVIEW_PARTS: readonly Part[] = [
 	{ kind: "tool", id: "read", label: "read", hint: "Files, directories, URLs, archives" },

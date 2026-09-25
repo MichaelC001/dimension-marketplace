@@ -19,7 +19,7 @@ import {
 	MeshBasicMaterial,
 	type Material,
 } from "three";
-import type { Vibr } from "../model";
+import type { Vibr } from "../../../src/agent-md";
 import { type StagePalette, VIBR_STYLES, type VibrStyle } from "./palette";
 
 // Ashima Arts 3D simplex noise (MIT) — the one noise every displaced body uses.
