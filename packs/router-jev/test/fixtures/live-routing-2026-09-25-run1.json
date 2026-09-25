@@ -1,0 +1,799 @@
+{
+ "timeoutMs": 1500,
+ "cards": {
+  "cmo": "The CMO: the marketing lead. Answers general questions about growth, positioning, launches, results and strategy, and hands platform work to the platform agents.",
+  "x": "The X (Twitter) agent: drafts, schedules and analyses posts and threads on X.",
+  "reddit": "The Reddit agent: finds relevant subreddits and threads, and drafts Reddit posts and replies that follow each subreddit's rules.",
+  "discord": "The Discord agent: runs the community Discord server — moderation, #help reports, announcements and pins."
+ },
+ "rows": [
+  {
+   "text": "Can you draft a launch thread for the alpha?",
+   "expected": "x",
+   "decision": {
+    "post": "room-post-mugqqbgg-889acf92",
+    "gated": [],
+    "budget": {
+     "streak": 0,
+     "limit": 6
+    },
+    "semantic": "ran",
+    "stage": "semantic",
+    "woken": [
+     {
+      "kind": "agent",
+      "id": "cmo"
+     },
+     {
+      "kind": "agent",
+      "id": "x"
+     }
+    ],
+    "notified": [],
+    "lead": {
+     "kind": "agent",
+     "id": "x"
+    },
+    "router": {
+     "id": "jev",
+     "elapsedMs": 871,
+     "lead": "x",
+     "contributors": [
+      "cmo"
+     ],
+     "scores": {
+      "cmo": 0.82,
+      "discord": 0.57,
+      "reddit": 0.55,
+      "x": 0.93
+     },
+     "detail": {
+      "model": "jev-1.13.0",
+      "usage": {
+       "input_tokens": 1090,
+       "output_tokens": 125
+      },
+      "none": "none",
+      "thresholds": {
+       "lead": 0.5,
+       "respond": 0.7
+      },
+      "answers": {
+       "respond_0": {
+        "type": "noul",
+        "noul": 0.82
+       },
+       "respond_1": {
+        "type": "noul",
+        "noul": 0.57
+       },
+       "respond_2": {
+        "type": "noul",
+        "noul": 0.55
+       },
+       "respond_3": {
+        "type": "noul",
+        "noul": 0.93
+       },
+       "lead": {
+        "type": "choice",
+        "choice": "x",
+        "confidence": 0.81,
+        "probabilities": {
+         "none": 0,
+         "x": 0.86,
+         "discord": 0,
+         "reddit": 0,
+         "cmo": 0.14
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "text": "Is anyone talking about us on r/ClaudeAI?",
+   "expected": "reddit",
+   "decision": {
+    "post": "room-post-mugqqc4p-03d2e6d7",
+    "gated": [],
+    "budget": {
+     "streak": 0,
+     "limit": 6
+    },
+    "semantic": "ran",
+    "stage": "semantic",
+    "woken": [
+     {
+      "kind": "agent",
+      "id": "reddit"
+     }
+    ],
+    "notified": [],
+    "lead": {
+     "kind": "agent",
+     "id": "reddit"
+    },
+    "router": {
+     "id": "jev",
+     "elapsedMs": 321,
+     "lead": "reddit",
+     "contributors": [],
+     "scores": {
+      "cmo": 0.62,
+      "discord": 0.17,
+      "reddit": 0.78,
+      "x": 0.14
+     },
+     "detail": {
+      "model": "jev-1.13.0",
+      "usage": {
+       "input_tokens": 1132,
+       "output_tokens": 125
+      },
+      "none": "none",
+      "thresholds": {
+       "lead": 0.5,
+       "respond": 0.7
+      },
+      "answers": {
+       "respond_0": {
+        "type": "noul",
+        "noul": 0.62
+       },
+       "respond_1": {
+        "type": "noul",
+        "noul": 0.17
+       },
+       "respond_2": {
+        "type": "noul",
+        "noul": 0.78
+       },
+       "respond_3": {
+        "type": "noul",
+        "noul": 0.14
+       },
+       "lead": {
+        "type": "choice",
+        "choice": "reddit",
+        "confidence": 0.96,
+        "probabilities": {
+         "cmo": 0.02,
+         "reddit": 0.97,
+         "discord": 0,
+         "none": 0.01,
+         "x": 0
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "text": "Someone reported a crash in #help on the server",
+   "expected": "discord",
+   "decision": {
+    "post": "room-post-mugqqcdo-e00981d3",
+    "gated": [],
+    "budget": {
+     "streak": 0,
+     "limit": 6
+    },
+    "semantic": "ran",
+    "stage": "semantic",
+    "woken": [
+     {
+      "kind": "agent",
+      "id": "discord"
+     }
+    ],
+    "notified": [],
+    "lead": {
+     "kind": "agent",
+     "id": "discord"
+    },
+    "router": {
+     "id": "jev",
+     "elapsedMs": 307,
+     "lead": "discord",
+     "contributors": [],
+     "scores": {
+      "cmo": 0.05,
+      "discord": 0.89,
+      "reddit": 0.07,
+      "x": 0.03
+     },
+     "detail": {
+      "model": "jev-1.13.0",
+      "usage": {
+       "input_tokens": 1173,
+       "output_tokens": 125
+      },
+      "none": "none",
+      "thresholds": {
+       "lead": 0.5,
+       "respond": 0.7
+      },
+      "answers": {
+       "respond_0": {
+        "type": "noul",
+        "noul": 0.05
+       },
+       "respond_1": {
+        "type": "noul",
+        "noul": 0.89
+       },
+       "respond_2": {
+        "type": "noul",
+        "noul": 0.07
+       },
+       "respond_3": {
+        "type": "noul",
+        "noul": 0.03
+       },
+       "lead": {
+        "type": "choice",
+        "choice": "discord",
+        "confidence": 0.99,
+        "probabilities": {
+         "reddit": 0,
+         "discord": 1,
+         "none": 0,
+         "cmo": 0,
+         "x": 0
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "text": "What should our positioning be against Cursor?",
+   "expected": "cmo",
+   "decision": {
+    "post": "room-post-mugqqcm9-01935df3",
+    "gated": [],
+    "budget": {
+     "streak": 0,
+     "limit": 6
+    },
+    "semantic": "ran",
+    "stage": "semantic",
+    "woken": [
+     {
+      "kind": "agent",
+      "id": "cmo"
+     }
+    ],
+    "notified": [],
+    "lead": {
+     "kind": "agent",
+     "id": "cmo"
+    },
+    "router": {
+     "id": "jev",
+     "elapsedMs": 293,
+     "lead": "cmo",
+     "contributors": [],
+     "scores": {
+      "cmo": 0.94,
+      "discord": 0.09,
+      "reddit": 0.15,
+      "x": 0.31
+     },
+     "detail": {
+      "model": "jev-1.13.0",
+      "usage": {
+       "input_tokens": 1212,
+       "output_tokens": 126
+      },
+      "none": "none",
+      "thresholds": {
+       "lead": 0.5,
+       "respond": 0.7
+      },
+      "answers": {
+       "respond_0": {
+        "type": "noul",
+        "noul": 0.94
+       },
+       "respond_1": {
+        "type": "noul",
+        "noul": 0.09
+       },
+       "respond_2": {
+        "type": "noul",
+        "noul": 0.15
+       },
+       "respond_3": {
+        "type": "noul",
+        "noul": 0.31
+       },
+       "lead": {
+        "type": "choice",
+        "choice": "cmo",
+        "confidence": 0.99,
+        "probabilities": {
+         "reddit": 0,
+         "cmo": 1,
+         "discord": 0,
+         "x": 0,
+         "none": 0
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "text": "How did last week go overall?",
+   "expected": "cmo",
+   "decision": {
+    "post": "room-post-mugqqcuf-f0712f9a",
+    "gated": [],
+    "budget": {
+     "streak": 0,
+     "limit": 6
+    },
+    "semantic": "ran",
+    "stage": "semantic",
+    "woken": [
+     {
+      "kind": "agent",
+      "id": "cmo"
+     }
+    ],
+    "notified": [],
+    "lead": {
+     "kind": "agent",
+     "id": "cmo"
+    },
+    "router": {
+     "id": "jev",
+     "elapsedMs": 299,
+     "lead": "cmo",
+     "contributors": [],
+     "scores": {
+      "cmo": 0.75,
+      "discord": 0.46,
+      "reddit": 0.11,
+      "x": 0.23
+     },
+     "detail": {
+      "model": "jev-1.13.0",
+      "usage": {
+       "input_tokens": 1250,
+       "output_tokens": 126
+      },
+      "none": "none",
+      "thresholds": {
+       "lead": 0.5,
+       "respond": 0.7
+      },
+      "answers": {
+       "respond_0": {
+        "type": "noul",
+        "noul": 0.75
+       },
+       "respond_1": {
+        "type": "noul",
+        "noul": 0.46
+       },
+       "respond_2": {
+        "type": "noul",
+        "noul": 0.11
+       },
+       "respond_3": {
+        "type": "noul",
+        "noul": 0.23
+       },
+       "lead": {
+        "type": "choice",
+        "choice": "cmo",
+        "confidence": 0.9,
+        "probabilities": {
+         "discord": 0.01,
+         "none": 0.07,
+         "x": 0,
+         "reddit": 0,
+         "cmo": 0.92
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "text": "Reply to that comment on our Reddit post, then share the thread on X too",
+   "expected": "reddit",
+   "decision": {
+    "post": "room-post-mugqqd2s-5871cea5",
+    "gated": [],
+    "budget": {
+     "streak": 0,
+     "limit": 6
+    },
+    "semantic": "ran",
+    "stage": "semantic",
+    "woken": [
+     {
+      "kind": "agent",
+      "id": "reddit"
+     }
+    ],
+    "notified": [],
+    "lead": {
+     "kind": "agent",
+     "id": "reddit"
+    },
+    "router": {
+     "id": "jev",
+     "elapsedMs": 303,
+     "lead": "reddit",
+     "contributors": [],
+     "scores": {
+      "cmo": 0.27,
+      "discord": 0.07,
+      "reddit": 0.85,
+      "x": 0.67
+     },
+     "detail": {
+      "model": "jev-1.13.0",
+      "usage": {
+       "input_tokens": 1297,
+       "output_tokens": 125
+      },
+      "none": "none",
+      "thresholds": {
+       "lead": 0.5,
+       "respond": 0.7
+      },
+      "answers": {
+       "respond_0": {
+        "type": "noul",
+        "noul": 0.27
+       },
+       "respond_1": {
+        "type": "noul",
+        "noul": 0.07
+       },
+       "respond_2": {
+        "type": "noul",
+        "noul": 0.85
+       },
+       "respond_3": {
+        "type": "noul",
+        "noul": 0.67
+       },
+       "lead": {
+        "type": "choice",
+        "choice": "reddit",
+        "confidence": 0.93,
+        "probabilities": {
+         "none": 0.01,
+         "reddit": 0.94,
+         "cmo": 0.02,
+         "discord": 0,
+         "x": 0.03
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "text": "thanks!",
+   "expected": "none",
+   "decision": {
+    "post": "room-post-mugqqdb9-e6655d28",
+    "gated": [],
+    "budget": {
+     "streak": 0,
+     "limit": 6
+    },
+    "semantic": "fell-through:no-lead",
+    "stage": "default",
+    "woken": [
+     {
+      "kind": "agent",
+      "id": "cmo"
+     }
+    ],
+    "notified": [],
+    "router": {
+     "id": "jev",
+     "elapsedMs": 478,
+     "lead": null,
+     "contributors": [],
+     "scores": {
+      "cmo": 0.14,
+      "discord": 0.15,
+      "reddit": 0.1,
+      "x": 0.11
+     },
+     "detail": {
+      "model": "jev-1.13.0",
+      "usage": {
+       "input_tokens": 1330,
+       "output_tokens": 125
+      },
+      "none": "none",
+      "thresholds": {
+       "lead": 0.5,
+       "respond": 0.7
+      },
+      "answers": {
+       "respond_0": {
+        "type": "noul",
+        "noul": 0.14
+       },
+       "respond_1": {
+        "type": "noul",
+        "noul": 0.15
+       },
+       "respond_2": {
+        "type": "noul",
+        "noul": 0.1
+       },
+       "respond_3": {
+        "type": "noul",
+        "noul": 0.11
+       },
+       "lead": {
+        "type": "choice",
+        "choice": "none",
+        "confidence": 0.86,
+        "probabilities": {
+         "reddit": 0.01,
+         "x": 0,
+         "none": 0.89,
+         "discord": 0.01,
+         "cmo": 0.09
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "text": "Pin an announcement about the new release in the community server",
+   "expected": "discord",
+   "decision": {
+    "post": "room-post-mugqqdol-ec7dc053",
+    "gated": [],
+    "budget": {
+     "streak": 0,
+     "limit": 6
+    },
+    "semantic": "ran",
+    "stage": "semantic",
+    "woken": [
+     {
+      "kind": "agent",
+      "id": "discord"
+     }
+    ],
+    "notified": [],
+    "lead": {
+     "kind": "agent",
+     "id": "discord"
+    },
+    "router": {
+     "id": "jev",
+     "elapsedMs": 348,
+     "lead": "discord",
+     "contributors": [],
+     "scores": {
+      "cmo": 0.2,
+      "discord": 0.97,
+      "reddit": 0.05,
+      "x": 0.05
+     },
+     "detail": {
+      "model": "jev-1.13.0",
+      "usage": {
+       "input_tokens": 1372,
+       "output_tokens": 125
+      },
+      "none": "none",
+      "thresholds": {
+       "lead": 0.5,
+       "respond": 0.7
+      },
+      "answers": {
+       "respond_0": {
+        "type": "noul",
+        "noul": 0.2
+       },
+       "respond_1": {
+        "type": "noul",
+        "noul": 0.97
+       },
+       "respond_2": {
+        "type": "noul",
+        "noul": 0.05
+       },
+       "respond_3": {
+        "type": "noul",
+        "noul": 0.05
+       },
+       "lead": {
+        "type": "choice",
+        "choice": "discord",
+        "confidence": 1,
+        "probabilities": {
+         "discord": 1,
+         "cmo": 0,
+         "reddit": 0,
+         "x": 0,
+         "none": 0
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "text": "What's the weather in Bangalore tomorrow?",
+   "expected": "none",
+   "decision": {
+    "post": "room-post-mugqqdyb-75cd6459",
+    "gated": [],
+    "budget": {
+     "streak": 0,
+     "limit": 6
+    },
+    "semantic": "fell-through:no-lead",
+    "stage": "default",
+    "woken": [
+     {
+      "kind": "agent",
+      "id": "cmo"
+     }
+    ],
+    "notified": [],
+    "router": {
+     "id": "jev",
+     "elapsedMs": 294,
+     "lead": null,
+     "contributors": [],
+     "scores": {
+      "cmo": 0.04,
+      "discord": 0.05,
+      "reddit": 0.03,
+      "x": 0.03
+     },
+     "detail": {
+      "model": "jev-1.13.0",
+      "usage": {
+       "input_tokens": 1411,
+       "output_tokens": 125
+      },
+      "none": "none",
+      "thresholds": {
+       "lead": 0.5,
+       "respond": 0.7
+      },
+      "answers": {
+       "respond_0": {
+        "type": "noul",
+        "noul": 0.04
+       },
+       "respond_1": {
+        "type": "noul",
+        "noul": 0.05
+       },
+       "respond_2": {
+        "type": "noul",
+        "noul": 0.03
+       },
+       "respond_3": {
+        "type": "noul",
+        "noul": 0.03
+       },
+       "lead": {
+        "type": "choice",
+        "choice": "none",
+        "confidence": 0.99,
+        "probabilities": {
+         "discord": 0.01,
+         "none": 0.99,
+         "reddit": 0,
+         "cmo": 0,
+         "x": 0
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "text": "Schedule the tweet for 9am tomorrow",
+   "expected": "x",
+   "decision": {
+    "post": "room-post-mugqqe6j-df850b96",
+    "gated": [],
+    "budget": {
+     "streak": 0,
+     "limit": 6
+    },
+    "semantic": "ran",
+    "stage": "semantic",
+    "woken": [
+     {
+      "kind": "agent",
+      "id": "x"
+     }
+    ],
+    "notified": [],
+    "lead": {
+     "kind": "agent",
+     "id": "x"
+    },
+    "router": {
+     "id": "jev",
+     "elapsedMs": 293,
+     "lead": "x",
+     "contributors": [],
+     "scores": {
+      "cmo": 0.1,
+      "discord": 0.05,
+      "reddit": 0.04,
+      "x": 0.96
+     },
+     "detail": {
+      "model": "jev-1.13.0",
+      "usage": {
+       "input_tokens": 1409,
+       "output_tokens": 125
+      },
+      "none": "none",
+      "thresholds": {
+       "lead": 0.5,
+       "respond": 0.7
+      },
+      "answers": {
+       "respond_0": {
+        "type": "noul",
+        "noul": 0.1
+       },
+       "respond_1": {
+        "type": "noul",
+        "noul": 0.05
+       },
+       "respond_2": {
+        "type": "noul",
+        "noul": 0.04
+       },
+       "respond_3": {
+        "type": "noul",
+        "noul": 0.96
+       },
+       "lead": {
+        "type": "choice",
+        "choice": "x",
+        "confidence": 1,
+        "probabilities": {
+         "discord": 0,
+         "reddit": 0,
+         "cmo": 0,
+         "none": 0,
+         "x": 1
+        }
+       }
+      }
+     }
+    }
+   }
+  }
+ ]
+}

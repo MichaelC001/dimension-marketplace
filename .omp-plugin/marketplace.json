@@ -802,6 +802,28 @@
 			]
 		},
 		{
+			"name": "router-jev",
+			"source": "./packs/router-jev",
+			"pluginId": "router-jev",
+			"title": "Jev room router",
+			"icon": "packs/router-jev/assets/icon.svg",
+			"description": "Room router backed by TypeSafe's Jev: when a room post addresses nobody, one System One request decides which agent leads the reply and who else should chime in",
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-community",
+			"license": "MIT",
+			"category": "connector",
+			"tags": [
+				"rooms",
+				"router",
+				"typesafe",
+				"jev",
+				"provider"
+			]
+		},
+		{
 			"name": "slack",
 			"source": "./packs/slack",
 			"pluginId": "slack",
