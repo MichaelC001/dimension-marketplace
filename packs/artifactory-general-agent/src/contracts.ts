@@ -35,6 +35,8 @@ export interface ListedAgent {
 export interface AgentListing {
 	/** The workspace root agents are read from and written to; null = unknown. */
 	readonly workspace: string | null;
+	/** The project config dir agents live under (`.inso`, or the dev engine's `.inso-dev`). */
+	readonly configDir: string;
 	readonly agents: readonly ListedAgent[];
 	/** Things the human should know: an invalid file, a shadowed name, why pack
 	 *  agents are missing, why there is no workspace. */

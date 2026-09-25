@@ -40,7 +40,7 @@ import {
 } from "./agent-md.js";
 import type { ForgeOpened, ForgeProposed } from "./contracts.js";
 import { listParts } from "./parts.js";
-import { listAgents, SaveRefused, saveAgent } from "./store.js";
+import { listAgents, SaveRefused, saveAgent, WRITE_DIR } from "./store.js";
 
 export const FORGE_VIEW_URI = "ui://general-agent/index.html";
 /** The request `_meta` key the engine stamps the calling session under (`app-server.ts` `SESSION_META_KEY`). */
@@ -164,7 +164,7 @@ export async function createForgeServer(options: ForgeServerOptions = {}): Promi
 		{
 			title: "Forge",
 			description:
-				"Open the Forge in the artifact view: every General Agent in the workspace (and the ones installed packs ship) as a constellation the user can open, reshape and forge — or one agent, by name. Pass `workspace`: the absolute path of the directory you are working in; the Forge reads and writes `<workspace>/.inso/agents/<name>/agent.md` there. It writes nothing itself — the user forges.",
+				`Open the Forge in the artifact view: every General Agent in the workspace (and the ones installed packs ship) as a constellation the user can open, reshape and forge — or one agent, by name. Pass \`workspace\`: the absolute path of the directory you are working in; the Forge reads and writes \`<workspace>/${WRITE_DIR}/agents/<name>/agent.md\` there. It writes nothing itself — the user forges.`,
 			inputSchema: {
 				agent: agentName.optional().describe("open this agent directly"),
 				workspace: z.string().min(1).max(1024).optional().describe("absolute path of your working directory"),
@@ -240,7 +240,7 @@ export async function createForgeServer(options: ForgeServerOptions = {}): Promi
 	server.registerTool(
 		"save_agent",
 		{
-			description: "Write the draft to <workspace>/.inso/agents/<name>/agent.md. `create: true` refuses a name that is taken; `create: false` rewrites an existing editable workspace agent.",
+			description: `Write the draft to <workspace>/${WRITE_DIR}/agents/<name>/agent.md. \`create: true\` refuses a name that is taken; \`create: false\` rewrites an existing editable workspace agent.`,
 			inputSchema: { draft: draftSchema, create: z.boolean() },
 			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 			_meta: APP_ONLY,

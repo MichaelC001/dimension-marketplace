@@ -501,7 +501,7 @@ export function ForgeApp({ backend, incoming }: { backend: ForgeBackend; incomin
 									aria-label="What this agent is for"
 									onChange={event => updateDraft(current => ({ ...current, description: event.target.value }))}
 								/>
-								<span className="fg-path">{listing?.workspace ? `${listing.workspace.replace(/[\\/]$/, "")}/${manifestPath(draft)}` : manifestPath(draft)}</span>
+								<span className="fg-path">{listing?.workspace ? `${listing.workspace.replace(/[\\/]$/, "")}/${manifestPath(draft, listing.configDir)}` : manifestPath(draft)}</span>
 								<button type="button" className="fg-chip fg-panel-toggle" aria-expanded={panelOpen} onClick={() => setPanelOpen(open => !open)}>
 									{panelOpen ? "Hide charter & agent.md" : "Charter & agent.md"}
 								</button>

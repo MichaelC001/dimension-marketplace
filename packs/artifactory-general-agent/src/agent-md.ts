@@ -228,6 +228,6 @@ export function toAgentMd(draft: AgentDraft): string {
 }
 
 /** Where the file lands in a workspace — the path every discovery walks. */
-export function manifestPath(draft: Pick<AgentDraft, "name">): string {
-	return `.inso/agents/${draft.name || "<name>"}/agent.md`;
+export function manifestPath(draft: Pick<AgentDraft, "name">, configDir = ".inso"): string {
+	return `${configDir}/agents/${draft.name || "<name>"}/agent.md`;
 }

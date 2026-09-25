@@ -182,3 +182,30 @@ describe("list_agents", () => {
 		expect(await readFile(agentFile("tuned"), "utf8")).toBe(handTuned);
 	});
 });
+
+describe("the project config dir", () => {
+	// The engine's General Agents catalog reads `<workspace>/<PI_CONFIG_DIR>/agents`
+	// (`.inso-dev` on a dev engine). The live proof caught the Forge writing
+	// `.inso/agents` there, where that engine never listed it. WRITE_DIR is fixed
+	// at module load, so the rule is exercised in a child with the env set.
+	test("save_agent writes under PI_CONFIG_DIR, where the engine reads, and the listing reports it", async () => {
+		const ws = await mkdtemp(join(tmpdir(), "forge-cfgdir-"));
+		try {
+			const script = `
+				const { saveAgent, listAgents } = await import(${JSON.stringify(join(import.meta.dir, "../src/store.ts"))});
+				const { blankDraft } = await import(${JSON.stringify(join(import.meta.dir, "../src/agent-md.ts"))});
+				const draft = { ...blankDraft("k"), name: "dev-herald", description: "d", charter: "c" };
+				const saved = await saveAgent({ workspace: ${JSON.stringify(ws)}, draft, create: true, takenNames: new Set() });
+				const listing = await listAgents({ workspace: ${JSON.stringify(ws)}, pluginsDir: ${JSON.stringify(join(ws, "no-plugins"))} });
+				console.log(JSON.stringify({ rel: saved.relativePath, configDir: listing.configDir, names: listing.agents.map(a => a.name) }));`;
+			const child = Bun.spawnSync([process.execPath, "-e", script], { env: { ...process.env, PI_CONFIG_DIR: ".inso-dev" } });
+			const out = JSON.parse(new TextDecoder().decode(child.stdout).trim().split("\n").pop() ?? "{}");
+			expect(out.rel).toBe(".inso-dev/agents/dev-herald/agent.md");
+			expect(out.configDir).toBe(".inso-dev");
+			expect(out.names).toContain("dev-herald");
+			expect(await readdir(join(ws, ".inso-dev", "agents"))).toEqual(["dev-herald"]);
+		} finally {
+			await rm(ws, { recursive: true, force: true });
+		}
+	});
+});

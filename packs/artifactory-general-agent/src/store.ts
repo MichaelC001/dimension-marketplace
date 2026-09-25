@@ -31,8 +31,14 @@ import {
 } from "./agent-md.js";
 import type { AgentListing, ListedAgent, SaveOutcome } from "./contracts.js";
 
-/** The config dir the Forge writes to, then the legacy one it only reads. */
-const WRITE_DIR = ".inso";
+/**
+ * The project config dir the Forge writes to — the ENGINE's own rule
+ * (`getConfigDirName` in omp utils: `PI_CONFIG_DIR`, else `.inso` in the product),
+ * because the General Agents catalog reads `<workspace>/<that dir>/agents`. A
+ * hardcoded `.inso` wrote files a dev engine (`.inso-dev`) never listed. Then the
+ * legacy dir it only reads.
+ */
+export const WRITE_DIR = process.env.PI_CONFIG_DIR?.trim() || ".inso";
 const LEGACY_DIR = ".omp";
 
 /**
@@ -274,7 +280,7 @@ export async function listAgents(options: ListOptions): Promise<AgentListing> {
 			}
 		}
 	}
-	return { workspace: options.workspace, agents, notices };
+	return { workspace: options.workspace, configDir: WRITE_DIR, agents, notices };
 }
 
 // ── a draft → a file ────────────────────────────────────────────────────────
