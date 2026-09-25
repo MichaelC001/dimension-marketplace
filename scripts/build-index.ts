@@ -10,6 +10,7 @@
 // The pack files are the source of truth, per pack directory `packs/<name>/`:
 //   name / source / pluginId  ← the directory name + the manifest's plugin id
 //   title / icon / requires / channel / spaces  ← the pack MANIFEST
+//   generalAgents  ← `general-agents/<name>/agent.md` frontmatter
 //   version / author / license / repository  ← `package.json`
 //   description / category / tags  ← the merged metadata block
 //
@@ -148,6 +149,67 @@ function spaceListings(manifest: Json, packDir: string): Json[] | undefined {
 	return listings.length > 0 ? listings : undefined;
 }
 
+/** Where a pack ships its General Agents — the conversational identities a
+ *  session is opened AS. Deliberately NOT `agents/`: that directory is the open
+ *  subagent standard (what a `task` tool spawns), and the two must never be
+ *  confused by a reader walking the pack. */
+const GENERAL_AGENTS_DIR = "general-agents";
+const GENERAL_AGENT_FILE = "agent.md";
+
+/** The YAML frontmatter of an `agent.md`, or undefined when it has none. */
+function frontmatterOf(content: string): Json | undefined {
+	const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(content);
+	if (!match) return undefined;
+	return asObject(Bun.YAML.parse(match[1]));
+}
+
+/** The listing projection of every General Agent a pack ships, sorted by name,
+ *  or undefined when it ships none. Applies the SAME classification the engine
+ *  applies at load (directory form, manifest-bearing, no `autonomy.trigger`,
+ *  name = directory, boolean `defaultEnabled`) — but where the engine skips a
+ *  file that fails it, this THROWS: a skipped agent is a card that promises an
+ *  identity the installed pack never delivers, and the only place that can
+ *  still be loud about it is here. */
+function generalAgentListings(packRoot: string, packDir: string): Json[] | undefined {
+	const agentsRoot = join(packRoot, GENERAL_AGENTS_DIR);
+	if (!existsSync(agentsRoot)) return undefined;
+	const listings: Json[] = [];
+	for (const dirName of readdirSync(agentsRoot).sort()) {
+		const where = `${packDir}/${GENERAL_AGENTS_DIR}/${dirName}`;
+		if (!statSync(join(agentsRoot, dirName)).isDirectory()) {
+			throw new Error(`${where}: a General Agent is a directory \`<name>/${GENERAL_AGENT_FILE}\`, not a flat file`);
+		}
+		const file = join(agentsRoot, dirName, GENERAL_AGENT_FILE);
+		if (!existsSync(file)) throw new Error(`${where}: ${GENERAL_AGENT_FILE} is missing`);
+		const at = `${where}/${GENERAL_AGENT_FILE}`;
+		let frontmatter: Json | undefined;
+		try {
+			frontmatter = frontmatterOf(readFileSync(file, "utf8"));
+		} catch (error) {
+			throw new Error(`${at}: frontmatter is not valid YAML (${error instanceof Error ? error.message : String(error)})`);
+		}
+		if (!frontmatter) throw new Error(`${at}: YAML frontmatter is required`);
+		const name = frontmatter.name ?? dirName;
+		if (name !== dirName) {
+			throw new Error(`${at}: name ${JSON.stringify(name)} must equal its directory name "${dirName}"`);
+		}
+		if (frontmatter.specVersion === undefined) {
+			throw new Error(`${at}: specVersion is required (specVersion: 1)`);
+		}
+		if (asObject(frontmatter.autonomy)?.trigger !== undefined) {
+			throw new Error(`${at}: carries autonomy.trigger — a triggered agent is a Loop, not a General Agent`);
+		}
+		const description = asString(frontmatter.description);
+		if (!description) throw new Error(`${at}: a description is required`);
+		const defaultEnabled = frontmatter.defaultEnabled ?? true;
+		if (typeof defaultEnabled !== "boolean") {
+			throw new Error(`${at}: defaultEnabled must be a boolean`);
+		}
+		listings.push({ name: dirName, description, defaultEnabled });
+	}
+	return listings.length > 0 ? listings : undefined;
+}
+
 /** `{ dimension: "<semver range>" }` off a manifest, or undefined. The RANGE is
  *  not parsed here: the engine and the OMP manager are the two places that
  *  match it (`Bun.semver.satisfies`), and the validator is what refuses an
@@ -220,6 +282,8 @@ function entryFor(dir: string): Json {
 	if (channel) entry.channel = channel;
 	const spaces = spaceListings(manifest, packDir);
 	if (spaces) entry.spaces = spaces;
+	const generalAgents = generalAgentListings(packRoot, packDir);
+	if (generalAgents) entry.generalAgents = generalAgents;
 	return entry;
 }
 

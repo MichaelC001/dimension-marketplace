@@ -73,7 +73,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 `bun scripts/build-index.ts` walks `packs/*/` and writes one entry per pack from
 that pack's own files (`package.json` for version/description/author/license/
 category/tags, `dimension.plugin.json` for `pluginId`/`title`/`icon`/`requires`
-and the `spaces[]` listings, with asset paths rewritten catalog-root-relative).
+and the `spaces[]` listings, with asset paths rewritten catalog-root-relative,
+plus a `generalAgents[]` listing from each `general-agents/<name>/agent.md`).
 It writes the same bytes to `.omp-plugin/marketplace.json`, the read path every
 Dimension built before oh-my-pi #158 uses. `bun scripts/build-index.ts --check`
 is a CI gate: a pack edited without regenerating fails the build, so the shelf
@@ -102,6 +103,15 @@ engine and the plugin manager (`Bun.semver.satisfies`) — never by the UI. A ho
 whose version is unknown is never gated. Omit the field when your pack has no
 floor; `packs/build` is the worked example (it pins the bundled `general-chat`
 companion, which first ships in Dimension 0.10.5).
+
+## General Agents
+
+A pack may ship **General Agents** — the identity a session is opened as (a
+space's marketing lead, say) — at `general-agents/<name>/agent.md`. They are
+distinct from subagents, which stay in a pack's `agents/` under the open
+standard. A space scopes its picker with `generalAgents.list`; users turn agents
+on and off in Capabilities → General Agents. Start from `packs/example-agents`
+and see [CONTRIBUTING.md](CONTRIBUTING.md#contribute-a-general-agent).
 
 ## Status and honesty
 

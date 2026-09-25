@@ -20,6 +20,8 @@ function IndependentThreadSection(props) {
 				behaviour: props.behaviour,
 				signals: props.signals,
 				bridgedPresences: props.bridgedPresences,
+				skin: props.avatarSkin,
+				accent: props.avatarAccent,
 				size: config.vibrSize
 			}),
 			verb: props.verb,
