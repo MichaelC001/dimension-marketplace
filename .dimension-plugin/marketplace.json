@@ -36,6 +36,26 @@
 			]
 		},
 		{
+			"name": "artifactory-general-agent",
+			"source": "./packs/artifactory-general-agent",
+			"pluginId": "artifactory-general-agent",
+			"title": "The Forge",
+			"icon": "bot",
+			"description": "The Forge — build a General Agent by hand or by talking to your agent: a three.js orrery where skills, MCP servers, memory and lineage orbit the agent's core, and the agent.md is written live beside it.",
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-community",
+			"license": "MIT",
+			"category": "artifactory",
+			"tags": [
+				"general-agents",
+				"mcp-apps",
+				"agent-builder"
+			]
+		},
+		{
 			"name": "artifactory-system-monitor",
 			"source": "./packs/artifactory-system-monitor",
 			"pluginId": "artifactory-system-monitor",

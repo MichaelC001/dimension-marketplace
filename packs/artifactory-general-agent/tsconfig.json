@@ -1,0 +1,21 @@
+{
+	// TWO PROGRAMS, ONE PACK (the `@dimension/sdk` precedent: packages/sdk/
+	// tsconfig.agent.json). This one is the View and the modules it shares with
+	// the server — judged by this pack's own strictness. `tsconfig.server.json`
+	// is the server and its tests: `@dimension/sdk/general-agent` brings the
+	// fork's manifest parser, so OMP source enters that program and is judged by
+	// the ENGINE's rules, not this pack's. `check:types` chains both.
+	"compilerOptions": {
+		"target": "ES2022",
+		"module": "ESNext",
+		"moduleResolution": "Bundler",
+		"jsx": "react-jsx",
+		"strict": true,
+		"noUncheckedIndexedAccess": true,
+		"skipLibCheck": true,
+		"noEmit": true,
+		"lib": ["ES2022", "DOM", "DOM.Iterable"],
+		"types": ["bun", "vite/client"]
+	},
+	"include": ["app/view", "src/agent-md.ts", "src/contracts.ts"]
+}
