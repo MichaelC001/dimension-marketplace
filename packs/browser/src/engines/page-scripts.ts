@@ -1,4 +1,5 @@
 import type { BrowserRegion } from "../contracts.js";
+import type { ReportedIdentity } from "./launch.js";
 import type { FieldRead, PageRead } from "./types.js";
 /**
  * The page's text and interactive controls, each with a selector for
@@ -287,6 +288,14 @@ const LINK_HREFS_SCRIPT = (selector: string, limit: number): string[] => {
 	return out;
 };
 
+/** The browser's own answers to `navigator.userAgentData.getHighEntropyValues` (a secure context only). */
+const UA_HINTS_SCRIPT = (names: string[]): Promise<ReportedIdentity["hints"]> => {
+	// NavigatorUAData is not in TypeScript's DOM lib.
+	const uaNavigator = navigator as Navigator & { userAgentData?: { getHighEntropyValues(hints: string[]): Promise<ReportedIdentity["hints"]> } };
+	if (!uaNavigator.userAgentData) throw new Error("navigator.userAgentData is unavailable");
+	return uaNavigator.userAgentData.getHighEntropyValues(names);
+};
+
 export {
 	PAGE_TEXT_SCRIPT,
 	READ_PAGE_SCRIPT,
@@ -301,4 +310,5 @@ export {
 	FRAME_INSET_SCRIPT,
 	READ_FIELD_SCRIPT,
 	LINK_HREFS_SCRIPT,
+	UA_HINTS_SCRIPT,
 };
