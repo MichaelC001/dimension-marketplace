@@ -1,3 +1,5 @@
+import type { ConnectionObservations } from "./connection.js";
+
 /** What the browser IS. `abp` and `browser4` are refused with the reason (see engines/refused.ts). */
 export const BROWSER_ENGINES = ["chromium", "chrome-relay", "abp", "browser4"] as const;
 export type BrowserEngine = (typeof BROWSER_ENGINES)[number];
@@ -118,6 +120,13 @@ export interface PublishRecipe {
   composeUrl: string;
   /** CSS selector present only when the profile is signed in. */
   signedIn: string;
+  /**
+   * Optional CSS selector whose text names the signed-in account, read only
+   * once signed in: its last "@handle" ("Jane (CEO @acme) @jane" → "@jane";
+   * an email's "@domain" is not one), else its text. It goes into the
+   * connection report (connection.ts).
+   */
+  account?: string;
   /** 1-8 fields, each value at most 10 000 characters. */
   fields: PublishField[];
   /** CSS selector clicked exactly once, only on confirm. */
@@ -173,6 +182,8 @@ export interface PublishCheck {
   status: "not-signed-in" | "signed-in" | "failed";
   url: string;
   profile: string;
+  /** The account the recipe's `account` selector read, when signed in and it could. */
+  account?: string;
   error?: string;
 }
 /** Which browser a `chromium` View launched: the installed Chrome, else Edge, else a Chromium; `custom` is DIMENSION_BROWSER_EXECUTABLE. */
@@ -253,6 +264,10 @@ export interface BrowserRuntimePort {
   runTask(browserId: string, request: TaskRequest, onStep?: (step: TaskStep, run: TaskRun) => void): Promise<TaskRun>;
   cancelTask(browserId: string): Promise<TaskRun>;
   annotate(browserId: string, frameId: string, region: BrowserRegion, note: string): Promise<BrowserAnnotation>;
+  /** Every on-disk profile's persisted sign-in observations (connection.ts). */
+  connections(): Promise<ConnectionObservations>;
+  /** `listener` runs after each new observation is persisted and after a profile with observations is deleted. Returns the unsubscribe. */
+  onConnectionsChanged(listener: () => void): () => void;
   profiles(): Promise<string[]>;
   /** Settles a pending publish first. Refused (`publish_pending`) while one awaits confirmation, unless `caller` is "app". */
   close(browserId: string, caller?: ToolCaller): Promise<void>;

@@ -8,7 +8,12 @@
  * reaches it in its own title — `writes:<n> clicks:<n> secret:<n>` — so the
  * test can prove "nothing was typed" and "submit was clicked once" from the
  * live document. `?text=&rich=` prefill the fields as page content (no write
- * counted, no human input). `#post` POSTs both fields to `/submit` (the
+ * counted, no human input). `?shown=` renders its value as plain page text in
+ * `<p id="shown">`. `?controls` gives `#secret` the value "@typed" and adds a
+ * `<div id="controls">` holding a `<textarea id="draft">@drafted</textarea>`
+ * and a `<select id="pick">` whose selected option is "@picked" (form controls
+ * whose text a read must refuse, alone or inside the element read).
+ * `#post` POSTs both fields to `/submit` (the
  * server-side write count), then, per variant:
  *  - `nav`      navigates to `/alice/status/<n>` (the receipt is the tab URL);
  *  - `offsite`  navigates to the same path on the OTHER origin (`localhost`);
@@ -67,6 +72,15 @@ ${variant === "shadow-toast" ? `<toast-host id="toasthost"></toast-host>` : ""}
   var query = new URLSearchParams(location.search);
   if (query.has("text")) text.value = query.get("text");
   if (query.has("rich")) rich.innerText = query.get("rich");
+  if (query.has("shown")) {
+    var shown = document.createElement("p");
+    shown.id = "shown"; shown.textContent = query.get("shown");
+    document.body.appendChild(shown);
+  }
+  if (query.has("controls")) {
+    document.getElementById("secret").value = "@typed";
+    document.body.insertAdjacentHTML("beforeend", '<div id="controls"><textarea id="draft">@drafted</textarea><select id="pick"><option>@other</option><option selected>@picked</option></select></div>');
+  }
   text.addEventListener("input", function () {
     writes++; show();
     if (variant === "rewrite") text.value = text.value.toUpperCase();

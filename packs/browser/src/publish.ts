@@ -23,6 +23,7 @@
  */
 import { randomBytes } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
+import { accountFromText } from "./connection.js";
 import type { PublishCheck, PublishField, PublishMode, PublishRecipe, PublishRecord, PublishStatus } from "./contracts.js";
 import { PUBLISH_MODES } from "./contracts.js";
 import type { EngineDriver } from "./engines/types.js";
@@ -37,6 +38,8 @@ const MAX_URL_CHARS = 2_048;
 /** Receipt links read per snapshot; filtered by origin and path here, never in the page. */
 const MAX_RECEIPT_LINKS = 5_000;
 const SIGNED_IN_WAIT_MS = 15_000;
+/** Characters of the account element's text read; a handle is far shorter. */
+const MAX_ACCOUNT_TEXT_CHARS = 512;
 const RECEIPT_WAIT_MS = 20_000;
 /** How long a parked publish waits for a confirm. */
 export const PUBLISH_PENDING_MS = 10 * 60_000;
@@ -75,6 +78,8 @@ export interface Publication {
 	 * posted" (cancel, close, expiry, changed since shown) is `unknown`.
 	 */
 	sharedPage: boolean;
+	/** The signed-in account the recipe's `account` selector read before filling, if any. */
+	account?: string;
 	/** Resolves when the record reaches a terminal status. */
 	settled: PromiseWithResolvers<void>;
 }
@@ -118,6 +123,7 @@ export function validateRecipe(input: PublishRecipe): Recipe {
 		origin,
 		composeUrl: compose.href,
 		signedIn: selector(input.signedIn, "signedIn"),
+		...(input.account === undefined ? {} : { account: selector(input.account, "account") }),
 		fields,
 		submit: selector(input.submit, "submit"),
 		receipt: {
@@ -221,7 +227,9 @@ export async function prepare(driver: EngineDriver, profile: string, recipe: Rec
 	}
 	const url = await currentUrl(driver);
 	if (!signedIn) return { status: "not-signed-in", url, profile };
-	if (mode === "check") return { status: "signed-in", url, profile };
+	// Page text, read only once signed in, only for the connection report; never a reason to fail.
+	const account = recipe.account === undefined ? undefined : accountFromText(await driver.readText(recipe.account, MAX_ACCOUNT_TEXT_CHARS).catch(() => null));
+	if (mode === "check") return { status: "signed-in", url, profile, ...(account === undefined ? {} : { account }) };
 
 	for (const field of recipe.fields) {
 		const failed = (error: string): PublishCheck => ({ status: "failed", url, profile, error: `${error}; nothing was submitted` });
@@ -263,6 +271,7 @@ export async function prepare(driver: EngineDriver, profile: string, recipe: Rec
 		touchedWhilePending: false,
 		sharedPage: false,
 		settled: Promise.withResolvers<void>(),
+		...(account === undefined ? {} : { account }),
 	};
 }
 

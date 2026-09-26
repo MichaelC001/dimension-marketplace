@@ -38,6 +38,7 @@ import { FaviconCache } from "../favicon.js";
 import { MAX_FRAME_BYTES } from "../image.js";
 import { ActionNotDispatched, BrowserRuntimeError, fail } from "../store.js";
 import {
+	ELEMENT_TEXT_SCRIPT,
 	ELEMENTS_IN_REGION_SCRIPT,
 	FAVICON_HREF_SCRIPT,
 	FOCUSED_LEAF_SCRIPT,
@@ -688,7 +689,7 @@ class PuppeteerDriver implements EngineDriver {
 		await withTimeout(this.#type(this.#activeTab().page, selector, text, true), ACTION_TIMEOUT_MS + 5_000, "fill");
 	}
 
-	// Publish reads: hasElement/readField resolve the selector through
+	// Publish reads: hasElement/readField/readText resolve the selector through
 	// puppeteer's own query handlers (so `pierce/` reaches into shadow roots),
 	// then run a fixed data-only script on the element handle. linkHrefs runs one
 	// fixed script that takes the selector as a data argument (CSS or `pierce/`
@@ -705,6 +706,16 @@ class PuppeteerDriver implements EngineDriver {
 		if (handle === null) return { state: "absent" };
 		try {
 			return await handle.evaluate(READ_FIELD_SCRIPT);
+		} finally {
+			await handle.dispose().catch(() => undefined);
+		}
+	}
+
+	async readText(selector: string, limit: number): Promise<string | null> {
+		const handle = await this.#activeTab().page.$(selector);
+		if (handle === null) return null;
+		try {
+			return await handle.evaluate(ELEMENT_TEXT_SCRIPT, limit);
 		} finally {
 			await handle.dispose().catch(() => undefined);
 		}

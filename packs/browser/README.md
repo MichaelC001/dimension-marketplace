@@ -281,6 +281,12 @@ as data, so the pack's code stays platform-agnostic:
 - `mode: "check"` opens the compose page and reports `signed-in` or
   `not-signed-in`. Signed out, nothing is typed; sign in (the agent with
   `browser_act` / `browser_task`, or you in the View), then post.
+  With the optional `account` selector, a signed-in check also reads the
+  account from the page: the element's last `@handle` (`"Jane (CEO @acme)
+  @jane"` → `"@jane"`; an email's `@domain` is not one), else its text. A form
+  control is never read, and saved passwords are scrubbed from it like every
+  other page read. It is returned as `account` and goes into the
+  [connection report](#connection-report). `x-post` reads X's account switcher.
 - `mode: "post"` types each value, reads it back exactly, and parks the publish
   as `awaiting-confirmation`, recording the active tab and its URL as
   `composeUrl` (where the post goes). **Nothing is submitted.** The Browser View
@@ -310,7 +316,7 @@ as data, so the pack's code stays platform-agnostic:
   that keeps one `<p>` per line (ProseMirror, Quill, Lexical) reads as those
   lines joined by one newline, not the blank line `innerText` would put between
   paragraphs.
-- Recipe selectors (`signedIn`, `fields`, `submit`) accept any puppeteer
+- Recipe selectors (`signedIn`, `account`, `fields`, `submit`) accept any puppeteer
   selector syntax: CSS, `pierce/…` to reach into open shadow roots,
   `::-p-text(…)` and `::-p-xpath(…)`. `receipt.linkSelector` is read in-page,
   so it accepts CSS and `pierce/…` only.
@@ -348,6 +354,42 @@ modelled on; the fixture copies are in `test/platform-fixtures/`.
 user's comment that loads on the thread after submit could be taken as the
 receipt: the receipt checks the path shape and that the link was not on the
 page before submit, not who wrote the comment.
+
+## Connection report
+
+The pack's own MCP server tells the host which profiles are signed in to which
+sites, so a campaign board such as Traction's can say whether an account can
+post (dimension#1219). It sends the vendor notification
+`notifications/ai.insodimension/connection` with
+`{ report: { profiles: { <profile>: { sites: { <host>: { signedIn, account?, observedAt } } } } } }`
+(`observedAt` is epoch ms):
+
+- **Only observed, never derived.** A site is in the report only because a
+  `browser_publish` result said `signed-in` or `not-signed-in` (a check, or a
+  post that found the profile signed out) or a publish reached `posted`. A site
+  never observed is absent, never `signedIn: false`, and a publish that failed
+  before its sign-in check reached a verdict records nothing. A later
+  `not-signed-in` sets `signedIn: false`. Nothing is read from the saved
+  passwords.
+- **Hosts** are registrable domains under the Public Suffix List, private
+  suffixes included (`https://www.linkedin.com` → `linkedin.com`,
+  `https://shop.example.com.my` → `example.com.my`, `alice.github.io` stays
+  itself). A local app on an IP or `localhost` is keyed by that name.
+- **Never the relay.** The `relay` profile is your own Chrome and is never
+  observed or reported.
+- **Whole map every time.** Each report replaces the last one, so every send
+  carries every profile. It is sent once the host connects (from the
+  observations saved before), after every new observation, and when a profile
+  directory with observations is deleted. The host retracts it when the server
+  exits.
+- **Within the host's caps.** The report JSON stays at or under 64 KiB, with the
+  oldest observations dropped first, and an `account` over 256 UTF-8 bytes is
+  left out rather than cut into a different handle.
+- **Never in a tool's way.** A report that cannot be sent is logged. The tool
+  call that made the observation still returns its own result.
+
+Observations are saved per profile in `profiles/<profile>/connections.json`,
+next to that profile's Chrome data, at most 64 sites per profile.
 
 ## Tests and benchmark
 

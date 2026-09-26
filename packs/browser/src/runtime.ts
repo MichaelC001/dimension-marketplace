@@ -14,9 +14,15 @@
  *    relay (the human's own Chrome) is never closed.
  *  - Whole tasks run on upstream agent loops (jev, browser-use) against the
  *    same Chrome, through `task.ts`. We keep their progress, not their logic.
+ *  - Sign-in is only ever OBSERVED, never derived: a publish result that says
+ *    signed-in, not-signed-in or posted is persisted per profile (never for
+ *    the relay) and announced to `onConnectionsChanged` listeners, which the
+ *    server turns into its connection report (connection.ts).
  */
 import { randomBytes } from "node:crypto";
+import { existsSync, type FSWatcher, watch } from "node:fs";
 import { join } from "node:path";
+import { type ConnectionObservations, RELAY_PROFILE, siteHost } from "./connection.js";
 import type {
 	ActionResult,
 	BrowserAction,
@@ -79,13 +85,6 @@ const MAX_WIDTH = 2_560;
 const MIN_HEIGHT = 240;
 const MAX_HEIGHT = 2_000;
 const DEFAULT_VIEWPORT: Viewport = { width: 1_280, height: 800 };
-/**
- * Reserved slug for the chrome-relay engine. The relay is a single running
- * Chrome with a single cookie jar, so exactly one relay lease exists per
- * profile root and it is never confused with an isolated chromium profile.
- */
-const RELAY_PROFILE = "relay";
-
 const NAMED_KEYS: Record<string, true> = {
 	Enter: true,
 	Tab: true,
@@ -188,6 +187,11 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	 */
 	private readonly stranded = new Set<{ driver: EngineDriver; release: () => void }>();
 	private disposed = false;
+	private readonly connectionListeners = new Set<() => void>();
+	/** Profiles with persisted observations, so a deleted one is noticed and reported gone. */
+	private readonly observedProfiles = new Set<string>();
+	/** Watches the profile root for deletions while anyone listens for connection changes. */
+	private profileWatcher: FSWatcher | undefined;
 
 	constructor(options: BrowserRuntimeOptions = {}) {
 		this.options = options;
@@ -331,6 +335,9 @@ export class BrowserRuntime implements BrowserRuntimePort {
 
 	async dispose(): Promise<void> {
 		this.disposed = true;
+		this.connectionListeners.clear();
+		this.profileWatcher?.close();
+		this.profileWatcher = undefined;
 		// Let in-flight launches finish first: a browser born after we started
 		// disposing would otherwise outlive the runtime holding its lock.
 		await Promise.allSettled(this.opening.values());
@@ -481,6 +488,66 @@ export class BrowserRuntime implements BrowserRuntimePort {
 
 	async profiles(): Promise<string[]> {
 		return this.store.list();
+	}
+
+	async connections(): Promise<ConnectionObservations> {
+		return this.store.allConnections();
+	}
+
+	onConnectionsChanged(listener: () => void): () => void {
+		this.connectionListeners.add(listener);
+		if (this.profileWatcher === undefined && !this.disposed) {
+			for (const profile of Object.keys(this.store.allConnections())) this.observedProfiles.add(profile);
+			try {
+				// A deleted profile directory takes its observations with it; say so.
+				this.profileWatcher = watch(this.store.profilesRoot, { persistent: false }, () => {
+					const gone = [...this.observedProfiles].filter((profile) => !existsSync(this.store.profileDir(profile)));
+					if (gone.length === 0) return;
+					for (const profile of gone) this.observedProfiles.delete(profile);
+					this.connectionsChanged();
+				});
+				this.profileWatcher.on("error", () => {
+					this.profileWatcher?.close();
+					this.profileWatcher = undefined;
+				});
+			} catch (error) {
+				console.error("Browser profile watch failed; a deleted profile is reported at the next observation:", describe(error));
+			}
+		}
+		return () => {
+			this.connectionListeners.delete(listener);
+			if (this.connectionListeners.size > 0) return;
+			this.profileWatcher?.close();
+			this.profileWatcher = undefined;
+		};
+	}
+
+	/**
+	 * Persist what a publish just saw about `origin`'s sign-in on this profile
+	 * and tell the listeners. Never throws: a report is never worth failing
+	 * the publish that observed it.
+	 */
+	private observeConnection(profile: string, origin: string, signedIn: boolean, account: string | undefined): void {
+		const host = siteHost(origin);
+		if (profile === RELAY_PROFILE || host === null) return;
+		try {
+			this.store.recordConnection(profile, host, { signedIn, observedAt: Date.now(), ...(signedIn && account !== undefined ? { account } : {}) });
+		} catch (error) {
+			console.error("Browser sign-in observation was not saved:", describe(error));
+			return;
+		}
+		this.observedProfiles.add(profile);
+		this.connectionsChanged();
+	}
+
+	private connectionsChanged(): void {
+		for (const listener of this.connectionListeners) {
+			try {
+				listener();
+			} catch (error) {
+				console.error("Browser connection listener failed:", describe(error));
+			}
+		}
 	}
 
 	// -----------------------------------------------------------------------
@@ -743,7 +810,12 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				fail("publish_pending", "a publish is already awaiting confirmation; it must be posted, cancelled or expire first");
 			}
 			const outcome = await prepare(entry.driver, entry.profile, valid, selected);
-			if (!("record" in outcome)) return this.redact(entry, outcome);
+			if (!("record" in outcome)) {
+				// The account is page text: scrubbed like every other page read before it is persisted or reported.
+				const shown = this.redact(entry, outcome);
+				if (shown.status !== "failed") this.observeConnection(entry.profile, valid.origin, shown.status === "signed-in", shown.account);
+				return shown;
+			}
 			// The relay is the human's own Chrome: they can use this page without the runtime seeing it.
 			outcome.sharedPage = entry.engine === "chrome-relay";
 			if (preset !== undefined) outcome.record.preset = { name: preset.name, verified: preset.verified };
@@ -760,6 +832,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				fail("task_running", `a browser_task (${entry.task.agent}) owns this page; wait for it or cancel it`);
 			}
 			await confirm(entry.driver, publication);
+			if (publication.record.status === "posted") this.observeConnection(entry.profile, publication.recipe.origin, true, this.redact(entry, publication.account));
 			return this.redact(entry, publishRecord(publication));
 		});
 	}

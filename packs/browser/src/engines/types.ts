@@ -129,6 +129,8 @@ export interface EngineDriver {
   /** Publish reads on the active tab; none writes to the page. Selectors resolve like actions' (CSS or `pierce/`). */
   hasElement(selector: string): Promise<boolean>;
   readField(selector: string): Promise<FieldRead>;
+  /** The text of the first element matching `selector`, at most `limit` characters; null when absent or a form control (never read). */
+  readText(selector: string, limit: number): Promise<string | null>;
   /** Absolute hrefs of up to `limit` elements matching `selector` (CSS or `pierce/` only: it is read in-page). */
   linkHrefs(selector: string, limit: number): Promise<string[]>;
   /** Open a tab, make it the active one, and navigate it to `url` (already validated) when given. */
