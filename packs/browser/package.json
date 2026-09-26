@@ -26,6 +26,7 @@
     "@puppeteer/browsers": "3.2.2",
     "pngjs": "7.0.0",
     "puppeteer-core": "25.11.0",
+    "tldts": "7.4.15",
     "zod": "4.4.3"
   },
   "devDependencies": {

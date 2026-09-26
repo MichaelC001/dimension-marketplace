@@ -122,8 +122,9 @@ export interface PublishRecipe {
   signedIn: string;
   /**
    * Optional CSS selector whose text names the signed-in account, read only
-   * once signed in: its first "@handle" ("Alice @alice" → "@alice"), else its
-   * text. It goes into the connection report (connection.ts).
+   * once signed in: its last "@handle" ("Jane (CEO @acme) @jane" → "@jane";
+   * an email's "@domain" is not one), else its text. It goes into the
+   * connection report (connection.ts).
    */
   account?: string;
   /** 1-8 fields, each value at most 10 000 characters. */

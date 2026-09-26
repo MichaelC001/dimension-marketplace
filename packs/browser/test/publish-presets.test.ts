@@ -178,6 +178,17 @@ describeWithChrome("presets against their fixture copies", () => {
 	}
 
 	test(
+		"x-post reads the signed-in handle from X's account switcher, not a mention in the display name beside it",
+		async () => {
+			// The fixture's switcher is X's shape: the display name ("Alice, CEO @acme") and the handle ("@alice") in sibling elements.
+			const s = await session("preset-x-account", "x-post");
+			const checked = await s.call("browser_publish", { browserId: s.browserId, preset: { name: "x-post", values: ["hi"] }, mode: "check" });
+			expect(checked.structuredContent).toMatchObject({ status: "signed-in", account: "@alice" });
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
 		"a preset request that is not exactly right is refused before any page is touched",
 		async () => {
 			const s = await session("preset-refused", "reddit-comment");

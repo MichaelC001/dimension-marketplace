@@ -10,42 +10,13 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 // src/connection.ts
+import { getDomain } from "tldts";
 var PACK_CONNECTION_REPORT_METHOD = "notifications/ai.insodimension/connection";
 var PACK_CONNECTION_REPORT_MAX_BYTES = 64 * 1024;
 var PACK_CONNECTION_ACCOUNT_MAX_BYTES = 256;
 var RELAY_PROFILE = "relay";
-var TWO_LABEL_SUFFIXES = Object.fromEntries([
-  "co.uk",
-  "org.uk",
-  "ac.uk",
-  "gov.uk",
-  "me.uk",
-  "ltd.uk",
-  "plc.uk",
-  "com.au",
-  "net.au",
-  "org.au",
-  "edu.au",
-  "gov.au",
-  "co.nz",
-  "org.nz",
-  "co.jp",
-  "ne.jp",
-  "or.jp",
-  "co.kr",
-  "co.in",
-  "co.za",
-  "co.il",
-  "com.br",
-  "com.mx",
-  "com.ar",
-  "com.cn",
-  "com.hk",
-  "com.sg",
-  "com.tw",
-  "com.tr"
-].map((suffix) => [suffix, true]));
-var IPV4 = /^\d{1,3}(?:\.\d{1,3}){3}$/;
+var PSL = { allowPrivateDomains: true, extractHostname: false };
+var HANDLE = /(?<![\p{L}\p{N}_])@[\p{L}\p{N}_.-]+/gu;
 function siteHost(origin) {
   let url;
   try {
@@ -55,15 +26,11 @@ function siteHost(origin) {
   }
   if (url.protocol !== "https:" && url.protocol !== "http:") return null;
   const host = url.hostname.replace(/\.$/, "");
-  if (host.startsWith("[") || IPV4.test(host)) return host;
-  const labels = host.split(".");
-  if (labels.length < 2) return host;
-  const keep = labels.length >= 3 && TWO_LABEL_SUFFIXES[labels.slice(-2).join(".")] === true ? 3 : 2;
-  return labels.slice(-keep).join(".");
+  return getDomain(host, PSL) ?? host;
 }
 function accountFromText(text) {
   if (typeof text !== "string") return void 0;
-  const handle = /@[\p{L}\p{N}_.-]+/u.exec(text)?.[0];
+  const handle = text.match(HANDLE)?.at(-1);
   const account = handle ?? text.replace(/\s+/g, " ").trim();
   return account.length > 0 ? account : void 0;
 }
@@ -117,7 +84,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 
 // src/store.ts
 import { randomBytes } from "node:crypto";
-import { closeSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
+import { closeSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 var CONNECTIONS_FILE = "connections.json";
@@ -252,18 +219,32 @@ var ProfileStore = class {
     }
     return sites;
   }
-  /** Persist one observation of `host`, replacing that host's last one. Atomic: a crash leaves the old file or the new one. */
+  /**
+   * Persist one observation of `host`, replacing that host's last one. Atomic
+   * and durable: the staging file is fsynced before the rename, so a crash or
+   * power loss leaves the old file or the new one; a failure at any step
+   * removes the staging file.
+   */
   recordConnection(slug, host, observation) {
     const sites = { ...this.connections(slug), [host]: observation };
     const kept = Object.entries(sites).sort(([, a], [, b]) => b.observedAt - a.observedAt).slice(0, MAX_SITES_PER_PROFILE);
     const dir = this.ensureProfile(slug);
     const path = join(dir, CONNECTIONS_FILE);
     const staging = `${path}.${randomBytes(6).toString("hex")}.tmp`;
-    writeFileSync(staging, `${JSON.stringify({ sites: Object.fromEntries(kept) })}
-`, { mode: 384 });
+    let fd;
     try {
+      fd = openSync(staging, "w", 384);
+      writeSync(fd, `${JSON.stringify({ sites: Object.fromEntries(kept) })}
+`);
+      fsyncSync(fd);
+      closeSync(fd);
+      fd = void 0;
       renameSync(staging, path);
     } catch (error) {
+      if (fd !== void 0) try {
+        closeSync(fd);
+      } catch {
+      }
       try {
         unlinkSync(staging);
       } catch {
@@ -738,7 +719,7 @@ import { join as join6 } from "node:path";
 
 // src/credentials.ts
 import { randomInt } from "node:crypto";
-import { readFileSync as readFileSync2, renameSync as renameSync2, rmSync, writeFileSync as writeFileSync2 } from "node:fs";
+import { readFileSync as readFileSync2, renameSync as renameSync2, rmSync, writeFileSync } from "node:fs";
 import { join as join3 } from "node:path";
 var FILE = "credentials.json";
 var LOOPBACK = { localhost: true, "127.0.0.1": true, "[::1]": true };
@@ -804,7 +785,7 @@ function resolveCredential(profileDir, request) {
   const password = generatePassword();
   const tmp = `${file}.${process.pid}.tmp`;
   try {
-    writeFileSync2(tmp, `${JSON.stringify({ version: 1, origins: { ...origins, [origin]: password } })}
+    writeFileSync(tmp, `${JSON.stringify({ version: 1, origins: { ...origins, [origin]: password } })}
 `, { mode: 384 });
     renameSync2(tmp, file);
   } finally {
@@ -1125,7 +1106,16 @@ var READ_FIELD_SCRIPT = (el) => {
 };
 var ELEMENT_TEXT_SCRIPT = (el, limit) => {
   if (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT") return null;
-  return (el.textContent ?? "").slice(0, limit);
+  const walker = el.ownerDocument.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  const parts = [];
+  let length = 0;
+  for (let node = walker.nextNode(); node !== null && length < limit; node = walker.nextNode()) {
+    if (node.parentElement?.closest("textarea, select") != null) continue;
+    const text = node.nodeValue ?? "";
+    parts.push(text);
+    length += text.length + 1;
+  }
+  return parts.join(" ").slice(0, limit);
 };
 var LINK_HREFS_SCRIPT = (selector3, limit) => {
   const out = [];
@@ -1164,7 +1154,7 @@ var UA_HINTS_SCRIPT = (names) => {
 };
 
 // src/engines/launch.ts
-import { existsSync, mkdirSync as mkdirSync2, readFileSync as readFileSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { existsSync, mkdirSync as mkdirSync2, readFileSync as readFileSync3, writeFileSync as writeFileSync2 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
 import { join as join4 } from "node:path";
 import { Browser as CachedBrowser, detectBrowserPlatform, getInstalledBrowsers } from "@puppeteer/browsers";
@@ -1311,7 +1301,7 @@ function turnOffPasswordSaving(userDataDir) {
   const profile2 = prefs.profile && typeof prefs.profile === "object" ? prefs.profile : {};
   if (prefs.credentials_enable_service === false && profile2.password_manager_enabled === false) return;
   mkdirSync2(join4(userDataDir, "Default"), { recursive: true, mode: 448 });
-  writeFileSync3(path, JSON.stringify({ ...prefs, credentials_enable_service: false, profile: { ...profile2, password_manager_enabled: false } }), { mode: 384 });
+  writeFileSync2(path, JSON.stringify({ ...prefs, credentials_enable_service: false, profile: { ...profile2, password_manager_enabled: false } }), { mode: 384 });
 }
 
 // src/engines/puppeteer.ts
@@ -3256,8 +3246,9 @@ var BrowserRuntime = class {
       }
       const outcome = await prepare(entry.driver, entry.profile, valid, selected);
       if (!("record" in outcome)) {
-        if (outcome.status !== "failed") this.observeConnection(entry.profile, valid.origin, outcome.status === "signed-in", outcome.account);
-        return this.redact(entry, outcome);
+        const shown = this.redact(entry, outcome);
+        if (shown.status !== "failed") this.observeConnection(entry.profile, valid.origin, shown.status === "signed-in", shown.account);
+        return shown;
       }
       outcome.sharedPage = entry.engine === "chrome-relay";
       if (preset !== void 0) outcome.record.preset = { name: preset.name, verified: preset.verified };
@@ -3273,7 +3264,7 @@ var BrowserRuntime = class {
         fail("task_running", `a browser_task (${entry.task.agent}) owns this page; wait for it or cancel it`);
       }
       await confirm(entry.driver, publication);
-      if (publication.record.status === "posted") this.observeConnection(entry.profile, publication.recipe.origin, true, publication.account);
+      if (publication.record.status === "posted") this.observeConnection(entry.profile, publication.recipe.origin, true, this.redact(entry, publication.account));
       return this.redact(entry, publishRecord(publication));
     });
   }

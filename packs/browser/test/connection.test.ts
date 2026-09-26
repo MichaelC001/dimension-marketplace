@@ -10,13 +10,14 @@
  *  local publish fixture over an in-memory MCP transport, capturing what the
  *  host would receive.
  */
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import * as fs from "node:fs";
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { buildConnectionReport, type ConnectionReport, siteHost } from "../src/connection";
+import { accountFromText, buildConnectionReport, type ConnectionReport, siteHost } from "../src/connection";
 import type { PublishRecipe } from "../src/contracts";
 import { createBrowserServer } from "../src/server";
 import { ProfileStore } from "../src/store";
@@ -54,6 +55,39 @@ describe("connection report", () => {
 		});
 		// Keyed by the bare registrable domain, whatever subdomain the recipe's origin used.
 		expect([siteHost("https://www.linkedin.com"), siteHost("https://old.reddit.com"), siteHost("https://www.bbc.co.uk")]).toEqual(["linkedin.com", "reddit.com", "bbc.co.uk"]);
+	});
+
+	test("sites key by the Public Suffix List's registrable domain, so unrelated sites under one suffix never share an entry", () => {
+		expect(siteHost("https://shop.example.com.my")).toBe("example.com.my");
+		expect(siteHost("https://mobile.x.com")).toBe("x.com");
+		// Private suffixes too: two people's GitHub Pages are two sites.
+		expect(siteHost("https://alice.github.io")).toBe("alice.github.io");
+		expect(siteHost("https://bob.github.io")).toBe("bob.github.io");
+		// No registrable domain: the host itself.
+		expect([siteHost("http://localhost:3000"), siteHost("http://127.0.0.1:8080"), siteHost("http://[::1]:9")]).toEqual(["localhost", "127.0.0.1", "[::1]"]);
+	});
+
+	test("the account is the handle, not a mention in the display name nor an email's domain", () => {
+		expect(accountFromText("Jane Doe (CEO @acme)\n@janedoe")).toBe("@janedoe");
+		expect(accountFromText("alice@gmail.com")).toBe("alice@gmail.com");
+		expect(accountFromText("Signed in as alice@gmail.com")).toBe("Signed in as alice@gmail.com");
+	});
+
+	test("a write that fails before the rename leaves the last file and no staging file behind", async () => {
+		const store = await storeAt();
+		store.recordConnection("acme", "x.com", { signedIn: true, account: "@acme", observedAt: T });
+		const dir = store.profileDir("acme");
+		const before = await readFile(join(dir, "connections.json"), "utf8");
+		const fsync = spyOn(fs, "fsyncSync").mockImplementation(() => {
+			throw Object.assign(new Error("EIO: i/o error, fsync"), { code: "EIO" });
+		});
+		try {
+			expect(() => store.recordConnection("acme", "x.com", { signedIn: false, observedAt: T + 1 })).toThrow("EIO");
+		} finally {
+			fsync.mockRestore();
+		}
+		expect((await readdir(dir)).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+		expect(await readFile(join(dir, "connections.json"), "utf8")).toBe(before);
 	});
 
 	test("an observed sign-out sets signedIn:false, and a deleted profile leaves the report", async () => {
@@ -289,6 +323,53 @@ describeWithChrome("the server's connection report", () => {
 			} finally {
 				logged.mockRestore();
 			}
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"an account element showing a saved password in plain text never puts the password on disk or in a report, on a check or a post",
+		async () => {
+			const PASSWORD = "Zq7kPw9Lr4tVb8eXm2Na";
+			const s = await session("acme", (store) => {
+				fs.writeFileSync(join(store.ensureProfile("acme"), "credentials.json"), `${JSON.stringify({ version: 1, origins: { "https://example.com": PASSWORD } })}\n`);
+			});
+			const revealed = recipe(s.fixture, { composeUrl: s.fixture.url(`/compose?v=nav&shown=${encodeURIComponent(`Your new password is ${PASSWORD}`)}`), account: "#shown" });
+			const onDisk = (): string => fs.readFileSync(join(s.store.profileDir("acme"), "connections.json"), "utf8");
+
+			const checked = await s.call("browser_publish", { browserId: s.browserId, recipe: revealed, mode: "check" });
+			expect(checked.structuredContent?.status).toBe("signed-in");
+			expect(onDisk()).not.toContain(PASSWORD);
+			const afterCheck = await s.report((report) => report.profiles.acme !== undefined);
+			expect(afterCheck.profiles.acme.sites["127.0.0.1"].account).toBe("Your new password is [saved password]");
+
+			const mark = s.reports.length;
+			const seen = afterCheck.profiles.acme.sites["127.0.0.1"].observedAt;
+			const parked = await s.call("browser_publish", { browserId: s.browserId, recipe: revealed, mode: "post" });
+			const posted = await s.call("browser_publish_confirm", { browserId: s.browserId, publishId: parked.structuredContent?.publishId as string });
+			expect(posted.structuredContent?.status).toBe("posted");
+			expect(onDisk()).not.toContain(PASSWORD);
+			const afterPost = await s.report((report) => (report.profiles.acme?.sites["127.0.0.1"]?.observedAt ?? 0) > seen, mark);
+			expect(afterPost.profiles.acme.sites["127.0.0.1"].account).toBe("Your new password is [saved password]");
+			expect(JSON.stringify(s.reports)).not.toContain(PASSWORD);
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"an account selector on a form control (password input, textarea, select), or on an element holding them, reads nothing: no account in the result or the report",
+		async () => {
+			const s = await session("acme");
+			const controls = s.fixture.url("/compose?v=nav&controls");
+			for (const account of ["#secret", "#draft", "#pick", "#controls"]) {
+				const checked = await s.call("browser_publish", { browserId: s.browserId, recipe: recipe(s.fixture, { composeUrl: controls, account }), mode: "check" });
+				expect(checked.structuredContent?.status).toBe("signed-in");
+				expect(checked.structuredContent?.account).toBeUndefined();
+				expect(s.store.connections("acme")["127.0.0.1"]).not.toHaveProperty("account");
+			}
+			const report = await s.report((next) => next.profiles.acme !== undefined);
+			expect(report.profiles.acme.sites["127.0.0.1"]).not.toHaveProperty("account");
+			expect(JSON.stringify(s.reports)).not.toMatch(/@typed|@drafted|@picked|@other/);
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);

@@ -811,8 +811,10 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			}
 			const outcome = await prepare(entry.driver, entry.profile, valid, selected);
 			if (!("record" in outcome)) {
-				if (outcome.status !== "failed") this.observeConnection(entry.profile, valid.origin, outcome.status === "signed-in", outcome.account);
-				return this.redact(entry, outcome);
+				// The account is page text: scrubbed like every other page read before it is persisted or reported.
+				const shown = this.redact(entry, outcome);
+				if (shown.status !== "failed") this.observeConnection(entry.profile, valid.origin, shown.status === "signed-in", shown.account);
+				return shown;
 			}
 			// The relay is the human's own Chrome: they can use this page without the runtime seeing it.
 			outcome.sharedPage = entry.engine === "chrome-relay";
@@ -830,7 +832,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				fail("task_running", `a browser_task (${entry.task.agent}) owns this page; wait for it or cancel it`);
 			}
 			await confirm(entry.driver, publication);
-			if (publication.record.status === "posted") this.observeConnection(entry.profile, publication.recipe.origin, true, publication.account);
+			if (publication.record.status === "posted") this.observeConnection(entry.profile, publication.recipe.origin, true, this.redact(entry, publication.account));
 			return this.redact(entry, publishRecord(publication));
 		});
 	}

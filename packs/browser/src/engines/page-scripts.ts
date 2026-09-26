@@ -251,11 +251,23 @@ const READ_FIELD_SCRIPT = (el: Element): FieldRead => {
 };
 /**
  * The text an element shows, at most `limit` characters; null for a form
- * control, whose text is a value (a password's included) and never read here.
+ * control, whose text is a value (a password's included) and never read here,
+ * and a control nested inside contributes nothing. Its text nodes are joined
+ * by a space, so a display name and a handle in sibling spans read as two
+ * words ("Jane Doe @jane"), where `textContent` would glue them ("Jane Doe@jane").
  */
 const ELEMENT_TEXT_SCRIPT = (el: Element, limit: number): string | null => {
 	if (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT") return null;
-	return (el.textContent ?? "").slice(0, limit);
+	const walker = el.ownerDocument.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+	const parts: string[] = [];
+	let length = 0;
+	for (let node = walker.nextNode(); node !== null && length < limit; node = walker.nextNode()) {
+		if (node.parentElement?.closest("textarea, select") != null) continue;
+		const text = node.nodeValue ?? "";
+		parts.push(text);
+		length += text.length + 1;
+	}
+	return parts.join(" ").slice(0, limit);
 };
 /**
  * The absolute hrefs of up to `limit` elements matching `selector`. The

@@ -9,6 +9,7 @@
  * (runtime.ts records those, store.ts persists them per profile). A host never
  * observed is absent, never `signedIn: false`.
  */
+import { getDomain } from "tldts";
 
 /**
  * The vendor notification the host listens for on the pack's own MCP server.
@@ -51,18 +52,15 @@ export interface ConnectionReportParams {
 	[key: string]: unknown;
 }
 
-/** Second-level public suffixes under which the registrable domain takes three labels. */
-const TWO_LABEL_SUFFIXES: Readonly<Record<string, true>> = Object.fromEntries([
-	"co.uk", "org.uk", "ac.uk", "gov.uk", "me.uk", "ltd.uk", "plc.uk",
-	"com.au", "net.au", "org.au", "edu.au", "gov.au",
-	"co.nz", "org.nz", "co.jp", "ne.jp", "or.jp", "co.kr", "co.in", "co.za", "co.il",
-	"com.br", "com.mx", "com.ar", "com.cn", "com.hk", "com.sg", "com.tw", "com.tr",
-].map((suffix) => [suffix, true]));
-const IPV4 = /^\d{1,3}(?:\.\d{1,3}){3}$/;
+/** The registrable domain under the full Public Suffix List, private suffixes included ("alice.github.io" is a site). */
+const PSL = { allowPrivateDomains: true, extractHostname: false } as const;
+/** An "@handle" not preceded by a word character, so an email's "@domain" is never one. */
+const HANDLE = /(?<![\p{L}\p{N}_])@[\p{L}\p{N}_.-]+/gu;
 
 /**
- * The site key for an origin: its bare registrable domain ("https://www.x.com"
- * → "x.com", "https://old.reddit.com" → "reddit.com"). A host with no
+ * The site key for an origin: its bare registrable domain (eTLD+1 under the
+ * Public Suffix List: "https://www.x.com" → "x.com", "https://shop.example.com.my"
+ * → "example.com.my", "https://alice.github.io" → itself). A host with no
  * registrable domain (an IP literal, `localhost`) keys as itself. Null for
  * anything that is not an http(s) URL.
  */
@@ -75,21 +73,19 @@ export function siteHost(origin: string): string | null {
 	}
 	if (url.protocol !== "https:" && url.protocol !== "http:") return null;
 	const host = url.hostname.replace(/\.$/, "");
-	if (host.startsWith("[") || IPV4.test(host)) return host;
-	const labels = host.split(".");
-	if (labels.length < 2) return host;
-	const keep = labels.length >= 3 && TWO_LABEL_SUFFIXES[labels.slice(-2).join(".")] === true ? 3 : 2;
-	return labels.slice(-keep).join(".");
+	return getDomain(host, PSL) ?? host;
 }
 
 /**
- * The account name in the page text an account selector matched: its first
- * "@handle" token when it has one ("Alice @alice" → "@alice"), else the text
- * with whitespace collapsed. Undefined when there is nothing.
+ * The account name in the page text an account selector matched: its LAST
+ * "@handle" token when it has one (X renders the display name, which may hold
+ * a mention, before the handle: "Jane (CEO @acme) @jane" → "@jane"; an email's
+ * "@domain" is never a handle), else the text with whitespace collapsed.
+ * Undefined when there is nothing.
  */
 export function accountFromText(text: string | null | undefined): string | undefined {
 	if (typeof text !== "string") return undefined;
-	const handle = /@[\p{L}\p{N}_.-]+/u.exec(text)?.[0];
+	const handle = text.match(HANDLE)?.at(-1);
 	const account = handle ?? text.replace(/\s+/g, " ").trim();
 	return account.length > 0 ? account : undefined;
 }

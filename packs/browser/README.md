@@ -282,8 +282,10 @@ as data, so the pack's code stays platform-agnostic:
   `not-signed-in`. Signed out, nothing is typed; sign in (the agent with
   `browser_act` / `browser_task`, or you in the View), then post.
   With the optional `account` selector, a signed-in check also reads the
-  account from the page: the element's first `@handle` (`"Alice @alice"` →
-  `"@alice"`), else its text. It is returned as `account` and goes into the
+  account from the page: the element's last `@handle` (`"Jane (CEO @acme)
+  @jane"` → `"@jane"`; an email's `@domain` is not one), else its text. A form
+  control is never read, and saved passwords are scrubbed from it like every
+  other page read. It is returned as `account` and goes into the
   [connection report](#connection-report). `x-post` reads X's account switcher.
 - `mode: "post"` types each value, reads it back exactly, and parks the publish
   as `awaiting-confirmation`, recording the active tab and its URL as
@@ -369,8 +371,10 @@ post (dimension#1219). It sends the vendor notification
   before its sign-in check reached a verdict records nothing. A later
   `not-signed-in` sets `signedIn: false`. Nothing is read from the saved
   passwords.
-- **Hosts** are bare registrable domains (`https://www.linkedin.com` →
-  `linkedin.com`). A local app on an IP or `localhost` is keyed by that name.
+- **Hosts** are registrable domains under the Public Suffix List, private
+  suffixes included (`https://www.linkedin.com` → `linkedin.com`,
+  `https://shop.example.com.my` → `example.com.my`, `alice.github.io` stays
+  itself). A local app on an IP or `localhost` is keyed by that name.
 - **Never the relay.** The `relay` profile is your own Chrome and is never
   observed or reported.
 - **Whole map every time.** Each report replaces the last one, so every send

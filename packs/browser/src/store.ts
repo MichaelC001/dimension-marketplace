@@ -10,7 +10,7 @@
  *      profile takes them with it and a restart can report them again.
  */
 import { randomBytes } from "node:crypto";
-import { closeSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
+import { closeSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { ConnectionObservations, SiteObservation, SiteObservations } from "./connection.js";
@@ -180,18 +180,29 @@ export class ProfileStore {
 		return sites;
 	}
 
-	/** Persist one observation of `host`, replacing that host's last one. Atomic: a crash leaves the old file or the new one. */
+	/**
+	 * Persist one observation of `host`, replacing that host's last one. Atomic
+	 * and durable: the staging file is fsynced before the rename, so a crash or
+	 * power loss leaves the old file or the new one; a failure at any step
+	 * removes the staging file.
+	 */
 	recordConnection(slug: string, host: string, observation: SiteObservation): void {
 		const sites = { ...this.connections(slug), [host]: observation };
 		const kept = Object.entries(sites).sort(([, a], [, b]) => b.observedAt - a.observedAt).slice(0, MAX_SITES_PER_PROFILE);
 		const dir = this.ensureProfile(slug);
 		const path = join(dir, CONNECTIONS_FILE);
 		const staging = `${path}.${randomBytes(6).toString("hex")}.tmp`;
-		writeFileSync(staging, `${JSON.stringify({ sites: Object.fromEntries(kept) })}\n`, { mode: 0o600 });
+		let fd: number | undefined;
 		try {
+			fd = openSync(staging, "w", 0o600);
+			writeSync(fd, `${JSON.stringify({ sites: Object.fromEntries(kept) })}\n`);
+			fsyncSync(fd);
+			closeSync(fd);
+			fd = undefined;
 			renameSync(staging, path);
 		} catch (error) {
-			try { unlinkSync(staging); } catch { /* already gone */ }
+			if (fd !== undefined) try { closeSync(fd); } catch { /* already closed */ }
+			try { unlinkSync(staging); } catch { /* never created, or already gone */ }
 			throw error;
 		}
 	}
