@@ -667,7 +667,7 @@ function resolveCredential(profileDir, request) {
 
 // src/engines/puppeteer.ts
 import { createHash } from "node:crypto";
-import { mkdirSync as mkdirSync3 } from "node:fs";
+import { mkdirSync as mkdirSync3, statSync as statSync2 } from "node:fs";
 import { setTimeout as sleep2 } from "node:timers/promises";
 import puppeteer, { TimeoutError } from "puppeteer-core";
 
@@ -1005,36 +1005,37 @@ var LINK_HREFS_SCRIPT = (selector3, limit) => {
   }
   return out;
 };
+var UA_HINTS_SCRIPT = (names) => {
+  const uaNavigator = navigator;
+  if (!uaNavigator.userAgentData) throw new Error("navigator.userAgentData is unavailable");
+  return uaNavigator.userAgentData.getHighEntropyValues(names);
+};
 
 // src/engines/launch.ts
-import { existsSync, mkdirSync as mkdirSync2, readdirSync as readdirSync2, readFileSync as readFileSync3, writeFileSync as writeFileSync2 } from "node:fs";
+import { existsSync, mkdirSync as mkdirSync2, readFileSync as readFileSync3, writeFileSync as writeFileSync2 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
 import { join as join4 } from "node:path";
+import { Browser as CachedBrowser, detectBrowserPlatform, getInstalledBrowsers } from "@puppeteer/browsers";
 var systemProbe = {
   platform: process.platform,
+  browserPlatform: detectBrowserPlatform(),
   env: process.env,
   home: homedir2(),
-  exists: existsSync,
-  list: (dir) => {
-    try {
-      return readdirSync2(dir);
-    } catch {
-      return [];
-    }
-  }
+  exists: existsSync
 };
-function resolveBrowser(explicitPath, probe = systemProbe) {
+async function resolveBrowser(explicitPath, probe = systemProbe) {
   if (explicitPath) return { app: "custom", executablePath: explicitPath };
   const candidates = installedCandidates(probe);
   for (const app of ["chrome", "msedge", "chromium"]) {
     const executablePath = candidates[app].find((path) => probe.exists(path));
     if (executablePath) return { app, executablePath };
   }
-  const cached = puppeteerCacheChrome(probe);
-  if (cached) return { app: "chromium", executablePath: cached };
+  const cacheDir = probe.env.PUPPETEER_CACHE_DIR || join4(probe.home, ".cache", "puppeteer");
+  const cached = (await getInstalledBrowsers({ cacheDir })).filter((build) => build.browser === CachedBrowser.CHROME && build.platform === probe.browserPlatform && probe.exists(build.executablePath)).sort((a, b) => compareVersions(b.buildId, a.buildId))[0];
+  if (cached) return { app: "chromium", executablePath: cached.executablePath };
   return fail(
     "browser_not_found",
-    `No Google Chrome, Microsoft Edge or Chromium found (looked in ${Object.values(candidates).flat().join(", ")}). Install Google Chrome, or set DIMENSION_BROWSER_EXECUTABLE to a Chrome/Chromium binary.`
+    `No Google Chrome, Microsoft Edge or Chromium found (looked in ${Object.values(candidates).flat().join(", ")} and puppeteer's cache ${cacheDir}). Install Google Chrome, or set DIMENSION_BROWSER_EXECUTABLE to a Chrome/Chromium binary.`
   );
 }
 function installedCandidates(probe) {
@@ -1062,16 +1063,6 @@ function installedCandidates(probe) {
     chromium: ["/usr/bin/chromium", "/usr/bin/chromium-browser", "/snap/bin/chromium"]
   };
 }
-function puppeteerCacheChrome(probe) {
-  const root = join4(probe.env.PUPPETEER_CACHE_DIR || join4(probe.home, ".cache", "puppeteer"), "chrome");
-  const builds = probe.list(root).map((name) => ({ name, version: /-(\d+(?:\.\d+)*)$/.exec(name)?.[1] })).filter((build) => build.version !== void 0).sort((a, b) => compareVersions(b.version, a.version));
-  for (const { name } of builds) {
-    const platform = name.slice(0, name.lastIndexOf("-"));
-    const path = probe.platform === "win32" ? join4(root, name, `chrome-${platform}`, "chrome.exe") : probe.platform === "darwin" ? join4(root, name, `chrome-${platform}`, "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing") : join4(root, name, `chrome-${platform}`, "chrome");
-    if (probe.exists(path)) return path;
-  }
-  return void 0;
-}
 function compareVersions(a, b) {
   const left = a.split(".").map(Number);
   const right = b.split(".").map(Number);
@@ -1081,8 +1072,55 @@ function compareVersions(a, b) {
   }
   return 0;
 }
-function headfulUserAgent(userAgent) {
-  return userAgent.replace(/\bHeadlessChrome\//, "Chrome/");
+var UA_HINTS = ["architecture", "bitness", "brands", "formFactors", "fullVersionList", "mobile", "model", "platform", "platformVersion", "uaFullVersion", "wow64"];
+function headfulIdentity(reported) {
+  const { hints } = reported;
+  return {
+    userAgent: reported.userAgent.replace(/\bHeadlessChrome\//, "Chrome/"),
+    metadata: {
+      platform: hints.platform ?? "",
+      platformVersion: hints.platformVersion ?? "",
+      architecture: hints.architecture ?? "",
+      model: hints.model ?? "",
+      mobile: hints.mobile ?? false,
+      ...hints.brands ? { brands: hints.brands } : {},
+      ...hints.fullVersionList ? { fullVersionList: hints.fullVersionList } : {},
+      ...hints.uaFullVersion ? { fullVersion: hints.uaFullVersion } : {},
+      ...hints.bitness !== void 0 ? { bitness: hints.bitness } : {},
+      ...hints.wow64 !== void 0 ? { wow64: hints.wow64 } : {},
+      ...hints.formFactors ? { formFactors: hints.formFactors } : {}
+    }
+  };
+}
+function identityPerBinary(options) {
+  const known = /* @__PURE__ */ new Map();
+  const probe = async (executablePath) => {
+    const launched = await options.launch(executablePath);
+    try {
+      return headfulIdentity(await launched.read());
+    } finally {
+      await withTimeout(launched.close(), options.closeTimeoutMs, "identity probe close").catch(() => launched.kill());
+    }
+  };
+  return (executablePath) => {
+    const key = `${executablePath}\0${options.stamp(executablePath)}`;
+    let identity = known.get(key);
+    if (!identity) {
+      identity = probe(executablePath);
+      identity.catch(() => known.delete(key));
+      known.set(key, identity);
+    }
+    return identity;
+  };
+}
+async function withTimeout(promise, ms, label) {
+  const { promise: expired, reject } = Promise.withResolvers();
+  const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+  try {
+    return await Promise.race([promise, expired]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 function viewLaunchOptions(input) {
   return {
@@ -1176,31 +1214,57 @@ async function attachRelay(options, release) {
     throw err;
   }
 }
-var HEADFUL_USER_AGENTS = /* @__PURE__ */ new Map();
-function binaryUserAgent(executablePath) {
-  let known = HEADFUL_USER_AGENTS.get(executablePath);
-  if (!known) {
-    known = (async () => {
-      const probe = await puppeteer.launch({ executablePath, headless: true, timeout: LAUNCH_TIMEOUT_MS, args: CHROMIUM_ARGS });
-      try {
-        return headfulUserAgent(await probe.userAgent());
-      } finally {
-        await probe.close();
-      }
-    })();
-    known.catch(() => HEADFUL_USER_AGENTS.delete(executablePath));
-    HEADFUL_USER_AGENTS.set(executablePath, known);
+var PROBE_URL = "http://127.0.0.1/";
+var binaryIdentity = identityPerBinary({
+  stamp: (executablePath) => statSync2(executablePath).mtimeMs,
+  closeTimeoutMs: CLOSE_TIMEOUT_MS,
+  async launch(executablePath) {
+    const probe = await puppeteer.launch({ executablePath, headless: true, timeout: LAUNCH_TIMEOUT_MS, args: CHROMIUM_ARGS });
+    return {
+      async read() {
+        const page = (await probe.pages())[0] ?? await probe.newPage();
+        await page.setRequestInterception(true);
+        page.on("request", (request) => void request.respond({ status: 200, contentType: "text/html", body: "" }).catch(() => void 0));
+        await page.goto(PROBE_URL, { timeout: NAVIGATE_TIMEOUT_MS });
+        return { userAgent: await probe.userAgent(), hints: await page.evaluate(UA_HINTS_SCRIPT, [...UA_HINTS]) };
+      },
+      close: () => probe.close(),
+      kill: () => void probe.process()?.kill("SIGKILL")
+    };
   }
-  return known;
+});
+async function presentAsHeadful(browser, identity) {
+  const root = await browser.target().createCDPSession();
+  const connection = root.connection();
+  if (!connection) fail("launch_failed", "the browser's DevTools connection is gone");
+  const override = { userAgent: identity.userAgent, userAgentMetadata: identity.metadata };
+  const autoAttach = { autoAttach: true, waitForDebuggerOnStart: true, flatten: true };
+  const adopting = /* @__PURE__ */ new Set();
+  const watch = (session) => {
+    session.on("Target.attachedToTarget", ({ sessionId, waitingForDebugger }) => {
+      const child = connection.session(sessionId);
+      if (!child) return;
+      watch(child);
+      const sent = [child.send("Emulation.setUserAgentOverride", override), child.send("Target.setAutoAttach", autoAttach)];
+      if (waitingForDebugger) sent.push(child.send("Runtime.runIfWaitingForDebugger"));
+      const adopted = Promise.allSettled(sent);
+      adopting.add(adopted);
+      void adopted.then(() => adopting.delete(adopted));
+    });
+  };
+  watch(root);
+  await root.send("Target.setAutoAttach", autoAttach);
+  await withTimeout(Promise.all(adopting), ACTION_TIMEOUT_MS, "identity for the open tabs");
 }
 async function launchChromium(options, release) {
   const userDataDir = options.profileDirectory;
+  const headless = options.headless ?? true;
   let browser;
   let resolved;
+  let identity;
   try {
-    resolved = resolveBrowser(options.executablePath);
-    const headless = options.headless ?? true;
-    const userAgent = headless ? await binaryUserAgent(resolved.executablePath) : void 0;
+    resolved = await resolveBrowser(options.executablePath);
+    identity = headless ? await binaryIdentity(resolved.executablePath) : void 0;
     mkdirSync3(userDataDir, { recursive: true, mode: 448 });
     turnOffPasswordSaving(userDataDir);
     browser = await puppeteer.launch(viewLaunchOptions({
@@ -1209,7 +1273,7 @@ async function launchChromium(options, release) {
       headless,
       args: CHROMIUM_ARGS,
       timeout: LAUNCH_TIMEOUT_MS,
-      ...userAgent ? { userAgent } : {}
+      ...identity ? { userAgent: identity.userAgent } : {}
     }));
     console.error(`[browser] launched ${resolved.app} (${resolved.executablePath})${headless ? ", headless" : ""} on ${userDataDir}`);
   } catch (err) {
@@ -1218,6 +1282,7 @@ async function launchChromium(options, release) {
   }
   browser.process()?.once("exit", release);
   try {
+    if (identity) await presentAsHeadful(browser, identity);
     const pages = await browser.pages();
     if (pages.length === 0) pages.push(await browser.newPage());
     const tabs = [];
@@ -2072,15 +2137,6 @@ async function frameOffset(frame) {
 }
 function describe2(err) {
   return err instanceof Error ? err.message : String(err);
-}
-async function withTimeout(promise, ms, label) {
-  const { promise: expired, reject } = Promise.withResolvers();
-  const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
-  try {
-    return await Promise.race([promise, expired]);
-  } finally {
-    clearTimeout(timer);
-  }
 }
 
 // src/engines/refused.ts

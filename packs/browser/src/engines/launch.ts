@@ -1,7 +1,7 @@
 /**
  * How the Browser View's browser is launched: WHICH browser, and with what
- * switches. Pure functions over an injectable filesystem probe, so the choice
- * is testable without a browser.
+ * switches and identity. Pure functions over an injectable filesystem probe,
+ * so the choice is testable without a browser.
  *
  * The View's browser is meant to be the user's real browser, launched as that
  * browser: sites must see what they would see from the same Chrome started by
@@ -9,17 +9,19 @@
  * before any page loads) treat it as a bot:
  *  - headless Chrome names itself `HeadlessChrome/<v>` in the User-Agent;
  *    that token alone is what x.com's edge refuses. The View IS headless (it is
- *    a screencast inside the app, not a desktop window), so the browser is
- *    started with its own headful User-Agent — the same binary's string with
- *    the headless token taken out, read from that binary, never made up.
+ *    a screencast inside the app, not a desktop window), so the browser
+ *    presents the SAME binary's headful identity: its User-Agent with the
+ *    headless token taken out, and its own User-Agent client hints, both read
+ *    from that binary (`headfulIdentity`), never made up.
  *  - `--enable-automation`, puppeteer's "controlled by automated test
  *    software" switch, is dropped. Nothing is added in its place: no
  *    `AutomationControlled` blink switch, no stealth, no fingerprint changes.
  */
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { LaunchOptions } from "puppeteer-core";
+import { Browser as CachedBrowser, type BrowserPlatform, detectBrowserPlatform, getInstalledBrowsers } from "@puppeteer/browsers";
+import type { LaunchOptions, Protocol } from "puppeteer-core";
 import type { BrowserApp } from "../contracts.js";
 import { fail } from "../store.js";
 
@@ -31,45 +33,42 @@ export interface ResolvedBrowser {
 /** What `resolveBrowser` may look at; tests pass a fake. */
 export interface BrowserProbe {
 	platform: NodeJS.Platform;
+	/** puppeteer's name for this OS/arch, which picks the cached build; undefined when unsupported. */
+	browserPlatform: BrowserPlatform | undefined;
 	env: Record<string, string | undefined>;
 	home: string;
 	exists(path: string): boolean;
-	/** Entry names in `dir`; empty when it is missing or unreadable. */
-	list(dir: string): string[];
 }
 
 export const systemProbe: BrowserProbe = {
 	platform: process.platform,
+	browserPlatform: detectBrowserPlatform(),
 	env: process.env,
 	home: homedir(),
 	exists: existsSync,
-	list: (dir) => {
-		try {
-			return readdirSync(dir);
-		} catch {
-			return [];
-		}
-	},
 };
 
 /**
  * The browser the View launches: an explicit binary when configured; else the
  * installed Google Chrome; else Microsoft Edge; else a Chromium — a system
- * install, then the newest one puppeteer has downloaded into its cache.
- * Nothing is downloaded here.
+ * install, then the newest Chrome for Testing puppeteer has downloaded into
+ * its cache for this platform. Nothing is downloaded here.
  */
-export function resolveBrowser(explicitPath: string | undefined, probe: BrowserProbe = systemProbe): ResolvedBrowser {
+export async function resolveBrowser(explicitPath: string | undefined, probe: BrowserProbe = systemProbe): Promise<ResolvedBrowser> {
 	if (explicitPath) return { app: "custom", executablePath: explicitPath };
 	const candidates = installedCandidates(probe);
 	for (const app of ["chrome", "msedge", "chromium"] as const) {
 		const executablePath = candidates[app].find((path) => probe.exists(path));
 		if (executablePath) return { app, executablePath };
 	}
-	const cached = puppeteerCacheChrome(probe);
-	if (cached) return { app: "chromium", executablePath: cached };
+	const cacheDir = probe.env.PUPPETEER_CACHE_DIR || join(probe.home, ".cache", "puppeteer");
+	const cached = (await getInstalledBrowsers({ cacheDir }))
+		.filter((build) => build.browser === CachedBrowser.CHROME && build.platform === probe.browserPlatform && probe.exists(build.executablePath))
+		.sort((a, b) => compareVersions(b.buildId, a.buildId))[0];
+	if (cached) return { app: "chromium", executablePath: cached.executablePath };
 	return fail(
 		"browser_not_found",
-		`No Google Chrome, Microsoft Edge or Chromium found (looked in ${Object.values(candidates).flat().join(", ")}). ` +
+		`No Google Chrome, Microsoft Edge or Chromium found (looked in ${Object.values(candidates).flat().join(", ")} and puppeteer's cache ${cacheDir}). ` +
 			`Install Google Chrome, or set DIMENSION_BROWSER_EXECUTABLE to a Chrome/Chromium binary.`,
 	);
 }
@@ -100,25 +99,6 @@ function installedCandidates(probe: BrowserProbe): Record<"chrome" | "msedge" | 
 	};
 }
 
-/** Newest Chrome for Testing in puppeteer's download cache (`<cache>/chrome/<platform>-<version>/…`). */
-function puppeteerCacheChrome(probe: BrowserProbe): string | undefined {
-	const root = join(probe.env.PUPPETEER_CACHE_DIR || join(probe.home, ".cache", "puppeteer"), "chrome");
-	const builds = probe.list(root)
-		.map((name) => ({ name, version: /-(\d+(?:\.\d+)*)$/.exec(name)?.[1] }))
-		.filter((build): build is { name: string; version: string } => build.version !== undefined)
-		.sort((a, b) => compareVersions(b.version, a.version));
-	for (const { name } of builds) {
-		const platform = name.slice(0, name.lastIndexOf("-"));
-		const path = probe.platform === "win32"
-			? join(root, name, `chrome-${platform}`, "chrome.exe")
-			: probe.platform === "darwin"
-				? join(root, name, `chrome-${platform}`, "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing")
-				: join(root, name, `chrome-${platform}`, "chrome");
-		if (probe.exists(path)) return path;
-	}
-	return undefined;
-}
-
 function compareVersions(a: string, b: string): number {
 	const left = a.split(".").map(Number);
 	const right = b.split(".").map(Number);
@@ -129,15 +109,121 @@ function compareVersions(a: string, b: string): number {
 	return 0;
 }
 
-/** The User-Agent the same binary sends when it is not headless. */
-export function headfulUserAgent(userAgent: string): string {
-	return userAgent.replace(/\bHeadlessChrome\//, "Chrome/");
+/** The high-entropy User-Agent client hints a page may ask for; `headfulIdentity` replays the binary's own answers. */
+export const UA_HINTS = ["architecture", "bitness", "brands", "formFactors", "fullVersionList", "mobile", "model", "platform", "platformVersion", "uaFullVersion", "wow64"] as const;
+
+/** What the binary itself reports: its User-Agent and `navigator.userAgentData.getHighEntropyValues(UA_HINTS)`. */
+export interface ReportedIdentity {
+	userAgent: string;
+	hints: {
+		brands?: Protocol.Emulation.UserAgentBrandVersion[];
+		fullVersionList?: Protocol.Emulation.UserAgentBrandVersion[];
+		uaFullVersion?: string;
+		platform?: string;
+		platformVersion?: string;
+		architecture?: string;
+		model?: string;
+		mobile?: boolean;
+		bitness?: string;
+		wow64?: boolean;
+		formFactors?: string[];
+	};
+}
+
+/** The identity a headless View presents: the binary's own, as its headful build reports it. */
+export interface HeadfulIdentity {
+	userAgent: string;
+	metadata: Protocol.Emulation.UserAgentMetadata;
 }
 
 /**
- * Puppeteer launch options for the View's browser. `userAgent` is this
- * binary's own headful string (`headfulUserAgent` of what it reports), set only
- * when headless: a headful Chrome already sends it.
+ * The same binary's headful identity from what it reported headless. Only the
+ * `HeadlessChrome/` product token differs between the two; the client hints
+ * already name the real brand ("Google Chrome", "Microsoft Edge") and are
+ * passed through as reported.
+ */
+export function headfulIdentity(reported: ReportedIdentity): HeadfulIdentity {
+	const { hints } = reported;
+	return {
+		userAgent: reported.userAgent.replace(/\bHeadlessChrome\//, "Chrome/"),
+		metadata: {
+			platform: hints.platform ?? "",
+			platformVersion: hints.platformVersion ?? "",
+			architecture: hints.architecture ?? "",
+			model: hints.model ?? "",
+			mobile: hints.mobile ?? false,
+			...(hints.brands ? { brands: hints.brands } : {}),
+			...(hints.fullVersionList ? { fullVersionList: hints.fullVersionList } : {}),
+			...(hints.uaFullVersion ? { fullVersion: hints.uaFullVersion } : {}),
+			...(hints.bitness !== undefined ? { bitness: hints.bitness } : {}),
+			...(hints.wow64 !== undefined ? { wow64: hints.wow64 } : {}),
+			...(hints.formFactors ? { formFactors: hints.formFactors } : {}),
+		},
+	};
+}
+
+/** A throwaway launch of one binary, read for its identity and then retired. */
+export interface IdentityProbe {
+	read(): Promise<ReportedIdentity>;
+	close(): Promise<void>;
+	/** Hard stop, for a close that failed or hung. */
+	kill(): void;
+}
+
+/**
+ * The headful identity of each browser binary, probed once per build: keyed
+ * on the path AND the binary's `stamp` (its mtime), because Chrome, Edge and
+ * Chromium update in place at the same path, and a stale identity would name
+ * the old version beside the new binary's own. Failures are not cached.
+ *
+ * The probe's close is bounded by `closeTimeoutMs`, and a close that fails or
+ * hangs kills the probe. What was read stands whatever the close outcome: a
+ * probe that will not shut down cleanly must not fail the open it was read for.
+ */
+export function identityPerBinary(options: {
+	launch(executablePath: string): Promise<IdentityProbe>;
+	stamp(executablePath: string): number;
+	closeTimeoutMs: number;
+}): (executablePath: string) => Promise<HeadfulIdentity> {
+	const known = new Map<string, Promise<HeadfulIdentity>>();
+	const probe = async (executablePath: string): Promise<HeadfulIdentity> => {
+		const launched = await options.launch(executablePath);
+		try {
+			return headfulIdentity(await launched.read());
+		} finally {
+			await withTimeout(launched.close(), options.closeTimeoutMs, "identity probe close").catch(() => launched.kill());
+		}
+	};
+	return (executablePath) => {
+		const key = `${executablePath}\0${options.stamp(executablePath)}`;
+		let identity = known.get(key);
+		if (!identity) {
+			identity = probe(executablePath);
+			identity.catch(() => known.delete(key));
+			known.set(key, identity);
+		}
+		return identity;
+	};
+}
+
+/** Bound a call that would otherwise hang the caller forever. */
+export async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+	const { promise: expired, reject } = Promise.withResolvers<never>();
+	const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+	try {
+		return await Promise.race([promise, expired]);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+/**
+ * Puppeteer launch options for the View's browser. `userAgent` (headless only;
+ * a headful Chrome already sends its own) goes in as `--user-agent`: that
+ * switch is the only thing that reaches shared and service workers'
+ * `navigator.userAgent` and a service worker's script fetch. It also blanks
+ * the high-entropy client hints, so the driver restores them per target with
+ * the binary's own metadata (`presentAsHeadful` in puppeteer.ts).
  */
 export function viewLaunchOptions(input: {
 	browser: ResolvedBrowser;

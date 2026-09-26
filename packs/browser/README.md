@@ -119,15 +119,35 @@ The View's browser is your real browser, started the way you would start it,
 so sites treat it as one:
 
 - **Which browser.** The installed Google Chrome; if there is none, Microsoft
-  Edge; then a Chromium (a system install, then the newest one puppeteer has
-  already downloaded). Nothing is downloaded. `browser_state.app` says which
-  (`chrome`, `msedge`, `chromium`, `custom`), and the server logs the path.
-- **Headless, with its own User-Agent.** The View is a live picture inside the
+  Edge; then a Chromium (a system install, then the newest Chrome for Testing
+  puppeteer has already downloaded for this platform). Nothing is downloaded.
+  `browser_state.app` says which (`chrome`, `msedge`, `chromium`, `custom`),
+  and the server logs the path.
+- **Headless, with its own identity.** The View is a live picture inside the
   app, not a desktop window, so the browser runs headless. Headless Chrome
   calls itself `HeadlessChrome` in its User-Agent, and some sites refuse that
-  outright (x.com answers 403 before any page loads). The browser is started
-  with the User-Agent the same binary sends when it has a window, read from
-  that binary once. Client hints and workers match it.
+  outright (x.com answers 403 before any page loads). The View replays what
+  the same binary reports, changing only that token:
+  - A throwaway headless launch of the binary reads its User-Agent and its
+    own `navigator.userAgentData.getHighEntropyValues` (brands, full version
+    list, full version, platform, platform version, architecture, bitness,
+    model, mobile, wow64). It runs once per build: the cache is keyed on the
+    path and the binary's modification time, so an in-place update is read
+    again. Nothing is made up, and a failed read is not cached.
+  - The User-Agent goes in as `--user-agent`. That switch alone would blank
+    every high-entropy client hint, so the binary's hints are put back with
+    `Emulation.setUserAgentOverride` on every target the View owns: tabs,
+    popups, out-of-process frames, and dedicated, shared and service
+    workers. Each new target is held at start until its override is set.
+  - A page therefore sees the same thing it would see from that Chrome with a
+    window: the `user-agent` header, `Sec-CH-UA`, `-Mobile`, `-Platform`,
+    `-Full-Version-List`, `-Platform-Version`, `-Arch` and `-Bitness`, plus
+    `navigator.userAgent` and every value above, in the page, a cross-site
+    iframe and each kind of worker. The pack's tests check this against the
+    binary itself (`test/launch.test.ts`). Requests that start inside a
+    worker, and worker script fetches, carry the User-Agent and no `Sec-CH-UA`
+    headers. The binary sends none there either (checked with and without a
+    window on Chrome 154), so there is nothing to replay.
 - **No automation switch.** puppeteer's `--enable-automation` is dropped.
   Nothing is added to hide the browser: no stealth plugin, no fingerprint
   changes, no `AutomationControlled` switch. `navigator.webdriver` stays

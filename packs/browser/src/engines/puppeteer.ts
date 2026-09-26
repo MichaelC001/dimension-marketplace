@@ -29,7 +29,7 @@
  * `page-scripts.ts`. Caller-supplied JavaScript never reaches `evaluate`.
  */
 import { createHash } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, statSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 import puppeteer, { TimeoutError } from "puppeteer-core";
 import type { Browser, BrowserContext, CDPSession, ElementHandle, Frame, HTTPRequest, HTTPResponse, JSHandle, KeyInput, Page, Protocol, Target } from "puppeteer-core";
@@ -51,8 +51,9 @@ import {
 	SAVED_PASSWORD_TARGET_SCRIPT,
 	SELECT_ALL_SCRIPT,
 	TYPE_TARGET_SCRIPT,
+	UA_HINTS_SCRIPT,
 } from "./page-scripts.js";
-import { headfulUserAgent, type ResolvedBrowser, resolveBrowser, turnOffPasswordSaving, viewLaunchOptions } from "./launch.js";
+import { type HeadfulIdentity, identityPerBinary, type ResolvedBrowser, resolveBrowser, turnOffPasswordSaving, UA_HINTS, viewLaunchOptions, withTimeout } from "./launch.js";
 import type { EngineDriver, EngineOptions, EngineState, FieldRead, LiveFrame, PageRead, PageReader, PasswordSource, PerformOutcome, ReadOutcome, ReadPolicy } from "./types.js";
 
 const NAVIGATE_TIMEOUT_MS = 30_000;
@@ -165,44 +166,84 @@ async function attachRelay(options: EngineOptions, release: () => void): Promise
 	}
 }
 
-/**
- * Headful User-Agent per browser binary, read once from that binary: a
- * throwaway headless launch (no profile of ours) reports its User-Agent, and
- * the headless token is taken out. Failures are not cached.
- */
-const HEADFUL_USER_AGENTS = new Map<string, Promise<string>>();
+/** The probe's page: loopback is a secure context (`userAgentData` needs one); the request is answered in-browser and never sent. */
+const PROBE_URL = "http://127.0.0.1/";
 
-function binaryUserAgent(executablePath: string): Promise<string> {
-	let known = HEADFUL_USER_AGENTS.get(executablePath);
-	if (!known) {
-		known = (async () => {
-			const probe = await puppeteer.launch({ executablePath, headless: true, timeout: LAUNCH_TIMEOUT_MS, args: CHROMIUM_ARGS });
-			try {
-				return headfulUserAgent(await probe.userAgent());
-			} finally {
-				await probe.close();
-			}
-		})();
-		known.catch(() => HEADFUL_USER_AGENTS.delete(executablePath));
-		HEADFUL_USER_AGENTS.set(executablePath, known);
-	}
-	return known;
+/**
+ * Headful identity per browser binary, read from that binary: a throwaway
+ * headless launch (no profile of ours) reports its User-Agent and client
+ * hints, and `headfulIdentity` takes the headless token out.
+ */
+const binaryIdentity = identityPerBinary({
+	stamp: (executablePath) => statSync(executablePath).mtimeMs,
+	closeTimeoutMs: CLOSE_TIMEOUT_MS,
+	async launch(executablePath) {
+		const probe = await puppeteer.launch({ executablePath, headless: true, timeout: LAUNCH_TIMEOUT_MS, args: CHROMIUM_ARGS });
+		return {
+			async read() {
+				const page = (await probe.pages())[0] ?? (await probe.newPage());
+				await page.setRequestInterception(true);
+				page.on("request", (request) => void request.respond({ status: 200, contentType: "text/html", body: "" }).catch(() => undefined));
+				await page.goto(PROBE_URL, { timeout: NAVIGATE_TIMEOUT_MS });
+				return { userAgent: await probe.userAgent(), hints: await page.evaluate(UA_HINTS_SCRIPT, [...UA_HINTS]) };
+			},
+			close: () => probe.close(),
+			kill: () => void probe.process()?.kill("SIGKILL"),
+		};
+	},
+});
+
+/**
+ * Give every target of a headless View the binary's headful identity: pages,
+ * popups, out-of-process frames, and dedicated, shared and service workers,
+ * existing and future. The `--user-agent` switch blanks the high-entropy
+ * client hints; `Emulation.setUserAgentOverride` with the binary's own
+ * metadata restores them. Auto-attach holds each new target before it runs;
+ * the override, the nested auto-attach and the release are sent in that order
+ * on the target's own session, so nothing leaves before its override, and a
+ * paused target is always released (a service worker answers only once it
+ * runs, so nothing waits on a reply before the release).
+ */
+async function presentAsHeadful(browser: Browser, identity: HeadfulIdentity): Promise<void> {
+	const root = await browser.target().createCDPSession();
+	const connection = root.connection();
+	if (!connection) fail("launch_failed", "the browser's DevTools connection is gone");
+	const override = { userAgent: identity.userAgent, userAgentMetadata: identity.metadata };
+	const autoAttach = { autoAttach: true, waitForDebuggerOnStart: true, flatten: true };
+	const adopting = new Set<Promise<unknown>>();
+	const watch = (session: CDPSession): void => {
+		session.on("Target.attachedToTarget", ({ sessionId, waitingForDebugger }: Protocol.Target.AttachedToTargetEvent) => {
+			const child = connection.session(sessionId);
+			if (!child) return;
+			watch(child);
+			const sent = [child.send("Emulation.setUserAgentOverride", override), child.send("Target.setAutoAttach", autoAttach)];
+			if (waitingForDebugger) sent.push(child.send("Runtime.runIfWaitingForDebugger"));
+			const adopted = Promise.allSettled(sent);
+			adopting.add(adopted);
+			void adopted.then(() => adopting.delete(adopted));
+		});
+	};
+	watch(root);
+	await root.send("Target.setAutoAttach", autoAttach);
+	// The targets already open (the first tab) carry the identity before any use.
+	await withTimeout(Promise.all(adopting), ACTION_TIMEOUT_MS, "identity for the open tabs");
 }
 
 /** Launch the user's browser (launch.ts decides which, and how) on the persistent profile directory this driver owns. */
 async function launchChromium(options: EngineOptions, release: () => void): Promise<EngineDriver> {
 	const userDataDir = options.profileDirectory;
+	const headless = options.headless ?? true;
 	let browser: Browser;
 	let resolved: ResolvedBrowser;
+	let identity: HeadfulIdentity | undefined;
 	try {
-		resolved = resolveBrowser(options.executablePath);
-		const headless = options.headless ?? true;
-		const userAgent = headless ? await binaryUserAgent(resolved.executablePath) : undefined;
+		resolved = await resolveBrowser(options.executablePath);
+		identity = headless ? await binaryIdentity(resolved.executablePath) : undefined;
 		mkdirSync(userDataDir, { recursive: true, mode: 0o700 });
 		turnOffPasswordSaving(userDataDir);
 		browser = await puppeteer.launch(viewLaunchOptions({
 			browser: resolved, userDataDir, headless, args: CHROMIUM_ARGS, timeout: LAUNCH_TIMEOUT_MS,
-			...(userAgent ? { userAgent } : {}),
+			...(identity ? { userAgent: identity.userAgent } : {}),
 		}));
 		console.error(`[browser] launched ${resolved.app} (${resolved.executablePath})${headless ? ", headless" : ""} on ${userDataDir}`);
 	} catch (err) {
@@ -219,6 +260,7 @@ async function launchChromium(options: EngineOptions, release: () => void): Prom
 	browser.process()?.once("exit", release);
 
 	try {
+		if (identity) await presentAsHeadful(browser, identity);
 		const pages = await browser.pages();
 		if (pages.length === 0) pages.push(await browser.newPage());
 		const tabs: Tab[] = [];
@@ -1298,15 +1340,4 @@ async function frameOffset(frame: Frame): Promise<{ x: number; y: number } | nul
 
 function describe(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
-}
-
-/** Bound a call that would otherwise hang the caller forever. */
-async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
-	const { promise: expired, reject } = Promise.withResolvers<never>();
-	const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
-	try {
-		return await Promise.race([promise, expired]);
-	} finally {
-		clearTimeout(timer);
-	}
 }

@@ -23,6 +23,7 @@
   "dependencies": {
     "@modelcontextprotocol/ext-apps": "1.7.5",
     "@modelcontextprotocol/sdk": "1.29.0",
+    "@puppeteer/browsers": "3.2.2",
     "pngjs": "7.0.0",
     "puppeteer-core": "25.11.0",
     "zod": "4.4.3"
