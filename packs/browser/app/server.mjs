@@ -1094,6 +1094,7 @@ function headfulIdentity(reported) {
 }
 function identityPerBinary(options) {
   const known = /* @__PURE__ */ new Map();
+  const buildOf = (executablePath) => `${executablePath}\0${options.stamp(executablePath)}`;
   const probe = async (executablePath) => {
     const launched = await options.launch(executablePath);
     try {
@@ -1102,8 +1103,8 @@ function identityPerBinary(options) {
       await withTimeout(launched.close(), options.closeTimeoutMs, "identity probe close").catch(() => launched.kill());
     }
   };
-  return (executablePath) => {
-    const key = `${executablePath}\0${options.stamp(executablePath)}`;
+  const of = (executablePath) => {
+    const key = buildOf(executablePath);
     let identity = known.get(key);
     if (!identity) {
       identity = probe(executablePath);
@@ -1111,6 +1112,15 @@ function identityPerBinary(options) {
       known.set(key, identity);
     }
     return identity;
+  };
+  return {
+    of,
+    async confirm(executablePath, identity, runningVersion) {
+      if (identity.metadata.fullVersion === void 0 || identity.metadata.fullVersion === runningVersion) return identity;
+      const key = buildOf(executablePath);
+      if (await known.get(key)?.catch(() => void 0) === identity) known.delete(key);
+      return await of(executablePath);
+    }
   };
 }
 async function withTimeout(promise, ms, label) {
@@ -1215,7 +1225,7 @@ async function attachRelay(options, release) {
   }
 }
 var PROBE_URL = "http://127.0.0.1/";
-var binaryIdentity = identityPerBinary({
+var binaryIdentities = identityPerBinary({
   stamp: (executablePath) => statSync2(executablePath).mtimeMs,
   closeTimeoutMs: CLOSE_TIMEOUT_MS,
   async launch(executablePath) {
@@ -1241,13 +1251,17 @@ async function presentAsHeadful(browser, identity) {
   const autoAttach = { autoAttach: true, waitForDebuggerOnStart: true, flatten: true };
   const adopting = /* @__PURE__ */ new Set();
   const watch = (session) => {
-    session.on("Target.attachedToTarget", ({ sessionId, waitingForDebugger }) => {
+    session.on("Target.attachedToTarget", ({ sessionId, targetInfo, waitingForDebugger }) => {
       const child = connection.session(sessionId);
       if (!child) return;
-      watch(child);
-      const sent = [child.send("Emulation.setUserAgentOverride", override), child.send("Target.setAutoAttach", autoAttach)];
+      const serviceWorker = targetInfo.type === "service_worker";
+      if (!serviceWorker) watch(child);
+      const sent = [child.send("Emulation.setUserAgentOverride", override)];
+      if (!serviceWorker) sent.push(child.send("Target.setAutoAttach", autoAttach));
       if (waitingForDebugger) sent.push(child.send("Runtime.runIfWaitingForDebugger"));
-      const adopted = Promise.allSettled(sent);
+      const adopted = Promise.allSettled(sent).then(async () => {
+        if (serviceWorker) await session.send("Target.detachFromTarget", { sessionId }).catch(() => void 0);
+      });
       adopting.add(adopted);
       void adopted.then(() => adopting.delete(adopted));
     });
@@ -1264,7 +1278,7 @@ async function launchChromium(options, release) {
   let identity;
   try {
     resolved = await resolveBrowser(options.executablePath);
-    identity = headless ? await binaryIdentity(resolved.executablePath) : void 0;
+    identity = headless ? await binaryIdentities.of(resolved.executablePath) : void 0;
     mkdirSync3(userDataDir, { recursive: true, mode: 448 });
     turnOffPasswordSaving(userDataDir);
     browser = await puppeteer.launch(viewLaunchOptions({
@@ -1282,7 +1296,10 @@ async function launchChromium(options, release) {
   }
   browser.process()?.once("exit", release);
   try {
-    if (identity) await presentAsHeadful(browser, identity);
+    if (identity) {
+      const running = (await browser.version()).split("/").pop() ?? "";
+      await presentAsHeadful(browser, await binaryIdentities.confirm(resolved.executablePath, identity, running));
+    }
     const pages = await browser.pages();
     if (pages.length === 0) pages.push(await browser.newPage());
     const tabs = [];

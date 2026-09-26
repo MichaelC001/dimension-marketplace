@@ -14,7 +14,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { Browser, BrowserPlatform, computeExecutablePath } from "@puppeteer/browsers";
-import puppeteer from "puppeteer-core";
+import puppeteer, { type Protocol } from "puppeteer-core";
 import { type BrowserProbe, headfulIdentity, type IdentityProbe, identityPerBinary, resolveBrowser, turnOffPasswordSaving, viewLaunchOptions, withTimeout } from "../src/engines/launch";
 import { BROWSER_TEST_TIMEOUT_MS, chromePath, createRoot, createRuntime, describeWithChrome, failureCode, perform, teardown, waitUntil } from "./fixture";
 
@@ -135,7 +135,7 @@ describe("identityPerBinary", () => {
 	/** A fake binary whose probe reports `Chrome/<version>` and records how it was retired. */
 	function fakeBinary(close: () => Promise<void> = async () => undefined) {
 		const binary = { version: 154, mtime: 1, launches: 0, closes: 0, kills: 0, failNextRead: false };
-		const identityOf = identityPerBinary({
+		const identities = identityPerBinary({
 			stamp: () => binary.mtime,
 			closeTimeoutMs: 1,
 			async launch(): Promise<IdentityProbe> {
@@ -156,7 +156,7 @@ describe("identityPerBinary", () => {
 				};
 			},
 		});
-		return { binary, identityOf };
+		return { binary, identities, identityOf: identities.of };
 	}
 
 	test("one probe per build; an in-place update at the same path is probed again", async () => {
@@ -170,6 +170,22 @@ describe("identityPerBinary", () => {
 		expect({ ua: updated.userAgent, full: updated.metadata.fullVersion, launches: binary.launches }).toEqual({
 			ua: "Mozilla/5.0 Chrome/155.0.0.0", full: "155.0.1.2", launches: 2,
 		});
+	});
+
+	test("an update the stamp missed (the running version differs) is probed again exactly once per open", async () => {
+		const { binary, identities, identityOf } = fakeBinary();
+		const cached = await identityOf("chromium");
+		expect(await identities.confirm("chromium", cached, "154.0.1.2")).toBe(cached);
+		expect(binary.launches).toBe(1);
+		// A snap refresh: same path, same stamp, a new binary behind it.
+		binary.version = 155;
+		const fresh = await identities.confirm("chromium", cached, "155.0.1.2");
+		expect({ full: fresh.metadata.fullVersion, launches: binary.launches }).toEqual({ full: "155.0.1.2", launches: 2 });
+		expect(await identityOf("chromium")).toBe(fresh);
+		// A re-probe that still disagrees is taken as read: one probe, no loop.
+		binary.version = 156;
+		const once = await identities.confirm("chromium", fresh, "157.0.1.2");
+		expect({ full: once.metadata.fullVersion, launches: binary.launches }).toEqual({ full: "156.0.1.2", launches: 3 });
 	});
 
 	test("a failed probe is retired and not cached: the next open probes again", async () => {
@@ -307,7 +323,7 @@ interface BrandVersion {
 /** What one context (page, frame, worker) sees of itself. */
 interface Identity {
 	ua: string;
-	hints: { fullVersionList: BrandVersion[]; uaFullVersion: string; platformVersion: string; architecture: string; bitness: string };
+	hints: Record<string, unknown> & { fullVersionList: BrandVersion[]; uaFullVersion: string; platformVersion: string; architecture: string; bitness: string };
 }
 
 /** Script that defines `identity()`: this context's User-Agent and high-entropy client hints. */
@@ -426,6 +442,36 @@ async function binaryReport(): Promise<{ seen: Seen; version: string }> {
 	}
 }
 
+/** One DevTools call on a browser endpoint, over a connection of its own that attaches to nothing. */
+async function devtools<T>(endpoint: string, method: string): Promise<T> {
+	const socket = new WebSocket(endpoint);
+	const { promise, resolve, reject } = Promise.withResolvers<T>();
+	socket.onopen = () => socket.send(JSON.stringify({ id: 1, method }));
+	socket.onmessage = (event) => {
+		const message = JSON.parse(String(event.data));
+		if (message.id === 1) message.error ? reject(new Error(message.error.message)) : resolve(message.result);
+	};
+	socket.onerror = () => reject(new Error(`DevTools ${method} failed`));
+	try {
+		return await promise;
+	} finally {
+		socket.close();
+	}
+}
+
+/** What survives in a service worker once the View lets go of it; see `comparable`. */
+const SERVICE_WORKER_HINTS = ["brands", "mobile", "platform"];
+
+/**
+ * A context's identity as far as the View replays it. The View detaches from
+ * a service worker once it is released (attached, it would never be stopped
+ * when idle), and the override goes with the session: the worker keeps the
+ * headful User-Agent (`--user-agent`) and its low-entropy hints, but its own
+ * `getHighEntropyValues` answers empty. That trade-off is in the README.
+ */
+const comparable = (name: (typeof CONTEXTS)[number], identity: Identity | undefined) =>
+	name === "service" && identity ? { ua: identity.ua, hints: Object.fromEntries(SERVICE_WORKER_HINTS.map((hint) => [hint, identity.hints[hint]])) } : identity;
+
 describeWithChrome("launch", () => {
 	test(
 		"the headless View presents the binary's own headful identity: UA and client hints, in the page, an out-of-process frame and every kind of worker",
@@ -452,21 +498,50 @@ describeWithChrome("launch", () => {
 
 				// Every context and every request sees exactly what the binary reports,
 				// with only the headless token taken out of the User-Agent.
-				expect(view).toEqual({
-					contexts: Object.fromEntries(CONTEXTS.map((name) => [name, { ...binary.seen.contexts[name], ua: headful(binary.seen.contexts[name].ua) }])),
-					requests: Object.fromEntries(REQUESTS.map((key) => [key, { ...binary.seen.requests[key], "user-agent": headful(binary.seen.requests[key]?.["user-agent"]) }])),
-				} as unknown as Seen);
+				expect({
+					contexts: Object.fromEntries(CONTEXTS.map((name) => [name, comparable(name, view.contexts[name])])),
+					requests: view.requests,
+				}).toEqual({
+					contexts: Object.fromEntries(CONTEXTS.map((name) => [name, comparable(name, { ...binary.seen.contexts[name], ua: headful(binary.seen.contexts[name].ua) ?? "" })])),
+					requests: Object.fromEntries(REQUESTS.map((key) => [key, { ...binary.seen.requests[key], "user-agent": headful(binary.seen.requests[key]?.["user-agent"]) ?? null }])),
+				});
 				expect(JSON.stringify(view)).not.toMatch(/Headless/i);
 
-				// The cross-site frame really is out of process: its own target in the View.
 				const { byId } = runtime as unknown as { byId: Map<string, { driver: { cdpEndpoint(): string } }> };
-				const peek = await puppeteer.connect({ browserWSEndpoint: byId.get(opened.browserId)?.driver.cdpEndpoint() });
-				try {
-					const { targetInfos } = await (await peek.target().createCDPSession()).send("Target.getTargets");
-					expect(targetInfos.filter((target) => target.type === "iframe").map((target) => new URL(target.url).hostname)).toContain("localhost");
-				} finally {
-					await peek.disconnect();
-				}
+				const endpoint = byId.get(opened.browserId)?.driver.cdpEndpoint() ?? "";
+				// The cross-site frame really is out of process: its own target in the View.
+				const targets = (await devtools<Protocol.Target.GetTargetsResponse>(endpoint, "Target.getTargets")).targetInfos;
+				expect(targets.filter((target) => target.type === "iframe").map((target) => new URL(target.url).hostname)).toContain("localhost");
+			} finally {
+				site.stop();
+			}
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"a service worker the View registers is left unattached once it carries the identity, so Chrome can stop it when idle",
+		async () => {
+			const site = startIdentitySite();
+			try {
+				const { runtime } = await createRuntime();
+				const opened = await runtime.open({ profile: "sw", viewport: { width: 640, height: 480 } });
+				await perform(runtime, opened.browserId, { kind: "navigate", url: site.url });
+				const view = await site.seen();
+				// The worker ran with the replayed identity before it was let go.
+				expect(view.contexts.service.ua).toBe(view.contexts.page.ua);
+				expect(view.contexts.service.ua).not.toMatch(/Headless/i);
+
+				// `attached` counts every DevTools client, and `devtools` attaches to
+				// nothing and puppeteer detaches from service workers itself, so this
+				// is the View's own identity session letting go.
+				const { byId } = runtime as unknown as { byId: Map<string, { driver: { cdpEndpoint(): string } }> };
+				const endpoint = byId.get(opened.browserId)?.driver.cdpEndpoint() ?? "";
+				const targets = async () => (await devtools<Protocol.Target.GetTargetsResponse>(endpoint, "Target.getTargets")).targetInfos;
+				await waitUntil("the service worker, running and detached", targets, (infos) => {
+					const workers = infos.filter((target) => target.type === "service_worker");
+					return workers.length > 0 && workers.every((target) => !target.attached);
+				});
 			} finally {
 				site.stop();
 			}

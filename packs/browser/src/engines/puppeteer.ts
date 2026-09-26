@@ -174,7 +174,7 @@ const PROBE_URL = "http://127.0.0.1/";
  * headless launch (no profile of ours) reports its User-Agent and client
  * hints, and `headfulIdentity` takes the headless token out.
  */
-const binaryIdentity = identityPerBinary({
+const binaryIdentities = identityPerBinary({
 	stamp: (executablePath) => statSync(executablePath).mtimeMs,
 	closeTimeoutMs: CLOSE_TIMEOUT_MS,
 	async launch(executablePath) {
@@ -212,13 +212,20 @@ async function presentAsHeadful(browser: Browser, identity: HeadfulIdentity): Pr
 	const autoAttach = { autoAttach: true, waitForDebuggerOnStart: true, flatten: true };
 	const adopting = new Set<Promise<unknown>>();
 	const watch = (session: CDPSession): void => {
-		session.on("Target.attachedToTarget", ({ sessionId, waitingForDebugger }: Protocol.Target.AttachedToTargetEvent) => {
+		session.on("Target.attachedToTarget", ({ sessionId, targetInfo, waitingForDebugger }: Protocol.Target.AttachedToTargetEvent) => {
 			const child = connection.session(sessionId);
 			if (!child) return;
-			watch(child);
-			const sent = [child.send("Emulation.setUserAgentOverride", override), child.send("Target.setAutoAttach", autoAttach)];
+			// A DevTools-attached service worker is never stopped when idle (the
+			// reason puppeteer itself detaches from them), so it is let go once
+			// released, as the user's Chrome would stop it.
+			const serviceWorker = targetInfo.type === "service_worker";
+			if (!serviceWorker) watch(child);
+			const sent: Promise<unknown>[] = [child.send("Emulation.setUserAgentOverride", override)];
+			if (!serviceWorker) sent.push(child.send("Target.setAutoAttach", autoAttach));
 			if (waitingForDebugger) sent.push(child.send("Runtime.runIfWaitingForDebugger"));
-			const adopted = Promise.allSettled(sent);
+			const adopted = Promise.allSettled(sent).then(async () => {
+				if (serviceWorker) await session.send("Target.detachFromTarget", { sessionId }).catch(() => undefined);
+			});
 			adopting.add(adopted);
 			void adopted.then(() => adopting.delete(adopted));
 		});
@@ -238,7 +245,7 @@ async function launchChromium(options: EngineOptions, release: () => void): Prom
 	let identity: HeadfulIdentity | undefined;
 	try {
 		resolved = await resolveBrowser(options.executablePath);
-		identity = headless ? await binaryIdentity(resolved.executablePath) : undefined;
+		identity = headless ? await binaryIdentities.of(resolved.executablePath) : undefined;
 		mkdirSync(userDataDir, { recursive: true, mode: 0o700 });
 		turnOffPasswordSaving(userDataDir);
 		browser = await puppeteer.launch(viewLaunchOptions({
@@ -260,7 +267,13 @@ async function launchChromium(options: EngineOptions, release: () => void): Prom
 	browser.process()?.once("exit", release);
 
 	try {
-		if (identity) await presentAsHeadful(browser, identity);
+		if (identity) {
+			// An update the stamp missed shows as a version the identity does not
+			// name: it is probed again, once, and the fresh identity is presented.
+			// Only `--user-agent`, fixed at launch, keeps the old string until reopen.
+			const running = (await browser.version()).split("/").pop() ?? "";
+			await presentAsHeadful(browser, await binaryIdentities.confirm(resolved.executablePath, identity, running));
+		}
 		const pages = await browser.pages();
 		if (pages.length === 0) pages.push(await browser.newPage());
 		const tabs: Tab[] = [];

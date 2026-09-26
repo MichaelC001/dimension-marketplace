@@ -170,11 +170,27 @@ export interface IdentityProbe {
 	kill(): void;
 }
 
+/** The headful identity of each browser binary; see `identityPerBinary`. */
+export interface BinaryIdentities {
+	/** This binary's identity, probed once per build. */
+	of(executablePath: string): Promise<HeadfulIdentity>;
+	/**
+	 * The identity for a browser of this binary that is already running and
+	 * reports `runningVersion` (`Browser.getVersion`'s product version, which
+	 * is the binary's `uaFullVersion`): `identity` when it names that version,
+	 * else probed again, once, with no further check.
+	 */
+	confirm(executablePath: string, identity: HeadfulIdentity, runningVersion: string): Promise<HeadfulIdentity>;
+}
+
 /**
  * The headful identity of each browser binary, probed once per build: keyed
  * on the path AND the binary's `stamp` (its mtime), because Chrome, Edge and
  * Chromium update in place at the same path, and a stale identity would name
- * the old version beside the new binary's own. Failures are not cached.
+ * the old version beside the new binary's own. A stamp cannot see every
+ * update (a snap Chromium refreshes behind a symlink and a wrapper script),
+ * so `confirm` checks the identity against the version the launched browser
+ * reports. Failures are not cached.
  *
  * The probe's close is bounded by `closeTimeoutMs`, and a close that fails or
  * hangs kills the probe. What was read stands whatever the close outcome: a
@@ -184,8 +200,10 @@ export function identityPerBinary(options: {
 	launch(executablePath: string): Promise<IdentityProbe>;
 	stamp(executablePath: string): number;
 	closeTimeoutMs: number;
-}): (executablePath: string) => Promise<HeadfulIdentity> {
+}): BinaryIdentities {
 	const known = new Map<string, Promise<HeadfulIdentity>>();
+	/** One build of one binary: the path and its stamp. */
+	const buildOf = (executablePath: string): string => `${executablePath}\0${options.stamp(executablePath)}`;
 	const probe = async (executablePath: string): Promise<HeadfulIdentity> => {
 		const launched = await options.launch(executablePath);
 		try {
@@ -194,8 +212,8 @@ export function identityPerBinary(options: {
 			await withTimeout(launched.close(), options.closeTimeoutMs, "identity probe close").catch(() => launched.kill());
 		}
 	};
-	return (executablePath) => {
-		const key = `${executablePath}\0${options.stamp(executablePath)}`;
+	const of = (executablePath: string): Promise<HeadfulIdentity> => {
+		const key = buildOf(executablePath);
 		let identity = known.get(key);
 		if (!identity) {
 			identity = probe(executablePath);
@@ -203,6 +221,16 @@ export function identityPerBinary(options: {
 			known.set(key, identity);
 		}
 		return identity;
+	};
+	return {
+		of,
+		async confirm(executablePath, identity, runningVersion) {
+			if (identity.metadata.fullVersion === undefined || identity.metadata.fullVersion === runningVersion) return identity;
+			const key = buildOf(executablePath);
+			// Only the stale entry is dropped: a concurrent open may already have re-probed.
+			if ((await known.get(key)?.catch(() => undefined)) === identity) known.delete(key);
+			return await of(executablePath);
+		},
 	};
 }
 
