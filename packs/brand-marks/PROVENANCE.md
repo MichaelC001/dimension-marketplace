@@ -85,7 +85,7 @@ path is edited, simplified, re-drawn or re-coloured beyond a single fill.
    the brand colour. The glyph itself is never recoloured, distorted, skewed,
    cropped, rotated or re-lettered.
 3. **No implied endorsement.** The pack is a community presentation; it is not made,
-   sponsored or approved by X Corp., Reddit, Inc., Google LLC, Discord Inc., Y Combinator,
+   sponsored or approved by X Corp., Reddit, Inc., Google LLC, Discord Inc., Y Combinator Management, LLC,
    Product Hunt, Inc., Bluesky Social, PBC, Meta Platforms, Inc. or ByteDance Ltd.
 
 If a trademark owner asks for a mark to be removed or changed, remove it: delete its
