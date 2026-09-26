@@ -5,6 +5,7 @@ import { registerAppResource, registerAppTool, RESOURCE_MIME_TYPE } from "@model
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { buildConnectionReport, type ConnectionReportParams, PACK_CONNECTION_REPORT_METHOD } from "./connection.js";
 import type { BrowserRuntimePort, TaskRun, ToolCaller } from "./contracts.js";
 import { BROWSER_ENGINES, CREDENTIAL_MODES, PUBLISH_MODES, TASK_AGENTS } from "./contracts.js";
 import { type PublishPreset, loadPresets, resolvePreset, summarizePresets } from "./presets.js";
@@ -39,6 +40,7 @@ const recipeSchema = z.object({
   origin: z.string().min(1).max(2048),
   composeUrl: z.string().min(1).max(2048),
   signedIn: selector,
+  account: selector.optional(),
   fields: z.array(z.object({ selector, value: z.string().max(10_000), label: z.string().trim().min(1).max(40).optional() }).strict()).min(1).max(8),
   submit: selector,
   receipt: z.object({ path: z.string().min(1).max(256).startsWith("/"), linkSelector: selector.optional() }).strict(),
@@ -231,7 +233,7 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
   // Post button) submits exactly once. browser_publish itself never submits.
   registerAppTool(server, "browser_publish", {
     title: "Publish",
-    description: "Post through a signed-in profile. Pass EXACTLY ONE of preset or recipe. preset (preferred; list them with browser_publish_presets): {name, values (one string per preset field, in the preset's field order), target? (only for a preset with needsTarget: the page on the preset's site to post on, e.g. the thread to comment on)}; it resolves to a recipe and takes the same path. recipe (data you supply, for a site with no preset): origin (https; http only for 127.0.0.1/localhost), composeUrl on origin, signedIn (a CSS selector present only when logged in), fields [{selector, value, label?}] (1-8, values ≤ 10000 chars; label ≤ 40 chars is the caption shown in the Browser View, e.g. \"Post text\"), submit (selector), receipt {path (template for the posted URL's pathname on origin: literal text plus {segment} for one path segment and {digits} for a number, at most one per segment, e.g. \"/{segment}/status/{digits}\"; query and hash are ignored), linkSelector? (the posted link's element; else the tab's URL after submit)}. mode \"check\": opens composeUrl and returns status \"signed-in\" or \"not-signed-in\" (sign in first — with browser_act or browser_task, or by hand in the View — then post). mode \"post\": types each value, reads it back exactly, and returns status \"awaiting-confirmation\" with a publishId and composeUrl (where it will post). NOTHING is submitted yet: confirm it with browser_publish_confirm (or the Post button in the Browser View), or drop it with browser_publish_cancel; browser_publish_wait follows it. While it awaits confirmation the page is pinned: browser_act, browser_tab, browser_task and browser_publish are refused (publish_pending) until it is posted, cancelled or expires (10 minutes). \"failed\" means nothing was submitted. A password field is never a publish field (its value is never read back, so it cannot be verified); log in with browser_act or browser_task. Refused while a task runs.",
+    description: "Post through a signed-in profile. Pass EXACTLY ONE of preset or recipe. preset (preferred; list them with browser_publish_presets): {name, values (one string per preset field, in the preset's field order), target? (only for a preset with needsTarget: the page on the preset's site to post on, e.g. the thread to comment on)}; it resolves to a recipe and takes the same path. recipe (data you supply, for a site with no preset): origin (https; http only for 127.0.0.1/localhost), composeUrl on origin, signedIn (a CSS selector present only when logged in), account? (a CSS selector whose text names the signed-in account, e.g. \"Alice @alice\" → \"@alice\"; reported to the host with the sign-in), fields [{selector, value, label?}] (1-8, values ≤ 10000 chars; label ≤ 40 chars is the caption shown in the Browser View, e.g. \"Post text\"), submit (selector), receipt {path (template for the posted URL's pathname on origin: literal text plus {segment} for one path segment and {digits} for a number, at most one per segment, e.g. \"/{segment}/status/{digits}\"; query and hash are ignored), linkSelector? (the posted link's element; else the tab's URL after submit)}. mode \"check\": opens composeUrl and returns status \"signed-in\" or \"not-signed-in\" (sign in first — with browser_act or browser_task, or by hand in the View — then post). mode \"post\": types each value, reads it back exactly, and returns status \"awaiting-confirmation\" with a publishId and composeUrl (where it will post). NOTHING is submitted yet: confirm it with browser_publish_confirm (or the Post button in the Browser View), or drop it with browser_publish_cancel; browser_publish_wait follows it. While it awaits confirmation the page is pinned: browser_act, browser_tab, browser_task and browser_publish are refused (publish_pending) until it is posted, cancelled or expires (10 minutes). \"failed\" means nothing was submitted. A password field is never a publish field (its value is never read back, so it cannot be verified); log in with browser_act or browser_task. Refused while a task runs.",
     inputSchema: { browserId: capability, recipe: recipeSchema.optional(), preset: presetSchema.optional(), mode: z.enum(PUBLISH_MODES) },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     _meta: { ui: { resourceUri: BROWSER_VIEW_URI } },
@@ -294,15 +296,36 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     inputSchema: { browserId: capability },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   }, ({ browserId }, extra) => result(async () => { await runtime.close(browserId, callerOf(extra)); return { closed: true }; }));
+  // The connection report (connection.ts, dimension#1219): the full current map
+  // once the host has initialized, then after every observation (a check, a
+  // post, a deleted profile). Sends run one at a time and each reads the map
+  // fresh, so the last one the host sees is the latest. A failed send is logged
+  // and never reaches a tool result.
+  let reporting = Promise.resolve();
+  const sendReport = (): void => {
+    reporting = reporting.then(async () => {
+      if (!server.isConnected()) return;
+      const params: ConnectionReportParams = { report: buildConnectionReport(await runtime.connections()) };
+      await server.server.notification({ method: PACK_CONNECTION_REPORT_METHOD, params });
+    }).catch(error => console.error("Browser connection report was not sent:", error instanceof Error ? error.message : error));
+  };
+  const stopReporting = runtime.onConnectionsChanged(sendReport);
+  const previousOnInitialized = server.server.oninitialized;
+  server.server.oninitialized = () => {
+    previousOnInitialized?.();
+    sendReport();
+  };
   const previousOnClose = server.server.onclose;
   const closeTransport = server.close.bind(server);
   let disposal: Promise<void> | undefined;
   server.close = async () => {
+    stopReporting();
     try { await (disposal ??= runtime.dispose()); }
     finally { await closeTransport(); }
   };
   server.server.onclose = () => {
     previousOnClose?.();
+    stopReporting();
     void (disposal ??= runtime.dispose()).catch(error => console.error("Browser cleanup failed:", error));
   };
   return server;

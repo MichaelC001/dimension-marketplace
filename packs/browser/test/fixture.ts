@@ -18,7 +18,7 @@ import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe } from "bun:test";
+import { describe, setSystemTime } from "bun:test";
 import type { BrowserAction, BrowserState } from "../src/contracts";
 import { BrowserRuntime, type BrowserRuntimeOptions } from "../src/runtime";
 import { BrowserRuntimeError } from "../src/store";
@@ -122,6 +122,33 @@ export async function teardown(): Promise<void> {
 	for (const root of roots.splice(0)) {
 		// Chrome can hold profile files for a moment after exit on Windows.
 		await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }).catch(() => undefined);
+	}
+}
+
+/**
+ * Settle `work`, and once `ready()` has held for `graceMs`, make `Date.now()`
+ * race ahead so any real-clock deadline inside it passes within a poll. Timers
+ * stay real. `ready` must name the last thing the page will ever do; the grace
+ * (several of publish.ts's 250 ms polls) lets the code under test observe that
+ * final page before its deadline is skipped, so skipping cannot hide an outcome.
+ */
+export async function racingClock<T>(ready: () => boolean, work: Promise<T>, graceMs = 1_000): Promise<T> {
+	const base = Date.now() - performance.now();
+	let readyAt: number | undefined;
+	let skip = 0;
+	// A real interval, deliberately: the deadlines live in real Chrome round trips
+	// that a fake timer cannot advance, and only Date.now() is jumped.
+	const pump = setInterval(() => {
+		if (readyAt === undefined && ready()) readyAt = performance.now();
+		if (readyAt === undefined || performance.now() - readyAt < graceMs) return;
+		skip += 30_000;
+		setSystemTime(new Date(base + performance.now() + skip));
+	}, 50);
+	try {
+		return await work;
+	} finally {
+		clearInterval(pump);
+		setSystemTime();
 	}
 }
 

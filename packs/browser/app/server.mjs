@@ -9,6 +9,96 @@ import { registerAppResource, registerAppTool, RESOURCE_MIME_TYPE } from "@model
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
+// src/connection.ts
+var PACK_CONNECTION_REPORT_METHOD = "notifications/ai.insodimension/connection";
+var PACK_CONNECTION_REPORT_MAX_BYTES = 64 * 1024;
+var PACK_CONNECTION_ACCOUNT_MAX_BYTES = 256;
+var RELAY_PROFILE = "relay";
+var TWO_LABEL_SUFFIXES = Object.fromEntries([
+  "co.uk",
+  "org.uk",
+  "ac.uk",
+  "gov.uk",
+  "me.uk",
+  "ltd.uk",
+  "plc.uk",
+  "com.au",
+  "net.au",
+  "org.au",
+  "edu.au",
+  "gov.au",
+  "co.nz",
+  "org.nz",
+  "co.jp",
+  "ne.jp",
+  "or.jp",
+  "co.kr",
+  "co.in",
+  "co.za",
+  "co.il",
+  "com.br",
+  "com.mx",
+  "com.ar",
+  "com.cn",
+  "com.hk",
+  "com.sg",
+  "com.tw",
+  "com.tr"
+].map((suffix) => [suffix, true]));
+var IPV4 = /^\d{1,3}(?:\.\d{1,3}){3}$/;
+function siteHost(origin) {
+  let url;
+  try {
+    url = new URL(origin);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+  const host = url.hostname.replace(/\.$/, "");
+  if (host.startsWith("[") || IPV4.test(host)) return host;
+  const labels = host.split(".");
+  if (labels.length < 2) return host;
+  const keep = labels.length >= 3 && TWO_LABEL_SUFFIXES[labels.slice(-2).join(".")] === true ? 3 : 2;
+  return labels.slice(-keep).join(".");
+}
+function accountFromText(text) {
+  if (typeof text !== "string") return void 0;
+  const handle = /@[\p{L}\p{N}_.-]+/u.exec(text)?.[0];
+  const account = handle ?? text.replace(/\s+/g, " ").trim();
+  return account.length > 0 ? account : void 0;
+}
+function buildConnectionReport(observations) {
+  const entries = [];
+  for (const [profile2, sites] of Object.entries(observations)) {
+    if (profile2 === RELAY_PROFILE) continue;
+    for (const [host, observed] of Object.entries(sites)) {
+      const site = { signedIn: observed.signedIn, observedAt: observed.observedAt };
+      if (observed.account !== void 0 && Buffer.byteLength(observed.account, "utf8") <= PACK_CONNECTION_ACCOUNT_MAX_BYTES) site.account = observed.account;
+      entries.push({ profile: profile2, host, site });
+    }
+  }
+  entries.sort((a, b) => b.site.observedAt - a.site.observedAt);
+  const assemble = (count) => {
+    const profiles = {};
+    for (let i = 0; i < count; i += 1) {
+      const { profile: profile2, host, site } = entries[i];
+      (profiles[profile2] ??= { sites: {} }).sites[host] = site;
+    }
+    return { profiles };
+  };
+  const fits = (report) => Buffer.byteLength(JSON.stringify(report), "utf8") <= PACK_CONNECTION_REPORT_MAX_BYTES;
+  const whole = assemble(entries.length);
+  if (fits(whole)) return whole;
+  let low = 0;
+  let high = entries.length - 1;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    if (fits(assemble(mid))) low = mid;
+    else high = mid - 1;
+  }
+  return assemble(low);
+}
+
 // src/contracts.ts
 var BROWSER_ENGINES = ["chromium", "chrome-relay", "abp", "browser4"];
 var TASK_AGENTS = ["jev", "browser-use"];
@@ -27,9 +117,12 @@ import { setTimeout as sleep } from "node:timers/promises";
 
 // src/store.ts
 import { randomBytes } from "node:crypto";
-import { closeSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, statSync, unlinkSync, writeSync } from "node:fs";
+import { closeSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+var CONNECTIONS_FILE = "connections.json";
+var MAX_SITES_PER_PROFILE = 64;
+var MAX_ACCOUNT_CHARS = 1024;
 var SLUG_RE = /^[a-z0-9][a-z0-9_-]{0,47}$/;
 var BrowserRuntimeError = class extends Error {
   code;
@@ -139,6 +232,54 @@ var ProfileStore = class {
     } catch {
     }
   }
+  /** This profile's persisted sign-in observations; none when it was never observed or the file is unreadable. */
+  connections(slug) {
+    let parsed;
+    try {
+      parsed = JSON.parse(readFileSync(join(this.profileDir(slug), CONNECTIONS_FILE), "utf8"));
+    } catch {
+      return {};
+    }
+    const sites = {};
+    const stored = parsed?.sites;
+    if (typeof stored !== "object" || stored === null) return sites;
+    for (const [host, value] of Object.entries(stored)) {
+      const site = value;
+      if (typeof site?.signedIn !== "boolean" || typeof site.observedAt !== "number" || !Number.isFinite(site.observedAt)) continue;
+      const valid = { signedIn: site.signedIn, observedAt: site.observedAt };
+      if (typeof site.account === "string" && site.account.length <= MAX_ACCOUNT_CHARS) valid.account = site.account;
+      sites[host] = valid;
+    }
+    return sites;
+  }
+  /** Persist one observation of `host`, replacing that host's last one. Atomic: a crash leaves the old file or the new one. */
+  recordConnection(slug, host, observation) {
+    const sites = { ...this.connections(slug), [host]: observation };
+    const kept = Object.entries(sites).sort(([, a], [, b]) => b.observedAt - a.observedAt).slice(0, MAX_SITES_PER_PROFILE);
+    const dir = this.ensureProfile(slug);
+    const path = join(dir, CONNECTIONS_FILE);
+    const staging = `${path}.${randomBytes(6).toString("hex")}.tmp`;
+    writeFileSync(staging, `${JSON.stringify({ sites: Object.fromEntries(kept) })}
+`, { mode: 384 });
+    try {
+      renameSync(staging, path);
+    } catch (error) {
+      try {
+        unlinkSync(staging);
+      } catch {
+      }
+      throw error;
+    }
+  }
+  /** Every on-disk profile that has observations. A deleted profile directory is simply not here. */
+  allConnections() {
+    const all = {};
+    for (const slug of this.list()) {
+      const sites = this.connections(slug);
+      if (Object.keys(sites).length > 0) all[slug] = sites;
+    }
+    return all;
+  }
 };
 function readLock(path) {
   try {
@@ -175,6 +316,7 @@ var MAX_PATH_CHARS = 256;
 var MAX_URL_CHARS = 2048;
 var MAX_RECEIPT_LINKS = 5e3;
 var SIGNED_IN_WAIT_MS = 15e3;
+var MAX_ACCOUNT_TEXT_CHARS = 512;
 var RECEIPT_WAIT_MS = 2e4;
 var PUBLISH_PENDING_MS = 10 * 6e4;
 var POLL_MS = 250;
@@ -216,6 +358,7 @@ function validateRecipe(input) {
     origin,
     composeUrl: compose.href,
     signedIn: selector(input.signedIn, "signedIn"),
+    ...input.account === void 0 ? {} : { account: selector(input.account, "account") },
     fields,
     submit: selector(input.submit, "submit"),
     receipt: {
@@ -294,7 +437,8 @@ async function prepare(driver, profile2, recipe, mode) {
   }
   const url = await currentUrl(driver);
   if (!signedIn) return { status: "not-signed-in", url, profile: profile2 };
-  if (mode === "check") return { status: "signed-in", url, profile: profile2 };
+  const account = recipe.account === void 0 ? void 0 : accountFromText(await driver.readText(recipe.account, MAX_ACCOUNT_TEXT_CHARS).catch(() => null));
+  if (mode === "check") return { status: "signed-in", url, profile: profile2, ...account === void 0 ? {} : { account } };
   for (const field of recipe.fields) {
     const failed = (error) => ({ status: "failed", url, profile: profile2, error: `${error}; nothing was submitted` });
     const before = await driver.readField(field.selector).catch((error) => ({ state: "error", error }));
@@ -333,7 +477,8 @@ async function prepare(driver, profile2, recipe, mode) {
     confirming: false,
     touchedWhilePending: false,
     sharedPage: false,
-    settled: Promise.withResolvers()
+    settled: Promise.withResolvers(),
+    ...account === void 0 ? {} : { account }
   };
 }
 function requirePending(publication, publishId) {
@@ -468,7 +613,7 @@ var NAME = /^[a-z0-9][a-z0-9-]{0,47}$/;
 var MAX_PLATFORM_CHARS = 40;
 var MAX_NOTES_CHARS = 2e3;
 var PRESETS_DIR = fileURLToPath(new URL("../recipes/", import.meta.url));
-var PRESET_KEYS = ["name", "platform", "verified", "verifiedAt", "notes", "origin", "composeUrl", "composeFrom", "signedIn", "fields", "submit", "receipt"];
+var PRESET_KEYS = ["name", "platform", "verified", "verifiedAt", "notes", "origin", "composeUrl", "composeFrom", "signedIn", "account", "fields", "submit", "receipt"];
 async function loadPresets(dir = PRESETS_DIR) {
   const files = (await readdir(dir)).filter((file) => extname(file) === ".json").sort();
   const presets = [];
@@ -523,6 +668,7 @@ function parsePreset(input, where) {
       origin: valid.origin,
       ...preset.composeUrl === void 0 ? { composeFrom: "target" } : { composeUrl: valid.composeUrl },
       signedIn: valid.signedIn,
+      ...valid.account === void 0 ? {} : { account: valid.account },
       fields: valid.fields.map((field) => ({ label: field.label ?? "", selector: field.selector })),
       submit: valid.submit,
       receipt: valid.receipt
@@ -575,6 +721,7 @@ function toRecipe(preset, values, composeUrl) {
     origin: preset.origin,
     composeUrl,
     signedIn: preset.signedIn,
+    ...preset.account === void 0 ? {} : { account: preset.account },
     fields: preset.fields.map((field, index) => ({ label: field.label, selector: field.selector, value: values[index] ?? "" })),
     submit: preset.submit,
     receipt: { ...preset.receipt }
@@ -586,11 +733,12 @@ function isObject2(value) {
 
 // src/runtime.ts
 import { randomBytes as randomBytes3 } from "node:crypto";
+import { existsSync as existsSync3, watch } from "node:fs";
 import { join as join6 } from "node:path";
 
 // src/credentials.ts
 import { randomInt } from "node:crypto";
-import { readFileSync as readFileSync2, renameSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync as readFileSync2, renameSync as renameSync2, rmSync, writeFileSync as writeFileSync2 } from "node:fs";
 import { join as join3 } from "node:path";
 var FILE = "credentials.json";
 var LOOPBACK = { localhost: true, "127.0.0.1": true, "[::1]": true };
@@ -656,9 +804,9 @@ function resolveCredential(profileDir, request) {
   const password = generatePassword();
   const tmp = `${file}.${process.pid}.tmp`;
   try {
-    writeFileSync(tmp, `${JSON.stringify({ version: 1, origins: { ...origins, [origin]: password } })}
+    writeFileSync2(tmp, `${JSON.stringify({ version: 1, origins: { ...origins, [origin]: password } })}
 `, { mode: 384 });
-    renameSync(tmp, file);
+    renameSync2(tmp, file);
   } finally {
     rmSync(tmp, { force: true });
   }
@@ -975,6 +1123,10 @@ var READ_FIELD_SCRIPT = (el) => {
   const lines = children.filter((node) => node.nodeName === "P").map((p) => trimmed(p.innerText));
   return { state: "value", value: lines.join("\n") };
 };
+var ELEMENT_TEXT_SCRIPT = (el, limit) => {
+  if (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT") return null;
+  return (el.textContent ?? "").slice(0, limit);
+};
 var LINK_HREFS_SCRIPT = (selector3, limit) => {
   const out = [];
   const collect = (root, css2) => {
@@ -1012,7 +1164,7 @@ var UA_HINTS_SCRIPT = (names) => {
 };
 
 // src/engines/launch.ts
-import { existsSync, mkdirSync as mkdirSync2, readFileSync as readFileSync3, writeFileSync as writeFileSync2 } from "node:fs";
+import { existsSync, mkdirSync as mkdirSync2, readFileSync as readFileSync3, writeFileSync as writeFileSync3 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
 import { join as join4 } from "node:path";
 import { Browser as CachedBrowser, detectBrowserPlatform, getInstalledBrowsers } from "@puppeteer/browsers";
@@ -1159,7 +1311,7 @@ function turnOffPasswordSaving(userDataDir) {
   const profile2 = prefs.profile && typeof prefs.profile === "object" ? prefs.profile : {};
   if (prefs.credentials_enable_service === false && profile2.password_manager_enabled === false) return;
   mkdirSync2(join4(userDataDir, "Default"), { recursive: true, mode: 448 });
-  writeFileSync2(path, JSON.stringify({ ...prefs, credentials_enable_service: false, profile: { ...profile2, password_manager_enabled: false } }), { mode: 384 });
+  writeFileSync3(path, JSON.stringify({ ...prefs, credentials_enable_service: false, profile: { ...profile2, password_manager_enabled: false } }), { mode: 384 });
 }
 
 // src/engines/puppeteer.ts
@@ -1250,12 +1402,12 @@ async function presentAsHeadful(browser, identity) {
   const override = { userAgent: identity.userAgent, userAgentMetadata: identity.metadata };
   const autoAttach = { autoAttach: true, waitForDebuggerOnStart: true, flatten: true };
   const adopting = /* @__PURE__ */ new Set();
-  const watch = (session) => {
+  const watch2 = (session) => {
     session.on("Target.attachedToTarget", ({ sessionId, targetInfo, waitingForDebugger }) => {
       const child = connection.session(sessionId);
       if (!child) return;
       const serviceWorker = targetInfo.type === "service_worker";
-      if (!serviceWorker) watch(child);
+      if (!serviceWorker) watch2(child);
       const sent = [child.send("Emulation.setUserAgentOverride", override)];
       if (!serviceWorker) sent.push(child.send("Target.setAutoAttach", autoAttach));
       if (waitingForDebugger) sent.push(child.send("Runtime.runIfWaitingForDebugger"));
@@ -1266,7 +1418,7 @@ async function presentAsHeadful(browser, identity) {
       void adopted.then(() => adopting.delete(adopted));
     });
   };
-  watch(root);
+  watch2(root);
   await root.send("Target.setAutoAttach", autoAttach);
   await withTimeout(Promise.all(adopting), ACTION_TIMEOUT_MS, "identity for the open tabs");
 }
@@ -1592,7 +1744,7 @@ var PuppeteerDriver = class {
   async fill(selector3, text) {
     await withTimeout(this.#type(this.#activeTab().page, selector3, text, true), ACTION_TIMEOUT_MS + 5e3, "fill");
   }
-  // Publish reads: hasElement/readField resolve the selector through
+  // Publish reads: hasElement/readField/readText resolve the selector through
   // puppeteer's own query handlers (so `pierce/` reaches into shadow roots),
   // then run a fixed data-only script on the element handle. linkHrefs runs one
   // fixed script that takes the selector as a data argument (CSS or `pierce/`
@@ -1608,6 +1760,15 @@ var PuppeteerDriver = class {
     if (handle === null) return { state: "absent" };
     try {
       return await handle.evaluate(READ_FIELD_SCRIPT);
+    } finally {
+      await handle.dispose().catch(() => void 0);
+    }
+  }
+  async readText(selector3, limit) {
+    const handle = await this.#activeTab().page.$(selector3);
+    if (handle === null) return null;
+    try {
+      return await handle.evaluate(ELEMENT_TEXT_SCRIPT, limit);
     } finally {
       await handle.dispose().catch(() => void 0);
     }
@@ -2501,7 +2662,6 @@ var MAX_WIDTH = 2560;
 var MIN_HEIGHT = 240;
 var MAX_HEIGHT = 2e3;
 var DEFAULT_VIEWPORT = { width: 1280, height: 800 };
-var RELAY_PROFILE = "relay";
 var NAMED_KEYS = {
   Enter: true,
   Tab: true,
@@ -2545,6 +2705,11 @@ var BrowserRuntime = class {
    */
   stranded = /* @__PURE__ */ new Set();
   disposed = false;
+  connectionListeners = /* @__PURE__ */ new Set();
+  /** Profiles with persisted observations, so a deleted one is noticed and reported gone. */
+  observedProfiles = /* @__PURE__ */ new Set();
+  /** Watches the profile root for deletions while anyone listens for connection changes. */
+  profileWatcher;
   constructor(options = {}) {
     this.options = options;
     this.store = new ProfileStore(options.rootDir);
@@ -2671,6 +2836,9 @@ var BrowserRuntime = class {
   }
   async dispose() {
     this.disposed = true;
+    this.connectionListeners.clear();
+    this.profileWatcher?.close();
+    this.profileWatcher = void 0;
     await Promise.allSettled(this.opening.values());
     const errors = [];
     await this.closeReader().catch((err) => errors.push(describe3(err)));
@@ -2806,6 +2974,61 @@ var BrowserRuntime = class {
   }
   async profiles() {
     return this.store.list();
+  }
+  async connections() {
+    return this.store.allConnections();
+  }
+  onConnectionsChanged(listener) {
+    this.connectionListeners.add(listener);
+    if (this.profileWatcher === void 0 && !this.disposed) {
+      for (const profile2 of Object.keys(this.store.allConnections())) this.observedProfiles.add(profile2);
+      try {
+        this.profileWatcher = watch(this.store.profilesRoot, { persistent: false }, () => {
+          const gone = [...this.observedProfiles].filter((profile2) => !existsSync3(this.store.profileDir(profile2)));
+          if (gone.length === 0) return;
+          for (const profile2 of gone) this.observedProfiles.delete(profile2);
+          this.connectionsChanged();
+        });
+        this.profileWatcher.on("error", () => {
+          this.profileWatcher?.close();
+          this.profileWatcher = void 0;
+        });
+      } catch (error) {
+        console.error("Browser profile watch failed; a deleted profile is reported at the next observation:", describe3(error));
+      }
+    }
+    return () => {
+      this.connectionListeners.delete(listener);
+      if (this.connectionListeners.size > 0) return;
+      this.profileWatcher?.close();
+      this.profileWatcher = void 0;
+    };
+  }
+  /**
+   * Persist what a publish just saw about `origin`'s sign-in on this profile
+   * and tell the listeners. Never throws: a report is never worth failing
+   * the publish that observed it.
+   */
+  observeConnection(profile2, origin, signedIn, account) {
+    const host = siteHost(origin);
+    if (profile2 === RELAY_PROFILE || host === null) return;
+    try {
+      this.store.recordConnection(profile2, host, { signedIn, observedAt: Date.now(), ...signedIn && account !== void 0 ? { account } : {} });
+    } catch (error) {
+      console.error("Browser sign-in observation was not saved:", describe3(error));
+      return;
+    }
+    this.observedProfiles.add(profile2);
+    this.connectionsChanged();
+  }
+  connectionsChanged() {
+    for (const listener of this.connectionListeners) {
+      try {
+        listener();
+      } catch (error) {
+        console.error("Browser connection listener failed:", describe3(error));
+      }
+    }
   }
   // -----------------------------------------------------------------------
   // Tabs
@@ -3032,7 +3255,10 @@ var BrowserRuntime = class {
         fail("publish_pending", "a publish is already awaiting confirmation; it must be posted, cancelled or expire first");
       }
       const outcome = await prepare(entry.driver, entry.profile, valid, selected);
-      if (!("record" in outcome)) return this.redact(entry, outcome);
+      if (!("record" in outcome)) {
+        if (outcome.status !== "failed") this.observeConnection(entry.profile, valid.origin, outcome.status === "signed-in", outcome.account);
+        return this.redact(entry, outcome);
+      }
       outcome.sharedPage = entry.engine === "chrome-relay";
       if (preset !== void 0) outcome.record.preset = { name: preset.name, verified: preset.verified };
       entry.publish = outcome;
@@ -3047,6 +3273,7 @@ var BrowserRuntime = class {
         fail("task_running", `a browser_task (${entry.task.agent}) owns this page; wait for it or cancel it`);
       }
       await confirm(entry.driver, publication);
+      if (publication.record.status === "posted") this.observeConnection(entry.profile, publication.recipe.origin, true, publication.account);
       return this.redact(entry, publishRecord(publication));
     });
   }
@@ -3422,6 +3649,7 @@ var recipeSchema = z.object({
   origin: z.string().min(1).max(2048),
   composeUrl: z.string().min(1).max(2048),
   signedIn: selector2,
+  account: selector2.optional(),
   fields: z.array(z.object({ selector: selector2, value: z.string().max(1e4), label: z.string().trim().min(1).max(40).optional() }).strict()).min(1).max(8),
   submit: selector2,
   receipt: z.object({ path: z.string().min(1).max(256).startsWith("/"), linkSelector: selector2.optional() }).strict()
@@ -3593,7 +3821,7 @@ async function createBrowserServer(options = {}) {
   }, ({ browserId }) => result(() => runtime.cancelTask(browserId)));
   registerAppTool(server2, "browser_publish", {
     title: "Publish",
-    description: `Post through a signed-in profile. Pass EXACTLY ONE of preset or recipe. preset (preferred; list them with browser_publish_presets): {name, values (one string per preset field, in the preset's field order), target? (only for a preset with needsTarget: the page on the preset's site to post on, e.g. the thread to comment on)}; it resolves to a recipe and takes the same path. recipe (data you supply, for a site with no preset): origin (https; http only for 127.0.0.1/localhost), composeUrl on origin, signedIn (a CSS selector present only when logged in), fields [{selector, value, label?}] (1-8, values \u2264 10000 chars; label \u2264 40 chars is the caption shown in the Browser View, e.g. "Post text"), submit (selector), receipt {path (template for the posted URL's pathname on origin: literal text plus {segment} for one path segment and {digits} for a number, at most one per segment, e.g. "/{segment}/status/{digits}"; query and hash are ignored), linkSelector? (the posted link's element; else the tab's URL after submit)}. mode "check": opens composeUrl and returns status "signed-in" or "not-signed-in" (sign in first \u2014 with browser_act or browser_task, or by hand in the View \u2014 then post). mode "post": types each value, reads it back exactly, and returns status "awaiting-confirmation" with a publishId and composeUrl (where it will post). NOTHING is submitted yet: confirm it with browser_publish_confirm (or the Post button in the Browser View), or drop it with browser_publish_cancel; browser_publish_wait follows it. While it awaits confirmation the page is pinned: browser_act, browser_tab, browser_task and browser_publish are refused (publish_pending) until it is posted, cancelled or expires (10 minutes). "failed" means nothing was submitted. A password field is never a publish field (its value is never read back, so it cannot be verified); log in with browser_act or browser_task. Refused while a task runs.`,
+    description: `Post through a signed-in profile. Pass EXACTLY ONE of preset or recipe. preset (preferred; list them with browser_publish_presets): {name, values (one string per preset field, in the preset's field order), target? (only for a preset with needsTarget: the page on the preset's site to post on, e.g. the thread to comment on)}; it resolves to a recipe and takes the same path. recipe (data you supply, for a site with no preset): origin (https; http only for 127.0.0.1/localhost), composeUrl on origin, signedIn (a CSS selector present only when logged in), account? (a CSS selector whose text names the signed-in account, e.g. "Alice @alice" \u2192 "@alice"; reported to the host with the sign-in), fields [{selector, value, label?}] (1-8, values \u2264 10000 chars; label \u2264 40 chars is the caption shown in the Browser View, e.g. "Post text"), submit (selector), receipt {path (template for the posted URL's pathname on origin: literal text plus {segment} for one path segment and {digits} for a number, at most one per segment, e.g. "/{segment}/status/{digits}"; query and hash are ignored), linkSelector? (the posted link's element; else the tab's URL after submit)}. mode "check": opens composeUrl and returns status "signed-in" or "not-signed-in" (sign in first \u2014 with browser_act or browser_task, or by hand in the View \u2014 then post). mode "post": types each value, reads it back exactly, and returns status "awaiting-confirmation" with a publishId and composeUrl (where it will post). NOTHING is submitted yet: confirm it with browser_publish_confirm (or the Post button in the Browser View), or drop it with browser_publish_cancel; browser_publish_wait follows it. While it awaits confirmation the page is pinned: browser_act, browser_tab, browser_task and browser_publish are refused (publish_pending) until it is posted, cancelled or expires (10 minutes). "failed" means nothing was submitted. A password field is never a publish field (its value is never read back, so it cannot be verified); log in with browser_act or browser_task. Refused while a task runs.`,
     inputSchema: { browserId: capability, recipe: recipeSchema.optional(), preset: presetSchema.optional(), mode: z.enum(PUBLISH_MODES) },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     _meta: { ui: { resourceUri: BROWSER_VIEW_URI } }
@@ -3666,10 +3894,25 @@ async function createBrowserServer(options = {}) {
     await runtime.close(browserId, callerOf(extra));
     return { closed: true };
   }));
+  let reporting = Promise.resolve();
+  const sendReport = () => {
+    reporting = reporting.then(async () => {
+      if (!server2.isConnected()) return;
+      const params = { report: buildConnectionReport(await runtime.connections()) };
+      await server2.server.notification({ method: PACK_CONNECTION_REPORT_METHOD, params });
+    }).catch((error) => console.error("Browser connection report was not sent:", error instanceof Error ? error.message : error));
+  };
+  const stopReporting = runtime.onConnectionsChanged(sendReport);
+  const previousOnInitialized = server2.server.oninitialized;
+  server2.server.oninitialized = () => {
+    previousOnInitialized?.();
+    sendReport();
+  };
   const previousOnClose = server2.server.onclose;
   const closeTransport = server2.close.bind(server2);
   let disposal;
   server2.close = async () => {
+    stopReporting();
     try {
       await (disposal ??= runtime.dispose());
     } finally {
@@ -3678,6 +3921,7 @@ async function createBrowserServer(options = {}) {
   };
   server2.server.onclose = () => {
     previousOnClose?.();
+    stopReporting();
     void (disposal ??= runtime.dispose()).catch((error) => console.error("Browser cleanup failed:", error));
   };
   return server2;

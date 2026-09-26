@@ -30,7 +30,7 @@ import { confirm, prepare, validateRecipe, type Publication } from "../src/publi
 import type { BrowserRuntime } from "../src/runtime";
 import { createBrowserServer } from "../src/server";
 import { ActionNotDispatched } from "../src/store";
-import { BROWSER_TEST_TIMEOUT_MS, chromePath, createRoot, describeWithChrome, failureCode, newRuntime, perform, teardown } from "./fixture";
+import { BROWSER_TEST_TIMEOUT_MS, chromePath, createRoot, describeWithChrome, failureCode, newRuntime, perform, racingClock, teardown } from "./fixture";
 import { type ComposeVariant, type PublishFixture, startPublishFixture } from "./publish-fixture";
 
 const CALLER = "ai.insodimension/caller";
@@ -157,33 +157,6 @@ async function humanPostsOnThePage(s: Session): Promise<void> {
 	await humanAct(s, { kind: "click", selector: "#post" });
 	await s.fixture.reached("/landed");
 	expect(s.fixture.submissions()).toHaveLength(1);
-}
-
-/**
- * Settle `work`, and once `ready()` has held for `graceMs`, make `Date.now()`
- * race ahead so any real-clock deadline inside it passes within a poll. Timers
- * stay real. `ready` must name the last thing the page will ever do; the grace
- * (several of publish.ts's 250 ms polls) lets the code under test observe that
- * final page before its deadline is skipped, so skipping cannot hide an outcome.
- */
-async function racingClock<T>(ready: () => boolean, work: Promise<T>, graceMs = 1_000): Promise<T> {
-	const base = Date.now() - performance.now();
-	let readyAt: number | undefined;
-	let skip = 0;
-	// A real interval, deliberately: the deadlines live in real Chrome round trips
-	// that a fake timer cannot advance, and only Date.now() is jumped.
-	const pump = setInterval(() => {
-		if (readyAt === undefined && ready()) readyAt = performance.now();
-		if (readyAt === undefined || performance.now() - readyAt < graceMs) return;
-		skip += 30_000;
-		setSystemTime(new Date(base + performance.now() + skip));
-	}, 50);
-	try {
-		return await work;
-	} finally {
-		clearInterval(pump);
-		setSystemTime();
-	}
 }
 
 // ---------------------------------------------------------------------------

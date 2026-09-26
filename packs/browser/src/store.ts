@@ -1,15 +1,24 @@
 /**
  * Per-profile filesystem state for the browser runtime.
  *
- * Owns two things and nothing else:
+ * Owns three things and nothing else:
  *   1. Profile directory layout + filesystem-safe slug validation.
  *   2. The per-profile process lock (atomic create, owner-token release,
  *      NEVER steals a stale lock and NEVER kills a foreign process).
+ *   3. Each profile's sign-in observations (`connections.json`, see
+ *      connection.ts), kept in the profile's own directory so a deleted
+ *      profile takes them with it and a restart can report them again.
  */
 import { randomBytes } from "node:crypto";
-import { closeSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, statSync, unlinkSync, writeSync } from "node:fs";
+import { closeSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import type { ConnectionObservations, SiteObservation, SiteObservations } from "./connection.js";
+
+const CONNECTIONS_FILE = "connections.json";
+/** Sites remembered per profile; the oldest observation goes first. */
+const MAX_SITES_PER_PROFILE = 64;
+const MAX_ACCOUNT_CHARS = 1_024;
 
 /** Matches the server's input schema exactly: 1-48 chars, no dots. */
 const SLUG_RE = /^[a-z0-9][a-z0-9_-]{0,47}$/;
@@ -148,6 +157,53 @@ export class ProfileStore {
 		} catch {
 			/* already gone */
 		}
+	}
+
+	/** This profile's persisted sign-in observations; none when it was never observed or the file is unreadable. */
+	connections(slug: string): SiteObservations {
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(readFileSync(join(this.profileDir(slug), CONNECTIONS_FILE), "utf8"));
+		} catch {
+			return {};
+		}
+		const sites: SiteObservations = {};
+		const stored = (parsed as { sites?: unknown } | null)?.sites;
+		if (typeof stored !== "object" || stored === null) return sites;
+		for (const [host, value] of Object.entries(stored as Record<string, unknown>)) {
+			const site = value as Partial<SiteObservation> | null;
+			if (typeof site?.signedIn !== "boolean" || typeof site.observedAt !== "number" || !Number.isFinite(site.observedAt)) continue;
+			const valid: SiteObservation = { signedIn: site.signedIn, observedAt: site.observedAt };
+			if (typeof site.account === "string" && site.account.length <= MAX_ACCOUNT_CHARS) valid.account = site.account;
+			sites[host] = valid;
+		}
+		return sites;
+	}
+
+	/** Persist one observation of `host`, replacing that host's last one. Atomic: a crash leaves the old file or the new one. */
+	recordConnection(slug: string, host: string, observation: SiteObservation): void {
+		const sites = { ...this.connections(slug), [host]: observation };
+		const kept = Object.entries(sites).sort(([, a], [, b]) => b.observedAt - a.observedAt).slice(0, MAX_SITES_PER_PROFILE);
+		const dir = this.ensureProfile(slug);
+		const path = join(dir, CONNECTIONS_FILE);
+		const staging = `${path}.${randomBytes(6).toString("hex")}.tmp`;
+		writeFileSync(staging, `${JSON.stringify({ sites: Object.fromEntries(kept) })}\n`, { mode: 0o600 });
+		try {
+			renameSync(staging, path);
+		} catch (error) {
+			try { unlinkSync(staging); } catch { /* already gone */ }
+			throw error;
+		}
+	}
+
+	/** Every on-disk profile that has observations. A deleted profile directory is simply not here. */
+	allConnections(): ConnectionObservations {
+		const all: ConnectionObservations = {};
+		for (const slug of this.list()) {
+			const sites = this.connections(slug);
+			if (Object.keys(sites).length > 0) all[slug] = sites;
+		}
+		return all;
 	}
 }
 

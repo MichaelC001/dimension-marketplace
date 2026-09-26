@@ -39,6 +39,8 @@ export interface PublishPreset {
 	composeUrl?: string;
 	composeFrom?: "target";
 	signedIn: string;
+	/** Optional selector whose text names the signed-in account (for the connection report). */
+	account?: string;
 	/** The caller's values fill these in order. */
 	fields: { label: string; selector: string }[];
 	submit: string;
@@ -61,7 +63,7 @@ export interface PresetSummary {
 	needsTarget: boolean;
 }
 
-const PRESET_KEYS: readonly string[] = ["name", "platform", "verified", "verifiedAt", "notes", "origin", "composeUrl", "composeFrom", "signedIn", "fields", "submit", "receipt"];
+const PRESET_KEYS: readonly string[] = ["name", "platform", "verified", "verifiedAt", "notes", "origin", "composeUrl", "composeFrom", "signedIn", "account", "fields", "submit", "receipt"];
 
 /**
  * Read and check every `*.json` in `dir`. A malformed preset is a startup
@@ -124,6 +126,7 @@ export function parsePreset(input: unknown, where: string): PublishPreset {
 			origin: valid.origin,
 			...(preset.composeUrl === undefined ? { composeFrom: "target" as const } : { composeUrl: valid.composeUrl }),
 			signedIn: valid.signedIn,
+			...(valid.account === undefined ? {} : { account: valid.account }),
 			fields: valid.fields.map((field) => ({ label: field.label ?? "", selector: field.selector })),
 			submit: valid.submit,
 			receipt: valid.receipt,
@@ -188,6 +191,7 @@ function toRecipe(preset: PublishPreset, values: readonly string[], composeUrl: 
 		origin: preset.origin,
 		composeUrl,
 		signedIn: preset.signedIn,
+		...(preset.account === undefined ? {} : { account: preset.account }),
 		fields: preset.fields.map((field, index) => ({ label: field.label, selector: field.selector, value: values[index] ?? "" })),
 		submit: preset.submit,
 		receipt: { ...preset.receipt },
