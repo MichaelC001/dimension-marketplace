@@ -299,8 +299,11 @@ describeWithChrome("browser_publish", () => {
 				{ name: "browser_publish_confirm", visibility: undefined },
 				{ name: "browser_publish_cancel", visibility: undefined },
 			]);
+			// The host asks the human before every call of a tool marked "prompt", yolo included: the Allow card is the gate.
+			expect(tools[0]?._meta?.["ai.insodimension/approval"]).toBe("prompt");
 
-			const confirmed = await s.call("browser_publish_confirm", { browserId: s.browserId, publishId: parked.publishId }, "model");
+			const shown = { origin: parked.origin, profile: parked.profile, values: parked.fields.map((field) => field.value) };
+			const confirmed = await s.call("browser_publish_confirm", { browserId: s.browserId, publishId: parked.publishId, expect: shown }, "model");
 
 			expect(confirmed.isError).toBeFalsy();
 			expect(confirmed.structuredContent).toMatchObject({ status: "posted", url: s.fixture.url("/alice/status/1") });
@@ -308,6 +311,56 @@ describeWithChrome("browser_publish", () => {
 			expect(s.fixture.submissions()).toEqual([{ text: TEXT, rich: RICH }]);
 			expect(s.fixture.hits("/submit")).toBe(1);
 			expect(await record(s, parked.publishId)).toMatchObject({ status: "posted", url: s.fixture.url("/alice/status/1") });
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"a model confirm without expect is refused expect_required, clicks nothing, and leaves the publish pending",
+		async () => {
+			const s = await session("pub-model-no-expect");
+			const parked = await post(s, "nav");
+
+			const confirmed = await s.call("browser_publish_confirm", { browserId: s.browserId, publishId: parked.publishId }, "model");
+
+			expect(confirmed.isError).toBe(true);
+			expect(confirmed.content[0]?.text).toContain("expect_required");
+			expect((await counters(s.runtime, s.browserId)).clicks).toBe(0);
+			expect(s.fixture.hits("/submit")).toBe(0);
+			expect((await record(s, parked.publishId)).status).toBe("awaiting-confirmation");
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"a model confirm whose expect differs in one of origin, profile, or a value is refused publish_mismatch and does not consume the publish",
+		async () => {
+			const s = await session("pub-model-mismatch");
+			const parked = await post(s, "nav");
+			const shown = { origin: parked.origin, profile: parked.profile, values: parked.fields.map((field) => field.value) };
+			const args = { browserId: s.browserId, publishId: parked.publishId };
+			const differing = [
+				{ name: "origin", expect: { ...shown, origin: s.fixture.origin.replace("127.0.0.1", "localhost") } },
+				{ name: "profile", expect: { ...shown, profile: "someone-else" } },
+				{ name: "values[1]", expect: { ...shown, values: [TEXT, `${RICH} `] } },
+			];
+
+			for (const row of differing) {
+				const refused = await s.call("browser_publish_confirm", { ...args, expect: row.expect }, "model");
+				expect({ row: row.name, isError: refused.isError, text: refused.content[0]?.text }).toMatchObject({
+					row: row.name,
+					isError: true,
+					text: expect.stringContaining(`publish_mismatch: expect does not match the pending publish (mismatched: ${row.name})`),
+				});
+				expect((await counters(s.runtime, s.browserId)).clicks).toBe(0);
+				expect(s.fixture.hits("/submit")).toBe(0);
+				expect((await record(s, parked.publishId)).status).toBe("awaiting-confirmation");
+			}
+
+			const confirmed = await s.call("browser_publish_confirm", { ...args, expect: shown }, "model");
+
+			expect(confirmed.structuredContent).toMatchObject({ status: "posted", url: s.fixture.url("/alice/status/1") });
+			expect(s.fixture.submissions()).toEqual([{ text: TEXT, rich: RICH }]);
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);

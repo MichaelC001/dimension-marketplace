@@ -50,11 +50,19 @@ const presetSchema = z.object({
   values: z.array(z.string().max(10_000)).min(1).max(8),
   target: z.string().min(1).max(2048).optional(),
 }).strict();
+/** browser_publish_confirm's binding to the pending record it posts: the Allow card shows exactly where, as whom and what. */
+const expectSchema = z.object({
+  origin: z.string().min(1).max(2048),
+  profile: z.string().min(1).max(48),
+  values: z.array(z.string().max(10_000)).min(1).max(8),
+}).strict();
 const MIME: Record<string, string> = { ".js": "text/javascript", ".mjs": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".png": "image/png", ".woff": "font/woff", ".woff2": "font/woff2", ".json": "application/json" };
 const APP_ONLY = { ui: { visibility: ["app"] as const } };
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false, openWorldHint: false };
 /** Stamped by the host on every tools/call from the visibility-checked caller: "model" | "app". */
 const CALLER_META_KEY = "ai.insodimension/caller";
+/** A tool carrying `"prompt"` here makes the host ask the human before every call, in every permission mode. */
+const APPROVAL_META_KEY = "ai.insodimension/approval";
 type CallExtra = { _meta?: Record<string, unknown> };
 
 /** Who the host says made this call; no stamp means it did not come through the host. */
@@ -251,10 +259,11 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     inputSchema: {}, annotations: READ_ONLY,
   }, () => result(async () => ({ presets: summarizePresets(presets) })));
   server.registerTool("browser_publish_confirm", {
-    description: "Post a publish awaiting confirmation (the model may call this; the Browser View's Post button calls it too): re-verify the active tab is still the one and the URL shown in the View and every field still holds exactly the pending value, click submit exactly once (never retried), and read the posted URL from the page. Status posted (url), failed (nothing submitted) or unknown (may have posted).",
-    inputSchema: { browserId: capability, publishId: capability },
+    description: "Post a publish awaiting confirmation (the model may call this; the Browser View's Post button calls it too). The host ALWAYS asks the human first, whatever the session's permission mode: its Allow card shows these args (a harness that cannot guarantee that ask gets the call refused by the Dimension host; then the user presses Post in the View). The model MUST pass expect: {origin, profile, values} copied exactly from the pending record it was shown (origin and profile as-is; values = every field's value, in field order); a model call without expect fails with expect_required, and any difference fails with publish_mismatch — nothing clicked, the publish still pending. Then: re-verify the active tab is still the one and the URL shown in the View and every field still holds exactly the pending value, click submit exactly once (never retried), and read the posted URL from the page. Status posted (url), failed (nothing submitted) or unknown (may have posted).",
+    inputSchema: { browserId: capability, publishId: capability, expect: expectSchema.optional() },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
-  }, ({ browserId, publishId }) => result(() => runtime.confirmPublish(browserId, publishId)));
+    _meta: { [APPROVAL_META_KEY]: "prompt" },
+  }, ({ browserId, publishId, expect }, extra) => result(() => runtime.confirmPublish(browserId, publishId, callerOf(extra), expect)));
   server.registerTool("browser_publish_cancel", {
     description: "Drop a publish awaiting confirmation without submitting anything (the model may call this; the Browser View's Cancel button calls it too).",
     inputSchema: { browserId: capability, publishId: capability },

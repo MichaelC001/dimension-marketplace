@@ -175,6 +175,26 @@ function formatWhen(ev: CalendarEvent): string {
 	return "(no start time)";
 }
 
+/** Deleting an event is irreversible, and inviting attendees or patching an
+ *  event reaches other people's calendars, so these demand a human click in
+ *  EVERY approval mode — a bare "write" tier is auto-approved by write and yolo
+ *  mode. */
+const PROMPT_EVERY_MODE = { tier: "write", policy: "prompt" } as const;
+// Event notes go to every attendee; the approval card shows the first 4000
+// characters and says how much more follows.
+const APPROVAL_BODY_CAP = 4000;
+
+/** Event notes as an approval card shows them, capped at APPROVAL_BODY_CAP. */
+function approvalDescription(description: string): string {
+	return `Description:\n${description.length > APPROVAL_BODY_CAP ? `${description.slice(0, APPROVAL_BODY_CAP)}[…${description.length - APPROVAL_BODY_CAP} more chars]` : description}`;
+}
+
+/** One argument off unvalidated tool args, for an approval card or approval
+ *  decision. Never throws: both run before the schema checks the call. */
+function approvalArg(args: unknown, key: string): unknown {
+	return typeof args === "object" && args !== null ? Reflect.get(args, key) : undefined;
+}
+
 const listCalendarsSchema = type({});
 
 const listEventsSchema = type({
@@ -402,7 +422,40 @@ function createCreateEventTool(): ToolDefinition<typeof createEventSchema> {
 		description:
 			"Create an event on a calendar. Timed events take ISO 8601 dateTimes with a timezone offset; set allDay to treat startIso/endIso as calendar dates instead. Mutating — confirm the summary, time, and attendees with the user first. Returns the new event id and htmlLink.",
 		parameters: createEventSchema,
-		approval: "write" as const,
+		// Attendees put the event on other people's calendars, so an invite asks the
+		// human in every mode; an event only on the user's own calendar is a plain
+		// write. Any attendeeEmails value other than absent or [] counts as an
+		// invite, so a malformed one can only make the gate stricter.
+		approval: (args: unknown) => {
+			const attendees = approvalArg(args, "attendeeEmails");
+			return attendees === undefined || (Array.isArray(attendees) && attendees.length === 0)
+				? "write"
+				: PROMPT_EVERY_MODE;
+		},
+		formatApprovalDetails(args: unknown) {
+			const text = (key: string) => {
+				const value = approvalArg(args, key);
+				return typeof value === "string" ? value : undefined;
+			};
+			const attendees = approvalArg(args, "attendeeEmails");
+			const description = text("description");
+			const lines = [
+				`Calendar: ${text("calendarId") ?? "primary"}`,
+				`Summary: ${text("summary") ?? "(missing)"}`,
+				`When: ${text("startIso") ?? "(missing)"} – ${text("endIso") ?? "(missing)"}${approvalArg(args, "allDay") === true ? " (all-day)" : ""}`,
+				`Invites: ${
+					attendees === undefined || (Array.isArray(attendees) && attendees.length === 0)
+						? "none"
+						: Array.isArray(attendees)
+							? attendees.map(String).join(", ")
+							: "(malformed attendeeEmails)"
+				}`,
+			];
+			const location = text("location");
+			if (location) lines.push(`Location: ${location}`);
+			if (description) lines.push(approvalDescription(description));
+			return lines;
+		},
 		async execute(_toolCallId: string, params: typeof createEventSchema.infer) {
 			const accessToken = await freshAccessToken();
 			const calendarId = params.calendarId ?? "primary";
@@ -431,7 +484,28 @@ function createUpdateEventTool(): ToolDefinition<typeof updateEventSchema> {
 		description:
 			"Patch an existing event — only the fields you pass change; everything else is preserved. Mutating — confirm the change first. Note: for a recurring series, PATCHing the event id edits THAT occurrence; series-level edits need the master event id (recurringEventId, from google_calendar_get_event).",
 		parameters: updateEventSchema,
-		approval: "write" as const,
+		// Patching an event changes every guest's copy, and the args cannot show
+		// whether it has guests, so every update asks the human in every mode.
+		approval: PROMPT_EVERY_MODE,
+		formatApprovalDetails(args: unknown) {
+			const text = (key: string) => {
+				const value = approvalArg(args, key);
+				return typeof value === "string" ? value : undefined;
+			};
+			// The same fields, under the same conditions, that execute patches.
+			const summary = text("summary");
+			const startIso = text("startIso");
+			const endIso = text("endIso");
+			const description = text("description");
+			const location = text("location");
+			const lines = [`Calendar: ${text("calendarId") ?? "primary"}`, `Update event: ${text("eventId") ?? "(missing)"}`];
+			if (summary !== undefined) lines.push(`Summary: ${summary}`);
+			if (startIso) lines.push(`Start: ${startIso}`);
+			if (endIso) lines.push(`End: ${endIso}`);
+			if (location !== undefined) lines.push(`Location: ${location}`);
+			if (description !== undefined) lines.push(approvalDescription(description));
+			return lines;
+		},
 		async execute(_toolCallId: string, params: typeof updateEventSchema.infer) {
 			const accessToken = await freshAccessToken();
 			const calendarId = params.calendarId ?? "primary";
@@ -465,7 +539,15 @@ function createDeleteEventTool(): ToolDefinition<typeof deleteEventSchema> {
 		description:
 			"Permanently delete an event from a calendar. DESTRUCTIVE and irreversible — before calling, read the event (google_calendar_get_event) and confirm the EXACT event with the user by its summary and start time. Do not guess the event id.",
 		parameters: deleteEventSchema,
-		approval: "write" as const,
+		approval: PROMPT_EVERY_MODE,
+		formatApprovalDetails(args: unknown) {
+			const calendarId = approvalArg(args, "calendarId");
+			const eventId = approvalArg(args, "eventId");
+			return [
+				`Calendar: ${typeof calendarId === "string" ? calendarId : "primary"}`,
+				`Delete event: ${typeof eventId === "string" ? eventId : "(missing)"}`,
+			];
+		},
 		async execute(_toolCallId: string, params: typeof deleteEventSchema.infer) {
 			const accessToken = await freshAccessToken();
 			const calendarId = params.calendarId ?? "primary";

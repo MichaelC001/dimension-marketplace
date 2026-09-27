@@ -39,6 +39,7 @@ import type {
 	PublishCheck,
 	PublishMode,
 	PublishRecipe,
+	PublishExpectation,
 	PublishRecord,
 	ReadRequest,
 	ReadResult,
@@ -824,10 +825,12 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		});
 	}
 
-	async confirmPublish(browserId: string, publishId: string): Promise<PublishRecord> {
+	async confirmPublish(browserId: string, publishId: string, caller?: ToolCaller, expect?: PublishExpectation): Promise<PublishRecord> {
 		const entry = this.require(browserId);
 		return await this.serialize(entry, async () => {
 			const publication = requirePending(entry.publish, publishId);
+			// Before any page interaction: a refusal here leaves the publish pending and nothing clicked.
+			requireExpected(this.redact(entry, publishRecord(publication)), caller, expect);
 			if (entry.task?.status === "running") {
 				fail("task_running", `a browser_task (${entry.task.agent}) owns this page; wait for it or cancel it`);
 			}
@@ -1209,6 +1212,30 @@ function requireDelta(value: unknown, name: string): number {
 function refuseWhilePublishing(entry: Entry, caller: ToolCaller | undefined): void {
 	if (caller !== "app" && isPending(entry.publish)) {
 		fail("publish_pending", "a post awaits confirmation on this browser; confirm or cancel it (browser_publish_confirm / browser_publish_cancel) or wait with browser_publish_wait");
+	}
+}
+
+/**
+ * The confirm must name what it posts. A model (or unstamped) confirm must
+ * carry `expect`; any `expect` must match the record the caller was shown —
+ * redacted, as every reported record is — exactly: origin, profile, and every
+ * field value in field order. The View's Post ("app") is the human's own
+ * click on the bar that shows the record, so it may omit `expect`.
+ */
+function requireExpected(shown: PublishRecord, caller: ToolCaller | undefined, expect: PublishExpectation | undefined): void {
+	if (expect === undefined) {
+		if (caller !== "app") fail("expect_required", "expect_required: pass expect: { origin, profile, values } copied exactly from the pending publish record (values: every field's value, in field order); nothing was clicked");
+		return;
+	}
+	const values = shown.fields.map((field) => field.value);
+	const differs = [
+		...(expect.origin === shown.origin ? [] : ["origin"]),
+		...(expect.profile === shown.profile ? [] : ["profile"]),
+		...(expect.values.length === values.length ? [] : [`values (expected ${values.length}, got ${expect.values.length})`]),
+		...values.flatMap((value, index) => (index < expect.values.length && expect.values[index] !== value ? [`values[${index}]`] : [])),
+	];
+	if (differs.length > 0) {
+		fail("publish_mismatch", `publish_mismatch: expect does not match the pending publish (mismatched: ${differs.join(", ")}); nothing was clicked and the publish is still pending. Read it with browser_publish_wait and confirm what it actually holds, or cancel it`);
 	}
 }
 

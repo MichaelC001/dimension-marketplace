@@ -24,6 +24,8 @@
 // skill say so, and `x_post` reports the tier it just spent.
 
 import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -61,6 +63,16 @@ const storedCredential = type({
 });
 type StoredCredential = typeof storedCredential.infer;
 
+/** Validate the stored credential's JSON text. Throws a reconnect message when
+ *  it is not a credential. */
+function parseCredential(raw: string): StoredCredential {
+	const parsed = storedCredential(JSON.parse(raw));
+	if (parsed instanceof type.errors) {
+		throw new Error(`X's stored credential at ${CONFIG_TARGET} is malformed. Reconnect the plugin.`);
+	}
+	return parsed;
+}
+
 async function readCredential(): Promise<StoredCredential> {
 	let raw: string;
 	try {
@@ -68,11 +80,23 @@ async function readCredential(): Promise<StoredCredential> {
 	} catch {
 		throw new Error("X isn't connected yet. Open the plugin's Connect dialog (Plugins → X) and sign in.");
 	}
-	const parsed = storedCredential(JSON.parse(raw));
-	if (parsed instanceof type.errors) {
-		throw new Error(`X's stored credential at ${CONFIG_TARGET} is malformed. Reconnect the plugin.`);
+	return parseCredential(raw);
+}
+
+/** The credential on disk right now, or null when it is missing or malformed.
+ *  Synchronous for the approval card, which renders before any await. */
+function readCredentialSync(): StoredCredential | null {
+	try {
+		return parseCredential(readFileSync(CONFIG_TARGET, "utf-8"));
+	} catch {
+		return null;
 	}
-	return parsed;
+}
+
+/** Which authorised ACCOUNT a credential is. The clientId names only the OAuth
+ *  app, and one app can authorise several accounts, so the tokens are the key. */
+function credentialIdentity(cred: StoredCredential): string {
+	return createHash("sha256").update(`${cred.access}\0${cred.refresh}`).digest("hex");
 }
 
 /** Refresh the access token via the `refresh_token` grant when it's expired (or
@@ -116,6 +140,11 @@ async function refreshAccessToken(cred: StoredCredential): Promise<StoredCredent
 		expires: Date.now() + expiresIn * 1000,
 	};
 	await writeFile(CONFIG_TARGET, JSON.stringify(refreshed, null, 2));
+	// A refresh rotates both tokens but keeps the account: carry the cached
+	// handle over rather than paying for another /users/me.
+	if (cachedMe?.identity === credentialIdentity(cred)) {
+		cachedMe = { identity: credentialIdentity(refreshed), user: cachedMe.user };
+	}
 	return refreshed;
 }
 
@@ -350,18 +379,69 @@ function tweetListParams(
 }
 
 /** The connected account's numeric id, needed by every user-scoped endpoint.
- *  Cached for the process: it never changes for a given credential, and every
- *  uncached lookup is a billed request. Cleared when the credential changes. */
-let cachedMe: { clientId: string; user: XUser } | null = null;
+ *  Cached for the process against the account's credential identity: it never
+ *  changes for a given account, and every uncached lookup is a billed request. */
+let cachedMe: { identity: string; user: XUser } | null = null;
 
 async function me(): Promise<XUser> {
+	// Refresh first: an expired token is rotated (and rewritten) inside xJson,
+	// and the cache must be keyed to the credential the lookup actually used.
+	await freshAccessToken();
 	const cred = await readCredential();
-	if (cachedMe && cachedMe.clientId === cred.clientId) return cachedMe.user;
+	const identity = credentialIdentity(cred);
+	if (cachedMe && cachedMe.identity === identity) return cachedMe.user;
 	const payload = await xJson<{ data?: XUser }>(`/users/me?user.fields=${USER_FIELDS}`, "users/me");
 	const user = payload.data;
 	if (!user?.id) throw new Error("X did not return the connected account's id. Reconnect the plugin.");
-	cachedMe = { clientId: cred.clientId, user };
+	cachedMe = { identity, user };
 	return user;
+}
+
+/** Publishing, deleting, and DMing are public or unretractable, so they demand
+ *  a human click in EVERY approval mode — a bare "write" tier is auto-approved
+ *  by write and yolo mode. */
+const PROMPT_EVERY_MODE = { tier: "write", policy: "prompt" } as const;
+
+/** One string argument off unvalidated tool args, for an approval card. Never
+ *  throws: the card renders before the schema checks the call. */
+function approvalArg(args: unknown, key: string): string | undefined {
+	const value: unknown = typeof args === "object" && args !== null ? Reflect.get(args, key) : undefined;
+	return typeof value === "string" ? value : undefined;
+}
+
+/** Who the write goes out as. Synchronous by contract and never touches the
+ *  network: names the handle only when `me()` cached it for the account whose
+ *  credential is on disk now, so a reconnect as another account never shows
+ *  the old handle. */
+function approvalAccount(): string {
+	const cred = readCredentialSync();
+	const username =
+		cachedMe && cred && cachedMe.identity === credentialIdentity(cred) ? cachedMe.user.username : undefined;
+	return username ? `As: @${username}` : "As: the connected X account";
+}
+
+/** The reply target x_post uses: an empty or whitespace-only replyTo is absent,
+ *  so the post goes out top-level. Shared by the tool and its approval card. */
+function replyTarget(raw: string | undefined): string | undefined {
+	return raw?.trim() ? raw : undefined;
+}
+
+/** A post reference as the approval card shows it: the id plus its link, or the
+ *  raw input flagged when it will not parse (the call then fails, posting nothing). */
+function approvalPostRef(raw: string | undefined): string {
+	if (raw === undefined) return "(missing)";
+	try {
+		const id = postId(raw);
+		return `${id} (https://x.com/i/status/${id})`;
+	} catch {
+		return `${raw} (not a post id or status URL)`;
+	}
+}
+
+/** The posts x_thread publishes, in order — shared by the tool and its approval
+ *  card so the human approves exactly what goes out. */
+function threadPosts(posts: readonly string[]): string[] {
+	return posts.map(entry => entry.trim()).filter(Boolean);
 }
 
 const emptySchema = type({});
@@ -779,11 +859,19 @@ function createPostTool(): ToolDefinition<typeof postSchema> {
 		description:
 			"Publish a post as the connected account, or a reply when replyTo is set. PUBLIC, IMMEDIATE, and attributed to the user — confirm the exact final text with them in the current turn before calling; there is no draft state and no silent undo. Costs $0.015, or $0.20 when the text contains a URL. REPLY RULE: X's automation policy only permits a programmatic reply when the original author @mentioned or quoted the user — otherwise draft it and let the user send it themselves.",
 		parameters: postSchema,
-		approval: "write" as const,
+		approval: PROMPT_EVERY_MODE,
+		formatApprovalDetails(args: unknown) {
+			const replyTo = replyTarget(approvalArg(args, "replyTo"));
+			const lines = [approvalAccount()];
+			if (replyTo !== undefined) lines.push(`Reply to: ${approvalPostRef(replyTo)}`);
+			lines.push(`Text:\n${approvalArg(args, "text") ?? "(missing)"}`);
+			return lines;
+		},
 		async execute(_toolCallId: string, params: typeof postSchema.infer) {
 			const text = params.text;
 			if (!text.trim()) throw new Error("Refusing to publish an empty post.");
-			const replyToId = params.replyTo ? postId(params.replyTo) : undefined;
+			const replyTo = replyTarget(params.replyTo);
+			const replyToId = replyTo ? postId(replyTo) : undefined;
 			const created = await publishPost(text, replyToId);
 			const user = await me();
 			const what = replyToId ? `Replied to ${replyToId}` : "Posted";
@@ -811,9 +899,15 @@ function createThreadTool(): ToolDefinition<typeof threadSchema> {
 		description:
 			"Publish several posts as one self-replying thread, in order. PUBLIC and IMMEDIATE — confirm EVERY post's text with the user first. Not atomic: if a later post fails, the earlier ones stay up and the tool reports exactly how far it got so you can continue from there. Each post bills separately ($0.015, or $0.20 with a URL).",
 		parameters: threadSchema,
-		approval: "write" as const,
+		approval: PROMPT_EVERY_MODE,
+		formatApprovalDetails(args: unknown) {
+			const raw: unknown = typeof args === "object" && args !== null ? Reflect.get(args, "posts") : undefined;
+			if (!Array.isArray(raw)) return [approvalAccount(), "Posts: (missing)"];
+			const posts = threadPosts(raw.map(entry => (typeof entry === "string" ? entry : "")));
+			return [approvalAccount(), ...posts.map((text, i) => `Post ${i + 1}/${posts.length}:\n${text}`)];
+		},
 		async execute(_toolCallId: string, params: typeof threadSchema.infer) {
-			const posts = params.posts.map(entry => entry.trim()).filter(Boolean);
+			const posts = threadPosts(params.posts);
 			if (posts.length < 2) throw new Error("A thread needs at least two posts — use x_post for a single one.");
 			const ids: string[] = [];
 			let previous: string | undefined;
@@ -850,7 +944,10 @@ function createDeleteTool(): ToolDefinition<typeof deleteSchema> {
 		description:
 			"Delete one of the connected account's own posts. IRREVERSIBLE — read the post back with x_get_post and confirm the exact id with the user before calling. Deleting a mid-thread post orphans the replies below it.",
 		parameters: deleteSchema,
-		approval: "write" as const,
+		approval: PROMPT_EVERY_MODE,
+		formatApprovalDetails(args: unknown) {
+			return [approvalAccount(), `Delete post: ${approvalPostRef(approvalArg(args, "post"))}`];
+		},
 		async execute(_toolCallId: string, params: typeof deleteSchema.infer) {
 			const id = postId(params.post);
 			const payload = await xJson<{ data?: { deleted?: boolean } }>(`/tweets/${id}`, "tweets/delete", {
@@ -914,7 +1011,15 @@ function createDmTool(): ToolDefinition<typeof dmSchema> {
 		description:
 			"Send a direct message to a user. PRIVATE but immediate and unretractable — confirm the recipient handle AND the full text with the user first. Requires the dm.write scope and the app's \"Direct message\" permission. NEVER use for unsolicited outreach: mass or automated DMs violate X's platform rules.",
 		parameters: dmSchema,
-		approval: "write" as const,
+		approval: PROMPT_EVERY_MODE,
+		formatApprovalDetails(args: unknown) {
+			const username = approvalArg(args, "username");
+			return [
+				approvalAccount(),
+				`To: ${username === undefined ? "(missing)" : `@${handle(username)}`}`,
+				`Text:\n${approvalArg(args, "text") ?? "(missing)"}`,
+			];
+		},
 		async execute(_toolCallId: string, params: typeof dmSchema.infer) {
 			if (!params.text.trim()) throw new Error("Refusing to send an empty DM.");
 			const name = handle(params.username);

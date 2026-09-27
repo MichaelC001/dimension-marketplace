@@ -193,6 +193,25 @@ function htmlToText(html: string, max = 500): string {
 	return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 
+/** Posting to a shared channel reaches other people, so it demands a human
+ *  click in EVERY approval mode — a bare "write" tier is auto-approved by write
+ *  and yolo mode. */
+const PROMPT_EVERY_MODE = { tier: "write", policy: "prompt" } as const;
+// A channel message may be far longer than a card can hold; the approval card
+// shows the first 4000 characters and says how much more follows.
+const APPROVAL_BODY_CAP = 4000;
+
+/** One argument off unvalidated tool args, for an approval card. Never throws:
+ *  the card renders before the schema checks the call. The body is shown raw,
+ *  HTML included, because that is exactly what Graph receives. */
+function approvalArg(args: unknown, key: string): string {
+	const value: unknown = typeof args === "object" && args !== null ? Reflect.get(args, key) : undefined;
+	if (typeof value !== "string") return "(missing)";
+	return value.length > APPROVAL_BODY_CAP
+		? `${value.slice(0, APPROVAL_BODY_CAP)}[…${value.length - APPROVAL_BODY_CAP} more chars]`
+		: value;
+}
+
 const listTeamsSchema = type({});
 const listChannelsSchema = type({
 	teamId: type("string").describe("The team (group) id, from teams_list_teams."),
@@ -282,7 +301,14 @@ function createSendMessageTool(): ToolDefinition<typeof sendMessageSchema> {
 		description:
 			"Post a message to a Microsoft Teams channel. DESTRUCTIVE — this publishes to a shared channel; ALWAYS confirm the exact team, channel, and message text with the user before calling. Note: sending as an application requires the ChannelMessage.Send application permission WITH admin consent, and Microsoft restricts app-only channel messages to migration/import scenarios on some tenants — if Graph refuses, its exact error is surfaced verbatim.",
 		parameters: sendMessageSchema,
-		approval: "write" as const,
+		approval: PROMPT_EVERY_MODE,
+		formatApprovalDetails(args: unknown) {
+			return [
+				`Team: ${approvalArg(args, "teamId")}`,
+				`Channel: ${approvalArg(args, "channelId")}`,
+				`Message:\n${approvalArg(args, "content")}`,
+			];
+		},
 		async execute(_toolCallId: string, params: typeof sendMessageSchema.infer) {
 			const payload = await graphPostMessage(
 				`/teams/${encodeURIComponent(params.teamId)}/channels/${encodeURIComponent(params.channelId)}/messages`,
@@ -338,7 +364,15 @@ function createReplyMessageTool(): ToolDefinition<typeof replyMessageSchema> {
 		description:
 			"Reply to a message in a Microsoft Teams channel (posts under the given top-level message). DESTRUCTIVE — this publishes to a shared channel; ALWAYS confirm the exact team, channel, target message id, and reply text with the user before calling. Like teams_send_channel_message, replying as an application requires the ChannelMessage.Send application permission WITH admin consent, and Microsoft restricts app-only channel messages to migration/import scenarios on some tenants — if Graph refuses, its exact error is surfaced verbatim.",
 		parameters: replyMessageSchema,
-		approval: "write" as const,
+		approval: PROMPT_EVERY_MODE,
+		formatApprovalDetails(args: unknown) {
+			return [
+				`Team: ${approvalArg(args, "teamId")}`,
+				`Channel: ${approvalArg(args, "channelId")}`,
+				`Reply to message: ${approvalArg(args, "messageId")}`,
+				`Reply:\n${approvalArg(args, "content")}`,
+			];
+		},
 		async execute(_toolCallId: string, params: typeof replyMessageSchema.infer) {
 			const payload = await graphPostMessage(
 				`/teams/${encodeURIComponent(params.teamId)}/channels/${encodeURIComponent(params.channelId)}/messages/${encodeURIComponent(params.messageId)}/replies`,

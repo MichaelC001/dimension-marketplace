@@ -358,7 +358,16 @@ function createEndActiveConferenceTool(): ToolDefinition<typeof endActiveConfere
 		description:
 			"End the conference currently in progress in a space, removing everyone from the call. DESTRUCTIVE and disruptive — confirm the exact space (by meeting code / URL) with the user first. No-ops with an error if no conference is active.",
 		parameters: endActiveConferenceSchema,
-		approval: "write" as const,
+		// Ends the call for everyone in it, so it asks the human in EVERY approval
+		// mode — a bare "write" tier is auto-approved by write and yolo mode.
+		approval: { tier: "write", policy: "prompt" } as const,
+		formatApprovalDetails(args: unknown) {
+			const space: unknown = typeof args === "object" && args !== null ? Reflect.get(args, "space") : undefined;
+			return [
+				`End the live call in: ${typeof space === "string" ? spaceName(space) : "(missing)"}`,
+				"Everyone in the call is removed.",
+			];
+		},
 		async execute(_toolCallId: string, params: typeof endActiveConferenceSchema.infer) {
 			const accessToken = await freshAccessToken();
 			const name = spaceName(params.space);

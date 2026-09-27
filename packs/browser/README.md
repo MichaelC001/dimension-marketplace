@@ -17,7 +17,8 @@ standard MCP and MCP Apps. No host internals, no browser fork.
   marks are painted into the cropped screenshot and sent, with your note, the URL
   and the elements under the crop, into the same conversation.
 - **Acts when asked.** The agent session decides what to do — its permission mode
-  and its own questions to you govern consequential steps. The browser never
+  and its own questions to you govern consequential steps (except the publish
+  confirm, which always asks you). The browser never
   second-guesses it. One safety property is kept: an action that errored after it
   was sent is reported `unknown` (it may have taken effect) and is never retried
   automatically.
@@ -243,14 +244,17 @@ drafts, and the post is confirmed.
 3. **Post.** A bar at the bottom of the Browser View shows where the post goes
    (the page and the profile) and exactly what will be posted, with **Post**
    and **Cancel**. Your agent can confirm it itself (`browser_publish_confirm`),
-   asking first or not as your session's permission mode says, or you press
-   Post. While the bar waits, the agent can't otherwise touch the page. After
-   the post, its own link comes back to the agent as the receipt.
+   but that ALWAYS asks you first, whatever your session's permission mode: an
+   Allow card names the exact site, profile and text it will post. (Under a
+   harness that can't guarantee that ask, Dimension refuses the agent's confirm
+   instead.) Or you press Post. While the bar waits, the agent can't otherwise
+   touch the page. After the post, its own link comes back to the agent as the
+   receipt.
 
 If you post it yourself with the site's own button instead, the bar can't
 know for sure, so it says "May have posted" and never posts a second copy.
-Nothing is posted until a confirm: your Post button or the agent's
-`browser_publish_confirm`.
+Nothing is posted until a confirm: your Post button, or the agent's
+`browser_publish_confirm` once you allow it.
 
 ## Publishing
 
@@ -292,10 +296,18 @@ as data, so the pack's code stays platform-agnostic:
   `composeUrl` (where the post goes). **Nothing is submitted.** The Browser View
   shows a confirm bar with that URL, the profile and every value. A confirm
   submits: the model's `browser_publish_confirm` or the bar's **Post** (the same
-  tool). It is destructive and open-world, so the session's permission mode
-  decides whether it asks. The page is re-checked first: another active tab, a
-  different URL or a changed value fails with nothing clicked.
-  `browser_publish_cancel` drops it.
+  tool). The tool declares `_meta: { "ai.insodimension/approval": "prompt" }`,
+  so the host ALWAYS asks the human before the agent's call runs, in every permission mode
+  (yolo included); a harness that can't guarantee that ask has the call refused
+  by the Dimension host instead. The model MUST pass `expect: { origin, profile, values }`
+  copied exactly from the pending record (`values`: every field's value, in
+  field order), so the Allow card states where the post goes, as which profile,
+  and exactly what it says. A model call without `expect` fails
+  `expect_required`; any `expect` (from any caller) that differs from the
+  pending record fails `publish_mismatch`; either way nothing is clicked and the
+  publish stays pending. The View's Post may omit `expect`. The page is then
+  re-checked: another active tab, a different URL or a changed value fails with
+  nothing clicked. `browser_publish_cancel` drops it.
 - While a publish is pending the page is pinned: `browser_act`, `browser_tab`,
   `browser_task`, `browser_publish` and `browser_close` are refused
   (`publish_pending`) unless the host stamped the call as coming from the View.

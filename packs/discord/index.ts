@@ -142,6 +142,20 @@ function oneLine(text: string, max: number): string {
 	return flattened.length > max ? `${flattened.slice(0, max)}…` : flattened;
 }
 
+/** Posting, republishing, and deleting in a live channel reach other people or
+ *  cannot be undone, so they demand a human click in EVERY approval mode — a
+ *  bare "write" tier is auto-approved by write and yolo mode. */
+const PROMPT_EVERY_MODE = { tier: "write", policy: "prompt" } as const;
+
+/** One argument off unvalidated tool args, for an approval card; `absent`
+ *  stands in when it is not a string or number. Never throws: the card renders
+ *  before the schema checks the call. Shown in full — a Discord message is at
+ *  most 2000 characters. */
+function approvalArg(args: unknown, key: string, absent = "(missing)"): string {
+	const value: unknown = typeof args === "object" && args !== null ? Reflect.get(args, key) : undefined;
+	return typeof value === "string" || typeof value === "number" ? String(value) : absent;
+}
+
 const listGuildsSchema = type({});
 
 const listChannelsSchema = type({
@@ -314,7 +328,10 @@ function createSendMessageTool(): ToolDefinition<typeof sendMessageSchema> {
 		description:
 			"Post a message to a Discord channel. DESTRUCTIVE — this publishes text to a live channel other people can see. ALWAYS confirm the exact channel and message content with the user before calling. Returns the new message id.",
 		parameters: sendMessageSchema,
-		approval: "write" as const,
+		approval: PROMPT_EVERY_MODE,
+		formatApprovalDetails(args: unknown) {
+			return [`Channel: ${approvalArg(args, "channelId")}`, `Message:\n${approvalArg(args, "content")}`];
+		},
 		async execute(_toolCallId: string, params: typeof sendMessageSchema.infer) {
 			const token = (await readCredential()).access;
 			const sent = await discordJson<Message>(
@@ -335,7 +352,15 @@ function createCreateThreadTool(): ToolDefinition<typeof createThreadSchema> {
 		description:
 			"Create a thread in a Discord channel. If `messageId` is given the thread is spun off from that existing message; otherwise a standalone public thread is created. MUTATING — confirm the channel (and message, if any) and the thread name with the user first. Returns the new thread id and name.",
 		parameters: createThreadSchema,
-		approval: "write" as const,
+		approval: PROMPT_EVERY_MODE,
+		formatApprovalDetails(args: unknown) {
+			const from = approvalArg(args, "messageId", "");
+			return [
+				`Channel: ${approvalArg(args, "channelId")}`,
+				`Thread name: ${approvalArg(args, "name")}`,
+				from ? `From message: ${from}` : "Starts: a new public thread (Discord announces it in the channel)",
+			];
+		},
 		async execute(_toolCallId: string, params: typeof createThreadSchema.infer) {
 			const token = (await readCredential()).access;
 			const channelId = encodeURIComponent(params.channelId);
@@ -373,7 +398,14 @@ function createReplyMessageTool(): ToolDefinition<typeof replyMessageSchema> {
 		description:
 			"Reply to a specific Discord message (posts a new message linked to the original). DESTRUCTIVE — this publishes text to a live channel other people can see. ALWAYS confirm the exact channel, target message, and reply content with the user first. Returns the new message id.",
 		parameters: replyMessageSchema,
-		approval: "write" as const,
+		approval: PROMPT_EVERY_MODE,
+		formatApprovalDetails(args: unknown) {
+			return [
+				`Channel: ${approvalArg(args, "channelId")}`,
+				`Reply to message: ${approvalArg(args, "messageId")}`,
+				`Message:\n${approvalArg(args, "content")}`,
+			];
+		},
 		async execute(_toolCallId: string, params: typeof replyMessageSchema.infer) {
 			const token = (await readCredential()).access;
 			const sent = await discordJson<Message>(
@@ -420,7 +452,14 @@ function createEditMessageTool(): ToolDefinition<typeof editMessageSchema> {
 		description:
 			"Edit the content of a Discord message. ONLY works on the bot's OWN messages — Discord rejects edits to messages posted by other users. DESTRUCTIVE — the previous content is replaced; confirm the exact message and new content with the user first.",
 		parameters: editMessageSchema,
-		approval: "write" as const,
+		approval: PROMPT_EVERY_MODE,
+		formatApprovalDetails(args: unknown) {
+			return [
+				`Channel: ${approvalArg(args, "channelId")}`,
+				`Edit message: ${approvalArg(args, "messageId")}`,
+				`New content:\n${approvalArg(args, "content")}`,
+			];
+		},
 		async execute(_toolCallId: string, params: typeof editMessageSchema.infer) {
 			const token = (await readCredential()).access;
 			const edited = await discordJson<Message>(
@@ -441,7 +480,10 @@ function createDeleteMessageTool(): ToolDefinition<typeof deleteMessageSchema> {
 		description:
 			"MODERATION. Permanently delete a Discord message — with the Manage Messages permission this works on ANYONE's message, not just the bot's. IRREVERSIBLE. NEVER call without EXPLICIT user confirmation of the EXACT message (channel + message id, ideally quoting its content) in the current turn. Refuse on vague instructions like \"clean up the channel\".",
 		parameters: deleteMessageSchema,
-		approval: "write" as const,
+		approval: PROMPT_EVERY_MODE,
+		formatApprovalDetails(args: unknown) {
+			return [`Channel: ${approvalArg(args, "channelId")}`, `Delete message: ${approvalArg(args, "messageId")}`];
+		},
 		async execute(_toolCallId: string, params: typeof deleteMessageSchema.infer) {
 			const token = (await readCredential()).access;
 			await discordVoid(

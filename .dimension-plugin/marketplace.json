@@ -130,7 +130,7 @@
 			"title": "Browser",
 			"icon": "globe",
 			"description": "A real browser beside your chat that your agent drives while you watch. Tabs, persistent logged-in profiles, circle-to-annotate, and fast task agents (jev, browser-use).",
-			"version": "0.2.2",
+			"version": "0.2.3",
 			"author": {
 				"name": "Dimension"
 			},
@@ -323,7 +323,7 @@
 			"title": "Discord",
 			"icon": "packs/discord/assets/icon.svg",
 			"description": "Discord connector — list servers/channels, read and send messages via a bot token",
-			"version": "0.1.3",
+			"version": "0.1.4",
 			"author": {
 				"name": "Dimension"
 			},
@@ -446,7 +446,7 @@
 			"title": "Google Calendar",
 			"icon": "packs/google-calendar/assets/icon.png",
 			"description": "Manage Google Calendar events and schedules",
-			"version": "0.1.3",
+			"version": "0.1.4",
 			"author": {
 				"name": "Dimension"
 			},
@@ -469,7 +469,7 @@
 			"title": "Google Drive",
 			"icon": "packs/google-drive/assets/icon.svg",
 			"description": "Google Drive connector — list/search/read files via OAuth",
-			"version": "0.1.2",
+			"version": "0.1.3",
 			"author": {
 				"name": "Dimension"
 			},
@@ -491,7 +491,7 @@
 			"title": "Google Meet",
 			"icon": "packs/google-meet/assets/icon.svg",
 			"description": "Create Google Meet spaces, read conference records/recordings/transcripts, and live-transcribe a call",
-			"version": "0.1.2",
+			"version": "0.1.3",
 			"author": {
 				"name": "Dimension"
 			},
@@ -806,7 +806,7 @@
 			"title": "Reddit",
 			"icon": "packs/reddit/assets/icon.svg",
 			"description": "Reddit connector — feeds, posts, comments, search, submit, vote, and inbox via the Reddit OAuth API",
-			"version": "0.1.3",
+			"version": "0.1.4",
 			"author": {
 				"name": "Dimension"
 			},
@@ -850,7 +850,7 @@
 			"title": "Slack",
 			"icon": "packs/slack/assets/icon.svg",
 			"description": "Slack connector — list channels, read messages, and post via the Slack Web API",
-			"version": "0.1.2",
+			"version": "0.1.3",
 			"author": {
 				"name": "Dimension"
 			},
@@ -898,7 +898,7 @@
 			"title": "Microsoft Teams",
 			"icon": "packs/teams/assets/icon.svg",
 			"description": "Microsoft Teams connector — list teams/channels and post channel messages via Microsoft Graph",
-			"version": "0.1.3",
+			"version": "0.1.4",
 			"author": {
 				"name": "Dimension"
 			},
@@ -921,7 +921,7 @@
 			"title": "Telegram",
 			"icon": "packs/telegram/assets/icon.svg",
 			"description": "Telegram connector — send messages, read updates, inspect chats via the Bot API",
-			"version": "0.1.3",
+			"version": "0.1.4",
 			"author": {
 				"name": "Dimension"
 			},
@@ -1016,7 +1016,7 @@
 			"title": "WhatsApp",
 			"icon": "packs/whatsapp/assets/icon.svg",
 			"description": "WhatsApp connector — send text messages and templates via the Meta WhatsApp Cloud API",
-			"version": "0.1.2",
+			"version": "0.1.3",
 			"author": {
 				"name": "Dimension"
 			},
@@ -1038,7 +1038,7 @@
 			"title": "X",
 			"icon": "packs/x/assets/icon.svg",
 			"description": "X (Twitter) connector — mentions, timelines, search, threads, and posting via the official X API v2",
-			"version": "0.2.4",
+			"version": "0.2.5",
 			"author": {
 				"name": "Dimension"
 			},
@@ -1061,7 +1061,7 @@
 			"title": "YouTube",
 			"icon": "packs/youtube/assets/icon.svg",
 			"description": "Search YouTube, inspect videos and channels, manage playlists, and read/post comments",
-			"version": "0.1.3",
+			"version": "0.1.4",
 			"author": {
 				"name": "Dimension"
 			},

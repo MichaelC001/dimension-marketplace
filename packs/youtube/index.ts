@@ -120,6 +120,21 @@ function clampLimit(v: number | undefined, def: number, max: number): number {
 	return Math.min(Math.max(v ?? def, 1), max);
 }
 
+/** A comment is public under the user's channel name, so posting one demands a
+ *  human click in EVERY approval mode — a bare "write" tier is auto-approved by
+ *  write and yolo mode. */
+const PROMPT_EVERY_MODE = { tier: "write", policy: "prompt" } as const;
+// A comment may run to 10k characters; the approval card shows the first 4000
+// and says how much more follows.
+const APPROVAL_BODY_CAP = 4000;
+
+/** One non-empty string argument off unvalidated tool args, for an approval
+ *  card. Never throws: the card renders before the schema checks the call. */
+function approvalArg(args: unknown, key: string): string | undefined {
+	const value: unknown = typeof args === "object" && args !== null ? Reflect.get(args, key) : undefined;
+	return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
 /** Turn an ISO 8601 duration (PT1H2M3S) into a compact 1:02:03 clock. Falls back
  *  to the raw string if it doesn't parse (e.g. live streams report P0D). */
 function formatDuration(iso: string | undefined): string {
@@ -503,7 +518,20 @@ function createPostCommentTool(): ToolDefinition<typeof postCommentSchema> {
 		description:
 			"Post a PUBLIC comment. Pass videoId to post a new top-level comment on a video, OR parentCommentId to reply to an existing comment (from youtube_list_comments) — exactly one. Mutating and PUBLICLY VISIBLE under the connected account's name — confirm the exact target and full text with the user first; it cannot be silently undone.",
 		parameters: postCommentSchema,
-		approval: "write" as const,
+		approval: PROMPT_EVERY_MODE,
+		formatApprovalDetails(args: unknown) {
+			const videoId = approvalArg(args, "videoId");
+			const parent = approvalArg(args, "parentCommentId");
+			const text = approvalArg(args, "text") ?? "(missing)";
+			const lines: string[] = [];
+			if (videoId) lines.push(`Video: https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`);
+			if (parent) lines.push(`Reply to comment: ${parent}`);
+			if (!videoId && !parent) lines.push("Target: (missing)");
+			lines.push(
+				`Comment:\n${text.length > APPROVAL_BODY_CAP ? `${text.slice(0, APPROVAL_BODY_CAP)}[…${text.length - APPROVAL_BODY_CAP} more chars]` : text}`,
+			);
+			return lines;
+		},
 		async execute(_toolCallId: string, params: typeof postCommentSchema.infer) {
 			const accessToken = await freshAccessToken();
 			const hasVideo = !!params.videoId;

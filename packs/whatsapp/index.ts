@@ -81,6 +81,20 @@ async function sendMessage(
 	return id;
 }
 
+/** Every tool here messages another person and cannot be unsent, so each
+ *  demands a human click in EVERY approval mode — a bare "write" tier is
+ *  auto-approved by write and yolo mode. */
+const PROMPT_EVERY_MODE = { tier: "write", policy: "prompt" } as const;
+
+/** One string argument off unvalidated tool args, for an approval card;
+ *  `absent` stands in when it is not a non-empty string (the tools skip an empty
+ *  optional field). Never throws: the card renders before the schema checks the
+ *  call. Shown in full — WhatsApp caps a text at 4096 characters. */
+function approvalArg(args: unknown, key: string, absent = "(missing)"): string {
+	const value: unknown = typeof args === "object" && args !== null ? Reflect.get(args, key) : undefined;
+	return typeof value === "string" && value.length > 0 ? value : absent;
+}
+
 const sendMessageSchema = type({
 	to: type("string").describe(
 		"Recipient phone number in international format (country code + number, digits only, e.g. 447700900123). This person MUST have messaged your number within the last 24h.",
@@ -126,7 +140,10 @@ function createSendMessageTool(): ToolDefinition<typeof sendMessageSchema> {
 		description:
 			"Send a free-form text WhatsApp message to a recipient. DESTRUCTIVE — always confirm the recipient AND the exact message text with the user before calling. Free-form text ONLY reaches people who messaged your number within the last 24 hours (the customer-service window); for first contact or any message outside that window a pre-approved template is required — use whatsapp_send_template instead. Returns the sent message id.",
 		parameters: sendMessageSchema,
-		approval: "write" as const,
+		approval: PROMPT_EVERY_MODE,
+		formatApprovalDetails(args: unknown) {
+			return [`To: ${approvalArg(args, "to")}`, `Message:\n${approvalArg(args, "body")}`];
+		},
 		async execute(_toolCallId: string, params: typeof sendMessageSchema.infer) {
 			const cred = await readCredential();
 			const id = await sendMessage(
@@ -146,7 +163,14 @@ function createSendTemplateTool(): ToolDefinition<typeof sendTemplateSchema> {
 		description:
 			'Send a pre-approved WhatsApp message template to a recipient — required for first contact or any message outside the 24-hour customer-service window (where free-form text is blocked). DESTRUCTIVE — always confirm the recipient AND which template with the user first. Language code defaults to "en_US". Returns the sent message id.',
 		parameters: sendTemplateSchema,
-		approval: "write" as const,
+		approval: PROMPT_EVERY_MODE,
+		formatApprovalDetails(args: unknown) {
+			return [
+				`To: ${approvalArg(args, "to")}`,
+				`Template: ${approvalArg(args, "template")}`,
+				`Language: ${approvalArg(args, "languageCode", DEFAULT_TEMPLATE_LANGUAGE)}`,
+			];
+		},
 		async execute(_toolCallId: string, params: typeof sendTemplateSchema.infer) {
 			const cred = await readCredential();
 			const id = await sendMessage(
@@ -180,7 +204,14 @@ function createSendImageTool(): ToolDefinition<typeof sendImageSchema> {
 		description:
 			"Send an image (from a public HTTPS URL) to a WhatsApp recipient, with an optional caption. DESTRUCTIVE — always confirm the recipient AND the exact image URL/caption with the user before calling. Like free-form text, media ONLY reaches people who messaged your number within the last 24 hours (the customer-service window); outside it a pre-approved template is required instead. Returns the sent message id.",
 		parameters: sendImageSchema,
-		approval: "write" as const,
+		approval: PROMPT_EVERY_MODE,
+		formatApprovalDetails(args: unknown) {
+			return [
+				`To: ${approvalArg(args, "to")}`,
+				`Image: ${approvalArg(args, "imageUrl")}`,
+				`Caption:\n${approvalArg(args, "caption", "(none)")}`,
+			];
+		},
 		async execute(_toolCallId: string, params: typeof sendImageSchema.infer) {
 			const cred = await readCredential();
 			const image: Record<string, string> = { link: params.imageUrl };
@@ -198,7 +229,15 @@ function createSendDocumentTool(): ToolDefinition<typeof sendDocumentSchema> {
 		description:
 			"Send a document/file (from a public HTTPS URL) to a WhatsApp recipient, with an optional filename and caption. DESTRUCTIVE — always confirm the recipient AND the exact document URL with the user before calling. Like free-form text, media ONLY reaches people who messaged your number within the last 24 hours (the customer-service window); outside it a pre-approved template is required instead. Returns the sent message id.",
 		parameters: sendDocumentSchema,
-		approval: "write" as const,
+		approval: PROMPT_EVERY_MODE,
+		formatApprovalDetails(args: unknown) {
+			return [
+				`To: ${approvalArg(args, "to")}`,
+				`Document: ${approvalArg(args, "documentUrl")}`,
+				`Filename: ${approvalArg(args, "filename", "(derived from the URL)")}`,
+				`Caption:\n${approvalArg(args, "caption", "(none)")}`,
+			];
+		},
 		async execute(_toolCallId: string, params: typeof sendDocumentSchema.infer) {
 			const cred = await readCredential();
 			const doc: Record<string, string> = { link: params.documentUrl };
