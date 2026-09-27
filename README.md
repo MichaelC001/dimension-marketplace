@@ -104,6 +104,19 @@ whose version is unknown is never gated. Omit the field when your pack has no
 floor; `packs/build` is the worked example (it pins the bundled `general-chat`
 companion, which first ships in Dimension 0.10.5).
 
+### `channel` — keep samples and work in progress off stable
+
+A pack that is not a user feature on its own declares `"channel": "canary"` in its
+`dimension.plugin.json` block: work in progress (`build`, `phone`) and every
+sample, demo, reference or fixture pack (`example-agents`, `mochi-mark`,
+`pulse-mark`, `artifactory-threejs`, `artifactory-system-monitor`). The
+generator carries it into the catalog entry and the engine hides the pack — its
+card, its General Agents and its install-by-name — from every install on the
+`stable` release ring. Canary testers and dev builds still see it, and tests
+read the pack from disk, so copying it as a template is unaffected. Omit the
+field for anything that ships to everyone; the validator refuses any value but
+`stable` or `canary`, because the engine treats a typo as unrestricted.
+
 ## General Agents
 
 A pack may ship **General Agents** — the identity a session is opened as (a
