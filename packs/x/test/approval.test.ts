@@ -4,15 +4,65 @@
 // (the pack's `@oh-my-pi/pi-coding-agent` peer), fed the tool exactly as the
 // default-exported factory registers it. The approval card is what the human
 // reads before clicking, so it must carry everything that goes out, verbatim.
+//
+// `CONFIG_TARGET` is derived from `homedir()` at module load, so HOME is pointed
+// at a temp dir around the dynamic import only: the account tests swap the
+// stored credential there and stub `fetch`, never touching the real token.
 
-import { expect, test } from "bun:test";
+import { afterAll, afterEach, expect, test } from "bun:test";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { resolveApproval } from "@oh-my-pi/pi-coding-agent/tools/approval";
-import xExtension from "../index";
+
+const home = await mkdtemp(join(tmpdir(), "dimension-x-approval-"));
+const tokenDir = join(home, ".config", "dimension-x");
+await mkdir(tokenDir, { recursive: true });
+const priorHome = process.env.HOME;
+const priorUserProfile = process.env.USERPROFILE;
+process.env.HOME = home;
+process.env.USERPROFILE = home;
+// Dynamic on purpose: a static import is hoisted above the HOME override.
+const { default: xExtension } = await import("../index");
+if (priorHome === undefined) delete process.env.HOME;
+else process.env.HOME = priorHome;
+if (priorUserProfile === undefined) delete process.env.USERPROFILE;
+else process.env.USERPROFILE = priorUserProfile;
+
+const realFetch = globalThis.fetch;
+afterEach(() => {
+	globalThis.fetch = realFetch;
+});
+afterAll(async () => {
+	await rm(home, { recursive: true, force: true });
+});
+
+/** Store a credential for one account. Both accounts share the OAuth app. */
+async function connect(access: string, refresh: string): Promise<void> {
+	await writeFile(
+		join(tokenDir, "token.json"),
+		JSON.stringify({ access, refresh, expires: Date.now() + 3_600_000, clientId: "shared-app" }),
+	);
+}
+
+/** Stub X: /users/me answers as `username`; every POST /tweets is recorded. */
+function stubX(username: string, posted: unknown[] = []): void {
+	globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+		const url = String(input);
+		if (url.includes("/users/me")) return Response.json({ data: { id: "42", username } });
+		if (url.endsWith("/tweets")) {
+			posted.push(JSON.parse(String(init?.body)));
+			return Response.json({ data: { id: "1790000000000000009", text: "x" } });
+		}
+		throw new Error(`unexpected request ${url}`);
+	}) as typeof fetch;
+}
 
 interface RegisteredTool {
 	name: string;
 	approval?: unknown;
 	formatApprovalDetails?: (args: unknown) => string[];
+	execute?: (id: string, params: unknown) => Promise<unknown>;
 }
 
 const tools = new Map<string, RegisteredTool>();
@@ -76,5 +126,30 @@ test("malformed args still render a card instead of throwing", () => {
 		for (const args of [undefined, 42, { text: 7 }, { posts: [1, null] }]) {
 			expect(card(name, args)).toContain("As:");
 		}
+	}
+});
+
+test("the card names the handle only for the account whose credential is connected now", async () => {
+	await connect("access-alice", "refresh-alice");
+	stubX("alice");
+	await tool("x_me").execute?.("call-1", {});
+	expect(card("x_post", { text: "hi" })).toContain("As: @alice");
+
+	// Reconnected as another account through the same OAuth app.
+	await connect("access-brand", "refresh-brand");
+	const shown = card("x_post", { text: "hi" });
+	expect(shown).not.toContain("@alice");
+	expect(shown).toContain("As: the connected X account");
+});
+
+test("an empty or blank replyTo is no reply target: the card and the post both go top-level", async () => {
+	await connect("access-alice", "refresh-alice");
+	for (const replyTo of ["", "   "]) {
+		const shown = card("x_post", { text: "top level", replyTo });
+		expect(shown).not.toContain("Reply to");
+		const posted: unknown[] = [];
+		stubX("alice", posted);
+		await tool("x_post").execute?.("call-2", { text: "top level", replyTo });
+		expect(posted).toEqual([{ text: "top level" }]);
 	}
 });

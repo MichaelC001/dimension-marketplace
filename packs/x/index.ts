@@ -24,6 +24,8 @@
 // skill say so, and `x_post` reports the tier it just spent.
 
 import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -61,6 +63,16 @@ const storedCredential = type({
 });
 type StoredCredential = typeof storedCredential.infer;
 
+/** Validate the stored credential's JSON text. Throws a reconnect message when
+ *  it is not a credential. */
+function parseCredential(raw: string): StoredCredential {
+	const parsed = storedCredential(JSON.parse(raw));
+	if (parsed instanceof type.errors) {
+		throw new Error(`X's stored credential at ${CONFIG_TARGET} is malformed. Reconnect the plugin.`);
+	}
+	return parsed;
+}
+
 async function readCredential(): Promise<StoredCredential> {
 	let raw: string;
 	try {
@@ -68,12 +80,23 @@ async function readCredential(): Promise<StoredCredential> {
 	} catch {
 		throw new Error("X isn't connected yet. Open the plugin's Connect dialog (Plugins → X) and sign in.");
 	}
-	const parsed = storedCredential(JSON.parse(raw));
-	if (parsed instanceof type.errors) {
-		throw new Error(`X's stored credential at ${CONFIG_TARGET} is malformed. Reconnect the plugin.`);
+	return parseCredential(raw);
+}
+
+/** The credential on disk right now, or null when it is missing or malformed.
+ *  Synchronous for the approval card, which renders before any await. */
+function readCredentialSync(): StoredCredential | null {
+	try {
+		return parseCredential(readFileSync(CONFIG_TARGET, "utf-8"));
+	} catch {
+		return null;
 	}
-	lastCredentialClientId = parsed.clientId;
-	return parsed;
+}
+
+/** Which authorised ACCOUNT a credential is. The clientId names only the OAuth
+ *  app, and one app can authorise several accounts, so the tokens are the key. */
+function credentialIdentity(cred: StoredCredential): string {
+	return createHash("sha256").update(`${cred.access}\0${cred.refresh}`).digest("hex");
 }
 
 /** Refresh the access token via the `refresh_token` grant when it's expired (or
@@ -117,6 +140,11 @@ async function refreshAccessToken(cred: StoredCredential): Promise<StoredCredent
 		expires: Date.now() + expiresIn * 1000,
 	};
 	await writeFile(CONFIG_TARGET, JSON.stringify(refreshed, null, 2));
+	// A refresh rotates both tokens but keeps the account: carry the cached
+	// handle over rather than paying for another /users/me.
+	if (cachedMe?.identity === credentialIdentity(cred)) {
+		cachedMe = { identity: credentialIdentity(refreshed), user: cachedMe.user };
+	}
 	return refreshed;
 }
 
@@ -351,21 +379,18 @@ function tweetListParams(
 }
 
 /** The connected account's numeric id, needed by every user-scoped endpoint.
- *  Cached for the process: it never changes for a given credential, and every
- *  uncached lookup is a billed request. Cleared when the credential changes. */
-let cachedMe: { clientId: string; user: XUser } | null = null;
-/** The clientId of the credential `readCredential` last parsed. The approval
- *  card is synchronous and must not touch disk or network, so it trusts
- *  `cachedMe` only while it matches this — the same key `me()` checks. */
-let lastCredentialClientId: string | null = null;
+ *  Cached for the process against the account's credential identity: it never
+ *  changes for a given account, and every uncached lookup is a billed request. */
+let cachedMe: { identity: string; user: XUser } | null = null;
 
 async function me(): Promise<XUser> {
 	const cred = await readCredential();
-	if (cachedMe && cachedMe.clientId === cred.clientId) return cachedMe.user;
+	const identity = credentialIdentity(cred);
+	if (cachedMe && cachedMe.identity === identity) return cachedMe.user;
 	const payload = await xJson<{ data?: XUser }>(`/users/me?user.fields=${USER_FIELDS}`, "users/me");
 	const user = payload.data;
 	if (!user?.id) throw new Error("X did not return the connected account's id. Reconnect the plugin.");
-	cachedMe = { clientId: cred.clientId, user };
+	cachedMe = { identity, user };
 	return user;
 }
 
@@ -381,11 +406,21 @@ function approvalArg(args: unknown, key: string): string | undefined {
 	return typeof value === "string" ? value : undefined;
 }
 
-/** Who the write goes out as. Synchronous by contract: names the handle only
- *  when `me()` already cached it for the credential in use. */
+/** Who the write goes out as. Synchronous by contract and never touches the
+ *  network: names the handle only when `me()` cached it for the account whose
+ *  credential is on disk now, so a reconnect as another account never shows
+ *  the old handle. */
 function approvalAccount(): string {
-	const username = cachedMe && cachedMe.clientId === lastCredentialClientId ? cachedMe.user.username : undefined;
+	const cred = readCredentialSync();
+	const username =
+		cachedMe && cred && cachedMe.identity === credentialIdentity(cred) ? cachedMe.user.username : undefined;
 	return username ? `As: @${username}` : "As: the connected X account";
+}
+
+/** The reply target x_post uses: an empty or whitespace-only replyTo is absent,
+ *  so the post goes out top-level. Shared by the tool and its approval card. */
+function replyTarget(raw: string | undefined): string | undefined {
+	return raw?.trim() ? raw : undefined;
 }
 
 /** A post reference as the approval card shows it: the id plus its link, or the
@@ -823,7 +858,7 @@ function createPostTool(): ToolDefinition<typeof postSchema> {
 		parameters: postSchema,
 		approval: PROMPT_EVERY_MODE,
 		formatApprovalDetails(args: unknown) {
-			const replyTo = approvalArg(args, "replyTo");
+			const replyTo = replyTarget(approvalArg(args, "replyTo"));
 			const lines = [approvalAccount()];
 			if (replyTo !== undefined) lines.push(`Reply to: ${approvalPostRef(replyTo)}`);
 			lines.push(`Text:\n${approvalArg(args, "text") ?? "(missing)"}`);
@@ -832,7 +867,8 @@ function createPostTool(): ToolDefinition<typeof postSchema> {
 		async execute(_toolCallId: string, params: typeof postSchema.infer) {
 			const text = params.text;
 			if (!text.trim()) throw new Error("Refusing to publish an empty post.");
-			const replyToId = params.replyTo ? postId(params.replyTo) : undefined;
+			const replyTo = replyTarget(params.replyTo);
+			const replyToId = replyTo ? postId(replyTo) : undefined;
 			const created = await publishPost(text, replyToId);
 			const user = await me();
 			const what = replyToId ? `Replied to ${replyToId}` : "Posted";

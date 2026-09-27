@@ -1,15 +1,20 @@
-// An event with attendees lands on other people's calendars and emails them, so
-// creating one must stop for a human click even in yolo mode; an event only on
-// the user's own calendar stays a plain write that yolo auto-approves. Deleting
-// an event is irreversible and always asks. Decided by the engine's own
-// `resolveApproval` (the pack's `@oh-my-pi/pi-coding-agent` peer) on the tools
-// exactly as the default-exported factory registers them.
+// An event with attendees lands on other people's calendars (insert sends no
+// `sendUpdates`, so it puts the event on their calendars rather than emailing
+// them), so creating one must stop for a human click even in yolo mode; an
+// event only on the user's own calendar stays a plain write that yolo
+// auto-approves. Patching an event changes every guest's copy and the args
+// cannot show whether it has guests, so every update asks. Deleting an event is
+// irreversible and always asks. Decided by the engine's own `resolveApproval`
+// (the pack's `@oh-my-pi/pi-coding-agent` peer) on the tools exactly as the
+// default-exported factory registers them.
 
 import { expect, test } from "bun:test";
 import { resolveApproval } from "@oh-my-pi/pi-coding-agent/tools/approval";
 import googleCalendarExtension from "../index";
 
-type ApprovalSubject = Parameters<typeof resolveApproval>[0];
+type ApprovalSubject = Parameters<typeof resolveApproval>[0] & {
+	formatApprovalDetails?: (args: unknown) => string[];
+};
 
 const tools = new Map<string, ApprovalSubject>();
 googleCalendarExtension({
@@ -22,6 +27,12 @@ function yolo(name: string, args: unknown) {
 	const tool = tools.get(name);
 	if (!tool) throw new Error(`google-calendar extension did not register ${name}`);
 	return resolveApproval(tool, args, "yolo").policy;
+}
+
+function card(name: string, args: unknown): string {
+	const format = tools.get(name)?.formatApprovalDetails;
+	if (!format) throw new Error(`${name} has no approval card`);
+	return format(args).join("\n");
 }
 
 const event = { summary: "Planning", startIso: "2026-10-01T10:00:00Z", endIso: "2026-10-01T11:00:00Z" };
@@ -43,4 +54,47 @@ test.each([
 
 test("deleting an event prompts even in yolo mode", () => {
 	expect(yolo("google_calendar_delete_event", { eventId: "evt_1" })).toBe("prompt");
+});
+
+test("updating an event prompts even in yolo mode, whatever it patches", () => {
+	expect(yolo("google_calendar_update_event", { eventId: "evt_1", summary: "Renamed" })).toBe("prompt");
+	expect(yolo("google_calendar_update_event", { eventId: "evt_1", location: "Room 2" })).toBe("prompt");
+});
+
+test("the update card names the event and every field the patch changes", () => {
+	const shown = card("google_calendar_update_event", {
+		calendarId: "team@example.com",
+		eventId: "evt_1",
+		summary: "Renamed",
+		startIso: "2026-10-02T10:00:00Z",
+		endIso: "2026-10-02T11:00:00Z",
+		description: "new agenda",
+		location: "Room 2",
+	});
+	for (const part of [
+		"team@example.com",
+		"evt_1",
+		"Renamed",
+		"2026-10-02T10:00:00Z",
+		"2026-10-02T11:00:00Z",
+		"new agenda",
+		"Room 2",
+	]) {
+		expect(shown).toContain(part);
+	}
+});
+
+test.each([
+	["no attendee list", event],
+	["an empty attendee list", { ...event, attendeeEmails: [] }],
+])("the create card says no one is invited for %s", (_label, args) => {
+	const shown = card("google_calendar_create_event", args);
+	expect(shown).toContain("Invites: none");
+	expect(shown).not.toContain("malformed");
+});
+
+test("the create card flags a non-array attendee list as malformed", () => {
+	expect(card("google_calendar_create_event", { ...event, attendeeEmails: "a@example.com" })).toContain(
+		"(malformed attendeeEmails)",
+	);
 });
