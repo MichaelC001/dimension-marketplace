@@ -15,6 +15,9 @@
 			"icon": "message-square-off",
 			"category": "rules",
 			"defaultEnabled": true,
+			"requires": {
+				"dimension": ">=0.10.24"
+			},
 			"channel": "canary"
 		}
 	}

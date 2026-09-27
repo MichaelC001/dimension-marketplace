@@ -1,8 +1,15 @@
 ---
 description: "No code comments — delete the comment and carry its meaning in names, types and structure"
 condition:
-  - '(?:^|[\s;{}(\[,])//(?!/? ?<reference|(?:export|line) |lint:|[ \t]*(?:@ts-|@jsx|@(?:jest|vitest)-environment\b|biome-ignore|eslint-|oxlint-|deno-lint-|prettier-|istanbul ignore|c8 ignore|#(?:end)?region\b|go:|nolint\b|\+build\b))'
-  - '(?:^|[\s(\[{,;=])/\*(?!!|[\s*]*(?:@license\b|@preserve\b|@jsx|@(?:jest|vitest)-environment\b|biome-ignore|eslint-|oxlint-|deno-lint-|prettier-|@ts-|[#@]__(?:PURE|NO_SIDE_EFFECTS)__|webpack[A-Z]|@vite-ignore|istanbul ignore|c8 ignore|#(?:include|cgo)\b))'
+  - '(?:^|[\s;{}(\[,])//'
+  - '(?:^|[\s(\[{,;=])/\*[\s*]*[^\s*]'
+except:
+  - '///? ?<reference'
+  - '//(?:export|line) '
+  - '//lint:'
+  - '//[ \t]*(?:@ts-|@jsx|@(?:jest|vitest)-environment\b|biome-ignore|eslint-|oxlint-|deno-lint-|prettier-|istanbul ignore|c8 ignore|#(?:end)?region\b|go:|nolint\b|\+build\b)'
+  - '/\*!'
+  - '(?:/\*|^)[\s*]*(?:@license\b|@preserve\b|@jsx|@(?:jest|vitest)-environment\b|biome-ignore|eslint-|oxlint-|deno-lint-|prettier-|@ts-|[#@]__(?:PURE|NO_SIDE_EFFECTS)__|webpack[A-Z]|@vite-ignore|istanbul ignore|c8 ignore|#(?:include|cgo)\b)'
 scope: "tool:edit(*.ts), tool:edit(*.tsx), tool:edit(*.js), tool:edit(*.jsx), tool:edit(*.rs), tool:edit(*.go), tool:write(*.ts), tool:write(*.tsx), tool:write(*.js), tool:write(*.jsx), tool:write(*.rs), tool:write(*.go)"
 interruptMode: always
 ---

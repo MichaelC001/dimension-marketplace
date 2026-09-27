@@ -1,6 +1,7 @@
 ---
 description: "No Python comments — delete the comment and carry its meaning in names, type hints and structure"
-condition: '(?:^|\s)#(?!!)(?![ \t]*(?:(?:end)?region\b|type:|noqa\b|pragma\b|pylint:|fmt:|mypy:|ruff:|pyright:|isort:|nosec\b|-\*-))'
+condition: '(?:^|\s)#'
+except: '(?:^|\s)#(?:!|[ \t]*(?:(?:end)?region\b|type:|noqa\b|pragma\b|pylint:|fmt:|mypy:|ruff:|pyright:|isort:|nosec\b|-\*-))'
 scope: "tool:edit(*.py), tool:write(*.py)"
 interruptMode: always
 ---

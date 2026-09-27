@@ -122,6 +122,9 @@
 				"go",
 				"python"
 			],
+			"requires": {
+				"dimension": ">=0.10.24"
+			},
 			"channel": "canary"
 		},
 		{
