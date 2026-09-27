@@ -22,7 +22,8 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, type FSWatcher, watch } from "node:fs";
 import { join } from "node:path";
-import { type ConnectionObservations, RELAY_PROFILE, siteHost } from "./connection.js";
+import { type ConnectionObservations, siteHost } from "./connection.js";
+import { RELAY_PROFILE } from "./profile-name.js";
 import type {
 	ActionResult,
 	BrowserAction,

@@ -34,3 +34,24 @@ await buildView({
   plugins: [react()],
   build: { outDir: resolve(root, "app/dist"), emptyOutDir: true, sourcemap: false, target: "es2022" },
 });
+// The dock component (the Browser panel) — the rung-3 bundle the host loads at
+// runtime, built exactly as the pr-viewer pack builds its own: ONE entry whose
+// DEFAULT export is the component, and an externals list that is the pack's
+// IMPORT contract (doc 68 §9.1 Q1) — the specifiers the host's loader
+// resolves, nothing else. Unminified because `dist/` is committed and must
+// stay reviewable; `jsx` pinned to the automatic runtime because
+// `react/jsx-runtime` is one of the granted externals.
+await buildView({
+  configFile: false,
+  root,
+  esbuild: { jsx: "automatic" },
+  build: {
+    outDir: resolve(root, "dist"),
+    emptyOutDir: true,
+    sourcemap: false,
+    minify: false,
+    target: "es2022",
+    lib: { entry: resolve(root, "src/dock/index.ts"), formats: ["es"], fileName: () => "index.mjs" },
+    rollupOptions: { external: ["react", "react-dom", "react/jsx-runtime", "@fraym/ui"] },
+  },
+});

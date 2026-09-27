@@ -78,7 +78,7 @@ Both refusals name the reason in the error and lift when upstream fixes land.
 
 Build from inside the Dimension monorepo — `@dimension/sdk` and `@fraym/ui` are
 `workspace:*` build-time dependencies until they are published. The shipped
-`app/` bundle needs neither.
+`app/` and `dist/` bundles need neither.
 
 ```bash
 npm install
@@ -402,6 +402,25 @@ post (dimension#1219). It sends the vendor notification
 
 Observations are saved per profile in `profiles/<profile>/connections.json`,
 next to that profile's Chrome data, at most 64 sites per profile.
+
+## Browser panel
+
+Installing the pack also adds a **Browser** tab to the dock (component
+`browser-accounts`). It lists each profile from the [connection report](#connection-report)
+with its sites: signed in or signed out, the account, and when the Browser last
+saw it. A site the Browser has never observed is not in the report, so it is not
+listed. **Sign in** on a site, or **New sign-in** (pick X, LinkedIn, Reddit or
+Bluesky and name a profile), opens the live Browser View beside the chat at that
+site's login page on that profile. You sign in there yourself, and the panel
+shows the account once the Browser observes it.
+
+The panel reads only this pack's own connection fact (`plugin/browser/connection`)
+and acts only through `openArtifactoryView` (`browser_open` with `{ profile, url }`),
+which its `artifactory:open` grant admits. The host opens the View in the active
+session, so with no session open the panel's sign-in buttons are disabled.
+Profile names follow the same rule as `browser_open` (`src/profile-name.ts`). The
+site list takes its origins from the shipped presets in `recipes/`. The panel is
+built by `npm run build` into `dist/index.mjs`.
 
 ## Tests and benchmark
 

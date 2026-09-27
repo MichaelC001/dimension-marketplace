@@ -10,6 +10,7 @@
  * observed is absent, never `signedIn: false`.
  */
 import { getDomain } from "tldts";
+import { RELAY_PROFILE } from "./profile-name.js";
 
 /**
  * The vendor notification the host listens for on the pack's own MCP server.
@@ -24,12 +25,6 @@ export const PACK_CONNECTION_REPORT_METHOD = "notifications/ai.insodimension/con
  */
 export const PACK_CONNECTION_REPORT_MAX_BYTES = 64 * 1024;
 export const PACK_CONNECTION_ACCOUNT_MAX_BYTES = 256;
-
-/**
- * Reserved slug for the chrome-relay engine: the human's own running Chrome,
- * one cookie jar, one lease per profile root. Never reported.
- */
-export const RELAY_PROFILE = "relay";
 
 /** What one observation saw for one site on one profile. `observedAt` is epoch ms. */
 export interface SiteObservation {
@@ -110,8 +105,8 @@ export function buildConnectionReport(observations: ConnectionObservations): Con
 	entries.sort((a, b) => b.site.observedAt - a.site.observedAt);
 	const assemble = (count: number): ConnectionReport => {
 		const profiles: ConnectionReport["profiles"] = {};
-		for (let i = 0; i < count; i += 1) {
-			const { profile, host, site } = entries[i];
+		for (const [index, { profile, host, site }] of entries.entries()) {
+			if (index >= count) break;
 			(profiles[profile] ??= { sites: {} }).sites[host] = site;
 		}
 		return { profiles };
