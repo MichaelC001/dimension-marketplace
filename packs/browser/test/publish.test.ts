@@ -300,7 +300,8 @@ describeWithChrome("browser_publish", () => {
 				{ name: "browser_publish_cancel", visibility: undefined },
 			]);
 
-			const confirmed = await s.call("browser_publish_confirm", { browserId: s.browserId, publishId: parked.publishId }, "model");
+			const shown = { origin: parked.origin, profile: parked.profile, values: parked.fields.map((field) => field.value) };
+			const confirmed = await s.call("browser_publish_confirm", { browserId: s.browserId, publishId: parked.publishId, expect: shown }, "model");
 
 			expect(confirmed.isError).toBeFalsy();
 			expect(confirmed.structuredContent).toMatchObject({ status: "posted", url: s.fixture.url("/alice/status/1") });

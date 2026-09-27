@@ -8,8 +8,9 @@ description: Drive a real browser the user watches live in the Browser View — 
 One browser, shared: the user sees the same page you act on, live, in the
 Browser View beside the chat. You decide what to do; the browser does it
 immediately. Your session's permission mode decides which steps ask for
-approval; beyond that, use your judgment on an irreversible submission the user
-has not clearly asked for (payment, sending, publishing, a final "submit
+approval, except `browser_publish_confirm`, which always asks the user first in
+every mode; beyond that, use your judgment on an irreversible submission the
+user has not clearly asked for (payment, sending, publishing, a final "submit
 application" when details were guessed).
 
 ## Open
@@ -165,10 +166,16 @@ the posted URL's path on the origin (`{segment}` = one path segment,
   `awaiting-confirmation` with a `publishId` and `composeUrl` (where it will
   post). **Nothing is sent yet.** The View shows the exact text with **Post**
   and **Cancel**. Post it yourself with
-  `browser_publish_confirm({ browserId, publishId })` (clicks submit exactly
-  once, never retried, and returns `posted` with the post's `url` read from
-  the page, `failed` or `unknown`), or drop it with `browser_publish_cancel`.
-  The user's Post button does the same.
+  `browser_publish_confirm({ browserId, publishId, expect: { origin, profile, values } })`,
+  copying `origin`, `profile` and every field's `value` (in field order)
+  exactly from the `awaiting-confirmation` record you were shown. The user is
+  ALWAYS asked first, whatever the permission mode: their Allow card shows
+  those args, so it names exactly where, as whom and what goes out. Without
+  `expect` it fails `expect_required`; any difference fails `publish_mismatch`.
+  Either way nothing is clicked and the publish stays pending. Once allowed it
+  clicks submit exactly once, never retried, and returns `posted` with the
+  post's `url` read from the page, `failed` or `unknown`. Drop it with
+  `browser_publish_cancel`. The user's Post button in the View posts it too.
 - Don't act on the page while a publish awaits confirmation: `browser_act`,
   `browser_tab`, `browser_task`, `browser_publish` and `browser_close` are
   refused anyway (`publish_pending`) until it is posted, cancelled or expires

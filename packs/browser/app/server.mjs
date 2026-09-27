@@ -3256,10 +3256,11 @@ var BrowserRuntime = class {
       return this.redact(entry, publishRecord(outcome));
     });
   }
-  async confirmPublish(browserId, publishId) {
+  async confirmPublish(browserId, publishId, caller, expect) {
     const entry = this.require(browserId);
     return await this.serialize(entry, async () => {
       const publication = requirePending(entry.publish, publishId);
+      requireExpected(this.redact(entry, publishRecord(publication)), caller, expect);
       if (entry.task?.status === "running") {
         fail("task_running", `a browser_task (${entry.task.agent}) owns this page; wait for it or cancel it`);
       }
@@ -3601,6 +3602,22 @@ function refuseWhilePublishing(entry, caller) {
     fail("publish_pending", "a post awaits confirmation on this browser; confirm or cancel it (browser_publish_confirm / browser_publish_cancel) or wait with browser_publish_wait");
   }
 }
+function requireExpected(shown, caller, expect) {
+  if (expect === void 0) {
+    if (caller !== "app") fail("expect_required", "expect_required: pass expect: { origin, profile, values } copied exactly from the pending publish record (values: every field's value, in field order); nothing was clicked");
+    return;
+  }
+  const values = shown.fields.map((field) => field.value);
+  const differs = [
+    ...expect.origin === shown.origin ? [] : ["origin"],
+    ...expect.profile === shown.profile ? [] : ["profile"],
+    ...expect.values.length === values.length ? [] : [`values (expected ${values.length}, got ${expect.values.length})`],
+    ...values.flatMap((value, index) => index < expect.values.length && expect.values[index] !== value ? [`values[${index}]`] : [])
+  ];
+  if (differs.length > 0) {
+    fail("publish_mismatch", `publish_mismatch: expect does not match the pending publish (mismatched: ${differs.join(", ")}); nothing was clicked and the publish is still pending. Read it with browser_publish_wait and confirm what it actually holds, or cancel it`);
+  }
+}
 function settleOnClose(entry) {
   if (entry.publish && !entry.publish.confirming && isPending(entry.publish)) {
     cancel(entry.publish, "The browser was closed. Nothing was submitted.");
@@ -3650,10 +3667,16 @@ var presetSchema = z.object({
   values: z.array(z.string().max(1e4)).min(1).max(8),
   target: z.string().min(1).max(2048).optional()
 }).strict();
+var expectSchema = z.object({
+  origin: z.string().min(1).max(2048),
+  profile: z.string().min(1).max(48),
+  values: z.array(z.string().max(1e4)).min(1).max(8)
+}).strict();
 var MIME = { ".js": "text/javascript", ".mjs": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".png": "image/png", ".woff": "font/woff", ".woff2": "font/woff2", ".json": "application/json" };
 var APP_ONLY = { ui: { visibility: ["app"] } };
 var READ_ONLY = { readOnlyHint: true, destructiveHint: false, openWorldHint: false };
 var CALLER_META_KEY = "ai.insodimension/caller";
+var APPROVAL_META_KEY = "ai.insodimension/approval";
 function callerOf(extra) {
   const caller = extra._meta?.[CALLER_META_KEY];
   return caller === "app" || caller === "model" ? caller : void 0;
@@ -3829,10 +3852,11 @@ async function createBrowserServer(options = {}) {
     annotations: READ_ONLY
   }, () => result(async () => ({ presets: summarizePresets(presets) })));
   server2.registerTool("browser_publish_confirm", {
-    description: "Post a publish awaiting confirmation (the model may call this; the Browser View's Post button calls it too): re-verify the active tab is still the one and the URL shown in the View and every field still holds exactly the pending value, click submit exactly once (never retried), and read the posted URL from the page. Status posted (url), failed (nothing submitted) or unknown (may have posted).",
-    inputSchema: { browserId: capability, publishId: capability },
-    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true }
-  }, ({ browserId, publishId }) => result(() => runtime.confirmPublish(browserId, publishId)));
+    description: "Post a publish awaiting confirmation (the model may call this; the Browser View's Post button calls it too). The host ALWAYS asks the human first, whatever the session's permission mode: its Allow card shows these args. The model MUST pass expect: {origin, profile, values} copied exactly from the pending record it was shown (origin and profile as-is; values = every field's value, in field order); a model call without expect fails with expect_required, and any difference fails with publish_mismatch \u2014 nothing clicked, the publish still pending. Then: re-verify the active tab is still the one and the URL shown in the View and every field still holds exactly the pending value, click submit exactly once (never retried), and read the posted URL from the page. Status posted (url), failed (nothing submitted) or unknown (may have posted).",
+    inputSchema: { browserId: capability, publishId: capability, expect: expectSchema.optional() },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+    _meta: { [APPROVAL_META_KEY]: "prompt" }
+  }, ({ browserId, publishId, expect }, extra) => result(() => runtime.confirmPublish(browserId, publishId, callerOf(extra), expect)));
   server2.registerTool("browser_publish_cancel", {
     description: "Drop a publish awaiting confirmation without submitting anything (the model may call this; the Browser View's Cancel button calls it too).",
     inputSchema: { browserId: capability, publishId: capability },
