@@ -9,12 +9,13 @@ import { buildConnectionReport, type ConnectionReportParams, PACK_CONNECTION_REP
 import type { BrowserRuntimePort, TaskRun, ToolCaller } from "./contracts.js";
 import { BROWSER_ENGINES, CREDENTIAL_MODES, PUBLISH_MODES, TASK_AGENTS } from "./contracts.js";
 import { type PublishPreset, loadPresets, resolvePreset, summarizePresets } from "./presets.js";
+import { PROFILE_NAME } from "./profile-name.js";
 import { BrowserRuntime } from "./runtime.js";
 import { fail } from "./store.js";
 
 export const BROWSER_VIEW_URI = "ui://browser/index.html";
 const capability = z.string().min(16).max(128);
-const profile = z.string().regex(/^[a-z0-9][a-z0-9_-]{0,47}$/);
+const profile = z.string().regex(PROFILE_NAME);
 const coordinate = z.number().finite().min(0).max(4096);
 const selector = z.string().trim().min(1).max(512);
 const point = { x: coordinate, y: coordinate };

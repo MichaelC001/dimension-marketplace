@@ -11,10 +11,19 @@ import { z } from "zod";
 
 // src/connection.ts
 import { getDomain } from "tldts";
+
+// src/profile-name.ts
+var PROFILE_NAME = /^[a-z0-9][a-z0-9_-]{0,47}$/;
+var RELAY_PROFILE = "relay";
+function profileSlug(raw) {
+  const slug = raw.trim().toLowerCase();
+  return PROFILE_NAME.test(slug) ? slug : null;
+}
+
+// src/connection.ts
 var PACK_CONNECTION_REPORT_METHOD = "notifications/ai.insodimension/connection";
 var PACK_CONNECTION_REPORT_MAX_BYTES = 64 * 1024;
 var PACK_CONNECTION_ACCOUNT_MAX_BYTES = 256;
-var RELAY_PROFILE = "relay";
 var PSL = { allowPrivateDomains: true, extractHostname: false };
 var HANDLE = /(?<![\p{L}\p{N}_])@[\p{L}\p{N}_.-]+/gu;
 function siteHost(origin) {
@@ -90,7 +99,6 @@ import { join, resolve } from "node:path";
 var CONNECTIONS_FILE = "connections.json";
 var MAX_SITES_PER_PROFILE = 64;
 var MAX_ACCOUNT_CHARS = 1024;
-var SLUG_RE = /^[a-z0-9][a-z0-9_-]{0,47}$/;
 var BrowserRuntimeError = class extends Error {
   code;
   constructor(code, message) {
@@ -106,8 +114,8 @@ var ActionNotDispatched = class extends BrowserRuntimeError {
 };
 function validateProfile(raw) {
   if (typeof raw !== "string") fail("bad_profile", "profile must be a string");
-  const slug = raw.trim().toLowerCase();
-  if (!SLUG_RE.test(slug)) {
+  const slug = profileSlug(raw);
+  if (slug === null) {
     fail(
       "bad_profile",
       `profile ${JSON.stringify(raw)} is not a valid slug: use 1-48 chars of [a-z0-9_-] starting alphanumeric`
@@ -144,7 +152,7 @@ var ProfileStore = class {
     } catch {
       return [];
     }
-    return entries.filter((name) => SLUG_RE.test(name)).filter((name) => {
+    return entries.filter((name) => PROFILE_NAME.test(name)).filter((name) => {
       try {
         return statSync(join(this.profilesRoot, name)).isDirectory();
       } catch {
@@ -3633,7 +3641,7 @@ function describe3(err) {
 // src/server.ts
 var BROWSER_VIEW_URI = "ui://browser/index.html";
 var capability = z.string().min(16).max(128);
-var profile = z.string().regex(/^[a-z0-9][a-z0-9_-]{0,47}$/);
+var profile = z.string().regex(PROFILE_NAME);
 var coordinate = z.number().finite().min(0).max(4096);
 var selector2 = z.string().trim().min(1).max(512);
 var point = { x: coordinate, y: coordinate };

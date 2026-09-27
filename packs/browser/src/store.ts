@@ -14,14 +14,12 @@ import { closeSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, r
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { ConnectionObservations, SiteObservation, SiteObservations } from "./connection.js";
+import { PROFILE_NAME, profileSlug } from "./profile-name.js";
 
 const CONNECTIONS_FILE = "connections.json";
 /** Sites remembered per profile; the oldest observation goes first. */
 const MAX_SITES_PER_PROFILE = 64;
 const MAX_ACCOUNT_CHARS = 1_024;
-
-/** Matches the server's input schema exactly: 1-48 chars, no dots. */
-const SLUG_RE = /^[a-z0-9][a-z0-9_-]{0,47}$/;
 
 export class BrowserRuntimeError extends Error {
 	readonly code: string;
@@ -46,8 +44,8 @@ export class ActionNotDispatched extends BrowserRuntimeError {}
  */
 export function validateProfile(raw: unknown): string {
 	if (typeof raw !== "string") fail("bad_profile", "profile must be a string");
-	const slug = raw.trim().toLowerCase();
-	if (!SLUG_RE.test(slug)) {
+	const slug = profileSlug(raw);
+	if (slug === null) {
 		fail(
 			"bad_profile",
 			`profile ${JSON.stringify(raw)} is not a valid slug: use 1-48 chars of [a-z0-9_-] starting alphanumeric`,
@@ -96,7 +94,7 @@ export class ProfileStore {
 			return [];
 		}
 		return entries
-			.filter((name) => SLUG_RE.test(name))
+			.filter((name) => PROFILE_NAME.test(name))
 			.filter((name) => {
 				try {
 					return statSync(join(this.profilesRoot, name)).isDirectory();

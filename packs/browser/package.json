@@ -1,6 +1,6 @@
 {
   "name": "@dimension/community-browser",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "private": true,
   "type": "module",
   "author": "Dimension",
@@ -8,7 +8,7 @@
   "engines": { "node": ">=22.12.0" },
   "scripts": {
     "build": "node scripts/build.mjs",
-    "check:types": "tsc --noEmit",
+    "check:types": "tsc --noEmit && tsc --noEmit -p src/dock",
     "test": "bun test test/",
     "start": "node app/server.mjs"
   },
@@ -19,7 +19,7 @@
     "category": "artifactory",
     "keywords": ["browser", "mcp-apps", "profiles", "annotations"]
   },
-  "files": ["plugin.json", "ai.insodimension.dimension/", "app/server.mjs", "app/dist/", "recipes/", "python/dim_browser_bridge/", "python/pyproject.toml", "python/uv.lock", "skills/", "README.md"],
+  "files": ["plugin.json", "ai.insodimension.dimension/", "app/server.mjs", "app/dist/", "dist/", "recipes/", "python/dim_browser_bridge/", "python/pyproject.toml", "python/uv.lock", "skills/", "README.md"],
   "dependencies": {
     "@modelcontextprotocol/ext-apps": "1.7.5",
     "@modelcontextprotocol/sdk": "1.29.0",
