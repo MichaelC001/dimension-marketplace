@@ -8,6 +8,9 @@ import { Icon } from "@fraym/ui/icons";
 import { Omnibox, type OmniboxHandle, profileHue } from "./toolbar";
 import { Overlays } from "./page-view";
 
+/** The runtime's reserved slug for attached Chrome; other engines refuse it. */
+export const RELAY_PROFILE = "relay";
+
 const ENGINES: readonly { readonly value: BrowserEngine; readonly label: string; readonly detail: string }[] = [
 	{ value: "chromium", label: "Chromium", detail: "Managed browser with its own persistent profile" },
 	{ value: "chrome-relay", label: "Your Chrome", detail: "Attach to the Chrome you are signed in to" },

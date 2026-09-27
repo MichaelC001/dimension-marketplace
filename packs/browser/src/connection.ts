@@ -105,8 +105,8 @@ export function buildConnectionReport(observations: ConnectionObservations): Con
 	entries.sort((a, b) => b.site.observedAt - a.site.observedAt);
 	const assemble = (count: number): ConnectionReport => {
 		const profiles: ConnectionReport["profiles"] = {};
-		for (const [index, { profile, host, site }] of entries.entries()) {
-			if (index >= count) break;
+		for (let i = 0; i < count; i += 1) {
+			const { profile, host, site } = entries[i];
 			(profiles[profile] ??= { sites: {} }).sites[host] = site;
 		}
 		return { profiles };

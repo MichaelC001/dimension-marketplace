@@ -15,7 +15,7 @@
 import { Button, Icon, Input, Pill, useObservable } from "@fraym/ui";
 import { type FormEvent, useEffect, useMemo, useState } from "react";
 import { profileSlug, RELAY_PROFILE } from "../profile-name";
-import { CONNECTION_KEY, type ConnectionFact, observedAgo, type ProfileRow, profileRows, type SiteRow } from "./report";
+import { CONNECTION_KEY, observedAgo, type ProfileRow, profileRows, type SiteRow } from "./report";
 import { knownSite, SIGN_IN_SITES, signInUrl } from "./sites";
 
 /** The Store's contract shape, restated by the members this panel uses. */
@@ -49,10 +49,10 @@ function SiteLine({ site, now, onSignIn }: { readonly site: SiteRow; readonly no
 		<li className="flex min-w-0 items-center gap-2 py-1" data-slot="browser-accounts-site" data-signed-in={site.signedIn}>
 			<span className="flex min-w-0 flex-1 flex-col">
 				<span className="flex min-w-0 items-center gap-1.5">
-					<span className="fr-overflow truncate text-fr-sm text-fr-text">{label}</span>
+					<span className="fr-overflow text-fr-sm text-fr-text">{label}</span>
 					<Pill tint={site.signedIn ? "bg-fr-add-bg" : "bg-fr-warn/15"}>{site.signedIn ? "Signed in" : "Signed out"}</Pill>
 				</span>
-				<span className="fr-overflow truncate font-secondary text-fr-xs text-fr-text-3">
+				<span className="fr-overflow font-secondary text-fr-xs text-fr-text-3">
 					{site.account ? `${site.account} · ` : ""}
 					{observedAgo(site.observedAt, now)}
 				</span>
@@ -84,7 +84,7 @@ function ProfileSection({
 				onClick={onPick}
 			>
 				<Icon name="user" size={12} />
-				<span className="fr-overflow truncate font-secondary text-fr-xs">{profile.name}</span>
+				<span className="fr-overflow font-secondary text-fr-xs">{profile.name}</span>
 			</button>
 			<ul className="flex flex-col">
 				{profile.sites.map(site => (
@@ -151,7 +151,7 @@ function NewSignIn({ profile, onProfile, signIn }: { readonly profile: string; r
 }
 
 export function BrowserAccounts({ sessionId, store }: BrowserAccountsProps) {
-	const observable = useMemo(() => store?.watch<ConnectionFact>(CONNECTION_KEY) ?? NONE, [store]);
+	const observable = useMemo(() => store?.watch(CONNECTION_KEY) ?? NONE, [store]);
 	const fact = useObservable(observable);
 	const profiles = useMemo(() => profileRows(fact), [fact]);
 	const [profile, setProfile] = useState("");

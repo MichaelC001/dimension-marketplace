@@ -25,18 +25,35 @@ function profileSlug(raw) {
 	const slug = raw.trim().toLowerCase();
 	return PROFILE_NAME.test(slug) ? slug : null;
 }
-/** Every reported profile with its sites, both sorted by name. Empty when the
-*  pack has reported nothing yet, or retracted its report. */
+/** A plain JSON object's entries, or none for anything else (null, an array, a primitive). */
+function entriesOf(value) {
+	return typeof value === "object" && value !== null && !Array.isArray(value) ? Object.entries(value) : [];
+}
+/** Every reported profile with its well-formed sites, both sorted by name.
+*  Empty when the pack has reported nothing yet, or retracted its report. */
 function profileRows(fact) {
 	const profiles = fact?.reported?.profiles;
-	if (!profiles) return [];
-	return Object.entries(profiles).map(([name, { sites }]) => ({
-		name,
-		sites: Object.entries(sites).map(([host, site]) => ({
-			host,
-			...site
-		})).sort((a, b) => a.host.localeCompare(b.host))
-	})).sort((a, b) => a.name.localeCompare(b.name));
+	const rows = [];
+	for (const [name, profile] of entriesOf(profiles)) {
+		const sites = profile?.sites;
+		if (typeof sites !== "object" || sites === null || Array.isArray(sites)) continue;
+		const siteRows = [];
+		for (const [host, value] of Object.entries(sites)) {
+			const site = value;
+			if (typeof site?.signedIn !== "boolean" || typeof site.observedAt !== "number" || !Number.isFinite(site.observedAt)) continue;
+			siteRows.push({
+				host,
+				signedIn: site.signedIn,
+				...typeof site.account === "string" && site.account.length > 0 ? { account: site.account } : {},
+				observedAt: site.observedAt
+			});
+		}
+		rows.push({
+			name,
+			sites: siteRows.sort((a, b) => a.host.localeCompare(b.host))
+		});
+	}
+	return rows.sort((a, b) => a.name.localeCompare(b.name));
 }
 /** "just now", "5m ago", "3h ago", "2d ago" — for an epoch-ms observation. */
 function observedAgo(at, now) {
@@ -116,14 +133,14 @@ function SiteLine({ site, now, onSignIn }) {
 			children: [/* @__PURE__ */ jsxs("span", {
 				className: "flex min-w-0 items-center gap-1.5",
 				children: [/* @__PURE__ */ jsx("span", {
-					className: "fr-overflow truncate text-fr-sm text-fr-text",
+					className: "fr-overflow text-fr-sm text-fr-text",
 					children: label
 				}), /* @__PURE__ */ jsx(Pill, {
 					tint: site.signedIn ? "bg-fr-add-bg" : "bg-fr-warn/15",
 					children: site.signedIn ? "Signed in" : "Signed out"
 				})]
 			}), /* @__PURE__ */ jsxs("span", {
-				className: "fr-overflow truncate font-secondary text-fr-xs text-fr-text-3",
+				className: "fr-overflow font-secondary text-fr-xs text-fr-text-3",
 				children: [site.account ? `${site.account} · ` : "", observedAgo(site.observedAt, now)]
 			})]
 		}), /* @__PURE__ */ jsx(Button, {
@@ -148,7 +165,7 @@ function ProfileSection({ profile, now, signIn, onPick }) {
 				name: "user",
 				size: 12
 			}), /* @__PURE__ */ jsx("span", {
-				className: "fr-overflow truncate font-secondary text-fr-xs",
+				className: "fr-overflow font-secondary text-fr-xs",
 				children: profile.name
 			})]
 		}), /* @__PURE__ */ jsx("ul", {

@@ -56,8 +56,8 @@ function buildConnectionReport(observations) {
   entries.sort((a, b) => b.site.observedAt - a.site.observedAt);
   const assemble = (count) => {
     const profiles = {};
-    for (const [index, { profile: profile2, host, site }] of entries.entries()) {
-      if (index >= count) break;
+    for (let i = 0; i < count; i += 1) {
+      const { profile: profile2, host, site } = entries[i];
       (profiles[profile2] ??= { sites: {} }).sites[host] = site;
     }
     return { profiles };
