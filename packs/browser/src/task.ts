@@ -87,6 +87,12 @@ function spawnWorker(spare = false): Spawned {
     stderr = (stderr + chunk).slice(-STDERR_KEEP);
   });
   child.on("error", () => undefined);
+  // A pipe error (the worker or a process it spawned dying mid-write) is an
+  // 'error' event; unheard, Node throws it and takes the whole MCP server down.
+  // Attached at spawn so an idle spare is covered too, not only a running task.
+  child.stdin.on("error", () => undefined);
+  child.stdout.on("error", () => undefined);
+  child.stderr.on("error", () => undefined);
   return { child, stderr: () => stderr };
 }
 
@@ -178,12 +184,8 @@ export function startWorker(job: WorkerJob, onStep: (step: WorkerStep) => void):
       };
     }
   });
-  // A pipe error (the worker or a process it spawned dying mid-write) is an
-  // 'error' event; unheard, Node throws it and takes the whole MCP server down.
-  // The worker's result comes from `close` below either way.
-  child.stdin.on("error", () => undefined);
-  child.stdout.on("error", () => undefined);
-  child.stderr.on("error", () => undefined);
+  // The worker's pipes already carry their 'error' listeners (spawnWorker); the
+  // result comes from `close` below either way.
   lines.on("error", () => undefined);
   child.stdin.write(`${JSON.stringify(job)}\n`);
 

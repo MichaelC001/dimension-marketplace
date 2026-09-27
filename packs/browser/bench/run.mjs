@@ -278,12 +278,12 @@ async function runStage(agent, browserId, stage, label = `${agent}/${stage.id}`,
         lastStepN = step.n;
         lastStepAt = performance.now();
         waits = /^wait\b/.test(step.action) ? waits + 1 : 0;
+        rec?.step(`${step.n}. ${step.action}`);
       }
       return take(t);
     };
     const progress = { onprogress: (p) => {
       console.log(`[${label}] +${((performance.now() - t0) / 1000).toFixed(1)}s ${p.progress}: ${p.message ?? ""}`);
-      rec?.step(`${p.progress}. ${p.message ?? ""}`);
       pollSolved();
     }, timeout: 60_000 };
     const deadline = performance.now() + taskTimeoutMs;

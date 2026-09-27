@@ -2583,6 +2583,9 @@ function spawnWorker(spare2 = false) {
     stderr = (stderr + chunk).slice(-STDERR_KEEP);
   });
   child.on("error", () => void 0);
+  child.stdin.on("error", () => void 0);
+  child.stdout.on("error", () => void 0);
+  child.stderr.on("error", () => void 0);
   return { child, stderr: () => stderr };
 }
 var spare;
@@ -2658,9 +2661,6 @@ function startWorker(job, onStep) {
       };
     }
   });
-  child.stdin.on("error", () => void 0);
-  child.stdout.on("error", () => void 0);
-  child.stderr.on("error", () => void 0);
   lines.on("error", () => void 0);
   child.stdin.write(`${JSON.stringify(job)}
 `);
