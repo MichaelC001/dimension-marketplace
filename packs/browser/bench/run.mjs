@@ -261,17 +261,27 @@ async function runStage(agent, browserId, stage, label = `${agent}/${stage.id}`,
   try {
     await call("browser_act", { browserId, action: { kind: "navigate", url: stage.start } });
     console.log(`[${label}] task started`);
+    // Stall is judged from the step list every call returns, not from progress
+    // notifications: a step that lands between two calls is never notified.
     let lastStepAt = performance.now();
+    let lastStepN = 0;
     let waits = 0;
+    const observe = (t) => {
+      for (const step of t.steps ?? []) {
+        if (step.n <= lastStepN) continue;
+        lastStepN = step.n;
+        lastStepAt = performance.now();
+        waits = /^wait\b/.test(step.action) ? waits + 1 : 0;
+      }
+      return take(t);
+    };
     const progress = { onprogress: (p) => {
       console.log(`[${label}] ${p.progress}: ${p.message ?? ""}`);
-      lastStepAt = performance.now();
-      waits = /^wait\b/.test(p.message ?? "") ? waits + 1 : 0;
       pollSolved();
     }, timeout: 60_000 };
     const deadline = performance.now() + taskTimeoutMs;
     const credential = agent === "jev" && stage.task.includes(PASSWORD) ? { origin: base, mode: stage.account ? "signup" : "login" } : undefined;
-    let taskRun = take(await call("browser_task", { browserId, agent, task: stage.task.replaceAll(PASSWORD, agent === "jev" ? "(filled by the browser)" : a.password), maxSteps, ...(credential ? { credential } : {}), waitSeconds: 3 }, progress));
+    let taskRun = observe(await call("browser_task", { browserId, agent, task: stage.task.replaceAll(PASSWORD, agent === "jev" ? "(filled by the browser)" : a.password), maxSteps, ...(credential ? { credential } : {}), waitSeconds: 3 }, progress));
     while (taskRun.status === "running") {
       if (performance.now() > deadline) {
         run.status = "timeout";
@@ -290,7 +300,7 @@ async function runStage(agent, browserId, stage, label = `${agent}/${stage.id}`,
         console.log(`[${label}] stalled (${waits >= stall.waitSteps ? `${waits} waits in a row` : `no step for ${stall.idleSeconds}s`}); handing over`);
         break;
       }
-      taskRun = take(await call("browser_task_wait", { browserId, waitSeconds: 3 }, progress));
+      taskRun = observe(await call("browser_task_wait", { browserId, waitSeconds: 3 }, progress));
     }
   } catch (error) {
     run.error = error.message;
@@ -336,7 +346,7 @@ for (const agent of agents) {
       const rescue = await runStage("browser-use", browserId, stage, `hybrid/${stage.id}:browser-use`);
       run = { ...rescue, seconds: first.seconds + rescue.seconds, stepCount: first.stepCount + rescue.stepCount,
         solvedSeconds: rescue.solvedSeconds === null ? null : first.seconds + rescue.solvedSeconds,
-        usage: sumUsage(first.usage, rescue.usage), summary: `jev: ${first.reason}; then browser-use: ${rescue.summary}` };
+        usage: sumUsage(first.usage, rescue.usage), summary: `jev (${first.status}): ${first.reason}; then browser-use: ${rescue.summary}` };
     }
     runs.push({ ...run, agent: "hybrid", by: run === first ? first.agent : "jev→browser-use" });
   }
