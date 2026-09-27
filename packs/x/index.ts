@@ -384,6 +384,9 @@ function tweetListParams(
 let cachedMe: { identity: string; user: XUser } | null = null;
 
 async function me(): Promise<XUser> {
+	// Refresh first: an expired token is rotated (and rewritten) inside xJson,
+	// and the cache must be keyed to the credential the lookup actually used.
+	await freshAccessToken();
 	const cred = await readCredential();
 	const identity = credentialIdentity(cred);
 	if (cachedMe && cachedMe.identity === identity) return cachedMe.user;
