@@ -112,6 +112,24 @@ interface SlackUser {
 	readonly is_bot?: boolean;
 }
 
+/** Posting, republishing, and deleting in a channel reach other people or
+ *  cannot be undone, so they demand a human click in EVERY approval mode — a
+ *  bare "write" tier is auto-approved by write and yolo mode. */
+const PROMPT_EVERY_MODE = { tier: "write", policy: "prompt" } as const;
+// A Slack message may run to 40k characters; the approval card shows the first
+// 4000 and says how much more follows.
+const APPROVAL_BODY_CAP = 4000;
+
+/** One argument off unvalidated tool args, for an approval card. Never throws:
+ *  the card renders before the schema checks the call. */
+function approvalArg(args: unknown, key: string): string {
+	const value: unknown = typeof args === "object" && args !== null ? Reflect.get(args, key) : undefined;
+	if (typeof value !== "string") return "(missing)";
+	return value.length > APPROVAL_BODY_CAP
+		? `${value.slice(0, APPROVAL_BODY_CAP)}[…${value.length - APPROVAL_BODY_CAP} more chars]`
+		: value;
+}
+
 const listChannelsSchema = type({
 	"limit?": type("number").describe("Max channels to return, default 100, capped at 200."),
 	"cursor?": type("string").describe(
@@ -244,7 +262,10 @@ function createPostMessageTool(): ToolDefinition<typeof postMessageSchema> {
 		description:
 			"Post a message to a Slack channel. DESTRUCTIVE — this sends a real message visible to the channel; ALWAYS confirm the exact channel and text with the user before calling. The bot must be a member of the channel (invite it with /invite). Returns the posted message ts + channel.",
 		parameters: postMessageSchema,
-		approval: "write" as const,
+		approval: PROMPT_EVERY_MODE,
+		formatApprovalDetails(args: unknown) {
+			return [`Channel: ${approvalArg(args, "channel")}`, `Message:\n${approvalArg(args, "text")}`];
+		},
 		async execute(_toolCallId: string, params: typeof postMessageSchema.infer) {
 			const payload = await slackPost<{ channel?: string; ts?: string }>(
 				"chat.postMessage",
@@ -305,7 +326,14 @@ function createReplyThreadTool(): ToolDefinition<typeof replyThreadSchema> {
 		description:
 			"Reply inside a Slack thread. DESTRUCTIVE — this sends a real message visible to the channel; ALWAYS confirm the exact channel, thread, and text with the user before calling. Pass the parent message's `ts` as threadTs. The bot must be a member of the channel. Returns the posted reply ts + channel.",
 		parameters: replyThreadSchema,
-		approval: "write" as const,
+		approval: PROMPT_EVERY_MODE,
+		formatApprovalDetails(args: unknown) {
+			return [
+				`Channel: ${approvalArg(args, "channel")}`,
+				`Thread: ${approvalArg(args, "threadTs")}`,
+				`Reply:\n${approvalArg(args, "text")}`,
+			];
+		},
 		async execute(_toolCallId: string, params: typeof replyThreadSchema.infer) {
 			const payload = await slackPost<{ channel?: string; ts?: string }>(
 				"chat.postMessage",
@@ -355,7 +383,14 @@ function createEditMessageTool(): ToolDefinition<typeof editMessageSchema> {
 		description:
 			"Edit a Slack message. chat.update only works on messages the bot itself posted. DESTRUCTIVE — this replaces the visible message text; ALWAYS confirm the exact channel, message ts, and new text with the user before calling. Returns the updated ts + channel.",
 		parameters: editMessageSchema,
-		approval: "write" as const,
+		approval: PROMPT_EVERY_MODE,
+		formatApprovalDetails(args: unknown) {
+			return [
+				`Channel: ${approvalArg(args, "channel")}`,
+				`Edit message: ${approvalArg(args, "messageTs")}`,
+				`New text:\n${approvalArg(args, "text")}`,
+			];
+		},
 		async execute(_toolCallId: string, params: typeof editMessageSchema.infer) {
 			const payload = await slackPost<{ channel?: string; ts?: string }>(
 				"chat.update",
@@ -381,7 +416,10 @@ function createDeleteMessageTool(): ToolDefinition<typeof deleteMessageSchema> {
 		description:
 			"Delete a Slack message. IRREVERSIBLE and DESTRUCTIVE — chat.delete removes the message permanently and it CANNOT be recovered. Only the bot's own messages (or any message if the token has admin scopes). ALWAYS confirm the EXACT channel and message ts with the user, and that they accept it cannot be undone, before calling. Returns a confirmation.",
 		parameters: deleteMessageSchema,
-		approval: "write" as const,
+		approval: PROMPT_EVERY_MODE,
+		formatApprovalDetails(args: unknown) {
+			return [`Channel: ${approvalArg(args, "channel")}`, `Delete message: ${approvalArg(args, "messageTs")}`];
+		},
 		async execute(_toolCallId: string, params: typeof deleteMessageSchema.infer) {
 			const payload = await slackPost<{ channel?: string; ts?: string }>(
 				"chat.delete",

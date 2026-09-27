@@ -72,6 +72,7 @@ async function readCredential(): Promise<StoredCredential> {
 	if (parsed instanceof type.errors) {
 		throw new Error(`X's stored credential at ${CONFIG_TARGET} is malformed. Reconnect the plugin.`);
 	}
+	lastCredentialClientId = parsed.clientId;
 	return parsed;
 }
 
@@ -353,6 +354,10 @@ function tweetListParams(
  *  Cached for the process: it never changes for a given credential, and every
  *  uncached lookup is a billed request. Cleared when the credential changes. */
 let cachedMe: { clientId: string; user: XUser } | null = null;
+/** The clientId of the credential `readCredential` last parsed. The approval
+ *  card is synchronous and must not touch disk or network, so it trusts
+ *  `cachedMe` only while it matches this — the same key `me()` checks. */
+let lastCredentialClientId: string | null = null;
 
 async function me(): Promise<XUser> {
 	const cred = await readCredential();
@@ -362,6 +367,43 @@ async function me(): Promise<XUser> {
 	if (!user?.id) throw new Error("X did not return the connected account's id. Reconnect the plugin.");
 	cachedMe = { clientId: cred.clientId, user };
 	return user;
+}
+
+/** Publishing, deleting, and DMing are public or unretractable, so they demand
+ *  a human click in EVERY approval mode — a bare "write" tier is auto-approved
+ *  by write and yolo mode. */
+const PROMPT_EVERY_MODE = { tier: "write", policy: "prompt" } as const;
+
+/** One string argument off unvalidated tool args, for an approval card. Never
+ *  throws: the card renders before the schema checks the call. */
+function approvalArg(args: unknown, key: string): string | undefined {
+	const value: unknown = typeof args === "object" && args !== null ? Reflect.get(args, key) : undefined;
+	return typeof value === "string" ? value : undefined;
+}
+
+/** Who the write goes out as. Synchronous by contract: names the handle only
+ *  when `me()` already cached it for the credential in use. */
+function approvalAccount(): string {
+	const username = cachedMe && cachedMe.clientId === lastCredentialClientId ? cachedMe.user.username : undefined;
+	return username ? `As: @${username}` : "As: the connected X account";
+}
+
+/** A post reference as the approval card shows it: the id plus its link, or the
+ *  raw input flagged when it will not parse (the call then fails, posting nothing). */
+function approvalPostRef(raw: string | undefined): string {
+	if (raw === undefined) return "(missing)";
+	try {
+		const id = postId(raw);
+		return `${id} (https://x.com/i/status/${id})`;
+	} catch {
+		return `${raw} (not a post id or status URL)`;
+	}
+}
+
+/** The posts x_thread publishes, in order — shared by the tool and its approval
+ *  card so the human approves exactly what goes out. */
+function threadPosts(posts: readonly string[]): string[] {
+	return posts.map(entry => entry.trim()).filter(Boolean);
 }
 
 const emptySchema = type({});
@@ -779,7 +821,14 @@ function createPostTool(): ToolDefinition<typeof postSchema> {
 		description:
 			"Publish a post as the connected account, or a reply when replyTo is set. PUBLIC, IMMEDIATE, and attributed to the user — confirm the exact final text with them in the current turn before calling; there is no draft state and no silent undo. Costs $0.015, or $0.20 when the text contains a URL. REPLY RULE: X's automation policy only permits a programmatic reply when the original author @mentioned or quoted the user — otherwise draft it and let the user send it themselves.",
 		parameters: postSchema,
-		approval: "write" as const,
+		approval: PROMPT_EVERY_MODE,
+		formatApprovalDetails(args: unknown) {
+			const replyTo = approvalArg(args, "replyTo");
+			const lines = [approvalAccount()];
+			if (replyTo !== undefined) lines.push(`Reply to: ${approvalPostRef(replyTo)}`);
+			lines.push(`Text:\n${approvalArg(args, "text") ?? "(missing)"}`);
+			return lines;
+		},
 		async execute(_toolCallId: string, params: typeof postSchema.infer) {
 			const text = params.text;
 			if (!text.trim()) throw new Error("Refusing to publish an empty post.");
@@ -811,9 +860,15 @@ function createThreadTool(): ToolDefinition<typeof threadSchema> {
 		description:
 			"Publish several posts as one self-replying thread, in order. PUBLIC and IMMEDIATE — confirm EVERY post's text with the user first. Not atomic: if a later post fails, the earlier ones stay up and the tool reports exactly how far it got so you can continue from there. Each post bills separately ($0.015, or $0.20 with a URL).",
 		parameters: threadSchema,
-		approval: "write" as const,
+		approval: PROMPT_EVERY_MODE,
+		formatApprovalDetails(args: unknown) {
+			const raw: unknown = typeof args === "object" && args !== null ? Reflect.get(args, "posts") : undefined;
+			if (!Array.isArray(raw)) return [approvalAccount(), "Posts: (missing)"];
+			const posts = threadPosts(raw.map(entry => (typeof entry === "string" ? entry : "")));
+			return [approvalAccount(), ...posts.map((text, i) => `Post ${i + 1}/${posts.length}:\n${text}`)];
+		},
 		async execute(_toolCallId: string, params: typeof threadSchema.infer) {
-			const posts = params.posts.map(entry => entry.trim()).filter(Boolean);
+			const posts = threadPosts(params.posts);
 			if (posts.length < 2) throw new Error("A thread needs at least two posts — use x_post for a single one.");
 			const ids: string[] = [];
 			let previous: string | undefined;
@@ -850,7 +905,10 @@ function createDeleteTool(): ToolDefinition<typeof deleteSchema> {
 		description:
 			"Delete one of the connected account's own posts. IRREVERSIBLE — read the post back with x_get_post and confirm the exact id with the user before calling. Deleting a mid-thread post orphans the replies below it.",
 		parameters: deleteSchema,
-		approval: "write" as const,
+		approval: PROMPT_EVERY_MODE,
+		formatApprovalDetails(args: unknown) {
+			return [approvalAccount(), `Delete post: ${approvalPostRef(approvalArg(args, "post"))}`];
+		},
 		async execute(_toolCallId: string, params: typeof deleteSchema.infer) {
 			const id = postId(params.post);
 			const payload = await xJson<{ data?: { deleted?: boolean } }>(`/tweets/${id}`, "tweets/delete", {
@@ -914,7 +972,15 @@ function createDmTool(): ToolDefinition<typeof dmSchema> {
 		description:
 			"Send a direct message to a user. PRIVATE but immediate and unretractable — confirm the recipient handle AND the full text with the user first. Requires the dm.write scope and the app's \"Direct message\" permission. NEVER use for unsolicited outreach: mass or automated DMs violate X's platform rules.",
 		parameters: dmSchema,
-		approval: "write" as const,
+		approval: PROMPT_EVERY_MODE,
+		formatApprovalDetails(args: unknown) {
+			const username = approvalArg(args, "username");
+			return [
+				approvalAccount(),
+				`To: ${username === undefined ? "(missing)" : `@${handle(username)}`}`,
+				`Text:\n${approvalArg(args, "text") ?? "(missing)"}`,
+			];
+		},
 		async execute(_toolCallId: string, params: typeof dmSchema.infer) {
 			if (!params.text.trim()) throw new Error("Refusing to send an empty DM.");
 			const name = handle(params.username);

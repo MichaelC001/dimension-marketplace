@@ -144,7 +144,9 @@ Consequences that should change your behavior:
 - `x_bookmarks` — the user's saved posts.
 - `x_usage` — post-read consumption vs the monthly cap.
 
-**Writes** (every one is `approval: "write"`)
+**Writes** — `x_post`, `x_thread`, `x_delete`, and `x_dm` always ask the human
+first, in every approval mode (yolo included), and the approval card shows the
+exact text, reply target, recipient, or post id. `x_bookmark` is a plain write.
 
 - `x_post` — publish a post, or a reply when `replyTo` is set. Reports the cost
   tier and warns past 280 characters.

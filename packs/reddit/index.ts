@@ -400,6 +400,25 @@ const searchSchema = type({
 	),
 });
 
+/** Posting, commenting, and messaging publish under the user's name to other
+ *  people, so they demand a human click in EVERY approval mode — a bare "write"
+ *  tier is auto-approved by write and yolo mode. */
+const PROMPT_EVERY_MODE = { tier: "write", policy: "prompt" } as const;
+// A self post or comment may run to 40k characters; the approval card shows
+// the first 4000 and says how much more follows.
+const APPROVAL_BODY_CAP = 4000;
+
+/** One string argument off unvalidated tool args, for an approval card, or
+ *  undefined when it is not a string. Never throws: the card renders before the
+ *  schema checks the call. */
+function approvalArg(args: unknown, key: string): string | undefined {
+	const value: unknown = typeof args === "object" && args !== null ? Reflect.get(args, key) : undefined;
+	if (typeof value !== "string") return undefined;
+	return value.length > APPROVAL_BODY_CAP
+		? `${value.slice(0, APPROVAL_BODY_CAP)}[…${value.length - APPROVAL_BODY_CAP} more chars]`
+		: value;
+}
+
 const submitPostSchema = type({
 	subreddit: type("string").describe("Target subreddit (without r/)."),
 	title: type("string").describe("Post title."),
@@ -552,7 +571,20 @@ function createSubmitPostTool(): ToolDefinition<typeof submitPostSchema> {
 		description:
 			"Submit a post to a subreddit — a self (text) post or a link. DESTRUCTIVE — this publishes publicly under the connected account; ALWAYS confirm the subreddit, title, and body/url with the user first. Provide either text OR url. Returns the new post's fullname and url.",
 		parameters: submitPostSchema,
-		approval: "write" as const,
+		approval: PROMPT_EVERY_MODE,
+		formatApprovalDetails(args: unknown) {
+			const lines = [
+				`Subreddit: r/${approvalArg(args, "subreddit") ?? "(missing)"}`,
+				`Title: ${approvalArg(args, "title") ?? "(missing)"}`,
+			];
+			const url = approvalArg(args, "url");
+			const text = approvalArg(args, "text");
+			if (url !== undefined) lines.push(`Link: ${url}`);
+			if (text !== undefined) lines.push(`Text:\n${text}`);
+			if (url === undefined && text === undefined) lines.push("Body: (missing)");
+			if (typeof args === "object" && args !== null && Reflect.get(args, "nsfw") === true) lines.push("NSFW: yes");
+			return lines;
+		},
 		async execute(_toolCallId: string, params: typeof submitPostSchema.infer) {
 			if (!params.text && !params.url) {
 				throw new Error("Provide either text (a self post) or url (a link post).");
@@ -591,7 +623,13 @@ function createCommentTool(): ToolDefinition<typeof commentSchema> {
 		description:
 			"Comment on a post or reply to another comment. Pass the parent t3_ (post) or t1_ (comment) fullname and text. DESTRUCTIVE — this publishes publicly under the connected account; ALWAYS confirm the parent and text with the user first. Returns the new comment fullname.",
 		parameters: commentSchema,
-		approval: "write" as const,
+		approval: PROMPT_EVERY_MODE,
+		formatApprovalDetails(args: unknown) {
+			return [
+				`Reply to: ${approvalArg(args, "parent") ?? "(missing)"}`,
+				`Comment:\n${approvalArg(args, "text") ?? "(missing)"}`,
+			];
+		},
 		async execute(_toolCallId: string, params: typeof commentSchema.infer) {
 			const payload = await redditPostForm(
 				"/api/comment",
@@ -649,7 +687,13 @@ function createReplyMessageTool(): ToolDefinition<typeof replyMessageSchema> {
 		description:
 			"Reply to a private message or inbox item. Pass the t4_ (private message) or t1_ (comment reply) fullname from reddit_inbox and text. DESTRUCTIVE — sends a real message from the connected account; ALWAYS confirm the recipient/thread and text with the user first.",
 		parameters: replyMessageSchema,
-		approval: "write" as const,
+		approval: PROMPT_EVERY_MODE,
+		formatApprovalDetails(args: unknown) {
+			return [
+				`Reply to: ${approvalArg(args, "message") ?? "(missing)"}`,
+				`Reply:\n${approvalArg(args, "text") ?? "(missing)"}`,
+			];
+		},
 		async execute(_toolCallId: string, params: typeof replyMessageSchema.infer) {
 			await redditPostForm(
 				"/api/comment",

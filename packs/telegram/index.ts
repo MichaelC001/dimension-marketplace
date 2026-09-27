@@ -134,6 +134,20 @@ function chatLabel(chat: TelegramChat): string {
 	return name || String(chat.id);
 }
 
+/** Sending, republishing, and deleting in a chat reach other people or cannot
+ *  be undone, so they demand a human click in EVERY approval mode — a bare
+ *  "write" tier is auto-approved by write and yolo mode. */
+const PROMPT_EVERY_MODE = { tier: "write", policy: "prompt" } as const;
+
+/** One argument off unvalidated tool args, for an approval card; `absent`
+ *  stands in when it is not a string or number. Never throws: the card renders
+ *  before the schema checks the call. Shown in full — Telegram caps a message
+ *  at 4096 characters. */
+function approvalArg(args: unknown, key: string, absent = "(missing)"): string {
+	const value: unknown = typeof args === "object" && args !== null ? Reflect.get(args, key) : undefined;
+	return typeof value === "string" || typeof value === "number" ? String(value) : absent;
+}
+
 const sendMessageSchema = type({
 	chatId: type("string").describe(
 		"Target chat: a numeric chat id (from telegram_get_updates), or a public @channelusername. A bot can only message users who have messaged it first.",
@@ -205,7 +219,10 @@ function createSendMessageTool(): ToolDefinition<typeof sendMessageSchema> {
 		description:
 			"Send a text message to a Telegram chat via the bot. DESTRUCTIVE — confirm the exact recipient (chat_id) AND the message text with the user before calling. Returns the sent message_id.",
 		parameters: sendMessageSchema,
-		approval: "write" as const,
+		approval: PROMPT_EVERY_MODE,
+		formatApprovalDetails(args: unknown) {
+			return [`Chat: ${approvalArg(args, "chatId")}`, `Message:\n${approvalArg(args, "text")}`];
+		},
 		async execute(_toolCallId: string, params: typeof sendMessageSchema.infer) {
 			const { access } = await readCredential();
 			const message = await telegramCall<TelegramMessage>(access, "sendMessage", {
@@ -283,7 +300,14 @@ function createReplyMessageTool(): ToolDefinition<typeof replyMessageSchema> {
 		description:
 			"Reply to a specific message in a chat (threads under the original via reply_parameters). DESTRUCTIVE — confirm the exact chat_id, the message_id being replied to, AND the reply text with the user before calling. Returns the sent message_id.",
 		parameters: replyMessageSchema,
-		approval: "write" as const,
+		approval: PROMPT_EVERY_MODE,
+		formatApprovalDetails(args: unknown) {
+			return [
+				`Chat: ${approvalArg(args, "chatId")}`,
+				`Reply to message: ${approvalArg(args, "messageId")}`,
+				`Message:\n${approvalArg(args, "text")}`,
+			];
+		},
 		async execute(_toolCallId: string, params: typeof replyMessageSchema.infer) {
 			const { access } = await readCredential();
 			const message = await telegramCall<TelegramMessage>(access, "sendMessage", {
@@ -302,7 +326,14 @@ function createEditMessageTool(): ToolDefinition<typeof editMessageSchema> {
 		description:
 			"Replace the text of a message the bot ITSELF sent (editMessageText). A bot cannot edit other users' messages. DESTRUCTIVE — confirm the exact chat_id, message_id, and new text with the user before calling. Returns the edited message_id.",
 		parameters: editMessageSchema,
-		approval: "write" as const,
+		approval: PROMPT_EVERY_MODE,
+		formatApprovalDetails(args: unknown) {
+			return [
+				`Chat: ${approvalArg(args, "chatId")}`,
+				`Edit message: ${approvalArg(args, "messageId")}`,
+				`New text:\n${approvalArg(args, "text")}`,
+			];
+		},
 		async execute(_toolCallId: string, params: typeof editMessageSchema.infer) {
 			const { access } = await readCredential();
 			const message = await telegramCall<TelegramMessage>(access, "editMessageText", {
@@ -321,7 +352,10 @@ function createDeleteMessageTool(): ToolDefinition<typeof deleteMessageSchema> {
 		description:
 			"Delete a message from a chat (deleteMessage). IRREVERSIBLE — the message is gone for everyone. Demand explicit confirmation of the exact chat_id AND message_id before calling. The bot can delete its OWN messages any time; other users' messages only within 48h of posting and only with 'delete messages' admin rights in the group. Returns confirmation.",
 		parameters: deleteMessageSchema,
-		approval: "write" as const,
+		approval: PROMPT_EVERY_MODE,
+		formatApprovalDetails(args: unknown) {
+			return [`Chat: ${approvalArg(args, "chatId")}`, `Delete message: ${approvalArg(args, "messageId")}`];
+		},
 		async execute(_toolCallId: string, params: typeof deleteMessageSchema.infer) {
 			const { access } = await readCredential();
 			await telegramCall<boolean>(access, "deleteMessage", {
@@ -370,7 +404,14 @@ function createSendPhotoTool(): ToolDefinition<typeof sendPhotoSchema> {
 		description:
 			"Send a photo to a chat by https:// URL (sendPhoto), with an optional caption. DESTRUCTIVE — confirm the exact recipient (chat_id), the photo URL, AND any caption with the user before calling. Returns the sent message_id.",
 		parameters: sendPhotoSchema,
-		approval: "write" as const,
+		approval: PROMPT_EVERY_MODE,
+		formatApprovalDetails(args: unknown) {
+			return [
+				`Chat: ${approvalArg(args, "chatId")}`,
+				`Photo: ${approvalArg(args, "photoUrl")}`,
+				`Caption:\n${approvalArg(args, "caption", "(none)")}`,
+			];
+		},
 		async execute(_toolCallId: string, params: typeof sendPhotoSchema.infer) {
 			const { access } = await readCredential();
 			const body: Record<string, unknown> = { chat_id: params.chatId, photo: params.photoUrl };

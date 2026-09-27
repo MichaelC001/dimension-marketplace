@@ -221,9 +221,15 @@ function createReadFileTool(): ToolDefinition<typeof readFileSchema> {
 
 // ---------------------------------------------------------------------------
 // Write surface — registered ONLY when the stored credential's granted scopes
-// permit mutation (connect-time "Full access" choice). Every write tool is
-// approval:"write"; the rule file additionally demands explicit user
-// confirmation before mutating intents.
+// permit mutation (connect-time "Full access" choice). Upload, create-folder,
+// and move are approval:"write"; share grants OTHER people access, so it asks
+// the human in every approval mode. The rule file additionally demands explicit
+// user confirmation before mutating intents.
+
+/** Sharing hands a file to other people (and can email them), so it demands a
+ *  human click in EVERY approval mode — a bare "write" tier is auto-approved by
+ *  write and yolo mode. */
+const PROMPT_EVERY_MODE = { tier: "write", policy: "prompt" } as const;
 
 const uploadFileSchema = type({
 	path: type("string").describe("Local file path to upload."),
@@ -353,7 +359,19 @@ function createShareFileTool(): ToolDefinition<typeof shareFileSchema> {
 		description:
 			"Grant access to a Drive file (a specific account, or anyone-with-the-link) and return its link. CHANGES who can see the file — confirm with the user first.",
 		parameters: shareFileSchema,
-		approval: "write" as const,
+		approval: PROMPT_EVERY_MODE,
+		formatApprovalDetails(args: unknown) {
+			const arg = (key: string): unknown =>
+				typeof args === "object" && args !== null ? Reflect.get(args, key) : undefined;
+			const fileId = arg("fileId");
+			const email = arg("emailAddress");
+			const role = arg("role");
+			return [
+				`File: ${typeof fileId === "string" ? fileId : "(missing)"}`,
+				`Share with: ${typeof email === "string" && email.length > 0 ? email : "ANYONE with the link"}`,
+				`Role: ${typeof role === "string" ? role : "reader"}`,
+			];
+		},
 		async execute(_toolCallId: string, params: typeof shareFileSchema.infer) {
 			const accessToken = await freshAccessToken();
 			const id = encodeURIComponent(params.fileId);
