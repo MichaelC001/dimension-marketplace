@@ -170,7 +170,9 @@ the posted URL's path on the origin (`{segment}` = one path segment,
   copying `origin`, `profile` and every field's `value` (in field order)
   exactly from the `awaiting-confirmation` record you were shown. The user is
   ALWAYS asked first, whatever the permission mode: their Allow card shows
-  those args, so it names exactly where, as whom and what goes out. Without
+  those args, so it names exactly where, as whom and what goes out. (Where the
+  harness can't guarantee that ask, Dimension refuses your confirm: hand the
+  Post to the user in the View.) Without
   `expect` it fails `expect_required`; any difference fails `publish_mismatch`.
   Either way nothing is clicked and the publish stays pending. Once allowed it
   clicks submit exactly once, never retried, and returns `posted` with the

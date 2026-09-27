@@ -245,9 +245,11 @@ drafts, and the post is confirmed.
    (the page and the profile) and exactly what will be posted, with **Post**
    and **Cancel**. Your agent can confirm it itself (`browser_publish_confirm`),
    but that ALWAYS asks you first, whatever your session's permission mode: an
-   Allow card names the exact site, profile and text it will post. Or you press
-   Post. While the bar waits, the agent can't otherwise touch the page. After
-   the post, its own link comes back to the agent as the receipt.
+   Allow card names the exact site, profile and text it will post. (Under a
+   harness that can't guarantee that ask, Dimension refuses the agent's confirm
+   instead.) Or you press Post. While the bar waits, the agent can't otherwise
+   touch the page. After the post, its own link comes back to the agent as the
+   receipt.
 
 If you post it yourself with the site's own button instead, the bar can't
 know for sure, so it says "May have posted" and never posts a second copy.
@@ -296,7 +298,8 @@ as data, so the pack's code stays platform-agnostic:
   submits: the model's `browser_publish_confirm` or the bar's **Post** (the same
   tool). The tool declares `_meta: { "ai.insodimension/approval": "prompt" }`,
   so the host ALWAYS asks the human before the agent's call runs, in every permission mode
-  (yolo included). The model MUST pass `expect: { origin, profile, values }`
+  (yolo included); a harness that can't guarantee that ask has the call refused
+  by the Dimension host instead. The model MUST pass `expect: { origin, profile, values }`
   copied exactly from the pending record (`values`: every field's value, in
   field order), so the Allow card states where the post goes, as which profile,
   and exactly what it says. A model call without `expect` fails
