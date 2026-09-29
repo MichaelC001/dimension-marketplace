@@ -145,7 +145,7 @@ async function record(s: Session, publishId: string): Promise<PublishRecord> {
 
 /** The human's own input in the View: `browser_act` stamped "app", the only input a pending publish admits. */
 async function humanAct(s: Session, action: BrowserAction): Promise<void> {
-	const acted = await s.call("browser_act", { browserId: s.browserId, action }, "app");
+	const acted = await s.call("browser_act", { browserId: s.browserId, actions: [action] }, "app");
 	expect(acted.isError).toBeFalsy();
 }
 
@@ -534,8 +534,8 @@ describeWithChrome("browser_publish", () => {
 			const before = await s.runtime.state(id);
 			const seen = await counters(s.runtime, id);
 			const calls: Array<[string, Record<string, unknown>]> = [
-				["browser_act", { browserId: id, action: { kind: "type", selector: "#text", text: "not what the human saw" } }],
-				["browser_tab", { browserId: id, op: "new", url: s.fixture.url("/compose?v=stay") }],
+				["browser_act", { browserId: id, actions: [{ kind: "type", selector: "#text", text: "not what the human saw" }] }],
+				["browser_act", { browserId: id, actions: [{ kind: "tab", op: "new", url: s.fixture.url("/compose?v=stay") }] }],
 				["browser_task", { browserId: id, agent: "jev", task: "post something else", waitSeconds: 0 }],
 				["browser_publish", { browserId: id, recipe: recipe(s.fixture, "stay"), mode: "check" }],
 			];
@@ -548,6 +548,8 @@ describeWithChrome("browser_publish", () => {
 			// The code behind those messages, at each gated runtime entry point.
 			expect(await failureCode(() => s.runtime.act(id, { kind: "type", selector: "#text", text: "x" }, "model"))).toBe("publish_pending");
 			expect(await failureCode(() => s.runtime.tab(id, { op: "new" }, "model"))).toBe("publish_pending");
+			// One refusal for a whole batch, before any of its steps reaches the page.
+			expect(await failureCode(() => s.runtime.actMany(id, [{ kind: "type", selector: "#text", text: "x" }, { kind: "click", selector: "#post" }], "model"))).toBe("publish_pending");
 			expect(await failureCode(() => s.runtime.startTask(id, { agent: "jev", task: "post something else" }, "model"))).toBe("publish_pending");
 			expect(await failureCode(() => s.runtime.publish(id, recipe(s.fixture, "stay"), "check", "model"))).toBe("publish_pending");
 
@@ -574,7 +576,7 @@ describeWithChrome("browser_publish", () => {
 			const s = await session("pub-other-tab");
 			const parked = await post(s, "nav");
 			expect(parked.composeUrl).toBe(s.fixture.url("/compose?v=nav"));
-			const opened = await s.call("browser_tab", { browserId: s.browserId, op: "new", url: parked.composeUrl }, "app");
+			const opened = await s.call("browser_act", { browserId: s.browserId, actions: [{ kind: "tab", op: "new", url: parked.composeUrl }] }, "app");
 			expect(opened.isError).toBeFalsy();
 			await humanAct(s, { kind: "type", selector: "#text", text: TEXT });
 			await humanAct(s, { kind: "type", selector: "#rich", text: RICH });

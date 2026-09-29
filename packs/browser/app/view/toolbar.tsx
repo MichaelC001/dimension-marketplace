@@ -3,14 +3,15 @@
 import { type CSSProperties, type FormEvent, forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import type { BrowserEngine } from "../../src/contracts";
 import { Icon } from "@fraym/ui/icons";
-import { addressParts, guessAddress } from "./address";
+import { addressParts, guessAddress } from "../../src/address";
+import { loginSetLabel } from "../../src/profile-name";
 
-const ENGINE_LABEL: Record<BrowserEngine, string> = {
-	chromium: "Chromium",
-	"chrome-relay": "Your Chrome",
-	abp: "ABP",
-	browser4: "Browser4",
-};
+/** Who this browser is, as a person says it: no slugs, no engine names. */
+function identityLabel(profile: string | null, engine: BrowserEngine): { readonly name: string; readonly detail: string } {
+	if (engine === "chrome-relay") return { name: "Your Chrome", detail: "Signed in as you" };
+	if (profile === null) return { name: "Private", detail: "Nothing is saved" };
+	return { name: loginSetLabel(profile), detail: "Saved logins" };
+}
 
 export function LockIcon({ open = false, size = 13 }: { readonly open?: boolean; readonly size?: number }) {
 	return (
@@ -30,6 +31,8 @@ export function profileHue(name: string): number {
 
 export interface OmniboxHandle {
 	focus(): void;
+	/** Submit what is typed, exactly as Enter would. */
+	submit(): void;
 }
 
 interface OmniboxProps {
@@ -56,20 +59,7 @@ export const Omnibox = forwardRef<OmniboxHandle, OmniboxProps>(function Omnibox(
 	const [draft, setDraft] = useState(url);
 	const [error, setError] = useState<string | null>(null);
 
-	useImperativeHandle(ref, () => ({
-		focus: () => {
-			inputRef.current?.focus();
-			inputRef.current?.select();
-		},
-	}));
-
-	// The page moved on under an unfocused omnibox: show where it is now.
-	useEffect(() => {
-		if (!focused) setDraft(addressParts(url).blank ? "" : url);
-	}, [url, focused]);
-
-	const submit = (event: FormEvent) => {
-		event.preventDefault();
+	const commit = () => {
 		if (allowEmpty && draft.trim().length === 0) {
 			onNavigate("");
 			return;
@@ -82,6 +72,25 @@ export const Omnibox = forwardRef<OmniboxHandle, OmniboxProps>(function Omnibox(
 		setError(null);
 		onNavigate(guess.url);
 		inputRef.current?.blur();
+	};
+
+	useImperativeHandle(ref, () => ({
+		focus: () => {
+			inputRef.current?.focus();
+			inputRef.current?.select();
+		},
+		submit: commit,
+	}));
+
+	// The page moved on under an unfocused address bar: show where it is now. A
+	// launcher (`hero`) has no page — what is typed there is only ever the person's own.
+	useEffect(() => {
+		if (size === "toolbar" && !focused) setDraft(addressParts(url).blank ? "" : url);
+	}, [url, focused, size]);
+
+	const submit = (event: FormEvent) => {
+		event.preventDefault();
+		commit();
 	};
 
 	const parts = addressParts(url);
@@ -158,7 +167,7 @@ export interface ToolbarProps {
 	readonly canGoForward: boolean;
 	readonly locked: boolean;
 	readonly annotating: boolean;
-	readonly profile: string;
+	readonly profile: string | null;
 	readonly engine: BrowserEngine;
 	readonly offline: boolean;
 	readonly onBack: () => void;
@@ -174,6 +183,7 @@ export interface ToolbarProps {
 
 export const Toolbar = forwardRef<OmniboxHandle, ToolbarProps>(function Toolbar(props, ref) {
 	const { url, loading, canGoBack, canGoForward, locked, annotating, profile, engine, offline } = props;
+	const identity = identityLabel(profile, engine);
 	const [menuOpen, setMenuOpen] = useState(false);
 	const menuRef = useRef<HTMLDivElement | null>(null);
 
@@ -257,18 +267,18 @@ export const Toolbar = forwardRef<OmniboxHandle, ToolbarProps>(function Toolbar(
 					<button
 						type="button"
 						className="bx-profile"
-						title={`Profile ${profile} · ${ENGINE_LABEL[engine]}`}
-						aria-label={`Profile ${profile}, ${ENGINE_LABEL[engine]} — browser menu`}
+						title={`${identity.name} · ${identity.detail}`}
+						aria-label={`${identity.name}, ${identity.detail} — browser menu`}
 						aria-haspopup="menu"
 						aria-expanded={menuOpen}
 						onClick={() => setMenuOpen(open => !open)}
 					>
-						<span className="bx-avatar" style={{ "--hue": profileHue(profile) } as CSSProperties} aria-hidden="true">
-							{(profile[0] ?? "?").toUpperCase()}
+						<span className="bx-avatar" style={{ "--hue": profileHue(identity.name) } as CSSProperties} aria-hidden="true">
+							{identity.name[0]?.toUpperCase()}
 						</span>
 						<span className="bx-profile-text">
-							<span className="bx-profile-name">{profile}</span>
-							<span className="bx-profile-engine">{ENGINE_LABEL[engine]}</span>
+							<span className="bx-profile-name">{identity.name}</span>
+							<span className="bx-profile-engine">{identity.detail}</span>
 						</span>
 					</button>
 					<button

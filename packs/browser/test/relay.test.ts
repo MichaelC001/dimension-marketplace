@@ -156,7 +156,9 @@ afterEach(async () => {
 
 async function openRelay(relayUrl: string): Promise<{ runtime: BrowserRuntime; browserId: string }> {
 	const runtime = newRuntime(await createRoot(), { relayUrl });
-	const { browserId } = await runtime.open({ profile: "relay", engine: "chrome-relay", viewport: VIEWPORT });
+	// No profile, the way an agent calls it: the relay is always the reserved "relay" profile, never a throwaway browser.
+	const { browserId } = await runtime.open({ engine: "chrome-relay", viewport: VIEWPORT });
+	expect((await runtime.state(browserId)).profile).toBe("relay");
 	return { runtime, browserId };
 }
 

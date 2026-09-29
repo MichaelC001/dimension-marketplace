@@ -164,6 +164,7 @@ describeTasks("tasks", () => {
 			for (const refused of [
 				() => runtime.act(browserId, { kind: "navigate", url: fixture.url("/page2") }),
 				() => runtime.tab(browserId, { op: "new", url: fixture.url("/page2") }),
+				() => runtime.actMany(browserId, [{ kind: "navigate", url: fixture.url("/page2") }, { kind: "tab", op: "new" }]),
 			]) {
 				expect(await failureCode(refused)).toBe("task_running");
 			}
@@ -230,7 +231,7 @@ describeTasks("tasks", () => {
 				const state = await within(5_000, `browser_state after failed task ${i}`, call("browser_state", { browserId }));
 				expect({ isError: state.isError, browserId: state.structuredContent?.browserId }).toEqual({ isError: undefined, browserId });
 			}
-			const acted = await within(10_000, "browser_act after the failed tasks", call("browser_act", { browserId, action: { kind: "navigate", url: fixture.url("/page2") } }));
+			const acted = await within(10_000, "browser_act after the failed tasks", call("browser_act", { browserId, actions: [{ kind: "navigate", url: fixture.url("/page2") }] }));
 			expect(acted.isError).toBeUndefined();
 			expect(fixture.hits("/page2")).toBe(1);
 		},
@@ -321,7 +322,7 @@ describeTasks("tasks", () => {
 			const origin = new URL(fixture.url("/")).origin;
 			const results: unknown[] = [];
 			const act = async (action: Record<string, unknown>): Promise<ToolResult> => {
-				const out = await call("browser_act", { browserId, action });
+				const out = await call("browser_act", { browserId, actions: [action] });
 				results.push(out);
 				expect(out.isError).toBeUndefined();
 				return out;
@@ -343,7 +344,7 @@ describeTasks("tasks", () => {
 
 			const state = await call("browser_state", { browserId });
 			const tabId = state.structuredContent?.activeTabId as string;
-			results.push(state, await call("browser_snapshot", { browserId }), await call("browser_tab", { browserId, op: "activate", tabId }));
+			results.push(state, await call("browser_snapshot", { browserId }), await call("browser_act", { browserId, actions: [{ kind: "tab", op: "activate", tabId }] }));
 			// A task whose steps and failure summary quote the URL, as jev's would after the filled form submits.
 			const summary = `stopped at ${landed} (${encodeURIComponent(password)})`;
 			const task = JSON.stringify({ steps: [{ action: `submitted ${landed}`, url: landed }], result: { status: "failed", summary, steps: 1 } });

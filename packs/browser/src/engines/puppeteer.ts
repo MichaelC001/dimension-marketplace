@@ -26,14 +26,15 @@
  * request screened by the read policy before it is sent.
  *
  * Every page script executed here is a fixed compiled function from
- * `page-scripts.ts`. Caller-supplied JavaScript never reaches `evaluate`.
+ * `page-scripts.ts`. The one exception is `evaluate`: the runtime lets a
+ * model's own JavaScript reach it on a throwaway browser only.
  */
 import { createHash } from "node:crypto";
 import { mkdirSync, statSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 import puppeteer, { TimeoutError } from "puppeteer-core";
 import type { Browser, BrowserContext, CDPSession, ElementHandle, Frame, HTTPRequest, HTTPResponse, JSHandle, KeyInput, Page, Protocol, Target } from "puppeteer-core";
-import type { BrowserAction, BrowserApp, BrowserRegion, TabInfo, Viewport } from "../contracts.js";
+import { type BrowserAction, type BrowserApp, type BrowserRegion, type DialogType, type ElementInspection, type HandledDialog, type LogEntry, MAX_LOG_ENTRIES, type ModelShot, type ShotRequest, type TabInfo, type Viewport } from "../contracts.js";
 import { FaviconCache } from "../favicon.js";
 import { MAX_FRAME_BYTES } from "../image.js";
 import { ActionNotDispatched, BrowserRuntimeError, fail } from "../store.js";
@@ -43,6 +44,7 @@ import {
 	FAVICON_HREF_SCRIPT,
 	FOCUSED_LEAF_SCRIPT,
 	FRAME_INSET_SCRIPT,
+	INSPECT_SCRIPT,
 	IS_PASSWORD_SCRIPT,
 	INSERT_PASSWORD_SCRIPT,
 	LINK_HREFS_SCRIPT,
@@ -51,11 +53,14 @@ import {
 	READ_PAGE_SCRIPT,
 	SAVED_PASSWORD_TARGET_SCRIPT,
 	SELECT_ALL_SCRIPT,
+	READ_TEXT_SCRIPT,
 	TYPE_TARGET_SCRIPT,
+	EVAL_RESULT_SCRIPT,
 	UA_HINTS_SCRIPT,
 } from "./page-scripts.js";
+import { watchPageLog } from "./page-log.js";
 import { type HeadfulIdentity, identityPerBinary, type ResolvedBrowser, resolveBrowser, turnOffPasswordSaving, UA_HINTS, viewLaunchOptions, withTimeout } from "./launch.js";
-import type { EngineDriver, EngineOptions, EngineState, FieldRead, LiveFrame, PageRead, PageReader, PasswordSource, PerformOutcome, ReadOutcome, ReadPolicy } from "./types.js";
+import type { EngineDriver, EngineOptions, EngineState, EvalOutcome, FieldRead, LiveFrame, PageRead, PageReader, PasswordSource, PerformOutcome, ReadOutcome, ReadPolicy, WaitCondition } from "./types.js";
 
 const NAVIGATE_TIMEOUT_MS = 30_000;
 /** Child frames a snapshot lists controls for, depth first. */
@@ -78,7 +83,22 @@ const FAVICON_SCRIPT_TIMEOUT_MS = 2_000;
 /** How long a freshly started screencast gets to deliver its first frame before one is captured. */
 const FIRST_FRAME_WAIT_MS = 500;
 const SCREENCAST_QUALITY = 80;
+/** A model's picture: the browser's own webp at this quality, its longest edge at most this many CSS px. */
+const MODEL_SHOT_QUALITY = 70;
+const MODEL_SHOT_EDGE = 1_024;
+/** An eval step gets this long to run its script, plus a grace for a promise it awaits. */
+const EVAL_TIMEOUT_MS = 10_000;
+const EVAL_GROUP = "dimension-eval";
 const DEFAULT_RELAY_URL = "http://127.0.0.1:9224";
+/** Dialogs kept per tab for the model, and the longest message kept (a page's own text: bounded, untrusted). */
+const MAX_DIALOGS = 5;
+const MAX_DIALOG_CHARS = 300;
+/** After input that can navigate: how long a navigation gets to start, and how long to wait for it to commit and finish loading. */
+const NAVIGATION_GRACE_MS = 100;
+const SETTLE_MS = 1_500;
+const SETTLE_POLL_MS = 20;
+/** The error a read gets when the document under it is replaced by a navigation. */
+const NAVIGATED_UNDER_READ = /Execution context was destroyed|Cannot find context|Inspected target navigated|Target closed|Session closed/i;
 
 /** One process-wide cache: an origin's icon is the same whichever browser shows it. */
 const FAVICONS = new FaviconCache();
@@ -237,7 +257,7 @@ async function presentAsHeadful(browser: Browser, identity: HeadfulIdentity): Pr
 	await withTimeout(Promise.all(adopting), ACTION_TIMEOUT_MS, "identity for the open tabs");
 }
 
-/** Launch the user's browser (launch.ts decides which, and how) on the persistent profile directory this driver owns. */
+/** Launch the user's browser (launch.ts decides which, and how) on the profile directory this driver owns. */
 async function launchChromium(options: EngineOptions, release: () => void): Promise<EngineDriver> {
 	const userDataDir = options.profileDirectory;
 	const headless = options.headless ?? true;
@@ -462,18 +482,35 @@ interface Tab {
 	target: Target;
 	cdp: CDPSession;
 	loading: boolean;
+	/** Counts every navigation this tab started or was asked to start; a change means one is under way. */
+	navSeq: number;
+	/** Every dialog this tab's page (or an iframe of it) opened, as answered. */
+	dialogs: DialogLog;
+	/** What went wrong on this page, newest last (bounded); `LogEntry.n` is the driver's, so it orders across tabs. */
+	log: LogEntry[];
 }
 
-async function prepareTab(page: Page, viewport: Viewport, scale = 1): Promise<Tab> {
-	await page.setViewport({ ...viewport, deviceScaleFactor: scale });
-	const cdp = await page.createCDPSession();
-	const tab: Tab = { id: "", documentId: "", page, target: page.target(), cdp, loading: false };
+/** The last MAX_DIALOGS dialogs answered, oldest first; `seq` counts them since the tab began. */
+interface DialogLog {
+	entries: Array<HandledDialog & { seq: number }>;
+	seq: number;
+}
+
+/** A session that already answers its page's dialogs. */
+interface Guarded {
+	cdp: CDPSession;
+	dialogs: DialogLog;
+}
+
+async function prepareTab(page: Page, viewport: Viewport, scale = 1, early?: Guarded): Promise<Tab> {
+	const { cdp, dialogs } = early ?? (await guardPage(await page.createCDPSession()));
+	const tab: Tab = { id: "", documentId: "", page, target: page.target(), cdp, loading: false, navSeq: 0, dialogs, log: [] };
 	// Subscribed before the first read: a commit racing setup is never missed.
 	cdp.on("Page.frameNavigated", ({ frame }) => {
 		if (frame.parentId === undefined) tab.documentId = frame.loaderId;
 	});
 	try {
-		await cdp.send("Page.enable");
+		await page.setViewport({ ...viewport, deviceScaleFactor: scale });
 		// A tab behind another (the human's tab in the relay, a background tab)
 		// is not rendered, and puppeteer's element clicks wait on rendering.
 		// Focus emulation keeps our tabs rendering without stealing the window.
@@ -489,6 +526,48 @@ async function prepareTab(page: Page, viewport: Viewport, scale = 1): Promise<Ta
 		await cdp.detach().catch(() => undefined);
 		throw err;
 	}
+}
+
+/**
+ * Start answering a page's dialogs on `cdp`, before anything else runs on the
+ * target — for a popup, before puppeteer even initialises its page, which an
+ * open dialog would block for good.
+ */
+async function guardPage(cdp: CDPSession): Promise<Guarded> {
+	const dialogs: DialogLog = { entries: [], seq: 0 };
+	answerDialogs(cdp, dialogs);
+	try {
+		await cdp.send("Page.enable");
+	} catch (err) {
+		await cdp.detach().catch(() => undefined);
+		throw err;
+	}
+	return { cdp, dialogs };
+}
+
+/**
+ * An open JavaScript dialog freezes its page: every command to it waits for
+ * an answer, so one unanswered `alert()` hangs the browser for good. Each is
+ * answered the moment it opens, whoever caused it (the model's action, a
+ * task agent driving the tab, the page itself, an iframe of it, cross-origin
+ * ones included: Chrome delivers their dialogs to the page's own session): alert and
+ * beforeunload are accepted (leaving is the point of a beforeunload), confirm
+ * and prompt are dismissed. The outcome is recorded from Chrome's own "closed"
+ * event, so it is true even when another client answered first.
+ */
+function answerDialogs(cdp: CDPSession, log: DialogLog): void {
+	let open: { type: DialogType; message: string } | undefined;
+	cdp.on("Page.javascriptDialogOpening", (event) => {
+		open = { type: event.type, message: event.message.slice(0, MAX_DIALOG_CHARS) };
+		const accept = event.type === "alert" || event.type === "beforeunload";
+		void cdp.send("Page.handleJavaScriptDialog", { accept }).catch(() => undefined);
+	});
+	cdp.on("Page.javascriptDialogClosed", (event) => {
+		if (!open) return;
+		log.entries.push({ seq: ++log.seq, type: open.type, message: open.message, handled: event.result ? "accepted" : "dismissed" });
+		if (log.entries.length > MAX_DIALOGS) log.entries.shift();
+		open = undefined;
+	});
 }
 
 /** The live screencast of one tab and its newest frame. */
@@ -534,6 +613,7 @@ class PuppeteerDriver implements EngineDriver {
 	/** Screencast start/stop run in order; a tab switch never interleaves with another. */
 	#castChain: Promise<void> = Promise.resolve();
 	#frameSeq = 0;
+	#logSeq = 0;
 	#closed = false;
 	#closing: Promise<void> | undefined;
 
@@ -612,6 +692,7 @@ class PuppeteerDriver implements EngineDriver {
 			loading: active.loading,
 			canGoBack: history.currentIndex > 0,
 			canGoForward: history.currentIndex < history.entries.length - 1,
+			dialogs: active.dialogs.entries.map(({ type, message, handled }) => ({ type, message, handled })),
 		};
 	}
 
@@ -628,6 +709,88 @@ class PuppeteerDriver implements EngineDriver {
 			fail("frame_too_large", `screenshot is ${shot.length} bytes, above the ${MAX_FRAME_BYTES} byte limit`);
 		}
 		return shot;
+	}
+
+	async shotForModel(request: ShotRequest): Promise<Omit<ModelShot, "url">> {
+		const tab = this.#activeTab();
+		const metrics = await this.#read(() => tab.cdp.send("Page.getLayoutMetrics"));
+		const view = metrics.cssVisualViewport;
+		// Clip and capture coordinates are the page's (document) CSS pixels, scrolled or not.
+		let region: BrowserRegion = { x: view.pageX, y: view.pageY, width: view.clientWidth, height: view.clientHeight };
+		if (request.fullPage) region = { x: 0, y: 0, width: metrics.cssContentSize.width, height: metrics.cssContentSize.height };
+		else if (request.selector !== undefined) region = await this.#elementRegion(tab, request.selector, view);
+		const width = Math.max(1, Math.ceil(region.width));
+		const height = Math.max(1, Math.ceil(region.height));
+		const scale = Math.min(1, MODEL_SHOT_EDGE / Math.max(width, height)) * (request.scale ?? 1);
+		// Only a region past the viewport needs the page laid out beyond it (which can move viewport-relative CSS).
+		const inView = region.x >= view.pageX && region.y >= view.pageY && region.x + width <= view.pageX + view.clientWidth && region.y + height <= view.pageY + view.clientHeight;
+		const shot = await this.#read(() =>
+			tab.cdp.send("Page.captureScreenshot", {
+				format: "webp",
+				quality: MODEL_SHOT_QUALITY,
+				captureBeyondViewport: !inView,
+				// The output is the clip's size times its scale times the page's pixel ratio.
+				clip: { x: region.x, y: region.y, width, height, scale: scale / this.#scale },
+			}),
+		);
+		return { mimeType: "image/webp", data: shot.data, width, height, scale: Math.round(scale * 1_000) / 1_000 };
+	}
+
+	/** The element's box in page pixels (an iframe's element too), or a refusal that nothing was captured. */
+	async #elementRegion(tab: Tab, selector: string, view: { pageX: number; pageY: number }): Promise<BrowserRegion> {
+		const { frame, css } = aim(tab.page, selector);
+		const handle = await frame.$(css);
+		if (!handle) throw new ActionNotDispatched("no_element", `${JSON.stringify(selector)} matches nothing on the page`);
+		try {
+			const box = await handle.boundingBox();
+			if (!box || box.width < 1 || box.height < 1) throw new ActionNotDispatched("no_box", `${JSON.stringify(selector)} has no visible box to capture`);
+			return { x: box.x + view.pageX, y: box.y + view.pageY, width: box.width, height: box.height };
+		} finally {
+			await handle.dispose().catch(() => undefined);
+		}
+	}
+
+	logs(): LogEntry[] {
+		return this.#active.log.map((entry) => ({ ...entry }));
+	}
+
+	async evaluate(expression: string, limit: number): Promise<EvalOutcome> {
+		const tab = this.#activeTab();
+		// The main world (no contextId), so the app's own globals are visible; `replMode` lets a snippet `await` and re-declare.
+		const run = await withTimeout(
+			tab.cdp.send("Runtime.evaluate", { expression, awaitPromise: true, replMode: true, returnByValue: false, timeout: EVAL_TIMEOUT_MS, objectGroup: EVAL_GROUP }),
+			EVAL_TIMEOUT_MS + 5_000,
+			"eval",
+		);
+		try {
+			// `replMode` (top-level await) hands a plain promise back unawaited: settle it here. A rejection is an exception.
+			let outcome: { result: Protocol.Runtime.RemoteObject; exceptionDetails?: Protocol.Runtime.ExceptionDetails } = run;
+			if (!run.exceptionDetails && run.result.subtype === "promise" && run.result.objectId !== undefined) {
+				outcome = await withTimeout(tab.cdp.send("Runtime.awaitPromise", { promiseObjectId: run.result.objectId, returnByValue: false }), EVAL_TIMEOUT_MS + 5_000, "eval");
+			}
+			const thrown = outcome.exceptionDetails;
+			if (thrown) {
+				const said = thrown.exception?.description ?? String(thrown.exception?.value ?? thrown.text);
+				return { ok: false, ran: thrown.exception?.className !== "SyntaxError", error: said.split("\n", 1)[0] ?? "" };
+			}
+			const result = outcome.result;
+			if (result.type === "undefined") return { ok: true, truncated: false };
+			if (result.objectId === undefined) {
+				const text = result.unserializableValue ?? JSON.stringify(result.value);
+				return { ok: true, value: text.slice(0, limit), truncated: text.length > limit };
+			}
+			const described = await tab.cdp.send("Runtime.callFunctionOn", {
+				objectId: result.objectId,
+				functionDeclaration: String(EVAL_RESULT_SCRIPT),
+				arguments: [{ value: limit }],
+				returnByValue: true,
+				silent: true,
+			});
+			const { text, truncated } = described.result.value as { text: string; truncated: boolean };
+			return { ok: true, value: text, truncated };
+		} finally {
+			await tab.cdp.send("Runtime.releaseObjectGroup", { objectGroup: EVAL_GROUP }).catch(() => undefined);
+		}
 	}
 
 	async liveFrame(): Promise<LiveFrame> {
@@ -661,8 +824,9 @@ class PuppeteerDriver implements EngineDriver {
 	 * main-viewport pixels. A frame that is not rendered (no box) is left out.
 	 */
 	async snapshot(limit: number): Promise<string> {
-		const page = this.#activeTab().page;
-		const parts = [await page.evaluate(PAGE_TEXT_SCRIPT, limit, null, 0, 0)];
+		const tab = this.#activeTab();
+		const page = tab.page;
+		const parts = [await this.#duringNavigation(tab, () => page.evaluate(PAGE_TEXT_SCRIPT, limit, null, 0, 0))];
 		let left = limit - (parts[0]?.length ?? 0);
 		for (const { frame, ref } of childFrames(page)) {
 			if (left <= 0) break;
@@ -725,6 +889,61 @@ class PuppeteerDriver implements EngineDriver {
 		return await this.#activeTab().page.evaluate(LINK_HREFS_SCRIPT, selector, limit);
 	}
 
+	// waitFor and inspect read only: a selector or a substring is data, and the one script that runs is compiled in page-scripts.ts.
+	async waitFor(condition: WaitCondition, timeoutMs: number, mask: (value: string) => string): Promise<boolean> {
+		const tab = this.#activeTab();
+		try {
+			if ("selector" in condition) {
+				const { frame, css } = aim(tab.page, condition.selector);
+				const found = await frame.waitForSelector(css, { visible: true, timeout: Math.max(1, timeoutMs) });
+				await found?.dispose().catch(() => undefined);
+				return true;
+			}
+			// Text and URL are compared after masking: an unmasked match would tell the caller, a guess at a time, what a saved password is.
+			const needle = "text" in condition ? condition.text : condition.url;
+			const deadline = Date.now() + timeoutMs;
+			for (;;) {
+				if (mask(await this.#waitSubject(tab, "text" in condition)).includes(needle)) return true;
+				if (Date.now() >= deadline) return false;
+				await sleep(SETTLE_POLL_MS * 5);
+			}
+		} catch (error) {
+			if (error instanceof TimeoutError) return false;
+			throw error;
+		}
+	}
+
+	/** The page's text, or its current URL, for a wait to match. A document replaced mid-read is an empty read: the next poll sees the new one. */
+	async #waitSubject(tab: Tab, text: boolean): Promise<string> {
+		if (!text) {
+			const history = await this.#read(() => tab.cdp.send("Page.getNavigationHistory"));
+			return history.entries[history.currentIndex]?.url ?? "";
+		}
+		try {
+			return await tab.page.evaluate(READ_TEXT_SCRIPT);
+		} catch (error) {
+			if (NAVIGATED_UNDER_READ.test(describe(error))) return "";
+			throw error;
+		}
+	}
+
+	async inspect(selector: string): Promise<ElementInspection | null> {
+		const page = this.#activeTab().page;
+		const { frame, css } = aim(page, selector);
+		const handle = await frame.$(css);
+		if (!handle) return null;
+		try {
+			const read = await handle.evaluate(INSPECT_SCRIPT);
+			// An iframe's boxes are reported in main-viewport pixels, as a snapshot lists its controls.
+			const offset = frame === page.mainFrame() ? null : await frameOffset(frame).catch(() => null);
+			if (offset === null) return { found: true, ...read };
+			const shift = (box: BrowserRegion): BrowserRegion => ({ ...box, x: Math.round((box.x + offset.x) * 100) / 100, y: Math.round((box.y + offset.y) * 100) / 100 });
+			return { found: true, ...read, rect: shift(read.rect), parent: read.parent && shift(read.parent) };
+		} finally {
+			await handle.dispose().catch(() => undefined);
+		}
+	}
+
 	// -----------------------------------------------------------------------
 	// Actions
 	// -----------------------------------------------------------------------
@@ -737,12 +956,17 @@ class PuppeteerDriver implements EngineDriver {
 	 * ActionNotDispatched before the first input event.
 	 */
 	async perform(action: BrowserAction, password?: PasswordSource): Promise<PerformOutcome> {
-		return await withTimeout(this.#dispatch(action, password), NAVIGATE_TIMEOUT_MS + 5_000, `${action.kind}`);
+		const tab = this.#activeTab();
+		const seen = tab.dialogs.seq;
+		const outcome = await withTimeout(this.#dispatch(action, password), NAVIGATE_TIMEOUT_MS + 5_000, `${action.kind}`);
+		const dialogs = tab.dialogs.entries.filter((dialog) => dialog.seq > seen).map(({ type, message, handled }) => ({ type, message, handled }));
+		return dialogs.length === 0 ? outcome : { ...outcome, dialogs };
 	}
 
 	async #dispatch(action: BrowserAction, password: PasswordSource | undefined): Promise<PerformOutcome> {
 		const tab = this.#activeTab();
 		const page = tab.page;
+		const started = tab.navSeq;
 		switch (action.kind) {
 			case "navigate": {
 				const url = requireField(action.url, "navigate.url");
@@ -770,20 +994,28 @@ class PuppeteerDriver implements EngineDriver {
 			case "click": {
 				const options = { button: action.button ?? "left", count: action.clickCount ?? 1 };
 				if (action.selector === undefined) {
-					await page.mouse.click(requireNumber(action.x, "click.x"), requireNumber(action.y, "click.y"), options);
-					return NONE;
+					const x = requireNumber(action.x, "click.x");
+					const y = requireNumber(action.y, "click.y");
+					this.#assertInViewport("click", x, y);
+					await page.mouse.click(x, y, options);
+				} else {
+					const { handle } = await this.#resolve(page, action.selector);
+					try {
+						await handle.click(options);
+					} finally {
+						await handle.dispose().catch(() => undefined);
+					}
 				}
-				const { handle } = await this.#resolve(page, action.selector);
-				try {
-					await handle.click(options);
-				} finally {
-					await handle.dispose().catch(() => undefined);
-				}
+				await this.#settle(tab, started, true);
 				return NONE;
 			}
-			case "hover":
-				await page.mouse.move(requireNumber(action.x, "hover.x"), requireNumber(action.y, "hover.y"));
+			case "hover": {
+				const x = requireNumber(action.x, "hover.x");
+				const y = requireNumber(action.y, "hover.y");
+				this.#assertInViewport("hover", x, y);
+				await page.mouse.move(x, y);
 				return NONE;
+			}
 			case "insert":
 				if (action.useSavedPassword || action.generatePassword) return await this.#typePassword(await this.#focusedField(page), action, password);
 				// Whatever has focus receives the text as one native input operation.
@@ -813,14 +1045,64 @@ class PuppeteerDriver implements EngineDriver {
 				}
 				return NONE;
 			}
-			case "press":
-				await page.keyboard.press(requireField(action.key, "press.key") as KeyInput);
+			case "press": {
+				const key = requireField(action.key, "press.key");
+				await page.keyboard.press(key as KeyInput);
+				await this.#settle(tab, started, key === "Enter" || key === "Space" || key === " ");
+				return NONE;
+			}
+			case "resize":
+				await this.resize({ width: requireNumber(action.width, "resize.width"), height: requireNumber(action.height, "resize.height") }, this.#scale);
 				return NONE;
 			case "scroll":
 				await page.mouse.wheel({ deltaX: action.deltaX ?? 0, deltaY: action.deltaY ?? 0 });
 				return NONE;
 			default:
 				throw new ActionNotDispatched("bad_action", `unsupported action kind ${JSON.stringify((action as BrowserAction).kind)}`);
+		}
+	}
+
+	/** A coordinate outside the viewport reaches no element: refused, with the way out. */
+	#assertInViewport(kind: "click" | "hover", x: number, y: number): void {
+		const { width, height } = this.#viewport;
+		if (x >= 0 && y >= 0 && x < width && y < height) return;
+		throw new ActionNotDispatched(
+			"off_viewport",
+			`${kind} at ${x},${y} is outside the ${width}x${height} viewport, so nothing was ${kind === "click" ? "clicked" : "hovered"}. Scroll it into view with browser_act scroll, then take a new browser_snapshot for its fresh coordinates.`,
+		);
+	}
+
+	/**
+	 * After input that can start a navigation: give one a moment to start (only
+	 * for a click or Enter), then wait — bounded — for it to commit and finish
+	 * loading, so the result names the page the input led to. Input that starts
+	 * nothing costs only the grace.
+	 */
+	async #settle(tab: Tab, startedAt: number, mayStart: boolean): Promise<void> {
+		if (mayStart) {
+			const grace = Date.now() + NAVIGATION_GRACE_MS;
+			while (tab.navSeq === startedAt && Date.now() < grace) await sleep(SETTLE_POLL_MS);
+		}
+		if (tab.navSeq !== startedAt) await this.#awaitLoad(tab);
+	}
+
+	async #awaitLoad(tab: Tab): Promise<void> {
+		const deadline = Date.now() + SETTLE_MS;
+		while (tab.loading && Date.now() < deadline) await sleep(SETTLE_POLL_MS);
+	}
+
+	/**
+	 * A read that lost its document to a navigation is retried once, after the
+	 * navigation has settled. Reading has no effect, so re-reading is safe.
+	 */
+	async #duringNavigation<T>(tab: Tab, read: () => Promise<T>): Promise<T> {
+		try {
+			return await read();
+		} catch (error) {
+			if (!NAVIGATED_UNDER_READ.test(describe(error))) throw error;
+			await sleep(SETTLE_POLL_MS * 2);
+			await this.#awaitLoad(tab);
+			return await read();
 		}
 	}
 
@@ -927,9 +1209,14 @@ class PuppeteerDriver implements EngineDriver {
 		const known = this.#adopting.get(target);
 		if (known) return known;
 		const work = (async (): Promise<Tab | undefined> => {
+			// Guarded before `target.page()`: a popup that opens a dialog as it loads would block puppeteer's own setup of it forever.
+			const early = await guardPage(await target.createCDPSession());
 			const page = await target.page();
-			if (!page || this.#closed || page.isClosed()) return undefined;
-			const tab = await prepareTab(page, this.#viewport, this.#scale);
+			if (!page || this.#closed || page.isClosed()) {
+				await early.cdp.detach().catch(() => undefined);
+				return undefined;
+			}
+			const tab = await prepareTab(page, this.#viewport, this.#scale, early);
 			if (this.#closed || page.isClosed()) {
 				await tab.cdp.detach().catch(() => undefined);
 				return undefined;
@@ -953,10 +1240,16 @@ class PuppeteerDriver implements EngineDriver {
 	 */
 	#wire(tab: Tab): void {
 		const start = (event: { frameId: string }): void => {
-			if (event.frameId === tab.id) tab.loading = true;
+			if (event.frameId !== tab.id) return;
+			tab.loading = true;
+			tab.navSeq += 1;
 		};
 		tab.cdp.on("Page.frameStartedLoading", start);
 		tab.cdp.on("Page.frameRequestedNavigation", start);
+		tab.cdp.on("Page.navigatedWithinDocument", (event) => {
+			// A fragment or history.pushState navigation replaces no document and never "stops loading".
+			if (event.frameId === tab.id) tab.loading = false;
+		});
 		tab.cdp.on("Page.downloadWillBegin", (event) => {
 			// A link that downloads never replaces the document or stops loading it.
 			if (event.frameId === tab.id) tab.loading = false;
@@ -967,6 +1260,10 @@ class PuppeteerDriver implements EngineDriver {
 			this.#loadFavicon(tab);
 		});
 		tab.page.once("close", () => this.#forget(tab));
+		watchPageLog(tab.page, (type, text) => {
+			tab.log.push({ n: ++this.#logSeq, type, text });
+			if (tab.log.length > MAX_LOG_ENTRIES) tab.log.shift();
+		});
 		this.#loadFavicon(tab);
 	}
 
@@ -1223,14 +1520,11 @@ class PuppeteerDriver implements EngineDriver {
 	 * miss here is a certain non-event.
 	 */
 	async #resolve(page: Page, selector: string): Promise<{ handle: ElementHandle<Element>; frame: Frame }> {
-		const aimed = FRAME_SELECTOR.exec(selector);
-		if (!aimed && FRAME_REF_LIKE.test(selector)) throw frameChanged(selector);
-		const frame = aimed ? frameAt(page, aimed[1] as string, aimed[2] as string) : page.mainFrame();
-		const css = aimed ? (aimed[3] as string) : selector;
+		const { frame, css, tag } = aim(page, selector);
 		const handle = await frame.waitForSelector(css, { timeout: ACTION_TIMEOUT_MS }).catch(() => null);
 		if (!handle) throw new ActionNotDispatched("no_element", `selector ${JSON.stringify(selector)} did not resolve to an element`);
 		// The wait can outlast a navigation of that frame to another site.
-		if (aimed && (frame.detached || frameTag(frame) !== aimed[2])) {
+		if (tag !== null && (frame.detached || frameTag(frame) !== tag)) {
 			await handle.dispose().catch(() => undefined);
 			throw frameChanged(selector);
 		}
@@ -1346,6 +1640,19 @@ function frameAt(page: Page, path: string, tag: string): Frame {
 	}
 	if (frameTag(frame) !== tag) throw frameChanged(`@${path}~${tag}`);
 	return frame;
+}
+
+/**
+ * The frame a selector aims at and the CSS to run there: the main frame for a
+ * plain selector, a child frame for `@<ref> <css>` (`tag` is that ref's
+ * identity tag, to re-check after any wait). A stale or hand-written ref is
+ * refused before anything runs.
+ */
+function aim(page: Page, selector: string): { frame: Frame; css: string; tag: string | null } {
+	const aimed = FRAME_SELECTOR.exec(selector);
+	if (!aimed && FRAME_REF_LIKE.test(selector)) throw frameChanged(selector);
+	if (!aimed) return { frame: page.mainFrame(), css: selector, tag: null };
+	return { frame: frameAt(page, aimed[1] as string, aimed[2] as string), css: aimed[3] as string, tag: aimed[2] as string };
 }
 
 /** Where a child frame's content box starts in the main viewport, or null when it has no box (not rendered). */

@@ -1,5 +1,6 @@
-// What the omnibox makes of what the human typed, and how a URL is shown
-// back to them. Pure functions: no React, no host.
+// What the address bars make of what a person typed (the View's omnibox and the
+// dock's "Open a page"), and how a URL is shown back to them. Pure functions: no
+// React, no host — the dock runs in the host's page and cannot reach more.
 
 export type AddressGuess = { readonly ok: true; readonly url: string } | { readonly ok: false; readonly reason: string };
 
