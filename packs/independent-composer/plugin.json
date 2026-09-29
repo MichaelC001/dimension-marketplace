@@ -14,6 +14,7 @@
 	"extensions": {
 		"ai.insodimension.dimension": {
 			"contractVersion": 1,
+			"requires": { "dimension": ">=0.11.1" },
 			"title": "Independent Composer",
 			"category": "component",
 			"defaultEnabled": true,
