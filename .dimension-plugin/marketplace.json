@@ -181,7 +181,7 @@
 			"pluginId": "build",
 			"title": "Build",
 			"description": "Build - the assembled workspace. The Code space rebuilt entirely from marketplace packs: rail, thread, composer, start surface, dock, environment and switcher are all replaceable parts. Install it beside Code and swap any one of them without touching the app.",
-			"version": "0.1.3",
+			"version": "0.1.4",
 			"author": {
 				"name": "Dimension"
 			},
@@ -204,8 +204,8 @@
 					"label": "Build",
 					"tagline": "Every part of this workspace is a pack you can swap.",
 					"screenshots": [
-						"packs/build/assets/preview/start.webp",
-						"packs/build/assets/preview/session.webp"
+						"packs/build/assets/preview/session.webp",
+						"packs/build/assets/preview/start.webp"
 					],
 					"icon": "hammer",
 					"accent": "#f59e0b",
