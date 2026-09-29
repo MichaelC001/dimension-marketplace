@@ -1,4 +1,4 @@
-import type { BrowserAction, BrowserApp, BrowserRegion, TabInfo, Viewport } from "../contracts.js";
+import type { BrowserAction, BrowserApp, BrowserRegion, ElementInspection, HandledDialog, TabInfo, Viewport } from "../contracts.js";
 
 /** Everything below describes the ACTIVE tab unless it says otherwise. */
 export interface EngineState {
@@ -13,6 +13,8 @@ export interface EngineState {
   loading: boolean;
   canGoBack: boolean;
   canGoForward: boolean;
+  /** The last five dialogs the browser answered on the active tab, oldest first. */
+  dialogs: HandledDialog[];
 }
 
 /** The latest live frame of the active tab. */
@@ -93,7 +95,9 @@ export interface PageReader {
  */
 export type PasswordSource = (origin: string) => string | undefined;
 /** What `perform` did beyond the action itself: the frame origin whose password it typed, if it did. */
-export interface PerformOutcome { passwordOrigin?: string }
+export interface PerformOutcome { passwordOrigin?: string; dialogs?: HandledDialog[] }
+/** What `waitFor` holds out for: an element that is visible, text on the page, or a substring of the URL. */
+export type WaitCondition = { selector: string } | { text: string } | { url: string };
 
 export interface EngineDriver {
   /** The browser application this driver launched; null when it attached to one it does not own. */
@@ -126,6 +130,16 @@ export interface EngineDriver {
    * password input is refused with `ActionNotDispatched` before any input event.
    */
   fill(selector: string, text: string): Promise<void>;
+  /**
+   * Resolve when `condition` holds on the active tab (true) or after
+   * `timeoutMs` (false). Reads only; a selector takes the `@<ref> ` frame prefix.
+   * `mask` scrubs the page's text and URL exactly as the runtime scrubs
+   * everything it returns: a `text` or `url` condition is matched against the
+   * MASKED value, so a wait can never confirm what the caller may not read.
+   */
+  waitFor(condition: WaitCondition, timeoutMs: number, mask: (value: string) => string): Promise<boolean>;
+  /** The layout facts of the first match of `selector` (`@<ref> ` prefix reaches an iframe), measured by a fixed page script; null when nothing matches. Does not wait. */
+  inspect(selector: string): Promise<ElementInspection | null>;
   /** Publish reads on the active tab; none writes to the page. Selectors resolve like actions' (CSS or `pierce/`). */
   hasElement(selector: string): Promise<boolean>;
   readField(selector: string): Promise<FieldRead>;
@@ -148,7 +162,7 @@ export interface EngineDriver {
 }
 
 export interface EngineOptions {
-  /** Private persistent profile directory, already protected by the runtime lock. */
+  /** Private user-data directory the driver owns: a saved profile's (protected by the runtime lock) or a throwaway browser's own. */
   profileDirectory: string;
   viewport: Viewport;
   /** Undefined permits the engine's supported default; explicit values must be honored. */

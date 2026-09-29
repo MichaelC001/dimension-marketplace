@@ -4,7 +4,7 @@
 // the shapes and engine identifiers come from the pack's own contracts module.
 import type { App } from "@modelcontextprotocol/ext-apps";
 import type { CallToolResult, ContentBlock } from "@modelcontextprotocol/sdk/types.js";
-import { BROWSER_APPS, BROWSER_ENGINES, PUBLISH_STATUSES, TASK_AGENTS } from "../../src/contracts";
+import { BROWSER_APPS, BROWSER_ENGINES, DIALOG_TYPES, PUBLISH_STATUSES, TASK_AGENTS } from "../../src/contracts";
 import type {
 	BrowserAction,
 	BrowserAnnotation,
@@ -13,6 +13,7 @@ import type {
 	UnchangedFrame,
 	BrowserRegion,
 	BrowserState,
+	HandledDialog,
 	FrameFormat,
 	PublishField,
 	PublishRecord,
@@ -145,6 +146,19 @@ function readTabs(value: unknown): TabInfo[] {
 	return tabs;
 }
 
+function readDialogs(value: unknown): HandledDialog[] {
+	if (!Array.isArray(value)) return [];
+	const dialogs: HandledDialog[] = [];
+	for (const entry of value) {
+		if (!isRecord(entry)) continue;
+		const type = DIALOG_TYPES.find(candidate => candidate === readString(entry, "type"));
+		const handled = readString(entry, "handled");
+		if (type === undefined || (handled !== "accepted" && handled !== "dismissed")) continue;
+		dialogs.push({ type, message: readString(entry, "message") ?? "", handled });
+	}
+	return dialogs;
+}
+
 function readState(tool: string, value: unknown): BrowserState {
 	if (!isRecord(value)) throw new BrowserToolError(tool, "no browser state in the result");
 	const browserId = readString(value, "browserId");
@@ -159,7 +173,7 @@ function readState(tool: string, value: unknown): BrowserState {
 	const tabs = readTabs(value.tabs);
 	return {
 		browserId,
-		profile: readString(value, "profile") ?? "",
+		profile: readString(value, "profile") ?? null,
 		engine,
 		app: BROWSER_APPS.find(candidate => candidate === readString(value, "app")) ?? null,
 		url: readString(value, "url") ?? "",
@@ -173,6 +187,7 @@ function readState(tool: string, value: unknown): BrowserState {
 		canGoBack: value.canGoBack === true,
 		canGoForward: value.canGoForward === true,
 		publish: value.publish === null || value.publish === undefined ? null : readPublish(tool, value.publish),
+		dialogs: readDialogs(value.dialogs),
 	};
 }
 
@@ -185,21 +200,30 @@ function structured(tool: string, result: CallToolResult): Record<string, unknow
 	return structuredContent;
 }
 
-/** `browser_open`'s state, read out of a host-delivered
- *  `ui/notifications/tool-result` — the View's ONLY source of a browserId. */
-export function stateFromToolResult(result: CallToolResult): BrowserState | null {
-	if (result.isError || !isRecord(result.structuredContent)) return null;
+/** What a host-delivered `ui/notifications/tool-result` tells this View: the
+ *  browser its tool opened, or why it opened none. */
+export type MountResult = { readonly state: BrowserState } | { readonly error: string };
+/** A `MountResult` as the host delivered it; `seq` orders them so a repeat still registers. */
+export type ToolMount = MountResult & { readonly seq: number };
+
+/** `browser_open`'s outcome, read out of a host-delivered
+ *  `ui/notifications/tool-result` — the View's ONLY source of a browserId.
+ *  `null`: a result that says nothing about a browser. */
+export function mountFromToolResult(result: CallToolResult): MountResult | null {
+	if (result.isError) return { error: openFailureText(toolError("tool-result", result)) };
+	if (!isRecord(result.structuredContent)) return null;
 	const payload = result.structuredContent;
 	const candidate = isRecord(payload.state) ? payload.state : payload;
 	try {
-		return readState("tool-result", candidate);
+		return { state: readState("tool-result", candidate) };
 	} catch {
 		return null;
 	}
 }
 
 export interface OpenOptions {
-	profile: string;
+	/** Omitted: a private browser — nothing is saved. */
+	profile?: string;
 	engine?: BrowserEngine;
 	url?: string;
 }
@@ -213,6 +237,19 @@ export function browserReference(browserId: string): string {
 /** Human-readable failure text for anything a browser call threw. */
 export function failureText(cause: unknown): string {
 	return cause instanceof Error ? cause.message : String(cause);
+}
+
+/** The runtime allows one holder per saved set of logins. Only the text of that
+ *  refusal crosses the tool boundary (`profile_in_use` / `profile_locked`), so it
+ *  is recognised by it. */
+const SET_TAKEN = /profile "[^"]*" is already (?:open|in use)/;
+const SET_TAKEN_TEXT = "That browser is already open. Use it, or open a Private one.";
+
+/** Why an open opened nothing, as the start page says it: the runtime's own
+ *  text, except a taken set of logins, which is plain language and a way out. */
+export function openFailureText(cause: unknown): string {
+	const text = failureText(cause);
+	return SET_TAKEN.test(text) ? SET_TAKEN_TEXT : text;
 }
 
 /** The typed surface the UI calls. One instance per connected `App`. */
@@ -261,7 +298,8 @@ export class BrowserClient {
 	}
 
 	async open(options: OpenOptions): Promise<BrowserState> {
-		const args: Record<string, unknown> = { profile: options.profile };
+		const args: Record<string, unknown> = {};
+		if (options.profile !== undefined) args.profile = options.profile;
 		if (options.engine) args.engine = options.engine;
 		if (options.url !== undefined && options.url.length > 0) args.url = options.url;
 		return readState("browser_open", await this.call("browser_open", args));

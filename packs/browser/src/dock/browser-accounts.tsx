@@ -1,6 +1,6 @@
-// The Browser panel — the dock instrument that shows which Browser profiles
-// are signed in where, and starts a sign-in the person does THEMSELVES in the
-// live Browser View beside the chat.
+// The Browser panel — the dock's Browser tab. At the top a person opens a page in
+// the live Browser beside the chat; below it, which sites they are signed in to,
+// and a sign-in they do THEMSELVES in that same live Browser.
 //
 //   THE IMPORT SURFACE: `react` + the granted `@fraym/ui` bricks.
 //
@@ -14,7 +14,8 @@
 
 import { Button, Icon, Input, Pill, useObservable } from "@fraym/ui";
 import { type FormEvent, useEffect, useMemo, useState } from "react";
-import { profileSlug, RELAY_PROFILE } from "../profile-name";
+import { guessAddress } from "../address";
+import { checkProfileName, DEFAULT_PROFILE, loginSetLabel } from "../profile-name";
 import { CONNECTION_KEY, observedAgo, type ProfileRow, profileRows, type SiteRow } from "./report";
 import { knownSite, SIGN_IN_SITES, signInUrl } from "./sites";
 
@@ -31,17 +32,11 @@ export interface BrowserAccountsProps {
 }
 
 type SignIn = (profile: string, url: string) => void;
+/** Open a page: `url` null is a blank browser; private opens with nothing saved. */
+type OpenPage = (url: string | null, isPrivate: boolean) => void;
 
 const NONE = { getSnapshot: () => undefined, subscribe: () => () => {} };
 const MINUTE_MS = 60_000;
-
-/** Why a typed profile name cannot be used, or null when it can. */
-function profileProblem(raw: string): string | null {
-	const slug = profileSlug(raw);
-	if (slug === null) return "Use 1–48 letters, digits, - or _, starting with a letter or digit.";
-	if (slug === RELAY_PROFILE) return `"${RELAY_PROFILE}" is reserved for your own Chrome.`;
-	return null;
-}
 
 function SiteLine({ site, now, onSignIn }: { readonly site: SiteRow; readonly now: number; readonly onSignIn: (() => void) | null }) {
 	const label = knownSite(site.host)?.label ?? site.host;
@@ -80,11 +75,11 @@ function ProfileSection({
 			<button
 				type="button"
 				className="flex min-w-0 items-center gap-1.5 text-left text-fr-text-2 hover:text-fr-text"
-				title="Use this profile for a new sign-in"
+				title="Use these logins for a new sign-in"
 				onClick={onPick}
 			>
 				<Icon name="user" size={12} />
-				<span className="fr-overflow font-secondary text-fr-xs">{profile.name}</span>
+				<span className="fr-overflow font-secondary text-fr-xs">{loginSetLabel(profile.name)}</span>
 			</button>
 			<ul className="flex flex-col">
 				{profile.sites.map(site => (
@@ -100,21 +95,22 @@ function ProfileSection({
 	);
 }
 
-function NewSignIn({ profile, onProfile, signIn }: { readonly profile: string; readonly onProfile: (value: string) => void; readonly signIn: SignIn | null }) {
+/** `name` is what a person typed or picked, never the slug: empty is the implicit set. */
+function NewSignIn({ name, onName, signIn }: { readonly name: string; readonly onName: (value: string) => void; readonly signIn: SignIn | null }) {
 	const [host, setHost] = useState(SIGN_IN_SITES[0]?.host ?? "");
 	const [touched, setTouched] = useState(false);
-	const problem = profileProblem(profile);
+	const check = name.trim().length === 0 ? ({ ok: true, slug: DEFAULT_PROFILE } as const) : checkProfileName(name);
+	const problem = check.ok ? null : check.problem;
 	const site = knownSite(host);
 	const submit = (event: FormEvent) => {
 		event.preventDefault();
 		setTouched(true);
-		const slug = profileSlug(profile);
-		if (!signIn || !site || problem !== null || slug === null) return;
-		signIn(slug, site.loginUrl);
+		if (!signIn || !site || !check.ok) return;
+		signIn(check.slug, site.loginUrl);
 	};
 	return (
 		<form className="flex flex-col gap-2 px-3 py-2" data-slot="browser-accounts-new" onSubmit={submit}>
-			<span className="fr-eyebrow text-fr-text-3">New sign-in</span>
+			<span className="fr-eyebrow text-fr-text-3">Sign in to a site</span>
 			<div className="flex flex-wrap gap-1" role="radiogroup" aria-label="Site">
 				{SIGN_IN_SITES.map(option => (
 					<Button
@@ -133,19 +129,72 @@ function NewSignIn({ profile, onProfile, signIn }: { readonly profile: string; r
 			<div className="flex items-center gap-2">
 				<Input
 					size="sm"
-					value={profile}
-					placeholder="Profile name, e.g. work"
-					aria-label="Profile name"
+					value={name}
+					placeholder="Default, or a name like work"
+					aria-label="Name for these logins"
 					aria-invalid={touched && problem !== null}
 					data-state={touched && problem !== null ? "invalid" : undefined}
-					onChange={event => onProfile(event.target.value)}
-					onBlur={() => setTouched(profile.length > 0)}
+					onChange={event => onName(event.target.value)}
+					onBlur={() => setTouched(name.length > 0)}
 				/>
-				<Button type="submit" size="sm" disabled={!signIn || profile.trim().length === 0}>
+				<Button type="submit" size="sm" disabled={!signIn}>
 					Sign in
 				</Button>
 			</div>
-			{touched && problem !== null ? <span className="text-fr-xs text-fr-del">{problem}</span> : null}
+			{touched && problem !== null ? (
+				<span className="text-fr-xs text-fr-del" data-slot="browser-accounts-problem">
+					{problem}
+				</span>
+			) : null}
+		</form>
+	);
+}
+
+function OpenPageForm({ openPage }: { readonly openPage: OpenPage | null }) {
+	const [text, setText] = useState("");
+	const [isPrivate, setPrivate] = useState(false);
+	const [problem, setProblem] = useState<string | null>(null);
+	const submit = (event: FormEvent) => {
+		event.preventDefault();
+		if (!openPage) return;
+		if (text.trim().length === 0) {
+			setProblem(null);
+			openPage(null, isPrivate);
+			return;
+		}
+		const guess = guessAddress(text);
+		setProblem(guess.ok ? null : guess.reason);
+		if (guess.ok) openPage(guess.url, isPrivate);
+	};
+	return (
+		<form className="flex flex-col gap-2 border-fr-border-soft border-b px-3 py-2" data-slot="browser-accounts-open" onSubmit={submit}>
+			<span className="fr-eyebrow text-fr-text-3">Open a page</span>
+			<div className="flex items-center gap-2">
+				<Input
+					size="sm"
+					value={text}
+					placeholder="Type a website address"
+					aria-label="Website address"
+					aria-invalid={problem !== null}
+					data-state={problem !== null ? "invalid" : undefined}
+					onChange={event => {
+						setText(event.target.value);
+						setProblem(null);
+					}}
+				/>
+				<Button type="submit" size="sm" disabled={!openPage}>
+					Open
+				</Button>
+			</div>
+			<label className="flex items-center gap-2 text-fr-xs text-fr-text-2">
+				<input type="checkbox" checked={isPrivate} onChange={event => setPrivate(event.target.checked)} />
+				Private — nothing is saved
+			</label>
+			{problem !== null ? (
+				<span className="text-fr-xs text-fr-del" data-slot="browser-accounts-problem">
+					{problem}
+				</span>
+			) : null}
 		</form>
 	);
 }
@@ -154,7 +203,7 @@ export function BrowserAccounts({ sessionId, store }: BrowserAccountsProps) {
 	const observable = useMemo(() => store?.watch(CONNECTION_KEY) ?? NONE, [store]);
 	const fact = useObservable(observable);
 	const profiles = useMemo(() => profileRows(fact), [fact]);
-	const [profile, setProfile] = useState("");
+	const [name, setName] = useState("");
 	// Observations are minutes-to-days old; a minute tick keeps "5m ago" honest
 	// without re-rendering on every frame.
 	const [now, setNow] = useState(() => Date.now());
@@ -163,24 +212,39 @@ export function BrowserAccounts({ sessionId, store }: BrowserAccountsProps) {
 		return () => clearInterval(timer);
 	}, []);
 	// The View opens in the seat's session, so with none there is nowhere to open it.
-	const signIn = useMemo<SignIn | null>(
-		() =>
-			store && sessionId
-				? (name, url) => store.act("openArtifactoryView", { tool: "browser_open", args: { profile: name, url } })
-				: null,
+	const launch = useMemo<((args: { profile?: string; url?: string }) => void) | null>(
+		() => (store && sessionId ? args => store.act("openArtifactoryView", { tool: "browser_open", args }) : null),
 		[store, sessionId],
+	);
+	const signIn = useMemo<SignIn | null>(() => (launch ? (name, url) => launch({ profile: name, url }) : null), [launch]);
+	// A person's own browser keeps their logins: the saved set `default`, unless Private.
+	const openPage = useMemo<OpenPage | null>(
+		() =>
+			launch
+				? (url, isPrivate) => {
+						const args: { profile?: string; url?: string } = {};
+						if (url !== null) args.url = url;
+						if (!isPrivate) args.profile = DEFAULT_PROFILE;
+						launch(args);
+					}
+				: null,
+		[launch],
 	);
 	return (
 		<div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto" data-slot="browser-accounts">
+			<OpenPageForm openPage={openPage} />
+			{profiles.length > 0 ? <span className="fr-eyebrow px-3 pt-2 text-fr-text-3">Signed-in sites</span> : null}
 			{profiles.map(row => (
-				<ProfileSection key={row.name} profile={row} now={now} signIn={signIn} onPick={() => setProfile(row.name)} />
+				<ProfileSection key={row.name} profile={row} now={now} signIn={signIn} onPick={() => setName(loginSetLabel(row.name))} />
 			))}
-			<NewSignIn profile={profile} onProfile={setProfile} signIn={signIn} />
+			<NewSignIn name={name} onName={setName} signIn={signIn} />
 			{!signIn ? (
-				<p className="px-3 pb-3 text-fr-xs text-fr-text-3">Open a session to sign in: the browser opens beside its chat.</p>
+				<p className="px-3 pb-3 text-fr-xs text-fr-text-3" data-slot="browser-accounts-hint">
+					Start or open a chat first — the browser opens beside it.
+				</p>
 			) : profiles.length === 0 ? (
-				<p className="px-3 pb-3 text-fr-xs text-fr-text-3">
-					The browser opens beside the chat and you sign in there; this panel then shows the account.
+				<p className="px-3 pb-3 text-fr-xs text-fr-text-3" data-slot="browser-accounts-hint">
+					Sites you sign in to in the browser are listed here.
 				</p>
 			) : null}
 		</div>

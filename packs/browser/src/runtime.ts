@@ -12,6 +12,10 @@
  *  - Persistent profiles are never deleted, foreign locks are never stolen, a
  *    profile lock is released only once the owned Chrome process is gone, and a
  *    relay (the human's own Chrome) is never closed.
+ *  - A browser opened without a profile is throwaway: its own directory under
+ *    `ephemeral/`, no lock, deleted once its Chrome process is gone (and swept by
+ *    the next server if this one died first). It keeps no sign-in, so whatever
+ *    needs a saved profile refuses it (`profile_required`).
  *  - Whole tasks run on upstream agent loops (jev, browser-use) against the
  *    same Chrome, through `task.ts`. We keep their progress, not their logic.
  *  - Sign-in is only ever OBSERVED, never derived: a publish result that says
@@ -51,12 +55,15 @@ import type {
 	TaskStep,
 	ToolCaller,
 	Viewport,
+	InspectResult,
+	WaitRequest,
+	WaitResult,
 } from "./contracts.js";
-import { BROWSER_ENGINES, TASK_AGENTS } from "./contracts.js";
+import { BROWSER_ENGINES, MAX_WAIT_MS, TASK_AGENTS } from "./contracts.js";
 import { credentialOrigin, resolveCredential, savedPassword, savedPasswords } from "./credentials.js";
 import { assertEngineAvailable, createEngineDriver } from "./engines/index.js";
 import { launchReader } from "./engines/puppeteer.js";
-import type { EngineDriver, EngineState, PageReader, PasswordSource, PerformOutcome } from "./engines/types.js";
+import type { EngineDriver, EngineState, PageReader, PasswordSource, PerformOutcome, WaitCondition } from "./engines/types.js";
 import { cropRegion, MAX_FRAME_BYTES } from "./image.js";
 import { type Publication, cancel, confirm, isPending, prepare, publishRecord, requirePending, validateMode, validateRecipe, waitSettled } from "./publish.js";
 import { blockedReason, DEFAULT_READ_CHARS, MAX_READ_CHARS, READ_TIMEOUT_MS, readPolicy, TIMEOUT_REASON } from "./read.js";
@@ -81,6 +88,8 @@ const MAX_URL_LENGTH = 2_048;
 const MAX_SCROLL_DELTA = 5_000;
 const MAX_TASK_CHARS = 8_192;
 const MAX_TASK_STEPS = 200;
+const DEFAULT_WAIT_MS = 5_000;
+const MAX_WAIT_MATCH_CHARS = 2_048;
 const DEFAULT_TASK_STEPS = 60;
 const TASK_STEPS_RETAINED = 100;
 const MIN_WIDTH = 320;
@@ -136,7 +145,8 @@ interface FrameRecord {
 interface Entry {
 	/** Opaque capability. Never listed, never re-handed-out. */
 	browserId: string;
-	profile: string;
+	/** null: a throwaway browser (no saved profile). */
+	profile: string | null;
 	engine: BrowserEngine;
 	viewport: Viewport;
 	driver: EngineDriver;
@@ -189,6 +199,8 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	 * process the runtime can no longer name.
 	 */
 	private readonly stranded = new Set<{ driver: EngineDriver; release: () => void }>();
+	/** Throwaway directories being deleted; `close` and `dispose` wait for them. */
+	private readonly removals = new Set<Promise<void>>();
 	private disposed = false;
 	private readonly connectionListeners = new Set<() => void>();
 	/** Profiles with persisted observations, so a deleted one is noticed and reported gone. */
@@ -199,6 +211,8 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	constructor(options: BrowserRuntimeOptions = {}) {
 		this.options = options;
 		this.store = new ProfileStore(options.rootDir);
+		// Only what a dead server abandoned: a live server's throwaway browsers are never touched.
+		this.store.sweepEphemeral();
 	}
 
 	// -----------------------------------------------------------------------
@@ -206,14 +220,17 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	// -----------------------------------------------------------------------
 
 	/**
-	 * Open a browser for `profile` and mint a fresh capability for it.
+	 * Open a browser and mint a fresh capability for it.
 	 *
-	 * A profile that is already open — or in the middle of opening — is REFUSED.
-	 * One engine server serves many sessions, so returning the live browserId of
-	 * somebody else's browser would hand out their capability; and launching a
-	 * second Chrome on the same user-data dir would fork the cookie jar. The
-	 * holder of the existing capability closes it, or the caller picks another
-	 * profile.
+	 * With a `profile` it runs on that persistent profile. A profile that is
+	 * already open — or in the middle of opening — is REFUSED. One engine server
+	 * serves many sessions, so returning the live browserId of somebody else's
+	 * browser would hand out their capability; and launching a second Chrome on
+	 * the same user-data dir would fork the cookie jar. The holder of the
+	 * existing capability closes it, or the caller picks another profile.
+	 *
+	 * Without a `profile` it is a throwaway browser: a directory of its own that
+	 * is deleted when it closes, so it can never collide with another browser.
 	 */
 	async open(options: BrowserOpenOptions): Promise<BrowserState> {
 		if (this.disposed) fail("disposed", "runtime has been disposed");
@@ -221,9 +238,12 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		// holds the last slot it is closed (after any read in progress) first.
 		if (this.byId.size + this.opening.size >= MAX_BROWSERS - 1 && this.readerHeld()) await this.closeReader();
 		if (this.disposed) fail("disposed", "runtime has been disposed");
-		const profile = validateProfile(options.profile);
+		const named = options.profile === undefined ? undefined : validateProfile(options.profile);
 		const engine = normalizeEngine(options.engine);
 		const viewport = normalizeViewport(options.viewport);
+		// The relay is the human's own Chrome: there is nothing to make throwaway,
+		// so no profile means the one it has.
+		const profile = named ?? (engine === "chrome-relay" ? RELAY_PROFILE : null);
 
 		// The relay is ONE already-running Chrome with ONE cookie jar, chosen by
 		// the human inside Chrome. Named relay profiles would imply an isolation
@@ -239,8 +259,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		if (engine !== "chrome-relay" && profile === RELAY_PROFILE) {
 			fail("bad_profile", `profile "${RELAY_PROFILE}" is reserved for the chrome-relay engine`);
 		}
-		const live = this.byProfile.get(profile);
-		if (live || this.opening.has(profile)) {
+		if (profile !== null && (this.byProfile.has(profile) || this.opening.has(profile))) {
 			fail(
 				"profile_in_use",
 				`profile "${profile}" is already open in this runtime; close that browser before opening it again`,
@@ -253,30 +272,41 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		}
 
 		assertEngineAvailable(engine);
-		const started = this.launch(profile, engine, viewport).finally(() => this.opening.delete(profile));
-		this.opening.set(profile, started);
+		// A throwaway browser has no name to guard; its slot only counts against the bound. `:` is not a slug character.
+		const slot = profile ?? `ephemeral:${randomBytes(8).toString("hex")}`;
+		const started = this.launch(profile, engine, viewport).finally(() => this.opening.delete(slot));
+		this.opening.set(slot, started);
 		const entry = await started;
 		return this.redact(entry, await this.buildState(entry));
 	}
 
-	private async launch(profile: string, engine: BrowserEngine, viewport: Viewport): Promise<Entry> {
-		const lock = this.store.acquireLock(profile);
+	private async launch(profile: string | null, engine: BrowserEngine, viewport: Viewport): Promise<Entry> {
+		// A saved profile is locked while its browser runs; a throwaway one gets a
+		// directory of its own that goes with the browser.
+		let directory: string;
+		let free: () => void;
+		if (profile === null) {
+			const ephemeral = this.store.createEphemeral();
+			directory = ephemeral.userDataDir;
+			free = () => this.discard(ephemeral.dir);
+		} else {
+			const lock = this.store.acquireLock(profile);
+			// Native backends never reuse an incompatible engine's cookie store.
+			directory = engine === "chromium" ? this.store.userDataDir(profile) : join(this.store.profileDir(profile), engine);
+			free = () => this.store.releaseLock(lock);
+		}
 		let released = false;
 		let entry: Entry | undefined;
 		let driver: EngineDriver | undefined;
 		const release = (): void => {
 			if (released) return;
-			this.store.releaseLock(lock);
+			free();
 			released = true;
 			if (entry) this.detach(entry);
 		};
 		try {
-			// Native backends never reuse an incompatible engine's cookie store.
-			const profileDirectory = engine === "chromium"
-				? this.store.userDataDir(profile)
-				: join(this.store.profileDir(profile), engine);
 			driver = await createEngineDriver(engine, {
-				profileDirectory, viewport, onClosed: release,
+				profileDirectory: directory, viewport, onClosed: release,
 				...(this.options.headless === undefined ? {} : { headless: this.options.headless }),
 				...(this.options.executablePath ? { executablePath: this.options.executablePath } : {}),
 				...(this.options.relayUrl && engine === "chrome-relay" ? { relayUrl: this.options.relayUrl } : {}),
@@ -290,7 +320,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				task: null, worker: null, publish: null, secrets: new Set(),
 			};
 			this.byId.set(entry.browserId, entry);
-			this.byProfile.set(profile, entry);
+			if (profile !== null) this.byProfile.set(profile, entry);
 			return entry;
 		} catch (error) {
 			// A factory owns rollback until it returns; only its confirmed-close
@@ -308,10 +338,17 @@ export class BrowserRuntime implements BrowserRuntimePort {
 					this.stranded.add({ driver: orphan, release });
 				}
 			}
+			// A failed throwaway launch leaves nothing behind by the time the caller hears of it.
+			await Promise.allSettled(this.removals);
 			throw error;
 		}
 	}
 
+	/** Delete a throwaway browser's directory in the background; `close` and `dispose` wait for it. */
+	private discard(dir: string): void {
+		const removal: Promise<void> = this.store.removeEphemeral(dir).finally(() => this.removals.delete(removal));
+		this.removals.add(removal);
+	}
 
 	/** Refused (`publish_pending`) while a publish awaits confirmation, unless `caller` is "app". */
 	async close(browserId: string, caller?: ToolCaller): Promise<void> {
@@ -322,6 +359,8 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			if (!entry.closed) refuseWhilePublishing(entry, caller);
 			await this.teardown(entry);
 		}, { evenIfClosed: true });
+		// A throwaway browser's data is gone by the time its close resolves.
+		await Promise.allSettled(this.removals);
 	}
 
 	/** Retain ownership and the lock until the driver confirms shutdown. */
@@ -361,6 +400,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				errors.push(describe(err));
 			}
 		}
+		await Promise.allSettled(this.removals);
 		if (errors.length > 0) fail("dispose_incomplete", `some browsers did not shut down cleanly: ${errors.join("; ")}`);
 	}
 
@@ -371,7 +411,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		entry.frames.length = 0;
 		entry.worker?.process.cancel();
 		this.byId.delete(entry.browserId);
-		if (this.byProfile.get(entry.profile) === entry) this.byProfile.delete(entry.profile);
+		if (entry.profile !== null && this.byProfile.get(entry.profile) === entry) this.byProfile.delete(entry.profile);
 	}
 
 	// -----------------------------------------------------------------------
@@ -437,12 +477,15 @@ export class BrowserRuntime implements BrowserRuntimePort {
 
 	async snapshot(browserId: string): Promise<{ state: BrowserState; text: string }> {
 		return await this.serialize(this.require(browserId), async (entry) => {
-			await this.refreshState(entry);
-			const revision = entry.revision;
-			const text = await entry.driver.snapshot(MAX_SNAPSHOT_CHARS);
-			const state = await this.buildState(entry);
-			if (entry.revision !== revision) fail("stale_snapshot", "The document changed during inspection.");
-			return this.redact(entry, { state, text });
+			// A page that swaps its document under the read gets one more try; a second swap is reported.
+			for (let attempt = 1; ; attempt += 1) {
+				await this.refreshState(entry);
+				const revision = entry.revision;
+				const text = await entry.driver.snapshot(MAX_SNAPSHOT_CHARS);
+				const state = await this.buildState(entry);
+				if (entry.revision === revision) return this.redact(entry, { state, text });
+				if (attempt === 2) fail("stale_snapshot", "The document changed during inspection.");
+			}
 		});
 	}
 
@@ -583,7 +626,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		const entry = this.require(browserId);
 		if (!request || typeof request !== "object") fail("bad_tab", "tab request must be an object");
 		const navigate = request.op === "new" && request.url !== undefined
-			? normalizeAction({ kind: "navigate", url: request.url }, entry.viewport)
+			? normalizeAction({ kind: "navigate", url: request.url })
 			: undefined;
 		if ((request.op === "activate" || request.op === "close") && (typeof request.tabId !== "string" || request.tabId.length === 0 || request.tabId.length > MAX_TAB_ID_CHARS)) {
 			fail("bad_tab", `${request.op} needs the tabId from state.tabs`);
@@ -625,7 +668,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				fail("task_running", `a browser_task (${entry.task.agent}) owns this page; wait for it or cancel it`);
 			}
 			refuseWhilePublishing(entry, caller);
-			const action = normalizeAction(input, entry.viewport);
+			const action = normalizeAction(input);
 			// The human driving the pinned page while waiting may hit the site's own submit.
 			const pinned = caller === "app" && TOUCHING_KINDS[action.kind] && isPending(entry.publish) ? entry.publish : null;
 			// Another tab is not the page being confirmed; an unreadable state counts as the pinned one.
@@ -635,23 +678,24 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			if ((action.useSavedPassword || action.generatePassword) && caller === "app") {
 				fail("bad_action", "useSavedPassword and generatePassword are for the agent; the Browser View types exactly what the human typed");
 			}
-			const profileDir = this.store.profileDir(entry.profile);
 			let created = false;
-			const password: PasswordSource | undefined = action.generatePassword
-				? (origin: string) => {
-					// The signup rule the task credential uses: the saved one, else mint and save.
-					const credential = resolveCredential(profileDir, { origin, mode: "signup" });
-					created = credential.created;
-					entry.secrets.add(credential.password);
-					return credential.password;
-				}
-				: action.useSavedPassword
+			let password: PasswordSource | undefined;
+			if (action.generatePassword || action.useSavedPassword) {
+				const profileDir = this.store.profileDir(this.savedProfile(entry, "typing a saved password"));
+				password = action.generatePassword
 					? (origin: string) => {
+						// The signup rule the task credential uses: the saved one, else mint and save.
+						const credential = resolveCredential(profileDir, { origin, mode: "signup" });
+						created = credential.created;
+						entry.secrets.add(credential.password);
+						return credential.password;
+					}
+					: (origin: string) => {
 						const value = savedPassword(profileDir, origin);
 						if (value) entry.secrets.add(value);
 						return value;
-					}
-					: undefined;
+					};
+			}
 			let outcome: PerformOutcome;
 			try {
 				outcome = await entry.driver.perform(action, password);
@@ -669,8 +713,40 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				});
 			}
 			const state = await this.buildState(entry);
-			return this.redact(entry, outcome.passwordOrigin ? { status: "completed", state, credential: { origin: outcome.passwordOrigin, created } } : { status: "completed", state });
+			const result: ActionResult = {
+				status: "completed",
+				state,
+				...(outcome.passwordOrigin ? { credential: { origin: outcome.passwordOrigin, created } } : {}),
+				...(outcome.dialogs ? { dialogs: outcome.dialogs } : {}),
+			};
+			return this.redact(entry, result);
 		});
+	}
+
+	/**
+	 * Wait until the page shows what the caller is waiting for, or `timeoutMs`
+	 * passes. Queued and refused exactly like `act`, so a wait never runs beside
+	 * a task or a pending publish. A timeout is a result, not an error: the state
+	 * is what the browser shows now.
+	 */
+	async wait(browserId: string, request: WaitRequest, caller?: ToolCaller): Promise<WaitResult> {
+		const entry = this.require(browserId);
+		const { condition, timeoutMs } = validateWait(request);
+		return await this.serialize(entry, async () => {
+			if (entry.task?.status === "running") {
+				fail("task_running", `a browser_task (${entry.task.agent}) owns this page; wait for it or cancel it`);
+			}
+			refuseWhilePublishing(entry, caller);
+			const held = await entry.driver.waitFor(condition, timeoutMs, (value) => this.redact(entry, value));
+			return this.redact(entry, { status: held ? ("completed" as const) : ("timeout" as const), state: await this.buildState(entry) });
+		});
+	}
+
+	/** A read like `snapshot`: the page is not touched, and no task or publish stops it. */
+	async inspect(browserId: string, selector: string): Promise<InspectResult> {
+		const entry = this.require(browserId);
+		const css = requireReadSelector(selector);
+		return await this.serialize(entry, async () => this.redact(entry, (await entry.driver.inspect(css)) ?? { found: false as const }));
 	}
 
 	// -----------------------------------------------------------------------
@@ -723,7 +799,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			refuseWhilePublishing(entry, caller);
 			const state = await this.refreshState(entry);
 			// Resolved (and, for a sign-up, minted) only once the task will run.
-			const credential = request.credential ? resolveCredential(this.store.profileDir(entry.profile), request.credential) : undefined;
+			const credential = request.credential ? resolveCredential(this.store.profileDir(this.savedProfile(entry, "a task credential")), request.credential) : undefined;
 			if (credential) entry.secrets.add(credential.password);
 			const run: TaskRun = {
 				id: randomBytes(8).toString("hex"), agent: request.agent, task, status: "running", summary: "",
@@ -807,6 +883,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 
 	async publish(browserId: string, recipe: PublishRecipe, mode: PublishMode, caller?: ToolCaller, preset?: PresetRef): Promise<PublishCheck | PublishRecord> {
 		const entry = this.require(browserId);
+		const profile = this.savedProfile(entry, "publishing");
 		const valid = validateRecipe(recipe);
 		const selected = validateMode(mode);
 		return await this.serialize(entry, async () => {
@@ -818,11 +895,11 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			if (isPending(entry.publish)) {
 				fail("publish_pending", "a publish is already awaiting confirmation; it must be posted, cancelled or expire first");
 			}
-			const outcome = await prepare(entry.driver, entry.profile, valid, selected);
+			const outcome = await prepare(entry.driver, profile, valid, selected);
 			if (!("record" in outcome)) {
 				// The account is page text: scrubbed like every other page read before it is persisted or reported.
 				const shown = this.redact(entry, outcome);
-				if (shown.status !== "failed") this.observeConnection(entry.profile, valid.origin, shown.status === "signed-in", shown.account);
+				if (shown.status !== "failed") this.observeConnection(profile, valid.origin, shown.status === "signed-in", shown.account);
 				return shown;
 			}
 			// The relay is the human's own Chrome: they can use this page without the runtime seeing it.
@@ -843,7 +920,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				fail("task_running", `a browser_task (${entry.task.agent}) owns this page; wait for it or cancel it`);
 			}
 			await confirm(entry.driver, publication);
-			if (publication.record.status === "posted") this.observeConnection(entry.profile, publication.recipe.origin, true, this.redact(entry, publication.account));
+			if (publication.record.status === "posted") this.observeConnection(publication.record.profile, publication.recipe.origin, true, this.redact(entry, publication.account));
 			return this.redact(entry, publishRecord(publication));
 		});
 	}
@@ -1006,6 +1083,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			tabs: state.tabs, activeTabId: state.activeTabId, loading: state.loading,
 			canGoBack: state.canGoBack, canGoForward: state.canGoForward,
 			publish: entry.publish ? publishRecord(entry.publish) : null,
+			dialogs: state.dialogs,
 		};
 	}
 
@@ -1016,6 +1094,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			revision: entry.revision, viewport: entry.viewport, task: entry.task ? cloneTask(entry.task) : null,
 			tabs: [], activeTabId: "", loading: false, canGoBack: false, canGoForward: false,
 			publish: entry.publish ? publishRecord(entry.publish) : null,
+			dialogs: [],
 		};
 	}
 
@@ -1026,12 +1105,26 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	 */
 	private redact<T>(entry: Entry, value: T): T {
 		const secrets = new Set(entry.secrets);
-		try {
-			for (const secret of savedPasswords(this.store.profileDir(entry.profile))) secrets.add(secret);
-		} catch {
-			// credentials_unreadable: the in-memory set is all there is to scrub.
+		if (entry.profile !== null) {
+			try {
+				for (const secret of savedPasswords(this.store.profileDir(entry.profile))) secrets.add(secret);
+			} catch {
+				// credentials_unreadable: the in-memory set is all there is to scrub.
+			}
 		}
 		return secrets.size === 0 ? value : scrub(value, secrets);
+	}
+
+	/**
+	 * The saved profile behind `entry`. A throwaway browser keeps nothing, so a
+	 * sign-in, a saved password or a credential has no home on it: refused
+	 * before anything reaches the page, naming the fix.
+	 */
+	private savedProfile(entry: Entry, needing: string): string {
+		if (entry.profile === null) {
+			fail("profile_required", `${needing} needs a saved profile, and this browser is a throwaway one (opened without a profile). Close it and open it again with a profile name to keep logins.`);
+		}
+		return entry.profile;
 	}
 }
 
@@ -1117,7 +1210,7 @@ function passwordFlag(action: BrowserAction): { useSavedPassword: true } | { gen
 }
 
 /** Validate and canonicalize an action before anything touches the page. */
-function normalizeAction(action: BrowserAction, viewport: Viewport): BrowserAction {
+function normalizeAction(action: BrowserAction): BrowserAction {
 	if (!action || typeof action !== "object") fail("bad_action", "action must be an object");
 	switch (action.kind) {
 		case "navigate":
@@ -1131,13 +1224,13 @@ function normalizeAction(action: BrowserAction, viewport: Viewport): BrowserActi
 			if (typeof action.selector === "string") {
 				return { kind: "click", selector: requireSelector(action.selector), ...options };
 			}
-			const x = requireCoordinate(action.x, "click", "x", viewport.width);
-			const y = requireCoordinate(action.y, "click", "y", viewport.height);
+			const x = requireCoordinate(action.x, "click", "x");
+			const y = requireCoordinate(action.y, "click", "y");
 			return { kind: "click", x, y, ...options };
 		}
 		case "hover": {
-			const x = requireCoordinate(action.x, "hover", "x", viewport.width);
-			const y = requireCoordinate(action.y, "hover", "y", viewport.height);
+			const x = requireCoordinate(action.x, "hover", "x");
+			const y = requireCoordinate(action.y, "hover", "y");
 			return { kind: "hover", x, y };
 		}
 		case "insert": {
@@ -1191,15 +1284,41 @@ function requireSelector(selector: unknown): string {
 	return selector.trim();
 }
 
-function requireCoordinate(value: unknown, kind: string, name: string, bound: number): number {
+/**
+ * The selector of a read that answers "is it there?": plain CSS only. Puppeteer's
+ * `text/`, `xpath/`, `aria/`, `pierce/` handlers and `::-p-*` selectors match on
+ * page text, which would let a caller probe text the runtime masks, a guess at a time.
+ */
+function requireReadSelector(selector: unknown): string {
+	const css = requireSelector(selector);
+	if (/::-p-/i.test(css) || /^(?:@\S+\s+)?(?:aria|text|xpath|pierce|p)\//i.test(css)) {
+		fail("bad_action", "selector must be plain CSS: text/, xpath/, aria/, pierce/ and ::-p-* query handlers are not allowed here");
+	}
+	return css;
+}
+
+/** A finite coordinate. Whether it lies inside the viewport is the driver's to say: it is a failed action (`off_viewport`), not a malformed one. */
+function requireCoordinate(value: unknown, kind: string, name: string): number {
 	if (typeof value !== "number" || !Number.isFinite(value)) {
 		fail("bad_action", `${kind} needs ${kind === "click" ? "a selector or " : ""}a finite ${name} coordinate`);
 	}
-	const rounded = Math.floor(value);
-	if (rounded < 0 || rounded >= bound) {
-		fail("bad_action", `${kind}.${name}=${rounded} is outside the ${bound}px viewport`);
+	return Math.floor(value);
+}
+
+/** Exactly one condition, and a timeout inside the cap. */
+function validateWait(request: WaitRequest): { condition: WaitCondition; timeoutMs: number } {
+	if (!request || typeof request !== "object") fail("bad_wait", "wait request must be an object");
+	if ([request.selector, request.text, request.url].filter((given) => given !== undefined).length !== 1) {
+		fail("bad_wait", "pass exactly one of selector, text or url");
 	}
-	return rounded;
+	const timeoutMs = request.timeoutMs ?? DEFAULT_WAIT_MS;
+	if (!Number.isFinite(timeoutMs) || timeoutMs < 0 || timeoutMs > MAX_WAIT_MS) fail("bad_wait", `timeoutMs must be between 0 and ${MAX_WAIT_MS}`);
+	if (request.selector !== undefined) return { condition: { selector: requireReadSelector(request.selector) }, timeoutMs };
+	const value = request.text ?? request.url;
+	if (typeof value !== "string" || value.length === 0 || value.length > MAX_WAIT_MATCH_CHARS) {
+		fail("bad_wait", `text and url must be strings of 1-${MAX_WAIT_MATCH_CHARS} characters`);
+	}
+	return { condition: request.text !== undefined ? { text: value } : { url: value }, timeoutMs };
 }
 
 function requireDelta(value: unknown, name: string): number {

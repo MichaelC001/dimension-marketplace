@@ -1,22 +1,29 @@
 /**
- * Per-profile filesystem state for the browser runtime.
+ * Filesystem state for the browser runtime.
  *
- * Owns three things and nothing else:
+ * Owns four things and nothing else:
  *   1. Profile directory layout + filesystem-safe slug validation.
  *   2. The per-profile process lock (atomic create, owner-token release,
  *      NEVER steals a stale lock and NEVER kills a foreign process).
  *   3. Each profile's sign-in observations (`connections.json`, see
  *      connection.ts), kept in the profile's own directory so a deleted
  *      profile takes them with it and a restart can report them again.
+ *   4. Throwaway browser directories (`<root>/ephemeral/<id>`): created for a
+ *      browser opened without a profile, deleted when it closes, and swept
+ *      after a server that died before it could delete them. They are never
+ *      profiles: no lock, no listing, no observations.
  */
 import { randomBytes } from "node:crypto";
-import { closeSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeSync } from "node:fs";
+import { closeSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type { ConnectionObservations, SiteObservation, SiteObservations } from "./connection.js";
 import { PROFILE_NAME, profileSlug } from "./profile-name.js";
 
 const CONNECTIONS_FILE = "connections.json";
+/** Inside a throwaway directory: the pid of the server that made it. */
+const OWNER_FILE = "owner.pid";
 /** Sites remembered per profile; the oldest observation goes first. */
 const MAX_SITES_PER_PROFILE = 64;
 const MAX_ACCOUNT_CHARS = 1_024;
@@ -104,6 +111,71 @@ export class ProfileStore {
 			})
 			.sort()
 			.slice(0, 256);
+	}
+
+	get ephemeralRoot(): string {
+		return join(this.rootDir, "ephemeral");
+	}
+
+	/**
+	 * A fresh directory for one throwaway browser, marked with this server's
+	 * pid so a later start can tell it was abandoned. Chrome's user-data dir is
+	 * `userDataDir`; the marker sits beside it, outside anything Chrome writes.
+	 */
+	createEphemeral(): { dir: string; userDataDir: string } {
+		const dir = join(this.ephemeralRoot, randomBytes(8).toString("hex"));
+		mkdirSync(dir, { recursive: true, mode: 0o700 });
+		try {
+			writeFileSync(join(dir, OWNER_FILE), String(process.pid), { mode: 0o600 });
+		} catch (error) {
+			rmSync(dir, { recursive: true, force: true });
+			throw error;
+		}
+		return { dir, userDataDir: join(dir, "chrome") };
+	}
+
+	/**
+	 * Delete a throwaway directory once its browser is gone. Chrome's helper
+	 * processes can hold files for a moment after it exits (Windows), so the
+	 * delete retries. Never throws: a directory that would not go stays marked
+	 * with its owner and is swept once that server is dead. Refuses anything
+	 * that is not a direct child of `ephemeral/`, so a bad path can never reach
+	 * a profile.
+	 */
+	async removeEphemeral(dir: string): Promise<void> {
+		if (dirname(resolve(dir)) !== this.ephemeralRoot) {
+			throw new Error(`refusing to delete ${dir}: not a throwaway browser directory`);
+		}
+		try {
+			await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+		} catch (error) {
+			console.error(`Throwaway browser data was not deleted (${dir}); it is removed once this server exits:`, error instanceof Error ? error.message : error);
+		}
+	}
+
+	/**
+	 * Delete throwaway directories a dead server left behind. One goes only
+	 * when its recorded owner is provably gone AND no browser still holds it;
+	 * a directory without a readable owner, or held by anything, stays. Never
+	 * touches `profiles/`.
+	 */
+	sweepEphemeral(): void {
+		let names: string[];
+		try {
+			names = readdirSync(this.ephemeralRoot);
+		} catch {
+			return;
+		}
+		for (const name of names) {
+			const dir = join(this.ephemeralRoot, name);
+			const owner = readOwner(dir);
+			if (owner === undefined || processAlive(owner) || browserHolds(join(dir, "chrome"))) continue;
+			try {
+				rmSync(dir, { recursive: true, force: true });
+			} catch (error) {
+				console.error(`Abandoned throwaway browser data was not deleted (${dir}); it is retried at the next start:`, error instanceof Error ? error.message : error);
+			}
+		}
 	}
 
 	/**
@@ -237,6 +309,42 @@ function processAlive(pid: number): boolean {
 	} catch (error) {
 		return (error as NodeJS.ErrnoException).code === "EPERM";
 	}
+}
+
+/** The pid recorded in a throwaway directory; undefined when it is missing or not a pid (never guessed at). */
+function readOwner(dir: string): number | undefined {
+	try {
+		const text = readFileSync(join(dir, OWNER_FILE), "utf8").trim();
+		return /^\d{1,10}$/.test(text) ? Number(text) : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Whether a Chrome still runs on `userDataDir`, by the marker Chrome itself
+ * keeps for as long as it does. Windows: `lockfile`, held open without write
+ * sharing and deleted by the OS when the process ends. Elsewhere:
+ * `SingletonLock`, a symlink to `<host>-<pid>` that a crash leaves behind, so
+ * it counts only while that pid is alive. An unreadable marker counts as held.
+ */
+function browserHolds(userDataDir: string): boolean {
+	if (process.platform === "win32") {
+		try {
+			closeSync(openSync(join(userDataDir, "lockfile"), "r+"));
+			return false;
+		} catch (error) {
+			return (error as NodeJS.ErrnoException).code !== "ENOENT";
+		}
+	}
+	let target: string;
+	try {
+		target = readlinkSync(join(userDataDir, "SingletonLock"));
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code !== "ENOENT";
+	}
+	const pid = /-(\d+)$/.exec(target)?.[1];
+	return pid === undefined || processAlive(Number(pid));
 }
 
 export function defaultRootDir(): string {

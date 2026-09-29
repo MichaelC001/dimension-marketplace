@@ -5,14 +5,15 @@
 // never a URL).
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { App } from "@modelcontextprotocol/ext-apps";
-import type { BrowserAction, BrowserEngine, BrowserFrame, BrowserState, TabOp } from "../../src/contracts";
+import type { BrowserAction, BrowserFrame, BrowserState, TabOp } from "../../src/contracts";
 import { Icon } from "@fraym/ui/icons";
-import { addressParts, tabLabel } from "./address";
+import { addressParts, tabLabel } from "../../src/address";
 import { AgentPill, ResultToast } from "./agent-activity";
 import { AnnotateBar } from "./annotate-bar";
-import { BrowserClient, failureText } from "./browser-client";
+import { BrowserClient, failureText, openFailureText, type ToolMount } from "./browser-client";
 import { type DrawTool, EMPTY_SKETCH, PageView, type Sketch } from "./page-view";
-import { BlankTab, RELAY_PROFILE, StartPage } from "./start-page";
+import { DEFAULT_PROFILE, RELAY_PROFILE } from "../../src/profile-name";
+import { BlankTab, StartPage } from "./start-page";
 import { TabStrip } from "./tab-strip";
 import { PublishBar } from "./publish-bar";
 import { type OmniboxHandle, Toolbar } from "./toolbar";
@@ -30,9 +31,9 @@ const NAVIGATION: Record<string, true> = { navigate: true, reload: true, back: t
 
 export interface BrowserAppProps {
 	readonly app: App;
-	/** The state carried by the tool result that mounted (or re-targeted) this
-	 *  View — the only place a browserId may come from. */
-	readonly toolState: { state: BrowserState; seq: number } | null;
+	/** The result of the tool call that mounted (or re-targeted) this View — the
+	 *  only place a browserId may come from — or why that call opened none. */
+	readonly toolState: ToolMount | null;
 }
 
 export function BrowserApp({ app, toolState }: BrowserAppProps) {
@@ -42,10 +43,13 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 	const [opened, setOpened] = useState<BrowserState | null>(null);
 	const [profiles, setProfiles] = useState<readonly string[] | null>(null);
 	const [profilesError, setProfilesError] = useState<string | null>(null);
-	const [profile, setProfile] = useState("default");
-	const [engine, setEngine] = useState<BrowserEngine>("chromium");
+	const [profile, setProfile] = useState(DEFAULT_PROFILE);
+	const [isPrivate, setPrivate] = useState(false);
+	const [ownChrome, setOwnChrome] = useState(false);
 	const [opening, setOpening] = useState(false);
 	const [openError, setOpenError] = useState<string | null>(null);
+	/** The last browser ended by itself: the start page says so once. */
+	const [closed, setClosed] = useState(false);
 
 	const [annotating, setAnnotating] = useState(false);
 	const [tool, setTool] = useState<DrawTool>("region");
@@ -79,8 +83,8 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 	const state = poll.state ?? opened;
 	const task = state?.task ?? null;
 	const taskRunning = task?.status === "running";
-	// An agent drives, or the browser is gone: no input, no tab ops.
-	const locked = taskRunning || poll.connection === "gone";
+	// An agent drives: no input, no tab ops.
+	const locked = taskRunning;
 	const loading = (state?.loading ?? false) || navPending > 0;
 	const viewport = state?.viewport ?? { width: 1280, height: 800 };
 
@@ -109,15 +113,20 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 	const [seenSeq, setSeenSeq] = useState(0);
 	if (toolState !== null && toolState.seq !== seenSeq) {
 		setSeenSeq(toolState.seq);
-		setOpened(toolState.state);
-		setOpenError(null);
-		if (toolState.state.browserId !== browserId) {
-			setBrowserId(toolState.state.browserId);
-			setProfile(toolState.state.profile);
-			setEngine(toolState.state.engine);
-			setAnnotating(false);
-			setSketch(EMPTY_SKETCH);
-			setStill(null);
+		if ("error" in toolState) {
+			// Told on the start page only: a live browser is never covered by the
+			// failure of a call that was meant to open another.
+			if (browserId === null) setOpenError(toolState.error);
+		} else {
+			setOpened(toolState.state);
+			setOpenError(null);
+			if (toolState.state.browserId !== browserId) {
+				setBrowserId(toolState.state.browserId);
+				setClosed(false);
+				setAnnotating(false);
+				setSketch(EMPTY_SKETCH);
+				setStill(null);
+			}
 		}
 	}
 
@@ -131,27 +140,28 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 		};
 	}, [client, browserId, say]);
 
-	// The profile list is app-only: it names profiles, never live browsers.
+	// The saved logins are app-only: they name saved sets, never live browsers. Read
+	// again each time the start page shows, so a set saved meanwhile is on offer.
+	const atStart = browserId === null;
 	useEffect(() => {
+		if (!atStart) return;
 		let alive = true;
 		client.profiles().then(
 			list => {
 				if (!alive) return;
-				const managed = list.filter(name => name !== RELAY_PROFILE);
-				setProfiles(managed);
+				setProfiles(list.filter(name => name !== RELAY_PROFILE));
 				setProfilesError(null);
-				setProfile(current => (current === "default" ? (managed[0] ?? "default") : current));
 			},
 			cause => {
 				if (!alive) return;
-				setProfiles([]);
+				setProfiles(current => current ?? []);
 				setProfilesError(failureText(cause));
 			},
 		);
 		return () => {
 			alive = false;
 		};
-	}, [client]);
+	}, [client, atStart]);
 
 	// Remember which task this View saw running, so its end gets a toast.
 	useEffect(() => {
@@ -182,21 +192,25 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 	});
 
 	const open = async (url: string) => {
-		const target = engine === "chrome-relay" ? RELAY_PROFILE : profile.trim();
-		if (target.length === 0) return;
 		setOpening(true);
 		setOpenError(null);
 		try {
-			const next = await client.open({ profile: target, engine, url: url.length > 0 ? url : undefined });
+			const next = await client.open({
+				engine: ownChrome ? "chrome-relay" : "chromium",
+				profile: ownChrome ? RELAY_PROFILE : isPrivate ? undefined : profile,
+				url: url.length > 0 ? url : undefined,
+			});
 			if (!mountedRef.current) return;
 			setBrowserId(next.browserId);
 			setOpened(next);
-			if (next.engine !== "chrome-relay") setProfiles(current => [...new Set([...(current ?? []), next.profile])].sort());
+			setClosed(false);
+			const saved = next.engine === "chrome-relay" ? null : next.profile;
+			if (saved !== null) setProfiles(current => [...new Set([...(current ?? []), saved])].sort());
 			setAnnotating(false);
 			setSketch(EMPTY_SKETCH);
 			setStill(null);
 		} catch (cause) {
-			if (mountedRef.current) setOpenError(failureText(cause));
+			if (mountedRef.current) setOpenError(openFailureText(cause));
 		} finally {
 			if (mountedRef.current) setOpening(false);
 		}
@@ -296,6 +310,14 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 		setStill(null);
 		input.reset();
 	};
+
+	// A browser that ends by itself — the agent finished, the session ended — is a
+	// normal ending, not a failure: back to the start page with one calm line.
+	useEffect(() => {
+		if (poll.connection !== "gone") return;
+		setClosed(true);
+		leave();
+	}, [poll.connection]);
 
 	const enterAnnotation = async () => {
 		const bound = browserId;
@@ -406,11 +428,14 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 				profiles={profiles}
 				profilesError={profilesError}
 				profile={profile}
-				engine={engine}
+				isPrivate={isPrivate}
+				ownChrome={ownChrome}
 				opening={opening}
 				error={openError}
+				closed={closed}
 				onProfile={setProfile}
-				onEngine={setEngine}
+				onPrivate={setPrivate}
+				onOwnChrome={setOwnChrome}
 				onOpen={url => void open(url)}
 			/>
 		);
@@ -468,7 +493,7 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 	);
 
 	return (
-		<div className="bx-browser" data-locked={locked || undefined} data-annotating={annotating || undefined} data-connection={poll.connection}>
+		<div className="bx-browser" data-locked={locked || undefined} data-annotating={annotating || undefined}>
 			<TabStrip
 				tabs={navPending > 0 ? state.tabs.map(tab => (tab.id === state.activeTabId ? { ...tab, loading: true } : tab)) : state.tabs}
 				activeTabId={state.activeTabId}
@@ -558,21 +583,6 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 						<button type="button" className="bx-banner-action" onClick={refreshPoll}>
 							Ask again
 						</button>
-					</div>
-				)}
-
-				{poll.connection === "gone" && (
-					<div className="bx-gone" role="alert">
-						<div className="bx-gone-card">
-							<span className="bx-start-mark" aria-hidden="true">
-								<Icon name="logout" size={20} strokeWidth={1.75} />
-							</span>
-							<h2>This browser was closed</h2>
-							<p>It was shut down elsewhere — by the agent, or by the session ending.</p>
-							<button type="button" className="bx-start-open" onClick={leave}>
-								Open another
-							</button>
-						</div>
 					</div>
 				)}
 			</div>

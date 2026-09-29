@@ -11,6 +11,7 @@ import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, test } from "bun:test";
+import { openFailureText } from "../app/view/browser-client";
 import type { BrowserState } from "../src/contracts";
 import { BrowserRuntimeError } from "../src/store";
 import {
@@ -75,6 +76,8 @@ describeWithChrome("profiles", () => {
 			expect(refused).toHaveLength(1);
 			expect(refused[0]?.reason).toBeInstanceOf(BrowserRuntimeError);
 			expect((refused[0]?.reason as BrowserRuntimeError).code).toBe("profile_in_use");
+			// The person sees plain words for this refusal, not the runtime's: the View recognises the runtime's real message.
+			expect(openFailureText(refused[0]?.reason)).not.toMatch(/profile/i);
 
 			const live = opened[0]?.value as BrowserState;
 			expect((await runtime.state(live.browserId)).profile).toBe("shared");
@@ -92,9 +95,10 @@ describeWithChrome("profiles", () => {
 			const holder = await runtime.open({ profile: "exclusive", viewport: VIEWPORT });
 
 			const intruder = newRuntime(rootDir);
-			expect(await failureCode(() => intruder.open({ profile: "exclusive", viewport: VIEWPORT }))).toBe(
-				"profile_locked",
-			);
+			const stolen = await intruder.open({ profile: "exclusive", viewport: VIEWPORT }).catch((error: unknown) => error);
+			expect(stolen).toBeInstanceOf(BrowserRuntimeError);
+			expect((stolen as BrowserRuntimeError).code).toBe("profile_locked");
+			expect(openFailureText(stolen)).not.toMatch(/profile/i);
 			// The refusal must not have disturbed the holder's browser.
 			expect((await runtime.state(holder.browserId)).browserId).toBe(holder.browserId);
 

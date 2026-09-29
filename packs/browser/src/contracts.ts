@@ -69,8 +69,40 @@ export interface TabRequest { op: TabOp; tabId?: string; url?: string }
 export type FrameFormat = "jpeg" | "png";
 /** `failed`: provably nothing happened. `unknown`: dispatched, then errored — may have taken effect. */
 export type ActionStatus = "completed" | "failed" | "unknown";
-/** `credential`: a `useSavedPassword`/`generatePassword` action typed this profile's password for `origin` (`created`: minted just now). Never the value. */
-export interface ActionResult { status: ActionStatus; error?: string; state: BrowserState; credential?: CredentialUse }
+/**
+ * `credential`: a `useSavedPassword`/`generatePassword` action typed this profile's password for `origin` (`created`: minted just now). Never the value.
+ * `dialogs`: the JavaScript dialogs the browser answered while this action ran.
+ */
+export interface ActionResult { status: ActionStatus; error?: string; state: BrowserState; credential?: CredentialUse; dialogs?: HandledDialog[] }
+/** The kinds of JavaScript dialog a page can open. */
+export const DIALOG_TYPES = ["alert", "confirm", "prompt", "beforeunload"] as const;
+export type DialogType = (typeof DIALOG_TYPES)[number];
+/**
+ * A dialog the browser answered by itself, because an open one freezes the
+ * page: alert and beforeunload are accepted, confirm and prompt dismissed.
+ * `message` is the page's own text (untrusted, bounded).
+ */
+export interface HandledDialog { type: DialogType; message: string; handled: "accepted" | "dismissed" }
+/** The longest wait browser_wait takes. */
+export const MAX_WAIT_MS = 15_000;
+/** Exactly one of `selector` (visible), `text` (on the page) or `url` (a substring of the current URL). */
+export interface WaitRequest { selector?: string; text?: string; url?: string; timeoutMs?: number }
+/** `completed`: the condition held. `timeout`: it did not within `timeoutMs`; `state` is what the browser shows now. */
+export interface WaitResult { status: "completed" | "timeout"; state: BrowserState }
+/** browser_inspect: the layout facts of the first element a selector matches, in the page's CSS pixels (an iframe's in main-viewport pixels, as a snapshot lists them). */
+export interface ElementInspection {
+  found: true;
+  rect: BrowserRegion;
+  scrollWidth: number;
+  clientWidth: number;
+  scrollHeight: number;
+  clientHeight: number;
+  /** A fixed allowlist of computed styles; see INSPECT_STYLES in engines/page-scripts.ts. */
+  styles: Record<string, string>;
+  /** The parent element's box; null for the root. */
+  parent: BrowserRegion | null;
+}
+export type InspectResult = { found: false } | ElementInspection;
 export interface TaskStep { n: number; action: string; url: string; elapsedMs: number }
 export interface TaskUsage { modelCalls: number; inputTokens: number; outputTokens: number; costUsd: number | null }
 export type TaskStatus = "running" | "done" | "blocked" | "failed" | "cancelled";
@@ -201,7 +233,12 @@ export const BROWSER_APPS = ["chrome", "msedge", "chromium", "custom"] as const;
 export type BrowserApp = (typeof BROWSER_APPS)[number];
 export interface BrowserState {
   browserId: string;
-  profile: string;
+  /**
+   * The saved profile this browser runs on; `null` for a throwaway browser
+   * (opened without a profile), whose data is deleted when it closes. A
+   * chrome-relay browser is always "relay".
+   */
+  profile: string | null;
   engine: BrowserEngine;
   /** The browser application behind this View; null on chrome-relay (the human's own Chrome). */
   app: BrowserApp | null;
@@ -220,6 +257,8 @@ export interface BrowserState {
   canGoForward: boolean;
   /** The current or most recent publish; the View renders its confirm bar from this. */
   publish: PublishRecord | null;
+  /** The last five JavaScript dialogs the browser answered on the active tab, oldest first. */
+  dialogs: HandledDialog[];
 }
 export interface BrowserFrame {
   state: BrowserState;
@@ -245,7 +284,8 @@ export interface BrowserAnnotation {
   elements: string;
 }
 export interface BrowserOpenOptions {
-  profile: string;
+  /** Omitted: a throwaway browser, nothing saved, no sign-in kept. Named: the persistent profile of that name. */
+  profile?: string;
   engine?: BrowserEngine;
   viewport?: Viewport;
 }
@@ -278,6 +318,10 @@ export interface BrowserRuntimePort {
   snapshot(browserId: string): Promise<{ state: BrowserState; text: string }>;
   /** Refused (`publish_pending`) while a publish awaits confirmation, unless `caller` is "app". */
   act(browserId: string, action: BrowserAction, caller?: ToolCaller): Promise<ActionResult>;
+  /** Serialized and refused (`task_running`, `publish_pending`) like `act`; nothing is changed on the page. `timeout` is a result, not an error. */
+  wait(browserId: string, request: WaitRequest, caller?: ToolCaller): Promise<WaitResult>;
+  /** Read-only: a fixed page script measures the first match of `selector` (`@<ref> ` prefix reaches an iframe). Nothing the caller wrote runs in the page. */
+  inspect(browserId: string, selector: string): Promise<InspectResult>;
   runTask(browserId: string, request: TaskRequest, onStep?: (step: TaskStep, run: TaskRun) => void): Promise<TaskRun>;
   cancelTask(browserId: string): Promise<TaskRun>;
   annotate(browserId: string, frameId: string, region: BrowserRegion, note: string): Promise<BrowserAnnotation>;

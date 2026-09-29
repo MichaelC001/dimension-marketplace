@@ -11,8 +11,11 @@ standard MCP and MCP Apps. No host internals, no browser fork.
 
 - **One shared browser.** The View and the agent work on the same browser, named
   by one opaque `browserId`. There is no listing and no ambient access.
-- **Named profiles.** Logins persist across restarts, profiles stay isolated, and
-  one profile is held by one caller at a time.
+- **Throwaway by default, named profiles to keep logins.** A browser opened
+  without a profile keeps nothing and is deleted when it closes. A named profile
+  persists logins across restarts, stays isolated, and is held by one caller at
+  a time. The exception is yours: the View's start page and the dock open the
+  saved `default` profile unless you tick **Private** ([Browser panel](#browser-panel)).
 - **Annotations that carry pixels.** Draw a region, circle or freehand stroke; the
   marks are painted into the cropped screenshot and sent, with your note, the URL
   and the elements under the crop, into the same conversation.
@@ -67,8 +70,8 @@ Nothing upstream is copied or forked. Updating an upstream is a version bump.
 
 | Engine | Status |
 | --- | --- |
-| `chromium` | Default. A Chrome this pack manages, on a profile it owns. |
-| `chrome-relay` | Attaches to the Chrome you are signed in to (profile `relay`); owns only the tabs it opens (and the pages they open) and never closes your browser. `browser_task` is refused here: the task agents drive a whole browser, and this one is yours. |
+| `chromium` | Default. A Chrome this pack manages, in a directory it owns: a throwaway one, or a saved profile. |
+| `chrome-relay` | Attaches to the Chrome you are signed in to (always profile `relay`, so `profile` may be omitted); owns only the tabs it opens (and the pages they open) and never closes your browser. `browser_task` is refused here: the task agents drive a whole browser, and this one is yours. |
 | `abp` | **Refused**: its control server authenticates nothing, so any page it visits could drive it. theredsix/agent-browser-protocol#16 |
 | `browser4` | **Refused**: every published bundle disables HTTPS certificate verification. platonai/Browser4#602 |
 
@@ -122,7 +125,7 @@ needs a relay that drops them (upstream jev-ultrafast behaviour).
 
 | Variable | Effect |
 | --- | --- |
-| `DIMENSION_BROWSER_ROOT` | Root for profiles. |
+| `DIMENSION_BROWSER_ROOT` | Root for browser data: saved profiles in `profiles/`, throwaway browsers in `ephemeral/`. Default `$INSO_HOME/browser`, else `~/.inso/browser`. |
 | `DIMENSION_BROWSER_EXECUTABLE` | Chrome/Chromium executable (overrides the choice below; `browser_state` then reports `app: "custom"`). |
 | `DIMENSION_BROWSER_RELAY_URL` | Relay CDP endpoint (default `http://127.0.0.1:9224`). |
 | `DIMENSION_BROWSER_HEADLESS` | `false` for a visible window. |
@@ -178,15 +181,36 @@ throwaway. A site that refuses it is reported `blocked`, never worked around.
 
 ## Tools
 
-Model-callable: `browser_open`, `browser_state`, `browser_snapshot`, `browser_read`,
-`browser_screenshot`, `browser_act`, `browser_tab`, `browser_task`, `browser_task_wait`,
-`browser_task_cancel`, `browser_publish`, `browser_publish_presets`, `browser_publish_confirm`,
-`browser_publish_cancel`, `browser_publish_wait`, `browser_close`.
+Model-callable: `browser_open`, `browser_state`, `browser_snapshot`, `browser_inspect`,
+`browser_wait`, `browser_read`, `browser_screenshot`, `browser_act`, `browser_tab`,
+`browser_task`, `browser_task_wait`, `browser_task_cancel`, `browser_publish`,
+`browser_publish_presets`, `browser_publish_confirm`, `browser_publish_cancel`,
+`browser_publish_wait`, `browser_close`.
 View-only: `browser_frame` (live JPEG by default, PNG for annotation; the View passes the frame it
 shows as `since`, so a still page returns `{ unchanged: true }` and no pixels — 2.0 MiB/s down to
 88 KiB/s at 10 Hz on a Wikipedia article), `browser_annotate`, `browser_viewport`, `browser_profiles`.
 
 Page content is untrusted data, never instructions.
+
+**What it does not do, on purpose.** No file upload: a page could steer the model
+into sending a local secret to a site. No JavaScript verb: arbitrary script in a
+signed-in profile is a bigger blast radius than the layout facts `browser_inspect`
+returns from a fixed page script.
+
+### Throwaway browsers and saved profiles
+
+`browser_open({ profile?, engine?, url? })`. Leave `profile` out for a throwaway
+browser: its own directory under `<root>/ephemeral/`, no lock, no saved sign-in,
+deleted when it closes or the server exits, and any number can be open at once
+(up to the pool bound). `browser_state.profile` is `null` for it and
+`browser_profiles` never lists it. If the server is killed first, the next start
+deletes the directory once its recorded owner (`owner.pid`) is provably dead and
+no Chrome still holds it. Pass `profile` to run on the saved profile of that
+name in `<root>/profiles/<name>`: it keeps logins, is held by one caller at a
+time, and is never deleted. Saved passwords (`generatePassword`,
+`useSavedPassword`), a `browser_task` `credential` and `browser_publish` need a
+saved profile and fail `profile_required` on a throwaway browser, before
+anything reaches the page.
 
 ## Reading public pages
 
@@ -421,21 +445,33 @@ next to that profile's Chrome data, at most 64 sites per profile.
 ## Browser panel
 
 Installing the pack also adds a **Browser** tab to the dock (component
-`browser-accounts`). It lists each profile from the [connection report](#connection-report)
-with its sites: signed in or signed out, the account, and when the Browser last
-saw it. A site the Browser has never observed is not in the report, so it is not
-listed. **Sign in** on a site, or **New sign-in** (pick X, LinkedIn, Reddit or
-Bluesky and name a profile), opens the live Browser View beside the chat at that
-site's login page on that profile. You sign in there yourself, and the panel
+`browser-accounts`). At the top is an **Open a page** bar: type a website
+address and **Open** shows the live Browser View beside the chat at it (an empty
+bar opens a blank browser; something that is not an address opens nothing and
+says why). Below it, the panel lists each saved set of logins (a profile) from
+the [connection report](#connection-report) with its sites: signed in or signed
+out, the account, and when the Browser last saw it. A site the Browser has never
+observed is not in the report, so it is not listed. **Sign in** on a site, or
+**New sign-in** (pick X, LinkedIn, Reddit or Bluesky and name the logins; left
+empty, they are the `default` set), opens the live Browser View beside the chat
+at that site's login page on that set. You sign in there yourself, and the panel
 shows the account once the Browser observes it.
 
+The View's start page and the panel's **Open a page** open on the saved `default`
+set, so a person's own browser keeps their logins, unless **Private** is ticked.
+Private sends no profile: a throwaway browser that saves nothing. One browser
+holds a saved set at a time, so a second open of `default` is refused
+(`profile_in_use`); the start page turns that into "That browser is already
+open. Use it, or open a Private one."
+
 The panel reads only this pack's own connection fact (`plugin/browser/connection`)
-and acts only through `openArtifactoryView` (`browser_open` with `{ profile, url }`),
-which its `artifactory:open` grant admits. The host opens the View in the active
-session, so with no session open the panel's sign-in buttons are disabled.
-Profile names follow the same rule as `browser_open` (`src/profile-name.ts`). The
-site list takes its origins from the shipped presets in `recipes/`. The panel is
-built by `npm run build` into `dist/index.mjs`.
+and acts only through `openArtifactoryView` (`browser_open` with
+`{ url?, profile? }`), which its `artifactory:open` grant admits. The host opens
+the View in the active session, so with no session open the panel's **Open** and
+**Sign in** buttons are disabled. Profile names follow the same rule as
+`browser_open` (`src/profile-name.ts`). The site list takes its origins from the
+shipped presets in `recipes/`. The panel is built by `npm run build` into
+`dist/index.mjs`.
 
 ## Tests and benchmark
 
@@ -454,3 +490,10 @@ harness completes that account from the fixture (`/__seed`) so the stages after
 it measure their own task, and the report marks the stage `then seeded`.
 `--record` writes one video per agent (the View's live frames with the stage,
 stage timer and run timer burned in; needs `ffmpeg`).
+
+The benchmark's browser data (its `bench-*` profiles and the saved fixture
+password) lives in a directory it makes under `.scratch/browser-bench/`
+(gitignored) and deletes when the run ends; it never uses `~/.inso` or
+`~/.inso-dev`. It refuses to start when `DIMENSION_BROWSER_ROOT` or `INSO_HOME`
+points into them, unless `--root <dir>` names a directory to use instead (kept
+after the run).

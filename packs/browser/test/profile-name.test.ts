@@ -29,7 +29,7 @@ afterEach(async () => {
 });
 
 /** The runtime the server needs to boot and answer `browser_open`, recording each profile it was asked to open. */
-function recordingRuntime(opened: string[]): BrowserRuntimePort {
+function recordingRuntime(opened: Array<string | undefined>): BrowserRuntimePort {
 	const runtime: Pick<BrowserRuntimePort, "open" | "connections" | "onConnectionsChanged" | "dispose"> = {
 		open: async ({ profile }: BrowserOpenOptions) => {
 			opened.push(profile);
