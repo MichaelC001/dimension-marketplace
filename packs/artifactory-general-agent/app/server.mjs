@@ -77,12 +77,13 @@ function manifestLines(draft) {
   if (draft.memory !== "inherit") {
     push("memory", "memory:");
     push("memory.backend", `  backend: ${draft.memory}`);
-    if (draft.memory !== "off" && draft.memoryScope === "global") push("memory.vault", "  vault: global");
   }
-  if (draft.habitat !== "bound") {
+  const reachAll = draft.memory !== "off" && draft.memoryScope === "global";
+  if (draft.habitat !== "bound" || reachAll) {
     push("workspace", "workspace:");
     push("workspace.policy", `  policy: ${draft.habitat}`);
     if (draft.habitat === "home") push("workspace.id", `  id: ${scalar(`agent-${draft.name || "unnamed"}`)}`);
+    if (reachAll) push("workspace.reach", "  reach: all");
   }
   push("fence", "---");
   const body = draft.charter.trim() === "" ? ["\u2026"] : draft.charter.replace(/\s+$/, "").split("\n");
@@ -6853,7 +6854,15 @@ function buildScope(aliases, options) {
 }
 
 // ../../../omp/packages/coding-agent/src/config/agent-manifest.ts
-var CONTROL_LANE_NAMES = ["observe", "create", "steer", "end", "command"];
+var CONTROL_LANE_NAMES = [
+  "observe",
+  "create",
+  "steer",
+  "end",
+  "command",
+  "rooms",
+  "agents"
+];
 var AgentManifestError = class extends Error {
   constructor(filePath, detail) {
     super(`Invalid agent manifest: ${filePath}
@@ -6871,7 +6880,7 @@ var SECTION_KEYS = [
   "workspace",
   "loop",
   "subagents",
-  "autonomy"
+  "routing"
 ];
 var FLAT_ALIASES = [
   { flat: ["tools"], section: "capabilities", nested: "tools" },
@@ -6911,6 +6920,7 @@ var capabilitiesSchema = type({
   "skills?": `'*' | ${stringList}`,
   "autoloadSkills?": `'*' | ${stringList}`,
   "slashCommands?": `'*' | ${stringList}`,
+  "optIn?": stringList,
   "ignore?": ignoreSchema,
   "control?": "unknown",
   "+": "reject"
@@ -6922,14 +6932,16 @@ var gateSchema = type({
 });
 var memorySchema = type({
   "backend?": "string",
-  "vault?": "'global' | 'project'",
+  // Removed field: accepted with ANY value so a leftover key loads the agent
+  // and reports itself (a diagnostic) rather than being a hard parse error.
+  // The value is never read.
+  "vault?": "unknown",
   "namespace?": "string",
   "+": "reject"
 });
 var workspaceSchema = type({
   policy: "'bound' | 'home' | 'pinned' | 'ephemeral'",
   "id?": "string",
-  "seed?": "string",
   // `none`/`all` are the two grant WORDS; anything else is a workspace-id list
   // (CSV or YAML), coerced like every other list-valued manifest field.
   "reach?": stringList,
@@ -6945,6 +6957,17 @@ var loopSchema = type({
   "maxTurns?": "number > 0",
   "+": "reject"
 });
+var routingTriggersSchema = type({
+  mode: "'mentions' | 'keywords' | 'all'",
+  "keywords?": stringList,
+  "patterns?": stringList,
+  "+": "reject"
+});
+var routingSchema = type({
+  "triggers?": routingTriggersSchema,
+  "card?": "string",
+  "+": "reject"
+});
 var subagentsSchema = type({
   "allowed?": "'*' | string | string[]",
   "maxDepth?": "number > 0",
@@ -6953,55 +6976,6 @@ var subagentsSchema = type({
   "readSummarize?": "boolean",
   "+": "reject"
 });
-var autonomyTriggerSchema = type({
-  "interval?": "string",
-  // duration: "30s" | "5m" | "1h" | "1d"
-  "cron?": "string",
-  // standard 5-field cron expression
-  "at?": "string",
-  // one-shot ISO datetime — fires ONCE, then the loop retires (Reminder type)
-  "jitter?": "string",
-  // optional splay to de-sync herds, e.g. "30s"
-  "timezone?": "string",
-  // IANA tz for cron; default = host tz
-  "on?": "string",
-  // sensor source: "hook" | "file:<glob>" (open for future kinds)
-  "debounce?": "string",
-  // sensor debounce duration, e.g. "30s"
-  "+": "delete"
-});
-var autonomyGovernorSchema = type({
-  "maxTicksPerDay?": "number > 0",
-  "spendPerTickUsd?": "number > 0",
-  // soft cap, checked post-hoc from AgentRunSummary.cost
-  "dailySpendUsd?": "number > 0",
-  // hard daily ceiling across this agent's ticks
-  "maxTurns?": "number > 0",
-  // per-tick anti-runaway turn cap (mirrors loop.maxTurns)
-  "maxMinutes?": "number > 0",
-  // per-tick WATCH window (minutes) — the pulse observes this long before settling the receipt; never cancels the run
-  "overlap?": "'skip' | 'queue'",
-  // default "skip"
-  "+": "delete"
-  // forward-compatible: see autonomyTriggerSchema
-});
-var autonomyEscalationSchema = type({
-  "webhook?": "string",
-  // POST target; value must parse as a URL (checked at parse)
-  "mention?": "string",
-  // handle/role to @-mention in the escalation body
-  "+": "reject"
-});
-var autonomyNotifySchema = type({
-  "on?": "('done' | 'ask' | 'fail')[] | 'done' | 'ask' | 'fail'",
-  // default: done
-  "webhook?": "string",
-  // POST target; value must parse as a URL (checked at parse)
-  "mention?": "string",
-  // handle/role to @-mention in the notify body
-  "+": "reject"
-});
-var DURATION_RE = /^(\d+(?:\.\d+)?)(ms|s|m|h|d)$/;
 var SECTION_SCHEMAS = {
   identity: identitySchema,
   engine: engineSchema,
@@ -7010,7 +6984,8 @@ var SECTION_SCHEMAS = {
   memory: memorySchema,
   workspace: workspaceSchema,
   loop: loopSchema,
-  subagents: subagentsSchema
+  subagents: subagentsSchema,
+  routing: routingSchema
 };
 function toStringList(value) {
   if (value === void 0) return void 0;
@@ -7110,13 +7085,6 @@ function narrowWorkspacePolicy(section, filePath) {
       `workspace.id is only valid with policy 'home' or 'pinned' (got '${policy}')`
     );
   }
-  if (section.seed !== void 0 && policy !== "home") {
-    throw new AgentManifestError(
-      filePath,
-      `workspace.seed is only valid with policy 'home' (got '${policy}') \u2014 only a home workspace is provisioned`
-    );
-  }
-  const seed = typeof section.seed === "string" && section.seed.trim() !== "" ? section.seed.trim() : void 0;
   const rawReach = section.reach;
   const reachList = rawReach === "none" || rawReach === "all" ? void 0 : toStringList(rawReach);
   let reach;
@@ -7131,10 +7099,55 @@ function narrowWorkspacePolicy(section, filePath) {
   } else reach = reachList;
   const resolved = { policy };
   if (id !== void 0) resolved.id = id;
-  if (seed !== void 0) resolved.seed = seed;
   if (reach !== void 0) resolved.reach = reach;
   return resolved;
 }
+function narrowOptIn(raw, filePath) {
+  const names2 = [];
+  for (const entry2 of toStringList(raw) ?? []) {
+    const name = entry2.trim();
+    if (name === "" || name === "*") {
+      throw new AgentManifestError(
+        filePath,
+        `capabilities.optIn: ${JSON.stringify(entry2)} is not a plugin name \u2014 list the opt-in plugins this agent carries`
+      );
+    }
+    if (!names2.includes(name)) names2.push(name);
+  }
+  return names2;
+}
+function narrowRouting(section, filePath) {
+  const routing = {};
+  const card = section.card;
+  if (typeof card === "string") {
+    if (card.trim() === "") throw new AgentManifestError(filePath, "routing.card must not be empty");
+    routing.card = card.trim();
+  }
+  const triggers = section.triggers;
+  if (typeof triggers === "object" && triggers !== null && "mode" in triggers) {
+    const { mode } = triggers;
+    if (mode !== "mentions" && mode !== "keywords" && mode !== "all") return routing;
+    const narrowed = { mode };
+    for (const field of ["keywords", "patterns"]) {
+      const raw = field in triggers ? triggers[field] : void 0;
+      const list2 = typeof raw === "string" ? field === "patterns" ? [raw] : raw.split(",") : toStringList(raw);
+      if (list2 === void 0) continue;
+      if (list2.some((entry2) => entry2.trim() === "")) {
+        throw new AgentManifestError(filePath, `routing.triggers.${field} must not contain an empty entry`);
+      }
+      narrowed[field] = list2.map((entry2) => entry2.trim());
+    }
+    if (mode === "keywords" && !narrowed.keywords?.length && !narrowed.patterns?.length) {
+      throw new AgentManifestError(filePath, "routing.triggers mode 'keywords' needs keywords or patterns");
+    }
+    routing.triggers = narrowed;
+  }
+  return routing;
+}
+var MEMORY_VAULT_REMOVED = {
+  key: "memory.vault",
+  message: "`memory.vault` was removed: the agent's `workspace.reach` decides which rooms it recalls from; delete the key"
+};
 function parseAgentManifest(frontmatter, filePath) {
   const present = SECTION_KEYS.filter((key) => frontmatter[key] !== void 0);
   const rawVersion = frontmatter.specVersion;
@@ -7167,106 +7180,6 @@ function parseAgentManifest(frontmatter, filePath) {
     if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
       throw new AgentManifestError(filePath, `section '${key}' must be a YAML mapping`);
     }
-    if (key === "autonomy") {
-      const block = raw;
-      if (block.trigger !== void 0) {
-        const trigger = autonomyTriggerSchema(block.trigger);
-        if (trigger instanceof type.errors) {
-          throw new AgentManifestError(filePath, `autonomy.trigger: ${trigger.summary}`);
-        }
-        const t = block.trigger;
-        for (const field of ["interval", "jitter", "debounce"]) {
-          const value = t[field];
-          if (typeof value !== "string") continue;
-          const match = DURATION_RE.exec(value.trim());
-          if (match === null || Number(match[1]) <= 0) {
-            throw new AgentManifestError(
-              filePath,
-              `autonomy.trigger: ${field} ${JSON.stringify(value)} is not a positive duration (e.g. "30s", "5m", "1h")`
-            );
-          }
-        }
-        if (typeof t.cron === "string" && t.cron.trim().split(/\s+/).length !== 5) {
-          throw new AgentManifestError(
-            filePath,
-            "autonomy.trigger: cron must have exactly 5 whitespace-separated fields"
-          );
-        }
-        if (typeof t.timezone === "string") {
-          try {
-            Intl.DateTimeFormat(void 0, { timeZone: t.timezone });
-          } catch {
-            throw new AgentManifestError(
-              filePath,
-              `autonomy.trigger: timezone ${JSON.stringify(t.timezone)} is not a valid IANA time zone`
-            );
-          }
-        }
-        if (typeof t.on === "string" && t.on.trim() === "") {
-          throw new AgentManifestError(
-            filePath,
-            `autonomy.trigger: on must be a non-empty sensor source (e.g. "hook" or "file:<glob>")`
-          );
-        }
-        if (typeof t.at === "string" && Number.isNaN(Date.parse(t.at))) {
-          throw new AgentManifestError(
-            filePath,
-            `autonomy.trigger: at ${JSON.stringify(t.at)} is not a parseable datetime (e.g. "2026-07-15T09:00:00+05:30")`
-          );
-        }
-        if (t.interval === void 0 && t.cron === void 0 && t.at === void 0 && t.on === void 0) {
-          throw new AgentManifestError(filePath, "autonomy.trigger needs at least one of: interval, cron, at, on");
-        }
-      }
-      if (block.governor !== void 0) {
-        const governor = autonomyGovernorSchema(block.governor);
-        if (governor instanceof type.errors) {
-          throw new AgentManifestError(filePath, `autonomy.governor: ${governor.summary}`);
-        }
-      }
-      if (block.escalation !== void 0) {
-        const escalation = autonomyEscalationSchema(block.escalation);
-        if (escalation instanceof type.errors) {
-          throw new AgentManifestError(filePath, `autonomy.escalation: ${escalation.summary}`);
-        }
-        const e = block.escalation;
-        if (typeof e.webhook === "string") {
-          try {
-            new URL(e.webhook);
-          } catch {
-            throw new AgentManifestError(
-              filePath,
-              `autonomy.escalation: webhook ${JSON.stringify(e.webhook)} is not a valid URL`
-            );
-          }
-        }
-      }
-      if (block.notify !== void 0) {
-        const notify = autonomyNotifySchema(block.notify);
-        if (notify instanceof type.errors) {
-          throw new AgentManifestError(filePath, `autonomy.notify: ${notify.summary}`);
-        }
-        const n = block.notify;
-        if (typeof n.webhook === "string") {
-          try {
-            new URL(n.webhook);
-          } catch {
-            throw new AgentManifestError(
-              filePath,
-              `autonomy.notify: webhook ${JSON.stringify(n.webhook)} is not a valid URL`
-            );
-          }
-        }
-      }
-      if (block.retention !== void 0 && block.retention !== "scratch" && block.retention !== "keep") {
-        throw new AgentManifestError(
-          filePath,
-          `autonomy.retention must be "scratch" or "keep", got ${JSON.stringify(block.retention)}`
-        );
-      }
-      sections[key] = block;
-      continue;
-    }
     const validated = SECTION_SCHEMAS[key](raw);
     if (validated instanceof type.errors) {
       throw new AgentManifestError(filePath, `section '${key}': ${validated.summary}`);
@@ -7289,6 +7202,11 @@ function parseAgentManifest(frontmatter, filePath) {
     if (nestedValue === void 0) continue;
     if (nestedValue === "*" && alias.section === "capabilities") continue;
     enrichedFrontmatter[alias.flat[0]] = nestedValue;
+  }
+  for (const alias of FLAT_ALIASES) {
+    const flatKey = alias.flat.find((key) => frontmatter[key] !== void 0);
+    if (flatKey === void 0) continue;
+    sections[alias.section] = { ...sections[alias.section], [alias.nested]: frontmatter[flatKey] };
   }
   const manifest = rawVersion !== void 0 ? { specVersion: 1 } : {};
   if (extendsList !== void 0) manifest.extends = extendsList;
@@ -7316,6 +7234,9 @@ function parseAgentManifest(frontmatter, filePath) {
       autoloadSkills: starOrList(sections.capabilities.autoloadSkills),
       slashCommands: starOrList(sections.capabilities.slashCommands)
     };
+    if (sections.capabilities.optIn !== void 0) {
+      manifest.capabilities.optIn = narrowOptIn(sections.capabilities.optIn, filePath);
+    }
     if (rawIgnore !== void 0 && typeof rawIgnore === "object" && rawIgnore !== null) {
       manifest.capabilities.ignore = {
         tools: toStringList("tools" in rawIgnore ? rawIgnore.tools : void 0),
@@ -7330,7 +7251,15 @@ function parseAgentManifest(frontmatter, filePath) {
     }
   }
   if (sections.gate) manifest.gate = sections.gate;
-  if (sections.memory) manifest.memory = sections.memory;
+  const diagnostics = [];
+  if (sections.memory) {
+    const { backend, namespace } = sections.memory;
+    manifest.memory = {
+      ...backend !== void 0 ? { backend } : {},
+      ...namespace !== void 0 ? { namespace } : {}
+    };
+    if ("vault" in sections.memory) diagnostics.push(MEMORY_VAULT_REMOVED);
+  }
   if (sections.workspace) manifest.workspace = narrowWorkspacePolicy(sections.workspace, filePath);
   if (sections.loop) {
     const loop = sections.loop;
@@ -7349,8 +7278,8 @@ function parseAgentManifest(frontmatter, filePath) {
       readSummarize: subagents.readSummarize
     };
   }
-  if (sections.autonomy) manifest.autonomy = sections.autonomy;
-  return { manifest, enrichedFrontmatter };
+  if (sections.routing) manifest.routing = narrowRouting(sections.routing, filePath);
+  return { manifest, enrichedFrontmatter, diagnostics };
 }
 
 // ../../../packages/sdk/src/general-agent/index.ts
@@ -7407,6 +7336,12 @@ function parseAvatar(value, errors) {
     ...typeof accent === "string" ? { accent } : {}
   };
 }
+function generalAgentRouting(manifest, description) {
+  const card = manifest.routing?.card ?? (description.trim() || void 0);
+  const triggers = manifest.routing?.triggers;
+  if (!card && !triggers) return void 0;
+  return { ...triggers ? { triggers } : {}, ...card ? { card } : {} };
+}
 function rejected(reason, ...errors) {
   return { ok: false, reason, errors };
 }
@@ -7425,7 +7360,7 @@ function parseGeneralAgent(content, filePath, dirName) {
   const raw = parsedYaml;
   const autonomy = raw.autonomy;
   if (typeof autonomy === "object" && autonomy !== null && "trigger" in autonomy && autonomy.trigger !== void 0) {
-    return rejected("loop", "declares autonomy.trigger \u2014 a Loop, not a General Agent");
+    return rejected("loop", "declares autonomy.trigger \u2014 a retired Loop manifest (doc 78), not a General Agent");
   }
   let manifest;
   try {
@@ -7440,22 +7375,31 @@ function parseGeneralAgent(content, filePath, dirName) {
   const errors = [];
   if (raw.name !== void 0 && typeof raw.name !== "string") errors.push("name must be a string");
   const name = typeof raw.name === "string" ? raw.name : dirName;
-  if (name !== dirName) errors.push(`name ${JSON.stringify(name)} must equal its directory ${JSON.stringify(dirName)}`);
+  if (name !== dirName)
+    errors.push(`name ${JSON.stringify(name)} must equal its directory ${JSON.stringify(dirName)}`);
   if (raw.description !== void 0 && typeof raw.description !== "string") {
     errors.push("description must be a string");
   }
   if (raw.defaultEnabled !== void 0 && typeof raw.defaultEnabled !== "boolean") {
     errors.push("defaultEnabled must be a boolean");
   }
+  if (raw.title !== void 0 && (typeof raw.title !== "string" || raw.title.trim() === "")) {
+    errors.push("title must be a non-empty string");
+  }
   const avatar = parseAvatar(raw.avatar, errors);
   if (errors.length > 0) return rejected("invalid", ...errors);
+  const description = typeof raw.description === "string" ? raw.description : "";
+  const routing = generalAgentRouting(manifest, description);
   return {
     ok: true,
     decl: {
       name,
-      description: typeof raw.description === "string" ? raw.description : "",
+      description,
       defaultEnabled: typeof raw.defaultEnabled === "boolean" ? raw.defaultEnabled : true,
+      // One line on every surface that shows it (a chip, a menu row).
+      ...typeof raw.title === "string" ? { title: raw.title.trim().replace(/\s+/g, " ") } : {},
       ...avatar ? { avatar } : {},
+      ...routing ? { routing } : {},
       manifest,
       body: parts.body.trim()
     }
@@ -7499,8 +7443,8 @@ var MODELED = {
   engine: ["model", "thinkingLevel"],
   capabilities: ["tools", "skills", "mcp"],
   gate: ["approval"],
-  memory: ["backend", "vault"],
-  workspace: ["policy", "id"]
+  memory: ["backend"],
+  workspace: ["policy", "id", "reach"]
 };
 function allowlist(value, key, unshown) {
   if (value === "*") unshown.push(`${key}: "*"`);
@@ -7539,8 +7483,10 @@ function draftFromDecl(decl, key) {
     if (MEMORY_BACKENDS.includes(backend) && backend !== "inherit") memory = backend;
     else unshown.push(`memory.backend: ${backend}`);
   }
-  const vault = manifest.memory?.vault;
-  if (vault !== void 0 && !(vault === "global" && memory !== "off")) unshown.push(`memory.vault: ${vault}`);
+  const reach = manifest.workspace?.reach;
+  let memoryScope = "project";
+  if (reach === "all" && memory !== "off") memoryScope = "global";
+  else if (reach !== void 0 && reach !== "none") unshown.push(`workspace.reach: ${Array.isArray(reach) ? `[${reach.join(", ")}]` : reach}`);
   const policy = manifest.workspace?.policy;
   let habitat = "bound";
   if (policy !== void 0) {
@@ -7568,7 +7514,7 @@ function draftFromDecl(decl, key) {
     skills: allowlist(manifest.capabilities?.skills, "capabilities.skills", unshown),
     mcp: allowlist(manifest.capabilities?.mcp, "capabilities.mcp", unshown),
     memory,
-    memoryScope: vault === "global" ? "global" : "project",
+    memoryScope,
     approval: approval ?? "always-ask",
     habitat,
     lineage: [...manifest.extends ?? []],

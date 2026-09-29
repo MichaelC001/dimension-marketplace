@@ -23,6 +23,7 @@ import {
 	HABITATS,
 	MEMORY_BACKENDS,
 	type MemoryBackend,
+	type MemoryScope,
 	type Thinking,
 	THINKING_STEPS,
 	toAgentMd,
@@ -92,8 +93,8 @@ const MODELED: Readonly<Record<string, readonly string[] | null>> = {
 	engine: ["model", "thinkingLevel"],
 	capabilities: ["tools", "skills", "mcp"],
 	gate: ["approval"],
-	memory: ["backend", "vault"],
-	workspace: ["policy", "id"],
+	memory: ["backend"],
+	workspace: ["policy", "id", "reach"],
 };
 
 function allowlist(value: string[] | "*" | undefined, key: string, unshown: string[]): string[] {
@@ -144,8 +145,14 @@ export function draftFromDecl(decl: GeneralAgentDecl, key: string): { draft: Age
 		if ((MEMORY_BACKENDS as readonly string[]).includes(backend) && backend !== "inherit") memory = backend as MemoryBackend;
 		else unshown.push(`memory.backend: ${backend}`);
 	}
-	const vault = manifest.memory?.vault;
-	if (vault !== undefined && !(vault === "global" && memory !== "off")) unshown.push(`memory.vault: ${vault}`);
+
+	// Recall follows `workspace.reach`: `all` is the toggle's "Every project"; an
+	// absent key and `none` both say the agent recalls its own project. An id
+	// list has no toggle position, and a memory-less agent has nothing to recall.
+	const reach = manifest.workspace?.reach;
+	let memoryScope: MemoryScope = "project";
+	if (reach === "all" && memory !== "off") memoryScope = "global";
+	else if (reach !== undefined && reach !== "none") unshown.push(`workspace.reach: ${Array.isArray(reach) ? `[${reach.join(", ")}]` : reach}`);
 
 	const policy = manifest.workspace?.policy;
 	let habitat: Habitat = "bound";
@@ -178,7 +185,7 @@ export function draftFromDecl(decl: GeneralAgentDecl, key: string): { draft: Age
 		skills: allowlist(manifest.capabilities?.skills, "capabilities.skills", unshown),
 		mcp: allowlist(manifest.capabilities?.mcp, "capabilities.mcp", unshown),
 		memory,
-		memoryScope: vault === "global" ? "global" : "project",
+		memoryScope,
 		approval: approval ?? "always-ask",
 		habitat,
 		lineage: [...(manifest.extends ?? [])],
