@@ -597,7 +597,7 @@
 			"pluginId": "independent-composer",
 			"title": "Independent Composer",
 			"description": "A composer built independently on the bricks tier — Fraym primitives + tokens + the store channels. Ships no shipped-implementation import.",
-			"version": "0.1.1",
+			"version": "0.1.2",
 			"author": {
 				"name": "Dimension"
 			},
@@ -608,7 +608,10 @@
 				"component",
 				"composer",
 				"independent"
-			]
+			],
+			"requires": {
+				"dimension": ">=0.11.1"
+			}
 		},
 		{
 			"name": "independent-rail",

@@ -22,7 +22,11 @@
  *  here by the smallest honest stand-ins: a `Composer` that records the props it
  *  is handed, and a `useObservable` that is the real `useSyncExternalStore`.
  *  What is under test is this pack's OWN section wiring — the send mapping, the
- *  draft persistence, and the acknowledgement. `react`, `react-dom` and
+ *  draft persistence, and the acknowledgement. The one part that is NOT a
+ *  stand-in is the View-context binding (`useSectionViewContext`): it is the
+ *  kit's real hook, mounted under the kit's real `HostStoreProvider` over a
+ *  store that answers `seat/scope` for the session under test, exactly as the
+ *  host's seat boundary does for a pack. `react`, `react-dom` and
  *  `linkedom` come from the Dimension monorepo this repo is mounted into, which
  *  is where pack tests run (marketplace CI validates only what is standalone).
  */
@@ -30,6 +34,15 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { parseHTML } from "linkedom";
 import { act, createElement, useSyncExternalStore } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { type HostStore, SEAT_SCOPE_KEY } from "@fraym/driver";
+import type { ViewContextEntry } from "../../../../fraym/packages/ui/src/features/composer/composer-view-context";
+import * as composerDraft from "../../../../fraym/packages/ui/src/features/composer/session-composer-draft";
+import {
+	stageSessionViewContext,
+	takeSessionViewContexts,
+} from "../../../../fraym/packages/ui/src/features/composer/session-composer-draft";
+import { sessionRefKey } from "../../../../fraym/packages/ui/src/shell/session-groups";
+import { HostStoreProvider } from "../../../../fraym/packages/ui/src/shell/space/store-binding";
 
 // ── The published parts, replaced by stand-ins ───────────────────────────────
 
@@ -37,6 +50,9 @@ interface ComposerCapture {
 	readonly value: string;
 	readonly onChange: (text: string) => void;
 	readonly onSubmit: (text: string, attachments?: readonly unknown[]) => void;
+	readonly onStashSend?: (text: string, attachments?: readonly unknown[]) => void;
+	readonly viewContexts?: readonly { readonly callId: string }[];
+	readonly onRemoveViewContext?: (callId: string) => void;
 	readonly disabled: boolean;
 }
 
@@ -56,7 +72,20 @@ mock.module("@fraym/ui", () => ({
 	useSlashCommands: () => undefined,
 	useFileCompletions: () => undefined,
 	useArgumentCompletions: () => undefined,
+	// The kit's own binding, not a stand-in: see the last describe block.
+	useSectionViewContext: composerDraft.useSectionViewContext,
 }));
+
+/** The session keys this file staged View context under, emptied after each test: the store is
+ *  a module global. */
+const stagedKeys: string[] = [];
+
+/** A View declares context for the session a `mount(sessionId, …)` below will compose into. */
+function stage(sessionId: string, entry: ViewContextEntry): void {
+	const key = sessionRefKey({ workspaceId: "ws1", sessionId });
+	stagedKeys.push(key);
+	stageSessionViewContext(key, entry);
+}
 
 // Static imports are hoisted above `mock.module`, so the module under test must
 // be pulled in after the stand-ins are registered.
@@ -98,6 +127,7 @@ afterEach(async () => {
 	}
 	originalGlobals = undefined;
 	composer = null;
+	for (const key of stagedKeys.splice(0)) takeSessionViewContexts(key);
 });
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -115,6 +145,35 @@ function deferred<T>() {
 		settle = resolve;
 	});
 	return { promise, settle };
+}
+
+/** The store the host's seat boundary hands a pack: it answers ONE key, `seat/scope`, the
+ *  session the seat is bound to. `follow` is the host re-binding the seat when the human
+ *  switches session — the scope moves with the section's `sessionRef` prop. The snapshot is
+ *  the same object until it moves (an unstable one would loop `useSyncExternalStore`). */
+function seatStore(initialSessionId: string) {
+	const scopeFor = (sessionId: string) => ({ sessionId, workspaceId: "ws1", agent: null });
+	let scope = scopeFor(initialSessionId);
+	const listeners = new Set<() => void>();
+	const store: HostStore = {
+		read: <T,>(key: string) => (key === SEAT_SCOPE_KEY ? (scope as T) : undefined),
+		watch: <T,>(key: string) => ({
+			getSnapshot: () => (key === SEAT_SCOPE_KEY ? (scope as T) : undefined),
+			subscribe: (listener: () => void) => {
+				if (key !== SEAT_SCOPE_KEY) return () => {};
+				listeners.add(listener);
+				return () => {
+					listeners.delete(listener);
+				};
+			},
+		}),
+		act: () => {},
+	};
+	const follow = (sessionId: string) => {
+		scope = scopeFor(sessionId);
+		for (const listener of [...listeners]) listener();
+	};
+	return { store, follow };
 }
 
 interface Mounted {
@@ -142,13 +201,19 @@ async function mount(sessionId: string, reply: (input: unknown) => Promise<boole
 		sent.push(input);
 		return reply(input);
 	};
+	const seat = seatStore(sessionId);
+	const tree = (id: string) =>
+		createElement(HostStoreProvider, { store: seat.store }, createElement(IndependentComposer, propsFor(id, sendMessage)));
 	const root = createRoot(container);
 	roots.push(root);
-	await act(async () => root.render(createElement(IndependentComposer, propsFor(sessionId, sendMessage))));
+	await act(async () => root.render(tree(sessionId)));
 	return {
 		sent,
 		rerender: async (nextId: string) => {
-			await act(async () => root.render(createElement(IndependentComposer, propsFor(nextId, sendMessage))));
+			await act(async () => {
+				seat.follow(nextId);
+				root.render(tree(nextId));
+			});
 		},
 		unmount: async () => {
 			await act(async () => root.unmount());
@@ -358,5 +423,103 @@ describe("a stray second Enter cannot post the message twice", () => {
 		await flush();
 
 		expect(view.sent).toEqual([SENT, NEWER]);
+	});
+});
+
+// ── a View's staged context ──────────────────────────────────────────────────
+//
+// WHAT BREAKS IN THE PRODUCT IF THESE GO RED: a phone (or any space that binds THIS
+// composer instead of the classic one) stops showing what a View told the agent on the human's
+// behalf, or stops carrying it. The hook is the kit's REAL `useSectionViewContext` — the same
+// store the classic composer and a View's `ui/message` use, bound to the seat's session through
+// the `seat/scope` store `mount` provides — not a stand-in, because "spent by the send, back on
+// a failure" is the store's behaviour and a stand-in could only echo the pack's wiring.
+
+const ANNOTATION = {
+	callId: "browser/view#1",
+	serverId: "browser",
+	tool: "browser_view",
+	label: "Browser · example.com",
+	text: "browserId: b-7\nThe human circled the checkout button.",
+	images: [{ data: "iVBORw0KGgo=", mimeType: "image/png" }],
+};
+
+const chipIds = () => (composer?.viewContexts ?? []).map(chip => chip.callId);
+
+describe("a View's staged context in the independent composer", () => {
+	test("it shows as chips, and the ✕ withdraws one", async () => {
+		stage("chips", ANNOTATION);
+		await mount("chips", async () => true);
+		expect(chipIds()).toEqual(["browser/view#1"]);
+
+		await act(async () => composer?.onRemoveViewContext?.("browser/view#1"));
+
+		expect(chipIds()).toEqual([]);
+	});
+
+	test("the composer's own send carries it once: words as typed, the fence for the model, the image attached", async () => {
+		stage("carry", ANNOTATION);
+		const view = await mount("carry", async () => true);
+		await type(SENT);
+
+		await submit(SENT);
+		await flush();
+		await type("and one more thing");
+		await submit("and one more thing");
+		await flush();
+
+		expect(view.sent).toHaveLength(2);
+		const [first, second] = view.sent as [{ text: string; expansion: string; attachments: unknown[] }, unknown];
+		// The human's words stay what they typed; the model-facing text carries the View's body
+		// inside ONE open/close pair that names the same nonce. The fence's exact wording is the
+		// kit's, pinned in the kit's own tests, not here.
+		expect(first.text).toBe(SENT);
+		expect(first.expansion.startsWith(SENT)).toBe(true);
+		expect(first.expansion).toContain(ANNOTATION.text);
+		expect(first.expansion).toMatch(/<artifact-context id="([0-9a-f]+)"[^>]*>[\s\S]*<\/artifact-context id="\1">$/);
+		expect(first.attachments).toEqual([
+			{ kind: "image", mimeType: "image/png", data: "iVBORw0KGgo=", name: "Browser · example.com" },
+		]);
+		// ...and it rode ONE message: the next goes out as typed.
+		expect(second).toBe("and one more thing");
+		expect(chipIds()).toEqual([]);
+	});
+
+	test("a chip the human removed is not sent", async () => {
+		stage("removed", ANNOTATION);
+		const view = await mount("removed", async () => true);
+		// Guard: the chip really was there to remove.
+		expect(chipIds()).toEqual(["browser/view#1"]);
+		await act(async () => composer?.onRemoveViewContext?.("browser/view#1"));
+		await type(SENT);
+
+		await submit(SENT);
+		await flush();
+
+		expect(view.sent).toEqual([SENT]);
+	});
+
+	test("a send the host refuses puts the chip back beside the words that stayed", async () => {
+		stage("refused-chip", ANNOTATION);
+		const view = await mount("refused-chip", async () => false);
+		await type(SENT);
+
+		await submit(SENT);
+		await flush();
+
+		expect(view.sent).toHaveLength(1);
+		expect(value_()).toBe(SENT);
+		expect(chipIds()).toEqual(["browser/view#1"]);
+	});
+
+	test("a stash send never lived in this field, so it spends nothing", async () => {
+		stage("stash", ANNOTATION);
+		const view = await mount("stash", async () => true);
+
+		await act(async () => composer?.onStashSend?.("parked words", []));
+		await flush();
+
+		expect(view.sent).toEqual(["parked words"]);
+		expect(chipIds()).toEqual(["browser/view#1"]);
 	});
 });
