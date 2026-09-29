@@ -142,24 +142,26 @@ describe("save_agent", () => {
 });
 
 describe("forge_propose", () => {
-	test("offers the model no tools or approval field, and carries none into the draft", async () => {
+	test("offers the model no tools, approval or recall-scope field, and carries none into the draft", async () => {
 		const { tools } = await client.listTools();
 		const schema = tools.find(tool => tool.name === "forge_propose")?.inputSchema.properties ?? {};
 		expect(Object.keys(schema)).not.toContain("tools");
 		expect(Object.keys(schema)).not.toContain("approval");
+		expect(Object.keys(schema)).not.toContain("memoryScope");
 
-		const result = await call("forge_propose", { name: "scout", description: "Finds things", skills: ["fallow"], tools: ["bash"], approval: "yolo" });
+		const result = await call("forge_propose", { name: "scout", description: "Finds things", skills: ["fallow"], tools: ["bash"], approval: "yolo", memoryScope: "global" });
 		expect(result.isError).toBeFalsy();
 		const { proposal } = result.structuredContent as unknown as ForgeProposed;
 		expect(proposal).toEqual({ name: "scout", description: "Finds things", skills: ["fallow"] });
 	});
 
-	test("merged into a draft, a proposal leaves the human's tools and gate alone", () => {
-		const base = draft({ tools: ["read"], approval: "always-ask" });
-		const hostile = { name: "release-herald", charter: "New charter", tools: ["bash"], approval: "yolo" } as AgentProposal;
+	test("merged into a draft, a proposal leaves the human's tools, gate and recall scope alone", () => {
+		const base = draft({ tools: ["read"], approval: "always-ask", memoryScope: "project" });
+		const hostile = { name: "release-herald", charter: "New charter", tools: ["bash"], approval: "yolo", memoryScope: "global" } as AgentProposal;
 		const merged = applyProposal(base, hostile);
 		expect(merged.tools).toEqual(["read"]);
 		expect(merged.approval).toBe("always-ask");
+		expect(merged.memoryScope).toBe("project");
 		expect(merged.charter).toBe("New charter");
 	});
 });
@@ -207,5 +209,68 @@ describe("the project config dir", () => {
 		} finally {
 			await rm(ws, { recursive: true, force: true });
 		}
+	});
+});
+
+describe("recall scope", () => {
+	// The Recall switch is the agent's `workspace.reach` grant, not a memory
+	// key: what the human toggled is what the engine reads back.
+	const listed = async (name: string) => {
+		const listing = (await call("list_agents", {})).structuredContent as unknown as AgentListing;
+		const found = listing.agents.find(agent => agent.name === name);
+		if (!found) throw new Error(`${name} was not listed`);
+		return found;
+	};
+	const manifestOf = async (name: string) => {
+		const parsed = parseGeneralAgent(await readFile(agentFile(name), "utf8"), agentFile(name), name);
+		if (!parsed.ok) throw new Error(parsed.errors.join("; "));
+		return parsed.decl.manifest;
+	};
+
+	test("'Every project' writes workspace.reach: all, keeps the habitat, and reads back as the same switch", async () => {
+		await call("save_agent", { draft: draft({ memory: "engram", memoryScope: "global" }), create: true });
+		const manifest = await manifestOf("release-herald");
+		expect(manifest.workspace).toEqual({ policy: "bound", reach: "all" });
+		expect(manifest.memory).toEqual({ backend: "engram" });
+
+		const readBack = await listed("release-herald");
+		expect(readBack.editable).toBe(true);
+		expect(readBack.draft).toMatchObject({ memory: "engram", memoryScope: "global", habitat: "bound" });
+
+		await call("save_agent", { draft: draft({ name: "homebody", memoryScope: "global", habitat: "home" }), create: true });
+		expect((await manifestOf("homebody")).workspace).toEqual({ policy: "home", id: "agent-homebody", reach: "all" });
+	});
+
+	test("'This project' writes no grant, and an agent with memory off never carries one", async () => {
+		await call("save_agent", { draft: draft({ memory: "engram", memoryScope: "project" }), create: true });
+		expect((await manifestOf("release-herald")).workspace).toBeUndefined();
+
+		await call("save_agent", { draft: draft({ name: "amnesiac", memory: "off", memoryScope: "global" }), create: true });
+		expect((await manifestOf("amnesiac")).workspace).toBeUndefined();
+	});
+
+	test("a manifest that still says memory.vault opens editable, reads as 'This project', and is never written back", async () => {
+		const old = "---\nname: elder\ndescription: authored before memory.vault was removed\nspecVersion: 1\ngate:\n  approval: write\nmemory:\n  backend: engram\n  vault: global\n---\nRemember everything.\n";
+		await put(agentFile("elder"), old);
+		const opened = await listed("elder");
+		expect(opened.editable).toBe(true);
+		expect(opened.draft).toMatchObject({ memory: "engram", memoryScope: "project" });
+
+		const result = await call("save_agent", { draft: opened.draft, create: false });
+		expect(result.isError).toBeFalsy();
+		const rewritten = await readFile(agentFile("elder"), "utf8");
+		expect(rewritten).not.toMatch(/^\s*vault:/m);
+		expect(rewritten).toContain("backend: engram");
+	});
+
+	test("a reach the switch cannot draw opens read-only instead of being widened or dropped", async () => {
+		const scoped = "---\nname: scoped\ndescription: reads two named workspaces\nspecVersion: 1\ngate:\n  approval: write\nworkspace:\n  policy: bound\n  reach: [inso, docs]\n---\nRead the siblings.\n";
+		await put(agentFile("scoped"), scoped);
+		const opened = await listed("scoped");
+		expect(opened.editable).toBe(false);
+		expect(opened.readOnlyReason).toContain("workspace.reach: [inso, docs]");
+		const rewrite = await call("save_agent", { draft: opened.draft, create: false });
+		expect(rewrite.isError).toBe(true);
+		expect(await readFile(agentFile("scoped"), "utf8")).toBe(scoped);
 	});
 });

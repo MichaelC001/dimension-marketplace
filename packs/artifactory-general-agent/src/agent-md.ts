@@ -63,6 +63,9 @@ export interface AgentDraft {
 	/** `capabilities.mcp` allowlist. Empty = every server (key omitted). */
 	mcp: string[];
 	memory: MemoryBackend;
+	/** `project` = the agent recalls its own project; `global` = every project
+	 *  (`workspace.reach: all`). Never `memory.*` — the recall scope is the
+	 *  agent's reach grant. */
 	memoryScope: MemoryScope;
 	approval: Approval;
 	habitat: Habitat;
@@ -73,9 +76,10 @@ export interface AgentDraft {
 }
 
 /** The fields the WORKSHOP (the model, through `forge_propose`) may fill. The
- *  two security fields — `tools` (`capabilities.tools`) and `approval`
- *  (`gate.approval`) — are deliberately absent: doc 58 §3, only a human gesture
- *  in the View changes them. */
+ *  three security fields — `tools` (`capabilities.tools`), `approval`
+ *  (`gate.approval`) and `memoryScope` (`workspace.reach`, a cross-project
+ *  grant) — are deliberately absent: doc 58 §3, only a human gesture in the
+ *  View changes them. */
 export const PROPOSABLE_FIELDS = [
 	"name",
 	"description",
@@ -205,15 +209,20 @@ export function manifestLines(draft: AgentDraft): ManifestLine[] {
 	if (draft.memory !== "inherit") {
 		push("memory", "memory:");
 		push("memory.backend", `  backend: ${draft.memory}`);
-		if (draft.memory !== "off" && draft.memoryScope === "global") push("memory.vault", "  vault: global");
 	}
 
-	if (draft.habitat !== "bound") {
+	// Recall across every project is not a memory key: the agent's recall scope
+	// follows its `workspace.reach` grant, so "Every project" writes
+	// `reach: all` (and, with it, the control verbs' reach — the grant is one).
+	// A memory-less agent has nothing to recall, so it never carries the grant.
+	const reachAll = draft.memory !== "off" && draft.memoryScope === "global";
+	if (draft.habitat !== "bound" || reachAll) {
 		push("workspace", "workspace:");
 		push("workspace.policy", `  policy: ${draft.habitat}`);
 		// `home` REQUIRES an id (agent-manifest.ts AgentWorkspacePolicy); the
 		// agent's own name is the managed workspace it is provisioned into.
 		if (draft.habitat === "home") push("workspace.id", `  id: ${scalar(`agent-${draft.name || "unnamed"}`)}`);
+		if (reachAll) push("workspace.reach", "  reach: all");
 	}
 	push("fence", "---");
 	const body = draft.charter.trim() === "" ? ["…"] : draft.charter.replace(/\s+$/, "").split("\n");
