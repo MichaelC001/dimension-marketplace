@@ -35,10 +35,11 @@ session's workspace, and the View's calls — stamped with the same session —
 resolve against it. `DIMENSION_FORGE_WORKSPACE` is the fallback for a session
 that never named one. Without either, the View says so instead of guessing.
 
-**Security (doc 58 §3).** `capabilities.tools` and `gate.approval` change only
-by a human gesture in the View: `forge_propose` cannot carry them (its schema
-has neither), merging a proposal never touches them, and `save_agent` is
-App-only — the model cannot write a file at all.
+**Security (doc 58 §3).** `capabilities.tools`, `gate.approval` and the Recall
+switch (`workspace.reach`, a cross-project grant) change only by a human
+gesture in the View: `forge_propose` cannot carry them (its schema has none of
+them), merging a proposal never touches them, and `save_agent` is App-only — the
+model cannot write a file at all.
 
 `modelSpaces` grants the model surface in every space that exists today:
 `code` (compiled in), `build`, `example-hub`, `phone` (community packs) and
@@ -61,7 +62,7 @@ orbit, in the aurora hue Fraym already sanctions:
 | Tools | accent | `capabilities.tools` | every tool (key omitted) |
 | Skills | blue | `capabilities.skills` | every skill |
 | MCP | iris | `capabilities.mcp` | every server |
-| Memory | cyan band | `memory.backend` (+ `vault: global`) | inherits the host's |
+| Memory | cyan band | `memory.backend` | inherits the host's |
 | Lineage | silver, with a beam to the core | `extends` | none |
 
 Gestures, all of which rewrite the `agent.md` beside the orrery live (changed
@@ -79,6 +80,11 @@ lines flash):
   asks before everything, sparse asks before writes, none runs free.
 - **The pedestal** below is where it lives (`workspace.policy`): tethered to
   the workspace it was opened in, its own home, or a dashed scratch ring.
+- **The Recall switch** sets how far its memory reads: this project (nothing
+  written), or every project (`workspace.reach: all`). Reach is the agent's one
+  cross-project grant, so it also lets the agent's control tools target every
+  workspace. A manifest whose reach is a list of workspace ids opens read-only;
+  the orrery has no position for it.
 - **The line at the bottom** talks to your agent: the words go to the session
   as yours (`ui/message`), and what the agent proposes lands here for you to
   accept. In the preview there is no agent to talk to, and it says so.
