@@ -20,9 +20,11 @@
 import {
 	Composer,
 	GoalComposerSurface,
+	type SessionViewContext,
 	useArgumentCompletions,
 	useFileCompletions,
 	useObservable,
+	useSectionViewContext,
 	useSlashCommands,
 	UsageLimitComposerSurface,
 } from "@fraym/ui";
@@ -92,10 +94,14 @@ export default function IndependentComposer(props: ComposerSectionProps) {
 		readonly isStreaming?: boolean;
 		readonly turnPhase?: "streaming" | "settled";
 		readonly goal?: unknown;
+		readonly snapshot?: Parameters<SessionViewContext["hold"]>[1];
 	} | null;
 	const slashCommands = useSlashCommands(draft);
 	const fileCompletionSource = useFileCompletions();
 	const argumentCompletionSource = useArgumentCompletions();
+	// The View context staged for the session this seat was mounted for (the binding takes no
+	// session of its own): chips in the field, spent by the composer's own send.
+	const viewContext = useSectionViewContext();
 
 	const setDraftPersisted = (text: string) => {
 		setDraft(text);
@@ -112,6 +118,7 @@ export default function IndependentComposer(props: ComposerSectionProps) {
 	const send = async (
 		text: string,
 		attachments: readonly { readonly data: string; readonly mimeType: string; readonly name?: string }[] = [],
+		spendViewContext = false,
 	): Promise<boolean> => {
 		if (!actions || blocked) return false;
 		// NO `running` guard: `actions.sendMessage` is the ONE behavior path and
@@ -127,7 +134,13 @@ export default function IndependentComposer(props: ComposerSectionProps) {
 		// pills — dropping the second argument silently discarded every pasted
 		// image behind an "[Image #N]" marker. Map them to the wire shape the
 		// reference's sendComposed produces.
-		const images = attachments.map(a => ({ kind: "image", mimeType: a.mimeType, data: a.data, name: a.name }));
+		const images = attachments.map(a => ({
+			kind: "image" as const,
+			mimeType: a.mimeType,
+			data: a.data,
+			name: a.name,
+		}));
+		const input = images.length > 0 ? { text, attachments: images } : text;
 		// RETURN the host's delivery verdict. The comment above records this
 		// file's own history of vaporizing composed text; the FAILURE path had
 		// the same hole, because `onSubmit` clears the draft and this call threw
@@ -136,7 +149,11 @@ export default function IndependentComposer(props: ComposerSectionProps) {
 		// composer, not in the transcript, nowhere. `?? false` because a host
 		// older than this contract resolves `undefined`, and "no answer" must
 		// count as undelivered rather than as a silent success.
-		return (await actions.sendMessage(images.length > 0 ? { text, attachments: images } : text)) ?? false;
+		const deliver = async (message: unknown) => (await actions.sendMessage(message)) ?? false;
+		// The composer's own submit SPENDS the View context staged for this session
+		// (chips the human sees above the field); a goal command or a stash send does
+		// not — the first cannot carry it, the second never lived in this field.
+		return spendViewContext ? viewContext.send(input, deliver, undefined, facts?.snapshot) : deliver(input);
 	};
 	const stop = () => {
 		if (!actions) return;
@@ -173,7 +190,7 @@ export default function IndependentComposer(props: ComposerSectionProps) {
 				inFlight.current.add(flightId);
 				void (async () => {
 					try {
-						if (!(await send(text, attachments))) return;
+						if (!(await send(text, attachments, true))) return;
 						// Delivered. Now it is safe to drop the copy — and only if the user
 						// has not typed something newer while it was in flight.
 						if (drafts.get(sentKey) === text) drafts.delete(sentKey);
@@ -201,6 +218,8 @@ export default function IndependentComposer(props: ComposerSectionProps) {
 			slashCommands={slashCommands}
 			fileCompletionSource={fileCompletionSource}
 			argumentCompletionSource={argumentCompletionSource}
+			{...viewContext.composerProps}
+			viewContextHold={text => viewContext.hold(text, facts?.snapshot)}
 			topSlot={
 				<>
 					<UsageLimitComposerSurface />

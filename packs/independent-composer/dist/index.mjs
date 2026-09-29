@@ -1,4 +1,4 @@
-import { Composer, GoalComposerSurface, UsageLimitComposerSurface, useArgumentCompletions, useFileCompletions, useObservable, useSlashCommands } from "@fraym/ui";
+import { Composer, GoalComposerSurface, UsageLimitComposerSurface, useArgumentCompletions, useFileCompletions, useObservable, useSectionViewContext, useSlashCommands } from "@fraym/ui";
 import { useRef, useState } from "react";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
 //#region src/index.tsx
@@ -22,10 +22,12 @@ function IndependentComposer(props) {
 	liveKeyRef.current = draftKey;
 	const draftRef = useRef(draft);
 	draftRef.current = draft;
+	const inFlight = useRef(/* @__PURE__ */ new Set());
 	const facts = useObservable(session ?? NO_SESSION) ?? null;
 	const slashCommands = useSlashCommands(draft);
 	const fileCompletionSource = useFileCompletions();
 	const argumentCompletionSource = useArgumentCompletions();
+	const viewContext = useSectionViewContext();
 	const setDraftPersisted = (text) => {
 		setDraft(text);
 		if (draftKey) if (text) drafts.set(draftKey, text);
@@ -34,7 +36,7 @@ function IndependentComposer(props) {
 	const blocked = disabled || !sessionRef || !actions || continuation.continued;
 	const running = Boolean(facts?.isStreaming) || facts?.turnPhase === "streaming";
 	const goal = facts?.goal ?? null;
-	const send = async (text, attachments = []) => {
+	const send = async (text, attachments = [], spendViewContext = false) => {
 		if (!actions || blocked) return false;
 		const images = attachments.map((a) => ({
 			kind: "image",
@@ -42,10 +44,12 @@ function IndependentComposer(props) {
 			data: a.data,
 			name: a.name
 		}));
-		return await actions.sendMessage(images.length > 0 ? {
+		const input = images.length > 0 ? {
 			text,
 			attachments: images
-		} : text) ?? false;
+		} : text;
+		const deliver = async (message) => await actions.sendMessage(message) ?? false;
+		return spendViewContext ? viewContext.send(input, deliver, void 0, facts?.snapshot) : deliver(input);
 	};
 	const stop = () => {
 		if (!actions) return;
@@ -56,10 +60,17 @@ function IndependentComposer(props) {
 		onChange: setDraftPersisted,
 		onSubmit: (text, attachments) => {
 			const sentKey = draftKey;
+			const flightId = `${sentKey}\u0000${text}`;
+			if (inFlight.current.has(flightId)) return;
+			inFlight.current.add(flightId);
 			(async () => {
-				if (!await send(text, attachments)) return;
-				if (drafts.get(sentKey) === text) drafts.delete(sentKey);
-				if (liveKeyRef.current === sentKey && draftRef.current === text) setDraft("");
+				try {
+					if (!await send(text, attachments, true)) return;
+					if (drafts.get(sentKey) === text) drafts.delete(sentKey);
+					if (liveKeyRef.current === sentKey && draftRef.current === text) setDraft("");
+				} finally {
+					inFlight.current.delete(flightId);
+				}
 			})();
 		},
 		onStashSend: (text, attachments) => void send(text, attachments),
@@ -75,6 +86,8 @@ function IndependentComposer(props) {
 		slashCommands,
 		fileCompletionSource,
 		argumentCompletionSource,
+		...viewContext.composerProps,
+		viewContextHold: (text) => viewContext.hold(text, facts?.snapshot),
 		topSlot: /* @__PURE__ */ jsxs(Fragment, { children: [/* @__PURE__ */ jsx(UsageLimitComposerSurface, {}), goal?.objective ? /* @__PURE__ */ jsx(GoalComposerSurface, {
 			goal,
 			disabled: blocked,
