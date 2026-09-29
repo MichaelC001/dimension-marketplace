@@ -339,6 +339,23 @@ export function startFixture(): Fixture {
 			if (pathname === "/late") {
 				return html(page("late", `<p>starting</p><script>setTimeout(() => { document.body.insertAdjacentHTML("beforeend", '<p id="late">late arrival text</p>'); }, 300); setTimeout(() => history.replaceState(null, "", "/late?done=1"), 500);</script>`));
 			}
+			// An app with a global of its own, for a script run in the page's main world to read.
+			if (pathname === "/app") return html(page("app", `<p id="out">ready</p><script>window.appState = { count: 3, items: ["a", "b"] };</script>`));
+			// A page that goes wrong every way a developer cares about; the query strings carry a token that must never be kept.
+			if (pathname === "/broken") {
+				return html(page("broken", `<script>
+console.error("boom from the app");
+console.warn("careful now");
+setTimeout(() => { throw new Error("uncaught in the app"); }, 0);
+// Once both requests have answered, so a test can wait for the page to have finished going wrong.
+Promise.allSettled([fetch("/nope?token=SECRET-TOKEN"), fetch("http://127.0.0.1:1/unreachable?token=SECRET-TOKEN")]).then(() => document.body.insertAdjacentHTML("beforeend", '<p id="settled">settled</p>'));
+</script>`));
+			}
+			// Thirty 100px blocks, edge to edge: a page far taller than any viewport.
+			if (pathname === "/tall") {
+				const blocks = Array.from({ length: 30 }, (_, i) => `<div style="height:100px;background:hsl(${i * 12},80%,50%)">block ${i}</div>`).join("");
+				return html(page("tall", blocks, "<style>body{margin:0}</style>"));
+			}
 			if (pathname === "/brand.png") return new Response(FAVICON_PNG, { headers: { "content-type": "image/png" } });
 			// Answers only after SLOW_PAGE_MS: a navigation that stays in flight long enough to observe.
 			if (pathname === "/slow") {

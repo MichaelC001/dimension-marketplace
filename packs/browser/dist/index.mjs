@@ -381,7 +381,7 @@ function BrowserAccounts({ sessionId, store }) {
 		return () => clearInterval(timer);
 	}, []);
 	const launch = useMemo(() => store && sessionId ? (args) => store.act("openArtifactoryView", {
-		tool: "browser_open",
+		tool: "browser_view",
 		args
 	}) : null, [store, sessionId]);
 	const signIn = useMemo(() => launch ? (name, url) => launch({

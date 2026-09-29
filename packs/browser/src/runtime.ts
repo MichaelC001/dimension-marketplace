@@ -30,6 +30,15 @@ import { type ConnectionObservations, siteHost } from "./connection.js";
 import { RELAY_PROFILE } from "./profile-name.js";
 import type {
 	ActionResult,
+	ActManyResult,
+	BatchStep,
+	EvalStep,
+	LogEntry,
+	ModelShot,
+	ShotRequest,
+	TabOp,
+	CredentialUse,
+	HandledDialog,
 	BrowserAction,
 	BrowserAnnotation,
 	BrowserEngine,
@@ -58,12 +67,14 @@ import type {
 	InspectResult,
 	WaitRequest,
 	WaitResult,
+	StepOutcome,
+	StepStatus,
 } from "./contracts.js";
-import { BROWSER_ENGINES, MAX_WAIT_MS, TASK_AGENTS } from "./contracts.js";
+import { BROWSER_ENGINES, MAX_BATCH_STEPS, MAX_EVAL_EXPRESSION_CHARS, MAX_EVAL_RESULT_CHARS, MAX_VIEWPORT, MAX_WAIT_MS, MIN_VIEWPORT, TASK_AGENTS } from "./contracts.js";
 import { credentialOrigin, resolveCredential, savedPassword, savedPasswords } from "./credentials.js";
 import { assertEngineAvailable, createEngineDriver } from "./engines/index.js";
 import { launchReader } from "./engines/puppeteer.js";
-import type { EngineDriver, EngineState, PageReader, PasswordSource, PerformOutcome, WaitCondition } from "./engines/types.js";
+import type { EngineDriver, EngineState, EvalOutcome, PageReader, PasswordSource, PerformOutcome, WaitCondition } from "./engines/types.js";
 import { cropRegion, MAX_FRAME_BYTES } from "./image.js";
 import { type Publication, cancel, confirm, isPending, prepare, publishRecord, requirePending, validateMode, validateRecipe, waitSettled } from "./publish.js";
 import { blockedReason, DEFAULT_READ_CHARS, MAX_READ_CHARS, READ_TIMEOUT_MS, readPolicy, TIMEOUT_REASON } from "./read.js";
@@ -77,6 +88,10 @@ const MAX_BROWSERS = 4;
 /** browser_read's reader browser is closed this long after its last read. */
 const READER_IDLE_MS = 60_000;
 const MAX_FRAMES_RETAINED = 8;
+/** A batch takes no new step after this long: a host times a tool call out (the desktop at 30 s). */
+const ACT_BUDGET_MS = 20_000;
+/** Dialogs a batch reports, as many as a state does. */
+const MAX_BATCH_DIALOGS = 5;
 const MAX_SNAPSHOT_CHARS = 20_000;
 const MAX_ELEMENT_CHARS = 4_000;
 const MAX_TEXT_INPUT = 4_096;
@@ -92,10 +107,6 @@ const DEFAULT_WAIT_MS = 5_000;
 const MAX_WAIT_MATCH_CHARS = 2_048;
 const DEFAULT_TASK_STEPS = 60;
 const TASK_STEPS_RETAINED = 100;
-const MIN_WIDTH = 320;
-const MAX_WIDTH = 2_560;
-const MIN_HEIGHT = 240;
-const MAX_HEIGHT = 2_000;
 const DEFAULT_VIEWPORT: Viewport = { width: 1_280, height: 800 };
 const NAMED_KEYS: Record<string, true> = {
 	Enter: true,
@@ -125,6 +136,8 @@ export interface BrowserRuntimeOptions {
 	relayUrl?: string;
 	/** Explicit browser visibility; omitted uses each engine's supported default. */
 	headless?: boolean;
+	/** How long a batch (`actMany`) may go on taking steps; defaults to ACT_BUDGET_MS. */
+	actBudgetMs?: number;
 	/**
 	 * TESTS ONLY: exact hostnames browser_read may reach although they are
 	 * loopback/private (the local fixture on 127.0.0.1). Never set in
@@ -132,6 +145,23 @@ export interface BrowserRuntimeOptions {
 	 */
 	allowPrivateReadHosts?: readonly string[];
 }
+
+/** A wait step after `validateWait`. */
+interface PlannedWait { kind: "wait"; condition: WaitCondition; timeoutMs: number }
+
+/** What one step did, before it is filed in a result. */
+interface StepDone { status: StepStatus; error?: string; credential?: CredentialUse; dialogs?: HandledDialog[]; value?: string; truncated?: boolean }
+
+/** A dispatched action either completed or was reported `failed`/`unknown`, never a throw. */
+type Dispatched = { status: "completed"; credential?: CredentialUse; dialogs?: HandledDialog[] } | { status: "failed" | "unknown"; error: string };
+
+/** A tab step after `admitTab`: `url`, when given, is already canonical. */
+interface PlannedTab { kind: "tab"; op: TabOp; tabId?: string; url?: string }
+
+/** An eval step that was admitted: the browser is a throwaway one. */
+interface PlannedEval { kind: "eval"; expression: string }
+
+type PlannedStep = BrowserAction | PlannedWait | PlannedTab | PlannedEval;
 
 interface FrameRecord {
 	id: string;
@@ -172,6 +202,12 @@ interface Entry {
 	 * credentials file must not un-redact a password already typed.
 	 */
 	secrets: Set<string>;
+	/**
+	 * The newest log entry (`LogEntry.n`) a model has read (browser_state) and the newest one it was told the count
+	 * of (`newErrors`), so each is reported once; the View reads neither.
+	 */
+	logRead: number;
+	logNoticed: number;
 }
 
 export class BrowserRuntime implements BrowserRuntimePort {
@@ -179,6 +215,12 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	private readonly options: BrowserRuntimeOptions;
 	private readonly byId = new Map<string, Entry>();
 	private readonly byProfile = new Map<string, Entry>();
+	/**
+	 * The browser the human opened or is viewing in each session, by the session id the HOST stamped on the call
+	 * (never one a caller passed). It lets that session's model find a browser it was never handed an id for;
+	 * an entry goes when its browser does.
+	 */
+	private readonly viewBySession = new Map<string, string>();
 	/** In-flight launches, so a second open cannot race a first one. */
 	private readonly opening = new Map<string, Promise<Entry>>();
 	/**
@@ -317,7 +359,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				browserId: randomBytes(24).toString("base64url"),
 				profile, engine, viewport: initial.viewport, documentId: initial.documentId,
 				driver, release, revision: 1, frames: [], queue: Promise.resolve(), closed: false,
-				task: null, worker: null, publish: null, secrets: new Set(),
+				task: null, worker: null, publish: null, secrets: new Set(), logRead: 0, logNoticed: 0,
 			};
 			this.byId.set(entry.browserId, entry);
 			if (profile !== null) this.byProfile.set(profile, entry);
@@ -412,6 +454,16 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		entry.worker?.process.cancel();
 		this.byId.delete(entry.browserId);
 		if (entry.profile !== null && this.byProfile.get(entry.profile) === entry) this.byProfile.delete(entry.profile);
+		for (const [session, browserId] of this.viewBySession) if (browserId === entry.browserId) this.viewBySession.delete(session);
+	}
+
+	bindView(session: string, browserId: string): void {
+		const entry = this.byId.get(browserId);
+		if (entry && !entry.closed) this.viewBySession.set(session, browserId);
+	}
+
+	viewOf(session: string): string | undefined {
+		return this.viewBySession.get(session);
 	}
 
 	// -----------------------------------------------------------------------
@@ -473,6 +525,38 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				capturedAt: record.capturedAt,
 			};
 		});
+	}
+
+	/** A read like `snapshot`; the picture is for a model, so nothing of it is kept (`entry.frames` holds annotatable frames only). */
+	async shot(browserId: string, request: ShotRequest = {}): Promise<ModelShot> {
+		const scale = request.scale;
+		if (scale !== undefined && !(Number.isFinite(scale) && scale > 0 && scale <= 1)) fail("bad_shot", "scale must be above 0 and at most 1");
+		if (request.fullPage && request.selector !== undefined) fail("bad_shot", "pass fullPage or selector, not both");
+		const selector = request.selector === undefined ? undefined : requireReadSelector(request.selector);
+		return await this.serialize(this.require(browserId), async (entry) => {
+			const state = await this.refreshState(entry);
+			const picture = await entry.driver.shotForModel({
+				...(request.fullPage ? { fullPage: true } : {}),
+				...(selector === undefined ? {} : { selector }),
+				...(scale === undefined ? {} : { scale }),
+			});
+			return { ...picture, url: this.redact(entry, state.url) };
+		});
+	}
+
+	async logs(browserId: string): Promise<LogEntry[]> {
+		const entry = this.require(browserId);
+		const fresh = entry.driver.logs().filter((log) => log.n > entry.logRead);
+		entry.logRead = Math.max(entry.logRead, fresh.at(-1)?.n ?? 0);
+		return this.redact(entry, fresh);
+	}
+
+	/** How many log entries are newer than anything a model was told or shown; they count as told from now on. */
+	private noticeLogs(entry: Entry): number {
+		const told = Math.max(entry.logRead, entry.logNoticed);
+		const entries = entry.driver.logs();
+		entry.logNoticed = Math.max(told, entries.at(-1)?.n ?? 0);
+		return entries.filter((log) => log.n > told).length;
 	}
 
 	async snapshot(browserId: string): Promise<{ state: BrowserState; text: string }> {
@@ -624,37 +708,31 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	 */
 	async tab(browserId: string, request: TabRequest, caller?: ToolCaller): Promise<BrowserState> {
 		const entry = this.require(browserId);
-		if (!request || typeof request !== "object") fail("bad_tab", "tab request must be an object");
-		const navigate = request.op === "new" && request.url !== undefined
-			? normalizeAction({ kind: "navigate", url: request.url })
-			: undefined;
-		if ((request.op === "activate" || request.op === "close") && (typeof request.tabId !== "string" || request.tabId.length === 0 || request.tabId.length > MAX_TAB_ID_CHARS)) {
-			fail("bad_tab", `${request.op} needs the tabId from state.tabs`);
-		}
+		const planned = admitTab(request);
 		return await this.serialize(entry, async () => {
-			if (entry.task?.status === "running") {
-				fail("task_running", `a browser_task (${entry.task.agent}) owns this page; wait for it or cancel it`);
-			}
-			refuseWhilePublishing(entry, caller);
-			switch (request.op) {
-				case "new":
-					try {
-						await entry.driver.openTab(navigate?.url);
-					} catch (error) {
-						fail("tab_failed", `opening a new tab${navigate ? ` at ${navigate.url}` : ""} failed: ${describe(error)}`);
-					}
-					break;
-				case "activate":
-					await entry.driver.activateTab(request.tabId as string);
-					break;
-				case "close":
-					await entry.driver.closeTab(request.tabId as string);
-					break;
-				default:
-					fail("bad_tab", `op must be one of: new, activate, close`);
-			}
+			refuseWhileBusy(entry, caller);
+			await this.applyTab(entry, planned);
 			return this.redact(entry, await this.buildState(entry));
 		});
+	}
+
+	/** One admitted tab operation, under the caller's lock. */
+	private async applyTab(entry: Entry, tab: PlannedTab): Promise<void> {
+		switch (tab.op) {
+			case "new":
+				try {
+					await entry.driver.openTab(tab.url);
+				} catch (error) {
+					fail("tab_failed", `opening a new tab${tab.url ? ` at ${tab.url}` : ""} failed: ${describe(error)}`);
+				}
+				break;
+			case "activate":
+				await entry.driver.activateTab(tab.tabId as string);
+				break;
+			case "close":
+				await entry.driver.closeTab(tab.tabId as string);
+				break;
+		}
 	}
 
 	// -----------------------------------------------------------------------
@@ -664,63 +742,201 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	async act(browserId: string, input: BrowserAction, caller?: ToolCaller): Promise<ActionResult> {
 		const entry = this.require(browserId);
 		return await this.serialize(entry, async () => {
-			if (entry.task?.status === "running") {
-				fail("task_running", `a browser_task (${entry.task.agent}) owns this page; wait for it or cancel it`);
+			refuseWhileBusy(entry, caller);
+			const done = await this.dispatch(entry, this.admit(entry, input, caller), caller);
+			if (done.status !== "completed") {
+				return this.redact(entry, { status: done.status, error: done.error, state: await this.buildState(entry).catch(() => this.staleState(entry)) });
 			}
-			refuseWhilePublishing(entry, caller);
-			const action = normalizeAction(input);
-			// The human driving the pinned page while waiting may hit the site's own submit.
-			const pinned = caller === "app" && TOUCHING_KINDS[action.kind] && isPending(entry.publish) ? entry.publish : null;
-			// Another tab is not the page being confirmed; an unreadable state counts as the pinned one.
-			const touching = pinned !== null && ((await entry.driver.state().catch(() => null))?.activeTabId ?? pinned.record.tabId) === pinned.record.tabId ? pinned : null;
+			return this.redact(entry, {
+				status: "completed" as const,
+				state: await this.buildState(entry),
+				...(done.credential ? { credential: done.credential } : {}),
+				...(done.dialogs ? { dialogs: done.dialogs } : {}),
+			});
+		});
+	}
+
+	/**
+	 * A batch of steps under the one per-browser lock (a loop of `act` would take it once per step and let another
+	 * caller's action land between two of them). Refused once; every step is checked before the first reaches the
+	 * page; steps run in order until one is not `completed` or the time budget is spent (a host times a call out, and a
+	 * caller that never heard back would send the same submit again). The state is read once, at the end.
+	 */
+	async actMany(browserId: string, steps: readonly BatchStep[], caller?: ToolCaller): Promise<ActManyResult> {
+		const entry = this.require(browserId);
+		if (!Array.isArray(steps) || steps.length < 1 || steps.length > MAX_BATCH_STEPS) fail("bad_action", `actions must be 1-${MAX_BATCH_STEPS} steps`);
+		return await this.serialize(entry, async () => {
+			refuseWhileBusy(entry, caller);
+			const plan = steps.map((step) => this.admitStep(entry, step, caller));
+			const budget = this.options.actBudgetMs ?? ACT_BUDGET_MS;
+			const deadline = Date.now() + budget;
+			const outcomes: StepOutcome[] = [];
+			const dialogs: HandledDialog[] = [];
+			// What the batch's eval steps may still return between them.
+			let valueChars = MAX_EVAL_RESULT_CHARS;
+			let stopped: StepDone | undefined;
+			for (const [index, step] of plan.entries()) {
+				if (index > 0 && Date.now() >= deadline) {
+					stopped = { status: "timeout", error: `the batch's time budget (${budget} ms) ran out after ${index} of ${plan.length} steps; send the remaining steps in a new call` };
+					break;
+				}
+				const done = await this.runStep(entry, step, caller, valueChars);
+				valueChars -= done.value?.length ?? 0;
+				outcomes.push({
+					kind: step.kind,
+					status: done.status,
+					...(done.error === undefined ? {} : { error: done.error }),
+					...(done.credential ? { credential: done.credential } : {}),
+					...(done.value === undefined ? {} : { value: done.value }),
+					...(done.truncated ? { truncated: true as const } : {}),
+				});
+				if (done.dialogs) dialogs.push(...done.dialogs);
+				if (done.status !== "completed") {
+					stopped = done;
+					break;
+				}
+			}
+			const state = stopped ? await this.buildState(entry).catch(() => this.staleState(entry)) : await this.buildState(entry);
+			const completed = outcomes.filter((outcome) => outcome.status === "completed").length;
+			const newErrors = caller === "app" ? 0 : this.noticeLogs(entry);
+			return this.redact(entry, {
+				status: stopped?.status ?? "completed",
+				...(stopped?.error === undefined ? {} : { error: stopped.error }),
+				completed,
+				steps: outcomes,
+				state,
+				...(dialogs.length === 0 ? {} : { dialogs: dialogs.slice(-MAX_BATCH_DIALOGS) }),
+				...(newErrors === 0 ? {} : { newErrors }),
+			});
+		});
+	}
+
+	private runStep(entry: Entry, step: PlannedStep, caller: ToolCaller | undefined, valueChars: number): Promise<StepDone> {
+		switch (step.kind) {
+			case "wait":
+				return this.waitStep(entry, step);
+			case "tab":
+				return this.tabStep(entry, step);
+			case "eval":
+				return this.evalStep(entry, step, valueChars);
+			default:
+				return this.dispatch(entry, step, caller);
+		}
+	}
+
+	/**
+	 * What about one action needs no page: its shape, and who may use a saved password where. Throws before
+	 * anything of a batch is dispatched, so an action that cannot run never leaves its predecessors half done.
+	 */
+	private admit(entry: Entry, input: BrowserAction, caller: ToolCaller | undefined): BrowserAction {
+		const action = normalizeAction(input);
+		if (action.useSavedPassword || action.generatePassword) {
 			// Opt-in only, and never for the View: the human's keystrokes and
 			// pastes arrive as insert and must type exactly what they typed.
-			if ((action.useSavedPassword || action.generatePassword) && caller === "app") {
-				fail("bad_action", "useSavedPassword and generatePassword are for the agent; the Browser View types exactly what the human typed");
-			}
-			let created = false;
-			let password: PasswordSource | undefined;
-			if (action.generatePassword || action.useSavedPassword) {
-				const profileDir = this.store.profileDir(this.savedProfile(entry, "typing a saved password"));
-				password = action.generatePassword
-					? (origin: string) => {
-						// The signup rule the task credential uses: the saved one, else mint and save.
-						const credential = resolveCredential(profileDir, { origin, mode: "signup" });
-						created = credential.created;
-						entry.secrets.add(credential.password);
-						return credential.password;
-					}
-					: (origin: string) => {
-						const value = savedPassword(profileDir, origin);
-						if (value) entry.secrets.add(value);
-						return value;
-					};
-			}
-			let outcome: PerformOutcome;
-			try {
-				outcome = await entry.driver.perform(action, password);
-				if (touching) touching.touchedWhilePending = true;
-			} catch (error) {
-				const dispatched = !(error instanceof ActionNotDispatched);
-				if (dispatched && touching) touching.touchedWhilePending = true;
-				if (dispatched) entry.revision += 1;
-				return this.redact(entry, {
-					status: dispatched ? "unknown" : "failed",
-					error: dispatched
-						? `The action was sent to the page, then failed; it may or may not have taken effect. Check the page before retrying. (${describe(error)})`
-						: describe(error),
-					state: await this.buildState(entry).catch(() => this.staleState(entry)),
-				});
-			}
-			const state = await this.buildState(entry);
-			const result: ActionResult = {
-				status: "completed",
-				state,
-				...(outcome.passwordOrigin ? { credential: { origin: outcome.passwordOrigin, created } } : {}),
-				...(outcome.dialogs ? { dialogs: outcome.dialogs } : {}),
+			if (caller === "app") fail("bad_action", "useSavedPassword and generatePassword are for the agent; the Browser View types exactly what the human typed");
+			this.savedProfile(entry, "typing a saved password");
+		}
+		return action;
+	}
+
+	private admitStep(entry: Entry, step: BatchStep, caller: ToolCaller | undefined): PlannedStep {
+		if (!step || typeof step !== "object") fail("bad_action", "each step must be an object");
+		switch (step.kind) {
+			case "wait":
+				return { kind: "wait", ...validateWait(step) };
+			case "tab":
+				return admitTab(step);
+			case "eval":
+				return this.admitEval(entry, step);
+			default:
+				return this.admit(entry, step, caller);
+		}
+	}
+
+	/** Model-written JavaScript runs only where nothing of the person's is in reach. */
+	private admitEval(entry: Entry, step: EvalStep): PlannedEval {
+		if (typeof step.expression !== "string" || step.expression.length === 0 || step.expression.length > MAX_EVAL_EXPRESSION_CHARS) {
+			fail("bad_action", `eval.expression must be a string of 1-${MAX_EVAL_EXPRESSION_CHARS} characters`);
+		}
+		if (entry.profile !== null || entry.engine !== "chromium") {
+			fail("eval_needs_throwaway", "eval runs your JavaScript in the page, so it only runs in a throwaway browser (no profile, engine chromium); this one holds a saved profile or is the user's own Chrome. Open a throwaway browser with browser_open and eval there.");
+		}
+		return { kind: "eval", expression: step.expression };
+	}
+
+	/** One admitted action, dispatched once on the active tab. A failure is a status, never a throw: earlier steps of a batch stay accounted for. */
+	private async dispatch(entry: Entry, action: BrowserAction, caller: ToolCaller | undefined): Promise<Dispatched> {
+		// The human driving the pinned page while waiting may hit the site's own submit.
+		const pinned = caller === "app" && TOUCHING_KINDS[action.kind] && isPending(entry.publish) ? entry.publish : null;
+		// Another tab is not the page being confirmed; an unreadable state counts as the pinned one.
+		const touching = pinned !== null && ((await entry.driver.state().catch(() => null))?.activeTabId ?? pinned.record.tabId) === pinned.record.tabId ? pinned : null;
+		let created = false;
+		let password: PasswordSource | undefined;
+		if (action.generatePassword || action.useSavedPassword) {
+			const profileDir = this.store.profileDir(this.savedProfile(entry, "typing a saved password"));
+			password = action.generatePassword
+				? (origin: string) => {
+					// The signup rule the task credential uses: the saved one, else mint and save.
+					const credential = resolveCredential(profileDir, { origin, mode: "signup" });
+					created = credential.created;
+					entry.secrets.add(credential.password);
+					return credential.password;
+				}
+				: (origin: string) => {
+					const value = savedPassword(profileDir, origin);
+					if (value) entry.secrets.add(value);
+					return value;
+				};
+		}
+		let outcome: PerformOutcome;
+		try {
+			outcome = await entry.driver.perform(action, password);
+			if (touching) touching.touchedWhilePending = true;
+		} catch (error) {
+			const dispatched = !(error instanceof ActionNotDispatched);
+			if (dispatched && touching) touching.touchedWhilePending = true;
+			if (dispatched) entry.revision += 1;
+			return {
+				status: dispatched ? "unknown" : "failed",
+				error: dispatched
+					? `The action was sent to the page, then failed; it may or may not have taken effect. Check the page before retrying. (${describe(error)})`
+					: describe(error),
 			};
-			return this.redact(entry, result);
-		});
+		}
+		return {
+			status: "completed",
+			...(outcome.passwordOrigin ? { credential: { origin: outcome.passwordOrigin, created } } : {}),
+			...(outcome.dialogs ? { dialogs: outcome.dialogs } : {}),
+		};
+	}
+
+	/** One admitted wait, run like `wait()`: the masked condition, and a timeout is a status. */
+	private async waitStep(entry: Entry, step: PlannedWait): Promise<StepDone> {
+		const held = await entry.driver.waitFor(step.condition, step.timeoutMs, (value) => this.redact(entry, value));
+		return held ? { status: "completed" } : { status: "timeout", error: `wait timed out after ${step.timeoutMs} ms` };
+	}
+
+	/** One admitted tab operation: a failure is a status, as for an action. */
+	private async tabStep(entry: Entry, step: PlannedTab): Promise<StepDone> {
+		try {
+			await this.applyTab(entry, step);
+		} catch (error) {
+			return { status: error instanceof ActionNotDispatched ? "failed" : "unknown", error: describe(error) };
+		}
+		return { status: "completed" };
+	}
+
+	/** One admitted eval: its value as JSON text (at most `limit` characters), or what it threw. */
+	private async evalStep(entry: Entry, step: PlannedEval, limit: number): Promise<StepDone> {
+		let outcome: EvalOutcome;
+		try {
+			outcome = await entry.driver.evaluate(step.expression, limit);
+		} catch (error) {
+			entry.revision += 1;
+			return { status: "unknown", error: `The script was sent to the page, then failed; it may or may not have taken effect. (${describe(error)})` };
+		}
+		if (!outcome.ok) return { status: outcome.ran ? "unknown" : "failed", error: outcome.error };
+		return { status: "completed", ...(outcome.value === undefined ? {} : { value: outcome.value }), ...(outcome.truncated ? { truncated: true } : {}) };
 	}
 
 	/**
@@ -733,10 +949,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		const entry = this.require(browserId);
 		const { condition, timeoutMs } = validateWait(request);
 		return await this.serialize(entry, async () => {
-			if (entry.task?.status === "running") {
-				fail("task_running", `a browser_task (${entry.task.agent}) owns this page; wait for it or cancel it`);
-			}
-			refuseWhilePublishing(entry, caller);
+			refuseWhileBusy(entry, caller);
 			const held = await entry.driver.waitFor(condition, timeoutMs, (value) => this.redact(entry, value));
 			return this.redact(entry, { status: held ? ("completed" as const) : ("timeout" as const), state: await this.buildState(entry) });
 		});
@@ -887,10 +1100,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		const valid = validateRecipe(recipe);
 		const selected = validateMode(mode);
 		return await this.serialize(entry, async () => {
-			if (entry.task?.status === "running") {
-				fail("task_running", `a browser_task (${entry.task.agent}) owns this page; wait for it or cancel it`);
-			}
-			refuseWhilePublishing(entry, caller);
+			refuseWhileBusy(entry, caller);
 			// Even from the View: a check or a second post would navigate away from the page awaiting confirmation.
 			if (isPending(entry.publish)) {
 				fail("publish_pending", "a publish is already awaiting confirmation; it must be posted, cancelled or expire first");
@@ -1132,6 +1342,17 @@ export class BrowserRuntime implements BrowserRuntimePort {
 // Validation
 // ---------------------------------------------------------------------------
 
+/** A tab request checked before anything runs: its shape, its op, and the tabId that activate and close need. */
+function admitTab(request: TabRequest): PlannedTab {
+	if (!request || typeof request !== "object") fail("bad_tab", "tab request must be an object");
+	if (request.op !== "new" && request.op !== "activate" && request.op !== "close") fail("bad_tab", "op must be one of: new, activate, close");
+	if (request.op !== "new" && (typeof request.tabId !== "string" || request.tabId.length === 0 || request.tabId.length > MAX_TAB_ID_CHARS)) {
+		fail("bad_tab", `${request.op} needs the tabId from state.tabs`);
+	}
+	const url = request.op === "new" && request.url !== undefined ? normalizeAction({ kind: "navigate", url: request.url }).url : undefined;
+	return { kind: "tab", op: request.op, ...(request.tabId === undefined ? {} : { tabId: request.tabId }), ...(url === undefined ? {} : { url }) };
+}
+
 function normalizeEngine(engine: BrowserEngine | undefined): BrowserEngine {
 	const selected = engine ?? "chromium";
 	if (BROWSER_ENGINES.includes(selected)) return selected;
@@ -1143,8 +1364,8 @@ function normalizeViewport(viewport: Viewport | undefined): Viewport {
 	const { width, height } = viewport;
 	if (!Number.isFinite(width) || !Number.isFinite(height)) fail("bad_viewport", "viewport dimensions must be numbers");
 	return {
-		width: Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, Math.floor(width))),
-		height: Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, Math.floor(height))),
+		width: Math.min(MAX_VIEWPORT.width, Math.max(MIN_VIEWPORT.width, Math.floor(width))),
+		height: Math.min(MAX_VIEWPORT.height, Math.max(MIN_VIEWPORT.height, Math.floor(height))),
 	};
 }
 
@@ -1266,6 +1487,10 @@ function normalizeAction(action: BrowserAction): BrowserAction {
 			}
 			return { kind: "press", key };
 		}
+		case "resize": {
+			if (typeof action.width !== "number" || typeof action.height !== "number") fail("bad_action", "resize needs a numeric width and height");
+			return { kind: "resize", ...normalizeViewport({ width: action.width, height: action.height }) };
+		}
 		case "scroll": {
 			const deltaX = requireDelta(action.deltaX ?? 0, "deltaX");
 			const deltaY = requireDelta(action.deltaY ?? 0, "deltaY");
@@ -1329,6 +1554,14 @@ function requireDelta(value: unknown, name: string): number {
 // ---------------------------------------------------------------------------
 // Small helpers
 // ---------------------------------------------------------------------------
+
+/** A task's page is its own, and a pending publish pins the page: neither takes another caller's page work. */
+function refuseWhileBusy(entry: Entry, caller: ToolCaller | undefined): void {
+	if (entry.task?.status === "running") {
+		fail("task_running", `a browser_task (${entry.task.agent}) owns this page; wait for it or cancel it`);
+	}
+	refuseWhilePublishing(entry, caller);
+}
 
 /**
  * While a post awaits confirmation the page is pinned: only the Browser View's

@@ -1,6 +1,6 @@
 // The browser. Tab strip, toolbar, the page, and what floats over it: agent
 // activity, annotation, notices. Every capability comes from one opaque
-// `browserId` that arrives in this View's own `browser_open` tool result —
+// `browserId` that arrives in the tool result that mounted this View —
 // there is no listing, and the id is held in React state only (never storage,
 // never a URL).
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -107,7 +107,7 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 	}, []);
 
 	// A tool result is the ONLY source of a browserId, and it is folded in DURING
-	// RENDER so a View mounted by `browser_open` paints the live browser on its
+	// RENDER so a View mounted by `browser_view` paints the live browser on its
 	// first frame. Only a CHANGE of browserId resets the annotation: a model turn
 	// must not wipe a half-drawn crop out from under the human.
 	const [seenSeq, setSeenSeq] = useState(0);
@@ -130,10 +130,12 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 		}
 	}
 
+	// The browser on screen is never announced to the agent (it reads the one the human opened with browser_state).
+	// Only a picture the human sent is context, and it is taken back once the View moves to another browser.
 	useEffect(() => {
 		let current = true;
-		void client.bindBrowser(browserId).catch(cause => {
-			if (current) say("error", `The agent could not be told about this browser: ${failureText(cause)}`);
+		void client.follow(browserId).catch(cause => {
+			if (current) say("error", `The annotation could not be taken back from the agent: ${failureText(cause)}`);
 		});
 		return () => {
 			current = false;
@@ -348,7 +350,7 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 		const bound = browserId;
 		if (bound === null) return;
 		try {
-			if (await client.bindBrowser(bound)) say("ok", "Annotation removed — the agent keeps the browser, not the picture.");
+			if (await client.updateContext(bound, [])) say("ok", "Annotation removed.");
 		} catch (cause) {
 			if (live(bound)) say("error", failureText(cause));
 		}

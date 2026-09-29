@@ -158,7 +158,7 @@ const signInButton = (line: Element): Element => {
 	return button;
 };
 
-const openBrowser = (args: Record<string, string>): Act => ({ intent: "openArtifactoryView", payload: { tool: "browser_open", args } });
+const openBrowser = (args: Record<string, string>): Act => ({ intent: "openArtifactoryView", payload: { tool: "browser_view", args } });
 const openView = (profile: string, url: string): Act => openBrowser({ profile, url });
 
 describe("the Browser panel", () => {

@@ -26,14 +26,15 @@
  * request screened by the read policy before it is sent.
  *
  * Every page script executed here is a fixed compiled function from
- * `page-scripts.ts`. Caller-supplied JavaScript never reaches `evaluate`.
+ * `page-scripts.ts`. The one exception is `evaluate`: the runtime lets a
+ * model's own JavaScript reach it on a throwaway browser only.
  */
 import { createHash } from "node:crypto";
 import { mkdirSync, statSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 import puppeteer, { TimeoutError } from "puppeteer-core";
 import type { Browser, BrowserContext, CDPSession, ElementHandle, Frame, HTTPRequest, HTTPResponse, JSHandle, KeyInput, Page, Protocol, Target } from "puppeteer-core";
-import type { BrowserAction, BrowserApp, BrowserRegion, DialogType, ElementInspection, HandledDialog, TabInfo, Viewport } from "../contracts.js";
+import { type BrowserAction, type BrowserApp, type BrowserRegion, type DialogType, type ElementInspection, type HandledDialog, type LogEntry, MAX_LOG_ENTRIES, type ModelShot, type ShotRequest, type TabInfo, type Viewport } from "../contracts.js";
 import { FaviconCache } from "../favicon.js";
 import { MAX_FRAME_BYTES } from "../image.js";
 import { ActionNotDispatched, BrowserRuntimeError, fail } from "../store.js";
@@ -54,10 +55,12 @@ import {
 	SELECT_ALL_SCRIPT,
 	READ_TEXT_SCRIPT,
 	TYPE_TARGET_SCRIPT,
+	EVAL_RESULT_SCRIPT,
 	UA_HINTS_SCRIPT,
 } from "./page-scripts.js";
+import { watchPageLog } from "./page-log.js";
 import { type HeadfulIdentity, identityPerBinary, type ResolvedBrowser, resolveBrowser, turnOffPasswordSaving, UA_HINTS, viewLaunchOptions, withTimeout } from "./launch.js";
-import type { EngineDriver, EngineOptions, EngineState, FieldRead, LiveFrame, PageRead, PageReader, PasswordSource, PerformOutcome, ReadOutcome, ReadPolicy, WaitCondition } from "./types.js";
+import type { EngineDriver, EngineOptions, EngineState, EvalOutcome, FieldRead, LiveFrame, PageRead, PageReader, PasswordSource, PerformOutcome, ReadOutcome, ReadPolicy, WaitCondition } from "./types.js";
 
 const NAVIGATE_TIMEOUT_MS = 30_000;
 /** Child frames a snapshot lists controls for, depth first. */
@@ -80,6 +83,12 @@ const FAVICON_SCRIPT_TIMEOUT_MS = 2_000;
 /** How long a freshly started screencast gets to deliver its first frame before one is captured. */
 const FIRST_FRAME_WAIT_MS = 500;
 const SCREENCAST_QUALITY = 80;
+/** A model's picture: the browser's own webp at this quality, its longest edge at most this many CSS px. */
+const MODEL_SHOT_QUALITY = 70;
+const MODEL_SHOT_EDGE = 1_024;
+/** An eval step gets this long to run its script, plus a grace for a promise it awaits. */
+const EVAL_TIMEOUT_MS = 10_000;
+const EVAL_GROUP = "dimension-eval";
 const DEFAULT_RELAY_URL = "http://127.0.0.1:9224";
 /** Dialogs kept per tab for the model, and the longest message kept (a page's own text: bounded, untrusted). */
 const MAX_DIALOGS = 5;
@@ -477,6 +486,8 @@ interface Tab {
 	navSeq: number;
 	/** Every dialog this tab's page (or an iframe of it) opened, as answered. */
 	dialogs: DialogLog;
+	/** What went wrong on this page, newest last (bounded); `LogEntry.n` is the driver's, so it orders across tabs. */
+	log: LogEntry[];
 }
 
 /** The last MAX_DIALOGS dialogs answered, oldest first; `seq` counts them since the tab began. */
@@ -493,7 +504,7 @@ interface Guarded {
 
 async function prepareTab(page: Page, viewport: Viewport, scale = 1, early?: Guarded): Promise<Tab> {
 	const { cdp, dialogs } = early ?? (await guardPage(await page.createCDPSession()));
-	const tab: Tab = { id: "", documentId: "", page, target: page.target(), cdp, loading: false, navSeq: 0, dialogs };
+	const tab: Tab = { id: "", documentId: "", page, target: page.target(), cdp, loading: false, navSeq: 0, dialogs, log: [] };
 	// Subscribed before the first read: a commit racing setup is never missed.
 	cdp.on("Page.frameNavigated", ({ frame }) => {
 		if (frame.parentId === undefined) tab.documentId = frame.loaderId;
@@ -602,6 +613,7 @@ class PuppeteerDriver implements EngineDriver {
 	/** Screencast start/stop run in order; a tab switch never interleaves with another. */
 	#castChain: Promise<void> = Promise.resolve();
 	#frameSeq = 0;
+	#logSeq = 0;
 	#closed = false;
 	#closing: Promise<void> | undefined;
 
@@ -697,6 +709,88 @@ class PuppeteerDriver implements EngineDriver {
 			fail("frame_too_large", `screenshot is ${shot.length} bytes, above the ${MAX_FRAME_BYTES} byte limit`);
 		}
 		return shot;
+	}
+
+	async shotForModel(request: ShotRequest): Promise<Omit<ModelShot, "url">> {
+		const tab = this.#activeTab();
+		const metrics = await this.#read(() => tab.cdp.send("Page.getLayoutMetrics"));
+		const view = metrics.cssVisualViewport;
+		// Clip and capture coordinates are the page's (document) CSS pixels, scrolled or not.
+		let region: BrowserRegion = { x: view.pageX, y: view.pageY, width: view.clientWidth, height: view.clientHeight };
+		if (request.fullPage) region = { x: 0, y: 0, width: metrics.cssContentSize.width, height: metrics.cssContentSize.height };
+		else if (request.selector !== undefined) region = await this.#elementRegion(tab, request.selector, view);
+		const width = Math.max(1, Math.ceil(region.width));
+		const height = Math.max(1, Math.ceil(region.height));
+		const scale = Math.min(1, MODEL_SHOT_EDGE / Math.max(width, height)) * (request.scale ?? 1);
+		// Only a region past the viewport needs the page laid out beyond it (which can move viewport-relative CSS).
+		const inView = region.x >= view.pageX && region.y >= view.pageY && region.x + width <= view.pageX + view.clientWidth && region.y + height <= view.pageY + view.clientHeight;
+		const shot = await this.#read(() =>
+			tab.cdp.send("Page.captureScreenshot", {
+				format: "webp",
+				quality: MODEL_SHOT_QUALITY,
+				captureBeyondViewport: !inView,
+				// The output is the clip's size times its scale times the page's pixel ratio.
+				clip: { x: region.x, y: region.y, width, height, scale: scale / this.#scale },
+			}),
+		);
+		return { mimeType: "image/webp", data: shot.data, width, height, scale: Math.round(scale * 1_000) / 1_000 };
+	}
+
+	/** The element's box in page pixels (an iframe's element too), or a refusal that nothing was captured. */
+	async #elementRegion(tab: Tab, selector: string, view: { pageX: number; pageY: number }): Promise<BrowserRegion> {
+		const { frame, css } = aim(tab.page, selector);
+		const handle = await frame.$(css);
+		if (!handle) throw new ActionNotDispatched("no_element", `${JSON.stringify(selector)} matches nothing on the page`);
+		try {
+			const box = await handle.boundingBox();
+			if (!box || box.width < 1 || box.height < 1) throw new ActionNotDispatched("no_box", `${JSON.stringify(selector)} has no visible box to capture`);
+			return { x: box.x + view.pageX, y: box.y + view.pageY, width: box.width, height: box.height };
+		} finally {
+			await handle.dispose().catch(() => undefined);
+		}
+	}
+
+	logs(): LogEntry[] {
+		return this.#active.log.map((entry) => ({ ...entry }));
+	}
+
+	async evaluate(expression: string, limit: number): Promise<EvalOutcome> {
+		const tab = this.#activeTab();
+		// The main world (no contextId), so the app's own globals are visible; `replMode` lets a snippet `await` and re-declare.
+		const run = await withTimeout(
+			tab.cdp.send("Runtime.evaluate", { expression, awaitPromise: true, replMode: true, returnByValue: false, timeout: EVAL_TIMEOUT_MS, objectGroup: EVAL_GROUP }),
+			EVAL_TIMEOUT_MS + 5_000,
+			"eval",
+		);
+		try {
+			// `replMode` (top-level await) hands a plain promise back unawaited: settle it here. A rejection is an exception.
+			let outcome: { result: Protocol.Runtime.RemoteObject; exceptionDetails?: Protocol.Runtime.ExceptionDetails } = run;
+			if (!run.exceptionDetails && run.result.subtype === "promise" && run.result.objectId !== undefined) {
+				outcome = await withTimeout(tab.cdp.send("Runtime.awaitPromise", { promiseObjectId: run.result.objectId, returnByValue: false }), EVAL_TIMEOUT_MS + 5_000, "eval");
+			}
+			const thrown = outcome.exceptionDetails;
+			if (thrown) {
+				const said = thrown.exception?.description ?? String(thrown.exception?.value ?? thrown.text);
+				return { ok: false, ran: thrown.exception?.className !== "SyntaxError", error: said.split("\n", 1)[0] ?? "" };
+			}
+			const result = outcome.result;
+			if (result.type === "undefined") return { ok: true, truncated: false };
+			if (result.objectId === undefined) {
+				const text = result.unserializableValue ?? JSON.stringify(result.value);
+				return { ok: true, value: text.slice(0, limit), truncated: text.length > limit };
+			}
+			const described = await tab.cdp.send("Runtime.callFunctionOn", {
+				objectId: result.objectId,
+				functionDeclaration: String(EVAL_RESULT_SCRIPT),
+				arguments: [{ value: limit }],
+				returnByValue: true,
+				silent: true,
+			});
+			const { text, truncated } = described.result.value as { text: string; truncated: boolean };
+			return { ok: true, value: text, truncated };
+		} finally {
+			await tab.cdp.send("Runtime.releaseObjectGroup", { objectGroup: EVAL_GROUP }).catch(() => undefined);
+		}
 	}
 
 	async liveFrame(): Promise<LiveFrame> {
@@ -957,6 +1051,9 @@ class PuppeteerDriver implements EngineDriver {
 				await this.#settle(tab, started, key === "Enter" || key === "Space" || key === " ");
 				return NONE;
 			}
+			case "resize":
+				await this.resize({ width: requireNumber(action.width, "resize.width"), height: requireNumber(action.height, "resize.height") }, this.#scale);
+				return NONE;
 			case "scroll":
 				await page.mouse.wheel({ deltaX: action.deltaX ?? 0, deltaY: action.deltaY ?? 0 });
 				return NONE;
@@ -1163,6 +1260,10 @@ class PuppeteerDriver implements EngineDriver {
 			this.#loadFavicon(tab);
 		});
 		tab.page.once("close", () => this.#forget(tab));
+		watchPageLog(tab.page, (type, text) => {
+			tab.log.push({ n: ++this.#logSeq, type, text });
+			if (tab.log.length > MAX_LOG_ENTRIES) tab.log.shift();
+		});
 		this.#loadFavicon(tab);
 	}
 

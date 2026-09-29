@@ -17,7 +17,7 @@ import type { ContentBlock } from "@modelcontextprotocol/sdk/types.js";
 import type { BrowserAnnotation, BrowserRegion } from "../../src/contracts";
 import { Icon } from "@fraym/ui/icons";
 import { AnnotationPaintError, type PaintedAnnotation, paintAnnotation } from "./annotation-image";
-import { type BrowserClient, browserReference, failureText } from "./browser-client";
+import { type BrowserClient, failureText } from "./browser-client";
 import { boundsOf, unionRegion } from "./geometry";
 import type { DrawTool, Sketch } from "./page-view";
 
@@ -45,11 +45,11 @@ function ToolGlyph({ tool }: { readonly tool: DrawTool }) {
 /** The prose the model reads. Everything the crop knows, in one block, under
  *  the host's character limit: the note is never trimmed — the element dump,
  *  which the model can re-read from the page, is. */
-function annotationText(browserId: string, annotation: BrowserAnnotation, painted: PaintedAnnotation): { text: string; fits: boolean } {
+function annotationText(annotation: BrowserAnnotation, painted: PaintedAnnotation): { text: string; fits: boolean } {
 	const { region } = annotation;
 	const lines = [
-		browserReference(browserId),
 		"Browser annotation from the human (region of the live page):",
+		"Read that browser with browser_state (it needs no browserId).",
 		`URL: ${annotation.url}`,
 		`Captured: ${annotation.capturedAt}`,
 		`Crop (viewport px): x=${region.x} y=${region.y} w=${region.width} h=${region.height}`,
@@ -146,7 +146,7 @@ export function AnnotateBar({ app, client, browserId, frameId, tool, onTool, ske
 				return;
 			}
 			if (!alive()) return;
-			const prose = annotationText(bound, annotation, painted);
+			const prose = annotationText(annotation, painted);
 			if (!prose.fits) {
 				onNotice("error", `The note is too long to send with the image (${MAX_CONTEXT_TEXT} characters max). Your drawing is kept.`);
 				return;

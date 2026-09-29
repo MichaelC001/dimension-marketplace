@@ -7,7 +7,7 @@
 // DATA: this pack's own connection fact (`report.ts`), the one Store key the
 // host admits this seat to beyond the public ones.
 //
-// INTENT: `store.act("openArtifactoryView", { tool: "browser_open", args })`,
+// INTENT: `store.act("openArtifactoryView", { tool: "browser_view", args })`,
 // admitted by the `artifactory:open` grant the manifest declares. The host
 // resolves the server itself (this pack's artifactory) and opens the View in
 // the seat's session; a refusal is the host's console warning, never a throw.
@@ -213,7 +213,7 @@ export function BrowserAccounts({ sessionId, store }: BrowserAccountsProps) {
 	}, []);
 	// The View opens in the seat's session, so with none there is nowhere to open it.
 	const launch = useMemo<((args: { profile?: string; url?: string }) => void) | null>(
-		() => (store && sessionId ? args => store.act("openArtifactoryView", { tool: "browser_open", args }) : null),
+		() => (store && sessionId ? args => store.act("openArtifactoryView", { tool: "browser_view", args }) : null),
 		[store, sessionId],
 	);
 	const signIn = useMemo<SignIn | null>(() => (launch ? (name, url) => launch({ profile: name, url }) : null), [launch]);

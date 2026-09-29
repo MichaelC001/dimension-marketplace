@@ -8,14 +8,17 @@
  *  before there is one to pick.
  *
  *  The View is mounted live on a linkedom document (`dom-harness.ts`) against a
- *  fake MCP App host whose `callServerTool` records every browser tool call.
+ *  fake MCP App host whose `callServerTool` records every browser tool call and
+ *  whose `updateModelContext` records everything the View puts in the agent's
+ *  context. That is nothing at all until the human deliberately annotates: the
+ *  host parks whatever the View sends and appends it to every later prompt.
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import type { App } from "@modelcontextprotocol/ext-apps";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { BrowserState } from "../src/contracts";
 import { BrowserApp } from "../app/view/browser-app";
-import { mountFromToolResult, type ToolMount } from "../app/view/browser-client";
+import { BrowserClient, mountFromToolResult, type ToolMount } from "../app/view/browser-client";
 import { StartPage, type StartPageProps } from "../app/view/start-page";
 import { type Dom, mount, unmountAll } from "./dom-harness";
 
@@ -161,9 +164,14 @@ interface Call {
 
 const failure = (text: string): CallToolResult => ({ isError: true, content: [{ type: "text", text }] });
 
-/** A host that answers `browser_profiles`, records every call, and lets `answer` decide the rest. */
-function fakeApp(answer: (call: Call) => CallToolResult): { readonly app: App; readonly calls: Call[] } {
+interface ContextUpdate {
+	readonly content: readonly unknown[];
+}
+
+/** A host that answers `browser_profiles`, records every call and every context update, and lets `answer` decide the rest. */
+function fakeApp(answer: (call: Call) => CallToolResult): { readonly app: App; readonly calls: Call[]; readonly contexts: ContextUpdate[] } {
 	const calls: Call[] = [];
+	const contexts: ContextUpdate[] = [];
 	// The View touches exactly these three App members; the rest of the host surface is not in play.
 	const app = {
 		callServerTool: async (request: { name: string; arguments?: Record<string, unknown> }): Promise<CallToolResult> => {
@@ -171,10 +179,13 @@ function fakeApp(answer: (call: Call) => CallToolResult): { readonly app: App; r
 			calls.push(call);
 			return call.name === "browser_profiles" ? { content: [], structuredContent: { profiles: [] } } : answer(call);
 		},
-		getHostCapabilities: () => ({ updateModelContext: { text: {} } }),
-		updateModelContext: async () => ({}),
+		getHostCapabilities: () => ({ updateModelContext: { text: {}, image: {} } }),
+		updateModelContext: async (update: ContextUpdate) => {
+			contexts.push(update);
+			return {};
+		},
 	} as unknown as App;
-	return { app, calls };
+	return { app, calls, contexts };
 }
 
 const opens = (calls: readonly Call[]) => calls.filter(call => call.name === "browser_open").map(call => call.args);
@@ -317,5 +328,68 @@ describe("a browser that ends", () => {
 
 		expect(dom.find(".bx-browser")).toHaveLength(1);
 		expect(dom.text()).not.toContain("This browser was closed.");
+	});
+});
+
+describe("what the View puts in the agent's context", () => {
+	const crop = [{ type: "image", data: "AA==", mimeType: "image/png" }, { type: "text", text: "the circled button" }];
+
+	test("nothing: not when a browser is mounted, and not when the human opens one from the start page", async () => {
+		const mountedBy = fakeApp(() => failure("unexpected"));
+		const mounted = await mount(<BrowserApp app={mountedBy.app} toolState={{ state: LIVE, seq: 1 }} />);
+		await mounted.settle();
+		expect(mounted.find(".bx-browser")).toHaveLength(1);
+		expect(mountedBy.contexts).toEqual([]);
+
+		const openedBy = fakeApp(call => (call.name === "browser_open" ? { content: [], structuredContent: { ...LIVE, browserId: "b2" } } : failure("unexpected")));
+		const started = await mount(<BrowserApp app={openedBy.app} toolState={null} />);
+		await started.settle();
+		await started.click(button(started, "Open"));
+		await started.settle();
+		expect(started.find(".bx-browser")).toHaveLength(1);
+		expect(openedBy.contexts).toEqual([]);
+	});
+
+	test("the human's annotation, exactly as sent, and its taking back — once — when the View moves to another browser", async () => {
+		const { app, contexts } = fakeApp(() => failure("unexpected"));
+		const client = new BrowserClient(app);
+		await client.follow("b1");
+		expect(contexts).toEqual([]);
+
+		expect(await client.updateContext("b1", crop)).toBe(true);
+		expect(contexts).toEqual([{ content: crop }]);
+		// Still the same browser: nothing more to say.
+		await client.follow("b1");
+		expect(contexts).toHaveLength(1);
+
+		// The picture is of b1's page; it no longer describes what is on screen.
+		await client.follow("b2");
+		expect(contexts).toEqual([{ content: crop }, { content: [] }]);
+		await client.follow("b3");
+		expect(contexts).toHaveLength(2);
+	});
+
+	test("an annotation the human removes is taken back, and moving on then has nothing left to take back", async () => {
+		const { app, contexts } = fakeApp(() => failure("unexpected"));
+		const client = new BrowserClient(app);
+		await client.follow("b1");
+		await client.updateContext("b1", crop);
+
+		expect(await client.updateContext("b1", [])).toBe(true);
+		await client.follow("b2");
+
+		expect(contexts).toEqual([{ content: crop }, { content: [] }]);
+	});
+
+	test("an annotation for a browser the View has already left is never sent", async () => {
+		const { app, contexts } = fakeApp(() => failure("unexpected"));
+		const client = new BrowserClient(app);
+		await client.follow("b1");
+
+		const pending = client.updateContext("b1", crop);
+		await client.follow("b2");
+
+		expect(await pending).toBe(false);
+		expect(contexts).toEqual([]);
 	});
 });

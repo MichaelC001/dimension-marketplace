@@ -376,6 +376,34 @@ const UA_HINTS_SCRIPT = (names: string[]): Promise<ReportedIdentity["hints"]> =>
 	return uaNavigator.userAgentData.getHighEntropyValues(names);
 };
 
+/**
+ * The value an eval step returned, as JSON text cut at `limit` (run with the result as `this`). Cycles, functions,
+ * DOM nodes, errors and bigints are described, never thrown on.
+ */
+const EVAL_RESULT_SCRIPT = function (this: unknown, limit: number): { text: string; truncated: boolean } {
+	const ancestors: unknown[] = [];
+	let text: string;
+	try {
+		text =
+			JSON.stringify(this, function (this: unknown, _key: string, value: unknown) {
+				if (typeof value === "bigint") return `${value}n`;
+				if (typeof value === "function") return `[function ${value.name || "anonymous"}]`;
+				if (typeof value === "symbol") return String(value);
+				if (value instanceof Node) return `[${value.nodeName.toLowerCase()}${(value as Element).id ? `#${(value as Element).id}` : ""}]`;
+				if (value instanceof Error) return `${value.name}: ${value.message}`;
+				if (value !== null && typeof value === "object") {
+					while (ancestors.length > 0 && ancestors[ancestors.length - 1] !== this) ancestors.pop();
+					if (ancestors.includes(value)) return "[circular]";
+					ancestors.push(value);
+				}
+				return value;
+			}) ?? "undefined";
+	} catch (error) {
+		text = `[unserialisable: ${error instanceof Error ? error.message : String(error)}]`;
+	}
+	return { text: text.slice(0, limit), truncated: text.length > limit };
+};
+
 export {
 	PAGE_TEXT_SCRIPT,
 	READ_TEXT_SCRIPT,
@@ -394,4 +422,5 @@ export {
 	ELEMENT_TEXT_SCRIPT,
 	LINK_HREFS_SCRIPT,
 	UA_HINTS_SCRIPT,
+	EVAL_RESULT_SCRIPT,
 };

@@ -19,9 +19,12 @@ export interface CredentialUse { origin: string; created: boolean }
 /** Maximum encoded PNG accepted by the host's image model-context contract. */
 export const MAX_ANNOTATION_BYTES = 2_097_152;
 export interface Viewport { width: number; height: number }
+/** What a viewport may be (CSS px): `browser_open`, the View's fit and the `resize` step clamp to these. */
+export const MIN_VIEWPORT: Viewport = { width: 320, height: 240 };
+export const MAX_VIEWPORT: Viewport = { width: 2_560, height: 2_000 };
 export type MouseButton = "left" | "right" | "middle";
 export interface BrowserAction {
-  kind: "navigate" | "click" | "type" | "select" | "press" | "scroll" | "back" | "forward" | "reload" | "stop" | "insert" | "hover";
+  kind: "navigate" | "click" | "type" | "select" | "press" | "scroll" | "back" | "forward" | "reload" | "stop" | "insert" | "hover" | "resize";
   url?: string;
   selector?: string;
   /** `type`: replaces the field's value. `insert`: typed into whatever is focused. */
@@ -48,10 +51,13 @@ export interface BrowserAction {
   y?: number;
   deltaX?: number;
   deltaY?: number;
+  /** `resize`: the viewport in CSS pixels (bounded like `browser_open`'s), for responsive checks. */
+  width?: number;
+  height?: number;
   /** `click` only; default "left". */
   button?: MouseButton;
-  /** `click` only; 2 = double-click, 3 = triple-click. Default 1. */
-  clickCount?: 1 | 2 | 3;
+  /** `click` only; 2 = double-click, 3 = triple-click. Default 1; the runtime refuses any other. */
+  clickCount?: number;
 }
 export interface TabInfo {
   /** Stable opaque id for the tab's lifetime. */
@@ -74,6 +80,48 @@ export type ActionStatus = "completed" | "failed" | "unknown";
  * `dialogs`: the JavaScript dialogs the browser answered while this action ran.
  */
 export interface ActionResult { status: ActionStatus; error?: string; state: BrowserState; credential?: CredentialUse; dialogs?: HandledDialog[] }
+/** How many steps one `actMany` call takes. */
+export const MAX_BATCH_STEPS = 25;
+/** A step that waits, as `browser_act` takes it beside the page actions: `WaitRequest`'s exactly-one rule and bounds. */
+export interface WaitStep { kind: "wait"; selector?: string; text?: string; url?: string; timeoutMs?: number }
+/** A tab step: `TabRequest` as a step, on the same lock as the others. */
+export interface TabStep extends TabRequest { kind: "tab" }
+/** Run `expression` in the page (its main world). Only a throwaway browser: see `runtime.actMany`. */
+export interface EvalStep { kind: "eval"; expression: string }
+export const MAX_EVAL_EXPRESSION_CHARS = 8_192;
+/** What an eval step's JSON result may be, and what one batch's eval steps may return between them. */
+export const MAX_EVAL_RESULT_CHARS = 8_000;
+export type BatchStep = BrowserAction | WaitStep | TabStep | EvalStep;
+/** `timeout`: a wait step's condition never held, or the batch's time budget ran out before this step. */
+export type StepStatus = ActionStatus | "timeout";
+/**
+ * What one step did. `credential`: as `ActionResult`'s. `value`: an eval step's result as JSON text (cut at the
+ * cap, `truncated: true`, when longer); absent when it returned nothing.
+ */
+export interface StepOutcome { kind: BatchStep["kind"]; status: StepStatus; error?: string; credential?: CredentialUse; value?: string; truncated?: true }
+/**
+ * One batch: `steps` are those attempted, in order (the last is the one that stopped the batch), `completed`
+ * how many completed, `status`/`error` those of the step that stopped it ("completed" when none did). `state` is
+ * read once, after the last step; `dialogs` are those answered during the batch (the last five). `newErrors`:
+ * console errors, exceptions and failed requests logged since the last result a model was handed (never for the View).
+ */
+export interface ActManyResult { status: StepStatus; error?: string; completed: number; steps: StepOutcome[]; state: BrowserState; dialogs?: HandledDialog[]; newErrors?: number }
+/** The most log entries kept per tab, and the longest text one holds. */
+export const MAX_LOG_ENTRIES = 50;
+export const MAX_LOG_TEXT_CHARS = 300;
+/**
+ * One thing that went wrong in a page: `console.error`/`console.warning`, an uncaught `exception`, an `http` response
+ * of 400 or more, or a request that `network`-failed. `n` counts up per browser. `text` is the page's own words (untrusted),
+ * urls without their query strings; never a body, header or cookie.
+ */
+export interface LogEntry { n: number; type: "console.error" | "console.warning" | "exception" | "http" | "network"; text: string }
+/**
+ * `fullPage`: the whole document, not just the viewport. `selector`: that element's box (plain CSS; `@<ref> ` reaches an iframe).
+ * `scale`: 0-1, shrinks the picture further. The longest edge is at most 1024 CSS px whatever else is asked.
+ */
+export interface ShotRequest { fullPage?: boolean; selector?: string; scale?: number }
+/** `width`/`height`: the CSS px the picture covers, `scale` how much it was shrunk (a point in it is at x/scale in the page). */
+export interface ModelShot { mimeType: "image/webp"; data: string; url: string; width: number; height: number; scale: number }
 /** The kinds of JavaScript dialog a page can open. */
 export const DIALOG_TYPES = ["alert", "confirm", "prompt", "beforeunload"] as const;
 export type DialogType = (typeof DIALOG_TYPES)[number];
@@ -83,7 +131,7 @@ export type DialogType = (typeof DIALOG_TYPES)[number];
  * `message` is the page's own text (untrusted, bounded).
  */
 export interface HandledDialog { type: DialogType; message: string; handled: "accepted" | "dismissed" }
-/** The longest wait browser_wait takes. */
+/** The longest a `wait` step (or `WaitRequest`) waits. */
 export const MAX_WAIT_MS = 15_000;
 /** Exactly one of `selector` (visible), `text` (on the page) or `url` (a substring of the current URL). */
 export interface WaitRequest { selector?: string; text?: string; url?: string; timeoutMs?: number }
@@ -318,6 +366,22 @@ export interface BrowserRuntimePort {
   snapshot(browserId: string): Promise<{ state: BrowserState; text: string }>;
   /** Refused (`publish_pending`) while a publish awaits confirmation, unless `caller` is "app". */
   act(browserId: string, action: BrowserAction, caller?: ToolCaller): Promise<ActionResult>;
+  /**
+   * 1..MAX_BATCH_STEPS steps under ONE lock: refused once (`task_running`, `publish_pending`, as `act`), every step
+   * validated before the first runs (`bad_action`/`bad_wait`), then run in order until one is not `completed`.
+   */
+  actMany(browserId: string, steps: readonly BatchStep[], caller?: ToolCaller): Promise<ActManyResult>;
+  /** A picture for a model: webp, at most 1024 CSS px on its longest edge, never retained (so never annotatable). Read like `snapshot`. */
+  shot(browserId: string, request?: ShotRequest): Promise<ModelShot>;
+  /** The active tab's log entries since the last call (which marks them read); `[]` when nothing is new. For a model's reads, never the View's. */
+  logs(browserId: string): Promise<LogEntry[]>;
+  /**
+   * Remember `browserId` as the browser `session` — the id the HOST stamped on a call, never one a caller passed — has
+   * open in its View: what the human opened or is viewing. Forgotten when that browser closes.
+   */
+  bindView(session: string, browserId: string): void;
+  /** The browser the human opened or is viewing in `session`, while it is open. */
+  viewOf(session: string): string | undefined;
   /** Serialized and refused (`task_running`, `publish_pending`) like `act`; nothing is changed on the page. `timeout` is a result, not an error. */
   wait(browserId: string, request: WaitRequest, caller?: ToolCaller): Promise<WaitResult>;
   /** Read-only: a fixed page script measures the first match of `selector` (`@<ref> ` prefix reaches an iframe). Nothing the caller wrote runs in the page. */

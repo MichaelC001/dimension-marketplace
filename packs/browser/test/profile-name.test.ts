@@ -33,7 +33,7 @@ function recordingRuntime(opened: Array<string | undefined>): BrowserRuntimePort
 	const runtime: Pick<BrowserRuntimePort, "open" | "connections" | "onConnectionsChanged" | "dispose"> = {
 		open: async ({ profile }: BrowserOpenOptions) => {
 			opened.push(profile);
-			return { browserId: "b".repeat(32), profile } as unknown as BrowserState;
+			return { browserId: "b".repeat(32), profile, tabs: [] } as unknown as BrowserState;
 		},
 		connections: async () => ({}),
 		onConnectionsChanged: () => () => {},

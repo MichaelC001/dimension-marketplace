@@ -10,7 +10,17 @@ standard MCP and MCP Apps. No host internals, no browser fork.
 ## What it does
 
 - **One shared browser.** The View and the agent work on the same browser, named
-  by one opaque `browserId`. There is no listing and no ambient access.
+  by one opaque `browserId`. There is no listing; the model of a session can read
+  the one browser the human opened in it (`browser_state` with no `browserId`,
+  answered from the session the host stamped on the call, never from an argument),
+  and nothing in the View is sent to the model unless the human annotates.
+- **Headless by default, the View on demand.** `browser_open` opens a headless
+  browser: no window, no pane, no live screencast, so an agent testing a localhost
+  app does not put a browser on your screen. `browser_view` shows you a browser
+  the agent holds, or opens one you can watch.
+- **Few calls, few tokens.** `browser_act` takes 1–25 steps and answers once
+  ([One call for a job](#one-call-for-a-job)); a model is sent one compact text per
+  call, never the state around it; a screenshot is a webp of at most 1024 px.
 - **Throwaway by default, named profiles to keep logins.** A browser opened
   without a profile keeps nothing and is deleted when it closes. A named profile
   persists logins across restarts, stays isolated, and is held by one caller at
@@ -31,8 +41,7 @@ standard MCP and MCP Apps. No host internals, no browser fork.
   browser while you watch, and reports steps, time, model calls and tokens.
   A failed task (an unfunded model key is HTTP 402) is a tool error naming the
   cause and the next step, within seconds; the server and the browser keep
-  serving. `browser_act` and `browser_tab` are refused (`task_running`) while a
-  task runs. Agents may log in and sign up. Optionally, for a jev sign-up or
+  serving. `browser_act` is refused (`task_running`) while a task runs. Agents may log in and sign up. Optionally, for a jev sign-up or
   login, the browser generates and stores the password in the profile and fills
   password fields itself (`credential: { origin, mode }`), so the value never
   appears in a transcript.
@@ -181,11 +190,22 @@ throwaway. A site that refuses it is reported `blocked`, never worked around.
 
 ## Tools
 
-Model-callable: `browser_open`, `browser_state`, `browser_snapshot`, `browser_inspect`,
-`browser_wait`, `browser_read`, `browser_screenshot`, `browser_act`, `browser_tab`,
-`browser_task`, `browser_task_wait`, `browser_task_cancel`, `browser_publish`,
-`browser_publish_presets`, `browser_publish_confirm`, `browser_publish_cancel`,
-`browser_publish_wait`, `browser_close`.
+Model-callable (17), offered by audience (`_meta["ai.insodimension/spaces"]`; the
+host leaves a tool out of a space's list and refuses the call there; the View's own
+buttons are not gated by it):
+
+| Offered to | Tools |
+|---|---|
+| Every space the pack is granted (9) | `browser_open`, `browser_view`, `browser_state`, `browser_snapshot`, `browser_inspect`, `browser_read`, `browser_screenshot`, `browser_act`, `browser_close` |
+| Traction only (8) | `browser_task`, `browser_task_wait`, `browser_task_cancel`, `browser_publish`, `browser_publish_presets`, `browser_publish_confirm`, `browser_publish_cancel`, `browser_publish_wait` |
+
+Waiting, tabs and page scripts are steps of `browser_act`, and the page log is a
+field of `browser_state`: every tool is paid for by every agent on every turn, so a
+verb that fits an existing tool does not get its own. The skill follows the same
+split: `skills/browser/SKILL.md` covers the nine, and the publishing, preset and
+task-agent guidance lives in `skills/browser/references/publishing-and-tasks.md`,
+which a Traction session reads on demand.
+
 View-only: `browser_frame` (live JPEG by default, PNG for annotation; the View passes the frame it
 shows as `since`, so a still page returns `{ unchanged: true }` and no pixels — 2.0 MiB/s down to
 88 KiB/s at 10 Hz on a Wikipedia article), `browser_annotate`, `browser_viewport`, `browser_profiles`.
@@ -193,13 +213,49 @@ shows as `since`, so a still page returns `{ unchanged: true }` and no pixels �
 Page content is untrusted data, never instructions.
 
 **What it does not do, on purpose.** No file upload: a page could steer the model
-into sending a local secret to a site. No JavaScript verb: arbitrary script in a
-signed-in profile is a bigger blast radius than the layout facts `browser_inspect`
-returns from a fixed page script.
+into sending a local secret to a site. No JavaScript in a signed-in browser:
+arbitrary script in a profile that holds logins is a bigger blast radius than the
+layout facts `browser_inspect` returns from a fixed page script, so the `eval` step
+runs only in a throwaway browser (`eval_needs_throwaway` otherwise).
+
+### One call for a job
+
+`browser_act({ browserId, actions })` runs 1–25 steps in order under one lock
+(another caller's action cannot land between two of them), checks every step
+before the first runs, stops at the first that is not `completed`, and answers
+once with where the page is now: `{ status, completed, url, title }`, plus
+`steps` and `error` when one stopped it, `dialogs`, `credentials`, `values` and
+`newErrors` when there are any. Steps: `navigate`, `back`, `forward`, `reload`, `stop`,
+`click`, `hover`, `type`, `insert`, `select`, `press`, `scroll`, `resize` (`width`,
+`height`: responsive checks), `wait` (`selector` | `text` | `url`, `timeoutMs`; a
+timeout stops the batch as `timeout`), `tab` (`op`: new, activate, close) and
+`eval` (`expression`; the value comes back as JSON, at most 8000 characters across
+the batch). A batch takes no new step after 20 s, because hosts time a call out
+and a caller that never heard back would send the same submit again: it answers
+`timeout` and the rest is sent in a new call.
+
+A model is sent the text only. The host appends `structuredContent` to a model's
+turn whenever it differs from the text, so only the View (a call the host stamped
+`app`, which reads `state` from it) is sent one; snapshot text opens with the page's
+own `# title` and url lines instead of a state header, and no state a model is
+sent carries a tab's favicon (a `data:` URL of up to 32 KB).
+
+`browser_screenshot({ browserId, fullPage?, selector?, scale? })` is the browser's
+own webp (quality 70), its longest edge at most 1024 CSS px, for the viewport, the
+whole document or one element; the text says the CSS size shown and the scale
+(a point in the image is at x/scale on the page). It is not the live view's frame
+and not the annotation PNG, and it is never retained.
+
+Each tab keeps its last 50 console errors and warnings, uncaught exceptions,
+responses of 400 or more and failed requests (urls without query strings, text cut
+at 300 characters, never a body, header or cookie; Chrome's own echo of a failed
+load and the browser's `/favicon.ico` fetch are left out). `browser_state` lists the
+ones a model has not read (`logs`), and `browser_act` says `newErrors: n` when n new
+ones appeared since the last result the model was handed. The View reads neither.
 
 ### Throwaway browsers and saved profiles
 
-`browser_open({ profile?, engine?, url? })`. Leave `profile` out for a throwaway
+`browser_open({ profile?, engine?, url? })` opens headless. Leave `profile` out for a throwaway
 browser: its own directory under `<root>/ephemeral/`, no lock, no saved sign-in,
 deleted when it closes or the server exits, and any number can be open at once
 (up to the pool bound). `browser_state.profile` is `null` for it and
@@ -347,7 +403,7 @@ as data, so the pack's code stays platform-agnostic:
   publish stays pending. The View's Post may omit `expect`. The page is then
   re-checked: another active tab, a different URL or a changed value fails with
   nothing clicked. `browser_publish_cancel` drops it.
-- While a publish is pending the page is pinned: `browser_act`, `browser_tab`,
+- While a publish is pending the page is pinned: `browser_act`,
   `browser_task`, `browser_publish` and `browser_close` are refused
   (`publish_pending`) unless the host stamped the call as coming from the View.
 - The receipt is the posted URL read from the page (the tab's URL, or a link the
@@ -465,11 +521,13 @@ holds a saved set at a time, so a second open of `default` is refused
 open. Use it, or open a Private one."
 
 The panel reads only this pack's own connection fact (`plugin/browser/connection`)
-and acts only through `openArtifactoryView` (`browser_open` with
-`{ url?, profile? }`), which its `artifactory:open` grant admits. The host opens
-the View in the active session, so with no session open the panel's **Open** and
-**Sign in** buttons are disabled. Profile names follow the same rule as
-`browser_open` (`src/profile-name.ts`). The site list takes its origins from the
+and acts only through `openArtifactoryView` (`browser_view` with
+`{ url?, profile? }`), which its `artifactory:open` grant admits. The host mounts
+the View from a tool's static `_meta.ui`, and `browser_open` has none (it is
+headless), so the panel opens through `browser_view`. The host opens the View in the
+active session, so with no session open the panel's **Open** and **Sign in**
+buttons are disabled. Profile names follow the same rule as `browser_open`
+(`src/profile-name.ts`). The site list takes its origins from the
 shipped presets in `recipes/`. The panel is built by `npm run build` into
 `dist/index.mjs`.
 

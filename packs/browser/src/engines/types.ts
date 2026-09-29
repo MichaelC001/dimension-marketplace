@@ -1,4 +1,4 @@
-import type { BrowserAction, BrowserApp, BrowserRegion, ElementInspection, HandledDialog, TabInfo, Viewport } from "../contracts.js";
+import type { BrowserAction, BrowserApp, BrowserRegion, ElementInspection, HandledDialog, LogEntry, ModelShot, ShotRequest, TabInfo, Viewport } from "../contracts.js";
 
 /** Everything below describes the ACTIVE tab unless it says otherwise. */
 export interface EngineState {
@@ -98,6 +98,8 @@ export type PasswordSource = (origin: string) => string | undefined;
 export interface PerformOutcome { passwordOrigin?: string; dialogs?: HandledDialog[] }
 /** What `waitFor` holds out for: an element that is visible, text on the page, or a substring of the URL. */
 export type WaitCondition = { selector: string } | { text: string } | { url: string };
+/** What `evaluate` answered: the value as JSON text (absent for `undefined`), or the error the expression threw. */
+export type EvalOutcome = { ok: true; value?: string; truncated: boolean } | { ok: false; ran: boolean; error: string };
 
 export interface EngineDriver {
   /** The browser application this driver launched; null when it attached to one it does not own. */
@@ -105,6 +107,19 @@ export interface EngineDriver {
   state(): Promise<EngineState>;
   /** Viewport PNG of the active tab, not a full-page image; device scale factor is one. */
   screenshot(): Promise<Uint8Array>;
+  /**
+   * A picture for a model: the browser's own webp (jpeg where webp is refused), shrunk so its longest edge is at most
+   * 1024 CSS px. Not the live view's frames and not the annotation PNG: nothing here is retained. `url` is the caller's to fill.
+   */
+  shotForModel(request: ShotRequest): Promise<Omit<ModelShot, "url">>;
+  /** The active tab's console errors/warnings, uncaught exceptions and failed or 4xx/5xx responses, oldest first (bounded per tab); `n` counts up across tabs. */
+  logs(): LogEntry[];
+  /**
+   * Evaluate `expression` in the active tab's main world (app globals are visible) and answer its value as JSON text,
+   * cut at `limit` characters. THE one place a caller's own JavaScript reaches a page: the runtime lets only a throwaway browser here.
+   * `ran: false`: it never ran (a syntax error).
+   */
+  evaluate(expression: string, limit: number): Promise<EvalOutcome>;
   /**
    * The newest screencast frame of the active tab, from memory. The first call
    * starts the screencast and waits for its first frame.

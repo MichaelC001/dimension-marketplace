@@ -1,7 +1,7 @@
 /** WHAT BREAKS IN THE PRODUCT IF THIS GOES RED: an agent cannot wait for a
  *  page that fills in late (it polls with sleeps, or acts on a half-loaded
  *  page), or a coding agent cannot tell why a box overflows (it has only a
- *  screenshot to guess from). `browser_wait` and `browser_inspect` give it the
+ *  screenshot to guess from). The `wait` step and `browser_inspect` give it the
  *  two missing facts: "it is there now" and "here are the box and the styles
  *  that made it this size". They must also stay inside the rules of the other
  *  tools: a wait is refused where an act is, and inspect runs no code the
@@ -25,7 +25,7 @@ async function opened(path: string, host?: "localhost") {
 	return { fixture, runtime, browserId };
 }
 
-describeWithChrome("browser_wait", () => {
+describeWithChrome("wait", () => {
 	test(
 		"returns the fresh state once a selector, some text or a URL fragment shows up, and status timeout when it never does",
 		async () => {

@@ -1,22 +1,28 @@
 ---
 name: browser
-description: Drive a real browser the user watches live in the Browser View — open sites or localhost (throwaway by default, or on a saved profile to keep logins), log in or sign up, read and act on pages, read a public page logged out with browser_read, post through browser_publish, hand whole tasks to the fast jev or browser-use agents, and read the user's circled annotations. Use when the user asks to browse, read a public page, fill a form, log in, sign up, post, apply, check a site, test a local app, or "look at this page".
+description: Drive a real browser — open or view a page, act with batched steps (click, type, wait, tabs, eval), read, snapshot, inspect layout, screenshot. Use to browse a site, test a local app, fill a form, log in, or "look at this page".
 ---
 
 # Browser
 
-One browser, shared: the user sees the same page you act on, live, in the
-Browser View beside the chat. You decide what to do; the browser does it
-immediately. Your session's permission mode decides which steps ask for
-approval, except `browser_publish_confirm`, which always asks the user first in
-every mode; beyond that, use your judgment on an irreversible submission the
-user has not clearly asked for (payment, sending, publishing, a final "submit
+One browser, shared when you want it to be: `browser_open` is headless (no window,
+nothing on the user's screen), and `browser_view` puts the same page in the
+Browser View beside the chat for the user to watch and drive. You decide what to
+do; the browser does it immediately. Your session's permission mode decides which
+steps ask for approval; beyond that, use your judgment on an irreversible
+submission the user has not clearly asked for (payment, sending, a final "submit
 application" when details were guessed).
+
+Publishing and task agents (Traction sessions only): read [references/publishing-and-tasks.md](references/publishing-and-tasks.md).
 
 ## Open
 
 `browser_open({ profile?, engine?, url? })` returns a `browserId`; every other
-tool needs it.
+tool needs it. **If you were not given one, call `browser_state` with no
+`browserId`:** it answers with the browser the user opened in this session (from the
+Browser View's start page or the dock), or says none is open — then `browser_view`
+opens one they can watch. `browser_view({ browserId })` shows the user a browser you
+hold; give it `url` (and `profile`) instead to open one for them to watch.
 
 - `profile`: **leave it out** unless the task needs a login that must survive.
   Without one you get a throwaway browser: nothing is saved, its data is
@@ -26,28 +32,23 @@ tool needs it.
   Browser list. Name one (`personal`, `work`, `jobs`…) only to keep logins and
   cookies across sessions. Profiles never share cookies, and one caller holds a
   profile at a time — close it before reopening. Saved passwords
-  (`generatePassword`, `useSavedPassword`), `browser_task` `credential` and
-  `browser_publish` need a profile: on a throwaway browser they fail
-  `profile_required` — close it and open again with a name.
+  (`generatePassword`, `useSavedPassword`) need a profile: on a throwaway
+  browser they fail `profile_required` — close it and open again with a name.
 - `engine`: `chromium` (default, a Chrome this pack manages) or `chrome-relay`
   (the user's own running Chrome; its profile is always `relay`, which you may
-  omit; `browser_task` is refused there — use a chromium browser for task
-  agents). `abp` and `browser4` are refused with the reason.
+  omit). `abp` and `browser4` are refused with the reason.
 - You may log in or sign up yourself: `browser_act` types into password fields
-  like any other, and `browser_task` takes a password in `task`. Logins persist
-  in a named profile (a throwaway browser forgets them). A verification step
-  (CAPTCHA, email code, phone code) is yours to handle however you can; use
-  `ask` when you need the user for it.
-- **Tip — keep passwords out of the transcript.** Anything you type or put in
-  `task` lands in the session transcript. On a password field, `browser_act`
-  `type` (with a selector) or `insert` (into the focused field) takes one of
-  these instead of `text`, and the password never enters the transcript:
-  - `generatePassword: true` — **for a sign-up**, and the way to do one
-    without a task key: the browser generates a strong password, saves it in
-    this profile for the field's own frame origin (the same store as
-    `browser_task` `credential`), and types it, replacing the field. A
-    password already saved for that origin is reused, so a retried sign-up
-    keeps the account's password.
+  like any other. Logins persist in a named profile (a throwaway browser forgets
+  them). A verification step (CAPTCHA, email code, phone code) is yours to handle
+  however you can; use `ask` when you need the user for it.
+- **Tip — keep passwords out of the transcript.** Anything you type lands in the
+  session transcript. On a password field, `browser_act` `type` (with a
+  selector) or `insert` (into the focused field) takes one of these instead of
+  `text`, and the password never enters the transcript:
+  - `generatePassword: true` — **for a sign-up**: the browser generates a strong
+    password, saves it in this profile for the field's own frame origin, and
+    types it, replacing the field. A password already saved for that origin is
+    reused, so a retried sign-up keeps the account's password.
   - `useSavedPassword: true` — **to log in**: types the password saved for the
     field's own frame origin. With nothing saved there it fails and types
     nothing.
@@ -62,15 +63,31 @@ tool needs it.
   radio is checked, and what a `<select>` holds. A click at x,y must be inside
   the viewport; otherwise it fails and tells you to scroll.
 - A click or Enter that navigates waits up to 1.5 s and returns the new url and
-  title. For anything slower, `browser_wait({ browserId, selector | text | url })`;
-  `text` and `url` match the page after saved passwords are masked.
+  title. For anything slower, add a `wait` step: `{ kind: "wait", selector | text | url }`
+  (`text` and `url` match the page after saved passwords are masked; `timeoutMs`
+  default 5000, max 15000; a timeout stops the batch as `timeout`).
 - `browser_inspect({ browserId, selector })` returns an element's box, overflow
   sizes, key computed styles and its parent's box: use it, with
   `browser_screenshot`, to debug layout. Both take plain CSS selectors (no
-  `text/`, `xpath/`, `aria/`, `pierce/`), and there is no JavaScript verb.
+  `text/`, `xpath/`, `aria/`, `pierce/`). `browser_screenshot` is a webp of at
+  most 1024 px, cheap to send; `fullPage`, `selector` and `scale` narrow what it
+  shows, and its text gives the scale (a point in the image is at x/scale on the page).
 - JS dialogs never block you: alert and beforeunload are accepted, confirm and
   prompt are dismissed, and `dialogs` in the act result and `browser_state`
   says what happened.
+
+## Testing your own app
+
+On a throwaway browser (no profile) the `eval` step runs your JavaScript in the
+page's main world, so the app's own globals are visible:
+`{ kind: "eval", expression: "window.appState" }` comes back as JSON in `values`
+(at most 8000 characters across the batch). A signed-in profile or the user's own
+Chrome refuses it (`eval_needs_throwaway`), before any step of the batch runs.
+`{ kind: "resize", width, height }` checks a responsive layout. Each tab logs its
+console errors and warnings, uncaught exceptions and failed or 4xx/5xx requests
+(urls without query strings): `browser_act` says `newErrors: n` when something new
+appeared, and `browser_state` lists them (`logs`), once. Reproduce a bug, then read
+`logs` before guessing from a screenshot.
 
 ## Read a public page
 
@@ -90,21 +107,20 @@ private-network addresses, including through a redirect.
 
 The browser has real tabs. `browser_state` lists them (`tabs[]` with `id`,
 `title`, `url`, `active`, `loading`) plus `activeTabId`, `canGoBack` and
-`canGoForward`. Every read and action works on the **active** tab.
+`canGoForward`. Every read and action works on the **active** tab. Tabs are steps
+of `browser_act`:
 
-- `browser_tab({ browserId, op: "new", url? })` opens a tab and makes it active.
-- `browser_tab({ browserId, op: "activate", tabId })` switches to a tab.
-- `browser_tab({ browserId, op: "close", tabId })` closes one; closing the last
-  tab leaves a blank tab, never a closed browser.
+- `{ kind: "tab", op: "new", url? }` opens a tab and makes it active.
+- `{ kind: "tab", op: "activate", tabId }` switches to a tab.
+- `{ kind: "tab", op: "close", tabId }` closes one; closing the last tab leaves
+  a blank tab, never a closed browser.
 - A link or script that opens a new tab/window (target=_blank, popups) becomes
   the active tab on its own — after such a click, check `browser_state` and
-  keep working there. Tabs a task agent opens become active the same way.
+  keep working there.
 - The user can switch tabs in the View; if the page is not what you expect,
   read `browser_state` first.
 
-## Two ways to drive
-
-**Step by step (you drive).** Best when judgment is needed at each step.
+## Driving the page
 
 1. `browser_snapshot` → page text plus the interactive controls, each with a
    selector (`#email`, `input[name="city"]`, `input[name="role"][value="fe"]`)
@@ -114,109 +130,31 @@ The browser has real tabs. `browser_state` lists them (`tabs[]` with `id`,
    as given. A ref names the frame as it was when read; if the frame moved
    or navigated since, the act fails with "frame changed" — take a new
    `browser_snapshot`. Password values are never shown.
-2. `browser_act` with one action: `navigate`, `back`, `forward`, `reload`,
-   `stop`, `click` (selector or x/y; optional `button` and `clickCount` for
-   right/double clicks), `hover` (x/y), `type` (replaces the field's value),
-   `insert` (types text into whatever is focused), `select` (a `<select>`
-   option by value or visible text), `press` (`Enter`, `Tab`…), `scroll`.
+2. `browser_act({ browserId, actions: [...] })` takes 1–25 steps and runs them
+   in order in ONE call: put a whole form in one call, not one call per field.
+   Steps: `navigate`, `back`, `forward`, `reload`, `stop`, `click` (selector or
+   x/y; optional `button` and `clickCount` for right/double clicks), `hover`
+   (x/y), `type` (replaces the field's value), `insert` (types text into
+   whatever is focused), `select` (a `<select>` option by value or visible text),
+   `press` (`Enter`, `Tab`…), `scroll`, `resize`, `wait`, `tab`, `eval`. Every step
+   is checked before the first runs; the batch stops at the first step that is
+   not `completed` and says which; the answer is the page's `url` and `title`
+   after the last step.
 3. Snapshot again after anything that changes the page.
 
-Result status: `completed`; `failed` = nothing happened (fix the selector);
-`unknown` = it was sent and then errored — **look at the page before retrying a
-submission**, never resubmit blindly.
-
-**Whole task (a fast agent drives).** Best for well-specified, repetitive
-flows (forms, applications, sign-ups with given data).
-
-`browser_task({ browserId, agent: "jev" | "browser-use", task, maxSteps?, credential? })`
-runs that agent in this same browser while the user watches; it returns
-status (`done`, `blocked`, `failed`, `cancelled`), a summary, steps, elapsed
-time, model calls and tokens. Put every fact the agent needs in `task` (names,
-emails, answers) — it cannot ask you. `jev` is the fastest (one TypeSafe
-decision per step); `browser-use` is a general LLM agent. Both need model keys
-in the browser server's environment (jev: `TYPESAFE_API_KEY` and
-`TEXT_MODEL_API_KEY`). A `failed` task is a tool error naming the cause and
-the next step (an unfunded key is HTTP 402); the browser stays open, so carry
-on with `browser_act` — for a sign-up's password, `generatePassword: true`.
-`browser_act` and `browser_tab` are refused (`task_running`) while a task runs;
-`browser_task_cancel` stops it. After a task, `browser_snapshot` to verify the
-outcome yourself.
-
-**Optional: let the browser hold the password.** For a jev sign-up you may pass
-`credential: { origin: "https://site.example", mode: "signup" }` instead of a
-password: the browser generates a strong password, saves it in this profile
-for that origin and fills that origin's password fields itself, so it never
-appears in the transcript — jev, you and the results never see it (the result
-says `credential: { origin, created }`). To sign in again later to an account
-the browser created, `mode: "login"`. It fills only documents of that exact
-origin (https, or http on localhost), including one in an iframe on another
-site's page (an embedded login form). An account made any other way has no
-saved password: log in with `browser_act` (`useSavedPassword: true` needs a
-saved one), or put the password in `task`.
-`credential` is jev-only: `browser-use` reads password fields into its model,
-so it gets the password in `task` instead.
-
-Give a task **one clear goal with all its data**, start to finish. If a task
-ends unfinished (`blocked`, `failed`, out of steps, or `done` but the snapshot
-shows it is not), do NOT start a second task that says "continue the half-done
-form" — jev loops on that. Inspect with `browser_snapshot` and finish the
-remaining steps yourself with `browser_act`.
-
-## Publishing
-
-To post something public (a social post, a reply) use `browser_publish`, not
-`browser_act`. Prefer a **preset** over a hand-written recipe: list them with
-`browser_publish_presets` (`name`, `platform`, `verified`, `fields`,
-`needsTarget`), then pass `preset: { name, values }`, one value per field, in
-the listed order. A preset with `needsTarget` (e.g. `reddit-comment`) also takes
-`target`, the page on that site to post on (the thread's URL). Shipped presets:
-`x-post`, `bluesky-post`, `linkedin-post`, `reddit-comment`. They are
-`verified: false`: tested against copies of each site's page, not the live
-site, so if one fails on a selector, report the error; never improvise a
-different button.
-
-Only for a site with no preset, pass a `recipe` instead (never both): the
-site's `origin`, its `composeUrl`, a `signedIn` selector, the `fields`
-(`selector`, exact `value`, optional `label` such as "Post text" that the user
-sees above it), the `submit` button, and a `receipt`: `path`, a template for
-the posted URL's path on the origin (`{segment}` = one path segment,
-`{digits}` = a number; for X `"/{segment}/status/{digits}"`), plus an optional
-`linkSelector`.
-
-- `mode: "check"` only verifies that the profile is logged in (`signed-in` /
-  `not-signed-in`). If it is not, log in first (`browser_act`, `browser_task`,
-  or the user in the View), then post. A password field is never a publish
-  field.
-- `mode: "post"` fills the fields and reads them back. It then returns
-  `awaiting-confirmation` with a `publishId` and `composeUrl` (where it will
-  post). **Nothing is sent yet.** The View shows the exact text with **Post**
-  and **Cancel**. Post it yourself with
-  `browser_publish_confirm({ browserId, publishId, expect: { origin, profile, values } })`,
-  copying `origin`, `profile` and every field's `value` (in field order)
-  exactly from the `awaiting-confirmation` record you were shown. The user is
-  ALWAYS asked first, whatever the permission mode: their Allow card shows
-  those args, so it names exactly where, as whom and what goes out. (Where the
-  harness can't guarantee that ask, Dimension refuses your confirm: hand the
-  Post to the user in the View.) Without
-  `expect` it fails `expect_required`; any difference fails `publish_mismatch`.
-  Either way nothing is clicked and the publish stays pending. Once allowed it
-  clicks submit exactly once, never retried, and returns `posted` with the
-  post's `url` read from the page, `failed` or `unknown`. Drop it with
-  `browser_publish_cancel`. The user's Post button in the View posts it too.
-- Don't act on the page while a publish awaits confirmation: `browser_act`,
-  `browser_tab`, `browser_task`, `browser_publish` and `browser_close` are
-  refused anyway (`publish_pending`) until it is posted, cancelled or expires
-  (10 minutes).
-- `browser_publish_wait({ browserId, publishId })` follows it to `posted`
-  (with the post's `url`, read from the page), `unknown` (it may have posted:
-  never post again), `failed`, `cancelled` or `expired`.
+Result status: `completed`; `failed` = that step did nothing (fix the selector;
+`completed` says how many steps ran before it); `unknown` = it was sent and then
+errored — **look at the page before retrying a submission**, never resubmit
+blindly; `timeout` = a `wait` ran out, or the batch used its 20 s and the
+rest must go in a new call.
 
 ## Annotations
 
 When the user circles or selects part of the page in the View, you receive
 the cropped screenshot (with their marks), their note, the URL and the
 elements under the region in this conversation. Treat it as the user pointing
-at the screen.
+at the screen. It does not name the browser: `browser_state` with no
+`browserId` reads it.
 
 ## Rules
 

@@ -322,7 +322,7 @@ async function runStage(agent, browserId, stage, label = `${agent}/${stage.id}`,
   };
   const take = (t) => Object.assign(run, { status: t.status, stepCount: t.stepCount, usage: t.usage, summary: t.summary, taskMs: t.elapsedMs });
   try {
-    await call("browser_act", { browserId, action: { kind: "navigate", url: stage.start } });
+    await call("browser_act", { browserId, actions: [{ kind: "navigate", url: stage.start }] });
     console.log(`[${label}] task started`);
     rec?.stage(`${stage.n}/${stages.length}  ${stage.account ? "account" : "job"} · ${stage.id}   [${agent}]`);
     // Stall is judged from the step list every call returns, not from progress
@@ -428,7 +428,7 @@ for (const agent of agents) {
     // the account from the fixture and signs this browser in (/__seed).
     if (isAccountStage(stage) && !run.success) {
       try {
-        await call("browser_act", { browserId, action: { kind: "navigate", url: `${base}/__seed?stage=${stage.id}` } });
+        await call("browser_act", { browserId, actions: [{ kind: "navigate", url: `${base}/__seed?stage=${stage.id}` }] });
         run.seeded = (await worldResults()).seeded.includes(stage.id);
         if (run.seeded) console.log(`[${agent}/${stage.id}] repaired by the harness so later stages start fair`);
       } catch (error) {
