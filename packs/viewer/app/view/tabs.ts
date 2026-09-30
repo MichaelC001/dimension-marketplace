@@ -10,6 +10,8 @@ export interface DocTab extends ViewedFile {
 	readonly key: string;
 	/** Bumped when the same file is opened again and has CHANGED on disk. */
 	readonly revision: number;
+	/** How many opens of this document asked for annotate mode. A count, not a flag: each ask turns the layer on again, even for a tab already open. */
+	readonly annotateRequests: number;
 }
 
 export interface ViewerState {
@@ -20,7 +22,7 @@ export interface ViewerState {
 }
 
 export type ViewerAction =
-	| { readonly type: "open"; readonly key: string; readonly file: ViewedFile }
+	| { readonly type: "open"; readonly key: string; readonly file: ViewedFile; /** The open asked for annotate mode. */ readonly annotate?: boolean }
 	| { readonly type: "refused"; readonly message: string }
 	| { readonly type: "activate"; readonly key: string }
 	| { readonly type: "close"; readonly key: string }
@@ -31,17 +33,23 @@ export const INITIAL_STATE: ViewerState = { tabs: [], activeKey: null, notice: n
 export function reduce(state: ViewerState, action: ViewerAction): ViewerState {
 	switch (action.type) {
 		case "open": {
+			const asked = action.annotate === true ? 1 : 0;
 			const at = state.tabs.findIndex(tab => tab.key === action.key);
 			if (at === -1) {
-				const tab: DocTab = { ...action.file, key: action.key, revision: 0 };
+				const tab: DocTab = { ...action.file, key: action.key, revision: 0, annotateRequests: asked };
 				return { tabs: [...state.tabs, tab], activeKey: action.key, notice: null };
 			}
 			// The same file again: focus it, and reload it only if it moved under us.
 			const existing = state.tabs[at] as DocTab;
 			const changed = existing.size !== action.file.size || existing.mtimeMs !== action.file.mtimeMs;
-			const tabs = changed
-				? state.tabs.map((tab, index) => (index === at ? { ...action.file, key: action.key, revision: existing.revision + 1 } : tab))
-				: state.tabs;
+			const annotateRequests = existing.annotateRequests + asked;
+			const tabs =
+				changed || asked > 0
+					? state.tabs.map((tab, index) => {
+							if (index !== at) return tab;
+							return changed ? { ...action.file, key: action.key, revision: existing.revision + 1, annotateRequests } : { ...existing, annotateRequests };
+						})
+					: state.tabs;
 			return { tabs, activeKey: action.key, notice: null };
 		}
 		case "refused":

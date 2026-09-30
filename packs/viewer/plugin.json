@@ -1,7 +1,7 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "viewer",
-	"version": "0.1.0",
+	"version": "0.2.0",
 	"description": "A tabbed document viewer beside the conversation: images, PDF, HTML, Markdown, Word, PowerPoint, Excel and plain text, rendered offline inside a sandboxed frame. Ask the agent to open a file and it appears as a tab.",
 	"author": {
 		"name": "Dimension"
@@ -32,7 +32,91 @@
 					"modelSpaces": [
 						"chat"
 					],
-					"grants": []
+					"grants": ["files:read"],
+					"opens": [
+						{
+							"tool": "view_file",
+							"pathArg": "path",
+							"ext": ["png", "jpg", "jpeg", "gif", "webp", "avif", "bmp", "ico", "svg"],
+							"mime": ["image/png", "image/jpeg", "image/gif", "image/webp", "image/avif", "image/bmp", "image/x-icon", "image/svg+xml"],
+							"annotates": ["marks"],
+							"label": "Viewer"
+						},
+						{
+							"tool": "view_file",
+							"pathArg": "path",
+							"ext": ["pdf"],
+							"mime": ["application/pdf"],
+							"annotates": ["text"],
+							"label": "Viewer"
+						},
+						{
+							"tool": "view_file",
+							"pathArg": "path",
+							"ext": ["docx"],
+							"mime": ["application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
+							"annotates": ["text"],
+							"label": "Viewer"
+						},
+						{
+							"tool": "view_file",
+							"pathArg": "path",
+							"ext": ["pptx"],
+							"mime": ["application/vnd.openxmlformats-officedocument.presentationml.presentation"],
+							"annotates": ["text"],
+							"label": "Viewer"
+						},
+						{
+							"tool": "view_file",
+							"pathArg": "path",
+							"ext": ["xlsx", "xlsm"],
+							"mime": ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"],
+							"annotates": ["text"],
+							"label": "Viewer"
+						},
+						{
+							"tool": "view_file",
+							"pathArg": "path",
+							"ext": ["md", "markdown", "mdx"],
+							"mime": ["text/markdown"],
+							"annotates": ["text"],
+							"label": "Viewer"
+						},
+						{
+							"tool": "view_file",
+							"pathArg": "path",
+							"ext": ["html", "htm", "xhtml"],
+							"mime": ["text/html", "application/xhtml+xml"],
+							"label": "Viewer"
+						},
+						{
+							"tool": "view_file",
+							"pathArg": "path",
+							"ext": ["txt", "log", "csv", "tsv", "json", "yaml", "yml", "toml", "xml", "css", "js", "mjs", "ts", "tsx", "jsx", "py", "rs", "go", "java", "c", "h", "cpp", "sh", "sql"],
+							"mime": [
+								"text/plain",
+								"text/csv",
+								"text/tab-separated-values",
+								"application/json",
+								"application/yaml",
+								"application/toml",
+								"application/xml",
+								"text/css",
+								"text/javascript",
+								"text/typescript",
+								"text/x-python",
+								"text/x-rust",
+								"text/x-go",
+								"text/x-java",
+								"text/x-c",
+								"text/x-c++",
+								"text/x-shellscript",
+								"application/sql"
+							],
+							"annotates": ["text"],
+							"label": "Viewer"
+						}
+					]
 				}
 			]
 		}

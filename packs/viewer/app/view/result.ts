@@ -1,7 +1,7 @@
 // A `view_file` tool result, read as the action it stands for. The result is the
 // only thing the host hands this View, so it is parsed at the boundary: a result
 // that is not ours (or a server older than this View) opens nothing and says so.
-import { TAB_META_KEY, tabMetaSchema, viewedFileSchema } from "../../src/contract";
+import { ANNOTATE_META_KEY, TAB_META_KEY, tabMetaSchema, viewedFileSchema } from "../../src/contract";
 import type { ViewerAction } from "./tabs";
 
 interface ResultLike {
@@ -20,5 +20,5 @@ export function actionFromResult(result: ResultLike): ViewerAction {
 	if (!file.success) return { type: "refused", message: "The viewer server answered with something this View does not understand." };
 	// The key the server named for the host's tab when it sent one (today it is the path); the path otherwise.
 	const tab = tabMetaSchema.safeParse(result._meta?.[TAB_META_KEY]);
-	return { type: "open", key: tab.success ? tab.data.key : file.data.path, file: file.data };
+	return { type: "open", key: tab.success ? tab.data.key : file.data.path, file: file.data, ...(result._meta?.[ANNOTATE_META_KEY] === true ? { annotate: true } : {}) };
 }

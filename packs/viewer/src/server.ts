@@ -1,4 +1,6 @@
-// The viewer's MCP server: two tools and the View bundle.
+// The viewer's MCP server: two tools and the View bundle. Each tool passes its
+// call's `_meta` to the fence, which reads the host-lent one-file grant there
+// (doc 86 §5): a human's click may open ONE file the roots do not cover.
 //
 //   view_file        model-visible. Resolves a path through the fence, names what
 //                    it is, and mounts the View. Its RESULT carries the document
@@ -18,7 +20,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { readChunk, readRange } from "./chunk";
-import { MAX_CHUNK_BYTES, TAB_META_KEY, VIEWER_VIEW_URI, type ViewedFile } from "./contract";
+import { ANNOTATE_META_KEY, MAX_CHUNK_BYTES, TAB_META_KEY, VIEWER_VIEW_URI, type ViewedFile } from "./contract";
 import { createFence, type Fence } from "./fence";
 import { detectKind, KIND_HEAD_BYTES } from "./kind";
 
@@ -95,12 +97,13 @@ export async function createViewerServer(options: ViewerServerOptions = {}): Pro
 			inputSchema: {
 				path: z.string().min(1).max(4096).describe("Absolute path of the file to open"),
 				filename: z.string().min(1).max(255).optional().describe("Name to show in the tab; defaults to the file's own name"),
+				annotate: z.boolean().optional().describe("Open in annotate mode, so the user can mark the file up"),
 			},
 			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 			_meta: { ui: { resourceUri: VIEWER_VIEW_URI } },
 		},
-		async ({ path, filename }) => {
-			const verdict = await fence.check(path);
+		async ({ path, filename, annotate }, extra) => {
+			const verdict = await fence.check(path, extra._meta);
 			if (!verdict.ok) return failure(verdict.reason);
 			try {
 				const head = await readRange(verdict.real, 0, KIND_HEAD_BYTES);
@@ -115,7 +118,7 @@ export async function createViewerServer(options: ViewerServerOptions = {}): Pro
 				return {
 					content: [{ type: "text", text: `Opened ${file.filename} (${file.kind}, ${file.size} bytes) in the viewer.` }],
 					structuredContent: { ...file },
-					_meta: { [TAB_META_KEY]: { key: file.path } },
+					_meta: { [TAB_META_KEY]: { key: file.path }, ...(annotate === true ? { [ANNOTATE_META_KEY]: true } : {}) },
 				};
 			} catch (error) {
 				return failure(`"${path}" cannot be opened: ${describeError(error)}`);
@@ -137,8 +140,8 @@ export async function createViewerServer(options: ViewerServerOptions = {}): Pro
 			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 			_meta: APP_ONLY,
 		},
-		async ({ path, offset, length }) => {
-			const verdict = await fence.check(path);
+		async ({ path, offset, length }, extra) => {
+			const verdict = await fence.check(path, extra._meta);
 			if (!verdict.ok) return failure(verdict.reason);
 			try {
 				const chunk = await readChunk(verdict.real, offset, length);

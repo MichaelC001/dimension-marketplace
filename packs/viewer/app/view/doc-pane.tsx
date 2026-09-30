@@ -45,6 +45,13 @@ export function DocPane({ app, tab, active, theme }: DocPaneProps) {
 	const limit = readLimit(tab);
 	const truncated = limit !== undefined && tab.size > limit;
 	const modes = annotationModes(tab.kind);
+	const firstMode = modes[0];
+
+	// An open that asked for annotate mode (the card's Annotate action) turns the layer on, for a new tab and for one
+	// already open. A plain open leaves the mode as the human set it; a kind with no mode ignores the ask.
+	useEffect(() => {
+		if (tab.annotateRequests > 0 && firstMode !== undefined) setMode(firstMode);
+	}, [tab.annotateRequests, firstMode]);
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: `retry` is a retrigger token, and a changed file arrives as a new `revision`.
 	useEffect(() => {

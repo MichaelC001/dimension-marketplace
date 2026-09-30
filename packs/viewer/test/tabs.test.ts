@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { actionFromResult } from "../app/view/result";
 import { INITIAL_STATE, reduce, type ViewerAction, type ViewerState } from "../app/view/tabs";
-import type { ViewedFile } from "../src/contract";
+import { ANNOTATE_META_KEY, type ViewedFile } from "../src/contract";
 
 const file = (name: string, extra: Partial<ViewedFile> = {}): ViewedFile => ({ path: `/docs/${name}`, filename: name, kind: "text", size: 10, mtimeMs: 1, ...extra });
 const open = (name: string, extra: Partial<ViewedFile> = {}): ViewerAction => ({ type: "open", key: `/docs/${name}`, file: file(name, extra) });
@@ -47,6 +47,22 @@ describe("tab state", () => {
 		expect(keys(refused)).toEqual(["a.txt"]);
 		expect(reduce(refused, open("b.txt")).notice).toBeNull();
 	});
+
+	test("an open that asks for annotate mode is counted on its tab, including a tab already open and unchanged", () => {
+		const asked = (name: string, extra: Partial<ViewedFile> = {}): ViewerAction => ({ type: "open", key: `/docs/${name}`, file: file(name, extra), annotate: true });
+		const requests = (state: ViewerState) => state.tabs.map(tab => tab.annotateRequests);
+		expect(requests(play(open("a.txt"), asked("b.txt")))).toEqual([0, 1]);
+		// Already open and untouched on disk: no reload, but the ask still reaches the pane.
+		const again = play(open("a.txt"), asked("a.txt"));
+		expect(requests(again)).toEqual([1]);
+		expect(again.tabs[0]?.revision).toBe(0);
+		expect(requests(play(open("a.txt"), asked("a.txt"), asked("a.txt")))).toEqual([2]);
+		// A plain open later neither clears the ask nor adds one; a reload keeps the count and bumps the revision.
+		const reloaded = play(asked("a.txt"), open("a.txt"), open("a.txt", { mtimeMs: 2 }));
+		expect(requests(reloaded)).toEqual([1]);
+		expect(reloaded.tabs[0]?.revision).toBe(1);
+		expect(requests(play(asked("a.txt", { mtimeMs: 2 }), asked("a.txt", { mtimeMs: 3 })))).toEqual([2]);
+	});
 });
 
 describe("actionFromResult", () => {
@@ -62,6 +78,16 @@ describe("actionFromResult", () => {
 	test("the tab key from _meta wins over the path", () => {
 		expect(actionFromResult({ structuredContent: structured, _meta: { "ai.insodimension/tab": { key: "REAL" } } })).toMatchObject({ type: "open", key: "REAL" });
 		expect(actionFromResult({ structuredContent: structured })).toMatchObject({ type: "open", key: "/docs/a.txt" });
+	});
+
+	test("only a result that says annotate: true asks for annotate mode", () => {
+		expect(actionFromResult({ structuredContent: structured, _meta: { [ANNOTATE_META_KEY]: true } })).toMatchObject({ type: "open", annotate: true });
+		for (const asked of [undefined, false, "true", 1, {}]) {
+			const action = actionFromResult({ structuredContent: structured, _meta: { [ANNOTATE_META_KEY]: asked } });
+			expect(action).toMatchObject({ type: "open" });
+			expect(action).not.toHaveProperty("annotate");
+		}
+		expect(actionFromResult({ structuredContent: structured })).not.toHaveProperty("annotate");
 	});
 
 	test("a result that is not a viewer file opens nothing", () => {
