@@ -34,7 +34,8 @@ export interface ForgeBackend {
 	validate(draft: AgentDraft): Promise<DraftCheck>;
 	/** An agent's home, its standing instructions and its memory room. */
 	home(name: string): Promise<AgentHome>;
-	saveInstructions(name: string, text: string): Promise<InstructionsSaved>;
+	/** `revision` is the one `home` gave for the file a save writes; the server refuses the write when that file or its place has changed since. */
+	saveInstructions(name: string, text: string, revision: string): Promise<InstructionsSaved>;
 	/** Talk-to-build: the line goes to the agent's session as the user's words. */
 	speak(text: string): Promise<void>;
 	readonly visibility: AgentVisibility;
@@ -91,7 +92,7 @@ export function hostBackend(app: App): ForgeBackend {
 		save: (draft, target) => call<SaveOutcome>("save_agent", { draft, ...target }),
 		validate: draft => call<DraftCheck>("validate_agent", { draft }),
 		home: name => call<AgentHome>("agent_home", { name }),
-		saveInstructions: (name, text) => call<InstructionsSaved>("save_instructions", { name, text }),
+		saveInstructions: (name, text, revision) => call<InstructionsSaved>("save_instructions", { name, text, revision }),
 		speak: async text => {
 			const answer = await app.sendMessage({ role: "user", content: [{ type: "text", text }] });
 			if (answer.isError) throw new ForgeToolError("The host did not take the message.");

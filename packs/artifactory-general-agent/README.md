@@ -51,13 +51,13 @@ the roster and under its name.
 | Tool | Who calls it | What it does |
 |---|---|---|
 | `forge_open { agent?, workspace? }` | the model, and the rail door | Mounts the View on the constellation, or on one agent. `workspace` is optional: it adds the project's agents. |
-| `forge_propose { name, description?, charter?, vibr?, skills?, mcp?, memory?, lineage?, thinking?, personality?, habitat?, extra? }` | the model | Talk-to-build: pushes a draft into the View, marked **proposed by the workshop** until the human accepts or discards it. Writes nothing. Has no `tools` or `approval` field, and refuses an `extra` that names a grant-class key (below). |
+| `forge_propose { name, description?, charter?, vibr?, skills?, memory?, lineage?, thinking?, personality?, habitat?, extra? }` | the model | Talk-to-build: pushes a draft into the View, marked **proposed by the workshop** until the human accepts or discards it. Writes nothing. Has no `tools`, `mcp` or `approval` field, and refuses an `extra` that names a grant-class key (below). |
 | `list_agents` | the View | All three tiers, each parsed by `@dimension/sdk/general-agent`'s `parseGeneralAgent`, with its tier, path, revision and whether it is editable. |
 | `list_parts` | the View | Skills and MCP servers read from the workspace, `$INSO_HOME/agent` and every installed pack; tool names only as existing agents already use them — the host exposes no tool registry to Apps, and the tray says so. |
 | `validate_agent { draft }` | the View | The server's verdict on a draft — its own problems, then whether the merged `agent.md` loads as a General Agent — without writing. Drives the live error under Everything else. |
 | `save_agent { draft, create, tier?, revision? }` | the View | Serializes with the SAME `src/agent-md.ts` the View renders, re-parses the WHOLE file with `parseGeneralAgent` before anything touches disk (a parse error is refused, never written), then writes atomically (temp + rename). `create: true` writes a new agent into the user tier and refuses a name taken in any tier. `create: false` rewrites the agent of that `tier` and is refused unless `revision` is the one `list_agents` gave — a hand edit since is never overwritten unseen. Never rewrites a Loop. |
-| `agent_home { name }` | the View | The agent's home: id, folder, whether the engine registers it, the memory room, and its standing instructions (below). Works for a name that does not exist yet. |
-| `save_instructions { name, text }` | the View | Writes the agent's standing instructions (below). The path is derived from the name, never given. |
+| `agent_home { name }` | the View | The agent's home: id, folder, whether the engine registers it, the memory room, and its standing instructions (below), with the `revision` of the file a save would write. Works for a name that does not exist yet. |
+| `save_instructions { name, text, revision }` | the View | Writes the agent's standing instructions (below). The path is derived from the name, never given. Refused unless `revision` is the one `agent_home` gave: the file changed since (an edit made elsewhere), or the home was set up since (the save would land in another file). |
 
 **Where things are read from.** The engine spawns this server once, from the
 plugin's own root, with its home and project config dir in the environment
@@ -74,8 +74,10 @@ workspace is bound and everything but project agents still works.
 `capabilities.control`, `capabilities.plugins`, `capabilities.mcp`,
 `capabilities.optIn`, `subagents.allowed`, `harness`, `allowedHarnesses` — change
 only by a human gesture in the View. `forge_propose` cannot carry them: its
-schema has none of the drawn ones; an `extra` that names any grant-class key
-(even inline, or through the legacy flat `tools:` / `spawns:`) is refused whole;
+schema has none of the drawn ones (`tools`, `mcp`, `approval`, the Recall scope);
+an `extra` that names any grant-class key is refused whole — read as text, and
+again as the YAML it parses to, so a flow mapping, explicit `? key` entries or an
+anchored key cannot slip one through (nor the legacy flat `tools:` / `spawns:`);
 and merging a proposal into a draft never applies one, whatever reaches the View.
 `save_agent` and `save_instructions` are App-only — the model cannot write a file
 at all.
@@ -188,7 +190,9 @@ legacy `.omp/agents` file, or a Loop (which is not listed at all).
   `agent.md`. Every candidate is listed with its state and the winner marked.
   For a user or project agent the text is editable: a save writes the home
   `AGENTS.md` once the home folder exists, else the sibling (which seeds the home
-  on its first provisioning). A pack agent's resolution is shown, read-only.
+  on its first provisioning), and is refused if that file changed — or the home
+  appeared — since the text was read, so nothing written meanwhile is lost. A
+  pack agent's resolution is shown, read-only.
 - **Memory reads from.** This agent's room, its home room (memory follows the
   agent from project to project), and the global lane — or every room when the
   reach is `all` (`packages/engine/src/providers/memory-reach.ts`). The tab notes

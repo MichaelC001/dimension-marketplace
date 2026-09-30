@@ -9,6 +9,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { parse as parseYaml } from "yaml";
 import { type AgentDraft, type AgentProposal, applyProposal, blankDraft, manifestLines } from "../src/agent-md";
 import type { AgentHome, AgentListing, DraftCheck, ForgeProposed, InstructionsSaved, ListedAgent, SaveOutcome } from "../src/contracts";
+import { grantPathsIn } from "../src/extra";
 import { createForgeServer } from "../src/server";
 import { WRITE_DIR } from "../src/store";
 
@@ -469,14 +470,15 @@ You run the desk.
 });
 
 describe("forge_propose", () => {
-	test("offers the model no tools, approval or recall-scope field, and carries none into the draft", async () => {
+	test("offers the model no tools, mcp, approval or recall-scope field, and carries none into the draft", async () => {
 		const { tools } = await client.listTools();
 		const schema = tools.find(tool => tool.name === "forge_propose")?.inputSchema.properties ?? {};
 		expect(Object.keys(schema)).not.toContain("tools");
+		expect(Object.keys(schema)).not.toContain("mcp");
 		expect(Object.keys(schema)).not.toContain("approval");
 		expect(Object.keys(schema)).not.toContain("memoryScope");
 
-		const result = await call("forge_propose", { name: "scout", description: "Finds things", skills: ["fallow"], tools: ["bash"], approval: "yolo", memoryScope: "global" });
+		const result = await call("forge_propose", { name: "scout", description: "Finds things", skills: ["fallow"], tools: ["bash"], mcp: ["palace"], approval: "yolo", memoryScope: "global" });
 		expect(result.isError).toBeFalsy();
 		const { proposal } = result.structuredContent as unknown as ForgeProposed;
 		expect(proposal).toEqual({ name: "scout", description: "Finds things", skills: ["fallow"] });
@@ -497,12 +499,51 @@ describe("forge_propose", () => {
 		["tools", "tools: [bash]"],
 		["spawns", "spawns: '*'"],
 		["capabilities (inline)", "capabilities: { control: [agents] }"],
+		["capabilities (inline)", "capabilities:\n  {control: [spaces], tools: [bash, write]}"],
+		["subagents (inline)", 'subagents:\n  ? allowed\n  : ["*"]'],
 		["capabilities.control", "title: Friendly\ncapabilities:\n  autoloadSkills: [x]\n  control: [agents]"],
 	])("refuses an Everything-else proposal that sets %s — the whole proposal, not just the key", async (named, extra) => {
 		const result = await call("forge_propose", { name: "scout", description: "Finds things", extra });
 		expect(result.isError).toBe(true);
 		expect(JSON.stringify(result.content)).toContain(named);
 		expect(result.structuredContent).toBeUndefined();
+	});
+
+	// `grantPathsIn` reads lines, so a spelling of YAML it cannot place slips past it;
+	// the server's second reader resolves the text to the keys the engine will read.
+	test.each([
+		["capabilities.tools", "capabilities:\n  title: x\n  ? tools\n  : [bash]"],
+		["capabilities.tools", "capabilities:\n  title: x\n  &a tools: [bash]"],
+		["capabilities.control", "title: x\n? capabilities\n: {control: [agents]}"],
+		["capabilities.plugins", "{capabilities: {plugins: [browser]}}"],
+		["gate", "? gate\n: {approval: yolo}"],
+	])("refuses %s however the YAML spells it: %j", async (named, extra) => {
+		const result = await call("forge_propose", { name: "scout", description: "Finds things", extra });
+		expect(result.isError).toBe(true);
+		expect(JSON.stringify(result.content)).toContain(named);
+		expect(result.structuredContent).toBeUndefined();
+	});
+
+	test("a proposal cannot change capabilities.mcp — by field, through extra, or merged into a draft", async () => {
+		// By field: undeclared in the schema, so the model's `mcp` never reaches the proposal.
+		const byField = await call("forge_propose", { name: "scout", mcp: ["palace"] });
+		expect(byField.isError).toBeFalsy();
+		expect((byField.structuredContent as unknown as ForgeProposed).proposal).toEqual({ name: "scout" });
+		// Through extra: refused whole.
+		const viaExtra = await call("forge_propose", { name: "scout", extra: "capabilities:\n  mcp: [palace]" });
+		expect(viaExtra.isError).toBe(true);
+		expect(JSON.stringify(viaExtra.content)).toContain("capabilities.mcp");
+		// Merged into a draft: a forged `mcp` (an older server, a hostile event) changes nothing.
+		const base = draft({ mcp: ["browser"] });
+		expect(applyProposal(base, { name: "release-herald", mcp: ["palace", "threejs"] } as AgentProposal).mcp).toEqual(["browser"]);
+	});
+
+	// The panel's "You are setting …" warning is `grantPathsIn` on the text being typed.
+	test("the warning names a mixed section written as a flow mapping or explicit keys on the next line, and stays silent on plain harmless keys", () => {
+		expect(grantPathsIn("capabilities:\n  {control: [spaces], tools: [bash, write]}")).toEqual(["capabilities (inline)"]);
+		expect(grantPathsIn('subagents:\n  ? allowed\n  : ["*"]')).toEqual(["subagents (inline)"]);
+		expect(grantPathsIn("capabilities:\n  # only a comment\n")).toEqual([]);
+		expect(grantPathsIn("capabilities:\n  autoloadSkills: [fallow]\nsubagents:\n  maxDepth: 2")).toEqual([]);
 	});
 
 	test("carries the harmless keys of Everything else through, and refuses YAML that is not a mapping", async () => {
@@ -516,10 +557,11 @@ describe("forge_propose", () => {
 	});
 
 	test("merged into a draft, a proposal leaves the human's tools, gate, recall scope and grants alone", () => {
-		const base = draft({ tools: ["read"], approval: "always-ask", memoryScope: "project", extra: "capabilities:\n  control: [agents]\ntitle: Old" });
-		const hostile = { name: "release-herald", charter: "New charter", tools: ["bash"], approval: "yolo", memoryScope: "global" } as AgentProposal;
+		const base = draft({ tools: ["read"], mcp: ["browser"], approval: "always-ask", memoryScope: "project", extra: "capabilities:\n  control: [agents]\ntitle: Old" });
+		const hostile = { name: "release-herald", charter: "New charter", tools: ["bash"], mcp: ["palace"], approval: "yolo", memoryScope: "global" } as AgentProposal;
 		const merged = applyProposal(base, hostile);
 		expect(merged.tools).toEqual(["read"]);
+		expect(merged.mcp).toEqual(["browser"]);
 		expect(merged.approval).toBe("always-ask");
 		expect(merged.memoryScope).toBe("project");
 		expect(merged.charter).toBe("New charter");
@@ -527,6 +569,10 @@ describe("forge_propose", () => {
 		// Even if a grant-class proposal reaches the View (an older server, a forged event), it is not applied.
 		const smuggled = applyProposal(base, { name: "release-herald", extra: "capabilities:\n  control: [agents, rooms]\ngate:\n  approval: yolo" });
 		expect(smuggled.extra).toBe(base.extra);
+		// Nor when the grant is a flow mapping or explicit keys on the line after the section's key.
+		for (const extra of ["capabilities:\n  {control: [spaces], tools: [bash, write]}", 'subagents:\n  ? allowed\n  : ["*"]']) {
+			expect(applyProposal(base, { name: "release-herald", extra }).extra).toBe(base.extra);
+		}
 		// A harmless one lays over the human's own text key by key, keeping their grant.
 		const overlaid = applyProposal(base, { name: "release-herald", extra: "title: New\ncapabilities:\n  autoloadSkills: [fallow]" });
 		const decl = parseYaml(overlaid.extra) as { title: string; capabilities: Record<string, unknown> };
@@ -721,15 +767,19 @@ describe("an agent's home and its standing instructions", () => {
 		expect((await homeOf("project-bot")).instructions.text).toBe("Project only.\n");
 	});
 
+	/** The revision of the file a save would write, as the View reads it from `agent_home`. */
+	const targetRevision = async (name: string): Promise<string> => (await homeOf(name)).instructions.target?.revision ?? "";
+	const saveText = async (name: string, text: string, revision: string): Promise<CallToolResult> => call("save_instructions", { name, text, revision });
+
 	test("saving writes the home AGENTS.md once the home exists, the sibling before; a pack agent's is read-only", async () => {
 		await call("save_agent", { draft: draft(), create: true });
 		const sibling = join(home, "agent", "agents", "release-herald", "AGENTS.md");
-		const beforeHome = await call("save_instructions", { name: "release-herald", text: "Be brief." });
+		const beforeHome = await saveText("release-herald", "Be brief.", await targetRevision("release-herald"));
 		expect(beforeHome.structuredContent as unknown as InstructionsSaved).toEqual({ path: sibling, kind: "agent-dir" });
 		expect(await readFile(sibling, "utf8")).toBe("Be brief.\n");
 
 		await mkdir(homeDirOf("release-herald"), { recursive: true });
-		const afterHome = await call("save_instructions", { name: "release-herald", text: "Be briefer.\n" });
+		const afterHome = await saveText("release-herald", "Be briefer.\n", await targetRevision("release-herald"));
 		expect(afterHome.structuredContent as unknown as InstructionsSaved).toEqual({ path: join(homeDirOf("release-herald"), "AGENTS.md"), kind: "home" });
 		const now = await homeOf("release-herald");
 		expect(wins(now)).toBe("home");
@@ -737,9 +787,56 @@ describe("an agent's home and its standing instructions", () => {
 		// Nothing half-written is left behind.
 		expect((await readdir(homeDirOf("release-herald"))).filter(name => name.endsWith(".tmp"))).toEqual([]);
 
-		const pack = await call("save_instructions", { name: "helper", text: "No." });
+		const pack = await saveText("helper", "No.", await targetRevision("helper"));
 		expect(pack.isError).toBe(true);
 		await expect(stat(join(homeDirOf("helper"), "AGENTS.md"))).rejects.toThrow();
-		expect((await call("save_instructions", { name: "ghost-agent", text: "No." })).isError).toBe(true);
+		expect((await saveText("ghost-agent", "No.", "0123456789abcdef")).isError).toBe(true);
+	});
+
+	test("a save is refused when the file it would write changed since it was read — the edit made elsewhere survives", async () => {
+		await call("save_agent", { draft: draft(), create: true });
+		const sibling = join(home, "agent", "agents", "release-herald", "AGENTS.md");
+		await put(sibling, "As first read.\n");
+		const seen = await targetRevision("release-herald");
+
+		await put(sibling, "Edited in another editor.\n");
+		const stale = await saveText("release-herald", "The Forge tab's copy.", seen);
+		expect(stale.isError).toBe(true);
+		expect(await readFile(sibling, "utf8")).toBe("Edited in another editor.\n");
+
+		// Read again, the same text goes through: the guard refuses a stale write, not every write.
+		expect((await saveText("release-herald", "The Forge tab's copy.", await targetRevision("release-herald"))).isError).toBeFalsy();
+		expect(await readFile(sibling, "utf8")).toBe("The Forge tab's copy.\n");
+	});
+
+	test("a save is refused when the home appeared since the text was read — it would have landed in another file", async () => {
+		await call("save_agent", { draft: draft(), create: true });
+		const sibling = join(home, "agent", "agents", "release-herald", "AGENTS.md");
+		await put(sibling, "Beside agent.md.\n");
+		const seen = await targetRevision("release-herald");
+		expect((await homeOf("release-herald")).instructions.target?.kind).toBe("agent-dir");
+
+		// The engine provisions the home between the read and the save.
+		await mkdir(homeDirOf("release-herald"), { recursive: true });
+		const moved = await saveText("release-herald", "Edited against the sibling's text.", seen);
+		expect(moved.isError).toBe(true);
+		await expect(stat(join(homeDirOf("release-herald"), "AGENTS.md"))).rejects.toThrow();
+		expect(await readFile(sibling, "utf8")).toBe("Beside agent.md.\n");
+
+		const reread = await homeOf("release-herald");
+		expect(reread.instructions.target?.kind).toBe("home");
+		expect((await saveText("release-herald", "Edited against the sibling's text.", reread.instructions.target?.revision ?? "")).isError).toBeFalsy();
+		expect(await readFile(join(homeDirOf("release-herald"), "AGENTS.md"), "utf8")).toBe("Edited against the sibling's text.\n");
+	});
+
+	test("a save that names no revision is refused", async () => {
+		await call("save_agent", { draft: draft(), create: true });
+		const sibling = join(home, "agent", "agents", "release-herald", "AGENTS.md");
+		const outcome = await call("save_instructions", { name: "release-herald", text: "No revision." }).then(
+			result => result.isError === true,
+			() => true,
+		);
+		expect(outcome).toBe(true);
+		await expect(stat(sibling)).rejects.toThrow();
 	});
 });

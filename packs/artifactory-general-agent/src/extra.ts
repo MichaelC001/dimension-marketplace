@@ -158,6 +158,13 @@ export function overlayExtra(base: string, patch: string): string {
 }
 
 // ── what a proposal may not carry ───────────────────────────────────────────
+//
+// One rule, two readers. `grantPathsIn` reads TEXT — all the View can do, as it
+// bundles no YAML parser — and so sees only the forms `parseExtra` places.
+// `grantPathsInDocument` reads the PARSED document — what the engine reads, in
+// whatever spelling the text used (flow mapping, explicit `? key`, anchored or
+// tagged key) — and is the server's authority on a proposal. `forge_propose`
+// runs both.
 
 /** Sections every key of which grants something (an approval mode, a workspace). */
 const GRANT_SECTIONS: Readonly<Record<string, true>> = { gate: true, workspace: true };
@@ -182,17 +189,41 @@ const GRANT_PATHS: Readonly<Record<string, true>> = {
 	spawns: true,
 };
 
-/** The grant-class paths `text` names. A mixed section written inline (a flow
- *  mapping) cannot be read key by key, so it counts as holding a grant. */
-export function grantPathsIn(text: string): string[] {
+/**
+ * The rule. Each top-level key comes with the keys under it: a list, or `null`
+ * when a value is there that cannot be read key by key. A mixed section
+ * (`capabilities`, `subagents`) with `null` counts as holding a grant — inline,
+ * a flow mapping or explicit keys on the next line, a sequence — because the
+ * keys it really names are unknown.
+ */
+function grantPathsOf(sections: Iterable<readonly [key: string, children: readonly string[] | null]>): string[] {
 	const found: string[] = [];
-	for (const block of parseExtra(text).blocks) {
-		if (GRANT_SECTIONS[block.key] || GRANT_PATHS[block.key]) found.push(block.key);
-		else if (MIXED_SECTIONS[block.key]) {
-			if (block.children === null) {
-				if (block.inline !== "") found.push(`${block.key} (inline)`);
-			} else for (const child of block.children) if (GRANT_PATHS[`${block.key}.${child.key}`]) found.push(`${block.key}.${child.key}`);
+	for (const [key, children] of sections) {
+		if (Object.hasOwn(GRANT_SECTIONS, key) || Object.hasOwn(GRANT_PATHS, key)) found.push(key);
+		else if (Object.hasOwn(MIXED_SECTIONS, key)) {
+			if (children === null) found.push(`${key} (inline)`);
+			else for (const child of children) if (Object.hasOwn(GRANT_PATHS, `${key}.${child}`)) found.push(`${key}.${child}`);
 		}
 	}
 	return found;
+}
+
+/**
+ * The grant-class paths `text` names. `parseExtra` gives a section
+ * `children: null` exactly when something follows its key line that is not a
+ * block mapping of `key: value` lines; an empty section, or one holding only
+ * comments, has `[]`.
+ */
+export function grantPathsIn(text: string): string[] {
+	return grantPathsOf(parseExtra(text).blocks.map(block => [block.key, block.children === null ? null : block.children.map(child => child.key)] as const));
+}
+
+function isMapping(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** The grant-class paths a PARSED document names — `grantPathsIn`'s verdict read off the keys the text resolves to, not the lines it was written in. */
+export function grantPathsInDocument(document: unknown): string[] {
+	if (!isMapping(document)) return [];
+	return grantPathsOf(Object.entries(document).map(([key, value]) => [key, value === null || value === undefined ? [] : isMapping(value) ? Object.keys(value) : null] as const));
 }

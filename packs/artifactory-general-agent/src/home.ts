@@ -24,7 +24,7 @@ import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { agentHomeWorkspaceId, GENERAL_AGENT_FILE } from "@dimension/sdk/general-agent";
 import type { AgentHome, AgentInstructions, AgentSource, InstructionFile, InstructionsSaved } from "./contracts.js";
-import { LEGACY_DIR, listAgents, pathsOf, type Roots, SaveRefused, WRITE_DIR } from "./store.js";
+import { LEGACY_DIR, listAgents, pathsOf, type Roots, revisionOf, SaveRefused, WRITE_DIR } from "./store.js";
 
 const AGENTS_MD = "AGENTS.md";
 /** A generous ceiling on a standing-instructions file: a prompt, not a corpus. */
@@ -44,6 +44,16 @@ async function isDirectory(path: string): Promise<boolean> {
 		return (await stat(path)).isDirectory();
 	} catch {
 		return false;
+	}
+}
+
+/** What a file holds now; "" when it is not there. */
+async function contentOf(path: string): Promise<string> {
+	try {
+		return await readFile(path, "utf8");
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
+		throw error;
 	}
 }
 
@@ -116,12 +126,21 @@ export async function describeHome(roots: Roots, name: string): Promise<AgentHom
 	else homeNote = folderExists ? `Its home is ${homeId}; the folder exists.` : `Its home is ${homeId}; the engine creates the folder the first time the agent is opened, seeding it from the AGENTS.md beside agent.md.`;
 
 	const editable = listed === undefined ? false : listed.editable;
-	const target: AgentInstructions["target"] =
+	const targetFile: Pick<NonNullable<AgentInstructions["target"]>, "path" | "kind"> | null =
 		listed === undefined || !listed.editable
 			? null
 			: source === "user" && folderExists
 				? { path: join(folder ?? "", AGENTS_MD), kind: "home" }
 				: { path: join(dirname(listed.path), AGENTS_MD), kind: "agent-dir" };
+	// The revision a save must name: the target's path AND what it holds now, so a
+	// write is refused both when the file changed and when the target moved (a
+	// home provisioned since). The winning file was read above and is usually
+	// that very file; the target is read again only when it is not.
+	let target: AgentInstructions["target"] = null;
+	if (targetFile !== null) {
+		const current = targetFile.path === files.find(file => file.wins)?.path ? text : await contentOf(targetFile.path);
+		target = { ...targetFile, revision: revisionOf(`${targetFile.path}\0${current}`) };
+	}
 	const note =
 		listed === undefined
 			? `${TIER_RULES.user} Save the agent first; its standing instructions can be written once it exists.`
@@ -146,15 +165,20 @@ export async function describeHome(roots: Roots, name: string): Promise<AgentHom
 
 /**
  * Write the agent's standing instructions: the home `AGENTS.md` once the home
- * folder exists, else the sibling of `agent.md`. Atomic like `saveAgent`. Only a
+ * folder exists, else the sibling of `agent.md`. Atomic like `saveAgent`, and
+ * guarded like it: `revision` is the one `describeHome` gave, and a save is
+ * refused unless the target still has that path and that content. Only a
  * listed, editable agent has a target, and the path is derived from its name —
  * never taken from the caller.
  */
-export async function saveInstructions(roots: Roots, name: string, text: string): Promise<InstructionsSaved> {
+export async function saveInstructions(roots: Roots, name: string, text: string, revision: string): Promise<InstructionsSaved> {
 	if (Buffer.byteLength(text) > INSTRUCTIONS_MAX_BYTES) throw new SaveRefused(`The instructions are over ${INSTRUCTIONS_MAX_BYTES / 1000} KB; a standing prompt should be far shorter.`);
 	const { instructions } = await describeHome(roots, name);
 	const { target } = instructions;
 	if (target === null) throw new SaveRefused(instructions.editable ? `No agent named "${name}".` : instructions.note);
+	if (target.revision !== revision) {
+		throw new SaveRefused(`${name}'s standing instructions changed since they were opened here — the file was edited elsewhere, or its home was set up since, so a save would land somewhere else. Reopen them so nothing written since is lost.`);
+	}
 	const temp = join(dirname(target.path), `.${basename(target.path)}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`);
 	try {
 		await mkdir(dirname(target.path), { recursive: true });

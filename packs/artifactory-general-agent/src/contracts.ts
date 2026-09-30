@@ -106,8 +106,11 @@ export interface AgentInstructions {
 	/** The tier rules in words, and why it is read-only when it is. */
 	readonly note: string;
 	/** Where a save writes: the home `AGENTS.md` once the home folder exists, else
-	 *  the sibling of `agent.md` (which seeds the home on its first provisioning). */
-	readonly target: { readonly path: string; readonly kind: "home" | "agent-dir" } | null;
+	 *  the sibling of `agent.md` (which seeds the home on its first provisioning).
+	 *  `revision` digests that path and what it holds now — `save_instructions`
+	 *  is refused unless it still matches, so neither an edit made elsewhere since
+	 *  this was read nor a home provisioned since (the target moved) is overwritten. */
+	readonly target: { readonly path: string; readonly kind: "home" | "agent-dir"; readonly revision: string } | null;
 }
 
 /** An agent's home: the folder, the standing instructions and the memory room

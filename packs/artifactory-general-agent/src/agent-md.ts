@@ -85,18 +85,19 @@ export interface AgentDraft {
 }
 
 /** The fields the WORKSHOP (the model, through `forge_propose`) may fill. The
- *  security fields — `tools` (`capabilities.tools`), `approval` (`gate.approval`)
- *  and `memoryScope` (`workspace.reach`, a cross-project grant) — are
- *  deliberately absent: doc 58 §3, only a human gesture in the View changes
- *  them. `extra` IS proposable, minus every grant-class key it could carry
- *  (`grantPathsIn`): the proposal is refused, and never applied, if it names one. */
+ *  grant-class fields — `tools` (`capabilities.tools`), `mcp`
+ *  (`capabilities.mcp`, which servers the agent may call), `approval`
+ *  (`gate.approval`) and `memoryScope` (`workspace.reach`, a cross-project
+ *  grant) — are deliberately absent: doc 58 §3, only a human gesture in the
+ *  View changes them. `extra` IS proposable, minus every grant-class key it
+ *  could carry (`grantPathsIn`): the proposal is refused, and never applied, if
+ *  it names one. */
 export const PROPOSABLE_FIELDS = [
 	"name",
 	"description",
 	"charter",
 	"vibr",
 	"skills",
-	"mcp",
 	"memory",
 	"lineage",
 	"thinking",

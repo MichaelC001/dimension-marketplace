@@ -96,17 +96,26 @@ var GRANT_PATHS = {
   tools: true,
   spawns: true
 };
-function grantPathsIn(text) {
+function grantPathsOf(sections) {
   const found = [];
-  for (const block of parseExtra(text).blocks) {
-    if (GRANT_SECTIONS[block.key] || GRANT_PATHS[block.key]) found.push(block.key);
-    else if (MIXED_SECTIONS[block.key]) {
-      if (block.children === null) {
-        if (block.inline !== "") found.push(`${block.key} (inline)`);
-      } else for (const child of block.children) if (GRANT_PATHS[`${block.key}.${child.key}`]) found.push(`${block.key}.${child.key}`);
+  for (const [key, children] of sections) {
+    if (Object.hasOwn(GRANT_SECTIONS, key) || Object.hasOwn(GRANT_PATHS, key)) found.push(key);
+    else if (Object.hasOwn(MIXED_SECTIONS, key)) {
+      if (children === null) found.push(`${key} (inline)`);
+      else for (const child of children) if (Object.hasOwn(GRANT_PATHS, `${key}.${child}`)) found.push(`${key}.${child}`);
     }
   }
   return found;
+}
+function grantPathsIn(text) {
+  return grantPathsOf(parseExtra(text).blocks.map((block) => [block.key, block.children === null ? null : block.children.map((child) => child.key)]));
+}
+function isMapping(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function grantPathsInDocument(document) {
+  if (!isMapping(document)) return [];
+  return grantPathsOf(Object.entries(document).map(([key, value]) => [key, value === null || value === void 0 ? [] : isMapping(value) ? Object.keys(value) : null]));
 }
 
 // src/agent-md.ts
@@ -7901,6 +7910,14 @@ async function isDirectory(path) {
     return false;
   }
 }
+async function contentOf(path) {
+  try {
+    return await readFile2(path, "utf8");
+  } catch (error) {
+    if (error.code === "ENOENT") return "";
+    throw error;
+  }
+}
 function candidatesFor(roots, source, name, agentFile) {
   const sibling = { kind: source === "pack" ? "pack" : "agent-dir", path: join2(dirname(agentFile), AGENTS_MD) };
   if (source === "workspace") return [sibling];
@@ -7952,7 +7969,12 @@ async function describeHome(roots, name) {
   else if (paths === null) homeNote = `Its home is ${homeId}; where that lives is unknown, as the engine did not say where its home is.`;
   else homeNote = folderExists ? `Its home is ${homeId}; the folder exists.` : `Its home is ${homeId}; the engine creates the folder the first time the agent is opened, seeding it from the AGENTS.md beside agent.md.`;
   const editable = listed === void 0 ? false : listed.editable;
-  const target = listed === void 0 || !listed.editable ? null : source === "user" && folderExists ? { path: join2(folder ?? "", AGENTS_MD), kind: "home" } : { path: join2(dirname(listed.path), AGENTS_MD), kind: "agent-dir" };
+  const targetFile = listed === void 0 || !listed.editable ? null : source === "user" && folderExists ? { path: join2(folder ?? "", AGENTS_MD), kind: "home" } : { path: join2(dirname(listed.path), AGENTS_MD), kind: "agent-dir" };
+  let target = null;
+  if (targetFile !== null) {
+    const current = targetFile.path === files.find((file) => file.wins)?.path ? text : await contentOf(targetFile.path);
+    target = { ...targetFile, revision: revisionOf(`${targetFile.path}\0${current}`) };
+  }
   const note = listed === void 0 ? `${TIER_RULES.user} Save the agent first; its standing instructions can be written once it exists.` : listed.editable ? `${TIER_RULES[source]} A save writes ${target?.kind === "home" ? "the home AGENTS.md" : "the AGENTS.md beside agent.md, which seeds the home on its first provisioning"}.` : `${TIER_RULES[source]} ${listed.readOnlyReason ?? "It is read-only here."}`;
   return {
     name,
@@ -7968,11 +7990,14 @@ async function describeHome(roots, name) {
     instructions: { files, text, editable, note, target }
   };
 }
-async function saveInstructions(roots, name, text) {
+async function saveInstructions(roots, name, text, revision) {
   if (Buffer.byteLength(text) > INSTRUCTIONS_MAX_BYTES) throw new SaveRefused(`The instructions are over ${INSTRUCTIONS_MAX_BYTES / 1e3} KB; a standing prompt should be far shorter.`);
   const { instructions } = await describeHome(roots, name);
   const { target } = instructions;
   if (target === null) throw new SaveRefused(instructions.editable ? `No agent named "${name}".` : instructions.note);
+  if (target.revision !== revision) {
+    throw new SaveRefused(`${name}'s standing instructions changed since they were opened here \u2014 the file was edited elsewhere, or its home was set up since, so a save would land somewhere else. Reopen them so nothing written since is lost.`);
+  }
   const temp = join2(dirname(target.path), `.${basename2(target.path)}.${process.pid}.${randomBytes2(6).toString("hex")}.tmp`);
   try {
     await mkdir2(dirname(target.path), { recursive: true });
@@ -8128,7 +8153,6 @@ var proposalShape = {
   charter: z.string().max(4e4).optional().describe("the instructions it runs by (the agent.md body), markdown"),
   vibr: z.enum(VIBRS).optional().describe("the body it wears"),
   skills: names.optional().describe("skill allowlist; omit to keep every skill"),
-  mcp: names.optional().describe("MCP server allowlist; omit to keep every server"),
   memory: z.enum(MEMORY_BACKENDS).optional(),
   lineage: z.array(agentName).max(16).optional().describe("agents whose brain it extends"),
   thinking: z.enum(THINKING_STEPS).optional(),
@@ -8163,7 +8187,7 @@ async function createForgeServer(options = {}) {
   const fallback2 = env.DIMENSION_FORGE_WORKSPACE !== void 0 && isDirectory2(env.DIMENSION_FORGE_WORKSPACE) ? resolve(env.DIMENSION_FORGE_WORKSPACE) : null;
   const workspaces = /* @__PURE__ */ new Map();
   const rootsOf = (extra) => ({ workspace: workspaces.get(sessionOf(extra)) ?? fallback2, home });
-  const server2 = new McpServer({ name: "dimension-community-general-agent", version: "0.2.0" });
+  const server2 = new McpServer({ name: "dimension-community-general-agent", version: "0.2.1" });
   const viewDir = options.viewDir ?? fileURLToPath(new URL("./dist/", import.meta.url));
   const html = await readFile4(join4(viewDir, "index.html"), "utf8");
   const metadata = { ui: { prefersBorder: false } };
@@ -8211,21 +8235,26 @@ async function createForgeServer(options = {}) {
     "forge_propose",
     {
       title: "Forge proposal",
-      description: "Propose a General Agent draft to the user in the Forge \u2014 talk-to-build. Name it and give any of: description, charter, vibr, skills, mcp, memory, lineage, thinking, personality, habitat, extra (YAML for the manifest keys the orrery does not draw). The draft appears in the Forge marked as proposed by the workshop; the user accepts it, changes it, and forges it. Nothing is written by this call. A proposal cannot set anything that grants \u2014 the agent's tools, approval gate, workspace, control lanes, plugins, MCP servers, delegation or harness: only the user sets those, in the Forge.",
+      description: "Propose a General Agent draft to the user in the Forge \u2014 talk-to-build. Name it and give any of: description, charter, vibr, skills, memory, lineage, thinking, personality, habitat, extra (YAML for the manifest keys the orrery does not draw). The draft appears in the Forge marked as proposed by the workshop; the user accepts it, changes it, and forges it. Nothing is written by this call. A proposal cannot set anything that grants \u2014 the agent's tools, approval gate, workspace, control lanes, plugins, MCP servers, delegation or harness: only the user sets those, in the Forge.",
       inputSchema: proposalShape,
       _meta: { ui: { resourceUri: FORGE_VIEW_URI } }
     },
     async (proposal) => {
       if (proposal.extra !== void 0) {
-        const grants = grantPathsIn(proposal.extra);
-        if (grants.length > 0) {
-          return fail2(`A proposal cannot set ${grants.join(", ")}: those grant the agent something, so only the user sets them, in the Forge. Propose the rest.`);
+        const textual = grantPathsIn(proposal.extra);
+        if (textual.length > 0) {
+          return fail2(`A proposal cannot set ${textual.join(", ")}: those grant the agent something, so only the user sets them, in the Forge. Propose the rest.`);
         }
+        let parsed;
         try {
-          const parsed = parseYaml4(proposal.extra);
-          if (parsed !== null && (typeof parsed !== "object" || Array.isArray(parsed))) return fail2("extra must be a YAML mapping: one `key: value` per line.");
+          parsed = parseYaml4(proposal.extra);
         } catch (error) {
           return fail2(`extra is not valid YAML: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        if (parsed !== null && (typeof parsed !== "object" || Array.isArray(parsed))) return fail2("extra must be a YAML mapping: one `key: value` per line.");
+        const resolved = grantPathsInDocument(parsed);
+        if (resolved.length > 0) {
+          return fail2(`A proposal cannot set ${resolved.join(", ")}: those grant the agent something, so only the user sets them, in the Forge. Propose the rest.`);
         }
       }
       const proposed = { view: "proposal", proposal };
@@ -8293,7 +8322,7 @@ async function createForgeServer(options = {}) {
   server2.registerTool(
     "agent_home",
     {
-      description: "An agent's home: its id (home-<name>), its folder under the engine's workspaces, whether the engine registers it, the memory room it follows, and its standing instructions \u2014 every AGENTS.md OMP looks at, which one wins, and what it holds. Works for a name that does not exist yet (the user tier, where new agents land).",
+      description: "An agent's home: its id (home-<name>), its folder under the engine's workspaces, whether the engine registers it, the memory room it follows, and its standing instructions \u2014 every AGENTS.md OMP looks at, which one wins, what it holds, and the `revision` of the file a save would write (`save_instructions` needs it). Works for a name that does not exist yet (the user tier, where new agents land).",
       inputSchema: { name: agentName },
       annotations: READ_ONLY,
       _meta: APP_ONLY
@@ -8306,14 +8335,14 @@ async function createForgeServer(options = {}) {
   server2.registerTool(
     "save_instructions",
     {
-      description: "Write an agent's standing instructions: its home AGENTS.md once the home folder exists, otherwise the AGENTS.md beside its agent.md (which seeds the home on its first provisioning). Only for a user or workspace agent the Forge may edit; the path is derived, never given.",
-      inputSchema: { name: agentName, text: z.string().max(INSTRUCTIONS_MAX_BYTES) },
+      description: "Write an agent's standing instructions: its home AGENTS.md once the home folder exists, otherwise the AGENTS.md beside its agent.md (which seeds the home on its first provisioning). Only for a user or workspace agent the Forge may edit; the path is derived, never given. `revision` is the target's revision from agent_home: the write is refused unless the file still holds what it held then and the home has not been set up since (a save would land elsewhere) \u2014 reopen, so nothing written meanwhile is lost.",
+      inputSchema: { name: agentName, text: z.string().max(INSTRUCTIONS_MAX_BYTES), revision: z.string().max(64) },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       _meta: APP_ONLY
     },
-    async ({ name, text }, extra) => {
+    async ({ name, text, revision }, extra) => {
       try {
-        const saved = await saveInstructions(rootsOf(extra), name, text);
+        const saved = await saveInstructions(rootsOf(extra), name, text, revision);
         return json(saved, `Wrote ${saved.path}`);
       } catch (error) {
         if (error instanceof SaveRefused) return fail2(error.message);

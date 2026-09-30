@@ -1,7 +1,7 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "artifactory-general-agent",
-	"version": "0.2.0",
+	"version": "0.2.1",
 	"description": "The Forge — build and configure a General Agent by hand or by talking to your agent: a three.js orrery where skills, MCP servers, memory and lineage orbit the agent's core, the agent.md is written live beside it, and everything else — its home, its standing instructions, every manifest key — is one tab away.",
 	"keywords": [
 		"general-agents",

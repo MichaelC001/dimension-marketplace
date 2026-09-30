@@ -22,10 +22,12 @@
 // and the other grant-class keys (`capabilities.control`, `capabilities.plugins`,
 // `capabilities.mcp`, `subagents.allowed`, `harness`, `allowedHarnesses`) change
 // only by a human's gesture in the View. `forge_propose` — the model's only way
-// to shape a draft — has none of those fields in its schema, refuses an
-// Everything-else proposal that names one, and copies only the proposable
-// fields out of what it is given; `save_agent` and the instructions writer are
-// App-only, so the model cannot write a file at all.
+// to shape a draft — has none of those fields in its schema (`mcp`, which
+// servers the agent may call, is one: the user drags it in the View), refuses
+// an Everything-else proposal that names one — read as text AND as the YAML it
+// parses to, so no spelling of a key slips through — and copies only the
+// proposable fields out of what it is given; `save_agent` and the instructions
+// writer are App-only, so the model cannot write a file at all.
 import { statSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { extname, isAbsolute, join, resolve } from "node:path";
@@ -47,7 +49,7 @@ import {
 	VIBRS,
 } from "./agent-md.js";
 import type { DraftCheck, ForgeOpened, ForgeProposed, SaveTarget } from "./contracts.js";
-import { grantPathsIn } from "./extra.js";
+import { grantPathsIn, grantPathsInDocument } from "./extra.js";
 import { describeHome, INSTRUCTIONS_MAX_BYTES, saveInstructions } from "./home.js";
 import { listParts } from "./parts.js";
 import { listAgents, pathsOf, type Roots, renderDraft, SaveRefused, saveAgent, WRITE_DIR } from "./store.js";
@@ -100,7 +102,6 @@ const proposalShape = {
 	charter: z.string().max(40_000).optional().describe("the instructions it runs by (the agent.md body), markdown"),
 	vibr: z.enum(VIBRS).optional().describe("the body it wears"),
 	skills: names.optional().describe("skill allowlist; omit to keep every skill"),
-	mcp: names.optional().describe("MCP server allowlist; omit to keep every server"),
 	memory: z.enum(MEMORY_BACKENDS).optional(),
 	lineage: z.array(agentName).max(16).optional().describe("agents whose brain it extends"),
 	thinking: z.enum(THINKING_STEPS).optional(),
@@ -155,7 +156,7 @@ export async function createForgeServer(options: ForgeServerOptions = {}): Promi
 	const workspaces = new Map<string, string>();
 	const rootsOf = (extra: { _meta?: Record<string, unknown> }): Roots => ({ workspace: workspaces.get(sessionOf(extra)) ?? fallback, home });
 
-	const server = new McpServer({ name: "dimension-community-general-agent", version: "0.2.0" });
+	const server = new McpServer({ name: "dimension-community-general-agent", version: "0.2.1" });
 	const viewDir = options.viewDir ?? fileURLToPath(new URL("./dist/", import.meta.url));
 	// A missing built View is a startup error, not an installed pack that opens blank.
 	const html = await readFile(join(viewDir, "index.html"), "utf8");
@@ -213,25 +214,32 @@ export async function createForgeServer(options: ForgeServerOptions = {}): Promi
 		{
 			title: "Forge proposal",
 			description:
-				"Propose a General Agent draft to the user in the Forge — talk-to-build. Name it and give any of: description, charter, vibr, skills, mcp, memory, lineage, thinking, personality, habitat, extra (YAML for the manifest keys the orrery does not draw). The draft appears in the Forge marked as proposed by the workshop; the user accepts it, changes it, and forges it. Nothing is written by this call. A proposal cannot set anything that grants — the agent's tools, approval gate, workspace, control lanes, plugins, MCP servers, delegation or harness: only the user sets those, in the Forge.",
+				"Propose a General Agent draft to the user in the Forge — talk-to-build. Name it and give any of: description, charter, vibr, skills, memory, lineage, thinking, personality, habitat, extra (YAML for the manifest keys the orrery does not draw). The draft appears in the Forge marked as proposed by the workshop; the user accepts it, changes it, and forges it. Nothing is written by this call. A proposal cannot set anything that grants — the agent's tools, approval gate, workspace, control lanes, plugins, MCP servers, delegation or harness: only the user sets those, in the Forge.",
 			inputSchema: proposalShape,
 			_meta: { ui: { resourceUri: FORGE_VIEW_URI } },
 		},
 		async proposal => {
 			// The SCHEMA is the guard for fields: `proposalShape` declares no `tools`, no
-			// `approval`, no `autonomy`, and the SDK strips undeclared keys before this
-			// runs. `extra` is free text, so it is read here: a grant-class key in it
-			// refuses the whole proposal, and so does YAML that is not a mapping.
+			// `mcp`, no `approval`, no `autonomy`, and the SDK strips undeclared keys
+			// before this runs. `extra` is free text, so it is read here, twice: as text
+			// (the lines the View can also place) and as the YAML it parses to (the keys
+			// the engine will read, whatever their spelling). A grant-class key in
+			// either refuses the whole proposal, and so does YAML that is not a mapping.
 			if (proposal.extra !== undefined) {
-				const grants = grantPathsIn(proposal.extra);
-				if (grants.length > 0) {
-					return fail(`A proposal cannot set ${grants.join(", ")}: those grant the agent something, so only the user sets them, in the Forge. Propose the rest.`);
+				const textual = grantPathsIn(proposal.extra);
+				if (textual.length > 0) {
+					return fail(`A proposal cannot set ${textual.join(", ")}: those grant the agent something, so only the user sets them, in the Forge. Propose the rest.`);
 				}
+				let parsed: unknown;
 				try {
-					const parsed: unknown = parseYaml(proposal.extra);
-					if (parsed !== null && (typeof parsed !== "object" || Array.isArray(parsed))) return fail("extra must be a YAML mapping: one `key: value` per line.");
+					parsed = parseYaml(proposal.extra);
 				} catch (error) {
 					return fail(`extra is not valid YAML: ${error instanceof Error ? error.message : String(error)}`);
+				}
+				if (parsed !== null && (typeof parsed !== "object" || Array.isArray(parsed))) return fail("extra must be a YAML mapping: one `key: value` per line.");
+				const resolved = grantPathsInDocument(parsed);
+				if (resolved.length > 0) {
+					return fail(`A proposal cannot set ${resolved.join(", ")}: those grant the agent something, so only the user sets them, in the Forge. Propose the rest.`);
 				}
 			}
 			const proposed: ForgeProposed = { view: "proposal", proposal };
@@ -305,7 +313,7 @@ export async function createForgeServer(options: ForgeServerOptions = {}): Promi
 	server.registerTool(
 		"agent_home",
 		{
-			description: "An agent's home: its id (home-<name>), its folder under the engine's workspaces, whether the engine registers it, the memory room it follows, and its standing instructions — every AGENTS.md OMP looks at, which one wins, and what it holds. Works for a name that does not exist yet (the user tier, where new agents land).",
+			description: "An agent's home: its id (home-<name>), its folder under the engine's workspaces, whether the engine registers it, the memory room it follows, and its standing instructions — every AGENTS.md OMP looks at, which one wins, what it holds, and the `revision` of the file a save would write (`save_instructions` needs it). Works for a name that does not exist yet (the user tier, where new agents land).",
 			inputSchema: { name: agentName },
 			annotations: READ_ONLY,
 			_meta: APP_ONLY,
@@ -319,14 +327,14 @@ export async function createForgeServer(options: ForgeServerOptions = {}): Promi
 	server.registerTool(
 		"save_instructions",
 		{
-			description: "Write an agent's standing instructions: its home AGENTS.md once the home folder exists, otherwise the AGENTS.md beside its agent.md (which seeds the home on its first provisioning). Only for a user or workspace agent the Forge may edit; the path is derived, never given.",
-			inputSchema: { name: agentName, text: z.string().max(INSTRUCTIONS_MAX_BYTES) },
+			description: "Write an agent's standing instructions: its home AGENTS.md once the home folder exists, otherwise the AGENTS.md beside its agent.md (which seeds the home on its first provisioning). Only for a user or workspace agent the Forge may edit; the path is derived, never given. `revision` is the target's revision from agent_home: the write is refused unless the file still holds what it held then and the home has not been set up since (a save would land elsewhere) — reopen, so nothing written meanwhile is lost.",
+			inputSchema: { name: agentName, text: z.string().max(INSTRUCTIONS_MAX_BYTES), revision: z.string().max(64) },
 			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 			_meta: APP_ONLY,
 		},
-		async ({ name, text }, extra) => {
+		async ({ name, text, revision }, extra) => {
 			try {
-				const saved = await saveInstructions(rootsOf(extra), name, text);
+				const saved = await saveInstructions(rootsOf(extra), name, text, revision);
 				return json(saved, `Wrote ${saved.path}`);
 			} catch (error) {
 				if (error instanceof SaveRefused) return fail(error.message);

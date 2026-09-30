@@ -109,7 +109,6 @@ const PROPOSAL_LINES: Record<(typeof PROPOSABLE_FIELDS)[number], readonly string
 	charter: ["body"],
 	vibr: ["avatar"],
 	skills: ["capabilities.skills"],
-	mcp: ["capabilities.mcp"],
 	memory: ["memory.backend"],
 	lineage: ["extends"],
 	thinking: ["engine.thinkingLevel"],
@@ -569,13 +568,19 @@ export function ForgeApp({ backend, incoming }: { backend: ForgeBackend; incomin
 	const pathOf = view.kind === "forge" ? (view.agent?.path ?? (newAgentDir === null ? "where your agents live is unknown (INSO_HOME is unset)" : [newAgentDir.replace(/[\\/]$/, ""), draft?.name || "<name>", "agent.md"].join(sep))) : "";
 	const saveInstructions = async (text: string) => {
 		if (!draft) return;
-		try {
-			const saved = await backend.saveInstructions(draft.name, text);
-			setNotice({ tone: "info", text: `Saved ${saved.path}` });
-			setHomeTick(tick => tick + 1);
-		} catch (error) {
-			setNotice({ tone: "error", text: `The instructions were not saved: ${error instanceof Error ? error.message : String(error)}` });
+		const revision = home !== null && home.name === draft.name ? home.info?.instructions.target?.revision : undefined;
+		if (revision === undefined) {
+			setNotice({ tone: "error", text: "The instructions were not saved: their current state has not been read yet. Wait for the Home tab to load, then save again." });
+			return;
 		}
+		try {
+			const saved = await backend.saveInstructions(draft.name, text, revision);
+			setNotice({ tone: "info", text: `Saved ${saved.path}` });
+		} catch (error) {
+			setNotice({ tone: "error", text: `The instructions were not saved: ${error instanceof Error ? error.message : String(error)} What is on disk now has been reloaded.` });
+		}
+		// Saved or refused, read the file again: the revision a next save names must be the one on disk now.
+		setHomeTick(tick => tick + 1);
 	};
 	/** An instrument whose key Everything else holds reads as that, not as a value it does not control. */
 	const heldValue = (path: string, value: string) => (held.has(path) ? "In Everything else" : value);
