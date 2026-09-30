@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { formatByteSize, PRESENTED_KIND_LABELS } from "@dimension/sdk/presentation";
 import { flatPng, loadTools, makeTempDir } from "./fixtures";
 
 const PACK = join(import.meta.dir, "..");
@@ -65,7 +66,7 @@ describe("the shipped bundle end to end", () => {
 		const result = await tools[0]?.execute("t1", { path: file }, undefined, undefined, { cwd: base });
 
 		expect(result?.content).toHaveLength(1);
-		expect(result?.content[0]?.text).toMatch(/^Presented shot\.png \(image, \d+(\.\d)? [KM]?B\)\.$/);
+		expect(result?.content[0]?.text).toBe(`Presented shot.png (${PRESENTED_KIND_LABELS.image}, ${formatByteSize((await stat(file)).size)}).`);
 		const [item] = result?.details.presentation.items ?? [];
 		expect(item).toMatchObject({ name: "shot.png", kind: "image", width: 3000, height: 2000, thumb: 0 });
 		expect(result?.details.images).toHaveLength(1);

@@ -39,8 +39,12 @@ const OPEN_FLAGS = constants.O_RDONLY | (constants.O_NONBLOCK ?? 0);
  * is not an error: it returns no bytes (the caller sees `eof`). Only a regular
  * file is read; a directory, pipe or device is refused before it is opened,
  * because opening a FIFO for reading blocks until a writer appears and would
- * stall the whole server. The check is repeated on the open handle: the path
- * could have been swapped between the two calls, and this one cannot be raced.
+ * stall the whole server. The type is checked again on the open handle, which
+ * closes the window in which a regular file is swapped for a FIFO or a directory
+ * between the two calls. It does NOT pin WHICH file was opened: a writer in the
+ * same directory can still swap a link in between the fence's `realpath` and the
+ * open, and the open follows it. Accepted: a process that can write there has
+ * the power of a shell, and the bytes go to the user's View, not to the model.
  */
 export async function readRange(path: string, offset: number, length: number, fs: RangeFs = nativeFs): Promise<RangeRead> {
 	if (!Number.isSafeInteger(offset) || offset < 0) throw new RangeError(`offset must be a non-negative integer, got ${offset}`);

@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { denyReason as viewerDenyReason } from "../../viewer/src/fence";
-import { denyReason, textRefusal } from "../src/deny";
+import * as viewer from "../../viewer/src/fence";
+import * as copy from "../src/deny";
 
-// The deny table is a deliberate COPY of the viewer pack's (packs install one at
-// a time and cannot import each other). The copy is pinned here: both functions run
-// over one corpus and must agree on the verdict AND the words.
+const { denyReason, textRefusal } = copy;
 
+// The deny tables are a deliberate COPY of the viewer pack's (packs install one at a time
+// and cannot import each other). The copy is pinned here twice over: the tables themselves
+// are held equal (every entry, every regular expression), and both functions run over one
+// corpus and must agree on the verdict AND the words.
 const SECRET_FOLDERS = [".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker", ".git", ".password-store", "keyrings", "locker"];
 
 const SECRET_FILE_NAMES = [
@@ -147,11 +149,38 @@ describe("denyReason leaves ordinary files alone", () => {
 	for (const path of ALLOWED) test(`allows ${path}`, () => expect(denyReason(path)).toBeUndefined());
 });
 
-describe("the copied deny table has not drifted from the viewer pack's", () => {
-	test("swiss-knife denyReason and viewer fence denyReason agree on every path, verdict and wording", () => {
-		const corpus = [...Object.values(DENIED).flat(), ...ALLOWED];
+describe("the copied deny tables have not drifted from the viewer pack's", () => {
+	// The viewer's own tables, exported for this test: a rule added there and not here fails,
+	// whether or not any path in the corpus below happens to exercise it.
+	for (const name of ["SECRET_DIRECTORIES", "SECRET_FILES"] as const) {
+		test(`${name} holds the same names`, () => {
+			expect(Object.keys(viewer[name]).length, "the viewer exports a populated table").toBeGreaterThan(5);
+			expect(copy[name]).toEqual(viewer[name]);
+		});
+	}
+
+	test("SECRET_PATHS holds the same folder sequences", () => {
+		const sequences = (paths: readonly (readonly string[])[]) => paths.map(path => JSON.stringify(path)).sort();
+		expect(viewer.SECRET_PATHS.length, "the viewer exports a populated table").toBeGreaterThan(2);
+		expect(sequences(copy.SECRET_PATHS)).toEqual(sequences(viewer.SECRET_PATHS));
+	});
+
+	for (const name of ["PRIVATE_KEY_FILE", "ENVIRONMENT_FILE", "OTHER_SECRET_FILE", "DATABASE_FILE", "ENGINE_HOME"] as const) {
+		test(`${name} is the same regular expression`, () => {
+			expect(viewer[name]).toBeInstanceOf(RegExp);
+			expect([copy[name].source, copy[name].flags]).toEqual([viewer[name].source, viewer[name].flags]);
+		});
+	}
+
+	test("denyReason agrees on every path, verdict and wording: the corpus, and one path for each entry of the viewer's tables", () => {
+		const fromTables = [
+			...Object.keys(viewer.SECRET_DIRECTORIES).map(folder => `/home/me/${folder}/notes.txt`),
+			...Object.keys(viewer.SECRET_FILES).map(file => `/home/me/docs/${file}`),
+			...viewer.SECRET_PATHS.map(sequence => `/home/me/${sequence.join("/")}/notes.txt`),
+		];
+		const corpus = [...Object.values(DENIED).flat(), ...ALLOWED, ...fromTables];
 		const disagreements = corpus
-			.map(path => ({ path, swissKnife: denyReason(path), viewer: viewerDenyReason(path) }))
+			.map(path => ({ path, swissKnife: denyReason(path), viewer: viewer.denyReason(path) }))
 			.filter(row => row.swissKnife !== row.viewer);
 		expect(
 			disagreements,
@@ -160,23 +189,27 @@ describe("the copied deny table has not drifted from the viewer pack's", () => {
 	});
 
 	test("the corpus exercises both verdicts, so agreeing on it means something", () => {
-		expect(Object.values(DENIED).flat().every(path => viewerDenyReason(path) !== undefined)).toBe(true);
-		expect(ALLOWED.every(path => viewerDenyReason(path) === undefined)).toBe(true);
+		expect(Object.values(DENIED).flat().every(path => viewer.denyReason(path) !== undefined)).toBe(true);
+		expect(ALLOWED.every(path => viewer.denyReason(path) === undefined)).toBe(true);
 	});
 });
 
+/** Spellings the operating system would act on, each refused from the text alone, by the rule that refuses it. */
+const WINDOWS_REFUSED: { path: string; reason: string }[] = [
+	{ path: "\\\\?\\C:\\a.png", reason: "device paths" },
+	{ path: "//?/C:/a.png", reason: "device paths" },
+	{ path: "\\\\.\\pipe\\x", reason: "device paths" },
+	{ path: "C:\\a.txt:hidden", reason: "alternate data streams" },
+	{ path: "C:\\dir\\a.png:Zone.Identifier", reason: "alternate data streams" },
+	{ path: "\\\\attacker\\share\\a.pdf", reason: "network paths" },
+	{ path: "//attacker/share/a.pdf", reason: "network paths" },
+	{ path: "\\\\attacker@SSL@443\\DavWWWRoot\\a.pdf", reason: "network paths" },
+];
+/** Local paths in every spelling a Windows user types: none is refused from the text. */
+const WINDOWS_ALLOWED = ["C:\\Work\\a.png", "reports\\a.png", "C:/Work/a.png", "/work/a.png", ".\\a.png"];
+
 describe("textRefusal", () => {
-	const refusedOnWindows: { path: string; reason: string }[] = [
-		{ path: "\\\\?\\C:\\a.png", reason: "device paths" },
-		{ path: "//?/C:/a.png", reason: "device paths" },
-		{ path: "\\\\.\\pipe\\x", reason: "device paths" },
-		{ path: "C:\\a.txt:hidden", reason: "alternate data streams" },
-		{ path: "C:\\dir\\a.png:Zone.Identifier", reason: "alternate data streams" },
-		{ path: "\\\\attacker\\share\\a.pdf", reason: "network paths" },
-		{ path: "//attacker/share/a.pdf", reason: "network paths" },
-		{ path: "\\\\attacker@SSL@443\\DavWWWRoot\\a.pdf", reason: "network paths" },
-	];
-	for (const { path, reason } of refusedOnWindows) {
+	for (const { path, reason } of WINDOWS_REFUSED) {
 		test(`win32 refuses ${path} as ${reason}`, () => {
 			const said = textRefusal(path, "win32");
 			expect(said, path).toBeString();
@@ -184,7 +217,7 @@ describe("textRefusal", () => {
 		});
 	}
 
-	for (const path of ["C:\\Work\\a.png", "reports\\a.png", "C:/Work/a.png", "/work/a.png", ".\\a.png"]) {
+	for (const path of WINDOWS_ALLOWED) {
 		test(`win32 allows ${path}`, () => expect(textRefusal(path, "win32")).toBeUndefined());
 	}
 
@@ -201,4 +234,29 @@ describe("textRefusal", () => {
 			expect(textRefusal("/tmp/a.png\0.txt", platform)).toContain("NUL");
 		});
 	}
+});
+
+describe("the copied text refusal has not drifted from the viewer's", () => {
+	// The viewer keeps its empty, NUL and not-absolute refusals inline in `check`, so only the
+	// Windows spellings are comparable function to function.
+	test("both refuse the same Windows spellings in the same words (the viewer says 'viewable', present 'presentable')", () => {
+		for (const path of [...WINDOWS_REFUSED.map(row => row.path), ...WINDOWS_ALLOWED]) {
+			const theirs = viewer.textRefusal(path, "win32")?.replace("viewable", "presentable");
+			expect(textRefusal(path, "win32"), path).toBe(theirs);
+		}
+	});
+
+	test("the corpus exercises every rule and both verdicts in the viewer, so agreeing on it means something", () => {
+		for (const { path, reason } of WINDOWS_REFUSED) expect(viewer.textRefusal(path, "win32"), path).toContain(reason);
+		for (const path of WINDOWS_ALLOWED) expect(viewer.textRefusal(path, "win32"), path).toBeUndefined();
+	});
+
+	test("neither refuses a Windows spelling on another platform", () => {
+		for (const path of WINDOWS_REFUSED.map(row => row.path)) {
+			for (const platform of ["linux", "darwin"] as const) {
+				expect(viewer.textRefusal(path, platform), `${platform} ${path}`).toBeUndefined();
+				expect(textRefusal(path, platform), `${platform} ${path}`).toBeUndefined();
+			}
+		}
+	});
 });

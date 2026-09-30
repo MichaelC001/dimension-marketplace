@@ -4,12 +4,13 @@
 // a model steered by a prompt-injected page must not be able to point it at
 // `~/.ssh/id_rsa` and have the pixels (or the name and size) land in the thread.
 // The viewer pack already owns the definition of "a secret path"
-// (`marketplace/packs/viewer/src/fence.ts`: `denyReason`, and the text refusals
-// at the top of `createFence.check`). Packs install one at a time and cannot
-// import each other, so the table is copied here, not re-derived. The copy is
-// pinned by `test/deny.test.ts`, which runs BOTH functions over one corpus and
-// fails when they disagree: a rule added to one pack and not the other is a red
-// test, not a silent gap. When either list changes, change both.
+// (`marketplace/packs/viewer/src/fence.ts`: `denyReason`, the tables it reads, and
+// `textRefusal`). Packs install one at a time and cannot import each other, so the
+// tables are copied here, not re-derived, and exported so `test/deny.test.ts` can
+// hold them equal to the viewer's BY VALUE (every key, every path, every regex
+// source and flag) and run both text refusals over the Windows spellings: a rule
+// added to one pack and not the other is a red test, whether or not any corpus
+// path happens to exercise it. When either list changes, change both.
 //
 // Two lines of defence, both run on the path as written AND on its real path:
 // `textRefusal` decides from the TEXT alone (no filesystem call: `realpath` on a
@@ -18,7 +19,7 @@
 
 type Platform = NodeJS.Platform;
 
-const SECRET_DIRECTORIES: Readonly<Record<string, true>> = {
+export const SECRET_DIRECTORIES: Readonly<Record<string, true>> = {
 	".ssh": true,
 	".gnupg": true,
 	".aws": true,
@@ -36,7 +37,7 @@ const SECRET_DIRECTORIES: Readonly<Record<string, true>> = {
 };
 
 /** Consecutive folder names that mark a credential store. */
-const SECRET_PATHS: readonly (readonly string[])[] = [
+export const SECRET_PATHS: readonly (readonly string[])[] = [
 	[".config", "gcloud"],
 	["microsoft", "credentials"],
 	["microsoft", "protect"],
@@ -44,7 +45,7 @@ const SECRET_PATHS: readonly (readonly string[])[] = [
 	["library", "keychains"],
 ];
 
-const SECRET_FILES: Readonly<Record<string, true>> = {
+export const SECRET_FILES: Readonly<Record<string, true>> = {
 	".netrc": true,
 	_netrc: true,
 	".npmrc": true,
@@ -76,12 +77,13 @@ const SECRET_FILES: Readonly<Record<string, true>> = {
 	"_locker.json": true,
 };
 
-const PRIVATE_KEY_FILE = /^(?:id_(?:rsa|dsa|ecdsa|ed25519)(?:\..*)?|.*\.(?:pem|key|p12|pfx|ppk|jks|keystore|kdbx))$/;
-const ENVIRONMENT_FILE = /^(?:\.env.*|.*\.env)$/;
-const OTHER_SECRET_FILE = /^(?:client_secret.*\.json|.*\.tfstate(?:\.backup)?|.*\.kubeconfig|.*\.secret\.json)$/;
-const DATABASE_FILE = /\.(?:db|sqlite3?)(?:-wal|-shm|-journal)?$/;
+export const PRIVATE_KEY_FILE =
+	/^(?:id_(?:rsa|dsa|ecdsa|ed25519)(?:\..*)?|.*\.(?:pem|key|p12|pfx|ppk|jks|keystore|kdbx))$/;
+export const ENVIRONMENT_FILE = /^(?:\.env.*|.*\.env)$/;
+export const OTHER_SECRET_FILE = /^(?:client_secret.*\.json|.*\.tfstate(?:\.backup)?|.*\.kubeconfig|.*\.secret\.json)$/;
+export const DATABASE_FILE = /\.(?:db|sqlite3?)(?:-wal|-shm|-journal)?$/;
 /** `.inso`, `.inso-dev`, `.omp` and their suffixed variants. */
-const ENGINE_HOME = /^\.(?:inso|omp)(?:-[a-z0-9._-]+)?$/;
+export const ENGINE_HOME = /^\.(?:inso|omp)(?:-[a-z0-9._-]+)?$/;
 
 /**
  * Why `path` must never be presented, or `undefined` when nothing on it is

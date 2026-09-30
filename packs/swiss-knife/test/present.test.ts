@@ -1,8 +1,12 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdir, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { constants } from "node:fs";
+import { mkdir, open, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { PresentedItem } from "@dimension/sdk/presentation";
-import { formatSize, nonFileReason, type PresentOptions, type PresentResult, presentPaths } from "../src/present";
+import { promisify } from "node:util";
+import { formatByteSize, PRESENTED_KIND_LABELS, type PresentedItem } from "@dimension/sdk/presentation";
+import { denyReason } from "../src/deny";
+import { nonFileReason, type PresentOptions, type PresentResult, presentPaths, readOnlyFlags } from "../src/present";
 import { blankPng, decodeThumb, flatPng, loadTools, makeTempDir, noisePng, orientedJpeg, tinyBmp } from "./fixtures";
 
 const PACK = join(import.meta.dir, "..");
@@ -69,23 +73,6 @@ async function refusal(input: string | readonly string[], options: Partial<Omit<
 	throw new Error(`expected ${JSON.stringify(input)} to be refused, but something was presented`);
 }
 
-describe("formatSize", () => {
-	const cases: [number, string][] = [
-		[0, "0 B"],
-		[5, "5 B"],
-		[1023, "1023 B"],
-		[1024, "1 KB"],
-		[1536, "1.5 KB"],
-		[10 * KIB, "10 KB"],
-		[1024 * KIB - 1, "1 MB"], // rounds up to the next unit, never "1024 KB"
-		[1024 * KIB, "1 MB"],
-		[Math.round(2.5 * 1024 * KIB), "2.5 MB"],
-		[26 * 1024 * KIB, "26 MB"],
-		[3 * 1024 * 1024 * KIB, "3 GB"],
-	];
-	for (const [bytes, label] of cases) test(`${bytes} bytes reads ${label}`, () => expect(formatSize(bytes)).toBe(label));
-});
-
 describe("nonFileReason: only a regular file is opened", () => {
 	const cases: { name: string; directory: boolean; file: boolean; reason: string | undefined }[] = [
 		{ name: "a directory", directory: true, file: false, reason: "it is a directory, not a file" },
@@ -104,7 +91,7 @@ describe("present: what a presented file reports", () => {
 		const size = (await stat(file)).size;
 		const result = await presentPaths(file, { cwd: base });
 
-		expect(result.text).toBe(`Presented shot.png (image, ${formatSize(size)}).`);
+		expect(result.text).toBe(`Presented shot.png (${PRESENTED_KIND_LABELS.image}, ${formatByteSize(size)}).`);
 		expect(result.details.presentation.items).toHaveLength(1);
 		expect(one(result)).toStrictEqual({
 			path: await realpath(file),
@@ -137,38 +124,21 @@ describe("present: what a presented file reports", () => {
 	});
 
 	const documents = [
-		{ file: "report.pdf", bytes: "%PDF-1.4\n%fake body\n", kind: "pdf", mime: "application/pdf", label: "PDF" },
-		{
-			file: "memo.docx",
-			bytes: "PK\u0003\u0004fake zip",
-			kind: "docx",
-			mime: `${OOXML}.wordprocessingml.document`,
-			label: "Word",
-		},
-		{
-			file: "deck.pptx",
-			bytes: "PK\u0003\u0004fake zip",
-			kind: "pptx",
-			mime: `${OOXML}.presentationml.presentation`,
-			label: "PowerPoint",
-		},
-		{
-			file: "sheet.xlsx",
-			bytes: "PK\u0003\u0004fake zip",
-			kind: "xlsx",
-			mime: `${OOXML}.spreadsheetml.sheet`,
-			label: "Excel",
-		},
-		{ file: "notes.md", bytes: "# Notes\n\nhello\n", kind: "markdown", mime: "text/markdown", label: "Markdown" },
+		{ file: "report.pdf", bytes: "%PDF-1.4\n%fake body\n", kind: "pdf", mime: "application/pdf" },
+		{ file: "memo.docx", bytes: "PK\u0003\u0004fake zip", kind: "docx", mime: `${OOXML}.wordprocessingml.document` },
+		{ file: "deck.pptx", bytes: "PK\u0003\u0004fake zip", kind: "pptx", mime: `${OOXML}.presentationml.presentation` },
+		{ file: "sheet.xlsx", bytes: "PK\u0003\u0004fake zip", kind: "xlsx", mime: `${OOXML}.spreadsheetml.sheet` },
+		{ file: "notes.md", bytes: "# Notes\n\nhello\n", kind: "markdown", mime: "text/markdown" },
 	] as const;
 	for (const row of documents) {
-		test(`${row.file} is a ${row.label} card without thumbnail or pixel size`, async () => {
+		test(`${row.file} is a ${row.kind} card without thumbnail or pixel size`, async () => {
 			const file = join(base, "docs", row.file);
 			await writeFile(file, row.bytes, "latin1");
 			const size = Buffer.byteLength(row.bytes, "latin1");
 			const result = await presentPaths(file, { cwd: base });
 
-			expect(result.text).toBe(`Presented ${row.file} (${row.label}, ${size} B).`);
+			// The words and the size come from the tables the card reads too: one truth.
+			expect(result.text).toBe(`Presented ${row.file} (${PRESENTED_KIND_LABELS[row.kind]}, ${formatByteSize(size)}).`);
 			expect(one(result)).toStrictEqual({
 				path: await realpath(file),
 				name: row.file,
@@ -185,19 +155,19 @@ describe("present: what a presented file reports", () => {
 		expect(await new Bun.Image(tinyBmp()).metadata(), "the BMP fixture is decodable").toMatchObject({ width: 2, height: 2 });
 		const png = await flatPng(40, 30);
 		const rows = [
-			{ file: "photo.dat", bytes: png, kind: "image", mime: "image/png", label: "image", decoded: true }, // magic beats an unknown name
-			{ file: "letter.txt", bytes: Buffer.from("%PDF-1.7\n%fake\n"), kind: "pdf", mime: "application/pdf", label: "PDF", decoded: false }, // ...and a wrong one
-			{ file: "plain.dat", bytes: Buffer.from("just some words\n"), kind: "text", mime: "text/plain", label: "text", decoded: false },
-			{ file: "blob.dat", bytes: Buffer.from([0, 1, 2, 3, 0xff, 0xfe]), kind: "binary", mime: "application/octet-stream", label: "file", decoded: false },
-			{ file: "empty.dat", bytes: Buffer.alloc(0), kind: "binary", mime: "application/octet-stream", label: "file", decoded: false },
+			{ file: "photo.dat", bytes: png, kind: "image", mime: "image/png", decoded: true }, // magic beats an unknown name
+			{ file: "letter.txt", bytes: Buffer.from("%PDF-1.7\n%fake\n"), kind: "pdf", mime: "application/pdf", decoded: false }, // ...and a wrong one
+			{ file: "plain.dat", bytes: Buffer.from("just some words\n"), kind: "text", mime: "text/plain", decoded: false },
+			{ file: "blob.dat", bytes: Buffer.from([0, 1, 2, 3, 0xff, 0xfe]), kind: "binary", mime: "application/octet-stream", decoded: false },
+			{ file: "empty.dat", bytes: Buffer.alloc(0), kind: "binary", mime: "application/octet-stream", decoded: false },
 			// Bun can decode a BMP, but this file is a text file by its name: kind, not a decode attempt, decides.
-			{ file: "scan.txt", bytes: tinyBmp(), kind: "text", mime: "text/plain", label: "text", decoded: false },
+			{ file: "scan.txt", bytes: tinyBmp(), kind: "text", mime: "text/plain", decoded: false },
 		] as const;
 		for (const row of rows) {
 			const file = join(base, "docs", row.file);
 			await writeFile(file, row.bytes);
 			const result = await presentPaths(file, { cwd: base });
-			expect(result.text, row.file).toBe(`Presented ${row.file} (${row.label}, ${formatSize(row.bytes.length)}).`);
+			expect(result.text, row.file).toBe(`Presented ${row.file} (${PRESENTED_KIND_LABELS[row.kind]}, ${formatByteSize(row.bytes.length)}).`);
 			expect(one(result), row.file).toStrictEqual({
 				path: await realpath(file),
 				name: row.file,
@@ -227,7 +197,7 @@ describe("present: what a presented file reports", () => {
 		const link = join(base, "docs", "holiday-snap.png");
 		await symlink(join(base, "real-dir", "file.png"), link, "file");
 		const result = await presentPaths(link, { cwd: base });
-		expect(result.text).toStartWith("Presented file.png (image, ");
+		expect(result.text).toStartWith(`Presented file.png (${PRESENTED_KIND_LABELS.image}, `);
 		expect(one(result).name).toBe("file.png");
 		expect(one(result).path).toBe(await realpath(join(base, "real-dir", "file.png")));
 	});
@@ -273,7 +243,7 @@ describe("present: what a presented file reports", () => {
 			const file = join(base, row.file);
 			await writeFile(file, row.bytes);
 			const result = await presentPaths(file, { cwd: base });
-			expect(result.text, row.file).toBe(`Presented ${row.file} (image, ${row.bytes.length} B).`);
+			expect(result.text, row.file).toBe(`Presented ${row.file} (${PRESENTED_KIND_LABELS.image}, ${formatByteSize(row.bytes.length)}).`);
 			expect(one(result), row.file).toStrictEqual({
 				path: await realpath(file),
 				name: row.file,
@@ -379,24 +349,40 @@ describe("present: the decode bounds", () => {
 		await rm(file);
 	}, 60_000);
 
-	test("an image over 50 million pixels is presented by kind and size, but never decoded", async () => {
-		const file = join(base, "huge-pixels.png");
-		const bytes = blankPng(8000, 7000); // 56 million pixels, a few KB on disk
-		await writeFile(file, bytes);
-		// A real canvas past the limit: without the bound it would get width/height and a thumbnail.
-		expect(await new Bun.Image(bytes).metadata()).toMatchObject({ width: 8000, height: 7000 });
+	// The bound is on the decoded canvas (about 4 bytes a pixel, in the agent's own process), and it is
+	// inclusive: 25 000 000 pixels is the largest picture that still gets a thumbnail.
+	const canvases = [
+		{ width: 5000, height: 5000, thumbed: true }, // exactly 25 million
+		{ width: 5001, height: 5000, thumbed: false }, // one column more
+		{ width: 7000, height: 4000, thumbed: false }, // 28 million: inside the old 50 million bound
+		{ width: 8000, height: 7000, thumbed: false }, // 56 million
+	];
+	for (const { width, height, thumbed } of canvases) {
+		test(`a ${width}x${height} image (${width * height} pixels) is ${thumbed ? "decoded and thumbnailed" : "presented by kind and size, but never decoded"}`, async () => {
+			const file = join(base, `canvas-${width}x${height}.png`);
+			const bytes = blankPng(width, height); // a few KB on disk whatever the canvas
+			await writeFile(file, bytes);
+			// A real canvas: without the bound an over-limit one would get width/height and a thumbnail.
+			expect(await new Bun.Image(bytes).metadata()).toMatchObject({ width, height });
 
-		const result = await presentPaths(file, { cwd: base });
-		expect(one(result)).toStrictEqual({
-			path: await realpath(file),
-			name: "huge-pixels.png",
-			kind: "image",
-			mime: "image/png",
-			size: bytes.length,
-			mtimeMs: (await stat(file)).mtimeMs,
-		});
-		expect(result.details).not.toHaveProperty("images");
-	}, 60_000);
+			const result = await presentPaths(file, { cwd: base });
+			const presentedByKindAndSize = {
+				path: await realpath(file),
+				name: `canvas-${width}x${height}.png`,
+				kind: "image",
+				mime: "image/png",
+				size: bytes.length,
+				mtimeMs: (await stat(file)).mtimeMs,
+			} satisfies PresentedItem;
+			if (thumbed) {
+				expect(one(result)).toStrictEqual({ ...presentedByKindAndSize, width, height, thumb: 0 });
+				expect(result.details.images).toHaveLength(1);
+			} else {
+				expect(one(result)).toStrictEqual(presentedByKindAndSize);
+				expect(result.details).not.toHaveProperty("images");
+			}
+		}, 60_000);
+	}
 });
 
 describe("present: what the model is told", () => {
@@ -413,7 +399,7 @@ describe("present: what the model is told", () => {
 		expect(result?.content).toHaveLength(1);
 		const [block] = result?.content ?? [];
 		expect(block?.type).toBe("text");
-		expect(block?.text).toStartWith("Presented noisy.png (image, ");
+		expect(block?.text).toStartWith(`Presented noisy.png (${PRESENTED_KIND_LABELS.image}, `);
 		expect(block?.text).not.toContain(image?.data ?? "");
 		expect(block?.text).not.toMatch(/[A-Za-z0-9+/=]{100,}/);
 	}, 30_000);
@@ -423,7 +409,7 @@ describe("present: what the model is told", () => {
 		const result = await presentPaths([join(base, "shot.png"), forged], { cwd: base });
 		const lines = result.text.split("\n");
 		expect(lines).toHaveLength(2);
-		expect(lines[0]).toStartWith("Presented shot.png (image, ");
+		expect(lines[0]).toStartWith(`Presented shot.png (${PRESENTED_KIND_LABELS.image}, `);
 		expect(lines[1]).toStartWith("Could not present ");
 		expect(result.text).not.toMatch(/^Presented forged/m);
 
@@ -458,7 +444,7 @@ describe("present: each path is judged alone", () => {
 		expect(lines[1]).toContain("no such file");
 		expect(lines[2]).toStartWith(`Could not present ${secret}: `);
 		expect(lines[2]).toContain("environment file");
-		expect(lines[3]).toBe("Presented report.pdf (PDF, 20 B).");
+		expect(lines[3]).toBe(`Presented report.pdf (${PRESENTED_KIND_LABELS.pdf}, ${formatByteSize(20)}).`);
 		for (const line of lines) expect(line).toEndWith(".");
 		expect(result.details.presentation.items.map(item => item.name)).toEqual(["report.pdf"]);
 	});
@@ -470,7 +456,7 @@ describe("present: each path is judged alone", () => {
 		for (const text of [mixed.text, refused, JSON.stringify(mixed.details)]) {
 			expect(text).not.toContain(SECRET);
 			expect(text).not.toContain("API_TOKEN");
-			expect(text).not.toContain(formatSize(SECRET_SIZE));
+			expect(text).not.toContain(formatByteSize(SECRET_SIZE));
 			expect(text).not.toContain(String(SECRET_SIZE));
 		}
 	});
@@ -587,4 +573,207 @@ describe("present: the cap on paths looked at", () => {
 		expect(result.details.presentation.items).toHaveLength(12);
 		expect(result.text).not.toContain("Only the first");
 	});
+});
+
+/** Everything a result line must not carry: what a terminal, a line splitter or a bidi renderer acts on. */
+const UNSAFE = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/;
+/** `\n` and every other character a renderer may split a line at. */
+const LINE_BREAK = /[\n\r\u0085\u2028\u2029]/;
+
+describe("present: a file name cannot carry terminal or layout controls into the result", () => {
+	// Every character here is legal in an NTFS or ext4 file name, and reaches the model as part of `content`.
+	const unsafe: [what: string, char: string][] = [
+		["DEL", "\u007f"],
+		["the first C1 control", "\u0080"],
+		["NEL (next line)", "\u0085"],
+		["CSI, which a UTF-8 terminal reads as ESC [", "\u009b"],
+		["OSC, which opens a clipboard write", "\u009d"],
+		["the last C1 control", "\u009f"],
+		["LINE SEPARATOR", "\u2028"],
+		["PARAGRAPH SEPARATOR", "\u2029"],
+		["LRE, the first bidi override", "\u202a"],
+		["RLO, the classic file-name spoof", "\u202e"],
+		["LRI, the first bidi isolate", "\u2066"],
+		["PDI, the last bidi isolate", "\u2069"],
+	];
+	for (const [what, char] of unsafe) {
+		const code = char.codePointAt(0)?.toString(16).toUpperCase().padStart(4, "0");
+		test(`${what} (U+${code}) in a file name is a space in the line and in details.name`, async () => {
+			const name = `a${char}b.png`;
+			const file = join(base, name);
+			await writeFile(file, await flatPng(10, 10));
+			const result = await presentPaths(file, { cwd: base });
+
+			expect(result.text).toStartWith("Presented a b.png (");
+			expect(result.text).not.toMatch(UNSAFE);
+			expect(result.text).not.toMatch(LINE_BREAK);
+			expect(one(result).name).toBe("a b.png");
+			// What is opened is still the real name: only what is SHOWN is cleaned.
+			expect(one(result).path).toEndWith(name);
+			expect(one(result).kind).toBe("image");
+		});
+	}
+
+	test("characters just outside each range are ordinary name characters and are kept", async () => {
+		// ~, NBSP, the last character before LINE SEPARATOR, the first after RLO, the last before LRI, the first after PDI.
+		const name = "a~b\u00a0c\u2027d\u202fe\u2065f\u206ag.png";
+		await writeFile(join(base, name), await flatPng(10, 10));
+		const result = await presentPaths(join(base, name), { cwd: base });
+		expect(one(result).name).toBe(name);
+		expect(result.text).toStartWith(`Presented ${name} (`);
+	});
+
+	test("a requested path is cleaned the same way where a refusal quotes it", async () => {
+		const requested = join(base, "no\u001b[31m\u009b31m\u001f\u2028\u202eone.png");
+		const message = await refusal(requested);
+		expect(message).toStartWith("Could not present ");
+		expect(message).not.toMatch(UNSAFE);
+		expect(message).not.toMatch(LINE_BREAK);
+	});
+
+	// Markdown text, so the kind can come from the NAME alone (an image's magic bytes would give it away).
+	const cuts = [
+		{ why: "200 code points fit as they are", name: `${"a".repeat(197)}.md`, shown: `${"a".repeat(197)}.md` },
+		{ why: "a 201st code point cuts after the 200th", name: `${"a".repeat(198)}.md`, shown: `${"a".repeat(198)}.m...` },
+		{ why: "the 200th UTF-16 unit is the middle of an emoji: the emoji stays whole", name: `${"a".repeat(199)}\u{1f600}tail.md`, shown: `${"a".repeat(199)}\u{1f600}...` },
+		{ why: "astral characters count once: 100 emoji are 203 UTF-16 units with the extension, and fit", name: `${"\u{1f600}".repeat(100)}.md`, shown: `${"\u{1f600}".repeat(100)}.md` },
+	];
+	for (const { why, name, shown } of cuts) {
+		test(`a long name: ${why}`, async () => {
+			await writeFile(join(base, name), "# A heading\n\nsome text\n");
+			const result = await presentPaths(join(base, name), { cwd: base });
+			expect(one(result).name).toBe(shown);
+			expect(result.text).toStartWith(`Presented ${shown} (`);
+			expect(result.text.isWellFormed(), "no lone surrogate reaches the model").toBe(true);
+			expect(one(result).kind, "the kind is read from the whole name, not the shown one").toBe("markdown");
+		});
+	}
+
+	test("a refusal quotes a long requested path at 200 code points, never inside an emoji", async () => {
+		const message = await refusal(`${"a".repeat(199)}\u{1f600}${"b".repeat(20)}`);
+		expect(message).toStartWith(`Could not present ${"a".repeat(199)}\u{1f600}...: `);
+		expect(message.isWellFormed()).toBe(true);
+	});
+});
+
+describe("present: how a file is opened", () => {
+	test("read-only, plus O_NONBLOCK on a platform that has it (so a FIFO swapped in after stat cannot park the open)", () => {
+		expect(readOnlyFlags({ O_RDONLY: 0, O_NONBLOCK: 0x800 })).toBe(0x800);
+		expect(readOnlyFlags({ O_RDONLY: 0 })).toBe(0); // Windows has no such flag
+	});
+
+	test("every file is opened with exactly those flags", async () => {
+		const opened: { path: string; flags: number }[] = [];
+		const result = await presentPaths(join(base, "shot.png"), {
+			cwd: base,
+			open: (path, flags) => {
+				opened.push({ path, flags });
+				return open(path, flags);
+			},
+		});
+		expect(opened).toEqual([{ path: await realpath(join(base, "shot.png")), flags: readOnlyFlags(constants) }]);
+		expect(one(result).kind).toBe("image"); // and what was opened is read
+	});
+
+	test("a path refused before the open never reaches it", async () => {
+		let opens = 0;
+		const countOpen: PresentOptions["open"] = (path, flags) => {
+			opens++;
+			return open(path, flags);
+		};
+		await refusal(join(base, ".env"), { open: countOpen });
+		await refusal(join(base, "a-folder"), { open: countOpen });
+		await refusal(join(base, "missing.png"), { open: countOpen });
+		expect(opens).toBe(0);
+	});
+});
+
+const execFileAsync = promisify(execFile);
+
+/**
+ * The 8.3 short names `dir /x` reports for `longNames` in `dir` (Windows). A name the volume gave no short
+ * name (8.3 creation can be switched off per volume, or the name already fits) is absent from the answer.
+ */
+async function shortNamesIn(dir: string, longNames: readonly string[]): Promise<Record<string, string>> {
+	// `cwd`, not an argument: the directory may have a space in it, which cmd.exe would split.
+	const { stdout } = await execFileAsync("cmd.exe", ["/d", "/c", "dir", "/x", "/a"], { cwd: dir });
+	const found: Record<string, string> = {};
+	for (const long of longNames) {
+		const escaped = long.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+		const match = new RegExp(`(\\S+~\\d+\\S*)\\s+${escaped}\\s*$`, "m").exec(stdout);
+		if (match?.[1] !== undefined) found[long] = match[1];
+	}
+	return found;
+}
+
+/** Whether this volume makes 8.3 short names (Windows). */
+const makes8dot3Names = await (async () => {
+	if (process.platform !== "win32") return false;
+	const dir = await makeTempDir();
+	try {
+		await writeFile(join(dir, ".env"), "x");
+		return (await shortNamesIn(dir, [".env"]))[".env"] !== undefined;
+	} catch {
+		return false;
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+})();
+
+const PROTECTED = "it resolves to a protected location (credentials, keys or engine state)";
+
+// Windows-only: an 8.3 short name, a trailing dot and a trailing space are NTFS spellings of a file. No other
+// platform has them, so there is nothing to run elsewhere. Everything here goes through the REAL `realpath`.
+describe.skipIf(process.platform !== "win32")("present: Windows spellings of a protected path (NTFS spellings: skipped on other platforms)", () => {
+	let win: string;
+	let shortNames: Record<string, string>;
+
+	beforeAll(async () => {
+		win = join(base, "win");
+		await mkdir(join(win, ".ssh"), { recursive: true });
+		await writeFile(join(win, ".env"), `API_TOKEN=${SECRET}\n`);
+		await writeFile(join(win, "credentials"), `password=${SECRET}\n`);
+		await writeFile(join(win, ".ssh", "holiday.png"), await flatPng(64, 64));
+		shortNames = await shortNamesIn(win, [".env", ".ssh", "credentials"]);
+	});
+
+	test.skipIf(!makes8dot3Names)("8.3 short names of .env, .ssh and credentials are refused for what they resolve to (skipped where the volume makes no short names)", async () => {
+		expect(Object.keys(shortNames).sort(), "dir /x gave each of them a short name").toEqual([".env", ".ssh", "credentials"]);
+		const requests = [
+			join(win, shortNames[".env"] ?? "?"),
+			join(win, shortNames[".ssh"] ?? "?", "holiday.png"),
+			join(win, shortNames.credentials ?? "?"),
+		];
+		for (const requested of requests) {
+			// The control: the spelling is harmless to the text check, so only `realpath` can expose what it is.
+			expect(denyReason(requested), requested).toBeUndefined();
+			expect(await refusal(requested), requested).toBe(`Could not present ${requested}: ${PROTECTED}.`);
+		}
+		expect(await refusal(requests)).not.toContain(SECRET);
+	});
+
+	const trailing = [
+		{ spelling: ".ssh. (a trailing dot on the folder)", path: () => join(win, ".ssh.", "holiday.png") },
+		{ spelling: ".ssh<space> (a trailing space on the folder)", path: () => join(win, ".ssh ", "holiday.png") },
+		{ spelling: "credentials. (a trailing dot)", path: () => join(win, "credentials.") },
+		{ spelling: "credentials<space> (a trailing space)", path: () => join(win, "credentials ") },
+	];
+	for (const { spelling, path } of trailing) {
+		test(`${spelling} does not get a protected file presented`, async () => {
+			const requested = path();
+			// The control: the text check cannot see through this spelling, so what refuses it is the disk's answer.
+			expect(denyReason(requested), requested).toBeUndefined();
+			// Win32 would strip the dot or space and open the protected file; a runtime whose `realpath` does not
+			// says "no such file", one that does canonicalises to the real name and is refused for it. Either is a refusal.
+			const message = await refusal(requested);
+			expect(message).toMatch(new RegExp(`: (?:no such file|${PROTECTED.replace(/[()]/g, "\\$&")})\\.$`));
+			expect(message).not.toContain(SECRET);
+		});
+	}
+
+	for (const spelling of [".env.", ".env "]) {
+		test(`${JSON.stringify(spelling)} is refused as an environment file`, async () => {
+			expect(await refusal(join(win, spelling))).toContain("environment file");
+		});
+	}
 });

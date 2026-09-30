@@ -83,7 +83,11 @@ export function insideRoot(target: string, root: string, platform: Platform): bo
 	return relative === "" || (relative !== ".." && !relative.startsWith(`..${api.sep}`) && !api.isAbsolute(relative));
 }
 
-const SECRET_DIRECTORIES: Readonly<Record<string, true>> = {
+// The deny tables below are exported, not private: `present` (swiss-knife) keeps a
+// copy of them (packs install one at a time and cannot import each other) and its
+// test compares that copy to these BY VALUE, so a rule added here and not there is
+// a red test. Change a table here and the copy must follow.
+export const SECRET_DIRECTORIES: Readonly<Record<string, true>> = {
 	".ssh": true,
 	".gnupg": true,
 	".aws": true,
@@ -102,7 +106,7 @@ const SECRET_DIRECTORIES: Readonly<Record<string, true>> = {
 };
 
 /** Consecutive folder names that mark a credential store. */
-const SECRET_PATHS: readonly (readonly string[])[] = [
+export const SECRET_PATHS: readonly (readonly string[])[] = [
 	[".config", "gcloud"],
 	["microsoft", "credentials"],
 	["microsoft", "protect"],
@@ -110,7 +114,7 @@ const SECRET_PATHS: readonly (readonly string[])[] = [
 	["library", "keychains"],
 ];
 
-const SECRET_FILES: Readonly<Record<string, true>> = {
+export const SECRET_FILES: Readonly<Record<string, true>> = {
 	".netrc": true,
 	_netrc: true,
 	".npmrc": true,
@@ -142,12 +146,12 @@ const SECRET_FILES: Readonly<Record<string, true>> = {
 	"_locker.json": true,
 };
 
-const PRIVATE_KEY_FILE = /^(?:id_(?:rsa|dsa|ecdsa|ed25519)(?:\..*)?|.*\.(?:pem|key|p12|pfx|ppk|jks|keystore|kdbx))$/;
-const ENVIRONMENT_FILE = /^(?:\.env.*|.*\.env)$/;
-const OTHER_SECRET_FILE = /^(?:client_secret.*\.json|.*\.tfstate(?:\.backup)?|.*\.kubeconfig|.*\.secret\.json)$/;
-const DATABASE_FILE = /\.(?:db|sqlite3?)(?:-wal|-shm|-journal)?$/;
+export const PRIVATE_KEY_FILE = /^(?:id_(?:rsa|dsa|ecdsa|ed25519)(?:\..*)?|.*\.(?:pem|key|p12|pfx|ppk|jks|keystore|kdbx))$/;
+export const ENVIRONMENT_FILE = /^(?:\.env.*|.*\.env)$/;
+export const OTHER_SECRET_FILE = /^(?:client_secret.*\.json|.*\.tfstate(?:\.backup)?|.*\.kubeconfig|.*\.secret\.json)$/;
+export const DATABASE_FILE = /\.(?:db|sqlite3?)(?:-wal|-shm|-journal)?$/;
 /** `.inso`, `.inso-dev`, `.omp` and their suffixed variants. */
-const ENGINE_HOME = /^\.(?:inso|omp)(?:-[a-z0-9._-]+)?$/;
+export const ENGINE_HOME = /^\.(?:inso|omp)(?:-[a-z0-9._-]+)?$/;
 
 /**
  * Why `path` must never be opened, or `undefined` when nothing on it is
@@ -175,6 +179,25 @@ export function denyReason(path: string): string | undefined {
 		}
 		if (DATABASE_FILE.test(base)) return "it is a database inside an engine home";
 	}
+	return undefined;
+}
+
+/**
+ * Why `requested` is refused on its TEXT alone, before any filesystem call, or
+ * `undefined`. These are the Windows spellings the operating system acts on:
+ * a device path, an alternate data stream, a network path (resolving one is a
+ * network request to a host the model chose). Pure: the platform is an argument.
+ * The empty, NUL and not-absolute refusals stay in `check`, which answers them
+ * first. `present` screens the same spellings with its own copy of this function.
+ */
+export function textRefusal(requested: string, platform: Platform): string | undefined {
+	if (platform !== "win32") return undefined;
+	if (/^[\\/]{2}[.?][\\/]/.test(requested)) return "Windows device paths (\\\\.\\ and \\\\?\\) are not viewable";
+	if (requested.slice(2).includes(":")) return "alternate data streams (a ':' after the drive) are not viewable";
+	// Any two leading separators, either kind: `\\host\share`, `//host/share`,
+	// `\\host@SSL@443\DavWWWRoot\x`. Every root is a local folder, so no
+	// legitimate one exists.
+	if (/^[\\/]{2}/.test(requested)) return "network paths (\\\\host\\share) are not viewable";
 	return undefined;
 }
 
@@ -303,14 +326,8 @@ export function createFence(options: FenceOptions): Fence {
 		if (typeof requested !== "string" || requested.trim() === "") return refuse("the path is empty");
 		if (requested.includes("\0")) return refuse("the path contains a NUL byte");
 		if (!api.isAbsolute(requested)) return refuse(`"${requested}" is not an absolute path; pass the full path to the file`);
-		if (platform === "win32") {
-			if (/^[\\/]{2}[.?][\\/]/.test(requested)) return refuse("Windows device paths (\\\\.\\ and \\\\?\\) are not viewable");
-			if (requested.slice(2).includes(":")) return refuse("alternate data streams (a ':' after the drive) are not viewable");
-			// Any two leading separators, either kind: `\\host\share`, `//host/share`,
-			// `\\host@SSL@443\DavWWWRoot\x`. Every root is a local folder, so no
-			// legitimate one exists, and resolving one is a network request.
-			if (/^[\\/]{2}/.test(requested)) return refuse("network paths (\\\\host\\share) are not viewable");
-		}
+		const refused = textRefusal(requested, platform);
+		if (refused !== undefined) return refuse(refused);
 		const lexical = api.resolve(requested);
 		// Deny first, on the text, before any filesystem call and whatever was lent.
 		const early = denyReason(lexical);

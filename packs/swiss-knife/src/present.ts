@@ -11,17 +11,28 @@
 // read for its first `HEAD_BYTES`, and an image is read whole only up to
 // `MAX_THUMB_SOURCE_BYTES`, one at a time; the thumbnails of a result share one
 // `MAX_RESULT_THUMB_BYTES` budget. A path the tool refuses never costs a read.
+//
+// Accepted residual risks (decided 2026-10-01 after review). Each needs an agent
+// that can already write to the filesystem, which is the power of the shell it has
+// anyway, and each ends at a card or a thumbnail for the human, not at model context:
+//   * Hardlinks. A hardlink is the secret's bytes under a harmless name and
+//     `realpath` returns that name, so the name-based deny cannot see it.
+//   * The existence oracle. A link to a MISSING target answers "no such file"; a
+//     link to an existing protected target answers "protected location".
+//   * The stat-to-open race. A path swapped for a link between `stat` and `open` is
+//     opened as the link says; the check on the open handle re-asserts the TYPE only.
 
-import type { Stats } from "node:fs";
+import { constants, type Stats } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
 import { open, realpath, stat } from "node:fs/promises";
 import { basename, resolve } from "node:path";
 import {
 	classifyFile,
+	formatByteSize,
 	MAX_PRESENTED_ITEMS,
+	PRESENTED_KIND_LABELS,
 	type Presentation,
 	type PresentedItem,
-	type PresentedKind,
 } from "@dimension/sdk/presentation";
 import { denyReason, textRefusal } from "./deny";
 import { imageFacts, MAX_THUMB_BYTES, MAX_THUMB_SOURCE_BYTES, type Thumbnail } from "./thumbnail";
@@ -30,26 +41,9 @@ import { imageFacts, MAX_THUMB_BYTES, MAX_THUMB_SOURCE_BYTES, type Thumbnail } f
 const HEAD_BYTES = 512;
 /** Encoded thumbnail bytes one result may carry in all. */
 const MAX_RESULT_THUMB_BYTES = 600 * 1024;
-/** Characters of a requested path quoted back in a refusal. */
+/** Code points of a requested path, or of a file name, quoted back in the result. */
 const MAX_ECHO = 200;
 const SVG = "image/svg+xml";
-
-/** The word a kind goes by in the result line. Exhaustive: a new kind fails the build here. */
-const KIND_LABEL: Readonly<Record<PresentedKind, string>> = {
-	image: "image",
-	pdf: "PDF",
-	docx: "Word",
-	pptx: "PowerPoint",
-	xlsx: "Excel",
-	markdown: "Markdown",
-	html: "HTML",
-	text: "text",
-	code: "code",
-	audio: "audio",
-	video: "video",
-	archive: "archive",
-	binary: "file",
-};
 
 /** One entry of `details.images`: the pixel lane every image-producing tool uses. */
 export interface ThumbImage {
@@ -68,18 +62,24 @@ export interface PresentResult {
 	readonly details: PresentDetails;
 }
 
+/** The call that opens a file for reading: `fs.promises.open`. */
+export type OpenFile = (path: string, flags: number) => Promise<FileHandle>;
+
 export interface PresentOptions {
 	/** The session's working directory: where a relative path is resolved. */
 	readonly cwd: string;
 	readonly signal?: AbortSignal;
 	/** The platform whose path spellings are refused from text alone. Default: this one. A test seam. */
 	readonly platform?: NodeJS.Platform;
+	/** `fs.promises.open`: the call a test puts a swapped-in FIFO behind. A test seam. */
+	readonly open?: OpenFile;
 }
 
 /** What one call of `presentPaths` shares across its paths. */
 interface Run {
 	readonly cwd: string;
 	readonly platform: NodeJS.Platform;
+	readonly open: OpenFile;
 	/** Real paths already presented: a file named twice is one card. */
 	readonly seen: Set<string>;
 }
@@ -90,23 +90,35 @@ interface Presented {
 	readonly thumb?: Thumbnail;
 }
 
-/** `text` on one line, control characters flattened (a file name may carry a newline), cut to `max`. */
+/** C0 and C1 controls, line and paragraph separators, and the bidirectional overrides and isolates. */
+const UNSAFE_IN_A_LINE = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g;
+
+/**
+ * `text` on one line: anything a terminal, a line splitter or a bidi renderer
+ * would act on (a file name may carry any of it) becomes a space, and the result
+ * is cut to `max` code points, never inside a surrogate pair.
+ */
 function oneLine(text: string, max: number): string {
-	const flat = text.replace(/[\u0000-\u001f\u007f]/g, " ");
-	return flat.length > max ? `${flat.slice(0, max)}...` : flat;
+	const flat = text.replace(UNSAFE_IN_A_LINE, " ");
+	if (flat.length <= max) return flat; // fewer UTF-16 units than `max` is fewer code points
+	let units = 0;
+	let points = 0;
+	for (const point of flat) {
+		if (points === max) return `${flat.slice(0, units)}...`;
+		units += point.length;
+		points++;
+	}
+	return flat;
 }
 
-export function formatSize(bytes: number): string {
-	const units = ["B", "KB", "MB", "GB", "TB"];
-	let unit = 0;
-	let value = bytes;
-	// Step up on the ROUNDED value, so 1 048 575 bytes reads "1 MB", never "1024 KB".
-	while (unit < units.length - 1 && Math.round(value) >= 1024) {
-		value /= 1024;
-		unit++;
-	}
-	const shown = unit > 0 && value < 10 ? Math.round(value * 10) / 10 : Math.round(value);
-	return `${shown} ${units[unit]}`;
+/**
+ * Read-only, and on POSIX never blocking: opening a FIFO for reading waits for a
+ * writer unless `O_NONBLOCK` is set, and a path swapped for one after `stat` would
+ * park a thread-pool thread. It does nothing to a regular file. Windows has no such
+ * flag (nor a FIFO in the filesystem namespace).
+ */
+export function readOnlyFlags(flags: { readonly O_RDONLY: number; readonly O_NONBLOCK?: number } = constants): number {
+	return flags.O_RDONLY | (flags.O_NONBLOCK ?? 0);
 }
 
 /**
@@ -155,6 +167,8 @@ async function presentOne(requested: unknown, run: Run, thumbBudget: number): Pr
 
 	let real: string;
 	try {
+		// The promise form, on purpose: under Bun on Windows it canonicalises 8.3 short names (`ENV~1` -> `.env`)
+		// and case, so the deny on the real path sees what the name really is. `realpathSync` does not.
 		real = await realpath(lexical);
 	} catch (error) {
 		return { refused: unresolvedReason(error) };
@@ -177,7 +191,7 @@ async function presentOne(requested: unknown, run: Run, thumbBudget: number): Pr
 
 	let handle: FileHandle;
 	try {
-		handle = await open(real, "r");
+		handle = await run.open(real, readOnlyFlags());
 	} catch (error) {
 		return { refused: unresolvedReason(error) };
 	}
@@ -188,10 +202,11 @@ async function presentOne(requested: unknown, run: Run, thumbBudget: number): Pr
 		if (swapped !== undefined) return { refused: swapped };
 		const head = Buffer.allocUnsafe(Math.min(HEAD_BYTES, opened.size));
 		const { bytesRead } = await handle.read(head, 0, head.length, 0);
-		const name = basename(real);
-		const { kind, mime } = classifyFile(name, head.subarray(0, bytesRead));
+		const fileName = basename(real);
+		const { kind, mime } = classifyFile(fileName, head.subarray(0, bytesRead));
 		run.seen.add(real);
 
+		const name = oneLine(fileName, MAX_ECHO);
 		const base: PresentedItem = { path: real, name, kind, mime, size: opened.size, mtimeMs: opened.mtimeMs };
 		// An SVG is drawn by the kind's icon, not rasterised here.
 		if (kind !== "image" || mime === SVG || opened.size > MAX_THUMB_SOURCE_BYTES) return { item: base };
@@ -215,7 +230,12 @@ export async function presentPaths(input: string | readonly string[], options: P
 	const lines: string[] = [];
 	const items: PresentedItem[] = [];
 	const images: ThumbImage[] = [];
-	const run: Run = { cwd: options.cwd, platform: options.platform ?? process.platform, seen: new Set() };
+	const run: Run = {
+		cwd: options.cwd,
+		platform: options.platform ?? process.platform,
+		open: options.open ?? open,
+		seen: new Set(),
+	};
 	let thumbBytes = 0;
 
 	for (const path of requested) {
@@ -233,7 +253,7 @@ export async function presentPaths(input: string | readonly string[], options: P
 			images.push({ data: thumb.data, mimeType: thumb.mimeType });
 		}
 		items.push(thumb === undefined ? item : { ...item, thumb: images.length - 1 });
-		lines.push(`Presented ${oneLine(item.name, MAX_ECHO)} (${KIND_LABEL[item.kind]}, ${formatSize(item.size)}).`);
+		lines.push(`Presented ${item.name} (${PRESENTED_KIND_LABELS[item.kind]}, ${formatByteSize(item.size)}).`);
 	}
 	if (all.length > requested.length) {
 		lines.push(`Only the first ${requested.length} of ${all.length} paths were presented.`);

@@ -1,4 +1,5 @@
 // src/present.ts
+import { constants } from "node:fs";
 import { open, realpath, stat } from "node:fs/promises";
 import { basename, resolve } from "node:path";
 
@@ -20,10 +21,13 @@ var BY_EXTENSION = {
   docx: { kind: "docx", mime: `${OOXML}.wordprocessingml.document` },
   pptx: { kind: "pptx", mime: `${OOXML}.presentationml.presentation` },
   xlsx: { kind: "xlsx", mime: `${OOXML}.spreadsheetml.sheet` },
+  xlsm: { kind: "xlsx", mime: "application/vnd.ms-excel.sheet.macroenabled.12" },
   md: { kind: "markdown", mime: "text/markdown" },
   markdown: { kind: "markdown", mime: "text/markdown" },
+  mdx: { kind: "markdown", mime: "text/markdown" },
   html: { kind: "html", mime: "text/html" },
   htm: { kind: "html", mime: "text/html" },
+  xhtml: { kind: "html", mime: "application/xhtml+xml" },
   txt: { kind: "text", mime: "text/plain" },
   log: { kind: "text", mime: "text/plain" },
   csv: { kind: "text", mime: "text/csv" },
@@ -82,7 +86,6 @@ function byMagic(head) {
   if (startsWith(head, [37, 80, 68, 70, 45])) return lookup("pdf");
   return void 0;
 }
-var UTF8 = new TextDecoder("utf-8", { fatal: true });
 function looksLikeText(head) {
   if (head.length === 0) return false;
   for (const byte of head) {
@@ -90,7 +93,7 @@ function looksLikeText(head) {
     if (byte < 9 || byte > 13 && byte < 32 && byte !== 27) return false;
   }
   try {
-    UTF8.decode(head, { stream: true });
+    new TextDecoder("utf-8", { fatal: true }).decode(head, { stream: true });
     return true;
   } catch {
     return false;
@@ -130,6 +133,32 @@ var PRESENTED_KINDS = [
 ];
 var MAX_PRESENTED_ITEMS = 12;
 var KIND_SET = new Set(PRESENTED_KINDS);
+var PRESENTED_KIND_LABELS = {
+  image: "Image",
+  pdf: "PDF",
+  docx: "Word",
+  pptx: "PowerPoint",
+  xlsx: "Excel",
+  markdown: "Markdown",
+  html: "HTML",
+  text: "Text",
+  code: "Code",
+  audio: "Audio",
+  video: "Video",
+  archive: "Archive",
+  binary: "File"
+};
+var SIZE_UNITS = ["B", "KB", "MB", "GB", "TB"];
+function formatByteSize(bytes) {
+  let value = Number.isFinite(bytes) && bytes > 0 ? bytes : 0;
+  let unit = 0;
+  while (unit < SIZE_UNITS.length - 1 && Math.round(value) >= 1024) {
+    value /= 1024;
+    unit++;
+  }
+  const shown = unit > 0 && value < 10 ? Math.round(value * 10) / 10 : Math.round(value);
+  return `${shown} ${SIZE_UNITS[unit]}`;
+}
 
 // ../../../fraym/packages/driver/src/types.ts
 var TERMINAL_CONTINUATION_REASONS = Object.assign(
@@ -238,7 +267,7 @@ function textRefusal(requested, platform = process.platform) {
 var THUMB_EDGE = 768;
 var MAX_THUMB_BYTES = 150 * 1024;
 var MAX_THUMB_SOURCE_BYTES = 25 * 1024 * 1024;
-var MAX_THUMB_PIXELS = 5e7;
+var MAX_THUMB_PIXELS = 25e6;
 var JPEG_QUALITIES = [75, 55];
 var SMALLER_EDGES = [512, 320];
 var SMALLER_EDGE_QUALITY = 50;
@@ -274,35 +303,21 @@ var HEAD_BYTES = 512;
 var MAX_RESULT_THUMB_BYTES = 600 * 1024;
 var MAX_ECHO = 200;
 var SVG = "image/svg+xml";
-var KIND_LABEL = {
-  image: "image",
-  pdf: "PDF",
-  docx: "Word",
-  pptx: "PowerPoint",
-  xlsx: "Excel",
-  markdown: "Markdown",
-  html: "HTML",
-  text: "text",
-  code: "code",
-  audio: "audio",
-  video: "video",
-  archive: "archive",
-  binary: "file"
-};
+var UNSAFE_IN_A_LINE = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g;
 function oneLine(text, max) {
-  const flat = text.replace(/[\u0000-\u001f\u007f]/g, " ");
-  return flat.length > max ? `${flat.slice(0, max)}...` : flat;
-}
-function formatSize(bytes) {
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let unit = 0;
-  let value = bytes;
-  while (unit < units.length - 1 && Math.round(value) >= 1024) {
-    value /= 1024;
-    unit++;
+  const flat = text.replace(UNSAFE_IN_A_LINE, " ");
+  if (flat.length <= max) return flat;
+  let units = 0;
+  let points = 0;
+  for (const point of flat) {
+    if (points === max) return `${flat.slice(0, units)}...`;
+    units += point.length;
+    points++;
   }
-  const shown = unit > 0 && value < 10 ? Math.round(value * 10) / 10 : Math.round(value);
-  return `${shown} ${units[unit]}`;
+  return flat;
+}
+function readOnlyFlags(flags = constants) {
+  return flags.O_RDONLY | (flags.O_NONBLOCK ?? 0);
 }
 function nonFileReason(info) {
   if (info.isDirectory()) return "it is a directory, not a file";
@@ -350,7 +365,7 @@ async function presentOne(requested, run, thumbBudget) {
   if (notFile !== void 0) return { refused: notFile };
   let handle;
   try {
-    handle = await open(real, "r");
+    handle = await run.open(real, readOnlyFlags());
   } catch (error) {
     return { refused: unresolvedReason(error) };
   }
@@ -360,9 +375,10 @@ async function presentOne(requested, run, thumbBudget) {
     if (swapped !== void 0) return { refused: swapped };
     const head = Buffer.allocUnsafe(Math.min(HEAD_BYTES, opened.size));
     const { bytesRead } = await handle.read(head, 0, head.length, 0);
-    const name = basename(real);
-    const { kind, mime } = classifyFile(name, head.subarray(0, bytesRead));
+    const fileName = basename(real);
+    const { kind, mime } = classifyFile(fileName, head.subarray(0, bytesRead));
     run.seen.add(real);
+    const name = oneLine(fileName, MAX_ECHO);
     const base = { path: real, name, kind, mime, size: opened.size, mtimeMs: opened.mtimeMs };
     if (kind !== "image" || mime === SVG || opened.size > MAX_THUMB_SOURCE_BYTES) return { item: base };
     const facts = await imageFacts(await readWhole(handle, opened.size), Math.min(MAX_THUMB_BYTES, thumbBudget));
@@ -378,7 +394,12 @@ async function presentPaths(input, options) {
   const lines = [];
   const items = [];
   const images = [];
-  const run = { cwd: options.cwd, platform: options.platform ?? process.platform, seen: /* @__PURE__ */ new Set() };
+  const run = {
+    cwd: options.cwd,
+    platform: options.platform ?? process.platform,
+    open: options.open ?? open,
+    seen: /* @__PURE__ */ new Set()
+  };
   let thumbBytes = 0;
   for (const path of requested) {
     options.signal?.throwIfAborted();
@@ -395,7 +416,7 @@ async function presentPaths(input, options) {
       images.push({ data: thumb.data, mimeType: thumb.mimeType });
     }
     items.push(thumb === void 0 ? item : { ...item, thumb: images.length - 1 });
-    lines.push(`Presented ${oneLine(item.name, MAX_ECHO)} (${KIND_LABEL[item.kind]}, ${formatSize(item.size)}).`);
+    lines.push(`Presented ${item.name} (${PRESENTED_KIND_LABELS[item.kind]}, ${formatByteSize(item.size)}).`);
   }
   if (all.length > requested.length) {
     lines.push(`Only the first ${requested.length} of ${all.length} paths were presented.`);

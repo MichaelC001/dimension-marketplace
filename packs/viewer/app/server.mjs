@@ -31827,6 +31827,13 @@ function denyReason(path) {
   }
   return void 0;
 }
+function textRefusal(requested, platform) {
+  if (platform !== "win32") return void 0;
+  if (/^[\\/]{2}[.?][\\/]/.test(requested)) return "Windows device paths (\\\\.\\ and \\\\?\\) are not viewable";
+  if (requested.slice(2).includes(":")) return "alternate data streams (a ':' after the drive) are not viewable";
+  if (/^[\\/]{2}/.test(requested)) return "network paths (\\\\host\\share) are not viewable";
+  return void 0;
+}
 var refuse = (reason) => ({ ok: false, reason });
 var MAX_LENT_FILES = 8;
 var MAX_LENT_PATH = 4096;
@@ -31895,11 +31902,8 @@ function createFence(options) {
     if (typeof requested !== "string" || requested.trim() === "") return refuse("the path is empty");
     if (requested.includes("\0")) return refuse("the path contains a NUL byte");
     if (!api.isAbsolute(requested)) return refuse(`"${requested}" is not an absolute path; pass the full path to the file`);
-    if (platform === "win32") {
-      if (/^[\\/]{2}[.?][\\/]/.test(requested)) return refuse("Windows device paths (\\\\.\\ and \\\\?\\) are not viewable");
-      if (requested.slice(2).includes(":")) return refuse("alternate data streams (a ':' after the drive) are not viewable");
-      if (/^[\\/]{2}/.test(requested)) return refuse("network paths (\\\\host\\share) are not viewable");
-    }
+    const refused = textRefusal(requested, platform);
+    if (refused !== void 0) return refuse(refused);
     const lexical = api.resolve(requested);
     const early = denyReason(lexical);
     if (early !== void 0) return refuse(`refused to open "${requested}": ${early}`);

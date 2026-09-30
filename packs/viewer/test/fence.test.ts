@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { configuredRoots, createFence, denyReason, insideRoot } from "../src/fence";
+import { configuredRoots, createFence, denyReason, insideRoot, textRefusal } from "../src/fence";
 
 describe("insideRoot", () => {
 	test("is segment-wise: a sibling that shares a prefix is outside", () => {
@@ -143,6 +143,35 @@ describe("fence refuses network paths before any filesystem call (Windows, platf
 		calls.length = 0;
 		expect(await fence.check("C:\\Work\\Docs\\a.pdf")).toMatchObject({ ok: true });
 		expect(calls).toContain("C:\\Work\\Docs\\a.pdf");
+	});
+});
+
+describe("textRefusal", () => {
+	// What the operating system would act on, named by the category it is refused as.
+	const spellings = [
+		["a `\\\\?\\` device path", "\\\\?\\C:\\Work\\a.png", /device/i],
+		["a `\\\\.\\` device path", "\\\\.\\PhysicalDrive0", /device/i],
+		["a forward-slash device path", "//?/C:/Work/a.png", /device/i],
+		["an alternate data stream", "C:\\Work\\a.txt:hidden", /data stream/i],
+		["a network path", "\\\\attacker\\share\\a.pdf", /network/i],
+		["a forward-slash network path", "//attacker/share/a.pdf", /network/i],
+	] as const;
+
+	test.each(spellings)("on Windows, %s is refused as its own category", (_name, path, category) => {
+		expect(textRefusal(path, "win32")).toMatch(category);
+	});
+
+	test("an ordinary Windows path is not refused", () => {
+		for (const path of ["C:\\Work\\Docs\\a.png", "c:/work/docs/a.png", "D:\\", "C:\\Work\\a b (1).txt"]) {
+			expect(textRefusal(path, "win32"), path).toBeUndefined();
+		}
+	});
+
+	test("off Windows the same spellings are ordinary file names: a colon and a double slash mean nothing there", () => {
+		for (const platform of ["linux", "darwin"] as const) {
+			for (const [, path] of spellings) expect(textRefusal(path, platform), `${platform} ${path}`).toBeUndefined();
+			expect(textRefusal("/home/me/notes:2024.txt", platform)).toBeUndefined();
+		}
 	});
 });
 

@@ -59,9 +59,32 @@ the host can attest to it. The pack declares `grants: ["files:read"]`, and then:
 A server that does not declare `files:read` is never stamped, so the viewer stays
 deny-by-default for everything a human did not click.
 
+## Accepted risks
+
+The fence decides from names and real paths. Two things it does not look at, both
+needing a process that can already write to the disk:
+
+* **Hard links.** A hard link to a secret is the secret's bytes under a harmless name:
+  its `realpath` is the harmless name, the deny rules do not match it, and the viewer
+  does not read link counts. So a hard link inside a root (or one a human clicks) opens.
+  Whoever can create one (`ln`, `mklink /H`) can already read the secret, and the bytes
+  go to the user's View, never to the model (`read_file_chunk` is app-only; the model
+  learns the kind and size).
+* **A link swapped in after the check.** `realpath` and the open are two calls. A writer in
+  the same directory can swap a link in between them, and the open follows it. The open
+  handle is re-checked to be a regular file (a FIFO or directory swapped in is refused);
+  its identity is not pinned. This is the same power as a shell.
+
 ## Build and test
 
 ```sh
 bun run build      # app/server.mjs and app/dist (validates plugin.json with the SDK first)
 bun test test/     # from this directory
 ```
+
+The host runs `app/server.mjs`, not `src/`. `test/bundle.test.ts` rebuilds the server in
+memory and fails when the pack's own code in the committed file is not what `src/`
+builds to, so rebuild and commit `app/server.mjs` with every change under `src/`. Build
+in an install whose dependencies sit at the repository root: a checkout that links them
+from elsewhere writes that path into the file's module comments, and the same test
+refuses it (rewrite the prefix to `../../../node_modules/`).

@@ -27,8 +27,8 @@ export const THUMB_EDGE = 768;
 export const MAX_THUMB_BYTES = 150 * 1024;
 /** Images larger than this on disk are presented without a thumbnail. */
 export const MAX_THUMB_SOURCE_BYTES = 25 * 1024 * 1024;
-/** Images with more pixels than this are presented without a thumbnail. */
-export const MAX_THUMB_PIXELS = 50_000_000;
+/** Images with more pixels than this are presented without a thumbnail (a decode is ~4 bytes a pixel, in the agent's own process). */
+export const MAX_THUMB_PIXELS = 25_000_000;
 
 /** JPEG qualities tried after a lossless PNG is over budget, then the smaller edges at the last quality. */
 const JPEG_QUALITIES = [75, 55] as const;

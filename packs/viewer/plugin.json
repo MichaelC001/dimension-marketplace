@@ -70,7 +70,7 @@
 							"tool": "view_file",
 							"pathArg": "path",
 							"ext": ["xlsx", "xlsm"],
-							"mime": ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"],
+							"mime": ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/vnd.ms-excel.sheet.macroenabled.12"],
 							"annotates": ["text"],
 							"label": "Viewer"
 						},
