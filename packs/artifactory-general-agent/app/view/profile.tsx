@@ -535,7 +535,7 @@ export function AgentProfile({
 					</Fact>
 				</Panel>
 
-				<Panel title="Charter" lede="The instructions it runs by: the body of its agent.md." wide list={false} proposed={proposed.has("charter")}>
+				<Panel title="Charter" lede="Who it is and what its job is: the body of its agent.md." wide list={false} proposed={proposed.has("charter")}>
 					<div className="py-4">
 						<Field error={shown("charter")}>
 							<Textarea
@@ -776,7 +776,7 @@ export function AgentProfile({
 							<span className={LABEL}>agent.md</span>
 							<pre
 								aria-label="agent.md, as it will be written"
-								className="m-0 max-h-96 min-h-56 overflow-auto rounded-[var(--fr-textarea-r)] border border-fr-border-soft bg-fr-bg px-3 py-3 font-mono text-fr-xs leading-relaxed text-fr-text-2"
+								className="m-0 max-h-96 min-h-56 overflow-auto rounded-[var(--fr-textarea-r)] border border-fr-border-soft bg-fr-bg px-[var(--fr-textarea-px)] py-[var(--fr-textarea-py)] font-mono text-fr-xs leading-relaxed text-fr-text-2"
 							>
 								{document.lines.map(line => line.text).join("\n")}
 							</pre>
@@ -920,7 +920,7 @@ function InstructionsPanel({
 	readonly onText: (text: string) => void;
 }) {
 	return (
-		<Panel title="Standing instructions" lede="Its own AGENTS.md: how it always acts, in any project." wide>
+		<Panel title="Standing instructions" lede="House rules it follows in every project, kept in its own AGENTS.md." wide>
 			{info === null ? (
 				<Fact label="Files">
 					<span className="text-fr-sm text-fr-text-2">{name === "" ? "Give it an id, and where its instructions live appears here." : (error ?? "Reading its instructions…")}</span>
