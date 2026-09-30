@@ -7784,7 +7784,7 @@ async function listAgents(roots) {
           source: "workspace",
           path: found.path,
           editable: !legacy,
-          ...legacy ? { readOnlyReason: `It lives in the legacy ${LEGACY_DIR}/agents; the Forge writes only ${WRITE_DIR}/agents.` } : {},
+          ...legacy ? { readOnlyReason: `It lives in the legacy ${LEGACY_DIR}/agents; new agents are written only to ${WRITE_DIR}/agents.` } : {},
           revision: revisionOf(found.content),
           ...found.decl.manifest.workspace?.id !== void 0 ? { workspaceId: found.decl.manifest.workspace.id } : {},
           draft: draftFromFile(found.decl, found.content, `workspace::${found.name}`)
@@ -7854,7 +7854,7 @@ async function saveAgent(options) {
     try {
       existing = await readFile(path, "utf8");
     } catch {
-      throw new SaveRefused(`There is no ${slash(relative(tierRoot, path))} to update. Forge it as a new agent.`);
+      throw new SaveRefused(`There is no ${slash(relative(tierRoot, path))} to update. Create it as a new agent.`);
     }
     const current = parseGeneralAgent(existing, path, draft.name);
     if (!current.ok) {
@@ -7950,7 +7950,7 @@ async function describeHome(roots, name) {
   let homeNote;
   if (!canStandAtHome) homeNote = "A project agent belongs to one project, so it has no home of its own.";
   else if (listed?.workspaceId === `agent-${name}`) {
-    homeNote = `Its file names "${listed.workspaceId}" as its workspace, an id no registry knows (an older Forge wrote it). Save it with Where it runs set to Its own home and it stands in ${homeId}.`;
+    homeNote = `Its file names "${listed.workspaceId}" as its workspace, an id no registry knows (an older version of this page wrote it). Save it with Where it runs set to Its own home and it stands in ${homeId}.`;
   } else if (foreign) homeNote = `It names its own workspace, "${listed?.workspaceId}", so it runs there and has no home of its own.`;
   else if (paths === null) homeNote = `Its home is ${homeId}; where that lives is unknown, as the engine did not say where its home is.`;
   else homeNote = folderExists ? `Its home is ${homeId}; the folder exists.` : `Its home is ${homeId}; the engine creates the folder the first time the agent is opened, seeding it from the AGENTS.md beside agent.md.`;
@@ -8177,7 +8177,7 @@ async function createForgeServer(options = {}) {
   const viewDir = options.viewDir ?? fileURLToPath(new URL("./dist/", import.meta.url));
   const html = await readFile4(join4(viewDir, "index.html"), "utf8");
   const metadata = { ui: { prefersBorder: false } };
-  registerAppResource(server2, "Forge", FORGE_VIEW_URI, { _meta: metadata }, async () => ({
+  registerAppResource(server2, "General Agents", FORGE_VIEW_URI, { _meta: metadata }, async () => ({
     contents: [{ uri: FORGE_VIEW_URI, mimeType: RESOURCE_MIME_TYPE, text: html, _meta: metadata }]
   }));
   for (const file of await readdir3(viewDir, { recursive: true, withFileTypes: true })) {
@@ -8193,7 +8193,7 @@ async function createForgeServer(options = {}) {
     server2,
     "forge_open",
     {
-      title: "Forge",
+      title: "General Agents",
       description: `Open the General Agents page: every General Agent \u2014 the ones installed packs ship, the user's own, and the workspace's \u2014 as cards the user can open, edit and create from, or one agent's profile, by name. \`workspace\` is optional: the absolute path of the directory you are working in, which adds that project's agents (\`<workspace>/${WRITE_DIR}/agents/<name>/agent.md\`); without it the page still lists pack and user agents and creates new ones in the user's own agents. It writes nothing itself \u2014 the user saves.`,
       inputSchema: {
         agent: agentName.optional().describe("open this agent directly"),
@@ -8212,7 +8212,7 @@ async function createForgeServer(options = {}) {
       const found = agent === void 0 ? void 0 : listing.agents.find((candidate) => candidate.name === agent);
       const opened = { view: "forge", agent: found?.name ?? null, workspace: roots.workspace };
       const where = roots.workspace === null ? "no workspace (pack and user agents)" : roots.workspace;
-      const text = agent !== void 0 && found === void 0 ? `No General Agent named "${agent}" in ${where}; the page opened on every agent (${listing.agents.length}).` : found !== void 0 ? `The Forge opened on ${found.name} (${found.source}, ${found.editable ? "editable" : "read-only"}) in ${where}.` : `The Forge opened on ${listing.agents.length} General Agents in ${where}.`;
+      const text = agent !== void 0 && found === void 0 ? `No General Agent named "${agent}" in ${where}; the page opened on every agent (${listing.agents.length}).` : found !== void 0 ? `The General Agents page opened on ${found.name} (${found.source}, ${found.editable ? "editable" : "read-only"}) in ${where}.` : `The General Agents page opened on ${listing.agents.length} General Agents in ${where}.`;
       return json(opened, text);
     }
   );
@@ -8220,7 +8220,7 @@ async function createForgeServer(options = {}) {
     server2,
     "forge_propose",
     {
-      title: "Forge proposal",
+      title: "General Agent proposal",
       description: "Propose a General Agent draft to the user on the General Agents page \u2014 talk-to-build. Name it and give any of: description, charter, vibr, skills, memory, lineage, thinking, personality, habitat, extra (YAML for the manifest keys the profile does not draw). The draft appears on the agent's profile marked as proposed by the Machinist; the user accepts it, changes it, and saves it. Nothing is written by this call. A proposal cannot set anything that grants \u2014 the agent's tools, approval gate, workspace, control lanes, plugins, MCP servers, delegation or harness: only the user sets those, on the profile.",
       inputSchema: proposalShape,
       _meta: { ui: { resourceUri: FORGE_VIEW_URI } }
@@ -8229,7 +8229,7 @@ async function createForgeServer(options = {}) {
       if (proposal.extra !== void 0) {
         const textual = grantPathsIn(proposal.extra);
         if (textual.length > 0) {
-          return fail2(`A proposal cannot set ${textual.join(", ")}: those grant the agent something, so only the user sets them, in the Forge. Propose the rest.`);
+          return fail2(`A proposal cannot set ${textual.join(", ")}: those grant the agent something, so only the user sets them, on the General Agents page. Propose the rest.`);
         }
         let parsed;
         try {
@@ -8240,7 +8240,7 @@ async function createForgeServer(options = {}) {
         if (parsed !== null && (typeof parsed !== "object" || Array.isArray(parsed))) return fail2("extra must be a YAML mapping: one `key: value` per line.");
         const resolved = grantPathsInDocument(parsed);
         if (resolved.length > 0) {
-          return fail2(`A proposal cannot set ${resolved.join(", ")}: those grant the agent something, so only the user sets them, in the Forge. Propose the rest.`);
+          return fail2(`A proposal cannot set ${resolved.join(", ")}: those grant the agent something, so only the user sets them, on the General Agents page. Propose the rest.`);
         }
       }
       const proposed = { view: "proposal", proposal };
@@ -8253,7 +8253,7 @@ async function createForgeServer(options = {}) {
   );
   server2.registerTool(
     "list_agents",
-    { description: "Every General Agent the Forge can see \u2014 installed packs', the user's own, the workspace's \u2014 each with its tier and marked editable or read-only.", inputSchema: {}, annotations: READ_ONLY, _meta: APP_ONLY },
+    { description: "Every General Agent the page can see \u2014 installed packs', the user's own, the workspace's \u2014 each with its tier and marked editable or read-only.", inputSchema: {}, annotations: READ_ONLY, _meta: APP_ONLY },
     async (_args, extra) => {
       const listing = await listAgents(rootsOf(extra));
       return json(listing, `${listing.agents.length} agents`);
@@ -8321,7 +8321,7 @@ async function createForgeServer(options = {}) {
   server2.registerTool(
     "save_instructions",
     {
-      description: "Write an agent's standing instructions: its home AGENTS.md once the home folder exists, otherwise the AGENTS.md beside its agent.md (which seeds the home on its first provisioning). Only for a user or workspace agent the Forge may edit; the path is derived, never given. `revision` is the target's revision from agent_home: the write is refused unless the file still holds what it held then and the home has not been set up since (a save would land elsewhere) \u2014 reopen, so nothing written meanwhile is lost.",
+      description: "Write an agent's standing instructions: its home AGENTS.md once the home folder exists, otherwise the AGENTS.md beside its agent.md (which seeds the home on its first provisioning). Only for a user or workspace agent the page may edit; the path is derived, never given. `revision` is the target's revision from agent_home: the write is refused unless the file still holds what it held then and the home has not been set up since (a save would land elsewhere) \u2014 reopen, so nothing written meanwhile is lost.",
       inputSchema: { name: agentName, text: z.string().max(INSTRUCTIONS_MAX_BYTES), revision: z.string().max(64) },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       _meta: APP_ONLY

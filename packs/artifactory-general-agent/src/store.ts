@@ -354,7 +354,7 @@ export async function listAgents(roots: Roots): Promise<AgentListing> {
 					source: "workspace",
 					path: found.path,
 					editable: !legacy,
-					...(legacy ? { readOnlyReason: `It lives in the legacy ${LEGACY_DIR}/agents; the Forge writes only ${WRITE_DIR}/agents.` } : {}),
+					...(legacy ? { readOnlyReason: `It lives in the legacy ${LEGACY_DIR}/agents; new agents are written only to ${WRITE_DIR}/agents.` } : {}),
 					revision: revisionOf(found.content),
 					...(found.decl.manifest.workspace?.id !== undefined ? { workspaceId: found.decl.manifest.workspace.id } : {}),
 					draft: draftFromFile(found.decl, found.content, `workspace::${found.name}`),
@@ -454,7 +454,7 @@ export async function saveAgent(options: SaveOptions): Promise<SaveOutcome> {
 		try {
 			existing = await readFile(path, "utf8");
 		} catch {
-			throw new SaveRefused(`There is no ${slash(relative(tierRoot, path))} to update. Forge it as a new agent.`);
+			throw new SaveRefused(`There is no ${slash(relative(tierRoot, path))} to update. Create it as a new agent.`);
 		}
 		const current = parseGeneralAgent(existing, path, draft.name);
 		if (!current.ok) {

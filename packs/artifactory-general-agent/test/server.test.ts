@@ -714,7 +714,9 @@ describe("an agent's home and its standing instructions", () => {
 		expect(pinned).toMatchObject({ hasHome: false, folder: null, memoryRoom: "inso-personal" });
 
 		await put(userFile("legacy-home"), "---\nname: legacy-home\ndescription: older Forge\nspecVersion: 1\ngate:\n  approval: write\nworkspace:\n  policy: home\n  id: agent-legacy-home\n---\nOld.\n");
-		expect((await homeOf("legacy-home")).homeNote).toContain("older Forge");
+		const note = (await homeOf("legacy-home")).homeNote;
+		expect(note).toContain("agent-legacy-home");
+		expect(note).toContain("home-legacy-home");
 	});
 
 	test("a user agent runs by its home AGENTS.md when it holds text; an empty one falls through to the sibling", async () => {

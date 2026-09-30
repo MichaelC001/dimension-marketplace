@@ -160,7 +160,7 @@ export async function createForgeServer(options: ForgeServerOptions = {}): Promi
 	// A missing built View is a startup error, not an installed pack that opens blank.
 	const html = await readFile(join(viewDir, "index.html"), "utf8");
 	const metadata = { ui: { prefersBorder: false } };
-	registerAppResource(server, "Forge", FORGE_VIEW_URI, { _meta: metadata }, async () => ({
+	registerAppResource(server, "General Agents", FORGE_VIEW_URI, { _meta: metadata }, async () => ({
 		contents: [{ uri: FORGE_VIEW_URI, mimeType: RESOURCE_MIME_TYPE, text: html, _meta: metadata }],
 	}));
 	for (const file of await readdir(viewDir, { recursive: true, withFileTypes: true })) {
@@ -178,7 +178,7 @@ export async function createForgeServer(options: ForgeServerOptions = {}): Promi
 		server,
 		"forge_open",
 		{
-			title: "Forge",
+			title: "General Agents",
 			description: `Open the General Agents page: every General Agent — the ones installed packs ship, the user's own, and the workspace's — as cards the user can open, edit and create from, or one agent's profile, by name. \`workspace\` is optional: the absolute path of the directory you are working in, which adds that project's agents (\`<workspace>/${WRITE_DIR}/agents/<name>/agent.md\`); without it the page still lists pack and user agents and creates new ones in the user's own agents. It writes nothing itself — the user saves.`,
 			inputSchema: {
 				agent: agentName.optional().describe("open this agent directly"),
@@ -201,8 +201,8 @@ export async function createForgeServer(options: ForgeServerOptions = {}): Promi
 				agent !== undefined && found === undefined
 					? `No General Agent named "${agent}" in ${where}; the page opened on every agent (${listing.agents.length}).`
 					: found !== undefined
-						? `The Forge opened on ${found.name} (${found.source}, ${found.editable ? "editable" : "read-only"}) in ${where}.`
-						: `The Forge opened on ${listing.agents.length} General Agents in ${where}.`;
+						? `The General Agents page opened on ${found.name} (${found.source}, ${found.editable ? "editable" : "read-only"}) in ${where}.`
+						: `The General Agents page opened on ${listing.agents.length} General Agents in ${where}.`;
 			return json(opened, text);
 		},
 	);
@@ -211,7 +211,7 @@ export async function createForgeServer(options: ForgeServerOptions = {}): Promi
 		server,
 		"forge_propose",
 		{
-			title: "Forge proposal",
+			title: "General Agent proposal",
 			description:
 				"Propose a General Agent draft to the user on the General Agents page — talk-to-build. Name it and give any of: description, charter, vibr, skills, memory, lineage, thinking, personality, habitat, extra (YAML for the manifest keys the profile does not draw). The draft appears on the agent's profile marked as proposed by the Machinist; the user accepts it, changes it, and saves it. Nothing is written by this call. A proposal cannot set anything that grants — the agent's tools, approval gate, workspace, control lanes, plugins, MCP servers, delegation or harness: only the user sets those, on the profile.",
 			inputSchema: proposalShape,
@@ -227,7 +227,7 @@ export async function createForgeServer(options: ForgeServerOptions = {}): Promi
 			if (proposal.extra !== undefined) {
 				const textual = grantPathsIn(proposal.extra);
 				if (textual.length > 0) {
-					return fail(`A proposal cannot set ${textual.join(", ")}: those grant the agent something, so only the user sets them, in the Forge. Propose the rest.`);
+					return fail(`A proposal cannot set ${textual.join(", ")}: those grant the agent something, so only the user sets them, on the General Agents page. Propose the rest.`);
 				}
 				let parsed: unknown;
 				try {
@@ -238,7 +238,7 @@ export async function createForgeServer(options: ForgeServerOptions = {}): Promi
 				if (parsed !== null && (typeof parsed !== "object" || Array.isArray(parsed))) return fail("extra must be a YAML mapping: one `key: value` per line.");
 				const resolved = grantPathsInDocument(parsed);
 				if (resolved.length > 0) {
-					return fail(`A proposal cannot set ${resolved.join(", ")}: those grant the agent something, so only the user sets them, in the Forge. Propose the rest.`);
+					return fail(`A proposal cannot set ${resolved.join(", ")}: those grant the agent something, so only the user sets them, on the General Agents page. Propose the rest.`);
 				}
 			}
 			const proposed: ForgeProposed = { view: "proposal", proposal };
@@ -253,7 +253,7 @@ export async function createForgeServer(options: ForgeServerOptions = {}): Promi
 	// ── the View's doors (App-only) ─────────────────────────────────────────
 	server.registerTool(
 		"list_agents",
-		{ description: "Every General Agent the Forge can see — installed packs', the user's own, the workspace's — each with its tier and marked editable or read-only.", inputSchema: {}, annotations: READ_ONLY, _meta: APP_ONLY },
+		{ description: "Every General Agent the page can see — installed packs', the user's own, the workspace's — each with its tier and marked editable or read-only.", inputSchema: {}, annotations: READ_ONLY, _meta: APP_ONLY },
 		async (_args, extra) => {
 			const listing = await listAgents(rootsOf(extra));
 			return json(listing, `${listing.agents.length} agents`);
@@ -326,7 +326,7 @@ export async function createForgeServer(options: ForgeServerOptions = {}): Promi
 	server.registerTool(
 		"save_instructions",
 		{
-			description: "Write an agent's standing instructions: its home AGENTS.md once the home folder exists, otherwise the AGENTS.md beside its agent.md (which seeds the home on its first provisioning). Only for a user or workspace agent the Forge may edit; the path is derived, never given. `revision` is the target's revision from agent_home: the write is refused unless the file still holds what it held then and the home has not been set up since (a save would land elsewhere) — reopen, so nothing written meanwhile is lost.",
+			description: "Write an agent's standing instructions: its home AGENTS.md once the home folder exists, otherwise the AGENTS.md beside its agent.md (which seeds the home on its first provisioning). Only for a user or workspace agent the page may edit; the path is derived, never given. `revision` is the target's revision from agent_home: the write is refused unless the file still holds what it held then and the home has not been set up since (a save would land elsewhere) — reopen, so nothing written meanwhile is lost.",
 			inputSchema: { name: agentName, text: z.string().max(INSTRUCTIONS_MAX_BYTES), revision: z.string().max(64) },
 			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 			_meta: APP_ONLY,

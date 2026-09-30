@@ -865,6 +865,19 @@ function Switches({
 	readonly onError: (message: string) => void;
 }) {
 	const [busy, setBusy] = useState(false);
+	// What the user asked for, shown at once: the host's fact only catches up once
+	// the engine re-reads its resources (seconds), and a switch that snaps back
+	// meanwhile invites a second, opposite flip. Each field is dropped when the
+	// host's fact agrees, and all of it when the write is refused.
+	const [requested, setRequested] = useState<{ enabled?: boolean; listed?: boolean }>({});
+	useEffect(() => {
+		setRequested(current => {
+			const next = { ...current };
+			if (next.enabled !== undefined && fact?.enabled === next.enabled) delete next.enabled;
+			if (next.listed !== undefined && fact?.listed === next.listed) delete next.listed;
+			return Object.keys(next).length === Object.keys(current).length ? current : next;
+		});
+	}, [fact?.enabled, fact?.listed]);
 	const offered = backend.visibility.offered();
 	const why =
 		name === null
@@ -877,9 +890,11 @@ function Switches({
 	const flip = async (change: { enabled?: boolean; listed?: boolean }) => {
 		if (name === null) return;
 		setBusy(true);
+		setRequested(current => ({ ...current, ...change }));
 		try {
 			await backend.visibility.configure({ name, ...change });
 		} catch (cause) {
+			setRequested({});
 			onError(errorText(cause));
 		} finally {
 			setBusy(false);
@@ -893,8 +908,8 @@ function Switches({
 	);
 	return (
 		<div data-slot="profile-switches" className="mt-2 flex flex-wrap items-center gap-x-6 gap-y-2">
-			{row("Enabled", fact?.enabled ?? name === null, value => void flip({ enabled: value }), "profile-enabled")}
-			{row("Show in rail", (fact?.enabled ?? true) && (fact?.listed ?? name === null), value => void flip({ listed: value }), "profile-listed")}
+			{row("Enabled", requested.enabled ?? fact?.enabled ?? name === null, value => void flip({ enabled: value }), "profile-enabled")}
+			{row("Show in rail", (requested.enabled ?? fact?.enabled ?? true) && (requested.listed ?? fact?.listed ?? name === null), value => void flip({ listed: value }), "profile-listed")}
 			{why !== null ? <span className="text-fr-xs leading-relaxed text-pretty text-fr-text-2">{why}</span> : null}
 		</div>
 	);

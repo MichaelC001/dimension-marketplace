@@ -120,7 +120,7 @@ export async function describeHome(roots: Roots, name: string): Promise<AgentHom
 	let homeNote: string;
 	if (!canStandAtHome) homeNote = "A project agent belongs to one project, so it has no home of its own.";
 	else if (listed?.workspaceId === `agent-${name}`) {
-		homeNote = `Its file names "${listed.workspaceId}" as its workspace, an id no registry knows (an older Forge wrote it). Save it with Where it runs set to Its own home and it stands in ${homeId}.`;
+		homeNote = `Its file names "${listed.workspaceId}" as its workspace, an id no registry knows (an older version of this page wrote it). Save it with Where it runs set to Its own home and it stands in ${homeId}.`;
 	} else if (foreign) homeNote = `It names its own workspace, "${listed?.workspaceId}", so it runs there and has no home of its own.`;
 	else if (paths === null) homeNote = `Its home is ${homeId}; where that lives is unknown, as the engine did not say where its home is.`;
 	else homeNote = folderExists ? `Its home is ${homeId}; the folder exists.` : `Its home is ${homeId}; the engine creates the folder the first time the agent is opened, seeding it from the AGENTS.md beside agent.md.`;
