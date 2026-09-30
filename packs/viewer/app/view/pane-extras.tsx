@@ -95,12 +95,49 @@ export function PaneExtras(props: PaneExtrasProps): ReactNode {
 	return KIND_WORDS[props.tab.kind] === undefined ? null : <TextComments {...props} />;
 }
 
-/** The right-hand column: the list of what the human has marked, and the send. */
-function Column({ children }: { readonly children: ReactNode }) {
-	return (
-		<aside data-slot="annotate-panel" className="flex w-[300px] min-h-0 shrink-0 flex-col">
+/**
+ * Below this View width the list goes UNDER the document. The artifact column is ~640 px
+ * wide; a 300 px list beside a fit-to-width page (PDF, Word, a slide) leaves it a third of
+ * its size, with text a few pixels tall that nobody can read or select. Measured, not guessed.
+ */
+const SIDE_PANEL_MIN_VIEW_WIDTH = 900;
+
+/** Whether this View is wide enough to seat the list beside the document. */
+function useWideView(): boolean {
+	const query = `(min-width: ${SIDE_PANEL_MIN_VIEW_WIDTH}px)`;
+	const [wide, setWide] = useState(() => window.matchMedia(query).matches);
+	useEffect(() => {
+		const list = window.matchMedia(query);
+		const update = () => setWide(list.matches);
+		update();
+		list.addEventListener("change", update);
+		return () => list.removeEventListener("change", update);
+	}, [query]);
+	return wide;
+}
+
+/** The list of what the human has marked, and the send: beside the document when there is room, under it when there is not. */
+function Column({ frame, children }: { readonly frame: HTMLElement | null; readonly children: ReactNode }) {
+	const wide = useWideView();
+	if (wide) {
+		return (
+			<aside data-slot="annotate-panel" data-placement="side" className="flex w-[300px] min-h-0 shrink-0 flex-col">
+				{children}
+			</aside>
+		);
+	}
+	// The pane is a flex column (toolbar, then the document row): a third child is a sheet under the document.
+	const pane = frame?.closest<HTMLElement>('[data-slot="viewer-pane"]') ?? null;
+	if (pane === null) return null;
+	return createPortal(
+		<aside
+			data-slot="annotate-panel"
+			data-placement="bottom"
+			className="flex h-[min(42%,340px)] min-h-[200px] shrink-0 flex-col [&_.dam-panel]:border-s-0 [&_.dam-panel]:border-t [&_.dam-panel]:border-fr-border"
+		>
 			{children}
-		</aside>
+		</aside>,
+		pane,
 	);
 }
 
@@ -164,7 +201,7 @@ function PictureMarkup({ app, tab, active, ready, frame, mode, onMode }: PaneExt
 						frame,
 					)}
 			{marking ? (
-				<Column>
+				<Column frame={frame}>
 					<AnnotationPanel
 						title="Marks"
 						items={items}
@@ -230,7 +267,7 @@ function TextComments({ app, tab, active, ready, frame, mode }: PaneExtrasProps)
 				interactive={commenting}
 			/>
 			{commenting ? (
-				<Column>
+				<Column frame={frame}>
 					<AnnotationPanel
 						title="Comments"
 						items={items}
