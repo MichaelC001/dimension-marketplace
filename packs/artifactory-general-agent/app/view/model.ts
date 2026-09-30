@@ -4,7 +4,7 @@
 import type { AgentDraft, MemoryBackend } from "../../src/agent-md";
 import type { Part, PartKind } from "../../src/contracts";
 
-/** Which draft list a part lands in; `memory`/`model` are single-slot. */
+/** Which draft list a part lands in; `memory` is single-slot. */
 export function hasPart(draft: AgentDraft, part: Pick<Part, "kind" | "id">): boolean {
 	switch (part.kind) {
 		case "tool":
@@ -15,8 +15,6 @@ export function hasPart(draft: AgentDraft, part: Pick<Part, "kind" | "id">): boo
 			return draft.mcp.includes(part.id);
 		case "lineage":
 			return draft.lineage.includes(part.id);
-		case "model":
-			return draft.models.includes(part.id);
 		case "memory":
 			return draft.memory === part.id;
 	}
@@ -33,8 +31,6 @@ export function attachPart(draft: AgentDraft, part: Pick<Part, "kind" | "id">): 
 			return { ...draft, mcp: [...draft.mcp, part.id] };
 		case "lineage":
 			return part.id === draft.name ? draft : { ...draft, lineage: [...draft.lineage, part.id] };
-		case "model":
-			return { ...draft, models: [...draft.models, part.id] };
 		case "memory":
 			return { ...draft, memory: part.id as MemoryBackend };
 	}
@@ -51,8 +47,6 @@ export function detachPart(draft: AgentDraft, part: Pick<Part, "kind" | "id">): 
 			return { ...draft, mcp: without(draft.mcp) };
 		case "lineage":
 			return { ...draft, lineage: without(draft.lineage) };
-		case "model":
-			return { ...draft, models: without(draft.models) };
 		case "memory":
 			return draft.memory === part.id ? { ...draft, memory: "inherit" } : draft;
 	}

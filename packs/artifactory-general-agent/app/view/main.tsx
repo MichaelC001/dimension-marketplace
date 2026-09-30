@@ -21,7 +21,7 @@ function HostedForge() {
 	// a `forge_propose`) is how the agent reaches this View.
 	const [incoming, setIncoming] = useState<IncomingEvent | null>(null);
 	const { app, isConnected, error } = useApp({
-		appInfo: { name: "general-agent-forge", version: "0.1.0" },
+		appInfo: { name: "general-agent-forge", version: "0.2.0" },
 		capabilities: {},
 		onAppCreated: created => {
 			// Registered before `connect()` runs, so the mounting result is not missed.

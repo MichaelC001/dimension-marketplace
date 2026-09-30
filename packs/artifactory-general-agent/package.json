@@ -1,23 +1,23 @@
 {
   "name": "@dimension/community-general-agent",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "author": "Dimension",
-  "description": "The Forge — build a General Agent by hand or by talking to your agent: a three.js orrery where skills, MCP servers, memory and lineage orbit the agent's core, and the agent.md is written live beside it.",
+  "description": "The Forge — build and configure a General Agent by hand or by talking to your agent: a three.js orrery where skills, MCP servers, memory and lineage orbit the agent's core, the agent.md is written live beside it, and everything else — its home, its standing instructions, every manifest key — is one tab away.",
   "engines": {
     "node": ">=22.12.0"
   },
   "scripts": {
     "dev": "vite --config vite.config.ts",
-    "build": "node scripts/build.mjs",
+    "build": "bun scripts/build.mjs",
     "check:types": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.server.json",
     "test": "bun test test/",
     "start": "node app/server.mjs"
   },
   "dimension": {
     "name": "artifactory-general-agent",
-    "description": "The Forge — build a General Agent by hand or by talking to your agent: a three.js orrery where skills, MCP servers, memory and lineage orbit the agent's core, and the agent.md is written live beside it.",
+    "description": "The Forge — build and configure a General Agent by hand or by talking to your agent: a three.js orrery where skills, MCP servers, memory and lineage orbit the agent's core, the agent.md is written live beside it, and everything else — its home, its standing instructions, every manifest key — is one tab away.",
     "defaultEnabled": false,
     "category": "artifactory",
     "keywords": [
@@ -40,6 +40,7 @@
     "zod": "4.4.3"
   },
   "devDependencies": {
+    "@dimension/mcp-app-kit": "workspace:*",
     "@dimension/sdk": "workspace:*",
     "@types/bun": "1.3.14",
     "@types/node": "^26.1.2",

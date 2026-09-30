@@ -35,7 +35,7 @@ import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
-import { type AgentDraft, type Approval, type Habitat, type Thinking, VIBRS, type Vibr } from "../../../src/agent-md";
+import { type AgentDraft, type ApprovalSetting, type Habitat, type Thinking, VIBRS, type Vibr } from "../../../src/agent-md";
 import type { PartKind } from "../../../src/contracts";
 import { type Satellite, satellitesOf } from "../model";
 import { type AgentCore, createCore } from "./core";
@@ -51,6 +51,10 @@ export interface OrbAgent {
 	readonly lineage: readonly string[];
 	/** How much this agent carries — orbits drawn around its orb. */
 	readonly rings: number;
+	/** What the host says about it: `off` = disabled, `hidden` = enabled but not shown in the rail. Absent = on and shown, or unknown. */
+	readonly status?: "off" | "hidden";
+	/** The tier it lives in, drawn as a small caption under its name. */
+	readonly tier: string;
 }
 
 export type StageScene =
@@ -76,7 +80,7 @@ const ARC_SEGMENTS = 40;
 const ENERGY: Record<Thinking, number> = { inherit: 0.35, off: 0.05, minimal: 0.15, low: 0.3, medium: 0.5, high: 0.75, xhigh: 1 };
 
 /** Ring geometry per capability family: radius, tilt, orbit speed (rad/s). */
-const RINGS: Record<Exclude<PartKind, "model">, { radius: number; tiltX: number; tiltZ: number; speed: number; label: string }> = {
+const RINGS: Record<PartKind, { radius: number; tiltX: number; tiltZ: number; speed: number; label: string }> = {
 	tool: { radius: 2.2, tiltX: 0.34, tiltZ: 0.16, speed: 0.22, label: "Tools" },
 	skill: { radius: 2.75, tiltX: 0.22, tiltZ: -0.2, speed: 0.15, label: "Skills" },
 	mcp: { radius: 3.25, tiltX: 0.46, tiltZ: 0.3, speed: 0.11, label: "MCP" },
@@ -175,7 +179,7 @@ export class Stage {
 	private readonly satellites = new Map<string, SatelliteNode>();
 	private memoryBand: Points | null = null;
 	private gateField: LineSegments | null = null;
-	private gateLevel: Approval | null = null;
+	private gateLevel: ApprovalSetting | null = null;
 	private habitat: Group | null = null;
 	private habitatKind: Habitat | null = null;
 	private energy = 0.35;
@@ -431,7 +435,7 @@ export class Stage {
 		});
 	}
 
-	private reconcileGate(level: Approval) {
+	private reconcileGate(level: ApprovalSetting) {
 		if (this.gateLevel === level) return;
 		this.gateLevel = level;
 		if (this.gateField) {
@@ -441,9 +445,10 @@ export class Stage {
 		}
 		if (level === "yolo") return;
 		// The containment field IS the approval gate: a dense cage asks before
-		// everything, a sparse one only before writes, none at all runs free.
+		// everything, a sparse one only before writes, none at all runs free. An
+		// inherited gate is the host's to say: a sparse cage, drawn fainter.
 		const geometry = new EdgesGeometry(new IcosahedronGeometry(1.85, level === "always-ask" ? 1 : 0));
-		const material = new LineBasicMaterial({ color: this.palette.silver, transparent: true, opacity: level === "always-ask" ? 0.16 : 0.1, blending: AdditiveBlending, depthWrite: false });
+		const material = new LineBasicMaterial({ color: this.palette.silver, transparent: true, opacity: level === "always-ask" ? 0.16 : level === "inherit" ? 0.06 : 0.1, blending: AdditiveBlending, depthWrite: false });
 		this.gateField = new LineSegments(geometry, material);
 		this.root.add(this.gateField);
 	}
@@ -477,7 +482,7 @@ export class Stage {
 
 	private satelliteMesh(kind: PartKind): Mesh {
 		// Silver bodies (lineage) would bloom to white at the same gain.
-		const color = ringColor(this.palette, kind).clone().multiplyScalar(kind === "lineage" || kind === "model" ? 0.75 : 1.6);
+		const color = ringColor(this.palette, kind).clone().multiplyScalar(kind === "lineage" ? 0.75 : 1.6);
 		const material = new MeshBasicMaterial({ color });
 		switch (kind) {
 			case "tool":
@@ -489,7 +494,6 @@ export class Stage {
 			case "memory":
 				return new Mesh(new SphereGeometry(0.16, 24, 24), material);
 			case "lineage":
-			case "model":
 				return new Mesh(new IcosahedronGeometry(0.17, 2), material);
 		}
 	}
@@ -624,7 +628,7 @@ export class Stage {
 		const wanted = new Map(next.agents.map(agent => [agent.key, agent]));
 		for (const [key, orb] of this.orbs) {
 			const agent = wanted.get(key);
-			if (agent && agent.vibr === orb.agent.vibr && agent.name === orb.agent.name && agent.rings === orb.agent.rings) continue;
+			if (agent && agent.vibr === orb.agent.vibr && agent.name === orb.agent.name && agent.rings === orb.agent.rings && agent.status === orb.agent.status && agent.tier === orb.agent.tier) continue;
 			this.root.remove(orb.anchor);
 			disposeTree(orb.anchor);
 			orb.core.dispose();
@@ -655,6 +659,14 @@ export class Stage {
 			}
 			this.root.add(anchor);
 			const label = this.label("fg-orb-label", agent.name, agent.description);
+			label.dataset.tier = agent.tier;
+			if (agent.status !== undefined) {
+				label.dataset.status = agent.status;
+				const badge = document.createElement("span");
+				badge.className = "fg-label-badge";
+				badge.textContent = agent.status === "off" ? "Off" : "Hidden from rail";
+				label.append(badge);
+			}
 			this.orbs.set(agent.key, { agent, core, anchor, label, position: slot });
 		});
 		if (this.seed === null) this.buildSeed();

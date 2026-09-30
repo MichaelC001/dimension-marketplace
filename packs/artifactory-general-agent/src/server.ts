@@ -1,24 +1,31 @@
 // The Forge as an MCP App (doc 45 §7): one View, two model-facing tools that
 // carry it, three App-only tools the View reads and writes through.
 //
-// WHERE THE WORKSPACE COMES FROM. The engine spawns this server ONCE per
+// WHERE AGENTS ARE READ AND WRITTEN. The engine spawns this server ONCE per
 // engine process, from the PLUGIN's root (`plugin-servers.ts`: `cwd: entry.cwd
-// ?? root`), and lends it to every session; its environment carries only the
-// engine's home (`INSO_HOME`, `INSO_VAULT_DIR`, `INSO_ENV` — `app-host.ts`
-// `engineHomeEnv`). A call's `_meta["ai.insodimension/session"]` names the
-// session but not its workspace (`workspaceId` is reserved, never emitted). So
-// neither the cwd nor any variable is the workspace, and the one party that
-// knows it is the agent: `forge_open { workspace }` binds the session's
-// workspace here, and every later call from that session — the model's or the
-// View's, both stamped with the same session id — resolves against it.
-// `DIMENSION_FORGE_WORKSPACE`, when set, is the fallback for a session that
-// never named one (a harness spawning this over stdio from a checkout, a test).
+// ?? root`), and lends it to every session; its environment carries the
+// engine's home (`INSO_HOME`, `INSO_VAULT_DIR`, `INSO_ENV`) and its project
+// config dir (`PI_CONFIG_DIR`) — `app-host.ts` `engineHomeEnv`. The HOME is
+// enough for the tiers that matter: pack agents (`plugins/`) and the user's own
+// agents (`agent/agents/`), where new agents are written and which have a home.
+// A project's agents need a workspace, and a call's
+// `_meta["ai.insodimension/session"]` names the session but not its workspace
+// (`workspaceId` is reserved, never emitted): the one party that knows it is
+// the agent, so `forge_open { workspace }` binds the session's workspace here,
+// and every later call from that session — the model's or the View's, both
+// stamped with the same session id — resolves against it. Opened from the rail
+// door there is no workspace, and the Forge is still whole: it lists pack and
+// user agents and creates into the user tier. `DIMENSION_FORGE_WORKSPACE`, when
+// set, is the fallback workspace (a harness spawning this over stdio, a test).
 //
-// SECURITY (doc 58 §3). `capabilities.tools` and `gate.approval` change only by
-// a human's gesture in the View. `forge_propose` — the model's only way to
-// shape a draft — has neither field in its schema, and copies only the
-// proposable fields out of what it is given; `save_agent` is App-only, so the
-// model cannot write a file at all.
+// SECURITY (doc 58 §3). `capabilities.tools`, `gate.approval`, `workspace.*`
+// and the other grant-class keys (`capabilities.control`, `capabilities.plugins`,
+// `capabilities.mcp`, `subagents.allowed`, `harness`, `allowedHarnesses`) change
+// only by a human's gesture in the View. `forge_propose` — the model's only way
+// to shape a draft — has none of those fields in its schema, refuses an
+// Everything-else proposal that names one, and copies only the proposable
+// fields out of what it is given; `save_agent` and the instructions writer are
+// App-only, so the model cannot write a file at all.
 import { statSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { extname, isAbsolute, join, resolve } from "node:path";
@@ -27,8 +34,9 @@ import { registerAppResource, registerAppTool, RESOURCE_MIME_TYPE } from "@model
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { parse as parseYaml } from "yaml";
 import {
-	APPROVALS,
+	APPROVAL_SETTINGS,
 	HABITATS,
 	MEMORY_BACKENDS,
 	MEMORY_SCOPES,
@@ -38,9 +46,11 @@ import {
 	THINKING_STEPS,
 	VIBRS,
 } from "./agent-md.js";
-import type { ForgeOpened, ForgeProposed } from "./contracts.js";
+import type { DraftCheck, ForgeOpened, ForgeProposed, SaveTarget } from "./contracts.js";
+import { grantPathsIn } from "./extra.js";
+import { describeHome, INSTRUCTIONS_MAX_BYTES, saveInstructions } from "./home.js";
 import { listParts } from "./parts.js";
-import { listAgents, SaveRefused, saveAgent, WRITE_DIR } from "./store.js";
+import { listAgents, pathsOf, type Roots, renderDraft, SaveRefused, saveAgent, WRITE_DIR } from "./store.js";
 
 export const FORGE_VIEW_URI = "ui://general-agent/index.html";
 /** The request `_meta` key the engine stamps the calling session under (`app-server.ts` `SESSION_META_KEY`). */
@@ -70,17 +80,17 @@ const draftSchema = z.object({
 	vibr: z.enum(VIBRS),
 	personality: z.enum(PERSONALITIES),
 	promptMode: z.enum(PROMPT_MODES),
-	models: names,
 	thinking: z.enum(THINKING_STEPS),
 	tools: names,
 	skills: names,
 	mcp: names,
 	memory: z.enum(MEMORY_BACKENDS),
 	memoryScope: z.enum(MEMORY_SCOPES),
-	approval: z.enum(APPROVALS),
+	approval: z.enum(APPROVAL_SETTINGS),
 	habitat: z.enum(HABITATS),
 	lineage: z.array(agentName).max(16),
 	charter: z.string().max(40_000),
+	extra: z.string().max(40_000),
 });
 
 /** `forge_propose`'s schema: the proposable fields and NOTHING else. */
@@ -96,6 +106,13 @@ const proposalShape = {
 	thinking: z.enum(THINKING_STEPS).optional(),
 	personality: z.enum(PERSONALITIES).optional(),
 	habitat: z.enum(HABITATS).optional().describe("bound: where opened; home: its own workspace; ephemeral: a scratch worktree"),
+	extra: z
+		.string()
+		.max(20_000)
+		.optional()
+		.describe(
+			"YAML for manifest keys the orrery does not draw — title, defaultListed, engine.model/profile/roles, routing, loop, memory.namespace, capabilities.autoloadSkills/slashCommands/ignore, subagents.maxDepth, … One `key: value` per line, sections indented two spaces. It is laid over the draft's own, key by key. Keys that GRANT — capabilities.tools/mcp/plugins/control/optIn, subagents.allowed, gate.*, workspace.*, harness, allowedHarnesses — are refused: only the user sets those.",
+		),
 };
 
 function json(structuredContent: object, text: string): CallToolResult {
@@ -123,23 +140,22 @@ function sessionOf(extra: { _meta?: Record<string, unknown> }): string {
 export interface ForgeServerOptions {
 	/** The built View (`app/dist`). */
 	readonly viewDir?: string;
-	/** Defaults to `process.env`: `INSO_HOME` locates the plugin store and the
-	 *  user's skills; `DIMENSION_FORGE_WORKSPACE` is the fallback workspace. */
+	/** Defaults to `process.env`: `INSO_HOME` locates the plugin store, the user's
+	 *  agents and skills, and every agent home; `DIMENSION_FORGE_WORKSPACE` is the
+	 *  fallback workspace. */
 	readonly env?: NodeJS.ProcessEnv;
 }
 
 export async function createForgeServer(options: ForgeServerOptions = {}): Promise<McpServer> {
 	const env = options.env ?? process.env;
 	const home = env.INSO_HOME !== undefined && env.INSO_HOME !== "" ? env.INSO_HOME : null;
-	const pluginsDir = home === null ? null : join(home, "plugins");
-	const agentDir = home === null ? null : join(home, "agent");
+	const paths = pathsOf(home);
 	const fallback = env.DIMENSION_FORGE_WORKSPACE !== undefined && isDirectory(env.DIMENSION_FORGE_WORKSPACE) ? resolve(env.DIMENSION_FORGE_WORKSPACE) : null;
 	/** Session id → the workspace its agent named in `forge_open`. */
 	const workspaces = new Map<string, string>();
-	const workspaceOf = (session: string) => workspaces.get(session) ?? fallback;
-	const NO_WORKSPACE = "No workspace yet: ask the agent to open the Forge — it names the workspace it is working in.";
+	const rootsOf = (extra: { _meta?: Record<string, unknown> }): Roots => ({ workspace: workspaces.get(sessionOf(extra)) ?? fallback, home });
 
-	const server = new McpServer({ name: "dimension-community-general-agent", version: "0.1.0" });
+	const server = new McpServer({ name: "dimension-community-general-agent", version: "0.2.0" });
 	const viewDir = options.viewDir ?? fileURLToPath(new URL("./dist/", import.meta.url));
 	// A missing built View is a startup error, not an installed pack that opens blank.
 	const html = await readFile(join(viewDir, "index.html"), "utf8");
@@ -163,8 +179,7 @@ export async function createForgeServer(options: ForgeServerOptions = {}): Promi
 		"forge_open",
 		{
 			title: "Forge",
-			description:
-				`Open the Forge in the artifact view: every General Agent in the workspace (and the ones installed packs ship) as a constellation the user can open, reshape and forge — or one agent, by name. Pass \`workspace\`: the absolute path of the directory you are working in; the Forge reads and writes \`<workspace>/${WRITE_DIR}/agents/<name>/agent.md\` there. It writes nothing itself — the user forges.`,
+			description: `Open the Forge in the artifact view: every General Agent — the ones installed packs ship, the user's own, and the workspace's — as a constellation the user can open, reshape and forge, or one agent, by name. \`workspace\` is optional: the absolute path of the directory you are working in, which adds that project's agents (\`<workspace>/${WRITE_DIR}/agents/<name>/agent.md\`); without it the Forge still lists pack and user agents and creates new ones in the user's own agents. It writes nothing itself — the user forges.`,
 			inputSchema: {
 				agent: agentName.optional().describe("open this agent directly"),
 				workspace: z.string().min(1).max(1024).optional().describe("absolute path of your working directory"),
@@ -177,16 +192,16 @@ export async function createForgeServer(options: ForgeServerOptions = {}): Promi
 				if (!isAbsolute(workspace) || !isDirectory(workspace)) return fail(`${workspace} is not an existing absolute directory.`);
 				workspaces.set(session, resolve(workspace));
 			}
-			const root = workspaceOf(session);
-			const listing = await listAgents({ workspace: root, pluginsDir, ...(root === null ? { workspaceMissing: NO_WORKSPACE } : {}) });
+			const roots = rootsOf(extra);
+			const listing = await listAgents(roots);
 			const found = agent === undefined ? undefined : listing.agents.find(candidate => candidate.name === agent);
-			const opened: ForgeOpened = { view: "forge", agent: found?.name ?? null, workspace: root };
-			const where = root === null ? "no workspace (pass `workspace`)" : root;
+			const opened: ForgeOpened = { view: "forge", agent: found?.name ?? null, workspace: roots.workspace };
+			const where = roots.workspace === null ? "no workspace (pack and user agents)" : roots.workspace;
 			const text =
 				agent !== undefined && found === undefined
 					? `No General Agent named "${agent}" in ${where}; the Forge opened on the constellation (${listing.agents.length} agents).`
 					: found !== undefined
-						? `The Forge opened on ${found.name} (${found.editable ? "editable" : "read-only"}) in ${where}.`
+						? `The Forge opened on ${found.name} (${found.source}, ${found.editable ? "editable" : "read-only"}) in ${where}.`
 						: `The Forge opened on ${listing.agents.length} General Agents in ${where}.`;
 			return json(opened, text);
 		},
@@ -198,19 +213,32 @@ export async function createForgeServer(options: ForgeServerOptions = {}): Promi
 		{
 			title: "Forge proposal",
 			description:
-				"Propose a General Agent draft to the user in the Forge — talk-to-build. Name it and give any of: description, charter, vibr, skills, mcp, memory, lineage, thinking, personality, habitat. The draft appears in the Forge marked as proposed by the workshop; the user accepts it, changes it, and forges it. Nothing is written by this call. A proposal cannot set the agent's tools or its approval gate — only the user sets those, in the Forge.",
+				"Propose a General Agent draft to the user in the Forge — talk-to-build. Name it and give any of: description, charter, vibr, skills, mcp, memory, lineage, thinking, personality, habitat, extra (YAML for the manifest keys the orrery does not draw). The draft appears in the Forge marked as proposed by the workshop; the user accepts it, changes it, and forges it. Nothing is written by this call. A proposal cannot set anything that grants — the agent's tools, approval gate, workspace, control lanes, plugins, MCP servers, delegation or harness: only the user sets those, in the Forge.",
 			inputSchema: proposalShape,
 			_meta: { ui: { resourceUri: FORGE_VIEW_URI } },
 		},
 		async proposal => {
-			// The SCHEMA is the guard: `proposalShape` declares no `tools`, no
-			// `approval`, no `autonomy`, and the SDK strips undeclared keys before
-			// this runs — so what arrives here is only ever proposable.
+			// The SCHEMA is the guard for fields: `proposalShape` declares no `tools`, no
+			// `approval`, no `autonomy`, and the SDK strips undeclared keys before this
+			// runs. `extra` is free text, so it is read here: a grant-class key in it
+			// refuses the whole proposal, and so does YAML that is not a mapping.
+			if (proposal.extra !== undefined) {
+				const grants = grantPathsIn(proposal.extra);
+				if (grants.length > 0) {
+					return fail(`A proposal cannot set ${grants.join(", ")}: those grant the agent something, so only the user sets them, in the Forge. Propose the rest.`);
+				}
+				try {
+					const parsed: unknown = parseYaml(proposal.extra);
+					if (parsed !== null && (typeof parsed !== "object" || Array.isArray(parsed))) return fail("extra must be a YAML mapping: one `key: value` per line.");
+				} catch (error) {
+					return fail(`extra is not valid YAML: ${error instanceof Error ? error.message : String(error)}`);
+				}
+			}
 			const proposed: ForgeProposed = { view: "proposal", proposal };
 			const fields = Object.keys(proposal).filter(field => field !== "name");
 			return json(
 				proposed,
-				`Proposed ${proposal.name} to the Forge${fields.length > 0 ? ` (${fields.join(", ")})` : ""}. The user accepts or discards it there; nothing is written until they forge it. Tools and the approval gate are theirs to set.`,
+				`Proposed ${proposal.name} to the Forge${fields.length > 0 ? ` (${fields.join(", ")})` : ""}. The user accepts or discards it there; nothing is written until they forge it. Anything that grants — tools, the approval gate, workspace, control lanes — is theirs to set.`,
 			);
 		},
 	);
@@ -218,10 +246,9 @@ export async function createForgeServer(options: ForgeServerOptions = {}): Promi
 	// ── the View's doors (App-only) ─────────────────────────────────────────
 	server.registerTool(
 		"list_agents",
-		{ description: "The workspace's General Agents plus the ones installed packs ship, each marked editable or read-only.", inputSchema: {}, annotations: READ_ONLY, _meta: APP_ONLY },
+		{ description: "Every General Agent the Forge can see — installed packs', the user's own, the workspace's — each with its tier and marked editable or read-only.", inputSchema: {}, annotations: READ_ONLY, _meta: APP_ONLY },
 		async (_args, extra) => {
-			const root = workspaceOf(sessionOf(extra));
-			const listing = await listAgents({ workspace: root, pluginsDir, ...(root === null ? { workspaceMissing: NO_WORKSPACE } : {}) });
+			const listing = await listAgents(rootsOf(extra));
 			return json(listing, `${listing.agents.length} agents`);
 		},
 	);
@@ -230,29 +257,77 @@ export async function createForgeServer(options: ForgeServerOptions = {}): Promi
 		"list_parts",
 		{ description: "The skills, MCP servers, tool names and memory backends the tray can offer, with where each list was read and what could not be.", inputSchema: {}, annotations: READ_ONLY, _meta: APP_ONLY },
 		async (_args, extra) => {
-			const root = workspaceOf(sessionOf(extra));
-			const { agents } = await listAgents({ workspace: root, pluginsDir });
-			const listing = await listParts({ workspace: root, pluginsDir, agentDir, agents });
+			const roots = rootsOf(extra);
+			const { agents } = await listAgents(roots);
+			const listing = await listParts({ workspace: roots.workspace, pluginsDir: paths?.plugins ?? null, agentDir: paths?.agent ?? null, agents });
 			return json(listing, `${listing.parts.length} parts`);
+		},
+	);
+
+	server.registerTool(
+		"validate_agent",
+		{
+			description: "Whether the draft would save: its own problems, then whether the agent.md it writes loads as a General Agent. Writes nothing.",
+			inputSchema: { draft: draftSchema },
+			annotations: READ_ONLY,
+			_meta: APP_ONLY,
+		},
+		async ({ draft }) => {
+			const rendered = renderDraft(draft, join(draft.name, "agent.md"));
+			const check: DraftCheck = { problems: "problems" in rendered ? rendered.problems : [] };
+			return json(check, check.problems.length === 0 ? "It would save." : check.problems.join(" "));
 		},
 	);
 
 	server.registerTool(
 		"save_agent",
 		{
-			description: `Write the draft to <workspace>/${WRITE_DIR}/agents/<name>/agent.md. \`create: true\` refuses a name that is taken; \`create: false\` rewrites an existing editable workspace agent.`,
-			inputSchema: { draft: draftSchema, create: z.boolean() },
+			description: `Write the draft. \`create: true\` writes a NEW agent into the user's own agents (\`$INSO_HOME/agent/agents/<name>/agent.md\`, where it gets a home) and refuses a name that is taken anywhere. \`create: false\` rewrites the agent of that name in \`tier\` (\`user\`, or \`workspace\`: <workspace>/${WRITE_DIR}/agents), and is refused unless \`revision\` is the one list_agents gave — the file changed since, otherwise. The merged agent.md must load as a General Agent or nothing is written.`,
+			inputSchema: { draft: draftSchema, create: z.boolean(), tier: z.enum(["workspace", "user"]).optional(), revision: z.string().max(64).optional() },
 			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 			_meta: APP_ONLY,
 		},
-		async ({ draft, create }, extra) => {
-			const root = workspaceOf(sessionOf(extra));
-			if (root === null) return fail(NO_WORKSPACE);
+		async ({ draft, create, tier, revision }, extra) => {
+			let target: SaveTarget;
+			if (create) target = { create: true };
+			else if (tier !== undefined && revision !== undefined) target = { create: false, tier, revision };
+			else return fail("Rewriting an agent names its tier and its revision — both come from list_agents.");
 			try {
-				const { agents } = await listAgents({ workspace: null, pluginsDir });
-				const takenNames = new Set(agents.map(agent => agent.name));
-				const outcome = await saveAgent({ workspace: root, draft, create, takenNames });
+				const outcome = await saveAgent({ roots: rootsOf(extra), draft, target });
 				return json(outcome, `Wrote ${outcome.relativePath}`);
+			} catch (error) {
+				if (error instanceof SaveRefused) return fail(error.message);
+				throw error;
+			}
+		},
+	);
+
+	server.registerTool(
+		"agent_home",
+		{
+			description: "An agent's home: its id (home-<name>), its folder under the engine's workspaces, whether the engine registers it, the memory room it follows, and its standing instructions — every AGENTS.md OMP looks at, which one wins, and what it holds. Works for a name that does not exist yet (the user tier, where new agents land).",
+			inputSchema: { name: agentName },
+			annotations: READ_ONLY,
+			_meta: APP_ONLY,
+		},
+		async ({ name }, extra) => {
+			const home = await describeHome(rootsOf(extra), name);
+			return json(home, `${name}: ${home.homeNote}`);
+		},
+	);
+
+	server.registerTool(
+		"save_instructions",
+		{
+			description: "Write an agent's standing instructions: its home AGENTS.md once the home folder exists, otherwise the AGENTS.md beside its agent.md (which seeds the home on its first provisioning). Only for a user or workspace agent the Forge may edit; the path is derived, never given.",
+			inputSchema: { name: agentName, text: z.string().max(INSTRUCTIONS_MAX_BYTES) },
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+			_meta: APP_ONLY,
+		},
+		async ({ name, text }, extra) => {
+			try {
+				const saved = await saveInstructions(rootsOf(extra), name, text);
+				return json(saved, `Wrote ${saved.path}`);
 			} catch (error) {
 				if (error instanceof SaveRefused) return fail(error.message);
 				throw error;

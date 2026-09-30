@@ -58,7 +58,6 @@ export function ringColor(palette: StagePalette, kind: PartKind): Color {
 		case "memory":
 			return palette.cyan;
 		case "lineage":
-		case "model":
 			return palette.silver;
 	}
 }

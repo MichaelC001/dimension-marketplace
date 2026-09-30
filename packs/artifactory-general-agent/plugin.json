@@ -1,8 +1,8 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "artifactory-general-agent",
-	"version": "0.1.0",
-	"description": "The Forge — build a General Agent by hand or by talking to your agent: a three.js orrery where skills, MCP servers, memory and lineage orbit the agent's core, and the agent.md is written live beside it.",
+	"version": "0.2.0",
+	"description": "The Forge — build and configure a General Agent by hand or by talking to your agent: a three.js orrery where skills, MCP servers, memory and lineage orbit the agent's core, the agent.md is written live beside it, and everything else — its home, its standing instructions, every manifest key — is one tab away.",
 	"keywords": [
 		"general-agents",
 		"mcp-apps",
@@ -24,7 +24,25 @@
 						"example-hub",
 						"phone",
 						"traction"
+					],
+					"grants": [
+						"agents:configure"
 					]
+				}
+			],
+			"railActions": [
+				{
+					"id": "general-agents",
+					"label": "General Agents",
+					"icon": "bot",
+					"order": 20,
+					"session": {
+						"agent": "machinist",
+						"artifactory": {
+							"server": "general-agent",
+							"tool": "forge_open"
+						}
+					}
 				}
 			]
 		}

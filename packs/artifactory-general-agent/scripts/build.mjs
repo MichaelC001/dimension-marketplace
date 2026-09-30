@@ -5,6 +5,7 @@ import { build as buildServer } from "esbuild";
 import { build as buildView } from "vite";
 import react from "@vitejs/plugin-react";
 import { validateArtifactoryDecl } from "@dimension/sdk/artifactory";
+import { validateRailActionDecl } from "@dimension/sdk/rail-action";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 // Agent Plugins 1.0.0 layout: the pack id is the portable `name`; the
@@ -15,6 +16,15 @@ if (!Array.isArray(declared) || declared.length === 0) throw new Error("plugin.j
 for (const declaration of declared) {
   const issues = validateArtifactoryDecl({ ...declaration, plugin: manifest.name, type: "artifactory" });
   if (issues.length) throw new Error(issues.map(issue => issue.message).join("\n"));
+}
+// The door: each rail entry must be one the engine accepts, and must seat a server
+// THIS pack hosts as an App — the engine drops an entry that does not.
+const servers = declared.map(declaration => declaration.mcpServer);
+for (const rail of manifest.extensions?.["ai.insodimension.dimension"]?.railActions ?? []) {
+  const issues = validateRailActionDecl(rail);
+  if (issues.length) throw new Error(issues.map(issue => `railActions[${rail.id}]: ${issue.message}`).join("\n"));
+  const seated = rail.session?.artifactory?.server;
+  if (seated !== undefined && !servers.includes(seated)) throw new Error(`railActions[${rail.id}] seats "${seated}", which this pack does not host (${servers.join(", ")})`);
 }
 // The runtime `dependencies` stay external (installed beside the pack); the
 // SDK's `parseGeneralAgent` — a workspace package not published to npm, with

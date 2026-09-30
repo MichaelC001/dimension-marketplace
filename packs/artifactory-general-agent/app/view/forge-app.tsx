@@ -1,17 +1,19 @@
-import { type DragEvent, type KeyboardEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ViewAgentFact } from "@dimension/sdk/artifactory";
+import { type DragEvent, type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
 	type AgentDraft,
 	type AgentProposal,
-	APPROVALS,
-	type Approval,
+	APPROVAL_SETTINGS,
+	type ApprovalSetting,
 	applyProposal,
 	blankDraft,
 	draftProblems,
 	HABITATS,
 	type Habitat,
-	manifestLines,
-	manifestPath,
+	heldByExtra,
+	manifestDocument,
 	type MemoryScope,
+	NAME_RE,
 	normalizeTypedName,
 	PERSONALITIES,
 	PROPOSABLE_FIELDS,
@@ -20,9 +22,11 @@ import {
 	VIBRS,
 	type Vibr,
 } from "../../src/agent-md";
-import type { AgentListing, ListedAgent, Part, PartKind, PartListing } from "../../src/contracts";
+import type { AgentHome, AgentListing, ListedAgent, Part, PartKind, PartListing, SaveTarget } from "../../src/contracts";
 import type { ForgeBackend, ForgeEvent } from "./forge-client";
+import { Instrument, Meter, Segments } from "./instruments";
 import { attachPart, detachPart, hasPart, type Satellite } from "./model";
+import { ExtraPanel, HomePanel, VisibilityInstruments } from "./panels";
 import { VIBR_STYLES } from "./stage/palette";
 import { NEW_AGENT_KEY, type OrbAgent, Stage, type StageEvents } from "./stage/stage";
 
@@ -47,6 +51,8 @@ type View =
 			readonly kind: "forge";
 			readonly draft: AgentDraft;
 			readonly isNew: boolean;
+			/** The listed agent being reforged; absent for a new one. Its tier and revision are what a save names. */
+			readonly agent?: ListedAgent;
 			/** Why this agent cannot be forged here, when it cannot. */
 			readonly readOnly?: string;
 			readonly proposal?: PendingProposal;
@@ -69,11 +75,23 @@ const THINKING_LABEL: Record<Thinking, string> = {
 	high: "High",
 	xhigh: "Max",
 };
-const APPROVAL_LABEL: Record<Approval, { label: string; hint: string }> = {
+const APPROVAL_LABEL: Record<ApprovalSetting, { label: string; hint: string }> = {
 	"always-ask": { label: "Ask first", hint: "Asks before every action" },
 	write: { label: "Ask on writes", hint: "Reads freely, asks before it changes anything" },
 	yolo: { label: "Free", hint: "Never asks — only for reversible work" },
+	inherit: { label: "Host's", hint: "Says nothing: the host's own approval mode applies until you pick one" },
 };
+/** The manifest path each part kind writes — a part cannot land where Everything else holds that key. */
+const PART_PATH: Record<PartKind, string | null> = { tool: "capabilities.tools", skill: "capabilities.skills", mcp: "capabilities.mcp", memory: "memory.backend", lineage: null };
+const TIER_LABEL = { pack: "Pack agent", user: "Your agent", workspace: "Project agent" } as const;
+const TIER_SHORT = { pack: "pack", user: "yours", workspace: "project" } as const;
+const PANEL_TABS = [
+	{ id: "charter", label: "Charter" },
+	{ id: "manifest", label: "agent.md" },
+	{ id: "extra", label: "Everything else" },
+	{ id: "home", label: "Home" },
+] as const;
+type PanelId = (typeof PANEL_TABS)[number]["id"];
 const HABITAT_LABEL: Record<Habitat, { label: string; hint: string }> = {
 	bound: { label: "Where opened", hint: "Runs in whichever workspace you open it in" },
 	home: { label: "Own home", hint: "Always runs in its own managed workspace" },
@@ -97,12 +115,14 @@ const PROPOSAL_LINES: Record<(typeof PROPOSABLE_FIELDS)[number], readonly string
 	thinking: ["engine.thinkingLevel"],
 	personality: ["identity.personality"],
 	habitat: ["workspace.policy", "workspace.id"],
+	extra: [],
 };
 
-function orbOf(agent: ListedAgent): OrbAgent {
+function orbOf(agent: ListedAgent, fact: ViewAgentFact | undefined): OrbAgent {
 	const { draft } = agent;
 	const families = [draft.tools, draft.skills, draft.mcp].filter(list => list.length > 0).length + (draft.memory === "inherit" ? 0 : 1);
-	return { key: draft.key, name: draft.name, description: draft.description, vibr: draft.vibr, lineage: draft.lineage, rings: families };
+	const status = fact === undefined ? undefined : !fact.enabled ? "off" : !fact.listed ? "hidden" : undefined;
+	return { key: draft.key, name: draft.name, description: draft.description, vibr: draft.vibr, lineage: draft.lineage, rings: families, tier: TIER_SHORT[agent.source], ...(status !== undefined ? { status } : {}) };
 }
 
 function newKey(): string {
@@ -120,7 +140,7 @@ export function ForgeApp({ backend, incoming }: { backend: ForgeBackend; incomin
 	const [selected, setSelected] = useState<Satellite | null>(null);
 	const [trayKind, setTrayKind] = useState<PartKind>("tool");
 	const [filter, setFilter] = useState("");
-	const [panel, setPanel] = useState<"charter" | "manifest">("manifest");
+	const [panel, setPanel] = useState<PanelId>("manifest");
 	const [dragKind, setDragKind] = useState<PartKind | null>(null);
 	const [notice, setNotice] = useState<{ text: string; tone: "info" | "error" } | null>(null);
 	const [incantation, setIncantation] = useState("");
@@ -133,6 +153,10 @@ export function ForgeApp({ backend, incoming }: { backend: ForgeBackend; incomin
 	const overlayRef = useRef<HTMLDivElement>(null);
 	const stageRef = useRef<Stage | null>(null);
 	const agents = useMemo(() => listing?.agents ?? [], [listing]);
+	/** The host's record of who is enabled and shown in the rail. */
+	const facts = useSyncExternalStore(backend.visibility.subscribe, backend.visibility.read);
+	const [home, setHome] = useState<{ name: string; info: AgentHome | null; error: string | null } | null>(null);
+	const [serverCheck, setServerCheck] = useState<{ signature: string; problems: readonly string[] } | null>(null);
 
 	const refresh = useCallback(async () => {
 		try {
@@ -160,10 +184,56 @@ export function ForgeApp({ backend, incoming }: { backend: ForgeBackend; incomin
 		setView(current => (current.kind === "forge" ? { ...current, draft: change(current.draft) } : current));
 	}, []);
 
+	/** The drawn keys Everything else holds: their orrery controls stand aside. */
+	const held = useMemo(() => (draft ? heldByExtra(draft) : new Set<string>()), [draft]);
+	const draftName = draft?.name ?? "";
+	const [homeTick, setHomeTick] = useState(0);
+	const inForge = view.kind === "forge";
+
+	// The home the engine would give this name — id, folder, AGENTS.md tiers — asked of the server, never derived here.
+	useEffect(() => {
+		if (!inForge || !NAME_RE.test(draftName)) {
+			setHome(null);
+			return;
+		}
+		let live = true;
+		const timer = setTimeout(() => {
+			backend.home(draftName).then(
+				info => live && setHome({ name: draftName, info, error: null }),
+				error => live && setHome({ name: draftName, info: null, error: error instanceof Error ? error.message : String(error) }),
+			);
+		}, 200);
+		return () => {
+			live = false;
+			clearTimeout(timer);
+		};
+	}, [backend, inForge, draftName, homeTick, listing]);
+
+	// Whether the merged agent.md would load — the server's own verdict, live, so a YAML error shows before Forge it.
+	const signature = draft ? JSON.stringify(draft) : "";
+	useEffect(() => {
+		if (!draft || draftProblems(draft).length > 0) {
+			setServerCheck(null);
+			return;
+		}
+		let live = true;
+		const timer = setTimeout(() => {
+			backend.validate(draft).then(
+				check => live && setServerCheck({ signature, problems: check.problems }),
+				() => {},
+			);
+		}, 350);
+		return () => {
+			live = false;
+			clearTimeout(timer);
+		};
+		// `signature` is the draft, serialised: the effect runs per edit, not per render.
+	}, [backend, signature]);
+
 	const openListed = useCallback((agent: ListedAgent) => {
 		setSelected(null);
 		setPicking(false);
-		setView({ kind: "forge", draft: { ...agent.draft }, isNew: false, ...(agent.editable ? {} : { readOnly: agent.readOnlyReason ?? "This agent is read-only here." }) });
+		setView({ kind: "forge", draft: { ...agent.draft }, isNew: false, agent, ...(agent.editable ? {} : { readOnly: agent.readOnlyReason ?? "This agent is read-only here." }) });
 		setPanel("manifest");
 	}, []);
 
@@ -210,16 +280,19 @@ export function ForgeApp({ backend, incoming }: { backend: ForgeBackend; incomin
 				const listed = agents.find(agent => agent.name === proposal.name);
 				let base: AgentDraft;
 				let isNew: boolean;
+				let agent: ListedAgent | undefined;
 				let readOnly: string | undefined;
 				let before: AgentDraft | null;
 				if (current.kind === "forge" && (current.draft.name === proposal.name || (current.isNew && current.draft.name === ""))) {
 					base = current.draft;
 					isNew = current.isNew;
+					agent = current.agent;
 					readOnly = current.readOnly;
 					before = current.proposal?.before ?? current.draft;
 				} else if (listed !== undefined && listed.editable) {
 					base = listed.draft;
 					isNew = false;
+					agent = listed;
 					before = listed.draft;
 				} else {
 					base = blankDraft(newKey());
@@ -231,6 +304,7 @@ export function ForgeApp({ backend, incoming }: { backend: ForgeBackend; incomin
 					kind: "forge",
 					draft: applyProposal(base, proposal),
 					isNew,
+					...(agent !== undefined ? { agent } : {}),
 					...(readOnly !== undefined ? { readOnly } : {}),
 					proposal: { fields: [...merged], before },
 				};
@@ -258,12 +332,20 @@ export function ForgeApp({ backend, incoming }: { backend: ForgeBackend; incomin
 		setPendingOpen(null);
 	}, [pendingOpen, listing, agents, openListed]);
 
-	const acceptProposal = () => setView(current => (current.kind === "forge" ? { kind: "forge", draft: current.draft, isNew: current.isNew, ...(current.readOnly !== undefined ? { readOnly: current.readOnly } : {}) } : current));
+	// A proposal decided: the same forge view, without the proposal riding on it.
+	const settled = (current: Extract<View, { kind: "forge" }>, draft: AgentDraft): View => ({
+		kind: "forge",
+		draft,
+		isNew: current.isNew,
+		...(current.agent !== undefined ? { agent: current.agent } : {}),
+		...(current.readOnly !== undefined ? { readOnly: current.readOnly } : {}),
+	});
+	const acceptProposal = () => setView(current => (current.kind === "forge" ? settled(current, current.draft) : current));
 	const discardProposal = () => {
 		if (view.kind !== "forge" || view.proposal === undefined) return;
 		const { before } = view.proposal;
 		if (before === null) backToConstellation();
-		else setView({ kind: "forge", draft: before, isNew: view.isNew, ...(view.readOnly !== undefined ? { readOnly: view.readOnly } : {}) });
+		else setView(settled(view, before));
 	};
 
 	// The Stage calls back through a ref so it is created exactly once.
@@ -277,11 +359,15 @@ export function ForgeApp({ backend, incoming }: { backend: ForgeBackend; incomin
 		},
 		thinkingStep: delta =>
 			updateDraft(current => {
+				if (heldByExtra(current).has("engine.thinkingLevel")) return current;
 				const index = THINKING_STEPS.indexOf(current.thinking);
 				const next = THINKING_STEPS[Math.min(THINKING_STEPS.length - 1, Math.max(0, index + delta))];
 				return next === undefined || next === current.thinking ? current : { ...current, thinking: next };
 			}),
-		openVibr: () => setPicking(true),
+		openVibr: () => {
+			if (draft !== null && held.has("avatar")) setNotice({ tone: "info", text: "Its avatar is set in Everything else (a skin, an accent or a contributed face), so the wheel leaves it alone. Edit or remove `avatar` there." });
+			else setPicking(true);
+		},
 		previewVibr: setPreviewVibr,
 		pickVibr: vibr => {
 			updateDraft(current => ({ ...current, vibr }));
@@ -314,7 +400,7 @@ export function ForgeApp({ backend, incoming }: { backend: ForgeBackend; incomin
 		};
 	}, []);
 
-	const orbs = useMemo(() => agents.map(orbOf), [agents]);
+	const orbs = useMemo(() => agents.map(agent => orbOf(agent, facts.find(fact => fact.name === agent.name))), [agents, facts]);
 	useEffect(() => {
 		const stage = stageRef.current;
 		if (!stage) return;
@@ -330,7 +416,8 @@ export function ForgeApp({ backend, incoming }: { backend: ForgeBackend; incomin
 	}, [dragKind]);
 
 	// Flash exactly the agent.md lines a gesture changed.
-	const lines = useMemo(() => (draft ? manifestLines(draft) : []), [draft]);
+	const homeId = home !== null && home.name === draftName && home.info !== null ? home.info.homeId : null;
+	const lines = useMemo(() => (draft ? manifestDocument(draft, homeId).lines : []), [draft, homeId]);
 	const previousLines = useRef<Map<string, string>>(new Map());
 	const draftKey = draft?.key ?? null;
 	const previousKey = useRef<string | null>(null);
@@ -350,6 +437,8 @@ export function ForgeApp({ backend, incoming }: { backend: ForgeBackend; incomin
 
 	const proposal = view.kind === "forge" ? view.proposal : undefined;
 	const proposedLines = useMemo(() => new Set((proposal?.fields ?? []).flatMap(field => PROPOSAL_LINES[field as keyof typeof PROPOSAL_LINES] ?? [])), [proposal]);
+	/** Everything else is one proposable field, but its lines carry per-key ids: all of them are the workshop's while it is pending. */
+	const proposedExtra = proposal?.fields.includes("extra") ?? false;
 
 	// ── parts ────────────────────────────────────────────────────────────────
 
@@ -362,13 +451,21 @@ export function ForgeApp({ backend, incoming }: { backend: ForgeBackend; incomin
 	const needle = filter.trim().toLowerCase();
 	const trayParts = parts.filter(part => part.kind === trayKind && (needle === "" || part.label.toLowerCase().includes(needle) || part.hint.toLowerCase().includes(needle)));
 	const counts = useMemo(() => {
-		const out: Record<PartKind, number> = { tool: 0, skill: 0, mcp: 0, memory: 0, lineage: 0, model: 0 };
+		const out: Record<PartKind, number> = { tool: 0, skill: 0, mcp: 0, memory: 0, lineage: 0 };
 		if (draft) for (const part of parts) if (hasPart(draft, part)) out[part.kind]++;
 		return out;
 	}, [draft, parts]);
 
+	/** A part cannot land where Everything else holds that key: say so, rather than change nothing. */
+	const refuseHeld = (kind: PartKind): boolean => {
+		const path = PART_PATH[kind];
+		if (path === null || !held.has(path)) return false;
+		setNotice({ tone: "info", text: `${path} is set in Everything else, so the orrery leaves it alone. Edit it there.` });
+		return true;
+	};
+
 	const togglePart = (part: Part) => {
-		if (!draft) return;
+		if (!draft || refuseHeld(part.kind)) return;
 		updateDraft(current => (hasPart(current, part) ? detachPart(current, part) : attachPart(current, part)));
 	};
 
@@ -391,7 +488,7 @@ export function ForgeApp({ backend, incoming }: { backend: ForgeBackend; incomin
 		event.preventDefault();
 		const dropped = JSON.parse(raw) as { kind: PartKind; id: string };
 		const part = parts.find(candidate => candidate.kind === dropped.kind && candidate.id === dropped.id);
-		if (!part) return;
+		if (!part || refuseHeld(part.kind)) return;
 		stageRef.current?.markDrop(part.kind, part.id, event.clientX, event.clientY);
 		updateDraft(current => attachPart(current, part));
 	};
@@ -399,19 +496,26 @@ export function ForgeApp({ backend, incoming }: { backend: ForgeBackend; incomin
 	// ── forging ────────────────────────────────────────────────────────────────
 
 	const problems = draft ? draftProblems(draft) : [];
+	const serverProblems = serverCheck !== null && serverCheck.signature === signature && problems.length === 0 ? serverCheck.problems : [];
+	const extraProblems = draft ? manifestDocument(draft).problems : [];
 	const nameTaken = draft !== null && view.kind === "forge" && view.isNew && agents.some(agent => agent.name === draft.name);
 	const blockers = [
 		...(view.kind === "forge" && view.readOnly !== undefined ? [view.readOnly] : []),
 		...(proposal !== undefined ? ["Accept or discard the workshop's proposal first."] : []),
 		...(nameTaken ? [`An agent named “${draft?.name}” already exists.`] : []),
+		...(view.kind === "forge" && view.isNew && listing?.userAgentsDir === null ? ["The Forge does not know where your agents live (INSO_HOME is unset), so it cannot create one."] : []),
 		...problems,
+		...serverProblems,
 	];
 
 	const forge = async () => {
 		if (!draft || view.kind !== "forge" || blockers.length > 0 || saving) return;
 		setSaving(true);
 		try {
-			const outcome = await backend.save(draft, view.isNew);
+			const agent = view.agent;
+			const target: SaveTarget | null = view.isNew ? { create: true } : agent !== undefined && agent.source !== "pack" && agent.revision !== undefined ? { create: false, tier: agent.source, revision: agent.revision } : null;
+			if (target === null) throw new Error("This agent was opened without its tier and revision, so it cannot be rewritten; reopen it from the constellation.");
+			const outcome = await backend.save(draft, target);
 			const verb = outcome.created ? "Forged" : "Reforged";
 			setNotice({
 				tone: "info",
@@ -459,6 +563,23 @@ export function ForgeApp({ backend, incoming }: { backend: ForgeBackend; incomin
 	};
 
 	const shownVibr = draft ? (previewVibr ?? draft.vibr) : null;
+	const tierOf = view.kind === "forge" ? (view.agent?.source ?? "user") : "user";
+	const newAgentDir = listing?.userAgentsDir ?? null;
+	const sep = newAgentDir?.includes("\\") ? "\\" : "/";
+	const pathOf = view.kind === "forge" ? (view.agent?.path ?? (newAgentDir === null ? "where your agents live is unknown (INSO_HOME is unset)" : [newAgentDir.replace(/[\\/]$/, ""), draft?.name || "<name>", "agent.md"].join(sep))) : "";
+	const saveInstructions = async (text: string) => {
+		if (!draft) return;
+		try {
+			const saved = await backend.saveInstructions(draft.name, text);
+			setNotice({ tone: "info", text: `Saved ${saved.path}` });
+			setHomeTick(tick => tick + 1);
+		} catch (error) {
+			setNotice({ tone: "error", text: `The instructions were not saved: ${error instanceof Error ? error.message : String(error)}` });
+		}
+	};
+	/** An instrument whose key Everything else holds reads as that, not as a value it does not control. */
+	const heldValue = (path: string, value: string) => (held.has(path) ? "In Everything else" : value);
+	const canStandAtHome = home === null || home.name !== draftName || home.info === null || home.info.canStandAtHome;
 	const trayNote = trayKind === "tool" ? partListing?.omitted.find(note => note.startsWith("The full tool list")) : undefined;
 
 	return (
@@ -475,6 +596,8 @@ export function ForgeApp({ backend, incoming }: { backend: ForgeBackend; incomin
 			{view.kind === "constellation" ? (
 				<ConstellationHud
 					listing={listing}
+					facts={facts}
+					offered={backend.visibility.offered()}
 					loadError={loadError}
 					preview={backend.mode === "preview"}
 					onOpen={openAgent}
@@ -507,9 +630,12 @@ export function ForgeApp({ backend, incoming }: { backend: ForgeBackend; incomin
 									aria-label="What this agent is for"
 									onChange={event => updateDraft(current => ({ ...current, description: event.target.value }))}
 								/>
-								<span className="fg-path">{listing?.workspace ? `${listing.workspace.replace(/[\\/]$/, "")}/${manifestPath(draft, listing.configDir)}` : manifestPath(draft)}</span>
+								<span className="fg-path" data-tier={tierOf}>
+									<span className="fg-tier">{TIER_LABEL[tierOf]}</span>
+									{pathOf}
+								</span>
 								<button type="button" className="fg-chip fg-panel-toggle" aria-expanded={panelOpen} onClick={() => setPanelOpen(open => !open)}>
-									{panelOpen ? "Hide charter & agent.md" : "Charter & agent.md"}
+									{panelOpen ? "Hide the panel" : "Charter, agent.md & more"}
 								</button>
 							</div>
 						</header>
@@ -565,16 +691,20 @@ export function ForgeApp({ backend, incoming }: { backend: ForgeBackend; incomin
 							</div>
 						</aside>
 
-						<aside className="fg-panel" aria-label="Charter and manifest">
+						<aside className="fg-panel" aria-label="Charter, manifest, everything else and home">
 							<div className="fg-panel-tabs" role="tablist">
-								<button type="button" role="tab" aria-selected={panel === "charter"} onClick={() => setPanel("charter")}>
-									Charter
-								</button>
-								<button type="button" role="tab" aria-selected={panel === "manifest"} onClick={() => setPanel("manifest")}>
-									agent.md
-								</button>
+								{PANEL_TABS.map(tab => (
+									<button key={tab.id} type="button" role="tab" aria-selected={panel === tab.id} onClick={() => setPanel(tab.id)}>
+										{tab.label}
+										{tab.id === "extra" && draft.extra.trim() !== "" && <span className="fg-count">•</span>}
+									</button>
+								))}
 							</div>
-							{panel === "charter" ? (
+							{panel === "extra" ? (
+								<ExtraPanel draft={draft} held={held} problems={[...extraProblems, ...serverProblems]} onChange={extra => updateDraft(current => ({ ...current, extra }))} />
+							) : panel === "home" ? (
+								<HomePanel draft={draft} agent={view.agent} held={held} info={home !== null && home.name === draftName ? home.info : null} error={home !== null && home.name === draftName ? home.error : null} onSaveInstructions={saveInstructions} />
+							) : panel === "charter" ? (
 								<div className="fg-charter">
 									<div className="fg-prompt-mode" role="radiogroup" aria-label="How the charter meets the default prompt">
 										<button type="button" role="radio" aria-checked={draft.promptMode === "append"} onClick={() => updateDraft(current => ({ ...current, promptMode: "append" }))}>
@@ -584,6 +714,11 @@ export function ForgeApp({ backend, incoming }: { backend: ForgeBackend; incomin
 											Speaks only as itself
 										</button>
 									</div>
+									<p className="fg-aside-lede fg-prompt-hint">
+										{draft.promptMode === "replace"
+											? "The charter is the agent's whole prompt — right for a specialist with its own voice."
+											: "The charter is added after the full default coding prompt — right only for an agent that builds on coding."}
+									</p>
 									<textarea
 										className="fg-charter-text"
 										value={draft.charter}
@@ -600,7 +735,7 @@ export function ForgeApp({ backend, incoming }: { backend: ForgeBackend; incomin
 											className="fg-line"
 											data-field={line.field}
 											data-flash={flash.has(line.field) || undefined}
-											data-proposed={proposedLines.has(line.field) || undefined}
+											data-proposed={proposedLines.has(line.field) || (proposedExtra && line.field.startsWith("extra.")) || undefined}
 											data-comment={line.text.trimStart().startsWith("#") || undefined}
 										>
 											{line.text || " "}
@@ -612,27 +747,28 @@ export function ForgeApp({ backend, incoming }: { backend: ForgeBackend; incomin
 
 						<div className="fg-instruments" aria-label="The agent's mind">
 							<Instrument label="Vibr" value={VIBR_STYLES[shownVibr ?? draft.vibr].label} hint={picking ? "Pick a body on the wheel — or here" : "Double-click the core, or open the wheel"}>
-								<button type="button" className="fg-chip" aria-expanded={picking} onClick={() => (picking ? (setPicking(false), setPreviewVibr(null)) : setPicking(true))}>
-									{picking ? "Close wheel" : "Change"}
+								<button type="button" className="fg-chip" aria-expanded={picking} disabled={held.has("avatar")} onClick={() => (picking ? (setPicking(false), setPreviewVibr(null)) : setPicking(true))}>
+									{held.has("avatar") ? "In Everything else" : picking ? "Close wheel" : "Change"}
 								</button>
 							</Instrument>
-							<Instrument label="Thinks" value={THINKING_LABEL[draft.thinking]} hint="Drag the core up or down">
-								<Meter steps={THINKING_STEPS} value={draft.thinking} onChange={value => updateDraft(current => ({ ...current, thinking: value }))} labels={THINKING_LABEL} />
+							<Instrument label="Thinks" value={heldValue("engine.thinkingLevel", THINKING_LABEL[draft.thinking])} hint="Drag the core up or down">
+								<Meter steps={THINKING_STEPS} value={draft.thinking} disabled={held.has("engine.thinkingLevel")} onChange={value => updateDraft(current => ({ ...current, thinking: value }))} labels={THINKING_LABEL} />
 							</Instrument>
-							<Instrument label="Gate" value={APPROVAL_LABEL[draft.approval].label} hint={APPROVAL_LABEL[draft.approval].hint}>
-								<Segments options={APPROVALS} value={draft.approval} labels={Object.fromEntries(APPROVALS.map(a => [a, APPROVAL_LABEL[a].label])) as Record<Approval, string>} onChange={value => updateDraft(current => ({ ...current, approval: value }))} />
+							<Instrument label="Gate" value={heldValue("gate.approval", APPROVAL_LABEL[draft.approval].label)} hint={APPROVAL_LABEL[draft.approval].hint}>
+								<Segments options={APPROVAL_SETTINGS} value={held.has("gate.approval") ? null : draft.approval} disabled={held.has("gate.approval")} labels={Object.fromEntries(APPROVAL_SETTINGS.map(a => [a, APPROVAL_LABEL[a].label])) as Record<ApprovalSetting, string>} onChange={value => updateDraft(current => ({ ...current, approval: value }))} />
 							</Instrument>
-							<Instrument label="Lives" value={HABITAT_LABEL[draft.habitat].label} hint={HABITAT_LABEL[draft.habitat].hint}>
-								<Segments options={HABITATS} value={draft.habitat} labels={Object.fromEntries(HABITATS.map(h => [h, HABITAT_LABEL[h].label])) as Record<Habitat, string>} onChange={value => updateDraft(current => ({ ...current, habitat: value }))} />
+							<Instrument label="Lives" value={heldValue("workspace.policy", HABITAT_LABEL[draft.habitat].label)} hint={canStandAtHome ? HABITAT_LABEL[draft.habitat].hint : "A project agent belongs to one project, so it has no home to live in. Extend it as a user agent for that."}>
+								<Segments options={HABITATS} value={held.has("workspace.policy") ? null : draft.habitat} disabled={held.has("workspace.policy")} disabledOptions={canStandAtHome ? [] : ["home"]} labels={Object.fromEntries(HABITATS.map(h => [h, HABITAT_LABEL[h].label])) as Record<Habitat, string>} onChange={value => updateDraft(current => ({ ...current, habitat: value }))} />
 							</Instrument>
-							<Instrument label="Temper" value={draft.personality === "default" ? "Default" : draft.personality[0]?.toUpperCase() + draft.personality.slice(1)} hint="The personality it speaks with">
-								<Segments options={PERSONALITIES} value={draft.personality} labels={{ default: "Default", friendly: "Friendly", pragmatic: "Pragmatic", none: "Plain" }} onChange={value => updateDraft(current => ({ ...current, personality: value }))} />
+							<Instrument label="Temper" value={heldValue("identity.personality", draft.personality === "default" ? "Default" : draft.personality[0]?.toUpperCase() + draft.personality.slice(1))} hint="The personality it speaks with">
+								<Segments options={PERSONALITIES} value={draft.personality} disabled={held.has("identity.personality")} labels={{ default: "Default", friendly: "Friendly", pragmatic: "Pragmatic", none: "Plain" }} onChange={value => updateDraft(current => ({ ...current, personality: value }))} />
 							</Instrument>
 							{draft.memory !== "off" && (
-								<Instrument label="Recall" value={RECALL_LABEL[draft.memoryScope].label} hint={RECALL_LABEL[draft.memoryScope].hint}>
-									<Segments options={["project", "global"] as const} value={draft.memoryScope} labels={{ project: RECALL_LABEL.project.label, global: RECALL_LABEL.global.label }} onChange={value => updateDraft(current => ({ ...current, memoryScope: value }))} />
+								<Instrument label="Recall" value={heldValue("workspace.reach", RECALL_LABEL[draft.memoryScope].label)} hint={RECALL_LABEL[draft.memoryScope].hint}>
+									<Segments options={["project", "global"] as const} value={held.has("workspace.reach") ? null : draft.memoryScope} disabled={held.has("workspace.reach")} labels={{ project: RECALL_LABEL.project.label, global: RECALL_LABEL.global.label }} onChange={value => updateDraft(current => ({ ...current, memoryScope: value }))} />
 								</Instrument>
 							)}
+							{!view.isNew && <VisibilityInstruments name={draft.name} visibility={backend.visibility} onError={message => setNotice({ tone: "error", text: message })} />}
 						</div>
 
 						{picking && (
@@ -712,6 +848,8 @@ export function ForgeApp({ backend, incoming }: { backend: ForgeBackend; incomin
 
 function ConstellationHud({
 	listing,
+	facts,
+	offered,
 	loadError,
 	preview,
 	onOpen,
@@ -720,6 +858,9 @@ function ConstellationHud({
 	speak,
 }: {
 	listing: AgentListing | null;
+	facts: readonly ViewAgentFact[];
+	/** Whether the host lends the enabled/listed facts at all. */
+	offered: boolean;
 	loadError: string | null;
 	preview: boolean;
 	onOpen: (key: string) => void;
@@ -739,6 +880,7 @@ function ConstellationHud({
 			<header className="fg-hero">
 				<h1>General Agents</h1>
 				<p>{lede}</p>
+				{listing !== null && !offered && !preview && <p className="fg-hero-note">This host does not lend the Forge which agents are enabled or hidden from the rail, so none are marked here.</p>}
 				{listing !== null && listing.notices.length > 0 && (
 					<ul className="fg-notes">
 						{listing.notices.map(note => (
@@ -751,7 +893,9 @@ function ConstellationHud({
 				{agents.map(agent => (
 					<button key={agent.draft.key} type="button" onClick={() => onOpen(agent.draft.key)} title={agent.editable ? agent.path : `${agent.path} — ${agent.readOnlyReason ?? "read-only"}`}>
 						<span className="fg-roster-name">{agent.name}</span>
-						<span className="fg-roster-sub">{agent.source === "pack" ? "pack" : agent.editable ? VIBR_STYLES[agent.draft.vibr].label : "read-only"}</span>
+						<span className="fg-roster-sub">
+							{[TIER_SHORT[agent.source], ...(agent.source !== "pack" && !agent.editable ? ["read-only"] : []), ...statusOf(facts.find(fact => fact.name === agent.name))].join(" · ")}
+						</span>
 					</button>
 				))}
 				<button type="button" className="fg-roster-new" onClick={() => onOpen(NEW_AGENT_KEY)}>
@@ -781,39 +925,10 @@ function Incantation({ value, onChange, onSubmit, placeholder }: { value: string
 	);
 }
 
-function Instrument({ label, value, hint, children }: { label: string; value: string; hint: string; children: ReactNode }) {
-	return (
-		<div className="fg-instrument" title={hint}>
-			<div className="fg-instrument-read">
-				<span className="fg-instrument-label">{label}</span>
-				<span className="fg-instrument-value">{value}</span>
-			</div>
-			{children}
-		</div>
-	);
-}
-
-function Segments<T extends string>({ options, value, labels, onChange }: { options: readonly T[]; value: T; labels: Record<T, string>; onChange: (value: T) => void }) {
-	return (
-		<div className="fg-segments" role="radiogroup">
-			{options.map(option => (
-				<button key={option} type="button" role="radio" aria-checked={option === value} aria-label={labels[option]} onClick={() => onChange(option)}>
-					<span className="fg-segment-tick" aria-hidden="true" />
-				</button>
-			))}
-		</div>
-	);
-}
-
-function Meter<T extends string>({ steps, value, labels, onChange }: { steps: readonly T[]; value: T; labels: Record<T, string>; onChange: (value: T) => void }) {
-	const index = steps.indexOf(value);
-	return (
-		<div className="fg-meter" role="radiogroup" aria-label="Thinking level">
-			{steps.map((step, i) => (
-				<button key={step} type="button" role="radio" aria-checked={step === value} aria-label={labels[step]} data-lit={i <= index || undefined} data-inherit={step === steps[0] || undefined} onClick={() => onChange(step)} />
-			))}
-		</div>
-	);
+/** What the host says about an agent, for the roster: nothing when it is on and shown, or unknown. */
+function statusOf(fact: ViewAgentFact | undefined): string[] {
+	if (fact === undefined) return [];
+	return !fact.enabled ? ["off"] : !fact.listed ? ["hidden from rail"] : [];
 }
 
 function ForgeButton({ blockers, onForge, isNew, saving }: { blockers: readonly string[]; onForge: () => void; isNew: boolean; saving: boolean }) {
