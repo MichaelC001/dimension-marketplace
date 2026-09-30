@@ -116,9 +116,9 @@ export function fieldErrors(state: ProfileState, agents: readonly ListedAgent[])
 	const { draft } = state;
 	const errors: { name?: string; description?: string; charter?: string } = {};
 	if (isNew(state)) {
-		if (draft.name === "") errors.name = "Name it: lowercase letters, digits and dashes.";
+		if (draft.name === "") errors.name = "Give it an id: lowercase letters, digits and dashes.";
 		else if (!NAME_RE.test(draft.name)) errors.name = "2–64 lowercase letters, digits or dashes, starting with a letter or digit.";
-		else if (agents.some(agent => agent.name === draft.name)) errors.name = `An agent named “${draft.name}” already exists.`;
+		else if (agents.some(agent => agent.name === draft.name)) errors.name = `An agent with the id “${draft.name}” already exists.`;
 	}
 	if (draft.description.trim() === "") errors.description = "Say in one line what it is for.";
 	if (draft.charter.trim() === "") errors.charter = "Write its charter: the instructions it runs by.";

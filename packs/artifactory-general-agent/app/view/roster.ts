@@ -58,22 +58,20 @@ export interface Standing {
 }
 
 /** Where an agent stands, in one line: on and in the rail, on but hidden from
- *  the rail, or off. With no host record, what the file itself says: its tier. */
-export function standingOf(agent: Pick<ListedAgent, "source">, fact: ViewAgentFact | undefined): Standing {
-	if (fact === undefined) return { label: TIER_LABEL[agent.source], tone: "idle" };
+ *  the rail, or off. `null` when the host lends no record: nothing here guesses. */
+export function standingOf(fact: ViewAgentFact | undefined): Standing | null {
+	if (fact === undefined) return null;
 	if (!fact.enabled) return { label: "Off", tone: "off" };
 	return fact.listed ? { label: "On · In rail", tone: "ready" } : { label: "On · Hidden from rail", tone: "idle" };
 }
 
-/** The tier, as a person says it. */
+/** The tier, as a person says it: the card's source line and the profile's
+ *  badge, in the filter pills' words. */
 export const TIER_LABEL: Readonly<Record<AgentSource, string>> = {
 	pack: "From a pack",
 	user: "Yours",
 	workspace: "This project",
 };
-
-/** The tier as one quiet word, beside an agent's id on its card. */
-export const TIER_WORD: Readonly<Record<AgentSource, string>> = { pack: "Pack", user: "Yours", workspace: "Project" };
 
 // ── what the extra text says ─────────────────────────────────────────────────
 
@@ -156,4 +154,11 @@ export function humanize(slug: string): string {
  *  beside it where the two differ. */
 export function displayName(agent: Pick<ListedAgent, "name" | "draft">, fact: ViewAgentFact | undefined): string {
 	return fact?.title ?? extraScalar(agent.draft.extra, "title") ?? humanize(agent.name);
+}
+
+/** An agent named by its id (a lineage entry), as a person reads it: its
+ *  display name when it is listed, else its id read as words. */
+export function titleOf(name: string, agents: readonly ListedAgent[], facts: readonly ViewAgentFact[]): string {
+	const agent = agents.find(candidate => candidate.name === name);
+	return agent === undefined ? humanize(name) : displayName(agent, factOf(agent, facts));
 }

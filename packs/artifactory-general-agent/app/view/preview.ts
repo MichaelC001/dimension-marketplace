@@ -31,7 +31,7 @@ const SEEDS: readonly Seed[] = [
 		pack: "dimension-agents",
 		draft: {
 			name: "machinist",
-			description: "The workbench's own engineer — configures loops, model profiles, plugins, skills and MCP servers",
+			description: "The workbench's own engineer, who configures loops, model profiles, plugins, skills and MCP servers",
 			vibr: "cube",
 			habitat: "home",
 			memory: "engram",
@@ -48,7 +48,7 @@ const SEEDS: readonly Seed[] = [
 		pack: "dimension-agents",
 		draft: {
 			name: "coding",
-			description: "The Code space's default agent — works the repository you opened",
+			description: "The Code space's default agent, which works the repository you opened",
 			vibr: "lattice",
 			thinking: "high",
 			skills: ["code-health", "checkpoint"],
@@ -96,7 +96,7 @@ const SEEDS: readonly Seed[] = [
 		source: "user",
 		draft: {
 			name: "cmo",
-			description: "Runs the marketing desk — positioning, launches and the weekly growth review",
+			description: "Runs the marketing desk: positioning, launches and the weekly growth review",
 			vibr: "",
 			personality: "pragmatic",
 			memory: "engram",
@@ -125,7 +125,7 @@ const SEEDS: readonly Seed[] = [
 		source: "user",
 		draft: {
 			name: "scribe",
-			description: "The workspace writer — terse, precise, dated entries",
+			description: "The workspace writer: terse, precise, dated entries",
 			vibr: "static",
 			personality: "pragmatic",
 			tools: ["read", "write", "palace"],

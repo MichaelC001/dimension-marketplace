@@ -10,7 +10,12 @@ import { cn } from "@fraym/ui/lib/cn";
 import { type KeyboardEvent, type ReactNode, useId, useState } from "react";
 import { PANEL } from "./chrome";
 
-/** One titled section of the profile: a panel holding a list of facts. */
+/** The one width every single-line control in a panel shares (inputs, selects,
+ *  the face picker, a chip picker's search). A text area takes the full width. */
+export const FIELD = "w-full max-w-md";
+
+/** One titled section of the profile: a panel holding a list of facts. Its
+ *  title is the scale's heading-lg, two steps over a card's name. */
 export function Panel({
 	title,
 	lede,
@@ -27,7 +32,7 @@ export function Panel({
 	return (
 		<section aria-labelledby={id} data-slot="profile-panel" className={cn("@container/panel flex min-w-0 flex-col", PANEL, wide && "@4xl:col-span-2")}>
 			<header className="flex min-w-0 flex-col gap-1 px-5 pt-5 pb-1">
-				<h2 id={id} className="m-0 text-fr-md font-semibold text-fr-text">
+				<h2 id={id} className="m-0 text-fr-xl leading-tight font-semibold text-fr-text">
 					{title}
 				</h2>
 				{lede ? <p className="m-0 text-fr-xs leading-relaxed text-pretty text-fr-text-2">{lede}</p> : null}
@@ -105,16 +110,31 @@ export function HeldValue({ children }: { readonly children: ReactNode }) {
 	);
 }
 
-const CHIP = "inline-flex items-center gap-1 rounded-full border border-fr-border-soft bg-fr-surface-2 px-3 py-1 font-secondary text-fr-xs leading-none text-fr-text";
+/** A chip: an id in the machine face, or a name a person reads in the primary one. */
+function chipClass(named: boolean): string {
+	return cn(
+		"inline-flex items-center gap-1 rounded-full border border-fr-border-soft bg-fr-surface-2 px-3 py-1 text-fr-xs leading-none text-fr-text",
+		named ? "font-primary" : "font-secondary",
+	);
+}
 
-/** A quiet list of values (read-only chips). */
-export function ChipList({ values, empty }: { readonly values: readonly string[]; readonly empty: string }) {
+/** A quiet list of values (read-only chips). `labelOf` names an id the way a
+ *  person reads it; the id itself stays in the chip's tooltip. */
+export function ChipList({
+	values,
+	empty,
+	labelOf,
+}: {
+	readonly values: readonly string[];
+	readonly empty: string;
+	readonly labelOf?: (id: string) => string;
+}) {
 	if (values.length === 0) return <span className="text-fr-sm text-fr-text-2">{empty}</span>;
 	return (
 		<ul className="m-0 flex list-none flex-wrap gap-2 p-0">
 			{values.map(value => (
-				<li key={value} className={CHIP}>
-					{value}
+				<li key={value} className={chipClass(labelOf !== undefined)} title={labelOf === undefined ? undefined : value}>
+					{labelOf?.(value) ?? value}
 				</li>
 			))}
 		</ul>
@@ -139,6 +159,7 @@ export function ChipPicker({
 	value,
 	options,
 	empty,
+	labelOf,
 	disabled = false,
 	free = false,
 	onChange,
@@ -149,6 +170,9 @@ export function ChipPicker({
 	readonly value: readonly string[];
 	readonly options: readonly ChipOption[];
 	readonly empty: string;
+	/** Names an id the way a person reads it (an agent's display name); the id
+	 *  stays in the chip's tooltip. Absent, the chip is the id. */
+	readonly labelOf?: (id: string) => string;
 	readonly disabled?: boolean;
 	readonly free?: boolean;
 	readonly onChange: (next: string[]) => void;
@@ -157,9 +181,17 @@ export function ChipPicker({
 	const [open, setOpen] = useState(false);
 	const listId = useId();
 	const needle = query.trim().toLowerCase();
+	const named = labelOf !== undefined;
+	const nameOf = (id: string) => labelOf?.(id) ?? id;
 	const suggestions = options
 		.filter(option => !value.includes(option.id))
-		.filter(option => needle === "" || option.id.toLowerCase().includes(needle) || (option.hint ?? "").toLowerCase().includes(needle))
+		.filter(
+			option =>
+				needle === "" ||
+				option.id.toLowerCase().includes(needle) ||
+				nameOf(option.id).toLowerCase().includes(needle) ||
+				(option.hint ?? "").toLowerCase().includes(needle),
+		)
 		.slice(0, 8);
 	const add = (id: string) => {
 		if (id === "" || value.includes(id)) return;
@@ -185,12 +217,12 @@ export function ChipPicker({
 					<li className="text-fr-sm text-fr-text-2">{empty}</li>
 				) : (
 					value.map(id => (
-						<li key={id} className={cn(CHIP, !disabled && "pr-1")}>
-							{id}
+						<li key={id} className={cn(chipClass(named), !disabled && "pr-1")} title={named ? id : undefined}>
+							{nameOf(id)}
 							<button
 								type="button"
 								disabled={disabled}
-								aria-label={`Remove ${id}`}
+								aria-label={`Remove ${nameOf(id)}`}
 								onClick={() => onChange(value.filter(entry => entry !== id))}
 								className="grid size-4 place-items-center rounded-full text-fr-text-3 fr-t-colors hover:bg-fr-surface-3 hover:text-fr-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fr-accent-line disabled:hidden"
 							>
@@ -202,7 +234,7 @@ export function ChipPicker({
 			</ul>
 			{disabled ? null : (
 				<div className="flex min-w-0 flex-col gap-2">
-					<div className="relative max-w-80">
+					<div className={cn("relative", FIELD)}>
 						<Icon name="search" size={13} strokeWidth={2} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-fr-text-3" />
 						<Input
 							size="sm"
@@ -227,16 +259,19 @@ export function ChipPicker({
 								<li key={option.id}>
 									<button
 										type="button"
-										title={option.hint}
+										title={named ? [option.id, option.hint].filter(Boolean).join(" · ") : option.hint}
 										// Chosen on press, before the input's blur closes the list.
 										onMouseDown={event => {
 											event.preventDefault();
 											add(option.id);
 										}}
-										className="inline-flex items-center gap-1 rounded-full border border-dashed border-fr-border px-3 py-1 font-secondary text-fr-xs leading-none text-fr-text-2 fr-t-colors hover:border-fr-accent-line hover:text-fr-text"
+										className={cn(
+											"inline-flex items-center gap-1 rounded-full border border-dashed border-fr-border px-3 py-1 text-fr-xs leading-none text-fr-text-2 fr-t-colors hover:border-fr-accent-line hover:text-fr-text",
+											named ? "font-primary" : "font-secondary",
+										)}
 									>
 										<Icon name="plus" size={10} strokeWidth={2.4} />
-										{option.id}
+										{nameOf(option.id)}
 									</button>
 								</li>
 							))}

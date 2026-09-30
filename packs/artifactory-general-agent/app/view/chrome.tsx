@@ -1,5 +1,5 @@
-// The page's shared vocabulary — the column, a section heading, a label, an
-// agent's live face and the Machinist's dock button — spoken the way the
+// The page's shared vocabulary — the column, a label, the panel, an agent's
+// live face and the Machinist's dock button — spoken the way the
 // Autonomy page speaks it (`packages/autonomy/app/view/chrome.tsx`, `dock.tsx`),
 // so two whole pages side by side in the Code rail read as one product.
 // Token-only (`--fr-*` through the kit's utilities).
@@ -31,16 +31,6 @@ export function ViewColumn({ slot, children }: { readonly slot: string; readonly
 				{children}
 			</div>
 		</div>
-	);
-}
-
-/** Section chrome: a real heading over its content. */
-export function Section({ title, children }: { readonly title: string; readonly children: ReactNode }) {
-	return (
-		<section className="flex flex-col gap-3">
-			<h2 className="m-0 min-h-5 text-fr-md font-semibold text-fr-text">{title}</h2>
-			{children}
-		</section>
 	);
 }
 

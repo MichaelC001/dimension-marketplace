@@ -2,9 +2,9 @@
 // holds its one action, the facet pills narrow the roster (and carry its
 // counts), and each card is the house's hero card (`MarkCard`, the Harnesses
 // and Memory providers card) with the agent's live face in its well, its name,
-// its id and tier, two lines of what it is for and where it stands. A card
-// carries no action: it opens the agent's profile, where the action lives (the
-// owner's card ruling, 2026-09-30).
+// where it comes from (in the pills' words), two lines of what it is for and
+// where it stands. A card carries no action: it opens the agent's profile,
+// where the action lives (the owner's card ruling, 2026-09-30).
 
 import type { ViewAgentFact } from "@dimension/sdk/artifactory";
 import { type MarketplaceFilter, MarketplaceFilterPills } from "@fraym/ui/components/filter-pills";
@@ -14,10 +14,13 @@ import { MarkCard } from "@fraym/ui/features/mark-card";
 import { Icon } from "@fraym/ui/icons";
 import { type KeyboardEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import type { AgentListing, ListedAgent } from "../../src/contracts";
-import { AgentFace, DockAgentButton, PANEL, Section, ViewColumn } from "./chrome";
+import { AgentFace, DockAgentButton, PANEL, ViewColumn } from "./chrome";
 import { faceHue, faceOf } from "./faces";
 import type { ForgeBackend } from "./forge-client";
-import { displayName, FACET_LABEL, FACETS, type Facet, facetCounts, factOf, filterAgents, standingOf, TIER_WORD } from "./roster";
+import { displayName, FACET_LABEL, FACETS, type Facet, facetCounts, factOf, filterAgents, type Standing, standingOf, TIER_LABEL } from "./roster";
+
+/** A card's status line when the host lends no record of the agent's switches. */
+const UNLENT: Standing = { label: "Status not shared", tone: "idle" };
 
 /** The Harnesses grid's geometry: as many 15rem columns as fit the COLUMN. */
 const GRID = "grid grid-cols-[repeat(auto-fill,minmax(15rem,1fr))] gap-4";
@@ -43,12 +46,12 @@ function AgentCard({ agent, fact, onOpen }: { readonly agent: ListedAgent; reado
 				name={displayName(agent, fact)}
 				avatar={<AgentFace {...face} size="lg" live={near || face.avatar === "orb"} />}
 				{...(hue !== undefined ? { hue } : {})}
-				status={standingOf(agent, fact)}
+				status={standingOf(fact) ?? UNLENT}
 				selected={false}
 				onOpen={onOpen}
 			>
-				<p data-slot="agent-card-id" className="m-0 mt-1 fr-overflow font-secondary text-fr-xs text-fr-text-2">
-					{agent.name} · {TIER_WORD[agent.source]}
+				<p data-slot="agent-card-source" className="m-0 mt-1 fr-overflow text-fr-xs text-fr-text-2">
+					{TIER_LABEL[agent.source]}
 				</p>
 				<p data-slot="agent-card-description" className="m-0 mt-2 line-clamp-2 text-fr-sm leading-relaxed text-fr-text-2">
 					{agent.description || "No description yet."}
@@ -117,7 +120,7 @@ function EmptyHome() {
 				<Icon name="bot" size={20} strokeWidth={1.7} />
 			</span>
 			<div className="flex min-w-0 flex-col gap-1">
-				<h2 className="m-0 text-fr-lg font-semibold text-fr-text">No agents yet</h2>
+				<h2 className="m-0 text-fr-xl leading-tight font-semibold text-fr-text">No agents yet</h2>
 				<p className="m-0 max-w-prose text-fr-sm leading-relaxed text-pretty text-fr-text-2">
 					A General Agent is a teammate with its own charter, tools, memory and home. Create one above, or tell the
 					Machinist what you need and it drafts one for you to accept.
@@ -196,7 +199,7 @@ export function ForgeHome({
 				<div className="flex min-w-0 max-w-prose flex-col gap-2">
 					<h1 className="m-0 text-fr-2xl leading-tight font-semibold tracking-fr-tight text-balance text-fr-text">General Agents</h1>
 					<p className="m-0 text-fr-sm leading-relaxed text-pretty text-fr-text-2">
-						Every agent you can run. Open one to see everything it is and can do, and change it there.
+						Every agent you can run. Open one to see and change how it works.
 					</p>
 				</div>
 				<Button onClick={onCreate} data-slot="forge-new-agent">
@@ -232,7 +235,11 @@ export function ForgeHome({
 			) : (
 				<>
 					{agents.length > 1 ? <MarketplaceFilterPills filters={filters} active={facet} onChange={onFacet} ariaLabel="Filter agents" /> : null}
-					<Section title={facet === "all" ? "All agents" : FACET_LABEL[facet]}>
+					{/* The pills name the list; the heading is for the document outline only. */}
+					<section aria-labelledby="forge-home-list" className="flex flex-col gap-3">
+						<h2 id="forge-home-list" className="sr-only">
+							{facet === "all" ? "All agents" : FACET_LABEL[facet]}
+						</h2>
 						{shown.length === 0 ? (
 							<p className="m-0 text-fr-sm text-fr-text-2">No agents here.</p>
 						) : (
@@ -242,7 +249,7 @@ export function ForgeHome({
 								))}
 							</AgentGrid>
 						)}
-					</Section>
+					</section>
 				</>
 			)}
 		</ViewColumn>

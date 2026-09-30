@@ -51,7 +51,7 @@ import { grantPathsIn } from "../../src/extra";
 import { AgentFace, errorText, LABEL, PANEL } from "./chrome";
 import { faceHue, faceLabel, faceOf, WEARABLE } from "./faces";
 import type { ForgeBackend } from "./forge-client";
-import { ChipList, ChipPicker, Fact, GrantMark, HeldValue, Panel } from "./profile-parts";
+import { ChipList, ChipPicker, FIELD, Fact, GrantMark, HeldValue, Panel } from "./profile-parts";
 import {
 	acceptProposal,
 	discardProposal,
@@ -62,7 +62,7 @@ import {
 	saveBlockers,
 	saveTargetOf,
 } from "./profile-state";
-import { displayName, extraList, extraScalar, heldAvatar, standingOf, TIER_LABEL } from "./roster";
+import { displayName, extraList, extraScalar, heldAvatar, standingOf, TIER_LABEL, titleOf } from "./roster";
 
 // ── words ───────────────────────────────────────────────────────────────────
 
@@ -72,9 +72,10 @@ const PERSONALITY_LABEL: Readonly<Record<Personality, string>> = {
 	pragmatic: "Pragmatic",
 	none: "None",
 };
+/** Named so neither choice echoes Lineage, which is a different mechanism. */
 const PROMPT_LABEL: Readonly<Record<PromptMode, string>> = {
-	replace: "Speaks only as itself",
-	append: "Builds on the default agent",
+	replace: "Only its own charter",
+	append: "Adds to Dimension's default prompt",
 };
 /** What the chosen way of speaking does, said for that choice alone. */
 const PROMPT_HINT: Readonly<Record<PromptMode, string>> = {
@@ -94,13 +95,13 @@ const THINKING_LABEL: Readonly<Record<Thinking, string>> = {
 const APPROVAL_LABEL: Readonly<Record<ApprovalSetting, string>> = {
 	"always-ask": "Ask before everything",
 	write: "Ask before writes",
-	yolo: "Never asks",
+	yolo: "Never ask",
 	inherit: "Dimension's default",
 };
 const HABITAT_LABEL: Readonly<Record<Habitat, string>> = {
 	bound: "Where it is opened",
 	home: "Its own home",
-	ephemeral: "A scratch worktree each session",
+	ephemeral: "A fresh scratch copy each session",
 };
 const MEMORY_LABEL: Readonly<Record<MemoryBackend, string>> = {
 	inherit: "Dimension's default",
@@ -110,7 +111,8 @@ const MEMORY_LABEL: Readonly<Record<MemoryBackend, string>> = {
 	mnemopi: "Mnemopi",
 	off: "Off: it forgets between sessions",
 };
-const REACH_LABEL: Readonly<Record<MemoryScope, string>> = { project: "This project", global: "Every project" };
+/** The reach switch limits only OTHER projects' rooms (`memory-reach.ts`). */
+const REACH_LABEL: Readonly<Record<MemoryScope, string>> = { project: "Not recalled", global: "Recalled" };
 const FILE_KIND: Readonly<Record<InstructionFile["kind"], string>> = {
 	"workspace-copy": "This project's copy",
 	home: "Its home",
@@ -119,6 +121,17 @@ const FILE_KIND: Readonly<Record<InstructionFile["kind"], string>> = {
 };
 /** The lanes an agent holds when its manifest names none (`control-scope.ts`). */
 const DEFAULT_LANES = ["observe", "create", "steer", "command"] as const;
+/** Each control lane as a person says it; a lane this page does not know reads as its id. */
+const LANE_LABEL: Readonly<Record<string, string>> = {
+	observe: "See sessions",
+	create: "Start sessions",
+	steer: "Message sessions",
+	end: "End sessions",
+	command: "Run commands",
+	rooms: "Rooms",
+	agents: "Manage agents",
+};
+const laneLabel = (lane: string): string => LANE_LABEL[lane] ?? lane;
 /** Where a setting the profile does not draw is changed. */
 const IN_ADVANCED = "Set in Other settings, under Advanced.";
 
@@ -129,17 +142,20 @@ function fileState(file: InstructionFile): string {
 	return "Shadowed";
 }
 
-/** Where its recall reads (`memory-reach.ts`), in the words of the Recall from
- *  choice: this project's room, its home room and the global lane; or every
- *  room and the global lane. */
+/** Where its recall reads (`memory-reach.ts`). This project's room, its home
+ *  room and the shared global notes are always read; the reach switch adds
+ *  only the OTHER projects' rooms (or the workspaces a held reach lists). */
 function memoryReads(draft: AgentDraft, held: ReadonlySet<string>, room: string | null): string[] {
 	if (draft.memory === "off") return ["Nothing. Memory is off for this agent."];
-	if (!held.has("workspace.reach") && draft.memoryScope === "global") return ["Every room", "The global lane"];
 	return [
 		"This project's room",
 		...(room !== null ? [`Its home room, ${room}, which follows it from project to project`] : []),
-		"The global lane",
-		...(held.has("workspace.reach") ? ["The rooms of the workspaces it lists"] : []),
+		"Shared notes (global)",
+		...(held.has("workspace.reach")
+			? ["The rooms of the workspaces it lists"]
+			: draft.memoryScope === "global"
+				? ["Every other project's room"]
+				: []),
 	];
 }
 
@@ -317,8 +333,10 @@ export function AgentProfile({
 	const heading = useRef<HTMLHeadingElement>(null);
 	useEffect(() => heading.current?.focus(), [draft.key]);
 
-	const title = creating ? draft.name || "New agent" : displayName({ name: draft.name, draft }, fact);
-	const standing = agent === undefined ? null : standingOf(agent, fact);
+	const title = draft.name === "" ? "New agent" : displayName({ name: draft.name, draft }, fact);
+	const standing = agent === undefined ? null : standingOf(fact);
+	/** Another agent, named the way its card names it; the id stays a tooltip. */
+	const agentTitle = (id: string) => titleOf(id, agents, facts);
 	const path =
 		agent?.path ??
 		(userAgentsDir === null
@@ -376,7 +394,11 @@ export function AgentProfile({
 								<Badge tone="mute" variant="soft">
 									{agent === undefined ? "New · yours" : TIER_LABEL[agent.source]}
 								</Badge>
-								{draft.lineage.length > 0 ? <span className="text-fr-xs text-fr-text-2">Extends {draft.lineage.join(", ")}</span> : null}
+								{draft.lineage.length > 0 ? (
+									<span className="text-fr-xs text-fr-text-2" title={draft.lineage.join(", ")}>
+										Extends {draft.lineage.map(agentTitle).join(", ")}
+									</span>
+								) : null}
 								{standing !== null ? (
 									<span data-slot="profile-standing" className="flex items-center gap-2 text-fr-xs text-fr-text-2">
 										<span
@@ -459,15 +481,15 @@ export function AgentProfile({
 			</div>
 
 			<div data-slot="profile-sections" className="grid grid-cols-1 gap-4 @4xl:grid-cols-2">
-				<Panel title="Identity" lede="Who it is: its name, its face, and how it speaks." wide>
-					<Fact label="Name" hint="Its folder's name. It cannot change once the agent is created.">
+				<Panel title="Identity" lede="Who it is, what it is for, and how it speaks." wide>
+					<Fact label="Id" hint="Its folder's name. It cannot change once the agent is created.">
 						{creating ? (
 							<Field error={shown("name")}>
 								<Input
 									value={draft.name}
 									placeholder="release-herald"
-									aria-label="Name"
-									className="max-w-80 font-mono"
+									aria-label="Id"
+									className={cn(FIELD, "font-mono")}
 									onChange={event => set({ name: normalizeTypedName(event.target.value) })}
 									onBlur={() => touch("name")}
 								/>
@@ -483,7 +505,7 @@ export function AgentProfile({
 								disabled={locked}
 								placeholder="What it is for, in one line"
 								aria-label="Description"
-								className="font-primary"
+								className={cn(FIELD, "font-primary")}
 								onChange={event => set({ description: event.target.value.replace(/[\r\n]+/g, " ") })}
 								onBlur={() => touch("description")}
 							/>
@@ -493,13 +515,15 @@ export function AgentProfile({
 						{held.has("avatar") ? (
 							<HeldValue>{heldFace === null ? "Its own face" : `${faceLabel(heldFace.id)}${heldFace.skin !== undefined ? ` · ${heldFace.skin}` : ""}`}</HeldValue>
 						) : (
-							<div className={cn("flex", locked && "pointer-events-none opacity-60")} aria-disabled={locked || undefined}>
+							<div className={cn("flex", FIELD, locked && "pointer-events-none opacity-60")} aria-disabled={locked || undefined}>
 								<AvatarSelect
+									className="w-full [&>button]:w-full"
 									title="Its face"
 									description="The face its sessions wear in the rail, the dock and the chat."
 									value={face.avatar}
 									onChange={id => set({ vibr: id })}
-									options={WEARABLE.map(id => ({ id, label: faceLabel(id), preview: <AgentFace avatar={id} size={40} live={false} /> }))}
+									// The trigger's face slot is 2rem: the face is painted at that size.
+									options={WEARABLE.map(id => ({ id, label: faceLabel(id), preview: <AgentFace avatar={id} size={32} live={false} /> }))}
 								/>
 							</div>
 						)}
@@ -509,7 +533,7 @@ export function AgentProfile({
 							value={draft.personality}
 							disabled={locked}
 							aria-label="Personality"
-							className="max-w-80"
+							className={FIELD}
 							options={PERSONALITIES.map(value => ({ value, label: PERSONALITY_LABEL[value] }))}
 							onChange={event => set({ personality: event.target.value as Personality })}
 						/>
@@ -552,7 +576,7 @@ export function AgentProfile({
 				<Panel title="Home" lede="The folder that follows it from project to project.">
 					{homeInfo === null ? (
 						<Fact label="Home">
-							<span className="text-fr-sm text-fr-text-2">{draft.name === "" ? "Name it, and its home appears here." : (home?.error ?? "Reading its home…")}</span>
+							<span className="text-fr-sm text-fr-text-2">{draft.name === "" ? "Give it an id, and its home appears here." : (home?.error ?? "Reading its home…")}</span>
 						</Fact>
 					) : (
 						<>
@@ -566,13 +590,13 @@ export function AgentProfile({
 									<span className={MONO_PATH}>{homeInfo.folder}</span>
 								</Fact>
 							) : null}
-							<Fact label="Stands there">
+							<Fact label="Works in its home">
 								<span className="text-fr-sm leading-relaxed text-pretty text-fr-text">
 									{held.has("workspace.policy")
-										? "It names its own workspace (set in Other settings) and stands there."
+										? "It names its own workspace (set in Other settings) and works there."
 										: draft.habitat === "home"
 											? "Yes. Every session starts in its home."
-											: `No. It only reads its home. Sessions start ${draft.habitat === "bound" ? "where it is opened" : "in a scratch worktree"}; its instructions and memory still follow it.`}
+											: `No. It only reads its home. Sessions start ${draft.habitat === "bound" ? "where it is opened" : "in a fresh scratch copy"}; its instructions and memory still follow it.`}
 								</span>
 							</Fact>
 						</>
@@ -580,24 +604,24 @@ export function AgentProfile({
 				</Panel>
 
 				<Panel title="Memory" lede="What it remembers, and how far its recall reaches.">
-					<Fact label="Backend" proposed={proposed.has("memory")}>
+					<Fact label="Memory engine" proposed={proposed.has("memory")}>
 						{held.has("memory.backend") ? (
 							<HeldValue>{extraScalar(draft.extra, "memory.backend") ?? "Its own"}</HeldValue>
 						) : (
 							<Select
 								value={draft.memory}
 								disabled={locked}
-								aria-label="Memory backend"
-								className="max-w-80"
+								aria-label="Memory engine"
+								className={FIELD}
 								options={MEMORY_BACKENDS.map(value => ({ value, label: MEMORY_LABEL[value] }))}
 								onChange={event => set({ memory: event.target.value as MemoryBackend })}
 							/>
 						)}
 					</Fact>
 					<Fact
-						label="Recall from"
+						label="Other projects"
 						grant={grantable}
-						hint={draft.memoryScope === "global" && !held.has("workspace.reach") ? "Every project also lets its control tools reach every workspace." : undefined}
+						hint={draft.memoryScope === "global" && !held.has("workspace.reach") ? "Recalled also lets its control tools reach every workspace." : undefined}
 					>
 						{held.has("workspace.reach") ? (
 							<HeldValue>The workspaces it lists</HeldValue>
@@ -664,7 +688,7 @@ export function AgentProfile({
 								value={draft.thinking}
 								disabled={locked}
 								aria-label="Thinking"
-								className="max-w-80"
+								className={FIELD}
 								options={THINKING_STEPS.map(value => ({ value, label: THINKING_LABEL[value] }))}
 								onChange={event => set({ thinking: event.target.value as Thinking })}
 							/>
@@ -681,7 +705,7 @@ export function AgentProfile({
 								value={draft.approval}
 								disabled={locked}
 								aria-label="Approval"
-								className="max-w-80"
+								className={FIELD}
 								options={APPROVAL_SETTINGS.map(value => ({ value, label: APPROVAL_LABEL[value] }))}
 								onChange={event => set({ approval: event.target.value as ApprovalSetting })}
 							/>
@@ -700,7 +724,7 @@ export function AgentProfile({
 								value={draft.habitat}
 								disabled={locked}
 								aria-label="Where it runs"
-								className="max-w-80"
+								className={FIELD}
 								options={HABITATS.map(value => ({
 									value,
 									label: HABITAT_LABEL[value],
@@ -710,8 +734,8 @@ export function AgentProfile({
 							/>
 						)}
 					</Fact>
-					<Fact label="Control lanes" grant={grantable} hint={`The Dimension Control actions it may take. ${IN_ADVANCED}`}>
-						<ChipList values={extraList(draft.extra, "capabilities.control") ?? [...DEFAULT_LANES]} empty="None" />
+					<Fact label="Can manage sessions" grant={grantable} hint={`What it may do to other sessions and agents. ${IN_ADVANCED}`}>
+						<ChipList values={extraList(draft.extra, "capabilities.control") ?? [...DEFAULT_LANES]} empty="None" labelOf={laneLabel} />
 					</Fact>
 				</Panel>
 
@@ -722,6 +746,7 @@ export function AgentProfile({
 							noun="agents"
 							value={draft.lineage}
 							options={others.map(other => ({ id: other.name, hint: other.description }))}
+							labelOf={agentTitle}
 							empty="Nothing. It stands on its own."
 							disabled={locked}
 							onChange={lineage => set({ lineage })}
@@ -803,7 +828,7 @@ const FIELD_WORD: Readonly<Record<ProposableField, string>> = {
 	charter: "the charter",
 	vibr: "the face",
 	skills: "the skills",
-	memory: "the memory backend",
+	memory: "the memory engine",
 	lineage: "the lineage",
 	thinking: "thinking",
 	personality: "the personality",
@@ -921,7 +946,7 @@ function InstructionsPanel({
 		<Panel title="Standing instructions" lede="Its own AGENTS.md: how it always acts, in any project." wide>
 			{info === null ? (
 				<Fact label="Files">
-					<span className="text-fr-sm text-fr-text-2">{name === "" ? "Name it, and where its instructions live appears here." : (error ?? "Reading its instructions…")}</span>
+					<span className="text-fr-sm text-fr-text-2">{name === "" ? "Give it an id, and where its instructions live appears here." : (error ?? "Reading its instructions…")}</span>
 				</Fact>
 			) : (
 				<>
