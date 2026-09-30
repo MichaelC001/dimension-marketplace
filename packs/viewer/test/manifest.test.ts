@@ -35,6 +35,7 @@ const rows: OpenHandlerFact[] = opens.map(open => ({
 	firstParty: true,
 	tool: open.tool,
 	pathArg: open.pathArg ?? "path",
+	nameArg: open.nameArg,
 	ext: open.ext ?? [],
 	mime: open.mime ?? [],
 	annotates: open.annotates ?? [],
@@ -86,7 +87,7 @@ describe("the declaration", () => {
 		expect(decl.grants).toContain(ARTIFACTORY_GRANT_FILES_READ);
 	});
 
-	test("every entry names a public tool of the real server that takes the declared path argument", async () => {
+	test("every entry names a public tool of the real server that takes the declared path and name arguments", async () => {
 		const base = await mkdtemp(join(tmpdir(), "viewer-manifest-"));
 		try {
 			await writeFile(join(base, "index.html"), "<!doctype html><title>viewer</title>");
@@ -102,6 +103,9 @@ describe("the declaration", () => {
 				expect(tool, `${row.tool} is a tool of the server`).toBeDefined();
 				expect(visibility.parse(tool?._meta).ui.visibility ?? ["model", "app"]).toContain("model");
 				expect(Object.keys(tool?.inputSchema.properties ?? {})).toContain(row.pathArg);
+				// A pasted screenshot is staged under a hash; `filename` is what titles its tab instead.
+				expect(row.nameArg, `${row.tool} declares the argument a display name goes in`).toBeDefined();
+				expect(Object.keys(tool?.inputSchema.properties ?? {})).toContain(row.nameArg as string);
 			}
 			// The argument `openWith` adds for the Annotate action is one this tool takes.
 			expect(Object.keys(tools.find(tool => tool.name === "view_file")?.inputSchema.properties ?? {})).toContain("annotate");

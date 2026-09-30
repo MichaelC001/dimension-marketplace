@@ -37,6 +37,7 @@
 						{
 							"tool": "view_file",
 							"pathArg": "path",
+							"nameArg": "filename",
 							"ext": ["png", "jpg", "jpeg", "gif", "webp", "avif", "bmp", "ico", "svg"],
 							"mime": ["image/png", "image/jpeg", "image/gif", "image/webp", "image/avif", "image/bmp", "image/x-icon", "image/svg+xml"],
 							"annotates": ["marks"],
@@ -45,6 +46,7 @@
 						{
 							"tool": "view_file",
 							"pathArg": "path",
+							"nameArg": "filename",
 							"ext": ["pdf"],
 							"mime": ["application/pdf"],
 							"annotates": ["text"],
@@ -53,6 +55,7 @@
 						{
 							"tool": "view_file",
 							"pathArg": "path",
+							"nameArg": "filename",
 							"ext": ["docx"],
 							"mime": ["application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
 							"annotates": ["text"],
@@ -61,6 +64,7 @@
 						{
 							"tool": "view_file",
 							"pathArg": "path",
+							"nameArg": "filename",
 							"ext": ["pptx"],
 							"mime": ["application/vnd.openxmlformats-officedocument.presentationml.presentation"],
 							"annotates": ["text"],
@@ -69,6 +73,7 @@
 						{
 							"tool": "view_file",
 							"pathArg": "path",
+							"nameArg": "filename",
 							"ext": ["xlsx", "xlsm"],
 							"mime": ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/vnd.ms-excel.sheet.macroenabled.12"],
 							"annotates": ["text"],
@@ -77,6 +82,7 @@
 						{
 							"tool": "view_file",
 							"pathArg": "path",
+							"nameArg": "filename",
 							"ext": ["md", "markdown", "mdx"],
 							"mime": ["text/markdown"],
 							"annotates": ["text"],
@@ -85,6 +91,7 @@
 						{
 							"tool": "view_file",
 							"pathArg": "path",
+							"nameArg": "filename",
 							"ext": ["html", "htm", "xhtml"],
 							"mime": ["text/html", "application/xhtml+xml"],
 							"label": "Viewer"
@@ -92,6 +99,7 @@
 						{
 							"tool": "view_file",
 							"pathArg": "path",
+							"nameArg": "filename",
 							"ext": ["txt", "log", "csv", "tsv", "json", "yaml", "yml", "toml", "xml", "css", "js", "mjs", "ts", "tsx", "jsx", "py", "rs", "go", "java", "c", "h", "cpp", "sh", "sql"],
 							"mime": [
 								"text/plain",
