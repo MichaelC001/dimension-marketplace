@@ -1,13 +1,17 @@
-// One agent's profile — what a card opens, and where a new agent is made. The
+// One agent's profile: what a card opens, and where a new agent is made. The
 // header says who it is (its live face, its name, what it is for, which tier it
-// lives in and where it stands) and holds the page's one action (Save changes,
-// Create agent, or — for a pack's agent — Extend as a new agent) beside the
-// host's two switches. Below, every part of the agent in titled cards, each a
-// list of facts edited in place: Identity, Charter, Standing instructions,
-// Home, Memory, Capabilities, Brain, Safety & access, Lineage, Advanced.
+// lives in and where it stands) and carries the host's two switches as a plain
+// row. Below, every part of the agent in titled panels, each a list of facts
+// edited in place: Identity, Charter, Standing instructions, Home, Memory,
+// Capabilities, Brain, Safety & access, Lineage, Advanced.
 //
-// A key that GRANTS the agent something is marked "only you can change this":
-// the Machinist's proposals never touch one (`profile-state.ts`).
+// ONE save. A sticky bar at the foot of the column appears only while something
+// is unsaved, and saves all of it: the agent's file and, when edited, its
+// standing instructions (AGENTS.md), each guarded by its revision. Its button
+// names what it saves. A pack's agent saves nothing; its header offers Extend.
+//
+// A key that GRANTS the agent something carries the lock, explained once by the
+// legend at the top: the Machinist's proposals never touch one (`profile-state.ts`).
 
 import type { ViewAgentFact } from "@dimension/sdk/artifactory";
 import { AvatarSelect } from "@fraym/ui/components/avatar-select";
@@ -44,8 +48,8 @@ import {
 } from "../../src/agent-md";
 import type { AgentHome, InstructionFile, ListedAgent, Part } from "../../src/contracts";
 import { grantPathsIn } from "../../src/extra";
-import { AgentFace, errorText, LABEL } from "./chrome";
-import { faceLabel, faceOf, WEARABLE } from "./faces";
+import { AgentFace, errorText, LABEL, PANEL } from "./chrome";
+import { faceHue, faceLabel, faceOf, WEARABLE } from "./faces";
 import type { ForgeBackend } from "./forge-client";
 import { ChipList, ChipPicker, Fact, GrantMark, HeldValue, Panel } from "./profile-parts";
 import {
@@ -63,7 +67,7 @@ import { displayName, extraList, extraScalar, heldAvatar, standingOf, TIER_LABEL
 // ── words ───────────────────────────────────────────────────────────────────
 
 const PERSONALITY_LABEL: Readonly<Record<Personality, string>> = {
-	default: "The host's default",
+	default: "Dimension's default",
 	friendly: "Friendly",
 	pragmatic: "Pragmatic",
 	none: "None",
@@ -72,8 +76,13 @@ const PROMPT_LABEL: Readonly<Record<PromptMode, string>> = {
 	replace: "Speaks only as itself",
 	append: "Builds on the default agent",
 };
+/** What the chosen way of speaking does, said for that choice alone. */
+const PROMPT_HINT: Readonly<Record<PromptMode, string>> = {
+	replace: "Its charter is its whole prompt.",
+	append: "Its charter follows Dimension's default coding prompt.",
+};
 const THINKING_LABEL: Readonly<Record<Thinking, string>> = {
-	inherit: "The host's default",
+	inherit: "Dimension's default",
 	off: "Off",
 	minimal: "Minimal",
 	low: "Low",
@@ -81,11 +90,12 @@ const THINKING_LABEL: Readonly<Record<Thinking, string>> = {
 	high: "High",
 	xhigh: "Maximum",
 };
+/** What the gate does, and nothing it cannot promise. */
 const APPROVAL_LABEL: Readonly<Record<ApprovalSetting, string>> = {
-	"always-ask": "Ask before every action",
-	write: "Ask before it changes anything",
-	yolo: "Never ask — reversible work only",
-	inherit: "The host's own approval mode",
+	"always-ask": "Ask before everything",
+	write: "Ask before writes",
+	yolo: "Never asks",
+	inherit: "Dimension's default",
 };
 const HABITAT_LABEL: Readonly<Record<Habitat, string>> = {
 	bound: "Where it is opened",
@@ -93,12 +103,12 @@ const HABITAT_LABEL: Readonly<Record<Habitat, string>> = {
 	ephemeral: "A scratch worktree each session",
 };
 const MEMORY_LABEL: Readonly<Record<MemoryBackend, string>> = {
-	inherit: "The host's default",
+	inherit: "Dimension's default",
 	engram: "Engram",
 	local: "Local",
 	hindsight: "Hindsight",
 	mnemopi: "Mnemopi",
-	off: "Off — it forgets between sessions",
+	off: "Off: it forgets between sessions",
 };
 const REACH_LABEL: Readonly<Record<MemoryScope, string>> = { project: "This project", global: "Every project" };
 const FILE_KIND: Readonly<Record<InstructionFile["kind"], string>> = {
@@ -109,35 +119,45 @@ const FILE_KIND: Readonly<Record<InstructionFile["kind"], string>> = {
 };
 /** The lanes an agent holds when its manifest names none (`control-scope.ts`). */
 const DEFAULT_LANES = ["observe", "create", "steer", "command"] as const;
+/** Where a setting the profile does not draw is changed. */
+const IN_ADVANCED = "Set in Other settings, under Advanced.";
 
 function fileState(file: InstructionFile): string {
 	if (file.wins) return file.bytes === 0 && file.exists ? "In force · empty" : "In force";
 	if (!file.exists) return "Not there";
-	if (file.kind === "home" && file.bytes === 0) return "Empty — skipped";
+	if (file.kind === "home" && file.bytes === 0) return "Empty, skipped";
 	return "Shadowed";
 }
 
-/** Where its recall reads (`memory-reach.ts`): its room, its home room, the global lane, or every room. */
+/** Where its recall reads (`memory-reach.ts`), in the words of the Recall from
+ *  choice: this project's room, its home room and the global lane; or every
+ *  room and the global lane. */
 function memoryReads(draft: AgentDraft, held: ReadonlySet<string>, room: string | null): string[] {
-	if (draft.memory === "off") return ["Nothing — memory is off for this agent."];
-	if (!held.has("workspace.reach") && draft.memoryScope === "global") return ["Every project's room", "The global lane"];
+	if (draft.memory === "off") return ["Nothing. Memory is off for this agent."];
+	if (!held.has("workspace.reach") && draft.memoryScope === "global") return ["Every room", "The global lane"];
 	return [
-		"The room of the project it works in",
-		...(room !== null ? [`Its home room, ${room} — it follows the agent from project to project`] : []),
+		"This project's room",
+		...(room !== null ? [`Its home room, ${room}, which follows it from project to project`] : []),
 		"The global lane",
-		...(held.has("workspace.reach") ? ["The rooms of the workspaces its reach lists"] : []),
+		...(held.has("workspace.reach") ? ["The rooms of the workspaces it lists"] : []),
 	];
 }
 
-/** The well a face sits in: the hero card's wash and dot field, at profile size. */
-const WELL_STYLE: CSSProperties = {
-	background: [
-		"radial-gradient(160px 120px at 50% 55%, color-mix(in oklab, var(--fr-text-3) 24%, transparent), transparent 72%)",
-		"linear-gradient(to bottom, color-mix(in oklab, var(--fr-text-3) 7%, transparent), transparent)",
-	].join(", "),
-};
+/** The well a face sits in: a faint wash in the face's own colour when it pinned
+ *  one (the card's rule), else a token neutral. */
+function wellStyle(hue: string | undefined): CSSProperties {
+	const wash = hue ?? "var(--fr-text-3)";
+	return {
+		background: [
+			`radial-gradient(closest-side, color-mix(in oklab, ${wash} 22%, transparent), transparent)`,
+			`linear-gradient(to bottom, color-mix(in oklab, ${wash} 6%, transparent), transparent)`,
+		].join(", "),
+	};
+}
 
 const MONO_PATH = "min-w-0 font-mono text-fr-xs text-fr-text-2 [overflow-wrap:anywhere]";
+
+type Status = { readonly tone: "info" | "error"; readonly text: string };
 
 // ── the page ────────────────────────────────────────────────────────────────
 
@@ -171,6 +191,9 @@ export function AgentProfile({
 	const { draft, agent, readOnly, proposal } = state;
 	const creating = isNew(state);
 	const locked = readOnly !== undefined;
+	/** The lock means "only you can change this": on an agent nobody can change
+	 *  here it says nothing, so it is drawn only where it holds. */
+	const grantable = !locked;
 	const fact = agent === undefined ? undefined : facts.find(candidate => candidate.name === agent.name);
 	const held = useMemo(() => heldByExtra(draft), [draft]);
 	const proposed = useMemo(() => new Set<ProposableField>(proposal?.fields ?? []), [proposal]);
@@ -217,43 +240,78 @@ export function AgentProfile({
 	}, [backend, signature, locked]);
 	const serverProblems = serverCheck !== null && serverCheck.signature === signature ? serverCheck.problems : [];
 
+	// ── the standing instructions: the AGENTS.md a save writes, edited here ──
+	const loadedInstructions = homeInfo?.instructions.text ?? "";
+	const instructionsTarget = homeInfo?.instructions.target ?? null;
+	const [instructions, setInstructions] = useState(loadedInstructions);
+	useEffect(() => setInstructions(loadedInstructions), [loadedInstructions, instructionsTarget?.path]);
+	const instructionsEditable = agent !== undefined && !locked && homeInfo !== null && homeInfo.instructions.editable && instructionsTarget !== null;
+
 	// ── saving ───────────────────────────────────────────────────────────────
 	const [attempted, setAttempted] = useState(false);
 	const [touched, setTouched] = useState<ReadonlySet<string>>(new Set());
 	const [saving, setSaving] = useState(false);
-	const [status, setStatus] = useState<{ readonly tone: "info" | "error"; readonly text: string } | null>(null);
+	const [status, setStatus] = useState<Status | null>(null);
 	const errors = fieldErrors(state, agents);
 	const shown = (field: keyof typeof errors) => (attempted || touched.has(field) ? errors[field] : undefined);
 	const touch = (field: string) => setTouched(previous => new Set([...previous, field]));
 	const blockers = saveBlockers(state, agents, serverProblems, userAgentsDir !== null);
-	const dirty = isDirty(state);
+	const agentDirty = !locked && isDirty(state);
+	const instructionsDirty = instructionsEditable && instructions !== loadedInstructions;
+	const dirty = agentDirty || instructionsDirty;
 
 	const save = async () => {
 		setAttempted(true);
-		if (blockers.length > 0) {
-			setStatus({ tone: "error", text: blockers.length === 1 ? (blockers[0] ?? "") : `${blockers.length} things to fix first — ${blockers[0]}` });
-			return;
-		}
-		const target = saveTargetOf(state);
-		if (typeof target === "string") {
-			setStatus({ tone: "error", text: target });
-			return;
+		const target = agentDirty ? saveTargetOf(state) : null;
+		if (agentDirty) {
+			if (blockers.length > 0) {
+				setStatus({ tone: "error", text: blockers.length === 1 ? (blockers[0] ?? "") : `${blockers.length} things to fix first. ${blockers[0]}` });
+				return;
+			}
+			if (typeof target === "string") {
+				setStatus({ tone: "error", text: target });
+				return;
+			}
 		}
 		setSaving(true);
 		setStatus(null);
+		const said: string[] = [];
 		try {
-			const outcome = await backend.save(draft, target);
-			setStatus({
-				tone: "info",
-				text: backend.mode === "host" ? `Saved to ${outcome.path}` : `Saved in the preview only — nothing was written to ${outcome.relativePath}.`,
-			});
-			await onSaved(draft.name);
-		} catch (cause) {
-			setStatus({ tone: "error", text: `Not saved: ${errorText(cause)}` });
+			if (target !== null && typeof target !== "string") {
+				try {
+					const outcome = await backend.save(draft, target);
+					said.push(backend.mode === "host" ? `Saved to ${outcome.path}.` : `Saved in the preview only. Nothing was written to ${outcome.relativePath}.`);
+				} catch (cause) {
+					setStatus({ tone: "error", text: `Not saved: ${errorText(cause)}` });
+					return;
+				}
+			}
+			if (instructionsDirty && instructionsTarget !== null) {
+				try {
+					const written = await backend.saveInstructions(draft.name, instructions, instructionsTarget.revision);
+					said.push(`Instructions saved to ${written.path}.`);
+				} catch (cause) {
+					// The revision guard: what is on disk now is read back, never overwritten.
+					setStatus({ tone: "error", text: `Instructions not saved: ${errorText(cause)} What is on disk now has been reloaded.` });
+					setHomeTick(tick => tick + 1);
+					if (target !== null) await onSaved(draft.name);
+					return;
+				}
+				setHomeTick(tick => tick + 1);
+			}
+			if (target !== null) await onSaved(draft.name);
+			setStatus({ tone: "info", text: said.join(" ") });
 		} finally {
 			setSaving(false);
 		}
 	};
+	const saveLabel = creating
+		? "Create agent"
+		: agentDirty && instructionsDirty
+			? "Save agent and instructions"
+			: instructionsDirty
+				? "Save instructions"
+				: "Save agent";
 
 	// A page that opens in place of the list says so to a keyboard: focus lands on the title.
 	const heading = useRef<HTMLHeadingElement>(null);
@@ -271,123 +329,138 @@ export function AgentProfile({
 	const homeId = homeInfo?.homeId ?? null;
 	const document = useMemo(() => manifestDocument(draft, homeId), [draft, homeId]);
 	const grants = grantPathsIn(draft.extra);
+	const face = faceOf(draft);
 	const heldFace = draft.vibr === "" ? heldAvatar(draft.extra) : null;
+	const namespace = extraScalar(draft.extra, "memory.namespace");
 
 	return (
 		<div data-slot="agent-profile" data-agent={draft.name} data-mode={creating ? "create" : locked ? "read-only" : "edit"} className="flex flex-col gap-6">
-			<nav aria-label="Breadcrumb" className="-mb-1 flex min-w-0 items-center gap-1.75 text-fr-sm text-fr-text-3">
-				<button
-					type="button"
-					data-slot="profile-back"
-					onClick={onBack}
-					className="shrink-0 rounded-sm text-fr-text-3 fr-t-colors hover:text-fr-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fr-accent-line"
-				>
-					General Agents
-				</button>
-				<Icon name="caretR" size={12} strokeWidth={2} aria-hidden="true" />
-				<span className="min-w-0 fr-overflow text-fr-text">{title}</span>
-			</nav>
+			<div className="flex flex-col gap-4">
+				<nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-2 text-fr-sm text-fr-text-3">
+					<button
+						type="button"
+						data-slot="profile-back"
+						onClick={onBack}
+						className="shrink-0 rounded-sm text-fr-text-3 fr-t-colors hover:text-fr-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fr-accent-line"
+					>
+						General Agents
+					</button>
+					<Icon name="caretR" size={12} strokeWidth={2} aria-hidden="true" />
+					<span className="min-w-0 fr-overflow text-fr-text">{title}</span>
+				</nav>
 
-			{/* The header is its own container, and its grid is the child that
-			    asks it: face beside the words from 36rem, the action column beside
-			    both from 56rem, the action row under them below that. */}
-			<header data-slot="profile-header" className="@container/head rounded-2xl border border-fr-border-soft bg-fr-surface/85">
-				<div className="grid gap-x-6 gap-y-5 p-5 @xl/head:grid-cols-[10rem_minmax(0,1fr)] @4xl/head:grid-cols-[10rem_minmax(0,1fr)_16rem]">
-				<div aria-hidden className="relative grid size-40 place-items-center overflow-hidden rounded-2xl border border-fr-border-soft @xl/head:row-span-2 @4xl/head:row-span-1" style={WELL_STYLE}>
-					<span className="pointer-events-none absolute inset-0 opacity-60 [background-image:radial-gradient(color-mix(in_oklab,var(--fr-text-3)_28%,transparent)_1px,transparent_1px)] [background-size:14px_14px] [mask-image:radial-gradient(120px_90px_at_50%_55%,black,transparent_75%)]" />
-					<AgentFace {...faceOf(draft)} size="xl" live />
-				</div>
-				<div className="flex min-w-0 flex-col gap-2 @xl/head:pt-1">
-					<h1 ref={heading} tabIndex={-1} className="m-0 text-fr-2xl leading-tight font-semibold tracking-[-0.01em] text-fr-text [overflow-wrap:anywhere] focus-visible:outline-none">
-						{title}
-					</h1>
-					<div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1.5">
-						{draft.name !== "" && title !== draft.name ? <span className="font-mono text-fr-xs text-fr-text-2">{draft.name}</span> : null}
-						<Badge tone="mute" variant="soft">
-							{agent === undefined ? "New · yours" : TIER_LABEL[agent.source]}
-						</Badge>
-						{draft.lineage.length > 0 ? (
-							<span className="text-fr-xs text-fr-text-2">Extends {draft.lineage.join(", ")}</span>
-						) : null}
-						{standing !== null ? (
-							<span data-slot="profile-standing" className="flex items-center gap-1.5 text-fr-xs text-fr-text-2">
-								<span aria-hidden className={cn("size-1.5 rounded-full", standing.tone === "ready" ? "bg-fr-add" : standing.tone === "idle" ? "bg-fr-text-3" : "hidden")} />
-								{standing.label}
-							</span>
-						) : null}
-					</div>
-					<p className="m-0 max-w-[62ch] text-fr-base leading-relaxed text-pretty text-fr-text-2">
-						{draft.description || (creating ? "Say in one line what it is for — under Identity." : "No description yet.")}
-					</p>
-					<p className={cn("m-0", MONO_PATH)} title={agent?.path}>
-						{path}
-					</p>
-				</div>
-				<div className="flex min-w-0 flex-col gap-3 @xl/head:col-start-2 @xl/head:max-w-80 @4xl/head:col-start-3 @4xl/head:row-start-1 @4xl/head:max-w-none">
-					<PrimaryAction
-						creating={creating}
-						locked={locked}
-						extendable={agent?.source === "pack"}
-						dirty={dirty}
-						saving={saving}
-						onSave={() => void save()}
-						onExtend={() => onExtend(draft)}
-					/>
-					<Switches backend={backend} name={agent?.name ?? null} fact={fact} onError={text => setStatus({ tone: "error", text })} />
-					<p role="status" aria-live="polite" className={cn("m-0 min-h-4.5 text-fr-xs leading-snug text-pretty", status?.tone === "error" ? "text-fr-warn" : "text-fr-text-2")}>
-						{status?.text ?? (dirty && !creating && !locked ? "Unsaved changes" : "")}
-					</p>
-				</div>
-				</div>
-			</header>
-
-			{readOnly !== undefined ? (
-				<div role="note" data-slot="profile-read-only" className="-mt-2 flex items-start gap-3 rounded-lg border border-fr-border-soft bg-fr-surface-2/70 px-4 py-3">
-					<Icon name="lock" size={14} strokeWidth={1.9} className="mt-0.5 shrink-0 text-fr-text-2" />
-					<p className="m-0 text-fr-sm leading-relaxed text-pretty text-fr-text-2">{readOnly}</p>
-				</div>
-			) : null}
-
-			{proposal !== undefined ? (
-				<div
-					role="region"
-					aria-label="Proposed by the Machinist"
-					data-slot="profile-proposal"
-					className="-mt-2 flex flex-wrap items-center justify-between gap-x-6 gap-y-3 rounded-lg border border-fr-accent-line bg-fr-accent-dim px-4 py-3"
-				>
-					<div className="flex min-w-0 flex-[1_1_24rem] items-start gap-3">
-						<Icon name="spark" size={15} strokeWidth={1.9} className="mt-0.5 shrink-0 text-fr-accent" />
-						<div className="flex min-w-0 flex-col gap-0.5">
-							<span className="text-fr-sm font-semibold text-fr-text">Proposed by the Machinist</span>
-							<span className="text-fr-xs leading-relaxed text-pretty text-fr-text-2">
-								{proposal.fields.length > 0 ? `It changed ${proposal.fields.map(field => FIELD_WORD[field]).join(", ")} — marked below.` : "It named this agent."} Nothing
-								is saved until you accept it and save. It cannot change tools, servers, the approval gate or where the agent lives.
-							</span>
+				{/* The header is its own container: the face beside the words from 36rem, above them below it. */}
+				<header data-slot="profile-header" className={cn("@container/head", PANEL)}>
+					<div className="grid gap-x-6 gap-y-5 p-6 @xl/head:grid-cols-[10rem_minmax(0,1fr)]">
+						<div aria-hidden className="grid size-40 place-items-center rounded-lg border border-fr-border-soft" style={wellStyle(faceHue(face))}>
+							<AgentFace {...face} size="xl" live />
+						</div>
+						<div className="flex min-w-0 flex-col gap-2">
+							<div className="flex min-w-0 flex-wrap items-start justify-between gap-x-6 gap-y-3">
+								<h1
+									ref={heading}
+									tabIndex={-1}
+									className="m-0 min-w-0 text-fr-2xl leading-tight font-semibold tracking-fr-tight text-fr-text [overflow-wrap:anywhere] focus-visible:outline-none"
+								>
+									{title}
+								</h1>
+								{locked && agent?.source === "pack" ? (
+									<Button data-slot="profile-extend" variant="outline" onClick={() => onExtend(draft)}>
+										<Icon name="branch" strokeWidth={2} />
+										Extend as a new agent
+									</Button>
+								) : null}
+							</div>
+							<div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
+								{draft.name !== "" && title !== draft.name ? <span className="font-mono text-fr-xs text-fr-text-2">{draft.name}</span> : null}
+								<Badge tone="mute" variant="soft">
+									{agent === undefined ? "New · yours" : TIER_LABEL[agent.source]}
+								</Badge>
+								{draft.lineage.length > 0 ? <span className="text-fr-xs text-fr-text-2">Extends {draft.lineage.join(", ")}</span> : null}
+								{standing !== null ? (
+									<span data-slot="profile-standing" className="flex items-center gap-2 text-fr-xs text-fr-text-2">
+										<span
+											aria-hidden
+											className={cn("size-1.5 rounded-full", standing.tone === "ready" ? "bg-fr-add" : standing.tone === "idle" ? "bg-fr-text-3" : "hidden")}
+										/>
+										{standing.label}
+									</span>
+								) : null}
+							</div>
+							<p className="m-0 max-w-prose text-fr-base leading-relaxed text-pretty text-fr-text-2">
+								{draft.description || (creating ? "Say in one line what it is for, under Identity." : "No description yet.")}
+							</p>
+							<p className={cn("m-0", MONO_PATH)} title={agent?.path}>
+								{path}
+							</p>
+							<Switches backend={backend} name={agent?.name ?? null} fact={fact} onError={text => setStatus({ tone: "error", text })} />
+							{/* Outside an edit, what the last save or switch said. While something
+							    is unsaved the save bar says it instead. */}
+							<p
+								role="status"
+								aria-live="polite"
+								data-slot="profile-status"
+								className={cn("m-0 text-fr-xs leading-relaxed text-pretty empty:hidden", status?.tone === "error" ? "text-fr-warn" : "text-fr-text-2")}
+							>
+								{dirty ? "" : (status?.text ?? "")}
+							</p>
 						</div>
 					</div>
-					<div className="flex shrink-0 items-center gap-2">
-						<Button
-							size="sm"
-							variant="ghost"
-							onClick={() => {
-								const next = discardProposal(state);
-								if (next === null) onClose();
-								else onChange(next);
-							}}
-						>
-							Discard
-						</Button>
-						<Button size="sm" variant="outline" onClick={() => onChange(acceptProposal(state))}>
-							<Icon name="check" strokeWidth={2.2} />
-							Accept
-						</Button>
+				</header>
+
+				{readOnly !== undefined ? (
+					<div role="note" data-slot="profile-read-only" className={cn(PANEL, "flex items-center gap-3 px-4 py-3")}>
+						<Icon name="lock" size={14} strokeWidth={1.9} className="shrink-0 text-fr-text-2" />
+						<p className="m-0 text-fr-sm leading-relaxed text-pretty text-fr-text-2">{readOnly}</p>
 					</div>
-				</div>
-			) : null}
+				) : (
+					<p data-slot="profile-legend" className="m-0 flex items-center gap-2 text-fr-xs leading-relaxed text-fr-text-2">
+						<Icon name="lock" size={12} strokeWidth={2} className="shrink-0 text-fr-text-3" aria-hidden="true" />
+						The lock marks settings only you can change; the Machinist can suggest everything else.
+					</p>
+				)}
+
+				{proposal !== undefined ? (
+					<div
+						role="region"
+						aria-label="Proposed by the Machinist"
+						data-slot="profile-proposal"
+						className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 rounded-xl border border-fr-accent-line bg-fr-accent-dim px-4 py-3"
+					>
+						<div className="flex min-w-0 flex-[1_1_24rem] items-start gap-3">
+							<Icon name="spark" size={16} strokeWidth={1.9} className="shrink-0 text-fr-accent" />
+							<div className="flex min-w-0 flex-col gap-1">
+								<span className="text-fr-sm leading-none font-semibold text-fr-text">Proposed by the Machinist</span>
+								<span className="text-fr-xs leading-relaxed text-pretty text-fr-text-2">
+									{proposal.fields.length > 0 ? `It changed ${proposal.fields.map(field => FIELD_WORD[field]).join(", ")}, marked below.` : "It named this agent."}{" "}
+									Nothing is saved until you accept it and save. It cannot change tools, servers, the approval gate or where the agent lives.
+								</span>
+							</div>
+						</div>
+						<div className="flex shrink-0 items-center gap-2">
+							<Button
+								size="sm"
+								variant="ghost"
+								onClick={() => {
+									const next = discardProposal(state);
+									if (next === null) onClose();
+									else onChange(next);
+								}}
+							>
+								Discard
+							</Button>
+							<Button size="sm" variant="outline" onClick={() => onChange(acceptProposal(state))}>
+								<Icon name="check" strokeWidth={2.2} />
+								Accept
+							</Button>
+						</div>
+					</div>
+				) : null}
+			</div>
 
 			<div data-slot="profile-sections" className="grid grid-cols-1 gap-4 @4xl:grid-cols-2">
 				<Panel title="Identity" lede="Who it is: its name, its face, and how it speaks." wide>
-					<Fact label="Name" hint={creating ? "Its folder's name. It cannot change once the agent is created." : "Its folder's name — fixed once created."}>
+					<Fact label="Name" hint="Its folder's name. It cannot change once the agent is created.">
 						{creating ? (
 							<Field error={shown("name")}>
 								<Input
@@ -410,20 +483,21 @@ export function AgentProfile({
 								disabled={locked}
 								placeholder="What it is for, in one line"
 								aria-label="Description"
+								className="font-primary"
 								onChange={event => set({ description: event.target.value.replace(/[\r\n]+/g, " ") })}
 								onBlur={() => touch("description")}
 							/>
 						</Field>
 					</Fact>
-					<Fact label="Face" tall={!held.has("avatar")} proposed={proposed.has("vibr")} hint={heldFace === null ? "Its live vibr, wherever its sessions are drawn." : undefined}>
+					<Fact label="Face" tall={!held.has("avatar")} proposed={proposed.has("vibr")} hint={heldFace === null ? "Its live face, wherever its sessions are drawn." : undefined}>
 						{held.has("avatar") ? (
 							<HeldValue>{heldFace === null ? "Its own face" : `${faceLabel(heldFace.id)}${heldFace.skin !== undefined ? ` · ${heldFace.skin}` : ""}`}</HeldValue>
 						) : (
 							<div className={cn("flex", locked && "pointer-events-none opacity-60")} aria-disabled={locked || undefined}>
 								<AvatarSelect
 									title="Its face"
-									description="The vibr its sessions wear in the rail, the dock and the chat."
-									value={faceOf(draft).avatar}
+									description="The face its sessions wear in the rail, the dock and the chat."
+									value={face.avatar}
 									onChange={id => set({ vibr: id })}
 									options={WEARABLE.map(id => ({ id, label: faceLabel(id), preview: <AgentFace avatar={id} size={40} live={false} /> }))}
 								/>
@@ -440,21 +514,14 @@ export function AgentProfile({
 							onChange={event => set({ personality: event.target.value as Personality })}
 						/>
 					</Fact>
-					<Fact
-						label="Speaks as"
-						hint={
-							draft.promptMode === "replace"
-								? "Its charter is its whole prompt — right for a CMO, a scribe, anything that is not a coder."
-								: "Its charter follows the full default coding prompt — right for an agent that extends coding."
-						}
-					>
+					<Fact label="Speaks as" hint={PROMPT_HINT[draft.promptMode]}>
 						<div className={cn("flex", locked && "pointer-events-none opacity-60")}>
 							<Segmented options={["replace", "append"] as const} value={draft.promptMode} label={value => PROMPT_LABEL[value]} onChange={promptMode => set({ promptMode })} />
 						</div>
 					</Fact>
 				</Panel>
 
-				<Panel title="Charter" lede="The instructions it runs by — the body of its agent.md." wide>
+				<Panel title="Charter" lede="The instructions it runs by: the body of its agent.md." wide>
 					<Fact label="Charter" proposed={proposed.has("charter")}>
 						<Field error={shown("charter")}>
 							<Textarea
@@ -473,22 +540,25 @@ export function AgentProfile({
 				</Panel>
 
 				<InstructionsPanel
-					backend={backend}
 					name={draft.name}
 					exists={agent !== undefined}
 					info={homeInfo}
 					error={home !== null && home.name === draft.name ? home.error : null}
-					onSaved={() => setHomeTick(tick => tick + 1)}
+					text={instructions}
+					editable={instructionsEditable}
+					onText={setInstructions}
 				/>
 
 				<Panel title="Home" lede="The folder that follows it from project to project.">
 					{homeInfo === null ? (
 						<Fact label="Home">
-							<span className="text-fr-sm text-fr-text-2">{draft.name === "" ? "Name it, and its home appears here." : home?.error ?? "Reading its home…"}</span>
+							<span className="text-fr-sm text-fr-text-2">{draft.name === "" ? "Name it, and its home appears here." : (home?.error ?? "Reading its home…")}</span>
 						</Fact>
 					) : (
 						<>
-							<Fact label="Id">
+							{/* The Id and Folder rows say what a plain home's note would; the
+							    note stays only where it tells something they do not. */}
+							<Fact label="Id" hint={homeInfo.hasHome && homeInfo.folder !== null ? undefined : homeInfo.homeNote}>
 								{homeInfo.hasHome ? <span className="font-mono text-fr-sm text-fr-text">{homeInfo.homeId}</span> : <span className="text-fr-sm text-fr-text-2">No home</span>}
 							</Fact>
 							{homeInfo.folder !== null ? (
@@ -499,14 +569,11 @@ export function AgentProfile({
 							<Fact label="Stands there">
 								<span className="text-fr-sm leading-relaxed text-pretty text-fr-text">
 									{held.has("workspace.policy")
-										? "It names its own workspace (set in Everything else) and stands there."
+										? "It names its own workspace (set in Other settings) and stands there."
 										: draft.habitat === "home"
-											? "Yes — every session starts in its home."
-											: `No — it only reads its home. Sessions start ${draft.habitat === "bound" ? "where it is opened" : "in a scratch worktree"}; its instructions and memory still follow it.`}
+											? "Yes. Every session starts in its home."
+											: `No. It only reads its home. Sessions start ${draft.habitat === "bound" ? "where it is opened" : "in a scratch worktree"}; its instructions and memory still follow it.`}
 								</span>
-							</Fact>
-							<Fact label="Why">
-								<span className="text-fr-sm leading-relaxed text-pretty text-fr-text-2">{homeInfo.homeNote}</span>
 							</Fact>
 						</>
 					)}
@@ -528,9 +595,9 @@ export function AgentProfile({
 						)}
 					</Fact>
 					<Fact
-						label="Recall reach"
-						grant
-						hint={draft.memoryScope === "global" ? "Every project also lets its control tools reach every workspace — one grant (workspace.reach: all)." : undefined}
+						label="Recall from"
+						grant={grantable}
+						hint={draft.memoryScope === "global" && !held.has("workspace.reach") ? "Every project also lets its control tools reach every workspace." : undefined}
 					>
 						{held.has("workspace.reach") ? (
 							<HeldValue>The workspaces it lists</HeldValue>
@@ -549,48 +616,45 @@ export function AgentProfile({
 							))}
 						</ul>
 					</Fact>
-					<Fact label="Namespace">
-						<span className="text-fr-sm leading-relaxed text-pretty text-fr-text-2">
-							{extraScalar(draft.extra, "memory.namespace") !== null ? (
-								<>
-									<span className="font-mono text-fr-text">{extraScalar(draft.extra, "memory.namespace")}</span> —{" "}
-								</>
-							) : null}
-							Only the Mnemopi runtime isolates by namespace; Engram keeps an agent apart by its reach and its home room.
-						</span>
-					</Fact>
+					{namespace !== null ? (
+						<Fact label="Namespace">
+							<HeldValue>
+								<span className="font-mono">{namespace}</span>
+							</HeldValue>
+						</Fact>
+					) : null}
 				</Panel>
 
 				<Panel title="Capabilities" lede="What it can use. An empty list means everything of that kind." wide>
-					<Fact label="Tools" grant>
+					<Fact label="Tools" grant={grantable}>
 						{held.has("capabilities.tools") ? (
 							<HeldValue>{(extraList(draft.extra, "capabilities.tools") ?? []).length === 0 ? "No tools" : "Its own list"}</HeldValue>
 						) : (
-							<ChipPicker label="Tools" value={draft.tools} options={partsOf("tool")} empty="Every tool" free disabled={locked} onChange={tools => set({ tools })} />
+							<ChipPicker label="Tools" noun="tools" value={draft.tools} options={partsOf("tool")} empty="Every tool" free disabled={locked} onChange={tools => set({ tools })} />
 						)}
 					</Fact>
 					<Fact label="Skills" proposed={proposed.has("skills")}>
 						{held.has("capabilities.skills") ? (
 							<HeldValue>Its own list</HeldValue>
 						) : (
-							<ChipPicker label="Skills" value={draft.skills} options={partsOf("skill")} empty="Every skill" free disabled={locked} onChange={skills => set({ skills })} />
+							<ChipPicker label="Skills" noun="skills" value={draft.skills} options={partsOf("skill")} empty="Every skill" free disabled={locked} onChange={skills => set({ skills })} />
 						)}
 					</Fact>
-					<Fact label="MCP servers" grant>
+					<Fact label="MCP servers" grant={grantable}>
 						{held.has("capabilities.mcp") ? (
 							<HeldValue>Its own list</HeldValue>
 						) : (
-							<ChipPicker label="MCP servers" value={draft.mcp} options={partsOf("mcp")} empty="Every server" free disabled={locked} onChange={mcp => set({ mcp })} />
+							<ChipPicker label="MCP servers" noun="MCP servers" value={draft.mcp} options={partsOf("mcp")} empty="Every server" free disabled={locked} onChange={mcp => set({ mcp })} />
 						)}
 					</Fact>
-					<Fact label="Plugins" grant hint="Set in Everything else, under Advanced (capabilities.plugins).">
+					<Fact label="Plugins" grant={grantable} hint={IN_ADVANCED}>
 						<ChipList values={extraList(draft.extra, "capabilities.plugins") ?? []} empty="Every plugin" />
 					</Fact>
 				</Panel>
 
 				<Panel title="Brain" lede="The models it runs on and how hard it thinks.">
-					<Fact label="Models" hint={extraList(draft.extra, "engine.model") === null ? undefined : "First available wins. Set in Everything else (engine.model)."}>
-						<ChipList values={extraList(draft.extra, "engine.model") ?? []} empty="The host's default models" />
+					<Fact label="Models" hint={extraList(draft.extra, "engine.model") === null ? IN_ADVANCED : `The first available one runs it. ${IN_ADVANCED}`}>
+						<ChipList values={extraList(draft.extra, "engine.model") ?? []} empty="Dimension's default models" />
 					</Fact>
 					<Fact label="Thinking" proposed={proposed.has("thinking")}>
 						{held.has("engine.thinkingLevel") ? (
@@ -609,7 +673,7 @@ export function AgentProfile({
 				</Panel>
 
 				<Panel title="Safety & access" lede="What it may do without asking, and where it may act.">
-					<Fact label="Approval" grant>
+					<Fact label="Approval" grant={grantable}>
 						{held.has("gate.approval") ? (
 							<HeldValue>{extraScalar(draft.extra, "gate.approval") ?? "Its own"}</HeldValue>
 						) : (
@@ -625,7 +689,7 @@ export function AgentProfile({
 					</Fact>
 					<Fact
 						label="Where it runs"
-						grant
+						grant={grantable}
 						proposed={proposed.has("habitat")}
 						hint={homeInfo !== null && !homeInfo.canStandAtHome ? "A project's own agent has no home to run in." : undefined}
 					>
@@ -646,7 +710,7 @@ export function AgentProfile({
 							/>
 						)}
 					</Fact>
-					<Fact label="Control lanes" grant hint="The Dimension Control verbs it holds. Set in Everything else (capabilities.control).">
+					<Fact label="Control lanes" grant={grantable} hint={`The Dimension Control actions it may take. ${IN_ADVANCED}`}>
 						<ChipList values={extraList(draft.extra, "capabilities.control") ?? [...DEFAULT_LANES]} empty="None" />
 					</Fact>
 				</Panel>
@@ -655,9 +719,10 @@ export function AgentProfile({
 					<Fact label="Extends" proposed={proposed.has("lineage")}>
 						<ChipPicker
 							label="Agents"
+							noun="agents"
 							value={draft.lineage}
 							options={others.map(other => ({ id: other.name, hint: other.description }))}
-							empty="Nothing — it stands on its own"
+							empty="Nothing. It stands on its own."
 							disabled={locked}
 							onChange={lineage => set({ lineage })}
 						/>
@@ -665,10 +730,10 @@ export function AgentProfile({
 				</Panel>
 
 				<Panel title="Advanced" lede="Every other key of its manifest, as YAML, and the agent.md that will be written." wide>
-					<div className="grid min-w-0 gap-5 py-3.5 @3xl/panel:grid-cols-2">
+					<div className="grid min-w-0 gap-5 py-4 @3xl/panel:grid-cols-2">
 						<div className="flex min-w-0 flex-col gap-2">
 							<span className={cn(LABEL, "flex items-center gap-2")}>
-								Everything else
+								Other settings
 								{proposed.has("extra") ? (
 									<Badge tone="accent" variant="soft">
 										Proposed
@@ -680,7 +745,7 @@ export function AgentProfile({
 								disabled={locked}
 								resize="vertical"
 								spellCheck={false}
-								aria-label="Everything else — manifest keys the profile does not draw, as YAML"
+								aria-label="Other settings: manifest keys the profile does not draw, as YAML"
 								placeholder={"title: Chief Marketing Officer\ncapabilities:\n  control: [agents]\nrouting:\n  card: Marketing questions"}
 								className="max-h-none min-h-56 font-mono text-fr-xs leading-relaxed"
 								onChange={event => set({ extra: event.target.value })}
@@ -696,11 +761,11 @@ export function AgentProfile({
 							) : (
 								<span className="text-fr-xs text-fr-text-2">Checked as you type: it loads as a General Agent.</span>
 							)}
-							{grants.length > 0 ? (
-								<span className="flex items-start gap-1.5 text-fr-xs leading-relaxed text-fr-text-2">
+							{grants.length > 0 && grantable ? (
+								<span className="flex items-baseline gap-2 text-fr-xs leading-relaxed text-fr-text-2">
 									<GrantMark />
 									<span>
-										— you are setting <span className="font-mono text-fr-text">{grants.join(", ")}</span>.
+										Only you can set these: <span className="font-mono text-fr-text">{grants.join(", ")}</span>.
 									</span>
 								</span>
 							) : null}
@@ -709,7 +774,7 @@ export function AgentProfile({
 							<span className={LABEL}>agent.md</span>
 							<pre
 								aria-label="agent.md, as it will be written"
-								className="m-0 max-h-96 min-h-56 overflow-auto rounded-[var(--fr-textarea-r)] border border-fr-border-soft bg-fr-bg px-3 py-2.5 font-mono text-fr-xs leading-relaxed text-fr-text-2"
+								className="m-0 max-h-96 min-h-56 overflow-auto rounded-[var(--fr-textarea-r)] border border-fr-border-soft bg-fr-bg px-3 py-3 font-mono text-fr-xs leading-relaxed text-fr-text-2"
 							>
 								{document.lines.map(line => line.text).join("\n")}
 							</pre>
@@ -717,6 +782,16 @@ export function AgentProfile({
 					</div>
 				</Panel>
 			</div>
+
+			{dirty ? (
+				<SaveBar
+					label={saveLabel}
+					creating={creating}
+					saving={saving}
+					status={status}
+					onSave={() => void save()}
+				/>
+			) : null}
 		</div>
 	);
 }
@@ -733,46 +808,49 @@ const FIELD_WORD: Readonly<Record<ProposableField, string>> = {
 	thinking: "thinking",
 	personality: "the personality",
 	habitat: "where it runs",
-	extra: "Everything else",
+	extra: "Other settings",
 };
 
-/** The page's one action. */
-function PrimaryAction({
+/** The profile's one save, pinned to the foot of the column while something is
+ *  unsaved. Solid ground (it floats over the panels as it scrolls) with the
+ *  faintest neutral lift DESIGN.md allows a popover. */
+function SaveBar({
+	label,
 	creating,
-	locked,
-	extendable,
-	dirty,
 	saving,
+	status,
 	onSave,
-	onExtend,
 }: {
+	readonly label: string;
 	readonly creating: boolean;
-	readonly locked: boolean;
-	readonly extendable: boolean;
-	readonly dirty: boolean;
 	readonly saving: boolean;
+	readonly status: Status | null;
 	readonly onSave: () => void;
-	readonly onExtend: () => void;
 }) {
-	if (locked) {
-		return extendable ? (
-			<Button data-slot="profile-action" onClick={onExtend}>
-				<Icon name="branch" strokeWidth={2} />
-				Extend as a new agent
-			</Button>
-		) : null;
-	}
+	const error = status?.tone === "error" ? status.text : null;
 	return (
-		<Button data-slot="profile-action" loading={saving} loadingText={creating ? "Creating…" : "Saving…"} disabled={saving || (!creating && !dirty)} onClick={onSave}>
-			{creating ? <Icon name="plus" strokeWidth={2} /> : <Icon name="check" strokeWidth={2.2} />}
-			{creating ? "Create agent" : "Save changes"}
-		</Button>
+		<div
+			role="region"
+			aria-label="Unsaved changes"
+			data-slot="profile-save-bar"
+			className="sticky bottom-4 z-20 flex flex-wrap items-center justify-between gap-x-6 gap-y-3 rounded-xl border border-fr-border bg-fr-surface px-4 py-3 shadow-md"
+		>
+			<p role="status" aria-live="polite" className={cn("m-0 flex min-w-0 flex-[1_1_20rem] items-center gap-2 text-fr-sm leading-relaxed text-pretty", error !== null ? "text-fr-warn" : "text-fr-text-2")}>
+				{error === null ? <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-fr-accent" /> : null}
+				{error ?? (creating ? "A new agent. Nothing is written until you create it." : "Unsaved changes")}
+			</p>
+			<Button data-slot="profile-save" loading={saving} loadingText={creating ? "Creating…" : "Saving…"} disabled={saving} onClick={onSave}>
+				{creating ? <Icon name="plus" strokeWidth={2} /> : <Icon name="check" strokeWidth={2.2} />}
+				{label}
+			</Button>
+		</div>
 	);
 }
 
-/** Enabled and Show in rail — the host's own switches, flipped exactly as the
- *  Capabilities page flips them (`agents:configure`). Where the host does not
- *  lend them, or the agent is not saved yet, they say why instead of pretending. */
+/** Enabled and Show in rail: the host's own switches, flipped exactly as the
+ *  Capabilities page flips them (`agents:configure`), as a plain row in the
+ *  header. Where the host does not lend them, or the agent is not saved yet,
+ *  they say why instead of pretending. */
 function Switches({
 	backend,
 	name,
@@ -790,7 +868,7 @@ function Switches({
 		name === null
 			? "On and in the rail once it is created."
 			: !offered
-				? "This host does not lend these switches here — use Capabilities → General Agents."
+				? "This host does not lend these switches here. Use Capabilities, then General Agents."
 				: fact === undefined
 					? "The host has not listed it yet."
 					: null;
@@ -806,80 +884,51 @@ function Switches({
 		}
 	};
 	const row = (label: string, checked: boolean, change: (value: boolean) => void, slot: string) => (
-		<label className="flex items-center justify-between gap-3 text-fr-sm text-fr-text">
-			{label}
+		<label className="flex items-center gap-3 text-fr-sm text-fr-text">
 			<Switch data-slot={slot} aria-label={label} checked={checked} disabled={why !== null || busy} onCheckedChange={change} />
+			{label}
 		</label>
 	);
 	return (
-		<div data-slot="profile-switches" className="flex flex-col gap-2.5 rounded-lg border border-fr-border-soft px-3.5 py-3">
+		<div data-slot="profile-switches" className="mt-2 flex flex-wrap items-center gap-x-6 gap-y-2">
 			{row("Enabled", fact?.enabled ?? name === null, value => void flip({ enabled: value }), "profile-enabled")}
 			{row("Show in rail", (fact?.enabled ?? true) && (fact?.listed ?? name === null), value => void flip({ listed: value }), "profile-listed")}
-			{why !== null ? <span className="text-fr-xs leading-snug text-pretty text-fr-text-2">{why}</span> : null}
+			{why !== null ? <span className="text-fr-xs leading-relaxed text-pretty text-fr-text-2">{why}</span> : null}
 		</div>
 	);
 }
 
 /** Standing instructions: the agent-level AGENTS.md, resolved exactly as OMP
- *  resolves it, and the editor for the file a save writes (guarded by its revision). */
+ *  resolves it, and the editor for the file the profile's save writes. */
 function InstructionsPanel({
-	backend,
 	name,
 	exists,
 	info,
 	error,
-	onSaved,
+	text,
+	editable,
+	onText,
 }: {
-	readonly backend: ForgeBackend;
 	readonly name: string;
 	readonly exists: boolean;
 	readonly info: AgentHome | null;
 	readonly error: string | null;
-	readonly onSaved: () => void;
+	readonly text: string;
+	readonly editable: boolean;
+	readonly onText: (text: string) => void;
 }) {
-	const loaded = info?.instructions.text ?? "";
-	const [text, setText] = useState(loaded);
-	const [saving, setSaving] = useState(false);
-	const [status, setStatus] = useState<{ readonly tone: "info" | "error"; readonly text: string } | null>(null);
-	useEffect(() => setText(loaded), [loaded, info?.instructions.target?.path]);
-	const target = info?.instructions.target ?? null;
-	const editable = exists && info !== null && info.instructions.editable && target !== null;
-	const save = async () => {
-		if (target === null) return;
-		setSaving(true);
-		try {
-			const saved = await backend.saveInstructions(name, text, target.revision);
-			setStatus({ tone: "info", text: `Saved to ${saved.path}` });
-		} catch (cause) {
-			setStatus({ tone: "error", text: `Not saved: ${errorText(cause)} What is on disk now has been reloaded.` });
-		} finally {
-			setSaving(false);
-			onSaved();
-		}
-	};
 	return (
-		<Panel
-			title="Standing instructions"
-			lede="Its own AGENTS.md: how it always acts, in any project."
-			wide
-			aside={
-				editable ? (
-					<Button size="sm" variant="outline" loading={saving} disabled={saving || text === loaded} onClick={() => void save()}>
-						Save instructions
-					</Button>
-				) : null
-			}
-		>
+		<Panel title="Standing instructions" lede="Its own AGENTS.md: how it always acts, in any project." wide>
 			{info === null ? (
 				<Fact label="Files">
-					<span className="text-fr-sm text-fr-text-2">{name === "" ? "Name it, and where its instructions live appears here." : error ?? "Reading its instructions…"}</span>
+					<span className="text-fr-sm text-fr-text-2">{name === "" ? "Name it, and where its instructions live appears here." : (error ?? "Reading its instructions…")}</span>
 				</Fact>
 			) : (
 				<>
 					<Fact label="Where it looks">
 						<ol className="m-0 flex list-none flex-col gap-2 p-0">
 							{info.instructions.files.map(file => (
-								<li key={file.path} data-wins={file.wins || undefined} className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 gap-y-0.5">
+								<li key={file.path} data-wins={file.wins || undefined} className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 gap-y-1">
 									<span className={cn("text-fr-sm", file.wins ? "font-medium text-fr-text" : "text-fr-text-2")}>{FILE_KIND[file.kind]}</span>
 									<span className="row-span-2 self-center">
 										{file.wins ? (
@@ -905,13 +954,8 @@ function InstructionsPanel({
 							aria-label="Standing instructions (AGENTS.md)"
 							placeholder={exists ? (editable ? "How this agent always acts, in any project…" : "") : "Create the agent first; then write how it always acts."}
 							className="max-h-none min-h-32 font-primary text-fr-sm leading-relaxed"
-							onChange={event => setText(event.target.value)}
+							onChange={event => onText(event.target.value)}
 						/>
-						{status !== null ? (
-							<span role="status" className={cn("text-fr-xs", status.tone === "error" ? "text-fr-warn" : "text-fr-text-2")}>
-								{status.text}
-							</span>
-						) : null}
 					</Fact>
 				</>
 			)}

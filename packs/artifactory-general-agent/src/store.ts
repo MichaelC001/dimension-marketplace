@@ -342,7 +342,7 @@ export async function listAgents(roots: Roots): Promise<AgentListing> {
 	}
 
 	if (roots.workspace === null) {
-		notices.push(roots.workspaceMissing ?? "No workspace is bound, so project agents are not listed — pack and user agents are.");
+		notices.push(roots.workspaceMissing ?? "No workspace is bound, so project agents are not listed. Pack agents and yours are.");
 	} else {
 		for (const dirName of [WRITE_DIR, LEGACY_DIR]) {
 			for (const found of await scanAgents(join(roots.workspace, dirName, "agents"), notices)) {
@@ -460,7 +460,7 @@ export async function saveAgent(options: SaveOptions): Promise<SaveOutcome> {
 		if (!current.ok) {
 			throw new SaveRefused(
 				current.reason === "loop"
-					? `${draft.name} is a Loop, not a General Agent — the Forge does not rewrite Loops.`
+					? `${draft.name} is a Loop, not a General Agent, and a Loop is never rewritten here.`
 					: `${draft.name}'s agent.md does not parse (${current.errors.join("; ")}); fix it by hand first.`,
 			);
 		}

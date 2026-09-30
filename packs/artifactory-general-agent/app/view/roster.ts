@@ -72,6 +72,9 @@ export const TIER_LABEL: Readonly<Record<AgentSource, string>> = {
 	workspace: "This project",
 };
 
+/** The tier as one quiet word, beside an agent's id on its card. */
+export const TIER_WORD: Readonly<Record<AgentSource, string>> = { pack: "Pack", user: "Yours", workspace: "Project" };
+
 // ── what the extra text says ─────────────────────────────────────────────────
 
 /** A scalar written in YAML, unquoted: `"Chief of Staff"` → `Chief of Staff`. */
@@ -142,8 +145,15 @@ export function heldAvatar(extra: string): { readonly id: string; readonly skin?
 	return { id, ...(skin !== undefined ? { skin } : {}), ...(accent !== undefined ? { accent } : {}) };
 }
 
+/** A slug as a person reads it: `release-herald` → `Release herald`. */
+export function humanize(slug: string): string {
+	const words = slug.replace(/-+/g, " ").trim();
+	return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
 /** What the agent is called on screen: the host's `title`, the file's own
- *  `title:`, or its name. */
+ *  `title:`, else its name read as words. The name itself stays the id, shown
+ *  beside it where the two differ. */
 export function displayName(agent: Pick<ListedAgent, "name" | "draft">, fact: ViewAgentFact | undefined): string {
-	return fact?.title ?? extraScalar(agent.draft.extra, "title") ?? agent.name;
+	return fact?.title ?? extraScalar(agent.draft.extra, "title") ?? humanize(agent.name);
 }

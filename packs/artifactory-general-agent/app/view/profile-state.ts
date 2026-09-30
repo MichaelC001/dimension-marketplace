@@ -121,14 +121,14 @@ export function fieldErrors(state: ProfileState, agents: readonly ListedAgent[])
 		else if (agents.some(agent => agent.name === draft.name)) errors.name = `An agent named “${draft.name}” already exists.`;
 	}
 	if (draft.description.trim() === "") errors.description = "Say in one line what it is for.";
-	if (draft.charter.trim() === "") errors.charter = "Write its charter — the instructions it runs by.";
+	if (draft.charter.trim() === "") errors.charter = "Write its charter: the instructions it runs by.";
 	return errors;
 }
 
 /**
  * Everything standing between the profile and a save, in the order a person
  * fixes them: why it is read-only, an undecided proposal, the fields, then the
- * document's own problems (Everything else) and the server's verdict.
+ * document's own problems (Other settings) and the server's verdict.
  */
 export function saveBlockers(state: ProfileState, agents: readonly ListedAgent[], serverProblems: readonly string[], canCreate: boolean): string[] {
 	if (state.readOnly !== undefined) return [state.readOnly];

@@ -96,8 +96,8 @@ async function resolveInstructions(roots: Roots, source: AgentSource, name: stri
 }
 
 const TIER_RULES: Readonly<Record<AgentSource, string>> = {
-	pack: "A pack agent runs by, in order: a project's own copy (<project>/agents/<name>/AGENTS.md — any file claims it), then the agent's home AGENTS.md (when it is not empty), then the AGENTS.md the pack ships beside agent.md.",
-	user: "A user agent runs by, in order: its home AGENTS.md (when it is not empty, and it follows the agent into every workspace), then the AGENTS.md beside agent.md.",
+	pack: "A pack agent runs by the first of these that applies: a project's own copy (any file there counts), then its home AGENTS.md when it is not empty, then the AGENTS.md its pack ships.",
+	user: "Your agent runs by its home AGENTS.md when that is not empty (it follows the agent into every project), else by the AGENTS.md beside its agent.md.",
 	workspace: "A project agent has no home: it runs by the AGENTS.md beside its agent.md, in this project.",
 };
 
@@ -118,10 +118,10 @@ export async function describeHome(roots: Roots, name: string): Promise<AgentHom
 	const folderExists = folder !== null && (await isDirectory(folder));
 
 	let homeNote: string;
-	if (!canStandAtHome) homeNote = "A project agent belongs to one project, so it has no home of its own. Extend it as a user agent to give it one.";
+	if (!canStandAtHome) homeNote = "A project agent belongs to one project, so it has no home of its own.";
 	else if (listed?.workspaceId === `agent-${name}`) {
-		homeNote = `Its file names workspace.id "${listed.workspaceId}", which the engine never registers (an older Forge wrote it). Reforge it: Lives → Own home writes ${homeId}.`;
-	} else if (foreign) homeNote = `Its manifest names workspace.id "${listed?.workspaceId}", so it stands there and gets no derived home.`;
+		homeNote = `Its file names "${listed.workspaceId}" as its workspace, an id no registry knows (an older Forge wrote it). Save it with Where it runs set to Its own home and it stands in ${homeId}.`;
+	} else if (foreign) homeNote = `It names its own workspace, "${listed?.workspaceId}", so it runs there and has no home of its own.`;
 	else if (paths === null) homeNote = `Its home is ${homeId}; where that lives is unknown, as the engine did not say where its home is.`;
 	else homeNote = folderExists ? `Its home is ${homeId}; the folder exists.` : `Its home is ${homeId}; the engine creates the folder the first time the agent is opened, seeding it from the AGENTS.md beside agent.md.`;
 
@@ -177,7 +177,7 @@ export async function saveInstructions(roots: Roots, name: string, text: string,
 	const { target } = instructions;
 	if (target === null) throw new SaveRefused(instructions.editable ? `No agent named "${name}".` : instructions.note);
 	if (target.revision !== revision) {
-		throw new SaveRefused(`${name}'s standing instructions changed since they were opened here — the file was edited elsewhere, or its home was set up since, so a save would land somewhere else. Reopen them so nothing written since is lost.`);
+		throw new SaveRefused(`${name}'s standing instructions changed since they were opened here: the file was edited elsewhere, or its home was set up since, so a save would land somewhere else. Reopen them so nothing written since is lost.`);
 	}
 	const temp = join(dirname(target.path), `.${basename(target.path)}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`);
 	try {

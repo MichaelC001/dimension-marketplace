@@ -8,6 +8,7 @@
 // allowlists — exactly what the rail and the dock paint for it.
 import { AVATAR_IDS, MOCHI_ACCENT_IDS, MOCHI_SKIN_IDS } from "@fraym/config";
 import { AGENT_NEUTRAL_AVATAR, type PresenceAvatarId, type PresenceSurfaceProps } from "@fraym/ui/features/presence";
+import { MOCHI_ACCENT_OPTIONS } from "@fraym/vibr";
 import type { AgentDraft } from "../../src/agent-md";
 import { heldAvatar } from "./roster";
 
@@ -35,6 +36,13 @@ export function faceOf(draft: Pick<AgentDraft, "vibr" | "extra">): FaceSpec {
 	const skin = (MOCHI_SKIN_IDS as readonly string[]).includes(held.skin ?? "") ? (held.skin as PresenceSurfaceProps["skin"]) : undefined;
 	const accent = (MOCHI_ACCENT_IDS as readonly string[]).includes(held.accent ?? "") ? (held.accent as PresenceSurfaceProps["accent"]) : undefined;
 	return { avatar: held.id, ...(skin !== undefined ? { skin } : {}), ...(accent !== undefined ? { accent } : {}) };
+}
+
+/** The colour the agent's face carries when it pinned one (Mochi's accent), for
+ *  the faint wash behind it; `undefined` (a neutral wash) otherwise. `theme` is
+ *  no colour of its own: it follows the app accent, so it washes neutral too. */
+export function faceHue(face: FaceSpec): string | undefined {
+	return MOCHI_ACCENT_OPTIONS.find(option => option.id === face.accent)?.hex ?? undefined;
 }
 
 /** A face's name, as the picker prints it. */

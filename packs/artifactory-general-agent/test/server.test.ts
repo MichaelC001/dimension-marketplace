@@ -416,10 +416,12 @@ You run the desk.
 		expect(((await call("validate_agent", { draft: opened.draft })).structuredContent as unknown as DraftCheck).problems).toEqual([]);
 	});
 
-	test("Everything else cannot take over the nameplate, the lineage or the charter's prompt mode", async () => {
+	test("Other settings cannot take over the name, the description, the lineage or the charter's prompt mode", async () => {
+		const clean = (await call("validate_agent", { draft: draft() })).structuredContent as unknown as DraftCheck;
+		expect(clean.problems).toEqual([]);
 		for (const extra of ["name: someone-else", "description: hijacked", "extends: [coding]", "identity:\n  prompt: append", "specVersion: 2"]) {
 			const check = (await call("validate_agent", { draft: draft({ extra }) })).structuredContent as unknown as DraftCheck;
-			expect(check.problems.join(" ")).toContain("Everything else");
+			expect(check.problems.length).toBeGreaterThan(0);
 		}
 	});
 

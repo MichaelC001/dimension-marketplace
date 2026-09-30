@@ -202,7 +202,7 @@ export function draftProblems(draft: AgentDraft): string[] {
 	const problems: string[] = [];
 	if (!NAME_RE.test(draft.name)) problems.push("Name it: 2–64 lowercase letters, digits or dashes.");
 	if (draft.description.trim() === "") problems.push("Give it one line that says what it is for.");
-	if (draft.charter.trim() === "") problems.push("Write its charter — the instructions it runs by.");
+	if (draft.charter.trim() === "") problems.push("Write its charter: the instructions it runs by.");
 	problems.push(...manifestDocument(draft).problems);
 	return problems;
 }
@@ -254,12 +254,12 @@ interface Unit {
 export function manifestDocument(draft: AgentDraft, homeId?: string | null): ManifestDocument {
 	const parsed = parseExtra(draft.extra);
 	const problems: string[] = [];
-	for (const stray of parsed.stray) problems.push(`Everything else must be \`key: value\` lines — not “${stray.trim()}”.`);
-	if (draft.extra.split("\n").some(line => /^(---|\.\.\.)/.test(line))) problems.push("Everything else cannot hold a document separator (---).");
+	for (const stray of parsed.stray) problems.push(`Other settings must be \`key: value\` lines, not “${stray.trim()}”.`);
+	if (draft.extra.split("\n").some(line => /^(---|\.\.\.)/.test(line))) problems.push("Other settings cannot hold a document separator (---).");
 	const byKey = new Map<string, Block>(parsed.blocks.map(block => [block.key, block]));
 	const held = extraPaths(parsed.blocks);
 	const fixed = [...held].filter(path => FIXED_PATHS[path] !== undefined);
-	for (const path of fixed) problems.push(`\`${path}\` is set on the profile itself (identity, lineage or charter) — remove it from Everything else.`);
+	for (const path of fixed) problems.push(`\`${path}\` is set on the profile itself (identity, lineage or charter). Remove it from Other settings.`);
 	const yields = (path: string) => held.has(path) && FIXED_PATHS[path] === undefined;
 
 	const line = (field: string, text: string): ManifestLine => ({ field, text });
@@ -338,7 +338,7 @@ export function manifestDocument(draft: AgentDraft, homeId?: string | null): Man
 		used.add(unit.key);
 		if (kept.length === 0) pushAll(`extra.${unit.key}`, block.lines);
 		else if (block.children === null) {
-			problems.push(`\`${unit.key}\` is written inline in Everything else, so the profile's own ${unit.key} settings cannot join it — write its keys indented, one per line.`);
+			problems.push(`\`${unit.key}\` is written inline in Other settings, so the profile's own ${unit.key} settings cannot join it. Write its keys indented, one per line.`);
 			lines.push(line(unit.key, `${unit.key}:`));
 			for (const entry of kept) lines.push(...entry.lines);
 		} else {

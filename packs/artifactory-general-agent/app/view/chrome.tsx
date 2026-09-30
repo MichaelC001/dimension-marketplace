@@ -16,14 +16,17 @@ import type { ForgeDock } from "./forge-client";
  *  case (DESIGN.md: no uppercase eyebrows), text-2 for contrast on surfaces. */
 export const LABEL = "font-secondary text-fr-2xs font-semibold tracking-fr-label text-fr-text-2";
 
-/** A label on the lit hero band: text at 80%, which text-2 would take under AA. */
-export const HERO_LABEL = "font-secondary text-fr-2xs font-semibold tracking-fr-label text-fr-text/80";
+/** The page's one panel: every bordered surface that is not a card (the page
+ *  header, the profile's header and sections, notes, the empty and error
+ *  states) shares this radius, edge and ground. Cards are `MarkCard`'s own
+ *  (rounded-2xl); a tile inside a panel steps down to rounded-lg. */
+export const PANEL = "rounded-xl border border-fr-border-soft bg-fr-surface/85";
 
 /** One scrolling column — the home and the profile. Container queries, not the
  *  viewport: the dock opening beside the page reflows it. */
 export function ViewColumn({ slot, children }: { readonly slot: string; readonly children: ReactNode }) {
 	return (
-		<div className="h-full overflow-y-auto [scrollbar-gutter:stable]">
+		<div className="fr-scroll-stable h-full overflow-y-auto">
 			<div data-slot={slot} className="@container mx-auto flex w-full max-w-295 flex-col gap-7 px-5 pt-5 pb-12">
 				{children}
 			</div>
@@ -31,31 +34,11 @@ export function ViewColumn({ slot, children }: { readonly slot: string; readonly
 	);
 }
 
-/** Section chrome: a real heading with a quiet count and an optional aside. */
-export function Section({
-	title,
-	count,
-	aside,
-	children,
-	className,
-}: {
-	readonly title: string;
-	readonly count?: number;
-	readonly aside?: ReactNode;
-	readonly children: ReactNode;
-	readonly className?: string;
-}) {
+/** Section chrome: a real heading over its content. */
+export function Section({ title, children }: { readonly title: string; readonly children: ReactNode }) {
 	return (
-		<section className={cn("flex flex-col gap-2.5", className)}>
-			<div className="flex min-h-5 items-center justify-between gap-3">
-				<h2 className="flex items-baseline gap-2 text-fr-md font-semibold text-fr-text">
-					{title}
-					{count !== undefined ? (
-						<span className="font-secondary text-fr-sm font-normal text-fr-text-2 tabular-nums">{count}</span>
-					) : null}
-				</h2>
-				{aside}
-			</div>
+		<section className="flex flex-col gap-3">
+			<h2 className="m-0 min-h-5 text-fr-md font-semibold text-fr-text">{title}</h2>
 			{children}
 		</section>
 	);

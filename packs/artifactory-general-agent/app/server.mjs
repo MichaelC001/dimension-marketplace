@@ -146,7 +146,7 @@ function draftProblems(draft) {
   const problems = [];
   if (!NAME_RE.test(draft.name)) problems.push("Name it: 2\u201364 lowercase letters, digits or dashes.");
   if (draft.description.trim() === "") problems.push("Give it one line that says what it is for.");
-  if (draft.charter.trim() === "") problems.push("Write its charter \u2014 the instructions it runs by.");
+  if (draft.charter.trim() === "") problems.push("Write its charter: the instructions it runs by.");
   problems.push(...manifestDocument(draft).problems);
   return problems;
 }
@@ -162,12 +162,12 @@ function list(values) {
 function manifestDocument(draft, homeId) {
   const parsed = parseExtra(draft.extra);
   const problems = [];
-  for (const stray of parsed.stray) problems.push(`Everything else must be \`key: value\` lines \u2014 not \u201C${stray.trim()}\u201D.`);
-  if (draft.extra.split("\n").some((line2) => /^(---|\.\.\.)/.test(line2))) problems.push("Everything else cannot hold a document separator (---).");
+  for (const stray of parsed.stray) problems.push(`Other settings must be \`key: value\` lines, not \u201C${stray.trim()}\u201D.`);
+  if (draft.extra.split("\n").some((line2) => /^(---|\.\.\.)/.test(line2))) problems.push("Other settings cannot hold a document separator (---).");
   const byKey = new Map(parsed.blocks.map((block) => [block.key, block]));
   const held = extraPaths(parsed.blocks);
   const fixed = [...held].filter((path) => FIXED_PATHS[path] !== void 0);
-  for (const path of fixed) problems.push(`\`${path}\` is set on the profile itself (identity, lineage or charter) \u2014 remove it from Everything else.`);
+  for (const path of fixed) problems.push(`\`${path}\` is set on the profile itself (identity, lineage or charter). Remove it from Other settings.`);
   const yields = (path) => held.has(path) && FIXED_PATHS[path] === void 0;
   const line = (field, text) => ({ field, text });
   const units = [
@@ -231,7 +231,7 @@ function manifestDocument(draft, homeId) {
     used.add(unit.key);
     if (kept.length === 0) pushAll(`extra.${unit.key}`, block.lines);
     else if (block.children === null) {
-      problems.push(`\`${unit.key}\` is written inline in Everything else, so the profile's own ${unit.key} settings cannot join it \u2014 write its keys indented, one per line.`);
+      problems.push(`\`${unit.key}\` is written inline in Other settings, so the profile's own ${unit.key} settings cannot join it. Write its keys indented, one per line.`);
       lines.push(line(unit.key, `${unit.key}:`));
       for (const entry2 of kept) lines.push(...entry2.lines);
     } else {
@@ -7772,7 +7772,7 @@ async function listAgents(roots) {
     }
   }
   if (roots.workspace === null) {
-    notices.push(roots.workspaceMissing ?? "No workspace is bound, so project agents are not listed \u2014 pack and user agents are.");
+    notices.push(roots.workspaceMissing ?? "No workspace is bound, so project agents are not listed. Pack agents and yours are.");
   } else {
     for (const dirName of [WRITE_DIR, LEGACY_DIR]) {
       for (const found of await scanAgents(join(roots.workspace, dirName, "agents"), notices)) {
@@ -7859,7 +7859,7 @@ async function saveAgent(options) {
     const current = parseGeneralAgent(existing, path, draft.name);
     if (!current.ok) {
       throw new SaveRefused(
-        current.reason === "loop" ? `${draft.name} is a Loop, not a General Agent \u2014 the Forge does not rewrite Loops.` : `${draft.name}'s agent.md does not parse (${current.errors.join("; ")}); fix it by hand first.`
+        current.reason === "loop" ? `${draft.name} is a Loop, not a General Agent, and a Loop is never rewritten here.` : `${draft.name}'s agent.md does not parse (${current.errors.join("; ")}); fix it by hand first.`
       );
     }
     if (revisionOf(existing) !== target.revision) {
@@ -7931,8 +7931,8 @@ async function resolveInstructions(roots, source, name, agentFile) {
   return { files, text };
 }
 var TIER_RULES = {
-  pack: "A pack agent runs by, in order: a project's own copy (<project>/agents/<name>/AGENTS.md \u2014 any file claims it), then the agent's home AGENTS.md (when it is not empty), then the AGENTS.md the pack ships beside agent.md.",
-  user: "A user agent runs by, in order: its home AGENTS.md (when it is not empty, and it follows the agent into every workspace), then the AGENTS.md beside agent.md.",
+  pack: "A pack agent runs by the first of these that applies: a project's own copy (any file there counts), then its home AGENTS.md when it is not empty, then the AGENTS.md its pack ships.",
+  user: "Your agent runs by its home AGENTS.md when that is not empty (it follows the agent into every project), else by the AGENTS.md beside its agent.md.",
   workspace: "A project agent has no home: it runs by the AGENTS.md beside its agent.md, in this project."
 };
 async function describeHome(roots, name) {
@@ -7948,10 +7948,10 @@ async function describeHome(roots, name) {
   const { files, text } = await resolveInstructions(roots, source, name, agentFile);
   const folderExists = folder !== null && await isDirectory(folder);
   let homeNote;
-  if (!canStandAtHome) homeNote = "A project agent belongs to one project, so it has no home of its own. Extend it as a user agent to give it one.";
+  if (!canStandAtHome) homeNote = "A project agent belongs to one project, so it has no home of its own.";
   else if (listed?.workspaceId === `agent-${name}`) {
-    homeNote = `Its file names workspace.id "${listed.workspaceId}", which the engine never registers (an older Forge wrote it). Reforge it: Lives \u2192 Own home writes ${homeId}.`;
-  } else if (foreign) homeNote = `Its manifest names workspace.id "${listed?.workspaceId}", so it stands there and gets no derived home.`;
+    homeNote = `Its file names "${listed.workspaceId}" as its workspace, an id no registry knows (an older Forge wrote it). Save it with Where it runs set to Its own home and it stands in ${homeId}.`;
+  } else if (foreign) homeNote = `It names its own workspace, "${listed?.workspaceId}", so it runs there and has no home of its own.`;
   else if (paths === null) homeNote = `Its home is ${homeId}; where that lives is unknown, as the engine did not say where its home is.`;
   else homeNote = folderExists ? `Its home is ${homeId}; the folder exists.` : `Its home is ${homeId}; the engine creates the folder the first time the agent is opened, seeding it from the AGENTS.md beside agent.md.`;
   const editable = listed === void 0 ? false : listed.editable;
@@ -7982,7 +7982,7 @@ async function saveInstructions(roots, name, text, revision) {
   const { target } = instructions;
   if (target === null) throw new SaveRefused(instructions.editable ? `No agent named "${name}".` : instructions.note);
   if (target.revision !== revision) {
-    throw new SaveRefused(`${name}'s standing instructions changed since they were opened here \u2014 the file was edited elsewhere, or its home was set up since, so a save would land somewhere else. Reopen them so nothing written since is lost.`);
+    throw new SaveRefused(`${name}'s standing instructions changed since they were opened here: the file was edited elsewhere, or its home was set up since, so a save would land somewhere else. Reopen them so nothing written since is lost.`);
   }
   const temp = join2(dirname(target.path), `.${basename2(target.path)}.${process.pid}.${randomBytes2(6).toString("hex")}.tmp`);
   try {
@@ -8042,7 +8042,7 @@ async function mcpServersIn(file) {
 function hintOf(text, from) {
   const line = text.split("\n")[0]?.trim() ?? "";
   const short = line.length > 90 ? `${line.slice(0, 89)}\u2026` : line;
-  return short === "" ? from : `${short} \u2014 ${from}`;
+  return short === "" ? from : `${short} (${from})`;
 }
 async function listParts(options) {
   const parts = [];

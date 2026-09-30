@@ -6,7 +6,7 @@
 // `?state=` picks what the page shows, for design review:
 //   home (default) · empty · loading · error · profile (a user agent with a
 //   home) · readonly (a pack agent) · create · proposal (a Machinist proposal
-//   on a user agent) · rich (an agent whose Everything else carries keys)
+//   on a user agent) · rich (an agent whose Other settings carry keys)
 // `&dock=off` is a host that lends no dock station; `&rail=off` one that does
 // not lend the agents' switches.
 import type { ViewAgentFact, ViewDockState } from "@dimension/sdk/artifactory";
