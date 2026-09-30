@@ -135,9 +135,9 @@ export function ForgeApp({
 			/>
 		);
 
-	// The whole View sits on the studio atmosphere (drifting light over a dot
-	// net) lit as a room, as the Autonomy page does; every surface above it is
-	// translucent enough to let it through.
+	// The whole View sits on one quiet texture: the studio atmosphere's dot net
+	// alone, no glow. Every surface above it is translucent enough to let it
+	// through.
 	return (
 		<div
 			data-slot="forge-view"
@@ -148,7 +148,7 @@ export function ForgeApp({
 				if (event.key === "Escape" && profile !== null && !typing) back();
 			}}
 		>
-			<DiagramAtmosphere net="dot" glow="lit" palette="accent" />
+			<DiagramAtmosphere net="dot" orbs={false} />
 			<div className="relative z-10 min-h-0 flex-1">{content}</div>
 		</div>
 	);

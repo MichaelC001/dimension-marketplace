@@ -14,31 +14,59 @@ import { PANEL } from "./chrome";
  *  the face picker, a chip picker's search). A text area takes the full width. */
 export const FIELD = "w-full max-w-md";
 
-/** One titled section of the profile: a panel holding a list of facts. Its
- *  title is the scale's heading-lg, two steps over a card's name. */
+/** One titled section of the profile: a panel holding a list of facts, or,
+ *  with `list={false}`, one body that takes the panel's full width (the
+ *  charter's editor, the advanced pair), where a label would only repeat the
+ *  title. Its title is the scale's heading-lg, two steps over a card's name. */
 export function Panel({
 	title,
 	lede,
 	wide = false,
+	list = true,
+	proposed = false,
 	children,
 }: {
 	readonly title: string;
 	readonly lede?: string;
 	/** Spans both columns of the profile's grid. */
 	readonly wide?: boolean;
+	/** A list of facts (`Fact` rows) or, false, one full-width body. */
+	readonly list?: boolean;
+	/** The Machinist's pending proposal set this panel's one body. */
+	readonly proposed?: boolean;
 	readonly children: ReactNode;
 }) {
 	const id = useId();
+	const Body = list ? "dl" : "div";
 	return (
-		<section aria-labelledby={id} data-slot="profile-panel" className={cn("@container/panel flex min-w-0 flex-col", PANEL, wide && "@4xl:col-span-2")}>
+		<section
+			aria-labelledby={id}
+			data-slot="profile-panel"
+			data-proposed={proposed || undefined}
+			className={cn("@container/panel flex min-w-0 flex-col", PANEL, wide && "@4xl:col-span-2")}
+		>
 			<header className="flex min-w-0 flex-col gap-1 px-5 pt-5 pb-1">
-				<h2 id={id} className="m-0 text-fr-xl leading-tight font-semibold text-fr-text">
+				<h2 id={id} className="m-0 flex items-center gap-2 text-fr-xl leading-tight font-semibold text-fr-text">
 					{title}
+					{proposed ? <ProposedBadge /> : null}
 				</h2>
 				{lede ? <p className="m-0 text-fr-xs leading-relaxed text-pretty text-fr-text-2">{lede}</p> : null}
 			</header>
-			<dl className="m-0 flex flex-col px-5 pt-1 pb-2">{children}</dl>
+			<Body className="m-0 flex flex-col px-5 pt-1 pb-2">{children}</Body>
 		</section>
+	);
+}
+
+/** A status word in a badge (a tier, "In force", "Proposed"): one step up from
+ *  the badge's eyebrow size, so no word that states something reads at 2xs. */
+export const STATUS_BADGE = "text-fr-xs";
+
+/** What the Machinist's pending proposal set. */
+export function ProposedBadge() {
+	return (
+		<Badge tone="accent" variant="soft" className={STATUS_BADGE}>
+			Proposed
+		</Badge>
 	);
 }
 
@@ -76,11 +104,7 @@ export function Fact({
 			<dt className={cn("flex min-w-0 flex-wrap items-center gap-2 text-fr-sm font-medium text-fr-text", tall && "@lg/panel:self-start @lg/panel:pt-3")}>
 				{label}
 				{grant ? <GrantMark /> : null}
-				{proposed ? (
-					<Badge tone="accent" variant="soft">
-						Proposed
-					</Badge>
-				) : null}
+				{proposed ? <ProposedBadge /> : null}
 			</dt>
 			<dd className="m-0 flex min-w-0 flex-col gap-2">
 				{children}
@@ -95,7 +119,7 @@ export function Fact({
  *  is spoken, and the profile's legend says it once in words. */
 export function GrantMark() {
 	return (
-		<span data-slot="grant-mark" role="img" aria-label="Only you can change this" title="Only you can change this" className="inline-flex text-fr-text-3">
+		<span data-slot="grant-mark" role="img" aria-label="Only you can change this" title="Only you can change this" className="inline-flex text-fr-text-2">
 			<Icon name="lock" size={12} strokeWidth={2} aria-hidden="true" />
 		</span>
 	);

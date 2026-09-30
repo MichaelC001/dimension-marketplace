@@ -188,13 +188,9 @@ export function ForgeHome({
 
 	return (
 		<ViewColumn slot="forge-home">
-			{/* The page's own top-right, as on Autonomy: the Machinist in the dock
-			    beside this page. The row collapses when no dock station is lent. */}
-			<div data-slot="forge-home-toolbar" className="-mt-2 -mb-4 flex min-h-8 items-center justify-end empty:hidden">
-				<DockAgentButton dock={backend.dock} onError={setNotice} />
-			</div>
-			{/* One quiet surface: the page's name and its one action. The room's own
-			    atmosphere behind the column is the only ambient light. */}
+			{/* One quiet surface: the page's name, its one action and, as on Autonomy,
+			    the Machinist in the dock beside this page (drawn only when a dock
+			    station is lent). The room's own atmosphere is the only ambient light. */}
 			<header className={`${PANEL} flex flex-wrap items-end justify-between gap-x-6 gap-y-4 px-6 py-6`}>
 				<div className="flex min-w-0 max-w-prose flex-col gap-2">
 					<h1 className="m-0 text-fr-2xl leading-tight font-semibold tracking-fr-tight text-balance text-fr-text">General Agents</h1>
@@ -202,18 +198,21 @@ export function ForgeHome({
 						Every agent you can run. Open one to see and change how it works.
 					</p>
 				</div>
-				<Button onClick={onCreate} data-slot="forge-new-agent">
-					<Icon name="plus" strokeWidth={2} />
-					Create agent
-				</Button>
+				<div data-slot="forge-home-actions" className="flex items-center gap-2">
+					<DockAgentButton dock={backend.dock} onError={setNotice} />
+					<Button onClick={onCreate} data-slot="forge-new-agent">
+						<Icon name="plus" strokeWidth={2} />
+						Create agent
+					</Button>
+				</div>
 			</header>
 			{notice !== null ? (
-				<p role="alert" className="m-0 -mt-3 text-fr-xs text-fr-warn">
+				<p role="alert" className="m-0 text-fr-xs text-fr-warn">
 					{notice}
 				</p>
 			) : null}
 			{listing !== null && listing.notices.length > 0 ? (
-				<ul className="m-0 -mt-3 flex list-none flex-col gap-1 p-0">
+				<ul className="m-0 flex list-none flex-col gap-1 p-0">
 					{listing.notices.map(line => (
 						<li key={line} className="text-fr-xs text-fr-text-2">
 							{line}

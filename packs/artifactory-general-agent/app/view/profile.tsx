@@ -1,9 +1,10 @@
 // One agent's profile: what a card opens, and where a new agent is made. The
 // header says who it is (its live face, its name, what it is for, which tier it
-// lives in and where it stands) and carries the host's two switches as a plain
-// row. Below, every part of the agent in titled panels, each a list of facts
-// edited in place: Identity, Charter, Standing instructions, Home, Memory,
-// Capabilities, Brain, Safety & access, Lineage, Advanced.
+// lives in and where its file is) and carries the host's two switches as a
+// plain row, which say where it stands. Below, every part of the agent in
+// titled panels, each a list of facts edited in place: Identity, Charter,
+// Standing instructions, Home, Memory, Capabilities, Brain, Safety & access,
+// Lineage, Advanced.
 //
 // ONE save. A sticky bar at the foot of the column appears only while something
 // is unsaved, and saves all of it: the agent's file and, when edited, its
@@ -51,7 +52,7 @@ import { grantPathsIn } from "../../src/extra";
 import { AgentFace, errorText, LABEL, PANEL } from "./chrome";
 import { faceHue, faceLabel, faceOf, WEARABLE } from "./faces";
 import type { ForgeBackend } from "./forge-client";
-import { ChipList, ChipPicker, FIELD, Fact, GrantMark, HeldValue, Panel } from "./profile-parts";
+import { ChipList, ChipPicker, FIELD, Fact, GrantMark, HeldValue, Panel, ProposedBadge, STATUS_BADGE } from "./profile-parts";
 import {
 	acceptProposal,
 	discardProposal,
@@ -62,7 +63,7 @@ import {
 	saveBlockers,
 	saveTargetOf,
 } from "./profile-state";
-import { displayName, extraList, extraScalar, heldAvatar, standingOf, TIER_LABEL, titleOf } from "./roster";
+import { displayName, extraList, extraScalar, heldAvatar, TIER_LABEL, titleOf } from "./roster";
 
 // ── words ───────────────────────────────────────────────────────────────────
 
@@ -72,15 +73,15 @@ const PERSONALITY_LABEL: Readonly<Record<Personality, string>> = {
 	pragmatic: "Pragmatic",
 	none: "None",
 };
-/** Named so neither choice echoes Lineage, which is a different mechanism. */
+/** A matched pair, named so neither choice echoes Lineage, which is a different mechanism. */
 const PROMPT_LABEL: Readonly<Record<PromptMode, string>> = {
-	replace: "Only its own charter",
-	append: "Adds to Dimension's default prompt",
+	replace: "Its charter only",
+	append: "Its charter plus Dimension's defaults",
 };
 /** What the chosen way of speaking does, said for that choice alone. */
 const PROMPT_HINT: Readonly<Record<PromptMode, string>> = {
-	replace: "Its charter is its whole prompt.",
-	append: "Its charter follows Dimension's default coding prompt.",
+	replace: "It is told its charter and nothing else.",
+	append: "Dimension's default instructions come first, then its charter.",
 };
 const THINKING_LABEL: Readonly<Record<Thinking, string>> = {
 	inherit: "Dimension's default",
@@ -142,19 +143,19 @@ function fileState(file: InstructionFile): string {
 	return "Shadowed";
 }
 
-/** Where its recall reads (`memory-reach.ts`). This project's room, its home
- *  room and the shared global notes are always read; the reach switch adds
- *  only the OTHER projects' rooms (or the workspaces a held reach lists). */
-function memoryReads(draft: AgentDraft, held: ReadonlySet<string>, room: string | null): string[] {
+/** Where its recall reads (`memory-reach.ts`). This project's notes, its home's
+ *  and the shared ones are always read; the reach switch adds only the OTHER
+ *  projects' notes (or the workspaces a held reach lists). */
+function memoryReads(draft: AgentDraft, held: ReadonlySet<string>, homeRoom: boolean): string[] {
 	if (draft.memory === "off") return ["Nothing. Memory is off for this agent."];
 	return [
-		"This project's room",
-		...(room !== null ? [`Its home room, ${room}, which follows it from project to project`] : []),
-		"Shared notes (global)",
+		"Notes from this project",
+		...(homeRoom ? ["Notes from its home"] : []),
+		"Notes shared across all projects",
 		...(held.has("workspace.reach")
-			? ["The rooms of the workspaces it lists"]
+			? ["Notes from the workspaces it lists"]
 			: draft.memoryScope === "global"
-				? ["Every other project's room"]
+				? ["Notes from every other project"]
 				: []),
 	];
 }
@@ -334,7 +335,6 @@ export function AgentProfile({
 	useEffect(() => heading.current?.focus(), [draft.key]);
 
 	const title = draft.name === "" ? "New agent" : displayName({ name: draft.name, draft }, fact);
-	const standing = agent === undefined ? null : standingOf(fact);
 	/** Another agent, named the way its card names it; the id stays a tooltip. */
 	const agentTitle = (id: string) => titleOf(id, agents, facts);
 	const path =
@@ -390,22 +390,12 @@ export function AgentProfile({
 								) : null}
 							</div>
 							<div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
-								{draft.name !== "" && title !== draft.name ? <span className="font-mono text-fr-xs text-fr-text-2">{draft.name}</span> : null}
-								<Badge tone="mute" variant="soft">
+								<Badge tone="mute" variant="soft" className={STATUS_BADGE}>
 									{agent === undefined ? "New · yours" : TIER_LABEL[agent.source]}
 								</Badge>
 								{draft.lineage.length > 0 ? (
 									<span className="text-fr-xs text-fr-text-2" title={draft.lineage.join(", ")}>
 										Extends {draft.lineage.map(agentTitle).join(", ")}
-									</span>
-								) : null}
-								{standing !== null ? (
-									<span data-slot="profile-standing" className="flex items-center gap-2 text-fr-xs text-fr-text-2">
-										<span
-											aria-hidden
-											className={cn("size-1.5 rounded-full", standing.tone === "ready" ? "bg-fr-add" : standing.tone === "idle" ? "bg-fr-text-3" : "hidden")}
-										/>
-										{standing.label}
 									</span>
 								) : null}
 							</div>
@@ -437,7 +427,7 @@ export function AgentProfile({
 					</div>
 				) : (
 					<p data-slot="profile-legend" className="m-0 flex items-center gap-2 text-fr-xs leading-relaxed text-fr-text-2">
-						<Icon name="lock" size={12} strokeWidth={2} className="shrink-0 text-fr-text-3" aria-hidden="true" />
+						<Icon name="lock" size={12} strokeWidth={2} className="shrink-0 text-fr-text-2" aria-hidden="true" />
 						The lock marks settings only you can change; the Machinist can suggest everything else.
 					</p>
 				)}
@@ -511,7 +501,7 @@ export function AgentProfile({
 							/>
 						</Field>
 					</Fact>
-					<Fact label="Face" tall={!held.has("avatar")} proposed={proposed.has("vibr")} hint={heldFace === null ? "Its live face, wherever its sessions are drawn." : undefined}>
+					<Fact label="Face" tall={!held.has("avatar")} proposed={proposed.has("vibr")} hint={heldFace === null ? "How it looks in the rail and in its sessions." : undefined}>
 						{held.has("avatar") ? (
 							<HeldValue>{heldFace === null ? "Its own face" : `${faceLabel(heldFace.id)}${heldFace.skin !== undefined ? ` · ${heldFace.skin}` : ""}`}</HeldValue>
 						) : (
@@ -545,8 +535,8 @@ export function AgentProfile({
 					</Fact>
 				</Panel>
 
-				<Panel title="Charter" lede="The instructions it runs by: the body of its agent.md." wide>
-					<Fact label="Charter" proposed={proposed.has("charter")}>
+				<Panel title="Charter" lede="The instructions it runs by: the body of its agent.md." wide list={false} proposed={proposed.has("charter")}>
+					<div className="py-4">
 						<Field error={shown("charter")}>
 							<Textarea
 								value={draft.charter}
@@ -560,7 +550,7 @@ export function AgentProfile({
 								onBlur={() => touch("charter")}
 							/>
 						</Field>
-					</Fact>
+					</div>
 				</Panel>
 
 				<InstructionsPanel
@@ -590,15 +580,6 @@ export function AgentProfile({
 									<span className={MONO_PATH}>{homeInfo.folder}</span>
 								</Fact>
 							) : null}
-							<Fact label="Works in its home">
-								<span className="text-fr-sm leading-relaxed text-pretty text-fr-text">
-									{held.has("workspace.policy")
-										? "It names its own workspace (set in Other settings) and works there."
-										: draft.habitat === "home"
-											? "Yes. Every session starts in its home."
-											: `No. It only reads its home. Sessions start ${draft.habitat === "bound" ? "where it is opened" : "in a fresh scratch copy"}; its instructions and memory still follow it.`}
-								</span>
-							</Fact>
 						</>
 					)}
 				</Panel>
@@ -633,7 +614,7 @@ export function AgentProfile({
 					</Fact>
 					<Fact label="Reads from">
 						<ul className="m-0 flex list-none flex-col gap-1 p-0">
-							{memoryReads(draft, held, homeInfo?.memoryRoom ?? null).map(line => (
+							{memoryReads(draft, held, (homeInfo?.memoryRoom ?? null) !== null).map(line => (
 								<li key={line} className="text-fr-sm leading-relaxed text-fr-text">
 									{line}
 								</li>
@@ -754,23 +735,19 @@ export function AgentProfile({
 					</Fact>
 				</Panel>
 
-				<Panel title="Advanced" lede="Every other key of its manifest, as YAML, and the agent.md that will be written." wide>
+				<Panel title="Advanced" lede="Every other key of its manifest, as YAML, and the agent.md that will be written." wide list={false}>
 					<div className="grid min-w-0 gap-5 py-4 @3xl/panel:grid-cols-2">
 						<div className="flex min-w-0 flex-col gap-2">
 							<span className={cn(LABEL, "flex items-center gap-2")}>
 								Other settings
-								{proposed.has("extra") ? (
-									<Badge tone="accent" variant="soft">
-										Proposed
-									</Badge>
-								) : null}
+								{proposed.has("extra") ? <ProposedBadge /> : null}
 							</span>
 							<Textarea
 								value={draft.extra}
 								disabled={locked}
 								resize="vertical"
 								spellCheck={false}
-								aria-label="Other settings: manifest keys the profile does not draw, as YAML"
+								aria-label="Other settings: settings this page does not show, as YAML"
 								placeholder={"title: Chief Marketing Officer\ncapabilities:\n  control: [agents]\nrouting:\n  card: Marketing questions"}
 								className="max-h-none min-h-56 font-mono text-fr-xs leading-relaxed"
 								onChange={event => set({ extra: event.target.value })}
@@ -957,11 +934,11 @@ function InstructionsPanel({
 									<span className={cn("text-fr-sm", file.wins ? "font-medium text-fr-text" : "text-fr-text-2")}>{FILE_KIND[file.kind]}</span>
 									<span className="row-span-2 self-center">
 										{file.wins ? (
-											<Badge tone="accent" variant="soft">
+											<Badge tone="accent" variant="soft" className={STATUS_BADGE}>
 												{fileState(file)}
 											</Badge>
 										) : (
-											<span className="font-secondary text-fr-2xs text-fr-text-3">{fileState(file)}</span>
+											<span className="font-secondary text-fr-xs text-fr-text-2">{fileState(file)}</span>
 										)}
 									</span>
 									<span className={MONO_PATH} title={file.path}>
