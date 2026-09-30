@@ -1,0 +1,22 @@
+/* The General Agents View's stylesheet: the brand faces, the Fraym theme and
+ * Tailwind over this View's own sources (theme.css carries the kit's @source).
+ * Bundled into the View; nothing remote. Only the default pairing (IBM Plex
+ * Sans + Mono) ships, as in the Autonomy View. Every pixel above this is a kit
+ * utility — this file holds no component styles. */
+@import "@fontsource/ibm-plex-sans/latin-400.css";
+@import "@fontsource/ibm-plex-sans/latin-500.css";
+@import "@fontsource/ibm-plex-sans/latin-600.css";
+@import "@fontsource/ibm-plex-mono/latin-400.css";
+@import "@fontsource/ibm-plex-mono/latin-500.css";
+@import "@fraym/ui/theme.css";
+@source "./**/*.{ts,tsx}";
+
+html,
+body,
+#root {
+	margin: 0;
+	height: 100%;
+	min-height: 100%;
+	background: var(--fr-bg);
+	color: var(--fr-text);
+}

@@ -46,7 +46,6 @@ import {
 	PERSONALITIES,
 	PROMPT_MODES,
 	THINKING_STEPS,
-	VIBRS,
 } from "./agent-md.js";
 import type { DraftCheck, ForgeOpened, ForgeProposed, SaveTarget } from "./contracts.js";
 import { grantPathsIn, grantPathsInDocument } from "./extra.js";
@@ -79,7 +78,7 @@ const draftSchema = z.object({
 	key: z.string().min(1).max(200),
 	name: z.string().max(64),
 	description: z.string().max(400),
-	vibr: z.enum(VIBRS),
+	vibr: z.string().max(80),
 	personality: z.enum(PERSONALITIES),
 	promptMode: z.enum(PROMPT_MODES),
 	thinking: z.enum(THINKING_STEPS),
@@ -100,7 +99,7 @@ const proposalShape = {
 	name: agentName.describe("the agent's name: lowercase letters, digits, dashes"),
 	description: z.string().max(400).optional().describe("one line: what it is for"),
 	charter: z.string().max(40_000).optional().describe("the instructions it runs by (the agent.md body), markdown"),
-	vibr: z.enum(VIBRS).optional().describe("the body it wears"),
+	vibr: z.string().max(80).optional().describe("the avatar id it wears — a vibr such as orb, nebula or mochi"),
 	skills: names.optional().describe("skill allowlist; omit to keep every skill"),
 	memory: z.enum(MEMORY_BACKENDS).optional(),
 	lineage: z.array(agentName).max(16).optional().describe("agents whose brain it extends"),
@@ -112,7 +111,7 @@ const proposalShape = {
 		.max(20_000)
 		.optional()
 		.describe(
-			"YAML for manifest keys the orrery does not draw — title, defaultListed, engine.model/profile/roles, routing, loop, memory.namespace, capabilities.autoloadSkills/slashCommands/ignore, subagents.maxDepth, … One `key: value` per line, sections indented two spaces. It is laid over the draft's own, key by key. Keys that GRANT — capabilities.tools/mcp/plugins/control/optIn, subagents.allowed, gate.*, workspace.*, harness, allowedHarnesses — are refused: only the user sets those.",
+			"YAML for manifest keys the profile does not draw — title, defaultListed, engine.model/profile/roles, routing, loop, memory.namespace, capabilities.autoloadSkills/slashCommands/ignore, subagents.maxDepth, … One `key: value` per line, sections indented two spaces. It is laid over the draft's own, key by key. Keys that GRANT — capabilities.tools/mcp/plugins/control/optIn, subagents.allowed, gate.*, workspace.*, harness, allowedHarnesses — are refused: only the user sets those.",
 		),
 };
 
@@ -156,7 +155,7 @@ export async function createForgeServer(options: ForgeServerOptions = {}): Promi
 	const workspaces = new Map<string, string>();
 	const rootsOf = (extra: { _meta?: Record<string, unknown> }): Roots => ({ workspace: workspaces.get(sessionOf(extra)) ?? fallback, home });
 
-	const server = new McpServer({ name: "dimension-community-general-agent", version: "0.2.1" });
+	const server = new McpServer({ name: "dimension-community-general-agent", version: "0.3.0" });
 	const viewDir = options.viewDir ?? fileURLToPath(new URL("./dist/", import.meta.url));
 	// A missing built View is a startup error, not an installed pack that opens blank.
 	const html = await readFile(join(viewDir, "index.html"), "utf8");
@@ -180,7 +179,7 @@ export async function createForgeServer(options: ForgeServerOptions = {}): Promi
 		"forge_open",
 		{
 			title: "Forge",
-			description: `Open the Forge in the artifact view: every General Agent — the ones installed packs ship, the user's own, and the workspace's — as a constellation the user can open, reshape and forge, or one agent, by name. \`workspace\` is optional: the absolute path of the directory you are working in, which adds that project's agents (\`<workspace>/${WRITE_DIR}/agents/<name>/agent.md\`); without it the Forge still lists pack and user agents and creates new ones in the user's own agents. It writes nothing itself — the user forges.`,
+			description: `Open the General Agents page: every General Agent — the ones installed packs ship, the user's own, and the workspace's — as cards the user can open, edit and create from, or one agent's profile, by name. \`workspace\` is optional: the absolute path of the directory you are working in, which adds that project's agents (\`<workspace>/${WRITE_DIR}/agents/<name>/agent.md\`); without it the page still lists pack and user agents and creates new ones in the user's own agents. It writes nothing itself — the user saves.`,
 			inputSchema: {
 				agent: agentName.optional().describe("open this agent directly"),
 				workspace: z.string().min(1).max(1024).optional().describe("absolute path of your working directory"),
@@ -200,7 +199,7 @@ export async function createForgeServer(options: ForgeServerOptions = {}): Promi
 			const where = roots.workspace === null ? "no workspace (pack and user agents)" : roots.workspace;
 			const text =
 				agent !== undefined && found === undefined
-					? `No General Agent named "${agent}" in ${where}; the Forge opened on the constellation (${listing.agents.length} agents).`
+					? `No General Agent named "${agent}" in ${where}; the page opened on every agent (${listing.agents.length}).`
 					: found !== undefined
 						? `The Forge opened on ${found.name} (${found.source}, ${found.editable ? "editable" : "read-only"}) in ${where}.`
 						: `The Forge opened on ${listing.agents.length} General Agents in ${where}.`;
@@ -214,7 +213,7 @@ export async function createForgeServer(options: ForgeServerOptions = {}): Promi
 		{
 			title: "Forge proposal",
 			description:
-				"Propose a General Agent draft to the user in the Forge — talk-to-build. Name it and give any of: description, charter, vibr, skills, memory, lineage, thinking, personality, habitat, extra (YAML for the manifest keys the orrery does not draw). The draft appears in the Forge marked as proposed by the workshop; the user accepts it, changes it, and forges it. Nothing is written by this call. A proposal cannot set anything that grants — the agent's tools, approval gate, workspace, control lanes, plugins, MCP servers, delegation or harness: only the user sets those, in the Forge.",
+				"Propose a General Agent draft to the user on the General Agents page — talk-to-build. Name it and give any of: description, charter, vibr, skills, memory, lineage, thinking, personality, habitat, extra (YAML for the manifest keys the profile does not draw). The draft appears on the agent's profile marked as proposed by the Machinist; the user accepts it, changes it, and saves it. Nothing is written by this call. A proposal cannot set anything that grants — the agent's tools, approval gate, workspace, control lanes, plugins, MCP servers, delegation or harness: only the user sets those, on the profile.",
 			inputSchema: proposalShape,
 			_meta: { ui: { resourceUri: FORGE_VIEW_URI } },
 		},
@@ -246,7 +245,7 @@ export async function createForgeServer(options: ForgeServerOptions = {}): Promi
 			const fields = Object.keys(proposal).filter(field => field !== "name");
 			return json(
 				proposed,
-				`Proposed ${proposal.name} to the Forge${fields.length > 0 ? ` (${fields.join(", ")})` : ""}. The user accepts or discards it there; nothing is written until they forge it. Anything that grants — tools, the approval gate, workspace, control lanes — is theirs to set.`,
+				`Proposed ${proposal.name} on the General Agents page${fields.length > 0 ? ` (${fields.join(", ")})` : ""}. The user accepts or discards it there; nothing is written until they save it. Anything that grants — tools, the approval gate, workspace, control lanes — is theirs to set.`,
 			);
 		},
 	);
@@ -263,7 +262,7 @@ export async function createForgeServer(options: ForgeServerOptions = {}): Promi
 
 	server.registerTool(
 		"list_parts",
-		{ description: "The skills, MCP servers, tool names and memory backends the tray can offer, with where each list was read and what could not be.", inputSchema: {}, annotations: READ_ONLY, _meta: APP_ONLY },
+		{ description: "The skills, MCP servers, tool names and memory backends the profile can offer, with where each list was read and what could not be.", inputSchema: {}, annotations: READ_ONLY, _meta: APP_ONLY },
 		async (_args, extra) => {
 			const roots = rootsOf(extra);
 			const { agents } = await listAgents(roots);

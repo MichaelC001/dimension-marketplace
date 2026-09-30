@@ -1,0 +1,1 @@
+import{t as e}from"./dom-C1sYDz5-.js";function t(t,n,r){if(e())return`still`;switch(t??`full`){case`off`:case`still`:return`still`;case`idle`:return(n??`idle`)===`idle`&&!r?`still`:`loop`;default:return`loop`}}function n(e){let t=0;return n=>{let r=e.current??0;return r<=0?!0:n-t<1e3/r?!1:(t=n,!0)}}export{t as n,n as t};

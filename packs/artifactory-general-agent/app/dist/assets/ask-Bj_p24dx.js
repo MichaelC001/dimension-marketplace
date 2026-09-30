@@ -1,0 +1,1 @@
+function e(e){switch(e?.ask){case`permission`:return`gate`;case`prompt`:return`question`;case`notify`:return null;case null:case void 0:return null}}function t(t){let n=e(t);return n===null?{}:n===`gate`&&t?.askTouchesFiles===!0?{"data-ask":n,"data-ask-writes":``}:{"data-ask":n}}export{t as n,e as t};

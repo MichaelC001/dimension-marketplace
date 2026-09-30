@@ -3,7 +3,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build as buildServer } from "esbuild";
 import { build as buildView } from "vite";
-import react from "@vitejs/plugin-react";
+import { defineAppViteConfig } from "@dimension/mcp-app-kit/vite";
 import { validateArtifactoryDecl } from "@dimension/sdk/artifactory";
 import { validateRailActionDecl } from "@dimension/sdk/rail-action";
 
@@ -42,13 +42,7 @@ await buildServer({
   external: Object.keys(pkg.dependencies),
   sourcemap: false,
 });
-await buildView({
-  configFile: false,
-  root: resolve(root, "app/view"),
-  base: "./",
-  plugins: [react()],
-  // ONE React: `@modelcontextprotocol/ext-apps/react` must call the hooks of the
-  // same copy that renders the View, wherever the installer put either.
-  resolve: { dedupe: ["react", "react-dom"] },
-  build: { outDir: resolve(root, "app/dist"), emptyOutDir: true, sourcemap: false, target: "es2022" },
-});
+// The View, in the App kit's shape: React, Tailwind over `@fraym/ui`, relative
+// URLs, ONE React (`@modelcontextprotocol/ext-apps/react` must call the hooks of
+// the same copy that renders the View, wherever the installer put either).
+await buildView({ ...defineAppViteConfig({ appDir: resolve(root, "app") }), configFile: false });

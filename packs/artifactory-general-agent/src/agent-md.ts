@@ -1,13 +1,13 @@
 // The Forge's document: one General Agent draft, and the agent.md it writes.
 //
-// SHARED by the View (which renders these lines live beside the orrery) and the
+// SHARED by the View (which shows these lines live on the agent's profile) and the
 // server (which writes exactly these bytes in `save_agent`), so what the human
 // watched being written is what lands on disk — one serializer, never two.
 // It imports no package: the View bundle must not pull the SDK's YAML parser in.
 //
 // Field names and value sets mirror the canonical schema in
 // omp/packages/coding-agent/src/config/agent-manifest.ts. That parser REJECTS
-// unknown keys inside a known section, so the orrery only ever emits keys the
+// unknown keys inside a known section, so the profile only ever emits keys the
 // schema accepts, plus the two Dimension keys `@dimension/sdk/general-agent`
 // reads beside it (`name`/`description`, and dimension#1042's `avatar`). Every
 // other key the file carries travels as TEXT in `AgentDraft.extra` ("Everything
@@ -25,23 +25,6 @@ export type Habitat = "bound" | "home" | "ephemeral";
 export type MemoryBackend = "inherit" | "engram" | "local" | "hindsight" | "mnemopi" | "off";
 export type MemoryScope = "project" | "global";
 
-/** The vibr roster (`@fraym/vibr` AvatarId, minus `none`) — each one an avatar id. */
-export const VIBRS = [
-	"blob",
-	"nebula",
-	"quasar",
-	"lattice",
-	"aurora",
-	"liquid",
-	"cube",
-	"matrix",
-	"static",
-	"siri",
-	"koi",
-	"octo",
-] as const;
-export type Vibr = (typeof VIBRS)[number];
-
 export const PERSONALITIES: readonly Personality[] = ["default", "friendly", "pragmatic", "none"];
 export const PROMPT_MODES: readonly PromptMode[] = ["replace", "append"];
 export const THINKING_STEPS: readonly Thinking[] = ["inherit", "off", "minimal", "low", "medium", "high", "xhigh"];
@@ -55,7 +38,13 @@ export interface AgentDraft {
 	readonly key: string;
 	name: string;
 	description: string;
-	vibr: Vibr;
+	/** The avatar id it wears (`avatar:`) — a first-party vibr (`orb`, `nebula`,
+	 *  `mochi`, …). The roster is the HOST's (`@fraym/config` `AVATAR_IDS`), so a
+	 *  vibr added there is wearable here with no pack edit; the manifest parser
+	 *  checks the id's shape. `""` = the file declares none, and hosts paint their
+	 *  neutral agent face. A face with a skin or accent, or a contributed
+	 *  `plugin:` face, travels in `extra` as the author wrote it. */
+	vibr: string;
 	personality: Personality;
 	promptMode: PromptMode;
 	thinking: Thinking;
@@ -76,7 +65,7 @@ export interface AgentDraft {
 	lineage: string[];
 	/** The markdown body: the charter this agent runs by. */
 	charter: string;
-	/** Everything else: the YAML text of every manifest key the orrery does not
+	/** Everything else: the YAML text of every manifest key the profile does not
 	 *  draw — `title`, `engine.model`, `capabilities.control`, `routing`, `loop`,
 	 *  … — and of any drawn key whose value it cannot draw (an avatar with a
 	 *  skin, `thinkingLevel: auto`, a reach that lists workspaces). Written back
@@ -135,7 +124,7 @@ export function blankDraft(key: string): AgentDraft {
 		key,
 		name: "",
 		description: "",
-		vibr: "nebula",
+		vibr: "orb",
 		personality: "default",
 		promptMode: "replace",
 		thinking: "inherit",
@@ -168,11 +157,11 @@ export function applyProposal(draft: AgentDraft, proposal: AgentProposal): Agent
 	return next;
 }
 
-// ── the paths the orrery draws ──────────────────────────────────────────────
+// ── the paths the profile draws ─────────────────────────────────────────────
 
-/** The top-level keys the orrery draws. */
+/** The top-level keys the profile draws. */
 const DRAWN_TOP: readonly string[] = ["name", "description", "avatar", "specVersion", "extends"];
-/** The keys the orrery draws inside each section it draws. */
+/** The keys the profile draws inside each section it draws. */
 export const DRAWN_CHILDREN: Readonly<Record<string, readonly string[]>> = {
 	identity: ["personality", "prompt"],
 	engine: ["thinkingLevel"],
@@ -181,9 +170,9 @@ export const DRAWN_CHILDREN: Readonly<Record<string, readonly string[]>> = {
 	memory: ["backend"],
 	workspace: ["policy", "id", "reach"],
 };
-/** The drawn paths Everything else may NOT carry: the nameplate, the lineage and
- *  the charter tab own them outright. Every other drawn path yields to a line
- *  the author wrote in Everything else (and its orrery control says so). */
+/** The drawn paths Everything else may NOT carry: the profile's name,
+ *  description, lineage and charter own them outright. Every other drawn path
+ *  yields to a line the author wrote in Everything else (and its control says so). */
 const FIXED_PATHS: Readonly<Record<string, true>> = {
 	name: true,
 	description: true,
@@ -192,7 +181,7 @@ const FIXED_PATHS: Readonly<Record<string, true>> = {
 	"identity.prompt": true,
 };
 
-/** Whether `path` is a key the orrery draws — `true` for `avatar`, `gate.approval`, … */
+/** Whether `path` is a key the profile draws — `true` for `avatar`, `gate.approval`, … */
 export function isDrawnPath(path: string): boolean {
 	const [head, child] = path.split(".");
 	if (head === undefined) return false;
@@ -200,7 +189,7 @@ export function isDrawnPath(path: string): boolean {
 	return DRAWN_CHILDREN[head]?.includes(child) ?? false;
 }
 
-/** The orrery-drawn paths Everything else holds in this draft: each one's
+/** The profile-drawn paths Everything else holds in this draft: each one's
  *  control is set aside and says so, and the file keeps the author's line. */
 export function heldByExtra(draft: Pick<AgentDraft, "extra">): Set<string> {
 	const held = new Set<string>();
@@ -255,7 +244,7 @@ interface Unit {
 }
 
 /**
- * The agent.md as lines: what the orrery draws, merged with Everything else.
+ * The agent.md as lines: what the profile draws, merged with Everything else.
  *
  * `homeId` is the managed-workspace id of the agent's own home — the SDK's
  * `agentHomeWorkspaceId(name)`, which the SERVER supplies (the View cannot
@@ -270,14 +259,14 @@ export function manifestDocument(draft: AgentDraft, homeId?: string | null): Man
 	const byKey = new Map<string, Block>(parsed.blocks.map(block => [block.key, block]));
 	const held = extraPaths(parsed.blocks);
 	const fixed = [...held].filter(path => FIXED_PATHS[path] !== undefined);
-	for (const path of fixed) problems.push(`\`${path}\` is set on the nameplate, the lineage or the charter tab — remove it from Everything else.`);
+	for (const path of fixed) problems.push(`\`${path}\` is set on the profile itself (identity, lineage or charter) — remove it from Everything else.`);
 	const yields = (path: string) => held.has(path) && FIXED_PATHS[path] === undefined;
 
 	const line = (field: string, text: string): ManifestLine => ({ field, text });
 	const units: Unit[] = [
 		{ key: "name", lines: [line("name", `name: ${scalar(draft.name || "unnamed")}`)] },
 		{ key: "description", lines: [line("description", `description: ${scalar(draft.description || "…")}`)] },
-		{ key: "avatar", lines: [line("avatar", `avatar: ${draft.vibr}`)] },
+		{ key: "avatar", lines: draft.vibr === "" ? [] : [line("avatar", `avatar: ${scalar(draft.vibr)}`)] },
 		{ key: "specVersion", lines: [line("specVersion", "specVersion: 1")] },
 	];
 	if (draft.lineage.length > 0) units.push({ key: "extends", lines: [line("extends", `extends: ${list(draft.lineage)}`)] });
@@ -304,7 +293,7 @@ export function manifestDocument(draft: AgentDraft, homeId?: string | null): Man
 	// A memory-less agent has nothing to recall, so it never carries the grant.
 	const reachAll = draft.memory !== "off" && draft.memoryScope === "global";
 	// A `workspace:` section REQUIRES a policy (agent-manifest.ts): whenever Everything
-	// else writes any key of it, the orrery writes its own policy beside them.
+	// else writes any key of it, the profile writes its own policy beside them.
 	const extraWorkspace = (byKey.get("workspace")?.children?.length ?? 0) > 0 || (byKey.get("workspace")?.inline ?? "") !== "";
 	section(
 		"workspace",
@@ -327,8 +316,8 @@ export function manifestDocument(draft: AgentDraft, homeId?: string | null): Man
 	for (const unit of units) {
 		const block = byKey.get(unit.key);
 		if (unit.lines !== undefined) {
-			// A scalar the orrery always writes (`avatar`) or writes when set. A key the
-			// author wrote in Everything else takes its place; the nameplate's own never yields.
+			// A scalar the profile writes when set (`avatar`). A key the author wrote
+			// in Everything else takes its place; the name and description never yield.
 			if (block !== undefined && yields(unit.key)) {
 				used.add(unit.key);
 				pushAll(`extra.${unit.key}`, block.lines);
@@ -349,7 +338,7 @@ export function manifestDocument(draft: AgentDraft, homeId?: string | null): Man
 		used.add(unit.key);
 		if (kept.length === 0) pushAll(`extra.${unit.key}`, block.lines);
 		else if (block.children === null) {
-			problems.push(`\`${unit.key}\` is written inline in Everything else, so the orrery's own ${unit.key} settings cannot join it — write its keys indented, one per line.`);
+			problems.push(`\`${unit.key}\` is written inline in Everything else, so the profile's own ${unit.key} settings cannot join it — write its keys indented, one per line.`);
 			lines.push(line(unit.key, `${unit.key}:`));
 			for (const entry of kept) lines.push(...entry.lines);
 		} else {

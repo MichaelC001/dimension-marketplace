@@ -31,8 +31,6 @@ import {
 	type Thinking,
 	THINKING_STEPS,
 	toAgentMd,
-	VIBRS,
-	type Vibr,
 } from "./agent-md.js";
 import type { AgentListing, ListedAgent, SaveOutcome, SaveTarget, WritableTier } from "./contracts.js";
 import { type Block, parseExtra, reindent } from "./extra.js";
@@ -115,8 +113,8 @@ async function listDirs(dir: string): Promise<string[]> {
 /** Keys the parser accepts and never stores — a retired setting, dropped on rewrite. */
 const RETIRED_PATHS: Readonly<Record<string, true>> = { "memory.vault": true };
 
-/** The legacy flat spellings that fold into a key the orrery draws: a file that
- *  uses one keeps it (in Everything else), and the orrery's own control stands aside. */
+/** The legacy flat spellings that fold into a key the profile draws: a file that
+ *  uses one keeps it (in Everything else), and the profile's own control stands aside. */
 const FLAT_ALIASES: Readonly<Record<string, string>> = {
 	tools: "capabilities.tools",
 	thinkingLevel: "engine.thinkingLevel",
@@ -131,21 +129,24 @@ function frontmatterOf(content: string): string {
 	return end < 0 ? "" : content.slice(content.indexOf("\n") + 1, end);
 }
 
-function isVibr(id: string): id is Vibr {
-	return (VIBRS as readonly string[]).includes(id);
+/** A face the profile's picker can hold: a plain avatar id — no skin, no accent,
+ *  not a contributed `plugin:` face. Which ids exist is the host's roster, not
+ *  this server's: the manifest parser has already checked the id's shape. */
+function isPlainAvatar(avatar: NonNullable<GeneralAgentDecl["avatar"]>): boolean {
+	return !avatar.id.startsWith("plugin:") && avatar.skin === undefined && avatar.accent === undefined;
 }
 
 /**
- * The orrery-drawn paths this file holds in a form the orrery cannot draw: an
+ * The profile-drawn paths this file holds in a form the profile cannot draw: an
  * avatar with a skin, `thinkingLevel: auto`, an allowlist that is `"*"` or
  * `[]` (none), a reach that lists workspaces, a pinned workspace. Such a key is
  * not drawn and not dropped — its text moves to Everything else, and the
- * orrery's control for it stands aside.
+ * profile's control for it stands aside.
  */
 function heldPaths(decl: GeneralAgentDecl, raw: Raw, blocks: readonly Block[]): Set<string> {
 	const held = new Set<string>();
 	const { manifest, avatar } = decl;
-	if (avatar !== undefined && !(isVibr(avatar.id) && avatar.skin === undefined && avatar.accent === undefined)) held.add("avatar");
+	if (avatar !== undefined && !isPlainAvatar(avatar)) held.add("avatar");
 
 	const level = raw.thinkingLevel;
 	if (level !== undefined && (level === "inherit" || !(THINKING_STEPS as readonly string[]).includes(String(level)))) held.add("engine.thinkingLevel");
@@ -153,7 +154,7 @@ function heldPaths(decl: GeneralAgentDecl, raw: Raw, blocks: readonly Block[]): 
 	const backend = manifest.memory?.backend;
 	if (backend !== undefined && (backend === "inherit" || !(MEMORY_BACKENDS as readonly string[]).includes(backend))) held.add("memory.backend");
 
-	// `[]` means NONE, and the orrery writes an empty list as an absent key (ALL).
+	// `[]` means NONE, and the profile writes an empty list as an absent key (ALL).
 	for (const key of ["tools", "skills", "mcp"] as const) {
 		const value = manifest.capabilities?.[key];
 		if (value === "*" || (Array.isArray(value) && value.length === 0)) held.add(`capabilities.${key}`);
@@ -210,10 +211,10 @@ function sectionChildren(block: Block): { key: string; lines: string[] }[] {
 
 /**
  * The Forge draft for a parsed agent. NOTHING in the file is unshown: every key
- * the orrery does not draw, and every drawn key it cannot draw faithfully,
+ * the profile does not draw, and every drawn key it cannot draw faithfully,
  * lands in `draft.extra` as the text the author wrote, so `toAgentMd(draft)`
- * re-parses to the same manifest (identity.prompt made explicit, an absent
- * avatar filled with the draft's vibr — both additive).
+ * re-parses to the same manifest (identity.prompt made explicit — additive; an
+ * absent avatar stays absent).
  */
 export function draftFromFile(decl: GeneralAgentDecl, content: string, key: string): AgentDraft {
 	const manifest = decl.manifest;
@@ -248,7 +249,7 @@ export function draftFromFile(decl: GeneralAgentDecl, content: string, key: stri
 		key,
 		name: decl.name,
 		description: decl.description,
-		vibr: decl.avatar !== undefined && isVibr(decl.avatar.id) ? decl.avatar.id : "nebula",
+		vibr: decl.avatar !== undefined && isPlainAvatar(decl.avatar) ? decl.avatar.id : "",
 		personality: manifest.identity?.personality ?? "default",
 		promptMode: manifest.identity?.prompt ?? "replace",
 		thinking: drawnOr<Thinking>("engine.thinkingLevel", raw.thinkingLevel as Thinking | undefined, "inherit"),

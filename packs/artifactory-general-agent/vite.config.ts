@@ -1,13 +1,8 @@
-import react from "@vitejs/plugin-react";
-import { defineConfig } from "vite";
+// The General Agents View builds to `app/dist/` in the App kit's shape (the
+// same config every Dimension App's View uses: React, Tailwind over
+// `@fraym/ui`, relative URLs, one React). `bun run dev` serves it on its own —
+// preview mode, seeded agents, nothing written (`app/view/preview.ts`).
+import { defineAppViteConfig } from "@dimension/mcp-app-kit/vite";
 
-// Dev server for the Forge View on its own (preview mode, seeded agents).
-// The shipped bundle is built by scripts/build.mjs with the same root.
-export default defineConfig({
-	root: "app/view",
-	base: "./",
-	plugins: [react()],
-	resolve: { dedupe: ["react", "react-dom"] },
-	server: { port: 5197, strictPort: true },
-	build: { outDir: "../dist", emptyOutDir: true, target: "es2022" },
-});
+const config = defineAppViteConfig({ appDir: `${__dirname}/app` });
+export default { ...config, server: { port: Number(process.env.FORGE_PREVIEW_PORT ?? 5197), strictPort: true } };

@@ -1,0 +1,1 @@
+function e(e,t,n){return!e||typeof window>`u`?n:window.getComputedStyle(e).getPropertyValue(t).trim()||n}function t(){return typeof window>`u`||!window.matchMedia?!1:window.matchMedia(`(prefers-reduced-motion: reduce)`).matches}export{e as n,t};

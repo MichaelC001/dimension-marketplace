@@ -74,7 +74,6 @@
 					"workspace": {
 						"surfaces": [
 							"session",
-							"autonomy",
 							"models"
 						],
 						"start": "session",

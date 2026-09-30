@@ -119,20 +119,6 @@ function grantPathsInDocument(document) {
 }
 
 // src/agent-md.ts
-var VIBRS = [
-  "blob",
-  "nebula",
-  "quasar",
-  "lattice",
-  "aurora",
-  "liquid",
-  "cube",
-  "matrix",
-  "static",
-  "siri",
-  "koi",
-  "octo"
-];
 var PERSONALITIES = ["default", "friendly", "pragmatic", "none"];
 var PROMPT_MODES = ["replace", "append"];
 var THINKING_STEPS = ["inherit", "off", "minimal", "low", "medium", "high", "xhigh"];
@@ -181,13 +167,13 @@ function manifestDocument(draft, homeId) {
   const byKey = new Map(parsed.blocks.map((block) => [block.key, block]));
   const held = extraPaths(parsed.blocks);
   const fixed = [...held].filter((path) => FIXED_PATHS[path] !== void 0);
-  for (const path of fixed) problems.push(`\`${path}\` is set on the nameplate, the lineage or the charter tab \u2014 remove it from Everything else.`);
+  for (const path of fixed) problems.push(`\`${path}\` is set on the profile itself (identity, lineage or charter) \u2014 remove it from Everything else.`);
   const yields = (path) => held.has(path) && FIXED_PATHS[path] === void 0;
   const line = (field, text) => ({ field, text });
   const units = [
     { key: "name", lines: [line("name", `name: ${scalar(draft.name || "unnamed")}`)] },
     { key: "description", lines: [line("description", `description: ${scalar(draft.description || "\u2026")}`)] },
-    { key: "avatar", lines: [line("avatar", `avatar: ${draft.vibr}`)] },
+    { key: "avatar", lines: draft.vibr === "" ? [] : [line("avatar", `avatar: ${scalar(draft.vibr)}`)] },
     { key: "specVersion", lines: [line("specVersion", "specVersion: 1")] }
   ];
   if (draft.lineage.length > 0) units.push({ key: "extends", lines: [line("extends", `extends: ${list(draft.lineage)}`)] });
@@ -245,7 +231,7 @@ function manifestDocument(draft, homeId) {
     used.add(unit.key);
     if (kept.length === 0) pushAll(`extra.${unit.key}`, block.lines);
     else if (block.children === null) {
-      problems.push(`\`${unit.key}\` is written inline in Everything else, so the orrery's own ${unit.key} settings cannot join it \u2014 write its keys indented, one per line.`);
+      problems.push(`\`${unit.key}\` is written inline in Everything else, so the profile's own ${unit.key} settings cannot join it \u2014 write its keys indented, one per line.`);
       lines.push(line(unit.key, `${unit.key}:`));
       for (const entry2 of kept) lines.push(...entry2.lines);
     } else {
@@ -7636,13 +7622,13 @@ function frontmatterOf(content) {
   const end = content.indexOf("\n---", 3);
   return end < 0 ? "" : content.slice(content.indexOf("\n") + 1, end);
 }
-function isVibr(id) {
-  return VIBRS.includes(id);
+function isPlainAvatar(avatar) {
+  return !avatar.id.startsWith("plugin:") && avatar.skin === void 0 && avatar.accent === void 0;
 }
 function heldPaths(decl, raw, blocks) {
   const held = /* @__PURE__ */ new Set();
   const { manifest, avatar } = decl;
-  if (avatar !== void 0 && !(isVibr(avatar.id) && avatar.skin === void 0 && avatar.accent === void 0)) held.add("avatar");
+  if (avatar !== void 0 && !isPlainAvatar(avatar)) held.add("avatar");
   const level = raw.thinkingLevel;
   if (level !== void 0 && (level === "inherit" || !THINKING_STEPS.includes(String(level)))) held.add("engine.thinkingLevel");
   const backend = manifest.memory?.backend;
@@ -7713,7 +7699,7 @@ function draftFromFile(decl, content, key) {
     key,
     name: decl.name,
     description: decl.description,
-    vibr: decl.avatar !== void 0 && isVibr(decl.avatar.id) ? decl.avatar.id : "nebula",
+    vibr: decl.avatar !== void 0 && isPlainAvatar(decl.avatar) ? decl.avatar.id : "",
     personality: manifest.identity?.personality ?? "default",
     promptMode: manifest.identity?.prompt ?? "replace",
     thinking: drawnOr("engine.thinkingLevel", raw.thinkingLevel, "inherit"),
@@ -8132,7 +8118,7 @@ var draftSchema = z.object({
   key: z.string().min(1).max(200),
   name: z.string().max(64),
   description: z.string().max(400),
-  vibr: z.enum(VIBRS),
+  vibr: z.string().max(80),
   personality: z.enum(PERSONALITIES),
   promptMode: z.enum(PROMPT_MODES),
   thinking: z.enum(THINKING_STEPS),
@@ -8151,7 +8137,7 @@ var proposalShape = {
   name: agentName.describe("the agent's name: lowercase letters, digits, dashes"),
   description: z.string().max(400).optional().describe("one line: what it is for"),
   charter: z.string().max(4e4).optional().describe("the instructions it runs by (the agent.md body), markdown"),
-  vibr: z.enum(VIBRS).optional().describe("the body it wears"),
+  vibr: z.string().max(80).optional().describe("the avatar id it wears \u2014 a vibr such as orb, nebula or mochi"),
   skills: names.optional().describe("skill allowlist; omit to keep every skill"),
   memory: z.enum(MEMORY_BACKENDS).optional(),
   lineage: z.array(agentName).max(16).optional().describe("agents whose brain it extends"),
@@ -8159,7 +8145,7 @@ var proposalShape = {
   personality: z.enum(PERSONALITIES).optional(),
   habitat: z.enum(HABITATS).optional().describe("bound: where opened; home: its own workspace; ephemeral: a scratch worktree"),
   extra: z.string().max(2e4).optional().describe(
-    "YAML for manifest keys the orrery does not draw \u2014 title, defaultListed, engine.model/profile/roles, routing, loop, memory.namespace, capabilities.autoloadSkills/slashCommands/ignore, subagents.maxDepth, \u2026 One `key: value` per line, sections indented two spaces. It is laid over the draft's own, key by key. Keys that GRANT \u2014 capabilities.tools/mcp/plugins/control/optIn, subagents.allowed, gate.*, workspace.*, harness, allowedHarnesses \u2014 are refused: only the user sets those."
+    "YAML for manifest keys the profile does not draw \u2014 title, defaultListed, engine.model/profile/roles, routing, loop, memory.namespace, capabilities.autoloadSkills/slashCommands/ignore, subagents.maxDepth, \u2026 One `key: value` per line, sections indented two spaces. It is laid over the draft's own, key by key. Keys that GRANT \u2014 capabilities.tools/mcp/plugins/control/optIn, subagents.allowed, gate.*, workspace.*, harness, allowedHarnesses \u2014 are refused: only the user sets those."
   )
 };
 function json(structuredContent, text) {
@@ -8187,7 +8173,7 @@ async function createForgeServer(options = {}) {
   const fallback2 = env.DIMENSION_FORGE_WORKSPACE !== void 0 && isDirectory2(env.DIMENSION_FORGE_WORKSPACE) ? resolve(env.DIMENSION_FORGE_WORKSPACE) : null;
   const workspaces = /* @__PURE__ */ new Map();
   const rootsOf = (extra) => ({ workspace: workspaces.get(sessionOf(extra)) ?? fallback2, home });
-  const server2 = new McpServer({ name: "dimension-community-general-agent", version: "0.2.1" });
+  const server2 = new McpServer({ name: "dimension-community-general-agent", version: "0.3.0" });
   const viewDir = options.viewDir ?? fileURLToPath(new URL("./dist/", import.meta.url));
   const html = await readFile4(join4(viewDir, "index.html"), "utf8");
   const metadata = { ui: { prefersBorder: false } };
@@ -8208,7 +8194,7 @@ async function createForgeServer(options = {}) {
     "forge_open",
     {
       title: "Forge",
-      description: `Open the Forge in the artifact view: every General Agent \u2014 the ones installed packs ship, the user's own, and the workspace's \u2014 as a constellation the user can open, reshape and forge, or one agent, by name. \`workspace\` is optional: the absolute path of the directory you are working in, which adds that project's agents (\`<workspace>/${WRITE_DIR}/agents/<name>/agent.md\`); without it the Forge still lists pack and user agents and creates new ones in the user's own agents. It writes nothing itself \u2014 the user forges.`,
+      description: `Open the General Agents page: every General Agent \u2014 the ones installed packs ship, the user's own, and the workspace's \u2014 as cards the user can open, edit and create from, or one agent's profile, by name. \`workspace\` is optional: the absolute path of the directory you are working in, which adds that project's agents (\`<workspace>/${WRITE_DIR}/agents/<name>/agent.md\`); without it the page still lists pack and user agents and creates new ones in the user's own agents. It writes nothing itself \u2014 the user saves.`,
       inputSchema: {
         agent: agentName.optional().describe("open this agent directly"),
         workspace: z.string().min(1).max(1024).optional().describe("absolute path of your working directory")
@@ -8226,7 +8212,7 @@ async function createForgeServer(options = {}) {
       const found = agent === void 0 ? void 0 : listing.agents.find((candidate) => candidate.name === agent);
       const opened = { view: "forge", agent: found?.name ?? null, workspace: roots.workspace };
       const where = roots.workspace === null ? "no workspace (pack and user agents)" : roots.workspace;
-      const text = agent !== void 0 && found === void 0 ? `No General Agent named "${agent}" in ${where}; the Forge opened on the constellation (${listing.agents.length} agents).` : found !== void 0 ? `The Forge opened on ${found.name} (${found.source}, ${found.editable ? "editable" : "read-only"}) in ${where}.` : `The Forge opened on ${listing.agents.length} General Agents in ${where}.`;
+      const text = agent !== void 0 && found === void 0 ? `No General Agent named "${agent}" in ${where}; the page opened on every agent (${listing.agents.length}).` : found !== void 0 ? `The Forge opened on ${found.name} (${found.source}, ${found.editable ? "editable" : "read-only"}) in ${where}.` : `The Forge opened on ${listing.agents.length} General Agents in ${where}.`;
       return json(opened, text);
     }
   );
@@ -8235,7 +8221,7 @@ async function createForgeServer(options = {}) {
     "forge_propose",
     {
       title: "Forge proposal",
-      description: "Propose a General Agent draft to the user in the Forge \u2014 talk-to-build. Name it and give any of: description, charter, vibr, skills, memory, lineage, thinking, personality, habitat, extra (YAML for the manifest keys the orrery does not draw). The draft appears in the Forge marked as proposed by the workshop; the user accepts it, changes it, and forges it. Nothing is written by this call. A proposal cannot set anything that grants \u2014 the agent's tools, approval gate, workspace, control lanes, plugins, MCP servers, delegation or harness: only the user sets those, in the Forge.",
+      description: "Propose a General Agent draft to the user on the General Agents page \u2014 talk-to-build. Name it and give any of: description, charter, vibr, skills, memory, lineage, thinking, personality, habitat, extra (YAML for the manifest keys the profile does not draw). The draft appears on the agent's profile marked as proposed by the Machinist; the user accepts it, changes it, and saves it. Nothing is written by this call. A proposal cannot set anything that grants \u2014 the agent's tools, approval gate, workspace, control lanes, plugins, MCP servers, delegation or harness: only the user sets those, on the profile.",
       inputSchema: proposalShape,
       _meta: { ui: { resourceUri: FORGE_VIEW_URI } }
     },
@@ -8261,7 +8247,7 @@ async function createForgeServer(options = {}) {
       const fields = Object.keys(proposal).filter((field) => field !== "name");
       return json(
         proposed,
-        `Proposed ${proposal.name} to the Forge${fields.length > 0 ? ` (${fields.join(", ")})` : ""}. The user accepts or discards it there; nothing is written until they forge it. Anything that grants \u2014 tools, the approval gate, workspace, control lanes \u2014 is theirs to set.`
+        `Proposed ${proposal.name} on the General Agents page${fields.length > 0 ? ` (${fields.join(", ")})` : ""}. The user accepts or discards it there; nothing is written until they save it. Anything that grants \u2014 tools, the approval gate, workspace, control lanes \u2014 is theirs to set.`
       );
     }
   );
@@ -8275,7 +8261,7 @@ async function createForgeServer(options = {}) {
   );
   server2.registerTool(
     "list_parts",
-    { description: "The skills, MCP servers, tool names and memory backends the tray can offer, with where each list was read and what could not be.", inputSchema: {}, annotations: READ_ONLY, _meta: APP_ONLY },
+    { description: "The skills, MCP servers, tool names and memory backends the profile can offer, with where each list was read and what could not be.", inputSchema: {}, annotations: READ_ONLY, _meta: APP_ONLY },
     async (_args, extra) => {
       const roots = rootsOf(extra);
       const { agents } = await listAgents(roots);
