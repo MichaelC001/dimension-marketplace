@@ -4,6 +4,7 @@
 // mirrored here field for field, and only the fields the page reads.
 import type { ComponentProps } from "react";
 import type { PresenceSurface } from "@fraym/ui";
+import type { VoiceAssigner, VoiceSampler } from "./voice";
 
 type PresenceProps = ComponentProps<typeof PresenceSurface>;
 export type AvatarId = NonNullable<PresenceProps["avatar"]>;
@@ -41,6 +42,9 @@ export interface GeneralAgentsPageProps {
 	readonly workspace?: { readonly workspaceId: string; readonly path: string; readonly displayName?: string } | null;
 	/** The shell's one navigation channel (`dock.open` reveals the Machinist). */
 	readonly onIntent?: (intent: { readonly t: "dock.open"; readonly tab?: string }) => void;
+	/** The doors the voice lane lends this seat: a sample to hear and a write for the agent's voice.
+	 *  Each is absent on a build that does not have it (the section then says so). */
+	readonly voice?: { readonly sampler?: VoiceSampler; readonly assigner?: VoiceAssigner };
 }
 
 export type CapabilityCount = number | "all";

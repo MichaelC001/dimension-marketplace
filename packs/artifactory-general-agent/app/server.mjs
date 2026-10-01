@@ -124,6 +124,7 @@ var APPROVAL_SETTINGS = ["always-ask", "write", "yolo", "inherit"];
 var HABITATS = ["bound", "home", "ephemeral"];
 var MEMORY_BACKENDS = ["inherit", "engram", "local", "hindsight", "mnemopi", "off"];
 var MEMORY_SCOPES = ["project", "global"];
+var VOICE_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 var NAME_RE = /^[a-z0-9][a-z0-9-]{1,63}$/;
 var DRAWN_CHILDREN = {
   identity: ["personality", "prompt"],
@@ -143,6 +144,7 @@ var FIXED_PATHS = {
 function draftProblems(draft) {
   const problems = [];
   if (!NAME_RE.test(draft.name)) problems.push("Name it: 2\u201364 lowercase letters, digits or dashes.");
+  if (draft.voice !== "" && !VOICE_NAME_RE.test(draft.voice)) problems.push("A voice is a profile name: lowercase letters, digits and single dashes.");
   if (draft.description.trim() === "") problems.push("Give it one line that says what it is for.");
   if (draft.charter.trim() === "") problems.push("Write its charter: the instructions it runs by.");
   problems.push(...manifestDocument(draft).problems);
@@ -150,8 +152,11 @@ function draftProblems(draft) {
 }
 var PLAIN_SCALAR = /^[A-Za-z0-9][A-Za-z0-9 _./@:+-]*$/;
 var YAML_WORDS = /^(true|false|yes|no|on|off|null|~)$/i;
+function readsAsNumber(value) {
+  return value.trim() !== "" && !Number.isNaN(Number(value));
+}
 function scalar(value) {
-  if (PLAIN_SCALAR.test(value) && !YAML_WORDS.test(value) && !/:\s/.test(value) && !/\s$/.test(value)) return value;
+  if (PLAIN_SCALAR.test(value) && !YAML_WORDS.test(value) && !readsAsNumber(value) && !/:\s/.test(value) && !/\s$/.test(value)) return value;
   return JSON.stringify(value);
 }
 function list(values) {
@@ -172,6 +177,7 @@ function manifestDocument(draft, homeId) {
     { key: "name", lines: [line("name", `name: ${scalar(draft.name || "unnamed")}`)] },
     { key: "description", lines: [line("description", `description: ${scalar(draft.description || "\u2026")}`)] },
     { key: "avatar", lines: draft.vibr === "" ? [] : [line("avatar", `avatar: ${scalar(draft.vibr)}`)] },
+    { key: "voice", lines: draft.voice === "" ? [] : [line("voice", `voice: ${scalar(draft.voice)}`)] },
     { key: "specVersion", lines: [line("specVersion", "specVersion: 1")] }
   ];
   if (draft.lineage.length > 0) units.push({ key: "extends", lines: [line("extends", `extends: ${list(draft.lineage)}`)] });
@@ -7572,6 +7578,11 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, join, relative } from "node:path";
 import { parse as parseYaml2, stringify as stringifyYaml } from "yaml";
+
+// src/guards.ts
+var isRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+
+// src/store.ts
 var WRITE_DIR = process.env.PI_CONFIG_DIR?.trim() || ".inso";
 var LEGACY_DIR = ".omp";
 function pathsOf(home) {
@@ -7631,6 +7642,7 @@ function heldPaths(decl, raw, blocks) {
   const held = /* @__PURE__ */ new Set();
   const { manifest, avatar } = decl;
   if (avatar !== void 0 && !isPlainAvatar(avatar)) held.add("avatar");
+  if (raw.voice !== void 0 && !(typeof raw.voice === "string" && VOICE_NAME_RE.test(raw.voice))) held.add("voice");
   const level = raw.thinkingLevel;
   if (level !== void 0 && (level === "inherit" || !THINKING_STEPS.includes(String(level)))) held.add("engine.thinkingLevel");
   const backend = manifest.memory?.backend;
@@ -7660,8 +7672,9 @@ function heldPaths(decl, raw, blocks) {
 }
 function rawSettings(frontmatter) {
   const parsed = parseYaml2(frontmatter);
-  const engine = typeof parsed === "object" && parsed !== null ? parsed.engine : void 0;
-  return { thinkingLevel: typeof engine === "object" && engine !== null ? engine.thinkingLevel : void 0 };
+  if (!isRecord(parsed)) return { thinkingLevel: void 0, voice: void 0 };
+  const engine = parsed.engine;
+  return { thinkingLevel: isRecord(engine) ? engine.thinkingLevel : void 0, voice: parsed.voice };
 }
 function sectionChildren(block) {
   if (block.children !== null) return block.children.map((child) => ({ key: child.key, lines: reindent(child.lines, block.childIndent, 2) }));
@@ -7684,6 +7697,8 @@ function draftFromFile(decl, content, key) {
     const drawn = DRAWN_CHILDREN[block.key];
     if (block.key === "avatar") {
       if (held.has("avatar")) pieces.push(...block.lines);
+    } else if (block.key === "voice") {
+      if (held.has("voice")) pieces.push(...block.lines);
     } else if (drawn !== void 0) {
       const kept = sectionChildren(block).filter((child) => {
         const path = `${block.key}.${child.key}`;
@@ -7704,6 +7719,7 @@ function draftFromFile(decl, content, key) {
     name: decl.name,
     description: decl.description,
     vibr: decl.avatar !== void 0 && isPlainAvatar(decl.avatar) ? decl.avatar.id : "",
+    voice: typeof raw.voice === "string" && !held.has("voice") ? raw.voice : "",
     personality: manifest.identity?.personality ?? "default",
     promptMode: manifest.identity?.prompt ?? "replace",
     thinking: drawnOr("engine.thinkingLevel", raw.thinkingLevel, "inherit"),
@@ -8115,6 +8131,7 @@ var draftSchema = z.object({
   name: z.string().max(64),
   description: z.string().max(400),
   vibr: z.string().max(120),
+  voice: z.string().max(120).default(""),
   personality: z.enum(PERSONALITIES),
   promptMode: z.enum(PROMPT_MODES),
   thinking: z.enum(THINKING_STEPS),
@@ -8136,6 +8153,7 @@ var proposalShape = {
   description: z.string().max(400).optional().describe("one line: what it is for"),
   charter: z.string().max(4e4).optional().describe("the instructions it runs by (the agent.md body), markdown"),
   vibr: z.string().max(120).optional().describe("the avatar id it wears \u2014 a vibr such as orb, nebula or mochi"),
+  voice: z.string().max(120).optional().describe("the voice profile it speaks with, by name (lowercase letters, digits, dashes); the user's own choice for it outranks this"),
   skills: names.optional().describe("skill allowlist; omit to keep every skill"),
   memory: z.enum(MEMORY_BACKENDS).optional(),
   thinking: z.enum(THINKING_STEPS).optional(),
@@ -8220,7 +8238,7 @@ function createForgeServer(options = {}) {
     "forge_propose",
     {
       title: "General Agent proposal",
-      description: "Propose a General Agent draft to the user on the General Agents page, talk-to-build. Name it and give any of: description, charter, vibr, skills, memory, thinking, personality, extra (YAML for the manifest keys the profile does not draw). The page of the workspace you bound with forge_open shows it on that agent's profile as proposed by the Machinist; the user accepts it, changes it, and saves it. Nothing is written by this call. A newer proposal for the same agent in the same workspace replaces the earlier one. A proposal cannot set anything that grants (the agent's tools, approval gate, workspace or where it works, the agents it extends, control lanes, plugins, MCP servers, delegation or harness): only the user sets those, on the profile.",
+      description: "Propose a General Agent draft to the user on the General Agents page, talk-to-build. Name it and give any of: description, charter, vibr, voice, skills, memory, thinking, personality, extra (YAML for the manifest keys the profile does not draw). The page of the workspace you bound with forge_open shows it on that agent's profile as proposed by the Machinist; the user accepts it, changes it, and saves it. Nothing is written by this call. A newer proposal for the same agent in the same workspace replaces the earlier one. A proposal cannot set anything that grants (the agent's tools, approval gate, workspace or where it works, the agents it extends, control lanes, plugins, MCP servers, delegation or harness): only the user sets those, on the profile.",
       inputSchema: proposalShape,
       _meta: MODEL_ONLY
     },

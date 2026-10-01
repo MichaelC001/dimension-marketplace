@@ -9,6 +9,7 @@
 import { type AgentDraft, blankDraft, draftProblems } from "../src/agent-md";
 import type { AgentHome, AgentListing, AgentSource, InstructionFile, ListedAgent, StoredProposal } from "../src/contracts";
 import type { AgentFact, CatalogFact, ModelFact, PageStore, SessionRow, UsageFact } from "../page/types";
+import { type Observable, observable } from "./observable";
 
 const HOME = "~/.inso";
 const PROJECT = "~/code/storefront";
@@ -28,6 +29,7 @@ const SEEDS: readonly Seed[] = [
 			name: "release-herald",
 			description: "Writes the changelog and the release notes in my voice, from what actually merged",
 			vibr: "orb",
+			voice: "calm",
 			habitat: "home",
 			memory: "engram",
 			thinking: "medium",
@@ -49,6 +51,7 @@ const SEEDS: readonly Seed[] = [
 			name: "cmo",
 			description: "Runs the marketing desk: positioning, launches and the weekly growth review",
 			vibr: "",
+			voice: "bright",
 			personality: "pragmatic",
 			memory: "engram",
 			approval: "always-ask",
@@ -298,29 +301,14 @@ function sessions(now: number): SessionRow[] {
 	];
 }
 
-function observable<T>(initial: T | undefined) {
-	let value = initial;
-	const listeners = new Set<() => void>();
-	return {
-		getSnapshot: () => value,
-		subscribe(listener: () => void) {
-			listeners.add(listener);
-			return () => void listeners.delete(listener);
-		},
-		set(next: T | undefined) {
-			value = next;
-			for (const listener of listeners) listener();
-		},
-	};
-}
-
-export function fixtureStore(params: URLSearchParams): PageStore {
+/** `voiceCells`: the voice lane's facts (`./voice-fixture`), merged beside the host's own. */
+export function fixtureStore(params: URLSearchParams, voiceCells: ReadonlyMap<string, Observable<unknown>>): PageStore {
 	const state = params.get("state") ?? "home";
 	let seeds: Seed[] = state === "empty" ? [] : [...SEEDS];
 	const now = Date.now();
 	const facts = observable<readonly AgentFact[]>(state === "loading" ? undefined : seeds.map(factOf));
-	const cells = new Map<string, ReturnType<typeof observable<unknown>>>([
-		["agents/list", facts as ReturnType<typeof observable<unknown>>],
+	const cells = new Map<string, Observable<unknown>>([
+		["agents/list", facts as Observable<unknown>],
 		["sessions/list", observable<unknown>(state === "empty" ? [] : sessions(now))],
 		[
 			"agents/usage",
@@ -389,7 +377,7 @@ export function fixtureStore(params: URLSearchParams): PageStore {
 		}
 	};
 	return {
-		watch: <T>(key: string) => (cells.get(key) ?? observable<unknown>(undefined)) as unknown as ReturnType<PageStore["watch"]> & { getSnapshot(): T | undefined },
+		watch: <T>(key: string) => (voiceCells.get(key) ?? cells.get(key) ?? observable<unknown>(undefined)) as unknown as ReturnType<PageStore["watch"]> & { getSnapshot(): T | undefined },
 		...(params.get("call") === "off"
 			? {}
 			: {

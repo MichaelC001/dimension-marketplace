@@ -46,6 +46,11 @@ export interface AgentDraft {
 	 *  neutral agent face. A face with a skin or accent travels in `extra` as the
 	 *  author wrote it. */
 	vibr: string;
+	/** The voice profile it speaks with (`voice:`): only a NAME, whose existence is
+	 *  the engine's call at resolve time (an agent never fails to load for a missing
+	 *  pack). Its own choice, the least specific one: a user or project setting
+	 *  outranks it. `""` = the file declares none. */
+	voice: string;
 	personality: Personality;
 	promptMode: PromptMode;
 	thinking: Thinking;
@@ -91,6 +96,7 @@ export const PROPOSABLE_FIELDS = [
 	"description",
 	"charter",
 	"vibr",
+	"voice",
 	"skills",
 	"memory",
 	"thinking",
@@ -100,6 +106,10 @@ export const PROPOSABLE_FIELDS = [
 export type ProposableField = (typeof PROPOSABLE_FIELDS)[number];
 /** A workshop proposal: a name plus any subset of the proposable fields. */
 export type AgentProposal = { name: string } & Partial<Pick<AgentDraft, ProposableField>>;
+
+/** A voice profile name: kebab-case, the stem of its `<name>.yml` and the value of `voice:`. Mirrors the
+ *  SDK's `VOICE_PROFILE_NAME`; a manifest that fails it does not load, so a draft is refused before a write. */
+export const VOICE_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 export const NAME_RE = /^[a-z0-9][a-z0-9-]{1,63}$/;
 
@@ -128,6 +138,7 @@ export function blankDraft(key: string): AgentDraft {
 		name: "",
 		description: "",
 		vibr: "orb",
+		voice: "",
 		personality: "default",
 		promptMode: "replace",
 		thinking: "inherit",
@@ -164,7 +175,7 @@ export function applyProposal(draft: AgentDraft, proposal: AgentProposal): Agent
 // ── the paths the profile draws ─────────────────────────────────────────────
 
 /** The top-level keys the profile draws. */
-const DRAWN_TOP: readonly string[] = ["name", "description", "avatar", "specVersion", "extends"];
+const DRAWN_TOP: readonly string[] = ["name", "description", "avatar", "voice", "specVersion", "extends"];
 /** The keys the profile draws inside each section it draws. */
 export const DRAWN_CHILDREN: Readonly<Record<string, readonly string[]>> = {
 	identity: ["personality", "prompt"],
@@ -205,6 +216,7 @@ export function heldByExtra(draft: Pick<AgentDraft, "extra">): Set<string> {
 export function draftProblems(draft: AgentDraft): string[] {
 	const problems: string[] = [];
 	if (!NAME_RE.test(draft.name)) problems.push("Name it: 2–64 lowercase letters, digits or dashes.");
+	if (draft.voice !== "" && !VOICE_NAME_RE.test(draft.voice)) problems.push("A voice is a profile name: lowercase letters, digits and single dashes.");
 	if (draft.description.trim() === "") problems.push("Give it one line that says what it is for.");
 	if (draft.charter.trim() === "") problems.push("Write its charter: the instructions it runs by.");
 	problems.push(...manifestDocument(draft).problems);
@@ -216,8 +228,15 @@ export function draftProblems(draft: AgentDraft): string[] {
 const PLAIN_SCALAR = /^[A-Za-z0-9][A-Za-z0-9 _./@:+-]*$/;
 const YAML_WORDS = /^(true|false|yes|no|on|off|null|~)$/i;
 
+/** Whether YAML would read this plain text as a number (`2026`, `1e3`, `0x10`, `0o7`) and so not hand back
+ *  the string that was written. A profile name, an agent name or a skill can be all digits. The SDK reads
+ *  with `yaml` (1.2), so `1_000` stays a string and needs no quoting. */
+function readsAsNumber(value: string): boolean {
+	return value.trim() !== "" && !Number.isNaN(Number(value));
+}
+
 function scalar(value: string): string {
-	if (PLAIN_SCALAR.test(value) && !YAML_WORDS.test(value) && !/:\s/.test(value) && !/\s$/.test(value)) return value;
+	if (PLAIN_SCALAR.test(value) && !YAML_WORDS.test(value) && !readsAsNumber(value) && !/:\s/.test(value) && !/\s$/.test(value)) return value;
 	return JSON.stringify(value);
 }
 
@@ -271,6 +290,7 @@ export function manifestDocument(draft: AgentDraft, homeId?: string | null): Man
 		{ key: "name", lines: [line("name", `name: ${scalar(draft.name || "unnamed")}`)] },
 		{ key: "description", lines: [line("description", `description: ${scalar(draft.description || "…")}`)] },
 		{ key: "avatar", lines: draft.vibr === "" ? [] : [line("avatar", `avatar: ${scalar(draft.vibr)}`)] },
+		{ key: "voice", lines: draft.voice === "" ? [] : [line("voice", `voice: ${scalar(draft.voice)}`)] },
 		{ key: "specVersion", lines: [line("specVersion", "specVersion: 1")] },
 	];
 	if (draft.lineage.length > 0) units.push({ key: "extends", lines: [line("extends", `extends: ${list(draft.lineage)}`)] });

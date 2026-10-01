@@ -84,6 +84,7 @@ const draftSchema = z.object({
 	name: z.string().max(64),
 	description: z.string().max(400),
 	vibr: z.string().max(120),
+	voice: z.string().max(120).default(""),
 	personality: z.enum(PERSONALITIES),
 	promptMode: z.enum(PROMPT_MODES),
 	thinking: z.enum(THINKING_STEPS),
@@ -109,6 +110,7 @@ const proposalShape = {
 	description: z.string().max(400).optional().describe("one line: what it is for"),
 	charter: z.string().max(40_000).optional().describe("the instructions it runs by (the agent.md body), markdown"),
 	vibr: z.string().max(120).optional().describe("the avatar id it wears — a vibr such as orb, nebula or mochi"),
+	voice: z.string().max(120).optional().describe("the voice profile it speaks with, by name (lowercase letters, digits, dashes); the user's own choice for it outranks this"),
 	skills: names.optional().describe("skill allowlist; omit to keep every skill"),
 	memory: z.enum(MEMORY_BACKENDS).optional(),
 	thinking: z.enum(THINKING_STEPS).optional(),
@@ -231,7 +233,7 @@ export function createForgeServer(options: ForgeServerOptions = {}): McpServer {
 		{
 			title: "General Agent proposal",
 			description:
-				"Propose a General Agent draft to the user on the General Agents page, talk-to-build. Name it and give any of: description, charter, vibr, skills, memory, thinking, personality, extra (YAML for the manifest keys the profile does not draw). The page of the workspace you bound with forge_open shows it on that agent's profile as proposed by the Machinist; the user accepts it, changes it, and saves it. Nothing is written by this call. A newer proposal for the same agent in the same workspace replaces the earlier one. A proposal cannot set anything that grants (the agent's tools, approval gate, workspace or where it works, the agents it extends, control lanes, plugins, MCP servers, delegation or harness): only the user sets those, on the profile.",
+				"Propose a General Agent draft to the user on the General Agents page, talk-to-build. Name it and give any of: description, charter, vibr, voice, skills, memory, thinking, personality, extra (YAML for the manifest keys the profile does not draw). The page of the workspace you bound with forge_open shows it on that agent's profile as proposed by the Machinist; the user accepts it, changes it, and saves it. Nothing is written by this call. A newer proposal for the same agent in the same workspace replaces the earlier one. A proposal cannot set anything that grants (the agent's tools, approval gate, workspace or where it works, the agents it extends, control lanes, plugins, MCP servers, delegation or harness): only the user sets those, on the profile.",
 			inputSchema: proposalShape,
 			_meta: MODEL_ONLY,
 		},

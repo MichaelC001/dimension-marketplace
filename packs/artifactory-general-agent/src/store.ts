@@ -31,9 +31,11 @@ import {
 	type Thinking,
 	THINKING_STEPS,
 	toAgentMd,
+	VOICE_NAME_RE,
 } from "./agent-md.js";
 import type { AgentListing, ListedAgent, SaveOutcome, SaveTarget, WritableTier } from "./contracts.js";
 import { type Block, parseExtra, reindent } from "./extra.js";
+import { isRecord } from "./guards.js";
 
 /**
  * The project config dir the Forge reads — the ENGINE's own rule
@@ -149,6 +151,9 @@ function heldPaths(decl: GeneralAgentDecl, raw: Raw, blocks: readonly Block[]): 
 	const held = new Set<string>();
 	const { manifest, avatar } = decl;
 	if (avatar !== undefined && !isPlainAvatar(avatar)) held.add("avatar");
+	// A `voice:` that is not a profile name keeps its text in Everything else: a voice-aware engine
+	// refuses the manifest, and rewriting it as an absent key would silently change the file.
+	if (raw.voice !== undefined && !(typeof raw.voice === "string" && VOICE_NAME_RE.test(raw.voice))) held.add("voice");
 
 	const level = raw.thinkingLevel;
 	if (level !== undefined && (level === "inherit" || !(THINKING_STEPS as readonly string[]).includes(String(level)))) held.add("engine.thinkingLevel");
@@ -192,12 +197,14 @@ function heldPaths(decl: GeneralAgentDecl, raw: Raw, blocks: readonly Block[]): 
  *  level is read from the YAML itself — reading it from the manifest lost it. */
 interface Raw {
 	readonly thinkingLevel: unknown;
+	readonly voice: unknown;
 }
 
 function rawSettings(frontmatter: string): Raw {
 	const parsed: unknown = parseYaml(frontmatter);
-	const engine = typeof parsed === "object" && parsed !== null ? (parsed as { engine?: unknown }).engine : undefined;
-	return { thinkingLevel: typeof engine === "object" && engine !== null ? (engine as { thinkingLevel?: unknown }).thinkingLevel : undefined };
+	if (!isRecord(parsed)) return { thinkingLevel: undefined, voice: undefined };
+	const engine = parsed.engine;
+	return { thinkingLevel: isRecord(engine) ? engine.thinkingLevel : undefined, voice: parsed.voice };
 }
 
 /** A section's keys as lines at 2 spaces — a flow-style section (`gate: { approval: yolo }`) is re-rendered as a block. */
@@ -234,6 +241,8 @@ export function draftFromFile(decl: GeneralAgentDecl, content: string, key: stri
 		const drawn = DRAWN_CHILDREN[block.key];
 		if (block.key === "avatar") {
 			if (held.has("avatar")) pieces.push(...block.lines);
+		} else if (block.key === "voice") {
+			if (held.has("voice")) pieces.push(...block.lines);
 		} else if (drawn !== undefined) {
 			const kept = sectionChildren(block).filter(child => {
 				const path = `${block.key}.${child.key}`;
@@ -256,6 +265,7 @@ export function draftFromFile(decl: GeneralAgentDecl, content: string, key: stri
 		name: decl.name,
 		description: decl.description,
 		vibr: decl.avatar !== undefined && isPlainAvatar(decl.avatar) ? decl.avatar.id : "",
+		voice: typeof raw.voice === "string" && !held.has("voice") ? raw.voice : "",
 		personality: manifest.identity?.personality ?? "default",
 		promptMode: manifest.identity?.prompt ?? "replace",
 		thinking: drawnOr<Thinking>("engine.thinkingLevel", raw.thinkingLevel as Thinking | undefined, "inherit"),

@@ -20,7 +20,9 @@ import { displayName, humanize, type RosterAgent, TIER_LABEL, titleOf } from "./
 import { CapabilitiesSection } from "./sections-capabilities";
 import { CharterSection, IdentitySection, InstructionsSection } from "./sections-identity";
 import { AdvancedSection, BrainSection, HomeSection, LineageSection, MemorySection, SafetySection } from "./sections-settings";
+import { VoiceSection } from "./sections-voice";
 import type { BridgedPresences, CatalogFact, FaceBinding, ModelFact, UsageFact } from "./types";
+import type { VoiceKit } from "./voice";
 
 /** Everything a section is handed: the draft, how to change it, and whether it may. */
 export interface SectionProps {
@@ -31,6 +33,7 @@ export interface SectionProps {
 
 const NAV: readonly { readonly id: string; readonly label: string }[] = [
 	{ id: "identity", label: "Identity" },
+	{ id: "voice", label: "Voice" },
 	{ id: "charter", label: "Charter" },
 	{ id: "capabilities", label: "Capabilities" },
 	{ id: "memory", label: "Memory" },
@@ -108,6 +111,8 @@ export function AgentProfile({
 	configure,
 	busy,
 	notice,
+	voice,
+	hasWorkspace,
 }: {
 	readonly state: ProfileState;
 	readonly onChange: (state: ProfileState) => void;
@@ -129,6 +134,10 @@ export function AgentProfile({
 	readonly configure: ((name: string, patch: { readonly enabled?: boolean; readonly listed?: boolean }) => Promise<void>) | undefined;
 	readonly busy: ReadonlySet<string>;
 	readonly notice: string | undefined;
+	/** What the voice lane lends the page; its absence is a state the section draws. */
+	readonly voice: VoiceKit;
+	/** A project is open: its workspace can hold a voice choice of its own. */
+	readonly hasWorkspace: boolean;
 }) {
 	const { draft } = state;
 	const creating = isNew(state);
@@ -366,6 +375,7 @@ export function AgentProfile({
 			</nav>
 
 			<IdentitySection draft={draft} set={set} editable={editable} creating={creating} errors={errors} face={face} faceOf={faceOf} bridged={bridged} marked={marked} />
+			<VoiceSection draft={draft} set={set} editable={editable} agentName={agentName} savedVoice={state.agent?.draft.voice ?? ""} creating={creating} kit={voice} hasWorkspace={hasWorkspace} marked={marked} />
 			<CharterSection draft={draft} set={set} editable={editable} errors={errors} agent={state.agent} marked={marked} />
 			<InstructionsSection home={home.value} error={home.error} creating={creating} text={instructionsText} onText={setInstructions} editable={editable} />
 			<CapabilitiesSection draft={draft} set={set} editable={editable} catalog={catalog} marked={marked} />

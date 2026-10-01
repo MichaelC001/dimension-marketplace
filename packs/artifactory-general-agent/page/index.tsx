@@ -28,6 +28,7 @@ import {
 	USAGE_KEY,
 	type UsageFact,
 } from "./types";
+import { readAgentVoices, readProfilesFact, SPEECH_AGENTS_KEY, SPEECH_PROFILES_KEY, type VoiceKit } from "./voice";
 
 export type { GeneralAgentsPageProps } from "./types";
 
@@ -49,6 +50,17 @@ export function GeneralAgentsPage(props: GeneralAgentsPageProps) {
 	const usage = useFact<UsageFact>(store, USAGE_KEY);
 	const catalog = useFact<CatalogFact>(store, CATALOG_KEY);
 	const models = useFact<readonly ModelFact[]>(store, MODELS_KEY);
+	const speechProfiles = useFact<unknown>(store, SPEECH_PROFILES_KEY);
+	const speechAgents = useFact<unknown>(store, SPEECH_AGENTS_KEY);
+	// A voice choice reaches the page through the doors the lane lends (`props.voice`): a sample to
+	// hear and a write for `voice.agents.<agent>`. A door this build lacks is simply absent.
+	const sampler = props.voice?.sampler;
+	const assigner = props.voice?.assigner;
+	const voiceAgents = useMemo(() => readAgentVoices(speechAgents), [speechAgents]);
+	const voiceKit = useMemo<VoiceKit>(
+		() => ({ profiles: readProfilesFact(speechProfiles), agents: voiceAgents, ...(sampler ? { sampler } : {}), ...(assigner ? { assigner } : {}) }),
+		[speechProfiles, voiceAgents, sampler, assigner],
+	);
 	const now = useNow(30_000);
 	const activity = useActivity(store, now, DEFAULT_AGENT);
 
@@ -171,6 +183,8 @@ export function GeneralAgentsPage(props: GeneralAgentsPageProps) {
 					bridged={bridgedPresences}
 					onDock={openDock}
 					configure={canConfigure ? configure : undefined}
+					voice={voiceKit}
+					hasWorkspace={workspace != null}
 					busy={busy}
 					notice={notice}
 				/>
@@ -184,6 +198,7 @@ export function GeneralAgentsPage(props: GeneralAgentsPageProps) {
 					catalog={catalog}
 					now={now}
 					faceOf={faceOf}
+					voices={voiceAgents}
 					bridged={bridgedPresences}
 					proposals={pending}
 					onReview={review}

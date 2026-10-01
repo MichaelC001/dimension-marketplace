@@ -1,7 +1,7 @@
 # General Agents
 
 Every General Agent you can run, as cards with their real faces and their week
-at a glance, and, one click in, each agent's whole profile: its face, charter
+at a glance, and, one click in, each agent's whole profile: its face, voice, charter
 and standing instructions, the skills, plugins, MCP servers and tools it may
 use, its memory, home, models and safety, and whom it extends. Yours and your
 project's are edited in place; a pack's agent reads the same and can be
@@ -55,10 +55,18 @@ All from the fenced Store the seat hands it, never from a driver:
 | `agents/usage` | tokens and cost in 7 days |
 | `capabilities/catalog` | the marks and names of every plugin, skill, MCP server and tool |
 | `models` | the model cards of the Brain section |
+| `speech/profiles` | the voice profiles visible from the project, each provider's readiness, and the default (the voice lane's public fact) |
+| `speech/agents` | each agent's RESOLVED voice (`name`, `source`, `why`, and which layers set one), computed by the engine |
 
 Faces come as fill props (`agentPresences`, `bridgedPresences`) and resolve
 through the kit's `agentPresenceFace`; every face is still until its card or
 tile is pointed at or focused, and mounts only near the viewport.
+
+Voice comes from the voice lane (docs "Speech and voice profiles" and "Voice mode"), through two more fill props
+under `voice`: `sampler` (hear a profile; one speaker at a time, app-wide) and `assigner` (write
+`voice.agents.<agent>` at user or project scope). The page never works out which profile wins: the
+engine says (`speech/agents`) and the page labels it. A build without a door leaves it absent, and the
+control that would use it says so; a build without `speech/profiles` shows "no voice engine" and nothing else changes.
 
 The KPI rules (`page/kpis.ts`): a row belongs to its `profile`, a row with none
 to the Code space's default agent (`coding`); a session is a non-room,
@@ -76,7 +84,8 @@ follows the Autonomy card: the face on its accent wash, the name with its tier
 and a live badge (Working, Needs you), two lines of what it is for, the Enabled
 switch (yours and your project's; a pack's agent shows its state), what it may
 use as the Capabilities page's own marks, where it stands (Last active · 3h ago,
-or Never used), and its week: Sessions 7d, Tokens 7d, Cost 7d, Rooms led.
+or Never used, with a small voice chip beside it when somebody chose the agent's voice,
+never for the default), and its week: Sessions 7d, Tokens 7d, Cost 7d, Rooms led.
 
 **Profile.** A header with the agent's face at hero size (it moves when pointed
 at), its title, tier, live badge, lineage and the Enabled and Show in rail
@@ -89,6 +98,7 @@ the thing it is:
 | Section | Drawn as |
 |---|---|
 | Identity | name and line; a face gallery (every first-party vibr and every contributed face the host lends); personality and how it speaks as choice cards |
+| Voice | the voice it speaks with now and why (with a play button); who decides, as a ladder (this project, you, the agent's own file, default), the in-use row marked; every voice profile as a card with its fallback chain, the layer it comes from and what is in the way, each playable before you choose. A pick at *this project* or *you* applies at once; a pick at *the agent's own file* is part of Save. Pack agents get the first two. |
 | Charter | an editor under the `agent.md` file card |
 | Standing instructions | the in-force `AGENTS.md` as a file card, every candidate tier as a chip, and an editor for the file a save writes |
 | Capabilities | Skills, Plugins, MCP and Tools tabs; each a searchable grid of mark cards, checked for its allowlist, with *Every X* as its own state |

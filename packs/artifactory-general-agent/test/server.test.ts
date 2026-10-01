@@ -468,6 +468,121 @@ You run the desk.
 	});
 });
 
+const frontmatter = (text: string): Record<string, unknown> => parseYaml(text.split("---")[1] ?? "") as Record<string, unknown>;
+
+describe("an agent's own voice", () => {
+	const voiceLines = (text: string) => text.split("\n").filter(line => line.startsWith("voice:"));
+	const validated = async (patch: Partial<AgentDraft>): Promise<readonly string[]> => ((await call("validate_agent", { draft: draft(patch) })).structuredContent as unknown as DraftCheck).problems;
+
+	test("a `voice:` naming a profile opens as the draft's voice, is not repeated in Everything else, and survives rewrites byte for byte", async () => {
+		await put(userFile("talker"), "---\nname: talker\ndescription: Speaks\nvoice: warm-studio\nspecVersion: 1\ngate:\n  approval: write\n---\nSpeak.\n");
+		const opened = await listed("talker");
+		expect(opened.editable).toBe(true);
+		expect(opened.draft.voice).toBe("warm-studio");
+		expect(opened.draft.extra).not.toContain("voice");
+
+		expect((await reforge(opened)).isError).toBeFalsy();
+		const first = await readFile(userFile("talker"), "utf8");
+		expect(voiceLines(first)).toEqual(["voice: warm-studio"]);
+		expect(frontmatter(first).voice).toBe("warm-studio");
+		await manifestAt(userFile("talker"), "talker");
+
+		// The live agent.md the profile shows is the file it writes, the voice line included.
+		const shown = manifestLines(opened.draft, agentHomeWorkspaceId("talker"))
+			.map(line => line.text)
+			.join("\n");
+		expect(`${shown}\n`).toBe(first);
+
+		expect((await reforge(await listed("talker"))).isError).toBeFalsy();
+		expect(await readFile(userFile("talker"), "utf8")).toBe(first);
+	});
+
+	test("choosing a voice writes `voice:`, changing it replaces the line, and clearing it removes the line", async () => {
+		expect((await call("save_agent", { draft: draft({ voice: "calm-low" }), create: true })).isError).toBeFalsy();
+		expect(voiceLines(await readFile(userFile("release-herald"), "utf8"))).toEqual(["voice: calm-low"]);
+		expect((await listed("release-herald")).draft.voice).toBe("calm-low");
+
+		expect((await reforge(await listed("release-herald"), { voice: "bright" })).isError).toBeFalsy();
+		expect(voiceLines(await readFile(userFile("release-herald"), "utf8"))).toEqual(["voice: bright"]);
+
+		expect((await reforge(await listed("release-herald"), { voice: "" })).isError).toBeFalsy();
+		expect(voiceLines(await readFile(userFile("release-herald"), "utf8"))).toEqual([]);
+		expect((await listed("release-herald")).draft.voice).toBe("");
+		await manifestAt(userFile("release-herald"), "release-herald");
+	});
+
+	// A `voice:` the profile cannot draw is NOT dropped: its text stays in Everything else and the file is unchanged.
+	test.each(["Warm_Voice", "Warm", "warm--studio", "warm-", "-warm", '"warm studio"', "[warm, calm]", "42"])("a `voice:` of %s is not a profile name: it stays as written in Everything else and the file round trips", async value => {
+		const original = `---\nname: odd\ndescription: Odd voice\nvoice: ${value}\nspecVersion: 1\ngate:\n  approval: write\n---\nBody.\n`;
+		await put(userFile("odd"), original);
+		const opened = await listed("odd");
+		expect(opened.editable).toBe(true);
+		expect(opened.draft.voice).toBe("");
+		expect(opened.draft.extra).toBe(`voice: ${value}`);
+		// Holding it is not an error: the agent can still be saved, and saving keeps the line.
+		expect(await validated({ ...opened.draft })).toEqual([]);
+		expect((await reforge(opened)).isError).toBeFalsy();
+		const text = await readFile(userFile("odd"), "utf8");
+		expect(voiceLines(text)).toEqual([`voice: ${value}`]);
+		expect(frontmatter(text).voice).toEqual(frontmatter(original).voice);
+	});
+
+	test.each(["Warm", "warm_voice", "warm-", "-warm", "warm--studio", "warm studio"])("a draft whose voice is %j is refused, and nothing is written", async voice => {
+		expect((await validated({ voice })).length).toBeGreaterThan(0);
+		expect((await call("save_agent", { draft: draft({ voice }), create: true })).isError).toBe(true);
+		await expect(stat(userFile("release-herald"))).rejects.toThrow();
+	});
+
+	test.each(["", "a", "warm-studio", "v2-low-1"])("a draft whose voice is %j is accepted: no voice, or letters, digits and single dashes", async voice => {
+		expect(await validated({ voice })).toEqual([]);
+	});
+
+	test("a caller that sends no `voice` at all (a page older than this field) still parses, and the agent is written with none", async () => {
+		const older = Object.fromEntries(Object.entries(draft()).filter(([key]) => key !== "voice"));
+		const check = await call("validate_agent", { draft: older });
+		expect(check.isError).toBeFalsy();
+		expect((check.structuredContent as unknown as DraftCheck).problems).toEqual([]);
+		expect((await call("save_agent", { draft: older, create: true })).isError).toBeFalsy();
+		expect(voiceLines(await readFile(userFile("release-herald"), "utf8"))).toEqual([]);
+	});
+
+	test("the Machinist may propose a voice by name, and the proposal carries it to the page", async () => {
+		const result = await call("forge_propose", { name: "scout", voice: "calm-low" });
+		expect(result.isError).toBeFalsy();
+		expect((result.structuredContent as unknown as ForgeProposed).proposal).toEqual({ name: "scout", voice: "calm-low" });
+	});
+
+	// A valid profile name that YAML would read as a number: written unquoted it became `voice: 2026`, and opened held in Everything else.
+	test.each(["2026", "1e3", "0"])("a profile named %s, which YAML would read as a number, is written as a string and opens as the agent's voice", async voice => {
+		expect(await validated({ voice })).toEqual([]);
+		expect((await call("save_agent", { draft: draft({ voice }), create: true })).isError).toBeFalsy();
+		expect(frontmatter(await readFile(userFile("release-herald"), "utf8")).voice).toBe(voice);
+		expect((await listed("release-herald")).draft.voice).toBe(voice);
+	});
+});
+
+// `scalar()` writes a string the way a YAML reader hands it back: whatever YAML would read as a number is quoted,
+// whether it is a name, a voice or a list entry.
+describe("a string that YAML would read as a number", () => {
+	test.each(["2026", "1e3"])("an agent named %s is written as a string, loads under that name, and lists as it", async name => {
+		expect((await call("save_agent", { draft: draft({ name }), create: true })).isError).toBeFalsy();
+		expect(frontmatter(await readFile(userFile(name), "utf8")).name).toBe(name);
+		expect((await manifestAt(userFile(name), name)).name).toBe(name);
+		expect((await listed(name)).draft.name).toBe(name);
+	});
+
+	test("a skill or tool named like a number is written as a string too, and comes back as the same entries", async () => {
+		const entries = ["2026", "1e3", "code-health"];
+		expect((await call("save_agent", { draft: draft({ skills: entries, tools: entries }), create: true })).isError).toBeFalsy();
+		const decl = await manifestAt(userFile("release-herald"), "release-herald");
+		expect(decl.manifest.capabilities?.skills).toEqual(entries);
+		expect(decl.manifest.capabilities?.tools).toEqual(entries);
+		const opened = await listed("release-herald");
+		expect(opened.draft.skills).toEqual(entries);
+		expect(opened.draft.tools).toEqual(entries);
+	});
+});
+
 describe("forge_propose", () => {
 	test("offers the model no tools, mcp, approval, recall-scope, habitat or lineage field, and carries none into the draft", async () => {
 		const { tools } = await client.listTools();

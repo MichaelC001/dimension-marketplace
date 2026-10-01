@@ -156,6 +156,23 @@ describe("a Machinist proposal, accepted or discarded, never moves a grant", () 
 		const smuggled = receiveProposal(openListed(base), "p1", { name: "herald", extra: "extends: [coding]" }, [base]);
 		expect(saveBlockers(acceptProposal(smuggled), FILES, []).join(" ")).toContain("extends");
 	});
+
+	test("a proposed voice lands on the open draft and is marked; a proposal that leaves it out keeps the human's own, and discarding restores it", () => {
+		const mine = listed("herald", "user", { voice: "mine" });
+		const proposed = receiveProposal(openListed(mine), "p1", { name: "herald", voice: "calm-low" }, [mine]);
+		expect(proposed.draft.voice).toBe("calm-low");
+		expect(proposed.proposal?.fields).toEqual(["voice"]);
+		expect(discardProposal(proposed)?.draft.voice).toBe("mine");
+		const silent = receiveProposal(openListed(mine), "p2", { name: "herald", description: "New line" }, [mine]);
+		expect(silent.draft.voice).toBe("mine");
+		expect(silent.proposal?.fields).toEqual(["description"]);
+	});
+
+	test("a proposed voice that is not a profile name is no way round the save check: the save is blocked until the human changes it", () => {
+		const accepted = (voice: string) => acceptProposal(receiveProposal(openListed(base), "p1", { name: "herald", voice }, [base]));
+		expect(saveBlockers(accepted("Not A Name"), FILES, []).length).toBeGreaterThan(0);
+		expect(saveBlockers(accepted("calm-low"), FILES, [])).toEqual([]);
+	});
 });
 
 describe("which proposals wait, and which land on the open profile", () => {
@@ -206,12 +223,12 @@ describe("faces are remembered per name", () => {
 
 describe("extending a pack's agent", () => {
 	test("opens a new, nameless agent that extends it and starts from its settings, with nothing held over", () => {
-		const pack = listed("coding", "pack", { vibr: "lattice", thinking: "high", models: ["anthropic/claude-sonnet-4.5"], skills: ["code-health"], promptMode: "append", extra: "routing:\n  card: Code" });
+		const pack = listed("coding", "pack", { vibr: "lattice", voice: "warm-studio", thinking: "high", models: ["anthropic/claude-sonnet-4.5"], skills: ["code-health"], promptMode: "append", extra: "routing:\n  card: Code" });
 		const extended = extendFrom(pack.draft);
 		expect(extended.agent).toBeUndefined();
 		expect(extended.draft.name).toBe("");
 		expect(extended.draft.lineage).toEqual(["coding"]);
-		expect(extended.draft).toMatchObject({ vibr: "lattice", thinking: "high", models: ["anthropic/claude-sonnet-4.5"], skills: ["code-health"], promptMode: "append", charter: pack.draft.charter });
+		expect(extended.draft).toMatchObject({ vibr: "lattice", voice: "warm-studio", thinking: "high", models: ["anthropic/claude-sonnet-4.5"], skills: ["code-health"], promptMode: "append", charter: pack.draft.charter });
 		expect(extended.draft.extra).toBe("");
 		expect(extended.draft.key).not.toBe(pack.draft.key);
 		// A fresh copy: editing it never edits the pack's draft.

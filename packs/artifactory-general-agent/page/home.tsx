@@ -35,6 +35,7 @@ import {
 	TIER_LABEL,
 } from "./roster";
 import type { BridgedPresences, CapabilityCount, CatalogFact, FaceBinding, UsageFact } from "./types";
+import { type AgentVoice, isExplicitVoice, SOURCE_LABELS } from "./voice";
 
 const GRID = "grid grid-cols-1 gap-4 @2xl:grid-cols-2 @5xl:grid-cols-3";
 
@@ -163,6 +164,7 @@ const AgentCard = memo(function AgentCard({
 	face,
 	bridged,
 	catalog,
+	voice,
 	busy,
 	onOpen,
 	onToggle,
@@ -174,6 +176,7 @@ const AgentCard = memo(function AgentCard({
 	readonly face: FaceBinding;
 	readonly bridged: BridgedPresences | undefined;
 	readonly catalog: CatalogFact | undefined;
+	readonly voice: AgentVoice | undefined;
 	readonly busy: boolean;
 	readonly onOpen: ((name: string) => void) | undefined;
 	readonly onToggle: ((name: string, on: boolean) => void) | undefined;
@@ -239,7 +242,15 @@ const AgentCard = memo(function AgentCard({
 					<ActivityDot state={state === "idle" ? (enabled ? "idle" : "off") : state} />
 					<span className="fr-overflow">{stand.text}</span>
 				</span>
-				{agent.fact !== undefined && enabled && !agent.fact.listed ? <span className="shrink-0 font-secondary text-fr-xs text-fr-text-2">Hidden from rail</span> : null}
+				<span className="flex shrink-0 items-center gap-2.5">
+					{isExplicitVoice(voice) ? (
+						<span title={`Speaks with ${voice.name}. ${SOURCE_LABELS[voice.source]}.`} className="flex min-w-0 items-center gap-1 font-secondary text-fr-xs text-fr-text-2">
+							<Icon name="waveform" size={12} strokeWidth={1.8} aria-hidden="true" />
+							<span className="fr-overflow max-w-24">{voice.name}</span>
+						</span>
+					) : null}
+					{agent.fact !== undefined && enabled && !agent.fact.listed ? <span className="font-secondary text-fr-xs text-fr-text-2">Hidden from rail</span> : null}
+				</span>
 			</div>
 			<dl className="m-0 mt-3 grid grid-cols-4 divide-x divide-fr-border-soft border-t border-fr-border-soft">
 				<CardStat value={`${activity.sessions7d}`} label="Sessions 7d" title={`${activity.sessions7d} sessions active in the last 7 days, ${activity.sessionsTotal} in all`} quiet={activity.sessions7d === 0} />
@@ -362,6 +373,7 @@ export function AgentsHome({
 	activity,
 	usage,
 	catalog,
+	voices,
 	now,
 	faceOf,
 	bridged,
@@ -380,6 +392,7 @@ export function AgentsHome({
 	readonly activity: ReadonlyMap<string, AgentActivity>;
 	readonly usage: UsageFact | undefined;
 	readonly catalog?: CatalogFact | undefined;
+	readonly voices: ReadonlyMap<string, AgentVoice>;
 	readonly now: number;
 	readonly faceOf: (name: string) => FaceBinding;
 	readonly bridged: BridgedPresences | undefined;
@@ -413,6 +426,7 @@ export function AgentsHome({
 			face={faceOf(agent.name)}
 			bridged={bridged}
 			catalog={catalog}
+			voice={voices.get(agent.name)}
 			busy={busy.has(agent.name)}
 			onOpen={agent.listed !== undefined ? onOpen : undefined}
 			onToggle={configure !== undefined && isEditable(agent) && agent.fact !== undefined ? toggle : undefined}

@@ -1476,6 +1476,337 @@ function allowlistOf(draft, kind) {
 	};
 }
 //#endregion
+//#region src/guards.ts
+var isRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+//#endregion
+//#region page/voice.ts
+var SPEECH_PROFILES_KEY = "speech/profiles";
+var SPEECH_AGENTS_KEY = "speech/agents";
+/** The on-device provider: a profile with no reachable entry falls back to it. */
+var LOCAL_PROVIDER = "local";
+var LAYER_LABELS = {
+	workspace: "This project",
+	user: "Yours",
+	pack: "From a plugin",
+	builtin: "Built in"
+};
+var text = (value) => typeof value === "string" && value !== "" ? value : void 0;
+function readReadiness(value) {
+	if (!isRecord(value) || typeof value.ready !== "boolean") return void 0;
+	const reason = text(value.reason);
+	const detail = text(value.detail);
+	return {
+		ready: value.ready,
+		...reason ? { reason } : {},
+		...detail ? { detail } : {}
+	};
+}
+function readStep(value) {
+	if (!isRecord(value)) return void 0;
+	const provider = text(value.provider);
+	const model = text(value.model);
+	if (!provider || !model) return void 0;
+	const voice = text(value.voice);
+	return {
+		provider,
+		model,
+		...voice ? { voice } : {}
+	};
+}
+function readProfile(value) {
+	if (!isRecord(value)) return void 0;
+	const name = text(value.name);
+	const layer = value.layer;
+	if (!name || layer !== "workspace" && layer !== "user" && layer !== "pack" && layer !== "builtin") return void 0;
+	const description = text(value.description);
+	return {
+		name,
+		layer,
+		speak: Array.isArray(value.speak) ? value.speak.flatMap((step) => readStep(step) ?? []) : [],
+		...description ? { description } : {}
+	};
+}
+function readProvider(value) {
+	if (!isRecord(value)) return void 0;
+	const id = text(value.id);
+	if (!id) return void 0;
+	const speak = readReadiness(value.speak);
+	return {
+		id,
+		label: text(value.label) ?? id,
+		...speak ? { speak } : {}
+	};
+}
+/** The `speech/profiles` fact; null when the engine published none (no speech lane in this build). */
+function readProfilesFact(raw) {
+	if (!isRecord(raw)) return null;
+	return {
+		profiles: Array.isArray(raw.profiles) ? raw.profiles.flatMap((row) => readProfile(row) ?? []) : [],
+		providers: Array.isArray(raw.providers) ? raw.providers.flatMap((row) => readProvider(row) ?? []) : [],
+		defaultName: isRecord(raw.default) ? text(raw.default.name) ?? null : null
+	};
+}
+/** What a provider that cannot speak is missing: a label (`Needs an API key`) and the same fact as a
+*  predicate (`needs an API key`), so a sentence can say WHO is missing it. */
+var REASONS = {
+	"needs-key": {
+		text: "Needs an API key",
+		phrase: "needs an API key"
+	},
+	"needs-download": {
+		text: "Needs a download",
+		phrase: "needs a download"
+	},
+	unavailable: {
+		text: "Unavailable",
+		phrase: "is unavailable"
+	}
+};
+/** One readiness as a sentence a person can act on. */
+function stateLine(readiness) {
+	if (!readiness) return {
+		tone: "off",
+		text: "Does not speak",
+		phrase: "does not speak"
+	};
+	if (readiness.ready) return {
+		tone: "ok",
+		text: "Ready",
+		phrase: "is ready"
+	};
+	const reason = readiness.reason !== void 0 && Object.hasOwn(REASONS, readiness.reason) ? REASONS[readiness.reason] : void 0;
+	return {
+		tone: "warn",
+		text: reason?.text ?? "Not ready",
+		phrase: reason?.phrase ?? "is not ready"
+	};
+}
+function stepOf(step, providers) {
+	const provider = providers.get(step.provider);
+	const state = provider ? stateLine(provider.speak) : {
+		tone: "warn",
+		text: "Not installed",
+		phrase: "is not installed"
+	};
+	const detail = provider?.speak && !provider.speak.ready ? provider.speak.detail : void 0;
+	return {
+		providerLabel: provider?.label ?? step.provider,
+		model: step.model,
+		...step.voice ? { voice: step.voice } : {},
+		state,
+		...detail ? { detail } : {},
+		ready: state.tone === "ok"
+	};
+}
+function profileCards(view) {
+	const providers = new Map(view.providers.map((provider) => [provider.id, provider]));
+	const local = providers.get(LOCAL_PROVIDER);
+	const localReady = local?.speak?.ready === true;
+	return view.profiles.map((profile) => {
+		const steps = profile.speak.map((step) => stepOf(step, providers));
+		const firstReady = steps.findIndex((step) => step.ready);
+		const head = steps[0];
+		const spoken = steps[firstReady];
+		const speaksWith = spoken ? {
+			label: spoken.providerLabel,
+			fellBack: firstReady > 0
+		} : localReady ? {
+			label: local?.label ?? "On-device voice",
+			fellBack: true
+		} : null;
+		const blocked = head !== void 0 && firstReady !== 0 ? head : void 0;
+		const needs = blocked ? `${blocked.providerLabel} ${blocked.state.phrase}.${blocked.detail ? ` ${blocked.detail}` : ""}` : void 0;
+		return {
+			name: profile.name,
+			layer: profile.layer,
+			layerLabel: LAYER_LABELS[profile.layer],
+			...profile.description ? { description: profile.description } : {},
+			steps,
+			speaksWith,
+			...needs ? { needs } : {}
+		};
+	});
+}
+/** Two letters for a provider's mark: its initials, or its first two characters. */
+function monogram(label) {
+	const words = label.trim().split(/[\s._-]+/).filter(Boolean);
+	return (words.length > 1 ? words.map((word) => word[0] ?? "").join("") : (words[0] ?? "").slice(0, 2)).slice(0, 2).toUpperCase();
+}
+var SOURCES = /* @__PURE__ */ new Set([
+	"session",
+	"workspace-config",
+	"user-config",
+	"agent",
+	"default",
+	"builtin"
+]);
+var SOURCE_LABELS = {
+	session: "Chosen for this session",
+	"workspace-config": "Set for this project",
+	"user-config": "Set by you",
+	agent: "The agent's own choice",
+	default: "The default voice",
+	builtin: "The built-in on-device voice"
+};
+function readLayers(value) {
+	if (!isRecord(value)) return void 0;
+	const workspace = text(value.workspace);
+	const user = text(value.user);
+	const agent = text(value.agent);
+	return {
+		...workspace ? { workspace } : {},
+		...user ? { user } : {},
+		...agent ? { agent } : {}
+	};
+}
+/** The `speech/agents` fact: agent name to its resolved voice. Empty when the fact is absent. */
+function readAgentVoices(raw) {
+	const out = /* @__PURE__ */ new Map();
+	if (!isRecord(raw)) return out;
+	for (const [agent, value] of Object.entries(raw)) {
+		if (!isRecord(value)) continue;
+		const name = text(value.name);
+		const source = text(value.source);
+		if (!name || !source || !SOURCES.has(source)) continue;
+		const layers = readLayers(value.layers);
+		out.set(agent, {
+			name,
+			source,
+			why: text(value.why) ?? "",
+			...layers ? { layers } : {}
+		});
+	}
+	return out;
+}
+var SCOPE_ORDER = [
+	"workspace",
+	"user",
+	"agent"
+];
+var SCOPE_LABELS = {
+	workspace: "This project",
+	user: "You",
+	agent: "The agent",
+	default: "Default"
+};
+var SCOPE_OF_SOURCE = {
+	"workspace-config": "workspace",
+	"user-config": "user",
+	agent: "agent",
+	default: "default",
+	builtin: "default"
+};
+/**
+* The four layers, most specific first, with the one the engine says wins marked. Every layer the page can
+* write is always a row, so what a pick writes to is always on screen. `agentFile` is the agent's own
+* choice as the page holds it (the draft, so an unsaved edit shows at once) and `savedAgentFile` what the
+* file holds now: a difference marks the row `pending` and never moves `wins`, which stays the engine's
+* word until a save republishes.
+*/
+function ladder(voice, agentFile, defaultName, savedAgentFile = agentFile) {
+	const winning = voice ? SCOPE_OF_SOURCE[voice.source] : void 0;
+	const layers = voice?.layers;
+	const rows = [];
+	for (const scope of SCOPE_ORDER) {
+		const wins = winning === scope;
+		if (scope === "agent") {
+			rows.push({
+				scope,
+				label: SCOPE_LABELS[scope],
+				value: agentFile === "" ? null : agentFile,
+				reported: true,
+				wins,
+				pending: agentFile !== savedAgentFile
+			});
+			continue;
+		}
+		const value = layers?.[scope] ?? (wins && voice ? voice.name : null);
+		rows.push({
+			scope,
+			label: SCOPE_LABELS[scope],
+			value,
+			reported: layers !== void 0 || wins,
+			wins,
+			pending: false
+		});
+	}
+	const fallback = winning === "default" ? voice?.name ?? defaultName : defaultName;
+	rows.push({
+		scope: "default",
+		label: SCOPE_LABELS.default,
+		value: fallback,
+		reported: true,
+		wins: winning === "default",
+		pending: false
+	});
+	return rows;
+}
+/** Whether somebody CHOSE this voice (a project, you, or the agent's own file) rather than it being the
+*  default. Only a choice is worth a mark on a card: a default voice would be the same chip on every one. */
+function isExplicitVoice(voice) {
+	return voice !== void 0 && (voice.source === "workspace-config" || voice.source === "user-config" || voice.source === "agent");
+}
+/** The row, above `scope`, whose choice still outranks one made there; null when none does. */
+function outrankedBy(scope, rows) {
+	const at = SCOPE_ORDER.indexOf(scope);
+	return rows.find((row) => row.scope !== "default" && row.value !== null && SCOPE_ORDER.indexOf(row.scope) < at) ?? null;
+}
+/** Which layers this page can write right now. A user or project choice is stored by agent name, so
+*  it needs the agent to exist (`exists`); the agent's own choice rides in its file, so it needs the
+*  file to be writable (`editable`). */
+function scopeStates(options) {
+	const config = (scope, needsProject) => {
+		if (!options.exists) return {
+			scope,
+			enabled: false,
+			reason: "Save the agent first."
+		};
+		if (!options.canAssign) return {
+			scope,
+			enabled: false,
+			reason: "This build cannot save a voice choice yet."
+		};
+		if (needsProject && !options.hasWorkspace) return {
+			scope,
+			enabled: false,
+			reason: "Open a project to set one for it."
+		};
+		return {
+			scope,
+			enabled: true
+		};
+	};
+	const agent = () => {
+		if (!options.editable) return {
+			scope: "agent",
+			enabled: false,
+			reason: "Ships in a pack, so read-only. Extend it to change this."
+		};
+		if (options.heldInFile) return {
+			scope: "agent",
+			enabled: false,
+			reason: "Its file sets this in Other settings, under Advanced. Change it there."
+		};
+		return {
+			scope: "agent",
+			enabled: true
+		};
+	};
+	return [
+		config("workspace", true),
+		config("user", false),
+		agent()
+	];
+}
+/** The layer a pick lands on by default: yours, else the agent's own file. */
+function defaultScope(states) {
+	return [
+		"user",
+		"agent",
+		"workspace"
+	].find((scope) => states.find((state) => state.scope === scope)?.enabled) ?? "user";
+}
+//#endregion
 //#region page/home.tsx
 var GRID = "grid grid-cols-1 gap-4 @2xl:grid-cols-2 @5xl:grid-cols-3";
 /** A label on the hero: text at 80%, which the lit nebula keeps above AA. */
@@ -1637,7 +1968,7 @@ function standing(activity, state, now) {
 /** Memoized: the page re-renders on every coalesced session update, and a card
 *  whose props are the same objects as last time draws the same thing. Its
 *  handlers take the name, so one stable function serves every card. */
-var AgentCard = memo(function AgentCard({ agent, activity, usage, now, face, bridged, catalog, busy, onOpen, onToggle }) {
+var AgentCard = memo(function AgentCard({ agent, activity, usage, now, face, bridged, catalog, voice, busy, onOpen, onToggle }) {
 	const [live, setLive] = useState(false);
 	const state = liveStateOf(activity);
 	const stand = standing(activity, state, now);
@@ -1724,10 +2055,25 @@ var AgentCard = memo(function AgentCard({ agent, activity, usage, now, face, bri
 						className: "fr-overflow",
 						children: stand.text
 					})]
-				}), agent.fact !== void 0 && enabled && !agent.fact.listed ? /* @__PURE__ */ jsx("span", {
-					className: "shrink-0 font-secondary text-fr-xs text-fr-text-2",
-					children: "Hidden from rail"
-				}) : null]
+				}), /* @__PURE__ */ jsxs("span", {
+					className: "flex shrink-0 items-center gap-2.5",
+					children: [isExplicitVoice(voice) ? /* @__PURE__ */ jsxs("span", {
+						title: `Speaks with ${voice.name}. ${SOURCE_LABELS[voice.source]}.`,
+						className: "flex min-w-0 items-center gap-1 font-secondary text-fr-xs text-fr-text-2",
+						children: [/* @__PURE__ */ jsx(Icon, {
+							name: "waveform",
+							size: 12,
+							strokeWidth: 1.8,
+							"aria-hidden": "true"
+						}), /* @__PURE__ */ jsx("span", {
+							className: "fr-overflow max-w-24",
+							children: voice.name
+						})]
+					}) : null, agent.fact !== void 0 && enabled && !agent.fact.listed ? /* @__PURE__ */ jsx("span", {
+						className: "font-secondary text-fr-xs text-fr-text-2",
+						children: "Hidden from rail"
+					}) : null]
+				})]
 			}),
 			/* @__PURE__ */ jsxs("dl", {
 				className: "m-0 mt-3 grid grid-cols-4 divide-x divide-fr-border-soft border-t border-fr-border-soft",
@@ -1938,7 +2284,7 @@ function ProposalsBanner({ proposals, roster, faceOf, bridged, onReview }) {
 		})
 	});
 }
-function AgentsHome({ roster, loading, listingError, activity, usage, catalog, now, faceOf, bridged, proposals, onReview, onOpen, onCreate, onDock, configure, busy, notice }) {
+function AgentsHome({ roster, loading, listingError, activity, usage, catalog, voices, now, faceOf, bridged, proposals, onReview, onOpen, onCreate, onDock, configure, busy, notice }) {
 	const [facet, setFacet] = useState("all");
 	const toggle = useCallback((name, on) => void configure?.(name, { enabled: on }), [configure]);
 	const counts = facetCounts(roster);
@@ -1964,6 +2310,7 @@ function AgentsHome({ roster, loading, listingError, activity, usage, catalog, n
 		face: faceOf(agent.name),
 		bridged,
 		catalog,
+		voice: voices.get(agent.name),
 		busy: busy.has(agent.name),
 		onOpen: agent.listed !== void 0 ? onOpen : void 0,
 		onToggle: configure !== void 0 && isEditable(agent) && agent.fact !== void 0 ? toggle : void 0
@@ -2159,12 +2506,16 @@ var PROPOSABLE_FIELDS = [
 	"description",
 	"charter",
 	"vibr",
+	"voice",
 	"skills",
 	"memory",
 	"thinking",
 	"personality",
 	"extra"
 ];
+/** A voice profile name: kebab-case, the stem of its `<name>.yml` and the value of `voice:`. Mirrors the
+*  SDK's `VOICE_PROFILE_NAME`; a manifest that fails it does not load, so a draft is refused before a write. */
+var VOICE_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 var NAME_RE = /^[a-z0-9][a-z0-9-]{1,63}$/;
 /**
 * A name as it is typed: lowercase, anything that is not a letter or digit
@@ -2186,6 +2537,7 @@ function blankDraft(key) {
 		name: "",
 		description: "",
 		vibr: "orb",
+		voice: "",
 		personality: "default",
 		promptMode: "replace",
 		thinking: "inherit",
@@ -2222,6 +2574,7 @@ var DRAWN_TOP = [
 	"name",
 	"description",
 	"avatar",
+	"voice",
 	"specVersion",
 	"extends"
 ];
@@ -2270,6 +2623,7 @@ function heldByExtra(draft) {
 function draftProblems(draft) {
 	const problems = [];
 	if (!NAME_RE.test(draft.name)) problems.push("Name it: 2–64 lowercase letters, digits or dashes.");
+	if (draft.voice !== "" && !VOICE_NAME_RE.test(draft.voice)) problems.push("A voice is a profile name: lowercase letters, digits and single dashes.");
 	if (draft.description.trim() === "") problems.push("Give it one line that says what it is for.");
 	if (draft.charter.trim() === "") problems.push("Write its charter: the instructions it runs by.");
 	problems.push(...manifestDocument(draft).problems);
@@ -2277,8 +2631,14 @@ function draftProblems(draft) {
 }
 var PLAIN_SCALAR = /^[A-Za-z0-9][A-Za-z0-9 _./@:+-]*$/;
 var YAML_WORDS = /^(true|false|yes|no|on|off|null|~)$/i;
+/** Whether YAML would read this plain text as a number (`2026`, `1e3`, `0x10`, `0o7`) and so not hand back
+*  the string that was written. A profile name, an agent name or a skill can be all digits. The SDK reads
+*  with `yaml` (1.2), so `1_000` stays a string and needs no quoting. */
+function readsAsNumber(value) {
+	return value.trim() !== "" && !Number.isNaN(Number(value));
+}
 function scalar(value) {
-	if (PLAIN_SCALAR.test(value) && !YAML_WORDS.test(value) && !/:\s/.test(value) && !/\s$/.test(value)) return value;
+	if (PLAIN_SCALAR.test(value) && !YAML_WORDS.test(value) && !readsAsNumber(value) && !/:\s/.test(value) && !/\s$/.test(value)) return value;
 	return JSON.stringify(value);
 }
 function list(values) {
@@ -2318,6 +2678,10 @@ function manifestDocument(draft, homeId) {
 		{
 			key: "avatar",
 			lines: draft.vibr === "" ? [] : [line("avatar", `avatar: ${scalar(draft.vibr)}`)]
+		},
+		{
+			key: "voice",
+			lines: draft.voice === "" ? [] : [line("voice", `voice: ${scalar(draft.voice)}`)]
 		},
 		{
 			key: "specVersion",
@@ -4060,11 +4424,438 @@ function Line({ n, extra, children }) {
 	});
 }
 //#endregion
+//#region page/sections-voice.tsx
+/** What a pick at each layer is called in a sentence. */
+var PICKING = {
+	workspace: "this project",
+	user: "you",
+	agent: "the agent's own file"
+};
+/** What happens when a pick lands, so nobody wonders whether to press Save. */
+var LANDS = {
+	workspace: "Applies as soon as you pick it, to this agent in this project only.",
+	user: "Applies as soon as you pick it, to this agent in every project that does not choose its own.",
+	agent: "Saved with the rest of the profile, in its agent.md."
+};
+function InlineAlert({ text }) {
+	return /* @__PURE__ */ jsxs("span", {
+		role: "alert",
+		className: "flex items-center gap-1.5 text-fr-xs text-fr-del",
+		children: [/* @__PURE__ */ jsx(Icon, {
+			name: "warnTri",
+			size: 12,
+			strokeWidth: 2
+		}), text]
+	});
+}
+/** A provider's mark: its initials on a tile. The state rides beside it as a dot, never as colour alone. */
+function ProviderMark({ label, ready, speaking }) {
+	return /* @__PURE__ */ jsxs("span", {
+		"aria-hidden": "true",
+		className: cn("relative flex size-5 shrink-0 items-center justify-center rounded-md font-secondary text-[9px] font-semibold", speaking ? "bg-fr-accent text-fr-accent-ink" : ready ? "bg-fr-surface-3 text-fr-text-2" : "bg-fr-surface-3 text-fr-text-3"),
+		children: [monogram(label), !ready ? /* @__PURE__ */ jsx("span", { className: "absolute -right-0.5 -bottom-0.5 size-1.5 rounded-full bg-fr-warn ring-1 ring-fr-surface" }) : null]
+	});
+}
+/** The fallback chain in order: the step that will speak is lit, the ones tried first and unready are flagged. */
+function Chain({ steps, speaking }) {
+	return /* @__PURE__ */ jsx("ol", {
+		className: "m-0 flex list-none flex-wrap items-center gap-x-1 gap-y-1 p-0",
+		children: steps.map((step, index) => /* @__PURE__ */ jsxs("li", {
+			className: "flex items-center gap-1",
+			children: [
+				/* @__PURE__ */ jsx(ProviderMark, {
+					label: step.providerLabel,
+					ready: step.ready,
+					speaking: index === speaking
+				}),
+				/* @__PURE__ */ jsx("span", {
+					className: cn("fr-overflow max-w-32 font-secondary text-fr-xs", index === speaking ? "text-fr-text" : step.ready ? "text-fr-text-2" : "text-fr-text-3"),
+					children: step.providerLabel
+				}),
+				/* @__PURE__ */ jsx("span", {
+					className: "sr-only",
+					children: step.state.text
+				}),
+				index < steps.length - 1 ? /* @__PURE__ */ jsx("span", {
+					"aria-hidden": "true",
+					className: "text-fr-text-3",
+					children: "›"
+				}) : null
+			]
+		}, `${step.providerLabel}:${step.model}`))
+	});
+}
+/** One sample at a time: pressed while this profile speaks (or is being made ready), a second press stops it. */
+function PlayButton({ card, sampler, className }) {
+	const phase = sampler.state.profile === card.name ? sampler.state.phase : "idle";
+	const going = phase === "playing" || phase === "preparing";
+	const cannot = card.speaksWith === null;
+	return /* @__PURE__ */ jsx("button", {
+		type: "button",
+		"aria-label": going ? `Stop the ${card.name} sample` : `Play a sample of ${card.name}`,
+		"aria-pressed": going,
+		disabled: cannot,
+		title: cannot ? "Nothing can speak this profile yet." : void 0,
+		onClick: () => going ? sampler.stop() : sampler.play(card.name),
+		className: cn("flex size-8 shrink-0 items-center justify-center rounded-full border fr-t-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fr-accent-line", going ? "border-fr-accent bg-fr-accent text-fr-accent-ink" : "border-fr-border bg-fr-bg text-fr-text-2 hover:bg-fr-surface-3 hover:text-fr-text", phase === "preparing" && "animate-pulse", cannot && "cursor-default opacity-50", className),
+		children: /* @__PURE__ */ jsx(Icon, {
+			name: going ? "pause" : "play",
+			size: 13,
+			strokeWidth: 2
+		})
+	});
+}
+/** The line under a profile: what speaks, and when something is in the way, a note saying what, in words a person can act on. */
+function speaksLine(card) {
+	const note = card.needs === void 0 ? {} : { note: card.needs };
+	if (card.speaksWith === null) return {
+		text: "Cannot speak yet",
+		...note,
+		warn: true
+	};
+	if (card.speaksWith.fellBack) return {
+		text: `Falls back to ${card.speaksWith.label}`,
+		...note,
+		warn: true
+	};
+	return {
+		text: `Speaks with ${card.speaksWith.label}`,
+		warn: false
+	};
+}
+function SoundsLike({ name, why, card, sampler }) {
+	const line = card ? speaksLine(card) : void 0;
+	return /* @__PURE__ */ jsxs("div", {
+		className: "flex flex-wrap items-center gap-4",
+		children: [
+			/* @__PURE__ */ jsx("span", {
+				className: cn("flex size-12 shrink-0 items-center justify-center rounded-xl", card !== void 0 && card.speaksWith !== null ? "bg-fr-accent-dim text-fr-accent" : "bg-fr-surface-3 text-fr-text-2"),
+				children: /* @__PURE__ */ jsx(Icon, {
+					name: "waveform",
+					size: 22,
+					strokeWidth: 1.6
+				})
+			}),
+			/* @__PURE__ */ jsxs("div", {
+				className: "flex min-w-0 flex-1 flex-col gap-0.5",
+				children: [
+					/* @__PURE__ */ jsx("span", {
+						className: LABEL,
+						children: "Sounds like"
+					}),
+					/* @__PURE__ */ jsx("span", {
+						className: "fr-overflow text-fr-md font-semibold text-fr-text",
+						children: name ?? "No voice chosen"
+					}),
+					/* @__PURE__ */ jsxs("span", {
+						className: "text-fr-xs leading-relaxed text-fr-text-2",
+						children: [why, line ? /* @__PURE__ */ jsxs("span", {
+							className: cn("ml-1.5", line.warn && "text-fr-warn"),
+							children: ["· ", line.text]
+						}) : null]
+					}),
+					line?.note ? /* @__PURE__ */ jsx("span", {
+						className: "text-fr-xs leading-relaxed text-fr-text-2",
+						children: line.note
+					}) : null
+				]
+			}),
+			card && sampler ? /* @__PURE__ */ jsx(PlayButton, {
+				card,
+				sampler
+			}) : null
+		]
+	});
+}
+function LadderRowView({ row, state, selected, busy, onSelect, onClear }) {
+	const body = /* @__PURE__ */ jsxs(Fragment, { children: [
+		/* @__PURE__ */ jsx("span", {
+			"aria-hidden": "true",
+			className: cn("flex size-3.5 shrink-0 items-center justify-center rounded-full border", selected ? "border-fr-accent bg-fr-accent" : "border-fr-border", state === void 0 && "border-transparent"),
+			children: selected ? /* @__PURE__ */ jsx("span", { className: "size-1.5 rounded-full bg-fr-accent-ink" }) : null
+		}),
+		/* @__PURE__ */ jsx("span", {
+			className: "w-24 shrink-0 text-fr-sm text-fr-text",
+			children: row.label
+		}),
+		/* @__PURE__ */ jsx("span", {
+			className: cn("fr-overflow min-w-0 font-secondary text-fr-sm", row.value === null ? "text-fr-text-3" : "text-fr-text"),
+			children: row.value ?? (row.reported ? "Nothing set" : "Not reported")
+		}),
+		row.pending ? /* @__PURE__ */ jsx(Badge, {
+			tone: "mute",
+			variant: "soft",
+			className: "shrink-0 text-fr-xs",
+			children: "Unsaved"
+		}) : row.wins ? /* @__PURE__ */ jsx(Badge, {
+			tone: "accent",
+			variant: "soft",
+			className: "shrink-0 text-fr-xs",
+			children: "In use"
+		}) : null
+	] });
+	const reason = state && !state.enabled ? state.reason : void 0;
+	return /* @__PURE__ */ jsxs("div", {
+		className: cn("flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border px-3 py-2", selected ? "border-fr-accent-line bg-fr-accent-dim" : "border-fr-border-soft bg-fr-bg", reason && !selected && "opacity-70"),
+		children: [
+			state === void 0 ? /* @__PURE__ */ jsx("div", {
+				className: "flex min-w-0 flex-1 items-center gap-3",
+				children: body
+			}) : /* @__PURE__ */ jsx("button", {
+				type: "button",
+				role: "radio",
+				"aria-checked": selected,
+				disabled: !state.enabled || busy,
+				onClick: onSelect,
+				className: "flex min-w-0 flex-1 items-center gap-3 rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fr-accent-line disabled:cursor-default",
+				children: body
+			}),
+			state?.enabled && (row.value !== null || !row.reported) ? /* @__PURE__ */ jsx("button", {
+				type: "button",
+				disabled: busy,
+				"aria-label": `Clear what ${PICKING[state.scope]} chose`,
+				onClick: onClear,
+				className: "shrink-0 rounded-md px-2 py-1 text-fr-xs text-fr-text-2 fr-t-colors hover:bg-fr-surface-3 hover:text-fr-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fr-accent-line disabled:cursor-default disabled:opacity-50",
+				children: "Clear"
+			}) : null,
+			reason ? /* @__PURE__ */ jsx("span", {
+				className: "w-full pl-[1.625rem] text-fr-xs text-fr-text-2",
+				children: reason
+			}) : null
+		]
+	});
+}
+function VoiceCard({ card, held, inUse, disabled, sampler, onPick }) {
+	const line = speaksLine(card);
+	const speaking = card.steps.findIndex((step) => step.ready);
+	return /* @__PURE__ */ jsxs("div", {
+		className: "relative",
+		children: [/* @__PURE__ */ jsxs("button", {
+			type: "button",
+			role: "radio",
+			"aria-checked": held,
+			disabled,
+			onClick: onPick,
+			className: cn("flex h-full w-full min-w-0 flex-col items-start gap-2 rounded-lg border p-3.5 text-left fr-t-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fr-accent-line", sampler && "pr-14", held ? "border-fr-accent-line bg-fr-accent-dim" : "border-fr-border-soft bg-fr-surface", disabled ? "cursor-default" : held ? "" : "hover:border-fr-border hover:bg-fr-surface-2", disabled && !held && "opacity-60"),
+			children: [
+				/* @__PURE__ */ jsxs("span", {
+					className: "flex min-w-0 items-center gap-2",
+					children: [/* @__PURE__ */ jsx("span", {
+						className: "fr-overflow text-fr-sm font-semibold text-fr-text",
+						children: card.name
+					}), inUse ? /* @__PURE__ */ jsx(Badge, {
+						tone: "accent",
+						variant: "soft",
+						className: "shrink-0 text-fr-xs",
+						children: "In use"
+					}) : null]
+				}),
+				card.description ? /* @__PURE__ */ jsx("span", {
+					className: "text-fr-xs leading-relaxed text-pretty text-fr-text-2",
+					children: card.description
+				}) : null,
+				/* @__PURE__ */ jsx(Chain, {
+					steps: card.steps,
+					speaking
+				}),
+				/* @__PURE__ */ jsxs("span", {
+					className: "flex flex-wrap items-center gap-x-2 text-fr-xs",
+					children: [/* @__PURE__ */ jsx("span", {
+						className: "text-fr-text-3",
+						children: card.layerLabel
+					}), /* @__PURE__ */ jsx("span", {
+						className: line.warn ? "text-fr-warn" : "text-fr-text-2",
+						children: line.text
+					})]
+				}),
+				line.note ? /* @__PURE__ */ jsx("span", {
+					className: "pr-6 text-fr-xs leading-relaxed text-pretty text-fr-text-2",
+					children: line.note
+				}) : null,
+				held ? /* @__PURE__ */ jsx("span", {
+					"aria-hidden": "true",
+					className: "absolute right-3 bottom-3 flex size-4 items-center justify-center rounded-full bg-fr-accent text-fr-accent-ink",
+					children: /* @__PURE__ */ jsx(Icon, {
+						name: "check",
+						size: 10,
+						strokeWidth: 3
+					})
+				}) : null
+			]
+		}), sampler ? /* @__PURE__ */ jsx(PlayButton, {
+			card,
+			sampler,
+			className: "absolute top-3 right-3"
+		}) : null]
+	});
+}
+function VoiceSection({ draft, set, editable, agentName, savedVoice, creating, kit, hasWorkspace, marked }) {
+	const { profiles, agents, sampler, assigner } = kit;
+	const lede = "How it sounds when it speaks. How it talks is its Spoken line, in Standing instructions.";
+	const aside = marked.has("voice") ? /* @__PURE__ */ jsx(ProposedBadge, {}) : void 0;
+	const [picked, setPicked] = useState(void 0);
+	const [inflight, setInflight] = useState(0);
+	const [error, setError] = useState(void 0);
+	if (profiles === null) return /* @__PURE__ */ jsx(Section, {
+		id: "agent-voice",
+		title: "Voice",
+		lede,
+		aside,
+		children: /* @__PURE__ */ jsxs("div", {
+			className: cn(PANEL, "flex items-center gap-4 p-4"),
+			children: [/* @__PURE__ */ jsx("span", {
+				className: "flex size-10 shrink-0 items-center justify-center rounded-xl bg-fr-surface-3 text-fr-text-2",
+				children: /* @__PURE__ */ jsx(Icon, {
+					name: "waveform",
+					size: 20,
+					strokeWidth: 1.6
+				})
+			}), /* @__PURE__ */ jsxs("div", {
+				className: "flex min-w-0 flex-col gap-0.5",
+				children: [/* @__PURE__ */ jsx("span", {
+					className: "text-fr-sm font-medium text-fr-text",
+					children: "This build has no voice engine"
+				}), /* @__PURE__ */ jsx("span", {
+					className: "text-fr-xs leading-relaxed text-fr-text-2",
+					children: "There is nothing to choose yet. A voice named in the agent's file is kept as written."
+				})]
+			})]
+		})
+	});
+	const cards = profileCards(profiles);
+	const resolved = agentName === void 0 ? void 0 : agents.get(agentName);
+	const rows = ladder(resolved, draft.voice, profiles.defaultName, savedVoice);
+	const writing = inflight > 0;
+	const states = scopeStates({
+		editable,
+		canAssign: assigner !== void 0,
+		hasWorkspace,
+		exists: !creating,
+		heldInFile: heldByExtra(draft).has("voice")
+	});
+	const active = picked !== void 0 && states.find((state) => state.scope === picked)?.enabled ? picked : defaultScope(states);
+	const nowName = resolved?.name ?? (draft.voice !== "" ? draft.voice : profiles.defaultName);
+	const nowWhy = resolved ? SOURCE_LABELS[resolved.source] : draft.voice !== "" ? SOURCE_LABELS.agent : profiles.defaultName ? SOURCE_LABELS.default : "";
+	const heldHere = rows.find((row) => row.scope === active)?.value ?? null;
+	const above = outrankedBy(active, rows);
+	const write = (target, profile) => {
+		setError(void 0);
+		if (target === "agent") {
+			set({ voice: profile ?? "" });
+			return;
+		}
+		if (assigner === void 0 || agentName === void 0) return;
+		setInflight((count) => count + 1);
+		assigner.assign(agentName, profile, target).catch((cause) => setError(errorText(cause))).finally(() => setInflight((count) => count - 1));
+	};
+	return /* @__PURE__ */ jsx(Section, {
+		id: "agent-voice",
+		title: "Voice",
+		lede,
+		aside,
+		children: /* @__PURE__ */ jsxs("div", {
+			className: cn(PANEL, "flex flex-col gap-5 p-4"),
+			children: [
+				/* @__PURE__ */ jsx(SoundsLike, {
+					name: nowName,
+					why: nowWhy,
+					card: cards.find((card) => card.name === nowName),
+					sampler
+				}),
+				/* @__PURE__ */ jsxs("div", {
+					className: "flex flex-col gap-2",
+					children: [
+						/* @__PURE__ */ jsx("span", {
+							className: "text-fr-sm font-medium text-fr-text",
+							children: "Who decides"
+						}),
+						/* @__PURE__ */ jsx("span", {
+							className: "text-fr-xs leading-relaxed text-fr-text-2",
+							children: "The most specific choice wins. Pick the row you want to set, then a voice below."
+						}),
+						/* @__PURE__ */ jsx("div", {
+							role: "radiogroup",
+							"aria-label": "Set the voice for",
+							className: "flex flex-col gap-1.5",
+							children: rows.map((row) => {
+								const state = states.find((entry) => entry.scope === row.scope);
+								return /* @__PURE__ */ jsx(LadderRowView, {
+									row,
+									state,
+									selected: state !== void 0 && row.scope === active,
+									busy: writing,
+									onSelect: () => state && setPicked(state.scope),
+									onClear: () => state && write(state.scope, null)
+								}, row.scope);
+							})
+						})
+					]
+				}),
+				/* @__PURE__ */ jsxs("div", {
+					className: "flex flex-col gap-2.5",
+					children: [
+						/* @__PURE__ */ jsxs("div", {
+							className: "flex flex-col gap-0.5",
+							children: [
+								/* @__PURE__ */ jsxs("span", {
+									className: "text-fr-sm font-medium text-fr-text",
+									children: ["Pick a voice for ", PICKING[active]]
+								}),
+								/* @__PURE__ */ jsx("span", {
+									className: "text-fr-xs leading-relaxed text-fr-text-2",
+									children: LANDS[active]
+								}),
+								above && above.value !== null ? /* @__PURE__ */ jsxs("span", {
+									className: "text-fr-xs leading-relaxed text-fr-text-2",
+									children: [
+										above.label,
+										" already chose ",
+										/* @__PURE__ */ jsx("span", {
+											className: "font-secondary text-fr-text",
+											children: above.value
+										}),
+										", which outranks this."
+									]
+								}) : null
+							]
+						}),
+						cards.length === 0 ? /* @__PURE__ */ jsx("p", {
+							className: "m-0 rounded-lg border border-dashed border-fr-border px-4 py-3 text-fr-sm text-fr-text-2",
+							children: "No voice profile is visible from this project."
+						}) : /* @__PURE__ */ jsx(ChoiceGroup, {
+							label: "Voice profiles",
+							columns: 4,
+							children: cards.map((card) => /* @__PURE__ */ jsx(VoiceCard, {
+								card,
+								held: heldHere === card.name,
+								inUse: nowName === card.name,
+								disabled: writing || states.find((state) => state.scope === active)?.enabled !== true,
+								sampler,
+								onPick: () => write(active, card.name)
+							}, card.name))
+						}),
+						error !== void 0 ? /* @__PURE__ */ jsx(InlineAlert, { text: error }) : null,
+						sampler?.state.phase === "error" && sampler.state.message ? /* @__PURE__ */ jsx(InlineAlert, { text: sampler.state.message }) : null
+					]
+				}),
+				/* @__PURE__ */ jsx("p", {
+					className: "m-0 border-t border-fr-border-soft pt-3 text-fr-xs leading-relaxed text-fr-text-2",
+					children: "To write a new profile or add a provider key, open Settings, then Voice. This page only chooses between the profiles that exist."
+				})
+			]
+		})
+	});
+}
+//#endregion
 //#region page/profile.tsx
 var NAV = [
 	{
 		id: "identity",
 		label: "Identity"
+	},
+	{
+		id: "voice",
+		label: "Voice"
 	},
 	{
 		id: "charter",
@@ -4165,7 +4956,7 @@ function SwitchField({ label, checked, disabled, onChange, locked }) {
 		})]
 	});
 }
-function AgentProfile({ state, onChange, onClose, onExtend, onDecide, onSaved, forge, roster, listed, activity, usage, catalog, models, now, faceOf, bridged, onDock, configure, busy, notice }) {
+function AgentProfile({ state, onChange, onClose, onExtend, onDecide, onSaved, forge, roster, listed, activity, usage, catalog, models, now, faceOf, bridged, onDock, configure, busy, notice, voice, hasWorkspace }) {
 	const { draft } = state;
 	const creating = isNew(state);
 	const editable = state.readOnly === void 0;
@@ -4514,6 +5305,17 @@ function AgentProfile({ state, onChange, onClose, onExtend, onDecide, onSaved, f
 				bridged,
 				marked
 			}),
+			/* @__PURE__ */ jsx(VoiceSection, {
+				draft,
+				set,
+				editable,
+				agentName,
+				savedVoice: state.agent?.draft.voice ?? "",
+				creating,
+				kit: voice,
+				hasWorkspace,
+				marked
+			}),
 			/* @__PURE__ */ jsx(CharterSection, {
 				draft,
 				set,
@@ -4587,7 +5389,7 @@ function AgentProfile({ state, onChange, onClose, onExtend, onDecide, onSaved, f
 }
 //#endregion
 //#region page/page.css?inline
-var page_default = "/*! tailwindcss v4.3.3 | MIT License | https://tailwindcss.com */\n@layer properties {\n  @supports (((-webkit-hyphens: none)) and (not (margin-trim: inline))) or ((-moz-orient: inline) and (not (color: rgb(from red r g b)))) {\n    *, :before, :after, ::backdrop {\n      --tw-translate-x: 0;\n      --tw-translate-y: 0;\n      --tw-translate-z: 0;\n      --tw-divide-x-reverse: 0;\n      --tw-border-style: solid;\n      --tw-leading: initial;\n      --tw-font-weight: initial;\n      --tw-tracking: initial;\n      --tw-ordinal: initial;\n      --tw-slashed-zero: initial;\n      --tw-numeric-figure: initial;\n      --tw-numeric-spacing: initial;\n      --tw-numeric-fraction: initial;\n      --tw-shadow: 0 0 #0000;\n      --tw-shadow-color: initial;\n      --tw-shadow-alpha: 100%;\n      --tw-inset-shadow: 0 0 #0000;\n      --tw-inset-shadow-color: initial;\n      --tw-inset-shadow-alpha: 100%;\n      --tw-ring-color: initial;\n      --tw-ring-shadow: 0 0 #0000;\n      --tw-inset-ring-color: initial;\n      --tw-inset-ring-shadow: 0 0 #0000;\n      --tw-ring-inset: initial;\n      --tw-ring-offset-width: 0px;\n      --tw-ring-offset-color: #fff;\n      --tw-ring-offset-shadow: 0 0 #0000;\n      --tw-outline-style: solid;\n      --tw-blur: initial;\n      --tw-brightness: initial;\n      --tw-contrast: initial;\n      --tw-grayscale: initial;\n      --tw-hue-rotate: initial;\n      --tw-invert: initial;\n      --tw-opacity: initial;\n      --tw-saturate: initial;\n      --tw-sepia: initial;\n      --tw-drop-shadow: initial;\n      --tw-drop-shadow-color: initial;\n      --tw-drop-shadow-alpha: 100%;\n      --tw-drop-shadow-size: initial;\n      --tw-content: \"\";\n    }\n  }\n}\n\n@layer theme, base, components;\n\n@layer utilities {\n  :where([data-slot=\"general-agents-page\"]) .\\@container {\n    container-type: inline-size;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .pointer-events-auto {\n    pointer-events: auto;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .pointer-events-none {\n    pointer-events: none;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .visible {\n    visibility: visible;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .sr-only {\n    clip-path: inset(50%);\n    white-space: nowrap;\n    border-width: 0;\n    width: 1px;\n    height: 1px;\n    margin: -1px;\n    padding: 0;\n    position: absolute;\n    overflow: hidden;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .absolute {\n    position: absolute;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .fixed {\n    position: fixed;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .relative {\n    position: relative;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .sticky {\n    position: sticky;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .inset-0 {\n    inset: 0;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .inset-x-0 {\n    inset-inline: 0;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .-top-24 {\n    top: calc(var(--spacing, .25rem) * -24);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .top-0 {\n    top: 0;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .top-1\\/2 {\n    top: 50%;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .top-3 {\n    top: calc(var(--spacing, .25rem) * 3);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .top-full {\n    top: 100%;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .right-0 {\n    right: 0;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .right-3 {\n    right: calc(var(--spacing, .25rem) * 3);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .right-8 {\n    right: calc(var(--spacing, .25rem) * 8);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .bottom-4 {\n    bottom: calc(var(--spacing, .25rem) * 4);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .-left-16 {\n    left: calc(var(--spacing, .25rem) * -16);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .left-0 {\n    left: 0;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .left-2\\.5 {\n    left: calc(var(--spacing, .25rem) * 2.5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .left-8 {\n    left: calc(var(--spacing, .25rem) * 8);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .isolate {\n    isolation: isolate;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .z-10 {\n    z-index: 10;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .z-20 {\n    z-index: 20;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .z-\\[1\\] {\n    z-index: 1;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .z-\\[5\\] {\n    z-index: 5;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .col-start-2 {\n    grid-column-start: 2;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .m-0 {\n    margin: 0;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .-mx-1 {\n    margin-inline: calc(var(--spacing, .25rem) * -1);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .mx-4 {\n    margin-inline: calc(var(--spacing, .25rem) * 4);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .mx-auto {\n    margin-inline: auto;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .-my-2 {\n    margin-block: calc(var(--spacing, .25rem) * -2);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .-mt-2 {\n    margin-top: calc(var(--spacing, .25rem) * -2);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .-mt-3 {\n    margin-top: calc(var(--spacing, .25rem) * -3);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .-mt-4 {\n    margin-top: calc(var(--spacing, .25rem) * -4);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .mt-0\\.5 {\n    margin-top: calc(var(--spacing, .25rem) * .5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .mt-1 {\n    margin-top: var(--spacing, .25rem);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .mt-1\\.5 {\n    margin-top: calc(var(--spacing, .25rem) * 1.5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .mt-3 {\n    margin-top: calc(var(--spacing, .25rem) * 3);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .mt-3\\.5 {\n    margin-top: calc(var(--spacing, .25rem) * 3.5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .mt-auto {\n    margin-top: auto;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .-mb-3 {\n    margin-bottom: calc(var(--spacing, .25rem) * -3);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .ml-auto {\n    margin-left: auto;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .line-clamp-2 {\n    -webkit-line-clamp: 2;\n    -webkit-box-orient: vertical;\n    display: -webkit-box;\n    overflow: hidden;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .block {\n    display: block;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .contents {\n    display: contents;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .flex {\n    display: flex;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .grid {\n    display: grid;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .hidden {\n    display: none;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .inline {\n    display: inline;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .inline-flex {\n    display: inline-flex;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .size-2 {\n    width: calc(var(--spacing, .25rem) * 2);\n    height: calc(var(--spacing, .25rem) * 2);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .size-4 {\n    width: calc(var(--spacing, .25rem) * 4);\n    height: calc(var(--spacing, .25rem) * 4);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .size-5 {\n    width: calc(var(--spacing, .25rem) * 5);\n    height: calc(var(--spacing, .25rem) * 5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .size-7 {\n    width: calc(var(--spacing, .25rem) * 7);\n    height: calc(var(--spacing, .25rem) * 7);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .size-8 {\n    width: calc(var(--spacing, .25rem) * 8);\n    height: calc(var(--spacing, .25rem) * 8);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .size-9 {\n    width: calc(var(--spacing, .25rem) * 9);\n    height: calc(var(--spacing, .25rem) * 9);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .size-10 {\n    width: calc(var(--spacing, .25rem) * 10);\n    height: calc(var(--spacing, .25rem) * 10);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .size-16 {\n    width: calc(var(--spacing, .25rem) * 16);\n    height: calc(var(--spacing, .25rem) * 16);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .size-80 {\n    width: calc(var(--spacing, .25rem) * 80);\n    height: calc(var(--spacing, .25rem) * 80);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .h-3 {\n    height: calc(var(--spacing, .25rem) * 3);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .h-4 {\n    height: calc(var(--spacing, .25rem) * 4);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .h-9 {\n    height: calc(var(--spacing, .25rem) * 9);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .h-11 {\n    height: calc(var(--spacing, .25rem) * 11);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .h-16 {\n    height: calc(var(--spacing, .25rem) * 16);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .h-40 {\n    height: calc(var(--spacing, .25rem) * 40);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .h-full {\n    height: 100%;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .h-px {\n    height: 1px;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .max-h-72 {\n    max-height: calc(var(--spacing, .25rem) * 72);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .max-h-120 {\n    max-height: calc(var(--spacing, .25rem) * 120);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .max-h-none {\n    max-height: none;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .min-h-0 {\n    min-height: 0;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .min-h-5 {\n    min-height: calc(var(--spacing, .25rem) * 5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .min-h-7 {\n    min-height: calc(var(--spacing, .25rem) * 7);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .min-h-44 {\n    min-height: calc(var(--spacing, .25rem) * 44);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .min-h-56 {\n    min-height: calc(var(--spacing, .25rem) * 56);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .min-h-72 {\n    min-height: calc(var(--spacing, .25rem) * 72);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .min-h-\\[2lh\\] {\n    min-height: 2lh;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .w-5 {\n    width: calc(var(--spacing, .25rem) * 5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .w-6 {\n    width: calc(var(--spacing, .25rem) * 6);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .w-9 {\n    width: calc(var(--spacing, .25rem) * 9);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .w-32 {\n    width: calc(var(--spacing, .25rem) * 32);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .w-36 {\n    width: calc(var(--spacing, .25rem) * 36);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .w-40 {\n    width: calc(var(--spacing, .25rem) * 40);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .w-full {\n    width: 100%;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .max-w-56 {\n    max-width: calc(var(--spacing, .25rem) * 56);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .max-w-285 {\n    max-width: calc(var(--spacing, .25rem) * 285);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .max-w-295 {\n    max-width: calc(var(--spacing, .25rem) * 295);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .max-w-full {\n    max-width: 100%;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .max-w-md {\n    max-width: var(--container-md, 28rem);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .max-w-prose {\n    max-width: 65ch;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .min-w-0 {\n    min-width: 0;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .min-w-48 {\n    min-width: calc(var(--spacing, .25rem) * 48);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .flex-1 {\n    flex: 1;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .shrink-0 {\n    flex-shrink: 0;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .-translate-y-1\\/2 {\n    --tw-translate-y: calc(calc(1 / 2 * 100%) * -1);\n    translate: var(--tw-translate-x) var(--tw-translate-y);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .translate-y-px {\n    --tw-translate-y: 1px;\n    translate: var(--tw-translate-x) var(--tw-translate-y);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .animate-pulse {\n    animation: var(--animate-pulse, pulse 2s cubic-bezier(.4, 0, .6, 1) infinite);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .cursor-default {\n    cursor: default;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .resize {\n    resize: both;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .scroll-mt-16 {\n    scroll-margin-top: calc(var(--spacing, .25rem) * 16);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .\\[scrollbar-gutter\\:stable\\] {\n    scrollbar-gutter: stable;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .list-none {\n    list-style-type: none;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .grid-cols-1 {\n    grid-template-columns: repeat(1, minmax(0, 1fr));\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .grid-cols-2 {\n    grid-template-columns: repeat(2, minmax(0, 1fr));\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .grid-cols-4 {\n    grid-template-columns: repeat(4, minmax(0, 1fr));\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .grid-cols-\\[2\\.5rem_minmax\\(0\\,1fr\\)\\] {\n    grid-template-columns: 2.5rem minmax(0, 1fr);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .grid-cols-\\[repeat\\(auto-fill\\,minmax\\(5\\.5rem\\,1fr\\)\\)\\] {\n    grid-template-columns: repeat(auto-fill, minmax(5.5rem, 1fr));\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .flex-col {\n    flex-direction: column;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .flex-col-reverse {\n    flex-direction: column-reverse;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .flex-wrap {\n    flex-wrap: wrap;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .items-baseline {\n    align-items: baseline;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .items-center {\n    align-items: center;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .items-end {\n    align-items: flex-end;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .items-start {\n    align-items: flex-start;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .justify-between {\n    justify-content: space-between;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .justify-center {\n    justify-content: center;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .gap-0\\.5 {\n    gap: calc(var(--spacing, .25rem) * .5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .gap-1 {\n    gap: var(--spacing, .25rem);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .gap-1\\.5 {\n    gap: calc(var(--spacing, .25rem) * 1.5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .gap-2 {\n    gap: calc(var(--spacing, .25rem) * 2);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .gap-2\\.5 {\n    gap: calc(var(--spacing, .25rem) * 2.5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .gap-3 {\n    gap: calc(var(--spacing, .25rem) * 3);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .gap-3\\.5 {\n    gap: calc(var(--spacing, .25rem) * 3.5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .gap-4 {\n    gap: calc(var(--spacing, .25rem) * 4);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .gap-5 {\n    gap: calc(var(--spacing, .25rem) * 5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .gap-6 {\n    gap: calc(var(--spacing, .25rem) * 6);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .gap-7 {\n    gap: calc(var(--spacing, .25rem) * 7);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .gap-x-2 {\n    column-gap: calc(var(--spacing, .25rem) * 2);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .gap-x-2\\.5 {\n    column-gap: calc(var(--spacing, .25rem) * 2.5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .gap-x-3 {\n    column-gap: calc(var(--spacing, .25rem) * 3);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .gap-x-3\\.5 {\n    column-gap: calc(var(--spacing, .25rem) * 3.5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .gap-x-6 {\n    column-gap: calc(var(--spacing, .25rem) * 6);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .gap-y-1 {\n    row-gap: var(--spacing, .25rem);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .gap-y-1\\.5 {\n    row-gap: calc(var(--spacing, .25rem) * 1.5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .gap-y-5 {\n    row-gap: calc(var(--spacing, .25rem) * 5);\n  }\n\n  :where(:where([data-slot=\"general-agents-page\"]) .divide-x > :not(:last-child)) {\n    --tw-divide-x-reverse: 0;\n    border-inline-style: var(--tw-border-style);\n    border-inline-start-width: calc(1px * var(--tw-divide-x-reverse));\n    border-inline-end-width: calc(1px * calc(1 - var(--tw-divide-x-reverse)));\n  }\n\n  :where(:where([data-slot=\"general-agents-page\"]) .divide-fr-border-soft > :not(:last-child)) {\n    border-color: var(--fr-border-soft);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .overflow-auto {\n    overflow: auto;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .overflow-hidden {\n    overflow: hidden;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .overflow-y-auto {\n    overflow-y: auto;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .rounded {\n    border-radius: .25rem;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .rounded-full {\n    border-radius: 3.40282e38px;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .rounded-lg {\n    border-radius: var(--fr-r);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .rounded-md {\n    border-radius: calc(var(--fr-r) - 2px);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .rounded-none {\n    border-radius: 0;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .rounded-sm {\n    border-radius: calc(var(--fr-r) - 4px);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .rounded-xl {\n    border-radius: calc(var(--fr-r) + 4px);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .border {\n    border-style: var(--tw-border-style);\n    border-width: 1px;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .border-0 {\n    border-style: var(--tw-border-style);\n    border-width: 0;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .border-t {\n    border-top-style: var(--tw-border-style);\n    border-top-width: 1px;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .border-b {\n    border-bottom-style: var(--tw-border-style);\n    border-bottom-width: 1px;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .border-dashed {\n    --tw-border-style: dashed;\n    border-style: dashed;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .border-fr-accent {\n    border-color: var(--fr-accent);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .border-fr-accent-line {\n    border-color: var(--fr-accent-line);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .border-fr-border {\n    border-color: var(--fr-border);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .border-fr-border-soft {\n    border-color: var(--fr-border-soft);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .border-fr-del\\/60 {\n    border-color: var(--fr-del);\n  }\n\n  @supports (color: color-mix(in lab, red, red)) {\n    :where([data-slot=\"general-agents-page\"]) .border-fr-del\\/60 {\n      border-color: color-mix(in oklab, var(--fr-del) 60%, transparent);\n    }\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .border-fr-iris\\/40 {\n    border-color: var(--fr-iris);\n  }\n\n  @supports (color: color-mix(in lab, red, red)) {\n    :where([data-slot=\"general-agents-page\"]) .border-fr-iris\\/40 {\n      border-color: color-mix(in oklab, var(--fr-iris) 40%, transparent);\n    }\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .bg-fr-accent {\n    background-color: var(--fr-accent);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .bg-fr-accent-dim, :where([data-slot=\"general-agents-page\"]) .bg-fr-accent-dim\\/40 {\n    background-color: var(--fr-accent-dim);\n  }\n\n  @supports (color: color-mix(in lab, red, red)) {\n    :where([data-slot=\"general-agents-page\"]) .bg-fr-accent-dim\\/40 {\n      background-color: color-mix(in oklab, var(--fr-accent-dim) 40%, transparent);\n    }\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .bg-fr-bg {\n    background-color: var(--fr-bg);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .bg-fr-border {\n    background-color: var(--fr-border);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .bg-fr-iris\\/15 {\n    background-color: var(--fr-iris);\n  }\n\n  @supports (color: color-mix(in lab, red, red)) {\n    :where([data-slot=\"general-agents-page\"]) .bg-fr-iris\\/15 {\n      background-color: color-mix(in oklab, var(--fr-iris) 15%, transparent);\n    }\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .bg-fr-surface {\n    background-color: var(--fr-surface);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .bg-fr-surface-2\\/50 {\n    background-color: var(--fr-surface-2);\n  }\n\n  @supports (color: color-mix(in lab, red, red)) {\n    :where([data-slot=\"general-agents-page\"]) .bg-fr-surface-2\\/50 {\n      background-color: color-mix(in oklab, var(--fr-surface-2) 50%, transparent);\n    }\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .bg-fr-surface-3 {\n    background-color: var(--fr-surface-3);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .bg-fr-warn {\n    background-color: var(--fr-warn);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .p-0 {\n    padding: 0;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .p-1 {\n    padding: var(--spacing, .25rem);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .p-1\\.5 {\n    padding: calc(var(--spacing, .25rem) * 1.5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .p-3 {\n    padding: calc(var(--spacing, .25rem) * 3);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .p-3\\.5 {\n    padding: calc(var(--spacing, .25rem) * 3.5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .p-4 {\n    padding: calc(var(--spacing, .25rem) * 4);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .p-5 {\n    padding: calc(var(--spacing, .25rem) * 5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .px-1 {\n    padding-inline: var(--spacing, .25rem);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .px-2 {\n    padding-inline: calc(var(--spacing, .25rem) * 2);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .px-2\\.5 {\n    padding-inline: calc(var(--spacing, .25rem) * 2.5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .px-3 {\n    padding-inline: calc(var(--spacing, .25rem) * 3);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .px-3\\.5 {\n    padding-inline: calc(var(--spacing, .25rem) * 3.5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .px-4 {\n    padding-inline: calc(var(--spacing, .25rem) * 4);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .px-5 {\n    padding-inline: calc(var(--spacing, .25rem) * 5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .px-6 {\n    padding-inline: calc(var(--spacing, .25rem) * 6);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .py-0\\.5 {\n    padding-block: calc(var(--spacing, .25rem) * .5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .py-1 {\n    padding-block: var(--spacing, .25rem);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .py-1\\.5 {\n    padding-block: calc(var(--spacing, .25rem) * 1.5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .py-2 {\n    padding-block: calc(var(--spacing, .25rem) * 2);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .py-2\\.5 {\n    padding-block: calc(var(--spacing, .25rem) * 2.5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .py-3 {\n    padding-block: calc(var(--spacing, .25rem) * 3);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .py-6 {\n    padding-block: calc(var(--spacing, .25rem) * 6);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .pt-0\\.5 {\n    padding-top: calc(var(--spacing, .25rem) * .5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .pt-1 {\n    padding-top: var(--spacing, .25rem);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .pt-3 {\n    padding-top: calc(var(--spacing, .25rem) * 3);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .pt-4 {\n    padding-top: calc(var(--spacing, .25rem) * 4);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .pt-5 {\n    padding-top: calc(var(--spacing, .25rem) * 5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .pt-8 {\n    padding-top: calc(var(--spacing, .25rem) * 8);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .pr-2 {\n    padding-right: calc(var(--spacing, .25rem) * 2);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .pr-3 {\n    padding-right: calc(var(--spacing, .25rem) * 3);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .pr-5 {\n    padding-right: calc(var(--spacing, .25rem) * 5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .pb-7 {\n    padding-bottom: calc(var(--spacing, .25rem) * 7);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .pb-12 {\n    padding-bottom: calc(var(--spacing, .25rem) * 12);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .pl-1\\.5 {\n    padding-left: calc(var(--spacing, .25rem) * 1.5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .pl-2 {\n    padding-left: calc(var(--spacing, .25rem) * 2);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .pl-8 {\n    padding-left: calc(var(--spacing, .25rem) * 8);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .text-center {\n    text-align: center;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .text-left {\n    text-align: left;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .text-right {\n    text-align: right;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .font-code {\n    font-family: var(--fr-font-code);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .font-secondary {\n    font-family: var(--fr-font-secondary);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .text-fr-2xl {\n    font-size: var(--fr-fs-2xl);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .text-fr-2xs {\n    font-size: var(--fr-fs-2xs);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .text-fr-lg {\n    font-size: var(--fr-fs-lg);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .text-fr-md {\n    font-size: var(--fr-fs-md);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .text-fr-sm {\n    font-size: var(--fr-fs-sm);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .text-fr-xs {\n    font-size: var(--fr-fs-xs);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .leading-none {\n    --tw-leading: 1;\n    line-height: 1;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .leading-relaxed {\n    --tw-leading: var(--leading-relaxed, 1.625);\n    line-height: var(--leading-relaxed, 1.625);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .leading-tight {\n    --tw-leading: var(--leading-tight, 1.25);\n    line-height: var(--leading-tight, 1.25);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .font-medium {\n    --tw-font-weight: var(--font-weight-medium, 500);\n    font-weight: var(--font-weight-medium, 500);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .font-normal {\n    --tw-font-weight: var(--font-weight-normal, 400);\n    font-weight: var(--font-weight-normal, 400);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .font-semibold {\n    --tw-font-weight: var(--font-weight-semibold, 600);\n    font-weight: var(--font-weight-semibold, 600);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .tracking-\\[-0\\.01em\\] {\n    --tw-tracking: -.01em;\n    letter-spacing: -.01em;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .tracking-fr-label {\n    --tw-tracking: var(--fr-tracking-label);\n    letter-spacing: var(--fr-tracking-label);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .text-balance {\n    text-wrap: balance;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .text-pretty {\n    text-wrap: pretty;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .break-words {\n    overflow-wrap: break-word;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .whitespace-pre-wrap {\n    white-space: pre-wrap;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .text-fr-accent {\n    color: var(--fr-accent);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .text-fr-accent-ink {\n    color: var(--fr-accent-ink);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .text-fr-del {\n    color: var(--fr-del);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .text-fr-iris {\n    color: var(--fr-iris);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .text-fr-text {\n    color: var(--fr-text);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .text-fr-text-2 {\n    color: var(--fr-text-2);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .text-fr-text-3 {\n    color: var(--fr-text-3);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .text-fr-text\\/80 {\n    color: var(--fr-text);\n  }\n\n  @supports (color: color-mix(in lab, red, red)) {\n    :where([data-slot=\"general-agents-page\"]) .text-fr-text\\/80 {\n      color: color-mix(in oklab, var(--fr-text) 80%, transparent);\n    }\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .text-fr-warn {\n    color: var(--fr-warn);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .text-transparent {\n    color: #0000;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .lowercase {\n    text-transform: lowercase;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .uppercase {\n    text-transform: uppercase;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .tabular-nums {\n    --tw-numeric-spacing: tabular-nums;\n    font-variant-numeric: var(--tw-ordinal, ) var(--tw-slashed-zero, ) var(--tw-numeric-figure, ) var(--tw-numeric-spacing, ) var(--tw-numeric-fraction, );\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .opacity-55 {\n    opacity: .55;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .opacity-60 {\n    opacity: .6;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .opacity-70 {\n    opacity: .7;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .opacity-80 {\n    opacity: .8;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .shadow-\\[inset_0_1px_0_color-mix\\(in_oklab\\,var\\(--fr-text\\)_10\\%\\,transparent\\)\\] {\n    --tw-shadow: inset 0 1px 0 var(--tw-shadow-color, var(--fr-text));\n  }\n\n  @supports (color: color-mix(in lab, red, red)) {\n    :where([data-slot=\"general-agents-page\"]) .shadow-\\[inset_0_1px_0_color-mix\\(in_oklab\\,var\\(--fr-text\\)_10\\%\\,transparent\\)\\] {\n      --tw-shadow: inset 0 1px 0 var(--tw-shadow-color, color-mix(in oklab,var(--fr-text) 10%,transparent));\n    }\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .shadow-\\[inset_0_1px_0_color-mix\\(in_oklab\\,var\\(--fr-text\\)_10\\%\\,transparent\\)\\] {\n    box-shadow: var(--tw-inset-shadow), var(--tw-inset-ring-shadow), var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .shadow-md {\n    --tw-shadow: 0 4px 6px -1px var(--tw-shadow-color, #0000001a), 0 2px 4px -2px var(--tw-shadow-color, #0000001a);\n    box-shadow: var(--tw-inset-shadow), var(--tw-inset-ring-shadow), var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .ring {\n    --tw-ring-shadow: var(--tw-ring-inset, ) 0 0 0 calc(1px + var(--tw-ring-offset-width)) var(--tw-ring-color, currentcolor);\n    box-shadow: var(--tw-inset-shadow), var(--tw-inset-ring-shadow), var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .outline {\n    outline-style: var(--tw-outline-style);\n    outline-width: 1px;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .saturate-0 {\n    --tw-saturate: saturate(0%);\n    filter: var(--tw-blur, ) var(--tw-brightness, ) var(--tw-contrast, ) var(--tw-grayscale, ) var(--tw-hue-rotate, ) var(--tw-invert, ) var(--tw-saturate, ) var(--tw-sepia, ) var(--tw-drop-shadow, );\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .filter {\n    filter: var(--tw-blur, ) var(--tw-brightness, ) var(--tw-contrast, ) var(--tw-grayscale, ) var(--tw-hue-rotate, ) var(--tw-invert, ) var(--tw-saturate, ) var(--tw-sepia, ) var(--tw-drop-shadow, );\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .select-none {\n    -webkit-user-select: none;\n    user-select: none;\n  }\n\n  @media (hover: hover) {\n    :where([data-slot=\"general-agents-page\"]) .group-hover\\/card\\:border-fr-border:is(:where(.group\\/card):hover *) {\n      border-color: var(--fr-border);\n    }\n\n    :where([data-slot=\"general-agents-page\"]) .group-hover\\/step\\:bg-fr-border:is(:where(.group\\/step):hover *) {\n      background-color: var(--fr-border);\n    }\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .after\\:absolute:after {\n    content: var(--tw-content);\n    position: absolute;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .after\\:inset-0:after {\n    content: var(--tw-content);\n    inset: 0;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .after\\:rounded-lg:after {\n    content: var(--tw-content);\n    border-radius: var(--fr-r);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .after\\:content-\\[\\'\\'\\]:after {\n    --tw-content: \"\";\n    content: var(--tw-content);\n  }\n\n  @media (hover: hover) {\n    :where([data-slot=\"general-agents-page\"]) .hover\\:border-fr-border:hover {\n      border-color: var(--fr-border);\n    }\n\n    :where([data-slot=\"general-agents-page\"]) .hover\\:border-fr-iris\\/70:hover {\n      border-color: var(--fr-iris);\n    }\n\n    @supports (color: color-mix(in lab, red, red)) {\n      :where([data-slot=\"general-agents-page\"]) .hover\\:border-fr-iris\\/70:hover {\n        border-color: color-mix(in oklab, var(--fr-iris) 70%, transparent);\n      }\n    }\n\n    :where([data-slot=\"general-agents-page\"]) .hover\\:bg-fr-surface-2:hover {\n      background-color: var(--fr-surface-2);\n    }\n\n    :where([data-slot=\"general-agents-page\"]) .hover\\:text-fr-del:hover {\n      color: var(--fr-del);\n    }\n\n    :where([data-slot=\"general-agents-page\"]) .hover\\:text-fr-text:hover {\n      color: var(--fr-text);\n    }\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .focus-visible\\:bg-fr-surface-2:focus-visible {\n    background-color: var(--fr-surface-2);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .focus-visible\\:ring-2:focus-visible {\n    --tw-ring-shadow: var(--tw-ring-inset, ) 0 0 0 calc(2px + var(--tw-ring-offset-width)) var(--tw-ring-color, currentcolor);\n    box-shadow: var(--tw-inset-shadow), var(--tw-inset-ring-shadow), var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .focus-visible\\:ring-fr-accent-line:focus-visible {\n    --tw-ring-color: var(--fr-accent-line);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .focus-visible\\:outline-none:focus-visible {\n    --tw-outline-style: none;\n    outline-style: none;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .focus-visible\\:after\\:ring-2:focus-visible:after {\n    content: var(--tw-content);\n    --tw-ring-shadow: var(--tw-ring-inset, ) 0 0 0 calc(2px + var(--tw-ring-offset-width)) var(--tw-ring-color, currentcolor);\n    box-shadow: var(--tw-inset-shadow), var(--tw-inset-ring-shadow), var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .focus-visible\\:after\\:ring-fr-accent-line:focus-visible:after {\n    content: var(--tw-content);\n    --tw-ring-color: var(--fr-accent-line);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .disabled\\:cursor-default:disabled {\n    cursor: default;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .disabled\\:opacity-30:disabled {\n    opacity: .3;\n  }\n\n  @container (min-width: 28rem) {\n    :where([data-slot=\"general-agents-page\"]) .\\@md\\:grid-cols-3 {\n      grid-template-columns: repeat(3, minmax(0, 1fr));\n    }\n  }\n\n  @container (min-width: 36rem) {\n    :where([data-slot=\"general-agents-page\"]) .\\@xl\\:grid-cols-2 {\n      grid-template-columns: repeat(2, minmax(0, 1fr));\n    }\n\n    :where([data-slot=\"general-agents-page\"]) .\\@xl\\:grid-cols-3 {\n      grid-template-columns: repeat(3, minmax(0, 1fr));\n    }\n  }\n\n  @container (min-width: 42rem) {\n    :where([data-slot=\"general-agents-page\"]) .\\@2xl\\:w-56 {\n      width: calc(var(--spacing, .25rem) * 56);\n    }\n\n    :where([data-slot=\"general-agents-page\"]) .\\@2xl\\:grid-cols-2 {\n      grid-template-columns: repeat(2, minmax(0, 1fr));\n    }\n\n    :where([data-slot=\"general-agents-page\"]) .\\@2xl\\:flex-row {\n      flex-direction: row;\n    }\n\n    :where([data-slot=\"general-agents-page\"]) .\\@2xl\\:items-start {\n      align-items: flex-start;\n    }\n\n    :where([data-slot=\"general-agents-page\"]) .\\@2xl\\:gap-6 {\n      gap: calc(var(--spacing, .25rem) * 6);\n    }\n  }\n\n  @container (min-width: 48rem) {\n    :where([data-slot=\"general-agents-page\"]) .\\@3xl\\:block {\n      display: block;\n    }\n\n    :where([data-slot=\"general-agents-page\"]) .\\@3xl\\:w-60 {\n      width: calc(var(--spacing, .25rem) * 60);\n    }\n\n    :where([data-slot=\"general-agents-page\"]) .\\@3xl\\:max-w-80 {\n      max-width: calc(var(--spacing, .25rem) * 80);\n    }\n\n    :where([data-slot=\"general-agents-page\"]) .\\@3xl\\:grid-cols-4 {\n      grid-template-columns: repeat(4, minmax(0, 1fr));\n    }\n\n    :where([data-slot=\"general-agents-page\"]) .\\@3xl\\:flex-row {\n      flex-direction: row;\n    }\n\n    :where([data-slot=\"general-agents-page\"]) .\\@3xl\\:items-center {\n      align-items: center;\n    }\n\n    :where([data-slot=\"general-agents-page\"]) .\\@3xl\\:items-start {\n      align-items: flex-start;\n    }\n  }\n\n  @container (min-width: 56rem) {\n    :where([data-slot=\"general-agents-page\"]) .\\@4xl\\:grid-cols-2 {\n      grid-template-columns: repeat(2, minmax(0, 1fr));\n    }\n\n    :where([data-slot=\"general-agents-page\"]) .\\@4xl\\:grid-cols-4 {\n      grid-template-columns: repeat(4, minmax(0, 1fr));\n    }\n\n    :where([data-slot=\"general-agents-page\"]) .\\@4xl\\:grid-cols-6 {\n      grid-template-columns: repeat(6, minmax(0, 1fr));\n    }\n\n    :where([data-slot=\"general-agents-page\"]) .\\@4xl\\:grid-cols-\\[3fr_2fr\\] {\n      grid-template-columns: 3fr 2fr;\n    }\n  }\n\n  @container (min-width: 64rem) {\n    :where([data-slot=\"general-agents-page\"]) .\\@5xl\\:grid-cols-2 {\n      grid-template-columns: repeat(2, minmax(0, 1fr));\n    }\n\n    :where([data-slot=\"general-agents-page\"]) .\\@5xl\\:grid-cols-3 {\n      grid-template-columns: repeat(3, minmax(0, 1fr));\n    }\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .\\[\\&\\>button\\]\\:w-full > button {\n    width: 100%;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .\\[\\&\\>button\\]\\:justify-center > button {\n    justify-content: center;\n  }\n}\n\n@property --tw-translate-x {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0;\n}\n\n@property --tw-translate-y {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0;\n}\n\n@property --tw-translate-z {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0;\n}\n\n@property --tw-divide-x-reverse {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0;\n}\n\n@property --tw-border-style {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: solid;\n}\n\n@property --tw-leading {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-font-weight {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-tracking {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-ordinal {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-slashed-zero {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-numeric-figure {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-numeric-spacing {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-numeric-fraction {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-shadow {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0 0 #0000;\n}\n\n@property --tw-shadow-color {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-shadow-alpha {\n  syntax: \"<percentage>\";\n  inherits: false;\n  initial-value: 100%;\n}\n\n@property --tw-inset-shadow {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0 0 #0000;\n}\n\n@property --tw-inset-shadow-color {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-inset-shadow-alpha {\n  syntax: \"<percentage>\";\n  inherits: false;\n  initial-value: 100%;\n}\n\n@property --tw-ring-color {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-ring-shadow {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0 0 #0000;\n}\n\n@property --tw-inset-ring-color {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-inset-ring-shadow {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0 0 #0000;\n}\n\n@property --tw-ring-inset {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-ring-offset-width {\n  syntax: \"<length>\";\n  inherits: false;\n  initial-value: 0;\n}\n\n@property --tw-ring-offset-color {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: #fff;\n}\n\n@property --tw-ring-offset-shadow {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0 0 #0000;\n}\n\n@property --tw-outline-style {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: solid;\n}\n\n@property --tw-blur {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-brightness {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-contrast {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-grayscale {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-hue-rotate {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-invert {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-opacity {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-saturate {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-sepia {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-drop-shadow {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-drop-shadow-color {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-drop-shadow-alpha {\n  syntax: \"<percentage>\";\n  inherits: false;\n  initial-value: 100%;\n}\n\n@property --tw-drop-shadow-size {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-content {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: \"\";\n}\n\n@keyframes pulse {\n  50% {\n    opacity: .5;\n  }\n}\n";
+var page_default = "/*! tailwindcss v4.3.3 | MIT License | https://tailwindcss.com */\n@layer properties {\n  @supports (((-webkit-hyphens: none)) and (not (margin-trim: inline))) or ((-moz-orient: inline) and (not (color: rgb(from red r g b)))) {\n    *, :before, :after, ::backdrop {\n      --tw-translate-x: 0;\n      --tw-translate-y: 0;\n      --tw-translate-z: 0;\n      --tw-divide-x-reverse: 0;\n      --tw-border-style: solid;\n      --tw-leading: initial;\n      --tw-font-weight: initial;\n      --tw-tracking: initial;\n      --tw-ordinal: initial;\n      --tw-slashed-zero: initial;\n      --tw-numeric-figure: initial;\n      --tw-numeric-spacing: initial;\n      --tw-numeric-fraction: initial;\n      --tw-shadow: 0 0 #0000;\n      --tw-shadow-color: initial;\n      --tw-shadow-alpha: 100%;\n      --tw-inset-shadow: 0 0 #0000;\n      --tw-inset-shadow-color: initial;\n      --tw-inset-shadow-alpha: 100%;\n      --tw-ring-color: initial;\n      --tw-ring-shadow: 0 0 #0000;\n      --tw-inset-ring-color: initial;\n      --tw-inset-ring-shadow: 0 0 #0000;\n      --tw-ring-inset: initial;\n      --tw-ring-offset-width: 0px;\n      --tw-ring-offset-color: #fff;\n      --tw-ring-offset-shadow: 0 0 #0000;\n      --tw-outline-style: solid;\n      --tw-blur: initial;\n      --tw-brightness: initial;\n      --tw-contrast: initial;\n      --tw-grayscale: initial;\n      --tw-hue-rotate: initial;\n      --tw-invert: initial;\n      --tw-opacity: initial;\n      --tw-saturate: initial;\n      --tw-sepia: initial;\n      --tw-drop-shadow: initial;\n      --tw-drop-shadow-color: initial;\n      --tw-drop-shadow-alpha: 100%;\n      --tw-drop-shadow-size: initial;\n      --tw-content: \"\";\n    }\n  }\n}\n\n@layer theme, base, components;\n\n@layer utilities {\n  :where([data-slot=\"general-agents-page\"]) .\\@container {\n    container-type: inline-size;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .pointer-events-auto {\n    pointer-events: auto;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .pointer-events-none {\n    pointer-events: none;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .visible {\n    visibility: visible;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .sr-only {\n    clip-path: inset(50%);\n    white-space: nowrap;\n    border-width: 0;\n    width: 1px;\n    height: 1px;\n    margin: -1px;\n    padding: 0;\n    position: absolute;\n    overflow: hidden;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .absolute {\n    position: absolute;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .fixed {\n    position: fixed;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .relative {\n    position: relative;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .sticky {\n    position: sticky;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .inset-0 {\n    inset: 0;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .inset-x-0 {\n    inset-inline: 0;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .-top-24 {\n    top: calc(var(--spacing, .25rem) * -24);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .top-0 {\n    top: 0;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .top-1\\/2 {\n    top: 50%;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .top-3 {\n    top: calc(var(--spacing, .25rem) * 3);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .top-full {\n    top: 100%;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .-right-0\\.5 {\n    right: calc(var(--spacing, .25rem) * -.5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .right-0 {\n    right: 0;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .right-3 {\n    right: calc(var(--spacing, .25rem) * 3);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .right-8 {\n    right: calc(var(--spacing, .25rem) * 8);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .-bottom-0\\.5 {\n    bottom: calc(var(--spacing, .25rem) * -.5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .bottom-3 {\n    bottom: calc(var(--spacing, .25rem) * 3);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .bottom-4 {\n    bottom: calc(var(--spacing, .25rem) * 4);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .-left-16 {\n    left: calc(var(--spacing, .25rem) * -16);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .left-0 {\n    left: 0;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .left-2\\.5 {\n    left: calc(var(--spacing, .25rem) * 2.5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .left-8 {\n    left: calc(var(--spacing, .25rem) * 8);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .isolate {\n    isolation: isolate;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .z-10 {\n    z-index: 10;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .z-20 {\n    z-index: 20;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .z-\\[1\\] {\n    z-index: 1;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .z-\\[5\\] {\n    z-index: 5;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .col-start-2 {\n    grid-column-start: 2;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .m-0 {\n    margin: 0;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .-mx-1 {\n    margin-inline: calc(var(--spacing, .25rem) * -1);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .mx-4 {\n    margin-inline: calc(var(--spacing, .25rem) * 4);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .mx-auto {\n    margin-inline: auto;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .-my-2 {\n    margin-block: calc(var(--spacing, .25rem) * -2);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .-mt-2 {\n    margin-top: calc(var(--spacing, .25rem) * -2);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .-mt-3 {\n    margin-top: calc(var(--spacing, .25rem) * -3);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .-mt-4 {\n    margin-top: calc(var(--spacing, .25rem) * -4);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .mt-0\\.5 {\n    margin-top: calc(var(--spacing, .25rem) * .5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .mt-1 {\n    margin-top: var(--spacing, .25rem);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .mt-1\\.5 {\n    margin-top: calc(var(--spacing, .25rem) * 1.5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .mt-3 {\n    margin-top: calc(var(--spacing, .25rem) * 3);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .mt-3\\.5 {\n    margin-top: calc(var(--spacing, .25rem) * 3.5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .mt-auto {\n    margin-top: auto;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .-mb-3 {\n    margin-bottom: calc(var(--spacing, .25rem) * -3);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .ml-1\\.5 {\n    margin-left: calc(var(--spacing, .25rem) * 1.5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .ml-auto {\n    margin-left: auto;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .line-clamp-2 {\n    -webkit-line-clamp: 2;\n    -webkit-box-orient: vertical;\n    display: -webkit-box;\n    overflow: hidden;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .block {\n    display: block;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .contents {\n    display: contents;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .flex {\n    display: flex;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .grid {\n    display: grid;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .hidden {\n    display: none;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .inline {\n    display: inline;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .inline-flex {\n    display: inline-flex;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .size-1\\.5 {\n    width: calc(var(--spacing, .25rem) * 1.5);\n    height: calc(var(--spacing, .25rem) * 1.5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .size-2 {\n    width: calc(var(--spacing, .25rem) * 2);\n    height: calc(var(--spacing, .25rem) * 2);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .size-3\\.5 {\n    width: calc(var(--spacing, .25rem) * 3.5);\n    height: calc(var(--spacing, .25rem) * 3.5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .size-4 {\n    width: calc(var(--spacing, .25rem) * 4);\n    height: calc(var(--spacing, .25rem) * 4);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .size-5 {\n    width: calc(var(--spacing, .25rem) * 5);\n    height: calc(var(--spacing, .25rem) * 5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .size-7 {\n    width: calc(var(--spacing, .25rem) * 7);\n    height: calc(var(--spacing, .25rem) * 7);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .size-8 {\n    width: calc(var(--spacing, .25rem) * 8);\n    height: calc(var(--spacing, .25rem) * 8);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .size-9 {\n    width: calc(var(--spacing, .25rem) * 9);\n    height: calc(var(--spacing, .25rem) * 9);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .size-10 {\n    width: calc(var(--spacing, .25rem) * 10);\n    height: calc(var(--spacing, .25rem) * 10);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .size-12 {\n    width: calc(var(--spacing, .25rem) * 12);\n    height: calc(var(--spacing, .25rem) * 12);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .size-16 {\n    width: calc(var(--spacing, .25rem) * 16);\n    height: calc(var(--spacing, .25rem) * 16);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .size-80 {\n    width: calc(var(--spacing, .25rem) * 80);\n    height: calc(var(--spacing, .25rem) * 80);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .h-3 {\n    height: calc(var(--spacing, .25rem) * 3);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .h-4 {\n    height: calc(var(--spacing, .25rem) * 4);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .h-9 {\n    height: calc(var(--spacing, .25rem) * 9);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .h-11 {\n    height: calc(var(--spacing, .25rem) * 11);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .h-16 {\n    height: calc(var(--spacing, .25rem) * 16);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .h-40 {\n    height: calc(var(--spacing, .25rem) * 40);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .h-full {\n    height: 100%;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .h-px {\n    height: 1px;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .max-h-72 {\n    max-height: calc(var(--spacing, .25rem) * 72);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .max-h-120 {\n    max-height: calc(var(--spacing, .25rem) * 120);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .max-h-none {\n    max-height: none;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .min-h-0 {\n    min-height: 0;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .min-h-5 {\n    min-height: calc(var(--spacing, .25rem) * 5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .min-h-7 {\n    min-height: calc(var(--spacing, .25rem) * 7);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .min-h-44 {\n    min-height: calc(var(--spacing, .25rem) * 44);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .min-h-56 {\n    min-height: calc(var(--spacing, .25rem) * 56);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .min-h-72 {\n    min-height: calc(var(--spacing, .25rem) * 72);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .min-h-\\[2lh\\] {\n    min-height: 2lh;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .w-5 {\n    width: calc(var(--spacing, .25rem) * 5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .w-6 {\n    width: calc(var(--spacing, .25rem) * 6);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .w-9 {\n    width: calc(var(--spacing, .25rem) * 9);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .w-24 {\n    width: calc(var(--spacing, .25rem) * 24);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .w-32 {\n    width: calc(var(--spacing, .25rem) * 32);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .w-36 {\n    width: calc(var(--spacing, .25rem) * 36);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .w-40 {\n    width: calc(var(--spacing, .25rem) * 40);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .w-full {\n    width: 100%;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .max-w-24 {\n    max-width: calc(var(--spacing, .25rem) * 24);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .max-w-32 {\n    max-width: calc(var(--spacing, .25rem) * 32);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .max-w-56 {\n    max-width: calc(var(--spacing, .25rem) * 56);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .max-w-285 {\n    max-width: calc(var(--spacing, .25rem) * 285);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .max-w-295 {\n    max-width: calc(var(--spacing, .25rem) * 295);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .max-w-full {\n    max-width: 100%;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .max-w-md {\n    max-width: var(--container-md, 28rem);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .max-w-prose {\n    max-width: 65ch;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .min-w-0 {\n    min-width: 0;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .min-w-48 {\n    min-width: calc(var(--spacing, .25rem) * 48);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .flex-1 {\n    flex: 1;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .shrink-0 {\n    flex-shrink: 0;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .-translate-y-1\\/2 {\n    --tw-translate-y: calc(calc(1 / 2 * 100%) * -1);\n    translate: var(--tw-translate-x) var(--tw-translate-y);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .translate-y-px {\n    --tw-translate-y: 1px;\n    translate: var(--tw-translate-x) var(--tw-translate-y);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .animate-pulse {\n    animation: var(--animate-pulse, pulse 2s cubic-bezier(.4, 0, .6, 1) infinite);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .cursor-default {\n    cursor: default;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .resize {\n    resize: both;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .scroll-mt-16 {\n    scroll-margin-top: calc(var(--spacing, .25rem) * 16);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .\\[scrollbar-gutter\\:stable\\] {\n    scrollbar-gutter: stable;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .list-none {\n    list-style-type: none;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .grid-cols-1 {\n    grid-template-columns: repeat(1, minmax(0, 1fr));\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .grid-cols-2 {\n    grid-template-columns: repeat(2, minmax(0, 1fr));\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .grid-cols-4 {\n    grid-template-columns: repeat(4, minmax(0, 1fr));\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .grid-cols-\\[2\\.5rem_minmax\\(0\\,1fr\\)\\] {\n    grid-template-columns: 2.5rem minmax(0, 1fr);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .grid-cols-\\[repeat\\(auto-fill\\,minmax\\(5\\.5rem\\,1fr\\)\\)\\] {\n    grid-template-columns: repeat(auto-fill, minmax(5.5rem, 1fr));\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .flex-col {\n    flex-direction: column;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .flex-col-reverse {\n    flex-direction: column-reverse;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .flex-wrap {\n    flex-wrap: wrap;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .items-baseline {\n    align-items: baseline;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .items-center {\n    align-items: center;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .items-end {\n    align-items: flex-end;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .items-start {\n    align-items: flex-start;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .justify-between {\n    justify-content: space-between;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .justify-center {\n    justify-content: center;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .gap-0\\.5 {\n    gap: calc(var(--spacing, .25rem) * .5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .gap-1 {\n    gap: var(--spacing, .25rem);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .gap-1\\.5 {\n    gap: calc(var(--spacing, .25rem) * 1.5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .gap-2 {\n    gap: calc(var(--spacing, .25rem) * 2);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .gap-2\\.5 {\n    gap: calc(var(--spacing, .25rem) * 2.5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .gap-3 {\n    gap: calc(var(--spacing, .25rem) * 3);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .gap-3\\.5 {\n    gap: calc(var(--spacing, .25rem) * 3.5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .gap-4 {\n    gap: calc(var(--spacing, .25rem) * 4);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .gap-5 {\n    gap: calc(var(--spacing, .25rem) * 5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .gap-6 {\n    gap: calc(var(--spacing, .25rem) * 6);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .gap-7 {\n    gap: calc(var(--spacing, .25rem) * 7);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .gap-x-1 {\n    column-gap: var(--spacing, .25rem);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .gap-x-2 {\n    column-gap: calc(var(--spacing, .25rem) * 2);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .gap-x-2\\.5 {\n    column-gap: calc(var(--spacing, .25rem) * 2.5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .gap-x-3 {\n    column-gap: calc(var(--spacing, .25rem) * 3);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .gap-x-3\\.5 {\n    column-gap: calc(var(--spacing, .25rem) * 3.5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .gap-x-6 {\n    column-gap: calc(var(--spacing, .25rem) * 6);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .gap-y-1 {\n    row-gap: var(--spacing, .25rem);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .gap-y-1\\.5 {\n    row-gap: calc(var(--spacing, .25rem) * 1.5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .gap-y-5 {\n    row-gap: calc(var(--spacing, .25rem) * 5);\n  }\n\n  :where(:where([data-slot=\"general-agents-page\"]) .divide-x > :not(:last-child)) {\n    --tw-divide-x-reverse: 0;\n    border-inline-style: var(--tw-border-style);\n    border-inline-start-width: calc(1px * var(--tw-divide-x-reverse));\n    border-inline-end-width: calc(1px * calc(1 - var(--tw-divide-x-reverse)));\n  }\n\n  :where(:where([data-slot=\"general-agents-page\"]) .divide-fr-border-soft > :not(:last-child)) {\n    border-color: var(--fr-border-soft);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .overflow-auto {\n    overflow: auto;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .overflow-hidden {\n    overflow: hidden;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .overflow-y-auto {\n    overflow-y: auto;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .rounded {\n    border-radius: .25rem;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .rounded-full {\n    border-radius: 3.40282e38px;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .rounded-lg {\n    border-radius: var(--fr-r);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .rounded-md {\n    border-radius: calc(var(--fr-r) - 2px);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .rounded-none {\n    border-radius: 0;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .rounded-sm {\n    border-radius: calc(var(--fr-r) - 4px);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .rounded-xl {\n    border-radius: calc(var(--fr-r) + 4px);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .border {\n    border-style: var(--tw-border-style);\n    border-width: 1px;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .border-0 {\n    border-style: var(--tw-border-style);\n    border-width: 0;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .border-t {\n    border-top-style: var(--tw-border-style);\n    border-top-width: 1px;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .border-b {\n    border-bottom-style: var(--tw-border-style);\n    border-bottom-width: 1px;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .border-dashed {\n    --tw-border-style: dashed;\n    border-style: dashed;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .border-fr-accent {\n    border-color: var(--fr-accent);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .border-fr-accent-line {\n    border-color: var(--fr-accent-line);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .border-fr-border {\n    border-color: var(--fr-border);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .border-fr-border-soft {\n    border-color: var(--fr-border-soft);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .border-fr-del\\/60 {\n    border-color: var(--fr-del);\n  }\n\n  @supports (color: color-mix(in lab, red, red)) {\n    :where([data-slot=\"general-agents-page\"]) .border-fr-del\\/60 {\n      border-color: color-mix(in oklab, var(--fr-del) 60%, transparent);\n    }\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .border-fr-iris\\/40 {\n    border-color: var(--fr-iris);\n  }\n\n  @supports (color: color-mix(in lab, red, red)) {\n    :where([data-slot=\"general-agents-page\"]) .border-fr-iris\\/40 {\n      border-color: color-mix(in oklab, var(--fr-iris) 40%, transparent);\n    }\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .border-transparent {\n    border-color: #0000;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .bg-fr-accent {\n    background-color: var(--fr-accent);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .bg-fr-accent-dim, :where([data-slot=\"general-agents-page\"]) .bg-fr-accent-dim\\/40 {\n    background-color: var(--fr-accent-dim);\n  }\n\n  @supports (color: color-mix(in lab, red, red)) {\n    :where([data-slot=\"general-agents-page\"]) .bg-fr-accent-dim\\/40 {\n      background-color: color-mix(in oklab, var(--fr-accent-dim) 40%, transparent);\n    }\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .bg-fr-accent-ink {\n    background-color: var(--fr-accent-ink);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .bg-fr-bg {\n    background-color: var(--fr-bg);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .bg-fr-border {\n    background-color: var(--fr-border);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .bg-fr-iris\\/15 {\n    background-color: var(--fr-iris);\n  }\n\n  @supports (color: color-mix(in lab, red, red)) {\n    :where([data-slot=\"general-agents-page\"]) .bg-fr-iris\\/15 {\n      background-color: color-mix(in oklab, var(--fr-iris) 15%, transparent);\n    }\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .bg-fr-surface {\n    background-color: var(--fr-surface);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .bg-fr-surface-2\\/50 {\n    background-color: var(--fr-surface-2);\n  }\n\n  @supports (color: color-mix(in lab, red, red)) {\n    :where([data-slot=\"general-agents-page\"]) .bg-fr-surface-2\\/50 {\n      background-color: color-mix(in oklab, var(--fr-surface-2) 50%, transparent);\n    }\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .bg-fr-surface-3 {\n    background-color: var(--fr-surface-3);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .bg-fr-warn {\n    background-color: var(--fr-warn);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .p-0 {\n    padding: 0;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .p-1 {\n    padding: var(--spacing, .25rem);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .p-1\\.5 {\n    padding: calc(var(--spacing, .25rem) * 1.5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .p-3 {\n    padding: calc(var(--spacing, .25rem) * 3);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .p-3\\.5 {\n    padding: calc(var(--spacing, .25rem) * 3.5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .p-4 {\n    padding: calc(var(--spacing, .25rem) * 4);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .p-5 {\n    padding: calc(var(--spacing, .25rem) * 5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .px-1 {\n    padding-inline: var(--spacing, .25rem);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .px-2 {\n    padding-inline: calc(var(--spacing, .25rem) * 2);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .px-2\\.5 {\n    padding-inline: calc(var(--spacing, .25rem) * 2.5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .px-3 {\n    padding-inline: calc(var(--spacing, .25rem) * 3);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .px-3\\.5 {\n    padding-inline: calc(var(--spacing, .25rem) * 3.5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .px-4 {\n    padding-inline: calc(var(--spacing, .25rem) * 4);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .px-5 {\n    padding-inline: calc(var(--spacing, .25rem) * 5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .px-6 {\n    padding-inline: calc(var(--spacing, .25rem) * 6);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .py-0\\.5 {\n    padding-block: calc(var(--spacing, .25rem) * .5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .py-1 {\n    padding-block: var(--spacing, .25rem);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .py-1\\.5 {\n    padding-block: calc(var(--spacing, .25rem) * 1.5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .py-2 {\n    padding-block: calc(var(--spacing, .25rem) * 2);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .py-2\\.5 {\n    padding-block: calc(var(--spacing, .25rem) * 2.5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .py-3 {\n    padding-block: calc(var(--spacing, .25rem) * 3);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .py-6 {\n    padding-block: calc(var(--spacing, .25rem) * 6);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .pt-0\\.5 {\n    padding-top: calc(var(--spacing, .25rem) * .5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .pt-1 {\n    padding-top: var(--spacing, .25rem);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .pt-3 {\n    padding-top: calc(var(--spacing, .25rem) * 3);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .pt-4 {\n    padding-top: calc(var(--spacing, .25rem) * 4);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .pt-5 {\n    padding-top: calc(var(--spacing, .25rem) * 5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .pt-8 {\n    padding-top: calc(var(--spacing, .25rem) * 8);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .pr-2 {\n    padding-right: calc(var(--spacing, .25rem) * 2);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .pr-3 {\n    padding-right: calc(var(--spacing, .25rem) * 3);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .pr-5 {\n    padding-right: calc(var(--spacing, .25rem) * 5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .pr-6 {\n    padding-right: calc(var(--spacing, .25rem) * 6);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .pr-14 {\n    padding-right: calc(var(--spacing, .25rem) * 14);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .pb-7 {\n    padding-bottom: calc(var(--spacing, .25rem) * 7);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .pb-12 {\n    padding-bottom: calc(var(--spacing, .25rem) * 12);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .pl-1\\.5 {\n    padding-left: calc(var(--spacing, .25rem) * 1.5);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .pl-2 {\n    padding-left: calc(var(--spacing, .25rem) * 2);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .pl-8 {\n    padding-left: calc(var(--spacing, .25rem) * 8);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .pl-\\[1\\.625rem\\] {\n    padding-left: 1.625rem;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .text-center {\n    text-align: center;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .text-left {\n    text-align: left;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .text-right {\n    text-align: right;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .font-code {\n    font-family: var(--fr-font-code);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .font-secondary {\n    font-family: var(--fr-font-secondary);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .text-\\[9px\\] {\n    font-size: 9px;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .text-fr-2xl {\n    font-size: var(--fr-fs-2xl);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .text-fr-2xs {\n    font-size: var(--fr-fs-2xs);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .text-fr-lg {\n    font-size: var(--fr-fs-lg);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .text-fr-md {\n    font-size: var(--fr-fs-md);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .text-fr-sm {\n    font-size: var(--fr-fs-sm);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .text-fr-xs {\n    font-size: var(--fr-fs-xs);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .leading-none {\n    --tw-leading: 1;\n    line-height: 1;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .leading-relaxed {\n    --tw-leading: var(--leading-relaxed, 1.625);\n    line-height: var(--leading-relaxed, 1.625);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .leading-tight {\n    --tw-leading: var(--leading-tight, 1.25);\n    line-height: var(--leading-tight, 1.25);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .font-medium {\n    --tw-font-weight: var(--font-weight-medium, 500);\n    font-weight: var(--font-weight-medium, 500);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .font-normal {\n    --tw-font-weight: var(--font-weight-normal, 400);\n    font-weight: var(--font-weight-normal, 400);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .font-semibold {\n    --tw-font-weight: var(--font-weight-semibold, 600);\n    font-weight: var(--font-weight-semibold, 600);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .tracking-\\[-0\\.01em\\] {\n    --tw-tracking: -.01em;\n    letter-spacing: -.01em;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .tracking-fr-label {\n    --tw-tracking: var(--fr-tracking-label);\n    letter-spacing: var(--fr-tracking-label);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .text-balance {\n    text-wrap: balance;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .text-pretty {\n    text-wrap: pretty;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .break-words {\n    overflow-wrap: break-word;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .whitespace-pre-wrap {\n    white-space: pre-wrap;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .text-fr-accent {\n    color: var(--fr-accent);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .text-fr-accent-ink {\n    color: var(--fr-accent-ink);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .text-fr-del {\n    color: var(--fr-del);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .text-fr-iris {\n    color: var(--fr-iris);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .text-fr-text {\n    color: var(--fr-text);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .text-fr-text-2 {\n    color: var(--fr-text-2);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .text-fr-text-3 {\n    color: var(--fr-text-3);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .text-fr-text\\/80 {\n    color: var(--fr-text);\n  }\n\n  @supports (color: color-mix(in lab, red, red)) {\n    :where([data-slot=\"general-agents-page\"]) .text-fr-text\\/80 {\n      color: color-mix(in oklab, var(--fr-text) 80%, transparent);\n    }\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .text-fr-warn {\n    color: var(--fr-warn);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .text-transparent {\n    color: #0000;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .lowercase {\n    text-transform: lowercase;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .uppercase {\n    text-transform: uppercase;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .tabular-nums {\n    --tw-numeric-spacing: tabular-nums;\n    font-variant-numeric: var(--tw-ordinal, ) var(--tw-slashed-zero, ) var(--tw-numeric-figure, ) var(--tw-numeric-spacing, ) var(--tw-numeric-fraction, );\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .opacity-50 {\n    opacity: .5;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .opacity-55 {\n    opacity: .55;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .opacity-60 {\n    opacity: .6;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .opacity-70 {\n    opacity: .7;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .opacity-80 {\n    opacity: .8;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .shadow-\\[inset_0_1px_0_color-mix\\(in_oklab\\,var\\(--fr-text\\)_10\\%\\,transparent\\)\\] {\n    --tw-shadow: inset 0 1px 0 var(--tw-shadow-color, var(--fr-text));\n  }\n\n  @supports (color: color-mix(in lab, red, red)) {\n    :where([data-slot=\"general-agents-page\"]) .shadow-\\[inset_0_1px_0_color-mix\\(in_oklab\\,var\\(--fr-text\\)_10\\%\\,transparent\\)\\] {\n      --tw-shadow: inset 0 1px 0 var(--tw-shadow-color, color-mix(in oklab,var(--fr-text) 10%,transparent));\n    }\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .shadow-\\[inset_0_1px_0_color-mix\\(in_oklab\\,var\\(--fr-text\\)_10\\%\\,transparent\\)\\] {\n    box-shadow: var(--tw-inset-shadow), var(--tw-inset-ring-shadow), var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .shadow-md {\n    --tw-shadow: 0 4px 6px -1px var(--tw-shadow-color, #0000001a), 0 2px 4px -2px var(--tw-shadow-color, #0000001a);\n    box-shadow: var(--tw-inset-shadow), var(--tw-inset-ring-shadow), var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .ring, :where([data-slot=\"general-agents-page\"]) .ring-1 {\n    --tw-ring-shadow: var(--tw-ring-inset, ) 0 0 0 calc(1px + var(--tw-ring-offset-width)) var(--tw-ring-color, currentcolor);\n    box-shadow: var(--tw-inset-shadow), var(--tw-inset-ring-shadow), var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .ring-fr-surface {\n    --tw-ring-color: var(--fr-surface);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .outline {\n    outline-style: var(--tw-outline-style);\n    outline-width: 1px;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .saturate-0 {\n    --tw-saturate: saturate(0%);\n    filter: var(--tw-blur, ) var(--tw-brightness, ) var(--tw-contrast, ) var(--tw-grayscale, ) var(--tw-hue-rotate, ) var(--tw-invert, ) var(--tw-saturate, ) var(--tw-sepia, ) var(--tw-drop-shadow, );\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .filter {\n    filter: var(--tw-blur, ) var(--tw-brightness, ) var(--tw-contrast, ) var(--tw-grayscale, ) var(--tw-hue-rotate, ) var(--tw-invert, ) var(--tw-saturate, ) var(--tw-sepia, ) var(--tw-drop-shadow, );\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .select-none {\n    -webkit-user-select: none;\n    user-select: none;\n  }\n\n  @media (hover: hover) {\n    :where([data-slot=\"general-agents-page\"]) .group-hover\\/card\\:border-fr-border:is(:where(.group\\/card):hover *) {\n      border-color: var(--fr-border);\n    }\n\n    :where([data-slot=\"general-agents-page\"]) .group-hover\\/step\\:bg-fr-border:is(:where(.group\\/step):hover *) {\n      background-color: var(--fr-border);\n    }\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .after\\:absolute:after {\n    content: var(--tw-content);\n    position: absolute;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .after\\:inset-0:after {\n    content: var(--tw-content);\n    inset: 0;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .after\\:rounded-lg:after {\n    content: var(--tw-content);\n    border-radius: var(--fr-r);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .after\\:content-\\[\\'\\'\\]:after {\n    --tw-content: \"\";\n    content: var(--tw-content);\n  }\n\n  @media (hover: hover) {\n    :where([data-slot=\"general-agents-page\"]) .hover\\:border-fr-border:hover {\n      border-color: var(--fr-border);\n    }\n\n    :where([data-slot=\"general-agents-page\"]) .hover\\:border-fr-iris\\/70:hover {\n      border-color: var(--fr-iris);\n    }\n\n    @supports (color: color-mix(in lab, red, red)) {\n      :where([data-slot=\"general-agents-page\"]) .hover\\:border-fr-iris\\/70:hover {\n        border-color: color-mix(in oklab, var(--fr-iris) 70%, transparent);\n      }\n    }\n\n    :where([data-slot=\"general-agents-page\"]) .hover\\:bg-fr-surface-2:hover {\n      background-color: var(--fr-surface-2);\n    }\n\n    :where([data-slot=\"general-agents-page\"]) .hover\\:bg-fr-surface-3:hover {\n      background-color: var(--fr-surface-3);\n    }\n\n    :where([data-slot=\"general-agents-page\"]) .hover\\:text-fr-del:hover {\n      color: var(--fr-del);\n    }\n\n    :where([data-slot=\"general-agents-page\"]) .hover\\:text-fr-text:hover {\n      color: var(--fr-text);\n    }\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .focus-visible\\:bg-fr-surface-2:focus-visible {\n    background-color: var(--fr-surface-2);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .focus-visible\\:ring-2:focus-visible {\n    --tw-ring-shadow: var(--tw-ring-inset, ) 0 0 0 calc(2px + var(--tw-ring-offset-width)) var(--tw-ring-color, currentcolor);\n    box-shadow: var(--tw-inset-shadow), var(--tw-inset-ring-shadow), var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .focus-visible\\:ring-fr-accent-line:focus-visible {\n    --tw-ring-color: var(--fr-accent-line);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .focus-visible\\:outline-none:focus-visible {\n    --tw-outline-style: none;\n    outline-style: none;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .focus-visible\\:after\\:ring-2:focus-visible:after {\n    content: var(--tw-content);\n    --tw-ring-shadow: var(--tw-ring-inset, ) 0 0 0 calc(2px + var(--tw-ring-offset-width)) var(--tw-ring-color, currentcolor);\n    box-shadow: var(--tw-inset-shadow), var(--tw-inset-ring-shadow), var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .focus-visible\\:after\\:ring-fr-accent-line:focus-visible:after {\n    content: var(--tw-content);\n    --tw-ring-color: var(--fr-accent-line);\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .disabled\\:cursor-default:disabled {\n    cursor: default;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .disabled\\:opacity-30:disabled {\n    opacity: .3;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .disabled\\:opacity-50:disabled {\n    opacity: .5;\n  }\n\n  @container (min-width: 28rem) {\n    :where([data-slot=\"general-agents-page\"]) .\\@md\\:grid-cols-3 {\n      grid-template-columns: repeat(3, minmax(0, 1fr));\n    }\n  }\n\n  @container (min-width: 36rem) {\n    :where([data-slot=\"general-agents-page\"]) .\\@xl\\:grid-cols-2 {\n      grid-template-columns: repeat(2, minmax(0, 1fr));\n    }\n\n    :where([data-slot=\"general-agents-page\"]) .\\@xl\\:grid-cols-3 {\n      grid-template-columns: repeat(3, minmax(0, 1fr));\n    }\n  }\n\n  @container (min-width: 42rem) {\n    :where([data-slot=\"general-agents-page\"]) .\\@2xl\\:w-56 {\n      width: calc(var(--spacing, .25rem) * 56);\n    }\n\n    :where([data-slot=\"general-agents-page\"]) .\\@2xl\\:grid-cols-2 {\n      grid-template-columns: repeat(2, minmax(0, 1fr));\n    }\n\n    :where([data-slot=\"general-agents-page\"]) .\\@2xl\\:flex-row {\n      flex-direction: row;\n    }\n\n    :where([data-slot=\"general-agents-page\"]) .\\@2xl\\:items-start {\n      align-items: flex-start;\n    }\n\n    :where([data-slot=\"general-agents-page\"]) .\\@2xl\\:gap-6 {\n      gap: calc(var(--spacing, .25rem) * 6);\n    }\n  }\n\n  @container (min-width: 48rem) {\n    :where([data-slot=\"general-agents-page\"]) .\\@3xl\\:block {\n      display: block;\n    }\n\n    :where([data-slot=\"general-agents-page\"]) .\\@3xl\\:w-60 {\n      width: calc(var(--spacing, .25rem) * 60);\n    }\n\n    :where([data-slot=\"general-agents-page\"]) .\\@3xl\\:max-w-80 {\n      max-width: calc(var(--spacing, .25rem) * 80);\n    }\n\n    :where([data-slot=\"general-agents-page\"]) .\\@3xl\\:grid-cols-4 {\n      grid-template-columns: repeat(4, minmax(0, 1fr));\n    }\n\n    :where([data-slot=\"general-agents-page\"]) .\\@3xl\\:flex-row {\n      flex-direction: row;\n    }\n\n    :where([data-slot=\"general-agents-page\"]) .\\@3xl\\:items-center {\n      align-items: center;\n    }\n\n    :where([data-slot=\"general-agents-page\"]) .\\@3xl\\:items-start {\n      align-items: flex-start;\n    }\n  }\n\n  @container (min-width: 56rem) {\n    :where([data-slot=\"general-agents-page\"]) .\\@4xl\\:grid-cols-2 {\n      grid-template-columns: repeat(2, minmax(0, 1fr));\n    }\n\n    :where([data-slot=\"general-agents-page\"]) .\\@4xl\\:grid-cols-4 {\n      grid-template-columns: repeat(4, minmax(0, 1fr));\n    }\n\n    :where([data-slot=\"general-agents-page\"]) .\\@4xl\\:grid-cols-6 {\n      grid-template-columns: repeat(6, minmax(0, 1fr));\n    }\n\n    :where([data-slot=\"general-agents-page\"]) .\\@4xl\\:grid-cols-\\[3fr_2fr\\] {\n      grid-template-columns: 3fr 2fr;\n    }\n  }\n\n  @container (min-width: 64rem) {\n    :where([data-slot=\"general-agents-page\"]) .\\@5xl\\:grid-cols-2 {\n      grid-template-columns: repeat(2, minmax(0, 1fr));\n    }\n\n    :where([data-slot=\"general-agents-page\"]) .\\@5xl\\:grid-cols-3 {\n      grid-template-columns: repeat(3, minmax(0, 1fr));\n    }\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .\\[\\&\\>button\\]\\:w-full > button {\n    width: 100%;\n  }\n\n  :where([data-slot=\"general-agents-page\"]) .\\[\\&\\>button\\]\\:justify-center > button {\n    justify-content: center;\n  }\n}\n\n@property --tw-translate-x {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0;\n}\n\n@property --tw-translate-y {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0;\n}\n\n@property --tw-translate-z {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0;\n}\n\n@property --tw-divide-x-reverse {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0;\n}\n\n@property --tw-border-style {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: solid;\n}\n\n@property --tw-leading {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-font-weight {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-tracking {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-ordinal {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-slashed-zero {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-numeric-figure {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-numeric-spacing {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-numeric-fraction {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-shadow {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0 0 #0000;\n}\n\n@property --tw-shadow-color {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-shadow-alpha {\n  syntax: \"<percentage>\";\n  inherits: false;\n  initial-value: 100%;\n}\n\n@property --tw-inset-shadow {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0 0 #0000;\n}\n\n@property --tw-inset-shadow-color {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-inset-shadow-alpha {\n  syntax: \"<percentage>\";\n  inherits: false;\n  initial-value: 100%;\n}\n\n@property --tw-ring-color {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-ring-shadow {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0 0 #0000;\n}\n\n@property --tw-inset-ring-color {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-inset-ring-shadow {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0 0 #0000;\n}\n\n@property --tw-ring-inset {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-ring-offset-width {\n  syntax: \"<length>\";\n  inherits: false;\n  initial-value: 0;\n}\n\n@property --tw-ring-offset-color {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: #fff;\n}\n\n@property --tw-ring-offset-shadow {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0 0 #0000;\n}\n\n@property --tw-outline-style {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: solid;\n}\n\n@property --tw-blur {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-brightness {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-contrast {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-grayscale {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-hue-rotate {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-invert {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-opacity {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-saturate {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-sepia {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-drop-shadow {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-drop-shadow-color {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-drop-shadow-alpha {\n  syntax: \"<percentage>\";\n  inherits: false;\n  initial-value: 100%;\n}\n\n@property --tw-drop-shadow-size {\n  syntax: \"*\";\n  inherits: false\n}\n\n@property --tw-content {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: \"\";\n}\n\n@keyframes pulse {\n  50% {\n    opacity: .5;\n  }\n}\n";
 //#endregion
 //#region page/sheet.ts
 var HOLDERS = "holders";
@@ -4639,6 +5441,22 @@ function GeneralAgentsPage(props) {
 	const usage = useFact(store, USAGE_KEY);
 	const catalog = useFact(store, CATALOG_KEY);
 	const models = useFact(store, MODELS_KEY);
+	const speechProfiles = useFact(store, SPEECH_PROFILES_KEY);
+	const speechAgents = useFact(store, SPEECH_AGENTS_KEY);
+	const sampler = props.voice?.sampler;
+	const assigner = props.voice?.assigner;
+	const voiceAgents = useMemo(() => readAgentVoices(speechAgents), [speechAgents]);
+	const voiceKit = useMemo(() => ({
+		profiles: readProfilesFact(speechProfiles),
+		agents: voiceAgents,
+		...sampler ? { sampler } : {},
+		...assigner ? { assigner } : {}
+	}), [
+		speechProfiles,
+		voiceAgents,
+		sampler,
+		assigner
+	]);
 	const now = useNow(3e4);
 	const activity = useActivity(store, now, DEFAULT_AGENT);
 	const listing = usePolled(useCallback(() => forge.listAgents(), [forge]), null, forge);
@@ -4742,6 +5560,8 @@ function GeneralAgentsPage(props) {
 			bridged: bridgedPresences,
 			onDock: openDock,
 			configure: canConfigure ? configure : void 0,
+			voice: voiceKit,
+			hasWorkspace: workspace != null,
 			busy,
 			notice
 		}, profile.draft.key) : /* @__PURE__ */ jsx(AgentsHome, {
@@ -4753,6 +5573,7 @@ function GeneralAgentsPage(props) {
 			catalog,
 			now,
 			faceOf,
+			voices: voiceAgents,
 			bridged: bridgedPresences,
 			proposals: pending,
 			onReview: review,
