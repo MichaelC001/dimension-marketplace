@@ -1,157 +1,190 @@
 # General Agents
 
-Every General Agent you can run, as cards on one page — and, one click in,
-each agent's whole profile: its tools, skills, plugins and MCP servers, its
-charter and standing instructions, its home and memory, whether it is on and
-in the rail, and every other key of its manifest. The profile is also where
-you edit an agent and where you create a new one, by hand or with the
-Machinist, who sits in the dock beside the page.
+Every General Agent you can run, as cards with their real faces and their week
+at a glance, and, one click in, each agent's whole profile: its face, charter
+and standing instructions, the skills, plugins, MCP servers and tools it may
+use, its memory, home, models and safety, and whom it extends. Yours and your
+project's are edited in place; a pack's agent reads the same and can be
+extended into an agent of your own. The Machinist, in the dock beside the page,
+can draft one for you to accept.
 
-Status: an installable artifactory pack — an MCP server the engine hosts
-(doc 45 §8) and a View it seats as a whole page in the Code rail. It reads and
-writes real `agent.md` files in the user's own agents (and, when a project is
-bound, the project's). A standalone preview runs for design work.
+Status: an installable pack with two parts.
+
+- **The page**: a host-rendered `workspace-surface` component (`page/`, built to
+  `dist/index.mjs`), mounted on the Code space's `page` surface by the rail's
+  General Agents entry. It paints with the host's own kit and the host's own
+  faces, so plugin faces (Traction's X face) and Mochi skins show exactly as
+  they do in the rail.
+- **The server**: an MCP server the engine hosts (`src/`, built to
+  `app/server.mjs`). The page calls its App-only tools through its seat; the
+  Machinist calls its two model tools.
 
 ```sh
-bun install          # from the Dimension monorepo: @dimension/sdk, @dimension/mcp-app-kit, @fraym/ui and @fraym/config are workspace dependencies
-bun run dev          # http://localhost:5197 (FORGE_PREVIEW_PORT to move it) — preview mode, seeded agents, nothing written
-bun run build        # app/server.mjs (esbuild) + app/dist (vite, the App kit's config); both are committed
-bun run check:types  # two programs: the View under the kit's compiler settings, and the server under the engine's
-bun run test         # the server's contracts and the page's rules
+bun install          # from the Dimension monorepo: @dimension/sdk, @fraym/ui, @fraym/config and @fraym/vibr are workspace dependencies
+bun run dev          # the design harness: http://localhost:5198 (GA_HARNESS_PORT to move it), fixture host, real kit and faces
+bun run build        # app/server.mjs (esbuild) + dist/index.mjs (vite lib); both are committed
+bun run check:types  # two programs: the page under the kit's compiler settings, the server under the engine's
+bun run test         # the server's contracts, the page's rules, the KPI fold, the bundle against the kit grant
 ```
 
 ## The door
 
-The pack contributes a **General Agents** entry to the Code rail
-(`railActions`: `target: page`, `surface: page`, `session.agent: machinist`,
-seating `forge_open`). One click opens the page full-width, exactly like
-Autonomy: Code's generic `page` surface binds the host's `page-view` fill, so
-the page needs no app code. The page's backing session is the Machinist's, and
-the Machinist lives in the dock beside the page — the page's own dock button
-(top right) opens it. The rail draws the entry only while the pack is enabled —
-it ships `defaultEnabled: false`, so turn it on in Capabilities → Plugins. In a
-space that does not host the `page` surface the entry opens as a session with
-the View in the artifact column instead.
+`railActions[general-agents]`: `target: page`, `surface: page`,
+`component: general-agents-page`, `session.agent: machinist`. One click opens
+the page full-width; the page's backing session is the Machinist's, and the
+Machinist lives in the dock beside the page (the page's **Ask the Machinist**
+button reveals it). The rail draws the entry only while the pack is enabled: it
+ships `defaultEnabled: false`, so turn it on in Capabilities → Plugins.
 
-Grants (`artifactories[].grants`): `agents:configure` (the host's record of who
-is on and in the rail, and the two switches), `dock:open` (the Machinist's dock
-button), `session:open` and `view:split`.
+The component (`components[general-agents-page]`, `slot: workspace-surface`,
+export `GeneralAgentsPage`) is mounted in a seat with two grants:
 
-The door passes no workspace, and the page does not need one: it lists the
-packs' agents and the user's own, and creates new agents into the user tier. A
-workspace only adds that project's agents (`forge_open { workspace }`).
+| Grant | What it opens |
+|---|---|
+| `artifactory:call` | `store.call("callOwnServerTool", { tool, args })`: this pack's own server's App-only tools, answered with their structured result or refused with their own words |
+| `agents:configure` | `store.call("configureGeneralAgent", { name, enabled?, listed? })`: the Capabilities page's two switches |
+
+## What the page reads
+
+All from the fenced Store the seat hands it, never from a driver:
+
+| Fact | For |
+|---|---|
+| `agents/list` | the roster: title, face, tier, the two switches, capability counts, home id |
+| `sessions/list` | activity, folded ONCE per page (coalesced to one read per 250 ms): sessions in 7 days, last active, working or waiting on you, rooms led |
+| `agents/usage` | tokens and cost in 7 days |
+| `capabilities/catalog` | the marks and names of every plugin, skill, MCP server and tool |
+| `models` | the model cards of the Brain section |
+
+Faces come as fill props (`agentPresences`, `bridgedPresences`) and resolve
+through the kit's `agentPresenceFace`; every face is still until its card or
+tile is pointed at or focused, and mounts only near the viewport.
+
+The KPI rules (`page/kpis.ts`): a row belongs to its `profile`, a row with none
+to the Code space's default agent (`coding`); a session is a non-room,
+unarchived row an autonomy did not start; a handoff chain (`continuedFrom` /
+`continuedInto`) counts once, as its live end; rooms count for their live lead,
+never for membership.
 
 ## The page
 
-**Home.** A hero band with the page's name and the roster's count — agents, on,
-in the rail, yours — and the one button, **New agent**. Facet pills narrow the
-cards: All, Yours, From packs, This project, Off (the last only where the host
-lends the switches). Each card is the house's hero card (`MarkCard`, the
-Harnesses and Memory providers card) with the agent's live vibr in its well,
-its name (its `title`, else its name), two lines of what it is for, its tier and
-where it stands: *On · In rail*, *On · Hidden from rail* or *Off*. Faces hold
-still until the pointer or the keyboard reaches their card (the orb, the page's
-own face, always moves: it paints through one shared GL pool). Arrow keys, Home
-and End move between cards. A card carries no action; it opens the profile.
+**Home.** A hero band (name, what the page is for, **Create agent**, **Ask the
+Machinist**, and the roster's pulse: working now, agents, cost in 7 days),
+the Machinist's undecided proposals, facet pills (All, Yours, This project, From
+packs, Off), then the agents as cards grouped by where they come from. Each card
+follows the Autonomy card: the face on its accent wash, the name with its tier
+and a live badge (Working, Needs you), two lines of what it is for, the Enabled
+switch (yours and your project's; a pack's agent shows its state), what it may
+use as the Capabilities page's own marks, where it stands (Last active · 3h ago,
+or Never used), and its week: Sessions 7d, Tokens 7d, Cost 7d, Rooms led.
 
-**Profile.** The header holds the agent's face at hero size, its name and
-title, what it is for, its tier, lineage and file path, where it stands — and
-the page's one action: **Save changes**, **Create agent**, or, for a pack's
-agent, **Extend as a new agent** (a new agent of yours with `extends: [<it>]`).
-Beside it, the host's **Enabled** and **Show in rail** switches. Below, titled
-cards, each a list of facts edited in place:
+**Profile.** A header with the agent's face at hero size (it moves when pointed
+at), its title, tier, live badge, lineage and the Enabled and Show in rail
+switches, and the one action it offers: **Save**, **Create agent**, or, for a
+pack's agent, **Extend as a new agent** (a new agent with `extends: [<it>]`,
+prefilled with its settings). Under it the vitals strip: sessions, tokens and
+cost in 7 days, last active, rooms led, home. Then the sections, each drawn as
+the thing it is:
 
-| Card | What it holds |
+| Section | Drawn as |
 |---|---|
-| Identity | name (typed once, when creating), description, face (the kit's vibr picker over the host's own roster — a vibr added to the kit is wearable here with no pack edit), personality, and how it speaks: *Speaks only as itself* (`identity.prompt: replace`, the default) or *Builds on the default agent* (`append`, right only for an agent that extends `coding`, dimension#1355) |
-| Charter | the `agent.md` body |
-| Standing instructions | the agent-level `AGENTS.md`, resolved exactly as OMP resolves it (a project's copy for a pack agent, then the home file when it holds text, then the file beside `agent.md`), every candidate with its state and the winner marked, and an editor for the file a save writes — refused if that file changed, or the home appeared, since it was read |
-| Home | its id (`home-<name>`), folder, whether it stands there or only reads it, and why it has none when it has none |
-| Memory | backend, recall reach (*This project* / *Every project* = `workspace.reach: all`), the rooms it reads, and a note that `memory.namespace` isolates only under Mnemopi |
-| Capabilities | tools, skills and MCP servers as chip pickers (empty = every one), and plugins |
-| Brain | its model stack (`engine.model`) and thinking level |
-| Safety & access | approval gate, where it runs (where opened / its own home / a scratch worktree), control lanes |
-| Lineage | the agents it extends |
-| Advanced | *Everything else* — every other manifest key as YAML, validated as you type — beside the exact `agent.md` that will be written |
+| Identity | name and line; a face gallery (every first-party vibr and every contributed face the host lends); personality and how it speaks as choice cards |
+| Charter | an editor under the `agent.md` file card |
+| Standing instructions | the in-force `AGENTS.md` as a file card, every candidate tier as a chip, and an editor for the file a save writes |
+| Capabilities | Skills, Plugins, MCP and Tools tabs; each a searchable grid of mark cards, checked for its allowlist, with *Every X* as its own state |
+| Memory | what it reads as connected tiles (this project, its home, shared notes, other projects), the engine as choice cards, and the recall switch |
+| Home | its folder card: id, path, whether it works there, its `AGENTS.md` |
+| Brain | the model stack as model cards (ordered, first available wins) and thinking as a stepped meter |
+| Safety | approval and where it runs as choice cards, session lanes as toggle chips |
+| Lineage | the agents it extends, as agent cards |
+| Advanced | Other settings (every key the profile does not draw, as YAML) beside the exact `agent.md` a save writes |
 
-Keys that grant (tools, MCP servers, plugins, approval, where it runs, recall
-reach, control lanes) are marked **Only you can change this**.
+Keys that grant (tools, plugins, MCP, approval, where it runs, recall reach,
+session lanes) carry the lock: only a human sets them. One sticky save bar
+appears while anything is unsaved, names what it will write, and states the
+first thing standing in the way; the server's own verdict (`validate_agent`)
+shows inline as you type.
 
-A read-only agent (a pack's, or a legacy `.omp/agents` file) opens the same
-profile with every control disabled, the reason stated, and the Extend action.
+**The Machinist's proposals.** `forge_propose` stores a draft on the server,
+stamped with the workspace its session was bound to (`forge_open`); the page
+reads the undecided ones for its own workspace (`pending_proposals`, plus any
+made with no workspace) and shows them as *Proposed by the Machinist*, on the
+home and on the agent's profile, with the fields it set marked. A proposal made
+in one project never reaches another project's page. Accept keeps them in the
+draft (nothing is written until you save); Discard restores the profile as it
+was. Either way the page tells the server (`dismiss_proposal`). Leave a profile
+without deciding and the proposal is back on the home. A new, unnamed agent
+takes one proposal; the next waits on the home.
 
-**Create.** *New agent* opens the same profile as a draft: a new agent wears the
-orb, speaks only as itself and asks before every action. Name, description and
-charter are checked inline; *Create agent* writes it into the user tier.
-
-**The Machinist's proposals.** `forge_propose` lays a draft on the profile it
-names, under a *Proposed by the Machinist* banner that lists what it changed;
-the changed facts are marked. Accept keeps them (nothing is written until you
-save), Discard puts the profile back as it was.
-
-## Tiers — where an agent lives
+## Tiers: where an agent lives
 
 | Tier | Path | Home | On this page |
 |---|---|---|---|
 | **pack** | `<pack>/general-agents/<name>/agent.md` | yes (`home-<name>`) | read-only; *Extend as a new agent* |
-| **user** ("Yours") | `$INSO_HOME/agent/agents/<name>/agent.md` — where `agent_create` writes | yes | read, edit, **create here** |
-| **project** | `<workspace>/<PI_CONFIG_DIR>/agents/<name>/agent.md` (legacy `.omp/agents` is read-only) | none: it belongs to one project | read and edit when a workspace is bound |
+| **user** ("Yours") | `$INSO_HOME/agent/agents/<name>/agent.md`, where `agent_create` writes | yes | read, edit, **create here** |
+| **project** | `<workspace>/<PI_CONFIG_DIR>/agents/<name>/agent.md` (legacy `.omp/agents` is read-only) | none: it belongs to one project | read and edit; the page passes the active workspace |
 
 Precedence is the engine's: packs own their names, then the project, then the
 user; a shadowed file is reported.
 
-## The App
+## The server
 
 | Tool | Who calls it | What it does |
 |---|---|---|
-| `forge_open { agent?, workspace? }` | the model, and the rail door | Opens the home, or one agent's profile. `workspace` is optional: it adds the project's agents. |
-| `forge_propose { name, description?, charter?, vibr?, skills?, memory?, lineage?, thinking?, personality?, habitat?, extra? }` | the model | Talk-to-build: lays a draft on the profile, marked **Proposed by the Machinist** until the human accepts or discards it. Writes nothing. Has no `tools`, `mcp` or `approval` field, and refuses an `extra` that names a grant-class key (below). |
-| `list_agents` | the View | All three tiers, each parsed by `@dimension/sdk/general-agent`'s `parseGeneralAgent`, with its tier, path, revision and whether it is editable. |
-| `list_parts` | the View | Skills and MCP servers read from the workspace, `$INSO_HOME/agent` and every installed pack; tool names only as existing agents already use them — the host exposes no tool registry to Apps. |
-| `validate_agent { draft }` | the View | The server's verdict on a draft — its own problems, then whether the merged `agent.md` loads as a General Agent — without writing. |
-| `save_agent { draft, create, tier?, revision? }` | the View | Serializes with the SAME `src/agent-md.ts` the View renders, re-parses the whole file with `parseGeneralAgent` before anything touches disk, then writes atomically. `create: true` writes a new agent into the user tier and refuses a name taken in any tier; `create: false` rewrites the agent of that `tier` and is refused unless `revision` is the one `list_agents` gave. Never rewrites a Loop. |
-| `agent_home { name }` | the View | The agent's home: id, folder, whether the engine registers it, the memory room, and its standing instructions with the `revision` of the file a save would write. |
-| `save_instructions { name, text, revision }` | the View | Writes the agent's standing instructions; the path is derived from the name, never given; refused unless `revision` still matches. |
+| `forge_open { agent?, workspace? }` | the model | Reads the roster, or one agent, in words. `workspace` binds the session's project for later calls. |
+| `forge_propose { name, description?, charter?, vibr?, skills?, memory?, thinking?, personality?, extra? }` | the model | Stores a draft for the page to show as proposed. Writes nothing. Has no `tools`, `mcp`, `approval`, `habitat` or `lineage` field, and refuses an `extra` that names a grant-class key. One undecided proposal per agent per workspace: a newer one replaces it. |
+| `pending_proposals { workspace? }` · `dismiss_proposal { id }` | the page | The undecided proposals made in that workspace (or with none); the human decided one. |
+| `list_agents { workspace? }` | the page | All three tiers, each parsed by `@dimension/sdk/general-agent`'s `parseGeneralAgent`, with its tier, path, revision and whether it is editable. |
+| `list_parts { workspace? }` | the page | Skills, MCP servers and tool names read from disk. |
+| `validate_agent { draft }` | the page | The server's verdict on a draft without writing. |
+| `save_agent { draft, create, tier?, revision?, workspace? }` | the page | Serializes with the SAME `src/agent-md.ts` the page previews, re-parses the whole file before anything touches disk, then writes atomically. `create: true` writes a new agent into the user tier; `create: false` rewrites the agent of that tier and is refused unless `revision` still matches. Never rewrites a Loop. |
+| `agent_home { name, workspace? }` · `save_instructions { name, text, revision, workspace? }` | the page | The agent's home and standing instructions; a save is refused unless `revision` still matches. |
 
-**Where things are read from.** The engine spawns this server once, from the
-plugin's own root, with its home and project config dir in the environment
-(`INSO_HOME`, `INSO_VAULT_DIR`, `INSO_ENV`, `PI_CONFIG_DIR`). A call's session
-`_meta` names the session but not its workspace, so the model names it with
-`forge_open { workspace }`; `DIMENSION_FORGE_WORKSPACE` is the fallback.
+The page's tools are App-only (`_meta.ui.visibility: ["app"]`); the model's are
+model-only. No tool carries a View.
 
-**Security (doc 58 §3).** The keys that grant — `capabilities.tools`,
+**Security (doc 58 §3).** The keys that grant (`capabilities.tools`,
 `gate.approval`, `workspace.*`, `capabilities.control`, `capabilities.plugins`,
 `capabilities.mcp`, `capabilities.optIn`, `subagents.allowed`, `harness`,
-`allowedHarnesses` — change only by a human gesture on the profile.
+`allowedHarnesses`) change only by a human gesture on the profile, and so do
+the two profile fields that carry one: Where it runs (`habitat`, written as
+`workspace.policy`) and Lineage (`lineage`, written as `extends`, which composes
+each base's whole grant into the agent).
 `forge_propose` cannot carry them: its schema has none of the drawn ones; an
-`extra` that names any grant-class key is refused whole — read as text and again
-as the YAML it parses to; and merging a proposal into a draft never applies one,
-whatever reaches the View. `save_agent` and `save_instructions` are App-only —
-the model cannot write a file at all.
+`extra` that names one is refused whole, read as text and again as the YAML it
+parses to; and laying a proposal on a draft never applies one, whatever reaches
+the page. `save_agent` and `save_instructions` are App-only: the model cannot
+write a file at all.
 
-## Honesty rules the View keeps
+## Honesty rules
 
 - The profile only emits keys `agent-manifest.ts` accepts, plus the Dimension
-  keys `parseGeneralAgent` reads beside them; the face is dimension#1042's
-  top-level `avatar:`, written only when set. It never emits `autonomy:`.
-- Nothing in a file is unshown and dropped: a key the profile does not draw — or
+  keys `parseGeneralAgent` reads beside them. It never emits `autonomy:`.
+- Nothing in a file is unshown and dropped: a key the profile does not draw, or
   a drawn key it cannot draw faithfully (an avatar with a skin, `thinkingLevel:
-  auto`, a reach that lists workspaces, a pinned workspace, an empty allowlist) —
-  rides in *Everything else* verbatim, and its control says *set in Everything
-  else*. The retired `memory.vault` is the one key a rewrite removes.
-- A face this page cannot paint (a contributed `plugin:` face) shows the host's
-  neutral agent face, exactly as the rail does.
-- The preview (`app/view/preview.ts`) is used only when there is no host, keeps
-  everything in memory and says nothing is written. `?state=` picks the screen:
-  `home`, `empty`, `loading`, `error`, `profile`, `readonly`, `create`,
-  `proposal`, `rich`; `&dock=off` and `&rail=off` drop the dock station and the
-  switches.
+  auto`, an empty allowlist, a pinned workspace), rides in Other settings
+  verbatim, and its control says so. The retired `memory.vault` is the one key a
+  rewrite removes.
+- A reading the host does not publish says so (`–`, *appear once this host
+  measures them*); nothing on the page is estimated.
 
-## What lands next
+## Styling
 
-1. Live proof on the dev desktop, twice green.
-2. An engine-supplied workspace on App calls (`workspaceId` in the session
-   `_meta` is reserved today), which retires `forge_open`'s `workspace` argument.
-3. A tool registry the host lends Apps, so the Tools picker is complete.
-4. The inspector report (`AgentReport`, doc 84) on the profile — it needs a
-   live session, not an agent file.
+The host's Tailwind scans the kit's and the app's source, never a bundle loaded
+at runtime, so `page/page.css` compiles exactly the utilities `page/` uses
+against the host's own theme (`@reference`, emitting no token or reset twice)
+into the `utilities` layer, scoped under the page's root element
+(`:where([data-slot="general-agents-page"])`): a utility the page needs can
+never override the host's own responsive variants on a host element, and the
+page's own variants still beat the host's plain copies inside it. The page
+holds the sheet (`page/styles.ts`) while it is mounted and removes it with its
+last instance. Anything the page renders outside its root element would lose
+its utilities. Every value reads a `--fr-*` token.
+
+## The harness
+
+`bun run dev` mounts the page exactly as the host does, over `harness/fixture.ts`
+(a Store with every fact above and a `call` door answering the server's tools
+from memory; nothing is written). `?state=` picks what it meets: `home`,
+`empty`, `loading`, `error`, `proposal`; `&call=off` is a host that grants no
+`artifactory:call`.

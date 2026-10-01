@@ -1,14 +1,14 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { agentHomeWorkspaceId, parseGeneralAgent } from "@dimension/sdk/general-agent";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { parse as parseYaml } from "yaml";
 import { type AgentDraft, type AgentProposal, applyProposal, blankDraft, manifestLines } from "../src/agent-md";
-import type { AgentHome, AgentListing, DraftCheck, ForgeProposed, InstructionsSaved, ListedAgent, SaveOutcome } from "../src/contracts";
+import type { AgentHome, AgentListing, DraftCheck, ForgeProposed, InstructionsSaved, ListedAgent, PendingProposals, SaveOutcome } from "../src/contracts";
 import { grantPathsIn } from "../src/extra";
 import { createForgeServer } from "../src/server";
 import { WRITE_DIR } from "../src/store";
@@ -16,7 +16,6 @@ import { WRITE_DIR } from "../src/store";
 let root: string;
 let workspace: string;
 let home: string;
-let viewDir: string;
 let client: Client;
 const open: Client[] = [];
 
@@ -37,7 +36,7 @@ async function put(path: string, content: string): Promise<void> {
 
 /** A client on a fresh Forge server. `bound` = the agent named its workspace in `forge_open`. */
 async function connect(bound: boolean): Promise<Client> {
-	const server = await createForgeServer({ viewDir, env: { INSO_HOME: home } });
+	const server = createForgeServer({ env: { INSO_HOME: home } });
 	const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
 	await server.connect(serverSide);
 	const connected = new Client({ name: "forge-test", version: "0" });
@@ -54,9 +53,7 @@ beforeEach(async () => {
 	root = await mkdtemp(join(tmpdir(), "forge-"));
 	workspace = join(root, "workspace");
 	home = join(root, "home");
-	viewDir = join(root, "view");
 	await mkdir(workspace, { recursive: true });
-	await put(join(viewDir, "index.html"), "<!doctype html><div id=root></div>");
 	await put(join(home, "plugins", "node_modules", "helper-pack", "general-agents", "helper", "agent.md"), PACK_AGENT);
 	client = await connect(true);
 });
@@ -230,7 +227,7 @@ describe("tiers and the door with no workspace", () => {
 		const bare = await connect(false);
 		const opened = await call("forge_open", {}, bare);
 		expect(opened.isError).toBeFalsy();
-		expect(opened.structuredContent).toMatchObject({ view: "forge", agent: null, workspace: null });
+		expect(opened.structuredContent).toMatchObject({ agent: null, workspace: null });
 
 		const seen = await listing(bare);
 		expect(seen.workspace).toBeNull();
@@ -472,15 +469,28 @@ You run the desk.
 });
 
 describe("forge_propose", () => {
-	test("offers the model no tools, mcp, approval or recall-scope field, and carries none into the draft", async () => {
+	test("offers the model no tools, mcp, approval, recall-scope, habitat or lineage field, and carries none into the draft", async () => {
 		const { tools } = await client.listTools();
 		const schema = tools.find(tool => tool.name === "forge_propose")?.inputSchema.properties ?? {};
 		expect(Object.keys(schema)).not.toContain("tools");
 		expect(Object.keys(schema)).not.toContain("mcp");
 		expect(Object.keys(schema)).not.toContain("approval");
 		expect(Object.keys(schema)).not.toContain("memoryScope");
+		// `habitat` is written as workspace.policy and `lineage` as `extends`, which composes a base's whole grant.
+		expect(Object.keys(schema)).not.toContain("habitat");
+		expect(Object.keys(schema)).not.toContain("lineage");
 
-		const result = await call("forge_propose", { name: "scout", description: "Finds things", skills: ["fallow"], tools: ["bash"], mcp: ["palace"], approval: "yolo", memoryScope: "global" });
+		const result = await call("forge_propose", {
+			name: "scout",
+			description: "Finds things",
+			skills: ["fallow"],
+			tools: ["bash"],
+			mcp: ["palace"],
+			approval: "yolo",
+			memoryScope: "global",
+			habitat: "home",
+			lineage: ["coding"],
+		});
 		expect(result.isError).toBeFalsy();
 		const { proposal } = result.structuredContent as unknown as ForgeProposed;
 		expect(proposal).toEqual({ name: "scout", description: "Finds things", skills: ["fallow"] });
@@ -560,12 +570,14 @@ describe("forge_propose", () => {
 
 	test("merged into a draft, a proposal leaves the human's tools, gate, recall scope and grants alone", () => {
 		const base = draft({ tools: ["read"], mcp: ["browser"], approval: "always-ask", memoryScope: "project", extra: "capabilities:\n  control: [agents]\ntitle: Old" });
-		const hostile = { name: "release-herald", charter: "New charter", tools: ["bash"], mcp: ["palace"], approval: "yolo", memoryScope: "global" } as AgentProposal;
+		const hostile = { name: "release-herald", charter: "New charter", tools: ["bash"], mcp: ["palace"], approval: "yolo", memoryScope: "global", habitat: "home", lineage: ["coding"] } as AgentProposal;
 		const merged = applyProposal(base, hostile);
 		expect(merged.tools).toEqual(["read"]);
 		expect(merged.mcp).toEqual(["browser"]);
 		expect(merged.approval).toBe("always-ask");
 		expect(merged.memoryScope).toBe("project");
+		expect(merged.habitat).toBe("bound");
+		expect(merged.lineage).toEqual([]);
 		expect(merged.charter).toBe("New charter");
 
 		// Even if a grant-class proposal reaches the View (an older server, a forged event), it is not applied.
@@ -580,6 +592,145 @@ describe("forge_propose", () => {
 		const decl = parseYaml(overlaid.extra) as { title: string; capabilities: Record<string, unknown> };
 		expect(decl.title).toBe("New");
 		expect(decl.capabilities).toEqual({ control: ["agents"], autoloadSkills: ["fallow"] });
+	});
+});
+
+describe("the page's proposal inbox", () => {
+	const pending = async (): Promise<PendingProposals> => (await call("pending_proposals", {})).structuredContent as unknown as PendingProposals;
+
+	test("a proposal waits for the page, grant fields stripped, until the page dismisses it", async () => {
+		const proposed = await call("forge_propose", { name: "scout", description: "Finds things", tools: ["bash"], approval: "yolo", memoryScope: "global" });
+		const { id } = proposed.structuredContent as unknown as ForgeProposed;
+		const waiting = (await pending()).proposals;
+		expect(waiting.map(entry => entry.id)).toEqual([id]);
+		expect(waiting[0]?.proposal).toEqual({ name: "scout", description: "Finds things" });
+
+		expect((await call("dismiss_proposal", { id })).structuredContent).toEqual({ dismissed: true });
+		expect((await pending()).proposals).toEqual([]);
+		// Deciding twice is harmless and says so.
+		expect((await call("dismiss_proposal", { id })).structuredContent).toEqual({ dismissed: false });
+	});
+
+	test("a refused proposal is never stored, and a second one for the same agent replaces the first", async () => {
+		await call("forge_propose", { name: "scout", extra: "gate:\n  approval: yolo" });
+		expect((await pending()).proposals).toEqual([]);
+		const first = (await call("forge_propose", { name: "scout", description: "One" })).structuredContent as unknown as ForgeProposed;
+		await call("forge_propose", { name: "other", description: "Other" });
+		const second = (await call("forge_propose", { name: "scout", charter: "Two" })).structuredContent as unknown as ForgeProposed;
+		const waiting = (await pending()).proposals;
+		expect(waiting.map(entry => entry.proposal.name)).toEqual(["other", "scout"]);
+		expect(waiting.find(entry => entry.proposal.name === "scout")?.id).toBe(second.id);
+		expect(second.id).not.toBe(first.id);
+	});
+
+	describe("scoped to the workspace it was proposed in", () => {
+		const session = (sessionId: string) => ({ "ai.insodimension/session": { sessionId } });
+		const inSession = async (on: Client, sessionId: string, name: string, args: Record<string, unknown>) => (await on.callTool({ name, arguments: args, _meta: session(sessionId) })) as CallToolResult;
+		const waitingFor = async (on: Client, page?: string) =>
+			(((await call("pending_proposals", page === undefined ? {} : { workspace: page }, on)).structuredContent as unknown as PendingProposals).proposals).map(entry => `${entry.proposal.name}:${entry.proposal.description ?? ""}`);
+		let other: string;
+		let shared: Client;
+
+		beforeEach(async () => {
+			other = join(root, "other");
+			await mkdir(other, { recursive: true });
+			shared = await connect(false);
+			await inSession(shared, "session-a", "forge_open", { workspace });
+			await inSession(shared, "session-b", "forge_open", { workspace: other });
+		});
+
+		test("two projects' proposals for the same agent stay apart, and each page is handed only its own", async () => {
+			await inSession(shared, "session-a", "forge_propose", { name: "reviewer", description: "A" });
+			await inSession(shared, "session-b", "forge_propose", { name: "reviewer", description: "B" });
+
+			expect(await waitingFor(shared, workspace)).toEqual(["reviewer:A"]);
+			expect(await waitingFor(shared, other)).toEqual(["reviewer:B"]);
+			// A project nobody proposed in sees nothing, and the same directory spelled another way is still the same project.
+			const third = join(root, "third");
+			await mkdir(third, { recursive: true });
+			expect(await waitingFor(shared, third)).toEqual([]);
+			expect(await waitingFor(shared, `${workspace}${sep}.`)).toEqual(["reviewer:A"]);
+		});
+
+		test("a page that reaches the project through a link is the same project, so its proposals still arrive", async () => {
+			await inSession(shared, "session-a", "forge_propose", { name: "reviewer", description: "A" });
+			const link = join(root, "linked-workspace");
+			await symlink(workspace, link, "junction");
+			expect(await waitingFor(shared, link)).toEqual(["reviewer:A"]);
+		});
+
+		test("a newer proposal replaces the earlier one for the same agent in the SAME workspace only", async () => {
+			await inSession(shared, "session-a", "forge_propose", { name: "reviewer", description: "A1" });
+			await inSession(shared, "session-b", "forge_propose", { name: "reviewer", description: "B1" });
+			await inSession(shared, "session-a", "forge_propose", { name: "reviewer", description: "A2" });
+			expect(await waitingFor(shared, workspace)).toEqual(["reviewer:A2"]);
+			expect(await waitingFor(shared, other)).toEqual(["reviewer:B1"]);
+		});
+
+		test("a proposal made with no workspace is every page's; a page with no workspace sees only those", async () => {
+			await inSession(shared, "session-a", "forge_propose", { name: "mine", description: "in a" });
+			await inSession(shared, "session-unbound", "forge_propose", { name: "loose", description: "nowhere" });
+			expect(await waitingFor(shared, workspace)).toEqual(["mine:in a", "loose:nowhere"]);
+			expect(await waitingFor(shared, other)).toEqual(["loose:nowhere"]);
+			expect(await waitingFor(shared)).toEqual(["loose:nowhere"]);
+		});
+
+		test("a page that names a directory that is not there is told so", async () => {
+			const refused = await call("pending_proposals", { workspace: join(root, "nowhere") }, shared);
+			expect(refused.isError).toBe(true);
+		});
+	});
+
+	test("the model sees its two tools and none of the page's; the page's tools are App-only", async () => {
+		const { tools } = await client.listTools();
+		const visibility = Object.fromEntries(tools.map(tool => [tool.name, (tool._meta?.ui as { visibility?: string[] } | undefined)?.visibility]));
+		expect(visibility.forge_open).toEqual(["model"]);
+		expect(visibility.forge_propose).toEqual(["model"]);
+		for (const name of ["pending_proposals", "dismiss_proposal", "list_agents", "list_parts", "validate_agent", "save_agent", "agent_home", "save_instructions"]) {
+			expect(visibility[name]).toEqual(["app"]);
+		}
+		expect(tools.some(tool => (tool._meta?.ui as { resourceUri?: string } | undefined)?.resourceUri !== undefined)).toBe(false);
+	});
+});
+
+describe("the page names its workspace", () => {
+	test("a sessionless call that names the workspace lists and saves project agents; a bad path is refused", async () => {
+		await put(projectFile("project-bot"), "---\nname: project-bot\ndescription: one project's agent\nspecVersion: 1\n---\nThis project only.\n");
+		const bare = await connect(false);
+		expect((await listing(bare)).agents.some(agent => agent.name === "project-bot")).toBe(false);
+		const named = (await call("list_agents", { workspace }, bare)).structuredContent as unknown as AgentListing;
+		const bot = named.agents.find(agent => agent.name === "project-bot");
+		expect(bot).toMatchObject({ source: "workspace", editable: true });
+		if (bot?.revision === undefined) throw new Error("project-bot has no revision");
+		const saved = await call("save_agent", { draft: { ...bot.draft, description: "Renamed line" }, create: false, tier: "workspace", revision: bot.revision, workspace }, bare);
+		expect(saved.isError).toBeFalsy();
+		expect((await manifestAt(projectFile("project-bot"), "project-bot")).description).toBe("Renamed line");
+
+		const refused = await call("list_agents", { workspace: join(root, "nowhere") }, bare);
+		expect(refused.isError).toBe(true);
+	});
+});
+
+describe("faces and models the profile draws", () => {
+	test("a contributed plugin face is drawn, not held, and survives a rewrite", async () => {
+		await put(userFile("x-agent"), "---\nname: x-agent\ndescription: posts\nspecVersion: 1\navatar: plugin:traction-vibrs/x-vibr\n---\nPost.\n");
+		const opened = await listed("x-agent");
+		expect(opened.draft.vibr).toBe("plugin:traction-vibrs/x-vibr");
+		expect(opened.draft.extra).toBe("");
+		expect((await reforge(opened)).isError).toBeFalsy();
+		expect((await manifestAt(userFile("x-agent"), "x-agent")).avatar).toEqual({ id: "plugin:traction-vibrs/x-vibr" });
+	});
+
+	test("the model stack is drawn from engine.model and written back in order; a bare default stays absent", async () => {
+		await put(userFile("deep"), "---\nname: deep\ndescription: thinks\nspecVersion: 1\nengine:\n  model: [anthropic/claude-opus-4, openai/gpt-5]\n---\nThink.\n");
+		const opened = await listed("deep");
+		expect(opened.draft.models).toEqual(["anthropic/claude-opus-4", "openai/gpt-5"]);
+		expect(opened.draft.extra).toBe("");
+		expect((await reforge(opened, { models: ["openai/gpt-5"] })).isError).toBeFalsy();
+		expect((await manifestAt(userFile("deep"), "deep")).manifest.engine?.model).toEqual(["openai/gpt-5"]);
+		const cleared = await listed("deep");
+		expect((await reforge(cleared, { models: [] })).isError).toBeFalsy();
+		expect((await manifestAt(userFile("deep"), "deep")).manifest.engine?.model).toBeUndefined();
 	});
 });
 

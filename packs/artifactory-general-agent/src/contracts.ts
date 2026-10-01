@@ -1,4 +1,4 @@
-// The wire between the Forge's server and its View: the structuredContent each
+// The wire between the pack's server and its page: the structuredContent each
 // tool answers with. Types only — both halves import it, neither re-derives it.
 import type { AgentDraft, AgentProposal } from "./agent-md";
 
@@ -148,15 +148,34 @@ export interface DraftCheck {
 	readonly problems: readonly string[];
 }
 
-/** `forge_open`'s answer: where the View should land. */
+/** `forge_open`'s answer: the agent it read, and the workspace it read in. */
 export interface ForgeOpened {
-	readonly view: "forge";
 	readonly agent: string | null;
 	readonly workspace: string | null;
 }
 
-/** `forge_propose`'s answer: a draft for the human to accept or discard. */
+/** `forge_propose`'s answer: the proposal as the page will show it. */
 export interface ForgeProposed {
-	readonly view: "proposal";
+	readonly id: string;
 	readonly proposal: AgentProposal;
+}
+
+/** A proposal the server holds until the human accepts or discards it on the page. */
+export interface StoredProposal {
+	readonly id: string;
+	readonly proposal: AgentProposal;
+	/** Epoch ms it was proposed. */
+	readonly at: number;
+	/** The workspace the proposing session was bound to; `null`: it had none, and every page sees it. */
+	readonly workspace: string | null;
+}
+
+/** `pending_proposals`' answer, oldest first. */
+export interface PendingProposals {
+	readonly proposals: readonly StoredProposal[];
+}
+
+/** `dismiss_proposal`'s answer: false when it was no longer pending. */
+export interface ProposalDismissed {
+	readonly dismissed: boolean;
 }

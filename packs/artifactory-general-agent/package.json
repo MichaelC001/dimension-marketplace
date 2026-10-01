@@ -1,15 +1,15 @@
 {
   "name": "@dimension/community-general-agent",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "author": "Dimension",
-  "description": "General Agents — every agent you can run, as cards on one page. Open one for its whole profile — tools, skills, plugins, MCP, standing instructions, home, memory and whether it is on and in the rail — and edit it there, or create a new one by hand or by asking the Machinist.",
+  "description": "General Agents: every agent you can run, as cards with their real faces and their week at a glance. Open one for its whole profile and edit it there, extend a pack's agent into your own, or ask the Machinist to draft one.",
   "engines": {
     "node": ">=22.12.0"
   },
   "scripts": {
-    "dev": "vite --config vite.config.ts",
+    "dev": "vite --config harness/vite.config.ts",
     "build": "bun scripts/build.mjs",
     "check:types": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.server.json",
     "test": "bun test test/",
@@ -17,33 +17,29 @@
   },
   "dimension": {
     "name": "artifactory-general-agent",
-    "description": "General Agents — every agent you can run, as cards on one page. Open one for its whole profile — tools, skills, plugins, MCP, standing instructions, home, memory and whether it is on and in the rail — and edit it there, or create a new one by hand or by asking the Machinist.",
+    "description": "General Agents: every agent you can run, as cards with their real faces and their week at a glance. Open one for its whole profile and edit it there, extend a pack's agent into your own, or ask the Machinist to draft one.",
     "defaultEnabled": false,
     "category": "artifactory",
     "keywords": [
       "general-agents",
-      "mcp-apps",
-      "agent-builder"
+      "agent-builder",
+      "component"
     ]
   },
   "files": [
     "plugin.json",
     "ai.insodimension.dimension/",
     "app/server.mjs",
-    "app/dist/",
+    "dist/",
     "README.md"
   ],
   "dependencies": {
-    "@modelcontextprotocol/ext-apps": "1.7.5",
     "@modelcontextprotocol/sdk": "1.29.0",
     "yaml": "2.9.0",
     "zod": "4.4.3"
   },
   "devDependencies": {
-    "@dimension/mcp-app-kit": "workspace:*",
     "@dimension/sdk": "workspace:*",
-    "@fontsource/ibm-plex-mono": "^5.2.7",
-    "@fontsource/ibm-plex-sans": "^5.2.8",
     "@fraym/config": "workspace:*",
     "@fraym/ui": "workspace:*",
     "@fraym/vibr": "workspace:*",
@@ -56,6 +52,7 @@
     "esbuild": "^0.21.5",
     "react": "19.2.7",
     "react-dom": "19.2.7",
+    "tailwindcss": "catalog:",
     "typescript": "7.0.2",
     "vite": "8.1.5"
   }

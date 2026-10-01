@@ -119,6 +119,7 @@ const FLAT_ALIASES: Readonly<Record<string, string>> = {
 	tools: "capabilities.tools",
 	thinkingLevel: "engine.thinkingLevel",
 	thinking: "engine.thinkingLevel",
+	model: "engine.model",
 };
 
 /** The frontmatter of a file `parseGeneralAgent` already accepted — the SDK's
@@ -129,11 +130,12 @@ function frontmatterOf(content: string): string {
 	return end < 0 ? "" : content.slice(content.indexOf("\n") + 1, end);
 }
 
-/** A face the profile's picker can hold: a plain avatar id — no skin, no accent,
- *  not a contributed `plugin:` face. Which ids exist is the host's roster, not
- *  this server's: the manifest parser has already checked the id's shape. */
+/** A face the profile's picker can hold: a plain avatar id, first-party or a
+ *  contributed `plugin:` face, with no skin and no accent. Which ids exist is the
+ *  host's roster, not this server's: the manifest parser has already checked the
+ *  id's shape. */
 function isPlainAvatar(avatar: NonNullable<GeneralAgentDecl["avatar"]>): boolean {
-	return !avatar.id.startsWith("plugin:") && avatar.skin === undefined && avatar.accent === undefined;
+	return avatar.skin === undefined && avatar.accent === undefined;
 }
 
 /**
@@ -153,6 +155,10 @@ function heldPaths(decl: GeneralAgentDecl, raw: Raw, blocks: readonly Block[]): 
 
 	const backend = manifest.memory?.backend;
 	if (backend !== undefined && (backend === "inherit" || !(MEMORY_BACKENDS as readonly string[]).includes(backend))) held.add("memory.backend");
+
+	// `[]` would be written back as an absent key (the host's default model).
+	const model = manifest.engine?.model;
+	if (model !== undefined && (!Array.isArray(model) || model.length === 0)) held.add("engine.model");
 
 	// `[]` means NONE, and the profile writes an empty list as an absent key (ALL).
 	for (const key of ["tools", "skills", "mcp"] as const) {
@@ -253,6 +259,7 @@ export function draftFromFile(decl: GeneralAgentDecl, content: string, key: stri
 		personality: manifest.identity?.personality ?? "default",
 		promptMode: manifest.identity?.prompt ?? "replace",
 		thinking: drawnOr<Thinking>("engine.thinkingLevel", raw.thinkingLevel as Thinking | undefined, "inherit"),
+		models: held.has("engine.model") ? [] : allowlist(manifest.engine?.model),
 		tools: held.has("capabilities.tools") ? [] : allowlist(manifest.capabilities?.tools),
 		skills: held.has("capabilities.skills") ? [] : allowlist(manifest.capabilities?.skills),
 		mcp: held.has("capabilities.mcp") ? [] : allowlist(manifest.capabilities?.mcp),

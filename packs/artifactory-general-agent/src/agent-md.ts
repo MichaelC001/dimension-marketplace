@@ -1,9 +1,9 @@
 // The Forge's document: one General Agent draft, and the agent.md it writes.
 //
-// SHARED by the View (which shows these lines live on the agent's profile) and the
+// SHARED by the page (which shows these lines live on the agent's profile) and the
 // server (which writes exactly these bytes in `save_agent`), so what the human
 // watched being written is what lands on disk — one serializer, never two.
-// It imports no package: the View bundle must not pull the SDK's YAML parser in.
+// It imports no package: the page bundle must not pull the SDK's YAML parser in.
 //
 // Field names and value sets mirror the canonical schema in
 // omp/packages/coding-agent/src/config/agent-manifest.ts. That parser REJECTS
@@ -38,16 +38,20 @@ export interface AgentDraft {
 	readonly key: string;
 	name: string;
 	description: string;
-	/** The avatar id it wears (`avatar:`) — a first-party vibr (`orb`, `nebula`,
-	 *  `mochi`, …). The roster is the HOST's (`@fraym/config` `AVATAR_IDS`), so a
-	 *  vibr added there is wearable here with no pack edit; the manifest parser
-	 *  checks the id's shape. `""` = the file declares none, and hosts paint their
-	 *  neutral agent face. A face with a skin or accent, or a contributed
-	 *  `plugin:` face, travels in `extra` as the author wrote it. */
+	/** The avatar id it wears (`avatar:`): a first-party vibr (`orb`, `nebula`,
+	 *  `mochi`, …) or a contributed `plugin:<pack>/<id>` face. Which ids exist is
+	 *  the HOST's roster (its vibrs plus the bridged presences it lends), so a face
+	 *  added there is wearable here with no pack edit; the manifest parser checks
+	 *  the id's shape. `""` = the file declares none, and hosts paint their
+	 *  neutral agent face. A face with a skin or accent travels in `extra` as the
+	 *  author wrote it. */
 	vibr: string;
 	personality: Personality;
 	promptMode: PromptMode;
 	thinking: Thinking;
+	/** `engine.model`: the model patterns it runs on, first available wins.
+	 *  Empty = the host's default model (key omitted). */
+	models: string[];
 	/** `capabilities.tools` allowlist. Empty = every tool (key omitted). */
 	tools: string[];
 	/** `capabilities.skills` allowlist. Empty = every skill (key omitted). */
@@ -76,11 +80,12 @@ export interface AgentDraft {
 /** The fields the WORKSHOP (the model, through `forge_propose`) may fill. The
  *  grant-class fields — `tools` (`capabilities.tools`), `mcp`
  *  (`capabilities.mcp`, which servers the agent may call), `approval`
- *  (`gate.approval`) and `memoryScope` (`workspace.reach`, a cross-project
- *  grant) — are deliberately absent: doc 58 §3, only a human gesture in the
- *  View changes them. `extra` IS proposable, minus every grant-class key it
- *  could carry (`grantPathsIn`): the proposal is refused, and never applied, if
- *  it names one. */
+ *  (`gate.approval`), `memoryScope` (`workspace.reach`, a cross-project grant),
+ *  `habitat` (`workspace.policy`, where it works) and `lineage` (`extends`,
+ *  which composes each base's WHOLE grant into this agent) — are deliberately
+ *  absent: doc 58 §3, only a human gesture in the View changes them. `extra`
+ *  IS proposable, minus every grant-class key it could carry (`grantPathsIn`):
+ *  the proposal is refused, and never applied, if it names one. */
 export const PROPOSABLE_FIELDS = [
 	"name",
 	"description",
@@ -88,10 +93,8 @@ export const PROPOSABLE_FIELDS = [
 	"vibr",
 	"skills",
 	"memory",
-	"lineage",
 	"thinking",
 	"personality",
-	"habitat",
 	"extra",
 ] as const satisfies readonly (keyof AgentDraft)[];
 export type ProposableField = (typeof PROPOSABLE_FIELDS)[number];
@@ -128,6 +131,7 @@ export function blankDraft(key: string): AgentDraft {
 		personality: "default",
 		promptMode: "replace",
 		thinking: "inherit",
+		models: [],
 		tools: [],
 		skills: [],
 		mcp: [],
@@ -142,9 +146,9 @@ export function blankDraft(key: string): AgentDraft {
 }
 
 /** Lay a workshop proposal over a draft: only the fields it names change, and
- *  `tools`/`approval`/`memoryScope` never do — whatever the object carries at
- *  runtime. `extra` is overlaid key by key, and not at all when it names a
- *  grant-class key. */
+ *  `tools`/`approval`/`memoryScope`/`habitat`/`lineage` never do — whatever the
+ *  object carries at runtime. `extra` is overlaid key by key, and not at all
+ *  when it names a grant-class key. */
 export function applyProposal(draft: AgentDraft, proposal: AgentProposal): AgentDraft {
 	const next: AgentDraft = { ...draft };
 	const patch = next as unknown as Record<ProposableField, unknown>;
@@ -164,7 +168,7 @@ const DRAWN_TOP: readonly string[] = ["name", "description", "avatar", "specVers
 /** The keys the profile draws inside each section it draws. */
 export const DRAWN_CHILDREN: Readonly<Record<string, readonly string[]>> = {
 	identity: ["personality", "prompt"],
-	engine: ["thinkingLevel"],
+	engine: ["thinkingLevel", "model"],
 	capabilities: ["tools", "skills", "mcp"],
 	gate: ["approval"],
 	memory: ["backend"],
@@ -278,7 +282,10 @@ export function manifestDocument(draft: AgentDraft, homeId?: string | null): Man
 		...(draft.personality !== "default" ? [child("identity.personality", `  personality: ${draft.personality}`)] : []),
 		child("identity.prompt", `  prompt: ${draft.promptMode}`),
 	]);
-	section("engine", draft.thinking !== "inherit" ? [child("engine.thinkingLevel", `  thinkingLevel: ${draft.thinking}`)] : []);
+	section("engine", [
+		...(draft.thinking !== "inherit" ? [child("engine.thinkingLevel", `  thinkingLevel: ${draft.thinking}`)] : []),
+		...(draft.models.length > 0 ? [child("engine.model", `  model: ${list(draft.models)}`)] : []),
+	]);
 	section("capabilities", [
 		...(draft.tools.length > 0 ? [child("capabilities.tools", `  tools: ${list(draft.tools)}`)] : []),
 		...(draft.skills.length > 0 ? [child("capabilities.skills", `  skills: ${list(draft.skills)}`)] : []),
