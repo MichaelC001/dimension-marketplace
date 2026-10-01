@@ -35,7 +35,7 @@ export interface Dom {
 	readonly submit: (form: Element) => Promise<void>;
 	/** Tick or untick a checkbox, as a click does. */
 	readonly check: (input: Element, checked: boolean) => Promise<void>;
-	/** Let pending promises and effects settle (a poll answering, a tool call returning). */
+	/** Let pending promises and effects settle (a stream message arriving, a tool call returning). */
 	readonly settle: () => Promise<void>;
 }
 

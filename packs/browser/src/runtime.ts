@@ -491,7 +491,8 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	/**
 	 * The human's own mouse, wheel and keys on the active tab (the View's direct channel). Like the live picture it is NOT queued behind
 	 * page work, so a click never waits for a navigation, but batches apply one after another. The rules `act` has for the View hold:
-	 * a task owns its page, and a click or key on the page a publish waits on marks the publish touched.
+	 * a task owns its page, a click or key on the page a publish waits on marks the publish touched, and while the bar's Post is being
+	 * submitted the page takes no input at all (an `act` waited behind it in the page queue; this door has to refuse).
 	 */
 	async input(browserId: string, events: unknown): Promise<void> {
 		const entry = this.require(browserId);
@@ -499,15 +500,22 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		const run = async (): Promise<void> => {
 			if (entry.closed) fail("unknown_browser", "unknown or already closed browserId");
 			refuseWhileBusy(entry, "app");
+			refuseWhileSubmitting(entry);
 			const pinned = isPending(entry.publish) && admitted.some(touchesPage) ? entry.publish : null;
 			// Another tab is not the page being confirmed; an unreadable state counts as the pinned one.
 			const touching = pinned !== null && ((await entry.driver.state().catch(() => null))?.activeTabId ?? pinned.record.tabId) === pinned.record.tabId ? pinned : null;
+			// The state read let the Post start: this check and the mark below must run with nothing awaited between them.
+			refuseWhileSubmitting(entry);
+			// Marked BEFORE the press is sent: a Post that starts while it is in flight must already see it and never click submit.
+			const touchedBefore = touching?.touchedWhilePending ?? false;
+			if (touching) touching.touchedWhilePending = true;
 			try {
 				await entry.driver.input(admitted);
-				if (touching) touching.touchedWhilePending = true;
 			} catch (error) {
-				if (!(error instanceof ActionNotDispatched)) {
-					if (touching) touching.touchedWhilePending = true;
+				if (error instanceof ActionNotDispatched) {
+					// Provably nothing reached the page, so the publish was not touched by this batch.
+					if (touching) touching.touchedWhilePending = touchedBefore;
+				} else {
 					entry.revision += 1;
 				}
 				throw error;
@@ -1599,6 +1607,13 @@ function refuseWhileBusy(entry: Entry, caller: ToolCaller | undefined): void {
 function refuseWhilePublishing(entry: Entry, caller: ToolCaller | undefined): void {
 	if (caller !== "app" && isPending(entry.publish)) {
 		fail("publish_pending", "a post awaits confirmation on this browser; confirm or cancel it (browser_publish_confirm / browser_publish_cancel) or wait with browser_publish_wait");
+	}
+}
+
+/** The bar's Post is clicking submit and waiting for its receipt: the page is its alone until it settles, or the human could post twice or change what is posted. */
+function refuseWhileSubmitting(entry: Entry): void {
+	if (entry.publish?.confirming && isPending(entry.publish)) {
+		fail("publish_pending", "the Post is being submitted; the page takes no input until it is done");
 	}
 }
 

@@ -421,6 +421,9 @@ as data, so the pack's code stays platform-agnostic:
   the publish waits, they may have used the site's own submit: the bar's Post
   then never clicks submit, and Post, Cancel, closing the browser or expiry all
   settle `unknown` ("Check the account") rather than claim nothing was posted.
+  While the bar's Post is submitting (it has clicked submit and waits for the
+  receipt), the View's input is refused `publish_pending` until the Post settles,
+  so a click or key cannot post twice or change what is posted.
 - On the `chrome-relay` engine the page is in your own Chrome, which you can
   use directly, outside the View. The bar's Post still works there, but a
   close, cancel, expiry or changed page settles `unknown`, never `cancelled`,

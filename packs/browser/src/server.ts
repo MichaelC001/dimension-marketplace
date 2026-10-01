@@ -417,7 +417,7 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
   }));
   registerAppTool(server, "browser_frame", {
     description: "A fresh full-quality PNG capture of the active tab, retained for browser_annotate (its frameId is what annotation names). The live picture is not read here: it rides the stream (browser_stream).",
-    inputSchema: { browserId: capability, format: z.literal("png").optional() }, annotations: READ_ONLY, _meta: APP_ONLY,
+    inputSchema: { browserId: capability }, annotations: READ_ONLY, _meta: APP_ONLY,
   }, ({ browserId }) => result(() => runtime.frame(browserId)));
   registerAppTool(server, "browser_annotate", {
     description: "Crop a retained frame and describe the selected region. Does not send anything to an agent; the View explicitly updates its model context afterward.",
