@@ -6,11 +6,12 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { buildConnectionReport, type ConnectionReportParams, PACK_CONNECTION_REPORT_METHOD } from "./connection.js";
-import type { ActManyResult, BrowserEngine, BrowserRuntimePort, BrowserState, TaskRun, ToolCaller } from "./contracts.js";
+import type { ActManyResult, BrowserEngine, BrowserOpener, BrowserRuntimePort, BrowserState, TaskRun, ToolCaller } from "./contracts.js";
 import { BROWSER_ENGINES, CREDENTIAL_MODES, MAX_ANNOTATION_REGIONS, MAX_BATCH_STEPS, MAX_EVAL_EXPRESSION_CHARS, MAX_VIEWPORT, MAX_WAIT_MS, MIN_VIEWPORT, PUBLISH_MODES, TASK_AGENTS } from "./contracts.js";
 import { MAX_DETAIL_BYTES } from "./annotation-file.js";
 import { type PublishPreset, loadPresets, resolvePreset, summarizePresets } from "./presets.js";
-import { PROFILE_NAME } from "./profile-name.js";
+import { MAX_LABEL_CHARS } from "./profile-meta.js";
+import { profilesForModel } from "./profile-list.js";
 import { BrowserRuntime } from "./runtime.js";
 import { fail } from "./store.js";
 import { LiveChannel } from "./stream.js";
@@ -23,7 +24,8 @@ export const BROWSER_VIEW_URI = "ui://browser/index.html";
  */
 const VIEW_CSP = { connectDomains: ["http://127.0.0.1:*"] };
 const capability = z.string();
-const profile = z.string().regex(PROFILE_NAME);
+/** A saved profile by its name (slug) or its label, in any case: the runtime says which one it means, or that it cannot tell. */
+const profile = z.string().min(1).max(MAX_LABEL_CHARS);
 const coordinate = z.number();
 const selector = z.string();
 const point = { x: coordinate, y: coordinate };
@@ -222,10 +224,16 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     const session = sessionOf(extra);
     return (session === undefined ? undefined : runtime.viewOf(session)) ?? fail("no_view", "no browser is open in this session; call browser_view");
   };
-  const openAt = async (profile: string | undefined, engine: BrowserEngine | undefined, url: string | undefined): Promise<BrowserState> => {
+  /** Who is opening, from the host's stamps alone: the human in the View ("app"), and the chat. */
+  const openerOf = (extra: CallExtra): BrowserOpener => {
+    const caller = callerOf(extra);
+    const session = sessionOf(extra);
+    return { ...(caller === undefined ? {} : { caller }), ...(session === undefined ? {} : { session }) };
+  };
+  const openAt = async (profile: string | undefined, engine: BrowserEngine | undefined, url: string | undefined, opener: BrowserOpener): Promise<BrowserState> => {
     // Validate before launching so malformed input cannot strand a browser/profile lock.
     const action = url === undefined ? undefined : navigateStep.parse({ kind: "navigate", url });
-    const state = await runtime.open({ ...(profile === undefined ? {} : { profile }), ...(engine ? { engine } : {}) });
+    const state = await runtime.open({ ...(profile === undefined ? {} : { profile }), ...(engine ? { engine } : {}) }, opener);
     if (!action) return state;
     const navigated = await runtime.act(state.browserId, action);
     if (navigated.status !== "completed") throw new Error(`Opened, but navigating to ${url} ${navigated.status}: ${navigated.error}`);
@@ -235,10 +243,10 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
   // one whose opener has none. `browser_view` and `browser_publish` are the mounting tools.
   server.registerTool("browser_open", {
     title: "Open Browser",
-    description: "Open a headless browser: no window, nothing shown to the human. No profile = throwaway: nothing saved, data deleted on close; name one (short lowercase, e.g. \"work\") only to keep logins, never for a throwaway. Saved passwords, publishing and task credentials need a profile. Engines: chromium (default) or chrome-relay (the user's running Chrome; profile always \"relay\", may be omitted); abp and browser4 are refused with the reason. url navigates at once. Returns the browserId every other tool needs.",
-    inputSchema: { profile: profile.optional().describe("Saved profile to keep logins in. Leave out for a throwaway browser."), engine: z.enum(BROWSER_ENGINES).optional(), url: z.string().max(2048).optional() },
+    description: "Open a headless browser: no window, nothing shown to the human. No profile = throwaway: nothing saved, data deleted on close; name one (a saved profile from browser_profiles, or a new short lowercase name) only to keep logins, never for a throwaway. Saved passwords, publishing and task credentials need a profile. Engines: chromium (default) or chrome-relay (the user's running Chrome; profile always \"relay\", may be omitted); abp and browser4 are refused with the reason. url navigates at once. Returns the browserId every other tool needs.",
+    inputSchema: { profile: profile.optional().describe("Saved profile, by name or label (see browser_profiles). Leave out for a throwaway browser."), engine: z.enum(BROWSER_ENGINES).optional(), url: z.string().max(2048).optional() },
   }, ({ profile, engine, url }, extra) => result(async () => {
-    const state = await openAt(profile, engine, url);
+    const state = await openAt(profile, engine, url, openerOf(extra));
     // A browser the human opens in the View has no tool call the model saw; the model asks browser_state for it.
     if (callerOf(extra) === "app") showing(extra, state.browserId);
     return stateFor(callerOf(extra), state);
@@ -253,7 +261,7 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     if (browserId !== undefined && (profile !== undefined || engine !== undefined || url !== undefined)) {
       fail("bad_view", "profile, engine and url open a NEW browser; pass a browserId alone to show the one you hold");
     }
-    const state = browserId === undefined ? await openAt(profile, engine, url) : await runtime.state(browserId);
+    const state = browserId === undefined ? await openAt(profile, engine, url, openerOf(extra)) : await runtime.state(browserId);
     // The View is mounted on this browser now, for whoever is in this session.
     showing(extra, state.browserId);
     return stateFor(callerOf(extra), state);
@@ -437,10 +445,15 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     inputSchema: { browserId: capability, width: z.number().int().min(1).max(8192), height: z.number().int().min(1).max(8192), scale: z.number().min(1).max(4).optional() },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false }, _meta: APP_ONLY,
   }, ({ browserId, width, height, scale }) => result(() => runtime.resize(browserId, { width, height }, scale)));
-  registerAppTool(server, "browser_profiles", {
-    description: "List the saved profile names, never browser capabilities, cookies or secrets. A throwaway browser is never listed. Relay Chrome profiles are managed in Chrome, not here.",
-    inputSchema: {}, annotations: READ_ONLY, _meta: APP_ONLY,
-  }, () => result(async () => ({ profiles: await runtime.profiles() })));
+  // Read-only and offered to every space (like browser_state): an agent that is told "use my work profile" can find it.
+  // The View reads the same tool as the human (`caller: "app"`) and gets the same list as structured content.
+  server.registerTool("browser_profiles", {
+    description: "Saved profiles: name, label, colour, heldBy (null | this chat | human | another chat), and the sites each is signed in to: signedIn (null = not known: unchecked or over 7 days old), seenAt. Observed, may be out of date. Accounts are shown to the person, not you. Never cookies or passwords.",
+    inputSchema: {}, annotations: READ_ONLY,
+  }, (_args, extra) => respond(extra, async () => {
+    const list = await runtime.profileList(sessionOf(extra));
+    return { text: JSON.stringify(profilesForModel(list)), structured: { profiles: list } };
+  }));
   server.registerTool("browser_close", {
     description: "Close this owned browser (stopping any task) and release its profile lock. Persisted logins remain; a throwaway's data is deleted; the user's relay browser is never terminated. Refused while a publish awaits confirmation (confirm, cancel or wait first).",
     inputSchema: { browserId: capability },
@@ -455,7 +468,7 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
   const sendReport = (): void => {
     reporting = reporting.then(async () => {
       if (!server.isConnected()) return;
-      const params: ConnectionReportParams = { report: buildConnectionReport(await runtime.connections()) };
+      const params: ConnectionReportParams = { report: buildConnectionReport(await runtime.connections(), await runtime.profileMeta()) };
       await server.server.notification({ method: PACK_CONNECTION_REPORT_METHOD, params });
     }).catch(error => console.error("Browser connection report was not sent:", error instanceof Error ? error.message : error));
   };

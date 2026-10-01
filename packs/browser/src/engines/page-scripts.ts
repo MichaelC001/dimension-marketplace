@@ -340,6 +340,16 @@ const ELEMENT_TEXT_SCRIPT = (el: Element, limit: number): string | null => {
 	return parts.join(" ").slice(0, limit);
 };
 /**
+ * An element's `aria-label`, at most `limit` characters; null when it has none
+ * and for a form control (whose label could be anything the page put there for
+ * the field, and is never read here). The only attribute read by name, so a
+ * link's href, a field's value or any token an attribute carries stays unread.
+ */
+const ELEMENT_LABEL_SCRIPT = (el: Element, limit: number): string | null => {
+	if (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT") return null;
+	return el.getAttribute("aria-label")?.slice(0, limit) ?? null;
+};
+/**
  * The absolute hrefs of up to `limit` elements matching `selector`. The
  * selector is data, never code: plain CSS goes to `document.querySelectorAll`
  * (document order); `pierce/<css>` queries the document, then every open
@@ -461,6 +471,7 @@ export {
 	FRAME_INSET_SCRIPT,
 	READ_FIELD_SCRIPT,
 	ELEMENT_TEXT_SCRIPT,
+	ELEMENT_LABEL_SCRIPT,
 	LINK_HREFS_SCRIPT,
 	UA_HINTS_SCRIPT,
 	EVAL_RESULT_SCRIPT,

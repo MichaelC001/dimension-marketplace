@@ -75,15 +75,15 @@ describeWithChrome("profiles", () => {
 			expect(opened).toHaveLength(1);
 			expect(refused).toHaveLength(1);
 			expect(refused[0]?.reason).toBeInstanceOf(BrowserRuntimeError);
-			expect((refused[0]?.reason as BrowserRuntimeError).code).toBe("profile_in_use");
+			expect((refused[0]?.reason as BrowserRuntimeError).code).toBe("profile_held");
 			// The person sees plain words for this refusal, not the runtime's: the View recognises the runtime's real message.
 			expect(openFailureText(refused[0]?.reason)).not.toMatch(/profile/i);
 
 			const live = opened[0]?.value as BrowserState;
 			expect((await runtime.state(live.browserId)).profile).toBe("shared");
 			// Sequentially, too: the refusal is not a race artifact.
-			expect(await failureCode(() => runtime.open({ profile: "shared", viewport: VIEWPORT }))).toBe("profile_in_use");
-			expect(await runtime.profiles()).toEqual(["shared"]);
+			expect(await failureCode(() => runtime.open({ profile: "shared", viewport: VIEWPORT }))).toBe("profile_held");
+			expect((await runtime.profileList()).map((profile) => profile.name)).toEqual(["shared"]);
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);
@@ -108,7 +108,7 @@ describeWithChrome("profiles", () => {
 			expect(handedOver.profile).toBe("exclusive");
 			// A close releases the lock but never destroys what the profile stores.
 			expect(existsSync(join(rootDir, "profiles", "exclusive", "chrome"))).toBe(true);
-			expect(await intruder.profiles()).toContain("exclusive");
+			expect((await intruder.profileList()).map((profile) => profile.name)).toContain("exclusive");
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);

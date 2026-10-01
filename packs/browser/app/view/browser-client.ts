@@ -267,7 +267,7 @@ export function failureText(cause: unknown): string {
 }
 
 /** The runtime allows one holder per saved set of logins. Only the text of that
- *  refusal crosses the tool boundary (`profile_in_use` / `profile_locked`), so it
+ *  refusal crosses the tool boundary (`profile_held` / `profile_locked`), so it
  *  is recognised by it. */
 const SET_TAKEN = /profile "[^"]*" is already (?:open|in use)/;
 const SET_TAKEN_TEXT = "That browser is already open. Use it, or open a Private one.";
@@ -328,11 +328,12 @@ export class BrowserClient {
 		return structured(tool, result);
 	}
 
+	/** The names of the saved profiles: `browser_profiles` answers the View with each one's label, colour and sites too. */
 	async profiles(): Promise<string[]> {
 		const payload = await this.call("browser_profiles", {});
 		const profiles = payload.profiles;
 		if (!Array.isArray(profiles)) throw new BrowserToolError("browser_profiles", "result carried no profiles array");
-		return profiles.filter((profile): profile is string => typeof profile === "string");
+		return profiles.flatMap((profile) => (isRecord(profile) && typeof profile.name === "string" ? [profile.name] : []));
 	}
 
 	async open(options: OpenOptions): Promise<BrowserState> {

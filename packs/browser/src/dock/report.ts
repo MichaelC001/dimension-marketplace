@@ -1,11 +1,15 @@
 // The panel's read of its own pack's connection fact. The fact is the host's
 // `PluginConnectionFact` (`{ connected, account?, reported? }`), and `reported`
 // carries what this pack's server last sent: `buildConnectionReport`'s
-// `{ profiles: { <name>: { sites: { <host>: { signedIn, account?, observedAt } } } } }`
+// `{ profiles: { <name>: { label?, colour?, avatar?, sites: { <host>: { signedIn, account?, observedAt } } } } }`
 // (connection.ts). It has crossed a process boundary and the host Store, so it
 // is narrowed here with the same per-site rule the server applies to its own
 // saved observations (`ProfileStore.connections`): a malformed profile or site
-// is skipped, never rendered and never thrown on.
+// is skipped, never rendered and never thrown on. The label, colour and avatar
+// are resolved by the same rule the agent's list uses (profile-meta.ts), so the
+// panel and `browser_profiles` name a profile alike.
+
+import { isProfileColour, type ProfileColour, resolveProfileMeta } from "../profile-meta";
 
 /** The Store key the host publishes this pack's connection under — keyed by
  *  the MANIFEST id (`plugin.json` `name`), never the install key. The host
@@ -14,13 +18,17 @@ export const CONNECTION_KEY = "plugin/browser/connection";
 
 export interface SiteRow {
 	readonly host: string;
-	readonly signedIn: boolean;
+	/** `null`: the site was visited and has no check, or the last check is old: not known, never shown as signed in. */
+	readonly signedIn: boolean | null;
 	readonly account?: string;
 	readonly observedAt: number;
 }
 
 export interface ProfileRow {
 	readonly name: string;
+	readonly label: string;
+	readonly colour: ProfileColour;
+	readonly avatar?: string;
 	readonly sites: readonly SiteRow[];
 }
 
@@ -35,12 +43,12 @@ export function profileRows(fact: unknown): readonly ProfileRow[] {
 	const profiles = (fact as { reported?: { profiles?: unknown } } | null | undefined)?.reported?.profiles;
 	const rows: ProfileRow[] = [];
 	for (const [name, profile] of entriesOf(profiles)) {
-		const sites = (profile as { sites?: unknown } | null)?.sites;
+		const { sites, label, colour, avatar } = Object.fromEntries(entriesOf(profile));
 		if (typeof sites !== "object" || sites === null || Array.isArray(sites)) continue;
 		const siteRows: SiteRow[] = [];
 		for (const [host, value] of Object.entries(sites)) {
-			const site = value as { signedIn?: unknown; account?: unknown; observedAt?: unknown } | null;
-			if (typeof site?.signedIn !== "boolean" || typeof site.observedAt !== "number" || !Number.isFinite(site.observedAt)) continue;
+			const site = Object.fromEntries(entriesOf(value));
+			if ((typeof site.signedIn !== "boolean" && site.signedIn !== null) || typeof site.observedAt !== "number" || !Number.isFinite(site.observedAt)) continue;
 			siteRows.push({
 				host,
 				signedIn: site.signedIn,
@@ -48,7 +56,12 @@ export function profileRows(fact: unknown): readonly ProfileRow[] {
 				observedAt: site.observedAt,
 			});
 		}
-		rows.push({ name, sites: siteRows.sort((a, b) => a.host.localeCompare(b.host)) });
+		const meta = resolveProfileMeta(name, {
+			...(typeof label === "string" ? { label } : {}),
+			...(isProfileColour(colour) ? { colour } : {}),
+			...(typeof avatar === "string" ? { avatar } : {}),
+		});
+		rows.push({ name, ...meta, sites: siteRows.sort((a, b) => a.host.localeCompare(b.host)) });
 	}
 	return rows.sort((a, b) => a.name.localeCompare(b.name));
 }

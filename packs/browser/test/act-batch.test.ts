@@ -231,12 +231,13 @@ async function connectStub(seen: BatchStep[][]): Promise<Client> {
 	const viewDir = join(rootDir, "view");
 	await mkdir(viewDir, { recursive: true });
 	await writeFile(join(viewDir, "index.html"), "<!doctype html><title>view</title>");
-	const runtime: Pick<BrowserRuntimePort, "actMany" | "connections" | "onConnectionsChanged" | "dispose"> = {
+	const runtime: Pick<BrowserRuntimePort, "actMany" | "connections" | "profileMeta" | "onConnectionsChanged" | "dispose"> = {
 		actMany: async (_browserId, steps) => {
 			seen.push([...steps]);
 			return { status: "completed", completed: steps.length, steps: steps.map((step) => ({ kind: step.kind, status: "completed" as const })), state: { url: "http://x.test/", title: "x", tabs: [] } as never };
 		},
 		connections: async () => ({}),
+		profileMeta: async () => ({}),
 		onConnectionsChanged: () => () => {},
 		dispose: async () => {},
 	};

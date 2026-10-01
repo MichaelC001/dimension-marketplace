@@ -1,14 +1,17 @@
 /**
  * Filesystem state for the browser runtime.
  *
- * Owns four things and nothing else:
+ * Owns five things and nothing else:
  *   1. Profile directory layout + filesystem-safe slug validation.
  *   2. The per-profile process lock (atomic create, owner-token release,
  *      NEVER steals a stale lock and NEVER kills a foreign process).
  *   3. Each profile's sign-in observations (`connections.json`, see
  *      connection.ts), kept in the profile's own directory so a deleted
  *      profile takes them with it and a restart can report them again.
- *   4. Throwaway browser directories (`<root>/ephemeral/<id>`): created for a
+ *   4. Each profile's metadata (`profile.json`: label, colour, avatar, last
+ *      used, the browser build that made it), beside `chrome/`. Optional: a
+ *      profile without one works, with defaults derived from its slug.
+ *   5. Throwaway browser directories (`<root>/ephemeral/<id>`): created for a
  *      browser opened without a profile, deleted when it closes, and swept
  *      after a server that died before it could delete them. They are never
  *      profiles: no lock, no listing, no observations.
@@ -18,10 +21,12 @@ import { closeSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, r
 import { rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import type { ConnectionObservations, SiteObservation, SiteObservations } from "./connection.js";
+import { type ConnectionObservations, keepFirst, type SiteObservation, type SiteObservations } from "./connection.js";
 import { PROFILE_NAME, profileSlug } from "./profile-name.js";
+import { cleanAvatar, cleanLabel, isProfileColour, type StoredProfileMeta } from "./profile-meta.js";
 
 const CONNECTIONS_FILE = "connections.json";
+const PROFILE_FILE = "profile.json";
 /** Inside a throwaway directory: the pid of the server that made it. */
 const OWNER_FILE = "owner.pid";
 /** Sites remembered per profile; the oldest observation goes first. */
@@ -229,6 +234,16 @@ export class ProfileStore {
 		}
 	}
 
+	/**
+	 * Whether a live process holds this profile's lock right now. Asked of a
+	 * profile this runtime holds no browser for: then it is another server's (or
+	 * another runtime's on this root), and the profile is not free to open.
+	 */
+	heldElsewhere(slug: string): boolean {
+		const pid = readLock(join(this.profileDir(slug), "runtime.lock"))?.pid;
+		return pid !== undefined && processAlive(pid);
+	}
+
 	/** This profile's persisted sign-in observations; none when it was never observed or the file is unreadable. */
 	connections(slug: string): SiteObservations {
 		let parsed: unknown;
@@ -242,7 +257,7 @@ export class ProfileStore {
 		if (typeof stored !== "object" || stored === null) return sites;
 		for (const [host, value] of Object.entries(stored as Record<string, unknown>)) {
 			const site = value as Partial<SiteObservation> | null;
-			if (typeof site?.signedIn !== "boolean" || typeof site.observedAt !== "number" || !Number.isFinite(site.observedAt)) continue;
+			if ((typeof site?.signedIn !== "boolean" && site?.signedIn !== null) || typeof site.observedAt !== "number" || !Number.isFinite(site.observedAt)) continue;
 			const valid: SiteObservation = { signedIn: site.signedIn, observedAt: site.observedAt };
 			if (typeof site.account === "string" && site.account.length <= MAX_ACCOUNT_CHARS) valid.account = site.account;
 			sites[host] = valid;
@@ -251,30 +266,14 @@ export class ProfileStore {
 	}
 
 	/**
-	 * Persist one observation of `host`, replacing that host's last one. Atomic
-	 * and durable: the staging file is fsynced before the rename, so a crash or
-	 * power loss leaves the old file or the new one; a failure at any step
-	 * removes the staging file.
+	 * Persist one observation of `host`, replacing that host's last one. A site
+	 * that was only visited (`signedIn: null`) is the first to go when the
+	 * profile is full: it never pushes out a site that was actually checked.
 	 */
 	recordConnection(slug: string, host: string, observation: SiteObservation): void {
 		const sites = { ...this.connections(slug), [host]: observation };
-		const kept = Object.entries(sites).sort(([, a], [, b]) => b.observedAt - a.observedAt).slice(0, MAX_SITES_PER_PROFILE);
-		const dir = this.ensureProfile(slug);
-		const path = join(dir, CONNECTIONS_FILE);
-		const staging = `${path}.${randomBytes(6).toString("hex")}.tmp`;
-		let fd: number | undefined;
-		try {
-			fd = openSync(staging, "w", 0o600);
-			writeSync(fd, `${JSON.stringify({ sites: Object.fromEntries(kept) })}\n`);
-			fsyncSync(fd);
-			closeSync(fd);
-			fd = undefined;
-			renameSync(staging, path);
-		} catch (error) {
-			if (fd !== undefined) try { closeSync(fd); } catch { /* already closed */ }
-			try { unlinkSync(staging); } catch { /* never created, or already gone */ }
-			throw error;
-		}
+		const kept = Object.entries(sites).sort(([, a], [, b]) => keepFirst(a, b)).slice(0, MAX_SITES_PER_PROFILE);
+		writeJsonAtomic(this.ensureProfile(slug), CONNECTIONS_FILE, { sites: Object.fromEntries(kept) });
 	}
 
 	/** Every on-disk profile that has observations. A deleted profile directory is simply not here. */
@@ -285,6 +284,58 @@ export class ProfileStore {
 			if (Object.keys(sites).length > 0) all[slug] = sites;
 		}
 		return all;
+	}
+
+	/** This profile's metadata: only the fields the rules allow; `{}` when there is no file or it is unreadable. */
+	meta(slug: string): StoredProfileMeta {
+		let parsed: Record<string, unknown>;
+		try {
+			const value: unknown = JSON.parse(readFileSync(join(this.profileDir(slug), PROFILE_FILE), "utf8"));
+			if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+			parsed = value as Record<string, unknown>;
+		} catch {
+			return {};
+		}
+		const meta: StoredProfileMeta = {};
+		const label = cleanLabel(parsed.label);
+		if (label !== undefined) meta.label = label;
+		if (isProfileColour(parsed.colour)) meta.colour = parsed.colour;
+		const avatar = cleanAvatar(parsed.avatar);
+		if (avatar !== undefined) meta.avatar = avatar;
+		if (typeof parsed.lastUsed === "number" && Number.isFinite(parsed.lastUsed) && parsed.lastUsed >= 0) meta.lastUsed = parsed.lastUsed;
+		if (typeof parsed.app === "string" && /^[a-z0-9-]{1,24}$/.test(parsed.app)) meta.app = parsed.app;
+		return meta;
+	}
+
+	/**
+	 * Change some of a profile's metadata, keeping the fields the patch does not
+	 * name. Atomic like the observations. Never renames or moves the folder.
+	 */
+	saveMeta(slug: string, patch: StoredProfileMeta): void {
+		writeJsonAtomic(this.ensureProfile(slug), PROFILE_FILE, { ...this.meta(slug), ...patch });
+	}
+}
+
+/**
+ * Write `value` as `<dir>/<file>`. Atomic and durable: the staging file is
+ * fsynced before the rename, so a crash or power loss leaves the old file or
+ * the new one; a failure at any step removes the staging file.
+ */
+function writeJsonAtomic(dir: string, file: string, value: unknown): void {
+	const path = join(dir, file);
+	const staging = `${path}.${randomBytes(6).toString("hex")}.tmp`;
+	let fd: number | undefined;
+	try {
+		fd = openSync(staging, "w", 0o600);
+		writeSync(fd, `${JSON.stringify(value)}\n`);
+		fsyncSync(fd);
+		closeSync(fd);
+		fd = undefined;
+		renameSync(staging, path);
+	} catch (error) {
+		if (fd !== undefined) try { closeSync(fd); } catch { /* already closed */ }
+		try { unlinkSync(staging); } catch { /* never created, or already gone */ }
+		throw error;
 	}
 }
 
