@@ -204,12 +204,20 @@ export function parseQueueStatus(body: unknown): QueueStatus {
 	return { state: "UNKNOWN", raw: body.status };
 }
 
-/** Ask fal to cancel. A job already done, or one fal no longer knows, has nothing
- *  left to cancel: the engine's next status poll tells it which. Anything else is an error. */
+/** Ask fal to cancel. Only a 2xx means fal stopped the job. A job fal reports as
+ *  already completed, or no longer knows, may have run and been billed, so both
+ *  throw: the engine then keeps the job on its books and its next status poll books
+ *  the real outcome. Returning quietly would let it record a finished, billed job as
+ *  cancelled at $0. */
 export async function cancelJob(api: Api, cancelUrl: string, signal: AbortSignal): Promise<void> {
 	const response = await call(api, "PUT", cancelUrl, { signal });
-	if (response.ok || response.status === 404) return;
-	if (response.status === 400 && isRecord(response.body) && response.body.status === "ALREADY_COMPLETED") return;
+	if (response.ok) return;
+	if (response.status === 400 && isRecord(response.body) && response.body.status === "ALREADY_COMPLETED") {
+		throw new FalError("fal could not cancel the job: it had already completed, so it may have been billed", 400);
+	}
+	if (response.status === 404) {
+		throw new FalError("fal could not cancel the job: it no longer knows the request (HTTP 404), so it may already have run and been billed", 404);
+	}
 	throw failure(response, "cancelling the job");
 }
 

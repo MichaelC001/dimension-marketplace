@@ -48,7 +48,7 @@ import {
 	uploadFile,
 } from "./client.ts";
 import { isRecord } from "./guards.ts";
-import { buildBody, checkRequest, claimedFields } from "./input.ts";
+import { buildBody, checkLocalFiles, checkRequest, claimedFields } from "./input.ts";
 import { loadPackData, type ModelEntry, type PackData } from "./models.ts";
 import { type LivePrice, type PriceContext, quoteRequest } from "./pricing.ts";
 import { collectFiles, makeHandle } from "./result.ts";
@@ -406,6 +406,7 @@ export function createFalProvider(options: FalProviderOptions = {}): GenerationP
 			const api = await connect();
 			const { model } = await findModel(api, request.model, signal);
 			checkRequest(model.entry, model.schema, request);
+			await checkLocalFiles(model.entry, request);
 			return quoteRequest(model.entry.pricing, priceContext(model, request), model.price);
 		},
 
@@ -544,6 +545,8 @@ export function createFalProvider(options: FalProviderOptions = {}): GenerationP
 			};
 		},
 
+		// Resolves only when fal stopped the job. One fal says already completed, or no
+		// longer knows, rejects: it may have billed, so the engine keeps polling it.
 		async cancel(ref, { signal }) {
 			const job = decodeRef(ref);
 			await cancelJob(await connect(), job.cancelUrl, signal);
@@ -552,7 +555,7 @@ export function createFalProvider(options: FalProviderOptions = {}): GenerationP
 }
 
 export { parseQueueStatus } from "./client.ts";
-export { buildBody, checkRequest, claimedFields } from "./input.ts";
+export { buildBody, checkLocalFiles, checkRequest, claimedFields } from "./input.ts";
 export { loadPackData, parsePackData } from "./models.ts";
 export { priceUnits, quoteRequest } from "./pricing.ts";
 export { chainedFile, collectFiles, makeHandle } from "./result.ts";

@@ -5,10 +5,11 @@
 // endpoint names those inputs differently (`image_url`, `image_urls`,
 // `input_image_url` + `back_image_url` + …, `input_file_url`), and models.json
 // says how. Files go to fal's CDN first — the only form every endpoint accepts —
-// and the body carries their URLs. Everything is validated before the first
-// upload so a bad request costs nothing.
+// and the body carries their URLs. The request and its local files are validated
+// before the first upload so a bad request costs nothing.
 
-import { extname, isAbsolute } from "node:path";
+import { stat } from "node:fs/promises";
+import { basename, extname, isAbsolute } from "node:path";
 import type { GenerationRequest } from "@dimension/sdk/provider";
 import type { ImageFields, ModelEntry } from "./models.ts";
 import { chainedFile } from "./result.ts";
@@ -16,6 +17,15 @@ import { type OptionsSchema, validateOptions } from "./schema.ts";
 
 /** Uploads a local file to fal and returns its URL. */
 export type Upload = (path: string) => Promise<string>;
+
+/** The image types fal's endpoints take: the ones its CDN names a content type for. */
+const IMAGE_EXTENSIONS: readonly string[] = ["png", "jpg", "jpeg", "webp"];
+
+/** The pack's own ceilings, not fal's (fal publishes none). Everything uploaded is
+ *  served by fal's CDN under a public URL, so a "reference image" or mesh this large
+ *  is a wrong path, not an input. */
+const MAX_IMAGE_BYTES = 50 * 1024 * 1024;
+const MAX_MODEL_BYTES = 500 * 1024 * 1024;
 
 function imageCapacity(images: ImageFields): number {
 	if ("field" in images) return 1;
@@ -59,6 +69,9 @@ export function checkRequest(model: ModelEntry, schema: OptionsSchema, request: 
 	}
 	for (const path of images) {
 		if (!isAbsolute(path)) problems.push(`image "${path}" is not an absolute path`);
+		else if (!IMAGE_EXTENSIONS.includes(extensionOf(path))) {
+			problems.push(`image "${basename(path)}" is not a type fal takes (${IMAGE_EXTENSIONS.join(", ")})`);
+		}
 	}
 
 	if (inputs.model === undefined) {
@@ -91,6 +104,29 @@ export function checkRequest(model: ModelEntry, schema: OptionsSchema, request: 
 	if (problems.length > 0) throw new Error(`${model.endpoint}: ${problems.join("; ")}`);
 }
 
+/** Throw, naming every problem at once, when a local file would be uploaded to fal's
+ *  public CDN that is not a plain, non-empty file within the pack's ceiling. Reads
+ *  metadata only; runs after `checkRequest` and before the first upload. */
+export async function checkLocalFiles(model: ModelEntry, request: GenerationRequest): Promise<void> {
+	const { input } = request;
+	const files: { readonly path: string; readonly kind: string; readonly maxBytes: number }[] = [];
+	if (model.inputs.images !== undefined) {
+		for (const path of input.images ?? []) files.push({ path, kind: "image", maxBytes: MAX_IMAGE_BYTES });
+	}
+	if (model.inputs.model !== undefined && input.from === undefined && input.model !== undefined) {
+		files.push({ path: input.model, kind: "3D file", maxBytes: MAX_MODEL_BYTES });
+	}
+	const infos = await Promise.all(files.map(file => stat(file.path).catch(() => undefined)));
+	const problems: string[] = [];
+	files.forEach(({ path, kind, maxBytes }, index) => {
+		const info = infos[index];
+		if (!info?.isFile()) problems.push(`${basename(path)} is not a readable file`);
+		else if (info.size === 0) problems.push(`${basename(path)} is empty`);
+		else if (info.size > maxBytes) problems.push(`${basename(path)} is ${info.size} bytes, over the pack's ${maxBytes} byte ceiling (${kind})`);
+	});
+	if (problems.length > 0) throw new Error(`${model.endpoint}: ${problems.join("; ")}`);
+}
+
 /** The JSON body to POST to the endpoint. Uploads the request's files. */
 export async function buildBody(
 	model: ModelEntry,
@@ -99,6 +135,7 @@ export async function buildBody(
 	upload: Upload,
 ): Promise<Record<string, unknown>> {
 	checkRequest(model, schema, request);
+	await checkLocalFiles(model, request);
 	const { input, options, seed } = request;
 	const { inputs } = model;
 	const body: Record<string, unknown> = { ...options };

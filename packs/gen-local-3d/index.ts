@@ -46,6 +46,7 @@ import type {
 	GenerationSubmitted,
 } from "@dimension/sdk/provider";
 import { type CutoutReport, type CutoutRule, requireCutout } from "./cutout.js";
+import { isRecord } from "./guards.js";
 import { type RunningProcess, startProcess, stopOrphan, stopProcess } from "./runner.js";
 import { startVramSampler, type VramReading } from "./vram.js";
 
@@ -132,10 +133,6 @@ export interface ModelsFile {
 	};
 	readonly cutout: CutoutRule;
 	readonly models: readonly ModelSpec[];
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 async function loadModelsFile(): Promise<ModelsFile> {
@@ -396,6 +393,8 @@ interface Job {
 	readonly dir: string;
 	/** Set when an abort or cancel could not stop the child. */
 	stopError?: string;
+	/** The GPU memory reading, set when the child has closed and a sampler was running. */
+	vram?: VramReading;
 }
 
 /** What the GLB says about the CLI that wrote it. */
@@ -586,6 +585,7 @@ export function createLocalGenerationProvider(options: LocalGenerationOptions = 
 				startedAt: live.proc.startedAt,
 				endedAt: outcome.endedAt,
 				tail: outcome.tail,
+				...(live.vram ? { vram: live.vram } : {}),
 			};
 		}
 		return readFinished(ref.dir);
@@ -650,6 +650,9 @@ export function createLocalGenerationProvider(options: LocalGenerationOptions = 
 
 			void proc.closed.then(async outcome => {
 				context.signal.removeEventListener("abort", onAbort);
+				// Kept on the live job as well as in result.json: a live job answers `fetch`
+				// from memory, so a reading that only reached the file would never be reported.
+				if (vram) job.vram = vram.stop();
 				const finished: Finished = {
 					exitCode: outcome.exitCode,
 					signal: outcome.signal,
@@ -657,7 +660,7 @@ export function createLocalGenerationProvider(options: LocalGenerationOptions = 
 					startedAt: proc.startedAt,
 					endedAt: outcome.endedAt,
 					tail: outcome.tail,
-					...(vram ? { vram: vram.stop() } : {}),
+					...(job.vram ? { vram: job.vram } : {}),
 				};
 				// Work-dir bookkeeping must never become an unhandled rejection in the engine:
 				// a cancelled job's dir is deleted (nobody will fetch it), and result.json is

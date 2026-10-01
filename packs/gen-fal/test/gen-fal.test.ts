@@ -412,14 +412,17 @@ describe("building fal's request body", () => {
 		const front = join(dir, "front.png");
 		const back = join(dir, "back.png");
 		const left = join(dir, "left.png");
+		await Promise.all([front, back, left].map(path => writeFile(path, "png bytes")));
 		const release = new Map<string, () => void>();
+		const allStarted = Promise.withResolvers<void>();
 		const gated = (path: string): Promise<string> => {
 			const { promise, resolve } = Promise.withResolvers<string>();
 			release.set(path, () => resolve(`https://v3b.fal.media/files/up/${path.split(/[\\/]/).pop()}`));
+			if (release.size === 3) allStarted.resolve();
 			return promise;
 		};
 		const building = buildBody(entryOf(HUNYUAN_PRO), schemaOf(HUNYUAN_PRO), { model: HUNYUAN_PRO, input: { images: [front, back, left] } }, gated);
-		for (let turn = 0; turn < 20; turn++) await Promise.resolve();
+		await allStarted.promise;
 		// Finish in the opposite order to the caller's.
 		release.get(left)?.();
 		release.get(back)?.();
@@ -684,16 +687,16 @@ describe("a job on fal's queue", () => {
 	});
 
 	describe("cancelling", () => {
-		test("asks fal on the cancel URL it issued; a job already completed or gone has nothing left to cancel; anything else is an error", async () => {
+		test("asks fal on the cancel URL it issued; only a stopped job resolves, and a job fal says is already completed or no longer knows rejects so the engine books its real outcome", async () => {
 			const fake = new FakeFal();
 			const { provider, ref } = await submitted(fake);
 			await provider.cancel?.(ref, { signal, jobId: "g" });
 			expect(fake.calls.at(-1)).toMatchObject({ method: "PUT", url: expect.stringContaining("/cancel") });
 
 			fake.cancelReply = { status: 400, body: { status: "ALREADY_COMPLETED" } };
-			await provider.cancel?.(ref, { signal, jobId: "g" });
+			await expect(provider.cancel?.(ref, { signal, jobId: "g" })).rejects.toThrow("had already completed");
 			fake.cancelReply = { status: 404, body: {} };
-			await provider.cancel?.(ref, { signal, jobId: "g" });
+			await expect(provider.cancel?.(ref, { signal, jobId: "g" })).rejects.toThrow("may already have run and been billed");
 
 			fake.cancelReply = { status: 500, body: { detail: "boom" } };
 			await expect(provider.cancel?.(ref, { signal, jobId: "g" })).rejects.toThrow("cancelling the job");

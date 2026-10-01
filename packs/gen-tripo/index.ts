@@ -40,9 +40,9 @@
 // the host. It is sent only to the Tripo API host: output URLs are signed CDN
 // links and are fetched without it. It is never logged or put in an error.
 //
-// Runtime imports are `node:` builtins and `fetch` only, so the engine can
-// import this file as-is. Types come from `@dimension/sdk/provider` and are
-// erased.
+// Runtime imports are `node:` builtins, `fetch` and this pack's `guards.ts`, so the
+// engine can import this file as-is. Types come from `@dimension/sdk/provider` and
+// are erased.
 
 import { createWriteStream, openAsBlob } from "node:fs";
 import { mkdir, readFile, rename, rm, stat } from "node:fs/promises";
@@ -66,6 +66,7 @@ import type {
 	GenerationStatus,
 	GenerationSubmitted,
 } from "@dimension/sdk/provider";
+import { isRecord } from "./guards.ts";
 
 /** MUST match `connect.configTarget` in plugin.json. */
 const CONFIG_TARGET = join(homedir(), ".config", "dimension-gen-tripo", "key.json");
@@ -73,8 +74,14 @@ const MODELS_PATH = fileURLToPath(new URL("./models.json", import.meta.url));
 
 /** The whole of one API call, retries included. */
 const REQUEST_TIMEOUT_MS = 60_000;
-/** Under the engine's 120 s submit deadline, so a slow upload fails here with a reason. */
-const UPLOAD_TIMEOUT_MS = 110_000;
+/** One `submit` end to end: its uploads, then the billed task-creating POST. Under the
+ *  engine's 120 s submit deadline, so a slow upload ends here with a reason and the POST
+ *  is never the call the engine abandons while Tripo may already have the task. */
+const SUBMIT_BUDGET_MS = 110_000;
+/** The uploads' share of that budget; the create POST gets what is left of it. */
+const UPLOAD_TIMEOUT_MS = 80_000;
+/** The least a billed create POST is given: with less left, submit refuses before sending it. */
+const MIN_CREATE_MS = 20_000;
 /** The balance only annotates a quote, and the engine gives a quote 30 s. */
 const BALANCE_TIMEOUT_MS = 5_000;
 const DOWNLOAD_TIMEOUT_MS = 300_000;
@@ -214,10 +221,8 @@ export interface TripoProviderOptions {
 	readonly catalogue?: TripoCatalogue;
 	/** Test seam for the 429/503 back-off. */
 	readonly sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
-}
-
-function isRecord(value: unknown): value is Json {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
+	/** Test seam: the clock `submit` measures its budget on. */
+	readonly now?: () => number;
 }
 
 function reason(error: unknown): string {
@@ -786,6 +791,7 @@ export function createTripoProvider(options: TripoProviderOptions = {}): Generat
 	const apiKey = options.apiKey ?? (() => readConnectKey());
 	const doFetch = options.fetch ?? fetch;
 	const sleep = options.sleep ?? pause;
+	const now = options.now ?? Date.now;
 	let loaded: Promise<TripoCatalogue> | undefined;
 	const catalogue = (): Promise<TripoCatalogue> => {
 		loaded ??= options.catalogue ? Promise.resolve(options.catalogue) : loadCatalogue();
@@ -821,7 +827,9 @@ export function createTripoProvider(options: TripoProviderOptions = {}): Generat
 					signal: deadline,
 				});
 			} catch (error) {
-				if (init.signal.aborted) throw error;
+				// The engine aborting a task-creating POST is not a plain cancellation: Tripo
+				// may already hold the task, so it carries the same warning as a failure in transit.
+				if (init.signal.aborted && !init.billed) throw error;
 				const maybeLanded = init.billed
 					? " - the request may have reached Tripo; check your Tripo task list before resubmitting, or you may pay twice"
 					: "";
@@ -925,6 +933,7 @@ export function createTripoProvider(options: TripoProviderOptions = {}): Generat
 		},
 
 		async submit(request, { signal }): Promise<GenerationSubmitted> {
+			const started = now();
 			const c = await catalogue();
 			const model = modelOf(c, request.model);
 			const { uploads } = planRequest(c, model, request);
@@ -932,7 +941,23 @@ export function createTripoProvider(options: TripoProviderOptions = {}): Generat
 			const tokens = new Map<string, string>();
 			await Promise.all(uploads.map(async file => tokens.set(file.path, await uploadFile(c, file, signal))));
 			const built = buildTaskRequest(c, model, request, file => tokens.get(file.path) ?? "");
-			const data = await call(c, { method: "POST", path: built.endpoint, json: built.body, signal, billed: true });
+			// The create POST is billed and never retried, so it must not be the call the
+			// engine's deadline cuts while Tripo may already hold the task: it gets what is
+			// left of the budget, or submit refuses before sending it.
+			const left = SUBMIT_BUDGET_MS - (now() - started);
+			if (left < MIN_CREATE_MS) {
+				throw new Error(
+					`Tripo submit has ${Math.max(0, Math.round(left / 1000))} s left of its ${SUBMIT_BUDGET_MS / 1000} s budget after the uploads, too little to create the task safely - nothing was created or billed; try again, or send smaller files`,
+				);
+			}
+			const data = await call(c, {
+				method: "POST",
+				path: built.endpoint,
+				json: built.body,
+				signal,
+				billed: true,
+				timeoutMs: Math.min(REQUEST_TIMEOUT_MS, left),
+			});
 			const task = isRecord(data) ? data.task_id : undefined;
 			if (typeof task !== "string" || task === "")
 				throw new Error(

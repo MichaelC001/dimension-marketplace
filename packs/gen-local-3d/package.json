@@ -12,6 +12,7 @@
 		"connect/",
 		"assets/",
 		"cutout.ts",
+		"guards.ts",
 		"index.ts",
 		"models.json",
 		"plugin.json",

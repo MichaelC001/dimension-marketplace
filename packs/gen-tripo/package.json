@@ -11,6 +11,7 @@
 	"files": [
 		"connect/",
 		"assets/",
+		"guards.ts",
 		"index.ts",
 		"models.json",
 		"plugin.json"
