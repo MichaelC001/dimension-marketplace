@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { configuredRoots, createFence, denyReason, insideRoot, textRefusal } from "../src/fence";
+import { configuredRoots, createFence, insideRoot, textRefusal } from "../src/fence";
 
 describe("insideRoot", () => {
 	test("is segment-wise: a sibling that shares a prefix is outside", () => {
@@ -20,56 +20,6 @@ describe("insideRoot", () => {
 	test("a path on another drive is outside", () => {
 		expect(insideRoot("D:\\Docs\\a.png", "C:\\Docs", "win32")).toBe(false);
 	});
-});
-
-describe("denyReason", () => {
-	const denied = [
-		"/home/me/.ssh/id_rsa",
-		"C:\\Users\\Me\\.SSH\\config",
-		"/work/app/.env",
-		"/work/app/.env.production",
-		"/work/app/prod.ENV",
-		"/work/app/.envrc",
-		"/work/certs/server.PEM",
-		"/home/me/.aws/credentials",
-		"/home/me/.inso/agent/agent.db",
-		"/home/me/.inso/agent/agent.db-wal",
-		"C:\\Users\\Me\\.inso-dev\\profiles\\p1\\agent\\config.yml",
-		"/home/me/.omp/agent/models.yml",
-		"/home/me/.inso/vault/notes.sqlite",
-		"C:\\Users\\Me\\AppData\\Local\\Inso\\activation.json",
-		"C:\\Users\\Me\\AppData\\Roaming\\Microsoft\\Credentials\\ABC",
-		"/work/app/.git/config",
-		"/home/me/.npmrc",
-		// The Personal vault's Locker: its folder, its plaintext control and audit files, its sealed entries.
-		"/home/me/.inso/vault/locker",
-		"/home/me/.inso/vault/locker/_locker.json",
-		"/home/me/.inso/vault/locker/audit.log",
-		"/home/me/.inso/vault/locker/vps-root.secret.json",
-		"C:\\Users\\Me\\.inso\\vault\\projects\\inso\\locker\\audit.log",
-		"D:\\Brain\\LOCKER\\anything.txt", // a vault at any INSO_VAULT_DIR
-		"/backups/vault-2026/_locker.json", // a copy that left its folder
-		"/backups/export/vps-root.SECRET.JSON",
-	];
-	for (const path of denied) {
-		test(`refuses ${path}`, () => expect(denyReason(path)).toBeString());
-	}
-
-	const allowed = [
-		"/home/me/.inso/vault/report.pdf",
-		"/home/me/.inso/vault/agent/photo.png", // an `agent` folder inside the vault is not the engine's
-		"/home/me/docs/environment.md",
-		"/home/me/docs/key-notes.md",
-		"/home/me/docs/token-economics.md",
-		"C:\\Work\\Docs\\quarterly.docx",
-		"/home/me/.inso/vault/lockers-overview.md", // `locker` must be a whole folder name
-		"/home/me/.inso/vault/projects/inso/audit.log", // an audit log that is not the Locker's
-		"/home/me/docs/locker-room.pdf",
-		"/home/me/docs/secret-recipe.json",
-	];
-	for (const path of allowed) {
-		test(`allows ${path}`, () => expect(denyReason(path)).toBeUndefined());
-	}
 });
 
 describe("configuredRoots", () => {

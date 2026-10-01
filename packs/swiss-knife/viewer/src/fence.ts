@@ -83,10 +83,10 @@ export function insideRoot(target: string, root: string, platform: Platform): bo
 	return relative === "" || (relative !== ".." && !relative.startsWith(`..${api.sep}`) && !api.isAbsolute(relative));
 }
 
-// The deny tables below are exported, not private: `present` (swiss-knife) keeps a
-// copy of them (packs install one at a time and cannot import each other) and its
-// test compares that copy to these BY VALUE, so a rule added here and not there is
-// a red test. Change a table here and the copy must follow.
+// The deny tables below are the plugin's ONE definition of a secret path: the
+// viewer's fence reads them, and so does `present` (`src/present.ts` imports them
+// from here and bundles them into `dist/index.mjs`). Change a table here and both
+// tools follow; `test/deny.test.ts` holds every entry to a refusal.
 export const SECRET_DIRECTORIES: Readonly<Record<string, true>> = {
 	".ssh": true,
 	".gnupg": true,
@@ -188,16 +188,18 @@ export function denyReason(path: string): string | undefined {
  * a device path, an alternate data stream, a network path (resolving one is a
  * network request to a host the model chose). Pure: the platform is an argument.
  * The empty, NUL and not-absolute refusals stay in `check`, which answers them
- * first. `present` screens the same spellings with its own copy of this function.
+ * first. `what` finishes the sentence ("... are not <what>"): the fence says
+ * `viewable`, and `present`, which screens the same spellings through this
+ * function, says `presentable`.
  */
-export function textRefusal(requested: string, platform: Platform): string | undefined {
+export function textRefusal(requested: string, platform: Platform, what: "viewable" | "presentable" = "viewable"): string | undefined {
 	if (platform !== "win32") return undefined;
-	if (/^[\\/]{2}[.?][\\/]/.test(requested)) return "Windows device paths (\\\\.\\ and \\\\?\\) are not viewable";
-	if (requested.slice(2).includes(":")) return "alternate data streams (a ':' after the drive) are not viewable";
+	if (/^[\\/]{2}[.?][\\/]/.test(requested)) return `Windows device paths (\\\\.\\ and \\\\?\\) are not ${what}`;
+	if (requested.slice(2).includes(":")) return `alternate data streams (a ':' after the drive) are not ${what}`;
 	// Any two leading separators, either kind: `\\host\share`, `//host/share`,
 	// `\\host@SSL@443\DavWWWRoot\x`. Every root is a local folder, so no
 	// legitimate one exists.
-	if (/^[\\/]{2}/.test(requested)) return "network paths (\\\\host\\share) are not viewable";
+	if (/^[\\/]{2}/.test(requested)) return `network paths (\\\\host\\share) are not ${what}`;
 	return undefined;
 }
 

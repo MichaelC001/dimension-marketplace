@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { stat } from "node:fs/promises";
-import { join } from "node:path";
+import { readdir, readFile, stat } from "node:fs/promises";
+import { basename, join } from "node:path";
 import { normalizeTools, Tokenizer } from "@oh-my-pi/pi-agent-core";
+import { bucketRules } from "@oh-my-pi/pi-coding-agent/capability/rule-buckets";
+import { buildRuleFromMarkdown } from "@oh-my-pi/pi-coding-agent/discovery/helpers";
+import { StreamRuleMatcher } from "@oh-my-pi/pi-coding-agent/stream-rules/matcher";
 import { loadTools } from "./fixtures";
 
 // The resident cost of `present`: its wire entry (name, description, parameters as the
@@ -41,15 +44,54 @@ describe("the context cost of the shipped `present` tool", () => {
 		expect(entry.name).toBe("present");
 	});
 
-	for (const folder of ["skills", "rules", "prompts"]) {
-		test(`the pack ships no ${folder}/ folder: a rule or prompt is resident context on every turn`, async () => {
+	for (const folder of ["skills", "prompts"]) {
+		test(`the plugin ships no ${folder}/ folder: a skill or prompt is resident context on every turn`, async () => {
 			const exists = await stat(join(PACK, folder)).then(
 				() => true,
 				() => false,
 			);
-			expect(exists, `${folder}/ exists in the pack root (doc 86 section 8 forbids it)`).toBe(false);
+			expect(exists, `${folder}/ exists in the plugin root (doc 86 section 8 forbids it)`).toBe(false);
 		});
 	}
+});
+
+// The plugin also ships stream rules (`rules/ban-comments*.md`), and a rule is only resident
+// context when the engine puts it in the system prompt on every turn: an always-apply body,
+// or a rulebook line (any rule that has a `description`). A STREAM rule is neither.
+// `bucketRules` (omp/packages/coding-agent/src/capability/rule-buckets.ts) registers a rule
+// whose `condition` the stream matcher accepts and moves on, so it reaches no prompt bucket;
+// the engine's own context-cost probe lists it as `loadMode: "stream", resident: 0, onUse:
+// <body tokens>` (omp/packages/coding-agent/src/context-cost/measure.ts), and
+// docs/design/81-stream-rules.md section 1 has the body injected only at the moment the model
+// is about to break the rule. So a stream rule costs 0 tokens until it fires.
+//
+// That holds only while the matcher ACCEPTS the condition. A rejected one (an engine that
+// cannot run `except:`, a lookaround) falls through to the next bucket, and these rules carry
+// a `description`, so it would become a rulebook line, resident on every turn. The test runs
+// the real parser and the real bucketing over the shipped files instead of trusting their
+// front matter; plugin.json carries the engine floor (`requires.dimension`) that honours `except:`.
+describe("the context cost of the shipped rules", () => {
+	test("every rule is a stream rule the engine accepts, so none is resident on any turn", async () => {
+		const folder = join(PACK, "rules");
+		const files = (await readdir(folder)).filter(file => file.endsWith(".md")).sort();
+		expect(files.length, "rules/ holds the plugin's rules; a plugin without any has no use for this test").toBeGreaterThan(0);
+		const rules = await Promise.all(
+			files.map(async file => {
+				const path = join(folder, file);
+				const source = { provider: "swiss-knife", providerName: "swiss-knife", path, level: "user" } as const;
+				return buildRuleFromMarkdown(basename(file), await readFile(path, "utf8"), path, source);
+			}),
+		);
+
+		const matcher = new StreamRuleMatcher();
+		const { rulebookRules, alwaysApplyRules } = bucketRules(rules, matcher);
+
+		expect(
+			[...rulebookRules, ...alwaysApplyRules].map(rule => rule.name),
+			"these rules would be resident context on every turn: the stream matcher did not take their condition",
+		).toEqual([]);
+		expect(matcher.getRules().map(rule => rule.name).sort()).toEqual(rules.map(rule => rule.name).sort());
+	});
 });
 
 /** The required and declared field names of a tool's wire schema, read off its JSON (what is sent). */

@@ -3,7 +3,7 @@
 // rows alone (`pickHandler`, `annotationModelFor`), so the promise is checked
 // through the host's own functions, not a restatement of them.
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -23,7 +23,7 @@ import type { ViewerKind } from "../src/contract";
 import { detectKind } from "../src/kind";
 import { createViewerServer } from "../src/server";
 
-const manifest = JSON.parse(readFileSync(new URL("../plugin.json", import.meta.url), "utf8"));
+const manifest = JSON.parse(readFileSync(new URL("../../plugin.json", import.meta.url), "utf8"));
 const declaration = manifest.extensions["ai.insodimension.dimension"].artifactories[0];
 const decl: ArtifactoryDecl = { ...declaration, plugin: manifest.name, type: "artifactory" };
 const opens: readonly ArtifactOpen[] = decl.opens ?? [];
@@ -103,6 +103,15 @@ describe("the declaration", () => {
 		expect(decl.grants).toContain(ARTIFACTORY_GRANT_FILES_READ);
 	});
 
+	test("names a server that the plugin's mcp.json starts from a script the plugin ships", () => {
+		const mcp = JSON.parse(readFileSync(new URL("../../ai.insodimension.dimension/mcp.json", import.meta.url), "utf8"));
+		const server = mcp.mcpServers[decl.mcpServer];
+		expect(server, `ai.insodimension.dimension/mcp.json declares a server named ${decl.mcpServer}`).toBeDefined();
+		expect(server.command).toBe("node");
+		const [script] = server.args;
+		expect(existsSync(new URL(`../../${script}`, import.meta.url)), `${script} is a file of the plugin`).toBe(true);
+	});
+
 	test("every entry names a public tool of the real server that takes the declared path and name arguments", async () => {
 		const base = await mkdtemp(join(tmpdir(), "viewer-manifest-"));
 		try {
@@ -156,7 +165,7 @@ describe("what the viewer claims to open is what it draws and what it can annota
 	test.each(claimed.map(({ ext }) => ext))("%s: a click on it reaches the viewer, and the host offers Annotate exactly when the View can", ext => {
 		const file = classifyFile(`report.${ext}`, headOf(ext));
 		const row = pickHandler(rows, { name: `report.${ext}`, mime: file.mime });
-		expect(row?.plugin).toBe("viewer");
+		expect(row?.plugin).toBe(decl.plugin);
 		const offered = (() => {
 			const hostModel = annotationModelFor(file.kind);
 			return hostModel !== null && row?.annotates.includes(hostModel) === true;
@@ -204,7 +213,7 @@ describe("what the viewer claims to open is what it draws and what it can annota
 
 	test("a recording reported by another name for its type (audio/x-wav, audio/x-flac, audio/x-m4a) still reaches the viewer, even with a name that says nothing", () => {
 		for (const mime of Object.keys(MIME_ALIASES)) {
-			expect(pickHandler(rows, { name: "recording", mime })?.plugin, mime).toBe("viewer");
+			expect(pickHandler(rows, { name: "recording", mime })?.plugin, mime).toBe(decl.plugin);
 		}
 	});
 
