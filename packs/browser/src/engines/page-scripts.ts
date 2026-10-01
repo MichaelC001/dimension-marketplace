@@ -1,4 +1,4 @@
-import type { BrowserRegion, ElementInspection } from "../contracts.js";
+import type { BrowserRegion, ElementInspection, PageElement, PageElements, PageScroll } from "../contracts.js";
 import type { ReportedIdentity } from "./launch.js";
 import type { FieldRead, PageRead } from "./types.js";
 /**
@@ -136,33 +136,73 @@ const READ_PAGE_SCRIPT = (limit: number, maxFrames: number): Omit<PageRead, "htt
 	}
 	return { title: document.title, text: all.slice(0, limit), truncated: all.length > limit, bodyChars: all.length, passwordShare, frames };
 };
-const ELEMENTS_IN_REGION_SCRIPT = (region: BrowserRegion, limit: number): string => {
-	const out: string[] = [];
+/**
+ * What is on the page under each of `regions` (viewport px), one pass over the document for all of them, and where the
+ * page is scrolled. Every element is its own record (tag, id, box, words), each string cut to its bound HERE so a page
+ * cannot make the answer large; the reader still treats every one as hostile text. A password or hidden input is
+ * named, never read. A container much larger than the region is left out: it says nothing about what is under the
+ * mark. A region takes at most 60 elements and about `limit` characters of them.
+ *
+ * The page can replace the built-ins this runs on (it runs in the page's own world), so nothing here is a guarantee
+ * of the shape: the answer is read as untrusted data on the other side.
+ */
+const ELEMENTS_IN_REGIONS_SCRIPT = (
+	regions: BrowserRegion[],
+	limit: number,
+	max: { tag: number; id: number; label: number; count: number },
+): { scroll: PageScroll; regions: PageElements[] } => {
+	const found: PageElements[] = regions.map(() => ({ elements: [], truncated: false }));
+	const used: number[] = regions.map(() => 0);
+	const open = (entry: PageElements): boolean => !entry.truncated && entry.elements.length < max.count;
 	const nodes = document.querySelectorAll("body *");
-	for (let i = 0; i < nodes.length && out.length < 60; i += 1) {
+	for (let i = 0; i < nodes.length && found.some(open); i += 1) {
 		const el = nodes[i] as HTMLElement;
 		const r = el.getBoundingClientRect();
 		if (r.width <= 0 || r.height <= 0) continue;
-		const intersects =
-			r.left < region.x + region.width && r.right > region.x && r.top < region.y + region.height && r.bottom > region.y;
-		if (!intersects) continue;
-		if (el.children.length > 0 && r.width * r.height > region.width * region.height * 4) continue;
-		const input = el as HTMLInputElement;
-		const secret = el.tagName === "INPUT" && ["password", "hidden"].includes((input.type ?? "").toLowerCase());
-		const editable = el.tagName === "INPUT" || el.tagName === "TEXTAREA";
-		const label = secret
-			? "[redacted input]"
-			: ((editable ? input.value || "" : "") || el.getAttribute("aria-label") || el.innerText || "")
-					.trim()
-					.replace(/\s+/g, " ")
-					.slice(0, 100);
-		const id = el.id ? `#${el.id}` : "";
-		out.push(
-			`${el.tagName.toLowerCase()}${id} [${Math.round(r.x)},${Math.round(r.y)} ${Math.round(r.width)}x${Math.round(r.height)}] ${label}`,
-		);
+		let described: PageElement | null = null;
+		for (let k = 0; k < regions.length; k += 1) {
+			const region = regions[k];
+			const entry = found[k];
+			if (!open(entry)) continue;
+			const intersects =
+				r.left < region.x + region.width && r.right > region.x && r.top < region.y + region.height && r.bottom > region.y;
+			if (!intersects) continue;
+			if (el.children.length > 0 && r.width * r.height > region.width * region.height * 4) continue;
+			if (described === null) {
+				const input = el as HTMLInputElement;
+				const secret = el.tagName === "INPUT" && ["password", "hidden"].includes((input.type ?? "").toLowerCase());
+				const editable = el.tagName === "INPUT" || el.tagName === "TEXTAREA";
+				const label = secret
+					? "[redacted input]"
+					: ((editable ? input.value || "" : "") || el.getAttribute("aria-label") || el.innerText || "")
+							.trim()
+							.replace(/\s+/g, " ")
+							.slice(0, max.label);
+				described = {
+					tag: el.tagName.toLowerCase().slice(0, max.tag),
+					id: (el.id || "").slice(0, max.id),
+					box: { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) },
+					label,
+				};
+			}
+			const size = described.tag.length + described.id.length + described.label.length + 24;
+			if (used[k] + size > limit) entry.truncated = true;
+			else {
+				used[k] += size;
+				entry.elements.push(described);
+			}
+		}
 	}
-	const text = out.join("\n");
-	return text.length > limit ? `${text.slice(0, limit)}\n… [truncated]` : text;
+	const root = document.documentElement;
+	return {
+		scroll: { x: Math.round(window.scrollX), y: Math.round(window.scrollY), width: root.scrollWidth, height: root.scrollHeight },
+		regions: found,
+	};
+};
+/** Where the page is scrolled and how large its document is, in CSS px. */
+const SCROLL_SCRIPT = (): PageScroll => {
+	const root = document.documentElement;
+	return { x: Math.round(window.scrollX), y: Math.round(window.scrollY), width: root.scrollWidth, height: root.scrollHeight };
 };
 const SELECT_ALL_SCRIPT = (el: Element): boolean => {
 	const field = el as HTMLInputElement | HTMLTextAreaElement;
@@ -419,7 +459,8 @@ export {
 	READ_TEXT_SCRIPT,
 	INSPECT_SCRIPT,
 	READ_PAGE_SCRIPT,
-	ELEMENTS_IN_REGION_SCRIPT,
+	ELEMENTS_IN_REGIONS_SCRIPT,
+	SCROLL_SCRIPT,
 	SELECT_ALL_SCRIPT,
 	FAVICON_HREF_SCRIPT,
 	IS_PASSWORD_SCRIPT,

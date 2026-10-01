@@ -115,8 +115,8 @@ describeWithChrome("a model's screenshot", () => {
 			// The runtime keeps 8 frames; a shot filed among them would push this one out.
 			for (let i = 0; i < 9; i += 1) await runtime.shot(browserId);
 
-			const annotated = await runtime.annotate(browserId, frame.frameId, { x: 0, y: 0, width: 100, height: 100 }, "here");
-			expect(annotated.mimeType).toBe("image/png");
+			const annotated = await runtime.annotate(browserId, frame.frameId, [{ x: 0, y: 0, width: 100, height: 100 }]);
+			expect(annotated.regions).toHaveLength(1);
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);

@@ -1,4 +1,5 @@
 import type { ConnectionObservations } from "./connection.js";
+import type { LiveFrame } from "./engines/types.js";
 import type { ProfileColour, ResolvedProfileMeta } from "./profile-meta.js";
 
 /** What the browser IS. `abp` and `browser4` are refused with the reason (see engines/refused.ts). */
@@ -17,8 +18,8 @@ export type CredentialMode = (typeof CREDENTIAL_MODES)[number];
 export interface CredentialRequest { origin: string; mode: CredentialMode }
 /** What a task reports about the credential it used — never the value. */
 export interface CredentialUse { origin: string; created: boolean }
-/** Maximum encoded PNG accepted by the host's image model-context contract. */
-export const MAX_ANNOTATION_BYTES = 2_097_152;
+/** Regions one `browser_annotate` reads: the shared annotation kit's mark limit (a page of numbered marks is a brief, past this it is a redraw). */
+export const MAX_ANNOTATION_REGIONS = 24;
 export interface Viewport { width: number; height: number }
 /** What a viewport may be (CSS px): `browser_open`, the View's fit and the `resize` step clamp to these. */
 export const MIN_VIEWPORT: Viewport = { width: 320, height: 240 };
@@ -72,8 +73,9 @@ export interface TabInfo {
 }
 export type TabOp = "new" | "activate" | "close";
 export interface TabRequest { op: TabOp; tabId?: string; url?: string }
-/** `jpeg`: the latest live screencast frame (not annotatable). `png`: a fresh capture, retained for annotation. */
-export type FrameFormat = "jpeg" | "png";
+/** The most events one input batch carries on the direct channel, and the longest text one `text` event inserts. */
+export const MAX_INPUT_BATCH = 64;
+export const MAX_INPUT_TEXT = 4_096;
 /** `failed`: provably nothing happened. `unknown`: dispatched, then errored — may have taken effect. */
 export type ActionStatus = "completed" | "failed" | "unknown";
 /**
@@ -311,28 +313,55 @@ export interface BrowserState {
   /** Set by `open` alone, when something a person should know about the profile just opened: the browser build under its logins changed. */
   notice?: string;
 }
+/** A fresh full-quality capture, retained so it can be annotated (`browser_frame`). Live pictures do not come this way: they ride the direct channel (stream.ts). */
 export interface BrowserFrame {
   state: BrowserState;
   frameId: string;
-  mimeType: "image/png" | "image/jpeg";
-  data: string;
-  capturedAt: string;
-}
-/** The live frame is still the one the caller named in `since`: no pixels are resent. */
-export interface UnchangedFrame {
-  state: BrowserState;
-  frameId: string;
-  unchanged: true;
-}
-export interface BrowserRegion { x: number; y: number; width: number; height: number }
-export interface BrowserAnnotation {
-  url: string;
-  note: string;
-  region: BrowserRegion;
-  capturedAt: string;
   mimeType: "image/png";
   data: string;
-  elements: string;
+  capturedAt: string;
+}
+export interface BrowserRegion { x: number; y: number; width: number; height: number }
+/** Where a page is scrolled and how large it is, in CSS px. */
+export interface PageScroll { x: number; y: number; width: number; height: number }
+/**
+ * What the page says about itself, kept apart field by field: a tag name, an id and an element's words are three
+ * strings the page wrote, so none of them is ever run together with another into one line to be parsed back apart.
+ * An id may hold spaces, a tag name nearly anything (`<a[0,0>` is a tag), and a line cannot tell them from the
+ * sentence around them. The tag and id bounds are the shared annotation kit's own (its tag-name and selector limits);
+ * the words and the count per region are this pack's.
+ */
+export const MAX_ELEMENT_TAG_CHARS = 40;
+export const MAX_ELEMENT_ID_CHARS = 240;
+export const MAX_ELEMENT_LABEL_CHARS = 100;
+export const MAX_ELEMENTS_PER_REGION = 60;
+export interface PageElement {
+  /** Lower-case tag name, at most {@link MAX_ELEMENT_TAG_CHARS}. */
+  tag: string;
+  /** The element's id, at most {@link MAX_ELEMENT_ID_CHARS}; "" when it has none. */
+  id: string;
+  /** Where it is in the viewport, whole CSS px. */
+  box: BrowserRegion;
+  /** What a person would read on it, at most {@link MAX_ELEMENT_LABEL_CHARS}; a password or hidden input is `[redacted input]`, never its value. */
+  label: string;
+}
+/** The elements under one region, in document order; `truncated`: more were there than fit the budget of the answer. */
+export interface PageElements { elements: PageElement[]; truncated: boolean }
+/**
+ * What `browser_annotate` answers: facts about the page under the regions the human marked. No pixels: the picture is
+ * the View's own frame, and the shared annotation kit paints the marks onto it.
+ */
+export interface BrowserAnnotationContext {
+  url: string;
+  title: string;
+  /** When the frame the human marked was captured. */
+  capturedAt: string;
+  /** When the page was read for the elements; a dynamic page may have changed since `capturedAt`. */
+  readAt: string;
+  viewport: Viewport;
+  scroll: PageScroll;
+  /** One entry per requested region, in order: the region as read (clamped to the frame) and the elements under it. */
+  regions: ({ region: BrowserRegion } & PageElements)[];
 }
 export interface BrowserOpenOptions {
   /** Omitted: a throwaway browser, nothing saved, no sign-in kept. Named: the persistent profile of that name. */
@@ -381,8 +410,22 @@ export interface BrowserRuntimePort {
    */
   open(options: BrowserOpenOptions, opener?: BrowserOpener): Promise<BrowserState>;
   state(browserId: string): Promise<BrowserState>;
-  frame(browserId: string, format?: FrameFormat): Promise<BrowserFrame>;
-  frame(browserId: string, format: "jpeg", since: string | undefined): Promise<BrowserFrame | UnchangedFrame>;
+  /** A fresh PNG capture of the active tab, retained for `annotate`. */
+  frame(browserId: string): Promise<BrowserFrame>;
+  /**
+   * The live picture of the active tab, as the View shows it: `onFrame` gets a JPEG whenever the page changes (and one
+   * at once for a page that is not changing), following the active tab, until the returned function is called. Never
+   * queued behind page work. Throws `unknown_browser`.
+   */
+  watchFrames(browserId: string, onFrame: (frame: LiveFrame) => void): () => void;
+  /** The state as `state` answers it, but NOT queued behind page work: the live view keeps reading it while a navigation or action is in flight. */
+  liveState(browserId: string): Promise<BrowserState>;
+  /**
+   * The human's own mouse, wheel and keys, applied to the active tab in order. Admitted and bounded first (`bad_input`), refused
+   * while a task owns the page (`task_running`), and a click or key while a publish waits for the Post marks it touched, as `act` does.
+   * Not queued behind page work, so it never waits for a navigation.
+   */
+  input(browserId: string, events: unknown): Promise<void>;
   tab(browserId: string, request: TabRequest, caller?: ToolCaller): Promise<BrowserState>;
   resize(browserId: string, viewport: Viewport, scale?: number): Promise<BrowserState>;
   snapshot(browserId: string): Promise<{ state: BrowserState; text: string }>;
@@ -410,7 +453,14 @@ export interface BrowserRuntimePort {
   inspect(browserId: string, selector: string): Promise<InspectResult>;
   runTask(browserId: string, request: TaskRequest, onStep?: (step: TaskStep, run: TaskRun) => void): Promise<TaskRun>;
   cancelTask(browserId: string): Promise<TaskRun>;
-  annotate(browserId: string, frameId: string, region: BrowserRegion, note: string): Promise<BrowserAnnotation>;
+  /**
+   * The page under the regions the human marked on a frame `frame` (png) captured: url, title, scroll and the elements
+   * under each region. Refused (`stale_frame`) once the page has moved on from the frame, (`unknown_frame`) for a frame
+   * no longer retained. Read-only; the picture is the caller's.
+   */
+  annotate(browserId: string, frameId: string, regions: readonly BrowserRegion[]): Promise<BrowserAnnotationContext>;
+  /** Stores the detail document the shared annotation kit assembles for what the human marked in `browserId`, and answers the absolute path the agent reads it at. A throwaway browser's document is deleted with it. */
+  saveAnnotationDetail(browserId: string, json: string): string;
   /** Every on-disk profile's persisted sign-in observations (connection.ts). */
   connections(): Promise<ConnectionObservations>;
   /** `listener` runs after each new observation is persisted and after a profile with observations is deleted. Returns the unsubscribe. */

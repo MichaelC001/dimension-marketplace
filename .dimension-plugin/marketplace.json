@@ -132,7 +132,7 @@
 			"title": "Browser",
 			"icon": "globe",
 			"description": "A real browser beside your chat that your agent drives while you watch. Tabs, persistent logged-in profiles, circle-to-annotate, and fast task agents (jev, browser-use).",
-			"version": "0.3.0",
+			"version": "0.5.0",
 			"author": {
 				"name": "Dimension"
 			},
@@ -144,7 +144,10 @@
 				"mcp-apps",
 				"profiles",
 				"annotations"
-			]
+			],
+			"requires": {
+				"dimension": ">=0.11.1"
+			}
 		},
 		{
 			"name": "build",
@@ -477,6 +480,106 @@
 					"description": "A sample marketing lead for the Example Hub — ships off by default; enable it in Capabilities → General Agents",
 					"defaultEnabled": false
 				}
+			]
+		},
+		{
+			"name": "gen-fal",
+			"source": "./packs/gen-fal",
+			"pluginId": "gen-fal",
+			"title": "fal.ai generators",
+			"icon": "packs/gen-fal/assets/icon.svg",
+			"description": "3D generators from fal.ai behind one key: Pixal3D, TRELLIS.2, Rodin 2.5, Meshy-6, Hunyuan 3.1 (image-to-3D, part splitter, smart topology) and Tripo P2, with live option schemas, prices and a quote before every job",
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-community",
+			"license": "MIT",
+			"category": "connector",
+			"tags": [
+				"generation",
+				"3d",
+				"fal",
+				"pixal3d",
+				"trellis",
+				"rodin",
+				"meshy",
+				"hunyuan",
+				"tripo",
+				"provider"
+			]
+		},
+		{
+			"name": "gen-local-3d",
+			"source": "./packs/gen-local-3d",
+			"pluginId": "gen-local-3d",
+			"title": "Local image-to-3D",
+			"icon": "packs/gen-local-3d/assets/icon.svg",
+			"description": "Image-to-3D on this machine's GPU: Pixal3D (single view) and TRELLIS.2 through pixal3d.cpp's trellis-cli. No account, no key, no cost per model.",
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-community",
+			"license": "MIT",
+			"category": "connector",
+			"tags": [
+				"generation",
+				"3d",
+				"image-to-3d",
+				"pixal3d",
+				"trellis",
+				"local",
+				"provider"
+			]
+		},
+		{
+			"name": "gen-tripo",
+			"source": "./packs/gen-tripo",
+			"pluginId": "gen-tripo",
+			"title": "Tripo 3D generation",
+			"icon": "packs/gen-tripo/assets/icon.svg",
+			"description": "Tripo 3D generation on Tripo's own pay-per-use API: image or multiview to 3D, part separation, retopology, auto-rig, animation retarget and format conversion, chained by Tripo task id",
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-community",
+			"license": "MIT",
+			"category": "connector",
+			"tags": [
+				"generation",
+				"3d",
+				"tripo",
+				"rigging",
+				"retopology",
+				"provider"
+			]
+		},
+		{
+			"name": "gen-wavespeed",
+			"source": "./packs/gen-wavespeed",
+			"pluginId": "gen-wavespeed",
+			"title": "WaveSpeed generators",
+			"icon": "packs/gen-wavespeed/assets/icon.svg",
+			"description": "3D generators from WaveSpeed AI behind one key: Tripo P2 and H3.1, Meshy 6 and 7.1, Rodin 2.5, TRELLIS.2 and Hunyuan3D 3 / 3.1, with live option schemas, live prices and a quote before every job",
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-community",
+			"license": "MIT",
+			"category": "connector",
+			"tags": [
+				"generation",
+				"3d",
+				"wavespeed",
+				"tripo",
+				"meshy",
+				"rodin",
+				"trellis",
+				"hunyuan",
+				"provider"
 			]
 		},
 		{

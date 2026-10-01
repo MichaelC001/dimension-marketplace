@@ -158,11 +158,12 @@ rest must go in a new call.
 
 ## Annotations
 
-When the user circles or selects part of the page in the View, you receive
-the cropped screenshot (with their marks), their note, the URL and the
-elements under the region in this conversation. Treat it as the user pointing
-at the screen. It does not name the browser: `browser_state` with no
-`browserId` reads it.
+When the user marks the page in the View, you receive the whole page picture
+with their numbered marks burned in, a note per mark, the page address, where
+it was scrolled, and the elements under each mark (the full list is in the JSON
+file the message names). Treat it as the user pointing at the screen. The page
+may have moved on since the picture was taken. It does not name the browser:
+`browser_state` with no `browserId` reads it.
 
 ## Rules
 

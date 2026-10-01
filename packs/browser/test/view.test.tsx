@@ -20,6 +20,9 @@ import type { BrowserState } from "../src/contracts";
 import { BrowserApp } from "../app/view/browser-app";
 import { BrowserClient, mountFromToolResult, type ToolMount } from "../app/view/browser-client";
 import { StartPage, type StartPageProps } from "../app/view/start-page";
+import type { LiveFrame } from "../src/engines/types";
+import { BrowserRuntimeError } from "../src/store";
+import { LiveChannel, type LiveSource } from "../src/stream";
 import { type Dom, mount, unmountAll } from "./dom-harness";
 
 afterEach(unmountAll);
@@ -299,7 +302,7 @@ describe("a browser the host's own tool call failed to open", () => {
 
 describe("a browser that ends", () => {
 	test("is a normal ending: the start page returns with one calm line, and nothing announces an error", async () => {
-		const { app, calls } = fakeApp(call => (call.name === "browser_frame" ? failure("unknown or already closed browserId b1") : failure("unexpected")));
+		const { app, calls } = fakeApp(call => (call.name === "browser_stream" ? failure("unknown or already closed browserId b1") : failure("unexpected")));
 		const dom = await mount(<BrowserApp app={app} toolState={{ state: LIVE, seq: 1 }} />);
 		await dom.settle();
 
@@ -309,7 +312,7 @@ describe("a browser that ends", () => {
 		expect(dom.text()).not.toMatch(/shut down|elsewhere/i);
 		// The page is one click away again: the same Open the first visit had.
 		expect(button(dom, "Open")).toBeTruthy();
-		expect(calls.some(call => call.name === "browser_frame")).toBe(true);
+		expect(calls.some(call => call.name === "browser_stream")).toBe(true);
 	});
 
 	test("the calm line belongs to the ended browser only: once the next one is open it is gone", async () => {
@@ -391,5 +394,87 @@ describe("what the View puts in the agent's context", () => {
 
 		expect(await pending).toBe(false);
 		expect(contexts).toEqual([]);
+	});
+});
+
+/** A browser behind the real listener: state the test can change, picture watchers it can count, input it records. */
+class ListeningBrowser implements LiveSource {
+	state: BrowserState = { ...LIVE, tabs: [{ id: "t1", title: "First title", url: "https://example.com/", active: true, loading: false, favicon: null }], activeTabId: "t1" };
+	watchers = 0;
+	readonly inputs: unknown[] = [];
+	watchFrames(_browserId: string, _onFrame: (frame: LiveFrame) => void): () => void {
+		this.watchers += 1;
+		return () => void (this.watchers -= 1);
+	}
+	async liveState(): Promise<BrowserState> {
+		return structuredClone(this.state);
+	}
+	async input(_browserId: string, events: unknown): Promise<void> {
+		if (!Array.isArray(events)) throw new BrowserRuntimeError("bad_input", "not a list");
+		this.inputs.push(events);
+	}
+}
+
+const channels: LiveChannel[] = [];
+afterEach(async () => {
+	for (const channel of channels.splice(0)) await channel.close();
+});
+
+/** A host whose `browser_stream` answers with a real listener's address; every other call is recorded and refused. */
+function appOnListener(browser: ListeningBrowser): { app: App; calls: Call[]; channel: LiveChannel } {
+	const channel = new LiveChannel(browser, { stateIntervalMs: 15 });
+	channels.push(channel);
+	const { app, calls } = fakeApp(() => failure("unexpected"));
+	const answer = app.callServerTool.bind(app);
+	app.callServerTool = async request => {
+		if (request.name !== "browser_stream") return await answer(request);
+		calls.push({ name: request.name, args: request.arguments ?? {} });
+		return { content: [], structuredContent: { ...(await channel.mint("b1")) } };
+	};
+	return { app, calls, channel };
+}
+
+async function until(dom: Dom, predicate: () => boolean): Promise<void> {
+	for (let attempt = 0; attempt < 150 && !predicate(); attempt += 1) await dom.settle();
+	expect(predicate()).toBe(true);
+}
+
+describe("the live connection", () => {
+	test("state reaches the View on the stream: one browser_stream call opens it and no tool call is made to learn what changed", async () => {
+		const browser = new ListeningBrowser();
+		const { app, calls } = appOnListener(browser);
+		const dom = await mount(<BrowserApp app={app} toolState={{ state: LIVE, seq: 1 }} />);
+		await until(dom, () => dom.text().includes("First title"));
+
+		browser.state = { ...browser.state, tabs: [{ id: "t1", title: "Retitled by the page", url: "https://example.com/", active: true, loading: false, favicon: null }] };
+		await until(dom, () => dom.text().includes("Retitled by the page"));
+		// Many more state reads happen on the listener than there are tool calls: there is exactly the one.
+		expect(calls.map(call => call.name)).toEqual(["browser_stream"]);
+		expect(calls[0]?.args).toEqual({ browserId: "b1" });
+	});
+
+	test("the picture watcher runs while the View shows the page, and stops while the human annotates it", async () => {
+		const browser = new ListeningBrowser();
+		const { app } = appOnListener(browser);
+		const dom = await mount(<BrowserApp app={app} toolState={{ state: LIVE, seq: 1 }} />);
+		await until(dom, () => browser.watchers === 1);
+
+		const annotate = dom.find('button[aria-label^="Annotate"]')[0] as Element;
+		await dom.click(annotate);
+		await until(dom, () => browser.watchers === 0);
+		// The state keeps coming while the picture is frozen: a tab retitled now still shows.
+		browser.state = { ...browser.state, tabs: [{ id: "t1", title: "Changed while annotating", url: "https://example.com/", active: true, loading: false, favicon: null }] };
+		await until(dom, () => dom.text().includes("Changed while annotating"));
+	});
+
+	test("a View that is torn down lets go of the listener: its picture watcher is released", async () => {
+		const browser = new ListeningBrowser();
+		const { app } = appOnListener(browser);
+		const dom = await mount(<BrowserApp app={app} toolState={{ state: LIVE, seq: 1 }} />);
+		await until(dom, () => browser.watchers === 1);
+
+		await unmountAll();
+		for (let attempt = 0; attempt < 150 && browser.watchers !== 0; attempt += 1) await new Promise(done => setTimeout(done, 20));
+		expect(browser.watchers).toBe(0);
 	});
 });

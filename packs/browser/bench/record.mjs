@@ -1,14 +1,17 @@
-// Video of a benchmark run: the same live frames the View shows (browser_frame, jpeg), captured with
-// their arrival time, then encoded by ffmpeg with a caption track burned in — the agent, the stage,
+// Video of a benchmark run: the same live pictures the View shows (the pack's direct stream, `browser_stream`),
+// captured with their arrival time, then encoded by ffmpeg with a caption track burned in — the agent, the stage,
 // a stage timer, a run timer and the agent's latest step. One recorder per agent (one browser).
 //
-// Frames are polled over the pack's own MCP server, so the video shows exactly what a person
+// The pictures are read from the same stream the View reads, so the video shows exactly what a person
 // watching the View would have seen, at the pace they would have seen it.
 import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-const POLL_MS = 100;
+/** The stream's framing (src/wire.ts): kind u8, JSON length u32le, body length u32le, the JSON, the body. Kind 1 is a picture, its body a JPEG. */
+const HEADER_BYTES = 9;
+const KIND_PICTURE = 1;
+const RETRY_MS = 200;
 
 const clock = (s) => {
   const m = Math.floor(s / 60);
@@ -31,30 +34,43 @@ export function startRecorder({ call, browserId, dir, title }) {
   /** Caption state changes over time: { at, stage, stageStart, step, verdict }. */
   const marks = [];
   let state = { stage: "", stageStart: 0, step: "", verdict: "" };
-  let lastId = null;
   let stopped = false;
+  const reading = new AbortController();
 
   const mark = (patch) => {
     state = { ...state, ...patch };
     marks.push({ at: now(), ...state });
   };
 
+  const save = (jpeg) => {
+    const file = `f${String(frames.length).padStart(6, "0")}.jpg`;
+    writeFileSync(join(dir, file), jpeg);
+    frames.push({ file, at: now() });
+  };
+
   const loop = (async () => {
     while (!stopped) {
-      const started = performance.now();
       try {
-        const frame = await call("browser_frame", { browserId, format: "jpeg", ...(lastId ? { since: lastId } : {}) });
-        if (frame?.frameId && !frame.unchanged && frame.frameId !== lastId) {
-          lastId = frame.frameId;
-          const file = `f${String(frames.length).padStart(6, "0")}.jpg`;
-          writeFileSync(join(dir, file), Buffer.from(frame.data, "base64"));
-          frames.push({ file, at: now() });
+        const { origin, token } = await call("browser_stream", { browserId });
+        const response = await fetch(`${origin}/s/${token}`, { signal: reading.signal });
+        const reader = response.body.getReader();
+        let buffer = Buffer.alloc(0);
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer = Buffer.concat([buffer, value]);
+          while (buffer.length >= HEADER_BYTES) {
+            const json = buffer.readUInt32LE(1);
+            const end = HEADER_BYTES + json + buffer.readUInt32LE(5);
+            if (buffer.length < end) break;
+            if (buffer[0] === KIND_PICTURE) save(buffer.subarray(HEADER_BYTES + json, end));
+            buffer = buffer.subarray(end);
+          }
         }
       } catch {
-        /* a frame can miss while a tab is switching; the next poll catches up */
+        /* the stream ends when the browser closes, and can miss while the pack restarts: ask again */
       }
-      const wait = POLL_MS - (performance.now() - started);
-      if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+      if (!stopped) await new Promise((r) => setTimeout(r, RETRY_MS));
     }
   })();
 
@@ -62,9 +78,10 @@ export function startRecorder({ call, browserId, dir, title }) {
     stage(stage) { mark({ stage, stageStart: now(), step: "", verdict: "" }); },
     step(step) { mark({ step }); },
     verdict(verdict) { mark({ verdict }); },
-    /** Stops polling and encodes `<dir>.mp4`. Returns its path, or null when there is nothing to encode. */
+    /** Stops reading and encodes `<dir>.mp4`. Returns its path, or null when there is nothing to encode. */
     async finish(outFile) {
       stopped = true;
+      reading.abort();
       await loop;
       const end = now();
       if (!frames.length) return null;

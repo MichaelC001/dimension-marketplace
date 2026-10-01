@@ -4,23 +4,22 @@
 // the shapes and engine identifiers come from the pack's own contracts module.
 import type { App } from "@modelcontextprotocol/ext-apps";
 import type { CallToolResult, ContentBlock } from "@modelcontextprotocol/sdk/types.js";
-import { BROWSER_APPS, BROWSER_ENGINES, DIALOG_TYPES, PUBLISH_STATUSES, TASK_AGENTS } from "../../src/contracts";
+import { BROWSER_APPS, BROWSER_ENGINES, DIALOG_TYPES, MAX_ELEMENT_ID_CHARS, MAX_ELEMENT_LABEL_CHARS, MAX_ELEMENT_TAG_CHARS, MAX_ELEMENTS_PER_REGION, PUBLISH_STATUSES, TASK_AGENTS } from "../../src/contracts";
 import type {
 	BrowserAction,
-	BrowserAnnotation,
+	BrowserAnnotationContext,
 	BrowserEngine,
 	BrowserFrame,
-	UnchangedFrame,
 	BrowserRegion,
 	BrowserState,
 	HandledDialog,
-	FrameFormat,
 	PublishField,
 	PublishRecord,
 	TabInfo,
 	TabOp,
 	TaskRun,
 	TaskStatus,
+	PageElement,
 } from "../../src/contracts";
 import { isRecord, readNumber, readString } from "./json";
 
@@ -62,6 +61,29 @@ function toolError(tool: string, result: CallToolResult): BrowserToolError {
 	const status = isRecord(structured) ? readString(structured, "status") : undefined;
 	if (status === "unknown") return new BrowserToolError(tool, `${reason} — it may have taken effect; check the page before retrying`, "unknown");
 	return new BrowserToolError(tool, reason, status === "failed" ? "failed" : null);
+}
+
+/**
+ * One element as the page described it. The page chose every byte of this, so none of it is trusted to be what the
+ * contract says: a field of the wrong type is empty, a string is cut to its bound again, and what is not a record at
+ * all is no element.
+ */
+function readElement(value: unknown): PageElement[] {
+	if (!isRecord(value)) return [];
+	const box = isRecord(value.box) ? value.box : {};
+	return [
+		{
+			tag: (readString(value, "tag") ?? "").slice(0, MAX_ELEMENT_TAG_CHARS),
+			id: (readString(value, "id") ?? "").slice(0, MAX_ELEMENT_ID_CHARS),
+			box: {
+				x: readNumber(box, "x") ?? 0,
+				y: readNumber(box, "y") ?? 0,
+				width: readNumber(box, "width") ?? 0,
+				height: readNumber(box, "height") ?? 0,
+			},
+			label: (readString(value, "label") ?? "").slice(0, MAX_ELEMENT_LABEL_CHARS),
+		},
+	];
 }
 
 function readTask(tool: string, value: unknown): TaskRun {
@@ -191,6 +213,11 @@ function readState(tool: string, value: unknown): BrowserState {
 	};
 }
 
+/** A state that arrived on the live stream, read the way a tool's answer is: a shape this View cannot read is raised, never drawn. */
+export function stateFromStream(value: unknown): BrowserState {
+	return readState("stream", value);
+}
+
 /** The one structured-content door. Every browser tool answers
  *  `structuredContent`; an `isError` result is raised, never rendered as data. */
 function structured(tool: string, result: CallToolResult): Record<string, unknown> {
@@ -219,6 +246,12 @@ export function mountFromToolResult(result: CallToolResult): MountResult | null 
 	} catch {
 		return null;
 	}
+}
+
+/** Where one View reads and writes the live channel: `GET {origin}/s/{token}` and `POST {origin}/i/{token}`. */
+export interface StreamGrant {
+	readonly origin: string;
+	readonly token: string;
 }
 
 export interface OpenOptions {
@@ -285,10 +318,10 @@ export class BrowserClient {
 		return next;
 	}
 
-	private async call(tool: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
+	private async call(tool: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<Record<string, unknown>> {
 		let result: CallToolResult;
 		try {
-			result = await this.app.callServerTool({ name: tool, arguments: args });
+			result = await this.app.callServerTool({ name: tool, arguments: args }, signal === undefined ? undefined : { signal });
 		} catch (cause) {
 			throw new BrowserToolError(tool, failureText(cause));
 		}
@@ -315,27 +348,26 @@ export class BrowserClient {
 		return readState("browser_state", await this.call("browser_state", { browserId }));
 	}
 
-	/** `jpeg`: the latest live screencast frame, answered from memory; with `since`
-	 *  (the frameId on screen) a still page answers `unchanged` and sends no pixels.
-	 *  `png`: a fresh full-quality capture whose frameId can be annotated. */
-	async frame(browserId: string, format: "png"): Promise<BrowserFrame>;
-	async frame(browserId: string, format: "jpeg", since?: string): Promise<BrowserFrame | UnchangedFrame>;
-	async frame(browserId: string, format: FrameFormat, since?: string): Promise<BrowserFrame | UnchangedFrame> {
+	/** A fresh full-quality PNG capture whose frameId can be annotated. The live picture does not come this way: it rides the stream (`stream`). */
+	async frame(browserId: string): Promise<BrowserFrame> {
 		const tool = "browser_frame";
-		const payload = await this.call(tool, since ? { browserId, format, since } : { browserId, format });
+		const payload = await this.call(tool, { browserId });
 		const frameId = readString(payload, "frameId");
 		if (frameId === undefined) throw new BrowserToolError(tool, "frame carried no frameId");
 		const state = readState(tool, payload.state);
-		if (payload.unchanged === true) return { state, frameId, unchanged: true };
 		const data = readString(payload, "data");
 		if (data === undefined || data.length === 0) throw new BrowserToolError(tool, "frame carried no image data");
-		return {
-			state,
-			frameId,
-			mimeType: readString(payload, "mimeType") === "image/png" ? "image/png" : "image/jpeg",
-			data,
-			capturedAt: readString(payload, "capturedAt") ?? new Date().toISOString(),
-		};
+		return { state, frameId, mimeType: "image/png", data, capturedAt: readString(payload, "capturedAt") ?? new Date().toISOString() };
+	}
+
+	/** Where to read this browser's live pictures and state and send the human's input: the pack's own loopback listener. One call per connection, never per picture. */
+	async stream(browserId: string): Promise<StreamGrant> {
+		const tool = "browser_stream";
+		const payload = await this.call(tool, { browserId });
+		const origin = readString(payload, "origin");
+		const token = readString(payload, "token");
+		if (origin === undefined || token === undefined || !/^http:\/\/127\.0\.0\.1:\d+$/.test(origin)) throw new BrowserToolError(tool, "the answer did not say where the live picture is");
+		return { origin, token };
 	}
 
 	/** Sizes every tab's viewport (CSS px) so the page fills the seat 1:1, rendered at
@@ -366,26 +398,49 @@ export class BrowserClient {
 		return readTask(tool, await this.call(tool, { browserId }));
 	}
 
-	async annotate(browserId: string, frameId: string, region: BrowserRegion, note: string): Promise<BrowserAnnotation> {
+	/** The page under the regions the human marked on the png frame `frameId`: its facts and the elements under each region. */
+	async annotate(browserId: string, frameId: string, regions: readonly BrowserRegion[], signal?: AbortSignal): Promise<BrowserAnnotationContext> {
 		const tool = "browser_annotate";
-		const payload = await this.call(tool, { browserId, frameId, region, note });
-		const data = readString(payload, "data");
-		if (data === undefined || data.length === 0) throw new BrowserToolError(tool, "annotation carried no image data");
-		const regionValue = isRecord(payload.region) ? payload.region : {};
+		const payload = await this.call(tool, { browserId, frameId, regions }, signal);
+		const scroll = isRecord(payload.scroll) ? payload.scroll : {};
+		const viewport = isRecord(payload.viewport) ? payload.viewport : {};
+		const entries = Array.isArray(payload.regions) ? payload.regions : [];
 		return {
 			url: readString(payload, "url") ?? "",
-			note: readString(payload, "note") ?? note,
-			region: {
-				x: readNumber(regionValue, "x") ?? region.x,
-				y: readNumber(regionValue, "y") ?? region.y,
-				width: readNumber(regionValue, "width") ?? region.width,
-				height: readNumber(regionValue, "height") ?? region.height,
+			title: readString(payload, "title") ?? "",
+			capturedAt: readString(payload, "capturedAt") ?? "",
+			readAt: readString(payload, "readAt") ?? "",
+			viewport: { width: readNumber(viewport, "width") ?? 0, height: readNumber(viewport, "height") ?? 0 },
+			scroll: {
+				x: readNumber(scroll, "x") ?? 0,
+				y: readNumber(scroll, "y") ?? 0,
+				width: readNumber(scroll, "width") ?? 0,
+				height: readNumber(scroll, "height") ?? 0,
 			},
-			capturedAt: readString(payload, "capturedAt") ?? new Date().toISOString(),
-			mimeType: "image/png",
-			data,
-			elements: readString(payload, "elements") ?? "",
+			regions: entries.map((entry, index) => {
+				const read = isRecord(entry) ? entry : {};
+				const region = isRecord(read.region) ? read.region : {};
+				const asked = regions[index];
+				return {
+					region: {
+						x: readNumber(region, "x") ?? asked?.x ?? 0,
+						y: readNumber(region, "y") ?? asked?.y ?? 0,
+						width: readNumber(region, "width") ?? asked?.width ?? 0,
+						height: readNumber(region, "height") ?? asked?.height ?? 0,
+					},
+					elements: Array.isArray(read.elements) ? read.elements.slice(0, MAX_ELEMENTS_PER_REGION).flatMap(readElement) : [],
+					truncated: read.truncated === true,
+				};
+			}),
 		};
+	}
+
+	/** Keeps the annotation kit's detail document for what was marked in `browserId`; answers the absolute path to read it at. */
+	async annotationFile(browserId: string, json: string): Promise<string> {
+		const tool = "browser_annotation_file";
+		const path = readString(await this.call(tool, { browserId, json }), "path");
+		if (path === undefined || path.length === 0) throw new BrowserToolError(tool, "the tool answered without a path");
+		return path;
 	}
 
 	/** The bar's Post. Answers the settled record: posted, failed or unknown. */

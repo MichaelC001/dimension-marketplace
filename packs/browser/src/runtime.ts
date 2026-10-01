@@ -47,19 +47,18 @@ import type {
 	LogEntry,
 	ModelShot,
 	ShotRequest,
+	PageScroll,
 	TabOp,
 	CredentialUse,
 	HandledDialog,
 	BrowserAction,
-	BrowserAnnotation,
+	BrowserAnnotationContext,
 	BrowserEngine,
 	BrowserFrame,
-	UnchangedFrame,
 	BrowserOpenOptions,
 	BrowserRegion,
 	BrowserRuntimePort,
 	BrowserState,
-	FrameFormat,
 	MouseButton,
 	PresetRef,
 	PublishCheck,
@@ -81,12 +80,14 @@ import type {
 	StepOutcome,
 	StepStatus,
 } from "./contracts.js";
-import { BROWSER_ENGINES, MAX_BATCH_STEPS, MAX_EVAL_EXPRESSION_CHARS, MAX_EVAL_RESULT_CHARS, MAX_VIEWPORT, MAX_WAIT_MS, MIN_VIEWPORT, TASK_AGENTS } from "./contracts.js";
+import { BROWSER_ENGINES, MAX_ANNOTATION_REGIONS, MAX_BATCH_STEPS, MAX_EVAL_EXPRESSION_CHARS, MAX_EVAL_RESULT_CHARS, MAX_VIEWPORT, MAX_WAIT_MS, MIN_VIEWPORT, TASK_AGENTS } from "./contracts.js";
 import { credentialOrigin, resolveCredential, savedPassword, savedPasswords } from "./credentials.js";
 import { assertEngineAvailable, createEngineDriver } from "./engines/index.js";
 import { launchReader } from "./engines/puppeteer.js";
-import type { EngineDriver, EngineState, EvalOutcome, PageReader, PasswordSource, PerformOutcome, WaitCondition } from "./engines/types.js";
-import { cropRegion, MAX_FRAME_BYTES } from "./image.js";
+import type { EngineDriver, EngineState, EvalOutcome, LiveFrame, PageReader, PasswordSource, PerformOutcome, WaitCondition } from "./engines/types.js";
+import { AnnotationFiles } from "./annotation-file.js";
+import { clampRegion, MAX_FRAME_BYTES } from "./image.js";
+import { type AdmittedInput, admitInput } from "./input.js";
 import { type Publication, cancel, confirm, isPending, prepare, publishRecord, requirePending, validateMode, validateRecipe, waitSettled } from "./publish.js";
 import { blockedReason, DEFAULT_READ_CHARS, MAX_READ_CHARS, READ_TIMEOUT_MS, readPolicy, TIMEOUT_REASON } from "./read.js";
 import { ActionNotDispatched, fail, ProfileStore, validateProfile } from "./store.js";
@@ -117,8 +118,10 @@ const MAX_BATCH_DIALOGS = 5;
 const MAX_SNAPSHOT_CHARS = 20_000;
 const MAX_ELEMENT_CHARS = 4_000;
 const MAX_TEXT_INPUT = 4_096;
-const MAX_NOTE_CHARS = 8_192;
 const MAX_SELECTOR_CHARS = 512;
+/** How long, in all, a capture waits for a scrolling page to come to rest: this many captures this far apart. */
+const SCROLL_SETTLE_ATTEMPTS = 6;
+const SCROLL_SETTLE_MS = 100;
 const MAX_TAB_ID_CHARS = 128;
 const MOUSE_BUTTONS: readonly MouseButton[] = ["left", "right", "middle"];
 const MAX_URL_LENGTH = 2_048;
@@ -148,6 +151,8 @@ const NAMED_KEYS: Record<string, true> = {
 };
 /** View input that can press the site's own submit; scroll, hover and navigation cannot. */
 const TOUCHING_KINDS: Partial<Record<BrowserAction["kind"], true>> = { click: true, press: true, type: true, insert: true };
+/** The same, for the direct channel: a press, a release, a key or pasted text can press the site's own submit; a move and a wheel cannot. */
+const touchesPage = (event: AdmittedInput): boolean => event.kind !== "wheel" && !(event.kind === "mouse" && event.type === "move");
 
 export interface BrowserRuntimeOptions {
 	/** Profile root; defaults to `$INSO_HOME/browser` else `~/.inso/browser`. */
@@ -191,12 +196,15 @@ interface PlannedEval { kind: "eval"; expression: string }
 
 type PlannedStep = BrowserAction | PlannedWait | PlannedTab | PlannedEval;
 
+/** A png frame the View was handed. The picture itself is the View's; this is what annotating it must still agree with. */
 interface FrameRecord {
 	id: string;
-	bytes: Buffer;
 	url: string;
+	title: string;
 	revision: number;
 	viewport: Viewport;
+	/** Where the page was scrolled when the picture was taken. */
+	scroll: PageScroll;
 	capturedAt: string;
 }
 
@@ -214,6 +222,8 @@ interface Entry {
 	frames: FrameRecord[];
 	/** Per-browser serializer: page reads and actions run in order. */
 	queue: Promise<unknown>;
+	/** The human's input batches, in order, apart from `queue`: input never waits for page work. */
+	inputQueue: Promise<unknown>;
 	closed: boolean;
 	/** The running or most recent task. */
 	task: TaskRun | null;
@@ -242,10 +252,13 @@ interface Entry {
 	/** The passive sign-in look: debounced after a page loads, one at a time, once more as the browser closes. */
 	probe: { timer: NodeJS.Timeout | undefined; running: Promise<void> | undefined; again: boolean };
 	logNoticed: number;
+	/** Where the detail documents of what the human marks in this browser are kept: shared for a saved profile, its own throwaway folder otherwise. */
+	annotations: AnnotationFiles;
 }
 
 export class BrowserRuntime implements BrowserRuntimePort {
 	private readonly store: ProfileStore;
+	private readonly annotationFiles: AnnotationFiles;
 	private readonly options: BrowserRuntimeOptions;
 	private readonly byId = new Map<string, Entry>();
 	private readonly byProfile = new Map<string, Entry>();
@@ -291,6 +304,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	constructor(options: BrowserRuntimeOptions = {}) {
 		this.options = options;
 		this.store = new ProfileStore(options.rootDir);
+		this.annotationFiles = new AnnotationFiles(join(this.store.rootDir, "annotations"));
 		// Only what a dead server abandoned: a live server's throwaway browsers are never touched.
 		this.store.sweepEphemeral();
 	}
@@ -387,10 +401,13 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		// directory of its own that goes with the browser.
 		let directory: string;
 		let free: () => void;
+		let annotations = this.annotationFiles;
 		if (profile === null) {
 			const ephemeral = this.store.createEphemeral();
 			directory = ephemeral.userDataDir;
 			free = () => this.discard(ephemeral.dir);
+			// What the human marked on a throwaway page is as private as the page: the folder goes when the browser does.
+			annotations = new AnnotationFiles(join(ephemeral.dir, "annotations"));
 		} else {
 			const lock = this.store.acquireLock(profile);
 			// Native backends never reuse an incompatible engine's cookie store.
@@ -420,8 +437,8 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			entry = {
 				browserId: randomBytes(24).toString("base64url"),
 				profile, engine, viewport: initial.viewport, documentId: initial.documentId,
-				driver, release, revision: 1, frames: [], queue: Promise.resolve(), closed: false,
-				task: null, worker: null, publish: null, secrets: new Set(), logRead: 0, logNoticed: 0,
+				driver, release, revision: 1, frames: [], queue: Promise.resolve(), inputQueue: Promise.resolve(), closed: false,
+				task: null, worker: null, publish: null, secrets: new Set(), logRead: 0, logNoticed: 0, annotations,
 				opener, probe: { timer: undefined, running: undefined, again: false },
 			};
 			if (profile !== null && profile !== RELAY_PROFILE) entry.notice = this.touchProfile(profile, driver.app);
@@ -542,30 +559,62 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		return await this.serialize(this.require(browserId), async (entry) => this.redact(entry, await this.buildState(entry)));
 	}
 
+	/** The live picture, for the View's direct channel (stream.ts): the driver's own cast, never queued behind page work. */
+	watchFrames(browserId: string, onFrame: (frame: LiveFrame) => void): () => void {
+		return this.require(browserId).driver.watchFrames(onFrame);
+	}
+
+	/** `state`, but NOT queued behind page work: the live view keeps reading it while a navigation or action is in flight. */
+	async liveState(browserId: string): Promise<BrowserState> {
+		const entry = this.require(browserId);
+		return this.redact(entry, await this.buildState(entry));
+	}
+
 	/**
-	 * `png` (default): a fresh capture, retained so it can be annotated.
-	 * `jpeg`: the live screencast's newest frame, straight from memory. It is
-	 * deliberately NOT queued behind page work — the live view keeps moving
-	 * while a navigation or action is in flight — and is not annotatable.
-	 * `since`: the frameId the caller already shows; while it is still the
-	 * newest, only the state comes back — a still page costs no pixels.
+	 * The human's own mouse, wheel and keys on the active tab (the View's direct channel). Like the live picture it is NOT queued behind
+	 * page work, so a click never waits for a navigation, but batches apply one after another. The rules `act` has for the View hold:
+	 * a task owns its page, a click or key on the page a publish waits on marks the publish touched, and while the bar's Post is being
+	 * submitted the page takes no input at all (an `act` waited behind it in the page queue; this door has to refuse).
 	 */
-	async frame(browserId: string, format?: FrameFormat): Promise<BrowserFrame>;
-	async frame(browserId: string, format: "jpeg", since: string | undefined): Promise<BrowserFrame | UnchangedFrame>;
-	async frame(browserId: string, format: FrameFormat = "png", since?: string): Promise<BrowserFrame | UnchangedFrame> {
-		if (format === "jpeg") {
-			const entry = this.require(browserId);
-			const live = await entry.driver.liveFrame();
-			const state = this.redact(entry, await this.buildState(entry));
-			if (since !== undefined && since === live.id) return { state, frameId: live.id, unchanged: true };
-			return { state, frameId: live.id, mimeType: "image/jpeg", data: live.data, capturedAt: live.capturedAt };
-		}
-		if (format !== "png") fail("bad_format", `format must be "jpeg" or "png"`);
+	async input(browserId: string, events: unknown): Promise<void> {
+		const entry = this.require(browserId);
+		const admitted = admitInput(events, entry.viewport);
+		const run = async (): Promise<void> => {
+			if (entry.closed) fail("unknown_browser", "unknown or already closed browserId");
+			refuseWhileBusy(entry, "app");
+			refuseWhileSubmitting(entry);
+			const pinned = isPending(entry.publish) && admitted.some(touchesPage) ? entry.publish : null;
+			// Another tab is not the page being confirmed; an unreadable state counts as the pinned one.
+			const touching = pinned !== null && ((await entry.driver.state().catch(() => null))?.activeTabId ?? pinned.record.tabId) === pinned.record.tabId ? pinned : null;
+			// The state read let the Post start: this check and the mark below must run with nothing awaited between them.
+			refuseWhileSubmitting(entry);
+			// Marked BEFORE the press is sent: a Post that starts while it is in flight must already see it and never click submit.
+			const touchedBefore = touching?.touchedWhilePending ?? false;
+			if (touching) touching.touchedWhilePending = true;
+			try {
+				await entry.driver.input(admitted);
+			} catch (error) {
+				if (error instanceof ActionNotDispatched) {
+					// Provably nothing reached the page, so the publish was not touched by this batch.
+					if (touching) touching.touchedWhilePending = touchedBefore;
+				} else {
+					entry.revision += 1;
+				}
+				throw error;
+			}
+		};
+		const next = entry.inputQueue.then(run, run);
+		entry.inputQueue = next.catch(() => undefined);
+		return next;
+	}
+
+	/** A fresh PNG capture, retained so it can be annotated. */
+	async frame(browserId: string): Promise<BrowserFrame> {
 		return await this.serialize(this.require(browserId), async (entry) => {
 			const before = await this.refreshState(entry);
 			const revision = entry.revision;
 			const url = before.url;
-			const shot = await entry.driver.screenshot();
+			const { shot, scroll } = await this.captureSettled(entry);
 			const capturedAt = new Date().toISOString();
 			const state = await this.buildState(entry);
 			if (entry.revision !== revision || state.url !== url) {
@@ -577,10 +626,11 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			}
 			const record: FrameRecord = {
 				id: randomBytes(12).toString("hex"),
-				bytes,
 				url,
+				title: state.title,
 				revision,
 				viewport: entry.viewport,
+				scroll,
 				capturedAt,
 			};
 			entry.frames.push(record);
@@ -593,6 +643,24 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				capturedAt: record.capturedAt,
 			};
 		});
+	}
+
+	/**
+	 * The picture of the page and where it is scrolled, as one thing. A wheel scroll animates for a moment, and a picture
+	 * taken in the middle of it shows no position the page was ever at; the position is read on both sides of the capture
+	 * and the capture is taken again, a few times, until they agree.
+	 */
+	private async captureSettled(entry: Entry): Promise<{ shot: Uint8Array; scroll: PageScroll }> {
+		for (let attempt = 1; ; attempt += 1) {
+			const from = await entry.driver.scroll();
+			const shot = await entry.driver.screenshot();
+			const scroll = await entry.driver.scroll();
+			if (scroll.x === from.x && scroll.y === from.y) return { shot, scroll };
+			if (attempt === SCROLL_SETTLE_ATTEMPTS) fail("stale_frame", "The page kept scrolling while the picture was taken; request a new frame.");
+			const { promise: rested, resolve } = Promise.withResolvers<void>();
+			setTimeout(resolve, SCROLL_SETTLE_MS);
+			await rested;
+		}
 	}
 
 	/** A read like `snapshot`; the picture is for a model, so nothing of it is kept (`entry.frames` holds annotatable frames only). */
@@ -642,23 +710,18 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	}
 
 	/**
-	 * Crop the STORED bytes of `frameId` and attach bounded live element context.
+	 * The page under the regions the human marked on the retained frame `frameId`: its address and title as captured,
+	 * where it is scrolled, and the elements under each region. The picture is the View's own frame; the shared
+	 * annotation kit paints the marks onto it and cuts the detail crops, so nothing here carries pixels.
 	 *
-	 * Honesty note baked into the returned payload: the crop is the captured
-	 * frame, while the element list is read from the page as it is NOW. On a
-	 * dynamic page those can disagree even at the same revision; we never claim
+	 * Honesty note baked into the answer: the frame is what was captured at `capturedAt`, the elements are read from the
+	 * page as it is NOW (`readAt`). On a dynamic page those can disagree even at the same revision; we never claim
 	 * they are the same instant.
 	 */
-	async annotate(
-		browserId: string,
-		frameId: string,
-		region: BrowserRegion,
-		note: string,
-	): Promise<BrowserAnnotation> {
+	async annotate(browserId: string, frameId: string, regions: readonly BrowserRegion[]): Promise<BrowserAnnotationContext> {
 		const entry = this.require(browserId);
-		const text = note ?? "";
-		if (typeof text !== "string" || text.length > MAX_NOTE_CHARS) {
-			fail("bad_note", `note must be a string of at most ${MAX_NOTE_CHARS} characters`);
+		if (!Array.isArray(regions) || regions.length === 0 || regions.length > MAX_ANNOTATION_REGIONS) {
+			fail("bad_region", `annotate needs between 1 and ${MAX_ANNOTATION_REGIONS} regions`);
 		}
 		return await this.serialize(entry, async () => {
 			await this.refreshState(entry);
@@ -672,22 +735,37 @@ export class BrowserRuntime implements BrowserRuntimePort {
 					`frame ${frameId} was captured at revision ${record.revision}; the page is now at revision ${entry.revision}. Capture a new frame.`,
 				);
 			}
-			const { png, region: clamped } = cropRegion(record.bytes, region);
-			const elements = await entry.driver.elements(clamped, MAX_ELEMENT_CHARS);
+			const clamped = regions.map((region) => clampRegion(region, record.viewport));
+			const read = await entry.driver.elements(clamped, MAX_ELEMENT_CHARS);
 			await this.refreshState(entry);
 			if (record.revision !== entry.revision) fail("stale_frame", "The document changed while reading annotation context.");
-			return {
+			// A scroll is not a new document, so it never moved the revision. Elements are read where the page is NOW; the
+			// picture shows where it was.
+			if (read.scroll.x !== record.scroll.x || read.scroll.y !== record.scroll.y) {
+				fail(
+					"stale_frame",
+					`The page is scrolled to ${read.scroll.x},${read.scroll.y} now and was at ${record.scroll.x},${record.scroll.y} when the picture was taken. Capture a new frame.`,
+				);
+			}
+			return this.redact(entry, {
 				url: record.url,
-				note: text,
-				region: clamped,
+				title: record.title,
 				capturedAt: record.capturedAt,
-				mimeType: "image/png" as const,
-				data: png.toString("base64"),
-				elements:
-					`${this.redact(entry, elements)}\n\n[live DOM read at ${new Date().toISOString()}, revision ${entry.revision}; ` +
-					`the image is the frame captured at ${record.capturedAt} — a dynamic page may have changed between them]`,
-			};
+				readAt: new Date().toISOString(),
+				viewport: record.viewport,
+				scroll: record.scroll,
+				regions: clamped.map((region, index) => ({
+					region,
+					elements: read.regions[index]?.elements ?? [],
+					truncated: read.regions[index]?.truncated ?? false,
+				})),
+			});
 		});
+	}
+
+	/** Keeps the kit's detail document for the browser the human marked in: a throwaway browser's goes with it. */
+	saveAnnotationDetail(browserId: string, json: string): string {
+		return this.require(browserId).annotations.save(json);
 	}
 
 	async profileList(asker?: string): Promise<ProfileListing[]> {
@@ -1821,6 +1899,13 @@ function refuseWhileBusy(entry: Entry, caller: ToolCaller | undefined): void {
 function refuseWhilePublishing(entry: Entry, caller: ToolCaller | undefined): void {
 	if (caller !== "app" && isPending(entry.publish)) {
 		fail("publish_pending", "a post awaits confirmation on this browser; confirm or cancel it (browser_publish_confirm / browser_publish_cancel) or wait with browser_publish_wait");
+	}
+}
+
+/** The bar's Post is clicking submit and waiting for its receipt: the page is its alone until it settles, or the human could post twice or change what is posted. */
+function refuseWhileSubmitting(entry: Entry): void {
+	if (entry.publish?.confirming && isPending(entry.publish)) {
+		fail("publish_pending", "the Post is being submitted; the page takes no input until it is done");
 	}
 }
 

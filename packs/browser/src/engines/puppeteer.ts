@@ -34,14 +34,15 @@ import { mkdirSync, statSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 import puppeteer, { TimeoutError } from "puppeteer-core";
 import type { Browser, BrowserContext, CDPSession, ElementHandle, Frame, HTTPRequest, HTTPResponse, JSHandle, KeyInput, Page, Protocol, Target } from "puppeteer-core";
-import { type BrowserAction, type BrowserApp, type BrowserRegion, type DialogType, type ElementInspection, type HandledDialog, type LogEntry, MAX_LOG_ENTRIES, type ModelShot, type ShotRequest, type TabInfo, type Viewport } from "../contracts.js";
+import { type BrowserAction, type BrowserApp, type BrowserRegion, type DialogType, type ElementInspection, type HandledDialog, type LogEntry, MAX_ELEMENT_ID_CHARS, MAX_ELEMENT_LABEL_CHARS, MAX_ELEMENT_TAG_CHARS, MAX_ELEMENTS_PER_REGION, MAX_LOG_ENTRIES, type ModelShot, type PageElements, type PageScroll, type ShotRequest, type TabInfo, type Viewport } from "../contracts.js";
 import { FaviconCache } from "../favicon.js";
 import { MAX_FRAME_BYTES } from "../image.js";
 import { ActionNotDispatched, BrowserRuntimeError, fail } from "../store.js";
 import {
 	ELEMENT_LABEL_SCRIPT,
 	ELEMENT_TEXT_SCRIPT,
-	ELEMENTS_IN_REGION_SCRIPT,
+	ELEMENTS_IN_REGIONS_SCRIPT,
+	SCROLL_SCRIPT,
 	FAVICON_HREF_SCRIPT,
 	FOCUSED_LEAF_SCRIPT,
 	FRAME_INSET_SCRIPT,
@@ -60,6 +61,7 @@ import {
 	UA_HINTS_SCRIPT,
 } from "./page-scripts.js";
 import { watchPageLog } from "./page-log.js";
+import { type AdmittedInput, inputCall } from "../input.js";
 import { type HeadfulIdentity, identityPerBinary, type ResolvedBrowser, resolveBrowser, turnOffPasswordSaving, UA_HINTS, viewLaunchOptions, withTimeout } from "./launch.js";
 import type { EngineDriver, EngineOptions, EngineState, EvalOutcome, FieldRead, LiveFrame, PageRead, PageReader, PasswordSource, PerformOutcome, ReadOutcome, ReadPolicy, WaitCondition } from "./types.js";
 
@@ -81,9 +83,11 @@ const ACTION_TIMEOUT_MS = 15_000;
 const LAUNCH_TIMEOUT_MS = 60_000;
 const CLOSE_TIMEOUT_MS = 15_000;
 const FAVICON_SCRIPT_TIMEOUT_MS = 2_000;
-/** How long a freshly started screencast gets to deliver its first frame before one is captured. */
-const FIRST_FRAME_WAIT_MS = 500;
-const SCREENCAST_QUALITY = 80;
+/** How long a freshly started screencast gets to deliver its first picture before one is captured: Chrome sends nothing for a page that is not changing. */
+const FIRST_FRAME_WAIT_MS = 150;
+const SCREENCAST_QUALITY = 70;
+/** A batch of the human's input gets this long: a renderer stuck in a navigation never acknowledges, and the View must hear that. */
+const INPUT_TIMEOUT_MS = 5_000;
 /** A model's picture: the browser's own webp at this quality, its longest edge at most this many CSS px. */
 const MODEL_SHOT_QUALITY = 70;
 const MODEL_SHOT_EDGE = 1_024;
@@ -571,11 +575,11 @@ function answerDialogs(cdp: CDPSession, log: DialogLog): void {
 	});
 }
 
-/** The live screencast of one tab and its newest frame. */
+/** The live screencast of one tab: the page size it was started at and its newest picture. */
 interface Screencast {
 	tab: Tab;
+	viewport: Viewport;
 	frame: LiveFrame | null;
-	first: PromiseWithResolvers<void>;
 	onFrame: (event: Protocol.Page.ScreencastFrameEvent) => void;
 }
 
@@ -611,8 +615,8 @@ class PuppeteerDriver implements EngineDriver {
 	readonly #onPageLoaded: (() => void) | undefined;
 	readonly #onTargetCreated: (target: Target) => void;
 	readonly #onDisconnected: () => void;
-	/** Set once the live view asked for frames; from then on the active tab is always cast. */
-	#liveWanted = false;
+	/** Everyone watching: the active tab is cast while this is not empty, and not otherwise. */
+	readonly #watchers = new Set<(frame: LiveFrame) => void>();
 	#cast: Screencast | undefined;
 	/** Screencast start/stop run in order; a tab switch never interleaves with another. */
 	#castChain: Promise<void> = Promise.resolve();
@@ -798,28 +802,33 @@ class PuppeteerDriver implements EngineDriver {
 		}
 	}
 
-	async liveFrame(): Promise<LiveFrame> {
-		const active = this.#activeTab();
-		this.#liveWanted = true;
-		if (this.#cast?.tab !== active) await this.#restartScreencast();
-		const cast = this.#cast;
-		if (!cast || cast.tab !== active) fail("tab_switched", "The active tab changed while starting the live view; ask again.");
-		if (!cast.frame) {
-			const { promise: waited, resolve } = Promise.withResolvers<void>();
-			const timer = setTimeout(resolve, FIRST_FRAME_WAIT_MS);
-			await Promise.race([cast.first.promise, waited]);
-			clearTimeout(timer);
+	watchFrames(listener: (frame: LiveFrame) => void): () => void {
+		this.#assertOpen();
+		this.#watchers.add(listener);
+		if (this.#watchers.size === 1) void this.#restartScreencast().catch(() => undefined);
+		else {
+			// A page that is not changing sends nothing more: the newest picture is what a late watcher is owed.
+			const shown = this.#cast?.frame;
+			if (shown) queueMicrotask(() => { if (this.#watchers.has(listener)) listener(shown); });
 		}
-		if (!cast.frame) {
-			// A page that has not painted since the cast began sends nothing yet:
-			// capture once so the view is never blank. The cast replaces it on the
-			// next paint.
-			const shot = await this.#read(() =>
-				active.cdp.send("Page.captureScreenshot", { format: "jpeg", quality: SCREENCAST_QUALITY }),
-			);
-			cast.frame ??= { id: `live-${active.id}-${++this.#frameSeq}`, data: shot.data, capturedAt: new Date().toISOString() };
-		}
-		return cast.frame;
+		return () => {
+			if (!this.#watchers.delete(listener) || this.#watchers.size > 0) return;
+			void this.#stopScreencast().catch(() => undefined);
+		};
+	}
+
+	async input(events: readonly AdmittedInput[]): Promise<void> {
+		const tab = this.#activeTab();
+		await withTimeout(
+			(async () => {
+				for (const event of events) {
+					const { method, params } = inputCall(event);
+					await tab.cdp.send(method, params as never);
+				}
+			})(),
+			INPUT_TIMEOUT_MS,
+			"input",
+		);
 	}
 
 	/**
@@ -846,8 +855,17 @@ class PuppeteerDriver implements EngineDriver {
 		return parts.join("\n\n");
 	}
 
-	async elements(region: BrowserRegion, limit: number): Promise<string> {
-		return await this.#activeTab().page.evaluate(ELEMENTS_IN_REGION_SCRIPT, region, limit);
+	async elements(regions: readonly BrowserRegion[], limit: number): Promise<{ scroll: PageScroll; regions: PageElements[] }> {
+		return await this.#activeTab().page.evaluate(ELEMENTS_IN_REGIONS_SCRIPT, [...regions], limit, {
+			tag: MAX_ELEMENT_TAG_CHARS,
+			id: MAX_ELEMENT_ID_CHARS,
+			label: MAX_ELEMENT_LABEL_CHARS,
+			count: MAX_ELEMENTS_PER_REGION,
+		});
+	}
+
+	async scroll(): Promise<PageScroll> {
+		return await this.#activeTab().page.evaluate(SCROLL_SCRIPT);
 	}
 
 	// -----------------------------------------------------------------------
@@ -1178,6 +1196,7 @@ class PuppeteerDriver implements EngineDriver {
 		this.#closed = true;
 		this.#browser.off("targetcreated", this.#onTargetCreated);
 		this.#browser.off("disconnected", this.#onDisconnected);
+		this.#watchers.clear();
 		await this.#stopScreencast();
 		const tabs = [...this.#tabs];
 		await Promise.all(tabs.map((tab) => tab.cdp.detach().catch(() => undefined)));
@@ -1324,7 +1343,7 @@ class PuppeteerDriver implements EngineDriver {
 		// A hidden tab renders no frames: screenshots crawl and input waits
 		// forever for one. The shown tab is always the front one.
 		await tab.page.bringToFront().catch(() => undefined);
-		if (this.#liveWanted) await this.#restartScreencast();
+		if (this.#watchers.size > 0) await this.#restartScreencast();
 	}
 
 	#tabById(tabId: string): Tab {
@@ -1358,29 +1377,27 @@ class PuppeteerDriver implements EngineDriver {
 		this.#viewport = viewport;
 		this.#scale = scale;
 		await Promise.all(this.#tabs.map((tab) => tab.page.setViewport({ ...viewport, deviceScaleFactor: scale }).catch(() => undefined)));
-		if (this.#liveWanted) {
+		if (this.#watchers.size > 0) {
 			await this.#stopScreencast();
 			await this.#restartScreencast();
 		}
 	}
 
-	/** Cast the CURRENT active tab, stopping whatever was cast before. Ordered. */
+	/** Cast the CURRENT active tab, stopping whatever was cast before, while anyone watches. Ordered. */
 	#restartScreencast(): Promise<void> {
 		const step = this.#castChain.then(async () => {
 			const tab = this.#active;
-			if (this.#cast?.tab === tab) return;
+			if (this.#cast?.tab === tab || this.#watchers.size === 0) return;
 			await this.#stopScreencastNow();
 			if (this.#closed || tab.page.isClosed()) return;
 			const cast: Screencast = {
 				tab,
+				viewport: this.#viewport,
 				frame: null,
-				first: Promise.withResolvers<void>(),
 				onFrame: (event) => {
-					// Every frame is acknowledged, or Chrome stops sending them.
+					// Every picture is acknowledged, or Chrome stops sending them.
 					void tab.cdp.send("Page.screencastFrameAck", { sessionId: event.sessionId }).catch(() => undefined);
-					if (this.#cast !== cast) return;
-					cast.frame = { id: `live-${tab.id}-${++this.#frameSeq}`, data: event.data, capturedAt: new Date().toISOString() };
-					cast.first.resolve();
+					if (this.#cast === cast) this.#emit(cast, Buffer.from(event.data, "base64"));
 				},
 			};
 			this.#cast = cast;
@@ -1394,9 +1411,31 @@ class PuppeteerDriver implements EngineDriver {
 					everyNthFrame: 1,
 				})
 				.catch(() => undefined);
+			void this.#stillIfNone(cast);
 		});
 		this.#castChain = step.catch(() => undefined);
 		return step;
+	}
+
+	/** One picture to every watcher, and the newest one kept for a watcher who joins later. */
+	#emit(cast: Screencast, jpeg: Uint8Array): void {
+		const frame: LiveFrame = { id: `live-${cast.tab.id}-${++this.#frameSeq}`, jpeg, viewport: cast.viewport, capturedAt: Date.now() };
+		cast.frame = frame;
+		for (const listener of [...this.#watchers]) {
+			try {
+				listener(frame);
+			} catch (error) {
+				console.error("A live frame listener failed:", error);
+			}
+		}
+	}
+
+	/** A page that has not painted since the cast began sends nothing: capture one picture so the view is never blank. The cast's own picture wins when it comes first. */
+	async #stillIfNone(cast: Screencast): Promise<void> {
+		await sleep(FIRST_FRAME_WAIT_MS);
+		if (cast.frame !== null || this.#cast !== cast) return;
+		const shot = await this.#read(() => cast.tab.cdp.send("Page.captureScreenshot", { format: "jpeg", quality: SCREENCAST_QUALITY })).catch(() => null);
+		if (shot !== null && cast.frame === null && this.#cast === cast) this.#emit(cast, Buffer.from(shot.data, "base64"));
 	}
 
 	#stopScreencast(): Promise<void> {

@@ -3,15 +3,18 @@
 // `useApp` (from the public `@modelcontextprotocol/ext-apps/react`) creates the
 // App, opens the PostMessageTransport to the host and runs `ui/initialize`;
 // `useHostStyles` applies the host's own CSS variables and fonts, and
-// `useDocumentTheme` reports the theme the host set on the document. No private
-// kit, no host window access, no hard-coded endpoint — every byte of state
-// comes over the bridge.
+// `useDocumentTheme` reports the theme the host set on the document. No host
+// window access, no hard-coded endpoint — every byte of state comes over the
+// bridge. The only kit it draws on is the shared annotation one, for marking
+// up the page.
 import { useApp, useDocumentTheme, useHostStyles } from "@modelcontextprotocol/ext-apps/react";
-import { StrictMode, useState } from "react";
+import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserApp } from "./browser-app";
 import { mountFromToolResult, type ToolMount } from "./browser-client";
+import { followSafeArea } from "./safe-area";
 import "@fraym/ui/theme.css"
+import "@dimension/mcp-app-kit/annotate/annotate.css";
 import "./style.css";
 
 function Root() {
@@ -35,6 +38,11 @@ function Root() {
 	});
 	useHostStyles(app, app?.getHostContext());
 	const theme = useDocumentTheme();
+	// The host's orb floats over a corner of this View: the kit's footer keeps clear of it once the room it takes is on the document.
+	useEffect(() => {
+		if (!isConnected || app === null) return;
+		return followSafeArea(app);
+	}, [app, isConnected]);
 
 	if (error !== null) {
 		return (
