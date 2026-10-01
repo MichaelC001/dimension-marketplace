@@ -6,6 +6,8 @@ A group of small useful things behind one switch: `present` shows you a file as 
 the Viewer opens that file beside the conversation and lets you annotate it, and two stream rules stop
 the agent mid-edit when it writes a code comment.
 
+Replaces the separate Viewer and Ban Comments plugins; if you still have them installed the app removes them for you.
+
 ## What it contains
 
 - **Tool `present`**, loaded eagerly. One parameter, `path`: a file path, or an array of up to 12 (a
