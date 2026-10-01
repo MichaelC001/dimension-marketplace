@@ -27,6 +27,8 @@ interface RawRow {
 let rootRows: readonly RawRow[] = [];
 /** Every list the (fake) kit was asked to fold — i.e. what survived the desk filter. */
 let kitInputs: (readonly RawRow[])[] = [];
+/** What the (fake) kit's presence resolver answers for a row; `null` = the status dot. Set by the test that cares. */
+let presenceFor: (item: { readonly id: string; readonly active?: boolean }) => ReactNode = () => null;
 
 const passthrough = ({ children }: { readonly children?: ReactNode }) => createElement("span", null, children);
 const button = ({ children, ...rest }: { readonly children?: ReactNode }) =>
@@ -44,7 +46,7 @@ mock.module("@fraym/ui", () => ({
 	useObservable: (source: { subscribe: (fn: () => void) => () => void; getSnapshot: () => unknown }) =>
 		useSyncExternalStore(source.subscribe, source.getSnapshot),
 	useStandardRootFacts: () => ({ sessions: rootRows }),
-	useRailSessionPresence: () => () => null,
+	useRailSessionPresence: () => (item: { readonly id: string; readonly active?: boolean }) => presenceFor(item),
 	// The kit's own pair: `useRailActionSet` resolves the ACTIVE space's declared actions,
 	// `FraymRailActions` draws them. Stubbed to expose exactly which actions the pack hands over.
 	useRailActionSet: (spaces: readonly { readonly id: string; readonly rail?: { readonly actions: readonly unknown[] } }[], id: string) =>
@@ -100,6 +102,7 @@ const roots: Root[] = [];
 beforeEach(() => {
 	rootRows = [];
 	kitInputs = [];
+	presenceFor = () => null;
 	const { window } = parseHTML('<html><head></head><body><div id="root"></div></body></html>');
 	// linkedom has no layout: the menu measures itself, so give it a box and a focus().
 	const proto = window.HTMLElement.prototype as unknown as Record<string, unknown>;
@@ -340,6 +343,46 @@ describe("a verb the host does not offer is a control that does not exist", () =
 		await click(archive);
 		expect((calls.archiveSessions?.[0]?.[0] as unknown[]).length).toBe(1);
 		expect(document.querySelector('[role="menu"]')).toBeNull();
+	});
+});
+
+describe("what a row re-renders for", () => {
+	/** Stands for the kit's avatar: counts how many times each row's presence is rendered. */
+	const presenceRenders: Record<string, number> = {};
+	function Avatar({ id }: { readonly id: string; readonly signals: unknown; readonly energy: number }) {
+		presenceRenders[id] = (presenceRenders[id] ?? 0) + 1;
+		return createElement("i", { "data-avatar": id });
+	}
+
+	test("a live avatar moving on the open session does not re-render the other rows, even though the resolver is a new function", async () => {
+		rootRows = [session("a", "Open one", 1), session("b", "Other one", 2), session("c", "Third one", 3)];
+		let energy = 0.2;
+		// The resolver is rebuilt by the kit on every live flush; only the open row's answer actually differs.
+		presenceFor = item =>
+			createElement(Avatar, { id: item.id, energy: item.active ? energy : 0, signals: { state: "thinking", energy: item.active ? energy : 0 } });
+		const snapshot = () => facts("", [], { workspaceId: "inso-personal", sessionId: "a" });
+		let current = snapshot();
+		const listeners = new Set<() => void>();
+		const rail = {
+			subscribe: (fn: () => void) => (listeners.add(fn), () => listeners.delete(fn)),
+			getSnapshot: () => current,
+		};
+		const root = createRoot(container);
+		roots.push(root);
+		await act(async () => root.render(createElement(ChatRail, { rail, actions: actionsOffering().actions, capabilities: { agents: [] } })));
+		const open = "inso-personal/a";
+		const before = { ...presenceRenders };
+		expect(Object.keys(before)).toHaveLength(3);
+
+		energy = 0.9;
+		current = snapshot();
+		await act(async () => {
+			for (const fn of listeners) fn();
+		});
+
+		expect(presenceRenders[open]).toBe((before[open] ?? 0) + 1);
+		expect(presenceRenders["inso-personal/b"]).toBe(before["inso-personal/b"]);
+		expect(presenceRenders["inso-personal/c"]).toBe(before["inso-personal/c"]);
 	});
 });
 

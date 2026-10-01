@@ -1,5 +1,5 @@
 import { ActivityDot, FraymRailActions, Icon, IconButton, Input, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger, sessionGroupsFromCatalog, useObservable, useRailActionSet, useRailSessionPresence, useStandardRootFacts } from "@fraym/ui";
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { isValidElement, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
 //#region src/collections-store.ts
@@ -1075,6 +1075,26 @@ function InlineInput({ initial, label, placeholder, onCommit, onCancel, lead }) 
 		})]
 	});
 }
+/** One level of `Object.is`, for a prop that is a flat bag the resolver rebuilds on every call (`signals`). */
+function sameBag(a, b) {
+	if (Object.is(a, b)) return true;
+	if (typeof a !== "object" || typeof b !== "object" || a === null || b === null || Array.isArray(a) || Array.isArray(b)) return false;
+	const x = a;
+	const y = b;
+	const keys = Object.keys(x);
+	return keys.length === Object.keys(y).length && keys.every((key) => Object.is(x[key], y[key]));
+}
+/** Two resolver answers draw the same thing: both absent, the same element, or elements of one type whose props are equal
+*  (a flat prop bag compared by value). The resolver's own identity moves with the ACTIVE session's live state on every
+*  streamed flush; comparing what a row would draw lets the other rows - all but one - keep their render. */
+function samePresence(a, b) {
+	if (a === b) return true;
+	if (!isValidElement(a) || !isValidElement(b) || a.type !== b.type || a.key !== b.key) return false;
+	const x = a.props;
+	const y = b.props;
+	const keys = Object.keys(x);
+	return keys.length === Object.keys(y).length && keys.every((key) => sameBag(x[key], y[key]));
+}
 /** Equal when nothing the row DRAWS or ACTS ON changed. A re-fold hands every
 *  row a fresh object (the kit builds them per call), so identity would defeat
 *  the memo on every minute tick and every catalog change; the fields below are
@@ -1083,12 +1103,12 @@ function InlineInput({ initial, label, placeholder, onCommit, onCancel, lead }) 
 function sameRow(a, b) {
 	const x = a.item;
 	const y = b.item;
-	return (x === y || x.id === y.id && x.title === y.title && x.time === y.time && x.status === y.status && x.dotState === y.dotState && x.active === y.active && x.unread === y.unread && x.continuedInto?.toSessionId === y.continuedInto?.toSessionId && x.sessionRef?.sessionId === y.sessionRef?.sessionId && x.sessionRef?.workspaceId === y.sessionRef?.workspaceId && x.lineage?.rootRef.sessionId === y.lineage?.rootRef.sessionId && x.profile === y.profile) && a.actions === b.actions && a.sessionPresence === b.sessionPresence && a.renaming === b.renaming && a.menuOpen === b.menuOpen && a.onOpenMenu === b.onOpenMenu && a.onRenamed === b.onRenamed;
+	return (x === y || x.id === y.id && x.title === y.title && x.time === y.time && x.status === y.status && x.dotState === y.dotState && x.active === y.active && x.unread === y.unread && x.continuedInto?.toSessionId === y.continuedInto?.toSessionId && x.sessionRef?.sessionId === y.sessionRef?.sessionId && x.sessionRef?.workspaceId === y.sessionRef?.workspaceId && x.lineage?.rootRef.sessionId === y.lineage?.rootRef.sessionId && x.profile === y.profile) && a.actions === b.actions && samePresence(a.presence, b.presence) && a.renaming === b.renaming && a.menuOpen === b.menuOpen && a.onOpenMenu === b.onOpenMenu && a.onRenamed === b.onRenamed;
 }
 /** The dot slot: the handoff mark for a frozen row, else the host's presence
 *  answer (`useRailSessionPresence`, the only route to the vibr avatar), else the
 *  status dot — `null` from the resolver is how a row falls back to the dot. */
-function Lead({ item, sessionPresence }) {
+function Lead({ item, presence }) {
 	if (item.continuedInto) return /* @__PURE__ */ jsx("span", {
 		className: "er-glyph",
 		children: /* @__PURE__ */ jsx(Icon, {
@@ -1100,10 +1120,10 @@ function Lead({ item, sessionPresence }) {
 	});
 	return /* @__PURE__ */ jsx("span", {
 		className: "er-glyph",
-		children: sessionPresence(item) ?? /* @__PURE__ */ jsx(ActivityDot, { state: item.dotState ?? item.status })
+		children: presence ?? /* @__PURE__ */ jsx(ActivityDot, { state: item.dotState ?? item.status })
 	});
 }
-var Row = memo(function Row({ item, actions, sessionPresence, renaming, menuOpen, onOpenMenu, onRenamed }) {
+var Row = memo(function Row({ item, actions, presence, renaming, menuOpen, onOpenMenu, onRenamed }) {
 	const ref = item.sessionRef;
 	const onClick = useCallback(() => actions.selectSession?.(item), [actions, item]);
 	const onContextMenu = useCallback((event) => {
@@ -1129,7 +1149,7 @@ var Row = memo(function Row({ item, actions, sessionPresence, renaming, menuOpen
 			label: "Rename session",
 			lead: /* @__PURE__ */ jsx(Lead, {
 				item,
-				sessionPresence
+				presence
 			}),
 			onCommit: (value) => onRenamed(item, value),
 			onCancel: () => onRenamed(item, null)
@@ -1156,7 +1176,7 @@ var Row = memo(function Row({ item, actions, sessionPresence, renaming, menuOpen
 			children: [
 				/* @__PURE__ */ jsx(Lead, {
 					item,
-					sessionPresence
+					presence
 				}),
 				/* @__PURE__ */ jsx("span", {
 					className: "er-title",
@@ -1308,7 +1328,7 @@ function SectionRows({ rows, sectionId, searching, expanded, onToggleExpanded, c
 		children: [shown.map((item) => /* @__PURE__ */ jsx(Row, {
 			item,
 			actions: ctx.actions,
-			sessionPresence: ctx.sessionPresence,
+			presence: item.continuedInto ? null : ctx.sessionPresence(item),
 			renaming: ctx.renamingId === item.id,
 			menuOpen: ctx.menuItemId === item.id,
 			onOpenMenu: ctx.onOpenMenu,
@@ -1578,7 +1598,7 @@ var ChatRailSection = memo(function ChatRailSection({ rail, actions, capabilitie
 							},
 							children: /* @__PURE__ */ jsx(Lead, {
 								item,
-								sessionPresence: ctx.sessionPresence
+								presence: item.continuedInto ? null : ctx.sessionPresence(item)
 							})
 						})
 					}), /* @__PURE__ */ jsx(TooltipContent, {
