@@ -2,19 +2,20 @@
 
 A tabbed document viewer beside the conversation (an artifactory, doc 45): images,
 PDF, HTML, Markdown, Word, PowerPoint, Excel, plain text, audio and video, rendered
-offline in a sandboxed frame. The View is `app/view` (built to `app/dist`); the MCP server is
+offline in a sandboxed frame. It is one part of the Swiss Knife plugin (`../README.md`): this
+folder is the deep reference. The View is `app/view` (built to `app/dist`); the MCP server is
 `src/` (bundled to `app/server.mjs`). Both built files are committed.
 
 ## Tools
 
 | Tool | Who calls it | Does |
 |---|---|---|
-| `view_file { path, filename?, annotate? }` | the model, or the host on a click | Resolves `path` through the fence and mounts the View on it. `annotate: true` opens the file in the View's annotate mode (marks on a picture, comments on text, a pick of an element on a page, a moment or a stretch on a recording) and is ignored for a kind with nothing to annotate. |
+| `view_file { path, filename?, annotate? }` | the host on a click (the plugin declares no `modelSpaces`, so no agent is offered it) | Resolves `path` through the fence and mounts the View on it. `annotate: true` opens the file in the View's annotate mode (marks on a picture, comments on text, a pick of an element on a page, a moment or a stretch on a recording) and is ignored for a kind with nothing to annotate. |
 | `read_file_chunk { path, offset, length }` | the View only (`visibility: ["app"]`) | Streams a file's bytes to the View, at most 4 MiB a call. |
 
 ## What `opens` declares
 
-`plugin.json` declares, beside `mcpServer`, what this viewer can open from outside
+The plugin's `plugin.json` (one folder up) declares, beside `mcpServer`, what this viewer can open from outside
 itself (`ArtifactoryDecl.opens`, doc 86 §3.2): one entry per family it really draws,
 each `{ tool: "view_file", pathArg: "path", ext, mime, annotates, label }`. The engine
 publishes them as the root Store fact `artifactory/opens`; a card in the thread reads it
@@ -124,14 +125,17 @@ needing a process that can already write to the disk:
 
 ## Build and test
 
+Run both from the plugin root (`marketplace/packs/swiss-knife`), not from this folder.
+
 ```sh
-bun run build      # app/server.mjs and app/dist (validates plugin.json with the SDK first)
-bun test test/     # from this directory
+bun viewer/scripts/build.mjs   # viewer/app/server.mjs and viewer/app/dist (validates ../plugin.json with the SDK first)
+bun test ./viewer/test/
 ```
 
-The host runs `app/server.mjs`, not `src/`. `test/bundle.test.ts` rebuilds the server in
-memory and fails when the pack's own code in the committed file is not what `src/`
-builds to, so rebuild and commit `app/server.mjs` with every change under `src/`. Build
-in an install whose dependencies sit at the repository root: a checkout that links them
-from elsewhere writes that path into the file's module comments, and the same test
-refuses it (rewrite the prefix to `../../../node_modules/`).
+`bun run build` there builds `present` too. The host runs `app/server.mjs`, not `src/`.
+`test/bundle.test.ts` rebuilds the server in memory and fails when the code in the committed
+file is not what `src/` builds to, so rebuild and commit `app/server.mjs` with every change
+under `src/`. The build writes every dependency path in the file as
+`../../../../node_modules/` (this folder's distance to the repository root), whatever install
+built it, and the same test refuses any other spelling. `src/fence.ts` also holds the plugin's
+one deny table: `present` imports it, so a change to it changes both tools.

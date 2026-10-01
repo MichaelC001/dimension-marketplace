@@ -17,23 +17,26 @@
 //     dependency versions, which the lockfile pins. Its module comments and
 //     module-map keys spell the path to `node_modules`, and that spelling depends
 //     on where the dependencies are installed (a worktree resolves them into
-//     another checkout), so on BOTH sides any such prefix is rewritten to one
-//     canonical spelling before comparing. The second test holds the COMMITTED
-//     file to that spelling, so a bundle built in an overlay cannot be committed
-//     unnoticed.
+//     another checkout), so `buildServerBundle` writes every such prefix as one
+//     canonical spelling, and this test rewrites the same way on BOTH sides before
+//     comparing. The second test holds the COMMITTED file to that spelling, so a
+//     bundle built elsewhere cannot be committed unnoticed, and the third holds
+//     the spelling to the real distance between this folder and `node_modules`.
 //   - NOT pinned: `app/dist/`, the View. Vite names its chunks by content hash.
 import { describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const PACK = join(import.meta.dir, "..");
-const COMMITTED = join(PACK, "app", "server.mjs");
-/** Where the compared tail starts: esbuild writes one `// <path>` comment per inlined module, and the pack's own modules live under `src/`. */
+const VIEWER = join(import.meta.dir, "..");
+const COMMITTED = join(VIEWER, "app", "server.mjs");
+/** Where the compared tail starts: esbuild writes one `// <path>` comment per inlined module, and the viewer's own modules live under `src/`. */
 const PACK_MARKER = "\n// src/";
 /** How a bundle spells the way to `node_modules`: any number of `../`, then optionally the directories of an install elsewhere, then `node_modules/`. */
 const DEPENDENCY_PREFIX = /(?:\.\.\/)+(?:[^/\s"']+\/)*?node_modules\//g;
-const CANONICAL_PREFIX = "../../../node_modules/";
+/** `marketplace/packs/swiss-knife/viewer/` is four folders below the repository root, which holds `node_modules/`. */
+const CANONICAL_PREFIX = "../../../../node_modules/";
 
 /** The compared part of `bundle`: its banner line and its tail, with the install layout and the line endings taken out. */
 function packAuthored(bundle: string, label: string): string {
@@ -58,7 +61,7 @@ function firstDifference(committed: string, rebuilt: string): string | undefined
 
 async function rebuild(): Promise<string> {
 	// The build script is plain untyped JS outside the TypeScript project; load it by path.
-	const built: unknown = await import(pathToFileURL(join(PACK, "scripts", "build.mjs")).href);
+	const built: unknown = await import(pathToFileURL(join(VIEWER, "scripts", "build.mjs")).href);
 	if (typeof built !== "object" || built === null || !("buildServerBundle" in built) || typeof built.buildServerBundle !== "function") {
 		throw new Error("scripts/build.mjs does not export buildServerBundle()");
 	}
@@ -73,7 +76,7 @@ describe("the committed server bundle", () => {
 		const committed = packAuthored(await readFile(COMMITTED, "utf8"), "app/server.mjs");
 		expect(
 			firstDifference(committed, rebuilt),
-			"app/server.mjs is stale: the host runs it, not src/. Run `bun scripts/build.mjs` in marketplace/packs/viewer (in a canonical install, or restore the `../../../node_modules/` comment prefix) and commit app/server.mjs",
+			"app/server.mjs is stale: the host runs it, not src/. Run `bun viewer/scripts/build.mjs` in marketplace/packs/swiss-knife and commit viewer/app/server.mjs",
 		).toBeUndefined();
 	}, 60_000);
 
@@ -83,5 +86,9 @@ describe("the committed server bundle", () => {
 		expect(odd, `app/server.mjs was built in a non-canonical install; rewrite these prefixes to ${CANONICAL_PREFIX}`).toEqual([]);
 		// And the canonical one really is in use: a file with no dependency paths at all would pass the check above for free.
 		expect(committed).toContain(`// ${CANONICAL_PREFIX}`);
+	});
+
+	test("the canonical spelling is the real way from this folder to the repository's node_modules", () => {
+		expect(existsSync(resolve(VIEWER, CANONICAL_PREFIX, "zod")), `${CANONICAL_PREFIX} from ${VIEWER} does not reach node_modules/zod`).toBe(true);
 	});
 });

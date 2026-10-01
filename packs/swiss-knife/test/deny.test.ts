@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import * as viewer from "../../viewer/src/fence";
-import * as copy from "../src/deny";
+import { textRefusal } from "../src/present";
+import * as fence from "../viewer/src/fence";
 
-const { denyReason, textRefusal } = copy;
+const { denyReason } = fence;
 
-// The deny tables are a deliberate COPY of the viewer pack's (packs install one at a time
-// and cannot import each other). The copy is pinned here twice over: the tables themselves
-// are held equal (every entry, every regular expression), and both functions run over one
-// corpus and must agree on the verdict AND the words.
+// `present` and the viewer's fence share ONE deny table, `viewer/src/fence.ts`: present imports
+// it and bundles it into dist/index.mjs. This file holds that table to what it promises: a corpus
+// of refused and allowed paths, and a path built from every entry of every table, so an entry
+// that can never match (a capital letter in a table that is matched lower-case) is a red test.
 const SECRET_FOLDERS = [".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker", ".git", ".password-store", "keyrings", "locker"];
 
 const SECRET_FILE_NAMES = [
@@ -149,49 +149,31 @@ describe("denyReason leaves ordinary files alone", () => {
 	for (const path of ALLOWED) test(`allows ${path}`, () => expect(denyReason(path)).toBeUndefined());
 });
 
-describe("the copied deny tables have not drifted from the viewer pack's", () => {
-	// The viewer's own tables, exported for this test: a rule added there and not here fails,
-	// whether or not any path in the corpus below happens to exercise it.
-	for (const name of ["SECRET_DIRECTORIES", "SECRET_FILES"] as const) {
-		test(`${name} holds the same names`, () => {
-			expect(Object.keys(viewer[name]).length, "the viewer exports a populated table").toBeGreaterThan(5);
-			expect(copy[name]).toEqual(viewer[name]);
+describe("every entry of the deny tables refuses the thing it names", () => {
+	// The category in the refusal tells which rule fired, so another rule cannot make a dead entry look alive.
+	const tables = [
+		{
+			table: "SECRET_DIRECTORIES",
+			paths: Object.keys(fence.SECRET_DIRECTORIES).map(folder => `/home/me/${folder}/notes.txt`),
+			category: /credentials folder/,
+		},
+		{
+			table: "SECRET_FILES",
+			paths: Object.keys(fence.SECRET_FILES).map(file => `/home/me/docs/${file}`),
+			category: /credentials or token file/,
+		},
+		{
+			table: "SECRET_PATHS",
+			paths: fence.SECRET_PATHS.map(sequence => `/home/me/${sequence.join("/")}/notes.txt`),
+			category: /credentials store/,
+		},
+	];
+	for (const { table, paths, category } of tables) {
+		test(`${table}: each entry is refused as its own category`, () => {
+			expect(paths.length, `${table} is populated`).toBeGreaterThan(2);
+			for (const path of paths) expect(denyReason(path), path).toMatch(category);
 		});
 	}
-
-	test("SECRET_PATHS holds the same folder sequences", () => {
-		const sequences = (paths: readonly (readonly string[])[]) => paths.map(path => JSON.stringify(path)).sort();
-		expect(viewer.SECRET_PATHS.length, "the viewer exports a populated table").toBeGreaterThan(2);
-		expect(sequences(copy.SECRET_PATHS)).toEqual(sequences(viewer.SECRET_PATHS));
-	});
-
-	for (const name of ["PRIVATE_KEY_FILE", "ENVIRONMENT_FILE", "OTHER_SECRET_FILE", "DATABASE_FILE", "ENGINE_HOME"] as const) {
-		test(`${name} is the same regular expression`, () => {
-			expect(viewer[name]).toBeInstanceOf(RegExp);
-			expect([copy[name].source, copy[name].flags]).toEqual([viewer[name].source, viewer[name].flags]);
-		});
-	}
-
-	test("denyReason agrees on every path, verdict and wording: the corpus, and one path for each entry of the viewer's tables", () => {
-		const fromTables = [
-			...Object.keys(viewer.SECRET_DIRECTORIES).map(folder => `/home/me/${folder}/notes.txt`),
-			...Object.keys(viewer.SECRET_FILES).map(file => `/home/me/docs/${file}`),
-			...viewer.SECRET_PATHS.map(sequence => `/home/me/${sequence.join("/")}/notes.txt`),
-		];
-		const corpus = [...Object.values(DENIED).flat(), ...ALLOWED, ...fromTables];
-		const disagreements = corpus
-			.map(path => ({ path, swissKnife: denyReason(path), viewer: viewer.denyReason(path) }))
-			.filter(row => row.swissKnife !== row.viewer);
-		expect(
-			disagreements,
-			"marketplace/packs/swiss-knife/src/deny.ts denyReason and marketplace/packs/viewer/src/fence.ts denyReason disagree: the deny table is a copy, change both",
-		).toEqual([]);
-	});
-
-	test("the corpus exercises both verdicts, so agreeing on it means something", () => {
-		expect(Object.values(DENIED).flat().every(path => viewer.denyReason(path) !== undefined)).toBe(true);
-		expect(ALLOWED.every(path => viewer.denyReason(path) === undefined)).toBe(true);
-	});
 });
 
 /** Spellings the operating system would act on, each refused from the text alone, by the rule that refuses it. */
@@ -236,27 +218,13 @@ describe("textRefusal", () => {
 	}
 });
 
-describe("the copied text refusal has not drifted from the viewer's", () => {
-	// The viewer keeps its empty, NUL and not-absolute refusals inline in `check`, so only the
-	// Windows spellings are comparable function to function.
-	test("both refuse the same Windows spellings in the same words (the viewer says 'viewable', present 'presentable')", () => {
-		for (const path of [...WINDOWS_REFUSED.map(row => row.path), ...WINDOWS_ALLOWED]) {
-			const theirs = viewer.textRefusal(path, "win32")?.replace("viewable", "presentable");
-			expect(textRefusal(path, "win32"), path).toBe(theirs);
-		}
-	});
-
-	test("the corpus exercises every rule and both verdicts in the viewer, so agreeing on it means something", () => {
-		for (const { path, reason } of WINDOWS_REFUSED) expect(viewer.textRefusal(path, "win32"), path).toContain(reason);
-		for (const path of WINDOWS_ALLOWED) expect(viewer.textRefusal(path, "win32"), path).toBeUndefined();
-	});
-
-	test("neither refuses a Windows spelling on another platform", () => {
-		for (const path of WINDOWS_REFUSED.map(row => row.path)) {
-			for (const platform of ["linux", "darwin"] as const) {
-				expect(viewer.textRefusal(path, platform), `${platform} ${path}`).toBeUndefined();
-				expect(textRefusal(path, platform), `${platform} ${path}`).toBeUndefined();
-			}
+describe("present and the fence screen the same Windows spellings", () => {
+	// One function: present passes the word its own sentence needs ("presentable"), the fence defaults to its own.
+	test("the fence says 'viewable' where present says 'presentable', and the sentence is otherwise the same", () => {
+		for (const { path } of WINDOWS_REFUSED) {
+			const viewable = fence.textRefusal(path, "win32");
+			expect(viewable, path).toContain("not viewable");
+			expect(textRefusal(path, "win32"), path).toBe(viewable?.replace("viewable", "presentable"));
 		}
 	});
 });

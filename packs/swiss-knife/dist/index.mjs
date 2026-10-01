@@ -217,7 +217,11 @@ var THEME_TOKEN_CHANNELS = {
 };
 var THEME_TOKENS = Object.keys(THEME_TOKEN_CHANNELS);
 
-// src/deny.ts
+// ../../../packages/sdk/src/artifactory/artifactory-decl.ts
+var PACK_CONNECTION_REPORT_MAX_BYTES = 64 * 1024;
+
+// viewer/src/fence.ts
+var segmentsOf = (path) => path.toLowerCase().split(/[\\/]+/).filter((part) => part !== "");
 var SECRET_DIRECTORIES = {
   ".ssh": true,
   ".gnupg": true,
@@ -229,9 +233,10 @@ var SECRET_DIRECTORIES = {
   ".password-store": true,
   keyrings: true,
   // The Personal vault's Locker (`<vault>/locker`, `<vault>/projects/<p>/locker`):
-  // sealed entries beside a plaintext control file and audit log. Any folder of
-  // that name is refused: over-denying a folder called `locker` is harmless
-  // where under-denying one is not.
+  // sealed entries beside a plaintext control file and audit log that carry the
+  // scrypt salt and a passphrase oracle. Any folder of that name is refused: a
+  // vault can live at any `INSO_VAULT_DIR`, and over-denying a folder called
+  // `locker` is harmless where under-denying one is not.
   locker: true
 };
 var SECRET_PATHS = [
@@ -278,16 +283,12 @@ var OTHER_SECRET_FILE = /^(?:client_secret.*\.json|.*\.tfstate(?:\.backup)?|.*\.
 var DATABASE_FILE = /\.(?:db|sqlite3?)(?:-wal|-shm|-journal)?$/;
 var ENGINE_HOME = /^\.(?:inso|omp)(?:-[a-z0-9._-]+)?$/;
 function denyReason(path) {
-  const segments = path.toLowerCase().split(/[\\/]+/).filter((part) => part !== "");
+  const segments = segmentsOf(path);
   const base = segments[segments.length - 1] ?? "";
-  for (const segment of segments) {
-    if (Object.hasOwn(SECRET_DIRECTORIES, segment)) return `it is inside a credentials folder (${segment})`;
-  }
+  for (const segment of segments) if (Object.hasOwn(SECRET_DIRECTORIES, segment)) return `it is inside a credentials folder (${segment})`;
   for (const secret of SECRET_PATHS) {
     for (let at = 0; at + secret.length <= segments.length; at++) {
-      if (secret.every((part, index) => segments[at + index] === part)) {
-        return `it is inside a credentials store (${secret.join("/")})`;
-      }
+      if (secret.every((part, index) => segments[at + index] === part)) return `it is inside a credentials store (${secret.join("/")})`;
     }
   }
   if (ENVIRONMENT_FILE.test(base)) return "it is an environment file (.env), which holds secrets";
@@ -303,14 +304,11 @@ function denyReason(path) {
   }
   return void 0;
 }
-function textRefusal(requested, platform = process.platform) {
-  if (requested.trim() === "") return "the path is empty";
-  if (requested.includes("\0")) return "the path contains a NUL byte";
-  if (platform === "win32") {
-    if (/^[\\/]{2}[.?][\\/]/.test(requested)) return "Windows device paths (\\\\.\\ and \\\\?\\) are not presentable";
-    if (requested.slice(2).includes(":")) return "alternate data streams (a ':' after the drive) are not presentable";
-    if (/^[\\/]{2}/.test(requested)) return "network paths (\\\\host\\share) are not presentable";
-  }
+function textRefusal(requested, platform, what = "viewable") {
+  if (platform !== "win32") return void 0;
+  if (/^[\\/]{2}[.?][\\/]/.test(requested)) return `Windows device paths (\\\\.\\ and \\\\?\\) are not ${what}`;
+  if (requested.slice(2).includes(":")) return `alternate data streams (a ':' after the drive) are not ${what}`;
+  if (/^[\\/]{2}/.test(requested)) return `network paths (\\\\host\\share) are not ${what}`;
   return void 0;
 }
 
@@ -354,6 +352,11 @@ var HEAD_BYTES = 512;
 var MAX_RESULT_THUMB_BYTES = 600 * 1024;
 var MAX_ECHO = 200;
 var SVG = "image/svg+xml";
+function textRefusal2(requested, platform) {
+  if (requested.trim() === "") return "the path is empty";
+  if (requested.includes("\0")) return "the path contains a NUL byte";
+  return textRefusal(requested, platform, "presentable");
+}
 var UNSAFE_IN_A_LINE = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g;
 function oneLine(text, max) {
   const flat = text.replace(UNSAFE_IN_A_LINE, " ");
@@ -392,7 +395,7 @@ async function readWhole(handle, size) {
 }
 async function presentOne(requested, run, thumbBudget) {
   if (typeof requested !== "string") return { refused: "it is not a path" };
-  const textual = textRefusal(requested, run.platform);
+  const textual = textRefusal2(requested, run.platform);
   if (textual !== void 0) return { refused: textual };
   const lexical = resolve(run.cwd, requested);
   const early = denyReason(lexical);
