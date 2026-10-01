@@ -16,6 +16,7 @@ import { type TimeRange, TimelineBar } from "@dimension/mcp-app-kit/annotate/rea
 import { IconButton } from "@fraym/ui/elements/icon-button";
 import { cn } from "@fraym/ui/lib/cn";
 import { type CSSProperties, type ReactElement, type ReactNode, useEffect, useState, useSyncExternalStore } from "react";
+import { FOCUS } from "./focus-ring";
 import { readLength, UNBOUNDED_SENTENCE } from "./media-length";
 import { describeMediaError, type MediaTag } from "./media-messages";
 
@@ -264,9 +265,7 @@ export interface MediaTransportProps {
 	readonly marking: TransportMarking | null;
 }
 
-// One focus ring for every control in the strip, the same solid accent the scrubber's knob and markers wear.
-const FOCUS = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fr-accent";
-
+// One focus ring for every control in the strip (`focus-ring.ts`), the same solid accent the scrubber's knob and markers wear.
 const ROUND_BUTTON = cn(
 	"inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 text-fr-sm font-medium transition-colors duration-[var(--fr-motion-fast)] disabled:pointer-events-none disabled:opacity-40",
 	FOCUS,
@@ -296,7 +295,7 @@ export function MediaTransport({ media, kind, filename, live, marks, activeId, o
 	const floatingHint = marking?.hint !== null && marking?.hint !== undefined && !(marking.full && marking.hint === FULL_SENTENCE);
 
 	return (
-		<div data-slot="viewer-transport" className="relative border-t border-fr-border-soft bg-fr-surface px-3 pb-3 pt-1">
+		<div data-slot="viewer-transport" className="relative border-t border-fr-border-soft bg-fr-surface pb-3 pt-1">
 			{failure === null ? null : (
 				<p role="alert" className="pt-1.5 text-fr-xs text-fr-del">
 					{failure}

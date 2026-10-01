@@ -4,7 +4,7 @@
 // mounts as a sibling of the panes inside `data-slot="viewer-root"`.
 import type { App } from "@modelcontextprotocol/ext-apps";
 import { Icon } from "@fraym/ui/icons";
-import { DocPane } from "./doc-pane";
+import { DocPane, FailedPane, Message } from "./doc-pane";
 import type { Theme } from "./renderers/types";
 import { TabStrip } from "./tab-strip";
 import { type ViewerStore, useViewerState } from "./tabs";
@@ -22,7 +22,8 @@ export function ViewerApp({ app, store }: { readonly app: App; readonly store: V
 					onClose={key => store.dispatch({ type: "close", key })}
 				/>
 			) : null}
-			{state.notice !== null ? (
+			{/* With nothing open the notice is the pane's own card (below); the banner is for news about a file that is NOT the one on screen. */}
+			{state.notice !== null && state.tabs.length > 0 ? (
 				<div role="alert" className="flex shrink-0 items-start gap-2 border-b border-fr-del-line bg-fr-del-bg px-3 py-2 text-fr-sm text-fr-del">
 					<span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{state.notice}</span>
 					<button type="button" aria-label="Dismiss" onClick={() => store.dispatch({ type: "dismiss" })} className="shrink-0 rounded-sm p-0.5 hover:bg-fr-surface-3">
@@ -32,14 +33,22 @@ export function ViewerApp({ app, store }: { readonly app: App; readonly store: V
 			) : null}
 			<div className="relative min-h-0 flex-1">
 				{state.tabs.length === 0 ? (
-					<div className="absolute inset-0 flex flex-col items-center justify-center gap-1 px-6 text-center">
-						<p className="text-fr-md font-semibold text-fr-text">Nothing open</p>
-						<p className="max-w-[40ch] text-fr-sm text-fr-text-3">Ask the assistant to open a file and it appears here.</p>
-					</div>
+					state.notice !== null ? (
+						<Message title="This file could not be opened" body={state.notice} />
+					) : (
+						<div className="absolute inset-0 flex flex-col items-center justify-center gap-1 px-6 text-center">
+							<p className="text-fr-md font-semibold text-fr-text">Nothing open</p>
+							<p className="max-w-[40ch] text-fr-sm text-fr-text-3">Ask the assistant to open a file and it appears here.</p>
+						</div>
+					)
 				) : null}
 				{state.tabs.map(tab => (
 					<div key={tab.key} className={tab.key === state.activeKey ? "absolute inset-0" : "hidden"}>
-						<DocPane app={app} tab={tab} active={tab.key === state.activeKey} theme={theme} />
+						{tab.failure === undefined ? (
+							<DocPane app={app} tab={tab} active={tab.key === state.activeKey} theme={theme} />
+						) : (
+							<FailedPane tab={tab} failure={tab.failure} active={tab.key === state.activeKey} />
+						)}
 					</div>
 				))}
 			</div>

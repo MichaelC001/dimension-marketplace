@@ -8,10 +8,12 @@
 // `./pane-extras` and is a sibling of the stage inside that wrapper
 // (`data-slot="viewer-stage-frame"`), or the right-hand column after it.
 import type { App } from "@modelcontextprotocol/ext-apps";
+import { cn } from "@fraym/ui/lib/cn";
 import { useEffect, useState } from "react";
 import { MAX_MEDIA_BYTES } from "../../src/contract";
 import { loadDocumentBytes, readLimit, tooLargeToPlay } from "./document-bytes";
 import { shownMode } from "./annotate-modes";
+import { FOCUS } from "./focus-ring";
 import { formatBytes } from "./format";
 import { failureAction, type FailureStage, isRecording } from "./media-failure";
 import { loadRenderer } from "./renderers";
@@ -157,7 +159,7 @@ export function DocPane({ app, tab, active, theme }: DocPaneProps) {
 					{phase.name === "too-large" ? (
 						<Message
 							title="Too large to play here"
-							body={`The viewer plays recordings up to ${formatBytes(MAX_MEDIA_BYTES)}, and this one is ${formatBytes(tab.size)}. Copy its path from the bar above to open it in a media player.`}
+							body={`The viewer plays recordings up to ${formatBytes(MAX_MEDIA_BYTES)}, and this one is ${formatBytes(tab.size)}. Copy its path to open it in a media player.`}
 							action={copyAction}
 						/>
 					) : null}
@@ -175,6 +177,22 @@ export function DocPane({ app, tab, active, theme }: DocPaneProps) {
 	);
 }
 
+/**
+ * The pane for a file that did not open (`tab.failure`): its name in the bar, why in one sentence, and the way out when
+ * there is one. Nothing is read and nothing can be marked, so none of a document's machinery is mounted.
+ */
+export function FailedPane({ tab, failure, active }: { readonly tab: DocTab; readonly failure: NonNullable<DocTab["failure"]>; readonly active: boolean }) {
+	const { copied, copy } = useCopied(tab.path);
+	return (
+		<div className={active ? "flex h-full min-h-0 flex-col" : "hidden"} data-slot="viewer-pane" data-key={tab.key} data-failed="">
+			<Toolbar filename={tab.filename} path={tab.path} />
+			<div className="relative min-h-0 flex-1">
+				<Message title="This file could not be opened" body={failure.message} action={failure.copyPath ? { label: copied ? "Path copied" : "Copy path", onClick: copy } : undefined} />
+			</div>
+		</div>
+	);
+}
+
 function Loading({ loaded, total }: { readonly loaded: number; readonly total: number }) {
 	const percent = total > 0 ? Math.min(100, Math.round((loaded / total) * 100)) : 0;
 	return (
@@ -187,16 +205,16 @@ function Loading({ loaded, total }: { readonly loaded: number; readonly total: n
 	);
 }
 
-function Message({ title, body, action }: { readonly title: string; readonly body: string; readonly action?: { readonly label: string; readonly onClick: () => void } }) {
+export function Message({ title, body, action }: { readonly title: string; readonly body: string; readonly action?: { readonly label: string; readonly onClick: () => void } }) {
 	return (
 		<div role="alert" className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-fr-bg px-6 text-center">
 			<p className="text-fr-md font-semibold text-fr-text">{title}</p>
-			<p className="max-w-[44ch] text-fr-sm text-fr-text-3 [overflow-wrap:anywhere]">{body}</p>
+			<p className="max-w-[44ch] text-fr-sm text-fr-text-2 [overflow-wrap:anywhere]">{body}</p>
 			{action ? (
 				<button
 					type="button"
 					onClick={action.onClick}
-					className="mt-2 rounded-md border border-fr-border px-3 py-1.5 text-fr-sm text-fr-text-2 hover:bg-fr-surface hover:text-fr-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fr-accent-line"
+					className={cn("mt-2 rounded-md border border-fr-border px-3 py-1.5 text-fr-sm text-fr-text-2 hover:bg-fr-surface hover:text-fr-text", FOCUS)}
 				>
 					{action.label}
 				</button>

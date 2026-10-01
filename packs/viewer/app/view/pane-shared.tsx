@@ -77,15 +77,14 @@ export function Column({ frame, children }: { readonly frame: HTMLElement | null
 	}
 	const pane = paneOf(frame);
 	if (pane === null) return null;
-	// A sheet under the document. Empty, it is only as tall as the hint and the send need, so the document keeps
-	// the room the human is aiming in. Once something is marked it is the list's turn: half the pane (never more,
-	// so the document always keeps the other half), which is room for whole rows in the artifact column's ~745 px.
+	// A sheet under the document, as tall as what is in it and no taller: the hint and the send when nothing is marked,
+	// a row's height more with each mark, until it reaches half the pane (never more, so the document always keeps the
+	// other half; 420 px at most). Past that the list scrolls inside it. Sized by content and not by a state, the first
+	// mark does not make the document jump to a smaller size, and one mark does not leave a sheet of empty space under
+	// it. The kit's panel fills a box it is given (the side column's); here nothing gives it one, so `viewer.css` lets it
+	// take the size of what it holds and shrink to fit (the kit's CSS is unlayered, so a utility class here would lose).
 	return createPortal(
-		<aside
-			data-slot="annotate-panel"
-			data-placement="bottom"
-			className="flex h-[min(34%,240px)] min-h-[180px] shrink-0 flex-col has-[.dam-list]:h-[min(50%,440px)] [&_.dam-panel]:border-s-0 [&_.dam-panel]:border-t [&_.dam-panel]:border-fr-border"
-		>
+		<aside data-slot="annotate-panel" data-placement="bottom" className="flex max-h-[min(50%,420px)] shrink-0 flex-col">
 			{children}
 		</aside>,
 		pane,

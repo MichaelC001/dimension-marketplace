@@ -379,3 +379,29 @@
 .vw-media-volume:hover::-moz-range-thumb {
 	background: var(--fr-text);
 }
+
+/* The annotation sheet under a document (`Column` in pane-shared.tsx, placement "bottom"). The kit's panel fills the box
+   it is put in (flex 1 1 0, a list of the same): in a side column that box is a fixed width and the full height. Under
+   the document nothing gives it a height, so it, its list and its hint take the size of what they hold, and only the
+   list gives way (and scrolls) when the sheet reaches its cap. These rules are unlayered like the kit's, and more
+   specific, so they win; a Tailwind utility on the aside would not, because utilities sit in a layer. The sheet is a
+   band across the foot of the pane, so its edge is a rule above it, not the side column's rule beside it. */
+[data-slot="annotate-panel"][data-placement="bottom"] .dam-panel {
+	flex: 0 1 auto;
+	border-inline-start: 0;
+	border-block-start: 1px solid var(--fr-border);
+}
+[data-slot="annotate-panel"][data-placement="bottom"] .dam-list {
+	flex: 0 1 auto;
+}
+[data-slot="annotate-panel"][data-placement="bottom"] .dam-empty {
+	flex: none;
+}
+
+/* The transport steps in from an edge the host has something floating over (the companion orb parked in a corner),
+   as the annotation footer does: its own 12 px, or the lent inset and a little air, whichever is more. Every control
+   in it, the scrubber included, then stays clear of the orb; with no inset lent it is the 12 px it always was. */
+[data-slot="viewer-transport"] {
+	padding-left: max(12px, calc(var(--fr-safe-area-inset-left, 0px) + 8px));
+	padding-right: max(12px, calc(var(--fr-safe-area-inset-right, 0px) + 8px));
+}
