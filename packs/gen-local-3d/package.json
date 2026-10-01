@@ -1,0 +1,25 @@
+{
+	"name": "@dimension/community-gen-local-3d",
+	"author": "Dimension",
+	"version": "0.1.0",
+	"description": "Image-to-3D on this machine's GPU: Pixal3D (single view) and TRELLIS.2 through pixal3d.cpp's trellis-cli. No account, no key, no cost per model.",
+	"type": "module",
+	"main": "index.ts",
+	"scripts": {
+		"check": "biome check . --no-errors-on-unmatched"
+	},
+	"files": [
+		"connect/",
+		"assets/",
+		"cutout.ts",
+		"index.ts",
+		"models.json",
+		"plugin.json",
+		"runner.ts",
+		"vram.ts"
+	],
+	"devDependencies": {
+		"@dimension/sdk": "workspace:*"
+	},
+	"license": "MIT"
+}

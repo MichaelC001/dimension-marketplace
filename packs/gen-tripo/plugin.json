@@ -1,0 +1,69 @@
+{
+	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+	"name": "gen-tripo",
+	"version": "0.1.0",
+	"description": "Tripo 3D generation on Tripo's own pay-per-use API: image or multiview to 3D, part separation, retopology, auto-rig, animation retarget and format conversion, chained by Tripo task id",
+	"author": {
+		"name": "Dimension"
+	},
+	"license": "MIT",
+	"keywords": [
+		"generation",
+		"3d",
+		"tripo",
+		"rigging",
+		"retopology",
+		"provider"
+	],
+	"extensions": {
+		"ai.insodimension.dimension": {
+			"contractVersion": 1,
+			"title": "Tripo 3D generation",
+			"icon": "assets/icon.svg",
+			"category": "connector",
+			"defaultEnabled": false,
+			"entry": "index.ts",
+			"providers": {
+				"generation": [
+					{
+						"id": "tripo",
+						"produces": [
+							"model3d",
+							"parts",
+							"rig",
+							"retopo"
+						],
+						"runtime": "api"
+					}
+				]
+			},
+			"connect": {
+				"kind": [
+					"form"
+				],
+				"setup": [
+					{
+						"title": "Get a Tripo API key",
+						"detail": "Create an account on the Tripo platform, buy API credits (1 credit is $0.01) and create a key on its API Keys page. The key stays on this machine and is sent only to openapi.tripo3d.ai. Credits from the free trial do not carry commercial rights to the output - fund the account before shipping an asset.",
+						"url": "https://platform.tripo3d.ai",
+						"urlLabel": "Tripo platform"
+					},
+					{
+						"title": "Spend is quoted and capped by Dimension",
+						"detail": "Connecting spends nothing. Every job is priced before it is submitted and checked against the engine's spend caps. The images and meshes you generate from are uploaded to Tripo."
+					}
+				],
+				"form": [
+					{
+						"id": "apiKey",
+						"label": "Tripo API key",
+						"secret": true,
+						"help": "Starts with tsk_. Used for every Tripo generation job."
+					}
+				],
+				"configTemplate": "connect/key.template.json",
+				"configTarget": "~/.config/dimension-gen-tripo/key.json"
+			}
+		}
+	}
+}
