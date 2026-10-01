@@ -1,0 +1,9 @@
+{
+	"kind": "documented",
+	"source": "https://developers.tripo3d.ai/en/docs/rate-limits",
+	"response": {
+		"code": 2000,
+		"message": "You have exceeded the limit of generation",
+		"suggestion": "Try again later. You can also check `Retry-After` header."
+	}
+}

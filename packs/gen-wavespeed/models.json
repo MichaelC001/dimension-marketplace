@@ -1,0 +1,383 @@
+{
+	"$comment": "The WaveSpeed models this pack offers. Add or remove a model by editing this list — no code. A model is offered only while WaveSpeed's live catalogue (GET api.wavespeed.ai/api/v3/models) lists it at /api/v3/<modelId> and its request schema still carries every field named under `inputs`; its option schema comes from WaveSpeed, and every request's price from WaveSpeed's pricing API (POST /api/v3/model/price), never from this file. What WaveSpeed does not expose lives here: how Dimension's inputs map onto each model's fields, the sentence describing how a price is made up (read from each model's docs page and checked against the pricing API on 2026-10-02), the licence, and the feature tags. The catalogue lists no rigging, retopology or part-splitting model, so every entry produces model3d.",
+	"uploads": {
+		"$comment": "Reference images are uploaded to WaveSpeed's storage, which keeps them this long (7 days, per its upload docs and data-retention policy). An upload is reused for half of it.",
+		"retainSeconds": 604800
+	},
+	"pricingProbeImage": "https://example.invalid/pricing-probe.png",
+	"models": [
+		{
+			"modelId": "tripo3d/p2/image-to-3d",
+			"label": "Tripo P2 image-to-3D (WaveSpeed)",
+			"produces": "model3d",
+			"accepts": [
+				"image"
+			],
+			"inputs": {
+				"images": {
+					"field": "image"
+				},
+				"seed": "model_seed"
+			},
+			"pricing": {
+				"basis": "$1.20 untextured (texture and pbr both false), $1.32 with fast or standard textures (the default), $1.44 detailed, $1.56 extreme; quad, face_limit, seeds, delight, auto_size, export_uv and export_orientation add nothing",
+				"source": "https://wavespeed.ai/docs/docs-api/tripo3d/tripo3d-p2-image-to-3d"
+			},
+			"licence": {
+				"id": "wavespeed-terms-2026-09-28",
+				"commercialUse": "unknown",
+				"url": "https://wavespeed.ai/static/terms",
+				"note": "WaveSpeed's Terms of Service (last updated 2026-09-28) make a task's Outputs the customer's own Customer Data (§1.5, §11.1) and leave third-party model terms to the customer (§6.1); its Commercial Use Policy says most models allow commercial use but each has its own terms, and WaveSpeed's catalogue publishes no per-model licence. Tripo's own terms for output made through a reseller were not reviewed. Recorded as unknown, which blocks a release export, until the upstream terms are reviewed."
+			},
+			"features": [
+				"single-view",
+				"textured",
+				"pbr",
+				"quad",
+				"delight",
+				"uv",
+				"auto-size",
+				"orientation",
+				"seed",
+				"glb",
+				"fbx"
+			]
+		},
+		{
+			"modelId": "tripo3d/h3.1/image-to-3d",
+			"label": "Tripo H3.1 image-to-3D (WaveSpeed)",
+			"produces": "model3d",
+			"accepts": [
+				"image"
+			],
+			"inputs": {
+				"images": {
+					"field": "image"
+				},
+				"seed": "model_seed"
+			},
+			"pricing": {
+				"basis": "$0.24 untextured; textures multiply that by 1.5 (standard, the default: $0.36) or 2 (detailed: $0.48); detailed geometry adds $0.24 and quad topology $0.06",
+				"source": "https://wavespeed.ai/docs/docs-api/tripo3d/tripo3d-h3.1-image-to-3d"
+			},
+			"licence": {
+				"id": "wavespeed-terms-2026-09-28",
+				"commercialUse": "unknown",
+				"url": "https://wavespeed.ai/static/terms",
+				"note": "WaveSpeed's Terms of Service (last updated 2026-09-28) make a task's Outputs the customer's own Customer Data (§1.5, §11.1) and leave third-party model terms to the customer (§6.1); its Commercial Use Policy says most models allow commercial use but each has its own terms, and WaveSpeed's catalogue publishes no per-model licence. Tripo's own terms for output made through a reseller were not reviewed. Recorded as unknown, which blocks a release export, until the upstream terms are reviewed."
+			},
+			"features": [
+				"single-view",
+				"textured",
+				"pbr",
+				"quad",
+				"auto-size",
+				"orientation",
+				"seed",
+				"geometry:detailed"
+			]
+		},
+		{
+			"modelId": "tripo3d/h3.1/multiview-to-3d",
+			"label": "Tripo H3.1 multiview-to-3D (WaveSpeed)",
+			"produces": "model3d",
+			"accepts": [
+				"image"
+			],
+			"inputs": {
+				"images": {
+					"arrayField": "images",
+					"min": 2,
+					"max": 4
+				},
+				"seed": "model_seed"
+			},
+			"pricing": {
+				"basis": "$0.24 untextured; textures multiply that by 1.5 (standard, the default: $0.36) or 2 (detailed: $0.48); detailed geometry adds $0.24 and quad topology $0.06",
+				"source": "https://wavespeed.ai/docs/docs-api/tripo3d/tripo3d-h3.1-multiview-to-3d"
+			},
+			"licence": {
+				"id": "wavespeed-terms-2026-09-28",
+				"commercialUse": "unknown",
+				"url": "https://wavespeed.ai/static/terms",
+				"note": "WaveSpeed's Terms of Service (last updated 2026-09-28) make a task's Outputs the customer's own Customer Data (§1.5, §11.1) and leave third-party model terms to the customer (§6.1); its Commercial Use Policy says most models allow commercial use but each has its own terms, and WaveSpeed's catalogue publishes no per-model licence. Tripo's own terms for output made through a reseller were not reviewed. Recorded as unknown, which blocks a release export, until the upstream terms are reviewed."
+			},
+			"features": [
+				"multi-view:4",
+				"images:front,left,back,right",
+				"textured",
+				"pbr",
+				"quad",
+				"auto-size",
+				"orientation",
+				"seed",
+				"geometry:detailed"
+			]
+		},
+		{
+			"modelId": "meshy/v6/image-to-3d",
+			"label": "Meshy 6 image-to-3D (WaveSpeed)",
+			"produces": "model3d",
+			"accepts": [
+				"image"
+			],
+			"inputs": {
+				"images": {
+					"field": "image"
+				}
+			},
+			"imageFormats": [
+				"png",
+				"jpg",
+				"jpeg"
+			],
+			"pricing": {
+				"basis": "$1.44 textured, $0.96 untextured (should_texture: false); no other option changes the price",
+				"source": "https://wavespeed.ai/docs/docs-api/meshy/meshy-v6-image-to-3d"
+			},
+			"licence": {
+				"id": "wavespeed-terms-2026-09-28",
+				"commercialUse": "unknown",
+				"url": "https://wavespeed.ai/static/terms",
+				"note": "WaveSpeed's Terms of Service (last updated 2026-09-28) make a task's Outputs the customer's own Customer Data (§1.5, §11.1) and leave third-party model terms to the customer (§6.1); its Commercial Use Policy says most models allow commercial use but each has its own terms, and WaveSpeed's catalogue publishes no per-model licence. Meshy's own terms for output made through a reseller were not reviewed. Recorded as unknown, which blocks a release export, until the upstream terms are reviewed."
+			},
+			"features": [
+				"single-view",
+				"textured",
+				"pbr",
+				"quad",
+				"ta-pose",
+				"symmetry",
+				"polycount:100-300000"
+			]
+		},
+		{
+			"modelId": "meshy/v7.1/image-to-3d",
+			"label": "Meshy 7.1 image-to-3D (WaveSpeed)",
+			"produces": "model3d",
+			"accepts": [
+				"image"
+			],
+			"inputs": {
+				"images": {
+					"field": "image"
+				}
+			},
+			"pricing": {
+				"basis": "$1.44 textured, $0.96 untextured (should_texture: false); 2K geometry adds $0.24, 4K geometry $0.48, auto-rigging $0.24 and an animation preset $0.144",
+				"source": "https://wavespeed.ai/docs/docs-api/meshy/meshy-v7.1-image-to-3d"
+			},
+			"licence": {
+				"id": "wavespeed-terms-2026-09-28",
+				"commercialUse": "unknown",
+				"url": "https://wavespeed.ai/static/terms",
+				"note": "WaveSpeed's Terms of Service (last updated 2026-09-28) make a task's Outputs the customer's own Customer Data (§1.5, §11.1) and leave third-party model terms to the customer (§6.1); its Commercial Use Policy says most models allow commercial use but each has its own terms, and WaveSpeed's catalogue publishes no per-model licence. Meshy's own terms for output made through a reseller were not reviewed. Recorded as unknown, which blocks a release export, until the upstream terms are reviewed."
+			},
+			"features": [
+				"single-view",
+				"textured",
+				"pbr",
+				"quad",
+				"a-pose",
+				"t-pose",
+				"rig:humanoid",
+				"animation",
+				"lowpoly",
+				"smart-topology",
+				"geometry:2k-4k",
+				"symmetry",
+				"polycount:100-300000"
+			]
+		},
+		{
+			"modelId": "meshy/v7.1/multi-image-to-3d",
+			"label": "Meshy 7.1 multi-image-to-3D (WaveSpeed)",
+			"produces": "model3d",
+			"accepts": [
+				"image"
+			],
+			"inputs": {
+				"images": {
+					"arrayField": "images",
+					"min": 1,
+					"max": 4
+				}
+			},
+			"pricing": {
+				"basis": "$1.44 textured, $0.96 untextured (should_texture: false); 2K geometry adds $0.24, auto-rigging $0.24 and an animation preset $0.144",
+				"source": "https://wavespeed.ai/docs/docs-api/meshy/meshy-v7.1-multi-image-to-3d"
+			},
+			"licence": {
+				"id": "wavespeed-terms-2026-09-28",
+				"commercialUse": "unknown",
+				"url": "https://wavespeed.ai/static/terms",
+				"note": "WaveSpeed's Terms of Service (last updated 2026-09-28) make a task's Outputs the customer's own Customer Data (§1.5, §11.1) and leave third-party model terms to the customer (§6.1); its Commercial Use Policy says most models allow commercial use but each has its own terms, and WaveSpeed's catalogue publishes no per-model licence. Meshy's own terms for output made through a reseller were not reviewed. Recorded as unknown, which blocks a release export, until the upstream terms are reviewed."
+			},
+			"features": [
+				"multi-view:4",
+				"textured",
+				"pbr",
+				"quad",
+				"a-pose",
+				"t-pose",
+				"rig:humanoid",
+				"animation",
+				"geometry:2k",
+				"symmetry",
+				"polycount:100-300000"
+			]
+		},
+		{
+			"modelId": "hyper3d/rodin-v2.5/image-to-3d",
+			"label": "Rodin 2.5 image-to-3D (WaveSpeed)",
+			"produces": "model3d",
+			"accepts": [
+				"image"
+			],
+			"inputs": {
+				"images": {
+					"arrayField": "images",
+					"min": 1,
+					"max": 5
+				},
+				"prompt": {
+					"field": "prompt"
+				}
+			},
+			"pricing": {
+				"basis": "$0.48 per generation; the Gen-2.5-Extreme-High tier doubles it and the HighPack add-on adds $0.96, and the two stack ($1.92); no other option changes the price",
+				"source": "https://wavespeed.ai/docs/docs-api/hyper3d/hyper3d-rodin-v2.5-image-to-3d"
+			},
+			"licence": {
+				"id": "wavespeed-terms-2026-09-28",
+				"commercialUse": "unknown",
+				"url": "https://wavespeed.ai/static/terms",
+				"note": "WaveSpeed's Terms of Service (last updated 2026-09-28) make a task's Outputs the customer's own Customer Data (§1.5, §11.1) and leave third-party model terms to the customer (§6.1); its Commercial Use Policy says most models allow commercial use but each has its own terms, and WaveSpeed's catalogue publishes no per-model licence. Hyper3D's own terms for output made through a reseller were not reviewed. Recorded as unknown, which blocks a release export, until the upstream terms are reviewed."
+			},
+			"features": [
+				"multi-image:5",
+				"quad",
+				"pbr",
+				"ta-pose",
+				"hd-texture",
+				"texture-delight",
+				"glb",
+				"fbx",
+				"usdz",
+				"obj",
+				"stl",
+				"prompt-hint",
+				"preview-render"
+			]
+		},
+		{
+			"modelId": "wavespeed-ai/trellis-2/image-to-3d",
+			"label": "TRELLIS.2 image-to-3D (WaveSpeed)",
+			"produces": "model3d",
+			"accepts": [
+				"image"
+			],
+			"inputs": {
+				"images": {
+					"field": "image"
+				},
+				"seed": "seed"
+			},
+			"pricing": {
+				"basis": "$0.10 at resolution 512, $0.20 at 1024 (the default), $0.40 at 1536; a 4096 texture_size adds $0.05",
+				"source": "https://wavespeed.ai/docs/docs-api/wavespeed-ai/trellis-2-image-to-3d"
+			},
+			"licence": {
+				"id": "wavespeed-terms-2026-09-28",
+				"commercialUse": "unknown",
+				"url": "https://wavespeed.ai/static/terms",
+				"note": "WaveSpeed's Terms of Service (last updated 2026-09-28) make a task's Outputs the customer's own Customer Data (§1.5, §11.1) and leave third-party model terms to the customer (§6.1); its Commercial Use Policy says most models allow commercial use but each has its own terms, and WaveSpeed's catalogue publishes no per-model licence. TRELLIS.2's model and code are MIT (microsoft/TRELLIS.2, as recorded for gen-fal), but its pipeline conditions on Meta's DINOv3 (DINOv3 License) and removes backgrounds with briaai/RMBG-2.0, which TencentARC/Pixal3D#33 reports as CC BY-NC; WaveSpeed does not say which background remover its remove_background option uses, and neither licence has been legally reviewed. Recorded as unknown, which blocks a release export, until the upstream terms are reviewed."
+			},
+			"features": [
+				"single-view",
+				"pbr",
+				"seed",
+				"res:512-1536",
+				"texture:1024-4096"
+			]
+		},
+		{
+			"modelId": "wavespeed-ai/hunyuan3d-v3/image-to-3d",
+			"label": "Hunyuan3D 3 image-to-3D (WaveSpeed)",
+			"produces": "model3d",
+			"accepts": [
+				"image"
+			],
+			"inputs": {
+				"images": {
+					"fields": [
+						"image",
+						"back_image",
+						"left_image",
+						"right_image"
+					]
+				}
+			},
+			"pricing": {
+				"basis": "$0.45 geometry-only, $0.63 textured (Normal, the default), $0.72 LowPoly; enable_pbr adds $0.18, and providing any of back_image, left_image or right_image adds $0.18 once",
+				"source": "https://wavespeed.ai/docs/docs-api/wavespeed-ai/hunyuan3d-v3-image-to-3d"
+			},
+			"licence": {
+				"id": "wavespeed-terms-2026-09-28",
+				"commercialUse": "unknown",
+				"url": "https://github.com/Tencent-Hunyuan/Hunyuan3D-2.1/blob/main/LICENSE",
+				"territoryExcludes": [
+					"EU",
+					"GB",
+					"KR"
+				],
+				"prototypeOnly": true,
+				"note": "WaveSpeed's Terms of Service (last updated 2026-09-28) make a task's Outputs the customer's own Customer Data (§1.5, §11.1) and leave third-party model terms to the customer (§6.1); its Commercial Use Policy says most models allow commercial use but each has its own terms, and WaveSpeed's catalogue publishes no per-model licence. The Tencent Hunyuan 3D 2.1 Community License excludes the EU, UK and South Korea (§1.l, §5.c, AUP 1) and needs a Tencent licence above 1M monthly active users (§4); WaveSpeed publishes no separate output licence for Hunyuan3D 3 or 3.1, so that licence is the nearest published terms (the same reading recorded for gen-fal). Recorded as unknown, which blocks a release export, until the upstream terms are reviewed."
+			},
+			"features": [
+				"pbr",
+				"multi-view:4",
+				"images:front,back,left,right",
+				"geometry-only",
+				"lowpoly",
+				"quad",
+				"polycount:40000-1500000"
+			]
+		},
+		{
+			"modelId": "wavespeed-ai/hunyuan-3d-v3.1/image-to-3d-rapid",
+			"label": "Hunyuan3D 3.1 Rapid image-to-3D (WaveSpeed)",
+			"produces": "model3d",
+			"accepts": [
+				"image"
+			],
+			"inputs": {
+				"images": {
+					"field": "image"
+				}
+			},
+			"maxImageBytes": 8388608,
+			"pricing": {
+				"basis": "$0.27 flat per generation",
+				"source": "https://wavespeed.ai/docs/docs-api/wavespeed-ai/hunyuan-3d-v3.1-image-to-3d-rapid"
+			},
+			"licence": {
+				"id": "wavespeed-terms-2026-09-28",
+				"commercialUse": "unknown",
+				"url": "https://github.com/Tencent-Hunyuan/Hunyuan3D-2.1/blob/main/LICENSE",
+				"territoryExcludes": [
+					"EU",
+					"GB",
+					"KR"
+				],
+				"prototypeOnly": true,
+				"note": "WaveSpeed's Terms of Service (last updated 2026-09-28) make a task's Outputs the customer's own Customer Data (§1.5, §11.1) and leave third-party model terms to the customer (§6.1); its Commercial Use Policy says most models allow commercial use but each has its own terms, and WaveSpeed's catalogue publishes no per-model licence. The Tencent Hunyuan 3D 2.1 Community License excludes the EU, UK and South Korea (§1.l, §5.c, AUP 1) and needs a Tencent licence above 1M monthly active users (§4); WaveSpeed publishes no separate output licence for Hunyuan3D 3 or 3.1, so that licence is the nearest published terms (the same reading recorded for gen-fal). Recorded as unknown, which blocks a release export, until the upstream terms are reviewed."
+			},
+			"features": [
+				"single-view",
+				"textured",
+				"rapid"
+			]
+		}
+	]
+}

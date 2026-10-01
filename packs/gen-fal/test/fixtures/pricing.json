@@ -1,0 +1,54 @@
+{
+	"prices": [
+		{
+			"endpoint_id": "fal-ai/pixal3d",
+			"unit_price": 0.06,
+			"unit": "units",
+			"currency": "USD"
+		},
+		{
+			"endpoint_id": "fal-ai/trellis-2",
+			"unit_price": 0.05,
+			"unit": "units",
+			"currency": "USD"
+		},
+		{
+			"endpoint_id": "fal-ai/hyper3d/rodin/v2.5",
+			"unit_price": 0.4,
+			"unit": "generations",
+			"currency": "USD"
+		},
+		{
+			"endpoint_id": "fal-ai/meshy/v6/image-to-3d",
+			"unit_price": 0.8,
+			"unit": "generations",
+			"currency": "USD"
+		},
+		{
+			"endpoint_id": "fal-ai/hunyuan-3d/v3.1/pro/image-to-3d",
+			"unit_price": 0.015,
+			"unit": "units",
+			"currency": "USD"
+		},
+		{
+			"endpoint_id": "fal-ai/hunyuan-3d/v3.1/part",
+			"unit_price": 0.015,
+			"unit": "units",
+			"currency": "USD"
+		},
+		{
+			"endpoint_id": "fal-ai/hunyuan-3d/v3.1/smart-topology",
+			"unit_price": 0.015,
+			"unit": "units",
+			"currency": "USD"
+		},
+		{
+			"endpoint_id": "tripo3d/p2/image-to-3d",
+			"unit_price": 0.01,
+			"unit": "credits",
+			"currency": "USD"
+		}
+	],
+	"next_cursor": null,
+	"has_more": false
+}

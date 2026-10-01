@@ -1,0 +1,295 @@
+{
+	"prices": [
+		{
+			"request": {
+				"model_id": "tripo3d/p2/image-to-3d",
+				"inputs": {
+					"image": "https://example.invalid/pricing-probe.png"
+				}
+			},
+			"response": {
+				"status": 200,
+				"body": {
+					"code": 200,
+					"message": "success",
+					"data": {
+						"model_id": "tripo3d/p2/image-to-3d",
+						"price": 1.32,
+						"discounted_price": 1.32,
+						"discount_rate": 100,
+						"currency": "USD"
+					}
+				}
+			}
+		},
+		{
+			"request": {
+				"model_id": "tripo3d/p2/image-to-3d",
+				"inputs": {
+					"texture": false,
+					"pbr": false,
+					"image": "https://example.invalid/pricing-probe.png"
+				}
+			},
+			"response": {
+				"status": 200,
+				"body": {
+					"code": 200,
+					"message": "success",
+					"data": {
+						"model_id": "tripo3d/p2/image-to-3d",
+						"price": 1.2,
+						"discounted_price": 1.2,
+						"discount_rate": 100,
+						"currency": "USD"
+					}
+				}
+			}
+		},
+		{
+			"request": {
+				"model_id": "tripo3d/p2/image-to-3d",
+				"inputs": {
+					"texture_quality": "extreme",
+					"image": "https://example.invalid/pricing-probe.png",
+					"model_seed": 7
+				}
+			},
+			"response": {
+				"status": 200,
+				"body": {
+					"code": 200,
+					"message": "success",
+					"data": {
+						"model_id": "tripo3d/p2/image-to-3d",
+						"price": 1.56,
+						"discounted_price": 1.56,
+						"discount_rate": 100,
+						"currency": "USD"
+					}
+				}
+			}
+		},
+		{
+			"request": {
+				"model_id": "wavespeed-ai/hunyuan3d-v3/image-to-3d",
+				"inputs": {
+					"image": "https://example.invalid/pricing-probe.png"
+				}
+			},
+			"response": {
+				"status": 200,
+				"body": {
+					"code": 200,
+					"message": "success",
+					"data": {
+						"model_id": "wavespeed-ai/hunyuan3d-v3/image-to-3d",
+						"price": 0.63,
+						"discounted_price": 0.63,
+						"discount_rate": 100,
+						"currency": "USD"
+					}
+				}
+			}
+		},
+		{
+			"request": {
+				"model_id": "wavespeed-ai/hunyuan3d-v3/image-to-3d",
+				"inputs": {
+					"image": "https://example.invalid/pricing-probe.png",
+					"back_image": "https://example.invalid/pricing-probe.png"
+				}
+			},
+			"response": {
+				"status": 200,
+				"body": {
+					"code": 200,
+					"message": "success",
+					"data": {
+						"model_id": "wavespeed-ai/hunyuan3d-v3/image-to-3d",
+						"price": 0.81,
+						"discounted_price": 0.81,
+						"discount_rate": 100,
+						"currency": "USD"
+					}
+				}
+			}
+		},
+		{
+			"request": {
+				"model_id": "wavespeed-ai/hunyuan3d-v3/image-to-3d",
+				"inputs": {
+					"generate_type": "LowPoly",
+					"enable_pbr": true,
+					"image": "https://example.invalid/pricing-probe.png",
+					"back_image": "https://example.invalid/pricing-probe.png",
+					"left_image": "https://example.invalid/pricing-probe.png"
+				}
+			},
+			"response": {
+				"status": 200,
+				"body": {
+					"code": 200,
+					"message": "success",
+					"data": {
+						"model_id": "wavespeed-ai/hunyuan3d-v3/image-to-3d",
+						"price": 1.08,
+						"discounted_price": 1.08,
+						"discount_rate": 100,
+						"currency": "USD"
+					}
+				}
+			}
+		},
+		{
+			"request": {
+				"model_id": "tripo3d/h3.1/multiview-to-3d",
+				"inputs": {
+					"quad": true,
+					"geometry_quality": "detailed",
+					"texture_quality": "detailed",
+					"images": [
+						"https://example.invalid/pricing-probe.png",
+						"https://example.invalid/pricing-probe.png"
+					]
+				}
+			},
+			"response": {
+				"status": 200,
+				"body": {
+					"code": 200,
+					"message": "success",
+					"data": {
+						"model_id": "tripo3d/h3.1/multiview-to-3d",
+						"price": 0.78,
+						"discounted_price": 0.78,
+						"discount_rate": 100,
+						"currency": "USD"
+					}
+				}
+			}
+		},
+		{
+			"request": {
+				"model_id": "hyper3d/rodin-v2.5/image-to-3d",
+				"inputs": {
+					"tier": "Gen-2.5-Extreme-High",
+					"addons": "HighPack",
+					"images": [
+						"https://example.invalid/pricing-probe.png"
+					],
+					"prompt": "a knight"
+				}
+			},
+			"response": {
+				"status": 200,
+				"body": {
+					"code": 200,
+					"message": "success",
+					"data": {
+						"model_id": "hyper3d/rodin-v2.5/image-to-3d",
+						"price": 1.92,
+						"discounted_price": 1.92,
+						"discount_rate": 100,
+						"currency": "USD"
+					}
+				}
+			}
+		},
+		{
+			"request": {
+				"model_id": "meshy/v7.1/image-to-3d",
+				"inputs": {
+					"enable_rigging": true,
+					"enable_animation": true,
+					"geometry_resolution": "4k",
+					"image": "https://example.invalid/pricing-probe.png"
+				}
+			},
+			"response": {
+				"status": 200,
+				"body": {
+					"code": 200,
+					"message": "success",
+					"data": {
+						"model_id": "meshy/v7.1/image-to-3d",
+						"price": 2.304,
+						"discounted_price": 2.304,
+						"discount_rate": 100,
+						"currency": "USD"
+					}
+				}
+			}
+		},
+		{
+			"request": {
+				"model_id": "wavespeed-ai/trellis-2/image-to-3d",
+				"inputs": {
+					"resolution": "1536",
+					"texture_size": 4096,
+					"image": "https://example.invalid/pricing-probe.png",
+					"seed": 3
+				}
+			},
+			"response": {
+				"status": 200,
+				"body": {
+					"code": 200,
+					"message": "success",
+					"data": {
+						"model_id": "wavespeed-ai/trellis-2/image-to-3d",
+						"price": 0.45,
+						"discounted_price": 0.45,
+						"discount_rate": 100,
+						"currency": "USD"
+					}
+				}
+			}
+		},
+		{
+			"request": {
+				"model_id": "wavespeed-ai/hunyuan-3d-v3.1/image-to-3d-rapid",
+				"inputs": {
+					"image": "https://example.invalid/pricing-probe.png"
+				}
+			},
+			"response": {
+				"status": 200,
+				"body": {
+					"code": 200,
+					"message": "success",
+					"data": {
+						"model_id": "wavespeed-ai/hunyuan-3d-v3.1/image-to-3d-rapid",
+						"price": 0.27,
+						"discounted_price": 0.27,
+						"discount_rate": 100,
+						"currency": "USD"
+					}
+				}
+			}
+		},
+		{
+			"request": {
+				"model_id": "meshy/v6/image-to-3d",
+				"inputs": {
+					"should_texture": false,
+					"image": "https://example.invalid/pricing-probe.png"
+				}
+			},
+			"response": {
+				"status": 200,
+				"body": {
+					"code": 200,
+					"message": "success",
+					"data": {
+						"model_id": "meshy/v6/image-to-3d",
+						"price": 0.96,
+						"discounted_price": 0.96,
+						"discount_rate": 100,
+						"currency": "USD"
+					}
+				}
+			}
+		}
+	]
+}
