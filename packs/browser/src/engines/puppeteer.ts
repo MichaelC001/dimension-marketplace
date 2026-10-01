@@ -34,13 +34,14 @@ import { mkdirSync, statSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 import puppeteer, { TimeoutError } from "puppeteer-core";
 import type { Browser, BrowserContext, CDPSession, ElementHandle, Frame, HTTPRequest, HTTPResponse, JSHandle, KeyInput, Page, Protocol, Target } from "puppeteer-core";
-import { type BrowserAction, type BrowserApp, type BrowserRegion, type DialogType, type ElementInspection, type HandledDialog, type LogEntry, MAX_LOG_ENTRIES, type ModelShot, type ShotRequest, type TabInfo, type Viewport } from "../contracts.js";
+import { type BrowserAction, type BrowserApp, type BrowserRegion, type DialogType, type ElementInspection, type HandledDialog, type LogEntry, MAX_ELEMENT_ID_CHARS, MAX_ELEMENT_LABEL_CHARS, MAX_ELEMENT_TAG_CHARS, MAX_ELEMENTS_PER_REGION, MAX_LOG_ENTRIES, type ModelShot, type PageElements, type PageScroll, type ShotRequest, type TabInfo, type Viewport } from "../contracts.js";
 import { FaviconCache } from "../favicon.js";
 import { MAX_FRAME_BYTES } from "../image.js";
 import { ActionNotDispatched, BrowserRuntimeError, fail } from "../store.js";
 import {
 	ELEMENT_TEXT_SCRIPT,
-	ELEMENTS_IN_REGION_SCRIPT,
+	ELEMENTS_IN_REGIONS_SCRIPT,
+	SCROLL_SCRIPT,
 	FAVICON_HREF_SCRIPT,
 	FOCUSED_LEAF_SCRIPT,
 	FRAME_INSET_SCRIPT,
@@ -849,8 +850,17 @@ class PuppeteerDriver implements EngineDriver {
 		return parts.join("\n\n");
 	}
 
-	async elements(region: BrowserRegion, limit: number): Promise<string> {
-		return await this.#activeTab().page.evaluate(ELEMENTS_IN_REGION_SCRIPT, region, limit);
+	async elements(regions: readonly BrowserRegion[], limit: number): Promise<{ scroll: PageScroll; regions: PageElements[] }> {
+		return await this.#activeTab().page.evaluate(ELEMENTS_IN_REGIONS_SCRIPT, [...regions], limit, {
+			tag: MAX_ELEMENT_TAG_CHARS,
+			id: MAX_ELEMENT_ID_CHARS,
+			label: MAX_ELEMENT_LABEL_CHARS,
+			count: MAX_ELEMENTS_PER_REGION,
+		});
+	}
+
+	async scroll(): Promise<PageScroll> {
+		return await this.#activeTab().page.evaluate(SCROLL_SCRIPT);
 	}
 
 	// -----------------------------------------------------------------------

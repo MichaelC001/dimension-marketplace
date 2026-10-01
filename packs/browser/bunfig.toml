@@ -7,5 +7,6 @@ preload = [
 	"../../../fraym/packages/ui/test/test-globals.ts",
 	"../../../fraym/packages/ui/test/pdfjs-test-adapter.ts",
 	"../../../fraym/packages/ui/test/asset-url-test-adapter.ts",
+	"./test/kit-react-preload.ts",
 ]
 telemetry = false

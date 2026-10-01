@@ -1,5 +1,5 @@
 import type { AdmittedInput } from "../input.js";
-import type { BrowserAction, BrowserApp, BrowserRegion, ElementInspection, HandledDialog, LogEntry, ModelShot, ShotRequest, TabInfo, Viewport } from "../contracts.js";
+import type { BrowserAction, BrowserApp, BrowserRegion, ElementInspection, HandledDialog, LogEntry, ModelShot, PageElements, PageScroll, ShotRequest, TabInfo, Viewport } from "../contracts.js";
 
 /** Everything below describes the ACTIVE tab unless it says otherwise. */
 export interface EngineState {
@@ -132,7 +132,14 @@ export interface EngineDriver {
   /** The human's input on the active tab, in order (already admitted). Throws `ActionNotDispatched` when provably nothing reached the page. */
   input(events: readonly AdmittedInput[]): Promise<void>;
   snapshot(limit: number): Promise<string>;
-  elements(region: BrowserRegion, limit: number): Promise<string>;
+  /**
+   * What is on the active tab under each of `regions` (viewport px), one read for all of them: the elements under each
+   * region as separate records (bounded; at most about `limit` characters of them per region), in the order asked, and
+   * where the page is scrolled right now.
+   */
+  elements(regions: readonly BrowserRegion[], limit: number): Promise<{ scroll: PageScroll; regions: PageElements[] }>;
+  /** Where the active tab is scrolled right now and how large its document is. */
+  scroll(): Promise<PageScroll>;
   /**
    * Perform one action on the active tab now, once, never retried. Throws
    * `ActionNotDispatched` when provably nothing reached the page; any other

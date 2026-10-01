@@ -9,9 +9,9 @@ import type { BrowserAction, BrowserFrame, BrowserState, TabOp } from "../../src
 import { Icon } from "@fraym/ui/icons";
 import { addressParts, tabLabel } from "../../src/address";
 import { AgentPill, ResultToast } from "./agent-activity";
-import { AnnotateBar } from "./annotate-bar";
+import { AnnotationSeat } from "./annotation-seat";
 import { BrowserClient, failureText, openFailureText, type ToolMount } from "./browser-client";
-import { type DrawTool, EMPTY_SKETCH, PageView, type Sketch } from "./page-view";
+import { PageView } from "./page-view";
 import { DEFAULT_PROFILE, RELAY_PROFILE } from "../../src/profile-name";
 import { BlankTab, StartPage } from "./start-page";
 import { TabStrip } from "./tab-strip";
@@ -52,8 +52,7 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 	const [closed, setClosed] = useState(false);
 
 	const [annotating, setAnnotating] = useState(false);
-	const [tool, setTool] = useState<DrawTool>("region");
-	const [sketch, setSketch] = useState<Sketch>(EMPTY_SKETCH);
+	/** The page frozen into one picture for the human to mark; null until it is captured. */
 	const [still, setStill] = useState<BrowserFrame | null>(null);
 
 	const [cancelling, setCancelling] = useState(false);
@@ -110,7 +109,7 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 	// A tool result is the ONLY source of a browserId, and it is folded in DURING
 	// RENDER so a View mounted by `browser_view` paints the live browser on its
 	// first frame. Only a CHANGE of browserId resets the annotation: a model turn
-	// must not wipe a half-drawn crop out from under the human.
+	// must not wipe a half-drawn mark out from under the human.
 	const [seenSeq, setSeenSeq] = useState(0);
 	if (toolState !== null && toolState.seq !== seenSeq) {
 		setSeenSeq(toolState.seq);
@@ -125,7 +124,6 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 				setBrowserId(toolState.state.browserId);
 				setClosed(false);
 				setAnnotating(false);
-				setSketch(EMPTY_SKETCH);
 				setStill(null);
 			}
 		}
@@ -208,7 +206,6 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 			const saved = next.engine === "chrome-relay" ? null : next.profile;
 			if (saved !== null) setProfiles(current => [...new Set([...(current ?? []), saved])].sort());
 			setAnnotating(false);
-			setSketch(EMPTY_SKETCH);
 			setStill(null);
 		} catch (cause) {
 			if (mountedRef.current) setOpenError(openFailureText(cause));
@@ -324,7 +321,6 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 		setNavPending(0);
 		setOpened(null);
 		setAnnotating(false);
-		setSketch(EMPTY_SKETCH);
 		setStill(null);
 		input.reset();
 	};
@@ -341,7 +337,6 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 		const bound = browserId;
 		if (bound === null || annotating) return;
 		setAnnotating(true);
-		setSketch(EMPTY_SKETCH);
 		setStill(null);
 		try {
 			const frame = await client.frame(bound);
@@ -355,7 +350,6 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 
 	const exitAnnotation = useCallback(() => {
 		setAnnotating(false);
-		setSketch(EMPTY_SKETCH);
 		setStill(null);
 	}, []);
 
@@ -363,7 +357,12 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 		const bound = browserId;
 		if (bound === null) return;
 		try {
-			if (await client.updateContext(bound, [])) say("ok", "Annotation removed.");
+			if (await client.updateContext(bound, [])) {
+				say("ok", "Annotation removed.");
+				// The seat's button would go on reading "Added" for a request the host no longer holds, and marking cannot
+				// be taken back into the same seat: the human starts a new one.
+				if (live(bound) && annotating) exitAnnotation();
+			}
 		} catch (cause) {
 			if (live(bound)) say("error", failureText(cause));
 		}
@@ -423,14 +422,10 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 				handled();
 				if (annotating) exitAnnotation();
 				else void enterAnnotation();
-			} else if (event.key === "Escape" && !inField && document.querySelector(".bx-menu") === null) {
-				if (annotating) {
-					handled();
-					exitAnnotation();
-				} else if (loading) {
-					handled();
-					act({ kind: "stop" });
-				}
+			} else if (event.key === "Escape" && !inField && !annotating && loading && document.querySelector(".bx-menu") === null) {
+				// While marking, Escape belongs to the annotation kit: it cancels a stroke in flight, and only then is Done.
+				handled();
+				act({ kind: "stop" });
 			}
 		};
 		window.addEventListener("keydown", onKey, true);
@@ -458,7 +453,8 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 
 	const parts = addressParts(state.url);
 	const blank = parts.blank && !state.loading && !annotating;
-	const mode = annotating ? "annotate" : locked ? "locked" : "live";
+	// Marking holds the page still: while the picture is being captured the page takes no input either.
+	const mode = annotating ? "frozen" : locked ? "locked" : "live";
 	const label = `${tabLabel(state.title, state.url)}${state.url.length > 0 ? ` — ${state.url}` : ""}`;
 	const ended = task !== null && task.status !== "running" && watchedTaskRef.current === task.id && dismissedTask !== task.id;
 	const showPublish =
@@ -468,24 +464,6 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 
 	const floats = (
 		<>
-			{annotating && (
-				<div className="bx-float bx-float-top">
-					<AnnotateBar
-						app={app}
-						client={client}
-						browserId={browserId}
-						frameId={still?.frameId ?? null}
-						tool={tool}
-						onTool={setTool}
-						sketch={sketch}
-						onClear={() => setSketch(EMPTY_SKETCH)}
-						onExit={exitAnnotation}
-						onNotice={say}
-						onSent={exitAnnotation}
-					/>
-				</div>
-			)}
-
 			{((taskRunning && task !== null) || showPublish) && (
 				<div className="bx-float bx-float-bottom">
 					<div className="bx-float-column">
@@ -545,16 +523,14 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 					<BlankTab disabled={locked} onNavigate={navigate}>
 						{floats}
 					</BlankTab>
+				) : annotating && still !== null ? (
+					<AnnotationSeat key={still.frameId} app={app} client={client} browserId={browserId} frame={still} floats={floats} onDone={exitAnnotation} />
 				) : (
 					<PageView
-						frame={still}
 						picture={stream.picture}
 						canvas={stream.canvas}
 						viewport={viewport}
 						mode={mode}
-						tool={tool}
-						sketch={sketch}
-						onSketch={setSketch}
 						onInput={input.send}
 						onResize={onStageResize}
 						label={label}

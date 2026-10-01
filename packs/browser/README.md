@@ -26,9 +26,12 @@ standard MCP and MCP Apps. No host internals, no browser fork.
   persists logins across restarts, stays isolated, and is held by one caller at
   a time. The exception is yours: the View's start page and the dock open the
   saved `default` profile unless you tick **Private** ([Browser panel](#browser-panel)).
-- **Annotations that carry pixels.** Draw a region, circle or freehand stroke; the
-  marks are painted into the cropped screenshot and sent, with your note, the URL
-  and the elements under the crop, into the same conversation.
+- **Annotations that carry pixels.** Freeze the page, mark it with the shared
+  annotation kit (pin, box, circle, arrow, pen, a note on each mark); the numbered
+  marks are burned into the picture and staged as a chip on your next message,
+  with the page's address, where it was scrolled and the elements under each mark.
+  The kit is the one annotation component every View shares; the Browser adds only
+  the page facts (`app/view/page-annotation.ts`).
 - **Acts when asked.** The agent session decides what to do — its permission mode
   and its own questions to you govern consequential steps (except the publish
   confirm, which always asks you). The browser never
@@ -208,7 +211,7 @@ which a Traction session reads on demand.
 
 View-only: `browser_stream` (where the View reads its live pictures and state and sends the human's
 mouse and keys: one call to bind a browser, none per picture), `browser_frame` (a PNG capture
-retained for annotation), `browser_annotate`, `browser_viewport`, `browser_profiles`.
+retained for annotation), `browser_annotate` (the page under the marked regions: address, title, the scroll the picture was taken at, elements; no pixels), `browser_annotation_file` (keeps the kit's detail document and answers its path; a Private browser's is deleted with it), `browser_viewport`, `browser_profiles`.
 
 **The View's direct channel.** The live picture and the human's input do not ride the tool-call
 lane. The server opens one listener on `127.0.0.1` (random port, only while a View holds a token) that
