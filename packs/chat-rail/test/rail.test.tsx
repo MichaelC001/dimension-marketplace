@@ -21,6 +21,7 @@ interface RawRow {
 	readonly space?: string;
 	readonly profile?: string;
 	readonly archivedAt?: string;
+	readonly voicemail?: { readonly unplayed: number; readonly newestAt: number; readonly needsYou?: true };
 }
 
 /** The raw `sessions/list` rows the fake root fact serves. */
@@ -29,6 +30,8 @@ let rootRows: readonly RawRow[] = [];
 let kitInputs: (readonly RawRow[])[] = [];
 /** What the (fake) kit's presence resolver answers for a row; `null` = the status dot. Set by the test that cares. */
 let presenceFor: (item: { readonly id: string; readonly active?: boolean }) => ReactNode = () => null;
+/** Every render of the kit's (stand-in) voicemail mark, by session: the only way a test can see `sameRow` working. */
+const markRenders: Record<string, number> = {};
 
 const passthrough = ({ children }: { readonly children?: ReactNode }) => createElement("span", null, children);
 const button = ({ children, ...rest }: { readonly children?: ReactNode }) =>
@@ -47,6 +50,23 @@ mock.module("@fraym/ui", () => ({
 		useSyncExternalStore(source.subscribe, source.getSnapshot),
 	useStandardRootFacts: () => ({ sessions: rootRows }),
 	useRailSessionPresence: () => (item: { readonly id: string; readonly active?: boolean }) => presenceFor(item),
+	// The kit's granted mark: the pack hands it the row's summary and identity and nothing else.
+	VoicemailMark: (props: {
+		readonly sessionId: string;
+		readonly title: string;
+		readonly agent?: string;
+		readonly voicemail?: { readonly needsYou?: true };
+		readonly className?: string;
+	}) => {
+		markRenders[props.sessionId] = (markRenders[props.sessionId] ?? 0) + 1;
+		return createElement("i", {
+			"data-voicemail-mark": props.sessionId,
+			"data-title": props.title,
+			"data-agent": props.agent,
+			"data-needs-you": props.voicemail?.needsYou ? "" : undefined,
+			className: props.className,
+		});
+	},
 	// The kit's own pair: `useRailActionSet` resolves the ACTIVE space's declared actions,
 	// `FraymRailActions` draws them. Stubbed to expose exactly which actions the pack hands over.
 	useRailActionSet: (spaces: readonly { readonly id: string; readonly rail?: { readonly actions: readonly unknown[] } }[], id: string) =>
@@ -71,6 +91,8 @@ mock.module("@fraym/ui", () => ({
 					status: "idle",
 					active: active?.sessionId === snapshot.ref.sessionId,
 					archived: Boolean(snapshot.archivedAt),
+					profile: snapshot.profile,
+					voicemail: snapshot.voicemail,
 				})),
 			},
 		];
@@ -81,7 +103,6 @@ mock.module("@fraym/ui", () => ({
 // imports resolve `@fraym/ui`, and static imports are hoisted above it.
 const { default: ChatRail } = await import("../src/index");
 const { collectionsStore } = await import("../src/collections-store");
-
 // ── DOM harness ──────────────────────────────────────────────────────────────
 
 const globalNames = [
@@ -426,6 +447,84 @@ describe("collections", () => {
 		const group = container.querySelector(`[data-collection="${trips.id}"]`);
 		expect(titles(group as unknown as ParentNode)).toEqual(["Lisbon plans"]);
 		expect(document.querySelector('[role="menu"]')).toBeNull();
+	});
+});
+
+describe("the voice message mark", () => {
+	const mark = (id: string) => container.querySelector(`[data-voicemail-mark="${id}"]`);
+
+	test("a session holding a message draws the kit's mark beside its row button, never inside it", async () => {
+		rootRows = [
+			session("a", "Plan the Lisbon trip", 2, { voicemail: { unplayed: 2, newestAt: 1 } }),
+			session("b", "Quarterly taxes", 1),
+			session("c", "Flight is cancelled", 3, { voicemail: { unplayed: 1, newestAt: 1, needsYou: true } }),
+		];
+		await mount(actionsOffering().actions);
+
+		expect(mark("a")).not.toBeNull();
+		expect(mark("b")).toBeNull();
+		// A button in a button is invalid HTML, so the mark is the row's sibling.
+		expect(mark("a")?.closest(".er-row-main")).toBeNull();
+		expect(mark("a")?.closest('[data-slot="chat-session"]')).toBe(rowNamed("Plan the Lisbon trip") as Element);
+		// It is handed the row's identity, and the plain/needs-you distinction survives the pack.
+		expect(mark("a")?.getAttribute("data-title")).toBe("Plan the Lisbon trip");
+		expect(mark("a")?.getAttribute("data-agent")).toBe("aether");
+		expect(mark("a")?.hasAttribute("data-needs-you")).toBe(false);
+		expect(mark("c")?.hasAttribute("data-needs-you")).toBe(true);
+	});
+
+	test("a drained stack (zero unplayed) draws no mark", async () => {
+		rootRows = [session("a", "Plan the Lisbon trip", 2, { voicemail: { unplayed: 0, newestAt: 1 } })];
+		await mount(actionsOffering().actions);
+		expect(mark("a")).toBeNull();
+	});
+
+	// `sameRow` memoises a row on what it DRAWS. A message arriving must reach the row (or the mark never appears
+	// until something unrelated repaints it), and a republish that changes nothing the mark draws must not.
+	test("a message arriving reaches its row; a republish that draws the same mark does not re-render it", async () => {
+		rootRows = [session("a", "Open one", 1), session("b", "Other one", 2)];
+		let current = facts("", [], { workspaceId: "inso-personal", sessionId: "a" });
+		const listeners = new Set<() => void>();
+		const rail = {
+			subscribe: (fn: () => void) => (listeners.add(fn), () => listeners.delete(fn)),
+			getSnapshot: () => current,
+		};
+		const publish = async () => {
+			current = facts("", [], { workspaceId: "inso-personal", sessionId: "a" });
+			await act(async () => {
+				for (const fn of listeners) fn();
+			});
+		};
+		const root = createRoot(container);
+		roots.push(root);
+		await act(async () =>
+			root.render(createElement(ChatRail, { rail, actions: actionsOffering().actions, capabilities: { agents: [] } })),
+		);
+		expect(mark("a")).toBeNull();
+
+		rootRows = [session("a", "Open one", 1, { voicemail: { unplayed: 1, newestAt: 10 } }), session("b", "Other one", 2)];
+		await publish();
+		expect(mark("a")).not.toBeNull();
+		expect(mark("b")).toBeNull();
+		const rendered = markRenders.a;
+
+		// The engine pushed a newer summary object for the same stack: nothing the mark draws changed.
+		rootRows = [session("a", "Open one", 1, { voicemail: { unplayed: 3, newestAt: 99 } }), session("b", "Other one", 2)];
+		await publish();
+		expect(markRenders.a).toBe(rendered);
+
+		// It becoming urgent is a change the mark draws.
+		rootRows = [
+			session("a", "Open one", 1, { voicemail: { unplayed: 3, newestAt: 99, needsYou: true } }),
+			session("b", "Other one", 2),
+		];
+		await publish();
+		expect(mark("a")?.hasAttribute("data-needs-you")).toBe(true);
+
+		// And playing it all removes the mark.
+		rootRows = [session("a", "Open one", 1), session("b", "Other one", 2)];
+		await publish();
+		expect(mark("a")).toBeNull();
 	});
 });
 

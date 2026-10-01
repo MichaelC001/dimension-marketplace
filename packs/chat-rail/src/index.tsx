@@ -35,6 +35,7 @@ import {
 	useRailActionSet,
 	useRailSessionPresence,
 	useStandardRootFacts,
+	VoicemailMark,
 } from "@fraym/ui";
 import {
 	type ComponentProps,
@@ -87,6 +88,8 @@ interface RailRow extends RailItem {
 	readonly dotState?: string;
 	readonly profile?: string;
 	readonly unread?: true;
+	/** The voice desk's summary for this session (doc 91 §8): present only while a message is unplayed. */
+	readonly voicemail?: { readonly unplayed: number; readonly needsYou?: true };
 	readonly continuedInto?: { readonly toSessionId: string };
 }
 
@@ -271,6 +274,13 @@ function samePresence(a: ReactNode, b: ReactNode): boolean {
 	return keys.length === Object.keys(y).length && keys.every(key => sameBag(x[key], y[key]));
 }
 
+/** What the voicemail mark DRAWS from a row: nothing, a message, or a message that needs you. A catalog republish
+ *  rebuilds `voicemail` on every fold, so the row's memo compares this, not the object. */
+function mailKey(item: RailRow): 0 | 1 | 2 {
+	const mail = item.voicemail;
+	return mail && mail.unplayed > 0 ? (mail.needsYou ? 2 : 1) : 0;
+}
+
 /** Equal when nothing the row DRAWS or ACTS ON changed. A re-fold hands every
  *  row a fresh object (the kit builds them per call), so identity would defeat
  *  the memo on every minute tick and every catalog change; the fields below are
@@ -288,6 +298,7 @@ function sameRow(a: RowProps, b: RowProps): boolean {
 				x.dotState === y.dotState &&
 				x.active === y.active &&
 				x.unread === y.unread &&
+				mailKey(x) === mailKey(y) &&
 				x.continuedInto?.toSessionId === y.continuedInto?.toSessionId &&
 				x.sessionRef?.sessionId === y.sessionRef?.sessionId &&
 				x.sessionRef?.workspaceId === y.sessionRef?.workspaceId &&
@@ -356,6 +367,7 @@ const Row = memo(function Row({ item, actions, presence, renaming, menuOpen, onO
 			</div>
 		);
 	}
+	const mail = mailKey(item) > 0 && ref !== undefined;
 	return (
 		<div
 			className="er-row"
@@ -364,6 +376,7 @@ const Row = memo(function Row({ item, actions, presence, renaming, menuOpen, onO
 			data-active={item.active ? "" : undefined}
 			data-unread={item.unread ? "" : undefined}
 			data-frozen={item.continuedInto ? "" : undefined}
+			data-mail={mail ? "" : undefined}
 		>
 			<button
 				type="button"
@@ -381,6 +394,11 @@ const Row = memo(function Row({ item, actions, presence, renaming, menuOpen, onO
 				<span className="er-title">{item.title}</span>
 				<span className="er-time">{item.time}</span>
 			</button>
+			{/* The voice message mark is the row's own click target, so it is a SIBLING of the row button (a button
+			    in a button is invalid HTML). The kit's granted component reads the summary and opens the popover. */}
+			{mail ? (
+				<VoicemailMark sessionId={ref.sessionId} voicemail={item.voicemail} title={item.title} agent={item.profile} className="er-mail" />
+			) : null}
 			<button
 				type="button"
 				className="er-options"
