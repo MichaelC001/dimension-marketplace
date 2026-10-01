@@ -1072,7 +1072,7 @@
 			"title": "Viewer",
 			"icon": "file",
 			"description": "A tabbed document viewer beside the conversation: images, PDF, HTML, Markdown, Word, PowerPoint, Excel and plain text, plus audio and video you can play and mark, rendered offline inside a sandboxed frame. Ask the agent to open a file and it appears as a tab.",
-			"version": "0.4.0",
+			"version": "0.4.1",
 			"author": {
 				"name": "Dimension"
 			},
