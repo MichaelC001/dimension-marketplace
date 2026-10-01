@@ -21,8 +21,18 @@
 //      answer must not say which outside paths exist. The cause goes to the
 //      `log` option (the server's stderr). Inside the roots the errors are
 //      specific (no such file, permission denied).
+//   5. A host-lent FILE (doc 86 §5). A human clicking Open lends ONE file: the
+//      engine stamps `_meta["ai.insodimension/grant"] = { read: [<realpath>] }` on
+//      the calls of that View, and this server treats it as ONE extra file, never
+//      a folder. It is checked AFTER 1 and 2 and never instead of them: a click
+//      cannot open a secret. A file is lent only when the REQUESTED path, resolved
+//      to its real path, equals a lent entry (no prefix, no sibling, no parent, and
+//      the entry is not resolved again) and is a regular file. The engine strips the
+//      key from every call it did not stamp, but this server does not rely on that:
+//      a grant with any flaw (not an object, `read` not a list, a non-string or
+//      relative entry, more than 8 files) is NO grant, and no grant changes nothing.
 //
-// The allow-list is configuration, not a lent fact: the server is not told which
+// The ROOTS are configuration, not a lent fact: the server is not told which
 // workspace a session lives in (doc 84 gap G4) nor the engine home (the engine
 // scrubs its home pointers from the environment of every child it spawns). Roots
 // come from `VIEWER_ROOTS` (a path list) and `INSO_VAULT_DIR`, plus the managed
@@ -31,10 +41,11 @@
 //
 // Pure where it can be: `denyReason`, `insideRoot` and `configuredRoots` take
 // their platform and inputs as arguments. Only `createFence` touches the disk
-// (one `realpath` per check; a few more, on the refusal path only), and it
-// accepts the `realpath` to use.
-import { realpath as nativeRealpath } from "node:fs/promises";
+// (one `realpath` per check; a few more, on the refusal path only, and one `stat`
+// for a lent file that matches), and it accepts the `realpath` and `isFile` to use.
+import { realpath as nativeRealpath, stat as nativeStat } from "node:fs/promises";
 import * as nodePath from "node:path";
+import { ARTIFACTORY_GRANT_META_KEY, type ArtifactoryGrantMeta } from "@dimension/sdk/artifactory";
 
 type Platform = NodeJS.Platform;
 type PathApi = typeof nodePath.posix;
@@ -43,6 +54,9 @@ const pathApi = (platform: Platform): PathApi => (platform === "win32" ? nodePat
 
 /** Windows and macOS volumes compare names without regard to case by default. */
 const foldsCase = (platform: Platform): boolean => platform === "win32" || platform === "darwin";
+
+/** `path` as the platform compares names. Containment and "the same file" both go through it, so they can never disagree about case. */
+const comparable = (path: string, platform: Platform): string => (foldsCase(platform) ? path.toLowerCase() : path);
 
 const segmentsOf = (path: string): string[] => path.toLowerCase().split(/[\\/]+/).filter(part => part !== "");
 
@@ -65,12 +79,15 @@ export function configuredRoots(env: Readonly<Record<string, string | undefined>
 /** Whether `target` is `root` or below it. Segment-wise, so `/a/bc` is not under `/a/b`. */
 export function insideRoot(target: string, root: string, platform: Platform): boolean {
 	const api = pathApi(platform);
-	const fold = foldsCase(platform) ? (path: string) => path.toLowerCase() : (path: string) => path;
-	const relative = api.relative(fold(root), fold(target));
+	const relative = api.relative(comparable(root, platform), comparable(target, platform));
 	return relative === "" || (relative !== ".." && !relative.startsWith(`..${api.sep}`) && !api.isAbsolute(relative));
 }
 
-const SECRET_DIRECTORIES: Readonly<Record<string, true>> = {
+// The deny tables below are exported, not private: `present` (swiss-knife) keeps a
+// copy of them (packs install one at a time and cannot import each other) and its
+// test compares that copy to these BY VALUE, so a rule added here and not there is
+// a red test. Change a table here and the copy must follow.
+export const SECRET_DIRECTORIES: Readonly<Record<string, true>> = {
 	".ssh": true,
 	".gnupg": true,
 	".aws": true,
@@ -89,7 +106,7 @@ const SECRET_DIRECTORIES: Readonly<Record<string, true>> = {
 };
 
 /** Consecutive folder names that mark a credential store. */
-const SECRET_PATHS: readonly (readonly string[])[] = [
+export const SECRET_PATHS: readonly (readonly string[])[] = [
 	[".config", "gcloud"],
 	["microsoft", "credentials"],
 	["microsoft", "protect"],
@@ -97,7 +114,7 @@ const SECRET_PATHS: readonly (readonly string[])[] = [
 	["library", "keychains"],
 ];
 
-const SECRET_FILES: Readonly<Record<string, true>> = {
+export const SECRET_FILES: Readonly<Record<string, true>> = {
 	".netrc": true,
 	_netrc: true,
 	".npmrc": true,
@@ -129,12 +146,12 @@ const SECRET_FILES: Readonly<Record<string, true>> = {
 	"_locker.json": true,
 };
 
-const PRIVATE_KEY_FILE = /^(?:id_(?:rsa|dsa|ecdsa|ed25519)(?:\..*)?|.*\.(?:pem|key|p12|pfx|ppk|jks|keystore|kdbx))$/;
-const ENVIRONMENT_FILE = /^(?:\.env.*|.*\.env)$/;
-const OTHER_SECRET_FILE = /^(?:client_secret.*\.json|.*\.tfstate(?:\.backup)?|.*\.kubeconfig|.*\.secret\.json)$/;
-const DATABASE_FILE = /\.(?:db|sqlite3?)(?:-wal|-shm|-journal)?$/;
+export const PRIVATE_KEY_FILE = /^(?:id_(?:rsa|dsa|ecdsa|ed25519)(?:\..*)?|.*\.(?:pem|key|p12|pfx|ppk|jks|keystore|kdbx))$/;
+export const ENVIRONMENT_FILE = /^(?:\.env.*|.*\.env)$/;
+export const OTHER_SECRET_FILE = /^(?:client_secret.*\.json|.*\.tfstate(?:\.backup)?|.*\.kubeconfig|.*\.secret\.json)$/;
+export const DATABASE_FILE = /\.(?:db|sqlite3?)(?:-wal|-shm|-journal)?$/;
 /** `.inso`, `.inso-dev`, `.omp` and their suffixed variants. */
-const ENGINE_HOME = /^\.(?:inso|omp)(?:-[a-z0-9._-]+)?$/;
+export const ENGINE_HOME = /^\.(?:inso|omp)(?:-[a-z0-9._-]+)?$/;
 
 /**
  * Why `path` must never be opened, or `undefined` when nothing on it is
@@ -165,6 +182,25 @@ export function denyReason(path: string): string | undefined {
 	return undefined;
 }
 
+/**
+ * Why `requested` is refused on its TEXT alone, before any filesystem call, or
+ * `undefined`. These are the Windows spellings the operating system acts on:
+ * a device path, an alternate data stream, a network path (resolving one is a
+ * network request to a host the model chose). Pure: the platform is an argument.
+ * The empty, NUL and not-absolute refusals stay in `check`, which answers them
+ * first. `present` screens the same spellings with its own copy of this function.
+ */
+export function textRefusal(requested: string, platform: Platform): string | undefined {
+	if (platform !== "win32") return undefined;
+	if (/^[\\/]{2}[.?][\\/]/.test(requested)) return "Windows device paths (\\\\.\\ and \\\\?\\) are not viewable";
+	if (requested.slice(2).includes(":")) return "alternate data streams (a ':' after the drive) are not viewable";
+	// Any two leading separators, either kind: `\\host\share`, `//host/share`,
+	// `\\host@SSL@443\DavWWWRoot\x`. Every root is a local folder, so no
+	// legitimate one exists.
+	if (/^[\\/]{2}/.test(requested)) return "network paths (\\\\host\\share) are not viewable";
+	return undefined;
+}
+
 export type FenceVerdict =
 	| { readonly ok: true; /** The path with every symlink resolved: open THIS, never the request. */ readonly real: string }
 	| { readonly ok: false; /** Names the reason; safe to show the model and the user. */ readonly reason: string };
@@ -172,7 +208,12 @@ export type FenceVerdict =
 export interface Fence {
 	/** The allowed roots as configured (lexical, absolute). */
 	readonly roots: readonly string[];
-	check(requested: unknown): Promise<FenceVerdict>;
+	/**
+	 * `meta` is the `_meta` of the tool call being answered: the host-lent file
+	 * grant (policy 5) is read from it, and nothing else in it is. Absent or
+	 * malformed ⇒ no grant, which is the fence's answer without one.
+	 */
+	check(requested: unknown, meta?: unknown): Promise<FenceVerdict>;
 }
 
 export interface FenceOptions {
@@ -184,16 +225,23 @@ export interface FenceOptions {
 	readonly roots?: readonly string[];
 	/** Defaults to the native `fs.promises.realpath` (long names, links resolved). */
 	readonly realpath?: (path: string) => Promise<string>;
+	/** Whether a real path is a regular file (not a directory or a device). Defaults to a native `stat`. */
+	readonly isFile?: (path: string) => Promise<boolean>;
 	/** Where the cause of an outside-the-roots refusal goes: it is kept out of the answer. Defaults to nowhere. */
 	readonly log?: (detail: string) => void;
 }
 
 const refuse = (reason: string): FenceVerdict => ({ ok: false, reason });
 
+/** The most files one grant may lend, and the longest path in it: the engine's own caps (doc 86 C2). */
+const MAX_LENT_FILES = 8;
+const MAX_LENT_PATH = 4096;
+
 export function createFence(options: FenceOptions): Fence {
 	const platform = options.platform ?? process.platform;
 	const api = pathApi(platform);
 	const resolveReal = options.realpath ?? nativeRealpath;
+	const isRegularFile = options.isFile ?? (async (path: string) => (await nativeStat(path)).isFile());
 	const log = options.log ?? (() => undefined);
 	const extra = (options.roots ?? []).filter(root => api.isAbsolute(root)).map(root => api.resolve(root));
 	const roots = [...new Set([...configuredRoots(options.env ?? {}, options.home, platform), ...extra])];
@@ -243,21 +291,48 @@ export function createFence(options: FenceOptions): Fence {
 		}
 	}
 
-	async function check(requested: unknown): Promise<FenceVerdict> {
+	/** The grant in a call's `_meta`, or `undefined`. ANY flaw voids all of it, as the engine refuses a whole open rather than grant part of one. */
+	function readGrant(meta: unknown): ArtifactoryGrantMeta | undefined {
+		if (typeof meta !== "object" || meta === null || !Object.hasOwn(meta, ARTIFACTORY_GRANT_META_KEY)) return undefined;
+		const grant: unknown = Reflect.get(meta, ARTIFACTORY_GRANT_META_KEY);
+		if (typeof grant !== "object" || grant === null || !Object.hasOwn(grant, "read")) return undefined;
+		const read: unknown = Reflect.get(grant, "read");
+		if (!Array.isArray(read) || read.length > MAX_LENT_FILES) return undefined;
+		const files: string[] = [];
+		for (const entry of read) {
+			if (typeof entry !== "string" || entry.length > MAX_LENT_PATH || !api.isAbsolute(entry)) return undefined;
+			files.push(entry);
+		}
+		return { read: files };
+	}
+
+	/**
+	 * Whether `real` is a file the host lent: the SAME path as a lent entry, and a
+	 * regular file. A lent entry is what the engine stamped, a real path, and is NOT
+	 * resolved again: a lent file swapped for a link after the click lends what it
+	 * was, not wherever the link now leads.
+	 */
+	async function isLent(real: string, lent: readonly string[]): Promise<boolean> {
+		const wanted = comparable(real, platform);
+		if (!lent.some(file => comparable(file, platform) === wanted)) return false;
+		try {
+			return await isRegularFile(real);
+		} catch {
+			return false;
+		}
+	}
+
+	async function check(requested: unknown, meta?: unknown): Promise<FenceVerdict> {
 		if (typeof requested !== "string" || requested.trim() === "") return refuse("the path is empty");
 		if (requested.includes("\0")) return refuse("the path contains a NUL byte");
 		if (!api.isAbsolute(requested)) return refuse(`"${requested}" is not an absolute path; pass the full path to the file`);
-		if (platform === "win32") {
-			if (/^[\\/]{2}[.?][\\/]/.test(requested)) return refuse("Windows device paths (\\\\.\\ and \\\\?\\) are not viewable");
-			if (requested.slice(2).includes(":")) return refuse("alternate data streams (a ':' after the drive) are not viewable");
-			// Any two leading separators, either kind: `\\host\share`, `//host/share`,
-			// `\\host@SSL@443\DavWWWRoot\x`. Every root is a local folder, so no
-			// legitimate one exists, and resolving one is a network request.
-			if (/^[\\/]{2}/.test(requested)) return refuse("network paths (\\\\host\\share) are not viewable");
-		}
+		const refused = textRefusal(requested, platform);
+		if (refused !== undefined) return refuse(refused);
 		const lexical = api.resolve(requested);
+		// Deny first, on the text, before any filesystem call and whatever was lent.
 		const early = denyReason(lexical);
 		if (early !== undefined) return refuse(`refused to open "${requested}": ${early}`);
+		const lent = readGrant(meta)?.read ?? [];
 
 		let real: string;
 		try {
@@ -265,7 +340,10 @@ export function createFence(options: FenceOptions): Fence {
 		} catch (error) {
 			const code = error instanceof Error && "code" in error && typeof error.code === "string" ? error.code : undefined;
 			const anchor = await nearestReal(lexical);
-			const within = anchor !== undefined && [...roots, ...(await realRoots())].some(root => insideRoot(anchor, root, platform));
+			// A lent file the human named is theirs to hear about: "no such file" beats "outside the folders" for one they just clicked.
+			const within =
+				lent.some(file => comparable(file, platform) === comparable(lexical, platform)) ||
+				(anchor !== undefined && [...roots, ...(await realRoots())].some(root => insideRoot(anchor, root, platform)));
 			if (!within) return refuseOutside(requested, `it does not resolve (${code ?? "unknown error"})`);
 			if (code === "ENOENT" || code === "ENOTDIR") return refuse(`no such file: "${requested}"`);
 			if (code === "EACCES" || code === "EPERM") return refuse(`"${requested}" cannot be read: permission denied`);
@@ -274,9 +352,12 @@ export function createFence(options: FenceOptions): Fence {
 
 		// Containment BEFORE the real-path deny check: a link that leads out to
 		// `~/.ssh` must read as "outside", like every other outside path, not as
-		// "a credentials folder", which would say what the outside target is.
+		// "a credentials folder", which would say what the outside target is. A
+		// lent file is the one other way in, and the deny check below still runs on it.
 		const allowed = await realRoots();
-		if (!allowed.some(root => insideRoot(real, root, platform))) return refuseOutside(requested, `it resolves to ${JSON.stringify(real)}`);
+		if (!allowed.some(root => insideRoot(real, root, platform)) && !(await isLent(real, lent))) {
+			return refuseOutside(requested, `it resolves to ${JSON.stringify(real)}`);
+		}
 		const denied = denyReason(real);
 		if (denied !== undefined) return refuse(`refused to open "${requested}": ${denied}`);
 		return { ok: true, real };

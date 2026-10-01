@@ -10,6 +10,12 @@ export const VIEWER_VIEW_URI = "ui://viewer/index.html";
  *  without it keeps the one-tab-per-server identity every other App has. */
 export const TAB_META_KEY = "ai.insodimension/tab";
 
+/** `_meta` key on a `view_file` RESULT asking the View to open that document in
+ *  its annotate mode (`view_file`'s `annotate: true`). It is the View's own
+ *  business, not the host's: it rides the result beside {@link TAB_META_KEY} and
+ *  carries no document identity. A kind with nothing to annotate ignores it. */
+export const ANNOTATE_META_KEY = "ai.insodimension.viewer/annotate";
+
 /** The most bytes one `read_file_chunk` call may return (before base64). */
 export const MAX_CHUNK_BYTES = 4 * 1024 * 1024;
 

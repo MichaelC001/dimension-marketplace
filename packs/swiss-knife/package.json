@@ -1,0 +1,37 @@
+{
+	"name": "@dimension/community-swiss-knife",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"author": "Dimension",
+	"description": "Small quality-of-life tools for the agent; `present` first.",
+	"engines": {
+		"node": ">=22.12.0"
+	},
+	"scripts": {
+		"build": "node scripts/build.mjs",
+		"test": "bun test test/"
+	},
+	"dimension": {
+		"name": "swiss-knife",
+		"extensions": [
+			"dist/index.mjs"
+		],
+		"sharedModule": true
+	},
+	"files": [
+		"plugin.json",
+		"dist/index.mjs"
+	],
+	"devDependencies": {
+		"@dimension/sdk": "workspace:*",
+		"@oh-my-pi/omptype": "workspace:*",
+		"@oh-my-pi/pi-agent-core": "workspace:*",
+		"@oh-my-pi/pi-coding-agent": "workspace:*",
+		"@types/bun": "catalog:",
+		"@types/node": "^26.1.2",
+		"esbuild": "^0.21.5",
+		"typescript": "catalog:"
+	},
+	"license": "MIT"
+}

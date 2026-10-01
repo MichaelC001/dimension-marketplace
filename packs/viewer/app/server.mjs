@@ -31660,6 +31660,7 @@ import { open, stat } from "node:fs/promises";
 // src/contract.ts
 var VIEWER_VIEW_URI = "ui://viewer/index.html";
 var TAB_META_KEY = "ai.insodimension/tab";
+var ANNOTATE_META_KEY = "ai.insodimension.viewer/annotate";
 var MAX_CHUNK_BYTES = 4 * 1024 * 1024;
 var VIEWER_KINDS = ["image", "pdf", "html", "markdown", "docx", "pptx", "xlsx", "text", "binary"];
 var viewedFileSchema = external_exports.object({
@@ -31716,10 +31717,17 @@ async function readChunk(path, offset, length) {
 }
 
 // src/fence.ts
-import { realpath as nativeRealpath } from "node:fs/promises";
+import { realpath as nativeRealpath, stat as nativeStat } from "node:fs/promises";
 import * as nodePath from "node:path";
+
+// ../../../packages/sdk/src/artifactory/artifactory-decl.ts
+var ARTIFACTORY_GRANT_META_KEY = "ai.insodimension/grant";
+var PACK_CONNECTION_REPORT_MAX_BYTES = 64 * 1024;
+
+// src/fence.ts
 var pathApi = (platform) => platform === "win32" ? nodePath.win32 : nodePath.posix;
 var foldsCase = (platform) => platform === "win32" || platform === "darwin";
+var comparable = (path, platform) => foldsCase(platform) ? path.toLowerCase() : path;
 var segmentsOf = (path) => path.toLowerCase().split(/[\\/]+/).filter((part) => part !== "");
 var MANAGED_HOMES = [".inso", ".inso-dev"];
 var MANAGED_FOLDERS = ["vault", "machinist"];
@@ -31734,8 +31742,7 @@ function configuredRoots(env, home, platform) {
 }
 function insideRoot(target, root, platform) {
   const api = pathApi(platform);
-  const fold = foldsCase(platform) ? (path) => path.toLowerCase() : (path) => path;
-  const relative = api.relative(fold(root), fold(target));
+  const relative = api.relative(comparable(root, platform), comparable(target, platform));
   return relative === "" || relative !== ".." && !relative.startsWith(`..${api.sep}`) && !api.isAbsolute(relative);
 }
 var SECRET_DIRECTORIES = {
@@ -31820,11 +31827,21 @@ function denyReason(path) {
   }
   return void 0;
 }
+function textRefusal(requested, platform) {
+  if (platform !== "win32") return void 0;
+  if (/^[\\/]{2}[.?][\\/]/.test(requested)) return "Windows device paths (\\\\.\\ and \\\\?\\) are not viewable";
+  if (requested.slice(2).includes(":")) return "alternate data streams (a ':' after the drive) are not viewable";
+  if (/^[\\/]{2}/.test(requested)) return "network paths (\\\\host\\share) are not viewable";
+  return void 0;
+}
 var refuse = (reason) => ({ ok: false, reason });
+var MAX_LENT_FILES = 8;
+var MAX_LENT_PATH = 4096;
 function createFence(options) {
   const platform = options.platform ?? process.platform;
   const api = pathApi(platform);
   const resolveReal = options.realpath ?? nativeRealpath;
+  const isRegularFile = options.isFile ?? (async (path) => (await nativeStat(path)).isFile());
   const log = options.log ?? (() => void 0);
   const extra = (options.roots ?? []).filter((root) => api.isAbsolute(root)).map((root) => api.resolve(root));
   const roots = [.../* @__PURE__ */ new Set([...configuredRoots(options.env ?? {}, options.home, platform), ...extra])];
@@ -31859,32 +31876,54 @@ function createFence(options) {
       }
     }
   }
-  async function check2(requested) {
+  function readGrant(meta3) {
+    if (typeof meta3 !== "object" || meta3 === null || !Object.hasOwn(meta3, ARTIFACTORY_GRANT_META_KEY)) return void 0;
+    const grant = Reflect.get(meta3, ARTIFACTORY_GRANT_META_KEY);
+    if (typeof grant !== "object" || grant === null || !Object.hasOwn(grant, "read")) return void 0;
+    const read = Reflect.get(grant, "read");
+    if (!Array.isArray(read) || read.length > MAX_LENT_FILES) return void 0;
+    const files = [];
+    for (const entry of read) {
+      if (typeof entry !== "string" || entry.length > MAX_LENT_PATH || !api.isAbsolute(entry)) return void 0;
+      files.push(entry);
+    }
+    return { read: files };
+  }
+  async function isLent(real, lent) {
+    const wanted = comparable(real, platform);
+    if (!lent.some((file2) => comparable(file2, platform) === wanted)) return false;
+    try {
+      return await isRegularFile(real);
+    } catch {
+      return false;
+    }
+  }
+  async function check2(requested, meta3) {
     if (typeof requested !== "string" || requested.trim() === "") return refuse("the path is empty");
     if (requested.includes("\0")) return refuse("the path contains a NUL byte");
     if (!api.isAbsolute(requested)) return refuse(`"${requested}" is not an absolute path; pass the full path to the file`);
-    if (platform === "win32") {
-      if (/^[\\/]{2}[.?][\\/]/.test(requested)) return refuse("Windows device paths (\\\\.\\ and \\\\?\\) are not viewable");
-      if (requested.slice(2).includes(":")) return refuse("alternate data streams (a ':' after the drive) are not viewable");
-      if (/^[\\/]{2}/.test(requested)) return refuse("network paths (\\\\host\\share) are not viewable");
-    }
+    const refused = textRefusal(requested, platform);
+    if (refused !== void 0) return refuse(refused);
     const lexical = api.resolve(requested);
     const early = denyReason(lexical);
     if (early !== void 0) return refuse(`refused to open "${requested}": ${early}`);
+    const lent = readGrant(meta3)?.read ?? [];
     let real;
     try {
       real = await resolveReal(lexical);
     } catch (error51) {
       const code = error51 instanceof Error && "code" in error51 && typeof error51.code === "string" ? error51.code : void 0;
       const anchor = await nearestReal(lexical);
-      const within = anchor !== void 0 && [...roots, ...await realRoots()].some((root) => insideRoot(anchor, root, platform));
+      const within = lent.some((file2) => comparable(file2, platform) === comparable(lexical, platform)) || anchor !== void 0 && [...roots, ...await realRoots()].some((root) => insideRoot(anchor, root, platform));
       if (!within) return refuseOutside(requested, `it does not resolve (${code ?? "unknown error"})`);
       if (code === "ENOENT" || code === "ENOTDIR") return refuse(`no such file: "${requested}"`);
       if (code === "EACCES" || code === "EPERM") return refuse(`"${requested}" cannot be read: permission denied`);
       return refuse(`"${requested}" cannot be resolved${code ? ` (${code})` : ""}`);
     }
     const allowed = await realRoots();
-    if (!allowed.some((root) => insideRoot(real, root, platform))) return refuseOutside(requested, `it resolves to ${JSON.stringify(real)}`);
+    if (!allowed.some((root) => insideRoot(real, root, platform)) && !await isLent(real, lent)) {
+      return refuseOutside(requested, `it resolves to ${JSON.stringify(real)}`);
+    }
     const denied = denyReason(real);
     if (denied !== void 0) return refuse(`refused to open "${requested}": ${denied}`);
     return { ok: true, real };
@@ -32011,13 +32050,14 @@ async function createViewerServer(options = {}) {
       description: "Open a file from the user's computer in the viewer beside the conversation, as a tab. Renders images, PDF, HTML, Markdown, Word (.docx), PowerPoint (.pptx), Excel (.xlsx) and plain text; other files show a file card. Pass the ABSOLUTE path of a file you created or were pointed at; opening the same file again refreshes its tab. Only folders the user allowed are readable (their personal vault and the folders in VIEWER_ROOTS); anything else, and secrets such as .env files and keys, is refused with the reason.",
       inputSchema: {
         path: external_exports.string().min(1).max(4096).describe("Absolute path of the file to open"),
-        filename: external_exports.string().min(1).max(255).optional().describe("Name to show in the tab; defaults to the file's own name")
+        filename: external_exports.string().min(1).max(255).optional().describe("Name to show in the tab; defaults to the file's own name"),
+        annotate: external_exports.boolean().optional().describe("Open in annotate mode, so the user can mark the file up")
       },
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       _meta: { ui: { resourceUri: VIEWER_VIEW_URI } }
     },
-    async ({ path, filename }) => {
-      const verdict = await fence.check(path);
+    async ({ path, filename, annotate }, extra) => {
+      const verdict = await fence.check(path, extra._meta);
       if (!verdict.ok) return failure(verdict.reason);
       try {
         const head = await readRange(verdict.real, 0, KIND_HEAD_BYTES);
@@ -32032,7 +32072,7 @@ async function createViewerServer(options = {}) {
         return {
           content: [{ type: "text", text: `Opened ${file2.filename} (${file2.kind}, ${file2.size} bytes) in the viewer.` }],
           structuredContent: { ...file2 },
-          _meta: { [TAB_META_KEY]: { key: file2.path } }
+          _meta: { [TAB_META_KEY]: { key: file2.path }, ...annotate === true ? { [ANNOTATE_META_KEY]: true } : {} }
         };
       } catch (error51) {
         return failure(`"${path}" cannot be opened: ${describeError(error51)}`);
@@ -32053,8 +32093,8 @@ async function createViewerServer(options = {}) {
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       _meta: APP_ONLY
     },
-    async ({ path, offset, length }) => {
-      const verdict = await fence.check(path);
+    async ({ path, offset, length }, extra) => {
+      const verdict = await fence.check(path, extra._meta);
       if (!verdict.ok) return failure(verdict.reason);
       try {
         const chunk = await readChunk(verdict.real, offset, length);
