@@ -1,4 +1,5 @@
 import type { ConnectionObservations } from "./connection.js";
+import type { ProfileColour, ResolvedProfileMeta } from "./profile-meta.js";
 
 /** What the browser IS. `abp` and `browser4` are refused with the reason (see engines/refused.ts). */
 export const BROWSER_ENGINES = ["chromium", "chrome-relay", "abp", "browser4"] as const;
@@ -307,6 +308,8 @@ export interface BrowserState {
   publish: PublishRecord | null;
   /** The last five JavaScript dialogs the browser answered on the active tab, oldest first. */
   dialogs: HandledDialog[];
+  /** Set by `open` alone, when something a person should know about the profile just opened: the browser build under its logins changed. */
+  notice?: string;
 }
 export interface BrowserFrame {
   state: BrowserState;
@@ -338,6 +341,20 @@ export interface BrowserOpenOptions {
   viewport?: Viewport;
 }
 /**
+ * Who opened a browser, from what the HOST stamped on the call: `caller` ("app" is the human, in the View) and the
+ * `session` (the chat). Never from tool input. A call without a stamp has neither, and is nobody's "this chat".
+ */
+export interface BrowserOpener { caller?: ToolCaller; session?: string }
+/** Who holds a saved profile, as `browser_profiles` tells the asking chat. No ids: only whose it is. */
+export type ProfileHolder = null | "this chat" | "human" | "another chat";
+/**
+ * One site a profile was checked on. `signedIn: null`: not known now (the last check is over 7 days old).
+ * `seenAt`: when it was last looked at, ISO 8601.
+ */
+export interface ProfileSiteListing { site: string; account?: string; signedIn: boolean | null; seenAt: string }
+/** One saved profile as an agent or the View reads it. Never a cookie, a password, a path or a browser id. */
+export interface ProfileListing { name: string; label: string; colour: ProfileColour; heldBy: ProfileHolder; sites: ProfileSiteListing[] }
+/**
  * browser_read: one logged-out read of a public page (see read.ts). There is
  * no profile: every read runs in a fresh incognito context.
  */
@@ -357,7 +374,11 @@ export type ReadResult =
   | { status: "blocked"; url: string; reason: string };
 /** Capability is the opaque browserId; it must never appear in global listings. */
 export interface BrowserRuntimePort {
-  open(options: BrowserOpenOptions): Promise<BrowserState>;
+  /**
+   * `opener`: who is asking (the host's stamps). A profile already open for the SAME chat comes back as that browser;
+   * for anyone else it is refused (`profile_held`), naming whose it is.
+   */
+  open(options: BrowserOpenOptions, opener?: BrowserOpener): Promise<BrowserState>;
   state(browserId: string): Promise<BrowserState>;
   frame(browserId: string, format?: FrameFormat): Promise<BrowserFrame>;
   frame(browserId: string, format: "jpeg", since: string | undefined): Promise<BrowserFrame | UnchangedFrame>;
@@ -393,7 +414,10 @@ export interface BrowserRuntimePort {
   connections(): Promise<ConnectionObservations>;
   /** `listener` runs after each new observation is persisted and after a profile with observations is deleted. Returns the unsubscribe. */
   onConnectionsChanged(listener: () => void): () => void;
-  profiles(): Promise<string[]>;
+  /** Every saved profile (never the relay's, never a throwaway), with who holds it relative to `asker`, the chat asking. */
+  profileList(asker?: string): Promise<ProfileListing[]>;
+  /** The label, colour and avatar of every saved profile that has any observation, for the connection report. */
+  profileMeta(): Promise<Record<string, ResolvedProfileMeta>>;
   /** Settles a pending publish first. Refused (`publish_pending`) while one awaits confirmation, unless `caller` is "app". */
   close(browserId: string, caller?: ToolCaller): Promise<void>;
   waitTask(browserId: string, ms: number): Promise<TaskRun>;

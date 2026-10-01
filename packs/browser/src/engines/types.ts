@@ -160,6 +160,11 @@ export interface EngineDriver {
   readField(selector: string): Promise<FieldRead>;
   /** The text of the first element matching `selector`, at most `limit` characters; null when absent or a form control (never read). */
   readText(selector: string, limit: number): Promise<string | null>;
+  /**
+   * The `aria-label` of the first element matching `selector`, at most `limit` characters; null when absent or a form control.
+   * The one attribute this reads: a fixed script, with the selector as data. Google's account button has its email only there.
+   */
+  readLabel(selector: string, limit: number): Promise<string | null>;
   /** Absolute hrefs of up to `limit` elements matching `selector` (CSS or `pierce/` only: it is read in-page). */
   linkHrefs(selector: string, limit: number): Promise<string[]>;
   /** Open a tab, make it the active one, and navigate it to `url` (already validated) when given. */
@@ -191,4 +196,9 @@ export interface EngineOptions {
    * Do not call this for a parent/foreign browser that this driver does not own.
    */
   onClosed(): void;
+  /**
+   * Called when the ACTIVE tab's main frame finishes loading, or navigates within its document (a single-page app's
+   * route change). No url: the runtime asks for the state it wants. Never throws into the driver. `chromium` only.
+   */
+  onPageLoaded?(): void;
 }

@@ -19,6 +19,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { accountFromText, buildConnectionReport, type ConnectionReport, siteHost } from "../src/connection";
 import type { PublishRecipe, PublishRecord } from "../src/contracts";
+import { defaultColour } from "../src/profile-meta";
 import { createBrowserServer } from "../src/server";
 import { ProfileStore } from "../src/store";
 import { BROWSER_TEST_TIMEOUT_MS, createRoot, describeWithChrome, newRuntime, perform, racingClock, teardown } from "./fixture";
@@ -231,7 +232,8 @@ function recipe(fixture: PublishFixture, overrides: Partial<PublishRecipe> = {})
 }
 
 const seedAcme = (store: ProfileStore): void => store.recordConnection("traction-x-acme", "x.com", { signedIn: true, account: "@acme", observedAt: T });
-const ACME = { sites: { "x.com": { signedIn: true, account: "@acme", observedAt: T } } };
+/** A profile as the host is told of it: its sites, and the label and colour a profile with no profile.json gets. */
+const ACME = { label: "traction-x-acme", colour: defaultColour("traction-x-acme"), sites: { "x.com": { signedIn: true, account: "@acme", observedAt: T } } };
 
 describeWithChrome("the server's connection report", () => {
 	test(

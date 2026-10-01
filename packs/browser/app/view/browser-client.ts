@@ -295,11 +295,12 @@ export class BrowserClient {
 		return structured(tool, result);
 	}
 
+	/** The names of the saved profiles: `browser_profiles` answers the View with each one's label, colour and sites too. */
 	async profiles(): Promise<string[]> {
 		const payload = await this.call("browser_profiles", {});
 		const profiles = payload.profiles;
 		if (!Array.isArray(profiles)) throw new BrowserToolError("browser_profiles", "result carried no profiles array");
-		return profiles.filter((profile): profile is string => typeof profile === "string");
+		return profiles.flatMap((profile) => (isRecord(profile) && typeof profile.name === "string" ? [profile.name] : []));
 	}
 
 	async open(options: OpenOptions): Promise<BrowserState> {

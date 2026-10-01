@@ -39,7 +39,7 @@ interface Calls {
 
 /** Just enough runtime for the server to boot and answer open/view: every call recorded. */
 function recordingRuntime(calls: Calls): BrowserRuntimePort {
-	const runtime: Pick<BrowserRuntimePort, "open" | "state" | "act" | "connections" | "onConnectionsChanged" | "dispose"> = {
+	const runtime: Pick<BrowserRuntimePort, "open" | "state" | "act" | "connections" | "profileMeta" | "onConnectionsChanged" | "dispose"> = {
 		open: async (options) => {
 			calls.opened.push(options);
 			return stateOf("o".repeat(32));
@@ -53,6 +53,7 @@ function recordingRuntime(calls: Calls): BrowserRuntimePort {
 			return { status: "completed", state: stateOf(browserId, action.url) };
 		},
 		connections: async () => ({}),
+		profileMeta: async () => ({}),
 		onConnectionsChanged: () => () => {},
 		dispose: async () => {},
 	};
@@ -88,9 +89,9 @@ test("publishing and task agents are offered to Traction alone; every browsing t
 	const modelTools = (await client.listTools()).tools.filter((tool) => uiOf(tool).visibility === undefined);
 	const audienceOf = (tool: { _meta?: Record<string, unknown> }) => tool._meta?.["ai.insodimension/spaces"];
 
-	// A dev session is listed these nine and nothing else; a new tool must choose a side to get past this list.
+	// A dev session is listed these ten and nothing else; a new tool must choose a side to get past this list.
 	expect(modelTools.filter((tool) => audienceOf(tool) === undefined).map((tool) => tool.name).sort()).toEqual([
-		"browser_act", "browser_close", "browser_inspect", "browser_open", "browser_read",
+		"browser_act", "browser_close", "browser_inspect", "browser_open", "browser_profiles", "browser_read",
 		"browser_screenshot", "browser_snapshot", "browser_state", "browser_view",
 	]);
 	const traction = modelTools.filter((tool) => audienceOf(tool) !== undefined);
@@ -128,8 +129,9 @@ test("browser_view without a browserId opens the browser exactly as browser_open
 	expect(calls.navigated).toEqual(["http://app.test/"]);
 	expect(opened.structuredContent).toMatchObject({ browserId: "o".repeat(32), url: "http://app.test/" });
 
-	// Same rules as browser_open: a profile name the rule refuses never reaches the runtime.
-	const refused = await client.callTool({ name: "browser_view", arguments: { profile: "Bad Name!" } });
-	expect(refused.isError).toBe(true);
+	// Same door as browser_open: a name that cannot be a profile's name or label (empty, or longer than a label) never reaches the runtime.
+	for (const profile of ["", "x".repeat(49)]) {
+		expect((await client.callTool({ name: "browser_view", arguments: { profile } })).isError).toBe(true);
+	}
 	expect(calls.opened).toHaveLength(1);
 });

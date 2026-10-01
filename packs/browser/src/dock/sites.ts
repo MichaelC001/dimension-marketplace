@@ -32,6 +32,8 @@ export const SIGN_IN_SITES: readonly SignInSite[] = [
 	fromPreset(redditName, redditOrigin, "/login"),
 	// Bluesky's home page IS its sign-in page for a signed-out visitor.
 	fromPreset(blueskyName, blueskyOrigin, "/"),
+	// Google has no publish preset to take an origin from, and a profile is usually one Google account: the sign-in page is Google's own account page.
+	{ host: "google.com", label: "Google", loginUrl: "https://accounts.google.com/" },
 ];
 
 const BY_HOST: ReadonlyMap<string, SignInSite> = new Map(SIGN_IN_SITES.map(site => [site.host, site]));
