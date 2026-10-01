@@ -29,9 +29,17 @@ hold; give it `url` (and `profile`) instead to open one for them to watch.
   deleted when it closes, it is never listed, and any number can be open at
   once. Never invent a profile name for a throwaway (`test`, `agent-1`…): a
   named profile is saved on the user's machine for good and shows in their
-  Browser list. Name one (`personal`, `work`, `jobs`…) only to keep logins and
-  cookies across sessions. Profiles never share cookies, and one caller holds a
-  profile at a time — close it before reopening. Saved passwords
+  Browser list. **Told to use a profile ("use my work profile")? Call
+  `browser_profiles` first:** it lists the saved profiles with their label, who
+  holds each, and the sites each is signed in to (`signedIn: null` is not known:
+  ask the user). It never shows which account a site is signed in to: ask the
+  user if that matters. Pass the name or the label, in any case; an exact name is
+  always that profile, and a label two profiles share, or a name that is none, is
+  refused with the choices: ask the user which, never guess. A profile another
+  chat or the user holds, open or still starting, is refused (`profile_held`);
+  your own chat gets the same browser back. Name a new one (`personal`, `work`,
+  `jobs`…) only to keep logins and cookies across sessions. Profiles never share
+  cookies. Saved passwords
   (`generatePassword`, `useSavedPassword`) need a profile: on a throwaway
   browser they fail `profile_required` — close it and open again with a name.
 - `engine`: `chromium` (default, a Chrome this pack manages) or `chrome-relay`
@@ -150,11 +158,12 @@ rest must go in a new call.
 
 ## Annotations
 
-When the user circles or selects part of the page in the View, you receive
-the cropped screenshot (with their marks), their note, the URL and the
-elements under the region in this conversation. Treat it as the user pointing
-at the screen. It does not name the browser: `browser_state` with no
-`browserId` reads it.
+When the user marks the page in the View, you receive the whole page picture
+with their numbered marks burned in, a note per mark, the page address, where
+it was scrolled, and the elements under each mark (the full list is in the JSON
+file the message names). Treat it as the user pointing at the screen. The page
+may have moved on since the picture was taken. It does not name the browser:
+`browser_state` with no `browserId` reads it.
 
 ## Rules
 

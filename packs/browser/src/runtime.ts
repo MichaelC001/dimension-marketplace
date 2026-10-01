@@ -8,7 +8,8 @@
  *    dispatched is reported `unknown` — it may have taken effect — and is never
  *    retried here. Only a caller that knows the page can decide to retry.
  *  - `browserId` is an opaque capability minted per open, never listed and
- *    never re-handed-out; `profiles()` lists profile names only.
+ *    never re-handed-out, except to the chat that already holds it;
+ *    `profileList()` says whose a profile is, never by id.
  *  - Persistent profiles are never deleted, foreign locks are never stolen, a
  *    profile lock is released only once the owned Chrome process is gone, and a
  *    relay (the human's own Chrome) is never closed.
@@ -18,17 +19,27 @@
  *    needs a saved profile refuses it (`profile_required`).
  *  - Whole tasks run on upstream agent loops (jev, browser-use) against the
  *    same Chrome, through `task.ts`. We keep their progress, not their logic.
- *  - Sign-in is only ever OBSERVED, never derived: a publish result that says
- *    signed-in, not-signed-in or posted is persisted per profile (never for
+ *  - Sign-in is only ever OBSERVED, never derived: a probe that saw the
+ *    signed-in marker (or, on a site's front or login page, its absence) after
+ *    a page loaded in a saved profile, or a publish result that says
+ *    signed-in, not-signed-in or posted, is persisted per profile (never for
  *    the relay) and announced to `onConnectionsChanged` listeners, which the
- *    server turns into its connection report (connection.ts).
+ *    server turns into its connection report (connection.ts). A page with no
+ *    probe is only "visited", never signed in or out.
  */
 import { randomBytes } from "node:crypto";
 import { existsSync, type FSWatcher, watch } from "node:fs";
 import { join } from "node:path";
-import { type ConnectionObservations, siteHost } from "./connection.js";
-import { RELAY_PROFILE } from "./profile-name.js";
+import { type ConnectionObservations, isPublicSite, siteHost } from "./connection.js";
+import { matchProfiles, type ResolvedProfileMeta, resolveProfileMeta } from "./profile-meta.js";
+import { profileSlug, RELAY_PROFILE } from "./profile-name.js";
+import { buildProfileList } from "./profile-list.js";
+import { probeFor, readProbe, SETTLE_MS, type SiteProbe, type ProbeVerdict } from "./probes.js";
 import type {
+	BrowserApp,
+	BrowserOpener,
+	ProfileHolder,
+	ProfileListing,
 	ActionResult,
 	ActManyResult,
 	BatchStep,
@@ -36,19 +47,18 @@ import type {
 	LogEntry,
 	ModelShot,
 	ShotRequest,
+	PageScroll,
 	TabOp,
 	CredentialUse,
 	HandledDialog,
 	BrowserAction,
-	BrowserAnnotation,
+	BrowserAnnotationContext,
 	BrowserEngine,
 	BrowserFrame,
-	UnchangedFrame,
 	BrowserOpenOptions,
 	BrowserRegion,
 	BrowserRuntimePort,
 	BrowserState,
-	FrameFormat,
 	MouseButton,
 	PresetRef,
 	PublishCheck,
@@ -70,12 +80,14 @@ import type {
 	StepOutcome,
 	StepStatus,
 } from "./contracts.js";
-import { BROWSER_ENGINES, MAX_BATCH_STEPS, MAX_EVAL_EXPRESSION_CHARS, MAX_EVAL_RESULT_CHARS, MAX_VIEWPORT, MAX_WAIT_MS, MIN_VIEWPORT, TASK_AGENTS } from "./contracts.js";
+import { BROWSER_ENGINES, MAX_ANNOTATION_REGIONS, MAX_BATCH_STEPS, MAX_EVAL_EXPRESSION_CHARS, MAX_EVAL_RESULT_CHARS, MAX_VIEWPORT, MAX_WAIT_MS, MIN_VIEWPORT, TASK_AGENTS } from "./contracts.js";
 import { credentialOrigin, resolveCredential, savedPassword, savedPasswords } from "./credentials.js";
 import { assertEngineAvailable, createEngineDriver } from "./engines/index.js";
 import { launchReader } from "./engines/puppeteer.js";
-import type { EngineDriver, EngineState, EvalOutcome, PageReader, PasswordSource, PerformOutcome, WaitCondition } from "./engines/types.js";
-import { cropRegion, MAX_FRAME_BYTES } from "./image.js";
+import type { EngineDriver, EngineState, EvalOutcome, LiveFrame, PageReader, PasswordSource, PerformOutcome, WaitCondition } from "./engines/types.js";
+import { AnnotationFiles } from "./annotation-file.js";
+import { clampRegion, MAX_FRAME_BYTES } from "./image.js";
+import { type AdmittedInput, admitInput } from "./input.js";
 import { type Publication, cancel, confirm, isPending, prepare, publishRecord, requirePending, validateMode, validateRecipe, waitSettled } from "./publish.js";
 import { blockedReason, DEFAULT_READ_CHARS, MAX_READ_CHARS, READ_TIMEOUT_MS, readPolicy, TIMEOUT_REASON } from "./read.js";
 import { ActionNotDispatched, fail, ProfileStore, validateProfile } from "./store.js";
@@ -85,6 +97,17 @@ import { type RunningWorker, startWorker } from "./task.js";
 // Bounds. Every unbounded thing in a long-lived runtime is a leak or a weapon.
 // ---------------------------------------------------------------------------
 const MAX_BROWSERS = 4;
+/** The browser applications a profile's logins may have been saved in, as a person names them. */
+const APP_NAMES: Record<string, string> = { chrome: "Chrome", msedge: "Edge", chromium: "Chromium", custom: "a custom browser" };
+/** A page that loads (or changes route) is looked at this long after the last such event, once. */
+const PROBE_DEBOUNCE_MS = 400;
+/** The look at close never holds a close up longer than this. */
+const PROBE_CLOSE_MS = 2_500;
+/** The same sign-in fact is not rewritten more often than this; a visit to a site with no probe, less often still. */
+const CHECK_RENOTE_MS = 30_000;
+const VISIT_RENOTE_MS = 10 * 60_000;
+/** Remembered "last noted" facts; the table is emptied when it grows past this. */
+const MAX_NOTED = 512;
 /** browser_read's reader browser is closed this long after its last read. */
 const READER_IDLE_MS = 60_000;
 const MAX_FRAMES_RETAINED = 8;
@@ -95,8 +118,10 @@ const MAX_BATCH_DIALOGS = 5;
 const MAX_SNAPSHOT_CHARS = 20_000;
 const MAX_ELEMENT_CHARS = 4_000;
 const MAX_TEXT_INPUT = 4_096;
-const MAX_NOTE_CHARS = 8_192;
 const MAX_SELECTOR_CHARS = 512;
+/** How long, in all, a capture waits for a scrolling page to come to rest: this many captures this far apart. */
+const SCROLL_SETTLE_ATTEMPTS = 6;
+const SCROLL_SETTLE_MS = 100;
 const MAX_TAB_ID_CHARS = 128;
 const MOUSE_BUTTONS: readonly MouseButton[] = ["left", "right", "middle"];
 const MAX_URL_LENGTH = 2_048;
@@ -126,6 +151,8 @@ const NAMED_KEYS: Record<string, true> = {
 };
 /** View input that can press the site's own submit; scroll, hover and navigation cannot. */
 const TOUCHING_KINDS: Partial<Record<BrowserAction["kind"], true>> = { click: true, press: true, type: true, insert: true };
+/** The same, for the direct channel: a press, a release, a key or pasted text can press the site's own submit; a move and a wheel cannot. */
+const touchesPage = (event: AdmittedInput): boolean => event.kind !== "wheel" && !(event.kind === "mouse" && event.type === "move");
 
 export interface BrowserRuntimeOptions {
 	/** Profile root; defaults to `$INSO_HOME/browser` else `~/.inso/browser`. */
@@ -144,6 +171,12 @@ export interface BrowserRuntimeOptions {
 	 * production; it is not reachable from any tool input.
 	 */
 	allowPrivateReadHosts?: readonly string[];
+	/**
+	 * TESTS ONLY: replaces the shipped site probes, how long a missing marker is waited for, and which hosts a
+	 * visit is recorded for (the local fixture is on loopback, which is never a site); `looked` hears the url of
+	 * every page a look finished on, whether it found anything or not. Not reachable from any tool input.
+	 */
+	probes?: { table?: readonly SiteProbe[]; settleMs?: number; recordVisit?: (url: string) => boolean; looked?: (url: string) => void };
 }
 
 /** A wait step after `validateWait`. */
@@ -163,12 +196,15 @@ interface PlannedEval { kind: "eval"; expression: string }
 
 type PlannedStep = BrowserAction | PlannedWait | PlannedTab | PlannedEval;
 
+/** A png frame the View was handed. The picture itself is the View's; this is what annotating it must still agree with. */
 interface FrameRecord {
 	id: string;
-	bytes: Buffer;
 	url: string;
+	title: string;
 	revision: number;
 	viewport: Viewport;
+	/** Where the page was scrolled when the picture was taken. */
+	scroll: PageScroll;
 	capturedAt: string;
 }
 
@@ -186,6 +222,8 @@ interface Entry {
 	frames: FrameRecord[];
 	/** Per-browser serializer: page reads and actions run in order. */
 	queue: Promise<unknown>;
+	/** The human's input batches, in order, apart from `queue`: input never waits for page work. */
+	inputQueue: Promise<unknown>;
 	closed: boolean;
 	/** The running or most recent task. */
 	task: TaskRun | null;
@@ -207,11 +245,20 @@ interface Entry {
 	 * of (`newErrors`), so each is reported once; the View reads neither.
 	 */
 	logRead: number;
+	/** Who opened it, as the host stamped the call: what `heldBy` and a second open of the same profile are judged by. */
+	opener: BrowserOpener;
+	/** Set at launch when the browser build under this profile changed; handed to the opener once, by `open`. */
+	notice?: string;
+	/** The passive sign-in look: debounced after a page loads, one at a time, once more as the browser closes. */
+	probe: { timer: NodeJS.Timeout | undefined; running: Promise<void> | undefined; again: boolean };
 	logNoticed: number;
+	/** Where the detail documents of what the human marks in this browser are kept: shared for a saved profile, its own throwaway folder otherwise. */
+	annotations: AnnotationFiles;
 }
 
 export class BrowserRuntime implements BrowserRuntimePort {
 	private readonly store: ProfileStore;
+	private readonly annotationFiles: AnnotationFiles;
 	private readonly options: BrowserRuntimeOptions;
 	private readonly byId = new Map<string, Entry>();
 	private readonly byProfile = new Map<string, Entry>();
@@ -244,6 +291,10 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	/** Throwaway directories being deleted; `close` and `dispose` wait for them. */
 	private readonly removals = new Set<Promise<void>>();
 	private disposed = false;
+	/** The opener of a saved profile whose browser is still launching, so the same chat opening it twice gets one browser. */
+	private readonly openers = new Map<string, BrowserOpener>();
+	/** The last passive observation per profile and site, so a page that reloads does not rewrite the same fact. */
+	private readonly lastNoted = new Map<string, { key: string; at: number }>();
 	private readonly connectionListeners = new Set<() => void>();
 	/** Profiles with persisted observations, so a deleted one is noticed and reported gone. */
 	private readonly observedProfiles = new Set<string>();
@@ -253,6 +304,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	constructor(options: BrowserRuntimeOptions = {}) {
 		this.options = options;
 		this.store = new ProfileStore(options.rootDir);
+		this.annotationFiles = new AnnotationFiles(join(this.store.rootDir, "annotations"));
 		// Only what a dead server abandoned: a live server's throwaway browsers are never touched.
 		this.store.sweepEphemeral();
 	}
@@ -268,20 +320,28 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	 * already open — or in the middle of opening — is REFUSED. One engine server
 	 * serves many sessions, so returning the live browserId of somebody else's
 	 * browser would hand out their capability; and launching a second Chrome on
-	 * the same user-data dir would fork the cookie jar. The holder of the
-	 * existing capability closes it, or the caller picks another profile.
+	 * the same user-data dir would fork the cookie jar. So the chat that already
+	 * holds a profile (the host's session stamp on `opener`) gets its own browser
+	 * back, and anyone else is refused (`profile_held`, naming whose it is, never
+	 * an id): the holder closes it, or the caller picks another profile.
+	 *
+	 * `profile` is a slug or a label, in any case. An exact slug is always that
+	 * profile; a label that two profiles share is refused (`profile_ambiguous`),
+	 * never resolved to the closest. A name that matches none is a new profile
+	 * when it is a valid slug (a person's first sign-in, an account profile), and
+	 * refused (`profile_unknown`) when it is not one.
 	 *
 	 * Without a `profile` it is a throwaway browser: a directory of its own that
 	 * is deleted when it closes, so it can never collide with another browser.
 	 */
-	async open(options: BrowserOpenOptions): Promise<BrowserState> {
+	async open(options: BrowserOpenOptions, opener: BrowserOpener = {}): Promise<BrowserState> {
 		if (this.disposed) fail("disposed", "runtime has been disposed");
 		// browser_read's reader never keeps the human from a browser: when it
 		// holds the last slot it is closed (after any read in progress) first.
 		if (this.byId.size + this.opening.size >= MAX_BROWSERS - 1 && this.readerHeld()) await this.closeReader();
 		if (this.disposed) fail("disposed", "runtime has been disposed");
-		const named = options.profile === undefined ? undefined : validateProfile(options.profile);
 		const engine = normalizeEngine(options.engine);
+		const named = options.profile === undefined ? undefined : this.resolveProfile(options.profile, engine);
 		const viewport = normalizeViewport(options.viewport);
 		// The relay is the human's own Chrome: there is nothing to make throwaway,
 		// so no profile means the one it has.
@@ -301,11 +361,18 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		if (engine !== "chrome-relay" && profile === RELAY_PROFILE) {
 			fail("bad_profile", `profile "${RELAY_PROFILE}" is reserved for the chrome-relay engine`);
 		}
-		if (profile !== null && (this.byProfile.has(profile) || this.opening.has(profile))) {
-			fail(
-				"profile_in_use",
-				`profile "${profile}" is already open in this runtime; close that browser before opening it again`,
-			);
+		const live = profile === null ? undefined : this.byProfile.get(profile);
+		if (profile !== null && live !== undefined) {
+			const holder = this.holderOf(live.opener, opener.session);
+			if (holder === "this chat") return await this.state(live.browserId);
+			fail("profile_held", heldMessage(profile, holder));
+		}
+		const launching = profile === null ? undefined : this.opening.get(profile);
+		if (profile !== null && launching !== undefined) {
+			// The same chat opening it twice at once (parallel tool calls) is one browser, not a refusal.
+			const holder = this.holderOf(this.openers.get(profile) ?? {}, opener.session);
+			if (holder === "this chat") return await this.state((await launching).browserId);
+			fail("profile_held", heldMessage(profile, holder));
 		}
 		// Count launches in flight too: four concurrent opens must not slip past
 		// the bound just because none of them has finished launching yet.
@@ -316,21 +383,31 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		assertEngineAvailable(engine);
 		// A throwaway browser has no name to guard; its slot only counts against the bound. `:` is not a slug character.
 		const slot = profile ?? `ephemeral:${randomBytes(8).toString("hex")}`;
-		const started = this.launch(profile, engine, viewport).finally(() => this.opening.delete(slot));
+		const started = this.launch(profile, engine, viewport, opener).finally(() => {
+			this.opening.delete(slot);
+			this.openers.delete(slot);
+		});
 		this.opening.set(slot, started);
+		this.openers.set(slot, opener);
 		const entry = await started;
-		return this.redact(entry, await this.buildState(entry));
+		const state = this.redact(entry, await this.buildState(entry));
+		const { notice } = entry;
+		delete entry.notice;
+		return notice === undefined ? state : { ...state, notice };
 	}
 
-	private async launch(profile: string | null, engine: BrowserEngine, viewport: Viewport): Promise<Entry> {
+	private async launch(profile: string | null, engine: BrowserEngine, viewport: Viewport, opener: BrowserOpener): Promise<Entry> {
 		// A saved profile is locked while its browser runs; a throwaway one gets a
 		// directory of its own that goes with the browser.
 		let directory: string;
 		let free: () => void;
+		let annotations = this.annotationFiles;
 		if (profile === null) {
 			const ephemeral = this.store.createEphemeral();
 			directory = ephemeral.userDataDir;
 			free = () => this.discard(ephemeral.dir);
+			// What the human marked on a throwaway page is as private as the page: the folder goes when the browser does.
+			annotations = new AnnotationFiles(join(ephemeral.dir, "annotations"));
 		} else {
 			const lock = this.store.acquireLock(profile);
 			// Native backends never reuse an incompatible engine's cookie store.
@@ -349,6 +426,8 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		try {
 			driver = await createEngineDriver(engine, {
 				profileDirectory: directory, viewport, onClosed: release,
+				// The passive sign-in look: a saved profile on our own Chrome, never the relay's and never a throwaway.
+				...(profile !== null && engine === "chromium" ? { onPageLoaded: () => { if (entry !== undefined) this.schedulePageProbe(entry, this.options.probes?.settleMs ?? SETTLE_MS); } } : {}),
 				...(this.options.headless === undefined ? {} : { headless: this.options.headless }),
 				...(this.options.executablePath ? { executablePath: this.options.executablePath } : {}),
 				...(this.options.relayUrl && engine === "chrome-relay" ? { relayUrl: this.options.relayUrl } : {}),
@@ -358,9 +437,11 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			entry = {
 				browserId: randomBytes(24).toString("base64url"),
 				profile, engine, viewport: initial.viewport, documentId: initial.documentId,
-				driver, release, revision: 1, frames: [], queue: Promise.resolve(), closed: false,
-				task: null, worker: null, publish: null, secrets: new Set(), logRead: 0, logNoticed: 0,
+				driver, release, revision: 1, frames: [], queue: Promise.resolve(), inputQueue: Promise.resolve(), closed: false,
+				task: null, worker: null, publish: null, secrets: new Set(), logRead: 0, logNoticed: 0, annotations,
+				opener, probe: { timer: undefined, running: undefined, again: false },
 			};
+			if (profile !== null && profile !== RELAY_PROFILE) entry.notice = this.touchProfile(profile, driver.app);
 			this.byId.set(entry.browserId, entry);
 			if (profile !== null) this.byProfile.set(profile, entry);
 			return entry;
@@ -413,7 +494,10 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		entry.frames.length = 0;
 		// A task agent drives this Chrome; it stops before the browser does.
 		await this.stopTask(entry);
+		// One last look at the page the person leaves on: a sign-in done in place never loads a page. It must not hold a close up.
+		await this.probeAtClose(entry);
 		await entry.driver.close();
+		this.markUsed(entry);
 		entry.release();
 	}
 
@@ -452,6 +536,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		entry.closed = true;
 		entry.frames.length = 0;
 		entry.worker?.process.cancel();
+		clearTimeout(entry.probe.timer);
 		this.byId.delete(entry.browserId);
 		if (entry.profile !== null && this.byProfile.get(entry.profile) === entry) this.byProfile.delete(entry.profile);
 		for (const [session, browserId] of this.viewBySession) if (browserId === entry.browserId) this.viewBySession.delete(session);
@@ -474,30 +559,62 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		return await this.serialize(this.require(browserId), async (entry) => this.redact(entry, await this.buildState(entry)));
 	}
 
+	/** The live picture, for the View's direct channel (stream.ts): the driver's own cast, never queued behind page work. */
+	watchFrames(browserId: string, onFrame: (frame: LiveFrame) => void): () => void {
+		return this.require(browserId).driver.watchFrames(onFrame);
+	}
+
+	/** `state`, but NOT queued behind page work: the live view keeps reading it while a navigation or action is in flight. */
+	async liveState(browserId: string): Promise<BrowserState> {
+		const entry = this.require(browserId);
+		return this.redact(entry, await this.buildState(entry));
+	}
+
 	/**
-	 * `png` (default): a fresh capture, retained so it can be annotated.
-	 * `jpeg`: the live screencast's newest frame, straight from memory. It is
-	 * deliberately NOT queued behind page work — the live view keeps moving
-	 * while a navigation or action is in flight — and is not annotatable.
-	 * `since`: the frameId the caller already shows; while it is still the
-	 * newest, only the state comes back — a still page costs no pixels.
+	 * The human's own mouse, wheel and keys on the active tab (the View's direct channel). Like the live picture it is NOT queued behind
+	 * page work, so a click never waits for a navigation, but batches apply one after another. The rules `act` has for the View hold:
+	 * a task owns its page, a click or key on the page a publish waits on marks the publish touched, and while the bar's Post is being
+	 * submitted the page takes no input at all (an `act` waited behind it in the page queue; this door has to refuse).
 	 */
-	async frame(browserId: string, format?: FrameFormat): Promise<BrowserFrame>;
-	async frame(browserId: string, format: "jpeg", since: string | undefined): Promise<BrowserFrame | UnchangedFrame>;
-	async frame(browserId: string, format: FrameFormat = "png", since?: string): Promise<BrowserFrame | UnchangedFrame> {
-		if (format === "jpeg") {
-			const entry = this.require(browserId);
-			const live = await entry.driver.liveFrame();
-			const state = this.redact(entry, await this.buildState(entry));
-			if (since !== undefined && since === live.id) return { state, frameId: live.id, unchanged: true };
-			return { state, frameId: live.id, mimeType: "image/jpeg", data: live.data, capturedAt: live.capturedAt };
-		}
-		if (format !== "png") fail("bad_format", `format must be "jpeg" or "png"`);
+	async input(browserId: string, events: unknown): Promise<void> {
+		const entry = this.require(browserId);
+		const admitted = admitInput(events, entry.viewport);
+		const run = async (): Promise<void> => {
+			if (entry.closed) fail("unknown_browser", "unknown or already closed browserId");
+			refuseWhileBusy(entry, "app");
+			refuseWhileSubmitting(entry);
+			const pinned = isPending(entry.publish) && admitted.some(touchesPage) ? entry.publish : null;
+			// Another tab is not the page being confirmed; an unreadable state counts as the pinned one.
+			const touching = pinned !== null && ((await entry.driver.state().catch(() => null))?.activeTabId ?? pinned.record.tabId) === pinned.record.tabId ? pinned : null;
+			// The state read let the Post start: this check and the mark below must run with nothing awaited between them.
+			refuseWhileSubmitting(entry);
+			// Marked BEFORE the press is sent: a Post that starts while it is in flight must already see it and never click submit.
+			const touchedBefore = touching?.touchedWhilePending ?? false;
+			if (touching) touching.touchedWhilePending = true;
+			try {
+				await entry.driver.input(admitted);
+			} catch (error) {
+				if (error instanceof ActionNotDispatched) {
+					// Provably nothing reached the page, so the publish was not touched by this batch.
+					if (touching) touching.touchedWhilePending = touchedBefore;
+				} else {
+					entry.revision += 1;
+				}
+				throw error;
+			}
+		};
+		const next = entry.inputQueue.then(run, run);
+		entry.inputQueue = next.catch(() => undefined);
+		return next;
+	}
+
+	/** A fresh PNG capture, retained so it can be annotated. */
+	async frame(browserId: string): Promise<BrowserFrame> {
 		return await this.serialize(this.require(browserId), async (entry) => {
 			const before = await this.refreshState(entry);
 			const revision = entry.revision;
 			const url = before.url;
-			const shot = await entry.driver.screenshot();
+			const { shot, scroll } = await this.captureSettled(entry);
 			const capturedAt = new Date().toISOString();
 			const state = await this.buildState(entry);
 			if (entry.revision !== revision || state.url !== url) {
@@ -509,10 +626,11 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			}
 			const record: FrameRecord = {
 				id: randomBytes(12).toString("hex"),
-				bytes,
 				url,
+				title: state.title,
 				revision,
 				viewport: entry.viewport,
+				scroll,
 				capturedAt,
 			};
 			entry.frames.push(record);
@@ -525,6 +643,24 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				capturedAt: record.capturedAt,
 			};
 		});
+	}
+
+	/**
+	 * The picture of the page and where it is scrolled, as one thing. A wheel scroll animates for a moment, and a picture
+	 * taken in the middle of it shows no position the page was ever at; the position is read on both sides of the capture
+	 * and the capture is taken again, a few times, until they agree.
+	 */
+	private async captureSettled(entry: Entry): Promise<{ shot: Uint8Array; scroll: PageScroll }> {
+		for (let attempt = 1; ; attempt += 1) {
+			const from = await entry.driver.scroll();
+			const shot = await entry.driver.screenshot();
+			const scroll = await entry.driver.scroll();
+			if (scroll.x === from.x && scroll.y === from.y) return { shot, scroll };
+			if (attempt === SCROLL_SETTLE_ATTEMPTS) fail("stale_frame", "The page kept scrolling while the picture was taken; request a new frame.");
+			const { promise: rested, resolve } = Promise.withResolvers<void>();
+			setTimeout(resolve, SCROLL_SETTLE_MS);
+			await rested;
+		}
 	}
 
 	/** A read like `snapshot`; the picture is for a model, so nothing of it is kept (`entry.frames` holds annotatable frames only). */
@@ -574,23 +710,18 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	}
 
 	/**
-	 * Crop the STORED bytes of `frameId` and attach bounded live element context.
+	 * The page under the regions the human marked on the retained frame `frameId`: its address and title as captured,
+	 * where it is scrolled, and the elements under each region. The picture is the View's own frame; the shared
+	 * annotation kit paints the marks onto it and cuts the detail crops, so nothing here carries pixels.
 	 *
-	 * Honesty note baked into the returned payload: the crop is the captured
-	 * frame, while the element list is read from the page as it is NOW. On a
-	 * dynamic page those can disagree even at the same revision; we never claim
+	 * Honesty note baked into the answer: the frame is what was captured at `capturedAt`, the elements are read from the
+	 * page as it is NOW (`readAt`). On a dynamic page those can disagree even at the same revision; we never claim
 	 * they are the same instant.
 	 */
-	async annotate(
-		browserId: string,
-		frameId: string,
-		region: BrowserRegion,
-		note: string,
-	): Promise<BrowserAnnotation> {
+	async annotate(browserId: string, frameId: string, regions: readonly BrowserRegion[]): Promise<BrowserAnnotationContext> {
 		const entry = this.require(browserId);
-		const text = note ?? "";
-		if (typeof text !== "string" || text.length > MAX_NOTE_CHARS) {
-			fail("bad_note", `note must be a string of at most ${MAX_NOTE_CHARS} characters`);
+		if (!Array.isArray(regions) || regions.length === 0 || regions.length > MAX_ANNOTATION_REGIONS) {
+			fail("bad_region", `annotate needs between 1 and ${MAX_ANNOTATION_REGIONS} regions`);
 		}
 		return await this.serialize(entry, async () => {
 			await this.refreshState(entry);
@@ -604,26 +735,56 @@ export class BrowserRuntime implements BrowserRuntimePort {
 					`frame ${frameId} was captured at revision ${record.revision}; the page is now at revision ${entry.revision}. Capture a new frame.`,
 				);
 			}
-			const { png, region: clamped } = cropRegion(record.bytes, region);
-			const elements = await entry.driver.elements(clamped, MAX_ELEMENT_CHARS);
+			const clamped = regions.map((region) => clampRegion(region, record.viewport));
+			const read = await entry.driver.elements(clamped, MAX_ELEMENT_CHARS);
 			await this.refreshState(entry);
 			if (record.revision !== entry.revision) fail("stale_frame", "The document changed while reading annotation context.");
-			return {
+			// A scroll is not a new document, so it never moved the revision. Elements are read where the page is NOW; the
+			// picture shows where it was.
+			if (read.scroll.x !== record.scroll.x || read.scroll.y !== record.scroll.y) {
+				fail(
+					"stale_frame",
+					`The page is scrolled to ${read.scroll.x},${read.scroll.y} now and was at ${record.scroll.x},${record.scroll.y} when the picture was taken. Capture a new frame.`,
+				);
+			}
+			return this.redact(entry, {
 				url: record.url,
-				note: text,
-				region: clamped,
+				title: record.title,
 				capturedAt: record.capturedAt,
-				mimeType: "image/png" as const,
-				data: png.toString("base64"),
-				elements:
-					`${this.redact(entry, elements)}\n\n[live DOM read at ${new Date().toISOString()}, revision ${entry.revision}; ` +
-					`the image is the frame captured at ${record.capturedAt} — a dynamic page may have changed between them]`,
-			};
+				readAt: new Date().toISOString(),
+				viewport: record.viewport,
+				scroll: record.scroll,
+				regions: clamped.map((region, index) => ({
+					region,
+					elements: read.regions[index]?.elements ?? [],
+					truncated: read.regions[index]?.truncated ?? false,
+				})),
+			});
 		});
 	}
 
-	async profiles(): Promise<string[]> {
-		return this.store.list();
+	/** Keeps the kit's detail document for the browser the human marked in: a throwaway browser's goes with it. */
+	saveAnnotationDetail(browserId: string, json: string): string {
+		return this.require(browserId).annotations.save(json);
+	}
+
+	async profileList(asker?: string): Promise<ProfileListing[]> {
+		return buildProfileList(
+			this.store,
+			(slug) => {
+				const opener = this.byProfile.get(slug)?.opener ?? this.openers.get(slug);
+				if (opener !== undefined) return this.holderOf(opener, asker);
+				// Open in another server (or another runtime on this root): not ours to name, and not free.
+				return this.store.heldElsewhere(slug) ? "another chat" : null;
+			},
+			Date.now(),
+		);
+	}
+
+	async profileMeta(): Promise<Record<string, ResolvedProfileMeta>> {
+		const meta: Record<string, ResolvedProfileMeta> = {};
+		for (const slug of this.store.list()) if (slug !== RELAY_PROFILE) meta[slug] = resolveProfileMeta(slug, this.store.meta(slug));
+		return meta;
 	}
 
 	async connections(): Promise<ConnectionObservations> {
@@ -659,15 +820,15 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	}
 
 	/**
-	 * Persist what a publish just saw about `origin`'s sign-in on this profile
-	 * and tell the listeners. Never throws: a report is never worth failing
-	 * the publish that observed it.
+	 * Persist what a probe or a publish just saw about `origin`'s sign-in on this
+	 * profile (`signedIn: null`: only visited) and tell the listeners. Never
+	 * throws: a report is never worth failing what observed it.
 	 */
-	private observeConnection(profile: string, origin: string, signedIn: boolean, account: string | undefined): void {
+	private observeConnection(profile: string, origin: string, signedIn: boolean | null, account: string | undefined): void {
 		const host = siteHost(origin);
 		if (profile === RELAY_PROFILE || host === null) return;
 		try {
-			this.store.recordConnection(profile, host, { signedIn, observedAt: Date.now(), ...(signedIn && account !== undefined ? { account } : {}) });
+			this.store.recordConnection(profile, host, { signedIn, observedAt: Date.now(), ...(signedIn === true && account !== undefined ? { account } : {}) });
 		} catch (error) {
 			console.error("Browser sign-in observation was not saved:", describe(error));
 			return;
@@ -684,6 +845,172 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				console.error("Browser connection listener failed:", describe(error));
 			}
 		}
+	}
+
+	// -----------------------------------------------------------------------
+	// Whose a profile is, and which one a name means
+	// -----------------------------------------------------------------------
+
+	/** `opener`'s browser, from the side of `asker` (a host session id): the same chat, the human in a View, or another chat. */
+	private holderOf(opener: BrowserOpener, asker: string | undefined): Exclude<ProfileHolder, null> {
+		if (asker !== undefined && opener.session === asker) return "this chat";
+		return opener.caller === "app" ? "human" : "another chat";
+	}
+
+	/** The profile `raw` means: a saved one by its slug or label, else a new one by its slug. */
+	private resolveProfile(raw: unknown, engine: BrowserEngine): string {
+		// The relay has one profile, reserved: nothing to look up.
+		if (engine === "chrome-relay" || typeof raw !== "string") return validateProfile(raw);
+		const known = this.store.list().filter((slug) => slug !== RELAY_PROFILE).map((slug) => ({ slug, label: resolveProfileMeta(slug, this.store.meta(slug)).label }));
+		const matches = matchProfiles(raw, known);
+		if (matches.length === 1) return matches[0].slug;
+		if (matches.length > 1) fail("profile_ambiguous", `more than one saved profile answers to ${JSON.stringify(raw)}: ${nameProfiles(matches)}. Ask the human which one; do not guess.`);
+		// No match: a new profile when it is a valid slug (the first sign-in on an account), else nothing to open.
+		const slug = profileSlug(raw);
+		if (slug !== null) return slug;
+		fail("profile_unknown", `no saved profile is named ${JSON.stringify(raw)}. Saved profiles: ${known.length === 0 ? "none" : nameProfiles(known)}. Ask the human which one, or leave profile out for a throwaway browser.`);
+	}
+
+	/**
+	 * Record that a saved profile is being opened (its last use, and the browser
+	 * application that runs it). Returns what a person should be told when that
+	 * application is not the one that made the logins: a different browser build
+	 * cannot read the first one's encrypted cookies, so they may be signed out.
+	 * Never throws: metadata is never worth failing an open.
+	 */
+	private touchProfile(profile: string, app: BrowserApp | null): string | undefined {
+		try {
+			const before = this.store.meta(profile).app;
+			this.store.saveMeta(profile, { lastUsed: Date.now(), ...(app === null ? {} : { app }) });
+			if (app === null || before === undefined || before === app) return undefined;
+			const notice = `This profile was last opened in ${APP_NAMES[before] ?? before}; this browser is ${APP_NAMES[app] ?? app}. A different browser often cannot read the logins the first one saved, so you may be signed out.`;
+			console.error(`[browser] profile "${profile}": ${notice}`);
+			return notice;
+		} catch (error) {
+			console.error("Browser profile metadata was not saved:", describe(error));
+			return undefined;
+		}
+	}
+
+	private markUsed(entry: Entry): void {
+		if (entry.profile === null || entry.profile === RELAY_PROFILE) return;
+		try {
+			this.store.saveMeta(entry.profile, { lastUsed: Date.now() });
+		} catch (error) {
+			console.error("Browser profile metadata was not saved:", describe(error));
+		}
+	}
+
+	// -----------------------------------------------------------------------
+	// The passive sign-in look
+	// -----------------------------------------------------------------------
+
+	/** A page just loaded (or changed route) in the active tab: look at it shortly, once however many events come. */
+	private schedulePageProbe(entry: Entry, settleMs: number): void {
+		if (this.disposed || entry.closed) return;
+		clearTimeout(entry.probe.timer);
+		const timer = setTimeout(() => void this.probeLoaded(entry, settleMs), PROBE_DEBOUNCE_MS);
+		timer.unref();
+		entry.probe.timer = timer;
+	}
+
+	/** One look at a time per browser; a load that arrives during one earns one more look after it. */
+	private async probeLoaded(entry: Entry, settleMs: number): Promise<void> {
+		const { probe } = entry;
+		if (probe.running !== undefined) {
+			probe.again = true;
+			return;
+		}
+		probe.running = (async () => {
+			try {
+				do {
+					probe.again = false;
+					await this.probeOnce(entry, settleMs, false);
+				} while (probe.again && !entry.closed && !this.disposed);
+			} finally {
+				probe.running = undefined;
+			}
+		})();
+		await probe.running;
+	}
+
+	/**
+	 * The last look, as the browser closes: no waiting for a page to draw (it has been open), and never longer
+	 * than PROBE_CLOSE_MS in all, so closing is never held up by a page that will not answer.
+	 */
+	private async probeAtClose(entry: Entry): Promise<void> {
+		if (entry.profile === null || entry.profile === RELAY_PROFILE) return;
+		clearTimeout(entry.probe.timer);
+		let timer: NodeJS.Timeout | undefined;
+		const giveUp = new Promise<void>((resolve) => {
+			timer = setTimeout(resolve, PROBE_CLOSE_MS);
+		});
+		try {
+			await Promise.race([(async () => { await entry.probe.running; await this.probeOnce(entry, 0, true); })(), giveUp]);
+		} finally {
+			clearTimeout(timer);
+		}
+	}
+
+	/**
+	 * Look at the active tab once and note what it shows, if anything: a known site gives a verdict (signed in with
+	 * its account, or signed out where that decides), any other public site is only "visited". Nothing here throws:
+	 * a page that changed under a read, or a browser going away, is simply not observed this time.
+	 */
+	private async probeOnce(entry: Entry, settleMs: number, closing: boolean): Promise<void> {
+		const profile = entry.profile;
+		if (profile === null || profile === RELAY_PROFILE) return;
+		let looked: string | undefined;
+		try {
+			const before = await entry.driver.state();
+			if ((entry.closed && !closing) || before.loading) return;
+			looked = before.url;
+			const host = siteHost(before.url);
+			if (host === null) return;
+			const probe = probeFor(host, this.options.probes?.table);
+			if (probe === undefined) {
+				this.noteVisit(profile, before.url, host);
+				return;
+			}
+			const verdict = await readProbe(entry.driver, probe, before.url, settleMs);
+			if (verdict === undefined) return;
+			// The verdict belongs to the page it was read on: if the person moved on while it was read, it is dropped.
+			const after = await entry.driver.state();
+			if (after.url !== before.url || after.activeTabId !== before.activeTabId) return;
+			this.noteVerdict(entry, profile, before.url, host, verdict);
+		} catch {
+			// Not observed this time; the next page that loads is looked at again.
+		} finally {
+			if (looked !== undefined) this.options.probes?.looked?.(looked);
+		}
+	}
+
+	private noteVerdict(entry: Entry, profile: string, url: string, host: string, verdict: ProbeVerdict): void {
+		// A page can show anything, a saved password included: the account is scrubbed like every other page read before it is kept.
+		const account = verdict.signedIn ? this.redact(entry, verdict.account) : undefined;
+		if (this.alreadyNoted(profile, host, `${verdict.signedIn}|${account ?? ""}`, CHECK_RENOTE_MS)) return;
+		this.observeConnection(profile, url, verdict.signedIn, account);
+	}
+
+	/** A site only visited is never allowed to replace a check that was made, and a loopback or private host is not a site. */
+	private noteVisit(profile: string, url: string, host: string): void {
+		if (!(this.options.probes?.recordVisit ?? isPublicSite)(url)) return;
+		if (this.alreadyNoted(profile, host, "visited", VISIT_RENOTE_MS)) return;
+		const current = this.store.connections(profile)[host];
+		if (current !== undefined && current.signedIn !== null) return;
+		this.observeConnection(profile, url, null, undefined);
+	}
+
+	/** True when the same fact about this site was noted less than `windowMs` ago; otherwise remembers it as noted now. */
+	private alreadyNoted(profile: string, host: string, key: string, windowMs: number): boolean {
+		const id = `${profile}\n${host}`;
+		const now = Date.now();
+		const last = this.lastNoted.get(id);
+		if (last !== undefined && last.key === key && now - last.at < windowMs) return true;
+		// One entry per site ever visited would grow without bound in a long session.
+		if (this.lastNoted.size >= MAX_NOTED) this.lastNoted.clear();
+		this.lastNoted.set(id, { key, at: now });
+		return false;
 	}
 
 	// -----------------------------------------------------------------------
@@ -1575,6 +1902,13 @@ function refuseWhilePublishing(entry: Entry, caller: ToolCaller | undefined): vo
 	}
 }
 
+/** The bar's Post is clicking submit and waiting for its receipt: the page is its alone until it settles, or the human could post twice or change what is posted. */
+function refuseWhileSubmitting(entry: Entry): void {
+	if (entry.publish?.confirming && isPending(entry.publish)) {
+		fail("publish_pending", "the Post is being submitted; the page takes no input until it is done");
+	}
+}
+
 /**
  * The confirm must name what it posts. A model (or unstamped) confirm must
  * carry `expect`; any `expect` must match the record the caller was shown —
@@ -1616,4 +1950,15 @@ function cloneTask(run: TaskRun): TaskRun {
 
 function describe(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
+}
+
+/** Profiles as a refusal names them for a person to choose from: label and slug only, never anything about their logins. */
+function nameProfiles(profiles: readonly { slug: string; label: string }[]): string {
+	const shown = profiles.slice(0, 20).map(({ slug, label }) => (label === slug ? slug : `${label} (${slug})`));
+	return profiles.length > shown.length ? `${shown.join(", ")} and ${profiles.length - shown.length} more` : shown.join(", ");
+}
+
+/** The refusal of a profile someone else holds, open or still launching: whose it is, never an id. The View recognises "is already open". */
+function heldMessage(profile: string, holder: Exclude<ProfileHolder, "this chat" | null>): string {
+	return `profile "${profile}" is already open, held by ${holder === "human" ? "the human in the View" : "another chat"}. Ask the human to close it, or use another profile.`;
 }

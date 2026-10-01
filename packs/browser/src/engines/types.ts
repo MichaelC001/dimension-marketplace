@@ -1,4 +1,5 @@
-import type { BrowserAction, BrowserApp, BrowserRegion, ElementInspection, HandledDialog, LogEntry, ModelShot, ShotRequest, TabInfo, Viewport } from "../contracts.js";
+import type { AdmittedInput } from "../input.js";
+import type { BrowserAction, BrowserApp, BrowserRegion, ElementInspection, HandledDialog, LogEntry, ModelShot, PageElements, PageScroll, ShotRequest, TabInfo, Viewport } from "../contracts.js";
 
 /** Everything below describes the ACTIVE tab unless it says otherwise. */
 export interface EngineState {
@@ -17,13 +18,15 @@ export interface EngineState {
   dialogs: HandledDialog[];
 }
 
-/** The latest live frame of the active tab. */
+/** One live picture of the active tab. */
 export interface LiveFrame {
-  /** Changes whenever the frame does. */
+  /** Changes whenever the picture does. */
   id: string;
-  /** Base64 JPEG. */
-  data: string;
-  capturedAt: string;
+  jpeg: Uint8Array;
+  /** The page size (CSS px) it was taken at: a point on the picture maps to the page by this, not by whatever the viewport is now. */
+  viewport: Viewport;
+  /** Epoch ms. */
+  capturedAt: number;
 }
 
 /** A publish field as read from the page. A password input is recognised and never read. */
@@ -121,12 +124,22 @@ export interface EngineDriver {
    */
   evaluate(expression: string, limit: number): Promise<EvalOutcome>;
   /**
-   * The newest screencast frame of the active tab, from memory. The first call
-   * starts the screencast and waits for its first frame.
+   * Live pictures of the active tab for as long as anyone watches: `listener` gets one whenever the page changes and
+   * one at once for a page that is not changing, and the cast follows the active tab and a resize. The screencast
+   * runs only while at least one listener is subscribed; the returned function unsubscribes.
    */
-  liveFrame(): Promise<LiveFrame>;
+  watchFrames(listener: (frame: LiveFrame) => void): () => void;
+  /** The human's input on the active tab, in order (already admitted). Throws `ActionNotDispatched` when provably nothing reached the page. */
+  input(events: readonly AdmittedInput[]): Promise<void>;
   snapshot(limit: number): Promise<string>;
-  elements(region: BrowserRegion, limit: number): Promise<string>;
+  /**
+   * What is on the active tab under each of `regions` (viewport px), one read for all of them: the elements under each
+   * region as separate records (bounded; at most about `limit` characters of them per region), in the order asked, and
+   * where the page is scrolled right now.
+   */
+  elements(regions: readonly BrowserRegion[], limit: number): Promise<{ scroll: PageScroll; regions: PageElements[] }>;
+  /** Where the active tab is scrolled right now and how large its document is. */
+  scroll(): Promise<PageScroll>;
   /**
    * Perform one action on the active tab now, once, never retried. Throws
    * `ActionNotDispatched` when provably nothing reached the page; any other
@@ -160,6 +173,11 @@ export interface EngineDriver {
   readField(selector: string): Promise<FieldRead>;
   /** The text of the first element matching `selector`, at most `limit` characters; null when absent or a form control (never read). */
   readText(selector: string, limit: number): Promise<string | null>;
+  /**
+   * The `aria-label` of the first element matching `selector`, at most `limit` characters; null when absent or a form control.
+   * The one attribute this reads: a fixed script, with the selector as data. Google's account button has its email only there.
+   */
+  readLabel(selector: string, limit: number): Promise<string | null>;
   /** Absolute hrefs of up to `limit` elements matching `selector` (CSS or `pierce/` only: it is read in-page). */
   linkHrefs(selector: string, limit: number): Promise<string[]>;
   /** Open a tab, make it the active one, and navigate it to `url` (already validated) when given. */
@@ -191,4 +209,9 @@ export interface EngineOptions {
    * Do not call this for a parent/foreign browser that this driver does not own.
    */
   onClosed(): void;
+  /**
+   * Called when the ACTIVE tab's main frame finishes loading, or navigates within its document (a single-page app's
+   * route change). No url: the runtime asks for the state it wants. Never throws into the driver. `chromium` only.
+   */
+  onPageLoaded?(): void;
 }

@@ -17,6 +17,9 @@ review is the taste check.** No pack merges red.
    copy it if you want your pack to stay portable. If you instead need in-repo
    typechecking, add a `tsconfig.json` and be aware it couples your pack to the
    monorepo layout.
+   Give it a `README.md` at the pack root: CI fails a new pack without one, and the
+   five headings are under [Document it: README.md](https://github.com/insodimension/dimension/blob/main/docs/plugins/authoring.md#document-it-readmemd)
+   in the Dimension repository.
 3. **Implement against the contract, not beside it.** Your component receives
    everything through props (data in) and speaks only ShellIntents (intents
    out). It holds no session state and talks to no engine. If you find

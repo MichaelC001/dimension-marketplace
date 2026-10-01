@@ -5,8 +5,8 @@ import { mkdir, open, realpath, rm, stat, symlink, writeFile } from "node:fs/pro
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { formatByteSize, PRESENTED_KIND_LABELS, type PresentedItem } from "@dimension/sdk/presentation";
-import { denyReason } from "../src/deny";
 import { nonFileReason, type PresentOptions, type PresentResult, presentPaths, readOnlyFlags } from "../src/present";
+import { denyReason } from "../viewer/src/fence";
 import { blankPng, decodeThumb, flatPng, loadTools, makeTempDir, noisePng, orientedJpeg, tinyBmp } from "./fixtures";
 
 const PACK = join(import.meta.dir, "..");

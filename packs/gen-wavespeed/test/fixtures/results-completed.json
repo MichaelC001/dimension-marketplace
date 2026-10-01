@@ -1,0 +1,217 @@
+{
+	"tripo3d/p2/image-to-3d": {
+		"code": 200,
+		"message": "success",
+		"data": {
+			"id": "d965d49efbbb49ffa9c7445f0a0cae03",
+			"code": 0,
+			"urls": {
+				"get": "https://api.wavespeed.ai/api/v3/predictions/d965d49efbbb49ffa9c7445f0a0cae03/result"
+			},
+			"error": "",
+			"model": "tripo3d/p2/image-to-3d",
+			"status": "completed",
+			"outputs": [
+				"https://static.wavespeed.ai/examples/d965d49efbbb49ffa9c7445f0a0cae03/1.glb"
+			],
+			"timings": {
+				"inference": 137946
+			},
+			"created_at": "2026-09-22T05:32:05.956541611Z"
+		}
+	},
+	"tripo3d/h3.1/image-to-3d": {
+		"code": 200,
+		"message": "success",
+		"data": {
+			"id": "45bcdc5ff6624ef192b1b0559f4b7b53",
+			"code": 0,
+			"urls": {
+				"get": "https://api.wavespeed.ai/api/v3/predictions/45bcdc5ff6624ef192b1b0559f4b7b53/result"
+			},
+			"error": "",
+			"model": "tripo3d/h3.1/image-to-3d",
+			"status": "completed",
+			"outputs": [
+				"https://static.wavespeed.ai/examples/45bcdc5ff6624ef192b1b0559f4b7b53/1.glb"
+			],
+			"timings": {
+				"inference": 140950
+			},
+			"created_at": "2026-04-17T16:11:27.90675875Z",
+			"executionTime": 140950,
+			"has_nsfw_contents": null
+		}
+	},
+	"tripo3d/h3.1/multiview-to-3d": {
+		"code": 200,
+		"message": "success",
+		"data": {
+			"id": "42828faa81484e5790c3389ca6cb97d8",
+			"code": 0,
+			"urls": {
+				"get": "https://api.wavespeed.ai/api/v3/predictions/42828faa81484e5790c3389ca6cb97d8/result"
+			},
+			"error": "",
+			"model": "tripo3d/h3.1/multiview-to-3d",
+			"status": "completed",
+			"outputs": [
+				"https://static.wavespeed.ai/examples/42828faa81484e5790c3389ca6cb97d8/1.glb"
+			],
+			"timings": {
+				"inference": 176495
+			},
+			"created_at": "2026-09-11T09:25:40.097732107Z"
+		}
+	},
+	"meshy/v6/image-to-3d": {
+		"code": 200,
+		"message": "success",
+		"data": {
+			"id": "ca62ae4187d541afb134b8e61aa1b85a",
+			"urls": {
+				"get": "https://api.wavespeed.ai/api/v3/predictions/ca62ae4187d541afb134b8e61aa1b85a/result"
+			},
+			"error": "",
+			"model": "wavespeed-ai/meshy6/image-to-3d",
+			"status": "completed",
+			"outputs": [
+				"https://static.wavespeed.ai/examples/ca62ae4187d541afb134b8e61aa1b85a/1.glb"
+			],
+			"timings": {
+				"inference": 270737
+			},
+			"created_at": "2026-01-22T13:49:44.358339645Z",
+			"executionTime": 270737,
+			"has_nsfw_contents": null
+		}
+	},
+	"meshy/v7.1/image-to-3d": {
+		"code": 200,
+		"message": "success",
+		"data": {
+			"id": "12f3db91db3c4e7a9934e7149e3f02d2",
+			"code": 0,
+			"urls": {
+				"get": "https://api.wavespeed.ai/api/v3/predictions/12f3db91db3c4e7a9934e7149e3f02d2/result"
+			},
+			"error": "",
+			"model": "meshy/v7.1/image-to-3d",
+			"status": "completed",
+			"outputs": [
+				"https://static.wavespeed.ai/examples/12f3db91db3c4e7a9934e7149e3f02d2/1.glb"
+			],
+			"timings": {
+				"inference": 148799
+			},
+			"created_at": "2026-09-24T07:36:21.982856351Z"
+		}
+	},
+	"meshy/v7.1/multi-image-to-3d": {
+		"code": 200,
+		"message": "success",
+		"data": {
+			"id": "545b5e0854ee43dca24ab7d9e1eb6a71",
+			"code": 0,
+			"urls": {
+				"get": "https://api.wavespeed.ai/api/v3/predictions/545b5e0854ee43dca24ab7d9e1eb6a71/result"
+			},
+			"error": "",
+			"model": "meshy/v7.1/multi-image-to-3d",
+			"status": "completed",
+			"outputs": [
+				"https://static.wavespeed.ai/examples/545b5e0854ee43dca24ab7d9e1eb6a71/1.glb"
+			],
+			"timings": {
+				"inference": 425198
+			},
+			"created_at": "2026-09-24T07:04:11.854594019Z"
+		}
+	},
+	"hyper3d/rodin-v2.5/image-to-3d": {
+		"code": 200,
+		"message": "success",
+		"data": {
+			"id": "b16b021932014e8788edb20ac07b28fb",
+			"code": 0,
+			"urls": {
+				"get": "https://api.wavespeed.ai/api/v3/predictions/b16b021932014e8788edb20ac07b28fb/result"
+			},
+			"error": "",
+			"model": "hyper3d/rodin-v2.5/image-to-3d",
+			"status": "completed",
+			"outputs": [
+				"https://static.wavespeed.ai/examples/b16b021932014e8788edb20ac07b28fb/1.glb"
+			],
+			"timings": {
+				"inference": 131173
+			},
+			"created_at": "2026-09-11T09:38:34.893781377Z"
+		}
+	},
+	"wavespeed-ai/trellis-2/image-to-3d": {
+		"code": 200,
+		"message": "success",
+		"data": {
+			"id": "4dadf3b410994538b4b3b3b077c4c192",
+			"code": 0,
+			"urls": {
+				"get": "https://api.wavespeed.ai/api/v3/predictions/4dadf3b410994538b4b3b3b077c4c192/result"
+			},
+			"error": "",
+			"model": "wavespeed-ai/trellis-2/image-to-3d",
+			"status": "completed",
+			"outputs": [
+				"https://static.wavespeed.ai/examples/4dadf3b410994538b4b3b3b077c4c192/52d1aada-a72b-4617-9b70-aa149aa0a5af-u2_81bcfded140d4bd7a7afecdc16f02287.glb"
+			],
+			"timings": {
+				"inference": 46945
+			},
+			"created_at": "2026-09-13T04:10:03.210344148Z"
+		}
+	},
+	"wavespeed-ai/hunyuan3d-v3/image-to-3d": {
+		"code": 200,
+		"message": "success",
+		"data": {
+			"id": "baec55834b1d443a8850a11ce502b423",
+			"code": 0,
+			"urls": {
+				"get": "https://api.wavespeed.ai/api/v3/predictions/baec55834b1d443a8850a11ce502b423/result"
+			},
+			"error": "",
+			"model": "wavespeed-ai/hunyuan3d-v3/image-to-3d",
+			"status": "completed",
+			"outputs": [
+				"https://static.wavespeed.ai/examples/baec55834b1d443a8850a11ce502b423/1.glb"
+			],
+			"timings": {
+				"inference": 141800
+			},
+			"created_at": "2026-09-11T10:02:41.742384618Z"
+		}
+	},
+	"wavespeed-ai/hunyuan-3d-v3.1/image-to-3d-rapid": {
+		"code": 200,
+		"message": "success",
+		"data": {
+			"id": "cb988513b282489da68e438217985df1",
+			"code": 0,
+			"urls": {
+				"get": "https://api.wavespeed.ai/api/v3/predictions/cb988513b282489da68e438217985df1/result"
+			},
+			"error": "",
+			"model": "wavespeed-ai/hunyuan-3d-v3.1/image-to-3d-rapid",
+			"status": "completed",
+			"outputs": [
+				"https://static.wavespeed.ai/examples/cb988513b282489da68e438217985df1/1.glb"
+			],
+			"timings": {
+				"inference": 34603
+			},
+			"created_at": "2026-03-24T20:51:43.272075676Z",
+			"executionTime": 34603,
+			"has_nsfw_contents": null
+		}
+	}
+}

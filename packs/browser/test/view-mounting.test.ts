@@ -17,6 +17,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { z } from "zod";
 import type { BrowserAction, BrowserOpenOptions, BrowserRuntimePort, BrowserState } from "../src/contracts";
 import { BROWSER_VIEW_URI, createBrowserServer } from "../src/server";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createRoot, teardown } from "./fixture";
 
 const clients: Client[] = [];
@@ -39,7 +40,7 @@ interface Calls {
 
 /** Just enough runtime for the server to boot and answer open/view: every call recorded. */
 function recordingRuntime(calls: Calls): BrowserRuntimePort {
-	const runtime: Pick<BrowserRuntimePort, "open" | "state" | "act" | "connections" | "onConnectionsChanged" | "dispose"> = {
+	const runtime: Pick<BrowserRuntimePort, "open" | "state" | "liveState" | "watchFrames" | "act" | "connections" | "profileMeta" | "onConnectionsChanged" | "dispose"> = {
 		open: async (options) => {
 			calls.opened.push(options);
 			return stateOf("o".repeat(32));
@@ -48,18 +49,21 @@ function recordingRuntime(calls: Calls): BrowserRuntimePort {
 			calls.read.push(browserId);
 			return stateOf(browserId, "http://held.test/");
 		},
+		liveState: async (browserId) => stateOf(browserId, "http://held.test/"),
+		watchFrames: () => () => {},
 		act: async (browserId, action: BrowserAction) => {
 			calls.navigated.push(action.url ?? "");
 			return { status: "completed", state: stateOf(browserId, action.url) };
 		},
 		connections: async () => ({}),
+		profileMeta: async () => ({}),
 		onConnectionsChanged: () => () => {},
 		dispose: async () => {},
 	};
 	return runtime as BrowserRuntimePort;
 }
 
-async function connect(): Promise<{ client: Client; calls: Calls }> {
+async function connect(): Promise<{ client: Client; calls: Calls; server: McpServer }> {
 	const rootDir = await createRoot();
 	const viewDir = join(rootDir, "view");
 	await mkdir(viewDir, { recursive: true });
@@ -70,7 +74,7 @@ async function connect(): Promise<{ client: Client; calls: Calls }> {
 	const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
 	await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
 	clients.push(client);
-	return { client, calls };
+	return { client, calls, server };
 }
 
 test("only browser_view and browser_publish mount the View: browser_open is headless", async () => {
@@ -88,9 +92,9 @@ test("publishing and task agents are offered to Traction alone; every browsing t
 	const modelTools = (await client.listTools()).tools.filter((tool) => uiOf(tool).visibility === undefined);
 	const audienceOf = (tool: { _meta?: Record<string, unknown> }) => tool._meta?.["ai.insodimension/spaces"];
 
-	// A dev session is listed these nine and nothing else; a new tool must choose a side to get past this list.
+	// A dev session is listed these ten and nothing else; a new tool must choose a side to get past this list.
 	expect(modelTools.filter((tool) => audienceOf(tool) === undefined).map((tool) => tool.name).sort()).toEqual([
-		"browser_act", "browser_close", "browser_inspect", "browser_open", "browser_read",
+		"browser_act", "browser_close", "browser_inspect", "browser_open", "browser_profiles", "browser_read",
 		"browser_screenshot", "browser_snapshot", "browser_state", "browser_view",
 	]);
 	const traction = modelTools.filter((tool) => audienceOf(tool) !== undefined);
@@ -128,8 +132,42 @@ test("browser_view without a browserId opens the browser exactly as browser_open
 	expect(calls.navigated).toEqual(["http://app.test/"]);
 	expect(opened.structuredContent).toMatchObject({ browserId: "o".repeat(32), url: "http://app.test/" });
 
-	// Same rules as browser_open: a profile name the rule refuses never reaches the runtime.
-	const refused = await client.callTool({ name: "browser_view", arguments: { profile: "Bad Name!" } });
-	expect(refused.isError).toBe(true);
+	// Same door as browser_open: a name that cannot be a profile's name or label (empty, or longer than a label) never reaches the runtime.
+	for (const profile of ["", "x".repeat(49)]) {
+		expect((await client.callTool({ name: "browser_view", arguments: { profile } })).isError).toBe(true);
+	}
 	expect(calls.opened).toHaveLength(1);
+});
+
+test("browser_stream is the View's own tool: a model is never offered it, and the View gets the address and token of a listener that serves its browser", async () => {
+	const { client } = await connect();
+	const stream = (await client.listTools()).tools.find((tool) => tool.name === "browser_stream");
+	expect(uiOf(stream ?? { _meta: {} }).visibility).toEqual(["app"]);
+
+	const granted = await client.callTool({ name: "browser_stream", arguments: { browserId: "s".repeat(32) } });
+	expect(granted.isError).toBeFalsy();
+	const { origin, token } = z.object({ origin: z.string().regex(/^http:\/\/127\.0\.0\.1:\d+$/), token: z.string().min(32) }).parse(granted.structuredContent);
+	const streamed = await fetch(`${origin}/s/${token}`, { headers: { origin: "null" } });
+	expect(streamed.status).toBe(200);
+	await streamed.body?.cancel();
+	expect((await fetch(`${origin}/s/${token}x`, { headers: { origin: "null" } })).status).toBe(404);
+});
+
+test("the View may reach 127.0.0.1 with fetch and nothing more: the policy it declares grants connect and no resource directive", async () => {
+	const { client } = await connect();
+	const resource = await client.readResource({ uri: BROWSER_VIEW_URI });
+	const declared = z.object({ ui: z.object({ csp: z.record(z.string(), z.array(z.string())) }) }).parse(resource.contents[0]?._meta);
+	// `resourceDomains` would reach script-src and style-src too; only `connectDomains` goes to connect-src alone.
+	expect(declared.ui.csp).toEqual({ connectDomains: ["http://127.0.0.1:*"] });
+});
+
+test("stopping the server closes the listener: the View's door does not outlive the pack", async () => {
+	const { client, server } = await connect();
+	const granted = await client.callTool({ name: "browser_stream", arguments: { browserId: "s".repeat(32) } });
+	const { origin, token } = z.object({ origin: z.string(), token: z.string() }).parse(granted.structuredContent);
+	expect((await fetch(`${origin}/s/${token}`, { headers: { origin: "null" } }).then(async (response) => { await response.body?.cancel(); return response.status; }))).toBe(200);
+
+	await server.close();
+
+	await expect(fetch(`${origin}/s/${token}`, { headers: { origin: "null" } })).rejects.toThrow();
 });

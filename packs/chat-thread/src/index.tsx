@@ -3,9 +3,12 @@
 // Chat is a personal assistant, not a workbench. The reader wants what was
 // said - their words, the assistant's words - and to know the assistant did
 // work in between, not to audit it. So this section draws text blocks and ONE
-// quiet, non-expandable "Worked for Xs" line per turn, and no tool rows at all
+// quiet, non-expandable "Worked for Xs" line per turn, and no tool rows, with
+// ONE exception: a file the assistant shows you (a successful `present`, or any
+// tool whose result carries a presentation) is a card with its Open action,
+// because it is the only way a person reaches that file from here
 // (`StoreThread density="worked"`, the shared kit contract). Anyone who wants
-// the tool cards binds `independent-thread` instead: same seat, other pack.
+// every tool card binds `independent-thread` instead: same seat, other pack.
 //
 // Parts from @fraym/ui: `StoreThread` (the Store-fed conversation: rows off the
 // `session/<id>/transcript` cell, the presence + verb tail off `verb` /

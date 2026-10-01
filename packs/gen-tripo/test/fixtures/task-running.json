@@ -1,0 +1,14 @@
+{
+	"kind": "constructed",
+	"source": "https://developers.tripo3d.ai/en/docs/task-query (field list: status, progress 0-100)",
+	"response": {
+		"code": 0,
+		"data": {
+			"task_id": "task_abc123",
+			"type": "image_to_model",
+			"status": "running",
+			"progress": 42,
+			"created_at": "2026-04-28T12:00:00Z"
+		}
+	}
+}

@@ -1,0 +1,22 @@
+{
+	"model_urls": {
+		"glb": {
+			"url": "https://v3b.fal.media/files/b/0a8c0ab4/eX-_x0Wv8fZL05l9CGp6Y_model.glb",
+			"file_name": "model.glb",
+			"content_type": "model/gltf-binary",
+			"file_size": 206004
+		},
+		"obj": {
+			"url": "https://v3b.fal.media/files/b/0a8c0ab4/tqMY5NJLnHjpwN8rQ15dj_model.obj",
+			"file_name": "model.obj",
+			"content_type": "model/obj",
+			"file_size": 394409
+		}
+	},
+	"model_glb": {
+		"url": "https://v3b.fal.media/files/b/0a8c0ab4/tqMY5NJLnHjpwN8rQ15dj_model.obj",
+		"file_name": "model.obj",
+		"content_type": "model/obj",
+		"file_size": 394409
+	}
+}

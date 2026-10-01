@@ -34,7 +34,7 @@ import {
 	type Presentation,
 	type PresentedItem,
 } from "@dimension/sdk/presentation";
-import { denyReason, textRefusal } from "./deny";
+import { denyReason, textRefusal as windowsSpellingRefusal } from "../viewer/src/fence";
 import { imageFacts, MAX_THUMB_BYTES, MAX_THUMB_SOURCE_BYTES, type Thumbnail } from "./thumbnail";
 
 /** Bytes of a file's start read to classify it. */
@@ -49,6 +49,19 @@ const SVG = "image/svg+xml";
 export interface ThumbImage {
 	readonly data: string;
 	readonly mimeType: string;
+}
+
+/**
+ * Why a requested path is refused on its text alone, before any filesystem call, or
+ * `undefined`: nothing to look at, a NUL byte, or a Windows spelling the operating
+ * system would act on (a device path, an alternate data stream, a network path;
+ * resolving one would make it authenticate to a host the model chose). Relative
+ * paths are fine here: the caller resolves them against the session's working directory.
+ */
+export function textRefusal(requested: string, platform: NodeJS.Platform): string | undefined {
+	if (requested.trim() === "") return "the path is empty";
+	if (requested.includes("\0")) return "the path contains a NUL byte";
+	return windowsSpellingRefusal(requested, platform, "presentable");
 }
 
 export interface PresentDetails {

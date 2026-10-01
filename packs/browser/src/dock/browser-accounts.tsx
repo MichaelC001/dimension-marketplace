@@ -16,6 +16,7 @@ import { Button, Icon, Input, Pill, useObservable } from "@fraym/ui";
 import { type FormEvent, useEffect, useMemo, useState } from "react";
 import { guessAddress } from "../address";
 import { checkProfileName, DEFAULT_PROFILE, loginSetLabel } from "../profile-name";
+import { effectiveSignedIn } from "../profile-meta";
 import { CONNECTION_KEY, observedAgo, type ProfileRow, profileRows, type SiteRow } from "./report";
 import { knownSite, SIGN_IN_SITES, signInUrl } from "./sites";
 
@@ -40,19 +41,21 @@ const MINUTE_MS = 60_000;
 
 function SiteLine({ site, now, onSignIn }: { readonly site: SiteRow; readonly now: number; readonly onSignIn: (() => void) | null }) {
 	const label = knownSite(site.host)?.label ?? site.host;
+	// Never claimed from a visit with no check, nor from an observation over 7 days old: the line says when it was seen.
+	const state = effectiveSignedIn(site.signedIn, site.observedAt, now);
 	return (
-		<li className="flex min-w-0 items-center gap-2 py-1" data-slot="browser-accounts-site" data-signed-in={site.signedIn}>
+		<li className="flex min-w-0 items-center gap-2 py-1" data-slot="browser-accounts-site" data-signed-in={state}>
 			<span className="flex min-w-0 flex-1 flex-col">
 				<span className="flex min-w-0 items-center gap-1.5">
 					<span className="fr-overflow text-fr-sm text-fr-text">{label}</span>
-					<Pill tint={site.signedIn ? "bg-fr-add-bg" : "bg-fr-warn/15"}>{site.signedIn ? "Signed in" : "Signed out"}</Pill>
+					<Pill tint={state === true ? "bg-fr-add-bg" : state === false ? "bg-fr-warn/15" : undefined}>{state === true ? "Signed in" : state === false ? "Signed out" : "Not checked"}</Pill>
 				</span>
 				<span className="fr-overflow font-secondary text-fr-xs text-fr-text-3">
 					{site.account ? `${site.account} · ` : ""}
 					{observedAgo(site.observedAt, now)}
 				</span>
 			</span>
-			<Button size="sm" variant={site.signedIn ? "ghost" : "outline"} disabled={!onSignIn} onClick={onSignIn ?? undefined}>
+			<Button size="sm" variant={state === true ? "ghost" : "outline"} disabled={!onSignIn} onClick={onSignIn ?? undefined}>
 				Sign in
 			</Button>
 		</li>
@@ -79,7 +82,7 @@ function ProfileSection({
 				onClick={onPick}
 			>
 				<Icon name="user" size={12} />
-				<span className="fr-overflow font-secondary text-fr-xs">{loginSetLabel(profile.name)}</span>
+				<span className="fr-overflow font-secondary text-fr-xs">{profile.label}</span>
 			</button>
 			<ul className="flex flex-col">
 				{profile.sites.map(site => (
