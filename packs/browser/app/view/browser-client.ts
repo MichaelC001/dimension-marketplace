@@ -10,11 +10,9 @@ import type {
 	BrowserAnnotationContext,
 	BrowserEngine,
 	BrowserFrame,
-	UnchangedFrame,
 	BrowserRegion,
 	BrowserState,
 	HandledDialog,
-	FrameFormat,
 	PublishField,
 	PublishRecord,
 	TabInfo,
@@ -215,6 +213,11 @@ function readState(tool: string, value: unknown): BrowserState {
 	};
 }
 
+/** A state that arrived on the live stream, read the way a tool's answer is: a shape this View cannot read is raised, never drawn. */
+export function stateFromStream(value: unknown): BrowserState {
+	return readState("stream", value);
+}
+
 /** The one structured-content door. Every browser tool answers
  *  `structuredContent`; an `isError` result is raised, never rendered as data. */
 function structured(tool: string, result: CallToolResult): Record<string, unknown> {
@@ -243,6 +246,12 @@ export function mountFromToolResult(result: CallToolResult): MountResult | null 
 	} catch {
 		return null;
 	}
+}
+
+/** Where one View reads and writes the live channel: `GET {origin}/s/{token}` and `POST {origin}/i/{token}`. */
+export interface StreamGrant {
+	readonly origin: string;
+	readonly token: string;
 }
 
 export interface OpenOptions {
@@ -338,27 +347,26 @@ export class BrowserClient {
 		return readState("browser_state", await this.call("browser_state", { browserId }));
 	}
 
-	/** `jpeg`: the latest live screencast frame, answered from memory; with `since`
-	 *  (the frameId on screen) a still page answers `unchanged` and sends no pixels.
-	 *  `png`: a fresh full-quality capture whose frameId can be annotated. */
-	async frame(browserId: string, format: "png"): Promise<BrowserFrame>;
-	async frame(browserId: string, format: "jpeg", since?: string): Promise<BrowserFrame | UnchangedFrame>;
-	async frame(browserId: string, format: FrameFormat, since?: string): Promise<BrowserFrame | UnchangedFrame> {
+	/** A fresh full-quality PNG capture whose frameId can be annotated. The live picture does not come this way: it rides the stream (`stream`). */
+	async frame(browserId: string): Promise<BrowserFrame> {
 		const tool = "browser_frame";
-		const payload = await this.call(tool, since ? { browserId, format, since } : { browserId, format });
+		const payload = await this.call(tool, { browserId });
 		const frameId = readString(payload, "frameId");
 		if (frameId === undefined) throw new BrowserToolError(tool, "frame carried no frameId");
 		const state = readState(tool, payload.state);
-		if (payload.unchanged === true) return { state, frameId, unchanged: true };
 		const data = readString(payload, "data");
 		if (data === undefined || data.length === 0) throw new BrowserToolError(tool, "frame carried no image data");
-		return {
-			state,
-			frameId,
-			mimeType: readString(payload, "mimeType") === "image/png" ? "image/png" : "image/jpeg",
-			data,
-			capturedAt: readString(payload, "capturedAt") ?? new Date().toISOString(),
-		};
+		return { state, frameId, mimeType: "image/png", data, capturedAt: readString(payload, "capturedAt") ?? new Date().toISOString() };
+	}
+
+	/** Where to read this browser's live pictures and state and send the human's input: the pack's own loopback listener. One call per connection, never per picture. */
+	async stream(browserId: string): Promise<StreamGrant> {
+		const tool = "browser_stream";
+		const payload = await this.call(tool, { browserId });
+		const origin = readString(payload, "origin");
+		const token = readString(payload, "token");
+		if (origin === undefined || token === undefined || !/^http:\/\/127\.0\.0\.1:\d+$/.test(origin)) throw new BrowserToolError(tool, "the answer did not say where the live picture is");
+		return { origin, token };
 	}
 
 	/** Sizes every tab's viewport (CSS px) so the page fills the seat 1:1, rendered at

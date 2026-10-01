@@ -13,8 +13,15 @@ import { type PublishPreset, loadPresets, resolvePreset, summarizePresets } from
 import { PROFILE_NAME } from "./profile-name.js";
 import { BrowserRuntime } from "./runtime.js";
 import { fail } from "./store.js";
+import { LiveChannel } from "./stream.js";
 
 export const BROWSER_VIEW_URI = "ui://browser/index.html";
+/**
+ * What the View may reach on this machine: the pack's own loopback listener (stream.ts), on whatever port it was given. `connect-src` is
+ * the ONLY directive this domain goes to (the host puts `resourceDomains` into script and style too), so the View can read a stream
+ * and post input and still cannot load a script or a style from a loopback port.
+ */
+const VIEW_CSP = { connectDomains: ["http://127.0.0.1:*"] };
 const capability = z.string();
 const profile = z.string().regex(PROFILE_NAME);
 const coordinate = z.number();
@@ -184,12 +191,13 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     ...(process.env.DIMENSION_BROWSER_HEADLESS === undefined ? {} : { headless: process.env.DIMENSION_BROWSER_HEADLESS !== "false" }),
   });
   const server = new McpServer({ name: "dimension-community-browser", version: "0.1.0" });
+  const live = new LiveChannel(runtime);
   const viewDir = options.viewDir ?? fileURLToPath(new URL("./dist/", import.meta.url));
   // A missing built View is a startup error, not an installed pack that opens blank.
   const html = await readFile(join(viewDir, "index.html"), "utf8");
   // A malformed shipped preset is a startup error too, never a recipe an agent can reach.
   const presets = options.presets ?? await loadPresets();
-  const metadata = { ui: { prefersBorder: false } };
+  const metadata = { ui: { prefersBorder: false, csp: VIEW_CSP } };
   registerAppResource(server, "Browser", BROWSER_VIEW_URI, { _meta: metadata }, async () => ({
     contents: [{ uri: BROWSER_VIEW_URI, mimeType: RESOURCE_MIME_TYPE, text: html, _meta: metadata }],
   }));
@@ -399,14 +407,19 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     annotations: READ_ONLY,
     _meta: TRACTION_ONLY,
   }, ({ browserId, publishId, waitSeconds }) => result(() => runtime.waitPublish(browserId, publishId, (waitSeconds ?? WAIT_CAP_S) * 1000)));
-  registerAppTool(server, "browser_frame", {
-    description: "Read the active tab's rendered frame for the View. jpeg (default): the newest live screencast frame, returned from memory — poll it for live view, passing the frameId on screen as `since` so a still page answers { unchanged: true } without pixels; its frameId is not annotatable. png: a fresh full-quality capture retained for browser_annotate.",
-    inputSchema: { browserId: capability, format: z.enum(["jpeg", "png"]).optional(), since: z.string().max(128).optional() }, annotations: READ_ONLY, _meta: APP_ONLY,
-  }, ({ browserId, format, since }, extra) => result(async () => {
-    // The View polls this for the browser it shows: proof of which one the human is looking at, even after a reload of the app.
+  registerAppTool(server, "browser_stream", {
+    description: "Where the View reads this browser's live pictures and state, and sends the human's mouse and keys: { origin, token } of the pack's loopback listener (GET {origin}/s/{token}, POST {origin}/i/{token}). One token per View, for this browser only; it stops working when the browser closes or the View has been gone a while. Called when the View binds a browser or must reconnect, never per picture.",
+    inputSchema: { browserId: capability }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }, _meta: APP_ONLY,
+  }, ({ browserId }, extra) => result(async () => {
+    const granted = await live.mint(browserId);
+    // The View asking for a stream is proof of which browser the human is looking at, even after a reload of the app.
     showing(extra, browserId);
-    return format === "png" ? await runtime.frame(browserId, "png") : await runtime.frame(browserId, "jpeg", since);
+    return granted;
   }));
+  registerAppTool(server, "browser_frame", {
+    description: "A fresh full-quality PNG capture of the active tab, retained for browser_annotate (its frameId is what annotation names). The live picture is not read here: it rides the stream (browser_stream).",
+    inputSchema: { browserId: capability }, annotations: READ_ONLY, _meta: APP_ONLY,
+  }, ({ browserId }) => result(() => runtime.frame(browserId)));
   registerAppTool(server, "browser_annotate", {
     description: "The page under the regions the human marked on a retained png frame: address, title, where it is scrolled, and the elements under each region (a password field is named, never read). No pixels: the picture is the View's own frame and the shared annotation kit paints the marks on it. Does not send anything to an agent; the View explicitly updates its model context afterward.",
     inputSchema: {
@@ -457,13 +470,13 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
   let disposal: Promise<void> | undefined;
   server.close = async () => {
     stopReporting();
-    try { await (disposal ??= runtime.dispose()); }
+    try { await (disposal ??= runtime.dispose().finally(() => live.close())); }
     finally { await closeTransport(); }
   };
   server.server.onclose = () => {
     previousOnClose?.();
     stopReporting();
-    void (disposal ??= runtime.dispose()).catch(error => console.error("Browser cleanup failed:", error));
+    void (disposal ??= runtime.dispose().finally(() => live.close())).catch(error => console.error("Browser cleanup failed:", error));
   };
   return server;
 }

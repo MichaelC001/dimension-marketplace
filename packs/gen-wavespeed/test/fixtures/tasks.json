@@ -1,0 +1,61 @@
+{
+	"created": {
+		"code": 200,
+		"message": "success",
+		"data": {
+			"id": "pred_abc123",
+			"status": "created",
+			"outputs": []
+		}
+	},
+	"processing": {
+		"code": 200,
+		"message": "success",
+		"data": {
+			"id": "pred_abc123",
+			"status": "processing",
+			"outputs": []
+		}
+	},
+	"failed": {
+		"code": 200,
+		"message": "success",
+		"data": {
+			"id": "pred_abc123",
+			"model": "tripo3d/p2/image-to-3d",
+			"status": "failed",
+			"code": 1402,
+			"error": "Failed to download image from the provided URL.",
+			"outputs": []
+		}
+	},
+	"timeout": {
+		"code": 200,
+		"message": "success",
+		"data": {
+			"id": "pred_abc123",
+			"status": "timeout",
+			"code": 5004,
+			"error": "",
+			"outputs": []
+		}
+	},
+	"cancelled": {
+		"code": 200,
+		"message": "success",
+		"data": {
+			"id": "pred_abc123",
+			"status": "cancelled",
+			"outputs": []
+		}
+	},
+	"deleted": {
+		"code": 200,
+		"message": "success",
+		"data": {
+			"id": "pred_abc123",
+			"model": "tripo3d/p2/image-to-3d",
+			"status": "deleted"
+		}
+	}
+}

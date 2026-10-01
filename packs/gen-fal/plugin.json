@@ -1,0 +1,78 @@
+{
+	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+	"name": "gen-fal",
+	"version": "0.1.0",
+	"description": "3D generators from fal.ai behind one key: Pixal3D, TRELLIS.2, Rodin 2.5, Meshy-6, Hunyuan 3.1 (image-to-3D, part splitter, smart topology) and Tripo P2, with live option schemas, prices and a quote before every job",
+	"author": {
+		"name": "Dimension"
+	},
+	"license": "MIT",
+	"keywords": [
+		"generation",
+		"3d",
+		"fal",
+		"pixal3d",
+		"trellis",
+		"rodin",
+		"meshy",
+		"hunyuan",
+		"tripo",
+		"provider"
+	],
+	"extensions": {
+		"ai.insodimension.dimension": {
+			"contractVersion": 1,
+			"title": "fal.ai generators",
+			"icon": "assets/icon.svg",
+			"category": "connector",
+			"defaultEnabled": false,
+			"entry": "index.ts",
+			"providers": {
+				"generation": [
+					{
+						"id": "fal",
+						"produces": [
+							"model3d",
+							"parts",
+							"retopo"
+						],
+						"runtime": "api"
+					}
+				]
+			},
+			"connect": {
+				"kind": [
+					"form"
+				],
+				"setup": [
+					{
+						"title": "Create a fal API key",
+						"detail": "Create a key in the fal dashboard. It stays on this machine and is sent only to fal (queue.fal.run, api.fal.ai, rest.fal.ai). An API-scope key covers generation, the model catalogue and prices; a job's actual cost is read from fal's billing events, which need an admin-scope key, and without one the job is recorded at its quote.",
+						"url": "https://fal.ai/dashboard/keys",
+						"urlLabel": "fal dashboard keys"
+					},
+					{
+						"title": "Fund the account",
+						"detail": "fal is prepaid: every job draws down credits. Each job's price is quoted before it is submitted and checked against Dimension's spend caps, so a job over the cap never starts.",
+						"url": "https://fal.ai/dashboard/billing",
+						"urlLabel": "fal billing"
+					},
+					{
+						"title": "Know what leaves this machine",
+						"detail": "Reference images and 3D files a job uses are uploaded to fal's CDN, which serves them by public URL, and are asked to expire after 24 hours. Rodin, Meshy, Hunyuan and Tripo are partner models: fal passes your prompt, options and files on to those vendors. Hunyuan and Pixal3D outputs are marked prototype-only until their licences are reviewed."
+					}
+				],
+				"form": [
+					{
+						"id": "apiKey",
+						"label": "fal API key",
+						"secret": true,
+						"help": "Used for every fal generation job. Create it at fal.ai/dashboard/keys."
+					}
+				],
+				"configTemplate": "connect/key.template.json",
+				"configTarget": "~/.config/dimension-gen-fal/key.json"
+			}
+		}
+	}
+}

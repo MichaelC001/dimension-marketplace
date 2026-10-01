@@ -21,7 +21,7 @@ export function formatElapsed(ms: number): string {
 	return minutes < 60 ? `${minutes}:${String(seconds % 60).padStart(2, "0")}` : `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
-/** A clock that keeps moving between polls while the task runs. */
+/** A clock that keeps moving between state updates while the task runs. */
 function useElapsed(task: TaskRun): number {
 	const running = task.status === "running";
 	const started = Date.parse(task.startedAt);

@@ -1,0 +1,79 @@
+{
+	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+	"name": "gen-local-3d",
+	"version": "0.1.0",
+	"description": "Image-to-3D on this machine's GPU: Pixal3D (single view) and TRELLIS.2 through pixal3d.cpp's trellis-cli. No account, no key, no cost per model.",
+	"author": {
+		"name": "Dimension"
+	},
+	"license": "MIT",
+	"keywords": [
+		"generation",
+		"3d",
+		"image-to-3d",
+		"pixal3d",
+		"trellis",
+		"local",
+		"provider"
+	],
+	"extensions": {
+		"ai.insodimension.dimension": {
+			"contractVersion": 1,
+			"title": "Local image-to-3D",
+			"icon": "assets/icon.svg",
+			"category": "connector",
+			"defaultEnabled": false,
+			"entry": "index.ts",
+			"providers": {
+				"generation": [
+					{
+						"id": "local-3d",
+						"produces": [
+							"model3d"
+						],
+						"runtime": "local"
+					}
+				]
+			},
+			"connect": {
+				"kind": [
+					"form"
+				],
+				"setup": [
+					{
+						"title": "Get trellis-cli",
+						"detail": "Download or build pixal3d.cpp and keep its folder together: trellis-cli.exe needs the CUDA and ggml DLLs beside it. Everything runs on this machine; nothing is sent anywhere.",
+						"url": "https://github.com/raven38/pixal3d.cpp",
+						"urlLabel": "pixal3d.cpp"
+					},
+					{
+						"title": "Download the model weights",
+						"detail": "One folder per model under a single models folder: pixal3d-sv/ holds the nine GGUF files of raven38/pixal3d-sv-q8_0-v1, trellis2-gguf/q8/ holds the q8 files of ilintar/trellis2-gguf. A model whose folder is missing or incomplete is simply not offered.",
+						"url": "https://huggingface.co/raven38/pixal3d-sv-q8_0-v1",
+						"urlLabel": "Pixal3D weights"
+					},
+					{
+						"title": "Give it transparent cutouts",
+						"detail": "Each job takes ONE PNG with the background already removed. A PNG whose alpha cuts nothing out is refused, because the backdrop would be built as geometry. A job holds the GPU for several minutes."
+					}
+				],
+				"form": [
+					{
+						"id": "cliPath",
+						"label": "trellis-cli path",
+						"placeholder": "C:/Tools/pixal3d-cpp/trellis-cli.exe",
+						"help": "The full path of the trellis-cli executable."
+					},
+					{
+						"id": "modelsRoot",
+						"label": "Models folder",
+						"placeholder": "C:/Models",
+						"help": "The folder that holds one subfolder of weights per model (pixal3d-sv, trellis2-gguf/q8)."
+					}
+				],
+				"configTemplate": "connect/config.template.json",
+				"configTarget": "~/.config/dimension-gen-local-3d/config.json"
+			}
+		}
+	}
+}

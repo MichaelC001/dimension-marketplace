@@ -1,0 +1,10 @@
+{
+	"kind": "documented",
+	"source": "https://developers.tripo3d.ai/en/docs/files",
+	"response": {
+		"code": 0,
+		"data": {
+			"file_token": "file_abc123"
+		}
+	}
+}

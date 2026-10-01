@@ -1,0 +1,230 @@
+{
+	"$comment": "The fal endpoints this pack offers. Add or remove a model by editing this list — no code. An endpoint is offered only while fal's live catalogue lists it as active and its input schema still carries every field named under `inputs`; its option schema and unit price come from fal (GET api.fal.ai/v1/models?expand=openapi-3.0 and /v1/models/pricing), never from this file. What fal does not expose lives here: how Dimension's inputs map onto the endpoint's fields, how many billing units a request takes (derived from the price text on the endpoint's fal page, checked 2026-10-01), the licence, and the feature tags.",
+	"uploads": {
+		"$comment": "Reference images and 3D files are sent to fal's CDN, which serves them by public URL. They are asked to expire after this many seconds; a job needs its inputs only until a fal runner picks it up.",
+		"expireSeconds": 86400
+	},
+	"outputRoles": [
+		{ "$comment": "First match wins, against the dotted path of a file inside fal's result. A model's own `outputRoles` are tried first; a file nothing matches is classified by its extension.", "path": "(^|\\.)(thumbnail|rendered_image|preview[a-z_]*)$", "role": "preview" },
+		{ "path": "(^|\\.)(textures?|texture_urls|base_color|metallic|roughness|normal)(\\[\\d+\\])?(\\.|$)", "role": "texture" },
+		{ "path": "^(rigged_|animation_|basic_animations)", "role": "rig" },
+		{ "path": "^result_files", "role": "part" },
+		{ "path": "(^|\\.)mtl$", "role": "other" },
+		{ "path": "^model", "role": "model" }
+	],
+	"models": [
+		{
+			"endpoint": "fal-ai/pixal3d",
+			"label": "Pixal3D (fal)",
+			"produces": "model3d",
+			"accepts": ["image"],
+			"maxImages": 1,
+			"inputs": { "images": { "field": "image_url" }, "seed": "seed" },
+			"pricing": {
+				"unit": "units",
+				"unitPrice": 0.06,
+				"base": 5,
+				"rules": [{ "when": { "resolution": 1536 }, "set": 7 }],
+				"basis": "$0.30 at 1024p, $0.42 at 1536p",
+				"source": "https://fal.ai/models/fal-ai/pixal3d"
+			},
+			"licence": {
+				"id": "MIT+DINOv3",
+				"commercialUse": "unknown",
+				"prototypeOnly": true,
+				"url": "https://github.com/TencentARC/Pixal3D/issues/33",
+				"note": "Pixal3D's repository is MIT, but the weights' commercial terms are disputed upstream (TencentARC/Pixal3D issue #33, open since 2026-07-09: a ComfyUI wrapper claims academic-only and EU-excluded) and its encoder is Meta's DINOv3, under the DINOv3 License, whose text has not been legally reviewed. fal lists the endpoint as license_type=commercial, which is fal's licence to host it, not an answer to #33. Prototype use only until the owner and legal clear both."
+			},
+			"features": ["single-view", "textured", "glb", "seed"]
+		},
+		{
+			"endpoint": "fal-ai/trellis-2",
+			"label": "TRELLIS.2 (fal)",
+			"produces": "model3d",
+			"accepts": ["image"],
+			"maxImages": 1,
+			"inputs": { "images": { "field": "image_url" }, "seed": "seed" },
+			"pricing": {
+				"unit": "units",
+				"unitPrice": 0.05,
+				"base": 6,
+				"rules": [
+					{ "when": { "resolution": 512 }, "set": 5 },
+					{ "when": { "resolution": 1536 }, "set": 7 }
+				],
+				"basis": "$0.25 at 512p, $0.30 at 1024p, $0.35 at 1536p",
+				"source": "https://fal.ai/models/fal-ai/trellis-2"
+			},
+			"licence": {
+				"id": "MIT",
+				"commercialUse": "yes",
+				"url": "https://huggingface.co/microsoft/TRELLIS.2-4B",
+				"note": "TRELLIS.2's model and code are MIT (microsoft/TRELLIS.2). Its pipeline config (pipeline.json) conditions on Meta's DINOv3 (facebook/dinov3-vitl16-pretrain-lvd1689m, under the DINOv3 License) and removes backgrounds with briaai/RMBG-2.0, which TencentARC/Pixal3D#33 reports as CC BY-NC; neither licence has been legally reviewed, so check both before a release export."
+			},
+			"features": ["single-view", "pbr", "uv-unwrap", "glb", "seed", "res:512-1536"]
+		},
+		{
+			"endpoint": "fal-ai/hyper3d/rodin/v2.5",
+			"label": "Rodin 2.5 (fal)",
+			"produces": "model3d",
+			"accepts": ["image"],
+			"maxImages": 5,
+			"inputs": { "images": { "arrayField": "image_urls", "max": 5 }, "prompt": { "field": "prompt" }, "seed": "seed" },
+			"pricing": {
+				"unit": "generations",
+				"unitPrice": 0.4,
+				"base": 1,
+				"rules": [{ "when": { "addons.high_pack": true }, "add": 2 }],
+				"basis": "$0.40 per generation, +$0.80 with addons.high_pack",
+				"source": "https://fal.ai/models/fal-ai/hyper3d/rodin/v2.5"
+			},
+			"licence": {
+				"id": "fal-terms-2026-09-08",
+				"commercialUse": "yes",
+				"url": "https://fal.ai/legal/terms-of-service",
+				"note": "fal's Terms of Service (updated 2026-09-08) make Output Content the customer's (§6) and set no commercial-use restriction, give no originality or IP warranty (§4c) and let third-party model terms apply (§14a); fal lists the endpoint as license_type=commercial. Hyper3D's own terms were not reviewed."
+			},
+			"features": ["quad", "pbr", "multi-image:5", "a-pose", "hd-texture", "fbx", "usdz", "obj", "stl", "seed", "prompt-hint"]
+		},
+		{
+			"endpoint": "fal-ai/meshy/v6/image-to-3d",
+			"label": "Meshy-6 image-to-3D (fal)",
+			"produces": "model3d",
+			"accepts": ["image"],
+			"maxImages": 1,
+			"inputs": { "images": { "field": "image_url" } },
+			"pricing": {
+				"unit": "generations",
+				"unitPrice": 0.8,
+				"base": 1,
+				"rules": [],
+				"basis": "$0.80 per generation (the only price fal lists for this endpoint, whatever the options)",
+				"source": "https://fal.ai/models/fal-ai/meshy/v6/image-to-3d"
+			},
+			"licence": {
+				"id": "fal-terms-2026-09-08",
+				"commercialUse": "yes",
+				"url": "https://fal.ai/legal/terms-of-service",
+				"note": "fal's Terms of Service (updated 2026-09-08) make Output Content the customer's (§6) and set no commercial-use restriction, give no originality or IP warranty (§4c) and let third-party model terms apply (§14a); fal lists the endpoint as license_type=commercial. Meshy's own terms were not reviewed."
+			},
+			"features": ["quad", "pbr", "rig:humanoid", "animation", "a-pose", "t-pose", "lowpoly", "smart-topology:parts", "fbx", "usdz", "obj"]
+		},
+		{
+			"endpoint": "fal-ai/hunyuan-3d/v3.1/pro/image-to-3d",
+			"label": "Hunyuan 3D 3.1 Pro image-to-3D (fal)",
+			"produces": "model3d",
+			"accepts": ["image"],
+			"maxImages": 8,
+			"inputs": {
+				"images": {
+					"fields": [
+						"input_image_url",
+						"back_image_url",
+						"left_image_url",
+						"right_image_url",
+						"top_image_url",
+						"bottom_image_url",
+						"left_front_image_url",
+						"right_front_image_url"
+					]
+				}
+			},
+			"pricing": {
+				"unit": "units",
+				"unitPrice": 0.015,
+				"base": 25,
+				"rules": [
+					{ "when": { "enable_pbr": true }, "add": 10 },
+					{ "when": { "$images": { "gte": 2 } }, "add": 10 },
+					{ "when": { "face_count": { "present": true } }, "add": 10 }
+				],
+				"basis": "$0.375 per generation, +$0.15 each for PBR, multi-view input and a custom face_count",
+				"source": "https://fal.ai/models/fal-ai/hunyuan-3d/v3.1/pro/image-to-3d"
+			},
+			"licence": {
+				"id": "tencent-hunyuan-3d-community",
+				"commercialUse": "yes",
+				"territoryExcludes": ["EU", "GB", "KR"],
+				"prototypeOnly": true,
+				"url": "https://github.com/Tencent-Hunyuan/Hunyuan3D-2.1/blob/main/LICENSE",
+				"note": "The Tencent Hunyuan 3D 2.1 Community License excludes the EU, UK and South Korea (§1.l, §5.c, AUP 1) and needs a Tencent licence above 1M monthly active users (§4). fal serves Hunyuan 3.1 through Tencent's partner API and publishes no separate output licence, so the 2.1 licence is the nearest published terms. Prototype use only until reviewed."
+			},
+			"features": ["pbr", "multi-view:8", "images:front,back,left,right,top,bottom,left-front,right-front", "geometry-only", "glb", "obj"]
+		},
+		{
+			"endpoint": "fal-ai/hunyuan-3d/v3.1/part",
+			"label": "Hunyuan 3D 3.1 Part splitter (fal)",
+			"produces": "parts",
+			"accepts": ["model3d"],
+			"inputs": { "model": { "field": "input_file_url", "formats": ["fbx"] } },
+			"pricing": {
+				"unit": "units",
+				"unitPrice": 0.015,
+				"base": 30,
+				"rules": [],
+				"basis": "$0.45 per generation",
+				"source": "https://fal.ai/models/fal-ai/hunyuan-3d/v3.1/part"
+			},
+			"licence": {
+				"id": "tencent-hunyuan-3d-community",
+				"commercialUse": "yes",
+				"territoryExcludes": ["EU", "GB", "KR"],
+				"prototypeOnly": true,
+				"url": "https://github.com/Tencent-Hunyuan/Hunyuan3D-2.1/blob/main/LICENSE",
+				"note": "The Tencent Hunyuan 3D 2.1 Community License excludes the EU, UK and South Korea (§1.l, §5.c, AUP 1) and needs a Tencent licence above 1M monthly active users (§4). fal serves Hunyuan 3.1 through Tencent's partner API and publishes no separate output licence, so the 2.1 licence is the nearest published terms. Prototype use only until reviewed."
+			},
+			"features": ["parts", "fbx-in", "fbx-out", "max-30k-faces", "max-100mb"]
+		},
+		{
+			"endpoint": "fal-ai/hunyuan-3d/v3.1/smart-topology",
+			"label": "Hunyuan 3D 3.1 Smart Topology (fal)",
+			"produces": "retopo",
+			"accepts": ["model3d"],
+			"inputs": { "model": { "field": "input_file_url", "typeField": "input_file_type", "formats": ["glb", "obj"] } },
+			"pricing": {
+				"unit": "units",
+				"unitPrice": 0.015,
+				"base": 50,
+				"rules": [],
+				"basis": "$0.75 per generation",
+				"source": "https://fal.ai/models/fal-ai/hunyuan-3d/v3.1/smart-topology"
+			},
+			"licence": {
+				"id": "tencent-hunyuan-3d-community",
+				"commercialUse": "yes",
+				"territoryExcludes": ["EU", "GB", "KR"],
+				"prototypeOnly": true,
+				"url": "https://github.com/Tencent-Hunyuan/Hunyuan3D-2.1/blob/main/LICENSE",
+				"note": "The Tencent Hunyuan 3D 2.1 Community License excludes the EU, UK and South Korea (§1.l, §5.c, AUP 1) and needs a Tencent licence above 1M monthly active users (§4). fal serves Hunyuan 3.1 through Tencent's partner API and publishes no separate output licence, so the 2.1 licence is the nearest published terms. Prototype use only until reviewed."
+			},
+			"features": ["retopo", "quad", "triangle", "glb-in", "obj-in", "max-200mb"]
+		},
+		{
+			"endpoint": "tripo3d/p2/image-to-3d",
+			"label": "Tripo P2 image-to-3D (fal)",
+			"produces": "model3d",
+			"accepts": ["image"],
+			"maxImages": 1,
+			"inputs": { "images": { "field": "image_url" }, "seed": "model_seed" },
+			"pricing": {
+				"unit": "credits",
+				"unitPrice": 0.01,
+				"base": 110,
+				"rules": [
+					{ "when": { "texture_quality": "detailed" }, "set": 120 },
+					{ "when": { "texture_quality": "extreme" }, "set": 130 },
+					{ "when": { "texture": false, "pbr": false }, "set": 100 }
+				],
+				"basis": "$1.00 untextured, $1.10 fast or standard textures, $1.20 detailed, $1.30 extreme; quad topology is free",
+				"source": "https://fal.ai/models/tripo3d/p2/image-to-3d"
+			},
+			"licence": {
+				"id": "fal-terms-2026-09-08",
+				"commercialUse": "yes",
+				"url": "https://fal.ai/legal/terms-of-service",
+				"note": "fal's Terms of Service (updated 2026-09-08) make Output Content the customer's (§6) and set no commercial-use restriction, give no originality or IP warranty (§4c) and let third-party model terms apply (§14a); fal lists the endpoint as license_type=commercial. Tripo's own terms were not reviewed."
+			},
+			"features": ["quad", "pbr", "delight", "uv", "auto-size", "orientation", "seed", "glb", "fbx"]
+		}
+	]
+}

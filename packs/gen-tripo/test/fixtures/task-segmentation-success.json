@@ -1,0 +1,20 @@
+{
+	"kind": "documented",
+	"source": "https://developers.tripo3d.ai/en/docs/mesh-segment",
+	"response": {
+		"code": 0,
+		"data": {
+			"task_id": "task_def456",
+			"type": "mesh_segmentation",
+			"status": "success",
+			"progress": 100,
+			"output": {
+				"model_url": "https://cdn.tripo3d.ai/output/mesh_seg.glb",
+				"rendered_image_url": "https://cdn.tripo3d.ai/output/mesh_seg.webp"
+			},
+			"credits_consumed": 40,
+			"created_at": "2026-05-27T02:22:56Z",
+			"completed_at": "2026-05-27T02:25:33Z"
+		}
+	}
+}
