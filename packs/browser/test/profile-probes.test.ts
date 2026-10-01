@@ -82,6 +82,15 @@ describe("what one look at a page decides", () => {
 		}
 	});
 
+	test("the look as a browser closes does not wait for a page to draw: it asks the page as it is, once, so a marker that is there is never lost to a timer", async () => {
+		const probe = probeOf("x.com");
+		const out = fakeReader({});
+		expect(await readProbe(out, probe, "https://x.com/", 0)).toEqual({ signedIn: false });
+		const inn = fakeReader({ present: [probe.signedIn] });
+		expect(await readProbe(inn, probe, "https://x.com/", 0)).toEqual({ signedIn: true });
+		expect([...out.waits, ...inn.waits]).toEqual([]);
+	});
+
 	test("no marker anywhere else is no verdict at all — a settings page without the nav does not sign anyone out — and costs no waiting", async () => {
 		const reader = fakeReader({});
 		expect(await readProbe(reader, probeOf("x.com"), "https://x.com/settings/account", 5_000)).toBeUndefined();

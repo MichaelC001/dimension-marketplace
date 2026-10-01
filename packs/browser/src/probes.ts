@@ -112,7 +112,8 @@ function decides(probe: SiteProbe, url: URL): boolean {
  */
 export async function readProbe(reader: ProbeReader, probe: SiteProbe, url: string, settleMs: number = SETTLE_MS): Promise<ProbeVerdict | undefined> {
 	const decisive = decides(probe, new URL(url));
-	const shown = decisive ? await reader.waitFor({ selector: probe.signedIn }, settleMs, (value) => value) : await reader.hasElement(probe.signedIn);
+	// Waiting is for a page that is still drawing; `settleMs: 0` (the look as a browser closes) asks the page as it is, once.
+	const shown = decisive && settleMs > 0 ? await reader.waitFor({ selector: probe.signedIn }, settleMs, (value) => value) : await reader.hasElement(probe.signedIn);
 	if (!shown) return decisive ? { signedIn: false } : undefined;
 	const account = await readAccount(reader, probe.account);
 	return account === undefined ? { signedIn: true } : { signedIn: true, account };
