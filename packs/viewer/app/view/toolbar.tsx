@@ -44,17 +44,24 @@ export function Toolbar({ filename, path, kind, size, shownBytes, zoom, pager, m
 	const { copied, copy } = useCopied(path);
 	return (
 		<>
-			<div data-slot="viewer-toolbar" className="flex h-10 shrink-0 items-center gap-3 border-b border-fr-border-soft px-3">
-				{kind === undefined ? null : <span className="shrink-0 rounded-sm bg-fr-surface-3 px-1.5 py-0.5 text-fr-2xs font-medium text-fr-text-2">{KIND_LABEL[kind]}</span>}
-				<span className="min-w-0 flex-1 truncate text-fr-sm text-fr-text" title={path}>
-					{filename}
-				</span>
-				{size === undefined ? null : (
-					<span className="shrink-0 text-fr-xs text-fr-text-3">
-						{formatBytes(size)}
-						{shownBytes === undefined ? "" : ` · showing the first ${formatBytes(shownBytes)}`}
+			{/* One row where the View is wide enough. Where it is not, the controls wrap to a row of their own, whole groups
+			    at a time and in the order they are read: nothing is clipped, scrolled to or taken away. A row is one touch
+			    target tall (40 px, the icon buttons'), so the bar is 40 px per row, the rule under it drawn inside the last
+			    row (a border would make one row 41). The name and the size stay together on the first row, and the name
+			    gives way first (truncated), then the size. */}
+			<div data-slot="viewer-toolbar" className="flex shrink-0 flex-wrap items-center gap-x-3 px-3 shadow-[inset_0_-1px_0_var(--fr-border-soft)]">
+				<div className="flex min-h-10 min-w-0 flex-1 basis-40 items-center gap-3">
+					{kind === undefined ? null : <span className="shrink-0 rounded-sm bg-fr-surface-3 px-1.5 py-0.5 text-fr-2xs font-medium text-fr-text-2">{KIND_LABEL[kind]}</span>}
+					<span className="min-w-0 flex-1 truncate text-fr-sm text-fr-text" title={path}>
+						{filename}
 					</span>
-				)}
+					{size === undefined ? null : (
+						<span className="min-w-0 truncate text-fr-xs text-fr-text-3">
+							{formatBytes(size)}
+							{shownBytes === undefined ? "" : ` · showing the first ${formatBytes(shownBytes)}`}
+						</span>
+					)}
+				</div>
 				{modes ? (
 					<div className="flex shrink-0 items-center gap-0.5 rounded-md bg-fr-surface p-0.5" role="group" aria-label="Markup">
 						{modes.available.map(option => (
@@ -106,7 +113,7 @@ export function Toolbar({ filename, path, kind, size, shownBytes, zoom, pager, m
 						</IconButton>
 					</div>
 				) : null}
-				<IconButton className={cn("size-7", FOCUS)} aria-label={copied ? "Path copied" : "Copy path"} title={copied ? "Path copied" : "Copy path"} onClick={copy}>
+				<IconButton className={cn("ml-auto size-7", FOCUS)} aria-label={copied ? "Path copied" : "Copy path"} title={copied ? "Path copied" : "Copy path"} onClick={copy}>
 					<Icon name={copied ? "check" : "copy"} size={14} />
 				</IconButton>
 			</div>
