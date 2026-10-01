@@ -2,22 +2,21 @@
  *  person they are signed in where they are not (or names the wrong account),
  *  or its Sign in opens the live Browser View on the wrong profile or the
  *  wrong site, or fires with no session to open it in, or starts a sign-in on
- *  a profile name the server will refuse.
+ *  a profile name the server will refuse — or its "Open a page" bar opens a
+ *  browser that forgets their logins (or, when they asked for Private, one that
+ *  saves them), or opens on an address the browser cannot load.
  *
  *  The panel's data is this pack's own connection report, so every fixture is
  *  built by the server's own `buildConnectionReport` (connection.ts): the two
  *  shapes cannot drift. The component is mounted live on a linkedom document
- *  (the marketplace's pack convention: `react`, `react-dom` and `linkedom` come
- *  from the Dimension monorepo the pack is mounted into) against a fake host
- *  Store that serves one fact and records every intent.
+ *  (`dom-harness.ts`) against a fake host Store that serves one fact and
+ *  records every intent.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { parseHTML } from "linkedom";
-import { act } from "react";
-import { createRoot, type Root } from "react-dom/client";
 import { buildConnectionReport, type ConnectionObservations } from "../src/connection";
 import { BrowserAccounts, type BrowserStoreShape } from "../src/dock/browser-accounts";
 import { CONNECTION_KEY, observedAgo, profileRows } from "../src/dock/report";
+import { mount, unmountAll } from "./dom-harness";
 
 const T = 1_790_000_000_000;
 
@@ -107,22 +106,7 @@ describe("observedAgo", () => {
 // The panel, mounted
 // ---------------------------------------------------------------------------
 
-const DOM_GLOBALS = ["window", "document", "navigator", "HTMLElement", "Event", "IS_REACT_ACT_ENVIRONMENT"] as const;
-type DomGlobal = (typeof DOM_GLOBALS)[number];
-let priorDomGlobals: Record<DomGlobal, PropertyDescriptor | undefined> | undefined;
-const roots: Root[] = [];
-
-afterEach(async () => {
-	for (const root of roots.splice(0)) await act(async () => root.unmount());
-	if (priorDomGlobals) {
-		for (const key of DOM_GLOBALS) {
-			const descriptor = priorDomGlobals[key];
-			if (descriptor) Object.defineProperty(globalThis, key, descriptor);
-			else Reflect.deleteProperty(globalThis, key);
-		}
-		priorDomGlobals = undefined;
-	}
-});
+afterEach(unmountAll);
 
 interface Act {
 	readonly intent: string;
@@ -143,79 +127,28 @@ function fakeStore(fact: unknown): { readonly store: BrowserStoreShape; readonly
 	return { store, acts };
 }
 
-interface Panel {
-	/** The site line for `label` under profile `profile`. */
-	readonly siteLine: (profile: string, label: string) => Element;
-	readonly click: (element: Element) => Promise<void>;
-	readonly type: (input: Element, value: string) => Promise<void>;
-	readonly submit: (form: Element) => Promise<void>;
-	readonly find: (selector: string) => Element[];
-	readonly text: () => string;
-}
-
-async function mountPanel(sessionId: string | null, store: BrowserStoreShape): Promise<Panel> {
-	const { window } = parseHTML('<!doctype html><html><body><div id="root"></div></body></html>');
-	priorDomGlobals ??= Object.fromEntries(DOM_GLOBALS.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)])) as Record<
-		DomGlobal,
-		PropertyDescriptor | undefined
-	>;
-	Object.assign(globalThis, {
-		window,
-		document: window.document,
-		navigator: window.navigator,
-		HTMLElement: window.HTMLElement,
-		Event: window.Event,
-		IS_REACT_ACT_ENVIRONMENT: true,
-	});
-	const container = window.document.getElementById("root") as unknown as HTMLElement;
-	const root = createRoot(container);
-	roots.push(root);
-	await act(async () => root.render(<BrowserAccounts sessionId={sessionId} store={store} />));
-	const find = (selector: string) => [...container.querySelectorAll(selector)];
+async function mountPanel(sessionId: string | null, store: BrowserStoreShape) {
+	const dom = await mount(<BrowserAccounts sessionId={sessionId} store={store} />);
 	return {
-		siteLine: (profile, label) => {
-			const section = find('[data-slot="browser-accounts-profile"]').filter(el => el.querySelector("button")?.textContent === profile);
+		...dom,
+		/** The site line for `label` under profile `profile`. */
+		siteLine: (profile: string, label: string): Element => {
+			const section = dom.find('[data-slot="browser-accounts-profile"]').filter(el => el.querySelector("button")?.textContent === profile);
 			const lines = section.flatMap(el => [...el.querySelectorAll('[data-slot="browser-accounts-site"]')]);
 			const matches = lines.filter(line => line.querySelector("span span span")?.textContent === label);
 			if (matches.length !== 1) throw new Error(`expected one ${label} line under ${profile}, found ${matches.length}`);
 			return matches[0] as Element;
 		},
-		// React 19 delegates events at the root container, so a bubbling native event reaches the handler.
-		click: async element => {
-			await act(async () => {
-				element.dispatchEvent(new window.Event("click", { bubbles: true }));
-			});
+		/** The "Open a page" form, its address field and its Private box. */
+		openForm: () => {
+			const form = dom.find('[data-slot="browser-accounts-open"]')[0] as Element;
+			return {
+				form,
+				address: form.querySelector('[data-slot="input"]') as Element,
+				private: form.querySelector('input[type="checkbox"]') as Element,
+				problem: () => form.querySelector('[data-slot="browser-accounts-problem"]')?.textContent ?? null,
+			};
 		},
-		// The kit's own typing path (fraym/packages/ui/test/plugins-page.create.test.tsx): react-dom
-		// loaded without a DOM, so it picked its IE-era value-change polyfill, which arms on
-		// `focusin` through `attachEvent` (no-ops here: linkedom has none) and notices a new value on
-		// `keyup`. The value goes through the PROTOTYPE setter so React's node-level tracker is left
-		// stale and reads it as changed. linkedom reports a type-less <input>'s `type` as null where a
-		// browser says "text", and only a text input takes that path — so say it here.
-		type: async (input, value) => {
-			if (!input.hasAttribute("type")) input.setAttribute("type", "text");
-			Object.assign(input, { attachEvent: () => {}, detachEvent: () => {} });
-			const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(input), "value")?.set;
-			if (!setter) throw new Error("input prototype exposes no value setter");
-			await act(async () => {
-				input.dispatchEvent(new window.Event("focusin", { bubbles: true }));
-			});
-			setter.call(input, value);
-			await act(async () => {
-				input.dispatchEvent(new window.Event("keyup", { bubbles: true }));
-			});
-			// Leaving the field armed hands a later test a dangling node in react-dom's module state.
-			await act(async () => {
-				input.dispatchEvent(new window.Event("focusout", { bubbles: true }));
-			});
-		},
-		submit: async form => {
-			await act(async () => {
-				form.dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
-			});
-		},
-		find,
-		text: () => container.textContent ?? "",
 	};
 }
 
@@ -225,7 +158,8 @@ const signInButton = (line: Element): Element => {
 	return button;
 };
 
-const openView = (profile: string, url: string): Act => ({ intent: "openArtifactoryView", payload: { tool: "browser_open", args: { profile, url } } });
+const openBrowser = (args: Record<string, string>): Act => ({ intent: "openArtifactoryView", payload: { tool: "browser_view", args } });
+const openView = (profile: string, url: string): Act => openBrowser({ profile, url });
 
 describe("the Browser panel", () => {
 	test("each site line shows its report state, and its Sign in opens the live View on that profile at that site's login page", async () => {
@@ -267,25 +201,63 @@ describe("the Browser panel", () => {
 		expect(acts).toEqual([openView("personal", "https://bsky.app/")]);
 	});
 
-	test("a New sign-in on a name profileSlug refuses, or on the reserved relay, acts nothing and says why", async () => {
+	test("a New sign-in starts with no name, and left that way is for the logins the browser itself opens with", async () => {
+		const { store, acts } = fakeStore({ connected: true, reported: buildConnectionReport({}) });
+		const panel = await mountPanel("session-1", store);
+		const form = panel.find('[data-slot="browser-accounts-new"]')[0] as Element;
+
+		expect((form.querySelector("input") as HTMLInputElement).value).toBe("");
+		expect(form.querySelector('button[type="submit"]')?.hasAttribute("disabled")).toBe(false);
+		await panel.submit(form);
+
+		expect(acts).toEqual([openView("default", "https://x.com/login")]);
+	});
+
+	test("picking a set fills the name as the panel labels it, never the slug, and signing in sends its slug", async () => {
+		const seen = { "x.com": { signedIn: true, observedAt: T } };
+		const { store, acts } = fakeStore({ connected: true, reported: buildConnectionReport({ default: seen, work: seen }) });
+		const panel = await mountPanel("session-1", store);
+		const form = panel.find('[data-slot="browser-accounts-new"]')[0] as Element;
+		const name = form.querySelector("input") as HTMLInputElement;
+		const header = (label: string): Element => {
+			const found = panel.find('[data-slot="browser-accounts-profile"]').map(el => el.querySelector("button") as Element).find(el => el.textContent === label);
+			if (!found) throw new Error(`no "${label}" set`);
+			return found;
+		};
+
+		await panel.click(header("Default"));
+		const defaultShown = name.value;
+		await panel.submit(form);
+		await panel.click(header("work"));
+		const workShown = name.value;
+		await panel.submit(form);
+
+		expect([defaultShown, workShown]).toEqual(["Default", "work"]);
+		expect(acts).toEqual([openView("default", "https://x.com/login"), openView("work", "https://x.com/login")]);
+	});
+
+	test("a New sign-in on a name profileSlug refuses, or on the reserved relay, acts nothing and gives a different reason for each", async () => {
 		const { store, acts } = fakeStore(FACT);
 		const panel = await mountPanel("session-1", store);
 		const form = panel.find('[data-slot="browser-accounts-new"]')[0] as Element;
 		const input = form.querySelector("input") as Element;
+		const problem = () => form.querySelector('[data-slot="browser-accounts-problem"]')?.textContent ?? null;
 
 		await panel.type(input, "Bad Name!");
 		await panel.submit(form);
 		expect(acts).toEqual([]);
 		expect(input.getAttribute("aria-invalid")).toBe("true");
-		expect(form.textContent).toContain("Use 1–48 letters, digits, - or _");
+		const badChars = problem();
+		expect(badChars).toBeTruthy();
 
 		await panel.type(input, "relay");
 		await panel.submit(form);
 		expect(acts).toEqual([]);
-		expect(form.textContent).toContain('"relay" is reserved');
+		expect(problem()).toBeTruthy();
+		expect(problem()).not.toBe(badChars);
 	});
 
-	test("with no session every Sign in is disabled and nothing is acted, even on a valid New sign-in submit", async () => {
+	test("with no session every Sign in and Open is disabled and nothing is acted, and the panel says what to do", async () => {
 		const { store, acts } = fakeStore(FACT);
 		const panel = await mountPanel(null, store);
 		const buttons = panel.find("button").filter(el => el.textContent?.trim() === "Sign in");
@@ -298,8 +270,53 @@ describe("the Browser panel", () => {
 		const form = panel.find('[data-slot="browser-accounts-new"]')[0] as Element;
 		await panel.type(form.querySelector("input") as Element, "work");
 		await panel.submit(form);
+		const open = panel.openForm();
+		await panel.type(open.address, "example.com");
+		await panel.submit(open.form);
 
 		expect(acts).toEqual([]);
-		expect(panel.text()).toContain("Open a session to sign in");
+		expect(open.form.querySelector("button")?.hasAttribute("disabled")).toBe(true);
+		expect(panel.find('[data-slot="browser-accounts-hint"]')).toHaveLength(1);
+	});
+});
+
+describe("the Browser panel's Open a page bar", () => {
+	test("a typed address opens the live browser on the person's saved logins, the address made loadable", async () => {
+		const { store, acts } = fakeStore(FACT);
+		const panel = await mountPanel("session-1", store);
+		const open = panel.openForm();
+
+		await panel.type(open.address, "  example.com/docs ");
+		await panel.submit(open.form);
+
+		expect(acts).toEqual([openBrowser({ url: "https://example.com/docs", profile: "default" })]);
+	});
+
+	test("Private opens with no profile at all, so nothing is saved", async () => {
+		const { store, acts } = fakeStore(FACT);
+		const panel = await mountPanel("session-1", store);
+		const open = panel.openForm();
+
+		await panel.check(open.private, true);
+		await panel.type(open.address, "example.com");
+		await panel.submit(open.form);
+
+		// Strict: a `profile` key present with any value, even undefined, is not "no profile".
+		expect(acts).toStrictEqual([openBrowser({ url: "https://example.com/" })]);
+	});
+
+	test("an empty bar opens a blank browser on the saved logins; a bar that is not an address opens nothing and says why", async () => {
+		const { store, acts } = fakeStore(FACT);
+		const panel = await mountPanel("session-1", store);
+		const open = panel.openForm();
+
+		await panel.submit(open.form);
+		expect(acts).toEqual([openBrowser({ profile: "default" })]);
+
+		await panel.type(open.address, "two words");
+		await panel.submit(open.form);
+		expect(acts).toHaveLength(1);
+		expect(open.problem()).toBeTruthy();
+		expect(open.address.getAttribute("aria-invalid")).toBe("true");
 	});
 });

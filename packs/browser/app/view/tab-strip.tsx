@@ -4,7 +4,7 @@
 import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 import type { TabInfo } from "../../src/contracts";
 import { Icon } from "@fraym/ui/icons";
-import { tabLabel } from "./address";
+import { tabLabel } from "../../src/address";
 
 export interface TabStripProps {
 	readonly tabs: readonly TabInfo[];

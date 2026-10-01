@@ -1,0 +1,51 @@
+// The wire contract between the viewer's server and its View. Both sides import
+// this file (the browser pack's `contracts.ts` is the precedent), so a tool
+// rename or a new kind is one edit and a type error on the other side.
+import { z } from "zod";
+
+export const VIEWER_VIEW_URI = "ui://viewer/index.html";
+
+/** `_meta` key on a tool RESULT naming the document a host tab stands for. The
+ *  host folds it into the tab identity `(server, view.uri, docKey)`; a result
+ *  without it keeps the one-tab-per-server identity every other App has. */
+export const TAB_META_KEY = "ai.insodimension/tab";
+
+/** `_meta` key on a `view_file` RESULT asking the View to open that document in
+ *  its annotate mode (`view_file`'s `annotate: true`). It is the View's own
+ *  business, not the host's: it rides the result beside {@link TAB_META_KEY} and
+ *  carries no document identity. A kind with nothing to annotate ignores it. */
+export const ANNOTATE_META_KEY = "ai.insodimension.viewer/annotate";
+
+/** The most bytes one `read_file_chunk` call may return (before base64). */
+export const MAX_CHUNK_BYTES = 4 * 1024 * 1024;
+
+/** The most bytes of a recording the View opens. It plays from ONE `Blob` of the whole file (a truncated one would play, and lie about how long it is), so the size is checked against this BEFORE any byte is read: past it the pane says so and reads nothing. */
+export const MAX_MEDIA_BYTES = 64 * 1024 * 1024;
+
+export const VIEWER_KINDS = ["image", "pdf", "html", "markdown", "docx", "pptx", "xlsx", "text", "audio", "video", "binary"] as const;
+export type ViewerKind = (typeof VIEWER_KINDS)[number];
+
+/** `structuredContent` of a `view_file` result. `path` is the REAL path (symlinks
+ *  resolved), which is also the document's tab key. */
+export const viewedFileSchema = z.object({
+	path: z.string().min(1),
+	filename: z.string().min(1),
+	kind: z.enum(VIEWER_KINDS),
+	size: z.number().int().nonnegative(),
+	mtimeMs: z.number(),
+});
+export type ViewedFile = z.infer<typeof viewedFileSchema>;
+
+/** `_meta[TAB_META_KEY]` on a `view_file` result. */
+export const tabMetaSchema = z.object({ key: z.string().min(1) });
+
+/** `structuredContent` of a `read_file_chunk` result. `length` is the number of
+ *  bytes actually returned, not the number asked for. */
+export const fileChunkSchema = z.object({
+	base64: z.string(),
+	offset: z.number().int().nonnegative(),
+	length: z.number().int().nonnegative(),
+	size: z.number().int().nonnegative(),
+	eof: z.boolean(),
+});
+export type FileChunk = z.infer<typeof fileChunkSchema>;

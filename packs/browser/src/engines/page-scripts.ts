@@ -1,4 +1,4 @@
-import type { BrowserRegion } from "../contracts.js";
+import type { BrowserRegion, ElementInspection } from "../contracts.js";
 import type { ReportedIdentity } from "./launch.js";
 import type { FieldRead, PageRead } from "./types.js";
 /**
@@ -13,6 +13,31 @@ const PAGE_TEXT_SCRIPT = (limit: number, frameRef: string | null = null, dx = 0,
 	const body = document.body?.innerText ?? "";
 	parts.push(body.replace(/\n{3,}/g, "\n\n").trim());
 	const controls: string[] = [];
+	// A selector the agent can pass straight back to browser_act: the first form that matches THIS element and no other in the document.
+	const quote = (value: string): string => `"${value.replace(/["\\]/g, "\\$&")}"`;
+	const only = (css: string, el: Element): boolean => {
+		try {
+			const found = document.querySelectorAll(css);
+			return found.length === 1 && found[0] === el;
+		} catch {
+			return false;
+		}
+	};
+	// The last resort: tags with :nth-of-type up to the nearest unique id, or the body.
+	const path = (el: Element): string => {
+		const steps: string[] = [];
+		for (let node: Element | null = el; node && node !== document.documentElement && steps.length < 8; node = node.parentElement) {
+			const anchor = node.id ? `#${CSS.escape(node.id)}` : "";
+			if (anchor && document.querySelectorAll(anchor).length === 1) {
+				steps.unshift(anchor);
+				break;
+			}
+			const tag = node.tagName.toLowerCase();
+			const same = node.parentElement ? Array.from(node.parentElement.children).filter((sibling) => sibling.tagName === node?.tagName) : [];
+			steps.unshift(same.length > 1 ? `${tag}:nth-of-type(${same.indexOf(node) + 1})` : tag);
+		}
+		return steps.join(" > ");
+	};
 	const nodes = document.querySelectorAll("a[href], button, input, textarea, select, [role='button'], [role='link']");
 	for (let i = 0; i < nodes.length && controls.length < 200; i += 1) {
 		const el = nodes[i] as HTMLElement;
@@ -41,13 +66,18 @@ const PAGE_TEXT_SCRIPT = (limit: number, frameRef: string | null = null, dx = 0,
 			.trim()
 			.replace(/\s+/g, " ")
 			.slice(0, 80);
-		// A selector the agent can pass straight back to browser_act.
+		const tag = el.tagName.toLowerCase();
 		const name = el.getAttribute("name");
-		const choice = (type === "radio" || type === "checkbox") && input.getAttribute("value") ? `[value="${input.getAttribute("value")!.replace(/"/g, '\\"')}"]` : "";
-		const target = el.id ? `#${CSS.escape(el.id)}` : name ? `${el.tagName.toLowerCase()}[name="${name.replace(/"/g, '\\"')}"]${choice}` : el.tagName.toLowerCase();
-		const kind = el.tagName === "INPUT" ? ` (${type || "text"})` : "";
+		const href = tag === "a" ? el.getAttribute("href") : null;
+		const choice = (type === "radio" || type === "checkbox") && input.getAttribute("value") ? `[value=${quote(input.getAttribute("value") as string)}]` : "";
+		const candidates = [el.id ? `#${CSS.escape(el.id)}` : "", name ? `${tag}[name=${quote(name)}]${choice}` : "", tag, href ? `a[href=${quote(href)}]` : ""];
+		const target = candidates.find((css) => css !== "" && only(css, el)) ?? path(el);
+		// A checkbox or radio says whether it is set; never a password or hidden field, which are only described.
+		const checked = type === "checkbox" || type === "radio" ? (input.checked ? " [checked]" : " [unchecked]") : "";
+		const kind = el.tagName === "INPUT" ? ` (${type || "text"})${checked}` : "";
+		const picked = el.tagName === "SELECT" ? Array.from((el as HTMLSelectElement).selectedOptions).map((o) => o.text.trim()).join(" | ").slice(0, 80) : "";
 		const options = el.tagName === "SELECT"
-			? ` options: ${Array.from((el as HTMLSelectElement).options).slice(0, 12).map((o) => o.text.trim()).join(" | ")}`
+			? ` options: ${Array.from((el as HTMLSelectElement).options).slice(0, 12).map((o) => o.text.trim()).join(" | ")}${picked ? ` selected: ${picked}` : ""}`
 			: "";
 		const ref = frameRef === null ? "" : `@${frameRef} `;
 		controls.push(`${ref}${target}${kind} "${label}"${options} @${Math.round(dx + rect.x + rect.width / 2)},${Math.round(dy + rect.y + rect.height / 2)}`);
@@ -308,6 +338,36 @@ const LINK_HREFS_SCRIPT = (selector: string, limit: number): string[] => {
 	return out;
 };
 
+/** The page's visible text, for a wait to match after the runtime has masked it. Nothing in, string out. */
+const READ_TEXT_SCRIPT = (): string => document.body?.innerText ?? "";
+
+/**
+ * browser_inspect: an element's box, overflow sizes, its parent's box and a
+ * FIXED allowlist of computed styles. Nothing the caller wrote runs here; the
+ * selector only chose the element. Numbers are rounded to hundredths.
+ */
+const INSPECT_SCRIPT = (el: Element): Omit<ElementInspection, "found"> => {
+	const round = (n: number): number => Math.round(n * 100) / 100;
+	const box = (node: Element | null): BrowserRegion | null => {
+		if (!node) return null;
+		const r = node.getBoundingClientRect();
+		return { x: round(r.x), y: round(r.y), width: round(r.width), height: round(r.height) };
+	};
+	const computed = getComputedStyle(el);
+	const styles: Record<string, string> = {};
+	for (const property of ["display", "position", "box-sizing", "width", "height", "margin", "padding", "border-width", "overflow", "overflow-x", "overflow-y", "flex", "grid-template-columns", "object-fit", "opacity", "visibility", "z-index"]) {
+		styles[property] = computed.getPropertyValue(property);
+	}
+	return {
+		rect: box(el) as BrowserRegion,
+		scrollWidth: el.scrollWidth,
+		clientWidth: el.clientWidth,
+		scrollHeight: el.scrollHeight,
+		clientHeight: el.clientHeight,
+		styles,
+		parent: box(el.parentElement),
+	};
+};
 /** The browser's own answers to `navigator.userAgentData.getHighEntropyValues` (a secure context only). */
 const UA_HINTS_SCRIPT = (names: string[]): Promise<ReportedIdentity["hints"]> => {
 	// NavigatorUAData is not in TypeScript's DOM lib.
@@ -316,8 +376,38 @@ const UA_HINTS_SCRIPT = (names: string[]): Promise<ReportedIdentity["hints"]> =>
 	return uaNavigator.userAgentData.getHighEntropyValues(names);
 };
 
+/**
+ * The value an eval step returned, as JSON text cut at `limit` (run with the result as `this`). Cycles, functions,
+ * DOM nodes, errors and bigints are described, never thrown on.
+ */
+const EVAL_RESULT_SCRIPT = function (this: unknown, limit: number): { text: string; truncated: boolean } {
+	const ancestors: unknown[] = [];
+	let text: string;
+	try {
+		text =
+			JSON.stringify(this, function (this: unknown, _key: string, value: unknown) {
+				if (typeof value === "bigint") return `${value}n`;
+				if (typeof value === "function") return `[function ${value.name || "anonymous"}]`;
+				if (typeof value === "symbol") return String(value);
+				if (value instanceof Node) return `[${value.nodeName.toLowerCase()}${(value as Element).id ? `#${(value as Element).id}` : ""}]`;
+				if (value instanceof Error) return `${value.name}: ${value.message}`;
+				if (value !== null && typeof value === "object") {
+					while (ancestors.length > 0 && ancestors[ancestors.length - 1] !== this) ancestors.pop();
+					if (ancestors.includes(value)) return "[circular]";
+					ancestors.push(value);
+				}
+				return value;
+			}) ?? "undefined";
+	} catch (error) {
+		text = `[unserialisable: ${error instanceof Error ? error.message : String(error)}]`;
+	}
+	return { text: text.slice(0, limit), truncated: text.length > limit };
+};
+
 export {
 	PAGE_TEXT_SCRIPT,
+	READ_TEXT_SCRIPT,
+	INSPECT_SCRIPT,
 	READ_PAGE_SCRIPT,
 	ELEMENTS_IN_REGION_SCRIPT,
 	SELECT_ALL_SCRIPT,
@@ -332,4 +422,5 @@ export {
 	ELEMENT_TEXT_SCRIPT,
 	LINK_HREFS_SCRIPT,
 	UA_HINTS_SCRIPT,
+	EVAL_RESULT_SCRIPT,
 };

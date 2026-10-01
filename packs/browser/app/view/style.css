@@ -962,13 +962,6 @@ kbd {
 	top: 46px;
 }
 
-/* A closed browser: the chrome goes quiet under the notice. */
-.bx-browser[data-connection="gone"] .bx-toolbar,
-.bx-browser[data-connection="gone"] .bx-strip {
-	opacity: 0.5;
-	pointer-events: none;
-}
-
 /* annotation strip */
 
 .bx-annotate {
@@ -1758,44 +1751,6 @@ kbd {
 	outline-offset: 1px;
 }
 
-.bx-gone {
-	position: absolute;
-	inset: 0;
-	z-index: 6;
-	display: grid;
-	place-items: center;
-	background: color-mix(in oklab, var(--fr-bg) 80%, transparent);
-	backdrop-filter: blur(6px);
-	-webkit-backdrop-filter: blur(6px);
-	animation: bx-fade var(--bx-base) var(--bx-ease-enter);
-}
-
-.bx-gone-card {
-	display: flex;
-	flex-direction: column;
-	align-items: center;
-	gap: 6px;
-	max-width: 320px;
-	padding: 28px 28px 24px;
-	border-radius: 16px;
-	background: var(--bx-sheet);
-	border: 1px solid var(--bx-hairline);
-	box-shadow: var(--bx-shadow);
-	text-align: center;
-}
-
-.bx-gone-card h2 {
-	margin: 8px 0 0;
-	font-size: 15px;
-	font-weight: 600;
-}
-
-.bx-gone-card p {
-	margin: 0 0 16px;
-	font-size: 12px;
-	color: var(--fr-text-2);
-}
-
 /* ── start page & blank tab ─────────────────────────────────────────── */
 
 .bx-start,
@@ -1905,59 +1860,6 @@ kbd {
 	color: var(--fr-text-2);
 }
 
-.bx-engines {
-	display: grid;
-	grid-template-columns: 1fr 1fr;
-	gap: 8px;
-}
-
-.bx-engine {
-	display: flex;
-	flex-direction: column;
-	align-items: flex-start;
-	gap: 3px;
-	padding: 12px 14px;
-	border-radius: 12px;
-	border: 1px solid var(--bx-hairline);
-	background: var(--bx-sheet);
-	text-align: left;
-	cursor: pointer;
-	transition:
-		border-color var(--bx-fast) var(--bx-ease),
-		background-color var(--bx-fast) var(--bx-ease),
-		box-shadow var(--bx-base) var(--bx-ease);
-}
-
-.bx-engine:hover {
-	border-color: var(--fr-border);
-	background: var(--fr-surface-2);
-}
-
-.bx-engine[aria-checked="true"] {
-	border-color: var(--fr-accent);
-	box-shadow: 0 0 0 3px var(--bx-ring);
-}
-
-.bx-engine-label {
-	font-size: 13px;
-	font-weight: 600;
-}
-
-.bx-engine[aria-checked="true"] .bx-engine-label {
-	color: var(--fr-accent);
-}
-
-.bx-engine-detail {
-	font-size: 11px;
-	color: var(--fr-text-2);
-}
-
-@container (max-width: 480px) {
-	.bx-engines {
-		grid-template-columns: 1fr;
-	}
-}
-
 .bx-chips {
 	display: flex;
 	flex-wrap: wrap;
@@ -2016,13 +1918,6 @@ kbd {
 	box-shadow: 0 0 0 3px var(--bx-ring);
 	font: inherit;
 	font-size: 12px;
-}
-
-.bx-chip-skeleton {
-	width: 110px;
-	border-color: transparent;
-	background: var(--fr-surface-2);
-	animation: bx-pulse 1.6s ease-in-out infinite;
 }
 
 .bx-start-foot {
@@ -2084,6 +1979,111 @@ kbd {
 	gap: 8px;
 	font-size: 12px;
 	color: var(--fr-del);
+}
+
+.bx-chip:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+
+/* the one calm line after a browser ends by itself */
+.bx-start-closed {
+	align-self: center;
+	margin: 0;
+	padding: 4px 12px;
+	border-radius: 999px;
+	background: var(--fr-surface-2);
+	font-size: 12px;
+	color: var(--fr-text-2);
+}
+
+/* the single folded row of choices under Open */
+.bx-options {
+	display: flex;
+	flex-direction: column;
+	border-top: 1px solid var(--bx-hairline);
+}
+
+.bx-options-toggle {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 12px 0;
+	border: 0;
+	background: none;
+	color: var(--fr-text-2);
+	font: inherit;
+	font-size: 12px;
+	font-weight: 500;
+	text-align: left;
+	cursor: pointer;
+}
+
+.bx-options-toggle:hover {
+	color: var(--fr-text);
+}
+
+.bx-options-toggle:focus-visible {
+	outline: 2px solid var(--fr-accent);
+	outline-offset: 2px;
+	border-radius: 6px;
+}
+
+.bx-options-summary {
+	margin-left: auto;
+	font-weight: 600;
+	color: var(--fr-accent);
+}
+
+.bx-options-panel {
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+	padding: 4px 0 12px;
+}
+
+.bx-option {
+	display: flex;
+	align-items: flex-start;
+	gap: 10px;
+	font-size: 13px;
+	cursor: pointer;
+}
+
+.bx-option input {
+	flex: none;
+	margin: 2px 0 0;
+	accent-color: var(--fr-accent);
+}
+
+.bx-option input:disabled + span {
+	opacity: 0.5;
+}
+
+.bx-option-block {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 8px;
+}
+
+.bx-option-block .bx-chips {
+	justify-content: flex-start;
+}
+
+.bx-option-block .bx-start-label {
+	text-align: left;
+}
+
+.bx-option-add {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+}
+
+.bx-option-add .bx-start-error {
+	flex-basis: 100%;
 }
 
 /* ── motion ─────────────────────────────────────────────────────────── */

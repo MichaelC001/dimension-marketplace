@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 // Browser task-agent benchmark: drives each task agent through the practice world (bench/sites/server.mjs)
 // via the pack's MCP server (app/server.mjs over stdio), scores every stage from /__results and writes a
-// markdown report plus raw JSON to bench/results/.
+// markdown report plus raw JSON to bench/results/. Its browser data (bench profiles, saved fixture password)
+// lives in a directory it makes under .scratch/browser-bench/ and deletes when the run ends; it never uses
+// ~/.inso or ~/.inso-dev.
 import { mkdir, writeFile } from "node:fs/promises";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { renderReport, summarize } from "./report.mjs";
@@ -40,11 +42,16 @@ Options:
   --port <n>          Practice world port; started in-process if not already running (default: 4777)
   --max-steps <n>     maxSteps passed to browser_task (default: 40)
   --timeout <sec>     Hard wall-clock limit per stage (default: 600)
+  --root <dir>        Browser data directory to use instead of a fresh one; kept after the run (yours to
+                      delete). The only way to run when DIMENSION_BROWSER_ROOT or INSO_HOME points into
+                      ~/.inso or ~/.inso-dev.
   --record            Record a video per agent (the View's live frames, with stage and run timers)
                       to bench/results/<timestamp>-<agent>.mp4; needs ffmpeg on PATH
   -h, --help          Show this help
 
 Output: a scorecard on stdout, bench/results/<timestamp>.md (report) and <timestamp>.json (raw).
+Browser data: every run makes its own directory under .scratch/browser-bench/ (gitignored), gives it to the
+pack server as DIMENSION_BROWSER_ROOT and deletes it when the run ends. ~/.inso and ~/.inso-dev are never used.
 Model keys come from the environment: jev needs TYPESAFE_API_KEY and TEXT_MODEL_API_KEY (TEXT_MODEL,
 TEXT_MODEL_BASE_URL optional); browser-use reads DIMENSION_BROWSER_USE_MODEL/_API_KEY/_BASE_URL.`;
 
@@ -62,6 +69,7 @@ const { values: opts } = parseArgs({
     port: { type: "string", default: "4777" },
     "max-steps": { type: "string", default: "40" },
     timeout: { type: "string", default: "600" },
+    root: { type: "string" },
     record: { type: "boolean", default: false },
     help: { type: "boolean", short: "h", default: false },
   },
@@ -94,6 +102,53 @@ if (!existsSync(serverPath)) {
   console.error(`Missing ${serverPath}; run \`npm run build\` in packs/browser first.`);
   process.exit(2);
 }
+
+// ---------------------------------------------------------------- browser data root
+
+const repoRoot = resolve(packDir, "..", "..", "..");
+const scratchRoot = join(repoRoot, ".scratch", "browser-bench");
+const real = (path) => {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
+};
+const inside = (child, parent) => {
+  const rel = relative(parent, child);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+};
+const realHomes = [".inso", ".inso-dev"].map((name) => real(join(homedir(), name)));
+if (!opts.root) {
+  const ambient = ["DIMENSION_BROWSER_ROOT", "INSO_HOME"].filter((name) => process.env[name]?.trim() && realHomes.some((home) => inside(real(process.env[name].trim()), home)));
+  if (ambient.length) {
+    console.error(`Refusing to start: ${ambient.join(" and ")} ${ambient.length === 1 ? "points" : "point"} into your real Inso data (~/.inso or ~/.inso-dev). The bench makes its own browser data and must not run beside it. Unset ${ambient.length === 1 ? "it" : "them"}, or pass --root <dir> to choose a bench directory yourself.`);
+    process.exit(2);
+  }
+}
+// Made here, so ours to delete: only a directory this run created is ever removed, and only under .scratch/browser-bench/.
+const ownsRoot = !opts.root;
+let browserRoot;
+if (opts.root) {
+  browserRoot = resolve(opts.root);
+  mkdirSync(browserRoot, { recursive: true });
+} else {
+  mkdirSync(scratchRoot, { recursive: true });
+  browserRoot = mkdtempSync(join(scratchRoot, "run-"));
+}
+function removeBrowserRoot() {
+  if (!ownsRoot) return;
+  if (browserRoot === scratchRoot || !inside(browserRoot, scratchRoot)) throw new Error(`refusing to delete ${browserRoot}: not a directory this run made`);
+  rmSync(browserRoot, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+}
+// Also covers an uncaught error; Chrome can hold files for a moment after exit, hence the retries.
+process.once("exit", () => {
+  try {
+    removeBrowserRoot();
+  } catch (error) {
+    console.error(`[bench] browser data ${browserRoot} was not deleted: ${error.message}`);
+  }
+});
 const applicant = JSON.parse(readFileSync(new URL("./applicant.json", import.meta.url), "utf8"));
 
 // ---------------------------------------------------------------- practice world
@@ -220,7 +275,7 @@ const transport = new StdioClientTransport({
   command: process.execPath,
   args: [serverPath],
   cwd: packDir,
-  env: { ...process.env, DIMENSION_BROWSER_HEADLESS: opts.headed ? "false" : "true" },
+  env: { ...process.env, DIMENSION_BROWSER_ROOT: browserRoot, DIMENSION_BROWSER_HEADLESS: opts.headed ? "false" : "true" },
   stderr: "pipe",
 });
 transport.stderr?.on("data", (chunk) => {
@@ -229,6 +284,9 @@ transport.stderr?.on("data", (chunk) => {
 });
 const client = new Client({ name: "dimension-browser-bench", version: "0.1.0" });
 await client.connect(transport);
+for (const signal of ["SIGINT", "SIGTERM"]) {
+  process.once(signal, () => void client.close().catch(() => undefined).finally(() => process.exit(130)));
+}
 
 async function call(name, args, options) {
   const result = await client.callTool({ name, arguments: args }, undefined, options);
@@ -264,7 +322,7 @@ async function runStage(agent, browserId, stage, label = `${agent}/${stage.id}`,
   };
   const take = (t) => Object.assign(run, { status: t.status, stepCount: t.stepCount, usage: t.usage, summary: t.summary, taskMs: t.elapsedMs });
   try {
-    await call("browser_act", { browserId, action: { kind: "navigate", url: stage.start } });
+    await call("browser_act", { browserId, actions: [{ kind: "navigate", url: stage.start }] });
     console.log(`[${label}] task started`);
     rec?.stage(`${stage.n}/${stages.length}  ${stage.account ? "account" : "job"} · ${stage.id}   [${agent}]`);
     // Stall is judged from the step list every call returns, not from progress
@@ -370,7 +428,7 @@ for (const agent of agents) {
     // the account from the fixture and signs this browser in (/__seed).
     if (isAccountStage(stage) && !run.success) {
       try {
-        await call("browser_act", { browserId, action: { kind: "navigate", url: `${base}/__seed?stage=${stage.id}` } });
+        await call("browser_act", { browserId, actions: [{ kind: "navigate", url: `${base}/__seed?stage=${stage.id}` }] });
         run.seeded = (await worldResults()).seeded.includes(stage.id);
         if (run.seeded) console.log(`[${agent}/${stage.id}] repaired by the harness so later stages start fair`);
       } catch (error) {
@@ -396,14 +454,11 @@ for (const agent of agents) {
 /**
  * The practice sites score the fixture password, so the bench profile holds it
  * as the browser's saved credential for the practice origin before the browser
- * opens (the profile lock is not held yet). Same root, in the same order, and
- * file the pack uses: DIMENSION_BROWSER_ROOT (src/server.ts), else
- * src/store.ts defaultRootDir; src/credentials.ts credentials.json.
+ * opens (the profile lock is not held yet). The same root the server was given
+ * (`browserRoot`), and the file the pack uses: src/credentials.ts credentials.json.
  */
 function seedCredential(profile) {
-  const insoHome = process.env.INSO_HOME?.trim();
-  const root = process.env.DIMENSION_BROWSER_ROOT || (insoHome ? join(insoHome, "browser") : join(homedir(), ".inso", "browser"));
-  const dir = join(root, "profiles", profile);
+  const dir = join(browserRoot, "profiles", profile);
   const file = join(dir, "credentials.json");
   let origins = {};
   try {
@@ -422,6 +477,7 @@ function sumUsage(a, b) {
 }
 
 await client.close();
+removeBrowserRoot();
 sitesServer?.close();
 
 // ---------------------------------------------------------------- report

@@ -227,6 +227,8 @@ export const FAVICON_PNG = Buffer.from(
 
 /** How long `/slow` keeps its navigation in flight. */
 export const SLOW_PAGE_MS = 2_000;
+/** How long `/delayed-landing` takes to answer: a navigation that commits well after the click that started it. */
+export const DELAYED_LANDING_MS = 700;
 
 function page(title: string, body: string, head = ""): string {
 	return `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>${head}</head><body>${body}</body></html>`;
@@ -263,6 +265,11 @@ export function startFixture(): Fixture {
 				const other: FixtureHost = url.hostname === "localhost" ? "127.0.0.1" : "localhost";
 				return html(page("framed login", `<h1>framed login</h1><iframe id="login" src="${origin(other)}/" style="width:600px;height:300px;border:0"></iframe>`));
 			}
+			// The dialogs page inside a CROSS-ORIGIN iframe: an out-of-process frame, whose dialogs never reach its parent's session.
+			if (pathname === "/framed-dialogs") {
+				const other: FixtureHost = url.hostname === "localhost" ? "127.0.0.1" : "localhost";
+				return html(page("framed dialogs", `<iframe id="dialogs" src="${origin(other)}/dialogs" style="width:600px;height:300px;border:0"></iframe>`));
+			}
 			// The fixture form on a page that claims the OTHER host's origin: `window.origin` is replaceable by page script.
 			if (pathname === "/spoofed") {
 				const other: FixtureHost = url.hostname === "localhost" ? "127.0.0.1" : "localhost";
@@ -270,7 +277,7 @@ export function startFixture(): Fixture {
 			}
 			// The fixture form with a show-password toggle that turns #pass into a text field.
 			if (pathname === "/revealable") {
-				return html(page("revealable", `${FORM_BODY}<button type="button" id="show" onclick="document.getElementById('pass').type = 'text'">show</button>`));
+				return html(page("revealable", `${FORM_BODY}<button type="button" id="show" onclick="document.getElementById('pass').type = 'text'">show</button><button type="button" id="echo" onclick="document.getElementById('echoed').textContent = 'echo:' + document.getElementById('pass').value">echo</button><p id="echoed"></p>`));
 			}
 			// A login form with no `method`: it submits as GET, so the password lands in the next page's URL, form-encoded.
 			if (pathname === "/get-login") {
@@ -290,6 +297,64 @@ export function startFixture(): Fixture {
 			if (pathname === "/focus-thief") {
 				const body = FORM_BODY.replace(`<button id="go"`, `<input id="decoy" name="decoy" type="text" /><button id="go"`);
 				return html(page("focus thief", `${body}<script>document.getElementById("pass").addEventListener("focus", () => setTimeout(() => document.getElementById("decoy").focus(), 0));</script>`));
+			}
+			// Page dialogs, each answered by the page's own script: it records what came back in the title.
+			if (pathname === "/dialogs") {
+				return html(page("dialogs", `<button id="alert" onclick="alert('hello alert'); document.title = 'after alert'">alert</button>
+<button id="confirm" onclick="document.title = 'confirm:' + confirm('really?')">confirm</button>
+<button id="prompt" onclick="document.title = 'prompt:' + prompt('your name?', 'anon')">prompt</button>
+<button id="many" onclick="for (let i = 1; i <= 7; i++) alert('dialog ' + i); document.title = 'many done'">many</button>`));
+			}
+			// A page that asks before it is left (a link click is the user activation Chrome wants first).
+			if (pathname === "/unload-guard") {
+				return html(page("unload guard", `<a id="leave" href="/page2" style="display:block;padding:40px">leave</a><script>addEventListener("beforeunload", (e) => { e.preventDefault(); e.returnValue = "unsaved"; });</script>`));
+			}
+			// Every way a click starts a navigation: a link, a form whose answer is slow, a script that starts late, and a button that navigates nowhere.
+			if (pathname === "/nav") {
+				return html(page("nav start", `<a id="link" href="/delayed-landing?via=link">slow page</a>
+<form method="GET" action="/delayed-landing"><input name="q" value="x"><button id="slow-go" type="submit">send</button></form>
+<button id="later" type="button" onclick="setTimeout(() => { location.href = '/page2'; }, 20)">later</button>
+<button id="idle" type="button" onclick="document.title = 'idle clicked'">idle</button>
+<form method="GET" action="/page2"><input id="q" name="q" type="text"></form>`));
+			}
+			if (pathname === "/delayed-landing") {
+				await Bun.sleep(DELAYED_LANDING_MS);
+				return html(page("landed", "<p>landed after a slow answer</p>"));
+			}
+			// Controls with state, a link list without ids, and a password field whose value must never appear.
+			if (pathname === "/controls") {
+				return html(page("controls", `<label><input type="checkbox" id="agree" name="agree" checked> agree</label>
+<label><input type="checkbox" id="news" name="news"> news</label>
+<label><input type="radio" name="size" value="s"> small</label><label><input type="radio" name="size" value="m" checked> medium</label>
+<select id="plan" name="plan"><option value="free">Free</option><option value="pro" selected>Pro plan</option></select>
+<input id="secret" type="password" value="hunter2-secret">
+<nav><a href="/page2" onclick="document.title='first';return false">first</a> <a href="/page2?x=1" onclick="document.title='second';return false">second</a> <a href="/page2" onclick="document.title='third';return false">third</a></nav>
+<ul><li><a href="/opener" onclick="document.title='list 1';return false">list link</a></li><li><a href="/opener" onclick="document.title='list 2';return false">list link</a></li></ul>`));
+			}
+			// The eval's layout bug: a content-box card wider than the panel that holds it.
+			if (pathname === "/layout") {
+				return html(page("layout", `<style>.panel{width:360px;padding:0;border:1px dashed #888;overflow:visible}.card{width:480px;box-sizing:content-box;padding:20px;border:2px solid #36c;margin:0 0 8px}</style><div class="panel" id="panel"><div class="card" id="card">Pro plan</div></div>`));
+			}
+			// Content that arrives late: an element, text, and a new URL.
+			if (pathname === "/late") {
+				return html(page("late", `<p>starting</p><script>setTimeout(() => { document.body.insertAdjacentHTML("beforeend", '<p id="late">late arrival text</p>'); }, 300); setTimeout(() => history.replaceState(null, "", "/late?done=1"), 500);</script>`));
+			}
+			// An app with a global of its own, for a script run in the page's main world to read.
+			if (pathname === "/app") return html(page("app", `<p id="out">ready</p><script>window.appState = { count: 3, items: ["a", "b"] };</script>`));
+			// A page that goes wrong every way a developer cares about; the query strings carry a token that must never be kept.
+			if (pathname === "/broken") {
+				return html(page("broken", `<script>
+console.error("boom from the app");
+console.warn("careful now");
+setTimeout(() => { throw new Error("uncaught in the app"); }, 0);
+// Once both requests have answered, so a test can wait for the page to have finished going wrong.
+Promise.allSettled([fetch("/nope?token=SECRET-TOKEN"), fetch("http://127.0.0.1:1/unreachable?token=SECRET-TOKEN")]).then(() => document.body.insertAdjacentHTML("beforeend", '<p id="settled">settled</p>'));
+</script>`));
+			}
+			// Thirty 100px blocks, edge to edge: a page far taller than any viewport.
+			if (pathname === "/tall") {
+				const blocks = Array.from({ length: 30 }, (_, i) => `<div style="height:100px;background:hsl(${i * 12},80%,50%)">block ${i}</div>`).join("");
+				return html(page("tall", blocks, "<style>body{margin:0}</style>"));
 			}
 			if (pathname === "/brand.png") return new Response(FAVICON_PNG, { headers: { "content-type": "image/png" } });
 			// Answers only after SLOW_PAGE_MS: a navigation that stays in flight long enough to observe.

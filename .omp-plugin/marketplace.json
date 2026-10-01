@@ -161,7 +161,7 @@
 			"title": "Browser",
 			"icon": "globe",
 			"description": "A real browser beside your chat that your agent drives while you watch. Tabs, persistent logged-in profiles, circle-to-annotate, and fast task agents (jev, browser-use).",
-			"version": "0.2.6",
+			"version": "0.3.0",
 			"author": {
 				"name": "Dimension"
 			},
@@ -181,7 +181,7 @@
 			"pluginId": "build",
 			"title": "Build",
 			"description": "Build - the assembled workspace. The Code space rebuilt entirely from marketplace packs: rail, thread, composer, start surface, dock, environment and switcher are all replaceable parts. Install it beside Code and swap any one of them without touching the app.",
-			"version": "0.1.3",
+			"version": "0.1.5",
 			"author": {
 				"name": "Dimension"
 			},
@@ -204,8 +204,8 @@
 					"label": "Build",
 					"tagline": "Every part of this workspace is a pack you can swap.",
 					"screenshots": [
-						"packs/build/assets/preview/start.webp",
-						"packs/build/assets/preview/session.webp"
+						"packs/build/assets/preview/session.webp",
+						"packs/build/assets/preview/start.webp"
 					],
 					"icon": "hammer",
 					"accent": "#f59e0b",
@@ -226,6 +226,91 @@
 					]
 				}
 			]
+		},
+		{
+			"name": "chat",
+			"source": "./packs/chat",
+			"pluginId": "chat",
+			"title": "Chat",
+			"description": "Chat - your personal assistant, in a room of its own. A calm conversation with Aether, a rail of your past sessions, and a viewer beside it that opens the documents, slides and images it makes. No repo, no branches, no developer chrome: one layout and one space, assembled entirely from marketplace packs.",
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-community",
+			"license": "MIT",
+			"category": "layout",
+			"tags": [
+				"layout",
+				"space",
+				"assistant",
+				"personal",
+				"chat"
+			],
+			"channel": "canary",
+			"spaces": [
+				{
+					"id": "chat",
+					"label": "Chat",
+					"tagline": "Your personal assistant in a room of its own: a calm conversation, your past sessions on the left, and whatever it makes for you opening beside it.",
+					"icon": "aether",
+					"accent": "#e8a838",
+					"requires": [
+						"classic-switcher",
+						"chat-rail",
+						"classic-workspace",
+						"chat-thread",
+						"independent-composer",
+						"classic-start",
+						"viewer"
+					]
+				}
+			]
+		},
+		{
+			"name": "chat-rail",
+			"source": "./packs/chat-rail",
+			"pluginId": "chat-rail",
+			"title": "Chat Rail",
+			"icon": "panel",
+			"description": "The Chat session rail: only your conversations, newest first, with a search box, a New session button and collections you make yourself to group them. No repos, branches, PR chips or recaps. Built from @fraym/ui primitives and the rail slot's channels only - no shipped rail inside.",
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-community",
+			"license": "MIT",
+			"category": "component",
+			"tags": [
+				"component",
+				"rail",
+				"sessions",
+				"collections",
+				"chat"
+			],
+			"channel": "canary"
+		},
+		{
+			"name": "chat-thread",
+			"source": "./packs/chat-thread",
+			"pluginId": "chat-thread",
+			"title": "Chat Thread",
+			"icon": "messageSquare",
+			"description": "Chat thread - the conversation and nothing else: your words, the assistant's words, and one quiet 'Worked for' line per turn. Built from the kit's StoreThread part; no tool cards, no shipped thread inside.",
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-community",
+			"license": "MIT",
+			"category": "component",
+			"tags": [
+				"component",
+				"thread",
+				"conversation",
+				"chat"
+			],
+			"channel": "canary"
 		},
 		{
 			"name": "classic-dock",
@@ -424,6 +509,28 @@
 			]
 		},
 		{
+			"name": "face-to-face",
+			"source": "./packs/face-to-face",
+			"pluginId": "face-to-face",
+			"title": "Face to face",
+			"icon": "waveform",
+			"description": "Face to face — talk to your agent and watch it answer: a full-screen halftone face that lip-syncs to the real audio, captions every word as it is spoken, and a small living orb that opens it from the Chat space.",
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-community",
+			"license": "MIT",
+			"category": "component",
+			"tags": [
+				"component",
+				"workspace-surface",
+				"voice",
+				"face to face"
+			],
+			"channel": "canary"
+		},
+		{
 			"name": "github",
 			"source": "./packs/github",
 			"pluginId": "github",
@@ -597,7 +704,7 @@
 			"pluginId": "independent-composer",
 			"title": "Independent Composer",
 			"description": "A composer built independently on the bricks tier — Fraym primitives + tokens + the store channels. Ships no shipped-implementation import.",
-			"version": "0.1.1",
+			"version": "0.1.2",
 			"author": {
 				"name": "Dimension"
 			},
@@ -608,7 +715,10 @@
 				"component",
 				"composer",
 				"independent"
-			]
+			],
+			"requires": {
+				"dimension": ">=0.11.1"
+			}
 		},
 		{
 			"name": "independent-rail",
@@ -697,70 +807,6 @@
 				"assembly"
 			],
 			"channel": "canary"
-		},
-		{
-			"name": "phone",
-			"source": "./packs/phone",
-			"pluginId": "phone",
-			"title": "Phone",
-			"description": "Phone - the Code session surface laid out for a 360-430px phone. The same shared components as Code (Assembled), bound to a layout with no switcher column (phone-switcher mounts in the rail drawer's head). The space Inso Mobile lands in; on a desktop, the honest preview of what a phone sees.",
-			"version": "0.1.1",
-			"author": {
-				"name": "Dimension"
-			},
-			"repository": "https://github.com/insodimension/dimension-community",
-			"license": "MIT",
-			"category": "layout",
-			"tags": [
-				"layout",
-				"space",
-				"phone",
-				"mobile"
-			],
-			"channel": "canary",
-			"spaces": [
-				{
-					"id": "phone",
-					"label": "Phone",
-					"tagline": "Your sessions, tool cards and approvals on a phone — the same components, laid out for one hand.",
-					"screenshots": [
-						"packs/phone/assets/preview/session.webp",
-						"packs/phone/assets/preview/drawer.webp",
-						"packs/phone/assets/preview/start.webp"
-					],
-					"icon": "phone",
-					"accent": "#f59e0b",
-					"requires": [
-						"phone-switcher",
-						"independent-rail",
-						"classic-workspace",
-						"classic-dock",
-						"independent-thread",
-						"independent-composer",
-						"classic-environment"
-					]
-				}
-			]
-		},
-		{
-			"name": "phone-switcher",
-			"source": "./packs/phone-switcher",
-			"pluginId": "phone-switcher",
-			"title": "Phone Switcher",
-			"icon": "layers",
-			"description": "The space switcher as a rail-head menu: re-exports SWITCHER_DROPDOWN from @fraym/ui. For layouts that cannot afford a 56px switcher column — the `phone` layout.",
-			"version": "0.1.1",
-			"author": {
-				"name": "Dimension"
-			},
-			"repository": "https://github.com/insodimension/dimension-community",
-			"license": "MIT",
-			"category": "component",
-			"tags": [
-				"component",
-				"switcher",
-				"phone"
-			]
 		},
 		{
 			"name": "pr-viewer",
@@ -922,6 +968,29 @@
 			"channel": "canary"
 		},
 		{
+			"name": "swiss-knife",
+			"source": "./packs/swiss-knife",
+			"pluginId": "swiss-knife",
+			"title": "Swiss Knife",
+			"icon": "hammer",
+			"description": "Small quality-of-life tools for the agent. `present` shows you a file (an image, a PDF, a Word file, a deck, a sheet) as a card in the thread that opens in the viewer, where you can annotate it.",
+			"version": "0.1.1",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-community",
+			"license": "MIT",
+			"category": "tools",
+			"tags": [
+				"present",
+				"files",
+				"images",
+				"viewer",
+				"tools"
+			],
+			"channel": "canary"
+		},
+		{
 			"name": "taste",
 			"source": "./packs/taste",
 			"pluginId": "taste",
@@ -1040,6 +1109,34 @@
 				"polish",
 				"skill"
 			]
+		},
+		{
+			"name": "viewer",
+			"source": "./packs/viewer",
+			"pluginId": "viewer",
+			"title": "Viewer",
+			"icon": "file",
+			"description": "A tabbed document viewer beside the conversation: images, PDF, HTML, Markdown, Word, PowerPoint, Excel and plain text, plus audio and video you can play and mark, rendered offline inside a sandboxed frame. Ask the agent to open a file and it appears as a tab.",
+			"version": "0.4.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-community",
+			"license": "MIT",
+			"category": "artifactory",
+			"tags": [
+				"viewer",
+				"artifactory",
+				"mcp-apps",
+				"documents",
+				"pdf",
+				"docx",
+				"pptx",
+				"xlsx",
+				"audio",
+				"video"
+			],
+			"channel": "canary"
 		},
 		{
 			"name": "watch",

@@ -11,6 +11,7 @@ import {
 	type Habitat,
 	manifestLines,
 	manifestPath,
+	type MemoryScope,
 	normalizeTypedName,
 	PERSONALITIES,
 	PROPOSABLE_FIELDS,
@@ -77,6 +78,11 @@ const HABITAT_LABEL: Record<Habitat, { label: string; hint: string }> = {
 	bound: { label: "Where opened", hint: "Runs in whichever workspace you open it in" },
 	home: { label: "Own home", hint: "Always runs in its own managed workspace" },
 	ephemeral: { label: "Scratch", hint: "A fresh throwaway worktree every session" },
+};
+/** The Recall toggle writes `workspace.reach`, so its hint names the whole grant. */
+const RECALL_LABEL: Record<MemoryScope, { label: string; hint: string }> = {
+	project: { label: "This project", hint: "Recalls this project, its own home and what you made global" },
+	global: { label: "Every project", hint: "May recall across every project — and its control tools may reach every workspace (workspace.reach: all)" },
 };
 /** The manifest line ids each proposable field renders, so a proposal's lines are marked. */
 const PROPOSAL_LINES: Record<(typeof PROPOSABLE_FIELDS)[number], readonly string[]> = {
@@ -622,9 +628,9 @@ export function ForgeApp({ backend, incoming }: { backend: ForgeBackend; incomin
 							<Instrument label="Temper" value={draft.personality === "default" ? "Default" : draft.personality[0]?.toUpperCase() + draft.personality.slice(1)} hint="The personality it speaks with">
 								<Segments options={PERSONALITIES} value={draft.personality} labels={{ default: "Default", friendly: "Friendly", pragmatic: "Pragmatic", none: "Plain" }} onChange={value => updateDraft(current => ({ ...current, personality: value }))} />
 							</Instrument>
-							{draft.memory !== "inherit" && draft.memory !== "off" && (
-								<Instrument label="Recall" value={draft.memoryScope === "global" ? "Everywhere" : "This project"} hint="Where its memory reads from">
-									<Segments options={["project", "global"] as const} value={draft.memoryScope} labels={{ project: "Project", global: "Everywhere" }} onChange={value => updateDraft(current => ({ ...current, memoryScope: value }))} />
+							{draft.memory !== "off" && (
+								<Instrument label="Recall" value={RECALL_LABEL[draft.memoryScope].label} hint={RECALL_LABEL[draft.memoryScope].hint}>
+									<Segments options={["project", "global"] as const} value={draft.memoryScope} labels={{ project: RECALL_LABEL.project.label, global: RECALL_LABEL.global.label }} onChange={value => updateDraft(current => ({ ...current, memoryScope: value }))} />
 								</Instrument>
 							)}
 						</div>

@@ -1,0 +1,217 @@
+// What plugin.json promises the host the viewer can open, held to what the viewer
+// really draws and really annotates. The host decides a click from the published
+// rows alone (`pickHandler`, `annotationModelFor`), so the promise is checked
+// through the host's own functions, not a restatement of them.
+import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+	ARTIFACT_ANNOTATION_MODELS,
+	ARTIFACTORY_GRANT_FILES_READ,
+	type ArtifactOpen,
+	type ArtifactoryDecl,
+	validateArtifactoryDecl,
+} from "@dimension/sdk/artifactory";
+import { type AnnotationModel, annotationModelFor, classifyFile, type OpenHandlerFact, pickHandler } from "@dimension/sdk/presentation";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { z } from "zod";
+import { annotationModes, MODEL_FOR_MODE } from "../app/view/annotate-modes";
+import type { ViewerKind } from "../src/contract";
+import { detectKind } from "../src/kind";
+import { createViewerServer } from "../src/server";
+
+const manifest = JSON.parse(readFileSync(new URL("../plugin.json", import.meta.url), "utf8"));
+const declaration = manifest.extensions["ai.insodimension.dimension"].artifactories[0];
+const decl: ArtifactoryDecl = { ...declaration, plugin: manifest.name, type: "artifactory" };
+const opens: readonly ArtifactOpen[] = decl.opens ?? [];
+
+/** The rows the engine publishes for this declaration (`artifactory/opens`), first-party as the bundled pack is. */
+const rows: OpenHandlerFact[] = opens.map(open => ({
+	plugin: decl.plugin,
+	server: `${decl.plugin}/${decl.mcpServer}`,
+	label: open.label,
+	firstParty: true,
+	tool: open.tool,
+	pathArg: open.pathArg ?? "path",
+	nameArg: open.nameArg,
+	ext: open.ext ?? [],
+	mime: open.mime ?? [],
+	annotates: open.annotates ?? [],
+}));
+
+/** What the View's annotate layer does for a kind it draws, read from the table the pane itself seats its layers from
+ *  (`annotate-modes.ts`, doc 85): nothing on a file card, else the platform's name for the one mode it offers. */
+function viewAnnotates(kind: ViewerKind): AnnotationModel | null {
+	const [mode] = annotationModes(kind);
+	return mode === undefined ? null : MODEL_FOR_MODE[mode];
+}
+
+const PNG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+const ZIP = [0x50, 0x4b, 0x03, 0x04];
+const ascii = (text: string) => Array.from(text, char => char.charCodeAt(0));
+const iso = (brand: string) => [0, 0, 0, 0x20, ...ascii("ftyp"), ...ascii(brand)];
+const OGG = [...ascii("OggS"), 0, 2, 0, 0, 0, 0, 0, 0, 0, 0];
+const EBML = [0x1a, 0x45, 0xdf, 0xa3, 0x9f, 0x42, 0x86, 0x81, 0x01, 0x42, 0x82, 0x88];
+/** Names other than the table's that a data source reports for the audio types it sorts; each stands for the one beside it. */
+const MIME_ALIASES: Readonly<Record<string, string>> = { "audio/x-wav": "audio/wav", "audio/x-flac": "audio/flac", "audio/x-m4a": "audio/mp4" };
+/** The first bytes a real file of this extension starts with, where it has a signature. */
+function headOf(ext: string): Uint8Array {
+	const bytes: Record<string, number[]> = {
+		png: PNG,
+		jpg: [0xff, 0xd8, 0xff, 0xe0],
+		jpeg: [0xff, 0xd8, 0xff, 0xe0],
+		gif: ascii("GIF89a"),
+		webp: [...ascii("RIFF"), 0, 0, 0, 0, ...ascii("WEBP")],
+		avif: [0, 0, 0, 0x1c, ...ascii("ftypavif")],
+		bmp: ascii("BM"),
+		ico: [0, 0, 1, 0],
+		pdf: ascii("%PDF-1.7"),
+		docx: ZIP,
+		pptx: ZIP,
+		xlsx: ZIP,
+		xlsm: ZIP,
+		mp3: [...ascii("ID3"), 3, 0, 0, 0, 0, 0, 10],
+		wav: [...ascii("RIFF"), 0, 0, 0, 0, ...ascii("WAVE")],
+		flac: ascii("fLaC"),
+		ogg: OGG,
+		oga: OGG,
+		opus: OGG,
+		m4a: iso("M4A "),
+		aac: [0xff, 0xf1, 0x50, 0x80],
+		weba: [...EBML, ...ascii("webm")],
+		mp4: iso("isom"),
+		m4v: iso("M4V "),
+		mov: iso("qt  "),
+		webm: [...EBML, ...ascii("webm")],
+		ogv: [...OGG, 0x80, ...ascii("theora")],
+		mkv: [...EBML, ...ascii("matroska")],
+		mka: [...EBML, ...ascii("matroska")],
+		m4b: iso("M4B "),
+	};
+	return new Uint8Array(bytes[ext] ?? ascii("plain text\n"));
+}
+
+describe("the declaration", () => {
+	test("passes the SDK's validator, so a bad entry fails here and not at engine load", () => {
+		expect(validateArtifactoryDecl(decl)).toEqual([]);
+	});
+
+	test("asks for the files:read grant, without which the host lends the viewer no file", () => {
+		expect(decl.grants).toContain(ARTIFACTORY_GRANT_FILES_READ);
+	});
+
+	test("every entry names a public tool of the real server that takes the declared path and name arguments", async () => {
+		const base = await mkdtemp(join(tmpdir(), "viewer-manifest-"));
+		try {
+			await writeFile(join(base, "index.html"), "<!doctype html><title>viewer</title>");
+			const server = await createViewerServer({ viewDir: base });
+			const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+			const client = new Client({ name: "test", version: "0" });
+			await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
+			const { tools } = await client.listTools();
+			await client.close();
+			const visibility = z.object({ ui: z.object({ visibility: z.array(z.string()).optional() }) });
+			for (const row of rows) {
+				const tool = tools.find(candidate => candidate.name === row.tool);
+				expect(tool, `${row.tool} is a tool of the server`).toBeDefined();
+				expect(visibility.parse(tool?._meta).ui.visibility ?? ["model", "app"]).toContain("model");
+				expect(Object.keys(tool?.inputSchema.properties ?? {})).toContain(row.pathArg);
+				// A pasted screenshot is staged under a hash; `filename` is what titles its tab instead.
+				expect(row.nameArg, `${row.tool} declares the argument a display name goes in`).toBeDefined();
+				expect(Object.keys(tool?.inputSchema.properties ?? {})).toContain(row.nameArg as string);
+			}
+			// The argument `openWith` adds for the Annotate action is one this tool takes.
+			expect(Object.keys(tools.find(tool => tool.name === "view_file")?.inputSchema.properties ?? {})).toContain("annotate");
+		} finally {
+			await rm(base, { recursive: true, force: true });
+		}
+	});
+
+	test("every annotation model it names is one the platform defines", () => {
+		for (const open of opens) for (const model of open.annotates ?? []) expect(ARTIFACT_ANNOTATION_MODELS).toContain(model);
+	});
+});
+
+describe("what the viewer claims to open is what it draws and what it can annotate", () => {
+	const claimed = rows.flatMap(row => row.ext.map(ext => ({ row, ext })));
+
+	test("each entry is one family: its extensions are drawn as the same kind of document", () => {
+		for (const row of rows) {
+			const kinds = new Set(row.ext.map(ext => detectKind(`file.${ext}`, headOf(ext))));
+			expect(kinds.size, `${row.ext.join(",")} drawn as ${[...kinds].join(",")}`).toBe(1);
+		}
+	});
+
+	test.each(claimed.map(({ ext }) => ext))("%s: the viewer draws it (not a bare file card), and declares what the View can annotate for it", ext => {
+		const row = claimed.find(candidate => candidate.ext === ext)?.row as OpenHandlerFact;
+		const kind = detectKind(`file.${ext}`, headOf(ext));
+		expect(kind).not.toBe("binary");
+		const model = viewAnnotates(kind);
+		expect(row.annotates).toEqual(model === null ? [] : [model]);
+	});
+
+	test.each(claimed.map(({ ext }) => ext))("%s: a click on it reaches the viewer, and the host offers Annotate exactly when the View can", ext => {
+		const file = classifyFile(`report.${ext}`, headOf(ext));
+		const row = pickHandler(rows, { name: `report.${ext}`, mime: file.mime });
+		expect(row?.plugin).toBe("viewer");
+		const offered = (() => {
+			const hostModel = annotationModelFor(file.kind);
+			return hostModel !== null && row?.annotates.includes(hostModel) === true;
+		})();
+		const viewModel = viewAnnotates(detectKind(`report.${ext}`, headOf(ext)));
+		// Offered only when the model the host asks for is the one the View implements.
+		expect(offered).toBe(viewModel !== null && viewModel === annotationModelFor(file.kind));
+	});
+
+	test("the mime a data source or a tool reports for a known extension is declared beside it", () => {
+		for (const { row, ext } of claimed) {
+			const named = classifyFile(`x.${ext}`);
+			if (named.kind !== "binary") expect(row.mime, `${ext} is ${named.mime}`).toContain(named.mime);
+		}
+	});
+
+	test("every recording it claims is sorted as audio or video by the host's own table, and the mime lists are exactly what that table says", () => {
+		for (const kind of ["audio", "video"] as const) {
+			const row = rows.find(candidate => classifyFile(`x.${candidate.ext[0]}`).kind === kind);
+			expect(row, `an entry for ${kind}`).toBeDefined();
+			for (const ext of row?.ext ?? []) expect(classifyFile(`take.${ext}`).kind, `${ext} is ${kind}`).toBe(kind);
+			// Not merely "contained": a mime nothing maps to is a claim the host would never make. The one exception is an
+			// alias: another name a data source may report for a type this table sorts (`audio/x-wav` for `audio/wav`).
+			const sorted = new Set((row?.ext ?? []).map(ext => classifyFile(`take.${ext}`).mime));
+			const declared = new Set(row?.mime);
+			for (const mime of sorted) expect(declared.has(mime), `${mime} is declared`).toBe(true);
+			const extras = [...declared].filter(mime => !sorted.has(mime)).sort();
+			expect(extras, `${kind}: mime beyond what the table says`).toEqual(kind === "audio" ? Object.keys(MIME_ALIASES).sort() : []);
+			for (const [alias, canonical] of Object.entries(MIME_ALIASES)) if (declared.has(alias)) expect(sorted.has(canonical), `${alias} stands for ${canonical}`).toBe(true);
+			// The model the host asks for is the one the entry declares (the Annotate action is offered on exactly that).
+			expect(annotationModelFor(kind)).toBe("timeline");
+			expect(row?.annotates).toEqual(["timeline"]);
+		}
+	});
+
+	test("every recording the viewer's own sniffer knows by its name is one the manifest claims, so a click on it reaches the viewer", () => {
+		// The extensions `sniffMedia` settles a recording by when the bytes cannot (src/kind.ts).
+		for (const ext of ["m4a", "m4b", "weba", "mka", "mp4", "m4v", "mov", "ogv"]) {
+			expect(
+				rows.some(row => row.ext.includes(ext)),
+				`${ext} is claimed`,
+			).toBe(true);
+		}
+	});
+
+	test("a recording reported by another name for its type (audio/x-wav, audio/x-flac, audio/x-m4a) still reaches the viewer, even with a name that says nothing", () => {
+		for (const mime of Object.keys(MIME_ALIASES)) {
+			expect(pickHandler(rows, { name: "recording", mime })?.plugin, mime).toBe("viewer");
+		}
+	});
+
+	test("archives and binaries are not claimed: the viewer would only show a file card", () => {
+		for (const name of ["a.zip", "a.tar", "a.gz", "a.7z", "a.exe", "a.dll", "a.bin", "a.doc", "a.xls"]) {
+			const file = classifyFile(name);
+			expect(pickHandler(rows, { name, mime: file.mime }), name).toBeUndefined();
+		}
+	});
+});

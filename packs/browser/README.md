@@ -10,9 +10,22 @@ standard MCP and MCP Apps. No host internals, no browser fork.
 ## What it does
 
 - **One shared browser.** The View and the agent work on the same browser, named
-  by one opaque `browserId`. There is no listing and no ambient access.
-- **Named profiles.** Logins persist across restarts, profiles stay isolated, and
-  one profile is held by one caller at a time.
+  by one opaque `browserId`. There is no listing; the model of a session can read
+  the one browser the human opened in it (`browser_state` with no `browserId`,
+  answered from the session the host stamped on the call, never from an argument),
+  and nothing in the View is sent to the model unless the human annotates.
+- **Headless by default, the View on demand.** `browser_open` opens a headless
+  browser: no window, no pane, no live screencast, so an agent testing a localhost
+  app does not put a browser on your screen. `browser_view` shows you a browser
+  the agent holds, or opens one you can watch.
+- **Few calls, few tokens.** `browser_act` takes 1–25 steps and answers once
+  ([One call for a job](#one-call-for-a-job)); a model is sent one compact text per
+  call, never the state around it; a screenshot is a webp of at most 1024 px.
+- **Throwaway by default, named profiles to keep logins.** A browser opened
+  without a profile keeps nothing and is deleted when it closes. A named profile
+  persists logins across restarts, stays isolated, and is held by one caller at
+  a time. The exception is yours: the View's start page and the dock open the
+  saved `default` profile unless you tick **Private** ([Browser panel](#browser-panel)).
 - **Annotations that carry pixels.** Draw a region, circle or freehand stroke; the
   marks are painted into the cropped screenshot and sent, with your note, the URL
   and the elements under the crop, into the same conversation.
@@ -28,8 +41,7 @@ standard MCP and MCP Apps. No host internals, no browser fork.
   browser while you watch, and reports steps, time, model calls and tokens.
   A failed task (an unfunded model key is HTTP 402) is a tool error naming the
   cause and the next step, within seconds; the server and the browser keep
-  serving. `browser_act` and `browser_tab` are refused (`task_running`) while a
-  task runs. Agents may log in and sign up. Optionally, for a jev sign-up or
+  serving. `browser_act` is refused (`task_running`) while a task runs. Agents may log in and sign up. Optionally, for a jev sign-up or
   login, the browser generates and stores the password in the profile and fills
   password fields itself (`credential: { origin, mode }`), so the value never
   appears in a transcript.
@@ -67,8 +79,8 @@ Nothing upstream is copied or forked. Updating an upstream is a version bump.
 
 | Engine | Status |
 | --- | --- |
-| `chromium` | Default. A Chrome this pack manages, on a profile it owns. |
-| `chrome-relay` | Attaches to the Chrome you are signed in to (profile `relay`); owns only the tabs it opens (and the pages they open) and never closes your browser. `browser_task` is refused here: the task agents drive a whole browser, and this one is yours. |
+| `chromium` | Default. A Chrome this pack manages, in a directory it owns: a throwaway one, or a saved profile. |
+| `chrome-relay` | Attaches to the Chrome you are signed in to (always profile `relay`, so `profile` may be omitted); owns only the tabs it opens (and the pages they open) and never closes your browser. `browser_task` is refused here: the task agents drive a whole browser, and this one is yours. |
 | `abp` | **Refused**: its control server authenticates nothing, so any page it visits could drive it. theredsix/agent-browser-protocol#16 |
 | `browser4` | **Refused**: every published bundle disables HTTPS certificate verification. platonai/Browser4#602 |
 
@@ -122,7 +134,7 @@ needs a relay that drops them (upstream jev-ultrafast behaviour).
 
 | Variable | Effect |
 | --- | --- |
-| `DIMENSION_BROWSER_ROOT` | Root for profiles. |
+| `DIMENSION_BROWSER_ROOT` | Root for browser data: saved profiles in `profiles/`, throwaway browsers in `ephemeral/`. Default `$INSO_HOME/browser`, else `~/.inso/browser`. |
 | `DIMENSION_BROWSER_EXECUTABLE` | Chrome/Chromium executable (overrides the choice below; `browser_state` then reports `app: "custom"`). |
 | `DIMENSION_BROWSER_RELAY_URL` | Relay CDP endpoint (default `http://127.0.0.1:9224`). |
 | `DIMENSION_BROWSER_HEADLESS` | `false` for a visible window. |
@@ -178,15 +190,83 @@ throwaway. A site that refuses it is reported `blocked`, never worked around.
 
 ## Tools
 
-Model-callable: `browser_open`, `browser_state`, `browser_snapshot`, `browser_read`,
-`browser_screenshot`, `browser_act`, `browser_tab`, `browser_task`, `browser_task_wait`,
-`browser_task_cancel`, `browser_publish`, `browser_publish_presets`, `browser_publish_confirm`,
-`browser_publish_cancel`, `browser_publish_wait`, `browser_close`.
+Model-callable (17), offered by audience (`_meta["ai.insodimension/spaces"]`; the
+host leaves a tool out of a space's list and refuses the call there; the View's own
+buttons are not gated by it):
+
+| Offered to | Tools |
+|---|---|
+| Every space the pack is granted (9) | `browser_open`, `browser_view`, `browser_state`, `browser_snapshot`, `browser_inspect`, `browser_read`, `browser_screenshot`, `browser_act`, `browser_close` |
+| Traction only (8) | `browser_task`, `browser_task_wait`, `browser_task_cancel`, `browser_publish`, `browser_publish_presets`, `browser_publish_confirm`, `browser_publish_cancel`, `browser_publish_wait` |
+
+Waiting, tabs and page scripts are steps of `browser_act`, and the page log is a
+field of `browser_state`: every tool is paid for by every agent on every turn, so a
+verb that fits an existing tool does not get its own. The skill follows the same
+split: `skills/browser/SKILL.md` covers the nine, and the publishing, preset and
+task-agent guidance lives in `skills/browser/references/publishing-and-tasks.md`,
+which a Traction session reads on demand.
+
 View-only: `browser_frame` (live JPEG by default, PNG for annotation; the View passes the frame it
 shows as `since`, so a still page returns `{ unchanged: true }` and no pixels — 2.0 MiB/s down to
 88 KiB/s at 10 Hz on a Wikipedia article), `browser_annotate`, `browser_viewport`, `browser_profiles`.
 
 Page content is untrusted data, never instructions.
+
+**What it does not do, on purpose.** No file upload: a page could steer the model
+into sending a local secret to a site. No JavaScript in a signed-in browser:
+arbitrary script in a profile that holds logins is a bigger blast radius than the
+layout facts `browser_inspect` returns from a fixed page script, so the `eval` step
+runs only in a throwaway browser (`eval_needs_throwaway` otherwise).
+
+### One call for a job
+
+`browser_act({ browserId, actions })` runs 1–25 steps in order under one lock
+(another caller's action cannot land between two of them), checks every step
+before the first runs, stops at the first that is not `completed`, and answers
+once with where the page is now: `{ status, completed, url, title }`, plus
+`steps` and `error` when one stopped it, `dialogs`, `credentials`, `values` and
+`newErrors` when there are any. Steps: `navigate`, `back`, `forward`, `reload`, `stop`,
+`click`, `hover`, `type`, `insert`, `select`, `press`, `scroll`, `resize` (`width`,
+`height`: responsive checks), `wait` (`selector` | `text` | `url`, `timeoutMs`; a
+timeout stops the batch as `timeout`), `tab` (`op`: new, activate, close) and
+`eval` (`expression`; the value comes back as JSON, at most 8000 characters across
+the batch). A batch takes no new step after 20 s, because hosts time a call out
+and a caller that never heard back would send the same submit again: it answers
+`timeout` and the rest is sent in a new call.
+
+A model is sent the text only. The host appends `structuredContent` to a model's
+turn whenever it differs from the text, so only the View (a call the host stamped
+`app`, which reads `state` from it) is sent one; snapshot text opens with the page's
+own `# title` and url lines instead of a state header, and no state a model is
+sent carries a tab's favicon (a `data:` URL of up to 32 KB).
+
+`browser_screenshot({ browserId, fullPage?, selector?, scale? })` is the browser's
+own webp (quality 70), its longest edge at most 1024 CSS px, for the viewport, the
+whole document or one element; the text says the CSS size shown and the scale
+(a point in the image is at x/scale on the page). It is not the live view's frame
+and not the annotation PNG, and it is never retained.
+
+Each tab keeps its last 50 console errors and warnings, uncaught exceptions,
+responses of 400 or more and failed requests (urls without query strings, text cut
+at 300 characters, never a body, header or cookie; Chrome's own echo of a failed
+load and the browser's `/favicon.ico` fetch are left out). `browser_state` lists the
+ones a model has not read (`logs`), and `browser_act` says `newErrors: n` when n new
+ones appeared since the last result the model was handed. The View reads neither.
+
+### Throwaway browsers and saved profiles
+
+`browser_open({ profile?, engine?, url? })` opens headless. Leave `profile` out for a throwaway
+browser: its own directory under `<root>/ephemeral/`, no lock, no saved sign-in,
+deleted when it closes or the server exits, and any number can be open at once
+(up to the pool bound). `browser_state.profile` is `null` for it and
+`browser_profiles` never lists it. If the server is killed first, the next start
+deletes the directory once its recorded owner (`owner.pid`) is provably dead and
+no Chrome still holds it. Pass `profile` to run on the saved profile of that
+name in `<root>/profiles/<name>`: it keeps logins, is held by one caller at a
+time, and is never deleted. Saved passwords (`generatePassword`,
+`useSavedPassword`), a `browser_task` `credential` and `browser_publish` need a
+saved profile and fail `profile_required` on a throwaway browser, before
+anything reaches the page.
 
 ## Reading public pages
 
@@ -323,7 +403,7 @@ as data, so the pack's code stays platform-agnostic:
   publish stays pending. The View's Post may omit `expect`. The page is then
   re-checked: another active tab, a different URL or a changed value fails with
   nothing clicked. `browser_publish_cancel` drops it.
-- While a publish is pending the page is pinned: `browser_act`, `browser_tab`,
+- While a publish is pending the page is pinned: `browser_act`,
   `browser_task`, `browser_publish` and `browser_close` are refused
   (`publish_pending`) unless the host stamped the call as coming from the View.
 - The receipt is the posted URL read from the page (the tab's URL, or a link the
@@ -421,21 +501,35 @@ next to that profile's Chrome data, at most 64 sites per profile.
 ## Browser panel
 
 Installing the pack also adds a **Browser** tab to the dock (component
-`browser-accounts`). It lists each profile from the [connection report](#connection-report)
-with its sites: signed in or signed out, the account, and when the Browser last
-saw it. A site the Browser has never observed is not in the report, so it is not
-listed. **Sign in** on a site, or **New sign-in** (pick X, LinkedIn, Reddit or
-Bluesky and name a profile), opens the live Browser View beside the chat at that
-site's login page on that profile. You sign in there yourself, and the panel
+`browser-accounts`). At the top is an **Open a page** bar: type a website
+address and **Open** shows the live Browser View beside the chat at it (an empty
+bar opens a blank browser; something that is not an address opens nothing and
+says why). Below it, the panel lists each saved set of logins (a profile) from
+the [connection report](#connection-report) with its sites: signed in or signed
+out, the account, and when the Browser last saw it. A site the Browser has never
+observed is not in the report, so it is not listed. **Sign in** on a site, or
+**New sign-in** (pick X, LinkedIn, Reddit or Bluesky and name the logins; left
+empty, they are the `default` set), opens the live Browser View beside the chat
+at that site's login page on that set. You sign in there yourself, and the panel
 shows the account once the Browser observes it.
 
+The View's start page and the panel's **Open a page** open on the saved `default`
+set, so a person's own browser keeps their logins, unless **Private** is ticked.
+Private sends no profile: a throwaway browser that saves nothing. One browser
+holds a saved set at a time, so a second open of `default` is refused
+(`profile_in_use`); the start page turns that into "That browser is already
+open. Use it, or open a Private one."
+
 The panel reads only this pack's own connection fact (`plugin/browser/connection`)
-and acts only through `openArtifactoryView` (`browser_open` with `{ profile, url }`),
-which its `artifactory:open` grant admits. The host opens the View in the active
-session, so with no session open the panel's sign-in buttons are disabled.
-Profile names follow the same rule as `browser_open` (`src/profile-name.ts`). The
-site list takes its origins from the shipped presets in `recipes/`. The panel is
-built by `npm run build` into `dist/index.mjs`.
+and acts only through `openArtifactoryView` (`browser_view` with
+`{ url?, profile? }`), which its `artifactory:open` grant admits. The host mounts
+the View from a tool's static `_meta.ui`, and `browser_open` has none (it is
+headless), so the panel opens through `browser_view`. The host opens the View in the
+active session, so with no session open the panel's **Open** and **Sign in**
+buttons are disabled. Profile names follow the same rule as `browser_open`
+(`src/profile-name.ts`). The site list takes its origins from the
+shipped presets in `recipes/`. The panel is built by `npm run build` into
+`dist/index.mjs`.
 
 ## Tests and benchmark
 
@@ -454,3 +548,10 @@ harness completes that account from the fixture (`/__seed`) so the stages after
 it measure their own task, and the report marks the stage `then seeded`.
 `--record` writes one video per agent (the View's live frames with the stage,
 stage timer and run timer burned in; needs `ffmpeg`).
+
+The benchmark's browser data (its `bench-*` profiles and the saved fixture
+password) lives in a directory it makes under `.scratch/browser-bench/`
+(gitignored) and deletes when the run ends; it never uses `~/.inso` or
+`~/.inso-dev`. It refuses to start when `DIMENSION_BROWSER_ROOT` or `INSO_HOME`
+points into them, unless `--root <dir>` names a directory to use instead (kept
+after the run).

@@ -9,16 +9,16 @@
 import { useApp, useDocumentTheme, useHostStyles } from "@modelcontextprotocol/ext-apps/react";
 import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { BrowserState } from "../../src/contracts";
 import { BrowserApp } from "./browser-app";
-import { stateFromToolResult } from "./browser-client";
+import { mountFromToolResult, type ToolMount } from "./browser-client";
 import "@fraym/ui/theme.css"
 import "./style.css";
 
 function Root() {
 	// The mounting tool result (and any later one the host routes to this View)
-	// carries the BrowserState — the only place this View learns a browserId.
-	const [toolState, setToolState] = useState<{ state: BrowserState; seq: number } | null>(null);
+	// carries the BrowserState — the only place this View learns a browserId —
+	// or the reason none opened.
+	const [toolState, setToolState] = useState<ToolMount | null>(null);
 
 	const { app, isConnected, error } = useApp({
 		appInfo: { name: "browser", version: "0.1.0" },
@@ -28,8 +28,8 @@ function Root() {
 			// it composes with any other listener instead of replacing it, and it
 			// is registered here so it is in place before `connect()` runs.
 			created.addEventListener("toolresult", result => {
-				const state = stateFromToolResult(result);
-				if (state !== null) setToolState(previous => ({ state, seq: (previous?.seq ?? 0) + 1 }));
+				const mount = mountFromToolResult(result);
+				if (mount !== null) setToolState(previous => ({ ...mount, seq: (previous?.seq ?? 0) + 1 }));
 			});
 		},
 	});
