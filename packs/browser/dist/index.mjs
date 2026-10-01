@@ -99,6 +99,69 @@ function checkProfileName(raw) {
 		slug
 	};
 }
+//#endregion
+//#region src/profile-meta.ts
+/**
+* What a person calls a saved profile, and how a profile's sign-in observations
+* are read — the ONE rule the agent's list (`browser_profiles`), the host
+* connection report and the dock panel share.
+*
+* Pure and dependency-free on purpose, like profile-name.ts: the dock panel
+* runs in the host's page, so it cannot reach this through store.ts
+* (node:fs). The slug (profile-name.ts) names the folder and never changes;
+* the label, colour and avatar here are separate, free to edit, and optional:
+* a profile with no metadata file gets defaults derived from its slug.
+*/
+/** The fixed palette. A colour is one of these names, never a free value. */
+var PROFILE_COLOURS = [
+	"blue",
+	"orange",
+	"green",
+	"red",
+	"purple",
+	"pink",
+	"teal",
+	"grey"
+];
+/** `raw` as a label: trimmed, inner whitespace collapsed, control characters removed; undefined when blank or too long. */
+function cleanLabel(raw) {
+	if (typeof raw !== "string") return void 0;
+	const label = raw.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
+	return label.length > 0 && label.length <= 48 ? label : void 0;
+}
+/** One emoji (a ZWJ sequence or a variation selector counts as one), or undefined. */
+var EMOJI = /^\p{Extended_Pictographic}(?:\p{Emoji_Modifier}|\uFE0F|\u200D\p{Extended_Pictographic})*$/u;
+function cleanAvatar(raw) {
+	return typeof raw === "string" && raw.length <= 16 && EMOJI.test(raw) ? raw : void 0;
+}
+function isProfileColour(raw) {
+	return typeof raw === "string" && PROFILE_COLOURS.includes(raw);
+}
+/** A stable colour for a slug with none chosen: the same slug is always the same colour. */
+function defaultColour(slug) {
+	let hash = 0;
+	for (let i = 0; i < slug.length; i += 1) hash = Math.imul(hash, 31) + slug.charCodeAt(i) >>> 0;
+	return PROFILE_COLOURS[hash % PROFILE_COLOURS.length];
+}
+/** `slug`'s label, colour and avatar: what was stored, else what the slug gives. */
+function resolveProfileMeta(slug, stored = {}) {
+	return {
+		label: cleanLabel(stored.label) ?? loginSetLabel(slug),
+		colour: isProfileColour(stored.colour) ? stored.colour : defaultColour(slug),
+		...cleanAvatar(stored.avatar) === void 0 ? {} : { avatar: stored.avatar }
+	};
+}
+/**
+* What an observation says NOW. `null` is "not known": the site was visited but
+* never checked, the check is over 7 days old, or its time is in the future
+* (a wrong clock or a copied file: a sign-in is not claimed for days that have
+* not happened). Signed in is never claimed from old data (nor signed out: a
+* session may have been renewed since).
+*/
+function effectiveSignedIn(signedIn, observedAt, now) {
+	const age = now - observedAt;
+	return signedIn !== null && age >= -6e4 && age <= 6048e5 ? signedIn : null;
+}
 /** A plain JSON object's entries, or none for anything else (null, an array, a primitive). */
 function entriesOf(value) {
 	return typeof value === "object" && value !== null && !Array.isArray(value) ? Object.entries(value) : [];
@@ -109,12 +172,12 @@ function profileRows(fact) {
 	const profiles = fact?.reported?.profiles;
 	const rows = [];
 	for (const [name, profile] of entriesOf(profiles)) {
-		const sites = profile?.sites;
+		const { sites, label, colour, avatar } = Object.fromEntries(entriesOf(profile));
 		if (typeof sites !== "object" || sites === null || Array.isArray(sites)) continue;
 		const siteRows = [];
 		for (const [host, value] of Object.entries(sites)) {
-			const site = value;
-			if (typeof site?.signedIn !== "boolean" || typeof site.observedAt !== "number" || !Number.isFinite(site.observedAt)) continue;
+			const site = Object.fromEntries(entriesOf(value));
+			if (typeof site.signedIn !== "boolean" && site.signedIn !== null || typeof site.observedAt !== "number" || !Number.isFinite(site.observedAt)) continue;
 			siteRows.push({
 				host,
 				signedIn: site.signedIn,
@@ -122,8 +185,14 @@ function profileRows(fact) {
 				observedAt: site.observedAt
 			});
 		}
+		const meta = resolveProfileMeta(name, {
+			...typeof label === "string" ? { label } : {},
+			...isProfileColour(colour) ? { colour } : {},
+			...typeof avatar === "string" ? { avatar } : {}
+		});
 		rows.push({
 			name,
+			...meta,
 			sites: siteRows.sort((a, b) => a.host.localeCompare(b.host))
 		});
 	}
@@ -171,7 +240,12 @@ var SIGN_IN_SITES = [
 	fromPreset("X", origin, "/login"),
 	fromPreset(platform$1, origin$2, "/login"),
 	fromPreset(platform, origin$1, "/login"),
-	fromPreset(platform$2, origin$3, "/")
+	fromPreset(platform$2, origin$3, "/"),
+	{
+		host: "google.com",
+		label: "Google",
+		loginUrl: "https://accounts.google.com/"
+	}
 ];
 var BY_HOST = new Map(SIGN_IN_SITES.map((site) => [site.host, site]));
 /** The known site for a report key, if the panel has one. */
@@ -191,10 +265,11 @@ var NONE = {
 var MINUTE_MS = 6e4;
 function SiteLine({ site, now, onSignIn }) {
 	const label = knownSite(site.host)?.label ?? site.host;
+	const state = effectiveSignedIn(site.signedIn, site.observedAt, now);
 	return /* @__PURE__ */ jsxs("li", {
 		className: "flex min-w-0 items-center gap-2 py-1",
 		"data-slot": "browser-accounts-site",
-		"data-signed-in": site.signedIn,
+		"data-signed-in": state,
 		children: [/* @__PURE__ */ jsxs("span", {
 			className: "flex min-w-0 flex-1 flex-col",
 			children: [/* @__PURE__ */ jsxs("span", {
@@ -203,8 +278,8 @@ function SiteLine({ site, now, onSignIn }) {
 					className: "fr-overflow text-fr-sm text-fr-text",
 					children: label
 				}), /* @__PURE__ */ jsx(Pill, {
-					tint: site.signedIn ? "bg-fr-add-bg" : "bg-fr-warn/15",
-					children: site.signedIn ? "Signed in" : "Signed out"
+					tint: state === true ? "bg-fr-add-bg" : state === false ? "bg-fr-warn/15" : void 0,
+					children: state === true ? "Signed in" : state === false ? "Signed out" : "Not checked"
 				})]
 			}), /* @__PURE__ */ jsxs("span", {
 				className: "fr-overflow font-secondary text-fr-xs text-fr-text-3",
@@ -212,7 +287,7 @@ function SiteLine({ site, now, onSignIn }) {
 			})]
 		}), /* @__PURE__ */ jsx(Button, {
 			size: "sm",
-			variant: site.signedIn ? "ghost" : "outline",
+			variant: state === true ? "ghost" : "outline",
 			disabled: !onSignIn,
 			onClick: onSignIn ?? void 0,
 			children: "Sign in"
@@ -233,7 +308,7 @@ function ProfileSection({ profile, now, signIn, onPick }) {
 				size: 12
 			}), /* @__PURE__ */ jsx("span", {
 				className: "fr-overflow font-secondary text-fr-xs",
-				children: loginSetLabel(profile.name)
+				children: profile.label
 			})]
 		}), /* @__PURE__ */ jsx("ul", {
 			className: "flex flex-col",
