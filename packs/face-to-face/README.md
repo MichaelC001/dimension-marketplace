@@ -40,6 +40,12 @@ ready: readiness is the engine's and the window's. **Tap to talk** there opens t
 for the pane's session (the hook's `act("ensureSession")`, which carries no message) and talks on it as soon as the seat
 reports it, so pressing it once creates one session and starts the conversation.
 
+**With voice mode.** Voice mode (doc 91 of the Dimension repository) is the reply hook that speaks any session's
+replies from the composer's speaker toggle; the Face is its cascaded-loop front. While a conversation is open for a
+session the voice desk is silent for THAT session, because the conversation's own voice carries its audio and its face frames;
+every other session keeps the desk's behaviour. The kit's `useVoiceConversation` tells the desk when it starts and stops, so
+this pack does nothing for it.
+
 ## The head asset (an SDK gap, solved by inlining)
 
 A pack bundle is fetched, hash-checked and `import()`ed from a **Blob URL**, so it has no file path of its own; the
