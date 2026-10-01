@@ -1,82 +1,71 @@
-// Direct input onto the page: every mouse, wheel and key event the human
-// makes becomes a `browser_act` call, sent strictly in order, one at a time.
-// Between calls the queue coalesces what a human produces in bursts, so a
-// flick of the wheel is one scroll, a typed word is one insert, and a sweep
-// of the mouse is only the hover where it came to rest.
+// The human's mouse, wheel and keys on the page: each event goes to the pack's input door (use-browser-stream's `post`), strictly in
+// order, one request in flight. Whatever happens while a request is out waits and goes together in the next one, so a fast sweep of
+// the mouse is a short list, not a request per pixel. Between neighbours the queue keeps only what loses nothing: of two moves the
+// later, of two wheels their sum.
 import { useCallback, useEffect, useRef } from "react";
-import type { BrowserAction, BrowserState } from "../../src/contracts";
-import { type BrowserClient, failureText } from "./browser-client";
+import { MAX_INPUT_BATCH, MAX_INPUT_TEXT } from "../../src/contracts";
+import type { PageInputEvent } from "../../src/input";
+import { failureText } from "./browser-client";
 
-/** The runtime's ceiling for one scroll delta and one inserted string. */
 const MAX_DELTA = 5000;
-const MAX_INSERT = 4096;
+const clampDelta = (value: number) => Math.max(-MAX_DELTA, Math.min(MAX_DELTA, value));
 
 export interface PageInput {
-	/** Queue one action; coalesced with the pending tail where that is lossless. */
-	send(action: BrowserAction): void;
+	/** Queue one event; folded into the pending tail where that is lossless. */
+	send(event: PageInputEvent): void;
 	/** Drop everything not yet sent (a tab switch, a task taking over). */
 	reset(): void;
 }
 
 export interface PageInputOptions {
-	readonly onState: (state: BrowserState, action: BrowserAction) => void;
-	readonly onError: (message: string, action: BrowserAction) => void;
+	/** Sends one batch; rejects with the reason it was refused. */
+	readonly post: (events: readonly PageInputEvent[]) => Promise<void>;
+	/** A batch that changed something was refused. A refused move or wheel is invisible and the next one supersedes it. */
+	readonly onError: (message: string) => void;
 }
 
-const clampDelta = (value: number) => Math.max(-MAX_DELTA, Math.min(MAX_DELTA, value));
-
-/** Folds `next` into `last` when the pair means the same as one action. */
-function merge(last: BrowserAction, next: BrowserAction): BrowserAction | null {
-	if (last.kind === "hover" && next.kind === "hover") return next;
-	if (last.kind === "scroll" && next.kind === "scroll") {
-		return { kind: "scroll", deltaX: clampDelta((last.deltaX ?? 0) + (next.deltaX ?? 0)), deltaY: clampDelta((last.deltaY ?? 0) + (next.deltaY ?? 0)) };
+/** Folds `next` into `last` when the pair means the same as one event. */
+function merge(last: PageInputEvent, next: PageInputEvent): PageInputEvent | null {
+	if (last.kind === "mouse" && last.type === "move" && next.kind === "mouse" && next.type === "move") return next;
+	if (last.kind === "wheel" && next.kind === "wheel" && last.x === next.x && last.y === next.y && last.modifiers === next.modifiers) {
+		return { ...next, deltaX: clampDelta(last.deltaX + next.deltaX), deltaY: clampDelta(last.deltaY + next.deltaY) };
 	}
-	if (last.kind === "insert" && next.kind === "insert") {
-		const text = `${last.text ?? ""}${next.text ?? ""}`;
-		return text.length <= MAX_INSERT ? { kind: "insert", text } : null;
-	}
+	if (last.kind === "text" && next.kind === "text" && last.text.length + next.text.length <= MAX_INPUT_TEXT) return { kind: "text", text: last.text + next.text };
 	return null;
 }
 
-export function usePageInput(client: BrowserClient, browserId: string | null, options: PageInputOptions): PageInput {
-	const queueRef = useRef<BrowserAction[]>([]);
+const quiet = (event: PageInputEvent) => event.kind === "wheel" || (event.kind === "mouse" && event.type === "move");
+
+export function usePageInput(options: PageInputOptions): PageInput {
+	const queueRef = useRef<PageInputEvent[]>([]);
 	const busyRef = useRef(false);
-	const boundRef = useRef(browserId);
-	boundRef.current = browserId;
 	const optionsRef = useRef(options);
 	optionsRef.current = options;
-
-	useEffect(() => {
-		queueRef.current = [];
-	}, [browserId]);
 
 	const drain = useCallback(async () => {
 		if (busyRef.current) return;
 		busyRef.current = true;
 		try {
-			for (let action = queueRef.current.shift(); action !== undefined; action = queueRef.current.shift()) {
-				const bound = boundRef.current;
-				if (bound === null) break;
+			while (queueRef.current.length > 0) {
+				const batch = queueRef.current.splice(0, MAX_INPUT_BATCH);
 				try {
-					const next = await client.act(bound, action);
-					if (boundRef.current === bound) optionsRef.current.onState(next, action);
+					await optionsRef.current.post(batch);
 				} catch (cause) {
-					// A missed hover is invisible and the next one supersedes it.
-					if (boundRef.current === bound && action.kind !== "hover") optionsRef.current.onError(failureText(cause), action);
+					if (!batch.every(quiet)) optionsRef.current.onError(failureText(cause));
 				}
 			}
 		} finally {
 			busyRef.current = false;
 		}
-	}, [client]);
+	}, []);
 
 	const send = useCallback(
-		(action: BrowserAction) => {
+		(event: PageInputEvent) => {
 			const queue = queueRef.current;
 			const last = queue[queue.length - 1];
-			const merged = last === undefined ? null : merge(last, action);
+			const merged = last === undefined ? null : merge(last, event);
 			if (merged !== null) queue[queue.length - 1] = merged;
-			else queue.push(action.kind === "scroll" ? { ...action, deltaX: clampDelta(action.deltaX ?? 0), deltaY: clampDelta(action.deltaY ?? 0) } : action);
+			else queue.push(event.kind === "wheel" ? { ...event, deltaX: clampDelta(event.deltaX), deltaY: clampDelta(event.deltaY) } : event);
 			void drain();
 		},
 		[drain],
@@ -85,6 +74,8 @@ export function usePageInput(client: BrowserClient, browserId: string | null, op
 	const reset = useCallback(() => {
 		queueRef.current = [];
 	}, []);
+
+	useEffect(() => reset, [reset]);
 
 	return { send, reset };
 }

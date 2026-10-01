@@ -17,7 +17,7 @@ import { BlankTab, StartPage } from "./start-page";
 import { TabStrip } from "./tab-strip";
 import { PublishBar } from "./publish-bar";
 import { type OmniboxHandle, Toolbar } from "./toolbar";
-import { useBrowserPoll } from "./use-browser-poll";
+import { useBrowserStream } from "./use-browser-stream";
 import { usePageInput } from "./use-page-input";
 
 interface Notice {
@@ -79,14 +79,15 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 	const watchedPublishRef = useRef<string | null>(null);
 	const [dismissedPublish, setDismissedPublish] = useState<string | null>(null);
 
-	const poll = useBrowserPoll(client, browserId, annotating);
-	const state = poll.state ?? opened;
+	const stream = useBrowserStream(client, browserId, annotating);
+	const state = stream.state ?? opened;
 	const task = state?.task ?? null;
 	const taskRunning = task?.status === "running";
 	// An agent drives: no input, no tab ops.
 	const locked = taskRunning;
 	const loading = (state?.loading ?? false) || navPending > 0;
-	const viewport = state?.viewport ?? { width: 1280, height: 800 };
+	// The size the newest picture was taken at, so a click maps exactly even in the moment a resize is in flight.
+	const viewport = stream.picture?.viewport ?? state?.viewport ?? { width: 1280, height: 800 };
 
 	const say = useCallback((tone: Notice["tone"], text: string) => setNotice({ id: Date.now(), tone, text }), []);
 	useEffect(() => {
@@ -176,22 +177,20 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 
 	const live = (bound: string) => mountedRef.current && boundRef.current === bound;
 
-	// A navigation this View started shows as loading at once: the runtime only
-	// reports `loading` on the next poll, which lands after the action returns.
-	const input = usePageInput(client, browserId, {
-		onState: (next, action) => {
-			if (NAVIGATION[action.kind]) setNavPending(count => Math.max(0, count - 1));
-			poll.push(next);
-			poll.refresh();
-		},
-		onError: (message, action) => {
-			if (NAVIGATION[action.kind]) setNavPending(count => Math.max(0, count - 1));
-			// Back/forward at the end of history is a no-op, not a failure worth a toast.
-			if ((action.kind === "back" || action.kind === "forward") && /history/i.test(message)) return;
-			say("error", message);
-			poll.refresh();
-		},
-	});
+	// The human's mouse, wheel and keys go straight to the page on the direct channel (stream.post), never through a tool call.
+	const input = usePageInput({ post: stream.post, onError: message => say("error", message) });
+
+	/** One state read now, for the moments an action just changed it (the stream would show it within a quarter second anyway). */
+	const pullState = () => {
+		const bound = browserId;
+		if (bound === null) return;
+		client.state(bound).then(
+			next => {
+				if (live(bound)) stream.push(next);
+			},
+			() => undefined,
+		);
+	};
 
 	const open = async (url: string) => {
 		setOpening(true);
@@ -234,9 +233,7 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 				sentSizeRef.current = { width, height };
 				client.viewport(bound, width, height).then(
 					next => {
-						if (!live(bound)) return;
-						poll.push(next);
-						poll.refresh();
+						if (live(bound)) stream.push(next);
 					},
 					cause => {
 						if (live(bound)) say("error", `Couldn't resize the page: ${failureText(cause)}`);
@@ -256,18 +253,37 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 		if (bound === null || locked) return;
 		try {
 			const next = await client.tab(bound, op, options);
-			if (!live(bound)) return;
-			poll.push(next);
-			poll.refresh();
+			if (live(bound)) stream.push(next);
 		} catch (cause) {
 			if (live(bound)) say("error", failureText(cause));
 		}
 	};
 
+	// An address-bar action (navigate, back, forward, reload, stop): rare, and it must settle, so it stays a tool call. A navigation this
+	// View started shows as loading at once; the browser only reports `loading` once the page has started.
 	const act = (action: BrowserAction) => {
-		if (browserId === null || locked) return;
-		if (NAVIGATION[action.kind]) setNavPending(count => count + 1);
-		input.send(action);
+		const bound = browserId;
+		if (bound === null || locked) return;
+		const navigation = NAVIGATION[action.kind] === true;
+		if (navigation) setNavPending(count => count + 1);
+		const settled = () => {
+			if (navigation) setNavPending(count => Math.max(0, count - 1));
+		};
+		client.act(bound, action).then(
+			next => {
+				if (!live(bound)) return;
+				settled();
+				stream.push(next);
+			},
+			cause => {
+				if (!live(bound)) return;
+				settled();
+				const message = failureText(cause);
+				// Back/forward at the end of history is a no-op, not a failure worth a toast.
+				if ((action.kind === "back" || action.kind === "forward") && /history/i.test(message)) return;
+				say("error", message);
+			},
+		);
 	};
 
 	const navigate = (url: string) => {
@@ -281,7 +297,7 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 		setCancelling(true);
 		try {
 			await client.cancelTask(bound);
-			if (live(bound)) poll.refresh();
+			if (live(bound)) pullState();
 		} catch (cause) {
 			if (live(bound)) say("error", failureText(cause));
 		} finally {
@@ -316,10 +332,10 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 	// A browser that ends by itself — the agent finished, the session ended — is a
 	// normal ending, not a failure: back to the start page with one calm line.
 	useEffect(() => {
-		if (poll.connection !== "gone") return;
+		if (stream.connection !== "gone") return;
 		setClosed(true);
 		leave();
-	}, [poll.connection]);
+	}, [stream.connection]);
 
 	const enterAnnotation = async () => {
 		const bound = browserId;
@@ -328,7 +344,7 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 		setSketch(EMPTY_SKETCH);
 		setStill(null);
 		try {
-			const frame = await client.frame(bound, "png");
+			const frame = await client.frame(bound);
 			if (live(bound)) setStill(frame);
 		} catch (cause) {
 			if (!live(bound)) return;
@@ -337,14 +353,11 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 		}
 	};
 
-	const refreshPoll = poll.refresh;
 	const exitAnnotation = useCallback(() => {
 		setAnnotating(false);
 		setSketch(EMPTY_SKETCH);
 		setStill(null);
-		// The loop is on its slow, frozen cadence: pull the first live frame now.
-		window.setTimeout(refreshPoll, 0);
-	}, [refreshPoll]);
+	}, []);
 
 	const forgetAnnotation = async () => {
 		const bound = browserId;
@@ -445,7 +458,6 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 
 	const parts = addressParts(state.url);
 	const blank = parts.blank && !state.loading && !annotating;
-	const frame = annotating ? (still ?? poll.frame) : poll.frame;
 	const mode = annotating ? "annotate" : locked ? "locked" : "live";
 	const label = `${tabLabel(state.title, state.url)}${state.url.length > 0 ? ` — ${state.url}` : ""}`;
 	const ended = task !== null && task.status !== "running" && watchedTaskRef.current === task.id && dismissedTask !== task.id;
@@ -483,7 +495,7 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 								client={client}
 								browserId={browserId}
 								publish={publish}
-								onSettled={poll.refresh}
+								onSettled={pullState}
 								onDismiss={() => setDismissedPublish(publish.publishId)}
 							/>
 						)}
@@ -535,13 +547,15 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 					</BlankTab>
 				) : (
 					<PageView
-						frame={frame}
+						frame={still}
+						picture={stream.picture}
+						canvas={stream.canvas}
 						viewport={viewport}
 						mode={mode}
 						tool={tool}
 						sketch={sketch}
 						onSketch={setSketch}
-						onAction={act}
+						onInput={input.send}
 						onResize={onStageResize}
 						label={label}
 						confirming={publish?.status === "awaiting-confirmation" && publish.tabId === state?.activeTabId}
@@ -570,19 +584,19 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 					</div>
 				</div>
 			)}
-				{poll.connection === "reconnecting" && (
+				{stream.connection === "reconnecting" && (
 					<div className="bx-banner" role="status">
 						<span className="bx-tab-spinner" aria-hidden="true" />
 						Reconnecting to the browser…
-						{poll.error !== null && <span className="bx-banner-detail">{poll.error}</span>}
+						{stream.error !== null && <span className="bx-banner-detail">{stream.error}</span>}
 					</div>
 				)}
 
-				{poll.connection === "unapproved" && (
-					<div className="bx-banner bx-banner-paused" role="status" title={poll.error ?? undefined}>
+				{stream.connection === "unapproved" && (
+					<div className="bx-banner bx-banner-paused" role="status" title={stream.error ?? undefined}>
 						<Icon name="pause" size={14} strokeWidth={2} aria-hidden="true" />
 						Live view paused: permission wasn't granted.
-						<button type="button" className="bx-banner-action" onClick={refreshPoll}>
+						<button type="button" className="bx-banner-action" onClick={stream.refresh}>
 							Ask again
 						</button>
 					</div>

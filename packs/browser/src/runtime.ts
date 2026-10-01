@@ -43,12 +43,10 @@ import type {
 	BrowserAnnotation,
 	BrowserEngine,
 	BrowserFrame,
-	UnchangedFrame,
 	BrowserOpenOptions,
 	BrowserRegion,
 	BrowserRuntimePort,
 	BrowserState,
-	FrameFormat,
 	MouseButton,
 	PresetRef,
 	PublishCheck,
@@ -74,7 +72,8 @@ import { BROWSER_ENGINES, MAX_BATCH_STEPS, MAX_EVAL_EXPRESSION_CHARS, MAX_EVAL_R
 import { credentialOrigin, resolveCredential, savedPassword, savedPasswords } from "./credentials.js";
 import { assertEngineAvailable, createEngineDriver } from "./engines/index.js";
 import { launchReader } from "./engines/puppeteer.js";
-import type { EngineDriver, EngineState, EvalOutcome, PageReader, PasswordSource, PerformOutcome, WaitCondition } from "./engines/types.js";
+import type { EngineDriver, EngineState, EvalOutcome, LiveFrame, PageReader, PasswordSource, PerformOutcome, WaitCondition } from "./engines/types.js";
+import { type AdmittedInput, admitInput } from "./input.js";
 import { cropRegion, MAX_FRAME_BYTES } from "./image.js";
 import { type Publication, cancel, confirm, isPending, prepare, publishRecord, requirePending, validateMode, validateRecipe, waitSettled } from "./publish.js";
 import { blockedReason, DEFAULT_READ_CHARS, MAX_READ_CHARS, READ_TIMEOUT_MS, readPolicy, TIMEOUT_REASON } from "./read.js";
@@ -126,6 +125,8 @@ const NAMED_KEYS: Record<string, true> = {
 };
 /** View input that can press the site's own submit; scroll, hover and navigation cannot. */
 const TOUCHING_KINDS: Partial<Record<BrowserAction["kind"], true>> = { click: true, press: true, type: true, insert: true };
+/** The same, for the direct channel: a press, a release, a key or pasted text can press the site's own submit; a move and a wheel cannot. */
+const touchesPage = (event: AdmittedInput): boolean => event.kind !== "wheel" && !(event.kind === "mouse" && event.type === "move");
 
 export interface BrowserRuntimeOptions {
 	/** Profile root; defaults to `$INSO_HOME/browser` else `~/.inso/browser`. */
@@ -186,6 +187,8 @@ interface Entry {
 	frames: FrameRecord[];
 	/** Per-browser serializer: page reads and actions run in order. */
 	queue: Promise<unknown>;
+	/** The human's input batches, in order, apart from `queue`: input never waits for page work. */
+	inputQueue: Promise<unknown>;
 	closed: boolean;
 	/** The running or most recent task. */
 	task: TaskRun | null;
@@ -358,7 +361,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			entry = {
 				browserId: randomBytes(24).toString("base64url"),
 				profile, engine, viewport: initial.viewport, documentId: initial.documentId,
-				driver, release, revision: 1, frames: [], queue: Promise.resolve(), closed: false,
+				driver, release, revision: 1, frames: [], queue: Promise.resolve(), inputQueue: Promise.resolve(), closed: false,
 				task: null, worker: null, publish: null, secrets: new Set(), logRead: 0, logNoticed: 0,
 			};
 			this.byId.set(entry.browserId, entry);
@@ -474,25 +477,49 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		return await this.serialize(this.require(browserId), async (entry) => this.redact(entry, await this.buildState(entry)));
 	}
 
+	/** The live picture, for the View's direct channel (stream.ts): the driver's own cast, never queued behind page work. */
+	watchFrames(browserId: string, onFrame: (frame: LiveFrame) => void): () => void {
+		return this.require(browserId).driver.watchFrames(onFrame);
+	}
+
+	/** `state`, but NOT queued behind page work: the live view keeps reading it while a navigation or action is in flight. */
+	async liveState(browserId: string): Promise<BrowserState> {
+		const entry = this.require(browserId);
+		return this.redact(entry, await this.buildState(entry));
+	}
+
 	/**
-	 * `png` (default): a fresh capture, retained so it can be annotated.
-	 * `jpeg`: the live screencast's newest frame, straight from memory. It is
-	 * deliberately NOT queued behind page work — the live view keeps moving
-	 * while a navigation or action is in flight — and is not annotatable.
-	 * `since`: the frameId the caller already shows; while it is still the
-	 * newest, only the state comes back — a still page costs no pixels.
+	 * The human's own mouse, wheel and keys on the active tab (the View's direct channel). Like the live picture it is NOT queued behind
+	 * page work, so a click never waits for a navigation, but batches apply one after another. The rules `act` has for the View hold:
+	 * a task owns its page, and a click or key on the page a publish waits on marks the publish touched.
 	 */
-	async frame(browserId: string, format?: FrameFormat): Promise<BrowserFrame>;
-	async frame(browserId: string, format: "jpeg", since: string | undefined): Promise<BrowserFrame | UnchangedFrame>;
-	async frame(browserId: string, format: FrameFormat = "png", since?: string): Promise<BrowserFrame | UnchangedFrame> {
-		if (format === "jpeg") {
-			const entry = this.require(browserId);
-			const live = await entry.driver.liveFrame();
-			const state = this.redact(entry, await this.buildState(entry));
-			if (since !== undefined && since === live.id) return { state, frameId: live.id, unchanged: true };
-			return { state, frameId: live.id, mimeType: "image/jpeg", data: live.data, capturedAt: live.capturedAt };
-		}
-		if (format !== "png") fail("bad_format", `format must be "jpeg" or "png"`);
+	async input(browserId: string, events: unknown): Promise<void> {
+		const entry = this.require(browserId);
+		const admitted = admitInput(events, entry.viewport);
+		const run = async (): Promise<void> => {
+			if (entry.closed) fail("unknown_browser", "unknown or already closed browserId");
+			refuseWhileBusy(entry, "app");
+			const pinned = isPending(entry.publish) && admitted.some(touchesPage) ? entry.publish : null;
+			// Another tab is not the page being confirmed; an unreadable state counts as the pinned one.
+			const touching = pinned !== null && ((await entry.driver.state().catch(() => null))?.activeTabId ?? pinned.record.tabId) === pinned.record.tabId ? pinned : null;
+			try {
+				await entry.driver.input(admitted);
+				if (touching) touching.touchedWhilePending = true;
+			} catch (error) {
+				if (!(error instanceof ActionNotDispatched)) {
+					if (touching) touching.touchedWhilePending = true;
+					entry.revision += 1;
+				}
+				throw error;
+			}
+		};
+		const next = entry.inputQueue.then(run, run);
+		entry.inputQueue = next.catch(() => undefined);
+		return next;
+	}
+
+	/** A fresh PNG capture, retained so it can be annotated. */
+	async frame(browserId: string): Promise<BrowserFrame> {
 		return await this.serialize(this.require(browserId), async (entry) => {
 			const before = await this.refreshState(entry);
 			const revision = entry.revision;

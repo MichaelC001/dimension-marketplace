@@ -1,4 +1,5 @@
 import type { ConnectionObservations } from "./connection.js";
+import type { LiveFrame } from "./engines/types.js";
 
 /** What the browser IS. `abp` and `browser4` are refused with the reason (see engines/refused.ts). */
 export const BROWSER_ENGINES = ["chromium", "chrome-relay", "abp", "browser4"] as const;
@@ -71,8 +72,9 @@ export interface TabInfo {
 }
 export type TabOp = "new" | "activate" | "close";
 export interface TabRequest { op: TabOp; tabId?: string; url?: string }
-/** `jpeg`: the latest live screencast frame (not annotatable). `png`: a fresh capture, retained for annotation. */
-export type FrameFormat = "jpeg" | "png";
+/** The most events one input batch carries on the direct channel, and the longest text one `text` event inserts. */
+export const MAX_INPUT_BATCH = 64;
+export const MAX_INPUT_TEXT = 4_096;
 /** `failed`: provably nothing happened. `unknown`: dispatched, then errored — may have taken effect. */
 export type ActionStatus = "completed" | "failed" | "unknown";
 /**
@@ -308,18 +310,13 @@ export interface BrowserState {
   /** The last five JavaScript dialogs the browser answered on the active tab, oldest first. */
   dialogs: HandledDialog[];
 }
+/** A fresh full-quality capture, retained so it can be annotated (`browser_frame`). Live pictures do not come this way: they ride the direct channel (stream.ts). */
 export interface BrowserFrame {
   state: BrowserState;
   frameId: string;
-  mimeType: "image/png" | "image/jpeg";
+  mimeType: "image/png";
   data: string;
   capturedAt: string;
-}
-/** The live frame is still the one the caller named in `since`: no pixels are resent. */
-export interface UnchangedFrame {
-  state: BrowserState;
-  frameId: string;
-  unchanged: true;
 }
 export interface BrowserRegion { x: number; y: number; width: number; height: number }
 export interface BrowserAnnotation {
@@ -359,8 +356,22 @@ export type ReadResult =
 export interface BrowserRuntimePort {
   open(options: BrowserOpenOptions): Promise<BrowserState>;
   state(browserId: string): Promise<BrowserState>;
-  frame(browserId: string, format?: FrameFormat): Promise<BrowserFrame>;
-  frame(browserId: string, format: "jpeg", since: string | undefined): Promise<BrowserFrame | UnchangedFrame>;
+  /** A fresh PNG capture of the active tab, retained for `annotate`. */
+  frame(browserId: string): Promise<BrowserFrame>;
+  /**
+   * The live picture of the active tab, as the View shows it: `onFrame` gets a JPEG whenever the page changes (and one
+   * at once for a page that is not changing), following the active tab, until the returned function is called. Never
+   * queued behind page work. Throws `unknown_browser`.
+   */
+  watchFrames(browserId: string, onFrame: (frame: LiveFrame) => void): () => void;
+  /** The state as `state` answers it, but NOT queued behind page work: the live view keeps reading it while a navigation or action is in flight. */
+  liveState(browserId: string): Promise<BrowserState>;
+  /**
+   * The human's own mouse, wheel and keys, applied to the active tab in order. Admitted and bounded first (`bad_input`), refused
+   * while a task owns the page (`task_running`), and a click or key while a publish waits for the Post marks it touched, as `act` does.
+   * Not queued behind page work, so it never waits for a navigation.
+   */
+  input(browserId: string, events: unknown): Promise<void>;
   tab(browserId: string, request: TabRequest, caller?: ToolCaller): Promise<BrowserState>;
   resize(browserId: string, viewport: Viewport, scale?: number): Promise<BrowserState>;
   snapshot(browserId: string): Promise<{ state: BrowserState; text: string }>;

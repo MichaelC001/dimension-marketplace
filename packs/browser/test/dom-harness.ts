@@ -50,6 +50,9 @@ export async function mount(element: ReactElement): Promise<Dom> {
 	const { window } = parseHTML('<!doctype html><html><body><div id="root"></div></body></html>');
 	// An address bar selects its text on focus.
 	Object.assign(window.HTMLInputElement.prototype, { select() {} });
+	// A selected tab scrolls itself into view, and the page schedules its mouse moves per display frame; linkedom has neither.
+	Object.assign(window.HTMLElement.prototype, { scrollIntoView() {} });
+	Object.assign(window, { requestAnimationFrame: (callback: (at: number) => void) => setTimeout(() => callback(performance.now()), 16), cancelAnimationFrame: (handle: number) => clearTimeout(handle) });
 	// A type-less <input> is a text input. linkedom says `null`, and React removes a type
 	// attribute it was not given on every re-render, so an input that re-renders on focus
 	// (an address bar) would stop being a text input to React's change detection.

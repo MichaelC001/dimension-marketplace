@@ -7,6 +7,7 @@
  *  first page; tabs show no favicon.
  */
 import { afterEach, expect, test } from "bun:test";
+import type { LiveFrame } from "../src/engines/types";
 import {
 	BROWSER_TEST_TIMEOUT_MS,
 	createRuntime,
@@ -135,61 +136,29 @@ describeWithChrome("tabs", () => {
 	);
 
 	test(
-		"a jpeg live frame returns within 50 ms once warm, and keeps following navigation after navigation",
-		async () => {
-			const fixture = startFixture();
-			const { runtime } = await createRuntime();
-			const { browserId } = await runtime.open({ profile: "tabs-live", viewport: VIEWPORT });
-			await perform(runtime, browserId, { kind: "navigate", url: fixture.url("/page2") });
-			const warm = await runtime.frame(browserId, "jpeg");
-			expect(warm.mimeType).toBe("image/jpeg");
-			// JPEG SOI marker: the bytes are a real JPEG, not a relabelled PNG.
-			expect(Buffer.from(warm.data, "base64").subarray(0, 2)).toEqual(Buffer.from([0xff, 0xd8]));
-
-			const started = performance.now();
-			const again = await runtime.frame(browserId, "jpeg");
-			expect(performance.now() - started).toBeLessThan(50);
-			expect(again.state.url).toBe(fixture.url("/page2"));
-
-			// Several pages in a row, cross-site among them (a renderer swap): the
-			// cast must keep flowing, not stop after its first few frames.
-			let previous = again;
-			for (const next of [fixture.url("/signup", "localhost"), fixture.url("/"), fixture.url("/opener", "localhost")]) {
-				await perform(runtime, browserId, { kind: "navigate", url: next });
-				const moved = await waitUntil(
-					`the live frame to show ${next}`,
-					() => runtime.frame(browserId, "jpeg"),
-					(frame) => frame.data !== previous.data && frame.state.url === next,
-					5_000,
-				);
-				expect(moved.frameId).not.toBe(previous.frameId);
-				previous = moved;
-			}
-		},
-		BROWSER_TEST_TIMEOUT_MS,
-	);
-
-	test(
-		"while a slow navigation is in flight, live frames and state still answer at once and report loading",
+		"while a slow navigation is in flight, the live state still answers at once and reports loading, and the live picture keeps coming",
 		async () => {
 			const fixture = startFixture();
 			const { runtime } = await createRuntime();
 			const { browserId } = await runtime.open({ profile: "tabs-inflight", viewport: VIEWPORT });
 			await perform(runtime, browserId, { kind: "navigate", url: fixture.url("/page2") });
-			await runtime.frame(browserId, "jpeg");
+			const frames: LiveFrame[] = [];
+			const stop = runtime.watchFrames(browserId, (frame) => frames.push(frame));
+			await waitUntil("the first picture", async () => frames.length, (count) => count >= 1);
 
 			const landing = perform(runtime, browserId, { kind: "navigate", url: fixture.url("/slow") });
 			// Once the request is on the wire, the navigation is certainly still pending.
 			await waitUntil("the slow request to arrive", () => fixture.hits("/slow"), (hits) => hits === 1);
 			const started = performance.now();
-			const during = await runtime.frame(browserId, "jpeg");
+			const during = await runtime.liveState(browserId);
 			expect(performance.now() - started).toBeLessThan(SLOW_PAGE_MS / 4);
-			expect(during.state.loading).toBe(true);
+			expect(during.loading).toBe(true);
 			// Still the committed document until the new one arrives.
-			expect(during.state.url).toBe(fixture.url("/page2"));
+			expect(during.url).toBe(fixture.url("/page2"));
 
 			expect((await landing).url).toBe(fixture.url("/slow"));
 			await waitUntil("loading to clear", () => runtime.state(browserId), (state) => !state.loading);
+			stop();
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);

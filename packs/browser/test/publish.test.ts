@@ -746,6 +746,29 @@ describeWithChrome("browser_publish", () => {
 	);
 
 	test(
+		"the human clicking the site's own Post on the direct channel, while the bar waits, is the same: the bar's Post is unknown and submits nothing more; hover and wheel on it change nothing",
+		async () => {
+			const s = await session("pub-touched-direct");
+			const parked = await post(s, "nav");
+			const box = await s.runtime.inspect(s.browserId, "#post");
+			if (!box.found) throw new Error("no #post on the page");
+			const x = box.rect.x + box.rect.width / 2;
+			const y = box.rect.y + box.rect.height / 2;
+
+			await s.runtime.input(s.browserId, [{ kind: "mouse", type: "move", x, y }, { kind: "wheel", x, y, deltaX: 0, deltaY: 10 }]);
+			expect(await record(s, parked.publishId)).toMatchObject({ status: "awaiting-confirmation" });
+
+			await s.runtime.input(s.browserId, [{ kind: "mouse", type: "down", x, y, buttons: 1 }, { kind: "mouse", type: "up", x, y }]);
+			await s.fixture.reached("/landed");
+			const confirmed = await s.call("browser_publish_confirm", { browserId: s.browserId, publishId: parked.publishId }, "app");
+
+			expect(confirmed.structuredContent).toMatchObject({ status: "unknown", error: TOUCHED });
+			expect(s.fixture.submissions()).toHaveLength(1);
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
 		"a site that keeps the text after its own submit: once the human pressed it while waiting, the bar's Post never clicks submit again",
 		async () => {
 			const s = await session("pub-touched-stay");
