@@ -1,15 +1,15 @@
 # Viewer
 
 A tabbed document viewer beside the conversation (an artifactory, doc 45): images,
-PDF, HTML, Markdown, Word, PowerPoint, Excel and plain text, rendered offline in a
-sandboxed frame. The View is `app/view` (built to `app/dist`); the MCP server is
+PDF, HTML, Markdown, Word, PowerPoint, Excel, plain text, audio and video, rendered
+offline in a sandboxed frame. The View is `app/view` (built to `app/dist`); the MCP server is
 `src/` (bundled to `app/server.mjs`). Both built files are committed.
 
 ## Tools
 
 | Tool | Who calls it | Does |
 |---|---|---|
-| `view_file { path, filename?, annotate? }` | the model, or the host on a click | Resolves `path` through the fence and mounts the View on it. `annotate: true` opens the file in the View's annotate mode (marks on a picture, comments on text) and is ignored for a kind with nothing to annotate. |
+| `view_file { path, filename?, annotate? }` | the model, or the host on a click | Resolves `path` through the fence and mounts the View on it. `annotate: true` opens the file in the View's annotate mode (marks on a picture, comments on text, a pick of an element on a page, a moment or a stretch on a recording) and is ignored for a kind with nothing to annotate. |
 | `read_file_chunk { path, offset, length }` | the View only (`visibility: ["app"]`) | Streams a file's bytes to the View, at most 4 MiB a call. |
 
 ## What `opens` declares
@@ -27,13 +27,60 @@ to show an Open button and to name the handler, so nothing outside this pack har
 | PDF, Word, PowerPoint, Excel | pdf, docx, pptx, xlsx, xlsm | `text` |
 | Markdown | md, markdown, mdx | `text` |
 | Text and code | txt, log, csv, tsv, json, yaml, toml, xml, css, js, ts, py, rs, go, java, c, cpp, sh, sql and the like | `text` |
-| HTML | html, htm, xhtml | none: the page is drawn in a `sandbox=""` frame nothing outside can select in |
+| HTML | html, htm, xhtml | `element` |
+| Audio | mp3, wav, flac, ogg, oga, opus, m4a, m4b, aac, weba, mka | `timeline` |
+| Video | mp4, m4v, mov, webm, ogv, mkv | `timeline` |
 
-`annotates` is a promise the View keeps: `marks` and `text` are the two models the
-View's annotate layer implements today (`@dimension/mcp-app-kit/annotate`, doc 85).
+`annotates` is a promise the View keeps: `marks`, `text`, `element` and `timeline` are the
+four models the View's annotate layer implements (`@dimension/mcp-app-kit/annotate`,
+docs 85 and 88), and the host offers Annotate on a card only for a kind a declared handler
+covers.
 Binaries and archives are not declared: the View shows them as a file card, which is
 not "opening" them. `test/manifest.test.ts` holds the declaration to the SDK validator
 and to the host's own `classifyFile` / `pickHandler`.
+
+## Picking on a page (doc 88)
+
+Pick mode lets a person point at part of a rendered HTML page; each pick joins the next
+message as the element's selector, tag, text, a few attributes, four computed styles and its
+box, with the human's note.
+
+The page is **never run**. The reading frame is `sandbox=""`, as always. Entering Pick mode
+builds a second frame from the same bytes with `sandbox="allow-scripts"` only, whose
+document begins with a Content-Security-Policy that admits exactly one script, the
+viewer's own picker, by its SHA-256, and denies every other script, handler,
+`javascript:` URL, frame, object, base, form and connection. A canary script that the policy
+must refuse runs first; if it ever runs, the picker declines and the reading frame comes
+back with a plain sentence. The picker reports by `postMessage`; the View checks every
+message (sender, origin, a per-mount channel, a closed set of types, exact keys, bounds)
+and draws the outline, label and numbered badges itself. See doc 88 section 2 for why this
+is the design and why the obvious one (reading the page directly) cannot work inside the
+engine's sandbox.
+
+Known limits, stated so nobody is surprised: toggling Pick mode opens the page at its top
+(the script-free reading frame's scroll cannot be read or set; opening with Annotate from a
+card avoids the swap); clicks inside a page's own `<iframe>` go to that frame and cannot be
+picked; shadow-root content picks its host element; an element inside `<head>` is not
+drawn and cannot be picked; a rotated element is outlined by its bounding box; a selector
+that cannot be made unique is flagged with how many elements it matches.
+
+## Recordings (doc 88)
+
+Audio and video play in the viewer: a transport (play, a scrubber, the time, volume, speed),
+keyboard control (Space, arrows, Home/End, `,` and `.` to step a frame), and **Mark** mode:
+`M` marks the moment under the playhead, `I` and `O` (or a drag on the scrubber) mark a
+stretch, each with a note. The request lists the marks in time order; for video, up to four
+marks carry a still of their moment.
+
+* Files are read whole and capped at **64 MiB**; the size is checked before any byte is
+  read, and a larger file says so and offers Copy path.
+* The kind comes from the file's container signature (content beats a wrong name), and a
+  file the viewer cannot decode says so honestly instead of showing a blank player.
+* A waveform is drawn only for an uncompressed WAV whose own header the viewer has verified
+  fits in memory; every other format shows a plain track. A header can lie about how long a
+  recording is, so no other container is ever decoded to draw a picture.
+* A recording that does not report its length is resolved with one seek; if that fails,
+  marks use the time you hear and the transport says so.
 
 ## A click-open is a host-lent, one-file grant
 

@@ -1,8 +1,8 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "viewer",
-	"version": "0.3.0",
-	"description": "A tabbed document viewer beside the conversation: images, PDF, HTML, Markdown, Word, PowerPoint, Excel and plain text, rendered offline inside a sandboxed frame. Ask the agent to open a file and it appears as a tab.",
+	"version": "0.4.0",
+	"description": "A tabbed document viewer beside the conversation: images, PDF, HTML, Markdown, Word, PowerPoint, Excel and plain text, plus audio and video you can play and mark, rendered offline inside a sandboxed frame. Ask the agent to open a file and it appears as a tab.",
 	"author": {
 		"name": "Dimension"
 	},
@@ -14,7 +14,9 @@
 		"pdf",
 		"docx",
 		"pptx",
-		"xlsx"
+		"xlsx",
+		"audio",
+		"video"
 	],
 	"extensions": {
 		"ai.insodimension.dimension": {
@@ -94,6 +96,7 @@
 							"nameArg": "filename",
 							"ext": ["html", "htm", "xhtml"],
 							"mime": ["text/html", "application/xhtml+xml"],
+							"annotates": ["element"],
 							"label": "Viewer"
 						},
 						{
@@ -122,6 +125,24 @@
 								"application/sql"
 							],
 							"annotates": ["text"],
+							"label": "Viewer"
+						},
+						{
+							"tool": "view_file",
+							"pathArg": "path",
+							"nameArg": "filename",
+							"ext": ["mp3", "wav", "flac", "ogg", "oga", "opus", "m4a", "m4b", "aac", "weba", "mka"],
+							"mime": ["audio/mpeg", "audio/wav", "audio/x-wav", "audio/flac", "audio/x-flac", "audio/ogg", "audio/mp4", "audio/x-m4a", "audio/aac", "audio/webm", "audio/x-matroska"],
+							"annotates": ["timeline"],
+							"label": "Viewer"
+						},
+						{
+							"tool": "view_file",
+							"pathArg": "path",
+							"nameArg": "filename",
+							"ext": ["mp4", "m4v", "mov", "webm", "ogv", "mkv"],
+							"mime": ["video/mp4", "video/x-m4v", "video/quicktime", "video/webm", "video/ogg", "video/x-matroska"],
+							"annotates": ["timeline"],
 							"label": "Viewer"
 						}
 					]

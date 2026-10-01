@@ -22,6 +22,12 @@ export interface MountContext {
 	/** OPTIONAL. Ask the host to open an http(s) link. A renderer must never let
 	 *  a document navigate the frame itself; without this, links stay inert. */
 	readonly openLink?: (url: string) => void;
+	/**
+	 * OPTIONAL. Aborted when the pane no longer wants this mount (the tab was closed or reloaded while `mount`
+	 * was still waiting). A renderer that waits on something slow, like a recording opening, gives up at once
+	 * and lets go of what it made, instead of holding it until the wait runs out.
+	 */
+	readonly signal?: AbortSignal;
 }
 
 export interface Mounted {

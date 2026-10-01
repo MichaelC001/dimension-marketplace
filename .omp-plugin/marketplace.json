@@ -929,7 +929,7 @@
 			"title": "Swiss Knife",
 			"icon": "hammer",
 			"description": "Small quality-of-life tools for the agent. `present` shows you a file (an image, a PDF, a Word file, a deck, a sheet) as a card in the thread that opens in the viewer, where you can annotate it.",
-			"version": "0.1.0",
+			"version": "0.1.1",
 			"author": {
 				"name": "Dimension"
 			},
@@ -1071,8 +1071,8 @@
 			"pluginId": "viewer",
 			"title": "Viewer",
 			"icon": "file",
-			"description": "A tabbed document viewer beside the conversation: images, PDF, HTML, Markdown, Word, PowerPoint, Excel and plain text, rendered offline inside a sandboxed frame. Ask the agent to open a file and it appears as a tab.",
-			"version": "0.3.0",
+			"description": "A tabbed document viewer beside the conversation: images, PDF, HTML, Markdown, Word, PowerPoint, Excel and plain text, plus audio and video you can play and mark, rendered offline inside a sandboxed frame. Ask the agent to open a file and it appears as a tab.",
+			"version": "0.4.0",
 			"author": {
 				"name": "Dimension"
 			},
@@ -1087,7 +1087,9 @@
 				"pdf",
 				"docx",
 				"pptx",
-				"xlsx"
+				"xlsx",
+				"audio",
+				"video"
 			],
 			"channel": "canary"
 		},

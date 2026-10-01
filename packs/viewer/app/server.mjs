@@ -31662,7 +31662,8 @@ var VIEWER_VIEW_URI = "ui://viewer/index.html";
 var TAB_META_KEY = "ai.insodimension/tab";
 var ANNOTATE_META_KEY = "ai.insodimension.viewer/annotate";
 var MAX_CHUNK_BYTES = 4 * 1024 * 1024;
-var VIEWER_KINDS = ["image", "pdf", "html", "markdown", "docx", "pptx", "xlsx", "text", "binary"];
+var MAX_MEDIA_BYTES = 64 * 1024 * 1024;
+var VIEWER_KINDS = ["image", "pdf", "html", "markdown", "docx", "pptx", "xlsx", "text", "audio", "video", "binary"];
 var viewedFileSchema = external_exports.object({
   path: external_exports.string().min(1),
   filename: external_exports.string().min(1),
@@ -31980,12 +31981,97 @@ function sniff(head) {
   if (startsWith(head, [208, 207, 17, 224, 161, 177, 26, 225])) return "binary";
   return void 0;
 }
+var audio = (mime) => ({ kind: "audio", mime });
+var video = (mime) => ({ kind: "video", mime });
+var ISO_AUDIO_BRANDS = { "M4A ": true, "M4B ": true, "M4P ": true, "F4A ": true };
+var ISO_GENERIC_BRANDS = { isom: true, iso2: true, iso3: true, iso4: true, iso5: true, iso6: true, mp41: true, mp42: true };
+var ISO_VIDEO_BRANDS = {
+  avc1: true,
+  dash: true,
+  "M4V ": true,
+  M4VH: true,
+  M4VP: true,
+  "F4V ": true,
+  mmp4: true,
+  MSNV: true,
+  XAVC: true
+};
+var QUICKTIME_ATOMS = { moov: true, mdat: true, wide: true, free: true, skip: true };
+var text4 = (head, at) => String.fromCharCode(...head.subarray(at, at + 4));
+var isIn = (table, key) => Object.hasOwn(table, key);
+var BITRATES_V1_L1 = [32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448];
+var BITRATES_V1_L2 = [32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384];
+var BITRATES_V1_L3 = [32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320];
+var BITRATES_V2_L1 = [32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256];
+var BITRATES_V2_L2_L3 = [8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160];
+var MPEG_RATES = { 3: [44100, 48e3, 32e3], 2: [22050, 24e3, 16e3], 0: [11025, 12e3, 8e3] };
+function mpegFrameLength(head, at) {
+  const b1 = head[at + 1];
+  const b2 = head[at + 2];
+  if (head[at] !== 255 || b1 === void 0 || b2 === void 0 || (b1 & 224) !== 224) return void 0;
+  const version2 = b1 >> 3 & 3;
+  const layer = b1 >> 1 & 3;
+  const bitrateIndex = b2 >> 4;
+  const rate = MPEG_RATES[version2]?.[b2 >> 2 & 3];
+  if (version2 === 1 || layer === 0 || bitrateIndex === 0 || bitrateIndex === 15 || rate === void 0) return void 0;
+  const mpeg1 = version2 === 3;
+  const bitrates = layer === 3 ? mpeg1 ? BITRATES_V1_L1 : BITRATES_V2_L1 : layer === 2 ? mpeg1 ? BITRATES_V1_L2 : BITRATES_V2_L2_L3 : mpeg1 ? BITRATES_V1_L3 : BITRATES_V2_L2_L3;
+  const bitrate = bitrates[bitrateIndex - 1] * 1e3;
+  const padding = b2 >> 1 & 1;
+  if (layer === 3) return (Math.floor(12 * bitrate / rate) + padding) * 4;
+  return Math.floor((layer === 1 && !mpeg1 ? 72 : 144) * bitrate / rate) + padding;
+}
+function isMpegAudioFrame(head) {
+  const length = mpegFrameLength(head, 0);
+  if (length === void 0) return false;
+  return head.length === length || mpegFrameLength(head, length) !== void 0 || startsWith(head, ascii("TAG"), length);
+}
+function isId3Tag(head) {
+  const major = head[3] ?? 0;
+  return startsWith(head, ascii("ID3")) && major >= 2 && major <= 4 && head.length >= 10 && [6, 7, 8, 9].every((at) => (head[at] ?? 255) < 128);
+}
+function isAdtsFrame(head) {
+  const b0 = head[0];
+  const b1 = head[1];
+  const b2 = head[2];
+  return b0 === 255 && b1 !== void 0 && b2 !== void 0 && (b1 & 246) === 240 && (b2 >> 2 & 15) < 13;
+}
+function sniffMedia(head, filename) {
+  const extension = fileExtension(filename);
+  if (isId3Tag(head) || isMpegAudioFrame(head)) return audio("audio/mpeg");
+  if (isAdtsFrame(head)) return audio("audio/aac");
+  if (startsWith(head, ascii("RIFF")) && startsWith(head, ascii("WAVE"), 8)) return audio("audio/wav");
+  if (startsWith(head, ascii("fLaC"))) return audio("audio/flac");
+  if (startsWith(head, ascii("OggS")) && head[4] === 0) {
+    const theora = String.fromCharCode(...head.subarray(0, 256)).includes("\x80theora");
+    return extension === "ogv" || theora ? video("video/ogg") : audio("audio/ogg");
+  }
+  if (startsWith(head, [26, 69, 223, 163])) {
+    const matroska = String.fromCharCode(...head.subarray(0, 64)).includes("matroska");
+    if (extension === "weba" || extension === "mka") return audio(matroska ? "audio/x-matroska" : "audio/webm");
+    return video(matroska ? "video/x-matroska" : "video/webm");
+  }
+  if (startsWith(head, ascii("ftyp"), 4)) {
+    const brand = text4(head, 8);
+    const named = extension === "m4a" || extension === "m4b";
+    if (isIn(ISO_AUDIO_BRANDS, brand) || named && isIn(ISO_GENERIC_BRANDS, brand)) return audio("audio/mp4");
+    if (brand === "qt  ") return video("video/quicktime");
+    if (isIn(ISO_GENERIC_BRANDS, brand) || isIn(ISO_VIDEO_BRANDS, brand) || brand.startsWith("3gp") || brand.startsWith("3g2")) return video("video/mp4");
+    if (extension === "mp4" || extension === "m4v") return video("video/mp4");
+    if (extension === "mov") return video("video/quicktime");
+    return void 0;
+  }
+  if (extension === "mov" && isIn(QUICKTIME_ATOMS, text4(head, 4))) return video("video/quicktime");
+  return void 0;
+}
 function detectKind(filename, head, size = head.length) {
   if (size === 0) return "text";
   const extension = fileExtension(filename);
   const named = Object.hasOwn(EXTENSION_KINDS, extension) ? EXTENSION_KINDS[extension] : void 0;
   const sniffed = sniff(head);
   if (sniffed === "image" || sniffed === "pdf") return sniffed;
+  const recording = sniffMedia(head, filename);
+  if (recording !== void 0) return recording.kind;
   if (named !== void 0 && OFFICE_KINDS[named]) {
     if (sniffed === "zip") return named;
   } else if (named === "image") {
@@ -32047,7 +32133,7 @@ async function createViewerServer(options = {}) {
     "view_file",
     {
       title: "View file",
-      description: "Open a file from the user's computer in the viewer beside the conversation, as a tab. Renders images, PDF, HTML, Markdown, Word (.docx), PowerPoint (.pptx), Excel (.xlsx) and plain text; other files show a file card. Pass the ABSOLUTE path of a file you created or were pointed at; opening the same file again refreshes its tab. Only folders the user allowed are readable (their personal vault and the folders in VIEWER_ROOTS); anything else, and secrets such as .env files and keys, is refused with the reason.",
+      description: "Open a file from the user's computer in the viewer beside the conversation, as a tab. Renders images, PDF, HTML, Markdown, Word (.docx), PowerPoint (.pptx), Excel (.xlsx) and plain text, and plays audio and video; other files show a file card. Pass the ABSOLUTE path of a file you created or were pointed at; opening the same file again refreshes its tab. annotate: true opens it ready for the user to mark up (a moment on a recording, an element on a page). Only folders the user allowed are readable (their personal vault and the folders in VIEWER_ROOTS); anything else, and secrets such as .env files and keys, is refused with the reason.",
       inputSchema: {
         path: external_exports.string().min(1).max(4096).describe("Absolute path of the file to open"),
         filename: external_exports.string().min(1).max(255).optional().describe("Name to show in the tab; defaults to the file's own name"),

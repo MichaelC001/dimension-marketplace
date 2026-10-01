@@ -8,21 +8,28 @@
 // `./pane-extras` and is a sibling of the stage inside that wrapper
 // (`data-slot="viewer-stage-frame"`), or the right-hand column after it.
 import type { App } from "@modelcontextprotocol/ext-apps";
+import { cn } from "@fraym/ui/lib/cn";
 import { useEffect, useState } from "react";
-import { loadDocumentBytes, readLimit } from "./document-bytes";
+import { MAX_MEDIA_BYTES } from "../../src/contract";
+import { loadDocumentBytes, readLimit, tooLargeToPlay } from "./document-bytes";
+import { shownMode } from "./annotate-modes";
+import { FOCUS } from "./focus-ring";
 import { formatBytes } from "./format";
+import { failureAction, type FailureStage, isRecording } from "./media-failure";
 import { loadRenderer } from "./renderers";
 import type { Mounted, Theme } from "./renderers/types";
 import { type AnnotateMode, annotationModes, PaneExtras } from "./pane-extras";
 import type { DocTab } from "./tabs";
 import { KIND_LABEL, Toolbar } from "./toolbar";
+import { useCopied } from "./use-copied";
 import { stepZoom } from "./zoom";
 
 type Phase =
 	| { readonly name: "loading"; readonly loaded: number; readonly total: number }
 	| { readonly name: "ready" }
 	| { readonly name: "unavailable" }
-	| { readonly name: "error"; readonly message: string };
+	| { readonly name: "too-large" }
+	| { readonly name: "error"; readonly message: string; readonly stage: FailureStage };
 
 export interface DocPaneProps {
 	readonly app: App;
@@ -42,6 +49,7 @@ export function DocPane({ app, tab, active, theme }: DocPaneProps) {
 	const [page, setPage] = useState(1);
 	const [retry, setRetry] = useState(0);
 	const [mode, setMode] = useState<AnnotateMode | null>(null);
+	const { copied, copy } = useCopied(tab.path);
 	const limit = readLimit(tab);
 	const truncated = limit !== undefined && tab.size > limit;
 	const modes = annotationModes(tab.kind);
@@ -58,12 +66,19 @@ export function DocPane({ app, tab, active, theme }: DocPaneProps) {
 		if (stage === null) return;
 		const controller = new AbortController();
 		let handle: Mounted | undefined;
+		// Where a failure is met, so a recording that cannot be played is told what to do next (`media-failure.ts`).
+		let where: FailureStage = "load";
 		setPhase({ name: "loading", loaded: 0, total: tab.size });
 		setZoom(1);
 		setPage(1);
 
 		(async () => {
 			try {
+				// A recording past the cap is not read at all: the size is the server's, and it is decided before a byte moves.
+				if (tooLargeToPlay(tab)) {
+					setPhase({ name: "too-large" });
+					return;
+				}
 				const renderer = await loadRenderer(tab.kind);
 				if (controller.signal.aborted) return;
 				if (renderer === null) {
@@ -75,6 +90,7 @@ export function DocPane({ app, tab, active, theme }: DocPaneProps) {
 					onProgress: (done, total) => setPhase({ name: "loading", loaded: done, total }),
 				});
 				if (controller.signal.aborted) return;
+				where = "open";
 				handle = await renderer.mount(stage, bytes, {
 					filename: tab.filename,
 					theme,
@@ -82,6 +98,7 @@ export function DocPane({ app, tab, active, theme }: DocPaneProps) {
 					openLink: url => {
 						void app.openLink({ url }).catch(() => undefined);
 					},
+					signal: controller.signal,
 				});
 				if (controller.signal.aborted) {
 					handle.destroy();
@@ -91,7 +108,7 @@ export function DocPane({ app, tab, active, theme }: DocPaneProps) {
 				setPhase({ name: "ready" });
 			} catch (error) {
 				if (controller.signal.aborted) return;
-				setPhase({ name: "error", message: error instanceof Error ? error.message : String(error) });
+				setPhase({ name: "error", message: error instanceof Error ? error.message : String(error), stage: where });
 			}
 		})();
 
@@ -113,8 +130,15 @@ export function DocPane({ app, tab, active, theme }: DocPaneProps) {
 		mounted?.goto?.(next);
 	};
 
+	// A document that did not open has nothing to mark, whatever its kind: no marking help, list or send under its error
+	// card (the human's choice of mode is kept, and comes back if a second try opens it). For a recording the card also
+	// offers what can help: Copy path when a retry cannot (`media-failure.ts`).
+	const modeShown = shownMode(mode, phase.name);
+	const retryAction = { label: "Try again", onClick: () => setRetry(count => count + 1) };
+	const copyAction = { label: copied ? "Path copied" : "Copy path", onClick: copy };
+
 	return (
-		<div className={active ? "flex h-full min-h-0 flex-col" : "hidden"} data-slot="viewer-pane" data-key={tab.key} data-annotate={mode ?? undefined}>
+		<div className={active ? "flex h-full min-h-0 flex-col" : "hidden"} data-slot="viewer-pane" data-key={tab.key} data-annotate={modeShown ?? undefined}>
 			<Toolbar
 				filename={tab.filename}
 				path={tab.path}
@@ -132,11 +156,38 @@ export function DocPane({ app, tab, active, theme }: DocPaneProps) {
 					{phase.name === "unavailable" ? (
 						<Message title="Preview not available" body={`${KIND_LABEL[tab.kind]} files cannot be previewed in this build of the viewer.`} />
 					) : null}
+					{phase.name === "too-large" ? (
+						<Message
+							title="Too large to play here"
+							body={`The viewer plays recordings up to ${formatBytes(MAX_MEDIA_BYTES)}, and this one is ${formatBytes(tab.size)}. Copy its path to open it in a media player.`}
+							action={copyAction}
+						/>
+					) : null}
 					{phase.name === "error" ? (
-						<Message title="This file could not be shown" body={phase.message} action={{ label: "Try again", onClick: () => setRetry(count => count + 1) }} />
+						<Message
+							title="This file could not be shown"
+							body={phase.message}
+							action={isRecording(tab.kind) && failureAction({ where: phase.stage, message: phase.message }) === "copy-path" ? copyAction : retryAction}
+						/>
 					) : null}
 				</div>
-				<PaneExtras app={app} tab={tab} active={active} ready={phase.name === "ready"} frame={frame} mode={mode} onMode={setMode} />
+				<PaneExtras app={app} tab={tab} active={active} ready={phase.name === "ready"} frame={frame} mode={modeShown} onMode={setMode} />
+			</div>
+		</div>
+	);
+}
+
+/**
+ * The pane for a file that did not open (`tab.failure`): its name in the bar, why in one sentence, and the way out when
+ * there is one. Nothing is read and nothing can be marked, so none of a document's machinery is mounted.
+ */
+export function FailedPane({ tab, failure, active }: { readonly tab: DocTab; readonly failure: NonNullable<DocTab["failure"]>; readonly active: boolean }) {
+	const { copied, copy } = useCopied(tab.path);
+	return (
+		<div className={active ? "flex h-full min-h-0 flex-col" : "hidden"} data-slot="viewer-pane" data-key={tab.key} data-failed="">
+			<Toolbar filename={tab.filename} path={tab.path} />
+			<div className="relative min-h-0 flex-1">
+				<Message title="This file could not be opened" body={failure.message} action={failure.copyPath ? { label: copied ? "Path copied" : "Copy path", onClick: copy } : undefined} />
 			</div>
 		</div>
 	);
@@ -154,16 +205,16 @@ function Loading({ loaded, total }: { readonly loaded: number; readonly total: n
 	);
 }
 
-function Message({ title, body, action }: { readonly title: string; readonly body: string; readonly action?: { readonly label: string; readonly onClick: () => void } }) {
+export function Message({ title, body, action }: { readonly title: string; readonly body: string; readonly action?: { readonly label: string; readonly onClick: () => void } }) {
 	return (
 		<div role="alert" className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-fr-bg px-6 text-center">
 			<p className="text-fr-md font-semibold text-fr-text">{title}</p>
-			<p className="max-w-[44ch] text-fr-sm text-fr-text-3 [overflow-wrap:anywhere]">{body}</p>
+			<p className="max-w-[44ch] text-fr-sm text-fr-text-2 [overflow-wrap:anywhere]">{body}</p>
 			{action ? (
 				<button
 					type="button"
 					onClick={action.onClick}
-					className="mt-2 rounded-md border border-fr-border px-3 py-1.5 text-fr-sm text-fr-text-2 hover:bg-fr-surface hover:text-fr-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fr-accent-line"
+					className={cn("mt-2 rounded-md border border-fr-border px-3 py-1.5 text-fr-sm text-fr-text-2 hover:bg-fr-surface hover:text-fr-text", FOCUS)}
 				>
 					{action.label}
 				</button>

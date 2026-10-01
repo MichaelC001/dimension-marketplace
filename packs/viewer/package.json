@@ -1,10 +1,10 @@
 {
   "name": "@dimension/community-viewer",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "author": "Dimension",
-  "description": "A tabbed document viewer MCP App: images, PDF, HTML, Markdown, Word, PowerPoint, Excel and text, parsed offline inside the sandboxed View.",
+  "description": "A tabbed document viewer MCP App: images, PDF, HTML pages, Markdown, Word, PowerPoint, Excel, text, and audio and video recordings, parsed or played offline inside the sandboxed View. Mark up a picture, comment on text, point at an element on a page, or mark a moment on a recording.",
   "engines": {
     "node": ">=22.12.0"
   },
@@ -16,14 +16,18 @@
   },
   "dimension": {
     "name": "viewer",
-    "description": "A tabbed document viewer beside the conversation: images, PDF, HTML, Markdown, Word, PowerPoint, Excel and text.",
+    "description": "A tabbed document viewer beside the conversation: images, PDF, HTML pages, Markdown, Word, PowerPoint, Excel, text, and audio and video recordings you can play and mark.",
     "defaultEnabled": false,
     "category": "artifactory",
     "keywords": [
       "viewer",
       "artifactory",
       "mcp-apps",
-      "documents"
+      "documents",
+      "pages",
+      "audio",
+      "video",
+      "recordings"
     ]
   },
   "files": [
