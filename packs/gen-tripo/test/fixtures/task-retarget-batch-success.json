@@ -1,0 +1,19 @@
+{
+	"kind": "constructed",
+	"source": "https://github.com/VAST-AI-Research/tripo-js-sdk (types/index.d.ts TaskOutput.model_urls; README `anim.output.model_urls`) - the docs page shows no batch body",
+	"response": {
+		"code": 0,
+		"data": {
+			"task_id": "task_def789",
+			"status": "success",
+			"output": {
+				"model_urls": [
+					"https://cdn.tripo3d.ai/output/idle.glb",
+					"https://cdn.tripo3d.ai/output/walk.glb",
+					"https://cdn.tripo3d.ai/output/run.glb"
+				]
+			},
+			"credits_consumed": 30
+		}
+	}
+}

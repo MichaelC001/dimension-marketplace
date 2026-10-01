@@ -1,0 +1,11 @@
+{
+	"kind": "documented",
+	"source": "https://developers.tripo3d.ai/en/docs/account",
+	"response": {
+		"code": 0,
+		"data": {
+			"balance": 10000,
+			"frozen": 200
+		}
+	}
+}

@@ -1,0 +1,75 @@
+{
+	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+	"name": "gen-wavespeed",
+	"version": "0.1.0",
+	"description": "3D generators from WaveSpeed AI behind one key: Tripo P2 and H3.1, Meshy 6 and 7.1, Rodin 2.5, TRELLIS.2 and Hunyuan3D 3 / 3.1, with live option schemas, live prices and a quote before every job",
+	"author": {
+		"name": "Dimension"
+	},
+	"license": "MIT",
+	"keywords": [
+		"generation",
+		"3d",
+		"wavespeed",
+		"tripo",
+		"meshy",
+		"rodin",
+		"trellis",
+		"hunyuan",
+		"provider"
+	],
+	"extensions": {
+		"ai.insodimension.dimension": {
+			"contractVersion": 1,
+			"title": "WaveSpeed generators",
+			"icon": "assets/icon.svg",
+			"category": "connector",
+			"defaultEnabled": false,
+			"entry": "index.ts",
+			"providers": {
+				"generation": [
+					{
+						"id": "wavespeed",
+						"produces": [
+							"model3d"
+						],
+						"runtime": "api"
+					}
+				]
+			},
+			"connect": {
+				"kind": [
+					"form"
+				],
+				"setup": [
+					{
+						"title": "Create a WaveSpeed API key",
+						"detail": "Create a key in the WaveSpeed dashboard. It stays on this machine and is sent only to WaveSpeed (api.wavespeed.ai). The pack reads WaveSpeed's model catalogue and pricing API with it, then submits and polls tasks.",
+						"url": "https://wavespeed.ai/accesskey",
+						"urlLabel": "WaveSpeed access keys"
+					},
+					{
+						"title": "Fund the account",
+						"detail": "WaveSpeed is prepaid: every task is charged against your credit balance, and its Refund Policy refunds failed and timed-out tasks automatically. Each job's price is read from WaveSpeed's pricing API before it is submitted and checked against Dimension's spend caps, so a job over the cap never starts. New accounts (Bronze) are limited to 5 predictions a minute and 2 running tasks at once; a first top-up lifts that to Silver (500 a minute, 300 tasks).",
+						"url": "https://wavespeed.ai/top-up",
+						"urlLabel": "WaveSpeed top-up"
+					},
+					{
+						"title": "Know what leaves this machine",
+						"detail": "Reference images a job uses are uploaded to WaveSpeed's storage, which keeps them for 7 days, under a generated file name. Tripo, Meshy, Hyper3D and Hunyuan are third-party models whose own terms apply (WaveSpeed Terms §6): their outputs are marked commercial-use unknown until those terms are reviewed, and Hunyuan outputs are marked prototype-only. WaveSpeed has no way to cancel a running task, so a job you stop in Dimension still finishes and is billed as quoted."
+					}
+				],
+				"form": [
+					{
+						"id": "apiKey",
+						"label": "WaveSpeed API key",
+						"secret": true,
+						"help": "Used for every WaveSpeed generation job. Create it at wavespeed.ai/accesskey."
+					}
+				],
+				"configTemplate": "connect/key.template.json",
+				"configTarget": "~/.config/dimension-gen-wavespeed/key.json"
+			}
+		}
+	}
+}

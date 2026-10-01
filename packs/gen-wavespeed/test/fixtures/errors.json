@@ -1,0 +1,30 @@
+{
+	"badKey": {
+		"status": 401,
+		"body": {
+			"code": 401,
+			"message": "Invalid API key. Verify the key on your dashboard's API Keys page, or contact support@wavespeed.ai."
+		}
+	},
+	"unknownModel": {
+		"status": 404,
+		"body": {
+			"code": 404,
+			"message": "Model \"no/such-model\" not found. Please check the model identifier."
+		}
+	},
+	"badEnum": {
+		"status": 400,
+		"body": {
+			"code": 400,
+			"message": "field \"texture_quality\" must be one of [\"fast\", \"standard\", \"detailed\", \"extreme\"], got string \"bogus\"; please use one of the allowed values"
+		}
+	},
+	"unknownTask": {
+		"status": 404,
+		"body": {
+			"code": 404,
+			"message": "Prediction not found."
+		}
+	}
+}
