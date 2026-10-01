@@ -16,12 +16,13 @@ the agent mid-edit when it writes a code comment.
   with the tools `view_file` and `read_file_chunk`. It draws images, PDF, HTML, Markdown, Word, PowerPoint,
   Excel, text and code, audio and video, offline in a sandboxed frame, and annotates them: marks on a
   picture, comments on text, a pick of an element on a page, a moment or a stretch on a recording. The
-  card's Open and Annotate buttons come from the `opens` rows in `plugin.json`. Depth: [`viewer/README.md`](viewer/README.md).
+  card's Open and Annotate buttons come from the `opens` rows in `plugin.json`. Depth: `viewer/README.md` in this plugin's folder.
 - **Two stream rules**, `ban-comments` (`.ts .tsx .js .jsx .rs .go`) and `ban-comments-python` (`.py`).
   When the agent writes a code comment in an `edit` or a `write`, the engine stops that output, tells the
   model to delete the comment and carry its meaning in names, types and structure, and the model writes
   the line again. Directive comments stay (`@ts-`, `eslint-`, `# noqa`, `#!` and the like). To turn them
-  off alone, add both names to the `ttsr.disabledRules` setting, which belongs to the `ttsr` plugin; a
+  off alone, add both names to the `ttsr.disabledRules` setting; it belongs to the `ttsr` plugin (on by
+  default), so it works only while `ttsr` is enabled, and with `ttsr` off the rules still fire. A
   same-named file in `.inso/rules/` overrides their text instead.
 
 No skills or prompts (a test keeps those out).

@@ -1,8 +1,8 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "chat-thread",
-	"version": "0.1.0",
-	"description": "Chat thread - the conversation and nothing else: your words, the assistant's words, and one quiet 'Worked for' line per turn. Built from the kit's StoreThread part; no tool cards, no shipped thread inside.",
+	"version": "0.1.1",
+	"description": "Chat thread - the conversation and nothing else: your words, the assistant's words, and one quiet 'Worked for' line per turn. Built from the kit's StoreThread part; no tool rows except a card for a file the assistant shows you, no shipped thread inside.",
 	"author": {
 		"name": "Dimension"
 	},
