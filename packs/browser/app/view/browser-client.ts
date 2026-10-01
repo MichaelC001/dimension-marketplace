@@ -4,7 +4,7 @@
 // the shapes and engine identifiers come from the pack's own contracts module.
 import type { App } from "@modelcontextprotocol/ext-apps";
 import type { CallToolResult, ContentBlock } from "@modelcontextprotocol/sdk/types.js";
-import { BROWSER_APPS, BROWSER_ENGINES, DIALOG_TYPES, PUBLISH_STATUSES, TASK_AGENTS } from "../../src/contracts";
+import { BROWSER_APPS, BROWSER_ENGINES, DIALOG_TYPES, MAX_ELEMENT_ID_CHARS, MAX_ELEMENT_LABEL_CHARS, MAX_ELEMENT_TAG_CHARS, MAX_ELEMENTS_PER_REGION, PUBLISH_STATUSES, TASK_AGENTS } from "../../src/contracts";
 import type {
 	BrowserAction,
 	BrowserAnnotationContext,
@@ -21,6 +21,7 @@ import type {
 	TabOp,
 	TaskRun,
 	TaskStatus,
+	PageElement,
 } from "../../src/contracts";
 import { isRecord, readNumber, readString } from "./json";
 
@@ -62,6 +63,29 @@ function toolError(tool: string, result: CallToolResult): BrowserToolError {
 	const status = isRecord(structured) ? readString(structured, "status") : undefined;
 	if (status === "unknown") return new BrowserToolError(tool, `${reason} — it may have taken effect; check the page before retrying`, "unknown");
 	return new BrowserToolError(tool, reason, status === "failed" ? "failed" : null);
+}
+
+/**
+ * One element as the page described it. The page chose every byte of this, so none of it is trusted to be what the
+ * contract says: a field of the wrong type is empty, a string is cut to its bound again, and what is not a record at
+ * all is no element.
+ */
+function readElement(value: unknown): PageElement[] {
+	if (!isRecord(value)) return [];
+	const box = isRecord(value.box) ? value.box : {};
+	return [
+		{
+			tag: (readString(value, "tag") ?? "").slice(0, MAX_ELEMENT_TAG_CHARS),
+			id: (readString(value, "id") ?? "").slice(0, MAX_ELEMENT_ID_CHARS),
+			box: {
+				x: readNumber(box, "x") ?? 0,
+				y: readNumber(box, "y") ?? 0,
+				width: readNumber(box, "width") ?? 0,
+				height: readNumber(box, "height") ?? 0,
+			},
+			label: (readString(value, "label") ?? "").slice(0, MAX_ELEMENT_LABEL_CHARS),
+		},
+	];
 }
 
 function readTask(tool: string, value: unknown): TaskRun {
@@ -395,16 +419,17 @@ export class BrowserClient {
 						width: readNumber(region, "width") ?? asked?.width ?? 0,
 						height: readNumber(region, "height") ?? asked?.height ?? 0,
 					},
-					elements: readString(read, "elements") ?? "",
+					elements: Array.isArray(read.elements) ? read.elements.slice(0, MAX_ELEMENTS_PER_REGION).flatMap(readElement) : [],
+					truncated: read.truncated === true,
 				};
 			}),
 		};
 	}
 
-	/** Keeps the annotation kit's detail document in a file of the pack's own folder; answers the absolute path to read it at. */
-	async annotationFile(json: string): Promise<string> {
+	/** Keeps the annotation kit's detail document for what was marked in `browserId`; answers the absolute path to read it at. */
+	async annotationFile(browserId: string, json: string): Promise<string> {
 		const tool = "browser_annotation_file";
-		const path = readString(await this.call(tool, { json }), "path");
+		const path = readString(await this.call(tool, { browserId, json }), "path");
 		if (path === undefined || path.length === 0) throw new BrowserToolError(tool, "the tool answered without a path");
 		return path;
 	}

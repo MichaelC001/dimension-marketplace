@@ -415,10 +415,10 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     }, annotations: READ_ONLY, _meta: APP_ONLY,
   }, ({ browserId, frameId, regions }) => result(() => runtime.annotate(browserId, frameId, regions)));
   registerAppTool(server, "browser_annotation_file", {
-    description: "Keep the annotation kit's detail document (every mark with the elements under it) in a file of this plugin's own folder and answer the absolute path the agent reads it at. Accepts only that document; keeps the newest few.",
-    inputSchema: { json: z.string().max(MAX_DETAIL_BYTES) },
+    description: "Keep the annotation kit's detail document (every mark with the elements under it) in a file of this plugin's own folder and answer the absolute path the agent reads it at. Accepts only that document; keeps the newest few. A Private (throwaway) browser's file is deleted when that browser closes.",
+    inputSchema: { browserId: capability, json: z.string().max(MAX_DETAIL_BYTES) },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }, _meta: APP_ONLY,
-  }, ({ json }) => result(async () => ({ path: runtime.saveAnnotationDetail(json) })));
+  }, ({ browserId, json }) => result(async () => ({ path: runtime.saveAnnotationDetail(browserId, json) })));
   registerAppTool(server, "browser_viewport", {
     description: "Fit the page to the View: set every tab's viewport to the page area's CSS size (bounded 320-2560 × 240-2000) at the View's pixel ratio (1-2) so the live view is crisp. The View calls this on resize, debounced.",
     inputSchema: { browserId: capability, width: z.number().int().min(1).max(8192), height: z.number().int().min(1).max(8192), scale: z.number().min(1).max(4).optional() },

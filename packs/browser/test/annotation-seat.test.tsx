@@ -33,6 +33,7 @@ mock.module("../../../../packages/mcp-app-kit/src/annotate/paint.js", () => ({
 }));
 // Dynamic by necessity: the seat binds the kit's painter when it loads, so it must load AFTER the mock above exists (static imports hoist above it).
 const { AnnotationSeat } = await import("../app/view/annotation-seat");
+const { BrowserApp } = await import("../app/view/browser-app");
 
 afterEach(unmountAll);
 
@@ -69,11 +70,17 @@ interface Update {
 	readonly content: readonly { type: string; text?: string }[];
 }
 
-const asked = (args: Record<string, unknown>): { region: unknown; elements: string }[] =>
-	Array.isArray(args.regions) ? args.regions.map(region => ({ region, elements: 'button#buy [412,300 96x32] Buy now' })) : [];
+const asked = (args: Record<string, unknown>) =>
+	Array.isArray(args.regions)
+		? args.regions.map(region => ({
+				region,
+				truncated: false,
+				elements: [{ tag: "button", id: "buy", label: "Buy now", box: { x: 412, y: 300, width: 96, height: 32 } }],
+			}))
+		: [];
 
 /** A host that takes text and pictures, answers the two annotation tools, and records everything. */
-function host(over: { capabilities?: object; annotate?: (call: Call) => CallToolResult } = {}) {
+function host(over: { capabilities?: object; annotate?: (call: Call) => CallToolResult; other?: (call: Call) => CallToolResult } = {}) {
 	const calls: Call[] = [];
 	const updates: Update[] = [];
 	const app = {
@@ -81,7 +88,7 @@ function host(over: { capabilities?: object; annotate?: (call: Call) => CallTool
 			const call = { name: request.name, args: request.arguments ?? {} };
 			calls.push(call);
 			if (call.name === "browser_annotation_file") return { content: [], structuredContent: { path: "/tmp/annotation-1.json" } };
-			if (call.name !== "browser_annotate") return { isError: true, content: [{ type: "text", text: "unexpected" }] };
+			if (call.name !== "browser_annotate") return over.other?.(call) ?? { isError: true, content: [{ type: "text", text: "unexpected" }] };
 			return (
 				over.annotate?.(call) ?? {
 					content: [],
@@ -141,9 +148,10 @@ describe("the annotation seat", () => {
 		expect(updates[0]?.content.map(block => block.type)).toEqual(["image", "text"]);
 		const text = updates[0]?.content.find(block => block.type === "text")?.text ?? "";
 		expect(text).toContain('Annotations from the human on "https://example.com/pricing"');
-		expect(text).toContain("About the picture: Live web page");
+		expect(text).toContain("About the picture: Words from the page");
+		expect(text).toContain("Live web page");
 		expect(text).toContain("y=1200");
-		expect(text).toContain('Facts: Under it: button#buy "Buy now"');
+		expect(text).toContain('Facts: Under it: "button#buy" "Buy now"');
 		expect(text).toContain("/tmp/annotation-1.json");
 
 		// One lookup for the one mark, on the frame that was frozen, around the point that was placed.
@@ -205,15 +213,55 @@ describe("the annotation seat", () => {
 		expect(status(dom)).toContain("revision 2");
 	});
 
-	test("Done leaves the seat, and the staged request is the human's to send or leave", async () => {
+	test("Done leaves the seat and does not touch what was staged: the request stays in the next message, it is the human's to send or leave", async () => {
 		let done = 0;
-		const { app } = host();
+		const { app, updates } = host();
 		const { dom } = await marked(app, undefined, () => {
 			done += 1;
 		});
+		await dom.click(sendButton(dom));
+		await dom.settle();
+		expect(updates).toHaveLength(1);
 
 		await dom.click(dom.find("button.dam-done")[0] as Element);
 
 		expect(done).toBe(1);
+		// Exactly the one request, and no take-back after it.
+		expect(updates).toHaveLength(1);
+		expect(updates[0]?.content.length).toBeGreaterThan(0);
+	});
+});
+
+describe("the Browser around the seat", () => {
+	test("removing the annotation from the agent while marking leaves the seat: it must not go on saying 'Added' for a request the host no longer holds", async () => {
+		const { app, updates } = host({
+			other: call => {
+				if (call.name === "browser_frame") {
+					const png = call.args.format === "png";
+					return { content: [], structuredContent: { state: FRAME.state, frameId: "f1", mimeType: png ? "image/png" : "image/jpeg", data: "AAAA", capturedAt: FRAME.capturedAt } };
+				}
+				return { content: [], structuredContent: FRAME.state };
+			},
+		});
+		const dom = await mount(<BrowserApp app={app} toolState={{ state: FRAME.state, seq: 1 }} />);
+		await dom.settle();
+		await dom.click(label(dom, "Annotate for the agent (Ctrl+Shift+A)"));
+		await dom.settle();
+		await dom.click(label(dom, "Comment pin"));
+		await dom.key(label(dom, "Mark up the page. Arrow keys move the cursor; Enter or Space places a point."), "Enter");
+		await dom.click(sendButton(dom));
+		await dom.settle();
+		expect(sendButton(dom).textContent).toContain("Added");
+		expect(updates).toHaveLength(1);
+
+		await dom.click(label(dom, "More"));
+		const remove = dom.find('[role="menuitem"]').find(item => item.textContent?.includes("Remove annotation from agent"));
+		await dom.click(remove as Element);
+		await dom.settle();
+
+		expect(updates).toHaveLength(2);
+		expect(updates[1]?.content).toEqual([]);
+		expect(dom.find("[data-slot='annotation-seat']")).toHaveLength(0);
+		expect(dom.text()).not.toContain("Added");
 	});
 });

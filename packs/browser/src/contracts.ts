@@ -325,6 +325,29 @@ export interface BrowserRegion { x: number; y: number; width: number; height: nu
 /** Where a page is scrolled and how large it is, in CSS px. */
 export interface PageScroll { x: number; y: number; width: number; height: number }
 /**
+ * What the page says about itself, kept apart field by field: a tag name, an id and an element's words are three
+ * strings the page wrote, so none of them is ever run together with another into one line to be parsed back apart.
+ * An id may hold spaces, a tag name nearly anything (`<a[0,0>` is a tag), and a line cannot tell them from the
+ * sentence around them. The tag and id bounds are the shared annotation kit's own (its tag-name and selector limits);
+ * the words and the count per region are this pack's.
+ */
+export const MAX_ELEMENT_TAG_CHARS = 40;
+export const MAX_ELEMENT_ID_CHARS = 240;
+export const MAX_ELEMENT_LABEL_CHARS = 100;
+export const MAX_ELEMENTS_PER_REGION = 60;
+export interface PageElement {
+  /** Lower-case tag name, at most {@link MAX_ELEMENT_TAG_CHARS}. */
+  tag: string;
+  /** The element's id, at most {@link MAX_ELEMENT_ID_CHARS}; "" when it has none. */
+  id: string;
+  /** Where it is in the viewport, whole CSS px. */
+  box: BrowserRegion;
+  /** What a person would read on it, at most {@link MAX_ELEMENT_LABEL_CHARS}; a password or hidden input is `[redacted input]`, never its value. */
+  label: string;
+}
+/** The elements under one region, in document order; `truncated`: more were there than fit the budget of the answer. */
+export interface PageElements { elements: PageElement[]; truncated: boolean }
+/**
  * What `browser_annotate` answers: facts about the page under the regions the human marked. No pixels: the picture is
  * the View's own frame, and the shared annotation kit paints the marks onto it.
  */
@@ -338,7 +361,7 @@ export interface BrowserAnnotationContext {
   viewport: Viewport;
   scroll: PageScroll;
   /** One entry per requested region, in order: the region as read (clamped to the frame) and the elements under it. */
-  regions: { region: BrowserRegion; elements: string }[];
+  regions: ({ region: BrowserRegion } & PageElements)[];
 }
 export interface BrowserOpenOptions {
   /** Omitted: a throwaway browser, nothing saved, no sign-in kept. Named: the persistent profile of that name. */
@@ -403,8 +426,8 @@ export interface BrowserRuntimePort {
    * no longer retained. Read-only; the picture is the caller's.
    */
   annotate(browserId: string, frameId: string, regions: readonly BrowserRegion[]): Promise<BrowserAnnotationContext>;
-  /** Stores the detail document the shared annotation kit assembles and answers the absolute path the agent reads it at. */
-  saveAnnotationDetail(json: string): string;
+  /** Stores the detail document the shared annotation kit assembles for what the human marked in `browserId`, and answers the absolute path the agent reads it at. A throwaway browser's document is deleted with it. */
+  saveAnnotationDetail(browserId: string, json: string): string;
   /** Every on-disk profile's persisted sign-in observations (connection.ts). */
   connections(): Promise<ConnectionObservations>;
   /** `listener` runs after each new observation is persisted and after a profile with observations is deleted. Returns the unsubscribe. */

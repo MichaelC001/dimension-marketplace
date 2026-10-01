@@ -344,7 +344,12 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 		const bound = browserId;
 		if (bound === null) return;
 		try {
-			if (await client.updateContext(bound, [])) say("ok", "Annotation removed.");
+			if (await client.updateContext(bound, [])) {
+				say("ok", "Annotation removed.");
+				// The seat's button would go on reading "Added" for a request the host no longer holds, and marking cannot
+				// be taken back into the same seat: the human starts a new one.
+				if (live(bound) && annotating) exitAnnotation();
+			}
 		} catch (cause) {
 			if (live(bound)) say("error", failureText(cause));
 		}

@@ -58,9 +58,11 @@ export function AnnotationSeat({ app, client, browserId, frame, floats, onDone }
 		() => pageEnrich(client, browserId, { frameId: frame.frameId, viewport: frame.state.viewport }),
 		[client, browserId, frame.frameId, frame.state.viewport],
 	);
-	const attach = useMemo(() => pageAttach(client), [client]);
+	const attach = useMemo(() => pageAttach(client, browserId), [client, browserId]);
 	const bytes = useMemo(() => bytesOf(frame.data), [frame.data]);
 
+	// dimension#1465: the kit's message says "Change ONLY what is marked; leave the rest of the image as it is." for every
+	// picture. For a live page that reads as editing an image; this seat passes its own scope sentence once the kit has the option.
 	const session = useImageMarkup({
 		app: host,
 		file: captureName(frame.state.url),

@@ -36,6 +36,7 @@ import type {
 	LogEntry,
 	ModelShot,
 	ShotRequest,
+	PageScroll,
 	TabOp,
 	CredentialUse,
 	HandledDialog,
@@ -97,6 +98,9 @@ const MAX_SNAPSHOT_CHARS = 20_000;
 const MAX_ELEMENT_CHARS = 4_000;
 const MAX_TEXT_INPUT = 4_096;
 const MAX_SELECTOR_CHARS = 512;
+/** How long, in all, a capture waits for a scrolling page to come to rest: this many captures this far apart. */
+const SCROLL_SETTLE_ATTEMPTS = 6;
+const SCROLL_SETTLE_MS = 100;
 const MAX_TAB_ID_CHARS = 128;
 const MOUSE_BUTTONS: readonly MouseButton[] = ["left", "right", "middle"];
 const MAX_URL_LENGTH = 2_048;
@@ -170,6 +174,8 @@ interface FrameRecord {
 	title: string;
 	revision: number;
 	viewport: Viewport;
+	/** Where the page was scrolled when the picture was taken. */
+	scroll: PageScroll;
 	capturedAt: string;
 }
 
@@ -209,6 +215,8 @@ interface Entry {
 	 */
 	logRead: number;
 	logNoticed: number;
+	/** Where the detail documents of what the human marks in this browser are kept: shared for a saved profile, its own throwaway folder otherwise. */
+	annotations: AnnotationFiles;
 }
 
 export class BrowserRuntime implements BrowserRuntimePort {
@@ -330,10 +338,13 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		// directory of its own that goes with the browser.
 		let directory: string;
 		let free: () => void;
+		let annotations = this.annotationFiles;
 		if (profile === null) {
 			const ephemeral = this.store.createEphemeral();
 			directory = ephemeral.userDataDir;
 			free = () => this.discard(ephemeral.dir);
+			// What the human marked on a throwaway page is as private as the page: the folder goes when the browser does.
+			annotations = new AnnotationFiles(join(ephemeral.dir, "annotations"));
 		} else {
 			const lock = this.store.acquireLock(profile);
 			// Native backends never reuse an incompatible engine's cookie store.
@@ -362,7 +373,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				browserId: randomBytes(24).toString("base64url"),
 				profile, engine, viewport: initial.viewport, documentId: initial.documentId,
 				driver, release, revision: 1, frames: [], queue: Promise.resolve(), closed: false,
-				task: null, worker: null, publish: null, secrets: new Set(), logRead: 0, logNoticed: 0,
+				task: null, worker: null, publish: null, secrets: new Set(), logRead: 0, logNoticed: 0, annotations,
 			};
 			this.byId.set(entry.browserId, entry);
 			if (profile !== null) this.byProfile.set(profile, entry);
@@ -500,7 +511,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			const before = await this.refreshState(entry);
 			const revision = entry.revision;
 			const url = before.url;
-			const shot = await entry.driver.screenshot();
+			const { shot, scroll } = await this.captureSettled(entry);
 			const capturedAt = new Date().toISOString();
 			const state = await this.buildState(entry);
 			if (entry.revision !== revision || state.url !== url) {
@@ -516,6 +527,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				title: state.title,
 				revision,
 				viewport: entry.viewport,
+				scroll,
 				capturedAt,
 			};
 			entry.frames.push(record);
@@ -528,6 +540,24 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				capturedAt: record.capturedAt,
 			};
 		});
+	}
+
+	/**
+	 * The picture of the page and where it is scrolled, as one thing. A wheel scroll animates for a moment, and a picture
+	 * taken in the middle of it shows no position the page was ever at; the position is read on both sides of the capture
+	 * and the capture is taken again, a few times, until they agree.
+	 */
+	private async captureSettled(entry: Entry): Promise<{ shot: Uint8Array; scroll: PageScroll }> {
+		for (let attempt = 1; ; attempt += 1) {
+			const from = await entry.driver.scroll();
+			const shot = await entry.driver.screenshot();
+			const scroll = await entry.driver.scroll();
+			if (scroll.x === from.x && scroll.y === from.y) return { shot, scroll };
+			if (attempt === SCROLL_SETTLE_ATTEMPTS) fail("stale_frame", "The page kept scrolling while the picture was taken; request a new frame.");
+			const { promise: rested, resolve } = Promise.withResolvers<void>();
+			setTimeout(resolve, SCROLL_SETTLE_MS);
+			await rested;
+		}
 	}
 
 	/** A read like `snapshot`; the picture is for a model, so nothing of it is kept (`entry.frames` holds annotatable frames only). */
@@ -606,20 +636,33 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			const read = await entry.driver.elements(clamped, MAX_ELEMENT_CHARS);
 			await this.refreshState(entry);
 			if (record.revision !== entry.revision) fail("stale_frame", "The document changed while reading annotation context.");
+			// A scroll is not a new document, so it never moved the revision. Elements are read where the page is NOW; the
+			// picture shows where it was.
+			if (read.scroll.x !== record.scroll.x || read.scroll.y !== record.scroll.y) {
+				fail(
+					"stale_frame",
+					`The page is scrolled to ${read.scroll.x},${read.scroll.y} now and was at ${record.scroll.x},${record.scroll.y} when the picture was taken. Capture a new frame.`,
+				);
+			}
 			return this.redact(entry, {
 				url: record.url,
 				title: record.title,
 				capturedAt: record.capturedAt,
 				readAt: new Date().toISOString(),
 				viewport: record.viewport,
-				scroll: read.scroll,
-				regions: clamped.map((region, index) => ({ region, elements: read.regions[index] ?? "" })),
+				scroll: record.scroll,
+				regions: clamped.map((region, index) => ({
+					region,
+					elements: read.regions[index]?.elements ?? [],
+					truncated: read.regions[index]?.truncated ?? false,
+				})),
 			});
 		});
 	}
 
-	saveAnnotationDetail(json: string): string {
-		return this.annotationFiles.save(json);
+	/** Keeps the kit's detail document for the browser the human marked in: a throwaway browser's goes with it. */
+	saveAnnotationDetail(browserId: string, json: string): string {
+		return this.require(browserId).annotations.save(json);
 	}
 
 	async profiles(): Promise<string[]> {
