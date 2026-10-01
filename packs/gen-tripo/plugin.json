@@ -44,7 +44,7 @@
 				"setup": [
 					{
 						"title": "Get a Tripo API key",
-						"detail": "Create an account on the Tripo platform, buy API credits (1 credit is $0.01) and create a key on its API Keys page. The key stays on this machine and is sent only to openapi.tripo3d.ai. Credits from the free trial do not carry commercial rights to the output - fund the account before shipping an asset.",
+						"detail": "Create an account on the Tripo platform, buy API credits (1 credit is $0.01) and create a key on its API Keys page. The key stays on this machine and is sent only to openapi.tripo3d.ai. Output made on free trial credits belongs to Tripo (Terms 5.2.1) and carries no commercial rights: while you are on the trial, answer \"no\" to the credits question below and Dimension stamps every result non-commercial; fund the account before shipping an asset.",
 						"url": "https://platform.tripo3d.ai",
 						"urlLabel": "Tripo platform"
 					},
@@ -59,6 +59,11 @@
 						"label": "Tripo API key",
 						"secret": true,
 						"help": "Starts with tsk_. Used for every Tripo generation job."
+					},
+					{
+						"id": "creditsPurchased",
+						"label": "Paid for Tripo credits? (yes / no)",
+						"help": "Commercial rights apply only to output made with purchased credits. Answer \"no\" while you are on the free trial: Tripo cannot tell trial credits from purchased ones, so Dimension relies on this answer and stamps output non-commercial unless it is \"yes\"."
 					}
 				],
 				"configTemplate": "connect/key.template.json",

@@ -16,7 +16,7 @@
 // shared between the two versions and task ids carry across.
 //
 // Nothing vendor-volatile lives in this file. Model ids, parameters, prices,
-// the licence, upload limits and the task-output keys are all in `models.json`,
+// the licences, upload limits and the task-output keys are all in `models.json`,
 // next to the sources they were read from; this module is the protocol - how a
 // request is validated, priced, shaped on the wire, polled and downloaded. A
 // price change or a new model version is a data edit, not a code edit.
@@ -36,9 +36,19 @@
 // pricing page says 25, the rig page's sample response says 30). `models.json`
 // marks every other price it had to infer.
 //
-// The API key comes from this pack's connect form, written to CONFIG_TARGET by
-// the host. It is sent only to the Tripo API host: output URLs are signed CDN
-// links and are fetched without it. It is never logged or put in an error.
+// The API key, and whether the credits behind it were bought, come from this
+// pack's connect form, written to CONFIG_TARGET by the host. The key is sent only
+// to the Tripo API host: output URLs are signed CDN links and are fetched without
+// it. It is never logged or put in an error.
+//
+// LICENCE. Tripo Terms 5.2.1: output made on free or trial credits belongs to
+// Tripo; only output made with purchased credits is the account's (5.2.2). Tripo's
+// balance API cannot tell the two apart, so the owner says which they are on
+// (`creditsPurchased`) and `models.json` carries a licence for each. The answer
+// is frozen into a job's reference when the job is submitted - the credits that
+// paid for it decide its licence, not whatever the config says at download time -
+// and every unknown (no answer, a reference from before this field existed, no
+// connection) under-claims as trial.
 //
 // Runtime imports are `node:` builtins, `fetch` and this pack's `guards.ts`, so the
 // engine can import this file as-is. Types come from `@dimension/sdk/provider` and
@@ -169,7 +179,7 @@ export interface TripoCatalogue {
 	readonly apiVersion: string;
 	readonly api: { readonly baseUrl: string };
 	readonly credit: { readonly usd: number };
-	readonly licence: GenerationLicence;
+	readonly licences: { readonly purchased: GenerationLicence; readonly trial: GenerationLicence };
 	readonly upload: {
 		readonly endpoint: string;
 		readonly image: { readonly extensions: readonly string[]; readonly maxBytes: number };
@@ -215,6 +225,10 @@ export interface TripoTask {
 export interface TripoProviderOptions {
 	/** Where the API key comes from. Default: the connect form's config file. */
 	readonly apiKey?: () => Promise<string>;
+	/** Whether the credits behind the key were bought. Default: the connect form's
+	 *  config file - except that an injected `apiKey` with no answer here has no
+	 *  config to ask, and under-claims (`false`). */
+	readonly creditsPurchased?: () => Promise<boolean>;
 	/** Test seam. */
 	readonly fetch?: typeof fetch;
 	/** Test seam; default loads `models.json` beside this file. */
@@ -230,13 +244,34 @@ function reason(error: unknown): string {
 }
 
 // ---------------------------------------------------------------------------
-// The key
+// The connect config
 // ---------------------------------------------------------------------------
 
-/** Read the API key the connect form wrote. Every error names the problem and
- *  never the file's content. `path` is the test seam; production reads the
- *  connect form's configTarget. */
-export async function readConnectKey(path: string = CONFIG_TARGET): Promise<string> {
+/** What the connect form wrote. */
+export interface ConnectConfig {
+	readonly apiKey: string;
+	/** True only when the owner said the credits were bought; trial credits carry no
+	 *  commercial rights (Terms 5.2.1). */
+	readonly creditsPurchased: boolean;
+}
+
+/** The owner's answer to "Paid for Tripo credits?". A config written before the
+ *  field existed has none, and an unanswered question under-claims. Anything
+ *  that is not a yes/no is refused - and never quoted back. */
+function parseCreditsPurchased(answer: unknown): boolean {
+	if (answer === undefined) return false;
+	const text = typeof answer === "string" ? answer.trim().toLowerCase() : answer;
+	if (text === "yes" || text === "true" || text === true) return true;
+	if (text === "no" || text === "false" || text === false) return false;
+	throw new Error(
+		`gen-tripo's "creditsPurchased" answer must be yes or no (true or false) - reconnect the pack and answer "Paid for Tripo credits?"`,
+	);
+}
+
+/** Read what the connect form wrote. Every error names the problem and never the
+ *  file's content. `path` is the test seam; production reads the connect form's
+ *  configTarget. */
+export async function readConnectConfig(path: string = CONFIG_TARGET): Promise<ConnectConfig> {
 	let raw: string;
 	try {
 		raw = await readFile(path, "utf8");
@@ -252,11 +287,12 @@ export async function readConnectKey(path: string = CONFIG_TARGET): Promise<stri
 	} catch {
 		throw new Error("gen-tripo's stored key is not valid JSON - reconnect the pack");
 	}
-	const access = isRecord(stored) ? stored.access : undefined;
+	const fields: Json = isRecord(stored) ? stored : {};
+	const access = fields.access;
 	if (typeof access !== "string" || access.trim() === "") {
 		throw new Error("gen-tripo's stored key is empty - reconnect the pack");
 	}
-	return access.trim();
+	return { apiKey: access.trim(), creditsPurchased: parseCreditsPurchased(fields.creditsPurchased) };
 }
 
 // ---------------------------------------------------------------------------
@@ -285,6 +321,9 @@ function referencedNames(model: TripoModel): string[] {
 }
 
 function assertCatalogue(catalogue: TripoCatalogue): void {
+	for (const licence of [catalogue.licences?.purchased, catalogue.licences?.trial]) {
+		if (!isRecord(licence)) throw new Error("models.json: licences needs both a purchased and a trial licence");
+	}
 	const seen = new Set<string>();
 	for (const model of catalogue.models) {
 		if (seen.has(model.id)) throw new Error(`models.json: duplicate model id ${model.id}`);
@@ -319,7 +358,13 @@ export function optionSchema(catalogue: TripoCatalogue, model: TripoModel): Json
 	};
 }
 
-export function describeModels(catalogue: TripoCatalogue): GenerationModel[] {
+/** The licence of output made with purchased or with trial credits. */
+export function licenceOf(catalogue: TripoCatalogue, creditsPurchased: boolean): GenerationLicence {
+	return creditsPurchased ? catalogue.licences.purchased : catalogue.licences.trial;
+}
+
+export function describeModels(catalogue: TripoCatalogue, creditsPurchased: boolean): GenerationModel[] {
+	const licence = licenceOf(catalogue, creditsPurchased);
 	return catalogue.models.map(model => ({
 		id: model.id,
 		label: model.label,
@@ -328,7 +373,7 @@ export function describeModels(catalogue: TripoCatalogue): GenerationModel[] {
 		...(model.maxImages === undefined ? {} : { maxImages: model.maxImages }),
 		options: optionSchema(catalogue, model),
 		priceBasis: model.priceBasis,
-		licence: catalogue.licence,
+		licence,
 		...(model.features ? { features: model.features } : {}),
 	}));
 }
@@ -729,6 +774,9 @@ interface JobRef {
 	readonly model: string;
 	/** What the quote said, for a result whose task reports no credits. */
 	readonly usd: number;
+	/** Whether the credits that paid for this task were bought, as answered when it was
+	 *  submitted. Absent from a reference written before the field existed: trial. */
+	readonly purchased: boolean;
 }
 
 function parseRef(ref: string): JobRef {
@@ -746,7 +794,7 @@ function parseRef(ref: string): JobRef {
 	) {
 		throw new Error("not a gen-tripo job reference");
 	}
-	return { task: parsed.task, model: parsed.model, usd: parsed.usd };
+	return { task: parsed.task, model: parsed.model, usd: parsed.usd, purchased: parsed.purchased === true };
 }
 
 // ---------------------------------------------------------------------------
@@ -788,7 +836,10 @@ function retryWait(response: Response, attempt: number): number {
 }
 
 export function createTripoProvider(options: TripoProviderOptions = {}): GenerationProvider {
-	const apiKey = options.apiKey ?? (() => readConnectKey());
+	const apiKey = options.apiKey ?? (async () => (await readConnectConfig()).apiKey);
+	const creditsPurchased =
+		options.creditsPurchased ??
+		(options.apiKey === undefined ? async () => (await readConnectConfig()).creditsPurchased : async () => false);
 	const doFetch = options.fetch ?? fetch;
 	const sleep = options.sleep ?? pause;
 	const now = options.now ?? Date.now;
@@ -903,13 +954,14 @@ export function createTripoProvider(options: TripoProviderOptions = {}): Generat
 
 		async describe(): Promise<GenerationCatalogue> {
 			const c = await catalogue();
-			const models = describeModels(c);
+			// Not connected, or an answer that is not a yes/no: listed under the licence that
+			// under-claims, with the reason.
 			try {
 				await apiKey();
+				return { ready: true, models: describeModels(c, await creditsPurchased()) };
 			} catch (error) {
-				return { ready: false, reason: reason(error), models };
+				return { ready: false, reason: reason(error), models: describeModels(c, false) };
 			}
-			return { ready: true, models };
 		},
 
 		async quote(request, { signal }): Promise<GenerationQuote> {
@@ -936,6 +988,7 @@ export function createTripoProvider(options: TripoProviderOptions = {}): Generat
 			const started = now();
 			const c = await catalogue();
 			const model = modelOf(c, request.model);
+			const purchased = await creditsPurchased();
 			const { uploads } = planRequest(c, model, request);
 			await checkLocalFiles(c, uploads);
 			const tokens = new Map<string, string>();
@@ -963,7 +1016,7 @@ export function createTripoProvider(options: TripoProviderOptions = {}): Generat
 				throw new Error(
 					"Tripo accepted the task but returned no task id - check your Tripo task list before resubmitting",
 				);
-			const ref: JobRef = { task, model: model.id, usd: built.usd };
+			const ref: JobRef = { task, model: model.id, usd: built.usd, purchased };
 			return { ref: JSON.stringify(ref) };
 		},
 
@@ -996,7 +1049,7 @@ export function createTripoProvider(options: TripoProviderOptions = {}): Generat
 			return {
 				files,
 				costUsd: credits === undefined ? job.usd : creditsToUsd(c, credits),
-				licence: c.licence,
+				licence: licenceOf(c, job.purchased),
 				handle: job.task,
 				meta: {
 					vendor: "tripo",
@@ -1005,6 +1058,7 @@ export function createTripoProvider(options: TripoProviderOptions = {}): Generat
 					taskType: task.type ?? null,
 					model: job.model,
 					modelVersion: model?.task.version ?? null,
+					creditsPurchased: job.purchased,
 					endpoint: model?.task.endpoint ?? null,
 					credits: credits ?? null,
 					costSource: credits === undefined ? "quote" : "task",

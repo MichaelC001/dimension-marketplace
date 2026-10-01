@@ -16,11 +16,20 @@
 	"credit": {
 		"usd": 0.01
 	},
-	"licence": {
-		"id": "tripo-api-paid",
-		"commercialUse": "yes",
-		"url": "https://developers.tripo3d.ai/en/terms",
-		"note": "Paid accounts own inputs and outputs and Tripo does not train on them (Terms 5.2.2); output made on free credits belongs to Tripo (5.2.1). Do not build a competing model or service from outputs, and do not expose Tripo's 3D service to third parties (3.2)."
+	"licences": {
+		"purchased": {
+			"id": "tripo-api-paid",
+			"commercialUse": "yes",
+			"url": "https://developers.tripo3d.ai/en/terms",
+			"note": "Output made with purchased credits: paid accounts own inputs and outputs and Tripo does not train on them (Terms 5.2.2). Do not build a competing model or service from outputs, and do not expose Tripo's 3D service to third parties (3.2)."
+		},
+		"trial": {
+			"id": "tripo-api-trial",
+			"commercialUse": "no",
+			"prototypeOnly": true,
+			"url": "https://developers.tripo3d.ai/en/terms",
+			"note": "Output made with free or trial credits belongs to Tripo (Terms 5.2.1), so it is not cleared for commercial use. Tripo's balance API cannot tell trial credits from purchased ones, so which licence applies follows the account's 'Paid for Tripo credits?' answer on the Connect page; an unanswered or older connection is treated as trial."
+		}
 	},
 	"upload": {
 		"endpoint": "/files",

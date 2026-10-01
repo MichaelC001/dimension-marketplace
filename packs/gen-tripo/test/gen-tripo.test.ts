@@ -19,7 +19,7 @@ import {
 	collectOutputs,
 	createTripoProvider,
 	loadCatalogue,
-	readConnectKey,
+	readConnectConfig,
 	type TripoCatalogue,
 	type TripoModel,
 	type TripoTask,
@@ -347,9 +347,11 @@ class FakeTripo {
 		return new Response("{}", { status: 404 });
 	}) as typeof fetch;
 
-	provider() {
+	/** `creditsPurchased` is the connect form's answer; the default is the honest one for an account nobody has said paid. */
+	provider(creditsPurchased = false) {
 		return createTripoProvider({
 			apiKey: async () => KEY,
+			creditsPurchased: async () => creditsPurchased,
 			fetch: this.fetch,
 			catalogue,
 			now: () => this.clock,
@@ -427,6 +429,36 @@ describe("a job from submit to its files", () => {
 		expect(result.costUsd).toBe(100 * catalogue.credit.usd);
 		expect(result.meta).toMatchObject({ taskId: "task_abc123", costSource: "task", credits: 100 });
 		expect(JSON.stringify(result)).not.toContain(KEY);
+	});
+
+	test("output made on trial credits is stamped non-commercial, output made on purchased credits commercial", async () => {
+		const finished = await fixture("task-image-to-model-success.json");
+		const licenceOfJob = async (creditsPurchased: boolean, outName: string) => {
+			const fake = await fresh();
+			const provider = fake.provider(creditsPurchased);
+			const { ref } = await provider.submit(imageRequest(), { signal, jobId: "gen_1" });
+			fake.tasks.set("task_abc123", { status: 200, body: finished });
+			return (await provider.fetch(ref, { signal, jobId: "gen_1", outDir: join(dir, outName) })).licence;
+		};
+
+		const trial = await licenceOfJob(false, "out-trial");
+		expect(trial).toMatchObject({ id: "tripo-api-trial", commercialUse: "no", prototypeOnly: true });
+		expect(await licenceOfJob(true, "out-purchased")).toMatchObject({ id: "tripo-api-paid", commercialUse: "yes" });
+	});
+
+	test("a job keeps the licence of the credits that paid for it, whatever the config says by the time it is fetched", async () => {
+		const fake = await fresh();
+		const finished = await fixture("task-image-to-model-success.json");
+		fake.tasks.set("task_abc123", { status: 200, body: finished });
+		const { ref } = await fake.provider(false).submit(imageRequest(), { signal, jobId: "gen_1" });
+		// The owner tops up and reconnects with "yes" before downloading the trial-credit job.
+		const reconnected = await fake.provider(true).fetch(ref, { signal, jobId: "gen_1", outDir: join(dir, "out-reconnected") });
+		expect(reconnected.licence.commercialUse).toBe("no");
+
+		// A reference from before the answer existed cannot claim rights nobody recorded.
+		const { task, model, usd } = JSON.parse(ref);
+		const old = await fake.provider(true).fetch(JSON.stringify({ task, model, usd }), { signal, jobId: "gen_1", outDir: join(dir, "out-legacy") });
+		expect(old.licence.commercialUse).toBe("no");
 	});
 
 	test("Tripo charging fewer credits than were quoted is what the job costs", async () => {
@@ -573,31 +605,96 @@ describe("a submit that has to stay inside the engine's deadline", () => {
 });
 
 describe("connecting", () => {
-	test("without a key the pack is not ready and says how to connect it; with one it is ready", async () => {
+	const SECRET = "tsk_SECRET_DO_NOT_LEAK";
+	const write = async (name: string, content: string): Promise<string> => {
+		await mkdir(dir, { recursive: true });
+		const path = join(dir, name);
+		await writeFile(path, content);
+		return path;
+	};
+
+	test("without a key the pack is not ready and says how to connect it, listing its models under the licence that under-claims; with one it is ready", async () => {
 		const fake = await fresh();
+		const missing = join(dir, "never-written.json");
 		const unconnected = createTripoProvider({
-			apiKey: () => readConnectKey(join(dir, "never-written.json")),
+			apiKey: async () => (await readConnectConfig(missing)).apiKey,
+			creditsPurchased: async () => (await readConnectConfig(missing)).creditsPurchased,
 			fetch: fake.fetch,
 			catalogue,
 		});
 		const notReady = await unconnected.describe({ signal });
 		expect(notReady.ready).toBe(false);
 		expect(notReady.reason).toContain("Connect page");
+		expect(notReady.models.every(model => model.licence.commercialUse === "no")).toBe(true);
 		expect((await fake.provider().describe({ signal })).ready).toBe(true);
 		expect(fake.calls).toEqual([]);
 	});
 
-	describe("readConnectKey", () => {
-		const SECRET = "tsk_SECRET_DO_NOT_LEAK";
-		const write = async (name: string, content: string): Promise<string> => {
-			await mkdir(dir, { recursive: true });
-			const path = join(dir, name);
-			await writeFile(path, content);
-			return path;
-		};
+	test("every model is described under the licence the credits answer picks", async () => {
+		const fake = await fresh();
+		const trial = await fake.provider(false).describe({ signal });
+		const purchased = await fake.provider(true).describe({ signal });
+		expect(trial.ready && purchased.ready).toBe(true);
+		expect(trial.models.length).toBeGreaterThan(0);
+		expect(trial.models.every(model => model.licence.id === "tripo-api-trial" && model.licence.commercialUse === "no")).toBe(true);
+		expect(purchased.models.every(model => model.licence.id === "tripo-api-paid" && model.licence.commercialUse === "yes")).toBe(true);
+	});
 
-		test("reads the key the connect form wrote, trimmed", async () => {
-			expect(await readConnectKey(await write("key-ok.json", JSON.stringify({ access: `  ${SECRET}\n` })))).toBe(SECRET);
+	test("a stored answer that is not yes or no makes the pack not ready and names the field, not the file's content", async () => {
+		const path = await write("bad-answer.json", JSON.stringify({ access: SECRET, creditsPurchased: "maybe-later" }));
+		const provider = createTripoProvider({
+			apiKey: async () => (await readConnectConfig(path)).apiKey,
+			creditsPurchased: async () => (await readConnectConfig(path)).creditsPurchased,
+			catalogue,
+		});
+		const catalogueNow = await provider.describe({ signal });
+		expect(catalogueNow.ready).toBe(false);
+		expect(catalogueNow.reason).toContain("creditsPurchased");
+		expect(catalogueNow.models.every(model => model.licence.commercialUse === "no")).toBe(true);
+	});
+
+	describe("readConnectConfig", () => {
+		test("reads the key the connect form wrote, trimmed, with the answer to the credits question", async () => {
+			const path = await write("key-ok.json", JSON.stringify({ access: `  ${SECRET}\n`, creditsPurchased: "yes" }));
+			expect(await readConnectConfig(path)).toEqual({ apiKey: SECRET, creditsPurchased: true });
+		});
+
+		test("yes, no, true and false are accepted in any case and with stray whitespace", async () => {
+			const answers: [unknown, boolean][] = [
+				["yes", true],
+				["YES", true],
+				[" Yes ", true],
+				["true", true],
+				["True", true],
+				[true, true],
+				["no", false],
+				["NO", false],
+				["false", false],
+				[" False\n", false],
+				[false, false],
+			];
+			for (const [answer, expected] of answers) {
+				const path = await write("answer.json", JSON.stringify({ access: SECRET, creditsPurchased: answer }));
+				expect((await readConnectConfig(path)).creditsPurchased).toBe(expected);
+			}
+		});
+
+		test("a config written before the question existed means the credits were not purchased", async () => {
+			const path = await write("older.json", JSON.stringify({ access: SECRET }));
+			expect(await readConnectConfig(path)).toEqual({ apiKey: SECRET, creditsPurchased: false });
+		});
+
+		test("an answer that is not a yes or no is refused with the field named, and neither the answer nor the key is echoed", async () => {
+			for (const answer of ["maybe-later", "", "1", "constructor", 1, null, ["yes"]]) {
+				const path = await write("unclear.json", JSON.stringify({ access: SECRET, creditsPurchased: answer }));
+				const failure = await readConnectConfig(path).catch((error: Error) => error);
+				expect(failure).toBeInstanceOf(Error);
+				const message = (failure as Error).message;
+				expect(message).toContain("creditsPurchased");
+				expect(message).toContain("reconnect");
+				expect(message).not.toContain(SECRET);
+				if (typeof answer === "string" && answer !== "") expect(message).not.toContain(answer);
+			}
 		});
 
 		test("a corrupt file, an empty key and a wrong shape are refused without echoing the file's content", async () => {
@@ -606,7 +703,7 @@ describe("connecting", () => {
 				["empty.json", JSON.stringify({ access: " " })],
 				["wrong.json", JSON.stringify({ token: SECRET })],
 			] as const) {
-				const failure = await readConnectKey(await write(name, content)).catch((error: Error) => error);
+				const failure = await readConnectConfig(await write(name, content)).catch((error: Error) => error);
 				expect(failure).toBeInstanceOf(Error);
 				expect((failure as Error).message).toContain("reconnect");
 				expect((failure as Error).message).not.toContain(SECRET);
