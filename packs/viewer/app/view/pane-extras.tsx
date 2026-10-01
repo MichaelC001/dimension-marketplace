@@ -26,12 +26,14 @@ import {
 import { type ReactNode, useEffect, useMemo } from "react";
 import { createPortal } from "react-dom";
 import type { ViewerKind } from "../../src/contract";
+import { annotationModes } from "./annotate-modes";
 import { loadDocumentBytes } from "./document-bytes";
 import { ElementPicks } from "./pane-extras-element";
 import { TimelineMarks } from "./pane-extras-timeline";
-import { type AnnotateMode, Column, type PaneExtrasProps, revisionOf, useSlot } from "./pane-shared";
+import { type AnnotateMode, Column, type PaneExtrasProps, revisionOf, Strip, useSlot } from "./pane-shared";
 
 export type { AnnotateMode, PaneExtrasProps };
+export { annotationModes };
 
 const PICTURE = '[data-slot="viewer-picture"]';
 const TEXT_ROOT = '[data-slot="viewer-text-root"]';
@@ -49,30 +51,19 @@ const KIND_WORDS: Readonly<Partial<Record<ViewerKind, string>>> = {
 /** What a page hint is called in a kind that has one: a PDF's default is "page". */
 const PAGE_WORDS: Readonly<Partial<Record<ViewerKind, string>>> = { pptx: "slide", xlsx: "sheet" };
 
-/**
- * Which modes the toolbar offers for a kind. Empty hides the toggle.
- *
- * A kind is listed only when its renderer puts what the human sees where a layer
- * can reach it: a picture in a box sized to its drawn pixels, or text in a
- * `viewer-text-root` element (Word's is an open shadow root: the kit reads it).
- * A page is the exception that proves it, and it works through TWO frames (docs/design/88 section 2). The reading
- * frame is `sandbox=""`: it runs nothing and the View cannot read it. `elements` is offered because Pick mode adds
- * a second frame over it, `sandbox="allow-scripts"` and nothing else, whose document opens with a policy that admits
- * only the hash of the picker script: that script reports layout and the View draws every outline itself. A
- * recording offers `timeline`.
- */
-export function annotationModes(kind: ViewerKind): readonly AnnotateMode[] {
-	if (kind === "image") return ["marks"];
-	if (kind === "html") return ["elements"];
-	if (kind === "audio" || kind === "video") return ["timeline"];
-	return KIND_WORDS[kind] === undefined ? [] : ["comments"];
-}
+/** The layer that seats each mode (docs/design/88 section 5): which modes a kind offers is `annotate-modes.ts`. */
+const LAYERS: Readonly<Record<AnnotateMode, (props: PaneExtrasProps) => ReactNode>> = {
+	marks: PictureMarkup,
+	comments: TextComments,
+	elements: ElementPicks,
+	timeline: TimelineMarks,
+};
 
 export function PaneExtras(props: PaneExtrasProps): ReactNode {
-	if (props.tab.kind === "image") return <PictureMarkup {...props} />;
-	if (props.tab.kind === "html") return <ElementPicks {...props} />;
-	if (props.tab.kind === "audio" || props.tab.kind === "video") return <TimelineMarks {...props} />;
-	return KIND_WORDS[props.tab.kind] === undefined ? null : <TextComments {...props} />;
+	const mode = annotationModes(props.tab.kind)[0];
+	if (mode === undefined) return null;
+	const Layer = LAYERS[mode];
+	return <Layer {...props} />;
 }
 
 function PictureMarkup({ app, tab, active, ready, frame, mode, onMode }: PaneExtrasProps) {
@@ -116,24 +107,22 @@ function PictureMarkup({ app, tab, active, ready, frame, mode, onMode }: PaneExt
 						/>,
 						picture,
 					)}
-			{frame === null || !marking
-				? null
-				: createPortal(
-						<div className="absolute inset-x-0 bottom-4 z-10 flex justify-center">
-							<MarkupToolbar
-								tool={session.tool}
-								onTool={session.setTool}
-								canUndo={session.markup.canUndo}
-								canRedo={session.markup.canRedo}
-								onUndo={session.markup.undo}
-								onRedo={session.markup.redo}
-								onClear={session.markup.clear}
-								hasMarks={session.markup.marks.length > 0}
-								onDone={() => onMode(null)}
-							/>
-						</div>,
-						frame,
-					)}
+			{marking ? (
+				<Strip frame={frame}>
+					<MarkupToolbar
+						tool={session.tool}
+						onTool={session.setTool}
+						canUndo={session.markup.canUndo}
+						canRedo={session.markup.canRedo}
+						onUndo={session.markup.undo}
+						onRedo={session.markup.redo}
+						onClear={session.markup.clear}
+						hasMarks={session.markup.marks.length > 0}
+						onDone={() => onMode(null)}
+						placement="strip"
+					/>
+				</Strip>
+			) : null}
 			{marking ? (
 				<Column frame={frame}>
 					<AnnotationPanel
@@ -153,7 +142,7 @@ function PictureMarkup({ app, tab, active, ready, frame, mode, onMode }: PaneExt
 							<>
 								<strong>Mark up this picture</strong>
 								<span>
-									Drag to box something, or pick another tool below. Press <kbd>1</kbd>–<kbd>5</kbd> to switch tools.
+									Drag to box something, or pick another tool above the picture. Press <kbd>1</kbd>–<kbd>5</kbd> to switch tools.
 								</span>
 							</>
 						}

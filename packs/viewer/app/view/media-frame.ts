@@ -9,7 +9,7 @@
 // unnecessary. It encodes with `toDataURL`, not `toBlob`: the kit measured (paint.ts) that
 // `toBlob` waits for an idle period, ~1 s each, on a page that is quiet while the human
 // reads; the synchronous encoder costs what the pixels cost (a few ms at 768 px).
-import type { FrameGrab } from "@dimension/mcp-app-kit/annotate";
+import { clampTime, type FrameGrab } from "@dimension/mcp-app-kit/annotate";
 
 /** The long edge of a still, in pixels: enough to read a face or a caption, and ~60 KB. */
 export const FRAME_LONG_EDGE = 768;
@@ -145,7 +145,7 @@ export class FrameGrabber {
 		window.clearTimeout(this.#idle);
 		try {
 			const clone = await until(this.#open(), stop);
-			const target = Math.min(Math.max(at, 0), Number.isFinite(clone.duration) ? clone.duration : at);
+			const target = clampTime(at, clone.duration);
 			if (Math.abs(clone.currentTime - target) > 0.0005) {
 				const landed = once(clone, "seeked", "seeking", stop);
 				clone.currentTime = target;

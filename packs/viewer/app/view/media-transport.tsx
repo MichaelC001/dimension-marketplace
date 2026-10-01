@@ -6,12 +6,16 @@
 // Mounted into the renderer's dock (`data-slot="viewer-media-dock"`), driven by the media
 // element's events. The element is the truth: nothing here keeps a second clock except the
 // playhead's position, which is read from the element once per animation frame WHILE it is
-// playing and this document is the one on screen - and not at all otherwise.
-import { formatTimecode, MAX_TIMELINE_MARKS, type TimelineMark } from "@dimension/mcp-app-kit/annotate";
+// playing and this document is the one on screen - and not at all otherwise. That position
+// lives in a small store the scrubber and the clock listen to, not in the transport's
+// state, and not in a prop: the scrubber paints it into its own DOM and the clock redraws
+// only when its tenths change, so a frame draws none of the buttons, the volume, the speed,
+// the marks or the scrubber itself.
+import { clampTime, formatTimecode, MAX_TIMELINE_MARKS, type TimelineMark } from "@dimension/mcp-app-kit/annotate";
 import { type TimeRange, TimelineBar } from "@dimension/mcp-app-kit/annotate/react";
 import { IconButton } from "@fraym/ui/elements/icon-button";
 import { cn } from "@fraym/ui/lib/cn";
-import { type CSSProperties, type ReactElement, type ReactNode, useEffect, useState } from "react";
+import { type CSSProperties, type ReactElement, type ReactNode, useEffect, useState, useSyncExternalStore } from "react";
 import { readLength, UNBOUNDED_SENTENCE } from "./media-length";
 import { describeMediaError, type MediaTag } from "./media-messages";
 
@@ -106,34 +110,67 @@ export function useMediaState(media: HTMLMediaElement): MediaState {
 	return state;
 }
 
+/**
+ * Where the playhead is, held outside React so that only the parts that draw it redraw. Moving it to the same place
+ * tells nobody.
+ */
+export interface Playhead {
+	readonly get: () => number;
+	readonly set: (seconds: number) => void;
+	readonly subscribe: (listener: () => void) => () => void;
+}
+
+export function createPlayhead(start: number): Playhead {
+	let position = start;
+	const listeners = new Set<() => void>();
+	return {
+		get: () => position,
+		set(seconds) {
+			if (seconds === position) return;
+			position = seconds;
+			for (const listener of listeners) listener();
+		},
+		subscribe(listener) {
+			listeners.add(listener);
+			return () => void listeners.delete(listener);
+		},
+	};
+}
+
 const POSITION_EVENTS = ["timeupdate", "seeking", "seeked", "emptied", "loadedmetadata"] as const;
 
 /**
- * Where the playhead is. Events keep it right while paused or seeking; while PLAYING it is read once per
- * animation frame (the element's `timeupdate` is four times a second, a playhead that visibly steps) -
- * and only while `live`, so a recording in a hidden tab costs no frames.
+ * Keeps the playhead where the element is. Events keep it right while paused or seeking; while PLAYING it is read once
+ * per animation frame (the element's `timeupdate` is four times a second, a playhead that visibly steps) - and only
+ * while `live`, so a recording in a hidden tab costs no frames. The hook itself never re-renders its caller for it.
  */
-export function useMediaPosition(media: HTMLMediaElement, playing: boolean, live: boolean): readonly [number, (seconds: number) => void] {
-	const [position, setPosition] = useState(() => media.currentTime);
+export function useMediaPosition(media: HTMLMediaElement, playing: boolean, live: boolean): Playhead {
+	const [playhead] = useState(() => createPlayhead(media.currentTime));
 	useEffect(() => {
-		const sync = (): void => setPosition(media.currentTime);
+		const sync = (): void => playhead.set(media.currentTime);
 		for (const type of POSITION_EVENTS) media.addEventListener(type, sync);
 		sync();
 		return () => {
 			for (const type of POSITION_EVENTS) media.removeEventListener(type, sync);
 		};
-	}, [media]);
+	}, [media, playhead]);
 	useEffect(() => {
 		if (!playing || !live) return;
 		let frame = 0;
 		const tick = (): void => {
-			setPosition(media.currentTime);
+			playhead.set(media.currentTime);
 			frame = requestAnimationFrame(tick);
 		};
 		frame = requestAnimationFrame(tick);
 		return () => cancelAnimationFrame(frame);
-	}, [media, playing, live]);
-	return [position, setPosition];
+	}, [media, playing, live, playhead]);
+	return playhead;
+}
+
+/** The elapsed time. What it watches is the TEXT, so it is drawn again when the tenths change, not on every frame. */
+function Elapsed({ playhead }: { readonly playhead: Playhead }): ReactElement {
+	const text = useSyncExternalStore(playhead.subscribe, () => formatTimecode(playhead.get()));
+	return <span className="text-fr-text">{text}</span>;
 }
 
 /** Play when paused, pause when playing. A refused `play()` (no gesture, no source) is not an error to throw at the human. */
@@ -239,12 +276,12 @@ const QUIET_BUTTON = "border-fr-border bg-transparent text-fr-text-2 hover:bg-fr
 
 export function MediaTransport({ media, kind, filename, live, marks, activeId, onSelectMark, waveform, marking }: MediaTransportProps): ReactNode {
 	const state = useMediaState(media);
-	const [position, setPosition] = useMediaPosition(media, state.playing, live);
+	const playhead = useMediaPosition(media, state.playing, live);
 	const seek = (seconds: number): void => {
-		const to = Math.min(Math.max(seconds, 0), state.duration);
+		const to = clampTime(seconds, state.duration);
 		media.currentTime = to;
 		// The playhead follows the pointer now, not when the engine finishes seeking.
-		setPosition(to);
+		playhead.set(to);
 	};
 	const nextRate = RATES[(RATES.indexOf(state.rate) + 1) % RATES.length] ?? 1;
 	const loud = state.muted ? 0 : state.volume;
@@ -274,8 +311,8 @@ export function MediaTransport({ media, kind, filename, live, marks, activeId, o
 				</p>
 			)}
 			<TimelineBar
+				playhead={playhead}
 				duration={state.duration}
-				position={position}
 				marks={marks}
 				activeId={activeId}
 				onSeek={seek}
@@ -304,7 +341,7 @@ export function MediaTransport({ media, kind, filename, live, marks, activeId, o
 					<Glyph name={state.playing ? "pause" : "play"} size={18} />
 				</IconButton>
 				<span className="min-w-[8.5ch] whitespace-nowrap text-fr-sm tabular-nums text-fr-text-3" data-slot="viewer-time">
-					<span className="text-fr-text">{formatTimecode(position)}</span>
+					<Elapsed playhead={playhead} />
 					{/* A recording that does not say how long it is has no total to read out. */}
 					{state.unbounded ? null : ` / ${formatTimecode(state.duration)}`}
 				</span>

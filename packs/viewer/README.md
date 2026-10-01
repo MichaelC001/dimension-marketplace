@@ -9,7 +9,7 @@ offline in a sandboxed frame. The View is `app/view` (built to `app/dist`); the 
 
 | Tool | Who calls it | Does |
 |---|---|---|
-| `view_file { path, filename?, annotate? }` | the model, or the host on a click | Resolves `path` through the fence and mounts the View on it. `annotate: true` opens the file in the View's annotate mode (marks on a picture, comments on text) and is ignored for a kind with nothing to annotate. |
+| `view_file { path, filename?, annotate? }` | the model, or the host on a click | Resolves `path` through the fence and mounts the View on it. `annotate: true` opens the file in the View's annotate mode (marks on a picture, comments on text, a pick of an element on a page, a moment or a stretch on a recording) and is ignored for a kind with nothing to annotate. |
 | `read_file_chunk { path, offset, length }` | the View only (`visibility: ["app"]`) | Streams a file's bytes to the View, at most 4 MiB a call. |
 
 ## What `opens` declares

@@ -111,6 +111,13 @@ describe("content beats a wrong name, and a name alone makes nothing", () => {
 		expect(detectKind("x.mp3", pad(head([0xff, 0xd8, 0xff, 0xe0])))).toBe("image");
 	});
 
+	test("an ADTS header names a sampling-frequency index of 0 to 12; 13 to 15 are reserved, so the header is not audio", () => {
+		// Sync, layer 00, then profile 01 and the 4-bit index in the third byte.
+		const adts = (index: number) => pad(head([0xff, 0xf1, 0x40 | (index << 2), 0x80, 0x1c]));
+		for (let index = 0; index <= 12; index += 1) expect(sniffMedia(adts(index), "x.bin"), `index ${index}`).toEqual({ kind: "audio", mime: "audio/aac" });
+		for (const index of [13, 14, 15]) expect(detectKind("x.bin", adts(index)), `index ${index}`).toBe("binary");
+	});
+
 	test("a modern ISO image (HEIC) is not mistaken for a film", () => {
 		expect(detectKind("photo.heic", iso("heic"))).toBe("binary");
 		expect(detectKind("photo.heic", iso("mif1"))).toBe("binary");

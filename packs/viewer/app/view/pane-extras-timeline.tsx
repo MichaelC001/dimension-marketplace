@@ -7,25 +7,23 @@
 //   * marks belong to the recording and outlive the mode and the renderer: the session
 //     sits in the component that never unmounts, and the element and dock are looked up
 //     again each time the renderer says `ready` (a theme change re-mounts it);
+//   * a recording the player has failed on cannot be marked: no Mark or Stretch buttons, no keys that make marks,
+//     no help for making them - only the marks already made, if there are any, so they are not lost;
 //   * only the tab on screen plays and paints: a hidden tab's media is paused, its frames
-//     are not animated, its waveform is not decoded.
+//     are not animated, and its waveform is not started (one already running finishes).
 import { formatMarkTime, formatTimecode, markNear, MAX_TIMELINE_MARKS } from "@dimension/mcp-app-kit/annotate";
 import { AnnotationPanel, type PanelItem, useTimelineMarks } from "@dimension/mcp-app-kit/annotate/react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { loadDocumentBytes } from "./document-bytes";
-import { FrameClock, FrameGrabber, frameStepTarget } from "./media-frame";
+import { DEFAULT_FRAME_SECONDS, FrameClock, FrameGrabber, frameStepTarget } from "./media-frame";
+import { useDuration, useFailed, useWaveform } from "./media-hooks";
 import { decideKey, keyOwner } from "./media-keys";
-import { type MediaLength, readLength, sameLength, seekTarget } from "./media-length";
+import { readLength, seekTarget } from "./media-length";
 import { FULL_SENTENCE, MediaTransport, type TransportMarking, togglePlayback } from "./media-transport";
-import { decodePeaks, WAVEFORM_MAX_BYTES, waveformAllowed } from "./media-waveform";
 import { Column, type PaneExtrasProps, revisionOf, useSlot } from "./pane-shared";
 
 const MEDIA = '[data-slot="viewer-media"]';
 const DOCK = '[data-slot="viewer-media-dock"]';
-const NO_LENGTH: MediaLength = { duration: 0, reach: 0, unbounded: false };
-/** What can change the length a recording reports or how far it can be played. */
-const LENGTH_EVENTS = ["durationchange", "loadedmetadata", "timeupdate", "seeked", "progress", "emptied"] as const;
 /** How long a line of help stays under the buttons. */
 const HINT_MS = 4000;
 
@@ -44,38 +42,17 @@ function usePageVisible(): boolean {
 	return visible;
 }
 
-/** What the recording says about its own length; nothing until there is an element to ask. */
-function useLength(media: HTMLMediaElement | null): MediaLength {
-	const [length, setLength] = useState<MediaLength>(NO_LENGTH);
-	useEffect(() => {
-		if (media === null) {
-			setLength(NO_LENGTH);
-			return;
-		}
-		const read = (): void =>
-			setLength(previous => {
-				const next = readLength(media);
-				// The same answer is the same state: a playing recording is asked four times a second.
-				return sameLength(previous, next) ? previous : next;
-			});
-		for (const type of LENGTH_EVENTS) media.addEventListener(type, read);
-		read();
-		return () => {
-			for (const type of LENGTH_EVENTS) media.removeEventListener(type, read);
-		};
-	}, [media]);
-	return length;
-}
-
 export function TimelineMarks({ app, tab, active, ready, frame, mode, onMode }: PaneExtrasProps): ReactNode {
 	const kind = tab.kind === "video" ? "video" : "audio";
 	const slot = useSlot(frame, ready, MEDIA);
 	const media = slot instanceof HTMLMediaElement ? slot : null;
 	const dock = useSlot(frame, ready, DOCK);
-	const length = useLength(media);
+	const duration = useDuration(media);
+	const failed = useFailed(media);
 	const visible = usePageVisible();
 	const live = active && visible;
-	const marking = mode === "timeline";
+	// Marks can be made on a recording that plays; the list shows while they can be made or there are some to keep.
+	const markable = mode === "timeline" && !failed;
 
 	// Stills come from a silent second element, so the player never moves while "Request edits" works. It is made
 	// when the element is found and let go of when the element goes (a theme change re-mounts it) or the pane does:
@@ -95,7 +72,7 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode, onMode }: 
 		file: tab.path,
 		rev: revisionOf(tab),
 		mediaKind: kind,
-		duration: length.duration,
+		duration,
 		...(grabber === null ? {} : { grabFrame: (at: number) => grabber.grab(at) }),
 	});
 	const { marks, addMark, addSpan, focusMark, setActiveId } = session;
@@ -118,27 +95,7 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode, onMode }: 
 	}, [media, live]);
 
 	// ── the waveform: sound only, on the screen, and only for a file whose cost the viewer can count ───────
-	const fileId = `${tab.key}\u0000${tab.size}:${tab.mtimeMs}`;
-	const [peaks, setPeaks] = useState<{ readonly id: string; readonly values: Float32Array } | null>(null);
-	const eligible = kind === "audio" && media !== null && tab.size <= WAVEFORM_MAX_BYTES;
-	useEffect(() => {
-		if (!eligible || !live || peaks?.id === fileId) return;
-		const controller = new AbortController();
-		void (async () => {
-			try {
-				// The document cache the pane already filled: the bytes are in memory, not read again.
-				const { bytes } = await loadDocumentBytes(app, tab, { signal: controller.signal });
-				// Only an uncompressed WAV whose header the viewer has checked is decoded; every other file has a plain track.
-				if (!waveformAllowed(bytes)) return;
-				const values = await decodePeaks(bytes, controller.signal);
-				if (values !== null && !controller.signal.aborted) setPeaks({ id: fileId, values });
-			} catch {
-				// A codec this engine cannot decode, or a pane that went away: a plain track is the answer.
-			}
-		})();
-		return () => controller.abort();
-	}, [app, tab, fileId, eligible, live, peaks?.id]);
-	const waveform = peaks?.id === fileId ? peaks.values : undefined;
+	const waveform = useWaveform(app, tab, kind === "audio" && media !== null && live);
 
 	// ── marking ─────────────────────────────────────────────────────────────────
 	const [inPoint, setInPoint] = useState<number | null>(null);
@@ -213,7 +170,7 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode, onMode }: 
 			if (!(media instanceof HTMLVideoElement)) return;
 			media.pause();
 			const clock = frames.current;
-			const target = frameStepTarget(clock?.showing ?? media.currentTime, clock?.frameSeconds ?? 1 / 30, direction);
+			const target = frameStepTarget(clock?.showing ?? media.currentTime, clock?.frameSeconds ?? DEFAULT_FRAME_SECONDS, direction);
 			media.currentTime = seekTarget(target, readLength(media));
 		},
 		[media],
@@ -232,7 +189,7 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode, onMode }: 
 				position: media.currentTime,
 				length: readLength(media),
 				kind,
-				marking,
+				marking: markable,
 				inPoint,
 				owner: keyOwner(event.target),
 			});
@@ -276,7 +233,7 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode, onMode }: 
 		};
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
-	}, [active, media, kind, marking, inPoint, onMode, markHere, stretch, stepFrame, say]);
+	}, [active, media, kind, markable, inPoint, onMode, markHere, stretch, stepFrame, say]);
 
 	// ── what is drawn ──────────────────────────────────────────────────────────
 	const items = useMemo<PanelItem[]>(
@@ -285,7 +242,7 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode, onMode }: 
 	);
 	const transportMarking = useMemo<TransportMarking | null>(
 		() =>
-			marking
+			markable
 				? {
 						full: marks.length >= MAX_TIMELINE_MARKS,
 						inPoint,
@@ -296,7 +253,7 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode, onMode }: 
 						onSpan: makeSpan,
 					}
 				: null,
-		[marking, marks.length, inPoint, hint, markHere, stretch, makeSpan],
+		[markable, marks.length, inPoint, hint, markHere, stretch, makeSpan],
 	);
 
 	return (
@@ -317,7 +274,7 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode, onMode }: 
 						/>,
 						dock,
 					)}
-			{marking ? (
+			{mode === "timeline" && (markable || marks.length > 0) ? (
 				<Column frame={frame}>
 					<AnnotationPanel
 						title="Marks"

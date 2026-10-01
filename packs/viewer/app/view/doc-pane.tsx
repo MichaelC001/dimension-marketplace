@@ -11,12 +11,15 @@ import type { App } from "@modelcontextprotocol/ext-apps";
 import { useEffect, useState } from "react";
 import { MAX_MEDIA_BYTES } from "../../src/contract";
 import { loadDocumentBytes, readLimit, tooLargeToPlay } from "./document-bytes";
+import { shownMode } from "./annotate-modes";
 import { formatBytes } from "./format";
+import { failureAction, type FailureStage, isRecording } from "./media-failure";
 import { loadRenderer } from "./renderers";
 import type { Mounted, Theme } from "./renderers/types";
 import { type AnnotateMode, annotationModes, PaneExtras } from "./pane-extras";
 import type { DocTab } from "./tabs";
 import { KIND_LABEL, Toolbar } from "./toolbar";
+import { useCopied } from "./use-copied";
 import { stepZoom } from "./zoom";
 
 type Phase =
@@ -24,7 +27,7 @@ type Phase =
 	| { readonly name: "ready" }
 	| { readonly name: "unavailable" }
 	| { readonly name: "too-large" }
-	| { readonly name: "error"; readonly message: string };
+	| { readonly name: "error"; readonly message: string; readonly stage: FailureStage };
 
 export interface DocPaneProps {
 	readonly app: App;
@@ -44,6 +47,7 @@ export function DocPane({ app, tab, active, theme }: DocPaneProps) {
 	const [page, setPage] = useState(1);
 	const [retry, setRetry] = useState(0);
 	const [mode, setMode] = useState<AnnotateMode | null>(null);
+	const { copied, copy } = useCopied(tab.path);
 	const limit = readLimit(tab);
 	const truncated = limit !== undefined && tab.size > limit;
 	const modes = annotationModes(tab.kind);
@@ -60,6 +64,8 @@ export function DocPane({ app, tab, active, theme }: DocPaneProps) {
 		if (stage === null) return;
 		const controller = new AbortController();
 		let handle: Mounted | undefined;
+		// Where a failure is met, so a recording that cannot be played is told what to do next (`media-failure.ts`).
+		let where: FailureStage = "load";
 		setPhase({ name: "loading", loaded: 0, total: tab.size });
 		setZoom(1);
 		setPage(1);
@@ -82,6 +88,7 @@ export function DocPane({ app, tab, active, theme }: DocPaneProps) {
 					onProgress: (done, total) => setPhase({ name: "loading", loaded: done, total }),
 				});
 				if (controller.signal.aborted) return;
+				where = "open";
 				handle = await renderer.mount(stage, bytes, {
 					filename: tab.filename,
 					theme,
@@ -99,7 +106,7 @@ export function DocPane({ app, tab, active, theme }: DocPaneProps) {
 				setPhase({ name: "ready" });
 			} catch (error) {
 				if (controller.signal.aborted) return;
-				setPhase({ name: "error", message: error instanceof Error ? error.message : String(error) });
+				setPhase({ name: "error", message: error instanceof Error ? error.message : String(error), stage: where });
 			}
 		})();
 
@@ -121,8 +128,15 @@ export function DocPane({ app, tab, active, theme }: DocPaneProps) {
 		mounted?.goto?.(next);
 	};
 
+	// A document that did not open has nothing to mark, whatever its kind: no marking help, list or send under its error
+	// card (the human's choice of mode is kept, and comes back if a second try opens it). For a recording the card also
+	// offers what can help: Copy path when a retry cannot (`media-failure.ts`).
+	const modeShown = shownMode(mode, phase.name);
+	const retryAction = { label: "Try again", onClick: () => setRetry(count => count + 1) };
+	const copyAction = { label: copied ? "Path copied" : "Copy path", onClick: copy };
+
 	return (
-		<div className={active ? "flex h-full min-h-0 flex-col" : "hidden"} data-slot="viewer-pane" data-key={tab.key} data-annotate={mode ?? undefined}>
+		<div className={active ? "flex h-full min-h-0 flex-col" : "hidden"} data-slot="viewer-pane" data-key={tab.key} data-annotate={modeShown ?? undefined}>
 			<Toolbar
 				filename={tab.filename}
 				path={tab.path}
@@ -144,13 +158,18 @@ export function DocPane({ app, tab, active, theme }: DocPaneProps) {
 						<Message
 							title="Too large to play here"
 							body={`The viewer plays recordings up to ${formatBytes(MAX_MEDIA_BYTES)}, and this one is ${formatBytes(tab.size)}. Copy its path from the bar above to open it in a media player.`}
+							action={copyAction}
 						/>
 					) : null}
 					{phase.name === "error" ? (
-						<Message title="This file could not be shown" body={phase.message} action={{ label: "Try again", onClick: () => setRetry(count => count + 1) }} />
+						<Message
+							title="This file could not be shown"
+							body={phase.message}
+							action={isRecording(tab.kind) && failureAction({ where: phase.stage, message: phase.message }) === "copy-path" ? copyAction : retryAction}
+						/>
 					) : null}
 				</div>
-				<PaneExtras app={app} tab={tab} active={active} ready={phase.name === "ready"} frame={frame} mode={mode} onMode={setMode} />
+				<PaneExtras app={app} tab={tab} active={active} ready={phase.name === "ready"} frame={frame} mode={modeShown} onMode={setMode} />
 			</div>
 		</div>
 	);

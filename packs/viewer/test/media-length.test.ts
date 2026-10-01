@@ -4,7 +4,7 @@
 // moment that was not at 0:00 - the agent was told wrong times with full confidence. These hold
 // the length to what the element says, and to what the engine learns when it is asked properly.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { keySeek, type LengthSource, type MediaLength, readLength, resolveLength, sameLength, seekTarget } from "../app/view/media-length";
+import { keySeek, type LengthSource, type MediaLength, readLength, resolveLength, seekTarget } from "../app/view/media-length";
 import { installDom, type TestDom } from "./dom";
 
 let dom: TestDom;
@@ -48,16 +48,6 @@ describe("readLength", () => {
 		expect(readLength(source({ duration: Number.POSITIVE_INFINITY, seekable: ranges(Number.POSITIVE_INFINITY) })).reach).toBe(0);
 		expect(readLength(source({ duration: Number.POSITIVE_INFINITY, currentTime: Number.NaN, seekable: ranges(20, 55) })).reach).toBe(55);
 		expect(readLength(source({ duration: Number.POSITIVE_INFINITY, currentTime: -4 })).reach).toBe(0);
-	});
-
-	test("two readings of the same answer are the same state", () => {
-		const a = readLength(source({ duration: 60 }));
-		expect(sameLength(a, readLength(source({ duration: 60 })))).toBe(true);
-		expect(sameLength(a, readLength(source({ duration: 61 })))).toBe(false);
-		const open = readLength(source({ duration: Number.POSITIVE_INFINITY, currentTime: 3 }));
-		expect(sameLength(open, readLength(source({ duration: Number.POSITIVE_INFINITY, currentTime: 4 })))).toBe(false);
-		expect(sameLength(open, readLength(source({ duration: Number.POSITIVE_INFINITY, currentTime: 3 })))).toBe(true);
-		expect(sameLength({ duration: 0, reach: 0, unbounded: false }, open)).toBe(false);
 	});
 });
 

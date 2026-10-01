@@ -60,6 +60,11 @@ function useWideView(): boolean {
 	return wide;
 }
 
+/** The pane around a document's frame: a flex column of the toolbar, the mode strip, the document row and the sheet. */
+function paneOf(frame: HTMLElement | null): HTMLElement | null {
+	return frame?.closest<HTMLElement>('[data-slot="viewer-pane"]') ?? null;
+}
+
 /** The list of what the human has marked, and the send: beside the document when there is room, under it when there is not. */
 export function Column({ frame, children }: { readonly frame: HTMLElement | null; readonly children: ReactNode }) {
 	const wide = useWideView();
@@ -70,18 +75,30 @@ export function Column({ frame, children }: { readonly frame: HTMLElement | null
 			</aside>
 		);
 	}
-	// The pane is a flex column (toolbar, then the document row): a third child is a sheet under the document.
-	const pane = frame?.closest<HTMLElement>('[data-slot="viewer-pane"]') ?? null;
+	const pane = paneOf(frame);
 	if (pane === null) return null;
+	// A sheet under the document. Empty, it is only as tall as the hint and the send need, so the document keeps
+	// the room the human is aiming in. Once something is marked it is the list's turn: half the pane (never more,
+	// so the document always keeps the other half), which is room for whole rows in the artifact column's ~745 px.
 	return createPortal(
 		<aside
 			data-slot="annotate-panel"
 			data-placement="bottom"
-			className="flex h-[min(42%,340px)] min-h-[200px] shrink-0 flex-col [&_.dam-panel]:border-s-0 [&_.dam-panel]:border-t [&_.dam-panel]:border-fr-border"
+			className="flex h-[min(34%,240px)] min-h-[180px] shrink-0 flex-col has-[.dam-list]:h-[min(50%,440px)] [&_.dam-panel]:border-s-0 [&_.dam-panel]:border-t [&_.dam-panel]:border-fr-border"
 		>
 			{children}
 		</aside>,
 		pane,
 	);
+}
+
+/**
+ * A mode's own tools (the pick strip, the drawing tools), docked between the viewer's toolbar and the document. It
+ * is in the flow: it takes its own row and covers nothing, where a pill floating over a short frame hid the very
+ * thing the human was pointing at. The toolbar keeps the slot (`viewer-mode-strip`), empty until a mode fills it.
+ */
+export function Strip({ frame, children }: { readonly frame: HTMLElement | null; readonly children: ReactNode }) {
+	const slot = paneOf(frame)?.querySelector<HTMLElement>('[data-slot="viewer-mode-strip"]') ?? null;
+	return slot === null ? null : createPortal(children, slot);
 }
 

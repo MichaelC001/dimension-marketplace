@@ -2,7 +2,7 @@
 // really draws and really annotates. The host decides a click from the published
 // rows alone (`pickHandler`, `annotationModelFor`), so the promise is checked
 // through the host's own functions, not a restatement of them.
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -18,6 +18,7 @@ import { type AnnotationModel, annotationModelFor, classifyFile, type OpenHandle
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { z } from "zod";
+import { annotationModes, MODEL_FOR_MODE } from "../app/view/annotate-modes";
 import type { ViewerKind } from "../src/contract";
 import { detectKind } from "../src/kind";
 import { createViewerServer } from "../src/server";
@@ -41,21 +42,12 @@ const rows: OpenHandlerFact[] = opens.map(open => ({
 	annotates: open.annotates ?? [],
 }));
 
-/** What the View's annotate layer does per kind it draws (doc 85; `annotationModes` in `app/view/pane-extras.tsx`):
- *  marks on a picture, comments on text, picked elements on a page drawn in a script-less frame, marks on a recording's timeline, nothing on a file card. */
-const VIEW_ANNOTATES: Record<ViewerKind, AnnotationModel | null> = {
-	image: "marks",
-	pdf: "text",
-	docx: "text",
-	pptx: "text",
-	xlsx: "text",
-	markdown: "text",
-	text: "text",
-	audio: "timeline",
-	video: "timeline",
-	html: "element",
-	binary: null,
-};
+/** What the View's annotate layer does for a kind it draws, read from the table the pane itself seats its layers from
+ *  (`annotate-modes.ts`, doc 85): nothing on a file card, else the platform's name for the one mode it offers. */
+function viewAnnotates(kind: ViewerKind): AnnotationModel | null {
+	const [mode] = annotationModes(kind);
+	return mode === undefined ? null : MODEL_FOR_MODE[mode];
+}
 
 const PNG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 const ZIP = [0x50, 0x4b, 0x03, 0x04];
@@ -157,7 +149,7 @@ describe("what the viewer claims to open is what it draws and what it can annota
 		const row = claimed.find(candidate => candidate.ext === ext)?.row as OpenHandlerFact;
 		const kind = detectKind(`file.${ext}`, headOf(ext));
 		expect(kind).not.toBe("binary");
-		const model = VIEW_ANNOTATES[kind];
+		const model = viewAnnotates(kind);
 		expect(row.annotates).toEqual(model === null ? [] : [model]);
 	});
 
@@ -169,7 +161,7 @@ describe("what the viewer claims to open is what it draws and what it can annota
 			const hostModel = annotationModelFor(file.kind);
 			return hostModel !== null && row?.annotates.includes(hostModel) === true;
 		})();
-		const viewModel = VIEW_ANNOTATES[detectKind(`report.${ext}`, headOf(ext))];
+		const viewModel = viewAnnotates(detectKind(`report.${ext}`, headOf(ext)));
 		// Offered only when the model the host asks for is the one the View implements.
 		expect(offered).toBe(viewModel !== null && viewModel === annotationModelFor(file.kind));
 	});

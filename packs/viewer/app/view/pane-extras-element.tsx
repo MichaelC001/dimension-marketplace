@@ -2,8 +2,9 @@
 // should change about it, and the agent gets its selector, its words and its box.
 //
 // What lives HERE is only the seating, like `PictureMarkup` beside it: where the frames are, where
-// the pill and the list go, and the rules that come from the pane. The picking is the kit's
-// (`@dimension/mcp-app-kit/annotate`), and so is every rule about a page that may be hostile.
+// the pick tools (a strip docked under the toolbar, never over the page) and the list go, and the
+// rules that come from the pane. The picking is the kit's (`@dimension/mcp-app-kit/annotate`), and
+// so is every rule about a page that may be hostile.
 //   * the READING frame is `[data-slot="viewer-html-frame"]`, drawn by `renderers/html.ts` with
 //     `sandbox=""`: it runs nothing, for anyone, and is never changed. In Pick mode the kit adds a PICK
 //     frame over it, made from its `srcdoc`, and removes it again when the mode ends;
@@ -23,7 +24,7 @@ import {
 import type { PickKeyIntent } from "@dimension/mcp-app-kit/annotate";
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import { Column, type PaneExtrasProps, revisionOf, useSlot } from "./pane-shared";
+import { Column, type PaneExtrasProps, revisionOf, Strip, useSlot } from "./pane-shared";
 
 const HTML_FRAME = '[data-slot="viewer-html-frame"]';
 
@@ -106,19 +107,17 @@ export function ElementPicks({ app, tab, active, ready, frame, mode, onMode }: P
 						/>,
 						frame,
 					)}
-			{frame === null || !live
-				? null
-				: createPortal(
-						<div className="absolute inset-x-0 bottom-4 z-10 flex justify-center">
-							<ElementToolbar
-								onWholePage={session.pickWholePage}
-								onDone={() => onMode(null)}
-								unavailable={unreadable}
-								full={session.full}
-							/>
-						</div>,
-						frame,
-					)}
+			{live ? (
+				<Strip frame={frame}>
+					<ElementToolbar
+						onWholePage={session.pickWholePage}
+						onDone={() => onMode(null)}
+						unavailable={unreadable}
+						full={session.full}
+						placement="strip"
+					/>
+				</Strip>
+			) : null}
 			{picking ? (
 				<Column frame={frame}>
 					<AnnotationPanel

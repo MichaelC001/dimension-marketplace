@@ -183,3 +183,32 @@ describe("a video that would not open is not opened again for every still", () =
 		grabber.dispose();
 	});
 });
+
+describe("a still is asked for a time the video has", () => {
+	// The silent element is parked at 10 s, so the seek it is asked to make is visible: `currentTime` is where it was sent.
+	async function seekAskedFor(at: number, duration: number): Promise<number> {
+		const grabber = new FrameGrabber(source);
+		const still = grabber.grab(at);
+		await settle();
+		const clone = clones.at(-1) as HTMLVideoElement;
+		Object.assign(clone, { duration, currentTime: 10 });
+		tell(clone, "loadeddata");
+		await settle();
+		const asked = clone.currentTime;
+		grabber.dispose();
+		await expect(still).rejects.toBeDefined();
+		return asked;
+	}
+
+	test.each([
+		["a time past the end is the end", 500, 60, 60],
+		["a time inside is itself", 12.5, 60, 12.5],
+		["a time before the start is the start", -3, 60, 0],
+		["a time that is not a number is the start: assigned to `currentTime` it would throw", Number.NaN, 60, 0],
+		["a video with no end has no end to cut a time at", 500, Number.POSITIVE_INFINITY, 500],
+		["...but still has a start", -3, Number.POSITIVE_INFINITY, 0],
+		["...and still wants a number", Number.NaN, Number.POSITIVE_INFINITY, 0],
+	] as const)("%s", async (_what, at, duration, expected) => {
+		expect(await seekAskedFor(at, duration)).toBe(expected);
+	});
+});

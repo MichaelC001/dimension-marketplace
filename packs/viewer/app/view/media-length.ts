@@ -51,10 +51,6 @@ export function readLength(media: LengthSource): MediaLength {
 	return { duration: known, reach: known, unbounded: false };
 }
 
-export function sameLength(a: MediaLength, b: MediaLength): boolean {
-	return a.duration === b.duration && a.reach === b.reach && a.unbounded === b.unbounded;
-}
-
 /** `seconds` kept where the recording can be: [0, its length] - and for one with no end, anywhere from its start. */
 export function seekTarget(seconds: number, length: MediaLength): number {
 	return clampTime(seconds, length.duration);
