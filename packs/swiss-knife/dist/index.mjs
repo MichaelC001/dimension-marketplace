@@ -166,6 +166,49 @@ var TERMINAL_CONTINUATION_REASONS = Object.assign(
   { handoff: true, new: true, plan: true, drop: true }
 );
 
+// ../../../fraym/packages/driver/src/theme.ts
+var THEME_TOKEN_CHANNELS = {
+  "--fr-accent": "color",
+  "--fr-accent-2": "color",
+  "--fr-accent-dim": "color",
+  "--fr-accent-line": "color",
+  "--fr-accent-ink": "color",
+  "--fr-accent-text": "color",
+  "--fr-accent-grad": "paint",
+  "--fr-accent-grad-hover": "paint",
+  "--fr-bg": "color",
+  "--fr-rail": "color",
+  "--fr-surface": "color",
+  "--fr-surface-2": "color",
+  "--fr-surface-3": "color",
+  "--fr-pill-sunken": "color",
+  "--fr-border": "color",
+  "--fr-border-soft": "color",
+  "--fr-btn-hover-bd": "color",
+  "--fr-text": "color",
+  "--fr-text-2": "color",
+  "--fr-text-3": "color",
+  "--fr-add": "color",
+  "--fr-add-bg": "color",
+  "--fr-del": "color",
+  "--fr-del-bg": "color",
+  "--fr-del-line": "color",
+  "--fr-warn": "color",
+  "--fr-warn-ink": "color",
+  "--fr-blue": "color",
+  "--fr-iris": "color",
+  "--fr-scrollbar-thumb": "color",
+  "--fr-scrollbar-thumb-hover": "color",
+  "--fr-switch-thumb-off": "color",
+  "--fr-font-primary": "font",
+  "--fr-font-display": "font",
+  "--fr-font-secondary": "font",
+  "--fr-font-mono": "font",
+  "--fr-r": "length",
+  "--fr-ui-size": "length"
+};
+var THEME_TOKENS = Object.keys(THEME_TOKEN_CHANNELS);
+
 // src/deny.ts
 var SECRET_DIRECTORIES = {
   ".ssh": true,
