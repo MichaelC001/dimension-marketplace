@@ -19,7 +19,7 @@ export const ANNOTATE_META_KEY = "ai.insodimension.viewer/annotate";
 /** The most bytes one `read_file_chunk` call may return (before base64). */
 export const MAX_CHUNK_BYTES = 4 * 1024 * 1024;
 
-export const VIEWER_KINDS = ["image", "pdf", "html", "markdown", "docx", "pptx", "xlsx", "text", "binary"] as const;
+export const VIEWER_KINDS = ["image", "pdf", "html", "markdown", "docx", "pptx", "xlsx", "text", "audio", "video", "binary"] as const;
 export type ViewerKind = (typeof VIEWER_KINDS)[number];
 
 /** `structuredContent` of a `view_file` result. `path` is the REAL path (symlinks

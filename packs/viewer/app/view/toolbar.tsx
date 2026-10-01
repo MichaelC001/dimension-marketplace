@@ -19,6 +19,8 @@ export const KIND_LABEL: Record<ViewerKind, string> = {
 	pptx: "PowerPoint",
 	xlsx: "Excel",
 	text: "Text",
+	audio: "Audio",
+	video: "Video",
 	binary: "File",
 };
 
@@ -35,7 +37,7 @@ export interface ToolbarProps {
 	readonly pager?: { readonly page: number; readonly count: number; readonly onGoto: (page: number) => void };
 }
 
-const MODE_LABEL: Record<AnnotateMode, string> = { marks: "Markup", comments: "Comment" };
+const MODE_LABEL: Record<AnnotateMode, string> = { marks: "Markup", comments: "Comment", elements: "Pick", timeline: "Mark" };
 
 export function Toolbar({ filename, path, kind, size, shownBytes, zoom, pager, modes }: ToolbarProps) {
 	const [copied, setCopied] = useState(false);

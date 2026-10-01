@@ -23,30 +23,15 @@ import {
 	useImageMarkup,
 	useMarkupShortcuts,
 } from "@dimension/mcp-app-kit/annotate/react";
-import type { App } from "@modelcontextprotocol/ext-apps";
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo } from "react";
 import { createPortal } from "react-dom";
 import type { ViewerKind } from "../../src/contract";
 import { loadDocumentBytes } from "./document-bytes";
-import type { DocTab } from "./tabs";
+import { ElementPicks } from "./pane-extras-element";
+import { TimelineMarks } from "./pane-extras-timeline";
+import { type AnnotateMode, Column, type PaneExtrasProps, revisionOf, useSlot } from "./pane-shared";
 
-/** The toolbar's markup modes: pick marks on a picture, or comments on text. */
-export type AnnotateMode = "marks" | "comments";
-
-export interface PaneExtrasProps {
-	readonly app: App;
-	readonly tab: DocTab;
-	/** This document's tab is the one showing. */
-	readonly active: boolean;
-	/** The renderer has mounted: `frame` now holds the rendered document. */
-	readonly ready: boolean;
-	/** The `position: relative` frame around the rendered document (`data-slot="viewer-stage-frame"`). */
-	readonly frame: HTMLElement | null;
-	/** The mode the toolbar toggle is in, or `null` when off. */
-	readonly mode: AnnotateMode | null;
-	/** Leave or change the mode from inside the layer (Esc, a Done button). */
-	readonly onMode: (mode: AnnotateMode | null) => void;
-}
+export type { AnnotateMode, PaneExtrasProps };
 
 const PICTURE = '[data-slot="viewer-picture"]';
 const TEXT_ROOT = '[data-slot="viewer-text-root"]';
@@ -70,75 +55,22 @@ const PAGE_WORDS: Readonly<Partial<Record<ViewerKind, string>>> = { pptx: "slide
  * A kind is listed only when its renderer puts what the human sees where a layer
  * can reach it: a picture in a box sized to its drawn pixels, or text in a
  * `viewer-text-root` element (Word's is an open shadow root: the kit reads it).
- * HTML is drawn in a `sandbox=""` frame, an opaque origin nothing outside can read
- * or select in, so it offers nothing rather than a toggle that cannot work.
+ * A page is the exception that proves it: its frame is script-free but readable by the
+ * View (`sandbox="allow-same-origin"`, docs/design/88), so it offers `elements`; a
+ * recording offers `timeline`.
  */
 export function annotationModes(kind: ViewerKind): readonly AnnotateMode[] {
 	if (kind === "image") return ["marks"];
+	if (kind === "html") return ["elements"];
+	if (kind === "audio" || kind === "video") return ["timeline"];
 	return KIND_WORDS[kind] === undefined ? [] : ["comments"];
 }
 
-/** The element a renderer marked with `selector`, looked up again whenever it re-mounts. */
-function useSlot(frame: HTMLElement | null, ready: boolean, selector: string): HTMLElement | null {
-	const [element, setElement] = useState<HTMLElement | null>(null);
-	useEffect(() => {
-		setElement(ready && frame !== null ? frame.querySelector<HTMLElement>(selector) : null);
-	}, [frame, ready, selector]);
-	return element;
-}
-
-/** The revision a marked-up file is keyed to: the same identity the tab uses to reload. */
-const revisionOf = (tab: DocTab): string => `${tab.mtimeMs}:${tab.size}`;
-
 export function PaneExtras(props: PaneExtrasProps): ReactNode {
 	if (props.tab.kind === "image") return <PictureMarkup {...props} />;
+	if (props.tab.kind === "html") return <ElementPicks {...props} />;
+	if (props.tab.kind === "audio" || props.tab.kind === "video") return <TimelineMarks {...props} />;
 	return KIND_WORDS[props.tab.kind] === undefined ? null : <TextComments {...props} />;
-}
-
-/**
- * Below this View width the list goes UNDER the document. The artifact column is ~640 px
- * wide; a 300 px list beside a fit-to-width page (PDF, Word, a slide) leaves it a third of
- * its size, with text a few pixels tall that nobody can read or select. Measured, not guessed.
- */
-const SIDE_PANEL_MIN_VIEW_WIDTH = 900;
-
-/** Whether this View is wide enough to seat the list beside the document. */
-function useWideView(): boolean {
-	const query = `(min-width: ${SIDE_PANEL_MIN_VIEW_WIDTH}px)`;
-	const [wide, setWide] = useState(() => window.matchMedia(query).matches);
-	useEffect(() => {
-		const list = window.matchMedia(query);
-		const update = () => setWide(list.matches);
-		update();
-		list.addEventListener("change", update);
-		return () => list.removeEventListener("change", update);
-	}, [query]);
-	return wide;
-}
-
-/** The list of what the human has marked, and the send: beside the document when there is room, under it when there is not. */
-function Column({ frame, children }: { readonly frame: HTMLElement | null; readonly children: ReactNode }) {
-	const wide = useWideView();
-	if (wide) {
-		return (
-			<aside data-slot="annotate-panel" data-placement="side" className="flex w-[300px] min-h-0 shrink-0 flex-col">
-				{children}
-			</aside>
-		);
-	}
-	// The pane is a flex column (toolbar, then the document row): a third child is a sheet under the document.
-	const pane = frame?.closest<HTMLElement>('[data-slot="viewer-pane"]') ?? null;
-	if (pane === null) return null;
-	return createPortal(
-		<aside
-			data-slot="annotate-panel"
-			data-placement="bottom"
-			className="flex h-[min(42%,340px)] min-h-[200px] shrink-0 flex-col [&_.dam-panel]:border-s-0 [&_.dam-panel]:border-t [&_.dam-panel]:border-fr-border"
-		>
-			{children}
-		</aside>,
-		pane,
-	);
 }
 
 function PictureMarkup({ app, tab, active, ready, frame, mode, onMode }: PaneExtrasProps) {
