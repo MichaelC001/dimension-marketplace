@@ -7,7 +7,7 @@
 // a room with no repo in it: the rail lists only that desk's sessions
 // (`workspace.scope`), the thread draws only the conversation and a quiet
 // "Worked for" line (`chat-thread`), and the `artifact-view` column opens a
-// tab for each document the assistant makes (`viewer`, an artifactory).
+// tab for each document the assistant makes (the Viewer, an artifactory of `swiss-knife`).
 //
 // Why the top bar publishes `sound` alone: an absent `workspace.actions` means
 // "no opinion" and shows every affordance, including `environment` - the repo /

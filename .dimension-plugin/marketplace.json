@@ -101,35 +101,6 @@
 			"channel": "canary"
 		},
 		{
-			"name": "ban-comments",
-			"source": "./packs/ban-comments",
-			"pluginId": "ban-comments",
-			"title": "Ban Comments",
-			"icon": "message-square-off",
-			"description": "Ban Comments — a stream rule that stops the agent mid-edit when it writes a code comment and has it carry the meaning in names, types and structure instead",
-			"version": "0.1.0",
-			"author": {
-				"name": "Dimension"
-			},
-			"repository": "https://github.com/insodimension/dimension-community",
-			"license": "MIT",
-			"category": "rules",
-			"tags": [
-				"rules",
-				"ttsr",
-				"comments",
-				"code-style",
-				"typescript",
-				"rust",
-				"go",
-				"python"
-			],
-			"requires": {
-				"dimension": ">=0.10.24"
-			},
-			"channel": "canary"
-		},
-		{
 			"name": "brand-marks",
 			"source": "./packs/brand-marks",
 			"pluginId": "brand-marks",
@@ -233,7 +204,7 @@
 			"pluginId": "chat",
 			"title": "Chat",
 			"description": "Chat - your personal assistant, in a room of its own. A calm conversation with Aether, a rail of your past sessions, and a viewer beside it that opens the documents, slides and images it makes. No repo, no branches, no developer chrome: one layout and one space, assembled entirely from marketplace packs.",
-			"version": "0.1.0",
+			"version": "0.1.1",
 			"author": {
 				"name": "Dimension"
 			},
@@ -262,7 +233,7 @@
 						"chat-thread",
 						"independent-composer",
 						"classic-start",
-						"viewer"
+						"swiss-knife"
 					]
 				}
 			]
@@ -296,8 +267,8 @@
 			"pluginId": "chat-thread",
 			"title": "Chat Thread",
 			"icon": "messageSquare",
-			"description": "Chat thread - the conversation and nothing else: your words, the assistant's words, and one quiet 'Worked for' line per turn. Built from the kit's StoreThread part; no tool cards, no shipped thread inside.",
-			"version": "0.1.0",
+			"description": "Chat thread - the conversation and nothing else: your words, the assistant's words, and one quiet 'Worked for' line per turn. Built from the kit's StoreThread part; no tool rows except a card for a file the assistant shows you, no shipped thread inside.",
+			"version": "0.1.1",
 			"author": {
 				"name": "Dimension"
 			},
@@ -1023,6 +994,45 @@
 			]
 		},
 		{
+			"name": "swiss-knife",
+			"source": "./packs/swiss-knife",
+			"pluginId": "swiss-knife",
+			"title": "Swiss Knife",
+			"icon": "hammer",
+			"description": "Small useful things in one switch: `present` shows you a file as a card in the thread, the Viewer opens and annotates it, and a stream rule stops the agent mid-edit when it writes a code comment.",
+			"version": "0.2.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-community",
+			"license": "MIT",
+			"category": "tools",
+			"tags": [
+				"present",
+				"files",
+				"images",
+				"viewer",
+				"artifactory",
+				"mcp-apps",
+				"documents",
+				"pdf",
+				"docx",
+				"pptx",
+				"xlsx",
+				"audio",
+				"video",
+				"rules",
+				"ttsr",
+				"comments",
+				"code-style",
+				"tools"
+			],
+			"requires": {
+				"dimension": ">=0.10.24"
+			},
+			"channel": "canary"
+		},
+		{
 			"name": "taste",
 			"source": "./packs/taste",
 			"pluginId": "taste",
@@ -1141,32 +1151,6 @@
 				"polish",
 				"skill"
 			]
-		},
-		{
-			"name": "viewer",
-			"source": "./packs/viewer",
-			"pluginId": "viewer",
-			"title": "Viewer",
-			"icon": "file",
-			"description": "A tabbed document viewer beside the conversation: images, PDF, HTML, Markdown, Word, PowerPoint, Excel and plain text, rendered offline inside a sandboxed frame. Ask the agent to open a file and it appears as a tab.",
-			"version": "0.1.0",
-			"author": {
-				"name": "Dimension"
-			},
-			"repository": "https://github.com/insodimension/dimension-community",
-			"license": "MIT",
-			"category": "artifactory",
-			"tags": [
-				"viewer",
-				"artifactory",
-				"mcp-apps",
-				"documents",
-				"pdf",
-				"docx",
-				"pptx",
-				"xlsx"
-			],
-			"channel": "canary"
 		},
 		{
 			"name": "watch",
