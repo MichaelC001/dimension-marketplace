@@ -11,9 +11,9 @@ import { basename, extname } from "node:path";
 import { isRecord } from "./guards.ts";
 import type { LivePrice } from "./pricing.ts";
 
-export const QUEUE_ORIGIN = "https://queue.fal.run";
-export const API_ORIGIN = "https://api.fal.ai";
-export const REST_ORIGIN = "https://rest.fal.ai";
+const QUEUE_ORIGIN = "https://queue.fal.run";
+const API_ORIGIN = "https://api.fal.ai";
+const REST_ORIGIN = "https://rest.fal.ai";
 
 /** An API call that expects a short answer. Uploads and downloads set their own limits. */
 const CALL_TIMEOUT_MS = 30_000;

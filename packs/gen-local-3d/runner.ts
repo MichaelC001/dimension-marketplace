@@ -71,7 +71,7 @@ const FLOW_STEP = /^\s*\[flow\]\s*\[[#.]*\]\s*(\d+)\/(\d+)\s/;
 
 /** Fold one CLI line into the progress; true when the line was progress noise
  *  that a failure message should not quote. */
-export function foldCliLine(progress: CliProgress, line: string): boolean {
+function foldCliLine(progress: CliProgress, line: string): boolean {
 	const banner = BANNER.exec(line);
 	if (banner) {
 		const index = Number(banner[1]);
@@ -192,7 +192,7 @@ function exitCodeOf(command: string, args: readonly string[]): Promise<number> {
 
 /** Kill `pid` and everything it started. Windows `taskkill /T /F` walks the tree;
  *  the CLI is a single process elsewhere, so SIGKILL on the pid is the whole tree. */
-export async function killProcessTree(pid: number): Promise<void> {
+async function killProcessTree(pid: number): Promise<void> {
 	if (!Number.isInteger(pid) || pid <= 0) throw new Error(`refusing to kill invalid pid ${pid}`);
 	if (process.platform === "win32") {
 		const code = await exitCodeOf("taskkill", ["/PID", String(pid), "/T", "/F"]);
@@ -221,7 +221,7 @@ export async function stopProcess(running: RunningProcess): Promise<void> {
 const UNIX_ETIME = /^(?:(?:(\d+)-)?(\d+):)?(\d+):(\d+)$/;
 
 /** When the OS started `pid`, in epoch ms, or null when no such process exists. */
-export async function processStartMs(pid: number): Promise<number | null> {
+async function processStartMs(pid: number): Promise<number | null> {
 	if (!Number.isInteger(pid) || pid <= 0) return null;
 	try {
 		if (process.platform === "win32") {
@@ -247,7 +247,7 @@ export async function processStartMs(pid: number): Promise<number | null> {
 
 /** True only when `pid` is alive AND is the process started at `startedAt`: a pid
  *  alone can be reused by an unrelated program after ours died. */
-export async function isSameProcess(pid: number, startedAt: number): Promise<boolean> {
+async function isSameProcess(pid: number, startedAt: number): Promise<boolean> {
 	const started = await processStartMs(pid);
 	return started !== null && Math.abs(started - startedAt) <= SAME_PROCESS_WINDOW_MS;
 }

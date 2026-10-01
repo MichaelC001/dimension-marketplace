@@ -104,7 +104,7 @@ export interface PackData {
 	readonly models: readonly ModelEntry[];
 }
 
-export const MODELS_PATH = join(dirname(fileURLToPath(import.meta.url)), "models.json");
+const MODELS_PATH = join(dirname(fileURLToPath(import.meta.url)), "models.json");
 
 function fail(where: string, problem: string): never {
 	throw new Error(`gen-fal models.json: ${where} ${problem}`);
