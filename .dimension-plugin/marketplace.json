@@ -899,6 +899,29 @@
 			]
 		},
 		{
+			"name": "speech-elevenlabs",
+			"source": "./packs/speech-elevenlabs",
+			"pluginId": "speech-elevenlabs",
+			"title": "ElevenLabs voice",
+			"icon": "packs/speech-elevenlabs/assets/icon.svg",
+			"description": "ElevenLabs speech provider: an agent's replies spoken by Eleven v4 Turbo (or v4, or Flash v2.5) with word-level caption timing. Choose it from a voice profile by naming the provider \"elevenlabs\".",
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-community",
+			"license": "MIT",
+			"category": "connector",
+			"tags": [
+				"speech",
+				"voice",
+				"tts",
+				"elevenlabs",
+				"provider"
+			],
+			"channel": "canary"
+		},
+		{
 			"name": "taste",
 			"source": "./packs/taste",
 			"pluginId": "taste",
