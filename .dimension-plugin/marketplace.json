@@ -233,7 +233,7 @@
 			"pluginId": "chat",
 			"title": "Chat",
 			"description": "Chat - your personal assistant, in a room of its own. A calm conversation with Aether, a rail of your past sessions, and a viewer beside it that opens the documents, slides and images it makes. No repo, no branches, no developer chrome: one layout and one space, assembled entirely from marketplace packs.",
-			"version": "0.1.0",
+			"version": "0.2.0",
 			"author": {
 				"name": "Dimension"
 			},
@@ -262,7 +262,8 @@
 						"chat-thread",
 						"independent-composer",
 						"classic-start",
-						"viewer"
+						"viewer",
+						"face-to-face"
 					]
 				}
 			]
@@ -274,7 +275,7 @@
 			"title": "Chat Rail",
 			"icon": "panel",
 			"description": "The Chat session rail: only your conversations, newest first, with a search box, a New session button and collections you make yourself to group them. No repos, branches, PR chips or recaps. Built from @fraym/ui primitives and the rail slot's channels only - no shipped rail inside.",
-			"version": "0.1.0",
+			"version": "0.1.1",
 			"author": {
 				"name": "Dimension"
 			},
