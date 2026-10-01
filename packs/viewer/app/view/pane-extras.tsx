@@ -55,8 +55,10 @@ const PAGE_WORDS: Readonly<Partial<Record<ViewerKind, string>>> = { pptx: "slide
  * A kind is listed only when its renderer puts what the human sees where a layer
  * can reach it: a picture in a box sized to its drawn pixels, or text in a
  * `viewer-text-root` element (Word's is an open shadow root: the kit reads it).
- * A page is the exception that proves it: its frame is script-free but readable by the
- * View (`sandbox="allow-same-origin"`, docs/design/88), so it offers `elements`; a
+ * A page is the exception that proves it, and it works through TWO frames (docs/design/88 section 2). The reading
+ * frame is `sandbox=""`: it runs nothing and the View cannot read it. `elements` is offered because Pick mode adds
+ * a second frame over it, `sandbox="allow-scripts"` and nothing else, whose document opens with a policy that admits
+ * only the hash of the picker script: that script reports layout and the View draws every outline itself. A
  * recording offers `timeline`.
  */
 export function annotationModes(kind: ViewerKind): readonly AnnotateMode[] {

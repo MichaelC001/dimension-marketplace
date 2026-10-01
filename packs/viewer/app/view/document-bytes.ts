@@ -5,7 +5,7 @@
 // changed: the key carries `size:mtime`, so a changed file never hits.
 import { createToolCaller } from "@dimension/mcp-app-kit/tools";
 import type { App } from "@modelcontextprotocol/ext-apps";
-import { fileChunkSchema, MAX_CHUNK_BYTES } from "../../src/contract";
+import { fileChunkSchema, MAX_CHUNK_BYTES, MAX_MEDIA_BYTES } from "../../src/contract";
 import { ByteCache, loadBytes } from "./bytes";
 import { formatBytes } from "./format";
 import type { DocTab } from "./tabs";
@@ -33,9 +33,19 @@ export interface DocumentLoadOptions {
 /** How many leading bytes of `tab` are read: all of it, except text, which is capped. */
 export const readLimit = (tab: Pick<DocTab, "kind">): number | undefined => (tab.kind === "text" ? TEXT_LIMIT : undefined);
 
+/**
+ * A recording past {@link MAX_MEDIA_BYTES}. It is played from one `Blob` of the whole file, so there is no
+ * honest smaller read of it (a truncated one plays, and lies about how long it is): it is not read at all.
+ */
+export const tooLargeToPlay = (tab: Pick<DocTab, "kind" | "size">): boolean => (tab.kind === "audio" || tab.kind === "video") && tab.size > MAX_MEDIA_BYTES;
+
 export async function loadDocumentBytes(app: App, tab: DocTab, options: DocumentLoadOptions = {}): Promise<LoadedDocument> {
 	// A file card needs no bytes.
 	if (tab.kind === "binary") return { bytes: new Uint8Array(0), truncated: false };
+	// Decided from the size the server reported, BEFORE the first chunk is asked for.
+	if (tooLargeToPlay(tab)) {
+		throw new Error(`This recording is ${formatBytes(tab.size)}; the viewer plays recordings up to ${formatBytes(MAX_MEDIA_BYTES)}.`);
+	}
 	const limit = readLimit(tab);
 	if (limit === undefined && tab.size > DOCUMENT_LIMIT) {
 		throw new Error(`This file is ${formatBytes(tab.size)}; the viewer opens files up to ${formatBytes(DOCUMENT_LIMIT)}.`);

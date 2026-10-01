@@ -91,8 +91,8 @@ export async function createViewerServer(options: ViewerServerOptions = {}): Pro
 		{
 			title: "View file",
 			description:
-				"Open a file from the user's computer in the viewer beside the conversation, as a tab. Renders images, PDF, HTML, Markdown, Word (.docx), PowerPoint (.pptx), Excel (.xlsx) and plain text; other files show a file card. " +
-				"Pass the ABSOLUTE path of a file you created or were pointed at; opening the same file again refreshes its tab. " +
+				"Open a file from the user's computer in the viewer beside the conversation, as a tab. Renders images, PDF, HTML, Markdown, Word (.docx), PowerPoint (.pptx), Excel (.xlsx) and plain text, and plays audio and video; other files show a file card. " +
+				"Pass the ABSOLUTE path of a file you created or were pointed at; opening the same file again refreshes its tab. annotate: true opens it ready for the user to mark up (a moment on a recording, an element on a page). " +
 				"Only folders the user allowed are readable (their personal vault and the folders in VIEWER_ROOTS); anything else, and secrets such as .env files and keys, is refused with the reason.",
 			inputSchema: {
 				path: z.string().min(1).max(4096).describe("Absolute path of the file to open"),

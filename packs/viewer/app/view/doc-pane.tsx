@@ -9,7 +9,8 @@
 // (`data-slot="viewer-stage-frame"`), or the right-hand column after it.
 import type { App } from "@modelcontextprotocol/ext-apps";
 import { useEffect, useState } from "react";
-import { loadDocumentBytes, readLimit } from "./document-bytes";
+import { MAX_MEDIA_BYTES } from "../../src/contract";
+import { loadDocumentBytes, readLimit, tooLargeToPlay } from "./document-bytes";
 import { formatBytes } from "./format";
 import { loadRenderer } from "./renderers";
 import type { Mounted, Theme } from "./renderers/types";
@@ -22,6 +23,7 @@ type Phase =
 	| { readonly name: "loading"; readonly loaded: number; readonly total: number }
 	| { readonly name: "ready" }
 	| { readonly name: "unavailable" }
+	| { readonly name: "too-large" }
 	| { readonly name: "error"; readonly message: string };
 
 export interface DocPaneProps {
@@ -64,6 +66,11 @@ export function DocPane({ app, tab, active, theme }: DocPaneProps) {
 
 		(async () => {
 			try {
+				// A recording past the cap is not read at all: the size is the server's, and it is decided before a byte moves.
+				if (tooLargeToPlay(tab)) {
+					setPhase({ name: "too-large" });
+					return;
+				}
 				const renderer = await loadRenderer(tab.kind);
 				if (controller.signal.aborted) return;
 				if (renderer === null) {
@@ -82,6 +89,7 @@ export function DocPane({ app, tab, active, theme }: DocPaneProps) {
 					openLink: url => {
 						void app.openLink({ url }).catch(() => undefined);
 					},
+					signal: controller.signal,
 				});
 				if (controller.signal.aborted) {
 					handle.destroy();
@@ -131,6 +139,12 @@ export function DocPane({ app, tab, active, theme }: DocPaneProps) {
 					{phase.name === "loading" ? <Loading loaded={phase.loaded} total={phase.total} /> : null}
 					{phase.name === "unavailable" ? (
 						<Message title="Preview not available" body={`${KIND_LABEL[tab.kind]} files cannot be previewed in this build of the viewer.`} />
+					) : null}
+					{phase.name === "too-large" ? (
+						<Message
+							title="Too large to play here"
+							body={`The viewer plays recordings up to ${formatBytes(MAX_MEDIA_BYTES)}, and this one is ${formatBytes(tab.size)}. Copy its path from the bar above to open it in a media player.`}
+						/>
 					) : null}
 					{phase.name === "error" ? (
 						<Message title="This file could not be shown" body={phase.message} action={{ label: "Try again", onClick: () => setRetry(count => count + 1) }} />

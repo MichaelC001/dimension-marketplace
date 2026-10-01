@@ -1,7 +1,7 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "swiss-knife",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "Small quality-of-life tools for the agent. `present` shows you a file (an image, a PDF, a Word file, a deck, a sheet) as a card in the thread that opens in the viewer, where you can annotate it.",
 	"author": {
 		"name": "Dimension"

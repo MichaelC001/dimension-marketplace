@@ -240,3 +240,142 @@
 	background: var(--fr-accent-dim);
 	color: transparent;
 }
+
+/* Recordings (renderers/media-core.ts). The renderer lays out the element and an empty dock;
+   the transport (media-transport.tsx) is React and fills the dock. A picture is shown on a
+   dark surround whatever the theme, as it is in every player. */
+.vw-media {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	flex-direction: column;
+	background: var(--fr-surface-2);
+}
+.vw-media-stage {
+	position: relative;
+	flex: 1 1 0;
+	min-height: 0;
+	display: grid;
+	place-items: center;
+	overflow: hidden;
+}
+.vw-media[data-kind="video"] .vw-media-stage {
+	background: color-mix(in oklab, black 90%, var(--fr-bg));
+}
+/* The picture is fitted, never cropped, whatever its shape: the element fills the stage box and the
+   frame is contained in it. Never blown up past twice its own size (`--vw-video-w/h`, set by the
+   renderer once the size is known): a 64px clip stays a small sharp picture, not a full-pane smear. */
+.vw-media-stage > video {
+	position: absolute;
+	inset: 0;
+	display: block;
+	width: 100%;
+	height: 100%;
+	max-width: calc(var(--vw-video-w, 100%) * 2);
+	max-height: calc(var(--vw-video-h, 100%) * 2);
+	margin: auto;
+	object-fit: contain;
+	cursor: pointer;
+}
+.vw-media-card {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 14px;
+	max-width: 100%;
+	padding: 24px;
+	text-align: center;
+}
+.vw-media-glyph {
+	box-sizing: border-box;
+	width: 76px;
+	height: 76px;
+	padding: 22px;
+	border-radius: 50%;
+	background: var(--fr-accent-dim);
+	color: var(--fr-accent-text);
+	fill: none;
+	stroke: currentColor;
+	stroke-width: 1.8;
+	stroke-linecap: round;
+}
+.vw-media-name {
+	max-width: 44ch;
+	overflow-wrap: anywhere;
+}
+.vw-media-note {
+	display: none;
+	position: absolute;
+	inset-inline: 0;
+	top: 50%;
+	margin: 0;
+	padding-inline: 24px;
+	translate: 0 -50%;
+	text-align: center;
+	font-size: var(--fr-fs-sm);
+	color: color-mix(in oklab, white 72%, transparent);
+}
+.vw-media[data-no-picture] .vw-media-note {
+	display: block;
+}
+.vw-media-dock {
+	flex: none;
+}
+
+/* Volume: quiet beside play. A thin track filled to the level in the text colour, a small knob, the
+   strip's accent focus ring; `--vw-level` is set by the transport. */
+.vw-media-volume {
+	--vw-level: 100%;
+	appearance: none;
+	-webkit-appearance: none;
+	inline-size: 80px;
+	block-size: 24px;
+	margin: 0;
+	border-radius: 6px;
+	background: transparent;
+	cursor: pointer;
+}
+.vw-media-volume:focus-visible {
+	outline: 2px solid var(--fr-accent);
+	outline-offset: 2px;
+}
+.vw-media-volume::-webkit-slider-runnable-track {
+	block-size: 4px;
+	border-radius: 2px;
+	background: linear-gradient(to right, var(--fr-text-2) var(--vw-level), var(--fr-surface-3) var(--vw-level));
+}
+.vw-media-volume::-moz-range-track {
+	block-size: 4px;
+	border-radius: 2px;
+	background: var(--fr-surface-3);
+}
+.vw-media-volume::-moz-range-progress {
+	block-size: 4px;
+	border-radius: 2px;
+	background: var(--fr-text-2);
+}
+.vw-media-volume::-webkit-slider-thumb {
+	-webkit-appearance: none;
+	appearance: none;
+	inline-size: 12px;
+	block-size: 12px;
+	margin-block-start: -4px;
+	border: 0;
+	border-radius: 50%;
+	background: var(--fr-text-2);
+	box-shadow: 0 0 0 2px var(--fr-surface);
+}
+.vw-media-volume::-moz-range-thumb {
+	inline-size: 12px;
+	block-size: 12px;
+	border: 0;
+	border-radius: 50%;
+	background: var(--fr-text-2);
+	box-shadow: 0 0 0 2px var(--fr-surface);
+}
+.vw-media-volume:hover::-webkit-slider-thumb {
+	background: var(--fr-text);
+}
+.vw-media-volume:hover::-moz-range-thumb {
+	background: var(--fr-text);
+}
