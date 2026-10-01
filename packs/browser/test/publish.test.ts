@@ -159,6 +159,32 @@ async function humanPostsOnThePage(s: Session): Promise<void> {
 	expect(s.fixture.submissions()).toHaveLength(1);
 }
 
+/** The middle of `selector` in page pixels, where the View's mouse would aim. */
+async function centerOf(s: Session, selector: string): Promise<{ x: number; y: number }> {
+	const box = await s.runtime.inspect(s.browserId, selector);
+	if (!box.found) throw new Error(`no ${selector} on the page`);
+	return { x: box.rect.x + box.rect.width / 2, y: box.rect.y + box.rect.height / 2 };
+}
+
+/** One left click as the View's direct channel sends it. */
+const pressAt = ({ x, y }: { x: number; y: number }) => [
+	{ kind: "mouse", type: "down", x, y, buttons: 1 },
+	{ kind: "mouse", type: "up", x, y },
+];
+
+/**
+ * The browser's driver, whose `input` and `state` a test can hold or fail: the only way to stand at an exact point of a press (the real
+ * calls are a few milliseconds).
+ */
+type DriverSeam = { input: EngineDriver["input"]; state: EngineDriver["state"] };
+function driverOf(runtime: BrowserRuntime, browserId: string): DriverSeam {
+	// Reason: test seam into the runtime's private map (as `entryOf` in wait-inspect.test.ts).
+	const seam = runtime as unknown as { byId: Map<string, { driver: DriverSeam }> };
+	const entry = seam.byId.get(browserId);
+	if (!entry) throw new Error("no such browser");
+	return entry.driver;
+}
+
 // ---------------------------------------------------------------------------
 // Real Chrome, real MCP server
 // ---------------------------------------------------------------------------
@@ -205,7 +231,7 @@ describeWithChrome("browser_publish", () => {
 				profile: "pub-post",
 				fields: [{ selector: "#text", value: TEXT }, { selector: "#rich", value: RICH }],
 			});
-			// The View renders its bar from the state poll: it must show the same record.
+			// The View renders its bar from the state its stream carries: it must show the same record.
 			const { state: _state, ...shown } = parked as PublishRecord & { state?: unknown };
 			expect((await s.runtime.state(s.browserId)).publish).toEqual(shown);
 			const seen = await counters(s.runtime, s.browserId);
@@ -741,6 +767,161 @@ describeWithChrome("browser_publish", () => {
 			expect((await s.call("browser_close", { browserId: s.browserId }, "app")).isError).toBeFalsy();
 
 			expect(await waiting).toMatchObject({ status: "unknown", error: TOUCHED });
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"the human clicking the site's own Post on the direct channel, while the bar waits, is the same: the bar's Post is unknown and submits nothing more; hover and wheel on it change nothing",
+		async () => {
+			const s = await session("pub-touched-direct");
+			const parked = await post(s, "nav");
+			const { x, y } = await centerOf(s, "#post");
+
+			await s.runtime.input(s.browserId, [{ kind: "mouse", type: "move", x, y }, { kind: "wheel", x, y, deltaX: 0, deltaY: 10 }]);
+			expect(await record(s, parked.publishId)).toMatchObject({ status: "awaiting-confirmation" });
+
+			await s.runtime.input(s.browserId, [{ kind: "mouse", type: "down", x, y, buttons: 1 }, { kind: "mouse", type: "up", x, y }]);
+			await s.fixture.reached("/landed");
+			const confirmed = await s.call("browser_publish_confirm", { browserId: s.browserId, publishId: parked.publishId }, "app");
+
+			expect(confirmed.structuredContent).toMatchObject({ status: "unknown", error: TOUCHED });
+			expect(s.fixture.submissions()).toHaveLength(1);
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"while the bar's Post is submitting, the human's click, key and mouse move on the page are refused publish_pending and never reach it; input works again once the Post settles",
+		async () => {
+			const s = await session("pub-confirming-input");
+			const parked = await post(s, "stay");
+			const at = await centerOf(s, "#post");
+			const confirming = s.call("browser_publish_confirm", { browserId: s.browserId, publishId: parked.publishId }, "app");
+			// A failed assertion below ends the test with this call still open; its rejection at teardown is not the failure.
+			confirming.catch(() => undefined);
+			// The bar clicked submit and the site keeps its text, so the Post now waits for a receipt that is not coming.
+			await s.fixture.reached("/submit");
+
+			expect(await failureCode(() => s.runtime.input(s.browserId, pressAt(at)))).toBe("publish_pending");
+			expect(await failureCode(() => s.runtime.input(s.browserId, [{ kind: "key", type: "down", key: "Enter", code: "Enter", keyCode: 13 }]))).toBe("publish_pending");
+			expect(await failureCode(() => s.runtime.input(s.browserId, [{ kind: "mouse", type: "move", ...at }]))).toBe("publish_pending");
+
+			const confirmed = await racingClock(() => true, confirming);
+			expect(confirmed.structuredContent).toMatchObject({ status: "unknown" });
+			expect(confirmed.structuredContent?.error).not.toBe(TOUCHED);
+			// The bar's one click is the only one the page ever saw.
+			expect(s.fixture.submissions()).toHaveLength(1);
+			expect((await counters(s.runtime, s.browserId)).clicks).toBe(1);
+
+			await s.runtime.input(s.browserId, pressAt(at));
+			expect((await counters(s.runtime, s.browserId)).clicks).toBe(2);
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"a press still being sent when the bar's Post starts already counts: the Post never clicks submit, and the human's press is the only post",
+		async () => {
+			const s = await session("pub-press-in-flight");
+			const parked = await post(s, "nav");
+			const at = await centerOf(s, "#post");
+			const driver = driverOf(s.runtime, s.browserId);
+			const send = driver.input.bind(driver);
+			const sending = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			driver.input = async (events) => {
+				sending.resolve();
+				await release.promise;
+				await send(events);
+			};
+			const press = s.runtime.input(s.browserId, pressAt(at));
+			try {
+				await sending.promise;
+				const confirmed = await s.call("browser_publish_confirm", { browserId: s.browserId, publishId: parked.publishId }, "app");
+				expect(confirmed.structuredContent).toMatchObject({ status: "unknown", error: TOUCHED });
+			} finally {
+				release.resolve();
+				await press.catch(() => undefined);
+			}
+			await press;
+			await s.fixture.reached("/landed");
+			expect(s.fixture.submissions()).toHaveLength(1);
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"a press that is still reading the page's state when the bar's Post starts is refused publish_pending, and never reaches the page",
+		async () => {
+			const s = await session("pub-press-state-read");
+			const parked = await post(s, "stay");
+			const at = await centerOf(s, "#post");
+			const driver = driverOf(s.runtime, s.browserId);
+			const read = driver.state.bind(driver);
+			const reading = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			// Only the press's own read is held; the Post's reads go straight through.
+			driver.state = async () => {
+				driver.state = read;
+				reading.resolve();
+				await release.promise;
+				return await read();
+			};
+			const press = s.runtime.input(s.browserId, pressAt(at));
+			press.catch(() => undefined);
+			await reading.promise;
+			const confirming = s.call("browser_publish_confirm", { browserId: s.browserId, publishId: parked.publishId }, "app");
+			confirming.catch(() => undefined);
+			// The Post found the page untouched and clicked submit; the site keeps its text, so it now waits for a receipt.
+			await s.fixture.reached("/submit");
+			release.resolve();
+
+			expect(await failureCode(() => press)).toBe("publish_pending");
+
+			const confirmed = await racingClock(() => true, confirming);
+			expect(confirmed.structuredContent).toMatchObject({ status: "unknown" });
+			expect(s.fixture.submissions()).toHaveLength(1);
+			expect((await counters(s.runtime, s.browserId)).clicks).toBe(1);
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"a press the browser provably never received leaves the publish untouched: the bar's Post still posts, once",
+		async () => {
+			const s = await session("pub-press-refused");
+			const parked = await post(s, "nav");
+			const at = await centerOf(s, "#post");
+			driverOf(s.runtime, s.browserId).input = async () => {
+				throw new ActionNotDispatched("unknown_tab", "no active tab");
+			};
+			expect(await failureCode(() => s.runtime.input(s.browserId, pressAt(at)))).toBe("unknown_tab");
+
+			const confirmed = await s.call("browser_publish_confirm", { browserId: s.browserId, publishId: parked.publishId }, "app");
+
+			expect(confirmed.structuredContent).toMatchObject({ status: "posted", url: s.fixture.url("/alice/status/1") });
+			expect(s.fixture.submissions()).toHaveLength(1);
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"a press that errors after it may have reached the page keeps the publish touched: the Post is unknown and clicks nothing",
+		async () => {
+			const s = await session("pub-press-errored");
+			const parked = await post(s, "nav");
+			const at = await centerOf(s, "#post");
+			driverOf(s.runtime, s.browserId).input = async () => {
+				throw new Error("target closed mid-press");
+			};
+			const sent = await s.runtime.input(s.browserId, pressAt(at)).catch((error: unknown) => error);
+			expect(sent).toEqual(new Error("target closed mid-press"));
+
+			const confirmed = await s.call("browser_publish_confirm", { browserId: s.browserId, publishId: parked.publishId }, "app");
+
+			expect(confirmed.structuredContent).toMatchObject({ status: "unknown", error: TOUCHED });
+			expect(s.fixture.submissions()).toHaveLength(0);
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);

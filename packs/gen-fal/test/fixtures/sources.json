@@ -1,0 +1,52 @@
+{
+	"$comment": "Where each fixture came from. Retrieved 2026-10-01 with no fal API key: nothing here is a response to a job this pack ran, and no fixture is a hand-written guess at fal's shape.",
+	"catalogue.json": {
+		"kind": "live response",
+		"source": "GET https://api.fal.ai/v1/models?endpoint_id=<id>&expand=openapi-3.0, one call per endpoint (no key needed, rate-limited without one); the eight `models[]` entries concatenated in the order of models.json",
+		"docs": "https://fal.ai/docs/platform-apis/v1/models.md"
+	},
+	"result-pixal3d.json": {
+		"kind": "fal's documented sample",
+		"source": "the `examples` of the output schema inside catalogue.json (fal-ai/pixal3d: `model_glb`); the same value is the Example Response on https://fal.ai/models/fal-ai/pixal3d/llms.txt, which omits the required `seed`"
+	},
+	"result-rodin-v25.json": {
+		"kind": "fal's documented sample",
+		"source": "the `examples` of the output schema inside catalogue.json (fal-ai/hyper3d/rodin/v2.5: `model_mesh` only; fal documents no sample for `textures`, `model_meshes` or `seed`)"
+	},
+	"result-meshy-v6.json": {
+		"kind": "fal's documented sample",
+		"source": "every field's `examples` entry in the output schema inside catalogue.json (fal-ai/meshy/v6/image-to-3d), assembled into one object"
+	},
+	"result-hunyuan-pro.json": {
+		"kind": "fal's documented sample",
+		"source": "every field's `examples` entry in the output schema inside catalogue.json (fal-ai/hunyuan-3d/v3.1/pro/image-to-3d), assembled into one object"
+	},
+	"result-hunyuan-part.json": {
+		"kind": "fal's documented sample",
+		"source": "the `examples` of the output schema inside catalogue.json (fal-ai/hunyuan-3d/v3.1/part: `result_files`)"
+	},
+	"result-hunyuan-smart-topology.json": {
+		"kind": "fal's documented sample",
+		"source": "every field's `examples` entry in the output schema inside catalogue.json (fal-ai/hunyuan-3d/v3.1/smart-topology); fal's own sample lists an .obj as `model_glb`, which is why files are classified by extension, not by key"
+	},
+	"queue-submit.json": {
+		"kind": "fal's documented sample",
+		"source": "https://fal.ai/docs/documentation/model-apis/inference/queue.md, 'Submit a Request'"
+	},
+	"queue-status-in-queue.json": {
+		"kind": "fal's documented sample",
+		"source": "https://fal.ai/docs/documentation/model-apis/inference/queue.md, 'Check Status'"
+	},
+	"queue-status-in-progress.json": {
+		"kind": "fal's documented sample",
+		"source": "https://fal.ai/docs/documentation/model-apis/inference/queue.md, 'Check Status'"
+	},
+	"queue-status-completed.json": {
+		"kind": "fal's documented sample",
+		"source": "https://fal.ai/docs/documentation/model-apis/inference/queue.md, 'Check Status'"
+	},
+	"pricing.json": {
+		"kind": "documented shape, scraped values",
+		"source": "the shape is the `prices[]` response of GET https://api.fal.ai/v1/models/pricing (https://fal.ai/docs/platform-apis/v1/models/pricing.md, which needs a key); each endpoint's unit_price and unit are the `endpointBilling` of its fal page https://fal.ai/models/<endpoint>, which the pricing API is documented to report"
+	}
+}

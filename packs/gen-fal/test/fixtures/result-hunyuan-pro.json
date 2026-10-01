@@ -1,0 +1,28 @@
+{
+	"model_urls": {
+		"obj": {
+			"file_name": "model.obj",
+			"file_size": 31447160,
+			"content_type": "model/obj",
+			"url": "https://v3b.fal.media/files/b/0a8c3186/no-aBFEDnOuthILfv-wzs_model.obj"
+		},
+		"glb": {
+			"file_name": "model.glb",
+			"file_size": 38554640,
+			"content_type": "model/gltf-binary",
+			"url": "https://v3b.fal.media/files/b/0a8c3187/jOeZmtBuhdQMkDu65AkdT_model.glb"
+		}
+	},
+	"model_glb": {
+		"file_name": "model.glb",
+		"file_size": 38554640,
+		"content_type": "model/gltf-binary",
+		"url": "https://v3b.fal.media/files/b/0a8c3187/jOeZmtBuhdQMkDu65AkdT_model.glb"
+	},
+	"thumbnail": {
+		"file_name": "preview.png",
+		"file_size": 194908,
+		"content_type": "image/png",
+		"url": "https://v3b.fal.media/files/b/0a8c3187/gxidaODj4OvPXruCfrZ-__preview.png"
+	}
+}

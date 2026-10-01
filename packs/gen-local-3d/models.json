@@ -1,0 +1,176 @@
+{
+	"cli": {
+		"output": "raw.glb",
+		"sidecars": [
+			{
+				"name": "raw_base.png",
+				"role": "texture",
+				"format": "png",
+				"label": "Base-colour atlas"
+			}
+		],
+		"unsetEnv": [
+			"PIXAL3D_STEPS"
+		]
+	},
+	"cutout": {
+		"minTransparentShare": 0.02,
+		"transparentBelow": 16
+	},
+	"models": [
+		{
+			"id": "pixal3d-sv",
+			"label": "Pixal3D single-view (Q8_0, local)",
+			"weightsDir": "pixal3d-sv",
+			"requiredFiles": [
+				"dinov3.gguf",
+				"pixal3d_naf.gguf",
+				"pixal3d_ss_flow_sv.gguf",
+				"ss_dec.gguf",
+				"pixal3d_shape_flow_512_sv.gguf",
+				"pixal3d_shape_flow_1024_sv.gguf",
+				"shape_dec.gguf",
+				"pixal3d_tex_flow_1024_sv.gguf",
+				"tex_dec.gguf"
+			],
+			"requiresFlags": [
+				"--sv-image",
+				"--fov",
+				"--pixal3d-weights",
+				"--gss",
+				"--require-gpu"
+			],
+			"defaultSeed": 42,
+			"argv": [
+				{ "flag": "--sv-image", "from": "image" },
+				{ "flag": "--fov", "from": "fov" },
+				{ "flag": "--models", "from": "models" },
+				{ "flag": "--seed", "from": "seed" },
+				{ "flag": "--res", "value": 1024 },
+				{ "flag": "--pixal3d-weights", "value": "sv" },
+				{ "flag": "--gss", "from": "gss" },
+				{ "flag": "--gsh", "from": "gsh" },
+				{ "flag": "--atlas", "from": "atlas" },
+				{ "flag": "--no-texture", "from": "texture", "when": false },
+				{ "flag": "--require-gpu" },
+				{ "arg": "output" }
+			],
+			"produces": "model3d",
+			"accepts": ["image"],
+			"maxImages": 1,
+			"features": ["pbr", "uv-atlas", "single-view", "tris:~1M", "local"],
+			"priceBasis": "No charge: runs on this machine's GPU (219 s for a prop, 581 s for a character on an RTX 4080 SUPER, measured 2026-10-01).",
+			"licence": {
+				"id": "MIT+DINOv3",
+				"commercialUse": "unknown",
+				"prototypeOnly": true,
+				"url": "https://huggingface.co/raven38/pixal3d-sv-q8_0-v1",
+				"note": "pixal3d.cpp and the Pixal3D/TRELLIS.2 flow weights are MIT, but the weights' commercial terms are disputed upstream (TencentARC/Pixal3D issue #33, open since 2026-07-09: a ComfyUI wrapper claims academic-only and EU-excluded) and the bundled dinov3.gguf encoder is under Meta's DINOv3 License, whose text has not been legally reviewed. Prototype use only until the owner and legal clear both."
+			},
+			"options": {
+				"type": "object",
+				"additionalProperties": false,
+				"properties": {
+					"gss": {
+						"type": "number",
+						"minimum": 0,
+						"default": 10,
+						"description": "Structure guidance strength. 10 keeps thin parts (at the CLI default of 7.5 a sword blade vanished; at 13 thin parts detach)."
+					},
+					"gsh": {
+						"type": "number",
+						"minimum": 0,
+						"description": "Shape guidance strength. Unset leaves the runtime default."
+					},
+					"fov": {
+						"type": "number",
+						"minimum": 0.05,
+						"maximum": 1.5,
+						"default": 0.3490658503988659,
+						"description": "Gauge camera field of view in radians for the single-view rig; 0.349 is the 20 degrees Pixal3D is built around."
+					},
+					"atlas": {
+						"type": "integer",
+						"enum": [1024, 2048, 4096],
+						"description": "UV atlas size in pixels. Unset lets the runtime choose (4096 at the 1024 geometry resolution)."
+					},
+					"texture": {
+						"type": "boolean",
+						"default": true,
+						"description": "false skips the texture flow and bake and returns geometry only."
+					}
+				}
+			}
+		},
+		{
+			"id": "trellis2-4b-q8",
+			"label": "TRELLIS.2-4B (Q8_0 GGUF, local)",
+			"weightsDir": "trellis2-gguf/q8",
+			"requiredFiles": [
+				"dinov3.gguf",
+				"ss_flow.gguf",
+				"ss_dec.gguf",
+				"shape_flow_512.gguf",
+				"shape_flow_1024.gguf",
+				"shape_dec.gguf",
+				"tex_flow_1024.gguf",
+				"tex_dec.gguf"
+			],
+			"requiresFlags": [
+				"--image",
+				"--output",
+				"--require-gpu"
+			],
+			"defaultSeed": 42,
+			"argv": [
+				{ "flag": "--image", "from": "image" },
+				{ "flag": "--output", "from": "output" },
+				{ "flag": "--models", "from": "models" },
+				{ "flag": "--res", "value": 1024 },
+				{ "flag": "--seed", "from": "seed" },
+				{ "flag": "--require-gpu" },
+				{ "flag": "--gss", "from": "gss" },
+				{ "flag": "--gsh", "from": "gsh" },
+				{ "flag": "--atlas", "from": "atlas" },
+				{ "flag": "--no-texture", "from": "texture", "when": false }
+			],
+			"produces": "model3d",
+			"accepts": ["image"],
+			"maxImages": 1,
+			"features": ["pbr", "uv-atlas", "tris:~300k", "back-side-fallback", "local"],
+			"priceBasis": "No charge: runs on this machine's GPU (155 s for a prop, 526 s for a character on an RTX 4080 SUPER, measured 2026-10-01).",
+			"licence": {
+				"id": "MIT",
+				"commercialUse": "yes",
+				"url": "https://github.com/microsoft/TRELLIS.2",
+				"note": "TRELLIS.2 code and weights are MIT (Microsoft). The bundled dinov3.gguf encoder is under Meta's DINOv3 License (conditional commercial use, trade-control and end-use restrictions); that text has not been legally reviewed, so the owner and legal must clear it before an asset ships."
+			},
+			"options": {
+				"type": "object",
+				"additionalProperties": false,
+				"properties": {
+					"gss": {
+						"type": "number",
+						"minimum": 0,
+						"description": "Structure guidance strength. Unset leaves the runtime default (7.5)."
+					},
+					"gsh": {
+						"type": "number",
+						"minimum": 0,
+						"description": "Shape guidance strength. Unset leaves the runtime default."
+					},
+					"atlas": {
+						"type": "integer",
+						"enum": [1024, 2048, 4096],
+						"description": "UV atlas size in pixels. Unset lets the runtime choose (2048 at the 1024 geometry resolution)."
+					},
+					"texture": {
+						"type": "boolean",
+						"default": true,
+						"description": "false skips the texture flow and bake and returns geometry only."
+					}
+				}
+			}
+		}
+	]
+}

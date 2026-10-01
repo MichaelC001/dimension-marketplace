@@ -1,0 +1,74 @@
+{
+	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+	"name": "gen-tripo",
+	"version": "0.1.0",
+	"description": "Tripo 3D generation on Tripo's own pay-per-use API: image or multiview to 3D, part separation, retopology, auto-rig, animation retarget and format conversion, chained by Tripo task id",
+	"author": {
+		"name": "Dimension"
+	},
+	"license": "MIT",
+	"keywords": [
+		"generation",
+		"3d",
+		"tripo",
+		"rigging",
+		"retopology",
+		"provider"
+	],
+	"extensions": {
+		"ai.insodimension.dimension": {
+			"contractVersion": 1,
+			"title": "Tripo 3D generation",
+			"icon": "assets/icon.svg",
+			"category": "connector",
+			"defaultEnabled": false,
+			"entry": "index.ts",
+			"providers": {
+				"generation": [
+					{
+						"id": "tripo",
+						"produces": [
+							"model3d",
+							"parts",
+							"rig",
+							"retopo"
+						],
+						"runtime": "api"
+					}
+				]
+			},
+			"connect": {
+				"kind": [
+					"form"
+				],
+				"setup": [
+					{
+						"title": "Get a Tripo API key",
+						"detail": "Create an account on the Tripo platform, buy API credits (1 credit is $0.01) and create a key on its API Keys page. The key stays on this machine and is sent only to openapi.tripo3d.ai. Output made on free trial credits belongs to Tripo (Terms 5.2.1) and carries no commercial rights: while you are on the trial, answer \"no\" to the credits question below and Dimension stamps every result non-commercial; fund the account before shipping an asset.",
+						"url": "https://platform.tripo3d.ai",
+						"urlLabel": "Tripo platform"
+					},
+					{
+						"title": "Spend is quoted and capped by Dimension",
+						"detail": "Connecting spends nothing. Every job is priced before it is submitted and checked against the engine's spend caps. The images and meshes you generate from are uploaded to Tripo."
+					}
+				],
+				"form": [
+					{
+						"id": "apiKey",
+						"label": "Tripo API key",
+						"secret": true,
+						"help": "Starts with tsk_. Used for every Tripo generation job."
+					},
+					{
+						"id": "creditsPurchased",
+						"label": "Paid for Tripo credits? (yes / no)",
+						"help": "Commercial rights apply only to output made with purchased credits. Answer \"no\" while you are on the free trial: Tripo cannot tell trial credits from purchased ones, so Dimension relies on this answer and stamps output non-commercial unless it is \"yes\"."
+					}
+				],
+				"configTemplate": "connect/key.template.json",
+				"configTarget": "~/.config/dimension-gen-tripo/key.json"
+			}
+		}
+	}
+}
