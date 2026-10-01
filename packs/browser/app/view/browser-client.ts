@@ -234,7 +234,7 @@ export function failureText(cause: unknown): string {
 }
 
 /** The runtime allows one holder per saved set of logins. Only the text of that
- *  refusal crosses the tool boundary (`profile_in_use` / `profile_locked`), so it
+ *  refusal crosses the tool boundary (`profile_held` / `profile_locked`), so it
  *  is recognised by it. */
 const SET_TAKEN = /profile "[^"]*" is already (?:open|in use)/;
 const SET_TAKEN_TEXT = "That browser is already open. Use it, or open a Private one.";
