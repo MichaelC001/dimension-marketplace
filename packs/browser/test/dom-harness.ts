@@ -35,7 +35,7 @@ export interface Dom {
 	readonly submit: (form: Element) => Promise<void>;
 	/** Tick or untick a checkbox, as a click does. */
 	readonly check: (input: Element, checked: boolean) => Promise<void>;
-	/** Let pending promises and effects settle (a poll answering, a tool call returning). */
+	/** Let pending promises and effects settle (a stream message arriving, a tool call returning). */
 	readonly settle: () => Promise<void>;
 }
 
@@ -50,6 +50,9 @@ export async function mount(element: ReactElement): Promise<Dom> {
 	const { window } = parseHTML('<!doctype html><html><body><div id="root"></div></body></html>');
 	// An address bar selects its text on focus.
 	Object.assign(window.HTMLInputElement.prototype, { select() {} });
+	// A selected tab scrolls itself into view, and the page schedules its mouse moves per display frame; linkedom has neither.
+	Object.assign(window.HTMLElement.prototype, { scrollIntoView() {} });
+	Object.assign(window, { requestAnimationFrame: (callback: (at: number) => void) => setTimeout(() => callback(performance.now()), 16), cancelAnimationFrame: (handle: number) => clearTimeout(handle) });
 	// A type-less <input> is a text input. linkedom says `null`, and React removes a type
 	// attribute it was not given on every re-render, so an input that re-renders on focus
 	// (an address bar) would stop being a text input to React's change detection.

@@ -60,7 +60,7 @@ export interface PublishBarProps {
 
 export function PublishBar({ client, browserId, publish, onSettled, onDismiss }: PublishBarProps) {
 	const [step, setStep] = useState<"idle" | "posting" | "cancelling">("idle");
-	/** The record a call answered, shown until the poll catches up. */
+	/** The record a call answered, shown until the stream's own state catches up. */
 	const [answered, setAnswered] = useState<PublishRecord | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const mounted = useRef(true);

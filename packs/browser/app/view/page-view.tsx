@@ -1,8 +1,9 @@
-// The page itself: the live picture, fitted to the seat at the viewport's own
-// aspect, and every direct input a human makes on it — click, double/triple
-// click, right and middle click, wheel, hover and typing — mapped from seat
-// pixels to viewport pixels and handed to `onAction`. In annotation mode the
-// same surface becomes a drawing board over a frozen full-quality frame.
+// The page itself: the live picture (a canvas the stream draws into), fitted to
+// the seat at the viewport's own aspect, and every direct input a human makes on
+// it — press and release of any button (so a drag selects), wheel, hover and
+// keys — mapped from seat pixels to viewport pixels and handed to `onInput`
+// as the browser's own events. In annotation mode the same surface becomes a
+// drawing board over a frozen full-quality frame.
 //
 // One coordinate space rules: `viewport` CSS pixels. The SVG overlay uses
 // `viewBox="0 0 width height"`, so drawings are stored in the same space
@@ -18,8 +19,10 @@ import {
 	useRef,
 	useState,
 } from "react";
-import type { BrowserAction, BrowserFrame, BrowserRegion, Viewport } from "../../src/contracts";
-import { ellipseOf, type Mark, type Point, regionFromDrag, toPixelPoint, toViewportPoint } from "./geometry";
+import type { BrowserFrame, BrowserRegion, Viewport } from "../../src/contracts";
+import type { PageInputEvent } from "../../src/input";
+import { ellipseOf, type Mark, type Point, regionFromDrag, toViewportPoint } from "./geometry";
+import type { Picture } from "./use-browser-stream";
 
 export type DrawTool = "region" | "circle" | "freehand";
 
@@ -35,8 +38,14 @@ const NAMED_KEYS: Record<string, true> = {
 	Enter: true, Tab: true, Escape: true, Backspace: true, Delete: true, ArrowUp: true, ArrowDown: true,
 	ArrowLeft: true, ArrowRight: true, Home: true, End: true, PageUp: true, PageDown: true,
 };
-/** A sweep of the mouse is a hover where it rests, not a stream. */
-const HOVER_INTERVAL_MS = 120;
+/** Modifier bits of the browser's input events. */
+const ALT = 1;
+const CTRL = 2;
+const META = 4;
+const SHIFT = 8;
+const modifiersOf = (event: { altKey: boolean; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }) =>
+	(event.altKey ? ALT : 0) | (event.ctrlKey ? CTRL : 0) | (event.metaKey ? META : 0) | (event.shiftKey ? SHIFT : 0);
+const BUTTONS = ["left", "middle", "right"] as const;
 /** A wheel line / page in pixels, for devices that report in those units. */
 const WHEEL_LINE_PX = 40;
 const MAX_FREEHAND_POINTS = 1024;
@@ -89,14 +98,19 @@ export function Overlays({ children }: { readonly children: ReactNode }) {
 }
 
 export interface PageViewProps {
+	/** The frozen full-quality capture annotation draws on; the live picture is not this (see `canvas`). */
 	readonly frame: BrowserFrame | null;
+	/** Null until the stream has drawn the first picture. */
+	readonly picture: Picture | null;
+	/** The ref the stream draws the live picture into. */
+	readonly canvas: (element: HTMLCanvasElement | null) => void;
 	readonly viewport: Viewport;
 	/** live: input goes to the page. annotate: draw. locked: an agent drives. */
 	readonly mode: "live" | "annotate" | "locked";
 	readonly tool: DrawTool;
 	readonly sketch: Sketch;
 	readonly onSketch: (next: Sketch) => void;
-	readonly onAction: (action: BrowserAction) => void;
+	readonly onInput: (event: PageInputEvent) => void;
 	readonly label: string;
 	/**
 	 * A post awaits confirmation: Tab and Enter stay with the View
@@ -111,7 +125,7 @@ export interface PageViewProps {
 	readonly children?: ReactNode;
 }
 
-export function PageView({ frame, viewport, mode, tool, sketch, onSketch, onAction, onResize, label, confirming = false, children }: PageViewProps) {
+export function PageView({ frame, picture, canvas, viewport, mode, tool, sketch, onSketch, onInput, onResize, label, confirming = false, children }: PageViewProps) {
 	const pageRef = useRef<HTMLDivElement | null>(null);
 	const stageRef = useRef<HTMLDivElement | null>(null);
 	const onResizeRef = useRef(onResize);
@@ -129,16 +143,27 @@ export function PageView({ frame, viewport, mode, tool, sketch, onSketch, onActi
 	}, []);
 	const [ripples, setRipples] = useState<readonly Ripple[]>([]);
 	const [drag, setDrag] = useState<Drag | null>(null);
-	const lastHoverRef = useRef(0);
 	const rippleIdRef = useRef(0);
-	const live = mode === "live" && frame !== null;
+	const live = mode === "live" && picture !== null;
 
 	const liveRef = useRef(live);
 	liveRef.current = live;
 	const viewportRef = useRef(viewport);
 	viewportRef.current = viewport;
-	const onActionRef = useRef(onAction);
-	onActionRef.current = onAction;
+	const onInputRef = useRef(onInput);
+	onInputRef.current = onInput;
+	// A mouse can report hundreds of moves a second; the page needs the last one of each display frame.
+	const moveRef = useRef<PageInputEvent | null>(null);
+	const moveFrameRef = useRef(0);
+	const flushMove = () => {
+		window.cancelAnimationFrame(moveFrameRef.current);
+		moveFrameRef.current = 0;
+		const move = moveRef.current;
+		moveRef.current = null;
+		if (move !== null) onInputRef.current(move);
+	};
+	useEffect(() => () => window.cancelAnimationFrame(moveFrameRef.current), []);
+	const heldKeysRef = useRef(new Set<string>());
 
 	const pointAt = (clientX: number, clientY: number): Point | null => {
 		const page = pageRef.current;
@@ -155,14 +180,15 @@ export function PageView({ frame, viewport, mode, tool, sketch, onSketch, onActi
 		window.setTimeout(() => setRipples(current => current.filter(entry => entry.id !== id)), 600);
 	};
 
-	const click = (event: ReactMouseEvent, button: "left" | "right" | "middle") => {
-		if (!live) return;
+	const mouse = (event: ReactMouseEvent, type: "down" | "up") => {
+		const button = BUTTONS[event.button];
+		if (!live || button === undefined) return;
 		const point = pointAt(event.clientX, event.clientY);
 		if (point === null) return;
-		const pixel = toPixelPoint(point, viewport);
-		const clickCount = Math.min(3, Math.max(1, event.detail)) as 1 | 2 | 3;
-		ripple(event, button);
-		onAction(button === "left" && clickCount === 1 ? { kind: "click", x: pixel.x, y: pixel.y } : { kind: "click", x: pixel.x, y: pixel.y, button, clickCount });
+		// Whatever was moving goes first: the press lands where the pointer is.
+		flushMove();
+		if (type === "down") ripple(event, button);
+		onInput({ kind: "mouse", type, x: point.x, y: point.y, button, buttons: event.buttons, clickCount: Math.min(3, Math.max(1, event.detail)) as 1 | 2 | 3, modifiers: modifiersOf(event) });
 	};
 
 	// Wheel must be a non-passive native listener to stop the seat scrolling.
@@ -181,11 +207,12 @@ export function PageView({ frame, viewport, mode, tool, sketch, onSketch, onActi
 			const deltaX = Math.round((event.shiftKey && event.deltaX === 0 ? event.deltaY : event.deltaX) * unit * scale);
 			const deltaY = Math.round((event.shiftKey && event.deltaX === 0 ? 0 : event.deltaY) * unit * scale);
 			if (deltaX === 0 && deltaY === 0) return;
-			onActionRef.current({ kind: "scroll", deltaX, deltaY });
+			const at = toViewportPoint(box, event.clientX, event.clientY, current);
+			onInputRef.current({ kind: "wheel", x: at.x, y: at.y, deltaX, deltaY, modifiers: modifiersOf(event) });
 		};
 		page.addEventListener("wheel", onWheel, { passive: false });
 		return () => page.removeEventListener("wheel", onWheel);
-	}, [frame === null]);
+	}, []);
 
 	const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
 		if (mode === "annotate") {
@@ -203,18 +230,18 @@ export function PageView({ frame, viewport, mode, tool, sketch, onSketch, onActi
 			}
 			return;
 		}
-		if (!live || event.pointerType !== "mouse" || event.buttons !== 0) return;
-		const now = performance.now();
-		if (now - lastHoverRef.current < HOVER_INTERVAL_MS) return;
-		lastHoverRef.current = now;
+		if (!live || event.pointerType !== "mouse") return;
 		const point = pointAt(event.clientX, event.clientY);
 		if (point === null) return;
-		const pixel = toPixelPoint(point, viewport);
-		onAction({ kind: "hover", x: pixel.x, y: pixel.y });
+		const held = event.buttons & 1 ? "left" : event.buttons & 4 ? "middle" : event.buttons & 2 ? "right" : "left";
+		moveRef.current = { kind: "mouse", type: "move", x: point.x, y: point.y, button: held, buttons: event.buttons, modifiers: modifiersOf(event) };
+		if (moveFrameRef.current === 0) moveFrameRef.current = window.requestAnimationFrame(flushMove);
 	};
 
 	const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
 		pageRef.current?.focus({ preventScroll: true });
+		// A drag that leaves the picture still ends on it: the release is delivered here whatever is under the pointer.
+		if (live) event.currentTarget.setPointerCapture(event.pointerId);
 		if (mode !== "annotate" || event.button !== 0 || frame === null) return;
 		const point = pointAt(event.clientX, event.clientY);
 		if (point === null) return;
@@ -232,25 +259,33 @@ export function PageView({ frame, viewport, mode, tool, sketch, onSketch, onActi
 		setDrag(null);
 	};
 
-	const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-		if (!live || event.ctrlKey || event.metaKey || event.altKey) return;
+	/** The browser's own key event for one DOM key event, or null for a key this View keeps (host shortcuts, IME, keys the page is never sent). */
+	const keyOf = (event: ReactKeyboardEvent<HTMLDivElement>, type: "down" | "up"): PageInputEvent | null => {
+		if (event.ctrlKey || event.metaKey || event.altKey || event.nativeEvent.isComposing || event.keyCode === 229) return null;
 		// Shift+Tab is left to the host: it is the way out of the page for a keyboard user.
-		if (event.key === "Tab" && event.shiftKey) return;
-		if (confirming && (event.key === "Tab" || event.key === "Enter")) return;
-		if (event.key === " ") {
-			event.preventDefault();
-			onAction({ kind: "press", key: "Space" });
-			return;
-		}
-		if (NAMED_KEYS[event.key]) {
-			event.preventDefault();
-			onAction({ kind: "press", key: event.key });
-			return;
-		}
-		if ([...event.key].length === 1) {
-			event.preventDefault();
-			onAction({ kind: "insert", text: event.key });
-		}
+		if (event.key === "Tab" && event.shiftKey) return null;
+		if (confirming && (event.key === "Tab" || event.key === "Enter")) return null;
+		const typed = [...event.key].length === 1;
+		if (!typed && !NAMED_KEYS[event.key]) return null;
+		// Enter types a line break, and the page sees keypress for it as for any character.
+		const text = typed ? event.key : event.key === "Enter" ? "\r" : undefined;
+		return { kind: "key", type, key: event.key, code: event.code, keyCode: event.keyCode, ...(text === undefined ? {} : { text }), modifiers: modifiersOf(event), repeat: event.repeat, location: event.location };
+	};
+
+	const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+		if (!live) return;
+		const key = keyOf(event, "down");
+		if (key === null) return;
+		event.preventDefault();
+		heldKeysRef.current.add(event.code);
+		onInput(key);
+	};
+
+	// A key is released only if its press was sent: a shortcut the View took (Ctrl+L) never sends half a key.
+	const onKeyUp = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+		if (!live || !heldKeysRef.current.delete(event.code)) return;
+		const key = keyOf(event, "up");
+		if (key !== null) onInput(key);
 	};
 
 	const onPaste = (event: ReactClipboardEvent<HTMLDivElement>) => {
@@ -258,7 +293,7 @@ export function PageView({ frame, viewport, mode, tool, sketch, onSketch, onActi
 		const text = event.clipboardData.getData("text/plain");
 		if (text.length === 0) return;
 		event.preventDefault();
-		onAction({ kind: "insert", text: text.slice(0, 4096) });
+		onInput({ kind: "text", text: text.slice(0, 4096) });
 	};
 
 	const liveMark = drag !== null && drag.tool !== "region" ? drag : null;
@@ -287,33 +322,36 @@ export function PageView({ frame, viewport, mode, tool, sketch, onSketch, onActi
 				onPointerMove={onPointerMove}
 				onPointerUp={onPointerUp}
 				onPointerCancel={onPointerUp}
-				onClick={event => click(event, "left")}
-				onAuxClick={event => {
-					if (event.button === 1) click(event, "middle");
-				}}
 				onMouseDown={event => {
 					// Middle-button autoscroll belongs to the page, not the seat.
 					if (event.button === 1) event.preventDefault();
+					mouse(event, "down");
 				}}
-				onContextMenu={event => {
-					event.preventDefault();
-					click(event, "right");
-				}}
+				onMouseUp={event => mouse(event, "up")}
+				onContextMenu={event => event.preventDefault()}
 				onKeyDown={onKeyDown}
+				onKeyUp={onKeyUp}
 				onPaste={onPaste}
 			>
-				{frame === null ? (
-					<div className="bx-page-skeleton" aria-hidden="true" />
+				{mode === "annotate" ? (
+					frame === null ? (
+						<div className="bx-page-skeleton" aria-hidden="true" />
+					) : (
+						<img
+							className="bx-frame"
+							src={`data:${frame.mimeType};base64,${frame.data}`}
+							width={viewport.width}
+							height={viewport.height}
+							alt=""
+							draggable={false}
+							decoding="sync"
+						/>
+					)
 				) : (
-					<img
-						className="bx-frame"
-						src={`data:${frame.mimeType};base64,${frame.data}`}
-						width={viewport.width}
-						height={viewport.height}
-						alt=""
-						draggable={false}
-						decoding="sync"
-					/>
+					<>
+						<canvas ref={canvas} className="bx-frame" aria-hidden="true" />
+						{picture === null && <div className="bx-page-skeleton" aria-hidden="true" />}
+					</>
 				)}
 				{mode === "annotate" && (
 					<svg className="bx-overlay" viewBox={`0 0 ${viewport.width} ${viewport.height}`} preserveAspectRatio="none" aria-hidden="true">
