@@ -1,0 +1,1132 @@
+{
+	"code": 200,
+	"message": "success",
+	"data": [
+		{
+			"model_id": "tripo3d/p2/image-to-3d",
+			"name": "tripo3d/p2/image-to-3d",
+			"base_price": 1.2,
+			"description": "Tripo P2 Image-to-3D generates a 3D mesh with optional PBR textures, selectable texture quality and triangle or quad topology.",
+			"type": "image-to-3d",
+			"sort_order": 10000,
+			"api_schema": {
+				"api_schemas": [
+					{
+						"type": "model_run",
+						"method": "POST",
+						"server": "https://api.wavespeed.ai",
+						"api_path": "/api/v3/tripo3d/p2/image-to-3d",
+						"request_schema": {
+							"additionalProperties": false,
+							"properties": {
+								"auto_size": {
+									"default": false,
+									"description": "Auto-scale the model to real-world dimensions in meters.",
+									"type": "boolean"
+								},
+								"delight": {
+									"default": true,
+									"description": "Remove baked-in lighting before texturing with v3.5-20260815.",
+									"type": "boolean"
+								},
+								"export_orientation": {
+									"description": "Optional forward axis for the exported model.",
+									"enum": [
+										"+x",
+										"-x",
+										"-y",
+										"+y"
+									],
+									"type": "string",
+									"x-ui-component": "select"
+								},
+								"export_uv": {
+									"default": true,
+									"description": "Generate UV coordinates for the model.",
+									"type": "boolean"
+								},
+								"face_limit": {
+									"description": "Optional mesh face limit, 48 to 50000. When quad is true, use at most 25000 faces. Omit for adaptive face count.",
+									"maximum": 50000,
+									"minimum": 48,
+									"type": "integer"
+								},
+								"image": {
+									"description": "Input image URL for 3D model creation.",
+									"minLength": 1,
+									"type": "string"
+								},
+								"model_seed": {
+									"description": "Optional seed for geometry generation reproducibility.",
+									"type": "integer"
+								},
+								"pbr": {
+									"default": true,
+									"description": "Generate PBR material maps. Enabling PBR also enables textures and texture billing.",
+									"type": "boolean"
+								},
+								"quad": {
+									"default": false,
+									"description": "Generate quad rather than triangle topology. Maximum 25000 faces; no additional charge.",
+									"type": "boolean"
+								},
+								"texture": {
+									"default": true,
+									"description": "Generate textures. Disable both texture and pbr for untextured pricing.",
+									"type": "boolean"
+								},
+								"texture_quality": {
+									"default": "standard",
+									"description": "Texture quality. Fast requires texture_version v3.5-20260815.",
+									"enum": [
+										"fast",
+										"standard",
+										"detailed",
+										"extreme"
+									],
+									"type": "string",
+									"x-ui-component": "select"
+								},
+								"texture_seed": {
+									"description": "Optional seed for texture generation reproducibility.",
+									"type": "integer"
+								},
+								"texture_version": {
+									"description": "Optional texture model version. Select v3.5-20260815 when using fast quality.",
+									"enum": [
+										"v3.5-20260815",
+										"v3.0-20250812",
+										"v2.5-20250123"
+									],
+									"type": "string",
+									"x-ui-component": "select"
+								}
+							},
+							"required": [
+								"image"
+							],
+							"type": "object",
+							"x-order-properties": [
+								"image",
+								"texture",
+								"pbr",
+								"texture_quality",
+								"texture_version",
+								"face_limit",
+								"quad",
+								"delight",
+								"auto_size",
+								"export_uv",
+								"export_orientation",
+								"model_seed",
+								"texture_seed"
+							]
+						}
+					}
+				]
+			}
+		},
+		{
+			"model_id": "tripo3d/h3.1/image-to-3d",
+			"name": "tripo3d/h3.1/image-to-3d",
+			"base_price": 0.24,
+			"description": "Tripo3D H3.1 Image-to-3D converts a single image into high-quality 3D models with textures and PBR materials.",
+			"type": "image-to-3d",
+			"sort_order": 100,
+			"api_schema": {
+				"api_schemas": [
+					{
+						"type": "model_run",
+						"method": "POST",
+						"server": "https://api.wavespeed.ai",
+						"api_path": "/api/v3/tripo3d/h3.1/image-to-3d",
+						"request_schema": {
+							"additionalProperties": false,
+							"properties": {
+								"auto_size": {
+									"default": false,
+									"description": "Auto-scale the model to real-world dimensions.",
+									"type": "boolean"
+								},
+								"face_limit": {
+									"description": "Target number of faces for the generated mesh. If not set, the model adaptively determines the count.",
+									"maximum": 2000000,
+									"minimum": 1000,
+									"type": "integer",
+									"x-hidden": true,
+									"x-ui-component": "slider"
+								},
+								"geometry_quality": {
+									"default": "standard",
+									"description": "Quality level for geometry.",
+									"enum": [
+										"standard",
+										"detailed"
+									],
+									"title": "Geometry Quality",
+									"type": "string"
+								},
+								"image": {
+									"description": "URL of the input image for 3D model creation.",
+									"type": "string"
+								},
+								"model_seed": {
+									"description": "Seed for geometry generation reproducibility.",
+									"type": "integer",
+									"x-hidden": true
+								},
+								"orientation": {
+									"default": "default",
+									"description": "Model orientation. 'align_image' auto-rotates to match the input image.",
+									"enum": [
+										"default",
+										"align_image"
+									],
+									"type": "string"
+								},
+								"pbr": {
+									"default": true,
+									"description": "Whether to generate PBR (Physically Based Rendering) materials. If true, texture is also enabled.",
+									"type": "boolean"
+								},
+								"quad": {
+									"default": false,
+									"description": "Generate quad (4-sided) mesh topology instead of triangles.",
+									"type": "boolean"
+								},
+								"texture": {
+									"default": true,
+									"description": "Whether to generate textures for the model.",
+									"type": "boolean"
+								},
+								"texture_alignment": {
+									"default": "original_image",
+									"description": "How textures are aligned. 'original_image' aligns to input image, 'geometry' aligns to generated geometry.",
+									"enum": [
+										"original_image",
+										"geometry"
+									],
+									"type": "string"
+								},
+								"texture_quality": {
+									"default": "standard",
+									"description": "Quality level for textures. 'detailed' produces higher-resolution textures.",
+									"enum": [
+										"standard",
+										"detailed"
+									],
+									"type": "string"
+								},
+								"texture_seed": {
+									"description": "Seed for texture generation reproducibility.",
+									"type": "integer",
+									"x-hidden": true
+								}
+							},
+							"required": [
+								"image"
+							],
+							"type": "object",
+							"x-order-properties": [
+								"image",
+								"texture_alignment",
+								"orientation",
+								"texture",
+								"pbr",
+								"texture_quality",
+								"geometry_quality",
+								"auto_size",
+								"quad",
+								"face_limit",
+								"model_seed",
+								"texture_seed"
+							]
+						}
+					}
+				]
+			}
+		},
+		{
+			"model_id": "tripo3d/h3.1/multiview-to-3d",
+			"name": "tripo3d/h3.1/multiview-to-3d",
+			"base_price": 0.24,
+			"description": "Tripo3D H3.1 Multiview-to-3D generates high-quality 3D models from 2-4 multi-angle images with textures and PBR materials.",
+			"type": "image-to-3d",
+			"sort_order": 100,
+			"api_schema": {
+				"api_schemas": [
+					{
+						"type": "model_run",
+						"method": "POST",
+						"server": "https://api.wavespeed.ai",
+						"api_path": "/api/v3/tripo3d/h3.1/multiview-to-3d",
+						"request_schema": {
+							"additionalProperties": false,
+							"properties": {
+								"auto_size": {
+									"default": false,
+									"description": "Auto-scale the model to real-world dimensions.",
+									"type": "boolean"
+								},
+								"face_limit": {
+									"description": "Target number of faces for the generated mesh. If not set, the model adaptively determines the count.",
+									"maximum": 2000000,
+									"minimum": 1000,
+									"type": "integer",
+									"x-hidden": true,
+									"x-ui-component": "slider"
+								},
+								"geometry_quality": {
+									"default": "standard",
+									"description": "Quality level for geometry.",
+									"enum": [
+										"standard",
+										"detailed"
+									],
+									"title": "Geometry Quality",
+									"type": "string"
+								},
+								"images": {
+									"description": "2 to 4 image URLs of the same object from different angles. Order: [front, left, back, right]. Front view is required.",
+									"items": {
+										"type": "string"
+									},
+									"maxItems": 4,
+									"minItems": 2,
+									"type": "array"
+								},
+								"model_seed": {
+									"description": "Seed for geometry generation reproducibility.",
+									"type": "integer",
+									"x-hidden": true
+								},
+								"orientation": {
+									"default": "default",
+									"description": "Model orientation. 'align_image' auto-rotates to match the input image.",
+									"enum": [
+										"default",
+										"align_image"
+									],
+									"type": "string"
+								},
+								"pbr": {
+									"default": true,
+									"description": "Whether to generate PBR (Physically Based Rendering) materials. If true, texture is also enabled.",
+									"type": "boolean"
+								},
+								"quad": {
+									"default": false,
+									"description": "Generate quad (4-sided) mesh topology instead of triangles.",
+									"type": "boolean"
+								},
+								"texture": {
+									"default": true,
+									"description": "Whether to generate textures for the model.",
+									"type": "boolean"
+								},
+								"texture_alignment": {
+									"default": "original_image",
+									"description": "How textures are aligned. 'original_image' aligns to input image, 'geometry' aligns to generated geometry.",
+									"enum": [
+										"original_image",
+										"geometry"
+									],
+									"type": "string"
+								},
+								"texture_quality": {
+									"default": "standard",
+									"description": "Quality level for textures. 'detailed' produces higher-resolution textures.",
+									"enum": [
+										"standard",
+										"detailed"
+									],
+									"type": "string"
+								},
+								"texture_seed": {
+									"description": "Seed for texture generation reproducibility.",
+									"type": "integer",
+									"x-hidden": true
+								}
+							},
+							"required": [
+								"images"
+							],
+							"type": "object",
+							"x-order-properties": [
+								"images",
+								"texture",
+								"pbr",
+								"texture_quality",
+								"geometry_quality",
+								"texture_alignment",
+								"auto_size",
+								"orientation",
+								"quad",
+								"face_limit",
+								"model_seed",
+								"texture_seed"
+							]
+						}
+					}
+				]
+			}
+		},
+		{
+			"model_id": "meshy/v6/image-to-3d",
+			"name": "meshy/v6/image-to-3d",
+			"base_price": 1.44,
+			"description": "Meshy 6 Preview converts 2D images into high-quality 3D models with accurate geometry reconstruction and superior texture quality.",
+			"type": "image-to-3d",
+			"sort_order": 100,
+			"api_schema": {
+				"api_schemas": [
+					{
+						"type": "model_run",
+						"method": "POST",
+						"server": "https://api.wavespeed.ai",
+						"api_path": "/api/v3/meshy/v6/image-to-3d",
+						"request_schema": {
+							"additionalProperties": false,
+							"properties": {
+								"enable_pbr": {
+									"default": false,
+									"description": "Generate PBR maps (metallic, roughness, normal)",
+									"type": "boolean"
+								},
+								"image": {
+									"description": "Image URL or base64 data URI for 3D model creation. Supports .jpg, .jpeg, and .png formats.",
+									"type": "string"
+								},
+								"should_remesh": {
+									"default": true,
+									"description": "Enable remesh phase for cleaner topology",
+									"type": "boolean"
+								},
+								"should_texture": {
+									"default": true,
+									"description": "Generate textures for the 3D model",
+									"type": "boolean"
+								},
+								"symmetry_mode": {
+									"default": "auto",
+									"description": "Controls symmetry behavior of the generated model",
+									"enum": [
+										"off",
+										"auto",
+										"on"
+									],
+									"type": "string"
+								},
+								"ta_pose": {
+									"default": false,
+									"description": "Generate model in A/T pose for rigging",
+									"type": "boolean"
+								},
+								"target_polycount": {
+									"default": 30000,
+									"description": "Target polygon count in generated model",
+									"maximum": 300000,
+									"minimum": 100,
+									"type": "integer"
+								},
+								"texture_image": {
+									"description": "2D image to guide texturing process",
+									"format": "uri",
+									"type": "string"
+								},
+								"texture_prompt": {
+									"description": "Text prompt to guide texturing process",
+									"type": "string"
+								},
+								"topology": {
+									"default": "triangle",
+									"description": "Specify the topology of the generated model. Quad for smooth surfaces, Triangle for detailed geometry.",
+									"enum": [
+										"quad",
+										"triangle"
+									],
+									"type": "string"
+								}
+							},
+							"required": [
+								"image"
+							],
+							"type": "object",
+							"x-order-properties": [
+								"image",
+								"topology",
+								"target_polycount",
+								"symmetry_mode",
+								"should_remesh",
+								"should_texture",
+								"enable_pbr",
+								"ta_pose",
+								"texture_prompt",
+								"texture_image"
+							]
+						}
+					}
+				]
+			}
+		},
+		{
+			"model_id": "meshy/v7.1/image-to-3d",
+			"name": "meshy/v7.1/image-to-3d",
+			"base_price": 1.44,
+			"description": "Meshy 7.1 converts one reference image into a textured, PBR-ready 3D mesh with up to 4K geometry resolution and downloadable GLB, FBX, OBJ, and USDZ files.",
+			"type": "image-to-3d",
+			"sort_order": 100,
+			"api_schema": {
+				"api_schemas": [
+					{
+						"type": "model_run",
+						"method": "POST",
+						"server": "https://api.wavespeed.ai",
+						"api_path": "/api/v3/meshy/v7.1/image-to-3d",
+						"request_schema": {
+							"additionalProperties": false,
+							"properties": {
+								"animation_action_id": {
+									"default": 92,
+									"description": "Meshy animation preset ID, used only when animation is enabled.",
+									"maximum": 696,
+									"minimum": 0,
+									"type": "integer"
+								},
+								"enable_animation": {
+									"default": false,
+									"description": "Apply an animation preset. Requires enable_rigging.",
+									"type": "boolean"
+								},
+								"enable_pbr": {
+									"default": false,
+									"description": "Generate PBR maps in addition to the base color texture.",
+									"type": "boolean"
+								},
+								"enable_rigging": {
+									"default": false,
+									"description": "Automatically rig a humanoid character, including basic walking and running animations.",
+									"type": "boolean"
+								},
+								"geometry_resolution": {
+									"default": "standard",
+									"description": "Geometry resolution. `standard` is the default; `2k`/`4k` generate denser, finer surface detail (up to 4K) at extra cost. Only applies to `standard` geometry.",
+									"enum": [
+										"standard",
+										"2k",
+										"4k"
+									],
+									"type": "string",
+									"x-ui-component": "select"
+								},
+								"image": {
+									"description": "Reference image for 3D model creation.",
+									"type": "string"
+								},
+								"model_type": {
+									"default": "standard",
+									"description": "Geometry mode: `standard` for a detailed mesh, `lowpoly` for cleaner low-polygon geometry, or `smart-topology` for optimized production topology.",
+									"enum": [
+										"standard",
+										"lowpoly",
+										"smart-topology"
+									],
+									"type": "string"
+								},
+								"pose_mode": {
+									"description": "Optional humanoid pose. Leave unselected for no specific pose.",
+									"enum": [
+										"a-pose",
+										"t-pose"
+									],
+									"type": "string",
+									"x-ui-component": "select"
+								},
+								"rigging_height_meters": {
+									"default": 1.7,
+									"description": "Approximate character height in meters when rigging is enabled.",
+									"minimum": 0.01,
+									"type": "number"
+								},
+								"should_remesh": {
+									"default": true,
+									"description": "Enable remeshing for cleaner topology.",
+									"type": "boolean"
+								},
+								"should_texture": {
+									"default": true,
+									"description": "Generate textures for the 3D model.",
+									"type": "boolean"
+								},
+								"symmetry_mode": {
+									"default": "auto",
+									"description": "Controls symmetry during model generation.",
+									"enum": [
+										"off",
+										"auto",
+										"on"
+									],
+									"type": "string"
+								},
+								"target_polycount": {
+									"default": 30000,
+									"description": "Target number of polygons for standard remeshed output.",
+									"maximum": 300000,
+									"minimum": 100,
+									"type": "integer"
+								},
+								"texture_image": {
+									"description": "Optional image to guide texture generation.",
+									"type": "string"
+								},
+								"texture_prompt": {
+									"description": "Optional text guidance for texture generation.",
+									"type": "string"
+								},
+								"topology": {
+									"default": "triangle",
+									"description": "Mesh topology. This setting is ignored when model_type is lowpoly.",
+									"enum": [
+										"quad",
+										"triangle"
+									],
+									"type": "string"
+								}
+							},
+							"required": [
+								"image"
+							],
+							"type": "object",
+							"x-order-properties": [
+								"image",
+								"model_type",
+								"topology",
+								"target_polycount",
+								"symmetry_mode",
+								"should_remesh",
+								"should_texture",
+								"enable_pbr",
+								"geometry_resolution",
+								"pose_mode",
+								"texture_prompt",
+								"texture_image",
+								"enable_rigging",
+								"rigging_height_meters",
+								"enable_animation",
+								"animation_action_id"
+							]
+						}
+					}
+				]
+			}
+		},
+		{
+			"model_id": "meshy/v7.1/multi-image-to-3d",
+			"name": "meshy/v7.1/multi-image-to-3d",
+			"base_price": 1.44,
+			"description": "Meshy 7.1 reconstructs a textured, PBR-ready 3D mesh from one to four views of the same object, with 2K geometry resolution.",
+			"type": "image-to-3d",
+			"sort_order": 100,
+			"api_schema": {
+				"api_schemas": [
+					{
+						"type": "model_run",
+						"method": "POST",
+						"server": "https://api.wavespeed.ai",
+						"api_path": "/api/v3/meshy/v7.1/multi-image-to-3d",
+						"request_schema": {
+							"additionalProperties": false,
+							"properties": {
+								"animation_action_id": {
+									"default": 92,
+									"description": "Meshy animation preset ID, used only when animation is enabled.",
+									"maximum": 696,
+									"minimum": 0,
+									"type": "integer"
+								},
+								"enable_animation": {
+									"default": false,
+									"description": "Apply an animation preset. Requires enable_rigging.",
+									"type": "boolean"
+								},
+								"enable_pbr": {
+									"default": false,
+									"description": "Generate PBR maps in addition to the base color texture.",
+									"type": "boolean"
+								},
+								"enable_rigging": {
+									"default": false,
+									"description": "Automatically rig a humanoid character, including basic walking and running animations.",
+									"type": "boolean"
+								},
+								"geometry_resolution": {
+									"default": "standard",
+									"description": "Geometry resolution. `standard` is the default; `2k` generate denser, finer surface detail (up to 2K) at extra cost. Only applies to `standard` geometry.",
+									"enum": [
+										"standard",
+										"2k"
+									],
+									"type": "string",
+									"x-ui-component": "select"
+								},
+								"images": {
+									"description": "One to four images of the same object from different angles.",
+									"items": {
+										"minLength": 1,
+										"type": "string"
+									},
+									"maxItems": 4,
+									"minItems": 1,
+									"type": "array"
+								},
+								"pose_mode": {
+									"description": "Optional humanoid pose. Leave unselected for no specific pose.",
+									"enum": [
+										"a-pose",
+										"t-pose"
+									],
+									"type": "string",
+									"x-ui-component": "select"
+								},
+								"rigging_height_meters": {
+									"default": 1.7,
+									"description": "Approximate character height in meters when rigging is enabled.",
+									"minimum": 0.01,
+									"type": "number"
+								},
+								"should_remesh": {
+									"default": true,
+									"description": "Enable remeshing for cleaner topology.",
+									"type": "boolean"
+								},
+								"should_texture": {
+									"default": true,
+									"description": "Generate textures for the 3D model.",
+									"type": "boolean"
+								},
+								"symmetry_mode": {
+									"default": "auto",
+									"description": "Controls symmetry during model generation.",
+									"enum": [
+										"off",
+										"auto",
+										"on"
+									],
+									"type": "string"
+								},
+								"target_polycount": {
+									"default": 30000,
+									"description": "Target number of polygons for remeshed output.",
+									"maximum": 300000,
+									"minimum": 100,
+									"type": "integer"
+								},
+								"texture_image": {
+									"description": "Optional image to guide texture generation.",
+									"type": "string"
+								},
+								"texture_prompt": {
+									"description": "Optional text guidance for texture generation.",
+									"type": "string"
+								},
+								"topology": {
+									"default": "triangle",
+									"description": "Mesh topology for the generated model.",
+									"enum": [
+										"quad",
+										"triangle"
+									],
+									"type": "string"
+								}
+							},
+							"required": [
+								"images"
+							],
+							"type": "object",
+							"x-order-properties": [
+								"images",
+								"topology",
+								"target_polycount",
+								"symmetry_mode",
+								"should_remesh",
+								"should_texture",
+								"enable_pbr",
+								"geometry_resolution",
+								"pose_mode",
+								"texture_prompt",
+								"texture_image",
+								"enable_rigging",
+								"rigging_height_meters",
+								"enable_animation",
+								"animation_action_id"
+							]
+						}
+					}
+				]
+			}
+		},
+		{
+			"model_id": "hyper3d/rodin-v2.5/image-to-3d",
+			"name": "hyper3d/rodin-v2.5/image-to-3d",
+			"base_price": 0.48,
+			"description": "Hyper3D Rodin v2.5 turns reference images into production-ready 3D assets with clean meshes, UVs, and textures.",
+			"type": "image-to-3d",
+			"sort_order": 2010,
+			"api_schema": {
+				"api_schemas": [
+					{
+						"type": "model_run",
+						"method": "POST",
+						"server": "https://api.wavespeed.ai",
+						"api_path": "/api/v3/hyper3d/rodin-v2.5/image-to-3d",
+						"request_schema": {
+							"additionalProperties": false,
+							"properties": {
+								"addons": {
+									"description": "Optional HighPack add-on for 4K textures and higher-poly geometry.",
+									"enum": [
+										"HighPack"
+									],
+									"type": "string"
+								},
+								"geometry_file_format": {
+									"default": "glb",
+									"description": "Output geometry file format.",
+									"enum": [
+										"glb",
+										"usdz",
+										"fbx",
+										"obj",
+										"stl"
+									],
+									"type": "string"
+								},
+								"geometry_instruct_mode": {
+									"default": "faithful",
+									"description": "Faithful follows the input closely; creative allows more variation.",
+									"enum": [
+										"faithful",
+										"creative"
+									],
+									"type": "string"
+								},
+								"hd_texture": {
+									"default": false,
+									"description": "Enable enhanced texture post-processing.",
+									"type": "boolean"
+								},
+								"images": {
+									"description": "Reference images for generating the 3D model. Up to 5 images are allowed.",
+									"items": {
+										"format": "uri",
+										"type": "string"
+									},
+									"maxItems": 5,
+									"type": "array"
+								},
+								"is_micro": {
+									"default": false,
+									"description": "Generate finer micro-scale geometric detail. Only effective with Extreme-High tier.",
+									"type": "boolean"
+								},
+								"material": {
+									"default": "All",
+									"description": "Material output type.",
+									"enum": [
+										"PBR",
+										"Shaded",
+										"All",
+										"None"
+									],
+									"type": "string"
+								},
+								"preview_render": {
+									"default": false,
+									"description": "Generate a preview render image of the 3D model.",
+									"type": "boolean"
+								},
+								"prompt": {
+									"description": "Optional text prompt. If empty, the model auto-generates a prompt from the images.",
+									"type": "string"
+								},
+								"quality_and_mesh": {
+									"default": "500K Triangle",
+									"description": "Combined quality and mesh type selection.",
+									"enum": [
+										"4K Quad",
+										"8K Quad",
+										"18K Quad",
+										"50K Quad",
+										"2K Triangle",
+										"20K Triangle",
+										"150K Triangle",
+										"500K Triangle"
+									],
+									"type": "string"
+								},
+								"ta_pose": {
+									"default": false,
+									"description": "Generate characters in T-pose or A-pose format.",
+									"title": "T/A Pose",
+									"type": "boolean"
+								},
+								"texture_delight": {
+									"default": false,
+									"description": "Remove baked lighting and highlights from generated textures.",
+									"type": "boolean"
+								},
+								"texture_mode": {
+									"description": "Texture generation quality. Leave empty to use the model default.",
+									"enum": [
+										"legacy",
+										"extreme-low",
+										"low",
+										"medium",
+										"high"
+									],
+									"type": "string"
+								},
+								"tier": {
+									"default": "Gen-2.5-Medium",
+									"description": "Generation tier. Extreme-High bills at double the base rate.",
+									"enum": [
+										"Gen-2.5-Extreme-Low",
+										"Gen-2.5-Low",
+										"Gen-2.5-Medium",
+										"Gen-2.5-High",
+										"Gen-2.5-Extreme-High"
+									],
+									"type": "string"
+								},
+								"use_original_alpha": {
+									"default": false,
+									"description": "Preserve the transparency channel from input images.",
+									"type": "boolean"
+								}
+							},
+							"required": [
+								"images"
+							],
+							"type": "object",
+							"x-order-properties": [
+								"images",
+								"prompt",
+								"tier",
+								"use_original_alpha",
+								"geometry_file_format",
+								"material",
+								"quality_and_mesh",
+								"texture_mode",
+								"geometry_instruct_mode",
+								"hd_texture",
+								"texture_delight",
+								"is_micro",
+								"ta_pose",
+								"addons",
+								"preview_render"
+							]
+						}
+					}
+				]
+			}
+		},
+		{
+			"model_id": "wavespeed-ai/trellis-2/image-to-3d",
+			"name": "wavespeed-ai/trellis-2/image-to-3d",
+			"base_price": 0.2,
+			"description": "TRELLIS.2 turns a single image into a textured 3D GLB with PBR materials.",
+			"type": "image-to-3d",
+			"sort_order": 100,
+			"api_schema": {
+				"api_schemas": [
+					{
+						"type": "model_run",
+						"method": "POST",
+						"server": "https://api.wavespeed.ai",
+						"api_path": "/api/v3/wavespeed-ai/trellis-2/image-to-3d",
+						"request_schema": {
+							"additionalProperties": false,
+							"properties": {
+								"image": {
+									"description": "Single input image URL, data URI or base64 image.",
+									"minLength": 1,
+									"type": "string"
+								},
+								"remove_background": {
+									"default": true,
+									"description": "Remove the image background before generation. Disable to use existing image alpha.",
+									"type": "boolean"
+								},
+								"resolution": {
+									"default": "1024",
+									"description": "Geometry resolution. Higher resolution takes more time and memory.",
+									"enum": [
+										"512",
+										"1024",
+										"1536"
+									],
+									"type": "string",
+									"x-ui-component": "select"
+								},
+								"seed": {
+									"description": "Random seed. Use -1 for a random seed.",
+									"type": "integer"
+								},
+								"target_face_count": {
+									"default": 200000,
+									"description": "Target mesh face count after simplification. The final count is approximate.",
+									"maximum": 1000000,
+									"minimum": 10000,
+									"type": "integer",
+									"x-ui-component": "slider"
+								},
+								"texture_size": {
+									"default": 2048,
+									"description": "PBR texture resolution in pixels.",
+									"enum": [
+										1024,
+										2048,
+										4096
+									],
+									"type": "integer",
+									"x-ui-component": "select"
+								}
+							},
+							"required": [
+								"image"
+							],
+							"type": "object",
+							"x-order-properties": [
+								"image",
+								"resolution",
+								"texture_size",
+								"target_face_count",
+								"remove_background",
+								"seed"
+							]
+						}
+					}
+				]
+			}
+		},
+		{
+			"model_id": "wavespeed-ai/hunyuan3d-v3/image-to-3d",
+			"name": "wavespeed-ai/hunyuan3d-v3/image-to-3d",
+			"base_price": 0.3,
+			"description": "Transform your photos into ultra-high-resolution 3D models in seconds with Tencent's Hunyuan3D V3. Film-quality geometry with PBR textures from single or multi-view images, ready for games, e-commerce, and 3D printing. Ready-to-use REST inference API, best performance, no coldstarts, affordable pricing.",
+			"type": "image-to-3d",
+			"sort_order": 100,
+			"api_schema": {
+				"api_schemas": [
+					{
+						"type": "model_run",
+						"method": "POST",
+						"server": "https://api.wavespeed.ai",
+						"api_path": "/api/v3/wavespeed-ai/hunyuan3d-v3/image-to-3d",
+						"request_schema": {
+							"additionalProperties": false,
+							"properties": {
+								"back_image": {
+									"description": "Optional back view image URL for better 3D reconstruction.",
+									"type": "string"
+								},
+								"enable_pbr": {
+									"default": false,
+									"description": "Whether to enable PBR material generation",
+									"type": "boolean"
+								},
+								"face_count": {
+									"default": 500000,
+									"description": "Target face count. Range: 40000-1500000",
+									"maximum": 1500000,
+									"minimum": 40000,
+									"title": "Face Count",
+									"type": "integer"
+								},
+								"generate_type": {
+									"default": "Normal",
+									"description": "Generation type. Normal: textured model. LowPoly: polygon reduction. Geometry: white model without texture.",
+									"enum": [
+										"Normal",
+										"LowPoly",
+										"Geometry"
+									],
+									"type": "string"
+								},
+								"image": {
+									"description": "The URL where the file can be downloaded from.",
+									"type": "string"
+								},
+								"left_image": {
+									"description": "Optional left view image URL for better 3D reconstruction.",
+									"type": "string"
+								},
+								"polygon_type": {
+									"default": "triangle",
+									"description": "Polygon type. Only takes effect when GenerateType is LowPoly.",
+									"enum": [
+										"triangle",
+										"quadrilateral"
+									],
+									"type": "string"
+								},
+								"right_image": {
+									"description": "Optional right view image URL for better 3D reconstruction.",
+									"type": "string"
+								}
+							},
+							"required": [
+								"image"
+							],
+							"type": "object",
+							"x-order-properties": [
+								"image",
+								"back_image",
+								"left_image",
+								"right_image",
+								"enable_pbr",
+								"polygon_type",
+								"face_count",
+								"generate_type"
+							]
+						}
+					}
+				]
+			}
+		},
+		{
+			"model_id": "wavespeed-ai/hunyuan-3d-v3.1/image-to-3d-rapid",
+			"name": "wavespeed-ai/hunyuan-3d-v3.1/image-to-3d-rapid",
+			"base_price": 0.27,
+			"description": "Hunyuan 3D V3.1 Rapid image-to-3D generation model. Ready-to-use REST inference API, best performance, no cold starts, affordable pricing.",
+			"type": "image-to-3d",
+			"sort_order": 100,
+			"api_schema": {
+				"api_schemas": [
+					{
+						"type": "model_run",
+						"method": "POST",
+						"server": "https://api.wavespeed.ai",
+						"api_path": "/api/v3/wavespeed-ai/hunyuan-3d-v3.1/image-to-3d-rapid",
+						"request_schema": {
+							"additionalProperties": false,
+							"properties": {
+								"image": {
+									"description": "Front view image of the object to convert into a 3D model (128-5000px, max 8MB, JPG/PNG/WEBP)",
+									"type": "string"
+								}
+							},
+							"required": [
+								"image"
+							],
+							"type": "object",
+							"x-order-properties": [
+								"image"
+							]
+						}
+					}
+				]
+			}
+		}
+	]
+}

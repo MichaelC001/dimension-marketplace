@@ -583,6 +583,32 @@
 			]
 		},
 		{
+			"name": "gen-wavespeed",
+			"source": "./packs/gen-wavespeed",
+			"pluginId": "gen-wavespeed",
+			"title": "WaveSpeed generators",
+			"icon": "packs/gen-wavespeed/assets/icon.svg",
+			"description": "3D generators from WaveSpeed AI behind one key: Tripo P2 and H3.1, Meshy 6 and 7.1, Rodin 2.5, TRELLIS.2 and Hunyuan3D 3 / 3.1, with live option schemas, live prices and a quote before every job",
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-community",
+			"license": "MIT",
+			"category": "connector",
+			"tags": [
+				"generation",
+				"3d",
+				"wavespeed",
+				"tripo",
+				"meshy",
+				"rodin",
+				"trellis",
+				"hunyuan",
+				"provider"
+			]
+		},
+		{
 			"name": "github",
 			"source": "./packs/github",
 			"pluginId": "github",
