@@ -112,6 +112,39 @@ describe("what the list says about each profile", () => {
 		expect(sent.profiles.map((p) => p.name)).toEqual([...sent.profiles.map((p) => p.name)].sort());
 		expect(profilesForModel(many.slice(0, 5))).toEqual({ profiles: many.slice(0, 5) });
 	});
+
+	test("what a model is sent leaves out every site's account, under the cap and over it — the listing itself keeps it for the person — and keeps the site, its state, its time and who holds the profile", () => {
+		const seenAt = "2026-10-01T00:00:00.000Z";
+		const site = (name: string, account?: string, signedIn: boolean | null = true): ProfileListing["sites"][number] => ({ site: name, ...(account === undefined ? {} : { account }), signedIn, seenAt });
+		const mine: ProfileListing = {
+			name: "work",
+			label: "Work",
+			colour: "blue",
+			heldBy: "another chat",
+			sites: [site("google.com", "work@acme.com"), site("x.com", "@acmeco", null), site("reddit.com", undefined, false)],
+		};
+		const sent = profilesForModel([mine]);
+		expect(sent.profiles).toEqual([
+			{
+				name: "work",
+				label: "Work",
+				colour: "blue",
+				heldBy: "another chat",
+				sites: [
+					{ site: "google.com", signedIn: true, seenAt },
+					{ site: "x.com", signedIn: null, seenAt },
+					{ site: "reddit.com", signedIn: false, seenAt },
+				],
+			},
+		]);
+		// The person's copy is not touched.
+		expect(mine.sites[0]).toEqual(site("google.com", "work@acme.com"));
+
+		const many = Array.from({ length: MAX_PROFILES_FOR_MODEL + 3 }, (_, i): ProfileListing => ({ ...mine, name: `p-${String(i).padStart(2, "0")}` }));
+		const capped = profilesForModel(many);
+		expect(capped.omitted).toBe(3);
+		expect(JSON.stringify(capped)).not.toMatch(/acme|@/);
+	});
 });
 
 describe("what the list never contains", () => {
@@ -277,29 +310,69 @@ describeWithChrome("asking for a profile by name", () => {
 	);
 
 	test(
-		"a name that two profiles answer to, or none can be, is refused with the choices — names and labels only — never resolved to the closest",
+		"a name that two profiles answer to by label, or none can be, is refused with the choices — names and labels only — never resolved to the closest",
 		async () => {
 			const { rootDir } = await rootWith((store) => {
-				store.saveMeta("acme", { label: "Work" });
-				store.ensureProfile("work");
+				store.saveMeta("acme", { label: "Team" });
+				store.saveMeta("zeta", { label: "team" });
 				store.saveMeta("personal", { label: "Personal" });
 				store.recordConnection("personal", "x.com", { signedIn: true, account: "@secret_handle", observedAt: NOW });
 			});
 			const runtime = newRuntime(rootDir);
-			// "work" is one profile's slug and another's label.
-			const two = await codeOf(runtime.open({ profile: "Work", viewport: VIEWPORT }));
+			const two = await codeOf(runtime.open({ profile: "TEAM", viewport: VIEWPORT }));
 			expect(two.code).toBe("profile_ambiguous");
-			expect(two.message).toContain("Work (acme)");
-			expect(two.message).toContain("work");
+			expect(two.message).toContain("Team (acme)");
+			expect(two.message).toContain("team (zeta)");
 			// A name no profile has and no slug can be: the list, so the agent can ask the human.
-			const none = await codeOf(runtime.open({ profile: "Work Account", viewport: VIEWPORT }));
+			const none = await codeOf(runtime.open({ profile: "Team Account", viewport: VIEWPORT }));
 			expect(none.code).toBe("profile_unknown");
 			expect(none.message).toContain("Personal (personal)");
 			// Names and labels only: not where anything is signed in.
 			expect(`${two.message}${none.message}`).not.toMatch(/secret_handle|x\.com/);
 			// Nothing was opened or created by a refusal.
 			expect((await runtime.profileList("s-1")).map((profile) => profile.heldBy)).toEqual([null, null, null]);
-			expect(JSON.stringify(await runtime.profileList())).not.toContain("work-account");
+			expect(JSON.stringify(await runtime.profileList())).not.toContain("team-account");
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"an exact slug opens its own profile even when another profile is labelled the same, in any case — `work` and `default` stay openable",
+		async () => {
+			const { rootDir } = await rootWith((store) => {
+				store.ensureProfile("work");
+				store.saveMeta("acme", { label: "Work" });
+				store.ensureProfile("default");
+				store.saveMeta("main", { label: "Default" });
+			});
+			const runtime = newRuntime(rootDir);
+			for (const [name, slug] of [["Work", "work"], ["Default", "default"]] as const) {
+				const opened = await runtime.open({ profile: name, viewport: VIEWPORT });
+				expect(opened.profile).toBe(slug);
+				await runtime.close(opened.browserId);
+			}
+			// The other profiles are still reachable, by their own slugs.
+			expect((await runtime.open({ profile: "acme", viewport: VIEWPORT })).profile).toBe("acme");
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"a profile still launching is refused to another chat as profile_held, naming the holder — the same refusal as one that is already open",
+		async () => {
+			const { rootDir } = await rootWith((store) => store.ensureProfile("work"));
+			const runtime = newRuntime(rootDir);
+			const person = { caller: "app", session: "s-view" } as const;
+			const starting = runtime.open({ profile: "work", viewport: VIEWPORT }, person);
+			// Same tick: the first open has not finished launching.
+			const byChat = await codeOf(runtime.open({ profile: "work", viewport: VIEWPORT }, { caller: "model", session: "s-other" }));
+			expect(byChat.code).toBe("profile_held");
+			expect(byChat.message).toContain("the human in the View");
+			const first = await starting;
+			const again = await codeOf(runtime.open({ profile: "work", viewport: VIEWPORT }, { caller: "model", session: "s-other" }));
+			// Launching or open, the refusal reads the same.
+			expect(again).toEqual(byChat);
+			expect(byChat.message).not.toContain(first.browserId);
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);

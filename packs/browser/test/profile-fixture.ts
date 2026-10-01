@@ -24,14 +24,14 @@ const PAGES: Record<string, () => Response> = {
 	// A sign-in done in place: no navigation, so no page load to look at.
 	"/flip": () => page('<button id="go" onclick="document.body.insertAdjacentHTML(\'beforeend\', \'<div id=me>Bo @bo</div>\')">Sign in</button>'),
 	"/pw": () => page(`<div id="me">Signed in as ${SAVED_PASSWORD}</div>`),
+	// The account button, and a stranger's content (a mail body) full of `authuser` links, on Google's own host and others.
 	"/google": () =>
 		page(
 			[
 				'<a class="gb_B" aria-label="Google Account: Jane Doe  \n(jane@gmail.com)" href="https://accounts.google.com/SignOutOptions?authuser=0">J</a>',
-				'<a href="/x?authuser=0">a</a><a href="/x?authuser=1">b</a><a href="/x?authuser=2">c</a>',
+				'<div class="mail-body"><a href="https://evil.example/?authuser=1">a</a><a href="https://evil.example/?authuser=2">b</a><a href="https://accounts.google.com/AccountChooser?authuser=3">c</a></div>',
 			].join(""),
 		),
-	"/google-one": () => page('<a aria-label="Google Account: Jane Doe (jane@gmail.com)" href="/x?authuser=0">J</a><a href="/x?authuser=0">a</a>'),
 	"/google-out": () => page('<a href="https://accounts.google.com/ServiceLogin">Sign in</a>'),
 	"/bsky": () => page('<a aria-label="Profile" href="/profile/alice.bsky.social">Profile</a>'),
 	// A form control whose label is not the page's to hand over.

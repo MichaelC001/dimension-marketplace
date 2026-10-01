@@ -75,7 +75,7 @@ describeWithChrome("profiles", () => {
 			expect(opened).toHaveLength(1);
 			expect(refused).toHaveLength(1);
 			expect(refused[0]?.reason).toBeInstanceOf(BrowserRuntimeError);
-			expect((refused[0]?.reason as BrowserRuntimeError).code).toBe("profile_in_use");
+			expect((refused[0]?.reason as BrowserRuntimeError).code).toBe("profile_held");
 			// The person sees plain words for this refusal, not the runtime's: the View recognises the runtime's real message.
 			expect(openFailureText(refused[0]?.reason)).not.toMatch(/profile/i);
 

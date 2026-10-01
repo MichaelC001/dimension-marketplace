@@ -311,11 +311,11 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	 * back, and anyone else is refused (`profile_held`, naming whose it is, never
 	 * an id): the holder closes it, or the caller picks another profile.
 	 *
-	 * `profile` is a slug or a label, in any case. A name that matches two
-	 * profiles is refused (`profile_ambiguous`), never resolved to the closest.
-	 * A name that matches none is a new profile when it is a valid slug (a
-	 * person's first sign-in, an account profile), and refused (`profile_unknown`)
-	 * when it is not one.
+	 * `profile` is a slug or a label, in any case. An exact slug is always that
+	 * profile; a label that two profiles share is refused (`profile_ambiguous`),
+	 * never resolved to the closest. A name that matches none is a new profile
+	 * when it is a valid slug (a person's first sign-in, an account profile), and
+	 * refused (`profile_unknown`) when it is not one.
 	 *
 	 * Without a `profile` it is a throwaway browser: a directory of its own that
 	 * is deleted when it closes, so it can never collide with another browser.
@@ -348,16 +348,17 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			fail("bad_profile", `profile "${RELAY_PROFILE}" is reserved for the chrome-relay engine`);
 		}
 		const live = profile === null ? undefined : this.byProfile.get(profile);
-		if (live !== undefined) {
+		if (profile !== null && live !== undefined) {
 			const holder = this.holderOf(live.opener, opener.session);
 			if (holder === "this chat") return await this.state(live.browserId);
-			fail("profile_held", `profile "${profile}" is already open, held by ${holder === "human" ? "the human in the View" : "another chat"}. Ask the human to close it, or use another profile.`);
+			fail("profile_held", heldMessage(profile, holder));
 		}
 		const launching = profile === null ? undefined : this.opening.get(profile);
 		if (profile !== null && launching !== undefined) {
 			// The same chat opening it twice at once (parallel tool calls) is one browser, not a refusal.
-			if (this.holderOf(this.openers.get(profile) ?? {}, opener.session) === "this chat") return await this.state((await launching).browserId);
-			fail("profile_in_use", `profile "${profile}" is already open in this runtime; close that browser before opening it again`);
+			const holder = this.holderOf(this.openers.get(profile) ?? {}, opener.session);
+			if (holder === "this chat") return await this.state((await launching).browserId);
+			fail("profile_held", heldMessage(profile, holder));
 		}
 		// Count launches in flight too: four concurrent opens must not slip past
 		// the bound just because none of them has finished launching yet.
@@ -1870,4 +1871,9 @@ function describe(err: unknown): string {
 function nameProfiles(profiles: readonly { slug: string; label: string }[]): string {
 	const shown = profiles.slice(0, 20).map(({ slug, label }) => (label === slug ? slug : `${label} (${slug})`));
 	return profiles.length > shown.length ? `${shown.join(", ")} and ${profiles.length - shown.length} more` : shown.join(", ");
+}
+
+/** The refusal of a profile someone else holds, open or still launching: whose it is, never an id. The View recognises "is already open". */
+function heldMessage(profile: string, holder: Exclude<ProfileHolder, "this chat" | null>): string {
+	return `profile "${profile}" is already open, held by ${holder === "human" ? "the human in the View" : "another chat"}. Ask the human to close it, or use another profile.`;
 }

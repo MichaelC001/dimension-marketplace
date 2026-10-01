@@ -430,7 +430,7 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
   // Read-only and offered to every space (like browser_state): an agent that is told "use my work profile" can find it.
   // The View reads the same tool as the human (`caller: "app"`) and gets the same list as structured content.
   server.registerTool("browser_profiles", {
-    description: "Saved profiles: name, label, colour, heldBy (null | this chat | human | another chat), and the sites each is signed in to: account, signedIn (null = not known: unchecked or over 7 days old), seenAt. Observed, may be out of date. Never cookies or passwords.",
+    description: "Saved profiles: name, label, colour, heldBy (null | this chat | human | another chat), and the sites each is signed in to: signedIn (null = not known: unchecked or over 7 days old), seenAt. Observed, may be out of date. Accounts are shown to the person, not you. Never cookies or passwords.",
     inputSchema: {}, annotations: READ_ONLY,
   }, (_args, extra) => respond(extra, async () => {
     const list = await runtime.profileList(sessionOf(extra));

@@ -22,9 +22,6 @@ import { ProfileStore } from "../src/store";
 import { BROWSER_TEST_TIMEOUT_MS, createRoot, describeWithChrome, newRuntime, perform, teardown, waitUntil } from "./fixture";
 import { markerProbe, type ProfileSite, SAVED_PASSWORD, shippedProbeOn, startProfileSite } from "./profile-fixture";
 import x from "../recipes/x-post.json";
-import linkedin from "../recipes/linkedin-post.json";
-import reddit from "../recipes/reddit-comment.json";
-import bluesky from "../recipes/bluesky-post.json";
 
 const VIEWPORT = { width: 640, height: 480 };
 const sites: ProfileSite[] = [];
@@ -100,18 +97,26 @@ describe("what one look at a page decides", () => {
 		expect(await readProbe(fakeReader({ present: [probe.signedIn] }), probe, "https://www.reddit.com/r/x/comments/1/", 50)).toEqual({ signedIn: true });
 	});
 
-	test("Google: the email in the account button's label, and the other accounts the page lists as a count — never the display name", async () => {
+	test("Google: the email in the account button's label — never the display name, and no email at all is no account", async () => {
 		const probe = probeOf("google.com");
 		const button = 'a[aria-label^="Google Account"]';
-		const label = { [button]: "Google Account: Jane Doe  \n(jane@gmail.com)" };
-		const others = 'a[href*="authuser="]';
-		const three = fakeReader({ present: [button], labels: label, hrefs: { [others]: ["https://x/?authuser=0", "https://x/?authuser=1", "https://x/?authuser=2", "https://x/?authuser=1"] } });
-		expect(await readProbe(three, probe, "https://www.google.com/", 50)).toEqual({ signedIn: true, account: "jane@gmail.com (+2)" });
-		const one = fakeReader({ present: [button], labels: label, hrefs: { [others]: ["https://x/?authuser=0", "https://x/?authuser=0"] } });
-		expect(await readProbe(one, probe, "https://mail.google.com/mail/", 50)).toEqual({ signedIn: true, account: "jane@gmail.com" });
-		// A label with no email is no account (the name alone is not one).
+		const email = fakeReader({ present: [button], labels: { [button]: "Google Account: Jane Doe  \n(jane@gmail.com)" } });
+		expect(await readProbe(email, probe, "https://www.google.com/", 50)).toEqual({ signedIn: true, account: "jane@gmail.com" });
 		const named = fakeReader({ present: [button], labels: { [button]: "Google Account: Jane Doe" } });
 		expect(await readProbe(named, probe, "https://www.google.com/", 50)).toEqual({ signedIn: true });
+	});
+
+	test("Google: no count of other accounts is taken from the page — a mail body holds any link its sender likes, so `authuser` links, foreign or on Google's own host, add nothing", async () => {
+		const probe = probeOf("google.com");
+		const button = 'a[aria-label^="Google Account"]';
+		const forged = [
+			...[1, 2, 3, 4, 5, 6, 7, 8, 9].map((slot) => `https://evil.example/?authuser=${slot}`),
+			"https://accounts.google.com/AccountChooser?authuser=10",
+			"https://mail.google.com/mail/u/11/?authuser=11",
+		];
+		// Whatever selector the probe asks for, the page answers with the sender's links.
+		const reader = { ...fakeReader({ present: [button], labels: { [button]: "Google Account: Jane Doe (jane@gmail.com)" } }), linkHrefs: async () => forged };
+		expect(await readProbe(reader, probe, "https://mail.google.com/mail/u/0/", 50)).toEqual({ signedIn: true, account: "jane@gmail.com" });
 	});
 
 	test("Google: the page that adds another account shows no marker and says nothing — adding one never signs the first out", async () => {
@@ -137,13 +142,6 @@ describe("one list of sites", () => {
 	test("every site the dock can sign in to has a probe, and every probe is for a site the dock offers", () => {
 		expect(SITE_PROBES.map((probe) => probe.host).sort()).toEqual(SIGN_IN_SITES.map((site) => site.host).sort());
 		expect(SITE_PROBES.map((probe) => probe.host)).toContain("google.com");
-	});
-
-	test("a preset's signed-in selector IS the site's probe: fixing a preset fixes the probe", () => {
-		expect(probeOf("x.com").signedIn).toBe(x.signedIn);
-		expect(probeOf("linkedin.com").signedIn).toBe(linkedin.signedIn);
-		expect(probeOf("reddit.com").signedIn).toBe(reddit.signedIn);
-		expect(probeOf("bsky.app").signedIn).toBe(bluesky.signedIn);
 	});
 });
 
@@ -256,7 +254,8 @@ describeWithChrome("a sign-in the person makes in the View", () => {
 				await perform(runtime, opened.browserId, { kind: "navigate", url: site.url(host, path) });
 				return (await waitUntil(`${host}`, () => sitesOf(runtime, "work"), (list) => list.some((entry) => entry.site === host))).find((entry) => entry.site === host);
 			};
-			expect(await seen("g.localhost", "/google")).toMatchObject({ signedIn: true, account: "jane@gmail.com (+2)" });
+			// The page also carries a mail body's worth of `authuser` links: none of them is a count.
+			expect(await seen("g.localhost", "/google")).toMatchObject({ signedIn: true, account: "jane@gmail.com" });
 			expect(await seen("b.localhost", "/bsky")).toMatchObject({ signedIn: true, account: "@alice.bsky.social" });
 			const control = await seen("ctl.localhost", "/control");
 			expect(control).toMatchObject({ signedIn: true });

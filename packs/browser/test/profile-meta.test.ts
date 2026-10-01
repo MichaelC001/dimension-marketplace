@@ -100,15 +100,29 @@ describe("naming a profile by slug or by label", () => {
 		expect(matchProfiles("   ", profiles)).toEqual([]);
 	});
 
-	test("two profiles that answer to one name are both returned, so the caller can refuse to guess", () => {
+	test("an exact slug always names its own profile, whatever another profile is labelled, in any case — no profile can become impossible to open", () => {
 		const clash = [
 			{ slug: "acme", label: "Work" },
 			{ slug: "work", label: "Personal" },
+			{ slug: "main", label: "Default" },
+			{ slug: "default", label: "Default" },
 		];
-		// "work" is one profile's slug and another's label (case aside).
-		expect(matchProfiles("work", clash).map((p) => p.slug)).toEqual(["acme", "work"]);
+		for (const name of ["work", "Work", "WORK", "  work "]) expect(matchProfiles(name, clash).map((p) => p.slug)).toEqual(["work"]);
+		for (const name of ["default", "Default", "DEFAULT"]) expect(matchProfiles(name, clash).map((p) => p.slug)).toEqual(["default"]);
+		// The other profile is still reachable: by its own slug.
+		expect(matchProfiles("acme", clash).map((p) => p.slug)).toEqual(["acme"]);
 		// One profile whose slug and label are the same word is one match, not two.
 		expect(matchProfiles("work", [{ slug: "work", label: "Work" }])).toHaveLength(1);
+	});
+
+	test("a label is a name only where no slug is: it opens its profile, and two profiles with one label are both returned so the caller refuses to guess", () => {
+		expect(matchProfiles("WORK", [{ slug: "acme", label: "Work" }, { slug: "personal", label: "Personal" }]).map((p) => p.slug)).toEqual(["acme"]);
+		const twins = [
+			{ slug: "acme", label: "Team" },
+			{ slug: "zeta", label: "team" },
+			{ slug: "solo", label: "Solo" },
+		];
+		expect(matchProfiles(" TEAM", twins).map((p) => p.slug)).toEqual(["acme", "zeta"]);
 	});
 });
 
@@ -123,5 +137,12 @@ describe("how old an observation may be", () => {
 
 	test("a site that was visited but never checked is never signed in, however fresh", () => {
 		expect(effectiveSignedIn(null, NOW, NOW)).toBeNull();
+	});
+
+	test("an observation stamped in the future (a wrong clock, a copied file) is not known, never fresh — a sign-in is not claimed for days that have not happened; a small skew is allowed", () => {
+		expect(effectiveSignedIn(true, NOW + 3 * 24 * 3_600_000, NOW)).toBeNull();
+		expect(effectiveSignedIn(false, NOW + 3 * 24 * 3_600_000, NOW)).toBeNull();
+		expect(effectiveSignedIn(true, NOW + 60_000, NOW)).toBe(true);
+		expect(effectiveSignedIn(true, NOW + 60_001, NOW)).toBeNull();
 	});
 });

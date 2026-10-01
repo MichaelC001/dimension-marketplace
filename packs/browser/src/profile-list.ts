@@ -13,7 +13,8 @@
  * builds that report), read with the same rules (profile-meta.ts): an
  * observation over 7 days old is not claimed, and a site that was only visited
  * (no check exists for it) is the human's history, not the agent's business, so
- * it is left out here.
+ * it is left out here. The listing carries each site's account for the person
+ * (the View, the dock); `profilesForModel` is what takes it out for a model.
  */
 import { reportableAccount } from "./connection.js";
 import type { ProfileHolder, ProfileListing, ProfileSiteListing } from "./contracts.js";
@@ -48,15 +49,25 @@ export function buildProfileList(store: ProfileStore, holderOf: (slug: string) =
 		});
 }
 
+/** A site as a model reads it: no `account`. An email or a handle names the person, and the person's accounts are not model context until a consent gate exists. */
+export type ModelSiteListing = Omit<ProfileSiteListing, "account">;
+export type ModelProfileListing = Omit<ProfileListing, "sites"> & { sites: ModelSiteListing[] };
+
+const forModel = (profile: ProfileListing): ModelProfileListing => ({
+	...profile,
+	sites: profile.sites.map(({ site, signedIn, seenAt }) => ({ site, signedIn, seenAt })),
+});
+
 /**
- * What a model is sent when there are more profiles than it should be: the ones
- * in use, then the ones signed in somewhere, then the rest, each by name; the
- * remainder counted in `omitted`. Agents leave profiles behind, and every line
- * is tokens on every call.
+ * What a model is sent: the listing without any site's account (the View and
+ * the dock are sent the whole listing), and, when there are more profiles than
+ * it should carry, the ones in use, then the ones signed in somewhere, then
+ * the rest, each by name; the remainder counted in `omitted`. Agents leave
+ * profiles behind, and every line is tokens on every call.
  */
-export function profilesForModel(list: readonly ProfileListing[], max: number = MAX_PROFILES_FOR_MODEL): { profiles: ProfileListing[]; omitted?: number } {
-	if (list.length <= max) return { profiles: [...list] };
+export function profilesForModel(list: readonly ProfileListing[], max: number = MAX_PROFILES_FOR_MODEL): { profiles: ModelProfileListing[]; omitted?: number } {
+	if (list.length <= max) return { profiles: list.map(forModel) };
 	const rank = (profile: ProfileListing): number => (profile.heldBy !== null ? 0 : profile.sites.length > 0 ? 1 : 2);
 	const kept = [...list].sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name)).slice(0, max);
-	return { profiles: kept.sort((a, b) => a.name.localeCompare(b.name)), omitted: list.length - max };
+	return { profiles: kept.sort((a, b) => a.name.localeCompare(b.name)).map(forModel), omitted: list.length - max };
 }

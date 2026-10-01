@@ -284,28 +284,32 @@ saved profile, `{ name, label, colour, heldBy, sites }`:
 { "profiles": [
   { "name": "work", "label": "Work", "colour": "blue", "heldBy": null,
     "sites": [
-      { "site": "x.com", "account": "@acmeco", "signedIn": true, "seenAt": "2026-10-01T09:14:00.000Z" },
-      { "site": "google.com", "account": "work@acme.com", "signedIn": null, "seenAt": "2026-09-20T17:02:00.000Z" } ] },
+      { "site": "x.com", "signedIn": true, "seenAt": "2026-10-01T09:14:00.000Z" },
+      { "site": "google.com", "signedIn": null, "seenAt": "2026-09-20T17:02:00.000Z" } ] },
   { "name": "personal", "label": "Personal", "colour": "orange", "heldBy": "human", "sites": [] } ] }
 ```
 
 `heldBy` is `null` (free), `"this chat"`, `"human"` (the person has it open in a View
 of another chat) or `"another chat"`; never an id. `signedIn: null` is "not known
-now": the last check is over 7 days old (its account and time are still given, so
-an agent can ask the person); a site that was only visited is not listed. Never a
-cookie, a cookie name, an expiry, a token, a password, whether a saved password
-exists, or a path; the relay and throwaway browsers are never listed. More than
-40 profiles: the ones in use and the signed-in ones first, the rest counted in
-`omitted`. The Browser View reads the same tool as the human and gets the same list
-as structured content.
+now": the last check is over 7 days old, or its time is in the future (an agent
+can ask the person); a site that was only visited is not listed. **A site's account
+(an email, a handle) is shown to the person, not to the model:** the model's answer
+leaves it out until the consent gate (P4) exists. The Browser View reads the same tool
+as the human and gets the same list as structured content, each site with its
+`account`, and so does the dock. Never a cookie, a cookie name, an expiry, a token, a
+password, whether a saved password exists, or a path; the relay and throwaway
+browsers are never listed. More than 40 profiles: the ones in use and the signed-in
+ones first, the rest counted in `omitted`.
 
-**Naming a profile.** `profile` is a name or a label, in any case. A name that two
-profiles answer to (`profile_ambiguous`), or that is not a valid name and matches
-no label (`profile_unknown`), is refused with the profiles' names and labels, never
-resolved to the closest. A valid name that matches nothing is a new profile, as it
-always was (an account's first sign-in). The chat that already holds a profile gets
-its own browser back; anyone else is refused `profile_held`, told whether the human
-or another chat has it. There is no consent step yet: until one exists any agent can
+**Naming a profile.** `profile` is a name or a label, in any case. An exact name is
+always that profile, whatever another profile is labelled (so a label can never make a
+profile impossible to open). A label that two profiles share (`profile_ambiguous`), or a
+name that is not a valid name and matches no label (`profile_unknown`), is refused with
+the profiles' names and labels, never resolved to the closest. A valid name that
+matches nothing is a new profile, as it always was (an account's first sign-in). The
+chat that already holds a profile gets its own browser back; anyone else is refused
+`profile_held`, told whether the human or another chat has it, whether that profile is
+open or still starting. There is no consent step yet: until one exists any agent can
 open any saved profile, `default` included.
 
 ## Reading public pages
@@ -545,8 +549,9 @@ post (dimension#1219) and the dock panel can list them. It sends the vendor noti
 Observations are saved per profile in `profiles/<profile>/connections.json`,
 next to that profile's Chrome data, at most 64 sites per profile. The selectors
 for X, LinkedIn, Reddit and Bluesky are the presets' own (`recipes/`); Google's
-account is read from the email in its account button's label, with a count when
-the page lists more accounts. Like the presets, the selectors are modelled on each
+account is read from the email in its account button's label (no count of other
+accounts: a page can hold any link its author likes, so such a count proves nothing).
+Like the presets, the selectors are modelled on each
 site's page and tested against copies of it, not yet seen on the live sites.
 
 ## Browser panel

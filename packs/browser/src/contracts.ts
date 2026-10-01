@@ -348,8 +348,9 @@ export interface BrowserOpener { caller?: ToolCaller; session?: string }
 /** Who holds a saved profile, as `browser_profiles` tells the asking chat. No ids: only whose it is. */
 export type ProfileHolder = null | "this chat" | "human" | "another chat";
 /**
- * One site a profile was checked on. `signedIn: null`: not known now (the last check is over 7 days old).
- * `seenAt`: when it was last looked at, ISO 8601.
+ * One site a profile was checked on. `signedIn: null`: not known now (the last check is over 7 days old, or its
+ * time is in the future). `seenAt`: when it was last looked at, ISO 8601. `account` is the person's: the View and the
+ * dock get it, a model's list does not (profile-list.ts `profilesForModel`).
  */
 export interface ProfileSiteListing { site: string; account?: string; signedIn: boolean | null; seenAt: string }
 /** One saved profile as an agent or the View reads it. Never a cookie, a password, a path or a browser id. */

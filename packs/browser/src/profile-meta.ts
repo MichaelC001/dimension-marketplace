@@ -74,26 +74,34 @@ export function resolveProfileMeta(slug: string, stored: StoredProfileMeta = {})
 const fold = (text: string): string => text.replace(/\s+/g, " ").trim().toLowerCase();
 
 /**
- * The profiles `query` names: those whose slug OR label equals it, ignoring
- * case and surrounding or repeated spaces. Nothing is ever the "closest": no
- * match is empty, two matches (another profile's label equal to this one's
- * slug, or two labels that differ only by case) are both returned, and the
- * caller says so.
+ * The profiles `query` names, ignoring case and surrounding or repeated
+ * spaces. A slug is a folder name, so it is unique: an exact slug names its
+ * own profile and nothing else, however another profile is labelled (else a
+ * label equal to a slug would make that profile impossible to open, `default`
+ * included). Only when no slug is the query is it matched against labels, where
+ * two profiles that differ only by case are both returned and the caller says
+ * so. Nothing is ever the "closest": no match is empty.
  */
 export function matchProfiles<T extends { slug: string; label: string }>(query: string, profiles: readonly T[]): T[] {
 	const wanted = fold(query);
 	if (wanted.length === 0) return [];
-	return profiles.filter((profile) => fold(profile.slug) === wanted || fold(profile.label) === wanted);
+	const named = profiles.find((profile) => profile.slug === wanted);
+	return named === undefined ? profiles.filter((profile) => fold(profile.label) === wanted) : [named];
 }
 
 /** A sign-in observation older than this is not evidence of anything now. */
 export const SIGNED_IN_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+/** How far ahead of this clock an observation's time may be (two clocks, a resume) and still count as now. */
+const CLOCK_SKEW_MS = 60_000;
 
 /**
  * What an observation says NOW. `null` is "not known": the site was visited but
- * never checked, or the check is over 7 days old. Signed in is never claimed
- * from old data (nor signed out: a session may have been renewed since).
+ * never checked, the check is over 7 days old, or its time is in the future
+ * (a wrong clock or a copied file: a sign-in is not claimed for days that have
+ * not happened). Signed in is never claimed from old data (nor signed out: a
+ * session may have been renewed since).
  */
 export function effectiveSignedIn(signedIn: boolean | null, observedAt: number, now: number): boolean | null {
-	return signedIn !== null && now - observedAt <= SIGNED_IN_MAX_AGE_MS ? signedIn : null;
+	const age = now - observedAt;
+	return signedIn !== null && age >= -CLOCK_SKEW_MS && age <= SIGNED_IN_MAX_AGE_MS ? signedIn : null;
 }

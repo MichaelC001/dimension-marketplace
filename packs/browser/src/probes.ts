@@ -31,11 +31,11 @@ export type AccountRead =
 	/** The marker's link: `pick` takes the absolute href. */
 	| { from: "href"; selector: string; pick: (href: string) => string | undefined }
 	/**
-	 * The marker's `aria-label`: `pick` takes it. `others`: the links of every OTHER account the page lists
-	 * (Google's own account switcher, when the page shows it); `key` names the account behind one, and the
-	 * distinct keys beyond the primary are the count.
+	 * The marker's `aria-label`: `pick` takes it. Only the one account the marker names: the page's other links are
+	 * never counted, because a page can hold any link its author likes (a mail body), so a count of "other accounts"
+	 * read from the page is not evidence of anything.
 	 */
-	| { from: "label"; selector: string; pick: (label: string) => string | undefined; others?: { selector: string; key: (href: string) => string | undefined } };
+	| { from: "label"; selector: string; pick: (label: string) => string | undefined };
 
 export interface SiteProbe {
 	/** The report's site key: the registrable domain. */
@@ -72,8 +72,6 @@ const bskyHandle = (href: string): string | undefined => {
 const EMAIL = /[\p{L}\p{N}._%+-]+@[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)+/u;
 /** The email in Google's "Google Account: Jane Doe (jane@gmail.com)". The name is never kept: an email names the account. */
 const googleEmail = (label: string): string | undefined => label.match(EMAIL)?.[0];
-/** `authuser=N` is the account's slot in Google's switcher. */
-const authuser = (href: string): string | undefined => new URL(href).searchParams.get("authuser") ?? undefined;
 const GOOGLE_MARKER = 'a[aria-label^="Google Account"]';
 
 export const SITE_PROBES: readonly SiteProbe[] = [
@@ -85,7 +83,7 @@ export const SITE_PROBES: readonly SiteProbe[] = [
 	{
 		host: "google.com",
 		signedIn: GOOGLE_MARKER,
-		account: { from: "label", selector: GOOGLE_MARKER, pick: googleEmail, others: { selector: 'a[href*="authuser="]', key: authuser } },
+		account: { from: "label", selector: GOOGLE_MARKER, pick: googleEmail },
 		loginPaths: [],
 	},
 ];
@@ -98,7 +96,6 @@ export function probeFor(host: string, table: readonly SiteProbe[] = SITE_PROBES
 /** How long a missing marker is waited for on a page where its absence decides: a single-page app draws it after `load`. */
 export const SETTLE_MS = 3_000;
 const ACCOUNT_CHARS = 256;
-const MAX_OTHER_ACCOUNTS = 16;
 
 /** Whether a missing marker on `url` is a verdict: the site's front page, or one of its login pages. */
 function decides(probe: SiteProbe, url: URL): boolean {
@@ -128,11 +125,7 @@ async function readAccount(reader: ProbeReader, read: AccountRead | undefined): 
 			return href === undefined ? undefined : read.pick(href);
 		}
 		const label = await reader.readLabel(read.selector, ACCOUNT_CHARS);
-		const primary = label === null ? undefined : read.pick(label);
-		if (primary === undefined || read.others === undefined) return primary;
-		const { selector, key } = read.others;
-		const slots = new Set((await reader.linkHrefs(selector, MAX_OTHER_ACCOUNTS)).flatMap((href) => key(href) ?? []));
-		return slots.size > 1 ? `${primary} (+${slots.size - 1})` : primary;
+		return label === null ? undefined : read.pick(label);
 	} catch {
 		// A page that changed under the read, or a href that is not a URL: signed in, account unknown. Never a guess.
 		return undefined;

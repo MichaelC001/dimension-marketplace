@@ -32,9 +32,11 @@ hold; give it `url` (and `profile`) instead to open one for them to watch.
   Browser list. **Told to use a profile ("use my work profile")? Call
   `browser_profiles` first:** it lists the saved profiles with their label, who
   holds each, and the sites each is signed in to (`signedIn: null` is not known:
-  ask the user). Pass the name or the label, in any case; a name two profiles
-  answer to, or none, is refused with the choices: ask the user which, never
-  guess. A profile another chat or the user holds is refused (`profile_held`);
+  ask the user). It never shows which account a site is signed in to: ask the
+  user if that matters. Pass the name or the label, in any case; an exact name is
+  always that profile, and a label two profiles share, or a name that is none, is
+  refused with the choices: ask the user which, never guess. A profile another
+  chat or the user holds, open or still starting, is refused (`profile_held`);
   your own chat gets the same browser back. Name a new one (`personal`, `work`,
   `jobs`…) only to keep logins and cookies across sessions. Profiles never share
   cookies. Saved passwords
