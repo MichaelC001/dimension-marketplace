@@ -30,6 +30,7 @@ import {
 	TooltipProvider,
 	TooltipTrigger,
 	useObservable,
+	VoicemailMark,
 } from "@fraym/ui";
 import {
 	type ComponentProps,
@@ -70,6 +71,9 @@ interface RailRow extends TriageRow {
 	readonly meta?: string;
 	readonly source?: "user" | "autonomy";
 	readonly sessionRef?: { readonly workspaceId: string; readonly sessionId: string };
+	readonly profile?: string;
+	/** The voice desk's summary for this session (doc 91 §8): present only while a message is unplayed. */
+	readonly voicemail?: { readonly unplayed: number; readonly needsYou?: true };
 }
 
 type RailGroup = TriageGroup<RailRow>;
@@ -150,7 +154,7 @@ const Row = memo(function Row({
 		[actions, item],
 	);
 	const dotState = (item.dotState ?? item.status) as ComponentProps<typeof ActivityDot>["state"];
-	return (
+	const row = (
 		<button
 			type="button"
 			className="tr-row"
@@ -179,6 +183,16 @@ const Row = memo(function Row({
 			</span>
 			<span className="tr-row-time">{trailing}</span>
 		</button>
+	);
+	// A voice message the desk holds for this session (doc 91 §8). The mark is its own click target, so it is a SIBLING of
+	// the row button (a button in a button is invalid HTML); only a row that holds one grows the holder.
+	const ref = item.sessionRef;
+	if (!item.voicemail || item.voicemail.unplayed <= 0 || !ref) return row;
+	return (
+		<div className="tr-row-holder" data-mail="">
+			{row}
+			<VoicemailMark sessionId={ref.sessionId} voicemail={item.voicemail} title={item.title} agent={item.profile} className="tr-mail" />
+		</div>
 	);
 });
 

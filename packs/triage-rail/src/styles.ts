@@ -244,6 +244,20 @@ export const TRIAGE_RAIL_CSS = `
 	font-variant-numeric: tabular-nums;
 	color: var(--fr-text-3);
 }
+/* The voice message mark (doc 91 §8): a sibling of the row button, drawn over its trailing padding. Only a row that
+   holds a message grows the holder, and its button gives up exactly the mark's width so title and time keep their columns. */
+[data-slot="triage-rail"] .tr-row-holder {
+	position: relative;
+}
+[data-slot="triage-rail"] .tr-row-holder[data-mail] .tr-row {
+	padding-right: 32px;
+}
+[data-slot="triage-rail"] .tr-mail {
+	position: absolute;
+	top: 50%;
+	right: 8px;
+	transform: translateY(-50%);
+}
 [data-slot="triage-rail"] .tr-more {
 	display: block;
 	width: 100%;

@@ -34,6 +34,21 @@ mock.module("@fraym/ui", () => ({
 	TooltipTrigger: passthrough,
 	useObservable: (source: { subscribe: (fn: () => void) => () => void; getSnapshot: () => unknown }) =>
 		useSyncExternalStore(source.subscribe, source.getSnapshot),
+	// The kit's granted mark: the pack hands it the row's summary and identity and nothing else.
+	VoicemailMark: (props: {
+		readonly sessionId: string;
+		readonly title: string;
+		readonly agent?: string;
+		readonly voicemail?: { readonly needsYou?: true };
+		readonly className?: string;
+	}) =>
+		createElement("i", {
+			"data-voicemail-mark": props.sessionId,
+			"data-title": props.title,
+			"data-agent": props.agent,
+			"data-needs-you": props.voicemail?.needsYou ? "" : undefined,
+			className: props.className,
+		}),
 }));
 
 const TriageRail = (await import("../src/index")).default;
@@ -91,6 +106,8 @@ interface Row {
 	readonly time: string;
 	readonly updatedAt: string;
 	readonly sessionRef?: { readonly workspaceId: string; readonly sessionId: string };
+	readonly profile?: string;
+	readonly voicemail?: { readonly unplayed: number; readonly newestAt: number; readonly needsYou?: true };
 }
 
 function row(id: string, status: string, ago: number, addressable = true): Row {
@@ -274,5 +291,42 @@ describe("the empty card", () => {
 		const { actions } = actionsWith();
 		await mount([], actions);
 		expect(container.querySelector(".tr-empty strong")?.textContent).toBe("Nothing to triage");
+	});
+});
+
+describe("the voice message mark", () => {
+	const mark = (id: string) => container.querySelector(`[data-voicemail-mark="${id}"]`);
+	const mailRow = (id: string, over: Partial<Row> = {}): Row => ({
+		...row(id, "idle", HOUR),
+		voicemail: { unplayed: 1, newestAt: 1 },
+		profile: "mochi",
+		...over,
+	});
+
+	test("a row holding a message draws the kit's mark beside its row button; a bare row is still a bare button", async () => {
+		const { actions } = actionsWith();
+		await mount([mailRow("a"), mailRow("c", { voicemail: { unplayed: 2, newestAt: 1, needsYou: true } }), row("b", "idle", HOUR)], actions);
+
+		expect(mark("a")).not.toBeNull();
+		expect(mark("b")).toBeNull();
+		// A button in a button is invalid HTML: the mark and the row button are siblings in one holder.
+		expect(mark("a")?.closest(".tr-row")).toBeNull();
+		const holder = mark("a")?.closest(".tr-row-holder");
+		expect(holder?.querySelector(":scope > .tr-row")?.getAttribute("data-session-id")).toBe("a");
+		expect(container.querySelector('[data-session-id="b"]')?.closest(".tr-row-holder")).toBeNull();
+		// It is handed the row's identity, and the plain/needs-you distinction survives the pack.
+		expect(mark("a")?.getAttribute("data-title")).toBe("title a");
+		expect(mark("a")?.getAttribute("data-agent")).toBe("mochi");
+		expect(mark("a")?.hasAttribute("data-needs-you")).toBe(false);
+		expect(mark("c")?.hasAttribute("data-needs-you")).toBe(true);
+	});
+
+	test("a drained stack, or a row the host cannot address, draws no mark", async () => {
+		const { actions } = actionsWith();
+		await mount(
+			[mailRow("drained", { voicemail: { unplayed: 0, newestAt: 1 } }), mailRow("nowhere", { sessionRef: undefined })],
+			actions,
+		);
+		expect(container.querySelector("[data-voicemail-mark]")).toBeNull();
 	});
 });
