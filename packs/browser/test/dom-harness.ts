@@ -35,6 +35,8 @@ export interface Dom {
 	readonly submit: (form: Element) => Promise<void>;
 	/** Tick or untick a checkbox, as a click does. */
 	readonly check: (input: Element, checked: boolean) => Promise<void>;
+	/** Press `key` with `target` focused, as a keyboard does: the event bubbles from it. */
+	readonly key: (target: Element, key: string) => Promise<void>;
 	/** Let pending promises and effects settle (a poll answering, a tool call returning). */
 	readonly settle: () => Promise<void>;
 }
@@ -50,6 +52,11 @@ export async function mount(element: ReactElement): Promise<Dom> {
 	const { window } = parseHTML('<!doctype html><html><body><div id="root"></div></body></html>');
 	// An address bar selects its text on focus.
 	Object.assign(window.HTMLInputElement.prototype, { select() {} });
+	// No layout in linkedom: every box is 800×600 at the origin, which is all a drawing surface needs to place a mark.
+	Object.defineProperty(window.Element.prototype, "getBoundingClientRect", {
+		configurable: true,
+		value: () => ({ left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600, x: 0, y: 0 }),
+	});
 	// A type-less <input> is a text input. linkedom says `null`, and React removes a type
 	// attribute it was not given on every re-render, so an input that re-renders on focus
 	// (an address bar) would stop being a text input to React's change detection.
@@ -123,6 +130,11 @@ export async function mount(element: ReactElement): Promise<Dom> {
 			Object.assign(input, { checked });
 			await act(async () => {
 				input.dispatchEvent(new window.Event("click", { bubbles: true }));
+			});
+		},
+		key: async (target, key) => {
+			await act(async () => {
+				target.dispatchEvent(Object.assign(new window.Event("keydown", { bubbles: true, cancelable: true }), { key }));
 			});
 		},
 		settle: () => act(async () => new Promise<void>(resolve => setTimeout(resolve, 20))),

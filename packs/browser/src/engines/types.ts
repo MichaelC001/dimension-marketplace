@@ -1,4 +1,4 @@
-import type { BrowserAction, BrowserApp, BrowserRegion, ElementInspection, HandledDialog, LogEntry, ModelShot, ShotRequest, TabInfo, Viewport } from "../contracts.js";
+import type { BrowserAction, BrowserApp, BrowserRegion, ElementInspection, HandledDialog, LogEntry, ModelShot, PageScroll, ShotRequest, TabInfo, Viewport } from "../contracts.js";
 
 /** Everything below describes the ACTIVE tab unless it says otherwise. */
 export interface EngineState {
@@ -126,7 +126,11 @@ export interface EngineDriver {
    */
   liveFrame(): Promise<LiveFrame>;
   snapshot(limit: number): Promise<string>;
-  elements(region: BrowserRegion, limit: number): Promise<string>;
+  /**
+   * What is on the active tab under each of `regions` (viewport px), one read for all of them: the elements under each
+   * region, one line apiece and at most `limit` characters per region, in the order asked, and where the page is scrolled.
+   */
+  elements(regions: readonly BrowserRegion[], limit: number): Promise<{ scroll: PageScroll; regions: string[] }>;
   /**
    * Perform one action on the active tab now, once, never retried. Throws
    * `ActionNotDispatched` when provably nothing reached the page; any other

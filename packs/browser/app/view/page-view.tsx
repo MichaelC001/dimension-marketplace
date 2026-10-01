@@ -1,12 +1,12 @@
 // The page itself: the live picture, fitted to the seat at the viewport's own
 // aspect, and every direct input a human makes on it — click, double/triple
 // click, right and middle click, wheel, hover and typing — mapped from seat
-// pixels to viewport pixels and handed to `onAction`. In annotation mode the
-// same surface becomes a drawing board over a frozen full-quality frame.
+// pixels to viewport pixels and handed to `onAction`. Marking the page up is
+// not done here: the human freezes it into one picture and the annotation seat
+// (annotation-seat.tsx) lays the shared annotation kit over that picture.
 //
-// One coordinate space rules: `viewport` CSS pixels. The SVG overlay uses
-// `viewBox="0 0 width height"`, so drawings are stored in the same space
-// clicks are, and never drift when the seat is resized.
+// One coordinate space rules: `viewport` CSS pixels, so a click lands on the
+// same pixel of the page whatever size the seat renders the picture at.
 import {
 	type ClipboardEvent as ReactClipboardEvent,
 	type CSSProperties,
@@ -18,17 +18,8 @@ import {
 	useRef,
 	useState,
 } from "react";
-import type { BrowserAction, BrowserFrame, BrowserRegion, Viewport } from "../../src/contracts";
-import { ellipseOf, type Mark, type Point, regionFromDrag, toPixelPoint, toViewportPoint } from "./geometry";
-
-export type DrawTool = "region" | "circle" | "freehand";
-
-export interface Sketch {
-	readonly region: BrowserRegion | null;
-	readonly marks: readonly Mark[];
-}
-
-export const EMPTY_SKETCH: Sketch = { region: null, marks: [] };
+import type { BrowserAction, BrowserFrame, Viewport } from "../../src/contracts";
+import { type Point, toPixelPoint, toViewportPoint } from "./geometry";
 
 /** Keys the runtime presses by name; everything printable is inserted. */
 const NAMED_KEYS: Record<string, true> = {
@@ -39,29 +30,12 @@ const NAMED_KEYS: Record<string, true> = {
 const HOVER_INTERVAL_MS = 120;
 /** A wheel line / page in pixels, for devices that report in those units. */
 const WHEEL_LINE_PX = 40;
-const MAX_FREEHAND_POINTS = 1024;
-const MAX_MARKS = 64;
 
 interface Ripple {
 	readonly id: number;
 	readonly x: number;
 	readonly y: number;
 	readonly kind: "left" | "right" | "middle";
-}
-
-interface Drag {
-	readonly tool: DrawTool;
-	readonly from: Point;
-	readonly points: readonly Point[];
-}
-
-function SketchMark({ mark }: { readonly mark: Pick<Mark, "kind" | "points"> }) {
-	if (mark.kind === "freehand") {
-		return <polyline className="bx-mark" points={mark.points.map(point => `${point.x},${point.y}`).join(" ")} />;
-	}
-	const ellipse = ellipseOf(mark.points);
-	if (ellipse === null) return null;
-	return <ellipse className="bx-mark" cx={ellipse.cx} cy={ellipse.cy} rx={ellipse.rx} ry={ellipse.ry} />;
 }
 
 /** The floating layers' home. Every event that would otherwise bubble into
@@ -91,11 +65,8 @@ export function Overlays({ children }: { readonly children: ReactNode }) {
 export interface PageViewProps {
 	readonly frame: BrowserFrame | null;
 	readonly viewport: Viewport;
-	/** live: input goes to the page. annotate: draw. locked: an agent drives. */
-	readonly mode: "live" | "annotate" | "locked";
-	readonly tool: DrawTool;
-	readonly sketch: Sketch;
-	readonly onSketch: (next: Sketch) => void;
+	/** live: input goes to the page. frozen: the page is being captured for marking, so it takes no input. locked: an agent drives. */
+	readonly mode: "live" | "frozen" | "locked";
 	readonly onAction: (action: BrowserAction) => void;
 	readonly label: string;
 	/**
@@ -111,7 +82,7 @@ export interface PageViewProps {
 	readonly children?: ReactNode;
 }
 
-export function PageView({ frame, viewport, mode, tool, sketch, onSketch, onAction, onResize, label, confirming = false, children }: PageViewProps) {
+export function PageView({ frame, viewport, mode, onAction, onResize, label, confirming = false, children }: PageViewProps) {
 	const pageRef = useRef<HTMLDivElement | null>(null);
 	const stageRef = useRef<HTMLDivElement | null>(null);
 	const onResizeRef = useRef(onResize);
@@ -128,7 +99,6 @@ export function PageView({ frame, viewport, mode, tool, sketch, onSketch, onActi
 		return () => observer.disconnect();
 	}, []);
 	const [ripples, setRipples] = useState<readonly Ripple[]>([]);
-	const [drag, setDrag] = useState<Drag | null>(null);
 	const lastHoverRef = useRef(0);
 	const rippleIdRef = useRef(0);
 	const live = mode === "live" && frame !== null;
@@ -188,21 +158,6 @@ export function PageView({ frame, viewport, mode, tool, sketch, onSketch, onActi
 	}, [frame === null]);
 
 	const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
-		if (mode === "annotate") {
-			if (drag === null) return;
-			const point = pointAt(event.clientX, event.clientY);
-			if (point === null) return;
-			if (drag.tool === "freehand") {
-				const last = drag.points[drag.points.length - 1];
-				if (last !== undefined && last.x === point.x && last.y === point.y) return;
-				const points = drag.points.length >= MAX_FREEHAND_POINTS ? [...drag.points.slice(0, -1), point] : [...drag.points, point];
-				setDrag({ ...drag, points });
-			} else {
-				setDrag({ ...drag, points: [drag.from, point] });
-				if (drag.tool === "region") onSketch({ ...sketch, region: regionFromDrag(drag.from, point) });
-			}
-			return;
-		}
 		if (!live || event.pointerType !== "mouse" || event.buttons !== 0) return;
 		const now = performance.now();
 		if (now - lastHoverRef.current < HOVER_INTERVAL_MS) return;
@@ -213,23 +168,8 @@ export function PageView({ frame, viewport, mode, tool, sketch, onSketch, onActi
 		onAction({ kind: "hover", x: pixel.x, y: pixel.y });
 	};
 
-	const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+	const onPointerDown = () => {
 		pageRef.current?.focus({ preventScroll: true });
-		if (mode !== "annotate" || event.button !== 0 || frame === null) return;
-		const point = pointAt(event.clientX, event.clientY);
-		if (point === null) return;
-		event.currentTarget.setPointerCapture(event.pointerId);
-		setDrag({ tool, from: point, points: [point] });
-	};
-
-	const onPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
-		if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
-		if (drag === null) return;
-		if (drag.tool !== "region" && drag.points.length > 1) {
-			const mark: Mark = { id: Date.now(), kind: drag.tool, points: drag.points };
-			onSketch({ ...sketch, marks: [...sketch.marks, mark].slice(-MAX_MARKS) });
-		}
-		setDrag(null);
 	};
 
 	const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -261,7 +201,6 @@ export function PageView({ frame, viewport, mode, tool, sketch, onSketch, onActi
 		onAction({ kind: "insert", text: text.slice(0, 4096) });
 	};
 
-	const liveMark = drag !== null && drag.tool !== "region" ? drag : null;
 	const style = { "--vw": viewport.width, "--vh": viewport.height } as CSSProperties;
 
 	return (
@@ -274,19 +213,16 @@ export function PageView({ frame, viewport, mode, tool, sketch, onSketch, onActi
 				tabIndex={0}
 				aria-roledescription="web page"
 				aria-label={
-					mode === "annotate"
-						? `${label}. Annotation mode: drag to draw.`
+					mode === "frozen"
+						? `${label}. Capturing the page for marking.`
 						: mode === "locked"
 							? `${label}. An agent is driving this page.`
 							: confirming
 								? `${label}. A post is waiting for your confirmation: Tab moves to it. Click, scroll and type to use the page.`
 								: `${label}. Click, scroll and type to use the page. Shift+Tab leaves it.`
 				}
-				data-tool={mode === "annotate" ? tool : undefined}
 				onPointerDown={onPointerDown}
 				onPointerMove={onPointerMove}
-				onPointerUp={onPointerUp}
-				onPointerCancel={onPointerUp}
 				onClick={event => click(event, "left")}
 				onAuxClick={event => {
 					if (event.button === 1) click(event, "middle");
@@ -314,17 +250,6 @@ export function PageView({ frame, viewport, mode, tool, sketch, onSketch, onActi
 						draggable={false}
 						decoding="sync"
 					/>
-				)}
-				{mode === "annotate" && (
-					<svg className="bx-overlay" viewBox={`0 0 ${viewport.width} ${viewport.height}`} preserveAspectRatio="none" aria-hidden="true">
-						{sketch.region !== null && (
-							<rect className="bx-region" x={sketch.region.x} y={sketch.region.y} width={sketch.region.width} height={sketch.region.height} />
-						)}
-						{sketch.marks.map(mark => (
-							<SketchMark key={mark.id} mark={mark} />
-						))}
-						{liveMark !== null && <SketchMark mark={{ kind: liveMark.tool === "circle" ? "circle" : "freehand", points: liveMark.points }} />}
-					</svg>
 				)}
 				{ripples.map(entry => (
 					<span key={entry.id} className="bx-ripple" data-kind={entry.kind} style={{ left: entry.x, top: entry.y }} aria-hidden="true" />

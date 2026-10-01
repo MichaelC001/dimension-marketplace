@@ -40,7 +40,7 @@ import type {
 	CredentialUse,
 	HandledDialog,
 	BrowserAction,
-	BrowserAnnotation,
+	BrowserAnnotationContext,
 	BrowserEngine,
 	BrowserFrame,
 	UnchangedFrame,
@@ -70,12 +70,13 @@ import type {
 	StepOutcome,
 	StepStatus,
 } from "./contracts.js";
-import { BROWSER_ENGINES, MAX_BATCH_STEPS, MAX_EVAL_EXPRESSION_CHARS, MAX_EVAL_RESULT_CHARS, MAX_VIEWPORT, MAX_WAIT_MS, MIN_VIEWPORT, TASK_AGENTS } from "./contracts.js";
+import { BROWSER_ENGINES, MAX_ANNOTATION_REGIONS, MAX_BATCH_STEPS, MAX_EVAL_EXPRESSION_CHARS, MAX_EVAL_RESULT_CHARS, MAX_VIEWPORT, MAX_WAIT_MS, MIN_VIEWPORT, TASK_AGENTS } from "./contracts.js";
 import { credentialOrigin, resolveCredential, savedPassword, savedPasswords } from "./credentials.js";
 import { assertEngineAvailable, createEngineDriver } from "./engines/index.js";
 import { launchReader } from "./engines/puppeteer.js";
 import type { EngineDriver, EngineState, EvalOutcome, PageReader, PasswordSource, PerformOutcome, WaitCondition } from "./engines/types.js";
-import { cropRegion, MAX_FRAME_BYTES } from "./image.js";
+import { AnnotationFiles } from "./annotation-file.js";
+import { clampRegion, MAX_FRAME_BYTES } from "./image.js";
 import { type Publication, cancel, confirm, isPending, prepare, publishRecord, requirePending, validateMode, validateRecipe, waitSettled } from "./publish.js";
 import { blockedReason, DEFAULT_READ_CHARS, MAX_READ_CHARS, READ_TIMEOUT_MS, readPolicy, TIMEOUT_REASON } from "./read.js";
 import { ActionNotDispatched, fail, ProfileStore, validateProfile } from "./store.js";
@@ -95,7 +96,6 @@ const MAX_BATCH_DIALOGS = 5;
 const MAX_SNAPSHOT_CHARS = 20_000;
 const MAX_ELEMENT_CHARS = 4_000;
 const MAX_TEXT_INPUT = 4_096;
-const MAX_NOTE_CHARS = 8_192;
 const MAX_SELECTOR_CHARS = 512;
 const MAX_TAB_ID_CHARS = 128;
 const MOUSE_BUTTONS: readonly MouseButton[] = ["left", "right", "middle"];
@@ -163,10 +163,11 @@ interface PlannedEval { kind: "eval"; expression: string }
 
 type PlannedStep = BrowserAction | PlannedWait | PlannedTab | PlannedEval;
 
+/** A png frame the View was handed. The picture itself is the View's; this is what annotating it must still agree with. */
 interface FrameRecord {
 	id: string;
-	bytes: Buffer;
 	url: string;
+	title: string;
 	revision: number;
 	viewport: Viewport;
 	capturedAt: string;
@@ -212,6 +213,7 @@ interface Entry {
 
 export class BrowserRuntime implements BrowserRuntimePort {
 	private readonly store: ProfileStore;
+	private readonly annotationFiles: AnnotationFiles;
 	private readonly options: BrowserRuntimeOptions;
 	private readonly byId = new Map<string, Entry>();
 	private readonly byProfile = new Map<string, Entry>();
@@ -253,6 +255,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	constructor(options: BrowserRuntimeOptions = {}) {
 		this.options = options;
 		this.store = new ProfileStore(options.rootDir);
+		this.annotationFiles = new AnnotationFiles(join(this.store.rootDir, "annotations"));
 		// Only what a dead server abandoned: a live server's throwaway browsers are never touched.
 		this.store.sweepEphemeral();
 	}
@@ -509,8 +512,8 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			}
 			const record: FrameRecord = {
 				id: randomBytes(12).toString("hex"),
-				bytes,
 				url,
+				title: state.title,
 				revision,
 				viewport: entry.viewport,
 				capturedAt,
@@ -574,23 +577,18 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	}
 
 	/**
-	 * Crop the STORED bytes of `frameId` and attach bounded live element context.
+	 * The page under the regions the human marked on the retained frame `frameId`: its address and title as captured,
+	 * where it is scrolled, and the elements under each region. The picture is the View's own frame; the shared
+	 * annotation kit paints the marks onto it and cuts the detail crops, so nothing here carries pixels.
 	 *
-	 * Honesty note baked into the returned payload: the crop is the captured
-	 * frame, while the element list is read from the page as it is NOW. On a
-	 * dynamic page those can disagree even at the same revision; we never claim
+	 * Honesty note baked into the answer: the frame is what was captured at `capturedAt`, the elements are read from the
+	 * page as it is NOW (`readAt`). On a dynamic page those can disagree even at the same revision; we never claim
 	 * they are the same instant.
 	 */
-	async annotate(
-		browserId: string,
-		frameId: string,
-		region: BrowserRegion,
-		note: string,
-	): Promise<BrowserAnnotation> {
+	async annotate(browserId: string, frameId: string, regions: readonly BrowserRegion[]): Promise<BrowserAnnotationContext> {
 		const entry = this.require(browserId);
-		const text = note ?? "";
-		if (typeof text !== "string" || text.length > MAX_NOTE_CHARS) {
-			fail("bad_note", `note must be a string of at most ${MAX_NOTE_CHARS} characters`);
+		if (!Array.isArray(regions) || regions.length === 0 || regions.length > MAX_ANNOTATION_REGIONS) {
+			fail("bad_region", `annotate needs between 1 and ${MAX_ANNOTATION_REGIONS} regions`);
 		}
 		return await this.serialize(entry, async () => {
 			await this.refreshState(entry);
@@ -604,22 +602,24 @@ export class BrowserRuntime implements BrowserRuntimePort {
 					`frame ${frameId} was captured at revision ${record.revision}; the page is now at revision ${entry.revision}. Capture a new frame.`,
 				);
 			}
-			const { png, region: clamped } = cropRegion(record.bytes, region);
-			const elements = await entry.driver.elements(clamped, MAX_ELEMENT_CHARS);
+			const clamped = regions.map((region) => clampRegion(region, record.viewport));
+			const read = await entry.driver.elements(clamped, MAX_ELEMENT_CHARS);
 			await this.refreshState(entry);
 			if (record.revision !== entry.revision) fail("stale_frame", "The document changed while reading annotation context.");
-			return {
+			return this.redact(entry, {
 				url: record.url,
-				note: text,
-				region: clamped,
+				title: record.title,
 				capturedAt: record.capturedAt,
-				mimeType: "image/png" as const,
-				data: png.toString("base64"),
-				elements:
-					`${this.redact(entry, elements)}\n\n[live DOM read at ${new Date().toISOString()}, revision ${entry.revision}; ` +
-					`the image is the frame captured at ${record.capturedAt} — a dynamic page may have changed between them]`,
-			};
+				readAt: new Date().toISOString(),
+				viewport: record.viewport,
+				scroll: read.scroll,
+				regions: clamped.map((region, index) => ({ region, elements: read.regions[index] ?? "" })),
+			});
 		});
+	}
+
+	saveAnnotationDetail(json: string): string {
+		return this.annotationFiles.save(json);
 	}
 
 	async profiles(): Promise<string[]> {

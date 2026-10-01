@@ -7,7 +7,8 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { buildConnectionReport, type ConnectionReportParams, PACK_CONNECTION_REPORT_METHOD } from "./connection.js";
 import type { ActManyResult, BrowserEngine, BrowserRuntimePort, BrowserState, TaskRun, ToolCaller } from "./contracts.js";
-import { BROWSER_ENGINES, CREDENTIAL_MODES, MAX_BATCH_STEPS, MAX_EVAL_EXPRESSION_CHARS, MAX_VIEWPORT, MAX_WAIT_MS, MIN_VIEWPORT, PUBLISH_MODES, TASK_AGENTS } from "./contracts.js";
+import { BROWSER_ENGINES, CREDENTIAL_MODES, MAX_ANNOTATION_REGIONS, MAX_BATCH_STEPS, MAX_EVAL_EXPRESSION_CHARS, MAX_VIEWPORT, MAX_WAIT_MS, MIN_VIEWPORT, PUBLISH_MODES, TASK_AGENTS } from "./contracts.js";
+import { MAX_DETAIL_BYTES } from "./annotation-file.js";
 import { type PublishPreset, loadPresets, resolvePreset, summarizePresets } from "./presets.js";
 import { PROFILE_NAME } from "./profile-name.js";
 import { BrowserRuntime } from "./runtime.js";
@@ -407,13 +408,17 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     return format === "png" ? await runtime.frame(browserId, "png") : await runtime.frame(browserId, "jpeg", since);
   }));
   registerAppTool(server, "browser_annotate", {
-    description: "Crop a retained frame and describe the selected region. Does not send anything to an agent; the View explicitly updates its model context afterward.",
+    description: "The page under the regions the human marked on a retained png frame: address, title, where it is scrolled, and the elements under each region (a password field is named, never read). No pixels: the picture is the View's own frame and the shared annotation kit paints the marks on it. Does not send anything to an agent; the View explicitly updates its model context afterward.",
     inputSchema: {
       browserId: capability, frameId: capability,
-      region: z.object({ x: coordinate, y: coordinate, width: z.number().positive().max(4096), height: z.number().positive().max(4096) }).strict(),
-      note: z.string().max(8192),
+      regions: z.array(z.object({ x: coordinate, y: coordinate, width: z.number().positive().max(4096), height: z.number().positive().max(4096) }).strict()).min(1).max(MAX_ANNOTATION_REGIONS),
     }, annotations: READ_ONLY, _meta: APP_ONLY,
-  }, ({ browserId, frameId, region, note }) => result(() => runtime.annotate(browserId, frameId, region, note)));
+  }, ({ browserId, frameId, regions }) => result(() => runtime.annotate(browserId, frameId, regions)));
+  registerAppTool(server, "browser_annotation_file", {
+    description: "Keep the annotation kit's detail document (every mark with the elements under it) in a file of this plugin's own folder and answer the absolute path the agent reads it at. Accepts only that document; keeps the newest few.",
+    inputSchema: { json: z.string().max(MAX_DETAIL_BYTES) },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }, _meta: APP_ONLY,
+  }, ({ json }) => result(async () => ({ path: runtime.saveAnnotationDetail(json) })));
   registerAppTool(server, "browser_viewport", {
     description: "Fit the page to the View: set every tab's viewport to the page area's CSS size (bounded 320-2560 × 240-2000) at the View's pixel ratio (1-2) so the live view is crisp. The View calls this on resize, debounced.",
     inputSchema: { browserId: capability, width: z.number().int().min(1).max(8192), height: z.number().int().min(1).max(8192), scale: z.number().min(1).max(4).optional() },

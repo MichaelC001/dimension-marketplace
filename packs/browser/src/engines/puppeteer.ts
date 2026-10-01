@@ -34,13 +34,13 @@ import { mkdirSync, statSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 import puppeteer, { TimeoutError } from "puppeteer-core";
 import type { Browser, BrowserContext, CDPSession, ElementHandle, Frame, HTTPRequest, HTTPResponse, JSHandle, KeyInput, Page, Protocol, Target } from "puppeteer-core";
-import { type BrowserAction, type BrowserApp, type BrowserRegion, type DialogType, type ElementInspection, type HandledDialog, type LogEntry, MAX_LOG_ENTRIES, type ModelShot, type ShotRequest, type TabInfo, type Viewport } from "../contracts.js";
+import { type BrowserAction, type BrowserApp, type BrowserRegion, type DialogType, type ElementInspection, type HandledDialog, type LogEntry, MAX_LOG_ENTRIES, type ModelShot, type PageScroll, type ShotRequest, type TabInfo, type Viewport } from "../contracts.js";
 import { FaviconCache } from "../favicon.js";
 import { MAX_FRAME_BYTES } from "../image.js";
 import { ActionNotDispatched, BrowserRuntimeError, fail } from "../store.js";
 import {
 	ELEMENT_TEXT_SCRIPT,
-	ELEMENTS_IN_REGION_SCRIPT,
+	ELEMENTS_IN_REGIONS_SCRIPT,
 	FAVICON_HREF_SCRIPT,
 	FOCUSED_LEAF_SCRIPT,
 	FRAME_INSET_SCRIPT,
@@ -841,8 +841,8 @@ class PuppeteerDriver implements EngineDriver {
 		return parts.join("\n\n");
 	}
 
-	async elements(region: BrowserRegion, limit: number): Promise<string> {
-		return await this.#activeTab().page.evaluate(ELEMENTS_IN_REGION_SCRIPT, region, limit);
+	async elements(regions: readonly BrowserRegion[], limit: number): Promise<{ scroll: PageScroll; regions: string[] }> {
+		return await this.#activeTab().page.evaluate(ELEMENTS_IN_REGIONS_SCRIPT, [...regions], limit);
 	}
 
 	// -----------------------------------------------------------------------

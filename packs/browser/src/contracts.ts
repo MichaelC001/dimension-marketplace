@@ -16,8 +16,8 @@ export type CredentialMode = (typeof CREDENTIAL_MODES)[number];
 export interface CredentialRequest { origin: string; mode: CredentialMode }
 /** What a task reports about the credential it used — never the value. */
 export interface CredentialUse { origin: string; created: boolean }
-/** Maximum encoded PNG accepted by the host's image model-context contract. */
-export const MAX_ANNOTATION_BYTES = 2_097_152;
+/** Regions one `browser_annotate` reads: the shared annotation kit's mark limit (a page of numbered marks is a brief, past this it is a redraw). */
+export const MAX_ANNOTATION_REGIONS = 24;
 export interface Viewport { width: number; height: number }
 /** What a viewport may be (CSS px): `browser_open`, the View's fit and the `resize` step clamp to these. */
 export const MIN_VIEWPORT: Viewport = { width: 320, height: 240 };
@@ -322,14 +322,23 @@ export interface UnchangedFrame {
   unchanged: true;
 }
 export interface BrowserRegion { x: number; y: number; width: number; height: number }
-export interface BrowserAnnotation {
+/** Where a page is scrolled and how large it is, in CSS px. */
+export interface PageScroll { x: number; y: number; width: number; height: number }
+/**
+ * What `browser_annotate` answers: facts about the page under the regions the human marked. No pixels: the picture is
+ * the View's own frame, and the shared annotation kit paints the marks onto it.
+ */
+export interface BrowserAnnotationContext {
   url: string;
-  note: string;
-  region: BrowserRegion;
+  title: string;
+  /** When the frame the human marked was captured. */
   capturedAt: string;
-  mimeType: "image/png";
-  data: string;
-  elements: string;
+  /** When the page was read for the elements; a dynamic page may have changed since `capturedAt`. */
+  readAt: string;
+  viewport: Viewport;
+  scroll: PageScroll;
+  /** One entry per requested region, in order: the region as read (clamped to the frame) and the elements under it. */
+  regions: { region: BrowserRegion; elements: string }[];
 }
 export interface BrowserOpenOptions {
   /** Omitted: a throwaway browser, nothing saved, no sign-in kept. Named: the persistent profile of that name. */
@@ -388,7 +397,14 @@ export interface BrowserRuntimePort {
   inspect(browserId: string, selector: string): Promise<InspectResult>;
   runTask(browserId: string, request: TaskRequest, onStep?: (step: TaskStep, run: TaskRun) => void): Promise<TaskRun>;
   cancelTask(browserId: string): Promise<TaskRun>;
-  annotate(browserId: string, frameId: string, region: BrowserRegion, note: string): Promise<BrowserAnnotation>;
+  /**
+   * The page under the regions the human marked on a frame `frame` (png) captured: url, title, scroll and the elements
+   * under each region. Refused (`stale_frame`) once the page has moved on from the frame, (`unknown_frame`) for a frame
+   * no longer retained. Read-only; the picture is the caller's.
+   */
+  annotate(browserId: string, frameId: string, regions: readonly BrowserRegion[]): Promise<BrowserAnnotationContext>;
+  /** Stores the detail document the shared annotation kit assembles and answers the absolute path the agent reads it at. */
+  saveAnnotationDetail(json: string): string;
   /** Every on-disk profile's persisted sign-in observations (connection.ts). */
   connections(): Promise<ConnectionObservations>;
   /** `listener` runs after each new observation is persisted and after a profile with observations is deleted. Returns the unsubscribe. */
