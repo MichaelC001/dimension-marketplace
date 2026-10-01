@@ -694,12 +694,26 @@ describe("a job on fal's queue", () => {
 			expect(fake.calls.at(-1)).toMatchObject({ method: "PUT", url: expect.stringContaining("/cancel") });
 
 			fake.cancelReply = { status: 400, body: { status: "ALREADY_COMPLETED" } };
-			await expect(provider.cancel?.(ref, { signal, jobId: "g" })).rejects.toThrow("had already completed");
+			await expect(provider.cancel?.(ref, { signal, jobId: "g" })).rejects.toThrow("billed");
 			fake.cancelReply = { status: 404, body: {} };
-			await expect(provider.cancel?.(ref, { signal, jobId: "g" })).rejects.toThrow("may already have run and been billed");
+			await expect(provider.cancel?.(ref, { signal, jobId: "g" })).rejects.toThrow("billed");
 
 			fake.cancelReply = { status: 500, body: { detail: "boom" } };
 			await expect(provider.cancel?.(ref, { signal, jobId: "g" })).rejects.toThrow("cancelling the job");
+		});
+
+		test("a cancel fal refuses because the job had already finished leaves the job readable: status says succeeded and fetch returns what fal charged", async () => {
+			const fake = new FakeFal();
+			fake.billing = [{ status: 200, body: { billing_events: [{ cost_total: 0.21 }] } }];
+			fake.result = { status: 200, body: await fixture("result-pixal3d.json") };
+			const { provider, ref } = await submitted(fake);
+			fake.queueState = "COMPLETED";
+			fake.cancelReply = { status: 400, body: { status: "ALREADY_COMPLETED" } };
+			await expect(provider.cancel?.(ref, { signal, jobId: "g" })).rejects.toThrow("billed");
+
+			expect(await provider.status(ref, { signal, jobId: "g" })).toEqual({ state: "succeeded" });
+			const result = await provider.fetch(ref, { signal, jobId: "g", outDir: await mkdtemp(join(dir, "out-")) });
+			expect(result.costUsd).toBe(0.21);
 		});
 	});
 });

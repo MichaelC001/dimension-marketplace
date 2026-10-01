@@ -305,6 +305,9 @@ class FakeTripo {
 	tasks = new Map<string, Reply>();
 	networkDown = false;
 	readonly sleeps: number[] = [];
+	/** The clock `submit` measures its budget on; an upload moves it on by `uploadTakes`. */
+	clock = 0;
+	uploadTakes = 0;
 	#uploads = 0;
 
 	async init(): Promise<void> {
@@ -327,6 +330,7 @@ class FakeTripo {
 		if (url.startsWith("https://cdn.tripo3d.ai/")) return new Response(`bytes of ${url}`);
 		if (path === catalogue.upload.endpoint) {
 			this.#uploads += 1;
+			this.clock += this.uploadTakes;
 			const base: { data: Record<string, unknown> } = (await fixture("upload.json")) as { data: Record<string, unknown> };
 			return reply({ status: 200, body: { code: 0, data: { file_token: `${base.data.file_token}-${this.#uploads}` } } });
 		}
@@ -348,6 +352,7 @@ class FakeTripo {
 			apiKey: async () => KEY,
 			fetch: this.fetch,
 			catalogue,
+			now: () => this.clock,
 			sleep: async ms => {
 				this.sleeps.push(ms);
 			},
@@ -542,6 +547,27 @@ describe("never paying twice", () => {
 		expect((failure as Error).message).toContain("Insufficient credits");
 		expect((failure as Error).message).toContain("platform.tripo3d.ai");
 		expect((failure as Error).message).not.toContain(KEY);
+		expect(fake.taskCalls()).toHaveLength(1);
+	});
+});
+
+describe("a submit that has to stay inside the engine's deadline", () => {
+	// The engine abandons a submit after 120 s. The task-creating POST is billed and
+	// never retried, so it must not be the call that deadline cuts while Tripo may
+	// already hold the task: a submit whose uploads ate the time refuses before it.
+	test("uploads that used up the budget end the submit before the billed POST: nothing is created, so nothing is billed", async () => {
+		const fake = await fresh();
+		fake.uploadTakes = 100_000;
+		await expect(fake.provider().submit(imageRequest(), { signal, jobId: "g" })).rejects.toThrow("nothing was created or billed");
+		expect(fake.calls.filter(call => call.upload !== undefined)).toHaveLength(1);
+		expect(fake.taskCalls()).toEqual([]);
+	});
+
+	test("uploads that left time to spare are followed by the POST", async () => {
+		const fake = await fresh();
+		fake.uploadTakes = 30_000;
+		const { ref } = await fake.provider().submit(imageRequest(), { signal, jobId: "g" });
+		expect(JSON.parse(ref).task).toBe("task_abc123");
 		expect(fake.taskCalls()).toHaveLength(1);
 	});
 });
