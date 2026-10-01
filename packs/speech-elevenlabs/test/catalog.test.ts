@@ -55,6 +55,29 @@ describe("catalog", () => {
 		});
 	});
 
+	test("the writing guide ships for the v4 models that perform tags and for no other: a Flash reply is told never to write a bracket", async () => {
+		const rig = await makeRig(harness, { env: {} });
+		const catalog = await rig.provider.catalog(rig.ctx);
+		const guides = new Map((catalog.speak ?? []).map(model => [model.id, model.guide]));
+
+		expect(guides.get("eleven_v4_turbo")).toBeString();
+		expect(guides.get("eleven_v4")).toBe(guides.get("eleven_v4_turbo"));
+		expect(guides.get("eleven_flash_v2_5")).toBeUndefined();
+		// A guide on a model that does not perform tags would have the rewriter write brackets Flash drops or reads aloud.
+		for (const model of catalog.speak ?? []) if (model.guide !== undefined) expect(model.audioTags).toBe(true);
+	});
+
+	test("the guide stays small enough to ride a small model's prompt and keeps its tags inside the engine's tag stripper", async () => {
+		const rig = await makeRig(harness, { env: {} });
+		const guide = (await rig.provider.catalog(rig.ctx)).speak?.find(model => model.id === "eleven_v4_turbo")?.guide ?? "";
+
+		expect(guide.split(/\s+/).length).toBeLessThan(250);
+		// `vocalizer/tags.ts` recognises a bracket of 1..60 characters on one line; a longer one in an example would be copied and read aloud.
+		const brackets = guide.match(/\[[^\]]*\]/g) ?? [];
+		expect(brackets.length).toBeGreaterThan(10);
+		expect(brackets.filter(bracket => bracket.length > 60 || bracket.includes("\n"))).toEqual([]);
+	});
+
 	test("with a key: the account's voices follow the curated ones, once each, cloned voices say so", async () => {
 		const rig = await makeRig(harness, { respond: () => jsonResponse(ACCOUNT_BODY) });
 		const catalog = await rig.provider.catalog(rig.ctx);

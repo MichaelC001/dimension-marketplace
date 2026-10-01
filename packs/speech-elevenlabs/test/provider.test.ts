@@ -28,15 +28,14 @@ describe("status", () => {
 		expect(detail).toContain("ELEVENLABS_API_KEY");
 	});
 
-	test("ready with the key in the environment, from the connect file, and it never calls out to check", async () => {
+	test("speak is ready on a present key without calling out; the key comes from the environment or the connect file", async () => {
 		const withEnv = await makeRig(harness);
-		expect(await withEnv.provider.status(withEnv.ctx)).toEqual({ speak: { ready: true } });
-
 		const withFile = await makeRig(harness, { env: {}, keyFile: JSON.stringify({ access: "k" }) });
-		expect(await withFile.provider.status(withFile.ctx)).toEqual({ speak: { ready: true } });
 
 		for (const rig of [withEnv, withFile]) {
-			expect(rig.http.requests).toHaveLength(0);
+			expect((await rig.provider.status(rig.ctx)).speak).toEqual({ ready: true });
+			// The only request status ever makes is the Agents scope check that `converse` needs.
+			expect(rig.http.requests.every(request => request.url.includes("/v1/convai/"))).toBe(true);
 			expect(rig.network.sockets).toHaveLength(0);
 		}
 	});
@@ -92,7 +91,7 @@ describe("which key a session uses", () => {
 		await mkdir(dirname(target), { recursive: true });
 		await writeFile(target, template.replaceAll("${apiKey}", "sk-from-the-form"));
 
-		expect(await rig.provider.status(rig.ctx)).toEqual({ speak: { ready: true } });
+		expect((await rig.provider.status(rig.ctx)).speak).toEqual({ ready: true });
 		await openTracked(harness, rig);
 		expect(rig.network.sockets[0]?.headers["xi-api-key"]).toBe("sk-from-the-form");
 	});

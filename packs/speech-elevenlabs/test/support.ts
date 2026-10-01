@@ -301,6 +301,7 @@ export async function makeRig(harness: Harness, options: RigOptions = {}): Promi
 		cwd: home,
 		env: options.env ?? { ELEVENLABS_API_KEY: KEY },
 		settings: { get: () => undefined },
+		credentials: { withAccess: () => Promise.reject(new Error("this provider reads no login")) },
 	};
 	return { provider, ctx, network, http, home };
 }
