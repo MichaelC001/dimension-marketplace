@@ -9,6 +9,7 @@
 		"check": "biome check . --no-errors-on-unmatched"
 	},
 	"files": [
+		"README.md",
 		"connect/",
 		"assets/",
 		"cutout.ts",
