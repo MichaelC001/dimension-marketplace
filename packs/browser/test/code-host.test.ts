@@ -406,7 +406,12 @@ describeWithChrome("a person takes the browser over while a cell is using it", (
       const settled = statSync(ticks).size;
       await new Promise(resolve => setTimeout(resolve, 600));
       expect(statSync(ticks).size).toBe(settled);
-      await expect(host.run("s1", { code: "1", timeoutMs: 5_000, waitMs: 5_000, signal: NEVER })).rejects.toThrow(/human_driving/);
+      const refused = await host.run("s1", { code: "1", timeoutMs: 5_000, waitMs: 5_000, signal: NEVER }).catch((error: Error) => error);
+      if (!(refused instanceof Error)) throw new Error("the cell should have been refused");
+      expect(refused.message).toContain("human_driving");
+      // Told in the words of a cell: a code or build model has no browser_snapshot or browser_state to read the page with.
+      expect(refused.message).toContain("tab.observe()");
+      for (const hidden of ["browser_snapshot", "browser_state"]) expect(refused.message).not.toContain(hidden);
       await runtime.control(browserId, "return", "app");
       expect((await failureOf(host, "s1", "kept")).message).toContain("kept is not defined");
     } finally {

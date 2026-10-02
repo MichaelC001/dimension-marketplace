@@ -9,7 +9,7 @@ import type { CodeHostPort } from "./code/contracts.js";
 import { type CodeHost, createRuntimeCodeHost } from "./code/host/code-host.js";
 import { registerCodeTool } from "./code/tool.js";
 import { buildConnectionReport, type ConnectionReportParams, PACK_CONNECTION_REPORT_METHOD } from "./connection.js";
-import type { ActManyResult, BrowserEngine, BrowserOpener, BrowserRuntimePort, BrowserState, TaskRun, ToolCaller } from "./contracts.js";
+import type { ActManyResult, BrowserEngine, BrowserOpener, BrowserRuntimePort, BrowserState, OpeningTool, TaskRun, ToolCaller } from "./contracts.js";
 import { BROWSER_ENGINES, CONTROL_MODES, CREDENTIAL_MODES, MAX_ANNOTATION_REGIONS, MAX_BATCH_STEPS, MAX_EVAL_EXPRESSION_CHARS, MAX_VIEWPORT, MAX_WAIT_MS, MIN_VIEWPORT, PUBLISH_MODES } from "./contracts.js";
 import { MAX_DETAIL_BYTES } from "./annotation-file.js";
 import { type PublishPreset, loadPresets, resolvePreset, summarizePresets } from "./presets.js";
@@ -317,10 +317,10 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     return (session === undefined ? undefined : runtime.viewOf(session)) ?? fail("no_view", "no browser is open in this session; call browser_view");
   };
   /** Who is opening, from the host's stamps alone: the human in the View ("app"), and the chat. */
-  const openerOf = (extra: CallExtra): BrowserOpener => {
+  const openerOf = (extra: CallExtra, tool?: OpeningTool): BrowserOpener => {
     const caller = callerOf(extra);
     const session = sessionOf(extra);
-    return { ...(caller === undefined ? {} : { caller }), ...(session === undefined ? {} : { session }) };
+    return { ...(caller === undefined ? {} : { caller }), ...(session === undefined ? {} : { session }), ...(tool === undefined ? {} : { tool }) };
   };
   const openAt = async (profile: string | undefined, engine: BrowserEngine | undefined, url: string | undefined, opener: BrowserOpener, leaving?: string): Promise<BrowserState> => {
     // Validate before launching so malformed input cannot strand a browser/profile lock.
@@ -344,14 +344,14 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     inputSchema: { profile: profile.optional().describe("Saved profile, by name or label (see browser_profiles). Leave out for a throwaway browser."), engine: z.enum(BROWSER_ENGINES).optional(), url: z.string().max(2048).optional() },
     _meta: stepMeta,
   }, ({ profile, engine, url }, extra) => result(async () => {
-    const state = await openAt(profile, engine, url, openerOf(extra));
+    const state = await openAt(profile, engine, url, openerOf(extra, "browser_open"));
     // A browser the human opens in the View has no tool call the model saw; the model asks browser_state for it.
     if (callerOf(extra) === "app") showing(extra, state.browserId);
     return stateFor(callerOf(extra), state);
   }));
   registerAppTool(server, "browser_view", {
     title: "Show Browser",
-    description: "Show the human this browser (browserId), or open one they can watch (profile, engine, url as browser_open). Mounts the Browser View; browser_open never does.",
+    description: "Show the human a browser you hold (browserId), or open one they can watch (profile, engine, url). Mounts the Browser View.",
     inputSchema: { browserId: capability.optional(), profile: profile.optional(), engine: z.enum(BROWSER_ENGINES).optional(), url: z.string().max(2048).optional() },
     _meta: { ui: { resourceUri: BROWSER_VIEW_URI } },
   // The result is a BrowserState: the View binds to whichever browser it names (a tool result is its only source of a browserId).
@@ -359,7 +359,7 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     if (browserId !== undefined && (profile !== undefined || engine !== undefined || url !== undefined)) {
       fail("bad_view", "profile, engine and url open a NEW browser; pass a browserId alone to show the one you hold");
     }
-    const state = browserId === undefined ? await openAt(profile, engine, url, openerOf(extra)) : await runtime.state(browserId);
+    const state = browserId === undefined ? await openAt(profile, engine, url, openerOf(extra, "browser_view")) : await runtime.state(browserId);
     // The View is mounted on this browser now, for whoever is in this session.
     showing(extra, state.browserId);
     return stateFor(callerOf(extra), state);
@@ -413,7 +413,7 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     } catch (error) { return failure(error); }
   });
   server.registerTool("browser_act", {
-    description: "Run 1-25 steps in order in the active tab, stopping at the first that does not complete; returns the page's url and title. Steps: navigate (http/https), back, forward, reload, stop, click (selector, or x,y in the viewport; button, clickCount 1-3), hover (x,y), type (replaces the value), insert (into the focused element), select (option value or text), press (key), scroll, resize (width, height), wait (selector visible | text on the page | url substring; timeoutMs default 5000, max 15000), tab (op new | activate | close; tabId from browser_state; url for new), eval (JS in the page's main world; value returned as JSON, at most 8000 chars; throwaway browsers only). A click or Enter that navigates waits up to 1.5 s. JS dialogs are answered (alert/beforeunload accepted, else dismissed) and listed. Status failed: that step did nothing. unknown: sent, then errored, so it may have taken effect: look before retrying a submit. timeout: a wait ran out, or the batch's time budget (send the rest again). newErrors: new page errors (read them in browser_state). A selector may start `@<ref> ` (from browser_snapshot) to reach an iframe. " + (jev ? "Refused while a browser_task runs. " : "") + "Passwords: type or insert with generatePassword: true (sign-up: mints, saves per profile and origin, types) or useSavedPassword: true (login) instead of text; needs a profile.",
+    description: "Run 1-25 steps in order in the active tab, stopping at the first that does not complete; returns the page's url and title. Steps: navigate (http/https), back, forward, reload, stop, click (selector, or x,y in the viewport; button, clickCount 1-3), hover (x,y), type (replaces the value), insert (into the focused element), select (option value or text), press (key), scroll, resize (width, height), wait (selector visible | text on the page | url substring; timeoutMs default 5000, max 15000), tab (op new | activate | close; tabId from browser_state; url for new), eval (JS in the page's main world; value returned as JSON, at most 8000 chars; throwaway browsers only). A click or Enter that navigates waits up to 1.5 s. JS dialogs are answered (alert/beforeunload accepted, else dismissed) and listed. Status failed: that step did nothing. unknown: sent, then errored, so it may have taken effect: look before retrying a submit. timeout: a wait ran out, or the batch's time budget (send the rest again). newErrors: new page errors (read them in browser_state). A selector may start `@<ref> ` (from browser_snapshot) to reach an iframe. " + (jev ? "Refused while a task runs on the browser. " : "") + "Passwords: type or insert with generatePassword: true (sign-up: mints, saves per profile and origin, types) or useSavedPassword: true (login) instead of text; needs a profile.",
     inputSchema: { browserId: capability, actions: z.array(stepSchema).min(1).max(MAX_BATCH_STEPS) },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     _meta: stepMeta,

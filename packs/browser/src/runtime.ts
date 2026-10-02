@@ -810,9 +810,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			this.watchIdle(entry, occupied ? idleMs : idleMs - quietMs);
 			return;
 		}
-		const reason = entry.code === undefined
-			? `it was a throwaway browser, closed after ${idleMs / 1_000} s with no calls; open a new one with browser_open`
-			: `it was a code browser, closed after ${idleMs / 1_000} s with no calls; open a new one with browser.open`;
+		const reason = `it was a ${entry.code === undefined ? "throwaway" : "code"} browser, closed after ${idleMs / 1_000} s with no calls; open a new one with ${reopenWith(entry)}`;
 		void this.retire(entry, reason).catch((error: unknown) => console.error("An idle throwaway browser was not closed:", describe(error)));
 	}
 
@@ -844,7 +842,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		}
 		const victim = this.pickVictim();
 		if (victim === undefined) fail("too_many_browsers", this.refusal(asker, "none can be closed to make room: each is running a task, has a call in progress, is open in a View, is one the person has taken over, is still shutting down, or is a saved profile's"));
-		const reason = `it was a throwaway browser, closed to make room for another chat's (at most ${MAX_BROWSERS} are open at once); open a new one with browser_open`;
+		const reason = `it was a ${victim.code === undefined ? "throwaway" : "code"} browser, closed to make room for another chat's (at most ${MAX_BROWSERS} are open at once); open a new one with ${reopenWith(victim)}`;
 		try {
 			await this.retire(victim, reason);
 		} catch (error) {
@@ -907,7 +905,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 
 	/** One call in flight on `entry`, for a cell: out of idle close and make-room, refused like a page call while a task or a pending publish owns the page. Returns what ends it. */
 	private holdWork(entry: Entry): () => void {
-		refuseWhileBusy(entry, undefined);
+		refuseWhileBusy(entry, undefined, "code");
 		entry.pending += 1;
 		let held = true;
 		return () => {
@@ -1208,7 +1206,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	async addProfile(request: NewProfileRequest, caller?: ToolCaller): Promise<ProfileListing> {
 		if (this.disposed) fail("disposed", "runtime has been disposed");
 		// The tool is app-only at the host, but a plain MCP client does not apply that rule: the runtime holds it itself, like `control`.
-		if (caller !== "app") fail("human_only", "only the person in the View can add a profile; name a new one in browser_open to have a profile of your own");
+		if (caller !== "app") fail("human_only", "only the person in the View can add a profile; to have a profile of your own, name a new short lowercase one when you open a browser");
 		if (typeof request?.name !== "string") fail("bad_profile_name", "Give the profile a name.");
 		if (request.colour !== undefined && !isProfileColour(request.colour)) fail("bad_profile", `colour must be one of: ${PROFILE_COLOURS.join(", ")}`);
 		if (request.avatar !== undefined && cleanAvatar(request.avatar) === undefined) fail("bad_profile", "avatar must be a single emoji");
@@ -1259,7 +1257,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		clearTimeout(entry.wheelTimer);
 		entry.wheelTimer = undefined;
 		if (this.keptOnLeave(entry, heldWheel)) return { closed: false };
-		await this.retire(entry, "the person left it for another profile in the Browser View, which closed it; open it again with browser_open");
+		await this.retire(entry, `the person left it for another profile in the Browser View, which closed it; open it again with ${reopenWith(entry)}`);
 		return { closed: true };
 	}
 
@@ -1613,7 +1611,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			for (const [index, step] of plan.entries()) {
 				// The person took over between two steps: the steps not yet sent are not sent.
 				if (index > 0 && caller !== "app" && entry.takenOver) {
-					stopped = { status: "failed", error: TAKEN_OVER_MESSAGE };
+					stopped = { status: "failed", error: TAKEN_OVER_MESSAGES.steps };
 					break;
 				}
 				if (index > 0 && Date.now() >= deadline) {
@@ -2437,20 +2435,36 @@ function requireDelta(value: unknown, name: string): number {
 // ---------------------------------------------------------------------------
 
 /** A task's page is its own, and a pending publish pins the page: neither takes another caller's page work. */
-function refuseWhileBusy(entry: Entry, caller: ToolCaller | undefined): void {
+function refuseWhileBusy(entry: Entry, caller: ToolCaller | undefined, tools: Tools = "steps"): void {
 	if (entry.task?.status === "running") {
 		fail("task_running", "a browser_task owns this page; wait for it or cancel it");
 	}
 	refuseWhilePublishing(entry, caller);
-	refuseWhileTakenOver(entry, caller);
+	refuseWhileTakenOver(entry, caller, tools);
 }
 
+/**
+ * The tools of the model that is refused, because the two sets do not share a name: a cell drives a page with `tab.*` and reads it with `tab.observe()`; the step tools read it with browser_snapshot and browser_state, which
+ * a code or build model does not have (doc 77 §7.5a).
+ */
+type Tools = "steps" | "code";
+
 /** What an agent is told when the person has the wheel: why it was refused, and that reading is still open to it. */
-const TAKEN_OVER_MESSAGE = "the person took over this browser in the View, so your actions on it are paused. You can still read it (browser_snapshot, browser_state); ask them to hand it back before you act.";
+const TAKEN_OVER_MESSAGES: Record<Tools, string> = {
+	steps: "the person took over this browser in the View, so your actions on it are paused. You can still read it (browser_snapshot, browser_state); ask them to hand it back before you act.",
+	code: "the person took over this browser in the View, so your actions on it are paused. You can still read it (tab.observe(), tab.url()); ask them to hand it back before you act.",
+};
+
+/** The way back to a browser that was given up, in the words of the model that has to say it: the tool its opener used (a code or build model has `browser_view` and not `browser_open`), a cell's `browser.open` for a code browser, and `browser_view` for the person's own, which every space has. */
+function reopenWith(entry: Entry): string {
+	if (entry.code !== undefined) return "browser.open";
+	if (entry.opener.caller === "app") return "browser_view";
+	return entry.opener.tool ?? "browser_open";
+}
 
 /** The person's wheel: only the View's own input drives a browser they took over. Refused as `human_driving`. */
-function refuseWhileTakenOver(entry: Entry, caller: ToolCaller | undefined): void {
-	if (caller !== "app" && entry.takenOver) fail("human_driving", TAKEN_OVER_MESSAGE);
+function refuseWhileTakenOver(entry: Entry, caller: ToolCaller | undefined, tools: Tools = "steps"): void {
+	if (caller !== "app" && entry.takenOver) fail("human_driving", TAKEN_OVER_MESSAGES[tools]);
 }
 
 /** `refuseWhileBusy`, then notes that an agent is acting on this browser (the View shows it, with a way to take over). */
