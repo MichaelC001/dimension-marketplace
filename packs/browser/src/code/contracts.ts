@@ -91,6 +91,23 @@ export interface TabHandle extends TabRef {
 }
 
 // ---- host <-> worker (OMP tab-protocol.ts:83-137, minus tool-call/tool-reply, plus bridge for open/close)
+/**
+ * What `init` tells the worker about the tab realm it builds. All but `session` and `env` are optional, and absent means the realm's own default:
+ * - `screenshotDir`: where model screenshots are also saved (OMP's screenshot directory); absent: the realm reads `DIMENSION_BROWSER_SCREENSHOT_DIR` from `env`.
+ * - `cwd`: resolves a relative `tab.uploadFile` path. MCP calls carry no working directory, so absent means a relative path is refused with the rule named.
+ * - `refusePasswordFields`: `tab.type` / `tab.fill` / `tab.press` (and a handle's) refuse a password input from code, and keys that would reach one (matrix D18). ABSENT MEANS ON; the host sends `false` only where the owner has lifted the rule.
+ * - `taskCredential`: the server offers `browser_task` (it is registered only with a TypeSafe key), so the refusal may send the model to it. ABSENT MEANS NOT OFFERED: the host sends `true` only where the tool exists.
+ * - `excludeWebP`: encode the screenshot the model sees as JPEG instead of WebP (a model provider that cannot read WebP).
+ */
+export interface RealmInit {
+  session: string;
+  env: Record<string, string>;
+  screenshotDir?: string;
+  cwd?: string;
+  refusePasswordFields?: boolean;
+  taskCredential?: boolean;
+  excludeWebP?: boolean;
+}
 export type HostToWorker =
   /**
    * `env` is the whole environment the cell may see: the worker deletes every other key of its `process.env` before it builds the realms (only in a worker thread; never in the main thread).
@@ -99,7 +116,7 @@ export type HostToWorker =
    * defines no copy of that function). A host that ends a session calls `discardSessionSpills(artifactsRoot, session)`, and once at start `sweepSpills(artifactsRoot)`; a rebuilt worker keeps the folder, because a failed
    * cell's message names a file in it. Absent: no file is kept.
    */
-  | { t: "init"; session: string; env: Record<string, string>; screenshotDir?: string; outputDir?: string; tabs?: Array<{ name: string; handle: TabHandle }> }
+  | ({ t: "init"; outputDir?: string; tabs?: Array<{ name: string; handle: TabHandle }> } & RealmInit)
   | { t: "run"; runId: string; code: string; timeoutMs: number }
   | { t: "bridge-reply"; id: number; ok: true; value: BridgeResponse & { attach?: TabHandle } }
   | { t: "bridge-reply"; id: number; ok: false; error: RunError }

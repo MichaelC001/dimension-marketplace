@@ -5,7 +5,7 @@
 
 import { isMainThread } from "node:worker_threads";
 import { z } from "zod";
-import type { BridgeDetails, BridgeRequest, BridgeResponse, HostToWorker, ImageBlock, RunError, RunResult, TabHandle, TabRealm, Transport, WorkerToHost } from "../contracts.js";
+import type { BridgeDetails, BridgeRequest, BridgeResponse, HostToWorker, ImageBlock, RealmInit, RunError, RunResult, TabHandle, TabRealm, Transport, WorkerToHost } from "../contracts.js";
 import { CellFailure, type CellInvoke, CodeCell, failureOf } from "../cell/cell.js";
 import { MAX_IMAGE_BASE64_CHARS } from "../cell/display.js";
 import { MAX_INLINE_BYTES, OutputSink } from "../cell/output-sink.js";
@@ -182,7 +182,7 @@ function errorOf(payload: RunError): Error {
 export interface WorkerCoreOptions {
   transport: Transport<HostToWorker, WorkerToHost>;
   /** Builds the tab realm once the host has said who the worker serves. */
-  createRealm(init: { session: string; env: Record<string, string>; screenshotDir?: string }): TabRealm;
+  createRealm(init: RealmInit): TabRealm;
   /** Take part in `unhandledRejection` for the cell (a worker: yes; a test: only where it proves it). */
   guardRejections?: boolean;
 }
@@ -258,7 +258,8 @@ export class WorkerCore {
     try {
       // Only a worker thread has an environment of its own to replace: in the main thread this would wipe the server's.
       if (!isMainThread) scrubEnvironment(process.env, message.env);
-      const realm = this.#options.createRealm({ session: message.session, env: message.env, ...(message.screenshotDir === undefined ? {} : { screenshotDir: message.screenshotDir }) });
+      const { session, env, screenshotDir, cwd, refusePasswordFields, excludeWebP, taskCredential } = message;
+      const realm = this.#options.createRealm({ session, env, screenshotDir, cwd, refusePasswordFields, excludeWebP, taskCredential });
       this.#realm = realm;
       this.#cell = new CodeCell({ guardRejections: this.#options.guardRejections ?? false });
       // A rebuilt worker takes its session's tabs back before it says it is ready, so a cell's `browser.tab("main")` still names a page. A tab that has gone since is the host's to forget.
