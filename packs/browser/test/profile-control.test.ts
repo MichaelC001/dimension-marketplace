@@ -1064,26 +1064,26 @@ describeWithChrome("a wheel nobody is watching", () => {
 	test(
 		"taken before any View ever joined the stream goes back after the window too; handing it back first cancels the wait",
 		async () => {
-			const r = await rig({ viewGoneMs: 1_200 });
+			const r = await rig({ viewGoneMs: 1_500 });
 			const id = (await open(r, CHAT, {})).browserId;
 			stateOf(await r.call("browser_control", { browserId: id, mode: "take" }, VIEW_OF_CHAT));
 			expect(await wheelOf(r, id)).toBe(true);
 			await waitUntil("the wheel to go back", () => wheelOf(r, id), (taken) => !taken);
 
 			// Taken, handed back by hand, and taken again part-way through the first window: that window's timer must not give the wheel back
-			// when it ends, only the second take's own does (a full window after that take).
+			// when it ends, only the second take's own does (a full window after that take). The margins are wide on purpose (600 ms before
+			// the stale window would end, 400 ms after it, 500 ms before the live one does) so a busy machine cannot turn a broken cancel green.
 			stateOf(await r.call("browser_control", { browserId: id, mode: "take" }, VIEW_OF_CHAT));
-			await sleep(700);
+			await sleep(300);
 			stateOf(await r.call("browser_control", { browserId: id, mode: "return" }, VIEW_OF_CHAT));
 			expect(await wheelOf(r, id)).toBe(false);
-			await sleep(400);
+			await sleep(600);
 			stateOf(await r.call("browser_control", { browserId: id, mode: "take" }, VIEW_OF_CHAT));
 			const retaken = performance.now();
-			// The first take's window would end 100 ms from now had the return not cancelled it.
-			await sleep(800);
+			await sleep(1_000);
 			expect(await wheelOf(r, id)).toBe(true);
 			await waitUntil("the second wheel to go back", () => wheelOf(r, id), (taken) => !taken);
-			expect(performance.now() - retaken).toBeGreaterThanOrEqual(1_100);
+			expect(performance.now() - retaken).toBeGreaterThanOrEqual(1_400);
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);

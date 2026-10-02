@@ -212,7 +212,7 @@ which a Traction session reads on demand.
 
 View-only: `browser_stream` (where the View reads its live pictures and state and sends the human's
 mouse and keys: one call to bind a browser, none per picture), `browser_frame` (a PNG capture
-retained for annotation), `browser_annotate` (the page under the marked regions: address, title, the scroll the picture was taken at, elements; no pixels), `browser_annotation_file` (keeps the kit's detail document and answers its path; a Private browser's is deleted with it), `browser_viewport`, `browser_profile_add` (the profile menu's Add profile: a name, a colour, an avatar), `browser_control` (Take over and Hand back), `browser_leave` (the person switching profile: closes the browser they leave unless something depends on it).
+retained for annotation), `browser_annotate` (the page under the marked regions: address, title, the scroll the picture was taken at, elements; no pixels), `browser_annotation_file` (keeps the kit's detail document and answers its path; a Private browser's is deleted with it), `browser_viewport`, `browser_profile_add` (the profile menu's Add profile: a name, a colour, an avatar), `browser_control` (Take over and Hand back), `browser_switch` (the person switching profile: opens the next browser like `browser_open` and, only with the pool full, closes the one they leave first when leaving would close it), `browser_leave` (the person switching profile: closes the browser they leave unless something depends on it). None of the View-only tools is offered to a model.
 
 **The View's direct channel.** The live picture and the human's input do not ride the tool-call
 lane. The server opens one listener on `127.0.0.1` (random port, only while a View holds a token) that
@@ -284,7 +284,13 @@ one account), never inside a profile folder, so a copy, backup or sync of a prof
 readable. The pack has no OS credential store accessor, which is why the key is a file. A store that does
 not authenticate (altered, or under another key) is refused with `credentials_unreadable` and left as it
 was; a key file that cannot be read is refused and never replaced. A plain-text store from an earlier
-version is encrypted in place the first time it is read.
+version is encrypted in place the first time it is read. A sealed value found inside such a store (a server
+from before encryption signs up by copying everything it read into a version-1 file, ciphertext included) is
+opened, never taken for the password. The key is made once, staged in the root, fsynced and restricted to
+the user, and only then given its name (a hard link, so two servers on one root end with one key); it is read
+back before anything is sealed under it, and it is never made while a profile already holds a sealed store
+(that key was lost, and a new one would orphan every password). The sealed store is written as the pack writes
+every file: staged, fsynced, renamed over the old one.
 
 **How a throwaway ends.** One server serves every chat on an engine, and the host
 stamps each call with its session (`ai.insodimension/session`) but sends the
@@ -363,14 +369,18 @@ costs no call. Opening the menu reads `browser_profiles` and lists the others, D
 label, each with where it is signed in or who has it: a profile open here (yours, or your agent's, or one
 an agent task is running on) is one click away; a profile another chat holds, or you hold in another chat's
 View, is shown dimmed and cannot be opened from here (the one-holder lock); its reason is still read out to a
-keyboard, because the row stays on the arrow keys. A click calls `browser_open` for that profile and the View
-shows it, then calls `browser_leave` for the browser it left. **The runtime closes the browser that was left**
+keyboard, because the row stays on the arrow keys. A click calls `browser_switch` for that profile (the browser on screen is named as the one being left) and the View
+shows the result, then calls `browser_leave` for the browser it left. The new browser is opened first, so a profile that cannot
+be opened never costs the person the one they are in; only with the pool full does the runtime close the browser being left
+first, when leaving would close it, so the switch takes that slot and never an agent's throwaway. A browser that stays when left
+frees nothing, and its wheel is left alone until the switch has opened the next one. **The runtime closes the browser that was left**
 (`closed: true`; a chat that still holds its id is told why, as for any browser the runtime closes) unless
 something depends on it: an agent opened it, a call or a task is running on it, a post awaits confirmation on
 it, the person had taken it over (the wheel goes back to the agent either way), or it is their own Chrome.
 Those stay open and are rows of their own in the menu — a saved profile's row, or "Private browser" / "Your
 Chrome" for the ones that are not profiles — saying what each is doing, one click to go back to it and a close
-button at the end of the row. Nothing accumulates: a person who switches through four profiles holds one browser,
+button at the end of the row. That close asks first when it would discard a post waiting for confirmation or stop
+a running task (a question under the row, Keep answered by Enter, Escape backs out); any other close is one press. Nothing accumulates: a person who switches through four profiles holds one browser,
 so the pool of four is never theirs alone. Opening a browser at the pool's cap is still decided by the pool's
 own rule (a chat's idle throwaway is given up first; a saved profile never is).
 **Add profile** is inside the menu: a name, one of the eight colours, an optional emoji. The name is shown

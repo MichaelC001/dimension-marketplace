@@ -19,7 +19,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { App } from "@modelcontextprotocol/ext-apps";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import type { ReactNode } from "react";
+import { act, type ReactNode } from "react";
 import type { BrowserState, OpenBrowserListing, ProfileListing, PublishRecord, TaskRun } from "../src/contracts";
 import { BrowserApp } from "../app/view/browser-app";
 import { defaultColour, PROFILE_COLOURS } from "../src/profile-meta";
@@ -585,7 +585,7 @@ describe("browsers left open in the background", () => {
 		});
 	}
 
-	test("a question left unanswered when the menu closes is not there when it opens again", async () => {
+	test("a question left unanswered when the menu closes — by its chip, or by a press outside it — is not there when it opens again, and nothing was closed", async () => {
 		const host = fakeHost(SHELF);
 		host.browsers = [PRIVATE_TASK];
 		const dom = await mountView(host, WORK_BROWSER);
@@ -594,6 +594,16 @@ describe("browsers left open in the background", () => {
 		expect(asks(dom)).toHaveLength(1);
 
 		await dom.click(chipOf(dom));
+		await openMenu(dom);
+		expect(asks(dom)).toHaveLength(0);
+
+		await dom.click(closeFor(dom, "Private browser"));
+		expect(asks(dom)).toHaveLength(1);
+		// A press anywhere outside the menu closes it (the window hears it).
+		await act(async () => {
+			window.dispatchEvent(new window.Event("pointerdown"));
+		});
+		expect(menuIsOpen(dom)).toBe(false);
 		await openMenu(dom);
 
 		expect(asks(dom)).toHaveLength(0);
