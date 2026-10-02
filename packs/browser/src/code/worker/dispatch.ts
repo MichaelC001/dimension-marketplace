@@ -5,7 +5,7 @@
 
 import { isMainThread } from "node:worker_threads";
 import { z } from "zod";
-import type { BridgeDetails, BridgeRequest, BridgeResponse, HostToWorker, ImageBlock, RunError, RunResult, TabHandle, TabRealm, Transport, WorkerToHost } from "../contracts.js";
+import type { BridgeDetails, BridgeRequest, BridgeResponse, HostToWorker, RunError, RunResult, TabHandle, TabRealm, Transport, WorkerToHost } from "../contracts.js";
 import { CellFailure, type CellInvoke, CodeCell, failureOf } from "../cell/cell.js";
 import { MAX_IMAGE_BASE64_CHARS } from "../cell/display.js";
 import { MAX_INLINE_BYTES, OutputSink } from "../cell/output-sink.js";
@@ -81,6 +81,8 @@ function runTarget(request: BridgeRequest): { code: string } | { fn: string; arg
   return fn !== undefined && fn.length > 0 ? { fn, args: request.args ?? [] } : { code: code ?? "" };
 }
 
+type DisplayedImage = Extract<RunResult["displays"][number], { type: "image" }>;
+
 const TAB_TEXT_CUT_NOTE = "[tab output over 50 KiB: its middle was not kept here; print less, or return the value]";
 
 /**
@@ -103,8 +105,8 @@ function boundedText(parts: string[]): string {
 }
 
 /** The images of a tab call up to the ceiling a cell may keep in all (the cell's own output enforces it again over the whole cell); the rest is counted. */
-function boundedImages(images: ImageBlock[]): { kept: ImageBlock[]; dropped: number } {
-  const kept: ImageBlock[] = [];
+function boundedImages(images: DisplayedImage[]): { kept: DisplayedImage[]; dropped: number } {
+  const kept: DisplayedImage[] = [];
   let chars = 0;
   for (const image of images) {
     if (chars + image.data.length > MAX_IMAGE_BASE64_CHARS) continue;

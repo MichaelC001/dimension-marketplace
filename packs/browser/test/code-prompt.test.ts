@@ -12,7 +12,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { countTokens } from "gpt-tokenizer/encoding/o200k_base";
 import { CodeCell } from "../src/code/cell/cell.js";
 import type { CodeHostPort } from "../src/code/contracts.js";
-import { savedProfileRefusal } from "../src/code/errors.js";
+import { savedProfileRefusal } from "../src/code/refusals.js";
 import { BROWSER_RUN_DESCRIPTION } from "../src/code/tool.js";
 import type { BrowserRuntimePort } from "../src/contracts.js";
 import { createBrowserServer } from "../src/server.js";
