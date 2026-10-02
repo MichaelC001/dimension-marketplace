@@ -11,15 +11,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inflateSync } from "node:zlib";
 import { createCodeEvaluator } from "../src/code/cell/evaluator";
-import type { ImageBlock, RunResult } from "../src/code/contracts";
+import type { ImageBlock, RunResult, TabHandle } from "../src/code/contracts";
 import { establishKind } from "../src/code/kinds/establish";
+import { CmuxBrowsers } from "../src/code/kinds/cmux/cmux-browsers";
 import { CmuxRealm } from "../src/code/kinds/cmux/cmux-realm";
+import { type CmuxOpenOptions, openCmuxSurface } from "../src/code/kinds/cmux/cmux-surface";
 import { downscalePng, encodePng, pngSize } from "../src/code/kinds/cmux/png";
 import { CmuxSocketClient } from "../src/code/kinds/cmux/socket-client";
 import { type FakeCmux, type FakePage, pageHandler, removeFakeCmuxDirs, startFakeCmux } from "./cmux-fixture";
 
 const fakes: FakeCmux[] = [];
 const clients: CmuxSocketClient[] = [];
+const realms: CmuxRealm[] = [];
 const scratch: string[] = [];
 
 async function daemon(options: Parameters<typeof startFakeCmux>[0] = {}): Promise<FakeCmux> {
@@ -36,6 +39,7 @@ async function connected(fake: FakeCmux, extra: { password?: string; relayId?: s
 }
 
 afterEach(async () => {
+	for (const realm of realms.splice(0)) await realm.dispose();
 	for (const client of clients.splice(0)) client.close();
 	for (const fake of fakes.splice(0)) await fake.stop();
 	for (const dir of scratch.splice(0)) await rm(dir, { recursive: true, force: true }).catch(() => undefined);
@@ -210,8 +214,21 @@ async function realmOn(options: { png?: Buffer; settings?: { screenshotDir?: str
 	const { handler, closed } = pageHandler(page, options.png);
 	const fake = await daemon({ handler });
 	const client = await connected(fake);
+	// The realm reaches the daemon by itself, over a connection of its own (the host opens surfaces over another), as the worker does.
 	const realm = new CmuxRealm({ evaluator: createCodeEvaluator, settings: () => options.settings ?? {} });
+	realms.push(realm);
 	return { realm, client, fake, closed, page };
+}
+
+/** What the code host does for `browser.open` on cmux, and then the worker: open (or attach to) the surface over the host's connection, hand its handle over, adopt it by name. */
+async function openOn(realm: CmuxRealm, fake: FakeCmux, client: CmuxSocketClient, name: string, o: Omit<CmuxOpenOptions, "client">): Promise<Awaited<ReturnType<typeof openCmuxSurface>>> {
+	const opened = await openCmuxSurface({ client, ...o });
+	const handle: TabHandle = {
+		tabId: opened.surfaceId, targetId: opened.surfaceId, url: opened.info.url, title: opened.info.title ?? "", active: true,
+		browserId: "cmux-test", wsEndpoint: "", kind: "cmux", created: opened.ownsSurface, cmux: { socketPath: fake.socketPath },
+	};
+	await realm.adopt(name, handle);
+	return opened;
 }
 
 /** The error a promise rejects with. A try/catch, not `expect().rejects`: under Bun on Windows the latter starves a named pipe of I/O between two requests, so a second request on the same socket never gets its answer. */
@@ -235,7 +252,7 @@ function textOf(result: RunResult): string {
 describe("a cmux tab, as a cell uses it", () => {
 	test("opening without a surface opens a split at the url and waits for it; the cell reads, navigates and acts on it", async () => {
 		const { realm, client, fake } = await realmOn();
-		const info = await realm.open("main", { client, url: "https://example.test/start", timeoutMs: 5_000 });
+		const { info } = await openOn(realm, fake, client, "main", { url: "https://example.test/start", timeoutMs: 5_000 });
 		expect(info).toMatchObject({ url: "https://example.test/start", targetId: "surface-uuid-1" });
 		const split = fake.requests.find((request) => request.method === "browser.open_split")!;
 		expect(split.params).toMatchObject({ url: "https://example.test/start", focus: false });
@@ -259,40 +276,53 @@ describe("a cmux tab, as a cell uses it", () => {
 		expect(fake.requests.find((request) => request.method === "browser.fill")?.params).toMatchObject({ selector: "#name", text: "Ada" });
 	});
 
-	test("a split the pack opened is closed on release; a surface it was pointed at is left alone", async () => {
+	test("releasing a tab lets go of it and nothing more: the realm never closes a split, and a name can be taken again", async () => {
 		const { realm, client, closed, fake } = await realmOn();
-		await realm.open("owned", { client, timeoutMs: 5_000 });
-		await realm.open("attached", { client, surface: "11111111-2222-3333-4444-555555555555", url: "https://example.test/x", timeoutMs: 5_000 });
+		await openOn(realm, fake, client, "owned", { timeoutMs: 5_000 });
+		await openOn(realm, fake, client, "attached", { surface: "11111111-2222-3333-4444-555555555555", url: "https://example.test/x", timeoutMs: 5_000 });
 		// Attaching opens nothing new, and navigates the surface it was given.
 		expect(fake.requests.filter((request) => request.method === "browser.open_split")).toHaveLength(1);
 		expect(fake.requests.find((request) => request.method === "browser.navigate")?.params).toMatchObject({ surface_id: "11111111-2222-3333-4444-555555555555" });
+		expect(realm.names().sort()).toEqual(["attached", "owned"]);
 		expect(await realm.release("attached")).toBe(true);
-		expect(closed).toEqual([]);
 		expect(await realm.release("owned")).toBe(true);
-		expect(closed).toEqual(["surface-uuid-1"]);
 		expect(await realm.release("owned")).toBe(false);
+		expect(realm.names()).toEqual([]);
+		expect(closed).toEqual([]);
+	});
+
+	test("a browser's tabs are dropped together when the browser ends, and a run on one ends at once saying why", async () => {
+		const { realm, client, fake } = await realmOn();
+		await openOn(realm, fake, client, "main", { timeoutMs: 5_000 });
+		const running = realm.run({ name: "main", code: "await wait(30000)", timeoutMs: 60_000, signal: new AbortController().signal }).then(
+			() => "finished",
+			(error: Error) => error.message,
+		);
+		await Bun.sleep(150); // real time: the run must be in its wait before the browser goes
+		await realm.end("cmux-test", "it was a cmux browser, let go after 1800 s with no calls");
+		expect(await running).toBe("it was a cmux browser, let go after 1800 s with no calls");
 		expect(realm.names()).toEqual([]);
 	});
 
 	test("a surface given as a 'surface:N' ref is refused with OMP's text, and nothing is opened", async () => {
 		const { realm, client, fake } = await realmOn();
-		expect((await rejection(realm.open("main", { client, surface: "surface:3", timeoutMs: 5_000 }))).message).toContain("app.surface must be a surface UUID (e.g. CMUX_SURFACE_ID), not a 'surface:N' ref; omit it to open a new split");
+		expect((await rejection(openOn(realm, fake, client, "main", { surface: "surface:3", timeoutMs: 5_000 }))).message).toContain("app.surface must be a surface UUID (e.g. CMUX_SURFACE_ID), not a 'surface:N' ref; omit it to open a new split");
 		expect(fake.requests).toEqual([]);
 	});
 
 	test("an open the caller gave up on closes the split it had made", async () => {
-		const { realm, client, closed } = await realmOn();
+		const { realm, client, closed, fake } = await realmOn();
 		const gone = new AbortController();
 		gone.abort();
-		expect((await rejection(realm.open("main", { client, timeoutMs: 5_000, signal: gone.signal }))).message).toContain("Browser tab open aborted");
+		expect((await rejection(openOn(realm, fake, client, "main", { timeoutMs: 5_000, signal: gone.signal }))).message).toContain("Browser tab open aborted");
 		expect(closed).toEqual(["surface-uuid-1"]);
 		expect(realm.names()).toEqual([]);
 	});
 
 	test("a tab that is not there, a tab already running, a cell that throws and one that overruns each say so in OMP's words", async () => {
-		const { realm, client } = await realmOn();
+		const { realm, client, fake } = await realmOn();
 		expect((await rejection(realm.run({ name: "main", code: "1", timeoutMs: 1_000, signal: new AbortController().signal }))).message).toContain('Tab "main" is not alive. Open it first with action:"open".');
-		await realm.open("main", { client, timeoutMs: 5_000 });
+		await openOn(realm, fake, client, "main", { timeoutMs: 5_000 });
 		expect((await rejection(runOf(realm, "throw new Error('cell failed')"))).message).toContain("cell failed");
 		expect((await rejection(runOf(realm, "await wait(5000)", 300))).message).toContain("Browser code execution timed out after 300ms");
 
@@ -306,8 +336,8 @@ describe("a cmux tab, as a cell uses it", () => {
 	});
 
 	test("releasing a tab under a run ends the run at once with the tab named, not at its budget", async () => {
-		const { realm, client } = await realmOn();
-		await realm.open("main", { client, timeoutMs: 5_000 });
+		const { realm, client, fake } = await realmOn();
+		await openOn(realm, fake, client, "main", { timeoutMs: 5_000 });
 		const started = Date.now();
 		const running = runOf(realm, "await wait(30000)", 60_000);
 		const outcome = running.then(
@@ -322,7 +352,7 @@ describe("a cmux tab, as a cell uses it", () => {
 
 	test("a call chain runs the same way a cell does, and an unknown helper is refused before anything is sent", async () => {
 		const { realm, client, fake } = await realmOn();
-		await realm.open("main", { client, timeoutMs: 5_000 });
+		await openOn(realm, fake, client, "main", { timeoutMs: 5_000 });
 		const result = await realm.call({ name: "main", chain: [{ method: "url", args: [] }], timeoutMs: 5_000, signal: new AbortController().signal });
 		expect(result.returnValue).toBe("about:blank");
 		const before = fake.requests.length;
@@ -331,8 +361,8 @@ describe("a cmux tab, as a cell uses it", () => {
 	});
 
 	test("evaluate runs a page script and gives back its value; a script that throws names the page's own message, not the daemon's blank one", async () => {
-		const { realm, client } = await realmOn();
-		await realm.open("main", { client, timeoutMs: 5_000 });
+		const { realm, client, fake } = await realmOn();
+		await openOn(realm, fake, client, "main", { timeoutMs: 5_000 });
 		expect((await runOf(realm, "return await tab.evaluate(() => document.title + '!')")).returnValue).toBe("Fake page!");
 		expect((await rejection(runOf(realm, "return await tab.evaluate(() => { throw new Error('page broke') })"))).message).toMatch(/page broke/);
 	});
@@ -340,8 +370,8 @@ describe("a cmux tab, as a cell uses it", () => {
 	test("a screenshot over 1024 pixels is shrunk to it and captioned; the full-size picture is what is saved when a folder is set", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "dimension-cmux-shots-"));
 		scratch.push(dir);
-		const { realm, client } = await realmOn({ png: solid(2400, 1200, 4, [200, 100, 50, 255]), settings: { screenshotDir: dir } });
-		await realm.open("main", { client, timeoutMs: 5_000 });
+		const { realm, client, fake } = await realmOn({ png: solid(2400, 1200, 4, [200, 100, 50, 255]), settings: { screenshotDir: dir } });
+		await openOn(realm, fake, client, "main", { timeoutMs: 5_000 });
 		const result = await runOf(realm, "return await tab.screenshot()");
 		const image = result.displays.find((part): part is ImageBlock => part.type === "image")!;
 		expect(image.mimeType).toBe("image/png");
@@ -355,8 +385,8 @@ describe("a cmux tab, as a cell uses it", () => {
 	});
 
 	test("with no folder set the shrunk picture is saved under the OS temp folder, and a selector is said to be the whole viewport", async () => {
-		const { realm, client } = await realmOn({ png: solid(1800, 900, 3, [10, 20, 30]) });
-		await realm.open("main", { client, timeoutMs: 5_000 });
+		const { realm, client, fake } = await realmOn({ png: solid(1800, 900, 3, [10, 20, 30]) });
+		await openOn(realm, fake, client, "main", { timeoutMs: 5_000 });
 		const result = await runOf(realm, `return await tab.screenshot({ selector: "#hero" })`);
 		const saved = result.screenshots[0]!;
 		scratch.push(saved.dest);
@@ -369,8 +399,8 @@ describe("a cmux tab, as a cell uses it", () => {
 	test("a picture the pack cannot shrink reaches the model whole with the note that it was not shrunk", async () => {
 		const unreadable = solid(1800, 900, 4, [1, 2, 3, 255]);
 		unreadable[28] = 1; // interlaced
-		const { realm, client } = await realmOn({ png: unreadable });
-		await realm.open("main", { client, timeoutMs: 5_000 });
+		const { realm, client, fake } = await realmOn({ png: unreadable });
+		await openOn(realm, fake, client, "main", { timeoutMs: 5_000 });
 		const result = await runOf(realm, "await tab.screenshot()");
 		scratch.push(result.screenshots[0]!.dest);
 		const image = result.displays.find((part): part is ImageBlock => part.type === "image")!;

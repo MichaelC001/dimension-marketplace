@@ -22,6 +22,8 @@ export interface KindEnv {
   DIMENSION_BROWSER_HEADLESS?: string;
   CMUX_SOCKET_PATH?: string;
   CMUX_SOCKET_PASSWORD?: string;
+  CMUX_RELAY_ID?: string;
+  CMUX_RELAY_TOKEN?: string;
   [name: string]: string | undefined;
 }
 
@@ -63,13 +65,18 @@ export function resolveCmuxKind(options: { surface?: string; settingEnabled?: bo
   if (!socketPath) return null;
   const kind: BrowserKind = { kind: "cmux", socketPath };
   if (env.CMUX_SOCKET_PASSWORD) kind.password = env.CMUX_SOCKET_PASSWORD;
+  if (env.CMUX_RELAY_ID) kind.relayId = env.CMUX_RELAY_ID;
+  if (env.CMUX_RELAY_TOKEN) kind.relayToken = env.CMUX_RELAY_TOKEN;
   if (options?.surface) kind.surface = options.surface;
   return kind;
 }
 
-/** Which browser `request` means. Throws only for an explicit `app.relay: true` while the relay is switched off. */
-export function resolveKind(request: KindRequest, env: KindEnv, cwd: string): BrowserKind {
-  const headless: BrowserKind = { kind: "headless", headless: env.DIMENSION_BROWSER_HEADLESS !== "false" };
+/**
+ * Which browser `request` means. Throws only for an explicit `app.relay: true` while the relay is switched off. `hidden` is whether the browser the pack
+ * launches itself is hidden (the host's own setting); without it the environment's `DIMENSION_BROWSER_HEADLESS` says.
+ */
+export function resolveKind(request: KindRequest, env: KindEnv, cwd: string, hidden: boolean = env.DIMENSION_BROWSER_HEADLESS !== "false"): BrowserKind {
+  const headless: BrowserKind = { kind: "headless", headless: hidden };
   // A saved profile is a Chromium the pack launches itself: no other kind can hold it, so it is chosen before the order.
   if (request.profile !== undefined) return headless;
   const app = request.app;

@@ -8,7 +8,8 @@ import { join } from "node:path";
 import { BrowserRuntimeError } from "../../store.js";
 import type { BridgeRequest, BridgeResponse, BrowserKind, CodeBrowserPort, CodeTabInfo, HostToWorker, RunError, RunResult, RunStarted, TabHandle, TabRef, WorkerToHost } from "../contracts.js";
 import { ToolAbortError, ToolError } from "../errors.js";
-import { CODE_VIEWPORT, codedMessage, describeBrowser, describeKind, sameBrowserKind } from "./runtime-port.js";
+import { describeBrowser, describeKind, sameBrowserKind } from "../kinds/resolve.js";
+import { CODE_VIEWPORT, codedMessage } from "./runtime-port.js";
 import type { SpawnWorker, WorkerHandle } from "./transport.js";
 
 const DEFAULT_TAB_NAME = "main";
@@ -78,7 +79,7 @@ interface LiveWorker {
   dead: boolean;
 }
 
-interface BrowserRecord { browserId: string; wsEndpoint: string; kind: BrowserKind; createdByCode: boolean }
+interface BrowserRecord { browserId: string; wsEndpoint: string; kind: BrowserKind; createdByCode: boolean; label?: string }
 interface NamedTab { name: string; browserId: string; kind: BrowserKind; handle: TabHandle }
 type HostReply = BridgeResponse & { attach?: TabHandle };
 
@@ -423,6 +424,7 @@ export class CodeSession {
         ...(request.url === undefined ? {} : { url: request.url }),
         ...(request.wait_until === undefined ? {} : { waitUntil: request.wait_until }),
         ...(request.dialogs === undefined ? {} : { dialogs: request.dialogs }),
+        ...(request.app?.target === undefined ? {} : { target: request.app.target }),
         timeoutMs,
       }, deadline);
     } catch (error) {
@@ -430,9 +432,9 @@ export class CodeSession {
       if (acquired.created) await this.#dropBrowser(record, true);
       throw error;
     }
-    const handle: TabHandle = { ...ref, browserId: record.browserId, wsEndpoint: record.wsEndpoint, kind: record.kind.kind, created: true };
+    const handle = this.#handleFor(ref, record, { created: record.kind.kind === "headless", target: request.app?.target });
     this.#tabs.set(name, { name, browserId: record.browserId, kind: record.kind, handle });
-    return this.#opened("Opened", name, record.kind, ref, handle, request);
+    return this.#opened("Opened", name, record, ref, handle, request);
   }
 
   /** `browser.open` on a name the session already holds: refresh the tab's clocks and apply what the call asks (OMP tab-supervisor.ts:302-361). Undefined when the tab is gone, which opens it afresh. */
@@ -456,13 +458,31 @@ export class CodeSession {
       : await browsers.navigateTab(existing.browserId, existing.handle.tabId, { url: request.url, ...(request.wait_until === undefined ? {} : { waitUntil: request.wait_until }), timeoutMs }, deadline);
     const handle: TabHandle = { ...existing.handle, ...ref, created: existing.handle.created };
     this.#tabs.set(existing.name, { ...existing, handle });
-    return this.#opened("Reused", existing.name, existing.kind, ref, handle, request);
+    return this.#opened("Reused", existing.name, this.#browsers.get(existing.browserId) ?? { kind: existing.kind }, ref, handle, request);
   }
 
-  #opened(verb: "Opened" | "Reused", name: string, kind: BrowserKind, ref: TabRef, handle: TabHandle, request: BridgeRequest): HostReply {
-    const size = request.viewport ?? CODE_VIEWPORT;
+  /**
+   * The tab as the worker adopts it. A page of a browser the pack only attached to was adopted, not created. The person's visible tab on a connected or relay browser is not raised for a screenshot unless `app.target`
+   * named a tab (OMP's rule, tab-supervisor.ts:1273); a cmux surface carries the connection to its daemon, which the worker's own environment does not.
+   */
+  #handleFor(ref: TabRef, record: { browserId: string; wsEndpoint: string; kind: BrowserKind }, o: { created: boolean; target?: string | undefined }): TabHandle {
+    const { kind } = record;
     return {
-      text: [`${verb} tab ${JSON.stringify(name)} on ${describeBrowser(kind)}`, `URL: ${ref.url}`, ref.title ? `Title: ${ref.title}` : null].filter(line => line !== null).join("\n"),
+      ...ref,
+      browserId: record.browserId,
+      wsEndpoint: record.wsEndpoint,
+      kind: kind.kind,
+      created: o.created,
+      ...(kind.kind === "connected" || kind.kind === "relay" ? { activateForScreenshot: o.target !== undefined } : {}),
+      ...(kind.kind === "cmux" ? { cmux: { socketPath: kind.socketPath, ...(kind.password === undefined ? {} : { password: kind.password }), ...(kind.relayId === undefined ? {} : { relayId: kind.relayId }), ...(kind.relayToken === undefined ? {} : { relayToken: kind.relayToken }) } } : {}),
+    };
+  }
+
+  #opened(verb: "Opened" | "Reused", name: string, record: { kind: BrowserKind; label?: string }, ref: TabRef, handle: TabHandle, request: BridgeRequest): HostReply {
+    const size = request.viewport ?? CODE_VIEWPORT;
+    const { kind } = record;
+    return {
+      text: [`${verb} tab ${JSON.stringify(name)} on ${record.label ?? describeBrowser(kind)}`, `URL: ${ref.url}`, ref.title ? `Title: ${ref.title}` : null].filter(line => line !== null).join("\n"),
       details: { action: "open", name, browser: kind.kind, url: ref.url, viewport: { width: size.width, height: size.height, ...(size.scale === undefined ? {} : { deviceScaleFactor: size.scale }) } },
       attach: handle,
     };
@@ -479,7 +499,7 @@ export class CodeSession {
     }, deadline);
     let record = this.#browsers.get(made.browserId);
     if (record === undefined) {
-      record = { browserId: made.browserId, wsEndpoint: made.wsEndpoint, kind, createdByCode: made.created };
+      record = { browserId: made.browserId, wsEndpoint: made.wsEndpoint, kind, createdByCode: made.created, ...(made.label === undefined ? {} : { label: made.label }) };
       this.#browsers.set(record.browserId, record);
     } else {
       record.wsEndpoint = made.wsEndpoint;
@@ -548,7 +568,7 @@ export class CodeSession {
   #known(): BrowserRecord[] {
     const found = this.#d.browsers.existing(this.#d.session);
     if (found !== undefined && !this.#browsers.has(found.browserId)) {
-      this.#browsers.set(found.browserId, { browserId: found.browserId, wsEndpoint: found.wsEndpoint, kind: this.#d.resolveKind({ action: "open" }), createdByCode: false });
+      this.#browsers.set(found.browserId, { browserId: found.browserId, wsEndpoint: found.wsEndpoint, kind: found.kind, createdByCode: false });
     }
     return [...this.#browsers.values()];
   }
@@ -573,7 +593,7 @@ export class CodeSession {
       if (current === undefined) continue;
       const named = [...this.#tabs.values()].find(tab => tab.browserId === record.browserId && tab.handle.tabId === current.tabId);
       const name = named?.name ?? `tab-${current.tabId.slice(0, 6)}`;
-      const handle: TabHandle = { ...current, browserId: record.browserId, wsEndpoint: record.wsEndpoint, kind: record.kind.kind, created: named?.handle.created ?? false };
+      const handle = this.#handleFor(current, record, { created: named?.handle.created ?? false });
       this.#tabs.set(name, { name, browserId: record.browserId, kind: record.kind, handle });
       return { text: "", details: { action: "active", name, url: current.url }, attach: handle };
     }

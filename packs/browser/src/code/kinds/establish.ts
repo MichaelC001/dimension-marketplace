@@ -83,7 +83,7 @@ async function establishConnected(kind: Extract<BrowserKind, { kind: "connected"
 }
 
 async function connectCmuxSocket(kind: Extract<BrowserKind, { kind: "cmux" }>): Promise<CmuxSocketClient> {
-  const client = new CmuxSocketClient({ socketPath: kind.socketPath, ...(kind.password ? { password: kind.password } : {}) });
+  const client = new CmuxSocketClient({ socketPath: kind.socketPath, ...(kind.password ? { password: kind.password } : {}), ...(kind.relayId ? { relayId: kind.relayId } : {}), ...(kind.relayToken ? { relayToken: kind.relayToken } : {}) });
   await client.connect();
   return client;
 }
