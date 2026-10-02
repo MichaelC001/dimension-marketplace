@@ -89,7 +89,7 @@ describe("a wrong setting that only concerns browser_run", () => {
   });
 
   test("a time setting names milliseconds", () => {
-    expect(() => createRuntimeCodeHost(newRuntime("unused-root"), { taskCredential: false, env: { DIMENSION_BROWSER_FREEZE_IDLE_MS: "soon" } })).toThrow("DIMENSION_BROWSER_FREEZE_IDLE_MS must be a number of milliseconds");
+    expect(() => createRuntimeCodeHost(newRuntime("unused-root"), { env: { DIMENSION_BROWSER_FREEZE_IDLE_MS: "soon" } })).toThrow("DIMENSION_BROWSER_FREEZE_IDLE_MS must be a number of milliseconds");
   });
 
   test("asking for the code tool by name (DIMENSION_BROWSER_MODEL_TOOLS=code) beside a wrong setting still starts, with the step tools", async () => {

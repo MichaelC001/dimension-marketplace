@@ -900,8 +900,9 @@ describeWithChrome("the tab realm drives a page it adopted", () => {
       for (const code of ['await tab.fill("#pw", "hunter2")', 'await tab.type("#pw", "hunter2")']) {
         const refused = await failure(code, { timeoutMs: 5_000 });
         expect(refused.message).toStartWith(refusal("#pw"));
-        expect(refused.message).toContain("browser_act");
-        expect(refused.message).toContain("ask the user");
+        expect(refused.message).toContain("browser_view({ profile })");
+        expect(refused.message).toContain("Ask the user");
+        expect(refused.message).not.toContain("browser_act");
       }
       expect(await secret()).toBe("");
       // The field beside it is no different from OMP's.

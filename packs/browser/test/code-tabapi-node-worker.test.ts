@@ -137,32 +137,18 @@ describeWithChrome("the code worker as the product runs it (a Node worker thread
   });
 
   describe("the realm settings the host sends in init", () => {
-    test("password fields are refused from code unless the host lifts the rule, and the refusal says where to go instead", () =>
+    test("password fields are refused from code unless the host lifts the rule, and the refusal sends the model to the person, by tools its space has", () =>
       withWorker({}, async worker => {
         const refused = await outcome(worker, "refused", `const tab = await browser.open({ name: "main" }); await tab.fill("#pw", "hunter2")`);
         expect(refused.ok).toBe(false);
         if (refused.ok) return;
         expect(refused.message).toStartWith('"#pw" is a password field');
-        expect(refused.message).toContain("browser_act");
-        expect(refused.message).toContain("ask the user");
-        // browser_task is registered only with a TypeSafe key, which only the host can see: unless it said so in init, the refusal does not send the model to a tool that is not there. And the way in it does name
-        // is truthful about the browser the cell drives: a throwaway one has no saved password.
-        expect(refused.message).not.toContain("browser_task");
-        expect(refused.message).toContain("saved profile");
-        expect(refused.message).toContain("throwaway");
+        // A cell runs only where browser_run is offered, and there the step tools and Traction's task tools are not: the routes are the person's, and browser_view is a tool every space has.
+        expect(refused.message).toContain("Ask the user");
+        expect(refused.message).toContain("browser_view({ profile })");
+        for (const hidden of ["browser_act", "browser_open", "browser_task"]) expect(refused.message).not.toContain(hidden);
         // An ordinary field is not in the way, and nothing was typed into the password one.
         expect(await outcome(worker, "ok", `await tab.fill("#name", "fine"); console.log("value=" + JSON.stringify(await tab.evaluate(() => document.getElementById("pw").value)))`)).toEqual({ ok: true, value: "" });
-      }), 30_000);
-
-    test("the refusal names browser_task when the host says the server offers it", () =>
-      withWorker({ taskCredential: true }, async worker => {
-        const refused = await outcome(worker, "refused", `const tab = await browser.open({ name: "main" }); await tab.type("#pw", "hunter2")`);
-        expect(refused.ok).toBe(false);
-        if (!refused.ok) {
-          expect(refused.message).toContain("browser_act");
-          expect(refused.message).toContain("browser_task with a credential");
-          expect(refused.message).toContain("ask the user");
-        }
       }), 30_000);
 
     test("the host lifts it with refusePasswordFields: false", () =>

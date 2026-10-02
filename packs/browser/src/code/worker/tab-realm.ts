@@ -68,8 +68,6 @@ export interface TabRealmOptions {
   cwd?: string;
   /** Refuse `type` and `fill` on a password input from code (matrix D18). Absent: {@link REFUSE_PASSWORD_FIELDS_BY_DEFAULT}. */
   refusePasswordFields?: boolean;
-  /** The server offers browser_task, so a password refusal may name it as a route (it needs a TypeSafe key, which only the host can see). Absent: not offered. */
-  taskCredential?: boolean;
   /** Encode the model's screenshot as JPEG instead of WebP. */
   excludeWebP?: boolean;
   /** Route unhandled rejections of the code a run started back into that run. Default: only inside a worker thread, where an unhandled rejection would end the worker. */
@@ -344,7 +342,7 @@ class BrowserTabRealm implements TabRealm {
         activate: session.activateForScreenshot,
       };
       const tabApi = createTabApi(
-        { session, run: active, signal, timeoutMs, shot, cwd: this.#options.cwd, refusePasswordFields: this.#options.refusePasswordFields ?? REFUSE_PASSWORD_FIELDS_BY_DEFAULT, taskCredential: this.#options.taskCredential ?? false },
+        { session, run: active, signal, timeoutMs, shot, cwd: this.#options.cwd, refusePasswordFields: this.#options.refusePasswordFields ?? REFUSE_PASSWORD_FIELDS_BY_DEFAULT },
         output,
         screenshots,
       );

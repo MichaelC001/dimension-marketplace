@@ -262,8 +262,8 @@ export class WorkerCore {
         // The worker's own globals are what the cell allocates through. In the main thread they are the server's, and the guard would refuse the server's own allocations.
         if (message.memoryLimitMb !== undefined && message.memoryLimitMb > 0) guardAllocations(globalThis, message.memoryLimitMb);
       }
-      const { session, env, screenshotDir, cwd, refusePasswordFields, excludeWebP, taskCredential } = message;
-      const realm = this.#options.createRealm({ session, env, screenshotDir, cwd, refusePasswordFields, excludeWebP, taskCredential });
+      const { session, env, screenshotDir, cwd, refusePasswordFields, excludeWebP } = message;
+      const realm = this.#options.createRealm({ session, env, screenshotDir, cwd, refusePasswordFields, excludeWebP });
       this.#realm = realm;
       this.#cell = new CodeCell({ guardRejections: this.#options.guardRejections ?? false });
       // A rebuilt worker takes its session's tabs back before it says it is ready, so a cell's `browser.tab("main")` still names a page. A tab that has gone since is the host's to forget.

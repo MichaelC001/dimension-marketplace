@@ -377,16 +377,16 @@ describeBundle("the shipped server, under Node", () => {
     expect(isAlive(server.pid)).toBe(true);
   }, BROWSER_TEST_TIMEOUT_MS);
 
-  // The shipped server decides whether `browser_task` exists from its environment (today always; after the jev hand-off becomes optional, from TYPESAFE_API_KEY), and the password refusal a cell gets must agree with
-  // the tool list whichever way it decides: the model is never sent to a tool the server does not list. test/code-task-credential.test.ts holds the two settings apart in-process; this holds the shipped path.
+  // The shipped server, with and without jev's key: the password refusal a cell gets names browser_view and never a tool the cell's space does not have (the step tools, and Traction's task tools with the key).
+  // test/code-password-routes.test.ts holds it per space in-process; this holds the shipped path.
   for (const [label, env] of [["without TYPESAFE_API_KEY", {}], ["with TYPESAFE_API_KEY", { TYPESAFE_API_KEY: "sk-test-secret" }]] as const) {
-    test(`the password refusal names browser_task exactly when the shipped server lists it (${label})`, async () => {
+    test(`the password refusal names browser_view and no step tool or task tool (${label})`, async () => {
       const server = await launch({ ...env });
-      const listed = ((await server.request("tools/list", {})) as { tools: Array<{ name: string }> }).tools.some(tool => tool.name === "browser_task");
       const refused = await server.call("browser_run", { code: `const tab = await browser.open({ name: "main", url: ${JSON.stringify(pages.url("/password"))} }); await tab.fill("#pw", "hunter2")` });
       expect(refused.isError).toBe(true);
       expect(text(refused)).toContain("is a password field");
-      expect(text(refused).includes("browser_task")).toBe(listed);
+      expect(text(refused)).toContain("browser_view({ profile })");
+      for (const hidden of ["browser_act", "browser_open", "browser_task"]) expect(text(refused)).not.toContain(hidden);
     }, BROWSER_TEST_TIMEOUT_MS);
   }
 

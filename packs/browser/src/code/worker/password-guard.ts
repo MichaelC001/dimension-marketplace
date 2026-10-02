@@ -53,15 +53,14 @@ async function keysReachPasswordField(page: Page, sig: AbortSignal | undefined):
   return true;
 }
 
-/** The refusal, written for the model: what it asked for, why not, and the routes that exist. `taskCredential`: the server offers browser_task (it needs a TypeSafe key); without it the tool is not named. */
-function refusal(subject: string, taskCredential: boolean): ToolError {
-  const routes = [
-    "Use browser_act on a browser opened with a saved profile (browser_open with a profile name: useSavedPassword to log in, generatePassword to sign up; the throwaway browser browser_run opens has no saved passwords)",
-    ...(taskCredential ? ["hand the login to browser_task with a credential (also on that profile)"] : []),
-    "ask the user to type it",
-  ];
-  const last = routes.pop();
-  return new ToolError(`${subject}; browser_run does not type into password fields from code. ${routes.join(", ")}, or ${last}.`);
+/**
+ * The refusal, written for the model that can read it: a cell runs only in the spaces that have `browser_run`, and those see `browser_view`, `browser_read`, `browser_profiles` and `browser_close` besides it, never the step tools
+ * (`browser_act`, `browser_open`) or the task tools (Traction's). So the routes are the person's: they type it themselves in the Browser View, or sign in to a saved profile there.
+ */
+function refusal(subject: string): ToolError {
+  return new ToolError(
+    `${subject}; browser_run does not type into password fields from code. Ask the user to type it themselves in the Browser View, where they can drive this browser, or to sign in to a saved profile with browser_view({ profile }) so the login is kept. Then carry on from the page they leave.`,
+  );
 }
 
 export interface PasswordGuard {
@@ -74,16 +73,16 @@ export interface PasswordGuard {
   beforePress(key: string, label: string, sig: AbortSignal | undefined): Promise<void>;
 }
 
-export function createPasswordGuard(page: Page, taskCredential: boolean): PasswordGuard {
+export function createPasswordGuard(page: Page): PasswordGuard {
   return {
     async beforeTyping(target, label, sig) {
-      if (await untilAborted(sig, () => target.evaluate(el => el instanceof HTMLInputElement && el.type === "password"))) throw refusal(`${label} is a password field`, taskCredential);
+      if (await untilAborted(sig, () => target.evaluate(el => el instanceof HTMLInputElement && el.type === "password"))) throw refusal(`${label} is a password field`);
       // Not `target.focus()`: that throws for an element that cannot take focus, and what the helper then does says so in its own words. Here it is only the check that needs focus given.
       await untilAborted(sig, () => target.evaluate(el => (el as HTMLElement).focus?.()));
-      if (await keysReachPasswordField(page, sig)) throw refusal(`typing into ${label} would reach a password field (the focused element is one)`, taskCredential);
+      if (await keysReachPasswordField(page, sig)) throw refusal(`typing into ${label} would reach a password field (the focused element is one)`);
     },
     async beforePress(key, label, sig) {
-      if (producesText(key) && (await keysReachPasswordField(page, sig))) throw refusal(`${label} would reach a password field (the focused element is one)`, taskCredential);
+      if (producesText(key) && (await keysReachPasswordField(page, sig))) throw refusal(`${label} would reach a password field (the focused element is one)`);
     },
   };
 }

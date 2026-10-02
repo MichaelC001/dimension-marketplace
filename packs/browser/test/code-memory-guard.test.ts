@@ -133,7 +133,7 @@ describe("the allocation guard", () => {
     class Mine extends (scope.Float64Array as new (length: number) => { length: number }) {}
     expect(new Mine(4).length).toBe(4);
     expect(() => (scope.ArrayBuffer as () => void)()).toThrow(TypeError); // still needs `new`
-    expect(() => new (class extends (scope.Float64Array as new (length: number) => unknown) {})(40 * MB)).toThrow(CellMemoryError); // a subclass is asked about too
+    expect(() => new (class extends (scope.Float64Array as new (length: number) => object) {})(40 * MB)).toThrow(CellMemoryError); // a subclass is asked about too
   });
 
   test("a view over an existing buffer allocates nothing and is never refused", () => {

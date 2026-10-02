@@ -62,8 +62,6 @@ export interface SessionDeps {
   refusePasswordFields: boolean;
   /** The screenshot the model sees is JPEG, not WebP (a model provider that cannot read WebP). */
   excludeWebP: boolean;
-  /** The server offers `browser_task`, so the realm's password refusal may send the model to it (RealmInit.taskCredential; absent means not offered). */
-  taskCredential: boolean;
   /** The workers this host ended that are still alive (all sessions share it; each session is counted on its own, and the host as a whole has a larger cap). */
   terminating: TerminatingWorkers;
   /** What a worker may hold, MB: its JS heap plus its Buffers and ArrayBuffers (the heap limit alone covers neither). 0: no limit. */
@@ -399,7 +397,6 @@ export class CodeSession {
       ...(this.#d.cwd === undefined ? {} : { cwd: this.#d.cwd }),
       refusePasswordFields: this.#d.refusePasswordFields,
       excludeWebP: this.#d.excludeWebP,
-      taskCredential: this.#d.taskCredential,
       ...(this.#d.memoryMb > 0 ? { memoryLimitMb: this.#d.memoryMb } : {}),
       // A rebuilt worker re-adopts the session's tabs before it answers `ready`: the pages and browsers outlive it.
       tabs: [...this.#tabs.values()].map(tab => ({ name: tab.name, handle: tab.handle })),

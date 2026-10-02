@@ -84,8 +84,6 @@ export interface TabApiContext {
   cwd?: string;
   /** Refuse `type`, `fill` and a text-typing `press` that would reach a password input (the pack's rule, matrix D18). */
   refusePasswordFields: boolean;
-  /** The server offers browser_task, so the refusal may name it as a route (the host knows: it needs a TypeSafe key). */
-  taskCredential: boolean;
 }
 
 /** Puppeteer's Frame as it is at runtime: `mainRealm` is internal, absent from its typings. */
@@ -239,7 +237,7 @@ export function createTabApi(c: TabApiContext, output: RunOutput, screenshots: P
     selectorOpts?: { selector?: string; zeroMatchAfterMs?: number },
   ): Promise<T> => markHandled(session.ops.runOp(run, label, signal, perOpMs, fn, selectorOpts));
 
-  const passwordGuard = createPasswordGuard(page, c.taskCredential);
+  const passwordGuard = createPasswordGuard(page);
 
   const resolveAriaRef = async (id: string): Promise<ElementHandle> => {
     const ref = parseAriaRefSelector(id) ?? id.trim();
