@@ -210,14 +210,16 @@ describe("tabs and active are answered by the host, like open and close", () => 
     expect(realm.called).toEqual([]);
   });
 
-  test("the handle browser.active() returns has every key a tab handle has, `name` included: it says which tab it is, so browser.tab(name) can name it", async () => {
-    const { run } = await startWorker(() => ({ ok: true, text: "", name: "tab-t2xxxx", attach: handle("tab-t2xxxx") }));
+  test("the handle browser.active() returns has every key a tab handle has, `name` included as a string: browser.tab(name) drives the same tab, and `await`ing the host's own name is not needed", async () => {
+    const { run, realm } = await startWorker(() => ({ ok: true, text: "", name: "tab-t2xxxx", attach: handle("tab-t2xxxx") }));
     const result = await run(`
       const keys = handle => Object.keys(handle).sort();
       const active = browser.active();
-      JSON.stringify({ sameKeys: keys(active).join() === keys(browser.tab("x")).join(), name: await active.name(), again: await active.name(), named: String(browser.tab(await active.name())) })`);
+      await browser.tab(active.name).click(1);
+      JSON.stringify({ sameKeys: keys(active).join() === keys(browser.tab("x")).join(), nameType: typeof active.name, printed: String(active) })`);
     expect(result.ok).toBe(true);
-    expect(JSON.parse(textOf(result).replace(/^display\[1\]:\n/, ""))).toEqual({ sameKeys: true, name: "tab-t2xxxx", again: "tab-t2xxxx", named: "<tab tab-t2xxxx>" });
+    expect(JSON.parse(textOf(result).replace(/^display\[1\]:\n/, ""))).toEqual({ sameKeys: true, nameType: "string", printed: "<tab active>" });
+    expect(realm.called.map(call => [call.name, call.chain.map(step => step.method)])).toEqual([["tab-t2xxxx", ["click"]]]);
   });
 });
 

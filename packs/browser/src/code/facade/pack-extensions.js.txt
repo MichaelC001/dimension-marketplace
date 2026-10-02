@@ -16,6 +16,11 @@
 	const tabMethods = helpers(sampleTab, ["toString", "id", "ref"]);
 	const elementMethods = helpers(sampleElement, ["toString"]);
 
+	// Every tab handle OMP makes has a string `name`, and `browser.tab(handle.name)` is that tab. The active tab's own name is known only after the host has said which tab is active, so its handle is named by an alias
+	// (`active#1`) that `browser.tab` and `browser.close` read back to the handle's pinned tab; a tab nobody asked `active()` about is never called that, and only the newest aliases are kept.
+	const MAX_ALIASES = 256;
+	const aliases = new Map();
+	let minted = 0;
 	const makeActiveTab = () => {
 		// The tab is asked for once, on first use, and kept: ids from one `observe()` belong to one tab, even if the human switches tabs between two calls.
 		let found;
@@ -33,9 +38,9 @@
 			return found;
 		};
 		const tab = {};
+		const alias = `active#${++minted}`;
+		Object.defineProperty(tab, "name", { value: alias, enumerable: true });
 		tab.toString = () => "<tab active>";
-		// Every tab handle OMP makes has a string `name`. This one's is known only after the host has said which tab is active, so it is asked for: `browser.tab(await browser.active().name())`.
-		tab.name = () => nameOfActive();
 		for (const method of tabMethods) {
 			tab[method] = async (...args) => base.tab(await nameOfActive())[method](...args);
 		}
@@ -49,7 +54,10 @@
 				return Object.freeze(element);
 			};
 		}
-		return Object.freeze(tab);
+		const handle = Object.freeze(tab);
+		aliases.set(alias, { handle, nameOfActive });
+		if (aliases.size > MAX_ALIASES) aliases.delete(aliases.keys().next().value);
+		return handle;
 	};
 
 	globalThis.browser = Object.freeze({
@@ -60,6 +68,13 @@
 		},
 		active() {
 			return makeActiveTab();
+		},
+		tab(...args) {
+			return aliases.get(args[0])?.handle ?? base.tab(...args);
+		},
+		async close(options) {
+			const pinned = options !== null && typeof options === "object" ? aliases.get(options.name) : undefined;
+			await base.close(pinned === undefined ? options : { ...options, name: await pinned.nameOfActive() });
 		},
 	});
 }

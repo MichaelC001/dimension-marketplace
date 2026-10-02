@@ -388,12 +388,39 @@ describe("OMP's facade, unchanged, in the cell", () => {
     expect(asked.filter(request => request.action === "tabs")).toHaveLength(1);
   });
 
-  test("the active handle has every key a named tab has, so a helper added to the facade is not missing from it; its name is asked for, because the host has to say which tab is active", async () => {
+  test("the active handle has every key a named tab has, so a helper added to the facade is not missing from it, and its name is a string like every tab handle's", async () => {
     const result = await run('const named = Object.keys(browser.tab("x")).sort(); const handle = browser.active(); JSON.stringify({ named, active: Object.keys(handle).sort(), nameOfTab: typeof browser.tab("x").name, nameOfActive: typeof handle.name })', { invoke });
     const { named, active, nameOfTab, nameOfActive } = JSON.parse(textOf(result).replace(/^display\[1\]:\n/, ""));
     expect(named.length).toBeGreaterThan(20);
     expect(active).toEqual(named);
-    expect([nameOfTab, nameOfActive]).toEqual(["string", "function"]);
+    expect([nameOfTab, nameOfActive]).toEqual(["string", "string"]);
+  });
+
+  test("browser.tab(browser.active().name) is the tab the active handle drives, a name nobody minted is an ordinary tab, and browser.close names the active tab by it", async () => {
+    const asked: BridgeRequest[] = [];
+    const answering: CellInvoke = async parameters => {
+      const request = parameters as BridgeRequest;
+      asked.push(request);
+      if (request.action === "active") return { text: "", details: { action: "active", name: "tab-t2xxxx" } };
+      if (request.action === "close") return { text: "closed", details: { action: "close", name: request.name ?? "main" } };
+      return { text: "", details: { action: "call", name: request.name ?? "main", value: `${request.name}:${request.chain?.map(step => step.method).join(">")}` } };
+    };
+    const result = await run(
+      `const active = browser.active();
+       const same = browser.tab(active.name);
+       const viaName = await same.url();
+       const ordinary = await browser.tab("active").url();
+       await browser.close({ name: active.name });
+       JSON.stringify({ viaName, ordinary, names: [active.name, same.name].map(String), printed: String(same) })`,
+      { invoke: answering },
+    );
+    const seen = JSON.parse(textOf(result).split("\n").at(-1)!);
+    expect(seen.viaName).toBe("tab-t2xxxx:url");
+    expect(seen.ordinary).toBe("active:url");
+    expect(seen.printed).toBe("<tab active>");
+    // One question for the handle and the tab made from its name: the same pinned tab, and the close named it by what the host answered.
+    expect(asked.filter(request => request.action === "active")).toHaveLength(1);
+    expect(asked.find(request => request.action === "close")?.name).toBe("tab-t2xxxx");
   });
 
   test("browser is only reachable while a cell runs", async () => {
