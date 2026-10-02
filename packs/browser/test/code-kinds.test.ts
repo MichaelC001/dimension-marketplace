@@ -577,3 +577,22 @@ describe("acquiring a browser of a kind", () => {
     await waitUntil("every browser the abandoned open made to be closed", () => ({ made: attached.length, closed: closed.length }), now => now.made === now.closed, 2_000);
   });
 });
+
+describeWithChrome("PUPPETEER_PROXY: the Chrome a cell launches goes through the proxy the environment names", () => {
+  const OFF_MACHINE = 'await browser.open({ url: "http://dimension-no-such-host.invalid/" })';
+
+  test("a page off the machine fails at the proxy when the variable names one that is not there, and not at a proxy when it is unset", async () => {
+    process.env.PUPPETEER_PROXY = "http://127.0.0.1:9"; // nothing listens on the discard port
+    try {
+      const proxied = await failureOf(await start(), "s1", OFF_MACHINE);
+      expect(proxied.message).toContain("ERR_PROXY_CONNECTION_FAILED");
+    } finally {
+      delete process.env.PUPPETEER_PROXY;
+    }
+    // One Chrome at a time: the first is gone before the second starts.
+    await host?.dispose();
+    await teardown();
+    const direct = await failureOf(await start(), "s2", OFF_MACHINE);
+    expect(direct.message).not.toContain("ERR_PROXY_CONNECTION_FAILED");
+  }, BROWSER_TEST_TIMEOUT_MS);
+});
