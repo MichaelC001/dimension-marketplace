@@ -34,12 +34,21 @@ export interface LiveChannelOptions {
 	tokenIdleMs?: number;
 	/** How often a browser's state is read while a View watches. */
 	stateIntervalMs?: number;
+	/** How long a View may be handed nothing before it is told the browser's (unchanged) state again. */
+	heartbeatMs?: number;
 	/** The most live tokens one browser holds; minting past it drops the oldest. */
 	maxTokensPerBrowser?: number;
 }
 
 const TOKEN_IDLE_MS = 60_000;
 const STATE_INTERVAL_MS = 250;
+/**
+ * A View that has been handed nothing for this long is sent the browser's state again, unchanged. A page that is not changing sends nothing
+ * of its own, so without this a still page and a stream that has stalled (this process wedged with the socket still open) look the same to
+ * the View. The View reads silence of several times this (app/view/use-browser-stream.ts STREAM_SILENCE_MS) as a dead stream; both ship in
+ * one pack version. The repeat is the identical bytes, which the View drops without a render.
+ */
+export const HEARTBEAT_MS = 2_000;
 const MAX_TOKENS_PER_BROWSER = 16;
 /** One input batch is at most 64 small events plus a 4 KiB paste; a body past this is not one. */
 const MAX_BODY_BYTES = 256 * 1024;
@@ -66,6 +75,8 @@ class Client {
 	#busy = false;
 	#state: Parts | undefined;
 	#picture: Parts | undefined;
+	/** When this View was last handed bytes, or joined (`performance.now()`): what a heartbeat measures its quiet from. */
+	lastWrite = performance.now();
 
 	constructor(
 		readonly response: http.ServerResponse,
@@ -97,6 +108,7 @@ class Client {
 		this.#state = undefined;
 		this.#picture = undefined;
 		if (chunks.length === 0) return;
+		this.lastWrite = performance.now();
 		this.#busy = true;
 		const written = (): void => {
 			this.#busy = false;
@@ -116,13 +128,15 @@ class Room {
 	#stopWatching: (() => void) | undefined;
 	#timer: ReturnType<typeof setInterval> | undefined;
 	#sampling = false;
-	#lastState: string | undefined;
+	/** The state the Views were last told: as JSON to see a change, as the message to tell it again. */
+	#last: { json: string; message: Parts } | undefined;
 	#lastPicture: Parts | undefined;
 
 	constructor(
 		readonly browserId: string,
 		private readonly source: LiveSource,
 		private readonly intervalMs: number,
+		private readonly heartbeatMs: number,
 		/** The last View left. */
 		private readonly onEmpty: (room: Room) => void,
 		/** The browser is closed. */
@@ -141,7 +155,7 @@ class Room {
 		}
 		this.#timer ??= setInterval(() => void this.#sample(), this.intervalMs);
 		if (client.wantsPictures) this.#watch();
-		if (this.#lastState !== undefined) client.offerState(encode(KIND_STATE, JSON.parse(this.#lastState)));
+		if (this.#last !== undefined) client.offerState(this.#last.message);
 		else void this.#sample();
 		if (client.wantsPictures && this.#lastPicture !== undefined) client.offerPicture(this.#lastPicture);
 	}
@@ -200,9 +214,13 @@ class Room {
 		try {
 			const state = await this.source.liveState(this.browserId);
 			const json = JSON.stringify(state);
-			if (json === this.#lastState) return;
-			this.#lastState = json;
+			const last = this.#last;
+			if (last !== undefined && json === last.json) {
+				this.#beat(last.message);
+				return;
+			}
 			const message = encode(KIND_STATE, state);
+			this.#last = { json, message };
 			for (const client of this.clients) client.offerState(message);
 		} catch (error) {
 			// A page mid-navigation can fail one read; only a closed browser ends the stream.
@@ -210,6 +228,12 @@ class Room {
 		} finally {
 			this.#sampling = false;
 		}
+	}
+
+	/** The state has not changed: a View that has been handed nothing for the heartbeat is told it again. */
+	#beat(message: Parts): void {
+		const now = performance.now();
+		for (const client of this.clients) if (now - client.lastWrite >= this.heartbeatMs) client.offerState(message);
 	}
 }
 
@@ -230,6 +254,7 @@ function reply(response: http.ServerResponse, status: number, body: unknown): vo
 export class LiveChannel {
 	readonly #source: LiveSource;
 	readonly #tokenIdleMs: number;
+	readonly #heartbeatMs: number;
 	readonly #stateIntervalMs: number;
 	readonly #maxTokens: number;
 	/** In minting order, so the oldest is first. */
@@ -243,6 +268,7 @@ export class LiveChannel {
 	constructor(source: LiveSource, options: LiveChannelOptions = {}) {
 		this.#source = source;
 		this.#tokenIdleMs = options.tokenIdleMs ?? TOKEN_IDLE_MS;
+		this.#heartbeatMs = options.heartbeatMs ?? HEARTBEAT_MS;
 		this.#stateIntervalMs = options.stateIntervalMs ?? STATE_INTERVAL_MS;
 		this.#maxTokens = options.maxTokensPerBrowser ?? MAX_TOKENS_PER_BROWSER;
 	}
@@ -325,6 +351,7 @@ export class LiveChannel {
 				browserId,
 				this.#source,
 				this.#stateIntervalMs,
+				this.#heartbeatMs,
 				(empty) => {
 					if (this.#rooms.get(empty.browserId) === empty) this.#rooms.delete(empty.browserId);
 				},

@@ -319,7 +319,7 @@ describe("what a View receives", () => {
 		expect(source.watchCalls).toBe(1);
 	});
 
-	test("state follows the browser and is sent only when it changed", async () => {
+	test("state follows the browser and is sent when it changed, not on every read", async () => {
 		const source = new FakeSource();
 		source.open("a");
 		const channel = channelFor(source);
@@ -354,6 +354,45 @@ describe("what a View receives", () => {
 		await live.waitFor((messages) => pictures(messages).includes("seen"));
 		// Delivered to the one that asked in the same turn: the quiet one would have it by now.
 		expect(pictures(quiet.messages)).toEqual([]);
+	});
+
+	test("a View handed nothing is told the browser's state again, unchanged, so a still page is never silent; a changed state is sent at once and is what the next repeats say", async () => {
+		const source = new FakeSource();
+		source.open("a");
+		const channel = channelFor(source, { heartbeatMs: 60 });
+		const { origin, token } = await channel.mint("a");
+		const stream = await openStream(origin, token, { frames: false });
+
+		// Fails if a quiet stream sends nothing: the View could not tell it from one that stalled.
+		await stream.waitFor((messages) => states(messages).length >= 4);
+		const first = JSON.stringify(states(stream.messages)[0]);
+		expect(states(stream.messages).every((message) => JSON.stringify(message) === first)).toBe(true);
+
+		source.states.set("a", stateOf("a", { url: "http://page.test/next" }));
+		await stream.waitFor((messages) => states(messages).some((message) => (message as { state: { url: string } }).state.url === "http://page.test/next"));
+		// Fails if the repeats keep telling the old state after it changed.
+		const seen = states(stream.messages).length;
+		await stream.waitFor((messages) => states(messages).length >= seen + 2);
+		const urls = states(stream.messages).slice(seen).map((message) => (message as { state: { url: string } }).state.url);
+		expect(urls).toEqual(urls.map(() => "http://page.test/next"));
+	});
+
+	test("a View that is handed nothing is still told the state while another View of the same browser is handed pictures", async () => {
+		const source = new FakeSource();
+		source.open("a");
+		const channel = channelFor(source, { heartbeatMs: 60 });
+		const { origin, token } = await channel.mint("a");
+		const watching = await openStream(origin, token);
+		const quiet = await openStream(origin, token, { frames: false });
+
+		// Fails if the heartbeat is measured per browser: the pictures sent to one View would keep the other from ever hearing one.
+		let pushed = 0;
+		await waitUntil(() => {
+			source.push("a", `p${(pushed += 1)}`);
+			return states(quiet.messages).length >= 4;
+		});
+		expect(pictures(quiet.messages)).toEqual([]);
+		expect(pictures(watching.messages).length).toBeGreaterThan(0);
 	});
 });
 
