@@ -15,7 +15,7 @@ import { RunOutput } from "../src/code/worker/run-output";
 import { createTabRealm } from "../src/code/worker/tab-realm";
 import { readImageDimensions } from "../src/code/worker/image-size";
 import { resolveScreenshotDir } from "../src/code/worker/screenshot";
-import { resolveUploadPath } from "../src/code/worker/tab-api";
+import { resolveUploadPath, textClickLoopMs } from "../src/code/worker/tab-api";
 import { OpRunner, type RunState, resolveOpTimeouts, resolveWaitTimeout } from "../src/code/worker/tab-ops";
 import { chromePath, type Fixture, type LaunchedChrome, launchChrome, startFixture } from "./code-tab-fixture";
 import { describeWithChrome } from "./fixture";
@@ -52,6 +52,16 @@ describe("the per-operation ceilings follow the cell budget", () => {
     expect(resolveWaitTimeout(30_000, Number.POSITIVE_INFINITY)).toBe(29_000);
     expect(resolveWaitTimeout(30_000, -5)).toBe(8_000);
     expect(resolveWaitTimeout(30_000, Number.NaN)).toBe(8_000);
+  });
+});
+
+describe("how long a text click keeps trying before the op's own ceiling ends it", () => {
+  test("it stops 250 ms before the ceiling so the model reads the actionability reason, and a short ceiling still gets at least half of itself rather than one attempt", () => {
+    expect(textClickLoopMs(8_000)).toBe(7_750);
+    expect(textClickLoopMs(500)).toBe(250);
+    expect(textClickLoopMs(400)).toBe(200);
+    expect(textClickLoopMs(100)).toBe(50);
+    expect(textClickLoopMs(1)).toBe(1);
   });
 });
 

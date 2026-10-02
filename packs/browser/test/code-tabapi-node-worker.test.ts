@@ -165,7 +165,7 @@ describeWithChrome("the code worker as the product runs it (a Node worker thread
       }
     }, 60_000);
 
-    test("the picture the model sees is WebP, or JPEG when the host sets excludeWebP, and it is kept under the temp directory the worker started with", async () => {
+    test("the picture the model sees is WebP, or JPEG when the host sets excludeWebP, and with no screenshot directory it is kept under the temp directory", async () => {
       const shotOf = (worker: NodeWorker, runId: string): Promise<{ mimeType: string | undefined; dest: string | undefined }> =>
         worker.cell(runId, `const tab = await browser.open({ name: "main" }); await tab.screenshot({ silent: false }); 1`).then(({ result }) => {
           if (!result.ok) throw new Error(result.error.message);
@@ -174,7 +174,7 @@ describeWithChrome("the code worker as the product runs it (a Node worker thread
         });
       const webp = await withWorker({}, worker => shotOf(worker, "webp"));
       expect(webp.mimeType).toBe("image/webp");
-      // The test host sends a scrubbed environment with no TEMP: on Windows `os.tmpdir()` read after that is the relative `undefined\temp`, and the file would land in the working directory.
+      // The host's scrubbed environment keeps TEMP, TMP and SystemRoot, so the worker's `os.tmpdir()` is the server's own (this harness sends the same keys the host does).
       expect(webp.dest?.startsWith(tmpdir())).toBe(true);
       expect((await withWorker({ excludeWebP: true }, worker => shotOf(worker, "jpeg"))).mimeType).toBe("image/jpeg");
     }, 60_000);

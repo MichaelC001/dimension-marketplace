@@ -30,6 +30,11 @@ type ActionabilityResult = { ok: true; x: number; y: number } | { ok: false; rea
 /** The text-selector click's own loop gives up this long before the op's ceiling, so its message (the last actionability reason it saw) is the one thrown, not the op's generic one. */
 const TEXT_CLICK_LOOP_SLACK_MS = 250;
 
+/** How long the text click's own loop runs inside an op of `actionOpMs`: the ceiling less the slack, but never less than half of it, so a short cell budget still gets more than one attempt (at least 1 ms). */
+export function textClickLoopMs(actionOpMs: number): number {
+  return Math.max(1, actionOpMs / 2, actionOpMs - TEXT_CLICK_LOOP_SLACK_MS);
+}
+
 /** The `tab` object `tab.run` code receives (and what a `call` chain is rendered against): OMP's helpers, with OMP's signatures. */
 export interface TabApi {
   readonly name: string;
@@ -200,7 +205,8 @@ async function clickQueryHandlerText(page: Page, selector: string, timeoutMs: nu
       }
     }
   } catch (err) {
-    // The loop's own deadline races the per-op one at the same instant: whichever lands first, the model is told what the element was doing (OMP's loop let its own AbortError through as "Aborted: The operation timed out.").
+    // The loop's own deadline (250 ms before the op's, so this is the usual way out) aborted whatever it was awaiting: the model is told what the element was doing, where OMP's loop let its AbortError through as
+    // "Aborted: The operation timed out." An abort by the run itself (a cancel, the run ended) is not that timeout and goes on as it is.
     if (timeoutSignal.aborted && !signal?.aborted) throw timedOut();
     throw err;
   }
@@ -486,7 +492,7 @@ export function createTabApi(c: TabApiContext, output: RunOutput, screenshots: P
             return;
           }
           const resolved = normalizeSelector(selector);
-          if (resolved.startsWith("text/")) await clickQueryHandlerText(page, resolved, Math.max(1, actionOpMs - TEXT_CLICK_LOOP_SLACK_MS), sig);
+          if (resolved.startsWith("text/")) await clickQueryHandlerText(page, resolved, textClickLoopMs(actionOpMs), sig);
           else await untilAborted(sig, () => page.locator(resolved).setTimeout(actionOpMs).click({ signal: sig }));
         },
         { selector, zeroMatchAfterMs: ZERO_MATCH_FAIL_FAST_MS },
