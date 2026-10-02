@@ -775,6 +775,42 @@ describeWithChrome("the tab realm drives a page it adopted", () => {
       }
     }, 20_000);
 
+    test("the browser reached any other way (page.browser(), the page's context, the sibling page's) cannot be disconnected from code either: no tab is ended, none is reported as ended", async () => {
+      await goto("/form");
+      await openTab("sibling", "/done");
+      try {
+        for (const reach of ["page.browser()", "page.browserContext().browser()", "page.target().browser()", "(await browser.pages())[0].browser()"]) {
+          await run(`await ${reach}.disconnect(); 1`);
+          expect(await value("await tab.title()", { name: "sibling" })).toBe("Done page");
+          expect(await value("tab.url()")).toBe(fixture.url("/form"));
+          expect(realm.names()).toContain("sibling");
+        }
+      } finally {
+        await realm.release("sibling");
+        await enginePages.get("sibling")?.close();
+      }
+    }, 30_000);
+
+    test("code cannot cut the realm's connection, but the realm still lets go of it when the last tab of that browser goes", async () => {
+      const own = createTabRealm({ evaluator: createCodeEvaluator });
+      try {
+        const { handle } = await chrome.openTab(fixture.url("/form"));
+        await own.adopt("solo", handle);
+        const ask = (code: string): Promise<RunResult> => own.run({ name: "solo", code, timeoutMs: 8_000, signal: new AbortController().signal });
+        // The Browser itself (the run's `browser` is a facade that stops answering when the run ends), taken out of the run to look at after it: its own `connected` is the proof either way.
+        await ask("globalThis.leakedBrowser = page.browser(); 1");
+        const leaked = Reflect.get(globalThis, "leakedBrowser") as { connected: boolean };
+        expect(leaked.connected).toBe(true);
+        await ask("await browser.disconnect(); await page.browser().disconnect(); 1");
+        expect(leaked.connected).toBe(true);
+        await own.release("solo");
+        expect(leaked.connected).toBe(false);
+      } finally {
+        Reflect.deleteProperty(globalThis, "leakedBrowser");
+        await own.dispose();
+      }
+    }, 30_000);
+
     test("the code gets raw puppeteer page and browser beside tab, and a run that is cancelled ends with the cancellation", async () => {
       expect(await value("page.url() === tab.url() && typeof browser.pages === 'function' && typeof tab.page.goto === 'function'")).toBe(true);
       const controller = new AbortController();
