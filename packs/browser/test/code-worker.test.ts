@@ -261,15 +261,19 @@ describe("what the cell may pass to browser", () => {
 });
 
 describe("cancellation, budget and shutdown", () => {
-  test("an abort ends the cell and the host call it waits on, and the next cell runs in the same worker", async () => {
+  test("an abort ends the cell and the host call it waits on, and asks the host for a new worker, as OMP kills its worker on any abort; a late reply changes nothing", async () => {
     const { link, run } = await startWorker(request => (request.name === "stuck" ? "never" : { ok: true, text: "fine" }));
     const stuck = run('await browser.open({ name: "stuck" })');
     const sent = await link.next(isBridge);
     link.send({ t: "abort", runId: "run-1" });
     const result = await stuck;
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toMatchObject({ name: "ToolAbortError", isAbort: true });
-    // The host answers late: nothing is waiting for it any more, and nothing breaks.
+    // The cancelled code may still be running in this worker (a loop that catches the abort): the answer says the worker is to be replaced, and says so to the model.
+    if (!result.ok) {
+      expect(result.error).toMatchObject({ name: "ToolAbortError", isAbort: true, recoverTab: true, resetNoted: true });
+      expect(result.error.message).toContain("variables from earlier cells are gone");
+    }
+    // The host answers late: nothing is waiting for it any more, and nothing breaks. (This fake host does not rebuild the worker, so the worker can still run a cell.)
     link.send({ t: "bridge-reply", id: sent.id, ok: true, value: { text: "late", details: { action: "open", name: "stuck" } } });
     expect(textOf(await run('const tab = await browser.open({ name: "ok" });'))).toBe("fine");
   });

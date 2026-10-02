@@ -116,12 +116,16 @@ export interface RunError {
   isAbort: boolean;
   /**
    * The host MUST terminate this worker thread and start a new one (the pages stay; the new worker re-adopts them) before the next run: the cell that failed may still be running
-   * (a synchronous loop cannot be stopped from inside the thread, and raw Puppeteer calls in a timed-out `tab.run` never see the cell's signal), and its variables are to be reset.
-   * The cell realm sets it when the cell's budget ran out (OMP force-kills its JS worker the same way, eval/js/executor.ts:70-78); the tab realm may set it too.
+   * (a synchronous loop cannot be stopped from inside the thread, a loop that catches the abort goes on, and raw Puppeteer calls in a timed-out `tab.run` never see the cell's signal), and its variables are to be reset.
+   * The cell realm sets it whenever it gives up on a cell that is still running: its budget ran out, or the run was cancelled (OMP force-kills its JS worker on ANY abort, eval/js/context-manager.ts:430-448);
+   * the tab realm may set it too. A run cancelled before its code began never has it. A host that replaces the worker because of this flag decides to from the worker's own error,
+   * before it swaps in a message of its own (a take-over), or the cancelled code is left running.
    */
   recoverTab?: boolean;
-  /** The cell's own budget ran out (`CellTimeoutError`). Its `message` is already OMP's whole annotation, reset sentence included: the host must not add its own. A `TimeoutError` the page raised never carries this. */
+  /** The cell's own budget ran out (`CellTimeoutError`). Its `message` is already OMP's whole annotation, reset sentence included. A `TimeoutError` the page raised never carries this. */
   budget?: boolean;
+  /** `message` already tells the model the worker was reset and its variables are gone (a timeout's and a cancel's do): a host that rebuilds the worker must not add a sentence of its own. */
+  resetNoted?: boolean;
   partial?: RunResult;
 }
 /** tab-protocol.ts:139-143 */

@@ -20,7 +20,10 @@ export interface CellRunOptions {
   code: string;
   /** The cell's own budget. Past it the run fails with OMP's timeout text and every operation it started is aborted. */
   timeoutMs: number;
-  /** The caller's cancellation (an MCP request that was cancelled, a take-over). */
+  /**
+   * The caller's cancellation (an MCP request that was cancelled, a take-over). A cancel that arrives while the cell is running fails the run as a `ToolAbortError` that asks for a new worker, like a timeout does:
+   * OMP force-kills its JS worker on ANY abort (eval/js/context-manager.ts:430-448), because the cancelled code may be a loop that catches the abort or never yields. A signal that is already aborted runs nothing.
+   */
   signal: AbortSignal;
   invoke: CellInvoke;
   /** Progress: the text the cell prints, at most one chunk of 16 KiB every 100 ms (the sink bounds and throttles it, so a cell that floods costs the host a fixed rate). */
@@ -28,6 +31,9 @@ export interface CellRunOptions {
   /** The session's folder for the file holding the whole of an output longer than the inline budget; absent: no file is kept. */
   spillDir?: string;
 }
+
+/** OMP's sentence for what ending the worker does (eval/js/executor.ts:70-78). Said wherever the cell realm asks for a new worker, so the model does not refer to variables that are gone. */
+export const WORKER_RESET_NOTE = "The JS worker was force-killed and its VM state was reset; variables from earlier cells are gone.";
 
 /**
  * The cell's budget ran out. Not a cancellation: the model is told, with the output it had by then. OMP's text, as OMP says it (eval/js/executor.ts:70-78): the worker is force-killed at the
@@ -38,7 +44,7 @@ export class CellTimeoutError extends Error {
   readonly budget = true;
 
   constructor(timeoutMs: number) {
-    super(`Command timed out after ${Math.max(1, Math.round(timeoutMs / 1000))} seconds. The JS worker was force-killed and its VM state was reset; variables from earlier cells are gone.`);
+    super(`Command timed out after ${Math.max(1, Math.round(timeoutMs / 1000))} seconds. ${WORKER_RESET_NOTE}`);
     this.name = "CellTimeoutError";
   }
 }
@@ -87,7 +93,7 @@ function uninstallFacade(): void {
   for (const key of GLOBAL_KEYS) delete (globalThis as Record<string, unknown>)[key];
 }
 
-/** A thrown value as the host gets it: `name` and `message` kept, `isAbort` for cancellation, `recoverTab` when the realm marked the failure as one that needs a fresh worker. */
+/** A thrown value as the host gets it: `name` and `message` kept, `isAbort` for cancellation, `recoverTab` (and `resetNoted`) when the realm marked the failure as one that needs a fresh worker. */
 export function failureOf(error: unknown): RunError {
   if (error instanceof Error) {
     const recoverTab = (error as Error & { recoverTab?: unknown }).recoverTab === true;
@@ -97,10 +103,21 @@ export function failureOf(error: unknown): RunError {
       ...(error.stack === undefined ? {} : { stack: error.stack }),
       isAbort: error.name === "AbortError" || error.name === "ToolAbortError",
       ...(recoverTab ? { recoverTab } : {}),
-      ...(error instanceof CellTimeoutError ? { budget: true } : {}),
+      ...(error instanceof CellTimeoutError ? { budget: true, resetNoted: true } : {}),
     };
   }
   return { name: "Error", message: String(error), isAbort: false };
+}
+
+/** The failure of a run the realm gave up on while its code was still running (a cancel): the worker is to be rebuilt, and the message says so. A timeout's already does. */
+function abandonedFailure(error: RunError): RunError {
+  if (error.resetNoted === true) return error;
+  return { ...error, message: `${error.message.replace(/\.?$/, ".")} ${WORKER_RESET_NOTE}`, recoverTab: true, resetNoted: true };
+}
+
+/** What the budget or a cancel puts into the race with the cell's code: the reason, wrapped, so a failure that came out of the race is told from one the cell's own code threw. */
+class Abandoned {
+  constructor(readonly reason: unknown) {}
 }
 
 /** A failed run: the error, and everything the cell had shown before it (a screenshot taken before the step that threw is still the model's to see). */
@@ -195,15 +212,20 @@ export class CodeCell {
     run.hooks = { onText: chunk => { if (!run.ended) live.onText(chunk); }, onDisplay: display => { if (!run.ended) live.onDisplay(display); } };
     this.#live.set(o.runId, run);
 
+    // The race the cell's own code loses when the budget runs out or the caller cancels. What wins it is wrapped, so a failure that came out of the race is told from one the cell's code threw.
     const abandoned = new Promise<never>((_, reject) => {
-      if (signal.aborted) reject(signal.reason);
-      else signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      if (signal.aborted) reject(new Abandoned(signal.reason));
+      else signal.addEventListener("abort", () => reject(new Abandoned(signal.reason)), { once: true });
     });
     // Whichever loses the race must not become an unhandled rejection of its own.
     abandoned.catch(() => {});
     let failure: unknown;
     let failed = false;
+    // The run was given up on while its code was still running: that code goes on in this worker, so the worker has to be replaced.
+    let gaveUp = false;
     try {
+      // A run cancelled before it began has started nothing: no code runs, and there is nothing to replace.
+      throwIfAborted(signal);
       const evaluated = callerRun.run(run, () => this.#evaluator.evaluate(o.code, { filename, scope: {}, hooks: run.hooks }));
       evaluated.catch(() => {});
       const value = await Promise.race([evaluated, abandoned]);
@@ -221,7 +243,12 @@ export class CodeCell {
       }
     } catch (error) {
       failed = true;
-      failure = error;
+      if (error instanceof Abandoned) {
+        gaveUp = true;
+        failure = error.reason;
+      } else {
+        failure = error;
+      }
     } finally {
       clearTimeout(timer);
       o.signal.removeEventListener("abort", onCancel);
@@ -236,7 +263,10 @@ export class CodeCell {
       displays: [...images, ...(text.length > 0 ? [{ type: "text" as const, text }] : [])],
       screenshots: run.screenshots,
     };
-    if (failed) throw new CellFailure(failureOf(failure), result);
+    if (failed) {
+      const error = failureOf(failure);
+      throw new CellFailure(gaveUp ? abandonedFailure(error) : error, result);
+    }
     return result;
   }
 

@@ -163,10 +163,46 @@ describe("the budget and cancellation", () => {
     expect(new CellTimeoutError(30_000).message).toStartWith("Command timed out after 30 seconds. The JS worker was force-killed");
   });
 
-  test("only the budget asks for a new worker: a cancel, a thrown error and a timeout the page raised do not", async () => {
+  /** A run parked on a host call that is cancelled when `abort()` is called: the shape of an MCP cancel, a take-over or a `#cancel` reaching a cell that is waiting on the page. */
+  function parkedOnTheHost(): { invoke: CellInvoke; started: Promise<void>; controller: AbortController } {
+    const controller = new AbortController();
+    const { promise: started, resolve: begun } = Promise.withResolvers<void>();
+    const invoke: CellInvoke = (_parameters, { signal }) => {
+      begun();
+      const { promise, reject } = Promise.withResolvers<BridgeResponse>();
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      return promise;
+    };
+    return { invoke, started, controller };
+  }
+
+  test("a cancel ends the run like a budget does: the worker is to be rebuilt, because the cancelled code is still running in it", async () => {
+    const { invoke, started, controller } = parkedOnTheHost();
+    const pending = failure("await browser.tab('main').url()", { invoke, signal: controller.signal });
+    await started;
+    controller.abort();
+    const failed = await pending;
+    // OMP force-kills its JS worker on ANY abort (eval/js/context-manager.ts:430-448): a synchronous loop cannot be stopped from inside the thread, and a loop that catches the abort is not stopped by it.
+    expect(failed.error).toMatchObject({ name: "ToolAbortError", isAbort: true, recoverTab: true, resetNoted: true });
+    expect(failed.error.message).toStartWith("Operation aborted");
+    expect(failed.error.message).toContain("variables from earlier cells are gone");
+    // It is not the cell's budget: the tool shows the message alone either way, but the host tells a timeout from a cancel by this flag.
+    expect(failed.error.budget).toBeUndefined();
+  });
+
+  test("a run cancelled before it starts runs none of its code, so there is nothing to recycle", async () => {
+    Reflect.deleteProperty(globalThis, "ranAnyway");
     const controller = new AbortController();
     controller.abort();
-    expect((await failure("1", { signal: controller.signal })).error.recoverTab).toBeUndefined();
+    const failed = await failure("globalThis.ranAnyway = true; 1", { signal: controller.signal });
+    // Let anything the run might have left behind take its turn before looking.
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(failed.error).toMatchObject({ name: "ToolAbortError", isAbort: true });
+    expect(failed.error.recoverTab).toBeUndefined();
+    expect(Reflect.get(globalThis, "ranAnyway")).toBeUndefined();
+  });
+
+  test("a thrown error and a TimeoutError the page raised do not ask for a new worker: the cell ended, nothing of it is still running", async () => {
     expect((await failure("throw new Error('x')")).error.recoverTab).toBeUndefined();
     const pageTimeout = await failure("const e = new Error('Waiting for selector failed'); e.name = 'TimeoutError'; throw e");
     expect(pageTimeout.error).toMatchObject({ name: "TimeoutError", isAbort: false });
