@@ -13,8 +13,11 @@
 //
 // A loopback request can HANG, neither refused nor answered (a host's local-network policy that prompts no one, a pack that stopped
 // answering). Every request this file makes to the pack has a deadline, enforced by aborting its AbortController so the socket really
-// closes: a connect that never answers becomes the same "reconnecting" state and backoff as one that was refused. The open stream
-// itself has none: a page that is not changing sends nothing, and silence is how a still page looks.
+// closes: a connect that never answers becomes the same "reconnecting" state and backoff as one that was refused. The open stream is held
+// to silence instead: a page that is not changing sends nothing, so the pack repeats the browser's state whenever it has sent a View
+// nothing for HEARTBEAT_MS (src/stream.ts), and a stream that carries nothing at all for STREAM_SILENCE_MS is dead (the pack's event loop
+// wedged with the socket still open) and takes the same road. The host call that names the listener is not timed here: it waits on the
+// human's consent prompt, and the MCP SDK fails it by itself after its own 60 s.
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { BrowserState, Viewport } from "../../src/contracts";
 import type { PageInputEvent } from "../../src/input";
@@ -25,8 +28,10 @@ const BACKOFF_START_MS = 500;
 const BACKOFF_MAX_MS = 8000;
 /** How long the stream's connect may go unanswered before it counts as a failure. `fetch` settles on the response headers, which the pack sends with its first message (the browser's state, read at once). */
 export const CONNECT_TIMEOUT_MS = 5000;
-/** How long one input POST may go unanswered. Longer than the pack's own limit on the page (INPUT_TIMEOUT_MS, 5 s, in engines/puppeteer.ts), so a page that will not take input is reported by the pack's reason, not by this clock. */
+/** How long one input POST may go unanswered. Longer than the pack's own bound on a batch (INPUT_BOUND_MS, 5 s, in src/runtime.ts: its wait for its turn plus its time on the page), so a page that will not take input is reported by the pack's reason, not by this clock. */
 export const INPUT_TIMEOUT_MS = 8000;
+/** How long an open stream may carry nothing at all (no picture, no state, no heartbeat) before it counts as dead. The pack repeats the state after 2 s of quiet (HEARTBEAT_MS in src/stream.ts), so a live stream is never this silent: it has stalled, it is not a still page. View and pack ship in one version. */
+export const STREAM_SILENCE_MS = 6000;
 /** A stream the pack ended (its browser closed, or its token was dropped): ask for a new one at once, but not in a spin. */
 const ENDED_RETRY_MS = 150;
 const GONE = /unknown or already closed browserId/i;
@@ -76,22 +81,30 @@ function refusalText(body: unknown, status: number): string {
 interface Deadline {
 	/** True once the deadline itself aborted the request, as opposed to the View aborting it (hidden, unmounted, token gone). */
 	readonly expired: boolean;
+	/** Start the time over: the request is not idle after all. Nothing once the request is aborted. */
+	restart(): void;
 	clear(): void;
 }
 
 /** After `ms`, abort `controller`. The timer is gone when the deadline is cleared or the controller aborts for any reason, so none outlives its request. */
 function arm(controller: AbortController, ms: number): Deadline {
+	const expire = () => {
+		deadline.expired = true;
+		controller.abort();
+	};
+	let timer = window.setTimeout(expire, ms);
 	const deadline = {
 		expired: false,
+		restart: () => {
+			if (controller.signal.aborted) return;
+			window.clearTimeout(timer);
+			timer = window.setTimeout(expire, ms);
+		},
 		clear: () => {
 			window.clearTimeout(timer);
 			controller.signal.removeEventListener("abort", deadline.clear);
 		},
 	};
-	const timer = window.setTimeout(() => {
-		deadline.expired = true;
-		controller.abort();
-	}, ms);
 	controller.signal.addEventListener("abort", deadline.clear);
 	return deadline;
 }
@@ -206,22 +219,22 @@ export function useBrowserStream(client: BrowserClient, browserId: string | null
 				}
 				const open = new AbortController();
 				controller = open;
-				/** Armed only around the connect: the open stream has no deadline. The host call just below waits on the human's consent prompt, so it has none either. */
-				let connecting: Deadline | undefined;
+				/** The connect's deadline, then the open stream's silence watch: whichever of them aborted `open` is why that abort is a failure and not the View's own. The host call just below is not timed here: it waits on the human's consent prompt, and the MCP SDK fails it after its own 60 s, a plain failure (reconnecting, and the next backoff tick asks again). */
+				let deadline: Deadline | undefined;
 				try {
 					const grant = await client.stream(browserId);
 					if (!alive) return;
 					if (open.signal.aborted) continue;
 					grantRef.current = grant;
-					connecting = arm(open, CONNECT_TIMEOUT_MS);
+					deadline = arm(open, CONNECT_TIMEOUT_MS);
 					let response: Response;
 					try {
 						response = await fetch(`${grant.origin}/s/${grant.token}${frozen ? "?frames=0" : ""}`, { signal: open.signal, cache: "no-store" });
 					} catch (cause) {
-						if (open.signal.aborted && !connecting.expired) throw cause;
-						throw new Error(`The live picture could not be reached (${connecting.expired ? silence(CONNECT_TIMEOUT_MS) : failureText(cause)}). A host that blocks http://127.0.0.1 does this.`);
+						if (open.signal.aborted && !deadline.expired) throw cause;
+						throw new Error(`The live picture could not be reached (${deadline.expired ? silence(CONNECT_TIMEOUT_MS) : failureText(cause)}). A host that blocks http://127.0.0.1 does this.`);
 					} finally {
-						connecting.clear();
+						deadline.clear();
 					}
 					if (!response.ok || response.body === null) throw new Error(`The live picture answered ${response.status}.`);
 					setError(null);
@@ -229,18 +242,28 @@ export function useBrowserStream(client: BrowserClient, browserId: string | null
 					backoff = BACKOFF_START_MS;
 					const reader = response.body.getReader();
 					const messages = new Reader();
-					for (;;) {
-						const step = await reader.read();
-						if (step.done) break;
-						for (const message of messages.push(step.value)) handle(message);
+					// From here the stream is held to silence: whatever arrives (a picture, a state, the pack's heartbeat) proves it is alive.
+					deadline = arm(open, STREAM_SILENCE_MS);
+					try {
+						for (;;) {
+							const step = await reader.read();
+							if (step.done) break;
+							deadline.restart();
+							for (const message of messages.push(step.value)) handle(message);
+						}
+					} catch (cause) {
+						if (!deadline.expired) throw cause;
+						throw new Error(`The live picture went quiet (nothing arrived for ${Math.round(STREAM_SILENCE_MS / 1000)} s).`);
+					} finally {
+						deadline.clear();
 					}
 					// The pack ended it: its browser closed or the token was dropped. A new token tells which.
 					grantRef.current = null;
 					await rest(ENDED_RETRY_MS);
 				} catch (cause) {
 					if (!alive) return;
-					// An abort the View made is not a failure; one the connect's own deadline made is.
-					if (open.signal.aborted && connecting?.expired !== true) continue;
+					// An abort the View made is not a failure; one a deadline made is.
+					if (open.signal.aborted && deadline?.expired !== true) continue;
 					grantRef.current = null;
 					const detail = failureText(cause);
 					setError(detail);

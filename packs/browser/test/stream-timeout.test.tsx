@@ -17,8 +17,9 @@ import { act, useState } from "react";
 import type { BrowserState } from "../src/contracts";
 import { BrowserApp } from "../app/view/browser-app";
 import type { BrowserClient, ToolMount } from "../app/view/browser-client";
-import { CONNECT_TIMEOUT_MS, INPUT_TIMEOUT_MS, type BrowserStream, useBrowserStream } from "../app/view/use-browser-stream";
+import { CONNECT_TIMEOUT_MS, INPUT_TIMEOUT_MS, STREAM_SILENCE_MS, type BrowserStream, useBrowserStream } from "../app/view/use-browser-stream";
 import { encode, KIND_PICTURE, KIND_STATE } from "../src/wire";
+import { HEARTBEAT_MS } from "../src/stream";
 import { mount, unmountAll } from "./dom-harness";
 
 const LIVE: BrowserState = {
@@ -132,6 +133,11 @@ class Loopback {
 		for (const controller of this.#open.splice(0)) controller.close();
 	}
 
+	/** The pack's heartbeat: the browser's state again, on every stream it is serving. */
+	beat(): void {
+		for (const controller of this.#open) for (const part of encode(KIND_STATE, RECOVERED)) if (part.length > 0) controller.enqueue(part);
+	}
+
 	async close(): Promise<void> {
 		for (const resolve of [...this.#heldStreams.splice(0), ...this.#heldInputs.splice(0)]) resolve(new Response("closing", { status: 503 }));
 		await this.#server.stop(true);
@@ -182,8 +188,11 @@ class VirtualClock {
 /** What the hook renders into, read back after every commit. */
 class Probe {
 	setId: (id: string | null) => void = () => {};
+	/** How many times the hook's host component has rendered. */
+	renders = 0;
 	#last: BrowserStream | undefined;
 	set last(stream: BrowserStream) {
+		this.renders += 1;
 		this.#last = stream;
 	}
 	get now(): BrowserStream {
@@ -204,10 +213,13 @@ class Grants {
 	calls = 0;
 	/** While set, the host's answer waits: a human has not yet answered the consent prompt. */
 	gate: Promise<void> | undefined;
+	/** When set, the host's answer is this failure. */
+	fail: string | undefined;
 	constructor(private readonly origin: string) {}
 	stream = async (_browserId: string) => {
 		this.calls += 1;
 		await this.gate;
+		if (this.fail !== undefined) throw new Error(this.fail);
 		return { origin: this.origin, token: "t".repeat(32) };
 	};
 }
@@ -280,6 +292,15 @@ async function scenario(options: { origin?: string } = {}) {
 		canvas,
 		start: () => act(async () => probe.setId("b1")),
 		advance: (ms: number) => act(async () => clock.advance(ms)),
+		/** A still page for `ms` of virtual time: every HEARTBEAT_MS the pack repeats the state, and the View has heard it before time moves on. */
+		still: async (ms: number) => {
+			for (let passed = 0; passed < ms; passed += HEARTBEAT_MS) {
+				await act(async () => clock.advance(HEARTBEAT_MS));
+				const heard = clock.requested.length;
+				loopback.beat();
+				await until("the View hears the heartbeat", () => clock.requested.length > heard);
+			}
+		},
 		/** Send the human's input; `outcome` settles with what the hook said of it: `sent`, or the rejection's text. Boxed so awaiting `send` does not wait for the answer. */
 		send: async (): Promise<{ outcome: Promise<string> }> => {
 			let outcome!: Promise<string>;
@@ -339,7 +360,7 @@ describe("a loopback connect that is accepted and never answered", () => {
 	}, 20_000);
 
 	test("goes live when the pack answers again, leaves no deadline running on the open stream, and starts the ladder over after it", async () => {
-		const { loopback, grants, probe, clock, canvas, start, advance } = await scenario();
+		const { loopback, grants, probe, clock, canvas, start, advance, still } = await scenario();
 		await start();
 		await until("attempt 1 reaches the pack", () => loopback.streamRequests === 1);
 		await advance(CONNECT_TIMEOUT_MS);
@@ -356,10 +377,10 @@ describe("a loopback connect that is accepted and never answered", () => {
 		expect(probe.now.error).toBeNull();
 		expect(probe.now.state?.tabs[0]?.title).toBe("Recovered page");
 		expect(grants.calls).toBe(3);
-		// Fails if the connect deadline is not cleared once the headers arrive: it would abort a healthy stream five seconds in.
-		expect(clock.pending).toEqual([]);
+		// Fails if the connect deadline is not cleared once the headers arrive: it would abort a healthy stream five seconds in. The only timer left is the stream's silence watch.
+		expect(clock.pending).toEqual([STREAM_SILENCE_MS]);
 
-		await advance(60_000);
+		await still(60_000);
 		await quiet();
 		expect(probe.now.connection).toBe("live");
 		expect(loopback.streamRequests).toBe(3);
@@ -368,7 +389,7 @@ describe("a loopback connect that is accepted and never answered", () => {
 		// The pack ends the stream, and its next connect hangs again: the wait is the FIRST rung, not the fourth the earlier failures had reached.
 		loopback.mode = "hang";
 		loopback.endStreams();
-		await until("the ended stream is noticed", () => clock.pending.length === 1);
+		await until("the ended stream is noticed: its silence watch is gone and the short retry is armed", () => clock.pending.length === 1 && clock.pending[0] !== STREAM_SILENCE_MS);
 		await advance(clock.pending[0] as number);
 		await until("attempt 4 reaches the pack", () => loopback.streamRequests === 4);
 		await advance(CONNECT_TIMEOUT_MS);
@@ -377,7 +398,7 @@ describe("a loopback connect that is accepted and never answered", () => {
 		expect(clock.pending).toEqual([500]);
 	}, 20_000);
 
-	test("the wait for the host's answer (a consent prompt nobody has answered yet) has no deadline: only the connect after it does", async () => {
+	test("the View puts no deadline of its own on the wait for the host's answer (a consent prompt nobody has answered yet): only the connect after it is timed", async () => {
 		const { loopback, grants, probe, clock, start, advance } = await scenario();
 		const consent = Promise.withResolvers<void>();
 		grants.gate = consent.promise;
@@ -394,6 +415,26 @@ describe("a loopback connect that is accepted and never answered", () => {
 		consent.resolve();
 		await until("the connect begins once the human has answered", () => loopback.streamRequests === 1);
 		expect(clock.pending).toEqual([CONNECT_TIMEOUT_MS]);
+	});
+
+	test("a host call that fails after the wait (the SDK's own 60 s request timeout on a prompt nobody answered) is a plain failure: reconnecting with its words, and the next backoff tick asks the host again", async () => {
+		const { loopback, grants, probe, clock, start, advance } = await scenario();
+		const prompt = Promise.withResolvers<void>();
+		grants.gate = prompt.promise;
+		await start();
+		await until("the host is asked", () => grants.calls === 1);
+		grants.fail = "MCP error -32001: Request timed out";
+		prompt.resolve();
+		await until("the View says it is reconnecting", () => probe.now.connection === "reconnecting");
+		expect(probe.now.error).toBe("MCP error -32001: Request timed out");
+		expect(loopback.streamRequests).toBe(0);
+		expect(clock.pending).toEqual([BACKOFF_LADDER[0] as number]);
+
+		grants.fail = undefined;
+		grants.gate = undefined;
+		await advance(BACKOFF_LADDER[0] as number);
+		await until("the next tick asks the host again", () => grants.calls === 2);
+		await until("the connect begins", () => loopback.streamRequests === 1);
 	});
 
 	test("an answer that arrives after the abort paints nothing and costs no extra retry", async () => {
@@ -438,7 +479,7 @@ describe("a loopback connect that is refused", () => {
 
 describe("the human's input", () => {
 	test("a POST the pack never answers is cut at its deadline, says so, closes its socket, and restarts the stream", async () => {
-		const { loopback, probe, clock, start, advance, send } = await scenario();
+		const { loopback, probe, clock, start, advance, still, send } = await scenario();
 		loopback.mode = "answer";
 		await start();
 		await until("the stream is live", () => probe.now.connection === "live" && probe.now.picture !== null);
@@ -446,14 +487,16 @@ describe("the human's input", () => {
 		const { outcome } = await send();
 		await until("the POST reaches the pack", () => loopback.inputRequests === 1);
 		// Fails if the POST has no deadline: input would hang for good.
-		expect(clock.pending).toEqual([INPUT_TIMEOUT_MS]);
+		expect(clock.pending).toEqual([STREAM_SILENCE_MS, INPUT_TIMEOUT_MS]);
 
-		await advance(INPUT_TIMEOUT_MS);
+		// The pack keeps repeating its state, so the POST's deadline is the only one in play.
+		await still(INPUT_TIMEOUT_MS - HEARTBEAT_MS);
+		await advance(HEARTBEAT_MS);
 		expect(await outcome).toContain("no answer within 8 s");
 		await until("the pack sees the POST's socket close", () => loopback.inputsGone === 1);
 		// A page that took no input may have a dead stream too: a fresh connect, not the old one.
 		await until("the stream reconnects", () => loopback.streamRequests === 2);
-		await until("no timer is left armed", () => clock.pending.length === 0);
+		await until("only the new stream's silence watch is armed", () => clock.pending.length === 1 && clock.pending[0] === STREAM_SILENCE_MS);
 		expect(probe.now.connection).toBe("live");
 	}, 20_000);
 
@@ -465,7 +508,8 @@ describe("the human's input", () => {
 		await until("the stream is live", () => probe.now.connection === "live");
 
 		expect(await (await send()).outcome).toBe("sent");
-		expect(clock.pending).toEqual([]);
+		// The POST's own deadline is gone; only the stream's silence watch remains.
+		expect(clock.pending).toEqual([STREAM_SILENCE_MS]);
 		await quiet();
 		expect(loopback.streamRequests).toBe(1);
 	});
@@ -478,8 +522,67 @@ describe("the human's input", () => {
 		await until("the stream is live", () => probe.now.connection === "live");
 
 		expect(await (await send()).outcome).toBe("a task owns the page");
-		expect(clock.pending).toEqual([]);
+		expect(clock.pending).toEqual([STREAM_SILENCE_MS]);
 	});
+});
+
+describe("an open stream that goes quiet", () => {
+	test("the pack's heartbeat is well inside the silence that condemns a stream, and that silence is seconds, never minutes", () => {
+		// Fails if the pack's repeat is slowed (or the View's patience cut) until a healthy still page reads as a stall.
+		expect(HEARTBEAT_MS * 2).toBeLessThanOrEqual(STREAM_SILENCE_MS);
+		// A frozen picture is told within this long.
+		expect(STREAM_SILENCE_MS).toBeLessThanOrEqual(10_000);
+	});
+
+	test("a pack that stops writing mid-stream is cut at the silence deadline, counted from the last thing it sent, into reconnecting; the View is live again when the pack answers", async () => {
+		const { loopback, grants, probe, clock, canvas, start, advance, still } = await scenario();
+		loopback.mode = "answer";
+		await start();
+		await until("the stream is live", () => probe.now.connection === "live" && probe.now.picture !== null && canvas.draws.length > 0);
+		// Fails if an open stream has no watch (a stalled one would read "live" for good) or keeps the connect's 5 s deadline.
+		expect(clock.pending).toEqual([STREAM_SILENCE_MS]);
+
+		// The pack repeats the state for ten seconds, then stops writing with the socket still open.
+		await still(10_000);
+		await advance(STREAM_SILENCE_MS - 1);
+		await quiet();
+		// Fails if the silence is counted from the connect, not from the last thing sent: a stream that beat for ten seconds would already be cut.
+		expect(probe.now.connection).toBe("live");
+		expect(loopback.streamsGone).toBe(0);
+
+		await advance(1);
+		await until("the View says it is reconnecting", () => probe.now.connection === "reconnecting");
+		expect(probe.now.error).toBe("The live picture went quiet (nothing arrived for 6 s).");
+		// Fails if the stalled socket is only forgotten, not closed.
+		await until("the pack sees the stalled stream's socket close", () => loopback.streamsGone === 1);
+		// One failure on the ladder's first rung, and nothing else armed.
+		expect(clock.pending).toEqual([BACKOFF_LADDER[0] as number]);
+
+		await advance(BACKOFF_LADDER[0] as number);
+		await until("the View is live again on a new stream", () => loopback.streamRequests === 2 && probe.now.connection === "live" && probe.now.error === null);
+		expect(grants.calls).toBe(2);
+	}, 20_000);
+
+	test("a still page whose pack keeps repeating the state never reconnects however long it sits, and the repeats cost no render", async () => {
+		const { loopback, grants, probe, clock, start, still } = await scenario();
+		loopback.mode = "answer";
+		await start();
+		await until("the stream is live", () => probe.now.connection === "live" && probe.now.picture !== null);
+		await quiet();
+		const renders = probe.renders;
+
+		// Four virtual minutes: forty times the silence deadline.
+		await still(240_000);
+		// Fails if hearing something does not push the deadline back (a healthy stream would be cut six seconds in).
+		expect(probe.now.connection).toBe("live");
+		expect(loopback.streamRequests).toBe(1);
+		expect(grants.calls).toBe(1);
+		expect(loopback.streamsGone).toBe(0);
+		// Fails if every push leaves its old timer behind.
+		expect(clock.pending).toEqual([STREAM_SILENCE_MS]);
+		// The repeat is the state the View already shows: dropped before React sees it.
+		expect(probe.renders).toBe(renders);
+	}, 30_000);
 });
 
 describe("a View that is torn down", () => {
@@ -487,17 +590,20 @@ describe("a View that is torn down", () => {
 		{ name: "while its connect is still waiting for an answer", socket: "stream" },
 		{ name: "while it waits out a backoff", socket: null },
 		{ name: "while an input POST is still waiting for an answer", socket: "input" },
+		{ name: "while its stream is open and live", socket: "open" },
 	] as const;
 
 	test.each(phases)("lets go of every timer, socket and retry $name", async ({ socket }) => {
 		const { loopback, grants, probe, clock, start, advance, send } = await scenario();
 		let outcome: Promise<string> | undefined;
-		if (socket === "input") {
+		if (socket === "input" || socket === "open") {
 			loopback.mode = "answer";
 			await start();
 			await until("the stream is live", () => probe.now.connection === "live");
-			({ outcome } = await send());
-			await until("the POST reaches the pack", () => loopback.inputRequests === 1);
+			if (socket === "input") {
+				({ outcome } = await send());
+				await until("the POST reaches the pack", () => loopback.inputRequests === 1);
+			}
 		} else {
 			await start();
 			await until("the stream request reaches the pack", () => loopback.streamRequests === 1);
@@ -512,7 +618,7 @@ describe("a View that is torn down", () => {
 		// Fails if a deadline or backoff timer survives the View.
 		expect(clock.pending).toEqual([]);
 		// Fails if the in-flight request is only forgotten, not aborted: its socket would stay open.
-		if (socket === "stream") await until("the pack sees the connect's socket close", () => loopback.streamsGone === 1);
+		if (socket === "stream" || socket === "open") await until("the pack sees the stream's socket close", () => loopback.streamsGone === 1);
 		if (socket === "input") {
 			await until("the pack sees the POST's socket close", () => loopback.inputsGone === 1);
 			expect(await outcome).not.toBe("sent");
@@ -593,6 +699,35 @@ describe("the Browser View as the human sees it", () => {
 		await act(async () => clock.advance(500));
 		await until("the recovered page shows", () => dom.text().includes("Recovered page"));
 		expect(dom.text()).not.toContain("Reconnecting to the browser");
+		expect(unexpected).toEqual([]);
+	}, 20_000);
+
+	test("a stream that goes quiet mid-session shows 'Reconnecting to the browser' with why, and the banner clears once the pack answers", async () => {
+		const loopback = listener();
+		loopback.mode = "answer";
+		loopback.pictures = false;
+		const { app, unexpected } = hostOn(loopback);
+		const deliver: { toolState?: (mount: ToolMount) => void } = {};
+		function Late() {
+			const [toolState, setToolState] = useState<ToolMount | null>(null);
+			deliver.toolState = setToolState;
+			return <BrowserApp app={app} toolState={toolState} />;
+		}
+		const dom = await mount(<Late />);
+		const clock = new VirtualClock();
+		clock.install();
+
+		await act(async () => deliver.toolState?.({ state: LIVE, seq: 1 }));
+		await until("the live page shows", () => dom.text().includes("Recovered page"));
+		expect(dom.text()).not.toContain("Reconnecting to the browser");
+
+		await act(async () => clock.advance(STREAM_SILENCE_MS));
+		await until("the banner appears", () => dom.text().includes("Reconnecting to the browser"));
+		expect(dom.text()).toContain("went quiet");
+
+		await act(async () => clock.advance(500));
+		await until("the banner clears", () => !dom.text().includes("Reconnecting to the browser"));
+		expect(dom.text()).toContain("Recovered page");
 		expect(unexpected).toEqual([]);
 	}, 20_000);
 });
