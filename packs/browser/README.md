@@ -186,12 +186,17 @@ so sites treat it as one:
   driven over DevTools (`true`), so a person signing in is not disguised
   (doc 77 §12 decision 2).
 - **A throwaway agent browser is the one exception.** A browser opened
-  without a profile, and `browser_read`'s reader, hold nothing and are not meant
-  for signing in; they do work on the public web that a stock automation
-  browser is turned away from. Nothing stops a person or the model from typing
-  a login into a throwaway, though, and a Google sign-in there would be
-  disguised: sign in through a saved profile (the View), where the rule above
-  holds. They present as the Chrome a person would run
+  without a profile holds nothing and is not meant for signing in; it does
+  work on the public web that a stock automation browser is turned away from.
+  Nothing stops a person or the model from typing a login into a throwaway,
+  though, and a Google sign-in there would be disguised: sign in through a
+  saved profile (the View), where the rule above holds. **Status of this
+  exception: the lead's reading of the owner's parity ruling with OMP's browser
+  (doc 77 §12 decision 8, 2026-10-02), awaiting his signature; he may flip it.**
+  The owner ruled parity ("no request or feature loss or performance or
+  optimization loss from the OMP version"); he did not sign the reversal of
+  decision 2, the automation-hiding switch, the patched library or the GPU
+  mask. A throwaway presents as the Chrome a person would run
   (`src/engines/agent-browser.ts`, `src/engines/agent-puppeteer.ts`):
   - `navigator.webdriver` is `false` in the page and its iframes: the
     `AutomationControlled` Blink switch, a launch argument, in a headless
@@ -234,19 +239,33 @@ so sites treat it as one:
   - On a machine with no GPU, WebGL reports a common integrated GPU of the
     platform instead of SwiftShader, in the page, in each same-origin and
     cross-origin frame and in each dedicated and shared worker (sent to each
-    before it runs; a service worker is not masked), with the one float shader precision a real GPU reports,
-    and the replaced functions read as native, named code to a frame's own
-    `Function.prototype.toString` as well. This is the only page script
-    besides the loopback error reporter; it exists only when the binary was
-    seen rendering in software. Texture and uniform limits, the extension
-    list and the rendered image's hash stay SwiftShader's, and so does an
-    error thrown through a replaced function (it names a wrapper frame).
+    before it runs; a service worker is not masked), with the one float shader
+    precision a real GPU reports, and the replaced functions read as native,
+    named code to their own realm's `Function.prototype.toString`. This is the
+    only page script besides the loopback error reporter; it exists only when
+    the binary was seen rendering in software. Texture and uniform limits, the
+    extension list and the rendered image's hash stay SwiftShader's, and so
+    does an error thrown through a replaced function (it names a wrapper
+    frame). **Known gap, measured and open:** a same-origin frame's own
+    `Function.prototype.toString` asked about this window's replaced functions
+    (or this window's about the frame's) answers `function () { [native code] }`
+    with no name. Closing it took a call from every frame into a function the
+    page can replace, which handed a page that wrapped `toString` before making
+    a frame the per-process secret and every masked name; that call was removed
+    (detect row `tostring-wrapper-heard`). The row `native-source-cross-realm`
+    flags on a host with no GPU for the throwaway, as it does for OMP's browser.
 
   Nothing else is changed: no plugin lists, fonts, audio or hardware numbers
   are invented, and a Chromium build without H.264 is not made to claim it.
   `bench/sites/detect.mjs` is a local page that reads these signals,
   `test/agent-browser.test.ts` runs it against both kinds of browser, and
   `bench/detect-columns.mjs` runs one column of the comparison with OMP's.
+  **Not measured:** the cross-realm `toString` gap above; a service worker's
+  GPU; the headful throwaway path (the patched library with a window, no
+  `AutomationControlled` switch) is not run and no test covers it; a real
+  GPU-less machine, Linux, macOS and Edge; `browser_task`'s agents themselves
+  (browser-use and jev; only a stand-in second CDP client); and what commercial
+  bot walls read beyond property tells (`bench/detect-report-2026-10-02.md`).
 - **Chrome's own password saving is off** in the profiles the pack owns
   (`credentials_enable_service` and `profile.password_manager_enabled` in the
   profile's Preferences, the chrome://settings/passwords toggle). The pack
@@ -254,13 +273,15 @@ so sites treat it as one:
   used to hide — would take focus from the page after every sign-in.
 
 `browser_read`'s reader is its own headless browser, logged out and throwaway.
-It avoids the automation tells above (an agent browser's launch, driver and
-screen) so the first-line check of a public page does not turn it away, and
-nothing more: a site that still refuses it (a bot check, a CAPTCHA, a login
-wall) is reported `blocked`; the reader never retries, never solves a check and
-never works around a refusal. That the reader avoids those tells at all is
-covered by the owner's parity ruling of 2026-10-02 (doc 77 §12 decision 2, a
-reading the owner may reverse).
+**It is stock puppeteer's Chrome and none of the above is applied to it:** its
+User-Agent says HeadlessChrome, `navigator.webdriver` is `true`, CDP `Runtime`
+is on. A site that refuses it (a bot check, a CAPTCHA, a login wall) is
+reported `blocked`; the reader never retries, never solves a check and never
+works around a refusal. Shaping it like a throwaway is one line,
+`READER_PRESENTS_AS_CHROME` in `src/engines/agent-browser.ts` (`false`), and
+it is OFF on purpose: OMP has no reader, so the owner's parity ruling does not
+reach it, and it waits on his yes (doc 77 §12, "Still open"). The shaped path
+is kept and tested (`launchReader({ presentAsChrome: true })`).
 
 ## Tools
 
