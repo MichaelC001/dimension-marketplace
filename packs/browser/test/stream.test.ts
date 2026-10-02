@@ -102,7 +102,8 @@ afterEach(async () => {
  */
 function frozenClock(): { advance(ms: number): void } {
 	const real = performance.now;
-	let now = real.call(performance);
+	// A whole millisecond: the clock then moves in whole milliseconds and "exactly the heartbeat" is exact, not 1999.9999999.
+	let now = Math.floor(real.call(performance));
 	performance.now = () => now;
 	restores.push(() => {
 		performance.now = real;
