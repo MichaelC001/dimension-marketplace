@@ -58,7 +58,7 @@ export interface CodeHostOptions {
   refusePasswordFields?: boolean;
   /** JPEG instead of WebP for the screenshot the model sees. Default false. */
   excludeWebP?: boolean;
-  /** The server registers `browser_task` (it does, unconditionally, in this build): the realm's password refusal then names it. Default true. */
+  /** The server registers `browser_task` (RealmInit.taskCredential): the realm's password refusal then names it. Default false: a refusal never sends the model to a tool the server was not told it offers. */
   taskCredential?: boolean;
   /** Root of the per-session folders a cell keeps an over-cap output in. Absent: none is kept. */
   artifactsRoot?: string;
@@ -112,7 +112,7 @@ export class CodeHost implements CodeHostPort {
         ...(this.#options.cwd === undefined ? {} : { cwd: this.#options.cwd }),
         refusePasswordFields: this.#options.refusePasswordFields ?? true,
         excludeWebP: this.#options.excludeWebP ?? false,
-        taskCredential: this.#options.taskCredential ?? true,
+        taskCredential: this.#options.taskCredential ?? false,
         timing: this.#timing,
         onEmpty: () => {
           if (this.#sessions.get(id) === created) this.#sessions.delete(id);
@@ -160,7 +160,7 @@ function numberEnv(env: Record<string, string | undefined>, name: string, fallba
  * `DIMENSION_BROWSER_CODE_IDLE_MS` (default 1,800,000, 0 = never), `DIMENSION_BROWSER_FREEZE_IDLE_MS` (20,000, 0 = never), `DIMENSION_BROWSER_SCREENSHOT_DIR`,
  * `DIMENSION_BROWSER_CODE_HEAP_MB`, `DIMENSION_BROWSER_CODE_MEMORY_MB` (1,536, 0 = no limit), `DIMENSION_BROWSER_CODE_ISOLATION` (`thread`).
  */
-export function createRuntimeCodeHost(runtime: BrowserRuntime, env: Record<string, string | undefined> = process.env): CodeHost {
+export function createRuntimeCodeHost(runtime: BrowserRuntime, { taskCredential, env = process.env }: { taskCredential: boolean; env?: Record<string, string | undefined> }): CodeHost {
   // Why the rung is a separate process, checked on Node 22.12 (--experimental-permission) and 24.12 (--permission): a worker thread INHERITS the permission model (reads and child processes were denied inside it, and
   // creating one needs --allow-worker). What cannot be done is to restrict the cell alone: the model is process-wide, and this server itself needs fs and child_process (Chrome, Python, the files it keeps).
   const isolation = env.DIMENSION_BROWSER_CODE_ISOLATION?.trim() || "thread";
@@ -170,6 +170,7 @@ export function createRuntimeCodeHost(runtime: BrowserRuntime, env: Record<strin
   const screenshotDir = env.DIMENSION_BROWSER_SCREENSHOT_DIR?.trim();
   return new CodeHost({
     browsers: new RuntimeCodeBrowsers(runtime.codeSeam(), { idleMs: numberEnv(env, "DIMENSION_BROWSER_CODE_IDLE_MS", CODE_IDLE_MS, "milliseconds") }),
+    taskCredential,
     env,
     headless: env.DIMENSION_BROWSER_HEADLESS !== "false",
     artifactsRoot: join(env.DIMENSION_BROWSER_ROOT || defaultRootDir(), "artifacts"),
