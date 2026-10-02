@@ -65,6 +65,7 @@ import {
 } from "./page-scripts.js";
 import { watchPageLog } from "./page-log.js";
 import { type AdmittedInput, inputCall } from "../input.js";
+import { environmentLaunchArgs } from "./launch-env.js";
 import { type HeadfulIdentity, identityPerBinary, type ResolvedBrowser, resolveBrowser, turnOffPasswordSaving, UA_HINTS, viewLaunchOptions, withTimeout } from "./launch.js";
 import type { TabRef } from "../code/contracts.js";
 import type { DialogPolicy, EngineDriver, EngineOptions, EngineState, EvalOutcome, FieldRead, LiveFrame, NavigateTabOptions, OpenTabOptions, PageRead, PageReader, PasswordSource, PerformOutcome, ReadOutcome, ReadPolicy, WaitCondition } from "./types.js";
@@ -281,7 +282,7 @@ async function launchChromium(options: EngineOptions, release: () => void): Prom
 		mkdirSync(userDataDir, { recursive: true, mode: 0o700 });
 		turnOffPasswordSaving(userDataDir);
 		browser = await puppeteer.launch(viewLaunchOptions({
-			browser: resolved, userDataDir, headless, args: CHROMIUM_ARGS, timeout: LAUNCH_TIMEOUT_MS,
+			browser: resolved, userDataDir, headless, args: [...CHROMIUM_ARGS, ...environmentLaunchArgs()], timeout: LAUNCH_TIMEOUT_MS,
 			...(identity ? { userAgent: identity.userAgent } : {}),
 		}));
 		console.error(`[browser] launched ${resolved.app} (${resolved.executablePath})${headless ? ", headless" : ""} on ${userDataDir}`);

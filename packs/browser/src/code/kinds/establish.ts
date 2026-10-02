@@ -73,13 +73,13 @@ async function establishRelay(kind: Extract<BrowserKind, { kind: "relay" }>, opt
         : `The Dimension browser relay is not reachable at ${cdpUrl}. Start it with \`node app/server.mjs --relay\` (or check the endpoint), and make sure the Dimension Browser Relay extension is loaded in Chrome.`,
     );
   }
-  return { kind: "relay", cdpUrl, label: describeBrowser(kind) };
+  return { kind: "relay", cdpUrl, label: describeBrowser(kind, { cdpUrl }) };
 }
 
 async function establishConnected(kind: Extract<BrowserKind, { kind: "connected" }>, opts: EstablishOptions): Promise<AttachTarget> {
   const cdpUrl = normalizeConnectedCdpUrl(kind.cdpUrl);
   await waitForCdp(cdpUrl, (opts.timings ?? KIND_TIMINGS).connectedMs, opts.signal);
-  return { kind: "connected", cdpUrl, label: describeBrowser(kind) };
+  return { kind: "connected", cdpUrl, label: describeBrowser(kind, { cdpUrl }) };
 }
 
 async function connectCmuxSocket(kind: Extract<BrowserKind, { kind: "cmux" }>): Promise<CmuxSocketClient> {
