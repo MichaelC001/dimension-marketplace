@@ -64,7 +64,6 @@ import {
 	UA_HINTS_SCRIPT,
 } from "./page-scripts.js";
 import { watchPageLog } from "./page-log.js";
-import type { TabRef } from "../code/contracts.js";
 import { ToolError } from "../code/errors.js";
 import { type AdmittedInput, inputCall } from "../input.js";
 import { type AttachTarget, connectAttached, pickAttachedPage, relayTarget } from "./attach.js";

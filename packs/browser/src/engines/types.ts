@@ -1,4 +1,3 @@
-import type { TabRef } from "../code/contracts.js";
 import type { AdmittedInput } from "../input.js";
 import type { AttachTarget } from "./attach.js";
 import type { BrowserAction, BrowserApp, BrowserRegion, ElementInspection, HandledDialog, LogEntry, ModelShot, PageElements, PageScroll, ShotRequest, TabInfo, Viewport } from "../contracts.js";
