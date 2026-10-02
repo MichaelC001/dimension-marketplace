@@ -7,9 +7,9 @@
  *  direct channel calls) and pictures through `runtime.watchFrames` (the same source the stream reads).
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import type { BrowserRuntime } from "../src/runtime";
+import type { BrowserRuntime, BrowserRuntimeOptions } from "../src/runtime";
 import type { LiveFrame } from "../src/engines/types";
-import { BROWSER_TEST_TIMEOUT_MS, createRuntime, describeWithChrome, teardown, waitUntil } from "./fixture";
+import { BROWSER_TEST_TIMEOUT_MS, createRoot, describeWithChrome, failureCode, newRuntime, teardown, waitUntil, within } from "./fixture";
 
 const VIEWPORT = { width: 800, height: 600 };
 
@@ -40,10 +40,10 @@ afterEach(async () => {
 	await teardown();
 }, BROWSER_TEST_TIMEOUT_MS);
 
-async function openPage(): Promise<{ runtime: BrowserRuntime; browserId: string; url: string }> {
+async function openPage(options: Omit<BrowserRuntimeOptions, "rootDir"> = {}): Promise<{ runtime: BrowserRuntime; browserId: string; url: string }> {
 	const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(PAGE, { headers: { "content-type": "text/html; charset=utf-8" } }) });
 	servers.push(server);
-	const { runtime } = await createRuntime();
+	const runtime = newRuntime(await createRoot(), options);
 	// No profile: a throwaway browser, the only kind `eval` may read the page of.
 	const { browserId } = await runtime.open({ viewport: VIEWPORT });
 	const url = `http://127.0.0.1:${server.port}/`;
@@ -198,6 +198,45 @@ describeWithChrome("the human's input on a real page", () => {
 			expect(performance.now() - started).toBeLessThan(1_500);
 			void url;
 			await landing;
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"a batch waiting behind another View's stuck batch is answered input_timeout once its own bound is up, never applied afterwards, and the next batch still goes through",
+		async () => {
+			const bound = 400;
+			const { runtime, browserId } = await openPage({ inputBoundMs: bound });
+			// The runtime has no public door to a browser's driver; this test replaces its `input`, the way publish.test.ts does.
+			const seam = runtime as unknown as { byId: Map<string, { driver: { input(events: unknown): Promise<void> } }> };
+			const entry = seam.byId.get(browserId);
+			if (!entry) throw new Error("no entry");
+			// The page takes the first batch and does not acknowledge it, as a renderer stuck in a navigation would; the later ones go straight through.
+			const stuck = Promise.withResolvers<void>();
+			const reached: unknown[] = [];
+			const send = entry.driver.input.bind(entry.driver);
+			entry.driver.input = async (events) => {
+				reached.push(events);
+				if (reached.length === 1) await stuck.promise;
+				await send(events);
+			};
+
+			const first = failureCode(() => runtime.input(browserId, click(80, 40)));
+			await waitUntil("the first batch reaches the page", async () => reached.length, (count) => count === 1);
+			// Another View's batch, queued behind the first one: it is the one the View would give up on at 8 s.
+			const started = performance.now();
+			const queued = failureCode(() => runtime.input(browserId, click(80, 40)));
+			// Fails if the wait for its turn is not bounded: it would wait for the stuck batch forever.
+			expect(await within(bound + 2_000, "the queued batch to be answered", queued)).toBe("input_timeout");
+			expect(performance.now() - started).toBeLessThan(bound + 1_500);
+			expect(await first).toBe("input_timeout");
+			expect(reached).toHaveLength(1);
+
+			stuck.resolve();
+			await runtime.input(browserId, click(80, 40));
+			// Fails if a batch that was answered as too slow is still applied when its turn comes: the click would land after the View was told it did not.
+			expect(reached).toHaveLength(2);
+			expect((await log(runtime, browserId)).filter((entry) => entry.startsWith("click:"))).toHaveLength(2);
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);
