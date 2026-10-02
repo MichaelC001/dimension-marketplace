@@ -186,38 +186,63 @@ so sites treat it as one:
   driven over DevTools (`true`), so a person signing in is not disguised
   (doc 77 §12 decision 2).
 - **A throwaway agent browser is the one exception.** A browser opened
-  without a profile, and `browser_read`'s reader, hold nothing and sign nobody
-  in; they do work on the public web that a stock automation browser is turned
-  away from. They present as the Chrome a person would run (`src/engines/agent-browser.ts`):
+  without a profile, and `browser_read`'s reader, hold nothing and are not meant
+  for signing in; they do work on the public web that a stock automation
+  browser is turned away from. Nothing stops a person or the model from typing
+  a login into a throwaway, though, and a Google sign-in there would be
+  disguised: sign in through a saved profile (the View), where the rule above
+  holds. They present as the Chrome a person would run
+  (`src/engines/agent-browser.ts`, `src/engines/agent-puppeteer.ts`):
   - `navigator.webdriver` is `false` in the page and its iframes: the
-    `AutomationControlled` Blink switch, a launch argument.
+    `AutomationControlled` Blink switch, a launch argument, in a headless
+    browser only (Chrome pins an "unsupported command-line flag" bar to every
+    window it opens with it, so a throwaway with a window, `DIMENSION_BROWSER_HEADLESS=false`,
+    reports `true` like the View).
   - The screen, window and orientation agree with the page. Headless Chrome's
     own screen is 800x600, its window 780x580 and its orientation portrait
-    whatever the viewport, so a 1280x800 page sat on a smaller "screen". A
-    device-metrics override and the window bounds, made again on every resize
-    and for every tab.
-  - A page's own stack traces name no driver script and no file of yours:
-    puppeteer tags each script it runs `pptr:evaluate;<file and line of the
-    caller>`, which the pack strips from the two commands that carry it.
+    whatever the viewport. A device-metrics override, sent to every page
+    (a popup and a `target=_blank` tab too) before its first document runs,
+    and the window bounds, made again on every resize.
+  - It is driven by a patched copy of puppeteer-core (`patches/`, built into
+    `app/puppeteer-agent.mjs`; the View and saved profiles keep the stock
+    library): CDP `Runtime.enable`, which stock puppeteer sends in every page,
+    frame and worker and a page can detect, is never sent; puppeteer's own
+    reads of the page run in an isolated world, so a hook a site put on
+    `document.querySelector` never hears them; no script carries a driver name
+    or a file of yours. The patch derives from oh-my-pi's (MIT).
+    Without Runtime events, the page log (`browser_logs`) takes console
+    errors and warnings from the Console domain; an uncaught exception or
+    unhandled rejection is logged for pages served from this machine
+    (localhost, 127.x) only, because reading one on any other site would need
+    a script in its page.
+  - Puppeteer's default popup-blocker, IPC-flooding and pre-commit-input
+    switches and its `--disable-features` list are left out, so a page sees the
+    defaults of a Chrome a person runs.
   - On a machine with no GPU, WebGL reports a common integrated GPU of the
-    platform instead of SwiftShader. This is the only page script, it runs only
-    when the throwaway launch of the binary (the same one that reads its
-    identity) saw a software renderer, and a worker's OffscreenCanvas still
-    reports the host's renderer.
+    platform instead of SwiftShader, in the page, in each cross-origin frame and
+    in each dedicated and shared worker (sent to each before it runs). This is
+    the only page script besides the loopback error reporter; it exists only
+    when the binary was seen rendering in software. Shader precision formats,
+    limits and extension lists stay SwiftShader's.
 
   Nothing else is changed: no plugin lists, fonts, audio or hardware numbers
   are invented, and a Chromium build without H.264 is not made to claim it.
-  `bench/sites/detect.mjs` is a local page that reads these signals and
-  `test/agent-browser.test.ts` runs it against both kinds of browser.
+  `bench/sites/detect.mjs` is a local page that reads these signals,
+  `test/agent-browser.test.ts` runs it against both kinds of browser, and
+  `bench/detect-columns.mjs` runs one column of the comparison with OMP's.
 - **Chrome's own password saving is off** in the profiles the pack owns
   (`credentials_enable_service` and `profile.password_manager_enabled` in the
   profile's Preferences, the chrome://settings/passwords toggle). The pack
   keeps its own credentials; Chrome's save prompt — which `--enable-automation`
   used to hide — would take focus from the page after every sign-in.
 
-`browser_read`'s reader is its own headless browser, logged out and throwaway,
-and presents as an agent browser (above). A site that refuses it is reported
-`blocked`, never worked around.
+`browser_read`'s reader is its own headless browser, logged out and throwaway.
+It avoids the automation tells above (an agent browser's launch, driver and
+screen) so the first-line check of a public page does not turn it away, and
+nothing more: a site that still refuses it (a bot check, a CAPTCHA, a login
+wall) is reported `blocked`; the reader never retries, never solves a check and
+never works around a refusal. Whether the reader should avoid those tells at all
+is the owner's to confirm (doc 77 §12).
 
 ## Tools
 

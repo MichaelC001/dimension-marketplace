@@ -124,7 +124,9 @@ const FAVICONS = new FaviconCache();
  * beacons, link pings and Chrome's bundled default apps / component extensions
  * with background pages. `--metrics-recording-only` keeps UMA local and
  * upload-free. User-installed extensions in this profile are NOT disabled;
- * only Chrome's own default payload is.
+ * only Chrome's own default payload is. A page cannot see any of these, so a
+ * throwaway agent browser keeps them too (agent-browser.ts, AGENT_IGNORED_DEFAULT_ARGS,
+ * lists the switches it does drop).
  */
 const CHROMIUM_ARGS = [
 	"--no-first-run",
