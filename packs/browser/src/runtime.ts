@@ -104,7 +104,7 @@ import { type AdmittedInput, admitInput } from "./input.js";
 import { PublishApprovals } from "./publish-approval.js";
 import { type Publication, cancel, confirm, isPending, prepare, publishRecord, requirePending, validateMode, validateRecipe, waitSettled } from "./publish.js";
 import { blockedReason, DEFAULT_READ_CHARS, MAX_READ_CHARS, READ_TIMEOUT_MS, readPolicy, TIMEOUT_REASON } from "./read.js";
-import { ActionNotDispatched, BrowserRuntimeError, fail, MAX_PROFILES, ProfileStore, validateProfile } from "./store.js";
+import { ActionNotDispatched, fail, MAX_PROFILES, ProfileStore, validateProfile } from "./store.js";
 import { type RunningWorker, releaseSpare, startWorker } from "./task.js";
 
 // ---------------------------------------------------------------------------
@@ -156,12 +156,6 @@ const VIEW_GONE_MS = 30 * 60_000;
 const MAX_FRAMES_RETAINED = 8;
 /** A batch takes no new step after this long: a host times a tool call out (the desktop at 30 s). */
 const ACT_BUDGET_MS = 20_000;
-/**
- * The human's input batch is answered within this long of arriving, however long it waited its turn behind another View's batch (two Views
- * of one browser are allowed). The page's own bound (engines/puppeteer.ts, 5 s) covers only the time on the page. The View gives up on its
- * POST at 8 s (app/view/use-browser-stream.ts), so a slow page is always reported here, by its reason, and never by the View's clock.
- */
-const INPUT_BOUND_MS = 5_000;
 /** Dialogs a batch reports, as many as a state does. */
 const MAX_BATCH_DIALOGS = 5;
 const MAX_SNAPSHOT_CHARS = 20_000;
@@ -214,8 +208,6 @@ export interface BrowserRuntimeOptions {
 	headless?: boolean;
 	/** How long a batch (`actMany`) may go on taking steps; defaults to ACT_BUDGET_MS. */
 	actBudgetMs?: number;
-	/** How long a batch of the human's input may take from its arrival, queueing included (`input`); defaults to INPUT_BOUND_MS. */
-	inputBoundMs?: number;
 	/** How long a throwaway browser a chat opened may go without a call (and with no View joined) before it is closed; defaults to THROWAWAY_IDLE_MS, at most 2147483647 (a timer's limit). */
 	throwawayIdleMs?: number;
 	/** How long a browser the person took over may go with no View joined before the wheel goes back to the agent (a fallback for a View that vanished without handing it back); defaults to VIEW_GONE_MS, at most 2147483647. */
@@ -883,10 +875,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	async input(browserId: string, events: unknown): Promise<void> {
 		const entry = this.require(browserId);
 		const admitted = admitInput(events, entry.viewport);
-		/** Set once the caller has been told the batch took too long: a batch still waiting its turn is then dropped, not applied after the answer. */
-		let timedOut = false;
 		const run = async (): Promise<void> => {
-			if (timedOut) return;
 			if (entry.closed) fail("unknown_browser", "unknown or already closed browserId");
 			refuseWhileBusy(entry, "app");
 			refuseWhileSubmitting(entry);
@@ -912,17 +901,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		};
 		const next = entry.inputQueue.then(run, run);
 		entry.inputQueue = next.catch(() => undefined);
-		const bound = this.options.inputBoundMs ?? INPUT_BOUND_MS;
-		const { promise: tooSlow, reject } = Promise.withResolvers<never>();
-		const timer = setTimeout(() => {
-			timedOut = true;
-			reject(new BrowserRuntimeError("input_timeout", `the page did not take the input within ${bound / 1000} s`));
-		}, bound);
-		try {
-			return await Promise.race([next, tooSlow]);
-		} finally {
-			clearTimeout(timer);
-		}
+		return next;
 	}
 
 	/** A fresh PNG capture, retained so it can be annotated. */
