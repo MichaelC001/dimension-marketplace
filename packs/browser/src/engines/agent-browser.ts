@@ -150,7 +150,11 @@ export function maskedGraphics(platform: string): MaskedGraphics {
  * whose binary was found to render in software. Answers a masked vendor and
  * renderer for the two unmasked-info parameters, from a Proxy over the native
  * `getParameter` (so a wrong receiver still throws Chrome's own error), and
- * makes both it and `Function.prototype.toString` report `[native code]`.
+ * makes both it and `Function.prototype.toString` report `[native code]`. The
+ * lower float precisions are answered with the highest's, as ANGLE on a real GPU
+ * does. Not touched, and different from a real GPU's: texture and uniform limits
+ * and the extension list; a TypeError thrown through a wrapper shows its
+ * `Object.apply` frame (the same weakness oh-my-pi's scripts have).
  * Self-contained: it is serialized into the page, and into each dedicated and
  * shared worker (`graphicsMaskExpression`), whose OffscreenCanvas would
  * otherwise name the host's renderer beside the page's masked one.
@@ -183,6 +187,19 @@ export const SOFTWARE_GRAPHICS_MASK = (vendor: string, renderer: string, softwar
 		});
 		names.set(getParameter, "getParameter");
 		Object.defineProperty(Context.prototype, "getParameter", { value: getParameter, writable: true, configurable: true, enumerable: true });
+		// ANGLE on a real GPU reports one precision for every float type; SwiftShader gives the lower ones less. The higher type's
+		// own native answer stands in, so the object is a real WebGLShaderPrecisionFormat.
+		const LOW_FLOAT = 0x8df0;
+		const MEDIUM_FLOAT = 0x8df1;
+		const HIGH_FLOAT = 0x8df2;
+		const precision = new Proxy(Context.prototype.getShaderPrecisionFormat, {
+			apply(target, self, args) {
+				const type: unknown = args[1];
+				return Reflect.apply(target, self, type === LOW_FLOAT || type === MEDIUM_FLOAT ? [args[0], HIGH_FLOAT] : args);
+			},
+		});
+		names.set(precision, "getShaderPrecisionFormat");
+		Object.defineProperty(Context.prototype, "getShaderPrecisionFormat", { value: precision, writable: true, configurable: true, enumerable: true });
 	}
 };
 

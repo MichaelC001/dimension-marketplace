@@ -150,6 +150,11 @@ async function run() {
     const vendor = ext ? gl.getParameter(ext.UNMASKED_VENDOR_WEBGL) : gl.getParameter(gl.VENDOR);
     const renderer = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
     pageGpu = [vendor, renderer];
+    // ANGLE on a real GPU (Direct3D, Metal, Vulkan on a card) reports one precision for every float type; SwiftShader gives the lower ones less.
+    const precision = (kind) => ["LOW_FLOAT", "MEDIUM_FLOAT", "HIGH_FLOAT"].map((t) => { const p = gl.getShaderPrecisionFormat(gl[kind], gl[t]); return p ? p.rangeMin + "/" + p.rangeMax + "/" + p.precision : "none"; });
+    const fragment = precision("FRAGMENT_SHADER");
+    const claimsRealGpu = /angle \((intel|nvidia|amd|apple|qualcomm|ati)/i.test(renderer);
+    add("webgl-precision", "webgl", claimsRealGpu && new Set(fragment).size > 1, fragment, "a renderer that names a real GPU but reports different precisions for low, medium and high float (SwiftShader's signature)");
     add("webgl-renderer", "webgl", /swiftshader|llvmpipe|lavapipe|software|mesa offscreen|google inc\. \(google\)/i.test(vendor + " " + renderer), [vendor, renderer], "a software renderer (SwiftShader, llvmpipe) is the headless-server tell");
   }
 
