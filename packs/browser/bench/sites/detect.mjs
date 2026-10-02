@@ -12,6 +12,8 @@
 //   GET  /__detect/result    the rows the last visit posted (404 until one did)
 //   POST /__detect/result    harness/page only
 //   GET  /__detect/late      the one row that needs the driver to have acted on the page first (see `__detectLate`)
+//   GET  /__detect/opener    a page with one link, #go, that opens the detection page in a new tab (target=_blank)
+//   GET  /__detect/frame     the page a cross-origin iframe loads (an out-of-process frame): a few rows of its own, POSTed to /__detect/frame-result
 //
 // `rows` is a list of { id, group, tell, value, note }. `tell: true` is a signal a detector flags.
 import http from "node:http";
@@ -21,14 +23,30 @@ import { fileURLToPath } from "node:url";
 export const DETECT_HTML = String.raw`<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>detect</title>
 <style>body{font:13px/1.4 system-ui,sans-serif;margin:16px}td,th{border:1px solid #ccc;padding:2px 6px;text-align:left}.tell{background:#fdd}.ok{background:#dfd}pre{white-space:pre-wrap}</style>
-</head><body><h1>Headless detection</h1><p id="summary">running</p><table id="rows"></table><pre id="detect-json"></pre>
+</head><body><h1>Headless detection</h1><p id="summary">running</p><table id="rows"></table><pre id="hooked">HOOKED|none</pre><pre id="runtime-note"></pre><pre id="detect-json"></pre>
 <script>
 "use strict";
 // Hooks the late rows use. They are installed before anything else on the page runs, as a site's own script would.
 window.__calls = [];
+// A frame that is not a script of this page: a driver name, or one with no script URL (what an evaluated string is).
+const FOREIGN_FRAME = /pptr:|puppeteer|<anonymous>:\d+:\d+|__puppeteer_evaluation_script__/i;
+const hookedNote = document.getElementById("hooked");
+const setHooked = (text) => { hookedNote.textContent = text; };
 for (const [proto, name] of [[Document.prototype, "getElementById"], [Document.prototype, "querySelector"], [Document.prototype, "querySelectorAll"], [Document.prototype, "elementFromPoint"], [Element.prototype, "getAttribute"], [Element.prototype, "getBoundingClientRect"], [Element.prototype, "querySelectorAll"], [Element.prototype, "closest"], [Element.prototype, "matches"], [Window.prototype, "getComputedStyle"]]) {
   const native = proto[name];
-  proto[name] = function () { try { window.__calls.push(new Error().stack || ""); } catch (e) {} return native.apply(this, arguments); };
+  proto[name] = function () {
+    try {
+      const stack = new Error().stack || "";
+      window.__calls.push(stack);
+      const foreign = stack.split("\n").filter((l) => FOREIGN_FRAME.test(l))[0];
+      // The reader returns the page's text, so what a hook heard is part of it.
+      if (foreign) {
+        setHooked("HOOKED|" + name + " from " + foreign.trim());
+        new Image().src = "/__detect/hooked?call=" + encodeURIComponent(name + " from " + foreign.trim());
+      }
+    } catch (e) {}
+    return native.apply(this, arguments);
+  };
 }
 
 const rows = [];
@@ -74,6 +92,14 @@ const measureFont = (family) => {
 };
 
 async function run() {
+  // Known before the first await, so a driver that reads the page text at load (browser_read) already has it.
+  document.getElementById("runtime-note").textContent = "RUNTIME|" + (runtimeEnabled() ? "on" : "off");
+  // A cross-origin frame (localhost against 127.0.0.1 is another site): an out-of-process frame, reported to the server.
+  const other = location.hostname === "localhost" ? "127.0.0.1" : "localhost";
+  const crossFrame = document.createElement("iframe");
+  crossFrame.style.display = "none";
+  crossFrame.src = "http://" + other + ":" + location.port + "/__detect/frame";
+  document.body.appendChild(crossFrame);
   const nav = navigator;
   const ua = nav.userAgent;
   // The two slow answers (the server's view of our headers, a worker's view of navigator) start now and are added last.
@@ -115,12 +141,14 @@ async function run() {
   add("notification-permission", "permissions", asState !== status, [window.Notification && Notification.permission, status], "Notification.permission and permissions.query must agree (default = prompt); 'denied' beside 'prompt' is the classic headless contradiction");
 
   // --- WebGL ------------------------------------------------------------------------------------
+  let pageGpu = null;
   const gl = safe(() => document.createElement("canvas").getContext("webgl"), null);
   if (!gl) add("webgl-available", "webgl", true, "no WebGL context", "WebGL is unavailable");
   else {
     const ext = gl.getExtension("WEBGL_debug_renderer_info");
     const vendor = ext ? gl.getParameter(ext.UNMASKED_VENDOR_WEBGL) : gl.getParameter(gl.VENDOR);
     const renderer = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+    pageGpu = [vendor, renderer];
     add("webgl-renderer", "webgl", /swiftshader|llvmpipe|lavapipe|software|mesa offscreen|google inc\. \(google\)/i.test(vendor + " " + renderer), [vendor, renderer], "a software renderer (SwiftShader, llvmpipe) is the headless-server tell");
   }
 
@@ -208,8 +236,9 @@ async function run() {
   const worker = await workerP;
   add("worker-ua-headless", "worker", worker === null || /HeadlessChrome/.test(worker.userAgent), worker ? worker.userAgent : "no worker", "a dedicated worker's navigator.userAgent names HeadlessChrome");
   add("worker-webdriver", "worker", worker !== null && worker.webdriver === true, worker ? String(worker.webdriver) : "no worker", "a worker's navigator.webdriver is true");
-  add("webgl-worker-renderer", "worker", false, worker ? worker.gpu : "no worker", "information only: the renderer a worker's OffscreenCanvas reports (a page-script mask does not reach workers)");
-  add("worker-matches-page", "worker", worker !== null && (worker.userAgent !== ua || worker.platform !== nav.platform || worker.hardwareConcurrency !== nav.hardwareConcurrency || JSON.stringify(worker.languages) !== JSON.stringify(nav.languages)), worker ? { ua: worker.userAgent === ua, platform: worker.platform === nav.platform, cores: worker.hardwareConcurrency === nav.hardwareConcurrency, languages: JSON.stringify(worker.languages) === JSON.stringify(nav.languages) } : "no worker", "a patched page that leaves its workers unpatched disagrees with itself");
+  add("webgl-worker-renderer", "worker", worker !== null && Array.isArray(worker.gpu) && pageGpu !== null && /swiftshader|llvmpipe|lavapipe|software|mesa offscreen|google inc\. \(google\)/i.test(worker.gpu.join(" ")), worker ? worker.gpu : "no worker", "a software renderer in a worker's OffscreenCanvas (the page's own context may have been masked, the worker's is a second place to look)");
+  const gpuMatches = worker === null || pageGpu === null || !Array.isArray(worker.gpu) || (worker.gpu[0] === pageGpu[0] && worker.gpu[1] === pageGpu[1]);
+  add("worker-matches-page", "worker", worker !== null && (worker.userAgent !== ua || worker.platform !== nav.platform || worker.hardwareConcurrency !== nav.hardwareConcurrency || JSON.stringify(worker.languages) !== JSON.stringify(nav.languages) || !gpuMatches), worker ? { ua: worker.userAgent === ua, platform: worker.platform === nav.platform, cores: worker.hardwareConcurrency === nav.hardwareConcurrency, languages: JSON.stringify(worker.languages) === JSON.stringify(nav.languages), gpu: gpuMatches ? "same" : { page: pageGpu, worker: worker.gpu } } : "no worker", "a patched page that leaves its workers unpatched disagrees with itself (user agent, platform, cores, languages, and the GPU strings a page and a worker report)");
   add("worker-runtime-enabled", "driver", worker !== null && worker.runtime === true, worker ? String(worker.runtime) : "no worker", "a DevTools client has Runtime enabled in a dedicated worker (puppeteer does it for every worker it attaches)");
 
 
@@ -220,10 +249,12 @@ async function run() {
   return rows;
 }
 
-// Rows that need the driver to have acted on the page first (it called getElementById / getAttribute from a script it injected).
+// Rows that need the driver to have acted on the page first (a snapshot runs a script of its own in the page).
+// Any hook a site installs on a DOM API in the page's own world (these are installed first, as a site's would be) records the
+// stack of every call. A call that comes from a frame that is not the page's own script is the driver reading in the page's world.
 window.__detectLate = () => {
-  const marked = window.__calls.filter((s) => /pptr:|__puppeteer_evaluation_script__|puppeteer/i.test(s));
-  return { id: "driver-sourceurl", group: "driver", tell: marked.length > 0, value: marked.length ? marked[0].split("\n").filter((l) => /pptr:|puppeteer/i.test(l))[0].trim() : window.__calls.length + " driver calls, none named the driver", note: "a script the driver injected is named in the stack of the page API it called" };
+  const foreign = window.__calls.map((s) => s.split("\n").filter((l) => FOREIGN_FRAME.test(l))[0]).filter(Boolean);
+  return { id: "driver-main-world", group: "driver", tell: foreign.length > 0, value: foreign.length ? foreign.length + " driver call(s) reached a hook in the page's world, first from: " + foreign[0].trim() : window.__calls.length + " calls seen by the page's hooks, none from outside the page's own script", note: "the driver's own reads must run in an isolated world; a hook in the page's world that sees one (by its name or by its frame having no script URL) tells the page it is driven" };
 };
 
 // The page reports the late row every half second, so a driver that cannot run script in the page (a saved profile) is measured the same way.
@@ -236,11 +267,32 @@ window.__detect = run().then(async (r) => {
 });
 </script></body></html>`;
 
+/**
+ * What a cross-origin iframe of the page reports (an out-of-process frame: its own renderer, its own CDP session, its own document
+ * start). It POSTs `{ webdriver, headless, runtime, gpu }` to /__detect/frame-result; the page cannot read it across origins.
+ */
+export const FRAME_HTML = String.raw`<!doctype html><meta charset="utf-8"><title>frame</title><script>
+const runtimeEnabled = () => {
+  let hit = false;
+  const previous = Error.prepareStackTrace;
+  try { Error.prepareStackTrace = () => { hit = true; return ""; }; console.debug(new Error()); } catch (e) {} finally { Error.prepareStackTrace = previous; }
+  return hit;
+};
+let gpu = null;
+try { const gl = document.createElement("canvas").getContext("webgl"); const e = gl.getExtension("WEBGL_debug_renderer_info"); gpu = [gl.getParameter(e.UNMASKED_VENDOR_WEBGL), gl.getParameter(e.UNMASKED_RENDERER_WEBGL)]; } catch (e) {}
+fetch("/__detect/frame-result", { method: "POST", body: JSON.stringify({ webdriver: navigator.webdriver, headless: /HeadlessChrome/.test(navigator.userAgent), runtime: runtimeEnabled(), gpu }) });
+</script>`;
+
+/** A page with one link that opens the detection page in a new tab, as a site's popup or target=_blank link does. */
+export const OPENER_HTML = '<!doctype html><meta charset="utf-8"><title>opener</title><a id="go" href="/" target="_blank">open</a>';
+
 /** The detection server. `rows()` is what the last visit posted; `headers()` is the last request to /__detect/headers. */
 export function createDetectServer({ port = 0 } = {}) {
   let posted = null;
   let late = null;
   let lates = 0;
+  let framed = null;
+  let hooked = [];
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
     if (url.pathname === "/__detect/headers") {
@@ -277,6 +329,30 @@ export function createDetectServer({ port = 0 } = {}) {
       res.end(JSON.stringify(late));
       return;
     }
+    if (url.pathname === "/__detect/hooked") {
+      hooked.push(url.searchParams.get("call") ?? "");
+      res.writeHead(204).end();
+      return;
+    }
+    if (url.pathname === "/__detect/opener") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+      res.end(OPENER_HTML);
+      return;
+    }
+    if (url.pathname === "/__detect/frame") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+      res.end(FRAME_HTML);
+      return;
+    }
+    if (url.pathname === "/__detect/frame-result" && req.method === "POST") {
+      const chunks = [];
+      req.on("data", (c) => chunks.push(c));
+      req.on("end", () => {
+        try { framed = JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { framed = null; }
+        res.writeHead(204).end();
+      });
+      return;
+    }
     if (url.pathname === "/") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
       res.end(DETECT_HTML);
@@ -291,9 +367,15 @@ export function createDetectServer({ port = 0 } = {}) {
         url: `http://127.0.0.1:${bound}/`,
         rows: () => posted,
         late: () => late,
+        /** What the cross-origin iframe reported; null until it did. */
+        frame: () => framed,
+        /** Every call to a hooked page API that came from outside the page's own scripts (the page beacons each). */
+        hooked: () => [...hooked],
+        /** The opener page (a link that opens the detection page in a new tab). */
+        openerUrl: `http://127.0.0.1:${bound}/__detect/opener`,
         /** How many times the page has reported the late row; a post that began after a driver action is proof the row saw it. */
         lates: () => lates,
-        reset: () => { posted = null; late = null; lates = 0; },
+        reset: () => { posted = null; late = null; lates = 0; framed = null; hooked = []; },
         stop: () => new Promise((done) => { server.close(() => done()); server.closeAllConnections?.(); }),
       });
     });

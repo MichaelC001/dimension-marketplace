@@ -15,9 +15,13 @@
  *    virtual screen is 800x600 whatever the viewport. A device-metrics
  *    override and the window bounds, both native CDP commands, made again
  *    whenever the viewport changes (`fitAgentScreen`).
- *  - the driver's own scripts named in the stack of any page API they call,
- *    with the pack's file path in it (`pptr:evaluate;<callsite>`): stripped
- *    from the two commands that carry it (`silenceDriverNames`).
+ *  - CDP `Runtime.enable`, which stock puppeteer sends in every page, frame
+ *    and worker and a page can detect, and the driver's own DOM reads, which
+ *    stock puppeteer runs in the page's own JavaScript world (a hook on
+ *    `document.getElementById` sees each), under a script name that holds the
+ *    pack's file path (`pptr:evaluate;<callsite>`): an agent browser is driven
+ *    with a patched puppeteer-core (`agent-puppeteer.ts`) that sends no
+ *    Runtime.enable, reads in the utility world and names no script.
  *  - a software renderer (SwiftShader, llvmpipe) on a host with no GPU: the
  *    one signal that needs a page script, so it exists only for such hosts,
  *    decided once per browser binary (`SOFTWARE_GRAPHICS_MASK`).
@@ -36,11 +40,24 @@
  * one switch; the runtime sets it from `profile === null`, never from tool
  * input.
  */
-import type { CDPSession, Connection, Page } from "puppeteer-core";
+import type { CDPSession, Protocol } from "puppeteer-core";
 import type { Viewport } from "../contracts.js";
+import { LOOPBACK_EXCEPTIONS } from "./page-log.js";
 
-/** Launch arguments for an agent browser: `navigator.webdriver` is false in every page and iframe, from the browser itself. */
+/**
+ * Launch arguments for a HEADLESS agent browser: `navigator.webdriver` is false in every page and iframe, from the browser
+ * itself. Not for a browser with a window: Chrome pins a yellow "unsupported command-line flag" bar to every window it opens
+ * with this switch, which changes what the person watching sees and takes 40 px off the page.
+ */
 export const AGENT_LAUNCH_ARGS: readonly string[] = ["--disable-blink-features=AutomationControlled"];
+
+/**
+ * Switches puppeteer adds by default that a person's Chrome does not carry and a page can observe: `--enable-automation`
+ * (webdriver, the infobar), `--disable-popup-blocking` (a `window.open` with no gesture succeeds), `--disable-ipc-flooding-protection`
+ * (a `pushState` flood is never throttled), `--allow-pre-commit-input`. The privacy switches in `CHROMIUM_ARGS` (puppeteer.ts) are kept on
+ * purpose: a page cannot see them.
+ */
+export const AGENT_IGNORED_DEFAULT_ARGS: readonly string[] = ["--enable-automation", "--disable-popup-blocking", "--disable-ipc-flooding-protection", "--allow-pre-commit-input"];
 
 /** What a stock Chrome window spends on its tab strip and address bar, in CSS px: `outerHeight - innerHeight`. */
 const WINDOW_CHROME_HEIGHT = 88;
@@ -48,83 +65,68 @@ const WINDOW_CHROME_HEIGHT = 88;
 const MIN_SCREEN: Viewport = { width: 1920, height: 1080 };
 
 /**
- * Give a page `viewport` a screen and a window that agree with it. Call after
- * every `page.setViewport`: puppeteer's override replaces ours, and headless
- * Chrome's own screen is 800x600, its window 780x580 and its orientation
- * portrait whatever the page measures. `cdp` is any session on the page.
+ * The device metrics that give a page `viewport` a screen that agrees with it:
+ * headless Chrome's own screen is 800x600 whatever the page measures, and its
+ * orientation portrait.
  */
-export async function fitAgentScreen(cdp: CDPSession, viewport: Viewport, scale: number): Promise<void> {
-	const windowHeight = viewport.height + WINDOW_CHROME_HEIGHT;
-	await cdp.send("Emulation.setDeviceMetricsOverride", {
+export function deviceMetrics(viewport: Viewport, scale: number): Protocol.Emulation.SetDeviceMetricsOverrideRequest {
+	return {
 		width: viewport.width,
 		height: viewport.height,
 		deviceScaleFactor: scale,
 		mobile: false,
 		screenWidth: Math.max(MIN_SCREEN.width, viewport.width),
-		screenHeight: Math.max(MIN_SCREEN.height, windowHeight),
+		screenHeight: Math.max(MIN_SCREEN.height, viewport.height + WINDOW_CHROME_HEIGHT),
 		positionX: 0,
 		positionY: 0,
 		screenOrientation: { angle: 0, type: "landscapePrimary" },
-	});
-	const { windowId } = await cdp.send("Browser.getWindowForTarget");
-	await cdp.send("Browser.setWindowBounds", { windowId, bounds: { left: 0, top: 0, width: viewport.width, height: windowHeight } });
+	};
 }
 
-/** What an agent browser's pages are shaped with (`shapeAgentPage`). */
+/**
+ * Give a page `viewport` a screen and a window that agree with it. Call after
+ * every `page.setViewport`: puppeteer's override replaces ours, and headless
+ * Chrome's own window is 780x580 whatever the page measures. `cdp` is any
+ * session on the page.
+ */
+export async function fitAgentScreen(cdp: CDPSession, viewport: Viewport, scale: number): Promise<void> {
+	await cdp.send("Emulation.setDeviceMetricsOverride", deviceMetrics(viewport, scale));
+	const { windowId } = await cdp.send("Browser.getWindowForTarget");
+	await cdp.send("Browser.setWindowBounds", { windowId, bounds: { left: 0, top: 0, width: viewport.width, height: viewport.height + WINDOW_CHROME_HEIGHT } });
+}
+
+/** What an agent browser's targets are shaped with. */
 export interface AgentShape {
 	/** Give each page a screen and window that fit it. Not in a browser with a real window, which already has both. */
 	screen: boolean;
 	/** The GPU to report instead of a software renderer, when the binary renders in software here. */
 	graphics: MaskedGraphics | undefined;
+	/** `shapeTargetEarly` runs for every new target (a headless browser, where `presentAsHeadful` holds each one); otherwise the driver shapes each page as it adopts it. */
+	early: boolean;
+	/** The viewport and pixel ratio the driver is at now. The driver keeps it current, so a target shaped before its tab exists gets today's size. */
+	view: { viewport: Viewport; scale: number };
 }
 
 /**
- * Shape one new page of an agent browser before it navigates anywhere: the
- * software-renderer mask in every document it will load, and a screen and
- * window that fit `viewport`. Call after the page's viewport is set.
+ * Shape a NEW target before it runs a line of its own: `presentAsHeadful`
+ * (puppeteer.ts) holds every target Chrome opens (the first tab, a popup, a
+ * `target=_blank` page, a cross-origin iframe, a worker) until these are
+ * sent on its own session. Pages and out-of-process frames get the software
+ * renderer mask in every document and, in a headless browser, a screen that
+ * fits; dedicated and shared workers get the mask in their global scope, so a
+ * worker's OffscreenCanvas names the same GPU as its page. The window's own
+ * bounds are set when the tab is adopted (`fitAgentScreen`).
  */
-export async function shapeAgentPage(page: Page, cdp: CDPSession, viewport: Viewport, scale: number, shape: AgentShape): Promise<void> {
-	if (shape.graphics) await page.evaluateOnNewDocument(SOFTWARE_GRAPHICS_MASK, shape.graphics.vendor, shape.graphics.renderer, SOFTWARE_RENDERER.source);
-	if (shape.screen) await fitAgentScreen(cdp, viewport, scale);
-}
-
-/** The comment puppeteer appends to every script it evaluates: `//# sourceURL=pptr:evaluate;<the caller's file and line>`. */
-const DRIVER_NAME = /\n\/\/# sourceURL=pptr:\S*\n?/g;
-
-/**
- * The params of a CDP command with the driver's script name taken out. Only
- * the two commands puppeteer evaluates page functions with carry it, and only
- * its own `pptr:` name is removed: a page script's or a model's own
- * `//# sourceURL` stays.
- */
-export function withoutDriverNames(method: string, params: unknown): unknown {
-	if (params === null || typeof params !== "object") return params;
-	const key = method === "Runtime.callFunctionOn" ? "functionDeclaration" : method === "Runtime.evaluate" ? "expression" : undefined;
-	if (key === undefined) return params;
-	const source = (params as Record<string, unknown>)[key];
-	if (typeof source !== "string" || !source.includes("//# sourceURL=pptr:")) return params;
-	return { ...params, [key]: source.replace(DRIVER_NAME, "\n") };
-}
-
-interface Sender {
-	_rawSend?: (this: Connection, ...args: unknown[]) => unknown;
-}
-
-/**
- * Strip the driver's script names from everything this connection sends, for
- * every session on it, present and future. Puppeteer exposes no option for
- * this; `Connection._rawSend` is the one place all its sessions send through.
- * Throws if a puppeteer upgrade moves it, rather than silently leaving the
- * pack's file path in every page's stack traces (the agent-browser test goes
- * red the same way).
- */
-export function silenceDriverNames(connection: Connection): void {
-	const host = connection as unknown as Sender;
-	const send = host._rawSend;
-	if (typeof send !== "function") throw new Error("puppeteer-core no longer sends through Connection._rawSend; the agent browser would name the driver in page stacks");
-	host._rawSend = function (this: Connection, callbacks: unknown, method: unknown, params: unknown, ...rest: unknown[]): unknown {
-		return send.call(this, callbacks, method, typeof method === "string" ? withoutDriverNames(method, params) : params, ...rest);
-	};
+export function shapeTargetEarly(session: CDPSession, targetType: string, shape: AgentShape): Array<Promise<unknown>> {
+	const mask = shape.graphics ? graphicsMaskExpression(shape.graphics) : undefined;
+	if (targetType === "page" || targetType === "iframe") {
+		// A session's document scripts run only once its Page domain is on.
+		const sent: Array<Promise<unknown>> = [session.send("Page.enable"), session.send("Page.addScriptToEvaluateOnNewDocument", { source: [mask, LOOPBACK_EXCEPTIONS].filter(Boolean).join(";\n") })];
+		if (shape.screen && targetType === "page") sent.push(session.send("Emulation.setDeviceMetricsOverride", deviceMetrics(shape.view.viewport, shape.view.scale)));
+		return sent;
+	}
+	if ((targetType === "worker" || targetType === "shared_worker") && mask) return [session.send("Runtime.evaluate", { expression: mask })];
+	return [];
 }
 
 /** What a software renderer's strings look like (Chrome's SwiftShader, Mesa's llvmpipe/lavapipe). */
@@ -148,9 +150,10 @@ export function maskedGraphics(platform: string): MaskedGraphics {
  * whose binary was found to render in software. Answers a masked vendor and
  * renderer for the two unmasked-info parameters, from a Proxy over the native
  * `getParameter` (so a wrong receiver still throws Chrome's own error), and
- * makes both it and `Function.prototype.toString` report `[native code]`. It
- * does not reach workers: an OffscreenCanvas there still names the host's
- * renderer. Self-contained: it is serialized into the page.
+ * makes both it and `Function.prototype.toString` report `[native code]`.
+ * Self-contained: it is serialized into the page, and into each dedicated and
+ * shared worker (`graphicsMaskExpression`), whose OffscreenCanvas would
+ * otherwise name the host's renderer beside the page's masked one.
  */
 export const SOFTWARE_GRAPHICS_MASK = (vendor: string, renderer: string, software: string): void => {
 	const looksSoftware = new RegExp(software, "i");
@@ -166,7 +169,7 @@ export const SOFTWARE_GRAPHICS_MASK = (vendor: string, renderer: string, softwar
 	Object.defineProperty(Function.prototype, "toString", { value: toString, writable: true, configurable: true, enumerable: false });
 	const UNMASKED_VENDOR_WEBGL = 0x9245;
 	const UNMASKED_RENDERER_WEBGL = 0x9246;
-	for (const Context of [window.WebGLRenderingContext, window.WebGL2RenderingContext]) {
+	for (const Context of [globalThis.WebGLRenderingContext, globalThis.WebGL2RenderingContext]) {
 		if (typeof Context !== "function") continue;
 		const original = Context.prototype.getParameter;
 		const getParameter = new Proxy(original, {
@@ -182,3 +185,8 @@ export const SOFTWARE_GRAPHICS_MASK = (vendor: string, renderer: string, softwar
 		Object.defineProperty(Context.prototype, "getParameter", { value: getParameter, writable: true, configurable: true, enumerable: true });
 	}
 };
+
+/** `SOFTWARE_GRAPHICS_MASK` as an expression to run in a worker's global scope, before its script does. */
+export function graphicsMaskExpression(graphics: MaskedGraphics): string {
+	return `(${SOFTWARE_GRAPHICS_MASK.toString()})(${JSON.stringify(graphics.vendor)}, ${JSON.stringify(graphics.renderer)}, ${JSON.stringify(SOFTWARE_RENDERER.source)})`;
+}

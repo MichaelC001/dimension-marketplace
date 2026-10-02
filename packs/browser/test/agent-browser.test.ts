@@ -1,7 +1,7 @@
 /** WHAT BREAKS IN THE PRODUCT IF THIS GOES RED: an agent that opens a throwaway browser to do real work on the real
  *  web is turned away by the first bot check (a HeadlessChrome User-Agent, `navigator.webdriver`, a 1280x800 page on
- *  an 800x600 "screen", the pack's own file path in a stack trace, a software GPU), while the same Chrome started by
- *  hand is not — or the opposite failure, that the person's View or a saved profile stops being the real, honest
+ *  an 800x600 "screen", CDP Runtime left on, the driver's own reads showing in a hook on the page's APIs, a software
+ *  GPU), while the same Chrome started by hand is not — or the opposite failure, that the person's View or a saved profile stops being the real, honest
  *  browser (doc 77 §12 decision 2: nothing hides automation where a person signs in).
  *
  *  These tests load a local page that reads the signals public bot-detection checks read
@@ -11,7 +11,6 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { type DetectRow, type DetectServer, createDetectServer } from "../bench/sites/detect.mjs";
-import { withoutDriverNames } from "../src/engines/agent-browser";
 import type { BrowserRuntime } from "../src/runtime";
 import { BROWSER_TEST_TIMEOUT_MS, createRoot, describeWithChrome, newRuntime, perform, teardown, waitUntil } from "./fixture";
 
@@ -30,7 +29,8 @@ const CONTROLLED = [
 	"webdriver", "iframe-webdriver", "worker-webdriver",
 	"ua-headless", "ua-data-headless", "worker-ua-headless", "iframe-ua", "ch-ua-header-headless", "worker-matches-page",
 	"outer-smaller-than-inner", "viewport-larger-than-screen", "screen-orientation", "screen-default", "window-fits-screen", "outer-window",
-	"webgl-renderer", "driver-sourceurl", "navigator-own-properties", "accessor-receiver", "native-source",
+	"webgl-renderer", "webgl-worker-renderer", "navigator-own-properties", "accessor-receiver", "native-source",
+	"cdp-runtime-enabled", "worker-runtime-enabled", "driver-main-world",
 ];
 
 async function detector(): Promise<DetectServer> {
@@ -59,22 +59,14 @@ async function look(runtime: BrowserRuntime, server: DetectServer, browserId: st
 	return [...(rows ?? []), ...(late ? [late] : [])];
 }
 
-describe("the driver's script names", () => {
-	const named = "(a) => a\n//# sourceURL=pptr:evaluate;fn%20(C%3A%5Cwork%5Cpack%5Cdriver.ts%3A9%3A3)\n";
-
-	test("are taken out of the two commands that evaluate with them, and out of nothing else", () => {
-		expect(withoutDriverNames("Runtime.callFunctionOn", { functionDeclaration: named, objectId: "1" })).toEqual({ functionDeclaration: "(a) => a\n", objectId: "1" });
-		expect(withoutDriverNames("Runtime.evaluate", { expression: named, awaitPromise: true })).toEqual({ expression: "(a) => a\n", awaitPromise: true });
-		// Other commands carry no such name; a page script is not ours to edit.
-		const other = { source: named };
-		expect(withoutDriverNames("Page.addScriptToEvaluateOnNewDocument", other)).toBe(other);
-	});
-
-	test("leave a model's own sourceURL alone: a script it named itself keeps its name in the stack", () => {
-		const own = { expression: "run()\n//# sourceURL=my-script.js\n" };
-		expect(withoutDriverNames("Runtime.evaluate", own)).toBe(own);
-	});
-});
+/** The page's rows when a site opens it in a new tab (a link with target=_blank): the tab is created, shaped and released by the browser, not by a later call of ours. */
+async function lookInNewTab(runtime: BrowserRuntime, server: DetectServer, browserId: string): Promise<DetectRow[]> {
+	server.reset();
+	await perform(runtime, browserId, { kind: "navigate", url: server.openerUrl });
+	await perform(runtime, browserId, { kind: "click", selector: "#go" });
+	const rows = await waitUntil("the new tab's rows", () => server.rows(), (posted) => posted !== null);
+	return rows ?? [];
+}
 
 describeWithChrome("a throwaway browser against a bot-detection page", () => {
 	test("raises none of the automation signals this change controls", async () => {
@@ -82,6 +74,19 @@ describeWithChrome("a throwaway browser against a bot-detection page", () => {
 		const runtime = newRuntime(await createRoot());
 		const { browserId } = await runtime.open({});
 		expect(flagged(await look(runtime, server, browserId))).toEqual([]);
+		// A cross-origin iframe is a process, a CDP session and a document start of its own.
+		const frame = await waitUntil("the cross-origin frame's report", () => server.frame(), (reported) => reported !== null);
+		expect(frame).toMatchObject({ webdriver: false, headless: false, runtime: false });
+	}, BROWSER_TEST_TIMEOUT_MS);
+
+	test("shows a new tab a site opens the same shaped browser from its first line", async () => {
+		const server = await detector();
+		const runtime = newRuntime(await createRoot(), { launchArgs: NO_GPU });
+		const { browserId } = await runtime.open({});
+		const rows = await lookInNewTab(runtime, server, browserId);
+		expect(flagged(rows)).toEqual([]);
+		expect(row(rows, "webgl-renderer").value).not.toMatch(/swiftshader/i);
+		expect(row(rows, "screen-default")).toMatchObject({ tell: false });
 	}, BROWSER_TEST_TIMEOUT_MS);
 
 	test("keeps its screen, window and orientation consistent after a resize and in a new tab", async () => {
@@ -98,13 +103,16 @@ describeWithChrome("a throwaway browser against a bot-detection page", () => {
 		expect(flagged(second)).toEqual([]);
 	}, BROWSER_TEST_TIMEOUT_MS);
 
-	test("shows a page no trace of the driver's own scripts or the pack's file path", async () => {
+	test("shows a page no trace of the driver: its reads never reach a hook on the page's own APIs, and Runtime is off", async () => {
 		const server = await detector();
 		const runtime = newRuntime(await createRoot());
 		const { browserId } = await runtime.open({});
 		const rows = await look(runtime, server, browserId);
-		expect(row(rows, "driver-sourceurl")).toMatchObject({ tell: false });
-		expect(row(rows, "driver-sourceurl").value).not.toContain("pptr:");
+		expect(row(rows, "driver-main-world")).toMatchObject({ tell: false });
+		expect(row(rows, "cdp-runtime-enabled")).toMatchObject({ tell: false });
+		expect(row(rows, "worker-runtime-enabled")).toMatchObject({ tell: false });
+		// Whatever the page's hooks recorded names no script of the driver's.
+		expect(row(rows, "driver-main-world").value).not.toMatch(/pptr:|puppeteer/i);
 	}, BROWSER_TEST_TIMEOUT_MS);
 
 	test("hides a software renderer behind a GPU a person's Chrome would report, with native-looking functions", async () => {
@@ -112,10 +120,12 @@ describeWithChrome("a throwaway browser against a bot-detection page", () => {
 		const runtime = newRuntime(await createRoot(), { launchArgs: NO_GPU });
 		const { browserId } = await runtime.open({});
 		const rows = await look(runtime, server, browserId);
-		// The precondition: this Chrome really has no GPU (a worker's canvas is not masked).
-		expect(row(rows, "webgl-worker-renderer").value).toMatch(/swiftshader/i);
 		expect(flagged(rows)).toEqual([]);
 		expect(row(rows, "webgl-renderer").value).not.toMatch(/swiftshader/i);
+		// A worker's OffscreenCanvas and a cross-origin frame name the same GPU the page does.
+		expect(row(rows, "webgl-worker-renderer").value).not.toMatch(/swiftshader/i);
+		const frame = await waitUntil("the cross-origin frame's report", () => server.frame(), (reported) => reported !== null);
+		expect(frame?.gpu?.join(" ")).not.toMatch(/swiftshader/i);
 	}, BROWSER_TEST_TIMEOUT_MS);
 
 	test("browser_read's reader presents the same: no HeadlessChrome, no webdriver, a screen that fits", async () => {
@@ -125,8 +135,20 @@ describeWithChrome("a throwaway browser against a bot-detection page", () => {
 		if (result.status !== "ok") throw new Error(`the reader did not read the page: ${JSON.stringify(result)}`);
 		const seen = result.text.split("\n").filter((line) => /^(FLAG|ok)\|/.test(line)).map((line) => ({ flag: line.startsWith("FLAG"), id: line.split("|")[1] ?? "" }));
 		expect(seen.length).toBeGreaterThan(20);
-		const controlled = ["webdriver", "iframe-webdriver", "ua-headless", "iframe-ua", "outer-smaller-than-inner", "viewport-larger-than-screen", "screen-orientation", "screen-default"];
+		const controlled = ["webdriver", "iframe-webdriver", "ua-headless", "iframe-ua", "outer-smaller-than-inner", "viewport-larger-than-screen", "screen-orientation", "screen-default", "cdp-runtime-enabled"];
 		expect(seen.filter((entry) => entry.flag && controlled.includes(entry.id)).map((entry) => entry.id)).toEqual([]);
+		// Runtime is off, and the read script itself ran in the utility world: the page's hook on its APIs heard nothing from outside the page.
+		expect(result.text).toMatch(/^RUNTIME\|off$/m);
+		expect(server.hooked()).toEqual([]);
+	}, BROWSER_TEST_TIMEOUT_MS);
+
+	test("browser_read's reader hides a software renderer too", async () => {
+		const server = await detector();
+		const runtime = newRuntime(await createRoot(), { allowPrivateReadHosts: ["127.0.0.1"], launchArgs: NO_GPU });
+		const result = await runtime.read({ url: server.url, maxChars: 30_000 });
+		if (result.status !== "ok") throw new Error(`the reader did not read the page: ${JSON.stringify(result)}`);
+		expect(result.text).toMatch(/^ok\|webgl-renderer\|/m);
+		expect(result.text).not.toMatch(/^ok\|webgl-renderer\|.*swiftshader/im);
 	}, BROWSER_TEST_TIMEOUT_MS);
 });
 
@@ -145,5 +167,10 @@ describeWithChrome("a saved profile's browser (the View) stays the real browser"
 		// Stock puppeteer turns Runtime on in every page and every worker; the page's probe must see it, or its "false" for a throwaway means nothing.
 		expect(row(rows, "cdp-runtime-enabled")).toMatchObject({ tell: true });
 		expect(row(rows, "worker-runtime-enabled")).toMatchObject({ tell: true });
+		// Stock reads in the page's own world: a hook on the page's APIs hears them.
+		expect(row(rows, "driver-main-world")).toMatchObject({ tell: true });
+		// No screen or window fitting: headless Chrome's own 800x600 screen under the page.
+		expect(row(rows, "screen-default")).toMatchObject({ tell: true });
+		expect(row(rows, "viewport-larger-than-screen")).toMatchObject({ tell: true });
 	}, BROWSER_TEST_TIMEOUT_MS);
 });

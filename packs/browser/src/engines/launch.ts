@@ -26,7 +26,7 @@ import { Browser as CachedBrowser, type BrowserPlatform, detectBrowserPlatform, 
 import type { LaunchOptions, Protocol } from "puppeteer-core";
 import type { BrowserApp } from "../contracts.js";
 import { fail } from "../store.js";
-import { AGENT_LAUNCH_ARGS, SOFTWARE_RENDERER } from "./agent-browser.js";
+import { AGENT_IGNORED_DEFAULT_ARGS, AGENT_LAUNCH_ARGS, SOFTWARE_RENDERER } from "./agent-browser.js";
 
 export interface ResolvedBrowser {
 	app: BrowserApp;
@@ -189,6 +189,10 @@ export interface BinaryIdentities {
 	 * else probed again, once, with no further check.
 	 */
 	confirm(executablePath: string, identity: HeadfulIdentity, runningVersion: string, launchArgs?: readonly string[]): Promise<HeadfulIdentity>;
+	/** This binary's identity when it is already known or being probed; undefined otherwise. Starts nothing. */
+	known(executablePath: string, launchArgs?: readonly string[]): Promise<HeadfulIdentity> | undefined;
+	/** Record what a running browser of this binary reported about itself, so no probe is ever launched for it. */
+	learn(executablePath: string, identity: HeadfulIdentity, launchArgs?: readonly string[]): void;
 }
 
 /**
@@ -232,6 +236,10 @@ export function identityPerBinary(options: {
 	};
 	return {
 		of,
+		known: (executablePath, launchArgs = []) => known.get(buildOf(executablePath, launchArgs)),
+		learn(executablePath, identity, launchArgs = []) {
+			known.set(buildOf(executablePath, launchArgs), Promise.resolve(identity));
+		},
 		async confirm(executablePath, identity, runningVersion, launchArgs = []) {
 			if (identity.metadata.fullVersion === undefined || identity.metadata.fullVersion === runningVersion) return identity;
 			const key = buildOf(executablePath, launchArgs);
@@ -267,7 +275,7 @@ export function viewLaunchOptions(input: {
 	headless: boolean;
 	args: readonly string[];
 	userAgent?: string;
-	/** A throwaway agent browser (see `agent-browser.ts`): `navigator.webdriver` is false. Never for the View or a saved profile. */
+	/** A throwaway agent browser (see `agent-browser.ts`): headless, it launches with `navigator.webdriver` false. Never for the View or a saved profile. */
 	agent?: boolean;
 	timeout: number;
 }): LaunchOptions {
@@ -277,8 +285,8 @@ export function viewLaunchOptions(input: {
 		userDataDir: input.userDataDir,
 		timeout: input.timeout,
 		defaultViewport: null,
-		args: [...input.args, ...(input.agent ? AGENT_LAUNCH_ARGS : []), ...(input.headless && input.userAgent ? [`--user-agent=${input.userAgent}`] : [])],
-		ignoreDefaultArgs: ["--enable-automation"],
+		args: [...input.args, ...(input.agent && input.headless ? AGENT_LAUNCH_ARGS : []), ...(input.headless && input.userAgent ? [`--user-agent=${input.userAgent}`] : [])],
+		ignoreDefaultArgs: input.agent ? [...AGENT_IGNORED_DEFAULT_ARGS] : ["--enable-automation"],
 	};
 }
 

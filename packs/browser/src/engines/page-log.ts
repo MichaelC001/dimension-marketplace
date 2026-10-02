@@ -4,7 +4,7 @@
  * page itself printed or requested is kept (never a request or response body, header or
  * cookie), every url loses its query string (tokens live there), and every line is cut short.
  */
-import type { ConsoleMessage, HTTPRequest, HTTPResponse, Page } from "puppeteer-core";
+import type { CDPSession, ConsoleMessage, HTTPRequest, HTTPResponse, Page, Protocol } from "puppeteer-core";
 import { type LogEntry, MAX_LOG_TEXT_CHARS } from "../contracts.js";
 
 /**
@@ -45,19 +45,61 @@ function isFavicon(request: HTTPRequest): boolean {
 	}
 }
 
-/** Report each thing that goes wrong on `page` to `record`, for as long as the page lives. */
-export function watchPageLog(page: Page, record: (type: LogEntry["type"], text: string) => void): void {
-	page.on("console", (message: ConsoleMessage) => {
-		const level = message.type();
-		if ((level !== "error" && level !== "warn") || message.text().startsWith(LOAD_FAILURE_ECHO)) return;
-		const { url, lineNumber } = message.location();
-		const where = url ? ` @ ${withoutQuery(url)}:${lineNumber ?? 0}` : "";
-		record(level === "error" ? "console.error" : "console.warning", logText(`${message.text()}${where}`));
+/** The marker a page's own exception reporter (`LOOPBACK_EXCEPTIONS`) puts in front of what it logs, so the reader can tell it from the app's own messages. */
+const EXCEPTION_MARK = "\u0001dimension-exception\u0001";
+
+/**
+ * A script for every document of an agent browser's page: on a page served from this machine (loopback), report an
+ * uncaught error or unhandled rejection through the console, where the Console domain (which, unlike Runtime, a page
+ * cannot detect) carries it to `watchPageLog`. Nothing is installed on any other origin.
+ */
+export const LOOPBACK_EXCEPTIONS = `(() => {
+	const host = location.hostname;
+	if (host !== "localhost" && host !== "[::1]" && !/^127\\./.test(host) && !host.endsWith(".localhost")) return;
+	const say = (text) => console.debug(${JSON.stringify(EXCEPTION_MARK)} + String(text).slice(0, 2000));
+	addEventListener("error", (event) => say((event.error && event.error.stack) || event.message));
+	addEventListener("unhandledrejection", (event) => say("Unhandled rejection: " + ((event.reason && (event.reason.stack || event.reason.message)) || event.reason)));
+})();`;
+
+function toLogLine(text: string): string {
+	return logText(text.split("\n").slice(0, STACK_LINES).join(" | "));
+}
+
+/** Console messages and uncaught exceptions without `Runtime` (an agent browser keeps it off): from the Console domain. */
+function watchConsoleDomain(cdp: CDPSession, record: (type: LogEntry["type"], text: string) => void): void {
+	cdp.on("Console.messageAdded", ({ message }: Protocol.Console.MessageAddedEvent) => {
+		if (message.source !== "console-api") return;
+		if (message.text.startsWith(EXCEPTION_MARK)) {
+			record("exception", toLogLine(message.text.slice(EXCEPTION_MARK.length)));
+			return;
+		}
+		if ((message.level !== "error" && message.level !== "warning") || message.text.startsWith(LOAD_FAILURE_ECHO)) return;
+		const where = message.url ? ` @ ${withoutQuery(message.url)}:${message.line ?? 0}` : "";
+		record(message.level === "error" ? "console.error" : "console.warning", logText(`${message.text}${where}`));
 	});
-	page.on("pageerror", (error: unknown) => {
-		const text = error instanceof Error ? error.message : String(error);
-		record("exception", logText(text.split("\n").slice(0, STACK_LINES).join(" | ")));
-	});
+	// Replays what the page printed before this was on.
+	void cdp.send("Console.enable").catch(() => undefined);
+}
+
+/**
+ * Report each thing that goes wrong on `page` to `record`, for as long as the page lives. `consoleSession` is the page's
+ * session when it has no Runtime events (an agent browser): console messages and exceptions then come from the Console
+ * domain.
+ */
+export function watchPageLog(page: Page, record: (type: LogEntry["type"], text: string) => void, consoleSession?: CDPSession): void {
+	if (consoleSession) watchConsoleDomain(consoleSession, record);
+	else {
+		page.on("console", (message: ConsoleMessage) => {
+			const level = message.type();
+			if ((level !== "error" && level !== "warn") || message.text().startsWith(LOAD_FAILURE_ECHO)) return;
+			const { url, lineNumber } = message.location();
+			const where = url ? ` @ ${withoutQuery(url)}:${lineNumber ?? 0}` : "";
+			record(level === "error" ? "console.error" : "console.warning", logText(`${message.text()}${where}`));
+		});
+		page.on("pageerror", (error: unknown) => {
+			record("exception", toLogLine(error instanceof Error ? error.message : String(error)));
+		});
+	}
 	page.on("response", (response: HTTPResponse) => {
 		if (response.status() < 400 || isFavicon(response.request())) return;
 		record("http", logText(`${response.status()} ${response.request().method()} ${withoutQuery(response.url())}`));
