@@ -483,14 +483,14 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
   // The View's Take over / Hand back. App-only, and the runtime refuses any caller but the View on its own.
   registerAppTool(server, "browser_control", {
     title: "Take Over Browser",
-    description: "The person in the View takes this browser over (mode take: an agent's page actions on it are refused as human_driving until handed back; reads still work) or hands it back (mode return). Refused while a task runs or a post awaits confirmation. Answers the state.",
+    description: "The person in the View takes this browser over (mode take: an agent's page actions on it are refused as human_driving until handed back; reads still work) or hands it back (mode return). Refused while " + (jev ? "a task runs or " : "") + "a post awaits confirmation. Answers the state.",
     inputSchema: { browserId: capability, mode: z.enum(CONTROL_MODES) },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false }, _meta: APP_ONLY,
   }, ({ browserId, mode }, extra) => result(async () => stateFor(callerOf(extra), await runtime.control(browserId, mode, callerOf(extra)))));
   // The View's switch to another profile: closes the browser it leaves unless something depends on it, and gives the wheel back. App-only; the runtime refuses any other caller itself.
   registerAppTool(server, "browser_leave", {
     title: "Leave Browser",
-    description: "The person in the View leaves this browser for another profile. The wheel goes back to the agent if they held it. The browser is closed unless an agent opened it, a task runs on it, a post awaits confirmation there, a call is in progress, the person had taken it over, or it is their own Chrome; those stay open and are listed in the profile menu. Answers {closed}.",
+    description: "The person in the View leaves this browser for another profile. The wheel goes back to the agent if they held it. The browser is closed unless an agent opened it, " + (jev ? "a task runs on it, " : "") + "a post awaits confirmation there, a call is in progress, the person had taken it over, or it is their own Chrome; those stay open and are listed in the profile menu. Answers {closed}.",
     inputSchema: { browserId: capability },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false }, _meta: APP_ONLY,
   }, ({ browserId }, extra) => result(async () => ({ ...(await runtime.leave(browserId, callerOf(extra))) })));
