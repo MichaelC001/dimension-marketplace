@@ -422,11 +422,10 @@ describeWithChrome("a throwaway nobody calls", () => {
 		"is closed again after another idle period when its first close failed, so a failed close never keeps a slot for good",
 		async () => {
 			const rootDir = await createRoot();
-			const runtime = newRuntime(rootDir, { throwawayIdleMs: 1_500 });
+			const runtime = newRuntime(rootDir, { throwawayIdleMs: 4_000 });
 			const one = await openThrowaway(runtime, rootDir, "s1");
-			const pids = (await chromePidsByThrowaway(rootDir)).get(one.dir) ?? [];
-			expect(pids.length).toBeGreaterThan(0);
 			// Reached into on purpose: a real Chrome that will not close cannot be had any other way. The one close fails; the next is the real one.
+			// Done before anything slow, so the fault is in place when the idle timeout first fires.
 			const internals = runtime as unknown as RuntimeInternals;
 			const driver = internals.byId.get(one.browserId)?.driver;
 			if (driver === undefined) throw new Error("the browser is not listed");
@@ -437,6 +436,8 @@ describeWithChrome("a throwaway nobody calls", () => {
 				failures += 1;
 				throw new Error("the browser did not shut down");
 			};
+			const pids = (await chromePidsByThrowaway(rootDir)).get(one.dir) ?? [];
+			expect(pids.length).toBeGreaterThan(0);
 
 			expect(await waitUntilGone(pids, 20_000)).toEqual([]);
 
