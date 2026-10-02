@@ -29,12 +29,17 @@ class FakeSource implements LiveSource {
 	readonly states = new Map<string, BrowserState>();
 	readonly inputs: Array<{ browserId: string; events: unknown }> = [];
 	inputError: BrowserRuntimeError | null = null;
+	readonly viewers = new Map<string, number>();
 	watchCalls = 0;
 	stateReads = 0;
 
 	open(browserId: string): void {
 		this.watchers.set(browserId, new Set());
 		this.states.set(browserId, stateOf(browserId));
+	}
+	/** How many Views the runtime has been told are on this browser. */
+	viewersOf(browserId: string): number {
+		return this.viewers.get(browserId) ?? 0;
 	}
 	watching(browserId: string): number {
 		return this.watchers.get(browserId)?.size ?? 0;
@@ -49,6 +54,16 @@ class FakeSource implements LiveSource {
 		this.watchCalls += 1;
 		set.add(onFrame);
 		return () => void set.delete(onFrame);
+	}
+	viewing(browserId: string): () => void {
+		this.require(browserId);
+		this.viewers.set(browserId, this.viewersOf(browserId) + 1);
+		let ended = false;
+		return () => {
+			if (ended) return;
+			ended = true;
+			this.viewers.set(browserId, this.viewersOf(browserId) - 1);
+		};
 	}
 	async liveState(browserId: string): Promise<BrowserState> {
 		this.require(browserId);
@@ -359,6 +374,37 @@ describe("what stops it", () => {
 		const again = await openStream(origin, token);
 		await again.waitFor((messages) => states(messages).length >= 1);
 		expect(source.watching("a")).toBe(1);
+	});
+
+	test("every View of a browser, pictures or state only, counts as watching it from when it joins until it leaves, and none is left when its browser or the channel ends", async () => {
+		const source = new FakeSource();
+		source.open("a");
+		source.open("b");
+		const channel = channelFor(source);
+		const a = await channel.mint("a");
+		const withPictures = await openStream(a.origin, a.token);
+		const stateOnly = await openStream(a.origin, a.token, { frames: false });
+		await withPictures.waitFor((messages) => states(messages).length >= 1);
+		await stateOnly.waitFor((messages) => states(messages).length >= 1);
+		expect(source.viewersOf("a")).toBe(2);
+		// The state-only View takes no picture watcher, and is a viewer all the same.
+		expect(source.watching("a")).toBe(1);
+
+		withPictures.close();
+		await withPictures.ended;
+		await waitUntil(() => source.viewersOf("a") === 1);
+
+		source.closed.add("a");
+		await stateOnly.ended;
+		await waitUntil(() => source.viewersOf("a") === 0);
+
+		const b = await channel.mint("b");
+		const onB = await openStream(b.origin, b.token);
+		await onB.waitFor((messages) => states(messages).length >= 1);
+		expect(source.viewersOf("b")).toBe(1);
+		await channel.close();
+		await onB.ended;
+		expect(source.viewersOf("b")).toBe(0);
 	});
 
 	test("a closed browser ends every stream of it and its tokens stop working; other browsers go on", async () => {

@@ -40,7 +40,7 @@ interface Calls {
 
 /** Just enough runtime for the server to boot and answer open/view: every call recorded. */
 function recordingRuntime(calls: Calls): BrowserRuntimePort {
-	const runtime: Pick<BrowserRuntimePort, "open" | "state" | "liveState" | "watchFrames" | "act" | "connections" | "profileMeta" | "onConnectionsChanged" | "dispose"> = {
+	const runtime: Pick<BrowserRuntimePort, "open" | "state" | "liveState" | "watchFrames" | "viewing" | "act" | "connections" | "profileMeta" | "onConnectionsChanged" | "dispose"> = {
 		open: async (options) => {
 			calls.opened.push(options);
 			return stateOf("o".repeat(32));
@@ -51,6 +51,7 @@ function recordingRuntime(calls: Calls): BrowserRuntimePort {
 		},
 		liveState: async (browserId) => stateOf(browserId, "http://held.test/"),
 		watchFrames: () => () => {},
+		viewing: () => () => {},
 		act: async (browserId, action: BrowserAction) => {
 			calls.navigated.push(action.url ?? "");
 			return { status: "completed", state: stateOf(browserId, action.url) };

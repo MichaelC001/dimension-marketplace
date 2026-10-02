@@ -29,8 +29,11 @@
  * `page-scripts.ts`. The one exception is `evaluate`: the runtime lets a
  * model's own JavaScript reach it on a throwaway browser only.
  */
+import { type ChildProcess, execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, statSync } from "node:fs";
+import { win32 } from "node:path";
+import { promisify } from "node:util";
 import { setTimeout as sleep } from "node:timers/promises";
 import puppeteer, { TimeoutError } from "puppeteer-core";
 import type { Browser, BrowserContext, CDPSession, ElementHandle, Frame, HTTPRequest, HTTPResponse, JSHandle, KeyInput, Page, Protocol, Target } from "puppeteer-core";
@@ -82,6 +85,8 @@ const FRAME_REF_LIKE = /^@\d/;
 const ACTION_TIMEOUT_MS = 15_000;
 const LAUNCH_TIMEOUT_MS = 60_000;
 const CLOSE_TIMEOUT_MS = 15_000;
+/** After a kill, how long the browser process gets to be seen exiting before the kill itself is called unconfirmed. */
+const KILL_CONFIRM_MS = 5_000;
 const FAVICON_SCRIPT_TIMEOUT_MS = 2_000;
 /** How long a freshly started screencast gets to deliver its first picture before one is captured: Chrome sends nothing for a page that is not changing. */
 const FIRST_FRAME_WAIT_MS = 150;
@@ -1223,6 +1228,28 @@ class PuppeteerDriver implements EngineDriver {
 		this.#release();
 	}
 
+	/**
+	 * Hard stop, for a `close` that hung. puppeteer's own close waits for the browser to exit with no bound, so a Chrome that will
+	 * not exit never lets it finish: this kills the whole process tree instead, and releases the lease only once the browser
+	 * process is seen to have exited. Safe beside a pending `close`: that one ends when the process does, and releasing is idempotent.
+	 */
+	async kill(): Promise<void> {
+		if (!this.#ownsBrowser) return await this.close();
+		this.#closed = true;
+		this.#browser.off("targetcreated", this.#onTargetCreated);
+		this.#browser.off("disconnected", this.#onDisconnected);
+		this.#watchers.clear();
+		const proc = this.#browser.process();
+		if (proc === null) fail("kill_failed", "this browser has no process of ours to kill");
+		if (!hasExited(this.#browser)) {
+			const exited = waitForExit(proc, KILL_CONFIRM_MS);
+			await killTree(proc);
+			if (!(await exited)) fail("kill_failed", `the browser process ${proc.pid} was killed but was not seen to exit within ${KILL_CONFIRM_MS} ms`);
+		}
+		await this.#browser.disconnect().catch(() => undefined);
+		this.#release();
+	}
+
 	// -----------------------------------------------------------------------
 	// Internals — tabs
 	// -----------------------------------------------------------------------
@@ -1637,6 +1664,55 @@ function requireNumber(value: unknown, name: string): number {
 function hasExited(browser: Browser): boolean {
 	const proc = browser.process();
 	return proc !== null && (proc.exitCode !== null || proc.signalCode !== null);
+}
+
+/** Resolves true once `proc` has exited (at once when it already has), false if it has not within `ms`. */
+function waitForExit(proc: ChildProcess, ms: number): Promise<boolean> {
+	if (proc.exitCode !== null || proc.signalCode !== null) return Promise.resolve(true);
+	const { promise, resolve } = Promise.withResolvers<boolean>();
+	const onExit = (): void => {
+		clearTimeout(timer);
+		resolve(true);
+	};
+	const timer = setTimeout(() => {
+		proc.off("exit", onExit);
+		resolve(false);
+	}, ms);
+	proc.once("exit", onExit);
+	return promise;
+}
+
+const execFileAsync = promisify(execFile);
+
+/**
+ * The `taskkill` arguments that end `proc` and everything it started, or undefined when there is nothing to end. A pid names a
+ * process only while it is running: once `proc` has exited the number may already belong to an unrelated program, so an exited
+ * process gets no command at all, and the image filter makes a number that was reused by a program of another name match nothing.
+ * `/T` still takes the whole tree below a match, whatever the children are called (crashpad, GPU and renderer helpers).
+ */
+export function taskkillArgs(proc: Pick<ChildProcess, "pid" | "spawnfile" | "exitCode" | "signalCode">): string[] | undefined {
+	if (proc.pid === undefined || proc.exitCode !== null || proc.signalCode !== null) return undefined;
+	return ["/pid", String(proc.pid), "/T", "/F", "/FI", `IMAGENAME eq ${win32.basename(proc.spawnfile)}`];
+}
+
+/**
+ * Kill `proc` and everything it started. Windows: `taskkill /T` (killing only the browser process leaves its helpers running).
+ * Elsewhere: the process group, which puppeteer makes Chrome the leader of, then the process itself if the group could not be signalled.
+ */
+async function killTree(proc: ChildProcess): Promise<void> {
+	const pid = proc.pid;
+	if (pid === undefined) return;
+	if (process.platform === "win32") {
+		// Decided here, right before the command starts: the process may have exited since the caller looked.
+		const args = taskkillArgs(proc);
+		if (args !== undefined) await execFileAsync("taskkill", args, { windowsHide: true }).catch(() => proc.kill());
+		return;
+	}
+	try {
+		process.kill(-pid, "SIGKILL");
+	} catch {
+		proc.kill("SIGKILL");
+	}
 }
 
 /**

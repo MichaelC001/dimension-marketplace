@@ -141,6 +141,7 @@ needs a relay that drops them (upstream jev-ultrafast behaviour).
 | `DIMENSION_BROWSER_EXECUTABLE` | Chrome/Chromium executable (overrides the choice below; `browser_state` then reports `app: "custom"`). |
 | `DIMENSION_BROWSER_RELAY_URL` | Relay CDP endpoint (default `http://127.0.0.1:9224`). |
 | `DIMENSION_BROWSER_HEADLESS` | `false` for a visible window. |
+| `DIMENSION_BROWSER_THROWAWAY_IDLE_MS` | How long a throwaway browser a chat opened may go without a call before it is closed, in milliseconds (default `600000`, 10 minutes; at most `2147483647`, above which a server refuses to start). |
 | `DIM_BROWSER_PYTHON` | Interpreter for the task agents. |
 
 ### How the browser launches
@@ -276,6 +277,32 @@ time, and is never deleted. Saved passwords (`generatePassword`,
 `useSavedPassword`), a `browser_task` `credential` and `browser_publish` need a
 saved profile and fail `profile_required` on a throwaway browser, before
 anything reaches the page.
+
+**How a throwaway ends.** One server serves every chat on an engine, and the host
+stamps each call with its session (`ai.insodimension/session`) but sends the
+server no word when a session ends, so a forgotten `browser_close` cannot be seen
+as such. A throwaway a chat opened is therefore closed when (1) `browser_close`
+says so, (2) it has had no call for 10 minutes (nothing queued or running on it,
+no task driving it, no View joined to its stream; `DIMENSION_BROWSER_THROWAWAY_IDLE_MS`
+changes the 10 minutes), or (3) the pool (4 browsers) is full and another open, or
+a `browser_read`, needs the slot: the one used longest ago that nothing is
+happening on is given up. A saved profile, a browser with a task or a call
+running, and one a View has joined are never given up; the Private browser a
+person opened from the View is never closed for being quiet and is given up only
+when no chat's browser can be, and never while its View is joined. When nothing
+can be given up, `browser_open` is refused (`too_many_browsers`), naming the
+browsers the asking chat holds and only those. The open takes at most one victim:
+if that browser will not close, the open is refused instead of moving on to the
+next chat's. A chat that returns to a browser closed this way is told so (and to
+`browser_open` again) instead of "unknown browser", and `browser_close` on it
+succeeds. By then its Chrome process has exited and its directory is deleted.
+
+A close that hangs does not keep a slot. The polite close gets 20 s; after that the
+throwaway's whole process tree is killed and its slot is freed only once the
+process is seen to exit. A close that still cannot be confirmed is tried again
+every 30 s (or each idle period, if shorter), whether it came from `browser_close`,
+the idle timeout or an eviction. A saved profile is never killed: its lock holds
+until its Chrome is provably gone.
 
 **A profile has a name and a label.** The name is the folder (`[a-z0-9_-]`, 48
 characters) and never changes. The label ("Work Account"), a colour from a fixed
