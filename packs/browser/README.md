@@ -224,7 +224,10 @@ so sites treat it as one:
     above (no `Runtime.enable`, reads in an isolated world) do not bind it: the
     task agents attach their own CDP clients, not the patched library, so
     what they send is what the page can see until the task ends. The launch
-    switches, the screen and the GPU mask stay.
+    switches, the screen and the GPU mask stay. Measured with stock puppeteer
+    attached as a stand-in for a task agent's client (the agents themselves
+    were not run): the page's two Runtime rows flag while it is attached and no
+    other row does (`bench/detect-report-2026-10-02.md`).
   - Puppeteer's default popup-blocker, IPC-flooding and pre-commit-input
     switches and its `--disable-features` list are left out, so a page sees the
     defaults of a Chrome a person runs.
