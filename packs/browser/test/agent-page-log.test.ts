@@ -24,7 +24,7 @@ afterEach(async () => {
  * A site whose /app page is under a Content-Security-Policy that refuses inline scripts, runs a script of its own that asks
  * another origin (no CORS headers) for data and then throws, and prints a console error of its own.
  */
-function startSite(): { port: number } {
+function startSite(): { port: number | undefined } {
 	const elsewhere = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("data") });
 	servers.push(elsewhere);
 	const site = Bun.serve({

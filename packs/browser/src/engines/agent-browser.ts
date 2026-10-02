@@ -180,16 +180,17 @@ export const SOFTWARE_GRAPHICS_MASK = (vendor: string, renderer: string, softwar
 	const LOOKUP = Symbol.for(`${secret}:lookup`);
 	const ANSWER = Symbol.for(`${secret}:answer`);
 	// The highest window this one can reach (a worker has none): its toString keeps the names for every frame below it.
-	let highest: Window | undefined = typeof window === "object" ? window : undefined;
+	type Realm = Window & typeof globalThis;
+	let highest: Realm | undefined = typeof window === "object" ? (window as Realm) : undefined;
 	try {
-		for (let up = highest?.parent; highest && up && up !== highest; up = highest.parent) {
+		for (let up = highest?.parent as Realm | undefined; highest && up && up !== highest; up = highest.parent as Realm) {
 			void up.Function; // throws for a parent of another origin
 			highest = up;
 		}
 	} catch {
 		// `highest` is the last parent this frame could reach.
 	}
-	const hub = highest && highest !== window ? highest.Function.prototype.toString : undefined;
+	const hub = highest && highest !== (window as Realm | undefined) ? highest.Function.prototype.toString : undefined;
 	const names = new WeakMap<object, string>();
 	const isObject = (value: unknown): value is object => (typeof value === "object" && value !== null) || typeof value === "function";
 	/** What the hub answers for `fn`; nothing when the hub is not this script's, or throws. */
