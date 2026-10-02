@@ -17,15 +17,16 @@ import { FOCUS } from "./focus-ring";
 import { formatBytes } from "./format";
 import { failureAction, type FailureStage, isRecording } from "./media-failure";
 import { loadRenderer } from "./renderers";
+import { Opening } from "./opening";
 import type { Mounted, Theme } from "./renderers/types";
-import { type AnnotateMode, annotationModes, PaneExtras } from "./pane-extras";
+import { PaneExtras } from "./pane-extras";
 import type { DocTab } from "./tabs";
 import { KIND_LABEL, Toolbar } from "./toolbar";
 import { useCopied } from "./use-copied";
 import { stepZoom } from "./zoom";
 
 type Phase =
-	| { readonly name: "loading"; readonly loaded: number; readonly total: number }
+	| { readonly name: "loading"; readonly stage: "read" | "prepare"; readonly loaded: number; readonly total: number }
 	| { readonly name: "ready" }
 	| { readonly name: "unavailable" }
 	| { readonly name: "too-large" }
@@ -44,23 +45,13 @@ export function DocPane({ app, tab, active, theme }: DocPaneProps) {
 	const [stage, setStage] = useState<HTMLDivElement | null>(null);
 	const [frame, setFrame] = useState<HTMLDivElement | null>(null);
 	const [mounted, setMounted] = useState<Mounted | null>(null);
-	const [phase, setPhase] = useState<Phase>({ name: "loading", loaded: 0, total: tab.size });
+	const [phase, setPhase] = useState<Phase>({ name: "loading", stage: "read", loaded: 0, total: tab.size });
 	const [zoom, setZoom] = useState(1);
 	const [page, setPage] = useState(1);
 	const [retry, setRetry] = useState(0);
-	const [mode, setMode] = useState<AnnotateMode | null>(null);
 	const { copied, copy } = useCopied(tab.path);
 	const limit = readLimit(tab);
 	const truncated = limit !== undefined && tab.size > limit;
-	const modes = annotationModes(tab.kind);
-	const firstMode = modes[0];
-
-	// An open that asked for annotate mode (the card's Annotate action) turns the layer on, for a new tab and for one
-	// already open. A plain open leaves the mode as the human set it; a kind with no mode ignores the ask.
-	useEffect(() => {
-		if (tab.annotateRequests > 0 && firstMode !== undefined) setMode(firstMode);
-	}, [tab.annotateRequests, firstMode]);
-
 	// biome-ignore lint/correctness/useExhaustiveDependencies: `retry` is a retrigger token, and a changed file arrives as a new `revision`.
 	useEffect(() => {
 		if (stage === null) return;
@@ -68,7 +59,7 @@ export function DocPane({ app, tab, active, theme }: DocPaneProps) {
 		let handle: Mounted | undefined;
 		// Where a failure is met, so a recording that cannot be played is told what to do next (`media-failure.ts`).
 		let where: FailureStage = "load";
-		setPhase({ name: "loading", loaded: 0, total: tab.size });
+		setPhase({ name: "loading", stage: "read", loaded: 0, total: tab.size });
 		setZoom(1);
 		setPage(1);
 
@@ -79,17 +70,22 @@ export function DocPane({ app, tab, active, theme }: DocPaneProps) {
 					setPhase({ name: "too-large" });
 					return;
 				}
-				const renderer = await loadRenderer(tab.kind);
+				// The renderer's chunk is part of preparing, not of reading, so it loads while the bytes stream in rather
+				// than before them: the opening surface names the stage that is really under way, and `prepare` starts the
+				// moment the bytes are in hand.
+				const reading = loadDocumentBytes(app, tab, {
+					signal: controller.signal,
+					onProgress: (done, total) => setPhase({ name: "loading", stage: "read", loaded: done, total }),
+				}).then(loaded => {
+					if (!controller.signal.aborted) setPhase({ name: "loading", stage: "prepare", loaded: loaded.bytes.length, total: tab.size });
+					return loaded;
+				});
+				const [renderer, { bytes }] = await Promise.all([loadRenderer(tab.kind), reading]);
 				if (controller.signal.aborted) return;
 				if (renderer === null) {
 					setPhase({ name: "unavailable" });
 					return;
 				}
-				const { bytes } = await loadDocumentBytes(app, tab, {
-					signal: controller.signal,
-					onProgress: (done, total) => setPhase({ name: "loading", loaded: done, total }),
-				});
-				if (controller.signal.aborted) return;
 				where = "open";
 				handle = await renderer.mount(stage, bytes, {
 					filename: tab.filename,
@@ -109,6 +105,8 @@ export function DocPane({ app, tab, active, theme }: DocPaneProps) {
 			} catch (error) {
 				if (controller.signal.aborted) return;
 				setPhase({ name: "error", message: error instanceof Error ? error.message : String(error), stage: where });
+				// The read may still be streaming (the renderer failed first): stop it, so its `prepare` cannot take the error card back.
+				controller.abort();
 			}
 		})();
 
@@ -131,9 +129,8 @@ export function DocPane({ app, tab, active, theme }: DocPaneProps) {
 	};
 
 	// A document that did not open has nothing to mark, whatever its kind: no marking help, list or send under its error
-	// card (the human's choice of mode is kept, and comes back if a second try opens it). For a recording the card also
-	// offers what can help: Copy path when a retry cannot (`media-failure.ts`).
-	const modeShown = shownMode(mode, phase.name);
+	// card. For a recording the card also offers what can help: Copy path when a retry cannot (`media-failure.ts`).
+	const modeShown = shownMode(tab.kind, phase.name);
 	const retryAction = { label: "Try again", onClick: () => setRetry(count => count + 1) };
 	const copyAction = { label: copied ? "Path copied" : "Copy path", onClick: copy };
 
@@ -147,12 +144,19 @@ export function DocPane({ app, tab, active, theme }: DocPaneProps) {
 				shownBytes={truncated ? limit : undefined}
 				zoom={mounted?.zoom ? { factor: zoom, onStep: direction => applyZoom(stepZoom(zoom, direction)), onReset: () => applyZoom(1) } : undefined}
 				pager={pages > 1 ? { page, count: pages, onGoto: goto } : undefined}
-				modes={phase.name === "ready" && modes.length > 0 ? { available: modes, mode, onChange: setMode } : undefined}
 			/>
 			<div className="flex min-h-0 flex-1">
 				<div className="relative min-h-0 min-w-0 flex-1" data-slot="viewer-stage-frame" ref={setFrame}>
 					<div ref={setStage} className="absolute inset-0 overflow-hidden" data-slot="viewer-stage" />
-					{phase.name === "loading" ? <Loading loaded={phase.loaded} total={phase.total} /> : null}
+					{phase.name === "loading" || phase.name === "ready" ? (
+						<Opening
+							name={tab.filename}
+							stage={phase.name === "loading" ? phase.stage : "prepare"}
+							loaded={phase.name === "loading" ? phase.loaded : undefined}
+							total={phase.name === "loading" ? phase.total : undefined}
+							open={phase.name === "loading"}
+						/>
+					) : null}
 					{phase.name === "unavailable" ? (
 						<Message title="Preview not available" body={`${KIND_LABEL[tab.kind]} files cannot be previewed in this build of the viewer.`} />
 					) : null}
@@ -171,7 +175,7 @@ export function DocPane({ app, tab, active, theme }: DocPaneProps) {
 						/>
 					) : null}
 				</div>
-				<PaneExtras app={app} tab={tab} active={active} ready={phase.name === "ready"} frame={frame} mode={modeShown} onMode={setMode} />
+				<PaneExtras app={app} tab={tab} active={active} ready={phase.name === "ready"} frame={frame} mode={modeShown} />
 			</div>
 		</div>
 	);
@@ -189,18 +193,6 @@ export function FailedPane({ tab, failure, active }: { readonly tab: DocTab; rea
 			<div className="relative min-h-0 flex-1">
 				<Message title="This file could not be opened" body={failure.message} action={failure.copyPath ? { label: copied ? "Path copied" : "Copy path", onClick: copy } : undefined} />
 			</div>
-		</div>
-	);
-}
-
-function Loading({ loaded, total }: { readonly loaded: number; readonly total: number }) {
-	const percent = total > 0 ? Math.min(100, Math.round((loaded / total) * 100)) : 0;
-	return (
-		<div role="status" aria-live="polite" className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-fr-bg">
-			<div className="h-1 w-40 overflow-hidden rounded-full bg-fr-surface-3">
-				<div className="h-full rounded-full bg-fr-accent transition-[width]" style={{ width: `${percent}%` }} />
-			</div>
-			<p className="text-fr-xs text-fr-text-3">{total >= 512 * 1024 ? `Loading ${formatBytes(loaded)} of ${formatBytes(total)}` : "Loading"}</p>
 		</div>
 	);
 }

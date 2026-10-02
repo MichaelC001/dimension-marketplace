@@ -6,8 +6,9 @@
 // rules that come from the pane. The picking is the kit's (`@dimension/mcp-app-kit/annotate`), and
 // so is every rule about a page that may be hostile.
 //   * the READING frame is `[data-slot="viewer-html-frame"]`, drawn by `renderers/html.ts` with
-//     `sandbox=""`: it runs nothing, for anyone, and is never changed. In Pick mode the kit adds a PICK
-//     frame over it, made from its `srcdoc`, and removes it again when the mode ends;
+//     `sandbox=""`: it runs nothing, for anyone, and is never changed. While Pick is armed (from the first frame
+//     the page can be read, unless it is larger than `PICK_FRAME_LIMIT`) the kit adds a PICK frame over it, made
+//     from its `srcdoc`, and removes it again when Pick is put down;
 //   * the renderer re-mounts (a theme, a changed file), replacing the reading frame, so the slot is
 //     looked up again each time it says `ready`, and the kit builds a new pick frame for the new one;
 //   * every open document keeps its own pane mounted, so the picker lives only for the tab on screen.
@@ -24,6 +25,7 @@ import {
 import type { PickKeyIntent } from "@dimension/mcp-app-kit/annotate";
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
+import { PICK_FRAME_LIMIT } from "./document-bytes";
 import { Column, type PaneExtrasProps, revisionOf, Strip, useSlot } from "./pane-shared";
 
 const HTML_FRAME = '[data-slot="viewer-html-frame"]';
@@ -49,27 +51,40 @@ function selectorHeading(selector: string): { heading: string; headingTitle?: st
 	return { heading: tail === selector ? selector : `…${STEP}${tail}`, headingTitle: selector };
 }
 
-export function ElementPicks({ app, tab, active, ready, frame, mode, onMode }: PaneExtrasProps): ReactNode {
+export function ElementPicks({ app, tab, active, ready, frame, mode }: PaneExtrasProps): ReactNode {
 	const slot = useSlot(frame, ready, HTML_FRAME);
 	const reading = slot instanceof HTMLIFrameElement ? slot : null;
-	const picking = mode === "elements";
-	const live = active && picking;
+	const up = mode === "elements";
+	// Pick is in the hand from the moment the page can be read, unless the page is large: the pick frame is a
+	// second copy of the page to parse and lay out, so a large one waits until the human asks (the Pick tool, or
+	// the card's Annotate action). Escape, or pressing Pick again, puts it down (the page is then only read and
+	// scrolled, which is the only way a finger can leave it); it comes back with the layer.
+	const large = tab.size > PICK_FRAME_LIMIT;
+	const [armed, setArmed] = useState(!large);
+	useEffect(() => {
+		if (up) setArmed(!large);
+	}, [up, large]);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: `annotateRequests` is the trigger; `up` is read as it stands.
+	useEffect(() => {
+		if (tab.annotateRequests > 0 && up) setArmed(true);
+	}, [tab.annotateRequests]);
+	const live = active && up && armed;
 	// The picker says so when it cannot pick from the page (nothing to run it, or the policy is not enforced).
 	const [unreadable, setUnreadable] = useState(false);
-	// Each time Pick mode starts, or the page is drawn again, the answer is not known until the picker says.
+	// Each time the picker comes up, or the page is drawn again, the answer is not known until the picker says.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: `live` and `reading` are the triggers.
 	useEffect(() => setUnreadable(false), [live, reading]);
 	const session = useElementPicks({ app, file: tab.path, rev: revisionOf(tab) });
 	const { picks, retarget, activeId } = session;
 
-	// Esc leaves; Alt+Up and Alt+Down widen and narrow the row the human is on, else the newest.
+	// Esc puts Pick down; Alt+Up and Alt+Down widen and narrow the row the human is on, else the newest.
 	const onIntent = useCallback(
 		(intent: PickKeyIntent) => {
-			if (intent === "exit") return onMode(null);
+			if (intent === "exit") return setArmed(false);
 			const id = activeId ?? picks[picks.length - 1]?.id;
 			if (id !== undefined) retarget(id, intent === "wider" ? "parent" : "child");
 		},
-		[activeId, picks, retarget, onMode],
+		[activeId, picks, retarget],
 	);
 	useElementShortcuts({ enabled: live, onIntent });
 
@@ -107,21 +122,23 @@ export function ElementPicks({ app, tab, active, ready, frame, mode, onMode }: P
 						/>,
 						frame,
 					)}
-			{live ? (
+			{up ? (
 				<Strip frame={frame}>
 					<ElementToolbar
 						onWholePage={session.pickWholePage}
-						onDone={() => onMode(null)}
+						armed={armed}
+						large={large}
+						onArm={setArmed}
 						unavailable={unreadable}
 						full={session.full}
 						placement="strip"
 					/>
 				</Strip>
 			) : null}
-			{picking ? (
+			{up ? (
 				<Column frame={frame}>
 					<AnnotationPanel
-						title="Elements"
+						title="Notes"
 						items={items}
 						activeId={activeId}
 						focus={session.focus}
@@ -152,10 +169,16 @@ export function ElementPicks({ app, tab, active, ready, frame, mode, onMode }: P
 								</>
 							) : (
 								<>
-									<strong>Pick from the page</strong>
+									<strong>Add a note</strong>
 									<span>
-										Point at what you mean and click it. <kbd>Alt</kbd>+<kbd>↑</kbd> then picks the
-										element around it. Press <kbd>Esc</kbd> when you are done.
+										{armed ? (
+											<>
+												Point at what you mean and click it. <kbd>Alt</kbd>+<kbd>↑</kbd> then picks the
+												element around it. Press <kbd>Esc</kbd>, or Pick again, to stop picking.
+											</>
+										) : (
+											<>Choose Pick above the page to point at what you mean.</>
+										)}
 									</span>
 								</>
 							)

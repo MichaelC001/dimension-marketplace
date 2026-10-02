@@ -8,8 +8,8 @@ import { type ReactNode, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import type { DocTab } from "./tabs";
 
-/** The toolbar's markup modes: marks on a picture, comments on text, picked elements on a
- *  page, marks on a recording's timeline. */
+/** The annotation modes: marks on a picture, comments on text, picked elements on a page, notes on a recording's
+ *  timeline. A kind is in exactly one (`annotate-modes.ts`); the bar names the tools, never the mode. */
 export type AnnotateMode = "marks" | "comments" | "elements" | "timeline";
 
 export interface PaneExtrasProps {
@@ -21,10 +21,8 @@ export interface PaneExtrasProps {
 	readonly ready: boolean;
 	/** The `position: relative` frame around the rendered document (`data-slot="viewer-stage-frame"`). */
 	readonly frame: HTMLElement | null;
-	/** The mode the toolbar toggle is in, or `null` when off. */
+	/** The mode the layer is up in: the kind's primary mode while there is something to mark, `null` while it did not open. */
 	readonly mode: AnnotateMode | null;
-	/** Leave or change the mode from inside the layer (Esc, a Done button). */
-	readonly onMode: (mode: AnnotateMode | null) => void;
 }
 
 /** The element a renderer marked with `selector`, looked up again whenever it re-mounts. */
@@ -77,12 +75,12 @@ export function Column({ frame, children }: { readonly frame: HTMLElement | null
 	}
 	const pane = paneOf(frame);
 	if (pane === null) return null;
-	// A sheet under the document, as tall as what is in it and no taller: the hint and the send when nothing is marked,
-	// a row's height more with each mark, until it reaches half the pane (never more, so the document always keeps the
-	// other half; 420 px at most). Past that the list scrolls inside it. Sized by content and not by a state, the first
-	// mark does not make the document jump to a smaller size, and one mark does not leave a sheet of empty space under
-	// it. The kit's panel fills a box it is given (the side column's); here nothing gives it one, so `viewer.css` lets it
-	// take the size of what it holds and shrink to fit (the kit's CSS is unlayered, so a utility class here would lose).
+	// A sheet under the document, up to half the pane (never more, so the document always keeps the other half; 420 px at
+	// most). Its head, body and foot are the same height whether there is one note or ten, the body (the hint, or the list)
+	// a fixed one that the rows scroll inside: a sheet that grew with each note moved the picture, the page or the media
+	// stage up and down as notes came and went. The kit's panel fills a box it is given (the side column's); here nothing
+	// gives it one, so `viewer.css` sets the sheet's body height and lets the rest take the size of what it holds (the
+	// kit's CSS is unlayered, so a utility class here would lose).
 	return createPortal(
 		<aside data-slot="annotate-panel" data-placement="bottom" className="flex max-h-[min(50%,420px)] shrink-0 flex-col">
 			{children}
@@ -92,9 +90,10 @@ export function Column({ frame, children }: { readonly frame: HTMLElement | null
 }
 
 /**
- * A mode's own tools (the pick strip, the drawing tools), docked between the viewer's toolbar and the document. It
- * is in the flow: it takes its own row and covers nothing, where a pill floating over a short frame hid the very
- * thing the human was pointing at. The toolbar keeps the slot (`viewer-mode-strip`), empty until a mode fills it.
+ * THE annotation bar (`AnnotationToolbar`: the same bar on every kind, only its tools differ), docked between the
+ * viewer's toolbar and the document. It is in the flow: it takes its own row and covers nothing, where a pill
+ * floating over a short frame hid the very thing the human was pointing at. The toolbar keeps the slot
+ * (`viewer-mode-strip`); a kind with nothing to annotate leaves it empty, and it takes no room.
  */
 export function Strip({ frame, children }: { readonly frame: HTMLElement | null; readonly children: ReactNode }) {
 	const slot = paneOf(frame)?.querySelector<HTMLElement>('[data-slot="viewer-mode-strip"]') ?? null;
