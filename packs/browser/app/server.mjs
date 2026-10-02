@@ -1,18 +1,18 @@
-// src/stdio.ts
+// marketplace/packs/browser/src/stdio.ts
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
-// src/server.ts
-import { readFile as readFile2, readdir as readdir2 } from "node:fs/promises";
-import { extname as extname2, join as join8 } from "node:path";
+// marketplace/packs/browser/src/server.ts
+import { readFile as readFile3, readdir as readdir3 } from "node:fs/promises";
+import { extname as extname2, join as join9 } from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 import { registerAppResource, registerAppTool, RESOURCE_MIME_TYPE } from "@modelcontextprotocol/ext-apps/server";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z as z2 } from "zod";
 
-// src/connection.ts
+// marketplace/packs/browser/src/connection.ts
 import { getDomain, parse } from "tldts";
 
-// src/profile-name.ts
+// marketplace/packs/browser/src/profile-name.ts
 var PROFILE_NAME = /^[a-z0-9][a-z0-9_-]{0,47}$/;
 var RELAY_PROFILE = "relay";
 var DEFAULT_PROFILE = "default";
@@ -24,7 +24,7 @@ function loginSetLabel(profile2) {
   return profile2 === DEFAULT_PROFILE ? "Default" : profile2;
 }
 
-// src/connection.ts
+// marketplace/packs/browser/src/connection.ts
 var PACK_CONNECTION_REPORT_METHOD = "notifications/ai.insodimension/connection";
 var PACK_CONNECTION_REPORT_MAX_BYTES = 64 * 1024;
 var PACK_CONNECTION_ACCOUNT_MAX_BYTES = 256;
@@ -91,7 +91,7 @@ function buildConnectionReport(observations, meta = {}) {
   return assemble(low);
 }
 
-// src/contracts.ts
+// marketplace/packs/browser/src/contracts.ts
 var BROWSER_ENGINES = ["chromium", "chrome-relay", "abp", "browser4"];
 var TASK_AGENTS = ["jev", "browser-use"];
 var CREDENTIAL_MODES = ["signup", "login"];
@@ -112,19 +112,19 @@ var MAX_ELEMENT_ID_CHARS = 240;
 var MAX_ELEMENT_LABEL_CHARS = 100;
 var MAX_ELEMENTS_PER_REGION = 60;
 
-// src/annotation-file.ts
+// marketplace/packs/browser/src/annotation-file.ts
 import { randomBytes as randomBytes2 } from "node:crypto";
 import { mkdirSync as mkdirSync2, readdirSync as readdirSync2, rmSync as rmSync2, writeFileSync as writeFileSync2 } from "node:fs";
 import { join as join2, resolve as resolve2 } from "node:path";
 
-// src/store.ts
+// marketplace/packs/browser/src/store.ts
 import { randomBytes } from "node:crypto";
 import { closeSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
-// src/profile-meta.ts
+// marketplace/packs/browser/src/profile-meta.ts
 var PROFILE_COLOURS = ["blue", "orange", "green", "red", "purple", "pink", "teal", "grey"];
 var MAX_LABEL_CHARS = 48;
 function cleanLabel(raw) {
@@ -165,7 +165,7 @@ function effectiveSignedIn(signedIn5, observedAt, now) {
   return signedIn5 !== null && age >= -CLOCK_SKEW_MS && age <= SIGNED_IN_MAX_AGE_MS ? signedIn5 : null;
 }
 
-// src/store.ts
+// marketplace/packs/browser/src/store.ts
 var CONNECTIONS_FILE = "connections.json";
 var PROFILE_FILE = "profile.json";
 var OWNER_FILE = "owner.pid";
@@ -492,7 +492,7 @@ function defaultRootDir() {
   return join(homedir(), ".inso", "browser");
 }
 
-// src/annotation-file.ts
+// marketplace/packs/browser/src/annotation-file.ts
 var SCHEMA_PREFIX = "dimension.annotation-detail/";
 var MAX_DETAIL_BYTES = 1024 * 1024;
 var ANNOTATION_FILES_KEPT = 20;
@@ -541,12 +541,12 @@ var AnnotationFiles = class {
   }
 };
 
-// src/presets.ts
+// marketplace/packs/browser/src/presets.ts
 import { readdir, readFile } from "node:fs/promises";
 import { basename, extname, join as join3 } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// src/publish.ts
+// marketplace/packs/browser/src/publish.ts
 import { randomBytes as randomBytes3 } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 var MAX_FIELDS = 8;
@@ -849,7 +849,7 @@ function describe(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
-// src/presets.ts
+// marketplace/packs/browser/src/presets.ts
 var NAME = /^[a-z0-9][a-z0-9-]{0,47}$/;
 var MAX_PLATFORM_CHARS = 40;
 var MAX_NOTES_CHARS = 2e3;
@@ -972,7 +972,7 @@ function isObject2(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-// src/profile-list.ts
+// marketplace/packs/browser/src/profile-list.ts
 var MAX_PROFILES_FOR_MODEL = 40;
 function buildProfileList(store, holderOf, now) {
   return store.list().filter((slug) => slug !== RELAY_PROFILE).map((slug) => {
@@ -1004,25 +1004,25 @@ function profilesForModel(list, max = MAX_PROFILES_FOR_MODEL) {
   return { profiles: kept.sort((a, b) => a.name.localeCompare(b.name)).map(forModel), omitted: list.length - max };
 }
 
-// src/runtime.ts
+// marketplace/packs/browser/src/runtime.ts
 import { randomBytes as randomBytes4 } from "node:crypto";
 import { existsSync as existsSync3, watch } from "node:fs";
-import { join as join7 } from "node:path";
+import { join as join8 } from "node:path";
 
-// recipes/x-post.json
+// marketplace/packs/browser/recipes/x-post.json
 var signedIn = '[data-testid="SideNav_AccountSwitcher_Button"]';
 var account = '[data-testid="SideNav_AccountSwitcher_Button"]';
 
-// recipes/bluesky-post.json
+// marketplace/packs/browser/recipes/bluesky-post.json
 var signedIn2 = 'a[aria-label="Profile"][href^="/profile/"]';
 
-// recipes/linkedin-post.json
+// marketplace/packs/browser/recipes/linkedin-post.json
 var signedIn3 = "img.global-nav__me-photo";
 
-// recipes/reddit-comment.json
+// marketplace/packs/browser/recipes/reddit-comment.json
 var signedIn4 = "#expand-user-drawer-button";
 
-// src/probes.ts
+// marketplace/packs/browser/src/probes.ts
 var bskyHandle = (href) => {
   const handle = new URL(href).pathname.match(/^\/profile\/([^/]+)\/?$/)?.[1];
   return handle === void 0 ? void 0 : `@${decodeURIComponent(handle)}`;
@@ -1073,7 +1073,7 @@ async function readAccount(reader, read2) {
   }
 }
 
-// src/credentials.ts
+// marketplace/packs/browser/src/credentials.ts
 import { randomInt } from "node:crypto";
 import { readFileSync as readFileSync2, renameSync as renameSync2, rmSync as rmSync3, writeFileSync as writeFileSync3 } from "node:fs";
 import { join as join4 } from "node:path";
@@ -1150,13 +1150,13 @@ function resolveCredential(profileDir, request) {
   return { origin, password, created: true };
 }
 
-// src/engines/puppeteer.ts
+// marketplace/packs/browser/src/engines/puppeteer.ts
 import { createHash } from "node:crypto";
 import { mkdirSync as mkdirSync4, statSync as statSync2 } from "node:fs";
 import { setTimeout as sleep2 } from "node:timers/promises";
 import puppeteer, { TimeoutError } from "puppeteer-core";
 
-// src/favicon.ts
+// marketplace/packs/browser/src/favicon.ts
 var MAX_FAVICON_DATA_URL = 32 * 1024;
 var MAX_ORIGINS = 256;
 var FETCH_TIMEOUT_MS = 4e3;
@@ -1248,7 +1248,7 @@ function sniff(url) {
   return null;
 }
 
-// src/image.ts
+// marketplace/packs/browser/src/image.ts
 var MAX_FRAME_BYTES = 8 * 1024 * 1024;
 function clampRegion(requested, frame) {
   for (const [name, value] of Object.entries(requested)) {
@@ -1268,7 +1268,7 @@ function clampRegion(requested, frame) {
   return { x, y, width: Math.min(w, frame.width - x), height: Math.min(h, frame.height - y) };
 }
 
-// src/engines/page-scripts.ts
+// marketplace/packs/browser/src/engines/page-scripts.ts
 var PAGE_TEXT_SCRIPT = (limit, frameRef = null, dx = 0, dy = 0) => {
   const parts = frameRef === null ? [`# ${document.title}`, document.location.href, ""] : [`## frame @${frameRef}: ${document.title}`, document.location.href, ""];
   const body = document.body?.innerText ?? "";
@@ -1366,9 +1366,9 @@ var READ_PAGE_SCRIPT = (limit, maxFrames) => {
 var ELEMENTS_IN_REGIONS_SCRIPT = (regions, limit, max) => {
   const found = regions.map(() => ({ elements: [], truncated: false }));
   const used = regions.map(() => 0);
-  const open = (entry) => !entry.truncated && entry.elements.length < max.count;
+  const open2 = (entry) => !entry.truncated && entry.elements.length < max.count;
   const nodes = document.querySelectorAll("body *");
-  for (let i = 0; i < nodes.length && found.some(open); i += 1) {
+  for (let i = 0; i < nodes.length && found.some(open2); i += 1) {
     const el = nodes[i];
     const r = el.getBoundingClientRect();
     if (r.width <= 0 || r.height <= 0) continue;
@@ -1376,7 +1376,7 @@ var ELEMENTS_IN_REGIONS_SCRIPT = (regions, limit, max) => {
     for (let k = 0; k < regions.length; k += 1) {
       const region = regions[k];
       const entry = found[k];
-      if (!open(entry)) continue;
+      if (!open2(entry)) continue;
       const intersects = r.left < region.x + region.width && r.right > region.x && r.top < region.y + region.height && r.bottom > region.y;
       if (!intersects) continue;
       if (el.children.length > 0 && r.width * r.height > region.width * region.height * 4) continue;
@@ -1575,7 +1575,7 @@ var EVAL_RESULT_SCRIPT = function(limit) {
   return { text: text.slice(0, limit), truncated: text.length > limit };
 };
 
-// src/engines/page-log.ts
+// marketplace/packs/browser/src/engines/page-log.ts
 var LOAD_FAILURE_ECHO = "Failed to load resource";
 var ABORTED = "net::ERR_ABORTED";
 var URL_IN_TEXT = /\bhttps?:\/\/[^\s"'<>)\]]+/g;
@@ -1624,7 +1624,7 @@ function watchPageLog(page, record) {
   });
 }
 
-// src/input.ts
+// marketplace/packs/browser/src/input.ts
 import { z } from "zod";
 var MAX_DELTA = 5e3;
 var modifiers = z.number().int().min(0).max(15).default(0);
@@ -1711,7 +1711,7 @@ function inputCall(event) {
   }
 }
 
-// src/engines/launch.ts
+// marketplace/packs/browser/src/engines/launch.ts
 import { existsSync, mkdirSync as mkdirSync3, readFileSync as readFileSync3, writeFileSync as writeFileSync4 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
 import { join as join5 } from "node:path";
@@ -1862,7 +1862,7 @@ function turnOffPasswordSaving(userDataDir) {
   writeFileSync4(path, JSON.stringify({ ...prefs, credentials_enable_service: false, profile: { ...profile2, password_manager_enabled: false } }), { mode: 384 });
 }
 
-// src/engines/puppeteer.ts
+// marketplace/packs/browser/src/engines/puppeteer.ts
 var NAVIGATE_TIMEOUT_MS = 3e4;
 var MAX_SNAPSHOT_FRAMES = 16;
 var FRAME_SELECTOR = /^@(\d{1,3}(?:\.\d{1,3}){0,7})~([0-9a-f]{8})\s+([\s\S]+)$/;
@@ -2163,17 +2163,17 @@ async function guardPage(cdp) {
   return { cdp, dialogs };
 }
 function answerDialogs(cdp, log) {
-  let open;
+  let open2;
   cdp.on("Page.javascriptDialogOpening", (event) => {
-    open = { type: event.type, message: event.message.slice(0, MAX_DIALOG_CHARS) };
+    open2 = { type: event.type, message: event.message.slice(0, MAX_DIALOG_CHARS) };
     const accept = event.type === "alert" || event.type === "beforeunload";
     void cdp.send("Page.handleJavaScriptDialog", { accept }).catch(() => void 0);
   });
   cdp.on("Page.javascriptDialogClosed", (event) => {
-    if (!open) return;
-    log.entries.push({ seq: ++log.seq, type: open.type, message: open.message, handled: event.result ? "accepted" : "dismissed" });
+    if (!open2) return;
+    log.entries.push({ seq: ++log.seq, type: open2.type, message: open2.message, handled: event.result ? "accepted" : "dismissed" });
     if (log.entries.length > MAX_DIALOGS) log.entries.shift();
-    open = void 0;
+    open2 = void 0;
   });
 }
 var NONE = Object.freeze({});
@@ -3160,7 +3160,7 @@ function describe2(err) {
   return err instanceof Error ? err.message : String(err);
 }
 
-// src/engines/refused.ts
+// marketplace/packs/browser/src/engines/refused.ts
 var REFUSED_ENGINES = {
   abp: {
     code: "abp_unauthenticated_control_port",
@@ -3175,7 +3175,7 @@ function isRefused(engine) {
   return Object.hasOwn(REFUSED_ENGINES, engine);
 }
 
-// src/engines/index.ts
+// marketplace/packs/browser/src/engines/index.ts
 function assertEngineAvailable(engine) {
   if (isRefused(engine)) fail(REFUSED_ENGINES[engine].code, REFUSED_ENGINES[engine].message);
 }
@@ -3184,7 +3184,128 @@ function createEngineDriver(engine, options) {
   return createPuppeteerDriver(engine === "chrome-relay" ? "chrome-relay" : "chromium", options);
 }
 
-// src/read.ts
+// marketplace/packs/browser/src/publish-approval.ts
+import { createHash as createHash2 } from "node:crypto";
+import { open, readdir as readdir2, readFile as readFile2, unlink } from "node:fs/promises";
+import { join as join6 } from "node:path";
+var BINDING_DOMAIN = "publish-approval/v1";
+var MAX_APPROVAL_MS = 24 * 60 * 6e4;
+var DRAFT_ID = /^[A-Za-z0-9_-]{1,64}$/;
+var NONCE = /^[0-9a-f]{32}$/;
+var DIGEST = /^[0-9a-f]{64}$/;
+function bindingOf(binding) {
+  return createHash2("sha256").update(JSON.stringify([BINDING_DOMAIN, binding.origin, binding.profile, binding.preset ?? null, [...binding.values]])).digest("hex");
+}
+var UNTOUCHED = {
+  park: "Nothing was typed or clicked.",
+  confirm: "Nothing was clicked and the publish is still pending: cancel it with browser_publish_cancel."
+};
+var PublishApprovals = class {
+  #dir;
+  #now;
+  constructor(dir, now = Date.now) {
+    this.#dir = dir;
+    this.#now = now;
+  }
+  /** Refuse unless a live, unspent approval covers this post. Spends nothing. */
+  async require(binding, stage) {
+    const found = await this.#survey(bindingOf(binding));
+    if (found.live.length === 0) refuse(binding, found, stage);
+  }
+  /**
+   * Spend the approval that covers this post, or refuse. The exclusive create of
+   * its marker is the lock, so of any number of concurrent spenders exactly one
+   * wins; the rest see `used`.
+   */
+  async consume(binding, stage) {
+    const found = await this.#survey(bindingOf(binding));
+    for (const approval of found.live) {
+      const marker = join6(this.#dir, `${approval.draftId}.${approval.nonce}.used`);
+      try {
+        await (await open(marker, "wx")).close();
+      } catch (error) {
+        if (error.code === "EEXIST") {
+          found.used.push(approval);
+          continue;
+        }
+        throw error;
+      }
+      return {
+        draftId: approval.draftId,
+        release: async () => {
+          await unlink(marker).catch((error) => {
+            if (error.code !== "ENOENT") throw error;
+          });
+        }
+      };
+    }
+    return refuse(binding, found, stage);
+  }
+  /** Every approval for this binding, sorted into the states a refusal tells apart. Unreadable or malformed entries are not approvals. */
+  async #survey(binding) {
+    const live = [];
+    const used = [];
+    const expired = [];
+    let names;
+    try {
+      names = await readdir2(this.#dir);
+    } catch (error) {
+      if (error.code === "ENOENT") return { live, used, expired };
+      throw error;
+    }
+    const spent = new Set(names.filter((name) => name.endsWith(".used")));
+    const now = this.#now();
+    for (const name of names) {
+      if (!name.endsWith(".json")) continue;
+      const approval = await readApproval(join6(this.#dir, name), name);
+      if (approval === null || approval.binding !== binding) continue;
+      if (spent.has(`${approval.draftId}.${approval.nonce}.used`)) used.push(approval);
+      else if (approval.expiresAt <= now) expired.push(approval);
+      else live.push(approval);
+    }
+    return { live, used, expired };
+  }
+};
+async function readApproval(path, name) {
+  let parsed;
+  try {
+    parsed = JSON.parse(await readFile2(path, "utf8"));
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const { v, draftId, nonce, binding, approvedAt, expiresAt } = parsed;
+  if (v !== 1 || typeof draftId !== "string" || !DRAFT_ID.test(draftId) || name !== `${draftId}.json`) return null;
+  if (typeof nonce !== "string" || !NONCE.test(nonce) || typeof binding !== "string" || !DIGEST.test(binding)) return null;
+  if (typeof approvedAt !== "string" || typeof expiresAt !== "string") return null;
+  const from = Date.parse(approvedAt);
+  const until = Date.parse(expiresAt);
+  if (!Number.isFinite(from) || !Number.isFinite(until) || until <= from || until - from > MAX_APPROVAL_MS) return null;
+  return { draftId, nonce, binding, approvedAt: from, expiresAt: until };
+}
+function refuse(binding, found, stage) {
+  const post = `site ${binding.origin}, profile ${binding.profile}, ${binding.preset === void 0 ? "a recipe, which no board approves," : `preset ${binding.preset},`} text sha256:${bindingOf(binding).slice(0, 12)}`;
+  const spent = found.used[0];
+  if (spent !== void 0) {
+    fail(
+      "publish_unapproved",
+      `publish_unapproved: the approval for draft ${spent.draftId} (${post}) was already used, so this post may already be up. Do not post it again: follow it with browser_publish_wait, then record draft_posted with its url, or unconfirmed if you cannot tell. ${UNTOUCHED[stage]}`
+    );
+  }
+  const lapsed = found.expired[0];
+  if (lapsed !== void 0) {
+    fail(
+      "publish_unapproved",
+      `publish_unapproved: the approval for draft ${lapsed.draftId} (${post}) expired at ${new Date(lapsed.expiresAt).toISOString()}. Record draft_failed with that reason; the user presses Retry on the board, which approves it again. ${UNTOUCHED[stage]}`
+    );
+  }
+  fail(
+    "publish_unapproved",
+    `publish_unapproved: no board approval covers this exact post (${post}). Post only text the user approved on the campaign board, from the profile that draft names, through the platform's preset (never a recipe you wrote), exactly as approved, character for character. ${UNTOUCHED[stage]}`
+  );
+}
+
+// marketplace/packs/browser/src/read.ts
 import { lookup } from "node:dns/promises";
 import { isIPv4, isIPv6 } from "node:net";
 var READ_TIMEOUT_MS = 15e3;
@@ -3382,12 +3503,12 @@ async function resolveReason(host, resolve4) {
   }
 }
 
-// src/task.ts
+// marketplace/packs/browser/src/task.ts
 import { spawn } from "node:child_process";
 import { existsSync as existsSync2 } from "node:fs";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 import { createInterface } from "node:readline";
-import { join as join6 } from "node:path";
+import { join as join7 } from "node:path";
 var PYTHON_DIR = fileURLToPath2(new URL("../python/", import.meta.url));
 var CANCEL_GRACE_MS = 15e3;
 var EXIT_DRAIN_MS = 2e3;
@@ -3396,7 +3517,7 @@ var SPARE_IDLE_MS = 10 * 6e4;
 function interpreter() {
   const configured = process.env.DIM_BROWSER_PYTHON?.trim();
   if (configured) return configured;
-  const venv = process.platform === "win32" ? join6(PYTHON_DIR, ".venv", "Scripts", "python.exe") : join6(PYTHON_DIR, ".venv", "bin", "python");
+  const venv = process.platform === "win32" ? join7(PYTHON_DIR, ".venv", "Scripts", "python.exe") : join7(PYTHON_DIR, ".venv", "bin", "python");
   if (!existsSync2(venv)) {
     fail(
       "python_env_missing",
@@ -3533,7 +3654,7 @@ function startWorker(job, onStep) {
   };
 }
 
-// src/runtime.ts
+// marketplace/packs/browser/src/runtime.ts
 var MAX_BROWSERS = 4;
 var APP_NAMES = { chrome: "Chrome", msedge: "Edge", chromium: "Chromium", custom: "a custom browser" };
 var PROBE_DEBOUNCE_MS = 400;
@@ -3582,6 +3703,7 @@ var TOUCHING_KINDS = { click: true, press: true, type: true, insert: true };
 var touchesPage = (event) => event.kind !== "wheel" && !(event.kind === "mouse" && event.type === "move");
 var BrowserRuntime = class {
   store;
+  publishApprovals;
   annotationFiles;
   options;
   byId = /* @__PURE__ */ new Map();
@@ -3627,7 +3749,8 @@ var BrowserRuntime = class {
   constructor(options = {}) {
     this.options = options;
     this.store = new ProfileStore(options.rootDir);
-    this.annotationFiles = new AnnotationFiles(join7(this.store.rootDir, "annotations"));
+    this.annotationFiles = new AnnotationFiles(join8(this.store.rootDir, "annotations"));
+    this.publishApprovals = new PublishApprovals(join8(this.store.rootDir, "publish-approvals"));
     this.store.sweepEphemeral();
   }
   // -----------------------------------------------------------------------
@@ -3708,10 +3831,10 @@ var BrowserRuntime = class {
       const ephemeral = this.store.createEphemeral();
       directory = ephemeral.userDataDir;
       free = () => this.discard(ephemeral.dir);
-      annotations = new AnnotationFiles(join7(ephemeral.dir, "annotations"));
+      annotations = new AnnotationFiles(join8(ephemeral.dir, "annotations"));
     } else {
       const lock = this.store.acquireLock(profile2);
-      directory = engine === "chromium" ? this.store.userDataDir(profile2) : join7(this.store.profileDir(profile2), engine);
+      directory = engine === "chromium" ? this.store.userDataDir(profile2) : join8(this.store.profileDir(profile2), engine);
       free = () => this.store.releaseLock(lock);
     }
     let released = false;
@@ -4643,6 +4766,7 @@ ${host}`;
       if (isPending(entry.publish)) {
         fail("publish_pending", "a publish is already awaiting confirmation; it must be posted, cancelled or expire first");
       }
+      if (selected === "post") await this.publishApprovals.require({ origin: valid.origin, profile: profile2, ...preset === void 0 ? {} : { preset: preset.name }, values: valid.fields.map((field) => field.value) }, "park");
       const outcome = await prepare(entry.driver, profile2, valid, selected);
       if (!("record" in outcome)) {
         const shown = this.redact(entry, outcome);
@@ -4663,7 +4787,10 @@ ${host}`;
       if (entry.task?.status === "running") {
         fail("task_running", `a browser_task (${entry.task.agent}) owns this page; wait for it or cancel it`);
       }
+      const { record } = publication;
+      const spent = await this.publishApprovals.consume({ origin: record.origin, profile: record.profile, ...record.preset === void 0 ? {} : { preset: record.preset.name }, values: record.fields.map((field) => field.value) }, "confirm");
       await confirm(entry.driver, publication);
+      if (publication.record.status === "failed") await spent.release();
       if (publication.record.status === "posted") this.observeConnection(publication.record.profile, publication.recipe.origin, true, this.redact(entry, publication.account));
       return this.redact(entry, publishRecord(publication));
     });
@@ -5092,11 +5219,11 @@ function heldMessage(profile2, holder) {
   return `profile "${profile2}" is already open, held by ${holder === "human" ? "the human in the View" : "another chat"}. Ask the human to close it, or use another profile.`;
 }
 
-// src/stream.ts
+// marketplace/packs/browser/src/stream.ts
 import { randomBytes as randomBytes5 } from "node:crypto";
 import http from "node:http";
 
-// src/wire.ts
+// marketplace/packs/browser/src/wire.ts
 var KIND_PICTURE = 1;
 var KIND_STATE = 2;
 var HEADER_BYTES = 9;
@@ -5114,7 +5241,7 @@ function encode(kind, head, body = new Uint8Array(0)) {
   return [prefix, body];
 }
 
-// src/stream.ts
+// marketplace/packs/browser/src/stream.ts
 var TOKEN_IDLE_MS = 6e4;
 var STATE_INTERVAL_MS = 250;
 var MAX_TOKENS_PER_BROWSER = 16;
@@ -5408,7 +5535,7 @@ var LiveChannel = class {
   }
 };
 
-// src/server.ts
+// marketplace/packs/browser/src/server.ts
 var BROWSER_VIEW_URI = "ui://browser/index.html";
 var VIEW_CSP = { connectDomains: ["http://127.0.0.1:*"] };
 var capability = z2.string();
@@ -5541,21 +5668,21 @@ async function createBrowserServer(options = {}) {
   const server2 = new McpServer({ name: "dimension-community-browser", version: "0.1.0" });
   const live = new LiveChannel(runtime);
   const viewDir = options.viewDir ?? fileURLToPath3(new URL("./dist/", import.meta.url));
-  const html = await readFile2(join8(viewDir, "index.html"), "utf8");
+  const html = await readFile3(join9(viewDir, "index.html"), "utf8");
   const presets = options.presets ?? await loadPresets();
   const metadata = { ui: { prefersBorder: false, csp: VIEW_CSP } };
   registerAppResource(server2, "Browser", BROWSER_VIEW_URI, { _meta: metadata }, async () => ({
     contents: [{ uri: BROWSER_VIEW_URI, mimeType: RESOURCE_MIME_TYPE, text: html, _meta: metadata }]
   }));
-  for (const entry of await readdir2(viewDir, { recursive: true, withFileTypes: true })) {
+  for (const entry of await readdir3(viewDir, { recursive: true, withFileTypes: true })) {
     if (!entry.isFile() || entry.name === "index.html") continue;
     const extension = extname2(entry.name);
     const mimeType = MIME[extension];
     if (!mimeType) throw new Error(`Unsupported browser View asset: ${entry.name}`);
-    const path = join8(entry.parentPath, entry.name);
+    const path = join9(entry.parentPath, entry.name);
     const relative = path.slice(viewDir.replace(/[\\/]$/, "").length + 1).replaceAll("\\", "/");
     const uri = `ui://browser/${relative}`;
-    server2.registerResource(relative, uri, { mimeType }, async () => ({ contents: [{ uri, mimeType, blob: (await readFile2(path)).toString("base64") }] }));
+    server2.registerResource(relative, uri, { mimeType }, async () => ({ contents: [{ uri, mimeType, blob: (await readFile3(path)).toString("base64") }] }));
   }
   const showing = (extra, browserId) => {
     const session = sessionOf(extra);
@@ -5714,7 +5841,7 @@ async function createBrowserServer(options = {}) {
   }, ({ browserId }) => result(() => runtime.cancelTask(browserId)));
   registerAppTool(server2, "browser_publish", {
     title: "Publish",
-    description: `Post through a signed-in profile (a throwaway browser is refused). Pass EXACTLY ONE of preset or recipe. preset (preferred; see browser_publish_presets): {name, values (one per preset field, in order), target? (needsTarget presets: the page to post on)}. recipe (a site with no preset): origin (https; http only for 127.0.0.1/localhost), composeUrl on origin, signedIn (CSS selector present only when logged in), account? (CSS selector whose text names the account, e.g. "Alice @alice" \u2192 "@alice"), fields [{selector, value, label?}] (1-8; value \u2264 10000 chars; label \u2264 40 chars, the caption in the View), submit (selector), receipt {path (the posted URL's pathname template: literal text plus {segment} and {digits}, at most one per segment, e.g. "/{segment}/status/{digits}"), linkSelector? (the posted link; else the tab's URL after submit)}. mode "check": opens composeUrl, returns "signed-in" or "not-signed-in" (sign in first, then post). mode "post": types and reads back each value, returns "awaiting-confirmation" with a publishId and composeUrl. NOTHING is submitted yet: confirm with browser_publish_confirm (or the View's Post button), drop with browser_publish_cancel, follow with browser_publish_wait. While pending the page is pinned: browser_act, browser_task and browser_publish are refused (publish_pending) until posted, cancelled or expired (10 minutes). "failed": nothing was submitted. A password field is never a publish field; log in with browser_act or browser_task. Refused while a task runs.`,
+    description: `Post through a signed-in profile (a throwaway browser is refused). Pass EXACTLY ONE of preset or recipe. preset (preferred; see browser_publish_presets): {name, values (one per preset field, in order), target? (needsTarget presets: the page to post on)}. recipe (a site with no preset): origin (https; http only for 127.0.0.1/localhost), composeUrl on origin, signedIn (CSS selector present only when logged in), account? (CSS selector whose text names the account, e.g. "Alice @alice" \u2192 "@alice"), fields [{selector, value, label?}] (1-8; value \u2264 10000 chars; label \u2264 40 chars, the caption in the View), submit (selector), receipt {path (the posted URL's pathname template: literal text plus {segment} and {digits}, at most one per segment, e.g. "/{segment}/status/{digits}"), linkSelector? (the posted link; else the tab's URL after submit)}. mode "check": opens composeUrl, returns "signed-in" or "not-signed-in" (sign in first, then post). mode "post": refused (publish_unapproved, nothing opened or typed) unless the user approved this exact post on the campaign board: the same site, profile and text, unexpired and unspent. Otherwise types and reads back each value, returns "awaiting-confirmation" with a publishId and composeUrl. NOTHING is submitted yet: confirm with browser_publish_confirm (or the View's Post button), drop with browser_publish_cancel, follow with browser_publish_wait. While pending the page is pinned: browser_act, browser_task and browser_publish are refused (publish_pending) until posted, cancelled or expired (10 minutes). "failed": nothing was submitted. A password field is never a publish field; log in with browser_act or browser_task. Refused while a task runs.`,
     inputSchema: { browserId: capability, recipe: recipeSchema.optional(), preset: presetSchema.optional(), mode: z2.enum(PUBLISH_MODES) },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     _meta: { ...TRACTION_ONLY, ui: { resourceUri: BROWSER_VIEW_URI } }
@@ -5733,7 +5860,7 @@ async function createBrowserServer(options = {}) {
     _meta: TRACTION_ONLY
   }, () => result(async () => ({ presets: summarizePresets(presets) })));
   server2.registerTool("browser_publish_confirm", {
-    description: "Post a pending publish (the View's Post button calls it too). The host ALWAYS asks the human first, in every permission mode; a harness that cannot guarantee that ask gets the call refused, and the user presses Post. The model MUST pass expect: {origin, profile, values} copied exactly from the pending record (values: every field's value, in order): without it the call fails expect_required, any difference fails publish_mismatch; either way nothing is clicked and the publish stays pending. Then it re-verifies the tab, URL and field values, clicks submit exactly once (never retried) and reads the posted URL. Status: posted (url), failed (nothing submitted) or unknown (may have posted).",
+    description: "Post a pending publish (the View's Post button calls it too). The host ALWAYS asks the human first, in every permission mode; a harness that cannot guarantee that ask gets the call refused, and the user presses Post. The model MUST pass expect: {origin, profile, values} copied exactly from the pending record (values: every field's value, in order): without it the call fails expect_required, any difference fails publish_mismatch; either way nothing is clicked and the publish stays pending. Then it re-verifies the tab, URL and field values and spends the board approval for this exact post (publish_unapproved if none is left: nothing clicked, the publish stays pending), clicks submit exactly once (never retried) and reads the posted URL. Status: posted (url), failed (nothing submitted) or unknown (may have posted).",
     inputSchema: { browserId: capability, publishId: capability, expect: expectSchema.optional() },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     _meta: { ...TRACTION_ONLY, [APPROVAL_META_KEY]: "prompt" }
@@ -5837,7 +5964,7 @@ async function createBrowserServer(options = {}) {
   return server2;
 }
 
-// src/stdio.ts
+// marketplace/packs/browser/src/stdio.ts
 var server = await createBrowserServer();
 var stopping;
 function stop() {
