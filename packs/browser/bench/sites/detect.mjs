@@ -12,6 +12,7 @@
 //   GET  /__detect/result    the rows the last visit posted (404 until one did)
 //   POST /__detect/result    harness/page only
 //   GET  /__detect/late      the one row that needs the driver to have acted on the page first (see `__detectLate`)
+//   GET  /__detect/blank     a 1 KB page, for timing a first navigation
 //   GET  /__detect/opener    a page with one link, #go, that opens the detection page in a new tab (target=_blank)
 //   GET  /__detect/frame     the page a cross-origin iframe loads (an out-of-process frame): a few rows of its own, POSTed to /__detect/frame-result
 //
@@ -327,6 +328,11 @@ export function createDetectServer({ port = 0 } = {}) {
       }
       res.writeHead(late === null ? 404 : 200, { "content-type": "application/json" });
       res.end(JSON.stringify(late));
+      return;
+    }
+    if (url.pathname === "/__detect/blank") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+      res.end("<!doctype html><title>blank</title><p>" + "x".repeat(900) + "</p>");
       return;
     }
     if (url.pathname === "/__detect/hooked") {
