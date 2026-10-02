@@ -6,8 +6,13 @@
  * A scripted browser port and a scripted worker, so every clock is short and exact and no Chrome is needed; the real thing is code-host.test.ts.
  */
 import { afterEach, describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
+import { mkdtemp, rm, utimes } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { BrowserKind, CodeBrowserPort, HostToWorker, RunError, TabRef, WorkerToHost } from "../src/code/contracts";
 import { CodeHost, type CodeHostOptions } from "../src/code/host/code-host";
+import { saveSpill, sessionFolder } from "../src/code/spill";
 import type { SpawnWorker, WorkerHandle, WorkerMemory } from "../src/code/host/transport";
 import { BrowserRuntimeError } from "../src/store";
 import { waitUntil } from "./fixture";
@@ -848,5 +853,68 @@ describe("what is kept", () => {
     expect(workers[0]!.exited).toBe(true);
     await expect(host.run("s1", { code: "x", timeoutMs: 5_000, waitMs: 20, signal: NEVER })).rejects.toThrow(/shut down/);
     await expect(host.resume("s1", runId, 0, NEVER)).rejects.toThrow(/shut down/);
+  });
+});
+
+describe("what a session keeps on disk goes with the session", () => {
+  const roots: string[] = [];
+  afterEach(async () => {
+    for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
+  });
+  async function artifacts(): Promise<string> {
+    const root = await mkdtemp(join(tmpdir(), "browser-lifecycle-"));
+    roots.push(root);
+    return root;
+  }
+  const SPILLS = { freezeIdleMs: 0, workerIdleMs: 60, startupTimeoutMs: 1_000, graceMs: 50, finishedTtlMs: 150 };
+  const exists = (path: string | undefined): boolean => path !== undefined && existsSync(path);
+
+  test("a session that holds nothing any more takes its spill files with it, and no other session's", async () => {
+    const root = await artifacts();
+    const mine = saveSpill(sessionFolder(root, "s1"), "the whole of a long output");
+    const theirs = saveSpill(sessionFolder(root, "s2"), "another session's");
+    const { host, workers } = rig({ artifactsRoot: root, timing: SPILLS });
+    const runId = await start(host, "s1");
+    workers[0]!.emit({ t: "result", runId, ...OK });
+    await host.resume("s1", runId, 1_000, NEVER);
+    // The run is still readable, so the model may still be about to open the file its footer named.
+    expect(exists(mine)).toBe(true);
+    await waitUntil("the session has nothing left and its folder is gone", () => existsSync(sessionFolder(root, "s1")), present => !present, 3_000);
+    expect(exists(mine)).toBe(false);
+    expect(exists(theirs)).toBe(true);
+  });
+
+  test("a rebuilt worker keeps the folder: the failed cell's message names a file in it and the model reads it after the rebuild", async () => {
+    const root = await artifacts();
+    const { host, workers } = rig({ artifactsRoot: root, timing: { ...SPILLS, finishedTtlMs: 60_000 } });
+    const runId = await start(host, "s1");
+    const kept = saveSpill(sessionFolder(root, "s1"), "output of the cell that failed");
+    workers[0]!.emit({ t: "result", runId, ok: false, error: { name: "ToolError", message: "stuck", isAbort: false, recoverTab: true } });
+    await host.resume("s1", runId, 1_000, NEVER);
+    await waitUntil("the worker was replaced", () => workers[0]!.exited, exited => exited, 2_000);
+    await new Promise(resolve => setTimeout(resolve, 250)); // a real wait: the thing under test is that nothing removes the file in this window
+    expect(exists(kept)).toBe(true);
+  });
+
+  test("shutting the host down removes the folders of the sessions it held, and only those", async () => {
+    const root = await artifacts();
+    const { host } = rig({ artifactsRoot: root, timing: { ...SPILLS, finishedTtlMs: 60_000 } });
+    await start(host, "s1");
+    const mine = saveSpill(sessionFolder(root, "s1"), "output of a cell");
+    const other = saveSpill(sessionFolder(root, "another-server"), "a session of a server that is still running");
+    await host.dispose();
+    expect(exists(mine)).toBe(false);
+    expect(exists(other)).toBe(true);
+  });
+
+  test("a host that starts sweeps a folder nobody has written to for more than a day, and keeps a young one", async () => {
+    const root = await artifacts();
+    const stale = saveSpill(sessionFolder(root, "left-by-a-crash"), "from a server that was killed");
+    const young = saveSpill(sessionFolder(root, "recent"), "from a server that just ended");
+    const old = new Date(Date.now() - 25 * 60 * 60 * 1000);
+    await utimes(stale!, old, old);
+    rig({ artifactsRoot: root });
+    expect(exists(stale)).toBe(false);
+    expect(exists(young)).toBe(true);
   });
 });

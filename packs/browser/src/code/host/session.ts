@@ -3,8 +3,7 @@
 // ONE worker thread serves a session's cell and every tab of it, so `run` and `call` never leave the worker; the runtime (not the worker) makes and owns every browser and tab, so the worker adopts what
 // the engine opened; and the host answers a call after at most `waitMs`, because the MCP host times a call out at 30 s.
 
-import { createHash, randomBytes } from "node:crypto";
-import { join } from "node:path";
+import { randomBytes } from "node:crypto";
 import { BrowserRuntimeError } from "../../store.js";
 import type { BridgeRequest, BridgeResponse, BrowserKind, CodeBrowserPort, CodeTabInfo, HostToWorker, RunError, RunResult, RunStarted, TabHandle, TabRef, WorkerToHost } from "../contracts.js";
 import { ToolAbortError, ToolError } from "../errors.js";
@@ -948,9 +947,4 @@ export class CodeSession {
       await this.#closeWorker();
     }
   }
-}
-
-/** One folder per session for what a cell keeps on disk (an over-cap output): a hash of the stamp, so the id itself is never a path. */
-export function sessionFolder(root: string, session: string): string {
-  return join(root, createHash("sha256").update(session).digest("hex").slice(0, 16));
 }

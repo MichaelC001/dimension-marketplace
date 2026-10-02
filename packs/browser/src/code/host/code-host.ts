@@ -7,10 +7,11 @@ import { defaultRootDir } from "../../store.js";
 import type { BridgeRequest, BrowserKind, CodeBrowserPort, CodeHostPort, RunStarted } from "../contracts.js";
 import { resolveKind } from "../kinds/resolve.js";
 import { CODE_IDLE_MS, RuntimeCodeBrowsers } from "./runtime-port.js";
-import { CodeSession, DEFAULT_TIMING, type CodeTiming, sessionFolder, unknownRunMessage } from "./session.js";
+import { CodeSession, DEFAULT_TIMING, type CodeTiming, unknownRunMessage } from "./session.js";
 import type { CommitProbe } from "./commit-probe.js";
 import { HostMemory } from "./host-memory.js";
 import { TerminatingWorkers } from "./terminating.js";
+import { discardSessionSpills, sessionFolder, sweepSpills } from "../spill.js";
 import { defaultCommitProbe, defaultWorkerEntry, type SpawnWorker, threadWorkerSpawner } from "./transport.js";
 
 /** A cell's worker thread may hold this much heap before it ends itself; the server and every other session's browsers go on. */
@@ -91,6 +92,8 @@ export class CodeHost implements CodeHostPort {
     this.#commit = options.spawn === undefined && watchesMemory ? defaultCommitProbe() : undefined;
     this.#spawn = options.spawn ?? threadWorkerSpawner(defaultWorkerEntry(), { maxOldGenerationSizeMb: options.heapMb ?? DEFAULT_HEAP_MB }, this.#commit);
     this.#timing = { ...DEFAULT_TIMING, ...options.timing };
+    // A server that was killed left its sessions' folders behind, and a machine that never spills again would keep them for ever: the age and size bounds are applied once, here.
+    if (options.artifactsRoot !== undefined) sweepSpills(options.artifactsRoot);
     this.#unsubscribe = [
       options.browsers.onEnd((browserId, why, reason) => {
         for (const session of this.#sessions.values()) if (session.ownsBrowser(browserId)) session.browserEnded(browserId, why, reason);
@@ -124,7 +127,10 @@ export class CodeHost implements CodeHostPort {
         taskCredential: this.#options.taskCredential ?? false,
         timing: this.#timing,
         onEmpty: () => {
-          if (this.#sessions.get(id) === created) this.#sessions.delete(id);
+          if (this.#sessions.get(id) !== created) return;
+          this.#sessions.delete(id);
+          // The session holds no worker, no browser and no run the model can still read: what its cells kept on disk goes with it (doc 77 §7.4.2). A rebuilt worker keeps the folder, because a failed cell's message names a file in it.
+          if (artifactsRoot !== undefined) discardSessionSpills(artifactsRoot, id);
         },
       });
       session = created;
@@ -158,9 +164,11 @@ export class CodeHost implements CodeHostPort {
     if (this.#disposed) return;
     this.#disposed = true;
     for (const stop of this.#unsubscribe) stop();
-    const sessions = [...this.#sessions.values()];
+    const sessions = [...this.#sessions];
     this.#sessions.clear();
-    await Promise.allSettled(sessions.map(session => session.close()));
+    await Promise.allSettled(sessions.map(([, session]) => session.close()));
+    // The browsers go with the server, and so do the files the sessions kept for them.
+    if (this.#options.artifactsRoot !== undefined) for (const [id] of sessions) discardSessionSpills(this.#options.artifactsRoot, id);
     await this.#options.browsers.dispose?.();
     this.#commit?.close();
   }
