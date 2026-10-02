@@ -629,6 +629,9 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			}
 		}
 		await Promise.allSettled(this.removals);
+		// A task whose start was already queued when this dispose began has run by now (every browser's queue drained above) and, taking
+		// no notice of the flag, kept a new spare: an interpreter holding jev's key in its environment that belongs to no browser.
+		releaseSpare();
 		if (errors.length > 0) fail("dispose_incomplete", `some browsers did not shut down cleanly: ${errors.join("; ")}`);
 	}
 
