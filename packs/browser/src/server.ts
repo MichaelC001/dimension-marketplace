@@ -6,6 +6,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import type { CodeHostPort } from "./code/contracts.js";
+import { type CodeHost, createRuntimeCodeHost } from "./code/host/code-host.js";
 import { registerCodeTool } from "./code/tool.js";
 import { buildConnectionReport, type ConnectionReportParams, PACK_CONNECTION_REPORT_METHOD } from "./connection.js";
 import type { ActManyResult, BrowserEngine, BrowserOpener, BrowserRuntimePort, BrowserState, TaskRun, ToolCaller } from "./contracts.js";
@@ -14,6 +15,7 @@ import { MAX_DETAIL_BYTES } from "./annotation-file.js";
 import { type PublishPreset, loadPresets, resolvePreset, summarizePresets } from "./presets.js";
 import { MAX_LABEL_CHARS, PROFILE_COLOURS } from "./profile-meta.js";
 import { profilesForModel } from "./profile-list.js";
+import { reapChildren } from "./reap.js";
 import { BrowserRuntime } from "./runtime.js";
 import { defaultRootDir, fail } from "./store.js";
 import { LiveChannel } from "./stream.js";
@@ -225,9 +227,24 @@ export interface BrowserServerOptions {
   modelTools?: ModelToolsMode;
   /** Where a `browser_run` result over 50 KiB keeps its full text; defaults to `artifacts/` beside the profiles. */
   codeArtifactsDir?: string;
+  /** Overrides `jevKeyConfigured()`, the ONE predicate for whether `browser_task` and its two companions are registered and so whether the code worker's password refusal may name `browser_task` (RealmInit.taskCredential). */
+  taskTools?: boolean;
 }
 
-export async function createBrowserServer(options: BrowserServerOptions = {}): Promise<McpServer> {
+/** The MCP server, plus the one thing its process needs when it must end now. */
+export interface BrowserServer extends McpServer {
+  /**
+   * The last resort of a server that is being ended hard: kills the process tree of every throwaway browser the runtime owns, without waiting for a polite close, and returns once they are gone or `limitMs` has passed.
+   * A saved profile's browser is left to its own close (a hard kill could cut a write to its logins). A runtime that is not the pack's has no browsers to kill.
+   */
+  killBrowsers(limitMs: number): Promise<void>;
+  /** Whether a stop now may leave a cell's child processes running or wait on a thread that cannot be interrupted (a cell is in a call, or a worker that was ended still is). The shutdown starts `reapChildren` with its stop when so. */
+  childrenAtRisk(): boolean;
+  /** Ends the processes cells started below this server and nothing else it owns (Windows; see reap.ts). Never rejects. */
+  reapChildren(): Promise<void>;
+}
+
+export async function createBrowserServer(options: BrowserServerOptions = {}): Promise<BrowserServer> {
   const runtime = options.runtime ?? new BrowserRuntime({
     ...(process.env.DIMENSION_BROWSER_ROOT ? { rootDir: process.env.DIMENSION_BROWSER_ROOT } : {}),
     ...(process.env.DIMENSION_BROWSER_EXECUTABLE ? { executablePath: process.env.DIMENSION_BROWSER_EXECUTABLE } : {}),
@@ -236,9 +253,25 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     ...(process.env.DIMENSION_BROWSER_THROWAWAY_IDLE_MS ? { throwawayIdleMs: Number(process.env.DIMENSION_BROWSER_THROWAWAY_IDLE_MS) } : {}),
   });
   const server = new McpServer({ name: "dimension-community-browser", version: "0.1.0" });
-  // jev's key is read once, as the server is created: it decides which tools exist and what their descriptions say.
-  const jev = jevKeyConfigured();
-  const modelTools = resolveModelTools(options.modelTools ?? process.env[MODEL_TOOLS_ENV], options.codeHost !== undefined);
+  // jev's key is read once, as the server is created. This ONE value decides which tools exist, what their descriptions say, and what the code host tells every worker (`RealmInit.taskCredential`).
+  const jev = options.taskTools ?? jevKeyConfigured();
+  // A real runtime brings its own code host: `browser_run` is on by default (the model's one way of driving a page, doc 77 §7.5a). A runtime that is not the pack's (a test's fake) has no browsers to run code on.
+  // A setting that only concerns code and is wrong (DIMENSION_BROWSER_CODE_ISOLATION=process, a non-numeric DIMENSION_BROWSER_CODE_HEAP_MB) turns `browser_run` off and says why on stderr; it never stops the server: every
+  // step tool and the View are unrelated to it, and a server that will not start takes them all down for one line of configuration. With no code host the model keeps the step tools (a registered `browser_run` that only
+  // ever answers with the configuration error would cost the model its description and give it nothing, and in `code` mode it would also have hidden the step tools).
+  let codeHost = options.codeHost;
+  let ownHost: CodeHost | undefined;
+  let codeHostOff = false;
+  if (codeHost === undefined && runtime instanceof BrowserRuntime) {
+    try {
+      codeHost = ownHost = createRuntimeCodeHost(runtime, { taskCredential: jev });
+    } catch (error) {
+      codeHostOff = true;
+      console.error(`browser_run is off: ${error instanceof Error ? error.message : String(error)}. The other browser tools and the View are not affected; correct the setting and restart the browser to turn it on.`);
+    }
+  }
+  const requestedTools = resolveModelTools(options.modelTools ?? process.env[MODEL_TOOLS_ENV], codeHost !== undefined || codeHostOff);
+  const modelTools: ModelToolsMode = codeHostOff ? "steps" : requestedTools;
   const stepMeta = stepToolMeta(modelTools);
   const live = new LiveChannel(runtime);
   const viewDir = options.viewDir ?? fileURLToPath(new URL("./dist/", import.meta.url));
@@ -376,9 +409,9 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     const outcome = await runtime.actMany(browserId, actions, callerOf(extra));
     return { text: actText(outcome), structured: outcome, isError: outcome.status === "failed" || outcome.status === "unknown" };
   }));
-  if (options.codeHost !== undefined && modelTools !== "steps") {
+  if (codeHost !== undefined && modelTools !== "steps") {
     registerCodeTool(server, {
-      host: options.codeHost,
+      host: codeHost,
       sessionOf,
       artifactsDir: () => options.codeArtifactsDir ?? join(process.env.DIMENSION_BROWSER_ROOT || defaultRootDir(), "artifacts"),
       meta: { [APPROVAL_META_KEY]: "exec", [SPACES_META_KEY]: CODE_TOOL_SPACES },
@@ -589,8 +622,10 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
   const closeTransport = server.close.bind(server);
   let disposal: Promise<void> | undefined;
   const disposeBackends = async (): Promise<void> => {
-    try { await options.codeHost?.dispose(); }
-    finally { await runtime.dispose(); }
+    // Together, not one after the other: the browsers close whatever the code worker does (a worker inside a native call holds the code host's disposal for the whole call), and a failure of one never skips the other.
+    const [code, browsers] = await Promise.allSettled([codeHost?.dispose(), runtime.dispose()]);
+    if (browsers.status === "rejected") throw browsers.reason;
+    if (code.status === "rejected") throw code.reason;
   };
   server.close = async () => {
     stopReporting();
@@ -602,5 +637,11 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     stopReporting();
     void (disposal ??= disposeBackends().finally(() => live.close())).catch(error => console.error("Browser cleanup failed:", error));
   };
-  return server;
+  return Object.assign(server, {
+    killBrowsers: async (limitMs: number): Promise<void> => {
+      if (runtime instanceof BrowserRuntime) await runtime.killThrowaways(limitMs);
+    },
+    childrenAtRisk: (): boolean => ownHost?.holdsProcesses() ?? false,
+    reapChildren: async (): Promise<void> => void (await reapChildren()),
+  });
 }
