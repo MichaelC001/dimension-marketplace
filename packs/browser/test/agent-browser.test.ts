@@ -17,6 +17,8 @@ import stockPuppeteer from "puppeteer-core";
 import { type DetectRow, type DetectServer, createDetectServer } from "../bench/sites/detect.mjs";
 import { agentPuppeteer } from "../src/engines/agent-puppeteer";
 import { resolveBrowser, viewLaunchOptions } from "../src/engines/launch";
+import { launchReader } from "../src/engines/puppeteer";
+import { readPolicy } from "../src/read";
 import type { BrowserRuntime } from "../src/runtime";
 import { BROWSER_TEST_TIMEOUT_MS, chromePath, createRoot, describeWithChrome, newRuntime, perform, teardown, waitUntil } from "./fixture";
 
@@ -37,9 +39,16 @@ const CONTROLLED = [
 	"webdriver", "iframe-webdriver", "worker-webdriver",
 	"ua-headless", "ua-data-headless", "worker-ua-headless", "iframe-ua", "ch-ua-header-headless", "worker-matches-page",
 	"outer-smaller-than-inner", "viewport-larger-than-screen", "screen-orientation", "screen-default", "window-fits-screen", "outer-window",
-	"webgl-renderer", "webgl-precision", "webgl-worker-renderer", "iframe-webgl-renderer", "navigator-own-properties", "accessor-receiver", "native-source", "native-source-cross-realm",
+	"webgl-renderer", "webgl-precision", "webgl-worker-renderer", "iframe-webgl-renderer", "navigator-own-properties", "accessor-receiver", "native-source", "native-source-cross-realm", "tostring-wrapper-heard",
 	"cdp-runtime-enabled", "worker-runtime-enabled", "driver-main-world",
 ];
+
+/**
+ * Known and measured, not closed: on a host with no GPU a same-origin frame's own `Function.prototype.toString` reads a replaced function of this window
+ * as `function () { [native code] }`, with no name (and this window's reads the frame's so). Closing it took a call from every frame into a function the page
+ * can replace, which handed the page a secret (see `tostring-wrapper-heard`); it is left open and listed under "Not measured" in the README.
+ */
+const CROSS_REALM_GAP = ["native-source-cross-realm"];
 
 async function detector(): Promise<DetectServer> {
 	const server = await createDetectServer();
@@ -47,7 +56,7 @@ async function detector(): Promise<DetectServer> {
 	return server;
 }
 
-const flagged = (rows: readonly DetectRow[]): string[] => rows.filter((row) => row.tell && CONTROLLED.includes(row.id)).map((row) => row.id);
+const flagged = (rows: readonly DetectRow[], except: readonly string[] = []): string[] => rows.filter((row) => row.tell && CONTROLLED.includes(row.id) && !except.includes(row.id)).map((row) => row.id);
 const row = (rows: readonly DetectRow[], id: string): DetectRow => {
 	const found = rows.find((candidate) => candidate.id === id);
 	if (!found) throw new Error(`the page reported no ${id} row; it reported ${rows.map((r) => r.id).join(", ")}`);
@@ -92,7 +101,7 @@ describeWithChrome("a throwaway browser against a bot-detection page", () => {
 		const runtime = newRuntime(await createRoot(), { launchArgs: NO_GPU });
 		const { browserId } = await runtime.open({});
 		const rows = await lookInNewTab(runtime, server, browserId);
-		expect(flagged(rows)).toEqual([]);
+		expect(flagged(rows, CROSS_REALM_GAP)).toEqual([]);
 		expect(row(rows, "webgl-renderer").value).not.toMatch(/swiftshader/i);
 		expect(row(rows, "screen-default")).toMatchObject({ tell: false });
 	}, BROWSER_TEST_TIMEOUT_MS);
@@ -128,35 +137,79 @@ describeWithChrome("a throwaway browser against a bot-detection page", () => {
 		const runtime = newRuntime(await createRoot(), { launchArgs: NO_GPU });
 		const { browserId } = await runtime.open({});
 		const rows = await look(runtime, server, browserId);
-		expect(flagged(rows)).toEqual([]);
+		expect(flagged(rows, CROSS_REALM_GAP)).toEqual([]);
 		expect(row(rows, "webgl-renderer").value).not.toMatch(/swiftshader/i);
+		// A page that wrapped Function.prototype.toString before it made a frame hears nothing from the mask: no secret, no masked name.
+		expect(row(rows, "tostring-wrapper-heard")).toMatchObject({ tell: false });
 		// A worker's OffscreenCanvas and a cross-origin frame name the same GPU the page does.
 		expect(row(rows, "webgl-worker-renderer").value).not.toMatch(/swiftshader/i);
 		const frame = await waitUntil("the cross-origin frame's report", () => server.frame(), (reported) => reported !== null);
 		expect(frame?.gpu?.join(" ")).not.toMatch(/swiftshader/i);
 	}, BROWSER_TEST_TIMEOUT_MS);
+});
 
-	test("browser_read's reader presents the same: no HeadlessChrome, no webdriver, a screen that fits", async () => {
-		const server = await detector();
-		const runtime = newRuntime(await createRoot(), { allowPrivateReadHosts: ["127.0.0.1"] });
-		const result = await runtime.read({ url: server.url, maxChars: 30_000 });
-		if (result.status !== "ok") throw new Error(`the reader did not read the page: ${JSON.stringify(result)}`);
-		const seen = result.text.split("\n").filter((line) => /^(FLAG|ok)\|/.test(line)).map((line) => ({ flag: line.startsWith("FLAG"), id: line.split("|")[1] ?? "" }));
-		expect(seen.length).toBeGreaterThan(20);
-		const controlled = ["webdriver", "iframe-webdriver", "ua-headless", "iframe-ua", "outer-smaller-than-inner", "viewport-larger-than-screen", "screen-orientation", "screen-default", "cdp-runtime-enabled"];
-		expect(seen.filter((entry) => entry.flag && controlled.includes(entry.id)).map((entry) => entry.id)).toEqual([]);
-		// Runtime is off, and the read script itself ran in the utility world: the page's hook on its APIs heard nothing from outside the page.
-		expect(result.text).toMatch(/^RUNTIME\|off$/m);
-		expect(server.hooked()).toEqual([]);
-	}, BROWSER_TEST_TIMEOUT_MS);
+/** The detect page as `browser_read` returns it: its `FLAG|id|value` and `ok|id|value` lines. */
+const readerRows = (text: string): Array<{ flag: boolean; id: string; value: string }> =>
+	text.split("\n").filter((line) => /^(FLAG|ok)\|/.test(line)).map((line) => {
+		const [kind, id = "", ...value] = line.split("|");
+		return { flag: kind === "FLAG", id, value: value.join("|") };
+	});
 
-	test("browser_read's reader hides a software renderer too", async () => {
+describeWithChrome("browser_read's reader", () => {
+	test("is stock puppeteer's Chrome by default: a page sees what it sees from puppeteer-core with nothing added (shaping the reader waits on the owner's yes)", async () => {
 		const server = await detector();
 		const runtime = newRuntime(await createRoot(), { allowPrivateReadHosts: ["127.0.0.1"], launchArgs: NO_GPU });
 		const result = await runtime.read({ url: server.url, maxChars: 30_000 });
 		if (result.status !== "ok") throw new Error(`the reader did not read the page: ${JSON.stringify(result)}`);
-		expect(result.text).toMatch(/^ok\|webgl-renderer\|/m);
-		expect(result.text).not.toMatch(/^ok\|webgl-renderer\|.*swiftshader/im);
+		const seen = new Map(readerRows(result.text).map((entry) => [entry.id, entry]));
+		// Stock puppeteer's tells, all there: the reader hides nothing.
+		for (const id of ["webdriver", "ua-headless", "webgl-renderer"]) expect(seen.get(id)?.flag, `${id} is flagged`).toBe(true);
+		expect(seen.get("webgl-renderer")?.value).toMatch(/swiftshader/i);
+		expect(result.text).toMatch(/^RUNTIME\|on$/m);
+	}, BROWSER_TEST_TIMEOUT_MS);
+
+	test("is shaped like a throwaway agent browser when its one switch (READER_PRESENTS_AS_CHROME) is on", async () => {
+		const server = await detector();
+		const reader = await launchReader({ ...(chromePath ? { executablePath: chromePath } : {}), launchArgs: NO_GPU, presentAsChrome: true });
+		try {
+			const outcome = await reader.read(server.url, 30_000, 15_000, readPolicy(["127.0.0.1"]));
+			if (outcome.kind !== "read") throw new Error(`the reader did not read the page: ${JSON.stringify(outcome)}`);
+			const { text } = outcome.page;
+			const seen = readerRows(text);
+			expect(seen.length).toBeGreaterThan(20);
+			const controlled = ["webdriver", "iframe-webdriver", "ua-headless", "iframe-ua", "outer-smaller-than-inner", "viewport-larger-than-screen", "screen-orientation", "screen-default", "cdp-runtime-enabled"];
+			expect(seen.filter((entry) => entry.flag && controlled.includes(entry.id)).map((entry) => entry.id)).toEqual([]);
+			// Runtime is off, and the read script itself ran in the utility world: the page's hook on its APIs heard nothing from outside the page.
+			expect(text).toMatch(/^RUNTIME\|off$/m);
+			expect(server.hooked()).toEqual([]);
+			// A software renderer is masked.
+			expect(text).toMatch(/^ok\|webgl-renderer\|/m);
+			expect(text).not.toMatch(/^ok\|webgl-renderer\|.*swiftshader/im);
+		} finally {
+			await reader.close();
+		}
+	}, BROWSER_TEST_TIMEOUT_MS);
+});
+
+describeWithChrome("the detection page", () => {
+	test("does not count a worker that never answers as a tell, and says so once as information", async () => {
+		const server = await detector();
+		const userDataDir = mkdtempSync(join(tmpdir(), "detect-no-worker-"));
+		const browser = await stockPuppeteer.launch(viewLaunchOptions({ browser: await resolveBrowser(chromePath), userDataDir, headless: true, args: [], agent: false, timeout: 60_000 }));
+		try {
+			const page = await browser.newPage();
+			// No Worker at all: the page's worker never starts, so it cannot answer.
+			await page.evaluateOnNewDocument(() => {
+				Object.defineProperty(window, "Worker", { value: undefined });
+			});
+			await page.goto(server.url);
+			const rows = (await waitUntil("the page's rows", () => server.rows(), (posted) => posted !== null)) ?? [];
+			expect(row(rows, "worker-answered")).toMatchObject({ tell: false, value: expect.stringContaining("no answer") });
+			expect(rows.filter((candidate) => candidate.group === "worker" && candidate.tell).map((candidate) => candidate.id)).toEqual([]);
+		} finally {
+			await browser.close();
+			rmSync(userDataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+		}
 	}, BROWSER_TEST_TIMEOUT_MS);
 });
 

@@ -215,6 +215,23 @@ async function run() {
   }
   add("native-source-cross-realm", "tamper", crossRealm.length > 0, crossRealm.length ? crossRealm : "a frame's toString and this window's agree that every replaced function is native and named", "a replaced function's source, asked by another realm's Function.prototype.toString (the standard iframe 'lies' test)");
   add("iframe-webgl-renderer", "iframe", frameGpu.some(([, r]) => /swiftshader|llvmpipe|lavapipe|software|mesa offscreen|google inc\. \(google\)/i.test(String(r))), frameGpu, "a same-origin frame's WebGL names a software renderer (the page's own may be masked, a frame's is a third place to look)");
+  // A page that wraps Function.prototype.toString BEFORE it makes a frame (a lies detector does) hears every call a script of the browser makes through it. Anything it hears that this page did not ask is a leak: a protocol call, a symbol, a name. The wrapper is on only while two fresh frames, an empty one and a srcdoc one, are made and loaded; the page asks nothing through it in that time.
+  const heardByWrapper = [];
+  const realToString = Function.prototype.toString;
+  Function.prototype.toString = function () { heardByWrapper.push({ target: typeof this === "function" ? "function " + this.name : typeof this, args: Array.prototype.map.call(arguments, (a) => typeof a === "symbol" ? "symbol " + (Symbol.keyFor(a) || a.description || "") : typeof a === "string" ? JSON.stringify(a) : typeof a) }); return realToString.apply(this, arguments); };
+  try {
+    const emptyFrame = document.createElement("iframe");
+    document.body.appendChild(emptyFrame);
+    const srcdocFrame = document.createElement("iframe");
+    srcdocFrame.srcdoc = "<p>wrapped</p>";
+    const loaded = new Promise((resolve) => { srcdocFrame.onload = resolve; setTimeout(resolve, 1000); });
+    document.body.appendChild(srcdocFrame);
+    await loaded;
+    for (const w of [emptyFrame.contentWindow, srcdocFrame.contentWindow]) safe(() => { const g = w.document.createElement("canvas").getContext("webgl"); const e = g.getExtension("WEBGL_debug_renderer_info"); g.getParameter(e.UNMASKED_RENDERER_WEBGL); g.getShaderPrecisionFormat(g.FRAGMENT_SHADER, g.LOW_FLOAT); });
+    emptyFrame.remove();
+    srcdocFrame.remove();
+  } finally { Function.prototype.toString = realToString; }
+  add("tostring-wrapper-heard", "tamper", heardByWrapper.length > 0, heardByWrapper.length ? heardByWrapper.slice(0, 8) : "a toString this page wrapped before making two frames was called by nothing it did not ask", "a Function.prototype.toString this page replaced before it made a frame is called by the browser's own scripts with arguments only they know (a leak of the secret and of every masked name)");
   blank.remove();
   frame.remove();
 
@@ -259,12 +276,13 @@ async function run() {
   const header = hints ? String(hints["accept-language"] || "") : null;
   add("accept-language", "locale", header !== null && header.split(",")[0].split(";")[0].trim() !== nav.languages[0], [header, nav.languages], "the Accept-Language header disagrees with navigator.languages (or is missing)");
   const worker = await workerP;
-  add("worker-ua-headless", "worker", worker === null || /HeadlessChrome/.test(worker.userAgent), worker ? worker.userAgent : "no worker", "a dedicated worker's navigator.userAgent names HeadlessChrome");
-  add("worker-webdriver", "worker", worker !== null && worker.webdriver === true, worker ? String(worker.webdriver) : "no worker", "a worker's navigator.webdriver is true");
-  add("webgl-worker-renderer", "worker", worker !== null && Array.isArray(worker.gpu) && pageGpu !== null && /swiftshader|llvmpipe|lavapipe|software|mesa offscreen|google inc\. \(google\)/i.test(worker.gpu.join(" ")), worker ? worker.gpu : "no worker", "a software renderer in a worker's OffscreenCanvas (the page's own context may have been masked, the worker's is a second place to look)");
+  add("worker-answered", "worker", false, worker ? "answered" : "no answer (the worker timed out or failed to start)", "information only: whether the dedicated worker reported back in time. Every worker row below reads ok without an answer, as ch-ua-header-headless does for its own timeout: a slow machine is not a tell");
+  add("worker-ua-headless", "worker", worker !== null && /HeadlessChrome/.test(worker.userAgent), worker ? worker.userAgent : "no answer", "a dedicated worker's navigator.userAgent names HeadlessChrome");
+  add("worker-webdriver", "worker", worker !== null && worker.webdriver === true, worker ? String(worker.webdriver) : "no answer", "a worker's navigator.webdriver is true");
+  add("webgl-worker-renderer", "worker", worker !== null && Array.isArray(worker.gpu) && pageGpu !== null && /swiftshader|llvmpipe|lavapipe|software|mesa offscreen|google inc\. \(google\)/i.test(worker.gpu.join(" ")), worker ? worker.gpu : "no answer", "a software renderer in a worker's OffscreenCanvas (the page's own context may have been masked, the worker's is a second place to look)");
   const gpuMatches = worker === null || pageGpu === null || !Array.isArray(worker.gpu) || (worker.gpu[0] === pageGpu[0] && worker.gpu[1] === pageGpu[1]);
-  add("worker-matches-page", "worker", worker !== null && (worker.userAgent !== ua || worker.platform !== nav.platform || worker.hardwareConcurrency !== nav.hardwareConcurrency || JSON.stringify(worker.languages) !== JSON.stringify(nav.languages) || !gpuMatches), worker ? { ua: worker.userAgent === ua, platform: worker.platform === nav.platform, cores: worker.hardwareConcurrency === nav.hardwareConcurrency, languages: JSON.stringify(worker.languages) === JSON.stringify(nav.languages), gpu: gpuMatches ? "same" : { page: pageGpu, worker: worker.gpu } } : "no worker", "a patched page that leaves its workers unpatched disagrees with itself (user agent, platform, cores, languages, and the GPU strings a page and a worker report)");
-  add("worker-runtime-enabled", "driver", worker !== null && worker.runtime === true, worker ? String(worker.runtime) : "no worker", "a DevTools client has Runtime enabled in a dedicated worker (puppeteer does it for every worker it attaches)");
+  add("worker-matches-page", "worker", worker !== null && (worker.userAgent !== ua || worker.platform !== nav.platform || worker.hardwareConcurrency !== nav.hardwareConcurrency || JSON.stringify(worker.languages) !== JSON.stringify(nav.languages) || !gpuMatches), worker ? { ua: worker.userAgent === ua, platform: worker.platform === nav.platform, cores: worker.hardwareConcurrency === nav.hardwareConcurrency, languages: JSON.stringify(worker.languages) === JSON.stringify(nav.languages), gpu: gpuMatches ? "same" : { page: pageGpu, worker: worker.gpu } } : "no answer", "a patched page that leaves its workers unpatched disagrees with itself (user agent, platform, cores, languages, and the GPU strings a page and a worker report)");
+  add("worker-runtime-enabled", "driver", worker !== null && worker.runtime === true, worker ? String(worker.runtime) : "no answer", "a DevTools client has Runtime enabled in a dedicated worker (puppeteer does it for every worker it attaches)");
 
 
   // --- the driver ------------------------------------------------------------------------------

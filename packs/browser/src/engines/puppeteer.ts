@@ -66,7 +66,7 @@ import {
 } from "./page-scripts.js";
 import { LOOPBACK_EXCEPTIONS, watchPageLog } from "./page-log.js";
 import { type AdmittedInput, inputCall } from "../input.js";
-import { AGENT_IGNORED_DEFAULT_ARGS, AGENT_LAUNCH_ARGS, type AgentShape, fitAgentScreen, maskedGraphics, shapeTargetEarly } from "./agent-browser.js";
+import { AGENT_IGNORED_DEFAULT_ARGS, AGENT_LAUNCH_ARGS, type AgentShape, fitAgentScreen, maskedGraphics, READER_PRESENTS_AS_CHROME, shapeTargetEarly } from "./agent-browser.js";
 import { agentPuppeteer } from "./agent-puppeteer.js";
 import { type HeadfulIdentity, headfulIdentity, identityPerBinary, type ReportedIdentity, type ResolvedBrowser, resolveBrowser, turnOffPasswordSaving, UA_HINTS, viewLaunchOptions, withTimeout } from "./launch.js";
 import type { EngineDriver, EngineOptions, EngineState, EvalOutcome, FieldRead, LiveFrame, PageRead, PageReader, PasswordSource, PerformOutcome, ReadOutcome, ReadPolicy, WaitCondition } from "./types.js";
@@ -380,13 +380,33 @@ const MAX_READ_FRAMES = 500;
  * a throwaway user-data dir, deleted on close, and every read runs in its own
  * incognito context besides. Chrome's popup blocker stays ON (puppeteer turns
  * it off by default), so a page's `window.open` or popunder never opens a tab
- * or sends a request. It reads the public web logged out, so it is an agent
- * browser in every sense `agent-browser.ts` names, and presents as one: the
- * binary's own headful identity, no `navigator.webdriver`, a screen that fits.
+ * or sends a request.
+ *
+ * It is STOCK puppeteer, exactly as before agent browsers were shaped, unless
+ * `READER_PRESENTS_AS_CHROME` (agent-browser.ts) is on: OMP has no reader, so
+ * the owner's parity ruling does not reach it, and shaping it waits on his yes
+ * (doc 77 §12). `presentAsChrome` is that constant, overridable so a test can
+ * launch both.
  */
-export async function launchReader(options: { executablePath?: string; launchArgs?: readonly string[] }): Promise<PageReader> {
-	const executablePath = options.executablePath ?? (await puppeteer.executablePath("chrome"));
+export async function launchReader(options: { executablePath?: string; launchArgs?: readonly string[]; presentAsChrome?: boolean }): Promise<PageReader> {
 	const launchArgs = options.launchArgs ?? [];
+	if (options.presentAsChrome ?? READER_PRESENTS_AS_CHROME) return await launchShapedReader(options.executablePath ?? (await puppeteer.executablePath("chrome")), launchArgs);
+	const browser = await puppeteer.launch({
+		headless: true,
+		timeout: LAUNCH_TIMEOUT_MS,
+		defaultViewport: READER_VIEWPORT,
+		...(options.executablePath ? { executablePath: options.executablePath } : { channel: "chrome" as const }),
+		args: [...CHROMIUM_ARGS, ...launchArgs],
+		ignoreDefaultArgs: ["--disable-popup-blocking"],
+	});
+	return new PuppeteerReader(browser);
+}
+
+/**
+ * The reader as an agent browser in every sense `agent-browser.ts` names: the binary's own headful identity, no
+ * `navigator.webdriver`, a screen that fits, driven by the patched library. Only `launchReader` with the switch on.
+ */
+async function launchShapedReader(executablePath: string, launchArgs: readonly string[]): Promise<PageReader> {
 	const browser = await (await agentPuppeteer()).launch({
 		headless: true,
 		timeout: LAUNCH_TIMEOUT_MS,
@@ -415,11 +435,11 @@ export async function launchReader(options: { executablePath?: string; launchArg
 
 class PuppeteerReader implements PageReader {
 	readonly #browser: Browser;
-	readonly #shape: AgentShape;
+	readonly #shape: AgentShape | undefined;
 	/** Set once closing starts, or when a read could not dispose of its context. */
 	#spent = false;
 
-	constructor(browser: Browser, shape: AgentShape) {
+	constructor(browser: Browser, shape?: AgentShape) {
 		this.#browser = browser;
 		this.#shape = shape;
 	}
@@ -459,7 +479,7 @@ class PuppeteerReader implements PageReader {
 		const page = await context.newPage();
 		primary = page.target();
 		// The session stays attached: a session's emulation is undone when it detaches. It goes with the page when the context closes.
-		if (this.#shape.screen) await fitAgentScreen(await page.createCDPSession(), READER_VIEWPORT, 1);
+		if (this.#shape?.screen) await fitAgentScreen(await page.createCDPSession(), READER_VIEWPORT, 1);
 
 		// Set from event handlers; the cast keeps TypeScript from narrowing it to `null` here.
 		let refusal = null as { url: string; reason: string } | null;

@@ -1,11 +1,11 @@
 /**
  * How a THROWAWAY AGENT browser presents itself to the sites it visits.
  *
- * An agent that opens a browser without a profile (or has `browser_read` read
- * a public page) does real work on the real web, and the first bot check it
- * meets decides whether the work happens. A stock puppeteer Chrome fails
- * public headless checks that the same Chrome started by hand passes; this
- * module closes exactly those, once, in the browser itself:
+ * An agent that opens a browser without a profile does real work on the real
+ * web, and the first bot check it meets decides whether the work happens. A
+ * stock puppeteer Chrome fails public headless checks that the same Chrome
+ * started by hand passes; this module closes exactly those, once, in the
+ * browser itself:
  *
  *  - `navigator.webdriver` (page and iframes; a worker has no such property):
  *    the `AutomationControlled` Blink switch, a launch argument. No page
@@ -34,16 +34,29 @@
  * profile, is not disguised and Google is not given a reason to challenge a
  * sign-in. That decision stands for the View and every saved profile, which
  * stay the real, honest browser: nothing in this module touches them. It is
- * reversed ONLY for a throwaway browser (no profile; nothing is kept, nobody
- * signs in) and the browser_read reader, whose whole job is to read pages a
- * stock automation browser is turned away from. `EngineOptions.agent` is the
- * one switch; the runtime sets it from `profile === null`, never from tool
- * input.
+ * reversed, on the lead's reading of the owner's parity ruling with OMP's
+ * browser (doc 77 §12, awaiting his signature; he may flip it), ONLY for a
+ * throwaway browser (no profile; nothing is kept, nobody signs in).
+ * `EngineOptions.agent` is the one switch; the runtime sets it from
+ * `profile === null`, never from tool input.
+ *
+ * `browser_read`'s reader is NOT covered by that reading: OMP has no reader, so
+ * the parity ruling says nothing about it. It launches as stock puppeteer
+ * does, as it did before this module existed, until the owner says otherwise;
+ * `READER_PRESENTS_AS_CHROME` turns the shaping below on for it in one line.
  */
-import { randomBytes } from "node:crypto";
 import type { CDPSession, Protocol } from "puppeteer-core";
 import type { Viewport } from "../contracts.js";
 import { LOOPBACK_EXCEPTIONS } from "./page-log.js";
+
+/**
+ * Whether `browser_read`'s reader is shaped like a throwaway agent browser (no `navigator.webdriver`, the binary's own headful
+ * User-Agent, a screen that fits, the patched puppeteer-core, a masked software renderer). FALSE: the reader is stock puppeteer,
+ * as on main, because OMP has no reader and the owner's parity ruling (doc 77 §12 decision 8) does not reach it; this is a
+ * decision for him. Setting it to `true` is the whole change: `launchReader` (puppeteer.ts) reads it, and a test launches the
+ * reader both ways.
+ */
+export const READER_PRESENTS_AS_CHROME: boolean = false;
 
 /**
  * Launch arguments for a HEADLESS agent browser: `navigator.webdriver` is false in every page and iframe, from the browser
@@ -157,69 +170,36 @@ export function maskedGraphics(platform: string): MaskedGraphics {
  * and the extension list; a TypeError thrown through a wrapper shows its
  * `Object.apply` frame (the same weakness oh-my-pi's scripts have).
  *
- * A Proxy reads `function () { [native code] }` (no name) to any realm's own
- * `Function.prototype.toString`, so a frame asking about the page's functions, or the
- * page about a frame's, would find them. Every frame runs this script too, and the
- * frames of one page that can reach each other (same origin) therefore keep their
- * names in the topmost one's list: a frame tells the top the name of each function it
- * replaces, and asks it about a function it does not know. Both are calls to the top's
- * own patched `toString` with a first argument only this script can make (`secret`
- * names three registered symbols, and is chosen anew for each browser), so a page
- * calling `toString` with arguments gets the answer it always gets. A page that
- * replaces the top's `toString` with a function of its own before a frame is made would
- * hear those calls; it learns nothing it can use. A frame of another origin cannot be
- * reached either way, and neither can a popup.
+ * A Proxy reads `function () { [native code] }` (no name) to ANOTHER realm's own
+ * `Function.prototype.toString`, so a same-origin frame's toString asked about this
+ * window's replaced functions, or this window's asked about a frame's, tells them
+ * from the real ones. THAT IS A KNOWN GAP, measured by the detect page's
+ * `native-source-cross-realm` row (it flags on a host with no GPU, as OMP's own
+ * does). An earlier revision closed it by having every frame call the topmost
+ * window's `Function.prototype.toString` with a secret symbol (to register the
+ * name of each function it replaced and to look one up). That call goes through
+ * whatever the page has put at `Function.prototype.toString`: a page that wrapped it
+ * before making a frame was handed the secret and every masked name (reproduced by a
+ * reviewer, and by the detect page's `tostring-wrapper-heard` row), and no frame can
+ * prove that what it calls is this script's own proxy. So nothing here calls into a
+ * function the page can replace; each realm names only its own.
  * Self-contained: it is serialized into the page, and into each dedicated and
  * shared worker (`graphicsMaskExpression`), whose OffscreenCanvas would
  * otherwise name the host's renderer beside the page's masked one.
  */
-export const SOFTWARE_GRAPHICS_MASK = (vendor: string, renderer: string, software: string, secret: string): void => {
+export const SOFTWARE_GRAPHICS_MASK = (vendor: string, renderer: string, software: string): void => {
 	const looksSoftware = new RegExp(software, "i");
 	const nativeToString = Function.prototype.toString;
-	const REGISTER = Symbol.for(`${secret}:register`);
-	const LOOKUP = Symbol.for(`${secret}:lookup`);
-	const ANSWER = Symbol.for(`${secret}:answer`);
-	// The highest window this one can reach (a worker has none): its toString keeps the names for every frame below it.
-	type Realm = Window & typeof globalThis;
-	let highest: Realm | undefined = typeof window === "object" ? (window as Realm) : undefined;
-	try {
-		for (let up = highest?.parent as Realm | undefined; highest && up && up !== highest; up = highest.parent as Realm) {
-			void up.Function; // throws for a parent of another origin
-			highest = up;
-		}
-	} catch {
-		// `highest` is the last parent this frame could reach.
-	}
-	const hub = highest && highest !== (window as Realm | undefined) ? highest.Function.prototype.toString : undefined;
 	const names = new WeakMap<object, string>();
-	const isObject = (value: unknown): value is object => (typeof value === "object" && value !== null) || typeof value === "function";
-	/** What the hub answers for `fn`; nothing when the hub is not this script's, or throws. */
-	const askHub = (fn: object, ...args: unknown[]): unknown => {
-		try {
-			return hub ? Reflect.apply(hub, fn, args) : undefined;
-		} catch {
-			return undefined;
-		}
-	};
 	const toString = new Proxy(nativeToString, {
 		apply(target, self, args) {
-			if (args[0] === REGISTER) {
-				if (isObject(self)) names.set(self, String(args[1]));
-				return undefined;
-			}
-			if (args[0] === LOOKUP) return [ANSWER, isObject(self) ? names.get(self) : undefined];
-			let name = isObject(self) ? names.get(self) : undefined;
-			if (name === undefined && typeof self === "function") {
-				const answer = askHub(self, LOOKUP);
-				if (Array.isArray(answer) && answer[0] === ANSWER) name = answer[1] as string | undefined;
-			}
+			const name = names.get(self as object);
 			return name === undefined ? Reflect.apply(target, self, args) : `function ${name}() { [native code] }`;
 		},
 	});
-	/** `fn` reads `function <name>() { [native code] }` to this realm's toString, and to every frame's under the same top. */
+	/** `fn` reads `function <name>() { [native code] }` to this realm's toString. */
 	const known = <T extends object>(fn: T, name: string): T => {
 		names.set(fn, name);
-		askHub(fn, REGISTER, name);
 		return fn;
 	};
 	known(toString, "toString");
@@ -256,10 +236,7 @@ export const SOFTWARE_GRAPHICS_MASK = (vendor: string, renderer: string, softwar
 	}
 };
 
-/** Chosen anew for each process, so no page can know the calls the mask's realms make to each other (`SOFTWARE_GRAPHICS_MASK`). */
-const REALM_SECRET = randomBytes(12).toString("hex");
-
 /** `SOFTWARE_GRAPHICS_MASK` as an expression to run in a worker's global scope, before its script does. */
 export function graphicsMaskExpression(graphics: MaskedGraphics): string {
-	return `(${SOFTWARE_GRAPHICS_MASK.toString()})(${JSON.stringify(graphics.vendor)}, ${JSON.stringify(graphics.renderer)}, ${JSON.stringify(SOFTWARE_RENDERER.source)}, ${JSON.stringify(REALM_SECRET)})`;
+	return `(${SOFTWARE_GRAPHICS_MASK.toString()})(${JSON.stringify(graphics.vendor)}, ${JSON.stringify(graphics.renderer)}, ${JSON.stringify(SOFTWARE_RENDERER.source)})`;
 }
