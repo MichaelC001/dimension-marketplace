@@ -1,6 +1,6 @@
 /**
- * Runs an upstream agent loop (jev, browser-use) against a browser this pack
- * already holds, through the Python worker in `packs/browser/python`.
+ * Runs the jev agent loop against a browser this pack already holds, through
+ * the Python worker in `packs/browser/python`.
  *
  * The worker is a published-package consumer, nothing more: it constructs the
  * library's own `Agent`, points it at our Chrome's CDP endpoint and reports
@@ -11,7 +11,7 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
 import { join } from "node:path";
-import type { TaskAgent, TaskStatus, TaskUsage } from "./contracts.js";
+import type { TaskStatus, TaskUsage } from "./contracts.js";
 import { fail } from "./store.js";
 
 /** `packs/browser/python`, from both `src/task.ts` and the bundled `app/server.mjs`. */
@@ -26,7 +26,6 @@ const SPARE_IDLE_MS = 10 * 60_000;
 export interface WorkerStep { n: number; action: string; url: string; elapsedMs: number; usage: TaskUsage }
 export interface WorkerResult { status: Exclude<TaskStatus, "running">; summary: string; steps: number; elapsedMs: number; usage: TaskUsage }
 export interface WorkerJob {
-  agent: TaskAgent;
   cdpUrl: string;
   task: string;
   maxSteps: number;
@@ -41,6 +40,11 @@ export interface RunningWorker {
   cancel(): void;
 }
 
+/** jev's key: its task tools are offered, and a spare worker kept, only where it is set (doc 77 §6). */
+export function jevKeyConfigured(): boolean {
+  return Boolean(process.env.TYPESAFE_API_KEY?.trim());
+}
+
 function interpreter(): string {
   const configured = process.env.DIM_BROWSER_PYTHON?.trim();
   if (configured) return configured;
@@ -48,7 +52,7 @@ function interpreter(): string {
   if (!existsSync(venv)) {
     fail(
       "python_env_missing",
-      `The jev / browser-use task agents need their pinned Python environment. Run: cd "${PYTHON_DIR}" && uv sync --python 3.12 ` +
+      `The jev task agent needs its pinned Python environment. Run: cd "${PYTHON_DIR}" && uv sync --python 3.12 ` +
         "(or set DIM_BROWSER_PYTHON to an interpreter that has it).",
     );
   }
@@ -73,11 +77,10 @@ interface Spawned {
   stderr(): string;
 }
 
-/** `spare`: the worker preloads browser-use while it waits (DIM_BROWSER_SPARE); a worker spawned for a job does not. */
-function spawnWorker(spare = false): Spawned {
+function spawnWorker(): Spawned {
   const child = spawn(interpreter(), ["-m", "dim_browser_bridge"], {
     cwd: PYTHON_DIR,
-    env: { ...process.env, PYTHONUNBUFFERED: "1", PYTHONIOENCODING: "utf-8", ...(spare ? { DIM_BROWSER_SPARE: "1" } : {}) },
+    env: { ...process.env, PYTHONUNBUFFERED: "1", PYTHONIOENCODING: "utf-8" },
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
   });
@@ -89,7 +92,6 @@ function spawnWorker(spare = false): Spawned {
   child.on("error", () => undefined);
   // A pipe error (the worker or a process it spawned dying mid-write) is an
   // 'error' event; unheard, Node throws it and takes the whole MCP server down.
-  // Attached at spawn so an idle spare is covered too, not only a running task.
   child.stdin.on("error", () => undefined);
   child.stdout.on("error", () => undefined);
   child.stderr.on("error", () => undefined);
@@ -97,12 +99,13 @@ function spawnWorker(spare = false): Spawned {
 }
 
 /**
- * One pre-spawned worker, waiting on stdin with browser-use already imported
- * (~4 s of imports), so a browser-use task's clock starts at its first step;
- * a jev task still imports its harness per task (it reads its env at import
- * time) and saves only interpreter start-up. Kept only once tasks are in use:
- * the first task spawns the next spare, every later one takes it and spawns
- * its successor.
+ * One pre-spawned worker, waiting on stdin, so a jev task's clock starts
+ * without the interpreter's start-up. jev's harness reads its env at import
+ * time, so nothing of it can be loaded ahead: start-up is all this saves.
+ * Kept only where jev's key is set and only once tasks are in use: the first
+ * task spawns the next spare, every later one takes it and spawns its
+ * successor. Unused, it exits after SPARE_IDLE_MS (the same ten minutes a
+ * throwaway browser may sit idle), and the runtime lets it go when disposed.
  */
 let spare: { worker: Spawned; env: string; idle: NodeJS.Timeout } | undefined;
 
@@ -117,11 +120,16 @@ function hold(worker: Spawned, held: boolean): void {
   }
 }
 
-function takeSpare(): Spawned | undefined {
-  const taken = spare;
+function detachSpare(): typeof spare {
+  const detached = spare;
   spare = undefined;
+  if (detached) clearTimeout(detached.idle);
+  return detached;
+}
+
+function takeSpare(): Spawned | undefined {
+  const taken = detachSpare();
   if (!taken) return undefined;
-  clearTimeout(taken.idle);
   const { child } = taken.worker;
   if (child.pid !== undefined && child.exitCode === null && child.signalCode === null && taken.env === envKey()) {
     hold(taken.worker, true);
@@ -132,10 +140,10 @@ function takeSpare(): Spawned | undefined {
 }
 
 function keepSpare(): void {
-  if (spare) return;
+  if (spare || !jevKeyConfigured()) return;
   let worker: Spawned;
   try {
-    worker = spawnWorker(true);
+    worker = spawnWorker();
   } catch {
     return; // no interpreter: the next task reports it
   }
@@ -152,6 +160,11 @@ function keepSpare(): void {
   });
   hold(worker, false);
   spare = { worker, env: envKey(), idle };
+}
+
+/** Let the waiting spare go: a runtime that is disposed leaves no worker running behind it. */
+export function releaseSpare(): void {
+  detachSpare()?.worker.child.stdin.end();
 }
 
 export function startWorker(job: WorkerJob, onStep: (step: WorkerStep) => void): RunningWorker {

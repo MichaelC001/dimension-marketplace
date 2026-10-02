@@ -27,6 +27,9 @@ import type { BrowserRuntime } from "../src/runtime";
 import { createBrowserServer } from "../src/server";
 import { BrowserRuntimeError } from "../src/store";
 import { BROWSER_TEST_TIMEOUT_MS, chromePath, createRoot, newRuntime, startFixture, teardown } from "./fixture";
+import { withJevKey } from "./jev-key";
+
+withJevKey();
 
 const PYTHON_DIR = fileURLToPath(new URL("../python/", import.meta.url));
 const VENV_PYTHON = join(PYTHON_DIR, ".venv", ...(process.platform === "win32" ? ["Scripts", "python.exe"] : ["bin", "python"]));
@@ -206,7 +209,7 @@ describeWithFakeWorker("credentials through browser_task", () => {
 				const opened = await call("browser_open", { profile: "signup" });
 				const browserId = opened.structuredContent?.browserId as string;
 				const task = async (outFile: string, credential: Record<string, unknown>): Promise<ToolResult> => {
-					const result = await call("browser_task", { browserId, agent: "jev", task: script(join(rootDir, outFile)), credential, waitSeconds: 25 });
+					const result = await call("browser_task", { browserId, task: script(join(rootDir, outFile)), credential, waitSeconds: 25 });
 					seen.push(result);
 					return result;
 				};
@@ -247,33 +250,27 @@ describeWithFakeWorker("credentials through browser_task", () => {
 			const runtime = newRuntime(rootDir);
 			const { browserId } = await runtime.open({ profile: "refusals" });
 			const out = (name: string): string => join(rootDir, `${name}.json`);
-			const signup = await runtime.runTask(browserId, { agent: "jev", task: script(out("signup")), credential: { origin: SHOP, mode: "signup" } });
+			const signup = await runtime.runTask(browserId, { task: script(out("signup")), credential: { origin: SHOP, mode: "signup" } });
 			expect(signup.status).toBe("done");
 			const password = savedPasswords(rootDir, "refusals")[SHOP] as string;
 
 			const noSaved = await refusal(() =>
-				runtime.runTask(browserId, { agent: "jev", task: script(out("login")), credential: { origin: "https://other.example", mode: "login" } }),
+				runtime.runTask(browserId, { task: script(out("login")), credential: { origin: "https://other.example", mode: "login" } }),
 			);
 			expect(noSaved.code).toBe("no_credential");
 			expect(noSaved.message).not.toContain(password);
 
-			// browser-use reads password fields into its model: it never gets one.
-			const browserUse = await refusal(() =>
-				runtime.runTask(browserId, { agent: "browser-use", task: script(out("browser-use")), credential: { origin: SHOP, mode: "login" } }),
-			);
-			expect(browserUse.code).toBe("credential_unsupported");
-
 			// Plain http to a remote host would send the password in clear.
 			const cleartext = await refusal(() =>
-				runtime.runTask(browserId, { agent: "jev", task: script(out("cleartext")), credential: { origin: "http://shop.example", mode: "signup" } }),
+				runtime.runTask(browserId, { task: script(out("cleartext")), credential: { origin: "http://shop.example", mode: "signup" } }),
 			);
 			expect(cleartext.code).toBe("bad_credential");
 
-			for (const name of ["login", "browser-use", "cleartext"]) expect(existsSync(out(name))).toBe(false);
+			for (const name of ["login", "cleartext"]) expect(existsSync(out(name))).toBe(false);
 			expect(savedPasswords(rootDir, "refusals")).toEqual({ [SHOP]: password });
 
 			// http on loopback is where a local app under test lives: allowed.
-			const local = await runtime.runTask(browserId, { agent: "jev", task: script(out("local")), credential: { origin: "http://127.0.0.1:8123", mode: "signup" } });
+			const local = await runtime.runTask(browserId, { task: script(out("local")), credential: { origin: "http://127.0.0.1:8123", mode: "signup" } });
 			expect(local.credential).toEqual({ origin: "http://127.0.0.1:8123", created: true });
 			expect(received(out("local"))).toEqual({ origin: "http://127.0.0.1:8123", password: savedPasswords(rootDir, "refusals")["http://127.0.0.1:8123"] });
 
@@ -281,7 +278,7 @@ describeWithFakeWorker("credentials through browser_task", () => {
 			const file = join(rootDir, "profiles", "refusals", "credentials.json");
 			await writeFile(file, readFileSync(file, "utf8").slice(0, -4));
 			const unreadable = await refusal(() =>
-				runtime.runTask(browserId, { agent: "jev", task: script(out("unreadable")), credential: { origin: SHOP, mode: "login" } }),
+				runtime.runTask(browserId, { task: script(out("unreadable")), credential: { origin: SHOP, mode: "login" } }),
 			);
 			expect(unreadable.code).toBe("credentials_unreadable");
 			expect(unreadable.message).not.toContain(password);

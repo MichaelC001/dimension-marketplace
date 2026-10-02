@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import type { TaskRun, TaskStatus } from "../../src/contracts";
 import { Icon } from "@fraym/ui/icons";
 
-const AGENT_LABEL: Record<TaskRun["agent"], string> = { jev: "Jev", "browser-use": "Browser Use" };
+const AGENT_NAME = "Jev";
 
 const RESULT_LABEL: Record<Exclude<TaskStatus, "running">, string> = {
 	done: "Task done",
@@ -47,12 +47,12 @@ export function AgentPill({ task, cancelling, onCancel }: AgentPillProps) {
 	const current = latest?.action ?? "Starting up…";
 
 	return (
-		<div className="bx-agent" data-expanded={expanded || undefined} role="group" aria-label={`${AGENT_LABEL[task.agent]} is working`}>
+		<div className="bx-agent" data-expanded={expanded || undefined} role="group" aria-label={`${AGENT_NAME} is working`}>
 			<div className="bx-agent-row">
 				<span className="bx-agent-mark" aria-hidden="true">
 					<Icon name="bot" size={15} strokeWidth={2} />
 				</span>
-				<span className="bx-agent-name">{AGENT_LABEL[task.agent]}</span>
+				<span className="bx-agent-name">{AGENT_NAME}</span>
 				<span className="bx-agent-step" role="status" aria-live="polite">
 					{current}
 				</span>

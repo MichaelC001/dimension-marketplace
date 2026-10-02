@@ -145,7 +145,6 @@ const WORK_BROWSER = browserOf("b1", WORK);
 
 const RUNNING: TaskRun = {
 	id: "task-1",
-	agent: "jev",
 	task: "Find the cheapest flight",
 	status: "running",
 	summary: "",

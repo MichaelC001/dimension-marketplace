@@ -33,7 +33,11 @@ import type { BrowserRuntime, BrowserRuntimeOptions } from "../src/runtime";
 import { createBrowserServer } from "../src/server";
 import { chromePidsByThrowaway, waitUntilGone } from "./chrome-processes";
 import { approvePublish, BROWSER_TEST_TIMEOUT_MS, chromePath, createRoot, describeWithChrome, failureCode, type Fixture, newRuntime, startFixture, teardown, waitUntil } from "./fixture";
+import { withJevKey } from "./jev-key";
 import { type PublishFixture, startPublishFixture } from "./publish-fixture";
+
+// browser_task is registered only where TYPESAFE_API_KEY is set when the server is created (doc 77 §6): the tests that call it need the key.
+withJevKey();
 
 const CALLER = "ai.insodimension/caller";
 const SESSION = "ai.insodimension/session";
@@ -315,7 +319,7 @@ describeWithChrome("taking a browser over in the View", () => {
 				["browser_act", { browserId: id, actions: [{ kind: "tab", op: "new", url: r.fixture.url("/show-cookie") }] }],
 				["browser_act", { browserId: id, actions: [{ kind: "wait", text: "never", timeoutMs: 100 }] }],
 				["browser_close", { browserId: id }],
-				["browser_task", { browserId: id, agent: "jev", task: "do something", waitSeconds: 0 }],
+				["browser_task", { browserId: id, task: "do something", waitSeconds: 0 }],
 			];
 			for (const who of [CHAT, OTHER_CHAT, undefined]) {
 				for (const [name, args] of moves) {
@@ -331,7 +335,7 @@ describeWithChrome("taking a browser over in the View", () => {
 			expect(await failureCode(() => r.runtime.tab(id, { op: "new" }, "model"))).toBe("human_driving");
 			expect(await failureCode(() => r.runtime.wait(id, { text: "never", timeoutMs: 100 }, "model"))).toBe("human_driving");
 			expect(await failureCode(() => r.runtime.close(id, "model"))).toBe("human_driving");
-			expect(await failureCode(() => r.runtime.startTask(id, { agent: "jev", task: "do something" }, "model"))).toBe("human_driving");
+			expect(await failureCode(() => r.runtime.startTask(id, { task: "do something" }, "model"))).toBe("human_driving");
 
 			// Nothing got through, and a refused attempt is not the agent working.
 			expect(r.fixture.hits("/show-cookie")).toBe(0);
@@ -638,12 +642,13 @@ describeTasks("taking over while a task runs", () => {
 			const r = await rig();
 			const opened = await open(r, CHAT, { profile: "tasked" });
 			const id = opened.browserId;
-			const running = await r.call("browser_task", { browserId: id, agent: "jev", task: JSON.stringify({ steps: [{ action: "thinking", url: "" }], hold: true }), waitSeconds: 0 }, CHAT);
+			const running = await r.call("browser_task", { browserId: id, task: JSON.stringify({ steps: [{ action: "thinking", url: "" }], hold: true }), waitSeconds: 0 }, CHAT);
 			expect(running.isError).toBeFalsy();
 			expect(running.structuredContent).toMatchObject({ status: "running" });
 			expect(entry(await listAs(r, VIEW_OF_CHAT), "tasked")).toMatchObject({ hold: { by: "agent", task: true, takenOver: false } });
 
-			refusal(await r.call("browser_control", { browserId: id, mode: "take" }, VIEW_OF_CHAT));
+			// The words a person reads in the View: the task is named for what it is, never by an agent that no longer exists.
+			expect(refusal(await r.call("browser_control", { browserId: id, mode: "take" }, VIEW_OF_CHAT))).toContain("a browser_task is running here; stop it first");
 			expect(await failureCode(() => r.runtime.control(id, "take", "app"))).toBe("task_running");
 			expect((await stateAs(r, VIEW_OF_CHAT, id)).takenOver).toBe(false);
 
@@ -678,7 +683,7 @@ describeTasks("taking over while a task runs", () => {
 				}
 				return await realState();
 			};
-			const starting = r.call("browser_task", { browserId: id, agent: "jev", task: JSON.stringify({ steps: [{ action: "thinking", url: "" }], hold: true }), waitSeconds: 0 }, CHAT);
+			const starting = r.call("browser_task", { browserId: id, task: JSON.stringify({ steps: [{ action: "thinking", url: "" }], hold: true }), waitSeconds: 0 }, CHAT);
 			try {
 				await reading.promise;
 				expect(refusal(await r.call("browser_control", { browserId: id, mode: "take" }, VIEW_OF_CHAT))).toContain("starting");
@@ -700,7 +705,7 @@ describeTasks("taking over while a task runs", () => {
 		async () => {
 			const r = await rig();
 			const id = (await open(r, VIEW_OF_CHAT, { profile: "tasked" })).browserId;
-			const running = await r.call("browser_task", { browserId: id, agent: "jev", task: JSON.stringify({ steps: [{ action: "thinking", url: "" }], hold: true }), waitSeconds: 0 }, CHAT);
+			const running = await r.call("browser_task", { browserId: id, task: JSON.stringify({ steps: [{ action: "thinking", url: "" }], hold: true }), waitSeconds: 0 }, CHAT);
 			expect(running.structuredContent).toMatchObject({ status: "running" });
 
 			expect(await r.runtime.leave(id, "app")).toEqual({ closed: false });
@@ -732,7 +737,7 @@ describeTasks("taking over while a task runs", () => {
 				}
 				return await realState();
 			};
-			const starting = r.call("browser_task", { browserId: id, agent: "jev", task: JSON.stringify({ steps: [{ action: "thinking", url: "" }], hold: true }), waitSeconds: 0 }, CHAT);
+			const starting = r.call("browser_task", { browserId: id, task: JSON.stringify({ steps: [{ action: "thinking", url: "" }], hold: true }), waitSeconds: 0 }, CHAT);
 			try {
 				await reading.promise;
 				expect(await r.runtime.leave(id, "app")).toEqual({ closed: false });

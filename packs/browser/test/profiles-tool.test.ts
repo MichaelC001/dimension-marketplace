@@ -122,7 +122,7 @@ describe("browser_profiles, as a host offers it", () => {
 		const meta = ToolMeta.parse(profiles?._meta ?? {});
 		expect(meta[SPACES]).toBeUndefined();
 		expect(meta.ui?.visibility).toBeUndefined();
-		expect(ToolMeta.parse(tools.get("browser_task")?._meta)[SPACES]).toEqual(["traction"]);
+		expect(ToolMeta.parse(tools.get("browser_publish")?._meta)[SPACES]).toEqual(["traction"]);
 		expect(ToolMeta.parse(tools.get("browser_frame")?._meta).ui?.visibility).toEqual(["app"]);
 	});
 

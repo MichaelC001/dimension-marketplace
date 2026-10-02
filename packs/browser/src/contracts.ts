@@ -5,9 +5,6 @@ import type { ProfileColour, ResolvedProfileMeta } from "./profile-meta.js";
 /** What the browser IS. `abp` and `browser4` are refused with the reason (see engines/refused.ts). */
 export const BROWSER_ENGINES = ["chromium", "chrome-relay", "abp", "browser4"] as const;
 export type BrowserEngine = (typeof BROWSER_ENGINES)[number];
-/** Who drives a whole task at its own speed: upstream agent loops, used as published. */
-export const TASK_AGENTS = ["jev", "browser-use"] as const;
-export type TaskAgent = (typeof TASK_AGENTS)[number];
 /**
  * `signup`: the password the browser saved for this profile + origin, or a
  * strong one it mints and saves. `login`: the saved one only. See credentials.ts.
@@ -159,7 +156,6 @@ export interface TaskUsage { modelCalls: number; inputTokens: number; outputToke
 export type TaskStatus = "running" | "done" | "blocked" | "failed" | "cancelled";
 export interface TaskRun {
   id: string;
-  agent: TaskAgent;
   task: string;
   status: TaskStatus;
   /** The agent's final message, or the failure reason. */
@@ -178,7 +174,7 @@ export interface TaskRun {
  * never reads or types password inputs). The value is held by the browser and
  * never passes through a tool argument, a result or a model call.
  */
-export interface TaskRequest { agent: TaskAgent; task: string; maxSteps?: number; credential?: CredentialRequest }
+export interface TaskRequest { task: string; maxSteps?: number; credential?: CredentialRequest }
 /** One field of a publish recipe: where to type, exactly what, and an optional caption shown in the View. */
 export interface PublishField {
   selector: string;

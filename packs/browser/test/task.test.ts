@@ -32,6 +32,9 @@ import {
 	waitUntil,
 	within,
 } from "./fixture";
+import { withJevKey } from "./jev-key";
+
+withJevKey();
 
 const VIEWPORT = { width: 640, height: 480 };
 const PYTHON_DIR = fileURLToPath(new URL("../python/", import.meta.url));
@@ -118,7 +121,6 @@ describeTasks("tasks", () => {
 			const finished = runtime.runTask(
 				browserId,
 				{
-					agent: "jev",
 					task: JSON.stringify({
 						steps,
 						gate,
@@ -158,7 +160,7 @@ describeTasks("tasks", () => {
 
 			const running = runtime.runTask(
 				browserId,
-				{ agent: "browser-use", task: JSON.stringify({ steps: [{ action: "thinking", url: "" }], hold: true }) },
+				{ task: JSON.stringify({ steps: [{ action: "thinking", url: "" }], hold: true }) },
 				progress.onStep,
 			);
 			await progress.reached;
@@ -172,7 +174,7 @@ describeTasks("tasks", () => {
 			}
 			// A crash script: were the second task wrongly admitted, it would resolve at once and fail this.
 			const second = JSON.stringify({ crash: { stderr: "second task ran", exit: 1 } });
-			expect(await failureCode(() => runtime.runTask(browserId, { agent: "jev", task: second }))).toBe("task_running");
+			expect(await failureCode(() => runtime.runTask(browserId, { task: second }))).toBe("task_running");
 			expect(fixture.hits("/page2")).toBe(0);
 
 			const cancelled = await runtime.cancelTask(browserId);
@@ -193,14 +195,14 @@ describeTasks("tasks", () => {
 			const { browserId } = await runtime.open({ profile: "task-crash", viewport: VIEWPORT });
 			const crash = JSON.stringify({ crash: { stderr: "fake worker exploded: TYPESAFE_API_KEY is not set", exit: 3 } });
 
-			const run = await runtime.runTask(browserId, { agent: "jev", task: crash });
+			const run = await runtime.runTask(browserId, { task: crash });
 
 			expect(run.status).toBe("failed");
 			expect(run.summary).toContain("(3)");
 			expect(run.summary).toContain("fake worker exploded: TYPESAFE_API_KEY is not set");
 			expect((await runtime.state(browserId)).task?.status).toBe("failed");
 			// The dead worker no longer holds the browser.
-			expect((await runtime.runTask(browserId, { agent: "jev", task: crash })).status).toBe("failed");
+			expect((await runtime.runTask(browserId, { task: crash })).status).toBe("failed");
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);
@@ -226,7 +228,7 @@ describeTasks("tasks", () => {
 			];
 
 			for (const [i, { script, cause, next }] of failures.entries()) {
-				const failed = await within(10_000, `failed task ${i}'s tool result`, call("browser_task", { browserId, agent: "jev", task: JSON.stringify(script), waitSeconds: 20 }));
+				const failed = await within(10_000, `failed task ${i}'s tool result`, call("browser_task", { browserId, task: JSON.stringify(script), waitSeconds: 20 }));
 				expect(failed.isError).toBe(true);
 				expect(failed.content[0]?.text).toContain(cause);
 				expect(failed.content[0]?.text).toContain(next);
@@ -251,7 +253,6 @@ describeTasks("tasks", () => {
 			const running = runtime.runTask(
 				browserId,
 				{
-					agent: "jev",
 					task: JSON.stringify({ openTab: fixture.url("/signup"), steps: [{ action: "opened tab", url: fixture.url("/signup") }], hold: true }),
 				},
 				progress.onStep,
@@ -283,7 +284,6 @@ describeTasks("tasks", () => {
 			const finished = runtime.runTask(
 				browserId,
 				{
-					agent: "jev",
 					task: JSON.stringify({
 						openTab: fixture.url("/signup"),
 						background: true,
@@ -350,7 +350,7 @@ describeTasks("tasks", () => {
 			// A task whose steps and failure summary quote the URL, as jev's would after the filled form submits.
 			const summary = `stopped at ${landed} (${encodeURIComponent(password)})`;
 			const task = JSON.stringify({ steps: [{ action: `submitted ${landed}`, url: landed }], result: { status: "failed", summary, steps: 1 } });
-			const failed = await call("browser_task", { browserId, agent: "jev", task, waitSeconds: 20 });
+			const failed = await call("browser_task", { browserId, task, waitSeconds: 20 });
 			expect(failed.isError).toBe(true);
 			results.push(failed, await call("browser_task_wait", { browserId, waitSeconds: 1 }), await call("browser_task_cancel", { browserId }));
 
