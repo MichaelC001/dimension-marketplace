@@ -11,12 +11,13 @@
  *  `startWorker` — only the agent loop is replaced, never the process boundary.
  */
 import { existsSync } from "node:fs";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { CredentialKey, readCredentials } from "../src/credentials";
 import type { BrowserRuntime } from "../src/runtime";
 import { createBrowserServer } from "../src/server";
 import type { TaskStep } from "../src/contracts";
@@ -37,6 +38,7 @@ withJevKey();
 
 const VIEWPORT = { width: 640, height: 480 };
 const PYTHON_DIR = fileURLToPath(new URL("../python/", import.meta.url));
+// The scripted fake worker needs an interpreter: the pack's pinned environment, or the one named in DIM_BROWSER_PYTHON (as profile-control.test.ts does).
 const PYTHON = process.env.DIM_BROWSER_PYTHON?.trim() || join(PYTHON_DIR, ".venv", ...(process.platform === "win32" ? ["Scripts", "python.exe"] : ["bin", "python"]));
 const FAKE_WORKER = fileURLToPath(new URL("./fake-worker/", import.meta.url));
 
@@ -334,7 +336,7 @@ describeTasks("tasks", () => {
 				await rm(store, { force: true });
 				await act({ kind: "navigate", url: fixture.url("/get-login") });
 				await act({ kind: "type", selector: "#pass", generatePassword: true });
-				password = JSON.parse(await readFile(store, "utf8")).origins[origin];
+				password = readCredentials(join(rootDir, "profiles", "task-redact"), new CredentialKey(rootDir))[origin] as string;
 			}
 			await act({ kind: "click", selector: "#go" });
 			await waitUntil("the GET login", () => fixture.submissions().length, (count) => count === 1);

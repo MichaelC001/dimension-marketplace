@@ -5,10 +5,10 @@
 // never a URL).
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { App } from "@modelcontextprotocol/ext-apps";
-import type { BrowserAction, BrowserFrame, BrowserState, TabOp } from "../../src/contracts";
+import type { BrowserAction, BrowserFrame, BrowserState, ControlMode, NewProfileRequest, OpenBrowserListing, ProfileListing, TabOp } from "../../src/contracts";
 import { Icon } from "@fraym/ui/icons";
 import { addressParts, tabLabel } from "../../src/address";
-import { AgentPill, ResultToast } from "./agent-activity";
+import { AgentPill, ControlPill, ResultToast, useAgentActive } from "./agent-activity";
 import { AnnotationSeat } from "./annotation-seat";
 import { BrowserClient, failureText, openFailureText, type ToolMount } from "./browser-client";
 import { PageView } from "./page-view";
@@ -41,8 +41,16 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 
 	const [browserId, setBrowserId] = useState<string | null>(null);
 	const [opened, setOpened] = useState<BrowserState | null>(null);
-	const [profiles, setProfiles] = useState<readonly string[] | null>(null);
+	/** Every saved profile with who holds it; null until it loads. Read again when the browser changes and when the profile menu opens. */
+	const [profiles, setProfiles] = useState<readonly ProfileListing[] | null>(null);
+	/** The browsers this chat holds that are not saved profiles (a Private one, Your Chrome): read with the profiles. */
+	const [browsers, setBrowsers] = useState<readonly OpenBrowserListing[]>([]);
 	const [profilesError, setProfilesError] = useState<string | null>(null);
+	/** The profile being opened from the menu right now (`""`: a Private browser). */
+	const [switching, setSwitching] = useState<string | null>(null);
+	const [controlBusy, setControlBusy] = useState(false);
+	/** The profile menu is open: the floating cards keep out from under it. */
+	const [menuOpen, setMenuOpen] = useState(false);
 	const [profile, setProfile] = useState(DEFAULT_PROFILE);
 	const [isPrivate, setPrivate] = useState(false);
 	const [ownChrome, setOwnChrome] = useState(false);
@@ -84,9 +92,35 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 	const taskRunning = task?.status === "running";
 	// An agent drives: no input, no tab ops.
 	const locked = taskRunning;
+	// The person may take the wheel when nothing else holds the page: no task runs and no post awaits its confirm.
+	const canTakeOver = !taskRunning && state?.publish?.status !== "awaiting-confirmation";
+	const agentActive = useAgentActive(state?.agentActionAt ?? null);
 	const loading = (state?.loading ?? false) || navPending > 0;
 	// The size the newest picture was taken at, so a click maps exactly even in the moment a resize is in flight.
 	const viewport = stream.picture?.viewport ?? state?.viewport ?? { width: 1280, height: 800 };
+
+	// The person's hold on the wheel ends when they hand it back, switch profile (`leave`) and when this View goes: it unmounts, or the
+	// chat's window closes (`pagehide`; a page kept in the back/forward cache comes back, so it keeps the wheel). A document merely
+	// hidden is NOT a departure: the stream stops while it is, and the person is coming back to the half-filled form they left. Best
+	// effort: a window that is already closing may not get the call through, and the runtime's long fallback clock then gives it back.
+	const wheelRef = useRef<string | null>(null);
+	wheelRef.current = state?.takenOver === true ? browserId : null;
+	useEffect(() => {
+		const handBack = () => {
+			const held = wheelRef.current;
+			if (held === null) return;
+			wheelRef.current = null;
+			client.control(held, "return").catch(() => undefined);
+		};
+		const onPageHide = (event: Event) => {
+			if ((event as PageTransitionEvent).persisted !== true) handBack();
+		};
+		window.addEventListener("pagehide", onPageHide);
+		return () => {
+			window.removeEventListener("pagehide", onPageHide);
+			handBack();
+		};
+	}, [client]);
 
 	const say = useCallback((tone: Notice["tone"], text: string) => setNotice({ id: Date.now(), tone, text }), []);
 	useEffect(() => {
@@ -141,28 +175,28 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 		};
 	}, [client, browserId, say]);
 
-	// The saved logins are app-only: they name saved sets, never live browsers. Read
-	// again each time the start page shows, so a set saved meanwhile is on offer.
-	const atStart = browserId === null;
-	useEffect(() => {
-		if (!atStart) return;
-		let alive = true;
+	// The profiles are read each time the start page shows (a profile made meanwhile is on offer) and when the profile menu opens: who
+	// holds each one changes under it. A browser on screen needs no read to draw its chip: its state carries the profile's look. The newest read wins.
+	const profilesSeq = useRef(0);
+	const loadProfiles = useCallback(() => {
+		const seq = (profilesSeq.current += 1);
 		client.profiles().then(
-			list => {
-				if (!alive) return;
-				setProfiles(list.filter(name => name !== RELAY_PROFILE));
+			answer => {
+				if (!mountedRef.current || profilesSeq.current !== seq) return;
+				setProfiles(answer.profiles);
+				setBrowsers(answer.browsers);
 				setProfilesError(null);
 			},
 			cause => {
-				if (!alive) return;
+				if (!mountedRef.current || profilesSeq.current !== seq) return;
 				setProfiles(current => current ?? []);
 				setProfilesError(failureText(cause));
 			},
 		);
-		return () => {
-			alive = false;
-		};
-	}, [client, atStart]);
+	}, [client]);
+	useEffect(() => {
+		if (browserId === null) loadProfiles();
+	}, [loadProfiles, browserId]);
 
 	// Remember which task this View saw running, so its end gets a toast.
 	useEffect(() => {
@@ -190,6 +224,17 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 		);
 	};
 
+	/** Show `next` in this View: a browser just opened, or the one the person switched to. */
+	const adopt = (next: BrowserState) => {
+		setBrowserId(next.browserId);
+		setOpened(next);
+		setClosed(false);
+		setAnnotating(false);
+		setStill(null);
+		setNavPending(0);
+		input.reset();
+	};
+
 	const open = async (url: string) => {
 		setOpening(true);
 		setOpenError(null);
@@ -199,18 +244,85 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 				profile: ownChrome ? RELAY_PROFILE : isPrivate ? undefined : profile,
 				url: url.length > 0 ? url : undefined,
 			});
-			if (!mountedRef.current) return;
-			setBrowserId(next.browserId);
-			setOpened(next);
-			setClosed(false);
-			const saved = next.engine === "chrome-relay" ? null : next.profile;
-			if (saved !== null) setProfiles(current => [...new Set([...(current ?? []), saved])].sort());
-			setAnnotating(false);
-			setStill(null);
+			if (mountedRef.current) adopt(next);
 		} catch (cause) {
 			if (mountedRef.current) setOpenError(openFailureText(cause));
 		} finally {
 			if (mountedRef.current) setOpening(false);
+		}
+	};
+
+	// Switching profile opens that profile's browser here, as Chrome does, and leaves the one it was on: the runtime closes it unless an
+	// agent opened it or something depends on it (a task, a post waiting for confirmation, the person's own take-over). What stays is
+	// listed in the menu, to go back to or close. The new browser is opened first, so one that cannot be opened (a profile taken meanwhile,
+	// Chrome failing to start) never costs the person the one they are in. Only with the pool full does the runtime close the old one before
+	// the open, when that frees the slot (`browser_switch`). A profile somebody else holds is not offered; if one is taken meanwhile, the
+	// runtime's refusal is said once.
+	const switchTo = async (key: string, reach: (left: string | null) => Promise<BrowserState>) => {
+		if (switching !== null) return;
+		const left = browserId;
+		setSwitching(key);
+		try {
+			const next = await reach(left);
+			if (!mountedRef.current) return;
+			adopt(next);
+			if (left !== null && left !== next.browserId) {
+				client.leave(left).then(
+					() => undefined,
+					cause => {
+						if (mountedRef.current) say("error", failureText(cause));
+					},
+				);
+			}
+		} catch (cause) {
+			if (mountedRef.current) say("error", openFailureText(cause));
+		} finally {
+			if (mountedRef.current) setSwitching(null);
+		}
+	};
+	const switchProfile = (target: string | null) =>
+		switchTo(target ?? "", left => {
+			const options = { engine: "chromium" as const, ...(target === null ? {} : { profile: target }) };
+			return left === null ? client.open(options) : client.switchProfile(left, options);
+		});
+	const switchBrowser = (target: string) => switchTo(`browser:${target}`, () => client.state(target));
+
+	// A browser left open is closed from the menu; it stays open, and the list is read again either way.
+	const closeOther = async (target: string) => {
+		try {
+			await client.close(target);
+		} catch (cause) {
+			if (mountedRef.current) say("error", failureText(cause));
+		}
+		if (mountedRef.current) loadProfiles();
+	};
+	// Add profile in the menu makes it and opens it, as Chrome does. A name the runtime refuses is the form's to show (this rejects).
+	const addProfile = async (request: NewProfileRequest) => {
+		const created = await client.addProfile(request);
+		if (!mountedRef.current) return;
+		loadProfiles();
+		await switchProfile(created.name);
+	};
+
+	// Add profile on the start page makes it and picks it for the browser about to open.
+	const addProfileAtStart = async (request: NewProfileRequest) => {
+		const created = await client.addProfile(request);
+		if (!mountedRef.current) return;
+		setProfile(created.name);
+		loadProfiles();
+	};
+
+	const control = async (mode: ControlMode) => {
+		const bound = browserId;
+		if (bound === null) return;
+		setControlBusy(true);
+		try {
+			const next = await client.control(bound, mode);
+			if (live(bound)) stream.push(next);
+		} catch (cause) {
+			if (live(bound)) say("error", failureText(cause));
+		} finally {
+			if (mountedRef.current) setControlBusy(false);
 		}
 	};
 
@@ -422,7 +534,7 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 				handled();
 				if (annotating) exitAnnotation();
 				else void enterAnnotation();
-			} else if (event.key === "Escape" && !inField && !annotating && loading && document.querySelector(".bx-menu") === null) {
+			} else if (event.key === "Escape" && !inField && !annotating && loading && document.querySelector(".bx-menu, .bx-pmenu") === null) {
 				// While marking, Escape belongs to the annotation kit: it cancels a stroke in flight, and only then is Done.
 				handled();
 				act({ kind: "stop" });
@@ -446,6 +558,7 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 				onProfile={setProfile}
 				onPrivate={setPrivate}
 				onOwnChrome={setOwnChrome}
+				onAddProfile={addProfileAtStart}
 				onOpen={url => void open(url)}
 			/>
 		);
@@ -462,10 +575,12 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 		dismissedPublish !== publish.publishId &&
 		(publish.status === "awaiting-confirmation" || watchedPublishRef.current === publish.publishId);
 
+	// The pill and the menu's own control row never show together: Take over is in one place at a time.
+	const showControl = !taskRunning && !menuOpen && (state.takenOver || (agentActive && canTakeOver));
 	const floats = (
 		<>
-			{((taskRunning && task !== null) || showPublish) && (
-				<div className="bx-float bx-float-bottom">
+			{((taskRunning && task !== null) || showPublish || showControl) && (
+				<div className="bx-float bx-float-bottom" data-under-menu={menuOpen || undefined}>
 					<div className="bx-float-column">
 						{showPublish && publish !== null && (
 							<PublishBar
@@ -478,6 +593,7 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 							/>
 						)}
 						{taskRunning && task !== null && <AgentPill task={task} cancelling={cancelling} onCancel={() => void cancelTask()} />}
+						{showControl && <ControlPill takenOver={state.takenOver} busy={controlBusy} onTakeOver={() => void control("take")} onHandBack={() => void control("return")} />}
 					</div>
 				</div>
 			)}
@@ -505,8 +621,26 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 				canGoForward={state.canGoForward}
 				locked={locked}
 				annotating={annotating}
-				profile={state.profile}
-				engine={state.engine}
+				profiles={{
+					profile: state.profile,
+					look: state.look,
+					engine: state.engine,
+					profiles,
+					profilesError,
+					switching,
+					takenOver: state.takenOver,
+					agentActive,
+					canTakeOver,
+					onMenu: setMenuOpen,
+					onOpen: loadProfiles,
+					browsers: browsers.filter(item => item.browserId !== browserId),
+					onSwitch: target => void switchProfile(target),
+					onSwitchBrowser: target => void switchBrowser(target),
+					onCloseOther: target => void closeOther(target),
+					onAdd: addProfile,
+					onTakeOver: () => void control("take"),
+					onHandBack: () => void control("return"),
+				}}
 				offline={offline}
 				onBack={() => act({ kind: "back" })}
 				onForward={() => act({ kind: "forward" })}
