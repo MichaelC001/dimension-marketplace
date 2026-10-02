@@ -15,7 +15,7 @@ import { createRuntimeCodeHost } from "../src/code/host/code-host";
 import { createBrowserServer } from "../src/server";
 import { createRoot, newRuntime, teardown } from "./fixture";
 
-const SETTINGS = ["DIMENSION_BROWSER_CODE_ISOLATION", "DIMENSION_BROWSER_CODE_HEAP_MB", "DIMENSION_BROWSER_CODE_MEMORY_MB", "DIMENSION_BROWSER_CODE_IDLE_MS", "DIMENSION_BROWSER_FREEZE_IDLE_MS", "DIMENSION_BROWSER_MODEL_TOOLS"] as const;
+const SETTINGS = ["DIMENSION_BROWSER_CODE_ISOLATION", "DIMENSION_BROWSER_CODE_HEAP_MB", "DIMENSION_BROWSER_CODE_MEMORY_MB", "DIMENSION_BROWSER_CODE_TOTAL_MB", "DIMENSION_BROWSER_CODE_IDLE_MS", "DIMENSION_BROWSER_FREEZE_IDLE_MS", "DIMENSION_BROWSER_MODEL_TOOLS"] as const;
 const saved: Record<string, string | undefined> = {};
 const logged: string[] = [];
 const realError = console.error;
@@ -78,6 +78,14 @@ describe("a wrong setting that only concerns browser_run", () => {
     expect(stepToolsHidden(tools)).toBe(false);
     expect(logged.join("\n")).toContain("DIMENSION_BROWSER_CODE_HEAP_MB must be a number of megabytes");
     expect(logged.join("\n")).not.toContain("milliseconds");
+  });
+
+  test("a non-numeric host-wide memory limit does the same, and names it", async () => {
+    process.env.DIMENSION_BROWSER_CODE_TOTAL_MB = "all of it";
+    const tools = await toolsOffered();
+    expect(names(tools)).not.toContain("browser_run");
+    expect(stepToolsHidden(tools)).toBe(false);
+    expect(logged.join("\n")).toContain("DIMENSION_BROWSER_CODE_TOTAL_MB must be a number of megabytes");
   });
 
   test("a time setting names milliseconds", () => {

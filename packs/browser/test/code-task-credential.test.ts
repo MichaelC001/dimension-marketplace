@@ -17,20 +17,25 @@ import { BROWSER_TEST_TIMEOUT_MS, createRoot, describeWithChrome, newRuntime, te
 const clients: Client[] = [];
 let pages: Pages;
 const saved: Record<string, string | undefined> = {};
+const WATCHDOG = ["DIMENSION_BROWSER_CODE_MEMORY_MB", "DIMENSION_BROWSER_CODE_TOTAL_MB"] as const;
 
 beforeEach(async () => {
   pages = await startPages();
   // The memory watchdog is not what is under test: keep its probes (a PowerShell on a Node without the worker's own figure) out of this server.
-  saved.memory = process.env.DIMENSION_BROWSER_CODE_MEMORY_MB;
-  process.env.DIMENSION_BROWSER_CODE_MEMORY_MB = "0";
+  for (const name of WATCHDOG) {
+    saved[name] = process.env[name];
+    process.env[name] = "0";
+  }
 });
 
 afterEach(async () => {
   for (const client of clients.splice(0)) await client.close().catch(() => undefined);
   await teardown();
   await pages.close();
-  if (saved.memory === undefined) delete process.env.DIMENSION_BROWSER_CODE_MEMORY_MB;
-  else process.env.DIMENSION_BROWSER_CODE_MEMORY_MB = saved.memory;
+  for (const name of WATCHDOG) {
+    if (saved[name] === undefined) delete process.env[name];
+    else process.env[name] = saved[name];
+  }
 });
 
 /** A server whose task tools are on or off, the tools it lists, and what a cell is told when it types into a password field. */
