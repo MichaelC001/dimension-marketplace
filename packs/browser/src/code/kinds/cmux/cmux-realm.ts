@@ -1,6 +1,6 @@
 // Copied from OMP (https://github.com/can1357/oh-my-pi, MIT), packages/coding-agent/src/tools/browser/tab-supervisor.ts:587-700 (the cmux branch of runInTab) and :766-911 (releaseTab for a cmux surface) @ dc5f95d9e1 (Dimension omp fork).
 // Copyright (c) 2025 Mario Zechner; (c) 2025-2026 Can Bölük; (c) 2026 Stencil Labs, Inc. See ../../../../third-party/omp/LICENSE.
-// Changed for the Browser pack (matrix F6): OMP's supervisor, its process-global tab map and idle clocks are not here (the code host owns lifetime and opens the surface: cmux-surface.ts); this is only what a cmux surface needs beside
+// Changed for the Browser pack: (matrix F6) OMP's supervisor, its process-global tab map and idle clocks are not here (the code host owns lifetime and opens the surface: cmux-surface.ts); this is only what a cmux surface needs beside
 // the puppeteer tab realm: adopt a surface by its UUID, run a cell or a call chain on it, and drop it.
 
 /**

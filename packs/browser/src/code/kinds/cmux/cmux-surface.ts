@@ -1,6 +1,6 @@
 // Copied from OMP (https://github.com/can1357/oh-my-pi, MIT), packages/coding-agent/src/tools/browser/tab-supervisor.ts:508-585 (acquireCmuxTab: the split's opening, its wait and the abort rule) @ dc5f95d9e1 (Dimension omp fork).
 // Copyright (c) 2025 Mario Zechner; (c) 2025-2026 Can Bölük; (c) 2026 Stencil Labs, Inc. See ../../../../third-party/omp/LICENSE.
-// Changed for the Browser pack (matrix F6): opening is separate from running. The code host opens (or attaches to) the surface on the main thread, where `browser.open` is answered and the cell is told the page's URL and title; the worker
+// Changed for the Browser pack: (matrix F6) opening is separate from running. The code host opens (or attaches to) the surface on the main thread, where `browser.open` is answered and the cell is told the page's URL and title; the worker
 // then adopts it by its UUID and runs cells on it (cmux-realm.ts). OMP's supervisor held the surface and the run in one process; here a cell never runs on the thread that holds the server.
 
 /**

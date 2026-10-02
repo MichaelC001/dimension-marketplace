@@ -1,6 +1,6 @@
 // Copied from OMP (https://github.com/can1357/oh-my-pi, MIT), packages/coding-agent/src/tools/browser/cmux/cmux-tab.ts @ dc5f95d9e1 (Dimension omp fork).
 // Copyright (c) 2025 Mario Zechner; (c) 2025-2026 Can Bölük; (c) 2026 Stencil Labs, Inc. See ../../../../third-party/omp/LICENSE.
-// Changed for the Browser pack (matrix F6): the cell is run by the pack's evaluator (no JsRuntime) and its rejections are routed by the worker's guard (no postmortem, no same-realm attribution) and a tab closed under a run ends it with the tab named; `callSessionTool` is gone (no reverse tool channel in MCP, D26); the screenshot is shrunk by png.ts (no Bun.Image) and saved with the file API; `Bun.file`, `Bun.write` and `Bun.sleep` are node:fs and a timer; the session is a plain settings object.
+// Changed for the Browser pack: (matrix F6) the cell is run by the pack's evaluator (no JsRuntime) and its rejections are routed by the worker's guard (no postmortem, no same-realm attribution) and a tab closed under a run ends it with the tab named; `callSessionTool` is gone (no reverse tool channel in MCP, D26); the screenshot is shrunk by png.ts (no Bun.Image) and saved with the file API; `Bun.file`, `Bun.write` and `Bun.sleep` are node:fs and a timer; the session is a plain settings object.
 
 import * as fs from "node:fs";
 import * as os from "node:os";
