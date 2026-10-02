@@ -61,7 +61,7 @@ export interface SessionDeps {
   excludeWebP: boolean;
   /** The server offers `browser_task`, so the realm's password refusal may send the model to it (RealmInit.taskCredential; absent means not offered). */
   taskCredential: boolean;
-  /** The workers this host ended that are still alive, across all sessions: the cap on stuck threads is theirs. */
+  /** The workers this host ended that are still alive (all sessions share it; each session is counted on its own, and the host as a whole has a larger cap). */
   terminating: TerminatingWorkers;
   /** What a worker may hold, MB: its JS heap plus its Buffers and ArrayBuffers (the heap limit alone covers neither). 0: no limit. */
   memoryMb: number;
@@ -129,9 +129,14 @@ function busyMessage(runId: string): string {
   return `busy: a cell is still running in this session (${runId}); wait for it with browser_run({ "resume": "${runId}" }) and start no new cell meanwhile.`;
 }
 
-/** A new cell is refused while this many workers that were ended are still inside a call that cannot be interrupted. */
+/** A new cell of this session is refused while its own workers that were ended are still inside a call that cannot be interrupted; the cells quoted are this session's. */
 function stuckMessage(labels: readonly string[]): string {
   return `stuck: ${labels.length} earlier code worker${labels.length === 1 ? " is" : "s are"} still alive inside a call that cannot be interrupted (${labels.map(label => JSON.stringify(label)).join(", ")}). They end when that call returns. Start no new cell until then, and keep blocking calls (execSync, spawnSync, a read from a pipe that never closes) out of cells.`;
+}
+
+/** The host as a whole holds too many such workers (the memory backstop): it says how many and whose they are not, since another session's code is not this session's to read. */
+function hostStuckMessage(count: number): string {
+  return `stuck: ${count} code workers of this browser server are still alive inside calls that cannot be interrupted, so it starts no new one until some of those calls return. They are not this session's cells; retry shortly, and keep blocking calls (execSync, spawnSync, a read from a pipe that never closes) out of cells.`;
 }
 
 /** The error a cell gets for a worker that could not answer a budget it had run out of: it was stuck, so it was ended. */
@@ -322,7 +327,9 @@ export class CodeSession {
     }
     const { terminating, timing } = this.#d;
     // A worker that is ending normally exits within the terminate limit (the grace on top is for its exit event); one that does not is inside a native call, and each of those is a thread and maybe a process that nothing can reclaim.
-    if (!(await terminating.hasRoom(timing.terminateMs + timing.graceMs))) throw new Error(stuckMessage(terminating.labels));
+    const room = await terminating.room(this.#d.session, timing.terminateMs + timing.graceMs);
+    if (room === "session-full") throw new Error(stuckMessage(terminating.labels(this.#d.session)));
+    if (room === "host-full") throw new Error(hostStuckMessage(terminating.size));
     const live = this.#spawn();
     this.#worker = live;
     await live.ready;
@@ -424,7 +431,7 @@ export class CodeSession {
 
   /** Asks the thread to end and counts it until it has. It never waits longer than `terminateMs`: a thread inside a native call answers only when the call returns. */
   async #end(live: LiveWorker): Promise<void> {
-    this.#d.terminating.add(live.handle, live.label);
+    this.#d.terminating.add(this.#d.session, live.handle, live.label);
     await live.handle.terminate(this.#d.timing.terminateMs).catch(() => undefined);
   }
 

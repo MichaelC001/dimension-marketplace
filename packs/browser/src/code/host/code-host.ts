@@ -74,7 +74,7 @@ export class CodeHost implements CodeHostPort {
   readonly #spawn: SpawnWorker;
   readonly #timing: CodeTiming;
   readonly #sessions = new Map<string, CodeSession>();
-  /** Shared by every session: workers that were ended but are stuck in a native call count against one cap. */
+  /** Shared by every session so the host-wide cap can hold; each session is also counted on its own (a session's stuck workers refuse that session only). */
   readonly #terminating = new TerminatingWorkers();
   readonly #unsubscribe: Array<() => void>;
   #disposed = false;

@@ -520,6 +520,59 @@ describe("a worker that nothing can end", () => {
     expect(workers).toHaveLength(6);
     expect(workers.every(worker => worker.exited)).toBe(true);
   });
+
+  /** A worker of one of these sessions is inside a native call from the moment it starts; every other session's workers behave. */
+  const stuckFor = (...sessions: string[]): Behavior => (worker, message) => {
+    if (message.t === "init") {
+      worker.stuck = sessions.includes(message.session);
+      queueMicrotask(() => worker.emit({ t: "ready" }));
+    }
+    if (message.t === "close" && !worker.stuck) worker.die("closed");
+  };
+
+  /** Runs cells that hang in `session` until one is refused; the refusal, or undefined when none was within `attempts`. */
+  async function hangUntilRefused(host: CodeHost, session: string, attempts: number): Promise<string | undefined> {
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      const started = await host.run(session, { code: `execSync("${session}-dev-server-${attempt}")`, timeoutMs: 30, waitMs: 2_000, signal: NEVER }).catch((error: Error) => error);
+      if (started instanceof Error) return started.message;
+    }
+    return undefined;
+  }
+
+  test("stuck workers are counted per session: a session whose cells never return is refused alone, another session still gets its worker", async () => {
+    const { host, workers } = rig({ timing: STUCK_TIMING }, stuckFor("s1"));
+    const refusal = await hangUntilRefused(host, "s1", 6);
+    expect(refusal).toContain("stuck: 2 earlier code workers");
+    // The same session is refused again; a new session and an old one are not.
+    expect(await hangUntilRefused(host, "s1", 1)).toContain("stuck: 2 earlier code workers");
+    for (const session of ["s2", "s3"]) {
+      const started = await host.run(session, { code: "40 + 2", timeoutMs: 5_000, waitMs: 20, signal: NEVER });
+      expect(started.state).toBe("running");
+    }
+    expect(workers.filter(worker => !worker.exited)).toHaveLength(4); // s1's two stuck threads, and one worker each for s2 and s3
+  }, 20_000);
+
+  test("a refusal quotes the refused session's own cells and never another session's code", async () => {
+    const { host } = rig({ timing: STUCK_TIMING }, stuckFor("s1", "s2"));
+    expect(await hangUntilRefused(host, "s1", 6)).toBeDefined();
+    const refusal = await hangUntilRefused(host, "s2", 6);
+    expect(refusal).toContain("s2-dev-server-0");
+    expect(refusal).toContain("s2-dev-server-1");
+    expect(refusal).not.toContain("s1-dev-server");
+  }, 20_000);
+
+  test("a host-wide cap above the per-session one is the memory backstop: past it every session is refused, and the message holds no session's code", async () => {
+    const { host, workers } = rig({ timing: STUCK_TIMING }, stuckFor("s1", "s2", "s3", "s4", "s5"));
+    for (const session of ["s1", "s2", "s3", "s4"]) expect(await hangUntilRefused(host, session, 6)).toBeDefined();
+    expect(workers.filter(worker => !worker.exited)).toHaveLength(8);
+    // A fifth session has no stuck worker of its own, and the host holds eight: it is refused all the same, naming the number and none of the cells.
+    const refusal = await host.run("s5", { code: "x", timeoutMs: 30, waitMs: 2_000, signal: NEVER }).catch((error: Error) => error.message);
+    expect(refusal).toContain("stuck: 8 code workers");
+    expect(refusal).not.toContain("dev-server");
+    // One of them returns and the fifth session is served.
+    workers[0]!.die("the call returned");
+    expect((await host.run("s5", { code: "x", timeoutMs: 5_000, waitMs: 20, signal: NEVER })).state).toBe("running");
+  }, 30_000);
 });
 
 const MEMORY_TIMING = { freezeIdleMs: 0, workerIdleMs: 60_000, startupTimeoutMs: 1_000, graceMs: 40, terminateMs: 20, closeMs: 60, memoryPollMs: 15, memoryIdlePollMs: 15, finishedTtlMs: 60_000 };
