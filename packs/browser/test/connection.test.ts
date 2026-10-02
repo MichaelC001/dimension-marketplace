@@ -22,7 +22,7 @@ import type { PublishRecipe, PublishRecord } from "../src/contracts";
 import { defaultColour } from "../src/profile-meta";
 import { createBrowserServer } from "../src/server";
 import { ProfileStore } from "../src/store";
-import { BROWSER_TEST_TIMEOUT_MS, createRoot, describeWithChrome, newRuntime, perform, racingClock, teardown } from "./fixture";
+import { approvePublish, BROWSER_TEST_TIMEOUT_MS, createRoot, describeWithChrome, newRuntime, perform, racingClock, teardown } from "./fixture";
 import { type PublishFixture, startPublishFixture } from "./publish-fixture";
 
 const METHOD = "notifications/ai.insodimension/connection";
@@ -177,6 +177,7 @@ interface Session {
 	fixture: PublishFixture;
 	store: ProfileStore;
 	browserId: string;
+	rootDir: string;
 }
 
 async function session(profile: string, seed?: (store: ProfileStore) => void): Promise<Session> {
@@ -215,7 +216,7 @@ async function session(profile: string, seed?: (store: ProfileStore) => void): P
 	expect(opened.isError).toBeFalsy();
 	const browserId = opened.structuredContent?.browserId as string;
 	await perform(runtime, browserId, { kind: "navigate", url: fixture.url("/login") });
-	return { server, call, reports, report, fixture, store, browserId };
+	return { server, call, reports, report, fixture, store, browserId, rootDir };
 }
 
 function recipe(fixture: PublishFixture, overrides: Partial<PublishRecipe> = {}): PublishRecipe {
@@ -259,7 +260,10 @@ describeWithChrome("the server's connection report", () => {
 			expect(afterCheck.profiles["traction-x-acme"]).toEqual(ACME);
 
 			const mark = s.reports.length;
-			const parked = await s.call("browser_publish", { browserId: s.browserId, recipe: recipe(s.fixture), mode: "post" });
+			// A post goes out only if the board approved exactly this text for this profile.
+			const posting = recipe(s.fixture);
+			await approvePublish(s.rootDir, { origin: posting.origin, profile: "acme", values: posting.fields.map((field) => field.value) });
+			const parked = await s.call("browser_publish", { browserId: s.browserId, recipe: posting, mode: "post" });
 			const publishId = parked.structuredContent?.publishId as string;
 			// Parking is not an observation; only the post reaching `posted` is.
 			const posted = await s.call("browser_publish_confirm", { browserId: s.browserId, publishId, expect: expectOf(parked.structuredContent as unknown as PublishRecord) });
@@ -348,6 +352,7 @@ describeWithChrome("the server's connection report", () => {
 
 			const mark = s.reports.length;
 			const seen = afterCheck.profiles.acme.sites["127.0.0.1"].observedAt;
+			await approvePublish(s.rootDir, { origin: revealed.origin, profile: "acme", values: revealed.fields.map((field) => field.value) });
 			const parked = await s.call("browser_publish", { browserId: s.browserId, recipe: revealed, mode: "post" });
 			const posted = await s.call("browser_publish_confirm", { browserId: s.browserId, publishId: parked.structuredContent?.publishId as string, expect: expectOf(parked.structuredContent as unknown as PublishRecord) });
 			expect(posted.structuredContent?.status).toBe("posted");

@@ -85,6 +85,16 @@ the posted URL's path on the origin (`{segment}` = one path segment,
   `not-signed-in`). If it is not, log in first (`browser_act`, `browser_task`,
   or the user in the View), then post. A password field is never a publish
   field.
+- A post goes out only if the user APPROVED it on the campaign board:
+  the text, the site and the profile must be exactly the approved draft's,
+  character for character, and the approval must be unexpired and unspent.
+  Otherwise it fails `publish_unapproved` before anything is typed, and so does
+  the confirm. Do not reword, trim or "fix" approved text, and do not try
+  another route to post it. The message says which case it is: no approval
+  covers this post (use the draft's exact text and profile); the approval
+  expired (record `draft_failed`; the user's Retry on the board approves it
+  again); or it was already used (the post may be up: never post it again,
+  follow it with `browser_publish_wait` and record what the account shows).
 - `mode: "post"` fills the fields and reads them back. It then returns
   `awaiting-confirmation` with a `publishId` and `composeUrl` (where it will
   post). **Nothing is sent yet.** The View shows the exact text with **Post**

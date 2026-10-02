@@ -8,6 +8,10 @@
  *  counts. While it is parked, only the View (`caller: "app"`) may drive the
  *  pinned page.
  *
+ *  Only a post a human approved on the campaign board goes out, so every post
+ *  here is approved first (`approvePublish` writes the board's record), and the
+ *  tests at the end prove that gate against a real page.
+ *
  *  Real Chrome against a local fake site (publish-fixture.ts), driven through
  *  the real MCP server over an in-memory transport so the caller stamp is the
  *  one a host sends. The page counts field writes and submit clicks in its own
@@ -30,7 +34,7 @@ import { confirm, prepare, validateRecipe, type Publication } from "../src/publi
 import type { BrowserRuntime } from "../src/runtime";
 import { createBrowserServer } from "../src/server";
 import { ActionNotDispatched } from "../src/store";
-import { BROWSER_TEST_TIMEOUT_MS, chromePath, createRoot, describeWithChrome, failureCode, newRuntime, perform, racingClock, teardown } from "./fixture";
+import { approvePublish, BROWSER_TEST_TIMEOUT_MS, chromePath, createRoot, describeWithChrome, failureCode, newRuntime, perform, racingClock, teardown } from "./fixture";
 import { type ComposeVariant, type PublishFixture, startPublishFixture } from "./publish-fixture";
 import { withJevKey } from "./jev-key";
 
@@ -76,6 +80,8 @@ interface Session {
 	runtime: BrowserRuntime;
 	browserId: string;
 	fixture: PublishFixture;
+	rootDir: string;
+	profile: string;
 }
 
 /**
@@ -102,7 +108,7 @@ async function session(profile: string, { signIn = true, relay = false } = {}): 
 	expect(opened.isError).toBeFalsy();
 	const browserId = opened.structuredContent?.browserId as string;
 	if (signIn) await perform(runtime, browserId, { kind: "navigate", url: fixture.url("/login") });
-	return { call, client, runtime, browserId, fixture };
+	return { call, client, runtime, browserId, fixture, rootDir, profile };
 }
 
 /** A headless Chrome on a throwaway profile with a DevTools port: the endpoint the relay engine attaches to. */
@@ -133,8 +139,20 @@ async function counters(runtime: BrowserRuntime, browserId: string): Promise<{ w
 	return { writes: Number(found[1]), clicks: Number(found[2]), secret: Number(found[3]) };
 }
 
+/** The board's approval of exactly the text `posting` types, for the profile `s` opened. */
+async function approve(s: Session, posting: PublishRecipe): Promise<void> {
+	await approvePublish(s.rootDir, { origin: posting.origin, profile: s.profile, values: posting.fields.map((field) => field.value) });
+}
+
+/** The board approves what `variant` types, then a post of it is asked for: whatever comes back. */
+async function requestPost(s: Session, variant: ComposeVariant, overrides: Partial<PublishRecipe> = {}): Promise<ToolResult> {
+	const posting = recipe(s.fixture, variant, overrides);
+	await approve(s, posting);
+	return await s.call("browser_publish", { browserId: s.browserId, recipe: posting, mode: "post" });
+}
+
 async function post(s: Session, variant: ComposeVariant, overrides: Partial<PublishRecipe> = {}): Promise<PublishRecord> {
-	const parked = await s.call("browser_publish", { browserId: s.browserId, recipe: recipe(s.fixture, variant, overrides), mode: "post" });
+	const parked = await requestPost(s, variant, overrides);
 	expect(parked.isError).toBeFalsy();
 	expect(parked.structuredContent?.status).toBe("awaiting-confirmation");
 	return parked.structuredContent as unknown as PublishRecord;
@@ -199,7 +217,7 @@ describeWithChrome("browser_publish", () => {
 			const s = await session("pub-signed-out", { signIn: false });
 			const result = await racingClock(
 				() => s.fixture.hits("/compose") > 0,
-				s.call("browser_publish", { browserId: s.browserId, recipe: recipe(s.fixture, "nav"), mode: "post" }),
+				requestPost(s, "nav"),
 			);
 
 			expect(result.structuredContent).toMatchObject({ status: "not-signed-in", url: s.fixture.url("/compose?v=nav"), profile: "pub-signed-out" });
@@ -249,11 +267,7 @@ describeWithChrome("browser_publish", () => {
 		"a password field fails the post before anything reaches it",
 		async () => {
 			const s = await session("pub-password");
-			const result = await s.call("browser_publish", {
-				browserId: s.browserId,
-				recipe: recipe(s.fixture, "nav", { fields: [{ selector: "#secret", value: "hunter2" }] }),
-				mode: "post",
-			});
+			const result = await requestPost(s, "nav", { fields: [{ selector: "#secret", value: "hunter2" }] });
 
 			expect(result.structuredContent?.status).toBe("failed");
 			expect(result.structuredContent?.error).toContain("password");
@@ -267,7 +281,7 @@ describeWithChrome("browser_publish", () => {
 		"a page that rewrites what was typed fails field-mismatch and nothing is submitted",
 		async () => {
 			const s = await session("pub-rewrite");
-			const result = await s.call("browser_publish", { browserId: s.browserId, recipe: recipe(s.fixture, "rewrite"), mode: "post" });
+			const result = await requestPost(s, "rewrite");
 
 			expect(result.structuredContent?.status).toBe("failed");
 			expect(result.structuredContent?.error).toContain("field-mismatch");
@@ -661,11 +675,7 @@ describeWithChrome("browser_publish", () => {
 		"a page that moves focus off the field fails the post and nothing is typed into the element that took focus",
 		async () => {
 			const s = await session("pub-steal");
-			const result = await s.call("browser_publish", {
-				browserId: s.browserId,
-				recipe: recipe(s.fixture, "steal", { fields: [{ selector: "#text", value: TEXT }] }),
-				mode: "post",
-			});
+			const result = await requestPost(s, "steal", { fields: [{ selector: "#text", value: TEXT }] });
 
 			expect(result.structuredContent?.status).toBe("failed");
 			// `#other`'s input events count as writes on this variant.
@@ -970,11 +980,7 @@ describeWithChrome("browser_publish", () => {
 		"a shadow-root page that moves focus off the field to another element in the same root fails the post and nothing is typed there",
 		async () => {
 			const s = await session("pub-shadow-steal");
-			const result = await s.call("browser_publish", {
-				browserId: s.browserId,
-				recipe: recipe(s.fixture, "shadow-steal", { fields: [{ selector: "pierce/#inner", value: TEXT }] }),
-				mode: "post",
-			});
+			const result = await requestPost(s, "shadow-steal", { fields: [{ selector: "pierce/#inner", value: TEXT }] });
 
 			expect(result.structuredContent?.status).toBe("failed");
 			// `#decoy`'s input events count as writes: the document's own activeElement is the host either way.
@@ -1028,6 +1034,117 @@ describeWithChrome("browser_publish", () => {
 			expect(confirmed.structuredContent).toMatchObject({ status: "posted", url: s.fixture.url("/alice/status/1") });
 			// The toast page stays, so its own counter shows the one click.
 			expect((await counters(s.runtime, s.browserId)).clicks).toBe(1);
+			expect(s.fixture.submissions()).toEqual([{ text: TEXT, rich: RICH }]);
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	// -----------------------------------------------------------------------
+	// Board approvals: only a post a human approved goes out
+	// -----------------------------------------------------------------------
+
+	test(
+		"text nobody approved never reaches the page: refused publish_unapproved, the compose page's own counters stay 0 and it is not even reloaded",
+		async () => {
+			const s = await session("pub-unapproved");
+			// Stand on the compose page first: its own counters then say whether anything was typed or clicked there.
+			await perform(s.runtime, s.browserId, { kind: "navigate", url: s.fixture.url("/compose?v=nav") });
+			const loads = s.fixture.hits("/compose");
+
+			const refused = await s.call("browser_publish", { browserId: s.browserId, recipe: recipe(s.fixture, "nav"), mode: "post" });
+
+			expect(refused.isError).toBe(true);
+			expect(refused.content[0]?.text).toContain("publish_unapproved: no board approval covers");
+			expect(await counters(s.runtime, s.browserId)).toEqual({ writes: 0, clicks: 0, secret: 0 });
+			expect(s.fixture.hits("/compose")).toBe(loads);
+			expect(s.fixture.hits("/submit")).toBe(0);
+			expect((await s.runtime.state(s.browserId)).publish).toBeNull();
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"an approved post posts exactly once, and a replay of the same text is refused 'already used' before the page is opened",
+		async () => {
+			const s = await session("pub-approved-once");
+			const parked = await post(s, "nav");
+			const shown = { origin: parked.origin, profile: parked.profile, values: parked.fields.map((field) => field.value) };
+
+			const confirmed = await s.call("browser_publish_confirm", { browserId: s.browserId, publishId: parked.publishId, expect: shown }, "model");
+
+			expect(confirmed.structuredContent).toMatchObject({ status: "posted", url: s.fixture.url("/alice/status/1") });
+			expect(s.fixture.submissions()).toEqual([{ text: TEXT, rich: RICH }]);
+			const loads = s.fixture.hits("/compose");
+
+			const replay = await s.call("browser_publish", { browserId: s.browserId, recipe: recipe(s.fixture, "nav"), mode: "post" });
+
+			expect(replay.isError).toBe(true);
+			expect(replay.content[0]?.text).toContain("publish_unapproved");
+			expect(replay.content[0]?.text).toContain("already used");
+			expect(s.fixture.hits("/compose")).toBe(loads);
+			expect(s.fixture.hits("/submit")).toBe(1);
+			expect(s.fixture.submissions()).toHaveLength(1);
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"an edit of the approved text between approval and park is refused before the page is touched, and the approved text still parks",
+		async () => {
+			const s = await session("pub-edited");
+			await approve(s, recipe(s.fixture, "nav"));
+			const edited = recipe(s.fixture, "nav", { fields: [{ selector: "#text", value: `${TEXT}!` }, { selector: "#rich", value: RICH }] });
+
+			const refused = await s.call("browser_publish", { browserId: s.browserId, recipe: edited, mode: "post" });
+
+			expect(refused.isError).toBe(true);
+			expect(refused.content[0]?.text).toContain("publish_unapproved: no board approval covers");
+			expect(s.fixture.hits("/compose")).toBe(0);
+			expect((await s.runtime.state(s.browserId)).publish).toBeNull();
+			// The refused edit spent nothing: the text the human approved parks.
+			const parked = await s.call("browser_publish", { browserId: s.browserId, recipe: recipe(s.fixture, "nav"), mode: "post" });
+			expect(parked.structuredContent?.status).toBe("awaiting-confirmation");
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"the View's Post spends the approval too: the agent cannot post the text the human just posted",
+		async () => {
+			const s = await session("pub-view-post");
+			const parked = await post(s, "nav");
+
+			const confirmed = await s.call("browser_publish_confirm", { browserId: s.browserId, publishId: parked.publishId }, "app");
+
+			expect(confirmed.structuredContent).toMatchObject({ status: "posted", url: s.fixture.url("/alice/status/1") });
+			expect(s.fixture.submissions()).toHaveLength(1);
+			const again = await s.call("browser_publish", { browserId: s.browserId, recipe: recipe(s.fixture, "nav"), mode: "post" });
+			expect(again.isError).toBe(true);
+			expect(again.content[0]?.text).toContain("already used");
+			expect(s.fixture.submissions()).toHaveLength(1);
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"a page that changed since it was shown settles failed and keeps the approval: the same text parks again, unapproved anew, and posts",
+		async () => {
+			const s = await session("pub-changed-keeps");
+			const parked = await post(s, "nav");
+			await humanAct(s, { kind: "navigate", url: parked.composeUrl });
+
+			const failed = await s.call("browser_publish_confirm", { browserId: s.browserId, publishId: parked.publishId }, "app");
+
+			expect(failed.structuredContent?.status).toBe("failed");
+			expect(failed.structuredContent?.error).toContain("changed since shown");
+			expect((await counters(s.runtime, s.browserId)).clicks).toBe(0);
+			expect(s.fixture.hits("/submit")).toBe(0);
+			const again = await s.call("browser_publish", { browserId: s.browserId, recipe: recipe(s.fixture, "nav"), mode: "post" });
+			expect(again.structuredContent?.status).toBe("awaiting-confirmation");
+
+			const posted = await s.call("browser_publish_confirm", { browserId: s.browserId, publishId: again.structuredContent?.publishId as string }, "app");
+
+			expect(posted.structuredContent).toMatchObject({ status: "posted", url: s.fixture.url("/alice/status/1") });
 			expect(s.fixture.submissions()).toEqual([{ text: TEXT, rich: RICH }]);
 		},
 		BROWSER_TEST_TIMEOUT_MS,
