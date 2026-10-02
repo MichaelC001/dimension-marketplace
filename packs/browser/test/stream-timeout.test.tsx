@@ -735,7 +735,8 @@ describe("an open stream that goes quiet", () => {
 		await quiet();
 		expect(probe.now.connection).toBe("live");
 
-		// Nothing came: the pack really is silent. Fails if the forgiveness can be spent again and again.
+		// Nothing came, and the thread is blocked again: the pack really is silent. Fails if the forgiveness can be spent again and again (a silent pack on a View that keeps stalling would never be cut).
+		blockThread(20_000);
 		await advance(STREAM_SILENCE_MS);
 		await until("the View says it is reconnecting", () => probe.now.connection === "reconnecting");
 		expect(probe.now.error).toBe("The live picture went quiet (nothing arrived for 6 s).");
