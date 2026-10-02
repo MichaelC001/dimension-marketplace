@@ -1,5 +1,6 @@
 import type { ConnectionObservations } from "./connection.js";
 import type { LiveFrame } from "./engines/types.js";
+import type { ProfileColour, ResolvedProfileMeta } from "./profile-meta.js";
 
 /** What the browser IS. `abp` and `browser4` are refused with the reason (see engines/refused.ts). */
 export const BROWSER_ENGINES = ["chromium", "chrome-relay", "abp", "browser4"] as const;
@@ -17,8 +18,8 @@ export type CredentialMode = (typeof CREDENTIAL_MODES)[number];
 export interface CredentialRequest { origin: string; mode: CredentialMode }
 /** What a task reports about the credential it used — never the value. */
 export interface CredentialUse { origin: string; created: boolean }
-/** Maximum encoded PNG accepted by the host's image model-context contract. */
-export const MAX_ANNOTATION_BYTES = 2_097_152;
+/** Regions one `browser_annotate` reads: the shared annotation kit's mark limit (a page of numbered marks is a brief, past this it is a redraw). */
+export const MAX_ANNOTATION_REGIONS = 24;
 export interface Viewport { width: number; height: number }
 /** What a viewport may be (CSS px): `browser_open`, the View's fit and the `resize` step clamp to these. */
 export const MIN_VIEWPORT: Viewport = { width: 320, height: 240 };
@@ -309,6 +310,8 @@ export interface BrowserState {
   publish: PublishRecord | null;
   /** The last five JavaScript dialogs the browser answered on the active tab, oldest first. */
   dialogs: HandledDialog[];
+  /** Set by `open` alone, when something a person should know about the profile just opened: the browser build under its logins changed. */
+  notice?: string;
 }
 /** A fresh full-quality capture, retained so it can be annotated (`browser_frame`). Live pictures do not come this way: they ride the direct channel (stream.ts). */
 export interface BrowserFrame {
@@ -319,14 +322,46 @@ export interface BrowserFrame {
   capturedAt: string;
 }
 export interface BrowserRegion { x: number; y: number; width: number; height: number }
-export interface BrowserAnnotation {
+/** Where a page is scrolled and how large it is, in CSS px. */
+export interface PageScroll { x: number; y: number; width: number; height: number }
+/**
+ * What the page says about itself, kept apart field by field: a tag name, an id and an element's words are three
+ * strings the page wrote, so none of them is ever run together with another into one line to be parsed back apart.
+ * An id may hold spaces, a tag name nearly anything (`<a[0,0>` is a tag), and a line cannot tell them from the
+ * sentence around them. The tag and id bounds are the shared annotation kit's own (its tag-name and selector limits);
+ * the words and the count per region are this pack's.
+ */
+export const MAX_ELEMENT_TAG_CHARS = 40;
+export const MAX_ELEMENT_ID_CHARS = 240;
+export const MAX_ELEMENT_LABEL_CHARS = 100;
+export const MAX_ELEMENTS_PER_REGION = 60;
+export interface PageElement {
+  /** Lower-case tag name, at most {@link MAX_ELEMENT_TAG_CHARS}. */
+  tag: string;
+  /** The element's id, at most {@link MAX_ELEMENT_ID_CHARS}; "" when it has none. */
+  id: string;
+  /** Where it is in the viewport, whole CSS px. */
+  box: BrowserRegion;
+  /** What a person would read on it, at most {@link MAX_ELEMENT_LABEL_CHARS}; a password or hidden input is `[redacted input]`, never its value. */
+  label: string;
+}
+/** The elements under one region, in document order; `truncated`: more were there than fit the budget of the answer. */
+export interface PageElements { elements: PageElement[]; truncated: boolean }
+/**
+ * What `browser_annotate` answers: facts about the page under the regions the human marked. No pixels: the picture is
+ * the View's own frame, and the shared annotation kit paints the marks onto it.
+ */
+export interface BrowserAnnotationContext {
   url: string;
-  note: string;
-  region: BrowserRegion;
+  title: string;
+  /** When the frame the human marked was captured. */
   capturedAt: string;
-  mimeType: "image/png";
-  data: string;
-  elements: string;
+  /** When the page was read for the elements; a dynamic page may have changed since `capturedAt`. */
+  readAt: string;
+  viewport: Viewport;
+  scroll: PageScroll;
+  /** One entry per requested region, in order: the region as read (clamped to the frame) and the elements under it. */
+  regions: ({ region: BrowserRegion } & PageElements)[];
 }
 export interface BrowserOpenOptions {
   /** Omitted: a throwaway browser, nothing saved, no sign-in kept. Named: the persistent profile of that name. */
@@ -334,6 +369,21 @@ export interface BrowserOpenOptions {
   engine?: BrowserEngine;
   viewport?: Viewport;
 }
+/**
+ * Who opened a browser, from what the HOST stamped on the call: `caller` ("app" is the human, in the View) and the
+ * `session` (the chat). Never from tool input. A call without a stamp has neither, and is nobody's "this chat".
+ */
+export interface BrowserOpener { caller?: ToolCaller; session?: string }
+/** Who holds a saved profile, as `browser_profiles` tells the asking chat. No ids: only whose it is. */
+export type ProfileHolder = null | "this chat" | "human" | "another chat";
+/**
+ * One site a profile was checked on. `signedIn: null`: not known now (the last check is over 7 days old, or its
+ * time is in the future). `seenAt`: when it was last looked at, ISO 8601. `account` is the person's: the View and the
+ * dock get it, a model's list does not (profile-list.ts `profilesForModel`).
+ */
+export interface ProfileSiteListing { site: string; account?: string; signedIn: boolean | null; seenAt: string }
+/** One saved profile as an agent or the View reads it. Never a cookie, a password, a path or a browser id. */
+export interface ProfileListing { name: string; label: string; colour: ProfileColour; heldBy: ProfileHolder; sites: ProfileSiteListing[] }
 /**
  * browser_read: one logged-out read of a public page (see read.ts). There is
  * no profile: every read runs in a fresh incognito context.
@@ -354,7 +404,11 @@ export type ReadResult =
   | { status: "blocked"; url: string; reason: string };
 /** Capability is the opaque browserId; it must never appear in global listings. */
 export interface BrowserRuntimePort {
-  open(options: BrowserOpenOptions): Promise<BrowserState>;
+  /**
+   * `opener`: who is asking (the host's stamps). A profile already open for the SAME chat comes back as that browser;
+   * for anyone else it is refused (`profile_held`), naming whose it is.
+   */
+  open(options: BrowserOpenOptions, opener?: BrowserOpener): Promise<BrowserState>;
   state(browserId: string): Promise<BrowserState>;
   /** A fresh PNG capture of the active tab, retained for `annotate`. */
   frame(browserId: string): Promise<BrowserFrame>;
@@ -399,12 +453,22 @@ export interface BrowserRuntimePort {
   inspect(browserId: string, selector: string): Promise<InspectResult>;
   runTask(browserId: string, request: TaskRequest, onStep?: (step: TaskStep, run: TaskRun) => void): Promise<TaskRun>;
   cancelTask(browserId: string): Promise<TaskRun>;
-  annotate(browserId: string, frameId: string, region: BrowserRegion, note: string): Promise<BrowserAnnotation>;
+  /**
+   * The page under the regions the human marked on a frame `frame` (png) captured: url, title, scroll and the elements
+   * under each region. Refused (`stale_frame`) once the page has moved on from the frame, (`unknown_frame`) for a frame
+   * no longer retained. Read-only; the picture is the caller's.
+   */
+  annotate(browserId: string, frameId: string, regions: readonly BrowserRegion[]): Promise<BrowserAnnotationContext>;
+  /** Stores the detail document the shared annotation kit assembles for what the human marked in `browserId`, and answers the absolute path the agent reads it at. A throwaway browser's document is deleted with it. */
+  saveAnnotationDetail(browserId: string, json: string): string;
   /** Every on-disk profile's persisted sign-in observations (connection.ts). */
   connections(): Promise<ConnectionObservations>;
   /** `listener` runs after each new observation is persisted and after a profile with observations is deleted. Returns the unsubscribe. */
   onConnectionsChanged(listener: () => void): () => void;
-  profiles(): Promise<string[]>;
+  /** Every saved profile (never the relay's, never a throwaway), with who holds it relative to `asker`, the chat asking. */
+  profileList(asker?: string): Promise<ProfileListing[]>;
+  /** The label, colour and avatar of every saved profile that has any observation, for the connection report. */
+  profileMeta(): Promise<Record<string, ResolvedProfileMeta>>;
   /** Settles a pending publish first. Refused (`publish_pending`) while one awaits confirmation, unless `caller` is "app". */
   close(browserId: string, caller?: ToolCaller): Promise<void>;
   waitTask(browserId: string, ms: number): Promise<TaskRun>;

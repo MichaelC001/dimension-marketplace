@@ -1,5 +1,5 @@
 import type { AdmittedInput } from "../input.js";
-import type { BrowserAction, BrowserApp, BrowserRegion, ElementInspection, HandledDialog, LogEntry, ModelShot, ShotRequest, TabInfo, Viewport } from "../contracts.js";
+import type { BrowserAction, BrowserApp, BrowserRegion, ElementInspection, HandledDialog, LogEntry, ModelShot, PageElements, PageScroll, ShotRequest, TabInfo, Viewport } from "../contracts.js";
 
 /** Everything below describes the ACTIVE tab unless it says otherwise. */
 export interface EngineState {
@@ -132,7 +132,14 @@ export interface EngineDriver {
   /** The human's input on the active tab, in order (already admitted). Throws `ActionNotDispatched` when provably nothing reached the page. */
   input(events: readonly AdmittedInput[]): Promise<void>;
   snapshot(limit: number): Promise<string>;
-  elements(region: BrowserRegion, limit: number): Promise<string>;
+  /**
+   * What is on the active tab under each of `regions` (viewport px), one read for all of them: the elements under each
+   * region as separate records (bounded; at most about `limit` characters of them per region), in the order asked, and
+   * where the page is scrolled right now.
+   */
+  elements(regions: readonly BrowserRegion[], limit: number): Promise<{ scroll: PageScroll; regions: PageElements[] }>;
+  /** Where the active tab is scrolled right now and how large its document is. */
+  scroll(): Promise<PageScroll>;
   /**
    * Perform one action on the active tab now, once, never retried. Throws
    * `ActionNotDispatched` when provably nothing reached the page; any other
@@ -166,6 +173,11 @@ export interface EngineDriver {
   readField(selector: string): Promise<FieldRead>;
   /** The text of the first element matching `selector`, at most `limit` characters; null when absent or a form control (never read). */
   readText(selector: string, limit: number): Promise<string | null>;
+  /**
+   * The `aria-label` of the first element matching `selector`, at most `limit` characters; null when absent or a form control.
+   * The one attribute this reads: a fixed script, with the selector as data. Google's account button has its email only there.
+   */
+  readLabel(selector: string, limit: number): Promise<string | null>;
   /** Absolute hrefs of up to `limit` elements matching `selector` (CSS or `pierce/` only: it is read in-page). */
   linkHrefs(selector: string, limit: number): Promise<string[]>;
   /** Open a tab, make it the active one, and navigate it to `url` (already validated) when given. */
@@ -197,4 +209,9 @@ export interface EngineOptions {
    * Do not call this for a parent/foreign browser that this driver does not own.
    */
   onClosed(): void;
+  /**
+   * Called when the ACTIVE tab's main frame finishes loading, or navigates within its document (a single-page app's
+   * route change). No url: the runtime asks for the state it wants. Never throws into the driver. `chromium` only.
+   */
+  onPageLoaded?(): void;
 }

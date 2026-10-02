@@ -12,8 +12,9 @@
  *  (`dom-harness.ts`) against a fake host Store that serves one fact and
  *  records every intent.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setSystemTime, test } from "bun:test";
 import { buildConnectionReport, type ConnectionObservations } from "../src/connection";
+import { defaultColour, effectiveSignedIn } from "../src/profile-meta";
 import { BrowserAccounts, type BrowserStoreShape } from "../src/dock/browser-accounts";
 import { CONNECTION_KEY, observedAgo, profileRows } from "../src/dock/report";
 import { mount, unmountAll } from "./dom-harness";
@@ -45,6 +46,8 @@ describe("profileRows", () => {
 		expect(profileRows(FACT)).toEqual([
 			{
 				name: "alt",
+				label: "alt",
+				colour: defaultColour("alt"),
 				sites: [
 					{ host: "example.org", signedIn: false, observedAt: T - 2 },
 					{ host: "reddit.com", signedIn: true, observedAt: T - 1 },
@@ -52,6 +55,8 @@ describe("profileRows", () => {
 			},
 			{
 				name: "work",
+				label: "work",
+				colour: defaultColour("work"),
 				sites: [
 					{ host: "linkedin.com", signedIn: false, observedAt: T - 60_000 },
 					{ host: "x.com", signedIn: true, account: "@acme", observedAt: T },
@@ -107,6 +112,9 @@ describe("observedAgo", () => {
 // ---------------------------------------------------------------------------
 
 afterEach(unmountAll);
+// The panel never claims a sign-in over 7 days old, and these fixtures are dated T: it reads them at that instant.
+beforeEach(() => setSystemTime(new Date(T)));
+afterEach(() => setSystemTime());
 
 interface Act {
 	readonly intent: string;
@@ -277,6 +285,41 @@ describe("the Browser panel", () => {
 		expect(acts).toEqual([]);
 		expect(open.form.querySelector("button")?.hasAttribute("disabled")).toBe(true);
 		expect(panel.find('[data-slot="browser-accounts-hint"]')).toHaveLength(1);
+	});
+});
+
+describe("what the panel says of a profile and of a site it cannot vouch for", () => {
+	test("a profile is shown by its label, and the report carries the label, colour and avatar the agent's list uses", () => {
+		const fact = { connected: true, reported: buildConnectionReport({ acme: { "x.com": { signedIn: true, observedAt: T } } }, { acme: { label: "Work Account", colour: "teal", avatar: "💼" } }) };
+		expect(profileRows(fact)).toEqual([{ name: "acme", label: "Work Account", colour: "teal", avatar: "💼", sites: [{ host: "x.com", signedIn: true, observedAt: T }] }]);
+		// Metadata that crossed the host Store damaged falls back to what the slug gives.
+		const damaged = { reported: { profiles: { acme: { label: "x".repeat(99), colour: "chartreuse", avatar: "no", sites: { "x.com": { signedIn: true, observedAt: T } } } } } };
+		expect(profileRows(damaged)).toEqual([{ name: "acme", label: "acme", colour: defaultColour("acme"), sites: [{ host: "x.com", signedIn: true, observedAt: T }] }]);
+	});
+
+	test("a visited site with no check reads Not checked, and a sign-in last seen over 7 days ago is not claimed either, though its account and age are shown", async () => {
+		const old = T - 8 * 24 * 3_600_000;
+		const fact = {
+			connected: true,
+			reported: buildConnectionReport(
+				{ acme: { "bbc.co.uk": { signedIn: null, observedAt: T }, "x.com": { signedIn: true, account: "@acme", observedAt: old }, "reddit.com": { signedIn: true, observedAt: T - 1_000 } } },
+				{ acme: { label: "Work Account", colour: "blue" } },
+			),
+		};
+		// The rows keep what was observed; the claim is made at the moment of reading, with the same rule the agent's list uses.
+		expect(profileRows(fact)[0]?.sites.map((site) => effectiveSignedIn(site.signedIn, site.observedAt, T))).toEqual([null, true, null]);
+		const { store } = fakeStore(fact);
+		const panel = await mountPanel("session-1", store);
+		expect(panel.find('[data-slot="browser-accounts-profile"]').map((el) => el.querySelector("button")?.textContent)).toEqual(["Work Account"]);
+		const visited = panel.siteLine("Work Account", "bbc.co.uk");
+		expect(visited.textContent).toContain("Not checked");
+		expect(visited.hasAttribute("data-signed-in")).toBe(false);
+		const stale = panel.siteLine("Work Account", "X");
+		expect(stale.textContent).toContain("Not checked");
+		expect(stale.textContent).not.toContain("Signed in");
+		expect(stale.textContent).toContain("@acme");
+		expect(stale.textContent).toContain("8d ago");
+		expect(panel.siteLine("Work Account", "Reddit").getAttribute("data-signed-in")).toBe("true");
 	});
 });
 

@@ -34,13 +34,15 @@ import { mkdirSync, statSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 import puppeteer, { TimeoutError } from "puppeteer-core";
 import type { Browser, BrowserContext, CDPSession, ElementHandle, Frame, HTTPRequest, HTTPResponse, JSHandle, KeyInput, Page, Protocol, Target } from "puppeteer-core";
-import { type BrowserAction, type BrowserApp, type BrowserRegion, type DialogType, type ElementInspection, type HandledDialog, type LogEntry, MAX_LOG_ENTRIES, type ModelShot, type ShotRequest, type TabInfo, type Viewport } from "../contracts.js";
+import { type BrowserAction, type BrowserApp, type BrowserRegion, type DialogType, type ElementInspection, type HandledDialog, type LogEntry, MAX_ELEMENT_ID_CHARS, MAX_ELEMENT_LABEL_CHARS, MAX_ELEMENT_TAG_CHARS, MAX_ELEMENTS_PER_REGION, MAX_LOG_ENTRIES, type ModelShot, type PageElements, type PageScroll, type ShotRequest, type TabInfo, type Viewport } from "../contracts.js";
 import { FaviconCache } from "../favicon.js";
 import { MAX_FRAME_BYTES } from "../image.js";
 import { ActionNotDispatched, BrowserRuntimeError, fail } from "../store.js";
 import {
+	ELEMENT_LABEL_SCRIPT,
 	ELEMENT_TEXT_SCRIPT,
-	ELEMENTS_IN_REGION_SCRIPT,
+	ELEMENTS_IN_REGIONS_SCRIPT,
+	SCROLL_SCRIPT,
 	FAVICON_HREF_SCRIPT,
 	FOCUSED_LEAF_SCRIPT,
 	FRAME_INSET_SCRIPT,
@@ -302,7 +304,7 @@ async function launchChromium(options: EngineOptions, release: () => void): Prom
 		if (pages.length === 0) pages.push(await browser.newPage());
 		const tabs: Tab[] = [];
 		for (const page of pages) tabs.push(await prepareTab(page, options.viewport));
-		return new PuppeteerDriver({ browser, tabs, viewport: options.viewport, ownsBrowser: true, release, app: resolved.app });
+		return new PuppeteerDriver({ browser, tabs, viewport: options.viewport, ownsBrowser: true, release, app: resolved.app, ...(options.onPageLoaded ? { onPageLoaded: options.onPageLoaded } : {}) });
 	} catch (err) {
 		try {
 			// `browser.close()` resolves once the process is gone; only then is the
@@ -589,6 +591,8 @@ interface DriverParts {
 	ownsBrowser: boolean;
 	release: () => void;
 	app: BrowserApp | null;
+	/** See `EngineOptions.onPageLoaded`. */
+	onPageLoaded?: () => void;
 }
 
 /** An action that did nothing beyond itself. */
@@ -608,6 +612,7 @@ class PuppeteerDriver implements EngineDriver {
 	#scale = 1;
 	readonly #ownsBrowser: boolean;
 	readonly #release: () => void;
+	readonly #onPageLoaded: (() => void) | undefined;
 	readonly #onTargetCreated: (target: Target) => void;
 	readonly #onDisconnected: () => void;
 	/** Everyone watching: the active tab is cast while this is not empty, and not otherwise. */
@@ -626,6 +631,7 @@ class PuppeteerDriver implements EngineDriver {
 		this.#viewport = parts.viewport;
 		this.#ownsBrowser = parts.ownsBrowser;
 		this.#release = parts.release;
+		this.#onPageLoaded = parts.onPageLoaded;
 		const first = parts.tabs[0];
 		if (!first) fail("no_tab", "the browser has no page tab");
 		this.#active = first;
@@ -849,8 +855,17 @@ class PuppeteerDriver implements EngineDriver {
 		return parts.join("\n\n");
 	}
 
-	async elements(region: BrowserRegion, limit: number): Promise<string> {
-		return await this.#activeTab().page.evaluate(ELEMENTS_IN_REGION_SCRIPT, region, limit);
+	async elements(regions: readonly BrowserRegion[], limit: number): Promise<{ scroll: PageScroll; regions: PageElements[] }> {
+		return await this.#activeTab().page.evaluate(ELEMENTS_IN_REGIONS_SCRIPT, [...regions], limit, {
+			tag: MAX_ELEMENT_TAG_CHARS,
+			id: MAX_ELEMENT_ID_CHARS,
+			label: MAX_ELEMENT_LABEL_CHARS,
+			count: MAX_ELEMENTS_PER_REGION,
+		});
+	}
+
+	async scroll(): Promise<PageScroll> {
+		return await this.#activeTab().page.evaluate(SCROLL_SCRIPT);
 	}
 
 	// -----------------------------------------------------------------------
@@ -888,6 +903,16 @@ class PuppeteerDriver implements EngineDriver {
 		if (handle === null) return null;
 		try {
 			return await handle.evaluate(ELEMENT_TEXT_SCRIPT, limit);
+		} finally {
+			await handle.dispose().catch(() => undefined);
+		}
+	}
+
+	async readLabel(selector: string, limit: number): Promise<string | null> {
+		const handle = await this.#activeTab().page.$(selector);
+		if (handle === null) return null;
+		try {
+			return await handle.evaluate(ELEMENT_LABEL_SCRIPT, limit);
 		} finally {
 			await handle.dispose().catch(() => undefined);
 		}
@@ -1257,7 +1282,9 @@ class PuppeteerDriver implements EngineDriver {
 		tab.cdp.on("Page.frameRequestedNavigation", start);
 		tab.cdp.on("Page.navigatedWithinDocument", (event) => {
 			// A fragment or history.pushState navigation replaces no document and never "stops loading".
-			if (event.frameId === tab.id) tab.loading = false;
+			if (event.frameId !== tab.id) return;
+			tab.loading = false;
+			this.#pageLoaded(tab);
 		});
 		tab.cdp.on("Page.downloadWillBegin", (event) => {
 			// A link that downloads never replaces the document or stops loading it.
@@ -1267,6 +1294,7 @@ class PuppeteerDriver implements EngineDriver {
 			if (event.frameId !== tab.id) return;
 			tab.loading = false;
 			this.#loadFavicon(tab);
+			this.#pageLoaded(tab);
 		});
 		tab.page.once("close", () => this.#forget(tab));
 		watchPageLog(tab.page, (type, text) => {
@@ -1274,6 +1302,16 @@ class PuppeteerDriver implements EngineDriver {
 			if (tab.log.length > MAX_LOG_ENTRIES) tab.log.shift();
 		});
 		this.#loadFavicon(tab);
+	}
+
+	/** The active tab's page finished loading or changed route: the runtime may look at it. A tab behind the active one is not what is shown. */
+	#pageLoaded(tab: Tab): void {
+		if (this.#closed || tab !== this.#active || this.#onPageLoaded === undefined) return;
+		try {
+			this.#onPageLoaded();
+		} catch (error) {
+			console.error("Page-loaded listener failed:", describe(error));
+		}
 	}
 
 	#loadFavicon(tab: Tab): void {

@@ -1,15 +1,17 @@
 /**
  * The connection report — which profiles are signed in to which sites, as the
  * Browser pack tells its host (dimension#1219) so Traction can show whether an
- * account can post.
+ * account can post and the dock can list the sites.
  *
  * Pure: observations in, report out. Nothing here reads a page, a file or the
- * credential store. A site is only ever in a report because a publish check
- * saw the signed-in marker (or its absence), or a publish reached `posted`
- * (runtime.ts records those, store.ts persists them per profile). A host never
- * observed is absent, never `signedIn: false`.
+ * credential store. A site is only ever in a report because a probe or a
+ * publish check saw the signed-in marker (or its absence), a publish reached
+ * `posted` (runtime.ts records those, store.ts persists them per profile), or
+ * the page was only visited (`signedIn: null`: not checked, never a guess). A
+ * host never observed is absent, never `signedIn: false`.
  */
-import { getDomain } from "tldts";
+import { getDomain, parse } from "tldts";
+import { type ResolvedProfileMeta } from "./profile-meta.js";
 import { RELAY_PROFILE } from "./profile-name.js";
 
 /**
@@ -26,9 +28,12 @@ export const PACK_CONNECTION_REPORT_METHOD = "notifications/ai.insodimension/con
 export const PACK_CONNECTION_REPORT_MAX_BYTES = 64 * 1024;
 export const PACK_CONNECTION_ACCOUNT_MAX_BYTES = 256;
 
-/** What one observation saw for one site on one profile. `observedAt` is epoch ms. */
+/**
+ * What one observation saw for one site on one profile. `observedAt` is epoch
+ * ms. `signedIn: null`: the page was visited and no check exists for the site.
+ */
 export interface SiteObservation {
-	signedIn: boolean;
+	signedIn: boolean | null;
 	account?: string;
 	observedAt: number;
 }
@@ -36,9 +41,12 @@ export interface SiteObservation {
 export type SiteObservations = Record<string, SiteObservation>;
 /** Every profile's observations, keyed by profile name. */
 export type ConnectionObservations = Record<string, SiteObservations>;
-/** The `report` param: the full current map. Each one replaces the last wholesale. */
+/**
+ * The `report` param: the full current map. Each one replaces the last wholesale.
+ * `label`, `colour` and `avatar` are the profile's metadata (profile-meta.ts) for a reader that has none.
+ */
 export interface ConnectionReport {
-	profiles: Record<string, { sites: SiteObservations }>;
+	profiles: Record<string, { sites: SiteObservations } & Partial<ResolvedProfileMeta>>;
 }
 export interface ConnectionReportParams {
 	/** `null` retracts the report. */
@@ -70,6 +78,17 @@ export function siteHost(origin: string): string | null {
 	const host = url.hostname.replace(/\.$/, "");
 	return getDomain(host, PSL) ?? host;
 }
+/**
+ * Whether `origin` is a site on the public internet: an http(s) host under a
+ * real suffix of the Public Suffix List (`example.com`, `bbc.co.uk`). A loopback
+ * or private host (`localhost`, an IP literal, `app.localhost`, `printer.local`)
+ * is not one: an agent testing its own app is not visiting a site.
+ */
+export function isPublicSite(origin: string): boolean {
+	if (siteHost(origin) === null) return false;
+	const { isIcann, isPrivate, isIp } = parse(new URL(origin).hostname, PSL);
+	return !isIp && (isIcann === true || isPrivate === true);
+}
 
 /**
  * The account name in the page text an account selector matched: its LAST
@@ -86,28 +105,47 @@ export function accountFromText(text: string | null | undefined): string | undef
 }
 
 /**
- * The report for `observations`: every profile except `relay`, every observed
- * site. It always fits the host's caps: an account over 256 UTF-8 bytes is
- * omitted (a cut-off handle would name a different account), and while the
- * report JSON is over 64 KiB the oldest observations are dropped.
+ * Which of two observations to keep first when there is room for one: a site
+ * that was checked beats one that was only visited, then the newer wins.
+ * Negative when `a` goes first.
  */
-export function buildConnectionReport(observations: ConnectionObservations): ConnectionReport {
+export function keepFirst(a: SiteObservation, b: SiteObservation): number {
+	return Number(b.signedIn !== null) - Number(a.signedIn !== null) || b.observedAt - a.observedAt;
+}
+
+/**
+ * An account as a report or a list may carry it: omitted when over the host's
+ * 256 UTF-8 bytes (a cut-off handle would name a different account).
+ */
+export function reportableAccount(account: string | undefined): string | undefined {
+	return account !== undefined && Buffer.byteLength(account, "utf8") <= PACK_CONNECTION_ACCOUNT_MAX_BYTES ? account : undefined;
+}
+
+/**
+ * The report for `observations`: every profile except `relay`, every observed
+ * site, each profile with its `meta` when given. It always fits the host's
+ * caps: an account over 256 UTF-8 bytes is omitted, and while the report JSON
+ * is over 64 KiB the oldest observations are dropped (a site only visited
+ * first, then the oldest checked one).
+ */
+export function buildConnectionReport(observations: ConnectionObservations, meta: Record<string, ResolvedProfileMeta> = {}): ConnectionReport {
 	const entries: Array<{ profile: string; host: string; site: SiteObservation }> = [];
 	for (const [profile, sites] of Object.entries(observations)) {
 		if (profile === RELAY_PROFILE) continue;
 		for (const [host, observed] of Object.entries(sites)) {
 			const site: SiteObservation = { signedIn: observed.signedIn, observedAt: observed.observedAt };
-			if (observed.account !== undefined && Buffer.byteLength(observed.account, "utf8") <= PACK_CONNECTION_ACCOUNT_MAX_BYTES) site.account = observed.account;
+			const account = reportableAccount(observed.account);
+			if (account !== undefined) site.account = account;
 			entries.push({ profile, host, site });
 		}
 	}
-	// Newest first, so keeping a prefix drops the oldest.
-	entries.sort((a, b) => b.site.observedAt - a.site.observedAt);
+	// Keeping a prefix drops the unchecked first, then the oldest.
+	entries.sort((a, b) => keepFirst(a.site, b.site));
 	const assemble = (count: number): ConnectionReport => {
 		const profiles: ConnectionReport["profiles"] = {};
 		for (let i = 0; i < count; i += 1) {
 			const { profile, host, site } = entries[i];
-			(profiles[profile] ??= { sites: {} }).sites[host] = site;
+			(profiles[profile] ??= { sites: {}, ...meta[profile] }).sites[host] = site;
 		}
 		return { profiles };
 	};

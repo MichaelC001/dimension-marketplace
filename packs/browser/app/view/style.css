@@ -815,15 +815,74 @@ kbd {
 }
 
 .bx-stage[data-mode="annotate"] .bx-page {
-	cursor: crosshair;
 	box-shadow:
 		0 0 0 1px var(--fr-accent),
 		0 0 0 6px var(--bx-ring),
 		0 24px 64px -24px color-mix(in oklab, var(--fr-accent) 60%, transparent);
 }
 
-.bx-stage[data-mode="locked"] .bx-page {
+.bx-stage[data-mode="locked"] .bx-page,
+.bx-stage[data-mode="frozen"] .bx-page {
 	cursor: progress;
+}
+
+/* ── marking the page up ────────────────────────────────────────────────
+   The picture of the page sits in the same stage as the live page, at the page's own aspect; the shared annotation kit
+   (annotate.css) draws the tool strip, the marks and the list. The list is beside the picture when the seat is wide
+   and under it when it is not. Nothing here is measured against the real browser: the seat never resizes the page. */
+
+.bx-seat-frame {
+	flex: 1;
+	min-width: 0;
+	min-height: 0;
+	display: flex;
+	container: bx-seat / inline-size;
+}
+
+.bx-seat {
+	flex: 1;
+	min-width: 0;
+	min-height: 0;
+	display: flex;
+}
+
+.bx-seat-main {
+	flex: 1;
+	min-width: 0;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+}
+
+.bx-seat-panel {
+	flex: none;
+	width: 300px;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+}
+
+@container bx-seat (max-width: 900px) {
+	.bx-seat {
+		flex-direction: column;
+	}
+	/* The kit's panel fills the box it is put in; under the picture nothing gives it a height, so it and its list take
+	   the size of what they hold, and only the list gives way (and scrolls) at the cap. */
+	.bx-seat-panel {
+		width: auto;
+		max-height: min(50%, 360px);
+	}
+	.bx-seat-panel .dam-panel {
+		flex: 0 1 auto;
+		border-inline-start: 0;
+		border-block-start: 1px solid var(--fr-border);
+	}
+	.bx-seat-panel .dam-list {
+		flex: 0 1 auto;
+	}
+	.bx-seat-panel .dam-empty {
+		flex: none;
+	}
 }
 
 .bx-frame {
@@ -841,31 +900,6 @@ kbd {
 		linear-gradient(100deg, transparent 30%, color-mix(in oklab, var(--fr-text) 7%, transparent) 50%, transparent 70%) 0 0 / 300% 100%,
 		var(--fr-surface-2);
 	animation: bx-shimmer 1.6s linear infinite;
-}
-
-.bx-overlay {
-	position: absolute;
-	inset: 0;
-	width: 100%;
-	height: 100%;
-	pointer-events: none;
-}
-
-.bx-region {
-	fill: color-mix(in oklab, var(--fr-accent) 16%, transparent);
-	stroke: var(--fr-accent);
-	stroke-width: 2;
-	stroke-dasharray: 6 4;
-	vector-effect: non-scaling-stroke;
-}
-
-.bx-mark {
-	fill: none;
-	stroke: var(--fr-accent);
-	stroke-width: 3;
-	stroke-linecap: round;
-	stroke-linejoin: round;
-	vector-effect: non-scaling-stroke;
 }
 
 .bx-ripple {
@@ -920,12 +954,6 @@ kbd {
 	pointer-events: auto;
 }
 
-.bx-float-top {
-	top: 12px;
-	left: 12px;
-	right: 12px;
-}
-
 /* Clear of the page's bottom edge and any device inset beneath it. */
 .bx-float-bottom {
 	bottom: calc(24px + env(safe-area-inset-bottom, 0px));
@@ -952,100 +980,16 @@ kbd {
 	width: 100%;
 }
 
-/* Toasts step below the annotation strip and the reconnect banner. */
+/* Toasts step below the annotation tool strip and the reconnect banner. */
 .bx-browser[data-annotating] .bx-float-corner {
-	top: 68px;
+	top: 52px;
 }
 
-.bx-content:has(> .bx-banner) .bx-float-top,
 .bx-content:has(> .bx-banner) .bx-float-corner {
 	top: 46px;
 }
 
-/* annotation strip */
-
-.bx-annotate {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	max-width: 100%;
-	padding: 6px;
-	border-radius: 16px;
-	background: var(--bx-glass);
-	backdrop-filter: blur(18px) saturate(1.4);
-	-webkit-backdrop-filter: blur(18px) saturate(1.4);
-	border: 1px solid var(--bx-hairline);
-	box-shadow: var(--bx-shadow);
-	animation: bx-drop var(--bx-slow) var(--bx-ease-enter);
-}
-
-.bx-seg {
-	display: flex;
-	padding: 2px;
-	border-radius: 9px;
-	background: var(--bx-hover);
-}
-
-.bx-seg-item {
-	display: flex;
-	align-items: center;
-	gap: 6px;
-	height: 26px;
-	padding: 0 9px;
-	border: 0;
-	border-radius: 8px;
-	background: transparent;
-	color: var(--fr-text-2);
-	font-size: 12px;
-	font-weight: 500;
-	cursor: pointer;
-	transition:
-		background-color var(--bx-fast) var(--bx-ease),
-		color var(--bx-fast) var(--bx-ease);
-}
-
-.bx-seg-item:hover {
-	color: var(--fr-text);
-}
-
-.bx-seg-item[aria-checked="true"] {
-	background: var(--bx-sheet);
-	color: var(--fr-accent);
-	box-shadow: 0 1px 2px color-mix(in oklab, var(--fr-bg) 40%, transparent);
-}
-
-.bx-annotate-hint {
-	flex: none;
-	padding: 0 6px;
-	font-size: 11px;
-	color: var(--fr-text-2);
-	font-variant-numeric: tabular-nums;
-	white-space: nowrap;
-}
-
-.bx-annotate-note {
-	flex: 1 1 160px;
-	min-width: 100px;
-	height: 30px;
-	padding: 0 10px;
-	border: 0;
-	border-radius: 8px;
-	background: var(--bx-field);
-	color: var(--fr-text);
-	font: inherit;
-	font-size: 12px;
-	outline: none;
-	transition: box-shadow var(--bx-fast) var(--bx-ease);
-}
-
-.bx-annotate-note::placeholder {
-	color: var(--fr-text-3);
-}
-
-.bx-annotate-note:focus {
-	box-shadow: 0 0 0 1px var(--fr-accent), 0 0 0 3px var(--bx-ring);
-}
-
+/* The primary action button: the publish bar's Post. (Marking the page up has its own, the annotation kit's.) */
 .bx-annotate-send {
 	display: flex;
 	align-items: center;
@@ -1072,26 +1016,6 @@ kbd {
 .bx-annotate-send:disabled {
 	opacity: 0.45;
 	cursor: default;
-}
-
-@container (max-width: 640px) {
-	.bx-annotate {
-		flex-wrap: wrap;
-	}
-	.bx-seg-label {
-		display: none;
-	}
-	.bx-seg-item {
-		padding: 0 8px;
-	}
-	.bx-annotate-hint {
-		position: absolute;
-		width: 1px;
-		height: 1px;
-		padding: 0;
-		overflow: hidden;
-		clip-path: inset(50%);
-	}
 }
 
 /* publish confirm bar — Post / Cancel for a parked publish */

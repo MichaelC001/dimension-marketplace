@@ -193,9 +193,9 @@ function fakeApp(answer: (call: Call) => CallToolResult): { readonly app: App; r
 
 const opens = (calls: readonly Call[]) => calls.filter(call => call.name === "browser_open").map(call => call.args);
 
-/** The runtime's two refusals of a saved set that is already held, verbatim: one holder in this server (`profile_in_use`), one across servers (`profile_locked`). */
+/** The runtime's two refusals of a saved set that is already held, verbatim: one holder in this server (`profile_held`, open or still launching), one across servers (`profile_locked`). */
 const SET_TAKEN = {
-	profile_in_use: `profile "default" is already open in this runtime; close that browser before opening it again`,
+	profile_held: `profile "default" is already open, held by another chat. Ask the human to close it, or use another profile.`,
 	profile_locked: `profile "default" is already in use (pid 4242 since 2026-09-29T08:00:00.000Z). Close that browser first (browser_close), or use another profile.`,
 } as const;
 const TAKEN_SENTENCE = "That browser is already open. Use it, or open a Private one.";
@@ -283,7 +283,7 @@ describe("a browser the host's own tool call failed to open", () => {
 	};
 
 	test("is told on the start page — in plain words for a held set, verbatim otherwise — not dropped", async () => {
-		for (const [text, shown] of [[SET_TAKEN.profile_in_use, TAKEN_SENTENCE], ["could not launch Chrome", "could not launch Chrome"]] as const) {
+		for (const [text, shown] of [[SET_TAKEN.profile_held, TAKEN_SENTENCE], ["could not launch Chrome", "could not launch Chrome"]] as const) {
 			const { app } = fakeApp(() => failure("unexpected"));
 			const dom = await mount(<BrowserApp app={app} toolState={mounted(failure(text))} />);
 			await dom.settle();

@@ -38,7 +38,7 @@ interface ToolResult {
 }
 
 /** The real MCP server over `runtime`, reached the way a host reaches it. */
-async function connect(runtime: BrowserRuntime, rootDir: string): Promise<(name: string, args: Record<string, unknown>) => Promise<ToolResult>> {
+async function connect(runtime: BrowserRuntime, rootDir: string): Promise<(name: string, args: Record<string, unknown>, caller?: "app") => Promise<ToolResult>> {
 	const viewDir = join(rootDir, "view");
 	await mkdir(viewDir, { recursive: true });
 	await writeFile(join(viewDir, "index.html"), "<!doctype html><title>view</title>");
@@ -47,7 +47,7 @@ async function connect(runtime: BrowserRuntime, rootDir: string): Promise<(name:
 	const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
 	await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
 	clients.push(client);
-	return async (name, args) => (await client.callTool({ name, arguments: args })) as ToolResult;
+	return async (name, args, caller) => (await client.callTool({ name, arguments: args, ...(caller === undefined ? {} : { _meta: { "ai.insodimension/caller": caller } }) })) as ToolResult;
 }
 
 /** A pid that is provably gone: a child that already exited. */
@@ -93,12 +93,14 @@ describeWithChrome("throwaway browsers", () => {
 			const throwaway = await call("browser_open", {});
 			expect(throwaway.isError).toBeFalsy();
 			expect(throwaway.structuredContent?.profile).toBeNull();
-			expect((await call("browser_profiles", {})).structuredContent).toEqual({ profiles: [] });
+			// Unstamped, so a model: the list is the compact text; the View (app) is the one given structured content.
+			expect((await call("browser_profiles", {})).structuredContent).toBeUndefined();
+			expect(await call("browser_profiles", {}, "app")).toMatchObject({ structuredContent: { profiles: [] } });
 
 			const kept = await call("browser_open", { profile: "kept" });
 			expect(kept.structuredContent?.profile).toBe("kept");
-			expect((await call("browser_profiles", {})).structuredContent).toEqual({ profiles: ["kept"] });
-			expect(await runtime.profiles()).toEqual(["kept"]);
+			expect((await call("browser_profiles", {}, "app")).structuredContent).toMatchObject({ profiles: [{ name: "kept", label: "kept", heldBy: "another chat", sites: [] }] });
+			expect((await runtime.profileList()).map((profile) => profile.name)).toEqual(["kept"]);
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);
@@ -115,7 +117,7 @@ describeWithChrome("throwaway browsers", () => {
 			expect(await entries(ephemeral)).toHaveLength(2);
 
 			await runtime.open({ profile: "shared", viewport: VIEWPORT });
-			expect(await failureCode(() => runtime.open({ profile: "shared", viewport: VIEWPORT }))).toBe("profile_in_use");
+			expect(await failureCode(() => runtime.open({ profile: "shared", viewport: VIEWPORT }))).toBe("profile_held");
 
 			await runtime.close(a.browserId);
 			expect(await entries(ephemeral)).toHaveLength(1);

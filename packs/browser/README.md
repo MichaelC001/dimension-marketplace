@@ -26,9 +26,12 @@ standard MCP and MCP Apps. No host internals, no browser fork.
   persists logins across restarts, stays isolated, and is held by one caller at
   a time. The exception is yours: the View's start page and the dock open the
   saved `default` profile unless you tick **Private** ([Browser panel](#browser-panel)).
-- **Annotations that carry pixels.** Draw a region, circle or freehand stroke; the
-  marks are painted into the cropped screenshot and sent, with your note, the URL
-  and the elements under the crop, into the same conversation.
+- **Annotations that carry pixels.** Freeze the page, mark it with the shared
+  annotation kit (pin, box, circle, arrow, pen, a note on each mark); the numbered
+  marks are burned into the picture and staged as a chip on your next message,
+  with the page's address, where it was scrolled and the elements under each mark.
+  The kit is the one annotation component every View shares; the Browser adds only
+  the page facts (`app/view/page-annotation.ts`).
 - **Acts when asked.** The agent session decides what to do — its permission mode
   and its own questions to you govern consequential steps (except the publish
   confirm, which always asks you). The browser never
@@ -190,25 +193,25 @@ throwaway. A site that refuses it is reported `blocked`, never worked around.
 
 ## Tools
 
-Model-callable (17), offered by audience (`_meta["ai.insodimension/spaces"]`; the
+Model-callable (18), offered by audience (`_meta["ai.insodimension/spaces"]`; the
 host leaves a tool out of a space's list and refuses the call there; the View's own
 buttons are not gated by it):
 
 | Offered to | Tools |
 |---|---|
-| Every space the pack is granted (9) | `browser_open`, `browser_view`, `browser_state`, `browser_snapshot`, `browser_inspect`, `browser_read`, `browser_screenshot`, `browser_act`, `browser_close` |
+| Every space the pack is granted (10) | `browser_open`, `browser_view`, `browser_state`, `browser_snapshot`, `browser_inspect`, `browser_read`, `browser_screenshot`, `browser_act`, `browser_profiles`, `browser_close` |
 | Traction only (8) | `browser_task`, `browser_task_wait`, `browser_task_cancel`, `browser_publish`, `browser_publish_presets`, `browser_publish_confirm`, `browser_publish_cancel`, `browser_publish_wait` |
 
 Waiting, tabs and page scripts are steps of `browser_act`, and the page log is a
 field of `browser_state`: every tool is paid for by every agent on every turn, so a
 verb that fits an existing tool does not get its own. The skill follows the same
-split: `skills/browser/SKILL.md` covers the nine, and the publishing, preset and
+split: `skills/browser/SKILL.md` covers the ten, and the publishing, preset and
 task-agent guidance lives in `skills/browser/references/publishing-and-tasks.md`,
 which a Traction session reads on demand.
 
 View-only: `browser_stream` (where the View reads its live pictures and state and sends the human's
 mouse and keys: one call to bind a browser, none per picture), `browser_frame` (a PNG capture
-retained for annotation), `browser_annotate`, `browser_viewport`, `browser_profiles`.
+retained for annotation), `browser_annotate` (the page under the marked regions: address, title, the scroll the picture was taken at, elements; no pixels), `browser_annotation_file` (keeps the kit's detail document and answers its path; a Private browser's is deleted with it), `browser_viewport`.
 
 **The View's direct channel.** The live picture and the human's input do not ride the tool-call
 lane. The server opens one listener on `127.0.0.1` (random port, only while a View holds a token) that
@@ -273,6 +276,50 @@ time, and is never deleted. Saved passwords (`generatePassword`,
 `useSavedPassword`), a `browser_task` `credential` and `browser_publish` need a
 saved profile and fail `profile_required` on a throwaway browser, before
 anything reaches the page.
+
+**A profile has a name and a label.** The name is the folder (`[a-z0-9_-]`, 48
+characters) and never changes. The label ("Work Account"), a colour from a fixed
+palette (blue, orange, green, red, purple, pink, teal, grey) and an optional emoji
+avatar are separate, optional, and kept in `profiles/<name>/profile.json` beside
+`chrome/`, with when the profile was last used and the browser application that
+last ran it (a profile opened by a different application, Chrome then Edge, may
+have lost its logins: `browser_open` says so once, in `notice`). A profile with no
+`profile.json` works: the label is the name, the colour comes from the name.
+
+**`browser_profiles`** is read-only and offered to every space. It returns, for each
+saved profile, `{ name, label, colour, heldBy, sites }`:
+
+```json
+{ "profiles": [
+  { "name": "work", "label": "Work", "colour": "blue", "heldBy": null,
+    "sites": [
+      { "site": "x.com", "signedIn": true, "seenAt": "2026-10-01T09:14:00.000Z" },
+      { "site": "google.com", "signedIn": null, "seenAt": "2026-09-20T17:02:00.000Z" } ] },
+  { "name": "personal", "label": "Personal", "colour": "orange", "heldBy": "human", "sites": [] } ] }
+```
+
+`heldBy` is `null` (free), `"this chat"`, `"human"` (the person has it open in a View
+of another chat) or `"another chat"`; never an id. `signedIn: null` is "not known
+now": the last check is over 7 days old, or its time is in the future (an agent
+can ask the person); a site that was only visited is not listed. **A site's account
+(an email, a handle) is shown to the person, not to the model:** the model's answer
+leaves it out until the consent gate (P4) exists. The Browser View reads the same tool
+as the human and gets the same list as structured content, each site with its
+`account`, and so does the dock. Never a cookie, a cookie name, an expiry, a token, a
+password, whether a saved password exists, or a path; the relay and throwaway
+browsers are never listed. More than 40 profiles: the ones in use and the signed-in
+ones first, the rest counted in `omitted`.
+
+**Naming a profile.** `profile` is a name or a label, in any case. An exact name is
+always that profile, whatever another profile is labelled (so a label can never make a
+profile impossible to open). A label that two profiles share (`profile_ambiguous`), or a
+name that is not a valid name and matches no label (`profile_unknown`), is refused with
+the profiles' names and labels, never resolved to the closest. A valid name that
+matches nothing is a new profile, as it always was (an account's first sign-in). The
+chat that already holds a profile gets its own browser back; anyone else is refused
+`profile_held`, told whether the human or another chat has it, whether that profile is
+open or still starting. There is no consent step yet: until one exists any agent can
+open any saved profile, `default` included.
 
 ## Reading public pages
 
@@ -475,18 +522,24 @@ page before submit, not who wrote the comment.
 
 The pack's own MCP server tells the host which profiles are signed in to which
 sites, so a campaign board such as Traction's can say whether an account can
-post (dimension#1219). It sends the vendor notification
+post (dimension#1219) and the dock panel can list them. It sends the vendor notification
 `notifications/ai.insodimension/connection` with
-`{ report: { profiles: { <profile>: { sites: { <host>: { signedIn, account?, observedAt } } } } } }`
-(`observedAt` is epoch ms):
+`{ report: { profiles: { <profile>: { label?, colour?, avatar?, sites: { <host>: { signedIn, account?, observedAt } } } } } }`
+(`observedAt` is epoch ms; `signedIn` is `null` for a site only visited):
 
-- **Only observed, never derived.** A site is in the report only because a
-  `browser_publish` result said `signed-in` or `not-signed-in` (a check, or a
-  post that found the profile signed out) or a publish reached `posted`. A site
-  never observed is absent, never `signedIn: false`, and a publish that failed
-  before its sign-in check reached a verdict records nothing. A later
-  `not-signed-in` sets `signedIn: false`. Nothing is read from the saved
-  passwords.
+- **Only observed, never derived.** A site is in the report because a **site
+  probe** looked at a page that finished loading in a saved profile (and once more
+  as the browser closes), or a `browser_publish` result said `signed-in` or
+  `not-signed-in`, or a publish reached `posted`. A probe is two selectors for a
+  known site (`src/probes.ts`; X, LinkedIn, Reddit, Bluesky, Google): one on the page
+  only when signed in, one that holds who. The marker found is signed in; its
+  absence is signed out only on the site's front page or a login page, anywhere
+  else no verdict. A site with no probe is recorded as visited (`signedIn: null`:
+  "not checked"), only for a public site, never replacing a check that was made. A
+  site never observed is absent, never `signedIn: false`. A later `not-signed-in`
+  sets `signedIn: false`. Nothing is read from the saved passwords, and an
+  account a page shows is scrubbed of them like every other page read. A
+  throwaway browser and the relay are never looked at.
 - **Hosts** are registrable domains under the Public Suffix List, private
   suffixes included (`https://www.linkedin.com` → `linkedin.com`,
   `https://shop.example.com.my` → `example.com.my`, `alice.github.io` stays
@@ -499,13 +552,19 @@ post (dimension#1219). It sends the vendor notification
   directory with observations is deleted. The host retracts it when the server
   exits.
 - **Within the host's caps.** The report JSON stays at or under 64 KiB, with the
-  oldest observations dropped first, and an `account` over 256 UTF-8 bytes is
-  left out rather than cut into a different handle.
+  visited-only sites dropped first and then the oldest observations, and an
+  `account` over 256 UTF-8 bytes is left out rather than cut into a different
+  handle.
 - **Never in a tool's way.** A report that cannot be sent is logged. The tool
   call that made the observation still returns its own result.
 
 Observations are saved per profile in `profiles/<profile>/connections.json`,
-next to that profile's Chrome data, at most 64 sites per profile.
+next to that profile's Chrome data, at most 64 sites per profile. The selectors
+for X, LinkedIn, Reddit and Bluesky are the presets' own (`recipes/`); Google's
+account is read from the email in its account button's label (no count of other
+accounts: a page can hold any link its author likes, so such a count proves nothing).
+Like the presets, the selectors are modelled on each
+site's page and tested against copies of it, not yet seen on the live sites.
 
 ## Browser panel
 
@@ -513,20 +572,21 @@ Installing the pack also adds a **Browser** tab to the dock (component
 `browser-accounts`). At the top is an **Open a page** bar: type a website
 address and **Open** shows the live Browser View beside the chat at it (an empty
 bar opens a blank browser; something that is not an address opens nothing and
-says why). Below it, the panel lists each saved set of logins (a profile) from
-the [connection report](#connection-report) with its sites: signed in or signed
-out, the account, and when the Browser last saw it. A site the Browser has never
-observed is not in the report, so it is not listed. **Sign in** on a site, or
-**New sign-in** (pick X, LinkedIn, Reddit or Bluesky and name the logins; left
+the [connection report](#connection-report) with its sites: signed in, signed out
+or not checked, the account, and when the Browser last saw it (a sign-in last seen
+over 7 days ago reads "not checked" with its age: it is never claimed from old data).
+The profile is shown by its label. A site the Browser has never observed is not in
+the report, so it is not listed. **Sign in** on a site, or
+**New sign-in** (pick X, LinkedIn, Reddit, Bluesky or Google and name the logins; left
 empty, they are the `default` set), opens the live Browser View beside the chat
 at that site's login page on that set. You sign in there yourself, and the panel
-shows the account once the Browser observes it.
+shows the account once the Browser observes it, with no agent doing anything.
 
 The View's start page and the panel's **Open a page** open on the saved `default`
 set, so a person's own browser keeps their logins, unless **Private** is ticked.
 Private sends no profile: a throwaway browser that saves nothing. One browser
 holds a saved set at a time, so a second open of `default` is refused
-(`profile_in_use`); the start page turns that into "That browser is already
+(`profile_held`); the start page turns that into "That browser is already
 open. Use it, or open a Private one."
 
 The panel reads only this pack's own connection fact (`plugin/browser/connection`)

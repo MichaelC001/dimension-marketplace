@@ -3,21 +3,25 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 
 // src/server.ts
 import { readFile as readFile2, readdir as readdir2 } from "node:fs/promises";
-import { extname as extname2, join as join7 } from "node:path";
+import { extname as extname2, join as join8 } from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 import { registerAppResource, registerAppTool, RESOURCE_MIME_TYPE } from "@modelcontextprotocol/ext-apps/server";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z as z2 } from "zod";
 
 // src/connection.ts
-import { getDomain } from "tldts";
+import { getDomain, parse } from "tldts";
 
 // src/profile-name.ts
 var PROFILE_NAME = /^[a-z0-9][a-z0-9_-]{0,47}$/;
 var RELAY_PROFILE = "relay";
+var DEFAULT_PROFILE = "default";
 function profileSlug(raw) {
   const slug = raw.trim().toLowerCase();
   return PROFILE_NAME.test(slug) ? slug : null;
+}
+function loginSetLabel(profile2) {
+  return profile2 === DEFAULT_PROFILE ? "Default" : profile2;
 }
 
 // src/connection.ts
@@ -37,28 +41,40 @@ function siteHost(origin) {
   const host = url.hostname.replace(/\.$/, "");
   return getDomain(host, PSL) ?? host;
 }
+function isPublicSite(origin) {
+  if (siteHost(origin) === null) return false;
+  const { isIcann, isPrivate, isIp } = parse(new URL(origin).hostname, PSL);
+  return !isIp && (isIcann === true || isPrivate === true);
+}
 function accountFromText(text) {
   if (typeof text !== "string") return void 0;
   const handle = text.match(HANDLE)?.at(-1);
-  const account = handle ?? text.replace(/\s+/g, " ").trim();
-  return account.length > 0 ? account : void 0;
+  const account2 = handle ?? text.replace(/\s+/g, " ").trim();
+  return account2.length > 0 ? account2 : void 0;
 }
-function buildConnectionReport(observations) {
+function keepFirst(a, b) {
+  return Number(b.signedIn !== null) - Number(a.signedIn !== null) || b.observedAt - a.observedAt;
+}
+function reportableAccount(account2) {
+  return account2 !== void 0 && Buffer.byteLength(account2, "utf8") <= PACK_CONNECTION_ACCOUNT_MAX_BYTES ? account2 : void 0;
+}
+function buildConnectionReport(observations, meta = {}) {
   const entries = [];
   for (const [profile2, sites] of Object.entries(observations)) {
     if (profile2 === RELAY_PROFILE) continue;
     for (const [host, observed] of Object.entries(sites)) {
       const site = { signedIn: observed.signedIn, observedAt: observed.observedAt };
-      if (observed.account !== void 0 && Buffer.byteLength(observed.account, "utf8") <= PACK_CONNECTION_ACCOUNT_MAX_BYTES) site.account = observed.account;
+      const account2 = reportableAccount(observed.account);
+      if (account2 !== void 0) site.account = account2;
       entries.push({ profile: profile2, host, site });
     }
   }
-  entries.sort((a, b) => b.site.observedAt - a.site.observedAt);
+  entries.sort((a, b) => keepFirst(a.site, b.site));
   const assemble = (count) => {
     const profiles = {};
     for (let i = 0; i < count; i += 1) {
       const { profile: profile2, host, site } = entries[i];
-      (profiles[profile2] ??= { sites: {} }).sites[host] = site;
+      (profiles[profile2] ??= { sites: {}, ...meta[profile2] }).sites[host] = site;
     }
     return { profiles };
   };
@@ -79,7 +95,7 @@ function buildConnectionReport(observations) {
 var BROWSER_ENGINES = ["chromium", "chrome-relay", "abp", "browser4"];
 var TASK_AGENTS = ["jev", "browser-use"];
 var CREDENTIAL_MODES = ["signup", "login"];
-var MAX_ANNOTATION_BYTES = 2097152;
+var MAX_ANNOTATION_REGIONS = 24;
 var MIN_VIEWPORT = { width: 320, height: 240 };
 var MAX_VIEWPORT = { width: 2560, height: 2e3 };
 var MAX_INPUT_BATCH = 64;
@@ -91,15 +107,15 @@ var MAX_LOG_ENTRIES = 50;
 var MAX_LOG_TEXT_CHARS = 300;
 var MAX_WAIT_MS = 15e3;
 var PUBLISH_MODES = ["check", "post"];
+var MAX_ELEMENT_TAG_CHARS = 40;
+var MAX_ELEMENT_ID_CHARS = 240;
+var MAX_ELEMENT_LABEL_CHARS = 100;
+var MAX_ELEMENTS_PER_REGION = 60;
 
-// src/presets.ts
-import { readdir, readFile } from "node:fs/promises";
-import { basename, extname, join as join2 } from "node:path";
-import { fileURLToPath } from "node:url";
-
-// src/publish.ts
+// src/annotation-file.ts
 import { randomBytes as randomBytes2 } from "node:crypto";
-import { setTimeout as sleep } from "node:timers/promises";
+import { mkdirSync as mkdirSync2, readdirSync as readdirSync2, rmSync as rmSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { join as join2, resolve as resolve2 } from "node:path";
 
 // src/store.ts
 import { randomBytes } from "node:crypto";
@@ -107,7 +123,51 @@ import { closeSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, r
 import { rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+
+// src/profile-meta.ts
+var PROFILE_COLOURS = ["blue", "orange", "green", "red", "purple", "pink", "teal", "grey"];
+var MAX_LABEL_CHARS = 48;
+function cleanLabel(raw) {
+  if (typeof raw !== "string") return void 0;
+  const label = raw.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
+  return label.length > 0 && label.length <= MAX_LABEL_CHARS ? label : void 0;
+}
+var EMOJI = /^\p{Extended_Pictographic}(?:\p{Emoji_Modifier}|\uFE0F|\u200D\p{Extended_Pictographic})*$/u;
+function cleanAvatar(raw) {
+  return typeof raw === "string" && raw.length <= 16 && EMOJI.test(raw) ? raw : void 0;
+}
+function isProfileColour(raw) {
+  return typeof raw === "string" && PROFILE_COLOURS.includes(raw);
+}
+function defaultColour(slug) {
+  let hash = 0;
+  for (let i = 0; i < slug.length; i += 1) hash = Math.imul(hash, 31) + slug.charCodeAt(i) >>> 0;
+  return PROFILE_COLOURS[hash % PROFILE_COLOURS.length];
+}
+function resolveProfileMeta(slug, stored = {}) {
+  return {
+    label: cleanLabel(stored.label) ?? loginSetLabel(slug),
+    colour: isProfileColour(stored.colour) ? stored.colour : defaultColour(slug),
+    ...cleanAvatar(stored.avatar) === void 0 ? {} : { avatar: stored.avatar }
+  };
+}
+var fold = (text) => text.replace(/\s+/g, " ").trim().toLowerCase();
+function matchProfiles(query, profiles) {
+  const wanted = fold(query);
+  if (wanted.length === 0) return [];
+  const named = profiles.find((profile2) => profile2.slug === wanted);
+  return named === void 0 ? profiles.filter((profile2) => fold(profile2.label) === wanted) : [named];
+}
+var SIGNED_IN_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
+var CLOCK_SKEW_MS = 6e4;
+function effectiveSignedIn(signedIn5, observedAt, now) {
+  const age = now - observedAt;
+  return signedIn5 !== null && age >= -CLOCK_SKEW_MS && age <= SIGNED_IN_MAX_AGE_MS ? signedIn5 : null;
+}
+
+// src/store.ts
 var CONNECTIONS_FILE = "connections.json";
+var PROFILE_FILE = "profile.json";
 var OWNER_FILE = "owner.pid";
 var MAX_SITES_PER_PROFILE = 64;
 var MAX_ACCOUNT_CHARS = 1024;
@@ -280,6 +340,15 @@ var ProfileStore = class {
     } catch {
     }
   }
+  /**
+   * Whether a live process holds this profile's lock right now. Asked of a
+   * profile this runtime holds no browser for: then it is another server's (or
+   * another runtime's on this root), and the profile is not free to open.
+   */
+  heldElsewhere(slug) {
+    const pid = readLock(join(this.profileDir(slug), "runtime.lock"))?.pid;
+    return pid !== void 0 && processAlive(pid);
+  }
   /** This profile's persisted sign-in observations; none when it was never observed or the file is unreadable. */
   connections(slug) {
     let parsed;
@@ -293,7 +362,7 @@ var ProfileStore = class {
     if (typeof stored !== "object" || stored === null) return sites;
     for (const [host, value] of Object.entries(stored)) {
       const site = value;
-      if (typeof site?.signedIn !== "boolean" || typeof site.observedAt !== "number" || !Number.isFinite(site.observedAt)) continue;
+      if (typeof site?.signedIn !== "boolean" && site?.signedIn !== null || typeof site.observedAt !== "number" || !Number.isFinite(site.observedAt)) continue;
       const valid = { signedIn: site.signedIn, observedAt: site.observedAt };
       if (typeof site.account === "string" && site.account.length <= MAX_ACCOUNT_CHARS) valid.account = site.account;
       sites[host] = valid;
@@ -301,37 +370,14 @@ var ProfileStore = class {
     return sites;
   }
   /**
-   * Persist one observation of `host`, replacing that host's last one. Atomic
-   * and durable: the staging file is fsynced before the rename, so a crash or
-   * power loss leaves the old file or the new one; a failure at any step
-   * removes the staging file.
+   * Persist one observation of `host`, replacing that host's last one. A site
+   * that was only visited (`signedIn: null`) is the first to go when the
+   * profile is full: it never pushes out a site that was actually checked.
    */
   recordConnection(slug, host, observation) {
     const sites = { ...this.connections(slug), [host]: observation };
-    const kept = Object.entries(sites).sort(([, a], [, b]) => b.observedAt - a.observedAt).slice(0, MAX_SITES_PER_PROFILE);
-    const dir = this.ensureProfile(slug);
-    const path = join(dir, CONNECTIONS_FILE);
-    const staging = `${path}.${randomBytes(6).toString("hex")}.tmp`;
-    let fd;
-    try {
-      fd = openSync(staging, "w", 384);
-      writeSync(fd, `${JSON.stringify({ sites: Object.fromEntries(kept) })}
-`);
-      fsyncSync(fd);
-      closeSync(fd);
-      fd = void 0;
-      renameSync(staging, path);
-    } catch (error) {
-      if (fd !== void 0) try {
-        closeSync(fd);
-      } catch {
-      }
-      try {
-        unlinkSync(staging);
-      } catch {
-      }
-      throw error;
-    }
+    const kept = Object.entries(sites).sort(([, a], [, b]) => keepFirst(a, b)).slice(0, MAX_SITES_PER_PROFILE);
+    writeJsonAtomic(this.ensureProfile(slug), CONNECTIONS_FILE, { sites: Object.fromEntries(kept) });
   }
   /** Every on-disk profile that has observations. A deleted profile directory is simply not here. */
   allConnections() {
@@ -342,7 +388,58 @@ var ProfileStore = class {
     }
     return all;
   }
+  /** This profile's metadata: only the fields the rules allow; `{}` when there is no file or it is unreadable. */
+  meta(slug) {
+    let parsed;
+    try {
+      const value = JSON.parse(readFileSync(join(this.profileDir(slug), PROFILE_FILE), "utf8"));
+      if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+      parsed = value;
+    } catch {
+      return {};
+    }
+    const meta = {};
+    const label = cleanLabel(parsed.label);
+    if (label !== void 0) meta.label = label;
+    if (isProfileColour(parsed.colour)) meta.colour = parsed.colour;
+    const avatar = cleanAvatar(parsed.avatar);
+    if (avatar !== void 0) meta.avatar = avatar;
+    if (typeof parsed.lastUsed === "number" && Number.isFinite(parsed.lastUsed) && parsed.lastUsed >= 0) meta.lastUsed = parsed.lastUsed;
+    if (typeof parsed.app === "string" && /^[a-z0-9-]{1,24}$/.test(parsed.app)) meta.app = parsed.app;
+    return meta;
+  }
+  /**
+   * Change some of a profile's metadata, keeping the fields the patch does not
+   * name. Atomic like the observations. Never renames or moves the folder.
+   */
+  saveMeta(slug, patch) {
+    writeJsonAtomic(this.ensureProfile(slug), PROFILE_FILE, { ...this.meta(slug), ...patch });
+  }
 };
+function writeJsonAtomic(dir, file, value) {
+  const path = join(dir, file);
+  const staging = `${path}.${randomBytes(6).toString("hex")}.tmp`;
+  let fd;
+  try {
+    fd = openSync(staging, "w", 384);
+    writeSync(fd, `${JSON.stringify(value)}
+`);
+    fsyncSync(fd);
+    closeSync(fd);
+    fd = void 0;
+    renameSync(staging, path);
+  } catch (error) {
+    if (fd !== void 0) try {
+      closeSync(fd);
+    } catch {
+    }
+    try {
+      unlinkSync(staging);
+    } catch {
+    }
+    throw error;
+  }
+}
 function readLock(path) {
   try {
     const parsed = JSON.parse(readFileSync(path, "utf8"));
@@ -395,10 +492,66 @@ function defaultRootDir() {
   return join(homedir(), ".inso", "browser");
 }
 
+// src/annotation-file.ts
+var SCHEMA_PREFIX = "dimension.annotation-detail/";
+var MAX_DETAIL_BYTES = 1024 * 1024;
+var ANNOTATION_FILES_KEPT = 20;
+var OWN_NAME = /^annotation-\d{13}-\d{6}-[0-9a-f]{8}\.json$/;
+var AnnotationFiles = class {
+  dir;
+  sequence = 0;
+  constructor(dir) {
+    this.dir = resolve2(dir);
+  }
+  /** Keep `json` and answer the absolute path it can be read at. */
+  save(json) {
+    const bytes = Buffer.byteLength(json, "utf8");
+    if (bytes > MAX_DETAIL_BYTES) fail("bad_detail", `the detail is ${bytes} bytes, above the ${MAX_DETAIL_BYTES} byte limit`);
+    let parsed;
+    try {
+      parsed = JSON.parse(json);
+    } catch {
+      fail("bad_detail", "the detail is not JSON");
+    }
+    const schema = typeof parsed === "object" && parsed !== null && "schema" in parsed ? parsed.schema : void 0;
+    if (typeof schema !== "string" || !schema.startsWith(SCHEMA_PREFIX)) {
+      fail("bad_detail", `the detail is not an annotation document (its schema must start with ${SCHEMA_PREFIX})`);
+    }
+    mkdirSync2(this.dir, { recursive: true, mode: 448 });
+    this.sequence += 1;
+    const name = `annotation-${String(Date.now()).padStart(13, "0")}-${String(this.sequence).padStart(6, "0")}-${randomBytes2(4).toString("hex")}.json`;
+    const path = join2(this.dir, name);
+    writeFileSync2(path, json, { encoding: "utf8", mode: 384, flag: "wx" });
+    this.prune();
+    return path;
+  }
+  prune() {
+    let names;
+    try {
+      names = readdirSync2(this.dir).filter((name) => OWN_NAME.test(name)).sort();
+    } catch {
+      return;
+    }
+    for (const name of names.slice(0, Math.max(0, names.length - ANNOTATION_FILES_KEPT))) {
+      try {
+        rmSync2(join2(this.dir, name), { force: true });
+      } catch {
+      }
+    }
+  }
+};
+
+// src/presets.ts
+import { readdir, readFile } from "node:fs/promises";
+import { basename, extname, join as join3 } from "node:path";
+import { fileURLToPath } from "node:url";
+
 // src/publish.ts
+import { randomBytes as randomBytes3 } from "node:crypto";
+import { setTimeout as sleep } from "node:timers/promises";
 var MAX_FIELDS = 8;
 var MAX_VALUE_CHARS = 1e4;
-var MAX_LABEL_CHARS = 40;
+var MAX_LABEL_CHARS2 = 40;
 var MAX_SELECTOR_CHARS = 512;
 var MAX_PATH_CHARS = 256;
 var MAX_URL_CHARS = 2048;
@@ -430,8 +583,8 @@ function validateRecipe(input) {
     if (typeof field.value !== "string" || field.value.length > MAX_VALUE_CHARS) {
       fail("bad_recipe", `fields[${index}].value must be a string of at most ${MAX_VALUE_CHARS} characters`);
     }
-    if (field.label !== void 0 && (typeof field.label !== "string" || field.label.trim().length === 0 || field.label.length > MAX_LABEL_CHARS)) {
-      fail("bad_recipe", `fields[${index}].label must be a non-empty string of at most ${MAX_LABEL_CHARS} characters`);
+    if (field.label !== void 0 && (typeof field.label !== "string" || field.label.trim().length === 0 || field.label.length > MAX_LABEL_CHARS2)) {
+      fail("bad_recipe", `fields[${index}].label must be a non-empty string of at most ${MAX_LABEL_CHARS2} characters`);
     }
     return {
       selector: selector(field.selector, `fields[${index}].selector`),
@@ -517,16 +670,16 @@ async function prepare(driver, profile2, recipe, mode) {
     return { status: "failed", url: await currentUrl(driver), profile: profile2, error: `could not open the compose page: ${describe(error)}` };
   }
   const deadline = Date.now() + SIGNED_IN_WAIT_MS;
-  let signedIn = false;
-  while (!signedIn) {
-    signedIn = originOf(await currentUrl(driver)) === recipe.origin && await driver.hasElement(recipe.signedIn).catch(() => false);
-    if (signedIn || Date.now() >= deadline) break;
+  let signedIn5 = false;
+  while (!signedIn5) {
+    signedIn5 = originOf(await currentUrl(driver)) === recipe.origin && await driver.hasElement(recipe.signedIn).catch(() => false);
+    if (signedIn5 || Date.now() >= deadline) break;
     await sleep(POLL_MS);
   }
   const url = await currentUrl(driver);
-  if (!signedIn) return { status: "not-signed-in", url, profile: profile2 };
-  const account = recipe.account === void 0 ? void 0 : accountFromText(await driver.readText(recipe.account, MAX_ACCOUNT_TEXT_CHARS).catch(() => null));
-  if (mode === "check") return { status: "signed-in", url, profile: profile2, ...account === void 0 ? {} : { account } };
+  if (!signedIn5) return { status: "not-signed-in", url, profile: profile2 };
+  const account2 = recipe.account === void 0 ? void 0 : accountFromText(await driver.readText(recipe.account, MAX_ACCOUNT_TEXT_CHARS).catch(() => null));
+  if (mode === "check") return { status: "signed-in", url, profile: profile2, ...account2 === void 0 ? {} : { account: account2 } };
   for (const field of recipe.fields) {
     const failed = (error) => ({ status: "failed", url, profile: profile2, error: `${error}; nothing was submitted` });
     const before = await driver.readField(field.selector).catch((error) => ({ state: "error", error }));
@@ -551,7 +704,7 @@ async function prepare(driver, profile2, recipe, mode) {
   const now = Date.now();
   return {
     record: {
-      publishId: randomBytes2(16).toString("hex"),
+      publishId: randomBytes3(16).toString("hex"),
       status: "awaiting-confirmation",
       origin: recipe.origin,
       composeUrl: shown.url,
@@ -566,7 +719,7 @@ async function prepare(driver, profile2, recipe, mode) {
     touchedWhilePending: false,
     sharedPage: false,
     settled: Promise.withResolvers(),
-    ...account === void 0 ? {} : { account }
+    ...account2 === void 0 ? {} : { account: account2 }
   };
 }
 function requirePending(publication, publishId) {
@@ -657,8 +810,8 @@ async function waitSettled(publication, ms) {
   expireIfDue(publication);
   if (TERMINAL.includes(publication.record.status)) return;
   const untilExpiry = Date.parse(publication.record.expiresAt) - Date.now();
-  const { promise: elapsed, resolve: resolve3 } = Promise.withResolvers();
-  const timer = setTimeout(resolve3, Math.max(0, publication.confirming ? ms : Math.min(ms, untilExpiry)));
+  const { promise: elapsed, resolve: resolve4 } = Promise.withResolvers();
+  const timer = setTimeout(resolve4, Math.max(0, publication.confirming ? ms : Math.min(ms, untilExpiry)));
   await Promise.race([publication.settled.promise, elapsed]);
   clearTimeout(timer);
   expireIfDue(publication);
@@ -706,7 +859,7 @@ async function loadPresets(dir = PRESETS_DIR) {
   const files = (await readdir(dir)).filter((file) => extname(file) === ".json").sort();
   const presets = [];
   for (const file of files) {
-    const where = join2(dir, file);
+    const where = join3(dir, file);
     let raw;
     try {
       raw = JSON.parse(await readFile(where, "utf8"));
@@ -819,15 +972,111 @@ function isObject2(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+// src/profile-list.ts
+var MAX_PROFILES_FOR_MODEL = 40;
+function buildProfileList(store, holderOf, now) {
+  return store.list().filter((slug) => slug !== RELAY_PROFILE).map((slug) => {
+    const { label, colour } = resolveProfileMeta(slug, store.meta(slug));
+    const sites = [];
+    for (const [site, observed] of Object.entries(store.connections(slug))) {
+      const seen = new Date(observed.observedAt);
+      if (observed.signedIn === null || Number.isNaN(seen.getTime())) continue;
+      const account2 = reportableAccount(observed.account);
+      sites.push({
+        site,
+        ...account2 === void 0 ? {} : { account: account2 },
+        signedIn: effectiveSignedIn(observed.signedIn, observed.observedAt, now),
+        seenAt: seen.toISOString()
+      });
+    }
+    sites.sort((a, b) => b.seenAt.localeCompare(a.seenAt) || a.site.localeCompare(b.site));
+    return { name: slug, label, colour, heldBy: holderOf(slug), sites };
+  });
+}
+var forModel = (profile2) => ({
+  ...profile2,
+  sites: profile2.sites.map(({ site, signedIn: signedIn5, seenAt }) => ({ site, signedIn: signedIn5, seenAt }))
+});
+function profilesForModel(list, max = MAX_PROFILES_FOR_MODEL) {
+  if (list.length <= max) return { profiles: list.map(forModel) };
+  const rank = (profile2) => profile2.heldBy !== null ? 0 : profile2.sites.length > 0 ? 1 : 2;
+  const kept = [...list].sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name)).slice(0, max);
+  return { profiles: kept.sort((a, b) => a.name.localeCompare(b.name)).map(forModel), omitted: list.length - max };
+}
+
 // src/runtime.ts
-import { randomBytes as randomBytes3 } from "node:crypto";
+import { randomBytes as randomBytes4 } from "node:crypto";
 import { existsSync as existsSync3, watch } from "node:fs";
-import { join as join6 } from "node:path";
+import { join as join7 } from "node:path";
+
+// recipes/x-post.json
+var signedIn = '[data-testid="SideNav_AccountSwitcher_Button"]';
+var account = '[data-testid="SideNav_AccountSwitcher_Button"]';
+
+// recipes/bluesky-post.json
+var signedIn2 = 'a[aria-label="Profile"][href^="/profile/"]';
+
+// recipes/linkedin-post.json
+var signedIn3 = "img.global-nav__me-photo";
+
+// recipes/reddit-comment.json
+var signedIn4 = "#expand-user-drawer-button";
+
+// src/probes.ts
+var bskyHandle = (href) => {
+  const handle = new URL(href).pathname.match(/^\/profile\/([^/]+)\/?$/)?.[1];
+  return handle === void 0 ? void 0 : `@${decodeURIComponent(handle)}`;
+};
+var EMAIL = /[\p{L}\p{N}._%+-]+@[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)+/u;
+var googleEmail = (label) => label.match(EMAIL)?.[0];
+var GOOGLE_MARKER = 'a[aria-label^="Google Account"]';
+var SITE_PROBES = [
+  { host: "x.com", signedIn, account: { from: "text", selector: account }, loginPaths: ["/login", "/i/flow/login"] },
+  { host: "linkedin.com", signedIn: signedIn3, loginPaths: ["/login", "/uas/login"] },
+  { host: "reddit.com", signedIn: signedIn4, loginPaths: ["/login"] },
+  { host: "bsky.app", signedIn: signedIn2, account: { from: "href", selector: signedIn2, pick: bskyHandle }, loginPaths: [] },
+  // A Google sign-in page shows no marker while ANOTHER account is signed in (adding one is the whole point), so no login path counts.
+  {
+    host: "google.com",
+    signedIn: GOOGLE_MARKER,
+    account: { from: "label", selector: GOOGLE_MARKER, pick: googleEmail },
+    loginPaths: []
+  }
+];
+function probeFor(host, table = SITE_PROBES) {
+  return table.find((probe) => probe.host === host);
+}
+var SETTLE_MS = 3e3;
+var ACCOUNT_CHARS = 256;
+function decides(probe, url) {
+  return url.pathname === "/" || probe.loginPaths.some((path) => url.pathname === path || url.pathname.startsWith(`${path}/`));
+}
+async function readProbe(reader, probe, url, settleMs = SETTLE_MS) {
+  const decisive = decides(probe, new URL(url));
+  const shown = decisive && settleMs > 0 ? await reader.waitFor({ selector: probe.signedIn }, settleMs, (value) => value) : await reader.hasElement(probe.signedIn);
+  if (!shown) return decisive ? { signedIn: false } : void 0;
+  const account2 = await readAccount(reader, probe.account);
+  return account2 === void 0 ? { signedIn: true } : { signedIn: true, account: account2 };
+}
+async function readAccount(reader, read2) {
+  if (read2 === void 0) return void 0;
+  try {
+    if (read2.from === "text") return accountFromText(await reader.readText(read2.selector, ACCOUNT_CHARS));
+    if (read2.from === "href") {
+      const href = (await reader.linkHrefs(read2.selector, 1))[0];
+      return href === void 0 ? void 0 : read2.pick(href);
+    }
+    const label = await reader.readLabel(read2.selector, ACCOUNT_CHARS);
+    return label === null ? void 0 : read2.pick(label);
+  } catch {
+    return void 0;
+  }
+}
 
 // src/credentials.ts
 import { randomInt } from "node:crypto";
-import { readFileSync as readFileSync2, renameSync as renameSync2, rmSync as rmSync2, writeFileSync as writeFileSync2 } from "node:fs";
-import { join as join3 } from "node:path";
+import { readFileSync as readFileSync2, renameSync as renameSync2, rmSync as rmSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { join as join4 } from "node:path";
 var FILE = "credentials.json";
 var LOOPBACK = { localhost: true, "127.0.0.1": true, "[::1]": true };
 var LOWER = "abcdefghijkmnopqrstuvwxyz";
@@ -873,16 +1122,16 @@ function read(file) {
   return origins;
 }
 function savedPassword(profileDir, origin) {
-  const origins = read(join3(profileDir, FILE));
+  const origins = read(join4(profileDir, FILE));
   return Object.hasOwn(origins, origin) ? origins[origin] : void 0;
 }
 function savedPasswords(profileDir) {
-  return Object.values(read(join3(profileDir, FILE)));
+  return Object.values(read(join4(profileDir, FILE)));
 }
 function resolveCredential(profileDir, request) {
   if (!CREDENTIAL_MODES.includes(request.mode)) fail("bad_credential", `credential.mode must be one of: ${CREDENTIAL_MODES.join(", ")}`);
   const origin = credentialOrigin(request.origin);
-  const file = join3(profileDir, FILE);
+  const file = join4(profileDir, FILE);
   const origins = read(file);
   const saved = origins[origin];
   if (saved) return { origin, password: saved, created: false };
@@ -892,18 +1141,18 @@ function resolveCredential(profileDir, request) {
   const password = generatePassword();
   const tmp = `${file}.${process.pid}.tmp`;
   try {
-    writeFileSync2(tmp, `${JSON.stringify({ version: 1, origins: { ...origins, [origin]: password } })}
+    writeFileSync3(tmp, `${JSON.stringify({ version: 1, origins: { ...origins, [origin]: password } })}
 `, { mode: 384 });
     renameSync2(tmp, file);
   } finally {
-    rmSync2(tmp, { force: true });
+    rmSync3(tmp, { force: true });
   }
   return { origin, password, created: true };
 }
 
 // src/engines/puppeteer.ts
 import { createHash } from "node:crypto";
-import { mkdirSync as mkdirSync3, statSync as statSync2 } from "node:fs";
+import { mkdirSync as mkdirSync4, statSync as statSync2 } from "node:fs";
 import { setTimeout as sleep2 } from "node:timers/promises";
 import puppeteer, { TimeoutError } from "puppeteer-core";
 
@@ -934,7 +1183,7 @@ var FaviconCache = class {
     if (inFlight) return await inFlight;
     const work = (async () => {
       const href = await declared();
-      const icon = await fetchIcon(href ? resolve2(href, pageUrl) : `${origin}/favicon.ico`);
+      const icon = await fetchIcon(href ? resolve3(href, pageUrl) : `${origin}/favicon.ico`);
       this.#icons.set(origin, icon);
       while (this.#icons.size > MAX_ORIGINS) this.#icons.delete(this.#icons.keys().next().value);
     })().finally(() => this.#pending.delete(origin));
@@ -950,7 +1199,7 @@ function originOf2(url) {
     return null;
   }
 }
-function resolve2(href, base) {
+function resolve3(href, base) {
   try {
     return new URL(href, base).toString();
   } catch {
@@ -1000,11 +1249,8 @@ function sniff(url) {
 }
 
 // src/image.ts
-import { PNG } from "pngjs";
-var MAX_FRAME_WIDTH = 3840;
-var MAX_FRAME_HEIGHT = 4320;
 var MAX_FRAME_BYTES = 8 * 1024 * 1024;
-function cropRegion(frameBytes, requested) {
+function clampRegion(requested, frame) {
   for (const [name, value] of Object.entries(requested)) {
     if (typeof value !== "number" || !Number.isFinite(value)) {
       fail("bad_region", `region.${name} must be a finite number`);
@@ -1016,42 +1262,10 @@ function cropRegion(frameBytes, requested) {
   const h = Math.floor(requested.height);
   if (w <= 0 || h <= 0) fail("bad_region", "region width and height must be > 0");
   if (x < 0 || y < 0) fail("bad_region", "region origin must be >= 0");
-  if (frameBytes.length > MAX_FRAME_BYTES) {
-    fail("frame_too_large", `frame is ${frameBytes.length} bytes, above the ${MAX_FRAME_BYTES} byte limit`);
+  if (x >= frame.width || y >= frame.height) {
+    fail("bad_region", `region origin (${x},${y}) is outside the ${frame.width}x${frame.height} frame`);
   }
-  const header = readIhdr(frameBytes);
-  if (header.width > MAX_FRAME_WIDTH || header.height > MAX_FRAME_HEIGHT) {
-    fail("frame_too_large", `frame is ${header.width}x${header.height}, above the supported maximum`);
-  }
-  if (x >= header.width || y >= header.height) {
-    fail("bad_region", `region origin (${x},${y}) is outside the ${header.width}x${header.height} frame`);
-  }
-  const source = PNG.sync.read(frameBytes);
-  if (source.width !== header.width || source.height !== header.height) {
-    fail("frame_invalid", "decoded PNG geometry does not match its header");
-  }
-  const width = Math.min(w, source.width - x);
-  const height = Math.min(h, source.height - y);
-  const cropped = new PNG({ width, height });
-  PNG.bitblt(source, cropped, x, y, width, height, 0, 0);
-  const png = PNG.sync.write(cropped);
-  if (png.length > MAX_ANNOTATION_BYTES) {
-    fail("frame_too_large", `cropped image exceeds the ${MAX_ANNOTATION_BYTES} byte context limit; select a smaller region`);
-  }
-  return { png, region: { x, y, width, height } };
-}
-var PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
-function readIhdr(bytes) {
-  if (bytes.length < 24 || !bytes.subarray(0, 8).equals(PNG_SIGNATURE)) {
-    fail("frame_invalid", "frame is not a PNG");
-  }
-  if (bytes.subarray(12, 16).toString("latin1") !== "IHDR") {
-    fail("frame_invalid", "PNG does not start with an IHDR chunk");
-  }
-  const width = bytes.readUInt32BE(16);
-  const height = bytes.readUInt32BE(20);
-  if (width === 0 || height === 0) fail("frame_invalid", "PNG header declares a zero dimension");
-  return { width, height };
+  return { x, y, width: Math.min(w, frame.width - x), height: Math.min(h, frame.height - y) };
 }
 
 // src/engines/page-scripts.ts
@@ -1149,28 +1363,52 @@ var READ_PAGE_SCRIPT = (limit, maxFrames) => {
   }
   return { title: document.title, text: all.slice(0, limit), truncated: all.length > limit, bodyChars: all.length, passwordShare, frames };
 };
-var ELEMENTS_IN_REGION_SCRIPT = (region, limit) => {
-  const out = [];
+var ELEMENTS_IN_REGIONS_SCRIPT = (regions, limit, max) => {
+  const found = regions.map(() => ({ elements: [], truncated: false }));
+  const used = regions.map(() => 0);
+  const open = (entry) => !entry.truncated && entry.elements.length < max.count;
   const nodes = document.querySelectorAll("body *");
-  for (let i = 0; i < nodes.length && out.length < 60; i += 1) {
+  for (let i = 0; i < nodes.length && found.some(open); i += 1) {
     const el = nodes[i];
     const r = el.getBoundingClientRect();
     if (r.width <= 0 || r.height <= 0) continue;
-    const intersects = r.left < region.x + region.width && r.right > region.x && r.top < region.y + region.height && r.bottom > region.y;
-    if (!intersects) continue;
-    if (el.children.length > 0 && r.width * r.height > region.width * region.height * 4) continue;
-    const input = el;
-    const secret = el.tagName === "INPUT" && ["password", "hidden"].includes((input.type ?? "").toLowerCase());
-    const editable = el.tagName === "INPUT" || el.tagName === "TEXTAREA";
-    const label = secret ? "[redacted input]" : ((editable ? input.value || "" : "") || el.getAttribute("aria-label") || el.innerText || "").trim().replace(/\s+/g, " ").slice(0, 100);
-    const id = el.id ? `#${el.id}` : "";
-    out.push(
-      `${el.tagName.toLowerCase()}${id} [${Math.round(r.x)},${Math.round(r.y)} ${Math.round(r.width)}x${Math.round(r.height)}] ${label}`
-    );
+    let described = null;
+    for (let k = 0; k < regions.length; k += 1) {
+      const region = regions[k];
+      const entry = found[k];
+      if (!open(entry)) continue;
+      const intersects = r.left < region.x + region.width && r.right > region.x && r.top < region.y + region.height && r.bottom > region.y;
+      if (!intersects) continue;
+      if (el.children.length > 0 && r.width * r.height > region.width * region.height * 4) continue;
+      if (described === null) {
+        const input = el;
+        const secret = el.tagName === "INPUT" && ["password", "hidden"].includes((input.type ?? "").toLowerCase());
+        const editable = el.tagName === "INPUT" || el.tagName === "TEXTAREA";
+        const label = secret ? "[redacted input]" : ((editable ? input.value || "" : "") || el.getAttribute("aria-label") || el.innerText || "").trim().replace(/\s+/g, " ").slice(0, max.label);
+        described = {
+          tag: el.tagName.toLowerCase().slice(0, max.tag),
+          id: (el.id || "").slice(0, max.id),
+          box: { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) },
+          label
+        };
+      }
+      const size = described.tag.length + described.id.length + described.label.length + 24;
+      if (used[k] + size > limit) entry.truncated = true;
+      else {
+        used[k] += size;
+        entry.elements.push(described);
+      }
+    }
   }
-  const text = out.join("\n");
-  return text.length > limit ? `${text.slice(0, limit)}
-\u2026 [truncated]` : text;
+  const root = document.documentElement;
+  return {
+    scroll: { x: Math.round(window.scrollX), y: Math.round(window.scrollY), width: root.scrollWidth, height: root.scrollHeight },
+    regions: found
+  };
+};
+var SCROLL_SCRIPT = () => {
+  const root = document.documentElement;
+  return { x: Math.round(window.scrollX), y: Math.round(window.scrollY), width: root.scrollWidth, height: root.scrollHeight };
 };
 var SELECT_ALL_SCRIPT = (el) => {
   const field = el;
@@ -1251,6 +1489,10 @@ var ELEMENT_TEXT_SCRIPT = (el, limit) => {
     length += text.length + 1;
   }
   return parts.join(" ").slice(0, limit);
+};
+var ELEMENT_LABEL_SCRIPT = (el, limit) => {
+  if (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT") return null;
+  return el.getAttribute("aria-label")?.slice(0, limit) ?? null;
 };
 var LINK_HREFS_SCRIPT = (selector3, limit) => {
   const out = [];
@@ -1470,9 +1712,9 @@ function inputCall(event) {
 }
 
 // src/engines/launch.ts
-import { existsSync, mkdirSync as mkdirSync2, readFileSync as readFileSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { existsSync, mkdirSync as mkdirSync3, readFileSync as readFileSync3, writeFileSync as writeFileSync4 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import { join as join4 } from "node:path";
+import { join as join5 } from "node:path";
 import { Browser as CachedBrowser, detectBrowserPlatform, getInstalledBrowsers } from "@puppeteer/browsers";
 var systemProbe = {
   platform: process.platform,
@@ -1488,7 +1730,7 @@ async function resolveBrowser(explicitPath, probe = systemProbe) {
     const executablePath = candidates[app].find((path) => probe.exists(path));
     if (executablePath) return { app, executablePath };
   }
-  const cacheDir = probe.env.PUPPETEER_CACHE_DIR || join4(probe.home, ".cache", "puppeteer");
+  const cacheDir = probe.env.PUPPETEER_CACHE_DIR || join5(probe.home, ".cache", "puppeteer");
   const cached = (await getInstalledBrowsers({ cacheDir })).filter((build) => build.browser === CachedBrowser.CHROME && build.platform === probe.browserPlatform && probe.exists(build.executablePath)).sort((a, b) => compareVersions(b.buildId, a.buildId))[0];
   if (cached) return { app: "chromium", executablePath: cached.executablePath };
   return fail(
@@ -1502,17 +1744,17 @@ function installedCandidates(probe) {
       (root) => typeof root === "string" && root.length > 0
     );
     return {
-      chrome: roots.map((root) => join4(root, "Google", "Chrome", "Application", "chrome.exe")),
-      msedge: roots.map((root) => join4(root, "Microsoft", "Edge", "Application", "msedge.exe")),
-      chromium: roots.map((root) => join4(root, "Chromium", "Application", "chrome.exe"))
+      chrome: roots.map((root) => join5(root, "Google", "Chrome", "Application", "chrome.exe")),
+      msedge: roots.map((root) => join5(root, "Microsoft", "Edge", "Application", "msedge.exe")),
+      chromium: roots.map((root) => join5(root, "Chromium", "Application", "chrome.exe"))
     };
   }
   if (probe.platform === "darwin") {
-    const apps = ["/Applications", join4(probe.home, "Applications")];
+    const apps = ["/Applications", join5(probe.home, "Applications")];
     return {
-      chrome: apps.map((dir) => join4(dir, "Google Chrome.app", "Contents", "MacOS", "Google Chrome")),
-      msedge: apps.map((dir) => join4(dir, "Microsoft Edge.app", "Contents", "MacOS", "Microsoft Edge")),
-      chromium: apps.map((dir) => join4(dir, "Chromium.app", "Contents", "MacOS", "Chromium"))
+      chrome: apps.map((dir) => join5(dir, "Google Chrome.app", "Contents", "MacOS", "Google Chrome")),
+      msedge: apps.map((dir) => join5(dir, "Microsoft Edge.app", "Contents", "MacOS", "Microsoft Edge")),
+      chromium: apps.map((dir) => join5(dir, "Chromium.app", "Contents", "MacOS", "Chromium"))
     };
   }
   return {
@@ -1602,7 +1844,7 @@ function viewLaunchOptions(input) {
   };
 }
 function turnOffPasswordSaving(userDataDir) {
-  const path = join4(userDataDir, "Default", "Preferences");
+  const path = join5(userDataDir, "Default", "Preferences");
   let prefs = {};
   if (existsSync(path)) {
     let parsed;
@@ -1616,8 +1858,8 @@ function turnOffPasswordSaving(userDataDir) {
   }
   const profile2 = prefs.profile && typeof prefs.profile === "object" ? prefs.profile : {};
   if (prefs.credentials_enable_service === false && profile2.password_manager_enabled === false) return;
-  mkdirSync2(join4(userDataDir, "Default"), { recursive: true, mode: 448 });
-  writeFileSync3(path, JSON.stringify({ ...prefs, credentials_enable_service: false, profile: { ...profile2, password_manager_enabled: false } }), { mode: 384 });
+  mkdirSync3(join5(userDataDir, "Default"), { recursive: true, mode: 448 });
+  writeFileSync4(path, JSON.stringify({ ...prefs, credentials_enable_service: false, profile: { ...profile2, password_manager_enabled: false } }), { mode: 384 });
 }
 
 // src/engines/puppeteer.ts
@@ -1640,7 +1882,7 @@ var DEFAULT_RELAY_URL = "http://127.0.0.1:9224";
 var MAX_DIALOGS = 5;
 var MAX_DIALOG_CHARS = 300;
 var NAVIGATION_GRACE_MS = 100;
-var SETTLE_MS = 1500;
+var SETTLE_MS2 = 1500;
 var SETTLE_POLL_MS = 20;
 var NAVIGATED_UNDER_READ = /Execution context was destroyed|Cannot find context|Inspected target navigated|Target closed|Session closed/i;
 var FAVICONS = new FaviconCache();
@@ -1748,7 +1990,7 @@ async function launchChromium(options, release) {
   try {
     resolved = await resolveBrowser(options.executablePath);
     identity = headless ? await binaryIdentities.of(resolved.executablePath) : void 0;
-    mkdirSync3(userDataDir, { recursive: true, mode: 448 });
+    mkdirSync4(userDataDir, { recursive: true, mode: 448 });
     turnOffPasswordSaving(userDataDir);
     browser = await puppeteer.launch(viewLaunchOptions({
       browser: resolved,
@@ -1773,7 +2015,7 @@ async function launchChromium(options, release) {
     if (pages.length === 0) pages.push(await browser.newPage());
     const tabs = [];
     for (const page of pages) tabs.push(await prepareTab(page, options.viewport));
-    return new PuppeteerDriver({ browser, tabs, viewport: options.viewport, ownsBrowser: true, release, app: resolved.app });
+    return new PuppeteerDriver({ browser, tabs, viewport: options.viewport, ownsBrowser: true, release, app: resolved.app, ...options.onPageLoaded ? { onPageLoaded: options.onPageLoaded } : {} });
   } catch (err) {
     try {
       await withTimeout(browser.close(), CLOSE_TIMEOUT_MS, "failed-launch cleanup");
@@ -1949,6 +2191,7 @@ var PuppeteerDriver = class {
   #scale = 1;
   #ownsBrowser;
   #release;
+  #onPageLoaded;
   #onTargetCreated;
   #onDisconnected;
   /** Everyone watching: the active tab is cast while this is not empty, and not otherwise. */
@@ -1966,6 +2209,7 @@ var PuppeteerDriver = class {
     this.#viewport = parts.viewport;
     this.#ownsBrowser = parts.ownsBrowser;
     this.#release = parts.release;
+    this.#onPageLoaded = parts.onPageLoaded;
     const first = parts.tabs[0];
     if (!first) fail("no_tab", "the browser has no page tab");
     this.#active = first;
@@ -2161,8 +2405,16 @@ var PuppeteerDriver = class {
     }
     return parts.join("\n\n");
   }
-  async elements(region, limit) {
-    return await this.#activeTab().page.evaluate(ELEMENTS_IN_REGION_SCRIPT, region, limit);
+  async elements(regions, limit) {
+    return await this.#activeTab().page.evaluate(ELEMENTS_IN_REGIONS_SCRIPT, [...regions], limit, {
+      tag: MAX_ELEMENT_TAG_CHARS,
+      id: MAX_ELEMENT_ID_CHARS,
+      label: MAX_ELEMENT_LABEL_CHARS,
+      count: MAX_ELEMENTS_PER_REGION
+    });
+  }
+  async scroll() {
+    return await this.#activeTab().page.evaluate(SCROLL_SCRIPT);
   }
   // -----------------------------------------------------------------------
   // Publish — reads with fixed scripts, and one guarded fill
@@ -2195,6 +2447,15 @@ var PuppeteerDriver = class {
     if (handle === null) return null;
     try {
       return await handle.evaluate(ELEMENT_TEXT_SCRIPT, limit);
+    } finally {
+      await handle.dispose().catch(() => void 0);
+    }
+  }
+  async readLabel(selector3, limit) {
+    const handle = await this.#activeTab().page.$(selector3);
+    if (handle === null) return null;
+    try {
+      return await handle.evaluate(ELEMENT_LABEL_SCRIPT, limit);
     } finally {
       await handle.dispose().catch(() => void 0);
     }
@@ -2389,7 +2650,7 @@ var PuppeteerDriver = class {
     if (tab.navSeq !== startedAt) await this.#awaitLoad(tab);
   }
   async #awaitLoad(tab) {
-    const deadline = Date.now() + SETTLE_MS;
+    const deadline = Date.now() + SETTLE_MS2;
     while (tab.loading && Date.now() < deadline) await sleep2(SETTLE_POLL_MS);
   }
   /**
@@ -2530,7 +2791,9 @@ var PuppeteerDriver = class {
     tab.cdp.on("Page.frameStartedLoading", start);
     tab.cdp.on("Page.frameRequestedNavigation", start);
     tab.cdp.on("Page.navigatedWithinDocument", (event) => {
-      if (event.frameId === tab.id) tab.loading = false;
+      if (event.frameId !== tab.id) return;
+      tab.loading = false;
+      this.#pageLoaded(tab);
     });
     tab.cdp.on("Page.downloadWillBegin", (event) => {
       if (event.frameId === tab.id) tab.loading = false;
@@ -2539,6 +2802,7 @@ var PuppeteerDriver = class {
       if (event.frameId !== tab.id) return;
       tab.loading = false;
       this.#loadFavicon(tab);
+      this.#pageLoaded(tab);
     });
     tab.page.once("close", () => this.#forget(tab));
     watchPageLog(tab.page, (type, text) => {
@@ -2546,6 +2810,15 @@ var PuppeteerDriver = class {
       if (tab.log.length > MAX_LOG_ENTRIES) tab.log.shift();
     });
     this.#loadFavicon(tab);
+  }
+  /** The active tab's page finished loading or changed route: the runtime may look at it. A tab behind the active one is not what is shown. */
+  #pageLoaded(tab) {
+    if (this.#closed || tab !== this.#active || this.#onPageLoaded === void 0) return;
+    try {
+      this.#onPageLoaded();
+    } catch (error) {
+      console.error("Page-loaded listener failed:", describe2(error));
+    }
   }
   #loadFavicon(tab) {
     if (this.#closed || tab.page.isClosed()) return;
@@ -3057,7 +3330,7 @@ function privateReason(host) {
   return `private address: ${host} is loopback, private or link-local; browser_read reads the public web only`;
 }
 var systemResolve = async (host) => (await lookup(host, { all: true, verbatim: true })).map((entry) => entry.address);
-function readPolicy(allowPrivateHosts = [], resolve3 = systemResolve) {
+function readPolicy(allowPrivateHosts = [], resolve4 = systemResolve) {
   const allowed = new Set(allowPrivateHosts.map((host) => host.toLowerCase()));
   const resolved = /* @__PURE__ */ new Map();
   const privateHost = (url) => {
@@ -3070,7 +3343,7 @@ function readPolicy(allowPrivateHosts = [], resolve3 = systemResolve) {
     if (host === "" || allowed.has(host)) return Promise.resolve(null);
     let answer = resolved.get(host);
     if (!answer) {
-      answer = resolveReason(host, resolve3);
+      answer = resolveReason(host, resolve4);
       resolved.set(host, answer);
     }
     return answer;
@@ -3098,12 +3371,12 @@ function readPolicy(allowPrivateHosts = [], resolve3 = systemResolve) {
     }
   };
 }
-async function resolveReason(host, resolve3) {
+async function resolveReason(host, resolve4) {
   if (LOCAL_NAME.test(host)) return privateReason(host);
   const literal = host.replace(/^\[|\]$/g, "");
   if (isIPv4(literal) || isIPv6(literal)) return isPrivateAddress(literal) ? privateReason(host) : null;
   try {
-    return (await resolve3(host)).some(isPrivateAddress) ? privateReason(host) : null;
+    return (await resolve4(host)).some(isPrivateAddress) ? privateReason(host) : null;
   } catch {
     return null;
   }
@@ -3114,7 +3387,7 @@ import { spawn } from "node:child_process";
 import { existsSync as existsSync2 } from "node:fs";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 import { createInterface } from "node:readline";
-import { join as join5 } from "node:path";
+import { join as join6 } from "node:path";
 var PYTHON_DIR = fileURLToPath2(new URL("../python/", import.meta.url));
 var CANCEL_GRACE_MS = 15e3;
 var EXIT_DRAIN_MS = 2e3;
@@ -3123,7 +3396,7 @@ var SPARE_IDLE_MS = 10 * 6e4;
 function interpreter() {
   const configured = process.env.DIM_BROWSER_PYTHON?.trim();
   if (configured) return configured;
-  const venv = process.platform === "win32" ? join5(PYTHON_DIR, ".venv", "Scripts", "python.exe") : join5(PYTHON_DIR, ".venv", "bin", "python");
+  const venv = process.platform === "win32" ? join6(PYTHON_DIR, ".venv", "Scripts", "python.exe") : join6(PYTHON_DIR, ".venv", "bin", "python");
   if (!existsSync2(venv)) {
     fail(
       "python_env_missing",
@@ -3237,10 +3510,10 @@ function startWorker(job, onStep) {
   child.stdin.write(`${JSON.stringify(job)}
 `);
   let killTimer;
-  const done = new Promise((resolve3) => {
+  const done = new Promise((resolve4) => {
     const finish = (reason) => {
       clearTimeout(killTimer);
-      resolve3(result2 ?? { status: "failed", summary: `${reason}${stderr() ? `: ${stderr().trim().slice(-600)}` : ""}`, steps: 0, elapsedMs: 0, usage: usageOf({}) });
+      resolve4(result2 ?? { status: "failed", summary: `${reason}${stderr() ? `: ${stderr().trim().slice(-600)}` : ""}`, steps: 0, elapsedMs: 0, usage: usageOf({}) });
       lines.close();
       child.stdout.destroy();
       child.stderr.destroy();
@@ -3262,6 +3535,12 @@ function startWorker(job, onStep) {
 
 // src/runtime.ts
 var MAX_BROWSERS = 4;
+var APP_NAMES = { chrome: "Chrome", msedge: "Edge", chromium: "Chromium", custom: "a custom browser" };
+var PROBE_DEBOUNCE_MS = 400;
+var PROBE_CLOSE_MS = 2500;
+var CHECK_RENOTE_MS = 3e4;
+var VISIT_RENOTE_MS = 10 * 6e4;
+var MAX_NOTED = 512;
 var READER_IDLE_MS = 6e4;
 var MAX_FRAMES_RETAINED = 8;
 var ACT_BUDGET_MS = 2e4;
@@ -3269,8 +3548,9 @@ var MAX_BATCH_DIALOGS = 5;
 var MAX_SNAPSHOT_CHARS = 2e4;
 var MAX_ELEMENT_CHARS = 4e3;
 var MAX_TEXT_INPUT = 4096;
-var MAX_NOTE_CHARS = 8192;
 var MAX_SELECTOR_CHARS2 = 512;
+var SCROLL_SETTLE_ATTEMPTS = 6;
+var SCROLL_SETTLE_MS = 100;
 var MAX_TAB_ID_CHARS = 128;
 var MOUSE_BUTTONS = ["left", "right", "middle"];
 var MAX_URL_LENGTH = 2048;
@@ -3302,6 +3582,7 @@ var TOUCHING_KINDS = { click: true, press: true, type: true, insert: true };
 var touchesPage = (event) => event.kind !== "wheel" && !(event.kind === "mouse" && event.type === "move");
 var BrowserRuntime = class {
   store;
+  annotationFiles;
   options;
   byId = /* @__PURE__ */ new Map();
   byProfile = /* @__PURE__ */ new Map();
@@ -3334,6 +3615,10 @@ var BrowserRuntime = class {
   /** Throwaway directories being deleted; `close` and `dispose` wait for them. */
   removals = /* @__PURE__ */ new Set();
   disposed = false;
+  /** The opener of a saved profile whose browser is still launching, so the same chat opening it twice gets one browser. */
+  openers = /* @__PURE__ */ new Map();
+  /** The last passive observation per profile and site, so a page that reloads does not rewrite the same fact. */
+  lastNoted = /* @__PURE__ */ new Map();
   connectionListeners = /* @__PURE__ */ new Set();
   /** Profiles with persisted observations, so a deleted one is noticed and reported gone. */
   observedProfiles = /* @__PURE__ */ new Set();
@@ -3342,6 +3627,7 @@ var BrowserRuntime = class {
   constructor(options = {}) {
     this.options = options;
     this.store = new ProfileStore(options.rootDir);
+    this.annotationFiles = new AnnotationFiles(join7(this.store.rootDir, "annotations"));
     this.store.sweepEphemeral();
   }
   // -----------------------------------------------------------------------
@@ -3354,18 +3640,26 @@ var BrowserRuntime = class {
    * already open — or in the middle of opening — is REFUSED. One engine server
    * serves many sessions, so returning the live browserId of somebody else's
    * browser would hand out their capability; and launching a second Chrome on
-   * the same user-data dir would fork the cookie jar. The holder of the
-   * existing capability closes it, or the caller picks another profile.
+   * the same user-data dir would fork the cookie jar. So the chat that already
+   * holds a profile (the host's session stamp on `opener`) gets its own browser
+   * back, and anyone else is refused (`profile_held`, naming whose it is, never
+   * an id): the holder closes it, or the caller picks another profile.
+   *
+   * `profile` is a slug or a label, in any case. An exact slug is always that
+   * profile; a label that two profiles share is refused (`profile_ambiguous`),
+   * never resolved to the closest. A name that matches none is a new profile
+   * when it is a valid slug (a person's first sign-in, an account profile), and
+   * refused (`profile_unknown`) when it is not one.
    *
    * Without a `profile` it is a throwaway browser: a directory of its own that
    * is deleted when it closes, so it can never collide with another browser.
    */
-  async open(options) {
+  async open(options, opener = {}) {
     if (this.disposed) fail("disposed", "runtime has been disposed");
     if (this.byId.size + this.opening.size >= MAX_BROWSERS - 1 && this.readerHeld()) await this.closeReader();
     if (this.disposed) fail("disposed", "runtime has been disposed");
-    const named = options.profile === void 0 ? void 0 : validateProfile(options.profile);
     const engine = normalizeEngine(options.engine);
+    const named = options.profile === void 0 ? void 0 : this.resolveProfile(options.profile, engine);
     const viewport = normalizeViewport(options.viewport);
     const profile2 = named ?? (engine === "chrome-relay" ? RELAY_PROFILE : null);
     if (engine === "chrome-relay" && profile2 !== RELAY_PROFILE) {
@@ -3377,32 +3671,47 @@ var BrowserRuntime = class {
     if (engine !== "chrome-relay" && profile2 === RELAY_PROFILE) {
       fail("bad_profile", `profile "${RELAY_PROFILE}" is reserved for the chrome-relay engine`);
     }
-    if (profile2 !== null && (this.byProfile.has(profile2) || this.opening.has(profile2))) {
-      fail(
-        "profile_in_use",
-        `profile "${profile2}" is already open in this runtime; close that browser before opening it again`
-      );
+    const live = profile2 === null ? void 0 : this.byProfile.get(profile2);
+    if (profile2 !== null && live !== void 0) {
+      const holder = this.holderOf(live.opener, opener.session);
+      if (holder === "this chat") return await this.state(live.browserId);
+      fail("profile_held", heldMessage(profile2, holder));
+    }
+    const launching = profile2 === null ? void 0 : this.opening.get(profile2);
+    if (profile2 !== null && launching !== void 0) {
+      const holder = this.holderOf(this.openers.get(profile2) ?? {}, opener.session);
+      if (holder === "this chat") return await this.state((await launching).browserId);
+      fail("profile_held", heldMessage(profile2, holder));
     }
     if (this.byId.size + this.opening.size + (this.readerHeld() ? 1 : 0) >= MAX_BROWSERS) {
       fail("too_many_browsers", `at most ${MAX_BROWSERS} browsers may be open at once; close one first`);
     }
     assertEngineAvailable(engine);
-    const slot = profile2 ?? `ephemeral:${randomBytes3(8).toString("hex")}`;
-    const started = this.launch(profile2, engine, viewport).finally(() => this.opening.delete(slot));
+    const slot = profile2 ?? `ephemeral:${randomBytes4(8).toString("hex")}`;
+    const started = this.launch(profile2, engine, viewport, opener).finally(() => {
+      this.opening.delete(slot);
+      this.openers.delete(slot);
+    });
     this.opening.set(slot, started);
+    this.openers.set(slot, opener);
     const entry = await started;
-    return this.redact(entry, await this.buildState(entry));
+    const state = this.redact(entry, await this.buildState(entry));
+    const { notice } = entry;
+    delete entry.notice;
+    return notice === void 0 ? state : { ...state, notice };
   }
-  async launch(profile2, engine, viewport) {
+  async launch(profile2, engine, viewport, opener) {
     let directory;
     let free;
+    let annotations = this.annotationFiles;
     if (profile2 === null) {
       const ephemeral = this.store.createEphemeral();
       directory = ephemeral.userDataDir;
       free = () => this.discard(ephemeral.dir);
+      annotations = new AnnotationFiles(join7(ephemeral.dir, "annotations"));
     } else {
       const lock = this.store.acquireLock(profile2);
-      directory = engine === "chromium" ? this.store.userDataDir(profile2) : join6(this.store.profileDir(profile2), engine);
+      directory = engine === "chromium" ? this.store.userDataDir(profile2) : join7(this.store.profileDir(profile2), engine);
       free = () => this.store.releaseLock(lock);
     }
     let released = false;
@@ -3419,6 +3728,10 @@ var BrowserRuntime = class {
         profileDirectory: directory,
         viewport,
         onClosed: release,
+        // The passive sign-in look: a saved profile on our own Chrome, never the relay's and never a throwaway.
+        ...profile2 !== null && engine === "chromium" ? { onPageLoaded: () => {
+          if (entry !== void 0) this.schedulePageProbe(entry, this.options.probes?.settleMs ?? SETTLE_MS);
+        } } : {},
         ...this.options.headless === void 0 ? {} : { headless: this.options.headless },
         ...this.options.executablePath ? { executablePath: this.options.executablePath } : {},
         ...this.options.relayUrl && engine === "chrome-relay" ? { relayUrl: this.options.relayUrl } : {}
@@ -3426,7 +3739,7 @@ var BrowserRuntime = class {
       const initial = await driver.state();
       if (released) fail("browser_closed", "The browser closed during initialization.");
       entry = {
-        browserId: randomBytes3(24).toString("base64url"),
+        browserId: randomBytes4(24).toString("base64url"),
         profile: profile2,
         engine,
         viewport: initial.viewport,
@@ -3443,8 +3756,12 @@ var BrowserRuntime = class {
         publish: null,
         secrets: /* @__PURE__ */ new Set(),
         logRead: 0,
-        logNoticed: 0
+        logNoticed: 0,
+        annotations,
+        opener,
+        probe: { timer: void 0, running: void 0, again: false }
       };
+      if (profile2 !== null && profile2 !== RELAY_PROFILE) entry.notice = this.touchProfile(profile2, driver.app);
       this.byId.set(entry.browserId, entry);
       if (profile2 !== null) this.byProfile.set(profile2, entry);
       return entry;
@@ -3484,7 +3801,9 @@ var BrowserRuntime = class {
     entry.closed = true;
     entry.frames.length = 0;
     await this.stopTask(entry);
+    await this.probeAtClose(entry);
     await entry.driver.close();
+    this.markUsed(entry);
     entry.release();
   }
   async dispose() {
@@ -3518,6 +3837,7 @@ var BrowserRuntime = class {
     entry.closed = true;
     entry.frames.length = 0;
     entry.worker?.process.cancel();
+    clearTimeout(entry.probe.timer);
     this.byId.delete(entry.browserId);
     if (entry.profile !== null && this.byProfile.get(entry.profile) === entry) this.byProfile.delete(entry.profile);
     for (const [session, browserId] of this.viewBySession) if (browserId === entry.browserId) this.viewBySession.delete(session);
@@ -3583,7 +3903,7 @@ var BrowserRuntime = class {
       const before = await this.refreshState(entry);
       const revision = entry.revision;
       const url = before.url;
-      const shot = await entry.driver.screenshot();
+      const { shot, scroll } = await this.captureSettled(entry);
       const capturedAt = (/* @__PURE__ */ new Date()).toISOString();
       const state = await this.buildState(entry);
       if (entry.revision !== revision || state.url !== url) {
@@ -3594,11 +3914,12 @@ var BrowserRuntime = class {
         fail("frame_too_large", `screenshot is ${bytes.length} bytes, above the ${MAX_FRAME_BYTES} byte limit`);
       }
       const record = {
-        id: randomBytes3(12).toString("hex"),
-        bytes,
+        id: randomBytes4(12).toString("hex"),
         url,
+        title: state.title,
         revision,
         viewport: entry.viewport,
+        scroll,
         capturedAt
       };
       entry.frames.push(record);
@@ -3611,6 +3932,23 @@ var BrowserRuntime = class {
         capturedAt: record.capturedAt
       };
     });
+  }
+  /**
+   * The picture of the page and where it is scrolled, as one thing. A wheel scroll animates for a moment, and a picture
+   * taken in the middle of it shows no position the page was ever at; the position is read on both sides of the capture
+   * and the capture is taken again, a few times, until they agree.
+   */
+  async captureSettled(entry) {
+    for (let attempt = 1; ; attempt += 1) {
+      const from = await entry.driver.scroll();
+      const shot = await entry.driver.screenshot();
+      const scroll = await entry.driver.scroll();
+      if (scroll.x === from.x && scroll.y === from.y) return { shot, scroll };
+      if (attempt === SCROLL_SETTLE_ATTEMPTS) fail("stale_frame", "The page kept scrolling while the picture was taken; request a new frame.");
+      const { promise: rested, resolve: resolve4 } = Promise.withResolvers();
+      setTimeout(resolve4, SCROLL_SETTLE_MS);
+      await rested;
+    }
   }
   /** A read like `snapshot`; the picture is for a model, so nothing of it is kept (`entry.frames` holds annotatable frames only). */
   async shot(browserId, request = {}) {
@@ -3654,18 +3992,18 @@ var BrowserRuntime = class {
     });
   }
   /**
-   * Crop the STORED bytes of `frameId` and attach bounded live element context.
+   * The page under the regions the human marked on the retained frame `frameId`: its address and title as captured,
+   * where it is scrolled, and the elements under each region. The picture is the View's own frame; the shared
+   * annotation kit paints the marks onto it and cuts the detail crops, so nothing here carries pixels.
    *
-   * Honesty note baked into the returned payload: the crop is the captured
-   * frame, while the element list is read from the page as it is NOW. On a
-   * dynamic page those can disagree even at the same revision; we never claim
+   * Honesty note baked into the answer: the frame is what was captured at `capturedAt`, the elements are read from the
+   * page as it is NOW (`readAt`). On a dynamic page those can disagree even at the same revision; we never claim
    * they are the same instant.
    */
-  async annotate(browserId, frameId, region, note) {
+  async annotate(browserId, frameId, regions) {
     const entry = this.require(browserId);
-    const text = note ?? "";
-    if (typeof text !== "string" || text.length > MAX_NOTE_CHARS) {
-      fail("bad_note", `note must be a string of at most ${MAX_NOTE_CHARS} characters`);
+    if (!Array.isArray(regions) || regions.length === 0 || regions.length > MAX_ANNOTATION_REGIONS) {
+      fail("bad_region", `annotate needs between 1 and ${MAX_ANNOTATION_REGIONS} regions`);
     }
     return await this.serialize(entry, async () => {
       await this.refreshState(entry);
@@ -3679,25 +4017,50 @@ var BrowserRuntime = class {
           `frame ${frameId} was captured at revision ${record.revision}; the page is now at revision ${entry.revision}. Capture a new frame.`
         );
       }
-      const { png, region: clamped } = cropRegion(record.bytes, region);
-      const elements = await entry.driver.elements(clamped, MAX_ELEMENT_CHARS);
+      const clamped = regions.map((region) => clampRegion(region, record.viewport));
+      const read2 = await entry.driver.elements(clamped, MAX_ELEMENT_CHARS);
       await this.refreshState(entry);
       if (record.revision !== entry.revision) fail("stale_frame", "The document changed while reading annotation context.");
-      return {
+      if (read2.scroll.x !== record.scroll.x || read2.scroll.y !== record.scroll.y) {
+        fail(
+          "stale_frame",
+          `The page is scrolled to ${read2.scroll.x},${read2.scroll.y} now and was at ${record.scroll.x},${record.scroll.y} when the picture was taken. Capture a new frame.`
+        );
+      }
+      return this.redact(entry, {
         url: record.url,
-        note: text,
-        region: clamped,
+        title: record.title,
         capturedAt: record.capturedAt,
-        mimeType: "image/png",
-        data: png.toString("base64"),
-        elements: `${this.redact(entry, elements)}
-
-[live DOM read at ${(/* @__PURE__ */ new Date()).toISOString()}, revision ${entry.revision}; the image is the frame captured at ${record.capturedAt} \u2014 a dynamic page may have changed between them]`
-      };
+        readAt: (/* @__PURE__ */ new Date()).toISOString(),
+        viewport: record.viewport,
+        scroll: record.scroll,
+        regions: clamped.map((region, index) => ({
+          region,
+          elements: read2.regions[index]?.elements ?? [],
+          truncated: read2.regions[index]?.truncated ?? false
+        }))
+      });
     });
   }
-  async profiles() {
-    return this.store.list();
+  /** Keeps the kit's detail document for the browser the human marked in: a throwaway browser's goes with it. */
+  saveAnnotationDetail(browserId, json) {
+    return this.require(browserId).annotations.save(json);
+  }
+  async profileList(asker) {
+    return buildProfileList(
+      this.store,
+      (slug) => {
+        const opener = this.byProfile.get(slug)?.opener ?? this.openers.get(slug);
+        if (opener !== void 0) return this.holderOf(opener, asker);
+        return this.store.heldElsewhere(slug) ? "another chat" : null;
+      },
+      Date.now()
+    );
+  }
+  async profileMeta() {
+    const meta = {};
+    for (const slug of this.store.list()) if (slug !== RELAY_PROFILE) meta[slug] = resolveProfileMeta(slug, this.store.meta(slug));
+    return meta;
   }
   async connections() {
     return this.store.allConnections();
@@ -3729,15 +4092,15 @@ var BrowserRuntime = class {
     };
   }
   /**
-   * Persist what a publish just saw about `origin`'s sign-in on this profile
-   * and tell the listeners. Never throws: a report is never worth failing
-   * the publish that observed it.
+   * Persist what a probe or a publish just saw about `origin`'s sign-in on this
+   * profile (`signedIn: null`: only visited) and tell the listeners. Never
+   * throws: a report is never worth failing what observed it.
    */
-  observeConnection(profile2, origin, signedIn, account) {
+  observeConnection(profile2, origin, signedIn5, account2) {
     const host = siteHost(origin);
     if (profile2 === RELAY_PROFILE || host === null) return;
     try {
-      this.store.recordConnection(profile2, host, { signedIn, observedAt: Date.now(), ...signedIn && account !== void 0 ? { account } : {} });
+      this.store.recordConnection(profile2, host, { signedIn: signedIn5, observedAt: Date.now(), ...signedIn5 === true && account2 !== void 0 ? { account: account2 } : {} });
     } catch (error) {
       console.error("Browser sign-in observation was not saved:", describe3(error));
       return;
@@ -3753,6 +4116,157 @@ var BrowserRuntime = class {
         console.error("Browser connection listener failed:", describe3(error));
       }
     }
+  }
+  // -----------------------------------------------------------------------
+  // Whose a profile is, and which one a name means
+  // -----------------------------------------------------------------------
+  /** `opener`'s browser, from the side of `asker` (a host session id): the same chat, the human in a View, or another chat. */
+  holderOf(opener, asker) {
+    if (asker !== void 0 && opener.session === asker) return "this chat";
+    return opener.caller === "app" ? "human" : "another chat";
+  }
+  /** The profile `raw` means: a saved one by its slug or label, else a new one by its slug. */
+  resolveProfile(raw, engine) {
+    if (engine === "chrome-relay" || typeof raw !== "string") return validateProfile(raw);
+    const known = this.store.list().filter((slug2) => slug2 !== RELAY_PROFILE).map((slug2) => ({ slug: slug2, label: resolveProfileMeta(slug2, this.store.meta(slug2)).label }));
+    const matches = matchProfiles(raw, known);
+    if (matches.length === 1) return matches[0].slug;
+    if (matches.length > 1) fail("profile_ambiguous", `more than one saved profile answers to ${JSON.stringify(raw)}: ${nameProfiles(matches)}. Ask the human which one; do not guess.`);
+    const slug = profileSlug(raw);
+    if (slug !== null) return slug;
+    fail("profile_unknown", `no saved profile is named ${JSON.stringify(raw)}. Saved profiles: ${known.length === 0 ? "none" : nameProfiles(known)}. Ask the human which one, or leave profile out for a throwaway browser.`);
+  }
+  /**
+   * Record that a saved profile is being opened (its last use, and the browser
+   * application that runs it). Returns what a person should be told when that
+   * application is not the one that made the logins: a different browser build
+   * cannot read the first one's encrypted cookies, so they may be signed out.
+   * Never throws: metadata is never worth failing an open.
+   */
+  touchProfile(profile2, app) {
+    try {
+      const before = this.store.meta(profile2).app;
+      this.store.saveMeta(profile2, { lastUsed: Date.now(), ...app === null ? {} : { app } });
+      if (app === null || before === void 0 || before === app) return void 0;
+      const notice = `This profile was last opened in ${APP_NAMES[before] ?? before}; this browser is ${APP_NAMES[app] ?? app}. A different browser often cannot read the logins the first one saved, so you may be signed out.`;
+      console.error(`[browser] profile "${profile2}": ${notice}`);
+      return notice;
+    } catch (error) {
+      console.error("Browser profile metadata was not saved:", describe3(error));
+      return void 0;
+    }
+  }
+  markUsed(entry) {
+    if (entry.profile === null || entry.profile === RELAY_PROFILE) return;
+    try {
+      this.store.saveMeta(entry.profile, { lastUsed: Date.now() });
+    } catch (error) {
+      console.error("Browser profile metadata was not saved:", describe3(error));
+    }
+  }
+  // -----------------------------------------------------------------------
+  // The passive sign-in look
+  // -----------------------------------------------------------------------
+  /** A page just loaded (or changed route) in the active tab: look at it shortly, once however many events come. */
+  schedulePageProbe(entry, settleMs) {
+    if (this.disposed || entry.closed) return;
+    clearTimeout(entry.probe.timer);
+    const timer = setTimeout(() => void this.probeLoaded(entry, settleMs), PROBE_DEBOUNCE_MS);
+    timer.unref();
+    entry.probe.timer = timer;
+  }
+  /** One look at a time per browser; a load that arrives during one earns one more look after it. */
+  async probeLoaded(entry, settleMs) {
+    const { probe } = entry;
+    if (probe.running !== void 0) {
+      probe.again = true;
+      return;
+    }
+    probe.running = (async () => {
+      try {
+        do {
+          probe.again = false;
+          await this.probeOnce(entry, settleMs, false);
+        } while (probe.again && !entry.closed && !this.disposed);
+      } finally {
+        probe.running = void 0;
+      }
+    })();
+    await probe.running;
+  }
+  /**
+   * The last look, as the browser closes: no waiting for a page to draw (it has been open), and never longer
+   * than PROBE_CLOSE_MS in all, so closing is never held up by a page that will not answer.
+   */
+  async probeAtClose(entry) {
+    if (entry.profile === null || entry.profile === RELAY_PROFILE) return;
+    clearTimeout(entry.probe.timer);
+    let timer;
+    const giveUp = new Promise((resolve4) => {
+      timer = setTimeout(resolve4, PROBE_CLOSE_MS);
+    });
+    try {
+      await Promise.race([(async () => {
+        await entry.probe.running;
+        await this.probeOnce(entry, 0, true);
+      })(), giveUp]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  /**
+   * Look at the active tab once and note what it shows, if anything: a known site gives a verdict (signed in with
+   * its account, or signed out where that decides), any other public site is only "visited". Nothing here throws:
+   * a page that changed under a read, or a browser going away, is simply not observed this time.
+   */
+  async probeOnce(entry, settleMs, closing) {
+    const profile2 = entry.profile;
+    if (profile2 === null || profile2 === RELAY_PROFILE) return;
+    let looked;
+    try {
+      const before = await entry.driver.state();
+      if (entry.closed && !closing || before.loading) return;
+      looked = before.url;
+      const host = siteHost(before.url);
+      if (host === null) return;
+      const probe = probeFor(host, this.options.probes?.table);
+      if (probe === void 0) {
+        this.noteVisit(profile2, before.url, host);
+        return;
+      }
+      const verdict = await readProbe(entry.driver, probe, before.url, settleMs);
+      if (verdict === void 0) return;
+      const after = await entry.driver.state();
+      if (after.url !== before.url || after.activeTabId !== before.activeTabId) return;
+      this.noteVerdict(entry, profile2, before.url, host, verdict);
+    } catch {
+    } finally {
+      if (looked !== void 0) this.options.probes?.looked?.(looked);
+    }
+  }
+  noteVerdict(entry, profile2, url, host, verdict) {
+    const account2 = verdict.signedIn ? this.redact(entry, verdict.account) : void 0;
+    if (this.alreadyNoted(profile2, host, `${verdict.signedIn}|${account2 ?? ""}`, CHECK_RENOTE_MS)) return;
+    this.observeConnection(profile2, url, verdict.signedIn, account2);
+  }
+  /** A site only visited is never allowed to replace a check that was made, and a loopback or private host is not a site. */
+  noteVisit(profile2, url, host) {
+    if (!(this.options.probes?.recordVisit ?? isPublicSite)(url)) return;
+    if (this.alreadyNoted(profile2, host, "visited", VISIT_RENOTE_MS)) return;
+    const current = this.store.connections(profile2)[host];
+    if (current !== void 0 && current.signedIn !== null) return;
+    this.observeConnection(profile2, url, null, void 0);
+  }
+  /** True when the same fact about this site was noted less than `windowMs` ago; otherwise remembers it as noted now. */
+  alreadyNoted(profile2, host, key, windowMs) {
+    const id = `${profile2}
+${host}`;
+    const now = Date.now();
+    const last = this.lastNoted.get(id);
+    if (last !== void 0 && last.key === key && now - last.at < windowMs) return true;
+    if (this.lastNoted.size >= MAX_NOTED) this.lastNoted.clear();
+    this.lastNoted.set(id, { key, at: now });
+    return false;
   }
   // -----------------------------------------------------------------------
   // Tabs
@@ -4041,7 +4555,7 @@ var BrowserRuntime = class {
       const credential = request.credential ? resolveCredential(this.store.profileDir(this.savedProfile(entry, "a task credential")), request.credential) : void 0;
       if (credential) entry.secrets.add(credential.password);
       const run = {
-        id: randomBytes3(8).toString("hex"),
+        id: randomBytes4(8).toString("hex"),
         agent: request.agent,
         task,
         status: "running",
@@ -4092,8 +4606,8 @@ var BrowserRuntime = class {
     if (!entry.task) fail("no_task", "no task has run on this browser");
     const worker = entry.worker;
     if (worker) {
-      const { promise: elapsed, resolve: resolve3 } = Promise.withResolvers();
-      const timer = setTimeout(resolve3, Math.max(0, ms));
+      const { promise: elapsed, resolve: resolve4 } = Promise.withResolvers();
+      const timer = setTimeout(resolve4, Math.max(0, ms));
       await Promise.race([worker.finished, elapsed]);
       clearTimeout(timer);
     }
@@ -4570,9 +5084,16 @@ function cloneTask(run) {
 function describe3(err) {
   return err instanceof Error ? err.message : String(err);
 }
+function nameProfiles(profiles) {
+  const shown = profiles.slice(0, 20).map(({ slug, label }) => label === slug ? slug : `${label} (${slug})`);
+  return profiles.length > shown.length ? `${shown.join(", ")} and ${profiles.length - shown.length} more` : shown.join(", ");
+}
+function heldMessage(profile2, holder) {
+  return `profile "${profile2}" is already open, held by ${holder === "human" ? "the human in the View" : "another chat"}. Ask the human to close it, or use another profile.`;
+}
 
 // src/stream.ts
-import { randomBytes as randomBytes4 } from "node:crypto";
+import { randomBytes as randomBytes5 } from "node:crypto";
 import http from "node:http";
 
 // src/wire.ts
@@ -4754,7 +5275,7 @@ var LiveChannel = class {
     const port = await this.#listen();
     const mine = [...this.#grants].filter(([, grant]) => grant.browserId === browserId);
     for (const [token2] of mine.slice(0, Math.max(0, mine.length - this.#maxTokens + 1))) this.#grants.delete(token2);
-    const token = randomBytes4(24).toString("base64url");
+    const token = randomBytes5(24).toString("base64url");
     this.#grants.set(token, { browserId, lastUsed: Date.now(), open: 0 });
     this.#sweeper ??= setInterval(() => this.#sweep(), Math.min(1e3, this.#tokenIdleMs));
     this.#sweeper.unref();
@@ -4772,9 +5293,9 @@ var LiveChannel = class {
       server2.requestTimeout = 0;
       server2.keepAliveTimeout = 5e3;
       server2.on("connection", (socket) => socket.setNoDelay(true));
-      const { promise, resolve: resolve3, reject } = Promise.withResolvers();
+      const { promise, resolve: resolve4, reject } = Promise.withResolvers();
       server2.once("error", reject);
-      server2.listen(0, "127.0.0.1", resolve3);
+      server2.listen(0, "127.0.0.1", resolve4);
       await promise;
       this.#server = server2;
       this.#port = server2.address().port;
@@ -4891,7 +5412,7 @@ var LiveChannel = class {
 var BROWSER_VIEW_URI = "ui://browser/index.html";
 var VIEW_CSP = { connectDomains: ["http://127.0.0.1:*"] };
 var capability = z2.string();
-var profile = z2.string().regex(PROFILE_NAME);
+var profile = z2.string().min(1).max(MAX_LABEL_CHARS);
 var coordinate = z2.number();
 var selector2 = z2.string();
 var point = { x: coordinate, y: coordinate };
@@ -5020,7 +5541,7 @@ async function createBrowserServer(options = {}) {
   const server2 = new McpServer({ name: "dimension-community-browser", version: "0.1.0" });
   const live = new LiveChannel(runtime);
   const viewDir = options.viewDir ?? fileURLToPath3(new URL("./dist/", import.meta.url));
-  const html = await readFile2(join7(viewDir, "index.html"), "utf8");
+  const html = await readFile2(join8(viewDir, "index.html"), "utf8");
   const presets = options.presets ?? await loadPresets();
   const metadata = { ui: { prefersBorder: false, csp: VIEW_CSP } };
   registerAppResource(server2, "Browser", BROWSER_VIEW_URI, { _meta: metadata }, async () => ({
@@ -5031,7 +5552,7 @@ async function createBrowserServer(options = {}) {
     const extension = extname2(entry.name);
     const mimeType = MIME[extension];
     if (!mimeType) throw new Error(`Unsupported browser View asset: ${entry.name}`);
-    const path = join7(entry.parentPath, entry.name);
+    const path = join8(entry.parentPath, entry.name);
     const relative = path.slice(viewDir.replace(/[\\/]$/, "").length + 1).replaceAll("\\", "/");
     const uri = `ui://browser/${relative}`;
     server2.registerResource(relative, uri, { mimeType }, async () => ({ contents: [{ uri, mimeType, blob: (await readFile2(path)).toString("base64") }] }));
@@ -5044,9 +5565,14 @@ async function createBrowserServer(options = {}) {
     const session = sessionOf(extra);
     return (session === void 0 ? void 0 : runtime.viewOf(session)) ?? fail("no_view", "no browser is open in this session; call browser_view");
   };
-  const openAt = async (profile2, engine, url) => {
+  const openerOf = (extra) => {
+    const caller = callerOf(extra);
+    const session = sessionOf(extra);
+    return { ...caller === void 0 ? {} : { caller }, ...session === void 0 ? {} : { session } };
+  };
+  const openAt = async (profile2, engine, url, opener) => {
     const action = url === void 0 ? void 0 : navigateStep.parse({ kind: "navigate", url });
-    const state = await runtime.open({ ...profile2 === void 0 ? {} : { profile: profile2 }, ...engine ? { engine } : {} });
+    const state = await runtime.open({ ...profile2 === void 0 ? {} : { profile: profile2 }, ...engine ? { engine } : {} }, opener);
     if (!action) return state;
     const navigated = await runtime.act(state.browserId, action);
     if (navigated.status !== "completed") throw new Error(`Opened, but navigating to ${url} ${navigated.status}: ${navigated.error}`);
@@ -5054,10 +5580,10 @@ async function createBrowserServer(options = {}) {
   };
   server2.registerTool("browser_open", {
     title: "Open Browser",
-    description: `Open a headless browser: no window, nothing shown to the human. No profile = throwaway: nothing saved, data deleted on close; name one (short lowercase, e.g. "work") only to keep logins, never for a throwaway. Saved passwords, publishing and task credentials need a profile. Engines: chromium (default) or chrome-relay (the user's running Chrome; profile always "relay", may be omitted); abp and browser4 are refused with the reason. url navigates at once. Returns the browserId every other tool needs.`,
-    inputSchema: { profile: profile.optional().describe("Saved profile to keep logins in. Leave out for a throwaway browser."), engine: z2.enum(BROWSER_ENGINES).optional(), url: z2.string().max(2048).optional() }
+    description: `Open a headless browser: no window, nothing shown to the human. No profile = throwaway: nothing saved, data deleted on close; name one (a saved profile from browser_profiles, or a new short lowercase name) only to keep logins, never for a throwaway. Saved passwords, publishing and task credentials need a profile. Engines: chromium (default) or chrome-relay (the user's running Chrome; profile always "relay", may be omitted); abp and browser4 are refused with the reason. url navigates at once. Returns the browserId every other tool needs.`,
+    inputSchema: { profile: profile.optional().describe("Saved profile, by name or label (see browser_profiles). Leave out for a throwaway browser."), engine: z2.enum(BROWSER_ENGINES).optional(), url: z2.string().max(2048).optional() }
   }, ({ profile: profile2, engine, url }, extra) => result(async () => {
-    const state = await openAt(profile2, engine, url);
+    const state = await openAt(profile2, engine, url, openerOf(extra));
     if (callerOf(extra) === "app") showing(extra, state.browserId);
     return stateFor(callerOf(extra), state);
   }));
@@ -5071,7 +5597,7 @@ async function createBrowserServer(options = {}) {
     if (browserId !== void 0 && (profile2 !== void 0 || engine !== void 0 || url !== void 0)) {
       fail("bad_view", "profile, engine and url open a NEW browser; pass a browserId alone to show the one you hold");
     }
-    const state = browserId === void 0 ? await openAt(profile2, engine, url) : await runtime.state(browserId);
+    const state = browserId === void 0 ? await openAt(profile2, engine, url, openerOf(extra)) : await runtime.state(browserId);
     showing(extra, state.browserId);
     return stateFor(callerOf(extra), state);
   }));
@@ -5241,28 +5767,35 @@ async function createBrowserServer(options = {}) {
     _meta: APP_ONLY
   }, ({ browserId }) => result(() => runtime.frame(browserId)));
   registerAppTool(server2, "browser_annotate", {
-    description: "Crop a retained frame and describe the selected region. Does not send anything to an agent; the View explicitly updates its model context afterward.",
+    description: "The page under the regions the human marked on a retained png frame: address, title, where it is scrolled, and the elements under each region (a password field is named, never read). No pixels: the picture is the View's own frame and the shared annotation kit paints the marks on it. Does not send anything to an agent; the View explicitly updates its model context afterward.",
     inputSchema: {
       browserId: capability,
       frameId: capability,
-      region: z2.object({ x: coordinate, y: coordinate, width: z2.number().positive().max(4096), height: z2.number().positive().max(4096) }).strict(),
-      note: z2.string().max(8192)
+      regions: z2.array(z2.object({ x: coordinate, y: coordinate, width: z2.number().positive().max(4096), height: z2.number().positive().max(4096) }).strict()).min(1).max(MAX_ANNOTATION_REGIONS)
     },
     annotations: READ_ONLY,
     _meta: APP_ONLY
-  }, ({ browserId, frameId, region, note }) => result(() => runtime.annotate(browserId, frameId, region, note)));
+  }, ({ browserId, frameId, regions }) => result(() => runtime.annotate(browserId, frameId, regions)));
+  registerAppTool(server2, "browser_annotation_file", {
+    description: "Keep the annotation kit's detail document (every mark with the elements under it) in a file of this plugin's own folder and answer the absolute path the agent reads it at. Accepts only that document; keeps the newest few. A Private (throwaway) browser's file is deleted when that browser closes.",
+    inputSchema: { browserId: capability, json: z2.string().max(MAX_DETAIL_BYTES) },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    _meta: APP_ONLY
+  }, ({ browserId, json }) => result(async () => ({ path: runtime.saveAnnotationDetail(browserId, json) })));
   registerAppTool(server2, "browser_viewport", {
     description: "Fit the page to the View: set every tab's viewport to the page area's CSS size (bounded 320-2560 \xD7 240-2000) at the View's pixel ratio (1-2) so the live view is crisp. The View calls this on resize, debounced.",
     inputSchema: { browserId: capability, width: z2.number().int().min(1).max(8192), height: z2.number().int().min(1).max(8192), scale: z2.number().min(1).max(4).optional() },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     _meta: APP_ONLY
   }, ({ browserId, width, height, scale }) => result(() => runtime.resize(browserId, { width, height }, scale)));
-  registerAppTool(server2, "browser_profiles", {
-    description: "List the saved profile names, never browser capabilities, cookies or secrets. A throwaway browser is never listed. Relay Chrome profiles are managed in Chrome, not here.",
+  server2.registerTool("browser_profiles", {
+    description: "Saved profiles: name, label, colour, heldBy (null | this chat | human | another chat), and the sites each is signed in to: signedIn (null = not known: unchecked or over 7 days old), seenAt. Observed, may be out of date. Accounts are shown to the person, not you. Never cookies or passwords.",
     inputSchema: {},
-    annotations: READ_ONLY,
-    _meta: APP_ONLY
-  }, () => result(async () => ({ profiles: await runtime.profiles() })));
+    annotations: READ_ONLY
+  }, (_args, extra) => respond(extra, async () => {
+    const list = await runtime.profileList(sessionOf(extra));
+    return { text: JSON.stringify(profilesForModel(list)), structured: { profiles: list } };
+  }));
   server2.registerTool("browser_close", {
     description: "Close this owned browser (stopping any task) and release its profile lock. Persisted logins remain; a throwaway's data is deleted; the user's relay browser is never terminated. Refused while a publish awaits confirmation (confirm, cancel or wait first).",
     inputSchema: { browserId: capability },
@@ -5275,7 +5808,7 @@ async function createBrowserServer(options = {}) {
   const sendReport = () => {
     reporting = reporting.then(async () => {
       if (!server2.isConnected()) return;
-      const params = { report: buildConnectionReport(await runtime.connections()) };
+      const params = { report: buildConnectionReport(await runtime.connections(), await runtime.profileMeta()) };
       await server2.server.notification({ method: PACK_CONNECTION_REPORT_METHOD, params });
     }).catch((error) => console.error("Browser connection report was not sent:", error instanceof Error ? error.message : error));
   };
