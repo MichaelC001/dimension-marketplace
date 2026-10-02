@@ -41,7 +41,7 @@ const TARGET_APPEAR_TIMEOUT_MS = 5_000;
 /** The names a function run receives, and the ones `tab.run` code can use (OMP `BROWSER_RUN_SCOPE`). */
 const RUN_SCOPE: readonly string[] = ["tab", "page", "browser", "wait", "assert"];
 /**
- * Matrix D18, a rule of the pack that OMP does not have: code does not type into a password field (`tab.type`, `tab.fill`, a handle's `type` and `fill`); a password goes through browser_act's saved-credential
+ * Matrix D18, a rule of the pack that OMP does not have: code does not type into a password field (`tab.type`, `tab.fill`, a text-typing `tab.press`, a handle's `type` and `fill`); a password goes through browser_act's saved-credential
  * route or the user. The ONE constant to flip if the owner lifts the rule; the host can also lift it per worker with `init.refusePasswordFields: false`.
  */
 export const REFUSE_PASSWORD_FIELDS_BY_DEFAULT = true;
@@ -72,6 +72,8 @@ export interface TabRealmOptions {
   cwd?: string;
   /** Refuse `type` and `fill` on a password input from code (matrix D18). Absent: {@link REFUSE_PASSWORD_FIELDS_BY_DEFAULT}. */
   refusePasswordFields?: boolean;
+  /** The server offers browser_task, so a password refusal may name it as a route (it needs a TypeSafe key, which only the host can see). Absent: not offered. */
+  taskCredential?: boolean;
   /** Encode the model's screenshot as JPEG instead of WebP. */
   excludeWebP?: boolean;
   /** Route unhandled rejections of the code a run started back into that run. Default: only inside a worker thread, where an unhandled rejection would end the worker. */
@@ -343,7 +345,7 @@ class BrowserTabRealm implements TabRealm {
         activate: session.activateForScreenshot,
       };
       const tabApi = createTabApi(
-        { session, run: active, signal, timeoutMs, shot, cwd: this.#options.cwd, refusePasswordFields: this.#options.refusePasswordFields ?? REFUSE_PASSWORD_FIELDS_BY_DEFAULT },
+        { session, run: active, signal, timeoutMs, shot, cwd: this.#options.cwd, refusePasswordFields: this.#options.refusePasswordFields ?? REFUSE_PASSWORD_FIELDS_BY_DEFAULT, taskCredential: this.#options.taskCredential ?? false },
         output,
         screenshots,
       );

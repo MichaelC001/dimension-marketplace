@@ -125,8 +125,24 @@ describeWithChrome("the code worker as the product runs it (a Node worker thread
         expect(refused.message).toStartWith('"#pw" is a password field');
         expect(refused.message).toContain("browser_act");
         expect(refused.message).toContain("ask the user");
+        // browser_task is registered only with a TypeSafe key, which only the host can see: unless it said so in init, the refusal does not send the model to a tool that is not there. And the way in it does name
+        // is truthful about the browser the cell drives: a throwaway one has no saved password.
+        expect(refused.message).not.toContain("browser_task");
+        expect(refused.message).toContain("saved profile");
+        expect(refused.message).toContain("throwaway");
         // An ordinary field is not in the way, and nothing was typed into the password one.
         expect(await outcome(worker, "ok", `await tab.fill("#name", "fine"); console.log("value=" + JSON.stringify(await tab.evaluate(() => document.getElementById("pw").value)))`)).toEqual({ ok: true, value: "" });
+      }), 30_000);
+
+    test("the refusal names browser_task when the host says the server offers it", () =>
+      withWorker({ taskCredential: true }, async worker => {
+        const refused = await outcome(worker, "refused", `const tab = await browser.open({ name: "main" }); await tab.type("#pw", "hunter2")`);
+        expect(refused.ok).toBe(false);
+        if (!refused.ok) {
+          expect(refused.message).toContain("browser_act");
+          expect(refused.message).toContain("browser_task with a credential");
+          expect(refused.message).toContain("ask the user");
+        }
       }), 30_000);
 
     test("the host lifts it with refusePasswordFields: false", () =>

@@ -2,9 +2,9 @@
 // #resolveAriaRef, #resolveActionHandle, clickQueryHandlerText and its actionability helpers) @ dc5f95d9e1 (Dimension omp fork).
 // Copyright (c) 2025 Mario Zechner; (c) 2025-2026 Can Bölük; (c) 2026 Stencil Labs, Inc. See ../../../third-party/omp/LICENSE.
 // Changed for the Browser pack: the helpers are built over a TabSession (one adopted page) instead of WorkerCore; Bun.sleep is `sleep`; `uploadFile` paths are absolute or resolve against the cwd the host
-// gave the realm (MCP carries none: matrix D21); `type` and `fill` refuse a password input unless the host lifts the rule (matrix D18, ON by default: OMP has no such rule); the text-selector click names its
-// own loop's timeout instead of letting an AbortError through, and its loop ends a quarter second before the op's ceiling so that message (with the actionability reason) is the one the model reads where OMP's
-// two equal deadlines raced; the ARIA, readable and screenshot pieces live in their own modules.
+// gave the realm (MCP carries none: matrix D21); `type`, `fill` and `press` refuse a password input unless the host lifts the rule (matrix D18, ON by default: OMP has no such rule; password-guard.ts); the
+// text-selector click names its own loop's timeout instead of letting an AbortError through, and its loop ends a quarter second before the op's ceiling so that message (with the actionability reason) is the
+// one the model reads where OMP's two equal deadlines raced; the ARIA, readable and screenshot pieces live in their own modules.
 
 import * as os from "node:os";
 import * as path from "node:path";
@@ -15,6 +15,7 @@ import { extractReadableFromHtml, type ReadableFormat } from "../extract/readabl
 import { sleep, untilAborted } from "./abortable";
 import { type ActionableHandle, fillViaHandle, toActionableHandle } from "./handles";
 import { collectObservation, type Observation } from "./observe";
+import { createPasswordGuard } from "./password-guard";
 import type { RunOutput } from "./run-output";
 import { markHandled } from "./run-scope";
 import { captureScreenshot, describeScreenshot, type ScreenshotOptions, type ShotConfig } from "./screenshot";
@@ -76,8 +77,10 @@ export interface TabApiContext {
   shot: ShotConfig;
   /** Resolves relative `uploadFile` paths; unset means a relative path is refused (MCP carries no working directory). */
   cwd?: string;
-  /** Refuse `type` and `fill` on a password input (the pack's rule, matrix D18). */
+  /** Refuse `type`, `fill` and a text-typing `press` that would reach a password input (the pack's rule, matrix D18). */
   refusePasswordFields: boolean;
+  /** The server offers browser_task, so the refusal may name it as a route (the host knows: it needs a TypeSafe key). */
+  taskCredential: boolean;
 }
 
 /** Puppeteer's Frame as it is at runtime: `mainRealm` is internal, absent from its typings. */
@@ -230,12 +233,7 @@ export function createTabApi(c: TabApiContext, output: RunOutput, screenshots: P
     selectorOpts?: { selector?: string; zeroMatchAfterMs?: number },
   ): Promise<T> => markHandled(session.ops.runOp(run, label, signal, perOpMs, fn, selectorOpts));
 
-  const isPasswordField = (handle: ElementHandle, sig: AbortSignal | undefined): Promise<boolean> =>
-    untilAborted(sig, () => handle.evaluate(el => el instanceof HTMLInputElement && el.type === "password"));
-  const refusePassword = (what: string): ToolError =>
-    new ToolError(
-      `${what} is a password field; browser_run does not type into password fields from code. Fill it with browser_act (useSavedPassword to log in, generatePassword to sign up), hand the login to browser_task with a credential, or ask the user to type it.`,
-    );
+  const passwordGuard = createPasswordGuard(page, c.taskCredential);
 
   const resolveAriaRef = async (id: string): Promise<ElementHandle> => {
     const ref = parseAriaRefSelector(id) ?? id.trim();
@@ -271,11 +269,11 @@ export function createTabApi(c: TabApiContext, output: RunOutput, screenshots: P
       const type = enriched.type.bind(enriched);
       const fill = enriched.fill.bind(enriched);
       enriched.type = async (...args: Parameters<typeof type>) => {
-        if (await isPasswordField(enriched, signal)) throw refusePassword("handle");
+        await passwordGuard.beforeTyping(enriched, "handle", signal);
         return type(...args);
       };
       enriched.fill = async value => {
-        if (await isPasswordField(enriched, signal)) throw refusePassword("handle");
+        await passwordGuard.beforeTyping(enriched, "handle", signal);
         return fill(value);
       };
     }
@@ -500,7 +498,7 @@ export function createTabApi(c: TabApiContext, output: RunOutput, screenshots: P
         async sig => {
           const handle = await resolveActionHandle(selector, actionOpMs, sig);
           try {
-            if (c.refusePasswordFields && (await isPasswordField(handle, sig))) throw refusePassword(JSON.stringify(selector));
+            if (c.refusePasswordFields) await passwordGuard.beforeTyping(handle, JSON.stringify(selector), sig);
             await untilAborted(sig, () => handle.type(text, { delay: 0 }));
           } finally {
             await handle.dispose().catch(() => undefined);
@@ -516,7 +514,7 @@ export function createTabApi(c: TabApiContext, output: RunOutput, screenshots: P
           if (parseAriaRefSelector(selector) !== null) {
             const handle = await resolveAriaRef(selector);
             try {
-              if (c.refusePasswordFields && (await isPasswordField(handle, sig))) throw refusePassword(JSON.stringify(selector));
+              if (c.refusePasswordFields) await passwordGuard.beforeTyping(handle, JSON.stringify(selector), sig);
               await fillViaHandle(handle, value, sig);
             } finally {
               await handle.dispose().catch(() => undefined);
@@ -528,11 +526,12 @@ export function createTabApi(c: TabApiContext, output: RunOutput, screenshots: P
             await untilAborted(sig, () => locator.fill(value, { signal: sig }));
             return;
           }
-          // The check is on the element the locator resolves and waits for (a field that renders a moment later is checked when it does), the same way `type` checks the handle it waited for. And the fill
-          // itself acts only on an element that is not a password field: that predicate runs in the page on the very handle the locator fills, so a field swapped in between is waited for, never typed into.
+          // The check is on the element the locator resolves and waits for (a field that renders a moment later is checked when it does), the same way `type` checks the handle it waited for, and on what holds focus
+          // once that element has it. And the fill itself acts only on an element that is not a password field: that predicate runs in the page on the very handle the locator fills, so a field swapped in between is
+          // waited for, never typed into.
           const resolved = await resolveActionHandle(selector, actionOpMs, sig);
           try {
-            if (await isPasswordField(resolved, sig)) throw refusePassword(JSON.stringify(selector));
+            await passwordGuard.beforeTyping(resolved, JSON.stringify(selector), sig);
           } finally {
             await resolved.dispose().catch(() => undefined);
           }
@@ -553,6 +552,7 @@ export function createTabApi(c: TabApiContext, output: RunOutput, screenshots: P
             }
           } else await untilAborted(sig, () => page.focus(normalizeSelector(selector)));
         }
+        if (c.refusePasswordFields) await passwordGuard.beforePress(key, `tab.press(${JSON.stringify(key)}${selector ? `, { selector: ${JSON.stringify(selector)} }` : ""})`, sig);
         await untilAborted(sig, () => page.keyboard.press(key));
       }),
     scroll: (deltaX, deltaY) =>
