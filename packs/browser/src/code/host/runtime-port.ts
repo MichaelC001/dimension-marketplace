@@ -25,8 +25,8 @@ export type EndListener = (browserId: string, why: EndWhy, reason?: string) => v
 
 /**
  * What a cell's browser may live for: its own idle clock, and whether it stays through idle close and being closed to make room. `kind` is the browser the cell asked for (what a second `browser.open` of the
- * same endpoint finds again); `label` is the words `Opened tab "main" on <label>` ends in for a browser that is not a plain headless one; `kill` is set by `close({ kill: true })` on a spawned application,
- * so closing the browser also ends the application the pack started.
+ * same endpoint finds again); `label` is the words `Opened tab "main" on <label>` ends in for a browser that is not a plain headless one; `kill` is set by `close({ kill: true })` on a spawned application, and by
+ * an open nobody waits for any more, so closing the browser also ends the application the pack started (an application that was already running has nothing to end: it is left running).
  */
 export interface CodeLifetime { idleMs: number; persist: boolean; kind?: BrowserKind; label?: string; kill?: boolean }
 

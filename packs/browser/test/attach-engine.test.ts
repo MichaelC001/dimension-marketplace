@@ -61,27 +61,31 @@ async function attachedToPersonsChrome(): Promise<{ driver: EngineDriver; chrome
 
 describeWithChrome("the attach engine on the person's Chrome", () => {
 	test(
-		"it adopts a page that is already there, opens none, and leaves the page the size it was",
+		"it adopts a page that is already there, opens none, and leaves the page exactly as it was: its size, its pixel ratio, how it is rendered",
 		async () => {
 			const before = await startDebugChrome();
-			const probe = await puppeteer.connect({ browserURL: before.cdpUrl, defaultViewport: null });
-			const widthBefore = Number(await (await probe.pages())[0]!.evaluate("window.innerWidth"));
-			await probe.disconnect();
+			const read = async (): Promise<number[]> => {
+				const probe = await puppeteer.connect({ browserURL: before.cdpUrl, defaultViewport: null });
+				try {
+					return (await (await probe.pages())[0]!.evaluate(() => [innerWidth, innerHeight, devicePixelRatio])) as number[];
+				} finally {
+					await probe.disconnect();
+				}
+			};
+			const metricsBefore = await read();
 			const established = await establishKind({ kind: "connected", cdpUrl: before.cdpUrl });
 			if (!("attach" in established)) throw new Error("expected an attach target");
 			const pageCount = (await pagesOf(before.cdpUrl)).length;
+			// The pack's own tabs get 640 x 480 here (and, where an agent drives them, whatever shaping that applies to them): the person's page is none of those.
+			// This is also the test that must keep passing when #155's agent shaping is merged: it applies to the pack's own tabs, never to an adopted page (see the PR body of #164).
 			const driver = await createEngineDriver("chrome-relay", { profileDirectory: join(tmpdir(), "unused-by-attach"), viewport: { width: 640, height: 480 }, attach: established.attach, onClosed: () => undefined });
 			drivers.push(driver);
 
 			expect((await pagesOf(before.cdpUrl)).length).toBe(pageCount);
 			const state = await driver.state();
 			expect(state.tabs).toHaveLength(1);
-			// 640 wide is what the pack gives its OWN tabs; the person's page is not made that size.
-			const after = await puppeteer.connect({ browserURL: before.cdpUrl, defaultViewport: null });
-			const widthAfter = Number(await (await after.pages())[0]!.evaluate("window.innerWidth"));
-			await after.disconnect();
-			expect(widthAfter).toBe(widthBefore);
-			expect(widthAfter).not.toBe(640);
+			expect(await read()).toEqual(metricsBefore);
+			expect(metricsBefore.slice(0, 2)).not.toEqual([640, 480]);
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);
