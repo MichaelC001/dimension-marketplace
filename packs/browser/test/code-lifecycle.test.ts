@@ -8,7 +8,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { CodeBrowserPort, HostToWorker, RunError, TabRef, WorkerToHost } from "../src/code/contracts";
 import { CodeHost, type CodeHostOptions } from "../src/code/host/code-host";
-import type { SpawnWorker, WorkerHandle } from "../src/code/host/transport";
+import type { SpawnWorker, WorkerHandle, WorkerMemory } from "../src/code/host/transport";
 import { BrowserRuntimeError } from "../src/store";
 import { waitUntil } from "./fixture";
 
@@ -20,10 +20,15 @@ type Behavior = (worker: FakeWorker, message: HostToWorker) => void;
 class FakeWorker {
   readonly sent: HostToWorker[] = [];
   exited = false;
+  /** A worker inside a native call: `terminate` cannot end it, and it answers `stuck` after the limit until the test lets the call return. */
+  stuck = false;
+  /** What the worker says it holds (undefined: it does not answer). */
+  memory: WorkerMemory | undefined = { mb: 1, own: true };
+  readonly terminateLimits: number[] = [];
   readonly #listeners = new Set<(message: WorkerToHost) => void>();
   readonly #exits: Array<(reason: string) => void> = [];
+  #reason = "";
   readonly handle: WorkerHandle;
-
   constructor(behavior: Behavior) {
     this.handle = {
       transport: {
@@ -37,8 +42,19 @@ class FakeWorker {
         },
         close: () => this.die("closed"),
       },
-      terminate: async () => this.die("terminated"),
-      onExit: handler => void this.#exits.push(handler),
+      terminate: async limitMs => {
+        this.terminateLimits.push(limitMs);
+        if (!this.stuck) {
+          this.die("terminated");
+          return "exited";
+        }
+        const delay = Promise.withResolvers<void>();
+        setTimeout(delay.resolve, limitMs); // the real wait `terminate` makes
+        await delay.promise;
+        return this.exited ? "exited" : "stuck";
+      },
+      onExit: handler => (this.exited ? queueMicrotask(() => handler(this.#reason)) : void this.#exits.push(handler)),
+      memory: async () => (this.exited ? undefined : this.memory),
     };
   }
 
@@ -49,6 +65,7 @@ class FakeWorker {
   die(reason: string): void {
     if (this.exited) return;
     this.exited = true;
+    this.#reason = reason;
     for (const handler of this.#exits) handler(reason);
   }
 
@@ -412,6 +429,64 @@ describe("the worker's life", () => {
     const init = workers[1]!.of("init")[0]!;
     expect(init.tabs?.map(tab => [tab.name, tab.handle.browserId, tab.handle.wsEndpoint, tab.handle.tabId])).toEqual([["main", "b1", "ws://fake/b1", "t1"]]);
     expect(workers[1]!.sent.map(message => message.t).slice(0, 2)).toEqual(["init", "run"]);
+  });
+});
+
+const STUCK_TIMING = { freezeIdleMs: 0, workerIdleMs: 60_000, startupTimeoutMs: 1_000, graceMs: 40, terminateMs: 20, closeMs: 60, finishedTtlMs: 60_000 };
+
+/** A worker that is inside a native call from the moment it starts: it never answers `close`, and `terminate` cannot end it. */
+const stuckBehavior: Behavior = (worker, message) => {
+  if (message.t === "init") {
+    worker.stuck = true;
+    queueMicrotask(() => worker.emit({ t: "ready" }));
+  }
+};
+
+describe("a worker that nothing can end", () => {
+  test("it does not hold the host's shutdown: dispose returns after the polite wait and the terminate limit, the thread left to end by itself", async () => {
+    const { host, workers } = rig({ timing: STUCK_TIMING }, stuckBehavior);
+    await start(host);
+    const began = performance.now();
+    await host.dispose();
+    const took = performance.now() - began;
+    // closeMs 60 + terminateMs 20: the shutdown waited for neither the call nor the thread.
+    expect(took).toBeLessThan(600);
+    expect(workers[0]!.exited).toBe(false);
+    expect(workers[0]!.terminateLimits).toEqual([20]);
+  });
+
+  test("twenty hung cells in a row never leave more than two stuck threads alive; the refusal names the cells; when one returns, cells run again", async () => {
+    const { host, workers } = rig({ timing: STUCK_TIMING }, stuckBehavior);
+    let mostAlive = 0;
+    const refusals: string[] = [];
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const started = await host.run("s1", { code: `execSync("blocking-${attempt}")`, timeoutMs: 30, waitMs: 2_000, signal: NEVER }).catch((error: Error) => error);
+      if (started instanceof Error) refusals.push(started.message);
+      else if (started.state !== "done" || !("error" in started.result) || started.result.error.budget !== true) throw new Error("a hung cell ends at its budget");
+      mostAlive = Math.max(mostAlive, workers.filter(worker => !worker.exited).length);
+    }
+    expect(mostAlive).toBe(2);
+    expect(workers).toHaveLength(2);
+    expect(refusals).toHaveLength(18);
+    expect(refusals[0]).toContain("stuck: 2 earlier code workers are still alive inside a call that cannot be interrupted");
+    expect(refusals[0]).toContain('execSync(\\"blocking-0\\")');
+    expect(refusals[0]).toContain('execSync(\\"blocking-1\\")');
+    // One call returns: its thread exits, and the next cell has room for a worker again.
+    workers[0]!.die("the call returned");
+    const next = await host.run("s1", { code: "x", timeoutMs: 5_000, waitMs: 20, signal: NEVER });
+    expect(next.state).toBe("running");
+    expect(workers).toHaveLength(3);
+  }, 20_000);
+
+  test("workers that end normally are never counted against the cap, however many cells recycle them", async () => {
+    const { host, workers } = rig({ timing: STUCK_TIMING });
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      const runId = await start(host);
+      workers.at(-1)!.emit({ t: "result", runId, ok: false, error: { name: "ToolError", message: "stuck tab", isAbort: false, recoverTab: true } });
+      await host.resume("s1", runId, 1_000, NEVER);
+    }
+    expect(workers).toHaveLength(6);
+    expect(workers.every(worker => worker.exited)).toBe(true);
   });
 });
 

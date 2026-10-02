@@ -7,6 +7,7 @@ import { defaultRootDir } from "../../store.js";
 import type { BridgeRequest, BrowserKind, CodeBrowserPort, CodeHostPort, RunStarted } from "../contracts.js";
 import { CODE_IDLE_MS, RuntimeCodeBrowsers } from "./runtime-port.js";
 import { CodeSession, DEFAULT_TIMING, type CodeTiming, sessionFolder, unknownRunMessage } from "./session.js";
+import { TerminatingWorkers } from "./terminating.js";
 import { defaultWorkerEntry, type SpawnWorker, threadWorkerSpawner } from "./transport.js";
 
 /** OMP's default relay endpoint (browser/relay/kind.ts:10). */
@@ -57,6 +58,8 @@ export class CodeHost implements CodeHostPort {
   readonly #spawn: SpawnWorker;
   readonly #timing: CodeTiming;
   readonly #sessions = new Map<string, CodeSession>();
+  /** Shared by every session: workers that were ended but are stuck in a native call count against one cap. */
+  readonly #terminating = new TerminatingWorkers();
   readonly #unsubscribe: Array<() => void>;
   #disposed = false;
 
@@ -88,6 +91,7 @@ export class CodeHost implements CodeHostPort {
         resolveKind: resolve,
         ...(screenshotDir === undefined ? {} : { screenshotDir }),
         ...(artifactsRoot === undefined ? {} : { outputDir: sessionFolder(artifactsRoot, id) }),
+        terminating: this.#terminating,
         timing: this.#timing,
         onEmpty: () => {
           if (this.#sessions.get(id) === created) this.#sessions.delete(id);

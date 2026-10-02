@@ -637,6 +637,17 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		if (errors.length > 0) fail("dispose_incomplete", `some browsers did not shut down cleanly: ${errors.join("; ")}`);
 	}
 
+	/**
+	 * The last resort of a server that is being ended hard (stdio.ts, when `dispose` has not finished in time): the process tree of every throwaway browser is killed at once, with no polite close, and the
+	 * call returns when they are gone or `limitMs` has passed. A saved profile's browser is left alone: its lock holds until its own close is confirmed, and a hard kill could cut a write to logins that matter.
+	 * A driver that is already closing is safe to kill (its `kill` is made for a `close` that hung).
+	 */
+	async killThrowaways(limitMs: number): Promise<void> {
+		const drivers = [...this.byId.values()].filter((entry) => entry.profile === null).map((entry) => entry.driver);
+		for (const orphan of this.stranded) drivers.push(orphan.driver);
+		await Promise.allSettled(drivers.map((driver) => withTimeout(driver.kill(), limitMs, "killing a browser")));
+	}
+
 	/** Drop in-memory state and make the capability dead. Does NOT free the lock. */
 	private detach(entry: Entry): void {
 		settleOnClose(entry);

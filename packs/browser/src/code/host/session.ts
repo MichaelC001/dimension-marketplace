@@ -10,6 +10,7 @@ import type { BridgeRequest, BridgeResponse, BrowserKind, CodeBrowserPort, CodeT
 import { ToolAbortError, ToolError } from "../errors.js";
 import { CODE_VIEWPORT, codedMessage, describeBrowser, describeKind, sameBrowserKind } from "./runtime-port.js";
 import type { SpawnWorker, WorkerHandle } from "./transport.js";
+import { cellLabel, type TerminatingWorkers } from "./terminating.js";
 
 const DEFAULT_TAB_NAME = "main";
 /** What a cell holds in memory of its own output for a call that answers `running`; the worker bounds and coalesces what it posts, so this is only a ceiling. */
@@ -27,11 +28,15 @@ export interface CodeTiming {
   startupTimeoutMs: number;
   /** OMP's GRACE_MS (tab-supervisor.ts:198): how long a cancelled cell has to answer before its worker is terminated, and what a synchronous loop gets past its budget. */
   graceMs: number;
+  /** How long `terminate` is waited for. A thread inside a synchronous native call (an `execSync`) cannot be interrupted and answers only when the call returns; past this it is counted as stuck and left to end by itself. */
+  terminateMs: number;
+  /** How long a worker that was asked to `close` gets to leave on its own (its realm disconnects from every browser) before it is terminated. */
+  closeMs: number;
   /** A finished run stays readable by `resume` this long. */
   finishedTtlMs: number;
 }
 
-export const DEFAULT_TIMING: CodeTiming = { freezeIdleMs: 20_000, workerIdleMs: 600_000, startupTimeoutMs: 10_000, graceMs: 750, finishedTtlMs: 600_000 };
+export const DEFAULT_TIMING: CodeTiming = { freezeIdleMs: 20_000, workerIdleMs: 600_000, startupTimeoutMs: 10_000, graceMs: 750, terminateMs: 1_000, closeMs: 1_000, finishedTtlMs: 600_000 };
 
 export interface SessionDeps {
   session: string;
@@ -44,6 +49,8 @@ export interface SessionDeps {
   screenshotDir?: string;
   /** Where a cell's over-cap output may be kept; this session's own folder. */
   outputDir?: string;
+  /** The workers this host ended that are still alive, across all sessions: the cap on stuck threads is theirs. */
+  terminating: TerminatingWorkers;
   timing: CodeTiming;
   /** The session holds nothing any more (no worker, no browser, nothing readable): the host forgets it. */
   onEmpty(): void;
@@ -65,7 +72,7 @@ class Run {
   override: RunError | undefined;
   hung = false;
   worker: LiveWorker | undefined;
-  constructor(readonly timeoutMs: number, readonly onProgress: ((chunk: string) => void) | undefined) {
+  constructor(readonly code: string, readonly timeoutMs: number, readonly onProgress: ((chunk: string) => void) | undefined) {
     this.done.promise.catch(() => undefined);
   }
 }
@@ -76,6 +83,8 @@ interface LiveWorker {
   /** Resolves with why the thread exited. */
   stopped: Promise<string>;
   dead: boolean;
+  /** The cell it ran last, in one short line: what is quoted if it ends up stuck. */
+  label: string;
 }
 
 interface BrowserRecord { browserId: string; wsEndpoint: string; kind: BrowserKind; createdByCode: boolean }
@@ -90,6 +99,11 @@ export function unknownRunMessage(runId: string, ttlMs: number): string {
 
 function busyMessage(runId: string): string {
   return `busy: a cell is still running in this session (${runId}); wait for it with browser_run({ "resume": "${runId}" }) and start no new cell meanwhile.`;
+}
+
+/** A new cell is refused while this many workers that were ended are still inside a call that cannot be interrupted. */
+function stuckMessage(labels: readonly string[]): string {
+  return `stuck: ${labels.length} earlier code worker${labels.length === 1 ? " is" : "s are"} still alive inside a call that cannot be interrupted (${labels.map(label => JSON.stringify(label)).join(", ")}). They end when that call returns. Start no new cell until then, and keep blocking calls (execSync, spawnSync, a read from a pipe that never closes) out of cells.`;
 }
 
 /** The error a cell gets for a worker that could not answer a budget it had run out of: it was stuck, so it was ended. */
@@ -166,7 +180,7 @@ export class CodeSession {
     this.#assertOpen();
     if (o.signal.aborted) throw new ToolAbortError();
     if (this.#active !== undefined) throw new Error(busyMessage(this.#active.id));
-    const run = new Run(o.timeoutMs, o.onProgress);
+    const run = new Run(o.code, o.timeoutMs, o.onProgress);
     // Reserved before the first await: a second call arriving while the worker starts is `busy`, not a second cell.
     this.#active = run;
     clearTimeout(this.#idleTimer);
@@ -176,6 +190,7 @@ export class CodeSession {
       await this.#thaw();
       this.#holdBrowsers(run);
       if (o.signal.aborted) throw new ToolAbortError();
+      live.label = cellLabel(o.code);
       run.worker = live;
       run.hangTimer = setTimeout(() => this.#hung(run), o.timeoutMs + this.#d.timing.graceMs);
       live.handle.transport.send({ t: "run", runId: run.id, code: o.code, timeoutMs: o.timeoutMs });
@@ -273,6 +288,9 @@ export class CodeSession {
       await current.ready;
       return current;
     }
+    const { terminating, timing } = this.#d;
+    // A worker that is ending normally exits within the terminate limit (the grace on top is for its exit event); one that does not is inside a native call, and each of those is a thread and maybe a process that nothing can reclaim.
+    if (!(await terminating.hasRoom(timing.terminateMs + timing.graceMs))) throw new Error(stuckMessage(terminating.labels));
     const live = this.#spawn();
     this.#worker = live;
     await live.ready;
@@ -285,7 +303,7 @@ export class CodeSession {
     const ready = Promise.withResolvers<void>();
     ready.promise.catch(() => undefined);
     const stopped = Promise.withResolvers<string>();
-    const live: LiveWorker = { handle, ready: ready.promise, stopped: stopped.promise, dead: false };
+    const live: LiveWorker = { handle, ready: ready.promise, stopped: stopped.promise, dead: false, label: "" };
     const startup = setTimeout(() => {
       ready.reject(new Error("Timed out initializing browser tab worker"));
       this.#recycle(live, false);
@@ -321,7 +339,13 @@ export class CodeSession {
     if (this.#worker === live) this.#worker = undefined;
     live.dead = true;
     if (note) this.#resetNote = true;
-    void live.handle.terminate().catch(() => undefined);
+    void this.#end(live);
+  }
+
+  /** Asks the thread to end and counts it until it has. It never waits longer than `terminateMs`: a thread inside a native call answers only when the call returns. */
+  async #end(live: LiveWorker): Promise<void> {
+    this.#d.terminating.add(live.handle, live.label);
+    await live.handle.terminate(this.#d.timing.terminateMs).catch(() => undefined);
   }
 
   #onMessage(live: LiveWorker, message: WorkerToHost, ready: PromiseWithResolvers<void>): void {
@@ -739,10 +763,17 @@ export class CodeSession {
     this.#worker = undefined;
     if (!live.dead) {
       live.handle.transport.send({ t: "close" });
-      await Promise.race([live.stopped, new Promise<void>(resolve => setTimeout(resolve, 2_000).unref())]);
+      // Not unref'd: a shutdown is waiting on this, and a loop with nothing else to hold it must still reach the end of the wait.
+      const patience = Promise.withResolvers<void>();
+      const timer = setTimeout(patience.resolve, this.#d.timing.closeMs);
+      try {
+        await Promise.race([live.stopped, patience.promise]);
+      } finally {
+        clearTimeout(timer);
+      }
     }
     live.dead = true;
-    await live.handle.terminate().catch(() => undefined);
+    await this.#end(live);
   }
 
   /** Server shutdown: the running cell is cancelled, every hold is let go, the worker ends. The runtime closes the browsers. */

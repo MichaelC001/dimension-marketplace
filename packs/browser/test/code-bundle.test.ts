@@ -6,7 +6,7 @@
  * The two bundles are built into a temp folder exactly as scripts/build.mjs builds them, `node` runs the server, and a plain JSON-RPC client speaks MCP to it over stdio. Real Chrome.
  * The numbers the PR reports (cold and warm open, 20 `tab.url()`, `browser_state` while a cell spins) are measured here and printed to stderr.
  */
-import { cpSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -220,5 +220,32 @@ describeBundle("the shipped server, under Node", () => {
     expect(isAlive(server.pid)).toBe(true);
     const next = await server.call("browser_run", { code: "40 + 2" });
     expect(text(next)).toBe("42");
+  }, BROWSER_TEST_TIMEOUT_MS);
+
+  test("a cell stuck in a 45 s native call does not keep the server or its Chrome alive: the host closes stdin and both are gone within 10 s", async () => {
+    const server = await launch();
+    const pidFile = join(server.root, "sleeper.pid");
+    // The child process says its own pid first, so the test can look for it by pid afterwards; then it sleeps 45 s inside the cell's execSync, which nothing can interrupt.
+    const sleeper = `"${NODE}" -e "require('fs').writeFileSync(process.argv[1], String(process.pid)); setTimeout(() => {}, 45000)" "${pidFile}"`;
+    const code = `await browser.open({ name: "main", url: ${JSON.stringify(pages.url("/other"))} }); const { execSync } = await import("node:child_process"); execSync(${JSON.stringify(sleeper)}); 1`;
+    // The call never answers (the server is gone before the 45 s are up); the test is not waiting for it.
+    void server.call("browser_run", { code, timeout: 120 }).catch(() => undefined);
+    await waitUntil("the cell is inside its native call", () => existsSync(pidFile), present => present, 40_000);
+    const chromePids = [...(await chromePidsByThrowaway(server.root)).values()].flatMap(chrome => chrome.all);
+    const sleeperPid = Number(readFileSync(pidFile, "utf8"));
+    expect(chromePids.length).toBeGreaterThan(0);
+    expect(isAlive(sleeperPid)).toBe(true);
+    const began = performance.now();
+    await server.end();
+    const tookMs = performance.now() - began;
+    console.error(`[code-bundle] stdin closed with a cell inside a 45 s native call: the server exited after ${Math.round(tookMs)} ms`);
+    // By pid, from the operating system: neither the pack's bookkeeping nor an exit code says a Chrome is gone.
+    expect(isAlive(server.pid)).toBe(false);
+    const left = await waitUntil("every Chrome of the session gone, by pid", () => chromePids.filter(isAlive), alive => alive.length === 0, Math.max(1_000, 10_000 - tookMs));
+    expect(left).toEqual([]);
+    expect(tookMs).toBeLessThan(10_000);
+    // Windows has no process group: the server ends the trees below it itself, so the 45 s child does not outlive it either.
+    if (process.platform === "win32") expect(isAlive(sleeperPid)).toBe(false);
+    else process.kill(sleeperPid, "SIGKILL");
   }, BROWSER_TEST_TIMEOUT_MS);
 });
