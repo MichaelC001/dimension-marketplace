@@ -14,7 +14,7 @@ export interface ShutdownDeps {
   stop(): Promise<void>;
   /** Kills every throwaway browser's process tree now, and returns when they are gone or the limit has passed. */
   killBrowsers(limitMs: number): Promise<void>;
-  /** Whether a cell is inside a call, or a worker that was ended is still stuck in one: processes it started may outlive the server, and the stop may wait on its thread. */
+  /** Whether a cell is inside a call, a worker that was ended is still stuck in one, or any cell has run: processes a cell started may outlive the server (a detached one always does), and the stop may wait on its thread. */
   childrenAtRisk(): boolean;
   /** Ends the processes cells started below this server (Windows; see reap.ts). Never rejects. */
   reapChildren(): Promise<void>;
@@ -53,7 +53,7 @@ async function within(ms: number, work: Promise<unknown>): Promise<void> {
 export function createShutdown(deps: ShutdownDeps, timing: ShutdownTiming = SHUTDOWN_TIMING): () => Promise<void> {
   let running: Promise<void> | undefined;
   return () => (running ??= (async () => {
-    // One reap however many paths want it; started at once when a cell is in a call (before the stop is even asked, so the two overlap), else only if the stop turns out to need it.
+    // Sweep alongside the stop whenever a cell has run: even a returned cell may have left a detached child.
     let reaping: Promise<void> | undefined;
     const reap = (): Promise<void> => (reaping ??= deps.reapChildren().catch(() => undefined));
     if (deps.childrenAtRisk()) void reap();
@@ -81,6 +81,7 @@ export function createShutdown(deps: ShutdownDeps, timing: ShutdownTiming = SHUT
       deps.killSelf();
       return;
     }
+    if (reaping !== undefined) await within(timing.reapMs, reaping);
     deps.exit(failed ? 1 : 0);
   })());
 }

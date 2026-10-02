@@ -250,7 +250,7 @@ export interface BrowserServer extends McpServer {
    * A saved profile's browser is left to its own close (a hard kill could cut a write to its logins). A runtime that is not the pack's has no browsers to kill.
    */
   killBrowsers(limitMs: number): Promise<void>;
-  /** Whether a stop now may leave a cell's child processes running or wait on a thread that cannot be interrupted (a cell is in a call, or a worker that was ended still is). The shutdown starts `reapChildren` with its stop when so. */
+  /** Whether a stop now may leave a cell's child processes running or wait on a thread that cannot be interrupted: a cell is in a call, a worker that was ended still is, or any cell has run (a detached child outlives its cell and the server). The shutdown starts `reapChildren` with its stop when so. */
   childrenAtRisk(): boolean;
   /** Ends the processes cells started below this server and nothing else it owns (Windows; see reap.ts). Never rejects. */
   reapChildren(): Promise<void>;
@@ -657,7 +657,7 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     killBrowsers: async (limitMs: number): Promise<void> => {
       if (runtime instanceof BrowserRuntime) await runtime.killThrowaways(limitMs);
     },
-    childrenAtRisk: (): boolean => ownHost?.holdsProcesses() ?? false,
+    childrenAtRisk: (): boolean => ownHost !== undefined && (ownHost.holdsProcesses() || ownHost.hasRunCells()),
     reapChildren: async (): Promise<void> => void (await reapChildren()),
   });
 }

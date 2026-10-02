@@ -9,18 +9,19 @@ standard MCP and MCP Apps. No host internals, no browser fork.
 
 ## What it does
 
-- **One shared browser.** The View and the agent work on the same browser, named
-  by one opaque `browserId`. There is no listing; the model of a session can read
-  the one browser the human opened in it (`browser_state` with no `browserId`,
-  answered from the session the host stamped on the call, never from an argument),
-  and nothing in the View is sent to the model unless the human annotates.
-- **Headless by default, the View on demand.** `browser_open` opens a headless
-  browser: no window, no pane, no live screencast, so an agent testing a localhost
-  app does not put a browser on your screen. `browser_view` shows you a browser
-  the agent holds, or opens one you can watch.
-- **Few calls, few tokens.** `browser_act` takes 1–25 steps and answers once
-  ([One call for a job](#one-call-for-a-job)); a model is sent one compact text per
-  call, never the state around it; a screenshot is a webp of at most 1024 px.
+- **One shared browser, two tool styles.** The default `code` mode offers
+  `browser_run` in code/build spaces and the step tools (`browser_open`,
+  `browser_state`, `browser_snapshot`, `browser_act`, etc.) in chat/labor/watch/
+  traction spaces. `DIMENSION_BROWSER_MODEL_TOOLS=steps` offers step tools only;
+  `both` offers both in code/build while keeping step tools in other spaces.
+  The View and the agent share the browser in their session, and nothing in
+  the View is sent to the model unless the human annotates.
+- **Headless by default, the View on demand.** A browser opened without a
+  visible-app request starts headless: no window, pane or live screencast.
+  `browser_view` lets you watch one.
+- **Compact step calls.** `browser_act` takes 1–25 steps and answers once
+  ([One call for a job](#one-call-for-a-job)); its screenshot is a webp of at
+  most 1024 px. Code cells use `browser_run` instead.
 - **Throwaway by default, named profiles to keep logins.** A browser opened
   without a profile keeps nothing and is deleted when it closes. A named profile
   persists logins across restarts, stays isolated, and is held by one caller at
@@ -68,6 +69,35 @@ standard MCP and MCP Apps. No host internals, no browser fork.
   calls are consent-gated by the host. When the host refuses one (denied or
   expired), the live view pauses with a **Resume** button instead of retrying
   and raising a fresh prompt every few seconds.
+
+### Code cells: scope and limits
+
+`browser_run` uses a worker thread in the server process with full Node access,
+not an operating-system sandbox. Its `browser` API confines ordinary calls to
+the caller's session, but a cell can read local files (including the credential
+store), make network requests and discover another session's local Chrome
+debugging endpoint; a deliberately hostile cell can cross that API boundary.
+Use a throwaway browser for code. Saved profiles and explicit app/relay/CDP
+attachment have their own refusal/consent paths, not a security boundary
+against arbitrary Node code.
+
+At startup the pack removes its task keys (`TYPESAFE_API_KEY`,
+`TEXT_MODEL_API_KEY`) and matching foreign `DIMENSION_*` secret variables from
+the process environment; the task process receives the keys it needs
+explicitly. This prevents accidental disclosure via `process.env`, Windows
+`process.report` and inherited child environments, not disclosure through
+files, network or Linux's startup environment (`/proc/self/environ`, not
+verified here). Do not run untrusted code alongside host secrets.
+
+The worker checks common direct allocations before they happen and a
+100 ms watchdog polls **every live worker**, including one whose cell
+returned. The per-worker and all-workers memory thresholds are best-effort,
+not process commit ceilings: Node internals, native allocations,
+`WebAssembly.Memory`, allocations from captured originals and bursts between
+polls can exceed them. On Windows shutdown sweeps children of the server
+after any code cell, including detached children left by a returned cell,
+while excluding registered browser/app processes and processes predating
+the server PID; a failed or timed-out sweep cannot promise reclamation.
 
 ## What we maintain, and what we do not
 
