@@ -7,6 +7,8 @@ const server = await createBrowserServer();
 const shutdown = createShutdown({
   stop: () => server.close(),
   killBrowsers: limitMs => server.killBrowsers(limitMs),
+  childrenAtRisk: () => server.childrenAtRisk(),
+  reapChildren: () => server.reapChildren(),
   unexitedThreads: unexitedWorkerThreads,
   exit: code => process.exit(code),
   killSelf: killThisProcess,

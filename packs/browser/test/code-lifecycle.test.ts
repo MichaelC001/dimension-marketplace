@@ -478,16 +478,39 @@ const stuckBehavior: Behavior = (worker, message) => {
 };
 
 describe("a worker that nothing can end", () => {
-  test("it does not hold the host's shutdown: dispose returns after the polite wait and the terminate limit, the thread left to end by itself", async () => {
-    const { host, workers } = rig({ timing: STUCK_TIMING }, stuckBehavior);
+  test("it does not hold the host's shutdown: a cell that is running at the stop is not asked to leave first - its worker is terminated at once, and dispose returns after the terminate limit alone, the thread left to end by itself", async () => {
+    // A close wait of 5 s that must not be spent: the thread is inside the cell's call and will not answer.
+    const { host, workers } = rig({ timing: { ...STUCK_TIMING, closeMs: 5_000 } }, stuckBehavior);
     await start(host);
     const began = performance.now();
     await host.dispose();
     const took = performance.now() - began;
-    // closeMs 60 + terminateMs 20: the shutdown waited for neither the call nor the thread.
-    expect(took).toBeLessThan(600);
+    expect(took).toBeLessThan(1_000);
+    expect(workers[0]!.of("close")).toHaveLength(0);
     expect(workers[0]!.exited).toBe(false);
     expect(workers[0]!.terminateLimits).toEqual([20]);
+  });
+
+  test("a worker with no cell running at the stop is still asked to leave on its own first (its realm disconnects from its browsers), and is terminated only if it does not", async () => {
+    const { host, workers } = rig({ timing: STUCK_TIMING }, stuckBehavior);
+    const runId = await start(host);
+    workers[0]!.emit({ t: "result", runId, ...OK });
+    await host.resume("s1", runId, 1_000, NEVER);
+    await host.dispose();
+    expect(workers[0]!.of("close")).toHaveLength(1);
+    expect(workers[0]!.terminateLimits).toEqual([20]);
+  });
+
+  test("the host says whether processes may be at risk at a stop: a cell is running, or a worker that was ended is still stuck in a call", async () => {
+    const { host, workers } = rig({ timing: STUCK_TIMING }, stuckBehavior);
+    expect(host.holdsProcesses()).toBe(false);
+    const running = host.run("s1", { code: "execSync('dev-server')", timeoutMs: 30, waitMs: 2_000, signal: NEVER });
+    await waitUntil("the cell is running", () => host.holdsProcesses(), held => held, 2_000);
+    // The cell outlives its budget, the worker is ended and is stuck: nothing runs any more, one thread is still alive.
+    expect((await running).state).toBe("done");
+    expect(host.holdsProcesses()).toBe(true);
+    workers[0]!.die("the call returned");
+    expect(host.holdsProcesses()).toBe(false);
   });
 
   test("twenty hung cells in a row never leave more than two stuck threads alive; the refusal names the cells; when one returns, cells run again", async () => {

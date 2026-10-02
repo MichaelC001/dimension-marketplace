@@ -67,6 +67,7 @@ import { watchPageLog } from "./page-log.js";
 import { type AdmittedInput, inputCall } from "../input.js";
 import { type HeadfulIdentity, identityPerBinary, type ResolvedBrowser, resolveBrowser, turnOffPasswordSaving, UA_HINTS, viewLaunchOptions, withTimeout } from "./launch.js";
 import type { TabRef } from "../code/contracts.js";
+import { ownedPids } from "../owned-pids.js";
 import type { DialogPolicy, EngineDriver, EngineOptions, EngineState, EvalOutcome, FieldRead, LiveFrame, NavigateTabOptions, OpenTabOptions, PageRead, PageReader, PasswordSource, PerformOutcome, ReadOutcome, ReadPolicy, WaitCondition } from "./types.js";
 
 const NAVIGATE_TIMEOUT_MS = 30_000;
@@ -110,6 +111,12 @@ const SETTLE_MS = 1_500;
 const SETTLE_POLL_MS = 20;
 /** The error a read gets when the document under it is replaced by a navigation. */
 const NAVIGATED_UNDER_READ = /Execution context was destroyed|Cannot find context|Inspected target navigated|Target closed|Session closed/i;
+
+/** A Chrome this server launched has its own end (a saved profile's is closed by its owner, a throwaway's is killed by `killThrowaways`): it is owned until it exits, and the shutdown sweep of what cells left behind never takes it (owned-pids.ts). */
+function own(browser: Browser): void {
+	const chrome = browser.process();
+	if (chrome?.pid !== undefined) chrome.once("exit", ownedPids.add(chrome.pid));
+}
 
 /** One process-wide cache: an origin's icon is the same whichever browser shows it. */
 const FAVICONS = new FaviconCache();
@@ -211,6 +218,7 @@ const binaryIdentities = identityPerBinary({
 	closeTimeoutMs: CLOSE_TIMEOUT_MS,
 	async launch(executablePath) {
 		const probe = await puppeteer.launch({ executablePath, headless: true, timeout: LAUNCH_TIMEOUT_MS, args: CHROMIUM_ARGS });
+		own(probe);
 		return {
 			async read() {
 				const page = (await probe.pages())[0] ?? (await probe.newPage());
@@ -297,6 +305,7 @@ async function launchChromium(options: EngineOptions, release: () => void): Prom
 	// confirmed release, and without this listener that confirmation is lost and
 	// the profile stays locked forever.
 	browser.process()?.once("exit", release);
+	own(browser);
 
 	try {
 		if (identity) {
@@ -363,6 +372,7 @@ export async function launchReader(options: { executablePath?: string }): Promis
 		args: CHROMIUM_ARGS,
 		ignoreDefaultArgs: ["--disable-popup-blocking"],
 	});
+	own(browser);
 	return new PuppeteerReader(browser);
 }
 

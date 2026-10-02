@@ -156,6 +156,16 @@ export class CodeHost implements CodeHostPort {
     return await held.resume(runId, waitMs, signal);
   }
 
+  /**
+   * Whether a stop now may leave processes behind or wait on a thread that will not answer: a cell is running (it may be inside a call to a child process), or a worker this host ended is still alive inside one.
+   * The server's shutdown starts its sweep of the cells' child processes with the stop when this is true.
+   */
+  holdsProcesses(): boolean {
+    if (this.#terminating.size > 0) return true;
+    for (const session of this.#sessions.values()) if (session.running) return true;
+    return false;
+  }
+
   async dispose(): Promise<void> {
     if (this.#disposed) return;
     this.#disposed = true;

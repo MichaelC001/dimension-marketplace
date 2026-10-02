@@ -6,7 +6,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import type { CodeHostPort } from "./code/contracts.js";
-import { createRuntimeCodeHost } from "./code/host/code-host.js";
+import { type CodeHost, createRuntimeCodeHost } from "./code/host/code-host.js";
 import { registerCodeTool } from "./code/tool.js";
 import { buildConnectionReport, type ConnectionReportParams, PACK_CONNECTION_REPORT_METHOD } from "./connection.js";
 import type { ActManyResult, BrowserEngine, BrowserOpener, BrowserRuntimePort, BrowserState, TaskRun, ToolCaller } from "./contracts.js";
@@ -15,6 +15,7 @@ import { MAX_DETAIL_BYTES } from "./annotation-file.js";
 import { type PublishPreset, loadPresets, resolvePreset, summarizePresets } from "./presets.js";
 import { MAX_LABEL_CHARS } from "./profile-meta.js";
 import { profilesForModel } from "./profile-list.js";
+import { reapChildren } from "./reap.js";
 import { BrowserRuntime } from "./runtime.js";
 import { defaultRootDir, fail } from "./store.js";
 import { LiveChannel } from "./stream.js";
@@ -243,6 +244,10 @@ export interface BrowserServer extends McpServer {
    * A saved profile's browser is left to its own close (a hard kill could cut a write to its logins). A runtime that is not the pack's has no browsers to kill.
    */
   killBrowsers(limitMs: number): Promise<void>;
+  /** Whether a stop now may leave a cell's child processes running or wait on a thread that cannot be interrupted (a cell is in a call, or a worker that was ended still is). The shutdown starts `reapChildren` with its stop when so. */
+  childrenAtRisk(): boolean;
+  /** Ends the processes cells started below this server and nothing else it owns (Windows; see reap.ts). Never rejects. */
+  reapChildren(): Promise<void>;
 }
 
 export async function createBrowserServer(options: BrowserServerOptions = {}): Promise<BrowserServer> {
@@ -260,10 +265,11 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
   // step tool and the View are unrelated to it, and a server that will not start takes them all down for one line of configuration. With no code host the model keeps the step tools (a registered `browser_run` that only
   // ever answers with the configuration error would cost the model its description and give it nothing, and in `code` mode it would also have hidden the step tools).
   let codeHost = options.codeHost;
+  let ownHost: CodeHost | undefined;
   let codeHostOff = false;
   if (codeHost === undefined && runtime instanceof BrowserRuntime) {
     try {
-      codeHost = createRuntimeCodeHost(runtime, { taskCredential: taskTools });
+      codeHost = ownHost = createRuntimeCodeHost(runtime, { taskCredential: taskTools });
     } catch (error) {
       codeHostOff = true;
       console.error(`browser_run is off: ${error instanceof Error ? error.message : String(error)}. The other browser tools and the View are not affected; correct the setting and restart the browser to turn it on.`);
@@ -597,5 +603,7 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     killBrowsers: async (limitMs: number): Promise<void> => {
       if (runtime instanceof BrowserRuntime) await runtime.killThrowaways(limitMs);
     },
+    childrenAtRisk: (): boolean => ownHost?.holdsProcesses() ?? false,
+    reapChildren: async (): Promise<void> => void (await reapChildren()),
   });
 }

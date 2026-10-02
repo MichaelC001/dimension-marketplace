@@ -215,6 +215,11 @@ export class CodeSession {
     this.#d = deps;
   }
 
+  /** A cell is running in this session now. */
+  get running(): boolean {
+    return this.#active !== undefined && this.#active.settled === undefined;
+  }
+
   ownsBrowser(browserId: string): boolean {
     return this.#browsers.has(browserId);
   }
@@ -880,12 +885,15 @@ export class CodeSession {
     if (this.#closed) throw new Error("the browser code host is shut down");
   }
 
-  /** The worker leaves politely when it can (its realm disconnects from every browser), and is terminated when it cannot. */
-  async #closeWorker(): Promise<void> {
+  /**
+   * The worker leaves politely when it can (its realm disconnects from every browser), and is terminated when it cannot. `urgent`: a cell was running when the stop came, so the thread is in the cell's code (maybe in a
+   * call that never returns) and will not answer a request to leave; waiting `closeMs` for it only spends the host's window (the SDK's client kills the server 2 s after closing stdin), so it is terminated at once.
+   */
+  async #closeWorker(urgent = false): Promise<void> {
     const live = this.#worker;
     if (live === undefined) return;
     this.#worker = undefined;
-    if (!live.dead) {
+    if (!live.dead && !urgent) {
       live.handle.transport.send({ t: "close" });
       // Not unref'd: a shutdown is waiting on this, and a loop with nothing else to hold it must still reach the end of the wait.
       const patience = Promise.withResolvers<void>();
@@ -908,12 +916,17 @@ export class CodeSession {
     clearTimeout(this.#idleTimer);
     clearTimeout(this.#pruneTimer);
     const run = this.#active;
-    if (run !== undefined && run.settled === undefined) {
+    const midRun = run !== undefined && run.settled === undefined;
+    if (run !== undefined && midRun) {
       run.controller.abort(new ToolAbortError());
       this.#settle(run, { error: abortError() });
     }
-    await this.#sweeping;
-    await this.#closeWorker();
+    // A sweep of the freeze state may be mid-way through a browser call; the worker does not wait for it when a cell is running.
+    if (midRun) await Promise.all([this.#closeWorker(true), this.#sweeping]);
+    else {
+      await this.#sweeping;
+      await this.#closeWorker();
+    }
   }
 }
 
