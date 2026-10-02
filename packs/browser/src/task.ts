@@ -1,6 +1,6 @@
 /**
- * Runs an upstream agent loop (jev, browser-use) against a browser this pack
- * already holds, through the Python worker in `packs/browser/python`.
+ * Runs the jev agent loop against a browser this pack already holds, through
+ * the Python worker in `packs/browser/python`.
  *
  * The worker is a published-package consumer, nothing more: it constructs the
  * library's own `Agent`, points it at our Chrome's CDP endpoint and reports
@@ -11,7 +11,7 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
 import { join } from "node:path";
-import type { TaskAgent, TaskStatus, TaskUsage } from "./contracts.js";
+import type { TaskStatus, TaskUsage } from "./contracts.js";
 import { fail } from "./store.js";
 
 /** `packs/browser/python`, from both `src/task.ts` and the bundled `app/server.mjs`. */
@@ -20,13 +20,10 @@ const CANCEL_GRACE_MS = 15_000;
 /** After the worker exits, how long its stdout may take to drain before the result is settled without `close`. */
 const EXIT_DRAIN_MS = 2_000;
 const STDERR_KEEP = 4_096;
-/** An unused pre-spawned worker is let go after this long, returning its memory. */
-const SPARE_IDLE_MS = 10 * 60_000;
 
 export interface WorkerStep { n: number; action: string; url: string; elapsedMs: number; usage: TaskUsage }
 export interface WorkerResult { status: Exclude<TaskStatus, "running">; summary: string; steps: number; elapsedMs: number; usage: TaskUsage }
 export interface WorkerJob {
-  agent: TaskAgent;
   cdpUrl: string;
   task: string;
   maxSteps: number;
@@ -48,7 +45,7 @@ function interpreter(): string {
   if (!existsSync(venv)) {
     fail(
       "python_env_missing",
-      `The jev / browser-use task agents need their pinned Python environment. Run: cd "${PYTHON_DIR}" && uv sync --python 3.12 ` +
+      `The jev task agent needs its pinned Python environment. Run: cd "${PYTHON_DIR}" && uv sync --python 3.12 ` +
         "(or set DIM_BROWSER_PYTHON to an interpreter that has it).",
     );
   }
@@ -67,17 +64,19 @@ function usageOf(line: Record<string, unknown>): TaskUsage {
 
 const FINAL: Record<string, true> = { done: true, blocked: true, failed: true, cancelled: true };
 
-/** A worker process whose stderr is already being kept (a spare must not block on a full pipe). */
+/** The one backend the worker speaks for; `python/dim_browser_bridge/__main__.py` refuses any other. */
+const WORKER_AGENT = "jev";
+
+/** A worker process whose stderr is being kept. */
 interface Spawned {
   child: ChildProcessWithoutNullStreams;
   stderr(): string;
 }
 
-/** `spare`: the worker preloads browser-use while it waits (DIM_BROWSER_SPARE); a worker spawned for a job does not. */
-function spawnWorker(spare = false): Spawned {
+function spawnWorker(): Spawned {
   const child = spawn(interpreter(), ["-m", "dim_browser_bridge"], {
     cwd: PYTHON_DIR,
-    env: { ...process.env, PYTHONUNBUFFERED: "1", PYTHONIOENCODING: "utf-8", ...(spare ? { DIM_BROWSER_SPARE: "1" } : {}) },
+    env: { ...process.env, PYTHONUNBUFFERED: "1", PYTHONIOENCODING: "utf-8" },
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
   });
@@ -89,74 +88,14 @@ function spawnWorker(spare = false): Spawned {
   child.on("error", () => undefined);
   // A pipe error (the worker or a process it spawned dying mid-write) is an
   // 'error' event; unheard, Node throws it and takes the whole MCP server down.
-  // Attached at spawn so an idle spare is covered too, not only a running task.
   child.stdin.on("error", () => undefined);
   child.stdout.on("error", () => undefined);
   child.stderr.on("error", () => undefined);
   return { child, stderr: () => stderr };
 }
 
-/**
- * One pre-spawned worker, waiting on stdin with browser-use already imported
- * (~4 s of imports), so a browser-use task's clock starts at its first step;
- * a jev task still imports its harness per task (it reads its env at import
- * time) and saves only interpreter start-up. Kept only once tasks are in use:
- * the first task spawns the next spare, every later one takes it and spawns
- * its successor.
- */
-let spare: { worker: Spawned; env: string; idle: NodeJS.Timeout } | undefined;
-
-/** The spare is only good for the environment it was spawned in (interpreter, keys, PYTHONPATH). */
-const envKey = (): string => JSON.stringify(process.env);
-
-/** An idle spare must never keep the server process alive; a running task must. */
-function hold(worker: Spawned, held: boolean): void {
-  const { child } = worker;
-  for (const handle of [child, child.stdin, child.stdout, child.stderr] as Array<{ ref?: () => void; unref?: () => void }>) {
-    (held ? handle.ref : handle.unref)?.call(handle);
-  }
-}
-
-function takeSpare(): Spawned | undefined {
-  const taken = spare;
-  spare = undefined;
-  if (!taken) return undefined;
-  clearTimeout(taken.idle);
-  const { child } = taken.worker;
-  if (child.pid !== undefined && child.exitCode === null && child.signalCode === null && taken.env === envKey()) {
-    hold(taken.worker, true);
-    return taken.worker;
-  }
-  child.stdin.end();
-  return undefined;
-}
-
-function keepSpare(): void {
-  if (spare) return;
-  let worker: Spawned;
-  try {
-    worker = spawnWorker(true);
-  } catch {
-    return; // no interpreter: the next task reports it
-  }
-  const idle = setTimeout(() => {
-    if (spare?.worker === worker) spare = undefined;
-    worker.child.stdin.end();
-  }, SPARE_IDLE_MS);
-  idle.unref();
-  worker.child.once("exit", () => {
-    if (spare?.worker === worker) {
-      clearTimeout(spare.idle);
-      spare = undefined;
-    }
-  });
-  hold(worker, false);
-  spare = { worker, env: envKey(), idle };
-}
-
 export function startWorker(job: WorkerJob, onStep: (step: WorkerStep) => void): RunningWorker {
-  const { child, stderr } = takeSpare() ?? spawnWorker();
-  keepSpare();
+  const { child, stderr } = spawnWorker();
   let result: WorkerResult | undefined;
   const lines = createInterface({ input: child.stdout });
   lines.on("line", (text) => {
@@ -187,7 +126,7 @@ export function startWorker(job: WorkerJob, onStep: (step: WorkerStep) => void):
   // The worker's pipes already carry their 'error' listeners (spawnWorker); the
   // result comes from `close` below either way.
   lines.on("error", () => undefined);
-  child.stdin.write(`${JSON.stringify(job)}\n`);
+  child.stdin.write(`${JSON.stringify({ agent: WORKER_AGENT, ...job })}\n`);
 
   let killTimer: NodeJS.Timeout | undefined;
   const done = new Promise<WorkerResult>((resolve) => {

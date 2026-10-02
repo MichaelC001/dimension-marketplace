@@ -15,7 +15,7 @@ import { afterEach, expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { z } from "zod";
-import type { BrowserAction, BrowserOpenOptions, BrowserRuntimePort, BrowserState } from "../src/contracts";
+import type { BrowserAction, BrowserOpenOptions, BrowserRuntimePort, BrowserState, TaskRequest } from "../src/contracts";
 import { BROWSER_VIEW_URI, createBrowserServer } from "../src/server";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createRoot, teardown } from "./fixture";
@@ -36,11 +36,12 @@ interface Calls {
 	opened: BrowserOpenOptions[];
 	read: string[];
 	navigated: string[];
+	tasked: TaskRequest[];
 }
 
 /** Just enough runtime for the server to boot and answer open/view: every call recorded. */
 function recordingRuntime(calls: Calls): BrowserRuntimePort {
-	const runtime: Pick<BrowserRuntimePort, "open" | "state" | "liveState" | "watchFrames" | "act" | "connections" | "profileMeta" | "onConnectionsChanged" | "dispose"> = {
+	const runtime: Pick<BrowserRuntimePort, "open" | "state" | "liveState" | "watchFrames" | "act" | "startTask" | "connections" | "profileMeta" | "onConnectionsChanged" | "dispose"> = {
 		open: async (options) => {
 			calls.opened.push(options);
 			return stateOf("o".repeat(32));
@@ -55,6 +56,10 @@ function recordingRuntime(calls: Calls): BrowserRuntimePort {
 			calls.navigated.push(action.url ?? "");
 			return { status: "completed", state: stateOf(browserId, action.url) };
 		},
+		startTask: async (_browserId, request) => {
+			calls.tasked.push(request);
+			throw new Error("task recorded");
+		},
 		connections: async () => ({}),
 		profileMeta: async () => ({}),
 		onConnectionsChanged: () => () => {},
@@ -63,13 +68,23 @@ function recordingRuntime(calls: Calls): BrowserRuntimePort {
 	return runtime as BrowserRuntimePort;
 }
 
-async function connect(): Promise<{ client: Client; calls: Calls; server: McpServer }> {
+/** The jev tools are registered only where TYPESAFE_API_KEY is set when the server is created, so the key is set around that moment alone. */
+async function connect(jevKey?: string): Promise<{ client: Client; calls: Calls; server: McpServer }> {
 	const rootDir = await createRoot();
 	const viewDir = join(rootDir, "view");
 	await mkdir(viewDir, { recursive: true });
 	await writeFile(join(viewDir, "index.html"), "<!doctype html><title>view</title>");
-	const calls: Calls = { opened: [], read: [], navigated: [] };
-	const server = await createBrowserServer({ runtime: recordingRuntime(calls), viewDir, presets: [] });
+	const calls: Calls = { opened: [], read: [], navigated: [], tasked: [] };
+	const savedKey = process.env.TYPESAFE_API_KEY;
+	if (jevKey === undefined) delete process.env.TYPESAFE_API_KEY;
+	else process.env.TYPESAFE_API_KEY = jevKey;
+	let server: McpServer;
+	try {
+		server = await createBrowserServer({ runtime: recordingRuntime(calls), viewDir, presets: [] });
+	} finally {
+		if (savedKey === undefined) delete process.env.TYPESAFE_API_KEY;
+		else process.env.TYPESAFE_API_KEY = savedKey;
+	}
 	const client = new Client({ name: "view-mounting-test", version: "0.0.0" });
 	const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
 	await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
@@ -88,7 +103,7 @@ test("only browser_view and browser_publish mount the View: browser_open is head
 });
 
 test("publishing and task agents are offered to Traction alone; every browsing tool names no audience", async () => {
-	const { client } = await connect();
+	const { client } = await connect("jev-key");
 	const modelTools = (await client.listTools()).tools.filter((tool) => uiOf(tool).visibility === undefined);
 	const audienceOf = (tool: { _meta?: Record<string, unknown> }) => tool._meta?.["ai.insodimension/spaces"];
 
@@ -103,6 +118,33 @@ test("publishing and task agents are offered to Traction alone; every browsing t
 		"browser_task", "browser_task_cancel", "browser_task_wait",
 	]);
 	expect(traction.map(audienceOf)).toEqual(traction.map(() => ["traction"]));
+});
+
+test("without jev's key a session is offered no browser_task tool; with it, those three and nothing else are added", async () => {
+	const names = async (key?: string): Promise<string[]> => (await (await connect(key)).client.listTools()).tools.map((tool) => tool.name).sort();
+
+	const withKey = await names("jev-key");
+	for (const unset of [undefined, "", "   "]) {
+		const without = await names(unset);
+		expect({ key: unset, task: without.filter((name) => name.startsWith("browser_task")) }).toEqual({ key: unset, task: [] });
+		expect({ key: unset, rest: withKey.filter((name) => !without.includes(name)) }).toEqual({ key: unset, rest: ["browser_task", "browser_task_cancel", "browser_task_wait"] });
+		expect(without.filter((name) => !withKey.includes(name))).toEqual([]);
+	}
+});
+
+test("browser_task takes no agent: a call that passes one is refused by name and starts nothing, the same call without it starts the task", async () => {
+	const { client, calls } = await connect("jev-key");
+
+	for (const agent of ["jev", "gpt"]) {
+		const refused = await client.callTool({ name: "browser_task", arguments: { browserId: "b".repeat(32), agent, task: "fill the form" } });
+		expect(refused.isError).toBe(true);
+		expect(JSON.stringify(refused.content)).toContain("agent");
+	}
+	expect(calls.tasked).toEqual([]);
+
+	const started = await client.callTool({ name: "browser_task", arguments: { browserId: "b".repeat(32), task: "fill the form" } });
+	expect(JSON.stringify(started.content)).toContain("task recorded");
+	expect(calls.tasked).toEqual([{ task: "fill the form" }]);
 });
 
 test("browser_view with a browserId shows that browser and opens nothing; it never repoints a held browser", async () => {

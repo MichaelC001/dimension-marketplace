@@ -4,7 +4,7 @@
 // the shapes and engine identifiers come from the pack's own contracts module.
 import type { App } from "@modelcontextprotocol/ext-apps";
 import type { CallToolResult, ContentBlock } from "@modelcontextprotocol/sdk/types.js";
-import { BROWSER_APPS, BROWSER_ENGINES, DIALOG_TYPES, MAX_ELEMENT_ID_CHARS, MAX_ELEMENT_LABEL_CHARS, MAX_ELEMENT_TAG_CHARS, MAX_ELEMENTS_PER_REGION, PUBLISH_STATUSES, TASK_AGENTS } from "../../src/contracts";
+import { BROWSER_APPS, BROWSER_ENGINES, DIALOG_TYPES, MAX_ELEMENT_ID_CHARS, MAX_ELEMENT_LABEL_CHARS, MAX_ELEMENT_TAG_CHARS, MAX_ELEMENTS_PER_REGION, PUBLISH_STATUSES } from "../../src/contracts";
 import type {
 	BrowserAction,
 	BrowserAnnotationContext,
@@ -88,14 +88,12 @@ function readElement(value: unknown): PageElement[] {
 
 function readTask(tool: string, value: unknown): TaskRun {
 	if (!isRecord(value)) throw new BrowserToolError(tool, "result carried no task run");
-	const agent = TASK_AGENTS.find(candidate => candidate === readString(value, "agent"));
 	const status = TASK_STATUSES.find(candidate => candidate === readString(value, "status"));
-	if (!agent || !status) throw new BrowserToolError(tool, "task run carried an unknown agent or status");
+	if (!status) throw new BrowserToolError(tool, "task run carried an unknown status");
 	const usage = isRecord(value.usage) ? value.usage : {};
 	const steps = Array.isArray(value.steps) ? value.steps.filter(isRecord) : [];
 	return {
 		id: readString(value, "id") ?? "",
-		agent,
 		task: readString(value, "task") ?? "",
 		status,
 		summary: readString(value, "summary") ?? "",

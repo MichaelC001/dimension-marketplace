@@ -7,7 +7,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { buildConnectionReport, type ConnectionReportParams, PACK_CONNECTION_REPORT_METHOD } from "./connection.js";
 import type { ActManyResult, BrowserEngine, BrowserOpener, BrowserRuntimePort, BrowserState, TaskRun, ToolCaller } from "./contracts.js";
-import { BROWSER_ENGINES, CREDENTIAL_MODES, MAX_ANNOTATION_REGIONS, MAX_BATCH_STEPS, MAX_EVAL_EXPRESSION_CHARS, MAX_VIEWPORT, MAX_WAIT_MS, MIN_VIEWPORT, PUBLISH_MODES, TASK_AGENTS } from "./contracts.js";
+import { BROWSER_ENGINES, CREDENTIAL_MODES, MAX_ANNOTATION_REGIONS, MAX_BATCH_STEPS, MAX_EVAL_EXPRESSION_CHARS, MAX_VIEWPORT, MAX_WAIT_MS, MIN_VIEWPORT, PUBLISH_MODES } from "./contracts.js";
 import { MAX_DETAIL_BYTES } from "./annotation-file.js";
 import { type PublishPreset, loadPresets, resolvePreset, summarizePresets } from "./presets.js";
 import { MAX_LABEL_CHARS } from "./profile-meta.js";
@@ -349,31 +349,38 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
       active = false;
     }
   };
-  server.registerTool("browser_task", {
-    description: `Hand a whole task to a fast browser agent (jev: one model decision per step; or browser-use) working in this browser while the human watches. Put every fact it needs in task; it cannot ask you. For a password prefer credential {origin, mode: "signup" | "login"} (jev only): the browser fills that origin's password fields itself from this profile's saved password (signup mints and saves one; login needs one saved), so it never reaches the transcript or jev. Returns within waitSeconds (default and max ${WAIT_CAP_S}) with status, steps, time, model calls, tokens (and credential {origin, created}); while "running", call browser_task_wait. A failed task is a tool error naming the cause and next step; the browser stays open. jev needs TYPESAFE_API_KEY and TEXT_MODEL_API_KEY in the server's environment; without them sign up yourself with browser_act generatePassword: true. browser_act is refused while a task runs (task_running).`,
-    inputSchema: {
-      browserId: capability, agent: z.enum(TASK_AGENTS), task: z.string().min(1).max(8192), maxSteps: z.number().int().min(1).max(200).optional(),
-      credential: z.object({ origin: z.string().min(1).max(2048), mode: z.enum(CREDENTIAL_MODES) }).strict().optional(),
-      waitSeconds,
-    },
-    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
-    _meta: TRACTION_ONLY,
-  }, ({ browserId, agent, task, maxSteps, credential, waitSeconds }, extra) => taskResult(async () => {
-    await runtime.startTask(browserId, { agent, task, ...(maxSteps ? { maxSteps } : {}), ...(credential ? { credential } : {}) }, callerOf(extra));
-    return await follow(browserId, waitSeconds, extra);
-  }));
-  server.registerTool("browser_task_wait", {
-    description: `Follow the task in this browser: returns when it finishes or after waitSeconds (default and max ${WAIT_CAP_S}), with its status, recent steps, time, model calls and tokens.`,
-    inputSchema: { browserId: capability, waitSeconds },
-    annotations: READ_ONLY,
-    _meta: TRACTION_ONLY,
-  }, ({ browserId, waitSeconds }, extra) => taskResult(() => follow(browserId, waitSeconds, extra)));
-  server.registerTool("browser_task_cancel", {
-    description: "Stop the task running in this browser. Resolves once the agent has stopped.",
-    inputSchema: { browserId: capability },
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    _meta: TRACTION_ONLY,
-  }, ({ browserId }) => result(() => runtime.cancelTask(browserId)));
+  // jev, the one task agent, is optional (doc 77 §6): its tools exist only where its key is set, so a session without it neither sees nor pays for them.
+  // An absent tool carries no text of its own, so the reason goes to the server log. TEXT_MODEL_API_KEY is still checked when a task starts.
+  if (process.env.TYPESAFE_API_KEY?.trim()) {
+    server.registerTool("browser_task", {
+      description: `Hand a whole task to jev, a fast browser agent (one model decision per step), working in this browser while the human watches. Put every fact it needs in task; it cannot ask you. For a password prefer credential {origin, mode: "signup" | "login"}: the browser fills that origin's password fields itself from this profile's saved password (signup mints and saves one; login needs one saved), so it never reaches the transcript or jev. Returns within waitSeconds (default and max ${WAIT_CAP_S}) with status, steps, time, model calls, tokens (and credential {origin, created}); while "running", call browser_task_wait. A failed task is a tool error naming the cause and next step; the browser stays open. jev also needs TEXT_MODEL_API_KEY in the server's environment; without it sign up yourself with browser_act generatePassword: true. browser_act is refused while a task runs (task_running).`,
+      // Strict: a caller still passing the removed `agent` is told so, not run on a backend it did not ask for.
+      inputSchema: z.object({
+        browserId: capability, task: z.string().min(1).max(8192), maxSteps: z.number().int().min(1).max(200).optional(),
+        credential: z.object({ origin: z.string().min(1).max(2048), mode: z.enum(CREDENTIAL_MODES) }).strict().optional(),
+        waitSeconds,
+      }).strict(),
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+      _meta: TRACTION_ONLY,
+    }, ({ browserId, task, maxSteps, credential, waitSeconds }, extra) => taskResult(async () => {
+      await runtime.startTask(browserId, { task, ...(maxSteps ? { maxSteps } : {}), ...(credential ? { credential } : {}) }, callerOf(extra));
+      return await follow(browserId, waitSeconds, extra);
+    }));
+    server.registerTool("browser_task_wait", {
+      description: `Follow the task in this browser: returns when it finishes or after waitSeconds (default and max ${WAIT_CAP_S}), with its status, recent steps, time, model calls and tokens.`,
+      inputSchema: { browserId: capability, waitSeconds },
+      annotations: READ_ONLY,
+      _meta: TRACTION_ONLY,
+    }, ({ browserId, waitSeconds }, extra) => taskResult(() => follow(browserId, waitSeconds, extra)));
+    server.registerTool("browser_task_cancel", {
+      description: "Stop the task running in this browser. Resolves once the agent has stopped.",
+      inputSchema: { browserId: capability },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      _meta: TRACTION_ONLY,
+    }, ({ browserId }) => result(() => runtime.cancelTask(browserId)));
+  } else {
+    console.error("[browser] browser_task, browser_task_wait and browser_task_cancel are not offered: TYPESAFE_API_KEY is not set (jev, the optional task hand-off, needs it).");
+  }
   // Publishing: fill and park, then one confirm (the model's call or the View's
   // Post button) submits exactly once. browser_publish itself never submits.
   registerAppTool(server, "browser_publish", {
