@@ -125,6 +125,11 @@ export class RuntimeCodeBrowsers implements CodeBrowserPort {
     return { idleMs: this.#idleMs, persist: persist === true || this.#never, kind, ...(label === undefined ? {} : { label }) };
   }
 
+  /** Whether the entry is a browser the pack only attached to (connected, spawned, relay): its pages are the person's. */
+  #attachedEntry(entry: CodeSeamEntry): boolean {
+    return entry.code?.kind !== undefined && entry.code.kind.kind !== "headless";
+  }
+
   /** The throwaway Chromium a session already holds: one browser per session (doc 77 §7.4.3 rule 1). A saved profile's is never the cell's. */
   #reusable(session: string): CodeSeamEntry | undefined {
     const shown = this.#seam.viewOf(session);
@@ -141,7 +146,6 @@ export class RuntimeCodeBrowsers implements CodeBrowserPort {
     if (req.profile !== undefined) {
       throw new BrowserRuntimeError("code_needs_consent", `a saved profile (${JSON.stringify(req.profile)}) cannot be driven by code yet: it holds logins, and code runs with full Node. Open a throwaway browser instead; the person can sign in in the View.`);
     }
-    if (req.kind.kind === "cmux") return await this.#cmux.acquire(session, req.kind, signal);
     const key = `${session}\u0000${describeKind(req.kind)}`;
     let launch = this.#launching.get(key);
     const starter = launch === undefined;
@@ -155,9 +159,9 @@ export class RuntimeCodeBrowsers implements CodeBrowserPort {
         this.#launching.delete(key);
       };
       started.promise.then(settle, settle);
-      // A browser made for an open that nobody waits for any more (its deadline passed or the cell was cancelled) must not outlive it: no Chrome left behind (matrix C8).
+      // A browser made for an open that nobody waits for any more (its deadline passed or the cell was cancelled) must not outlive it: no Chrome, no application and no cmux connection left behind (matrix C8).
       started.promise.then(async made => {
-        if (made.created && started.waiting === 0) await this.#seam.close(made.browserId).catch(() => undefined);
+        if (made.created && started.waiting === 0) await this.#letGo(made.browserId);
       }, () => undefined);
     }
     launch.waiting += 1;
@@ -173,7 +177,19 @@ export class RuntimeCodeBrowsers implements CodeBrowserPort {
     }
   }
 
-  async #acquire(session: string, kind: Exclude<BrowserKind, { kind: "cmux" }>, req: Parameters<CodeBrowserPort["acquire"]>[1], signal: AbortSignal): Promise<AcquiredBrowser> {
+  /**
+   * A browser this port made that no open waits for any more: the runtime closes it, and an application the pack started for it goes too (nothing else holds that application: no entry, no idle clock, no retry, and it
+   * was started detached). `terminate` exists only for one this open started, so an application that was already running is only let go of.
+   */
+  async #letGo(browserId: string): Promise<void> {
+    if (this.#cmux.owns(browserId)) return await this.#cmux.release(browserId).catch(() => undefined);
+    const entry = this.#seam.peek(browserId);
+    if (entry?.code?.kind?.kind === "spawned") entry.code.kill = true;
+    await this.#seam.close(browserId).catch(() => undefined);
+  }
+
+  async #acquire(session: string, kind: BrowserKind, req: Parameters<CodeBrowserPort["acquire"]>[1], signal: AbortSignal): Promise<AcquiredBrowser> {
+    if (kind.kind === "cmux") return await this.#cmux.acquire(session, kind, signal);
     if (kind.kind !== "headless") return await this.#acquireAttached(session, kind, req, signal);
     const existing = this.#reusable(session);
     if (existing !== undefined) {
@@ -204,25 +220,37 @@ export class RuntimeCodeBrowsers implements CodeBrowserPort {
     const established = await this.#establish(kind, { signal });
     if (!("attach" in established)) throw new ToolError(`a ${kind.kind} browser did not resolve to a browser to attach to`);
     const attach: AttachTarget = established.attach;
-    const lifetime = this.#lifetime(req.persist, kind, attach.label);
-    const state = await this.#seam.open({ engine: "chrome-relay" }, { caller: "model", session }, lifetime, attach);
-    const entry = this.#seam.require(state.browserId);
-    const created = entry.code === lifetime;
-    if (!created) {
-      // The runtime holds one relay Chrome per chat: a second open found the first (the person's own View, or an earlier cell). It is the cell's too, when it is the endpoint the cell asked for.
-      if (entry.code === undefined) entry.code = lifetime;
-      else if (entry.code.kind === undefined || !sameBrowserKind(entry.code.kind, kind)) {
-        throw new ToolError(`This session already holds a browser attached as ${entry.code.kind === undefined ? "the relay" : describeKind(entry.code.kind)}; close it before opening ${describeKind(kind)}.`);
+    // From here on this open owns whatever it started (`attach.terminate` exists only then): any way out but success ends it, or it would run on with no entry, no idle clock and nobody to retry.
+    let opened: string | undefined;
+    try {
+      signal.throwIfAborted();
+      const lifetime = this.#lifetime(req.persist, kind, attach.label);
+      const state = await this.#seam.open({ engine: "chrome-relay" }, { caller: "model", session }, lifetime, attach);
+      opened = state.browserId;
+      const entry = this.#seam.require(state.browserId);
+      const created = entry.code === lifetime;
+      if (!created) {
+        // The runtime holds one relay Chrome per chat: a second open found the first (the person's own View, or an earlier cell). It is the cell's too, when it is the endpoint the cell asked for.
+        if (entry.code === undefined) entry.code = lifetime;
+        else if (entry.code.kind === undefined || !sameBrowserKind(entry.code.kind, kind)) {
+          throw new ToolError(`This session already holds a browser attached as ${entry.code.kind === undefined ? "the relay" : describeKind(entry.code.kind)}; close it before opening ${describeKind(kind)}.`);
+        }
       }
+      return { browserId: state.browserId, created, wsEndpoint: entry.driver.cdpEndpoint(), label: attach.label };
+    } catch (error) {
+      if (attach.terminate !== undefined) {
+        if (opened !== undefined) await this.#letGo(opened);
+        await attach.terminate().catch(() => undefined);
+      }
+      throw error;
     }
-    return { browserId: state.browserId, created, wsEndpoint: entry.driver.cdpEndpoint(), label: attach.label };
   }
 
   async openTab(browserId: string, o: Parameters<CodeBrowserPort["openTab"]>[1], signal: AbortSignal): Promise<TabRef> {
     if (this.#cmux.owns(browserId)) return await abortable(this.#cmux.openTab(browserId, o, signal), signal);
     const entry = this.#seam.require(browserId);
     // A browser the pack only attached to (the person's own Chrome, an application) hands over a page it already has; a Chromium of the pack's opens one.
-    if (entry.code?.kind !== undefined && entry.code.kind.kind !== "headless") return await abortable(this.#seam.serialize(entry, () => this.#adopt(entry, o, signal)), signal);
+    if (this.#attachedEntry(entry)) return await abortable(this.#seam.serialize(entry, () => this.#adopt(entry, o, signal)), signal);
     return await abortable(this.#seam.serialize(entry, () => entry.driver.openTab(o.url, {
       waitUntil: o.waitUntil ?? "load",
       timeoutMs: o.timeoutMs,
@@ -234,7 +262,9 @@ export class RuntimeCodeBrowsers implements CodeBrowserPort {
 
   /** The page the person has in front (or the one `app.target` names), as it is; navigated only when the cell gave a URL. Its dialog policy is set before it navigates, as OMP's worker does. */
   async #adopt(entry: CodeSeamEntry, o: Parameters<CodeBrowserPort["openTab"]>[1], signal: AbortSignal): Promise<TabRef> {
-    let ref = await entry.driver.adoptTab(o.target === undefined ? {} : { match: o.target });
+    // A browser a person is using (the connected Chrome, the relay) hands over the page in front; an application the pack started is nobody's window, and OMP takes its first usable page in CDP order.
+    const userDriven = entry.code?.kind?.kind === "connected" || entry.code?.kind?.kind === "relay";
+    let ref = await entry.driver.adoptTab({ ...(o.target === undefined ? {} : { match: o.target }), preferVisible: userDriven && o.target === undefined });
     if (o.dialogs !== undefined) entry.driver.setDialogPolicy(ref.tabId, o.dialogs);
     if (o.url !== undefined) ref = await entry.driver.navigateTab(ref.tabId, o.url, { waitUntil: o.waitUntil ?? "load", timeoutMs: o.timeoutMs, signal });
     return ref;
@@ -266,7 +296,7 @@ export class RuntimeCodeBrowsers implements CodeBrowserPort {
     if (this.#cmux.owns(browserId)) return;
     const entry = this.#seam.require(browserId);
     // The pages of a browser the pack only attached to are the person's: they are never frozen.
-    if (entry.code?.kind !== undefined && entry.code.kind.kind !== "headless") return;
+    if (this.#attachedEntry(entry)) return;
     await entry.driver.setFrozen(tabId, frozen);
   }
 
@@ -277,6 +307,8 @@ export class RuntimeCodeBrowsers implements CodeBrowserPort {
 
   async resize(browserId: string, viewport: { width: number; height: number; scale?: number }): Promise<void> {
     if (this.#cmux.owns(browserId)) return;
+    // The pages of a browser the pack only attached to are the person's: a later open or reuse that carries a viewport never resizes them (the creation path does not either).
+    if (this.#attachedEntry(this.#seam.require(browserId))) return;
     await this.#seam.resize(browserId, { width: viewport.width, height: viewport.height }, viewport.scale ?? 1);
   }
 

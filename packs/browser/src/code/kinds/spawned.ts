@@ -262,8 +262,11 @@ export interface SpawnedApp {
   pid: number;
   /** True when a running instance's debugging port was reused instead of starting one. */
   reused: boolean;
-  /** Ends the application's whole process tree (asked politely, then forced). */
-  terminate(): Promise<void>;
+  /**
+   * Ends the application's whole process tree (asked politely, then forced). Present only for an application THIS call started: one that was already running is somebody else's, and a pid the pack did not start
+   * is not the pack's to signal. It does nothing once the process has been seen to exit.
+   */
+  terminate?: () => Promise<void>;
 }
 
 export interface SpawnOptions {
@@ -281,9 +284,8 @@ export async function establishSpawned(kind: { path: string; args?: string[] }, 
     throw new ToolError(`app.path must be absolute (got ${JSON.stringify(exe)}). Pass the binary inside Foo.app/Contents/MacOS/, not the .app bundle.`);
   }
   const reused = await findReusableCdp(exe, { ...(opts.signal ? { signal: opts.signal } : {}), ...(kind.args ? { appArgs: kind.args } : {}), ...(opts.scanner ? { scanner: opts.scanner } : {}) });
-  if (reused) {
-    return { cdpUrl: reused.cdpUrl, pid: reused.pid, reused: true, terminate: () => gracefulKillTreeOnce(reused.pid, { exe }) };
-  }
+  // An instance that was already running keeps running: `close({ kill: true })` ends only what this open started.
+  if (reused) return { cdpUrl: reused.cdpUrl, pid: reused.pid, reused: true };
   const port = await findFreeCdpPort();
   const child = (opts.spawner ?? systemSpawner)(exe, [...(kind.args ?? []), `--remote-debugging-port=${port}`]);
   if (child.pid === undefined) throw new ToolError(`Failed to start ${basename(exe)}: the process did not start.`);
@@ -296,18 +298,21 @@ export async function establishSpawned(kind: { path: string; args?: string[] }, 
     exitedWith = code;
     early.abort();
   });
+  // Once the child has been seen to exit its number may name another program: nothing is signalled then.
+  const terminate = (): Promise<void> => gracefulKillTreeOnce(pid, { exe, exited: () => exitedWith !== undefined });
   const waitSignal = opts.signal ? AbortSignal.any([opts.signal, early.signal]) : early.signal;
   try {
     await waitForCdp(cdpUrl, opts.waitMs ?? KIND_TIMINGS.spawnedMs, waitSignal);
+    // Inside the guard: an abort that lands as the port opens still ends the application it would otherwise leave running with nobody holding it.
+    throwIfAborted(opts.signal);
   } catch (error) {
-    await gracefulKillTreeOnce(pid, { exe }).catch(() => undefined);
+    await terminate().catch(() => undefined);
     if (opts.signal?.aborted) throw error instanceof ToolAbortError ? error : new ToolAbortError();
     if (exitedWith !== undefined) {
       throw new ToolError(`Failed to attach to ${basename(exe)} on ${cdpUrl}: the process exited${exitedWith === null ? "" : ` (code ${exitedWith})`} before opening its CDP endpoint`);
     }
     throw new ToolError(`Failed to attach to ${basename(exe)} on ${cdpUrl}: ${error instanceof Error ? error.message : String(error)}`);
   }
-  throwIfAborted(opts.signal);
-  return { cdpUrl, pid, reused: false, terminate: () => gracefulKillTreeOnce(pid, { exe }) };
+  return { cdpUrl, pid, reused: false, terminate };
 }
 

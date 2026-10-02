@@ -215,10 +215,11 @@ export interface EngineDriver {
   /**
    * Hard stop, for a `close` that hung or failed: kill the owned browser's whole process tree and resolve only once the browser
    * process is confirmed gone (`close_failed`-style rejection otherwise). The lease is released only on that confirmation, like
-   * `close`. A driver that owns nothing (the relay) just closes; one attached to an application the pack started (`AttachTarget.terminate`: a
-   * `spawned` kind) also ends that application, the one way anything an attach target names is ended. Safe to call while a `close` is still pending.
+   * `close`. A driver that owns nothing (the relay, or a browser a cell attached to) lets go of it at once, without waiting on a page that does not
+   * answer, and leaves the browser running: only `application: true` also ends an application the pack started (`AttachTarget.terminate`, a `spawned`
+   * kind: the cell's `close({ kill: true })`). Safe to call while a `close` is still pending.
    */
-  kill(): Promise<void>;
+  kill(options?: { application?: boolean }): Promise<void>;
 }
 
 export interface EngineOptions {

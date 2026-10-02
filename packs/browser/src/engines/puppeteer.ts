@@ -91,6 +91,8 @@ const LAUNCH_TIMEOUT_MS = 60_000;
 const CLOSE_TIMEOUT_MS = 15_000;
 /** After a kill, how long the browser process gets to be seen exiting before the kill itself is called unconfirmed. */
 const KILL_CONFIRM_MS = 5_000;
+/** What a hard stop of an attached browser gives the pages this driver opened itself to close before the connection is dropped. */
+const KILL_TAB_CLOSE_MS = 1_000;
 const FAVICON_SCRIPT_TIMEOUT_MS = 2_000;
 /** How long a freshly started screencast gets to deliver its first picture before one is captured: Chrome sends nothing for a page that is not changing. */
 const FIRST_FRAME_WAIT_MS = 150;
@@ -181,7 +183,8 @@ async function attachBrowser(target: AttachTarget, options: EngineOptions, relea
 	try {
 		browser = await connectAttached(target);
 		if (options.attach) {
-			page = await pickAttachedPage(browser, { preferVisible: true });
+			// Only a browser a person is using has a page "in front"; an application the pack started gets its first usable page in CDP order, as in OMP.
+			page = await pickAttachedPage(browser, { preferVisible: target.kind !== "spawned" });
 		} else {
 			page = await browser.newPage();
 			created = true;
@@ -1353,11 +1356,19 @@ class PuppeteerDriver implements EngineDriver {
 	 * not exit never lets it finish: this kills the whole process tree instead, and releases the lease only once the browser
 	 * process is seen to have exited. Safe beside a pending `close`: that one ends when the process does, and releasing is idempotent.
 	 */
-	async kill(): Promise<void> {
-		// A browser the pack attached to is never killed, only let go; the application behind a `spawned` target is the one thing it ends, after.
+	async kill(options: { application?: boolean } = {}): Promise<void> {
+		// A browser the pack attached to is never killed, only let go - at once: the connection goes first, so a detach that waits on a page that does not answer is rejected instead of waited out. The application behind
+		// a `spawned` target is ended only when the caller asked (`close({ kill: true })`), never because a plain close was slow.
 		if (!this.#ownsBrowser) {
-			await this.close();
-			await this.#terminate?.();
+			this.#closed = true;
+			this.#browser.off("targetcreated", this.#onTargetCreated);
+			this.#browser.off("disconnected", this.#onDisconnected);
+			this.#watchers.clear();
+			const own = this.#tabs.filter((tab) => !tab.foreign && !tab.page.isClosed());
+			if (own.length > 0) await Promise.race([Promise.all(own.map((tab) => tab.page.close().catch(() => undefined))), sleep(KILL_TAB_CLOSE_MS)]);
+			await this.#browser.disconnect().catch(() => undefined);
+			this.#release();
+			if (options.application === true) await this.#terminate?.();
 			return;
 		}
 		this.#closed = true;
@@ -1533,7 +1544,8 @@ class PuppeteerDriver implements EngineDriver {
 		if (viewport.width === this.#viewport.width && viewport.height === this.#viewport.height && scale === this.#scale) return;
 		this.#viewport = viewport;
 		this.#scale = scale;
-		await Promise.all(this.#tabs.map((tab) => tab.page.setViewport({ ...viewport, deviceScaleFactor: scale }).catch(() => undefined)));
+		// The person's own pages (an attach target's) are never resized: their window is theirs.
+		await Promise.all(this.#tabs.filter((tab) => !tab.foreign).map((tab) => tab.page.setViewport({ ...viewport, deviceScaleFactor: scale }).catch(() => undefined)));
 		if (this.#watchers.size > 0) {
 			await this.#stopScreencast();
 			await this.#restartScreencast();

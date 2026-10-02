@@ -9,7 +9,7 @@
  * debugging port, given by URL) and `spawned` (an application the pack started, or found already running, with a debugging port).
  *
  * What these have in common is the rule: the pack never closes the browser. Closing disconnects; the one exception is a `spawned`
- * application, which `kill` ends because the pack (or the cell's `kill: true`) is the one that started it. The kinds module
+ * application the pack started, which `kill` ends (the cell's `kill: true`); one that was already running is left running. The kinds module
  * (`code/kinds/establish.ts`) decides WHICH endpoint and waits for it; this module only connects to what it was given.
  */
 import puppeteer, { type Browser, type Page } from "puppeteer-core";
@@ -33,7 +33,10 @@ export interface AttachTarget {
 	label: string;
 	/** `spawned` only: the application's process. */
 	pid?: number;
-	/** `spawned` only: ends the application's whole process tree. Closing the browser never calls it; `kill` does. */
+	/**
+	 * `spawned` only, and only for an application THIS open started (one that was already running has none: it is not the pack's to end): ends the application's whole process tree. Closing the browser never calls it;
+	 * `close({ kill: true })` does, and so does a failed or abandoned open that started the application (nothing else holds it then).
+	 */
 	terminate?: () => Promise<void>;
 }
 

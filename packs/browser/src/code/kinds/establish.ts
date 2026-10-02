@@ -102,7 +102,7 @@ export async function establishKind(kind: EstablishableKind, opts: EstablishOpti
         ...(opts.spawner ? { spawner: opts.spawner } : {}),
         ...(opts.timings ? { waitMs: opts.timings.spawnedMs } : {}),
       });
-      return { attach: { kind: "spawned", cdpUrl: app.cdpUrl, label: describeBrowser(kind, { pid: app.pid }), pid: app.pid, terminate: app.terminate } };
+      return { attach: { kind: "spawned", cdpUrl: app.cdpUrl, label: describeBrowser(kind, { pid: app.pid }), pid: app.pid, ...(app.terminate ? { terminate: app.terminate } : {}) } };
     }
     case "cmux": {
       const client = opts.connectCmux ? await opts.connectCmux(kind) : await connectCmuxSocket(kind);

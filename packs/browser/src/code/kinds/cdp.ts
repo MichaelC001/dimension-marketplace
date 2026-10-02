@@ -10,9 +10,9 @@
  */
 import { execFile } from "node:child_process";
 import { connect, createServer } from "node:net";
-import { basename } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
+import { taskkillArgs } from "../../engines/puppeteer.js";
 import { ToolError, throwIfAborted } from "../errors.js";
 
 /** How long each kind waits for its endpoint (OMP registry.ts:208, :294, :44). Injectable so a test does not wait them out. */
@@ -129,22 +129,31 @@ export function isAlive(pid: number): boolean {
 }
 
 /**
- * End `pid` and everything it started: ask politely, wait up to `gracePeriodMs`, then force. Windows: `taskkill /T` takes the whole tree
- * (killing only the main process leaves Chrome's helpers), and the image filter makes a pid that was reused by a program of another name match nothing.
- * Elsewhere: the process group when the process leads one (a child started `detached` does), else the process itself.
+ * End `pid` and everything it started: ask politely, wait up to `gracePeriodMs`, then force. `exited` says whether the process is already known to be gone (the caller holds the child it started and has seen
+ * its exit): a pid names a process only while it runs, so an exited one gets no signal at all, whatever the number names by now. Windows: `taskkill /T` takes the whole tree (killing only the main process leaves
+ * Chrome's helpers), through the pack's one pid-reuse-safe command ({@link taskkillArgs}: the image filter makes a pid reused by a program of another name match nothing). Elsewhere: the process group the
+ * child leads (it was started `detached`), else the process itself.
  */
-export async function gracefulKillTreeOnce(pid: number, options: { exe?: string; gracePeriodMs?: number } = {}): Promise<void> {
+export async function gracefulKillTreeOnce(pid: number, options: { exe: string; exited?: () => boolean; gracePeriodMs?: number }): Promise<void> {
   const gracePeriodMs = options.gracePeriodMs ?? 2_000;
-  if (!isAlive(pid)) return;
+  const exited = options.exited ?? ((): boolean => false);
+  if (exited() || !isAlive(pid)) return;
   if (process.platform === "win32") {
-    const filter = options.exe ? ["/FI", `IMAGENAME eq ${basename(options.exe.replaceAll("\\", "/"))}`] : [];
-    await execFileAsync("taskkill", ["/pid", String(pid), "/T", ...filter], { windowsHide: true }).catch(() => undefined);
+    // Decided right before each command: the process may have exited since the caller looked.
+    const command = (force: boolean): string[] | undefined => {
+      const forced = taskkillArgs({ pid, spawnfile: options.exe, exitCode: exited() ? 0 : null, signalCode: null });
+      return force ? forced : forced?.filter((arg) => arg !== "/F");
+    };
+    const polite = command(false);
+    if (polite !== undefined) await execFileAsync("taskkill", polite, { windowsHide: true }).catch(() => undefined);
     const deadline = Date.now() + gracePeriodMs;
-    while (isAlive(pid) && Date.now() < deadline) await sleep(50);
-    if (isAlive(pid)) await execFileAsync("taskkill", ["/pid", String(pid), "/T", "/F", ...filter], { windowsHide: true }).catch(() => undefined);
+    while (isAlive(pid) && !exited() && Date.now() < deadline) await sleep(50);
+    const forced = isAlive(pid) ? command(true) : undefined;
+    if (forced !== undefined) await execFileAsync("taskkill", forced, { windowsHide: true }).catch(() => undefined);
     return;
   }
   const signal = (name: NodeJS.Signals): void => {
+    if (exited()) return;
     try {
       process.kill(-pid, name);
     } catch {
@@ -157,6 +166,6 @@ export async function gracefulKillTreeOnce(pid: number, options: { exe?: string;
   };
   signal("SIGTERM");
   const deadline = Date.now() + gracePeriodMs;
-  while (isAlive(pid) && Date.now() < deadline) await sleep(50);
+  while (isAlive(pid) && !exited() && Date.now() < deadline) await sleep(50);
   if (isAlive(pid)) signal("SIGKILL");
 }

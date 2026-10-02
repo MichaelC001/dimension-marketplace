@@ -593,8 +593,8 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	 * for done at once, and releasing on that would free the slot of a Chrome that may still be running.
 	 */
 	private async stopBrowser(entry: Entry): Promise<void> {
-		// A cell's `close({ kill: true })` on a spawned application: the driver lets go of it, then ends the process the pack started.
-		if (entry.code?.kill === true) return await entry.driver.kill();
+		// A cell's `close({ kill: true })` on a spawned application: the driver lets go of it, then ends the process the pack started (only the application is ended on this path; the fallback below never is).
+		if (entry.code?.kill === true) return await entry.driver.kill({ application: true });
 		if (entry.profile !== null) return await entry.driver.close();
 		if (!entry.closeFailed) {
 			try {

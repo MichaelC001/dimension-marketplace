@@ -15,6 +15,7 @@ import { MAX_DETAIL_BYTES } from "./annotation-file.js";
 import { type PublishPreset, loadPresets, resolvePreset, summarizePresets } from "./presets.js";
 import { MAX_LABEL_CHARS } from "./profile-meta.js";
 import { profilesForModel } from "./profile-list.js";
+import { stopOwnedRelays } from "./code/kinds/relay/ensure.js";
 import { BrowserRuntime } from "./runtime.js";
 import { defaultRootDir, fail } from "./store.js";
 import { LiveChannel } from "./stream.js";
@@ -583,8 +584,12 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
   const disposeBackends = async (): Promise<void> => {
     // Together, not one after the other: the browsers close whatever the code worker does (a worker inside a native call holds the code host's disposal for the whole call), and a failure of one never skips the other.
     const [code, browsers] = await Promise.allSettled([codeHost?.dispose(), runtime.dispose()]);
+    // The relay a cell's `app.relay` started lives in this process: left running it would keep serving /cdp and holding the person's Chrome in its debugging bar after the server had gone (and the next server would adopt it).
+    // It stops after the browsers attached through it have let go, so the extension sees a clean detach first.
+    const relays = await stopOwnedRelays().then(() => undefined, (error: unknown) => error);
     if (browsers.status === "rejected") throw browsers.reason;
     if (code.status === "rejected") throw code.reason;
+    if (relays !== undefined) throw relays;
   };
   server.close = async () => {
     stopReporting();
