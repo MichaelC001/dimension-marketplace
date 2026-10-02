@@ -124,6 +124,30 @@ export function extraPaths(blocks: readonly Block[]): Set<string> {
 	return paths;
 }
 
+/** Each path's text, so two readings of the same file compare. A section's keys are paths of their own (`key.child`,
+ *  at 2 spaces whatever the depth they were written at); every other block is one path. */
+function pathTexts(blocks: readonly Block[]): Map<string, string> {
+	const texts = new Map<string, string>();
+	for (const block of blocks) {
+		if (block.children === null || block.children.length === 0) texts.set(block.key, block.lines.join("\n"));
+		else for (const child of block.children) texts.set(`${block.key}.${child.key}`, reindent(child.lines, block.childIndent, 2).join("\n"));
+	}
+	return texts;
+}
+
+/**
+ * The paths whose text differs between two readings of the same "Everything else": added, changed or gone, in the
+ * order the second reads them (the gone ones last). What marks the parts of Other settings a proposal moved: the
+ * proposal banner names fields, and `extra` alone says nothing about WHICH of its keys changed.
+ */
+export function changedExtraPaths(before: string, after: string): string[] {
+	const was = pathTexts(parseExtra(before).blocks);
+	const now = pathTexts(parseExtra(after).blocks);
+	const changed = [...now].filter(([path, text]) => was.get(path) !== text).map(([path]) => path);
+	const gone = [...was.keys()].filter(path => !now.has(path));
+	return [...changed, ...gone];
+}
+
 /** `lines` moved from `from` spaces of indent to `to` — what lets one section
  *  hold the profile's keys (written at 2) and the author's (written at any depth). */
 export function reindent(lines: readonly string[], from: number, to: number): string[] {
@@ -176,6 +200,12 @@ const MIXED_SECTIONS: Readonly<Record<string, true>> = { capabilities: true, sub
  * control lanes, plugins, MCP, delegation, harnesses (doc 58 §3; the flat
  * `tools` and `spawns` are the legacy spellings of two of them). Only a human
  * gesture on the profile sets these; the model's `forge_propose` never does.
+ *
+ * `capabilities.ignore` is one: it is subtractive and wins over every allowlist
+ * (the engine applies it AFTER them, `agent-root.ts`), so an agent's reach is
+ * `capabilities.tools` minus `capabilities.ignore`. Emptying it widens the reach
+ * exactly as editing `tools` does, and `optIn` is already a grant for being
+ * additive. Naming it, to add or to remove, is refused whole like the rest.
  */
 const GRANT_PATHS: Readonly<Record<string, true>> = {
 	"capabilities.tools": true,
@@ -183,6 +213,7 @@ const GRANT_PATHS: Readonly<Record<string, true>> = {
 	"capabilities.plugins": true,
 	"capabilities.control": true,
 	"capabilities.optIn": true,
+	"capabilities.ignore": true,
 	"subagents.allowed": true,
 	harness: true,
 	allowedHarnesses: true,

@@ -91,6 +91,7 @@ var GRANT_PATHS = {
   "capabilities.plugins": true,
   "capabilities.control": true,
   "capabilities.optIn": true,
+  "capabilities.ignore": true,
   "subagents.allowed": true,
   harness: true,
   allowedHarnesses: true,
@@ -8157,7 +8158,7 @@ var proposalShape = {
   thinking: z.enum(THINKING_STEPS).optional(),
   personality: z.enum(PERSONALITIES).optional(),
   extra: z.string().max(2e4).optional().describe(
-    "YAML for manifest keys the profile does not draw \u2014 title, defaultListed, engine.model/profile/roles, routing, loop, memory.namespace, capabilities.autoloadSkills/slashCommands/ignore, subagents.maxDepth, \u2026 One `key: value` per line, sections indented two spaces. It is laid over the draft's own, key by key (a key it names that the profile also draws, like engine.model, is then held as written). Keys that GRANT \u2014 capabilities.tools/mcp/plugins/control/optIn, subagents.allowed, gate.*, workspace.*, harness, allowedHarnesses \u2014 are refused: only the user sets those."
+    "YAML for manifest keys the profile does not draw \u2014 title, defaultListed, engine.model/profile/roles, routing, loop, memory.namespace, capabilities.autoloadSkills/slashCommands, subagents.maxDepth, \u2026 One `key: value` per line, sections indented two spaces. It is laid over the draft's own, key by key (a key it names that the profile also draws, like engine.model, is then held as written). Keys that GRANT \u2014 capabilities.tools/mcp/plugins/control/ignore/optIn, subagents.allowed, gate.*, workspace.*, harness, allowedHarnesses \u2014 are refused: only the user sets those."
   )
 };
 function json(structuredContent, text) {

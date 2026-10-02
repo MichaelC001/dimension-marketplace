@@ -5,6 +5,7 @@
 import { describe, expect, test } from "bun:test";
 import { type AgentDraft, type AgentProposal, blankDraft } from "../src/agent-md";
 import type { AgentSource, ListedAgent, StoredProposal } from "../src/contracts";
+import { changedExtraPaths } from "../src/extra";
 import { setExtraPath } from "../page/extra-edit";
 import { rememberFaces } from "../page/faces";
 import {
@@ -276,5 +277,24 @@ describe("a gesture writes a key the profile does not draw", () => {
 	test("a legacy flat `tools:` line is the allowlist: its list, or none for `[]`, never 'every tool'", () => {
 		expect(allowlistOf({ ...blankDraft("k"), extra: "tools: [read]" }, "tools")).toEqual({ kind: "some", names: ["read"] });
 		expect(allowlistOf({ ...blankDraft("k"), extra: "tools: []" }, "tools")).toEqual({ kind: "none" });
+	});
+});
+
+describe("the parts of Other settings a proposal moved", () => {
+	test("names a key it added, a key it changed inside a section, and nothing it left alone", () => {
+		const before = "title: Chief\ncapabilities:\n  autoloadSkills: [fallow]\n  slashCommands: [review]";
+		const after = "title: Chief\ncapabilities:\n  autoloadSkills: [fallow, checkpoint]\n  slashCommands: [review]\nrouting:\n  card: Marketing";
+		expect(changedExtraPaths(before, after)).toEqual(["capabilities.autoloadSkills", "routing.card"]);
+		expect(changedExtraPaths(before, before)).toEqual([]);
+	});
+
+	test("a section the overlay re-wrote at another indent is not a change, and a key it dropped is one", () => {
+		const before = "capabilities:\n    autoloadSkills: [fallow]\nrouting:\n    card: A\n    lane: B";
+		const after = "capabilities:\n  autoloadSkills: [fallow]\nrouting:\n  card: A";
+		expect(changedExtraPaths(before, after)).toEqual(["routing.lane"]);
+	});
+
+	test("an agent the proposal started has every key it set marked", () => {
+		expect(changedExtraPaths("", "title: Scout\nengine:\n  profile: fast")).toEqual(["title", "engine.profile"]);
 	});
 });

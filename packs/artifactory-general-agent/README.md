@@ -155,8 +155,8 @@ model-only. No tool carries a View.
 
 **Security (doc 58 §3).** The keys that grant (`capabilities.tools`,
 `gate.approval`, `workspace.*`, `capabilities.control`, `capabilities.plugins`,
-`capabilities.mcp`, `capabilities.optIn`, `subagents.allowed`, `harness`,
-`allowedHarnesses`) change only by a human gesture on the profile, and so do
+`capabilities.mcp`, `capabilities.ignore`, `capabilities.optIn`, `subagents.allowed`,
+`harness`, `allowedHarnesses`) change only by a human gesture on the profile, and so do
 the two profile fields that carry one: Where it runs (`habitat`, written as
 `workspace.policy`) and Lineage (`lineage`, written as `extends`, which composes
 each base's whole grant into the agent).

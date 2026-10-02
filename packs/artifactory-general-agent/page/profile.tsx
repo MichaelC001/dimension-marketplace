@@ -384,7 +384,7 @@ export function AgentProfile({
 			<BrainSection draft={draft} set={set} editable={editable} models={models} marked={marked} />
 			<SafetySection draft={draft} set={set} editable={editable} marked={marked} />
 			<LineageSection draft={draft} set={set} editable={editable} roster={roster} self={agentName} faceOf={faceOf} bridged={bridged} />
-			<AdvancedSection draft={draft} set={set} editable={editable} homeId={homeId} problems={serverProblems} />
+			<AdvancedSection draft={draft} set={set} editable={editable} homeId={homeId} problems={serverProblems} marked={marked} proposedFrom={state.proposal?.before?.extra ?? ""} />
 			{dirty ? <div aria-hidden="true" className="h-16" /> : null}
 		</ViewColumn>
 	);

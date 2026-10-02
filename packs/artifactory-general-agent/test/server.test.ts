@@ -641,6 +641,8 @@ describe("forge_propose", () => {
 		["capabilities.mcp", "capabilities:\n  mcp: [palace]"],
 		["capabilities.tools", "capabilities:\n  tools: [bash]"],
 		["capabilities.optIn", "capabilities:\n  optIn: [browser]"],
+		["capabilities.ignore", "capabilities:\n  ignore:\n    tools: []"],
+		["capabilities.ignore", "title: Friendly\ncapabilities:\n  autoloadSkills: [x]\n  ignore:\n    tools: [bash]"],
 		["subagents.allowed", "subagents:\n  allowed: '*'"],
 		["gate", "gate:\n  approval: yolo"],
 		["gate", "gate:\n  policy: open"],
@@ -665,6 +667,8 @@ describe("forge_propose", () => {
 	test.each([
 		["capabilities.tools", "capabilities:\n  title: x\n  ? tools\n  : [bash]"],
 		["capabilities.tools", "capabilities:\n  title: x\n  &a tools: [bash]"],
+		["capabilities.ignore", "capabilities:\n  title: x\n  ? ignore\n  : {tools: []}"],
+		["capabilities.ignore", "{capabilities: {ignore: {tools: []}}}"],
 		["capabilities.control", "title: x\n? capabilities\n: {control: [agents]}"],
 		["capabilities.plugins", "{capabilities: {plugins: [browser]}}"],
 		["gate", "? gate\n: {approval: yolo}"],
@@ -689,11 +693,30 @@ describe("forge_propose", () => {
 		expect(applyProposal(base, { name: "release-herald", mcp: ["palace", "threejs"] } as AgentProposal).mcp).toEqual(["browser"]);
 	});
 
+	// The engine applies `capabilities.ignore` AFTER the allowlists, so emptying it widens what the agent may use,
+	// exactly as editing `tools` does. A proposal that names it, to add or to remove, is refused whole, and laid on
+	// a draft that holds a denylist it can neither drop nor edit (the block form is the one the overlay replaces
+	// child by child: it passed while `ignore` was not a grant).
+	test("a proposal cannot touch capabilities.ignore — through extra, or merged into a draft that holds one", async () => {
+		const emptied = "capabilities:\n  ignore:\n    tools: []";
+		const refused = await call("forge_propose", { name: "scout", extra: emptied });
+		expect(refused.isError).toBe(true);
+		expect(JSON.stringify(refused.content)).toContain("capabilities.ignore");
+		const held = draft({ extra: "capabilities:\n  autoloadSkills: [fallow]\n  ignore:\n    tools: [bash]" });
+		expect(applyProposal(held, { name: "release-herald", extra: emptied } as AgentProposal).extra).toBe(held.extra);
+		expect(applyProposal(held, { name: "release-herald", extra: "capabilities:\n  ignore:\n    tools: [bash, edit]" } as AgentProposal).extra).toBe(held.extra);
+		// What it may still do is untouched: a harmless key beside the denylist merges and the denylist stays as written.
+		const merged = applyProposal(held, { name: "release-herald", extra: "capabilities:\n  slashCommands: [review]" } as AgentProposal).extra;
+		expect(merged).toContain("ignore:\n    tools: [bash]");
+		expect(merged).toContain("slashCommands: [review]");
+	});
+
 	// The panel's "You are setting …" warning is `grantPathsIn` on the text being typed.
 	test("the warning names a mixed section written as a flow mapping or explicit keys on the next line, and stays silent on plain harmless keys", () => {
 		expect(grantPathsIn("capabilities:\n  {control: [spaces], tools: [bash, write]}")).toEqual(["capabilities (inline)"]);
 		expect(grantPathsIn('subagents:\n  ? allowed\n  : ["*"]')).toEqual(["subagents (inline)"]);
 		expect(grantPathsIn("capabilities:\n  # only a comment\n")).toEqual([]);
+		expect(grantPathsIn("capabilities:\n  autoloadSkills: [fallow]\n  ignore:\n    tools: [bash]")).toEqual(["capabilities.ignore"]);
 		expect(grantPathsIn("capabilities:\n  autoloadSkills: [fallow]\nsubagents:\n  maxDepth: 2")).toEqual([]);
 	});
 

@@ -15,7 +15,7 @@ import {
 	type Thinking,
 } from "../src/agent-md";
 import type { AgentHome } from "../src/contracts";
-import { grantPathsIn, parseExtra } from "../src/extra";
+import { changedExtraPaths, grantPathsIn, parseExtra } from "../src/extra";
 import { ChoiceCard, ChoiceGroup, FaceTile, GrantLock, PANEL, PickList, Section } from "./chrome";
 import { flowList, setExtraPath } from "./extra-edit";
 import type { SectionProps } from "./profile";
@@ -464,12 +464,27 @@ export function LineageSection({
 
 // ── Advanced ──────────────────────────────────────────────────────────────────
 
-export function AdvancedSection({ draft, set, editable, homeId, problems }: SectionProps & { readonly homeId: string | undefined; readonly problems: readonly string[] }) {
+export function AdvancedSection({
+	draft,
+	set,
+	editable,
+	homeId,
+	problems,
+	marked,
+	proposedFrom,
+}: SectionProps & {
+	readonly homeId: string | undefined;
+	readonly problems: readonly string[];
+	readonly marked: ReadonlySet<string>;
+	/** Other settings as it stood before the Machinist's proposal; "" for an agent the proposal started. */
+	readonly proposedFrom: string;
+}) {
 	const grants = grantPathsIn(draft.extra);
 	const document = manifestDocument(draft, homeId ?? null);
 	const issues = [...document.problems, ...problems.filter(problem => !document.problems.includes(problem))];
+	const proposed = marked.has("extra") ? changedExtraPaths(proposedFrom, draft.extra) : [];
 	return (
-		<Section id="agent-advanced" title="Advanced" lede="Every manifest key the profile does not draw, as the file says it, and the agent.md this profile writes.">
+		<Section id="agent-advanced" title="Advanced" lede="Every manifest key the profile does not draw, as the file says it, and the agent.md this profile writes." aside={proposed.length > 0 ? <ProposedBadge /> : undefined}>
 			<div className="grid grid-cols-1 gap-4 @5xl:grid-cols-2">
 				<div className={cn(PANEL, "flex flex-col overflow-hidden")}>
 					<div className="flex items-center justify-between gap-2 border-b border-fr-border-soft px-4 py-2.5">
@@ -487,6 +502,12 @@ export function AdvancedSection({ draft, set, editable, homeId, problems }: Sect
 						onChange={event => set({ extra: event.target.value })}
 						className="max-h-none min-h-56 flex-1 rounded-none border-0 px-4 py-3 font-code text-fr-sm leading-relaxed"
 					/>
+					{proposed.length > 0 ? (
+						<p data-slot="proposed-keys" className="m-0 flex items-center gap-2 border-t border-fr-accent-line bg-fr-accent-dim px-4 py-2 text-fr-xs text-fr-text">
+							<ProposedBadge />
+							The Machinist set {proposed.join(", ")}.
+						</p>
+					) : null}
 					{grants.length > 0 ? (
 						<p className="m-0 flex items-center gap-2 border-t border-fr-border-soft px-4 py-2 text-fr-xs text-fr-text-2">
 							<GrantLock />

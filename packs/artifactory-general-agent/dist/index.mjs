@@ -1229,6 +1229,26 @@ function extraPaths(blocks) {
 	}
 	return paths;
 }
+/** Each path's text, so two readings of the same file compare. A section's keys are paths of their own (`key.child`,
+*  at 2 spaces whatever the depth they were written at); every other block is one path. */
+function pathTexts(blocks) {
+	const texts = /* @__PURE__ */ new Map();
+	for (const block of blocks) if (block.children === null || block.children.length === 0) texts.set(block.key, block.lines.join("\n"));
+	else for (const child of block.children) texts.set(`${block.key}.${child.key}`, reindent(child.lines, block.childIndent, 2).join("\n"));
+	return texts;
+}
+/**
+* The paths whose text differs between two readings of the same "Everything else": added, changed or gone, in the
+* order the second reads them (the gone ones last). What marks the parts of Other settings a proposal moved: the
+* proposal banner names fields, and `extra` alone says nothing about WHICH of its keys changed.
+*/
+function changedExtraPaths(before, after) {
+	const was = pathTexts(parseExtra(before).blocks);
+	const now = pathTexts(parseExtra(after).blocks);
+	const changed = [...now].filter(([path, text]) => was.get(path) !== text).map(([path]) => path);
+	const gone = [...was.keys()].filter((path) => !now.has(path));
+	return [...changed, ...gone];
+}
 /** `lines` moved from `from` spaces of indent to `to` — what lets one section
 *  hold the profile's keys (written at 2) and the author's (written at any depth). */
 function reindent(lines, from, to) {
@@ -1286,6 +1306,12 @@ var MIXED_SECTIONS = {
 * control lanes, plugins, MCP, delegation, harnesses (doc 58 §3; the flat
 * `tools` and `spawns` are the legacy spellings of two of them). Only a human
 * gesture on the profile sets these; the model's `forge_propose` never does.
+*
+* `capabilities.ignore` is one: it is subtractive and wins over every allowlist
+* (the engine applies it AFTER them, `agent-root.ts`), so an agent's reach is
+* `capabilities.tools` minus `capabilities.ignore`. Emptying it widens the reach
+* exactly as editing `tools` does, and `optIn` is already a grant for being
+* additive. Naming it, to add or to remove, is refused whole like the rest.
 */
 var GRANT_PATHS = {
 	"capabilities.tools": true,
@@ -1293,6 +1319,7 @@ var GRANT_PATHS = {
 	"capabilities.plugins": true,
 	"capabilities.control": true,
 	"capabilities.optIn": true,
+	"capabilities.ignore": true,
 	"subagents.allowed": true,
 	harness: true,
 	allowedHarnesses: true,
@@ -4352,14 +4379,16 @@ function LineageSection({ draft, set, editable, roster, self, faceOf, bridged })
 		})
 	});
 }
-function AdvancedSection({ draft, set, editable, homeId, problems }) {
+function AdvancedSection({ draft, set, editable, homeId, problems, marked, proposedFrom }) {
 	const grants = grantPathsIn(draft.extra);
 	const document = manifestDocument(draft, homeId ?? null);
 	const issues = [...document.problems, ...problems.filter((problem) => !document.problems.includes(problem))];
+	const proposed = marked.has("extra") ? changedExtraPaths(proposedFrom, draft.extra) : [];
 	return /* @__PURE__ */ jsx(Section, {
 		id: "agent-advanced",
 		title: "Advanced",
 		lede: "Every manifest key the profile does not draw, as the file says it, and the agent.md this profile writes.",
+		aside: proposed.length > 0 ? /* @__PURE__ */ jsx(ProposedBadge, {}) : void 0,
 		children: /* @__PURE__ */ jsxs("div", {
 			className: "grid grid-cols-1 gap-4 @5xl:grid-cols-2",
 			children: [/* @__PURE__ */ jsxs("div", {
@@ -4386,6 +4415,16 @@ function AdvancedSection({ draft, set, editable, homeId, problems }) {
 						onChange: (event) => set({ extra: event.target.value }),
 						className: "max-h-none min-h-56 flex-1 rounded-none border-0 px-4 py-3 font-code text-fr-sm leading-relaxed"
 					}),
+					proposed.length > 0 ? /* @__PURE__ */ jsxs("p", {
+						"data-slot": "proposed-keys",
+						className: "m-0 flex items-center gap-2 border-t border-fr-accent-line bg-fr-accent-dim px-4 py-2 text-fr-xs text-fr-text",
+						children: [
+							/* @__PURE__ */ jsx(ProposedBadge, {}),
+							"The Machinist set ",
+							proposed.join(", "),
+							"."
+						]
+					}) : null,
 					grants.length > 0 ? /* @__PURE__ */ jsxs("p", {
 						className: "m-0 flex items-center gap-2 border-t border-fr-border-soft px-4 py-2 text-fr-xs text-fr-text-2",
 						children: [
@@ -5399,7 +5438,9 @@ function AgentProfile({ state, onChange, onClose, onExtend, onDecide, onSaved, f
 				set,
 				editable,
 				homeId,
-				problems: serverProblems
+				problems: serverProblems,
+				marked,
+				proposedFrom: state.proposal?.before?.extra ?? ""
 			}),
 			dirty ? /* @__PURE__ */ jsx("div", {
 				"aria-hidden": "true",
