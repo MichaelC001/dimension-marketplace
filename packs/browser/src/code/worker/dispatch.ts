@@ -5,8 +5,10 @@
 
 import { isMainThread } from "node:worker_threads";
 import { z } from "zod";
-import type { BridgeDetails, BridgeRequest, BridgeResponse, HostToWorker, RealmInit, RunError, RunResult, TabHandle, TabRealm, Transport, WorkerToHost } from "../contracts.js";
+import type { BridgeDetails, BridgeRequest, BridgeResponse, HostToWorker, ImageBlock, RealmInit, RunError, RunResult, TabHandle, TabRealm, Transport, WorkerToHost } from "../contracts.js";
 import { CellFailure, type CellInvoke, CodeCell, failureOf } from "../cell/cell.js";
+import { MAX_IMAGE_BASE64_CHARS } from "../cell/display.js";
+import { MAX_INLINE_BYTES, OutputSink } from "../cell/output-sink.js";
 import { ToolAbortError, ToolError, throwIfAborted } from "../errors.js";
 
 export const DEFAULT_TAB_NAME = "main";
@@ -79,10 +81,47 @@ function runTarget(request: BridgeRequest): { code: string } | { fn: string; arg
   return fn !== undefined && fn.length > 0 ? { fn, args: request.args ?? [] } : { code: code ?? "" };
 }
 
-/** The tab realm's result as the facade reads it: the text parts joined by newlines, the images apart, the returned value in `details`. */
+const TAB_TEXT_CUT_NOTE = "[tab output over 50 KiB: its middle was not kept here; print less, or return the value]";
+
+/**
+ * The text parts of a tab call, joined with newlines as the facade shows them, within the inline budget. A realm that prints without end (`tab.run` with a loop of `console.log`) is not copied whole into the cell's
+ * realm: over the budget the parts go through an {@link OutputSink} (the start, the end, a count of the rest) and the note says the middle is not kept. A text that fits is joined untouched.
+ */
+function boundedText(parts: string[]): string {
+  let total = Math.max(0, parts.length - 1);
+  for (const part of parts) {
+    total += Buffer.byteLength(part, "utf8");
+    if (total > MAX_INLINE_BYTES) break;
+  }
+  if (total <= MAX_INLINE_BYTES) return parts.join("\n");
+  const sink = new OutputSink();
+  parts.forEach((part, index) => {
+    if (index > 0) sink.push("\n");
+    sink.push(part);
+  });
+  return `${sink.dump().text}\n${TAB_TEXT_CUT_NOTE}`;
+}
+
+/** The images of a tab call up to the ceiling a cell may keep in all (the cell's own output enforces it again over the whole cell); the rest is counted. */
+function boundedImages(images: ImageBlock[]): { kept: ImageBlock[]; dropped: number } {
+  const kept: ImageBlock[] = [];
+  let chars = 0;
+  for (const image of images) {
+    if (chars + image.data.length > MAX_IMAGE_BASE64_CHARS) continue;
+    chars += image.data.length;
+    kept.push(image);
+  }
+  return { kept, dropped: images.length - kept.length };
+}
+
+/**
+ * The tab realm's result as the facade reads it: the text parts joined by newlines, the images apart, the returned value in `details`. Text and images are bounded here, where they cross into the cell;
+ * the returned value is the page code's own value and goes through as it is (the same object: it is neither copied nor cut, a cell that returns a page's HTML needs all of it).
+ */
 function bridgeResponse(result: RunResult, details: BridgeDetails): BridgeResponse {
-  const text = result.displays.flatMap(part => (part.type === "text" ? [part.text] : [])).join("\n");
-  const images = result.displays.flatMap(part => (part.type === "image" ? [part] : []));
+  const { kept: images, dropped } = boundedImages(result.displays.flatMap(part => (part.type === "image" ? [part] : [])));
+  const note = dropped === 0 ? "" : `[tab output: ${dropped} image${dropped === 1 ? "" : "s"} dropped — one call keeps at most ${MAX_IMAGE_BASE64_CHARS / (1024 * 1024)} MiB of images]`;
+  const text = [boundedText(result.displays.flatMap(part => (part.type === "text" ? [part.text] : []))), note].filter(part => part.length > 0).join("\n");
   if (result.screenshots.length > 0) details.screenshots = result.screenshots;
   if (result.returnValue !== undefined) details.value = result.returnValue;
   return { text, details, ...(images.length > 0 ? { images } : {}) };
@@ -166,6 +205,8 @@ export class WorkerCore {
   readonly #unsubscribe: () => void;
   #realm: TabRealm | undefined;
   #cell: CodeCell | undefined;
+  /** The session's folder (from `init`) for the file that keeps a cell's output longer than the inline budget. */
+  #outputDir: string | undefined;
   #nextBridgeId = 1;
   #closing = false;
 
@@ -187,6 +228,7 @@ export class WorkerCore {
   #handle(message: HostToWorker): void {
     switch (message.t) {
       case "init":
+        this.#outputDir = message.outputDir;
         void this.#init(message);
         return;
       case "run":
@@ -261,7 +303,8 @@ export class WorkerCore {
     this.#runs.set(runId, controller);
     const invoke = createDispatcher({ realm, host: (request, o) => this.#hostCall(request, o) });
     try {
-      const payload = await cell.run({ runId, code, timeoutMs, signal: controller.signal, invoke, onText: chunk => this.#send({ t: "text", runId, chunk }) });
+      // `onText` is already bounded and throttled by the cell's output sink (16 KiB, 100 ms), so a flooding cell cannot flood the host through this message.
+      const payload = await cell.run({ runId, code, timeoutMs, signal: controller.signal, invoke, onText: chunk => this.#send({ t: "text", runId, chunk }), ...(this.#outputDir === undefined ? {} : { spillDir: this.#outputDir }) });
       this.#send({ t: "result", runId, ok: true, payload });
     } catch (error) {
       const error_ = error instanceof CellFailure ? { ...error.error, partial: error.partial } : failureOf(error);

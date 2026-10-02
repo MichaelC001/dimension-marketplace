@@ -118,6 +118,7 @@ export type WorkerToHost =
   | { t: "ready" }
   /** open and close only */
   | { t: "bridge"; id: number; runId: string; request: BridgeRequest }
+  /** Progress, never the output itself (that is the `result`): at most one per 100 ms and 16 KiB per run, whatever the cell prints; a stretch left out is `[…NB elided…]`. Append them; the end is what matters. */
   | { t: "text"; runId: string; chunk: string }
   | { t: "result"; runId: string; ok: true; payload: RunResult }
   | { t: "result"; runId: string; ok: false; error: RunError }
@@ -132,12 +133,16 @@ export interface RunError {
   isAbort: boolean;
   /**
    * The host MUST terminate this worker thread and start a new one (the pages stay; the new worker re-adopts them) before the next run: the cell that failed may still be running
-   * (a synchronous loop cannot be stopped from inside the thread, and raw Puppeteer calls in a timed-out `tab.run` never see the cell's signal), and its variables are to be reset.
-   * The cell realm sets it when the cell's budget ran out (OMP force-kills its JS worker the same way, eval/js/executor.ts:70-78); the tab realm may set it too.
+   * (a synchronous loop cannot be stopped from inside the thread, a loop that catches the abort goes on, and raw Puppeteer calls in a timed-out `tab.run` never see the cell's signal), and its variables are to be reset.
+   * The cell realm sets it whenever it gives up on a cell that is still running: its budget ran out, or the run was cancelled (OMP force-kills its JS worker on ANY abort, eval/js/context-manager.ts:430-448);
+   * the tab realm may set it too. A run cancelled before its code began never has it. A host that replaces the worker because of this flag decides to from the worker's own error,
+   * before it swaps in a message of its own (a take-over), or the cancelled code is left running.
    */
   recoverTab?: boolean;
-  /** The cell's own budget ran out (`CellTimeoutError`). Its `message` is already OMP's whole annotation, reset sentence included: the host must not add its own. A `TimeoutError` the page raised never carries this. */
+  /** The cell's own budget ran out (`CellTimeoutError`). Its `message` is already OMP's whole annotation, reset sentence included. A `TimeoutError` the page raised never carries this. */
   budget?: boolean;
+  /** `message` already tells the model the worker was reset and its variables are gone (a timeout's and a cancel's do): a host that rebuilds the worker must not add a sentence of its own. */
+  resetNoted?: boolean;
   partial?: RunResult;
 }
 /** tab-protocol.ts:139-143 */
@@ -197,6 +202,11 @@ export interface TabRealm {
   adopt(name: string, h: TabHandle): Promise<void>;
   /** Drop the page; never closes a foreign browser. */
   release(name: string): Promise<void>;
+  /**
+   * `run` and `call` stay in the worker thread, so what they return is not posted anywhere; it is copied into the cell's realm, and there it is bounded (worker/dispatch.ts `bridgeResponse`): the text parts to the 50 KiB
+   * inline budget (the start, the end, a note), the images to the 32 MiB a cell keeps in all. A realm SHOULD bound what it collects the same way as it collects it (text through `OutputSink`, images under
+   * `MAX_IMAGE_BASE64_CHARS`), or a `tab.run` that prints without end grows the worker until its budget or the host's memory watchdog ends it. `returnValue` is the page code's own value and is never bounded or copied.
+   */
   run(r: { name: string; code?: string; fn?: string; args?: unknown[]; timeoutMs: number; signal: AbortSignal }): Promise<RunResult>;
   call(r: { name: string; chain: Array<{ method: string; args: unknown[] }>; timeoutMs: number; signal: AbortSignal }): Promise<RunResult>;
   names(): string[];
