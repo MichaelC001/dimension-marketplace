@@ -406,6 +406,9 @@ class ListeningBrowser implements LiveSource {
 		this.watchers += 1;
 		return () => void (this.watchers -= 1);
 	}
+	viewing(_browserId: string): () => void {
+		return () => {};
+	}
 	async liveState(): Promise<BrowserState> {
 		return structuredClone(this.state);
 	}

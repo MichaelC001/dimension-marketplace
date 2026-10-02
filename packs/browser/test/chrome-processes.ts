@@ -7,12 +7,21 @@
  */
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { dlopen, FFIType } from "bun:ffi";
 
 const run = promisify(execFile);
 
 interface OsProcess {
 	pid: number;
 	command: string;
+}
+
+/** One throwaway browser as the operating system sees it. */
+export interface ThrowawayChrome {
+	/** The browser process itself (the one with no `--type=`): what holds a slot. */
+	main: number | undefined;
+	/** Its whole tree: the browser process, renderers, GPU, crashpad. */
+	all: number[];
 }
 
 /** Every Chrome-family process on the machine with its command line. */
@@ -34,17 +43,20 @@ async function chromeProcesses(): Promise<OsProcess[]> {
 }
 
 /**
- * The live Chrome browsers under `root`, as `{ <the throwaway directory's name>: pids of its whole tree }`. One OS query for
- * all of them, because on Windows each query costs a second.
+ * The live Chrome browsers under `root`, by the name of the throwaway directory each runs in. One OS query for all of them,
+ * because on Windows each query costs a second.
  */
-export async function chromePidsByThrowaway(root: string): Promise<Map<string, number[]>> {
-	const byDirectory = new Map<string, number[]>();
+export async function chromePidsByThrowaway(root: string): Promise<Map<string, ThrowawayChrome>> {
+	const byDirectory = new Map<string, ThrowawayChrome>();
 	for (const entry of await chromeProcesses()) {
 		if (!entry.command.includes(root)) continue;
 		const match = /ephemeral[\\/]([0-9a-f]+)[\\/]/i.exec(entry.command);
 		if (match === null) continue;
 		const name = match[1] as string;
-		byDirectory.set(name, [...(byDirectory.get(name) ?? []), entry.pid]);
+		const known = byDirectory.get(name) ?? { main: undefined, all: [] };
+		known.all.push(entry.pid);
+		if (!entry.command.includes("--type=")) known.main = entry.pid;
+		byDirectory.set(name, known);
 	}
 	return byDirectory;
 }
@@ -59,7 +71,7 @@ export function isAlive(pid: number): boolean {
 	}
 }
 
-/** Poll until none of `pids` is alive; the survivors at the deadline otherwise (an empty list is success). */
+/** Poll until none of `pids` is alive; the survivors at the deadline otherwise (an empty list is success; a 0 deadline asks once). */
 export async function waitUntilGone(pids: readonly number[], timeoutMs: number): Promise<number[]> {
 	const deadline = Date.now() + timeoutMs;
 	for (;;) {
@@ -67,4 +79,42 @@ export async function waitUntilGone(pids: readonly number[], timeoutMs: number):
 		if (survivors.length === 0 || Date.now() >= deadline) return survivors;
 		await Bun.sleep(50);
 	}
+}
+
+/**
+ * Freeze a process so it stops answering anything — a Chrome that will not shut down is exactly this to whoever asks it to.
+ * Returns what thaws it. POSIX: SIGSTOP/SIGCONT. Windows: NtSuspendProcess/NtResumeProcess through bun:ffi (the POSIX branch is
+ * not exercised on this machine).
+ */
+export function suspendProcess(pid: number): () => void {
+	if (process.platform !== "win32") {
+		process.kill(pid, "SIGSTOP");
+		return () => {
+			try {
+				process.kill(pid, "SIGCONT");
+			} catch {
+				// Already gone: nothing to thaw.
+			}
+		};
+	}
+	const PROCESS_SUSPEND_RESUME = 0x0800;
+	const kernel = dlopen("kernel32.dll", {
+		OpenProcess: { args: [FFIType.u32, FFIType.i32, FFIType.u32], returns: FFIType.ptr },
+		CloseHandle: { args: [FFIType.ptr], returns: FFIType.i32 },
+	});
+	const ntdll = dlopen("ntdll.dll", {
+		NtSuspendProcess: { args: [FFIType.ptr], returns: FFIType.i32 },
+		NtResumeProcess: { args: [FFIType.ptr], returns: FFIType.i32 },
+	});
+	const handle = kernel.symbols.OpenProcess(PROCESS_SUSPEND_RESUME, 0, pid);
+	if (handle === null) throw new Error(`could not open process ${pid} to suspend it`);
+	const status = ntdll.symbols.NtSuspendProcess(handle);
+	if (status !== 0) {
+		kernel.symbols.CloseHandle(handle);
+		throw new Error(`NtSuspendProcess(${pid}) answered ${status}`);
+	}
+	return () => {
+		ntdll.symbols.NtResumeProcess(handle);
+		kernel.symbols.CloseHandle(handle);
+	};
 }

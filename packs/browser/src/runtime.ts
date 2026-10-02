@@ -17,10 +17,13 @@
  *    `ephemeral/`, no lock, deleted once its Chrome process is gone (and swept by
  *    the next server if this one died first). It keeps no sign-in, so whatever
  *    needs a saved profile refuses it (`profile_required`). Nobody can be
- *    relied on to close it (the host never says a session ended), so it is
- *    also closed after THROWAWAY_IDLE_MS with no call, and the least recently
- *    used one is closed when the pool is full and a slot is wanted — never a
- *    saved profile, a browser a task is driving or one a person is watching.
+ *    relied on to close it (the host never says a session ended), so one a
+ *    chat opened is also closed after THROWAWAY_IDLE_MS with no call, and the
+ *    least recently used one is closed when the pool is full and a slot is
+ *    wanted — never a saved profile, a browser a task or a call is working
+ *    on, one a View has joined, and the person's own Private browser only
+ *    after every chat's. A close that hangs is answered by killing the
+ *    browser's process tree; the slot is freed only on a confirmed exit.
  *  - Whole tasks run on upstream agent loops (jev, browser-use) against the
  *    same Chrome, through `task.ts`. We keep their progress, not their logic.
  *  - Sign-in is only ever OBSERVED, never derived: a probe that saw the
@@ -87,6 +90,7 @@ import type {
 import { BROWSER_ENGINES, MAX_ANNOTATION_REGIONS, MAX_BATCH_STEPS, MAX_EVAL_EXPRESSION_CHARS, MAX_EVAL_RESULT_CHARS, MAX_VIEWPORT, MAX_WAIT_MS, MIN_VIEWPORT, TASK_AGENTS } from "./contracts.js";
 import { credentialOrigin, resolveCredential, savedPassword, savedPasswords } from "./credentials.js";
 import { assertEngineAvailable, createEngineDriver } from "./engines/index.js";
+import { withTimeout } from "./engines/launch.js";
 import { launchReader } from "./engines/puppeteer.js";
 import type { EngineDriver, EngineState, EvalOutcome, LiveFrame, PageReader, PasswordSource, PerformOutcome, WaitCondition } from "./engines/types.js";
 import { AnnotationFiles } from "./annotation-file.js";
@@ -115,13 +119,22 @@ const MAX_NOTED = 512;
 /** browser_read's reader browser is closed this long after its last read. */
 const READER_IDLE_MS = 60_000;
 /**
- * A throwaway browser nobody has called for this long is closed. The host stamps every call with its session but sends this server
- * no word when a session ends, so a browser whose chat is gone looks exactly like one whose model is thinking: silence is the only
- * evidence there is. A chat that comes back to a closed browser is told what happened (`released`), not that its id is unknown.
+ * A throwaway browser a chat opened and nobody has called for this long is closed. The host stamps every call with its session but
+ * sends this server no word when a session ends, so a browser whose chat is gone looks exactly like one whose model is thinking:
+ * silence is the only evidence there is. Long on purpose: a model that works elsewhere for a few minutes keeps its page, and
+ * contention for slots is settled by least-recently-used eviction at the cap, not by this clock. A chat that comes back to a closed
+ * browser is told what happened (`released`), not that its id is unknown.
  */
-const THROWAWAY_IDLE_MS = 60_000;
-/** A person's View reads a browser it shows every 250 ms (stream.ts); a read this recent means somebody is looking at it. */
-const VIEWED_MS = 3_000;
+const THROWAWAY_IDLE_MS = 10 * 60_000;
+/** The longest delay a timer holds: a larger one fires after 1 ms, which would turn the idle check into a busy loop. */
+const MAX_TIMER_MS = 2_147_483_647;
+/**
+ * How long a throwaway's polite close gets before its process tree is killed: the driver's own 15 s bound on the browser exiting,
+ * plus what runs before it (CDP detaches that a frozen browser never answers). Under the host's 30 s tool-call limit with the kill.
+ */
+const GRACEFUL_CLOSE_MS = 20_000;
+/** A throwaway that could not be stopped is tried again after this long, or one idle period when that is shorter. */
+const CLOSE_RETRY_MS = 30_000;
 /** Ids of browsers the runtime closed on its own that are remembered, so their chats are told why; the oldest are forgotten first. */
 const MAX_RELEASED = 64;
 const MAX_FRAMES_RETAINED = 8;
@@ -179,7 +192,7 @@ export interface BrowserRuntimeOptions {
 	headless?: boolean;
 	/** How long a batch (`actMany`) may go on taking steps; defaults to ACT_BUDGET_MS. */
 	actBudgetMs?: number;
-	/** How long a throwaway browser may go without a call (or a person looking at it) before it is closed; defaults to THROWAWAY_IDLE_MS. */
+	/** How long a throwaway browser a chat opened may go without a call (and with no View joined) before it is closed; defaults to THROWAWAY_IDLE_MS, at most 2147483647 (a timer's limit). */
 	throwawayIdleMs?: number;
 	/**
 	 * TESTS ONLY: exact hostnames browser_read may reach although they are
@@ -272,14 +285,16 @@ interface Entry {
 	annotations: AnnotationFiles;
 	/** `performance.now()` when a call last reached this browser, from anyone: what the idle timeout and the least-recently-used order read. */
 	lastUsed: number;
-	/** The same for the View alone (its live reads, its input, its binding): a browser a person is looking at is never idle. -Infinity: never viewed. */
-	lastViewed: number;
+	/** Views joined to its live stream right now (stream.ts, through `viewing`). While any is, nobody may give the browser up. */
+	viewers: number;
 	/** Page-work calls queued or running. A browser with one is working, whatever the clocks say. */
 	pending: number;
-	/** A throwaway's idle timer (never set for a saved profile or the relay). */
+	/** A throwaway's idle timer, or its close retry (never set for a saved profile or the relay, nor for one a person opened). */
 	idle: NodeJS.Timeout | undefined;
 	/** Set once the runtime began closing it for being idle or to make room; cleared again if that close failed. */
 	retiring: Promise<void> | undefined;
+	/** A throwaway's polite close has failed once: it is killed from then on, because puppeteer treats a second close as already done. */
+	closeFailed: boolean;
 }
 
 export class BrowserRuntime implements BrowserRuntimePort {
@@ -334,7 +349,9 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	constructor(options: BrowserRuntimeOptions = {}) {
 		this.options = options;
 		this.idleMs = options.throwawayIdleMs ?? THROWAWAY_IDLE_MS;
-		if (!Number.isFinite(this.idleMs) || this.idleMs <= 0) throw new RangeError(`throwawayIdleMs must be a positive number of milliseconds, got ${String(options.throwawayIdleMs)}`);
+		if (!Number.isFinite(this.idleMs) || this.idleMs <= 0 || this.idleMs > MAX_TIMER_MS) {
+			throw new RangeError(`throwawayIdleMs must be a number of milliseconds above 0 and at most ${MAX_TIMER_MS}, got ${String(options.throwawayIdleMs)}`);
+		}
 		this.store = new ProfileStore(options.rootDir);
 		this.annotationFiles = new AnnotationFiles(join(this.store.rootDir, "annotations"));
 		// Only what a dead server abandoned: a live server's throwaway browsers are never touched.
@@ -476,12 +493,13 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				driver, release, revision: 1, frames: [], queue: Promise.resolve(), inputQueue: Promise.resolve(), closed: false,
 				task: null, worker: null, publish: null, secrets: new Set(), logRead: 0, logNoticed: 0, annotations,
 				opener, probe: { timer: undefined, running: undefined, again: false },
-				lastUsed: performance.now(), lastViewed: Number.NEGATIVE_INFINITY, pending: 0, idle: undefined, retiring: undefined,
+				lastUsed: performance.now(), viewers: 0, pending: 0, idle: undefined, retiring: undefined, closeFailed: false,
 			};
 			if (profile !== null && profile !== RELAY_PROFILE) entry.notice = this.touchProfile(profile, driver.app);
 			this.byId.set(entry.browserId, entry);
 			if (profile !== null) this.byProfile.set(profile, entry);
-			if (profile === null) this.watchIdle(entry, this.idleMs);
+			// A person's own Private browser is theirs: no clock closes it (the leak is chats' browsers, and the View stops reading while its tab is hidden).
+			if (profile === null && opener.caller !== "app") this.watchIdle(entry, this.idleMs);
 			return entry;
 		} catch (error) {
 			// A factory owns rollback until it returns; only its confirmed-close
@@ -528,19 +546,56 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		await Promise.allSettled(this.removals);
 	}
 
-	/** Retain ownership and the lock until the driver confirms shutdown. */
+	/** Retain ownership and the lock until the driver confirms shutdown. A throwaway that cannot be stopped is tried again soon. */
 	private async teardown(entry: Entry): Promise<void> {
 		if (this.byId.get(entry.browserId) !== entry) return;
 		settleOnClose(entry);
 		entry.closed = true;
 		entry.frames.length = 0;
-		// A task agent drives this Chrome; it stops before the browser does.
-		await this.stopTask(entry);
-		// One last look at the page the person leaves on: a sign-in done in place never loads a page. It must not hold a close up.
-		await this.probeAtClose(entry);
-		await entry.driver.close();
+		try {
+			// A task agent drives this Chrome; it stops before the browser does.
+			await this.stopTask(entry);
+			// One last look at the page the person leaves on: a sign-in done in place never loads a page. It must not hold a close up.
+			await this.probeAtClose(entry);
+			await this.stopBrowser(entry);
+		} catch (error) {
+			if (entry.profile === null) this.retryClose(entry);
+			throw error;
+		}
 		this.markUsed(entry);
 		entry.release();
+	}
+
+	/**
+	 * Stop `entry`'s browser. A saved profile's gets the driver's own confirmed close and nothing harder: its lock holds until the
+	 * process is provably gone, and a hard kill could cut a write to logins that matter. A throwaway keeps nothing, so a close that
+	 * hangs or fails is answered by killing the process tree (a Chrome seen hanging on exit never leaves by itself), and its slot is
+	 * freed only once the driver has seen the process exit. A close that failed once is not asked again: puppeteer takes a second one
+	 * for done at once, and releasing on that would free the slot of a Chrome that may still be running.
+	 */
+	private async stopBrowser(entry: Entry): Promise<void> {
+		if (entry.profile !== null) return await entry.driver.close();
+		if (!entry.closeFailed) {
+			try {
+				return await withTimeout(entry.driver.close(), GRACEFUL_CLOSE_MS, "browser close");
+			} catch (error) {
+				entry.closeFailed = true;
+				console.error("A throwaway browser did not close politely; its process tree is killed:", describe(error));
+			}
+		}
+		await entry.driver.kill();
+	}
+
+	/** A throwaway holds a slot and may hold a Chrome, and its chat may never call it again: try to stop it again soon, and again if that fails. */
+	private retryClose(entry: Entry): void {
+		if (this.disposed) return;
+		clearTimeout(entry.idle);
+		entry.idle = setTimeout(() => {
+			void this.serialize(entry, () => this.teardown(entry), { evenIfClosed: true })
+				.then(() => Promise.allSettled(this.removals))
+				.catch((error: unknown) => console.error("A throwaway browser still would not close:", describe(error)));
+		}, Math.min(this.idleMs, CLOSE_RETRY_MS));
+		entry.idle.unref();
 	}
 
 	async dispose(): Promise<void> {
@@ -587,10 +642,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 
 	bindView(session: string, browserId: string): void {
 		const entry = this.byId.get(browserId);
-		if (entry && !entry.closed) {
-			this.viewBySession.set(session, browserId);
-			entry.lastViewed = performance.now();
-		}
+		if (entry && !entry.closed) this.viewBySession.set(session, browserId);
 	}
 
 	viewOf(session: string): string | undefined {
@@ -603,7 +655,8 @@ export class BrowserRuntime implements BrowserRuntimePort {
 
 	/**
 	 * Close `entry` for a reason the chat that held it is told on its next call, and return once its Chrome is gone and its directory is
-	 * deleted. One close per browser: a second caller gets the first one's outcome.
+	 * deleted. One close per browser: a second caller gets the first one's outcome. A close that fails rejects, and `teardown` has by then
+	 * scheduled another try.
 	 */
 	private retire(entry: Entry, reason: string): Promise<void> {
 		entry.retiring ??= (async () => {
@@ -611,11 +664,8 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			await this.serialize(entry, () => this.teardown(entry), { evenIfClosed: true });
 			await Promise.allSettled(this.removals);
 		})().catch((error: unknown) => {
-			// Shutdown unconfirmed: it stays listed, closed, holding its slot and its Chrome. Tried again after another idle period, not left for ever.
+			// No longer on its way out, so nobody waits for it; it keeps its slot until a retry stops it.
 			entry.retiring = undefined;
-			clearTimeout(entry.idle);
-			entry.idle = setTimeout(() => void this.retire(entry, reason).catch((retry: unknown) => console.error("A throwaway browser's close failed again:", describe(retry))), this.idleMs);
-			entry.idle.unref();
 			throw error;
 		});
 		return entry.retiring;
@@ -643,10 +693,10 @@ export class BrowserRuntime implements BrowserRuntimePort {
 
 	private checkIdle(entry: Entry): void {
 		if (entry.closed || entry.retiring !== undefined) return;
-		const working = this.working(entry);
-		const quietMs = performance.now() - Math.max(entry.lastUsed, entry.lastViewed);
-		if (working || quietMs < this.idleMs) {
-			this.watchIdle(entry, working ? this.idleMs : this.idleMs - quietMs);
+		const quietMs = performance.now() - entry.lastUsed;
+		// A View joined to its stream is watching it however long the page takes to answer; a call in flight is work.
+		if (this.working(entry) || entry.viewers > 0 || quietMs < this.idleMs) {
+			this.watchIdle(entry, this.working(entry) || entry.viewers > 0 ? this.idleMs : this.idleMs - quietMs);
 			return;
 		}
 		const reason = `it was a throwaway browser, closed after ${this.idleMs / 1_000} s with no calls; open a new one with browser_open`;
@@ -654,15 +704,17 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	}
 
 	/**
-	 * The throwaway to give up when the pool is full: the one used least recently that nothing is happening on and no person is looking
-	 * at. A saved profile (and the relay) is never one: it holds a lock and logins.
+	 * The throwaway to give up when the pool is full: the one used least recently that nothing is happening on and no View has joined,
+	 * a chat's before the person's own Private one. A saved profile (and the relay) is never one: it holds a lock and logins. One
+	 * already on its way out is not asked about: `makeRoom` waits for it instead.
 	 */
 	private pickVictim(): Entry | undefined {
-		const now = performance.now();
 		let victim: Entry | undefined;
 		for (const entry of this.byId.values()) {
-			if (entry.profile !== null || entry.closed || entry.retiring !== undefined || this.working(entry) || now - entry.lastViewed < VIEWED_MS) continue;
-			if (victim === undefined || entry.lastUsed < victim.lastUsed) victim = entry;
+			if (entry.profile !== null || entry.closed || entry.viewers > 0 || this.working(entry)) continue;
+			const personal = entry.opener.caller === "app";
+			const victimPersonal = victim?.opener.caller === "app";
+			if (victim === undefined || (!personal && victimPersonal) || (personal === victimPersonal && entry.lastUsed < victim.lastUsed)) victim = entry;
 		}
 		return victim;
 	}
@@ -678,16 +730,38 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			return;
 		}
 		const victim = this.pickVictim();
-		if (victim === undefined) fail("too_many_browsers", this.refusal(asker));
+		if (victim === undefined) fail("too_many_browsers", this.refusal(asker, "none can be closed to make room: each is running a task, has a call in progress, is open in a View, is still shutting down, or is a saved profile's"));
 		const reason = `it was a throwaway browser, closed to make room for another chat's (at most ${MAX_BROWSERS} are open at once); open a new one with browser_open`;
-		await this.retire(victim, reason).catch((error: unknown) => console.error("A throwaway browser was not closed to make room:", describe(error)));
+		try {
+			await this.retire(victim, reason);
+		} catch (error) {
+			// One open closes one browser at most: when that one will not go, this open is refused rather than moved on to the next chat's.
+			console.error("A throwaway browser was not closed to make room:", describe(error));
+			fail("too_many_browsers", this.refusal(asker, "the one chosen to make room is still shutting down and no other was closed"));
+		}
 	}
 
 	/** Why nothing could be given up. It names what `asker` itself holds, never what anyone else does: an id is a capability. */
-	private refusal(asker: string | undefined): string {
+	private refusal(asker: string | undefined, because: string): string {
 		const held = asker === undefined ? [] : [...this.byId.values()].filter((entry) => entry.opener.session === asker && !entry.closed).map((entry) => entry.browserId);
-		const why = `at most ${MAX_BROWSERS} browsers may be open at once, and none can be closed to make room: each is running a task, is being watched by a person, or is a saved profile's`;
+		const why = `at most ${MAX_BROWSERS} browsers may be open at once, and ${because}`;
 		return held.length > 0 ? `${why}. You hold ${held.join(", ")}: browser_close the ones you are done with` : `${why}. None is yours; try again shortly`;
+	}
+
+	/**
+	 * A View joined `browserId`'s live stream (stream.ts): while any View is joined nobody may give the browser up, and it is not idle.
+	 * Returns what ends that. A count, not a clock: a View whose page answers slowly is still watching.
+	 */
+	viewing(browserId: string): () => void {
+		const entry = this.require(browserId);
+		entry.viewers += 1;
+		let ended = false;
+		return () => {
+			if (ended) return;
+			ended = true;
+			entry.viewers -= 1;
+			entry.lastUsed = performance.now();
+		};
 	}
 
 	// -----------------------------------------------------------------------
@@ -700,12 +774,12 @@ export class BrowserRuntime implements BrowserRuntimePort {
 
 	/** The live picture, for the View's direct channel (stream.ts): the driver's own cast, never queued behind page work. */
 	watchFrames(browserId: string, onFrame: (frame: LiveFrame) => void): () => void {
-		return this.require(browserId, true).driver.watchFrames(onFrame);
+		return this.require(browserId).driver.watchFrames(onFrame);
 	}
 
 	/** `state`, but NOT queued behind page work: the live view keeps reading it while a navigation or action is in flight. */
 	async liveState(browserId: string): Promise<BrowserState> {
-		const entry = this.require(browserId, true);
+		const entry = this.require(browserId);
 		return this.redact(entry, await this.buildState(entry));
 	}
 
@@ -716,7 +790,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	 * submitted the page takes no input at all (an `act` waited behind it in the page queue; this door has to refuse).
 	 */
 	async input(browserId: string, events: unknown): Promise<void> {
-		const entry = this.require(browserId, true);
+		const entry = this.require(browserId);
 		const admitted = admitInput(events, entry.viewport);
 		const run = async (): Promise<void> => {
 			if (entry.closed) fail("unknown_browser", "unknown or already closed browserId");
@@ -1714,12 +1788,10 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	// Internals
 	// -----------------------------------------------------------------------
 
-	private require(browserId: string, viewing = false): Entry {
+	private require(browserId: string): Entry {
 		const entry = typeof browserId === "string" ? this.byId.get(browserId) : undefined;
 		if (!entry || entry.closed) this.refuseGone(browserId);
-		const now = performance.now();
-		entry.lastUsed = now;
-		if (viewing) entry.lastViewed = now;
+		entry.lastUsed = performance.now();
 		return entry;
 	}
 
