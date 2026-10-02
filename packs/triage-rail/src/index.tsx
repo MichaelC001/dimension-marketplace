@@ -190,9 +190,8 @@ const Row = memo(function Row({
 	// after the last message is played; a holder that came and went with the summary would also remount the row button.
 	const ref = item.sessionRef;
 	if (!ref) return row;
-	const mail = item.voicemail !== undefined && item.voicemail.unplayed > 0;
 	return (
-		<div className="tr-row-holder" data-mail={mail ? "" : undefined}>
+		<div className="tr-row-holder">
 			{row}
 			<VoicemailMark sessionId={ref.sessionId} voicemail={item.voicemail} title={item.title} agent={item.profile} className="tr-mail" />
 		</div>

@@ -367,7 +367,6 @@ const Row = memo(function Row({ item, actions, presence, renaming, menuOpen, onO
 			</div>
 		);
 	}
-	const mail = mailKey(item) > 0 && ref !== undefined;
 	return (
 		<div
 			className="er-row"
@@ -376,7 +375,6 @@ const Row = memo(function Row({ item, actions, presence, renaming, menuOpen, onO
 			data-active={item.active ? "" : undefined}
 			data-unread={item.unread ? "" : undefined}
 			data-frozen={item.continuedInto ? "" : undefined}
-			data-mail={mail ? "" : undefined}
 		>
 			<button
 				type="button"

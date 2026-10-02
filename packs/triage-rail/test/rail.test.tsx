@@ -320,11 +320,12 @@ describe("the voice message mark", () => {
 		expect(mark("a")?.closest(".tr-row")).toBeNull();
 		const holder = mark("a")?.closest(".tr-row-holder");
 		expect(holder?.querySelector(":scope > .tr-row")?.getAttribute("data-session-id")).toBe("a");
-		expect(holder?.hasAttribute("data-mail")).toBe(true);
+		// The width the row gives up is keyed (in the stylesheet) on the mark actually being drawn as a direct child of the holder.
+		expect(holder?.querySelector(":scope > .tr-mail")).not.toBeNull();
 		// A bare row has the same holder (so the tree never changes shape when a message arrives) but is not marked as holding one.
 		const bare = container.querySelector('[data-session-id="b"]')?.closest(".tr-row-holder");
 		expect(bare).not.toBeNull();
-		expect(bare?.hasAttribute("data-mail")).toBe(false);
+		expect(bare?.querySelector(":scope > .tr-mail")).toBeNull();
 		// The mark is handed every addressable row, drawn or not: it decides, and must stay up under its open popover.
 		expect(markCalls.b).toBeGreaterThan(0);
 		// It is handed the row's identity, and the plain/needs-you distinction survives the pack.

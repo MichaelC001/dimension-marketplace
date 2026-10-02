@@ -468,6 +468,8 @@ describe("the voice message mark", () => {
 		// A button in a button is invalid HTML, so the mark is the row's sibling.
 		expect(mark("a")?.closest(".er-row-main")).toBeNull();
 		expect(mark("a")?.closest('[data-slot="chat-session"]')).toBe(rowNamed("Plan the Lisbon trip") as Element);
+		// The options button's room is keyed (in the stylesheet) on the mark being DRAWN as a direct child of the row.
+		expect(mark("a")?.parentElement).toBe(rowNamed("Plan the Lisbon trip") as Element);
 		// It is handed the row's identity, and the plain/needs-you distinction survives the pack.
 		expect(mark("a")?.getAttribute("data-title")).toBe("Plan the Lisbon trip");
 		expect(mark("a")?.getAttribute("data-agent")).toBe("aether");

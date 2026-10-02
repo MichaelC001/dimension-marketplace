@@ -752,11 +752,13 @@ var EMBER_RAIL_CSS = `
 }
 /* The voice message mark (doc 91 §8): a sibling of the row button, in flow at the trailing edge. The row button gives
    up exactly its width, so the title and the time keep their own columns. The options button moves left of it, onto the
-   time it already replaces on hover, so the mark never sits under it. */
+   time it already replaces on hover, so the mark never sits under it. Keyed on the mark actually being DRAWN (the kit's mark
+   decides: it draws nothing with voice off, and stays up under its open popover after the last message is played), not on the
+   summary. */
 [data-slot="chat-rail"] .er-mail {
 	margin-right: 8px;
 }
-[data-slot="chat-rail"] .er-row[data-mail] .er-options {
+[data-slot="chat-rail"] .er-row:has(> .er-mail) .er-options {
 	right: 32px;
 }
 @media (hover: none) {
@@ -1170,7 +1172,6 @@ var Row = memo(function Row({ item, actions, presence, renaming, menuOpen, onOpe
 			onCancel: () => onRenamed(item, null)
 		})
 	});
-	const mail = mailKey(item) > 0 && ref !== void 0;
 	return /* @__PURE__ */ jsxs("div", {
 		className: "er-row",
 		"data-slot": "chat-session",
@@ -1178,7 +1179,6 @@ var Row = memo(function Row({ item, actions, presence, renaming, menuOpen, onOpe
 		"data-active": item.active ? "" : void 0,
 		"data-unread": item.unread ? "" : void 0,
 		"data-frozen": item.continuedInto ? "" : void 0,
-		"data-mail": mail ? "" : void 0,
 		children: [
 			/* @__PURE__ */ jsxs("button", {
 				type: "button",
