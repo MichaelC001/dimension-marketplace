@@ -417,11 +417,12 @@ describe("the worker's life", () => {
     const defaults = plain.workers[0]!.of("init")[0]!;
     expect(defaults.refusePasswordFields).toBe(true);
     expect(defaults.excludeWebP).toBe(false);
+    expect(defaults.taskCredential).toBe(true); // the server registers browser_task, so the password refusal may name it
     expect(defaults.cwd).toBeUndefined();
-    const set = rig({ refusePasswordFields: false, excludeWebP: true, cwd: "/work/site" });
+    const set = rig({ refusePasswordFields: false, excludeWebP: true, cwd: "/work/site", taskCredential: false });
     await start(set.host);
     const chosen = set.workers[0]!.of("init")[0]!;
-    expect([chosen.refusePasswordFields, chosen.excludeWebP, chosen.cwd]).toEqual([false, true, "/work/site"]);
+    expect([chosen.refusePasswordFields, chosen.excludeWebP, chosen.cwd, chosen.taskCredential]).toEqual([false, true, "/work/site", false]);
   });
 
   test("a failure that asks for a new worker gets one: the reason is added unless the cell's own budget already said it, and the next ReferenceError is explained once", async () => {

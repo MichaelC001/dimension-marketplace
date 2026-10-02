@@ -58,6 +58,8 @@ export interface CodeHostOptions {
   refusePasswordFields?: boolean;
   /** JPEG instead of WebP for the screenshot the model sees. Default false. */
   excludeWebP?: boolean;
+  /** The server registers `browser_task` (it does, unconditionally, in this build): the realm's password refusal then names it. Default true. */
+  taskCredential?: boolean;
   /** Root of the per-session folders a cell keeps an over-cap output in. Absent: none is kept. */
   artifactsRoot?: string;
   timing?: Partial<CodeTiming>;
@@ -110,6 +112,7 @@ export class CodeHost implements CodeHostPort {
         ...(this.#options.cwd === undefined ? {} : { cwd: this.#options.cwd }),
         refusePasswordFields: this.#options.refusePasswordFields ?? true,
         excludeWebP: this.#options.excludeWebP ?? false,
+        taskCredential: this.#options.taskCredential ?? true,
         timing: this.#timing,
         onEmpty: () => {
           if (this.#sessions.get(id) === created) this.#sessions.delete(id);
