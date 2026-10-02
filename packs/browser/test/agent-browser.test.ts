@@ -299,7 +299,7 @@ describeWithChrome("the command line Chrome is started with", () => {
 		}
 	}
 
-	test("for a throwaway agent browser carries none of puppeteer's automation switches and the one that turns navigator.webdriver off, which the View's does not", async () => {
+	test("for a throwaway agent browser is the View's command line less puppeteer's automation switches, plus the one that turns navigator.webdriver off", async () => {
 		const saved = await spawnedWith(stockPuppeteer, false);
 		// Control: what puppeteer starts Chrome with when only --enable-automation is dropped (the View and a saved profile).
 		expect(saved).toEqual(expect.arrayContaining(["--disable-popup-blocking", "--disable-ipc-flooding-protection", "--allow-pre-commit-input"]));
@@ -309,7 +309,13 @@ describeWithChrome("the command line Chrome is started with", () => {
 		const agent = await spawnedWith(await agentPuppeteer(), true);
 		for (const dropped of ["--enable-automation", "--disable-popup-blocking", "--disable-ipc-flooding-protection", "--allow-pre-commit-input"]) expect(agent).not.toContain(dropped);
 		expect(agent).toContain("--disable-blink-features=AutomationControlled");
-		// The patched launcher adds none of puppeteer's own list of disabled features: the only ones are the caller's (none here).
-		expect(disabledFeatures(agent)).toEqual([]);
+		// Puppeteer's own list of disabled features stays (AcceptCHFrame, IsolateSandboxedIframes, ProcessPerSiteUpToMainFrameThreshold, ...): it is whatever the
+		// stock library passes, not a copy of it, and no page can tell.
+		expect(disabledFeatures(agent)).toEqual(disabledFeatures(saved));
+		// Nothing else in the command line differs from the View's, but the user-data dir (a fresh directory per launch).
+		const savedRest = saved.filter((arg) => !arg.startsWith("--user-data-dir="));
+		const agentRest = agent.filter((arg) => !arg.startsWith("--user-data-dir="));
+		expect(savedRest.filter((arg) => !agentRest.includes(arg)).sort()).toEqual(["--allow-pre-commit-input", "--disable-ipc-flooding-protection", "--disable-popup-blocking"]);
+		expect(agentRest.filter((arg) => !savedRest.includes(arg))).toEqual(["--disable-blink-features=AutomationControlled"]);
 	}, BROWSER_TEST_TIMEOUT_MS);
 });

@@ -155,13 +155,16 @@ describe("the patched library a throwaway browser launches with", () => {
 		return (switches[0] ?? "").slice("--disable-features=".length).split(",").filter(Boolean);
 	};
 
-	test("turns off none of the features puppeteer's own list does, only what the caller asks for", async () => {
+	test("turns off the features puppeteer's own list does, and what the caller asks for besides", async () => {
 		const patched = await agentPuppeteer();
 		// A fresh object each time: puppeteer removes the switches it merges from the caller's own `args`.
 		const asked = () => ({ headless: true, args: ["--disable-features=AskedFor"] });
 		// Control: the stock library adds its list (Translate, AcceptCHFrame, MediaRouter, ...) to the caller's.
-		expect(disabled(await stockPuppeteer.defaultArgs(asked()))).toEqual(expect.arrayContaining(["AskedFor", "AcceptCHFrame", "Translate"]));
-		expect(disabled(await patched.defaultArgs(asked()))).toEqual(["AskedFor"]);
-		expect(disabled(await patched.defaultArgs({ headless: true }))).toEqual([]);
+		const stock = disabled(await stockPuppeteer.defaultArgs(asked()));
+		expect(stock).toEqual(expect.arrayContaining(["AskedFor", "AcceptCHFrame", "Translate"]));
+		expect(disabled(await patched.defaultArgs(asked()))).toEqual(stock);
+		const stockOwn = disabled(await stockPuppeteer.defaultArgs({ headless: true }));
+		expect(stockOwn).toContain("IsolateSandboxedIframes");
+		expect(disabled(await patched.defaultArgs({ headless: true }))).toEqual(stockOwn);
 	}, 60_000);
 });

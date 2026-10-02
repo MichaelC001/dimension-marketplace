@@ -69,7 +69,8 @@ export const AGENT_LAUNCH_ARGS: readonly string[] = ["--disable-blink-features=A
  * Switches puppeteer adds by default that a person's Chrome does not carry and a page can observe: `--enable-automation`
  * (webdriver, the infobar), `--disable-popup-blocking` (a `window.open` with no gesture succeeds), `--disable-ipc-flooding-protection`
  * (a `pushState` flood is never throttled), `--allow-pre-commit-input`. The privacy switches in `CHROMIUM_ARGS` (puppeteer.ts) are kept on
- * purpose: a page cannot see them.
+ * purpose: a page cannot see them. So is puppeteer's `--disable-features` list (the patched library does not drop it as OMP's does): the
+ * detection page reads nothing from it, and without it Chrome starts an extra renderer process per browser (WebUIOmniboxPopup, WebUIOmniboxAimPopup).
  */
 export const AGENT_IGNORED_DEFAULT_ARGS: readonly string[] = ["--enable-automation", "--disable-popup-blocking", "--disable-ipc-flooding-protection", "--allow-pre-commit-input"];
 

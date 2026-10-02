@@ -5,7 +5,7 @@
  * the Browser View and every saved profile keep the stock puppeteer-core that app/server.mjs imports.
  *
  * Derived from the puppeteer-core 25.3.0 patch in oh-my-pi (omp/patches/puppeteer-core@25.3.0.patch), rebased onto 25.11.0
- * (which added a logger to every constructor, extension worlds, and a longer default --disable-features list). MIT licence:
+ * (which added a logger to every constructor and extension worlds). MIT licence:
  *
  *   Copyright (c) 2025 Mario Zechner
  *   Copyright (c) 2025-2026 Can Bölük
@@ -35,7 +35,10 @@
  *   api/Frame.js, api/ElementHandle.js, common/QueryHandler.js
  *                         evaluate / evaluateHandle / $eval / $$eval / waitForFunction / waitForSelector run in the
  *                         utility world, unless the code opts into the page's own world with a leading "//!world=main".
- *   node/ChromeLauncher.js  puppeteer's default --disable-features list is not added.
+ *   node/ChromeLauncher.js  NOT patched, on purpose. OMP's hunk drops puppeteer's default --disable-features list; a throwaway keeps it. The
+ *                         detection page flags nothing with the list or without it, and without it WebUIOmniboxPopup and WebUIOmniboxAimPopup
+ *                         are no longer disabled: Chrome then starts one more renderer process per browser (measured: 12 renderers for
+ *                         4 browsers against 8, ~180 MB private at idle).
  */
 var __defProp = Object.defineProperty;
 var __getOwnPropNames = Object.getOwnPropertyNames;
@@ -32471,11 +32474,20 @@ var ChromeLauncher = class extends BrowserLauncher {
       return feature !== "";
     });
     const disabledFeatures = [
-      // agent-browser: puppeteer's own default list (Translate, AcceptCHFrame, MediaRouter,
-      // OptimizationHints, the WebUI popups, ProcessPerSiteUpToMainFrameThreshold,
-      // IsolateSandboxedIframes) is a non-default flag set a person's Chrome does not
-      // carry, and AcceptCHFrame changes client-hint negotiation. Only what the caller
-      // asked to disable stays.
+      "Translate",
+      // AcceptCHFrame disabled because of crbug.com/1348106.
+      "AcceptCHFrame",
+      "MediaRouter",
+      "OptimizationHints",
+      "WebUIReloadButton",
+      "WebUIOmniboxPopup",
+      "WebUIOmniboxAimPopup",
+      ...turnOnExperimentalFeaturesForTesting ? [] : [
+        // https://crbug.com/1492053
+        "ProcessPerSiteUpToMainFrameThreshold",
+        // https://github.com/puppeteer/puppeteer/issues/10715
+        "IsolateSandboxedIframes"
+      ],
       ...userDisabledFeatures
     ].filter((feature) => {
       return feature !== "";

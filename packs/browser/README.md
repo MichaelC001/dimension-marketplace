@@ -234,8 +234,11 @@ so sites treat it as one:
     were not run): the page's two Runtime rows flag while it is attached and no
     other row does (`bench/detect-report-2026-10-02.md`).
   - Puppeteer's default popup-blocker, IPC-flooding and pre-commit-input
-    switches and its `--disable-features` list are left out, so a page sees the
-    defaults of a Chrome a person runs.
+    switches are left out, so a page sees the defaults of a Chrome a person
+    runs. Its `--disable-features` list is kept: the detection page flags
+    nothing with it or without it, and without it Chrome starts one more
+    renderer process in every browser (the omnibox popup features are no longer
+    disabled; 4 throwaways idled at 921 MB private against 738 MB, one sample each).
   - On a machine with no GPU, WebGL reports a common integrated GPU of the
     platform instead of SwiftShader, in the page, in each same-origin and
     cross-origin frame and in each dedicated and shared worker (sent to each
