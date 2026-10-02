@@ -7,10 +7,10 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { buildConnectionReport, type ConnectionReportParams, PACK_CONNECTION_REPORT_METHOD } from "./connection.js";
 import type { ActManyResult, BrowserEngine, BrowserOpener, BrowserRuntimePort, BrowserState, TaskRun, ToolCaller } from "./contracts.js";
-import { BROWSER_ENGINES, CREDENTIAL_MODES, MAX_ANNOTATION_REGIONS, MAX_BATCH_STEPS, MAX_EVAL_EXPRESSION_CHARS, MAX_VIEWPORT, MAX_WAIT_MS, MIN_VIEWPORT, PUBLISH_MODES } from "./contracts.js";
+import { BROWSER_ENGINES, CONTROL_MODES, CREDENTIAL_MODES, MAX_ANNOTATION_REGIONS, MAX_BATCH_STEPS, MAX_EVAL_EXPRESSION_CHARS, MAX_VIEWPORT, MAX_WAIT_MS, MIN_VIEWPORT, PUBLISH_MODES } from "./contracts.js";
 import { MAX_DETAIL_BYTES } from "./annotation-file.js";
 import { type PublishPreset, loadPresets, resolvePreset, summarizePresets } from "./presets.js";
-import { MAX_LABEL_CHARS } from "./profile-meta.js";
+import { MAX_LABEL_CHARS, PROFILE_COLOURS } from "./profile-meta.js";
 import { profilesForModel } from "./profile-list.js";
 import { BrowserRuntime } from "./runtime.js";
 import { fail } from "./store.js";
@@ -126,9 +126,11 @@ async function respond(extra: CallExtra, run: () => Promise<{ text: string; stru
   }
 }
 
-/** A state as its caller reads it: the View draws the tabs' favicons (data: URLs of up to 32 KB each); a model would pay for every one, every call. */
+/** A state as its caller reads it: the View draws the tabs' favicons (data: URLs of up to 32 KB each) and the profile's look (label, colour, avatar); a model would pay for every one, every call. */
 function stateFor(caller: ToolCaller | undefined, state: BrowserState): object {
-  return caller === "app" ? state : { ...state, tabs: state.tabs.map(({ favicon: _favicon, ...tab }) => tab) };
+  if (caller === "app") return state;
+  const { look: _look, ...rest } = state;
+  return { ...rest, tabs: state.tabs.map(({ favicon: _favicon, ...tab }) => tab) };
 }
 
 /** What a model is told of a batch: where the page is now; per-step detail only when a step stopped it or returned a value. */
@@ -234,12 +236,17 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     const session = sessionOf(extra);
     return { ...(caller === undefined ? {} : { caller }), ...(session === undefined ? {} : { session }) };
   };
-  const openAt = async (profile: string | undefined, engine: BrowserEngine | undefined, url: string | undefined, opener: BrowserOpener): Promise<BrowserState> => {
+  const openAt = async (profile: string | undefined, engine: BrowserEngine | undefined, url: string | undefined, opener: BrowserOpener, leaving?: string): Promise<BrowserState> => {
     // Validate before launching so malformed input cannot strand a browser/profile lock.
     const action = url === undefined ? undefined : navigateStep.parse({ kind: "navigate", url });
-    const state = await runtime.open({ ...(profile === undefined ? {} : { profile }), ...(engine ? { engine } : {}) }, opener);
+    const state = await runtime.open({ ...(profile === undefined ? {} : { profile }), ...(engine ? { engine } : {}), ...(leaving === undefined ? {} : { leaving }) }, opener);
     if (!action) return state;
-    const navigated = await runtime.act(state.browserId, action);
+    // As the caller who opened it: the person's own open is not an agent's action, and a browser they took over takes their navigation.
+    // But the person's address bar may drive a page a post is pinned to (it voids the post); an open must not do that by the side door.
+    if (opener.caller === "app" && state.publish?.status === "awaiting-confirmation") {
+      fail("publish_pending", "a post awaits confirmation on this browser; post or cancel it before opening a page in it");
+    }
+    const navigated = await runtime.act(state.browserId, action, opener.caller);
     if (navigated.status !== "completed") throw new Error(`Opened, but navigating to ${url} ${navigated.status}: ${navigated.error}`);
     return navigated.state;
   };
@@ -462,7 +469,42 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     inputSchema: {}, annotations: READ_ONLY,
   }, (_args, extra) => respond(extra, async () => {
     const list = await runtime.profileList(sessionOf(extra));
-    return { text: JSON.stringify(profilesForModel(list)), structured: { profiles: list } };
+    // The browsers this chat holds that are not profiles (Private ones, the person's Chrome) are the View's to list and close: a model is not told their ids.
+    const browsers = callerOf(extra) === "app" ? await runtime.openBrowsers(sessionOf(extra)) : [];
+    return { text: JSON.stringify(profilesForModel(list)), structured: { profiles: list, browsers } };
+  }));
+  // The View's Add profile. App-only: an agent that wants a profile of its own names a new short lowercase one in browser_open.
+  registerAppTool(server, "browser_profile_add", {
+    title: "Add Profile",
+    description: "Create a saved profile from a name the person typed (any script, up to 48 characters, shown as typed; the folder is derived and never renamed), with an optional colour and one emoji avatar. Refused with a plain sentence when the name is empty, already taken (in any case), reserved or could be a path. Opens nothing. Answers {profile}.",
+    inputSchema: { name: z.string().max(200), colour: z.enum(PROFILE_COLOURS).optional(), avatar: z.string().max(16).optional() },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }, _meta: APP_ONLY,
+  }, ({ name, colour, avatar }, extra) => result(async () => ({ profile: await runtime.addProfile({ name, ...(colour === undefined ? {} : { colour }), ...(avatar === undefined ? {} : { avatar }) }, callerOf(extra)) })));
+  // The View's Take over / Hand back. App-only, and the runtime refuses any caller but the View on its own.
+  registerAppTool(server, "browser_control", {
+    title: "Take Over Browser",
+    description: "The person in the View takes this browser over (mode take: an agent's page actions on it are refused as human_driving until handed back; reads still work) or hands it back (mode return). Refused while " + (jev ? "a task runs or " : "") + "a post awaits confirmation. Answers the state.",
+    inputSchema: { browserId: capability, mode: z.enum(CONTROL_MODES) },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false }, _meta: APP_ONLY,
+  }, ({ browserId, mode }, extra) => result(async () => stateFor(callerOf(extra), await runtime.control(browserId, mode, callerOf(extra)))));
+  // The View's switch to another profile: closes the browser it leaves unless something depends on it, and gives the wheel back. App-only; the runtime refuses any other caller itself.
+  registerAppTool(server, "browser_leave", {
+    title: "Leave Browser",
+    description: "The person in the View leaves this browser for another profile. The wheel goes back to the agent if they held it. The browser is closed unless an agent opened it, " + (jev ? "a task runs on it, " : "") + "a post awaits confirmation there, a call is in progress, the person had taken it over, or it is their own Chrome; those stay open and are listed in the profile menu. Answers {closed}.",
+    inputSchema: { browserId: capability },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false }, _meta: APP_ONLY,
+  }, ({ browserId }, extra) => result(async () => ({ ...(await runtime.leave(browserId, callerOf(extra))) })));
+  // The View's switch to another profile, in one call that opens it the way browser_open does: with the pool full, the browser the person leaves is closed FIRST when leaving would close it,
+  // so the open takes that slot and not an agent's throwaway; with room, nothing is closed before the new one is open. App-only; the runtime refuses any other caller itself.
+  registerAppTool(server, "browser_switch", {
+    title: "Switch Browser",
+    description: "The person in the View opens another profile (or a Private browser, with no profile) and leaves the browser they were on. Like browser_open, and the View shows the new browser. With the pool full, the browser being left is closed first when leaving it would close it, so the open never takes an agent's throwaway; it is otherwise left only by browser_leave, once this answered. Answers the new browser's state.",
+    inputSchema: { leaving: capability, profile: profile.optional(), engine: z.enum(BROWSER_ENGINES).optional() },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }, _meta: APP_ONLY,
+  }, ({ leaving, profile, engine }, extra) => result(async () => {
+    const state = await openAt(profile, engine, undefined, openerOf(extra), leaving);
+    showing(extra, state.browserId);
+    return stateFor(callerOf(extra), state);
   }));
   server.registerTool("browser_close", {
     description: "Close this owned browser (stopping any task) and release its profile lock. Persisted logins remain; a throwaway's data is deleted; the user's relay browser is never terminated. Refused while a publish awaits confirmation (confirm, cancel or wait first).",

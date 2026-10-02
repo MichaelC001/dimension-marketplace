@@ -133,11 +133,11 @@ test("without jev's key a session is offered no browser_task tool; with it, thos
 	}
 });
 
-test("without jev's key no tool a session is offered names browser_task or a task running; with it, browser_act and browser_publish do", async () => {
+test("without jev's key no tool a session is offered names browser_task or a task running; with it, browser_act, browser_control, browser_leave and browser_publish do", async () => {
 	const offered = async (key?: string) => (await (await connect(key)).client.listTools()).tools;
 	const mentions = (tools: Array<{ name: string }>) => tools.filter((tool) => /browser_task|task runs/.test(JSON.stringify(tool)) && !tool.name.startsWith("browser_task")).map((tool) => tool.name).sort();
 
-	expect(mentions(await offered("jev-key"))).toEqual(["browser_act", "browser_publish"]);
+	expect(mentions(await offered("jev-key"))).toEqual(["browser_act", "browser_control", "browser_leave", "browser_publish"]);
 	for (const unset of [undefined, "", "   "]) {
 		expect({ key: unset, mentions: mentions(await offered(unset)) }).toEqual({ key: unset, mentions: [] });
 	}

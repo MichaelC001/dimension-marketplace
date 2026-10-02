@@ -342,6 +342,32 @@ describeWithChrome("what a full pool never gives up", () => {
 	);
 
 	test(
+		"a browser the person has the wheel of is not given up, whether or not a View is joined to it, and is the one given up once the wheel is handed back",
+		async () => {
+			const rootDir = await createRoot();
+			const runtime = newRuntime(rootDir);
+			// A chat's browser, opened first and never called again: by recency alone the oldest, the one a full pool gives up first.
+			const taken = await openThrowaway(runtime, rootDir, "s1");
+			const others = [await openThrowaway(runtime, rootDir, "s2"), await openThrowaway(runtime, rootDir, "s3"), await openThrowaway(runtime, rootDir, "s4")];
+			await runtime.control(taken.browserId, "take", "app");
+			for (const browser of others) watching(runtime, browser.browserId);
+
+			// Nothing else can go, and the person's page has no View joined (a hidden document closes its stream): the open is refused.
+			const chrome = await chromeOf(rootDir, taken);
+			expect((await refusal(() => runtime.open({ viewport: VIEWPORT }, asSession("s5")))).code).toBe("too_many_browsers");
+			expect(isAlive(chrome.main)).toBe(true);
+			expect((await runtime.state(taken.browserId)).takenOver).toBe(true);
+
+			// Handed back, it is a throwaway like any other again.
+			await runtime.control(taken.browserId, "return", "app");
+			await openThrowaway(runtime, rootDir, "s5");
+			expect((await refusal(() => runtime.state(taken.browserId))).code).toBe("unknown_browser");
+			expect(await waitUntilGone(chrome.all, 10_000)).toEqual([]);
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
 		"a saved profile's browser and its lock are never given up for a throwaway",
 		async () => {
 			const rootDir = await createRoot();
@@ -641,6 +667,31 @@ describeWithChrome("a throwaway nobody calls", () => {
 			for (const browser of [called, waiting, shown]) expect((await runtime.state(browser.browserId)).browserId).toBe(browser.browserId);
 			expect(await waitUntilGone(silentChrome.all, 10_000)).toEqual([]);
 			expect((await refusal(() => runtime.state(silent.browserId))).code).toBe("unknown_browser");
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"a chat's browser the person has the wheel of is never closed for being quiet, with no View joined to it; the clock starts once the wheel is handed back",
+		async () => {
+			const rootDir = await createRoot();
+			const runtime = newRuntime(rootDir, { throwawayIdleMs: 2_000 });
+			const taken = await openThrowaway(runtime, rootDir, "s1");
+			const takenChrome = await chromeOf(rootDir, taken);
+			const quiet = await openThrowaway(runtime, rootDir, "s2");
+			const quietChrome = await chromeOf(rootDir, quiet);
+			await runtime.control(taken.browserId, "take", "app");
+
+			// The control first: the browser beside it, with the same silence, really is closed by the clock.
+			expect(await waitUntilGone(quietChrome.all, 15_000)).toEqual([]);
+			// A real wait: the idle clock reads performance.now over a live Chrome, which no fake timer moves. The person's browser outlasts several idle timeouts with no call and no stream (nothing here calls it: a call is use).
+			await Bun.sleep(5_000);
+			expect(isAlive(takenChrome.main)).toBe(true);
+
+			// Handed back, it is any chat's throwaway again, and the same silence now closes it.
+			await runtime.control(taken.browserId, "return", "app");
+			expect(await waitUntilGone(takenChrome.all, 15_000)).toEqual([]);
+			expect((await refusal(() => runtime.state(taken.browserId))).code).toBe("unknown_browser");
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);
