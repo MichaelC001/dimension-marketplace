@@ -27,7 +27,7 @@ type WaitUntil = "load" | "domcontentloaded" | "networkidle0" | "networkidle2";
 type ActionabilityResult = { ok: true; x: number; y: number } | { ok: false; reason: string };
 
 /** The text-selector click's own loop gives up this long before the op's ceiling, so its message (the last actionability reason it saw) is the one thrown, not the op's generic one. */
-const TEXT_CLICK_LOOP_SLACK_MS = 0;
+const TEXT_CLICK_LOOP_SLACK_MS = 250;
 
 /** The `tab` object `tab.run` code receives (and what a `call` chain is rendered against): OMP's helpers, with OMP's signatures. */
 export interface TabApi {

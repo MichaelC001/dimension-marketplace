@@ -59,6 +59,8 @@ Object.defineProperty(f, "type", { get() { reads += 1; return reads === 1 ? "tex
   document.addEventListener("mouseup", event => { if (down) { down = false; log.textContent = "up@" + event.clientX + "," + event.clientY; } });
 </script>`,
   "/xhr": `<!doctype html><title>Xhr</title><script>setTimeout(() => fetch("/api/data?x=1"), 300)</script>`,
+  // Two fetches, the second the one a waitForResponse predicate has to hold out for.
+  "/xhr-two": `<!doctype html><title>Xhr two</title><script>setTimeout(() => fetch("/api/other"), 300); setTimeout(() => fetch("/api/data?x=2"), 700)</script>`,
   "/article": `<!doctype html><html><head><title>The article page</title></head><body>
 <header><nav><a href="/">Home</a> <a href="/about">About</a></nav></header>
 <main><article><h1>A real article</h1>
@@ -84,7 +86,7 @@ export async function startFixture(): Promise<Fixture> {
       }, ms);
       return;
     }
-    if (url.pathname === "/api/data") {
+    if (url.pathname === "/api/data" || url.pathname === "/api/other") {
       response.setHeader("content-type", "application/json");
       response.end(JSON.stringify({ ok: true }));
       return;

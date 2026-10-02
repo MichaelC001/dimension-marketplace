@@ -1,8 +1,9 @@
 // Copied from OMP (https://github.com/can1357/oh-my-pi, MIT), packages/coding-agent/src/tools/browser/tab-worker.ts (describeScreenshot, preparePageForScreenshot, #captureScreenshot), tools/render-utils.ts (formatScreenshot, shortenPath) and utils/image-resize.ts (formatDimensionNote) @ dc5f95d9e1 (Dimension omp fork).
 // Copyright (c) 2025 Mario Zechner; (c) 2025-2026 Can Bölük; (c) 2026 Stencil Labs, Inc. See ../../../third-party/omp/LICENSE.
-// Changed for the Browser pack (matrix D13, D14, H9): the model's picture is encoded by Chrome at its final size (clip scale, WebP q70, the longest edge at most 1024, at most 150 KiB, as the
+// Changed for the Browser pack: (matrix D13, D14, H9) the model's picture is encoded by Chrome at its final size (clip scale, WebP q70, the longest edge at most 1024, at most 150 KiB, as the
 // engine's shotForModel does) where OMP captures a PNG and shrinks it with Bun.Image, which Node does not have; the full-resolution PNG is a second capture and is taken only when a screenshot
-// directory is set. Caption lines, the dimension note, the file naming and the destination rules are OMP's.
+// directory is set. Caption lines, the dimension note, the file naming and the destination rules are OMP's. The default destination is the temp directory the worker STARTED with: the host's scrubbed
+// environment replaces `process.env` on init, and on Windows `os.tmpdir()` without TEMP, TMP and SystemRoot is the relative path `undefined\temp` under the working directory.
 
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -38,6 +39,8 @@ export const MODEL_SHOT_QUALITY = 70;
 const MODEL_SHOT_MIN_EDGE = 200;
 const QUALITY_STEPS = [60, 50, 40] as const;
 const SCALE_STEPS = [0.75, 0.5, 0.35, 0.25] as const;
+/** `os.tmpdir()` as it was when the module loaded, before the worker swapped in the host's environment (see `scrubEnvironment`). */
+const STARTUP_TEMP_DIR = os.tmpdir();
 
 /** Human-readable label for a screenshot op, used in op tracking + timeout errors. */
 export function describeScreenshot(opts?: ScreenshotOptions): string {
@@ -292,7 +295,7 @@ export async function captureScreenshot(
   const ext = extensionOf(savedMimeType);
   const dest = config.dir
     ? path.join(config.dir, `screenshot-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, -1)}.${ext}`)
-    : path.join(os.tmpdir(), `dimension-sshots-${crypto.randomUUID()}.${ext}`);
+    : path.join(STARTUP_TEMP_DIR, `dimension-sshots-${crypto.randomUUID()}.${ext}`);
   await fs.promises.mkdir(path.dirname(dest), { recursive: true });
   await fs.promises.writeFile(dest, saved);
   screenshots.push({ dest, mimeType: savedMimeType, bytes: saved.length, width, height });

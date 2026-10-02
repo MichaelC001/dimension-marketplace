@@ -19,6 +19,9 @@ import { OpRunner, type RunState, resolveOpTimeouts, resolveWaitTimeout } from "
 import { chromePath, type Fixture, type LaunchedChrome, launchChrome, startFixture } from "./code-tab-fixture";
 import { describeWithChrome } from "./fixture";
 
+/** What globalThis held before any realm was made (module load, imports done): a global a run adds shows up against it, however early in the file the run was. */
+const GLOBALS_AT_LOAD = Object.getOwnPropertyNames(globalThis);
+
 /** The first printed line group of a run: a screenshot's caption. */
 function captionOf(result: RunResult): string {
   const first = result.displays[0];
@@ -601,9 +604,11 @@ describeWithChrome("the tab realm drives a page it adopted", () => {
       expect(navigated).toBe(fixture.url("/done"));
       await goto("/xhr");
       expect(await value('(await tab.waitForResponse("/api/data")).url()')).toBe(fixture.url("/api/data?x=1"));
-      // A function predicate is polled on every response until it says yes; the page's own fetch lands 300 ms after load.
-      await goto("/xhr");
-      expect(await value("const response = await tab.waitForResponse(r => r.url().includes('/api/data')); [response.status(), new URL(response.url()).pathname]")).toEqual([200, "/api/data"]);
+      // A function predicate (sync or async) is asked about every response, and the wait goes on until it says yes: this page fetches /api/other at 300 ms and /api/data at 700 ms.
+      await goto("/xhr-two");
+      expect(await value("const response = await tab.waitForResponse(r => r.url().includes('/api/data')); new URL(response.url()).pathname + new URL(response.url()).search")).toBe("/api/data?x=2");
+      await goto("/xhr-two");
+      expect(await value("(await tab.waitForResponse(async r => r.url().includes('/api/data'))).status()")).toBe(200);
       await goto("/xhr");
       expect(await value("(await tab.waitForResponse(/\\/api\\/data\\?x=1$/)).status()")).toBe(200);
     }, 20_000);
@@ -734,10 +739,9 @@ describeWithChrome("the tab realm drives a page it adopted", () => {
     test("the code can reach Node as OMP's can, and nothing of the pack's own is lent to it", async () => {
       expect(await value('typeof (await import("node:fs")).readFileSync')).toBe("function");
       expect(await value("[typeof tab, typeof page, typeof browser, typeof assert, typeof wait]")).toEqual(["object", "object", "object", "function", "function"]);
-      // The realm adds no global of its own: what the code sees on globalThis is what this very process has. The scope names (tab, page, ...) are lexical.
-      const mine = Object.getOwnPropertyNames(globalThis);
+      // The realm adds no global of its own, however many runs it has made: what the code sees on globalThis is what this process had before any realm existed. The scope names (tab, page, ...) are lexical.
       const theirs = (await value("Object.getOwnPropertyNames(globalThis)")) as string[];
-      expect(theirs.filter(name => !mine.includes(name))).toEqual([]);
+      expect(theirs.filter(name => !GLOBALS_AT_LOAD.includes(name))).toEqual([]);
       // And `tab` hands out the documented helpers only: no session, run, realm or connection object rides on it.
       expect(await value("Object.keys(tab).sort()")).toEqual(
         [

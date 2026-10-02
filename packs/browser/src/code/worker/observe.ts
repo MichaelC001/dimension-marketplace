@@ -1,7 +1,7 @@
 // Copied from OMP (https://github.com/can1357/oh-my-pi, MIT), packages/coding-agent/src/tools/browser/tab-worker.ts (INTERACTIVE_AX_ROLES, isInteractiveNode, collectObservationEntries, #collectObservation)
 // and tab-protocol.ts (Observation, ObservationEntry) @ dc5f95d9e1 (Dimension omp fork).
 // Copyright (c) 2025 Mario Zechner; (c) 2025-2026 Can Bölük; (c) 2026 Stencil Labs, Inc. See ../../../third-party/omp/LICENSE.
-// Changed for the Browser pack (matrix D10): the observation lives with its element cache instead of WorkerCore; `viewport` is the page's real size (the worker adopts a page and never sets its
+// Changed for the Browser pack: (matrix D10) the observation lives with its element cache instead of WorkerCore; `viewport` is the page's real size (the worker adopts a page and never sets its
 // viewport, so puppeteer's `page.viewport()` is null and OMP would print its 1365x768 default whatever the page is).
 
 import type { ElementHandle, Page, SerializedAXNode } from "puppeteer-core";

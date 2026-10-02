@@ -1,7 +1,7 @@
 // Copied from OMP (https://github.com/can1357/oh-my-pi, MIT), packages/coding-agent/src/tools/browser/tab-worker.ts (the WorkerCore fields and methods that belong to one adopted page: #observeDialogs,
 // #claimRelayTarget, #clearElementCache, #stopLoading, #close) @ dc5f95d9e1 (Dimension omp fork).
 // Copyright (c) 2025 Mario Zechner; (c) 2025-2026 Can Bölük; (c) 2026 Stencil Labs, Inc. See ../../../third-party/omp/LICENSE.
-// Changed for the Browser pack (matrix D5, D28): OMP's worker is ONE tab, so its state is WorkerCore's; here one worker holds every tab of a session, so each adopted page is a TabSession.
+// Changed for the Browser pack: (matrix D5, D28) OMP's worker is ONE tab, so its state is WorkerCore's; here one worker holds every tab of a session, so each adopted page is a TabSession.
 // The engine answers dialogs (one handler, two CDP clients never both answer), so the session only OBSERVES them, and learns they were answered from CDP's javascriptDialogClosed.
 
 import type { Browser, CDPSession, Page } from "puppeteer-core";

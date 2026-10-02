@@ -2,12 +2,12 @@
 // packages/coding-agent/src/eval/js/executor.ts (the timeout annotation) @ dc5f95d9e1 (Dimension omp fork).
 // Copyright (c) 2025 Mario Zechner; (c) 2025-2026 Can Bölük; (c) 2026 Stencil Labs, Inc. See ../../../third-party/omp/LICENSE.
 // Changed for the Browser pack: one cell per worker and one facade (OMP's prelude.js, verbatim) whose two hooks, `__omp_prelude__` and `__omp_display__`, route by async context to the run that
-// called them; the bridge is a function the worker core gives each run; the eval tool's output sink is `CellOutput`; no cwd, tool bridge or handle machinery.
+// called them; the bridge is a function the worker core gives each run; the eval tool's output sink is `CellOutput`; no cwd, tool bridge or handle machinery; a rejection the tab realm's guard already
+// settled (it shares this process's `unhandledRejection`) is not rethrown by the cell's.
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { BridgeResponse, CodeEvaluator, EvaluatorHooks, RunError, RunResult, ScreenshotResult } from "../contracts.js";
-import { ToolAbortError, ToolError, throwIfAborted } from "../errors.js";
-import { isRejectionHandled } from "../worker/run-scope.js";
+import { ToolAbortError, ToolError, isRejectionHandled, throwIfAborted } from "../errors.js";
 import facadeSource from "../facade/prelude.js.txt";
 import extensionsSource from "../facade/pack-extensions.js.txt";
 import { CellOutput, displayValue } from "./display.js";
