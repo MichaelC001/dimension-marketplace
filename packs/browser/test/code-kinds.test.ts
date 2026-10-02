@@ -191,7 +191,11 @@ describeWithChrome("connected: a cell drives a Chrome the person started", () =>
     expect(await valueOf(code, "s1", `
       const tab = await browser.open({ app: { cdp_url: ${cdp} } });
       await tab.run(async ({ page }) => {
-        page.once("dialog", dialog => dialog.accept());
+        // The cell takes its time: an engine that answered first would have dismissed the confirm already, whoever the dialog belonged to.
+        page.once("dialog", async dialog => {
+          await new Promise(resolve => setTimeout(resolve, 400));
+          await dialog.accept();
+        });
         await page.click("#ask");
         await page.waitForFunction(() => document.title.startsWith("asked:"));
       });
@@ -511,4 +515,64 @@ describeWithChrome("two kinds of browser in one session", () => {
     expect(await pageUrls(chrome)).toEqual([pages.url("/one")]);
     expect(await valueOf(code, "s1", `await browser.tab("chrome").title()`)).toBe("Page one");
   }, BROWSER_TEST_TIMEOUT_MS);
+});
+
+describe("acquiring a browser of a kind", () => {
+  interface FakeEntry { browserId: string; code?: unknown; closed: boolean; opener: unknown; profile: null; engine: string; driver: { cdpEndpoint(): string }; viewers: number; pending: number; lastUsed: number }
+
+  /** A runtime that attaches to whatever it is given (after a turn of the event loop, so opens really overlap) and records it, and an `establish` that answers for any endpoint. */
+  function fakes(): { port: RuntimeCodeBrowsers; attached: string[]; closed: string[]; established: Array<{ url: string; signal: AbortSignal | undefined }> } {
+    const entries = new Map<string, FakeEntry>();
+    const attached: string[] = [];
+    const closed: string[] = [];
+    const established: Array<{ url: string; signal: AbortSignal | undefined }> = [];
+    const seam = {
+      async open(_options: unknown, opener: unknown, code: unknown, attach?: { cdpUrl: string }) {
+        await Promise.resolve();
+        const browserId = `b${entries.size + 1}`;
+        entries.set(browserId, { browserId, code, closed: false, opener, profile: null, engine: "chrome-relay", driver: { cdpEndpoint: () => `ws://fake/${browserId}` }, viewers: 0, pending: 0, lastUsed: 0 });
+        attached.push(attach!.cdpUrl);
+        return { browserId };
+      },
+      require: (browserId: string) => entries.get(browserId)!,
+      browsersOf: () => [...entries.values()],
+      viewOf: () => undefined,
+      bindView: () => undefined,
+      async close(browserId: string) {
+        closed.push(browserId);
+        entries.delete(browserId);
+      },
+    } as unknown as CodeSeam;
+    const establish = (async (kind: { kind: string; cdpUrl: string }, options: { signal?: AbortSignal }) => {
+      established.push({ url: kind.cdpUrl, signal: options.signal });
+      await Bun.sleep(30); // real time: two opens must overlap, and a third must arrive while they do
+      return { attach: { kind: kind.kind, cdpUrl: kind.cdpUrl, label: `${kind.kind} ${kind.cdpUrl}` } };
+    }) as unknown as typeof establishKind;
+    return { port: new RuntimeCodeBrowsers(seam, { establish }), attached, closed, established };
+  }
+
+  const A: BrowserKind = { kind: "connected", cdpUrl: "http://127.0.0.1:1111" };
+  const B: BrowserKind = { kind: "connected", cdpUrl: "http://127.0.0.1:2222" };
+  const never = new AbortController().signal;
+
+  test("opens that start together share a browser only when they name the same one", async () => {
+    const { port, attached } = fakes();
+    const [a, b, again] = await Promise.all([port.acquire("s", { kind: A }, never), port.acquire("s", { kind: B }, never), port.acquire("s", { kind: A }, never)]);
+    expect(a.browserId).not.toBe(b.browserId);
+    expect(again).toMatchObject({ browserId: a.browserId, created: false });
+    expect(a.created).toBe(true);
+    expect(attached.sort()).toEqual([A.kind === "connected" ? A.cdpUrl : "", B.kind === "connected" ? B.cdpUrl : ""].sort());
+  });
+
+  test("the wait for a browser that is starting ends when nobody is waiting for it any more, and what it made is let go of", async () => {
+    const { port, established, attached, closed } = fakes();
+    const gone = new AbortController();
+    const waiting = port.acquire("s", { kind: A }, gone.signal).catch((error: unknown) => error);
+    gone.abort();
+    await waiting;
+    expect(established).toHaveLength(1);
+    expect(established[0]!.signal?.aborted).toBe(true);
+    // Whatever the open had made by then is not left holding a slot for a cell that has gone.
+    await waitUntil("every browser the abandoned open made to be closed", () => ({ made: attached.length, closed: closed.length }), now => now.made === now.closed, 2_000);
+  });
 });
