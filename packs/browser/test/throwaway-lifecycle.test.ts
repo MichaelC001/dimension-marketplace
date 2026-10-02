@@ -23,6 +23,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import type { BrowserOpener } from "../src/contracts";
+import { taskkillArgs } from "../src/engines/puppeteer";
 import type { BrowserRuntime } from "../src/runtime";
 import { createBrowserServer } from "../src/server";
 import { BrowserRuntimeError } from "../src/store";
@@ -528,6 +529,65 @@ describeWithChrome("what a full pool never gives up", () => {
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);
+
+	test(
+		"an open that finds the pool full while one browser is already closing on its idle clock waits for that one, and closes no second browser",
+		async () => {
+			const rootDir = await createRoot();
+			const runtime = newRuntime(rootDir, { throwawayIdleMs: 3_000 });
+			const quiet = await openThrowaway(runtime, rootDir, "s1");
+			const driver = driverOf(runtime, quiet.browserId);
+			const close = driver.close;
+			// Installed before anything slow, so the idle close finds the fault in place: its polite close stays pending until the test lets go.
+			let letGo!: () => void;
+			const held = new Promise<void>((resolve) => {
+				letGo = resolve;
+			});
+			let closing = false;
+			driver.close = async () => {
+				closing = true;
+				await held;
+				return await close.call(driver);
+			};
+			// Every other browser is called often enough never to go quiet itself: only the first one's clock may run out.
+			const others: string[] = [];
+			let calling = true;
+			const keeper = (async () => {
+				while (calling) {
+					for (const browserId of others) await runtime.state(browserId).catch(() => undefined);
+					// Real time: the idle clock under test runs on the platform clock, and a call only stamps it.
+					await Bun.sleep(300);
+				}
+			})();
+			try {
+				for (const session of ["s2", "s3", "s4"]) others.push((await openThrowaway(runtime, rootDir, session)).browserId);
+				await waitUntil("the quiet browser's idle close to start", () => closing, (started) => started, 20_000);
+
+				// Four browsers, one of them on its way out, three others that a full pool could close: the open must wait for the one leaving.
+				let opened = false;
+				const opening = runtime.open({ viewport: VIEWPORT }, asSession("s5")).then((state) => {
+					opened = true;
+					return state;
+				});
+				// A negative over real time (while one browser is held closing, no open and no second close may happen); no signal exists to await.
+				await Bun.sleep(1_000);
+				expect(opened).toBe(false);
+				for (const browserId of others) expect((await runtime.state(browserId)).browserId).toBe(browserId);
+
+				letGo();
+				const fifth = await within(60_000, "the open that waited for the closing browser", opening);
+				expect(fifth.profile).toBeNull();
+				expect((await refusal(() => runtime.state(quiet.browserId))).code).toBe("unknown_browser");
+				for (const browserId of others) expect((await runtime.state(browserId)).browserId).toBe(browserId);
+				expect((await runtime.state(fifth.browserId)).browserId).toBe(fifth.browserId);
+			} finally {
+				letGo();
+				calling = false;
+				await keeper;
+			}
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
 });
 
 describeWithChrome("a throwaway nobody calls", () => {
@@ -708,5 +768,21 @@ describe("the idle timeout is a number a timer can hold", () => {
 			expect(() => newRuntime(rootDir, { throwawayIdleMs: bad })).toThrow(RangeError);
 		}
 		expect(() => newRuntime(rootDir, { throwawayIdleMs: 2_147_483_647 })).not.toThrow();
+	});
+});
+
+describe("the Windows hard kill", () => {
+	const chrome = { pid: 4242, spawnfile: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe", exitCode: null, signalCode: null } as const;
+
+	test("names the process by pid and by program, so a pid since reused by another program matches nothing, and takes the tree below it", () => {
+		expect(taskkillArgs(chrome)).toEqual(["/pid", "4242", "/T", "/F", "/FI", "IMAGENAME eq chrome.exe"]);
+		expect(taskkillArgs({ ...chrome, spawnfile: "D:/chrome-for-testing/chrome-win64/chrome.exe" })).toEqual(["/pid", "4242", "/T", "/F", "/FI", "IMAGENAME eq chrome.exe"]);
+	});
+
+	test("a process that has already exited, normally (code 0 included) or by a signal, gets no command: its pid may be someone else's now", () => {
+		expect(taskkillArgs({ ...chrome, exitCode: 0 })).toBeUndefined();
+		expect(taskkillArgs({ ...chrome, exitCode: 1 })).toBeUndefined();
+		expect(taskkillArgs({ ...chrome, signalCode: "SIGKILL" })).toBeUndefined();
+		expect(taskkillArgs({ ...chrome, pid: undefined })).toBeUndefined();
 	});
 });

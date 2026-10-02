@@ -32,6 +32,7 @@
 import { type ChildProcess, execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, statSync } from "node:fs";
+import { win32 } from "node:path";
 import { promisify } from "node:util";
 import { setTimeout as sleep } from "node:timers/promises";
 import puppeteer, { TimeoutError } from "puppeteer-core";
@@ -1684,6 +1685,17 @@ function waitForExit(proc: ChildProcess, ms: number): Promise<boolean> {
 const execFileAsync = promisify(execFile);
 
 /**
+ * The `taskkill` arguments that end `proc` and everything it started, or undefined when there is nothing to end. A pid names a
+ * process only while it is running: once `proc` has exited the number may already belong to an unrelated program, so an exited
+ * process gets no command at all, and the image filter makes a number that was reused by a program of another name match nothing.
+ * `/T` still takes the whole tree below a match, whatever the children are called (crashpad, GPU and renderer helpers).
+ */
+export function taskkillArgs(proc: Pick<ChildProcess, "pid" | "spawnfile" | "exitCode" | "signalCode">): string[] | undefined {
+	if (proc.pid === undefined || proc.exitCode !== null || proc.signalCode !== null) return undefined;
+	return ["/pid", String(proc.pid), "/T", "/F", "/FI", `IMAGENAME eq ${win32.basename(proc.spawnfile)}`];
+}
+
+/**
  * Kill `proc` and everything it started. Windows: `taskkill /T` (killing only the browser process leaves its helpers running).
  * Elsewhere: the process group, which puppeteer makes Chrome the leader of, then the process itself if the group could not be signalled.
  */
@@ -1691,7 +1703,9 @@ async function killTree(proc: ChildProcess): Promise<void> {
 	const pid = proc.pid;
 	if (pid === undefined) return;
 	if (process.platform === "win32") {
-		await execFileAsync("taskkill", ["/pid", String(pid), "/T", "/F"], { windowsHide: true }).catch(() => proc.kill());
+		// Decided here, right before the command starts: the process may have exited since the caller looked.
+		const args = taskkillArgs(proc);
+		if (args !== undefined) await execFileAsync("taskkill", args, { windowsHide: true }).catch(() => proc.kill());
 		return;
 	}
 	try {
