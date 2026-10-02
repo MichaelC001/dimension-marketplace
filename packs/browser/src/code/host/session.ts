@@ -308,13 +308,13 @@ export class CodeSession {
     this.#resetNote = false;
     if ("error" in outcome) {
       let error = outcome.error;
+      // Whether to replace the worker is read from the worker's OWN error, before a message of the host's own is swapped in (contracts.ts RunError.recoverTab): a take-over's `human_driving` carries no
+      // `recoverTab`, and a cell that caught the abort and went on would be left running in a worker nothing ends.
+      recycle = error.recoverTab === true;
       if (run.override !== undefined && error.isAbort) error = run.override;
       else if (noted && error.name === "ReferenceError") error = { ...error, message: `${error.message} (${RESET_NOTE})` };
-      if (error.recoverTab === true) {
-        // The cell's own budget already says what happened (OMP's whole sentence); any other reason to rebuild the worker is ours to state.
-        if (error.budget !== true) error = { ...error, message: `${error.message} The code worker was restarted; the cell's variables were reset.` };
-        recycle = true;
-      }
+      // The cell's own budget and its cancellation already say what happened (OMP's whole sentence, reset included: `budget`, `resetNoted`); any other reason to rebuild the worker is ours to state.
+      if (recycle && error.budget !== true && error.resetNoted !== true) error = { ...error, message: `${error.message} The code worker was restarted; the cell's variables were reset.` };
       settled = { error };
     }
     // The answer is settled before the worker is ended, so the worker's exit can never be taken for the answer.

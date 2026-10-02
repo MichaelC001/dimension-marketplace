@@ -252,6 +252,25 @@ describe("a person takes a browser over", () => {
     expect(done.result.error.isAbort).toBe(true);
   });
 
+  test("a cell that catches the abort and goes on is still ended: the take-over's message replaces the worker's own, but the worker is replaced all the same", async () => {
+    const { host, browsers, workers } = rig();
+    const runId = await start(host);
+    const worker = workers[0]!;
+    await open(worker, runId);
+    browsers.end("taken-over");
+    // The cell realm gave up on a cell that was still running (`for (;;) { try { await tab.click(x) } catch {} }`): OMP's sentence, and the ask to rebuild the worker.
+    worker.emit({ t: "result", runId, ok: false, error: { name: "ToolAbortError", message: "Operation aborted. The JS worker was force-killed and its VM state was reset; variables from earlier cells are gone.", isAbort: true, recoverTab: true, resetNoted: true } });
+    const done = await host.resume("s1", runId, 1_000, NEVER);
+    if (done.state !== "done" || !("error" in done.result)) throw new Error("the cell should have ended in an error");
+    expect(done.result.error.message).toContain("human_driving");
+    expect(done.result.error.message.match(/reset/g)).toHaveLength(1);
+    expect(worker.exited).toBe(true);
+    // The next cell has a fresh worker, not the one still running the abandoned loop.
+    const next = await host.run("s1", { code: "y", timeoutMs: 5_000, waitMs: 20, signal: NEVER });
+    expect(next.state).toBe("running");
+    expect(workers).toHaveLength(2);
+  });
+
   test("a closed or retired browser drops its tabs and tells the worker why, but the cell goes on", async () => {
     const { host, browsers, workers } = rig();
     const runId = await start(host);
@@ -452,6 +471,17 @@ describe("the worker's life", () => {
     if (timedOut.state !== "done" || !("error" in timedOut.result)) throw new Error("expected an error");
     expect(timedOut.result.error.message).not.toContain("restarted");
     expect(workers[1]!.exited).toBe(true);
+  });
+
+  test("a cancelled cell whose own message already says the worker was reset is not told so a second time, and its worker is still replaced", async () => {
+    const { host, workers } = rig();
+    const runId = await start(host);
+    const said = "Operation aborted. The JS worker was force-killed and its VM state was reset; variables from earlier cells are gone.";
+    workers[0]!.emit({ t: "result", runId, ok: false, error: { name: "ToolAbortError", message: said, isAbort: true, recoverTab: true, resetNoted: true } });
+    const done = await host.resume("s1", runId, 1_000, NEVER);
+    if (done.state !== "done" || !("error" in done.result)) throw new Error("expected an error");
+    expect(done.result.error.message).toBe(said);
+    expect(workers[0]!.exited).toBe(true);
   });
 
   test("a rebuilt worker is handed the session's tabs before it runs anything", async () => {
