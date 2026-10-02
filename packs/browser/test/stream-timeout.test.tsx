@@ -202,9 +202,12 @@ function Harness({ client, probe }: { client: BrowserClient; probe: Probe }) {
 /** The one thing the hook asks of the client: where the loopback listener is. Counts the asks. */
 class Grants {
 	calls = 0;
+	/** While set, the host's answer waits: a human has not yet answered the consent prompt. */
+	gate: Promise<void> | undefined;
 	constructor(private readonly origin: string) {}
 	stream = async (_browserId: string) => {
 		this.calls += 1;
+		await this.gate;
 		return { origin: this.origin, token: "t".repeat(32) };
 	};
 }
@@ -366,6 +369,25 @@ describe("a loopback connect that is accepted and never answered", () => {
 		// Fails if a successful connect does not reset the ladder.
 		expect(clock.pending).toEqual([500]);
 	}, 20_000);
+
+	test("the wait for the host's answer (a consent prompt nobody has answered yet) has no deadline: only the connect after it does", async () => {
+		const { loopback, grants, probe, clock, start, advance } = await scenario();
+		const consent = Promise.withResolvers<void>();
+		grants.gate = consent.promise;
+		await start();
+		await until("the host is asked", () => grants.calls === 1);
+		// Fails if the deadline is armed before the host call: a person slow to answer a prompt would be told the pack could not be reached.
+		expect(clock.pending).toEqual([]);
+		await advance(60_000);
+		await quiet();
+		expect(probe.now.connection).toBe("connecting");
+		expect(probe.now.error).toBeNull();
+		expect(loopback.streamRequests).toBe(0);
+
+		consent.resolve();
+		await until("the connect begins once the human has answered", () => loopback.streamRequests === 1);
+		expect(clock.pending).toEqual([CONNECT_TIMEOUT_MS]);
+	});
 
 	test("an answer that arrives after the abort paints nothing and costs no extra retry", async () => {
 		const { loopback, grants, probe, clock, canvas, start, advance } = await scenario();
