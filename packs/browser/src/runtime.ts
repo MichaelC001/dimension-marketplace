@@ -772,9 +772,12 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	private checkIdle(entry: Entry): void {
 		if (entry.closed || entry.retiring !== undefined) return;
 		const quietMs = performance.now() - entry.lastUsed;
-		// A View joined to its stream is watching it however long the page takes to answer; a call in flight is work.
-		if (this.working(entry) || entry.viewers > 0 || quietMs < this.idleMs) {
-			this.watchIdle(entry, this.working(entry) || entry.viewers > 0 ? this.idleMs : this.idleMs - quietMs);
+		// A View joined to its stream is watching it however long the page takes to answer; a call in flight is work; a person who has the
+		// wheel is using the page with no call and, while their document is hidden, no stream. None of these is idle: only handing the wheel
+		// back (or its fallback, `watchWheel`) lets the clock count.
+		const occupied = this.working(entry) || entry.viewers > 0 || entry.takenOver;
+		if (occupied || quietMs < this.idleMs) {
+			this.watchIdle(entry, occupied ? this.idleMs : this.idleMs - quietMs);
 			return;
 		}
 		const reason = `it was a throwaway browser, closed after ${this.idleMs / 1_000} s with no calls; open a new one with browser_open`;
@@ -782,14 +785,14 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	}
 
 	/**
-	 * The throwaway to give up when the pool is full: the one used least recently that nothing is happening on and no View has joined,
-	 * a chat's before the person's own Private one. A saved profile (and the relay) is never one: it holds a lock and logins. One
-	 * already on its way out is not asked about: `makeRoom` waits for it instead.
+	 * The throwaway to give up when the pool is full: the one used least recently that nothing is happening on, that no View has joined and
+	 * that the person has not taken over, a chat's before the person's own Private one. A saved profile (and the relay) is never one: it
+	 * holds a lock and logins. One already on its way out is not asked about: `makeRoom` waits for it instead.
 	 */
 	private pickVictim(): Entry | undefined {
 		let victim: Entry | undefined;
 		for (const entry of this.byId.values()) {
-			if (entry.profile !== null || entry.closed || entry.viewers > 0 || this.working(entry)) continue;
+			if (entry.profile !== null || entry.closed || entry.viewers > 0 || entry.takenOver || this.working(entry)) continue;
 			const personal = entry.opener.caller === "app";
 			const victimPersonal = victim?.opener.caller === "app";
 			if (victim === undefined || (!personal && victimPersonal) || (personal === victimPersonal && entry.lastUsed < victim.lastUsed)) victim = entry;
@@ -808,7 +811,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			return;
 		}
 		const victim = this.pickVictim();
-		if (victim === undefined) fail("too_many_browsers", this.refusal(asker, "none can be closed to make room: each is running a task, has a call in progress, is open in a View, is still shutting down, or is a saved profile's"));
+		if (victim === undefined) fail("too_many_browsers", this.refusal(asker, "none can be closed to make room: each is running a task, has a call in progress, is open in a View, is one the person has taken over, is still shutting down, or is a saved profile's"));
 		const reason = `it was a throwaway browser, closed to make room for another chat's (at most ${MAX_BROWSERS} are open at once); open a new one with browser_open`;
 		try {
 			await this.retire(victim, reason);
