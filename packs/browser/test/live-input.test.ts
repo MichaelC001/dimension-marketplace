@@ -176,7 +176,7 @@ describeWithChrome("the human's input on a real page", () => {
 			// A task needs a Python worker this test does not have; the runtime's own record of "a task is running" is what the rule reads.
 			const entry = (runtime as unknown as { byId: Map<string, { task: unknown }> }).byId.get(browserId);
 			if (!entry) throw new Error("no entry");
-			entry.task = { status: "running", agent: "jev" };
+			entry.task = { status: "running" };
 
 			await expect(runtime.input(browserId, click(80, 40))).rejects.toMatchObject({ code: "task_running" });
 			entry.task = null;

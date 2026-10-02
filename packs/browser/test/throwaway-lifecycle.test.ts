@@ -415,7 +415,7 @@ describeWithChrome("what a full pool never gives up", () => {
 				const rootDir = await createRoot();
 				const runtime = newRuntime(rootDir);
 				const working = await openThrowaway(runtime, rootDir, "s1");
-				await runtime.startTask(working.browserId, { agent: "jev", task: JSON.stringify({ steps: [{ action: "thinking", url: "" }], hold: true }) });
+				await runtime.startTask(working.browserId, { task: JSON.stringify({ steps: [{ action: "thinking", url: "" }], hold: true }) });
 				const second = await openThrowaway(runtime, rootDir, "s2");
 				const third = await openThrowaway(runtime, rootDir, "s3");
 				const fourth = await openThrowaway(runtime, rootDir, "s4");
@@ -437,7 +437,7 @@ describeWithChrome("what a full pool never gives up", () => {
 				const rootDir = await createRoot();
 				const runtime = newRuntime(rootDir, { throwawayIdleMs: 1_500 });
 				const working = await openThrowaway(runtime, rootDir, "s1");
-				await runtime.startTask(working.browserId, { agent: "jev", task: JSON.stringify({ steps: [{ action: "thinking", url: "" }], hold: true }) });
+				await runtime.startTask(working.browserId, { task: JSON.stringify({ steps: [{ action: "thinking", url: "" }], hold: true }) });
 
 				// Quiet for several idle timeouts, and still working. A real wait: the idle clock is real time over a live Chrome, which no fake timer advances.
 				await Bun.sleep(5_000);
