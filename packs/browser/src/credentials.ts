@@ -24,25 +24,31 @@
  * in a profile folder. A copy, a backup or a sync of a profile folder therefore
  * carries no readable password and not the key. The pack has no OS credential
  * store accessor, so the key is a file only the user can read: mode 0600, and on
- * Windows, where modes mean nothing, an ACL reduced to the user. A file that
- * does not authenticate (tampered, or under another key) is refused, never read
- * as empty and never rewritten; a key file that cannot be read is refused, never
- * replaced (a new key would orphan every password it protected). A store written
- * before this (version 1: plain text) is encrypted in place the first time it is
- * read.
+ * Windows, where modes mean nothing, an ACL reduced to the user. It is published
+ * whole and durable (staged, fsynced, restricted, then given its name), and made
+ * only when no profile already holds a sealed store. A file that does not
+ * authenticate (tampered, or under another key) is refused, never read as empty
+ * and never rewritten; a key file that is missing, empty or damaged is refused,
+ * never replaced (a new key would orphan every password it protected). A store
+ * written before this (version 1: plain text) is encrypted in place the first
+ * time it is read; a sealed value found inside one (a server from before this
+ * one copies what it read into a version-1 file) is opened, never taken for the
+ * password.
  */
 import { spawnSync } from "node:child_process";
 import { createCipheriv, createDecipheriv, randomBytes, randomInt } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { closeSync, fsyncSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { CREDENTIAL_MODES, type CredentialRequest } from "./contracts.js";
-import { fail } from "./store.js";
+import { fail, writeJsonAtomic } from "./store.js";
 
 const FILE = "credentials.json";
 const KEY_FILE = "credentials.key";
 /** The stored form of a password: `gcm1:<iv>:<tag>:<ciphertext>`, each part base64 (a 12-byte nonce, a 16-byte tag). */
 const SEALED = /^gcm1:([A-Za-z0-9+/]{16}):([A-Za-z0-9+/]{22}==):([A-Za-z0-9+/]*={0,2})$/;
 const UNREADABLE = "this profile's saved passwords could not be read";
+const NO_KEY = "the key that protects saved passwords (credentials.key in the browser's data folder) is missing, so the passwords sealed under it cannot be opened; restore it from a backup, and until then nothing new is saved";
+const BAD_KEY = "the key that protects saved passwords (credentials.key in the browser's data folder) is empty or damaged, so the passwords sealed under it cannot be opened; restore it from a backup, or delete the file if none of them matter and a new key is made at the next save";
 const LOOPBACK: Record<string, true> = { localhost: true, "127.0.0.1": true, "[::1]": true };
 const LOWER = "abcdefghijkmnopqrstuvwxyz";
 const UPPER = "ABCDEFGHJKLMNPQRSTUVWXYZ";
@@ -82,9 +88,12 @@ export function generatePassword(): string {
 }
 
 /**
- * The key that protects every profile's saved passwords: 32 random bytes in `<root>/credentials.key`, made the first time something
- * must be sealed or opened (a read of a profile with no passwords never makes one). Loaded once. One key for the pack: it sits beside
- * `profiles/`, not inside one.
+ * The key that protects every profile's saved passwords: 32 random bytes in `<root>/credentials.key`. One key for the pack: it sits
+ * beside `profiles/`, not inside one. Loaded once.
+ *
+ * Every password depends on this one file, so it is made carefully and used in one direction each way. `get()` is the key to SEAL
+ * with: the file, else a new one, which exists whole and durable on disk before `get()` returns. `existing()` is the key to OPEN with:
+ * the file or a refusal, never a new key (a new key opens nothing the lost one sealed, and a read must not make one).
  */
 export class CredentialKey {
   readonly #file: string;
@@ -97,13 +106,14 @@ export class CredentialKey {
   }
 
   get(): Buffer {
+    return (this.#key ??= keyFrom(this.#load() ?? this.#create()));
+  }
+
+  existing(): Buffer {
     if (this.#key !== undefined) return this.#key;
-    const text = this.#load() ?? this.#create();
-    // Anything but 32 bytes is not our key. It is refused, never replaced: a new key would orphan every password the old one sealed.
-    const key = Buffer.from(text.trim(), "base64");
-    if (key.length !== 32) fail("credentials_unreadable", "the key that protects saved passwords could not be read");
-    this.#key = key;
-    return key;
+    const text = this.#load();
+    if (text === undefined) fail("credentials_unreadable", NO_KEY);
+    return (this.#key = keyFrom(text));
   }
 
   #load(): string | undefined {
@@ -115,19 +125,92 @@ export class CredentialKey {
     }
   }
 
-  /** Make the key with an exclusive create, so two servers on one root cannot each make a different one; the loser reads the winner's. */
+  /**
+   * Make the key and publish it whole. It is written to a staging file in the same folder, fsynced and restricted to the user, and only
+   * then given its name, so `credentials.key` is never seen empty or half-written (by a second server on this root, or after a crash), and
+   * a crash leaves either no key or the whole one. The name is taken with a hard link, which fails when it exists: two servers on one root
+   * cannot each publish a different key, and the loser reads the winner's. A filesystem with no hard links takes the name with a rename
+   * instead, which is atomic but cannot tell it lost a race (the read-back below still catches one that has already finished).
+   * Whatever is returned has been read back from the published file: nothing is sealed under a key that is not what is on disk.
+   */
   #create(): string {
+    // A key made while stores sealed under a lost one exist would sit beside passwords it can never open, and the lost key coming back would then orphan the ones sealed under this.
+    if (this.#holdsSealedStores()) fail("credentials_unreadable", NO_KEY);
     mkdirSync(this.#rootDir, { recursive: true, mode: 0o700 });
     const text = `${randomBytes(32).toString("base64")}\n`;
+    const staging = `${this.#file}.${randomBytes(6).toString("hex")}.tmp`;
     try {
-      writeFileSync(this.#file, text, { flag: "wx", mode: 0o600 });
+      const fd = openSync(staging, "wx", 0o600);
+      try {
+        writeSync(fd, text);
+        fsyncSync(fd);
+      } finally {
+        closeSync(fd);
+      }
+      onlyTheUser(staging);
+      try {
+        linkSync(staging, this.#file);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") return this.#raced();
+        if (this.#load() !== undefined) return this.#raced();
+        renameSync(staging, this.#file);
+      }
     } catch (error) {
-      const raced = (error as NodeJS.ErrnoException).code === "EEXIST" ? this.#load() : undefined;
-      if (raced === undefined) fail("credentials_unreadable", "the key that protects saved passwords could not be made");
-      return raced;
+      if (error instanceof Error && "code" in error && error.code === "credentials_unreadable") throw error;
+      fail("credentials_unreadable", `the key that protects saved passwords could not be made (${(error as NodeJS.ErrnoException).code ?? "unknown"})`);
+    } finally {
+      rmSync(staging, { force: true });
     }
-    onlyTheUser(this.#file);
+    syncFolder(this.#rootDir);
+    if (this.#load() !== text) fail("credentials_unreadable", "the key that protects saved passwords could not be made whole");
     return text;
+  }
+
+  /** The key another server published first. */
+  #raced(): string {
+    const text = this.#load();
+    if (text === undefined) fail("credentials_unreadable", "the key that protects saved passwords could not be read");
+    return text;
+  }
+
+  /** Whether any profile under this root already holds a store sealed under a key (so a key that is not on disk was lost, not never made). */
+  #holdsSealedStores(): boolean {
+    const profiles = join(this.#rootDir, "profiles");
+    let names: string[];
+    try {
+      names = readdirSync(profiles);
+    } catch {
+      return false;
+    }
+    return names.some((name) => {
+      try {
+        return (JSON.parse(readFileSync(join(profiles, name, FILE), "utf8")) as { version?: unknown } | null)?.version === 2;
+      } catch {
+        // No store, or one that read() refuses on its own account.
+        return false;
+      }
+    });
+  }
+}
+
+/** The key `text` holds. Anything but 32 bytes is not our key: refused, never replaced, since a new key would orphan every password the old one sealed. */
+function keyFrom(text: string): Buffer {
+  const key = Buffer.from(text.trim(), "base64");
+  if (key.length !== 32) fail("credentials_unreadable", BAD_KEY);
+  return key;
+}
+
+/** Flush a folder's new entry to disk where the platform lets a folder be opened (Windows does not; its journal covers a rename). */
+function syncFolder(dir: string): void {
+  try {
+    const fd = openSync(dir, "r");
+    try {
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    /* not supported here */
   }
 }
 
@@ -165,18 +248,11 @@ function open(sealed: string, origin: string, key: Buffer): string {
   }
 }
 
-/** Write the store: every password sealed, to a temporary file renamed over the old one, so a crash leaves one whole file. */
+/** Write the store: every password sealed, durably, to a temporary file renamed over the old one, so a crash leaves one whole file. */
 function write(file: string, origins: Record<string, string>, key: CredentialKey): void {
   const sealed: Record<string, string> = {};
   for (const [origin, password] of Object.entries(origins)) sealed[origin] = seal(password, origin, key.get());
-  const tmp = `${file}.${process.pid}.tmp`;
-  try {
-    writeFileSync(tmp, `${JSON.stringify({ version: 2, origins: sealed })}\n`, { mode: 0o600 });
-    renameSync(tmp, file);
-  } finally {
-    // A failed rename (a scanner holding the file on Windows) must not strand a second copy of every saved password; after a good rename this is a no-op.
-    rmSync(tmp, { force: true });
-  }
+  writeJsonAtomic(dirname(file), basename(file), { version: 2, origins: sealed });
 }
 
 /** Plain-text stores already said to be unencryptable, by file: said once, not at every read. */
@@ -202,14 +278,13 @@ function read(file: string, key: CredentialKey): Record<string, string> {
   const origins = (parsed as { origins?: unknown } | null)?.origins;
   if (!origins || typeof origins !== "object" || Array.isArray(origins) || Object.values(origins).some((v) => typeof v !== "string")) fail("credentials_unreadable", UNREADABLE);
   const stored = origins as Record<string, string>;
-  if (version === 2) {
-    const clear: Record<string, string> = {};
-    for (const [origin, sealed] of Object.entries(stored)) clear[origin] = open(sealed, origin, key.get());
-    return clear;
-  }
-  if (version !== 1 && version !== undefined) fail("credentials_unreadable", UNREADABLE);
-  if (Object.keys(stored).length > 0) migrate(file, stored, key);
-  return stored;
+  if (version !== 1 && version !== 2 && version !== undefined) fail("credentials_unreadable", UNREADABLE);
+  // Version 1 is plain text, but a value in one that is sealed is opened, never taken for the password: a server from before this one
+  // (it ignores `version` and writes back everything it read, ciphertext included) may have signed up on a profile this one had sealed.
+  const clear: Record<string, string> = {};
+  for (const [origin, value] of Object.entries(stored)) clear[origin] = version === 2 || SEALED.test(value) ? open(value, origin, key.existing()) : value;
+  if (version !== 2 && Object.keys(clear).length > 0) migrate(file, clear, key);
+  return clear;
 }
 
 /** Encrypt a plain-text store in place. A key that cannot be had is the key's own refusal; a file that cannot be written yet is retried at the next read. */
@@ -245,6 +320,16 @@ export function savedPasswords(profileDir: string, key: CredentialKey): string[]
 }
 
 /**
+ * Save `password` as the one the profile at `profileDir` uses for `origin`, keeping every other. The only way a password is written:
+ * a sign-up's minted one (`resolveCredential`) and the benchmark's fixture one (bench/seed-credential.ts) both come through here, so
+ * nothing writes the file by hand. Callers hold the profile lock, so there is one writer.
+ */
+export function saveCredential(profileDir: string, origin: string, password: string, key: CredentialKey): void {
+  const file = join(profileDir, FILE);
+  write(file, { ...read(file, key), [credentialOrigin(origin)]: password }, key);
+}
+
+/**
  * The password for `origin` in the profile at `profileDir`, minting and saving
  * one for a sign-up. Callers hold the profile lock, so there is one writer.
  */
@@ -259,6 +344,6 @@ export function resolveCredential(profileDir: string, request: CredentialRequest
     fail("no_credential", `this profile has no saved password for ${origin}; log in with browser_act, or put the password in a browser_task`);
   }
   const password = generatePassword();
-  write(file, { ...origins, [origin]: password }, key);
+  saveCredential(profileDir, origin, password, key);
   return { origin, password, created: true };
 }

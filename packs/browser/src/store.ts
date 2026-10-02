@@ -328,7 +328,7 @@ export class ProfileStore {
  * fsynced before the rename, so a crash or power loss leaves the old file or
  * the new one; a failure at any step removes the staging file.
  */
-function writeJsonAtomic(dir: string, file: string, value: unknown): void {
+export function writeJsonAtomic(dir: string, file: string, value: unknown): void {
 	const path = join(dir, file);
 	const staging = `${path}.${randomBytes(6).toString("hex")}.tmp`;
 	let fd: number | undefined;

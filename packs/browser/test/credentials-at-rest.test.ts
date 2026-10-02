@@ -3,16 +3,22 @@
  *  copy of the profile folder, a stray search — or a store somebody altered is
  *  read as if it were the person's, or silently emptied by the next sign-up, or
  *  a store written before encryption keeps its plain text for ever, or a lost or
- *  damaged key is quietly replaced (orphaning every password it protected).
+ *  damaged key is quietly replaced (orphaning every password it protected), or
+ *  a password is lost for good: a sign-up by a server from before encryption
+ *  turns sealed text into "passwords", or a key that was never fully on disk is
+ *  the one every store was sealed under.
  *
  *  No browser: the module is exercised over real files in temp directories, and
  *  "on disk" means every byte of every file under the pack's root, not the one
  *  file the module is known to write.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import * as fs from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, test } from "bun:test";
+import { fileURLToPath } from "node:url";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { CredentialKey, readCredentials, resolveCredential, savedPassword, savedPasswords } from "../src/credentials";
 import { BrowserRuntimeError } from "../src/store";
 import { createRoot, teardown } from "./fixture";
@@ -64,6 +70,23 @@ function refusal(work: () => unknown): BrowserRuntimeError {
 
 /** The store as JSON, for a test that alters it. */
 const stored = (file: string): { version: number; origins: Record<string, string> } => JSON.parse(readFileSync(file, "utf8"));
+
+/** A version 1 store as a server from before encryption leaves it after a sign-up on a profile that was already sealed: it ignores `version` and writes back everything it read, ciphertext included. */
+function olderServerSignsUp(file: string, origin: string, password: string): void {
+	writeFileSync(file, `${JSON.stringify({ version: 1, origins: { ...stored(file).origins, [origin]: password } })}\n`);
+}
+
+/** Whether only the user can read `path`: the mode bits where there are any, else an ACL of exactly this account with nothing inherited. */
+function onlyTheUserCanRead(path: string): boolean {
+	if (process.platform !== "win32") return (statSync(path).mode & 0o777) === 0o600;
+	// icacls lists one line per entry after the path: `DOMAIN\user:(F)`.
+	const listing = spawnSync("icacls", [path], { encoding: "utf8", windowsHide: true }).stdout;
+	const [entry, ...others] = listing
+		.split(/\r?\n/)
+		.map((line) => line.replace(path, "").trim())
+		.filter((line) => /:\(/.test(line));
+	return entry !== undefined && others.length === 0 && entry.toLowerCase().includes((process.env.USERNAME ?? "").toLowerCase()) && !entry.includes("(I)");
+}
 
 describe("a saved password at rest", () => {
 	test("is sealed: no file under the root holds it, in the clear or in base64 — and it still comes back whole, from this process and from a fresh one", async () => {
@@ -133,6 +156,67 @@ describe("a store written before encryption (version 1, plain text)", () => {
 
 		expect(existsSync(keyFile)).toBe(false);
 	});
+
+	test("one an older server wrote back with sealed values inside (a sign-up during an upgrade or rollback) is read through: every password comes back whole, and sealed text is never taken for one", async () => {
+		const { rootDir, profileDir, file, key } = await fresh();
+		const first = resolveCredential(profileDir, { origin: SHOP, mode: "signup" }, key).password;
+		const second = resolveCredential(profileDir, { origin: BANK, mode: "signup" }, key).password;
+		olderServerSignsUp(file, "https://news.example", "Older-Plain_7#fixture");
+		expect(stored(file).version).toBe(1);
+		expect(stored(file).origins[SHOP]).toStartWith("gcm1:");
+
+		const later = new CredentialKey(rootDir);
+		expect(readCredentials(profileDir, later)).toEqual({ [SHOP]: first, [BANK]: second, "https://news.example": "Older-Plain_7#fixture" });
+
+		// Sealed again as a whole: nothing readable is left, and a start after that still opens every one of them.
+		expect(stored(file).version).toBe(2);
+		expect(onDisk(rootDir, "Older-Plain_7#fixture")).toBe(false);
+		expect(Object.values(readCredentials(profileDir, new CredentialKey(rootDir))).sort()).toEqual([first, second, "Older-Plain_7#fixture"].sort());
+		expect(savedPassword(profileDir, SHOP, new CredentialKey(rootDir))).toBe(first);
+	});
+
+	test("with the key gone, or a sealed value moved under another origin, it is refused and left as it was: the sealed text is never answered as a password", async () => {
+		const { rootDir, profileDir, file, keyFile, key } = await fresh();
+		resolveCredential(profileDir, { origin: SHOP, mode: "signup" }, key);
+		const bank = resolveCredential(profileDir, { origin: BANK, mode: "signup" }, key).password;
+		olderServerSignsUp(file, "https://news.example", "Older-Plain_7#fixture");
+		const body = readFileSync(file, "utf8");
+
+		// A value taken from another origin's entry does not authenticate here.
+		const moved = JSON.stringify({ version: 1, origins: { ...stored(file).origins, [SHOP]: stored(file).origins[BANK] } });
+		writeFileSync(file, moved);
+		expect(refusal(() => savedPassword(profileDir, SHOP, new CredentialKey(rootDir))).code).toBe("credentials_unreadable");
+		expect(readFileSync(file, "utf8")).toBe(moved);
+
+		writeFileSync(file, body);
+		const keyBody = readFileSync(keyFile);
+		rmSync(keyFile);
+		for (const run of [() => savedPassword(profileDir, SHOP, new CredentialKey(rootDir)), () => savedPasswords(profileDir, new CredentialKey(rootDir)), () => resolveCredential(profileDir, { origin: "https://x.example", mode: "signup" }, new CredentialKey(rootDir))]) {
+			expect(refusal(run).code).toBe("credentials_unreadable");
+		}
+		expect(existsSync(keyFile)).toBe(false);
+		expect(readFileSync(file, "utf8")).toBe(body);
+
+		// The key comes back: nothing was lost in the meantime.
+		fs.writeFileSync(keyFile, keyBody);
+		expect(savedPassword(profileDir, BANK, new CredentialKey(rootDir))).toBe(bank);
+	});
+
+	test("the benchmark's seeding goes through the module: a root already holding a sealed profile keeps every password it had, and the practice one is sealed beside them", async () => {
+		const { rootDir, profileDir, file, key } = await fresh();
+		const existing = resolveCredential(profileDir, { origin: SHOP, mode: "signup" }, key).password;
+
+		const seeded = spawnSync(process.execPath, [fileURLToPath(new URL("../bench/seed-credential.ts", import.meta.url))], {
+			input: JSON.stringify({ root: rootDir, profile: "work", origin: "http://127.0.0.1:4777", password: "Practice-Fixture_1#" }),
+			encoding: "utf8",
+			windowsHide: true,
+		});
+		expect(seeded.status, seeded.stderr).toBe(0);
+
+		expect(readCredentials(profileDir, new CredentialKey(rootDir))).toEqual({ [SHOP]: existing, "http://127.0.0.1:4777": "Practice-Fixture_1#" });
+		expect(stored(file).version).toBe(2);
+		expect(onDisk(rootDir, "Practice-Fixture_1#")).toBe(false);
+	});
 });
 
 describe("a store that does not authenticate", () => {
@@ -188,11 +272,13 @@ describe("a store that does not authenticate", () => {
 		expect(readFileSync(file, "utf8")).toBe(body);
 	});
 
-	test("under another key it does not open: a copy of the profile folder on another machine reads nothing", async () => {
+	test("under another key it does not open: a copy of the profile folder on another machine, which has a key of its own, reads nothing", async () => {
 		const { profileDir, file, before } = await sealed();
-		const elsewhere = new CredentialKey(await createRoot());
+		const elsewhere = await fresh();
+		resolveCredential(elsewhere.profileDir, { origin: SHOP, mode: "signup" }, elsewhere.key);
+		expect(existsSync(elsewhere.keyFile)).toBe(true);
 
-		const refused = refusal(() => savedPassword(profileDir, SHOP, elsewhere));
+		const refused = refusal(() => savedPassword(profileDir, SHOP, new CredentialKey(elsewhere.rootDir)));
 
 		expect(refused.code).toBe("credentials_unreadable");
 		expect(readFileSync(file, "utf8")).toBe(before);
@@ -222,15 +308,7 @@ describe("the key", () => {
 			expect(statSync(file).mode & 0o777).toBe(0o600);
 			return;
 		}
-		// icacls lists one line per entry after the path: `DOMAIN\user:(F)`. Exactly one, and it is this account, with nothing inherited.
-		const listing = spawnSync("icacls", [keyFile], { encoding: "utf8", windowsHide: true }).stdout;
-		const entries = listing
-			.split(/\r?\n/)
-			.map((line) => line.replace(keyFile, "").trim())
-			.filter((line) => /:\(/.test(line));
-		expect(entries).toHaveLength(1);
-		expect(entries[0]?.toLowerCase()).toContain((process.env.USERNAME ?? "").toLowerCase());
-		expect(entries[0]).not.toContain("(I)");
+		expect(onlyTheUserCanRead(keyFile)).toBe(true);
 	});
 
 	test("a key file that cannot be read as a key is refused and left as it was: it is never replaced, which would orphan every sealed password", async () => {
@@ -246,5 +324,171 @@ describe("the key", () => {
 			expect(readFileSync(file, "utf8"), name).toBe(sealedBefore);
 			expect(refusal(() => resolveCredential(profileDir, { origin: BANK, mode: "signup" }, new CredentialKey(rootDir))).code, name).toBe("credentials_unreadable");
 		}
+	});
+
+	test("a key lost while stores sealed under it exist is refused and never made afresh: not by the profile that holds them, not by any other, and it comes back as it was", async () => {
+		const { rootDir, profileDir, file, keyFile, key } = await fresh();
+		const password = resolveCredential(profileDir, { origin: SHOP, mode: "signup" }, key).password;
+		const sealedBefore = readFileSync(file, "utf8");
+		const keyBody = readFileSync(keyFile);
+		const other = join(rootDir, "profiles", "play");
+		mkdirSync(other, { recursive: true });
+		rmSync(keyFile);
+
+		for (const [name, run] of [
+			["reading the profile that holds them", () => savedPasswords(profileDir, new CredentialKey(rootDir))],
+			["signing up on that profile", () => resolveCredential(profileDir, { origin: BANK, mode: "signup" }, new CredentialKey(rootDir))],
+			["signing up on another profile", () => resolveCredential(other, { origin: BANK, mode: "signup" }, new CredentialKey(rootDir))],
+		] as const) {
+			const refused = refusal(run);
+			expect(refused.code, name).toBe("credentials_unreadable");
+			expect(refused.message, name).toContain("credentials.key");
+			expect(existsSync(keyFile), name).toBe(false);
+		}
+		expect(readFileSync(file, "utf8")).toBe(sealedBefore);
+		expect(existsSync(join(other, "credentials.json"))).toBe(false);
+
+		fs.writeFileSync(keyFile, keyBody);
+		expect(savedPassword(profileDir, SHOP, new CredentialKey(rootDir))).toBe(password);
+	});
+
+	test("is published whole: staged and fsynced, restricted to the user, and only then given its name, which is never taken twice", async () => {
+		const { rootDir, profileDir, keyFile } = await fresh();
+		const events: string[] = [];
+		let published: { staged: string; nameTaken: boolean; private: boolean } | undefined;
+		const realFsync = fs.fsyncSync;
+		const realLink = fs.linkSync;
+		const syncing = spyOn(fs, "fsyncSync").mockImplementation((fd) => {
+			events.push("fsync");
+			return realFsync(fd);
+		});
+		const linking = spyOn(fs, "linkSync").mockImplementation((from, to) => {
+			events.push("publish");
+			published = { staged: readFileSync(from, "utf8"), nameTaken: existsSync(to), private: onlyTheUserCanRead(String(from)) };
+			return realLink(from, to);
+		});
+		try {
+			resolveCredential(profileDir, { origin: SHOP, mode: "signup" }, new CredentialKey(rootDir));
+		} finally {
+			syncing.mockRestore();
+			linking.mockRestore();
+		}
+
+		// The key's bytes reached the disk before the name existed, and the file that was staged is the file that is there.
+		expect(events.indexOf("fsync")).toBeGreaterThanOrEqual(0);
+		expect(events.indexOf("fsync")).toBeLessThan(events.indexOf("publish"));
+		expect(published?.nameTaken).toBe(false);
+		expect(published?.private).toBe(true);
+		expect(Buffer.from((published?.staged ?? "").trim(), "base64")).toHaveLength(32);
+		expect(readFileSync(keyFile, "utf8")).toBe(published?.staged);
+		expect(readdirSync(rootDir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+	});
+
+	test("when it cannot be made whole nothing is published and nothing is sealed: the plain passwords stay where they were and are encrypted at the next read", async () => {
+		const { rootDir, profileDir, file, keyFile } = await fresh();
+		const plain = `${JSON.stringify({ version: 1, origins: { [SHOP]: "Kept-Plain_1#fixture" } })}\n`;
+		writeFileSync(file, plain);
+		const failing = spyOn(fs, "fsyncSync").mockImplementation(() => {
+			throw Object.assign(new Error("EIO: i/o error, fsync"), { code: "EIO" });
+		});
+		try {
+			const refused = refusal(() => savedPassword(profileDir, SHOP, new CredentialKey(rootDir)));
+			expect(refused.code).toBe("credentials_unreadable");
+			expect(refused.message).toContain("EIO");
+		} finally {
+			failing.mockRestore();
+		}
+
+		expect(existsSync(keyFile)).toBe(false);
+		expect(readdirSync(rootDir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+		expect(readFileSync(file, "utf8")).toBe(plain);
+		expect(savedPassword(profileDir, SHOP, new CredentialKey(rootDir))).toBe("Kept-Plain_1#fixture");
+		expect(stored(file).version).toBe(2);
+	});
+
+	test("a crash between making the key and the first seal loses nothing: the next start finds the whole key and the plain store, and seals under that key", async () => {
+		const { rootDir, profileDir, file, keyFile } = await fresh();
+		writeFileSync(file, `${JSON.stringify({ version: 1, origins: { [SHOP]: "Kept-Plain_1#fixture", [BANK]: "Kept-Plain_2#fixture" } })}\n`);
+		// The key exists on disk; the process is gone before it sealed anything. A leftover staging file of a key that never got its name is there too.
+		const made = new CredentialKey(rootDir).get();
+		writeFileSync(`${keyFile}.deadbeef0000.tmp`, "half a key, then the power went");
+		expect(stored(file).version).toBe(1);
+
+		const next = new CredentialKey(rootDir);
+		expect(readCredentials(profileDir, next)).toEqual({ [SHOP]: "Kept-Plain_1#fixture", [BANK]: "Kept-Plain_2#fixture" });
+
+		expect(next.existing().equals(made)).toBe(true);
+		expect(Buffer.from(readFileSync(keyFile, "utf8").trim(), "base64").equals(made)).toBe(true);
+		expect(stored(file).version).toBe(2);
+		expect(readCredentials(profileDir, new CredentialKey(rootDir))).toEqual({ [SHOP]: "Kept-Plain_1#fixture", [BANK]: "Kept-Plain_2#fixture" });
+	});
+
+	test("a key file an older version left empty (it was made in two steps) is refused with what to do about it, the plain passwords are untouched, and once it is deleted they are encrypted", async () => {
+		const { rootDir, profileDir, file, keyFile } = await fresh();
+		const plain = `${JSON.stringify({ version: 1, origins: { [SHOP]: "Kept-Plain_1#fixture" } })}\n`;
+		writeFileSync(file, plain);
+		writeFileSync(keyFile, "");
+
+		const refused = refusal(() => savedPassword(profileDir, SHOP, new CredentialKey(rootDir)));
+
+		expect(refused.code).toBe("credentials_unreadable");
+		expect(refused.message).toMatch(/credentials\.key.*(empty|damaged).*delete/);
+		expect(readFileSync(file, "utf8")).toBe(plain);
+		expect(readFileSync(keyFile, "utf8")).toBe("");
+
+		rmSync(keyFile);
+		expect(savedPassword(profileDir, SHOP, new CredentialKey(rootDir))).toBe("Kept-Plain_1#fixture");
+		expect(stored(file).version).toBe(2);
+	});
+
+	test("two servers making the key at once end with one: the one that lost adopts the winner's, and what either sealed opens for both", async () => {
+		const { rootDir, profileDir } = await fresh();
+		const winner = new CredentialKey(rootDir);
+		const loser = new CredentialKey(rootDir);
+		const realFsync = fs.fsyncSync;
+		let winnerKey: Buffer | undefined;
+		let racing = false;
+		// The winner publishes its key while the loser is still staging its own.
+		const racingSync = spyOn(fs, "fsyncSync").mockImplementation((fd) => {
+			if (!racing) {
+				racing = true;
+				winnerKey = winner.get();
+			}
+			return realFsync(fd);
+		});
+		let adopted: Buffer;
+		try {
+			adopted = loser.get();
+		} finally {
+			racingSync.mockRestore();
+		}
+
+		expect(winnerKey).toBeDefined();
+		expect(adopted.equals(winnerKey as Buffer)).toBe(true);
+		const sealedByLoser = resolveCredential(profileDir, { origin: SHOP, mode: "signup" }, loser).password;
+		expect(savedPassword(profileDir, SHOP, winner)).toBe(sealedByLoser);
+		expect(readdirSync(rootDir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+	});
+
+	test("nothing is sealed under a key that is not the one on disk: a name overwritten by another key straight after it was published is refused", async () => {
+		const { rootDir, profileDir, file, keyFile } = await fresh();
+		const plain = `${JSON.stringify({ version: 1, origins: { [SHOP]: "Kept-Plain_1#fixture" } })}\n`;
+		writeFileSync(file, plain);
+		const realLink = fs.linkSync;
+		const clobbering = spyOn(fs, "linkSync").mockImplementation((from, to) => {
+			realLink(from, to);
+			fs.writeFileSync(to, `${randomBytes(32).toString("base64")}\n`);
+		});
+		try {
+			expect(refusal(() => savedPassword(profileDir, SHOP, new CredentialKey(rootDir))).code).toBe("credentials_unreadable");
+		} finally {
+			clobbering.mockRestore();
+		}
+
+		// Not sealed under the key it made: the store is still the plain one, and the next read seals it under the key that is there.
+		expect(readFileSync(file, "utf8")).toBe(plain);
+		expect(existsSync(keyFile)).toBe(true);
+		expect(savedPassword(profileDir, SHOP, new CredentialKey(rootDir))).toBe("Kept-Plain_1#fixture");
+		expect(stored(file).version).toBe(2);
 	});
 });
