@@ -743,6 +743,30 @@ describe("an open stream that goes quiet", () => {
 		await until("the pack sees the stalled stream's socket close", () => loopback.streamsGone === 1);
 	}, 20_000);
 
+	test("hearing the pack earns the forgiveness again: a host that freezes again and again in one session, with the pack's ping read after each, never costs a healthy stream its connection", async () => {
+		const { loopback, grants, probe, clock, start, advance } = await scenario();
+		loopback.mode = "answer";
+		await start();
+		await until("the stream paints", () => probe.now.connection === "live" && probe.now.picture !== null);
+
+		for (const freeze of [1, 2, 3]) {
+			// The thread is blocked for twenty seconds with the pack's ping waiting in the socket; the overdue timer is forgiven, and then the ping is read.
+			const heard = clock.requested.length;
+			loopback.beat();
+			blockThread(20_000);
+			await advance(STREAM_SILENCE_MS);
+			await until(`the ping waiting through freeze ${freeze} is read`, () => clock.requested.length > heard + 1);
+			// Fails if the forgiveness is spent for good by the first freeze (it must be re-earned by hearing, which is what the ping just did): the second would abort a stream that never stopped.
+			await quiet();
+			expect(loopback.streamsGone).toBe(0);
+			expect(probe.now.connection).toBe("live");
+			expect(probe.now.error).toBeNull();
+			expect(clock.pending).toEqual([STREAM_SILENCE_MS]);
+		}
+		expect(loopback.streamRequests).toBe(1);
+		expect(grants.calls).toBe(1);
+	}, 20_000);
+
 	test("a connect timer that fires late because this View's own thread was blocked is not a failed connect either: the pack's answer, read a moment later, goes live", async () => {
 		const { loopback, probe, clock, start, advance } = await scenario();
 		await start();

@@ -474,21 +474,31 @@ describe("what a View receives", () => {
 		expect(total() - before).toBe(16 * 9);
 	});
 
-	test("a View that did not ask for pings is never sent one: an older View reads a kind it does not know as a broken stream", async () => {
+	test("a View that did not ask for pings is never sent one, not at join and not across many heartbeats, while a View of the same browser that did ask is", async () => {
 		const clock = frozenClock();
 		const source = new FakeSource();
 		source.open("a");
 		const channel = channelFor(source);
 		const { origin, token } = await channel.mint("a");
-		const stream = await openStream(origin, token, { frames: false });
-		await stream.waitFor((messages) => states(messages).length === 1);
+		// One View that asked beside two that did not (one state-only, one with pictures): an older View's Reader throws on a kind it does not know.
+		const asking = await openStream(origin, token, { frames: false, ping: true });
+		const older = [await openStream(origin, token, { frames: false }), await openStream(origin, token)];
+		await Promise.all(older.map((stream) => stream.waitFor((messages) => states(messages).length === 1)));
+		await asking.waitFor((messages) => pings(messages).length === 1 && states(messages).length === 1);
 		await ticks(source);
-		const settled = stream.bytes;
+		// Fails if a View is greeted with a ping whether or not it asked: the one that did ask just had its greeting, so the greeting is on the wire and these two got the state alone.
+		for (const stream of older) expect(stream.messages.map((message) => message.kind)).toEqual([KIND_STATE]);
+		const settled = older.map((stream) => stream.bytes);
 
-		clock.advance(10 * HEARTBEAT_MS);
-		await ticks(source);
-		// Not a ping, and not any other frame: an older View has no deadline for a still page and needs no sign of life.
-		expect(stream.bytes).toBe(settled);
+		for (let heard = 2; heard <= 6; heard += 1) {
+			clock.advance(HEARTBEAT_MS);
+			// The beat does run: the View that asked is pinged each time, so a View that is not pinged was passed over, not forgotten.
+			await asking.waitFor((messages) => pings(messages).length === heard);
+			await ticks(source);
+		}
+		// Fails if the heartbeat pings every View, not just those that asked: nothing else is sent to a still page.
+		for (const stream of older) expect(stream.messages.map((message) => message.kind)).toEqual([KIND_STATE]);
+		expect(older.map((stream) => stream.bytes)).toEqual(settled);
 	});
 
 	test("a pack whose state read is stuck (a renderer wedged in a navigation) still pings: the beat does not wait for the read", async () => {
