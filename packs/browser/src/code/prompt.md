@@ -6,7 +6,7 @@ Changed for the Browser pack: Python lines removed, Eval renamed to browser_run,
 Drive real Chromium tabs by running JavaScript with the global `browser` object; pass `code`.
 
 <instruction>
-- Static public page? Use `browser_read`. Use `browser_run` for interaction, JavaScript execution and logged-in pages. Saved profiles are refused here; use `browser_view`.
+- Static public page? Use `browser_read`. Use `browser_run` for interaction, JavaScript execution and logged-in pages. Saved profiles are refused; tell the user to use one in `browser_view({ profile })`.
 - `await browser.open(options)` returns a `BrowserTab`; `browser.tab(name)` returns an existing handle; `await browser.close(options)` releases tabs.
 - `open` options: `name` (default `main`), `url`, `app`, `viewport`, `wait_until`, `dialogs`, `timeout`, `persist`. `close` options: `name`, `all`, `kill`, `timeout`.
 - Direct tab helpers:
@@ -21,9 +21,9 @@ Drive real Chromium tabs by running JavaScript with the global `browser` object;
 - Selectors accept CSS plus Puppeteer `aria/…`, `text/…`, `xpath/…`, and `pierce/…` query handlers.
 - Navigation and re-renders invalidate observed ids and refs. Re-observe, then act in the same cell.
 - `<select>` needs `tab.select`, not `tab.fill`. Raw request interception lasts only for the current `tab.run`.
-- Cell state persists between calls: top-level `const`/`let` stay, the last expression is returned, top-level `await` works.
+- Cell state persists: top-level `const`/`let` stay, the last expression is returned, top-level `await` works.
 - `timeout` is the cell's budget in seconds (default 30, max 300). One call returns after at most 25 s: a cell still running continues and the result says `running: <runId>` with its output so far. Call `browser_run({ resume: "<runId>" })` to wait up to 25 s more; start no new cell meanwhile.
-- Output over 50 KiB is elided in the middle; a footer names the file holding all of it.
+- Output over 50 KiB loses its middle; a footer names the file with all of it.
 
 Application modes:
 - `app.path`: spawn the specified browser or Electron executable.

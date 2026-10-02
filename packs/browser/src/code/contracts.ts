@@ -11,9 +11,14 @@
  *  2. The worker adopts what the engine made and never creates a page.
  *  3. The worker connects to `wsEndpoint` with `puppeteer.connect({browserWSEndpoint, defaultViewport: null, protocolTimeout: 60_000})`;
  *     a connected, relay or spawned browser gives the same `wsEndpoint` shape.
+ *     VERSION-ONE LIMIT, equal to OMP's: every browser the engine makes keeps a TCP DevTools port, and a cell runs with full Node (file system, network, child processes: doc 77 §7.4.5), so a cell can read another
+ *     profile's `DevToolsActivePort` and `puppeteer.connect` to another session's Chrome. "Another session's browser: no handle" is true of the API a cell is given, not of code that goes around it.
+ *     First improvement (doc 77 §7.8 decision 1, option B; not built): run the code host as a child process under Node's permission model (`--permission`: reads and writes only a scratch directory, no child process,
+ *     no worker) with a pipe transport to Chrome (`--remote-debugging-pipe`) or DevTools ports that are not discoverable from the profile directory. The transport is the same; it is a change of the host.
  *  4. Every text OMP prints is OMP's string (matrix rows C9, C10, C11, D8, D9, D16, D22).
- *  5. Errors thrown into the cell keep `name` and `message`; `isAbort` marks cancellation; `recoverTab` asks the host to rebuild the worker.
- *  6. A saved profile never reaches `acquire` from code without the gate: `acquire` throws `code_needs_consent`.
+ *  5. Errors thrown into the cell keep `name` and `message`; `isAbort` marks cancellation; `recoverTab` asks the host to rebuild the worker (a timeout and a cancel both set it).
+ *  6. A saved profile never reaches `acquire` from code without the gate: `acquire` throws `code_needs_consent`. The refusal is {@link savedProfileRefusal}'s text. The gate is advisory against code that goes around
+ *     the API (rule 3): it stops the model's `browser.open({ profile })`, not a cell that reads the profile's files.
  */
 
 // ---- the bridge: what the verbatim facade sends. OMP browser.ts:66-88, field for field, plus `profile`.
@@ -105,7 +110,9 @@ export type HostToWorker =
   /**
    * `env` is the whole environment the cell may see: the worker deletes every other key of its `process.env` before it builds the realms (only in a worker thread; never in the main thread).
    * `tabs`: a rebuilt worker re-adopts the session's tabs, each through `TabRealm.adopt`, BEFORE it answers `ready`.
-   * `outputDir`: a folder the cell realm may keep the full text of an over-cap cell output in (the host picks one folder per session, see `sessionArtifactsDir`); absent: no file is kept.
+   * `outputDir`: a folder the cell realm may keep the full text of an over-cap cell output in: `sessionFolder(artifactsRoot, session)` from `../spill.ts`, THE one folder per session (the tool's own files are there too; a host
+   * defines no copy of that function). A host that ends a session calls `discardSessionSpills(artifactsRoot, session)`, and once at start `sweepSpills(artifactsRoot)`; a rebuilt worker keeps the folder, because a failed
+   * cell's message names a file in it. Absent: no file is kept.
    */
   | ({ t: "init"; outputDir?: string; tabs?: Array<{ name: string; handle: TabHandle }> } & RealmInit)
   | { t: "run"; runId: string; code: string; timeoutMs: number }
