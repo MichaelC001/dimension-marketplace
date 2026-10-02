@@ -8,12 +8,15 @@
  * Not shown here, because it needs what this machine does not have: a real Chrome loading the unpacked extension (no infobar, no tab group), and a real cmux on a Mac.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { spawn } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import puppeteer from "puppeteer-core";
+import type { BrowserKind, HostToWorker, TabHandle } from "../src/code/contracts";
 import { CodeHost } from "../src/code/host/code-host";
-import { RuntimeCodeBrowsers } from "../src/code/host/runtime-port";
+import { RuntimeCodeBrowsers, type CodeSeam } from "../src/code/host/runtime-port";
+import { defaultWorkerEntry, type SpawnWorker, threadWorkerSpawner } from "../src/code/host/transport";
 import { establishKind } from "../src/code/kinds/establish";
 import type { ProcessScanner } from "../src/code/kinds/spawned";
 import { stopOwnedRelays } from "../src/code/kinds/relay/ensure";
@@ -68,6 +71,8 @@ interface RigOptions {
   idleMs?: number;
   /** Replaces how a non-headless kind is made ready (the scanner of running applications, say). Default: the real one. */
   establish?: typeof establishKind;
+  /** Where the worker's messages can be looked at. */
+  spawn?: SpawnWorker;
 }
 
 /** The pack's runtime and a code host over it, as the server builds them, with the kinds' environment this test chooses. */
@@ -77,6 +82,7 @@ async function start(options: RigOptions = {}): Promise<CodeHost> {
     browsers: new RuntimeCodeBrowsers(newRuntime(rootDir).codeSeam(), { idleMs: options.idleMs ?? 1_800_000, establish: options.establish ?? establishKind }),
     env: kindEnv(options.env),
     artifactsRoot: join(rootDir, "artifacts"),
+    ...(options.spawn === undefined ? {} : { spawn: options.spawn }),
   });
   return host;
 }
@@ -91,6 +97,20 @@ async function personTab(chrome: DebugChrome, url?: string): Promise<{ url: stri
   } finally {
     await browser.disconnect();
   }
+}
+
+/** A worker spawner that keeps every tab handle the host hands the worker (what `open` and `active` reply with), so a test can read what the worker was told about a tab. */
+function tapSpawn(handles: TabHandle[]): SpawnWorker {
+  const inner = threadWorkerSpawner(defaultWorkerEntry(), { maxOldGenerationSizeMb: 1_024 });
+  return options => {
+    const worker = inner(options);
+    const send = worker.transport.send.bind(worker.transport);
+    worker.transport.send = (message: HostToWorker) => {
+      if (message.t === "bridge-reply" && message.ok && message.value.attach !== undefined) handles.push(message.value.attach);
+      send(message);
+    };
+    return worker;
+  };
 }
 
 async function pageUrls(chrome: DebugChrome): Promise<string[]> {
@@ -145,6 +165,20 @@ describeWithChrome("connected: a cell drives a Chrome the person started", () =>
     expect(refused.message).toContain('No page target matched "nothing-like-this". Available pages:');
     expect(refused.message).toContain(pages.url("/one"));
     expect(refused.message).toContain(pages.url("/two"));
+  }, BROWSER_TEST_TIMEOUT_MS);
+
+  test("the worker is told the page is the person's: adopted not created, and not raised for a screenshot unless app.target named it", async () => {
+    const chrome = await startDebugChrome();
+    await personTab(chrome, pages.url("/one"));
+    const handles: TabHandle[] = [];
+    const code = await start({ spawn: tapSpawn(handles) });
+    const cdp = JSON.stringify(chrome.cdpUrl);
+    await valueOf(code, "s1", `await browser.open({ name: "front", app: { cdp_url: ${cdp} } }); 0`);
+    await valueOf(code, "s1", `await browser.open({ name: "named", app: { cdp_url: ${cdp}, target: "Page one" } }); 0`);
+    expect(handles.map(handle => ({ name: handle.kind, created: handle.created, activate: handle.activateForScreenshot }))).toEqual([
+      { name: "connected", created: false, activate: false },
+      { name: "connected", created: false, activate: true },
+    ]);
   }, BROWSER_TEST_TIMEOUT_MS);
 
   test("a dialog on the person's page is not answered for the cell: it waits for the cell's own handler, or for the policy the cell asked for", async () => {
@@ -250,7 +284,12 @@ describeWithChrome("spawned: a cell starts an application and drives it", () => 
 
   test("close({ kill: true }) ends the application the pack started, and nothing else", async () => {
     if (chromePath === undefined) throw new Error("no Chrome");
-    const bystander = await startDebugChrome();
+    // Another program on the machine, standing in for the person's other applications: it must be exactly as alive afterwards.
+    const bystander = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore", windowsHide: true });
+    const bystanderPid = bystander.pid!;
+    stoppers.push(async () => {
+      await killTree(bystanderPid);
+    });
     const args = await appArgs();
     const code = await start({ establish: spawnOwn });
     const result = await cell(code, "s1", `
@@ -261,9 +300,9 @@ describeWithChrome("spawned: a cell starts an application and drives it", () => 
     if (isFailure(result)) throw new Error(`${result.error.name}: ${result.error.message}`);
     const pid = pidOf(textOf(result));
     try {
-      expect(pid).not.toBe(bystander.pid);
+      expect(pid).not.toBe(bystanderPid);
       expect(await gone(pid)).toBe(true);
-      expect(alive(bystander.pid)).toBe(true);
+      expect(alive(bystanderPid)).toBe(true);
     } finally {
       await killTree(pid);
     }
@@ -350,11 +389,11 @@ describeWithChrome("relay: a cell drives the person's own Chrome through the pac
 
 const PAGE: FakePage = { url: "about:blank", title: "Fake page", html: "<h1>fake</h1> Fake page text", refs: { "@e1": { role: "button", name: "Go" } } };
 
-async function cmuxRig(daemon: Parameters<typeof startFakeCmux>[0] = {}, env: Record<string, string> = {}): Promise<{ code: CodeHost; fake: FakeCmux; closed: string[] }> {
+async function cmuxRig(daemon: Parameters<typeof startFakeCmux>[0] = {}, env: Record<string, string> = {}, rig: Pick<RigOptions, "spawn"> = {}): Promise<{ code: CodeHost; fake: FakeCmux; closed: string[] }> {
   const { handler, closed } = pageHandler({ ...PAGE }, undefined);
   const fake = await startFakeCmux({ ...daemon, handler });
   fakes.push(fake);
-  const code = await start({ env: { CMUX_SOCKET_PATH: fake.socketPath, ...env } });
+  const code = await start({ env: { CMUX_SOCKET_PATH: fake.socketPath, ...env }, ...rig });
   return { code, fake, closed };
 }
 
@@ -396,6 +435,14 @@ describeWithChrome("cmux: a cell drives a surface of the terminal app it runs in
     expect(closed.sort()).toEqual(["surface-uuid-1", "surface-uuid-2"]);
   }, BROWSER_TEST_TIMEOUT_MS);
 
+  test("the worker is handed the surface and the way to the daemon, and the surface is not a CDP target", async () => {
+    const handles: TabHandle[] = [];
+    const { code, fake } = await cmuxRig({ password: "s3cret" }, { CMUX_SOCKET_PASSWORD: "s3cret" }, { spawn: tapSpawn(handles) });
+    await valueOf(code, "s1", 'await browser.open({ url: "https://example.test/x" }); 0');
+    expect(handles).toHaveLength(1);
+    expect(handles[0]).toMatchObject({ kind: "cmux", tabId: "surface-uuid-1", targetId: "surface-uuid-1", wsEndpoint: "", url: "https://example.test/x", cmux: { socketPath: fake.socketPath, password: "s3cret" } });
+  }, BROWSER_TEST_TIMEOUT_MS);
+
   test("the daemon's password reaches the daemon and never the cell: the worker's own environment has none, and the cell still drives the surface", async () => {
     const { code } = await cmuxRig({ password: "s3cret" }, { CMUX_SOCKET_PASSWORD: "s3cret" });
     expect(await valueOf(code, "s1", `
@@ -415,5 +462,53 @@ describeWithChrome("cmux: a cell drives a surface of the terminal app it runs in
   test("a daemon that is not there is a refusal the cell can read, not a crash", async () => {
     const code = await start({ env: { CMUX_SOCKET_PATH: join(tmpdir(), "dimension-cmux-nobody-home.sock") } });
     expect((await failureOf(code, "s1", "await browser.open({ url: 'https://example.test/' })")).message).toContain("Failed to connect to cmux socket");
+  }, BROWSER_TEST_TIMEOUT_MS);
+});
+
+describe("freezing", () => {
+  /** A seam whose one browser is `kind`, and every freeze its driver was asked for. */
+  function portOver(kind: BrowserKind): { port: RuntimeCodeBrowsers; frozen: string[] } {
+    const frozen: string[] = [];
+    const entry = { browserId: "b", code: { idleMs: 1, persist: false, kind }, driver: { setFrozen: async (tabId: string, on: boolean): Promise<void> => void frozen.push(`${tabId}:${on}`) } };
+    return { port: new RuntimeCodeBrowsers({ require: () => entry } as unknown as CodeSeam, {}), frozen };
+  }
+
+  test("the pages of a browser the pack only attached to are never frozen: they are the person's", async () => {
+    for (const kind of [{ kind: "connected", cdpUrl: "http://x" }, { kind: "relay", cdpUrl: "http://x" }, { kind: "spawned", path: "/x" }] satisfies BrowserKind[]) {
+      const { port, frozen } = portOver(kind);
+      await port.setFrozen("b", "tab", true);
+      expect(frozen).toEqual([]);
+    }
+  });
+
+  test("a Chromium of the pack's is frozen and thawed as asked", async () => {
+    const { port, frozen } = portOver({ kind: "headless", headless: true });
+    await port.setFrozen("b", "tab", true);
+    await port.setFrozen("b", "tab", false);
+    expect(frozen).toEqual(["tab:true", "tab:false"]);
+  });
+});
+
+describeWithChrome("two kinds of browser in one session", () => {
+  test("opens that start together on different kinds each get their own browser: a connected Chrome and a cmux surface", async () => {
+    const chrome = await startDebugChrome();
+    await personTab(chrome, pages.url("/one"));
+    const { code, closed } = await cmuxRig();
+    const result = await cell(code, "s1", `
+      await Promise.all([
+        browser.open({ name: "chrome", app: { cdp_url: ${JSON.stringify(chrome.cdpUrl)} } }),
+        browser.open({ name: "split", url: "https://example.test/split" }),
+      ]);
+      JSON.stringify([await browser.tab("chrome").title(), await browser.tab("split").title(), (await browser.tabs()).length]);
+    `);
+    if (isFailure(result)) throw new Error(`${result.error.name}: ${result.error.message}`);
+    expect(textOf(result)).toContain(`on connected ${chrome.cdpUrl}`);
+    expect(textOf(result)).toContain("on cmux browser (split)");
+    expect(JSON.parse(textOf(result).split("\n").at(-1)!)).toEqual(["Page one", "Fake page", 2]);
+    // Closing one leaves the other: the person's tab is not the split's to close.
+    await valueOf(code, "s1", `await browser.tab("split").close(); 0`);
+    expect(closed).toEqual(["surface-uuid-1"]);
+    expect(await pageUrls(chrome)).toEqual([pages.url("/one")]);
+    expect(await valueOf(code, "s1", `await browser.tab("chrome").title()`)).toBe("Page one");
   }, BROWSER_TEST_TIMEOUT_MS);
 });
