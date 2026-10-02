@@ -523,6 +523,30 @@ describe("a View that is torn down", () => {
 		expect(loopback.streamRequests).toBe(requests);
 		expect(grants.calls).toBe(requests);
 	}, 20_000);
+
+	test("a View that sent many batches holds none of them: unmounting aborts nothing that already finished", async () => {
+		const { loopback, probe, start, send } = await scenario();
+		loopback.mode = "answer";
+		loopback.input = "ok";
+		const posted: AbortSignal[] = [];
+		const realFetch = globalThis.fetch;
+		globalThis.fetch = ((target: Parameters<typeof fetch>[0], init?: RequestInit) => {
+			if (init?.method === "POST" && init.signal) posted.push(init.signal);
+			return realFetch(target, init);
+		}) as typeof fetch;
+		try {
+			await start();
+			await until("the stream is live", () => probe.now.connection === "live");
+			for (let batch = 0; batch < 3; batch += 1) expect(await (await send()).outcome).toBe("sent");
+			expect(posted).toHaveLength(3);
+
+			await unmountAll();
+			// Fails if a finished POST's controller is left in the View's in-flight set: it grows by one per batch for the life of the View, and unmount aborts them all.
+			expect(posted.map(signal => signal.aborted)).toEqual([false, false, false]);
+		} finally {
+			globalThis.fetch = realFetch;
+		}
+	});
 });
 
 /** A host whose `browser_stream` names the loopback listener; `browser_profiles` is answered; anything else is a failure the test then reports. */
