@@ -348,11 +348,12 @@ describe("OMP's facade, unchanged, in the cell", () => {
     expect(asked.filter(request => request.action === "tabs")).toHaveLength(1);
   });
 
-  test("the active handle has every helper a named tab has, so a helper added to the facade is not missing from it", async () => {
-    const result = await run('const named = Object.keys(browser.tab("x")).filter(k => k !== "name").sort(); const active = Object.keys(browser.active()).sort(); JSON.stringify({ named, active })', { invoke });
-    const { named, active } = JSON.parse(textOf(result).replace(/^display\[1\]:\n/, ""));
+  test("the active handle has every key a named tab has, so a helper added to the facade is not missing from it; its name is asked for, because the host has to say which tab is active", async () => {
+    const result = await run('const named = Object.keys(browser.tab("x")).sort(); const handle = browser.active(); JSON.stringify({ named, active: Object.keys(handle).sort(), nameOfTab: typeof browser.tab("x").name, nameOfActive: typeof handle.name })', { invoke });
+    const { named, active, nameOfTab, nameOfActive } = JSON.parse(textOf(result).replace(/^display\[1\]:\n/, ""));
     expect(named.length).toBeGreaterThan(20);
     expect(active).toEqual(named);
+    expect([nameOfTab, nameOfActive]).toEqual(["string", "function"]);
   });
 
   test("browser is only reachable while a cell runs", async () => {

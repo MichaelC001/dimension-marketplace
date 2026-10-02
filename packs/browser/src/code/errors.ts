@@ -47,3 +47,13 @@ export function renderError(e: unknown): string {
   if (e instanceof Error) return e.message;
   return String(e);
 }
+
+/**
+ * What a host answers, as the `code_needs_consent` refusal, when a cell asks for a saved profile (contract rule 6): the profile holds logins and code runs with full Node, so it stays refused until the
+ * "human yes" gate exists (doc 77 §7.8 decision 2). The text says what the model tells the person and what it can do meanwhile, with the tools a code space has; prompt.md says the same in fewer words.
+ */
+export function savedProfileRefusal(profile: string): string {
+  const name = JSON.stringify(profile);
+  return `a saved profile (${name}) cannot be driven by code yet: it holds logins, and code runs with full Node. Tell the user so. They can work in it themselves: call browser_view({ profile: ${name} }) and they sign in or do the step in the View. `
+    + "Meanwhile code can use a throwaway browser (leave profile out) or the user's own Chrome (app: { relay: true }).";
+}
