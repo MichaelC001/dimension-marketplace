@@ -63,7 +63,7 @@ export type BrowserKind =
   | { kind: "spawned"; path: string; args?: string[] }
   | { kind: "connected"; cdpUrl: string }
   | { kind: "relay"; cdpUrl: string }
-  | { kind: "cmux"; socketPath: string; password?: string; surface?: string };
+  | { kind: "cmux"; socketPath: string; password?: string; surface?: string; relayId?: string; relayToken?: string };
 /** Base64 image content. */
 export interface ImageBlock { type: "image"; data: string; mimeType: string }
 export interface ScreenshotResult { dest: string; mimeType: string; bytes: number; width: number; height: number }
@@ -88,7 +88,13 @@ export interface TabHandle extends TabRef {
   created: boolean;
   /** Raise the tab before a screenshot. Unset: yes, except for a tab adopted (not created) on a connected or relay browser, which is the user's visible tab (OMP's rule). */
   activateForScreenshot?: boolean;
+  /** `kind: "cmux"` only: how the worker reaches the surface (`tabId` and `targetId` are the surface's UUID, `wsEndpoint` is empty: a cmux surface is no CDP target). */
+  cmux?: CmuxConnection;
 }
+/** What reaches a cmux daemon: the host resolved it from the cmux environment (`CMUX_SOCKET_PATH`, `CMUX_SOCKET_PASSWORD`, `CMUX_RELAY_ID`, `CMUX_RELAY_TOKEN`); the worker's own environment never carries it. */
+export interface CmuxConnection { socketPath: string; password?: string; relayId?: string; relayToken?: string }
+/** What `acquire` answers: the browser, whether this call made it, its CDP endpoint, and the words `Opened tab "main" on <label>` ends in when the browser is not a plain headless one (a spawned application names its pid). */
+export interface AcquiredBrowser { browserId: string; created: boolean; wsEndpoint: string; label?: string }
 
 // ---- host <-> worker (OMP tab-protocol.ts:83-137, minus tool-call/tool-reply, plus bridge for open/close)
 /**
@@ -176,8 +182,12 @@ export type RunStarted =
 
 // ---- L2 implements on BrowserRuntime (four hooks in runtime.ts); L2 and L4 consume.
 export interface CodeBrowserPort {
-  acquire(session: string, req: { kind: BrowserKind; profile?: string; viewport?: { width: number; height: number; scale?: number }; persist?: boolean }, signal: AbortSignal): Promise<{ browserId: string; created: boolean; wsEndpoint: string }>;
-  openTab(browserId: string, o: { url?: string; waitUntil?: WaitUntil; dialogs?: "accept" | "dismiss"; timeoutMs: number }, signal: AbortSignal): Promise<TabRef>;
+  acquire(session: string, req: { kind: BrowserKind; profile?: string; viewport?: { width: number; height: number; scale?: number }; persist?: boolean }, signal: AbortSignal): Promise<AcquiredBrowser>;
+  /**
+   * Makes a tab of `browserId` the cell's. A browser the pack launched opens a new tab; one it only attached to (connected, spawned, relay) hands over the page the person has in front, or the one whose URL or title contains `target`
+   * (`app.target`), as it is, and navigates it when `url` is given. A cmux browser opens a split at `url`, or attaches to the surface the request named.
+   */
+  openTab(browserId: string, o: { url?: string; waitUntil?: WaitUntil; dialogs?: "accept" | "dismiss"; timeoutMs: number; target?: string }, signal: AbortSignal): Promise<TabRef>;
   /** app.target */
   findTab(browserId: string, match: string): Promise<TabRef | undefined>;
   tabs(browserId: string): Promise<TabRef[]>;
@@ -200,9 +210,11 @@ export interface CodeBrowserPort {
   /** What the freeze clock reads; undefined once the browser is gone. `idleMs`: since any call reached it, the View's included. `working`: a call is queued or running, or a task agent is driving the browser (a task's steps do not touch `idleMs`). */
   activity(browserId: string): { idleMs: number; viewers: number; pending: number; working: boolean } | undefined;
   /** The browser the session already holds (one a cell made, or the person opened in the View), without making one: what `browser.tabs()` and `browser.active()` read. */
-  existing(session: string): { browserId: string; wsEndpoint: string } | undefined;
+  existing(session: string): { browserId: string; wsEndpoint: string; kind: BrowserKind } | undefined;
   /** A View joined the browser's live stream, or a task agent began driving it: a frozen tab draws nothing and answers no timer, so the host thaws before either looks. */
   onViewed(l: (browserId: string) => void): () => void;
+  /** The host is shutting down: let go of what the port holds that the runtime does not (the splits of a cmux browser). The runtime closes its own browsers. */
+  dispose?(): Promise<void>;
 }
 
 // ---- inside the worker: L1's dispatcher consumes, L3 implements. `open`/`close` never reach it; `run`/`call` always do.

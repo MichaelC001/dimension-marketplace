@@ -223,14 +223,29 @@ describeWithChrome("a session has its own browser", () => {
 });
 
 describeWithChrome("open and close", () => {
-  test("a name bound to another kind of browser is refused with OMP's text; a saved profile and a connected browser are refused by name", async () => {
-    const { host, rootDir } = await start();
+  test("a name bound to another kind of browser is refused with OMP's text; a saved profile is refused by name, and a connected browser by its websocket URL", async () => {
+    const { host, rootDir } = await start({ host: { env: { ...process.env, DIMENSION_BROWSER_CODE_ALLOW_ATTACH: "1" } } });
     await valueOf(host, "s1", `await browser.open({ name: "a", url: ${JSON.stringify(pages.url("/other"))} }); 0`);
     const mismatch = await failureOf(host, "s1", 'await browser.open({ name: "a", app: { cdp_url: "http://127.0.0.1:9" } })');
     expect(mismatch.message).toContain('Tab "a" is bound to a different browser (headless hidden). Close it first.');
     expect((await failureOf(host, "s1", 'await browser.open({ name: "work", profile: "work" })')).message).toContain("code_needs_consent");
-    expect((await failureOf(host, "s1", 'await browser.open({ name: "c", app: { cdp_url: "http://127.0.0.1:9" } })')).message).toContain("code_kind_unsupported");
+    expect((await failureOf(host, "s1", 'await browser.open({ name: "c", app: { cdp_url: "ws://127.0.0.1:9/devtools/browser/x" } })')).message).toContain("must be the HTTP CDP discovery endpoint");
     expect(await liveChromes(rootDir)).toBe(1);
+  }, BROWSER_TEST_TIMEOUT_MS);
+
+  test("a browser the cell did not launch is refused until the person says yes, and nothing a cell does can say it for them", async () => {
+    // The human gate for the three model-chosen kinds until the host's exec approval tier (H1) asks at the call: a setting of the pack, read from the host's environment at each open.
+    const { host, rootDir } = await start({ host: { env: { ...process.env, DIMENSION_BROWSER_CODE_ALLOW_ATTACH: "" } } });
+    for (const app of ['{ cdp_url: "http://127.0.0.1:9" }', '{ path: process.execPath }', "{ relay: true }"]) {
+      const refused = await failureOf(host, "s1", `await browser.open({ name: "x", app: ${app} })`);
+      expect(refused.message).toContain("code_needs_consent");
+      expect(refused.message).toContain("ask the user to set DIMENSION_BROWSER_CODE_ALLOW_ATTACH=1");
+    }
+    // The cell's own environment does not carry the setting, and setting it there is not the person's yes.
+    expect(await valueOf(host, "s1", "process.env.DIMENSION_BROWSER_CODE_ALLOW_ATTACH ?? 'unset'")).toBe("unset");
+    const stillRefused = await failureOf(host, "s1", 'process.env.DIMENSION_BROWSER_CODE_ALLOW_ATTACH = "1"; await browser.open({ name: "x", app: { cdp_url: "http://127.0.0.1:9" } })');
+    expect(stillRefused.message).toContain("code_needs_consent");
+    expect(await liveChromes(rootDir)).toBe(0);
   }, BROWSER_TEST_TIMEOUT_MS);
 
   test("one deadline covers the launch and the navigation, and the browser the failed open made does not outlive it", async () => {

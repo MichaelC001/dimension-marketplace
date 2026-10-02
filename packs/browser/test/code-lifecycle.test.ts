@@ -6,7 +6,7 @@
  * A scripted browser port and a scripted worker, so every clock is short and exact and no Chrome is needed; the real thing is code-host.test.ts.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import type { CodeBrowserPort, HostToWorker, RunError, TabRef, WorkerToHost } from "../src/code/contracts";
+import type { BrowserKind, CodeBrowserPort, HostToWorker, RunError, TabRef, WorkerToHost } from "../src/code/contracts";
 import { CodeHost, type CodeHostOptions } from "../src/code/host/code-host";
 import type { SpawnWorker, WorkerHandle, WorkerMemory } from "../src/code/host/transport";
 import { BrowserRuntimeError } from "../src/store";
@@ -149,8 +149,8 @@ class FakeBrowsers implements CodeBrowserPort {
     return this.#browser === undefined ? undefined : { idleMs: this.idleMs, viewers: this.viewers, pending: this.pending, working: this.working };
   }
 
-  existing(): { browserId: string; wsEndpoint: string } | undefined {
-    return this.#browser === undefined ? undefined : { browserId: this.#browser.id, wsEndpoint: "ws://fake/b1" };
+  existing(): { browserId: string; wsEndpoint: string; kind: BrowserKind } | undefined {
+    return this.#browser === undefined ? undefined : { browserId: this.#browser.id, wsEndpoint: "ws://fake/b1", kind: { kind: "headless", headless: true } };
   }
 
   holdWork(): () => void {

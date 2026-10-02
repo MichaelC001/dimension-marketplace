@@ -15,12 +15,13 @@ import { MAX_DETAIL_BYTES } from "./annotation-file.js";
 import { type PublishPreset, loadPresets, resolvePreset, summarizePresets } from "./presets.js";
 import { MAX_LABEL_CHARS, PROFILE_COLOURS } from "./profile-meta.js";
 import { profilesForModel } from "./profile-list.js";
+import { stopOwnedRelays } from "./code/kinds/relay/ensure.js";
 import { reapChildren } from "./reap.js";
 import { BrowserRuntime } from "./runtime.js";
 import { defaultRootDir, fail } from "./store.js";
 import { LiveChannel } from "./stream.js";
-import { jevKeyConfigured } from "./task.js";
 import manifest from "../plugin.json";
+import { jevKeyConfigured } from "./task.js";
 
 export const BROWSER_VIEW_URI = "ui://browser/index.html";
 /**
@@ -216,6 +217,13 @@ function nextStep(summary: string): string {
   return "check the page with browser_snapshot, then retry the task or continue with browser_act.";
 }
 
+/**
+ * Whether this server registers `browser_task`, `browser_task_wait` and `browser_task_cancel`. It is the ONE predicate behind two things that must agree: the tool list, and the code worker's password refusal (which sends
+ * the model to `browser_task` only when the model can call it). It is read once, as the server is created. jev is the one task agent and it needs its key, so the tools exist only where `jevKeyConfigured()`; test/code-task-credential.test.ts fails if the refusal and the tool list ever disagree.
+ */
+export function taskToolsOffered(): boolean {
+  return jevKeyConfigured();
+}
 export interface BrowserServerOptions {
   runtime?: BrowserRuntimePort;
   viewDir?: string;
@@ -227,7 +235,7 @@ export interface BrowserServerOptions {
   modelTools?: ModelToolsMode;
   /** Where a `browser_run` result over 50 KiB keeps its full text; defaults to `artifacts/` beside the profiles. */
   codeArtifactsDir?: string;
-  /** Overrides `jevKeyConfigured()`, the ONE predicate for whether `browser_task` and its two companions are registered and so whether the code worker's password refusal may name `browser_task` (RealmInit.taskCredential). */
+  /** Overrides `taskToolsOffered()`: whether the task tools are registered, and so whether the code worker's password refusal may name `browser_task`. */
   taskTools?: boolean;
 }
 
@@ -254,7 +262,7 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
   });
   const server = new McpServer({ name: "dimension-community-browser", version: "0.1.0" });
   // jev's key is read once, as the server is created. This ONE value decides which tools exist, what their descriptions say, and what the code host tells every worker (`RealmInit.taskCredential`).
-  const jev = options.taskTools ?? jevKeyConfigured();
+  const jev = options.taskTools ?? taskToolsOffered();
   // A real runtime brings its own code host: `browser_run` is on by default (the model's one way of driving a page, doc 77 §7.5a). A runtime that is not the pack's (a test's fake) has no browsers to run code on.
   // A setting that only concerns code and is wrong (DIMENSION_BROWSER_CODE_ISOLATION=process, a non-numeric DIMENSION_BROWSER_CODE_HEAP_MB) turns `browser_run` off and says why on stderr; it never stops the server: every
   // step tool and the View are unrelated to it, and a server that will not start takes them all down for one line of configuration. With no code host the model keeps the step tools (a registered `browser_run` that only
@@ -401,7 +409,7 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     } catch (error) { return failure(error); }
   });
   server.registerTool("browser_act", {
-    description: "Run 1-25 steps in order in the active tab, stopping at the first that does not complete; returns the page's url and title. Steps: navigate (http/https), back, forward, reload, stop, click (selector, or x,y in the viewport; button, clickCount 1-3), hover (x,y), type (replaces the value), insert (into the focused element), select (option value or text), press (key), scroll, resize (width, height), wait (selector visible | text on the page | url substring; timeoutMs default 5000, max 15000), tab (op new | activate | close; tabId from browser_state; url for new), eval (JS in the page's main world; value returned as JSON, at most 8000 chars; throwaway browsers only). A click or Enter that navigates waits up to 1.5 s. JS dialogs are answered (alert/beforeunload accepted, else dismissed) and listed. Status failed: that step did nothing. unknown: sent, then errored, so it may have taken effect: look before retrying a submit. timeout: a wait ran out, or the batch's time budget (send the rest again). newErrors: new page errors (read them in browser_state). A selector may start `@<ref> ` (from browser_snapshot) to reach an iframe. " + (jev ? "Refused while a browser_task runs. " : "") + "Passwords: type or insert with generatePassword: true (sign-up: mints, saves per profile and origin, types) or useSavedPassword: true (login) instead of text; needs a profile.",
+    description: "Run 1-25 steps in order in the active tab, stopping at the first that does not complete; returns the page's url and title. Steps: navigate (http/https), back, forward, reload, stop, click (selector, or x,y in the viewport; button, clickCount 1-3), hover (x,y), type (replaces the value), insert (into the focused element), select (option value or text), press (key), scroll, resize (width, height), wait (selector visible | text on the page | url substring; timeoutMs default 5000, max 15000), tab (op new | activate | close; tabId from browser_state; url for new), eval (JS in the page's main world; value returned as JSON, at most 8000 chars; throwaway browsers only). A click or Enter that navigates waits up to 1.5 s. JS dialogs are answered (alert/beforeunload accepted, else dismissed) and listed. Status failed: that step did nothing. unknown: sent, then errored, so it may have taken effect: look before retrying a submit. timeout: a wait ran out, or the batch's time budget (send the rest again). newErrors: new page errors (read them in browser_state). A selector may start `@<ref> ` (from browser_snapshot) to reach an iframe. " + (taskTools ? "Refused while a browser_task runs. " : "") + "Passwords: type or insert with generatePassword: true (sign-up: mints, saves per profile and origin, types) or useSavedPassword: true (login) instead of text; needs a profile.",
     inputSchema: { browserId: capability, actions: z.array(stepSchema).min(1).max(MAX_BATCH_STEPS) },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     _meta: stepMeta,
@@ -448,8 +456,8 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
       active = false;
     }
   };
-  // jev, the one task agent, is optional (doc 77 §6): its tools exist only where its key is set, so a session without it neither sees nor pays for them.
-  // An absent tool carries no text of its own, so the reason goes to the server log. TEXT_MODEL_API_KEY is still checked when a task starts.
+  // jev, the one task agent, is optional (doc 77 §6): its tools exist only where its key is set, so a session without it neither sees nor pays for them. The SAME value (`jev`) is what the code host tells every
+  // worker (`RealmInit.taskCredential`), so a password refusal names `browser_task` only when the model can call it. An absent tool carries no text of its own, so the reason goes to the server log. TEXT_MODEL_API_KEY is still checked when a task starts.
   if (jev) {
     server.registerTool("browser_task", {
       description: `Hand a whole task to jev, a fast browser agent (one model decision per step), working in this browser while the human watches. Put every fact it needs in task; it cannot ask you. For a password prefer credential {origin, mode: "signup" | "login"}: the browser fills that origin's password fields itself from this profile's saved password (signup mints and saves one; login needs one saved), so it never reaches the transcript or jev. Returns within waitSeconds (default and max ${WAIT_CAP_S}) with status, steps, time, model calls, tokens (and credential {origin, created}); while "running", call browser_task_wait. A failed task is a tool error naming the cause and next step; the browser stays open. jev also needs TEXT_MODEL_API_KEY in the server's environment; without it sign up yourself with browser_act generatePassword: true. browser_act is refused while a task runs (task_running).`,
@@ -483,7 +491,7 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
   // Post button) submits exactly once. browser_publish itself never submits.
   registerAppTool(server, "browser_publish", {
     title: "Publish",
-    description: "Post through a signed-in profile (a throwaway browser is refused). Pass EXACTLY ONE of preset or recipe. preset (preferred; see browser_publish_presets): {name, values (one per preset field, in order), target? (needsTarget presets: the page to post on)}. recipe (a site with no preset): origin (https; http only for 127.0.0.1/localhost), composeUrl on origin, signedIn (CSS selector present only when logged in), account? (CSS selector whose text names the account, e.g. \"Alice @alice\" → \"@alice\"), fields [{selector, value, label?}] (1-8; value ≤ 10000 chars; label ≤ 40 chars, the caption in the View), submit (selector), receipt {path (the posted URL's pathname template: literal text plus {segment} and {digits}, at most one per segment, e.g. \"/{segment}/status/{digits}\"), linkSelector? (the posted link; else the tab's URL after submit)}. mode \"check\": opens composeUrl, returns \"signed-in\" or \"not-signed-in\" (sign in first, then post). mode \"post\": refused (publish_unapproved, nothing opened or typed) unless the user approved this exact post on the campaign board: the same site, profile and text, unexpired and unspent. Otherwise types and reads back each value, returns \"awaiting-confirmation\" with a publishId and composeUrl. NOTHING is submitted yet: confirm with browser_publish_confirm (or the View's Post button), drop with browser_publish_cancel, follow with browser_publish_wait. While pending the page is pinned: browser_act" + (jev ? ", browser_task" : "") + " and browser_publish are refused (publish_pending) until posted, cancelled or expired (10 minutes). \"failed\": nothing was submitted. A password field is never a publish field; log in with browser_act" + (jev ? " or browser_task. Refused while a task runs." : "."),
+    description: "Post through a signed-in profile (a throwaway browser is refused). Pass EXACTLY ONE of preset or recipe. preset (preferred; see browser_publish_presets): {name, values (one per preset field, in order), target? (needsTarget presets: the page to post on)}. recipe (a site with no preset): origin (https; http only for 127.0.0.1/localhost), composeUrl on origin, signedIn (CSS selector present only when logged in), account? (CSS selector whose text names the account, e.g. \"Alice @alice\" → \"@alice\"), fields [{selector, value, label?}] (1-8; value ≤ 10000 chars; label ≤ 40 chars, the caption in the View), submit (selector), receipt {path (the posted URL's pathname template: literal text plus {segment} and {digits}, at most one per segment, e.g. \"/{segment}/status/{digits}\"), linkSelector? (the posted link; else the tab's URL after submit)}. mode \"check\": opens composeUrl, returns \"signed-in\" or \"not-signed-in\" (sign in first, then post). mode \"post\": refused (publish_unapproved, nothing opened or typed) unless the user approved this exact post on the campaign board: the same site, profile and text, unexpired and unspent. Otherwise types and reads back each value, returns \"awaiting-confirmation\" with a publishId and composeUrl. NOTHING is submitted yet: confirm with browser_publish_confirm (or the View's Post button), drop with browser_publish_cancel, follow with browser_publish_wait. While pending the page is pinned: browser_act" + (taskTools ? ", browser_task" : "") + " and browser_publish are refused (publish_pending) until posted, cancelled or expired (10 minutes). \"failed\": nothing was submitted. A password field is never a publish field; log in with browser_act" + (taskTools ? " or browser_task. Refused while a task runs." : "."),
     inputSchema: { browserId: capability, recipe: recipeSchema.optional(), preset: presetSchema.optional(), mode: z.enum(PUBLISH_MODES) },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     _meta: { ...TRACTION_ONLY, ui: { resourceUri: BROWSER_VIEW_URI } },
@@ -624,8 +632,12 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
   const disposeBackends = async (): Promise<void> => {
     // Together, not one after the other: the browsers close whatever the code worker does (a worker inside a native call holds the code host's disposal for the whole call), and a failure of one never skips the other.
     const [code, browsers] = await Promise.allSettled([codeHost?.dispose(), runtime.dispose()]);
+    // The relay a cell's `app.relay` started lives in this process: left running it would keep serving /cdp and holding the person's Chrome in its debugging bar after the server had gone (and the next server would adopt it).
+    // It stops after the browsers attached through it have let go, so the extension sees a clean detach first.
+    const relays = await stopOwnedRelays().then(() => undefined, (error: unknown) => error);
     if (browsers.status === "rejected") throw browsers.reason;
     if (code.status === "rejected") throw code.reason;
+    if (relays !== undefined) throw relays;
   };
   server.close = async () => {
     stopReporting();

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { BrowserRuntime } from "../../runtime.js";
 import { defaultRootDir } from "../../store.js";
 import type { BridgeRequest, BrowserKind, CodeBrowserPort, CodeHostPort, RunStarted } from "../contracts.js";
+import { resolveKind } from "../kinds/resolve.js";
 import { CODE_IDLE_MS, RuntimeCodeBrowsers } from "./runtime-port.js";
 import { CodeSession, DEFAULT_TIMING, type CodeTiming, sessionFolder, unknownRunMessage } from "./session.js";
 import type { CommitProbe } from "./commit-probe.js";
@@ -12,8 +13,6 @@ import { HostMemory } from "./host-memory.js";
 import { TerminatingWorkers } from "./terminating.js";
 import { defaultCommitProbe, defaultWorkerEntry, type SpawnWorker, threadWorkerSpawner } from "./transport.js";
 
-/** OMP's default relay endpoint (browser/relay/kind.ts:10). */
-const DEFAULT_RELAY_URL = "http://127.0.0.1:9224";
 /** A cell's worker thread may hold this much heap before it ends itself; the server and every other session's browsers go on. */
 const DEFAULT_HEAP_MB = 1_024;
 /** A cell's worker may hold this much in all (JS heap, Buffers, ArrayBuffers) before it is ended and its cell fails; `resourceLimits` bounds only the heap part. */
@@ -41,18 +40,6 @@ export function scrubbedEnv(source: Record<string, string | undefined>): Record<
   return kept;
 }
 
-/**
- * What a cell's `browser.open` means, in OMP's order (browser.ts:103-142): `app.cdp_url` is a connected browser, `app.path` a spawned one, `app.relay` the relay, else a headless browser of the pack.
- * Only the last can be acquired in this build (the runtime refuses the others by name); L4's resolver replaces this one.
- */
-export function resolveKind(request: BridgeRequest, o: { headless: boolean; relayUrl?: string }): BrowserKind {
-  const app = request.app;
-  if (app?.cdp_url !== undefined) return { kind: "connected", cdpUrl: app.cdp_url };
-  if (app?.path !== undefined) return { kind: "spawned", path: app.path, ...(app.args === undefined ? {} : { args: app.args }) };
-  if (app?.relay === true) return { kind: "relay", cdpUrl: o.relayUrl ?? DEFAULT_RELAY_URL };
-  return { kind: "headless", headless: o.headless };
-}
-
 export interface CodeHostOptions {
   browsers: CodeBrowserPort;
   /** Starts a worker. Default: a `worker_threads` thread running the bundled worker (or its source when run from source). */
@@ -61,9 +48,10 @@ export interface CodeHostOptions {
   env?: Record<string, string | undefined>;
   /** `browser.open` without `app`: a hidden browser, or the visible one `DIMENSION_BROWSER_HEADLESS=false` asks for. */
   headless?: boolean;
+  /** Replaces the choice of browser for a request (kinds/resolve.ts: OMP's order, the pack's environment variables). A test passes its own. */
   resolveKind?: (request: BridgeRequest) => BrowserKind;
   screenshotDir?: string;
-  /** What a relative `tab.uploadFile` path resolves against; absent: relative paths are refused with the rule named. */
+  /** What a relative `tab.uploadFile` path resolves against, and what a relative `app.path` of a spawned application is relative to (kinds/resolve.ts). Absent: this process's working directory for `app.path`; relative upload paths are refused with the rule named. */
   cwd?: string;
   /** Refuse password inputs from code (matrix D18). Default true. */
   refusePasswordFields?: boolean;
@@ -117,8 +105,8 @@ export class CodeHost implements CodeHostPort {
     if (this.#disposed) throw new Error("the browser code host is shut down");
     let session = this.#sessions.get(id);
     if (session === undefined) {
-      const { env: source = process.env, headless = true, artifactsRoot, screenshotDir } = this.#options;
-      const resolve = this.#options.resolveKind ?? ((request: BridgeRequest) => resolveKind(request, { headless, ...(source.DIMENSION_BROWSER_RELAY_URL ? { relayUrl: source.DIMENSION_BROWSER_RELAY_URL } : {}) }));
+      const { env: source = process.env, headless = true, cwd = process.cwd(), artifactsRoot, screenshotDir } = this.#options;
+      const resolve = this.#options.resolveKind ?? ((request: BridgeRequest) => resolveKind(request, source, cwd, headless));
       const created: CodeSession = new CodeSession({
         session: id,
         browsers: this.#options.browsers,
@@ -173,6 +161,7 @@ export class CodeHost implements CodeHostPort {
     const sessions = [...this.#sessions.values()];
     this.#sessions.clear();
     await Promise.allSettled(sessions.map(session => session.close()));
+    await this.#options.browsers.dispose?.();
     this.#commit?.close();
   }
 }
@@ -201,7 +190,7 @@ export function createRuntimeCodeHost(runtime: BrowserRuntime, { taskCredential,
   }
   const screenshotDir = env.DIMENSION_BROWSER_SCREENSHOT_DIR?.trim();
   return new CodeHost({
-    browsers: new RuntimeCodeBrowsers(runtime.codeSeam(), { idleMs: numberEnv(env, "DIMENSION_BROWSER_CODE_IDLE_MS", CODE_IDLE_MS, "milliseconds") }),
+    browsers: new RuntimeCodeBrowsers(runtime.codeSeam(), { idleMs: numberEnv(env, "DIMENSION_BROWSER_CODE_IDLE_MS", CODE_IDLE_MS, "milliseconds"), hidden: env.DIMENSION_BROWSER_HEADLESS !== "false" }),
     taskCredential,
     env,
     headless: env.DIMENSION_BROWSER_HEADLESS !== "false",

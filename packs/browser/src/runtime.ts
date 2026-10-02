@@ -97,6 +97,7 @@ import { CredentialKey, credentialOrigin, resolveCredential, savedPassword, save
 import { assertEngineAvailable, createEngineDriver } from "./engines/index.js";
 import { withTimeout } from "./engines/launch.js";
 import { launchReader } from "./engines/puppeteer.js";
+import type { AttachTarget } from "./engines/attach.js";
 import type { EngineDriver, EngineState, EvalOutcome, LiveFrame, PageReader, PasswordSource, PerformOutcome, WaitCondition } from "./engines/types.js";
 import { AnnotationFiles } from "./annotation-file.js";
 import { clampRegion, MAX_FRAME_BYTES } from "./image.js";
@@ -438,22 +439,25 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	 * With the pool full, the throwaway used least recently that is neither working nor watched is closed first (its Chrome gone before
 	 * this launches); when there is none, the open is refused (`too_many_browsers`) naming the browsers this chat holds.
 	 */
-	async open(options: BrowserOpenOptions, opener: BrowserOpener = {}, code?: CodeLifetime): Promise<BrowserState> {
+	async open(options: BrowserOpenOptions, opener: BrowserOpener = {}, code?: CodeLifetime, attach?: AttachTarget): Promise<BrowserState> {
 		if (this.disposed) fail("disposed", "runtime has been disposed");
 		// Only the person's own switch names a browser to leave; the host marks the tool app-only, and the runtime holds the rule itself, like `leave`.
 		if (options.leaving !== undefined && opener.caller !== "app") fail("human_only", "only the person in the View can switch to another browser");
 		const engine = normalizeEngine(options.engine);
 		const named = options.profile === undefined ? undefined : this.resolveProfile(options.profile, engine);
 		const viewport = normalizeViewport(options.viewport);
+		// A connected Chrome or a spawned application (a cell's `attach` target) is nobody's saved profile and not the one relay Chrome: it is attached to like
+		// a throwaway browser, with nothing to launch and nothing of the person's to close.
+		const attachedElsewhere = attach !== undefined && attach.kind !== "relay";
 		// The relay is the human's own Chrome: there is nothing to make throwaway,
 		// so no profile means the one it has.
-		const profile = named ?? (engine === "chrome-relay" ? RELAY_PROFILE : null);
+		const profile = named ?? (engine === "chrome-relay" && !attachedElsewhere ? RELAY_PROFILE : null);
 
 		// The relay is ONE already-running Chrome with ONE cookie jar, chosen by
 		// the human inside Chrome. Named relay profiles would imply an isolation
 		// that does not exist, so the slug "relay" is reserved for it and is the
 		// only slug it accepts. Other engines own their persistent profile data.
-		if (engine === "chrome-relay" && profile !== RELAY_PROFILE) {
+		if (engine === "chrome-relay" && profile !== RELAY_PROFILE && !attachedElsewhere) {
 			fail(
 				"bad_profile",
 				`the chrome-relay engine attaches to the one Chrome already running, so it always uses the reserved profile "${RELAY_PROFILE}"; ` +
@@ -492,7 +496,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		assertEngineAvailable(engine);
 		// A throwaway browser has no name to guard; its slot only counts against the bound. `:` is not a slug character.
 		const slot = profile ?? `ephemeral:${randomBytes(8).toString("hex")}`;
-		const started = this.launch(profile, engine, viewport, opener, code).finally(() => {
+		const started = this.launch(profile, engine, viewport, opener, code, attach).finally(() => {
 			this.opening.delete(slot);
 			this.openers.delete(slot);
 		});
@@ -505,7 +509,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		return notice === undefined ? state : { ...state, notice };
 	}
 
-	private async launch(profile: string | null, engine: BrowserEngine, viewport: Viewport, opener: BrowserOpener, code?: CodeLifetime): Promise<Entry> {
+	private async launch(profile: string | null, engine: BrowserEngine, viewport: Viewport, opener: BrowserOpener, code?: CodeLifetime, attach?: AttachTarget): Promise<Entry> {
 		// A saved profile is locked while its browser runs; a throwaway one gets a
 		// directory of its own that goes with the browser.
 		let directory: string;
@@ -540,6 +544,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				...(this.options.headless === undefined ? {} : { headless: this.options.headless }),
 				...(this.options.executablePath ? { executablePath: this.options.executablePath } : {}),
 				...(this.options.relayUrl && engine === "chrome-relay" ? { relayUrl: this.options.relayUrl } : {}),
+				...(attach === undefined ? {} : { attach }),
 			});
 			const initial = await driver.state();
 			if (released) fail("browser_closed", "The browser closed during initialization.");
@@ -557,7 +562,8 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			this.byId.set(entry.browserId, entry);
 			if (profile !== null) this.byProfile.set(profile, entry);
 			// A person's own Private browser is theirs: no clock closes it (the leak is chats' browsers, and the View stops reading while its tab is hidden).
-			if (profile === null && opener.caller !== "app") this.watchIdle(entry, this.idleOf(entry));
+			// A cell's browser has its own clock even when it is the person's relay Chrome (letting go of an attachment closes nothing of theirs).
+			if ((profile === null || code !== undefined) && opener.caller !== "app") this.watchIdle(entry, this.idleOf(entry));
 			return entry;
 		} catch (error) {
 			// A factory owns rollback until it returns; only its confirmed-close
@@ -639,6 +645,8 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	 * for done at once, and releasing on that would free the slot of a Chrome that may still be running.
 	 */
 	private async stopBrowser(entry: Entry): Promise<void> {
+		// A cell's `close({ kill: true })` on a spawned application: the driver lets go of it, then ends the process the pack started (only the application is ended on this path; the fallback below never is).
+		if (entry.code?.kill === true) return await entry.driver.kill({ application: true });
 		if (entry.profile !== null) return await entry.driver.close();
 		if (!entry.closeFailed) {
 			try {
@@ -913,7 +921,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	/** The closures the code host drives. The runtime stays the one owner of browsers, locks, sessions and the View's stream; the host owns workers and cells. */
 	codeSeam(): CodeSeam {
 		return (this.seam ??= {
-			open: async (options, opener, code) => await this.open(options, opener, code),
+			open: async (options, opener, code, attach) => await this.open(options, opener, code, attach),
 			resize: async (browserId, viewport, scale) => await this.resize(browserId, viewport, scale),
 			close: async (browserId) => await this.close(browserId),
 			require: (browserId) => this.require(browserId),
