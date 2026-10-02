@@ -10,6 +10,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import type { Browser, Page, Target } from "puppeteer-core";
 import { RuntimeCodeBrowsers, type CodeSeam } from "../src/code/host/runtime-port";
 import type { AcquiredBrowser, BrowserKind } from "../src/code/contracts";
+import { savedProfileRefusal } from "../src/code/refusals";
 import { CmuxBrowsers } from "../src/code/kinds/cmux/cmux-browsers";
 import { findFreeCdpPort } from "../src/code/kinds/cdp";
 import { ensureRelay, probeRelayServer } from "../src/code/kinds/relay/ensure";
@@ -171,4 +172,12 @@ describe("the relay the server started stops with the server", () => {
     await server.close();
     expect(await probeRelayServer(cdpUrl)).toBe(false);
   }, 60_000);
+});
+
+describe("a cell that asks for a saved profile is refused in the one text the model is taught", () => {
+  test("code_needs_consent, with the words of savedProfileRefusal and no browser touched", async () => {
+    const port = new RuntimeCodeBrowsers({} as CodeSeam);
+    // `{}` is a seam with no methods: any call into the runtime would throw a TypeError instead of this refusal.
+    await expect(port.acquire("s", { kind: { kind: "headless", headless: true }, profile: "work" }, never)).rejects.toMatchObject({ code: "code_needs_consent", message: savedProfileRefusal("work") });
+  });
 });

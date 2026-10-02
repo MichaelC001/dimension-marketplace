@@ -7,5 +7,5 @@
 export function savedProfileRefusal(profile: string): string {
   const name = JSON.stringify(profile);
   return `a saved profile (${name}) cannot be driven by code yet: it holds logins, and code runs with full Node. Tell the user so. They can work in it themselves: call browser_view({ profile: ${name} }) and they sign in or do the step in the View. `
-    + "Meanwhile code can use a throwaway browser (leave profile out) or the user's own Chrome (app: { relay: true }).";
+    + "Meanwhile code can use a throwaway browser (leave profile out) or, if the user has allowed it, their own Chrome (app: { relay: true }).";
 }

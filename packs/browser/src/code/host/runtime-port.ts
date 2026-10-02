@@ -12,6 +12,7 @@ import { ToolAbortError, ToolError } from "../errors.js";
 import { CmuxBrowsers } from "../kinds/cmux/cmux-browsers.js";
 import { establishKind } from "../kinds/establish.js";
 import { describeKind, sameBrowserKind } from "../kinds/resolve.js";
+import { savedProfileRefusal } from "../refusals.js";
 
 /** OMP's DEFAULT_VIEWPORT (browser/launch.ts:23): a cell's browser is this big unless the cell asks for another. */
 export const CODE_VIEWPORT = { width: 1365, height: 768, scale: 1.25 } as const;
@@ -144,7 +145,7 @@ export class RuntimeCodeBrowsers implements CodeBrowserPort {
 
   async acquire(session: string, req: Parameters<CodeBrowserPort["acquire"]>[1], signal: AbortSignal): Promise<AcquiredBrowser> {
     if (req.profile !== undefined) {
-      throw new BrowserRuntimeError("code_needs_consent", `a saved profile (${JSON.stringify(req.profile)}) cannot be driven by code yet: it holds logins, and code runs with full Node. Open a throwaway browser instead; the person can sign in in the View.`);
+      throw new BrowserRuntimeError("code_needs_consent", savedProfileRefusal(req.profile));
     }
     const key = `${session}\u0000${describeKind(req.kind)}`;
     let launch = this.#launching.get(key);
