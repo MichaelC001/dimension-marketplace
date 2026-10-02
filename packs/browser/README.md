@@ -179,17 +179,44 @@ so sites treat it as one:
     headers. The binary sends none there either (checked with and without a
     window on Chrome 154), so there is nothing to replay.
 - **No automation switch.** puppeteer's `--enable-automation` is dropped.
-  Nothing is added to hide the browser: no stealth plugin, no fingerprint
-  changes, no `AutomationControlled` switch. `navigator.webdriver` stays
-  whatever Chrome itself reports while it is driven over DevTools.
+  For the View and every saved profile nothing is added to hide the browser:
+  no stealth plugin, no fingerprint changes, no `AutomationControlled` switch.
+  `navigator.webdriver` stays whatever Chrome itself reports while it is
+  driven over DevTools (`true`), so a person signing in is not disguised
+  (doc 77 §12 decision 2).
+- **A throwaway agent browser is the one exception.** A browser opened
+  without a profile, and `browser_read`'s reader, hold nothing and sign nobody
+  in; they do work on the public web that a stock automation browser is turned
+  away from. They present as the Chrome a person would run (`src/engines/agent-browser.ts`):
+  - `navigator.webdriver` is `false` in the page and its iframes: the
+    `AutomationControlled` Blink switch, a launch argument.
+  - The screen, window and orientation agree with the page. Headless Chrome's
+    own screen is 800x600, its window 780x580 and its orientation portrait
+    whatever the viewport, so a 1280x800 page sat on a smaller "screen". A
+    device-metrics override and the window bounds, made again on every resize
+    and for every tab.
+  - A page's own stack traces name no driver script and no file of yours:
+    puppeteer tags each script it runs `pptr:evaluate;<file and line of the
+    caller>`, which the pack strips from the two commands that carry it.
+  - On a machine with no GPU, WebGL reports a common integrated GPU of the
+    platform instead of SwiftShader. This is the only page script, it runs only
+    when the throwaway launch of the binary (the same one that reads its
+    identity) saw a software renderer, and a worker's OffscreenCanvas still
+    reports the host's renderer.
+
+  Nothing else is changed: no plugin lists, fonts, audio or hardware numbers
+  are invented, and a Chromium build without H.264 is not made to claim it.
+  `bench/sites/detect.mjs` is a local page that reads these signals and
+  `test/agent-browser.test.ts` runs it against both kinds of browser.
 - **Chrome's own password saving is off** in the profiles the pack owns
   (`credentials_enable_service` and `profile.password_manager_enabled` in the
   profile's Preferences, the chrome://settings/passwords toggle). The pack
   keeps its own credentials; Chrome's save prompt — which `--enable-automation`
   used to hide — would take focus from the page after every sign-in.
 
-`browser_read`'s reader is unchanged: its own headless browser, logged out and
-throwaway. A site that refuses it is reported `blocked`, never worked around.
+`browser_read`'s reader is its own headless browser, logged out and throwaway,
+and presents as an agent browser (above). A site that refuses it is reported
+`blocked`, never worked around.
 
 ## Tools
 

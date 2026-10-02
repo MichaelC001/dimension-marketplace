@@ -46,6 +46,7 @@ import {
 	FAVICON_HREF_SCRIPT,
 	FOCUSED_LEAF_SCRIPT,
 	FRAME_INSET_SCRIPT,
+	GRAPHICS_SCRIPT,
 	INSPECT_SCRIPT,
 	IS_PASSWORD_SCRIPT,
 	INSERT_PASSWORD_SCRIPT,
@@ -62,6 +63,7 @@ import {
 } from "./page-scripts.js";
 import { watchPageLog } from "./page-log.js";
 import { type AdmittedInput, inputCall } from "../input.js";
+import { AGENT_LAUNCH_ARGS, type AgentShape, fitAgentScreen, maskedGraphics, shapeAgentPage, silenceDriverNames } from "./agent-browser.js";
 import { type HeadfulIdentity, identityPerBinary, type ResolvedBrowser, resolveBrowser, turnOffPasswordSaving, UA_HINTS, viewLaunchOptions, withTimeout } from "./launch.js";
 import type { EngineDriver, EngineOptions, EngineState, EvalOutcome, FieldRead, LiveFrame, PageRead, PageReader, PasswordSource, PerformOutcome, ReadOutcome, ReadPolicy, WaitCondition } from "./types.js";
 
@@ -203,15 +205,16 @@ const PROBE_URL = "http://127.0.0.1/";
 const binaryIdentities = identityPerBinary({
 	stamp: (executablePath) => statSync(executablePath).mtimeMs,
 	closeTimeoutMs: CLOSE_TIMEOUT_MS,
-	async launch(executablePath) {
-		const probe = await puppeteer.launch({ executablePath, headless: true, timeout: LAUNCH_TIMEOUT_MS, args: CHROMIUM_ARGS });
+	async launch(executablePath, launchArgs) {
+		const probe = await puppeteer.launch({ executablePath, headless: true, timeout: LAUNCH_TIMEOUT_MS, args: [...CHROMIUM_ARGS, ...launchArgs] });
 		return {
 			async read() {
 				const page = (await probe.pages())[0] ?? (await probe.newPage());
 				await page.setRequestInterception(true);
 				page.on("request", (request) => void request.respond({ status: 200, contentType: "text/html", body: "" }).catch(() => undefined));
 				await page.goto(PROBE_URL, { timeout: NAVIGATE_TIMEOUT_MS });
-				return { userAgent: await probe.userAgent(), hints: await page.evaluate(UA_HINTS_SCRIPT, [...UA_HINTS]) };
+				const graphics = await page.evaluate(GRAPHICS_SCRIPT);
+				return { userAgent: await probe.userAgent(), ...(graphics === undefined ? {} : { graphics }), hints: await page.evaluate(UA_HINTS_SCRIPT, [...UA_HINTS]) };
 			},
 			close: () => probe.close(),
 			kill: () => void probe.process()?.kill("SIGKILL"),
@@ -262,20 +265,39 @@ async function presentAsHeadful(browser: Browser, identity: HeadfulIdentity): Pr
 	await withTimeout(Promise.all(adopting), ACTION_TIMEOUT_MS, "identity for the open tabs");
 }
 
+/** The GPU an agent browser reports on a binary that renders in software; undefined when it has a GPU, or nothing was read. */
+function agentGraphics(identity: HeadfulIdentity | undefined): AgentShape["graphics"] {
+	return identity?.softwareGraphics ? maskedGraphics(identity.metadata.platform) : undefined;
+}
+
+/** Take the driver's own script names out of everything this browser's connection sends (agent-browser.ts). */
+async function silenceBrowser(browser: Browser): Promise<void> {
+	const session = await browser.target().createCDPSession();
+	try {
+		const connection = session.connection();
+		if (!connection) fail("launch_failed", "the browser's DevTools connection is gone");
+		silenceDriverNames(connection);
+	} finally {
+		await session.detach().catch(() => undefined);
+	}
+}
+
 /** Launch the user's browser (launch.ts decides which, and how) on the profile directory this driver owns. */
 async function launchChromium(options: EngineOptions, release: () => void): Promise<EngineDriver> {
 	const userDataDir = options.profileDirectory;
 	const headless = options.headless ?? true;
+	const agent = options.agent === true;
+	const launchArgs = options.launchArgs ?? [];
 	let browser: Browser;
 	let resolved: ResolvedBrowser;
 	let identity: HeadfulIdentity | undefined;
 	try {
 		resolved = await resolveBrowser(options.executablePath);
-		identity = headless ? await binaryIdentities.of(resolved.executablePath) : undefined;
+		identity = headless ? await binaryIdentities.of(resolved.executablePath, launchArgs) : undefined;
 		mkdirSync(userDataDir, { recursive: true, mode: 0o700 });
 		turnOffPasswordSaving(userDataDir);
 		browser = await puppeteer.launch(viewLaunchOptions({
-			browser: resolved, userDataDir, headless, args: CHROMIUM_ARGS, timeout: LAUNCH_TIMEOUT_MS,
+			browser: resolved, userDataDir, headless, args: [...CHROMIUM_ARGS, ...launchArgs], agent, timeout: LAUNCH_TIMEOUT_MS,
 			...(identity ? { userAgent: identity.userAgent } : {}),
 		}));
 		console.error(`[browser] launched ${resolved.app} (${resolved.executablePath})${headless ? ", headless" : ""} on ${userDataDir}`);
@@ -298,13 +320,16 @@ async function launchChromium(options: EngineOptions, release: () => void): Prom
 			// name: it is probed again, once, and the fresh identity is presented.
 			// Only `--user-agent`, fixed at launch, keeps the old string until reopen.
 			const running = (await browser.version()).split("/").pop() ?? "";
-			await presentAsHeadful(browser, await binaryIdentities.confirm(resolved.executablePath, identity, running));
+			identity = await binaryIdentities.confirm(resolved.executablePath, identity, running, launchArgs);
+			await presentAsHeadful(browser, identity);
 		}
+		if (agent) await silenceBrowser(browser);
 		const pages = await browser.pages();
 		if (pages.length === 0) pages.push(await browser.newPage());
+		const shape: AgentShape | undefined = agent ? { screen: headless, graphics: agentGraphics(identity) } : undefined;
 		const tabs: Tab[] = [];
-		for (const page of pages) tabs.push(await prepareTab(page, options.viewport));
-		return new PuppeteerDriver({ browser, tabs, viewport: options.viewport, ownsBrowser: true, release, app: resolved.app, ...(options.onPageLoaded ? { onPageLoaded: options.onPageLoaded } : {}) });
+		for (const page of pages) tabs.push(await prepareTab(page, options.viewport, 1, undefined, shape));
+		return new PuppeteerDriver({ browser, tabs, viewport: options.viewport, ownsBrowser: true, release, app: resolved.app, ...(shape ? { agent: shape } : {}), ...(options.onPageLoaded ? { onPageLoaded: options.onPageLoaded } : {}) });
 	} catch (err) {
 		try {
 			// `browser.close()` resolves once the process is gone; only then is the
@@ -346,27 +371,43 @@ const MAX_READ_FRAMES = 500;
  * a throwaway user-data dir, deleted on close, and every read runs in its own
  * incognito context besides. Chrome's popup blocker stays ON (puppeteer turns
  * it off by default), so a page's `window.open` or popunder never opens a tab
- * or sends a request.
+ * or sends a request. It reads the public web logged out, so it is an agent
+ * browser in every sense `agent-browser.ts` names, and presents as one: the
+ * binary's own headful identity, no `navigator.webdriver`, a screen that fits.
  */
-export async function launchReader(options: { executablePath?: string }): Promise<PageReader> {
+export async function launchReader(options: { executablePath?: string; launchArgs?: readonly string[] }): Promise<PageReader> {
+	const executablePath = options.executablePath ?? (await puppeteer.executablePath("chrome"));
+	const launchArgs = options.launchArgs ?? [];
+	const identity = await binaryIdentities.of(executablePath, launchArgs);
 	const browser = await puppeteer.launch({
 		headless: true,
 		timeout: LAUNCH_TIMEOUT_MS,
 		defaultViewport: READER_VIEWPORT,
-		...(options.executablePath ? { executablePath: options.executablePath } : { channel: "chrome" as const }),
-		args: CHROMIUM_ARGS,
-		ignoreDefaultArgs: ["--disable-popup-blocking"],
+		executablePath,
+		args: [...CHROMIUM_ARGS, ...launchArgs, ...AGENT_LAUNCH_ARGS, `--user-agent=${identity.userAgent}`],
+		ignoreDefaultArgs: ["--disable-popup-blocking", "--enable-automation"],
 	});
-	return new PuppeteerReader(browser);
+	try {
+		const running = (await browser.version()).split("/").pop() ?? "";
+		const confirmed = await binaryIdentities.confirm(executablePath, identity, running, launchArgs);
+		await presentAsHeadful(browser, confirmed);
+		await silenceBrowser(browser);
+		return new PuppeteerReader(browser, { screen: true, graphics: agentGraphics(confirmed) });
+	} catch (err) {
+		await withTimeout(browser.close(), CLOSE_TIMEOUT_MS, "failed reader launch cleanup").catch(() => undefined);
+		throw err;
+	}
 }
 
 class PuppeteerReader implements PageReader {
 	readonly #browser: Browser;
+	readonly #shape: AgentShape;
 	/** Set once closing starts, or when a read could not dispose of its context. */
 	#spent = false;
 
-	constructor(browser: Browser) {
+	constructor(browser: Browser, shape: AgentShape) {
 		this.#browser = browser;
+		this.#shape = shape;
 	}
 
 	get usable(): boolean {
@@ -403,6 +444,8 @@ class PuppeteerReader implements PageReader {
 		});
 		const page = await context.newPage();
 		primary = page.target();
+		// The session stays attached: a session's emulation is undone when it detaches. It goes with the page when the context closes.
+		await shapeAgentPage(page, await page.createCDPSession(), READER_VIEWPORT, 1, this.#shape);
 
 		// Set from event handlers; the cast keeps TypeScript from narrowing it to `null` here.
 		let refusal = null as { url: string; reason: string } | null;
@@ -507,7 +550,7 @@ interface Guarded {
 	dialogs: DialogLog;
 }
 
-async function prepareTab(page: Page, viewport: Viewport, scale = 1, early?: Guarded): Promise<Tab> {
+async function prepareTab(page: Page, viewport: Viewport, scale = 1, early?: Guarded, agent?: AgentShape): Promise<Tab> {
 	const { cdp, dialogs } = early ?? (await guardPage(await page.createCDPSession()));
 	const tab: Tab = { id: "", documentId: "", page, target: page.target(), cdp, loading: false, navSeq: 0, dialogs, log: [] };
 	// Subscribed before the first read: a commit racing setup is never missed.
@@ -516,6 +559,7 @@ async function prepareTab(page: Page, viewport: Viewport, scale = 1, early?: Gua
 	});
 	try {
 		await page.setViewport({ ...viewport, deviceScaleFactor: scale });
+		if (agent) await shapeAgentPage(page, cdp, viewport, scale, agent);
 		// A tab behind another (the human's tab in the relay, a background tab)
 		// is not rendered, and puppeteer's element clicks wait on rendering.
 		// Focus emulation keeps our tabs rendering without stealing the window.
@@ -591,6 +635,8 @@ interface DriverParts {
 	ownsBrowser: boolean;
 	release: () => void;
 	app: BrowserApp | null;
+	/** Set for a throwaway agent browser: how each of its pages is shaped (agent-browser.ts). */
+	agent?: AgentShape;
 	/** See `EngineOptions.onPageLoaded`. */
 	onPageLoaded?: () => void;
 }
@@ -611,6 +657,7 @@ class PuppeteerDriver implements EngineDriver {
 	/** Device pixel ratio the page renders at, so the live view is crisp on HiDPI. */
 	#scale = 1;
 	readonly #ownsBrowser: boolean;
+	readonly #agent: AgentShape | undefined;
 	readonly #release: () => void;
 	readonly #onPageLoaded: (() => void) | undefined;
 	readonly #onTargetCreated: (target: Target) => void;
@@ -630,6 +677,7 @@ class PuppeteerDriver implements EngineDriver {
 		this.app = parts.app;
 		this.#viewport = parts.viewport;
 		this.#ownsBrowser = parts.ownsBrowser;
+		this.#agent = parts.agent;
 		this.#release = parts.release;
 		this.#onPageLoaded = parts.onPageLoaded;
 		const first = parts.tabs[0];
@@ -1250,7 +1298,7 @@ class PuppeteerDriver implements EngineDriver {
 				await early.cdp.detach().catch(() => undefined);
 				return undefined;
 			}
-			const tab = await prepareTab(page, this.#viewport, this.#scale, early);
+			const tab = await prepareTab(page, this.#viewport, this.#scale, early, this.#agent);
 			if (this.#closed || page.isClosed()) {
 				await tab.cdp.detach().catch(() => undefined);
 				return undefined;
@@ -1376,11 +1424,17 @@ class PuppeteerDriver implements EngineDriver {
 		if (viewport.width === this.#viewport.width && viewport.height === this.#viewport.height && scale === this.#scale) return;
 		this.#viewport = viewport;
 		this.#scale = scale;
-		await Promise.all(this.#tabs.map((tab) => tab.page.setViewport({ ...viewport, deviceScaleFactor: scale }).catch(() => undefined)));
+		await Promise.all(this.#tabs.map((tab) => this.#fit(tab, viewport, scale).catch(() => undefined)));
 		if (this.#watchers.size > 0) {
 			await this.#stopScreencast();
 			await this.#restartScreencast();
 		}
+	}
+
+	/** One tab's viewport, and for an agent browser the screen and window around it (agent-browser.ts). */
+	async #fit(tab: Tab, viewport: Viewport, scale: number): Promise<void> {
+		await tab.page.setViewport({ ...viewport, deviceScaleFactor: scale });
+		if (this.#agent?.screen) await fitAgentScreen(tab.cdp, viewport, scale);
 	}
 
 	/** Cast the CURRENT active tab, stopping whatever was cast before, while anyone watches. Ordered. */
