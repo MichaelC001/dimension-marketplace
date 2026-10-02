@@ -99,6 +99,29 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 	// The size the newest picture was taken at, so a click maps exactly even in the moment a resize is in flight.
 	const viewport = stream.picture?.viewport ?? state?.viewport ?? { width: 1280, height: 800 };
 
+	// The person's hold on the wheel ends when they hand it back, switch profile (`leave`) and when this View goes: it unmounts, or the
+	// chat's window closes (`pagehide`; a page kept in the back/forward cache comes back, so it keeps the wheel). A document merely
+	// hidden is NOT a departure: the stream stops while it is, and the person is coming back to the half-filled form they left. Best
+	// effort: a window that is already closing may not get the call through, and the runtime's long fallback clock then gives it back.
+	const wheelRef = useRef<string | null>(null);
+	wheelRef.current = state?.takenOver === true ? browserId : null;
+	useEffect(() => {
+		const handBack = () => {
+			const held = wheelRef.current;
+			if (held === null) return;
+			wheelRef.current = null;
+			client.control(held, "return").catch(() => undefined);
+		};
+		const onPageHide = (event: Event) => {
+			if ((event as PageTransitionEvent).persisted !== true) handBack();
+		};
+		window.addEventListener("pagehide", onPageHide);
+		return () => {
+			window.removeEventListener("pagehide", onPageHide);
+			handBack();
+		};
+	}, [client]);
+
 	const say = useCallback((tone: Notice["tone"], text: string) => setNotice({ id: Date.now(), tone, text }), []);
 	useEffect(() => {
 		if (notice === null) return;

@@ -54,8 +54,9 @@ hold; give it `url` (and `profile`) instead to open one for them to watch.
   It is closed unless something depends on it; a browser you opened yourself is
   never closed that way, and a wheel they held comes back to you. If your id
   now answers `unknown or already closed browserId: the person left it...`, open
-  the profile again with `browser_open`; its sign-ins are kept. The wheel also
-  comes back by itself after the user's View has been gone for a minute.
+  the profile again with `browser_open`; its sign-ins are kept. The wheel comes
+  back to you when the user hands it back, leaves the browser, or closes the View
+  (a View that is only minimised or covered keeps it: ask rather than wait it out).
 - You may log in or sign up yourself: `browser_act` types into password fields
   like any other. Logins persist in a named profile (a throwaway browser forgets
   them). A verification step (CAPTCHA, email code, phone code) is yours to handle

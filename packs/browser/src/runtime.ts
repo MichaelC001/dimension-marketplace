@@ -143,11 +143,15 @@ const CLOSE_RETRY_MS = 30_000;
 /** Ids of browsers the runtime closed on its own that are remembered, so their chats are told why; the oldest are forgotten first. */
 const MAX_RELEASED = 64;
 /**
- * The person has taken a browser over and no View has been joined to its stream for this long: they are gone (the View or the chat was
- * closed, or they left for another browser), and the wheel goes back to the agent. A View that comes back first keeps it. Matches the
- * live channel's token idle (stream.ts): past it a View could not resume its stream anyway.
+ * The fallback for a View that is truly gone without having handed the wheel back (the app was killed, the window closed before its
+ * hand-back arrived): the person took a browser over and no View has been joined to its stream for this long, so the wheel goes back to
+ * the agent. It is NOT how a person who stepped away loses the wheel. A View whose document is hidden (minimised, covered by another
+ * window, another tab in front) closes its stream (use-browser-stream) and joins a new one, with a new token, when it is shown again,
+ * so "no View is joined" alone does not say the person is gone; a short clock would take the wheel from someone copying a value out of
+ * another window and let the agent carry on in their half-filled form. A real departure hands the wheel back at once: the View
+ * unmounting or the chat closing (`browser_control` `return`), switching to another profile (`browser_leave`), or Hand back.
  */
-const VIEW_GONE_MS = 60_000;
+const VIEW_GONE_MS = 30 * 60_000;
 const MAX_FRAMES_RETAINED = 8;
 /** A batch takes no new step after this long: a host times a tool call out (the desktop at 30 s). */
 const ACT_BUDGET_MS = 20_000;
@@ -205,7 +209,7 @@ export interface BrowserRuntimeOptions {
 	actBudgetMs?: number;
 	/** How long a throwaway browser a chat opened may go without a call (and with no View joined) before it is closed; defaults to THROWAWAY_IDLE_MS, at most 2147483647 (a timer's limit). */
 	throwawayIdleMs?: number;
-	/** How long a browser the person took over may go with no View joined before the wheel goes back to the agent; defaults to VIEW_GONE_MS, at most 2147483647. */
+	/** How long a browser the person took over may go with no View joined before the wheel goes back to the agent (a fallback for a View that vanished without handing it back); defaults to VIEW_GONE_MS, at most 2147483647. */
 	viewGoneMs?: number;
 	/**
 	 * TESTS ONLY: exact hostnames browser_read may reach although they are
@@ -291,7 +295,7 @@ interface Entry {
 	opener: BrowserOpener;
 	/** The person has the wheel: an agent's page actions are refused until they hand it back (`control`). Reads are not. */
 	takenOver: boolean;
-	/** Gives the wheel back when no View has watched this browser for VIEW_GONE_MS (`watchWheel`). */
+	/** Gives the wheel back when no View has been joined to this browser's stream for VIEW_GONE_MS (`watchWheel`). */
 	wheelTimer: NodeJS.Timeout | undefined;
 	/**
 	 * Something an agent is part-way through that parks or drives this page and is not yet visible as `publish` or `task`: a post being
@@ -372,7 +376,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	private readonly observedProfiles = new Set<string>();
 	/** How long a throwaway may go without a call before it is closed (see THROWAWAY_IDLE_MS). */
 	private readonly idleMs: number;
-	/** How long a taken-over browser may go unwatched before the wheel is given back (see VIEW_GONE_MS). */
+	/** How long a taken-over browser may have no View joined before the wheel is given back (see VIEW_GONE_MS). */
 	private readonly viewGoneMs: number;
 	/** Why a browser the runtime closed on its own is gone, by id, so the chat that held it is told rather than sent "unknown". */
 	private readonly released = new Map<string, string>();
@@ -731,9 +735,10 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	}
 
 	/**
-	 * The wheel the person holds goes back to the agent when no View has been joined to the browser's stream for `viewGoneMs`: the View
-	 * or the chat was closed, or they switched to another browser, and nobody is left to hand it back. A View that joins first keeps it.
-	 * One timer per unwatched stretch; called whenever the wheel is taken or a View joins or leaves.
+	 * The fallback that gives the wheel back to the agent when the View is gone for good without having handed it back: no View has been
+	 * joined to the browser's stream for `viewGoneMs`. A hidden document closes its stream too, so this clock is long and is not what takes
+	 * the wheel from a person who stepped away; a departure the View can see (unmount, chat closed, profile switch) hands it back at once.
+	 * A View that joins first keeps it. One timer per unwatched stretch; called whenever the wheel is taken or a View joins or leaves.
 	 */
 	private watchWheel(entry: Entry): void {
 		clearTimeout(entry.wheelTimer);

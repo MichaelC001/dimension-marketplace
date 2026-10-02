@@ -390,8 +390,11 @@ confirmation (`publish_pending`) and while a post is being filled or a task is s
 never navigate away from, or lose, the page a post is parked on. The menu offers Take over only while an agent
 has acted in the browser in the last few seconds (the page's pill is the same fact, and the two are never on
 screen together), or Hand back while the person holds it. It lasts until handed back, the browser closes, the
-person leaves the browser for another profile (`browser_leave`: the wheel goes back to the agent at once), or no
-View has been joined to its stream for a minute (the View or the chat was closed): then it goes back by itself.
+person leaves the browser for another profile (`browser_leave`: the wheel goes back to the agent at once), or the
+View goes (it unmounts or the chat's window closes: the View sends `return`, best effort). A View that is only
+hidden (minimised, covered, another tab in front) closes its stream and keeps the wheel: the person is coming
+back to the form they left. A View that vanished without handing it back (the app was killed) loses it after
+30 minutes with no View joined to the browser's stream.
 
 ## Reading public pages
 

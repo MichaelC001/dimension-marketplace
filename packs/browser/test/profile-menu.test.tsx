@@ -749,6 +749,56 @@ describe("taking over from the agent", () => {
 		expect(dom.text()).toContain("Your agent is working here");
 	});
 
+	/** A View in which the person has taken the wheel, the host that recorded it, and the number of `return` calls so far. */
+	async function holdingTheWheel(): Promise<{ host: Host; dom: Dom; returns: () => number }> {
+		const state = agentAt(2_000);
+		const host = fakeHost(SHELF, controlled(state));
+		const dom = await mountView(host, state);
+		await dom.click(button(dom, "Take over"));
+		await dom.settle();
+		expect(controls(dom, "page")).toEqual(["Hand back"]);
+		return { host, dom, returns: () => callsTo(host, "browser_control").filter(args => args.mode === "return").length };
+	}
+
+	test("the View going away hands the wheel back: unmounting hands back what the person holds, and a View that holds nothing makes no call", async () => {
+		const held = await holdingTheWheel();
+		await unmountAll();
+		expect(callsTo(held.host, "browser_control")).toStrictEqual([
+			{ browserId: "b1", mode: "take" },
+			{ browserId: "b1", mode: "return" },
+		]);
+
+		const idle = fakeHost(SHELF, controlled(agentAt(2_000)));
+		await mountView(idle, agentAt(2_000));
+		await unmountAll();
+		expect(callsTo(idle, "browser_control")).toEqual([]);
+
+		// Handed back by hand first: unmounting does not hand back a second time.
+		const handed = await holdingTheWheel();
+		await handed.dom.click(button(handed.dom, "Hand back"));
+		await handed.dom.settle();
+		await unmountAll();
+		expect(handed.returns()).toBe(1);
+	});
+
+	test("the window closing hands the wheel back; a page kept for later (back/forward cache) keeps it; and a document that is only hidden is not a departure", async () => {
+		const { dom, returns } = await holdingTheWheel();
+
+		// Minimised, covered, another tab in front: the stream stops, the person is coming back to their half-filled form.
+		Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
+		document.dispatchEvent(new window.Event("visibilitychange"));
+		await dom.settle();
+		expect(returns()).toBe(0);
+
+		window.dispatchEvent(Object.assign(new window.Event("pagehide"), { persisted: true }));
+		await dom.settle();
+		expect(returns()).toBe(0);
+
+		window.dispatchEvent(Object.assign(new window.Event("pagehide"), { persisted: false }));
+		await dom.settle();
+		expect(returns()).toBe(1);
+	});
+
 	test("a refused Take over says why and changes nothing", async () => {
 		const host = fakeHost(SHELF, call => (call.name === "browser_control" ? failure("That browser is closed.") : failure(`unexpected ${call.name}`)));
 		const dom = await mountView(host, agentAt(2_000));

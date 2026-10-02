@@ -24,7 +24,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, jest, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { z } from "zod";
@@ -963,18 +963,61 @@ describeWithChrome("a wheel nobody is watching", () => {
 	test(
 		"taken before any View ever joined the stream goes back after the window too; handing it back first cancels the wait",
 		async () => {
-			const r = await rig({ viewGoneMs: 700 });
+			const r = await rig({ viewGoneMs: 1_200 });
 			const id = (await open(r, CHAT, {})).browserId;
 			stateOf(await r.call("browser_control", { browserId: id, mode: "take" }, VIEW_OF_CHAT));
 			expect(await wheelOf(r, id)).toBe(true);
 			await waitUntil("the wheel to go back", () => wheelOf(r, id), (taken) => !taken);
 
-			// Taken again and handed back by hand: it is the agent's, and stays so past the window.
+			// Taken, handed back by hand, and taken again part-way through the first window: that window's timer must not give the wheel back
+			// when it ends, only the second take's own does (a full window after that take).
 			stateOf(await r.call("browser_control", { browserId: id, mode: "take" }, VIEW_OF_CHAT));
+			await sleep(700);
 			stateOf(await r.call("browser_control", { browserId: id, mode: "return" }, VIEW_OF_CHAT));
+			expect(await wheelOf(r, id)).toBe(false);
+			await sleep(400);
 			stateOf(await r.call("browser_control", { browserId: id, mode: "take" }, VIEW_OF_CHAT));
+			const retaken = performance.now();
+			// The first take's window would end 100 ms from now had the return not cancelled it.
+			await sleep(800);
 			expect(await wheelOf(r, id)).toBe(true);
 			await waitUntil("the second wheel to go back", () => wheelOf(r, id), (taken) => !taken);
+			expect(performance.now() - retaken).toBeGreaterThanOrEqual(1_100);
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"a View whose document is hidden stops its stream, and that alone never takes the wheel back before the long fallback: the old minute passes, the person's form is still theirs",
+		async () => {
+			const r = await rig();
+			const id = (await open(r, CHAT, {})).browserId;
+			// Clocks from here on are driven by the test: the real ones are only needed to launch the browser.
+			jest.useFakeTimers();
+			try {
+				const joined = r.runtime.viewing(id);
+				stateOf(await r.call("browser_control", { browserId: id, mode: "take" }, VIEW_OF_CHAT));
+				// The document is hidden: the View closes its stream and nobody is joined.
+				joined();
+
+				jest.advanceTimersByTime(5 * 60_000);
+				expect(await wheelOf(r, id)).toBe(true);
+				jest.advanceTimersByTime(24 * 60_000);
+				expect(await wheelOf(r, id)).toBe(true);
+				// The View comes back to its half-filled form: joined again, so the clock stops altogether.
+				const back = r.runtime.viewing(id);
+				jest.advanceTimersByTime(60 * 60_000);
+				expect(await wheelOf(r, id)).toBe(true);
+
+				// It is gone for good, and never handed the wheel back: the fallback gives it to the agent after the half hour, not before.
+				back();
+				jest.advanceTimersByTime(29 * 60_000);
+				expect(await wheelOf(r, id)).toBe(true);
+				jest.advanceTimersByTime(2 * 60_000);
+				expect(await wheelOf(r, id)).toBe(false);
+			} finally {
+				jest.useRealTimers();
+			}
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);
