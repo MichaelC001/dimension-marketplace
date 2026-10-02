@@ -13,8 +13,10 @@
  *     a connected, relay or spawned browser gives the same `wsEndpoint` shape.
  *     VERSION-ONE LIMIT, equal to OMP's: every browser the engine makes keeps a TCP DevTools port, and a cell runs with full Node (file system, network, child processes: doc 77 §7.4.5), so a cell can read another
  *     profile's `DevToolsActivePort` and `puppeteer.connect` to another session's Chrome. "Another session's browser: no handle" is true of the API a cell is given, not of code that goes around it.
- *     First improvement (doc 77 §7.8 decision 1, option B; not built): run the code host as a child process under Node's permission model (`--permission`: reads and writes only a scratch directory, no child process,
- *     no worker) with a pipe transport to Chrome (`--remote-debugging-pipe`) or DevTools ports that are not discoverable from the profile directory. The transport is the same; it is a change of the host.
+ *     Hardening rung (doc 77 §7.8 decision 1, option B; not built): run the code host as a child process under Node's permission model (`--permission`). That is a seat belt, not secrecy: it narrows accidents and casual
+ *     file reads (the scratch-directory-only reads and writes, no child process, no worker), but it does NOT close the reach to another session's Chrome. Open file descriptors and symlinks pass it, Node 22/24 has no network
+ *     restriction (so `puppeteer.connect` to a TCP DevTools port still works), and a granted `child_process` escapes it. What closes the reach is the transport: a pipe to Chrome (`--remote-debugging-pipe`, no port at all) or
+ *     DevTools ports that cannot be discovered from the profile directory. A pipe changes this rule (the worker would be handed a pipe, not a `wsEndpoint`); non-discoverable ports change only the host.
  *  4. Every text OMP prints is OMP's string (matrix rows C9, C10, C11, D8, D9, D16, D22).
  *  5. Errors thrown into the cell keep `name` and `message`; `isAbort` marks cancellation; `recoverTab` asks the host to rebuild the worker (a timeout and a cancel both set it).
  *  6. A saved profile never reaches `acquire` from code without the gate: `acquire` throws `code_needs_consent`. The refusal is {@link savedProfileRefusal}'s text. The gate is advisory against code that goes around
