@@ -316,7 +316,8 @@ describeWithChrome("spawned: a cell starts an application and drives it", () => 
     if (chromePath === undefined) throw new Error("no Chrome");
     const running = await startDebugChrome();
     await personTab(running, pages.url("/one"));
-    const sees: ProcessScanner = { running: async () => ({ processes: [{ pid: running.pid, args: [chromePath, "--headless=new", `--remote-debugging-port=${running.port}`] }], unreadable: false }) };
+    const exe = chromePath;
+    const sees: ProcessScanner = { running: async () => ({ processes: [{ pid: running.pid, args: [exe, "--headless=new", `--remote-debugging-port=${running.port}`] }], unreadable: false }) };
     const code = await start({ establish: (kind, options) => establishKind(kind, { ...options, scanner: sees }) });
     const result = await cell(code, "s1", `
       const tab = await browser.open({ app: { path: ${JSON.stringify(chromePath)} } });
