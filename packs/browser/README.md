@@ -553,6 +553,19 @@ as data, so the pack's code stays platform-agnostic:
   publish stays pending. The View's Post may omit `expect`. The page is then
   re-checked: another active tab, a different URL or a changed value fails with
   nothing clicked. `browser_publish_cancel` drops it.
+- **Only a post a human approved goes out.** `mode: "post"` is refused
+  (`publish_unapproved`, before the compose page is opened) unless an unspent,
+  unexpired [publish approval](#publish-approvals) covers this exact post: the
+  site, the profile, the preset it goes through and every value, character for
+  character. The confirm checks again and SPENDS the approval before it re-reads
+  the page and clicks submit, for the View's Post too (a confirm that ends
+  `unknown` with no click, because the page was used meanwhile, leaves it spent;
+  then record `draft_failed` if the post is not up, so the user's Retry approves
+  it again). A text the human did not approve, an
+  edit of one that was, a different profile, site or preset (a recipe the
+  caller wrote is never the approved preset), an expired approval and a second
+  post of an approved one are all refused; nothing is typed or clicked by the
+  refusal.
 - While a publish is pending the page is pinned: `browser_act`,
   `browser_task`, `browser_publish` and `browser_close` are refused
   (`publish_pending`) unless the host stamped the call as coming from the View.
@@ -614,6 +627,57 @@ modelled on; the fixture copies are in `test/platform-fixtures/`.
 user's comment that loads on the thread after submit could be taken as the
 receipt: the receipt checks the path shape and that the link was not on the
 page before submit, not who wrote the comment.
+
+### Publish approvals
+
+A publish is only as trustworthy as the thing that approved it. The host's
+Allow card puts you in front of the agent's confirm, but it cannot tell you
+that the text is the one you approved elsewhere (on Traction's campaign board).
+An approval is that statement, written by a surface only you can click, and
+checked here before anything is typed or posted. This pack only reads and
+spends approvals; it never writes one.
+
+Where: `<root>/publish-approvals/` (`$INSO_HOME/browser/publish-approvals`, else
+`~/.inso/browser/publish-approvals`).
+
+- `<draftId>.json`: `{ "v": 1, "draftId", "nonce", "binding", "approvedAt",
+  "expiresAt" }`. `draftId` is `[A-Za-z0-9_-]{1,64}` and names the file;
+  `nonce` is 32 lowercase hex; `approvedAt` and `expiresAt` are ISO times at
+  most 24 hours apart. `binding` is the lowercase hex SHA-256 of
+  `JSON.stringify(["publish-approval/v1", origin, profile, preset, values])`:
+  `origin` is the recipe's origin (`https://x.com`), `profile` the saved browser
+  profile that posts, `preset` the name of the shipped preset the post goes
+  through (`"x-post"`; `null` for a recipe the caller wrote, whose selectors and
+  submit button nobody approved, so a surface that approves a preset post can
+  never have it posted through a recipe), `values` every field's value in order,
+  as `bindingOf` in `src/publish-approval.ts` computes it. A draft has at most
+  one entry; approving it again replaces the file with a fresh `nonce`. A file
+  that does not parse to exactly this shape is not an approval.
+- `<draftId>.<nonce>.used`: made exclusively (`wx`) by the confirm that is
+  about to click submit. That create is the lock: of any number of confirms,
+  browsers or callers exactly one spends an approval, and a spent approval is
+  never spendable again, whatever the post's outcome. It is removed only when
+  nothing was submitted (`failed`: the page changed, the click never went).
+
+Both `browser_publish` (`mode: "post"`) and `browser_publish_confirm` fail
+closed with `publish_unapproved`, in three flavours the message names: no
+approval covers this exact post, the approval expired (the agent records
+`draft_failed`; the user's Retry approves it again), or it was already used (the
+post may be up; never post it twice).
+
+Today the only writer is Traction's board, and it approves X posts through the
+`x-post` preset only: through this pack, nothing else can be posted until
+another surface writes approvals (post those yourself on the site). The binding
+does not cover the page a `needsTarget` preset posts on (`reddit-comment`), so
+no surface should approve one before it does.
+
+What this does not cover: a process that can write files as you. An agent with
+a code runner or a file writer can write an approval, so a host that lends this
+pack to such an agent gets the Allow card and nothing more; give the agents that
+publish neither. (Traction's platform agents hold neither; its CMO keeps `write`
+for its desk notes and so is inside this limit.) Posting with `browser_act` or `browser_task` is page driving,
+not publishing: it is not gated here either, so an agent that posts only through
+`browser_publish` should not hold them.
 
 ## Connection report
 
