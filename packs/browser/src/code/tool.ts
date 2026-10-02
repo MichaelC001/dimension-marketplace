@@ -6,7 +6,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { capText, MAX_INLINE_BYTES } from "./cell/output-sink.js";
+import { capText, ERROR_LINE_BYTES, MAX_INLINE_BYTES } from "./cell/output-sink.js";
 import type { CodeHostPort, ImageBlock, RunError, RunResult, RunStarted } from "./contracts.js";
 import { ToolAbortError } from "./errors.js";
 import promptText from "./prompt.md";
@@ -42,6 +42,7 @@ export interface CodeToolDeps {
 /**
  * OMP's `enforceInlineByteCap`: text that fits is returned as it is. Longer text keeps the first 60% and the last 25% of the budget, cut on line boundaries,
  * with `[…NB elided…]` between; the rest of the budget is slack for the marker and the footer naming the file that holds all of it.
+ * The text a cell realm hands over is already within the budget (it composes the stream and the displays under one), so this is the net for a host that does not: what it cuts IS that host's raw output.
  */
 export function capInline(text: string, save: SaveSpill, maxBytes = MAX_INLINE_BYTES): string {
   const composed = capText(text, maxBytes);
@@ -73,23 +74,25 @@ function cellFrames(stack: string | undefined): string[] {
 
 /**
  * A failed cell is a tool error carrying what it had shown before it failed, then OMP's text for the failure: a timeout and a cancellation are their message
- * alone, anything else is `Name: message` with the lines of the model's own code.
+ * alone, anything else is `Name: message` with the lines of the model's own code. The cell realm leaves {@link ERROR_LINE_BYTES} of the budget for that line, so the output is not cut again;
+ * the line itself is cut alone, and is not an output anyone could ask a file for.
  */
 function failed(error: RunError, save: SaveSpill): CallToolResult {
-  const { images, text: body } = partsOf(error.partial?.displays ?? []);
-  const own = error.isAbort || error.budget === true ? error.message : [`${error.name}: ${error.message}`, ...cellFrames(error.stack)].join("\n");
-  const text = capInline(body.length > 0 ? `${body}\n${own}` : own, save);
-  return { isError: true, content: [...images, { type: "text", text }] };
+  const { images, text: shownBody } = partsOf(error.partial?.displays ?? []);
+  const body = capInline(shownBody, save, MAX_INLINE_BYTES - ERROR_LINE_BYTES);
+  const own = capText(error.isAbort || error.budget === true ? error.message : [`${error.name}: ${error.message}`, ...cellFrames(error.stack)].join("\n"), ERROR_LINE_BYTES);
+  return { isError: true, content: [...images, { type: "text", text: body.length > 0 ? `${body}\n${own}` : own }] };
 }
 
 function started(outcome: RunStarted, save: SaveSpill, waitCapMs: number): CallToolResult {
   if (outcome.state === "running") {
     const seconds = Math.round(waitCapMs / 1000);
     const output = outcome.outputSoFar.trim();
+    // Progress is not the output: it is cut to the budget and not kept (the finished cell's own footer names the file that is).
     return {
       content: [{
         type: "text",
-        text: [`running: ${outcome.runId}`, ...(output.length > 0 ? [capInline(output, save)] : []), `Call browser_run({ "resume": "${outcome.runId}" }) to wait up to ${seconds} s more; start no new cell meanwhile.`].join("\n"),
+        text: [`running: ${outcome.runId}`, ...(output.length > 0 ? [capText(output)] : []), `Call browser_run({ "resume": "${outcome.runId}" }) to wait up to ${seconds} s more; start no new cell meanwhile.`].join("\n"),
       }],
     };
   }

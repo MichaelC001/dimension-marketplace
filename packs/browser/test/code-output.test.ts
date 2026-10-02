@@ -92,12 +92,18 @@ describe("a cell that prints without end", () => {
     const spillDir = await tempDir();
     const output = new CellOutput({ spillDir, onText: () => {} });
     const { onText } = output.hooks();
+    const print = (count: number): void => {
+      for (let i = 0; i < count; i += 1) onText(`${String.fromCharCode(97 + (i % 26)).repeat(1_000_000)}\n`);
+    };
+    // The heap's number is noisy by tens of MB whatever runs (JSC sweeps lazily: the same 256 chunks measured +32, +23, -1 MB in one process, 1024 chunks -27 MB), and none of it grows with the volume. A sink that kept what it was
+    // given would be 256 MB up, so the bound is far above the noise and far below the volume. The first megabytes through a cold process also allocate code and caches: they go through before `before` is read.
+    print(16);
     Bun.gc(true);
     const before = process.memoryUsage().heapUsed;
-    for (let i = 0; i < 256; i += 1) onText(`${String.fromCharCode(97 + (i % 26)).repeat(1_000_000)}\n`);
+    print(256);
     Bun.gc(true);
     const grown = process.memoryUsage().heapUsed - before;
-    expect(grown).toBeLessThan(24 * MIB);
+    expect(grown).toBeLessThan(96 * MIB);
     expect(bytes(output.finish().text)).toBeLessThanOrEqual(INLINE_BYTES);
   }, 30_000);
 });
@@ -237,4 +243,85 @@ describe("the sink", () => {
     sink.dump();
     expect(sent.at(-1)).toBe("e\n");
   });
+});
+
+describe("one budget for the whole text of a cell", () => {
+  // The stream and the `display[n]:` blocks are two collectors; the text the model reads is their composition, and it must be within 50 KiB by itself, so the tool never cuts it a second time
+  // (two stacked markers, and a footer that names the cut text as if it were the raw output; review of #160, round 3).
+  const ERROR_LINE_BYTES = 4 * KIB;
+  const streamLine = (i: number): string => `line ${String(i).padStart(5, "0")} ${"é".repeat(8)}\n`;
+  const streamText = (lines: number): string => Array.from({ length: lines }, (_, i) => streamLine(i)).join("");
+  const printLines = (output: CellOutput, lines: number): void => {
+    for (let i = 0; i < lines; i += 1) output.hooks().onText(streamLine(i));
+  };
+  /** What `display(array)` makes of a 300-item array: one block, cut at 8,000 characters. */
+  const display300 = (output: CellOutput, count: number): void => {
+    for (let i = 0; i < count; i += 1) output.hooks().onDisplay({ type: "json", data: Array.from({ length: 300 }, (_, k) => ({ index: k, label: `item ${k}` })) });
+  };
+  const markers = (text: string): number => (text.match(/\[…\d+B elided…\]/g) ?? []).length;
+  const footers = (text: string): string[] => [...text.matchAll(/\[raw output: (.+)\]/g)].map(match => match[1]!);
+
+  test("2,000 printed lines and three displays of a 300-item array: within the budget, one marker for the stream, one footer, and the file holds the whole stream", async () => {
+    const spillDir = await tempDir();
+    const output = new CellOutput({ spillDir });
+    printLines(output, 2_000);
+    display300(output, 3);
+    const { text } = output.finish();
+
+    expect(bytes(text)).toBeLessThanOrEqual(INLINE_BYTES);
+    expect(markers(text)).toBe(1);
+    const paths = footers(text);
+    expect(paths).toHaveLength(1);
+    expect(await readFile(paths[0]!, "utf8")).toBe(streamText(2_000));
+    // The displays are what the model asked to see: all three are there.
+    for (const n of [1, 2, 3]) expect(text).toContain(`display[${n}]:`);
+    expect(text.startsWith("line 00000")).toBe(true);
+  });
+
+  test("a stream that fits the budget alone, and one display beside it that does not fit with it: the stream is cut once, and the file it never needed is written now", async () => {
+    const spillDir = await tempDir();
+    const output = new CellOutput({ spillDir });
+    printLines(output, 1_700);
+    expect(bytes(streamText(1_700))).toBeLessThan(INLINE_BYTES);
+    expect(bytes(streamText(1_700))).toBeGreaterThan(INLINE_BYTES - 8_000);
+    display300(output, 1);
+    const { text } = output.finish();
+
+    expect(bytes(text)).toBeLessThanOrEqual(INLINE_BYTES);
+    expect(markers(text)).toBe(1);
+    expect(text).toContain("display[1]:");
+    const paths = footers(text);
+    expect(paths).toHaveLength(1);
+    expect(await readFile(paths[0]!, "utf8")).toBe(streamText(1_700));
+  });
+
+  test("a flood of displays beside a flood of lines: each section keeps its start and its end and says what it left out, and together they are within the budget", async () => {
+    const output = new CellOutput({ spillDir: await tempDir() });
+    printLines(output, 4_000);
+    display300(output, 200);
+    const { text } = output.finish();
+
+    expect(bytes(text)).toBeLessThanOrEqual(INLINE_BYTES);
+    expect(text).toContain("line 00000");
+    expect(text).toContain("line 03999");
+    expect(text).toContain("display[1]:");
+    // The end of the last display is there (each ends with its own cut marker, a display being 8,000 characters at most); its first line is further back than a half budget's tail reaches.
+    expect(text.endsWith("ch elided…]")).toBe(true);
+    expect(markers(text)).toBe(2);
+    expect(footers(text)).toHaveLength(1);
+  });
+
+  test("whatever the mix of stream and displays, the text is within the budget; a failed cell leaves room for its error line", async () => {
+    const spillDir = await tempDir();
+    for (const lines of [0, 1, 300, 1_000, 1_500, 1_700, 4_000, 20_000]) {
+      for (const displays of [0, 1, 3, 7, 40]) {
+        for (const reserve of [0, ERROR_LINE_BYTES]) {
+          const output = new CellOutput({ spillDir });
+          printLines(output, lines);
+          display300(output, displays);
+          expect(bytes(output.finish(reserve).text)).toBeLessThanOrEqual(INLINE_BYTES - reserve);
+        }
+      }
+    }
+  }, 60_000);
 });

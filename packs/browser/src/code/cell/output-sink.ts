@@ -10,6 +10,12 @@ import { SpillFile } from "../spill.js";
 
 /** OMP's `DEFAULT_MAX_BYTES`: what one result carries inline. */
 export const MAX_INLINE_BYTES = 50 * 1024;
+/** What a failed cell leaves room for in its text: the tool appends the error line (the message and the lines of the model's own code), cut to this. */
+export const ERROR_LINE_BYTES = 4 * 1024;
+/** More than the elision line `\n[…NB elided…]\n` ever takes. */
+export const ELISION_MARKER_BYTES = 48;
+/** More than the footer `[raw output: <path>]` plus the file's stop line ever take. */
+export const FOOTER_BYTES = 1024;
 /** The share of the budget kept from the start of an output, and from its end (the rest is slack for the marker and the footer). */
 const HEAD_SHARE = 0.6;
 const TAIL_SHARE = 0.25;
@@ -174,19 +180,38 @@ export class OutputSink {
     this.#onChunk?.(dropped > 0 ? `[…${dropped}B elided…]\n${sent.text}` : sent.text);
   }
 
-  /** What the stream shows now, and the end of it: the pending progress chunk is sent, the file is closed, nothing more is taken. */
-  dump(): OutputSummary {
+  /**
+   * About how many bytes {@link dump} shows of this stream so far, footer not counted: all of it while it fits the budget, else the two windows and the marker. Never less than what `dump` makes.
+   */
+  estimate(maxBytes = this.#max): number {
+    const budget = Math.min(maxBytes, this.#max);
+    return Math.min(this.#total, Math.floor(budget * (HEAD_SHARE + TAIL_SHARE)) + ELISION_MARKER_BYTES);
+  }
+
+  /**
+   * What the stream shows now, and the end of it: the pending progress chunk is sent, the file is closed, nothing more is taken. `maxBytes` (never more than the sink's own budget) is what the text may take, footer not
+   * counted: a stream that is longer is cut to its start and its end. A stream that fit the sink but not `maxBytes` has no file yet, and gets one now, so what is cut is still somewhere.
+   */
+  dump(maxBytes = this.#max): OutputSummary {
     this.#flush(this.#now());
     this.#closed = true;
-    this.#spill?.close();
+    const budget = Math.min(maxBytes, this.#max);
     // The text is trimmed as a whole, as the cell's text always was: leading whitespace is the head's, trailing whitespace the tail's.
-    if (this.#total <= this.#max) {
+    if (this.#total <= budget) {
+      this.#spill?.close();
       return { text: (this.#head + this.#tail).trim(), totalBytes: this.#total };
     }
-    const shown = tailWindow(this.#tail, Math.floor(this.#max * TAIL_SHARE));
-    const head = this.#head.trimStart();
-    const tail = shown.text.trimEnd();
-    const trimmed = this.#headBytes - Buffer.byteLength(head, "utf8") + (shown.bytes - Buffer.byteLength(tail, "utf8"));
+    // Within the sink's budget the head and the tail are the whole stream between them; past it they are its two ends.
+    const whole = this.#total <= this.#max;
+    if (whole && this.#spillDir !== undefined && this.#spill === undefined && !this.#spillTried) this.#openSpill(this.#spillDir);
+    this.#spill?.close();
+    const start = whole ? this.#head + this.#tail : this.#head;
+    const end = whole ? start : this.#tail;
+    const headShown = headWindow(start, Math.floor(budget * HEAD_SHARE));
+    const tailShown = tailWindow(end, Math.floor(budget * TAIL_SHARE));
+    const head = headShown.text.trimStart();
+    const tail = tailShown.text.trimEnd();
+    const trimmed = headShown.bytes - Buffer.byteLength(head, "utf8") + (tailShown.bytes - Buffer.byteLength(tail, "utf8"));
     const elided = elideMiddle(head, tail, this.#total - trimmed);
     const spill = this.#spill;
     let text = elided;

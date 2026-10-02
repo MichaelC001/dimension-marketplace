@@ -10,6 +10,7 @@ import { ToolAbortError, ToolError, throwIfAborted } from "../errors.js";
 import facadeSource from "../facade/prelude.js.txt";
 import extensionsSource from "../facade/pack-extensions.js.txt";
 import { CellOutput, displayValue } from "./display.js";
+import { ERROR_LINE_BYTES } from "./output-sink.js";
 import { createCodeEvaluator } from "./evaluator.js";
 
 /** What a cell's `browser.*` call becomes: the dispatcher validates the parameters and answers with the text the facade prints. */
@@ -257,7 +258,8 @@ export class CodeCell {
       if (this.#recentFiles.size > RECENT_CELL_FILES_MAX) this.#recentFiles.delete(this.#recentFiles.values().next().value as string);
     }
     // The output is read BEFORE the run is marked ended, so everything it printed is in it.
-    const { text, images } = output.finish();
+    // A failed cell leaves room in the budget for the error line the tool appends to its text.
+    const { text, images } = output.finish(failed ? ERROR_LINE_BYTES : 0);
     run.ended = true;
     const result: RunResult = {
       displays: [...images, ...(text.length > 0 ? [{ type: "text" as const, text }] : [])],

@@ -14,6 +14,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { z } from "zod";
 import type { CodeHostPort, ImageBlock, RunError, RunResult, RunStarted } from "../src/code/contracts.js";
 import { ToolAbortError } from "../src/code/errors.js";
+import { CellOutput } from "../src/code/cell/display.js";
 import { MAX_INLINE_BYTES } from "../src/code/cell/output-sink.js";
 import { runCodeTool, type CodeToolDeps } from "../src/code/tool.js";
 import { SPILL_FILES_KEPT } from "../src/code/spill.js";
@@ -147,6 +148,26 @@ describe("what a cell's result looks like to the model", () => {
     // The quiet session's footer path is still a file: the busy one's spills did not take it.
     expect((await readFile(first, "utf8")).length).toBe(big.length);
   });
+
+  test("the text a cell composed within the budget is the model's text as it is: not cut a second time, and no second file called the raw output", async () => {
+    // The reviewer's numbers (review of #160, round 3): 2,000 printed lines and three `display()`s of a 300-item array, the way the cell realm composes them, with the worker's own spill folder.
+    const workerDir = await mkdtemp(join(tmpdir(), "browser-code-tool-worker-"));
+    dirs.push(workerDir);
+    const output = new CellOutput({ spillDir: workerDir });
+    for (let i = 0; i < 2_000; i += 1) output.hooks().onText(`line ${String(i).padStart(5, "0")} ${"é".repeat(8)}\n`);
+    for (let i = 0; i < 3; i += 1) output.hooks().onDisplay({ type: "json", data: Array.from({ length: 300 }, (_, k) => ({ index: k, label: `item ${k}` })) });
+    const { text: composed } = output.finish();
+    expect(Buffer.byteLength(composed, "utf8")).toBeLessThanOrEqual(MAX_INLINE_BYTES);
+
+    const { call, root } = await connect(fakeHost(() => shown({ type: "text", text: composed })));
+    const reply = textOf(await call("print(a lot)"));
+    expect(reply).toBe(composed);
+    expect(reply.match(/\[raw output: /g)).toHaveLength(1);
+    expect(reply.match(/\[…\d+B elided…\]/g)).toHaveLength(1);
+    // The tool made no file of its own: the one footer names the worker's, which holds the stream.
+    await expect(readdir(join(root, "artifacts"))).rejects.toThrow();
+    expect(reply).toContain(`[raw output: ${join(workerDir, (await readdir(workerDir))[0]!)}]`);
+  });
 });
 
 describe("what a failed cell tells the model", () => {
@@ -179,6 +200,21 @@ describe("what a failed cell tells the model", () => {
     const reply = await call("await browser.tab().waitForSelector('#go')");
     expect(reply.isError).toBe(true);
     expect(textOf(reply)).toBe("TimeoutError: Waiting for selector `#go` failed\n    at <anonymous> (browser-cell-r1.js:4:11)");
+  });
+
+  test("a failed cell's output is not cut again for its error line, and a huge error is cut alone: within the budget, with no file called the raw output", async () => {
+    const body = `${"b".repeat(60)}\n`.repeat(750).trim();
+    expect(Buffer.byteLength(body, "utf8")).toBeLessThanOrEqual(MAX_INLINE_BYTES - 4 * 1024);
+    const message = `${"boom ".repeat(40_000)}`;
+    const { call, root } = await connect(fakeHost(() => failedWith({ name: "Error", message, isAbort: false, partial: { displays: [{ type: "text", text: body }], screenshots: [] } })));
+    const reply = await call("throw new Error(huge)");
+    const text = textOf(reply);
+    expect(reply.isError).toBe(true);
+    expect(text.startsWith(`${body}\nError: boom boom`)).toBe(true);
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(MAX_INLINE_BYTES);
+    expect(text).toMatch(/\[…\d+B elided…\]/);
+    expect(text).not.toContain("[raw output:");
+    await expect(readdir(join(root, "artifacts"))).rejects.toThrow();
   });
 
   test("a refusal the host throws (a cell still running, an unknown run) reaches the model as it was written", async () => {
@@ -306,6 +342,24 @@ describe("the 25-second rule", () => {
     const second = await runCodeTool(deps(host, 500), { resume: "r1" }, extra);
     expect(second.content).toEqual([{ type: "text", text: "all of it" }]);
     expect(calls.map(call => call.kind)).toEqual(["run", "resume"]);
+  });
+
+  test("a running answer cuts the output so far to the budget with a marker, and writes no file: the finished cell's footer is the one that names a file", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "browser-code-tool-running-"));
+    dirs.push(dir);
+    const host: CodeHostPort = {
+      run: async () => ({ state: "running", runId: "r9", outputSoFar: `${"progress line\n".repeat(20_000)}tail` }),
+      resume: async () => ({ state: "running", runId: "r9", outputSoFar: "" }),
+      dispose: async () => {},
+    };
+    const reply = await runCodeTool({ ...deps(host, 80), artifactsDir: () => dir }, { code: "await slow()" }, extra);
+    const text = textOf(Reply.parse(reply));
+    expect(text.split("\n")[0]).toBe("running: r9");
+    expect(text).toContain("tail");
+    expect(text).toMatch(/\[…\d+B elided…\]/);
+    expect(text).not.toContain("[raw output:");
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(MAX_INLINE_BYTES + 512);
+    expect(await readdir(dir)).toEqual([]);
   });
 
   test("a cell that finishes inside the wait is answered by the one call", async () => {
