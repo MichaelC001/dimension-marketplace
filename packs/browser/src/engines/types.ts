@@ -192,6 +192,12 @@ export interface EngineDriver {
   cdpEndpoint(): string;
   /** Resolve only after owned resources shut down. Never close foreign browsers. */
   close(): Promise<void>;
+  /**
+   * Hard stop, for a `close` that hung or failed: kill the owned browser's whole process tree and resolve only once the browser
+   * process is confirmed gone (`close_failed`-style rejection otherwise). The lease is released only on that confirmation, like
+   * `close`. A driver that owns nothing (the relay) just closes. Safe to call while a `close` is still pending.
+   */
+  kill(): Promise<void>;
 }
 
 export interface EngineOptions {
