@@ -142,5 +142,8 @@ describeWithChrome("a saved profile's browser (the View) stays the real browser"
 		// No fingerprint change: the software renderer is what the page sees.
 		expect(row(rows, "webgl-renderer")).toMatchObject({ tell: true });
 		expect(row(rows, "webgl-renderer").value).toMatch(/swiftshader/i);
+		// Stock puppeteer turns Runtime on in every page and every worker; the page's probe must see it, or its "false" for a throwaway means nothing.
+		expect(row(rows, "cdp-runtime-enabled")).toMatchObject({ tell: true });
+		expect(row(rows, "worker-runtime-enabled")).toMatchObject({ tell: true });
 	}, BROWSER_TEST_TIMEOUT_MS);
 });

@@ -44,7 +44,14 @@ const safe = (fn, fallback) => { try { return fn(); } catch (e) { return fallbac
 const NATIVE = /\{\s*\[native code\]\s*\}\s*$/;
 const nativeSource = (fn) => typeof fn === "function" && safe(() => NATIVE.test(Function.prototype.toString.call(fn)), false);
 
-const workerCode = "let gpu = null; try { const gl = new OffscreenCanvas(1, 1).getContext('webgl'); const e = gl.getExtension('WEBGL_debug_renderer_info'); gpu = [gl.getParameter(e.UNMASKED_VENDOR_WEBGL), gl.getParameter(e.UNMASKED_RENDERER_WEBGL)]; } catch (e) {} self.postMessage({ gpu, userAgent: navigator.userAgent, platform: navigator.platform, webdriver: navigator.webdriver, hardwareConcurrency: navigator.hardwareConcurrency, languages: navigator.languages, brands: navigator.userAgentData ? navigator.userAgentData.brands.map(b => b.brand) : null })";
+// True when a DevTools client has Runtime enabled in this realm. With it on, V8 serialises every console call's arguments for that client, and building an Error's preview formats its stack, which calls Error.prepareStackTrace; with it off the same call never does. (The older probe, a getter on the Error's own stack property, no longer fires in current Chrome and said "ok" for stock puppeteer.)
+const runtimeEnabled = () => {
+  let hit = false;
+  const previous = Error.prepareStackTrace;
+  try { Error.prepareStackTrace = () => { hit = true; return ""; }; console.debug(new Error()); } catch (e) {} finally { Error.prepareStackTrace = previous; }
+  return hit;
+};
+const workerCode = "const runtimeEnabled = " + runtimeEnabled.toString() + "; let gpu = null; try { const gl = new OffscreenCanvas(1, 1).getContext('webgl'); const e = gl.getExtension('WEBGL_debug_renderer_info'); gpu = [gl.getParameter(e.UNMASKED_VENDOR_WEBGL), gl.getParameter(e.UNMASKED_RENDERER_WEBGL)]; } catch (e) {} self.postMessage({ gpu, runtime: runtimeEnabled(), userAgent: navigator.userAgent, platform: navigator.platform, webdriver: navigator.webdriver, hardwareConcurrency: navigator.hardwareConcurrency, languages: navigator.languages, brands: navigator.userAgentData ? navigator.userAgentData.brands.map(b => b.brand) : null })";
 const inWorker = () => new Promise((resolve) => {
   try {
     const url = URL.createObjectURL(new Blob([workerCode], { type: "text/javascript" }));
@@ -203,15 +210,13 @@ async function run() {
   add("worker-webdriver", "worker", worker !== null && worker.webdriver === true, worker ? String(worker.webdriver) : "no worker", "a worker's navigator.webdriver is true");
   add("webgl-worker-renderer", "worker", false, worker ? worker.gpu : "no worker", "information only: the renderer a worker's OffscreenCanvas reports (a page-script mask does not reach workers)");
   add("worker-matches-page", "worker", worker !== null && (worker.userAgent !== ua || worker.platform !== nav.platform || worker.hardwareConcurrency !== nav.hardwareConcurrency || JSON.stringify(worker.languages) !== JSON.stringify(nav.languages)), worker ? { ua: worker.userAgent === ua, platform: worker.platform === nav.platform, cores: worker.hardwareConcurrency === nav.hardwareConcurrency, languages: JSON.stringify(worker.languages) === JSON.stringify(nav.languages) } : "no worker", "a patched page that leaves its workers unpatched disagrees with itself");
+  add("worker-runtime-enabled", "driver", worker !== null && worker.runtime === true, worker ? String(worker.runtime) : "no worker", "a DevTools client has Runtime enabled in a dedicated worker (puppeteer does it for every worker it attaches)");
 
 
   // --- the driver ------------------------------------------------------------------------------
-  let cdp = false;
-  const trap = new Error();
-  Object.defineProperty(trap, "stack", { get() { cdp = true; return ""; } });
-  console.debug(trap);
-  await new Promise((r) => setTimeout(r, 50));
-  add("cdp-runtime-enabled", "driver", cdp, cdp, "console.debug reads an Error's stack only when a DevTools client has Runtime enabled (every puppeteer page does)");
+  // Runtime.enable is the most-probed CDP side effect: puppeteer sends it on every page, every out-of-process frame and every worker.
+  const runtime = runtimeEnabled();
+  add("cdp-runtime-enabled", "driver", runtime, runtime, "a DevTools client has Runtime enabled in this page (true under stock puppeteer)");
   return rows;
 }
 
