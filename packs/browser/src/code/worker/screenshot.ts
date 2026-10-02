@@ -224,21 +224,39 @@ export async function captureScreenshot(
   const mimeType = config.excludeWebP ? "image/jpeg" : "image/webp";
   const ratio = modelPixelRatio(region, dpr);
 
-  const capture = async (type: "png" | "webp" | "jpeg", quality: number | undefined, pixelsPerCss: number): Promise<Uint8Array> =>
-    (await untilAborted(signal, () =>
-      page.screenshot({
-        type,
+  // Raw CDP, as the engine's own shotForModel captures: puppeteer's page.screenshot ignores a clip scale (above and below 1) unless it captures beyond the viewport, so a small element reached the model
+  // under the vision floor and a wide viewport was not shrunk to the edge cap.
+  const cdp = await untilAborted(signal, () => target.cdp());
+  // Output pixels per clip pixel at scale 1. Chrome applies the page's emulated pixel ratio only to the session that set it (the engine's, not this one), and a high-density screen has its own ratio:
+  // so it is learned from the first capture instead of assumed.
+  let pixelFactor = 1;
+  const capture = async (type: "png" | "webp" | "jpeg", quality: number | undefined, pixelsPerCss: number): Promise<Uint8Array> => {
+    const { data } = await untilAborted(signal, () =>
+      cdp.send("Page.captureScreenshot", {
+        format: type,
         ...(quality === undefined ? {} : { quality }),
         captureBeyondViewport: !region.inView,
-        // The output is the clip's size times its scale times the page's own pixel ratio.
-        clip: { ...clip, scale: pixelsPerCss / dpr },
+        clip: { ...clip, scale: pixelsPerCss / pixelFactor },
       }),
-    )) as Uint8Array;
+    );
+    return Buffer.from(data, "base64");
+  };
 
   // The model's picture: the first encoding that fits the byte budget, walking OMP's quality then size ladder; the smallest one if none does.
   let best: { bytes: Uint8Array; ratio: number } | undefined;
+  let learned = false;
   const attempt = async (pixelsPerCss: number, quality: number): Promise<boolean> => {
-    const bytes = await capture(format, quality, pixelsPerCss);
+    let bytes = await capture(format, quality, pixelsPerCss);
+    if (!learned) {
+      learned = true;
+      const wide = readImageDimensions(bytes)?.width;
+      // Below ~100 px the rounding of the output width says nothing about the factor.
+      const factor = wide === undefined || wide < 100 ? 1 : wide / (clip.width * pixelsPerCss);
+      if (Math.abs(factor - 1) > 0.1) {
+        pixelFactor = factor;
+        bytes = await capture(format, quality, pixelsPerCss);
+      }
+    }
     if (!best || bytes.length < best.bytes.length) best = { bytes, ratio: pixelsPerCss };
     return bytes.length <= MODEL_SHOT_MAX_BYTES;
   };

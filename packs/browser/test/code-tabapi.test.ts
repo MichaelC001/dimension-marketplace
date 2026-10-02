@@ -449,14 +449,54 @@ describeWithChrome("the tab realm drives a page it adopted", () => {
       expect(typeof result.returnValue).toBe("string");
     }, 20_000);
 
-    test("a selector captures that element alone, and one that matches nothing is refused", async () => {
+    /** The width and height Chrome actually encoded: what the model receives, whatever the caption claims. */
+    function pictureSize(result: RunResult): { width: number; height: number } {
+      const picture = result.displays.find(part => part.type === "image");
+      const dims = readImageDimensions(Buffer.from(picture?.type === "image" ? picture.data : "", "base64"));
+      if (!dims) throw new Error("the run printed no readable picture");
+      return dims;
+    }
+
+    test("a selector captures that element alone, a small one is scaled up to the vision floor of 200 px on its short edge, and one that matches nothing is refused", async () => {
       await goto("/form");
       const result = await run('await tab.screenshot({ selector: "#submit" })');
-      const dims = captionOf(result).match(/Dimensions: (\d+)x(\d+)/)!;
-      expect(Number(dims[1])).toBeLessThan(300);
-      expect(Number(dims[2])).toBeLessThan(100);
+      const { width, height } = pictureSize(result);
+      // The button is about 58x21 CSS px: far below the floor, still one button, not the page.
+      expect(Math.min(width, height)).toBeGreaterThanOrEqual(200);
+      expect(width).toBeGreaterThan(height);
+      expect(Math.max(width, height)).toBeLessThanOrEqual(1024);
+      expect(captionOf(result)).toContain(`Dimensions: ${width}x${height}`);
       expect((await failure('await tab.screenshot({ selector: "#nope" })')).message).toBe("Screenshot selector did not resolve to an element");
     }, 20_000);
+
+    test("a viewport wider than 1024 is shrunk to 1024 on its long edge", async () => {
+      const page = await openTab("wide");
+      try {
+        await page.setViewport({ width: 1920, height: 1080 });
+        const wide = pictureSize(await run("await tab.screenshot()", { name: "wide" }));
+        expect(wide.width).toBe(1024);
+        expect(wide.height).toBe(576);
+      } finally {
+        await realm.release("wide");
+        await page.close();
+      }
+    }, 20_000);
+
+    test("a page on a high-density screen gets the same sizes: the pixel ratio the engine's connection set does not halve the picture or the floor", async () => {
+      const page = await openTab("dense");
+      try {
+        await page.setViewport({ width: 1000, height: 700, deviceScaleFactor: 2 });
+        const full = pictureSize(await run("await tab.screenshot()", { name: "dense" }));
+        expect(full.width).toBe(1024);
+        expect(full.height).toBeGreaterThanOrEqual(716);
+        expect(full.height).toBeLessThanOrEqual(718);
+        const small = pictureSize(await run('await tab.screenshot({ selector: "#submit" })', { name: "dense" }));
+        expect(Math.min(small.width, small.height)).toBeGreaterThanOrEqual(200);
+      } finally {
+        await realm.release("dense");
+        await page.close();
+      }
+    }, 30_000);
 
     test("a screenshot directory keeps the full-resolution PNG and the caption names where", async () => {
       const dir = await mkdtemp(join(tmpdir(), "dimension-code-shots-"));
