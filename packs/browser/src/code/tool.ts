@@ -1,17 +1,16 @@
-// Written for the Browser pack; the output cap (`enforceInlineByteCap`) and the "(no output)" line follow OMP (https://github.com/can1357/oh-my-pi, MIT),
+// Written for the Browser pack; the output cap (`capInline`) and the "(no output)" line follow OMP (https://github.com/can1357/oh-my-pi, MIT),
 // packages/coding-agent/src/session/streaming-output.ts:618-680 and tools/eval.ts:905 @ dc5f95d9e1 (Dimension omp fork).
 // Copyright (c) 2025 Mario Zechner; (c) 2025-2026 Can Bölük; (c) 2026 Stencil Labs, Inc. See ../../third-party/omp/LICENSE.
-// Changed for the Browser pack: the full text goes to a file of the pack's own folder (OMP's session artifact does not exist here) and the footer names its absolute path.
+// Changed for the Browser pack: the full text goes to a file in the session's own folder of the pack's artifacts (OMP's session artifact does not exist here) and the footer names its absolute path.
 
-import { randomBytes } from "node:crypto";
-import { mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { capText, MAX_INLINE_BYTES } from "./cell/output-sink.js";
 import type { CodeHostPort, ImageBlock, RunError, RunResult, RunStarted } from "./contracts.js";
 import { ToolAbortError } from "./errors.js";
 import promptText from "./prompt.md";
+import { saveSpill, sessionFolder } from "./spill.js";
 
 /** What the model reads: OMP's `browser.md` as the pack ports it, without the licence comment that heads the file. */
 export const BROWSER_RUN_DESCRIPTION = promptText.replace(/^<!--[\s\S]*?-->\s*/, "").trim();
@@ -20,21 +19,19 @@ export const BROWSER_RUN_DESCRIPTION = promptText.replace(/^<!--[\s\S]*?-->\s*/,
 export const RUN_WAIT_CAP_MS = 25_000;
 /** OMP's `TOOL_TIMEOUTS.browser`, seconds. */
 const DEFAULT_CELL_SECONDS = 30;
-/** OMP's `DEFAULT_MAX_BYTES`: what one result carries inline. */
-export const MAX_INLINE_BYTES = 50 * 1024;
-/** Spilled outputs kept in the folder (the one a model is about to read and a good few before it). */
-export const SPILL_FILES_KEPT = 20;
 /** A harness with no host stamp is one anonymous session (doc 77 §7.4.3). */
 export const ANONYMOUS_SESSION = "anonymous";
-const SPILL_NAME = /^browser-run-\d{13}-\d{6}-[0-9a-f]{8}\.txt$/;
 
 type CodeCallExtra = { signal: AbortSignal; _meta?: Record<string, unknown> };
+
+/** Where a result over the cap keeps its full text: the text in, the absolute path of the file out (undefined: it could not be written). */
+type SaveSpill = (text: string) => string | undefined;
 
 export interface CodeToolDeps {
   host: CodeHostPort;
   /** The host's session for the call (the stamp), if it has one. */
   sessionOf(extra: { _meta?: Record<string, unknown> }): string | undefined;
-  /** Where a result over the cap keeps its full text. Resolved when a result first needs it, so a server that never spills never makes the folder. */
+  /** The root of the folders that keep a result over the cap, one per session. Resolved when a result first needs it, so a server that never spills never makes the folder. */
   artifactsDir(): string;
   /** `_meta` of the tool: the host's approval tier and the spaces that may offer it (policy lives in server.ts). */
   meta: Record<string, unknown>;
@@ -42,83 +39,15 @@ export interface CodeToolDeps {
   waitCapMs?: number;
 }
 
-/** Longest prefix of `text` within `max` UTF-8 bytes, cut on a character boundary. */
-function headBytes(text: string, max: number): string {
-  const bytes = Buffer.from(text, "utf8");
-  if (bytes.length <= max) return text;
-  let end = max;
-  while (end > 0 && (bytes[end]! & 0xc0) === 0x80) end -= 1;
-  return bytes.subarray(0, end).toString("utf8");
-}
-
-/** Longest suffix of `text` within `max` UTF-8 bytes, cut on a character boundary. */
-function tailBytes(text: string, max: number): string {
-  const bytes = Buffer.from(text, "utf8");
-  if (bytes.length <= max) return text;
-  let start = bytes.length - max;
-  while (start < bytes.length && (bytes[start]! & 0xc0) === 0x80) start += 1;
-  return bytes.subarray(start).toString("utf8");
-}
-
-/** Keeps the output of a result over the cap, newest few, in one folder of the pack's own with names it picks. */
-export class OutputSpill {
-  readonly #dir: () => string;
-  #sequence = 0;
-
-  constructor(dir: () => string) {
-    this.#dir = dir;
-  }
-
-  /** The absolute path of a file holding `text`, or undefined when it could not be written (the model still gets the capped text). */
-  save(text: string): string | undefined {
-    try {
-      const dir = resolve(this.#dir());
-      mkdirSync(dir, { recursive: true, mode: 0o700 });
-      this.#sequence += 1;
-      const name = `browser-run-${String(Date.now()).padStart(13, "0")}-${String(this.#sequence).padStart(6, "0")}-${randomBytes(4).toString("hex")}.txt`;
-      const path = join(dir, name);
-      writeFileSync(path, text, { encoding: "utf8", mode: 0o600, flag: "wx" });
-      this.#prune(dir);
-      return path;
-    } catch {
-      return undefined;
-    }
-  }
-
-  #prune(dir: string): void {
-    let names: string[];
-    try {
-      names = readdirSync(dir).filter(name => SPILL_NAME.test(name)).sort();
-    } catch {
-      return;
-    }
-    for (const name of names.slice(0, Math.max(0, names.length - SPILL_FILES_KEPT))) {
-      try {
-        rmSync(join(dir, name), { force: true });
-      } catch {
-        // A file another process holds open stays until the next spill.
-      }
-    }
-  }
-}
-
 /**
  * OMP's `enforceInlineByteCap`: text that fits is returned as it is. Longer text keeps the first 60% and the last 25% of the budget, cut on line boundaries,
  * with `[…NB elided…]` between; the rest of the budget is slack for the marker and the footer naming the file that holds all of it.
  */
-export function capInline(text: string, spill: OutputSpill, maxBytes = MAX_INLINE_BYTES): string {
-  if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
-  const headWindow = headBytes(text, Math.floor(maxBytes * 0.6));
-  const headCut = headWindow.lastIndexOf("\n");
-  const head = headCut > 0 ? headWindow.slice(0, headCut) : headWindow;
-  const tailWindow = tailBytes(text, Math.floor(maxBytes * 0.25));
-  const tailCut = tailWindow.indexOf("\n");
-  const tail = tailCut < 0 || tailCut === tailWindow.length - 1 ? tailWindow : tailWindow.slice(tailCut + 1);
-  const elided = Math.max(0, Buffer.byteLength(text, "utf8") - Buffer.byteLength(head, "utf8") - Buffer.byteLength(tail, "utf8"));
-  let composed = `${head}\n[…${elided}B elided…]\n${tail}`;
-  const path = spill.save(text);
-  if (path !== undefined) composed += `${composed.endsWith("\n") ? "" : "\n"}[raw output: ${path}]`;
-  return composed;
+export function capInline(text: string, save: SaveSpill, maxBytes = MAX_INLINE_BYTES): string {
+  const composed = capText(text, maxBytes);
+  if (composed === text) return text;
+  const path = save(text);
+  return path === undefined ? composed : `${composed}${composed.endsWith("\n") ? "" : "\n"}[raw output: ${path}]`;
 }
 
 /** A cell's displays as the result carries them: every image, and the text parts joined by newlines. */
@@ -130,9 +59,9 @@ function partsOf(displays: RunResult["displays"]): { images: ImageBlock[]; text:
 }
 
 /** What a cell shows, as a result: the images first, then ONE text block (OMP browser.ts:392-408), capped. A cell that showed nothing says so. */
-function shown(result: RunResult, spill: OutputSpill): CallToolResult["content"] {
+function shown(result: RunResult, save: SaveSpill): CallToolResult["content"] {
   const { images, text: full } = partsOf(result.displays);
-  const text = capInline(full, spill);
+  const text = capInline(full, save);
   if (text.length === 0 && images.length === 0) return [{ type: "text", text: "(no output)" }];
   return [...images, ...(text.length > 0 ? [{ type: "text" as const, text }] : [])];
 }
@@ -146,41 +75,31 @@ function cellFrames(stack: string | undefined): string[] {
  * A failed cell is a tool error carrying what it had shown before it failed, then OMP's text for the failure: a timeout and a cancellation are their message
  * alone, anything else is `Name: message` with the lines of the model's own code.
  */
-function failed(error: RunError, spill: OutputSpill): CallToolResult {
+function failed(error: RunError, save: SaveSpill): CallToolResult {
   const { images, text: body } = partsOf(error.partial?.displays ?? []);
   const own = error.isAbort || error.budget === true ? error.message : [`${error.name}: ${error.message}`, ...cellFrames(error.stack)].join("\n");
-  const text = capInline(body.length > 0 ? `${body}\n${own}` : own, spill);
+  const text = capInline(body.length > 0 ? `${body}\n${own}` : own, save);
   return { isError: true, content: [...images, { type: "text", text }] };
 }
 
-function started(outcome: RunStarted, spill: OutputSpill, waitCapMs: number): CallToolResult {
+function started(outcome: RunStarted, save: SaveSpill, waitCapMs: number): CallToolResult {
   if (outcome.state === "running") {
     const seconds = Math.round(waitCapMs / 1000);
     const output = outcome.outputSoFar.trim();
     return {
       content: [{
         type: "text",
-        text: [`running: ${outcome.runId}`, ...(output.length > 0 ? [capInline(output, spill)] : []), `Call browser_run({ "resume": "${outcome.runId}" }) to wait up to ${seconds} s more; start no new cell meanwhile.`].join("\n"),
+        text: [`running: ${outcome.runId}`, ...(output.length > 0 ? [capInline(output, save)] : []), `Call browser_run({ "resume": "${outcome.runId}" }) to wait up to ${seconds} s more; start no new cell meanwhile.`].join("\n"),
       }],
     };
   }
-  return "error" in outcome.result ? failed(outcome.result.error, spill) : { content: shown(outcome.result, spill) };
+  return "error" in outcome.result ? failed(outcome.result.error, save) : { content: shown(outcome.result, save) };
 }
 
 /** A thrown error from the host (busy, unknown run, a refusal) is the model's message as it is. */
 function refused(error: unknown): CallToolResult {
   if (error instanceof Error && error.name === "ToolAbortError") return { isError: true, content: [{ type: "text", text: ToolAbortError.MESSAGE }] };
   return { isError: true, content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }] };
-}
-
-const SPILLS = new WeakMap<CodeToolDeps, OutputSpill>();
-function spillOf(deps: CodeToolDeps): OutputSpill {
-  let spill = SPILLS.get(deps);
-  if (!spill) {
-    spill = new OutputSpill(() => deps.artifactsDir());
-    SPILLS.set(deps, spill);
-  }
-  return spill;
 }
 
 export interface BrowserRunArgs {
@@ -194,13 +113,14 @@ export async function runCodeTool(deps: CodeToolDeps, args: BrowserRunArgs, extr
   if ((args.code === undefined) === (args.resume === undefined)) {
     return { isError: true, content: [{ type: "text", text: "Pass exactly one of code (a new cell) or resume (the runId of a cell still running)." }] };
   }
-  const spill = spillOf(deps);
   const waitCapMs = deps.waitCapMs ?? RUN_WAIT_CAP_MS;
   const session = deps.sessionOf(extra) ?? ANONYMOUS_SESSION;
+  // The session's own folder: one session's files are never pruned by another's spills.
+  const save: SaveSpill = text => saveSpill(sessionFolder(deps.artifactsDir(), session), text);
   try {
-    if (args.resume !== undefined) return started(await deps.host.resume(session, args.resume, waitCapMs, extra.signal), spill, waitCapMs);
+    if (args.resume !== undefined) return started(await deps.host.resume(session, args.resume, waitCapMs, extra.signal), save, waitCapMs);
     const timeoutMs = Math.min(300, Math.max(1, args.timeout ?? DEFAULT_CELL_SECONDS)) * 1000;
-    return started(await deps.host.run(session, { code: args.code!, timeoutMs, waitMs: waitCapMs, signal: extra.signal }), spill, waitCapMs);
+    return started(await deps.host.run(session, { code: args.code!, timeoutMs, waitMs: waitCapMs, signal: extra.signal }), save, waitCapMs);
   } catch (error) {
     return refused(error);
   }

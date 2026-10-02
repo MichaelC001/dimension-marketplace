@@ -23,8 +23,10 @@ export interface CellRunOptions {
   /** The caller's cancellation (an MCP request that was cancelled, a take-over). */
   signal: AbortSignal;
   invoke: CellInvoke;
-  /** Every chunk of text the cell prints, as it prints it. */
+  /** Progress: the text the cell prints, at most one chunk of 16 KiB every 100 ms (the sink bounds and throttles it, so a cell that floods costs the host a fixed rate). */
   onText?: (chunk: string) => void;
+  /** The session's folder for the file holding the whole of an output longer than the inline budget; absent: no file is kept. */
+  spillDir?: string;
 }
 
 /**
@@ -175,7 +177,7 @@ export class CodeCell {
 
   async run(o: CellRunOptions): Promise<RunResult> {
     if (this.#disposed) throw new ToolError("The code realm is closed");
-    const output = new CellOutput();
+    const output = new CellOutput({ ...(o.spillDir === undefined ? {} : { spillDir: o.spillDir }), ...(o.onText === undefined ? {} : { onText: o.onText }) });
     const filename = `browser-cell-${o.runId}.js`;
     // One signal for everything the run starts. Its reason is either the budget's CellTimeoutError (the model is told the budget ran out) or OMP's ToolAbortError (an MCP cancel arrives as a DOMException).
     const budget = new AbortController();
@@ -188,7 +190,7 @@ export class CodeCell {
       runId: o.runId, filename, signal, invoke: o.invoke, screenshots: [], floating: [], ended: false,
       hooks: { onText: () => {}, onDisplay: () => {} },
     };
-    const live = output.hooks(chunk => o.onText?.(chunk));
+    const live = output.hooks();
     // A run that was raced out (timeout, cancel) may still print later; that is nobody's output.
     run.hooks = { onText: chunk => { if (!run.ended) live.onText(chunk); }, onDisplay: display => { if (!run.ended) live.onDisplay(display); } };
     this.#live.set(o.runId, run);

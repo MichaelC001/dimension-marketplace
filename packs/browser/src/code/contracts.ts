@@ -101,6 +101,7 @@ export type WorkerToHost =
   | { t: "ready" }
   /** open and close only */
   | { t: "bridge"; id: number; runId: string; request: BridgeRequest }
+  /** Progress, never the output itself (that is the `result`): at most one per 100 ms and 16 KiB per run, whatever the cell prints; a stretch left out is `[…NB elided…]`. Append them; the end is what matters. */
   | { t: "text"; runId: string; chunk: string }
   | { t: "result"; runId: string; ok: true; payload: RunResult }
   | { t: "result"; runId: string; ok: false; error: RunError }

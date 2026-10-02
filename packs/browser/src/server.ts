@@ -17,6 +17,7 @@ import { profilesForModel } from "./profile-list.js";
 import { BrowserRuntime } from "./runtime.js";
 import { defaultRootDir, fail } from "./store.js";
 import { LiveChannel } from "./stream.js";
+import manifest from "../plugin.json";
 
 export const BROWSER_VIEW_URI = "ui://browser/index.html";
 /**
@@ -87,8 +88,12 @@ const TRACTION_ONLY = { [SPACES_META_KEY]: ["traction"] };
 /** Which tools the MODEL is shown for browsing: `code` is `browser_run` (the step tools stay registered for the View), `steps` is the six step tools, `both` is every one. Read once, at start. */
 export type ModelToolsMode = "code" | "steps" | "both";
 const MODEL_TOOLS_ENV = "DIMENSION_BROWSER_MODEL_TOOLS";
-/** The spaces the pack is lent to (plugin.json `modelSpaces`). */
-const MODEL_SPACES = ["code", "build", "chat", "labor", "watch", "traction"];
+/** The spaces the pack is lent to: plugin.json `modelSpaces`, read from the manifest itself (the bundle carries it) so a space the manifest gains is offered a way to drive a page without a second edit. */
+const MODEL_SPACES: readonly string[] = (() => {
+  const spaces = manifest.extensions["ai.insodimension.dimension"].artifactories.find(artifactory => artifactory.mcpServer === "browser")?.modelSpaces;
+  if (spaces === undefined || spaces.length === 0) throw new Error("plugin.json lends the browser server to no space (artifactories[].modelSpaces)");
+  return spaces;
+})();
 /**
  * The spaces whose model is offered `browser_run`. Until host contract H1 (omp fork) maps `ai.insodimension/approval: "exec"` to the exec tier, only the spaces that also have
  * `eval`/`bash` (doc 77 §7.4.5); list every space here once H1 has merged. Where `browser_run` is not offered the step tools stay on the model's list, so no space is left without a way to drive a page.

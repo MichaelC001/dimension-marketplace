@@ -166,6 +166,8 @@ export class WorkerCore {
   readonly #unsubscribe: () => void;
   #realm: TabRealm | undefined;
   #cell: CodeCell | undefined;
+  /** The session's folder (from `init`) for the file that keeps a cell's output longer than the inline budget. */
+  #outputDir: string | undefined;
   #nextBridgeId = 1;
   #closing = false;
 
@@ -187,6 +189,7 @@ export class WorkerCore {
   #handle(message: HostToWorker): void {
     switch (message.t) {
       case "init":
+        this.#outputDir = message.outputDir;
         void this.#init(message);
         return;
       case "run":
@@ -260,7 +263,8 @@ export class WorkerCore {
     this.#runs.set(runId, controller);
     const invoke = createDispatcher({ realm, host: (request, o) => this.#hostCall(request, o) });
     try {
-      const payload = await cell.run({ runId, code, timeoutMs, signal: controller.signal, invoke, onText: chunk => this.#send({ t: "text", runId, chunk }) });
+      // `onText` is already bounded and throttled by the cell's output sink (16 KiB, 100 ms), so a flooding cell cannot flood the host through this message.
+      const payload = await cell.run({ runId, code, timeoutMs, signal: controller.signal, invoke, onText: chunk => this.#send({ t: "text", runId, chunk }), ...(this.#outputDir === undefined ? {} : { spillDir: this.#outputDir }) });
       this.#send({ t: "result", runId, ok: true, payload });
     } catch (error) {
       const error_ = error instanceof CellFailure ? { ...error.error, partial: error.partial } : failureOf(error);

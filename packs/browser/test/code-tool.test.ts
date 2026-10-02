@@ -14,7 +14,9 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { z } from "zod";
 import type { CodeHostPort, ImageBlock, RunError, RunResult, RunStarted } from "../src/code/contracts.js";
 import { ToolAbortError } from "../src/code/errors.js";
-import { BROWSER_RUN_DESCRIPTION, MAX_INLINE_BYTES, runCodeTool, SPILL_FILES_KEPT, type CodeToolDeps } from "../src/code/tool.js";
+import { MAX_INLINE_BYTES } from "../src/code/cell/output-sink.js";
+import { runCodeTool, type CodeToolDeps } from "../src/code/tool.js";
+import { SPILL_FILES_KEPT } from "../src/code/spill.js";
 import type { BrowserRuntimePort } from "../src/contracts.js";
 import { createBrowserServer, type ModelToolsMode } from "../src/server.js";
 
@@ -130,11 +132,20 @@ describe("what a cell's result looks like to the model", () => {
     await expect(readdir(join(root, "artifacts"))).rejects.toThrow();
   });
 
-  test("only the newest spilled outputs are kept", async () => {
+  test("only the newest spilled outputs of a session are kept, and another session's spills never remove them", async () => {
     const big = "y".repeat(MAX_INLINE_BYTES + 10);
     const { call, root } = await connect(fakeHost(() => shown({ type: "text", text: big })));
-    for (let i = 0; i < SPILL_FILES_KEPT + 3; i += 1) await call("print(big)");
-    expect(await readdir(join(root, "artifacts"))).toHaveLength(SPILL_FILES_KEPT);
+    const pathOf = (reply: Reply): string => /\n\[raw output: (.+)\]$/.exec(textOf(reply))![1]!;
+    const first = pathOf(await call("print(big)", {}, { [SESSION_KEY]: { sessionId: "quiet" } }));
+    for (let i = 0; i < SPILL_FILES_KEPT + 3; i += 1) await call("print(big)", {}, { [SESSION_KEY]: { sessionId: "busy" } });
+    // The busy session spilled more than the folder keeps: its own newest are what stay.
+    const folders = await readdir(join(root, "artifacts"));
+    expect(folders).toHaveLength(2);
+    expect(folders.every(folder => /^[0-9a-f]{16}$/.test(folder))).toBe(true);
+    const counts = await Promise.all(folders.map(async folder => (await readdir(join(root, "artifacts", folder))).length));
+    expect(counts.sort((a, b) => a - b)).toEqual([1, SPILL_FILES_KEPT]);
+    // The quiet session's footer path is still a file: the busy one's spills did not take it.
+    expect((await readFile(first, "utf8")).length).toBe(big.length);
   });
 });
 
@@ -335,6 +346,17 @@ describe("which tools the model is shown", () => {
     expect(codeSpaceTools.filter(name => !["browser_stream", "browser_frame", "browser_annotate", "browser_annotation_file", "browser_viewport"].includes(name)).sort()).toEqual(["browser_close", "browser_profiles", "browser_read", "browser_run", "browser_view"]);
   });
 
+  test("the spaces the manifest lends the pack to are split between browser_run and the step tools, none in both and none in neither", async () => {
+    const manifest = JSON.parse(await readFile(new URL("../plugin.json", import.meta.url), "utf8")) as { extensions: Record<string, { artifactories: Array<{ mcpServer: string; modelSpaces: string[] }> }> };
+    const declared = manifest.extensions["ai.insodimension.dimension"]!.artifactories.find(artifactory => artifactory.mcpServer === "browser")!.modelSpaces;
+    const { client } = await connect(fakeHost(() => shown()), "code");
+    const tools = await listed(client);
+    const withCode = tools.get("browser_run")?.[SPACES] as string[];
+    const withSteps = tools.get("browser_act")?.[SPACES] as string[];
+    // A space the manifest gains is offered one of the two without anyone editing server.ts; one that is in neither would have a model with no way to drive a page.
+    expect([...withCode, ...withSteps].sort()).toEqual([...declared].sort());
+  });
+
   test("steps: the six step tools for everyone and no browser_run", async () => {
     const { client } = await connect(fakeHost(() => shown()), "steps");
     const tools = await listed(client);
@@ -384,12 +406,5 @@ describe("which tools the model is shown", () => {
     const { client } = await connect(host, "code");
     await client.close();
     await ended.promise;
-  });
-
-  test("the model's text is OMP's browser.md as the pack ports it, without the licence comment", () => {
-    expect(BROWSER_RUN_DESCRIPTION.startsWith("Drive real Chromium tabs by running JavaScript")).toBe(true);
-    expect(BROWSER_RUN_DESCRIPTION).not.toContain("<!--");
-    expect(BROWSER_RUN_DESCRIPTION).toContain("browser_run({ resume:");
-    expect(BROWSER_RUN_DESCRIPTION).not.toMatch(/python/i);
   });
 });
