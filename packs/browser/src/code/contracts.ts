@@ -88,7 +88,8 @@ export interface TabHandle extends TabRef {
  * What `init` tells the worker about the tab realm it builds. All but `session` and `env` are optional, and absent means the realm's own default:
  * - `screenshotDir`: where model screenshots are also saved (OMP's screenshot directory); absent: the realm reads `DIMENSION_BROWSER_SCREENSHOT_DIR` from `env`.
  * - `cwd`: resolves a relative `tab.uploadFile` path. MCP calls carry no working directory, so absent means a relative path is refused with the rule named.
- * - `refusePasswordFields`: `tab.type` / `tab.fill` (and a handle's) refuse a password input from code (matrix D18). ABSENT MEANS ON; the host sends `false` only where the owner has lifted the rule.
+ * - `refusePasswordFields`: `tab.type` / `tab.fill` / `tab.press` (and a handle's) refuse a password input from code, and keys that would reach one (matrix D18). ABSENT MEANS ON; the host sends `false` only where the owner has lifted the rule.
+ * - `taskCredential`: the server offers `browser_task` (it is registered only with a TypeSafe key), so the refusal may send the model to it. ABSENT MEANS NOT OFFERED: the host sends `true` only where the tool exists.
  * - `excludeWebP`: encode the screenshot the model sees as JPEG instead of WebP (a model provider that cannot read WebP).
  */
 export interface RealmInit {
@@ -97,6 +98,7 @@ export interface RealmInit {
   screenshotDir?: string;
   cwd?: string;
   refusePasswordFields?: boolean;
+  taskCredential?: boolean;
   excludeWebP?: boolean;
 }
 export type HostToWorker =

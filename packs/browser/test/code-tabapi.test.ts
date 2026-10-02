@@ -10,11 +10,12 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { Page } from "puppeteer-core";
 import { createCodeEvaluator } from "../src/code/cell/evaluator";
 import type { RunResult, TabRealm } from "../src/code/contracts";
+import { producesText } from "../src/code/worker/password-guard";
 import { RunOutput } from "../src/code/worker/run-output";
 import { createTabRealm } from "../src/code/worker/tab-realm";
 import { readImageDimensions } from "../src/code/worker/image-size";
 import { resolveScreenshotDir } from "../src/code/worker/screenshot";
-import { resolveUploadPath } from "../src/code/worker/tab-api";
+import { resolveUploadPath, textClickLoopMs } from "../src/code/worker/tab-api";
 import { OpRunner, type RunState, resolveOpTimeouts, resolveWaitTimeout } from "../src/code/worker/tab-ops";
 import { chromePath, type Fixture, type LaunchedChrome, launchChrome, startFixture } from "./code-tab-fixture";
 import { describeWithChrome } from "./fixture";
@@ -51,6 +52,23 @@ describe("the per-operation ceilings follow the cell budget", () => {
     expect(resolveWaitTimeout(30_000, Number.POSITIVE_INFINITY)).toBe(29_000);
     expect(resolveWaitTimeout(30_000, -5)).toBe(8_000);
     expect(resolveWaitTimeout(30_000, Number.NaN)).toBe(8_000);
+  });
+});
+
+describe("how long a text click keeps trying before the op's own ceiling ends it", () => {
+  test("it stops 250 ms before the ceiling so the model reads the actionability reason, and a short ceiling still gets at least half of itself rather than one attempt", () => {
+    expect(textClickLoopMs(8_000)).toBe(7_750);
+    expect(textClickLoopMs(500)).toBe(250);
+    expect(textClickLoopMs(400)).toBe(200);
+    expect(textClickLoopMs(100)).toBe(50);
+    expect(textClickLoopMs(1)).toBe(1);
+  });
+});
+
+describe("which keys count as typing into a password field (D18)", () => {
+  test("a character does, and so does a printable key by its code name; Enter, Tab, the arrows and the editing keys do not", () => {
+    for (const typing of ["a", "Z", "7", " ", "é", "KeyA", "Digit1", "Numpad5", "NumpadDecimal", "Space", "Minus", "Slash"] as const) expect(producesText(typing)).toBe(true);
+    for (const quiet of ["Enter", "NumpadEnter", "Tab", "Escape", "Backspace", "Delete", "ArrowLeft", "ArrowDown", "Home", "End", "PageUp", "F5", "Shift", "Control"] as const) expect(producesText(quiet)).toBe(false);
   });
 });
 
@@ -767,6 +785,42 @@ describeWithChrome("the tab realm drives a page it adopted", () => {
       }
     }, 20_000);
 
+    test("the browser reached any other way (page.browser(), the page's context, the sibling page's) cannot be disconnected from code either: no tab is ended, none is reported as ended", async () => {
+      await goto("/form");
+      await openTab("sibling", "/done");
+      try {
+        for (const reach of ["page.browser()", "page.browserContext().browser()", "page.target().browser()", "(await browser.pages())[0].browser()"]) {
+          await run(`await ${reach}.disconnect(); 1`);
+          expect(await value("await tab.title()", { name: "sibling" })).toBe("Done page");
+          expect(await value("tab.url()")).toBe(fixture.url("/form"));
+          expect(realm.names()).toContain("sibling");
+        }
+      } finally {
+        await realm.release("sibling");
+        await enginePages.get("sibling")?.close();
+      }
+    }, 30_000);
+
+    test("code cannot cut the realm's connection, but the realm still lets go of it when the last tab of that browser goes", async () => {
+      const own = createTabRealm({ evaluator: createCodeEvaluator });
+      try {
+        const { handle } = await chrome.openTab(fixture.url("/form"));
+        await own.adopt("solo", handle);
+        const ask = (code: string): Promise<RunResult> => own.run({ name: "solo", code, timeoutMs: 8_000, signal: new AbortController().signal });
+        // The Browser itself (the run's `browser` is a facade that stops answering when the run ends), taken out of the run to look at after it: its own `connected` is the proof either way.
+        await ask("globalThis.leakedBrowser = page.browser(); 1");
+        const leaked = Reflect.get(globalThis, "leakedBrowser") as { connected: boolean };
+        expect(leaked.connected).toBe(true);
+        await ask("await browser.disconnect(); await page.browser().disconnect(); 1");
+        expect(leaked.connected).toBe(true);
+        await own.release("solo");
+        expect(leaked.connected).toBe(false);
+      } finally {
+        Reflect.deleteProperty(globalThis, "leakedBrowser");
+        await own.dispose();
+      }
+    }, 30_000);
+
     test("the code gets raw puppeteer page and browser beside tab, and a run that is cancelled ends with the cancellation", async () => {
       expect(await value("page.url() === tab.url() && typeof browser.pages === 'function' && typeof tab.page.goto === 'function'")).toBe(true);
       const controller = new AbortController();
@@ -883,12 +937,72 @@ describeWithChrome("the tab realm drives a page it adopted", () => {
       expect(await value("await tab.evaluate(() => document.getElementById('late-pw').value)")).toBe("");
     }, 20_000);
 
-    test("a field that turns into a password between the check and the typing is waited for, never typed into", async () => {
+    test("a field that is a password by the time it has focus is refused, never typed into", async () => {
       await goto("/flaky");
+      const refused = await failure('await tab.fill("#flaky", "hunter2")', { timeoutMs: 4_000 });
+      expect(refused.message).toStartWith('typing into "#flaky" would reach a password field (the focused element is one); browser_run does not type into password fields from code.');
+      expect(await value("await tab.evaluate(() => document.getElementById('flaky').value)")).toBe("");
+    }, 20_000);
+
+    test("a field that turns into a password after those checks is waited for, never typed into", async () => {
+      // Two reads as text (the realm's own check, then what holds focus): the third is the fill's own predicate, which is what holds the keys back.
+      await goto("/flaky?reads=2");
       const failed = await failure('await tab.fill("#flaky", "hunter2")', { timeoutMs: 4_000 });
       expect(failed.message).toStartWith('tab.fill("#flaky") timed out');
       expect(await value("await tab.evaluate(() => document.getElementById('flaky').value)")).toBe("");
     }, 20_000);
+
+    test("keys pressed into a password field are refused, a key that types nothing is not, and a plain field still takes both", async () => {
+      await goto("/form");
+      // The model's way round: press the password one character at a time.
+      const refused = await failure('for (const ch of "hunter2") await tab.press(ch, { selector: "#pw" })');
+      expect(refused.message).toStartWith('tab.press("h", { selector: "#pw" }) would reach a password field (the focused element is one); browser_run does not type into password fields from code.');
+      expect(await secret()).toBe("");
+      // Enter in a password field is how a login is sent: it stays allowed, and so does every key that does not type.
+      await run('await tab.evaluate(() => { window.pressed = []; document.getElementById("pw").addEventListener("keydown", event => window.pressed.push(event.key)); })');
+      await run('await tab.press("Enter", { selector: "#pw" }); await tab.press("ArrowLeft"); await tab.press("Tab")');
+      expect(await value("await tab.evaluate(() => window.pressed.slice(0, 2))")).toEqual(["Enter", "ArrowLeft"]);
+      await run('await tab.press("o", { selector: "#name" }); await tab.press("k")');
+      expect(await value("await tab.evaluate(() => document.getElementById('name').value)")).toBe("ok");
+    }, 30_000);
+
+    test("keys that would reach a password field through another element are refused: focus handed on by a custom element, moved by the page, held from an earlier click, or inside a frame", async () => {
+      const innerValue = "document.getElementById('xpw').shadowRoot.getElementById('inner').value";
+      await goto("/delegate");
+      // A shadow root with delegatesFocus: the element the helper is pointed at is not an input at all.
+      for (const code of ['tab.type("x-pw", "secret")', 'tab.fill("x-pw", "secret")', '(await tab.waitFor("x-pw")).type("secret")', '(await tab.waitFor("x-pw")).fill("secret")', 'tab.press("s", { selector: "x-pw" })']) {
+        const refused = await failure(`await ${code}`);
+        expect(refused.message).toContain("would reach a password field (the focused element is one); browser_run does not type into password fields from code.");
+      }
+      expect(await value(`await tab.evaluate(() => ${innerValue})`)).toBe("");
+      await run('await tab.type("#plain", "ok")');
+      expect(await value("await tab.evaluate(() => document.getElementById('plain').value)")).toBe("ok");
+
+      // A field whose focus handler hands focus to a password field.
+      await goto("/focusmove");
+      expect((await failure('await tab.type("#decoy", "x")')).message).toContain('typing into "#decoy" would reach a password field');
+      expect(await value("await tab.evaluate(() => document.getElementById('hidden-pw').value)")).toBe("");
+
+      // A click gave the password field focus; a target that cannot take focus (the body) leaves it there, and so does a press with no selector.
+      await goto("/form");
+      await run('await tab.click("#pw")');
+      for (const code of ['tab.type("body", "zz")', '(await tab.waitFor("body")).type("zz")', 'tab.press("z")']) {
+        const refused = await failure(`await ${code}`);
+        expect(refused.message).toContain("would reach a password field (the focused element is one); browser_run does not type into password fields from code.");
+      }
+      expect(await secret()).toBe("");
+
+      // The password field is in an iframe of the page, and focus is there.
+      await goto("/framed");
+      await run('const frame = page.frames().find(f => f !== page.mainFrame()); await (await frame.$("#pw")).click()');
+      expect((await failure('await tab.type("body", "zz")')).message).toContain('typing into "body" would reach a password field');
+      // Pointing the helper at the iframe element itself: whether Chrome keeps the frame's focused field when the frame is focused this way is its own business; what matters is where the keys went.
+      await run('try { await tab.type("#f", "zz"); } catch {}');
+      expect(await value('await page.frames().find(f => f !== page.mainFrame()).evaluate(() => document.getElementById("pw").value)')).toBe("");
+      // A field of the page itself is a different focus, and types.
+      await run('await tab.type("#top", "fine")');
+      expect(await value("await tab.evaluate(() => document.getElementById('top').value)")).toBe("fine");
+    }, 60_000);
 
     test("the host lifts the rule with refusePasswordFields: false, and then the same calls type as OMP's do", async () => {
       const lifted = createTabRealm({ evaluator: createCodeEvaluator, refusePasswordFields: false });
