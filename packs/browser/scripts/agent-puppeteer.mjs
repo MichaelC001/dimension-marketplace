@@ -3,7 +3,9 @@
 // importing the stock `puppeteer-core` (see src/engines/agent-puppeteer.ts for how the two are told apart).
 //
 // The patch is derived from oh-my-pi's (MIT; its notice is in the patch file). It is applied by exact context, one
-// match per hunk: a puppeteer upgrade that moves a hunk fails the build, never ships half a patch.
+// match per hunk: a puppeteer upgrade that moves a hunk fails the build, never ships half a patch. The patch file's own
+// notes (what it is derived from, the MIT notice) head the bundle as a `/*! */` comment, so the file that ships
+// OMP's code carries OMP's notice (the patch file itself is not shipped).
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -70,13 +72,41 @@ export function applyHunks(path, source, hunks) {
 	return out;
 }
 
+/** The patch's own notes: the text before its first `diff --git`. Heads the bundle, so it carries the MIT notice of the code it derives from. */
+export function patchNotes(text) {
+	const end = text.indexOf("\ndiff --git ");
+	return (end < 0 ? text : text.slice(0, end)).replace(/\r\n/g, "\n").trim();
+}
+
+/** The installed version of `name`, as `require` (anchored at `from`) resolves it, or undefined when it is not installed. */
+function installedVersion(require, name) {
+	try {
+		return JSON.parse(readFileSync(require.resolve(`${name}/package.json`), "utf8")).version;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * The installed puppeteer-core and esbuild, as one string, after checking that puppeteer-core is the version the patch was
+ * made for. The cached bundle of a source run is named by this, and this runs on every source run before the cache is
+ * looked at: a puppeteer-core bump never reuses an older build, and fails here, not at the first hunk that moved.
+ * `from` anchors the lookup (a file URL); by default it is this pack's.
+ */
+export function bundleIdentity(from = import.meta.url) {
+	const require = createRequire(from);
+	const version = installedVersion(require, "puppeteer-core");
+	if (version === undefined) throw new Error("puppeteer-core is not installed");
+	if (version !== PATCHED_VERSION) throw new Error(`puppeteer-core ${version} is installed; the agent patch is for ${PATCHED_VERSION}. Re-base patches/puppeteer-core-25.11.0-agent.patch first.`);
+	return `puppeteer-core@${version} esbuild@${installedVersion(require, "esbuild") ?? "none"}`;
+}
+
 /** The pinned puppeteer-core as this pack resolves it: its entry file, and its package root. */
 function locatePuppeteer() {
+	bundleIdentity();
 	const require = createRequire(import.meta.url);
 	const entry = require.resolve("puppeteer-core");
 	const root = dirname(require.resolve("puppeteer-core/package.json"));
-	const { version } = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
-	if (version !== PATCHED_VERSION) throw new Error(`puppeteer-core ${version} is installed; the agent patch is for ${PATCHED_VERSION}. Re-base patches/puppeteer-core-25.11.0-agent.patch first.`);
 	return { entry, root: root.replace(/\\/g, "/") };
 }
 
@@ -87,7 +117,10 @@ function locatePuppeteer() {
 export async function buildAgentPuppeteer({ outfile }) {
 	const { build } = await import("esbuild");
 	const { entry, root } = locatePuppeteer();
-	const patch = parsePatch(readFileSync(PATCH_FILE, "utf8"));
+	const patchText = readFileSync(PATCH_FILE, "utf8");
+	const patch = parsePatch(patchText);
+	// `/*!` is a comment esbuild never drops: the notes (and the MIT notice in them) stay at the head of the shipped file.
+	const banner = `/*!\n${patchNotes(patchText).replace(/\*\//g, "* /").split("\n").map((line) => ` * ${line}`.trimEnd()).join("\n")}\n */`;
 	const applied = new Set();
 	await build({
 		entryPoints: [entry],
@@ -98,6 +131,7 @@ export async function buildAgentPuppeteer({ outfile }) {
 		target: "node22",
 		packages: "external",
 		sourcemap: false,
+		banner: { js: banner },
 		logLevel: "error",
 		plugins: [
 			{
