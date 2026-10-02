@@ -234,7 +234,7 @@ so sites treat it as one:
   - On a machine with no GPU, WebGL reports a common integrated GPU of the
     platform instead of SwiftShader, in the page, in each same-origin and
     cross-origin frame and in each dedicated and shared worker (sent to each
-    before it runs), with the one float shader precision a real GPU reports,
+    before it runs; a service worker is not masked), with the one float shader precision a real GPU reports,
     and the replaced functions read as native, named code to a frame's own
     `Function.prototype.toString` as well. This is the only page script
     besides the loopback error reporter; it exists only when the binary was
