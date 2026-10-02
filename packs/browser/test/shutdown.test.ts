@@ -103,6 +103,17 @@ describe("a cell is inside a call that cannot be interrupted at the stop", () =>
     expect(calls).toEqual(["reap", "stop", "exit 0"]);
   });
 
+  test("a completed cell's child is reaped before an otherwise ordinary exit", async () => {
+    const { deps, calls, finish, reaped } = rig({ atRisk: true });
+    const done = createShutdown(deps, TIMING)();
+    finish();
+    await Promise.resolve();
+    expect(calls).toEqual(["reap", "stop"]);
+    reaped();
+    await done;
+    expect(calls).toEqual(["reap", "stop", "exit 0"]);
+  });
+
   test("a stop that ends with a thread still alive waits for the reap that is already running, once, and then ends the process", async () => {
     const { deps, calls, finish, reaped, threads } = rig({ atRisk: true });
     threads.alive = 1;
