@@ -4,14 +4,19 @@
  *
  *   picture  kind 1  JSON `PictureHead`   body = the JPEG bytes
  *   state    kind 2  JSON `BrowserState`  body = none
+ *   ping     kind 3  no JSON, no body     nine bytes: "the pack is alive", nothing more (`PING`)
  *
  * Both sides import this file, so they cannot drift. `Reader` is bounded: a length above its caps is a protocol error, never a buffer.
+ * A kind a `Reader` does not know is skipped whole, unread: a newer pack's frame must never end an older View's stream.
  */
 import type { Viewport } from "./contracts.js";
 
 export const KIND_PICTURE = 1;
 export const KIND_STATE = 2;
+export const KIND_PING = 3;
 export const HEADER_BYTES = 9;
+/** The query a View adds to its stream request to say it understands pings (`?ping=1`). The pack pings only a View that asked: an older View reads a kind it does not know as a broken stream. */
+export const PING_QUERY = "ping";
 /** Larger than any real JPEG of a viewport of at most `MAX_VIEWPORT` at ratio 4; a bigger claim is a broken or hostile stream. */
 export const MAX_PICTURE_BYTES = 16 * 1024 * 1024;
 export const MAX_JSON_BYTES = 4 * 1024 * 1024;
@@ -26,9 +31,13 @@ export interface PictureHead {
 
 export type Message =
 	| { kind: typeof KIND_PICTURE; head: PictureHead; jpeg: Uint8Array }
-	| { kind: typeof KIND_STATE; state: unknown };
+	| { kind: typeof KIND_STATE; state: unknown }
+	| { kind: typeof KIND_PING };
 
 const encoder = new TextEncoder();
+
+/** A ping, as the two pieces to write (the second is empty). One shared instance: writing it never changes it. */
+export const PING: readonly [Uint8Array, Uint8Array] = [Uint8Array.of(KIND_PING, 0, 0, 0, 0, 0, 0, 0, 0), new Uint8Array(0)];
 
 /** The bytes of one message, as the two pieces to write (header + JSON, then the body) so a picture is never copied to join them. */
 export function encode(kind: number, head: unknown, body: Uint8Array = new Uint8Array(0)): [Uint8Array, Uint8Array] {
@@ -67,7 +76,8 @@ export class Reader {
 			if (this.#have < this.#need) break;
 			const whole = this.#take(this.#need, true);
 			this.#need = 0;
-			out.push(this.#decode(whole));
+			const message = this.#decode(whole);
+			if (message !== undefined) out.push(message);
 		}
 		return out;
 	}
@@ -93,13 +103,15 @@ export class Reader {
 		return this.#take(count, consume);
 	}
 
-	#decode(whole: Uint8Array): Message {
-		const view = new DataView(whole.buffer, whole.byteOffset, whole.byteLength);
+	/** The message, or nothing for a kind this Reader does not know (its parts are not read: it may not be JSON at all). */
+	#decode(whole: Uint8Array): Message | undefined {
 		const kind = whole[0];
+		if (kind === KIND_PING) return { kind: KIND_PING };
+		if (kind !== KIND_STATE && kind !== KIND_PICTURE) return undefined;
+		const view = new DataView(whole.buffer, whole.byteOffset, whole.byteLength);
 		const jsonLength = view.getUint32(1, true);
 		const json: unknown = JSON.parse(this.#decoder.decode(whole.subarray(HEADER_BYTES, HEADER_BYTES + jsonLength)));
 		if (kind === KIND_STATE) return { kind: KIND_STATE, state: json };
-		if (kind === KIND_PICTURE) return { kind: KIND_PICTURE, head: json as PictureHead, jpeg: whole.subarray(HEADER_BYTES + jsonLength) };
-		throw new Error(`the stream sent a message of unknown kind ${kind}`);
+		return { kind: KIND_PICTURE, head: json as PictureHead, jpeg: whole.subarray(HEADER_BYTES + jsonLength) };
 	}
 }
