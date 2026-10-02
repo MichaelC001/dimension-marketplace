@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import type { HeapInfo } from "node:v8";
 import { Worker } from "node:worker_threads";
 import type { HostToWorker, Transport, WorkerToHost } from "../contracts.js";
+import { CommitProbe } from "./commit-probe.js";
 
 /** What a worker holds in memory, as far as the runtime can tell. */
 export interface WorkerMemory {
@@ -14,9 +15,14 @@ export interface WorkerMemory {
   mb: number;
   /**
    * True when `mb` is this worker's own (Node 22.16+ and 24: `worker.getHeapStatistics()`, answered by the worker thread even while its JavaScript spins in a loop).
-   * False when the runtime has no such call (Node 22.12 to 22.15, Bun): `mb` is then the whole process's resident set, and only a growth of it during a cell says anything about that cell.
+   * False when the runtime has no such call (Node 22.12 to 22.15, Bun): `mb` is then the whole process's, and only a growth of it during a cell says anything about that cell.
    */
   own: boolean;
+  /**
+   * What a whole-process figure counts. `commit`: the private bytes the OS charges against commit (Windows, through the helper in commit-probe.ts), which sees `Buffer.alloc` memory nobody touched.
+   * `resident`: the resident set, which does NOT see it on Windows (and is what counts on a system that overcommits). Two figures of different kinds are never compared. Absent for an own figure.
+   */
+  basis?: "commit" | "resident";
 }
 
 /** One running code worker, as the host sees it. */
@@ -31,6 +37,8 @@ export interface WorkerHandle {
   onExit(handler: (reason: string) => void): void;
   /** What the worker holds now; undefined when it has exited or does not answer. Never waits longer than a moment for a worker that is stuck in a native call. */
   memory(): Promise<WorkerMemory | undefined>;
+  /** Resolves when `memory()` answers with the figure it will keep answering with (a helper that reads the commit charge is up), so a cell never starts unwatched. Bounded; never rejects. Absent: nothing to wait for. */
+  warm?(): Promise<void>;
 }
 
 /** Starts a worker serving one session. `env` is the scrubbed environment the cell may see. */
@@ -62,9 +70,25 @@ export function defaultWorkerEntry(): URL {
 const MB = 1024 * 1024;
 /** How long one memory question to a worker gets: a worker blocked in a native call never answers, and that is not a reason to ask again and again. */
 const MEMORY_ANSWER_MS = 500;
+/** How long a first cell waits for the helper that reads the commit charge to come up (a PowerShell starts in a quarter of a second to a second); past it the cell runs on the resident set, which is the stated limit. */
+const COMMIT_WARM_MS = 2_000;
+
+/** The whole process's memory, for a runtime that cannot say a worker's own: the commit charge where a helper reads it, else the resident set. */
+async function wholeProcessMemory(commit: CommitProbe | undefined): Promise<WorkerMemory> {
+  const charged = await commit?.read();
+  return charged === undefined ? { mb: process.memoryUsage.rss() / MB, own: false, basis: "resident" } : { mb: charged, own: false, basis: "commit" };
+}
+
+/**
+ * The helper that reads the commit charge, for a runtime that needs one: Windows on a Node that cannot read a worker's own memory (22.12 to 22.15) or on Bun. Elsewhere there is none: a system that overcommits charges
+ * nothing for pages nobody touched, so the resident set is the figure that counts, and Node 22.16+ and 24 say the worker's own.
+ */
+export function defaultCommitProbe(): CommitProbe | undefined {
+  return process.platform === "win32" && typeof Worker.prototype.getHeapStatistics !== "function" ? new CommitProbe() : undefined;
+}
 
 /** The thread rung: `worker_threads`, with its stdio held back (the server's stdout is the MCP stream; a stray write from a cell must never reach it). */
-export function threadWorkerSpawner(entry: URL | string, limits: ThreadLimits): SpawnWorker {
+export function threadWorkerSpawner(entry: URL | string, limits: ThreadLimits, commit?: CommitProbe): SpawnWorker {
   return ({ env }) => {
     const worker = new Worker(entry, { env, stdout: true, stderr: true, resourceLimits: { maxOldGenerationSizeMb: limits.maxOldGenerationSizeMb } });
     unexitedThreads += 1;
@@ -113,9 +137,10 @@ export function threadWorkerSpawner(entry: URL | string, limits: ThreadLimits): 
         }
       },
       onExit: handler => void exited.promise.then(handler),
+      ...(commit === undefined ? {} : { warm: async () => void (await commit.ready(COMMIT_WARM_MS)) }),
       memory: async () => {
         if (gone) return undefined;
-        if (typeof worker.getHeapStatistics !== "function") return { mb: process.memoryUsage.rss() / MB, own: false };
+        if (typeof worker.getHeapStatistics !== "function") return await wholeProcessMemory(commit);
         const limit = Promise.withResolvers<undefined>();
         const timer = setTimeout(limit.resolve, MEMORY_ANSWER_MS);
         try {

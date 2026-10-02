@@ -24,6 +24,8 @@ class FakeWorker {
   stuck = false;
   /** What the worker says it holds (undefined: it does not answer). */
   memory: WorkerMemory | undefined = { mb: 1, own: true };
+  /** While set, the worker's `warm` has not finished: the cell must not start. */
+  warming: PromiseWithResolvers<void> | undefined;
   readonly terminateLimits: number[] = [];
   readonly #listeners = new Set<(message: WorkerToHost) => void>();
   readonly #exits: Array<(reason: string) => void> = [];
@@ -54,6 +56,7 @@ class FakeWorker {
         return this.exited ? "exited" : "stuck";
       },
       onExit: handler => (this.exited ? queueMicrotask(() => handler(this.#reason)) : void this.#exits.push(handler)),
+      warm: async () => void (await this.warming?.promise),
       memory: async () => (this.exited ? undefined : this.memory),
     };
   }
@@ -645,6 +648,40 @@ describe("a worker's memory is bounded, not only its heap", () => {
     const error = await ended(host, runId);
     expect(error.message).toContain("grew the server by 200 MB while it ran");
     expect(workers[0]!.exited).toBe(true);
+  });
+
+  test("a figure of another kind than the one the cell began with is not set against it: a helper that fell away mid-cell cannot turn a resident set into a growth of gigabytes", async () => {
+    // The cell began on a commit figure (5,000 MB). The helper dies and the worker answers with the resident set (300 MB), then the helper is back (5,050 MB): only like is compared with like.
+    const { host, workers } = rig({ memoryMb: 100, timing: MEMORY_TIMING }, (worker, message) => {
+      if (message.t !== "init") return;
+      worker.memory = { mb: 5_000, own: false, basis: "commit" };
+      queueMicrotask(() => worker.emit({ t: "ready" }));
+    });
+    const runId = await start(host);
+    await new Promise(resolve => setTimeout(resolve, 100)); // a real wait: the baseline is taken
+    workers[0]!.memory = { mb: 300, own: false, basis: "resident" };
+    await new Promise(resolve => setTimeout(resolve, 100)); // a real wait: nothing may happen in this window
+    expect(workers[0]!.exited).toBe(false);
+    workers[0]!.memory = { mb: 5_050, own: false, basis: "commit" };
+    await new Promise(resolve => setTimeout(resolve, 100)); // a real wait: 50 MB of growth is under the limit
+    expect(workers[0]!.exited).toBe(false);
+    workers[0]!.memory = { mb: 5_300, own: false, basis: "commit" };
+    expect((await ended(host, runId)).message).toContain("grew the server by 300 MB while it ran");
+  });
+
+  test("a first cell waits for the worker's memory to be readable before it starts, so it never runs unwatched", async () => {
+    const { host, workers } = rig({ memoryMb: 100, timing: MEMORY_TIMING }, (worker, message) => {
+      if (message.t === "init") {
+        worker.warming = Promise.withResolvers<void>();
+        queueMicrotask(() => worker.emit({ t: "ready" }));
+      }
+    });
+    const starting = host.run("s1", { code: "x", timeoutMs: 30_000, waitMs: 20, signal: NEVER });
+    await new Promise(resolve => setTimeout(resolve, 100)); // a real wait: the cell must not have started
+    expect(workers[0]!.of("run")).toHaveLength(0);
+    workers[0]!.warming!.resolve();
+    expect((await starting).state).toBe("running");
+    expect(workers[0]!.of("run")).toHaveLength(1);
   });
 
   test("limits of 0 (per worker and for the host) turn the watchdog off", async () => {

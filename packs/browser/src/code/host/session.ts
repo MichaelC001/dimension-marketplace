@@ -9,7 +9,7 @@ import { BrowserRuntimeError } from "../../store.js";
 import type { BridgeRequest, BridgeResponse, BrowserKind, CodeBrowserPort, CodeTabInfo, HostToWorker, RunError, RunResult, RunStarted, TabHandle, TabRef, WorkerToHost } from "../contracts.js";
 import { ToolAbortError, ToolError } from "../errors.js";
 import { CODE_VIEWPORT, codedMessage, describeBrowser, describeKind, sameBrowserKind } from "./runtime-port.js";
-import type { SpawnWorker, WorkerHandle } from "./transport.js";
+import type { SpawnWorker, WorkerHandle, WorkerMemory } from "./transport.js";
 import type { HostMemory, Member, Overrun } from "./host-memory.js";
 import { cellLabel, type TerminatingWorkers } from "./terminating.js";
 
@@ -88,8 +88,8 @@ class Run {
   /** Why it was stopped from outside (a take-over): replaces the worker's own cancellation error. */
   override: RunError | undefined;
   hung = false;
-  /** The process's resident MB when the cell began, for a runtime that cannot say a worker's own memory (see `WorkerMemory.own`). */
-  memoryBase: number | undefined;
+  /** The process's memory when the cell began, for a runtime that cannot say a worker's own (see `WorkerMemory.own`); growth is only ever measured against a figure of the same `basis`. */
+  memoryBase: { mb: number; basis: WorkerMemory["basis"] } | undefined;
   worker: LiveWorker | undefined;
   constructor(readonly code: string, readonly timeoutMs: number, readonly onProgress: ((chunk: string) => void) | undefined) {
     this.done.promise.catch(() => undefined);
@@ -241,7 +241,7 @@ export class CodeSession {
       run.worker = live;
       if (this.#watching) this.#lookAtMemoryIn(live, this.#d.timing.memoryPollMs);
       void live.handle.memory().then(sample => {
-        if (sample !== undefined && !sample.own) run.memoryBase = sample.mb;
+        if (sample !== undefined && !sample.own) run.memoryBase = { mb: sample.mb, basis: sample.basis };
       });
       run.hangTimer = setTimeout(() => this.#hung(run), o.timeoutMs + this.#d.timing.graceMs);
       live.handle.transport.send({ t: "run", runId: run.id, code: o.code, timeoutMs: o.timeoutMs });
@@ -345,8 +345,11 @@ export class CodeSession {
     if (room === "session-full") throw new Error(stuckMessage(terminating.labels(this.#d.session)));
     if (room === "host-full") throw new Error(hostStuckMessage(terminating.size));
     const live = this.#spawn();
+    // The helper that reads the commit charge (where there is one) comes up while the worker does; the first cell does not start before it is up, so it never runs unwatched.
+    const warmed = live.handle.warm?.();
     this.#worker = live;
     await live.ready;
+    await warmed;
     return live;
   }
 
@@ -423,7 +426,8 @@ export class CodeSession {
     const sample = await live.handle.memory();
     if (live.dead) return;
     // A figure for this worker alone is the worker's memory; one for the whole process says something only about the cell that was running when it began to grow.
-    const used = sample === undefined ? 0 : sample.own ? sample.mb : run?.memoryBase === undefined ? 0 : sample.mb - run.memoryBase;
+    const base = run?.memoryBase;
+    const used = sample === undefined ? 0 : sample.own ? sample.mb : base === undefined || base.basis !== sample.basis ? 0 : sample.mb - base.mb;
     if (limit > 0 && used > limit) {
       this.#overMemory(live, run, memoryError(used, limit, sample?.own ?? true), `a code worker held ${Math.round(used)} MB (limit ${limit} MB) and was ended`);
       return;
