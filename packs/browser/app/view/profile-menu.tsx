@@ -120,7 +120,7 @@ export function ProfileSwitcher(props: ProfileSwitcherProps) {
 	const [asking, setAsking] = useState<string | null>(null);
 	const wrapRef = useRef<HTMLDivElement | null>(null);
 	/** Each close button by its browser, so focus can go back to it when the question is answered no. */
-	const closers = useRef(new Map<string, HTMLButtonElement | null>());
+	const closers = useRef(new Map<string, HTMLButtonElement>());
 	const identity = identityOf(profile, engine, look, profiles);
 
 	const close = useCallback(() => {
@@ -168,7 +168,10 @@ export function ProfileSwitcher(props: ProfileSwitcherProps) {
 					hold={hold}
 					disabled={busy}
 					asked={asked}
-					buttonRef={el => void closers.current.set(browserId, el)}
+					buttonRef={el => {
+						if (el === null) closers.current.delete(browserId);
+						else closers.current.set(browserId, el);
+					}}
 					onClose={() => {
 						if (ask === undefined) props.onCloseOther(browserId);
 						else setAsking(asked ? null : browserId);
