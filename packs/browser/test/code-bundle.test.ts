@@ -20,7 +20,7 @@ import { BROWSER_TEST_TIMEOUT_MS, chromePath, waitUntil } from "./fixture";
 const PACK = fileURLToPath(new URL("..", import.meta.url));
 // The runtime under test: the `node` on PATH, or the one BROWSER_TEST_NODE names (a Node of another version, to run the same proofs on it).
 const NODE = process.env.BROWSER_TEST_NODE ?? Bun.which("node");
-/** Whether this Node can read a worker's own memory (`Worker.getHeapStatistics()`, Node 22.16+ and 24): without it the watchdog falls back to the growth of the whole process, which sees touched memory only. */
+/** Whether this Node can read a worker's own memory (`Worker.getHeapStatistics()`, Node 22.16+ and 24). Without it the watchdog reads the whole process: the commit charge on Windows (through a helper), the resident set elsewhere. */
 const WORKER_MEMORY_IS_OWN = NODE !== null && spawnSync(NODE, ["-p", "typeof require('node:worker_threads').Worker.prototype.getHeapStatistics"], { encoding: "utf8" }).stdout.trim() === "function";
 const describeBundle = chromePath === undefined || NODE === null ? describe.skip : describe;
 
@@ -226,35 +226,42 @@ describeBundle("the shipped server, under Node", () => {
     expect(text(next)).toBe("42");
   }, BROWSER_TEST_TIMEOUT_MS);
 
-  test("a cell that allocates Buffers in a loop is ended by the memory watchdog within seconds: the server, its other Chrome and the next cell are untouched", async () => {
-    const server = await launch({ DIMENSION_BROWSER_CODE_MEMORY_MB: "300" });
-    // Another session with a browser of its own, which must come through.
-    const other = await server.call("browser_run", { code: `const tab = await browser.open({ name: "main", url: ${JSON.stringify(pages.url("/other"))} }); await tab.title()` }, "s2");
-    expect(text(other)).toContain("Other page");
-    const before = [...(await chromePidsByThrowaway(server.root)).values()].flatMap(chrome => chrome.all).sort();
-    const progress = join(server.root, "allocations.txt");
-    // Ten 100 MB Buffers at most, one every 50 ms, in a synchronous loop that never gives the worker a turn (the case a heap limit and a timer inside the worker both miss). With the watchdog it stops at about four: the
-    // test's own bound is that the file never shows more than seven, i.e. less than 700 MB, and the call answers well inside the budget. A runtime that can only measure the whole process sees touched memory only, so the Buffers are filled there.
-    const fill = WORKER_MEMORY_IS_OWN ? "" : ", 1";
-    const code = `const fs = await import("node:fs"); const keep = []; for (let i = 0; i < 10; i++) { keep.push(Buffer.alloc(100e6${fill})); fs.appendFileSync(${JSON.stringify(progress)}, "x"); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50); } "survived"`;
-    const began = performance.now();
-    const failed = await server.call("browser_run", { code, timeout: 60 }, "s1");
-    const tookMs = performance.now() - began;
-    const allocated = existsSync(progress) ? statSync(progress).size : 0;
-    console.error(`[code-bundle] memory watchdog (${WORKER_MEMORY_IS_OWN ? "the worker's own figure" : "whole-process growth"}, limit 300 MB): the cell was ended after ${allocated} of 10 allocations of 100 MB, the call answered in ${Math.round(tookMs)} ms`);
-    expect(failed.isError).toBe(true);
-    expect(text(failed)).toContain("CellMemoryError");
-    expect(text(failed)).toContain("the limit is 300 MB");
-    expect(text(failed)).toContain("variables were reset");
-    expect(allocated).toBeGreaterThan(0);
-    expect(allocated).toBeLessThanOrEqual(7);
-    expect(tookMs).toBeLessThan(8_000);
-    expect(isAlive(server.pid)).toBe(true);
-    expect([...(await chromePidsByThrowaway(server.root)).values()].flatMap(chrome => chrome.all).sort()).toEqual(before);
-    // The other session's page still answers, and this session has a worker again.
-    expect(text(await server.call("browser_run", { code: `await browser.tab("main").title()` }, "s2"))).toContain("Other page");
-    expect(text(await server.call("browser_run", { code: "40 + 2" }, "s1"))).toBe("42");
-  }, BROWSER_TEST_TIMEOUT_MS);
+  // The runaway as it really happens: `Buffer.alloc` is calloc, whose pages are COMMITTED at once and RESIDENT only when touched, so a loop that never touches what it allocates grows the machine's commit while the resident
+  // set stays put. Both kinds must be caught on every Node the pack supports. The one place the untouched kind is not asserted is a POSIX system whose Node cannot read a worker's own memory: there the resident set is
+  // the only figure, and untouched pages are charged to nothing (the system overcommits), so there is nothing for the watchdog to stop.
+  const memorySource = WORKER_MEMORY_IS_OWN ? "the worker's own figure" : process.platform === "win32" ? "the process's commit charge (helper)" : "the process's resident set";
+  for (const touched of [false, true]) {
+    const nothingToSee = !touched && !WORKER_MEMORY_IS_OWN && process.platform !== "win32";
+    test.skipIf(nothingToSee)(`a cell that allocates ${touched ? "touched" : "untouched"} Buffers in a loop is ended by the memory watchdog within seconds: the server, its other Chrome and the next cell are untouched`, async () => {
+      const server = await launch({ DIMENSION_BROWSER_CODE_MEMORY_MB: "300" });
+      // Another session with a browser of its own, which must come through.
+      const other = await server.call("browser_run", { code: `const tab = await browser.open({ name: "main", url: ${JSON.stringify(pages.url("/other"))} }); await tab.title()` }, "s2");
+      expect(text(other)).toContain("Other page");
+      const before = [...(await chromePidsByThrowaway(server.root)).values()].flatMap(chrome => chrome.all).sort();
+      const progress = join(server.root, "allocations.txt");
+      // Ten 100 MB Buffers at most, one every 50 ms, in a synchronous loop that never gives the worker a turn (the case a heap limit and a timer inside the worker both miss). With the watchdog it stops at about four: the
+      // test's own bound is that the file never shows more than seven, i.e. less than 700 MB, and the call answers well inside the budget.
+      const fill = touched ? ", 1" : "";
+      const code = `const fs = await import("node:fs"); const keep = []; for (let i = 0; i < 10; i++) { keep.push(Buffer.alloc(100e6${fill})); fs.appendFileSync(${JSON.stringify(progress)}, "x"); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50); } "survived"`;
+      const began = performance.now();
+      const failed = await server.call("browser_run", { code, timeout: 60 }, "s1");
+      const tookMs = performance.now() - began;
+      const allocated = existsSync(progress) ? statSync(progress).size : 0;
+      console.error(`[code-bundle] memory watchdog (${memorySource}, ${touched ? "touched" : "untouched"} Buffers, limit 300 MB): the cell was ended after ${allocated} of 10 allocations of 100 MB, the call answered in ${Math.round(tookMs)} ms`);
+      expect(failed.isError).toBe(true);
+      expect(text(failed)).toContain("CellMemoryError");
+      expect(text(failed)).toContain("the limit is 300 MB");
+      expect(text(failed)).toContain("variables were reset");
+      expect(allocated).toBeGreaterThan(0);
+      expect(allocated).toBeLessThanOrEqual(7);
+      expect(tookMs).toBeLessThan(8_000);
+      expect(isAlive(server.pid)).toBe(true);
+      expect([...(await chromePidsByThrowaway(server.root)).values()].flatMap(chrome => chrome.all).sort()).toEqual(before);
+      // The other session's page still answers, and this session has a worker again.
+      expect(text(await server.call("browser_run", { code: `await browser.tab("main").title()` }, "s2"))).toContain("Other page");
+      expect(text(await server.call("browser_run", { code: "40 + 2" }, "s1"))).toBe("42");
+    }, BROWSER_TEST_TIMEOUT_MS);
+  }
 
   test("a cell stuck in a 45 s native call does not keep the server or its Chrome alive: the host closes stdin and both are gone within 10 s", async () => {
     const server = await launch();
