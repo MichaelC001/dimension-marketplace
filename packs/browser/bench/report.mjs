@@ -1,4 +1,4 @@
-// Markdown report for a benchmark run: summary per agent, stage-by-stage comparison, per-agent detail, failures.
+// Markdown report for a benchmark run: totals, per-stage detail, failures.
 // Input is the same object run.mjs writes as raw JSON, so a report can be regenerated from any results file:
 //   node bench/report.mjs bench/results/<ts>.json   (writes <ts>.md beside it)
 import { readFileSync, writeFileSync } from "node:fs";
@@ -48,27 +48,6 @@ export function renderReport(run) {
   for (const t of totals) {
     lines.push(`| ${t.agent} | ${t.passed}/${t.stages} | ${pct(t.passed, t.stages)} | ${t.seconds.toFixed(1)} | ${t.steps} | ${t.modelCalls} | ${t.tokens} | ${t.costUsd === null ? "-" : t.costUsd.toFixed(4)} |`);
   }
-  if (totals.length) {
-    const fastest = [...totals].sort((x, y) => x.seconds - y.seconds)[0];
-    const accurate = [...totals].sort((x, y) => y.passed - x.passed || x.seconds - y.seconds)[0];
-    lines.push("", `**Fastest agent:** ${fastest.agent} (${secs(fastest.seconds)} total, ${pct(fastest.passed, fastest.stages)} accurate).`);
-    if (accurate.agent !== fastest.agent) lines.push(`**Most accurate:** ${accurate.agent} (${accurate.passed}/${accurate.stages}, ${secs(accurate.seconds)} total).`);
-  }
-
-  if (agents.length > 1) {
-    lines.push("", "## Stage by stage", "", `| stage | ${agents.join(" | ")} |`, `| --- | ${agents.map(() => "---").join(" | ")} |`);
-    // Stages are matched by position: two stages can share an id (the Network
-    // account and the Network Jobs application are both "network").
-    stages.forEach((s, i) => {
-      const cells = agents.map((a) => {
-        const r = runs.filter((x) => x.agent === a)[i];
-        return r ? `${r.success ? "pass" : "FAIL"} ${secs(r.seconds)}${r.solvedSeconds == null ? "" : ` (achieved ${secs(r.solvedSeconds)})`}` : "-";
-      });
-      const isAccount = s.account ?? (["mail", "verify", "profile"].includes(s.id) || (s.id === "network" && !stages.slice(0, i).some((p) => p.id === "network")));
-      lines.push(`| ${isAccount ? s.id : `${s.id} (job)`} | ${cells.join(" | ")} |`);
-    });
-  }
-
   for (const a of agents) {
     lines.push("", `## ${a}`, "", "| stage | result | seconds | achieved at | steps | model calls | tokens | status |", "| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |");
     for (const r of runs.filter((x) => x.agent === a)) {
