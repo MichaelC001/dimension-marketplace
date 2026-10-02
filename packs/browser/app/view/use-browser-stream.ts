@@ -10,6 +10,11 @@
 // A failure backs off and is reported; an unknown browserId is terminal (the browser was closed elsewhere). So is a call the HOST
 // refused to approve (a third-party pack's View calls are consent-gated): retrying would raise a fresh consent prompt on every
 // backoff tick, so it waits for `refresh()`, the human asking again.
+//
+// A loopback request can HANG, neither refused nor answered (a host's local-network policy that prompts no one, a pack that stopped
+// answering). Every request this file makes to the pack has a deadline, enforced by aborting its AbortController so the socket really
+// closes: a connect that never answers becomes the same "reconnecting" state and backoff as one that was refused. The open stream
+// itself has none: a page that is not changing sends nothing, and silence is how a still page looks.
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { BrowserState, Viewport } from "../../src/contracts";
 import type { PageInputEvent } from "../../src/input";
@@ -18,6 +23,10 @@ import { type BrowserClient, failureText, type StreamGrant, stateFromStream } fr
 
 const BACKOFF_START_MS = 500;
 const BACKOFF_MAX_MS = 8000;
+/** How long the stream's connect may go unanswered before it counts as a failure. `fetch` settles on the response headers, which the pack sends with its first message (the browser's state, read at once). */
+export const CONNECT_TIMEOUT_MS = 5000;
+/** How long one input POST may go unanswered. Longer than the pack's own limit on the page (INPUT_TIMEOUT_MS, 5 s, in engines/puppeteer.ts), so a page that will not take input is reported by the pack's reason, not by this clock. */
+export const INPUT_TIMEOUT_MS = 8000;
 /** A stream the pack ended (its browser closed, or its token was dropped): ask for a new one at once, but not in a spin. */
 const ENDED_RETRY_MS = 150;
 const GONE = /unknown or already closed browserId/i;
@@ -62,6 +71,34 @@ function draw(canvas: HTMLCanvasElement, bitmap: ImageBitmap): void {
 function refusalText(body: unknown, status: number): string {
 	if (typeof body === "object" && body !== null && "error" in body && typeof body.error === "string") return body.error;
 	return `The page did not take the input (HTTP ${status}).`;
+}
+
+interface Deadline {
+	/** True once the deadline itself aborted the request, as opposed to the View aborting it (hidden, unmounted, token gone). */
+	readonly expired: boolean;
+	clear(): void;
+}
+
+/** After `ms`, abort `controller`. The timer is gone when the deadline is cleared or the controller aborts for any reason, so none outlives its request. */
+function arm(controller: AbortController, ms: number): Deadline {
+	const deadline = {
+		expired: false,
+		clear: () => {
+			window.clearTimeout(timer);
+			controller.signal.removeEventListener("abort", deadline.clear);
+		},
+	};
+	const timer = window.setTimeout(() => {
+		deadline.expired = true;
+		controller.abort();
+	}, ms);
+	controller.signal.addEventListener("abort", deadline.clear);
+	return deadline;
+}
+
+/** A request that never answered, as the human is told it. */
+function silence(ms: number): string {
+	return `no answer within ${Math.round(ms / 1000)} s`;
 }
 
 export function useBrowserStream(client: BrowserClient, browserId: string | null, frozen: boolean): BrowserStream {
@@ -169,15 +206,23 @@ export function useBrowserStream(client: BrowserClient, browserId: string | null
 				}
 				const open = new AbortController();
 				controller = open;
+				/** Armed only around the connect: the open stream has no deadline. The host call just below waits on the human's consent prompt, so it has none either. */
+				let connecting: Deadline | undefined;
 				try {
 					const grant = await client.stream(browserId);
 					if (!alive) return;
 					if (open.signal.aborted) continue;
 					grantRef.current = grant;
-					const response = await fetch(`${grant.origin}/s/${grant.token}${frozen ? "?frames=0" : ""}`, { signal: open.signal, cache: "no-store" }).catch(cause => {
-						if (open.signal.aborted) throw cause;
-						throw new Error(`The live picture could not be reached (${failureText(cause)}). A host that blocks http://127.0.0.1 does this.`);
-					});
+					connecting = arm(open, CONNECT_TIMEOUT_MS);
+					let response: Response;
+					try {
+						response = await fetch(`${grant.origin}/s/${grant.token}${frozen ? "?frames=0" : ""}`, { signal: open.signal, cache: "no-store" });
+					} catch (cause) {
+						if (open.signal.aborted && !connecting.expired) throw cause;
+						throw new Error(`The live picture could not be reached (${connecting.expired ? silence(CONNECT_TIMEOUT_MS) : failureText(cause)}). A host that blocks http://127.0.0.1 does this.`);
+					} finally {
+						connecting.clear();
+					}
 					if (!response.ok || response.body === null) throw new Error(`The live picture answered ${response.status}.`);
 					setError(null);
 					setConnection("live");
@@ -194,7 +239,8 @@ export function useBrowserStream(client: BrowserClient, browserId: string | null
 					await rest(ENDED_RETRY_MS);
 				} catch (cause) {
 					if (!alive) return;
-					if (open.signal.aborted) continue;
+					// An abort the View made is not a failure; one the connect's own deadline made is.
+					if (open.signal.aborted && connecting?.expired !== true) continue;
 					grantRef.current = null;
 					const detail = failureText(cause);
 					setError(detail);
@@ -236,21 +282,33 @@ export function useBrowserStream(client: BrowserClient, browserId: string | null
 		if (element && shownRef.current) draw(element, shownRef.current);
 	}, []);
 
+	// The input POSTs in flight: an unmount ends them, so none keeps a socket or a timer after the View is gone.
+	const [posting] = useState(() => new Set<AbortController>());
+	useEffect(() => () => posting.forEach(request => request.abort()), [posting]);
+
 	const post = useCallback(async (events: readonly PageInputEvent[]) => {
 		const grant = grantRef.current;
 		if (grant === null) throw new Error("The live view is not connected yet.");
-		let response: Response;
+		const request = new AbortController();
+		posting.add(request);
+		const deadline = arm(request, INPUT_TIMEOUT_MS);
 		try {
-			response = await fetch(`${grant.origin}/i/${grant.token}`, { method: "POST", headers: { "content-type": "text/plain;charset=UTF-8" }, body: JSON.stringify(events) });
-		} catch (cause) {
-			restartRef.current();
-			throw new Error(`Input could not be sent (${failureText(cause)}).`);
+			let response: Response;
+			try {
+				response = await fetch(`${grant.origin}/i/${grant.token}`, { method: "POST", headers: { "content-type": "text/plain;charset=UTF-8" }, body: JSON.stringify(events), signal: request.signal });
+			} catch (cause) {
+				restartRef.current();
+				throw new Error(`Input could not be sent (${deadline.expired ? silence(INPUT_TIMEOUT_MS) : failureText(cause)}).`);
+			}
+			if (response.ok) return;
+			// The token is gone (the pack restarted, or the View was away long enough): a new one.
+			if (response.status === 404) restartRef.current();
+			throw new Error(refusalText(await response.json().catch(() => null), response.status));
+		} finally {
+			deadline.clear();
+			posting.delete(request);
 		}
-		if (response.ok) return;
-		// The token is gone (the pack restarted, or the View was away long enough): a new one.
-		if (response.status === 404) restartRef.current();
-		throw new Error(refusalText(await response.json().catch(() => null), response.status));
-	}, []);
+	}, [posting]);
 
 	const push = useCallback((next: BrowserState) => {
 		if (currentRef.current !== next.browserId) return;
