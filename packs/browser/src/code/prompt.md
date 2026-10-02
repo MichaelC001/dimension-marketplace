@@ -1,7 +1,7 @@
 <!--
 Copied from OMP (https://github.com/can1357/oh-my-pi, MIT), packages/coding-agent/src/prompts/tools/browser.md @ dc5f95d9e1 (Dimension omp fork).
 Copyright (c) 2025 Mario Zechner; (c) 2025-2026 Can Bölük; (c) 2026 Stencil Labs, Inc. See ../../third-party/omp/LICENSE.
-Changed for the Browser pack: Python lines removed, Eval renamed to browser_run, the sandbox sentence made true, the 25-second rule and cell state added. This comment is not sent to the model: tool.ts strips it.
+Changed for the Browser pack: Python lines removed, Eval renamed to browser_run, the sandbox sentence made true, the 25-second rule and cell state added, the person's opt-in for `app` and what `kill` ends said. This comment is not sent to the model: tool.ts strips it.
 -->
 Drive real Chromium tabs by running JavaScript with the global `browser` object; pass `code`.
 
@@ -29,7 +29,8 @@ Application modes:
 - `app.path`: spawn the specified browser or Electron executable.
 - `app.cdp_url`: attach to an existing CDP endpoint.
 - `app.relay: true`: drive the user's own logged-in Chrome; sites attribute actions to the user. `app.target` selects a tab by URL/title substring; without it, the visible tab is adopted (and `url` navigates it). Name a target or create a dedicated tab; NEVER navigate the visible tab without authorization.
-- Closing releases the managed tab. It never closes relay/CDP-attached pages. Spawned browsers remain open unless `kill: true`.
+- The person's yes comes first: `app.path`, `app.cdp_url` and `app.relay` are refused with `code_needs_consent` until the user has turned them on for this pack. If you are refused, do not retry or look for another way in; tell the user and ask them to set `DIMENSION_BROWSER_CODE_ALLOW_ATTACH=1` in the browser pack's environment and restart it, or use `browser.open()` with no `app`.
+- Closing releases the managed tab. It never closes relay/CDP-attached pages. Spawned browsers remain open unless `kill: true`, and `kill: true` ends only an application this `open` started: one that was already running is left running.
 - Idle browsers close after the idle timeout; `persist: true` on `open` keeps one live across turns (e.g. multi-step login). `browser.close` still releases explicitly.
 </instruction>
 

@@ -66,7 +66,7 @@ import {
 import { watchPageLog } from "./page-log.js";
 import { ToolError } from "../code/errors.js";
 import { type AdmittedInput, inputCall } from "../input.js";
-import { type AttachTarget, connectAttached, pickAttachedPage, relayTarget } from "./attach.js";
+import { type AttachTarget, BROWSER_PROTOCOL_TIMEOUT_MS, connectAttached, pickAttachedPage, relayTarget } from "./attach.js";
 import { environmentLaunchArgs } from "./launch-env.js";
 import { type HeadfulIdentity, identityPerBinary, type ResolvedBrowser, resolveBrowser, turnOffPasswordSaving, UA_HINTS, viewLaunchOptions, withTimeout } from "./launch.js";
 import type { TabRef } from "../code/contracts.js";
@@ -215,7 +215,8 @@ const binaryIdentities = identityPerBinary({
 	stamp: (executablePath) => statSync(executablePath).mtimeMs,
 	closeTimeoutMs: CLOSE_TIMEOUT_MS,
 	async launch(executablePath) {
-		const probe = await puppeteer.launch({ executablePath, headless: true, timeout: LAUNCH_TIMEOUT_MS, args: CHROMIUM_ARGS });
+		// The same sandbox switches as the launch it is for: as a Linux root user Chrome refuses to start without them, and a probe that cannot start fails the open before it launches.
+		const probe = await puppeteer.launch({ executablePath, headless: true, timeout: LAUNCH_TIMEOUT_MS, protocolTimeout: BROWSER_PROTOCOL_TIMEOUT_MS, args: [...CHROMIUM_ARGS, ...environmentLaunchArgs({})] });
 		return {
 			async read() {
 				const page = (await probe.pages())[0] ?? (await probe.newPage());
@@ -365,7 +366,8 @@ export async function launchReader(options: { executablePath?: string }): Promis
 		timeout: LAUNCH_TIMEOUT_MS,
 		defaultViewport: READER_VIEWPORT,
 		...(options.executablePath ? { executablePath: options.executablePath } : { channel: "chrome" as const }),
-		args: CHROMIUM_ARGS,
+		protocolTimeout: BROWSER_PROTOCOL_TIMEOUT_MS,
+		args: [...CHROMIUM_ARGS, ...environmentLaunchArgs({})],
 		ignoreDefaultArgs: ["--disable-popup-blocking"],
 	});
 	return new PuppeteerReader(browser);
