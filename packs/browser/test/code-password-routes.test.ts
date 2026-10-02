@@ -63,11 +63,20 @@ async function refusalWith(taskTools: boolean): Promise<{ refusal: string; offer
   const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
   clients.push(client);
-  const answer = await client.callTool({
+  const meta = { "ai.insodimension/caller": "model", "ai.insodimension/session": { sessionId: "s1" } };
+  let answer = await client.callTool({
     name: "browser_run",
     arguments: { code: `const tab = await browser.open({ name: "main", url: ${JSON.stringify(pages.url("/password"))} }); await tab.fill("#pw", "hunter2")` },
-    _meta: { "ai.insodimension/caller": "model", "ai.insodimension/session": { sessionId: "s1" } },
+    _meta: meta,
   });
+  // A cold Chrome may outlast one MCP call. "running: id" is a successful intermediate
+  // response, not the password refusal; follow the same resume instruction a model receives.
+  for (let remaining = 2; remaining > 0 && answer.isError !== true; remaining--) {
+    const content = (answer.content ?? []) as Array<{ type: string; text?: string }>;
+    const runId = /^running: ([^\s]+)/.exec(content.map(part => part.text ?? "").join("\n"))?.[1];
+    if (runId === undefined) break;
+    answer = await client.callTool({ name: "browser_run", arguments: { resume: runId }, _meta: meta });
+  }
   const content = (answer.content ?? []) as Array<{ type: string; text?: string }>;
   expect(answer.isError).toBe(true);
   const offered: Record<string, string[]> = {};
