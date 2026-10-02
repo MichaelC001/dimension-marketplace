@@ -3,10 +3,11 @@
  * process (fixtures-code/node-host.mjs), the tab realm attached to a real Chrome. For the tests where `bun test`'s own worker handling would get in the way (it ends any worker thread
  * with an unhandled rejection) and for the ones that need the whole init contract to arrive in a worker the way the host sends it.
  */
-import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { type ChildProcessByStdio, spawn } from "node:child_process";
 import { mkdir, rm } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
+import type { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import type { HostToWorker, RealmInit, TabHandle, WorkerToHost } from "../src/code/contracts.js";
@@ -59,7 +60,7 @@ export interface NodeWorker {
 
 /** Starts the worker with `init` merged over the minimal one, and waits for `ready`. `tab` is what the cell's `open` is answered with. */
 export async function startNodeWorker(tab: TabHandle, init: Partial<RealmInit> = {}): Promise<NodeWorker> {
-  const host: ChildProcessWithoutNullStreams = spawn("node", [join(packRoot, "test/fixtures-code/node-host.mjs"), await workerBundle(), JSON.stringify(tab), JSON.stringify(init)], {
+  const host: ChildProcessByStdio<Writable, Readable, null> = spawn("node", [join(packRoot, "test/fixtures-code/node-host.mjs"), await workerBundle(), JSON.stringify(tab), JSON.stringify(init)], {
     stdio: ["pipe", "pipe", "inherit"],
     windowsHide: true,
   });

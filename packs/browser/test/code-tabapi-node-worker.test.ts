@@ -111,15 +111,18 @@ describeWithChrome("the code worker as the product runs it (a Node worker thread
       }
     }, 60_000);
 
-    test("the picture the model sees is WebP, or JPEG when the host sets excludeWebP", async () => {
-      const mimeOf = (worker: NodeWorker, runId: string): Promise<string | undefined> =>
+    test("the picture the model sees is WebP, or JPEG when the host sets excludeWebP, and it is kept under the temp directory the worker started with", async () => {
+      const shotOf = (worker: NodeWorker, runId: string): Promise<{ mimeType: string | undefined; dest: string | undefined }> =>
         worker.cell(runId, `const tab = await browser.open({ name: "main" }); await tab.screenshot({ silent: false }); 1`).then(({ result }) => {
           if (!result.ok) throw new Error(result.error.message);
           const image = result.payload.displays.find(part => part.type === "image");
-          return image?.type === "image" ? image.mimeType : undefined;
+          return { mimeType: image?.type === "image" ? image.mimeType : undefined, dest: result.payload.screenshots[0]?.dest };
         });
-      expect(await withWorker({}, worker => mimeOf(worker, "webp"))).toBe("image/webp");
-      expect(await withWorker({ excludeWebP: true }, worker => mimeOf(worker, "jpeg"))).toBe("image/jpeg");
+      const webp = await withWorker({}, worker => shotOf(worker, "webp"));
+      expect(webp.mimeType).toBe("image/webp");
+      // The test host sends a scrubbed environment with no TEMP: on Windows `os.tmpdir()` read after that is the relative `undefined\temp`, and the file would land in the working directory.
+      expect(webp.dest?.startsWith(tmpdir())).toBe(true);
+      expect((await withWorker({ excludeWebP: true }, worker => shotOf(worker, "jpeg"))).mimeType).toBe("image/jpeg");
     }, 60_000);
   });
 });
