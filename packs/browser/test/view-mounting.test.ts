@@ -133,19 +133,28 @@ test("without jev's key a session is offered no browser_task tool; with it, thos
 	}
 });
 
-test("browser_task takes no agent: a call that passes one is refused by name and starts nothing, the same call without it starts the task", async () => {
+test("without jev's key no tool a session is offered names browser_task or a task running; with it, browser_act and browser_publish do", async () => {
+	const offered = async (key?: string) => (await (await connect(key)).client.listTools()).tools;
+	const mentions = (tools: Array<{ name: string }>) => tools.filter((tool) => /browser_task|task runs/.test(JSON.stringify(tool)) && !tool.name.startsWith("browser_task")).map((tool) => tool.name).sort();
+
+	expect(mentions(await offered("jev-key"))).toEqual(["browser_act", "browser_publish"]);
+	for (const unset of [undefined, "", "   "]) {
+		expect({ key: unset, mentions: mentions(await offered(unset)) }).toEqual({ key: unset, mentions: [] });
+	}
+});
+
+test("a browser_task call that still passes the removed `agent` is not an error and starts exactly the task asked for: the key is dropped like any unknown one", async () => {
 	const { client, calls } = await connect("jev-key");
+	const call = (extra: Record<string, unknown>) => client.callTool({ name: "browser_task", arguments: { browserId: "b".repeat(32), task: "fill the form", ...extra } });
 
 	for (const agent of ["jev", "gpt"]) {
-		const refused = await client.callTool({ name: "browser_task", arguments: { browserId: "b".repeat(32), agent, task: "fill the form" } });
-		expect(refused.isError).toBe(true);
-		expect(JSON.stringify(refused.content)).toContain("agent");
+		const started = await call({ agent });
+		// The runtime's own answer, not a refusal of the arguments.
+		expect(JSON.stringify(started.content)).toContain("task recorded");
 	}
-	expect(calls.tasked).toEqual([]);
+	await call({});
 
-	const started = await client.callTool({ name: "browser_task", arguments: { browserId: "b".repeat(32), task: "fill the form" } });
-	expect(JSON.stringify(started.content)).toContain("task recorded");
-	expect(calls.tasked).toEqual([{ task: "fill the form" }]);
+	expect(calls.tasked).toEqual([{ task: "fill the form" }, { task: "fill the form" }, { task: "fill the form" }]);
 });
 
 test("browser_view with a browserId shows that browser and opens nothing; it never repoints a held browser", async () => {

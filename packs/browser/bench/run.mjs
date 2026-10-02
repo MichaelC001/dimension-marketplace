@@ -254,9 +254,7 @@ const jobStages = sites.map((site) => ({ id: site, start: `${base}/`, reset: tru
 const stages = full ? fullStages : jobStages;
 stages.forEach((stage, i) => { stage.n = i + 1; });
 
-const models = {
-  [AGENT]: `TypeSafe Jev${process.env.TEXT_MODEL ? ` + ${process.env.TEXT_MODEL} (field values)` : ""}`,
-};
+const model = `TypeSafe Jev${process.env.TEXT_MODEL ? ` + ${process.env.TEXT_MODEL} (field values)` : ""}`;
 /** Stages that create or verify accounts, as opposed to job applications (the Network JOB stage shares the id "network"). */
 const isAccountStage = (stage) => stage.account === true;
 
@@ -302,7 +300,7 @@ const startedAt = new Date();
 async function runStage(browserId, stage, rec = null) {
   const label = `${AGENT}/${stage.id}`;
   if (stage.reset) await resetWorld();
-  const run = { agent: AGENT, stage: stage.id, success: false, seconds: 0, solvedSeconds: null, status: "error", stepCount: 0, usage: null, summary: "", error: null, reason: "", check: null };
+  const run = { stage: stage.id, success: false, seconds: 0, solvedSeconds: null, status: "error", stepCount: 0, usage: null, summary: "", error: null, reason: "", check: null };
   const t0 = performance.now();
   // The world is polled on every step so the report can show when the stage was actually achieved,
   // separately from when the agent declared itself done.
@@ -366,7 +364,7 @@ async function runStage(browserId, stage, rec = null) {
 
 const stamp = startedAt.toISOString().replace(/[:.]/g, "-");
 const resultsDir = fileURLToPath(new URL("./results/", import.meta.url));
-const videos = {};
+let video = null;
 
 console.log(`\n## ${AGENT}`);
 if (full) await resetWorld();
@@ -376,11 +374,11 @@ try {
   browserId = (await call("browser_open", { profile: `bench-${AGENT}`, engine: opts.engine, url: `${base}/` })).browserId;
 } catch (error) {
   console.error(`[bench] ${AGENT}: browser_open failed: ${error.message}`);
-  for (const stage of stages) runs.push({ agent: AGENT, stage: stage.id, success: false, seconds: 0, status: "error", error: error.message, reason: "browser_open failed", stepCount: 0, usage: null });
+  for (const stage of stages) runs.push({ stage: stage.id, success: false, seconds: 0, status: "error", error: error.message, reason: "browser_open failed", stepCount: 0, usage: null });
 }
 if (browserId) {
   const rec = opts.record
-    ? startRecorder({ call, browserId, dir: join(resultsDir, `${stamp}-${AGENT}-frames`), title: `${AGENT}  ·  ${models[AGENT]}` })
+    ? startRecorder({ call, browserId, dir: join(resultsDir, `${stamp}-${AGENT}-frames`), title: `${AGENT}  ·  ${model}` })
     : null;
   for (const stage of stages) {
     const run = await runStage(browserId, stage, rec);
@@ -402,7 +400,7 @@ if (browserId) {
     const file = join(resultsDir, `${stamp}-${AGENT}.mp4`);
     try {
       if (await rec.finish(file)) {
-        videos[AGENT] = `bench/results/${stamp}-${AGENT}.mp4`;
+        video = `bench/results/${stamp}-${AGENT}.mp4`;
         console.log(`[bench] ${AGENT}: video ${file}`);
       }
     } catch (error) {
@@ -438,18 +436,18 @@ sitesServer?.close();
 // ---------------------------------------------------------------- report
 
 const finishedAt = new Date();
-console.log("\n| agent | passed | seconds | steps | model calls | tokens |\n| --- | ---: | ---: | ---: | ---: | ---: |");
-const total = summarize(runs, AGENT);
-console.log(`| ${total.agent} | ${total.passed}/${total.stages} | ${total.seconds.toFixed(1)} | ${total.steps} | ${total.modelCalls} | ${total.tokens} |`);
+console.log("\n| passed | seconds | steps | model calls | tokens |\n| ---: | ---: | ---: | ---: | ---: |");
+const total = summarize(runs);
+console.log(`| ${total.passed}/${total.stages} | ${total.seconds.toFixed(1)} | ${total.steps} | ${total.modelCalls} | ${total.tokens} |`);
 
 const outDir = new URL("./results/", import.meta.url);
 await mkdir(outDir, { recursive: true });
 const jsonFile = new URL(`${stamp}.json`, outDir);
 const mdFile = new URL(`${stamp}.md`, outDir);
 const raw = {
-  scenario: opts.scenario, startedAt: startedAt.toISOString(), finishedAt: finishedAt.toISOString(), base, options: opts, models,
-  applicant: full ? mailAddress : a.email, agents: [AGENT], stages: stages.map(({ id, account, start, task }) => ({ id, account: account === true, start, task })), runs,
-  rawFile: `bench/results/${stamp}.json`, videos,
+  scenario: opts.scenario, startedAt: startedAt.toISOString(), finishedAt: finishedAt.toISOString(), base, options: opts, model,
+  applicant: full ? mailAddress : a.email, stages: stages.map(({ id, account, start, task }) => ({ id, account: account === true, start, task })), runs,
+  rawFile: `bench/results/${stamp}.json`, video,
 };
 await writeFile(jsonFile, JSON.stringify(raw, null, 2));
 await writeFile(mdFile, renderReport(raw));

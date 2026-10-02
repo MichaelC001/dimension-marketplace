@@ -99,7 +99,7 @@ import { type AdmittedInput, admitInput } from "./input.js";
 import { type Publication, cancel, confirm, isPending, prepare, publishRecord, requirePending, validateMode, validateRecipe, waitSettled } from "./publish.js";
 import { blockedReason, DEFAULT_READ_CHARS, MAX_READ_CHARS, READ_TIMEOUT_MS, readPolicy, TIMEOUT_REASON } from "./read.js";
 import { ActionNotDispatched, fail, ProfileStore, validateProfile } from "./store.js";
-import { type RunningWorker, startWorker } from "./task.js";
+import { type RunningWorker, releaseSpare, startWorker } from "./task.js";
 
 // ---------------------------------------------------------------------------
 // Bounds. Every unbounded thing in a long-lived runtime is a leak or a weapon.
@@ -603,6 +603,8 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		this.connectionListeners.clear();
 		this.profileWatcher?.close();
 		this.profileWatcher = undefined;
+		// The spare task worker waiting for the next task belongs to no browser: it goes with the runtime.
+		releaseSpare();
 		// Let in-flight launches finish first: a browser born after we started
 		// disposing would otherwise outlive the runtime holding its lock.
 		await Promise.allSettled(this.opening.values());

@@ -20,6 +20,8 @@ const CANCEL_GRACE_MS = 15_000;
 /** After the worker exits, how long its stdout may take to drain before the result is settled without `close`. */
 const EXIT_DRAIN_MS = 2_000;
 const STDERR_KEEP = 4_096;
+/** An unused pre-spawned worker is let go after this long, returning its memory. */
+const SPARE_IDLE_MS = 10 * 60_000;
 
 export interface WorkerStep { n: number; action: string; url: string; elapsedMs: number; usage: TaskUsage }
 export interface WorkerResult { status: Exclude<TaskStatus, "running">; summary: string; steps: number; elapsedMs: number; usage: TaskUsage }
@@ -36,6 +38,11 @@ export interface RunningWorker {
   readonly done: Promise<WorkerResult>;
   /** Ask the worker to stop between steps; force-kill after a grace period. */
   cancel(): void;
+}
+
+/** jev's key: its task tools are offered, and a spare worker kept, only where it is set (doc 77 §6). */
+export function jevKeyConfigured(): boolean {
+  return Boolean(process.env.TYPESAFE_API_KEY?.trim());
 }
 
 function interpreter(): string {
@@ -64,10 +71,7 @@ function usageOf(line: Record<string, unknown>): TaskUsage {
 
 const FINAL: Record<string, true> = { done: true, blocked: true, failed: true, cancelled: true };
 
-/** The one backend the worker speaks for; `python/dim_browser_bridge/__main__.py` refuses any other. */
-const WORKER_AGENT = "jev";
-
-/** A worker process whose stderr is being kept. */
+/** A worker process whose stderr is already being kept (a spare must not block on a full pipe). */
 interface Spawned {
   child: ChildProcessWithoutNullStreams;
   stderr(): string;
@@ -94,8 +98,78 @@ function spawnWorker(): Spawned {
   return { child, stderr: () => stderr };
 }
 
+/**
+ * One pre-spawned worker, waiting on stdin, so a jev task's clock starts
+ * without the interpreter's start-up. jev's harness reads its env at import
+ * time, so nothing of it can be loaded ahead: start-up is all this saves.
+ * Kept only where jev's key is set and only once tasks are in use: the first
+ * task spawns the next spare, every later one takes it and spawns its
+ * successor. Unused, it exits after SPARE_IDLE_MS (the same ten minutes a
+ * throwaway browser may sit idle), and the runtime lets it go when disposed.
+ */
+let spare: { worker: Spawned; env: string; idle: NodeJS.Timeout } | undefined;
+
+/** The spare is only good for the environment it was spawned in (interpreter, keys, PYTHONPATH). */
+const envKey = (): string => JSON.stringify(process.env);
+
+/** An idle spare must never keep the server process alive; a running task must. */
+function hold(worker: Spawned, held: boolean): void {
+  const { child } = worker;
+  for (const handle of [child, child.stdin, child.stdout, child.stderr] as Array<{ ref?: () => void; unref?: () => void }>) {
+    (held ? handle.ref : handle.unref)?.call(handle);
+  }
+}
+
+function detachSpare(): typeof spare {
+  const detached = spare;
+  spare = undefined;
+  if (detached) clearTimeout(detached.idle);
+  return detached;
+}
+
+function takeSpare(): Spawned | undefined {
+  const taken = detachSpare();
+  if (!taken) return undefined;
+  const { child } = taken.worker;
+  if (child.pid !== undefined && child.exitCode === null && child.signalCode === null && taken.env === envKey()) {
+    hold(taken.worker, true);
+    return taken.worker;
+  }
+  child.stdin.end();
+  return undefined;
+}
+
+function keepSpare(): void {
+  if (spare || !jevKeyConfigured()) return;
+  let worker: Spawned;
+  try {
+    worker = spawnWorker();
+  } catch {
+    return; // no interpreter: the next task reports it
+  }
+  const idle = setTimeout(() => {
+    if (spare?.worker === worker) spare = undefined;
+    worker.child.stdin.end();
+  }, SPARE_IDLE_MS);
+  idle.unref();
+  worker.child.once("exit", () => {
+    if (spare?.worker === worker) {
+      clearTimeout(spare.idle);
+      spare = undefined;
+    }
+  });
+  hold(worker, false);
+  spare = { worker, env: envKey(), idle };
+}
+
+/** Let the waiting spare go: a runtime that is disposed leaves no worker running behind it. */
+export function releaseSpare(): void {
+  detachSpare()?.worker.child.stdin.end();
+}
+
 export function startWorker(job: WorkerJob, onStep: (step: WorkerStep) => void): RunningWorker {
-  const { child, stderr } = spawnWorker();
+  const { child, stderr } = takeSpare() ?? spawnWorker();
+  keepSpare();
   let result: WorkerResult | undefined;
   const lines = createInterface({ input: child.stdout });
   lines.on("line", (text) => {
@@ -126,7 +200,7 @@ export function startWorker(job: WorkerJob, onStep: (step: WorkerStep) => void):
   // The worker's pipes already carry their 'error' listeners (spawnWorker); the
   // result comes from `close` below either way.
   lines.on("error", () => undefined);
-  child.stdin.write(`${JSON.stringify({ agent: WORKER_AGENT, ...job })}\n`);
+  child.stdin.write(`${JSON.stringify(job)}\n`);
 
   let killTimer: NodeJS.Timeout | undefined;
   const done = new Promise<WorkerResult>((resolve) => {

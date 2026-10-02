@@ -1,6 +1,6 @@
 """Task worker entry point: `python -m dim_browser_bridge`.
 
-stdin:  one JSON request line {"agent","cdpUrl","task","maxSteps","startUrl"[,"credential":{"origin","password"}]};
+stdin:  one JSON request line {"cdpUrl","task","maxSteps","startUrl"[,"credential":{"origin","password"}]};
         stdin then stays open, and EOF on it is a cancel request. `credential` is never echoed: not to
         stdout, stderr, a step or the result.
 stdout: JSON lines only — `step` lines with cumulative usage, then exactly one `result` line.
@@ -12,8 +12,6 @@ import os
 import sys
 import threading
 import time
-
-AGENTS = ("jev",)
 
 
 class Report:
@@ -42,8 +40,6 @@ def parse(line):
     request = json.loads(line)
     if not isinstance(request, dict):
         raise ValueError("expected one JSON object line")
-    if request.get("agent") not in AGENTS:
-        raise ValueError(f"agent must be one of {', '.join(AGENTS)}")
     for key in ("cdpUrl", "task"):
         if not isinstance(request.get(key), str) or not request[key].strip():
             raise ValueError(f"{key} must be a non-empty string")
