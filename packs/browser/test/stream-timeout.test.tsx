@@ -18,8 +18,8 @@ import type { BrowserState } from "../src/contracts";
 import { BrowserApp } from "../app/view/browser-app";
 import type { BrowserClient, ToolMount } from "../app/view/browser-client";
 import { CONNECT_TIMEOUT_MS, INPUT_TIMEOUT_MS, STREAM_SILENCE_MS, type BrowserStream, useBrowserStream } from "../app/view/use-browser-stream";
-import { encode, KIND_PICTURE, KIND_STATE } from "../src/wire";
-import { HEARTBEAT_MS } from "../src/stream";
+import { encode, KIND_PICTURE, KIND_STATE, PING } from "../src/wire";
+import { HEARTBEAT_MS, LiveChannel, type LiveSource } from "../src/stream";
 import { mount, unmountAll } from "./dom-harness";
 
 const LIVE: BrowserState = {
@@ -60,6 +60,8 @@ class Loopback {
 	/** `GET /s/<token>`: accepted and never answered, or answered with the browser's state (and a picture) on a stream that stays open. */
 	mode: "hang" | "answer" = "hang";
 	pictures = true;
+	/** Whether this pack pings the Views that ask it to: a pack older than the ping is `false`. */
+	pings = true;
 	/** `POST /i/<token>`: never answered, taken, or refused with a reason. */
 	input: "hang" | "ok" | "refuse" = "hang";
 	streamRequests = 0;
@@ -105,9 +107,9 @@ class Loopback {
 		return promise;
 	}
 
-	/** The browser's state, then (unless `pictures` is off) one picture, on a body that then stays open. */
+	/** The pack's greeting (a ping, if it pings), the browser's state, then (unless `pictures` is off) one picture, on a body that then stays open. */
 	#answer(): Response {
-		const parts = encode(KIND_STATE, RECOVERED);
+		const parts = [...(this.pings ? PING : []), ...encode(KIND_STATE, RECOVERED)];
 		if (this.pictures) parts.push(...encode(KIND_PICTURE, { id: "p1", viewport: { width: 800, height: 600 }, at: 0 }, new Uint8Array([1, 2, 3])));
 		let self: ReadableStreamDefaultController<Uint8Array> | undefined;
 		const body = new ReadableStream<Uint8Array>({
@@ -138,9 +140,18 @@ class Loopback {
 		for (const controller of this.#open.splice(0)) controller.close();
 	}
 
-	/** The pack's heartbeat: the browser's state again, on every stream it is serving. */
+	/** The pack's heartbeat: a ping on every stream it is serving (none if it is a pack that does not ping). */
 	beat(): void {
-		for (const controller of this.#open) for (const part of encode(KIND_STATE, RECOVERED)) if (part.length > 0) controller.enqueue(part);
+		if (this.pings) this.#emit(PING);
+	}
+
+	/** A frame of a kind this View does not know, as a newer pack might send, on every stream it is serving. */
+	emitUnknown(): void {
+		this.#emit(encode(99, { from: "a newer pack" }, new Uint8Array([7, 7])));
+	}
+
+	#emit(parts: readonly Uint8Array[]): void {
+		for (const controller of this.#open) for (const part of parts) if (part.length > 0) controller.enqueue(part);
 	}
 
 	async close(): Promise<void> {
@@ -220,13 +231,30 @@ class Grants {
 	gate: Promise<void> | undefined;
 	/** When set, the host's answer is this failure. */
 	fail: string | undefined;
-	constructor(private readonly origin: string) {}
+	constructor(
+		private readonly origin: string,
+		private readonly token = "t".repeat(32),
+	) {}
 	stream = async (_browserId: string) => {
 		this.calls += 1;
 		await this.gate;
 		if (this.fail !== undefined) throw new Error(this.fail);
-		return { origin: this.origin, token: "t".repeat(32) };
+		return { origin: this.origin, token: this.token };
 	};
+}
+
+/** A browser that never changes, for a test that wants the pack's real listener in front of the View. */
+class QuietBrowser implements LiveSource {
+	watchFrames(): () => void {
+		return () => {};
+	}
+	viewing(): () => void {
+		return () => {};
+	}
+	async liveState(): Promise<BrowserState> {
+		return LIVE;
+	}
+	async input(): Promise<void> {}
 }
 
 function fakeCanvas(): { element: HTMLCanvasElement; draws: unknown[] } {
@@ -236,9 +264,12 @@ function fakeCanvas(): { element: HTMLCanvasElement; draws: unknown[] } {
 }
 
 const loopbacks: Loopback[] = [];
+const channels: LiveChannel[] = [];
 const realBitmap = Object.getOwnPropertyDescriptor(globalThis, "createImageBitmap");
 /** The clock the sockets, the settling and this file's own waits run on, whatever a test installs. */
 const { setTimeout: realSetTimeout, clearTimeout: realClearTimeout } = globalThis;
+const realPerformanceNow = performance.now;
+let blocked = 0;
 
 beforeEach(() => {
 	// Bun has no image decoder; a picture is "decoded" to a bitmap the fake canvas records.
@@ -248,10 +279,19 @@ beforeEach(() => {
 afterEach(async () => {
 	await unmountAll();
 	Object.assign(globalThis, { setTimeout: realSetTimeout, clearTimeout: realClearTimeout });
+	performance.now = realPerformanceNow;
+	blocked = 0;
 	if (realBitmap) Object.defineProperty(globalThis, "createImageBitmap", realBitmap);
 	else Reflect.deleteProperty(globalThis, "createImageBitmap");
 	for (const loopback of loopbacks.splice(0)) await loopback.close();
+	for (const channel of channels.splice(0)) await channel.close();
 });
+
+/** The View's own thread was blocked for `ms` (a host UI freeze, a long GC): the clock it reads moves on, though no timer of its ran meanwhile. */
+function blockThread(ms: number): void {
+	blocked += ms;
+	performance.now = () => realPerformanceNow.call(performance) + blocked;
+}
 
 function listener(): Loopback {
 	const loopback = new Loopback();
@@ -279,10 +319,10 @@ async function closedOrigin(): Promise<string> {
 	return closed.origin;
 }
 
-/** The hook mounted with no browser yet, its timers virtual, a fake canvas given; `start()` binds it to browser "b1". `origin` is where the host says the listener is (default: the test's own). */
-async function scenario(options: { origin?: string } = {}) {
+/** The hook mounted with no browser yet, its timers virtual, a fake canvas given; `start()` binds it to browser "b1". `origin` and `token` are where the host says the listener is and what it lets the View open (default: the test's own loopback). */
+async function scenario(options: { origin?: string; token?: string } = {}) {
 	const loopback = listener();
-	const grants = new Grants(options.origin ?? loopback.origin);
+	const grants = new Grants(options.origin ?? loopback.origin, options.token);
 	const probe = new Probe();
 	await mount(<Harness client={grants as unknown as BrowserClient} probe={probe} />);
 	const clock = new VirtualClock();
@@ -297,7 +337,7 @@ async function scenario(options: { origin?: string } = {}) {
 		canvas,
 		start: () => act(async () => probe.setId("b1")),
 		advance: (ms: number) => act(async () => clock.advance(ms)),
-		/** A still page for `ms` of virtual time: every HEARTBEAT_MS the pack repeats the state, and the View has heard it before time moves on. */
+		/** A still page for `ms` of virtual time: every HEARTBEAT_MS the pack pings, and the View has heard it before time moves on. */
 		still: async (ms: number) => {
 			for (let passed = 0; passed < ms; passed += HEARTBEAT_MS) {
 				await act(async () => clock.advance(HEARTBEAT_MS));
@@ -494,7 +534,7 @@ describe("the human's input", () => {
 		// Fails if the POST has no deadline: input would hang for good.
 		expect(clock.pending).toEqual([STREAM_SILENCE_MS, INPUT_TIMEOUT_MS]);
 
-		// The pack keeps repeating its state, so the POST's deadline is the only one in play.
+		// The pack keeps pinging, so the POST's deadline is the only one in play.
 		await still(INPUT_TIMEOUT_MS - HEARTBEAT_MS);
 		await advance(HEARTBEAT_MS);
 		expect(await outcome).toBe("Input could not be sent (no answer within 8 s).");
@@ -542,7 +582,7 @@ describe("the human's input", () => {
 		loopback.mode = "answer";
 		loopback.input = "ok";
 		await start();
-		await until("the stream is live", () => probe.now.connection === "live");
+		await until("the stream is live and under its silence watch", () => probe.now.connection === "live" && clock.pending.length === 1);
 
 		expect(await (await send()).outcome).toBe("sent");
 		// The POST's own deadline is gone; only the stream's silence watch remains.
@@ -556,7 +596,7 @@ describe("the human's input", () => {
 		loopback.mode = "answer";
 		loopback.input = "refuse";
 		await start();
-		await until("the stream is live", () => probe.now.connection === "live");
+		await until("the stream is live and under its silence watch", () => probe.now.connection === "live" && clock.pending.length === 1);
 
 		expect(await (await send()).outcome).toBe("a task owns the page");
 		expect(clock.pending).toEqual([STREAM_SILENCE_MS]);
@@ -600,7 +640,7 @@ describe("an open stream that goes quiet", () => {
 		expect(grants.calls).toBe(2);
 	}, 20_000);
 
-	test("a still page whose pack keeps repeating the state never reconnects however long it sits, and the repeats cost no render", async () => {
+	test("a still page whose pack keeps pinging never reconnects however long it sits, and the pings cost no render", async () => {
 		const { loopback, grants, probe, clock, start, still } = await scenario();
 		loopback.mode = "answer";
 		await start();
@@ -620,6 +660,115 @@ describe("an open stream that goes quiet", () => {
 		// The repeat is the state the View already shows: dropped before React sees it.
 		expect(probe.renders).toBe(renders);
 	}, 30_000);
+
+	test("a pack that never pings (one older than this View) is trusted as it always was: no silence watch is armed, however long the stream sits quiet", async () => {
+		const { loopback, grants, probe, clock, start, advance } = await scenario();
+		loopback.mode = "answer";
+		loopback.pings = false;
+		await start();
+		await until("the stream paints", () => probe.now.connection === "live" && probe.now.picture !== null);
+		await quiet();
+		// Fails if the View judges silence without a ping to measure it by: every still page on an older pack would reconnect every six seconds.
+		expect(clock.pending).toEqual([]);
+		await advance(10 * 60_000);
+		await quiet();
+		expect(probe.now.connection).toBe("live");
+		expect(loopback.streamRequests).toBe(1);
+		expect(grants.calls).toBe(1);
+	});
+
+	test("any frame is proof of life, one this View does not know included, and none of them costs a render", async () => {
+		const { loopback, grants, probe, clock, start, advance } = await scenario();
+		loopback.mode = "answer";
+		await start();
+		await until("the stream paints", () => probe.now.connection === "live" && probe.now.picture !== null);
+		await quiet();
+		const renders = probe.renders;
+
+		// A newer pack's frame every five seconds for a virtual minute: never a ping, never a state, yet ten times the silence deadline passes.
+		for (let at = 0; at < 12; at += 1) {
+			await advance(STREAM_SILENCE_MS - 1_000);
+			const heard = clock.requested.length;
+			loopback.emitUnknown();
+			await until("the View hears it", () => clock.requested.length > heard);
+		}
+		// Fails if only frames the View knows push the deadline back, or an unknown one is an error that ends the stream.
+		expect(probe.now.connection).toBe("live");
+		expect(probe.now.error).toBeNull();
+		expect(loopback.streamRequests).toBe(1);
+		expect(grants.calls).toBe(1);
+		expect(probe.renders).toBe(renders);
+	}, 20_000);
+
+	test("a silence timer that fires late because this View's own thread was blocked gives the stream one more window to deliver what was waiting, and does not cut a healthy stream", async () => {
+		const { loopback, grants, probe, clock, start, advance } = await scenario();
+		loopback.mode = "answer";
+		await start();
+		await until("the stream paints", () => probe.now.connection === "live" && probe.now.picture !== null);
+		expect(clock.pending).toEqual([STREAM_SILENCE_MS]);
+		const heard = clock.requested.length;
+
+		// The thread is blocked for twenty seconds; the pack's ping is waiting in the socket, unread, behind the overdue timer.
+		loopback.beat();
+		blockThread(20_000);
+		await advance(STREAM_SILENCE_MS);
+		// Fails if a late timer aborts at once: a host freeze would flash 'Reconnecting' and make a fresh host call over a stream that never stopped.
+		expect(loopback.streamsGone).toBe(0);
+		expect(clock.pending).toEqual([STREAM_SILENCE_MS]);
+		await until("the waiting ping is read", () => clock.requested.length > heard + 1);
+		await quiet();
+		expect(probe.now.connection).toBe("live");
+		expect(probe.now.error).toBeNull();
+		expect(loopback.streamRequests).toBe(1);
+		expect(grants.calls).toBe(1);
+	}, 20_000);
+
+	test("a late silence timer forgives a stalled View once: if nothing arrives in the extra window, the stream is cut like any other silence", async () => {
+		const { loopback, probe, start, advance } = await scenario();
+		loopback.mode = "answer";
+		await start();
+		await until("the stream paints", () => probe.now.connection === "live" && probe.now.picture !== null);
+
+		blockThread(20_000);
+		await advance(STREAM_SILENCE_MS);
+		expect(loopback.streamsGone).toBe(0);
+		await quiet();
+		expect(probe.now.connection).toBe("live");
+
+		// Nothing came: the pack really is silent. Fails if the forgiveness can be spent again and again.
+		await advance(STREAM_SILENCE_MS);
+		await until("the View says it is reconnecting", () => probe.now.connection === "reconnecting");
+		expect(probe.now.error).toBe("The live picture went quiet (nothing arrived for 6 s).");
+		await until("the pack sees the stalled stream's socket close", () => loopback.streamsGone === 1);
+	}, 20_000);
+
+	test("a connect timer that fires late because this View's own thread was blocked is not a failed connect either: the pack's answer, read a moment later, goes live", async () => {
+		const { loopback, probe, clock, start, advance } = await scenario();
+		await start();
+		await until("the stream request reaches the pack", () => loopback.streamRequests === 1);
+
+		blockThread(20_000);
+		await advance(CONNECT_TIMEOUT_MS);
+		// Fails if a late connect timer is counted as a failure: the ladder, the banner and a second connect for an answer that was already on its way.
+		expect(probe.now.connection).toBe("connecting");
+		expect(clock.pending).toEqual([CONNECT_TIMEOUT_MS]);
+		loopback.mode = "answer";
+		loopback.answerHeldStreams();
+		await until("the stream paints", () => probe.now.connection === "live" && probe.now.picture !== null);
+		expect(loopback.streamRequests).toBe(1);
+		expect(probe.now.error).toBeNull();
+	}, 20_000);
+
+	test("a View on the real listener is held to the silence watch from the pack's first ping: what it asks for and what the pack answers agree", async () => {
+		const channel = new LiveChannel(new QuietBrowser(), { stateIntervalMs: 15 });
+		channels.push(channel);
+		const { origin, token } = await channel.mint("b1");
+		const { probe, clock, start } = await scenario({ origin, token });
+		await start();
+		// Fails if the View does not ask the pack for pings (`?ping=1`), or the pack does not greet a View that did: no watch would ever be armed.
+		await until("the stream is live and under its silence watch", () => probe.now.connection === "live" && clock.pending.includes(STREAM_SILENCE_MS));
+		expect(probe.now.state?.browserId).toBe("b1");
+	});
 });
 
 describe("a View that is torn down", () => {

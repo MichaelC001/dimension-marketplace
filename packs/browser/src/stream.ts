@@ -2,7 +2,7 @@
  * The Browser View's direct channel (doc 77 §3): one loopback listener that streams a browser's live pictures and
  * state out, and takes the human's mouse and keys in, so neither rides the MCP tool-call lane.
  *
- *   GET  /s/<token>[?frames=0]   pictures (JPEG) and state, framed by wire.ts; `frames=0`: state only
+ *   GET  /s/<token>[?frames=0][&ping=1]   pictures (JPEG) and state, framed by wire.ts; `frames=0`: state only; `ping=1`: this View understands pings
  *   POST /i/<token>              one batch of input events (JSON), answered { ok } or { ok: false, code, error }
  *
  * The listener exists only while a View holds a token: it opens on the first `mint`, and closes with the last token. A token names ONE
@@ -15,7 +15,7 @@ import type { AddressInfo } from "node:net";
 import type { BrowserState } from "./contracts.js";
 import type { LiveFrame } from "./engines/types.js";
 import { BrowserRuntimeError } from "./store.js";
-import { encode, KIND_PICTURE, KIND_STATE } from "./wire.js";
+import { encode, KIND_PICTURE, KIND_STATE, PING, PING_QUERY } from "./wire.js";
 
 /** What the channel needs of the runtime. The runtime's own `watchFrames`, `liveState` and `input` are exactly these. */
 export interface LiveSource {
@@ -34,8 +34,6 @@ export interface LiveChannelOptions {
 	tokenIdleMs?: number;
 	/** How often a browser's state is read while a View watches. */
 	stateIntervalMs?: number;
-	/** How long a View may be handed nothing before it is told the browser's (unchanged) state again. */
-	heartbeatMs?: number;
 	/** The most live tokens one browser holds; minting past it drops the oldest. */
 	maxTokensPerBrowser?: number;
 }
@@ -43,10 +41,11 @@ export interface LiveChannelOptions {
 const TOKEN_IDLE_MS = 60_000;
 const STATE_INTERVAL_MS = 250;
 /**
- * A View that has been handed nothing for this long is sent the browser's state again, unchanged. A page that is not changing sends nothing
- * of its own, so without this a still page and a stream that has stalled (this process wedged with the socket still open) look the same to
- * the View. The View reads silence of several times this (app/view/use-browser-stream.ts STREAM_SILENCE_MS) as a dead stream; both ship in
- * one pack version. The repeat is the identical bytes, which the View drops without a render.
+ * A View that asked for pings (`?ping=1`) and has been handed nothing for this long is sent a ping: nine bytes that say the pack is alive.
+ * A page that is not changing sends nothing of its own, so without this a still page and a stream that has stalled (this process wedged with
+ * the socket still open) look the same to the View. The View reads silence of several times this (app/view/use-browser-stream.ts
+ * STREAM_SILENCE_MS) as a dead stream. It is measured per View, from the last byte written to THAT View, so a View that is handed pictures is
+ * never pinged; and it ticks with the room's timer, not with the state read, so a read stuck on a wedged page does not silence the pings.
  */
 export const HEARTBEAT_MS = 2_000;
 const MAX_TOKENS_PER_BROWSER = 16;
@@ -75,13 +74,19 @@ class Client {
 	#busy = false;
 	#state: Parts | undefined;
 	#picture: Parts | undefined;
+	/** A ping is waiting to go out: set at join (it is the first thing a pinging View hears) and by the heartbeat. */
+	#ping: boolean;
 	/** When this View was last handed bytes, or joined (`performance.now()`): what a heartbeat measures its quiet from. */
 	lastWrite = performance.now();
 
 	constructor(
 		readonly response: http.ServerResponse,
 		readonly wantsPictures: boolean,
-	) {}
+		/** The View said it understands pings (`?ping=1`); only such a View is ever sent one. */
+		readonly wantsPing: boolean,
+	) {
+		this.#ping = wantsPing;
+	}
 
 	offerState(message: Parts): void {
 		this.#state = message;
@@ -90,6 +95,13 @@ class Client {
 
 	offerPicture(message: Parts): void {
 		this.#picture = message;
+		this.#flush();
+	}
+
+	/** The heartbeat. A View whose socket is still taking the last write is not idle, so it is not pinged; a ping never waits behind another. */
+	offerPing(): void {
+		if (this.#busy) return;
+		this.#ping = true;
 		this.#flush();
 	}
 
@@ -104,7 +116,9 @@ class Client {
 	#flush(): void {
 		const { response } = this;
 		if (this.#busy || response.destroyed || response.writableEnded) return;
-		const chunks = [this.#state, this.#picture].flatMap((message) => (message === undefined ? [] : message.filter((part) => part.length > 0)));
+		const waiting = [this.#ping ? PING : undefined, this.#state, this.#picture];
+		const chunks = waiting.flatMap((message) => (message === undefined ? [] : message.filter((part) => part.length > 0)));
+		this.#ping = false;
 		this.#state = undefined;
 		this.#picture = undefined;
 		if (chunks.length === 0) return;
@@ -136,7 +150,6 @@ class Room {
 		readonly browserId: string,
 		private readonly source: LiveSource,
 		private readonly intervalMs: number,
-		private readonly heartbeatMs: number,
 		/** The last View left. */
 		private readonly onEmpty: (room: Room) => void,
 		/** The browser is closed. */
@@ -153,7 +166,10 @@ class Room {
 			this.onClosed(this);
 			return;
 		}
-		this.#timer ??= setInterval(() => void this.#sample(), this.intervalMs);
+		this.#timer ??= setInterval(() => {
+			this.#beat();
+			void this.#sample();
+		}, this.intervalMs);
 		if (client.wantsPictures) this.#watch();
 		if (this.#last !== undefined) client.offerState(this.#last.message);
 		else void this.#sample();
@@ -214,11 +230,7 @@ class Room {
 		try {
 			const state = await this.source.liveState(this.browserId);
 			const json = JSON.stringify(state);
-			const last = this.#last;
-			if (last !== undefined && json === last.json) {
-				this.#beat(last.message);
-				return;
-			}
+			if (this.#last !== undefined && json === this.#last.json) return;
 			const message = encode(KIND_STATE, state);
 			this.#last = { json, message };
 			for (const client of this.clients) client.offerState(message);
@@ -230,10 +242,10 @@ class Room {
 		}
 	}
 
-	/** The state has not changed: a View that has been handed nothing for the heartbeat is told it again. */
-	#beat(message: Parts): void {
+	/** A View that asked for pings and has been handed nothing for the heartbeat gets one. Not tied to the state read: that can be stuck on a wedged page while this process is perfectly alive. */
+	#beat(): void {
 		const now = performance.now();
-		for (const client of this.clients) if (now - client.lastWrite >= this.heartbeatMs) client.offerState(message);
+		for (const client of this.clients) if (client.wantsPing && now - client.lastWrite >= HEARTBEAT_MS) client.offerPing();
 	}
 }
 
@@ -254,7 +266,6 @@ function reply(response: http.ServerResponse, status: number, body: unknown): vo
 export class LiveChannel {
 	readonly #source: LiveSource;
 	readonly #tokenIdleMs: number;
-	readonly #heartbeatMs: number;
 	readonly #stateIntervalMs: number;
 	readonly #maxTokens: number;
 	/** In minting order, so the oldest is first. */
@@ -268,7 +279,6 @@ export class LiveChannel {
 	constructor(source: LiveSource, options: LiveChannelOptions = {}) {
 		this.#source = source;
 		this.#tokenIdleMs = options.tokenIdleMs ?? TOKEN_IDLE_MS;
-		this.#heartbeatMs = options.heartbeatMs ?? HEARTBEAT_MS;
 		this.#stateIntervalMs = options.stateIntervalMs ?? STATE_INTERVAL_MS;
 		this.#maxTokens = options.maxTokensPerBrowser ?? MAX_TOKENS_PER_BROWSER;
 	}
@@ -351,7 +361,6 @@ export class LiveChannel {
 				browserId,
 				this.#source,
 				this.#stateIntervalMs,
-				this.#heartbeatMs,
 				(empty) => {
 					if (this.#rooms.get(empty.browserId) === empty) this.#rooms.delete(empty.browserId);
 				},
@@ -376,15 +385,15 @@ export class LiveChannel {
 			response.writeHead(204, { ...CORS, "access-control-allow-methods": "GET, POST", "access-control-allow-headers": "content-type", "access-control-allow-private-network": "true", "access-control-max-age": "600" });
 			return void response.end();
 		}
-		if (route === "s" && request.method === "GET") return this.#stream(request, response, grant, url.searchParams.get("frames") !== "0");
+		if (route === "s" && request.method === "GET") return this.#stream(request, response, grant, url.searchParams.get("frames") !== "0", url.searchParams.get(PING_QUERY) === "1");
 		if (route === "i" && request.method === "POST") return await this.#input(request, response, grant);
 		return notFound(response, true);
 	}
 
-	#stream(request: http.IncomingMessage, response: http.ServerResponse, grant: Grant, wantsPictures: boolean): void {
+	#stream(request: http.IncomingMessage, response: http.ServerResponse, grant: Grant, wantsPictures: boolean, wantsPing: boolean): void {
 		grant.open += 1;
 		response.writeHead(200, { ...CORS, "content-type": "application/octet-stream", "cache-control": "no-store", "x-content-type-options": "nosniff" });
-		const client = new Client(response, wantsPictures);
+		const client = new Client(response, wantsPictures, wantsPing);
 		const room = this.#room(grant.browserId);
 		let left = false;
 		const leave = (): void => {

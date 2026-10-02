@@ -14,14 +14,14 @@
 // A loopback request can HANG, neither refused nor answered (a host's local-network policy that prompts no one, a pack that stopped
 // answering). Every request this file makes to the pack has a deadline, enforced by aborting its AbortController so the socket really
 // closes: a connect that never answers becomes the same "reconnecting" state and backoff as one that was refused. The open stream is held
-// to silence instead: a page that is not changing sends nothing, so the pack repeats the browser's state whenever it has sent a View
-// nothing for HEARTBEAT_MS (src/stream.ts), and a stream that carries nothing at all for STREAM_SILENCE_MS is dead (the pack's event loop
-// wedged with the socket still open) and takes the same road. The host call that names the listener is not timed here: it waits on the
-// human's consent prompt, and the MCP SDK fails it by itself after its own 60 s.
+// to silence instead: a page that is not changing sends nothing, so the pack sends this View a nine-byte ping whenever it has written it
+// nothing for HEARTBEAT_MS (src/stream.ts), and a stream that carries nothing at all for STREAM_SILENCE_MS after its first ping is dead
+// (the pack's event loop wedged with the socket still open) and takes the same road. A ping is never parsed and costs no render. The host
+// call that names the listener is not timed here: it waits on the human's consent prompt, and the MCP SDK fails it by itself after its own 60 s.
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { BrowserState, Viewport } from "../../src/contracts";
 import type { PageInputEvent } from "../../src/input";
-import { KIND_PICTURE, KIND_STATE, type Message, Reader } from "../../src/wire";
+import { KIND_PICTURE, KIND_PING, KIND_STATE, type Message, PING_QUERY, Reader } from "../../src/wire";
 import { type BrowserClient, failureText, type StreamGrant, stateFromStream } from "./browser-client";
 
 const BACKOFF_START_MS = 500;
@@ -30,8 +30,10 @@ const BACKOFF_MAX_MS = 8000;
 export const CONNECT_TIMEOUT_MS = 5000;
 /** How long one input POST may go unanswered. The pack answers a batch once the page has taken it, however long that is (a batch waits its turn behind another View's, then applies), so past this the View reports it and closes the POST's socket, but the batch may still be applied late. The stream is not restarted for it: nothing says the stream is unhealthy. */
 export const INPUT_TIMEOUT_MS = 8000;
-/** How long an open stream may carry nothing at all (no picture, no state, no heartbeat) before it counts as dead. The pack repeats the state after 2 s of quiet (HEARTBEAT_MS in src/stream.ts), so a live stream is never this silent: it has stalled, it is not a still page. View and pack ship in one version. */
+/** How long an open stream may carry nothing at all (no picture, no state, no ping) before it counts as dead. A pack that pings (every View it pings is written to at least every HEARTBEAT_MS, 2 s, in src/stream.ts) is never this silent while it lives: a stream this quiet has stalled, it is not a still page. The watch starts at the pack's first ping, so a pack that does not ping is never judged by it. */
 export const STREAM_SILENCE_MS = 6000;
+/** A timer that fires this much later than set was held up by this View's own thread, not by the pack going quiet (see `arm`). */
+const TIMER_STALL_MS = 1000;
 /** A stream the pack ended (its browser closed, or its token was dropped): ask for a new one at once, but not in a spin. */
 const ENDED_RETRY_MS = 150;
 const GONE = /unknown or already closed browserId/i;
@@ -86,9 +88,22 @@ interface Deadline {
 	clear(): void;
 }
 
-/** After `ms`, abort `controller`. The timer is gone when the deadline is cleared or the controller aborts for any reason, so none outlives its request. */
+/**
+ * After `ms`, abort `controller`. The timer is gone when the deadline is cleared or the controller aborts for any reason, so none outlives its request.
+ * A timer that fires more than TIMER_STALL_MS later than it was set was held up by this View's own thread (a blocked main thread, a long GC), not by
+ * the other end going quiet: what the pack sent meanwhile is queued behind the timer, unread. The deadline then starts one more window, long enough
+ * to read it, instead of aborting a healthy request. Hearing something (`restart()`) earns the next stall the same forgiveness.
+ */
 function arm(controller: AbortController, ms: number): Deadline {
+	let armedAt = performance.now();
+	let forgiven = false;
 	const expire = () => {
+		if (!forgiven && performance.now() - armedAt - ms > TIMER_STALL_MS) {
+			forgiven = true;
+			armedAt = performance.now();
+			timer = window.setTimeout(expire, ms);
+			return;
+		}
 		deadline.expired = true;
 		controller.abort();
 	};
@@ -98,6 +113,8 @@ function arm(controller: AbortController, ms: number): Deadline {
 		restart: () => {
 			if (controller.signal.aborted) return;
 			window.clearTimeout(timer);
+			armedAt = performance.now();
+			forgiven = false;
 			timer = window.setTimeout(expire, ms);
 		},
 		clear: () => {
@@ -112,6 +129,13 @@ function arm(controller: AbortController, ms: number): Deadline {
 /** A request that never answered, as the human is told it. */
 function silence(ms: number): string {
 	return `no answer within ${Math.round(ms / 1000)} s`;
+}
+
+/** What this View asks of the stream: pings (it understands them, and holds the stream to them), and no pictures while it is frozen for annotating. */
+function streamQuery(frozen: boolean): string {
+	const query = new URLSearchParams({ [PING_QUERY]: "1" });
+	if (frozen) query.set("frames", "0");
+	return query.toString();
 }
 
 export function useBrowserStream(client: BrowserClient, browserId: string | null, frozen: boolean): BrowserStream {
@@ -194,8 +218,11 @@ export function useBrowserStream(client: BrowserClient, browserId: string | null
 				}
 				return;
 			}
-			pending = message;
-			void decode();
+			// A ping has done its work already (the loop below read it); the page has nothing to show for it.
+			if (message.kind === KIND_PICTURE) {
+				pending = message;
+				void decode();
+			}
 		};
 
 		// A sleep that `wake()` ends early: the backoff, the wait for a hidden View to be seen, or a refused call waiting to be asked again.
@@ -229,7 +256,7 @@ export function useBrowserStream(client: BrowserClient, browserId: string | null
 					deadline = arm(open, CONNECT_TIMEOUT_MS);
 					let response: Response;
 					try {
-						response = await fetch(`${grant.origin}/s/${grant.token}${frozen ? "?frames=0" : ""}`, { signal: open.signal, cache: "no-store" });
+						response = await fetch(`${grant.origin}/s/${grant.token}?${streamQuery(frozen)}`, { signal: open.signal, cache: "no-store" });
 					} catch (cause) {
 						if (open.signal.aborted && !deadline.expired) throw cause;
 						throw new Error(`The live picture could not be reached (${deadline.expired ? silence(CONNECT_TIMEOUT_MS) : failureText(cause)}). A host that blocks http://127.0.0.1 does this.`);
@@ -242,20 +269,24 @@ export function useBrowserStream(client: BrowserClient, browserId: string | null
 					backoff = BACKOFF_START_MS;
 					const reader = response.body.getReader();
 					const messages = new Reader();
-					// From here the stream is held to silence: whatever arrives (a picture, a state, the pack's heartbeat) proves it is alive.
-					deadline = arm(open, STREAM_SILENCE_MS);
+					/** The open stream's silence watch. Set up by the pack's first ping, which is the first thing it sends a View that asked for them: a pack that sends none (older than this View) is trusted as it always was, never read as stalled. */
+					let watch: Deadline | undefined;
 					try {
 						for (;;) {
 							const step = await reader.read();
 							if (step.done) break;
-							deadline.restart();
-							for (const message of messages.push(step.value)) handle(message);
+							// Any bytes at all prove the pack is alive, whatever frame they carry: nothing is read to know that.
+							watch?.restart();
+							for (const message of messages.push(step.value)) {
+								if (message.kind === KIND_PING && watch === undefined) watch = deadline = arm(open, STREAM_SILENCE_MS);
+								else handle(message);
+							}
 						}
 					} catch (cause) {
-						if (!deadline.expired) throw cause;
+						if (watch?.expired !== true) throw cause;
 						throw new Error(`The live picture went quiet (nothing arrived for ${Math.round(STREAM_SILENCE_MS / 1000)} s).`);
 					} finally {
-						deadline.clear();
+						watch?.clear();
 					}
 					// The pack ended it: its browser closed or the token was dropped. A new token tells which.
 					grantRef.current = null;
