@@ -24,8 +24,8 @@
  * in a profile folder. A copy, a backup or a sync of a profile folder therefore
  * carries no readable password and not the key. The pack has no OS credential
  * store accessor, so the key is a file only the user can read: mode 0600, and on
- * Windows, where modes mean nothing, an ACL reduced to the user. It is published
- * whole and durable (staged, fsynced, restricted, then given its name), and made
+ * Windows, where modes mean nothing, an ACL reduced to the user before a key byte is in the file. It is published
+ * whole and durable (staged and restricted, then written and fsynced, then given its name), and made
  * only when no profile already holds a sealed store. A file that does not
  * authenticate (tampered, or under another key) is refused, never read as empty
  * and never rewritten; a key file that is missing, empty or damaged is refused,
@@ -126,9 +126,10 @@ export class CredentialKey {
   }
 
   /**
-   * Make the key and publish it whole. It is written to a staging file in the same folder, fsynced and restricted to the user, and only
-   * then given its name, so `credentials.key` is never seen empty or half-written (by a second server on this root, or after a crash), and
-   * a crash leaves either no key or the whole one. The name is taken with a hard link, which fails when it exists: two servers on one root
+   * Make the key and publish it whole. It is staged in the same folder, restricted to the user BEFORE any key byte is written into it
+   * (created empty at mode 0600, its ACL cut where modes mean nothing, and only then filled), fsynced, and only then given its name, so
+   * `credentials.key` is never seen empty or half-written (by a second server on this root, or after a crash), the key is never readable
+   * by another account even for a moment, and a crash leaves either no key or the whole one. The name is taken with a hard link, which fails when it exists: two servers on one root
    * cannot each publish a different key, and the loser reads the winner's. A filesystem with no hard links takes the name with a rename
    * instead, which is atomic but cannot tell it lost a race (the read-back below still catches one that has already finished).
    * Whatever is returned has been read back from the published file: nothing is sealed under a key that is not what is on disk.
@@ -140,14 +141,15 @@ export class CredentialKey {
     const text = `${randomBytes(32).toString("base64")}\n`;
     const staging = `${this.#file}.${randomBytes(6).toString("hex")}.tmp`;
     try {
-      const fd = openSync(staging, "wx", 0o600);
+      closeSync(openSync(staging, "wx", 0o600));
+      onlyTheUser(staging);
+      const fd = openSync(staging, "r+");
       try {
         writeSync(fd, text);
         fsyncSync(fd);
       } finally {
         closeSync(fd);
       }
-      onlyTheUser(staging);
       try {
         linkSync(staging, this.#file);
       } catch (error) {
@@ -173,7 +175,11 @@ export class CredentialKey {
     return text;
   }
 
-  /** Whether any profile under this root already holds a store sealed under a key (so a key that is not on disk was lost, not never made). */
+  /**
+   * Whether any profile under this root already holds a store sealed under a key (so a key that is not on disk was lost, not never made):
+   * a version 2 store, or a version 1 one with a sealed value inside, which a server from before this one leaves when it signs up on a
+   * profile this one had sealed (a rollback).
+   */
   #holdsSealedStores(): boolean {
     const profiles = join(this.#rootDir, "profiles");
     let names: string[];
@@ -184,7 +190,9 @@ export class CredentialKey {
     }
     return names.some((name) => {
       try {
-        return (JSON.parse(readFileSync(join(profiles, name, FILE), "utf8")) as { version?: unknown } | null)?.version === 2;
+        const store = JSON.parse(readFileSync(join(profiles, name, FILE), "utf8")) as { version?: unknown; origins?: unknown } | null;
+        if (store?.version === 2) return true;
+        return typeof store?.origins === "object" && store.origins !== null && Object.values(store.origins).some((value) => typeof value === "string" && SEALED.test(value));
       } catch {
         // No store, or one that read() refuses on its own account.
         return false;

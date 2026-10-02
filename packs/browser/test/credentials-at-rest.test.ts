@@ -352,6 +352,38 @@ describe("the key", () => {
 		expect(savedPassword(profileDir, SHOP, new CredentialKey(rootDir))).toBe(password);
 	});
 
+	test("a key lost while a version 1 store holds sealed values (an older server wrote it back during a rollback) is never made afresh either, by any profile, and it comes back as it was", async () => {
+		const { rootDir, profileDir, file, keyFile, key } = await fresh();
+		const password = resolveCredential(profileDir, { origin: SHOP, mode: "signup" }, key).password;
+		const keyBody = readFileSync(keyFile);
+		// The rollback: the older server read the sealed store and wrote everything back as a version 1 file, adding its own plain sign-up.
+		olderServerSignsUp(file, BANK, "Older-Plain_7#fixture");
+		expect(stored(file).version).toBe(1);
+		const v1Before = readFileSync(file, "utf8");
+		const other = join(rootDir, "profiles", "play");
+		mkdirSync(other, { recursive: true });
+		rmSync(keyFile);
+
+		for (const [name, run] of [
+			["reading the profile that holds them", () => savedPasswords(profileDir, new CredentialKey(rootDir))],
+			["signing up on another profile", () => resolveCredential(other, { origin: BANK, mode: "signup" }, new CredentialKey(rootDir))],
+			["a plain store on another profile, sealed at its first read", () => {
+				writeFileSync(join(other, "credentials.json"), `${JSON.stringify({ version: 1, origins: { [SHOP]: "Kept-Plain_1#fixture" } })}\n`);
+				return savedPasswords(other, new CredentialKey(rootDir));
+			}],
+		] as const) {
+			const refused = refusal(run);
+			expect(refused.code, name).toBe("credentials_unreadable");
+			expect(refused.message, name).toContain("credentials.key");
+			expect(existsSync(keyFile), name).toBe(false);
+		}
+		expect(readFileSync(file, "utf8")).toBe(v1Before);
+
+		fs.writeFileSync(keyFile, keyBody);
+		expect(savedPassword(profileDir, SHOP, new CredentialKey(rootDir))).toBe(password);
+		expect(savedPassword(profileDir, BANK, new CredentialKey(rootDir))).toBe("Older-Plain_7#fixture");
+	});
+
 	test("is published whole: staged and fsynced, restricted to the user, and only then given its name, which is never taken twice", async () => {
 		const { rootDir, profileDir, keyFile } = await fresh();
 		const events: string[] = [];
@@ -382,6 +414,28 @@ describe("the key", () => {
 		expect(Buffer.from((published?.staged ?? "").trim(), "base64")).toHaveLength(32);
 		expect(readFileSync(keyFile, "utf8")).toBe(published?.staged ?? "no key was staged");
 		expect(readdirSync(rootDir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+	});
+
+	test("is restricted to the user before a byte of it is written: the staging file is never readable by anyone else, not even for a moment", async () => {
+		const { rootDir, profileDir } = await fresh();
+		const realWrite = fs.writeSync as (...args: unknown[]) => number;
+		// What the staging file's access was when the key's bytes went into it (`undefined`: no key was written).
+		let restrictedWhenWritten: boolean | undefined;
+		const writing = spyOn(fs, "writeSync").mockImplementation(((...args: unknown[]) => {
+			const data = args[1];
+			if (restrictedWhenWritten === undefined && typeof data === "string" && Buffer.from(data.trim(), "base64").length === 32) {
+				const staged = readdirSync(rootDir).find((name) => name.endsWith(".tmp"));
+				restrictedWhenWritten = staged !== undefined && onlyTheUserCanRead(join(rootDir, staged));
+			}
+			return realWrite(...args);
+		}) as typeof fs.writeSync);
+		try {
+			resolveCredential(profileDir, { origin: SHOP, mode: "signup" }, new CredentialKey(rootDir));
+		} finally {
+			writing.mockRestore();
+		}
+
+		expect(restrictedWhenWritten).toBe(true);
 	});
 
 	test("when it cannot be made whole nothing is published and nothing is sealed: the plain passwords stay where they were and are encrypted at the next read", async () => {
