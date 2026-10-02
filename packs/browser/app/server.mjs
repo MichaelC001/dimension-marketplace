@@ -1151,8 +1151,11 @@ function resolveCredential(profileDir, request) {
 }
 
 // src/engines/puppeteer.ts
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync as mkdirSync4, statSync as statSync2 } from "node:fs";
+import { win32 } from "node:path";
+import { promisify } from "node:util";
 import { setTimeout as sleep2 } from "node:timers/promises";
 import puppeteer, { TimeoutError } from "puppeteer-core";
 
@@ -1870,6 +1873,7 @@ var FRAME_REF_LIKE = /^@\d/;
 var ACTION_TIMEOUT_MS = 15e3;
 var LAUNCH_TIMEOUT_MS = 6e4;
 var CLOSE_TIMEOUT_MS = 15e3;
+var KILL_CONFIRM_MS = 5e3;
 var FAVICON_SCRIPT_TIMEOUT_MS = 2e3;
 var FIRST_FRAME_WAIT_MS = 150;
 var SCREENCAST_QUALITY = 70;
@@ -2737,6 +2741,27 @@ var PuppeteerDriver = class {
     }
     this.#release();
   }
+  /**
+   * Hard stop, for a `close` that hung. puppeteer's own close waits for the browser to exit with no bound, so a Chrome that will
+   * not exit never lets it finish: this kills the whole process tree instead, and releases the lease only once the browser
+   * process is seen to have exited. Safe beside a pending `close`: that one ends when the process does, and releasing is idempotent.
+   */
+  async kill() {
+    if (!this.#ownsBrowser) return await this.close();
+    this.#closed = true;
+    this.#browser.off("targetcreated", this.#onTargetCreated);
+    this.#browser.off("disconnected", this.#onDisconnected);
+    this.#watchers.clear();
+    const proc = this.#browser.process();
+    if (proc === null) fail("kill_failed", "this browser has no process of ours to kill");
+    if (!hasExited(this.#browser)) {
+      const exited = waitForExit(proc, KILL_CONFIRM_MS);
+      await killTree(proc);
+      if (!await exited) fail("kill_failed", `the browser process ${proc.pid} was killed but was not seen to exit within ${KILL_CONFIRM_MS} ms`);
+    }
+    await this.#browser.disconnect().catch(() => void 0);
+    this.#release();
+  }
   // -----------------------------------------------------------------------
   // Internals — tabs
   // -----------------------------------------------------------------------
@@ -3097,6 +3122,39 @@ function requireNumber(value, name) {
 function hasExited(browser) {
   const proc = browser.process();
   return proc !== null && (proc.exitCode !== null || proc.signalCode !== null);
+}
+function waitForExit(proc, ms) {
+  if (proc.exitCode !== null || proc.signalCode !== null) return Promise.resolve(true);
+  const { promise, resolve: resolve4 } = Promise.withResolvers();
+  const onExit = () => {
+    clearTimeout(timer);
+    resolve4(true);
+  };
+  const timer = setTimeout(() => {
+    proc.off("exit", onExit);
+    resolve4(false);
+  }, ms);
+  proc.once("exit", onExit);
+  return promise;
+}
+var execFileAsync = promisify(execFile);
+function taskkillArgs(proc) {
+  if (proc.pid === void 0 || proc.exitCode !== null || proc.signalCode !== null) return void 0;
+  return ["/pid", String(proc.pid), "/T", "/F", "/FI", `IMAGENAME eq ${win32.basename(proc.spawnfile)}`];
+}
+async function killTree(proc) {
+  const pid = proc.pid;
+  if (pid === void 0) return;
+  if (process.platform === "win32") {
+    const args = taskkillArgs(proc);
+    if (args !== void 0) await execFileAsync("taskkill", args, { windowsHide: true }).catch(() => proc.kill());
+    return;
+  }
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch {
+    proc.kill("SIGKILL");
+  }
 }
 function utilityWorld(frame) {
   return frame.isolatedRealm();
@@ -3542,6 +3600,11 @@ var CHECK_RENOTE_MS = 3e4;
 var VISIT_RENOTE_MS = 10 * 6e4;
 var MAX_NOTED = 512;
 var READER_IDLE_MS = 6e4;
+var THROWAWAY_IDLE_MS = 10 * 6e4;
+var MAX_TIMER_MS = 2147483647;
+var GRACEFUL_CLOSE_MS = 2e4;
+var CLOSE_RETRY_MS = 3e4;
+var MAX_RELEASED = 64;
 var MAX_FRAMES_RETAINED = 8;
 var ACT_BUDGET_MS = 2e4;
 var MAX_BATCH_DIALOGS = 5;
@@ -3622,10 +3685,18 @@ var BrowserRuntime = class {
   connectionListeners = /* @__PURE__ */ new Set();
   /** Profiles with persisted observations, so a deleted one is noticed and reported gone. */
   observedProfiles = /* @__PURE__ */ new Set();
+  /** How long a throwaway may go without a call before it is closed (see THROWAWAY_IDLE_MS). */
+  idleMs;
+  /** Why a browser the runtime closed on its own is gone, by id, so the chat that held it is told rather than sent "unknown". */
+  released = /* @__PURE__ */ new Map();
   /** Watches the profile root for deletions while anyone listens for connection changes. */
   profileWatcher;
   constructor(options = {}) {
     this.options = options;
+    this.idleMs = options.throwawayIdleMs ?? THROWAWAY_IDLE_MS;
+    if (!Number.isFinite(this.idleMs) || this.idleMs <= 0 || this.idleMs > MAX_TIMER_MS) {
+      throw new RangeError(`throwawayIdleMs must be a number of milliseconds above 0 and at most ${MAX_TIMER_MS}, got ${String(options.throwawayIdleMs)}`);
+    }
     this.store = new ProfileStore(options.rootDir);
     this.annotationFiles = new AnnotationFiles(join7(this.store.rootDir, "annotations"));
     this.store.sweepEphemeral();
@@ -3653,10 +3724,11 @@ var BrowserRuntime = class {
    *
    * Without a `profile` it is a throwaway browser: a directory of its own that
    * is deleted when it closes, so it can never collide with another browser.
+   *
+   * With the pool full, the throwaway used least recently that is neither working nor watched is closed first (its Chrome gone before
+   * this launches); when there is none, the open is refused (`too_many_browsers`) naming the browsers this chat holds.
    */
   async open(options, opener = {}) {
-    if (this.disposed) fail("disposed", "runtime has been disposed");
-    if (this.byId.size + this.opening.size >= MAX_BROWSERS - 1 && this.readerHeld()) await this.closeReader();
     if (this.disposed) fail("disposed", "runtime has been disposed");
     const engine = normalizeEngine(options.engine);
     const named = options.profile === void 0 ? void 0 : this.resolveProfile(options.profile, engine);
@@ -3671,20 +3743,23 @@ var BrowserRuntime = class {
     if (engine !== "chrome-relay" && profile2 === RELAY_PROFILE) {
       fail("bad_profile", `profile "${RELAY_PROFILE}" is reserved for the chrome-relay engine`);
     }
-    const live = profile2 === null ? void 0 : this.byProfile.get(profile2);
-    if (profile2 !== null && live !== void 0) {
-      const holder = this.holderOf(live.opener, opener.session);
-      if (holder === "this chat") return await this.state(live.browserId);
-      fail("profile_held", heldMessage(profile2, holder));
-    }
-    const launching = profile2 === null ? void 0 : this.opening.get(profile2);
-    if (profile2 !== null && launching !== void 0) {
-      const holder = this.holderOf(this.openers.get(profile2) ?? {}, opener.session);
-      if (holder === "this chat") return await this.state((await launching).browserId);
-      fail("profile_held", heldMessage(profile2, holder));
-    }
-    if (this.byId.size + this.opening.size + (this.readerHeld() ? 1 : 0) >= MAX_BROWSERS) {
-      fail("too_many_browsers", `at most ${MAX_BROWSERS} browsers may be open at once; close one first`);
+    for (; ; ) {
+      if (this.byId.size + this.opening.size >= MAX_BROWSERS - 1 && this.readerHeld()) await this.closeReader();
+      if (this.disposed) fail("disposed", "runtime has been disposed");
+      const live = profile2 === null ? void 0 : this.byProfile.get(profile2);
+      if (profile2 !== null && live !== void 0) {
+        const holder = this.holderOf(live.opener, opener.session);
+        if (holder === "this chat") return await this.state(live.browserId);
+        fail("profile_held", heldMessage(profile2, holder));
+      }
+      const launching = profile2 === null ? void 0 : this.opening.get(profile2);
+      if (profile2 !== null && launching !== void 0) {
+        const holder = this.holderOf(this.openers.get(profile2) ?? {}, opener.session);
+        if (holder === "this chat") return await this.state((await launching).browserId);
+        fail("profile_held", heldMessage(profile2, holder));
+      }
+      if (this.byId.size + this.opening.size + (this.readerHeld() ? 1 : 0) < MAX_BROWSERS) break;
+      await this.makeRoom(opener.session);
     }
     assertEngineAvailable(engine);
     const slot = profile2 ?? `ephemeral:${randomBytes4(8).toString("hex")}`;
@@ -3759,11 +3834,18 @@ var BrowserRuntime = class {
         logNoticed: 0,
         annotations,
         opener,
-        probe: { timer: void 0, running: void 0, again: false }
+        probe: { timer: void 0, running: void 0, again: false },
+        lastUsed: performance.now(),
+        viewers: 0,
+        pending: 0,
+        idle: void 0,
+        retiring: void 0,
+        closeFailed: false
       };
       if (profile2 !== null && profile2 !== RELAY_PROFILE) entry.notice = this.touchProfile(profile2, driver.app);
       this.byId.set(entry.browserId, entry);
       if (profile2 !== null) this.byProfile.set(profile2, entry);
+      if (profile2 === null && opener.caller !== "app") this.watchIdle(entry, this.idleMs);
       return entry;
     } catch (error) {
       if (driver) {
@@ -3787,24 +3869,60 @@ var BrowserRuntime = class {
   /** Refused (`publish_pending`) while a publish awaits confirmation, unless `caller` is "app". */
   async close(browserId, caller) {
     const entry = this.byId.get(browserId);
-    if (!entry) fail("unknown_browser", "Unknown or already closed browserId.");
+    if (!entry) {
+      if (this.released.has(browserId)) return;
+      fail("unknown_browser", "Unknown or already closed browserId.");
+    }
     await this.serialize(entry, async () => {
       if (!entry.closed) refuseWhilePublishing(entry, caller);
       await this.teardown(entry);
     }, { evenIfClosed: true });
     await Promise.allSettled(this.removals);
   }
-  /** Retain ownership and the lock until the driver confirms shutdown. */
+  /** Retain ownership and the lock until the driver confirms shutdown. A throwaway that cannot be stopped is tried again soon. */
   async teardown(entry) {
     if (this.byId.get(entry.browserId) !== entry) return;
     settleOnClose(entry);
     entry.closed = true;
     entry.frames.length = 0;
-    await this.stopTask(entry);
-    await this.probeAtClose(entry);
-    await entry.driver.close();
+    try {
+      await this.stopTask(entry);
+      await this.probeAtClose(entry);
+      await this.stopBrowser(entry);
+    } catch (error) {
+      if (entry.profile === null) this.retryClose(entry);
+      throw error;
+    }
     this.markUsed(entry);
     entry.release();
+  }
+  /**
+   * Stop `entry`'s browser. A saved profile's gets the driver's own confirmed close and nothing harder: its lock holds until the
+   * process is provably gone, and a hard kill could cut a write to logins that matter. A throwaway keeps nothing, so a close that
+   * hangs or fails is answered by killing the process tree (a Chrome seen hanging on exit never leaves by itself), and its slot is
+   * freed only once the driver has seen the process exit. A close that failed once is not asked again: puppeteer takes a second one
+   * for done at once, and releasing on that would free the slot of a Chrome that may still be running.
+   */
+  async stopBrowser(entry) {
+    if (entry.profile !== null) return await entry.driver.close();
+    if (!entry.closeFailed) {
+      try {
+        return await withTimeout(entry.driver.close(), GRACEFUL_CLOSE_MS, "browser close");
+      } catch (error) {
+        entry.closeFailed = true;
+        console.error("A throwaway browser did not close politely; its process tree is killed:", describe3(error));
+      }
+    }
+    await entry.driver.kill();
+  }
+  /** A throwaway holds a slot and may hold a Chrome, and its chat may never call it again: try to stop it again soon, and again if that fails. */
+  retryClose(entry) {
+    if (this.disposed) return;
+    clearTimeout(entry.idle);
+    entry.idle = setTimeout(() => {
+      void this.serialize(entry, () => this.teardown(entry), { evenIfClosed: true }).then(() => Promise.allSettled(this.removals)).catch((error) => console.error("A throwaway browser still would not close:", describe3(error)));
+    }, Math.min(this.idleMs, CLOSE_RETRY_MS));
+    entry.idle.unref();
   }
   async dispose() {
     this.disposed = true;
@@ -3838,6 +3956,7 @@ var BrowserRuntime = class {
     entry.frames.length = 0;
     entry.worker?.process.cancel();
     clearTimeout(entry.probe.timer);
+    clearTimeout(entry.idle);
     this.byId.delete(entry.browserId);
     if (entry.profile !== null && this.byProfile.get(entry.profile) === entry) this.byProfile.delete(entry.profile);
     for (const [session, browserId] of this.viewBySession) if (browserId === entry.browserId) this.viewBySession.delete(session);
@@ -3848,6 +3967,108 @@ var BrowserRuntime = class {
   }
   viewOf(session) {
     return this.viewBySession.get(session);
+  }
+  // -----------------------------------------------------------------------
+  // Throwaway browsers nobody is using
+  // -----------------------------------------------------------------------
+  /**
+   * Close `entry` for a reason the chat that held it is told on its next call, and return once its Chrome is gone and its directory is
+   * deleted. One close per browser: a second caller gets the first one's outcome. A close that fails rejects, and `teardown` has by then
+   * scheduled another try.
+   */
+  retire(entry, reason) {
+    entry.retiring ??= (async () => {
+      this.remember(entry.browserId, reason);
+      await this.serialize(entry, () => this.teardown(entry), { evenIfClosed: true });
+      await Promise.allSettled(this.removals);
+    })().catch((error) => {
+      entry.retiring = void 0;
+      throw error;
+    });
+    return entry.retiring;
+  }
+  remember(browserId, reason) {
+    this.released.set(browserId, reason);
+    if (this.released.size <= MAX_RELEASED) return;
+    for (const oldest of this.released.keys()) {
+      this.released.delete(oldest);
+      break;
+    }
+  }
+  /** A call is queued or running, or a task agent is driving it: nothing may close this browser under that work. */
+  working(entry) {
+    return entry.pending > 0 || entry.worker !== null;
+  }
+  /** Look at `entry` again after `afterMs`. One timer per idle period, never one per call: a call only stamps `lastUsed`. */
+  watchIdle(entry, afterMs) {
+    entry.idle = setTimeout(() => this.checkIdle(entry), afterMs);
+    entry.idle.unref();
+  }
+  checkIdle(entry) {
+    if (entry.closed || entry.retiring !== void 0) return;
+    const quietMs = performance.now() - entry.lastUsed;
+    if (this.working(entry) || entry.viewers > 0 || quietMs < this.idleMs) {
+      this.watchIdle(entry, this.working(entry) || entry.viewers > 0 ? this.idleMs : this.idleMs - quietMs);
+      return;
+    }
+    const reason = `it was a throwaway browser, closed after ${this.idleMs / 1e3} s with no calls; open a new one with browser_open`;
+    void this.retire(entry, reason).catch((error) => console.error("An idle throwaway browser was not closed:", describe3(error)));
+  }
+  /**
+   * The throwaway to give up when the pool is full: the one used least recently that nothing is happening on and no View has joined,
+   * a chat's before the person's own Private one. A saved profile (and the relay) is never one: it holds a lock and logins. One
+   * already on its way out is not asked about: `makeRoom` waits for it instead.
+   */
+  pickVictim() {
+    let victim;
+    for (const entry of this.byId.values()) {
+      if (entry.profile !== null || entry.closed || entry.viewers > 0 || this.working(entry)) continue;
+      const personal = entry.opener.caller === "app";
+      const victimPersonal = victim?.opener.caller === "app";
+      if (victim === void 0 || !personal && victimPersonal || personal === victimPersonal && entry.lastUsed < victim.lastUsed) victim = entry;
+    }
+    return victim;
+  }
+  /**
+   * Free one slot of a full pool or refuse. A browser already on its way out frees a slot by itself, so that is waited for instead of
+   * closing a second one; otherwise the victim is closed, its Chrome confirmed gone, before this returns. The caller looks again.
+   */
+  async makeRoom(asker) {
+    const leaving = [...this.byId.values()].flatMap((entry) => entry.retiring === void 0 ? [] : [entry.retiring]);
+    if (leaving.length > 0) {
+      await Promise.race(leaving).catch(() => void 0);
+      return;
+    }
+    const victim = this.pickVictim();
+    if (victim === void 0) fail("too_many_browsers", this.refusal(asker, "none can be closed to make room: each is running a task, has a call in progress, is open in a View, is still shutting down, or is a saved profile's"));
+    const reason = `it was a throwaway browser, closed to make room for another chat's (at most ${MAX_BROWSERS} are open at once); open a new one with browser_open`;
+    try {
+      await this.retire(victim, reason);
+    } catch (error) {
+      console.error("A throwaway browser was not closed to make room:", describe3(error));
+      fail("too_many_browsers", this.refusal(asker, "the one chosen to make room is still shutting down and no other was closed"));
+    }
+  }
+  /** Why nothing could be given up. It names what `asker` itself holds, never what anyone else does: an id is a capability. */
+  refusal(asker, because) {
+    const held = asker === void 0 ? [] : [...this.byId.values()].filter((entry) => entry.opener.session === asker && !entry.closed).map((entry) => entry.browserId);
+    const why = `at most ${MAX_BROWSERS} browsers may be open at once, and ${because}`;
+    return held.length > 0 ? `${why}. You hold ${held.join(", ")}: browser_close the ones you are done with` : `${why}. None is yours; try again shortly`;
+  }
+  /**
+   * A View joined `browserId`'s live stream (stream.ts): while any View is joined nobody may give the browser up, and it is not idle.
+   * Returns what ends that. A count, not a clock: a View whose page answers slowly is still watching.
+   */
+  viewing(browserId) {
+    const entry = this.require(browserId);
+    entry.viewers += 1;
+    let ended = false;
+    return () => {
+      if (ended) return;
+      ended = true;
+      entry.viewers -= 1;
+      entry.lastUsed = performance.now();
+    };
   }
   // -----------------------------------------------------------------------
   // Read paths
@@ -4589,6 +4810,7 @@ ${host}`;
         });
         entry.revision += 1;
         entry.worker = null;
+        entry.lastUsed = performance.now();
         return run;
       });
       entry.task = run;
@@ -4733,8 +4955,9 @@ ${host}`;
       await current.close();
       this.pageReader = null;
     }
-    if (this.byId.size + this.opening.size >= MAX_BROWSERS) {
-      fail("too_many_browsers", `at most ${MAX_BROWSERS} browsers may be open at once; close one first`);
+    while (this.byId.size + this.opening.size >= MAX_BROWSERS) {
+      await this.makeRoom(void 0);
+      if (this.disposed) fail("disposed", "runtime has been disposed");
     }
     this.readerLaunching = true;
     try {
@@ -4769,8 +4992,17 @@ ${host}`;
   // -----------------------------------------------------------------------
   require(browserId) {
     const entry = typeof browserId === "string" ? this.byId.get(browserId) : void 0;
-    if (!entry || entry.closed) fail("unknown_browser", "unknown or already closed browserId");
+    if (!entry || entry.closed) this.refuseGone(browserId);
+    entry.lastUsed = performance.now();
     return entry;
+  }
+  /**
+   * One error for "never existed" and "closed": the id is a capability and the difference is not something an unauthorized caller should
+   * learn. A browser this runtime closed on its own is the exception, and only for its own id, which the chat it is telling already holds.
+   */
+  refuseGone(browserId) {
+    const why = this.released.get(browserId);
+    fail("unknown_browser", why === void 0 ? "unknown or already closed browserId" : `unknown or already closed browserId: ${why}`);
   }
   /**
    * All page work for one browser runs strictly in order, never concurrently.
@@ -4778,9 +5010,15 @@ ${host}`;
    * may have been closed (or have crashed) while this call sat in the queue.
    */
   serialize(entry, work, options = {}) {
+    entry.pending += 1;
     const run = async () => {
-      if (entry.closed && !options.evenIfClosed) fail("unknown_browser", "unknown or already closed browserId");
-      return await work(entry);
+      try {
+        if (entry.closed && !options.evenIfClosed) this.refuseGone(entry.browserId);
+        return await work(entry);
+      } finally {
+        entry.pending -= 1;
+        entry.lastUsed = performance.now();
+      }
     };
     const next = entry.queue.then(run, run);
     entry.queue = next.catch(() => void 0);
@@ -5172,6 +5410,8 @@ var Room = class {
     this.onClosed = onClosed;
   }
   clients = /* @__PURE__ */ new Set();
+  /** What ends each joined View's hold on the browser (`LiveSource.viewing`). */
+  #leases = /* @__PURE__ */ new Map();
   #stopWatching;
   #timer;
   #sampling = false;
@@ -5179,6 +5419,13 @@ var Room = class {
   #lastPicture;
   join(client) {
     this.clients.add(client);
+    try {
+      this.#leases.set(client, this.source.viewing(this.browserId));
+    } catch (error) {
+      if (!isGone(error)) throw error;
+      this.onClosed(this);
+      return;
+    }
     this.#timer ??= setInterval(() => void this.#sample(), this.intervalMs);
     if (client.wantsPictures) this.#watch();
     if (this.#lastState !== void 0) client.offerState(encode(KIND_STATE, JSON.parse(this.#lastState)));
@@ -5187,6 +5434,8 @@ var Room = class {
   }
   leave(client) {
     this.clients.delete(client);
+    this.#leases.get(client)?.();
+    this.#leases.delete(client);
     if (![...this.clients].some((other) => other.wantsPictures)) this.#unwatch();
     if (this.clients.size > 0) return;
     this.#stop();
@@ -5196,6 +5445,8 @@ var Room = class {
   end() {
     const clients = [...this.clients];
     this.clients.clear();
+    for (const release of this.#leases.values()) release();
+    this.#leases.clear();
     this.#stop();
     for (const client of clients) client.end();
   }
@@ -5536,7 +5787,8 @@ async function createBrowserServer(options = {}) {
     ...process.env.DIMENSION_BROWSER_ROOT ? { rootDir: process.env.DIMENSION_BROWSER_ROOT } : {},
     ...process.env.DIMENSION_BROWSER_EXECUTABLE ? { executablePath: process.env.DIMENSION_BROWSER_EXECUTABLE } : {},
     ...process.env.DIMENSION_BROWSER_RELAY_URL ? { relayUrl: process.env.DIMENSION_BROWSER_RELAY_URL } : {},
-    ...process.env.DIMENSION_BROWSER_HEADLESS === void 0 ? {} : { headless: process.env.DIMENSION_BROWSER_HEADLESS !== "false" }
+    ...process.env.DIMENSION_BROWSER_HEADLESS === void 0 ? {} : { headless: process.env.DIMENSION_BROWSER_HEADLESS !== "false" },
+    ...process.env.DIMENSION_BROWSER_THROWAWAY_IDLE_MS ? { throwawayIdleMs: Number(process.env.DIMENSION_BROWSER_THROWAWAY_IDLE_MS) } : {}
   });
   const server2 = new McpServer({ name: "dimension-community-browser", version: "0.1.0" });
   const live = new LiveChannel(runtime);
