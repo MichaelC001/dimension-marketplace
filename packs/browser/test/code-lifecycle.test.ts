@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { BrowserKind, CodeBrowserPort, HostToWorker, RunError, TabRef, WorkerToHost } from "../src/code/contracts";
 import { CodeHost, type CodeHostOptions } from "../src/code/host/code-host";
+import { DEFAULT_TIMING } from "../src/code/host/session";
 import { saveSpill, sessionFolder } from "../src/code/spill";
 import type { SpawnWorker, WorkerHandle, WorkerMemory } from "../src/code/host/transport";
 import { BrowserRuntimeError } from "../src/store";
@@ -636,7 +637,7 @@ describe("a worker that nothing can end", () => {
   }, 30_000);
 });
 
-const MEMORY_TIMING = { freezeIdleMs: 0, workerIdleMs: 60_000, startupTimeoutMs: 1_000, graceMs: 40, terminateMs: 20, closeMs: 60, memoryPollMs: 15, memoryIdlePollMs: 15, finishedTtlMs: 60_000 };
+const MEMORY_TIMING = { freezeIdleMs: 0, workerIdleMs: 60_000, startupTimeoutMs: 1_000, graceMs: 40, terminateMs: 20, closeMs: 60, memoryPollMs: 15, finishedTtlMs: 60_000 };
 
 async function ended(host: CodeHost, runId: string): Promise<RunError> {
   const done = await host.resume("s1", runId, 2_000, NEVER);
@@ -680,16 +681,19 @@ describe("a worker's memory is bounded, not only its heap", () => {
     expect(workers[0]!.exited).toBe(false);
   });
 
-  test("a cell that starts while the worker is only looked at rarely is looked at quickly from its first moment", async () => {
-    // The worker was read once while idle, and the next look is 30 s away: the cell's start must not wait for it.
-    const { host, workers } = rig({ memoryMb: 100, timing: { ...MEMORY_TIMING, memoryPollMs: 15, memoryIdlePollMs: 30_000 } });
+  test("a worker with no cell running is looked at as often as one with a cell: a timer a cell left behind is caught within two looks, at the shipped rate", async () => {
+    // The shipped timing, not MEMORY_TIMING: the blind window of an idle rate nobody asked for is what this holds shut. A cell's `setInterval` keeps allocating after the cell has returned.
+    const { host, workers } = rig({ memoryMb: 100 });
     const idle = await start(host);
     workers[0]!.emit({ t: "result", runId: idle, ...OK });
     await host.resume("s1", idle, 1_000, NEVER);
-    await new Promise(resolve => setTimeout(resolve, 80)); // a real wait: the idle look has happened and the next one is far off
-    const runId = await start(host);
+    // A real wait, against the real clock: the worker has now been idle for more than two looks, and the thing under test is how soon the next one comes.
+    await new Promise(resolve => setTimeout(resolve, 250));
+    const returned = performance.now();
     workers[0]!.memory = { mb: 640, own: true };
-    expect((await ended(host, runId)).name).toBe("CellMemoryError");
+    await waitUntil("the idle worker is ended", () => workers[0]!.exited, exited => exited, 2_000);
+    // Two looks to see it (one may be in flight) and a moment to end it; not the seconds of a slower idle rate.
+    expect(performance.now() - returned).toBeLessThan(DEFAULT_TIMING.memoryPollMs * 2 + 150);
   });
 
   test("where only the whole process can be measured, the growth during the cell counts, not the level the process was already at", async () => {
@@ -706,6 +710,23 @@ describe("a worker's memory is bounded, not only its heap", () => {
     const error = await ended(host, runId);
     expect(error.message).toContain("grew the server by 200 MB while it ran");
     expect(workers[0]!.exited).toBe(true);
+  });
+
+  test("where only the whole process can be measured, a worker whose cell has returned is still judged by what the process has grown by since that cell began: the timer it left behind is caught", async () => {
+    // Node 22.12-22.15 and Bun have no figure of the worker's own. The idle look used to be 0 there (no cell, no base), so the one place the interval after `return` could not be seen was this runtime.
+    const { host, workers } = rig({ memoryMb: 100, timing: MEMORY_TIMING }, (worker, message) => {
+      if (message.t !== "init") return;
+      worker.memory = { mb: 900, own: false };
+      queueMicrotask(() => worker.emit({ t: "ready" }));
+    });
+    const runId = await start(host);
+    await new Promise(resolve => setTimeout(resolve, 60)); // a real wait: the cell's base figure is taken (900 MB)
+    workers[0]!.emit({ t: "result", runId, ...OK });
+    await host.resume("s1", runId, 1_000, NEVER);
+    await new Promise(resolve => setTimeout(resolve, 100)); // a real wait: the worker is idle, and 900 MB is the level, not a growth
+    expect(workers[0]!.exited).toBe(false);
+    workers[0]!.memory = { mb: 1_100, own: false }; // the process grew by 200 MB with no cell running
+    await waitUntil("the idle worker is ended", () => workers[0]!.exited, exited => exited, 2_000);
   });
 
   test("a figure of another kind than the one the cell began with is not set against it: a helper that fell away mid-cell cannot turn a resident set into a growth of gigabytes", async () => {

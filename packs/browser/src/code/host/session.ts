@@ -33,15 +33,17 @@ export interface CodeTiming {
   terminateMs: number;
   /** How long a worker that was asked to `close` gets to leave on its own (its realm disconnects from every browser) before it is terminated. */
   closeMs: number;
-  /** How often a worker's memory is read while a cell runs in it. A loop that allocates Buffers runs faster than this can look, so the overshoot past the limit is the allocation rate times this. */
+  /**
+   * How often a live worker's memory is read, whether or not a cell runs in it: a timer a cell left behind keeps allocating after the cell returned, and a slower rate for an idle worker was a window in which
+   * `setInterval(() => held.push(Buffer.alloc(100e6)), 20)` had the server at 1.2 GB for 5 s. A read is a look, not a bound: a loop that allocates faster than this runs past the limit by the allocation rate times
+   * this, and a synchronous burst runs past it before the first look. What stops those is the allocation guard in the worker (worker/memory-guard.ts) and, past that, the operating system's own limits.
+   */
   memoryPollMs: number;
-  /** How often it is read while no cell runs (a timer a cell left behind can still grow it). */
-  memoryIdlePollMs: number;
   /** A finished run stays readable by `resume` this long. */
   finishedTtlMs: number;
 }
 
-export const DEFAULT_TIMING: CodeTiming = { freezeIdleMs: 20_000, workerIdleMs: 600_000, startupTimeoutMs: 10_000, graceMs: 750, terminateMs: 1_000, closeMs: 1_000, memoryPollMs: 100, memoryIdlePollMs: 5_000, finishedTtlMs: 600_000 };
+export const DEFAULT_TIMING: CodeTiming = { freezeIdleMs: 20_000, workerIdleMs: 600_000, startupTimeoutMs: 10_000, graceMs: 750, terminateMs: 1_000, closeMs: 1_000, memoryPollMs: 100, finishedTtlMs: 600_000 };
 
 export interface SessionDeps {
   session: string;
@@ -106,6 +108,8 @@ interface LiveWorker {
   label: string;
   /** The next look at its memory. */
   memoryTimer?: NodeJS.Timeout;
+  /** The process's memory when the last cell began in this worker (a runtime that cannot say a worker's own, `WorkerMemory.own`): what growth after that cell has returned is measured against. */
+  memoryBase?: { mb: number; basis: WorkerMemory["basis"] };
   /** This worker's place in the host's total. */
   member?: Member;
 }
@@ -244,9 +248,8 @@ export class CodeSession {
       if (o.signal.aborted) throw new ToolAbortError();
       live.label = cellLabel(o.code);
       run.worker = live;
-      if (this.#watching) this.#lookAtMemoryIn(live, this.#d.timing.memoryPollMs);
       void live.handle.memory().then(sample => {
-        if (sample !== undefined && !sample.own) run.memoryBase = { mb: sample.mb, basis: sample.basis };
+        if (sample !== undefined && !sample.own) live.memoryBase = run.memoryBase = { mb: sample.mb, basis: sample.basis };
       });
       run.hangTimer = setTimeout(() => this.#hung(run), o.timeoutMs + this.#d.timing.graceMs);
       live.handle.transport.send({ t: "run", runId: run.id, code: o.code, timeoutMs: o.timeoutMs });
@@ -384,7 +387,8 @@ export class CodeSession {
       this.#afterRun();
     });
     handle.transport.onMessage(message => this.#onMessage(live, message, ready));
-    this.#watchMemory(live);
+    // A limit per worker, or one for the host: either way the worker is looked at, from the moment it starts.
+    if (this.#d.memoryMb > 0 || this.#d.hostMemory.limitMb > 0) this.#lookAtMemoryIn(live);
     const { screenshotDir, outputDir } = this.#d;
     handle.transport.send({
       t: "init",
@@ -404,23 +408,16 @@ export class CodeSession {
 
   /**
    * The worker's heap limit (`resourceLimits`) covers the JS heap only: a cell that collects Buffers (screenshots, downloads) grows the whole server's memory, and with it every session's Chrome is one allocation from
-   * the commit limit. So the worker's memory is read while it lives (`WorkerHandle.memory`, answered by the worker's thread even while its JavaScript spins), and a worker past `memoryMb` is ended like one that
-   * outlived its budget: the cell fails with the reason, its variables are reset, the pages and browsers stay. The same figure goes to the host's total (`HostMemory`), which ends the largest worker of all sessions at its limit.
+   * the commit limit. So the worker's memory is read from the moment it starts to the moment it ends, every `memoryPollMs`, with a cell or without one (`WorkerHandle.memory`, answered by the worker's thread even while its
+   * JavaScript spins), and a worker past `memoryMb` is ended like one that outlived its budget: the cell fails with the reason, its variables are reset, the pages and browsers stay. The same figure goes to the host's
+   * total (`HostMemory`), which ends the largest worker of all sessions at its limit.
+   *
+   * This is a look at an interval, not a bound. A synchronous burst allocates past the limit before the first look, and a timer allocating faster than the interval runs past it by the rate times the interval. The bound that
+   * holds for the allocations a cell makes itself is worker/memory-guard.ts, which refuses them in the worker before they are made; native modules, WebAssembly.Memory and the like reach this watchdog only.
    */
-  #watchMemory(live: LiveWorker): void {
-    if (this.#watching) this.#lookAtMemoryIn(live, this.#d.timing.memoryPollMs);
-  }
-
-  /** Whether a worker's memory is looked at at all: a limit per worker, or one for the host. */
-  get #watching(): boolean {
-    return this.#d.memoryMb > 0 || this.#d.hostMemory.limitMb > 0;
-  }
-
-  /** The next look at the worker's memory, replacing any that was due later: a cell that starts must not wait for a look that was scheduled for an idle worker. */
-  #lookAtMemoryIn(live: LiveWorker, afterMs: number): void {
-    clearTimeout(live.memoryTimer);
+  #lookAtMemoryIn(live: LiveWorker): void {
     if (live.dead) return;
-    live.memoryTimer = setTimeout(() => void this.#lookAtMemory(live), afterMs);
+    live.memoryTimer = setTimeout(() => void this.#lookAtMemory(live), this.#d.timing.memoryPollMs);
     live.memoryTimer.unref();
   }
 
@@ -430,8 +427,9 @@ export class CodeSession {
     const run = this.#active?.worker === live && this.#active.settled === undefined ? this.#active : undefined;
     const sample = await live.handle.memory();
     if (live.dead) return;
-    // A figure for this worker alone is the worker's memory; one for the whole process says something only about the cell that was running when it began to grow.
-    const base = run?.memoryBase;
+    // A figure for this worker alone is the worker's memory; one for the whole process says something only about the cell that was running when it began to grow, or, once it has returned, about what the process
+    // has grown by since that cell began (a timer the cell left behind): the base is the worker's, and it stays when the cell ends.
+    const base = run?.memoryBase ?? live.memoryBase;
     const used = sample === undefined ? 0 : sample.own ? sample.mb : base === undefined || base.basis !== sample.basis ? 0 : sample.mb - base.mb;
     if (limit > 0 && used > limit) {
       this.#overMemory(live, run, memoryError(used, limit, sample?.own ?? true), `a code worker held ${Math.round(used)} MB (limit ${limit} MB) and was ended`);
@@ -440,8 +438,7 @@ export class CodeSession {
     // A worker that did not answer keeps the figure it last had; the total may end this one (or a larger one of another session) from here.
     if (sample !== undefined) live.member?.report(used, sample.own);
     if (live.dead) return;
-    const { memoryPollMs, memoryIdlePollMs } = this.#d.timing;
-    this.#lookAtMemoryIn(live, this.#active?.worker === live ? memoryPollMs : memoryIdlePollMs);
+    this.#lookAtMemoryIn(live);
   }
 
   /** The workers of all sessions held more than the host's limit together, and this one was the largest. */
