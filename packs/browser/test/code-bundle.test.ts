@@ -11,7 +11,7 @@ import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, symlin
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { build } from "esbuild";
 import { chromePidsByThrowaway, isAlive } from "./chrome-processes";
 import { startPages, type Pages } from "./code-host-fixture";
@@ -116,7 +116,7 @@ class Server {
     return (await this.request("tools/call", { name, arguments: args, _meta: { "ai.insodimension/caller": "model", "ai.insodimension/session": { sessionId: session } } })) as ToolAnswer;
   }
 
-  /** What a host does when it lets a pack go: it closes the pack's stdin. */
+  /** What a host does when it lets a pack go, at its mildest: it closes the pack's stdin and waits as long as it takes. */
   async end(): Promise<number> {
     if (!this.#ended) {
       this.#ended = true;
@@ -125,6 +125,22 @@ class Server {
     return await this.#proc.exited;
   }
   #ended = false;
+
+  /**
+   * What the engine's app host does (the SDK's StdioClientTransport.close, @modelcontextprotocol/sdk/dist/esm/client/stdio.js): end stdin, wait 2,000 ms, then SIGTERM, which Node turns into TerminateProcess on
+   * Windows - nothing in the server runs after it. OMP's own transport sends SIGTERM straight after ending stdin, which no server can answer on Windows; this is the window a server can use.
+   */
+  async endLikeTheSdk(): Promise<{ ms: number; killedByTheHost: boolean }> {
+    const began = performance.now();
+    this.#ended = true;
+    this.#proc.stdin.end();
+    const itself = await Promise.race([this.#proc.exited.then(() => true), new Promise<boolean>(resolve => setTimeout(resolve, 2_000, false))]);
+    if (!itself) {
+      this.#proc.kill();
+      await this.#proc.exited;
+    }
+    return { ms: performance.now() - began, killedByTheHost: !itself };
+  }
 
   kill(): void {
     if (isAlive(this.#proc.pid)) this.#proc.kill();
@@ -141,14 +157,18 @@ async function launch(env: Record<string, string> = {}): Promise<Server> {
   await server.start();
   return server;
 }
-afterAll(async () => {
-  // A server is let go the way a host lets it go (stdin closed), so its Chrome goes with it; a hard kill is only the fallback.
-  for (const server of servers) {
+/** A server is let go the way a host lets it go (stdin closed), so its Chrome goes with it; a hard kill is only the fallback. After EVERY test: a server (a Node, a worker, a Chrome) left to the end of the file piles up with the next test's. */
+async function retireServers(): Promise<void> {
+  for (const server of servers.splice(0)) {
     const exited = await Promise.race([server.end(), new Promise<undefined>(resolve => setTimeout(resolve, 20_000, undefined))]);
     if (exited === undefined) server.kill();
     await server.exited;
     rmSync(server.root, { recursive: true, force: true });
   }
+}
+afterEach(retireServers);
+afterAll(async () => {
+  await retireServers();
   await pages.close();
   rmSync(out, { recursive: true, force: true });
 });
@@ -263,10 +283,26 @@ describeBundle("the shipped server, under Node", () => {
     }, BROWSER_TEST_TIMEOUT_MS);
   }
 
-  test("a cell stuck in a 45 s native call does not keep the server or its Chrome alive: the host closes stdin and both are gone within 10 s", async () => {
+  // The shipped server decides whether `browser_task` exists from its environment (today always; after the jev hand-off becomes optional, from TYPESAFE_API_KEY), and the password refusal a cell gets must agree with
+  // the tool list whichever way it decides: the model is never sent to a tool the server does not list. test/code-task-credential.test.ts holds the two settings apart in-process; this holds the shipped path.
+  for (const [label, env] of [["without TYPESAFE_API_KEY", {}], ["with TYPESAFE_API_KEY", { TYPESAFE_API_KEY: "sk-test-secret" }]] as const) {
+    test(`the password refusal names browser_task exactly when the shipped server lists it (${label})`, async () => {
+      const server = await launch({ ...env });
+      const listed = ((await server.request("tools/list", {})) as { tools: Array<{ name: string }> }).tools.some(tool => tool.name === "browser_task");
+      const refused = await server.call("browser_run", { code: `const tab = await browser.open({ name: "main", url: ${JSON.stringify(pages.url("/password"))} }); await tab.fill("#pw", "hunter2")` });
+      expect(refused.isError).toBe(true);
+      expect(text(refused)).toContain("is a password field");
+      expect(text(refused).includes("browser_task")).toBe(listed);
+    }, BROWSER_TEST_TIMEOUT_MS);
+  }
+
+  /**
+   * A cell inside a 45 s `execSync` that nothing can interrupt, with a Chrome open: the sleeper child process says its own pid first, so the test can look for it by pid afterwards. The host ends the server the way
+   * `end` says; the server, its Chrome and the cell's child must be gone by pid whatever the host does after that.
+   */
+  async function stuckCell(): Promise<{ server: Server; chromePids: number[]; sleeperPid: number }> {
     const server = await launch();
     const pidFile = join(server.root, "sleeper.pid");
-    // The child process says its own pid first, so the test can look for it by pid afterwards; then it sleeps 45 s inside the cell's execSync, which nothing can interrupt.
     const sleeper = `"${NODE}" -e "require('fs').writeFileSync(process.argv[1], String(process.pid)); setTimeout(() => {}, 45000)" "${pidFile}"`;
     const code = `await browser.open({ name: "main", url: ${JSON.stringify(pages.url("/other"))} }); const { execSync } = await import("node:child_process"); execSync(${JSON.stringify(sleeper)}); 1`;
     // The call never answers (the server is gone before the 45 s are up); the test is not waiting for it.
@@ -276,16 +312,32 @@ describeBundle("the shipped server, under Node", () => {
     const sleeperPid = Number(readFileSync(pidFile, "utf8"));
     expect(chromePids.length).toBeGreaterThan(0);
     expect(isAlive(sleeperPid)).toBe(true);
+    return { server, chromePids, sleeperPid };
+  }
+
+  test("a cell stuck in a 45 s native call does not keep the server, its Chrome or the cell's child process alive: the host closes stdin and waits, and all three are gone within 3 s", async () => {
+    const { server, chromePids, sleeperPid } = await stuckCell();
     const began = performance.now();
     await server.end();
     const tookMs = performance.now() - began;
-    console.error(`[code-bundle] stdin closed with a cell inside a 45 s native call: the server exited after ${Math.round(tookMs)} ms`);
-    // By pid, from the operating system: neither the pack's bookkeeping nor an exit code says a Chrome is gone.
+    console.error(`[code-bundle] stdin closed with a cell inside a 45 s native call (the host waits): the server exited after ${Math.round(tookMs)} ms`);
+    // By pid, from the operating system: neither the pack's bookkeeping nor an exit code says a process is gone.
     expect(isAlive(server.pid)).toBe(false);
-    const left = await waitUntil("every Chrome of the session gone, by pid", () => chromePids.filter(isAlive), alive => alive.length === 0, Math.max(1_000, 10_000 - tookMs));
-    expect(left).toEqual([]);
-    expect(tookMs).toBeLessThan(10_000);
-    // Windows has no process group: the server ends the trees below it itself, so the 45 s child does not outlive it either.
+    expect(await waitUntil("every Chrome of the session gone, by pid", () => chromePids.filter(isAlive), alive => alive.length === 0, 10_000)).toEqual([]);
+    expect(tookMs).toBeLessThan(3_000);
+    // Windows has no process group: the server ends the cell's child itself. Elsewhere nothing does yet (stated in the PR), and the test cleans it up.
+    if (process.platform === "win32") expect(isAlive(sleeperPid)).toBe(false);
+    else process.kill(sleeperPid, "SIGKILL");
+  }, BROWSER_TEST_TIMEOUT_MS);
+
+  test("the same cell, with the host that kills the server 2 s after closing stdin (the SDK's client): the server ends itself inside that window and nothing is orphaned - the cell's child and every Chrome are gone by pid", async () => {
+    const { server, chromePids, sleeperPid } = await stuckCell();
+    const { ms, killedByTheHost } = await server.endLikeTheSdk();
+    console.error(`[code-bundle] stdin closed with a cell inside a 45 s native call (the host kills at 2 s): the server exited ${killedByTheHost ? "only when killed, at" : "by itself after"} ${Math.round(ms)} ms`);
+    expect(killedByTheHost).toBe(false);
+    expect(ms).toBeLessThan(2_000);
+    expect(isAlive(server.pid)).toBe(false);
+    expect(await waitUntil("every Chrome of the session gone, by pid", () => chromePids.filter(isAlive), alive => alive.length === 0, 5_000)).toEqual([]);
     if (process.platform === "win32") expect(isAlive(sleeperPid)).toBe(false);
     else process.kill(sleeperPid, "SIGKILL");
   }, BROWSER_TEST_TIMEOUT_MS);
