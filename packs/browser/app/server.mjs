@@ -5843,10 +5843,13 @@ import http from "node:http";
 // src/wire.ts
 var KIND_PICTURE = 1;
 var KIND_STATE = 2;
+var KIND_PING = 3;
 var HEADER_BYTES = 9;
+var PING_QUERY = "ping";
 var MAX_PICTURE_BYTES = 16 * 1024 * 1024;
 var MAX_JSON_BYTES = 4 * 1024 * 1024;
 var encoder = new TextEncoder();
+var PING = [Uint8Array.of(KIND_PING, 0, 0, 0, 0, 0, 0, 0, 0), new Uint8Array(0)];
 function encode(kind, head, body = new Uint8Array(0)) {
   const json = encoder.encode(JSON.stringify(head));
   const prefix = new Uint8Array(HEADER_BYTES + json.length);
@@ -5861,6 +5864,7 @@ function encode(kind, head, body = new Uint8Array(0)) {
 // src/stream.ts
 var TOKEN_IDLE_MS = 6e4;
 var STATE_INTERVAL_MS = 250;
+var HEARTBEAT_MS = 2e3;
 var MAX_TOKENS_PER_BROWSER = 16;
 var MAX_BODY_BYTES = 256 * 1024;
 var MAX_DRAIN_BYTES = 8 * 1024 * 1024;
@@ -5868,19 +5872,31 @@ var GONE_CODES = /* @__PURE__ */ new Set(["unknown_browser", "browser_closed"]);
 var STATUS_BY_CODE = { task_running: 409, publish_pending: 409, bad_input: 400, bad_json: 400, unknown_browser: 410, browser_closed: 410 };
 var CORS = { "access-control-allow-origin": "*" };
 var Client = class {
-  constructor(response, wantsPictures) {
+  constructor(response, wantsPictures, wantsPing) {
     this.response = response;
     this.wantsPictures = wantsPictures;
+    this.wantsPing = wantsPing;
+    this.#ping = wantsPing;
   }
   #busy = false;
   #state;
   #picture;
+  /** A ping is waiting to go out: set at join (it is the first thing a pinging View hears) and by the heartbeat. */
+  #ping;
+  /** When this View was last handed bytes, or joined (`performance.now()`): what a heartbeat measures its quiet from. */
+  lastWrite = performance.now();
   offerState(message) {
     this.#state = message;
     this.#flush();
   }
   offerPicture(message) {
     this.#picture = message;
+    this.#flush();
+  }
+  /** The heartbeat. A View whose socket is still taking the last write is not idle, so it is not pinged; a ping never waits behind another. */
+  offerPing() {
+    if (this.#busy) return;
+    this.#ping = true;
     this.#flush();
   }
   end() {
@@ -5893,10 +5909,13 @@ var Client = class {
   #flush() {
     const { response } = this;
     if (this.#busy || response.destroyed || response.writableEnded) return;
-    const chunks = [this.#state, this.#picture].flatMap((message) => message === void 0 ? [] : message.filter((part) => part.length > 0));
+    const waiting = [this.#ping ? PING : void 0, this.#state, this.#picture];
+    const chunks = waiting.flatMap((message) => message === void 0 ? [] : message.filter((part) => part.length > 0));
+    this.#ping = false;
     this.#state = void 0;
     this.#picture = void 0;
     if (chunks.length === 0) return;
+    this.lastWrite = performance.now();
     this.#busy = true;
     const written = () => {
       this.#busy = false;
@@ -5921,7 +5940,8 @@ var Room = class {
   #stopWatching;
   #timer;
   #sampling = false;
-  #lastState;
+  /** The state the Views were last told: as JSON to see a change, as the message to tell it again. */
+  #last;
   #lastPicture;
   join(client) {
     this.clients.add(client);
@@ -5932,9 +5952,12 @@ var Room = class {
       this.onClosed(this);
       return;
     }
-    this.#timer ??= setInterval(() => void this.#sample(), this.intervalMs);
+    this.#timer ??= setInterval(() => {
+      this.#beat();
+      void this.#sample();
+    }, this.intervalMs);
     if (client.wantsPictures) this.#watch();
-    if (this.#lastState !== void 0) client.offerState(encode(KIND_STATE, JSON.parse(this.#lastState)));
+    if (this.#last !== void 0) client.offerState(this.#last.message);
     else void this.#sample();
     if (client.wantsPictures && this.#lastPicture !== void 0) client.offerPicture(this.#lastPicture);
   }
@@ -5986,15 +6009,20 @@ var Room = class {
     try {
       const state = await this.source.liveState(this.browserId);
       const json = JSON.stringify(state);
-      if (json === this.#lastState) return;
-      this.#lastState = json;
+      if (this.#last !== void 0 && json === this.#last.json) return;
       const message = encode(KIND_STATE, state);
+      this.#last = { json, message };
       for (const client of this.clients) client.offerState(message);
     } catch (error) {
       if (isGone(error)) this.onClosed(this);
     } finally {
       this.#sampling = false;
     }
+  }
+  /** A View that asked for pings and has been handed nothing for the heartbeat gets one. Not tied to the state read: that can be stuck on a wedged page while this process is perfectly alive. */
+  #beat() {
+    const now = performance.now();
+    for (const client of this.clients) if (client.wantsPing && now - client.lastWrite >= HEARTBEAT_MS) client.offerPing();
   }
 };
 function isGone(error) {
@@ -6117,14 +6145,14 @@ var LiveChannel = class {
       response.writeHead(204, { ...CORS, "access-control-allow-methods": "GET, POST", "access-control-allow-headers": "content-type", "access-control-allow-private-network": "true", "access-control-max-age": "600" });
       return void response.end();
     }
-    if (route === "s" && request.method === "GET") return this.#stream(request, response, grant, url.searchParams.get("frames") !== "0");
+    if (route === "s" && request.method === "GET") return this.#stream(request, response, grant, url.searchParams.get("frames") !== "0", url.searchParams.get(PING_QUERY) === "1");
     if (route === "i" && request.method === "POST") return await this.#input(request, response, grant);
     return notFound(response, true);
   }
-  #stream(request, response, grant, wantsPictures) {
+  #stream(request, response, grant, wantsPictures, wantsPing) {
     grant.open += 1;
     response.writeHead(200, { ...CORS, "content-type": "application/octet-stream", "cache-control": "no-store", "x-content-type-options": "nosniff" });
-    const client = new Client(response, wantsPictures);
+    const client = new Client(response, wantsPictures, wantsPing);
     const room = this.#room(grant.browserId);
     let left = false;
     const leave = () => {
