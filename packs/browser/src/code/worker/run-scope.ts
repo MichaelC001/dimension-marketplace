@@ -1,7 +1,8 @@
 // Copied from OMP (https://github.com/can1357/oh-my-pi, MIT), packages/coding-agent/src/tools/run-scope.ts @ dc5f95d9e1 (Dimension omp fork).
 // Copyright (c) 2025 Mario Zechner; (c) 2025-2026 Can Bölük; (c) 2026 Stencil Labs, Inc. See ../../../third-party/omp/LICENSE.
 // Changed for the Browser pack: ToolError and throwIfAborted come from ../errors; OMP's postmortem expected-cleanup marks are a local WeakSet-free symbol mark;
-// Bun.sleep is `sleep`; the worker's unhandledRejection guard leaves rejections that are not the run's to another listener when one exists.
+// Bun.sleep is `sleep`; the worker's unhandledRejection guard leaves rejections that are not the run's to another listener when one exists, and marks the ones it settled (`markRejectionHandled`) so
+// that listener (the cell realm's, which shares the process) does not rethrow them and end the worker.
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { ToolError, throwIfAborted } from "../errors";
@@ -51,6 +52,18 @@ export function isBrowserRunRejection(reason: unknown, owner: object): boolean {
 export function isBrowserRunOwnedRejection(reason: unknown, owner: object, filename: string): boolean {
 	if (isBrowserRunRejection(reason, owner)) return true;
 	return reason instanceof Error && typeof reason.stack === "string" && reason.stack.includes(filename);
+}
+
+const settledRejections = new WeakSet<object>();
+
+/** The tab realm's guard settled `reason` (a run owns it, or it is fallout of a deliberate cleanup): another `unhandledRejection` listener in this process must not rethrow it. */
+export function markRejectionHandled(reason: unknown): void {
+	if (reason !== null && (typeof reason === "object" || typeof reason === "function")) settledRejections.add(reason);
+}
+
+/** Whether {@link markRejectionHandled} was called for `reason`. Safe to ask on a later turn: the mark is made in the same event dispatch the other listeners run in. */
+export function isRejectionHandled(reason: unknown): boolean {
+	return reason !== null && (typeof reason === "object" || typeof reason === "function") && settledRejections.has(reason);
 }
 
 type FloatingRejectionHandler = (reason: unknown) => void;
@@ -296,7 +309,11 @@ function trackBrowserRunPromise<T>(
  */
 export function installBrowserWorkerRejectionGuard(consume: (reason: unknown) => boolean): () => void {
 	const onRejection = (reason: unknown): void => {
-		if (isExpectedCleanupError(reason) || consume(reason)) return;
+		if (isExpectedCleanupError(reason) || consume(reason)) {
+			// Every listener hears the same event: tell the others this one is settled.
+			markRejectionHandled(reason);
+			return;
+		}
 		// Another listener (the cell realm's own guard) decides for rejections that are not this run's; with none, keep Node's default and
 		// end the worker.
 		if (process.listenerCount("unhandledRejection") > 1) return;

@@ -7,6 +7,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { BridgeResponse, CodeEvaluator, EvaluatorHooks, RunError, RunResult, ScreenshotResult } from "../contracts.js";
 import { ToolAbortError, ToolError, throwIfAborted } from "../errors.js";
+import { isRejectionHandled } from "../worker/run-scope.js";
 import facadeSource from "../facade/prelude.js.txt";
 import extensionsSource from "../facade/pack-extensions.js.txt";
 import { CellOutput, displayValue } from "./display.js";
@@ -138,7 +139,8 @@ export class CodeCell {
   #installGuard(): () => void {
     const onRejection = (reason: unknown): void => {
       if (this.consumeRejection(reason)) return;
-      setTimeout(() => { throw reason; }, 0);
+      // The tab realm's guard (worker/run-scope.ts) hears the same event and marks what it settled; look on the next turn so the order the two listeners were added in does not matter.
+      setTimeout(() => { if (!isRejectionHandled(reason)) throw reason; }, 0);
     };
     process.on("unhandledRejection", onRejection);
     return () => process.off("unhandledRejection", onRejection);

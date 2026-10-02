@@ -1,7 +1,7 @@
 /**
  * WHAT BREAKS IN THE PRODUCT IF THIS GOES RED: a cell that drives a page pays a message hop to the host for every `tab.click`, as OMP's does twice. The pack's promise (doc 77 §7.4.4) is that
  * only `open` and `close` leave the worker; `run` and `call` stay inside it. This starts the real worker thread with the real tab realm and a real Chrome, plays the host for the one
- * `open` the cell makes, and counts what crossed the thread boundary.
+ * `open` the cell makes, and counts EVERYTHING the worker said to the host while the cell ran (not only its bridge requests).
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Worker } from "node:worker_threads";
@@ -63,13 +63,15 @@ describeWithChrome("a cell driving a page in the real worker thread", () => {
       const out = await tab.run(async ({ page }) => page.evaluate(() => document.getElementById("out").textContent));
       console.log(JSON.stringify({ distinct: [...new Set(urls)], out }));
     `;
+    const from = seen.length;
     send({ t: "run", runId: "r1", code, timeoutMs: 20_000 });
     const result = await next(m => m.t === "result" && m.runId === "r1");
     if (result.t !== "result" || !result.ok) throw new Error(`the cell failed: ${JSON.stringify(result)}`);
     const printed = result.payload.displays.flatMap(part => (part.type === "text" ? [part.text] : [])).join("\n");
     expect(JSON.parse(printed.slice(printed.indexOf("{")))).toEqual({ distinct: [fixture.url("/form")], out: "submitted:from the worker" });
-    // Everything the worker said to the host while the cell ran: one bridge request, for `open`.
-    const bridged = seen.flatMap(m => (m.t === "bridge" ? [m.request.action] : []));
-    expect(bridged).toEqual(["open"]);
+    // EVERYTHING the worker said to the host between the run and its answer: the one bridge request for `open`, the cell's printed text, the result. Not a log, a progress note or a screenshot per call.
+    const sent = seen.slice(from);
+    expect(sent.filter(m => m.t !== "text").map(m => (m.t === "bridge" ? `bridge:${m.request.action}` : m.t))).toEqual(["bridge:open", "result"]);
+    expect(sent.flatMap(m => (m.t === "text" ? [m.chunk] : [])).join("")).toContain("from the worker");
   }, 30_000);
 });

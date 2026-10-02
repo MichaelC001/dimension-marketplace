@@ -1,7 +1,7 @@
 // Copied from OMP (https://github.com/can1357/oh-my-pi, MIT), packages/coding-agent/src/tools/browser/tab-worker.ts (WorkerCore: #init's attach path, #run, #consumeUnhandledRejection, #recordFloatingRejection,
 // #floatingRejectionError, #foldFloatingRejections, #close) and tab-supervisor.ts (the `is not alive`, `was closed` and `is busy` texts, the 750 ms grace) @ dc5f95d9e1 (Dimension omp fork).
 // Copyright (c) 2025 Mario Zechner; (c) 2025-2026 Can Bölük; (c) 2026 Stencil Labs, Inc. See ../../../third-party/omp/LICENSE.
-// Changed for the Browser pack (doc 77 7.4, matrix D1, D5, D28; a failed request-interception cleanup no longer replaces the run's own failure): OMP runs one process per tab behind a supervisor, so `tab.click` crosses two hops; here ONE worker holds every tab of a session and the
+// Changed for the Browser pack (doc 77 7.4, matrix D1, D5, D18, D28; a failed request-interception cleanup no longer replaces the run's own failure; `browser.disconnect()` from code leaves the shared connection alone): OMP runs one process per tab behind a supervisor, so `tab.click` crosses two hops; here ONE worker holds every tab of a session and the
 // engine has already created and instrumented each page, so this realm only ADOPTS a page by targetId and `run` and `call` are plain calls inside the worker (zero postMessage hops). The page is never
 // created, closed or restyled here (stealth, viewport, dialog policy and the page log stay the engine's); the realm only disconnects its own connection. The user's code runs through the cell's
 // evaluator, which owns wrapCode and the persistent names.
@@ -40,6 +40,26 @@ const GRACE_MS = 750;
 const TARGET_APPEAR_TIMEOUT_MS = 5_000;
 /** The names a function run receives, and the ones `tab.run` code can use (OMP `BROWSER_RUN_SCOPE`). */
 const RUN_SCOPE: readonly string[] = ["tab", "page", "browser", "wait", "assert"];
+/**
+ * Matrix D18, a rule of the pack that OMP does not have: code does not type into a password field (`tab.type`, `tab.fill`, a handle's `type` and `fill`); a password goes through browser_act's saved-credential
+ * route or the user. The ONE constant to flip if the owner lifts the rule; the host can also lift it per worker with `init.refusePasswordFields: false`.
+ */
+export const REFUSE_PASSWORD_FIELDS_BY_DEFAULT = true;
+
+/**
+ * The `browser` a run sees. It is the realm's one connection to the Chrome, shared by every tab of it, so `disconnect()` (which a cell ends with by habit) must not cut it: that would end every
+ * adopted tab of the browser and report "the browser disconnected" for a Chrome that is still running. The realm releases the connection itself when the last tab of the browser goes. Every other member
+ * is the Browser's own, bound to it (puppeteer keeps private fields, so a call through the proxy would not find them).
+ */
+function sharedBrowserFacade(browser: Browser): Browser {
+  return new Proxy(browser, {
+    get(target, prop) {
+      if (prop === "disconnect") return async (): Promise<void> => undefined;
+      const member: unknown = Reflect.get(target, prop, target);
+      return typeof member === "function" ? member.bind(target) : member;
+    },
+  });
+}
 
 export interface TabRealmOptions {
   /** One evaluator per tab NAME (a factory), so a tab's top-level names persist per tab as they do in OMP. */
@@ -50,7 +70,7 @@ export interface TabRealmOptions {
   screenshotDir?: string;
   /** Resolves a relative `uploadFile` path. MCP calls carry no working directory, so unset means a relative path is refused with the rule named. */
   cwd?: string;
-  /** Refuse `type` and `fill` on a password input from code (matrix D18). Off is OMP's behaviour. */
+  /** Refuse `type` and `fill` on a password input from code (matrix D18). Absent: {@link REFUSE_PASSWORD_FIELDS_BY_DEFAULT}. */
   refusePasswordFields?: boolean;
   /** Encode the model's screenshot as JPEG instead of WebP. */
   excludeWebP?: boolean;
@@ -323,7 +343,7 @@ class BrowserTabRealm implements TabRealm {
         activate: session.activateForScreenshot,
       };
       const tabApi = createTabApi(
-        { session, run: active, signal, timeoutMs, shot, cwd: this.#options.cwd, refusePasswordFields: this.#options.refusePasswordFields ?? false },
+        { session, run: active, signal, timeoutMs, shot, cwd: this.#options.cwd, refusePasswordFields: this.#options.refusePasswordFields ?? REFUSE_PASSWORD_FIELDS_BY_DEFAULT },
         output,
         screenshots,
       );
@@ -341,7 +361,7 @@ class BrowserTabRealm implements TabRealm {
       };
       const scope: Record<string, unknown> = {
         page: bindRunFacade(runPage.page, signal, active.rejectionOwner, onFloatingRejection),
-        browser: bindRunFacade(session.browser, signal, active.rejectionOwner, onFloatingRejection),
+        browser: bindRunFacade(sharedBrowserFacade(session.browser), signal, active.rejectionOwner, onFloatingRejection),
         tab: bindRunFacade(tabApi, signal, active.rejectionOwner, onFloatingRejection),
         assert: (cond: unknown, text?: string): void => {
           if (!cond) throw new ToolError(text ?? "Assertion failed");

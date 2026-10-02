@@ -546,9 +546,9 @@ describeWithChrome("the tab realm drives a page it adopted", () => {
     test("a covered button is not clicked through its cover: the text selector waits for it to become actionable and says why it did not", async () => {
       await goto("/form");
       const error = await failure('await tab.click("text/Covered")', { timeoutMs: 4_000 });
-      // The text click's own loop and the per-op deadline end at the same instant; either one names the covered element (the loop with the reason it saw).
-      expect(error.message).toMatch(
-        /^(tab\.click\("text\/Covered"\) timed out after 3000ms; selector currently matches 1 element\(s\) but the action never became possible|Timed out clicking text\/Covered \(seen 1 matches; last reason: obscured\))/,
+      // The text click's own loop gives up just before the op's ceiling, so the model reads the reason the loop saw (the cover), not the op's generic line.
+      expect(error.message).toBe(
+        "Timed out clicking text/Covered (seen 1 matches; last reason: obscured). If there are multiple matching elements, use observe + tab.id() or a more specific selector.",
       );
       expect(await out()).toBe("");
     }, 15_000);
@@ -580,7 +580,8 @@ describeWithChrome("the tab realm drives a page it adopted", () => {
   describe("waits (D19) and evaluate (D20)", () => {
     test("each wait gives the type it documents", async () => {
       await goto("/form");
-      expect(await value('(await tab.waitFor("#submit")).constructor.name !== undefined')).toBe(true);
+      // A handle that can be filled and clicked, and that is the element asked for.
+      expect(await value('const handle = await tab.waitFor("#submit"); [typeof handle.fill, typeof handle.click, await handle.evaluate(el => el.id)]')).toEqual(["function", "function", "submit"]);
       // hidden:true is satisfied by absence (null) or by an element that is there but not shown (its handle).
       expect(await value('await tab.waitForSelector("#nope", { hidden: true })')).toBeNull();
       expect(await value('(await tab.waitForSelector("#hidden-btn", { hidden: true })) !== null')).toBe(true);
@@ -600,7 +601,11 @@ describeWithChrome("the tab realm drives a page it adopted", () => {
       expect(navigated).toBe(fixture.url("/done"));
       await goto("/xhr");
       expect(await value('(await tab.waitForResponse("/api/data")).url()')).toBe(fixture.url("/api/data?x=1"));
-      expect(await value("await tab.waitForResponse(r => r.url().includes('/api/data')).then(() => 'matched')").catch(() => "late")).toBeDefined();
+      // A function predicate is polled on every response until it says yes; the page's own fetch lands 300 ms after load.
+      await goto("/xhr");
+      expect(await value("const response = await tab.waitForResponse(r => r.url().includes('/api/data')); [response.status(), new URL(response.url()).pathname]")).toEqual([200, "/api/data"]);
+      await goto("/xhr");
+      expect(await value("(await tab.waitForResponse(/\\/api\\/data\\?x=1$/)).status()")).toBe(200);
     }, 20_000);
 
     test("evaluate runs a function or an expression in the page, and a string with a top-level return is a syntax error", async () => {
@@ -726,10 +731,36 @@ describeWithChrome("the tab realm drives a page it adopted", () => {
     }, 20_000);
 
     // Doc 77 §7.4.5: as in OMP the code is not sandboxed from Node (it can import node:fs), and nothing of the pack's own is lent to it. The import is in the code under test, not in this file.
-    test("the code can reach Node as OMP's can, and none of the pack's own objects", async () => {
+    test("the code can reach Node as OMP's can, and nothing of the pack's own is lent to it", async () => {
       expect(await value('typeof (await import("node:fs")).readFileSync')).toBe("function");
       expect(await value("[typeof tab, typeof page, typeof browser, typeof assert, typeof wait]")).toEqual(["object", "object", "object", "function", "function"]);
-      expect(await value("[typeof realm, typeof BrowserRuntime, typeof session, typeof evaluator, typeof createTabRealm]")).toEqual(["undefined", "undefined", "undefined", "undefined", "undefined"]);
+      // The realm adds no global of its own: what the code sees on globalThis is what this very process has. The scope names (tab, page, ...) are lexical.
+      const mine = Object.getOwnPropertyNames(globalThis);
+      const theirs = (await value("Object.getOwnPropertyNames(globalThis)")) as string[];
+      expect(theirs.filter(name => !mine.includes(name))).toEqual([]);
+      // And `tab` hands out the documented helpers only: no session, run, realm or connection object rides on it.
+      expect(await value("Object.keys(tab).sort()")).toEqual(
+        [
+          "ariaSnapshot", "click", "drag", "evaluate", "extract", "fill", "goto", "id", "name", "observe", "page", "press", "ref", "screenshot", "scroll", "scrollIntoView", "select", "signal", "title", "type",
+          "uploadFile", "url", "waitFor", "waitForNavigation", "waitForResponse", "waitForSelector", "waitForUrl",
+        ].sort(),
+      );
+    }, 20_000);
+
+    test("a browser.disconnect() at the end of a run does not take the other tabs of that browser, or this one, with it", async () => {
+      await goto("/form");
+      await openTab("sibling", "/done");
+      try {
+        await run("await browser.disconnect(); 1");
+        // `browser` is the one connection every tab of this Chrome shares: the sibling and this tab both still answer, and neither is reported as ended.
+        expect(await value("await tab.title()", { name: "sibling" })).toBe("Done page");
+        expect(await value("tab.url()")).toBe(fixture.url("/form"));
+        expect(realm.names()).toContain("sibling");
+        expect(await value("(await browser.pages()).length > 1")).toBe(true);
+      } finally {
+        await realm.release("sibling");
+        await enginePages.get("sibling")?.close();
+      }
     }, 20_000);
 
     test("the code gets raw puppeteer page and browser beside tab, and a run that is cancelled ends with the cancellation", async () => {
@@ -803,25 +834,68 @@ describeWithChrome("the tab realm drives a page it adopted", () => {
   });
 
   describe("password fields (D18)", () => {
-    test("typing into one is allowed as in OMP, and refused by name when the realm is told to refuse", async () => {
+    const refusal = (selector: string): string => `${JSON.stringify(selector)} is a password field; browser_run does not type into password fields from code.`;
+    const secret = (): Promise<unknown> => value("await tab.evaluate(() => document.getElementById('pw').value)");
+
+    test("code is refused a password field by default, by name and with the way round it, and nothing is typed", async () => {
       await goto("/form");
-      await run('await tab.fill("#pw", "hunter2")');
-      expect(await value("await tab.evaluate(() => document.getElementById('pw').value)")).toBe("hunter2");
-      const strict = createTabRealm({ evaluator: createCodeEvaluator, refusePasswordFields: true });
+      for (const code of ['await tab.fill("#pw", "hunter2")', 'await tab.type("#pw", "hunter2")']) {
+        const refused = await failure(code, { timeoutMs: 5_000 });
+        expect(refused.message).toStartWith(refusal("#pw"));
+        expect(refused.message).toContain("browser_act");
+        expect(refused.message).toContain("ask the user");
+      }
+      expect(await secret()).toBe("");
+      // The field beside it is no different from OMP's.
+      await run('await tab.fill("#name", "fine")');
+      expect(await value("await tab.evaluate(() => document.getElementById('name').value)")).toBe("fine");
+    }, 30_000);
+
+    test("a handle's own fill and type, however the handle was got, and an aria ref are refused the same way", async () => {
+      await goto("/form");
+      const snapshot = (await value("await tab.ariaSnapshot()")) as string;
+      const ref = /\[ref=(e\d+)\]/.exec(snapshot.split("\n").find(line => line.includes('"Secret"'))!)![1]!;
+      const password = (await observe()).elements.find(element => element.name === "Secret")!;
+      const attempts = [
+        '(await tab.waitFor("#pw")).fill("x")',
+        '(await tab.waitFor("#pw")).type("x")',
+        `(await tab.id(${password.id})).fill("x")`,
+        `(await tab.waitForSelector("#pw")).type("x")`,
+        `(await tab.ref(${JSON.stringify(ref)})).type("x")`,
+        `tab.fill("aria-ref=${ref}", "x")`,
+        `tab.type("aria-ref=${ref}", "x")`,
+      ];
+      for (const attempt of attempts) {
+        const refused = await failure(`await ${attempt}`);
+        expect(refused.message).toContain("is a password field; browser_run does not type into password fields from code.");
+      }
+      expect(await secret()).toBe("");
+    }, 30_000);
+
+    test("a field that renders a moment after the click is checked when it appears, not skipped for not being there yet", async () => {
+      await goto("/twostep");
+      const refused = await failure('await tab.click("#next"); await tab.fill("#late-pw", "hunter2")', { timeoutMs: 8_000 });
+      expect(refused.message).toStartWith(refusal("#late-pw"));
+      expect(await value("await tab.evaluate(() => document.getElementById('late-pw').value)")).toBe("");
+    }, 20_000);
+
+    test("a field that turns into a password between the check and the typing is waited for, never typed into", async () => {
+      await goto("/flaky");
+      const failed = await failure('await tab.fill("#flaky", "hunter2")', { timeoutMs: 4_000 });
+      expect(failed.message).toStartWith('tab.fill("#flaky") timed out');
+      expect(await value("await tab.evaluate(() => document.getElementById('flaky').value)")).toBe("");
+    }, 20_000);
+
+    test("the host lifts the rule with refusePasswordFields: false, and then the same calls type as OMP's do", async () => {
+      const lifted = createTabRealm({ evaluator: createCodeEvaluator, refusePasswordFields: false });
       try {
         const { handle } = await chrome.openTab(fixture.url("/form"));
-        await strict.adopt("main", handle);
-        const refused = await strict
-          .run({ name: "main", code: 'await tab.fill("#pw", "hunter2")', timeoutMs: 5_000, signal: new AbortController().signal })
-          .then(() => new Error("the run was expected to fail"), (error: Error) => error);
-        expect(refused.message).toBe('"#pw" is a password field; browser_run does not type into password fields from code.');
-        const typed = await strict
-          .run({ name: "main", code: 'await tab.type("#pw", "x")', timeoutMs: 5_000, signal: new AbortController().signal })
-          .then(() => new Error("the run was expected to fail"), (error: Error) => error);
-        expect(typed.message).toBe('"#pw" is a password field; browser_run does not type into password fields from code.');
-        expect(await strict.run({ name: "main", code: 'await tab.fill("#name", "fine")', timeoutMs: 5_000, signal: new AbortController().signal }).then(r => r.returnValue)).toBeUndefined();
+        await lifted.adopt("main", handle);
+        const code = 'await tab.fill("#pw", "hunter2"); await tab.type("#pw", "!"); await tab.evaluate(() => document.getElementById("pw").value)';
+        const result = await lifted.run({ name: "main", code, timeoutMs: 8_000, signal: new AbortController().signal });
+        expect(result.returnValue).toBe("hunter2!");
       } finally {
-        await strict.dispose();
+        await lifted.dispose();
       }
     }, 30_000);
   });

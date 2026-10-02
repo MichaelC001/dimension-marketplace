@@ -1,7 +1,8 @@
 /**
- * `tab.extract` makes the same markdown and text as OMP's own extractor on the same HTML. `code-extract-golden.json` is what OMP's extractor produced for each page in
- * `code-extract-fixtures.ts` (its in-tree Readability and DOM reimplementations, run once and recorded); the pack runs the upstream `@mozilla/readability`, `linkedom` and `turndown`
- * packages, so an equal answer on all five pages is the evidence the swap lost nothing.
+ * WHAT BREAKS IF THIS GOES RED: `tab.extract` stops giving what OMP's extractor gives on the same page. The pack runs OMP's OWN Readability, DOM and HTML-to-markdown reimplementations, copied into
+ * `src/code/extract` (no npm package: the upstream `@mozilla/readability`, `linkedom` and `turndown` do not produce OMP's output, see THIRD-PARTY-NOTICES.md). `code-extract-golden.json` is what OMP's
+ * extractor produced for each page in `code-extract-fixtures.ts`, run once and recorded; so this is a pin that the COPY has not drifted from OMP's output on those five pages. It says nothing about
+ * any upstream package.
  */
 import { describe, expect, test } from "bun:test";
 import { extractReadableFromHtml, type ReadableFormat, type ReadableResult } from "../src/code/extract/readable";

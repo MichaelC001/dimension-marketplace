@@ -39,6 +39,14 @@ const PAGES: Record<string, string> = {
   "/redirect": `<!doctype html><title>Redirect</title><p>wait for it</p><script>setTimeout(() => { location.href = "/done"; }, 400)</script>`,
   "/dialog": `<!doctype html><title>Dialog</title><button id="ask" onclick="alert('are you sure')">Ask</button>`,
   "/busy": `<!doctype html><title>Busy</title><button id="spin" onmousedown="const end = Date.now() + 3500; while (Date.now() < end) {}">Spin</button>`,
+  // A two-step login: the password field is not there until a moment after "Next".
+  "/twostep": `<!doctype html><title>Two step</title><label>Email <input id="email" type="text"></label>
+<button id="next" onclick="setTimeout(() => { const i = document.createElement('input'); i.id = 'late-pw'; i.type = 'password'; document.body.appendChild(i); }, 600)">Next</button>`,
+  // A field that reads as plain text exactly once (the realm's own check) and as a password after that: what a page swapping the element between a check and the typing looks like.
+  "/flaky": `<!doctype html><title>Flaky</title><input id="flaky" type="text"><script>
+const f = document.getElementById("flaky"); let reads = 0;
+Object.defineProperty(f, "type", { get() { reads += 1; return reads === 1 ? "text" : "password"; } });
+</script>`,
   "/drag": `<!doctype html><title>Drag</title>
 <div id="a" style="position:absolute;left:20px;top:20px;width:60px;height:60px;background:#08f">a</div>
 <div id="b" style="position:absolute;left:220px;top:120px;width:80px;height:80px;background:#f80">b</div>
