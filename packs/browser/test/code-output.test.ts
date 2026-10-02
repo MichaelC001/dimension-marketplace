@@ -325,3 +325,51 @@ describe("one budget for the whole text of a cell", () => {
     }
   }, 60_000);
 });
+
+describe("what a cell's displays may hold", () => {
+  // A screenshot loop or a `display()` loop must not be able to fill the worker's heap (doc 77 §7.4.4): images are kept up to a ceiling, display blocks in a bounded sink.
+  const IMAGE_CEILING_CHARS = 32 * MIB;
+
+  test("images past 32 MiB are dropped and counted: 40 one-MiB screenshots keep 32, and the text says how many were left out", () => {
+    const output = new CellOutput();
+    const shot = "A".repeat(MIB);
+    for (let i = 0; i < 40; i += 1) output.hooks().onDisplay({ type: "image", data: shot, mimeType: "image/png" });
+    const { images, text } = output.finish();
+    expect(images.reduce((sum, image) => sum + image.data.length, 0)).toBeLessThanOrEqual(IMAGE_CEILING_CHARS);
+    // The ceiling is on what is kept in all: the 32nd fills it exactly and is kept, the 33rd is the first dropped.
+    expect(images).toHaveLength(32);
+    expect(text).toBe("[display: 8 images dropped — one cell keeps at most 32 MiB of images]");
+  });
+
+  test("one image larger than the ceiling is dropped alone, and a small one after it is still kept", () => {
+    const output = new CellOutput();
+    output.hooks().onDisplay({ type: "image", data: "A".repeat(IMAGE_CEILING_CHARS + 4), mimeType: "image/png" });
+    output.hooks().onDisplay({ type: "image", data: "aGk=", mimeType: "image/png" });
+    const { images, text } = output.finish();
+    expect(images.map(image => image.data)).toEqual(["aGk="]);
+    expect(text).toBe("[display: 1 image dropped — one cell keeps at most 32 MiB of images]");
+  });
+
+  test("40,000 display blocks of 8,000 characters: the text is within 50 KiB with the first block and the last, and memory does not grow with their number", () => {
+    const output = new CellOutput();
+    const { onDisplay } = output.hooks();
+    const block = { filler: "y".repeat(9_000) };
+    const push = (count: number): void => {
+      for (let i = 0; i < count; i += 1) onDisplay({ type: "json", data: block });
+    };
+    // Same measure as the sink's own test above: warmed up, and a bound far above the heap's noise and far below the 320 MB a sink that kept its blocks would hold.
+    push(2_000);
+    Bun.gc(true);
+    const before = process.memoryUsage().heapUsed;
+    push(38_000);
+    Bun.gc(true);
+    const grown = process.memoryUsage().heapUsed - before;
+    expect(grown).toBeLessThan(96 * MIB);
+
+    const { text } = output.finish();
+    expect(bytes(text)).toBeLessThanOrEqual(INLINE_BYTES);
+    expect(text.startsWith("display[1]:\n")).toBe(true);
+    expect(text).toContain("display[40000]:");
+    expect(text).toMatch(/\n\[…\d+B elided…\]\n/);
+  }, 60_000);
+});
