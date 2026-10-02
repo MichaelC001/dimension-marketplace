@@ -53,6 +53,12 @@ export interface SessionDeps {
   screenshotDir?: string;
   /** Where a cell's over-cap output may be kept; this session's own folder. */
   outputDir?: string;
+  /** What a relative `tab.uploadFile` path resolves against. MCP calls carry no working directory: absent, the realm refuses a relative path and says so. */
+  cwd?: string;
+  /** `tab.type` / `tab.fill` refuse a password input from code (matrix D18). Sent in every `init`, so the worker never depends on its own default. */
+  refusePasswordFields: boolean;
+  /** The screenshot the model sees is JPEG, not WebP (a model provider that cannot read WebP). */
+  excludeWebP: boolean;
   /** The workers this host ended that are still alive, across all sessions: the cap on stuck threads is theirs. */
   terminating: TerminatingWorkers;
   /** What a worker may hold, MB: its JS heap plus its Buffers and ArrayBuffers (the heap limit alone covers neither). 0: no limit. */
@@ -353,6 +359,9 @@ export class CodeSession {
       env: this.#d.env,
       ...(screenshotDir === undefined ? {} : { screenshotDir }),
       ...(outputDir === undefined ? {} : { outputDir }),
+      ...(this.#d.cwd === undefined ? {} : { cwd: this.#d.cwd }),
+      refusePasswordFields: this.#d.refusePasswordFields,
+      excludeWebP: this.#d.excludeWebP,
       // A rebuilt worker re-adopts the session's tabs before it answers `ready`: the pages and browsers outlive it.
       tabs: [...this.#tabs.values()].map(tab => ({ name: tab.name, handle: tab.handle })),
     });

@@ -154,7 +154,7 @@ afterAll(async () => {
 });
 
 describeBundle("the shipped server, under Node", () => {
-  test("browser_run is on by default and drives a page through the bundled worker; the cell sees no key and writes nothing onto the MCP stream", async () => {
+  test("browser_run is on by default and drives a page through the bundled worker; the cell is handed a scrubbed environment without the server's keys (accident-proofing, not a boundary) and writes nothing onto the MCP stream", async () => {
     const server = await launch({ TYPESAFE_API_KEY: "sk-test-secret", DIMENSION_BROWSER_CODE_ISOLATION: "thread" });
     const tools = (await server.request("tools/list", {})) as { tools: Array<{ name: string }> };
     expect(tools.tools.map(tool => tool.name)).toContain("browser_run");

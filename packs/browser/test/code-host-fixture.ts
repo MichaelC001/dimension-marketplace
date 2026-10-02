@@ -16,6 +16,7 @@ const PAGES: Record<string, string> = {
 <input id="name" type="text"><button id="go" onclick="document.getElementById('out').textContent='hello:'+document.getElementById('name').value">Go</button><div id="out"></div>`,
   "/other": `<!doctype html><meta charset="utf-8"><title>Other page</title><h1>Other page</h1>`,
   "/dialog": `<!doctype html><meta charset="utf-8"><title>Dialog</title><button id="ask" onclick="document.title = 'asked:' + confirm('sure?')">Ask</button>`,
+  "/password": `<!doctype html><meta charset="utf-8"><title>Sign in</title><input id="user" type="text"><input id="pw" type="password">`,
 };
 
 export interface Pages {

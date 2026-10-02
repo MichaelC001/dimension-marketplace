@@ -162,7 +162,7 @@ describeWithChrome("a cell that cannot answer is ended and the pages go on", () 
     await waitUntil("the old worker has exited", () => counting.live(), live => live === 1, 3_000);
   }, BROWSER_TEST_TIMEOUT_MS);
 
-  test("a cell cannot read the server's secrets, and what it prints never reaches the server's stdout", async () => {
+  test("the environment a cell is handed has no key in it (accident-proofing, not a boundary: the worker shares the server's process), and what it prints never reaches the server's stdout", async () => {
     const { host } = await start({ host: { env: { TYPESAFE_API_KEY: "sk-secret", DIMENSION_BROWSER_ROOT: "/x", PUPPETEER_PROXY: "http://p", PATH: process.env.PATH } } });
     expect(await valueOf(host, "s1", "JSON.stringify([process.env.TYPESAFE_API_KEY, process.env.DIMENSION_BROWSER_ROOT, process.env.PUPPETEER_PROXY, typeof process.env.PATH])")).toEqual([null, null, "http://p", "string"]);
   }, BROWSER_TEST_TIMEOUT_MS);
@@ -274,6 +274,21 @@ describeWithChrome("open and close", () => {
     expect(textOf(closed)).toContain('Released managed tab "a"');
     expect(await liveChromes(rootDir)).toBe(1);
     expect(await valueOf(host, "s1", "browser.tab('b').url()")).toBe(pages.url("/other"));
+  }, BROWSER_TEST_TIMEOUT_MS);
+});
+
+describeWithChrome("the realm settings the host sends", () => {
+  const fillPassword = `const tab = await browser.open({ name: "main", url: ${"URL"} }); await tab.fill("#user", "ada"); await tab.fill("#pw", "hunter2"); await tab.evaluate(() => document.getElementById("pw").value)`;
+
+  test("a password field is refused from code by default, end to end; the name field beside it is not", async () => {
+    const { host } = await start();
+    const error = await failureOf(host, "s1", fillPassword.replace("URL", JSON.stringify(pages.url("/password"))));
+    expect(error.message).toContain("is a password field; browser_run does not type into password fields from code");
+  }, BROWSER_TEST_TIMEOUT_MS);
+
+  test("the host lifts the rule when the owner has: the same cell fills it", async () => {
+    const { host } = await start({ host: { refusePasswordFields: false } });
+    expect(await valueOf(host, "s1", fillPassword.replace("URL", JSON.stringify(pages.url("/password"))))).toBe("hunter2");
   }, BROWSER_TEST_TIMEOUT_MS);
 });
 

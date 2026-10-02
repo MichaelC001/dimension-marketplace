@@ -17,7 +17,11 @@ const DEFAULT_HEAP_MB = 1_024;
 /** A cell's worker may hold this much in all (JS heap, Buffers, ArrayBuffers) before it is ended and its cell fails; `resourceLimits` bounds only the heap part. */
 const DEFAULT_MEMORY_MB = 1_536;
 
-/** What a cell may see of the server's environment (doc 77 §7.4.5): where programs and temp files live, locale, and puppeteer's own settings; never a key. */
+/**
+ * What a cell is handed of the server's environment: where programs and temp files live, locale, and puppeteer's own settings. This is hygiene against accidents (a cell that prints `process.env`, a child process
+ * that inherits it), NOT a boundary: the worker is a thread of the server's own process, so on Linux `/proc/self/environ` still holds the environment the server started with, and the cell has HOME/USERPROFILE and full
+ * Node. It matches OMP's sandbox A. Keeping a secret from a cell takes a separate process (the isolation rung, not built yet).
+ */
 const CELL_ENV = /^(?:PATH|Path|PATHEXT|SystemRoot|SYSTEMROOT|windir|WINDIR|ComSpec|COMSPEC|TEMP|TMP|TMPDIR|HOME|USERPROFILE|LANG|LANGUAGE|LC_[A-Z_]+|TZ|PUPPETEER_[A-Z_]+)$/;
 
 export function scrubbedEnv(source: Record<string, string | undefined>): Record<string, string> {
@@ -48,6 +52,12 @@ export interface CodeHostOptions {
   headless?: boolean;
   resolveKind?: (request: BridgeRequest) => BrowserKind;
   screenshotDir?: string;
+  /** What a relative `tab.uploadFile` path resolves against; absent: relative paths are refused with the rule named. */
+  cwd?: string;
+  /** Refuse password inputs from code (matrix D18). Default true. */
+  refusePasswordFields?: boolean;
+  /** JPEG instead of WebP for the screenshot the model sees. Default false. */
+  excludeWebP?: boolean;
   /** Root of the per-session folders a cell keeps an over-cap output in. Absent: none is kept. */
   artifactsRoot?: string;
   timing?: Partial<CodeTiming>;
@@ -97,6 +107,9 @@ export class CodeHost implements CodeHostPort {
         ...(artifactsRoot === undefined ? {} : { outputDir: sessionFolder(artifactsRoot, id) }),
         terminating: this.#terminating,
         memoryMb: this.#options.memoryMb ?? DEFAULT_MEMORY_MB,
+        ...(this.#options.cwd === undefined ? {} : { cwd: this.#options.cwd }),
+        refusePasswordFields: this.#options.refusePasswordFields ?? true,
+        excludeWebP: this.#options.excludeWebP ?? false,
         timing: this.#timing,
         onEmpty: () => {
           if (this.#sessions.get(id) === created) this.#sessions.delete(id);
@@ -145,6 +158,8 @@ function numberEnv(env: Record<string, string | undefined>, name: string, fallba
  * `DIMENSION_BROWSER_CODE_HEAP_MB`, `DIMENSION_BROWSER_CODE_MEMORY_MB` (1,536, 0 = no limit), `DIMENSION_BROWSER_CODE_ISOLATION` (`thread`).
  */
 export function createRuntimeCodeHost(runtime: BrowserRuntime, env: Record<string, string | undefined> = process.env): CodeHost {
+  // Why the rung is a separate process, checked on Node 22.12 (--experimental-permission) and 24.12 (--permission): a worker thread INHERITS the permission model (reads and child processes were denied inside it, and
+  // creating one needs --allow-worker). What cannot be done is to restrict the cell alone: the model is process-wide, and this server itself needs fs and child_process (Chrome, Python, the files it keeps).
   const isolation = env.DIMENSION_BROWSER_CODE_ISOLATION?.trim() || "thread";
   if (isolation !== "thread") {
     throw new RangeError(`DIMENSION_BROWSER_CODE_ISOLATION must be "thread" (got "${isolation}"): the child-process rung under Node's permission model is not built yet, and running a weaker rung than asked for would be silent`);
@@ -159,5 +174,8 @@ export function createRuntimeCodeHost(runtime: BrowserRuntime, env: Record<strin
     timing: { freezeIdleMs: numberEnv(env, "DIMENSION_BROWSER_FREEZE_IDLE_MS", DEFAULT_TIMING.freezeIdleMs, "milliseconds") },
     heapMb: numberEnv(env, "DIMENSION_BROWSER_CODE_HEAP_MB", DEFAULT_HEAP_MB, "megabytes"),
     memoryMb: numberEnv(env, "DIMENSION_BROWSER_CODE_MEMORY_MB", DEFAULT_MEMORY_MB, "megabytes"),
+    ...(env.DIMENSION_BROWSER_CWD?.trim() ? { cwd: env.DIMENSION_BROWSER_CWD.trim() } : {}),
+    refusePasswordFields: env.DIMENSION_BROWSER_ALLOW_PASSWORD_FIELDS?.trim().toLowerCase() !== "true",
+    excludeWebP: env.DIMENSION_BROWSER_EXCLUDE_WEBP?.trim().toLowerCase() === "true",
   });
 }

@@ -411,6 +411,19 @@ describe("the worker's life", () => {
     expect(workers[0]!.exited).toBe(true);
   });
 
+  test("every worker is told the realm settings in its init: password fields refused unless lifted, and the working directory and WebP choice when the owner set them", async () => {
+    const plain = rig();
+    await start(plain.host);
+    const defaults = plain.workers[0]!.of("init")[0]!;
+    expect(defaults.refusePasswordFields).toBe(true);
+    expect(defaults.excludeWebP).toBe(false);
+    expect(defaults.cwd).toBeUndefined();
+    const set = rig({ refusePasswordFields: false, excludeWebP: true, cwd: "/work/site" });
+    await start(set.host);
+    const chosen = set.workers[0]!.of("init")[0]!;
+    expect([chosen.refusePasswordFields, chosen.excludeWebP, chosen.cwd]).toEqual([false, true, "/work/site"]);
+  });
+
   test("a failure that asks for a new worker gets one: the reason is added unless the cell's own budget already said it, and the next ReferenceError is explained once", async () => {
     const { host, workers } = rig();
     const first = await start(host);
