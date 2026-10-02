@@ -11,6 +11,7 @@ import { execFile, spawn } from "node:child_process";
 import { readdirSync, readFileSync, readlinkSync } from "node:fs";
 import { basename, isAbsolute, resolve } from "node:path";
 import { promisify } from "node:util";
+import { ownedPids } from "../../owned-pids.js";
 import { ToolAbortError, ToolError, throwIfAborted } from "../errors.js";
 import { findFreeCdpPort, gracefulKillTreeOnce, KIND_TIMINGS, probeCdpStatus, waitForCdp } from "./cdp.js";
 
@@ -294,8 +295,11 @@ export async function establishSpawned(kind: { path: string; args?: string[] }, 
   // A process that exits before its port opens (Chrome handing over to an instance that is already running does exactly this) fails the wait now, not at 30 s.
   const early = new AbortController();
   let exitedWith: number | null | undefined;
+  // The application has its own end (the person's, or a cell's `close({ kill: true })`): the sweep of what cells left behind at the server's stop never takes it (owned-pids.ts).
+  const disown = ownedPids.add(pid);
   void child.exited.then((code) => {
     exitedWith = code;
+    disown();
     early.abort();
   });
   // Once the child has been seen to exit its number may name another program: nothing is signalled then.

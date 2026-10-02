@@ -13,6 +13,7 @@ import type { AcquiredBrowser, BrowserKind } from "../src/code/contracts";
 import { findFreeCdpPort } from "../src/code/kinds/cdp";
 import { establishKind } from "../src/code/kinds/establish";
 import { establishSpawned, type ProcessScanner } from "../src/code/kinds/spawned";
+import { ownedPids } from "../src/owned-pids";
 import { BrowserRuntimeError } from "../src/store";
 import { alive, gone, killTree } from "./kinds-fixture";
 import { createRoot, newRuntime, teardown, waitUntil } from "./fixture";
@@ -213,6 +214,15 @@ describe("establishSpawned", () => {
     } finally {
       stop(server);
     }
+  }, 60_000);
+
+  test("an application it started is owned while it runs, so the shutdown sweep of what cells left behind leaves it open, and is not once it has exited", async () => {
+    const app = await establishSpawned({ path: process.execPath, args: [FAKE_APP] }, { scanner: NOTHING_RUNNING });
+    pids.add(app.pid);
+    expect(ownedPids.has(app.pid)).toBe(true);
+    await app.terminate!();
+    expect(await gone(app.pid)).toBe(true);
+    await waitUntil("the exit to be seen", async () => ownedPids.has(app.pid), owned => !owned, 15_000);
   }, 60_000);
 
   test("an application that was already running has no terminate: it is not the pack's to end", async () => {

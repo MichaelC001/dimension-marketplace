@@ -12,6 +12,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { countTokens } from "gpt-tokenizer/encoding/o200k_base";
 import { CodeCell } from "../src/code/cell/cell.js";
 import type { CodeHostPort } from "../src/code/contracts.js";
+import { savedProfileRefusal } from "../src/code/refusals.js";
 import { BROWSER_RUN_DESCRIPTION } from "../src/code/tool.js";
 import type { BrowserRuntimePort } from "../src/contracts.js";
 import { createBrowserServer } from "../src/server.js";
@@ -144,5 +145,21 @@ describe("what the model is made to read", () => {
 
   test("browser_run's description alone is at most OMP's 1,089 tokens", () => {
     expect(countTokens(BROWSER_RUN_DESCRIPTION)).toBeLessThanOrEqual(1_089);
+  });
+
+  test("a code-space model that meets a saved profile is told the same way out by the prompt and by the refusal: say so, and open it for the person with browser_view, a tool its space has", async () => {
+    const offered = (await modelTools()).map(tool => tool.name);
+    const prompt = lineStartingWith("- Static public page?");
+    const refusal = savedProfileRefusal("work");
+    for (const text of [prompt, refusal]) {
+      expect(text).toMatch(/tell the user/i);
+      expect(text).toContain("browser_view");
+      expect(text).toMatch(/profile/);
+    }
+    expect(offered).toContain("browser_view");
+    // The refusal names the profile it was asked for, so the call it suggests can be made as it stands, and says what code can do meanwhile.
+    expect(refusal).toContain('browser_view({ profile: "work" })');
+    expect(refusal).toContain("throwaway");
+    expect(refusal).toContain("relay: true");
   });
 });

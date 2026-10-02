@@ -24,6 +24,8 @@ class FakeWorker {
   stuck = false;
   /** What the worker says it holds (undefined: it does not answer). */
   memory: WorkerMemory | undefined = { mb: 1, own: true };
+  /** While set, the worker's `warm` has not finished: the cell must not start. */
+  warming: PromiseWithResolvers<void> | undefined;
   readonly terminateLimits: number[] = [];
   readonly #listeners = new Set<(message: WorkerToHost) => void>();
   readonly #exits: Array<(reason: string) => void> = [];
@@ -54,6 +56,7 @@ class FakeWorker {
         return this.exited ? "exited" : "stuck";
       },
       onExit: handler => (this.exited ? queueMicrotask(() => handler(this.#reason)) : void this.#exits.push(handler)),
+      warm: async () => void (await this.warming?.promise),
       memory: async () => (this.exited ? undefined : this.memory),
     };
   }
@@ -475,16 +478,39 @@ const stuckBehavior: Behavior = (worker, message) => {
 };
 
 describe("a worker that nothing can end", () => {
-  test("it does not hold the host's shutdown: dispose returns after the polite wait and the terminate limit, the thread left to end by itself", async () => {
-    const { host, workers } = rig({ timing: STUCK_TIMING }, stuckBehavior);
+  test("it does not hold the host's shutdown: a cell that is running at the stop is not asked to leave first - its worker is terminated at once, and dispose returns after the terminate limit alone, the thread left to end by itself", async () => {
+    // A close wait of 5 s that must not be spent: the thread is inside the cell's call and will not answer.
+    const { host, workers } = rig({ timing: { ...STUCK_TIMING, closeMs: 5_000 } }, stuckBehavior);
     await start(host);
     const began = performance.now();
     await host.dispose();
     const took = performance.now() - began;
-    // closeMs 60 + terminateMs 20: the shutdown waited for neither the call nor the thread.
-    expect(took).toBeLessThan(600);
+    expect(took).toBeLessThan(1_000);
+    expect(workers[0]!.of("close")).toHaveLength(0);
     expect(workers[0]!.exited).toBe(false);
     expect(workers[0]!.terminateLimits).toEqual([20]);
+  });
+
+  test("a worker with no cell running at the stop is still asked to leave on its own first (its realm disconnects from its browsers), and is terminated only if it does not", async () => {
+    const { host, workers } = rig({ timing: STUCK_TIMING }, stuckBehavior);
+    const runId = await start(host);
+    workers[0]!.emit({ t: "result", runId, ...OK });
+    await host.resume("s1", runId, 1_000, NEVER);
+    await host.dispose();
+    expect(workers[0]!.of("close")).toHaveLength(1);
+    expect(workers[0]!.terminateLimits).toEqual([20]);
+  });
+
+  test("the host says whether processes may be at risk at a stop: a cell is running, or a worker that was ended is still stuck in a call", async () => {
+    const { host, workers } = rig({ timing: STUCK_TIMING }, stuckBehavior);
+    expect(host.holdsProcesses()).toBe(false);
+    const running = host.run("s1", { code: "execSync('dev-server')", timeoutMs: 30, waitMs: 2_000, signal: NEVER });
+    await waitUntil("the cell is running", () => host.holdsProcesses(), held => held, 2_000);
+    // The cell outlives its budget, the worker is ended and is stuck: nothing runs any more, one thread is still alive.
+    expect((await running).state).toBe("done");
+    expect(host.holdsProcesses()).toBe(true);
+    workers[0]!.die("the call returned");
+    expect(host.holdsProcesses()).toBe(false);
   });
 
   test("twenty hung cells in a row never leave more than two stuck threads alive; the refusal names the cells; when one returns, cells run again", async () => {
@@ -645,6 +671,40 @@ describe("a worker's memory is bounded, not only its heap", () => {
     const error = await ended(host, runId);
     expect(error.message).toContain("grew the server by 200 MB while it ran");
     expect(workers[0]!.exited).toBe(true);
+  });
+
+  test("a figure of another kind than the one the cell began with is not set against it: a helper that fell away mid-cell cannot turn a resident set into a growth of gigabytes", async () => {
+    // The cell began on a commit figure (5,000 MB). The helper dies and the worker answers with the resident set (300 MB), then the helper is back (5,050 MB): only like is compared with like.
+    const { host, workers } = rig({ memoryMb: 100, timing: MEMORY_TIMING }, (worker, message) => {
+      if (message.t !== "init") return;
+      worker.memory = { mb: 5_000, own: false, basis: "commit" };
+      queueMicrotask(() => worker.emit({ t: "ready" }));
+    });
+    const runId = await start(host);
+    await new Promise(resolve => setTimeout(resolve, 100)); // a real wait: the baseline is taken
+    workers[0]!.memory = { mb: 300, own: false, basis: "resident" };
+    await new Promise(resolve => setTimeout(resolve, 100)); // a real wait: nothing may happen in this window
+    expect(workers[0]!.exited).toBe(false);
+    workers[0]!.memory = { mb: 5_050, own: false, basis: "commit" };
+    await new Promise(resolve => setTimeout(resolve, 100)); // a real wait: 50 MB of growth is under the limit
+    expect(workers[0]!.exited).toBe(false);
+    workers[0]!.memory = { mb: 5_300, own: false, basis: "commit" };
+    expect((await ended(host, runId)).message).toContain("grew the server by 300 MB while it ran");
+  });
+
+  test("a first cell waits for the worker's memory to be readable before it starts, so it never runs unwatched", async () => {
+    const { host, workers } = rig({ memoryMb: 100, timing: MEMORY_TIMING }, (worker, message) => {
+      if (message.t === "init") {
+        worker.warming = Promise.withResolvers<void>();
+        queueMicrotask(() => worker.emit({ t: "ready" }));
+      }
+    });
+    const starting = host.run("s1", { code: "x", timeoutMs: 30_000, waitMs: 20, signal: NEVER });
+    await new Promise(resolve => setTimeout(resolve, 100)); // a real wait: the cell must not have started
+    expect(workers[0]!.of("run")).toHaveLength(0);
+    workers[0]!.warming!.resolve();
+    expect((await starting).state).toBe("running");
+    expect(workers[0]!.of("run")).toHaveLength(1);
   });
 
   test("limits of 0 (per worker and for the host) turn the watchdog off", async () => {

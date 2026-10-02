@@ -8,9 +8,10 @@ import type { BridgeRequest, BrowserKind, CodeBrowserPort, CodeHostPort, RunStar
 import { resolveKind } from "../kinds/resolve.js";
 import { CODE_IDLE_MS, RuntimeCodeBrowsers } from "./runtime-port.js";
 import { CodeSession, DEFAULT_TIMING, type CodeTiming, sessionFolder, unknownRunMessage } from "./session.js";
+import type { CommitProbe } from "./commit-probe.js";
 import { HostMemory } from "./host-memory.js";
 import { TerminatingWorkers } from "./terminating.js";
-import { defaultWorkerEntry, type SpawnWorker, threadWorkerSpawner } from "./transport.js";
+import { defaultCommitProbe, defaultWorkerEntry, type SpawnWorker, threadWorkerSpawner } from "./transport.js";
 
 /** A cell's worker thread may hold this much heap before it ends itself; the server and every other session's browsers go on. */
 const DEFAULT_HEAP_MB = 1_024;
@@ -78,13 +79,17 @@ export class CodeHost implements CodeHostPort {
   readonly #terminating = new TerminatingWorkers();
   /** Every session's worker reports here: the host's total (DIMENSION_BROWSER_CODE_TOTAL_MB). */
   readonly #memory: HostMemory;
+  /** Reads the server's commit charge where a worker's own memory cannot be read and the resident set would be blind to it (Windows); this host starts it with the first worker and ends it with itself. */
+  readonly #commit: CommitProbe | undefined;
   readonly #unsubscribe: Array<() => void>;
   #disposed = false;
 
   constructor(options: CodeHostOptions) {
     this.#options = options;
     this.#memory = new HostMemory(options.totalMemoryMb ?? DEFAULT_TOTAL_MEMORY_MB);
-    this.#spawn = options.spawn ?? threadWorkerSpawner(defaultWorkerEntry(), { maxOldGenerationSizeMb: options.heapMb ?? DEFAULT_HEAP_MB });
+    const watchesMemory = (options.memoryMb ?? DEFAULT_MEMORY_MB) > 0 || (options.totalMemoryMb ?? DEFAULT_TOTAL_MEMORY_MB) > 0;
+    this.#commit = options.spawn === undefined && watchesMemory ? defaultCommitProbe() : undefined;
+    this.#spawn = options.spawn ?? threadWorkerSpawner(defaultWorkerEntry(), { maxOldGenerationSizeMb: options.heapMb ?? DEFAULT_HEAP_MB }, this.#commit);
     this.#timing = { ...DEFAULT_TIMING, ...options.timing };
     this.#unsubscribe = [
       options.browsers.onEnd((browserId, why, reason) => {
@@ -139,6 +144,16 @@ export class CodeHost implements CodeHostPort {
     return await held.resume(runId, waitMs, signal);
   }
 
+  /**
+   * Whether a stop now may leave processes behind or wait on a thread that will not answer: a cell is running (it may be inside a call to a child process), or a worker this host ended is still alive inside one.
+   * The server's shutdown starts its sweep of the cells' child processes with the stop when this is true.
+   */
+  holdsProcesses(): boolean {
+    if (this.#terminating.size > 0) return true;
+    for (const session of this.#sessions.values()) if (session.running) return true;
+    return false;
+  }
+
   async dispose(): Promise<void> {
     if (this.#disposed) return;
     this.#disposed = true;
@@ -147,6 +162,7 @@ export class CodeHost implements CodeHostPort {
     this.#sessions.clear();
     await Promise.allSettled(sessions.map(session => session.close()));
     await this.#options.browsers.dispose?.();
+    this.#commit?.close();
   }
 }
 

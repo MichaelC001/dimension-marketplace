@@ -34,6 +34,8 @@
 		};
 		const tab = {};
 		tab.toString = () => "<tab active>";
+		// Every tab handle OMP makes has a string `name`. This one's is known only after the host has said which tab is active, so it is asked for: `browser.tab(await browser.active().name())`.
+		tab.name = () => nameOfActive();
 		for (const method of tabMethods) {
 			tab[method] = async (...args) => base.tab(await nameOfActive())[method](...args);
 		}
