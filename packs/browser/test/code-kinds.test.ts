@@ -29,13 +29,14 @@ import { type FakeExtension, removeRelayBundle, startFakeExtension, startRelayHo
 /** The variables the kinds read; a test sets what it needs and the owner's own environment never leaks into it. */
 const KIND_VARIABLES = [
   "DIMENSION_BROWSER_CDP_URL", "DIMENSION_BROWSER_RELAY", "DIMENSION_BROWSER_RELAY_URL", "DIMENSION_BROWSER_CMUX", "DIMENSION_BROWSER_HEADLESS",
-  "CMUX_SOCKET_PATH", "CMUX_SOCKET_PASSWORD", "CMUX_RELAY_ID", "CMUX_RELAY_TOKEN", "CMUX_WORKSPACE_ID", "CMUX_SURFACE_ID", "PUPPETEER_PROXY",
+  "CMUX_SOCKET_PATH", "CMUX_SOCKET_PASSWORD", "CMUX_RELAY_ID", "CMUX_RELAY_TOKEN", "CMUX_WORKSPACE_ID", "CMUX_SURFACE_ID", "PUPPETEER_PROXY", "DIMENSION_BROWSER_CODE_ALLOW_ATTACH",
 ];
 
 function kindEnv(extra: Record<string, string> = {}): Record<string, string | undefined> {
   const env: Record<string, string | undefined> = { ...process.env };
   for (const name of KIND_VARIABLES) delete env[name];
-  return { ...env, ...extra };
+  // The person has said yes to a cell driving a browser it did not launch (code-host.test.ts defends the refusal without it); a test that wants it off says so.
+  return { ...env, DIMENSION_BROWSER_CODE_ALLOW_ATTACH: "1", ...extra };
 }
 
 let pages: PageServer;
@@ -94,6 +95,17 @@ async function personTab(chrome: DebugChrome, url?: string): Promise<{ url: stri
     const [page = await browser.newPage()] = await browser.pages();
     if (url !== undefined) await page.goto(url, { waitUntil: "load" });
     return { url: page.url(), ...(await page.evaluate(() => ({ width: innerWidth, height: innerHeight }))) };
+  } finally {
+    await browser.disconnect();
+  }
+}
+
+/** The person's tab as they have it: window size and pixel ratio, read over a connection of the test's own. */
+async function personMetrics(chrome: DebugChrome): Promise<[number, number, number]> {
+  const browser = await puppeteer.connect({ browserURL: chrome.cdpUrl, defaultViewport: null });
+  try {
+    const [page] = await browser.pages();
+    return (await page!.evaluate(() => [innerWidth, innerHeight, devicePixelRatio])) as [number, number, number];
   } finally {
     await browser.disconnect();
   }
@@ -234,6 +246,27 @@ describeWithChrome("connected: a cell drives a Chrome the person started", () =>
     expect(refused.message).toContain("http://127.0.0.1:9");
   }, BROWSER_TEST_TIMEOUT_MS);
 
+  test("no open or reuse that carries a viewport resizes the person's window: the first open, a second tab name on the same Chrome, and a reopen of a name", async () => {
+    const chrome = await startDebugChrome();
+    await personTab(chrome, pages.url("/one"));
+    const before = await personMetrics(chrome);
+    const cdp = JSON.stringify(chrome.cdpUrl);
+    const code = await start();
+    const asked = "viewport: { width: 1000, height: 700, scale: 2 }";
+    expect(before).not.toEqual([1000, 700, 2]);
+
+    await valueOf(code, "s1", `await browser.open({ name: "a", app: { cdp_url: ${cdp} }, ${asked} }); 0`);
+    expect(await personMetrics(chrome)).toEqual(before);
+    // Another name on the same endpoint finds the browser the session holds: this is the path that used to resize.
+    await valueOf(code, "s1", `await browser.open({ name: "b", app: { cdp_url: ${cdp} }, ${asked} }); 0`);
+    expect(await personMetrics(chrome)).toEqual(before);
+    // A reopen of a name that exists.
+    await valueOf(code, "s1", `await browser.open({ name: "a", app: { cdp_url: ${cdp} }, ${asked} }); 0`);
+    expect(await personMetrics(chrome)).toEqual(before);
+    // The cell sees the person's window too, not the size it asked for.
+    expect(await valueOf(code, "s1", "JSON.stringify(await browser.tab('a').evaluate(() => [innerWidth, innerHeight, devicePixelRatio]))")).toEqual(before);
+  }, BROWSER_TEST_TIMEOUT_MS);
+
   test("DIMENSION_BROWSER_CDP_URL makes a plain open connect", async () => {
     const chrome = await startDebugChrome();
     await personTab(chrome, pages.url("/one"));
@@ -312,7 +345,7 @@ describeWithChrome("spawned: a cell starts an application and drives it", () => 
     }
   }, BROWSER_TEST_TIMEOUT_MS);
 
-  test("an instance already running with a debugging port is adopted, not started twice, and close({ kill: true }) ends it as it does in OMP", async () => {
+  test("an instance already running with a debugging port is adopted, not started twice, and close({ kill: true }) does not end it: the pack did not start it", async () => {
     if (chromePath === undefined) throw new Error("no Chrome");
     const running = await startDebugChrome();
     await personTab(running, pages.url("/one"));
@@ -328,7 +361,36 @@ describeWithChrome("spawned: a cell starts an application and drives it", () => 
     if (isFailure(result)) throw new Error(`${result.error.name}: ${result.error.message}`);
     expect(textOf(result)).toContain(`Opened tab "main" on spawned ${chromePath} (pid ${running.pid})`);
     expect(textOf(result).split("\n").at(-1)).toBe("Page one");
-    expect(await gone(running.pid)).toBe(true);
+    // The person's own Chrome, given as an application path: still running, with its page.
+    expect(alive(running.pid)).toBe(true);
+    expect(await pageUrls(running)).toEqual([pages.url("/one")]);
+  }, BROWSER_TEST_TIMEOUT_MS);
+
+  test("an open given up while the runtime attaches to the application it started ends that application: nothing is left running by pid", async () => {
+    if (chromePath === undefined) throw new Error("no Chrome");
+    const userDataDir = await mkdtemp(join(tmpdir(), "dimension-code-kinds-"));
+    scratch.push(userDataDir);
+    const started: number[] = [];
+    const cancel = new AbortController();
+    const runtime = newRuntime(await createRoot());
+    const real = runtime.codeSeam();
+    // The cell's deadline passes at the moment the runtime begins to attach: the application is up, and nobody waits for the open.
+    const seam: CodeSeam = { ...real, open: async (...args) => (cancel.abort(), await real.open(...args)) };
+    const port = new RuntimeCodeBrowsers(seam, {
+      establish: async (kind, options) => {
+        const made = await establishKind(kind, { ...options, scanner: NOTHING_RUNNING });
+        if ("attach" in made && made.attach.pid !== undefined) started.push(made.attach.pid);
+        return made;
+      },
+    });
+    const kind: BrowserKind = { kind: "spawned", path: chromePath, args: ["--headless=new", `--user-data-dir=${userDataDir}`, "--no-first-run", "--no-default-browser-check", "about:blank"] };
+    try {
+      await port.acquire("s1", { kind }, cancel.signal).catch(() => undefined);
+      await waitUntil("the application the open started to be ended", async () => started.length === 1 && (await gone(started[0]!, 1_000)), done => done, 30_000);
+      expect(real.browsersOf("s1")).toEqual([]);
+    } finally {
+      for (const pid of started) await killTree(pid);
+    }
   }, BROWSER_TEST_TIMEOUT_MS);
 
   test("a relative app.path is made absolute against the host's folder before it is asked for", async () => {

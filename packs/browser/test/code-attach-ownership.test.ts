@@ -153,7 +153,11 @@ function stop(server: Server | undefined): void {
   server?.close();
 }
 
-const nextTurn = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
+function nextTurn(): Promise<void> {
+  const { promise, resolve } = Promise.withResolvers<void>();
+  setImmediate(resolve);
+  return promise;
+}
 
 describe("establishSpawned", () => {
   test("an abort that lands as the port opens ends the application it just started", async () => {

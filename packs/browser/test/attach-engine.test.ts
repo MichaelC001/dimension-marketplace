@@ -11,6 +11,8 @@ import { join } from "node:path";
 import puppeteer from "puppeteer-core";
 import { KIND_TIMINGS } from "../src/code/kinds/cdp";
 import { establishKind } from "../src/code/kinds/establish";
+import type { ProcessScanner } from "../src/code/kinds/spawned";
+import type { AttachTarget } from "../src/engines/attach";
 import { createEngineDriver } from "../src/engines";
 import type { EngineDriver } from "../src/engines/types";
 import { BROWSER_TEST_TIMEOUT_MS, chromePath, describeWithChrome, failureCode } from "./fixture";
@@ -150,6 +152,27 @@ describeWithChrome("the attach engine on the person's Chrome", () => {
 		BROWSER_TEST_TIMEOUT_MS,
 	);
 
+	test(
+		"fitting the browser to a size resizes none of the person's pages: the window is theirs, whoever asks",
+		async () => {
+			const { driver, chromeUrl } = await attachedToPersonsChrome();
+			await driver.adoptTab({ match: "Page one" });
+			await driver.adoptTab({ match: "Page two" });
+			const read = async (): Promise<number[][]> => {
+				const probe = await puppeteer.connect({ browserURL: chromeUrl, defaultViewport: null });
+				try {
+					return await Promise.all((await probe.pages()).map(async (page) => (await page.evaluate(() => [innerWidth, innerHeight, devicePixelRatio])) as number[]));
+				} finally {
+					await probe.disconnect();
+				}
+			};
+			const before = await read();
+			await driver.resize({ width: 500, height: 400 }, 2);
+			expect(await read()).toEqual(before);
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
 	test("an attach target belongs to the attach engine alone, and a launched browser has nothing to adopt", async () => {
 		const target = { kind: "connected" as const, cdpUrl: "http://127.0.0.1:1", label: "connected http://127.0.0.1:1" };
 		expect(await failureCode(() => createEngineDriver("chromium", { profileDirectory: tmpdir(), viewport: { width: 640, height: 480 }, attach: target, onClosed: () => undefined }))).toBe("bad_engine");
@@ -163,26 +186,39 @@ describeWithChrome("the attach engine on the person's Chrome", () => {
 	});
 });
 
-describeWithChrome("an application the pack spawned", () => {
-	test(
-		"closing the driver leaves it running; kill ends it",
-		async () => {
-			if (chromePath === undefined) throw new Error("no Chrome");
-			const userDataDir = await mkdtemp(join(tmpdir(), "dimension-attach-spawned-"));
-			let pid: number | undefined;
-			try {
-				const established = await establishKind({ kind: "spawned", path: chromePath, args: ["--headless=new", `--user-data-dir=${userDataDir}`, "--no-first-run", "--no-default-browser-check", "about:blank"] });
-				if (!("attach" in established)) throw new Error("expected an attach target");
-				pid = established.attach.pid;
-				const driver = await createEngineDriver("chrome-relay", { profileDirectory: tmpdir(), viewport: { width: 640, height: 480 }, attach: established.attach, onClosed: () => undefined });
-				await driver.close();
-				expect(alive(pid!)).toBe(true);
+/** What a machine with the application not running looks like: no other Chrome on it (a test's, a person's) is taken for the application, so an open starts its own. */
+const NOTHING_RUNNING: ProcessScanner = { running: async () => ({ processes: [], unreadable: false }) };
 
-				const again = await createEngineDriver("chrome-relay", { profileDirectory: tmpdir(), viewport: { width: 640, height: 480 }, attach: established.attach, onClosed: () => undefined });
-				await again.kill();
-				expect(await gone(pid!)).toBe(true);
+describeWithChrome("an application the pack spawned", () => {
+	/** A headless Chrome as the application, started by the kinds module with a profile of its own; the pid is ended in `finally`. */
+	async function spawnApplication(): Promise<{ attach: AttachTarget; pid: number; userDataDir: string }> {
+		if (chromePath === undefined) throw new Error("no Chrome");
+		const userDataDir = await mkdtemp(join(tmpdir(), "dimension-attach-spawned-"));
+		const established = await establishKind({ kind: "spawned", path: chromePath, args: ["--headless=new", `--user-data-dir=${userDataDir}`, "--no-first-run", "--no-default-browser-check", "about:blank"] }, { scanner: NOTHING_RUNNING });
+		if (!("attach" in established) || established.attach.pid === undefined) throw new Error("expected an attach target with a pid");
+		return { attach: established.attach, pid: established.attach.pid, userDataDir };
+	}
+	const driverOn = (attach: AttachTarget): Promise<EngineDriver> => createEngineDriver("chrome-relay", { profileDirectory: tmpdir(), viewport: { width: 640, height: 480 }, attach, onClosed: () => undefined });
+
+	test(
+		"closing the driver leaves it running, a hard stop of the attachment still leaves it running, and only a kill that asks for the application ends it",
+		async () => {
+			const { attach, pid, userDataDir } = await spawnApplication();
+			try {
+				const first = await driverOn(attach);
+				await first.close();
+				expect(alive(pid)).toBe(true);
+
+				// A close that hung is answered by a hard stop (the runtime's fallback): the driver lets go at once, and the application the cell opened is not its to end.
+				const second = await driverOn(attach);
+				await second.kill();
+				expect(alive(pid)).toBe(true);
+
+				const third = await driverOn(attach);
+				await third.kill({ application: true });
+				expect(await gone(pid)).toBe(true);
 			} finally {
-				if (pid !== undefined) await killTree(pid);
+				await killTree(pid);
 				await rm(userDataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }).catch(() => undefined);
 			}
 		},

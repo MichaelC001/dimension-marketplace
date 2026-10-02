@@ -39,6 +39,9 @@ const ABS_EXE = process.platform === "win32" ? "C:\\Apps\\Foo\\foo.exe" : "/opt/
 // Which kind: OMP's browser.ts:103-142, with the environment where OMP read its settings
 // ---------------------------------------------------------------------------
 
+/** The person's yes to a cell driving a browser it did not launch: the order of choice is read with it given, and the gate has its own tests below. */
+const ALLOWED: KindEnv = { DIMENSION_BROWSER_CODE_ALLOW_ATTACH: "1" };
+
 describe("resolveKind: OMP's order of choice", () => {
 	// Every row is read off OMP's resolveBrowserKind (browser.ts:103-142), setting by setting. The settings are the pack's variables:
 	// browser.relay = DIMENSION_BROWSER_RELAY (also OMP's kill switch), browser.relayUrl = _RELAY_URL, browser.cdpUrl = _CDP_URL, browser.cmux = _CMUX.
@@ -67,19 +70,19 @@ describe("resolveKind: OMP's order of choice", () => {
 	];
 	for (const [name, request, env, expected] of rows) {
 		test(name, () => {
-			expect(resolveKind(request, env, CWD)).toEqual(expected);
+			expect(resolveKind(request, { ...ALLOWED, ...env }, CWD)).toEqual(expected);
 		});
 	}
 
 	test("a path is made absolute against the session's folder, and ~ is the home folder", () => {
-		expect(resolveKind({ app: { path: "bin/app" } }, {}, CWD)).toEqual({ kind: "spawned", path: resolve(CWD, "bin/app") });
-		expect(resolveKind({ app: { path: "~/apps/app" } }, {}, CWD)).toEqual({ kind: "spawned", path: resolve(homedir(), "apps/app") });
+		expect(resolveKind({ app: { path: "bin/app" } }, ALLOWED, CWD)).toEqual({ kind: "spawned", path: resolve(CWD, "bin/app") });
+		expect(resolveKind({ app: { path: "~/apps/app" } }, ALLOWED, CWD)).toEqual({ kind: "spawned", path: resolve(homedir(), "apps/app") });
 	});
 
 	test("an explicit app.relay while the relay is switched off is refused, not turned into another browser (DIMENSION_BROWSER_RELAY=0)", () => {
 		// The one place the pack departs from OMP's order (matrix H3): OMP falls through to headless, so a model that asked for the person's own Chrome
 		// would be typing into a throwaway without being told. The kill switch stays final, and the model hears it.
-		expect(() => resolveKind({ app: { relay: true } }, { DIMENSION_BROWSER_RELAY: "0" }, CWD)).toThrow(/switched off/);
+		expect(() => resolveKind({ app: { relay: true } }, { ...ALLOWED, DIMENSION_BROWSER_RELAY: "0" }, CWD)).toThrow(/switched off/);
 		expect(resolveKind({}, { DIMENSION_BROWSER_RELAY: "0" }, CWD)).toEqual({ kind: "headless", headless: true });
 	});
 
@@ -94,6 +97,43 @@ describe("resolveKind: OMP's order of choice", () => {
 		expect(sameBrowserKind({ kind: "connected", cdpUrl: "http://a:1" }, { kind: "connected", cdpUrl: "http://a:1" })).toBe(true);
 		expect(sameBrowserKind({ kind: "connected", cdpUrl: "http://a:1" }, { kind: "connected", cdpUrl: "http://a:2" })).toBe(false);
 		expect(sameBrowserKind({ kind: "relay", cdpUrl: "http://a:1" }, { kind: "connected", cdpUrl: "http://a:1" })).toBe(false);
+	});
+});
+
+describe("resolveKind: a cell drives a browser it did not launch only when the person has said yes", () => {
+	// Until the host asks the human at the call (host contract H1, the exec approval tier, not honoured yet) the person's yes is a setting of the pack, read from the host's environment at each open.
+	const asks: Array<[string, Parameters<typeof resolveKind>[0]]> = [
+		["app.cdp_url (a connected Chrome)", { app: { cdp_url: "http://127.0.0.1:9222" } }],
+		["app.path (an application it starts)", { app: { path: ABS_EXE } }],
+		["app.relay (the person's own Chrome)", { app: { relay: true } }],
+	];
+
+	test("each of the three is refused by default, and the refusal tells the model to ask the user, naming the setting", () => {
+		for (const [what, request] of asks) {
+			let refusal = "";
+			try {
+				resolveKind(request, {}, CWD);
+			} catch (error) {
+				refusal = (error as Error).message;
+			}
+			expect(refusal, what).toContain("code_needs_consent");
+			expect(refusal, what).toContain("ask the user to set DIMENSION_BROWSER_CODE_ALLOW_ATTACH=1");
+		}
+	});
+
+	test("only the person's setting lifts it: 1 or true, and not 0, an empty value or a word that is not a yes", () => {
+		for (const [what, request] of asks) {
+			expect(() => resolveKind(request, { DIMENSION_BROWSER_CODE_ALLOW_ATTACH: "1" }, CWD), what).not.toThrow();
+			expect(() => resolveKind(request, { DIMENSION_BROWSER_CODE_ALLOW_ATTACH: "true" }, CWD), what).not.toThrow();
+			for (const no of ["0", "", "no", "false", "2"]) expect(() => resolveKind(request, { DIMENSION_BROWSER_CODE_ALLOW_ATTACH: no }, CWD), `${what} with ${JSON.stringify(no)}`).toThrow(/code_needs_consent/);
+		}
+	});
+
+	test("a browser the person's own environment names, a plain open and a throwaway need no second yes", () => {
+		expect(resolveKind({}, { DIMENSION_BROWSER_CDP_URL: "http://127.0.0.1:9222" }, CWD)).toEqual({ kind: "connected", cdpUrl: "http://127.0.0.1:9222" });
+		expect(resolveKind({}, { DIMENSION_BROWSER_RELAY: "1" }, CWD)).toEqual({ kind: "relay", cdpUrl: "http://127.0.0.1:9224" });
+		expect(resolveKind({ app: {} }, {}, CWD)).toEqual({ kind: "headless", headless: true });
+		expect(resolveKind({ app: { relay: false } }, {}, CWD)).toEqual({ kind: "headless", headless: true });
 	});
 });
 

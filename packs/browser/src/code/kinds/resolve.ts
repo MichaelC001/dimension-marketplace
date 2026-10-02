@@ -15,6 +15,7 @@ import { ToolError } from "../errors.js";
 
 /** The environment the kinds read. Names are the pack's (matrix H2-H6, H12); `CMUX_*` are cmux's own. */
 export interface KindEnv {
+  DIMENSION_BROWSER_CODE_ALLOW_ATTACH?: string;
   DIMENSION_BROWSER_CDP_URL?: string;
   DIMENSION_BROWSER_RELAY?: string;
   DIMENSION_BROWSER_RELAY_URL?: string;
@@ -72,7 +73,19 @@ export function resolveCmuxKind(options: { surface?: string; settingEnabled?: bo
 }
 
 /**
- * Which browser `request` means. Throws only for an explicit `app.relay: true` while the relay is switched off. `hidden` is whether the browser the pack
+ * The person's opt-in to a cell driving a browser or an application the pack did not launch. It is read from the host's environment each time a cell opens one, never from the cell: the code worker's own
+ * environment is an allowlist that does not carry it, and a cell that sets it in its own cannot reach this process's. Until the host asks the human at the call (the exec approval tier, host contract H1, which
+ * `browser_run` declares and the host does not honour yet) this is the one human gate the three model-chosen kinds have; H1 adds the approval on top of it and does not replace it.
+ */
+export const ATTACH_OPT_IN = "DIMENSION_BROWSER_CODE_ALLOW_ATTACH";
+
+const ATTACH_REFUSAL =
+  `code_needs_consent: driving a browser or an application you did not launch (app.cdp_url, app.path, app.relay) needs the person's yes, and they have not given it. Do not retry it or look for a way around it: ` +
+  `ask the user to set ${ATTACH_OPT_IN}=1 in the browser pack's environment and restart the pack, or open a throwaway browser with browser.open() and no app.`;
+
+/**
+ * Which browser `request` means. Throws for an explicit `app.cdp_url`, `app.path` or `app.relay: true` the person has not allowed ({@link ATTACH_OPT_IN}), and for an explicit `app.relay: true` while the relay is switched off.
+ * A kind the environment names (`DIMENSION_BROWSER_CDP_URL`, `DIMENSION_BROWSER_RELAY`) is the person's own choice and needs no second yes. `hidden` is whether the browser the pack
  * launches itself is hidden (the host's own setting); without it the environment's `DIMENSION_BROWSER_HEADLESS` says.
  */
 export function resolveKind(request: KindRequest, env: KindEnv, cwd: string, hidden: boolean = env.DIMENSION_BROWSER_HEADLESS !== "false"): BrowserKind {
@@ -80,6 +93,7 @@ export function resolveKind(request: KindRequest, env: KindEnv, cwd: string, hid
   // A saved profile is a Chromium the pack launches itself: no other kind can hold it, so it is chosen before the order.
   if (request.profile !== undefined) return headless;
   const app = request.app;
+  if ((app?.cdp_url || app?.path || app?.relay) && !parseFlag(env[ATTACH_OPT_IN], false)) throw new ToolError(ATTACH_REFUSAL);
   if (app?.cdp_url) return { kind: "connected", cdpUrl: trimUrl(app.cdp_url) };
   if (app?.path) {
     const spawned: BrowserKind = { kind: "spawned", path: resolveToCwd(app.path, cwd) };
