@@ -24,8 +24,8 @@
  *    on, one a View has joined, and the person's own Private browser only
  *    after every chat's. A close that hangs is answered by killing the
  *    browser's process tree; the slot is freed only on a confirmed exit.
- *  - Whole tasks run on upstream agent loops (jev, browser-use) against the
- *    same Chrome, through `task.ts`. We keep their progress, not their logic.
+ *  - Whole tasks run on the jev agent loop against the
+ *    same Chrome, through `task.ts`. We keep its progress, not its logic.
  *  - Sign-in is only ever OBSERVED, never derived: a probe that saw the
  *    signed-in marker (or, on a site's front or login page, its absence) after
  *    a page loaded in a saved profile, or a publish result that says
@@ -87,7 +87,7 @@ import type {
 	StepOutcome,
 	StepStatus,
 } from "./contracts.js";
-import { BROWSER_ENGINES, MAX_ANNOTATION_REGIONS, MAX_BATCH_STEPS, MAX_EVAL_EXPRESSION_CHARS, MAX_EVAL_RESULT_CHARS, MAX_VIEWPORT, MAX_WAIT_MS, MIN_VIEWPORT, TASK_AGENTS } from "./contracts.js";
+import { BROWSER_ENGINES, MAX_ANNOTATION_REGIONS, MAX_BATCH_STEPS, MAX_EVAL_EXPRESSION_CHARS, MAX_EVAL_RESULT_CHARS, MAX_VIEWPORT, MAX_WAIT_MS, MIN_VIEWPORT } from "./contracts.js";
 import { credentialOrigin, resolveCredential, savedPassword, savedPasswords } from "./credentials.js";
 import { assertEngineAvailable, createEngineDriver } from "./engines/index.js";
 import { withTimeout } from "./engines/launch.js";
@@ -100,7 +100,7 @@ import { PublishApprovals } from "./publish-approval.js";
 import { type Publication, cancel, confirm, isPending, prepare, publishRecord, requirePending, validateMode, validateRecipe, waitSettled } from "./publish.js";
 import { blockedReason, DEFAULT_READ_CHARS, MAX_READ_CHARS, READ_TIMEOUT_MS, readPolicy, TIMEOUT_REASON } from "./read.js";
 import { ActionNotDispatched, fail, ProfileStore, validateProfile } from "./store.js";
-import { type RunningWorker, startWorker } from "./task.js";
+import { type RunningWorker, releaseSpare, startWorker } from "./task.js";
 
 // ---------------------------------------------------------------------------
 // Bounds. Every unbounded thing in a long-lived runtime is a leak or a weapon.
@@ -606,6 +606,8 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		this.connectionListeners.clear();
 		this.profileWatcher?.close();
 		this.profileWatcher = undefined;
+		// The spare task worker waiting for the next task belongs to no browser: it goes with the runtime.
+		releaseSpare();
 		// Let in-flight launches finish first: a browser born after we started
 		// disposing would otherwise outlive the runtime holding its lock.
 		await Promise.allSettled(this.opening.values());
@@ -627,6 +629,9 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			}
 		}
 		await Promise.allSettled(this.removals);
+		// A task whose start was already queued when this dispose began has run by now (every browser's queue drained above) and, taking
+		// no notice of the flag, kept a new spare: an interpreter holding jev's key in its environment that belongs to no browser.
+		releaseSpare();
 		if (errors.length > 0) fail("dispose_incomplete", `some browsers did not shut down cleanly: ${errors.join("; ")}`);
 	}
 
@@ -1533,38 +1538,32 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		caller?: ToolCaller,
 	): Promise<{ run: TaskRun; finished: Promise<TaskRun> }> {
 		const entry = this.require(browserId);
-		if (!TASK_AGENTS.includes(request.agent)) fail("bad_agent", `agent must be one of: ${TASK_AGENTS.join(", ")}`);
-		// The task agents take a browser-level CDP endpoint and act on the whole
-		// browser (browser-use focuses the oldest tab). On the relay that is the
-		// human's own Chrome, which this pack owns only one tab of.
+		// The task agent takes a browser-level CDP endpoint and acts on the whole
+		// browser. On the relay that is the human's own Chrome, which this pack
+		// owns only one tab of.
 		if (entry.engine === "chrome-relay") {
-			fail("task_unsupported_engine", "task agents drive a whole browser, and chrome-relay is your own Chrome — open a chromium profile for browser_task");
+			fail("task_unsupported_engine", "the task agent drives a whole browser, and chrome-relay is your own Chrome — open a chromium profile for browser_task");
 		}
 		const task = typeof request.task === "string" ? request.task.trim() : "";
 		if (task.length === 0 || task.length > MAX_TASK_CHARS) fail("bad_task", `task must be 1-${MAX_TASK_CHARS} characters`);
 		const maxSteps = Math.min(MAX_TASK_STEPS, Math.max(1, Math.floor(request.maxSteps ?? DEFAULT_TASK_STEPS)));
-		if (request.credential !== undefined) {
-			// browser-use reads password fields like any other and would put a
-			// filled value in front of its model; only jev never reads them.
-			if (request.agent !== "jev") fail("credential_unsupported", "credential is supported with agent jev only; browser-use reads password fields, so give it the password in task or log in with browser_act");
-			credentialOrigin(request.credential?.origin);
-		}
+		if (request.credential !== undefined) credentialOrigin(request.credential.origin);
 
 		return await this.serialize(entry, async () => {
-			if (entry.worker) fail("task_running", `a ${entry.task?.agent} task is already running on this browser`);
+			if (entry.worker) fail("task_running", "a task is already running on this browser");
 			refuseWhilePublishing(entry, caller);
 			const state = await this.refreshState(entry);
 			// Resolved (and, for a sign-up, minted) only once the task will run.
 			const credential = request.credential ? resolveCredential(this.store.profileDir(this.savedProfile(entry, "a task credential")), request.credential) : undefined;
 			if (credential) entry.secrets.add(credential.password);
 			const run: TaskRun = {
-				id: randomBytes(8).toString("hex"), agent: request.agent, task, status: "running", summary: "",
+				id: randomBytes(8).toString("hex"), task, status: "running", summary: "",
 				steps: [], stepCount: 0, startedAt: new Date().toISOString(), elapsedMs: 0,
 				usage: { modelCalls: 0, inputTokens: 0, outputTokens: 0, costUsd: null },
 				...(credential ? { credential: { origin: credential.origin, created: credential.created } } : {}),
 			};
 			const worker: RunningWorker = startWorker(
-				{ agent: request.agent, cdpUrl: entry.driver.cdpEndpoint(), task, maxSteps, startUrl: state.url, ...(credential ? { credential: { origin: credential.origin, password: credential.password } } : {}) },
+				{ cdpUrl: entry.driver.cdpEndpoint(), task, maxSteps, startUrl: state.url, ...(credential ? { credential: { origin: credential.origin, password: credential.password } } : {}) },
 				(step) => {
 					const record: TaskStep = { n: step.n, action: step.action, url: step.url, elapsedMs: step.elapsedMs };
 					run.steps.push(record);
@@ -1673,7 +1672,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			// Before any page interaction: a refusal here leaves the publish pending and nothing clicked.
 			requireExpected(this.redact(entry, publishRecord(publication)), caller, expect);
 			if (entry.task?.status === "running") {
-				fail("task_running", `a browser_task (${entry.task.agent}) owns this page; wait for it or cancel it`);
+				fail("task_running", "a browser_task owns this page; wait for it or cancel it");
 			}
 			// The approval covers what the record holds NOW (the values the page read back, the origin, the profile and the preset), and
 			// spending it is the lock: it happens before the click, for the View's Post too, so a post the human pressed cannot be posted again by the agent.
@@ -2127,7 +2126,7 @@ function requireDelta(value: unknown, name: string): number {
 /** A task's page is its own, and a pending publish pins the page: neither takes another caller's page work. */
 function refuseWhileBusy(entry: Entry, caller: ToolCaller | undefined): void {
 	if (entry.task?.status === "running") {
-		fail("task_running", `a browser_task (${entry.task.agent}) owns this page; wait for it or cancel it`);
+		fail("task_running", "a browser_task owns this page; wait for it or cancel it");
 	}
 	refuseWhilePublishing(entry, caller);
 }

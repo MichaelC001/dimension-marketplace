@@ -145,7 +145,7 @@ describeWithChrome("throwaway browsers", () => {
 			expect(await failureCode(() => runtime.act(browserId, { kind: "type", selector: "#p", generatePassword: true }))).toBe("profile_required");
 			expect(await failureCode(() => runtime.act(browserId, { kind: "type", selector: "#p", useSavedPassword: true }))).toBe("profile_required");
 			expect(
-				await failureCode(() => runtime.startTask(browserId, { agent: "jev", task: "sign up", credential: { origin: "https://example.com", mode: "signup" } })),
+				await failureCode(() => runtime.startTask(browserId, { task: "sign up", credential: { origin: "https://example.com", mode: "signup" } })),
 			).toBe("profile_required");
 
 			expect((await runtime.state(browserId)).url).toBe(url);
