@@ -417,6 +417,11 @@ export interface BrowserRuntimePort {
   /** The state as `state` answers it, but NOT queued behind page work: the live view keeps reading it while a navigation or action is in flight. */
   liveState(browserId: string): Promise<BrowserState>;
   /**
+   * A View joined this browser's live stream. While any View is joined nobody may give the browser up to make room, and it is never
+   * idle. Returns what ends the watching (idempotent). Throws `unknown_browser`. A count, never a clock: a slow page is still watched.
+   */
+  viewing(browserId: string): () => void;
+  /**
    * The human's own mouse, wheel and keys, applied to the active tab in order. Admitted and bounded first (`bad_input`), refused
    * while a task owns the page (`task_running`), and a click or key while a publish waits for the Post marks it touched, as `act` does.
    * Not queued behind page work, so it never waits for a navigation.

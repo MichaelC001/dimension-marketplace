@@ -23,6 +23,8 @@ export interface LiveSource {
 	watchFrames(browserId: string, onFrame: (frame: LiveFrame) => void): () => void;
 	/** The browser's state, not queued behind page work. Throws `unknown_browser` once it is closed. */
 	liveState(browserId: string): Promise<BrowserState>;
+	/** A View is joined to this browser's stream until the returned function is called: the runtime does not give a watched browser up. Throws `unknown_browser`. */
+	viewing(browserId: string): () => void;
 	/** One batch of the human's input. Rejects with a `BrowserRuntimeError` whose `code` says why. */
 	input(browserId: string, events: unknown): Promise<void>;
 }
@@ -109,6 +111,8 @@ class Client {
 /** Everything the Views of one browser share: one state reader, one picture watcher, the newest of each for a View that joins later. */
 class Room {
 	readonly clients = new Set<Client>();
+	/** What ends each joined View's hold on the browser (`LiveSource.viewing`). */
+	readonly #leases = new Map<Client, () => void>();
 	#stopWatching: (() => void) | undefined;
 	#timer: ReturnType<typeof setInterval> | undefined;
 	#sampling = false;
@@ -127,6 +131,14 @@ class Room {
 
 	join(client: Client): void {
 		this.clients.add(client);
+		// Joined means watching: from here until it leaves, the runtime will not give this browser up.
+		try {
+			this.#leases.set(client, this.source.viewing(this.browserId));
+		} catch (error) {
+			if (!isGone(error)) throw error;
+			this.onClosed(this);
+			return;
+		}
 		this.#timer ??= setInterval(() => void this.#sample(), this.intervalMs);
 		if (client.wantsPictures) this.#watch();
 		if (this.#lastState !== undefined) client.offerState(encode(KIND_STATE, JSON.parse(this.#lastState)));
@@ -136,6 +148,8 @@ class Room {
 
 	leave(client: Client): void {
 		this.clients.delete(client);
+		this.#leases.get(client)?.();
+		this.#leases.delete(client);
 		if (![...this.clients].some((other) => other.wantsPictures)) this.#unwatch();
 		if (this.clients.size > 0) return;
 		this.#stop();
@@ -146,6 +160,8 @@ class Room {
 	end(): void {
 		const clients = [...this.clients];
 		this.clients.clear();
+		for (const release of this.#leases.values()) release();
+		this.#leases.clear();
 		this.#stop();
 		for (const client of clients) client.end();
 	}
