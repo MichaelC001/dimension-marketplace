@@ -18,6 +18,7 @@ const clients: Client[] = [];
 let pages: Pages;
 const saved: Record<string, string | undefined> = {};
 const WATCHDOG = ["DIMENSION_BROWSER_CODE_MEMORY_MB", "DIMENSION_BROWSER_CODE_TOTAL_MB"] as const;
+const JEV_KEY = "TYPESAFE_API_KEY";
 
 beforeEach(async () => {
   pages = await startPages();
@@ -26,25 +27,26 @@ beforeEach(async () => {
     saved[name] = process.env[name];
     process.env[name] = "0";
   }
+  saved[JEV_KEY] = process.env[JEV_KEY];
 });
 
 afterEach(async () => {
   for (const client of clients.splice(0)) await client.close().catch(() => undefined);
   await teardown();
   await pages.close();
-  for (const name of WATCHDOG) {
+  for (const name of [...WATCHDOG, JEV_KEY]) {
     if (saved[name] === undefined) delete process.env[name];
     else process.env[name] = saved[name];
   }
 });
 
 /** A server whose task tools are on or off, the tools it lists, and what a cell is told when it types into a password field. */
-async function refusalWith(taskTools: boolean): Promise<{ tools: string[]; refusal: string }> {
+async function refusalWith(taskTools?: boolean): Promise<{ tools: string[]; refusal: string }> {
   const root = await createRoot();
   const viewDir = join(root, "view");
   await mkdir(viewDir, { recursive: true });
   await writeFile(join(viewDir, "index.html"), "<!doctype html><title>view</title>");
-  const server = await createBrowserServer({ runtime: newRuntime(root), viewDir, presets: [], taskTools });
+  const server = await createBrowserServer({ runtime: newRuntime(root), viewDir, presets: [], ...(taskTools === undefined ? {} : { taskTools }) });
   const client = new Client({ name: "code-task-credential-test", version: "0.0.0" });
   const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
@@ -73,6 +75,24 @@ describeWithChrome("the password refusal names browser_task exactly when the ser
     expect(tools).not.toContain("browser_task");
     expect(tools).not.toContain("browser_task_wait");
     expect(tools).not.toContain("browser_task_cancel");
+    expect(refusal).toContain("is a password field");
+    expect(refusal).not.toContain("browser_task");
+  }, BROWSER_TEST_TIMEOUT_MS);
+});
+
+describeWithChrome("the server reads the one predicate itself: jev's key", () => {
+  // No `taskTools` option here: what decides is the environment, as it does in the product. A key that makes the tool exist and a refusal that does not name it (or the reverse) is the disagreement this guards.
+  test("with the key set the task tools are listed and the refusal names browser_task", async () => {
+    process.env[JEV_KEY] = "a-key";
+    const { tools, refusal } = await refusalWith();
+    expect(tools).toContain("browser_task");
+    expect(refusal).toContain("browser_task");
+  }, BROWSER_TEST_TIMEOUT_MS);
+
+  test("without it neither the tools nor the refusal mention browser_task", async () => {
+    delete process.env[JEV_KEY];
+    const { tools, refusal } = await refusalWith();
+    expect(tools).not.toContain("browser_task");
     expect(refusal).toContain("is a password field");
     expect(refusal).not.toContain("browser_task");
   }, BROWSER_TEST_TIMEOUT_MS);
