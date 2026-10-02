@@ -1239,6 +1239,8 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		// Not queued behind page work: it must hold before the agent's next step, not after its whole batch.
 		entry.takenOver = mode === "take";
 		this.watchWheel(entry);
+		// The code host holds this browser's tabs in a worker: it drops them, and stops a cell that is using the page (the cell is told human_driving) before the person's first click lands in the middle of it.
+		if (mode === "take") this.notifyEnd(entry, "taken-over");
 		return this.redact(entry, await this.buildState(entry));
 	}
 

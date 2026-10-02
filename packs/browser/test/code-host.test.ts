@@ -6,6 +6,10 @@
  * Real runtime, real Chrome, a real worker thread running the real tab realm. A Chrome is gone only when the operating system says so by pid (chrome-processes.ts).
  */
 import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
+import { existsSync, statSync } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { defaultWorkerEntry, type SpawnWorker, threadWorkerSpawner } from "../src/code/host/transport";
 import { chromePidsByThrowaway } from "./chrome-processes";
 import { BROWSER_TEST_TIMEOUT_MS, createRoot, describeWithChrome, teardown, waitUntil } from "./fixture";
@@ -379,5 +383,34 @@ describeWithChrome("tabs the person opened", () => {
     expect(tabs.map(tab => tab.url).sort()).toEqual([pages.url("/form"), pages.url("/other")].sort());
     expect(tabs.filter(tab => tab.active).map(tab => tab.url)).toEqual([pages.url("/other")]);
     expect(await valueOf(host, "s1", "browser.active().url()")).toBe(pages.url("/other"));
+  }, BROWSER_TEST_TIMEOUT_MS);
+});
+
+describeWithChrome("a person takes the browser over while a cell is using it", () => {
+  test("the person's control call stops the cell, a loop that catches the abort does not go on, and the next cell is refused until the wheel is handed back", async () => {
+    const { host, runtime } = await start();
+    const dir = await mkdtemp(join(tmpdir(), "browser-takeover-"));
+    const ticks = join(dir, "ticks.txt");
+    try {
+      await valueOf(host, "s1", `await browser.open({ name: "main", url: ${JSON.stringify(pages.url("/form"))} }); const kept = 1; 0`);
+      const code = `import { appendFileSync } from "node:fs"; const tab = browser.tab("main"); for (;;) { try { await tab.url(); } catch {} appendFileSync(${JSON.stringify(ticks)}, "x"); await new Promise(r => setTimeout(r, 20)); }`;
+      const pending = host.run("s1", { code, timeoutMs: 120_000, waitMs: 30_000, signal: NEVER });
+      await waitUntil("the loop is ticking", () => (existsSync(ticks) ? statSync(ticks).size : 0), size => size >= 3, 10_000);
+      const browserId = runtime.codeSeam().browsersOf("s1")[0]!.browserId;
+      await runtime.control(browserId, "take", "app");
+      const ended = await pending;
+      if (ended.state !== "done" || !("error" in ended.result)) throw new Error("the cell should have ended in an error");
+      expect(ended.result.error.message).toContain("human_driving");
+      expect(ended.result.error.message.match(/reset/g)).toHaveLength(1);
+      // The abandoned loop is in a worker that was replaced: its file stops growing. A real wait on purpose: the thing under test is that nothing writes in this window.
+      const settled = statSync(ticks).size;
+      await new Promise(resolve => setTimeout(resolve, 600));
+      expect(statSync(ticks).size).toBe(settled);
+      await expect(host.run("s1", { code: "1", timeoutMs: 5_000, waitMs: 5_000, signal: NEVER })).rejects.toThrow(/human_driving/);
+      await runtime.control(browserId, "return", "app");
+      expect((await failureOf(host, "s1", "kept")).message).toContain("kept is not defined");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   }, BROWSER_TEST_TIMEOUT_MS);
 });
