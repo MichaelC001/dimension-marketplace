@@ -5,6 +5,7 @@ import { coerceImageBase64 } from "../src/code/cell/display.js";
 import { createCodeEvaluator } from "../src/code/cell/evaluator.js";
 import { wrapCode } from "../src/code/cell/wrap-code.js";
 import { ToolError } from "../src/code/errors.js";
+import { ERROR_LINE_BYTES, MAX_INLINE_BYTES } from "../src/code/cell/output-sink.js";
 
 const cell = new CodeCell({ guardRejections: true });
 afterAll(() => cell.dispose());
@@ -113,6 +114,23 @@ describe("what a failing cell reports", () => {
     const failed = await failure('console.log("before"); display({ type: "image", mimeType: "image/png", data: "aGk=" }); throw new TypeError("nope");');
     expect(failed.error).toMatchObject({ name: "TypeError", message: "nope", isAbort: false });
     expect(failed.partial.displays).toEqual([{ type: "image", data: "aGk=", mimeType: "image/png" }, { type: "text", text: "before" }]);
+  });
+
+  // The tool appends the error line (the message and the lines of the model's own code, up to ERROR_LINE_BYTES) to the text of a failed cell and keeps the whole under MAX_INLINE_BYTES. The cell is what leaves the room:
+  // a failed cell that used all of it would reach the tool over MAX_INLINE_BYTES - ERROR_LINE_BYTES, which cuts it a second time (a second marker, a second file) and takes the error line's room out of the model's own
+  // output. A cell that went on has no error line and keeps the room. 300 lines and four 300-item displays is the mix whose text is the longest the budget allows: 47,743 B with no reserve, 43 KB with one.
+  test("a cell that fails after printing leaves room for its error line, and one that succeeds with the same output does not", async () => {
+    const printed = [
+      'for (let i = 0; i < 300; i++) console.log("line " + String(i).padStart(5, "0") + " " + "x".repeat(40));',
+      'for (let i = 0; i < 4; i++) display(Array.from({ length: 300 }, (_, k) => ({ index: k, label: "item " + k })));',
+    ].join("\n");
+    const bytes = (result: RunResult): number => Buffer.byteLength(textOf(result), "utf8");
+    const failed = await failure(`${printed}\nthrow new Error("boom");`);
+    expect(failed.error.message).toBe("boom");
+    expect(bytes(failed.partial)).toBeLessThanOrEqual(MAX_INLINE_BYTES - ERROR_LINE_BYTES);
+    expect(textOf(failed.partial)).toContain("display[1]:");
+    // The same output from a cell that went on is not shortened by room it does not need.
+    expect(bytes(await run(printed))).toBeGreaterThan(MAX_INLINE_BYTES - ERROR_LINE_BYTES);
   });
 
   test("a syntax error is the engine's own", async () => {
