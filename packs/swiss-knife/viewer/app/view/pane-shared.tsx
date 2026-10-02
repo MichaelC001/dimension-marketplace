@@ -1,5 +1,6 @@
 // The pieces every annotation mode seats the same way: the mode names, the props the
-// pane hands a layer, the slot lookup, and the list column. They live here, not in
+// pane hands a layer, the slot lookup, and the seats (the list column of a document, the footer of a picture or a
+// recording). They live here, not in
 // `pane-extras.tsx`, so each mode (a picture's marks, a document's comments, a page's
 // picked elements, a recording's timeline marks) can be its own file without importing
 // the dispatcher back (a cycle) or copying the seating rules.
@@ -98,5 +99,16 @@ export function Column({ frame, children }: { readonly frame: HTMLElement | null
 export function Strip({ frame, children }: { readonly frame: HTMLElement | null; readonly children: ReactNode }) {
 	const slot = paneOf(frame)?.querySelector<HTMLElement>('[data-slot="viewer-mode-strip"]') ?? null;
 	return slot === null ? null : createPortal(children, slot);
+}
+
+/**
+ * The send, for a kind whose notes live on the content itself (a picture, a recording): ONE slim row of fixed height
+ * (`AnnotationFooter`) at the very bottom of the pane, under the content, in the flow. There is no list above it to
+ * grow or shrink, so adding a note moves nothing: the content keeps its box. The pane is a flex column and the
+ * footer does not shrink, so the content row (`flex-1`) gives it the room.
+ */
+export function Footer({ frame, children }: { readonly frame: HTMLElement | null; readonly children: ReactNode }) {
+	const pane = paneOf(frame);
+	return pane === null ? null : createPortal(children, pane);
 }
 

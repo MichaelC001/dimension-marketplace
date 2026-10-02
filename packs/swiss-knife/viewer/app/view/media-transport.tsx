@@ -12,7 +12,7 @@
 // only when its tenths change, so a frame draws none of the buttons, the volume, the speed,
 // the marks or the scrubber itself.
 import { clampTime, type FilmFrame, formatTimecode, MAX_TIMELINE_MARKS, type TimelineMark } from "@dimension/mcp-app-kit/annotate";
-import { FilmLane, WaveLane } from "@dimension/mcp-app-kit/annotate/react";
+import { FilmLane, type NoteCloseReason, WaveLane } from "@dimension/mcp-app-kit/annotate/react";
 import { IconButton } from "@fraym/ui/elements/icon-button";
 import { cn } from "@fraym/ui/lib/cn";
 import { type CSSProperties, type ReactElement, type ReactNode, useEffect, useState, useSyncExternalStore } from "react";
@@ -222,10 +222,8 @@ export interface TransportMarking {
 	/** One line of help for the last thing that could not be done; `null` when there is none. */
 	readonly hint: string | null;
 	readonly onSpan: (from: number, to: number) => void;
-	/** A sound's lane adds a note at a time (a double-click, its Comment button): the id it made, or `null` when none could be. */
-	readonly onComment: (at: number) => number | null;
-	/** A note the lane opened for typing and the human cancelled. */
-	readonly onRemove: (id: number) => void;
+	/** A sound's lane adds a note at a time (a double-click, its Comment button): the pane adds the mark and opens its note. */
+	readonly onComment: (at: number) => void;
 }
 
 /** A video's filmstrip as its lane takes it. */
@@ -249,8 +247,14 @@ export interface MediaTransportProps {
 	readonly marks: readonly TimelineMark[];
 	readonly activeId: number | null;
 	readonly onSelectMark: (id: number) => void;
-	/** A note's words were written on the lane. */
+	/** A key was typed in the note open on the lane. */
 	readonly onNote: (id: number, note: string) => void;
+	/** The note open on the lane, or `null`: it opens as a popover at its marker. */
+	readonly openId: number | null;
+	/** The open note was left (Enter, Escape, a press elsewhere). */
+	readonly onClose: (reason: NoteCloseReason) => void;
+	/** The open note's trash button. */
+	readonly onRemove: (id: number) => void;
 	/** Loudness per slice, for a sound; `undefined` draws a plain track. */
 	readonly waveform?: ArrayLike<number>;
 	/** A video's thumbnails. */
@@ -261,7 +265,7 @@ export interface MediaTransportProps {
 
 const NO_FRAMES: readonly FilmFrame[] = [];
 
-export function MediaTransport({ media, kind, filename, live, marks, activeId, onSelectMark, onNote, waveform, film, marking }: MediaTransportProps): ReactNode {
+export function MediaTransport({ media, kind, filename, live, marks, activeId, onSelectMark, onNote, openId, onClose, onRemove, waveform, film, marking }: MediaTransportProps): ReactNode {
 	const state = useMediaState(media);
 	const playhead = useMediaPosition(media, state.playing, live);
 	const seek = (seconds: number): void => {
@@ -309,6 +313,10 @@ export function MediaTransport({ media, kind, filename, live, marks, activeId, o
 					activeId={activeId}
 					onSeek={seek}
 					onSelectMark={onSelectMark}
+					openId={openId}
+					onNote={onNote}
+					onClose={onClose}
+					onRemove={onRemove}
 					{...(marking === null ? {} : { onSpan: marking.onSpan })}
 					inPoint={marking?.inPoint ?? null}
 					label={`Position in ${filename}`}
@@ -322,8 +330,11 @@ export function MediaTransport({ media, kind, filename, live, marks, activeId, o
 					activeId={activeId}
 					onSeek={seek}
 					onSelectMark={onSelectMark}
+					openId={openId}
 					onNote={onNote}
-					{...(marking === null ? {} : { onSpan: marking.onSpan, onComment: marking.onComment, onRemove: marking.onRemove, inPoint: marking.inPoint })}
+					onClose={onClose}
+					onRemove={onRemove}
+					{...(marking === null ? {} : { onSpan: marking.onSpan, onComment: marking.onComment, inPoint: marking.inPoint })}
 					label={`Position in ${filename}`}
 				/>
 			)}

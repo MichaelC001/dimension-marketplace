@@ -17,7 +17,7 @@
 import { dirname } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, mock, test } from "bun:test";
 import { type FilmFrame, formatTimecode, type TimelineMark } from "@dimension/mcp-app-kit/annotate";
-import type { FilmLaneProps, WaveLaneProps } from "@dimension/mcp-app-kit/annotate/react";
+import type { FilmLaneProps, NoteCloseReason, WaveLaneProps } from "@dimension/mcp-app-kit/annotate/react";
 import * as react from "react";
 import { createElement, type ReactNode, useEffect, useRef } from "react";
 import * as jsxDevRuntime from "react/jsx-dev-runtime";
@@ -152,10 +152,13 @@ interface Over {
 	readonly waveform?: ArrayLike<number>;
 	readonly film?: Transport.TransportFilm;
 	readonly marking?: Transport.TransportMarking | null;
+	readonly openId?: number | null;
+	readonly onClose?: (reason: NoteCloseReason) => void;
+	readonly onRemove?: (id: number) => void;
 }
 
 function transportOf(media: FakeMedia, over: Over = {}) {
-	const { kind = "video", live = true, filename = "clip.mp4", marks = [], activeId = null, onSelectMark = () => {}, onNote = () => {}, marking = null } = over;
+	const { kind = "video", live = true, filename = "clip.mp4", marks = [], activeId = null, onSelectMark = () => {}, onNote = () => {}, openId = null, onClose = () => {}, onRemove = () => {}, marking = null } = over;
 	return createElement(transport.MediaTransport, {
 		media: asElement(media),
 		kind,
@@ -165,30 +168,40 @@ function transportOf(media: FakeMedia, over: Over = {}) {
 		activeId,
 		onSelectMark,
 		onNote,
+		openId,
+		onClose,
+		onRemove,
 		marking,
 		...(over.waveform === undefined ? {} : { waveform: over.waveform }),
 		...(over.film === undefined ? {} : { film: over.film }),
 	});
 }
 
-/** A marking layer that records what the lane sends it; its `onComment` answers `made`. */
-function markingOf(over: { full?: boolean; inPoint?: number | null; hint?: string | null; made?: number | null } = {}) {
-	const { full = false, inPoint = null, hint = null, made = 41 } = over;
+/** A marking layer that records what the lane sends it. */
+function markingOf(over: { full?: boolean; inPoint?: number | null; hint?: string | null } = {}) {
+	const { full = false, inPoint = null, hint = null } = over;
 	const spans: [number, number][] = [];
 	const comments: number[] = [];
-	const removed: number[] = [];
 	const marking: Transport.TransportMarking = {
 		full,
 		inPoint,
 		hint,
 		onSpan: (from, to) => void spans.push([from, to]),
-		onComment: at => {
-			comments.push(at);
-			return made;
-		},
-		onRemove: id => void removed.push(id),
+		onComment: at => void comments.push(at),
 	};
-	return { marking, spans, comments, removed };
+	return { marking, spans, comments };
+}
+
+/** The pane's side of the notes: every callback leaves its own entry in one log, so one wired to another, dropped, or handed the wrong argument shows in what the log says. */
+function noteHost() {
+	const log: string[] = [];
+	const over = {
+		onSelectMark: (id: number) => void log.push(`select ${id}`),
+		onNote: (id: number, note: string) => void log.push(`note ${id} ${note}`),
+		onClose: (reason: NoteCloseReason) => void log.push(`close ${reason}`),
+		onRemove: (id: number) => void log.push(`remove ${id}`),
+	};
+	return { log, over };
 }
 
 /** The props the lane of this kind was last drawn with. */
@@ -333,30 +346,22 @@ describe("a sound's waveform and notes", () => {
 		expect(waveLane().peaks).toBeNull();
 	});
 
-	test("a note's words written on the lane reach the one that owns the notes, with the note they belong to", async () => {
-		const written: [number, string][] = [];
-		await env.mount(transportOf(new FakeMedia(), { kind: "audio", onNote: (id, note) => void written.push([id, note]) }));
-		waveLane().onNote(4, "the drums come in late");
-		expect(written).toEqual([[4, "the drums come in late"]]);
-	});
-
 	test.each([
-		["is made: the lane is told the id", 41],
-		["could not be made (all the notes are used): the lane is told none", null],
-	] as const)("a note the lane asks for at a time %s; a note it opened and the human cancelled is taken back out", async (_what, made) => {
-		const marked = markingOf({ made });
-		await env.mount(transportOf(new FakeMedia(), { kind: "audio", marking: marked.marking }));
-		expect(waveLane().onComment?.(3.5)).toBe(made);
-		expect(marked.comments).toEqual([3.5]);
-		waveLane().onRemove?.(9);
-		expect(marked.removed).toEqual([9]);
-		expect(marked.spans).toEqual([]);
+		["a sound's lane is", "audio", true],
+		["a video's lane is never", "video", false],
+	] as const)("%s given the marking layer's way to comment at a time (the pane adds the mark and opens its note)", async (_who, kind, offered) => {
+		const marked = markingOf();
+		await env.mount(transportOf(new FakeMedia(), { kind, marking: marked.marking }));
+		// A video's notes come from its drawings and stretches; the film lane takes no such prop.
+		const comment = Reflect.get(laneOf(kind), "onComment") as ((at: number) => void) | undefined;
+		expect(comment !== undefined).toBe(offered);
+		comment?.(3.5);
+		expect(marked.comments).toEqual(offered ? [3.5] : []);
 	});
 
-	test("a sound with no marking layer has no way to add, take back or stretch a note, nor a keyboard in-point to draw", async () => {
+	test("a sound with no marking layer has no way to add or stretch a note, nor a keyboard in-point to draw", async () => {
 		await env.mount(transportOf(new FakeMedia(), { kind: "audio" }));
 		expect(waveLane().onComment).toBeUndefined();
-		expect(waveLane().onRemove).toBeUndefined();
 		expect(waveLane().onSpan).toBeUndefined();
 		expect(waveLane().inPoint).toBeUndefined();
 	});
@@ -381,6 +386,38 @@ describe("the marking layer on a lane", () => {
 		await render(transportOf(media, { kind }));
 		expect(laneOf(kind).onSpan).toBeUndefined();
 		expect(laneOf(kind).inPoint ?? null).toBeNull();
+	});
+});
+
+describe.each(KINDS)("the %s lane's notes", kind => {
+	test.each([
+		["up", true],
+		["down (a player that failed): the notes it already has can still be opened, edited and taken out, only none can be made", false],
+	] as const)("with the marking layer %s, each note callback the lane calls reaches the pane's own, with the lane's id, words or reason", async (_state, up) => {
+		const host = noteHost();
+		await env.mount(transportOf(new FakeMedia(), { kind, marks: [{ id: 4, at: 2, note: "" }], openId: 4, marking: up ? markingOf().marking : null, ...host.over }));
+		const lane = laneOf(kind);
+		lane.onSelectMark(3);
+		lane.onNote(4, "the drums come in late");
+		lane.onClose("save");
+		lane.onClose("cancel");
+		lane.onClose("outside");
+		lane.onRemove(5);
+		expect(host.log).toEqual(["select 3", "note 4 the drums come in late", "close save", "close cancel", "close outside", "remove 5"]);
+	});
+
+	test("the note open on the lane is the pane's open one - not the selected one - and follows it as it opens, moves to another and closes", async () => {
+		const media = new FakeMedia();
+		const marks: TimelineMark[] = [
+			{ id: 1, at: 2, note: "a" },
+			{ id: 2, at: 5, note: "b" },
+		];
+		const { render } = await env.mount(transportOf(media, { kind, marks, activeId: 1, openId: 2 }));
+		expect(laneOf(kind).openId).toBe(2);
+		await render(transportOf(media, { kind, marks, activeId: 1, openId: 1 }));
+		expect(laneOf(kind).openId).toBe(1);
+		await render(transportOf(media, { kind, marks, activeId: 1, openId: null }));
+		expect(laneOf(kind).openId).toBeNull();
 	});
 });
 

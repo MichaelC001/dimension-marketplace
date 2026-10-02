@@ -12,22 +12,23 @@
 //     re-mounts it);
 //   * a recording the player has failed on cannot be marked: no tools that make notes, no keys that make them -
 //     only the notes already made, if there are any, so they are not lost;
+//   * a note is written where it was made, and there is no list: a moment, a stretch (and a drawing on a player that
+//     failed) open as a popover at their marker on the lane, a drawing's beside the drawing over the picture. The
+//     session says which note is open (`writing`); the footer under the content is the one place the message to the
+//     agent and "Request edits" live;
 //   * only the tab on screen plays and paints: a hidden tab's media is paused, its frames are not animated, its
 //     waveform is not started and its filmstrip is not taken (one already running finishes).
 import {
-	formatMarkTime,
 	formatTimecode,
 	type MarkShape,
 	type MarkTool,
 	MAX_TIMELINE_MARKS,
 	markNear,
-	SHAPE_WORD,
 } from "@dimension/mcp-app-kit/annotate";
 import {
-	AnnotationPanel,
+	AnnotationFooter,
 	AnnotationToolbar,
 	markupToolGroups,
-	type PanelItem,
 	type ToolGroupDef,
 	useTimelineMarks,
 } from "@dimension/mcp-app-kit/annotate/react";
@@ -49,7 +50,7 @@ import { useDuration, useFailed, useWaveform } from "./media-hooks";
 import { decideKey, keyOwner } from "./media-keys";
 import { readLength, seekTarget } from "./media-length";
 import { FULL_SENTENCE, MediaTransport, type TransportMarking, togglePlayback } from "./media-transport";
-import { Column, type PaneExtrasProps, revisionOf, Strip, useSlot } from "./pane-shared";
+import { Footer, type PaneExtrasProps, revisionOf, Strip, useSlot } from "./pane-shared";
 
 const MEDIA = '[data-slot="viewer-media"]';
 const DOCK = '[data-slot="viewer-media-dock"]';
@@ -97,7 +98,7 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode }: PaneExtr
 	const failed = useFailed(media);
 	const visible = usePageVisible();
 	const live = active && visible;
-	// Notes can be made on a recording that plays; the list shows while they can be made or there are some to keep.
+	// Notes can be made on a recording that plays; the footer shows while they can be made or there are some to keep.
 	const markable = mode === "timeline" && !failed;
 	const drawable = markable && video !== null;
 
@@ -154,7 +155,7 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode }: PaneExtr
 		...(grabber === null ? {} : { grabFrame: (at: number) => grabber.grab(insideFrame(at, frameSeconds())) }),
 		stillSize,
 	});
-	const { marks, addMark, addSpan, addShape, focusMark, setActiveId } = session;
+	const { marks, addMark, addSpan, addShape, writing, openNote, closeNote } = session;
 	const full = marks.length >= MAX_TIMELINE_MARKS;
 
 	// Only the tab on screen plays. Coming back does not resume: the human pressed pause by leaving.
@@ -247,19 +248,13 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode }: PaneExtr
 		setInPoint(null);
 	}, [media, inPoint, makeSpan, say]);
 
-	// The lane's own gesture for a note (a double-click on the wave, its Comment button): the lane opens a field for the
-	// words itself, so the list must not also take the caret.
+	// The lane's own gesture for a note (a double-click on the wave, its Comment button): the session opens the new note,
+	// and the lane hangs its popover from the pin.
 	const commentAt = useCallback(
-		(at: number): number | null => {
-			const id = addMark(at, { focusNote: false });
-			if (id === undefined) {
-				say(FULL_SENTENCE);
-				return null;
-			}
-			setActiveId(id);
-			return id;
+		(at: number): void => {
+			if (addMark(at) === undefined) say(FULL_SENTENCE);
 		},
-		[addMark, say, setActiveId],
+		[addMark, say],
 	);
 
 	// A finished shape on the frame on screen. Drawing stops the film first: the frame is the one the human saw. The shape
@@ -267,16 +262,18 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode }: PaneExtr
 	// a pause lands anywhere in the frame (and a refresh late), so the paused playhead is put just inside the frame the shape
 	// belongs to, or the box would vanish the moment the pen is lifted. Nothing moves when it is there already.
 	const drawShape = useCallback(
-		(shape: MarkShape, aspect: number) => {
-			if (video === null) return;
+		(shape: MarkShape, aspect: number): number | undefined => {
+			if (video === null) return undefined;
 			video.pause();
 			const seconds = frameSeconds();
 			const at = drawingTime(video.currentTime);
-			if (addShape(shape, at, aspect) === undefined) {
+			const id = addShape(shape, at, aspect);
+			if (id === undefined) {
 				if (full) say(FULL_SENTENCE);
-				return;
+				return undefined;
 			}
 			if (!drawnOnFrame(at, video.currentTime, seconds)) seekTo(insideFrame(at, seconds));
+			return id;
 		},
 		[video, addShape, drawingTime, frameSeconds, seekTo, full, say],
 	);
@@ -297,13 +294,13 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode }: PaneExtr
 		[marks, media, seekTo, frameSeconds],
 	);
 
+	// Choosing a note (its marker on the lane): the playhead goes to it and its note opens.
 	const selectMark = useCallback(
 		(id: number) => {
 			goTo(id);
-			setActiveId(id);
-			focusMark(id);
+			openNote(id);
 		},
-		[goTo, setActiveId, focusMark],
+		[goTo, openNote],
 	);
 
 	const stepFrame = useCallback(
@@ -393,23 +390,18 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode }: PaneExtr
 	}, [active, media, kind, markable, drawable, tool, inPoint, markHere, stretch, stepFrame, say, undo, redo]);
 
 	// ── what is drawn ──────────────────────────────────────────────────────────
-	const items = useMemo<PanelItem[]>(
-		() =>
-			marks.map(mark => ({
-				id: mark.id,
-				heading: mark.shape === undefined ? formatMarkTime(mark) : `${formatMarkTime(mark)} · ${SHAPE_WORD[mark.shape.kind]}`,
-				headingStyle: "code",
-				note: mark.note,
-			})),
-		[marks],
-	);
 	const transportMarking = useMemo<TransportMarking | null>(
-		() =>
-			markable
-				? { full, inPoint, hint, onSpan: makeSpan, onComment: commentAt, onRemove: session.remove }
-				: null,
-		[markable, full, inPoint, hint, makeSpan, commentAt, session.remove],
+		() => (markable ? { full, inPoint, hint, onSpan: makeSpan, onComment: commentAt } : null),
+		[markable, full, inPoint, hint, makeSpan, commentAt],
 	);
+
+	// Where the open note hangs from. A drawing's goes beside the drawing, over the picture, wherever the picture can be
+	// drawn on; every other note - and a drawing on a player that failed, which has no picture to show it - hangs from its
+	// marker on the lane. One surface at a time, so a note never has two popovers.
+	const writingMark = writing === null ? undefined : marks.find(mark => mark.id === writing.id);
+	const pictureId = writingMark?.shape !== undefined && drawable ? writingMark.id : null;
+	const laneId = writingMark !== undefined && pictureId === null ? writingMark.id : null;
+	const onPictureNote = useCallback((id: number | null) => (id === null ? closeNote("outside") : openNote(id)), [openNote, closeNote]);
 
 	// The one toolbar: the two tools a recording has, and for a video the picture's drawing tools and undo.
 	const groups = useMemo<ToolGroupDef[]>(
@@ -468,9 +460,12 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode }: PaneExtr
 							filename={tab.filename}
 							live={live}
 							marks={marks}
-							activeId={session.activeId}
+							activeId={writingMark?.id ?? null}
 							onSelectMark={selectMark}
 							onNote={session.setNote}
+							openId={laneId}
+							onClose={closeNote}
+							onRemove={session.remove}
 							{...(waveform === undefined ? {} : { waveform })}
 							{...(kind === "video" ? { film } : {})}
 							marking={transportMarking}
@@ -483,12 +478,16 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode }: PaneExtr
 					live={live}
 					marks={marks}
 					tool={tool}
-					activeId={session.activeId}
+					activeId={pictureId}
 					filename={tab.filename}
 					frameSeconds={frameSeconds}
 					drawingTime={drawingTime}
 					onBegin={() => video.pause()}
 					onShape={drawShape}
+					openId={pictureId}
+					onOpen={onPictureNote}
+					onNote={session.setNote}
+					onRemove={session.remove}
 				/>
 			)}
 			{mode === "timeline" ? (
@@ -497,46 +496,16 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode }: PaneExtr
 				</Strip>
 			) : null}
 			{mode === "timeline" && (markable || marks.length > 0) ? (
-				<Column frame={frame}>
-					<AnnotationPanel
-						title="Notes"
-						items={items}
-						activeId={session.activeId}
-						focus={session.focus}
-						onActive={session.setActiveId}
-						onNote={session.setNote}
-						onRemove={session.remove}
+				<Footer frame={frame}>
+					<AnnotationFooter
 						message={session.message}
 						onMessage={session.setMessage}
 						onSend={() => void session.send()}
 						send={{ busy: session.sending, staged: session.staged }}
 						status={session.status}
-						rowActions={item => {
-							const mark = marks.find(entry => entry.id === item.id);
-							return mark === undefined ? null : (
-								<button type="button" className="dam-tl-go" onClick={() => goTo(mark.id)} aria-label={`Go to ${formatTimecode(mark.at)}`} title={`Move the playhead to ${formatTimecode(mark.at)}`}>
-									Go to
-								</button>
-							);
-						}}
-						emptyHint={
-							<>
-								<strong>Add a note</strong>
-								<span>
-									{kind === "video" ? (
-										<>
-											Pick a tool and draw on the picture, press <kbd>M</kbd> where something should change, or drag along the strip to select a stretch. <kbd>I</kbd> and <kbd>O</kbd> set a stretch from the keyboard.
-										</>
-									) : (
-										<>
-											Double-click the wave where something should change, or press <kbd>M</kbd>. Drag along it with a modifier to select a stretch, or use <kbd>I</kbd> and <kbd>O</kbd>.
-										</>
-									)}
-								</span>
-							</>
-						}
+						count={marks.length}
 					/>
-				</Column>
+				</Footer>
 			) : null}
 		</>
 	);

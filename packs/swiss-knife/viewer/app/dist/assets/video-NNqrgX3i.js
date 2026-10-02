@@ -1,0 +1,1 @@
+import{mountMedia as e}from"./media-core-CaW259l4.js";var t={mount:(t,n,r)=>e(t,n,r,`video`)};export{t as default};

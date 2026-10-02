@@ -1,6 +1,7 @@
 // What drawing on a video promises: the kit's overlay lies over the picture the video DRAWS (not the bars the box shows
 // around it), shows only the drawings that belong to the frame on screen, numbers them by their place among ALL the
-// notes, and stops the film when the human starts to draw - without redrawing the pane for every frame of a playing film.
+// notes, keeps a drawing's note open only while its frame is on screen, and stops the film when the human starts to
+// draw - without redrawing the pane for every frame of a playing film.
 //
 // Rendered for real (linkedom + react-dom under `act`) over a real <video> element whose layout is stubbed (linkedom has
 // no layout): the box, the stage offset and the picture's size are numbers the test sets, and a ResizeObserver stand-in
@@ -199,7 +200,7 @@ function rig(over: Partial<Footage> = {}, staged = true): Rig {
 const FRAME = 0.1;
 
 function layer(video: HTMLVideoElement, over: Partial<Draw.DrawLayerProps> = {}): ReactElement {
-	return createElement(DrawLayer, { video, live: true, marks: [], tool: null, activeId: null, filename: "clip.mp4", frameSeconds: () => FRAME, drawingTime: playhead => playhead, onBegin: () => {}, onShape: () => {}, ...over });
+	return createElement(DrawLayer, { video, live: true, marks: [], tool: null, activeId: null, filename: "clip.mp4", frameSeconds: () => FRAME, drawingTime: playhead => playhead, onBegin: () => {}, onShape: () => undefined, openId: null, onOpen: () => {}, onNote: () => {}, onRemove: () => {}, ...over });
 }
 
 /** Where the layer sits, as the numbers its wrapper's style gives (px), and the rest of that style. */
@@ -709,7 +710,7 @@ describe("what the layer hands the kit's overlay", () => {
 	test("the tool, the highlighted note, the label, and the way back out for a finished shape", async () => {
 		const at = rig();
 		const finished: [MarkShape, number][] = [];
-		const onShape = (shape: MarkShape, aspect: number): void => void finished.push([shape, aspect]);
+		const onShape = (shape: MarkShape, aspect: number): undefined => void finished.push([shape, aspect]);
 		const mounted = await env.mount(layer(at.video, { tool: "arrow", activeId: 13, filename: "take 2.mp4", onShape }));
 
 		expect(overlay()).toMatchObject({ tool: "arrow", activeId: 13, label: "Draw on take 2.mp4" });
@@ -718,5 +719,154 @@ describe("what the layer hands the kit's overlay", () => {
 
 		await mounted.render(layer(at.video, { tool: null, activeId: null, filename: "take 3.mp4", onShape }));
 		expect(overlay()).toMatchObject({ tool: null, activeId: null, label: "Draw on take 3.mp4" });
+	});
+
+	test("a finished shape is answered with the id of the note the pane made of it (the overlay opens that note), or with nothing when none was made", async () => {
+		const at = rig();
+		const finished: [MarkShape, number][] = [];
+		const answers = [42, undefined];
+		const onShape = (shape: MarkShape, aspect: number): number | undefined => {
+			finished.push([shape, aspect]);
+			return answers[finished.length - 1];
+		};
+		await env.mount(layer(at.video, { tool: "box", onShape }));
+
+		expect(overlay().onShape(BOX, 2)).toBe(42);
+		expect(overlay().onShape(PIN, 1)).toBeUndefined();
+		expect(finished).toEqual([[BOX, 2], [PIN, 1]]);
+	});
+
+	test("what the overlay says about a note reaches the pane under its own name: opening and closing, each typed word, the trash", async () => {
+		const at = rig();
+		const told: unknown[][] = [];
+		await env.mount(
+			layer(at.video, {
+				onOpen: id => void told.push(["open", id]),
+				onNote: (id, note) => void told.push(["note", id, note]),
+				onRemove: id => void told.push(["remove", id]),
+			}),
+		);
+
+		overlay().onOpenChange?.(13);
+		overlay().onOpenChange?.(null);
+		overlay().onNote?.(12, "logo lower");
+		overlay().onRemove?.(15);
+
+		expect(told).toEqual([["open", 13], ["open", null], ["note", 12, "logo lower"], ["remove", 15]]);
+	});
+});
+
+describe("the note open on a drawing", () => {
+	/** A pane that records every time the layer asks it to close the open note, and the layer drawn with the notes on the recording. */
+	const pane = (video: HTMLVideoElement) => {
+		const asked: (number | null)[] = [];
+		const onOpen = (id: number | null): void => void asked.push(id);
+		return { asked, show: (over: Partial<Draw.DrawLayerProps> = {}): ReactElement => layer(video, { marks: MARKS, onOpen, ...over }) };
+	};
+
+	test("the overlay is given the open note only while its drawing is among those on screen", async () => {
+		const at = rig({ currentTime: 5.02 });
+		const { show } = pane(at.video);
+		const mounted = await env.mount(show({ openId: 12 }));
+		expect(overlay().openId).toBe(12); // the very first draw: no frame without it
+
+		await at.seek(5.5);
+		expect(overlay().openId).toBeNull();
+		await at.seek(5.02);
+		expect(overlay().openId).toBe(12);
+
+		await mounted.render(show({ openId: 13 })); // the other drawing of the frame
+		expect(overlay().openId).toBe(13);
+		await mounted.render(show({ openId: 15 })); // a drawing that is on another frame, while drawings are on screen
+		expect(overlay().openId).toBeNull();
+	});
+
+	const WAITING = [
+		{ name: "it was open when the layer came", from: 15 },
+		{ name: "it is opened later, while the film is elsewhere", from: null },
+	];
+	for (const { name, from } of WAITING) {
+		test(`a note on a frame that has not been on screen yet waits for it: not closed on the way, and it appears when the playhead lands there - ${name}`, async () => {
+			const at = rig();
+			const { asked, show } = pane(at.video);
+			const mounted = await env.mount(show({ openId: from }));
+			if (from === null) await mounted.render(show({ openId: 15 }));
+			expect(overlay().openId).toBeNull();
+			expect(asked).toEqual([]);
+
+			await at.seek(5.02); // other drawings are on screen, not that one
+			expect(overlay().openId).toBeNull();
+			await at.seek(7);
+			expect(asked).toEqual([]);
+
+			await at.seek(9.03);
+			expect(overlay().openId).toBe(15);
+			expect(asked).toEqual([]);
+		});
+	}
+
+	test("closes the note, once, when the playhead leaves the frame it was shown on - however the film moves or the pane draws after", async () => {
+		const at = rig({ currentTime: 5.02 });
+		const { asked, show } = pane(at.video);
+		const mounted = await env.mount(show({ openId: 12 }));
+		await at.seek(5.05); // still its frame
+		expect(asked).toEqual([]);
+
+		await at.seek(5.5);
+		expect(asked).toEqual([null]);
+
+		await at.seek(7); // the pane has not answered: it stays asked for once
+		await at.seek(1);
+		await mounted.render(show({ openId: 12, onOpen: id => void asked.push(id) })); // drawn again, with a new callback
+		expect(asked).toEqual([null]);
+	});
+
+	const COMINGS = [
+		{ name: "no note is open", openId: null },
+		{ name: "the note that is open is on another frame that has not been on screen", openId: 15 },
+	];
+	for (const { name, openId } of COMINGS) {
+		test(`drawings coming and going close nothing when ${name}`, async () => {
+			const at = rig();
+			const { asked, show } = pane(at.video);
+			await env.mount(show({ openId }));
+
+			for (const seconds of [5.02, 5.5, 4.5, 5.02, 7, 2, 5.02]) await at.seek(seconds);
+
+			expect(asked).toEqual([]);
+		});
+	}
+
+	test("choosing another drawing's note does not close it for the other drawing's frame: it is closed only after it has been shown", async () => {
+		const at = rig({ currentTime: 5.02 });
+		const { asked, show } = pane(at.video);
+		const mounted = await env.mount(show({ openId: 12 })); // shown
+
+		await mounted.render(show({ openId: 15 })); // chosen from the strip: the pane has yet to seek to it
+		expect(overlay().openId).toBeNull();
+		expect(asked).toEqual([]);
+
+		await at.seek(9.03);
+		expect(overlay().openId).toBe(15);
+		expect(asked).toEqual([]);
+
+		await at.seek(9.5);
+		expect(asked).toEqual([null]);
+	});
+
+	test("a note closed and opened again for a drawing that is off screen waits for its frame like a first one", async () => {
+		const at = rig({ currentTime: 5.02 });
+		const { asked, show } = pane(at.video);
+		const mounted = await env.mount(show({ openId: 12 })); // shown
+
+		await mounted.render(show({ openId: null })); // the human closed it
+		await at.seek(7);
+		await mounted.render(show({ openId: 12 })); // chosen again from the strip: the pane has yet to seek back
+		expect(overlay().openId).toBeNull();
+		expect(asked).toEqual([]);
+
+		await at.seek(5.02);
+		expect(overlay().openId).toBe(12);
+		expect(asked).toEqual([]);
 	});
 });

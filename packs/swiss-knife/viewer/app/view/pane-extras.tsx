@@ -14,6 +14,7 @@
 //     layer sat in, so the slots are looked up again each time it says `ready`.
 import "@dimension/mcp-app-kit/annotate/annotate.css";
 import {
+	AnnotationFooter,
 	AnnotationPanel,
 	AnnotationToolbar,
 	DocumentCommentLayer,
@@ -32,7 +33,7 @@ import { annotationModes } from "./annotate-modes";
 import { loadDocumentBytes } from "./document-bytes";
 import { ElementPicks } from "./pane-extras-element";
 import { TimelineMarks } from "./pane-extras-timeline";
-import { type AnnotateMode, Column, type PaneExtrasProps, revisionOf, Strip, useSlot } from "./pane-shared";
+import { type AnnotateMode, Column, Footer, type PaneExtrasProps, revisionOf, Strip, useSlot } from "./pane-shared";
 
 const PICTURE = '[data-slot="viewer-picture"]';
 const TEXT_ROOT = '[data-slot="viewer-text-root"]';
@@ -99,7 +100,6 @@ function PictureMarkup({ app, tab, active, ready, frame, mode }: PaneExtrasProps
 		onExit: () => setTool(null),
 	});
 
-	const items = useMemo<PanelItem[]>(() => session.markup.marks.map(mark => ({ id: mark.id, note: mark.note })), [session.markup.marks]);
 	const armed = session.tool !== null;
 
 	return (
@@ -111,7 +111,8 @@ function PictureMarkup({ app, tab, active, ready, frame, mode }: PaneExtrasProps
 							marks={session.markup.marks}
 							tool={session.tool}
 							onShape={session.onShape}
-							activeId={session.activeId}
+							onNote={session.markup.setNote}
+							onRemove={session.markup.remove}
 							label={`Draw on ${tab.filename}`}
 						/>,
 						picture,
@@ -136,38 +137,16 @@ function PictureMarkup({ app, tab, active, ready, frame, mode }: PaneExtrasProps
 				</Strip>
 			) : null}
 			{up ? (
-				<Column frame={frame}>
-					<AnnotationPanel
-						title="Notes"
-						items={items}
-						activeId={session.activeId}
-						focus={session.focus}
-						onActive={session.setActiveId}
-						onNote={session.markup.setNote}
-						onRemove={session.markup.remove}
+				<Footer frame={frame}>
+					<AnnotationFooter
 						message={session.message}
 						onMessage={session.setMessage}
 						onSend={() => void session.send()}
 						send={{ busy: session.sending, staged: session.staged }}
 						status={session.status}
-						emptyHint={
-							<>
-								<strong>Add a note</strong>
-								<span>
-									{armed ? (
-										<>
-											Drag on the picture to box something, or pick another tool above it. Press <kbd>1</kbd>–<kbd>5</kbd> to switch tools; press the tool again, or <kbd>Esc</kbd>, to scroll and zoom.
-										</>
-									) : (
-										<>
-											Pick a tool above the picture, or press <kbd>1</kbd>–<kbd>5</kbd>, then draw on it.
-										</>
-									)}
-								</span>
-							</>
-						}
+						count={session.markup.marks.length}
 					/>
-				</Column>
+				</Footer>
 			) : null}
 		</>
 	);

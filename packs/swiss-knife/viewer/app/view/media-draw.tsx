@@ -8,12 +8,15 @@
 //   * the picture moves: the overlay shows a drawing only while its frame is on screen (`drawnOnFrame`), read from
 //     the playhead without drawing the pane again for every frame - only when the set of visible drawings changes;
 //   * drawing stops the film: the first press or key on the overlay pauses it, because a box drawn on a frame that
-//     is already gone is a box on the wrong picture.
-// The overlay is the kit's, unchanged: it takes no input unless a tool is armed, so with none in hand a click on
-// the picture still plays and pauses it.
+//     is already gone is a box on the wrong picture;
+//   * a drawing's note is written where it was drawn: the overlay opens its popover beside the shape, over the picture,
+//     and the note belongs to the frame - it closes when the playhead leaves it, and one chosen from the strip waits
+//     for the pane to seek to its frame (a drawing that is not on screen has no place to hang a popover from).
+// The overlay is the kit's: it takes no input unless a tool is armed, so with none in hand a click on the picture
+// still plays and pauses it, and the badges on the drawings are the only parts of it a press reaches.
 import { frameKey, type MarkShape, type MarkTool, type TimelineMark } from "@dimension/mcp-app-kit/annotate";
 import { MarkupOverlay } from "@dimension/mcp-app-kit/annotate/react";
-import { type ReactNode, useLayoutEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { type DrawnRect, drawnOnFrame, drawnRect } from "./media-frame";
 import { useMediaPosition, useMediaState } from "./media-transport";
@@ -87,11 +90,19 @@ export interface DrawLayerProps {
 	readonly drawingTime: (playhead: number) => number;
 	/** The human began to draw: stop the film. */
 	readonly onBegin: () => void;
-	/** A finished shape, with the picture's width / height. */
-	readonly onShape: (shape: MarkShape, aspect: number) => void;
+	/** A finished shape, with the picture's width / height; answers with the id of the note it became (`undefined`: none was made). */
+	readonly onShape: (shape: MarkShape, aspect: number) => number | undefined;
+	/** The note open on a drawing, or `null`. It stays shut until its drawing is on screen. */
+	readonly openId: number | null;
+	/** The human opened a note (`id`) or closed the open one (`null`) on the picture. */
+	readonly onOpen: (id: number | null) => void;
+	/** A key was typed in the open note. */
+	readonly onNote: (id: number, note: string) => void;
+	/** The open note's trash button. */
+	readonly onRemove: (id: number) => void;
 }
 
-export function DrawLayer({ video, live, marks, tool, activeId, filename, frameSeconds, drawingTime, onBegin, onShape }: DrawLayerProps): ReactNode {
+export function DrawLayer({ video, live, marks, tool, activeId, filename, frameSeconds, drawingTime, onBegin, onShape, openId, onOpen, onNote, onRemove }: DrawLayerProps): ReactNode {
 	const stage = video.parentElement;
 	const state = useMediaState(video);
 	const playhead = useMediaPosition(video, state.playing, live);
@@ -114,10 +125,26 @@ export function DrawLayer({ video, live, marks, tool, activeId, filename, frameS
 		return marks.flatMap(mark => (mark.shape !== undefined && ids.has(mark.id) ? [{ id: mark.id, shape: mark.shape, note: mark.note }] : []));
 	}, [marks, visibleIds]);
 
-	// The number on a drawing is its place among ALL the notes - the number the list and the message give it - not its
-	// place among the few on this frame; a shape being drawn wears the number it will have once it is a note.
+	// The number on a drawing is its place among ALL the notes - the number the message gives it - not its place among
+	// the few on this frame; a shape being drawn wears the number it will have once it is a note.
 	const ordinals = useMemo(() => new Map(marks.map((mark, index) => [mark.id, index + 1])), [marks]);
 	const draftOrdinal = Number(behind) + 1;
+
+	// The popover is the overlay's while its drawing is on screen. The note belongs to the frame: once its drawing has
+	// been on screen and is not (the playhead moved on), the note is closed - not before, or a note chosen from the
+	// strip would close while the pane is still seeking to its frame.
+	const shown = openId !== null && visible.some(mark => mark.id === openId) ? openId : null;
+	const wasShown = useRef<number | null>(null);
+	useEffect(() => {
+		if (openId === null) {
+			wasShown.current = null;
+		} else if (shown !== null) {
+			wasShown.current = shown;
+		} else if (wasShown.current === openId) {
+			wasShown.current = null;
+			onOpen(null);
+		}
+	}, [openId, shown, onOpen]);
 
 	if (stage === null || rect.width === 0 || rect.height === 0) return null;
 	return createPortal(
@@ -135,6 +162,10 @@ export function DrawLayer({ video, live, marks, tool, activeId, filename, frameS
 				label={`Draw on ${filename}`}
 				ordinalOf={id => ordinals.get(id) ?? 0}
 				draftOrdinal={draftOrdinal}
+				openId={shown}
+				onOpenChange={onOpen}
+				onNote={onNote}
+				onRemove={onRemove}
 			/>
 		</div>,
 		stage,
