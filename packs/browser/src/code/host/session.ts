@@ -10,6 +10,7 @@ import type { BridgeRequest, BridgeResponse, BrowserKind, CodeBrowserPort, CodeT
 import { ToolAbortError, ToolError } from "../errors.js";
 import { CODE_VIEWPORT, codedMessage, describeBrowser, describeKind, sameBrowserKind } from "./runtime-port.js";
 import type { SpawnWorker, WorkerHandle } from "./transport.js";
+import type { HostMemory, Member, Overrun } from "./host-memory.js";
 import { cellLabel, type TerminatingWorkers } from "./terminating.js";
 
 const DEFAULT_TAB_NAME = "main";
@@ -65,6 +66,8 @@ export interface SessionDeps {
   terminating: TerminatingWorkers;
   /** What a worker may hold, MB: its JS heap plus its Buffers and ArrayBuffers (the heap limit alone covers neither). 0: no limit. */
   memoryMb: number;
+  /** The memory of every session's worker, added up: the host's own limit, which ends the largest worker of all sessions. */
+  hostMemory: HostMemory;
   timing: CodeTiming;
   /** The session holds nothing any more (no worker, no browser, nothing readable): the host forgets it. */
   onEmpty(): void;
@@ -103,6 +106,8 @@ interface LiveWorker {
   label: string;
   /** The next look at its memory. */
   memoryTimer?: NodeJS.Timeout;
+  /** This worker's place in the host's total. */
+  member?: Member;
 }
 
 interface BrowserRecord { browserId: string; wsEndpoint: string; kind: BrowserKind; createdByCode: boolean }
@@ -121,6 +126,15 @@ function memoryError(usedMb: number, limitMb: number, own: boolean): RunError {
   return {
     name: "CellMemoryError",
     message: `The cell ${held} (JS heap plus Buffers and ArrayBuffers; the limit is ${limitMb} MB), so the JS worker was terminated and the cell's variables were reset; variables from earlier cells are gone. Keep large data out of memory: write it to a file, or handle it in pieces.`,
+    isAbort: false,
+  };
+}
+
+/** The error the cell of the largest worker gets when all the workers together passed the host's limit: the sum, the share of this one, and where the limit is set. */
+function hostMemoryError(usedMb: number, totalMb: number, limitMb: number): RunError {
+  return {
+    name: "CellMemoryError",
+    message: `The code workers of this browser server held ${totalMb} MB together (the limit is ${limitMb} MB for all sessions, DIMENSION_BROWSER_CODE_TOTAL_MB), and this cell's worker was the largest at ${Math.round(usedMb)} MB, so the JS worker was terminated and the cell's variables were reset; variables from earlier cells are gone. Keep large data out of memory: write it to a file, or handle it in pieces.`,
     isAbort: false,
   };
 }
@@ -225,7 +239,7 @@ export class CodeSession {
       if (o.signal.aborted) throw new ToolAbortError();
       live.label = cellLabel(o.code);
       run.worker = live;
-      if (this.#d.memoryMb > 0) this.#lookAtMemoryIn(live, this.#d.timing.memoryPollMs);
+      if (this.#watching) this.#lookAtMemoryIn(live, this.#d.timing.memoryPollMs);
       void live.handle.memory().then(sample => {
         if (sample !== undefined && !sample.own) run.memoryBase = sample.mb;
       });
@@ -343,12 +357,14 @@ export class CodeSession {
     ready.promise.catch(() => undefined);
     const stopped = Promise.withResolvers<string>();
     const live: LiveWorker = { handle, ready: ready.promise, stopped: stopped.promise, dead: false, label: "" };
+    live.member = this.#d.hostMemory.join(overrun => this.#overHostMemory(live, overrun));
     const startup = setTimeout(() => {
       ready.reject(new Error("Timed out initializing browser tab worker"));
       this.#recycle(live, false);
     }, timing.startupTimeoutMs);
     void ready.promise.then(() => clearTimeout(startup), () => clearTimeout(startup));
     handle.onExit(reason => {
+      live.member?.leave();
       live.dead = true;
       if (this.#worker === live) this.#worker = undefined;
       ready.reject(new Error(`Tab worker failed during startup: ${reason}`));
@@ -381,10 +397,15 @@ export class CodeSession {
   /**
    * The worker's heap limit (`resourceLimits`) covers the JS heap only: a cell that collects Buffers (screenshots, downloads) grows the whole server's memory, and with it every session's Chrome is one allocation from
    * the commit limit. So the worker's memory is read while it lives (`WorkerHandle.memory`, answered by the worker's thread even while its JavaScript spins), and a worker past `memoryMb` is ended like one that
-   * outlived its budget: the cell fails with the reason, its variables are reset, the pages and browsers stay.
+   * outlived its budget: the cell fails with the reason, its variables are reset, the pages and browsers stay. The same figure goes to the host's total (`HostMemory`), which ends the largest worker of all sessions at its limit.
    */
   #watchMemory(live: LiveWorker): void {
-    if (this.#d.memoryMb > 0) this.#lookAtMemoryIn(live, this.#d.timing.memoryPollMs);
+    if (this.#watching) this.#lookAtMemoryIn(live, this.#d.timing.memoryPollMs);
+  }
+
+  /** Whether a worker's memory is looked at at all: a limit per worker, or one for the host. */
+  get #watching(): boolean {
+    return this.#d.memoryMb > 0 || this.#d.hostMemory.limitMb > 0;
   }
 
   /** The next look at the worker's memory, replacing any that was due later: a cell that starts must not wait for a look that was scheduled for an idle worker. */
@@ -403,19 +424,28 @@ export class CodeSession {
     if (live.dead) return;
     // A figure for this worker alone is the worker's memory; one for the whole process says something only about the cell that was running when it began to grow.
     const used = sample === undefined ? 0 : sample.own ? sample.mb : run?.memoryBase === undefined ? 0 : sample.mb - run.memoryBase;
-    if (used > limit) {
-      this.#overMemory(live, run, used, sample?.own ?? true);
+    if (limit > 0 && used > limit) {
+      this.#overMemory(live, run, memoryError(used, limit, sample?.own ?? true), `a code worker held ${Math.round(used)} MB (limit ${limit} MB) and was ended`);
       return;
     }
+    // A worker that did not answer keeps the figure it last had; the total may end this one (or a larger one of another session) from here.
+    if (sample !== undefined) live.member?.report(used, sample.own);
+    if (live.dead) return;
     const { memoryPollMs, memoryIdlePollMs } = this.#d.timing;
     this.#lookAtMemoryIn(live, this.#active?.worker === live ? memoryPollMs : memoryIdlePollMs);
   }
 
-  #overMemory(live: LiveWorker, run: Run | undefined, used: number, own: boolean): void {
-    console.error(`[browser-code] a code worker held ${Math.round(used)} MB (limit ${this.#d.memoryMb} MB) and was ended`);
+  /** The workers of all sessions held more than the host's limit together, and this one was the largest. */
+  #overHostMemory(live: LiveWorker, { usedMb, totalMb }: Overrun): void {
+    const run = this.#active?.worker === live && this.#active.settled === undefined ? this.#active : undefined;
+    this.#overMemory(live, run, hostMemoryError(usedMb, totalMb, this.#d.hostMemory.limitMb), `the code workers held ${totalMb} MB together (limit ${this.#d.hostMemory.limitMb} MB): the largest, ${Math.round(usedMb)} MB, was ended`);
+  }
+
+  #overMemory(live: LiveWorker, run: Run | undefined, error: RunError, log: string): void {
+    console.error(`[browser-code] ${log}`);
     if (run !== undefined) {
       run.controller.abort(new ToolAbortError());
-      this.#settle(run, { error: memoryError(used, this.#d.memoryMb, own) });
+      this.#settle(run, { error });
     }
     this.#recycle(live);
   }
@@ -425,6 +455,7 @@ export class CodeSession {
     if (this.#worker === live) this.#worker = undefined;
     live.dead = true;
     clearTimeout(live.memoryTimer);
+    live.member?.leave();
     if (note) this.#resetNote = true;
     void this.#end(live);
   }
@@ -861,6 +892,7 @@ export class CodeSession {
         clearTimeout(timer);
       }
     }
+    live.member?.leave();
     live.dead = true;
     await this.#end(live);
   }

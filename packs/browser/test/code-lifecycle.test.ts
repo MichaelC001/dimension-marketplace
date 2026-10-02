@@ -647,12 +647,86 @@ describe("a worker's memory is bounded, not only its heap", () => {
     expect(workers[0]!.exited).toBe(true);
   });
 
-  test("a limit of 0 turns the watchdog off", async () => {
-    const { host, workers } = rig({ memoryMb: 0, timing: MEMORY_TIMING });
+  test("limits of 0 (per worker and for the host) turn the watchdog off", async () => {
+    const { host, workers } = rig({ memoryMb: 0, totalMemoryMb: 0, timing: MEMORY_TIMING });
     await start(host);
     workers[0]!.memory = { mb: 99_999, own: true };
     await new Promise(resolve => setTimeout(resolve, 150)); // a real wait: nothing may happen in this window
     expect(workers[0]!.exited).toBe(false);
+  });
+});
+
+describe("the code workers' memory is bounded together, not only one by one", () => {
+  /** The error session `session`'s run ended in. */
+  async function endedIn(host: CodeHost, session: string, runId: string): Promise<RunError> {
+    const done = await host.resume(session, runId, 2_000, NEVER);
+    if (done.state !== "done" || !("error" in done.result)) throw new Error("the cell should have ended in an error");
+    return done.result.error;
+  }
+
+  test("sessions that are each under the per-worker limit cannot together pass the host limit: the largest worker is ended with a plain message, the others go on", async () => {
+    const { host, workers } = rig({ memoryMb: 200, totalMemoryMb: 300, timing: MEMORY_TIMING });
+    const runs = [await start(host, "s1"), await start(host, "s2"), await start(host, "s3")];
+    // 100 + 110 + 130 = 340 MB: every worker is under its own 200 MB, the server is not.
+    workers[0]!.memory = { mb: 100, own: true };
+    workers[1]!.memory = { mb: 130, own: true };
+    workers[2]!.memory = { mb: 110, own: true };
+    const error = await endedIn(host, "s2", runs[1]!);
+    expect(error.name).toBe("CellMemoryError");
+    expect(error.message).toContain("held 340 MB together");
+    expect(error.message).toContain("the limit is 300 MB");
+    expect(error.message).toContain("this cell's worker was the largest at 130 MB");
+    expect(error.message).toContain("variables were reset");
+    expect(workers.map(worker => worker.exited)).toEqual([false, true, false]); // 210 MB are left: nothing more is ended
+    await new Promise(resolve => setTimeout(resolve, 100)); // a real wait: the others must stay
+    expect(workers.map(worker => worker.exited)).toEqual([false, true, false]);
+  });
+
+  test("the largest is ended whether or not it is running a cell: an idle worker holding the most is the one that goes, and a running neighbour is untouched", async () => {
+    const { host, workers } = rig({ memoryMb: 500, totalMemoryMb: 300, timing: MEMORY_TIMING });
+    const idle = await start(host, "s1");
+    workers[0]!.emit({ t: "result", runId: idle, ...OK });
+    await host.resume("s1", idle, 1_000, NEVER);
+    const running = await start(host, "s2");
+    workers[0]!.memory = { mb: 250, own: true };
+    workers[1]!.memory = { mb: 100, own: true };
+    await waitUntil("the idle worker is ended", () => workers[0]!.exited, exited => exited, 2_000);
+    expect(workers[1]!.exited).toBe(false);
+    workers[1]!.emit({ t: "result", runId: running, ...OK });
+    expect((await host.resume("s2", running, 1_000, NEVER)).state).toBe("done");
+  });
+
+  test("two cells that both see the same growth of a process-wide figure are not added up", async () => {
+    const wholeProcess: Behavior = (worker, message) => {
+      if (message.t !== "init") return;
+      worker.memory = { mb: 900, own: false };
+      queueMicrotask(() => worker.emit({ t: "ready" }));
+    };
+    const { host, workers } = rig({ memoryMb: 1_000, totalMemoryMb: 300, timing: MEMORY_TIMING }, wholeProcess);
+    await start(host, "s1");
+    await start(host, "s2");
+    // One process grew by 200 MB while both cells ran: each cell sees 200 MB, the server holds 200 MB, not 400.
+    workers[0]!.memory = { mb: 1_100, own: false };
+    workers[1]!.memory = { mb: 1_100, own: false };
+    await new Promise(resolve => setTimeout(resolve, 150)); // a real wait: nothing may happen in this window
+    expect(workers.map(worker => worker.exited)).toEqual([false, false]);
+    workers[0]!.memory = { mb: 1_250, own: false };
+    workers[1]!.memory = { mb: 1_250, own: false };
+    await waitUntil("the server's growth passed the host limit", () => workers.filter(worker => worker.exited).length, ended => ended >= 1, 2_000);
+  });
+
+  test("a host limit of 0 turns only the total off: a worker over its own limit is still ended", async () => {
+    const { host, workers } = rig({ memoryMb: 100, totalMemoryMb: 0, timing: MEMORY_TIMING });
+    const runId = await start(host, "s1");
+    workers[0]!.memory = { mb: 640, own: true };
+    expect((await endedIn(host, "s1", runId)).message).toContain("grew the code worker to 640 MB");
+  });
+
+  test("no per-worker limit does not turn the total off: the host still bounds what all of them hold", async () => {
+    const { host, workers } = rig({ memoryMb: 0, totalMemoryMb: 300, timing: MEMORY_TIMING });
+    const runId = await start(host, "s1");
+    workers[0]!.memory = { mb: 640, own: true };
+    expect((await endedIn(host, "s1", runId)).message).toContain("held 640 MB together");
   });
 });
 
