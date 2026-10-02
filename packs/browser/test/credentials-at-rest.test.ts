@@ -492,3 +492,66 @@ describe("the key", () => {
 		expect(stored(file).version).toBe(2);
 	});
 });
+
+describe("the sealed store, as it is written", () => {
+	test("is staged whole and fsynced before it takes the old store's place, so a crash leaves the old file or the new one and never half of one", async () => {
+		const { rootDir, profileDir, file } = await fresh();
+		writeFileSync(file, `${JSON.stringify({ version: 1, origins: { [SHOP]: "Kept-Plain_1#fixture" } })}\n`);
+		const key = new CredentialKey(rootDir);
+		key.get();
+		const events: string[] = [];
+		let staged: { version?: number; origins?: Record<string, string> } | undefined;
+		const realRename = fs.renameSync;
+		const realFsync = fs.fsyncSync;
+		const syncing = spyOn(fs, "fsyncSync").mockImplementation((fd) => {
+			events.push("fsync");
+			return realFsync(fd);
+		});
+		const renaming = spyOn(fs, "renameSync").mockImplementation((from, to) => {
+			events.push("rename");
+			if (String(to) === file) staged = JSON.parse(readFileSync(from, "utf8"));
+			return realRename(from, to);
+		});
+		try {
+			savedPasswords(profileDir, key);
+		} finally {
+			syncing.mockRestore();
+			renaming.mockRestore();
+		}
+
+		// The bytes were on disk before the rename, and what was renamed in was the whole sealed store.
+		expect(events.indexOf("fsync")).toBeGreaterThanOrEqual(0);
+		expect(events.indexOf("fsync")).toBeLessThan(events.indexOf("rename"));
+		expect(staged?.version).toBe(2);
+		expect(Object.keys(staged?.origins ?? {})).toEqual([SHOP]);
+		expect(readdirSync(profileDir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+	});
+
+	test("a write that fails half way leaves the old store as it was and nothing behind: the passwords are still answered and sealed at the next read", async () => {
+		const { rootDir, profileDir, file } = await fresh();
+		const plain = `${JSON.stringify({ version: 1, origins: { [SHOP]: "Kept-Plain_1#fixture", [BANK]: "Kept-Plain_2#fixture" } })}\n`;
+		writeFileSync(file, plain);
+		const key = new CredentialKey(rootDir);
+		key.get();
+		const saying = spyOn(console, "error").mockImplementation(() => undefined);
+		const failing = spyOn(fs, "renameSync").mockImplementation(() => {
+			throw Object.assign(new Error("EPERM: operation not permitted, rename"), { code: "EPERM" });
+		});
+		try {
+			// A scanner holds the file: the passwords still come back, the file is untouched and no staging file is left.
+			expect(savedPasswords(profileDir, key).sort()).toEqual(["Kept-Plain_1#fixture", "Kept-Plain_2#fixture"]);
+			expect(readFileSync(file, "utf8")).toBe(plain);
+			expect(readdirSync(profileDir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+			// Said once, however often it is read.
+			savedPasswords(profileDir, key);
+			expect(saying.mock.calls.filter(([message]) => String(message).includes("could not be encrypted")).length).toBe(1);
+		} finally {
+			failing.mockRestore();
+			saying.mockRestore();
+		}
+
+		expect(savedPasswords(profileDir, key).sort()).toEqual(["Kept-Plain_1#fixture", "Kept-Plain_2#fixture"]);
+		expect(stored(file).version).toBe(2);
+		expect(onDisk(rootDir, "Kept-Plain_1#fixture")).toBe(false);
+	});
+});
