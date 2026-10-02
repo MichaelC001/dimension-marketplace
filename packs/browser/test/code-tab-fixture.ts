@@ -42,11 +42,19 @@ const PAGES: Record<string, string> = {
   // A two-step login: the password field is not there until a moment after "Next".
   "/twostep": `<!doctype html><title>Two step</title><label>Email <input id="email" type="text"></label>
 <button id="next" onclick="setTimeout(() => { const i = document.createElement('input'); i.id = 'late-pw'; i.type = 'password'; document.body.appendChild(i); }, 600)">Next</button>`,
-  // A field that reads as plain text exactly once (the realm's own check) and as a password after that: what a page swapping the element between a check and the typing looks like.
+  // A field that reads as plain text for the first `reads` reads (default 1) and as a password after that: what a page swapping the element between a check and the typing looks like. The realm reads it once
+  // for its own check and once for what holds focus; the fill's own predicate is the read after those.
   "/flaky": `<!doctype html><title>Flaky</title><input id="flaky" type="text"><script>
-const f = document.getElementById("flaky"); let reads = 0;
-Object.defineProperty(f, "type", { get() { reads += 1; return reads === 1 ? "text" : "password"; } });
+const f = document.getElementById("flaky"); let reads = 0; const text = Number(new URLSearchParams(location.search).get("reads") ?? "1");
+Object.defineProperty(f, "type", { get() { reads += 1; return reads <= text ? "text" : "password"; } });
 </script>`,
+  // Where keys end up is not where a helper was pointed: a custom element that hands focus to the password field inside its shadow root, a field that moves focus to a password field when it gets it,
+  // and a same-origin iframe holding the form (and so a password field of its own).
+  "/delegate": `<!doctype html><title>Delegate</title><x-pw id="xpw"></x-pw><input id="plain" type="text"><script>
+customElements.define("x-pw", class extends HTMLElement { constructor() { super(); this.attachShadow({ mode: "open", delegatesFocus: true }).innerHTML = '<input id="inner" type="password">'; } });
+</script>`,
+  "/focusmove": `<!doctype html><title>Focus move</title><input id="decoy" type="text" onfocus="document.getElementById('hidden-pw').focus()"><input id="hidden-pw" type="password">`,
+  "/framed": `<!doctype html><title>Framed</title><iframe id="f" src="/form" width="600" height="300"></iframe><input id="top" type="text">`,
   "/drag": `<!doctype html><title>Drag</title>
 <div id="a" style="position:absolute;left:20px;top:20px;width:60px;height:60px;background:#08f">a</div>
 <div id="b" style="position:absolute;left:220px;top:120px;width:80px;height:80px;background:#f80">b</div>

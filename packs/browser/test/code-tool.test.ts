@@ -14,7 +14,10 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { z } from "zod";
 import type { CodeHostPort, ImageBlock, RunError, RunResult, RunStarted } from "../src/code/contracts.js";
 import { ToolAbortError } from "../src/code/errors.js";
-import { BROWSER_RUN_DESCRIPTION, MAX_INLINE_BYTES, runCodeTool, SPILL_FILES_KEPT, type CodeToolDeps } from "../src/code/tool.js";
+import { CellOutput } from "../src/code/cell/display.js";
+import { MAX_INLINE_BYTES } from "../src/code/cell/output-sink.js";
+import { runCodeTool, type CodeToolDeps } from "../src/code/tool.js";
+import { SPILL_FILES_KEPT } from "../src/code/spill.js";
 import type { BrowserRuntimePort } from "../src/contracts.js";
 import { createBrowserServer, type ModelToolsMode } from "../src/server.js";
 
@@ -130,11 +133,40 @@ describe("what a cell's result looks like to the model", () => {
     await expect(readdir(join(root, "artifacts"))).rejects.toThrow();
   });
 
-  test("only the newest spilled outputs are kept", async () => {
+  test("only the newest spilled outputs of a session are kept, and another session's spills never remove them", async () => {
     const big = "y".repeat(MAX_INLINE_BYTES + 10);
     const { call, root } = await connect(fakeHost(() => shown({ type: "text", text: big })));
-    for (let i = 0; i < SPILL_FILES_KEPT + 3; i += 1) await call("print(big)");
-    expect(await readdir(join(root, "artifacts"))).toHaveLength(SPILL_FILES_KEPT);
+    const pathOf = (reply: Reply): string => /\n\[raw output: (.+)\]$/.exec(textOf(reply))![1]!;
+    const first = pathOf(await call("print(big)", {}, { [SESSION_KEY]: { sessionId: "quiet" } }));
+    for (let i = 0; i < SPILL_FILES_KEPT + 3; i += 1) await call("print(big)", {}, { [SESSION_KEY]: { sessionId: "busy" } });
+    // The busy session spilled more than the folder keeps: its own newest are what stay.
+    const folders = await readdir(join(root, "artifacts"));
+    expect(folders).toHaveLength(2);
+    expect(folders.every(folder => /^[0-9a-f]{16}$/.test(folder))).toBe(true);
+    const counts = await Promise.all(folders.map(async folder => (await readdir(join(root, "artifacts", folder))).length));
+    expect(counts.sort((a, b) => a - b)).toEqual([1, SPILL_FILES_KEPT]);
+    // The quiet session's footer path is still a file: the busy one's spills did not take it.
+    expect((await readFile(first, "utf8")).length).toBe(big.length);
+  });
+
+  test("the text a cell composed within the budget is the model's text as it is: not cut a second time, and no second file called the raw output", async () => {
+    // The reviewer's numbers (review of #160, round 3): 2,000 printed lines and three `display()`s of a 300-item array, the way the cell realm composes them, with the worker's own spill folder.
+    const workerDir = await mkdtemp(join(tmpdir(), "browser-code-tool-worker-"));
+    dirs.push(workerDir);
+    const output = new CellOutput({ spillDir: workerDir });
+    for (let i = 0; i < 2_000; i += 1) output.hooks().onText(`line ${String(i).padStart(5, "0")} ${"é".repeat(8)}\n`);
+    for (let i = 0; i < 3; i += 1) output.hooks().onDisplay({ type: "json", data: Array.from({ length: 300 }, (_, k) => ({ index: k, label: `item ${k}` })) });
+    const { text: composed } = output.finish();
+    expect(Buffer.byteLength(composed, "utf8")).toBeLessThanOrEqual(MAX_INLINE_BYTES);
+
+    const { call, root } = await connect(fakeHost(() => shown({ type: "text", text: composed })));
+    const reply = textOf(await call("print(a lot)"));
+    expect(reply).toBe(composed);
+    expect(reply.match(/\[raw output: /g)).toHaveLength(1);
+    expect(reply.match(/\[…\d+B elided…\]/g)).toHaveLength(1);
+    // The tool made no file of its own: the one footer names the worker's, which holds the stream.
+    await expect(readdir(join(root, "artifacts"))).rejects.toThrow();
+    expect(reply).toContain(`[raw output: ${join(workerDir, (await readdir(workerDir))[0]!)}]`);
   });
 });
 
@@ -168,6 +200,21 @@ describe("what a failed cell tells the model", () => {
     const reply = await call("await browser.tab().waitForSelector('#go')");
     expect(reply.isError).toBe(true);
     expect(textOf(reply)).toBe("TimeoutError: Waiting for selector `#go` failed\n    at <anonymous> (browser-cell-r1.js:4:11)");
+  });
+
+  test("a failed cell's output is not cut again for its error line, and a huge error is cut alone: within the budget, with no file called the raw output", async () => {
+    const body = `${"b".repeat(60)}\n`.repeat(750).trim();
+    expect(Buffer.byteLength(body, "utf8")).toBeLessThanOrEqual(MAX_INLINE_BYTES - 4 * 1024);
+    const message = `${"boom ".repeat(40_000)}`;
+    const { call, root } = await connect(fakeHost(() => failedWith({ name: "Error", message, isAbort: false, partial: { displays: [{ type: "text", text: body }], screenshots: [] } })));
+    const reply = await call("throw new Error(huge)");
+    const text = textOf(reply);
+    expect(reply.isError).toBe(true);
+    expect(text.startsWith(`${body}\nError: boom boom`)).toBe(true);
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(MAX_INLINE_BYTES);
+    expect(text).toMatch(/\[…\d+B elided…\]/);
+    expect(text).not.toContain("[raw output:");
+    await expect(readdir(join(root, "artifacts"))).rejects.toThrow();
   });
 
   test("a refusal the host throws (a cell still running, an unknown run) reaches the model as it was written", async () => {
@@ -297,6 +344,24 @@ describe("the 25-second rule", () => {
     expect(calls.map(call => call.kind)).toEqual(["run", "resume"]);
   });
 
+  test("a running answer cuts the output so far to the budget with a marker, and writes no file: the finished cell's footer is the one that names a file", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "browser-code-tool-running-"));
+    dirs.push(dir);
+    const host: CodeHostPort = {
+      run: async () => ({ state: "running", runId: "r9", outputSoFar: `${"progress line\n".repeat(20_000)}tail` }),
+      resume: async () => ({ state: "running", runId: "r9", outputSoFar: "" }),
+      dispose: async () => {},
+    };
+    const reply = await runCodeTool({ ...deps(host, 80), artifactsDir: () => dir }, { code: "await slow()" }, extra);
+    const text = textOf(Reply.parse(reply));
+    expect(text.split("\n")[0]).toBe("running: r9");
+    expect(text).toContain("tail");
+    expect(text).toMatch(/\[…\d+B elided…\]/);
+    expect(text).not.toContain("[raw output:");
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(MAX_INLINE_BYTES + 512);
+    expect(await readdir(dir)).toEqual([]);
+  });
+
   test("a cell that finishes inside the wait is answered by the one call", async () => {
     const { host, calls } = slowCell(10);
     const reply = await runCodeTool(deps(host, 500), { code: "1" }, extra);
@@ -333,6 +398,17 @@ describe("which tools the model is shown", () => {
       return !Array.isArray(spaces) || spaces.includes("code");
     }).map(([name]) => name).filter(name => name.startsWith("browser_") && !name.startsWith("browser_task") && !name.startsWith("browser_publish"));
     expect(codeSpaceTools.filter(name => !["browser_stream", "browser_frame", "browser_annotate", "browser_annotation_file", "browser_viewport"].includes(name)).sort()).toEqual(["browser_close", "browser_profiles", "browser_read", "browser_run", "browser_view"]);
+  });
+
+  test("the spaces the manifest lends the pack to are split between browser_run and the step tools, none in both and none in neither", async () => {
+    const manifest = JSON.parse(await readFile(new URL("../plugin.json", import.meta.url), "utf8")) as { extensions: Record<string, { artifactories: Array<{ mcpServer: string; modelSpaces: string[] }> }> };
+    const declared = manifest.extensions["ai.insodimension.dimension"]!.artifactories.find(artifactory => artifactory.mcpServer === "browser")!.modelSpaces;
+    const { client } = await connect(fakeHost(() => shown()), "code");
+    const tools = await listed(client);
+    const withCode = tools.get("browser_run")?.[SPACES] as string[];
+    const withSteps = tools.get("browser_act")?.[SPACES] as string[];
+    // A space the manifest gains is offered one of the two without anyone editing server.ts; one that is in neither would have a model with no way to drive a page.
+    expect([...withCode, ...withSteps].sort()).toEqual([...declared].sort());
   });
 
   test("steps: the six step tools for everyone and no browser_run", async () => {
@@ -384,12 +460,5 @@ describe("which tools the model is shown", () => {
     const { client } = await connect(host, "code");
     await client.close();
     await ended.promise;
-  });
-
-  test("the model's text is OMP's browser.md as the pack ports it, without the licence comment", () => {
-    expect(BROWSER_RUN_DESCRIPTION.startsWith("Drive real Chromium tabs by running JavaScript")).toBe(true);
-    expect(BROWSER_RUN_DESCRIPTION).not.toContain("<!--");
-    expect(BROWSER_RUN_DESCRIPTION).toContain("browser_run({ resume:");
-    expect(BROWSER_RUN_DESCRIPTION).not.toMatch(/python/i);
   });
 });

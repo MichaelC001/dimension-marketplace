@@ -60,6 +60,8 @@ export interface CodeSeam {
   bindView(session: string, browserId: string): void;
   /** One call in flight: out of idle close and make-room. Throws `task_running`, `publish_pending` (and `human_driving` once the person has the wheel). */
   hold(entry: CodeSeamEntry): () => void;
+  /** A call is queued or running on the browser, or a task agent is driving it: nothing may close or freeze it under that work. */
+  working(entry: CodeSeamEntry): boolean;
   /** Page work in the runtime's per-browser order. */
   serialize<T>(entry: CodeSeamEntry, work: () => Promise<T>): Promise<T>;
   onEnd(listener: EndListener): () => void;
@@ -284,10 +286,10 @@ export class RuntimeCodeBrowsers implements CodeBrowserPort {
     if (entry.code !== undefined) entry.code.persist = persist || this.#never;
   }
 
-  activity(browserId: string): { idleMs: number; viewers: number; pending: number } | undefined {
+  activity(browserId: string): { idleMs: number; viewers: number; pending: number; working: boolean } | undefined {
     if (this.#cmux.owns(browserId)) return undefined;
     const entry = this.#seam.peek(browserId);
-    return entry === undefined ? undefined : { idleMs: performance.now() - entry.lastUsed, viewers: entry.viewers, pending: entry.pending };
+    return entry === undefined ? undefined : { idleMs: performance.now() - entry.lastUsed, viewers: entry.viewers, pending: entry.pending, working: this.#seam.working(entry) };
   }
 
   existing(session: string): { browserId: string; wsEndpoint: string; kind: BrowserKind } | undefined {

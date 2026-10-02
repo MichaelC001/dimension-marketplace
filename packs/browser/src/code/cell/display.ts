@@ -1,12 +1,14 @@
 // Copied from OMP (https://github.com/can1357/oh-my-pi, MIT), packages/coding-agent/src/eval/js/shared/runtime.ts (displayValue, coerceImageBase64, formatConsoleArgs, the stdout patch),
 // packages/coding-agent/src/eval/js/shared/prelude.txt (the console bridge) and packages/coding-agent/src/tools/eval.ts (formatDisplayJsonForText) @ dc5f95d9e1 (Dimension omp fork).
 // Copyright (c) 2025 Mario Zechner; (c) 2025-2026 Can Bölük; (c) 2026 Stencil Labs, Inc. See ../../../third-party/omp/LICENSE.
-// Changed for the Browser pack: the bridge calls are plain closures over a run's hooks (no AsyncLocalStorage lookup for the lexical names), and the output of a finished cell is assembled here.
+// Changed for the Browser pack: the bridge calls are plain closures over a run's hooks (no AsyncLocalStorage lookup for the lexical names), and the output of a finished cell is assembled here, held in bounded memory
+// (the stream and the `display[n]:` blocks each go through an `OutputSink`, the images are counted against a ceiling).
 
 import { Console } from "node:console";
 import { Writable } from "node:stream";
 import * as util from "node:util";
 import type { EvaluatorDisplay, EvaluatorHooks } from "../contracts.js";
+import { FOOTER_BYTES, MAX_INLINE_BYTES, OutputSink } from "./output-sink.js";
 
 // Strict base64: characters from the standard alphabet plus optional `=` padding, and a length that is a multiple of four. URL-safe base64 and embedded
 // whitespace are not accepted: the model APIs only honor strict base64 in image sources.
@@ -193,38 +195,84 @@ function formatDisplayJsonForText(value: unknown): string {
   return text;
 }
 
+/** Base64 characters of images one cell may keep. Past it an image is dropped and counted: a loop of screenshots must not be able to fill the worker's heap. About 160 full-size model screenshots. */
+export const MAX_IMAGE_BASE64_CHARS = 32 * 1024 * 1024;
+
+/** Between the stream, the display blocks and the note: a blank line. */
+const SECTION_GAP = "\n\n";
+
+export interface CellOutputOptions {
+  /** The session's folder for the file that keeps a stream longer than the inline budget. Absent: none is kept. */
+  spillDir?: string;
+  /** Progress: the text as it is printed, throttled and bounded (see {@link OutputSink}). */
+  onText?: (chunk: string) => void;
+}
+
 /**
  * Collects what one cell shows: the stream text (`console.*`, `print`, strings and numbers handed to `display`, the final value) and the `display()`ed
  * objects and images. `finish()` is OMP's eval-cell text: the trimmed stream, then `display[n]:` blocks, separated by a blank line; images are returned
- * apart, and go first in the tool result.
+ * apart, and go first in the tool result. Whatever the cell prints, what is held stays within the inline budget (twice: the stream, the blocks) plus the images' ceiling,
+ * and the text `finish()` makes is ONE budget's worth, shared by the two: the tool that carries it never has to cut it again.
  */
 export class CellOutput {
-  #stream = "";
-  readonly #json: unknown[] = [];
+  readonly #stream: OutputSink;
+  readonly #blocks = new OutputSink();
+  #blockCount = 0;
   readonly #images: Array<{ type: "image"; data: string; mimeType: string }> = [];
+  #imageChars = 0;
+  #imagesDropped = 0;
 
-  /** Hooks for one run; `observe` sees every text chunk as it arrives (the progress channel). */
-  hooks(observe?: (chunk: string) => void): EvaluatorHooks {
+  constructor(options: CellOutputOptions = {}) {
+    this.#stream = new OutputSink({
+      ...(options.spillDir === undefined ? {} : { spillDir: options.spillDir }),
+      ...(options.onText === undefined ? {} : { onChunk: options.onText }),
+    });
+  }
+
+  hooks(): EvaluatorHooks {
     return {
-      onText: chunk => {
-        this.#stream += chunk;
-        observe?.(chunk);
-      },
+      onText: chunk => this.#stream.push(chunk),
       onDisplay: (output: EvaluatorDisplay) => {
-        if (output.type === "image") this.#images.push({ type: "image", data: output.data, mimeType: output.mimeType });
-        else this.#json.push(output.data);
+        if (output.type === "image") {
+          if (this.#imageChars + output.data.length > MAX_IMAGE_BASE64_CHARS) this.#imagesDropped += 1;
+          else {
+            this.#imageChars += output.data.length;
+            this.#images.push({ type: "image", data: output.data, mimeType: output.mimeType });
+          }
+          return;
+        }
+        this.#blockCount += 1;
+        const block = `display[${this.#blockCount}]:\n${formatDisplayJsonForText(output.data)}`;
+        this.#blocks.push(this.#blockCount === 1 ? block : `\n\n${block}`);
       },
     };
   }
 
-  get streamText(): string {
-    return this.#stream;
-  }
-
-  finish(): { text: string; images: Array<{ type: "image"; data: string; mimeType: string }> } {
-    const stdout = this.#stream.trim();
-    const shown = this.#json.map((data, index) => `display[${index + 1}]:\n${formatDisplayJsonForText(data)}`).join("\n\n");
-    const text = stdout && shown ? `${stdout}\n\n${shown}` : stdout || shown;
+  /**
+   * The cell's text, within {@link MAX_INLINE_BYTES} less `reserveBytes` (room a failed cell leaves for its error line, which the tool appends). The stream and the blocks share the budget: a section that fits in its
+   * half, or in what the other leaves, is shown whole; one that does not is cut to its start and its end with its own marker. A stream cut here has the whole of what it printed in the file the footer names, even if it
+   * would have fitted the stream's own budget alone.
+   */
+  finish(reserveBytes = 0): { text: string; images: Array<{ type: "image"; data: string; mimeType: string }> } {
+    const note = this.#imagesDropped === 0 ? "" : `[display: ${this.#imagesDropped} image${this.#imagesDropped === 1 ? "" : "s"} dropped — one cell keeps at most ${MAX_IMAGE_BASE64_CHARS / (1024 * 1024)} MiB of images]`;
+    const gaps = SECTION_GAP.length * 2;
+    const room = Math.max(0, MAX_INLINE_BYTES - reserveBytes - gaps - Buffer.byteLength(note, "utf8"));
+    // Who gets what: each section asks for what it would show whole (the stream also for its footer); if both do not fit, the smaller keeps its ask up to half and the larger gets the rest.
+    let streamRoom = this.#stream.estimate() + FOOTER_BYTES;
+    let blocksRoom = this.#blocks.estimate();
+    if (streamRoom + blocksRoom > room) {
+      const half = Math.floor(room / 2);
+      if (streamRoom <= half) blocksRoom = room - streamRoom;
+      else if (blocksRoom <= half) streamRoom = room - blocksRoom;
+      else {
+        streamRoom = half;
+        blocksRoom = room - half;
+      }
+    }
+    const stdout = this.#stream.dump(Math.max(0, streamRoom - FOOTER_BYTES)).text;
+    // The blocks get what the stream really took.
+    const shown = this.#blocks.dump(Math.max(0, room - Buffer.byteLength(stdout, "utf8"))).text;
+    const text = [stdout, shown, note].filter(part => part.length > 0).join(SECTION_GAP);
     return { text, images: this.#images };
   }
 }

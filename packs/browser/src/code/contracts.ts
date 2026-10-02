@@ -94,7 +94,8 @@ export interface AcquiredBrowser { browserId: string; created: boolean; wsEndpoi
  * What `init` tells the worker about the tab realm it builds. All but `session` and `env` are optional, and absent means the realm's own default:
  * - `screenshotDir`: where model screenshots are also saved (OMP's screenshot directory); absent: the realm reads `DIMENSION_BROWSER_SCREENSHOT_DIR` from `env`.
  * - `cwd`: resolves a relative `tab.uploadFile` path. MCP calls carry no working directory, so absent means a relative path is refused with the rule named.
- * - `refusePasswordFields`: `tab.type` / `tab.fill` (and a handle's) refuse a password input from code (matrix D18). ABSENT MEANS ON; the host sends `false` only where the owner has lifted the rule.
+ * - `refusePasswordFields`: `tab.type` / `tab.fill` / `tab.press` (and a handle's) refuse a password input from code, and keys that would reach one (matrix D18). ABSENT MEANS ON; the host sends `false` only where the owner has lifted the rule.
+ * - `taskCredential`: the server offers `browser_task` (it is registered only with a TypeSafe key), so the refusal may send the model to it. ABSENT MEANS NOT OFFERED: the host sends `true` only where the tool exists.
  * - `excludeWebP`: encode the screenshot the model sees as JPEG instead of WebP (a model provider that cannot read WebP).
  */
 export interface RealmInit {
@@ -103,6 +104,7 @@ export interface RealmInit {
   screenshotDir?: string;
   cwd?: string;
   refusePasswordFields?: boolean;
+  taskCredential?: boolean;
   excludeWebP?: boolean;
 }
 export type HostToWorker =
@@ -122,6 +124,7 @@ export type WorkerToHost =
   | { t: "ready" }
   /** open and close only */
   | { t: "bridge"; id: number; runId: string; request: BridgeRequest }
+  /** Progress, never the output itself (that is the `result`): at most one per 100 ms and 16 KiB per run, whatever the cell prints; a stretch left out is `[…NB elided…]`. Append them; the end is what matters. */
   | { t: "text"; runId: string; chunk: string }
   | { t: "result"; runId: string; ok: true; payload: RunResult }
   | { t: "result"; runId: string; ok: false; error: RunError }
@@ -136,12 +139,16 @@ export interface RunError {
   isAbort: boolean;
   /**
    * The host MUST terminate this worker thread and start a new one (the pages stay; the new worker re-adopts them) before the next run: the cell that failed may still be running
-   * (a synchronous loop cannot be stopped from inside the thread, and raw Puppeteer calls in a timed-out `tab.run` never see the cell's signal), and its variables are to be reset.
-   * The cell realm sets it when the cell's budget ran out (OMP force-kills its JS worker the same way, eval/js/executor.ts:70-78); the tab realm may set it too.
+   * (a synchronous loop cannot be stopped from inside the thread, a loop that catches the abort goes on, and raw Puppeteer calls in a timed-out `tab.run` never see the cell's signal), and its variables are to be reset.
+   * The cell realm sets it whenever it gives up on a cell that is still running: its budget ran out, or the run was cancelled (OMP force-kills its JS worker on ANY abort, eval/js/context-manager.ts:430-448);
+   * the tab realm may set it too. A run cancelled before its code began never has it. A host that replaces the worker because of this flag decides to from the worker's own error,
+   * before it swaps in a message of its own (a take-over), or the cancelled code is left running.
    */
   recoverTab?: boolean;
-  /** The cell's own budget ran out (`CellTimeoutError`). Its `message` is already OMP's whole annotation, reset sentence included: the host must not add its own. A `TimeoutError` the page raised never carries this. */
+  /** The cell's own budget ran out (`CellTimeoutError`). Its `message` is already OMP's whole annotation, reset sentence included. A `TimeoutError` the page raised never carries this. */
   budget?: boolean;
+  /** `message` already tells the model the worker was reset and its variables are gone (a timeout's and a cancel's do): a host that rebuilds the worker must not add a sentence of its own. */
+  resetNoted?: boolean;
   partial?: RunResult;
 }
 /** tab-protocol.ts:139-143 */
@@ -191,11 +198,11 @@ export interface CodeBrowserPort {
   resize(browserId: string, viewport: { width: number; height: number; scale?: number }): Promise<void>;
   /** `persist: true` exempts the browser from idle close and from being closed to make room. */
   setPersist(browserId: string, persist: boolean): void;
-  /** What the freeze clock reads; undefined once the browser is gone. `idleMs`: since any call reached it, the View's included. */
-  activity(browserId: string): { idleMs: number; viewers: number; pending: number } | undefined;
+  /** What the freeze clock reads; undefined once the browser is gone. `idleMs`: since any call reached it, the View's included. `working`: a call is queued or running, or a task agent is driving the browser (a task's steps do not touch `idleMs`). */
+  activity(browserId: string): { idleMs: number; viewers: number; pending: number; working: boolean } | undefined;
   /** The browser the session already holds (one a cell made, or the person opened in the View), without making one: what `browser.tabs()` and `browser.active()` read. */
   existing(session: string): { browserId: string; wsEndpoint: string; kind: BrowserKind } | undefined;
-  /** A View joined the browser's live stream: a frozen tab draws nothing, so the host thaws before the View looks. */
+  /** A View joined the browser's live stream, or a task agent began driving it: a frozen tab draws nothing and answers no timer, so the host thaws before either looks. */
   onViewed(l: (browserId: string) => void): () => void;
   /** The host is shutting down: let go of what the port holds that the runtime does not (the splits of a cmux browser). The runtime closes its own browsers. */
   dispose?(): Promise<void>;
@@ -207,6 +214,11 @@ export interface TabRealm {
   adopt(name: string, h: TabHandle): Promise<void>;
   /** Drop the page; never closes a foreign browser. */
   release(name: string): Promise<void>;
+  /**
+   * `run` and `call` stay in the worker thread, so what they return is not posted anywhere; it is copied into the cell's realm, and there it is bounded (worker/dispatch.ts `bridgeResponse`): the text parts to the 50 KiB
+   * inline budget (the start, the end, a note), the images to the 32 MiB a cell keeps in all. A realm SHOULD bound what it collects the same way as it collects it (text through `OutputSink`, images under
+   * `MAX_IMAGE_BASE64_CHARS`), or a `tab.run` that prints without end grows the worker until its budget or the host's memory watchdog ends it. `returnValue` is the page code's own value and is never bounded or copied.
+   */
   run(r: { name: string; code?: string; fn?: string; args?: unknown[]; timeoutMs: number; signal: AbortSignal }): Promise<RunResult>;
   call(r: { name: string; chain: Array<{ method: string; args: unknown[] }>; timeoutMs: number; signal: AbortSignal }): Promise<RunResult>;
   names(): string[];

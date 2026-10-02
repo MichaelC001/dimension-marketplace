@@ -41,24 +41,20 @@ const TARGET_APPEAR_TIMEOUT_MS = 5_000;
 /** The names a function run receives, and the ones `tab.run` code can use (OMP `BROWSER_RUN_SCOPE`). */
 const RUN_SCOPE: readonly string[] = ["tab", "page", "browser", "wait", "assert"];
 /**
- * Matrix D18, a rule of the pack that OMP does not have: code does not type into a password field (`tab.type`, `tab.fill`, a handle's `type` and `fill`); a password goes through browser_act's saved-credential
+ * Matrix D18, a rule of the pack that OMP does not have: code does not type into a password field (`tab.type`, `tab.fill`, a text-typing `tab.press`, a handle's `type` and `fill`); a password goes through browser_act's saved-credential
  * route or the user. The ONE constant to flip if the owner lifts the rule; the host can also lift it per worker with `init.refusePasswordFields: false`.
  */
 export const REFUSE_PASSWORD_FIELDS_BY_DEFAULT = true;
 
 /**
- * The `browser` a run sees. It is the realm's one connection to the Chrome, shared by every tab of it, so `disconnect()` (which a cell ends with by habit) must not cut it: that would end every
- * adopted tab of the browser and report "the browser disconnected" for a Chrome that is still running. The realm releases the connection itself when the last tab of the browser goes. Every other member
- * is the Browser's own, bound to it (puppeteer keeps private fields, so a call through the proxy would not find them).
+ * The realm's connection to a Chrome is shared by every tab of it, but any run can reach the Browser: as `browser`, and through `page.browser()`, `page.browserContext().browser()` or `page.target().browser()`; and a
+ * cell ends with `disconnect()` by habit. That would end every adopted tab of the browser and report "the browser disconnected" for a Chrome that is still running. So the Browser itself takes `disconnect()` as a no-op,
+ * whoever calls it and however they got there (a proxy on one name would leave the other paths open), and the realm keeps the real one, returned here, to release the connection when the last tab of the browser goes.
  */
-function sharedBrowserFacade(browser: Browser): Browser {
-  return new Proxy(browser, {
-    get(target, prop) {
-      if (prop === "disconnect") return async (): Promise<void> => undefined;
-      const member: unknown = Reflect.get(target, prop, target);
-      return typeof member === "function" ? member.bind(target) : member;
-    },
-  });
+function withdrawDisconnect(browser: Browser): () => Promise<void> {
+  const release = browser.disconnect.bind(browser);
+  Object.defineProperty(browser, "disconnect", { configurable: true, value: async (): Promise<void> => undefined });
+  return release;
 }
 
 export interface TabRealmOptions {
@@ -72,6 +68,8 @@ export interface TabRealmOptions {
   cwd?: string;
   /** Refuse `type` and `fill` on a password input from code (matrix D18). Absent: {@link REFUSE_PASSWORD_FIELDS_BY_DEFAULT}. */
   refusePasswordFields?: boolean;
+  /** The server offers browser_task, so a password refusal may name it as a route (it needs a TypeSafe key, which only the host can see). Absent: not offered. */
+  taskCredential?: boolean;
   /** Encode the model's screenshot as JPEG instead of WebP. */
   excludeWebP?: boolean;
   /** Route unhandled rejections of the code a run started back into that run. Default: only inside a worker thread, where an unhandled rejection would end the worker. */
@@ -83,6 +81,8 @@ export interface TabRealmOptions {
 interface BrowserConnection {
   wsEndpoint: string;
   browser: Promise<Browser>;
+  /** The Browser's real `disconnect`, set once it has connected (see {@link withdrawDisconnect}). */
+  release?: () => Promise<void>;
 }
 
 function privateTargetId(target: Target): string | undefined {
@@ -208,6 +208,7 @@ class BrowserTabRealm implements TabRealm {
     this.#connections.set(handle.browserId, connection);
     try {
       const browser = await connection.browser;
+      connection.release = withdrawDisconnect(browser);
       browser.on("disconnected", () => {
         if (this.#connections.get(handle.browserId) === connection) void this.end(handle.browserId, "the browser disconnected").catch(() => undefined);
       });
@@ -254,8 +255,8 @@ class BrowserTabRealm implements TabRealm {
     const connection = this.#connections.get(browserId);
     if (!connection) return;
     this.#connections.delete(browserId);
-    const browser = await connection.browser.catch(() => undefined);
-    await browser?.disconnect().catch(() => undefined);
+    await connection.browser.catch(() => undefined);
+    await connection.release?.().catch(() => undefined);
   }
 
   #consumeUnhandledRejection(reason: unknown): boolean {
@@ -343,7 +344,7 @@ class BrowserTabRealm implements TabRealm {
         activate: session.activateForScreenshot,
       };
       const tabApi = createTabApi(
-        { session, run: active, signal, timeoutMs, shot, cwd: this.#options.cwd, refusePasswordFields: this.#options.refusePasswordFields ?? REFUSE_PASSWORD_FIELDS_BY_DEFAULT },
+        { session, run: active, signal, timeoutMs, shot, cwd: this.#options.cwd, refusePasswordFields: this.#options.refusePasswordFields ?? REFUSE_PASSWORD_FIELDS_BY_DEFAULT, taskCredential: this.#options.taskCredential ?? false },
         output,
         screenshots,
       );
@@ -361,7 +362,7 @@ class BrowserTabRealm implements TabRealm {
       };
       const scope: Record<string, unknown> = {
         page: bindRunFacade(runPage.page, signal, active.rejectionOwner, onFloatingRejection),
-        browser: bindRunFacade(sharedBrowserFacade(session.browser), signal, active.rejectionOwner, onFloatingRejection),
+        browser: bindRunFacade(session.browser, signal, active.rejectionOwner, onFloatingRejection),
         tab: bindRunFacade(tabApi, signal, active.rejectionOwner, onFloatingRejection),
         assert: (cond: unknown, text?: string): void => {
           if (!cond) throw new ToolError(text ?? "Assertion failed");

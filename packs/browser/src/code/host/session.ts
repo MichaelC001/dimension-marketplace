@@ -11,6 +11,8 @@ import { ToolAbortError, ToolError } from "../errors.js";
 import { describeBrowser, describeKind, sameBrowserKind } from "../kinds/resolve.js";
 import { CODE_VIEWPORT, codedMessage } from "./runtime-port.js";
 import type { SpawnWorker, WorkerHandle } from "./transport.js";
+import type { HostMemory, Member, Overrun } from "./host-memory.js";
+import { cellLabel, type TerminatingWorkers } from "./terminating.js";
 
 const DEFAULT_TAB_NAME = "main";
 /** What a cell holds in memory of its own output for a call that answers `running`; the worker bounds and coalesces what it posts, so this is only a ceiling. */
@@ -28,11 +30,19 @@ export interface CodeTiming {
   startupTimeoutMs: number;
   /** OMP's GRACE_MS (tab-supervisor.ts:198): how long a cancelled cell has to answer before its worker is terminated, and what a synchronous loop gets past its budget. */
   graceMs: number;
+  /** How long `terminate` is waited for. A thread inside a synchronous native call (an `execSync`) cannot be interrupted and answers only when the call returns; past this it is counted as stuck and left to end by itself. */
+  terminateMs: number;
+  /** How long a worker that was asked to `close` gets to leave on its own (its realm disconnects from every browser) before it is terminated. */
+  closeMs: number;
+  /** How often a worker's memory is read while a cell runs in it. A loop that allocates Buffers runs faster than this can look, so the overshoot past the limit is the allocation rate times this. */
+  memoryPollMs: number;
+  /** How often it is read while no cell runs (a timer a cell left behind can still grow it). */
+  memoryIdlePollMs: number;
   /** A finished run stays readable by `resume` this long. */
   finishedTtlMs: number;
 }
 
-export const DEFAULT_TIMING: CodeTiming = { freezeIdleMs: 20_000, workerIdleMs: 600_000, startupTimeoutMs: 10_000, graceMs: 750, finishedTtlMs: 600_000 };
+export const DEFAULT_TIMING: CodeTiming = { freezeIdleMs: 20_000, workerIdleMs: 600_000, startupTimeoutMs: 10_000, graceMs: 750, terminateMs: 1_000, closeMs: 1_000, memoryPollMs: 100, memoryIdlePollMs: 5_000, finishedTtlMs: 600_000 };
 
 export interface SessionDeps {
   session: string;
@@ -45,6 +55,20 @@ export interface SessionDeps {
   screenshotDir?: string;
   /** Where a cell's over-cap output may be kept; this session's own folder. */
   outputDir?: string;
+  /** What a relative `tab.uploadFile` path resolves against. MCP calls carry no working directory: absent, the realm refuses a relative path and says so. */
+  cwd?: string;
+  /** `tab.type` / `tab.fill` refuse a password input from code (matrix D18). Sent in every `init`, so the worker never depends on its own default. */
+  refusePasswordFields: boolean;
+  /** The screenshot the model sees is JPEG, not WebP (a model provider that cannot read WebP). */
+  excludeWebP: boolean;
+  /** The server offers `browser_task`, so the realm's password refusal may send the model to it (RealmInit.taskCredential; absent means not offered). */
+  taskCredential: boolean;
+  /** The workers this host ended that are still alive (all sessions share it; each session is counted on its own, and the host as a whole has a larger cap). */
+  terminating: TerminatingWorkers;
+  /** What a worker may hold, MB: its JS heap plus its Buffers and ArrayBuffers (the heap limit alone covers neither). 0: no limit. */
+  memoryMb: number;
+  /** The memory of every session's worker, added up: the host's own limit, which ends the largest worker of all sessions. */
+  hostMemory: HostMemory;
   timing: CodeTiming;
   /** The session holds nothing any more (no worker, no browser, nothing readable): the host forgets it. */
   onEmpty(): void;
@@ -65,8 +89,10 @@ class Run {
   /** Why it was stopped from outside (a take-over): replaces the worker's own cancellation error. */
   override: RunError | undefined;
   hung = false;
+  /** The process's resident MB when the cell began, for a runtime that cannot say a worker's own memory (see `WorkerMemory.own`). */
+  memoryBase: number | undefined;
   worker: LiveWorker | undefined;
-  constructor(readonly timeoutMs: number, readonly onProgress: ((chunk: string) => void) | undefined) {
+  constructor(readonly code: string, readonly timeoutMs: number, readonly onProgress: ((chunk: string) => void) | undefined) {
     this.done.promise.catch(() => undefined);
   }
 }
@@ -77,6 +103,12 @@ interface LiveWorker {
   /** Resolves with why the thread exited. */
   stopped: Promise<string>;
   dead: boolean;
+  /** The cell it ran last, in one short line: what is quoted if it ends up stuck. */
+  label: string;
+  /** The next look at its memory. */
+  memoryTimer?: NodeJS.Timeout;
+  /** This worker's place in the host's total. */
+  member?: Member;
 }
 
 interface BrowserRecord { browserId: string; wsEndpoint: string; kind: BrowserKind; createdByCode: boolean; label?: string }
@@ -89,8 +121,37 @@ export function unknownRunMessage(runId: string, ttlMs: number): string {
   return `unknown run ${JSON.stringify(runId)}: no cell with that id is running here or finished in the last ${Math.round(ttlMs / 60_000)} minutes; start a new one with browser_run({ code })`;
 }
 
+/** The error a cell gets when its worker grew past the memory limit and was ended. */
+function memoryError(usedMb: number, limitMb: number, own: boolean): RunError {
+  const held = own ? `grew the code worker to ${Math.round(usedMb)} MB` : `grew the server by ${Math.round(usedMb)} MB while it ran`;
+  return {
+    name: "CellMemoryError",
+    message: `The cell ${held} (JS heap plus Buffers and ArrayBuffers; the limit is ${limitMb} MB), so the JS worker was terminated and the cell's variables were reset; variables from earlier cells are gone. Keep large data out of memory: write it to a file, or handle it in pieces.`,
+    isAbort: false,
+  };
+}
+
+/** The error the cell of the largest worker gets when all the workers together passed the host's limit: the sum, the share of this one, and where the limit is set. */
+function hostMemoryError(usedMb: number, totalMb: number, limitMb: number): RunError {
+  return {
+    name: "CellMemoryError",
+    message: `The code workers of this browser server held ${totalMb} MB together (the limit is ${limitMb} MB for all sessions, DIMENSION_BROWSER_CODE_TOTAL_MB), and this cell's worker was the largest at ${Math.round(usedMb)} MB, so the JS worker was terminated and the cell's variables were reset; variables from earlier cells are gone. Keep large data out of memory: write it to a file, or handle it in pieces.`,
+    isAbort: false,
+  };
+}
+
 function busyMessage(runId: string): string {
   return `busy: a cell is still running in this session (${runId}); wait for it with browser_run({ "resume": "${runId}" }) and start no new cell meanwhile.`;
+}
+
+/** A new cell of this session is refused while its own workers that were ended are still inside a call that cannot be interrupted; the cells quoted are this session's. */
+function stuckMessage(labels: readonly string[]): string {
+  return `stuck: ${labels.length} earlier code worker${labels.length === 1 ? " is" : "s are"} still alive inside a call that cannot be interrupted (${labels.map(label => JSON.stringify(label)).join(", ")}). They end when that call returns. Start no new cell until then, and keep blocking calls (execSync, spawnSync, a read from a pipe that never closes) out of cells.`;
+}
+
+/** The host as a whole holds too many such workers (the memory backstop): it says how many and whose they are not, since another session's code is not this session's to read. */
+function hostStuckMessage(count: number): string {
+  return `stuck: ${count} code workers of this browser server are still alive inside calls that cannot be interrupted, so it starts no new one until some of those calls return. They are not this session's cells; retry shortly, and keep blocking calls (execSync, spawnSync, a read from a pipe that never closes) out of cells.`;
 }
 
 /** The error a cell gets for a worker that could not answer a budget it had run out of: it was stuck, so it was ended. */
@@ -167,7 +228,7 @@ export class CodeSession {
     this.#assertOpen();
     if (o.signal.aborted) throw new ToolAbortError();
     if (this.#active !== undefined) throw new Error(busyMessage(this.#active.id));
-    const run = new Run(o.timeoutMs, o.onProgress);
+    const run = new Run(o.code, o.timeoutMs, o.onProgress);
     // Reserved before the first await: a second call arriving while the worker starts is `busy`, not a second cell.
     this.#active = run;
     clearTimeout(this.#idleTimer);
@@ -177,7 +238,12 @@ export class CodeSession {
       await this.#thaw();
       this.#holdBrowsers(run);
       if (o.signal.aborted) throw new ToolAbortError();
+      live.label = cellLabel(o.code);
       run.worker = live;
+      if (this.#watching) this.#lookAtMemoryIn(live, this.#d.timing.memoryPollMs);
+      void live.handle.memory().then(sample => {
+        if (sample !== undefined && !sample.own) run.memoryBase = sample.mb;
+      });
       run.hangTimer = setTimeout(() => this.#hung(run), o.timeoutMs + this.#d.timing.graceMs);
       live.handle.transport.send({ t: "run", runId: run.id, code: o.code, timeoutMs: o.timeoutMs });
     } catch (error) {
@@ -274,6 +340,11 @@ export class CodeSession {
       await current.ready;
       return current;
     }
+    const { terminating, timing } = this.#d;
+    // A worker that is ending normally exits within the terminate limit (the grace on top is for its exit event); one that does not is inside a native call, and each of those is a thread and maybe a process that nothing can reclaim.
+    const room = await terminating.room(this.#d.session, timing.terminateMs + timing.graceMs);
+    if (room === "session-full") throw new Error(stuckMessage(terminating.labels(this.#d.session)));
+    if (room === "host-full") throw new Error(hostStuckMessage(terminating.size));
     const live = this.#spawn();
     this.#worker = live;
     await live.ready;
@@ -286,13 +357,15 @@ export class CodeSession {
     const ready = Promise.withResolvers<void>();
     ready.promise.catch(() => undefined);
     const stopped = Promise.withResolvers<string>();
-    const live: LiveWorker = { handle, ready: ready.promise, stopped: stopped.promise, dead: false };
+    const live: LiveWorker = { handle, ready: ready.promise, stopped: stopped.promise, dead: false, label: "" };
+    live.member = this.#d.hostMemory.join(overrun => this.#overHostMemory(live, overrun));
     const startup = setTimeout(() => {
       ready.reject(new Error("Timed out initializing browser tab worker"));
       this.#recycle(live, false);
     }, timing.startupTimeoutMs);
     void ready.promise.then(() => clearTimeout(startup), () => clearTimeout(startup));
     handle.onExit(reason => {
+      live.member?.leave();
       live.dead = true;
       if (this.#worker === live) this.#worker = undefined;
       ready.reject(new Error(`Tab worker failed during startup: ${reason}`));
@@ -304,6 +377,7 @@ export class CodeSession {
       this.#afterRun();
     });
     handle.transport.onMessage(message => this.#onMessage(live, message, ready));
+    this.#watchMemory(live);
     const { screenshotDir, outputDir } = this.#d;
     handle.transport.send({
       t: "init",
@@ -311,18 +385,86 @@ export class CodeSession {
       env: this.#d.env,
       ...(screenshotDir === undefined ? {} : { screenshotDir }),
       ...(outputDir === undefined ? {} : { outputDir }),
+      ...(this.#d.cwd === undefined ? {} : { cwd: this.#d.cwd }),
+      refusePasswordFields: this.#d.refusePasswordFields,
+      excludeWebP: this.#d.excludeWebP,
+      taskCredential: this.#d.taskCredential,
       // A rebuilt worker re-adopts the session's tabs before it answers `ready`: the pages and browsers outlive it.
       tabs: [...this.#tabs.values()].map(tab => ({ name: tab.name, handle: tab.handle })),
     });
     return live;
   }
 
+  /**
+   * The worker's heap limit (`resourceLimits`) covers the JS heap only: a cell that collects Buffers (screenshots, downloads) grows the whole server's memory, and with it every session's Chrome is one allocation from
+   * the commit limit. So the worker's memory is read while it lives (`WorkerHandle.memory`, answered by the worker's thread even while its JavaScript spins), and a worker past `memoryMb` is ended like one that
+   * outlived its budget: the cell fails with the reason, its variables are reset, the pages and browsers stay. The same figure goes to the host's total (`HostMemory`), which ends the largest worker of all sessions at its limit.
+   */
+  #watchMemory(live: LiveWorker): void {
+    if (this.#watching) this.#lookAtMemoryIn(live, this.#d.timing.memoryPollMs);
+  }
+
+  /** Whether a worker's memory is looked at at all: a limit per worker, or one for the host. */
+  get #watching(): boolean {
+    return this.#d.memoryMb > 0 || this.#d.hostMemory.limitMb > 0;
+  }
+
+  /** The next look at the worker's memory, replacing any that was due later: a cell that starts must not wait for a look that was scheduled for an idle worker. */
+  #lookAtMemoryIn(live: LiveWorker, afterMs: number): void {
+    clearTimeout(live.memoryTimer);
+    if (live.dead) return;
+    live.memoryTimer = setTimeout(() => void this.#lookAtMemory(live), afterMs);
+    live.memoryTimer.unref();
+  }
+
+  async #lookAtMemory(live: LiveWorker): Promise<void> {
+    if (live.dead) return;
+    const limit = this.#d.memoryMb;
+    const run = this.#active?.worker === live && this.#active.settled === undefined ? this.#active : undefined;
+    const sample = await live.handle.memory();
+    if (live.dead) return;
+    // A figure for this worker alone is the worker's memory; one for the whole process says something only about the cell that was running when it began to grow.
+    const used = sample === undefined ? 0 : sample.own ? sample.mb : run?.memoryBase === undefined ? 0 : sample.mb - run.memoryBase;
+    if (limit > 0 && used > limit) {
+      this.#overMemory(live, run, memoryError(used, limit, sample?.own ?? true), `a code worker held ${Math.round(used)} MB (limit ${limit} MB) and was ended`);
+      return;
+    }
+    // A worker that did not answer keeps the figure it last had; the total may end this one (or a larger one of another session) from here.
+    if (sample !== undefined) live.member?.report(used, sample.own);
+    if (live.dead) return;
+    const { memoryPollMs, memoryIdlePollMs } = this.#d.timing;
+    this.#lookAtMemoryIn(live, this.#active?.worker === live ? memoryPollMs : memoryIdlePollMs);
+  }
+
+  /** The workers of all sessions held more than the host's limit together, and this one was the largest. */
+  #overHostMemory(live: LiveWorker, { usedMb, totalMb }: Overrun): void {
+    const run = this.#active?.worker === live && this.#active.settled === undefined ? this.#active : undefined;
+    this.#overMemory(live, run, hostMemoryError(usedMb, totalMb, this.#d.hostMemory.limitMb), `the code workers held ${totalMb} MB together (limit ${this.#d.hostMemory.limitMb} MB): the largest, ${Math.round(usedMb)} MB, was ended`);
+  }
+
+  #overMemory(live: LiveWorker, run: Run | undefined, error: RunError, log: string): void {
+    console.error(`[browser-code] ${log}`);
+    if (run !== undefined) {
+      run.controller.abort(new ToolAbortError());
+      this.#settle(run, { error });
+    }
+    this.#recycle(live);
+  }
+
   /** Ends `live` now: the next cell gets a fresh worker that re-adopts the session's tabs, and its variables are gone. */
   #recycle(live: LiveWorker, note = true): void {
     if (this.#worker === live) this.#worker = undefined;
     live.dead = true;
+    clearTimeout(live.memoryTimer);
+    live.member?.leave();
     if (note) this.#resetNote = true;
-    void live.handle.terminate().catch(() => undefined);
+    void this.#end(live);
+  }
+
+  /** Asks the thread to end and counts it until it has. It never waits longer than `terminateMs`: a thread inside a native call answers only when the call returns. */
+  async #end(live: LiveWorker): Promise<void> {
+    this.#d.terminating.add(this.#d.session, live.handle, live.label);
+    await live.handle.terminate(this.#d.timing.terminateMs).catch(() => undefined);
   }
 
   #onMessage(live: LiveWorker, message: WorkerToHost, ready: PromiseWithResolvers<void>): void {
@@ -649,7 +791,8 @@ export class CodeSession {
 
   /** A View joined `browserId`'s stream: a frozen tab draws nothing, so it is thawed before the View looks. */
   viewed(browserId: string): void {
-    if (this.#browsers.has(browserId)) void this.#thaw(browserId);
+    // Thawed for the View (or the task agent), and then the freeze clock runs again: left live for ever it would keep using CPU after they are gone.
+    if (this.#browsers.has(browserId)) void this.#thaw(browserId).then(() => this.#afterRun());
   }
 
   #thaw(only?: string): Promise<void> {
@@ -674,7 +817,8 @@ export class CodeSession {
       for (const record of [...this.#browsers.values()]) {
         const activity = this.#d.browsers.activity(record.browserId);
         if (activity === undefined) continue;
-        if (activity.viewers > 0 || activity.pending > 0) {
+        // A task agent driving the browser is work: its steps never stamp the browser as used, so the idle clock alone would freeze the page under it.
+        if (activity.viewers > 0 || activity.pending > 0 || activity.working) {
           nextIn = Math.min(nextIn, freezeIdleMs);
           continue;
         }
@@ -759,10 +903,18 @@ export class CodeSession {
     this.#worker = undefined;
     if (!live.dead) {
       live.handle.transport.send({ t: "close" });
-      await Promise.race([live.stopped, new Promise<void>(resolve => setTimeout(resolve, 2_000).unref())]);
+      // Not unref'd: a shutdown is waiting on this, and a loop with nothing else to hold it must still reach the end of the wait.
+      const patience = Promise.withResolvers<void>();
+      const timer = setTimeout(patience.resolve, this.#d.timing.closeMs);
+      try {
+        await Promise.race([live.stopped, patience.promise]);
+      } finally {
+        clearTimeout(timer);
+      }
     }
+    live.member?.leave();
     live.dead = true;
-    await live.handle.terminate().catch(() => undefined);
+    await this.#end(live);
   }
 
   /** Server shutdown: the running cell is cancelled, every hold is let go, the worker ends. The runtime closes the browsers. */

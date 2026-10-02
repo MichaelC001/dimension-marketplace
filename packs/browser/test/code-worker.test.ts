@@ -260,16 +260,65 @@ describe("what the cell may pass to browser", () => {
   });
 });
 
+describe("what a tab call hands the cell", () => {
+  // The cell's own output is bounded whatever it prints; what the tab realm collected from `tab.run` is the other way text and images reach it. Both are bounded where they cross, so a `tab.run` that prints
+  // without end is not copied whole into the cell's realm (review of #160, round 3: the cell bound stopped at the bridge).
+  const live = { runId: "r", signal: new AbortController().signal };
+  const MIB = 1024 * 1024;
+  const bytes = (text: string): number => Buffer.byteLength(text, "utf8");
+  const dispatcherOver = (realm: FakeRealm) => createDispatcher({ realm, host: async () => { throw new Error("must not reach the host"); } });
+
+  test("text over 50 KiB comes back as its start and its end with a marker and a note, not whole", async () => {
+    const realm = new FakeRealm();
+    const rows = Array.from({ length: 400_000 }, (_, i) => `row ${i}`);
+    realm.run = async () => ({ displays: [{ type: "text", text: rows.slice(0, 200_000).join("\n") }, { type: "text", text: rows.slice(200_000).join("\n") }], screenshots: [] });
+    const response = await dispatcherOver(realm)({ action: "run", code: "1" }, live);
+    expect(bytes(response.text)).toBeLessThanOrEqual(50 * 1024 + 512);
+    expect(response.text.startsWith("row 0\n")).toBe(true);
+    expect(response.text).toContain("\nrow 399999");
+    expect(response.text).toMatch(/\n\[…\d+B elided…\]\n/);
+    expect(response.text.endsWith("[tab output over 50 KiB: its middle was not kept here; print less, or return the value]")).toBe(true);
+  });
+
+  test("text that fits is joined as the realm gave it, whitespace and all", async () => {
+    const realm = new FakeRealm();
+    realm.run = async () => ({ displays: [{ type: "text", text: "a\n" }, { type: "text", text: " b" }], screenshots: [] });
+    expect((await dispatcherOver(realm)({ action: "run", code: "1" }, live)).text).toBe("a\n\n b");
+  });
+
+  test("images keep to the cell's ceiling of 32 MiB, in order, and the note says how many were left out", async () => {
+    const realm = new FakeRealm();
+    realm.run = async () => ({ displays: Array.from({ length: 40 }, (_, i) => ({ type: "image" as const, data: `${i}`.padEnd(MIB, "A"), mimeType: "image/png" })), screenshots: [] });
+    const response = await dispatcherOver(realm)({ action: "run", code: "1" }, live);
+    expect(response.images).toHaveLength(32);
+    expect(response.images!.reduce((sum, image) => sum + image.data.length, 0)).toBeLessThanOrEqual(32 * MIB);
+    expect(response.images!.map(image => image.data.slice(0, 2))).toEqual(Array.from({ length: 32 }, (_, i) => `${i}`.padEnd(2, "A").slice(0, 2)));
+    expect(response.text).toBe("[tab output: 8 images dropped — one call keeps at most 32 MiB of images]");
+  });
+
+  test("the value the page code returned is the cell's to have, as it is: the same object, not cut and not copied", async () => {
+    const realm = new FakeRealm();
+    const big = Array.from({ length: 300_000 }, (_, i) => i);
+    realm.run = async () => ({ displays: [], returnValue: big, screenshots: [] });
+    const response = await dispatcherOver(realm)({ action: "run", code: "1" }, live);
+    expect(response.details.value).toBe(big);
+  });
+});
+
 describe("cancellation, budget and shutdown", () => {
-  test("an abort ends the cell and the host call it waits on, and the next cell runs in the same worker", async () => {
+  test("an abort ends the cell and the host call it waits on, and asks the host for a new worker, as OMP kills its worker on any abort; a late reply changes nothing", async () => {
     const { link, run } = await startWorker(request => (request.name === "stuck" ? "never" : { ok: true, text: "fine" }));
     const stuck = run('await browser.open({ name: "stuck" })');
     const sent = await link.next(isBridge);
     link.send({ t: "abort", runId: "run-1" });
     const result = await stuck;
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toMatchObject({ name: "ToolAbortError", isAbort: true });
-    // The host answers late: nothing is waiting for it any more, and nothing breaks.
+    // The cancelled code may still be running in this worker (a loop that catches the abort): the answer says the worker is to be replaced, and says so to the model.
+    if (!result.ok) {
+      expect(result.error).toMatchObject({ name: "ToolAbortError", isAbort: true, recoverTab: true, resetNoted: true });
+      expect(result.error.message).toContain("variables from earlier cells are gone");
+    }
+    // The host answers late: nothing is waiting for it any more, and nothing breaks. (This fake host does not rebuild the worker, so the worker can still run a cell.)
     link.send({ t: "bridge-reply", id: sent.id, ok: true, value: { text: "late", details: { action: "open", name: "stuck" } } });
     expect(textOf(await run('const tab = await browser.open({ name: "ok" });'))).toBe("fine");
   });

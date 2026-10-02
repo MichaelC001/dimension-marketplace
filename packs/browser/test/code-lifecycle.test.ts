@@ -8,7 +8,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { BrowserKind, CodeBrowserPort, HostToWorker, RunError, TabRef, WorkerToHost } from "../src/code/contracts";
 import { CodeHost, type CodeHostOptions } from "../src/code/host/code-host";
-import type { SpawnWorker, WorkerHandle } from "../src/code/host/transport";
+import type { SpawnWorker, WorkerHandle, WorkerMemory } from "../src/code/host/transport";
 import { BrowserRuntimeError } from "../src/store";
 import { waitUntil } from "./fixture";
 
@@ -20,10 +20,15 @@ type Behavior = (worker: FakeWorker, message: HostToWorker) => void;
 class FakeWorker {
   readonly sent: HostToWorker[] = [];
   exited = false;
+  /** A worker inside a native call: `terminate` cannot end it, and it answers `stuck` after the limit until the test lets the call return. */
+  stuck = false;
+  /** What the worker says it holds (undefined: it does not answer). */
+  memory: WorkerMemory | undefined = { mb: 1, own: true };
+  readonly terminateLimits: number[] = [];
   readonly #listeners = new Set<(message: WorkerToHost) => void>();
   readonly #exits: Array<(reason: string) => void> = [];
+  #reason = "";
   readonly handle: WorkerHandle;
-
   constructor(behavior: Behavior) {
     this.handle = {
       transport: {
@@ -37,8 +42,19 @@ class FakeWorker {
         },
         close: () => this.die("closed"),
       },
-      terminate: async () => this.die("terminated"),
-      onExit: handler => void this.#exits.push(handler),
+      terminate: async limitMs => {
+        this.terminateLimits.push(limitMs);
+        if (!this.stuck) {
+          this.die("terminated");
+          return "exited";
+        }
+        const delay = Promise.withResolvers<void>();
+        setTimeout(delay.resolve, limitMs); // the real wait `terminate` makes
+        await delay.promise;
+        return this.exited ? "exited" : "stuck";
+      },
+      onExit: handler => (this.exited ? queueMicrotask(() => handler(this.#reason)) : void this.#exits.push(handler)),
+      memory: async () => (this.exited ? undefined : this.memory),
     };
   }
 
@@ -49,6 +65,7 @@ class FakeWorker {
   die(reason: string): void {
     if (this.exited) return;
     this.exited = true;
+    this.#reason = reason;
     for (const handler of this.#exits) handler(reason);
   }
 
@@ -71,6 +88,8 @@ class FakeBrowsers implements CodeBrowserPort {
   idleMs = 0;
   viewers = 0;
   pending = 0;
+  /** A task agent is driving the browser: its steps never reach `idleMs`. */
+  working = false;
   readonly #ends = new Set<(browserId: string, why: "closed" | "retired" | "taken-over", reason?: string) => void>();
   readonly #views = new Set<(browserId: string) => void>();
   #browser: { id: string; tabs: TabRef[] } | undefined;
@@ -123,8 +142,8 @@ class FakeBrowsers implements CodeBrowserPort {
 
   setPersist(): void {}
 
-  activity(): { idleMs: number; viewers: number; pending: number } | undefined {
-    return this.#browser === undefined ? undefined : { idleMs: this.idleMs, viewers: this.viewers, pending: this.pending };
+  activity(): { idleMs: number; viewers: number; pending: number; working: boolean } | undefined {
+    return this.#browser === undefined ? undefined : { idleMs: this.idleMs, viewers: this.viewers, pending: this.pending, working: this.working };
   }
 
   existing(): { browserId: string; wsEndpoint: string; kind: BrowserKind } | undefined {
@@ -308,6 +327,22 @@ describe("an idle tab freezes and thaws", () => {
     await waitUntil("the tab is frozen once the View has gone", () => browsers.frozen.size, size => size === 1, 2_000);
     browsers.view();
     await waitUntil("the View's arrival thaws it", () => browsers.frozen.size, size => size === 0, 2_000);
+    // Thawed for the View, and not left live for ever: the freeze clock runs again, and it freezes once nobody is looking.
+    await waitUntil("the tab freezes again after the View's thaw", () => browsers.frozen.size, size => size === 1, 2_000);
+  });
+
+  test("a browser a task agent is driving is not frozen, however long it has been since a call reached it; when the task ends it freezes", async () => {
+    const { host, browsers, workers } = rig({ timing: { freezeIdleMs: 60, workerIdleMs: 60_000, startupTimeoutMs: 1_000, graceMs: 50, finishedTtlMs: 60_000 } });
+    const runId = await start(host);
+    await open(workers[0]!, runId);
+    workers[0]!.emit({ t: "result", runId, ...OK });
+    await host.resume("s1", runId, 1_000, NEVER);
+    browsers.idleMs = 500; // the cell's last call was long ago; the task's steps do not move this
+    browsers.working = true;
+    await new Promise(resolve => setTimeout(resolve, 300)); // a real wait: the thing under test is that nothing happens in this window
+    expect(browsers.frozen.size).toBe(0);
+    browsers.working = false;
+    await waitUntil("the tab is frozen once the task has ended", () => browsers.frozen.size, size => size === 1, 2_000);
   });
 });
 
@@ -376,6 +411,20 @@ describe("the worker's life", () => {
     expect(workers[0]!.exited).toBe(true);
   });
 
+  test("every worker is told the realm settings in its init: password fields refused unless lifted, and the working directory and WebP choice when the owner set them", async () => {
+    const plain = rig();
+    await start(plain.host);
+    const defaults = plain.workers[0]!.of("init")[0]!;
+    expect(defaults.refusePasswordFields).toBe(true);
+    expect(defaults.excludeWebP).toBe(false);
+    expect(defaults.taskCredential).toBe(false); // a host that was not told the server offers browser_task never sends the model to it
+    expect(defaults.cwd).toBeUndefined();
+    const set = rig({ refusePasswordFields: false, excludeWebP: true, cwd: "/work/site", taskCredential: true });
+    await start(set.host);
+    const chosen = set.workers[0]!.of("init")[0]!;
+    expect([chosen.refusePasswordFields, chosen.excludeWebP, chosen.cwd, chosen.taskCredential]).toEqual([false, true, "/work/site", true]);
+  });
+
   test("a failure that asks for a new worker gets one: the reason is added unless the cell's own budget already said it, and the next ReferenceError is explained once", async () => {
     const { host, workers } = rig();
     const first = await start(host);
@@ -412,6 +461,272 @@ describe("the worker's life", () => {
     const init = workers[1]!.of("init")[0]!;
     expect(init.tabs?.map(tab => [tab.name, tab.handle.browserId, tab.handle.wsEndpoint, tab.handle.tabId])).toEqual([["main", "b1", "ws://fake/b1", "t1"]]);
     expect(workers[1]!.sent.map(message => message.t).slice(0, 2)).toEqual(["init", "run"]);
+  });
+});
+
+const STUCK_TIMING = { freezeIdleMs: 0, workerIdleMs: 60_000, startupTimeoutMs: 1_000, graceMs: 40, terminateMs: 20, closeMs: 60, finishedTtlMs: 60_000 };
+
+/** A worker that is inside a native call from the moment it starts: it never answers `close`, and `terminate` cannot end it. */
+const stuckBehavior: Behavior = (worker, message) => {
+  if (message.t === "init") {
+    worker.stuck = true;
+    queueMicrotask(() => worker.emit({ t: "ready" }));
+  }
+};
+
+describe("a worker that nothing can end", () => {
+  test("it does not hold the host's shutdown: dispose returns after the polite wait and the terminate limit, the thread left to end by itself", async () => {
+    const { host, workers } = rig({ timing: STUCK_TIMING }, stuckBehavior);
+    await start(host);
+    const began = performance.now();
+    await host.dispose();
+    const took = performance.now() - began;
+    // closeMs 60 + terminateMs 20: the shutdown waited for neither the call nor the thread.
+    expect(took).toBeLessThan(600);
+    expect(workers[0]!.exited).toBe(false);
+    expect(workers[0]!.terminateLimits).toEqual([20]);
+  });
+
+  test("twenty hung cells in a row never leave more than two stuck threads alive; the refusal names the cells; when one returns, cells run again", async () => {
+    const { host, workers } = rig({ timing: STUCK_TIMING }, stuckBehavior);
+    let mostAlive = 0;
+    const refusals: string[] = [];
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const started = await host.run("s1", { code: `execSync("blocking-${attempt}")`, timeoutMs: 30, waitMs: 2_000, signal: NEVER }).catch((error: Error) => error);
+      if (started instanceof Error) refusals.push(started.message);
+      else if (started.state !== "done" || !("error" in started.result) || started.result.error.budget !== true) throw new Error("a hung cell ends at its budget");
+      mostAlive = Math.max(mostAlive, workers.filter(worker => !worker.exited).length);
+    }
+    expect(mostAlive).toBe(2);
+    expect(workers).toHaveLength(2);
+    expect(refusals).toHaveLength(18);
+    expect(refusals[0]).toContain("stuck: 2 earlier code workers are still alive inside a call that cannot be interrupted");
+    expect(refusals[0]).toContain('execSync(\\"blocking-0\\")');
+    expect(refusals[0]).toContain('execSync(\\"blocking-1\\")');
+    // One call returns: its thread exits, and the next cell has room for a worker again.
+    workers[0]!.die("the call returned");
+    const next = await host.run("s1", { code: "x", timeoutMs: 5_000, waitMs: 20, signal: NEVER });
+    expect(next.state).toBe("running");
+    expect(workers).toHaveLength(3);
+  }, 20_000);
+
+  test("workers that end normally are never counted against the cap, however many cells recycle them", async () => {
+    const { host, workers } = rig({ timing: STUCK_TIMING });
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      const runId = await start(host);
+      workers.at(-1)!.emit({ t: "result", runId, ok: false, error: { name: "ToolError", message: "stuck tab", isAbort: false, recoverTab: true } });
+      await host.resume("s1", runId, 1_000, NEVER);
+    }
+    expect(workers).toHaveLength(6);
+    expect(workers.every(worker => worker.exited)).toBe(true);
+  });
+
+  /** A worker of one of these sessions is inside a native call from the moment it starts; every other session's workers behave. */
+  const stuckFor = (...sessions: string[]): Behavior => (worker, message) => {
+    if (message.t === "init") {
+      worker.stuck = sessions.includes(message.session);
+      queueMicrotask(() => worker.emit({ t: "ready" }));
+    }
+    if (message.t === "close" && !worker.stuck) worker.die("closed");
+  };
+
+  /** Runs cells that hang in `session` until one is refused; the refusal, or undefined when none was within `attempts`. */
+  async function hangUntilRefused(host: CodeHost, session: string, attempts: number): Promise<string | undefined> {
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      const started = await host.run(session, { code: `execSync("${session}-dev-server-${attempt}")`, timeoutMs: 30, waitMs: 2_000, signal: NEVER }).catch((error: Error) => error);
+      if (started instanceof Error) return started.message;
+    }
+    return undefined;
+  }
+
+  test("stuck workers are counted per session: a session whose cells never return is refused alone, another session still gets its worker", async () => {
+    const { host, workers } = rig({ timing: STUCK_TIMING }, stuckFor("s1"));
+    const refusal = await hangUntilRefused(host, "s1", 6);
+    expect(refusal).toContain("stuck: 2 earlier code workers");
+    // The same session is refused again; a new session and an old one are not.
+    expect(await hangUntilRefused(host, "s1", 1)).toContain("stuck: 2 earlier code workers");
+    for (const session of ["s2", "s3"]) {
+      const started = await host.run(session, { code: "40 + 2", timeoutMs: 5_000, waitMs: 20, signal: NEVER });
+      expect(started.state).toBe("running");
+    }
+    expect(workers.filter(worker => !worker.exited)).toHaveLength(4); // s1's two stuck threads, and one worker each for s2 and s3
+  }, 20_000);
+
+  test("a refusal quotes the refused session's own cells and never another session's code", async () => {
+    const { host } = rig({ timing: STUCK_TIMING }, stuckFor("s1", "s2"));
+    expect(await hangUntilRefused(host, "s1", 6)).toBeDefined();
+    const refusal = await hangUntilRefused(host, "s2", 6);
+    expect(refusal).toContain("s2-dev-server-0");
+    expect(refusal).toContain("s2-dev-server-1");
+    expect(refusal).not.toContain("s1-dev-server");
+  }, 20_000);
+
+  test("a host-wide cap above the per-session one is the memory backstop: past it every session is refused, and the message holds no session's code", async () => {
+    const { host, workers } = rig({ timing: STUCK_TIMING }, stuckFor("s1", "s2", "s3", "s4", "s5"));
+    for (const session of ["s1", "s2", "s3", "s4"]) expect(await hangUntilRefused(host, session, 6)).toBeDefined();
+    expect(workers.filter(worker => !worker.exited)).toHaveLength(8);
+    // A fifth session has no stuck worker of its own, and the host holds eight: it is refused all the same, naming the number and none of the cells.
+    const refusal = await host.run("s5", { code: "x", timeoutMs: 30, waitMs: 2_000, signal: NEVER }).catch((error: Error) => error.message);
+    expect(refusal).toContain("stuck: 8 code workers");
+    expect(refusal).not.toContain("dev-server");
+    // One of them returns and the fifth session is served.
+    workers[0]!.die("the call returned");
+    expect((await host.run("s5", { code: "x", timeoutMs: 5_000, waitMs: 20, signal: NEVER })).state).toBe("running");
+  }, 30_000);
+});
+
+const MEMORY_TIMING = { freezeIdleMs: 0, workerIdleMs: 60_000, startupTimeoutMs: 1_000, graceMs: 40, terminateMs: 20, closeMs: 60, memoryPollMs: 15, memoryIdlePollMs: 15, finishedTtlMs: 60_000 };
+
+async function ended(host: CodeHost, runId: string): Promise<RunError> {
+  const done = await host.resume("s1", runId, 2_000, NEVER);
+  if (done.state !== "done" || !("error" in done.result)) throw new Error("the cell should have ended in an error");
+  return done.result.error;
+}
+
+describe("a worker's memory is bounded, not only its heap", () => {
+  test("a cell whose worker grows past the limit fails with the reason, its worker is replaced, and the next cell runs", async () => {
+    const { host, workers } = rig({ memoryMb: 100, timing: MEMORY_TIMING });
+    const runId = await start(host);
+    workers[0]!.memory = { mb: 640, own: true }; // Buffers: the heap limit would never have seen this
+    const error = await ended(host, runId);
+    expect(error.name).toBe("CellMemoryError");
+    expect(error.message).toContain("grew the code worker to 640 MB");
+    expect(error.message).toContain("the limit is 100 MB");
+    expect(error.message).toContain("variables were reset");
+    expect(workers[0]!.exited).toBe(true);
+    expect((await host.run("s1", { code: "x", timeoutMs: 5_000, waitMs: 20, signal: NEVER })).state).toBe("running");
+    expect(workers).toHaveLength(2);
+    expect(workers[1]!.exited).toBe(false);
+  });
+
+  test("a worker past the limit with no cell running is ended too, and the next cell is told its variables were reset", async () => {
+    const { host, workers } = rig({ memoryMb: 100, timing: MEMORY_TIMING });
+    const runId = await start(host);
+    workers[0]!.emit({ t: "result", runId, ...OK });
+    await host.resume("s1", runId, 1_000, NEVER);
+    workers[0]!.memory = { mb: 640, own: true }; // a timer the cell left behind keeps allocating
+    await waitUntil("the idle worker is ended", () => workers[0]!.exited, exited => exited, 2_000);
+    const next = await start(host);
+    workers[1]!.emit({ t: "result", runId: next, ok: false, error: { name: "ReferenceError", message: "kept is not defined", isAbort: false } });
+    expect((await ended(host, next)).message).toContain("variables were reset");
+  });
+
+  test("a worker that does not answer the memory question is left alone (its budget and the terminate limit are what end a stuck one)", async () => {
+    const { host, workers } = rig({ memoryMb: 100, timing: MEMORY_TIMING });
+    await start(host);
+    workers[0]!.memory = undefined;
+    await new Promise(resolve => setTimeout(resolve, 150)); // a real wait: nothing may happen in this window
+    expect(workers[0]!.exited).toBe(false);
+  });
+
+  test("a cell that starts while the worker is only looked at rarely is looked at quickly from its first moment", async () => {
+    // The worker was read once while idle, and the next look is 30 s away: the cell's start must not wait for it.
+    const { host, workers } = rig({ memoryMb: 100, timing: { ...MEMORY_TIMING, memoryPollMs: 15, memoryIdlePollMs: 30_000 } });
+    const idle = await start(host);
+    workers[0]!.emit({ t: "result", runId: idle, ...OK });
+    await host.resume("s1", idle, 1_000, NEVER);
+    await new Promise(resolve => setTimeout(resolve, 80)); // a real wait: the idle look has happened and the next one is far off
+    const runId = await start(host);
+    workers[0]!.memory = { mb: 640, own: true };
+    expect((await ended(host, runId)).name).toBe("CellMemoryError");
+  });
+
+  test("where only the whole process can be measured, the growth during the cell counts, not the level the process was already at", async () => {
+    // The server already holds 900 MB (Chrome's pages, other sessions): far over the limit, and the cell has not added a byte.
+    const { host, workers } = rig({ memoryMb: 100, timing: MEMORY_TIMING }, (worker, message) => {
+      if (message.t !== "init") return;
+      worker.memory = { mb: 900, own: false };
+      queueMicrotask(() => worker.emit({ t: "ready" }));
+    });
+    const runId = await start(host);
+    await new Promise(resolve => setTimeout(resolve, 150)); // a real wait: nothing may happen in this window
+    expect(workers[0]!.exited).toBe(false);
+    workers[0]!.memory = { mb: 1_100, own: false }; // the process grew by 200 MB while the cell ran
+    const error = await ended(host, runId);
+    expect(error.message).toContain("grew the server by 200 MB while it ran");
+    expect(workers[0]!.exited).toBe(true);
+  });
+
+  test("limits of 0 (per worker and for the host) turn the watchdog off", async () => {
+    const { host, workers } = rig({ memoryMb: 0, totalMemoryMb: 0, timing: MEMORY_TIMING });
+    await start(host);
+    workers[0]!.memory = { mb: 99_999, own: true };
+    await new Promise(resolve => setTimeout(resolve, 150)); // a real wait: nothing may happen in this window
+    expect(workers[0]!.exited).toBe(false);
+  });
+});
+
+describe("the code workers' memory is bounded together, not only one by one", () => {
+  /** The error session `session`'s run ended in. */
+  async function endedIn(host: CodeHost, session: string, runId: string): Promise<RunError> {
+    const done = await host.resume(session, runId, 2_000, NEVER);
+    if (done.state !== "done" || !("error" in done.result)) throw new Error("the cell should have ended in an error");
+    return done.result.error;
+  }
+
+  test("sessions that are each under the per-worker limit cannot together pass the host limit: the largest worker is ended with a plain message, the others go on", async () => {
+    const { host, workers } = rig({ memoryMb: 200, totalMemoryMb: 300, timing: MEMORY_TIMING });
+    const runs = [await start(host, "s1"), await start(host, "s2"), await start(host, "s3")];
+    // 100 + 110 + 130 = 340 MB: every worker is under its own 200 MB, the server is not.
+    workers[0]!.memory = { mb: 100, own: true };
+    workers[1]!.memory = { mb: 130, own: true };
+    workers[2]!.memory = { mb: 110, own: true };
+    const error = await endedIn(host, "s2", runs[1]!);
+    expect(error.name).toBe("CellMemoryError");
+    expect(error.message).toContain("held 340 MB together");
+    expect(error.message).toContain("the limit is 300 MB");
+    expect(error.message).toContain("this cell's worker was the largest at 130 MB");
+    expect(error.message).toContain("variables were reset");
+    expect(workers.map(worker => worker.exited)).toEqual([false, true, false]); // 210 MB are left: nothing more is ended
+    await new Promise(resolve => setTimeout(resolve, 100)); // a real wait: the others must stay
+    expect(workers.map(worker => worker.exited)).toEqual([false, true, false]);
+  });
+
+  test("the largest is ended whether or not it is running a cell: an idle worker holding the most is the one that goes, and a running neighbour is untouched", async () => {
+    const { host, workers } = rig({ memoryMb: 500, totalMemoryMb: 300, timing: MEMORY_TIMING });
+    const idle = await start(host, "s1");
+    workers[0]!.emit({ t: "result", runId: idle, ...OK });
+    await host.resume("s1", idle, 1_000, NEVER);
+    const running = await start(host, "s2");
+    workers[0]!.memory = { mb: 250, own: true };
+    workers[1]!.memory = { mb: 100, own: true };
+    await waitUntil("the idle worker is ended", () => workers[0]!.exited, exited => exited, 2_000);
+    expect(workers[1]!.exited).toBe(false);
+    workers[1]!.emit({ t: "result", runId: running, ...OK });
+    expect((await host.resume("s2", running, 1_000, NEVER)).state).toBe("done");
+  });
+
+  test("two cells that both see the same growth of a process-wide figure are not added up", async () => {
+    const wholeProcess: Behavior = (worker, message) => {
+      if (message.t !== "init") return;
+      worker.memory = { mb: 900, own: false };
+      queueMicrotask(() => worker.emit({ t: "ready" }));
+    };
+    const { host, workers } = rig({ memoryMb: 1_000, totalMemoryMb: 300, timing: MEMORY_TIMING }, wholeProcess);
+    await start(host, "s1");
+    await start(host, "s2");
+    // One process grew by 200 MB while both cells ran: each cell sees 200 MB, the server holds 200 MB, not 400.
+    workers[0]!.memory = { mb: 1_100, own: false };
+    workers[1]!.memory = { mb: 1_100, own: false };
+    await new Promise(resolve => setTimeout(resolve, 150)); // a real wait: nothing may happen in this window
+    expect(workers.map(worker => worker.exited)).toEqual([false, false]);
+    workers[0]!.memory = { mb: 1_250, own: false };
+    workers[1]!.memory = { mb: 1_250, own: false };
+    await waitUntil("the server's growth passed the host limit", () => workers.filter(worker => worker.exited).length, ended => ended >= 1, 2_000);
+  });
+
+  test("a host limit of 0 turns only the total off: a worker over its own limit is still ended", async () => {
+    const { host, workers } = rig({ memoryMb: 100, totalMemoryMb: 0, timing: MEMORY_TIMING });
+    const runId = await start(host, "s1");
+    workers[0]!.memory = { mb: 640, own: true };
+    expect((await endedIn(host, "s1", runId)).message).toContain("grew the code worker to 640 MB");
+  });
+
+  test("no per-worker limit does not turn the total off: the host still bounds what all of them hold", async () => {
+    const { host, workers } = rig({ memoryMb: 0, totalMemoryMb: 300, timing: MEMORY_TIMING });
+    const runId = await start(host, "s1");
+    workers[0]!.memory = { mb: 640, own: true };
+    expect((await endedIn(host, "s1", runId)).message).toContain("held 640 MB together");
   });
 });
 

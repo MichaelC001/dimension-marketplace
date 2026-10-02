@@ -6,7 +6,8 @@
  * The two bundles are built into a temp folder exactly as scripts/build.mjs builds them, `node` runs the server, and a plain JSON-RPC client speaks MCP to it over stdio. Real Chrome.
  * The numbers the PR reports (cold and warm open, 20 `tab.url()`, `browser_state` while a cell spins) are measured here and printed to stderr.
  */
-import { cpSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,7 +18,10 @@ import { startPages, type Pages } from "./code-host-fixture";
 import { BROWSER_TEST_TIMEOUT_MS, chromePath, waitUntil } from "./fixture";
 
 const PACK = fileURLToPath(new URL("..", import.meta.url));
-const NODE = Bun.which("node");
+// The runtime under test: the `node` on PATH, or the one BROWSER_TEST_NODE names (a Node of another version, to run the same proofs on it).
+const NODE = process.env.BROWSER_TEST_NODE ?? Bun.which("node");
+/** Whether this Node can read a worker's own memory (`Worker.getHeapStatistics()`, Node 22.16+ and 24): without it the watchdog falls back to the growth of the whole process, which sees touched memory only. */
+const WORKER_MEMORY_IS_OWN = NODE !== null && spawnSync(NODE, ["-p", "typeof require('node:worker_threads').Worker.prototype.getHeapStatistics"], { encoding: "utf8" }).stdout.trim() === "function";
 const describeBundle = chromePath === undefined || NODE === null ? describe.skip : describe;
 
 let pages: Pages;
@@ -150,7 +154,7 @@ afterAll(async () => {
 });
 
 describeBundle("the shipped server, under Node", () => {
-  test("browser_run is on by default and drives a page through the bundled worker; the cell sees no key and writes nothing onto the MCP stream", async () => {
+  test("browser_run is on by default and drives a page through the bundled worker; the cell is handed a scrubbed environment without the server's keys (accident-proofing, not a boundary) and writes nothing onto the MCP stream", async () => {
     const server = await launch({ TYPESAFE_API_KEY: "sk-test-secret", DIMENSION_BROWSER_CODE_ISOLATION: "thread" });
     const tools = (await server.request("tools/list", {})) as { tools: Array<{ name: string }> };
     expect(tools.tools.map(tool => tool.name)).toContain("browser_run");
@@ -220,5 +224,62 @@ describeBundle("the shipped server, under Node", () => {
     expect(isAlive(server.pid)).toBe(true);
     const next = await server.call("browser_run", { code: "40 + 2" });
     expect(text(next)).toBe("42");
+  }, BROWSER_TEST_TIMEOUT_MS);
+
+  test("a cell that allocates Buffers in a loop is ended by the memory watchdog within seconds: the server, its other Chrome and the next cell are untouched", async () => {
+    const server = await launch({ DIMENSION_BROWSER_CODE_MEMORY_MB: "300" });
+    // Another session with a browser of its own, which must come through.
+    const other = await server.call("browser_run", { code: `const tab = await browser.open({ name: "main", url: ${JSON.stringify(pages.url("/other"))} }); await tab.title()` }, "s2");
+    expect(text(other)).toContain("Other page");
+    const before = [...(await chromePidsByThrowaway(server.root)).values()].flatMap(chrome => chrome.all).sort();
+    const progress = join(server.root, "allocations.txt");
+    // Ten 100 MB Buffers at most, one every 50 ms, in a synchronous loop that never gives the worker a turn (the case a heap limit and a timer inside the worker both miss). With the watchdog it stops at about four: the
+    // test's own bound is that the file never shows more than seven, i.e. less than 700 MB, and the call answers well inside the budget. A runtime that can only measure the whole process sees touched memory only, so the Buffers are filled there.
+    const fill = WORKER_MEMORY_IS_OWN ? "" : ", 1";
+    const code = `const fs = await import("node:fs"); const keep = []; for (let i = 0; i < 10; i++) { keep.push(Buffer.alloc(100e6${fill})); fs.appendFileSync(${JSON.stringify(progress)}, "x"); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50); } "survived"`;
+    const began = performance.now();
+    const failed = await server.call("browser_run", { code, timeout: 60 }, "s1");
+    const tookMs = performance.now() - began;
+    const allocated = existsSync(progress) ? statSync(progress).size : 0;
+    console.error(`[code-bundle] memory watchdog (${WORKER_MEMORY_IS_OWN ? "the worker's own figure" : "whole-process growth"}, limit 300 MB): the cell was ended after ${allocated} of 10 allocations of 100 MB, the call answered in ${Math.round(tookMs)} ms`);
+    expect(failed.isError).toBe(true);
+    expect(text(failed)).toContain("CellMemoryError");
+    expect(text(failed)).toContain("the limit is 300 MB");
+    expect(text(failed)).toContain("variables were reset");
+    expect(allocated).toBeGreaterThan(0);
+    expect(allocated).toBeLessThanOrEqual(7);
+    expect(tookMs).toBeLessThan(8_000);
+    expect(isAlive(server.pid)).toBe(true);
+    expect([...(await chromePidsByThrowaway(server.root)).values()].flatMap(chrome => chrome.all).sort()).toEqual(before);
+    // The other session's page still answers, and this session has a worker again.
+    expect(text(await server.call("browser_run", { code: `await browser.tab("main").title()` }, "s2"))).toContain("Other page");
+    expect(text(await server.call("browser_run", { code: "40 + 2" }, "s1"))).toBe("42");
+  }, BROWSER_TEST_TIMEOUT_MS);
+
+  test("a cell stuck in a 45 s native call does not keep the server or its Chrome alive: the host closes stdin and both are gone within 10 s", async () => {
+    const server = await launch();
+    const pidFile = join(server.root, "sleeper.pid");
+    // The child process says its own pid first, so the test can look for it by pid afterwards; then it sleeps 45 s inside the cell's execSync, which nothing can interrupt.
+    const sleeper = `"${NODE}" -e "require('fs').writeFileSync(process.argv[1], String(process.pid)); setTimeout(() => {}, 45000)" "${pidFile}"`;
+    const code = `await browser.open({ name: "main", url: ${JSON.stringify(pages.url("/other"))} }); const { execSync } = await import("node:child_process"); execSync(${JSON.stringify(sleeper)}); 1`;
+    // The call never answers (the server is gone before the 45 s are up); the test is not waiting for it.
+    void server.call("browser_run", { code, timeout: 120 }).catch(() => undefined);
+    await waitUntil("the cell is inside its native call", () => existsSync(pidFile), present => present, 40_000);
+    const chromePids = [...(await chromePidsByThrowaway(server.root)).values()].flatMap(chrome => chrome.all);
+    const sleeperPid = Number(readFileSync(pidFile, "utf8"));
+    expect(chromePids.length).toBeGreaterThan(0);
+    expect(isAlive(sleeperPid)).toBe(true);
+    const began = performance.now();
+    await server.end();
+    const tookMs = performance.now() - began;
+    console.error(`[code-bundle] stdin closed with a cell inside a 45 s native call: the server exited after ${Math.round(tookMs)} ms`);
+    // By pid, from the operating system: neither the pack's bookkeeping nor an exit code says a Chrome is gone.
+    expect(isAlive(server.pid)).toBe(false);
+    const left = await waitUntil("every Chrome of the session gone, by pid", () => chromePids.filter(isAlive), alive => alive.length === 0, Math.max(1_000, 10_000 - tookMs));
+    expect(left).toEqual([]);
+    expect(tookMs).toBeLessThan(10_000);
+    // Windows has no process group: the server ends the trees below it itself, so the 45 s child does not outlive it either.
+    if (process.platform === "win32") expect(isAlive(sleeperPid)).toBe(false);
+    else process.kill(sleeperPid, "SIGKILL");
   }, BROWSER_TEST_TIMEOUT_MS);
 });

@@ -8,12 +8,29 @@ import type { BridgeRequest, BrowserKind, CodeBrowserPort, CodeHostPort, RunStar
 import { resolveKind } from "../kinds/resolve.js";
 import { CODE_IDLE_MS, RuntimeCodeBrowsers } from "./runtime-port.js";
 import { CodeSession, DEFAULT_TIMING, type CodeTiming, sessionFolder, unknownRunMessage } from "./session.js";
+import { HostMemory } from "./host-memory.js";
+import { TerminatingWorkers } from "./terminating.js";
 import { defaultWorkerEntry, type SpawnWorker, threadWorkerSpawner } from "./transport.js";
 
 /** A cell's worker thread may hold this much heap before it ends itself; the server and every other session's browsers go on. */
 const DEFAULT_HEAP_MB = 1_024;
+/** A cell's worker may hold this much in all (JS heap, Buffers, ArrayBuffers) before it is ended and its cell fails; `resourceLimits` bounds only the heap part. */
+const DEFAULT_MEMORY_MB = 1_536;
+/**
+ * All the code workers of the server may hold this much together, across sessions, before the largest is ended. The per-worker limit alone lets ten sessions that each hold 1.4 GB take 14 GB of commit in the one
+ * process; this is the guarantee that counts against commit exhaustion. Two full-size workers fit; a third at the same size does not.
+ */
+const DEFAULT_TOTAL_MEMORY_MB = 3_072;
 
-/** What a cell may see of the server's environment (doc 77 §7.4.5): where programs and temp files live, locale, and puppeteer's own settings; never a key. */
+/**
+ * What a cell is handed of the server's environment: where programs and temp files live, locale, and puppeteer's own settings. This is hygiene against accidents (a cell that prints `process.env`, a child process
+ * that inherits it), NOT a boundary and NOT secrecy: the worker is a thread of the server's own process, so on Linux `/proc/self/environ` still holds the environment the server started with, the cell has
+ * HOME/USERPROFILE (the credentials path stays readable by design) and full Node, and a cell that means to read the server's keys can. It matches OMP's sandbox A.
+ *
+ * A separate-process rung under Node's permission model would be hardening, not secrecy, and is not built: Node documents the model as a seat belt that code written to bypass it can (already-open file descriptors
+ * and symlinks get through; Node 22 and 24 have no network restriction, so a cell could still reach a localhost CDP endpoint and send data out; a granted child_process escapes it altogether). What it would stop is
+ * an accident or a casual read of a path, which is not what this host promises to keep from a cell.
+ */
 const CELL_ENV = /^(?:PATH|Path|PATHEXT|SystemRoot|SYSTEMROOT|windir|WINDIR|ComSpec|COMSPEC|TEMP|TMP|TMPDIR|HOME|USERPROFILE|LANG|LANGUAGE|LC_[A-Z_]+|TZ|PUPPETEER_[A-Z_]+)$/;
 
 export function scrubbedEnv(source: Record<string, string | undefined>): Record<string, string> {
@@ -30,16 +47,26 @@ export interface CodeHostOptions {
   env?: Record<string, string | undefined>;
   /** `browser.open` without `app`: a hidden browser, or the visible one `DIMENSION_BROWSER_HEADLESS=false` asks for. */
   headless?: boolean;
-  /** What a relative `app.path` of a spawned application is relative to. Default: this process's working directory. */
-  cwd?: string;
   /** Replaces the choice of browser for a request (kinds/resolve.ts: OMP's order, the pack's environment variables). A test passes its own. */
   resolveKind?: (request: BridgeRequest) => BrowserKind;
   screenshotDir?: string;
+  /** What a relative `tab.uploadFile` path resolves against, and what a relative `app.path` of a spawned application is relative to (kinds/resolve.ts). Absent: this process's working directory for `app.path`; relative upload paths are refused with the rule named. */
+  cwd?: string;
+  /** Refuse password inputs from code (matrix D18). Default true. */
+  refusePasswordFields?: boolean;
+  /** JPEG instead of WebP for the screenshot the model sees. Default false. */
+  excludeWebP?: boolean;
+  /** The server registers `browser_task` (RealmInit.taskCredential): the realm's password refusal then names it. Default false: a refusal never sends the model to a tool the server was not told it offers. */
+  taskCredential?: boolean;
   /** Root of the per-session folders a cell keeps an over-cap output in. Absent: none is kept. */
   artifactsRoot?: string;
   timing?: Partial<CodeTiming>;
   /** The worker thread's heap ceiling, MB. Default 1,024. */
   heapMb?: number;
+  /** What a worker may hold in all, MB (heap plus Buffers and ArrayBuffers); past it the worker is ended and the cell fails. Default 1,536; 0 = no limit. */
+  memoryMb?: number;
+  /** What all the workers may hold together, across sessions, MB; past it the largest worker is ended and its cell fails. Default 3,072; 0 = no limit. */
+  totalMemoryMb?: number;
 }
 
 export class CodeHost implements CodeHostPort {
@@ -47,11 +74,16 @@ export class CodeHost implements CodeHostPort {
   readonly #spawn: SpawnWorker;
   readonly #timing: CodeTiming;
   readonly #sessions = new Map<string, CodeSession>();
+  /** Shared by every session so the host-wide cap can hold; each session is also counted on its own (a session's stuck workers refuse that session only). */
+  readonly #terminating = new TerminatingWorkers();
+  /** Every session's worker reports here: the host's total (DIMENSION_BROWSER_CODE_TOTAL_MB). */
+  readonly #memory: HostMemory;
   readonly #unsubscribe: Array<() => void>;
   #disposed = false;
 
   constructor(options: CodeHostOptions) {
     this.#options = options;
+    this.#memory = new HostMemory(options.totalMemoryMb ?? DEFAULT_TOTAL_MEMORY_MB);
     this.#spawn = options.spawn ?? threadWorkerSpawner(defaultWorkerEntry(), { maxOldGenerationSizeMb: options.heapMb ?? DEFAULT_HEAP_MB });
     this.#timing = { ...DEFAULT_TIMING, ...options.timing };
     this.#unsubscribe = [
@@ -78,6 +110,13 @@ export class CodeHost implements CodeHostPort {
         resolveKind: resolve,
         ...(screenshotDir === undefined ? {} : { screenshotDir }),
         ...(artifactsRoot === undefined ? {} : { outputDir: sessionFolder(artifactsRoot, id) }),
+        terminating: this.#terminating,
+        memoryMb: this.#options.memoryMb ?? DEFAULT_MEMORY_MB,
+        hostMemory: this.#memory,
+        ...(this.#options.cwd === undefined ? {} : { cwd: this.#options.cwd }),
+        refusePasswordFields: this.#options.refusePasswordFields ?? true,
+        excludeWebP: this.#options.excludeWebP ?? false,
+        taskCredential: this.#options.taskCredential ?? false,
         timing: this.#timing,
         onEmpty: () => {
           if (this.#sessions.get(id) === created) this.#sessions.delete(id);
@@ -111,32 +150,42 @@ export class CodeHost implements CodeHostPort {
   }
 }
 
-function numberEnv(env: Record<string, string | undefined>, name: string, fallback: number): number {
+type Unit = "milliseconds" | "megabytes";
+
+function numberEnv(env: Record<string, string | undefined>, name: string, fallback: number, unit: Unit): number {
   const raw = env[name]?.trim();
   if (raw === undefined || raw === "") return fallback;
   const value = Number(raw);
-  if (!Number.isFinite(value) || value < 0) throw new RangeError(`${name} must be a number of milliseconds, 0 or more (got "${raw}")`);
+  if (!Number.isFinite(value) || value < 0) throw new RangeError(`${name} must be a number of ${unit}, 0 or more (got "${raw}")`);
   return value;
 }
 
 /**
  * The code host `createBrowserServer` starts with: the runtime's own browsers, the environment's settings (doc 77 matrix H7, H8, H9, H13).
  * `DIMENSION_BROWSER_CODE_IDLE_MS` (default 1,800,000, 0 = never), `DIMENSION_BROWSER_FREEZE_IDLE_MS` (20,000, 0 = never), `DIMENSION_BROWSER_SCREENSHOT_DIR`,
- * `DIMENSION_BROWSER_CODE_HEAP_MB`, `DIMENSION_BROWSER_CODE_ISOLATION` (`thread`).
+ * `DIMENSION_BROWSER_CODE_HEAP_MB`, `DIMENSION_BROWSER_CODE_MEMORY_MB` (1,536, 0 = no limit), `DIMENSION_BROWSER_CODE_TOTAL_MB` (3,072, all workers together, 0 = no limit), `DIMENSION_BROWSER_CODE_ISOLATION` (`thread`).
  */
-export function createRuntimeCodeHost(runtime: BrowserRuntime, env: Record<string, string | undefined> = process.env): CodeHost {
+export function createRuntimeCodeHost(runtime: BrowserRuntime, { taskCredential, env = process.env }: { taskCredential: boolean; env?: Record<string, string | undefined> }): CodeHost {
+  // Only a thread is built. A separate process under Node's permission model would be hardening, not secrecy (see CELL_ENV): a worker thread INHERITS the model (checked on Node 22.12 with --experimental-permission and
+  // 24.12 with --permission: reads and child processes were denied inside it, and creating one needs --allow-worker), the model is process-wide, and this server itself needs fs and child_process (Chrome, Python, its files).
   const isolation = env.DIMENSION_BROWSER_CODE_ISOLATION?.trim() || "thread";
   if (isolation !== "thread") {
     throw new RangeError(`DIMENSION_BROWSER_CODE_ISOLATION must be "thread" (got "${isolation}"): the child-process rung under Node's permission model is not built yet, and running a weaker rung than asked for would be silent`);
   }
   const screenshotDir = env.DIMENSION_BROWSER_SCREENSHOT_DIR?.trim();
   return new CodeHost({
-    browsers: new RuntimeCodeBrowsers(runtime.codeSeam(), { idleMs: numberEnv(env, "DIMENSION_BROWSER_CODE_IDLE_MS", CODE_IDLE_MS), hidden: env.DIMENSION_BROWSER_HEADLESS !== "false" }),
+    browsers: new RuntimeCodeBrowsers(runtime.codeSeam(), { idleMs: numberEnv(env, "DIMENSION_BROWSER_CODE_IDLE_MS", CODE_IDLE_MS, "milliseconds"), hidden: env.DIMENSION_BROWSER_HEADLESS !== "false" }),
+    taskCredential,
     env,
     headless: env.DIMENSION_BROWSER_HEADLESS !== "false",
     artifactsRoot: join(env.DIMENSION_BROWSER_ROOT || defaultRootDir(), "artifacts"),
     ...(screenshotDir ? { screenshotDir: screenshotDir.replace(/^~(?=$|[\\/])/, env.HOME ?? env.USERPROFILE ?? "~") } : {}),
-    timing: { freezeIdleMs: numberEnv(env, "DIMENSION_BROWSER_FREEZE_IDLE_MS", DEFAULT_TIMING.freezeIdleMs) },
-    heapMb: numberEnv(env, "DIMENSION_BROWSER_CODE_HEAP_MB", DEFAULT_HEAP_MB),
+    timing: { freezeIdleMs: numberEnv(env, "DIMENSION_BROWSER_FREEZE_IDLE_MS", DEFAULT_TIMING.freezeIdleMs, "milliseconds") },
+    heapMb: numberEnv(env, "DIMENSION_BROWSER_CODE_HEAP_MB", DEFAULT_HEAP_MB, "megabytes"),
+    memoryMb: numberEnv(env, "DIMENSION_BROWSER_CODE_MEMORY_MB", DEFAULT_MEMORY_MB, "megabytes"),
+    totalMemoryMb: numberEnv(env, "DIMENSION_BROWSER_CODE_TOTAL_MB", DEFAULT_TOTAL_MEMORY_MB, "megabytes"),
+    ...(env.DIMENSION_BROWSER_CWD?.trim() ? { cwd: env.DIMENSION_BROWSER_CWD.trim() } : {}),
+    refusePasswordFields: env.DIMENSION_BROWSER_ALLOW_PASSWORD_FIELDS?.trim().toLowerCase() !== "true",
+    excludeWebP: env.DIMENSION_BROWSER_EXCLUDE_WEBP?.trim().toLowerCase() === "true",
   });
 }
