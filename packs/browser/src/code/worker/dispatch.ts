@@ -10,6 +10,7 @@ import { CellFailure, type CellInvoke, CodeCell, failureOf } from "../cell/cell.
 import { MAX_IMAGE_BASE64_CHARS } from "../cell/display.js";
 import { MAX_INLINE_BYTES, OutputSink } from "../cell/output-sink.js";
 import { TAB_TEXT_CUT_NOTE, droppedImagesNote } from "./run-output.js";
+import { guardAllocations } from "./memory-guard.js";
 import { ToolAbortError, ToolError, throwIfAborted } from "../errors.js";
 
 export const DEFAULT_TAB_NAME = "main";
@@ -256,7 +257,11 @@ export class WorkerCore {
   async #init(message: Extract<HostToWorker, { t: "init" }>): Promise<void> {
     try {
       // Only a worker thread has an environment of its own to replace: in the main thread this would wipe the server's.
-      if (!isMainThread) scrubEnvironment(process.env, message.env);
+      if (!isMainThread) {
+        scrubEnvironment(process.env, message.env);
+        // The worker's own globals are what the cell allocates through. In the main thread they are the server's, and the guard would refuse the server's own allocations.
+        if (message.memoryLimitMb !== undefined && message.memoryLimitMb > 0) guardAllocations(globalThis, message.memoryLimitMb);
+      }
       const { session, env, screenshotDir, cwd, refusePasswordFields, excludeWebP, taskCredential } = message;
       const realm = this.#options.createRealm({ session, env, screenshotDir, cwd, refusePasswordFields, excludeWebP, taskCredential });
       this.#realm = realm;

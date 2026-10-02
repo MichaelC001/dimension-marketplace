@@ -247,27 +247,58 @@ describeBundle("the shipped server, under Node", () => {
   }, BROWSER_TEST_TIMEOUT_MS);
 
   // The runaway as it really happens: `Buffer.alloc` is calloc, whose pages are COMMITTED at once and RESIDENT only when touched, so a loop that never touches what it allocates grows the machine's commit while the resident
-  // set stays put. Both kinds must be caught on every Node the pack supports. The one place the untouched kind is not asserted is a POSIX system whose Node cannot read a worker's own memory: there the resident set is
-  // the only figure, and untouched pages are charged to nothing (the system overcommits), so there is nothing for the watchdog to stop.
+  // set stays put. Both kinds are held at the limit on every Node the pack supports, by the allocation guard in the worker (worker/memory-guard.ts): it asks before it allocates, so no look at an interval is needed. A
+  // synchronous burst allocates 880 MB before the first look of a watchdog (measured), and this one stops at the limit.
+  for (const touched of [false, true]) {
+    test(`a synchronous burst of 100 MB ${touched ? "touched" : "untouched"} Buffers is refused at the limit of 300 MB, before any look at an interval: at most three of ten are made, and the worker and its variables live`, async () => {
+      const server = await launch({ DIMENSION_BROWSER_CODE_MEMORY_MB: "300" });
+      const fill = touched ? ", 1" : "";
+      const burst = await server.call("browser_run", { code: `const keep = []; const names = []; for (let i = 0; i < 10; i++) { try { keep.push(Buffer.alloc(100e6${fill})); } catch (error) { names.push(error.name); } } JSON.stringify({ kept: keep.length, refused: names.length, name: names[0] })` });
+      expect(burst.isError).toBeFalsy();
+      const { kept, refused, name } = JSON.parse(text(burst).split("\n").at(-1) as string) as { kept: number; refused: number; name: string };
+      console.error(`[code-bundle] allocation guard (${touched ? "touched" : "untouched"} Buffers, limit 300 MB): ${kept} of 10 allocations of 100 MB were made in one synchronous burst, ${refused} refused with ${name}`);
+      expect(kept).toBeGreaterThan(0);
+      expect(kept).toBeLessThanOrEqual(3);
+      expect(refused).toBe(10 - kept);
+      expect(name).toBe("CellMemoryError");
+      // Refused in the cell, not ended: the worker is the same one, and what the cell kept is still there.
+      expect(text(await server.call("browser_run", { code: "keep.length" }))).toBe(String(kept));
+      expect(isAlive(server.pid)).toBe(true);
+    }, BROWSER_TEST_TIMEOUT_MS);
+  }
+
+  test("a refusal that nothing catches ends that cell with the reason and its limit, and the next cell runs", async () => {
+    const server = await launch({ DIMENSION_BROWSER_CODE_MEMORY_MB: "300" });
+    const failed = await server.call("browser_run", { code: "const keep = []; for (;;) keep.push(Buffer.alloc(100e6));", timeout: 60 });
+    expect(failed.isError).toBe(true);
+    expect(text(failed)).toContain("CellMemoryError");
+    expect(text(failed)).toContain("the limit is 300 MB");
+    expect(text(failed)).toContain("DIMENSION_BROWSER_CODE_MEMORY_MB");
+    expect(text(await server.call("browser_run", { code: "40 + 2" }))).toBe("42");
+    expect(isAlive(server.pid)).toBe(true);
+  }, BROWSER_TEST_TIMEOUT_MS);
+
+  // What the guard does not see: memory that is not allocated through the worker's own `Buffer`, `ArrayBuffer` or typed arrays. `WebAssembly.Memory` is one such path (measured: ten of 100 MB were not refused at a limit of
+  // 300 MB and showed as 962 MB held). Those reach the host's watchdog only, which looks every 100 ms, with a cell or without one.
   const memorySource = WORKER_MEMORY_IS_OWN ? "the worker's own figure" : process.platform === "win32" ? "the process's commit charge (helper)" : "the process's resident set";
   for (const touched of [false, true]) {
     const nothingToSee = !touched && !WORKER_MEMORY_IS_OWN && process.platform !== "win32";
-    test.skipIf(nothingToSee)(`a cell that allocates ${touched ? "touched" : "untouched"} Buffers in a loop is ended by the memory watchdog within seconds: the server, its other Chrome and the next cell are untouched`, async () => {
+    test.skipIf(nothingToSee)(`${touched ? "touched" : "untouched"} WebAssembly.Memory, which the guard cannot see, in a loop is ended by the memory watchdog within seconds: the server, its other Chrome and the next cell are untouched`, async () => {
       const server = await launch({ DIMENSION_BROWSER_CODE_MEMORY_MB: "300" });
       // Another session with a browser of its own, which must come through.
       const other = await server.call("browser_run", { code: `const tab = await browser.open({ name: "main", url: ${JSON.stringify(pages.url("/other"))} }); await tab.title()` }, "s2");
       expect(text(other)).toContain("Other page");
       const before = [...(await chromePidsByThrowaway(server.root)).values()].flatMap(chrome => chrome.all).sort();
       const progress = join(server.root, "allocations.txt");
-      // Ten 100 MB Buffers at most, one every 50 ms, in a synchronous loop that never gives the worker a turn (the case a heap limit and a timer inside the worker both miss). With the watchdog it stops at about four: the
+      // Ten 100 MB memories at most, one every 50 ms, in a synchronous loop that never gives the worker a turn (the case a heap limit and a timer inside the worker both miss). With the watchdog it stops at about four: the
       // test's own bound is that the file never shows more than seven, i.e. less than 700 MB, and the call answers well inside the budget.
-      const fill = touched ? ", 1" : "";
-      const code = `const fs = await import("node:fs"); const keep = []; for (let i = 0; i < 10; i++) { keep.push(Buffer.alloc(100e6${fill})); fs.appendFileSync(${JSON.stringify(progress)}, "x"); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50); } "survived"`;
+      const touch = touched ? " new Uint8Array(memory.buffer).fill(1);" : "";
+      const code = `const fs = await import("node:fs"); const keep = []; for (let i = 0; i < 10; i++) { const memory = new WebAssembly.Memory({ initial: 1526 }); keep.push(memory);${touch} fs.appendFileSync(${JSON.stringify(progress)}, "x"); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50); } "survived"`;
       const began = performance.now();
       const failed = await server.call("browser_run", { code, timeout: 60 }, "s1");
       const tookMs = performance.now() - began;
       const allocated = existsSync(progress) ? statSync(progress).size : 0;
-      console.error(`[code-bundle] memory watchdog (${memorySource}, ${touched ? "touched" : "untouched"} Buffers, limit 300 MB): the cell was ended after ${allocated} of 10 allocations of 100 MB, the call answered in ${Math.round(tookMs)} ms`);
+      console.error(`[code-bundle] memory watchdog (${memorySource}, ${touched ? "touched" : "untouched"} WebAssembly.Memory, limit 300 MB): the cell was ended after ${allocated} of 10 allocations of 100 MB, the call answered in ${Math.round(tookMs)} ms`);
       expect(failed.isError).toBe(true);
       expect(text(failed)).toContain("CellMemoryError");
       expect(text(failed)).toContain("the limit is 300 MB");
@@ -282,6 +313,22 @@ describeBundle("the shipped server, under Node", () => {
       expect(text(await server.call("browser_run", { code: "40 + 2" }, "s1"))).toBe("42");
     }, BROWSER_TEST_TIMEOUT_MS);
   }
+
+  // The window the review measured: a cell returns, and its `setInterval` goes on allocating. The watchdog used to look at an idle worker every 5 s; the server held 1.2 GB for that long before the log line. Twelve
+  // memories of 50 MB at most (the test's own bound is 600 MB), one every 20 ms, through the one path the guard does not see.
+  test.skipIf(!WORKER_MEMORY_IS_OWN && process.platform !== "win32")("a timer a cell left behind keeps allocating after the cell returned: the watchdog ends the worker within a second of the return, not five", async () => {
+    const server = await launch({ DIMENSION_BROWSER_CODE_MEMORY_MB: "300" });
+    const code = `globalThis.held = []; let made = 0; const timer = setInterval(() => { if (made++ >= 12) return clearInterval(timer); held.push(new WebAssembly.Memory({ initial: 763 })); }, 20); "returned"`;
+    const returned = await server.call("browser_run", { code });
+    const returnedAt = performance.now();
+    expect(text(returned)).toBe("returned");
+    await waitUntil("the worker is ended", () => server.stderr.includes("a code worker held"), ended => ended, 10_000);
+    const endedAfterMs = Math.round(performance.now() - returnedAt);
+    console.error(`[code-bundle] a timer left behind by a returned cell (${memorySource}, limit 300 MB): the worker was ended ${endedAfterMs} ms after the cell returned`);
+    expect(endedAfterMs).toBeLessThan(1_000);
+    expect(text(await server.call("browser_run", { code: "typeof held" }))).toBe("undefined");
+    expect(isAlive(server.pid)).toBe(true);
+  }, BROWSER_TEST_TIMEOUT_MS);
 
   // The shipped server decides whether `browser_task` exists from its environment (today always; after the jev hand-off becomes optional, from TYPESAFE_API_KEY), and the password refusal a cell gets must agree with
   // the tool list whichever way it decides: the model is never sent to a tool the server does not list. test/code-task-credential.test.ts holds the two settings apart in-process; this holds the shipped path.

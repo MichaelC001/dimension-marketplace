@@ -104,6 +104,8 @@ export interface AcquiredBrowser { browserId: string; created: boolean; wsEndpoi
  * - `refusePasswordFields`: `tab.type` / `tab.fill` / `tab.press` (and a handle's) refuse a password input from code, and keys that would reach one (matrix D18). ABSENT MEANS ON; the host sends `false` only where the owner has lifted the rule.
  * - `taskCredential`: the server offers `browser_task` (it is registered only with a TypeSafe key), so the refusal may send the model to it. ABSENT MEANS NOT OFFERED: the host sends `true` only where the tool exists.
  * - `excludeWebP`: encode the screenshot the model sees as JPEG instead of WebP (a model provider that cannot read WebP).
+ * - `memoryLimitMb`: the worker thread's memory limit (`DIMENSION_BROWSER_CODE_MEMORY_MB`). Present and above 0, the worker wraps its own allocators (`Buffer.alloc`, `ArrayBuffer`, the typed arrays) so that one that would take it
+ *   past the limit throws in the cell before it is made (worker/memory-guard.ts). Absent or 0: no guard. The host's watchdog, which looks at an interval, is separate and always on where there is a limit.
  */
 export interface RealmInit {
   session: string;
@@ -113,6 +115,7 @@ export interface RealmInit {
   refusePasswordFields?: boolean;
   taskCredential?: boolean;
   excludeWebP?: boolean;
+  memoryLimitMb?: number;
 }
 export type HostToWorker =
   /**

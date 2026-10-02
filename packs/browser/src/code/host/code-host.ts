@@ -16,11 +16,15 @@ import { defaultCommitProbe, defaultWorkerEntry, type SpawnWorker, threadWorkerS
 
 /** A cell's worker thread may hold this much heap before it ends itself; the server and every other session's browsers go on. */
 const DEFAULT_HEAP_MB = 1_024;
-/** A cell's worker may hold this much in all (JS heap, Buffers, ArrayBuffers) before it is ended and its cell fails; `resourceLimits` bounds only the heap part. */
+/**
+ * A cell's worker may hold this much in all (JS heap, Buffers, ArrayBuffers). Two things hold it, and neither is a guarantee: the allocation guard in the worker refuses a `Buffer`, `ArrayBuffer` or typed array that would
+ * pass it, before it is made (worker/memory-guard.ts; it does not see native modules, `WebAssembly.Memory` or what Node's own internals allocate), and the watchdog reads the worker every 100 ms and ends it past the limit
+ * (a look at an interval: a loop allocating faster than that runs past it by the rate times the interval). `resourceLimits` bounds only the heap part.
+ */
 const DEFAULT_MEMORY_MB = 1_536;
 /**
  * All the code workers of the server may hold this much together, across sessions, before the largest is ended. The per-worker limit alone lets ten sessions that each hold 1.4 GB take 14 GB of commit in the one
- * process; this is the guarantee that counts against commit exhaustion. Two full-size workers fit; a third at the same size does not.
+ * process; this is the best effort against commit exhaustion, not a bound: it is enforced by the same 100 ms look, so what a loop allocates between two looks is not in it. Two full-size workers fit; a third at the same size does not.
  */
 const DEFAULT_TOTAL_MEMORY_MB = 3_072;
 

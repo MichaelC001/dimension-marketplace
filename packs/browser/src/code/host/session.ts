@@ -400,6 +400,7 @@ export class CodeSession {
       refusePasswordFields: this.#d.refusePasswordFields,
       excludeWebP: this.#d.excludeWebP,
       taskCredential: this.#d.taskCredential,
+      ...(this.#d.memoryMb > 0 ? { memoryLimitMb: this.#d.memoryMb } : {}),
       // A rebuilt worker re-adopts the session's tabs before it answers `ready`: the pages and browsers outlive it.
       tabs: [...this.#tabs.values()].map(tab => ({ name: tab.name, handle: tab.handle })),
     });

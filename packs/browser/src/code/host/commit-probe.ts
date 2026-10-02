@@ -3,8 +3,10 @@
 // pushes `Buffer.alloc(1e8)` in a loop commits memory at several GB/s while `process.memoryUsage.rss()` stays where it was (47 MB before and after 4 x 100 MB, measured on Node 22.12), and commit is what the machine runs out of.
 //
 // So on Windows the figure is the process's private bytes (what the OS charges against commit), read through ONE long-lived PowerShell that answers a line with a line. It is started when the first worker is, asked every
-// 100 ms only while a cell runs (a question is one pipe round trip, a few milliseconds; there is no polling loop in the helper), and ends itself after `idleMs` with nobody asking. It dies with the server too: its stdin
-// closes, and so does its read loop. Where there is no PowerShell the caller falls back to the resident set, which is blind to untouched Buffers on Windows: that is a stated limit, not a silent one (README, PR).
+// 100 ms while any code worker lives (with a cell or without: a timer a cell left behind still allocates; one question serves every worker, at most one is in flight), and ends itself after `idleMs` with nobody asking.
+// Measured on Node 22.12, Windows 11, at 10 questions a second: about 9% of one core for the helper while a worker lives (9.8 ms of CPU per question), 0.86% at one question a second, nothing with no questions;
+// the server itself +0.2-0.5% of a core. It dies with the server too: its stdin closes, and so does its read loop.
+// Where there is no PowerShell the caller falls back to the resident set, which is blind to untouched Buffers on Windows: that is a stated limit, not a silent one (README, PR).
 
 import { type ChildProcess, spawn } from "node:child_process";
 import { createInterface } from "node:readline";
