@@ -52,7 +52,8 @@ async function ask(request: Record<string, unknown>): Promise<ResultLine> {
 
 describeWithPython("the task worker's entry point", () => {
 	test("a backend it does not know, or none, is an invalid request that starts no agent", async () => {
-		for (const agent of ["gpt", "JEV", undefined]) {
+		// "browser-use" is the backend this worker used to run: a request still naming it must be refused, not served by anything.
+		for (const agent of ["browser-use", "gpt", "JEV", undefined]) {
 			const result = await ask({ ...(agent === undefined ? {} : { agent }), cdpUrl: "ws://127.0.0.1:1/devtools/browser/x", task: "fill the form" });
 			expect({ agent, status: result.status, invalid: result.summary.startsWith("invalid request:") }).toEqual({ agent, status: "failed", invalid: true });
 			expect(result.summary).toContain("jev");
