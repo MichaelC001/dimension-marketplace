@@ -67,6 +67,8 @@ export function startFakeExtension(chrome: DebugChrome, settings: { port: number
 	let nextTabId = 100;
 	let badge = "";
 	const debuggerSockets = new Map<number, WebSocket>();
+	/** Commands sent over a page's socket, waiting for their answer: one message handler per socket reads them all. */
+	const pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>();
 	const timers = new Set<ReturnType<typeof setTimeout>>();
 	const sockets = new Set<WebSocket>();
 	let disposed = false;
@@ -165,8 +167,15 @@ export function startFakeExtension(chrome: DebugChrome, settings: { port: number
 				});
 				debuggerSockets.set(tabId, socket);
 				socket.on("message", (data) => {
-					const message = JSON.parse(String(data)) as { id?: number; method?: string; params?: unknown; sessionId?: string };
-					if (message.id === undefined && message.method) onEvent.fire({ tabId, ...(message.sessionId ? { sessionId: message.sessionId } : {}) }, message.method, message.params);
+					const message = JSON.parse(String(data)) as { id?: number; result?: unknown; error?: { message: string }; method?: string; params?: unknown; sessionId?: string };
+					if (message.id !== undefined) {
+						const waiting = pending.get(message.id);
+						pending.delete(message.id);
+						if (message.error) waiting?.reject(new Error(message.error.message));
+						else waiting?.resolve(message.result ?? {});
+						return;
+					}
+					if (message.method) onEvent.fire({ tabId, ...(message.sessionId ? { sessionId: message.sessionId } : {}) }, message.method, message.params);
 				});
 				socket.on("close", () => {
 					sockets.delete(socket);
@@ -187,14 +196,7 @@ export function startFakeExtension(chrome: DebugChrome, settings: { port: number
 				if (!socket) throw new Error(`Debugger is not attached to the tab with id: ${tabId}.`);
 				const id = ++commandSeq;
 				const answered = Promise.withResolvers<unknown>();
-				const onMessage = (data: unknown): void => {
-					const message = JSON.parse(String(data)) as { id?: number; result?: unknown; error?: { message: string } };
-					if (message.id !== id) return;
-					socket.off("message", onMessage);
-					if (message.error) answered.reject(new Error(message.error.message));
-					else answered.resolve(message.result ?? {});
-				};
-				socket.on("message", onMessage);
+				pending.set(id, answered);
 				socket.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
 				return await answered.promise;
 			},
