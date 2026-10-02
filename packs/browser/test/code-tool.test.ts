@@ -397,7 +397,7 @@ describe("which tools the model is shown", () => {
       const spaces = meta?.[SPACES];
       return !Array.isArray(spaces) || spaces.includes("code");
     }).map(([name]) => name).filter(name => name.startsWith("browser_") && !name.startsWith("browser_task") && !name.startsWith("browser_publish"));
-    expect(codeSpaceTools.filter(name => !["browser_stream", "browser_frame", "browser_annotate", "browser_annotation_file", "browser_viewport"].includes(name)).sort()).toEqual(["browser_close", "browser_profiles", "browser_read", "browser_run", "browser_view"]);
+    expect(codeSpaceTools.filter(name => !["browser_stream", "browser_frame", "browser_annotate", "browser_annotation_file", "browser_viewport", "browser_control", "browser_leave", "browser_profile_add", "browser_switch"].includes(name)).sort()).toEqual(["browser_close", "browser_profiles", "browser_read", "browser_run", "browser_view"]);
   });
 
   test("the spaces the manifest lends the pack to are split between browser_run and the step tools, none in both and none in neither", async () => {
