@@ -13,7 +13,8 @@ import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, test } from "bun:test";
 import { build } from "esbuild";
-import { bundleFromSource, locateAgentBundle } from "../src/engines/agent-puppeteer";
+import stockPuppeteer from "puppeteer-core";
+import { agentPuppeteer, bundleFromSource, locateAgentBundle } from "../src/engines/agent-puppeteer";
 import { buildAgentPuppeteer, bundleIdentity, PATCH_FILE } from "../scripts/agent-puppeteer.mjs";
 
 const PACK = fileURLToPath(new URL("../", import.meta.url));
@@ -143,5 +144,24 @@ describe("the builder (scripts/agent-puppeteer.mjs)", () => {
 		// The notes end where the patch's first diff begins: no hunk text leaks into the comment.
 		expect(head).not.toContain("diff --git");
 		expect(readFileSync(PATCH_FILE, "utf8")).toContain("Mario Zechner");
+	}, 60_000);
+});
+
+describe("the patched library a throwaway browser launches with", () => {
+	/** The features the single --disable-features switch of `args` turns off. */
+	const disabled = (args: readonly string[]): string[] => {
+		const switches = args.filter((arg) => arg.startsWith("--disable-features="));
+		expect(switches).toHaveLength(1);
+		return (switches[0] ?? "").slice("--disable-features=".length).split(",").filter(Boolean);
+	};
+
+	test("turns off none of the features puppeteer's own list does, only what the caller asks for", async () => {
+		const patched = await agentPuppeteer();
+		// A fresh object each time: puppeteer removes the switches it merges from the caller's own `args`.
+		const asked = () => ({ headless: true, args: ["--disable-features=AskedFor"] });
+		// Control: the stock library adds its list (Translate, AcceptCHFrame, MediaRouter, ...) to the caller's.
+		expect(disabled(await stockPuppeteer.defaultArgs(asked()))).toEqual(expect.arrayContaining(["AskedFor", "AcceptCHFrame", "Translate"]));
+		expect(disabled(await patched.defaultArgs(asked()))).toEqual(["AskedFor"]);
+		expect(disabled(await patched.defaultArgs({ headless: true }))).toEqual([]);
 	}, 60_000);
 });
