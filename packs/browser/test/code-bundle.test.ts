@@ -37,6 +37,8 @@ beforeAll(async () => {
   await build({ ...bundle, entryPoints: [join(PACK, "src/code/worker/entry.ts")], outfile: join(app, "code-worker.mjs"), logLevel: "silent" });
   cpSync(join(PACK, "app/dist"), join(app, "dist"), { recursive: true });
   cpSync(join(PACK, "recipes"), join(out, "recipes"), { recursive: true });
+  // The task worker runs from `python/` beside `app/`, as the pack ships it (package.json `files`).
+  cpSync(join(PACK, "python"), join(out, "python"), { recursive: true, filter: source => !source.includes(".venv") && !source.includes("__pycache__") });
   // The bundles leave their packages external, as the shipped ones do; they find them through this link.
   symlinkSync(fileURLToPath(new URL("../../../../node_modules", import.meta.url)), join(out, "node_modules"), "junction");
 }, 60_000);
@@ -203,6 +205,51 @@ describeBundle("the shipped server, under Node", () => {
     await waitUntil("every process of the server gone, by pid", async () => [...(await chromePidsByThrowaway(server.root)).values()].flatMap(chrome => chrome.all).filter(isAlive).length, alive => alive === 0, 15_000);
     expect(isAlive(server.pid)).toBe(false);
   }, BROWSER_TEST_TIMEOUT_MS);
+
+  // The built bundle, as the review ran it: a second session's cell read TYPESAFE_API_KEY and a DIMENSION_* secret out of `process.report.getReport().environmentVariables`, which is the process's whole environment block,
+  // whatever the worker's own `process.env` was scrubbed to. The keys are taken out of the block when the server starts (src/secrets.ts). A positive control keeps an empty report from passing: it carries DIMENSION_BROWSER_ROOT.
+  test("a cell cannot read the pack's keys from process.env, from process.report, or from the environment of a child process it starts; the task tools are still listed", async () => {
+    const secrets = { TYPESAFE_API_KEY: "sk-typesafe-5f1c2a", TEXT_MODEL_API_KEY: "sk-model-77ab31", DIMENSION_FAKE_SECRET: "fake-dimension-secret-93de08" };
+    const server = await launch(secrets);
+    const tools = (await server.request("tools/list", {})) as { tools: Array<{ name: string }> };
+    expect(tools.tools.map(tool => tool.name)).toContain("browser_task"); // the key counts although it is no longer in the environment
+    const answer = await server.call("browser_run", {
+      code: `
+        const { execFileSync } = await import("node:child_process");
+        const child = execFileSync(process.execPath, ["-e", "process.stdout.write(JSON.stringify(process.env))"], { encoding: "utf8" });
+        JSON.stringify({ env: process.env, report: process.report.getReport().environmentVariables, child: JSON.parse(child) })`,
+    }, "s2");
+    expect(answer.isError).toBeFalsy();
+    const seen = JSON.parse(text(answer).split("\n").at(-1) as string) as { env: Record<string, string>; report: Record<string, string>; child: Record<string, string> };
+    for (const where of ["env", "report", "child"] as const) {
+      const block = JSON.stringify(seen[where]);
+      for (const [name, value] of Object.entries(secrets)) {
+        expect(block).not.toContain(value);
+        expect(Object.keys(seen[where]).map(key => key.toUpperCase())).not.toContain(name);
+      }
+    }
+    // The report is the process's real environment block: it carries the server's own setting, so an empty one would not have passed.
+    expect(seen.report.DIMENSION_BROWSER_ROOT).toBe(server.root);
+  }, BROWSER_TEST_TIMEOUT_MS);
+
+  // The task worker gets its keys from the server, not from the environment block: the real python worker checks them first, and says which one is missing.
+  const PYTHON = process.env.DIM_BROWSER_PYTHON?.trim() || join(PACK, "python", ".venv", process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
+  test.skipIf(!existsSync(PYTHON))("browser_task still reaches jev with the keys the server was started with: the python worker is handed them although the environment no longer carries them", async () => {
+    for (const [env, expectation] of [
+      [{ TYPESAFE_API_KEY: "sk-typesafe-5f1c2a" }, "jev needs TEXT_MODEL_API_KEY in the browser server's environment."],
+      [{ TYPESAFE_API_KEY: "sk-typesafe-5f1c2a", TEXT_MODEL_API_KEY: "sk-model-77ab31" }, undefined],
+    ] as const) {
+      const server = await launch({ ...env, DIM_BROWSER_PYTHON: PYTHON });
+      const opened = await server.call("browser_open", {});
+      const { browserId } = JSON.parse(text(opened)) as { browserId: string };
+      const task = await server.call("browser_task", { browserId, task: "say hi", waitSeconds: 25 });
+      const said = text(task);
+      if (expectation !== undefined) expect(said).toContain(expectation);
+      else expect(said).not.toContain("jev needs"); // both keys arrived; whatever fails next is the library, not the keys
+      expect(said).not.toContain("TYPESAFE_API_KEY and");
+      await retireServers();
+    }
+  }, BROWSER_TEST_TIMEOUT_MS * 2);
 
   test("what a cell costs: cold and warm open, 20 sequential tab.url(), and browser_state while a cell spins for 5 s", async () => {
     const server = await launch();

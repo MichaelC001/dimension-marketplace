@@ -30,8 +30,10 @@ const DEFAULT_TOTAL_MEMORY_MB = 3_072;
 
 /**
  * What a cell is handed of the server's environment: where programs and temp files live, locale, and puppeteer's own settings. This is hygiene against accidents (a cell that prints `process.env`, a child process
- * that inherits it), NOT a boundary and NOT secrecy: the worker is a thread of the server's own process, so on Linux `/proc/self/environ` still holds the environment the server started with, the cell has
- * HOME/USERPROFILE (the credentials path stays readable by design) and full Node, and a cell that means to read the server's keys can. It matches OMP's sandbox A.
+ * that inherits it), NOT a boundary: the worker is a thread of the server's own process, the cell has HOME/USERPROFILE (the credentials path stays readable by design) and full Node, and a cell that means to read
+ * the server's files, network or other processes' command lines can. It matches OMP's sandbox A. The pack's own keys (TYPESAFE_API_KEY, TEXT_MODEL_API_KEY) and any other DIMENSION_* secret are not in the
+ * process's environment block at all (secrets.ts takes them out at start), so `process.report.getReport().environmentVariables` shows none either; on Linux `/proc/self/environ` is the environment the process was
+ * started with and unsetting does not change it [INFERENCE, not run here].
  *
  * A separate-process rung under Node's permission model would be hardening, not secrecy, and is not built: Node documents the model as a seat belt that code written to bypass it can (already-open file descriptors
  * and symlinks get through; Node 22 and 24 have no network restriction, so a cell could still reach a localhost CDP endpoint and send data out; a granted child_process escapes it altogether). What it would stop is

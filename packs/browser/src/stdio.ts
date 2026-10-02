@@ -1,8 +1,12 @@
+import { launchSecrets } from "./secrets.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { runRelayCliIfAsked } from "./code/kinds/relay/cli.js";
 import { unexitedWorkerThreads } from "./code/host/transport.js";
 import { createBrowserServer } from "./server.js";
 import { createShutdown, killThisProcess } from "./shutdown.js";
+
+// The pack's own secrets leave the process environment before anything else runs, so no cell can read them from it (secrets.ts).
+launchSecrets.take();
 
 // `node app/server.mjs --relay` and `--relay-install` are the relay's own commands (the Chrome extension's install and a hand-started relay), not a server start.
 if (await runRelayCliIfAsked(process.argv.slice(2))) process.exit(process.exitCode ?? 0);
