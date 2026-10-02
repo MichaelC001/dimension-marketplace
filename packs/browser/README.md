@@ -122,6 +122,13 @@ widens the host's minimal default):
 | `TYPESAFE_API_KEY` | Read when the server starts. Set, the three task tools are offered; unset or blank, they are absent and the server log names this variable. Every jev decision is one call to TypeSafe's hosted service with it. |
 | `TEXT_MODEL_API_KEY` | Checked when a task starts: a task fails at once, naming it, if it is missing. Optionally `TEXT_MODEL_BASE_URL` and `TEXT_MODEL` for the small model that writes field values. |
 
+Once a task has run, the server keeps one worker pre-spawned and waiting, so the
+next task's clock starts without the interpreter's start-up. jev's harness reads
+its env at import time, so nothing of it can be loaded ahead: start-up is all the
+spare saves. It exists only where `TYPESAFE_API_KEY` is set, is used only by a
+task that starts in the environment it was started in, exits after ten minutes
+unused, and is let go when the server shuts down.
+
 jev always sends a `reasoning` object to `TEXT_MODEL_BASE_URL`; Gemini's
 OpenAI-compatible endpoint rejects unknown fields, so a Gemini field-value model
 needs a relay that drops them (upstream jev-ultrafast behaviour).
