@@ -71,6 +71,14 @@ function closeTitle(hold: ProfileHold | undefined): string {
 	return "Close it";
 }
 
+/** What closing a browser would lose, as the question a row asks before it does it; nothing when closing loses only a page. */
+function closeAsk(hold: ProfileHold | undefined): { readonly question: string; readonly confirm: string } | undefined {
+	if (hold?.post && hold.task) return { question: "Discard the waiting post and stop the task?", confirm: "Discard and stop" };
+	if (hold?.post) return { question: "Discard the post waiting for you?", confirm: "Discard post" };
+	if (hold?.task) return { question: "Stop the running task?", confirm: "Stop task" };
+	return undefined;
+}
+
 export interface ProfileSwitcherProps {
 	readonly profile: string | null;
 	/** How that profile looks, as the browser's state carries it; null for a throwaway browser and your own Chrome. */
@@ -108,19 +116,29 @@ export function ProfileSwitcher(props: ProfileSwitcherProps) {
 	const { profile, look, engine, profiles, profilesError, switching, takenOver, agentActive, canTakeOver, onMenu } = props;
 	const [open, setOpen] = useState(false);
 	const [adding, setAdding] = useState(false);
+	/** The browser whose close is waiting for the person's yes (it would discard a post or stop a task). */
+	const [asking, setAsking] = useState<string | null>(null);
 	const wrapRef = useRef<HTMLDivElement | null>(null);
+	/** Each close button by its browser, so focus can go back to it when the question is answered no. */
+	const closers = useRef(new Map<string, HTMLButtonElement | null>());
 	const identity = identityOf(profile, engine, look, profiles);
 
 	const close = useCallback(() => {
 		setOpen(false);
 		setAdding(false);
+		setAsking(null);
 	}, []);
-	// Escape closes the form first, the menu on the second press.
+	// Escape answers a question first, then closes the form, and the menu on the next press.
 	const onEscape = useCallback(() => {
+		if (asking !== null) {
+			setAsking(null);
+			closers.current.get(asking)?.focus();
+			return true;
+		}
 		if (!adding) return false;
 		setAdding(false);
 		return true;
-	}, [adding]);
+	}, [adding, asking]);
 	useMenu(open, close, wrapRef, { onEscape, ready: profiles !== null });
 	useEffect(() => {
 		onMenu(open);
@@ -135,10 +153,47 @@ export function ProfileSwitcher(props: ProfileSwitcherProps) {
 		if (!open) props.onOpen();
 		setOpen(!open);
 		setAdding(false);
+		setAsking(null);
+	};
+
+	const busy = switching !== null;
+	/** The close at the end of a row, and under the row the question it asks first when closing would lose a post or a task. */
+	const closeOf = (browserId: string, label: string, hold: ProfileHold | undefined) => {
+		const ask = closeAsk(hold);
+		const asked = ask !== undefined && asking === browserId;
+		return (
+			<>
+				<RowClose
+					label={label}
+					hold={hold}
+					disabled={busy}
+					asked={asked}
+					buttonRef={el => void closers.current.set(browserId, el)}
+					onClose={() => {
+						if (ask === undefined) props.onCloseOther(browserId);
+						else setAsking(asked ? null : browserId);
+					}}
+				/>
+				{asked && (
+					<CloseAsk
+						label={label}
+						ask={ask}
+						disabled={busy}
+						onKeep={() => {
+							setAsking(null);
+							closers.current.get(browserId)?.focus();
+						}}
+						onConfirm={() => {
+							setAsking(null);
+							props.onCloseOther(browserId);
+						}}
+					/>
+				)}
+			</>
+		);
 	};
 
 	const others = offered(profiles ?? []).filter(candidate => identity.kind !== "profile" || candidate.name !== profile);
-	const busy = switching !== null;
 	// Focus lands on a profile, or on Add profile when none can be opened: never on Take over, so Enter pressed straight after
 	// opening cannot pause the agent, whoever is listed and whatever has not loaded.
 	const firstOpenable = profiles === null ? undefined : others.find(candidate => profileStatus(candidate).openable)?.name;
@@ -228,9 +283,7 @@ export function ProfileSwitcher(props: ProfileSwitcherProps) {
 													</span>
 													{pending ? <span className="bx-tab-spinner" aria-hidden="true" /> : state.tone !== undefined && <span className="bx-prow-dot" aria-hidden="true" />}
 												</button>
-												{candidate.browserId !== undefined && (
-													<RowClose label={candidate.label} hold={candidate.hold} disabled={busy} onClose={() => props.onCloseOther(candidate.browserId as string)} />
-												)}
+												{candidate.browserId !== undefined && closeOf(candidate.browserId, candidate.label, candidate.hold)}
 											</div>
 										);
 									})}
@@ -261,7 +314,7 @@ export function ProfileSwitcher(props: ProfileSwitcherProps) {
 													</span>
 													<span className="bx-prow-dot" aria-hidden="true" />
 												</button>
-												<RowClose label={label} hold={item.hold} disabled={busy} onClose={() => props.onCloseOther(item.browserId)} />
+												{closeOf(item.browserId, label, item.hold)}
 											</div>
 										);
 									})}
@@ -289,11 +342,32 @@ export function ProfileSwitcher(props: ProfileSwitcherProps) {
 	);
 }
 
-/** The close button at the end of a row whose browser was left open: pressing it closes that browser, not the one on screen. */
-function RowClose({ label, hold, disabled, onClose }: { readonly label: string; readonly hold: ProfileHold | undefined; readonly disabled: boolean; readonly onClose: () => void }) {
+/** The close button at the end of a row whose browser was left open: pressing it closes that browser, not the one on screen, or asks first (`asked`: the question is showing). */
+function RowClose({ label, hold, disabled, asked, buttonRef, onClose }: { readonly label: string; readonly hold: ProfileHold | undefined; readonly disabled: boolean; readonly asked: boolean; readonly buttonRef: (el: HTMLButtonElement | null) => void; readonly onClose: () => void }) {
 	return (
-		<button type="button" role="menuitem" className="bx-prow-close" aria-label={`Close ${label}`} title={closeTitle(hold)} disabled={disabled} onClick={onClose}>
+		<button type="button" role="menuitem" ref={buttonRef} className="bx-prow-close" aria-label={`Close ${label}`} aria-expanded={closeAsk(hold) === undefined ? undefined : asked} title={closeTitle(hold)} disabled={disabled} onClick={onClose}>
 			<Icon name="x" size={13} strokeWidth={2.25} />
 		</button>
+	);
+}
+
+/** Under a row: what its close would lose, and the two answers. Focus lands on Keep, so Enter pressed straight after asking keeps what is there. */
+function CloseAsk({ label, ask, disabled, onKeep, onConfirm }: { readonly label: string; readonly ask: { readonly question: string; readonly confirm: string }; readonly disabled: boolean; readonly onKeep: () => void; readonly onConfirm: () => void }) {
+	const keep = useRef<HTMLButtonElement | null>(null);
+	useEffect(() => {
+		keep.current?.focus();
+	}, []);
+	return (
+		<div className="bx-prow-ask" role="group" aria-label={`${label}: ${ask.question}`}>
+			<span className="bx-prow-ask-text">{ask.question}</span>
+			<span className="bx-prow-ask-actions">
+				<button type="button" role="menuitem" ref={keep} className="bx-pmenu-control-btn" onClick={onKeep}>
+					Keep
+				</button>
+				<button type="button" role="menuitem" className="bx-pmenu-control-btn" data-danger="" disabled={disabled} onClick={onConfirm}>
+					{ask.confirm}
+				</button>
+			</span>
+		</div>
 	);
 }

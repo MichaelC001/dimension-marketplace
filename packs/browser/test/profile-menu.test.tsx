@@ -339,10 +339,10 @@ describe("the profile menu", () => {
 describe("switching profile from the menu", () => {
 	/** Work with its browser gone: what the runtime lists once it has closed what the person left. */
 	const WORK_CLOSED = listing("work", "Work account", { colour: "teal", avatar: "💼", sites: WORK.sites });
-	/** A runtime that opens Bank as `b2`, and whose `browser_leave` of Work closes it (so Work is free in the next listing). */
+	/** A runtime that switches to Bank as `b2`, and whose `browser_leave` of Work closes it (so Work is free in the next listing). */
 	const switching = (leave: () => CallToolResult = () => answer({ closed: true })): Host => {
 		const host: Host = fakeHost(SHELF, call => {
-			if (call.name === "browser_open") return answer(browserOf("b2", BANK));
+			if (call.name === "browser_switch") return answer(browserOf("b2", BANK));
 			if (call.name === "browser_leave") {
 				const result = leave();
 				if (!result.isError) host.profiles = SHELF.map(profile => (profile.name === "work" ? WORK_CLOSED : profile));
@@ -361,10 +361,11 @@ describe("switching profile from the menu", () => {
 		await dom.click(rowFor(dom, "Bank"));
 		await dom.settle();
 
-		expect(callsTo(host, "browser_open")).toStrictEqual([{ engine: "chromium", profile: "z-bank" }]);
+		expect(callsTo(host, "browser_switch")).toStrictEqual([{ leaving: "b1", engine: "chromium", profile: "z-bank" }]);
+		expect(callsTo(host, "browser_open")).toEqual([]);
 		expect(callsTo(host, "browser_leave")).toStrictEqual([{ browserId: "b1" }]);
-		// Open first, so a refused open never leaves the person with no browser.
-		expect(host.calls.map(call => call.name).filter(name => name === "browser_open" || name === "browser_leave")).toEqual(["browser_open", "browser_leave"]);
+		// The new one first, so a refused open never leaves the person with no browser (a full pool is the runtime's to tell, in browser_switch).
+		expect(host.calls.map(call => call.name).filter(name => name === "browser_switch" || name === "browser_leave")).toEqual(["browser_switch", "browser_leave"]);
 		expect(chipOf(dom).textContent?.trim()).toBe("BBank");
 		expect(menuIsOpen(dom)).toBe(false);
 		expect(callsTo(host, "browser_close")).toEqual([]);
@@ -389,7 +390,7 @@ describe("switching profile from the menu", () => {
 	});
 
 	test("a profile held elsewhere is listed but pressing it opens nothing", async () => {
-		const host = fakeHost(SHELF, call => (call.name === "browser_open" ? answer(browserOf("b2", BANK)) : failure(`unexpected ${call.name}`)));
+		const host = fakeHost(SHELF, call => (call.name === "browser_switch" ? answer(browserOf("b2", BANK)) : failure(`unexpected ${call.name}`)));
 		const dom = await mountView(host, WORK_BROWSER);
 		await openMenu(dom);
 
@@ -397,13 +398,13 @@ describe("switching profile from the menu", () => {
 		await dom.click(rowFor(dom, "Travel"));
 		await dom.settle();
 
-		expect(callsTo(host, "browser_open")).toEqual([]);
+		expect(callsTo(host, "browser_switch")).toEqual([]);
 		expect(chipOf(dom).textContent?.trim()).toBe("💼Work account");
 	});
 
 	test("a profile taken in the meantime keeps the current browser and says why, once, in plain words — or the runtime's own words when it is something else", async () => {
 		let reason = HELD_TEXT;
-		const host = fakeHost(SHELF, call => (call.name === "browser_open" ? failure(reason) : failure(`unexpected ${call.name}`)));
+		const host = fakeHost(SHELF, call => (call.name === "browser_switch" ? failure(reason) : failure(`unexpected ${call.name}`)));
 		const dom = await mountView(host, WORK_BROWSER);
 
 		await openMenu(dom);
@@ -417,9 +418,9 @@ describe("switching profile from the menu", () => {
 		await dom.click(rowFor(dom, "Bank"));
 		await dom.settle();
 		expect(alerts(dom)).toEqual(["could not launch Chrome"]);
-		expect(callsTo(host, "browser_open")).toStrictEqual([
-			{ engine: "chromium", profile: "z-bank" },
-			{ engine: "chromium", profile: "z-bank" },
+		expect(callsTo(host, "browser_switch")).toStrictEqual([
+			{ leaving: "b1", engine: "chromium", profile: "z-bank" },
+			{ leaving: "b1", engine: "chromium", profile: "z-bank" },
 		]);
 		// The browser on screen was never left: the person is still in it.
 		expect(callsTo(host, "browser_leave")).toEqual([]);
@@ -427,7 +428,7 @@ describe("switching profile from the menu", () => {
 
 	test("Private browser opens with no profile at all; it shows as Private, offers no second Private, and every saved profile is still there to open", async () => {
 		const host: Host = fakeHost(SHELF, call => {
-			if (call.name === "browser_open") return answer(browserOf("b2", null));
+			if (call.name === "browser_switch") return answer(browserOf("b2", null));
 			if (call.name === "browser_leave") {
 				host.profiles = SHELF.map(profile => (profile.name === "work" ? WORK_CLOSED : profile));
 				return answer({ closed: true });
@@ -442,7 +443,7 @@ describe("switching profile from the menu", () => {
 		await dom.settle();
 
 		// Strict: a `profile` key present with any value, even undefined, is not "no profile".
-		expect(callsTo(host, "browser_open")).toStrictEqual([{ engine: "chromium" }]);
+		expect(callsTo(host, "browser_switch")).toStrictEqual([{ leaving: "b1", engine: "chromium" }]);
 		expect(callsTo(host, "browser_leave")).toStrictEqual([{ browserId: "b1" }]);
 		expect(chipOf(dom).textContent?.trim()).toBe("Private");
 		expect(callsTo(host, "browser_close")).toEqual([]);
@@ -517,9 +518,86 @@ describe("browsers left open in the background", () => {
 		expect(closeFor(dom, "Private browser")).toBeDefined();
 		expect(closeFor(dom, "Your Chrome")).toBeDefined();
 
+		// Your Chrome has a post waiting: closing it asks first (see below), then closes exactly that browser.
 		await dom.click(closeFor(dom, "Your Chrome"));
+		await dom.click(askButton(dom, "Discard post"));
 		await dom.settle();
 		expect(callsTo(host, "browser_close")).toStrictEqual([{ browserId: "c1" }]);
+	});
+
+	/** The question a row asks under it before it closes something that would lose a post or a task. */
+	const asks = (dom: Dom) => dom.find(".bx-prow-ask");
+	const askButton = (dom: Dom, label: string): Element => {
+		const found = asks(dom).flatMap(el => [...el.querySelectorAll("button")]).find(el => el.textContent?.trim() === label);
+		if (!found) throw new Error(`no "${label}" answer`);
+		return found;
+	};
+	const BOTH = { browserId: "x1", kind: "private", hold: { by: "agent", task: true, takenOver: false, post: true } } as const;
+
+	for (const { name, id, close, question, confirm, shelf, browsers } of [
+		{ name: "a profile whose post is waiting", id: "b-pub", close: "Pub", question: "Discard the post waiting for you?", confirm: "Discard post", shelf: [listing("pub", "Pub", { ...hold("person", false, false, true) })], browsers: [] },
+		{ name: "a profile whose task is running", id: "b-w-research", close: "Research", question: "Stop the running task?", confirm: "Stop task", shelf: SHELF, browsers: [] },
+		{ name: "a Private browser with a task running", id: "p1", close: "Private browser", question: "Stop the running task?", confirm: "Stop task", shelf: SHELF, browsers: [PRIVATE_TASK] },
+		{ name: "Your Chrome with a post waiting", id: "c1", close: "Your Chrome", question: "Discard the post waiting for you?", confirm: "Discard post", shelf: SHELF, browsers: [CHROME_POST] },
+		{ name: "a browser with both", id: "x1", close: "Private browser", question: "Discard the waiting post and stop the task?", confirm: "Discard and stop", shelf: SHELF, browsers: [BOTH] },
+	] as const) {
+		test(`closing ${name} asks first: one press (or Enter) on the close discards nothing, Keep and Escape back out with the menu still open, and only the answer closes it`, async () => {
+			const host = fakeHost([...shelf], call => (call.name === "browser_close" ? answer({ closed: true }) : failure(`unexpected ${call.name}`)));
+			host.browsers = [...browsers];
+			const dom = await mountView(host, WORK_BROWSER);
+			await openMenu(dom);
+			const focused: Element[] = [];
+			Object.assign(HTMLElement.prototype, { focus(this: Element) { focused.push(this); } });
+			const target = closeFor(dom, close);
+			expect(asks(dom)).toHaveLength(0);
+			expect(target.hasAttribute("aria-expanded")).toBe(true);
+
+			// The press asks. Nothing is closed, the menu stays, and the cursor is on the safe answer.
+			await dom.click(target);
+			await dom.settle();
+			expect(callsTo(host, "browser_close")).toEqual([]);
+			expect(menuIsOpen(dom)).toBe(true);
+			expect(asks(dom).map(el => el.querySelector(".bx-prow-ask-text")?.textContent)).toEqual([question]);
+			expect(closeFor(dom, close).getAttribute("aria-expanded")).toBe("true");
+			expect(focused.at(-1)?.textContent?.trim()).toBe("Keep");
+
+			// Keep: the question goes, the close button has the cursor again, nothing was closed.
+			await dom.click(askButton(dom, "Keep"));
+			expect(asks(dom)).toHaveLength(0);
+			expect(focused.at(-1)).toBe(closeFor(dom, close));
+			expect(callsTo(host, "browser_close")).toEqual([]);
+
+			// Escape answers the question first and leaves the menu; the next Escape closes the menu.
+			await dom.click(closeFor(dom, close));
+			expect(asks(dom)).toHaveLength(1);
+			await dom.key(chipOf(dom), "Escape");
+			expect(asks(dom)).toHaveLength(0);
+			expect(menuIsOpen(dom)).toBe(true);
+			expect(callsTo(host, "browser_close")).toEqual([]);
+
+			// Asked again and answered: exactly that browser is closed, once.
+			await dom.click(closeFor(dom, close));
+			expect(askButton(dom, confirm).textContent?.trim()).toBe(confirm);
+			await dom.click(askButton(dom, confirm));
+			await dom.settle();
+			expect(callsTo(host, "browser_close")).toStrictEqual([{ browserId: id }]);
+			expect(asks(dom)).toHaveLength(0);
+		});
+	}
+
+	test("a question left unanswered when the menu closes is not there when it opens again", async () => {
+		const host = fakeHost(SHELF);
+		host.browsers = [PRIVATE_TASK];
+		const dom = await mountView(host, WORK_BROWSER);
+		await openMenu(dom);
+		await dom.click(closeFor(dom, "Private browser"));
+		expect(asks(dom)).toHaveLength(1);
+
+		await dom.click(chipOf(dom));
+		await openMenu(dom);
+
+		expect(asks(dom)).toHaveLength(0);
+		expect(callsTo(host, "browser_close")).toEqual([]);
 	});
 
 	test("pressing a Private browser left open shows it and leaves the one on screen, without opening anything new", async () => {
@@ -580,7 +658,7 @@ describe("Add profile in the menu", () => {
 				return answer({ profile: made });
 			}
 			if (call.name === "browser_leave") return answer({ closed: true });
-			return call.name === "browser_open" && made !== undefined ? answer(browserOf("b2", made)) : failure(`unexpected ${call.name}`);
+			return call.name === "browser_switch" && made !== undefined ? answer(browserOf("b2", made)) : failure(`unexpected ${call.name}`);
 		};
 	}
 
@@ -651,9 +729,9 @@ describe("Add profile in the menu", () => {
 
 		expect(callsTo(host, "browser_profile_add")).toStrictEqual([{ name: "Side hustle", colour: FIRST_FREE }]);
 		// The runtime named the folder; the View opens that, not what was typed.
-		expect(callsTo(host, "browser_open")).toStrictEqual([{ engine: "chromium", profile: "made-by-server" }]);
+		expect(callsTo(host, "browser_switch")).toStrictEqual([{ leaving: "b1", engine: "chromium", profile: "made-by-server" }]);
 		// The profile on screen when it was added is the one left, once the new one is open.
-		expect(host.calls.filter(call => ["browser_profile_add", "browser_open", "browser_leave"].includes(call.name)).map(call => [call.name, call.args.browserId])).toEqual([["browser_profile_add", undefined], ["browser_open", undefined], ["browser_leave", "b1"]]);
+		expect(host.calls.filter(call => ["browser_profile_add", "browser_switch", "browser_leave"].includes(call.name)).map(call => [call.name, call.args.browserId])).toEqual([["browser_profile_add", undefined], ["browser_switch", undefined], ["browser_leave", "b1"]]);
 		expect(chipOf(dom).textContent?.trim()).toBe("SSide hustle");
 		expect(menuIsOpen(dom)).toBe(false);
 		expect(alerts(dom)).toEqual([]);
@@ -689,7 +767,7 @@ describe("Add profile in the menu", () => {
 
 		expect(alerts(dom)).toEqual([refusal]);
 		expect(form.querySelector('[role="alert"]')?.textContent).toBe(refusal);
-		expect(callsTo(host, "browser_open")).toEqual([]);
+		expect(callsTo(host, "browser_switch")).toEqual([]);
 		expect(chipOf(dom).textContent?.trim()).toBe("💼Work account");
 
 		refuse = false;
@@ -700,7 +778,7 @@ describe("Add profile in the menu", () => {
 		await dom.settle();
 
 		expect(callsTo(host, "browser_profile_add")).toHaveLength(2);
-		expect(callsTo(host, "browser_open")).toHaveLength(1);
+		expect(callsTo(host, "browser_switch")).toHaveLength(1);
 		expect(chipOf(dom).textContent?.trim()).toBe("SSide hustle 2");
 	});
 });

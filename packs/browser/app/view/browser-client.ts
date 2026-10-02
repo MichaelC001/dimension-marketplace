@@ -417,6 +417,14 @@ export class BrowserClient {
 		return (await this.call(tool, { browserId })).closed === true;
 	}
 
+	/** The person moves to another profile (none: a Private browser) from the browser `leaving`: opened as `open` does; with the pool full the runtime closes the one left first, when closing it frees a slot. Answers the new browser's state. */
+	async switchProfile(leaving: string, options: { profile?: string; engine?: BrowserEngine }): Promise<BrowserState> {
+		const args: Record<string, unknown> = { leaving };
+		if (options.profile !== undefined) args.profile = options.profile;
+		if (options.engine) args.engine = options.engine;
+		return readState("browser_switch", await this.call("browser_switch", args));
+	}
+
 	async open(options: OpenOptions): Promise<BrowserState> {
 		const args: Record<string, unknown> = {};
 		if (options.profile !== undefined) args.profile = options.profile;

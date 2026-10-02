@@ -254,14 +254,16 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 
 	// Switching profile opens that profile's browser here, as Chrome does, and leaves the one it was on: the runtime closes it unless an
 	// agent opened it or something depends on it (a task, a post waiting for confirmation, the person's own take-over). What stays is
-	// listed in the menu, to go back to or close. A profile somebody else holds is not offered; if one is taken meanwhile, the runtime's
-	// refusal is said once.
-	const switchTo = async (key: string, reach: () => Promise<BrowserState>) => {
+	// listed in the menu, to go back to or close. The new browser is opened first, so one that cannot be opened (a profile taken meanwhile,
+	// Chrome failing to start) never costs the person the one they are in. Only with the pool full does the runtime close the old one before
+	// the open, when that frees the slot (`browser_switch`). A profile somebody else holds is not offered; if one is taken meanwhile, the
+	// runtime's refusal is said once.
+	const switchTo = async (key: string, reach: (left: string | null) => Promise<BrowserState>) => {
 		if (switching !== null) return;
 		const left = browserId;
 		setSwitching(key);
 		try {
-			const next = await reach();
+			const next = await reach(left);
 			if (!mountedRef.current) return;
 			adopt(next);
 			if (left !== null && left !== next.browserId) {
@@ -278,7 +280,11 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 			if (mountedRef.current) setSwitching(null);
 		}
 	};
-	const switchProfile = (target: string | null) => switchTo(target ?? "", () => client.open({ engine: "chromium", ...(target === null ? {} : { profile: target }) }));
+	const switchProfile = (target: string | null) =>
+		switchTo(target ?? "", left => {
+			const options = { engine: "chromium" as const, ...(target === null ? {} : { profile: target }) };
+			return left === null ? client.open(options) : client.switchProfile(left, options);
+		});
 	const switchBrowser = (target: string) => switchTo(`browser:${target}`, () => client.state(target));
 
 	// A browser left open is closed from the menu; it stays open, and the list is read again either way.

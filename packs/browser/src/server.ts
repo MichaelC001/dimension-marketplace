@@ -233,10 +233,10 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     const session = sessionOf(extra);
     return { ...(caller === undefined ? {} : { caller }), ...(session === undefined ? {} : { session }) };
   };
-  const openAt = async (profile: string | undefined, engine: BrowserEngine | undefined, url: string | undefined, opener: BrowserOpener): Promise<BrowserState> => {
+  const openAt = async (profile: string | undefined, engine: BrowserEngine | undefined, url: string | undefined, opener: BrowserOpener, leaving?: string): Promise<BrowserState> => {
     // Validate before launching so malformed input cannot strand a browser/profile lock.
     const action = url === undefined ? undefined : navigateStep.parse({ kind: "navigate", url });
-    const state = await runtime.open({ ...(profile === undefined ? {} : { profile }), ...(engine ? { engine } : {}) }, opener);
+    const state = await runtime.open({ ...(profile === undefined ? {} : { profile }), ...(engine ? { engine } : {}), ...(leaving === undefined ? {} : { leaving }) }, opener);
     if (!action) return state;
     // As the caller who opened it: the person's own open is not an agent's action, and a browser they took over takes their navigation.
     // But the person's address bar may drive a page a post is pinned to (it voids the post); an open must not do that by the side door.
@@ -485,6 +485,18 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     inputSchema: { browserId: capability },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false }, _meta: APP_ONLY,
   }, ({ browserId }, extra) => result(async () => ({ ...(await runtime.leave(browserId, callerOf(extra))) })));
+  // The View's switch to another profile, in one call that opens it the way browser_open does: with the pool full, the browser the person leaves is closed FIRST when leaving would close it,
+  // so the open takes that slot and not an agent's throwaway; with room, nothing is closed before the new one is open. App-only; the runtime refuses any other caller itself.
+  registerAppTool(server, "browser_switch", {
+    title: "Switch Browser",
+    description: "The person in the View opens another profile (or a Private browser, with no profile) and leaves the browser they were on. Like browser_open, and the View shows the new browser. With the pool full, the browser being left is closed first when leaving it would close it, so the open never takes an agent's throwaway; it is otherwise left only by browser_leave, once this answered. Answers the new browser's state.",
+    inputSchema: { leaving: capability, profile: profile.optional(), engine: z.enum(BROWSER_ENGINES).optional() },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }, _meta: APP_ONLY,
+  }, ({ leaving, profile, engine }, extra) => result(async () => {
+    const state = await openAt(profile, engine, undefined, openerOf(extra), leaving);
+    showing(extra, state.browserId);
+    return stateFor(callerOf(extra), state);
+  }));
   server.registerTool("browser_close", {
     description: "Close this owned browser (stopping any task) and release its profile lock. Persisted logins remain; a throwaway's data is deleted; the user's relay browser is never terminated. Refused while a publish awaits confirmation (confirm, cancel or wait first).",
     inputSchema: { browserId: capability },

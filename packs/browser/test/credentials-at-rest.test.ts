@@ -380,7 +380,7 @@ describe("the key", () => {
 		expect(published?.nameTaken).toBe(false);
 		expect(published?.private).toBe(true);
 		expect(Buffer.from((published?.staged ?? "").trim(), "base64")).toHaveLength(32);
-		expect(readFileSync(keyFile, "utf8")).toBe(published?.staged);
+		expect(readFileSync(keyFile, "utf8")).toBe(published?.staged ?? "no key was staged");
 		expect(readdirSync(rootDir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
 	});
 

@@ -430,6 +430,8 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	 */
 	async open(options: BrowserOpenOptions, opener: BrowserOpener = {}): Promise<BrowserState> {
 		if (this.disposed) fail("disposed", "runtime has been disposed");
+		// Only the person's own switch names a browser to leave; the host marks the tool app-only, and the runtime holds the rule itself, like `leave`.
+		if (options.leaving !== undefined && opener.caller !== "app") fail("human_only", "only the person in the View can switch to another browser");
 		const engine = normalizeEngine(options.engine);
 		const named = options.profile === undefined ? undefined : this.resolveProfile(options.profile, engine);
 		const viewport = normalizeViewport(options.viewport);
@@ -471,7 +473,9 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			}
 			// Count launches in flight too: four concurrent opens must not slip past the bound just because none of them has finished launching yet.
 			if (this.byId.size + this.opening.size + (this.readerHeld() ? 1 : 0) < MAX_BROWSERS) break;
-			// Full: give up the least recently used throwaway nothing is happening on, or refuse naming what this chat holds. Then look again from the top.
+			// Full. The browser the person is leaving gives up its slot first when leaving it would close it (it is the one slot they can have without taking an agent's);
+			// otherwise give up the least recently used throwaway nothing is happening on, or refuse naming what this chat holds. Then look again from the top.
+			if (await this.leaveForRoom(options.leaving, opener)) continue;
 			await this.makeRoom(opener.session);
 		}
 
@@ -1145,6 +1149,19 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		if (this.keptOnLeave(entry, heldWheel)) return { closed: false };
 		await this.retire(entry, "the person left it for another profile in the Browser View, which closed it; open it again with browser_open");
 		return { closed: true };
+	}
+
+	/**
+	 * The slot of the browser the person is leaving, for the open that replaces it, when the pool is full (`open`). It is closed only when
+	 * leaving it would close it (`keptOnLeave` decides: a browser that stays frees nothing, and its wheel is not touched here), and only
+	 * if it is the asking chat's own. True: it is gone and the open looks again; false: the open goes on to `makeRoom`. A close that fails is the open's failure.
+	 */
+	private async leaveForRoom(browserId: string | undefined, opener: BrowserOpener): Promise<boolean> {
+		if (browserId === undefined) return false;
+		const entry = this.byId.get(browserId);
+		if (entry === undefined || entry.closed || entry.retiring !== undefined || this.holderOf(entry.opener, opener.session) !== "this chat") return false;
+		if (this.keptOnLeave(entry, entry.takenOver)) return false;
+		return (await this.leave(browserId, "app")).closed;
 	}
 
 	/**

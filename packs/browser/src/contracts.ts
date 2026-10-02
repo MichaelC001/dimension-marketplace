@@ -380,6 +380,8 @@ export interface BrowserOpenOptions {
   profile?: string;
   engine?: BrowserEngine;
   viewport?: Viewport;
+  /** The View's profile switch only: the browser the person is leaving. With the pool full, it is closed first when leaving it would close it, so the open takes its slot and not an agent's throwaway. */
+  leaving?: string;
 }
 /**
  * Who opened a browser, from what the HOST stamped on the call: `caller` ("app" is the human, in the View) and the
