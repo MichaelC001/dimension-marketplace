@@ -165,6 +165,8 @@ export class Agents {
 			const created = await this.#call(apiKey, "POST", "/v1/convai/tools", wantedTool, signal);
 			toolId = isRecord(created) && typeof created.id === "string" ? created.id : undefined;
 			if (!toolId) throw new Error("ElevenLabs created the delegate tool but returned no id");
+			// Keep the new tool before the agent step can fail or be cancelled: the next call must find it, not POST another.
+			await this.#write(home, { version: 1, agentId: stored?.agentId ?? "", agentHash: stored?.agentHash ?? "", toolId, toolHash });
 		}
 
 		const wantedAgent = agentBody(toolId, ttsModel, DEFAULT_VOICES[0].id);

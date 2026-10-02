@@ -17,6 +17,8 @@ const passthrough = ({ children }: { readonly children?: ReactNode }) => createE
 /** Every row renders one dot, so this counts ROW RENDERS — the only way a test
  *  can see `memo(Row)` being defeated. */
 let dotRenders = 0;
+/** How often the stand-in for the kit's granted mark was mounted per session (drawn or not). */
+const markCalls: Record<string, number> = {};
 mock.module("@fraym/ui", () => ({
 	ActivityDot: ({ state }: { readonly state: string }) => {
 		dotRenders += 1;
@@ -34,21 +36,25 @@ mock.module("@fraym/ui", () => ({
 	TooltipTrigger: passthrough,
 	useObservable: (source: { subscribe: (fn: () => void) => () => void; getSnapshot: () => unknown }) =>
 		useSyncExternalStore(source.subscribe, source.getSnapshot),
-	// The kit's granted mark: the pack hands it the row's summary and identity and nothing else.
+	// The kit's granted mark: the pack hands it the row's summary and identity and nothing else, and the mark itself decides
+	// whether to draw (nothing without an unplayed message). `markCalls` counts mounts of the component, drawn or not.
 	VoicemailMark: (props: {
 		readonly sessionId: string;
 		readonly title: string;
 		readonly agent?: string;
-		readonly voicemail?: { readonly needsYou?: true };
+		readonly voicemail?: { readonly unplayed: number; readonly needsYou?: true };
 		readonly className?: string;
-	}) =>
-		createElement("i", {
+	}) => {
+		markCalls[props.sessionId] = (markCalls[props.sessionId] ?? 0) + 1;
+		if (!props.voicemail || props.voicemail.unplayed <= 0) return null;
+		return createElement("i", {
 			"data-voicemail-mark": props.sessionId,
 			"data-title": props.title,
 			"data-agent": props.agent,
 			"data-needs-you": props.voicemail?.needsYou ? "" : undefined,
 			className: props.className,
-		}),
+		});
+	},
 }));
 
 const TriageRail = (await import("../src/index")).default;
@@ -63,6 +69,7 @@ const roots: Root[] = [];
 
 beforeEach(() => {
 	dotRenders = 0;
+	for (const key of Object.keys(markCalls)) delete markCalls[key];
 	// The component folds with the real clock, so the clock is a fixture too:
 	// mid-afternoon keeps "an hour ago" inside today, at any hour CI runs.
 	setSystemTime(new Date(2026, 8, 18, 15, 0, 0));
@@ -303,7 +310,7 @@ describe("the voice message mark", () => {
 		...over,
 	});
 
-	test("a row holding a message draws the kit's mark beside its row button; a bare row is still a bare button", async () => {
+	test("a row holding a message draws the kit's mark beside its row button; every addressable row sits in the same holder", async () => {
 		const { actions } = actionsWith();
 		await mount([mailRow("a"), mailRow("c", { voicemail: { unplayed: 2, newestAt: 1, needsYou: true } }), row("b", "idle", HOUR)], actions);
 
@@ -313,12 +320,41 @@ describe("the voice message mark", () => {
 		expect(mark("a")?.closest(".tr-row")).toBeNull();
 		const holder = mark("a")?.closest(".tr-row-holder");
 		expect(holder?.querySelector(":scope > .tr-row")?.getAttribute("data-session-id")).toBe("a");
-		expect(container.querySelector('[data-session-id="b"]')?.closest(".tr-row-holder")).toBeNull();
+		expect(holder?.hasAttribute("data-mail")).toBe(true);
+		// A bare row has the same holder (so the tree never changes shape when a message arrives) but is not marked as holding one.
+		const bare = container.querySelector('[data-session-id="b"]')?.closest(".tr-row-holder");
+		expect(bare).not.toBeNull();
+		expect(bare?.hasAttribute("data-mail")).toBe(false);
+		// The mark is handed every addressable row, drawn or not: it decides, and must stay up under its open popover.
+		expect(markCalls.b).toBeGreaterThan(0);
 		// It is handed the row's identity, and the plain/needs-you distinction survives the pack.
 		expect(mark("a")?.getAttribute("data-title")).toBe("title a");
 		expect(mark("a")?.getAttribute("data-agent")).toBe("mochi");
 		expect(mark("a")?.hasAttribute("data-needs-you")).toBe(false);
 		expect(mark("c")?.hasAttribute("data-needs-you")).toBe(true);
+	});
+
+	test("a message arriving does not remount the row button", async () => {
+		const { actions } = actionsWith();
+		let snapshot = facts([row("a", "idle", HOUR)]);
+		const listeners = new Set<() => void>();
+		const rail = {
+			subscribe: (fn: () => void) => (listeners.add(fn), () => listeners.delete(fn)),
+			getSnapshot: () => snapshot,
+		};
+		const root = createRoot(container);
+		roots.push(root);
+		await act(async () => root.render(createElement(TriageRail, { rail, actions, capabilities: {} })));
+		const before = container.querySelector('[data-session-id="a"]');
+		expect(before).not.toBeNull();
+
+		snapshot = facts([mailRow("a")]);
+		await act(async () => {
+			for (const fn of listeners) fn();
+		});
+		// The same DOM node: a holder that came and went with the summary would have replaced it (and its focus and hover).
+		expect(container.querySelector('[data-session-id="a"]')).toBe(before);
+		expect(mark("a")).not.toBeNull();
 	});
 
 	test("a drained stack, or a row the host cannot address, draws no mark", async () => {

@@ -678,10 +678,10 @@ var Row = memo(function Row({ item, repo, trailing, actions }) {
 		]
 	});
 	const ref = item.sessionRef;
-	if (!item.voicemail || item.voicemail.unplayed <= 0 || !ref) return row;
+	if (!ref) return row;
 	return /* @__PURE__ */ jsxs("div", {
 		className: "tr-row-holder",
-		"data-mail": "",
+		"data-mail": item.voicemail !== void 0 && item.voicemail.unplayed > 0 ? "" : void 0,
 		children: [row, /* @__PURE__ */ jsx(VoicemailMark, {
 			sessionId: ref.sessionId,
 			voicemail: item.voicemail,

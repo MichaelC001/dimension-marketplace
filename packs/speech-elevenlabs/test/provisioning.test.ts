@@ -154,6 +154,20 @@ describe("provisioning the one shared agent", () => {
 		expect(await readRecord(rig)).toMatchObject({ agentId, toolId });
 	});
 
+	test("a first call that fails after the tool was created keeps that tool: the next call reuses it instead of creating another", async () => {
+		const rig = await makeLiveRig(harness);
+		rig.api.refuseAgentCreate = true;
+		await expect(openConverse(rig)).rejects.toThrow();
+		const tool = firstKey(rig.api.tools);
+		expect(tool).not.toBe("");
+
+		rig.api.refuseAgentCreate = false;
+		await openAndHangUp(rig);
+		expect(rig.api.calls.filter(call => call === "POST /v1/convai/tools")).toHaveLength(1);
+		expect([...rig.api.tools.keys()]).toEqual([tool]);
+		expect(rig.api.agentById(firstKey(rig.api.agents)).conversation_config.agent.prompt.tool_ids).toEqual([tool]);
+	});
+
 	test("a corrupt id file is treated as no file", async () => {
 		const rig = await makeLiveRig(harness);
 		await mkdir(dirname(recordPath(rig)), { recursive: true });

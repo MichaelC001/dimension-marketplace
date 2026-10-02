@@ -1206,7 +1206,7 @@ var Row = memo(function Row({ item, actions, presence, renaming, menuOpen, onOpe
 					})
 				]
 			}),
-			mail ? /* @__PURE__ */ jsx(VoicemailMark, {
+			ref ? /* @__PURE__ */ jsx(VoicemailMark, {
 				sessionId: ref.sessionId,
 				voicemail: item.voicemail,
 				title: item.title,

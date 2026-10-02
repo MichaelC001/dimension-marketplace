@@ -35,6 +35,8 @@ export interface ToolPayload {
 /** A stateful stand-in for the parts of `api.elevenlabs.io/v1/convai` the pack uses. */
 export class FakeAgentsApi {
 	scope: Scope = "full";
+	/** The account refuses to create an agent (a quota, a transient 5xx): the tool step before it still succeeds. */
+	refuseAgentCreate = false;
 	readonly tools = new Map<string, Record<string, unknown>>();
 	readonly agents = new Map<string, Record<string, unknown>>();
 	#next = 1;
@@ -94,6 +96,9 @@ export class FakeAgentsApi {
 			return jsonResponse({ id });
 		}
 		if (method === "POST" && path === "/v1/convai/agents/create") {
+			if (this.refuseAgentCreate) {
+				return this.#error(422, { status: "quota_exceeded", message: "The workspace has reached its agent limit" });
+			}
 			const id = `agent_${this.#next++}`;
 			this.agents.set(id, body ?? {});
 			return jsonResponse({ agent_id: id });

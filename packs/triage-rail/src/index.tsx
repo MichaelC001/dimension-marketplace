@@ -185,11 +185,14 @@ const Row = memo(function Row({
 		</button>
 	);
 	// A voice message the desk holds for this session (doc 91 §8). The mark is its own click target, so it is a SIBLING of
-	// the row button (a button in a button is invalid HTML); only a row that holds one grows the holder.
+	// the row button (a button in a button is invalid HTML). Every addressable row sits in the same holder, whether or not it
+	// holds a message: the kit's mark decides for itself whether to draw, and it must stay mounted under its open popover
+	// after the last message is played; a holder that came and went with the summary would also remount the row button.
 	const ref = item.sessionRef;
-	if (!item.voicemail || item.voicemail.unplayed <= 0 || !ref) return row;
+	if (!ref) return row;
+	const mail = item.voicemail !== undefined && item.voicemail.unplayed > 0;
 	return (
-		<div className="tr-row-holder" data-mail="">
+		<div className="tr-row-holder" data-mail={mail ? "" : undefined}>
 			{row}
 			<VoicemailMark sessionId={ref.sessionId} voicemail={item.voicemail} title={item.title} agent={item.profile} className="tr-mail" />
 		</div>

@@ -398,6 +398,48 @@ describe("phases follow the work", () => {
 
 		expect(log.phases).toEqual(["listening", "working", "speaking", "working", "listening", "speaking", "listening"]);
 	});
+
+	test("one final answers the whole run: a delegation the agent steered in after the first is closed with it", async () => {
+		const rig = await makeLiveRig(harness);
+		const { session, socket, log } = await startCall(rig);
+		socket.receive(frames.tool("a", { task: "fix the retry bug" }));
+		socket.receive(frames.tool("b", { task: "and the timeout" }));
+		await settle();
+		// The engine addresses the newest delegation of the run; the older one is answered by the same final.
+		session.final("b", "Agent Final Message:\n\nBoth done.");
+		socket.receive(frames.audio(pcm(64)));
+		socket.receive(frames.complete());
+		await settle();
+
+		expect(log.phases).toEqual(["listening", "working", "listening", "speaking", "listening"]);
+	});
+});
+
+describe("a long call", () => {
+	test("every audio frame re-arms the speaking timer, and the cancelled ones are released rather than kept for the life of the call", async () => {
+		const created: WeakRef<object>[] = [];
+		const realSetTimeout = globalThis.setTimeout;
+		globalThis.setTimeout = ((...args: Parameters<typeof setTimeout>) => {
+			const timer = realSetTimeout(...args);
+			created.push(new WeakRef(timer));
+			return timer;
+		}) as typeof setTimeout;
+		try {
+			const rig = await makeLiveRig(harness);
+			const { socket } = await startCall(rig);
+			const frameCount = 3_000;
+			for (let i = 0; i < frameCount; i++) socket.receive(frames.audio(pcm(320), i));
+			await settle();
+			Bun.gc(true);
+
+			// Without the release, each of the frames leaves its cancelled timer behind.
+			const retained = created.filter(ref => ref.deref() !== undefined).length;
+			expect(created.length).toBeGreaterThanOrEqual(frameCount);
+			expect(retained).toBeLessThan(50);
+		} finally {
+			globalThis.setTimeout = realSetTimeout;
+		}
+	});
 });
 
 describe("how a call ends", () => {

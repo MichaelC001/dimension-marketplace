@@ -47,8 +47,9 @@ picker. `ELEVENLABS_API_KEY` in the environment works in place of the form.
   safe: the next call recreates it. A key without the Agents permissions still speaks; only live calls report the
   missing permission.
 - **What reaches the agent's mouth.** Progress while your coding agent works goes up as a silent context update
-  and is never spoken; a final result is sent as a user message, which speaks, so it is held until the agent has
-  stopped talking (eight seconds by default) before it is sent anyway.
+  and is never spoken; a final result is sent as a user message, which speaks, so it waits for the agent to stop
+  talking: up to eight seconds by default, stretched to at most 32 seconds while the agent is still speaking, and
+  then it is sent anyway.
 - **The writing guide is advice, not a guarantee.** The engine strips a tag for a fallback voice only when it is 60
   characters or shorter; a longer one would be read aloud, so the guide keeps tags short and few.
 

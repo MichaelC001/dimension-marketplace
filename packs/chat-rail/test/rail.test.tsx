@@ -50,15 +50,17 @@ mock.module("@fraym/ui", () => ({
 		useSyncExternalStore(source.subscribe, source.getSnapshot),
 	useStandardRootFacts: () => ({ sessions: rootRows }),
 	useRailSessionPresence: () => (item: { readonly id: string; readonly active?: boolean }) => presenceFor(item),
-	// The kit's granted mark: the pack hands it the row's summary and identity and nothing else.
+	// The kit's granted mark: the pack hands it the row's summary and identity and nothing else, and the mark itself decides
+	// whether to draw (nothing without an unplayed message). `markCalls` counts mounts of the component, drawn or not.
 	VoicemailMark: (props: {
 		readonly sessionId: string;
 		readonly title: string;
 		readonly agent?: string;
-		readonly voicemail?: { readonly needsYou?: true };
+		readonly voicemail?: { readonly unplayed: number; readonly needsYou?: true };
 		readonly className?: string;
 	}) => {
 		markRenders[props.sessionId] = (markRenders[props.sessionId] ?? 0) + 1;
+		if (!props.voicemail || props.voicemail.unplayed <= 0) return null;
 		return createElement("i", {
 			"data-voicemail-mark": props.sessionId,
 			"data-title": props.title,
@@ -477,6 +479,16 @@ describe("the voice message mark", () => {
 		rootRows = [session("a", "Plan the Lisbon trip", 2, { voicemail: { unplayed: 0, newestAt: 1 } })];
 		await mount(actionsOffering().actions);
 		expect(mark("a")).toBeNull();
+	});
+
+	// The mark owns render-or-not (it must stay up under its open popover once the summary is gone), so the pack has to
+	// hand it EVERY addressable row, including one with no message: gating the mount on the summary unmounts the popover.
+	test("every addressable row is handed to the mark, with or without a message", async () => {
+		rootRows = [session("a", "Has mail", 1, { voicemail: { unplayed: 1, newestAt: 1 } }), session("b", "No mail", 2)];
+		await mount(actionsOffering().actions);
+		expect(markRenders.a).toBeGreaterThan(0);
+		expect(markRenders.b).toBeGreaterThan(0);
+		expect(mark("b")).toBeNull();
 	});
 
 	// `sameRow` memoises a row on what it DRAWS. A message arriving must reach the row (or the mark never appears

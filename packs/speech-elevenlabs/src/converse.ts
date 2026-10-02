@@ -5,7 +5,8 @@
 //
 //   - `progress` rides `contextual_update` with a stable id: the agent never speaks it;
 //   - `final` rides `user_message`, which SPEAKS and, sent mid-speech, cuts the agent off. So it is
-//     held until the agent is idle, for at most `finalHoldMs`, then sent anyway;
+//     held until the agent is idle: `finalHoldMs` (8 s by default), stretched while the agent is audibly
+//     still speaking to at most four holds (32 s), then sent anyway;
 //   - an `interruption` arrives AFTER the agent's audio already burst over the wire (4-7x real time),
 //     so nothing stops by itself: the client must flush on the `interrupt` event.
 import type { ConverseEvent, ConverseMedia, ConversePhase, ConverseSession } from "@dimension/sdk/provider";
@@ -110,7 +111,7 @@ class RelaySession implements ConverseSession {
 	/** When the audio received so far finishes playing, if it plays gaplessly from its arrival (`performance.now()` ms). */
 	#playbackEndsAt = 0;
 
-	/** Delegations asked for and not yet answered by `final`. */
+	/** Delegations asked for and not yet answered. A `final` answers the whole run, so it closes every one. */
 	readonly #delegations = new Set<string>();
 	#userTurn = 0;
 	#assistantTurn = 0;
@@ -161,9 +162,9 @@ class RelaySession implements ConverseSession {
 		this.#send(progressFrame(`Progress: ${text}`));
 	}
 
-	final(delegationId: string, text: string): void {
+	final(_delegationId: string, text: string): void {
 		if (this.#ended) return;
-		this.#delegations.delete(delegationId);
+		this.#delegations.clear();
 		this.#updatePhase();
 		this.#pendingFinals.push(text);
 		if (!this.#busy()) this.#flushFinals();
@@ -291,13 +292,13 @@ class RelaySession implements ConverseSession {
 	}
 
 	#flushFinals(): void {
-		clearTimeout(this.#holdTimer);
+		this.#cancel(this.#holdTimer);
 		this.#holdTimer = undefined;
 		if (this.#ended || this.#pendingFinals.length === 0) return;
 		const text = this.#pendingFinals.splice(0).join("\n\n");
 		this.#send(userMessageFrame(text));
 		this.#replyPending = true;
-		clearTimeout(this.#replyTimer);
+		this.#cancel(this.#replyTimer);
 		this.#replyTimer = this.#later(REPLY_AUDIO_WAIT_MS, () => {
 			this.#replyPending = false;
 			this.#flushWhenIdle();
@@ -313,7 +314,7 @@ class RelaySession implements ConverseSession {
 	#trackPlayback(bytes: number, rate: number): void {
 		const now = performance.now();
 		this.#playbackEndsAt = Math.max(this.#playbackEndsAt, now) + (bytes / 2 / rate) * 1000;
-		clearTimeout(this.#speakingTimer);
+		this.#cancel(this.#speakingTimer);
 		this.#speakingTimer = this.#later(this.#playbackEndsAt + this.#finalHoldMs / 2 - now, () => {
 			this.#stopSpeaking();
 			this.#flushWhenIdle();
@@ -323,7 +324,7 @@ class RelaySession implements ConverseSession {
 	#stopSpeaking(): void {
 		this.#speaking = false;
 		this.#playbackEndsAt = 0;
-		clearTimeout(this.#speakingTimer);
+		this.#cancel(this.#speakingTimer);
 		this.#updatePhase();
 	}
 
@@ -367,6 +368,13 @@ class RelaySession implements ConverseSession {
 		}, ms);
 		this.#timers.add(timer);
 		return timer;
+	}
+
+	/** Stop a timer for good: `clearTimeout` alone leaves it in `#timers` until teardown, one entry per audio frame. */
+	#cancel(timer: Timer | undefined): void {
+		if (timer === undefined) return;
+		clearTimeout(timer);
+		this.#timers.delete(timer);
 	}
 
 	#clearTimers(): void {

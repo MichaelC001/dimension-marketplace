@@ -394,9 +394,10 @@ const Row = memo(function Row({ item, actions, presence, renaming, menuOpen, onO
 				<span className="er-title">{item.title}</span>
 				<span className="er-time">{item.time}</span>
 			</button>
-			{/* The voice message mark is the row's own click target, so it is a SIBLING of the row button (a button
-			    in a button is invalid HTML). The kit's granted component reads the summary and opens the popover. */}
-			{mail ? (
+			{/* The mark is rendered for every addressable row and decides for itself whether to draw: it must stay mounted
+			    while its popover is open after the last message is played (the summary is gone by then), or Stop vanishes
+			    mid-playback. */}
+			{ref ? (
 				<VoicemailMark sessionId={ref.sessionId} voicemail={item.voicemail} title={item.title} agent={item.profile} className="er-mail" />
 			) : null}
 			<button
