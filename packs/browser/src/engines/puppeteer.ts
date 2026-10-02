@@ -188,7 +188,7 @@ async function attachBrowser(target: AttachTarget, options: EngineOptions, relea
 		}
 		const tab = await prepareTab(page, options.viewport, 1, undefined, !created);
 		if (!created) tab.foreign = true;
-		return new PuppeteerDriver({ browser, tabs: [tab], viewport: options.viewport, ownsBrowser: false, release, app: null, ...(target.terminate ? { terminate: target.terminate } : {}) });
+		return new PuppeteerDriver({ browser, tabs: [tab], viewport: options.viewport, ownsBrowser: false, release, app: null, ...(target.terminate ? { terminate: target.terminate } : {}), ...(options.attach ? { attached: true } : {}) });
 	} catch (err) {
 		// Roll back exactly what we created. Disconnecting ends the lease, which
 		// is the only resource an attach engine holds — so the release here is
@@ -511,6 +511,8 @@ interface DialogLog {
 	seq: number;
 	/** How this tab answers its dialogs when its opener asked for one way (`setDialogPolicy`); unset: alert and beforeunload accepted, confirm and prompt dismissed. */
 	policy?: DialogPolicy;
+	/** The page is the person's: dialogs are recorded, and answered only once a policy is set (`setDialogPolicy`). */
+	observeOnly?: boolean;
 }
 
 /** A session that already answers its page's dialogs. */
@@ -520,7 +522,7 @@ interface Guarded {
 }
 
 async function prepareTab(page: Page, viewport: Viewport, scale = 1, early?: Guarded, foreign = false): Promise<Tab> {
-	const { cdp, dialogs } = early ?? (await guardPage(await page.createCDPSession()));
+	const { cdp, dialogs } = early ?? (await guardPage(await page.createCDPSession(), foreign));
 	const tab: Tab = { id: "", documentId: "", page, target: page.target(), cdp, loading: false, navSeq: 0, dialogs, log: [] };
 	// Subscribed before the first read: a commit racing setup is never missed.
 	cdp.on("Page.frameNavigated", ({ frame }) => {
@@ -552,8 +554,9 @@ async function prepareTab(page: Page, viewport: Viewport, scale = 1, early?: Gua
  * target — for a popup, before puppeteer even initialises its page, which an
  * open dialog would block for good.
  */
-async function guardPage(cdp: CDPSession): Promise<Guarded> {
-	const dialogs: DialogLog = { entries: [], seq: 0 };
+async function guardPage(cdp: CDPSession, foreign = false): Promise<Guarded> {
+	// The person's own page is not answered for: a dialog on it waits for them, or for the cell's own `dialogs` policy, as OMP's worker leaves it.
+	const dialogs: DialogLog = { entries: [], seq: 0, ...(foreign ? { observeOnly: true } : {}) };
 	answerDialogs(cdp, dialogs);
 	try {
 		await cdp.send("Page.enable");
@@ -578,6 +581,7 @@ function answerDialogs(cdp: CDPSession, log: DialogLog): void {
 	let open: { type: DialogType; message: string } | undefined;
 	cdp.on("Page.javascriptDialogOpening", (event) => {
 		open = { type: event.type, message: event.message.slice(0, MAX_DIALOG_CHARS) };
+		if (log.observeOnly === true && log.policy === undefined) return;
 		const accept = log.policy === undefined ? event.type === "alert" || event.type === "beforeunload" : log.policy === "accept";
 		void cdp.send("Page.handleJavaScriptDialog", { accept }).catch(() => undefined);
 	});
@@ -607,6 +611,8 @@ interface DriverParts {
 	app: BrowserApp | null;
 	/** `AttachTarget.terminate`: what `kill` ends beyond closing (an attached application the pack started). */
 	terminate?: () => Promise<void>;
+	/** A cell's attach target: every page of this browser is the person's (a popup of one included), never resized, raised or answered for. */
+	attached?: boolean;
 	/** See `EngineOptions.onPageLoaded`. */
 	onPageLoaded?: () => void;
 }
@@ -637,6 +643,7 @@ class PuppeteerDriver implements EngineDriver {
 	#scale = 1;
 	readonly #ownsBrowser: boolean;
 	readonly #terminate: (() => Promise<void>) | undefined;
+	readonly #attached: boolean;
 	readonly #release: () => void;
 	readonly #onPageLoaded: (() => void) | undefined;
 	readonly #onTargetCreated: (target: Target) => void;
@@ -659,6 +666,7 @@ class PuppeteerDriver implements EngineDriver {
 		this.#viewport = parts.viewport;
 		this.#ownsBrowser = parts.ownsBrowser;
 		this.#terminate = parts.terminate;
+		this.#attached = parts.attached === true;
 		this.#release = parts.release;
 		this.#onPageLoaded = parts.onPageLoaded;
 		const first = parts.tabs[0];
@@ -674,7 +682,7 @@ class PuppeteerDriver implements EngineDriver {
 			if (target.type() !== "page" || this.#closed || !this.#owns(target)) return;
 			// A site's popup / target=_blank and a task agent's tab become the
 			// active tab, so the human watches where the work happens.
-			void this.#adopt(target, true).catch(() => undefined);
+			void this.#adopt(target, true, this.#attached).catch(() => undefined);
 		};
 		this.#onDisconnected = (): void => {
 			if (this.#ownsBrowser) {
@@ -1388,7 +1396,7 @@ class PuppeteerDriver implements EngineDriver {
 		if (known) return known;
 		const work = (async (): Promise<Tab | undefined> => {
 			// Guarded before `target.page()`: a popup that opens a dialog as it loads would block puppeteer's own setup of it forever.
-			const early = await guardPage(await target.createCDPSession());
+			const early = await guardPage(await target.createCDPSession(), foreign);
 			const page = await target.page();
 			if (!page || this.#closed || page.isClosed()) {
 				await early.cdp.detach().catch(() => undefined);

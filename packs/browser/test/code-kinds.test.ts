@@ -1,0 +1,419 @@
+/**
+ * WHAT BREAKS IN THE PRODUCT IF THIS GOES RED: `browser.open({ app })` from a cell does not reach the browser it names, or reaches it and leaves it worse than it found it. A cell that asks for the person's own
+ * Chrome (`app.cdp_url`, `app.relay`) gets a page it did not choose, resizes the window the person is looking at, answers a dialog that was theirs, or closes their tab when it is done; a spawned application
+ * is ended when the cell only let go of it, or kept when the cell asked for it to be killed; a cmux surface is not opened, is closed when the person pointed the cell at it, or lets the cell read the daemon's
+ * password. Every file under src/code/kinds has its own test; this is the seam: the REAL runtime and code host, a REAL worker thread running the real tab realm, over a real headless Chrome the test starts
+ * (the person's own Chrome, or the application a cell spawns), the real relay with the shipped extension's own code against that Chrome, and a fake cmux daemon speaking cmux's wire protocol.
+ *
+ * Not shown here, because it needs what this machine does not have: a real Chrome loading the unpacked extension (no infobar, no tab group), and a real cmux on a Mac.
+ */
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import puppeteer from "puppeteer-core";
+import { CodeHost } from "../src/code/host/code-host";
+import { RuntimeCodeBrowsers } from "../src/code/host/runtime-port";
+import { establishKind } from "../src/code/kinds/establish";
+import type { ProcessScanner } from "../src/code/kinds/spawned";
+import { stopOwnedRelays } from "../src/code/kinds/relay/ensure";
+import { alive, chromePath, gone, killTree, startDebugChrome, startPageServer, stopDebugChromes, type DebugChrome, type PageServer } from "./kinds-fixture";
+import { cell, failureOf, isFailure, textOf, valueOf } from "./code-host-fixture";
+import { BROWSER_TEST_TIMEOUT_MS, createRoot, describeWithChrome, newRuntime, teardown, waitUntil } from "./fixture";
+import { type FakeCmux, type FakePage, pageHandler, removeFakeCmuxDirs, startFakeCmux } from "./cmux-fixture";
+import { type FakeExtension, removeRelayBundle, startFakeExtension, startRelayHost, stopRelayHosts } from "./relay-fixture";
+
+/** The variables the kinds read; a test sets what it needs and the owner's own environment never leaks into it. */
+const KIND_VARIABLES = [
+  "DIMENSION_BROWSER_CDP_URL", "DIMENSION_BROWSER_RELAY", "DIMENSION_BROWSER_RELAY_URL", "DIMENSION_BROWSER_CMUX", "DIMENSION_BROWSER_HEADLESS",
+  "CMUX_SOCKET_PATH", "CMUX_SOCKET_PASSWORD", "CMUX_RELAY_ID", "CMUX_RELAY_TOKEN", "CMUX_WORKSPACE_ID", "CMUX_SURFACE_ID", "PUPPETEER_PROXY",
+];
+
+function kindEnv(extra: Record<string, string> = {}): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = { ...process.env };
+  for (const name of KIND_VARIABLES) delete env[name];
+  return { ...env, ...extra };
+}
+
+let pages: PageServer;
+let host: CodeHost | undefined;
+const stoppers: Array<() => Promise<void>> = [];
+const extensions: FakeExtension[] = [];
+const fakes: FakeCmux[] = [];
+const scratch: string[] = [];
+
+beforeAll(async () => {
+  pages = await startPageServer();
+});
+afterAll(async () => {
+  await pages.stop();
+  await removeRelayBundle();
+  await removeFakeCmuxDirs();
+});
+afterEach(async () => {
+  await host?.dispose();
+  host = undefined;
+  for (const extension of extensions.splice(0)) extension.dispose();
+  for (const stop of stoppers.splice(0).reverse()) await stop();
+  for (const fake of fakes.splice(0)) await fake.stop();
+  await stopOwnedRelays();
+  await stopRelayHosts();
+  await stopDebugChromes();
+  await teardown();
+  for (const dir of scratch.splice(0)) await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }).catch(() => undefined);
+}, BROWSER_TEST_TIMEOUT_MS);
+
+interface RigOptions {
+  env?: Record<string, string>;
+  idleMs?: number;
+  /** Replaces how a non-headless kind is made ready (the scanner of running applications, say). Default: the real one. */
+  establish?: typeof establishKind;
+}
+
+/** The pack's runtime and a code host over it, as the server builds them, with the kinds' environment this test chooses. */
+async function start(options: RigOptions = {}): Promise<CodeHost> {
+  const rootDir = await createRoot();
+  host = new CodeHost({
+    browsers: new RuntimeCodeBrowsers(newRuntime(rootDir).codeSeam(), { idleMs: options.idleMs ?? 1_800_000, establish: options.establish ?? establishKind }),
+    env: kindEnv(options.env),
+    artifactsRoot: join(rootDir, "artifacts"),
+  });
+  return host;
+}
+
+/** What the person sees of their own tab: where it is and how big its window is, read over a connection of the test's own. */
+async function personTab(chrome: DebugChrome, url?: string): Promise<{ url: string; width: number; height: number }> {
+  const browser = await puppeteer.connect({ browserURL: chrome.cdpUrl, defaultViewport: null });
+  try {
+    const [page = await browser.newPage()] = await browser.pages();
+    if (url !== undefined) await page.goto(url, { waitUntil: "load" });
+    return { url: page.url(), ...(await page.evaluate(() => ({ width: innerWidth, height: innerHeight }))) };
+  } finally {
+    await browser.disconnect();
+  }
+}
+
+async function pageUrls(chrome: DebugChrome): Promise<string[]> {
+  const list = (await (await fetch(`${chrome.cdpUrl}/json/list`)).json()) as Array<{ type: string; url: string }>;
+  return list.filter(target => target.type === "page").map(target => target.url);
+}
+
+describeWithChrome("connected: a cell drives a Chrome the person started", () => {
+  test("it adopts the page in front as it is, drives it, and leaves the page and the Chrome open when it is done", async () => {
+    const chrome = await startDebugChrome();
+    const before = await personTab(chrome, pages.url("/one"));
+    const cdp = JSON.stringify(chrome.cdpUrl);
+    const code = await start();
+
+    const result = await cell(code, "s1", `
+      const tab = await browser.open({ app: { cdp_url: ${cdp} } });
+      const first = await tab.title();
+      await tab.goto(${JSON.stringify(pages.url("/two"))});
+      const inside = await tab.evaluate(() => [innerWidth, innerHeight]);
+      await tab.screenshot();
+      await browser.close();
+      JSON.stringify([first, inside]);
+    `);
+    if (isFailure(result)) throw new Error(`${result.error.name}: ${result.error.message}`);
+    expect(textOf(result)).toContain(`Opened tab "main" on connected ${chrome.cdpUrl}`);
+    expect(textOf(result)).toContain(`URL: ${pages.url("/one")}`);
+    expect(textOf(result)).toContain("Title: Page one");
+    const [first, inside] = JSON.parse(textOf(result).split("\n").at(-1)!) as [string, [number, number]];
+    expect(first).toBe("Page one");
+    // The person's window is theirs: it is the size it was, not the size a cell's own browser gets.
+    expect(inside).toEqual([before.width, before.height]);
+    expect(result.screenshots).toHaveLength(1);
+
+    // Their tab is still open, on the page the cell left it on, and their Chrome still answers.
+    expect(alive(chrome.pid)).toBe(true);
+    expect(await pageUrls(chrome)).toEqual([pages.url("/two")]);
+    expect(await personTab(chrome)).toEqual({ url: pages.url("/two"), width: before.width, height: before.height });
+    // The pack kept nothing: no browser entry of its own is left to idle-close or to count against the four.
+    expect(await valueOf(code, "s1", "typeof browser.tabs === 'function' && (await browser.tabs()).length")).toBe(0);
+  }, BROWSER_TEST_TIMEOUT_MS);
+
+  test("app.target picks the tab whose URL or title contains it; a target that matches none lists the pages", async () => {
+    const chrome = await startDebugChrome();
+    await personTab(chrome, pages.url("/one"));
+    await fetch(`${chrome.cdpUrl}/json/new?${encodeURIComponent(pages.url("/two"))}`, { method: "PUT" });
+    await waitUntil("the second tab", async () => (await pageUrls(chrome)).length, count => count === 2, 10_000);
+    const cdp = JSON.stringify(chrome.cdpUrl);
+    const code = await start();
+
+    expect(await valueOf(code, "s1", `const tab = await browser.open({ app: { cdp_url: ${cdp}, target: "Page two" } }); await tab.title()`)).toBe("Page two");
+    const refused = await failureOf(code, "s1", `await browser.open({ name: "other", app: { cdp_url: ${cdp}, target: "nothing-like-this" } })`);
+    expect(refused.message).toContain('No page target matched "nothing-like-this". Available pages:');
+    expect(refused.message).toContain(pages.url("/one"));
+    expect(refused.message).toContain(pages.url("/two"));
+  }, BROWSER_TEST_TIMEOUT_MS);
+
+  test("a dialog on the person's page is not answered for the cell: it waits for the cell's own handler, or for the policy the cell asked for", async () => {
+    const chrome = await startDebugChrome();
+    await personTab(chrome, pages.url("/dialog"));
+    const cdp = JSON.stringify(chrome.cdpUrl);
+    const code = await start();
+
+    // No policy: OMP leaves the dialog to the cell, so the cell's handler is the one that answers (a throwaway's engine would have dismissed the confirm first).
+    expect(await valueOf(code, "s1", `
+      const tab = await browser.open({ app: { cdp_url: ${cdp} } });
+      await tab.run(async ({ page }) => {
+        page.once("dialog", dialog => dialog.accept());
+        await page.click("#ask");
+        await page.waitForFunction(() => document.title.startsWith("asked:"));
+      });
+      await tab.title();
+    `)).toBe("asked:true");
+
+    // dialogs: "dismiss" is the policy; from then on the engine answers, as it does for every tab the pack opens.
+    expect(await valueOf(code, "s1", `
+      const tab = await browser.open({ app: { cdp_url: ${cdp} }, dialogs: "dismiss" });
+      await tab.run(async ({ page }) => {
+        await page.evaluate(() => { document.title = "again"; });
+        await page.click("#ask");
+        await page.waitForFunction(() => document.title.startsWith("asked:"));
+      });
+      await tab.title();
+    `)).toBe("asked:false");
+  }, BROWSER_TEST_TIMEOUT_MS);
+
+  test("a browser nobody calls for the idle period is let go of, the cell is told why, and the person's Chrome is untouched", async () => {
+    const chrome = await startDebugChrome();
+    await personTab(chrome, pages.url("/one"));
+    const code = await start({ idleMs: 400 });
+    await valueOf(code, "s1", `await browser.open({ app: { cdp_url: ${JSON.stringify(chrome.cdpUrl)} } }); 0`);
+    await Bun.sleep(1_500); // real time: the idle clock is the thing under test
+    const error = await failureOf(code, "s1", "await browser.tab('main').title()");
+    expect(error.message).toContain("it was a code browser, closed after 0.4 s with no calls");
+    expect(alive(chrome.pid)).toBe(true);
+    expect(await pageUrls(chrome)).toEqual([pages.url("/one")]);
+  }, BROWSER_TEST_TIMEOUT_MS);
+
+  test("a websocket URL is refused with OMP's text, and an endpoint nothing answers on fails naming it when the connection's 5 s wait is up", async () => {
+    const code = await start();
+    expect((await failureOf(code, "s1", 'await browser.open({ app: { cdp_url: "ws://127.0.0.1:9/devtools/browser/x" } })')).message)
+      .toContain("browser app.cdp_url must be the HTTP CDP discovery endpoint (for example http://127.0.0.1:9222), not a ws:// browser websocket URL.");
+    const refused = await failureOf(code, "s1", 'await browser.open({ app: { cdp_url: "http://127.0.0.1:9" } })');
+    expect(refused.message).toContain("http://127.0.0.1:9");
+  }, BROWSER_TEST_TIMEOUT_MS);
+
+  test("DIMENSION_BROWSER_CDP_URL makes a plain open connect", async () => {
+    const chrome = await startDebugChrome();
+    await personTab(chrome, pages.url("/one"));
+    const code = await start({ env: { DIMENSION_BROWSER_CDP_URL: chrome.cdpUrl } });
+    const result = await cell(code, "s1", "await browser.open({ name: 'main' }); 0");
+    if (isFailure(result)) throw new Error(result.error.message);
+    expect(textOf(result)).toContain(`Opened tab "main" on connected ${chrome.cdpUrl}`);
+  }, BROWSER_TEST_TIMEOUT_MS);
+});
+
+/** What a machine with the application not running looks like: every other Chrome on it (a test's, a person's) is out of sight, so a spawned open starts its own. */
+const NOTHING_RUNNING: ProcessScanner = { running: async () => ({ processes: [], unreadable: false }) };
+const spawnOwn: typeof establishKind = (kind, options) => establishKind(kind, { ...options, scanner: NOTHING_RUNNING });
+
+describeWithChrome("spawned: a cell starts an application and drives it", () => {
+  async function appArgs(): Promise<string> {
+    const userDataDir = await mkdtemp(join(tmpdir(), "dimension-code-kinds-"));
+    scratch.push(userDataDir);
+    // headless: a cell on a test must never put a window in front of the person.
+    return JSON.stringify(["--headless=new", `--user-data-dir=${userDataDir}`, "--no-first-run", "--no-default-browser-check", "about:blank"]);
+  }
+
+  /** The pid a spawned open names in its first line. */
+  function pidOf(text: string): number {
+    const match = /\(pid (\d+)\)/.exec(text);
+    if (!match) throw new Error(`no pid in: ${text}`);
+    return Number(match[1]);
+  }
+
+  test("it is started with a debugging port and named with its pid, and closing the tab leaves it running", async () => {
+    if (chromePath === undefined) throw new Error("no Chrome");
+    const args = await appArgs();
+    const code = await start({ establish: spawnOwn });
+    const result = await cell(code, "s1", `
+      const tab = await browser.open({ app: { path: ${JSON.stringify(chromePath)}, args: ${args} }, url: ${JSON.stringify(pages.url("/one"))} });
+      const title = await tab.title();
+      await browser.close();
+      title;
+    `);
+    if (isFailure(result)) throw new Error(`${result.error.name}: ${result.error.message}`);
+    const pid = pidOf(textOf(result));
+    try {
+      expect(textOf(result)).toContain(`Opened tab "main" on spawned ${chromePath} (pid ${pid})`);
+      expect(textOf(result).split("\n").at(-1)).toBe("Page one");
+      // Not the pack's to end when a cell only lets go: it stays open, as in OMP.
+      expect(alive(pid)).toBe(true);
+    } finally {
+      await killTree(pid);
+      expect(await gone(pid)).toBe(true);
+    }
+  }, BROWSER_TEST_TIMEOUT_MS);
+
+  test("close({ kill: true }) ends the application the pack started, and nothing else", async () => {
+    if (chromePath === undefined) throw new Error("no Chrome");
+    const bystander = await startDebugChrome();
+    const args = await appArgs();
+    const code = await start({ establish: spawnOwn });
+    const result = await cell(code, "s1", `
+      await browser.open({ app: { path: ${JSON.stringify(chromePath)}, args: ${args} } });
+      await browser.close({ kill: true });
+      0;
+    `);
+    if (isFailure(result)) throw new Error(`${result.error.name}: ${result.error.message}`);
+    const pid = pidOf(textOf(result));
+    try {
+      expect(pid).not.toBe(bystander.pid);
+      expect(await gone(pid)).toBe(true);
+      expect(alive(bystander.pid)).toBe(true);
+    } finally {
+      await killTree(pid);
+    }
+  }, BROWSER_TEST_TIMEOUT_MS);
+
+  test("an instance already running with a debugging port is adopted, not started twice, and close({ kill: true }) ends it as it does in OMP", async () => {
+    if (chromePath === undefined) throw new Error("no Chrome");
+    const running = await startDebugChrome();
+    await personTab(running, pages.url("/one"));
+    const sees: ProcessScanner = { running: async () => ({ processes: [{ pid: running.pid, args: [chromePath, "--headless=new", `--remote-debugging-port=${running.port}`] }], unreadable: false }) };
+    const code = await start({ establish: (kind, options) => establishKind(kind, { ...options, scanner: sees }) });
+    const result = await cell(code, "s1", `
+      const tab = await browser.open({ app: { path: ${JSON.stringify(chromePath)} } });
+      const title = await tab.title();
+      await browser.close({ kill: true });
+      title;
+    `);
+    if (isFailure(result)) throw new Error(`${result.error.name}: ${result.error.message}`);
+    expect(textOf(result)).toContain(`Opened tab "main" on spawned ${chromePath} (pid ${running.pid})`);
+    expect(textOf(result).split("\n").at(-1)).toBe("Page one");
+    expect(await gone(running.pid)).toBe(true);
+  }, BROWSER_TEST_TIMEOUT_MS);
+
+  test("a relative app.path is made absolute against the host's folder before it is asked for", async () => {
+    const code = await start({ establish: spawnOwn });
+    const refused = await failureOf(code, "s1", 'await browser.open({ app: { path: "no-such-dir/no-such-app" }, timeout: 5 })');
+    expect(refused.message).toContain("no-such-app");
+  }, BROWSER_TEST_TIMEOUT_MS);
+});
+
+describeWithChrome("relay: a cell drives the person's own Chrome through the pack's relay", () => {
+  async function relayRig(options: RigOptions = {}): Promise<{ code: CodeHost; chrome: DebugChrome; extension: FakeExtension; relayUrl: string }> {
+    const chrome = await startDebugChrome();
+    const relay = await startRelayHost();
+    const extension = startFakeExtension(chrome, { port: relay.port });
+    extensions.push(extension);
+    await extension.openByHand(pages.url("/one"));
+    await waitUntil("the extension to dial in", async () => (await fetch(`${relay.url}/json/version`)).status, status => status === 200, 20_000);
+    const code = await start({ ...options, env: { DIMENSION_BROWSER_RELAY_URL: relay.url, ...options.env } });
+    return { code, chrome, extension, relayUrl: relay.url };
+  }
+
+  test("app.relay opens the person's tab through the relay, a cell navigates it, and closing leaves it open with the debugger let go of", async () => {
+    const { code, chrome, extension, relayUrl } = await relayRig();
+    const result = await cell(code, "s1", `
+      const tab = await browser.open({ app: { relay: true } });
+      const first = await tab.title();
+      await tab.goto(${JSON.stringify(pages.url("/two"))});
+      const second = await tab.title();
+      await browser.close();
+      JSON.stringify([first, second]);
+    `);
+    if (isFailure(result)) throw new Error(`${result.error.name}: ${result.error.message}`);
+    expect(textOf(result)).toContain(`Opened tab "main" on relay ${relayUrl}`);
+    expect(JSON.parse(textOf(result).split("\n").at(-1)!)).toEqual(["Page one", "Page two"]);
+    // The person's tab is still there, and the extension no longer holds the debugger on any tab.
+    expect(await pageUrls(chrome)).toContain(pages.url("/two"));
+    await waitUntil("the extension to release the debugger on every tab", () => extension.attachedPages().length, count => count === 0, 15_000);
+  }, BROWSER_TEST_TIMEOUT_MS);
+
+  test("DIMENSION_BROWSER_RELAY=1 makes a plain open use the relay, and =0 refuses app.relay with the reason", async () => {
+    const { code } = await relayRig({ env: { DIMENSION_BROWSER_RELAY: "1" } });
+    const result = await cell(code, "s1", "await browser.open({ name: 'main' }); 0");
+    if (isFailure(result)) throw new Error(result.error.message);
+    expect(textOf(result)).toMatch(/Opened tab "main" on relay http:\/\/127\.0\.0\.1:\d+/);
+
+    await host?.dispose();
+    const off = await start({ env: { DIMENSION_BROWSER_RELAY: "0" } });
+    expect((await failureOf(off, "s2", "await browser.open({ app: { relay: true } })")).message).toContain("DIMENSION_BROWSER_RELAY=0");
+  }, BROWSER_TEST_TIMEOUT_MS);
+
+  test("the relay's browser has its own idle clock too: let go of when nobody calls, the person's tab untouched", async () => {
+    const { code, chrome, extension } = await relayRig({ idleMs: 500 });
+    const tabsBefore = await pageUrls(chrome);
+    await valueOf(code, "s1", "await browser.open({ app: { relay: true } }); 0");
+    await Bun.sleep(1_800); // real time: the idle clock is the thing under test
+    const error = await failureOf(code, "s1", "await browser.tab('main').title()");
+    expect(error.message).toContain("it was a code browser, closed after 0.5 s with no calls");
+    expect(await pageUrls(chrome)).toEqual(tabsBefore);
+    expect(tabsBefore).toContain(pages.url("/one"));
+    await waitUntil("the extension to release the debugger", () => extension.attachedPages().length, count => count === 0, 15_000);
+  }, BROWSER_TEST_TIMEOUT_MS);
+});
+
+const PAGE: FakePage = { url: "about:blank", title: "Fake page", html: "<h1>fake</h1> Fake page text", refs: { "@e1": { role: "button", name: "Go" } } };
+
+async function cmuxRig(daemon: Parameters<typeof startFakeCmux>[0] = {}, env: Record<string, string> = {}): Promise<{ code: CodeHost; fake: FakeCmux; closed: string[] }> {
+  const { handler, closed } = pageHandler({ ...PAGE }, undefined);
+  const fake = await startFakeCmux({ ...daemon, handler });
+  fakes.push(fake);
+  const code = await start({ env: { CMUX_SOCKET_PATH: fake.socketPath, ...env } });
+  return { code, fake, closed };
+}
+
+describeWithChrome("cmux: a cell drives a surface of the terminal app it runs in (a fake daemon speaking cmux's protocol)", () => {
+  test("a plain open inside cmux opens a split, the cell reads and navigates it, and closing the tab closes the split", async () => {
+    const { code, fake, closed } = await cmuxRig();
+    const result = await cell(code, "s1", `
+      const tab = await browser.open({ url: "https://example.test/start" });
+      const seen = await tab.observe();
+      await tab.goto("https://example.test/next");
+      const url = await tab.url();
+      await browser.close();
+      JSON.stringify([seen.url, seen.title, url]);
+    `);
+    if (isFailure(result)) throw new Error(`${result.error.name}: ${result.error.message}`);
+    expect(textOf(result)).toContain('Opened tab "main" on cmux browser (split)');
+    expect(JSON.parse(textOf(result).split("\n").at(-1)!)).toEqual(["https://example.test/start", "Fake page", "https://example.test/next"]);
+    expect(fake.requests.find(request => request.method === "browser.open_split")?.params).toMatchObject({ url: "https://example.test/start", focus: false });
+    expect(fake.requests.find(request => request.method === "browser.navigate")?.params).toMatchObject({ url: "https://example.test/next", surface_id: "surface-uuid-1" });
+    expect(closed).toEqual(["surface-uuid-1"]);
+  }, BROWSER_TEST_TIMEOUT_MS);
+
+  test("a second open of the same name navigates the surface it has; another name opens a second split; browser.tabs() lists both", async () => {
+    const { code, fake, closed } = await cmuxRig();
+    const result = await cell(code, "s1", `
+      await browser.open({ name: "a", url: "https://example.test/a" });
+      await browser.open({ name: "a", url: "https://example.test/again" });
+      await browser.open({ name: "b", url: "https://example.test/b" });
+      JSON.stringify((await browser.tabs()).map(tab => tab.id));
+    `);
+    if (isFailure(result)) throw new Error(`${result.error.name}: ${result.error.message}`);
+    expect(textOf(result)).toContain('Reused tab "a" on cmux browser (split)');
+    expect(JSON.parse(textOf(result).split("\n").at(-1)!)).toEqual(["surface-uuid-1", "surface-uuid-2"]);
+    expect(fake.requests.filter(request => request.method === "browser.open_split")).toHaveLength(2);
+    expect(closed).toEqual([]);
+    // Closing the server closes the splits the pack opened and no others.
+    await host?.dispose();
+    host = undefined;
+    expect(closed.sort()).toEqual(["surface-uuid-1", "surface-uuid-2"]);
+  }, BROWSER_TEST_TIMEOUT_MS);
+
+  test("the daemon's password reaches the daemon and never the cell: the worker's own environment has none, and the cell still drives the surface", async () => {
+    const { code } = await cmuxRig({ password: "s3cret" }, { CMUX_SOCKET_PASSWORD: "s3cret" });
+    expect(await valueOf(code, "s1", `
+      const tab = await browser.open({ url: "https://example.test/x" });
+      JSON.stringify([await tab.title(), process.env.CMUX_SOCKET_PASSWORD ?? "unset", process.env.CMUX_SOCKET_PATH ?? "unset"]);
+    `)).toEqual(["Fake page", "unset", "unset"]);
+  }, BROWSER_TEST_TIMEOUT_MS);
+
+  test("DIMENSION_BROWSER_CMUX=0 turns cmux off even where a socket is named: the open is a headless browser", async () => {
+    const { code, fake } = await cmuxRig({}, { DIMENSION_BROWSER_CMUX: "0" });
+    const result = await cell(code, "s1", `await browser.open({ url: ${JSON.stringify(pages.url("/one"))} }); 0`);
+    if (isFailure(result)) throw new Error(`${result.error.name}: ${result.error.message}`);
+    expect(textOf(result)).toContain('Opened tab "main" on headless browser (hidden)');
+    expect(fake.requests).toEqual([]);
+  }, BROWSER_TEST_TIMEOUT_MS);
+
+  test("a daemon that is not there is a refusal the cell can read, not a crash", async () => {
+    const code = await start({ env: { CMUX_SOCKET_PATH: join(tmpdir(), "dimension-cmux-nobody-home.sock") } });
+    expect((await failureOf(code, "s1", "await browser.open({ url: 'https://example.test/' })")).message).toContain("Failed to connect to cmux socket");
+  }, BROWSER_TEST_TIMEOUT_MS);
+});

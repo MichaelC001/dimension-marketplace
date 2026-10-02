@@ -105,13 +105,14 @@ export interface PageServer {
 	stop(): Promise<void>;
 }
 
-/** Two small pages, so a test can tell which one a browser is on. */
+/** Small pages, so a test can tell which one a browser is on; `/dialog` asks a confirm() when its button is clicked. */
 export async function startPageServer(): Promise<PageServer> {
 	const server: Server = createServer((request, response) => {
 		const path = new URL(request.url ?? "/", "http://x").pathname;
 		response.setHeader("content-type", "text/html");
 		if (path === "/one") response.end("<!doctype html><title>Page one</title><h1 id=hero>one</h1>");
 		else if (path === "/two") response.end("<!doctype html><title>Page two</title><h1 id=hero>two</h1>");
+		else if (path === "/dialog") response.end("<!doctype html><title>Dialog page</title><button id=ask onclick=\"document.title = 'asked:' + confirm('sure?')\">Ask</button>");
 		else {
 			response.statusCode = 404;
 			response.end("not found");
