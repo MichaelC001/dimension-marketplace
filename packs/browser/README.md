@@ -141,6 +141,7 @@ needs a relay that drops them (upstream jev-ultrafast behaviour).
 | `DIMENSION_BROWSER_EXECUTABLE` | Chrome/Chromium executable (overrides the choice below; `browser_state` then reports `app: "custom"`). |
 | `DIMENSION_BROWSER_RELAY_URL` | Relay CDP endpoint (default `http://127.0.0.1:9224`). |
 | `DIMENSION_BROWSER_HEADLESS` | `false` for a visible window. |
+| `DIMENSION_BROWSER_THROWAWAY_IDLE_MS` | How long a throwaway browser may go without a call before it is closed, in milliseconds (default `60000`). |
 | `DIM_BROWSER_PYTHON` | Interpreter for the task agents. |
 
 ### How the browser launches
@@ -276,6 +277,21 @@ time, and is never deleted. Saved passwords (`generatePassword`,
 `useSavedPassword`), a `browser_task` `credential` and `browser_publish` need a
 saved profile and fail `profile_required` on a throwaway browser, before
 anything reaches the page.
+
+**How a throwaway ends.** One server serves every chat on an engine, and the host
+stamps each call with its session (`ai.insodimension/session`) but sends the
+server no word when a session ends, so a forgotten `browser_close` cannot be seen
+as such. A throwaway is therefore closed when (1) `browser_close` says so, (2) it
+has had no call for 60 s (no call queued or running, no task driving it, no View
+reading it; `DIMENSION_BROWSER_THROWAWAY_IDLE_MS` changes the 60 s), or (3) the pool
+(4 browsers) is full and another open, or a `browser_read`, needs the slot: the
+one used longest ago that nothing is happening on is given up. A saved profile, a
+browser with a task running and one a person is watching are never given up. When
+nothing can be, `browser_open` is refused (`too_many_browsers`) naming the
+browsers the asking chat holds, and only those. A chat that returns to a browser
+closed this way is told so (and to `browser_open` again) instead of "unknown
+browser", and `browser_close` on it succeeds. By that point its Chrome process has
+exited and its directory is deleted.
 
 **A profile has a name and a label.** The name is the folder (`[a-z0-9_-]`, 48
 characters) and never changes. The label ("Work Account"), a colour from a fixed
