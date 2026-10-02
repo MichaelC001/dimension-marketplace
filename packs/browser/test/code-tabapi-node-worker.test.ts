@@ -32,8 +32,8 @@ describeWithChrome("the code worker as the product runs it (a Node worker thread
     await removeWorkerBundle();
   }, 30_000);
 
-  async function withWorker<T>(init: Parameters<typeof startNodeWorker>[1], body: (worker: NodeWorker) => Promise<T>): Promise<T> {
-    const worker = await startNodeWorker(tab, init);
+  async function withWorker<T>(init: Parameters<typeof startNodeWorker>[1], body: (worker: NodeWorker) => Promise<T>, options?: Parameters<typeof startNodeWorker>[2]): Promise<T> {
+    const worker = await startNodeWorker(tab, init, options);
     try {
       return await body(worker);
     } finally {
@@ -114,6 +114,26 @@ describeWithChrome("the code worker as the product runs it (a Node worker thread
         expect(done.ok).toBe(true);
         expect(await worker.whenEnded).toBe("error: an object nobody owns");
       }), 30_000);
+  });
+
+  describe("a tab.run that prints without end", () => {
+    // 400 MB of text through a worker whose heap is 160 MB: kept whole it ends the worker (ERR_WORKER_OUT_OF_MEMORY), held as the cell holds its own output it does not. Chrome and its page are untouched.
+    test("is held in bounded memory in the worker: it prints 400 MB, the cell is shown the start and the end, and the worker lives with its variables", () =>
+      withWorker({}, async worker => {
+        await worker.cell("open", `const tab = await browser.open({ name: "main" }); const keep = 41;`);
+        const { result } = await worker.cell("flood", `await tab.run(async () => { for (let i = 0; i < 400; i++) { console.log("line " + i + "\\n" + ("x".repeat(99) + "\\n").repeat(10_000) + "end " + i); if (i % 40 === 0) await new Promise(r => setTimeout(r)); } })`, 60_000);
+        expect(worker.ended()).toBeUndefined();
+        if (!result.ok) throw new Error(`the flood failed the cell: ${result.error.message}`);
+        const text = result.payload.displays.flatMap(part => (part.type === "text" ? [part.text] : [])).join("\n");
+        expect(Buffer.byteLength(text, "utf8")).toBeLessThan(60 * 1024);
+        expect(text).toStartWith("line 0\nxxxx");
+        expect(text).toContain("end 399");
+        expect(text).toMatch(/\[…\d+B elided…\]/);
+        expect(text).toContain("its middle was not kept here");
+        // The worker is the same one: the earlier name is still there, and so is the page.
+        const { result: after } = await worker.cell("after", `console.log("value=" + JSON.stringify([keep + 1, await tab.url()]))`);
+        expect(after.ok).toBe(true);
+      }, { heapMb: 160 }), 120_000);
   });
 
   describe("the realm settings the host sends in init", () => {

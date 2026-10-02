@@ -58,11 +58,12 @@ export interface NodeWorker {
   stop(): Promise<void>;
 }
 
-/** Starts the worker with `init` merged over the minimal one, and waits for `ready`. `tab` is what the cell's `open` is answered with. */
-export async function startNodeWorker(tab: TabHandle, init: Partial<RealmInit> = {}): Promise<NodeWorker> {
+/** Starts the worker with `init` merged over the minimal one, and waits for `ready`. `tab` is what the cell's `open` is answered with. `heapMb` is the worker thread's heap ceiling (default 1,024, the product's). */
+export async function startNodeWorker(tab: TabHandle, init: Partial<RealmInit> = {}, options: { heapMb?: number } = {}): Promise<NodeWorker> {
   const host: ChildProcessByStdio<Writable, Readable, null> = spawn("node", [join(packRoot, "test/fixtures-code/node-host.mjs"), await workerBundle(), JSON.stringify(tab), JSON.stringify(init)], {
     stdio: ["pipe", "pipe", "inherit"],
     windowsHide: true,
+    ...(options.heapMb === undefined ? {} : { env: { ...process.env, NODE_HOST_HEAP_MB: String(options.heapMb) } }),
   });
   const seen: NodeWorkerMessage[] = [];
   const waiting: Array<{ matches: (m: NodeWorkerMessage) => boolean; resolve: (m: NodeWorkerMessage) => void; reject: (e: Error) => void }> = [];

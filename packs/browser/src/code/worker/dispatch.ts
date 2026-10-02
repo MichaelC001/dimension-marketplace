@@ -9,6 +9,7 @@ import type { BridgeDetails, BridgeRequest, BridgeResponse, HostToWorker, ImageB
 import { CellFailure, type CellInvoke, CodeCell, failureOf } from "../cell/cell.js";
 import { MAX_IMAGE_BASE64_CHARS } from "../cell/display.js";
 import { MAX_INLINE_BYTES, OutputSink } from "../cell/output-sink.js";
+import { TAB_TEXT_CUT_NOTE, droppedImagesNote } from "./run-output.js";
 import { ToolAbortError, ToolError, throwIfAborted } from "../errors.js";
 
 export const DEFAULT_TAB_NAME = "main";
@@ -81,8 +82,6 @@ function runTarget(request: BridgeRequest): { code: string } | { fn: string; arg
   return fn !== undefined && fn.length > 0 ? { fn, args: request.args ?? [] } : { code: code ?? "" };
 }
 
-const TAB_TEXT_CUT_NOTE = "[tab output over 50 KiB: its middle was not kept here; print less, or return the value]";
-
 /**
  * The text parts of a tab call, joined with newlines as the facade shows them, within the inline budget. A realm that prints without end (`tab.run` with a loop of `console.log`) is not copied whole into the cell's
  * realm: over the budget the parts go through an {@link OutputSink} (the start, the end, a count of the rest) and the note says the middle is not kept. A text that fits is joined untouched.
@@ -120,7 +119,7 @@ function boundedImages(images: ImageBlock[]): { kept: ImageBlock[]; dropped: num
  */
 function bridgeResponse(result: RunResult, details: BridgeDetails): BridgeResponse {
   const { kept: images, dropped } = boundedImages(result.displays.flatMap(part => (part.type === "image" ? [part] : [])));
-  const note = dropped === 0 ? "" : `[tab output: ${dropped} image${dropped === 1 ? "" : "s"} dropped — one call keeps at most ${MAX_IMAGE_BASE64_CHARS / (1024 * 1024)} MiB of images]`;
+  const note = dropped === 0 ? "" : droppedImagesNote(dropped, MAX_IMAGE_BASE64_CHARS);
   const text = [boundedText(result.displays.flatMap(part => (part.type === "text" ? [part.text] : []))), note].filter(part => part.length > 0).join("\n");
   if (result.screenshots.length > 0) details.screenshots = result.screenshots;
   if (result.returnValue !== undefined) details.value = result.returnValue;

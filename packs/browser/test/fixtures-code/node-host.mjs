@@ -5,7 +5,7 @@
 //
 // The thread is started the way PR #163's host starts it (src/code/host/transport.ts `threadWorkerSpawner`): `new Worker(entry, { env, stdout: true, stderr: true, resourceLimits })` with no `execArgv`, `env` the
 // scrubbed environment (the same keys code-host.ts's `CELL_ENV` keeps, copied here because #163 is a different branch: change both together), the same scrubbed env sent again in `init`, and the heap limit
-// (`DEFAULT_HEAP_MB`, 1,024). The worker's stdout and stderr are held back from the host's and forwarded to its stderr, as there. What this does not copy: the host's own supervision (timeouts, memory polling, recycling).
+// (`DEFAULT_HEAP_MB`, 1,024; NODE_HOST_HEAP_MB makes it smaller for a test that must see a worker run out of heap). The worker's stdout and stderr are held back from the host's and forwarded to its stderr, as there. What this does not copy: the host's own supervision (timeouts, memory polling, recycling).
 import { createInterface } from "node:readline";
 import { Worker } from "node:worker_threads";
 
@@ -17,7 +17,7 @@ const CELL_ENV = /^(?:PATH|Path|PATHEXT|SystemRoot|SYSTEMROOT|windir|WINDIR|ComS
 const env = {};
 for (const [key, value] of Object.entries(process.env)) if (value !== undefined && CELL_ENV.test(key)) env[key] = value;
 
-const worker = new Worker(bundle, { env, stdout: true, stderr: true, resourceLimits: { maxOldGenerationSizeMb: 1_024 } });
+const worker = new Worker(bundle, { env, stdout: true, stderr: true, resourceLimits: { maxOldGenerationSizeMb: Number(process.env.NODE_HOST_HEAP_MB) || 1_024 } });
 worker.stdout?.on("data", chunk => process.stderr.write(chunk));
 worker.stderr?.on("data", chunk => process.stderr.write(chunk));
 worker.on("message", message => {
