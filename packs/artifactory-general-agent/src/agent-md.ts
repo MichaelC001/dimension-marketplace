@@ -156,6 +156,11 @@ export function blankDraft(key: string): AgentDraft {
 	};
 }
 
+/** Whether two reads of the grant-class paths name the same ones. */
+function sameGrants(a: readonly string[], b: readonly string[]): boolean {
+	return a.length === b.length && [...a].sort().join("\n") === [...b].sort().join("\n");
+}
+
 /** Lay a workshop proposal over a draft: only the fields it names change, and
  *  `tools`/`approval`/`memoryScope`/`habitat`/`lineage` never do — whatever the
  *  object carries at runtime. `extra` is overlaid key by key, and not at all
@@ -168,7 +173,14 @@ export function applyProposal(draft: AgentDraft, proposal: AgentProposal): Agent
 		if (value === undefined || field === "extra") continue;
 		patch[field] = Array.isArray(value) ? [...value] : value;
 	}
-	if (proposal.extra !== undefined && grantPathsIn(proposal.extra).length === 0) next.extra = overlayExtra(draft.extra, proposal.extra);
+	if (proposal.extra !== undefined && grantPathsIn(proposal.extra).length === 0) {
+		// The overlay replaces a section the draft writes INLINE wholesale, so a proposal that names
+		// no grant can still drop one it never named (`subagents: { allowed: [..] }` losing `allowed`
+		// leaves the agent free to spawn anything). A merge that moves the grants the file holds is
+		// refused exactly as one that names a grant is.
+		const merged = overlayExtra(draft.extra, proposal.extra);
+		if (sameGrants(grantPathsIn(merged), grantPathsIn(draft.extra))) next.extra = merged;
+	}
 	return next;
 }
 
@@ -176,6 +188,16 @@ export function applyProposal(draft: AgentDraft, proposal: AgentProposal): Agent
 
 /** The top-level keys the profile draws. */
 const DRAWN_TOP: readonly string[] = ["name", "description", "avatar", "voice", "specVersion", "extends"];
+/** The legacy flat spellings that fold into a key the profile draws. A file that uses one keeps
+ *  it in Everything else, and the profile's own control for the key it folds into stands aside:
+ *  the file's flat line is what the engine reads, and writing the nested key beside it is a
+ *  manifest the engine refuses (`both 'tools' and 'capabilities.tools' set`). */
+export const FLAT_ALIASES: Readonly<Record<string, string>> = {
+	tools: "capabilities.tools",
+	thinkingLevel: "engine.thinkingLevel",
+	thinking: "engine.thinkingLevel",
+	model: "engine.model",
+};
 /** The keys the profile draws inside each section it draws. */
 export const DRAWN_CHILDREN: Readonly<Record<string, readonly string[]>> = {
 	identity: ["personality", "prompt"],
@@ -208,7 +230,11 @@ export function isDrawnPath(path: string): boolean {
  *  control is set aside and says so, and the file keeps the author's line. */
 export function heldByExtra(draft: Pick<AgentDraft, "extra">): Set<string> {
 	const held = new Set<string>();
-	for (const path of extraPaths(parseExtra(draft.extra).blocks)) if (isDrawnPath(path) && FIXED_PATHS[path] === undefined) held.add(path);
+	for (const path of extraPaths(parseExtra(draft.extra).blocks)) {
+		if (isDrawnPath(path) && FIXED_PATHS[path] === undefined) held.add(path);
+		const folded = FLAT_ALIASES[path];
+		if (folded !== undefined) held.add(folded);
+	}
 	return held;
 }
 

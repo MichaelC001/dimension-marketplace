@@ -9,6 +9,9 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { parse as parseYaml4 } from "yaml";
 
+// src/guards.ts
+var isRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+
 // src/extra.ts
 var KEY_LINE = /^( *)("[^"]+"|'[^']+'|[A-Za-z0-9_][\w./-]*) *:(?: +(.*))?$/;
 function indentOf(line) {
@@ -108,12 +111,9 @@ function grantPathsOf(sections) {
 function grantPathsIn(text) {
   return grantPathsOf(parseExtra(text).blocks.map((block) => [block.key, block.children === null ? null : block.children.map((child) => child.key)]));
 }
-function isMapping(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 function grantPathsInDocument(document) {
-  if (!isMapping(document)) return [];
-  return grantPathsOf(Object.entries(document).map(([key, value]) => [key, value === null || value === void 0 ? [] : isMapping(value) ? Object.keys(value) : null]));
+  if (!isRecord(document)) return [];
+  return grantPathsOf(Object.entries(document).map(([key, value]) => [key, value === null || value === void 0 ? [] : isRecord(value) ? Object.keys(value) : null]));
 }
 
 // src/agent-md.ts
@@ -126,6 +126,12 @@ var MEMORY_BACKENDS = ["inherit", "engram", "local", "hindsight", "mnemopi", "of
 var MEMORY_SCOPES = ["project", "global"];
 var VOICE_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 var NAME_RE = /^[a-z0-9][a-z0-9-]{1,63}$/;
+var FLAT_ALIASES = {
+  tools: "capabilities.tools",
+  thinkingLevel: "engine.thinkingLevel",
+  thinking: "engine.thinkingLevel",
+  model: "engine.model"
+};
 var DRAWN_CHILDREN = {
   identity: ["personality", "prompt"],
   engine: ["thinkingLevel", "model"],
@@ -7042,7 +7048,7 @@ var SECTION_KEYS = [
   "subagents",
   "routing"
 ];
-var FLAT_ALIASES = [
+var FLAT_ALIASES2 = [
   { flat: ["tools"], section: "capabilities", nested: "tools" },
   { flat: ["autoloadSkills"], section: "capabilities", nested: "autoloadSkills" },
   { flat: ["model"], section: "engine", nested: "model" },
@@ -7346,7 +7352,7 @@ function parseAgentManifest(frontmatter, filePath) {
     }
     sections[key] = validated;
   }
-  for (const alias of FLAT_ALIASES) {
+  for (const alias of FLAT_ALIASES2) {
     const flatKey = alias.flat.find((key) => frontmatter[key] !== void 0);
     const nestedValue = sections[alias.section]?.[alias.nested];
     if (flatKey !== void 0 && nestedValue !== void 0) {
@@ -7357,13 +7363,13 @@ function parseAgentManifest(frontmatter, filePath) {
     }
   }
   const enrichedFrontmatter = { ...frontmatter };
-  for (const alias of FLAT_ALIASES) {
+  for (const alias of FLAT_ALIASES2) {
     const nestedValue = sections[alias.section]?.[alias.nested];
     if (nestedValue === void 0) continue;
     if (nestedValue === "*" && alias.section === "capabilities") continue;
     enrichedFrontmatter[alias.flat[0]] = nestedValue;
   }
-  for (const alias of FLAT_ALIASES) {
+  for (const alias of FLAT_ALIASES2) {
     const flatKey = alias.flat.find((key) => frontmatter[key] !== void 0);
     if (flatKey === void 0) continue;
     sections[alias.section] = { ...sections[alias.section], [alias.nested]: frontmatter[flatKey] };
@@ -7463,6 +7469,9 @@ var GENERAL_AGENTS_DIR = "general-agents";
 var GENERAL_AGENT_FILE = "agent.md";
 function agentHomeWorkspaceId(agent) {
   return `home-${agent}`;
+}
+function derivesAgentHome(agent, workspaceId) {
+  return workspaceId === void 0 || workspaceId === agentHomeWorkspaceId(agent);
 }
 function isAvatarId(id) {
   if (!id.startsWith("plugin:")) return AVATAR_ID_PART.test(id);
@@ -7578,11 +7587,6 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, join, relative } from "node:path";
 import { parse as parseYaml2, stringify as stringifyYaml } from "yaml";
-
-// src/guards.ts
-var isRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
-
-// src/store.ts
 var WRITE_DIR = process.env.PI_CONFIG_DIR?.trim() || ".inso";
 var LEGACY_DIR = ".omp";
 function pathsOf(home) {
@@ -7624,12 +7628,6 @@ async function listDirs(dir) {
   return entries.filter((entry2) => entry2.isDirectory() || entry2.isSymbolicLink()).map((entry2) => entry2.name);
 }
 var RETIRED_PATHS = { "memory.vault": true };
-var FLAT_ALIASES2 = {
-  tools: "capabilities.tools",
-  thinkingLevel: "engine.thinkingLevel",
-  thinking: "engine.thinkingLevel",
-  model: "engine.model"
-};
 function frontmatterOf(content) {
   if (!content.startsWith("---")) return "";
   const end = content.indexOf("\n---", 3);
@@ -7665,7 +7663,7 @@ function heldPaths(decl, raw, blocks) {
     if (reach !== void 0 && reach !== "none" && !(reach === "all" && backend !== "off")) held.add("workspace.reach");
   }
   for (const block of blocks) {
-    const canonical = FLAT_ALIASES2[block.key];
+    const canonical = FLAT_ALIASES[block.key];
     if (canonical !== void 0) held.add(canonical);
   }
   return held;
@@ -7962,7 +7960,7 @@ async function describeHome(roots, name) {
   const paths = pathsOf(roots.home);
   const homeId = agentHomeWorkspaceId(name);
   const canStandAtHome = source !== "workspace";
-  const foreign = listed?.workspaceId !== void 0 && listed.workspaceId !== homeId;
+  const foreign = !derivesAgentHome(name, listed?.workspaceId);
   const hasHome = canStandAtHome && !foreign;
   const folder = canStandAtHome && paths !== null ? join2(paths.homes, homeId) : null;
   const agentFile = listed?.path ?? join2(paths?.userAgents ?? "", name, GENERAL_AGENT_FILE);

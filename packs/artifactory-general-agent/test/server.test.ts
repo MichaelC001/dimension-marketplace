@@ -7,7 +7,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { parse as parseYaml } from "yaml";
-import { type AgentDraft, type AgentProposal, applyProposal, blankDraft, manifestLines } from "../src/agent-md";
+import { type AgentDraft, type AgentProposal, applyProposal, blankDraft, heldByExtra, manifestLines } from "../src/agent-md";
 import type { AgentHome, AgentListing, DraftCheck, ForgeProposed, InstructionsSaved, ListedAgent, PendingProposals, SaveOutcome } from "../src/contracts";
 import { grantPathsIn } from "../src/extra";
 import { createForgeServer } from "../src/server";
@@ -466,6 +466,30 @@ You run the desk.
 		await reforge(opened);
 		expect(`${shown}\n`).toBe(await readFile(userFile("cmo"), "utf8"));
 	});
+
+	// The legacy flat spellings (`tools:`, `model:`, `thinkingLevel:` / `thinking:`) stay in Everything else as the file wrote them,
+	// and the engine reads them. The profile's control for the key each one folds into must stand aside: a pick beside a flat
+	// `tools:` line writes both, and the engine refuses `both 'tools' and 'capabilities.tools' set`.
+	test.each(["thinkingLevel", "thinking"])("a file on the flat keys (%s) holds the controls they fold into, and the flat tool list stays in Everything else", async spelling => {
+		await put(
+			userFile("flat"),
+			`---\nname: flat\ndescription: legacy keys\nspecVersion: 1\ntools: [read]\nmodel: [anthropic/claude-sonnet-4]\n${spelling}: high\ngate:\n  approval: write\n---\nFlat.\n`,
+		);
+		const opened = await listed("flat");
+		expect([...heldByExtra(opened.draft)].sort()).toEqual(["capabilities.tools", "engine.model", "engine.thinkingLevel"]);
+		// The flat line the page's `allowlistOf` reads (page-state.test.ts) travels in Everything else as written.
+		expect(opened.draft.extra).toContain("tools: [read]");
+	});
+
+	test("a file on the nested keys draws those controls: nothing is held and the tool list is the drawn one", async () => {
+		await put(
+			userFile("nested"),
+			"---\nname: nested\ndescription: current keys\nspecVersion: 1\ncapabilities:\n  tools: [read]\nengine:\n  thinkingLevel: high\n  model: [anthropic/claude-sonnet-4]\ngate:\n  approval: write\n---\nNested.\n",
+		);
+		const opened = await listed("nested");
+		expect(opened.draft).toMatchObject({ tools: ["read"], models: ["anthropic/claude-sonnet-4"], thinking: "high" });
+		expect([...heldByExtra(opened.draft)]).toEqual([]);
+	});
 });
 
 const frontmatter = (text: string): Record<string, unknown> => parseYaml(text.split("---")[1] ?? "") as Record<string, unknown>;
@@ -707,6 +731,46 @@ describe("forge_propose", () => {
 		const decl = parseYaml(overlaid.extra) as { title: string; capabilities: Record<string, unknown> };
 		expect(decl.title).toBe("New");
 		expect(decl.capabilities).toEqual({ control: ["agents"], autoloadSkills: ["fallow"] });
+	});
+
+	// The overlay replaces a section the draft writes INLINE wholesale, so a proposal that names no grant can still drop one it
+	// never named: `subagents: { allowed: [..] }` losing `allowed` leaves the agent free to spawn anything.
+	describe("an extra overlay that names no grant still may not move the grants the file holds", () => {
+		const INLINE = "subagents: { allowed: [scout], maxDepth: 2 }";
+		const seed = async (section: string): Promise<ListedAgent> => {
+			await put(userFile("lead"), `---\nname: lead\ndescription: Delegates to scouts\nspecVersion: 1\n${section}\ngate:\n  approval: write\n---\nLead.\n`);
+			return listed("lead");
+		};
+
+		test("`maxDepth` over an inline `subagents:` section changes nothing, and the write keeps `allowed`", async () => {
+			const opened = await seed(INLINE);
+			expect(opened.draft.extra).toBe(INLINE);
+			const proposed = applyProposal(opened.draft, { name: "lead", description: "Still delegates to scouts", extra: "subagents:\n  maxDepth: 3" });
+			expect(proposed.extra).toBe(INLINE);
+			// The rest of the proposal lands.
+			expect(proposed.description).toBe("Still delegates to scouts");
+			expect((await reforge(opened, proposed)).isError).toBeFalsy();
+			expect((await manifestAt(userFile("lead"), "lead")).manifest.subagents).toMatchObject({ allowed: ["scout"], maxDepth: 2 });
+		});
+
+		test("the same proposal over a BLOCK `subagents:` section still merges: `maxDepth` moves, `allowed` stays", async () => {
+			const opened = await seed("subagents:\n  allowed: [scout]\n  maxDepth: 2");
+			const proposed = applyProposal(opened.draft, { name: "lead", extra: "subagents:\n  maxDepth: 3" });
+			expect(parseYaml(proposed.extra)).toEqual({ subagents: { allowed: ["scout"], maxDepth: 3 } });
+			expect((await reforge(opened, proposed)).isError).toBeFalsy();
+			expect((await manifestAt(userFile("lead"), "lead")).manifest.subagents).toMatchObject({ allowed: ["scout"], maxDepth: 3 });
+		});
+
+		test("a harmless new top-level key still overlays beside an inline section, which stays as written", async () => {
+			const opened = await seed(INLINE);
+			const proposed = applyProposal(opened.draft, { name: "lead", extra: "title: Scout lead" });
+			expect(proposed.extra).toContain(INLINE);
+			expect(parseYaml(proposed.extra)).toEqual({ subagents: { allowed: ["scout"], maxDepth: 2 }, title: "Scout lead" });
+			expect((await reforge(opened, proposed)).isError).toBeFalsy();
+			const decl = await manifestAt(userFile("lead"), "lead");
+			expect(decl.title).toBe("Scout lead");
+			expect(decl.manifest.subagents).toMatchObject({ allowed: ["scout"], maxDepth: 2 });
+		});
 	});
 });
 

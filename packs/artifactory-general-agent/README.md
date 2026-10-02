@@ -142,7 +142,7 @@ user; a shadowed file is reported.
 | Tool | Who calls it | What it does |
 |---|---|---|
 | `forge_open { agent?, workspace? }` | the model | Reads the roster, or one agent, in words. `workspace` binds the session's project for later calls. |
-| `forge_propose { name, description?, charter?, vibr?, skills?, memory?, thinking?, personality?, extra? }` | the model | Stores a draft for the page to show as proposed. Writes nothing. Has no `tools`, `mcp`, `approval`, `habitat` or `lineage` field, and refuses an `extra` that names a grant-class key. One undecided proposal per agent per workspace: a newer one replaces it. |
+| `forge_propose { name, description?, charter?, vibr?, voice?, skills?, memory?, thinking?, personality?, extra? }` | the model | Stores a draft for the page to show as proposed. Writes nothing. Has no `tools`, `mcp`, `approval`, `habitat` or `lineage` field, and refuses an `extra` that names a grant-class key. One undecided proposal per agent per workspace: a newer one replaces it. |
 | `pending_proposals { workspace? }` · `dismiss_proposal { id }` | the page | The undecided proposals made in that workspace (or with none); the human decided one. |
 | `list_agents { workspace? }` | the page | All three tiers, each parsed by `@dimension/sdk/general-agent`'s `parseGeneralAgent`, with its tier, path, revision and whether it is editable. |
 | `list_parts { workspace? }` | the page | Skills, MCP servers and tool names read from disk. |

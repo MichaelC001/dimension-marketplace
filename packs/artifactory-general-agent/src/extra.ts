@@ -1,18 +1,19 @@
-// "Everything else": the manifest keys the orrery does not draw, kept as the
+// "Everything else": the manifest keys the profile does not draw, kept as the
 // YAML text the author wrote.
 //
-// The orrery draws a handful of keys; a General Agent's manifest has many more
+// The profile draws a handful of keys; a General Agent's manifest has many more
 // (`capabilities.control`, `engine.profile`, `routing`, `loop`, `title`, …). The
-// Forge never rewrites what it does not draw: those keys travel through the
+// profile never rewrites what it does not draw: those keys travel through the
 // draft as TEXT (`AgentDraft.extra`), are shown and edited as text, and are
 // merged back into the written file line for line. This module never parses
-// YAML — the View shares it and must not bundle a YAML parser — so it
+// YAML — the page shares it and must not bundle a YAML parser — so it
 // understands exactly the two levels a manifest has (section → key) and treats
 // everything deeper as opaque text. The authority on whether the merged file is
 // a valid General Agent is always `parseGeneralAgent`, run by the server before
 // anything is written.
 //
-// SHARED by the View and the server. It imports nothing.
+// SHARED by the page and the server. It imports only the pack's structural guard.
+import { isRecord } from "./guards";
 
 /** One top-level key of a YAML mapping, with the lines it owns. */
 export interface Block {
@@ -124,7 +125,7 @@ export function extraPaths(blocks: readonly Block[]): Set<string> {
 }
 
 /** `lines` moved from `from` spaces of indent to `to` — what lets one section
- *  hold the orrery's keys (written at 2) and the author's (written at any depth). */
+ *  hold the profile's keys (written at 2) and the author's (written at any depth). */
 export function reindent(lines: readonly string[], from: number, to: number): string[] {
 	return lines.map(line => (isBlank(line) ? "" : " ".repeat(to) + line.slice(Math.min(from, indentOf(line)))));
 }
@@ -159,7 +160,7 @@ export function overlayExtra(base: string, patch: string): string {
 
 // ── what a proposal may not carry ───────────────────────────────────────────
 //
-// One rule, two readers. `grantPathsIn` reads TEXT — all the View can do, as it
+// One rule, two readers. `grantPathsIn` reads TEXT — all the page can do, as it
 // bundles no YAML parser — and so sees only the forms `parseExtra` places.
 // `grantPathsInDocument` reads the PARSED document — what the engine reads, in
 // whatever spelling the text used (flow mapping, explicit `? key`, anchored or
@@ -174,7 +175,7 @@ const MIXED_SECTIONS: Readonly<Record<string, true>> = { capabilities: true, sub
  * The manifest keys that GRANT — tool reach, approval, workspace reach, the
  * control lanes, plugins, MCP, delegation, harnesses (doc 58 §3; the flat
  * `tools` and `spawns` are the legacy spellings of two of them). Only a human
- * gesture in the View sets these; the model's `forge_propose` never does.
+ * gesture on the profile sets these; the model's `forge_propose` never does.
  */
 const GRANT_PATHS: Readonly<Record<string, true>> = {
 	"capabilities.tools": true,
@@ -218,12 +219,8 @@ export function grantPathsIn(text: string): string[] {
 	return grantPathsOf(parseExtra(text).blocks.map(block => [block.key, block.children === null ? null : block.children.map(child => child.key)] as const));
 }
 
-function isMapping(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 /** The grant-class paths a PARSED document names — `grantPathsIn`'s verdict read off the keys the text resolves to, not the lines it was written in. */
 export function grantPathsInDocument(document: unknown): string[] {
-	if (!isMapping(document)) return [];
-	return grantPathsOf(Object.entries(document).map(([key, value]) => [key, value === null || value === undefined ? [] : isMapping(value) ? Object.keys(value) : null] as const));
+	if (!isRecord(document)) return [];
+	return grantPathsOf(Object.entries(document).map(([key, value]) => [key, value === null || value === undefined ? [] : isRecord(value) ? Object.keys(value) : null] as const));
 }

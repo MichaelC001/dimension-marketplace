@@ -165,7 +165,8 @@ export type CapabilityKind = "skills" | "plugins" | "mcp" | "tools";
  *  held text in Other settings (`*` or `[]`, a plugins list), else every one. */
 export function allowlistOf(draft: { readonly tools: readonly string[]; readonly skills: readonly string[]; readonly mcp: readonly string[]; readonly extra: string }, kind: CapabilityKind): Allowlist {
 	if (kind !== "plugins" && draft[kind].length > 0) return { kind: "some", names: draft[kind] };
-	const held = extraList(draft.extra, `capabilities.${kind}`);
+	// A legacy flat `tools:` line is the same allowlist (FLAT_ALIASES), held in Other settings.
+	const held = extraList(draft.extra, `capabilities.${kind}`) ?? (kind === "tools" ? extraList(draft.extra, "tools") : null);
 	if (held === null) return { kind: "all" };
 	if (held.length === 0) return { kind: "none" };
 	if (held.length === 1 && held[0] === "*") return { kind: "all" };

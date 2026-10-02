@@ -23,6 +23,7 @@ import {
 	type AgentDraft,
 	DRAWN_CHILDREN,
 	draftProblems,
+	FLAT_ALIASES,
 	type Habitat,
 	HABITATS,
 	MEMORY_BACKENDS,
@@ -114,15 +115,6 @@ async function listDirs(dir: string): Promise<string[]> {
 
 /** Keys the parser accepts and never stores — a retired setting, dropped on rewrite. */
 const RETIRED_PATHS: Readonly<Record<string, true>> = { "memory.vault": true };
-
-/** The legacy flat spellings that fold into a key the profile draws: a file that
- *  uses one keeps it (in Everything else), and the profile's own control stands aside. */
-const FLAT_ALIASES: Readonly<Record<string, string>> = {
-	tools: "capabilities.tools",
-	thinkingLevel: "engine.thinkingLevel",
-	thinking: "engine.thinkingLevel",
-	model: "engine.model",
-};
 
 /** The frontmatter of a file `parseGeneralAgent` already accepted — the SDK's
  *  own split (`---` … `\n---`). */

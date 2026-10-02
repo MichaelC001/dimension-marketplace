@@ -22,7 +22,7 @@
 import { randomBytes } from "node:crypto";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
-import { agentHomeWorkspaceId, GENERAL_AGENT_FILE } from "@dimension/sdk/general-agent";
+import { agentHomeWorkspaceId, derivesAgentHome, GENERAL_AGENT_FILE } from "@dimension/sdk/general-agent";
 import type { AgentHome, AgentInstructions, AgentSource, InstructionFile, InstructionsSaved } from "./contracts.js";
 import { LEGACY_DIR, listAgents, pathsOf, type Roots, revisionOf, SaveRefused, WRITE_DIR } from "./store.js";
 
@@ -110,7 +110,7 @@ export async function describeHome(roots: Roots, name: string): Promise<AgentHom
 	const canStandAtHome = source !== "workspace";
 	// Mirrors the engine's registry (`managed-workspaces.ts`): a project agent has
 	// no derived home, and one that names another `workspace.id` stands there instead.
-	const foreign = listed?.workspaceId !== undefined && listed.workspaceId !== homeId;
+	const foreign = !derivesAgentHome(name, listed?.workspaceId);
 	const hasHome = canStandAtHome && !foreign;
 	const folder = canStandAtHome && paths !== null ? join(paths.homes, homeId) : null;
 	const agentFile = listed?.path ?? join(paths?.userAgents ?? "", name, GENERAL_AGENT_FILE);

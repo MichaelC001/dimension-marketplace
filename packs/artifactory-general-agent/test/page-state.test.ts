@@ -173,6 +173,19 @@ describe("a Machinist proposal, accepted or discarded, never moves a grant", () 
 		expect(saveBlockers(accepted("Not A Name"), FILES, []).length).toBeGreaterThan(0);
 		expect(saveBlockers(accepted("calm-low"), FILES, [])).toEqual([]);
 	});
+
+	// An overlay that would move the grants the file holds is refused (`applyProposal`): the field must not read as proposed.
+	test("an overlay the draft's grants refuse is not marked as proposed, while the rest of the proposal lands and a harmless overlay is marked", () => {
+		const lead = listed("lead", "user", { extra: "subagents: { allowed: [scout], maxDepth: 2 }" });
+		const refused = receiveProposal(openListed(lead), "p1", { name: "lead", description: "New line", extra: "subagents:\n  maxDepth: 3" }, [lead]);
+		expect(refused.draft.extra).toBe(lead.draft.extra);
+		expect(refused.draft.description).toBe("New line");
+		expect(refused.proposal?.fields).toEqual(["description"]);
+
+		const overlaid = receiveProposal(openListed(lead), "p2", { name: "lead", extra: "title: Scout lead" }, [lead]);
+		expect(overlaid.draft.extra).toBe("subagents: { allowed: [scout], maxDepth: 2 }\ntitle: Scout lead");
+		expect(overlaid.proposal?.fields).toEqual(["extra"]);
+	});
 });
 
 describe("which proposals wait, and which land on the open profile", () => {
@@ -258,5 +271,10 @@ describe("a gesture writes a key the profile does not draw", () => {
 		expect(allowlistOf(draft, "tools")).toEqual({ kind: "none" });
 		expect(allowlistOf(draft, "plugins")).toEqual({ kind: "some", names: ["browser"] });
 		expect(allowlistOf(draft, "mcp")).toEqual({ kind: "all" });
+	});
+
+	test("a legacy flat `tools:` line is the allowlist: its list, or none for `[]`, never 'every tool'", () => {
+		expect(allowlistOf({ ...blankDraft("k"), extra: "tools: [read]" }, "tools")).toEqual({ kind: "some", names: ["read"] });
+		expect(allowlistOf({ ...blankDraft("k"), extra: "tools: []" }, "tools")).toEqual({ kind: "none" });
 	});
 });

@@ -1128,6 +1128,9 @@ function PickList({ placeholder, options, onPick, disabled }) {
 	});
 }
 //#endregion
+//#region src/guards.ts
+var isRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+//#endregion
 //#region src/extra.ts
 var KEY_LINE = /^( *)("[^"]+"|'[^']+'|[A-Za-z0-9_][\w./-]*) *:(?: +(.*))?$/;
 function indentOf(line) {
@@ -1227,7 +1230,7 @@ function extraPaths(blocks) {
 	return paths;
 }
 /** `lines` moved from `from` spaces of indent to `to` — what lets one section
-*  hold the orrery's keys (written at 2) and the author's (written at any depth). */
+*  hold the profile's keys (written at 2) and the author's (written at any depth). */
 function reindent(lines, from, to) {
 	return lines.map((line) => isBlank(line) ? "" : " ".repeat(to) + line.slice(Math.min(from, indentOf(line))));
 }
@@ -1282,7 +1285,7 @@ var MIXED_SECTIONS = {
 * The manifest keys that GRANT — tool reach, approval, workspace reach, the
 * control lanes, plugins, MCP, delegation, harnesses (doc 58 §3; the flat
 * `tools` and `spawns` are the legacy spellings of two of them). Only a human
-* gesture in the View sets these; the model's `forge_propose` never does.
+* gesture on the profile sets these; the model's `forge_propose` never does.
 */
 var GRANT_PATHS = {
 	"capabilities.tools": true,
@@ -1466,7 +1469,7 @@ function allowlistOf(draft, kind) {
 		kind: "some",
 		names: draft[kind]
 	};
-	const held = extraList(draft.extra, `capabilities.${kind}`);
+	const held = extraList(draft.extra, `capabilities.${kind}`) ?? (kind === "tools" ? extraList(draft.extra, "tools") : null);
 	if (held === null) return { kind: "all" };
 	if (held.length === 0) return { kind: "none" };
 	if (held.length === 1 && held[0] === "*") return { kind: "all" };
@@ -1475,9 +1478,6 @@ function allowlistOf(draft, kind) {
 		names: held
 	};
 }
-//#endregion
-//#region src/guards.ts
-var isRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 //#endregion
 //#region page/voice.ts
 var SPEECH_PROFILES_KEY = "speech/profiles";
@@ -2554,6 +2554,10 @@ function blankDraft(key) {
 		extra: ""
 	};
 }
+/** Whether two reads of the grant-class paths name the same ones. */
+function sameGrants(a, b) {
+	return a.length === b.length && [...a].sort().join("\n") === [...b].sort().join("\n");
+}
 /** Lay a workshop proposal over a draft: only the fields it names change, and
 *  `tools`/`approval`/`memoryScope`/`habitat`/`lineage` never do — whatever the
 *  object carries at runtime. `extra` is overlaid key by key, and not at all
@@ -2566,7 +2570,10 @@ function applyProposal(draft, proposal) {
 		if (value === void 0 || field === "extra") continue;
 		patch[field] = Array.isArray(value) ? [...value] : value;
 	}
-	if (proposal.extra !== void 0 && grantPathsIn(proposal.extra).length === 0) next.extra = overlayExtra(draft.extra, proposal.extra);
+	if (proposal.extra !== void 0 && grantPathsIn(proposal.extra).length === 0) {
+		const merged = overlayExtra(draft.extra, proposal.extra);
+		if (sameGrants(grantPathsIn(merged), grantPathsIn(draft.extra))) next.extra = merged;
+	}
 	return next;
 }
 /** The top-level keys the profile draws. */
@@ -2578,6 +2585,16 @@ var DRAWN_TOP = [
 	"specVersion",
 	"extends"
 ];
+/** The legacy flat spellings that fold into a key the profile draws. A file that uses one keeps
+*  it in Everything else, and the profile's own control for the key it folds into stands aside:
+*  the file's flat line is what the engine reads, and writing the nested key beside it is a
+*  manifest the engine refuses (`both 'tools' and 'capabilities.tools' set`). */
+var FLAT_ALIASES = {
+	tools: "capabilities.tools",
+	thinkingLevel: "engine.thinkingLevel",
+	thinking: "engine.thinkingLevel",
+	model: "engine.model"
+};
 /** The keys the profile draws inside each section it draws. */
 var DRAWN_CHILDREN = {
 	identity: ["personality", "prompt"],
@@ -2616,7 +2633,11 @@ function isDrawnPath(path) {
 *  control is set aside and says so, and the file keeps the author's line. */
 function heldByExtra(draft) {
 	const held = /* @__PURE__ */ new Set();
-	for (const path of extraPaths(parseExtra(draft.extra).blocks)) if (isDrawnPath(path) && FIXED_PATHS[path] === void 0) held.add(path);
+	for (const path of extraPaths(parseExtra(draft.extra).blocks)) {
+		if (isDrawnPath(path) && FIXED_PATHS[path] === void 0) held.add(path);
+		const folded = FLAT_ALIASES[path];
+		if (folded !== void 0) held.add(folded);
+	}
 	return held;
 }
 /** Why the draft cannot be written yet; empty = it can. */
