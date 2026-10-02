@@ -16,6 +16,7 @@ import { startPages, type Pages } from "./code-host-fixture";
 import { BROWSER_TEST_TIMEOUT_MS, createRoot, describeWithChrome, newRuntime, teardown } from "./fixture";
 
 const clients: Client[] = [];
+const servers: Array<{ close(): Promise<void> }> = [];
 let pages: Pages;
 const saved: Record<string, string | undefined> = {};
 const WATCHDOG = ["DIMENSION_BROWSER_CODE_MEMORY_MB", "DIMENSION_BROWSER_CODE_TOTAL_MB"] as const;
@@ -30,7 +31,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  for (const client of clients.splice(0)) await client.close().catch(() => undefined);
+  for (const server of servers.splice(0)) await server.close();
+  for (const client of clients.splice(0)) await client.close();
   await teardown();
   await pages.close();
   for (const name of WATCHDOG) {
@@ -59,6 +61,7 @@ async function refusalWith(taskTools: boolean): Promise<{ refusal: string; offer
   await mkdir(viewDir, { recursive: true });
   await writeFile(join(viewDir, "index.html"), "<!doctype html><title>view</title>");
   const server = await createBrowserServer({ runtime: newRuntime(root), viewDir, presets: [], taskTools });
+  servers.push(server);
   const client = new Client({ name: "code-password-routes-test", version: "0.0.0" });
   const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
