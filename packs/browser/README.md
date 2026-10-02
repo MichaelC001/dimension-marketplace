@@ -210,20 +210,34 @@ so sites treat it as one:
     reads of the page run in an isolated world, so a hook a site put on
     `document.querySelector` never hears them; no script carries a driver name
     or a file of yours. The patch derives from oh-my-pi's (MIT).
-    Without Runtime events, the page log (`browser_logs`) takes console
-    errors and warnings from the Console domain; an uncaught exception or
-    unhandled rejection is logged for pages served from this machine
-    (localhost, 127.x) only, because reading one on any other site would need
-    a script in its page.
+    Without Runtime events the page log is fed another way: Chrome's own console
+    errors and warnings (a Content-Security-Policy refusal, a request blocked
+    by CORS, and the rest of what Chrome prints itself) come from the Log
+    domain, which puppeteer keeps on and a page cannot detect; what the page
+    prints with `console.*` comes from the Console domain. Both reach the model
+    through `browser_state` (`logs`) and the `newErrors` count in a
+    `browser_act` result. The one thing lost is an uncaught exception or
+    unhandled rejection on a page not served from this machine: it is logged
+    for localhost and 127.x pages only (a listener the pack installs there),
+    because hearing one anywhere else would need a script in the public page.
+  - While a `browser_task` agent drives the browser, the two driver protections
+    above (no `Runtime.enable`, reads in an isolated world) do not bind it: the
+    task agents attach their own CDP clients, not the patched library, so
+    what they send is what the page can see until the task ends. The launch
+    switches, the screen and the GPU mask stay.
   - Puppeteer's default popup-blocker, IPC-flooding and pre-commit-input
     switches and its `--disable-features` list are left out, so a page sees the
     defaults of a Chrome a person runs.
   - On a machine with no GPU, WebGL reports a common integrated GPU of the
-    platform instead of SwiftShader, in the page, in each cross-origin frame and
-    in each dedicated and shared worker (sent to each before it runs). This is
-    the only page script besides the loopback error reporter; it exists only
-    when the binary was seen rendering in software. Shader precision formats,
-    limits and extension lists stay SwiftShader's.
+    platform instead of SwiftShader, in the page, in each same-origin and
+    cross-origin frame and in each dedicated and shared worker (sent to each
+    before it runs), with the one float shader precision a real GPU reports,
+    and the replaced functions read as native, named code to a frame's own
+    `Function.prototype.toString` as well. This is the only page script
+    besides the loopback error reporter; it exists only when the binary was
+    seen rendering in software. Texture and uniform limits, the extension
+    list and the rendered image's hash stay SwiftShader's, and so does an
+    error thrown through a replaced function (it names a wrapper frame).
 
   Nothing else is changed: no plugin lists, fonts, audio or hardware numbers
   are invented, and a Chromium build without H.264 is not made to claim it.
@@ -241,8 +255,9 @@ It avoids the automation tells above (an agent browser's launch, driver and
 screen) so the first-line check of a public page does not turn it away, and
 nothing more: a site that still refuses it (a bot check, a CAPTCHA, a login
 wall) is reported `blocked`; the reader never retries, never solves a check and
-never works around a refusal. Whether the reader should avoid those tells at all
-is the owner's to confirm (doc 77 §12).
+never works around a refusal. That the reader avoids those tells at all is
+covered by the owner's parity ruling of 2026-10-02 (doc 77 §12 decision 2, a
+reading the owner may reverse).
 
 ## Tools
 
