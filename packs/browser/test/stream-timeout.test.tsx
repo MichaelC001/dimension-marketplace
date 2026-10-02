@@ -128,6 +128,11 @@ class Loopback {
 		for (const resolve of this.#heldStreams.splice(0)) resolve(this.#answer());
 	}
 
+	/** Answer every input POST that is still waiting with `ok`, however late: the client has usually given up on them by now. */
+	answerHeldInputs(): void {
+		for (const resolve of this.#heldInputs.splice(0)) resolve(Response.json({ ok: true }));
+	}
+
 	/** The pack ends every stream it is serving (its browser closed, or the token was dropped). */
 	endStreams(): void {
 		for (const controller of this.#open.splice(0)) controller.close();
@@ -478,8 +483,8 @@ describe("a loopback connect that is refused", () => {
 });
 
 describe("the human's input", () => {
-	test("a POST the pack never answers is cut at its deadline, says so, closes its socket, and restarts the stream", async () => {
-		const { loopback, probe, clock, start, advance, still, send } = await scenario();
+	test("a POST the pack never answers is cut at its deadline, says so and closes its socket, but leaves the healthy stream alone; an answer that arrives after the abort changes nothing", async () => {
+		const { loopback, grants, probe, clock, start, advance, still, send } = await scenario();
 		loopback.mode = "answer";
 		await start();
 		await until("the stream is live", () => probe.now.connection === "live" && probe.now.picture !== null);
@@ -492,13 +497,45 @@ describe("the human's input", () => {
 		// The pack keeps repeating its state, so the POST's deadline is the only one in play.
 		await still(INPUT_TIMEOUT_MS - HEARTBEAT_MS);
 		await advance(HEARTBEAT_MS);
-		expect(await outcome).toContain("no answer within 8 s");
+		expect(await outcome).toBe("Input could not be sent (no answer within 8 s).");
+		// Fails if the abort only forgets the request: its socket would stay open.
 		await until("the pack sees the POST's socket close", () => loopback.inputsGone === 1);
-		// A page that took no input may have a dead stream too: a fresh connect, not the old one.
-		await until("the stream reconnects", () => loopback.streamRequests === 2);
-		await until("only the new stream's silence watch is armed", () => clock.pending.length === 1 && clock.pending[0] === STREAM_SILENCE_MS);
+
+		// Fails if a slow page takes a healthy stream down with it (a fresh connect, a host call, a flash of 'Reconnecting'): the stream was never the problem.
+		await quiet();
 		expect(probe.now.connection).toBe("live");
+		expect(loopback.streamRequests).toBe(1);
+		expect(loopback.streamsGone).toBe(0);
+		expect(grants.calls).toBe(1);
+		expect(clock.pending).toEqual([STREAM_SILENCE_MS]);
+
+		// The batch may still be applied: the pack answers 200 to a request the View has abandoned. Nothing in the View moves.
+		const renders = probe.renders;
+		loopback.answerHeldInputs();
+		await quiet();
+		expect(probe.renders).toBe(renders);
+		expect(probe.now.connection).toBe("live");
+		expect(probe.now.error).toBeNull();
+		expect(loopback.streamRequests).toBe(1);
+		expect(clock.pending).toEqual([STREAM_SILENCE_MS]);
 	}, 20_000);
+
+	test("a POST that fails outright (the socket refused or reset, not a silence) is reported with the fetch's own words and restarts the stream, which may be as dead as that socket", async () => {
+		const { loopback, probe, start, send } = await scenario();
+		loopback.mode = "answer";
+		await start();
+		await until("the stream is live", () => probe.now.connection === "live");
+
+		const realFetch = globalThis.fetch;
+		globalThis.fetch = ((target: Parameters<typeof fetch>[0], init?: RequestInit) => (init?.method === "POST" ? Promise.reject(new TypeError("connection reset")) : realFetch(target, init))) as typeof fetch;
+		try {
+			expect(await (await send()).outcome).toBe("Input could not be sent (connection reset).");
+			// Fails if a failed POST no longer asks for a fresh stream.
+			await until("the stream reconnects", () => loopback.streamRequests === 2);
+		} finally {
+			globalThis.fetch = realFetch;
+		}
+	});
 
 	test("a POST the pack answers in time leaves no timer behind and does not touch the stream", async () => {
 		const { loopback, probe, clock, start, send } = await scenario();

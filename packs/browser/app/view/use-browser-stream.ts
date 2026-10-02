@@ -28,7 +28,7 @@ const BACKOFF_START_MS = 500;
 const BACKOFF_MAX_MS = 8000;
 /** How long the stream's connect may go unanswered before it counts as a failure. `fetch` settles on the response headers, which the pack sends with its first message (the browser's state, read at once). */
 export const CONNECT_TIMEOUT_MS = 5000;
-/** How long one input POST may go unanswered. Longer than the pack's own bound on a batch (INPUT_BOUND_MS, 5 s, in src/runtime.ts: its wait for its turn plus its time on the page), so a page that will not take input is reported by the pack's reason, not by this clock. */
+/** How long one input POST may go unanswered. The pack answers a batch once the page has taken it, however long that is (a batch waits its turn behind another View's, then applies), so past this the View reports it and closes the POST's socket, but the batch may still be applied late. The stream is not restarted for it: nothing says the stream is unhealthy. */
 export const INPUT_TIMEOUT_MS = 8000;
 /** How long an open stream may carry nothing at all (no picture, no state, no heartbeat) before it counts as dead. The pack repeats the state after 2 s of quiet (HEARTBEAT_MS in src/stream.ts), so a live stream is never this silent: it has stalled, it is not a still page. View and pack ship in one version. */
 export const STREAM_SILENCE_MS = 6000;
@@ -320,7 +320,9 @@ export function useBrowserStream(client: BrowserClient, browserId: string | null
 			try {
 				response = await fetch(`${grant.origin}/i/${grant.token}`, { method: "POST", headers: { "content-type": "text/plain;charset=UTF-8" }, body: JSON.stringify(events), signal: request.signal });
 			} catch (cause) {
-				restartRef.current();
+				// A deadline the View set is a page that was slow to answer, not a stream that is broken: the batch may still be applied, and the stream, which is held to its own silence watch, is left alone.
+				// Any other failure (the socket refused or reset) may be a dead connection, so the stream is asked for afresh.
+				if (!deadline.expired) restartRef.current();
 				throw new Error(`Input could not be sent (${deadline.expired ? silence(INPUT_TIMEOUT_MS) : failureText(cause)}).`);
 			}
 			if (response.ok) return;
