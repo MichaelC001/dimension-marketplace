@@ -255,10 +255,17 @@ async function quiet(): Promise<void> {
 	for (let tick = 0; tick < 5; tick += 1) await settle();
 }
 
-/** The hook mounted with no browser yet, its timers virtual, a fake canvas given; `start()` binds it to browser "b1". */
-async function scenario() {
+/** An origin on loopback that nothing listens on: a connect to it is refused at once. */
+async function closedOrigin(): Promise<string> {
+	const closed = new Loopback();
+	await closed.close();
+	return closed.origin;
+}
+
+/** The hook mounted with no browser yet, its timers virtual, a fake canvas given; `start()` binds it to browser "b1". `origin` is where the host says the listener is (default: the test's own). */
+async function scenario(options: { origin?: string } = {}) {
 	const loopback = listener();
-	const grants = new Grants(loopback.origin);
+	const grants = new Grants(options.origin ?? loopback.origin);
 	const probe = new Probe();
 	await mount(<Harness client={grants as unknown as BrowserClient} probe={probe} />);
 	const clock = new VirtualClock();
@@ -407,6 +414,25 @@ describe("a loopback connect that is accepted and never answered", () => {
 		expect(loopback.streamRequests).toBe(1);
 		expect(grants.calls).toBe(1);
 		expect(clock.pending).toEqual([500]);
+	});
+});
+
+describe("a loopback connect that is refused", () => {
+	test("is told with the fetch's own failure, at once, never as a silence; its timer is gone and it retries on the same ladder", async () => {
+		const { probe, grants, clock, start, advance } = await scenario({ origin: await closedOrigin() });
+		await start();
+		// Nothing advances the virtual clock: a refusal is reported the moment the socket says so, not at the deadline.
+		await until("the View says it is reconnecting", () => probe.now.connection === "reconnecting");
+		// Fails if every connect failure is worded as the deadline's silence (a host that blocks loopback, or a pack that is down, would read as "no answer").
+		expect(probe.now.error).not.toContain("no answer within");
+		expect(probe.now.error).toMatch(/^The live picture could not be reached \(\S[^)]*\)\. A host that blocks http:\/\/127\.0\.0\.1 does this\.$/);
+		// The failure cleared the connect's deadline; only the backoff is armed.
+		expect(clock.pending).toEqual([BACKOFF_LADDER[0] as number]);
+
+		await advance(BACKOFF_LADDER[0] as number);
+		await until("the second attempt asks the host again", () => grants.calls === 2);
+		await until("the second refusal waits the next rung", () => clock.pending.length === 1 && clock.pending[0] === BACKOFF_LADDER[1]);
+		expect(probe.now.error).not.toContain("no answer within");
 	});
 });
 
