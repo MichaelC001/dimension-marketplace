@@ -306,7 +306,7 @@ which a Traction session reads on demand.
 
 View-only: `browser_stream` (where the View reads its live pictures and state and sends the human's
 mouse and keys: one call to bind a browser, none per picture), `browser_frame` (a PNG capture
-retained for annotation), `browser_annotate` (the page under the marked regions: address, title, the scroll the picture was taken at, elements; no pixels), `browser_annotation_file` (keeps the kit's detail document and answers its path; a Private browser's is deleted with it), `browser_viewport`.
+retained for annotation), `browser_annotate` (the page under the marked regions: address, title, the scroll the picture was taken at, elements; no pixels), `browser_annotation_file` (keeps the kit's detail document and answers its path; a Private browser's is deleted with it), `browser_viewport`, `browser_profile_add` (the profile menu's Add profile: a name, a colour, an avatar), `browser_control` (Take over and Hand back), `browser_switch` (the person switching profile: opens the next browser like `browser_open` and, only with the pool full, closes the one they leave first when leaving would close it), `browser_leave` (the person switching profile: closes the browser they leave unless something depends on it). None of the View-only tools is offered to a model.
 
 **The View's direct channel.** The live picture and the human's input do not ride the tool-call
 lane. The server opens one listener on `127.0.0.1` (random port, only while a View holds a token) that
@@ -371,6 +371,20 @@ time, and is never deleted. Saved passwords (`generatePassword`,
 `useSavedPassword`), a `browser_task` `credential` and `browser_publish` need a
 saved profile and fail `profile_required` on a throwaway browser, before
 anything reaches the page.
+
+Saved passwords are **encrypted at rest**: AES-256-GCM, each bound to its origin, in the profile's
+`credentials.json`, under one 32-byte key in `<root>/credentials.key` (mode 0600; on Windows an ACL of the
+one account), never inside a profile folder, so a copy, backup or sync of a profile carries nothing
+readable. The pack has no OS credential store accessor, which is why the key is a file. A store that does
+not authenticate (altered, or under another key) is refused with `credentials_unreadable` and left as it
+was; a key file that cannot be read is refused and never replaced. A plain-text store from an earlier
+version is encrypted in place the first time it is read. A sealed value found inside such a store (a server
+from before encryption signs up by copying everything it read into a version-1 file, ciphertext included) is
+opened, never taken for the password. The key is made once, staged in the root, fsynced and restricted to
+the user, and only then given its name (a hard link, so two servers on one root end with one key); it is read
+back before anything is sealed under it, and it is never made while a profile already holds a sealed store
+(that key was lost, and a new one would orphan every password). The sealed store is written as the pack writes
+every file: staged, fsynced, renamed over the old one.
 
 **How a throwaway ends.** One server serves every chat on an engine, and the host
 stamps each call with its session (`ai.insodimension/session`) but sends the
@@ -441,6 +455,50 @@ chat that already holds a profile gets its own browser back; anyone else is refu
 `profile_held`, told whether the human or another chat has it, whether that profile is
 open or still starting. There is no consent step yet: until one exists any agent can
 open any saved profile, `default` included.
+
+**The profile menu (the View).** The toolbar's chip is the browser's profile: its avatar (the emoji
+the person chose, else the label's first letter, on the profile's colour) and its label; Private for a
+throwaway browser, Your Chrome for the relay. Its face rides the browser's own state (`look`), so drawing it
+costs no call. Opening the menu reads `browser_profiles` and lists the others, Default first and then by
+label, each with where it is signed in or who has it: a profile open here (yours, or your agent's, or one
+an agent task is running on) is one click away; a profile another chat holds, or you hold in another chat's
+View, is shown dimmed and cannot be opened from here (the one-holder lock); its reason is still read out to a
+keyboard, because the row stays on the arrow keys. A click calls `browser_switch` for that profile (the browser on screen is named as the one being left) and the View
+shows the result, then calls `browser_leave` for the browser it left. The new browser is opened first, so a profile that cannot
+be opened never costs the person the one they are in; only with the pool full does the runtime close the browser being left
+first, when leaving would close it, so the switch takes that slot and never an agent's throwaway. A browser that stays when left
+frees nothing, and its wheel is left alone until the switch has opened the next one. **The runtime closes the browser that was left**
+(`closed: true`; a chat that still holds its id is told why, as for any browser the runtime closes) unless
+something depends on it: an agent opened it, a call or a task is running on it, a post awaits confirmation on
+it, the person had taken it over (the wheel goes back to the agent either way), or it is their own Chrome.
+Those stay open and are rows of their own in the menu — a saved profile's row, or "Private browser" / "Your
+Chrome" for the ones that are not profiles — saying what each is doing, one click to go back to it and a close
+button at the end of the row. That close asks first when it would discard a post waiting for confirmation or stop
+a running task (a question under the row, Keep answered by Enter, Escape backs out); any other close is one press. Nothing accumulates: a person who switches through four profiles holds one browser,
+so the pool of four is never theirs alone. Opening a browser at the pool's cap is still decided by the pool's
+own rule (a chat's idle throwaway is given up first; a saved profile never is).
+**Add profile** is inside the menu: a name, one of the eight colours, an optional emoji. The name is shown
+as typed (any script, up to 48 characters) and the folder is derived from it; a blank name, one that could
+be a path (`\ / : * ? " < > |`, a leading dot), `relay` or a Windows device name, or one that matches
+another profile's label or name in any case, is refused with a sentence and nothing is created
+(`browser_profile_add` answers `bad_profile_name`). A new profile is opened at once. A throwaway browser an
+agent opened is never listed.
+
+**Taking over.** Whoever opened a browser, the person in the View can take the wheel: `browser_control`
+`take` (the pill "Your agent is working here · Take over", or the profile menu). While they hold it, an
+agent's `browser_act`, `browser_task`, publish and `browser_close` on it are refused `human_driving`
+(reads — `browser_snapshot`, `browser_state` — still work, and say `takenOver: true`), an agent batch
+already running stops before its next step, and `browser_profiles` reports the profile as held by the
+human. `return` hands it back. It is refused while a task runs (`task_running`), while a post awaits
+confirmation (`publish_pending`) and while a post is being filled or a task is starting: taking the wheel must
+never navigate away from, or lose, the page a post is parked on. The menu offers Take over only while an agent
+has acted in the browser in the last few seconds (the page's pill is the same fact, and the two are never on
+screen together), or Hand back while the person holds it. It lasts until handed back, the browser closes, the
+person leaves the browser for another profile (`browser_leave`: the wheel goes back to the agent at once), or the
+View goes (it unmounts or the chat's window closes: the View sends `return`, best effort). A View that is only
+hidden (minimised, covered, another tab in front) closes its stream and keeps the wheel: the person is coming
+back to the form they left. A View that vanished without handing it back (the app was killed) loses it after
+30 minutes with no View joined to the browser's stream.
 
 ## Reading public pages
 

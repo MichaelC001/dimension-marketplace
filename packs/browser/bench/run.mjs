@@ -5,7 +5,8 @@
 // lives in a directory it makes under .scratch/browser-bench/ and deletes when the run ends; it never uses
 // ~/.inso or ~/.inso-dev.
 import { mkdir, writeFile } from "node:fs/promises";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -411,22 +412,22 @@ if (browserId) {
 }
 
 /**
- * The practice sites score the fixture password, so the bench profile holds it
- * as the browser's saved credential for the practice origin before the browser
- * opens (the profile lock is not held yet). The same root the server was given
- * (`browserRoot`), and the file the pack uses: src/credentials.ts credentials.json.
+ * The practice sites score the fixture password, so the bench profile holds it as the browser's saved credential for the practice origin
+ * before the browser opens (the profile lock is not held yet). Written by the pack's own credentials module (bench/seed-credential.ts,
+ * run with bun), never by hand: the store is sealed under the root's key, and what the profile already holds (this may be a --root used
+ * before) is kept as it is.
  */
 function seedCredential(profile) {
-  const dir = join(browserRoot, "profiles", profile);
-  const file = join(dir, "credentials.json");
-  let origins = {};
-  try {
-    origins = JSON.parse(readFileSync(file, "utf8")).origins ?? {};
-  } catch {
-    /* none saved yet */
+  const bun = typeof Bun === "undefined" ? "bun" : process.execPath;
+  const seeded = spawnSync(bun, [fileURLToPath(new URL("./seed-credential.ts", import.meta.url))], {
+    input: JSON.stringify({ root: browserRoot, profile, origin: new URL(base).origin, password: a.password }),
+    encoding: "utf8",
+    windowsHide: true,
+  });
+  if (seeded.status !== 0) {
+    console.error(`[bench] could not save the practice password through the pack's credentials module (needs bun on PATH): ${seeded.error?.message ?? seeded.stderr}`);
+    process.exit(2);
   }
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  writeFileSync(file, `${JSON.stringify({ version: 1, origins: { ...origins, [new URL(base).origin]: a.password } })}\n`, { mode: 0o600 });
 }
 
 await client.close();

@@ -12,9 +12,9 @@ import net from "node:net";
 import { afterEach, describe, expect, test } from "bun:test";
 import type { BrowserState } from "../src/contracts";
 import type { LiveFrame } from "../src/engines/types";
-import { LiveChannel, type LiveChannelOptions, type LiveSource } from "../src/stream";
+import { HEARTBEAT_MS, LiveChannel, type LiveChannelOptions, type LiveSource } from "../src/stream";
 import { BrowserRuntimeError } from "../src/store";
-import { KIND_PICTURE, KIND_STATE, type Message, Reader } from "../src/wire";
+import { KIND_PICTURE, KIND_PING, KIND_STATE, type Message, PING_QUERY, Reader } from "../src/wire";
 
 const VIEWPORT = { width: 800, height: 600 };
 
@@ -32,6 +32,8 @@ class FakeSource implements LiveSource {
 	readonly viewers = new Map<string, number>();
 	watchCalls = 0;
 	stateReads = 0;
+	/** While set, a state read never answers, as a renderer stuck in a navigation would leave it. */
+	hangReads = false;
 
 	open(browserId: string): void {
 		this.watchers.set(browserId, new Set());
@@ -68,6 +70,7 @@ class FakeSource implements LiveSource {
 	async liveState(browserId: string): Promise<BrowserState> {
 		this.require(browserId);
 		this.stateReads += 1;
+		if (this.hangReads) await Promise.withResolvers<never>().promise;
 		return structuredClone(this.states.get(browserId) as BrowserState);
 	}
 	async input(browserId: string, events: unknown): Promise<void> {
@@ -85,10 +88,32 @@ class FakeSource implements LiveSource {
 const channels: LiveChannel[] = [];
 const opened: Array<{ close(): void }> = [];
 
+const restores: Array<() => void> = [];
+
 afterEach(async () => {
+	for (const restore of restores.splice(0)) restore();
 	for (const stream of opened.splice(0)) stream.close();
 	for (const channel of channels.splice(0)) await channel.close();
 });
+
+/**
+ * The pack measures how long it has written nothing to a View with `performance.now()`. A test that wants that cadence exactly freezes the clock and
+ * moves it itself, so "not yet" and "now" are asserted without racing a real timer. The sockets and the pack's own tick stay real.
+ */
+function frozenClock(): { advance(ms: number): void } {
+	const real = performance.now;
+	// A whole millisecond: the clock then moves in whole milliseconds and "exactly the heartbeat" is exact, not 1999.9999999.
+	let now = Math.floor(real.call(performance));
+	performance.now = () => now;
+	restores.push(() => {
+		performance.now = real;
+	});
+	return {
+		advance: (ms) => {
+			now += ms;
+		},
+	};
+}
 
 function channelFor(source: LiveSource, options: LiveChannelOptions = {}): LiveChannel {
 	const channel = new LiveChannel(source, { stateIntervalMs: 20, ...options });
@@ -100,6 +125,8 @@ interface OpenStream {
 	status: number;
 	headers: http.IncomingHttpHeaders;
 	messages: Message[];
+	/** Every byte received so far, whatever it held. */
+	readonly bytes: number;
 	ended: Promise<void>;
 	waitFor(predicate: (messages: Message[]) => boolean, ms?: number): Promise<void>;
 	resume(): void;
@@ -107,35 +134,43 @@ interface OpenStream {
 }
 
 /** GET a stream like the View's fetch: whatever bytes arrive go through the shared Reader. `host` and `origin` override those headers. */
-function openStream(origin: string, token: string, extra: { frames?: boolean; host?: string; origin?: string; pause?: boolean } = {}): Promise<OpenStream> {
-	const url = new URL(`${origin}/s/${token}${extra.frames === false ? "?frames=0" : ""}`);
+function openStream(origin: string, token: string, extra: { frames?: boolean; ping?: boolean; host?: string; origin?: string; pause?: boolean } = {}): Promise<OpenStream> {
+	const query = new URLSearchParams();
+	if (extra.frames === false) query.set("frames", "0");
+	if (extra.ping) query.set(PING_QUERY, "1");
+	const url = new URL(`${origin}/s/${token}${query.size > 0 ? `?${query}` : ""}`);
 	return new Promise((resolve, reject) => {
 		const request = http.get(url, { headers: { ...(extra.host ? { host: extra.host } : {}), ...(extra.origin ? { origin: extra.origin } : {}) }, agent: false }, (response) => {
 			const reader = new Reader();
 			const messages: Message[] = [];
 			const waiters: Array<() => void> = [];
+			let received = 0;
 			const ended = new Promise<void>((done) => {
 				response.on("close", done);
 				response.on("error", done);
 			});
 			if (response.statusCode !== 200) {
 				response.resume();
-				resolve({ status: response.statusCode ?? 0, headers: response.headers, messages, ended, waitFor: async () => undefined, resume: () => undefined, close: () => request.destroy() });
+				resolve({ status: response.statusCode ?? 0, headers: response.headers, messages, bytes: 0, ended, waitFor: async () => undefined, resume: () => undefined, close: () => request.destroy() });
 				return;
 			}
 			if (extra.pause) response.pause();
 			response.on("data", (chunk: Buffer) => {
+				received += chunk.length;
 				for (const message of reader.push(chunk)) messages.push(message);
 				for (const wake of waiters.splice(0)) wake();
 			});
 			const stream: OpenStream = {
+				get bytes() {
+					return received;
+				},
 				status: 200,
 				headers: response.headers,
 				messages,
 				ended,
 				waitFor: (predicate, ms = 3_000) =>
 					new Promise((done, fail) => {
-						const timer = setTimeout(() => fail(new Error(`timed out waiting; got ${messages.map((m) => (m.kind === KIND_PICTURE ? `picture:${m.head.id}` : "state")).join(",")}`)), ms);
+						const timer = setTimeout(() => fail(new Error(`timed out waiting; got ${messages.map((m) => (m.kind === KIND_PICTURE ? `picture:${m.head.id}` : m.kind === KIND_PING ? "ping" : "state")).join(",")}`)), ms);
 						const check = (): void => {
 							if (predicate(messages)) {
 								clearTimeout(timer);
@@ -156,6 +191,7 @@ function openStream(origin: string, token: string, extra: { frames?: boolean; ho
 
 const pictures = (messages: Message[]): string[] => messages.flatMap((message) => (message.kind === KIND_PICTURE ? [message.head.id] : []));
 const states = (messages: Message[]) => messages.filter((message) => message.kind === KIND_STATE);
+const pings = (messages: Message[]) => messages.filter((message) => message.kind === KIND_PING);
 
 /** A raw HTTP exchange where the test controls every header (the Host header cannot be set through fetch). */
 function raw(origin: string, method: string, path: string, headers: Record<string, string>, body?: string): Promise<{ status: number; text: string }> {
@@ -319,7 +355,7 @@ describe("what a View receives", () => {
 		expect(source.watchCalls).toBe(1);
 	});
 
-	test("state follows the browser and is sent only when it changed", async () => {
+	test("state follows the browser and is sent when it changed, not on every read", async () => {
 		const source = new FakeSource();
 		source.open("a");
 		const channel = channelFor(source);
@@ -354,6 +390,131 @@ describe("what a View receives", () => {
 		await live.waitFor((messages) => pictures(messages).includes("seen"));
 		// Delivered to the one that asked in the same turn: the quiet one would have it by now.
 		expect(pictures(quiet.messages)).toEqual([]);
+	});
+
+	/** Let the pack's own tick run `count` more times (each one reads the browser's state, or finds a read still pending). */
+	async function ticks(source: FakeSource, count = 3): Promise<void> {
+		const reads = source.stateReads;
+		await waitUntil(() => source.stateReads >= reads + count);
+	}
+
+	test("a quiet View that asked for pings is pinged once its heartbeat has passed with nothing written to it, nine bytes a time, and is never told the state again", async () => {
+		const clock = frozenClock();
+		const source = new FakeSource();
+		source.open("a");
+		const channel = channelFor(source);
+		const { origin, token } = await channel.mint("a");
+		const stream = await openStream(origin, token, { frames: false, ping: true });
+
+		// Joined: a ping first (it proves the pack pings), then the state.
+		await stream.waitFor((messages) => pings(messages).length === 1 && states(messages).length === 1);
+		for (let heard = 2; heard <= 4; heard += 1) {
+			clock.advance(HEARTBEAT_MS - 1);
+			await ticks(source);
+			// Fails if the pack pings before the heartbeat is up.
+			expect(pings(stream.messages)).toHaveLength(heard - 1);
+			const before = stream.bytes;
+			clock.advance(1);
+			// Fails if a quiet stream sends nothing: the View could not tell it from one that stalled.
+			await stream.waitFor((messages) => pings(messages).length === heard);
+			// The header and nothing else: the state, with every tab's favicon, is not sent again.
+			expect(stream.bytes - before).toBe(9);
+		}
+		expect(states(stream.messages)).toHaveLength(1);
+	});
+
+	test("a View that is handed pictures is not pinged, however long it watches, while a quiet View of the same browser still is", async () => {
+		const clock = frozenClock();
+		const source = new FakeSource();
+		source.open("a");
+		const channel = channelFor(source);
+		const { origin, token } = await channel.mint("a");
+		const watching = await openStream(origin, token, { ping: true });
+		const quiet = await openStream(origin, token, { frames: false, ping: true });
+		await Promise.all([watching, quiet].map((stream) => stream.waitFor((messages) => pings(messages).length === 1 && states(messages).length === 1)));
+
+		// Twelve seconds, six heartbeats: a picture every second for one View, nothing for the other.
+		for (let at = 1; at <= 12; at += 1) {
+			clock.advance(1_000);
+			source.push("a", `p${at}`);
+			await watching.waitFor((messages) => pictures(messages).includes(`p${at}`));
+		}
+		await ticks(source);
+		// Fails if handing a View bytes does not count as hearing from the pack (`lastWrite` never moved): it would be pinged on every tick once a heartbeat had passed since it joined.
+		expect(pings(watching.messages)).toHaveLength(1);
+		// Fails if the quiet is measured per browser: the pictures sent to one View would keep the other from ever being pinged.
+		expect(pings(quiet.messages).length).toBeGreaterThanOrEqual(2);
+		// Fails if a quiet View is pinged faster than its heartbeat (greeting, then at most one per two seconds).
+		expect(pings(quiet.messages).length).toBeLessThanOrEqual(1 + 12_000 / HEARTBEAT_MS);
+		expect(pictures(quiet.messages)).toEqual([]);
+	});
+
+	test("sixteen quiet Views cost sixteen pings of nine bytes a heartbeat, however heavy the page's state", async () => {
+		const clock = frozenClock();
+		const source = new FakeSource();
+		source.open("a");
+		// Ten tabs with a favicon at its largest: the state a beat used to repeat to every View.
+		const favicon = `data:image/png;base64,${"A".repeat(32 * 1024 - 22)}`;
+		const tabs = Array.from({ length: 10 }, (_, at) => ({ id: `t${at}`, title: "tab", url: "http://page.test/", active: at === 0, loading: false, favicon }));
+		source.states.set("a", stateOf("a", { tabs, activeTabId: "t0" }));
+		const channel = channelFor(source);
+		const views: OpenStream[] = [];
+		for (let view = 0; view < 16; view += 1) {
+			const { origin, token } = await channel.mint("a");
+			views.push(await openStream(origin, token, { frames: false, ping: true }));
+		}
+		await Promise.all(views.map((stream) => stream.waitFor((messages) => pings(messages).length === 1 && states(messages).length === 1)));
+		const total = () => views.reduce((sum, stream) => sum + stream.bytes, 0);
+		const before = total();
+		// What one beat of the whole state would have cost: a state per View, each over 300 KB.
+		expect(before / views.length).toBeGreaterThan(300_000);
+
+		clock.advance(HEARTBEAT_MS);
+		await Promise.all(views.map((stream) => stream.waitFor((messages) => pings(messages).length === 2)));
+		expect(total() - before).toBe(16 * 9);
+	});
+
+	test("a View that did not ask for pings is never sent one, not at join and not across many heartbeats, while a View of the same browser that did ask is", async () => {
+		const clock = frozenClock();
+		const source = new FakeSource();
+		source.open("a");
+		const channel = channelFor(source);
+		const { origin, token } = await channel.mint("a");
+		// One View that asked beside two that did not (one state-only, one with pictures): an older View's Reader throws on a kind it does not know.
+		const asking = await openStream(origin, token, { frames: false, ping: true });
+		const older = [await openStream(origin, token, { frames: false }), await openStream(origin, token)];
+		await Promise.all(older.map((stream) => stream.waitFor((messages) => states(messages).length === 1)));
+		await asking.waitFor((messages) => pings(messages).length === 1 && states(messages).length === 1);
+		await ticks(source);
+		// Fails if a View is greeted with a ping whether or not it asked: the one that did ask just had its greeting, so the greeting is on the wire and these two got the state alone.
+		for (const stream of older) expect(stream.messages.map((message) => message.kind)).toEqual([KIND_STATE]);
+		const settled = older.map((stream) => stream.bytes);
+
+		for (let heard = 2; heard <= 6; heard += 1) {
+			clock.advance(HEARTBEAT_MS);
+			// The beat does run: the View that asked is pinged each time, so a View that is not pinged was passed over, not forgotten.
+			await asking.waitFor((messages) => pings(messages).length === heard);
+			await ticks(source);
+		}
+		// Fails if the heartbeat pings every View, not just those that asked: nothing else is sent to a still page.
+		for (const stream of older) expect(stream.messages.map((message) => message.kind)).toEqual([KIND_STATE]);
+		expect(older.map((stream) => stream.bytes)).toEqual(settled);
+	});
+
+	test("a pack whose state read is stuck (a renderer wedged in a navigation) still pings: the beat does not wait for the read", async () => {
+		const clock = frozenClock();
+		const source = new FakeSource();
+		source.open("a");
+		const channel = channelFor(source);
+		const { origin, token } = await channel.mint("a");
+		const stream = await openStream(origin, token, { frames: false, ping: true });
+		await stream.waitFor((messages) => pings(messages).length === 1 && states(messages).length === 1);
+
+		source.hangReads = true;
+		await ticks(source, 1);
+		clock.advance(HEARTBEAT_MS);
+		// Fails if the beat rides on the state read: a View would take a pack that is only waiting on a page for a dead one.
+		await stream.waitFor((messages) => pings(messages).length === 2);
 	});
 });
 

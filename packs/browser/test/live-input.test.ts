@@ -201,6 +201,51 @@ describeWithChrome("the human's input on a real page", () => {
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);
+
+	test(
+		"a batch is applied however long the page takes to reach it, never dropped: a press and its release sent as two batches, the page stalled between them, still complete as one click",
+		async () => {
+			const { runtime, browserId } = await openPage();
+			// The runtime has no public door to a browser's driver; this test replaces its `input`, the way publish.test.ts does.
+			const seam = runtime as unknown as { byId: Map<string, { driver: { input(events: unknown): Promise<void> } }> };
+			const entry = seam.byId.get(browserId);
+			if (!entry) throw new Error("no entry");
+			// The page takes the first batch and does not acknowledge it, as a renderer stuck in a navigation would; the later ones go straight through.
+			const stalled = Promise.withResolvers<void>();
+			let reached = 0;
+			const send = entry.driver.input.bind(entry.driver);
+			entry.driver.input = async (events) => {
+				reached += 1;
+				if (reached === 1) await stalled.promise;
+				await send(events);
+			};
+
+			const [move, down, up] = click(80, 40);
+			const outcomes: string[] = [];
+			const press = runtime.input(browserId, [move, down]).then(
+				() => outcomes.push("press taken"),
+				() => outcomes.push("press refused"),
+			);
+			await waitUntil("the press reaches the page", async () => reached, (count) => count === 1);
+			// The release of the same click, queued behind the stalled press.
+			const release = runtime.input(browserId, [up]).then(
+				() => outcomes.push("release taken"),
+				() => outcomes.push("release refused"),
+			);
+
+			// A real wait, on purpose: the bound under test is the runtime's own timer, and Chrome runs on the platform clock, so no fake clock can pass it.
+			// Longer than the 5 s an earlier version gave a batch before dropping it, which left the button held in Chrome.
+			await Bun.sleep(5_600);
+			expect(outcomes).toEqual([]);
+
+			stalled.resolve();
+			await Promise.all([press, release]);
+			// Fails if either batch was dropped or refused for taking long: Chrome would hold the button, with no click.
+			expect(outcomes).toEqual(["press taken", "release taken"]);
+			expect(await log(runtime, browserId)).toEqual(["down:0:1", "up:0", "click:trusted:1"]);
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
 });
 
 describeWithChrome("the live picture", () => {
