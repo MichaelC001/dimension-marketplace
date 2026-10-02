@@ -14,6 +14,8 @@ import { defaultWorkerEntry, type SpawnWorker, threadWorkerSpawner } from "./tra
 const DEFAULT_RELAY_URL = "http://127.0.0.1:9224";
 /** A cell's worker thread may hold this much heap before it ends itself; the server and every other session's browsers go on. */
 const DEFAULT_HEAP_MB = 1_024;
+/** A cell's worker may hold this much in all (JS heap, Buffers, ArrayBuffers) before it is ended and its cell fails; `resourceLimits` bounds only the heap part. */
+const DEFAULT_MEMORY_MB = 1_536;
 
 /** What a cell may see of the server's environment (doc 77 §7.4.5): where programs and temp files live, locale, and puppeteer's own settings; never a key. */
 const CELL_ENV = /^(?:PATH|Path|PATHEXT|SystemRoot|SYSTEMROOT|windir|WINDIR|ComSpec|COMSPEC|TEMP|TMP|TMPDIR|HOME|USERPROFILE|LANG|LANGUAGE|LC_[A-Z_]+|TZ|PUPPETEER_[A-Z_]+)$/;
@@ -51,6 +53,8 @@ export interface CodeHostOptions {
   timing?: Partial<CodeTiming>;
   /** The worker thread's heap ceiling, MB. Default 1,024. */
   heapMb?: number;
+  /** What a worker may hold in all, MB (heap plus Buffers and ArrayBuffers); past it the worker is ended and the cell fails. Default 1,536; 0 = no limit. */
+  memoryMb?: number;
 }
 
 export class CodeHost implements CodeHostPort {
@@ -92,6 +96,7 @@ export class CodeHost implements CodeHostPort {
         ...(screenshotDir === undefined ? {} : { screenshotDir }),
         ...(artifactsRoot === undefined ? {} : { outputDir: sessionFolder(artifactsRoot, id) }),
         terminating: this.#terminating,
+        memoryMb: this.#options.memoryMb ?? DEFAULT_MEMORY_MB,
         timing: this.#timing,
         onEmpty: () => {
           if (this.#sessions.get(id) === created) this.#sessions.delete(id);
@@ -124,18 +129,20 @@ export class CodeHost implements CodeHostPort {
   }
 }
 
-function numberEnv(env: Record<string, string | undefined>, name: string, fallback: number): number {
+type Unit = "milliseconds" | "megabytes";
+
+function numberEnv(env: Record<string, string | undefined>, name: string, fallback: number, unit: Unit): number {
   const raw = env[name]?.trim();
   if (raw === undefined || raw === "") return fallback;
   const value = Number(raw);
-  if (!Number.isFinite(value) || value < 0) throw new RangeError(`${name} must be a number of milliseconds, 0 or more (got "${raw}")`);
+  if (!Number.isFinite(value) || value < 0) throw new RangeError(`${name} must be a number of ${unit}, 0 or more (got "${raw}")`);
   return value;
 }
 
 /**
  * The code host `createBrowserServer` starts with: the runtime's own browsers, the environment's settings (doc 77 matrix H7, H8, H9, H13).
  * `DIMENSION_BROWSER_CODE_IDLE_MS` (default 1,800,000, 0 = never), `DIMENSION_BROWSER_FREEZE_IDLE_MS` (20,000, 0 = never), `DIMENSION_BROWSER_SCREENSHOT_DIR`,
- * `DIMENSION_BROWSER_CODE_HEAP_MB`, `DIMENSION_BROWSER_CODE_ISOLATION` (`thread`).
+ * `DIMENSION_BROWSER_CODE_HEAP_MB`, `DIMENSION_BROWSER_CODE_MEMORY_MB` (1,536, 0 = no limit), `DIMENSION_BROWSER_CODE_ISOLATION` (`thread`).
  */
 export function createRuntimeCodeHost(runtime: BrowserRuntime, env: Record<string, string | undefined> = process.env): CodeHost {
   const isolation = env.DIMENSION_BROWSER_CODE_ISOLATION?.trim() || "thread";
@@ -144,12 +151,13 @@ export function createRuntimeCodeHost(runtime: BrowserRuntime, env: Record<strin
   }
   const screenshotDir = env.DIMENSION_BROWSER_SCREENSHOT_DIR?.trim();
   return new CodeHost({
-    browsers: new RuntimeCodeBrowsers(runtime.codeSeam(), { idleMs: numberEnv(env, "DIMENSION_BROWSER_CODE_IDLE_MS", CODE_IDLE_MS) }),
+    browsers: new RuntimeCodeBrowsers(runtime.codeSeam(), { idleMs: numberEnv(env, "DIMENSION_BROWSER_CODE_IDLE_MS", CODE_IDLE_MS, "milliseconds") }),
     env,
     headless: env.DIMENSION_BROWSER_HEADLESS !== "false",
     artifactsRoot: join(env.DIMENSION_BROWSER_ROOT || defaultRootDir(), "artifacts"),
     ...(screenshotDir ? { screenshotDir: screenshotDir.replace(/^~(?=$|[\\/])/, env.HOME ?? env.USERPROFILE ?? "~") } : {}),
-    timing: { freezeIdleMs: numberEnv(env, "DIMENSION_BROWSER_FREEZE_IDLE_MS", DEFAULT_TIMING.freezeIdleMs) },
-    heapMb: numberEnv(env, "DIMENSION_BROWSER_CODE_HEAP_MB", DEFAULT_HEAP_MB),
+    timing: { freezeIdleMs: numberEnv(env, "DIMENSION_BROWSER_FREEZE_IDLE_MS", DEFAULT_TIMING.freezeIdleMs, "milliseconds") },
+    heapMb: numberEnv(env, "DIMENSION_BROWSER_CODE_HEAP_MB", DEFAULT_HEAP_MB, "megabytes"),
+    memoryMb: numberEnv(env, "DIMENSION_BROWSER_CODE_MEMORY_MB", DEFAULT_MEMORY_MB, "megabytes"),
   });
 }

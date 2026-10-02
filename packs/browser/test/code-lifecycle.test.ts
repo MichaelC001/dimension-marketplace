@@ -490,6 +490,87 @@ describe("a worker that nothing can end", () => {
   });
 });
 
+const MEMORY_TIMING = { freezeIdleMs: 0, workerIdleMs: 60_000, startupTimeoutMs: 1_000, graceMs: 40, terminateMs: 20, closeMs: 60, memoryPollMs: 15, memoryIdlePollMs: 15, finishedTtlMs: 60_000 };
+
+async function ended(host: CodeHost, runId: string): Promise<RunError> {
+  const done = await host.resume("s1", runId, 2_000, NEVER);
+  if (done.state !== "done" || !("error" in done.result)) throw new Error("the cell should have ended in an error");
+  return done.result.error;
+}
+
+describe("a worker's memory is bounded, not only its heap", () => {
+  test("a cell whose worker grows past the limit fails with the reason, its worker is replaced, and the next cell runs", async () => {
+    const { host, workers } = rig({ memoryMb: 100, timing: MEMORY_TIMING });
+    const runId = await start(host);
+    workers[0]!.memory = { mb: 640, own: true }; // Buffers: the heap limit would never have seen this
+    const error = await ended(host, runId);
+    expect(error.name).toBe("CellMemoryError");
+    expect(error.message).toContain("grew the code worker to 640 MB");
+    expect(error.message).toContain("the limit is 100 MB");
+    expect(error.message).toContain("variables were reset");
+    expect(workers[0]!.exited).toBe(true);
+    expect((await host.run("s1", { code: "x", timeoutMs: 5_000, waitMs: 20, signal: NEVER })).state).toBe("running");
+    expect(workers).toHaveLength(2);
+    expect(workers[1]!.exited).toBe(false);
+  });
+
+  test("a worker past the limit with no cell running is ended too, and the next cell is told its variables were reset", async () => {
+    const { host, workers } = rig({ memoryMb: 100, timing: MEMORY_TIMING });
+    const runId = await start(host);
+    workers[0]!.emit({ t: "result", runId, ...OK });
+    await host.resume("s1", runId, 1_000, NEVER);
+    workers[0]!.memory = { mb: 640, own: true }; // a timer the cell left behind keeps allocating
+    await waitUntil("the idle worker is ended", () => workers[0]!.exited, exited => exited, 2_000);
+    const next = await start(host);
+    workers[1]!.emit({ t: "result", runId: next, ok: false, error: { name: "ReferenceError", message: "kept is not defined", isAbort: false } });
+    expect((await ended(host, next)).message).toContain("variables were reset");
+  });
+
+  test("a worker that does not answer the memory question is left alone (its budget and the terminate limit are what end a stuck one)", async () => {
+    const { host, workers } = rig({ memoryMb: 100, timing: MEMORY_TIMING });
+    await start(host);
+    workers[0]!.memory = undefined;
+    await new Promise(resolve => setTimeout(resolve, 150)); // a real wait: nothing may happen in this window
+    expect(workers[0]!.exited).toBe(false);
+  });
+
+  test("a cell that starts while the worker is only looked at rarely is looked at quickly from its first moment", async () => {
+    // The worker was read once while idle, and the next look is 30 s away: the cell's start must not wait for it.
+    const { host, workers } = rig({ memoryMb: 100, timing: { ...MEMORY_TIMING, memoryPollMs: 15, memoryIdlePollMs: 30_000 } });
+    const idle = await start(host);
+    workers[0]!.emit({ t: "result", runId: idle, ...OK });
+    await host.resume("s1", idle, 1_000, NEVER);
+    await new Promise(resolve => setTimeout(resolve, 80)); // a real wait: the idle look has happened and the next one is far off
+    const runId = await start(host);
+    workers[0]!.memory = { mb: 640, own: true };
+    expect((await ended(host, runId)).name).toBe("CellMemoryError");
+  });
+
+  test("where only the whole process can be measured, the growth during the cell counts, not the level the process was already at", async () => {
+    // The server already holds 900 MB (Chrome's pages, other sessions): far over the limit, and the cell has not added a byte.
+    const { host, workers } = rig({ memoryMb: 100, timing: MEMORY_TIMING }, (worker, message) => {
+      if (message.t !== "init") return;
+      worker.memory = { mb: 900, own: false };
+      queueMicrotask(() => worker.emit({ t: "ready" }));
+    });
+    const runId = await start(host);
+    await new Promise(resolve => setTimeout(resolve, 150)); // a real wait: nothing may happen in this window
+    expect(workers[0]!.exited).toBe(false);
+    workers[0]!.memory = { mb: 1_100, own: false }; // the process grew by 200 MB while the cell ran
+    const error = await ended(host, runId);
+    expect(error.message).toContain("grew the server by 200 MB while it ran");
+    expect(workers[0]!.exited).toBe(true);
+  });
+
+  test("a limit of 0 turns the watchdog off", async () => {
+    const { host, workers } = rig({ memoryMb: 0, timing: MEMORY_TIMING });
+    await start(host);
+    workers[0]!.memory = { mb: 99_999, own: true };
+    await new Promise(resolve => setTimeout(resolve, 150)); // a real wait: nothing may happen in this window
+    expect(workers[0]!.exited).toBe(false);
+  });
+});
+
 describe("what is kept", () => {
   test("a finished run is readable for the keeping period and then it is unknown", async () => {
     const { host, workers } = rig({ timing: { freezeIdleMs: 0, workerIdleMs: 60_000, startupTimeoutMs: 1_000, graceMs: 50, finishedTtlMs: 120 } });
