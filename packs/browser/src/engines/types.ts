@@ -1,4 +1,6 @@
+import type { TabRef } from "../code/contracts.js";
 import type { AdmittedInput } from "../input.js";
+import type { AttachTarget } from "./attach.js";
 import type { BrowserAction, BrowserApp, BrowserRegion, ElementInspection, HandledDialog, LogEntry, ModelShot, PageElements, PageScroll, ShotRequest, TabInfo, Viewport } from "../contracts.js";
 import type { TabRef, WaitUntil } from "../code/contracts.js";
 
@@ -194,6 +196,13 @@ export interface EngineDriver {
   setDialogPolicy(tabId: string, policy: DialogPolicy | undefined): void;
   /** Freeze (`Page.setWebLifecycleState` frozen) or thaw `tabId`: an idle tab stops using CPU. Capped at 3 s; throws for an unknown tab. */
   setFrozen(tabId: string, frozen: boolean): Promise<void>;
+  /**
+   * Attach engines only (`EngineOptions.attach`): make one of the page tabs the browser ALREADY has a tab of this driver, and the active one — the
+   * tab in front (`preferVisible`, the default with no `match`) or the first whose URL or title contains `match` — instead of opening a new one.
+   * The person's tab is not resized, restyled or kept rendering, and is never closed by this driver. Idempotent for a page already adopted.
+   * Throws a `ToolError` listing the pages when `match` names none, and for a driver that owns its browser.
+   */
+  adoptTab(options?: { match?: string; preferVisible?: boolean }): Promise<TabRef>;
   /** Make `tabId` the driven and shown tab. Throws `ActionNotDispatched` for an unknown id. */
   activateTab(tabId: string): Promise<void>;
   /** Close `tabId`. Closing the last tab opens a blank one first: the browser never ends from a tab close. */
@@ -207,7 +216,8 @@ export interface EngineDriver {
   /**
    * Hard stop, for a `close` that hung or failed: kill the owned browser's whole process tree and resolve only once the browser
    * process is confirmed gone (`close_failed`-style rejection otherwise). The lease is released only on that confirmation, like
-   * `close`. A driver that owns nothing (the relay) just closes. Safe to call while a `close` is still pending.
+   * `close`. A driver that owns nothing (the relay) just closes; one attached to an application the pack started (`AttachTarget.terminate`: a
+   * `spawned` kind) also ends that application, the one way anything an attach target names is ended. Safe to call while a `close` is still pending.
    */
   kill(): Promise<void>;
 }
@@ -220,6 +230,11 @@ export interface EngineOptions {
   headless?: boolean;
   executablePath?: string;
   relayUrl?: string;
+  /**
+   * A browser to attach to instead of launching one (a cell's `connected`, `spawned` or `relay` kind). Only with the `chrome-relay` engine. The driver
+   * adopts a page the browser already has (`adoptTab`) rather than opening its own, and closing it disconnects and leaves the browser and its pages alone.
+   */
+  attach?: AttachTarget;
   /**
    * Release callback, NOT merely a disconnected notification. Call exactly when
    * owned profile resources are confirmed stopped, including failed initialization
