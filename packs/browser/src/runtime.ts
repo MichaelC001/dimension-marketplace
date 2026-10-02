@@ -101,6 +101,7 @@ import type { EngineDriver, EngineState, EvalOutcome, LiveFrame, PageReader, Pas
 import { AnnotationFiles } from "./annotation-file.js";
 import { clampRegion, MAX_FRAME_BYTES } from "./image.js";
 import { type AdmittedInput, admitInput } from "./input.js";
+import { PublishApprovals } from "./publish-approval.js";
 import { type Publication, cancel, confirm, isPending, prepare, publishRecord, requirePending, validateMode, validateRecipe, waitSettled } from "./publish.js";
 import { blockedReason, DEFAULT_READ_CHARS, MAX_READ_CHARS, READ_TIMEOUT_MS, readPolicy, TIMEOUT_REASON } from "./read.js";
 import { ActionNotDispatched, fail, MAX_PROFILES, ProfileStore, validateProfile } from "./store.js";
@@ -332,6 +333,7 @@ interface Entry {
 
 export class BrowserRuntime implements BrowserRuntimePort {
 	private readonly store: ProfileStore;
+	private readonly publishApprovals: PublishApprovals;
 	private readonly annotationFiles: AnnotationFiles;
 	/** The key every profile's saved passwords are sealed under: one file in the root, beside `profiles/` (credentials.ts). */
 	private readonly credentialKey: CredentialKey;
@@ -396,6 +398,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		this.store = new ProfileStore(options.rootDir);
 		this.annotationFiles = new AnnotationFiles(join(this.store.rootDir, "annotations"));
 		this.credentialKey = new CredentialKey(this.store.rootDir);
+		this.publishApprovals = new PublishApprovals(join(this.store.rootDir, "publish-approvals"));
 		// Only what a dead server abandoned: a live server's throwaway browsers are never touched.
 		this.store.sweepEphemeral();
 	}
@@ -1846,6 +1849,9 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			entry.starting = "post";
 			let outcome: PublishCheck | Publication;
 			try {
+				// A post the user did not approve is refused before the page is opened: the model cannot even show the human text nobody approved.
+				// Inside the `starting` window, so the wheel cannot be taken while the approval is looked up.
+				if (selected === "post") await this.publishApprovals.require({ origin: valid.origin, profile, ...(preset === undefined ? {} : { preset: preset.name }), values: valid.fields.map((field) => field.value) }, "park");
 				outcome = await prepare(entry.driver, profile, valid, selected);
 			} finally {
 				entry.starting = null;
@@ -1876,7 +1882,13 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			if (entry.task?.status === "running") {
 				fail("task_running", `a browser_task (${entry.task.agent}) owns this page; wait for it or cancel it`);
 			}
+			// The approval covers what the record holds NOW (the values the page read back, the origin, the profile and the preset), and
+			// spending it is the lock: it happens before the click, for the View's Post too, so a post the human pressed cannot be posted again by the agent.
+			const { record } = publication;
+			const spent = await this.publishApprovals.consume({ origin: record.origin, profile: record.profile, ...(record.preset === undefined ? {} : { preset: record.preset.name }), values: record.fields.map((field) => field.value) }, "confirm");
 			await confirm(entry.driver, publication);
+			// `failed` is provably nothing submitted: the approval is the user's still, for the confirm that follows. Anything else may have posted.
+			if (publication.record.status === "failed") await spent.release();
 			if (publication.record.status === "posted") this.observeConnection(publication.record.profile, publication.recipe.origin, true, this.redact(entry, publication.account));
 			return this.redact(entry, publishRecord(publication));
 		});
