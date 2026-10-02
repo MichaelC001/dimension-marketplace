@@ -388,9 +388,9 @@ describe("which tools the model is shown", () => {
   test("code: browser_run is offered with the exec approval tier to the spaces that have eval, and the step tools go to the spaces that do not", async () => {
     const { client } = await connect(fakeHost(() => shown()), "code");
     const tools = await listed(client);
-    expect(tools.get("browser_run")).toMatchObject({ "ai.insodimension/approval": "exec", [SPACES]: ["code", "build", "traction"] });
+    expect(tools.get("browser_run")).toMatchObject({ "ai.insodimension/approval": "exec", [SPACES]: ["code", "build"] });
     // The View keeps calling the step tools (no space gates the View), but the model of a space with browser_run no longer sees them.
-    for (const name of STEP_TOOLS) expect(tools.get(name)?.[SPACES]).toEqual(["chat", "labor", "watch"]);
+    for (const name of STEP_TOOLS) expect(tools.get(name)?.[SPACES]).toEqual(["chat", "labor", "watch", "traction"]);
     for (const name of VIEW_SIDE) expect(tools.has(name)).toBe(true);
     // Everything the model of a code space sees for browsing: browser_run and the four that stay.
     const codeSpaceTools = [...tools].filter(([, meta]) => {
@@ -460,5 +460,44 @@ describe("which tools the model is shown", () => {
     const { client } = await connect(host, "code");
     await client.close();
     await ended.promise;
+  });
+
+  /** The model's list for one space: the tools visible to a model whose `ai.insodimension/spaces` audience, when it has one, names the space (the engine's `toolsVisibleTo("model", space)`). */
+  const offeredTo = async (client: Client, space: string): Promise<string[]> =>
+    (await client.listTools()).tools
+      .filter(tool => {
+        const visibility = (tool._meta?.ui as { visibility?: string[] } | undefined)?.visibility;
+        const audience = tool._meta?.[SPACES];
+        return (visibility === undefined || visibility.includes("model")) && (!Array.isArray(audience) || audience.includes(space));
+      })
+      .map(tool => tool.name)
+      .sort();
+  // What Traction's X agent and CMO name in their manifests and skills (traction-publishing signs in with browser_open and checks the profile with browser_state/snapshot/screenshot, then posts through the publish set).
+  const TRACTION_PUBLISHES_WITH = [...STEP_TOOLS, ...VIEW_SIDE, "browser_publish", "browser_publish_cancel", "browser_publish_confirm", "browser_publish_presets", "browser_publish_wait"];
+
+  test("a Traction model keeps every browsing and publishing tool in every mode and is never offered browser_run: its agents hold no code runner", async () => {
+    for (const mode of ["code", "steps", "both"] as const) {
+      const { client } = await connect(fakeHost(() => shown()), mode);
+      const offered = await offeredTo(client, "traction");
+      for (const name of TRACTION_PUBLISHES_WITH) expect(offered, `${mode}: traction is offered ${name}`).toContain(name);
+      expect(offered, `${mode}: traction is not offered browser_run`).not.toContain("browser_run");
+    }
+  });
+
+  test("the default mode, with a code host and DIMENSION_BROWSER_MODEL_TOOLS unset, still gives Traction its tools and a code space browser_run in place of the step tools", async () => {
+    const previous = process.env.DIMENSION_BROWSER_MODEL_TOOLS;
+    delete process.env.DIMENSION_BROWSER_MODEL_TOOLS;
+    try {
+      const { client } = await connect(fakeHost(() => shown()));
+      const traction = await offeredTo(client, "traction");
+      for (const name of TRACTION_PUBLISHES_WITH) expect(traction, `traction is offered ${name}`).toContain(name);
+      expect(traction).not.toContain("browser_run");
+      const code = await offeredTo(client, "code");
+      expect(code).toContain("browser_run");
+      for (const name of STEP_TOOLS) expect(code, `a code space is not offered ${name}`).not.toContain(name);
+      for (const name of TRACTION_PUBLISHES_WITH.filter(tool => tool.startsWith("browser_publish"))) expect(code, `a code space is not offered ${name}`).not.toContain(name);
+    } finally {
+      if (previous !== undefined) process.env.DIMENSION_BROWSER_MODEL_TOOLS = previous;
+    }
   });
 });
