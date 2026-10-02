@@ -398,6 +398,8 @@ describe("browser_profile_add, as a host offers it", () => {
 		const tools = new Map((await client.listTools()).tools.map((tool) => [tool.name, tool]));
 		const visibility = (name: string): string[] | undefined => ToolMeta.parse(tools.get(name)?._meta ?? {}).ui?.visibility;
 		expect(visibility("browser_profile_add")).toEqual(["app"]);
+		// The switch carries a browser to leave, which only the person's View may name; a model is never offered it.
+		expect(visibility("browser_switch")).toEqual(["app"]);
 		expect(visibility("browser_profiles")).toBeUndefined();
 	});
 

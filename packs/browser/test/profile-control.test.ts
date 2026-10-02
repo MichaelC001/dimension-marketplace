@@ -887,6 +887,107 @@ describeWithChrome("leaving a browser for another profile in the View", () => {
 		BROWSER_TEST_TIMEOUT_MS,
 	);
 
+	const switchTo = (r: Rig, leaving: string, profile: string | undefined, who: Who = VIEW) => r.call("browser_switch", { leaving, ...(profile === undefined ? {} : { profile }) }, who);
+	/** The browser's page state as its own seat reads it: a refusal throws, which is how a test says "it is gone". */
+	const alive = (r: Rig, who: Who, browserId: string): Promise<PageState> => stateAs(r, who, browserId);
+
+	test(
+		"with room in the pool the next browser opens first and the one being left stays until it is left: a switch that cannot open loses nothing",
+		async () => {
+			const r = await rig();
+			const a = await open(r, VIEW, { profile: "a" });
+			const held = await open(r, CHAT, { profile: "h" });
+
+			// Refused: another chat has "h". The browser being left is exactly as it was.
+			expect(refusal(await switchTo(r, a.browserId, "h"))).toContain("already open");
+			expect((await alive(r, VIEW, a.browserId)).browserId).toBe(a.browserId);
+
+			const b = stateOf(await switchTo(r, a.browserId, "b"));
+			expect(b.profile).toBe("b");
+			// Opened, not yet left: the View leaves it once it shows the new one.
+			expect((await alive(r, VIEW, a.browserId)).browserId).toBe(a.browserId);
+			expect(await r.runtime.leave(a.browserId, "app")).toEqual({ closed: true });
+			expect((await alive(r, CHAT, held.browserId)).browserId).toBe(held.browserId);
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"with the pool full the browser being left gives up its slot first, so the switch does not close an agent's throwaway",
+		async () => {
+			const r = await rig();
+			const a = await open(r, VIEW, { profile: "a" });
+			const first = await open(r, OTHER_CHAT, {});
+			const second = await open(r, OTHER_CHAT, {});
+			const held = await open(r, CHAT, { profile: "h" });
+
+			const b = stateOf(await switchTo(r, a.browserId, "b"));
+
+			expect(b.profile).toBe("b");
+			expect(refusal(await r.call("browser_state", { browserId: a.browserId }, VIEW))).toContain(LEFT);
+			for (const [who, browser] of [[OTHER_CHAT, first], [OTHER_CHAT, second], [CHAT, held]] as const) expect((await alive(r, who, browser.browserId)).browserId).toBe(browser.browserId);
+			// The View's leave that follows is the same fact, not an error.
+			expect(await r.runtime.leave(a.browserId, "app")).toEqual({ closed: true });
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"a refused switch at the cap loses nothing either: a profile another chat holds is refused before anything is closed",
+		async () => {
+			const r = await rig();
+			const a = await open(r, VIEW, { profile: "a" });
+			const first = await open(r, OTHER_CHAT, {});
+			const second = await open(r, OTHER_CHAT, {});
+			await open(r, OTHER_CHAT, { profile: "h" });
+
+			expect(refusal(await switchTo(r, a.browserId, "h"))).toContain("already open");
+
+			for (const [who, browser] of [[VIEW, a], [OTHER_CHAT, first], [OTHER_CHAT, second]] as const) expect((await alive(r, who, browser.browserId)).browserId).toBe(browser.browserId);
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"a browser that stays when it is left frees nothing at the cap: one the person took over keeps its wheel and its slot, and the switch is refused naming the pool",
+		async () => {
+			const r = await rig();
+			const a = await open(r, VIEW, { profile: "a" });
+			stateOf(await r.call("browser_control", { browserId: a.browserId, mode: "take" }, VIEW));
+			await open(r, OTHER_CHAT, { profile: "h1" });
+			await open(r, OTHER_CHAT, { profile: "h2" });
+			await open(r, CHAT, { profile: "h3" });
+
+			expect(refusal(await switchTo(r, a.browserId, "b"))).toContain("at most 4 browsers");
+
+			expect(await alive(r, VIEW, a.browserId)).toMatchObject({ browserId: a.browserId, takenOver: true });
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"only the person's own browser can be named to make room: another seat's is not closed by a switch that names it, and a model or an unstamped call cannot switch at all",
+		async () => {
+			const r = await rig();
+			const mine = await open(r, VIEW, { profile: "a" });
+			const theirs = await open(r, VIEW_TWO, { profile: "x" });
+			await open(r, OTHER_CHAT, { profile: "h1" });
+			await open(r, CHAT, { profile: "h2" });
+
+			// Full, and the browser named is another seat's: nothing is freed and the open is refused for want of room.
+			expect(refusal(await switchTo(r, theirs.browserId, "b"))).toContain("at most 4 browsers");
+			expect((await alive(r, VIEW_TWO, theirs.browserId)).browserId).toBe(theirs.browserId);
+
+			for (const who of [CHAT, OTHER_CHAT, undefined]) {
+				refusal(await r.call("browser_switch", { leaving: mine.browserId, profile: "b" }, who));
+				expect(await failureCode(() => r.runtime.open({ profile: "b", leaving: mine.browserId }, who ?? {}))).toBe("human_only");
+			}
+			expect((await alive(r, VIEW, mine.browserId)).browserId).toBe(mine.browserId);
+			expect(entry(await listAs(r, VIEW), "b")?.heldBy ?? null).toBeNull();
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
 	test(
 		"the View's list holds the Private browsers this seat has open and never another chat's: with their ids to the View, none in a model's text",
 		async () => {
