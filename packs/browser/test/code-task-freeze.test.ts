@@ -78,7 +78,7 @@ describeTasks("a task agent drives a browser a cell opened", () => {
     // Idle with nobody about: the tab freezes.
     await waitUntil("the idle tab freezes", () => browsers.asked.filter(frozen => frozen).length, count => count === 1, 10_000);
 
-    await runtime.startTask(browserId, { agent: "jev", task: JSON.stringify({ steps: [{ action: "thinking", url: "" }], hold: true }) });
+    await runtime.startTask(browserId, { task: JSON.stringify({ steps: [{ action: "thinking", url: "" }], hold: true }) });
     await waitUntil("the task's start thaws it", () => browsers.asked.length, count => count === 2, 10_000);
     expect(browsers.asked).toEqual([true, false]);
 

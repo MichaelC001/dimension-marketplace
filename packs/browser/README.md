@@ -2,7 +2,7 @@
 
 A browser you and your agent share. Open a website or a localhost app, watch the
 same page the agent works on, circle something and talk about it, and let the
-agent — or a fast browser agent it hands the task to — drive real workflows.
+agent drive real workflows (where jev is configured, it may hand a whole task to a fast browser agent).
 
 Built as a community plugin on the public `@dimension/sdk` and Fraym UI, with
 standard MCP and MCP Apps. No host internals, no browser fork.
@@ -38,13 +38,16 @@ standard MCP and MCP Apps. No host internals, no browser fork.
   second-guesses it. One safety property is kept: an action that errored after it
   was sent is reported `unknown` (it may have taken effect) and is never retried
   automatically.
-- **Whole tasks at agent speed.** `browser_task` hands a task to
-  [jev-ultrafast](https://github.com/browser-use/jev-ultrafast) or
-  [browser-use](https://github.com/browser-use/browser-use), running in the same
+- **Optional: a whole task at agent speed.** Where jev's key is configured
+  (`TYPESAFE_API_KEY`), `browser_task` hands a task to jev (`jev-ultrafast`,
+  pinned in `python/pyproject.toml`), running in the same
   browser while you watch, and reports steps, time, model calls and tokens.
+  Without the key `browser_task`, `browser_task_wait` and `browser_task_cancel`
+  are not offered at all (the server log says why), so a session without jev
+  neither sees nor pays for them.
   A failed task (an unfunded model key is HTTP 402) is a tool error naming the
   cause and the next step, within seconds; the server and the browser keep
-  serving. `browser_act` is refused (`task_running`) while a task runs. Agents may log in and sign up. Optionally, for a jev sign-up or
+  serving. `browser_act` is refused (`task_running`) while a task runs. jev may log in and sign up. Optionally, for a sign-up or
   login, the browser generates and stores the password in the profile and fills
   password fields itself (`credential: { origin, mode }`), so the value never
   appears in a transcript.
@@ -72,8 +75,7 @@ standard MCP and MCP Apps. No host internals, no browser fork.
 | --- | --- | --- |
 | Chrome driving | Google (`puppeteer-core`, pinned) | public API |
 | MCP server + View protocol | MCP (`@modelcontextprotocol/sdk`, `ext-apps`, pinned) | public API |
-| jev agent loop | browser-use (`jev-ultrafast`, pinned git commit — not on PyPI) | its own `Agent` |
-| browser-use agent loop | browser-use (`browser-use`, pinned) | its own `Agent` + `BrowserSession` |
+| jev agent loop | its authors (`jev-ultrafast`, pinned git commit — not on PyPI) | its own `Agent` |
 | View, annotations, profiles, the MCP tools, the task protocol | this pack | — |
 
 Nothing upstream is copied or forked. Updating an upstream is a version bump.
@@ -83,7 +85,7 @@ Nothing upstream is copied or forked. Updating an upstream is a version bump.
 | Engine | Status |
 | --- | --- |
 | `chromium` | Default. A Chrome this pack manages, in a directory it owns: a throwaway one, or a saved profile. |
-| `chrome-relay` | Attaches to the Chrome you are signed in to (always profile `relay`, so `profile` may be omitted); owns only the tabs it opens (and the pages they open) and never closes your browser. `browser_task` is refused here: the task agents drive a whole browser, and this one is yours. |
+| `chrome-relay` | Attaches to the Chrome you are signed in to (always profile `relay`, so `profile` may be omitted); owns only the tabs it opens (and the pages they open) and never closes your browser. `browser_task` is refused here: the task agent drives a whole browser, and this one is yours. |
 | `abp` | **Refused**: its control server authenticates nothing, so any page it visits could drive it. theredsix/agent-browser-protocol#16 |
 | `browser4` | **Refused**: every published bundle disables HTTPS certificate verification. platonai/Browser4#602 |
 
@@ -100,9 +102,10 @@ npm install
 npm run build
 ```
 
-### Task agents (`jev`, `browser-use`)
+### Task agent (`jev`, optional)
 
-Opening a browser never installs anything. Prepare the pinned environment once:
+Opening a browser never installs anything. `browser_task` needs the pinned
+environment; prepare it once:
 
 ```bash
 cd python
@@ -114,20 +117,17 @@ read from the environment of the pack's server, which inherits the engine's
 environment (`ai.insodimension.dimension/mcp.json` declares an `env`, which
 widens the host's minimal default):
 
-| Agent | Needs |
+| Variable | Effect |
 | --- | --- |
-| `jev` | `TYPESAFE_API_KEY`, plus `TEXT_MODEL_API_KEY` (and optionally `TEXT_MODEL_BASE_URL`, `TEXT_MODEL`) for the small model that writes field values |
-| `browser-use` | `DIMENSION_BROWSER_USE_MODEL` (default `gpt-4.1-mini`). `gemini-*` models use browser-use's Google client with `DIMENSION_BROWSER_USE_API_KEY` or `GOOGLE_API_KEY`; anything else its OpenAI client with `DIMENSION_BROWSER_USE_API_KEY` or `OPENAI_API_KEY`, and `DIMENSION_BROWSER_USE_BASE_URL` for any OpenAI-compatible endpoint |
+| `TYPESAFE_API_KEY` | Read when the server starts. Set, the three task tools are offered; unset or blank, they are absent and the server log names this variable. Every jev decision is one call to TypeSafe's hosted service with it. |
+| `TEXT_MODEL_API_KEY` | Checked when a task starts: a task fails at once, naming it, if it is missing. Optionally `TEXT_MODEL_BASE_URL` and `TEXT_MODEL` for the small model that writes field values. |
 
-Once a task has run, the server keeps one worker pre-spawned with browser-use
-already imported (~4 s of imports), so the next browser-use task starts at its
-first step: 11–12 s to the first step cold, 4 s warm (browser-use, measured
-through the MCP server, 2026-09-26); jev's harness reads its env at import
-time, so a jev task saves only interpreter start-up. An unused spare exits
-after ten minutes. browser-use runs in flash mode, without its planner or judge call:
-on the 14-stage practice world with `gemini-3.1-flash-lite` both configurations
-pass 14/14, in 558 s and 251k tokens against 726 s and 787k for the library
-defaults.
+Once a task has run, the server keeps one worker pre-spawned and waiting, so the
+next task's clock starts without the interpreter's start-up. jev's harness reads
+its env at import time, so nothing of it can be loaded ahead: start-up is all the
+spare saves. It exists only where `TYPESAFE_API_KEY` is set, is used only by a
+task that starts in the environment it was started in, exits after ten minutes
+unused, and is let go when the server shuts down.
 
 jev always sends a `reasoning` object to `TEXT_MODEL_BASE_URL`; Gemini's
 OpenAI-compatible endpoint rejects unknown fields, so a Gemini field-value model
@@ -142,7 +142,7 @@ needs a relay that drops them (upstream jev-ultrafast behaviour).
 | `DIMENSION_BROWSER_RELAY_URL` | Relay CDP endpoint (default `http://127.0.0.1:9224`). |
 | `DIMENSION_BROWSER_HEADLESS` | `false` for a visible window. |
 | `DIMENSION_BROWSER_THROWAWAY_IDLE_MS` | How long a throwaway browser a chat opened may go without a call before it is closed, in milliseconds (default `600000`, 10 minutes; at most `2147483647`, above which a server refuses to start). |
-| `DIM_BROWSER_PYTHON` | Interpreter for the task agents. |
+| `DIM_BROWSER_PYTHON` | Interpreter for the task agent. |
 
 ### How the browser launches
 
@@ -194,14 +194,14 @@ throwaway. A site that refuses it is reported `blocked`, never worked around.
 
 ## Tools
 
-Model-callable (18), offered by audience (`_meta["ai.insodimension/spaces"]`; the
+Model-callable (15; 18 where jev's key is configured), offered by audience (`_meta["ai.insodimension/spaces"]`; the
 host leaves a tool out of a space's list and refuses the call there; the View's own
 buttons are not gated by it):
 
 | Offered to | Tools |
 |---|---|
 | Every space the pack is granted (10) | `browser_open`, `browser_view`, `browser_state`, `browser_snapshot`, `browser_inspect`, `browser_read`, `browser_screenshot`, `browser_act`, `browser_profiles`, `browser_close` |
-| Traction only (8) | `browser_task`, `browser_task_wait`, `browser_task_cancel`, `browser_publish`, `browser_publish_presets`, `browser_publish_confirm`, `browser_publish_cancel`, `browser_publish_wait` |
+| Traction only (5; 8 with jev's key) | `browser_publish`, `browser_publish_presets`, `browser_publish_confirm`, `browser_publish_cancel`, `browser_publish_wait`, and, only with `TYPESAFE_API_KEY`: `browser_task`, `browser_task_wait`, `browser_task_cancel` |
 
 Waiting, tabs and page scripts are steps of `browser_act`, and the page log is a
 field of `browser_state`: every tool is paid for by every agent on every turn, so a
@@ -483,6 +483,19 @@ as data, so the pack's code stays platform-agnostic:
   publish stays pending. The View's Post may omit `expect`. The page is then
   re-checked: another active tab, a different URL or a changed value fails with
   nothing clicked. `browser_publish_cancel` drops it.
+- **Only a post a human approved goes out.** `mode: "post"` is refused
+  (`publish_unapproved`, before the compose page is opened) unless an unspent,
+  unexpired [publish approval](#publish-approvals) covers this exact post: the
+  site, the profile, the preset it goes through and every value, character for
+  character. The confirm checks again and SPENDS the approval before it re-reads
+  the page and clicks submit, for the View's Post too (a confirm that ends
+  `unknown` with no click, because the page was used meanwhile, leaves it spent;
+  then record `draft_failed` if the post is not up, so the user's Retry approves
+  it again). A text the human did not approve, an
+  edit of one that was, a different profile, site or preset (a recipe the
+  caller wrote is never the approved preset), an expired approval and a second
+  post of an approved one are all refused; nothing is typed or clicked by the
+  refusal.
 - While a publish is pending the page is pinned: `browser_act`,
   `browser_task`, `browser_publish` and `browser_close` are refused
   (`publish_pending`) unless the host stamped the call as coming from the View.
@@ -544,6 +557,57 @@ modelled on; the fixture copies are in `test/platform-fixtures/`.
 user's comment that loads on the thread after submit could be taken as the
 receipt: the receipt checks the path shape and that the link was not on the
 page before submit, not who wrote the comment.
+
+### Publish approvals
+
+A publish is only as trustworthy as the thing that approved it. The host's
+Allow card puts you in front of the agent's confirm, but it cannot tell you
+that the text is the one you approved elsewhere (on Traction's campaign board).
+An approval is that statement, written by a surface only you can click, and
+checked here before anything is typed or posted. This pack only reads and
+spends approvals; it never writes one.
+
+Where: `<root>/publish-approvals/` (`$INSO_HOME/browser/publish-approvals`, else
+`~/.inso/browser/publish-approvals`).
+
+- `<draftId>.json`: `{ "v": 1, "draftId", "nonce", "binding", "approvedAt",
+  "expiresAt" }`. `draftId` is `[A-Za-z0-9_-]{1,64}` and names the file;
+  `nonce` is 32 lowercase hex; `approvedAt` and `expiresAt` are ISO times at
+  most 24 hours apart. `binding` is the lowercase hex SHA-256 of
+  `JSON.stringify(["publish-approval/v1", origin, profile, preset, values])`:
+  `origin` is the recipe's origin (`https://x.com`), `profile` the saved browser
+  profile that posts, `preset` the name of the shipped preset the post goes
+  through (`"x-post"`; `null` for a recipe the caller wrote, whose selectors and
+  submit button nobody approved, so a surface that approves a preset post can
+  never have it posted through a recipe), `values` every field's value in order,
+  as `bindingOf` in `src/publish-approval.ts` computes it. A draft has at most
+  one entry; approving it again replaces the file with a fresh `nonce`. A file
+  that does not parse to exactly this shape is not an approval.
+- `<draftId>.<nonce>.used`: made exclusively (`wx`) by the confirm that is
+  about to click submit. That create is the lock: of any number of confirms,
+  browsers or callers exactly one spends an approval, and a spent approval is
+  never spendable again, whatever the post's outcome. It is removed only when
+  nothing was submitted (`failed`: the page changed, the click never went).
+
+Both `browser_publish` (`mode: "post"`) and `browser_publish_confirm` fail
+closed with `publish_unapproved`, in three flavours the message names: no
+approval covers this exact post, the approval expired (the agent records
+`draft_failed`; the user's Retry approves it again), or it was already used (the
+post may be up; never post it twice).
+
+Today the only writer is Traction's board, and it approves X posts through the
+`x-post` preset only: through this pack, nothing else can be posted until
+another surface writes approvals (post those yourself on the site). The binding
+does not cover the page a `needsTarget` preset posts on (`reddit-comment`), so
+no surface should approve one before it does.
+
+What this does not cover: a process that can write files as you. An agent with
+a code runner or a file writer can write an approval, so a host that lends this
+pack to such an agent gets the Allow card and nothing more; give the agents that
+publish neither. (Traction's platform agents hold neither; its CMO keeps `write`
+for its desk notes and so is inside this limit.) Posting with `browser_act` or `browser_task` is page driving,
+not publishing: it is not gated here either, so an agent that posts only through
+`browser_publish` should not hold them.
 
 ## Connection report
 

@@ -227,7 +227,6 @@ function markPublishPending(runtime: BrowserRuntime, browserId: string): void {
 function markTaskRunning(runtime: BrowserRuntime, browserId: string): void {
 	entryOf(runtime, browserId).task = {
 		id: "t",
-		agent: "jev",
 		task: "hold the page",
 		status: "running",
 		summary: "",
