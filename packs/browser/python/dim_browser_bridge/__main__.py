@@ -1,8 +1,8 @@
 """Task worker entry point: `python -m dim_browser_bridge`.
 
-stdin:  one JSON request line {"agent","cdpUrl","task","maxSteps","startUrl"[,"credential":{"origin","password"}]};
-        stdin then stays open, and EOF on it is a cancel request. `credential` is jev-only and
-        is never echoed: not to stdout, stderr, a step or the result.
+stdin:  one JSON request line {"cdpUrl","task","maxSteps","startUrl"[,"credential":{"origin","password"}]};
+        stdin then stays open, and EOF on it is a cancel request. `credential` is never echoed: not to
+        stdout, stderr, a step or the result.
 stdout: JSON lines only — `step` lines with cumulative usage, then exactly one `result` line.
 stderr: logs.
 """
@@ -12,8 +12,6 @@ import os
 import sys
 import threading
 import time
-
-AGENTS = ("jev", "browser-use")
 
 
 class Report:
@@ -42,8 +40,6 @@ def parse(line):
     request = json.loads(line)
     if not isinstance(request, dict):
         raise ValueError("expected one JSON object line")
-    if request.get("agent") not in AGENTS:
-        raise ValueError(f"agent must be one of {', '.join(AGENTS)}")
     for key in ("cdpUrl", "task"):
         if not isinstance(request.get(key), str) or not request[key].strip():
             raise ValueError(f"{key} must be a non-empty string")
@@ -68,20 +64,9 @@ def main():
     devnull = os.open(os.devnull, os.O_RDONLY)
     os.dup2(devnull, 0)
     os.close(devnull)
-    # A pre-spawned spare (src/task.ts sets DIM_BROWSER_SPARE) imports browser-use while it waits
-    # for its job, so that import (~4 s) is never on a task's clock. jev cannot be preloaded: its
-    # harness reads its env at import time. A worker spawned for a job imports only what it needs.
-    # A failed import is left for the task that needs it to report.
-    if os.environ.get("DIM_BROWSER_SPARE"):
-        try:
-            from . import browser_use_task
-
-            browser_use_task.preload()
-        except Exception:
-            pass
     line = control.readline()
     if not line:
-        return 0  # an idle spare let go before it was given a job
+        return 0  # let go before it was given a job
     report = Report(out)
     cancel = threading.Event()
     try:
@@ -97,10 +82,7 @@ def main():
 
     threading.Thread(target=watch_stdin, daemon=True).start()
     try:
-        if request["agent"] == "jev":
-            from . import jev_task as task
-        else:
-            from . import browser_use_task as task
+        from . import jev_task as task
         status, summary = task.run(request, cancel, report)
     except Exception as exc:
         print(f"task failed: {exc!r}", file=sys.stderr)

@@ -34,7 +34,7 @@ import {
 const VIEWPORT = { width: 640, height: 480 };
 const FAKE_WORKER = fileURLToPath(new URL("./fake-worker/", import.meta.url));
 const PYTHON_DIR = fileURLToPath(new URL("../python/", import.meta.url));
-const PYTHON = join(PYTHON_DIR, ".venv", ...(process.platform === "win32" ? ["Scripts", "python.exe"] : ["bin", "python"]));
+const PYTHON = process.env.DIM_BROWSER_PYTHON?.trim() || join(PYTHON_DIR, ".venv", ...(process.platform === "win32" ? ["Scripts", "python.exe"] : ["bin", "python"]));
 
 // ---------------------------------------------------------------------------
 // The human's Chrome: launched here, never by the runtime under test
@@ -179,9 +179,7 @@ describeWithChrome("chrome-relay", () => {
 				steps: [{ action: "take over", url: userUrl }],
 				result: { status: "done", summary: "ran on the relay", steps: 1 },
 			});
-			for (const agent of ["jev", "browser-use"] as const) {
-				expect(await failureCode(() => runtime.runTask(browserId, { agent, task: script }))).toBe("task_unsupported_engine");
-			}
+			expect(await failureCode(() => runtime.runTask(browserId, { task: script }))).toBe("task_unsupported_engine");
 
 			expect((await runtime.state(browserId)).task).toBeNull();
 			expect(fixture.hits("/worker-ran")).toBe(0);

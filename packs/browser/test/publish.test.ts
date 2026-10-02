@@ -36,6 +36,9 @@ import { createBrowserServer } from "../src/server";
 import { ActionNotDispatched } from "../src/store";
 import { approvePublish, BROWSER_TEST_TIMEOUT_MS, chromePath, createRoot, describeWithChrome, failureCode, newRuntime, perform, racingClock, teardown } from "./fixture";
 import { type ComposeVariant, type PublishFixture, startPublishFixture } from "./publish-fixture";
+import { withJevKey } from "./jev-key";
+
+withJevKey();
 
 const CALLER = "ai.insodimension/caller";
 const TEXT = "first line\nsecond line — ünïcødé 🚀";
@@ -576,7 +579,7 @@ describeWithChrome("browser_publish", () => {
 			const calls: Array<[string, Record<string, unknown>]> = [
 				["browser_act", { browserId: id, actions: [{ kind: "type", selector: "#text", text: "not what the human saw" }] }],
 				["browser_act", { browserId: id, actions: [{ kind: "tab", op: "new", url: s.fixture.url("/compose?v=stay") }] }],
-				["browser_task", { browserId: id, agent: "jev", task: "post something else", waitSeconds: 0 }],
+				["browser_task", { browserId: id, task: "post something else", waitSeconds: 0 }],
 				["browser_publish", { browserId: id, recipe: recipe(s.fixture, "stay"), mode: "check" }],
 			];
 			for (const caller of [undefined, "model"]) {
@@ -590,7 +593,7 @@ describeWithChrome("browser_publish", () => {
 			expect(await failureCode(() => s.runtime.tab(id, { op: "new" }, "model"))).toBe("publish_pending");
 			// One refusal for a whole batch, before any of its steps reaches the page.
 			expect(await failureCode(() => s.runtime.actMany(id, [{ kind: "type", selector: "#text", text: "x" }, { kind: "click", selector: "#post" }], "model"))).toBe("publish_pending");
-			expect(await failureCode(() => s.runtime.startTask(id, { agent: "jev", task: "post something else" }, "model"))).toBe("publish_pending");
+			expect(await failureCode(() => s.runtime.startTask(id, { task: "post something else" }, "model"))).toBe("publish_pending");
 			expect(await failureCode(() => s.runtime.publish(id, recipe(s.fixture, "stay"), "check", "model"))).toBe("publish_pending");
 
 			const after = await s.runtime.state(id);
