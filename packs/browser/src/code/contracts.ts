@@ -169,6 +169,11 @@ export interface TabRealm {
   adopt(name: string, h: TabHandle): Promise<void>;
   /** Drop the page; never closes a foreign browser. */
   release(name: string): Promise<void>;
+  /**
+   * `run` and `call` stay in the worker thread, so what they return is not posted anywhere; it is copied into the cell's realm, and there it is bounded (worker/dispatch.ts `bridgeResponse`): the text parts to the 50 KiB
+   * inline budget (the start, the end, a note), the images to the 32 MiB a cell keeps in all. A realm SHOULD bound what it collects the same way as it collects it (text through `OutputSink`, images under
+   * `MAX_IMAGE_BASE64_CHARS`), or a `tab.run` that prints without end grows the worker until its budget or the host's memory watchdog ends it. `returnValue` is the page code's own value and is never bounded or copied.
+   */
   run(r: { name: string; code?: string; fn?: string; args?: unknown[]; timeoutMs: number; signal: AbortSignal }): Promise<RunResult>;
   call(r: { name: string; chain: Array<{ method: string; args: unknown[] }>; timeoutMs: number; signal: AbortSignal }): Promise<RunResult>;
   names(): string[];
