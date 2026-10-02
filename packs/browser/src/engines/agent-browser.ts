@@ -40,6 +40,7 @@
  * one switch; the runtime sets it from `profile === null`, never from tool
  * input.
  */
+import { randomBytes } from "node:crypto";
 import type { CDPSession, Protocol } from "puppeteer-core";
 import type { Viewport } from "../contracts.js";
 import { LOOPBACK_EXCEPTIONS } from "./page-log.js";
@@ -155,21 +156,72 @@ export function maskedGraphics(platform: string): MaskedGraphics {
  * does. Not touched, and different from a real GPU's: texture and uniform limits
  * and the extension list; a TypeError thrown through a wrapper shows its
  * `Object.apply` frame (the same weakness oh-my-pi's scripts have).
+ *
+ * A Proxy reads `function () { [native code] }` (no name) to any realm's own
+ * `Function.prototype.toString`, so a frame asking about the page's functions, or the
+ * page about a frame's, would find them. Every frame runs this script too, and the
+ * frames of one page that can reach each other (same origin) therefore keep their
+ * names in the topmost one's list: a frame tells the top the name of each function it
+ * replaces, and asks it about a function it does not know. Both are calls to the top's
+ * own patched `toString` with a first argument only this script can make (`secret`
+ * names three registered symbols, and is chosen anew for each browser), so a page
+ * calling `toString` with arguments gets the answer it always gets. A page that
+ * replaces the top's `toString` with a function of its own before a frame is made would
+ * hear those calls; it learns nothing it can use. A frame of another origin cannot be
+ * reached either way, and neither can a popup.
  * Self-contained: it is serialized into the page, and into each dedicated and
  * shared worker (`graphicsMaskExpression`), whose OffscreenCanvas would
  * otherwise name the host's renderer beside the page's masked one.
  */
-export const SOFTWARE_GRAPHICS_MASK = (vendor: string, renderer: string, software: string): void => {
+export const SOFTWARE_GRAPHICS_MASK = (vendor: string, renderer: string, software: string, secret: string): void => {
 	const looksSoftware = new RegExp(software, "i");
 	const nativeToString = Function.prototype.toString;
+	const REGISTER = Symbol.for(`${secret}:register`);
+	const LOOKUP = Symbol.for(`${secret}:lookup`);
+	const ANSWER = Symbol.for(`${secret}:answer`);
+	// The highest window this one can reach (a worker has none): its toString keeps the names for every frame below it.
+	let highest: Window | undefined = typeof window === "object" ? window : undefined;
+	try {
+		for (let up = highest?.parent; highest && up && up !== highest; up = highest.parent) {
+			void up.Function; // throws for a parent of another origin
+			highest = up;
+		}
+	} catch {
+		// `highest` is the last parent this frame could reach.
+	}
+	const hub = highest && highest !== window ? highest.Function.prototype.toString : undefined;
 	const names = new WeakMap<object, string>();
+	const isObject = (value: unknown): value is object => (typeof value === "object" && value !== null) || typeof value === "function";
+	/** What the hub answers for `fn`; nothing when the hub is not this script's, or throws. */
+	const askHub = (fn: object, ...args: unknown[]): unknown => {
+		try {
+			return hub ? Reflect.apply(hub, fn, args) : undefined;
+		} catch {
+			return undefined;
+		}
+	};
 	const toString = new Proxy(nativeToString, {
 		apply(target, self, args) {
-			const name = names.get(self as object);
+			if (args[0] === REGISTER) {
+				if (isObject(self)) names.set(self, String(args[1]));
+				return undefined;
+			}
+			if (args[0] === LOOKUP) return [ANSWER, isObject(self) ? names.get(self) : undefined];
+			let name = isObject(self) ? names.get(self) : undefined;
+			if (name === undefined && typeof self === "function") {
+				const answer = askHub(self, LOOKUP);
+				if (Array.isArray(answer) && answer[0] === ANSWER) name = answer[1] as string | undefined;
+			}
 			return name === undefined ? Reflect.apply(target, self, args) : `function ${name}() { [native code] }`;
 		},
 	});
-	names.set(toString, "toString");
+	/** `fn` reads `function <name>() { [native code] }` to this realm's toString, and to every frame's under the same top. */
+	const known = <T extends object>(fn: T, name: string): T => {
+		names.set(fn, name);
+		askHub(fn, REGISTER, name);
+		return fn;
+	};
+	known(toString, "toString");
 	Object.defineProperty(Function.prototype, "toString", { value: toString, writable: true, configurable: true, enumerable: false });
 	const UNMASKED_VENDOR_WEBGL = 0x9245;
 	const UNMASKED_RENDERER_WEBGL = 0x9246;
@@ -185,7 +237,7 @@ export const SOFTWARE_GRAPHICS_MASK = (vendor: string, renderer: string, softwar
 				return value;
 			},
 		});
-		names.set(getParameter, "getParameter");
+		known(getParameter, "getParameter");
 		Object.defineProperty(Context.prototype, "getParameter", { value: getParameter, writable: true, configurable: true, enumerable: true });
 		// ANGLE on a real GPU reports one precision for every float type; SwiftShader gives the lower ones less. The higher type's
 		// own native answer stands in, so the object is a real WebGLShaderPrecisionFormat.
@@ -198,12 +250,15 @@ export const SOFTWARE_GRAPHICS_MASK = (vendor: string, renderer: string, softwar
 				return Reflect.apply(target, self, type === LOW_FLOAT || type === MEDIUM_FLOAT ? [args[0], HIGH_FLOAT] : args);
 			},
 		});
-		names.set(precision, "getShaderPrecisionFormat");
+		known(precision, "getShaderPrecisionFormat");
 		Object.defineProperty(Context.prototype, "getShaderPrecisionFormat", { value: precision, writable: true, configurable: true, enumerable: true });
 	}
 };
 
+/** Chosen anew for each process, so no page can know the calls the mask's realms make to each other (`SOFTWARE_GRAPHICS_MASK`). */
+const REALM_SECRET = randomBytes(12).toString("hex");
+
 /** `SOFTWARE_GRAPHICS_MASK` as an expression to run in a worker's global scope, before its script does. */
 export function graphicsMaskExpression(graphics: MaskedGraphics): string {
-	return `(${SOFTWARE_GRAPHICS_MASK.toString()})(${JSON.stringify(graphics.vendor)}, ${JSON.stringify(graphics.renderer)}, ${JSON.stringify(SOFTWARE_RENDERER.source)})`;
+	return `(${SOFTWARE_GRAPHICS_MASK.toString()})(${JSON.stringify(graphics.vendor)}, ${JSON.stringify(graphics.renderer)}, ${JSON.stringify(SOFTWARE_RENDERER.source)}, ${JSON.stringify(REALM_SECRET)})`;
 }

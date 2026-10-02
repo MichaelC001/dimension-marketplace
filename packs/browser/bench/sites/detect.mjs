@@ -197,6 +197,25 @@ async function run() {
   add("iframe-webdriver", "iframe", safe(() => fw.navigator.webdriver === true, false), safe(() => String(fw.navigator.webdriver)), "an iframe's navigator.webdriver is true");
   add("iframe-ua", "iframe", safe(() => /HeadlessChrome/.test(fw.navigator.userAgent), true), safe(() => fw.navigator.userAgent), "an iframe's User-Agent names HeadlessChrome");
   add("iframe-window-proxy", "iframe", safe(() => !(fw.self === fw.window && fw.frameElement === frame), true), "self/frameElement", "an iframe's window is not the genuine one");
+  // The lie test from the other side of a realm. A function replaced by a Proxy reads as native to ITS realm's patched toString, but another realm's own Function.prototype.toString says "function () { [native code] }" for it, with no name: this window's replacements asked of a frame's toString, and a frame's replacements asked of this window's. Two frames: the srcdoc one above, and an empty one a script of this page makes and reads at once.
+  const blank = document.createElement("iframe");
+  document.body.appendChild(blank);
+  const namedNative = (toStringOf, fn) => safe(() => toStringOf.call(fn) === "function " + fn.name + "() { [native code] }", false);
+  const crossRealm = [];
+  const frameGpu = [];
+  for (const [label, w] of [["srcdoc iframe", fw], ["blank iframe", blank.contentWindow]]) {
+    if (!w) continue;
+    const apis = (win) => [["WebGL getParameter", win.WebGLRenderingContext && win.WebGLRenderingContext.prototype.getParameter], ["WebGL getShaderPrecisionFormat", win.WebGLRenderingContext && win.WebGLRenderingContext.prototype.getShaderPrecisionFormat], ["Function.prototype.toString", win.Function.prototype.toString]];
+    const mine = apis(window), theirs = apis(w);
+    for (let i = 0; i < mine.length; i += 1) {
+      if (typeof mine[i][1] === "function" && !namedNative(w.Function.prototype.toString, mine[i][1])) crossRealm.push(label + "'s toString on this window's " + mine[i][0]);
+      if (typeof theirs[i][1] === "function" && !namedNative(Function.prototype.toString, theirs[i][1])) crossRealm.push("this window's toString on the " + label + "'s " + theirs[i][0]);
+    }
+    frameGpu.push([label, safe(() => { const g = w.document.createElement("canvas").getContext("webgl"); const e = g.getExtension("WEBGL_debug_renderer_info"); return g.getParameter(e.UNMASKED_RENDERER_WEBGL); }, "n/a")]);
+  }
+  add("native-source-cross-realm", "tamper", crossRealm.length > 0, crossRealm.length ? crossRealm : "a frame's toString and this window's agree that every replaced function is native and named", "a replaced function's source, asked by another realm's Function.prototype.toString (the standard iframe 'lies' test)");
+  add("iframe-webgl-renderer", "iframe", frameGpu.some(([, r]) => /swiftshader|llvmpipe|lavapipe|software|mesa offscreen|google inc\. \(google\)/i.test(String(r))), frameGpu, "a same-origin frame's WebGL names a software renderer (the page's own may be masked, a frame's is a third place to look)");
+  blank.remove();
   frame.remove();
 
   // --- codecs -----------------------------------------------------------------------------------

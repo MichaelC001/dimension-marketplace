@@ -29,7 +29,7 @@ const CONTROLLED = [
 	"webdriver", "iframe-webdriver", "worker-webdriver",
 	"ua-headless", "ua-data-headless", "worker-ua-headless", "iframe-ua", "ch-ua-header-headless", "worker-matches-page",
 	"outer-smaller-than-inner", "viewport-larger-than-screen", "screen-orientation", "screen-default", "window-fits-screen", "outer-window",
-	"webgl-renderer", "webgl-precision", "webgl-worker-renderer", "navigator-own-properties", "accessor-receiver", "native-source",
+	"webgl-renderer", "webgl-precision", "webgl-worker-renderer", "iframe-webgl-renderer", "navigator-own-properties", "accessor-receiver", "native-source", "native-source-cross-realm",
 	"cdp-runtime-enabled", "worker-runtime-enabled", "driver-main-world",
 ];
 
