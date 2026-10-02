@@ -772,6 +772,11 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		return held.length > 0 ? `${why}. You hold ${held.join(", ")}: browser_close the ones you are done with` : `${why}. None is yours; try again shortly`;
 	}
 
+	/** Someone other than a cell is about to use the browser live (a View joined, a task agent began): the code host thaws its tabs, because a frozen page draws nothing and answers no timer. */
+	private wake(browserId: string): void {
+		for (const listener of [...this.viewListeners]) listener(browserId);
+	}
+
 	/**
 	 * A View joined `browserId`'s live stream (stream.ts): while any View is joined nobody may give the browser up, and it is not idle.
 	 * Returns what ends that. A count, not a clock: a View whose page answers slowly is still watching.
@@ -779,7 +784,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	viewing(browserId: string): () => void {
 		const entry = this.require(browserId);
 		entry.viewers += 1;
-		for (const listener of [...this.viewListeners]) listener(browserId);
+		this.wake(browserId);
 		let ended = false;
 		return () => {
 			if (ended) return;
@@ -837,6 +842,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			viewOf: (session) => this.viewOf(session),
 			bindView: (session, browserId) => this.bindView(session, browserId),
 			hold: (entry) => this.holdWork(entry as Entry),
+			working: (entry) => this.working(entry as Entry),
 			serialize: (entry, work) => this.serialize(entry as Entry, work),
 			onEnd: (listener) => {
 				this.endListeners.add(listener);
@@ -1673,6 +1679,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			});
 			entry.task = run;
 			entry.worker = { process: worker, finished };
+			this.wake(entry.browserId);
 			// Returned wrapped so the serializer is released now: the task runs
 			// outside the page queue, and frames keep flowing while it works.
 			return { run, finished };

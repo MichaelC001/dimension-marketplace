@@ -181,11 +181,11 @@ export interface CodeBrowserPort {
   resize(browserId: string, viewport: { width: number; height: number; scale?: number }): Promise<void>;
   /** `persist: true` exempts the browser from idle close and from being closed to make room. */
   setPersist(browserId: string, persist: boolean): void;
-  /** What the freeze clock reads; undefined once the browser is gone. `idleMs`: since any call reached it, the View's included. */
-  activity(browserId: string): { idleMs: number; viewers: number; pending: number } | undefined;
+  /** What the freeze clock reads; undefined once the browser is gone. `idleMs`: since any call reached it, the View's included. `working`: a call is queued or running, or a task agent is driving the browser (a task's steps do not touch `idleMs`). */
+  activity(browserId: string): { idleMs: number; viewers: number; pending: number; working: boolean } | undefined;
   /** The browser the session already holds (one a cell made, or the person opened in the View), without making one: what `browser.tabs()` and `browser.active()` read. */
   existing(session: string): { browserId: string; wsEndpoint: string } | undefined;
-  /** A View joined the browser's live stream: a frozen tab draws nothing, so the host thaws before the View looks. */
+  /** A View joined the browser's live stream, or a task agent began driving it: a frozen tab draws nothing and answers no timer, so the host thaws before either looks. */
   onViewed(l: (browserId: string) => void): () => void;
 }
 

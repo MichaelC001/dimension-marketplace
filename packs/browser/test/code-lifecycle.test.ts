@@ -88,6 +88,8 @@ class FakeBrowsers implements CodeBrowserPort {
   idleMs = 0;
   viewers = 0;
   pending = 0;
+  /** A task agent is driving the browser: its steps never reach `idleMs`. */
+  working = false;
   readonly #ends = new Set<(browserId: string, why: "closed" | "retired" | "taken-over", reason?: string) => void>();
   readonly #views = new Set<(browserId: string) => void>();
   #browser: { id: string; tabs: TabRef[] } | undefined;
@@ -140,8 +142,8 @@ class FakeBrowsers implements CodeBrowserPort {
 
   setPersist(): void {}
 
-  activity(): { idleMs: number; viewers: number; pending: number } | undefined {
-    return this.#browser === undefined ? undefined : { idleMs: this.idleMs, viewers: this.viewers, pending: this.pending };
+  activity(): { idleMs: number; viewers: number; pending: number; working: boolean } | undefined {
+    return this.#browser === undefined ? undefined : { idleMs: this.idleMs, viewers: this.viewers, pending: this.pending, working: this.working };
   }
 
   existing(): { browserId: string; wsEndpoint: string } | undefined {
@@ -325,6 +327,22 @@ describe("an idle tab freezes and thaws", () => {
     await waitUntil("the tab is frozen once the View has gone", () => browsers.frozen.size, size => size === 1, 2_000);
     browsers.view();
     await waitUntil("the View's arrival thaws it", () => browsers.frozen.size, size => size === 0, 2_000);
+    // Thawed for the View, and not left live for ever: the freeze clock runs again, and it freezes once nobody is looking.
+    await waitUntil("the tab freezes again after the View's thaw", () => browsers.frozen.size, size => size === 1, 2_000);
+  });
+
+  test("a browser a task agent is driving is not frozen, however long it has been since a call reached it; when the task ends it freezes", async () => {
+    const { host, browsers, workers } = rig({ timing: { freezeIdleMs: 60, workerIdleMs: 60_000, startupTimeoutMs: 1_000, graceMs: 50, finishedTtlMs: 60_000 } });
+    const runId = await start(host);
+    await open(workers[0]!, runId);
+    workers[0]!.emit({ t: "result", runId, ...OK });
+    await host.resume("s1", runId, 1_000, NEVER);
+    browsers.idleMs = 500; // the cell's last call was long ago; the task's steps do not move this
+    browsers.working = true;
+    await new Promise(resolve => setTimeout(resolve, 300)); // a real wait: the thing under test is that nothing happens in this window
+    expect(browsers.frozen.size).toBe(0);
+    browsers.working = false;
+    await waitUntil("the tab is frozen once the task has ended", () => browsers.frozen.size, size => size === 1, 2_000);
   });
 });
 

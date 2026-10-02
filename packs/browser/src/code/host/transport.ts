@@ -47,12 +47,15 @@ export interface ThreadLimits {
   maxOldGenerationSizeMb: number;
 }
 
+/** The code worker's bundle, beside the server's (`app/code-worker.mjs`). The pack's `files` list must ship it: a server without it answers every `browser_run` with a startup failure. */
+export const WORKER_BUNDLE = "code-worker.mjs";
+
 /**
  * Where the worker's code is. The bundled server (`app/server.mjs`) has the worker beside it (`app/code-worker.mjs`, the second esbuild entry);
  * running from source (the tests, a dev checkout) it is the worker's TypeScript entry.
  */
 export function defaultWorkerEntry(): URL {
-  const bundled = new URL("./code-worker.mjs", import.meta.url);
+  const bundled = new URL(`./${WORKER_BUNDLE}`, import.meta.url);
   return existsSync(fileURLToPath(bundled)) ? bundled : new URL("../worker/entry.ts", import.meta.url);
 }
 

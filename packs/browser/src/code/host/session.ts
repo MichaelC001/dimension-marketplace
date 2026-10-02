@@ -721,7 +721,8 @@ export class CodeSession {
 
   /** A View joined `browserId`'s stream: a frozen tab draws nothing, so it is thawed before the View looks. */
   viewed(browserId: string): void {
-    if (this.#browsers.has(browserId)) void this.#thaw(browserId);
+    // Thawed for the View (or the task agent), and then the freeze clock runs again: left live for ever it would keep using CPU after they are gone.
+    if (this.#browsers.has(browserId)) void this.#thaw(browserId).then(() => this.#afterRun());
   }
 
   #thaw(only?: string): Promise<void> {
@@ -746,7 +747,8 @@ export class CodeSession {
       for (const record of [...this.#browsers.values()]) {
         const activity = this.#d.browsers.activity(record.browserId);
         if (activity === undefined) continue;
-        if (activity.viewers > 0 || activity.pending > 0) {
+        // A task agent driving the browser is work: its steps never stamp the browser as used, so the idle clock alone would freeze the page under it.
+        if (activity.viewers > 0 || activity.pending > 0 || activity.working) {
           nextIn = Math.min(nextIn, freezeIdleMs);
           continue;
         }
