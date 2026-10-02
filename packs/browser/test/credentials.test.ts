@@ -29,14 +29,18 @@ import { BrowserRuntimeError } from "../src/store";
 import { BROWSER_TEST_TIMEOUT_MS, chromePath, createRoot, newRuntime, startFixture, teardown } from "./fixture";
 
 const PYTHON_DIR = fileURLToPath(new URL("../python/", import.meta.url));
-const PYTHON = join(PYTHON_DIR, ".venv", ...(process.platform === "win32" ? ["Scripts", "python.exe"] : ["bin", "python"]));
+const VENV_PYTHON = join(PYTHON_DIR, ".venv", ...(process.platform === "win32" ? ["Scripts", "python.exe"] : ["bin", "python"]));
 const FAKE_WORKER = fileURLToPath(new URL("./fake-worker/", import.meta.url));
+// The scripted FAKE worker needs an interpreter that can import `websockets`: the pack's pinned environment, or the one named in
+// DIM_BROWSER_PYTHON (as profile-control.test.ts does). The REAL worker's tests need the pinned environment itself.
+const PYTHON = process.env.DIM_BROWSER_PYTHON?.trim() || VENV_PYTHON;
 const hasPython = existsSync(PYTHON);
-if (!hasPython) {
-	console.warn(`[browser tests] ${PYTHON} is missing; the credential tests are SKIPPED. Run: cd python && uv sync --python 3.12`);
-}
-const describeWithBoth = chromePath === undefined || !hasPython ? describe.skip : describe;
-const describeWithPython = hasPython ? describe : describe.skip;
+const hasVenv = existsSync(VENV_PYTHON);
+if (!hasPython) console.warn(`[browser tests] ${PYTHON} is missing; the credentials-through-browser_task tests are SKIPPED. Run: cd python && uv sync --python 3.12 (or set DIM_BROWSER_PYTHON)`);
+if (!hasVenv) console.warn(`[browser tests] ${VENV_PYTHON} is missing; the tests of the real worker (the password fill, the jev worker) are SKIPPED. Run: cd python && uv sync --python 3.12`);
+const describeWithFakeWorker = chromePath === undefined || !hasPython ? describe.skip : describe;
+const describeWithRealWorker = chromePath === undefined || !hasVenv ? describe.skip : describe;
+const describeWithPython = hasVenv ? describe : describe.skip;
 
 const SHOP = "https://shop.example";
 
@@ -47,7 +51,7 @@ const SHOP = "https://shop.example";
 /** Run a snippet in the REAL worker package (not the fake one) and return its stdout. */
 function python(code: string, stdin: string): string {
 	const env: Record<string, string | undefined> = { ...process.env, PYTHONPATH: PYTHON_DIR, PYTHONDONTWRITEBYTECODE: "1", PYTHONIOENCODING: "utf-8" };
-	const run = spawnSync(PYTHON, ["-c", code], { cwd: PYTHON_DIR, env, input: stdin, encoding: "utf8", windowsHide: true });
+	const run = spawnSync(VENV_PYTHON, ["-c", code], { cwd: PYTHON_DIR, env, input: stdin, encoding: "utf8", windowsHide: true });
 	if (run.status !== 0) throw new Error(`python exited ${run.status}: ${run.stderr}`);
 	return run.stdout;
 }
@@ -189,7 +193,7 @@ afterEach(async () => {
 // The runtime and MCP server: the value reaches the worker and nothing else
 // ---------------------------------------------------------------------------
 
-describeWithBoth("credentials through browser_task", () => {
+describeWithFakeWorker("credentials through browser_task", () => {
 	test(
 		"a signup mints a password only the worker receives; no tool result, task record or log carries it; retries and logins reuse it",
 		async () => {
@@ -294,7 +298,7 @@ describeWithBoth("credentials through browser_task", () => {
 /** A password whose characters would break (or inject into) a script that did not pass it as a JSON literal. */
 const AWKWARD = `a"b'c\\d</script>\${x}\`e пароль✓`;
 
-describeWithBoth("the password fill in a real page", () => {
+describeWithRealWorker("the password fill in a real page", () => {
 	async function openPage(url: string): Promise<Page> {
 		const browser = await puppeteer.launch({ executablePath: chromePath, headless: true, userDataDir: await createRoot() });
 		browsers.push(browser);

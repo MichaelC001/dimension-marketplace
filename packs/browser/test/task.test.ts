@@ -35,7 +35,8 @@ import {
 
 const VIEWPORT = { width: 640, height: 480 };
 const PYTHON_DIR = fileURLToPath(new URL("../python/", import.meta.url));
-const PYTHON = join(PYTHON_DIR, ".venv", ...(process.platform === "win32" ? ["Scripts", "python.exe"] : ["bin", "python"]));
+// The scripted fake worker needs an interpreter: the pack's pinned environment, or the one named in DIM_BROWSER_PYTHON (as profile-control.test.ts does).
+const PYTHON = process.env.DIM_BROWSER_PYTHON?.trim() || join(PYTHON_DIR, ".venv", ...(process.platform === "win32" ? ["Scripts", "python.exe"] : ["bin", "python"]));
 const FAKE_WORKER = fileURLToPath(new URL("./fake-worker/", import.meta.url));
 
 if (!existsSync(PYTHON)) {
