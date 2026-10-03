@@ -745,7 +745,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		if (entry.closed) return { ok: false, code: "source_closed" };
 		if (entry.opener.session !== session && this.viewOf(session) !== browserId) return { ok: false, code: "not_owner" };
 		if (entry.engine !== "chromium" || this.options.headless === false) return { ok: false, code: "not_headless" };
-		const state = entry.driver.state();
+		const state = this.redact(entry, entry.driver.state());
 		return { ok: true, profile: entry.profile === null ? "throwaway" : "saved", url: state.url, title: state.title };
 	}
 
