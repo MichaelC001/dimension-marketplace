@@ -483,10 +483,8 @@ export interface BrowserRuntimePort {
   bindView(session: string, browserId: string): void;
   /** The browser the human opened or is viewing in `session`, while it is open. */
   viewOf(session: string): string | undefined;
-  /** A stamped session may preview only its opening or held browser; never binds the View. */
+  /** App-preview authorization accepts only the host-stamped opener or this session's held View. */
   previewAccess(session: string, browserId: string): { ok: true; profile: "throwaway" | "saved"; url: string; title: string } | { ok: false; code: "not_owner" | "unknown_source" | "source_closed" | "not_headless" };
-  /** Newest headless source for a browser_run call in this host session. */
-  previewSource(session: string): string | undefined;
   /** A still only for a throwaway owned source, rate-limited by the runtime. */
   previewStill(session: string, browserId: string): Promise<string | undefined>;
   /** Serialized and refused (`task_running`, `publish_pending`) like `act`; nothing is changed on the page. `timeout` is a result, not an error. */

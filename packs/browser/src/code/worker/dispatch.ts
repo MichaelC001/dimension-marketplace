@@ -67,6 +67,8 @@ export interface DispatcherPorts {
   realm: TabRealm;
   /** Sends one `open`/`close`/`tabs`/`active` request to the code host and answers with its reply; rejects when `signal` aborts. */
   host(request: BridgeRequest, o: { runId: string; signal: AbortSignal }): Promise<HostReply>;
+  /** Tell the host which named page a worker-local run/call is about to drive. */
+  activity?(runId: string, name: string): void;
 }
 
 function summarize(error: z.ZodError): string {
@@ -164,8 +166,10 @@ export function createDispatcher(ports: DispatcherPorts): CellInvoke {
         return { text: reply.text, details: { ...details, ...reply.details, action: "active", name: found }, ...(reply.images ? { images: reply.images } : {}) };
       }
       case "call":
+        ports.activity?.(runId, name);
         return bridgeResponse(await realm.call({ name, chain: request.chain ?? [], timeoutMs, signal }), details);
       case "run":
+        ports.activity?.(runId, name);
         return bridgeResponse(await realm.run({ name, ...runTarget(request), timeoutMs, signal }), details);
     }
   };
@@ -305,7 +309,7 @@ export class WorkerCore {
     }
     const controller = new AbortController();
     this.#runs.set(runId, controller);
-    const invoke = createDispatcher({ realm, host: (request, o) => this.#hostCall(request, o) });
+    const invoke = createDispatcher({ realm, host: (request, o) => this.#hostCall(request, o), activity: (id, name) => this.#send({ t: "activity", runId: id, name }) });
     try {
       // `onText` is already bounded and throttled by the cell's output sink (16 KiB, 100 ms), so a flooding cell cannot flood the host through this message.
       const payload = await cell.run({ runId, code, timeoutMs, signal: controller.signal, invoke, onText: chunk => this.#send({ t: "text", runId, chunk }), ...(this.#outputDir === undefined ? {} : { spillDir: this.#outputDir }) });

@@ -453,10 +453,8 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
       host: codeHost,
       sessionOf,
       artifactsDir: () => options.codeArtifactsDir ?? join(process.env.DIMENSION_BROWSER_ROOT || defaultRootDir(), "artifacts"),
-      preview: async (session, running) => {
-        const id = runtime.previewSource(session);
-        return id ? (running ? previewMeta(runtime, id, session) : await previewResult(runtime, id, session))?.[PREVIEW_META_KEY] : undefined;
-      },
+      preview: async (session, browserId, running) =>
+        (running ? previewMeta(runtime, browserId, session) : await previewResult(runtime, browserId, session))?.[PREVIEW_META_KEY],
       meta: { [APPROVAL_META_KEY]: "exec", [SPACES_META_KEY]: CODE_TOOL_SPACES },
     });
   }

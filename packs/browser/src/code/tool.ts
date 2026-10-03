@@ -36,7 +36,7 @@ export interface CodeToolDeps {
   /** `_meta` of the tool: the host's approval tier and the spaces that may offer it (policy lives in server.ts). */
   meta: Record<string, unknown>;
   /** Out-of-band source identity for the current host session; never included in model content. */
-  preview?(session: string, running: boolean): Promise<unknown>;
+  preview?(session: string, browserId: string, running: boolean): Promise<unknown>;
   /** One call's wait, ms. Defaults to {@link RUN_WAIT_CAP_MS}; a test shortens it. */
   waitCapMs?: number;
 }
@@ -123,11 +123,17 @@ export async function runCodeTool(deps: CodeToolDeps, args: BrowserRunArgs, extr
   // The session's own folder: one session's files are never pruned by another's spills.
   const save: SaveSpill = text => saveSpill(sessionFolder(deps.artifactsDir(), session), text);
   try {
+    let activeBrowserId: string | undefined;
     const outcome = args.resume !== undefined
       ? await deps.host.resume(session, args.resume, waitCapMs, extra.signal)
-      : await deps.host.run(session, { code: args.code!, timeoutMs: Math.min(300, Math.max(1, args.timeout ?? DEFAULT_CELL_SECONDS)) * 1000, waitMs: waitCapMs, signal: extra.signal });
+      : await deps.host.run(session, {
+          code: args.code!, timeoutMs: Math.min(300, Math.max(1, args.timeout ?? DEFAULT_CELL_SECONDS)) * 1000,
+          waitMs: waitCapMs, signal: extra.signal,
+          onBrowserActivity: browserId => { activeBrowserId = browserId; },
+        });
     const answer = started(outcome, save, waitCapMs);
-    const preview = await deps.preview?.(session, outcome.state === "running");
+    const browserId = outcome.previewBrowserId ?? activeBrowserId;
+    const preview = browserId ? await deps.preview?.(session, browserId, outcome.state === "running") : undefined;
     return preview ? { ...answer, _meta: { "ai.insodimension/preview": preview } } : answer;
   } catch (error) {
     return refused(error);

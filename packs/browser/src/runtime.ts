@@ -749,10 +749,6 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		return { ok: true, profile: entry.profile === null ? "throwaway" : "saved", url: state.url, title: state.title };
 	}
 
-	previewSource(session: string): string | undefined {
-		const entries = [...this.byId.values()];
-		return entries.reverse().find(entry => !entry.closed && entry.opener.session === session && entry.engine === "chromium" && this.options.headless !== false)?.browserId;
-	}
 	private readonly previewLast = new Map<string, number>();
 
 	async previewStill(session: string, browserId: string): Promise<string | undefined> {

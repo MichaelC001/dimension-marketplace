@@ -134,6 +134,8 @@ export type WorkerToHost =
   | { t: "ready" }
   /** open and close only */
   | { t: "bridge"; id: number; runId: string; request: BridgeRequest }
+  /** Worker-local run/call names the tab it is about to touch; the host resolves it to an owned browser. */
+  | { t: "activity"; runId: string; name: string }
   /** Progress, never the output itself (that is the `result`): at most one per 100 ms and 16 KiB per run, whatever the cell prints; a stretch left out is `[…NB elided…]`. Append them; the end is what matters. */
   | { t: "text"; runId: string; chunk: string }
   | { t: "result"; runId: string; ok: true; payload: RunResult }
@@ -172,14 +174,14 @@ export interface CodeHostPort {
    * A cell still running for this session makes `run` reject with an Error whose message starts `busy` and names that run's id. `signal` cancels the cell while this call waits;
    * once the answer is `running` the run no longer belongs to the call, and only `resume`'s signal or the cell's own budget stops it.
    */
-  run(session: string, o: { code: string; timeoutMs: number; waitMs: number; signal: AbortSignal; onProgress?: (chunk: string) => void }): Promise<RunStarted>;
+  run(session: string, o: { code: string; timeoutMs: number; waitMs: number; signal: AbortSignal; onProgress?: (chunk: string) => void; onBrowserActivity?: (browserId: string) => void }): Promise<RunStarted>;
   /** Waits up to `waitMs` for the run to finish; `waitMs` 0 only looks. A finished run stays readable for 10 minutes. An unknown or expired `runId` rejects with an Error whose message says so. */
   resume(session: string, runId: string, waitMs: number, signal: AbortSignal): Promise<RunStarted>;
   dispose(): Promise<void>;
 }
 export type RunStarted =
-  | { state: "done"; result: RunResult | { error: RunError } }
-  | { state: "running"; runId: string; outputSoFar: string };
+  | { state: "done"; result: RunResult | { error: RunError }; previewBrowserId?: string }
+  | { state: "running"; runId: string; outputSoFar: string; previewBrowserId?: string };
 
 // ---- L2 implements on BrowserRuntime (four hooks in runtime.ts); L2 and L4 consume.
 export interface CodeBrowserPort {

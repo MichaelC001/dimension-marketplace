@@ -78,6 +78,8 @@ type Outcome = { result: RunResult } | { error: RunError };
 class Run {
   readonly id = `run-${randomBytes(5).toString("hex")}`;
   output = "";
+  /** Actual latest browser touched by this run; never inferred from opening order. */
+  previewBrowserId: string | undefined;
   /** Aborted when the run is cancelled, the person takes the browser over, or its worker is terminated: what every host-side step of the run (an open) waits under. */
   readonly controller = new AbortController();
   readonly done = Promise.withResolvers<Outcome>();
@@ -91,7 +93,7 @@ class Run {
   /** The process's memory when the cell began, for a runtime that cannot say a worker's own (see `WorkerMemory.own`); growth is only ever measured against a figure of the same `basis`. */
   memoryBase: { mb: number; basis: WorkerMemory["basis"] } | undefined;
   worker: LiveWorker | undefined;
-  constructor(readonly code: string, readonly timeoutMs: number, readonly onProgress: ((chunk: string) => void) | undefined) {
+  constructor(readonly code: string, readonly timeoutMs: number, readonly onProgress: ((chunk: string) => void) | undefined, readonly onBrowserActivity: ((browserId: string) => void) | undefined) {
     this.done.promise.catch(() => undefined);
   }
 }
@@ -230,11 +232,11 @@ export class CodeSession {
   // Runs
   // -----------------------------------------------------------------------
 
-  async run(o: { code: string; timeoutMs: number; waitMs: number; signal: AbortSignal; onProgress?: (chunk: string) => void }): Promise<RunStarted> {
+  async run(o: { code: string; timeoutMs: number; waitMs: number; signal: AbortSignal; onProgress?: (chunk: string) => void; onBrowserActivity?: (browserId: string) => void }): Promise<RunStarted> {
     this.#assertOpen();
     if (o.signal.aborted) throw new ToolAbortError();
     if (this.#active !== undefined) throw new Error(busyMessage(this.#active.id));
-    const run = new Run(o.code, o.timeoutMs, o.onProgress);
+    const run = new Run(o.code, o.timeoutMs, o.onProgress, o.onBrowserActivity);
     // Reserved before the first await: a second call arriving while the worker starts is `busy`, not a second cell.
     this.#active = run;
     clearTimeout(this.#idleTimer);
@@ -272,9 +274,9 @@ export class CodeSession {
 
   async #wait(run: Run, waitMs: number, signal: AbortSignal): Promise<RunStarted> {
     const outcome = await settledWithin(run, waitMs, signal);
-    if (outcome === "timeout") return { state: "running", runId: run.id, outputSoFar: run.output };
+    if (outcome === "timeout") return { state: "running", runId: run.id, outputSoFar: run.output, ...(run.previewBrowserId ? { previewBrowserId: run.previewBrowserId } : {}) };
     if (outcome === "aborted") return await this.#cancel(run);
-    return { state: "done", result: "error" in outcome ? { error: outcome.error } : outcome.result };
+    return { state: "done", result: "error" in outcome ? { error: outcome.error } : outcome.result, ...(run.previewBrowserId ? { previewBrowserId: run.previewBrowserId } : {}) };
   }
 
   /** The call that was waiting for this run was cancelled: the cell is told (its pending operations reject), and a worker that does not answer within the grace is terminated. */
@@ -289,7 +291,7 @@ export class CodeSession {
       }
     }
     const settled = run.settled ?? { error: abortError() };
-    return { state: "done", result: "error" in settled ? { error: settled.error } : settled.result };
+    return { state: "done", result: "error" in settled ? { error: settled.error } : settled.result, ...(run.previewBrowserId ? { previewBrowserId: run.previewBrowserId } : {}) };
   }
 
   /** The cell has outlived its budget and the grace on top: a synchronous loop (it can never answer its own timer). The worker is terminated; the page and the browser are not. */
@@ -478,6 +480,12 @@ export class CodeSession {
       case "bridge":
         void this.#bridge(live, message);
         return;
+      case "activity": {
+        const run = this.#active;
+        const browserId = this.#tabs.get(message.name)?.browserId;
+        if (run?.id === message.runId && browserId) this.#activity(run, browserId);
+        return;
+      }
       case "text": {
         const run = this.#active;
         if (run?.id !== message.runId) return;
@@ -513,10 +521,18 @@ export class CodeSession {
       return;
     }
     try {
-      reply({ t: "bridge-reply", id: message.id, ok: true, value: await this.#request(message.request, run) });
+      const value = await this.#request(message.request, run);
+      if (value.attach) this.#activity(run, value.attach.browserId);
+      reply({ t: "bridge-reply", id: message.id, ok: true, value });
     } catch (error) {
       reply({ t: "bridge-reply", id: message.id, ok: false, error: runErrorOf(error, run.controller.signal) });
     }
+  }
+
+  #activity(run: Run, browserId: string): void {
+    if (run.previewBrowserId === browserId || run.settled !== undefined) return;
+    run.previewBrowserId = browserId;
+    run.onBrowserActivity?.(browserId);
   }
 
   async #request(request: BridgeRequest, run: Run): Promise<HostReply> {
