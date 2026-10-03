@@ -4,7 +4,7 @@
 // the shapes and engine identifiers come from the pack's own contracts module.
 import type { App } from "@modelcontextprotocol/ext-apps";
 import type { CallToolResult, ContentBlock } from "@modelcontextprotocol/sdk/types.js";
-import { BROWSER_APPS, BROWSER_ENGINES, DIALOG_TYPES, MAX_ELEMENT_ID_CHARS, MAX_ELEMENT_LABEL_CHARS, MAX_ELEMENT_TAG_CHARS, MAX_ELEMENTS_PER_REGION, PUBLISH_STATUSES, TASK_AGENTS } from "../../src/contracts";
+import { BROWSER_APPS, BROWSER_ENGINES, DIALOG_TYPES, MAX_ELEMENT_ID_CHARS, MAX_ELEMENT_LABEL_CHARS, MAX_ELEMENT_TAG_CHARS, MAX_ELEMENTS_PER_REGION, PUBLISH_STATUSES } from "../../src/contracts";
 import type {
 	BrowserAction,
 	BrowserAnnotationContext,
@@ -20,8 +20,22 @@ import type {
 	TaskRun,
 	TaskStatus,
 	PageElement,
+	ControlMode,
+	NewProfileRequest,
+	OpenBrowserListing,
+	ProfileHold,
+	ProfileListing,
+	ProfileSiteListing,
 } from "../../src/contracts";
+import { isProfileColour, resolveProfileMeta } from "../../src/profile-meta";
+import { PROFILE_NAME } from "../../src/profile-name";
 import { isRecord, readNumber, readString } from "./json";
+
+/** What `browser_profiles` tells the View: the saved profiles, and the browsers this chat holds that are not profiles (Private ones, the person's Chrome). */
+export interface ProfilesAnswer {
+	readonly profiles: ProfileListing[];
+	readonly browsers: OpenBrowserListing[];
+}
 
 const TASK_STATUSES: readonly TaskStatus[] = ["running", "done", "blocked", "failed", "cancelled"];
 
@@ -88,14 +102,12 @@ function readElement(value: unknown): PageElement[] {
 
 function readTask(tool: string, value: unknown): TaskRun {
 	if (!isRecord(value)) throw new BrowserToolError(tool, "result carried no task run");
-	const agent = TASK_AGENTS.find(candidate => candidate === readString(value, "agent"));
 	const status = TASK_STATUSES.find(candidate => candidate === readString(value, "status"));
-	if (!agent || !status) throw new BrowserToolError(tool, "task run carried an unknown agent or status");
+	if (!status) throw new BrowserToolError(tool, "task run carried an unknown status");
 	const usage = isRecord(value.usage) ? value.usage : {};
 	const steps = Array.isArray(value.steps) ? value.steps.filter(isRecord) : [];
 	return {
 		id: readString(value, "id") ?? "",
-		agent,
 		task: readString(value, "task") ?? "",
 		status,
 		summary: readString(value, "summary") ?? "",
@@ -181,6 +193,47 @@ function readDialogs(value: unknown): HandledDialog[] {
 	return dialogs;
 }
 
+/** One site of a profile's listing; what is not a site is dropped, never guessed at. */
+function readSite(value: unknown): ProfileSiteListing[] {
+	if (!isRecord(value)) return [];
+	const site = readString(value, "site");
+	const seenAt = readString(value, "seenAt");
+	if (site === undefined || seenAt === undefined || (typeof value.signedIn !== "boolean" && value.signedIn !== null)) return [];
+	const account = readString(value, "account");
+	return [{ site, ...(account === undefined ? {} : { account }), signedIn: value.signedIn, seenAt }];
+}
+
+/** A hold as the runtime reports it; what is not said is taken as not happening. */
+function readHold(value: unknown): ProfileHold | undefined {
+	if (!isRecord(value)) return undefined;
+	return { by: value.by === "agent" ? "agent" : "person", task: value.task === true, takenOver: value.takenOver === true, post: value.post === true };
+}
+
+/** One saved profile of `browser_profiles` / `browser_profile_add`: zero entries for anything that is not one (a name the runtime would never hand out), so the menu cannot draw a row it cannot open. */
+function readProfile(value: unknown): ProfileListing[] {
+	if (!isRecord(value)) return [];
+	const name = readString(value, "name");
+	if (name === undefined || !PROFILE_NAME.test(name)) return [];
+	const drawn = readString(value, "colour");
+	const { label, colour, avatar } = resolveProfileMeta(name, { label: readString(value, "label"), colour: isProfileColour(drawn) ? drawn : undefined, avatar: readString(value, "avatar") });
+	const heldBy = value.heldBy === "this chat" || value.heldBy === "human" || value.heldBy === "another chat" ? value.heldBy : null;
+	const hold = readHold(value.hold);
+	const browserId = readString(value, "browserId");
+	return [{
+		name, label, colour, ...(avatar === undefined ? {} : { avatar }), heldBy, ...(hold === undefined ? {} : { hold }), ...(browserId === undefined || browserId.length === 0 ? {} : { browserId }),
+		sites: Array.isArray(value.sites) ? value.sites.flatMap(readSite) : [],
+	}];
+}
+
+/** One browser the chat holds that is not a saved profile; anything else is dropped, so the menu never draws a row it cannot reach. */
+function readOpenBrowser(value: unknown): OpenBrowserListing[] {
+	if (!isRecord(value)) return [];
+	const browserId = readString(value, "browserId");
+	const hold = readHold(value.hold);
+	if (browserId === undefined || browserId.length === 0 || hold === undefined || (value.kind !== "private" && value.kind !== "chrome")) return [];
+	return [{ browserId, kind: value.kind, hold }];
+}
+
 function readState(tool: string, value: unknown): BrowserState {
 	if (!isRecord(value)) throw new BrowserToolError(tool, "no browser state in the result");
 	const browserId = readString(value, "browserId");
@@ -193,9 +246,13 @@ function readState(tool: string, value: unknown): BrowserState {
 	const engine = BROWSER_ENGINES.find(candidate => candidate === readString(value, "engine"));
 	if (!engine) throw new BrowserToolError(tool, "result carried an unsupported browser engine");
 	const tabs = readTabs(value.tabs);
+	const profile = readString(value, "profile") ?? null;
+	const face = value.look;
+	const drawn = isRecord(face) ? readString(face, "colour") : undefined;
 	return {
 		browserId,
-		profile: readString(value, "profile") ?? null,
+		profile,
+		look: profile === null || !isRecord(face) ? null : resolveProfileMeta(profile, { label: readString(face, "label"), colour: isProfileColour(drawn) ? drawn : undefined, avatar: readString(face, "avatar") }),
 		engine,
 		app: BROWSER_APPS.find(candidate => candidate === readString(value, "app")) ?? null,
 		url: readString(value, "url") ?? "",
@@ -210,6 +267,8 @@ function readState(tool: string, value: unknown): BrowserState {
 		canGoForward: value.canGoForward === true,
 		publish: value.publish === null || value.publish === undefined ? null : readPublish(tool, value.publish),
 		dialogs: readDialogs(value.dialogs),
+		takenOver: value.takenOver === true,
+		agentActionAt: readNumber(value, "agentActionAt") ?? null,
 	};
 }
 
@@ -328,12 +387,40 @@ export class BrowserClient {
 		return structured(tool, result);
 	}
 
-	/** The names of the saved profiles: `browser_profiles` answers the View with each one's label, colour and sites too. */
-	async profiles(): Promise<string[]> {
-		const payload = await this.call("browser_profiles", {});
-		const profiles = payload.profiles;
-		if (!Array.isArray(profiles)) throw new BrowserToolError("browser_profiles", "result carried no profiles array");
-		return profiles.flatMap((profile) => (isRecord(profile) && typeof profile.name === "string" ? [profile.name] : []));
+	/** Every saved profile with its label, colour, avatar, who holds it and where it is signed in, and the browsers this chat holds that are not profiles: `browser_profiles` answers the View the whole listing. */
+	async profiles(): Promise<ProfilesAnswer> {
+		const tool = "browser_profiles";
+		const answered = await this.call(tool, {});
+		if (!Array.isArray(answered.profiles)) throw new BrowserToolError(tool, "result carried no profiles array");
+		return { profiles: answered.profiles.flatMap(readProfile), browsers: Array.isArray(answered.browsers) ? answered.browsers.flatMap(readOpenBrowser) : [] };
+	}
+
+	/** Creates a profile from the name the person typed. The refusal (a taken or unusable name) is the runtime's sentence, raised as is. */
+	async addProfile(request: NewProfileRequest): Promise<ProfileListing> {
+		const tool = "browser_profile_add";
+		const [profile] = readProfile((await this.call(tool, { ...request })).profile);
+		if (profile === undefined) throw new BrowserToolError(tool, "the answer did not describe the new profile");
+		return profile;
+	}
+
+	/** The person takes the browser over (`take`) or hands it back (`return`); answers the state after it. */
+	async control(browserId: string, mode: ControlMode): Promise<BrowserState> {
+		const tool = "browser_control";
+		return readState(tool, await this.call(tool, { browserId, mode }));
+	}
+
+	/** The person leaves the browser for another profile: it is closed unless something depends on it. Answers whether it was closed. */
+	async leave(browserId: string): Promise<boolean> {
+		const tool = "browser_leave";
+		return (await this.call(tool, { browserId })).closed === true;
+	}
+
+	/** The person moves to another profile (none: a Private browser) from the browser `leaving`: opened as `open` does; with the pool full the runtime closes the one left first, when closing it frees a slot. Answers the new browser's state. */
+	async switchProfile(leaving: string, options: { profile?: string; engine?: BrowserEngine }): Promise<BrowserState> {
+		const args: Record<string, unknown> = { leaving };
+		if (options.profile !== undefined) args.profile = options.profile;
+		if (options.engine) args.engine = options.engine;
+		return readState("browser_switch", await this.call("browser_switch", args));
 	}
 
 	async open(options: OpenOptions): Promise<BrowserState> {

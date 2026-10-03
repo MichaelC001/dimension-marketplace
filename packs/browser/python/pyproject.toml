@@ -1,12 +1,11 @@
 [project]
 name = "dim-browser-bridge"
 version = "0.1.0"
-description = "Task worker running the jev and browser-use agent loops against a Chrome over CDP."
+description = "Task worker running the jev agent loop against a Chrome over CDP."
 license = "MIT"
-# jev-ultrafast requires >=3.12; browser-use requires >=3.11,<4.
+# jev-ultrafast requires >=3.12.
 requires-python = ">=3.12,<4"
 dependencies = [
-  "browser-use==0.13.10",
   # jev's CDP transport; the worker also stops its daemon through the public admin API.
   "browser-harness==0.1.13",
   # jev-ultrafast is not published to PyPI (pypi.org/pypi/jev-ultrafast/json is

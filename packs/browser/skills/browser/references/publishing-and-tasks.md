@@ -1,15 +1,16 @@
 # Publishing and task agents
 
-Traction sessions only. `browser_task`, `browser_task_wait`, `browser_task_cancel`
-and the five `browser_publish*` tools are offered to the `traction` space and to no
-other; if you cannot see them, this file does not apply to you. Open, view, snapshot,
-act, read and close are in [SKILL.md](../SKILL.md).
+Traction sessions only. The five `browser_publish*` tools are offered to the
+`traction` space and to no other; `browser_task`, `browser_task_wait` and
+`browser_task_cancel` are offered there too, but only where jev's key is
+configured (`TYPESAFE_API_KEY`). If you cannot see a tool, this file does not
+apply to it. Open, view, snapshot, act, read and close are in [SKILL.md](../SKILL.md).
 
 ## Connect a platform
 
 One named profile per account, signed in once; the login persists in it across
 restarts. `browser_open({ profile, url })` on the site's login page, then sign in
-yourself (`browser_task` with `credential`, below, or `browser_act`) or let the user
+yourself (`browser_act`, or `browser_task` with `credential`, below, where you have it) or let the user
 sign in in the Browser View (`browser_view`). A verification step (CAPTCHA, email or
 phone code) is yours to handle however you can; use `ask` when you need the user for
 it. Verify with `browser_publish` `mode: "check"` (below): `signed-in` means the
@@ -18,27 +19,27 @@ account is connected.
 `browser_task` `credential` and `browser_publish` need a profile: on a throwaway
 browser they fail `profile_required`, so close it and open again with a name. On
 `engine: "chrome-relay"` (the user's own Chrome) `browser_task` is refused; use a
-chromium browser for task agents. `browser_task` also takes a password in `task`,
+chromium browser for the task agent. `browser_task` also takes a password in `task`,
 but anything put in `task` lands in the session transcript: prefer `credential`.
 
-## Whole task (a fast agent drives)
+## Whole task (jev drives)
 
 Best for well-specified, repetitive flows (forms, applications, sign-ups with given
 data); for a step that needs judgment, drive with `browser_act` instead.
 
-`browser_task({ browserId, agent: "jev" | "browser-use", task, maxSteps?, credential? })`
-runs that agent in this same browser while the user watches; it returns
+`browser_task({ browserId, task, maxSteps?, credential? })`
+runs jev in this same browser while the user watches; it returns
 status (`done`, `blocked`, `failed`, `cancelled`), a summary, steps, elapsed
-time, model calls and tokens. Put every fact the agent needs in `task` (names,
-emails, answers) — it cannot ask you. `jev` is the fastest (one TypeSafe
-decision per step); `browser-use` is a general LLM agent. Both need model keys
-in the browser server's environment (jev: `TYPESAFE_API_KEY` and
+time, model calls and tokens. Put every fact jev needs in `task` (names,
+emails, answers) — it cannot ask you. jev makes one TypeSafe
+decision per step and needs model keys in the browser server's environment
+(`TYPESAFE_API_KEY` and
 `TEXT_MODEL_API_KEY`). A `failed` task is a tool error naming the cause and
 the next step (an unfunded key is HTTP 402); the browser stays open, so carry
 on with `browser_act` — for a sign-up's password, `generatePassword: true`.
 `browser_act` is refused (`task_running`) while a task runs;
-`browser_task_wait` follows it and `browser_task_cancel` stops it. A tab the
-agent opens becomes the active tab. After a task, `browser_snapshot` to verify
+`browser_task_wait` follows it and `browser_task_cancel` stops it. A tab jev
+opens becomes the active tab. After a task, `browser_snapshot` to verify
 the outcome yourself.
 
 **Optional: let the browser hold the password.** For a jev sign-up you may pass
@@ -52,8 +53,6 @@ origin (https, or http on localhost), including one in an iframe on another
 site's page (an embedded login form). An account made any other way has no
 saved password: log in with `browser_act` (`useSavedPassword: true` needs a
 saved one), or put the password in `task`.
-`credential` is jev-only: `browser-use` reads password fields into its model,
-so it gets the password in `task` instead.
 
 Give a task **one clear goal with all its data**, start to finish. If a task
 ends unfinished (`blocked`, `failed`, out of steps, or `done` but the snapshot
@@ -86,6 +85,16 @@ the posted URL's path on the origin (`{segment}` = one path segment,
   `not-signed-in`). If it is not, log in first (`browser_act`, `browser_task`,
   or the user in the View), then post. A password field is never a publish
   field.
+- A post goes out only if the user APPROVED it on the campaign board:
+  the text, the site and the profile must be exactly the approved draft's,
+  character for character, and the approval must be unexpired and unspent.
+  Otherwise it fails `publish_unapproved` before anything is typed, and so does
+  the confirm. Do not reword, trim or "fix" approved text, and do not try
+  another route to post it. The message says which case it is: no approval
+  covers this post (use the draft's exact text and profile); the approval
+  expired (record `draft_failed`; the user's Retry on the board approves it
+  again); or it was already used (the post may be up: never post it again,
+  follow it with `browser_publish_wait` and record what the account shows).
 - `mode: "post"` fills the fields and reads them back. It then returns
   `awaiting-confirmation` with a `publishId` and `composeUrl` (where it will
   post). **Nothing is sent yet.** The View shows the exact text with **Post**

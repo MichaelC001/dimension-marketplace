@@ -7,14 +7,15 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { buildConnectionReport, type ConnectionReportParams, PACK_CONNECTION_REPORT_METHOD } from "./connection.js";
 import type { ActManyResult, BrowserEngine, BrowserOpener, BrowserRuntimePort, BrowserState, TaskRun, ToolCaller } from "./contracts.js";
-import { BROWSER_ENGINES, CREDENTIAL_MODES, MAX_ANNOTATION_REGIONS, MAX_BATCH_STEPS, MAX_EVAL_EXPRESSION_CHARS, MAX_VIEWPORT, MAX_WAIT_MS, MIN_VIEWPORT, PUBLISH_MODES, TASK_AGENTS } from "./contracts.js";
+import { BROWSER_ENGINES, CONTROL_MODES, CREDENTIAL_MODES, MAX_ANNOTATION_REGIONS, MAX_BATCH_STEPS, MAX_EVAL_EXPRESSION_CHARS, MAX_VIEWPORT, MAX_WAIT_MS, MIN_VIEWPORT, PUBLISH_MODES } from "./contracts.js";
 import { MAX_DETAIL_BYTES } from "./annotation-file.js";
 import { type PublishPreset, loadPresets, resolvePreset, summarizePresets } from "./presets.js";
-import { MAX_LABEL_CHARS } from "./profile-meta.js";
+import { MAX_LABEL_CHARS, PROFILE_COLOURS } from "./profile-meta.js";
 import { profilesForModel } from "./profile-list.js";
 import { BrowserRuntime } from "./runtime.js";
 import { fail } from "./store.js";
 import { LiveChannel } from "./stream.js";
+import { jevKeyConfigured } from "./task.js";
 
 export const BROWSER_VIEW_URI = "ui://browser/index.html";
 /**
@@ -125,9 +126,11 @@ async function respond(extra: CallExtra, run: () => Promise<{ text: string; stru
   }
 }
 
-/** A state as its caller reads it: the View draws the tabs' favicons (data: URLs of up to 32 KB each); a model would pay for every one, every call. */
+/** A state as its caller reads it: the View draws the tabs' favicons (data: URLs of up to 32 KB each) and the profile's look (label, colour, avatar); a model would pay for every one, every call. */
 function stateFor(caller: ToolCaller | undefined, state: BrowserState): object {
-  return caller === "app" ? state : { ...state, tabs: state.tabs.map(({ favicon: _favicon, ...tab }) => tab) };
+  if (caller === "app") return state;
+  const { look: _look, ...rest } = state;
+  return { ...rest, tabs: state.tabs.map(({ favicon: _favicon, ...tab }) => tab) };
 }
 
 /** What a model is told of a batch: where the page is now; per-step detail only when a step stopped it or returned a value. */
@@ -191,8 +194,11 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     ...(process.env.DIMENSION_BROWSER_EXECUTABLE ? { executablePath: process.env.DIMENSION_BROWSER_EXECUTABLE } : {}),
     ...(process.env.DIMENSION_BROWSER_RELAY_URL ? { relayUrl: process.env.DIMENSION_BROWSER_RELAY_URL } : {}),
     ...(process.env.DIMENSION_BROWSER_HEADLESS === undefined ? {} : { headless: process.env.DIMENSION_BROWSER_HEADLESS !== "false" }),
+    ...(process.env.DIMENSION_BROWSER_THROWAWAY_IDLE_MS ? { throwawayIdleMs: Number(process.env.DIMENSION_BROWSER_THROWAWAY_IDLE_MS) } : {}),
   });
   const server = new McpServer({ name: "dimension-community-browser", version: "0.1.0" });
+  // jev's key is read once, as the server is created: it decides which tools exist and what their descriptions say.
+  const jev = jevKeyConfigured();
   const live = new LiveChannel(runtime);
   const viewDir = options.viewDir ?? fileURLToPath(new URL("./dist/", import.meta.url));
   // A missing built View is a startup error, not an installed pack that opens blank.
@@ -230,12 +236,17 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     const session = sessionOf(extra);
     return { ...(caller === undefined ? {} : { caller }), ...(session === undefined ? {} : { session }) };
   };
-  const openAt = async (profile: string | undefined, engine: BrowserEngine | undefined, url: string | undefined, opener: BrowserOpener): Promise<BrowserState> => {
+  const openAt = async (profile: string | undefined, engine: BrowserEngine | undefined, url: string | undefined, opener: BrowserOpener, leaving?: string): Promise<BrowserState> => {
     // Validate before launching so malformed input cannot strand a browser/profile lock.
     const action = url === undefined ? undefined : navigateStep.parse({ kind: "navigate", url });
-    const state = await runtime.open({ ...(profile === undefined ? {} : { profile }), ...(engine ? { engine } : {}) }, opener);
+    const state = await runtime.open({ ...(profile === undefined ? {} : { profile }), ...(engine ? { engine } : {}), ...(leaving === undefined ? {} : { leaving }) }, opener);
     if (!action) return state;
-    const navigated = await runtime.act(state.browserId, action);
+    // As the caller who opened it: the person's own open is not an agent's action, and a browser they took over takes their navigation.
+    // But the person's address bar may drive a page a post is pinned to (it voids the post); an open must not do that by the side door.
+    if (opener.caller === "app" && state.publish?.status === "awaiting-confirmation") {
+      fail("publish_pending", "a post awaits confirmation on this browser; post or cancel it before opening a page in it");
+    }
+    const navigated = await runtime.act(state.browserId, action, opener.caller);
     if (navigated.status !== "completed") throw new Error(`Opened, but navigating to ${url} ${navigated.status}: ${navigated.error}`);
     return navigated.state;
   };
@@ -311,7 +322,7 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     } catch (error) { return failure(error); }
   });
   server.registerTool("browser_act", {
-    description: "Run 1-25 steps in order in the active tab, stopping at the first that does not complete; returns the page's url and title. Steps: navigate (http/https), back, forward, reload, stop, click (selector, or x,y in the viewport; button, clickCount 1-3), hover (x,y), type (replaces the value), insert (into the focused element), select (option value or text), press (key), scroll, resize (width, height), wait (selector visible | text on the page | url substring; timeoutMs default 5000, max 15000), tab (op new | activate | close; tabId from browser_state; url for new), eval (JS in the page's main world; value returned as JSON, at most 8000 chars; throwaway browsers only). A click or Enter that navigates waits up to 1.5 s. JS dialogs are answered (alert/beforeunload accepted, else dismissed) and listed. Status failed: that step did nothing. unknown: sent, then errored, so it may have taken effect: look before retrying a submit. timeout: a wait ran out, or the batch's time budget (send the rest again). newErrors: new page errors (read them in browser_state). A selector may start `@<ref> ` (from browser_snapshot) to reach an iframe. Refused while a browser_task runs. Passwords: type or insert with generatePassword: true (sign-up: mints, saves per profile and origin, types) or useSavedPassword: true (login) instead of text; needs a profile.",
+    description: "Run 1-25 steps in order in the active tab, stopping at the first that does not complete; returns the page's url and title. Steps: navigate (http/https), back, forward, reload, stop, click (selector, or x,y in the viewport; button, clickCount 1-3), hover (x,y), type (replaces the value), insert (into the focused element), select (option value or text), press (key), scroll, resize (width, height), wait (selector visible | text on the page | url substring; timeoutMs default 5000, max 15000), tab (op new | activate | close; tabId from browser_state; url for new), eval (JS in the page's main world; value returned as JSON, at most 8000 chars; throwaway browsers only). A click or Enter that navigates waits up to 1.5 s. JS dialogs are answered (alert/beforeunload accepted, else dismissed) and listed. Status failed: that step did nothing. unknown: sent, then errored, so it may have taken effect: look before retrying a submit. timeout: a wait ran out, or the batch's time budget (send the rest again). newErrors: new page errors (read them in browser_state). A selector may start `@<ref> ` (from browser_snapshot) to reach an iframe. " + (jev ? "Refused while a browser_task runs. " : "") + "Passwords: type or insert with generatePassword: true (sign-up: mints, saves per profile and origin, types) or useSavedPassword: true (login) instead of text; needs a profile.",
     inputSchema: { browserId: capability, actions: z.array(stepSchema).min(1).max(MAX_BATCH_STEPS) },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   }, ({ browserId, actions }, extra) => respond(extra, async () => {
@@ -349,36 +360,42 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
       active = false;
     }
   };
-  server.registerTool("browser_task", {
-    description: `Hand a whole task to a fast browser agent (jev: one model decision per step; or browser-use) working in this browser while the human watches. Put every fact it needs in task; it cannot ask you. For a password prefer credential {origin, mode: "signup" | "login"} (jev only): the browser fills that origin's password fields itself from this profile's saved password (signup mints and saves one; login needs one saved), so it never reaches the transcript or jev. Returns within waitSeconds (default and max ${WAIT_CAP_S}) with status, steps, time, model calls, tokens (and credential {origin, created}); while "running", call browser_task_wait. A failed task is a tool error naming the cause and next step; the browser stays open. jev needs TYPESAFE_API_KEY and TEXT_MODEL_API_KEY in the server's environment; without them sign up yourself with browser_act generatePassword: true. browser_act is refused while a task runs (task_running).`,
-    inputSchema: {
-      browserId: capability, agent: z.enum(TASK_AGENTS), task: z.string().min(1).max(8192), maxSteps: z.number().int().min(1).max(200).optional(),
-      credential: z.object({ origin: z.string().min(1).max(2048), mode: z.enum(CREDENTIAL_MODES) }).strict().optional(),
-      waitSeconds,
-    },
-    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
-    _meta: TRACTION_ONLY,
-  }, ({ browserId, agent, task, maxSteps, credential, waitSeconds }, extra) => taskResult(async () => {
-    await runtime.startTask(browserId, { agent, task, ...(maxSteps ? { maxSteps } : {}), ...(credential ? { credential } : {}) }, callerOf(extra));
-    return await follow(browserId, waitSeconds, extra);
-  }));
-  server.registerTool("browser_task_wait", {
-    description: `Follow the task in this browser: returns when it finishes or after waitSeconds (default and max ${WAIT_CAP_S}), with its status, recent steps, time, model calls and tokens.`,
-    inputSchema: { browserId: capability, waitSeconds },
-    annotations: READ_ONLY,
-    _meta: TRACTION_ONLY,
-  }, ({ browserId, waitSeconds }, extra) => taskResult(() => follow(browserId, waitSeconds, extra)));
-  server.registerTool("browser_task_cancel", {
-    description: "Stop the task running in this browser. Resolves once the agent has stopped.",
-    inputSchema: { browserId: capability },
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    _meta: TRACTION_ONLY,
-  }, ({ browserId }) => result(() => runtime.cancelTask(browserId)));
+  // jev, the one task agent, is optional (doc 77 §6): its tools exist only where its key is set, so a session without it neither sees nor pays for them.
+  // An absent tool carries no text of its own, so the reason goes to the server log. TEXT_MODEL_API_KEY is still checked when a task starts.
+  if (jev) {
+    server.registerTool("browser_task", {
+      description: `Hand a whole task to jev, a fast browser agent (one model decision per step), working in this browser while the human watches. Put every fact it needs in task; it cannot ask you. For a password prefer credential {origin, mode: "signup" | "login"}: the browser fills that origin's password fields itself from this profile's saved password (signup mints and saves one; login needs one saved), so it never reaches the transcript or jev. Returns within waitSeconds (default and max ${WAIT_CAP_S}) with status, steps, time, model calls, tokens (and credential {origin, created}); while "running", call browser_task_wait. A failed task is a tool error naming the cause and next step; the browser stays open. jev also needs TEXT_MODEL_API_KEY in the server's environment; without it sign up yourself with browser_act generatePassword: true. browser_act is refused while a task runs (task_running).`,
+      inputSchema: {
+        browserId: capability, task: z.string().min(1).max(8192), maxSteps: z.number().int().min(1).max(200).optional(),
+        credential: z.object({ origin: z.string().min(1).max(2048), mode: z.enum(CREDENTIAL_MODES) }).strict().optional(),
+        waitSeconds,
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+      _meta: TRACTION_ONLY,
+    }, ({ browserId, task, maxSteps, credential, waitSeconds }, extra) => taskResult(async () => {
+      await runtime.startTask(browserId, { task, ...(maxSteps ? { maxSteps } : {}), ...(credential ? { credential } : {}) }, callerOf(extra));
+      return await follow(browserId, waitSeconds, extra);
+    }));
+    server.registerTool("browser_task_wait", {
+      description: `Follow the task in this browser: returns when it finishes or after waitSeconds (default and max ${WAIT_CAP_S}), with its status, recent steps, time, model calls and tokens.`,
+      inputSchema: { browserId: capability, waitSeconds },
+      annotations: READ_ONLY,
+      _meta: TRACTION_ONLY,
+    }, ({ browserId, waitSeconds }, extra) => taskResult(() => follow(browserId, waitSeconds, extra)));
+    server.registerTool("browser_task_cancel", {
+      description: "Stop the task running in this browser. Resolves once the agent has stopped.",
+      inputSchema: { browserId: capability },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      _meta: TRACTION_ONLY,
+    }, ({ browserId }) => result(() => runtime.cancelTask(browserId)));
+  } else {
+    console.error("[browser] browser_task, browser_task_wait and browser_task_cancel are not offered: TYPESAFE_API_KEY is not set (jev, the optional task hand-off, needs it).");
+  }
   // Publishing: fill and park, then one confirm (the model's call or the View's
   // Post button) submits exactly once. browser_publish itself never submits.
   registerAppTool(server, "browser_publish", {
     title: "Publish",
-    description: "Post through a signed-in profile (a throwaway browser is refused). Pass EXACTLY ONE of preset or recipe. preset (preferred; see browser_publish_presets): {name, values (one per preset field, in order), target? (needsTarget presets: the page to post on)}. recipe (a site with no preset): origin (https; http only for 127.0.0.1/localhost), composeUrl on origin, signedIn (CSS selector present only when logged in), account? (CSS selector whose text names the account, e.g. \"Alice @alice\" → \"@alice\"), fields [{selector, value, label?}] (1-8; value ≤ 10000 chars; label ≤ 40 chars, the caption in the View), submit (selector), receipt {path (the posted URL's pathname template: literal text plus {segment} and {digits}, at most one per segment, e.g. \"/{segment}/status/{digits}\"), linkSelector? (the posted link; else the tab's URL after submit)}. mode \"check\": opens composeUrl, returns \"signed-in\" or \"not-signed-in\" (sign in first, then post). mode \"post\": types and reads back each value, returns \"awaiting-confirmation\" with a publishId and composeUrl. NOTHING is submitted yet: confirm with browser_publish_confirm (or the View's Post button), drop with browser_publish_cancel, follow with browser_publish_wait. While pending the page is pinned: browser_act, browser_task and browser_publish are refused (publish_pending) until posted, cancelled or expired (10 minutes). \"failed\": nothing was submitted. A password field is never a publish field; log in with browser_act or browser_task. Refused while a task runs.",
+    description: "Post through a signed-in profile (a throwaway browser is refused). Pass EXACTLY ONE of preset or recipe. preset (preferred; see browser_publish_presets): {name, values (one per preset field, in order), target? (needsTarget presets: the page to post on)}. recipe (a site with no preset): origin (https; http only for 127.0.0.1/localhost), composeUrl on origin, signedIn (CSS selector present only when logged in), account? (CSS selector whose text names the account, e.g. \"Alice @alice\" → \"@alice\"), fields [{selector, value, label?}] (1-8; value ≤ 10000 chars; label ≤ 40 chars, the caption in the View), submit (selector), receipt {path (the posted URL's pathname template: literal text plus {segment} and {digits}, at most one per segment, e.g. \"/{segment}/status/{digits}\"), linkSelector? (the posted link; else the tab's URL after submit)}. mode \"check\": opens composeUrl, returns \"signed-in\" or \"not-signed-in\" (sign in first, then post). mode \"post\": refused (publish_unapproved, nothing opened or typed) unless the user approved this exact post on the campaign board: the same site, profile and text, unexpired and unspent. Otherwise types and reads back each value, returns \"awaiting-confirmation\" with a publishId and composeUrl. NOTHING is submitted yet: confirm with browser_publish_confirm (or the View's Post button), drop with browser_publish_cancel, follow with browser_publish_wait. While pending the page is pinned: browser_act" + (jev ? ", browser_task" : "") + " and browser_publish are refused (publish_pending) until posted, cancelled or expired (10 minutes). \"failed\": nothing was submitted. A password field is never a publish field; log in with browser_act" + (jev ? " or browser_task. Refused while a task runs." : "."),
     inputSchema: { browserId: capability, recipe: recipeSchema.optional(), preset: presetSchema.optional(), mode: z.enum(PUBLISH_MODES) },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     _meta: { ...TRACTION_ONLY, ui: { resourceUri: BROWSER_VIEW_URI } },
@@ -398,7 +415,7 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     inputSchema: {}, annotations: READ_ONLY, _meta: TRACTION_ONLY,
   }, () => result(async () => ({ presets: summarizePresets(presets) })));
   server.registerTool("browser_publish_confirm", {
-    description: "Post a pending publish (the View's Post button calls it too). The host ALWAYS asks the human first, in every permission mode; a harness that cannot guarantee that ask gets the call refused, and the user presses Post. The model MUST pass expect: {origin, profile, values} copied exactly from the pending record (values: every field's value, in order): without it the call fails expect_required, any difference fails publish_mismatch; either way nothing is clicked and the publish stays pending. Then it re-verifies the tab, URL and field values, clicks submit exactly once (never retried) and reads the posted URL. Status: posted (url), failed (nothing submitted) or unknown (may have posted).",
+    description: "Post a pending publish (the View's Post button calls it too). The host ALWAYS asks the human first, in every permission mode; a harness that cannot guarantee that ask gets the call refused, and the user presses Post. The model MUST pass expect: {origin, profile, values} copied exactly from the pending record (values: every field's value, in order): without it the call fails expect_required, any difference fails publish_mismatch; either way nothing is clicked and the publish stays pending. Then it re-verifies the tab, URL and field values and spends the board approval for this exact post (publish_unapproved if none is left: nothing clicked, the publish stays pending), clicks submit exactly once (never retried) and reads the posted URL. Status: posted (url), failed (nothing submitted) or unknown (may have posted).",
     inputSchema: { browserId: capability, publishId: capability, expect: expectSchema.optional() },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     _meta: { ...TRACTION_ONLY, [APPROVAL_META_KEY]: "prompt" },
@@ -452,7 +469,42 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     inputSchema: {}, annotations: READ_ONLY,
   }, (_args, extra) => respond(extra, async () => {
     const list = await runtime.profileList(sessionOf(extra));
-    return { text: JSON.stringify(profilesForModel(list)), structured: { profiles: list } };
+    // The browsers this chat holds that are not profiles (Private ones, the person's Chrome) are the View's to list and close: a model is not told their ids.
+    const browsers = callerOf(extra) === "app" ? await runtime.openBrowsers(sessionOf(extra)) : [];
+    return { text: JSON.stringify(profilesForModel(list)), structured: { profiles: list, browsers } };
+  }));
+  // The View's Add profile. App-only: an agent that wants a profile of its own names a new short lowercase one in browser_open.
+  registerAppTool(server, "browser_profile_add", {
+    title: "Add Profile",
+    description: "Create a saved profile from a name the person typed (any script, up to 48 characters, shown as typed; the folder is derived and never renamed), with an optional colour and one emoji avatar. Refused with a plain sentence when the name is empty, already taken (in any case), reserved or could be a path. Opens nothing. Answers {profile}.",
+    inputSchema: { name: z.string().max(200), colour: z.enum(PROFILE_COLOURS).optional(), avatar: z.string().max(16).optional() },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }, _meta: APP_ONLY,
+  }, ({ name, colour, avatar }, extra) => result(async () => ({ profile: await runtime.addProfile({ name, ...(colour === undefined ? {} : { colour }), ...(avatar === undefined ? {} : { avatar }) }, callerOf(extra)) })));
+  // The View's Take over / Hand back. App-only, and the runtime refuses any caller but the View on its own.
+  registerAppTool(server, "browser_control", {
+    title: "Take Over Browser",
+    description: "The person in the View takes this browser over (mode take: an agent's page actions on it are refused as human_driving until handed back; reads still work) or hands it back (mode return). Refused while " + (jev ? "a task runs or " : "") + "a post awaits confirmation. Answers the state.",
+    inputSchema: { browserId: capability, mode: z.enum(CONTROL_MODES) },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false }, _meta: APP_ONLY,
+  }, ({ browserId, mode }, extra) => result(async () => stateFor(callerOf(extra), await runtime.control(browserId, mode, callerOf(extra)))));
+  // The View's switch to another profile: closes the browser it leaves unless something depends on it, and gives the wheel back. App-only; the runtime refuses any other caller itself.
+  registerAppTool(server, "browser_leave", {
+    title: "Leave Browser",
+    description: "The person in the View leaves this browser for another profile. The wheel goes back to the agent if they held it. The browser is closed unless an agent opened it, " + (jev ? "a task runs on it, " : "") + "a post awaits confirmation there, a call is in progress, the person had taken it over, or it is their own Chrome; those stay open and are listed in the profile menu. Answers {closed}.",
+    inputSchema: { browserId: capability },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false }, _meta: APP_ONLY,
+  }, ({ browserId }, extra) => result(async () => ({ ...(await runtime.leave(browserId, callerOf(extra))) })));
+  // The View's switch to another profile, in one call that opens it the way browser_open does: with the pool full, the browser the person leaves is closed FIRST when leaving would close it,
+  // so the open takes that slot and not an agent's throwaway; with room, nothing is closed before the new one is open. App-only; the runtime refuses any other caller itself.
+  registerAppTool(server, "browser_switch", {
+    title: "Switch Browser",
+    description: "The person in the View opens another profile (or a Private browser, with no profile) and leaves the browser they were on. Like browser_open, and the View shows the new browser. With the pool full, the browser being left is closed first when leaving it would close it, so the open never takes an agent's throwaway; it is otherwise left only by browser_leave, once this answered. Answers the new browser's state.",
+    inputSchema: { leaving: capability, profile: profile.optional(), engine: z.enum(BROWSER_ENGINES).optional() },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }, _meta: APP_ONLY,
+  }, ({ leaving, profile, engine }, extra) => result(async () => {
+    const state = await openAt(profile, engine, undefined, openerOf(extra), leaving);
+    showing(extra, state.browserId);
+    return stateFor(callerOf(extra), state);
   }));
   server.registerTool("browser_close", {
     description: "Close this owned browser (stopping any task) and release its profile lock. Persisted logins remain; a throwaway's data is deleted; the user's relay browser is never terminated. Refused while a publish awaits confirmation (confirm, cancel or wait first).",

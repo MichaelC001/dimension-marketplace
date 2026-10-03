@@ -1,11 +1,12 @@
 #!/usr/bin/env node
-// Browser task-agent benchmark: drives each task agent through the practice world (bench/sites/server.mjs)
+// Browser task-agent benchmark: drives the jev task agent through the practice world (bench/sites/server.mjs)
 // via the pack's MCP server (app/server.mjs over stdio), scores every stage from /__results and writes a
 // markdown report plus raw JSON to bench/results/. Its browser data (bench profiles, saved fixture password)
 // lives in a directory it makes under .scratch/browser-bench/ and deletes when the run ends; it never uses
 // ~/.inso or ~/.inso-dev.
 import { mkdir, writeFile } from "node:fs/promises";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,13 +16,13 @@ import { startRecorder } from "./record.mjs";
 
 const USAGE = `Usage: node bench/run.mjs [options]
 
-Runs browser task agents against the local practice world and reports speed and accuracy per stage.
+Runs the jev task agent against the local practice world and reports speed and accuracy per stage.
 
 Scenarios (--scenario):
   jobs   One independent application per site; the world is reset before each site and the
          applicant uses the fixed example email. Sites: --sites (default acme,globex,initech,umbrella,hooli;
          also soylent,tyrell).
-  full   Per agent, ONE browser and a chain of tasks in a fresh world:
+  full   ONE browser and a chain of tasks in a fresh world:
            mail     create an @mail.test account (fake "I'm not a robot" check)
            network  sign up on Network with that address and verify it from the inbox
            profile  complete the Network profile wizard
@@ -32,10 +33,6 @@ Scenarios (--scenario):
 
 Options:
   --scenario <name>   jobs | full (default: jobs)
-  --agents <list>     Comma-separated task agents (default: jev,browser-use). "hybrid" runs
-                      account stages with browser-use and each job with jev, falling back to
-                      browser-use when jev does not finish it or stalls (20 s without a step, or two
-                      waits in a row); the times of both are summed.
   --sites <list>      Comma-separated job sites (defaults above)
   --engine <name>     Browser engine for browser_open (default: chromium)
   --headed            Show the browser window (DIMENSION_BROWSER_HEADLESS=false)
@@ -45,15 +42,15 @@ Options:
   --root <dir>        Browser data directory to use instead of a fresh one; kept after the run (yours to
                       delete). The only way to run when DIMENSION_BROWSER_ROOT or INSO_HOME points into
                       ~/.inso or ~/.inso-dev.
-  --record            Record a video per agent (the View's live frames, with stage and run timers)
-                      to bench/results/<timestamp>-<agent>.mp4; needs ffmpeg on PATH
+  --record            Record a video (the View's live frames, with stage and run timers)
+                      to bench/results/<timestamp>-jev.mp4; needs ffmpeg on PATH
   -h, --help          Show this help
 
 Output: a scorecard on stdout, bench/results/<timestamp>.md (report) and <timestamp>.json (raw).
 Browser data: every run makes its own directory under .scratch/browser-bench/ (gitignored), gives it to the
 pack server as DIMENSION_BROWSER_ROOT and deletes it when the run ends. ~/.inso and ~/.inso-dev are never used.
 Model keys come from the environment: jev needs TYPESAFE_API_KEY and TEXT_MODEL_API_KEY (TEXT_MODEL,
-TEXT_MODEL_BASE_URL optional); browser-use reads DIMENSION_BROWSER_USE_MODEL/_API_KEY/_BASE_URL.`;
+TEXT_MODEL_BASE_URL optional). browser_task is offered only where TYPESAFE_API_KEY is set, so a run without it stops at once.`;
 
 const JOB_SITES = ["acme", "globex", "initech", "umbrella", "hooli", "network", "wayne", "cyberdyne", "soylent", "tyrell"];
 const STANDALONE_SITES = ["acme", "globex", "initech", "umbrella", "hooli", "soylent", "tyrell"];
@@ -62,7 +59,6 @@ const list = (s) => s.split(",").map((x) => x.trim()).filter(Boolean);
 const { values: opts } = parseArgs({
   options: {
     scenario: { type: "string", default: "jobs" },
-    agents: { type: "string", default: "jev,browser-use" },
     sites: { type: "string" },
     engine: { type: "string", default: "chromium" },
     headed: { type: "boolean", default: false },
@@ -86,7 +82,7 @@ const full = opts.scenario === "full";
 const allowed = full ? JOB_SITES : STANDALONE_SITES;
 opts.sites ??= (full ? JOB_SITES : STANDALONE_SITES.slice(0, 5)).join(",");
 
-const agents = list(opts.agents);
+const AGENT = "jev";
 const sites = list(opts.sites);
 const unknown = sites.filter((s) => !allowed.includes(s));
 if (unknown.length) {
@@ -100,6 +96,10 @@ const packDir = fileURLToPath(new URL("../", import.meta.url));
 const serverPath = fileURLToPath(new URL("../app/server.mjs", import.meta.url));
 if (!existsSync(serverPath)) {
   console.error(`Missing ${serverPath}; run \`npm run build\` in packs/browser first.`);
+  process.exit(2);
+}
+if (!process.env.TYPESAFE_API_KEY?.trim()) {
+  console.error("Refusing to start: browser_task is offered only where jev's key (TYPESAFE_API_KEY) is set, so this run would have no task tool to call.");
   process.exit(2);
 }
 
@@ -168,11 +168,9 @@ const resetWorld = () => fetch(`${base}/__reset`, { method: "POST" });
 // ---------------------------------------------------------------- stages
 
 const a = applicant;
-// Task text names the password by this token, resolved per agent in runStage.
-// jev never receives it: the browser fills password fields from the credential
-// it holds for the bench profile (seeded below with the fixture). browser-use
-// cannot take a credential (it reads password fields), so it gets the fixture
-// in its task text; the value is a practice-site fixture, never a real secret.
+// Task text names the password by this token, replaced in runStage. jev never
+// receives it: the browser fills password fields from the credential it holds
+// for the bench profile (seeded below with the fixture).
 const PASSWORD = "{{password}}";
 
 const mailAddress = `${a.mailUsername}@mail.test`;
@@ -257,11 +255,7 @@ const jobStages = sites.map((site) => ({ id: site, start: `${base}/`, reset: tru
 const stages = full ? fullStages : jobStages;
 stages.forEach((stage, i) => { stage.n = i + 1; });
 
-const models = {
-  jev: `TypeSafe Jev${process.env.TEXT_MODEL ? ` + ${process.env.TEXT_MODEL} (field values)` : ""}`,
-  "browser-use": `${process.env.DIMENSION_BROWSER_USE_MODEL ?? "gpt-4.1-mini"} (flash mode)`,
-};
-models.hybrid = `accounts: browser-use (${models["browser-use"]}); jobs: jev (${models.jev}), browser-use if jev fails`;
+const model = `TypeSafe Jev${process.env.TEXT_MODEL ? ` + ${process.env.TEXT_MODEL} (field values)` : ""}`;
 /** Stages that create or verify accounts, as opposed to job applications (the Network JOB stage shares the id "network"). */
 const isAccountStage = (stage) => stage.account === true;
 
@@ -304,14 +298,10 @@ async function call(name, args, options) {
 const runs = [];
 const startedAt = new Date();
 
-/**
- * `stall` (hybrid's jev leg): give up early instead of waiting for the agent to
- * quit on its own - after `idleSeconds` without a step, or `waitSteps`
- * consecutive "wait" actions (jev repeating a wait means it sees no way on).
- */
-async function runStage(agent, browserId, stage, label = `${agent}/${stage.id}`, stall = null, rec = null) {
+async function runStage(browserId, stage, rec = null) {
+  const label = `${AGENT}/${stage.id}`;
   if (stage.reset) await resetWorld();
-  const run = { agent, stage: stage.id, success: false, seconds: 0, solvedSeconds: null, status: "error", stepCount: 0, usage: null, summary: "", error: null, reason: "", check: null };
+  const run = { stage: stage.id, success: false, seconds: 0, solvedSeconds: null, status: "error", stepCount: 0, usage: null, summary: "", error: null, reason: "", check: null };
   const t0 = performance.now();
   // The world is polled on every step so the report can show when the stage was actually achieved,
   // separately from when the agent declared itself done.
@@ -324,18 +314,14 @@ async function runStage(agent, browserId, stage, label = `${agent}/${stage.id}`,
   try {
     await call("browser_act", { browserId, actions: [{ kind: "navigate", url: stage.start }] });
     console.log(`[${label}] task started`);
-    rec?.stage(`${stage.n}/${stages.length}  ${stage.account ? "account" : "job"} · ${stage.id}   [${agent}]`);
-    // Stall is judged from the step list every call returns, not from progress
+    rec?.stage(`${stage.n}/${stages.length}  ${stage.account ? "account" : "job"} · ${stage.id}   [${AGENT}]`);
+    // The step list every call returns is what the recording shows, not progress
     // notifications: a step that lands between two calls is never notified.
-    let lastStepAt = performance.now();
     let lastStepN = 0;
-    let waits = 0;
     const observe = (t) => {
       for (const step of t.steps ?? []) {
         if (step.n <= lastStepN) continue;
         lastStepN = step.n;
-        lastStepAt = performance.now();
-        waits = /^wait\b/.test(step.action) ? waits + 1 : 0;
         rec?.step(`${step.n}. ${step.action}`);
       }
       return take(t);
@@ -345,8 +331,8 @@ async function runStage(agent, browserId, stage, label = `${agent}/${stage.id}`,
       pollSolved();
     }, timeout: 60_000 };
     const deadline = performance.now() + taskTimeoutMs;
-    const credential = agent === "jev" && stage.task.includes(PASSWORD) ? { origin: base, mode: stage.account ? "signup" : "login" } : undefined;
-    let taskRun = observe(await call("browser_task", { browserId, agent, task: stage.task.replaceAll(PASSWORD, agent === "jev" ? "(filled by the browser)" : a.password), maxSteps, ...(credential ? { credential } : {}), waitSeconds: 3 }, progress));
+    const credential = stage.task.includes(PASSWORD) ? { origin: base, mode: stage.account ? "signup" : "login" } : undefined;
+    let taskRun = observe(await call("browser_task", { browserId, task: stage.task.replaceAll(PASSWORD, "(filled by the browser)"), maxSteps, ...(credential ? { credential } : {}), waitSeconds: 3 }, progress));
     while (taskRun.status === "running") {
       if (performance.now() > deadline) {
         run.status = "timeout";
@@ -357,12 +343,6 @@ async function runStage(agent, browserId, stage, label = `${agent}/${stage.id}`,
       if (stage.score(await worldResults()).success) {
         take(await call("browser_task_cancel", { browserId }));
         run.status = "done";
-        break;
-      }
-      if (stall && (waits >= stall.waitSteps || performance.now() - lastStepAt > stall.idleSeconds * 1000)) {
-        take(await call("browser_task_cancel", { browserId }));
-        run.status = "stalled";
-        console.log(`[${label}] stalled (${waits >= stall.waitSteps ? `${waits} waits in a row` : `no step for ${stall.idleSeconds}s`}); handing over`);
         break;
       }
       taskRun = observe(await call("browser_task_wait", { browserId, waitSeconds: 3 }, progress));
@@ -385,44 +365,24 @@ async function runStage(agent, browserId, stage, label = `${agent}/${stage.id}`,
 
 const stamp = startedAt.toISOString().replace(/[:.]/g, "-");
 const resultsDir = fileURLToPath(new URL("./results/", import.meta.url));
-const videos = {};
+let video = null;
 
-for (const agent of agents) {
-  console.log(`\n## ${agent}`);
-  if (full) await resetWorld();
-  let browserId = null;
-  seedCredential(`bench-${agent}`);
-  try {
-    browserId = (await call("browser_open", { profile: `bench-${agent}`, engine: opts.engine, url: `${base}/` })).browserId;
-  } catch (error) {
-    console.error(`[bench] ${agent}: browser_open failed: ${error.message}`);
-    for (const stage of stages) runs.push({ agent, stage: stage.id, success: false, seconds: 0, status: "error", error: error.message, reason: "browser_open failed", stepCount: 0, usage: null });
-    continue;
-  }
+console.log(`\n## ${AGENT}`);
+if (full) await resetWorld();
+let browserId = null;
+seedCredential(`bench-${AGENT}`);
+try {
+  browserId = (await call("browser_open", { profile: `bench-${AGENT}`, engine: opts.engine, url: `${base}/` })).browserId;
+} catch (error) {
+  console.error(`[bench] ${AGENT}: browser_open failed: ${error.message}`);
+  for (const stage of stages) runs.push({ stage: stage.id, success: false, seconds: 0, status: "error", error: error.message, reason: "browser_open failed", stepCount: 0, usage: null });
+}
+if (browserId) {
   const rec = opts.record
-    ? startRecorder({ call, browserId, dir: join(resultsDir, `${stamp}-${agent}-frames`), title: `${agent}  ·  ${models[agent]}` })
+    ? startRecorder({ call, browserId, dir: join(resultsDir, `${stamp}-${AGENT}-frames`), title: `${AGENT}  ·  ${model}` })
     : null;
   for (const stage of stages) {
-    let run;
-    if (agent !== "hybrid") {
-      run = await runStage(agent, browserId, stage, undefined, null, rec);
-    } else {
-      // Hybrid: each stage goes to the agent that does it best. Accounts need
-      // multi-step judgment (browser-use); single forms need speed (jev), with
-      // browser-use finishing whatever jev leaves undone. Time adds up honestly.
-      // jev is handed off after 20 s without a step or two waits in a row; its
-      // good runs take 2-4 s per step, so neither cuts off a working attempt.
-      const account = isAccountStage(stage);
-      const first = await runStage(account ? "browser-use" : "jev", browserId, stage, `hybrid/${stage.id}`, account ? null : { idleSeconds: 20, waitSteps: 2 }, rec);
-      run = first;
-      if (!first.success && !account) {
-        const rescue = await runStage("browser-use", browserId, stage, `hybrid/${stage.id}:browser-use`, null, rec);
-        run = { ...rescue, seconds: first.seconds + rescue.seconds, stepCount: first.stepCount + rescue.stepCount,
-          solvedSeconds: rescue.solvedSeconds === null ? null : first.seconds + rescue.solvedSeconds,
-          usage: sumUsage(first.usage, rescue.usage), summary: `jev (${first.status}): ${first.reason}; then browser-use: ${rescue.summary}` };
-      }
-      run = { ...run, agent: "hybrid", by: run === first ? first.agent : "jev→browser-use" };
-    }
+    const run = await runStage(browserId, stage, rec);
     // A failed account stage still counts as failed, but the stages after it
     // must measure THEIR task, not inherit the failure: the harness repairs
     // the account from the fixture and signs this browser in (/__seed).
@@ -430,50 +390,44 @@ for (const agent of agents) {
       try {
         await call("browser_act", { browserId, actions: [{ kind: "navigate", url: `${base}/__seed?stage=${stage.id}` }] });
         run.seeded = (await worldResults()).seeded.includes(stage.id);
-        if (run.seeded) console.log(`[${agent}/${stage.id}] repaired by the harness so later stages start fair`);
+        if (run.seeded) console.log(`[${AGENT}/${stage.id}] repaired by the harness so later stages start fair`);
       } catch (error) {
-        console.error(`[${agent}/${stage.id}] seed failed: ${error.message}`);
+        console.error(`[${AGENT}/${stage.id}] seed failed: ${error.message}`);
       }
     }
     runs.push(run);
   }
   if (rec) {
-    const file = join(resultsDir, `${stamp}-${agent}.mp4`);
+    const file = join(resultsDir, `${stamp}-${AGENT}.mp4`);
     try {
       if (await rec.finish(file)) {
-        videos[agent] = `bench/results/${stamp}-${agent}.mp4`;
-        console.log(`[bench] ${agent}: video ${file}`);
+        video = `bench/results/${stamp}-${AGENT}.mp4`;
+        console.log(`[bench] ${AGENT}: video ${file}`);
       }
     } catch (error) {
-      console.error(`[bench] ${agent}: video failed: ${error.message}`);
+      console.error(`[bench] ${AGENT}: video failed: ${error.message}`);
     }
   }
-  await call("browser_close", { browserId }).catch((error) => console.error(`[bench] ${agent}: browser_close failed: ${error.message}`));
+  await call("browser_close", { browserId }).catch((error) => console.error(`[bench] ${AGENT}: browser_close failed: ${error.message}`));
 }
 
 /**
- * The practice sites score the fixture password, so the bench profile holds it
- * as the browser's saved credential for the practice origin before the browser
- * opens (the profile lock is not held yet). The same root the server was given
- * (`browserRoot`), and the file the pack uses: src/credentials.ts credentials.json.
+ * The practice sites score the fixture password, so the bench profile holds it as the browser's saved credential for the practice origin
+ * before the browser opens (the profile lock is not held yet). Written by the pack's own credentials module (bench/seed-credential.ts,
+ * run with bun), never by hand: the store is sealed under the root's key, and what the profile already holds (this may be a --root used
+ * before) is kept as it is.
  */
 function seedCredential(profile) {
-  const dir = join(browserRoot, "profiles", profile);
-  const file = join(dir, "credentials.json");
-  let origins = {};
-  try {
-    origins = JSON.parse(readFileSync(file, "utf8")).origins ?? {};
-  } catch {
-    /* none saved yet */
+  const bun = typeof Bun === "undefined" ? "bun" : process.execPath;
+  const seeded = spawnSync(bun, [fileURLToPath(new URL("./seed-credential.ts", import.meta.url))], {
+    input: JSON.stringify({ root: browserRoot, profile, origin: new URL(base).origin, password: a.password }),
+    encoding: "utf8",
+    windowsHide: true,
+  });
+  if (seeded.status !== 0) {
+    console.error(`[bench] could not save the practice password through the pack's credentials module (needs bun on PATH): ${seeded.error?.message ?? seeded.stderr}`);
+    process.exit(2);
   }
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  writeFileSync(file, `${JSON.stringify({ version: 1, origins: { ...origins, [new URL(base).origin]: a.password } })}\n`, { mode: 0o600 });
-}
-
-function sumUsage(a, b) {
-  if (!a) return b;
-  if (!b) return a;
-  return { modelCalls: a.modelCalls + b.modelCalls, inputTokens: a.inputTokens + b.inputTokens, outputTokens: a.outputTokens + b.outputTokens, costUsd: a.costUsd == null && b.costUsd == null ? null : (a.costUsd ?? 0) + (b.costUsd ?? 0) };
 }
 
 await client.close();
@@ -483,17 +437,18 @@ sitesServer?.close();
 // ---------------------------------------------------------------- report
 
 const finishedAt = new Date();
-console.log("\n| agent | passed | seconds | steps | model calls | tokens |\n| --- | ---: | ---: | ---: | ---: | ---: |");
-for (const t of agents.map((x) => summarize(runs, x))) console.log(`| ${t.agent} | ${t.passed}/${t.stages} | ${t.seconds.toFixed(1)} | ${t.steps} | ${t.modelCalls} | ${t.tokens} |`);
+console.log("\n| passed | seconds | steps | model calls | tokens |\n| ---: | ---: | ---: | ---: | ---: |");
+const total = summarize(runs);
+console.log(`| ${total.passed}/${total.stages} | ${total.seconds.toFixed(1)} | ${total.steps} | ${total.modelCalls} | ${total.tokens} |`);
 
 const outDir = new URL("./results/", import.meta.url);
 await mkdir(outDir, { recursive: true });
 const jsonFile = new URL(`${stamp}.json`, outDir);
 const mdFile = new URL(`${stamp}.md`, outDir);
 const raw = {
-  scenario: opts.scenario, startedAt: startedAt.toISOString(), finishedAt: finishedAt.toISOString(), base, options: opts, models,
-  applicant: full ? mailAddress : a.email, agents, stages: stages.map(({ id, account, start, task }) => ({ id, account: account === true, start, task })), runs,
-  rawFile: `bench/results/${stamp}.json`, videos,
+  scenario: opts.scenario, startedAt: startedAt.toISOString(), finishedAt: finishedAt.toISOString(), base, options: opts, model,
+  applicant: full ? mailAddress : a.email, stages: stages.map(({ id, account, start, task }) => ({ id, account: account === true, start, task })), runs,
+  rawFile: `bench/results/${stamp}.json`, video,
 };
 await writeFile(jsonFile, JSON.stringify(raw, null, 2));
 await writeFile(mdFile, renderReport(raw));

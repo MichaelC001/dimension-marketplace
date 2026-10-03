@@ -5,9 +5,6 @@ import type { ProfileColour, ResolvedProfileMeta } from "./profile-meta.js";
 /** What the browser IS. `abp` and `browser4` are refused with the reason (see engines/refused.ts). */
 export const BROWSER_ENGINES = ["chromium", "chrome-relay", "abp", "browser4"] as const;
 export type BrowserEngine = (typeof BROWSER_ENGINES)[number];
-/** Who drives a whole task at its own speed: upstream agent loops, used as published. */
-export const TASK_AGENTS = ["jev", "browser-use"] as const;
-export type TaskAgent = (typeof TASK_AGENTS)[number];
 /**
  * `signup`: the password the browser saved for this profile + origin, or a
  * strong one it mints and saves. `login`: the saved one only. See credentials.ts.
@@ -159,7 +156,6 @@ export interface TaskUsage { modelCalls: number; inputTokens: number; outputToke
 export type TaskStatus = "running" | "done" | "blocked" | "failed" | "cancelled";
 export interface TaskRun {
   id: string;
-  agent: TaskAgent;
   task: string;
   status: TaskStatus;
   /** The agent's final message, or the failure reason. */
@@ -178,7 +174,7 @@ export interface TaskRun {
  * never reads or types password inputs). The value is held by the browser and
  * never passes through a tool argument, a result or a model call.
  */
-export interface TaskRequest { agent: TaskAgent; task: string; maxSteps?: number; credential?: CredentialRequest }
+export interface TaskRequest { task: string; maxSteps?: number; credential?: CredentialRequest }
 /** One field of a publish recipe: where to type, exactly what, and an optional caption shown in the View. */
 export interface PublishField {
   selector: string;
@@ -192,6 +188,9 @@ export interface PublishField {
  * stamp did not come through the host and is treated as not-the-human.
  */
 export type ToolCaller = "model" | "app";
+/** `take`: the person has the wheel and an agent's page actions are refused. `return`: the agent may act again. */
+export const CONTROL_MODES = ["take", "return"] as const;
+export type ControlMode = (typeof CONTROL_MODES)[number];
 /**
  * How to post on one site, supplied by the caller as data — the pack itself is
  * platform-agnostic. See publish.ts for the bounds every field is held to.
@@ -290,6 +289,8 @@ export interface BrowserState {
    * chrome-relay browser is always "relay".
    */
   profile: string | null;
+  /** How a person knows that profile: label, colour and avatar (profile-meta.ts). null for a throwaway browser and for the relay. The View's chip draws it; a model is not sent it. */
+  look: ResolvedProfileMeta | null;
   engine: BrowserEngine;
   /** The browser application behind this View; null on chrome-relay (the human's own Chrome). */
   app: BrowserApp | null;
@@ -310,6 +311,13 @@ export interface BrowserState {
   publish: PublishRecord | null;
   /** The last five JavaScript dialogs the browser answered on the active tab, oldest first. */
   dialogs: HandledDialog[];
+  /**
+   * The person in the View took this browser over: an agent's page actions on it are refused (`human_driving`) until they
+   * hand it back. Reads are not. Whoever holds the profile, the person's own input is never refused for this.
+   */
+  takenOver: boolean;
+  /** Epoch ms of the newest page action an agent (anyone but the View) ran here; null when none has. The View shows "working" for a few seconds after it. */
+  agentActionAt: number | null;
   /** Set by `open` alone, when something a person should know about the profile just opened: the browser build under its logins changed. */
   notice?: string;
 }
@@ -368,6 +376,8 @@ export interface BrowserOpenOptions {
   profile?: string;
   engine?: BrowserEngine;
   viewport?: Viewport;
+  /** The View's profile switch only: the browser the person is leaving. With the pool full, it is closed first when leaving it would close it, so the open takes its slot and not an agent's throwaway. */
+  leaving?: string;
 }
 /**
  * Who opened a browser, from what the HOST stamped on the call: `caller` ("app" is the human, in the View) and the
@@ -382,8 +392,25 @@ export type ProfileHolder = null | "this chat" | "human" | "another chat";
  * dock get it, a model's list does not (profile-list.ts `profilesForModel`).
  */
 export interface ProfileSiteListing { site: string; account?: string; signedIn: boolean | null; seenAt: string }
-/** One saved profile as an agent or the View reads it. Never a cookie, a password, a path or a browser id. */
-export interface ProfileListing { name: string; label: string; colour: ProfileColour; heldBy: ProfileHolder; sites: ProfileSiteListing[] }
+/**
+ * Who holds a profile this server has a browser for, in the detail only the View is sent (profile-list.ts
+ * `profilesForModel` takes it out): `by` is who opened it (the person in a View, or an agent), `task` whether a task
+ * agent is running on it, `takenOver` whether the person has the wheel, `post` whether a post awaits their confirmation
+ * (or is being prepared). `heldBy` says whose it is from the asker's side; this says what it is doing.
+ */
+export interface ProfileHold { by: "person" | "agent"; task: boolean; takenOver: boolean; post: boolean }
+/**
+ * One saved profile as an agent or the View reads it. Never a cookie, a password or a path. `avatar`, `hold` and `browserId` are the
+ * View's: `browserId` is the browser this chat holds for the profile (present only when `heldBy` is "this chat", never another chat's:
+ * an id is a capability) so the View can reach it and close it.
+ */
+export interface ProfileListing { name: string; label: string; colour: ProfileColour; avatar?: string; heldBy: ProfileHolder; hold?: ProfileHold; browserId?: string; sites: ProfileSiteListing[] }
+/** A browser this chat holds that is not a saved profile: a Private one, or the person's own Chrome. Only the View is sent these. */
+export interface OpenBrowserListing { browserId: string; kind: "private" | "chrome"; hold: ProfileHold }
+/** What leaving a browser did to it: closed, or kept because something of an agent's (or the person's) still depends on it. */
+export interface LeaveOutcome { closed: boolean }
+/** A new profile as a person typed it in the View: a name to show (the folder is derived from it), and optionally a colour and an avatar emoji. */
+export interface NewProfileRequest { name: string; colour?: ProfileColour; avatar?: string }
 /**
  * browser_read: one logged-out read of a public page (see read.ts). There is
  * no profile: every read runs in a fresh incognito context.
@@ -420,6 +447,11 @@ export interface BrowserRuntimePort {
   watchFrames(browserId: string, onFrame: (frame: LiveFrame) => void): () => void;
   /** The state as `state` answers it, but NOT queued behind page work: the live view keeps reading it while a navigation or action is in flight. */
   liveState(browserId: string): Promise<BrowserState>;
+  /**
+   * A View joined this browser's live stream. While any View is joined nobody may give the browser up to make room, and it is never
+   * idle. Returns what ends the watching (idempotent). Throws `unknown_browser`. A count, never a clock: a slow page is still watched.
+   */
+  viewing(browserId: string): () => void;
   /**
    * The human's own mouse, wheel and keys, applied to the active tab in order. Admitted and bounded first (`bad_input`), refused
    * while a task owns the page (`task_running`), and a click or key while a publish waits for the Post marks it touched, as `act` does.
@@ -467,8 +499,31 @@ export interface BrowserRuntimePort {
   onConnectionsChanged(listener: () => void): () => void;
   /** Every saved profile (never the relay's, never a throwaway), with who holds it relative to `asker`, the chat asking. */
   profileList(asker?: string): Promise<ProfileListing[]>;
+  /** The browsers this chat holds that are not saved profiles (Private ones, the person's own Chrome), for the View's menu; never another chat's. */
+  openBrowsers(asker?: string): Promise<OpenBrowserListing[]>;
   /** The label, colour and avatar of every saved profile that has any observation, for the connection report. */
   profileMeta(): Promise<Record<string, ResolvedProfileMeta>>;
+  /**
+   * Create a saved profile from a name a person typed (profile-meta.ts `checkNewProfile`): its label, a folder derived from it, the
+   * colour and avatar they chose. Refused (`bad_profile_name`) with the sentence the View shows when the name is empty, taken,
+   * reserved or could be a path. Nothing is opened. Only `caller` "app" may: a model (or an unstamped call) is refused
+   * (`human_only`) and nothing is made; an agent that wants a profile of its own names a new one in `open`.
+   */
+  addProfile(request: NewProfileRequest, caller?: ToolCaller): Promise<ProfileListing>;
+  /**
+   * The person in the View takes `browserId` over (`take`) or hands it back (`return`). Only `caller` "app" may: a model is refused
+   * (`human_only`). Taking over is refused while a task runs (`task_running`) or a post awaits confirmation (`publish_pending`: it
+   * would navigate away from, or steal, the page being confirmed). Not queued behind page work: it takes effect at once, even
+   * between two steps of an agent's batch. Answers the state after it.
+   */
+  control(browserId: string, mode: ControlMode, caller?: ToolCaller): Promise<BrowserState>;
+  /**
+   * The person in the View leaves `browserId` for another profile. Only `caller` "app" may (`human_only`). The wheel goes back to the
+   * agent at once if they held it. The browser is closed (by the runtime's own close for a browser nobody holds: its chat is told why)
+   * unless an agent opened it, a task runs on it, a post awaits or is being prepared on it, a call is in progress on it, the person had
+   * taken it over, or it is their own Chrome: those stay open, listed in the View's menu, and are closed from there.
+   */
+  leave(browserId: string, caller?: ToolCaller): Promise<LeaveOutcome>;
   /** Settles a pending publish first. Refused (`publish_pending`) while one awaits confirmation, unless `caller` is "app". */
   close(browserId: string, caller?: ToolCaller): Promise<void>;
   waitTask(browserId: string, ms: number): Promise<TaskRun>;

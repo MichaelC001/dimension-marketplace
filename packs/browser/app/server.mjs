@@ -2,8 +2,8 @@
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
 // src/server.ts
-import { readFile as readFile2, readdir as readdir2 } from "node:fs/promises";
-import { extname as extname2, join as join8 } from "node:path";
+import { readFile as readFile3, readdir as readdir3 } from "node:fs/promises";
+import { extname as extname2, join as join9 } from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 import { registerAppResource, registerAppTool, RESOURCE_MIME_TYPE } from "@modelcontextprotocol/ext-apps/server";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -93,7 +93,6 @@ function buildConnectionReport(observations, meta = {}) {
 
 // src/contracts.ts
 var BROWSER_ENGINES = ["chromium", "chrome-relay", "abp", "browser4"];
-var TASK_AGENTS = ["jev", "browser-use"];
 var CREDENTIAL_MODES = ["signup", "login"];
 var MAX_ANNOTATION_REGIONS = 24;
 var MIN_VIEWPORT = { width: 320, height: 240 };
@@ -106,6 +105,7 @@ var MAX_EVAL_RESULT_CHARS = 8e3;
 var MAX_LOG_ENTRIES = 50;
 var MAX_LOG_TEXT_CHARS = 300;
 var MAX_WAIT_MS = 15e3;
+var CONTROL_MODES = ["take", "return"];
 var PUBLISH_MODES = ["check", "post"];
 var MAX_ELEMENT_TAG_CHARS = 40;
 var MAX_ELEMENT_ID_CHARS = 240;
@@ -119,7 +119,7 @@ import { join as join2, resolve as resolve2 } from "node:path";
 
 // src/store.ts
 import { randomBytes } from "node:crypto";
-import { closeSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -130,7 +130,8 @@ var MAX_LABEL_CHARS = 48;
 function cleanLabel(raw) {
   if (typeof raw !== "string") return void 0;
   const label = raw.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
-  return label.length > 0 && label.length <= MAX_LABEL_CHARS ? label : void 0;
+  const characters = [...label].length;
+  return characters > 0 && characters <= MAX_LABEL_CHARS ? label : void 0;
 }
 var EMOJI = /^\p{Extended_Pictographic}(?:\p{Emoji_Modifier}|\uFE0F|\u200D\p{Extended_Pictographic})*$/u;
 function cleanAvatar(raw) {
@@ -151,12 +152,44 @@ function resolveProfileMeta(slug, stored = {}) {
     ...cleanAvatar(stored.avatar) === void 0 ? {} : { avatar: stored.avatar }
   };
 }
-var fold = (text) => text.replace(/\s+/g, " ").trim().toLowerCase();
+var fold = (text) => text.normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase();
 function matchProfiles(query, profiles) {
   const wanted = fold(query);
   if (wanted.length === 0) return [];
   const named = profiles.find((profile2) => profile2.slug === wanted);
   return named === void 0 ? profiles.filter((profile2) => fold(profile2.label) === wanted) : [named];
+}
+var DEVICE_NAME = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/;
+var PATH_UNSAFE = /[\\/:*?"<>|]/;
+function slugOf(label) {
+  const ascii = label.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  return ascii.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48).replace(/-+$/g, "");
+}
+function tagOf(label) {
+  let hash = 0;
+  for (const char of label) hash = Math.imul(hash, 31) + (char.codePointAt(0) ?? 0) >>> 0;
+  return `p-${hash.toString(36)}`;
+}
+function checkNewProfile(raw, taken, exists = () => false) {
+  const typed = raw.replace(/\s+/g, " ").trim();
+  if (typed.length === 0) return { ok: false, problem: "Give the profile a name." };
+  if (PATH_UNSAFE.test(typed) || /[\u0000-\u001f\u007f]/.test(typed) || typed.startsWith(".")) {
+    return { ok: false, problem: `A name can't contain \\ / : * ? " < > | or start with a dot.` };
+  }
+  if ([...typed].length > MAX_LABEL_CHARS) return { ok: false, problem: `Use ${MAX_LABEL_CHARS} characters or fewer.` };
+  if (!/[\p{L}\p{N}]/u.test(typed)) return { ok: false, problem: "Use at least one letter or number." };
+  const label = cleanLabel(typed);
+  if (label === void 0) return { ok: false, problem: "Give the profile a name." };
+  const wanted = fold(label);
+  const slugs = /* @__PURE__ */ new Set([DEFAULT_PROFILE, ...taken.map((profile2) => profile2.slug)]);
+  const names = /* @__PURE__ */ new Set([...slugs, ...taken.map((profile2) => fold(profile2.label)), fold(loginSetLabel(DEFAULT_PROFILE))]);
+  if (wanted === RELAY_PROFILE || DEVICE_NAME.test(wanted)) return { ok: false, problem: "That name is reserved. Pick another." };
+  if (names.has(wanted)) return { ok: false, problem: "You already have a profile with that name." };
+  const base = slugOf(label);
+  const stem = base.length > 0 && !DEVICE_NAME.test(base) && base !== RELAY_PROFILE ? base : tagOf(label);
+  let slug = stem;
+  for (let suffix = 2; slugs.has(slug) || exists(slug); suffix += 1) slug = `${stem.slice(0, 44)}-${suffix}`;
+  return { ok: true, slug, label };
 }
 var SIGNED_IN_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
 var CLOCK_SKEW_MS = 6e4;
@@ -166,6 +199,7 @@ function effectiveSignedIn(signedIn5, observedAt, now) {
 }
 
 // src/store.ts
+var MAX_PROFILES = 256;
 var CONNECTIONS_FILE = "connections.json";
 var PROFILE_FILE = "profile.json";
 var OWNER_FILE = "owner.pid";
@@ -211,12 +245,16 @@ var ProfileStore = class {
   userDataDir(slug) {
     return join(this.profileDir(slug), "chrome");
   }
+  /** Whether a folder for `slug` is on disk, listed or not (the listing stops at MAX_PROFILES). Creates nothing. */
+  exists(slug) {
+    return existsSync(this.profileDir(slug));
+  }
   ensureProfile(slug) {
     const dir = this.profileDir(slug);
     mkdirSync(dir, { recursive: true, mode: 448 });
     return dir;
   }
-  /** Profiles that have ever been materialized on disk, sorted, bounded. */
+  /** Profiles that have ever been materialized on disk, sorted, at most MAX_PROFILES: beyond that they are not listed (and `addProfile` refuses to make more). */
   list() {
     let entries;
     try {
@@ -230,7 +268,7 @@ var ProfileStore = class {
       } catch {
         return false;
       }
-    }).sort().slice(0, 256);
+    }).sort().slice(0, MAX_PROFILES);
   }
   get ephemeralRoot() {
     return join(this.rootDir, "ephemeral");
@@ -974,9 +1012,10 @@ function isObject2(value) {
 
 // src/profile-list.ts
 var MAX_PROFILES_FOR_MODEL = 40;
-function buildProfileList(store, holderOf, now) {
+function buildProfileList(store, holdOf, now) {
   return store.list().filter((slug) => slug !== RELAY_PROFILE).map((slug) => {
-    const { label, colour } = resolveProfileMeta(slug, store.meta(slug));
+    const stored = store.meta(slug);
+    const { label, colour, avatar } = resolveProfileMeta(slug, stored);
     const sites = [];
     for (const [site, observed] of Object.entries(store.connections(slug))) {
       const seen = new Date(observed.observedAt);
@@ -990,11 +1029,13 @@ function buildProfileList(store, holderOf, now) {
       });
     }
     sites.sort((a, b) => b.seenAt.localeCompare(a.seenAt) || a.site.localeCompare(b.site));
-    return { name: slug, label, colour, heldBy: holderOf(slug), sites };
+    const { heldBy, hold: hold2, browserId } = holdOf(slug);
+    return { name: slug, label, colour, ...avatar === void 0 ? {} : { avatar }, heldBy, ...hold2 === void 0 ? {} : { hold: hold2 }, ...browserId === void 0 ? {} : { browserId }, sites };
   });
 }
-var forModel = (profile2) => ({
+var forModel = ({ avatar: _avatar, hold: hold2, browserId: _browserId, ...profile2 }) => ({
   ...profile2,
+  heldBy: hold2?.takenOver ? "human" : profile2.heldBy,
   sites: profile2.sites.map(({ site, signedIn: signedIn5, seenAt }) => ({ site, signedIn: signedIn5, seenAt }))
 });
 function profilesForModel(list, max = MAX_PROFILES_FOR_MODEL) {
@@ -1005,9 +1046,9 @@ function profilesForModel(list, max = MAX_PROFILES_FOR_MODEL) {
 }
 
 // src/runtime.ts
-import { randomBytes as randomBytes4 } from "node:crypto";
-import { existsSync as existsSync3, watch } from "node:fs";
-import { join as join7 } from "node:path";
+import { randomBytes as randomBytes5 } from "node:crypto";
+import { existsSync as existsSync4, watch } from "node:fs";
+import { join as join8 } from "node:path";
 
 // recipes/x-post.json
 var signedIn = '[data-testid="SideNav_AccountSwitcher_Button"]';
@@ -1074,10 +1115,16 @@ async function readAccount(reader, read2) {
 }
 
 // src/credentials.ts
-import { randomInt } from "node:crypto";
-import { readFileSync as readFileSync2, renameSync as renameSync2, rmSync as rmSync3, writeFileSync as writeFileSync3 } from "node:fs";
-import { join as join4 } from "node:path";
+import { spawnSync } from "node:child_process";
+import { createCipheriv, createDecipheriv, randomBytes as randomBytes4, randomInt } from "node:crypto";
+import { closeSync as closeSync2, fsyncSync as fsyncSync2, linkSync, mkdirSync as mkdirSync3, openSync as openSync2, readdirSync as readdirSync3, readFileSync as readFileSync2, renameSync as renameSync2, rmSync as rmSync3, writeSync as writeSync2 } from "node:fs";
+import { basename as basename2, dirname as dirname2, join as join4 } from "node:path";
 var FILE = "credentials.json";
+var KEY_FILE = "credentials.key";
+var SEALED = /^gcm1:([A-Za-z0-9+/]{16}):([A-Za-z0-9+/]{22}==):([A-Za-z0-9+/]*={0,2})$/;
+var UNREADABLE = "this profile's saved passwords could not be read";
+var NO_KEY = "the key that protects saved passwords (credentials.key in the browser's data folder) is missing, so the passwords sealed under it cannot be opened; restore it from a backup, and until then nothing new is saved";
+var BAD_KEY = "the key that protects saved passwords (credentials.key in the browser's data folder) is empty or damaged, so the passwords sealed under it cannot be opened; restore it from a backup, or delete the file if none of them matter and a new key is made at the next save";
 var LOOPBACK = { localhost: true, "127.0.0.1": true, "[::1]": true };
 var LOWER = "abcdefghijkmnopqrstuvwxyz";
 var UPPER = "ABCDEFGHJKLMNPQRSTUVWXYZ";
@@ -1107,52 +1154,213 @@ function generatePassword() {
   }
   return chars.join("");
 }
-function read(file) {
+var CredentialKey = class {
+  #file;
+  #rootDir;
+  #key;
+  constructor(rootDir) {
+    this.#rootDir = rootDir;
+    this.#file = join4(rootDir, KEY_FILE);
+  }
+  get() {
+    return this.#key ??= keyFrom(this.#load() ?? this.#create());
+  }
+  existing() {
+    if (this.#key !== void 0) return this.#key;
+    const text = this.#load();
+    if (text === void 0) fail("credentials_unreadable", NO_KEY);
+    return this.#key = keyFrom(text);
+  }
+  #load() {
+    try {
+      return readFileSync2(this.#file, "utf8");
+    } catch (error) {
+      if (error.code === "ENOENT") return void 0;
+      fail("credentials_unreadable", "the key that protects saved passwords could not be read");
+    }
+  }
+  /**
+   * Make the key and publish it whole. It is staged in the same folder, restricted to the user BEFORE any key byte is written into it
+   * (created empty at mode 0600, its ACL cut where modes mean nothing, and only then filled), fsynced, and only then given its name, so
+   * `credentials.key` is never seen empty or half-written (by a second server on this root, or after a crash), the key is never readable
+   * by another account even for a moment, and a crash leaves either no key or the whole one. The name is taken with a hard link, which fails when it exists: two servers on one root
+   * cannot each publish a different key, and the loser reads the winner's. A filesystem with no hard links takes the name with a rename
+   * instead, which is atomic but cannot tell it lost a race (the read-back below still catches one that has already finished).
+   * Whatever is returned has been read back from the published file: nothing is sealed under a key that is not what is on disk.
+   */
+  #create() {
+    if (this.#holdsSealedStores()) fail("credentials_unreadable", NO_KEY);
+    mkdirSync3(this.#rootDir, { recursive: true, mode: 448 });
+    const text = `${randomBytes4(32).toString("base64")}
+`;
+    const staging = `${this.#file}.${randomBytes4(6).toString("hex")}.tmp`;
+    try {
+      closeSync2(openSync2(staging, "wx", 384));
+      onlyTheUser(staging);
+      const fd = openSync2(staging, "r+");
+      try {
+        writeSync2(fd, text);
+        fsyncSync2(fd);
+      } finally {
+        closeSync2(fd);
+      }
+      try {
+        linkSync(staging, this.#file);
+      } catch (error) {
+        if (error.code === "EEXIST") return this.#raced();
+        if (this.#load() !== void 0) return this.#raced();
+        renameSync2(staging, this.#file);
+      }
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "credentials_unreadable") throw error;
+      fail("credentials_unreadable", `the key that protects saved passwords could not be made (${error.code ?? "unknown"})`);
+    } finally {
+      rmSync3(staging, { force: true });
+    }
+    syncFolder(this.#rootDir);
+    if (this.#load() !== text) fail("credentials_unreadable", "the key that protects saved passwords could not be made whole");
+    return text;
+  }
+  /** The key another server published first. */
+  #raced() {
+    const text = this.#load();
+    if (text === void 0) fail("credentials_unreadable", "the key that protects saved passwords could not be read");
+    return text;
+  }
+  /**
+   * Whether any profile under this root already holds a store sealed under a key (so a key that is not on disk was lost, not never made):
+   * a version 2 store, or a version 1 one with a sealed value inside, which a server from before this one leaves when it signs up on a
+   * profile this one had sealed (a rollback).
+   */
+  #holdsSealedStores() {
+    const profiles = join4(this.#rootDir, "profiles");
+    let names;
+    try {
+      names = readdirSync3(profiles);
+    } catch {
+      return false;
+    }
+    return names.some((name) => {
+      try {
+        const store = JSON.parse(readFileSync2(join4(profiles, name, FILE), "utf8"));
+        if (store?.version === 2) return true;
+        return typeof store?.origins === "object" && store.origins !== null && Object.values(store.origins).some((value) => typeof value === "string" && SEALED.test(value));
+      } catch {
+        return false;
+      }
+    });
+  }
+};
+function keyFrom(text) {
+  const key = Buffer.from(text.trim(), "base64");
+  if (key.length !== 32) fail("credentials_unreadable", BAD_KEY);
+  return key;
+}
+function syncFolder(dir) {
+  try {
+    const fd = openSync2(dir, "r");
+    try {
+      fsyncSync2(fd);
+    } finally {
+      closeSync2(fd);
+    }
+  } catch {
+  }
+}
+function onlyTheUser(file) {
+  if (process.platform !== "win32") return;
+  const user = process.env.USERDOMAIN && process.env.USERNAME ? `${process.env.USERDOMAIN}\\${process.env.USERNAME}` : process.env.USERNAME;
+  const run = user === void 0 ? void 0 : spawnSync("icacls", [file, "/inheritance:r", "/grant:r", `${user}:F`], { windowsHide: true, encoding: "utf8" });
+  if (run === void 0 || run.status !== 0) console.error("The key that protects saved passwords could not be restricted to your account; it keeps the folder's permissions.");
+}
+function seal(password, origin, key) {
+  const iv = randomBytes4(12);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  cipher.setAAD(Buffer.from(origin, "utf8"));
+  const data = Buffer.concat([cipher.update(password, "utf8"), cipher.final()]);
+  return `gcm1:${iv.toString("base64")}:${cipher.getAuthTag().toString("base64")}:${data.toString("base64")}`;
+}
+function open(sealed, origin, key) {
+  const parts = SEALED.exec(sealed);
+  if (parts === null) fail("credentials_unreadable", UNREADABLE);
+  try {
+    const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(parts[1], "base64"));
+    decipher.setAAD(Buffer.from(origin, "utf8"));
+    decipher.setAuthTag(Buffer.from(parts[2], "base64"));
+    return Buffer.concat([decipher.update(Buffer.from(parts[3], "base64")), decipher.final()]).toString("utf8");
+  } catch {
+    fail("credentials_unreadable", UNREADABLE);
+  }
+}
+function write(file, origins, key) {
+  const sealed = {};
+  for (const [origin, password] of Object.entries(origins)) sealed[origin] = seal(password, origin, key.get());
+  writeJsonAtomic(dirname2(file), basename2(file), { version: 2, origins: sealed });
+}
+var unmigrated = /* @__PURE__ */ new Set();
+function read(file, key) {
   let parsed;
   try {
     parsed = JSON.parse(readFileSync2(file, "utf8"));
   } catch (error) {
     if (error.code === "ENOENT") return {};
-    fail("credentials_unreadable", "this profile's saved passwords could not be read");
+    fail("credentials_unreadable", UNREADABLE);
   }
+  const version = parsed?.version;
   const origins = parsed?.origins;
-  if (!origins || typeof origins !== "object" || Array.isArray(origins) || Object.values(origins).some((v) => typeof v !== "string")) {
-    fail("credentials_unreadable", "this profile's saved passwords could not be read");
-  }
-  return origins;
+  if (!origins || typeof origins !== "object" || Array.isArray(origins) || Object.values(origins).some((v) => typeof v !== "string")) fail("credentials_unreadable", UNREADABLE);
+  const stored = origins;
+  if (version !== 1 && version !== 2 && version !== void 0) fail("credentials_unreadable", UNREADABLE);
+  const clear = {};
+  for (const [origin, value] of Object.entries(stored)) clear[origin] = version === 2 || SEALED.test(value) ? open(value, origin, key.existing()) : value;
+  if (version !== 2 && Object.keys(clear).length > 0) migrate(file, clear, key);
+  return clear;
 }
-function savedPassword(profileDir, origin) {
-  const origins = read(join4(profileDir, FILE));
+function migrate(file, plain, key) {
+  try {
+    write(file, plain, key);
+    unmigrated.delete(file);
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "credentials_unreadable") throw error;
+    if (!unmigrated.has(file)) console.error("Saved passwords could not be encrypted in place yet; they stay readable and the next read tries again.");
+    unmigrated.add(file);
+  }
+}
+function readCredentials(profileDir, key) {
+  return read(join4(profileDir, FILE), key);
+}
+function savedPassword(profileDir, origin, key) {
+  const origins = readCredentials(profileDir, key);
   return Object.hasOwn(origins, origin) ? origins[origin] : void 0;
 }
-function savedPasswords(profileDir) {
-  return Object.values(read(join4(profileDir, FILE)));
+function savedPasswords(profileDir, key) {
+  return Object.values(readCredentials(profileDir, key));
 }
-function resolveCredential(profileDir, request) {
+function saveCredential(profileDir, origin, password, key) {
+  const file = join4(profileDir, FILE);
+  write(file, { ...read(file, key), [credentialOrigin(origin)]: password }, key);
+}
+function resolveCredential(profileDir, request, key) {
   if (!CREDENTIAL_MODES.includes(request.mode)) fail("bad_credential", `credential.mode must be one of: ${CREDENTIAL_MODES.join(", ")}`);
   const origin = credentialOrigin(request.origin);
   const file = join4(profileDir, FILE);
-  const origins = read(file);
+  const origins = read(file, key);
   const saved = origins[origin];
   if (saved) return { origin, password: saved, created: false };
   if (request.mode === "login") {
     fail("no_credential", `this profile has no saved password for ${origin}; log in with browser_act, or put the password in a browser_task`);
   }
   const password = generatePassword();
-  const tmp = `${file}.${process.pid}.tmp`;
-  try {
-    writeFileSync3(tmp, `${JSON.stringify({ version: 1, origins: { ...origins, [origin]: password } })}
-`, { mode: 384 });
-    renameSync2(tmp, file);
-  } finally {
-    rmSync3(tmp, { force: true });
-  }
+  saveCredential(profileDir, origin, password, key);
   return { origin, password, created: true };
 }
 
 // src/engines/puppeteer.ts
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync as mkdirSync4, statSync as statSync2 } from "node:fs";
+import { mkdirSync as mkdirSync5, statSync as statSync2 } from "node:fs";
+import { win32 } from "node:path";
+import { promisify } from "node:util";
 import { setTimeout as sleep2 } from "node:timers/promises";
 import puppeteer, { TimeoutError } from "puppeteer-core";
 
@@ -1366,9 +1574,9 @@ var READ_PAGE_SCRIPT = (limit, maxFrames) => {
 var ELEMENTS_IN_REGIONS_SCRIPT = (regions, limit, max) => {
   const found = regions.map(() => ({ elements: [], truncated: false }));
   const used = regions.map(() => 0);
-  const open = (entry) => !entry.truncated && entry.elements.length < max.count;
+  const open3 = (entry) => !entry.truncated && entry.elements.length < max.count;
   const nodes = document.querySelectorAll("body *");
-  for (let i = 0; i < nodes.length && found.some(open); i += 1) {
+  for (let i = 0; i < nodes.length && found.some(open3); i += 1) {
     const el = nodes[i];
     const r = el.getBoundingClientRect();
     if (r.width <= 0 || r.height <= 0) continue;
@@ -1376,7 +1584,7 @@ var ELEMENTS_IN_REGIONS_SCRIPT = (regions, limit, max) => {
     for (let k = 0; k < regions.length; k += 1) {
       const region = regions[k];
       const entry = found[k];
-      if (!open(entry)) continue;
+      if (!open3(entry)) continue;
       const intersects = r.left < region.x + region.width && r.right > region.x && r.top < region.y + region.height && r.bottom > region.y;
       if (!intersects) continue;
       if (el.children.length > 0 && r.width * r.height > region.width * region.height * 4) continue;
@@ -1712,7 +1920,7 @@ function inputCall(event) {
 }
 
 // src/engines/launch.ts
-import { existsSync, mkdirSync as mkdirSync3, readFileSync as readFileSync3, writeFileSync as writeFileSync4 } from "node:fs";
+import { existsSync as existsSync2, mkdirSync as mkdirSync4, readFileSync as readFileSync3, writeFileSync as writeFileSync3 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
 import { join as join5 } from "node:path";
 import { Browser as CachedBrowser, detectBrowserPlatform, getInstalledBrowsers } from "@puppeteer/browsers";
@@ -1721,7 +1929,7 @@ var systemProbe = {
   browserPlatform: detectBrowserPlatform(),
   env: process.env,
   home: homedir2(),
-  exists: existsSync
+  exists: existsSync2
 };
 async function resolveBrowser(explicitPath, probe = systemProbe) {
   if (explicitPath) return { app: "custom", executablePath: explicitPath };
@@ -1846,7 +2054,7 @@ function viewLaunchOptions(input) {
 function turnOffPasswordSaving(userDataDir) {
   const path = join5(userDataDir, "Default", "Preferences");
   let prefs = {};
-  if (existsSync(path)) {
+  if (existsSync2(path)) {
     let parsed;
     try {
       parsed = JSON.parse(readFileSync3(path, "utf8"));
@@ -1858,8 +2066,8 @@ function turnOffPasswordSaving(userDataDir) {
   }
   const profile2 = prefs.profile && typeof prefs.profile === "object" ? prefs.profile : {};
   if (prefs.credentials_enable_service === false && profile2.password_manager_enabled === false) return;
-  mkdirSync3(join5(userDataDir, "Default"), { recursive: true, mode: 448 });
-  writeFileSync4(path, JSON.stringify({ ...prefs, credentials_enable_service: false, profile: { ...profile2, password_manager_enabled: false } }), { mode: 384 });
+  mkdirSync4(join5(userDataDir, "Default"), { recursive: true, mode: 448 });
+  writeFileSync3(path, JSON.stringify({ ...prefs, credentials_enable_service: false, profile: { ...profile2, password_manager_enabled: false } }), { mode: 384 });
 }
 
 // src/engines/puppeteer.ts
@@ -1870,6 +2078,7 @@ var FRAME_REF_LIKE = /^@\d/;
 var ACTION_TIMEOUT_MS = 15e3;
 var LAUNCH_TIMEOUT_MS = 6e4;
 var CLOSE_TIMEOUT_MS = 15e3;
+var KILL_CONFIRM_MS = 5e3;
 var FAVICON_SCRIPT_TIMEOUT_MS = 2e3;
 var FIRST_FRAME_WAIT_MS = 150;
 var SCREENCAST_QUALITY = 70;
@@ -1990,7 +2199,7 @@ async function launchChromium(options, release) {
   try {
     resolved = await resolveBrowser(options.executablePath);
     identity = headless ? await binaryIdentities.of(resolved.executablePath) : void 0;
-    mkdirSync4(userDataDir, { recursive: true, mode: 448 });
+    mkdirSync5(userDataDir, { recursive: true, mode: 448 });
     turnOffPasswordSaving(userDataDir);
     browser = await puppeteer.launch(viewLaunchOptions({
       browser: resolved,
@@ -2163,17 +2372,17 @@ async function guardPage(cdp) {
   return { cdp, dialogs };
 }
 function answerDialogs(cdp, log) {
-  let open;
+  let open3;
   cdp.on("Page.javascriptDialogOpening", (event) => {
-    open = { type: event.type, message: event.message.slice(0, MAX_DIALOG_CHARS) };
+    open3 = { type: event.type, message: event.message.slice(0, MAX_DIALOG_CHARS) };
     const accept = event.type === "alert" || event.type === "beforeunload";
     void cdp.send("Page.handleJavaScriptDialog", { accept }).catch(() => void 0);
   });
   cdp.on("Page.javascriptDialogClosed", (event) => {
-    if (!open) return;
-    log.entries.push({ seq: ++log.seq, type: open.type, message: open.message, handled: event.result ? "accepted" : "dismissed" });
+    if (!open3) return;
+    log.entries.push({ seq: ++log.seq, type: open3.type, message: open3.message, handled: event.result ? "accepted" : "dismissed" });
     if (log.entries.length > MAX_DIALOGS) log.entries.shift();
-    open = void 0;
+    open3 = void 0;
   });
 }
 var NONE = Object.freeze({});
@@ -2737,6 +2946,27 @@ var PuppeteerDriver = class {
     }
     this.#release();
   }
+  /**
+   * Hard stop, for a `close` that hung. puppeteer's own close waits for the browser to exit with no bound, so a Chrome that will
+   * not exit never lets it finish: this kills the whole process tree instead, and releases the lease only once the browser
+   * process is seen to have exited. Safe beside a pending `close`: that one ends when the process does, and releasing is idempotent.
+   */
+  async kill() {
+    if (!this.#ownsBrowser) return await this.close();
+    this.#closed = true;
+    this.#browser.off("targetcreated", this.#onTargetCreated);
+    this.#browser.off("disconnected", this.#onDisconnected);
+    this.#watchers.clear();
+    const proc = this.#browser.process();
+    if (proc === null) fail("kill_failed", "this browser has no process of ours to kill");
+    if (!hasExited(this.#browser)) {
+      const exited = waitForExit(proc, KILL_CONFIRM_MS);
+      await killTree(proc);
+      if (!await exited) fail("kill_failed", `the browser process ${proc.pid} was killed but was not seen to exit within ${KILL_CONFIRM_MS} ms`);
+    }
+    await this.#browser.disconnect().catch(() => void 0);
+    this.#release();
+  }
   // -----------------------------------------------------------------------
   // Internals — tabs
   // -----------------------------------------------------------------------
@@ -3098,6 +3328,39 @@ function hasExited(browser) {
   const proc = browser.process();
   return proc !== null && (proc.exitCode !== null || proc.signalCode !== null);
 }
+function waitForExit(proc, ms) {
+  if (proc.exitCode !== null || proc.signalCode !== null) return Promise.resolve(true);
+  const { promise, resolve: resolve4 } = Promise.withResolvers();
+  const onExit = () => {
+    clearTimeout(timer);
+    resolve4(true);
+  };
+  const timer = setTimeout(() => {
+    proc.off("exit", onExit);
+    resolve4(false);
+  }, ms);
+  proc.once("exit", onExit);
+  return promise;
+}
+var execFileAsync = promisify(execFile);
+function taskkillArgs(proc) {
+  if (proc.pid === void 0 || proc.exitCode !== null || proc.signalCode !== null) return void 0;
+  return ["/pid", String(proc.pid), "/T", "/F", "/FI", `IMAGENAME eq ${win32.basename(proc.spawnfile)}`];
+}
+async function killTree(proc) {
+  const pid = proc.pid;
+  if (pid === void 0) return;
+  if (process.platform === "win32") {
+    const args = taskkillArgs(proc);
+    if (args !== void 0) await execFileAsync("taskkill", args, { windowsHide: true }).catch(() => proc.kill());
+    return;
+  }
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch {
+    proc.kill("SIGKILL");
+  }
+}
 function utilityWorld(frame) {
   return frame.isolatedRealm();
 }
@@ -3182,6 +3445,127 @@ function assertEngineAvailable(engine) {
 function createEngineDriver(engine, options) {
   assertEngineAvailable(engine);
   return createPuppeteerDriver(engine === "chrome-relay" ? "chrome-relay" : "chromium", options);
+}
+
+// src/publish-approval.ts
+import { createHash as createHash2 } from "node:crypto";
+import { open as open2, readdir as readdir2, readFile as readFile2, unlink } from "node:fs/promises";
+import { join as join6 } from "node:path";
+var BINDING_DOMAIN = "publish-approval/v1";
+var MAX_APPROVAL_MS = 24 * 60 * 6e4;
+var DRAFT_ID = /^[A-Za-z0-9_-]{1,64}$/;
+var NONCE = /^[0-9a-f]{32}$/;
+var DIGEST = /^[0-9a-f]{64}$/;
+function bindingOf(binding) {
+  return createHash2("sha256").update(JSON.stringify([BINDING_DOMAIN, binding.origin, binding.profile, binding.preset ?? null, [...binding.values]])).digest("hex");
+}
+var UNTOUCHED = {
+  park: "Nothing was typed or clicked.",
+  confirm: "Nothing was clicked and the publish is still pending: cancel it with browser_publish_cancel."
+};
+var PublishApprovals = class {
+  #dir;
+  #now;
+  constructor(dir, now = Date.now) {
+    this.#dir = dir;
+    this.#now = now;
+  }
+  /** Refuse unless a live, unspent approval covers this post. Spends nothing. */
+  async require(binding, stage) {
+    const found = await this.#survey(bindingOf(binding));
+    if (found.live.length === 0) refuse(binding, found, stage);
+  }
+  /**
+   * Spend the approval that covers this post, or refuse. The exclusive create of
+   * its marker is the lock, so of any number of concurrent spenders exactly one
+   * wins; the rest see `used`.
+   */
+  async consume(binding, stage) {
+    const found = await this.#survey(bindingOf(binding));
+    for (const approval of found.live) {
+      const marker = join6(this.#dir, `${approval.draftId}.${approval.nonce}.used`);
+      try {
+        await (await open2(marker, "wx")).close();
+      } catch (error) {
+        if (error.code === "EEXIST") {
+          found.used.push(approval);
+          continue;
+        }
+        throw error;
+      }
+      return {
+        draftId: approval.draftId,
+        release: async () => {
+          await unlink(marker).catch((error) => {
+            if (error.code !== "ENOENT") throw error;
+          });
+        }
+      };
+    }
+    return refuse(binding, found, stage);
+  }
+  /** Every approval for this binding, sorted into the states a refusal tells apart. Unreadable or malformed entries are not approvals. */
+  async #survey(binding) {
+    const live = [];
+    const used = [];
+    const expired = [];
+    let names;
+    try {
+      names = await readdir2(this.#dir);
+    } catch (error) {
+      if (error.code === "ENOENT") return { live, used, expired };
+      throw error;
+    }
+    const spent = new Set(names.filter((name) => name.endsWith(".used")));
+    const now = this.#now();
+    for (const name of names) {
+      if (!name.endsWith(".json")) continue;
+      const approval = await readApproval(join6(this.#dir, name), name);
+      if (approval === null || approval.binding !== binding) continue;
+      if (spent.has(`${approval.draftId}.${approval.nonce}.used`)) used.push(approval);
+      else if (approval.expiresAt <= now) expired.push(approval);
+      else live.push(approval);
+    }
+    return { live, used, expired };
+  }
+};
+async function readApproval(path, name) {
+  let parsed;
+  try {
+    parsed = JSON.parse(await readFile2(path, "utf8"));
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const { v, draftId, nonce, binding, approvedAt, expiresAt } = parsed;
+  if (v !== 1 || typeof draftId !== "string" || !DRAFT_ID.test(draftId) || name !== `${draftId}.json`) return null;
+  if (typeof nonce !== "string" || !NONCE.test(nonce) || typeof binding !== "string" || !DIGEST.test(binding)) return null;
+  if (typeof approvedAt !== "string" || typeof expiresAt !== "string") return null;
+  const from = Date.parse(approvedAt);
+  const until = Date.parse(expiresAt);
+  if (!Number.isFinite(from) || !Number.isFinite(until) || until <= from || until - from > MAX_APPROVAL_MS) return null;
+  return { draftId, nonce, binding, approvedAt: from, expiresAt: until };
+}
+function refuse(binding, found, stage) {
+  const post = `site ${binding.origin}, profile ${binding.profile}, ${binding.preset === void 0 ? "a recipe, which no board approves," : `preset ${binding.preset},`} text sha256:${bindingOf(binding).slice(0, 12)}`;
+  const spent = found.used[0];
+  if (spent !== void 0) {
+    fail(
+      "publish_unapproved",
+      `publish_unapproved: the approval for draft ${spent.draftId} (${post}) was already used, so this post may already be up. Do not post it again: follow it with browser_publish_wait, then record draft_posted with its url, or unconfirmed if you cannot tell. ${UNTOUCHED[stage]}`
+    );
+  }
+  const lapsed = found.expired[0];
+  if (lapsed !== void 0) {
+    fail(
+      "publish_unapproved",
+      `publish_unapproved: the approval for draft ${lapsed.draftId} (${post}) expired at ${new Date(lapsed.expiresAt).toISOString()}. Record draft_failed with that reason; the user presses Retry on the board, which approves it again. ${UNTOUCHED[stage]}`
+    );
+  }
+  fail(
+    "publish_unapproved",
+    `publish_unapproved: no board approval covers this exact post (${post}). Post only text the user approved on the campaign board, from the profile that draft names, through the platform's preset (never a recipe you wrote), exactly as approved, character for character. ${UNTOUCHED[stage]}`
+  );
 }
 
 // src/read.ts
@@ -3384,23 +3768,26 @@ async function resolveReason(host, resolve4) {
 
 // src/task.ts
 import { spawn } from "node:child_process";
-import { existsSync as existsSync2 } from "node:fs";
+import { existsSync as existsSync3 } from "node:fs";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 import { createInterface } from "node:readline";
-import { join as join6 } from "node:path";
+import { join as join7 } from "node:path";
 var PYTHON_DIR = fileURLToPath2(new URL("../python/", import.meta.url));
 var CANCEL_GRACE_MS = 15e3;
 var EXIT_DRAIN_MS = 2e3;
 var STDERR_KEEP = 4096;
 var SPARE_IDLE_MS = 10 * 6e4;
+function jevKeyConfigured() {
+  return Boolean(process.env.TYPESAFE_API_KEY?.trim());
+}
 function interpreter() {
   const configured = process.env.DIM_BROWSER_PYTHON?.trim();
   if (configured) return configured;
-  const venv = process.platform === "win32" ? join6(PYTHON_DIR, ".venv", "Scripts", "python.exe") : join6(PYTHON_DIR, ".venv", "bin", "python");
-  if (!existsSync2(venv)) {
+  const venv = process.platform === "win32" ? join7(PYTHON_DIR, ".venv", "Scripts", "python.exe") : join7(PYTHON_DIR, ".venv", "bin", "python");
+  if (!existsSync3(venv)) {
     fail(
       "python_env_missing",
-      `The jev / browser-use task agents need their pinned Python environment. Run: cd "${PYTHON_DIR}" && uv sync --python 3.12 (or set DIM_BROWSER_PYTHON to an interpreter that has it).`
+      `The jev task agent needs its pinned Python environment. Run: cd "${PYTHON_DIR}" && uv sync --python 3.12 (or set DIM_BROWSER_PYTHON to an interpreter that has it).`
     );
   }
   return venv;
@@ -3415,10 +3802,10 @@ function usageOf(line) {
   };
 }
 var FINAL = { done: true, blocked: true, failed: true, cancelled: true };
-function spawnWorker(spare2 = false) {
+function spawnWorker() {
   const child = spawn(interpreter(), ["-m", "dim_browser_bridge"], {
     cwd: PYTHON_DIR,
-    env: { ...process.env, PYTHONUNBUFFERED: "1", PYTHONIOENCODING: "utf-8", ...spare2 ? { DIM_BROWSER_SPARE: "1" } : {} },
+    env: { ...process.env, PYTHONUNBUFFERED: "1", PYTHONIOENCODING: "utf-8" },
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true
   });
@@ -3441,11 +3828,15 @@ function hold(worker, held) {
     (held ? handle.ref : handle.unref)?.call(handle);
   }
 }
-function takeSpare() {
-  const taken = spare;
+function detachSpare() {
+  const detached = spare;
   spare = void 0;
+  if (detached) clearTimeout(detached.idle);
+  return detached;
+}
+function takeSpare() {
+  const taken = detachSpare();
   if (!taken) return void 0;
-  clearTimeout(taken.idle);
   const { child } = taken.worker;
   if (child.pid !== void 0 && child.exitCode === null && child.signalCode === null && taken.env === envKey()) {
     hold(taken.worker, true);
@@ -3455,10 +3846,10 @@ function takeSpare() {
   return void 0;
 }
 function keepSpare() {
-  if (spare) return;
+  if (spare || !jevKeyConfigured()) return;
   let worker;
   try {
-    worker = spawnWorker(true);
+    worker = spawnWorker();
   } catch {
     return;
   }
@@ -3475,6 +3866,9 @@ function keepSpare() {
   });
   hold(worker, false);
   spare = { worker, env: envKey(), idle };
+}
+function releaseSpare() {
+  detachSpare()?.worker.child.stdin.end();
 }
 function startWorker(job, onStep) {
   const { child, stderr } = takeSpare() ?? spawnWorker();
@@ -3542,6 +3936,12 @@ var CHECK_RENOTE_MS = 3e4;
 var VISIT_RENOTE_MS = 10 * 6e4;
 var MAX_NOTED = 512;
 var READER_IDLE_MS = 6e4;
+var THROWAWAY_IDLE_MS = 10 * 6e4;
+var MAX_TIMER_MS = 2147483647;
+var GRACEFUL_CLOSE_MS = 2e4;
+var CLOSE_RETRY_MS = 3e4;
+var MAX_RELEASED = 64;
+var VIEW_GONE_MS = 30 * 6e4;
 var MAX_FRAMES_RETAINED = 8;
 var ACT_BUDGET_MS = 2e4;
 var MAX_BATCH_DIALOGS = 5;
@@ -3582,7 +3982,10 @@ var TOUCHING_KINDS = { click: true, press: true, type: true, insert: true };
 var touchesPage = (event) => event.kind !== "wheel" && !(event.kind === "mouse" && event.type === "move");
 var BrowserRuntime = class {
   store;
+  publishApprovals;
   annotationFiles;
+  /** The key every profile's saved passwords are sealed under: one file in the root, beside `profiles/` (credentials.ts). */
+  credentialKey;
   options;
   byId = /* @__PURE__ */ new Map();
   byProfile = /* @__PURE__ */ new Map();
@@ -3622,12 +4025,28 @@ var BrowserRuntime = class {
   connectionListeners = /* @__PURE__ */ new Set();
   /** Profiles with persisted observations, so a deleted one is noticed and reported gone. */
   observedProfiles = /* @__PURE__ */ new Set();
+  /** How long a throwaway may go without a call before it is closed (see THROWAWAY_IDLE_MS). */
+  idleMs;
+  /** How long a taken-over browser may have no View joined before the wheel is given back (see VIEW_GONE_MS). */
+  viewGoneMs;
+  /** Why a browser the runtime closed on its own is gone, by id, so the chat that held it is told rather than sent "unknown". */
+  released = /* @__PURE__ */ new Map();
   /** Watches the profile root for deletions while anyone listens for connection changes. */
   profileWatcher;
   constructor(options = {}) {
     this.options = options;
+    this.idleMs = options.throwawayIdleMs ?? THROWAWAY_IDLE_MS;
+    if (!Number.isFinite(this.idleMs) || this.idleMs <= 0 || this.idleMs > MAX_TIMER_MS) {
+      throw new RangeError(`throwawayIdleMs must be a number of milliseconds above 0 and at most ${MAX_TIMER_MS}, got ${String(options.throwawayIdleMs)}`);
+    }
+    this.viewGoneMs = options.viewGoneMs ?? VIEW_GONE_MS;
+    if (!Number.isFinite(this.viewGoneMs) || this.viewGoneMs <= 0 || this.viewGoneMs > MAX_TIMER_MS) {
+      throw new RangeError(`viewGoneMs must be a number of milliseconds above 0 and at most ${MAX_TIMER_MS}, got ${String(options.viewGoneMs)}`);
+    }
     this.store = new ProfileStore(options.rootDir);
-    this.annotationFiles = new AnnotationFiles(join7(this.store.rootDir, "annotations"));
+    this.annotationFiles = new AnnotationFiles(join8(this.store.rootDir, "annotations"));
+    this.credentialKey = new CredentialKey(this.store.rootDir);
+    this.publishApprovals = new PublishApprovals(join8(this.store.rootDir, "publish-approvals"));
     this.store.sweepEphemeral();
   }
   // -----------------------------------------------------------------------
@@ -3653,11 +4072,13 @@ var BrowserRuntime = class {
    *
    * Without a `profile` it is a throwaway browser: a directory of its own that
    * is deleted when it closes, so it can never collide with another browser.
+   *
+   * With the pool full, the throwaway used least recently that is neither working nor watched is closed first (its Chrome gone before
+   * this launches); when there is none, the open is refused (`too_many_browsers`) naming the browsers this chat holds.
    */
   async open(options, opener = {}) {
     if (this.disposed) fail("disposed", "runtime has been disposed");
-    if (this.byId.size + this.opening.size >= MAX_BROWSERS - 1 && this.readerHeld()) await this.closeReader();
-    if (this.disposed) fail("disposed", "runtime has been disposed");
+    if (options.leaving !== void 0 && opener.caller !== "app") fail("human_only", "only the person in the View can switch to another browser");
     const engine = normalizeEngine(options.engine);
     const named = options.profile === void 0 ? void 0 : this.resolveProfile(options.profile, engine);
     const viewport = normalizeViewport(options.viewport);
@@ -3671,23 +4092,27 @@ var BrowserRuntime = class {
     if (engine !== "chrome-relay" && profile2 === RELAY_PROFILE) {
       fail("bad_profile", `profile "${RELAY_PROFILE}" is reserved for the chrome-relay engine`);
     }
-    const live = profile2 === null ? void 0 : this.byProfile.get(profile2);
-    if (profile2 !== null && live !== void 0) {
-      const holder = this.holderOf(live.opener, opener.session);
-      if (holder === "this chat") return await this.state(live.browserId);
-      fail("profile_held", heldMessage(profile2, holder));
-    }
-    const launching = profile2 === null ? void 0 : this.opening.get(profile2);
-    if (profile2 !== null && launching !== void 0) {
-      const holder = this.holderOf(this.openers.get(profile2) ?? {}, opener.session);
-      if (holder === "this chat") return await this.state((await launching).browserId);
-      fail("profile_held", heldMessage(profile2, holder));
-    }
-    if (this.byId.size + this.opening.size + (this.readerHeld() ? 1 : 0) >= MAX_BROWSERS) {
-      fail("too_many_browsers", `at most ${MAX_BROWSERS} browsers may be open at once; close one first`);
+    for (; ; ) {
+      if (this.byId.size + this.opening.size >= MAX_BROWSERS - 1 && this.readerHeld()) await this.closeReader();
+      if (this.disposed) fail("disposed", "runtime has been disposed");
+      const live = profile2 === null ? void 0 : this.byProfile.get(profile2);
+      if (profile2 !== null && live !== void 0) {
+        const holder = this.holderOf(live.opener, opener.session);
+        if (holder === "this chat") return await this.state(live.browserId);
+        fail("profile_held", heldMessage(profile2, holder));
+      }
+      const launching = profile2 === null ? void 0 : this.opening.get(profile2);
+      if (profile2 !== null && launching !== void 0) {
+        const holder = this.holderOf(this.openers.get(profile2) ?? {}, opener.session);
+        if (holder === "this chat") return await this.state((await launching).browserId);
+        fail("profile_held", heldMessage(profile2, holder));
+      }
+      if (this.byId.size + this.opening.size + (this.readerHeld() ? 1 : 0) < MAX_BROWSERS) break;
+      if (await this.leaveForRoom(options.leaving, opener)) continue;
+      await this.makeRoom(opener.session);
     }
     assertEngineAvailable(engine);
-    const slot = profile2 ?? `ephemeral:${randomBytes4(8).toString("hex")}`;
+    const slot = profile2 ?? `ephemeral:${randomBytes5(8).toString("hex")}`;
     const started = this.launch(profile2, engine, viewport, opener).finally(() => {
       this.opening.delete(slot);
       this.openers.delete(slot);
@@ -3708,10 +4133,10 @@ var BrowserRuntime = class {
       const ephemeral = this.store.createEphemeral();
       directory = ephemeral.userDataDir;
       free = () => this.discard(ephemeral.dir);
-      annotations = new AnnotationFiles(join7(ephemeral.dir, "annotations"));
+      annotations = new AnnotationFiles(join8(ephemeral.dir, "annotations"));
     } else {
       const lock = this.store.acquireLock(profile2);
-      directory = engine === "chromium" ? this.store.userDataDir(profile2) : join7(this.store.profileDir(profile2), engine);
+      directory = engine === "chromium" ? this.store.userDataDir(profile2) : join8(this.store.profileDir(profile2), engine);
       free = () => this.store.releaseLock(lock);
     }
     let released = false;
@@ -3739,7 +4164,7 @@ var BrowserRuntime = class {
       const initial = await driver.state();
       if (released) fail("browser_closed", "The browser closed during initialization.");
       entry = {
-        browserId: randomBytes4(24).toString("base64url"),
+        browserId: randomBytes5(24).toString("base64url"),
         profile: profile2,
         engine,
         viewport: initial.viewport,
@@ -3759,11 +4184,23 @@ var BrowserRuntime = class {
         logNoticed: 0,
         annotations,
         opener,
-        probe: { timer: void 0, running: void 0, again: false }
+        takenOver: false,
+        starting: null,
+        agentAt: null,
+        look: profile2 === null || profile2 === RELAY_PROFILE ? null : resolveProfileMeta(profile2, this.store.meta(profile2)),
+        probe: { timer: void 0, running: void 0, again: false },
+        lastUsed: performance.now(),
+        viewers: 0,
+        pending: 0,
+        idle: void 0,
+        retiring: void 0,
+        closeFailed: false,
+        wheelTimer: void 0
       };
       if (profile2 !== null && profile2 !== RELAY_PROFILE) entry.notice = this.touchProfile(profile2, driver.app);
       this.byId.set(entry.browserId, entry);
       if (profile2 !== null) this.byProfile.set(profile2, entry);
+      if (profile2 === null && opener.caller !== "app") this.watchIdle(entry, this.idleMs);
       return entry;
     } catch (error) {
       if (driver) {
@@ -3787,30 +4224,71 @@ var BrowserRuntime = class {
   /** Refused (`publish_pending`) while a publish awaits confirmation, unless `caller` is "app". */
   async close(browserId, caller) {
     const entry = this.byId.get(browserId);
-    if (!entry) fail("unknown_browser", "Unknown or already closed browserId.");
+    if (!entry) {
+      if (this.released.has(browserId)) return;
+      fail("unknown_browser", "Unknown or already closed browserId.");
+    }
     await this.serialize(entry, async () => {
-      if (!entry.closed) refuseWhilePublishing(entry, caller);
+      if (!entry.closed) {
+        refuseWhilePublishing(entry, caller);
+        refuseWhileTakenOver(entry, caller);
+      }
       await this.teardown(entry);
     }, { evenIfClosed: true });
     await Promise.allSettled(this.removals);
   }
-  /** Retain ownership and the lock until the driver confirms shutdown. */
+  /** Retain ownership and the lock until the driver confirms shutdown. A throwaway that cannot be stopped is tried again soon. */
   async teardown(entry) {
     if (this.byId.get(entry.browserId) !== entry) return;
     settleOnClose(entry);
+    clearTimeout(entry.wheelTimer);
     entry.closed = true;
     entry.frames.length = 0;
-    await this.stopTask(entry);
-    await this.probeAtClose(entry);
-    await entry.driver.close();
+    try {
+      await this.stopTask(entry);
+      await this.probeAtClose(entry);
+      await this.stopBrowser(entry);
+    } catch (error) {
+      if (entry.profile === null) this.retryClose(entry);
+      throw error;
+    }
     this.markUsed(entry);
     entry.release();
+  }
+  /**
+   * Stop `entry`'s browser. A saved profile's gets the driver's own confirmed close and nothing harder: its lock holds until the
+   * process is provably gone, and a hard kill could cut a write to logins that matter. A throwaway keeps nothing, so a close that
+   * hangs or fails is answered by killing the process tree (a Chrome seen hanging on exit never leaves by itself), and its slot is
+   * freed only once the driver has seen the process exit. A close that failed once is not asked again: puppeteer takes a second one
+   * for done at once, and releasing on that would free the slot of a Chrome that may still be running.
+   */
+  async stopBrowser(entry) {
+    if (entry.profile !== null) return await entry.driver.close();
+    if (!entry.closeFailed) {
+      try {
+        return await withTimeout(entry.driver.close(), GRACEFUL_CLOSE_MS, "browser close");
+      } catch (error) {
+        entry.closeFailed = true;
+        console.error("A throwaway browser did not close politely; its process tree is killed:", describe3(error));
+      }
+    }
+    await entry.driver.kill();
+  }
+  /** A throwaway holds a slot and may hold a Chrome, and its chat may never call it again: try to stop it again soon, and again if that fails. */
+  retryClose(entry) {
+    if (this.disposed) return;
+    clearTimeout(entry.idle);
+    entry.idle = setTimeout(() => {
+      void this.serialize(entry, () => this.teardown(entry), { evenIfClosed: true }).then(() => Promise.allSettled(this.removals)).catch((error) => console.error("A throwaway browser still would not close:", describe3(error)));
+    }, Math.min(this.idleMs, CLOSE_RETRY_MS));
+    entry.idle.unref();
   }
   async dispose() {
     this.disposed = true;
     this.connectionListeners.clear();
     this.profileWatcher?.close();
     this.profileWatcher = void 0;
+    releaseSpare();
     await Promise.allSettled(this.opening.values());
     const errors = [];
     await this.closeReader().catch((err) => errors.push(describe3(err)));
@@ -3829,6 +4307,7 @@ var BrowserRuntime = class {
       }
     }
     await Promise.allSettled(this.removals);
+    releaseSpare();
     if (errors.length > 0) fail("dispose_incomplete", `some browsers did not shut down cleanly: ${errors.join("; ")}`);
   }
   /** Drop in-memory state and make the capability dead. Does NOT free the lock. */
@@ -3838,6 +4317,8 @@ var BrowserRuntime = class {
     entry.frames.length = 0;
     entry.worker?.process.cancel();
     clearTimeout(entry.probe.timer);
+    clearTimeout(entry.idle);
+    clearTimeout(entry.wheelTimer);
     this.byId.delete(entry.browserId);
     if (entry.profile !== null && this.byProfile.get(entry.profile) === entry) this.byProfile.delete(entry.profile);
     for (const [session, browserId] of this.viewBySession) if (browserId === entry.browserId) this.viewBySession.delete(session);
@@ -3848,6 +4329,127 @@ var BrowserRuntime = class {
   }
   viewOf(session) {
     return this.viewBySession.get(session);
+  }
+  // -----------------------------------------------------------------------
+  // Throwaway browsers nobody is using
+  // -----------------------------------------------------------------------
+  /**
+   * Close `entry` for a reason the chat that held it is told on its next call, and return once its Chrome is gone and its directory is
+   * deleted. One close per browser: a second caller gets the first one's outcome. A close that fails rejects, and `teardown` has by then
+   * scheduled another try.
+   */
+  retire(entry, reason) {
+    entry.retiring ??= (async () => {
+      this.remember(entry.browserId, reason);
+      await this.serialize(entry, () => this.teardown(entry), { evenIfClosed: true });
+      await Promise.allSettled(this.removals);
+    })().catch((error) => {
+      entry.retiring = void 0;
+      throw error;
+    });
+    return entry.retiring;
+  }
+  remember(browserId, reason) {
+    this.released.set(browserId, reason);
+    if (this.released.size <= MAX_RELEASED) return;
+    for (const oldest of this.released.keys()) {
+      this.released.delete(oldest);
+      break;
+    }
+  }
+  /** A call is queued or running, or a task agent is driving it: nothing may close this browser under that work. */
+  working(entry) {
+    return entry.pending > 0 || entry.worker !== null;
+  }
+  /**
+   * The fallback that gives the wheel back to the agent when the View is gone for good without having handed it back: no View has been
+   * joined to the browser's stream for `viewGoneMs`. A hidden document closes its stream too, so this clock is long and is not what takes
+   * the wheel from a person who stepped away; a departure the View can see (unmount, chat closed, profile switch) hands it back at once.
+   * A View that joins first keeps it. One timer per unwatched stretch; called whenever the wheel is taken or a View joins or leaves.
+   */
+  watchWheel(entry) {
+    clearTimeout(entry.wheelTimer);
+    entry.wheelTimer = void 0;
+    if (!entry.takenOver || entry.viewers > 0 || entry.closed || this.disposed) return;
+    entry.wheelTimer = setTimeout(() => {
+      entry.wheelTimer = void 0;
+      if (entry.takenOver && entry.viewers === 0) entry.takenOver = false;
+    }, this.viewGoneMs);
+    entry.wheelTimer.unref();
+  }
+  /** Look at `entry` again after `afterMs`. One timer per idle period, never one per call: a call only stamps `lastUsed`. */
+  watchIdle(entry, afterMs) {
+    entry.idle = setTimeout(() => this.checkIdle(entry), afterMs);
+    entry.idle.unref();
+  }
+  checkIdle(entry) {
+    if (entry.closed || entry.retiring !== void 0) return;
+    const quietMs = performance.now() - entry.lastUsed;
+    const occupied = this.working(entry) || entry.viewers > 0 || entry.takenOver;
+    if (occupied || quietMs < this.idleMs) {
+      this.watchIdle(entry, occupied ? this.idleMs : this.idleMs - quietMs);
+      return;
+    }
+    const reason = `it was a throwaway browser, closed after ${this.idleMs / 1e3} s with no calls; open a new one with browser_open`;
+    void this.retire(entry, reason).catch((error) => console.error("An idle throwaway browser was not closed:", describe3(error)));
+  }
+  /**
+   * The throwaway to give up when the pool is full: the one used least recently that nothing is happening on, that no View has joined and
+   * that the person has not taken over, a chat's before the person's own Private one. A saved profile (and the relay) is never one: it
+   * holds a lock and logins. One already on its way out is not asked about: `makeRoom` waits for it instead.
+   */
+  pickVictim() {
+    let victim;
+    for (const entry of this.byId.values()) {
+      if (entry.profile !== null || entry.closed || entry.viewers > 0 || entry.takenOver || this.working(entry)) continue;
+      const personal = entry.opener.caller === "app";
+      const victimPersonal = victim?.opener.caller === "app";
+      if (victim === void 0 || !personal && victimPersonal || personal === victimPersonal && entry.lastUsed < victim.lastUsed) victim = entry;
+    }
+    return victim;
+  }
+  /**
+   * Free one slot of a full pool or refuse. A browser already on its way out frees a slot by itself, so that is waited for instead of
+   * closing a second one; otherwise the victim is closed, its Chrome confirmed gone, before this returns. The caller looks again.
+   */
+  async makeRoom(asker) {
+    const leaving = [...this.byId.values()].flatMap((entry) => entry.retiring === void 0 ? [] : [entry.retiring]);
+    if (leaving.length > 0) {
+      await Promise.race(leaving).catch(() => void 0);
+      return;
+    }
+    const victim = this.pickVictim();
+    if (victim === void 0) fail("too_many_browsers", this.refusal(asker, "none can be closed to make room: each is running a task, has a call in progress, is open in a View, is one the person has taken over, is still shutting down, or is a saved profile's"));
+    const reason = `it was a throwaway browser, closed to make room for another chat's (at most ${MAX_BROWSERS} are open at once); open a new one with browser_open`;
+    try {
+      await this.retire(victim, reason);
+    } catch (error) {
+      console.error("A throwaway browser was not closed to make room:", describe3(error));
+      fail("too_many_browsers", this.refusal(asker, "the one chosen to make room is still shutting down and no other was closed"));
+    }
+  }
+  /** Why nothing could be given up. It names what `asker` itself holds, never what anyone else does: an id is a capability. */
+  refusal(asker, because) {
+    const held = asker === void 0 ? [] : [...this.byId.values()].filter((entry) => entry.opener.session === asker && !entry.closed).map((entry) => entry.browserId);
+    const why = `at most ${MAX_BROWSERS} browsers may be open at once, and ${because}`;
+    return held.length > 0 ? `${why}. You hold ${held.join(", ")}: browser_close the ones you are done with` : `${why}. None is yours; try again shortly`;
+  }
+  /**
+   * A View joined `browserId`'s live stream (stream.ts): while any View is joined nobody may give the browser up, and it is not idle.
+   * Returns what ends that. A count, not a clock: a View whose page answers slowly is still watching.
+   */
+  viewing(browserId) {
+    const entry = this.require(browserId);
+    entry.viewers += 1;
+    this.watchWheel(entry);
+    let ended = false;
+    return () => {
+      if (ended) return;
+      ended = true;
+      entry.viewers -= 1;
+      entry.lastUsed = performance.now();
+      this.watchWheel(entry);
+    };
   }
   // -----------------------------------------------------------------------
   // Read paths
@@ -3914,7 +4516,7 @@ var BrowserRuntime = class {
         fail("frame_too_large", `screenshot is ${bytes.length} bytes, above the ${MAX_FRAME_BYTES} byte limit`);
       }
       const record = {
-        id: randomBytes4(12).toString("hex"),
+        id: randomBytes5(12).toString("hex"),
         url,
         title: state.title,
         revision,
@@ -4047,20 +4649,104 @@ var BrowserRuntime = class {
     return this.require(browserId).annotations.save(json);
   }
   async profileList(asker) {
-    return buildProfileList(
-      this.store,
-      (slug) => {
-        const opener = this.byProfile.get(slug)?.opener ?? this.openers.get(slug);
-        if (opener !== void 0) return this.holderOf(opener, asker);
-        return this.store.heldElsewhere(slug) ? "another chat" : null;
-      },
-      Date.now()
+    return buildProfileList(this.store, (slug) => this.holdFact(slug, asker), Date.now());
+  }
+  /** Who holds `slug` as `asker` sees it, and what that holder is doing. A browser still launching counts; so does one open in another server. */
+  holdFact(slug, asker) {
+    const entry = this.byProfile.get(slug);
+    const opener = entry?.opener ?? this.openers.get(slug);
+    if (opener !== void 0) {
+      const heldBy = this.holderOf(opener, asker);
+      return { heldBy, hold: this.holdOf(entry, opener), ...heldBy === "this chat" && entry !== void 0 ? { browserId: entry.browserId } : {} };
+    }
+    return { heldBy: this.store.heldElsewhere(slug) ? "another chat" : null };
+  }
+  /** What `entry` (absent while it is still launching) is doing, for the View's menu. */
+  holdOf(entry, opener) {
+    return {
+      by: opener.caller === "app" ? "person" : "agent",
+      task: entry?.task?.status === "running",
+      takenOver: entry?.takenOver === true,
+      post: entry !== void 0 && (isPending(entry.publish) || entry.starting === "post")
+    };
+  }
+  /** The browsers `asker`'s chat holds that are not saved profiles: Private ones and the person's own Chrome. Nothing of another chat's. */
+  async openBrowsers(asker) {
+    return [...this.byId.values()].flatMap(
+      (entry) => entry.closed || entry.retiring !== void 0 || entry.profile !== null && entry.profile !== RELAY_PROFILE || this.holderOf(entry.opener, asker) !== "this chat" ? [] : [{ browserId: entry.browserId, kind: entry.profile === null ? "private" : "chrome", hold: this.holdOf(entry, entry.opener) }]
     );
   }
   async profileMeta() {
     const meta = {};
     for (const slug of this.store.list()) if (slug !== RELAY_PROFILE) meta[slug] = resolveProfileMeta(slug, this.store.meta(slug));
     return meta;
+  }
+  async addProfile(request, caller) {
+    if (this.disposed) fail("disposed", "runtime has been disposed");
+    if (caller !== "app") fail("human_only", "only the person in the View can add a profile; name a new one in browser_open to have a profile of your own");
+    if (typeof request?.name !== "string") fail("bad_profile_name", "Give the profile a name.");
+    if (request.colour !== void 0 && !isProfileColour(request.colour)) fail("bad_profile", `colour must be one of: ${PROFILE_COLOURS.join(", ")}`);
+    if (request.avatar !== void 0 && cleanAvatar(request.avatar) === void 0) fail("bad_profile", "avatar must be a single emoji");
+    const listed = this.store.list();
+    this.requireRoomForProfile(listed);
+    const taken = listed.filter((slug) => slug !== RELAY_PROFILE).map((slug) => ({ slug, label: resolveProfileMeta(slug, this.store.meta(slug)).label }));
+    const check = checkNewProfile(request.name, taken, (slug) => this.store.exists(slug));
+    if (!check.ok) fail("bad_profile_name", check.problem);
+    this.store.saveMeta(check.slug, { label: check.label, ...request.colour === void 0 ? {} : { colour: request.colour }, ...request.avatar === void 0 ? {} : { avatar: request.avatar } });
+    const created = (await this.profileList()).find((profile2) => profile2.name === check.slug);
+    if (created === void 0) fail("profile_missing", "the profile was created but cannot be read back");
+    return created;
+  }
+  async control(browserId, mode, caller) {
+    if (caller !== "app") fail("human_only", "only the person in the View can take a browser over or hand it back");
+    if (!CONTROL_MODES.includes(mode)) fail("bad_control", `mode must be one of: ${CONTROL_MODES.join(", ")}`);
+    const entry = this.require(browserId);
+    if (mode === "take") {
+      if (isPending(entry.publish)) fail("publish_pending", "a post awaits confirmation on this browser; take over once it is posted or cancelled");
+      if (entry.task?.status === "running") fail("task_running", "a browser_task is running here; stop it first");
+      if (entry.starting === "post") fail("publish_pending", "a post is being prepared on this browser; take over once it is posted or cancelled");
+      if (entry.starting === "task") fail("task_running", "a browser_task is starting on this browser; take over once it has finished or been cancelled");
+    }
+    entry.takenOver = mode === "take";
+    this.watchWheel(entry);
+    return this.redact(entry, await this.buildState(entry));
+  }
+  async leave(browserId, caller) {
+    if (caller !== "app") fail("human_only", "only the person in the View can leave a browser for another profile");
+    const entry = this.byId.get(browserId);
+    if (entry === void 0) {
+      if (this.released.has(browserId)) return { closed: true };
+      fail("unknown_browser", "Unknown or already closed browserId.");
+    }
+    if (entry.closed || entry.retiring !== void 0) return { closed: true };
+    const heldWheel = entry.takenOver;
+    entry.takenOver = false;
+    clearTimeout(entry.wheelTimer);
+    entry.wheelTimer = void 0;
+    if (this.keptOnLeave(entry, heldWheel)) return { closed: false };
+    await this.retire(entry, "the person left it for another profile in the Browser View, which closed it; open it again with browser_open");
+    return { closed: true };
+  }
+  /**
+   * The slot of the browser the person is leaving, for the open that replaces it, when the pool is full (`open`). It is closed only when
+   * leaving it would close it (`keptOnLeave` decides: a browser that stays frees nothing, and its wheel is not touched here), and only
+   * if it is the asking chat's own. True: it is gone and the open looks again; false: the open goes on to `makeRoom`. A close that fails is the open's failure.
+   */
+  async leaveForRoom(browserId, opener) {
+    if (browserId === void 0) return false;
+    const entry = this.byId.get(browserId);
+    if (entry === void 0 || entry.closed || entry.retiring !== void 0 || this.holderOf(entry.opener, opener.session) !== "this chat") return false;
+    if (this.keptOnLeave(entry, entry.takenOver)) return false;
+    return (await this.leave(browserId, "app")).closed;
+  }
+  /**
+   * Does something outlive the person's interest in `entry`? An agent opened it (it may be using it), a call is in progress or a task runs on
+   * it (`working`: a post being filled and a task being started are calls too), a post awaits confirmation on it, the person had the wheel
+   * (they were doing something in it), or it is their own Chrome (closing it would close the tabs they were working in). Whatever stays is
+   * listed in the View's menu and closed from there.
+   */
+  keptOnLeave(entry, heldWheel) {
+    return entry.opener.caller !== "app" || entry.profile === RELAY_PROFILE || heldWheel || this.working(entry) || isPending(entry.publish);
   }
   async connections() {
     return this.store.allConnections();
@@ -4071,7 +4757,7 @@ var BrowserRuntime = class {
       for (const profile2 of Object.keys(this.store.allConnections())) this.observedProfiles.add(profile2);
       try {
         this.profileWatcher = watch(this.store.profilesRoot, { persistent: false }, () => {
-          const gone = [...this.observedProfiles].filter((profile2) => !existsSync3(this.store.profileDir(profile2)));
+          const gone = [...this.observedProfiles].filter((profile2) => !existsSync4(this.store.profileDir(profile2)));
           if (gone.length === 0) return;
           for (const profile2 of gone) this.observedProfiles.delete(profile2);
           this.connectionsChanged();
@@ -4125,6 +4811,10 @@ var BrowserRuntime = class {
     if (asker !== void 0 && opener.session === asker) return "this chat";
     return opener.caller === "app" ? "human" : "another chat";
   }
+  /** Profiles are listed up to MAX_PROFILES; one more would exist where nothing lists it and the duplicate check cannot see it. */
+  requireRoomForProfile(listed) {
+    if (listed.length >= MAX_PROFILES) fail("too_many_profiles", `at most ${MAX_PROFILES} profiles can be kept; delete a profile folder you no longer use before making another`);
+  }
   /** The profile `raw` means: a saved one by its slug or label, else a new one by its slug. */
   resolveProfile(raw, engine) {
     if (engine === "chrome-relay" || typeof raw !== "string") return validateProfile(raw);
@@ -4133,7 +4823,10 @@ var BrowserRuntime = class {
     if (matches.length === 1) return matches[0].slug;
     if (matches.length > 1) fail("profile_ambiguous", `more than one saved profile answers to ${JSON.stringify(raw)}: ${nameProfiles(matches)}. Ask the human which one; do not guess.`);
     const slug = profileSlug(raw);
-    if (slug !== null) return slug;
+    if (slug !== null) {
+      if (!this.store.exists(slug)) this.requireRoomForProfile(this.store.list());
+      return slug;
+    }
     fail("profile_unknown", `no saved profile is named ${JSON.stringify(raw)}. Saved profiles: ${known.length === 0 ? "none" : nameProfiles(known)}. Ask the human which one, or leave profile out for a throwaway browser.`);
   }
   /**
@@ -4290,7 +4983,7 @@ ${host}`;
     const entry = this.require(browserId);
     const planned = admitTab(request);
     return await this.serialize(entry, async () => {
-      refuseWhileBusy(entry, caller);
+      admitCaller(entry, caller);
       await this.applyTab(entry, planned);
       return this.redact(entry, await this.buildState(entry));
     });
@@ -4319,7 +5012,7 @@ ${host}`;
   async act(browserId, input, caller) {
     const entry = this.require(browserId);
     return await this.serialize(entry, async () => {
-      refuseWhileBusy(entry, caller);
+      admitCaller(entry, caller);
       const done = await this.dispatch(entry, this.admit(entry, input, caller), caller);
       if (done.status !== "completed") {
         return this.redact(entry, { status: done.status, error: done.error, state: await this.buildState(entry).catch(() => this.staleState(entry)) });
@@ -4342,7 +5035,7 @@ ${host}`;
     const entry = this.require(browserId);
     if (!Array.isArray(steps) || steps.length < 1 || steps.length > MAX_BATCH_STEPS) fail("bad_action", `actions must be 1-${MAX_BATCH_STEPS} steps`);
     return await this.serialize(entry, async () => {
-      refuseWhileBusy(entry, caller);
+      admitCaller(entry, caller);
       const plan = steps.map((step) => this.admitStep(entry, step, caller));
       const budget = this.options.actBudgetMs ?? ACT_BUDGET_MS;
       const deadline = Date.now() + budget;
@@ -4351,6 +5044,10 @@ ${host}`;
       let valueChars = MAX_EVAL_RESULT_CHARS;
       let stopped;
       for (const [index, step] of plan.entries()) {
+        if (index > 0 && caller !== "app" && entry.takenOver) {
+          stopped = { status: "failed", error: TAKEN_OVER_MESSAGE };
+          break;
+        }
         if (index > 0 && Date.now() >= deadline) {
           stopped = { status: "timeout", error: `the batch's time budget (${budget} ms) ran out after ${index} of ${plan.length} steps; send the remaining steps in a new call` };
           break;
@@ -4441,12 +5138,12 @@ ${host}`;
     if (action.generatePassword || action.useSavedPassword) {
       const profileDir = this.store.profileDir(this.savedProfile(entry, "typing a saved password"));
       password = action.generatePassword ? (origin) => {
-        const credential = resolveCredential(profileDir, { origin, mode: "signup" });
+        const credential = resolveCredential(profileDir, { origin, mode: "signup" }, this.credentialKey);
         created = credential.created;
         entry.secrets.add(credential.password);
         return credential.password;
       } : (origin) => {
-        const value = savedPassword(profileDir, origin);
+        const value = savedPassword(profileDir, origin, this.credentialKey);
         if (value) entry.secrets.add(value);
         return value;
       };
@@ -4506,7 +5203,7 @@ ${host}`;
     const entry = this.require(browserId);
     const { condition, timeoutMs } = validateWait(request);
     return await this.serialize(entry, async () => {
-      refuseWhileBusy(entry, caller);
+      admitCaller(entry, caller);
       const held = await entry.driver.waitFor(condition, timeoutMs, (value) => this.redact(entry, value));
       return this.redact(entry, { status: held ? "completed" : "timeout", state: await this.buildState(entry) });
     });
@@ -4537,26 +5234,29 @@ ${host}`;
   }
   async beginTask(browserId, request, onStep, caller) {
     const entry = this.require(browserId);
-    if (!TASK_AGENTS.includes(request.agent)) fail("bad_agent", `agent must be one of: ${TASK_AGENTS.join(", ")}`);
     if (entry.engine === "chrome-relay") {
-      fail("task_unsupported_engine", "task agents drive a whole browser, and chrome-relay is your own Chrome \u2014 open a chromium profile for browser_task");
+      fail("task_unsupported_engine", "the task agent drives a whole browser, and chrome-relay is your own Chrome \u2014 open a chromium profile for browser_task");
     }
     const task = typeof request.task === "string" ? request.task.trim() : "";
     if (task.length === 0 || task.length > MAX_TASK_CHARS) fail("bad_task", `task must be 1-${MAX_TASK_CHARS} characters`);
     const maxSteps = Math.min(MAX_TASK_STEPS, Math.max(1, Math.floor(request.maxSteps ?? DEFAULT_TASK_STEPS)));
-    if (request.credential !== void 0) {
-      if (request.agent !== "jev") fail("credential_unsupported", "credential is supported with agent jev only; browser-use reads password fields, so give it the password in task or log in with browser_act");
-      credentialOrigin(request.credential?.origin);
-    }
+    if (request.credential !== void 0) credentialOrigin(request.credential.origin);
     return await this.serialize(entry, async () => {
-      if (entry.worker) fail("task_running", `a ${entry.task?.agent} task is already running on this browser`);
+      if (entry.worker) fail("task_running", "a task is already running on this browser");
       refuseWhilePublishing(entry, caller);
-      const state = await this.refreshState(entry);
-      const credential = request.credential ? resolveCredential(this.store.profileDir(this.savedProfile(entry, "a task credential")), request.credential) : void 0;
+      refuseWhileTakenOver(entry, caller);
+      entry.starting = "task";
+      let state;
+      try {
+        state = await this.refreshState(entry);
+      } finally {
+        entry.starting = null;
+      }
+      refuseWhileTakenOver(entry, caller);
+      const credential = request.credential ? resolveCredential(this.store.profileDir(this.savedProfile(entry, "a task credential")), request.credential, this.credentialKey) : void 0;
       if (credential) entry.secrets.add(credential.password);
       const run = {
-        id: randomBytes4(8).toString("hex"),
-        agent: request.agent,
+        id: randomBytes5(8).toString("hex"),
         task,
         status: "running",
         summary: "",
@@ -4568,7 +5268,7 @@ ${host}`;
         ...credential ? { credential: { origin: credential.origin, created: credential.created } } : {}
       };
       const worker = startWorker(
-        { agent: request.agent, cdpUrl: entry.driver.cdpEndpoint(), task, maxSteps, startUrl: state.url, ...credential ? { credential: { origin: credential.origin, password: credential.password } } : {} },
+        { cdpUrl: entry.driver.cdpEndpoint(), task, maxSteps, startUrl: state.url, ...credential ? { credential: { origin: credential.origin, password: credential.password } } : {} },
         (step) => {
           const record = { n: step.n, action: step.action, url: step.url, elapsedMs: step.elapsedMs };
           run.steps.push(record);
@@ -4589,6 +5289,7 @@ ${host}`;
         });
         entry.revision += 1;
         entry.worker = null;
+        entry.lastUsed = performance.now();
         return run;
       });
       entry.task = run;
@@ -4643,7 +5344,15 @@ ${host}`;
       if (isPending(entry.publish)) {
         fail("publish_pending", "a publish is already awaiting confirmation; it must be posted, cancelled or expire first");
       }
-      const outcome = await prepare(entry.driver, profile2, valid, selected);
+      entry.starting = "post";
+      let outcome;
+      try {
+        if (selected === "post") await this.publishApprovals.require({ origin: valid.origin, profile: profile2, ...preset === void 0 ? {} : { preset: preset.name }, values: valid.fields.map((field) => field.value) }, "park");
+        outcome = await prepare(entry.driver, profile2, valid, selected);
+      } finally {
+        entry.starting = null;
+      }
+      refuseWhileTakenOver(entry, caller);
       if (!("record" in outcome)) {
         const shown = this.redact(entry, outcome);
         if (shown.status !== "failed") this.observeConnection(profile2, valid.origin, shown.status === "signed-in", shown.account);
@@ -4659,11 +5368,15 @@ ${host}`;
     const entry = this.require(browserId);
     return await this.serialize(entry, async () => {
       const publication = requirePending(entry.publish, publishId);
+      refuseWhileTakenOver(entry, caller);
       requireExpected(this.redact(entry, publishRecord(publication)), caller, expect);
       if (entry.task?.status === "running") {
-        fail("task_running", `a browser_task (${entry.task.agent}) owns this page; wait for it or cancel it`);
+        fail("task_running", "a browser_task owns this page; wait for it or cancel it");
       }
+      const { record } = publication;
+      const spent = await this.publishApprovals.consume({ origin: record.origin, profile: record.profile, ...record.preset === void 0 ? {} : { preset: record.preset.name }, values: record.fields.map((field) => field.value) }, "confirm");
       await confirm(entry.driver, publication);
+      if (publication.record.status === "failed") await spent.release();
       if (publication.record.status === "posted") this.observeConnection(publication.record.profile, publication.recipe.origin, true, this.redact(entry, publication.account));
       return this.redact(entry, publishRecord(publication));
     });
@@ -4733,8 +5446,9 @@ ${host}`;
       await current.close();
       this.pageReader = null;
     }
-    if (this.byId.size + this.opening.size >= MAX_BROWSERS) {
-      fail("too_many_browsers", `at most ${MAX_BROWSERS} browsers may be open at once; close one first`);
+    while (this.byId.size + this.opening.size >= MAX_BROWSERS) {
+      await this.makeRoom(void 0);
+      if (this.disposed) fail("disposed", "runtime has been disposed");
     }
     this.readerLaunching = true;
     try {
@@ -4769,8 +5483,17 @@ ${host}`;
   // -----------------------------------------------------------------------
   require(browserId) {
     const entry = typeof browserId === "string" ? this.byId.get(browserId) : void 0;
-    if (!entry || entry.closed) fail("unknown_browser", "unknown or already closed browserId");
+    if (!entry || entry.closed) this.refuseGone(browserId);
+    entry.lastUsed = performance.now();
     return entry;
+  }
+  /**
+   * One error for "never existed" and "closed": the id is a capability and the difference is not something an unauthorized caller should
+   * learn. A browser this runtime closed on its own is the exception, and only for its own id, which the chat it is telling already holds.
+   */
+  refuseGone(browserId) {
+    const why = this.released.get(browserId);
+    fail("unknown_browser", why === void 0 ? "unknown or already closed browserId" : `unknown or already closed browserId: ${why}`);
   }
   /**
    * All page work for one browser runs strictly in order, never concurrently.
@@ -4778,9 +5501,15 @@ ${host}`;
    * may have been closed (or have crashed) while this call sat in the queue.
    */
   serialize(entry, work, options = {}) {
+    entry.pending += 1;
     const run = async () => {
-      if (entry.closed && !options.evenIfClosed) fail("unknown_browser", "unknown or already closed browserId");
-      return await work(entry);
+      try {
+        if (entry.closed && !options.evenIfClosed) this.refuseGone(entry.browserId);
+        return await work(entry);
+      } finally {
+        entry.pending -= 1;
+        entry.lastUsed = performance.now();
+      }
     };
     const next = entry.queue.then(run, run);
     entry.queue = next.catch(() => void 0);
@@ -4802,6 +5531,7 @@ ${host}`;
     return {
       browserId: entry.browserId,
       profile: entry.profile,
+      look: entry.look,
       engine: entry.engine,
       app: entry.driver.app,
       url: state.url,
@@ -4815,7 +5545,9 @@ ${host}`;
       canGoBack: state.canGoBack,
       canGoForward: state.canGoForward,
       publish: entry.publish ? publishRecord(entry.publish) : null,
-      dialogs: state.dialogs
+      dialogs: state.dialogs,
+      takenOver: entry.takenOver,
+      agentActionAt: entry.agentAt
     };
   }
   /** State when the page cannot be read (it may be mid-navigation after a failed action). */
@@ -4823,6 +5555,7 @@ ${host}`;
     return {
       browserId: entry.browserId,
       profile: entry.profile,
+      look: entry.look,
       engine: entry.engine,
       app: entry.driver.app,
       url: "",
@@ -4836,7 +5569,9 @@ ${host}`;
       canGoBack: false,
       canGoForward: false,
       publish: entry.publish ? publishRecord(entry.publish) : null,
-      dialogs: []
+      dialogs: [],
+      takenOver: entry.takenOver,
+      agentActionAt: entry.agentAt
     };
   }
   /**
@@ -4848,7 +5583,7 @@ ${host}`;
     const secrets = new Set(entry.secrets);
     if (entry.profile !== null) {
       try {
-        for (const secret of savedPasswords(this.store.profileDir(entry.profile))) secrets.add(secret);
+        for (const secret of savedPasswords(this.store.profileDir(entry.profile), this.credentialKey)) secrets.add(secret);
       } catch {
       }
     }
@@ -5043,9 +5778,18 @@ function requireDelta(value, name) {
 }
 function refuseWhileBusy(entry, caller) {
   if (entry.task?.status === "running") {
-    fail("task_running", `a browser_task (${entry.task.agent}) owns this page; wait for it or cancel it`);
+    fail("task_running", "a browser_task owns this page; wait for it or cancel it");
   }
   refuseWhilePublishing(entry, caller);
+  refuseWhileTakenOver(entry, caller);
+}
+var TAKEN_OVER_MESSAGE = "the person took over this browser in the View, so your actions on it are paused. You can still read it (browser_snapshot, browser_state); ask them to hand it back before you act.";
+function refuseWhileTakenOver(entry, caller) {
+  if (caller !== "app" && entry.takenOver) fail("human_driving", TAKEN_OVER_MESSAGE);
+}
+function admitCaller(entry, caller) {
+  refuseWhileBusy(entry, caller);
+  if (caller !== "app") entry.agentAt = Date.now();
 }
 function refuseWhilePublishing(entry, caller) {
   if (caller !== "app" && isPending(entry.publish)) {
@@ -5093,16 +5837,19 @@ function heldMessage(profile2, holder) {
 }
 
 // src/stream.ts
-import { randomBytes as randomBytes5 } from "node:crypto";
+import { randomBytes as randomBytes6 } from "node:crypto";
 import http from "node:http";
 
 // src/wire.ts
 var KIND_PICTURE = 1;
 var KIND_STATE = 2;
+var KIND_PING = 3;
 var HEADER_BYTES = 9;
+var PING_QUERY = "ping";
 var MAX_PICTURE_BYTES = 16 * 1024 * 1024;
 var MAX_JSON_BYTES = 4 * 1024 * 1024;
 var encoder = new TextEncoder();
+var PING = [Uint8Array.of(KIND_PING, 0, 0, 0, 0, 0, 0, 0, 0), new Uint8Array(0)];
 function encode(kind, head, body = new Uint8Array(0)) {
   const json = encoder.encode(JSON.stringify(head));
   const prefix = new Uint8Array(HEADER_BYTES + json.length);
@@ -5117,6 +5864,7 @@ function encode(kind, head, body = new Uint8Array(0)) {
 // src/stream.ts
 var TOKEN_IDLE_MS = 6e4;
 var STATE_INTERVAL_MS = 250;
+var HEARTBEAT_MS = 2e3;
 var MAX_TOKENS_PER_BROWSER = 16;
 var MAX_BODY_BYTES = 256 * 1024;
 var MAX_DRAIN_BYTES = 8 * 1024 * 1024;
@@ -5124,19 +5872,31 @@ var GONE_CODES = /* @__PURE__ */ new Set(["unknown_browser", "browser_closed"]);
 var STATUS_BY_CODE = { task_running: 409, publish_pending: 409, bad_input: 400, bad_json: 400, unknown_browser: 410, browser_closed: 410 };
 var CORS = { "access-control-allow-origin": "*" };
 var Client = class {
-  constructor(response, wantsPictures) {
+  constructor(response, wantsPictures, wantsPing) {
     this.response = response;
     this.wantsPictures = wantsPictures;
+    this.wantsPing = wantsPing;
+    this.#ping = wantsPing;
   }
   #busy = false;
   #state;
   #picture;
+  /** A ping is waiting to go out: set at join (it is the first thing a pinging View hears) and by the heartbeat. */
+  #ping;
+  /** When this View was last handed bytes, or joined (`performance.now()`): what a heartbeat measures its quiet from. */
+  lastWrite = performance.now();
   offerState(message) {
     this.#state = message;
     this.#flush();
   }
   offerPicture(message) {
     this.#picture = message;
+    this.#flush();
+  }
+  /** The heartbeat. A View whose socket is still taking the last write is not idle, so it is not pinged; a ping never waits behind another. */
+  offerPing() {
+    if (this.#busy) return;
+    this.#ping = true;
     this.#flush();
   }
   end() {
@@ -5149,10 +5909,13 @@ var Client = class {
   #flush() {
     const { response } = this;
     if (this.#busy || response.destroyed || response.writableEnded) return;
-    const chunks = [this.#state, this.#picture].flatMap((message) => message === void 0 ? [] : message.filter((part) => part.length > 0));
+    const waiting = [this.#ping ? PING : void 0, this.#state, this.#picture];
+    const chunks = waiting.flatMap((message) => message === void 0 ? [] : message.filter((part) => part.length > 0));
+    this.#ping = false;
     this.#state = void 0;
     this.#picture = void 0;
     if (chunks.length === 0) return;
+    this.lastWrite = performance.now();
     this.#busy = true;
     const written = () => {
       this.#busy = false;
@@ -5172,21 +5935,36 @@ var Room = class {
     this.onClosed = onClosed;
   }
   clients = /* @__PURE__ */ new Set();
+  /** What ends each joined View's hold on the browser (`LiveSource.viewing`). */
+  #leases = /* @__PURE__ */ new Map();
   #stopWatching;
   #timer;
   #sampling = false;
-  #lastState;
+  /** The state the Views were last told: as JSON to see a change, as the message to tell it again. */
+  #last;
   #lastPicture;
   join(client) {
     this.clients.add(client);
-    this.#timer ??= setInterval(() => void this.#sample(), this.intervalMs);
+    try {
+      this.#leases.set(client, this.source.viewing(this.browserId));
+    } catch (error) {
+      if (!isGone(error)) throw error;
+      this.onClosed(this);
+      return;
+    }
+    this.#timer ??= setInterval(() => {
+      this.#beat();
+      void this.#sample();
+    }, this.intervalMs);
     if (client.wantsPictures) this.#watch();
-    if (this.#lastState !== void 0) client.offerState(encode(KIND_STATE, JSON.parse(this.#lastState)));
+    if (this.#last !== void 0) client.offerState(this.#last.message);
     else void this.#sample();
     if (client.wantsPictures && this.#lastPicture !== void 0) client.offerPicture(this.#lastPicture);
   }
   leave(client) {
     this.clients.delete(client);
+    this.#leases.get(client)?.();
+    this.#leases.delete(client);
     if (![...this.clients].some((other) => other.wantsPictures)) this.#unwatch();
     if (this.clients.size > 0) return;
     this.#stop();
@@ -5196,6 +5974,8 @@ var Room = class {
   end() {
     const clients = [...this.clients];
     this.clients.clear();
+    for (const release of this.#leases.values()) release();
+    this.#leases.clear();
     this.#stop();
     for (const client of clients) client.end();
   }
@@ -5229,15 +6009,20 @@ var Room = class {
     try {
       const state = await this.source.liveState(this.browserId);
       const json = JSON.stringify(state);
-      if (json === this.#lastState) return;
-      this.#lastState = json;
+      if (this.#last !== void 0 && json === this.#last.json) return;
       const message = encode(KIND_STATE, state);
+      this.#last = { json, message };
       for (const client of this.clients) client.offerState(message);
     } catch (error) {
       if (isGone(error)) this.onClosed(this);
     } finally {
       this.#sampling = false;
     }
+  }
+  /** A View that asked for pings and has been handed nothing for the heartbeat gets one. Not tied to the state read: that can be stuck on a wedged page while this process is perfectly alive. */
+  #beat() {
+    const now = performance.now();
+    for (const client of this.clients) if (client.wantsPing && now - client.lastWrite >= HEARTBEAT_MS) client.offerPing();
   }
 };
 function isGone(error) {
@@ -5275,7 +6060,7 @@ var LiveChannel = class {
     const port = await this.#listen();
     const mine = [...this.#grants].filter(([, grant]) => grant.browserId === browserId);
     for (const [token2] of mine.slice(0, Math.max(0, mine.length - this.#maxTokens + 1))) this.#grants.delete(token2);
-    const token = randomBytes5(24).toString("base64url");
+    const token = randomBytes6(24).toString("base64url");
     this.#grants.set(token, { browserId, lastUsed: Date.now(), open: 0 });
     this.#sweeper ??= setInterval(() => this.#sweep(), Math.min(1e3, this.#tokenIdleMs));
     this.#sweeper.unref();
@@ -5360,14 +6145,14 @@ var LiveChannel = class {
       response.writeHead(204, { ...CORS, "access-control-allow-methods": "GET, POST", "access-control-allow-headers": "content-type", "access-control-allow-private-network": "true", "access-control-max-age": "600" });
       return void response.end();
     }
-    if (route === "s" && request.method === "GET") return this.#stream(request, response, grant, url.searchParams.get("frames") !== "0");
+    if (route === "s" && request.method === "GET") return this.#stream(request, response, grant, url.searchParams.get("frames") !== "0", url.searchParams.get(PING_QUERY) === "1");
     if (route === "i" && request.method === "POST") return await this.#input(request, response, grant);
     return notFound(response, true);
   }
-  #stream(request, response, grant, wantsPictures) {
+  #stream(request, response, grant, wantsPictures, wantsPing) {
     grant.open += 1;
     response.writeHead(200, { ...CORS, "content-type": "application/octet-stream", "cache-control": "no-store", "x-content-type-options": "nosniff" });
-    const client = new Client(response, wantsPictures);
+    const client = new Client(response, wantsPictures, wantsPing);
     const room = this.#room(grant.browserId);
     let left = false;
     const leave = () => {
@@ -5490,7 +6275,9 @@ async function respond(extra, run) {
   }
 }
 function stateFor(caller, state) {
-  return caller === "app" ? state : { ...state, tabs: state.tabs.map(({ favicon: _favicon, ...tab }) => tab) };
+  if (caller === "app") return state;
+  const { look: _look, ...rest } = state;
+  return { ...rest, tabs: state.tabs.map(({ favicon: _favicon, ...tab }) => tab) };
 }
 function actText(outcome) {
   const { status, state } = outcome;
@@ -5536,26 +6323,28 @@ async function createBrowserServer(options = {}) {
     ...process.env.DIMENSION_BROWSER_ROOT ? { rootDir: process.env.DIMENSION_BROWSER_ROOT } : {},
     ...process.env.DIMENSION_BROWSER_EXECUTABLE ? { executablePath: process.env.DIMENSION_BROWSER_EXECUTABLE } : {},
     ...process.env.DIMENSION_BROWSER_RELAY_URL ? { relayUrl: process.env.DIMENSION_BROWSER_RELAY_URL } : {},
-    ...process.env.DIMENSION_BROWSER_HEADLESS === void 0 ? {} : { headless: process.env.DIMENSION_BROWSER_HEADLESS !== "false" }
+    ...process.env.DIMENSION_BROWSER_HEADLESS === void 0 ? {} : { headless: process.env.DIMENSION_BROWSER_HEADLESS !== "false" },
+    ...process.env.DIMENSION_BROWSER_THROWAWAY_IDLE_MS ? { throwawayIdleMs: Number(process.env.DIMENSION_BROWSER_THROWAWAY_IDLE_MS) } : {}
   });
   const server2 = new McpServer({ name: "dimension-community-browser", version: "0.1.0" });
+  const jev = jevKeyConfigured();
   const live = new LiveChannel(runtime);
   const viewDir = options.viewDir ?? fileURLToPath3(new URL("./dist/", import.meta.url));
-  const html = await readFile2(join8(viewDir, "index.html"), "utf8");
+  const html = await readFile3(join9(viewDir, "index.html"), "utf8");
   const presets = options.presets ?? await loadPresets();
   const metadata = { ui: { prefersBorder: false, csp: VIEW_CSP } };
   registerAppResource(server2, "Browser", BROWSER_VIEW_URI, { _meta: metadata }, async () => ({
     contents: [{ uri: BROWSER_VIEW_URI, mimeType: RESOURCE_MIME_TYPE, text: html, _meta: metadata }]
   }));
-  for (const entry of await readdir2(viewDir, { recursive: true, withFileTypes: true })) {
+  for (const entry of await readdir3(viewDir, { recursive: true, withFileTypes: true })) {
     if (!entry.isFile() || entry.name === "index.html") continue;
     const extension = extname2(entry.name);
     const mimeType = MIME[extension];
     if (!mimeType) throw new Error(`Unsupported browser View asset: ${entry.name}`);
-    const path = join8(entry.parentPath, entry.name);
+    const path = join9(entry.parentPath, entry.name);
     const relative = path.slice(viewDir.replace(/[\\/]$/, "").length + 1).replaceAll("\\", "/");
     const uri = `ui://browser/${relative}`;
-    server2.registerResource(relative, uri, { mimeType }, async () => ({ contents: [{ uri, mimeType, blob: (await readFile2(path)).toString("base64") }] }));
+    server2.registerResource(relative, uri, { mimeType }, async () => ({ contents: [{ uri, mimeType, blob: (await readFile3(path)).toString("base64") }] }));
   }
   const showing = (extra, browserId) => {
     const session = sessionOf(extra);
@@ -5570,11 +6359,14 @@ async function createBrowserServer(options = {}) {
     const session = sessionOf(extra);
     return { ...caller === void 0 ? {} : { caller }, ...session === void 0 ? {} : { session } };
   };
-  const openAt = async (profile2, engine, url, opener) => {
+  const openAt = async (profile2, engine, url, opener, leaving) => {
     const action = url === void 0 ? void 0 : navigateStep.parse({ kind: "navigate", url });
-    const state = await runtime.open({ ...profile2 === void 0 ? {} : { profile: profile2 }, ...engine ? { engine } : {} }, opener);
+    const state = await runtime.open({ ...profile2 === void 0 ? {} : { profile: profile2 }, ...engine ? { engine } : {}, ...leaving === void 0 ? {} : { leaving } }, opener);
     if (!action) return state;
-    const navigated = await runtime.act(state.browserId, action);
+    if (opener.caller === "app" && state.publish?.status === "awaiting-confirmation") {
+      fail("publish_pending", "a post awaits confirmation on this browser; post or cancel it before opening a page in it");
+    }
+    const navigated = await runtime.act(state.browserId, action, opener.caller);
     if (navigated.status !== "completed") throw new Error(`Opened, but navigating to ${url} ${navigated.status}: ${navigated.error}`);
     return navigated.state;
   };
@@ -5651,7 +6443,7 @@ async function createBrowserServer(options = {}) {
     }
   });
   server2.registerTool("browser_act", {
-    description: "Run 1-25 steps in order in the active tab, stopping at the first that does not complete; returns the page's url and title. Steps: navigate (http/https), back, forward, reload, stop, click (selector, or x,y in the viewport; button, clickCount 1-3), hover (x,y), type (replaces the value), insert (into the focused element), select (option value or text), press (key), scroll, resize (width, height), wait (selector visible | text on the page | url substring; timeoutMs default 5000, max 15000), tab (op new | activate | close; tabId from browser_state; url for new), eval (JS in the page's main world; value returned as JSON, at most 8000 chars; throwaway browsers only). A click or Enter that navigates waits up to 1.5 s. JS dialogs are answered (alert/beforeunload accepted, else dismissed) and listed. Status failed: that step did nothing. unknown: sent, then errored, so it may have taken effect: look before retrying a submit. timeout: a wait ran out, or the batch's time budget (send the rest again). newErrors: new page errors (read them in browser_state). A selector may start `@<ref> ` (from browser_snapshot) to reach an iframe. Refused while a browser_task runs. Passwords: type or insert with generatePassword: true (sign-up: mints, saves per profile and origin, types) or useSavedPassword: true (login) instead of text; needs a profile.",
+    description: "Run 1-25 steps in order in the active tab, stopping at the first that does not complete; returns the page's url and title. Steps: navigate (http/https), back, forward, reload, stop, click (selector, or x,y in the viewport; button, clickCount 1-3), hover (x,y), type (replaces the value), insert (into the focused element), select (option value or text), press (key), scroll, resize (width, height), wait (selector visible | text on the page | url substring; timeoutMs default 5000, max 15000), tab (op new | activate | close; tabId from browser_state; url for new), eval (JS in the page's main world; value returned as JSON, at most 8000 chars; throwaway browsers only). A click or Enter that navigates waits up to 1.5 s. JS dialogs are answered (alert/beforeunload accepted, else dismissed) and listed. Status failed: that step did nothing. unknown: sent, then errored, so it may have taken effect: look before retrying a submit. timeout: a wait ran out, or the batch's time budget (send the rest again). newErrors: new page errors (read them in browser_state). A selector may start `@<ref> ` (from browser_snapshot) to reach an iframe. " + (jev ? "Refused while a browser_task runs. " : "") + "Passwords: type or insert with generatePassword: true (sign-up: mints, saves per profile and origin, types) or useSavedPassword: true (login) instead of text; needs a profile.",
     inputSchema: { browserId: capability, actions: z2.array(stepSchema).min(1).max(MAX_BATCH_STEPS) },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true }
   }, ({ browserId, actions }, extra) => respond(extra, async () => {
@@ -5684,37 +6476,40 @@ async function createBrowserServer(options = {}) {
       active = false;
     }
   };
-  server2.registerTool("browser_task", {
-    description: `Hand a whole task to a fast browser agent (jev: one model decision per step; or browser-use) working in this browser while the human watches. Put every fact it needs in task; it cannot ask you. For a password prefer credential {origin, mode: "signup" | "login"} (jev only): the browser fills that origin's password fields itself from this profile's saved password (signup mints and saves one; login needs one saved), so it never reaches the transcript or jev. Returns within waitSeconds (default and max ${WAIT_CAP_S}) with status, steps, time, model calls, tokens (and credential {origin, created}); while "running", call browser_task_wait. A failed task is a tool error naming the cause and next step; the browser stays open. jev needs TYPESAFE_API_KEY and TEXT_MODEL_API_KEY in the server's environment; without them sign up yourself with browser_act generatePassword: true. browser_act is refused while a task runs (task_running).`,
-    inputSchema: {
-      browserId: capability,
-      agent: z2.enum(TASK_AGENTS),
-      task: z2.string().min(1).max(8192),
-      maxSteps: z2.number().int().min(1).max(200).optional(),
-      credential: z2.object({ origin: z2.string().min(1).max(2048), mode: z2.enum(CREDENTIAL_MODES) }).strict().optional(),
-      waitSeconds
-    },
-    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
-    _meta: TRACTION_ONLY
-  }, ({ browserId, agent, task, maxSteps, credential, waitSeconds: waitSeconds2 }, extra) => taskResult(async () => {
-    await runtime.startTask(browserId, { agent, task, ...maxSteps ? { maxSteps } : {}, ...credential ? { credential } : {} }, callerOf(extra));
-    return await follow(browserId, waitSeconds2, extra);
-  }));
-  server2.registerTool("browser_task_wait", {
-    description: `Follow the task in this browser: returns when it finishes or after waitSeconds (default and max ${WAIT_CAP_S}), with its status, recent steps, time, model calls and tokens.`,
-    inputSchema: { browserId: capability, waitSeconds },
-    annotations: READ_ONLY,
-    _meta: TRACTION_ONLY
-  }, ({ browserId, waitSeconds: waitSeconds2 }, extra) => taskResult(() => follow(browserId, waitSeconds2, extra)));
-  server2.registerTool("browser_task_cancel", {
-    description: "Stop the task running in this browser. Resolves once the agent has stopped.",
-    inputSchema: { browserId: capability },
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    _meta: TRACTION_ONLY
-  }, ({ browserId }) => result(() => runtime.cancelTask(browserId)));
+  if (jev) {
+    server2.registerTool("browser_task", {
+      description: `Hand a whole task to jev, a fast browser agent (one model decision per step), working in this browser while the human watches. Put every fact it needs in task; it cannot ask you. For a password prefer credential {origin, mode: "signup" | "login"}: the browser fills that origin's password fields itself from this profile's saved password (signup mints and saves one; login needs one saved), so it never reaches the transcript or jev. Returns within waitSeconds (default and max ${WAIT_CAP_S}) with status, steps, time, model calls, tokens (and credential {origin, created}); while "running", call browser_task_wait. A failed task is a tool error naming the cause and next step; the browser stays open. jev also needs TEXT_MODEL_API_KEY in the server's environment; without it sign up yourself with browser_act generatePassword: true. browser_act is refused while a task runs (task_running).`,
+      inputSchema: {
+        browserId: capability,
+        task: z2.string().min(1).max(8192),
+        maxSteps: z2.number().int().min(1).max(200).optional(),
+        credential: z2.object({ origin: z2.string().min(1).max(2048), mode: z2.enum(CREDENTIAL_MODES) }).strict().optional(),
+        waitSeconds
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+      _meta: TRACTION_ONLY
+    }, ({ browserId, task, maxSteps, credential, waitSeconds: waitSeconds2 }, extra) => taskResult(async () => {
+      await runtime.startTask(browserId, { task, ...maxSteps ? { maxSteps } : {}, ...credential ? { credential } : {} }, callerOf(extra));
+      return await follow(browserId, waitSeconds2, extra);
+    }));
+    server2.registerTool("browser_task_wait", {
+      description: `Follow the task in this browser: returns when it finishes or after waitSeconds (default and max ${WAIT_CAP_S}), with its status, recent steps, time, model calls and tokens.`,
+      inputSchema: { browserId: capability, waitSeconds },
+      annotations: READ_ONLY,
+      _meta: TRACTION_ONLY
+    }, ({ browserId, waitSeconds: waitSeconds2 }, extra) => taskResult(() => follow(browserId, waitSeconds2, extra)));
+    server2.registerTool("browser_task_cancel", {
+      description: "Stop the task running in this browser. Resolves once the agent has stopped.",
+      inputSchema: { browserId: capability },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      _meta: TRACTION_ONLY
+    }, ({ browserId }) => result(() => runtime.cancelTask(browserId)));
+  } else {
+    console.error("[browser] browser_task, browser_task_wait and browser_task_cancel are not offered: TYPESAFE_API_KEY is not set (jev, the optional task hand-off, needs it).");
+  }
   registerAppTool(server2, "browser_publish", {
     title: "Publish",
-    description: `Post through a signed-in profile (a throwaway browser is refused). Pass EXACTLY ONE of preset or recipe. preset (preferred; see browser_publish_presets): {name, values (one per preset field, in order), target? (needsTarget presets: the page to post on)}. recipe (a site with no preset): origin (https; http only for 127.0.0.1/localhost), composeUrl on origin, signedIn (CSS selector present only when logged in), account? (CSS selector whose text names the account, e.g. "Alice @alice" \u2192 "@alice"), fields [{selector, value, label?}] (1-8; value \u2264 10000 chars; label \u2264 40 chars, the caption in the View), submit (selector), receipt {path (the posted URL's pathname template: literal text plus {segment} and {digits}, at most one per segment, e.g. "/{segment}/status/{digits}"), linkSelector? (the posted link; else the tab's URL after submit)}. mode "check": opens composeUrl, returns "signed-in" or "not-signed-in" (sign in first, then post). mode "post": types and reads back each value, returns "awaiting-confirmation" with a publishId and composeUrl. NOTHING is submitted yet: confirm with browser_publish_confirm (or the View's Post button), drop with browser_publish_cancel, follow with browser_publish_wait. While pending the page is pinned: browser_act, browser_task and browser_publish are refused (publish_pending) until posted, cancelled or expired (10 minutes). "failed": nothing was submitted. A password field is never a publish field; log in with browser_act or browser_task. Refused while a task runs.`,
+    description: `Post through a signed-in profile (a throwaway browser is refused). Pass EXACTLY ONE of preset or recipe. preset (preferred; see browser_publish_presets): {name, values (one per preset field, in order), target? (needsTarget presets: the page to post on)}. recipe (a site with no preset): origin (https; http only for 127.0.0.1/localhost), composeUrl on origin, signedIn (CSS selector present only when logged in), account? (CSS selector whose text names the account, e.g. "Alice @alice" \u2192 "@alice"), fields [{selector, value, label?}] (1-8; value \u2264 10000 chars; label \u2264 40 chars, the caption in the View), submit (selector), receipt {path (the posted URL's pathname template: literal text plus {segment} and {digits}, at most one per segment, e.g. "/{segment}/status/{digits}"), linkSelector? (the posted link; else the tab's URL after submit)}. mode "check": opens composeUrl, returns "signed-in" or "not-signed-in" (sign in first, then post). mode "post": refused (publish_unapproved, nothing opened or typed) unless the user approved this exact post on the campaign board: the same site, profile and text, unexpired and unspent. Otherwise types and reads back each value, returns "awaiting-confirmation" with a publishId and composeUrl. NOTHING is submitted yet: confirm with browser_publish_confirm (or the View's Post button), drop with browser_publish_cancel, follow with browser_publish_wait. While pending the page is pinned: browser_act` + (jev ? ", browser_task" : "") + ' and browser_publish are refused (publish_pending) until posted, cancelled or expired (10 minutes). "failed": nothing was submitted. A password field is never a publish field; log in with browser_act' + (jev ? " or browser_task. Refused while a task runs." : "."),
     inputSchema: { browserId: capability, recipe: recipeSchema.optional(), preset: presetSchema.optional(), mode: z2.enum(PUBLISH_MODES) },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     _meta: { ...TRACTION_ONLY, ui: { resourceUri: BROWSER_VIEW_URI } }
@@ -5733,7 +6528,7 @@ async function createBrowserServer(options = {}) {
     _meta: TRACTION_ONLY
   }, () => result(async () => ({ presets: summarizePresets(presets) })));
   server2.registerTool("browser_publish_confirm", {
-    description: "Post a pending publish (the View's Post button calls it too). The host ALWAYS asks the human first, in every permission mode; a harness that cannot guarantee that ask gets the call refused, and the user presses Post. The model MUST pass expect: {origin, profile, values} copied exactly from the pending record (values: every field's value, in order): without it the call fails expect_required, any difference fails publish_mismatch; either way nothing is clicked and the publish stays pending. Then it re-verifies the tab, URL and field values, clicks submit exactly once (never retried) and reads the posted URL. Status: posted (url), failed (nothing submitted) or unknown (may have posted).",
+    description: "Post a pending publish (the View's Post button calls it too). The host ALWAYS asks the human first, in every permission mode; a harness that cannot guarantee that ask gets the call refused, and the user presses Post. The model MUST pass expect: {origin, profile, values} copied exactly from the pending record (values: every field's value, in order): without it the call fails expect_required, any difference fails publish_mismatch; either way nothing is clicked and the publish stays pending. Then it re-verifies the tab, URL and field values and spends the board approval for this exact post (publish_unapproved if none is left: nothing clicked, the publish stays pending), clicks submit exactly once (never retried) and reads the posted URL. Status: posted (url), failed (nothing submitted) or unknown (may have posted).",
     inputSchema: { browserId: capability, publishId: capability, expect: expectSchema.optional() },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     _meta: { ...TRACTION_ONLY, [APPROVAL_META_KEY]: "prompt" }
@@ -5794,7 +6589,40 @@ async function createBrowserServer(options = {}) {
     annotations: READ_ONLY
   }, (_args, extra) => respond(extra, async () => {
     const list = await runtime.profileList(sessionOf(extra));
-    return { text: JSON.stringify(profilesForModel(list)), structured: { profiles: list } };
+    const browsers = callerOf(extra) === "app" ? await runtime.openBrowsers(sessionOf(extra)) : [];
+    return { text: JSON.stringify(profilesForModel(list)), structured: { profiles: list, browsers } };
+  }));
+  registerAppTool(server2, "browser_profile_add", {
+    title: "Add Profile",
+    description: "Create a saved profile from a name the person typed (any script, up to 48 characters, shown as typed; the folder is derived and never renamed), with an optional colour and one emoji avatar. Refused with a plain sentence when the name is empty, already taken (in any case), reserved or could be a path. Opens nothing. Answers {profile}.",
+    inputSchema: { name: z2.string().max(200), colour: z2.enum(PROFILE_COLOURS).optional(), avatar: z2.string().max(16).optional() },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    _meta: APP_ONLY
+  }, ({ name, colour, avatar }, extra) => result(async () => ({ profile: await runtime.addProfile({ name, ...colour === void 0 ? {} : { colour }, ...avatar === void 0 ? {} : { avatar } }, callerOf(extra)) })));
+  registerAppTool(server2, "browser_control", {
+    title: "Take Over Browser",
+    description: "The person in the View takes this browser over (mode take: an agent's page actions on it are refused as human_driving until handed back; reads still work) or hands it back (mode return). Refused while " + (jev ? "a task runs or " : "") + "a post awaits confirmation. Answers the state.",
+    inputSchema: { browserId: capability, mode: z2.enum(CONTROL_MODES) },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    _meta: APP_ONLY
+  }, ({ browserId, mode }, extra) => result(async () => stateFor(callerOf(extra), await runtime.control(browserId, mode, callerOf(extra)))));
+  registerAppTool(server2, "browser_leave", {
+    title: "Leave Browser",
+    description: "The person in the View leaves this browser for another profile. The wheel goes back to the agent if they held it. The browser is closed unless an agent opened it, " + (jev ? "a task runs on it, " : "") + "a post awaits confirmation there, a call is in progress, the person had taken it over, or it is their own Chrome; those stay open and are listed in the profile menu. Answers {closed}.",
+    inputSchema: { browserId: capability },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    _meta: APP_ONLY
+  }, ({ browserId }, extra) => result(async () => ({ ...await runtime.leave(browserId, callerOf(extra)) })));
+  registerAppTool(server2, "browser_switch", {
+    title: "Switch Browser",
+    description: "The person in the View opens another profile (or a Private browser, with no profile) and leaves the browser they were on. Like browser_open, and the View shows the new browser. With the pool full, the browser being left is closed first when leaving it would close it, so the open never takes an agent's throwaway; it is otherwise left only by browser_leave, once this answered. Answers the new browser's state.",
+    inputSchema: { leaving: capability, profile: profile.optional(), engine: z2.enum(BROWSER_ENGINES).optional() },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    _meta: APP_ONLY
+  }, ({ leaving, profile: profile2, engine }, extra) => result(async () => {
+    const state = await openAt(profile2, engine, void 0, openerOf(extra), leaving);
+    showing(extra, state.browserId);
+    return stateFor(callerOf(extra), state);
   }));
   server2.registerTool("browser_close", {
     description: "Close this owned browser (stopping any task) and release its profile lock. Persisted logins remain; a throwaway's data is deleted; the user's relay browser is never terminated. Refused while a publish awaits confirmation (confirm, cancel or wait first).",

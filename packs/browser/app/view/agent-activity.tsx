@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import type { TaskRun, TaskStatus } from "../../src/contracts";
 import { Icon } from "@fraym/ui/icons";
 
-const AGENT_LABEL: Record<TaskRun["agent"], string> = { jev: "Jev", "browser-use": "Browser Use" };
+const AGENT_NAME = "Jev";
 
 const RESULT_LABEL: Record<Exclude<TaskStatus, "running">, string> = {
 	done: "Task done",
@@ -47,12 +47,12 @@ export function AgentPill({ task, cancelling, onCancel }: AgentPillProps) {
 	const current = latest?.action ?? "Starting up…";
 
 	return (
-		<div className="bx-agent" data-expanded={expanded || undefined} role="group" aria-label={`${AGENT_LABEL[task.agent]} is working`}>
+		<div className="bx-agent" data-expanded={expanded || undefined} role="group" aria-label={`${AGENT_NAME} is working`}>
 			<div className="bx-agent-row">
 				<span className="bx-agent-mark" aria-hidden="true">
 					<Icon name="bot" size={15} strokeWidth={2} />
 				</span>
-				<span className="bx-agent-name">{AGENT_LABEL[task.agent]}</span>
+				<span className="bx-agent-name">{AGENT_NAME}</span>
 				<span className="bx-agent-step" role="status" aria-live="polite">
 					{current}
 				</span>
@@ -126,6 +126,49 @@ export function ResultToast({ task, onDismiss }: ResultToastProps) {
 			</span>
 			<button type="button" className="bx-toast-close" aria-label="Dismiss" onClick={onDismiss}>
 				<Icon name="x" size={13} strokeWidth={2.25} />
+			</button>
+		</div>
+	);
+}
+
+/** An agent's page action is "now" for this long. Long enough to bridge its pauses between calls, short enough to be gone when it is. */
+export const AGENT_ACTIVE_MS = 12_000;
+
+/** True from an agent's action (`at`, epoch ms) until AGENT_ACTIVE_MS later, re-rendering when it ends; same machine, same clock. */
+export function useAgentActive(at: number | null): boolean {
+	const [now, setNow] = useState(() => Date.now());
+	useEffect(() => {
+		if (at === null) return;
+		const left = at + AGENT_ACTIVE_MS - Date.now();
+		if (left <= 0) return;
+		setNow(Date.now());
+		const timer = window.setTimeout(() => setNow(Date.now()), left + 50);
+		return () => window.clearTimeout(timer);
+	}, [at]);
+	return at !== null && now - at < AGENT_ACTIVE_MS;
+}
+
+export interface ControlPillProps {
+	/** The person has the wheel. Otherwise an agent is acting and the pill offers it. */
+	readonly takenOver: boolean;
+	readonly busy: boolean;
+	readonly onTakeOver: () => void;
+	readonly onHandBack: () => void;
+}
+
+/** Who is driving, when it is not just the person: "your agent is working here" with Take over, and "you have control" with Hand back. */
+export function ControlPill({ takenOver, busy, onTakeOver, onHandBack }: ControlPillProps) {
+	return (
+		<div className="bx-control" data-state={takenOver ? "yours" : "agent"} role="status" aria-live="polite">
+			<span className="bx-control-mark" aria-hidden="true">
+				{takenOver ? <Icon name="hand" size={14} strokeWidth={2} /> : <span className="bx-dot" />}
+			</span>
+			<span className="bx-control-text">
+				<span className="bx-control-title">{takenOver ? "You have control" : "Your agent is working here"}</span>
+				<span className="bx-control-sub">{takenOver ? "Your agent is paused until you hand back." : "Take over to stop it and use the page yourself."}</span>
+			</span>
+			<button type="button" className="bx-control-btn" disabled={busy} onClick={takenOver ? onHandBack : onTakeOver}>
+				{takenOver ? "Hand back" : "Take over"}
 			</button>
 		</div>
 	);

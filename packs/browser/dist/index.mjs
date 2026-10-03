@@ -1,4 +1,4 @@
-import { Button, Icon, Input, Pill, useObservable } from "@fraym/ui";
+import { Button, Input, Pill, useObservable } from "@fraym/ui";
 import { useEffect, useMemo, useState } from "react";
 import { jsx, jsxs } from "react/jsx-runtime";
 //#region src/address.ts
@@ -127,7 +127,8 @@ var PROFILE_COLOURS = [
 function cleanLabel(raw) {
 	if (typeof raw !== "string") return void 0;
 	const label = raw.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
-	return label.length > 0 && label.length <= 48 ? label : void 0;
+	const characters = [...label].length;
+	return characters > 0 && characters <= 48 ? label : void 0;
 }
 /** One emoji (a ZWJ sequence or a variation selector counts as one), or undefined. */
 var EMOJI = /^\p{Extended_Pictographic}(?:\p{Emoji_Modifier}|\uFE0F|\u200D\p{Extended_Pictographic})*$/u;
@@ -161,6 +162,65 @@ function resolveProfileMeta(slug, stored = {}) {
 function effectiveSignedIn(signedIn, observedAt, now) {
 	const age = now - observedAt;
 	return signedIn !== null && age >= -6e4 && age <= 6048e5 ? signedIn : null;
+}
+//#endregion
+//#region src/profile-look.ts
+/** OKLCH hue (degrees) and chroma of each named colour. */
+var PROFILE_LOOK = {
+	blue: {
+		hue: 255,
+		chroma: .15
+	},
+	orange: {
+		hue: 55,
+		chroma: .16
+	},
+	green: {
+		hue: 150,
+		chroma: .14
+	},
+	red: {
+		hue: 25,
+		chroma: .18
+	},
+	purple: {
+		hue: 300,
+		chroma: .16
+	},
+	pink: {
+		hue: 350,
+		chroma: .16
+	},
+	teal: {
+		hue: 195,
+		chroma: .11
+	},
+	grey: {
+		hue: 260,
+		chroma: .015
+	}
+};
+/**
+* The inline style of an avatar disc. A letter sits on the colour as a soft diagonal gradient, in white; an emoji keeps its
+* own colours and sits on a tint of the profile's colour, ringed in it. Sizes, centring and type are the host's.
+*/
+function avatarStyle(colour, emoji) {
+	const { hue, chroma } = PROFILE_LOOK[colour];
+	if (emoji) return {
+		background: `color-mix(in oklab, oklch(0.62 ${chroma} ${hue}) 20%, var(--fr-surface))`,
+		boxShadow: `inset 0 0 0 1.5px oklch(0.62 ${chroma} ${hue} / 0.7)`
+	};
+	return {
+		color: "oklch(0.99 0 0)",
+		background: `linear-gradient(150deg, oklch(0.64 ${chroma} ${hue}), oklch(0.5 ${chroma} ${hue + 22}))`,
+		boxShadow: "inset 0 0 0 1px oklch(1 0 0 / 0.2)"
+	};
+}
+/** What an avatar disc shows: the chosen emoji, else the label's first letter or number, upper-case. */
+function avatarGlyph(label, avatar) {
+	if (avatar !== void 0 && avatar.length > 0) return avatar;
+	const first = [...label.trim()].find((char) => /[\p{L}\p{N}]/u.test(char));
+	return first === void 0 ? "?" : first.toUpperCase();
 }
 /** A plain JSON object's entries, or none for anything else (null, an array, a primitive). */
 function entriesOf(value) {
@@ -303,11 +363,15 @@ function ProfileSection({ profile, now, signIn, onPick }) {
 			className: "flex min-w-0 items-center gap-1.5 text-left text-fr-text-2 hover:text-fr-text",
 			title: "Use these logins for a new sign-in",
 			onClick: onPick,
-			children: [/* @__PURE__ */ jsx(Icon, {
-				name: "user",
-				size: 12
+			children: [/* @__PURE__ */ jsx("span", {
+				className: "grid size-4 shrink-0 place-items-center rounded-full text-[9px] font-semibold leading-none",
+				style: avatarStyle(profile.colour, profile.avatar !== void 0),
+				"aria-hidden": "true",
+				"data-slot": "browser-accounts-avatar",
+				children: avatarGlyph(profile.label, profile.avatar)
 			}), /* @__PURE__ */ jsx("span", {
 				className: "fr-overflow font-secondary text-fr-xs",
+				"data-slot": "browser-accounts-profile-label",
 				children: profile.label
 			})]
 		}), /* @__PURE__ */ jsx("ul", {

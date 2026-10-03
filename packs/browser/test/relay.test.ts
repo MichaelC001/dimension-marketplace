@@ -33,7 +33,7 @@ import {
 const VIEWPORT = { width: 640, height: 480 };
 const FAKE_WORKER = fileURLToPath(new URL("./fake-worker/", import.meta.url));
 const PYTHON_DIR = fileURLToPath(new URL("../python/", import.meta.url));
-const PYTHON = join(PYTHON_DIR, ".venv", ...(process.platform === "win32" ? ["Scripts", "python.exe"] : ["bin", "python"]));
+const PYTHON = process.env.DIM_BROWSER_PYTHON?.trim() || join(PYTHON_DIR, ".venv", ...(process.platform === "win32" ? ["Scripts", "python.exe"] : ["bin", "python"]));
 
 // ---------------------------------------------------------------------------
 // The human's Chrome: launched here, never by the runtime under test
@@ -178,9 +178,7 @@ describeWithChrome("chrome-relay", () => {
 				steps: [{ action: "take over", url: userUrl }],
 				result: { status: "done", summary: "ran on the relay", steps: 1 },
 			});
-			for (const agent of ["jev", "browser-use"] as const) {
-				expect(await failureCode(() => runtime.runTask(browserId, { agent, task: script }))).toBe("task_unsupported_engine");
-			}
+			expect(await failureCode(() => runtime.runTask(browserId, { task: script }))).toBe("task_unsupported_engine");
 
 			expect((await runtime.state(browserId)).task).toBeNull();
 			expect(fixture.hits("/worker-ran")).toBe(0);
@@ -277,6 +275,28 @@ describeWithChrome("chrome-relay", () => {
 			await within(10_000, "a click on the hidden relay tab", perform(runtime, browserId, { kind: "click", selector: "#go" }));
 			await submissionLanded(runtime, browserId, fixture);
 			expect(fixture.submissions()).toEqual([{ user: "ada", pass: "" }]);
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"the person leaving their own Chrome in the View for another profile does not close the tabs they were working in: the relay stays attached and listed, and only an explicit close ends it",
+		async () => {
+			const fixture = startFixture();
+			const userUrl = fixture.url("/signup");
+			const chrome = await launchUserChrome(userUrl, "signup");
+			const runtime = newRuntime(await createRoot(), { relayUrl: chrome.relayUrl });
+			const view = { caller: "app", session: "s-view" } as const;
+			const { browserId } = await runtime.open({ engine: "chrome-relay", viewport: VIEWPORT }, view);
+			await perform(runtime, browserId, { kind: "navigate", url: fixture.url("/page2") });
+
+			expect(await runtime.leave(browserId, "app")).toEqual({ closed: false });
+
+			expect((await runtime.state(browserId)).url).toBe(fixture.url("/page2"));
+			expect(await runtime.openBrowsers("s-view")).toMatchObject([{ browserId, kind: "chrome", hold: { by: "person" } }]);
+			await runtime.close(browserId, "app");
+			expect(await runtime.openBrowsers("s-view")).toEqual([]);
+			expect(chrome.running()).toBe(true);
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);
