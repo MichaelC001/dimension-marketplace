@@ -454,7 +454,8 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
       sessionOf,
       artifactsDir: () => options.codeArtifactsDir ?? join(process.env.DIMENSION_BROWSER_ROOT || defaultRootDir(), "artifacts"),
       preview: async (session, browserId, running) =>
-        (running ? previewMeta(runtime, browserId, session) : await previewResult(runtime, browserId, session))?.[PREVIEW_META_KEY],
+        (running ? previewMeta(runtime, browserId, session) : await previewResult(runtime, browserId, session))?.[PREVIEW_META_KEY]
+        ?? { v: 1, source: { kind: "browser", browserId }, at: Date.now() },
       meta: { [APPROVAL_META_KEY]: "exec", [SPACES_META_KEY]: CODE_TOOL_SPACES },
     });
   }
