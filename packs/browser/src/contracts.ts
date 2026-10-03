@@ -446,7 +446,7 @@ export interface BrowserRuntimePort {
    * at once for a page that is not changing), following the active tab, until the returned function is called. Never
    * queued behind page work. Throws `unknown_browser`.
    */
-  watchFrames(browserId: string, onFrame: (frame: LiveFrame) => void): () => void;
+  watchFrames(browserId: string, onFrame: (frame: LiveFrame) => void, size?: "view" | { maxWidth: 480 | 1280 }): () => void;
   /** The state as `state` answers it, but NOT queued behind page work: the live view keeps reading it while a navigation or action is in flight. */
   liveState(browserId: string): Promise<BrowserState>;
   /**
@@ -454,6 +454,8 @@ export interface BrowserRuntimePort {
    * idle. Returns what ends the watching (idempotent). Throws `unknown_browser`. A count, never a clock: a slow page is still watched.
    */
   viewing(browserId: string): () => void;
+  /** A consuming preview holds idle eviction without joining the human's View or wheel. */
+  previewHolding(browserId: string): () => void;
   /**
    * The human's own mouse, wheel and keys, applied to the active tab in order. Admitted and bounded first (`bad_input`), refused
    * while a task owns the page (`task_running`), and a click or key while a publish waits for the Post marks it touched, as `act` does.
@@ -481,6 +483,12 @@ export interface BrowserRuntimePort {
   bindView(session: string, browserId: string): void;
   /** The browser the human opened or is viewing in `session`, while it is open. */
   viewOf(session: string): string | undefined;
+  /** A stamped session may preview only its opening or held browser; never binds the View. */
+  previewAccess(session: string, browserId: string): { ok: true; profile: "throwaway" | "saved"; url: string; title: string } | { ok: false; code: "not_owner" | "unknown_source" | "source_closed" | "not_headless" };
+  /** Newest headless source for a browser_run call in this host session. */
+  previewSource(session: string): string | undefined;
+  /** A still only for a throwaway owned source, rate-limited by the runtime. */
+  previewStill(session: string, browserId: string): Promise<string | undefined>;
   /** Serialized and refused (`task_running`, `publish_pending`) like `act`; nothing is changed on the page. `timeout` is a result, not an error. */
   wait(browserId: string, request: WaitRequest, caller?: ToolCaller): Promise<WaitResult>;
   /** Read-only: a fixed page script measures the first match of `selector` (`@<ref> ` prefix reaches an iframe). Nothing the caller wrote runs in the page. */

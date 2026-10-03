@@ -12,6 +12,7 @@ import { buildConnectionReport, type ConnectionReportParams, PACK_CONNECTION_REP
 import type { ActManyResult, BrowserEngine, BrowserOpener, BrowserRuntimePort, BrowserState, OpeningTool, TaskRun, ToolCaller } from "./contracts.js";
 import { BROWSER_ENGINES, CONTROL_MODES, CREDENTIAL_MODES, MAX_ANNOTATION_REGIONS, MAX_BATCH_STEPS, MAX_EVAL_EXPRESSION_CHARS, MAX_VIEWPORT, MAX_WAIT_MS, MIN_VIEWPORT, PUBLISH_MODES } from "./contracts.js";
 import { MAX_DETAIL_BYTES } from "./annotation-file.js";
+import { BrowserRuntimeError } from "./store.js";
 import { type PublishPreset, loadPresets, resolvePreset, summarizePresets } from "./presets.js";
 import { MAX_LABEL_CHARS, PROFILE_COLOURS } from "./profile-meta.js";
 import { profilesForModel } from "./profile-list.js";
@@ -138,6 +139,7 @@ function sessionOf(extra: CallExtra): string | undefined {
   if (typeof meta !== "object" || meta === null || !("sessionId" in meta)) return undefined;
   return typeof meta.sessionId === "string" && meta.sessionId.length > 0 ? meta.sessionId : undefined;
 }
+const PREVIEW_META_KEY = "ai.insodimension/preview";
 
 function failure(error: unknown): CallToolResult {
   return { isError: true, content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }] };
@@ -165,6 +167,25 @@ async function respond(extra: CallExtra, run: () => Promise<{ text: string; stru
     return failure(error);
   }
 }
+/** Metadata is out of model content; saved profiles carry identity only, never automatic pixels or title. */
+function previewMeta(runtime: BrowserRuntimePort, browserId: string, session: string | undefined): Record<string, unknown> | undefined {
+  if (!session) return undefined;
+  const access = runtime.previewAccess(session, browserId);
+  if (!access.ok) return undefined;
+  return { [PREVIEW_META_KEY]: {
+    v: 1, source: { kind: "browser", browserId }, at: Date.now(), profile: access.profile,
+    ...(access.profile === "throwaway" ? { url: access.url, title: access.title } : {}),
+  } };
+}
+async function previewResult(runtime: BrowserRuntimePort, browserId: string, session: string | undefined): Promise<Record<string, unknown> | undefined> {
+  const meta = previewMeta(runtime, browserId, session);
+  if (!meta || !session) return meta;
+  const jpeg = await runtime.previewStill(session, browserId);
+  if (!jpeg) return meta;
+  return { [PREVIEW_META_KEY]: { ...(meta[PREVIEW_META_KEY] as object), images: [{ type: "image", mimeType: "image/jpeg", data: jpeg }] } };
+}
+
+
 
 /** A state as its caller reads it: the View draws the tabs' favicons (data: URLs of up to 32 KB each) and the profile's look (label, colour, avatar); a model would pay for every one, every call. */
 function stateFor(caller: ToolCaller | undefined, state: BrowserState): object {
@@ -343,12 +364,15 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     description: "Open a headless browser: no window, nothing shown to the human. No profile = throwaway: nothing saved, data deleted on close; name one (a saved profile from browser_profiles, or a new short lowercase name) only to keep logins, never for a throwaway. Saved passwords, publishing and task credentials need a profile. Engines: chromium (default) or chrome-relay (the user's running Chrome; profile always \"relay\", may be omitted); abp and browser4 are refused with the reason. url navigates at once. Returns the browserId every other tool needs.",
     inputSchema: { profile: profile.optional().describe("Saved profile, by name or label (see browser_profiles). Leave out for a throwaway browser."), engine: z.enum(BROWSER_ENGINES).optional(), url: z.string().max(2048).optional() },
     _meta: stepMeta,
-  }, ({ profile, engine, url }, extra) => result(async () => {
-    const state = await openAt(profile, engine, url, openerOf(extra, "browser_open"));
-    // A browser the human opens in the View has no tool call the model saw; the model asks browser_state for it.
-    if (callerOf(extra) === "app") showing(extra, state.browserId);
-    return stateFor(callerOf(extra), state);
-  }));
+  }, async ({ profile, engine, url }, extra) => {
+    const answer = await result(async () => {
+      const state = await openAt(profile, engine, url, openerOf(extra, "browser_open"));
+      if (callerOf(extra) === "app") showing(extra, state.browserId);
+      return stateFor(callerOf(extra), state);
+    });
+    const browserId = (answer.structuredContent as { browserId?: string } | undefined)?.browserId;
+    return browserId && url ? { ...answer, _meta: await previewResult(runtime, browserId, sessionOf(extra)) } : answer;
+  });
   registerAppTool(server, "browser_view", {
     title: "Show Browser",
     description: "Show the human a browser you hold (browserId), or open one they can watch (profile, engine, url). Mounts the Browser View.",
@@ -417,15 +441,22 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     inputSchema: { browserId: capability, actions: z.array(stepSchema).min(1).max(MAX_BATCH_STEPS) },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     _meta: stepMeta,
-  }, ({ browserId, actions }, extra) => respond(extra, async () => {
-    const outcome = await runtime.actMany(browserId, actions, callerOf(extra));
-    return { text: actText(outcome), structured: outcome, isError: outcome.status === "failed" || outcome.status === "unknown" };
-  }));
+  }, async ({ browserId, actions }, extra) => {
+    const answer = await respond(extra, async () => {
+      const outcome = await runtime.actMany(browserId, actions, callerOf(extra));
+      return { text: actText(outcome), structured: outcome, isError: outcome.status === "failed" || outcome.status === "unknown" };
+    });
+    return { ...answer, _meta: await previewResult(runtime, browserId, sessionOf(extra)) };
+  });
   if (codeHost !== undefined && modelTools !== "steps") {
     registerCodeTool(server, {
       host: codeHost,
       sessionOf,
       artifactsDir: () => options.codeArtifactsDir ?? join(process.env.DIMENSION_BROWSER_ROOT || defaultRootDir(), "artifacts"),
+      preview: async (session, running) => {
+        const id = runtime.previewSource(session);
+        return id ? (running ? previewMeta(runtime, id, session) : await previewResult(runtime, id, session))?.[PREVIEW_META_KEY] : undefined;
+      },
       meta: { [APPROVAL_META_KEY]: "exec", [SPACES_META_KEY]: CODE_TOOL_SPACES },
     });
   }
@@ -472,16 +503,22 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
       _meta: TRACTION_ONLY,
-    }, ({ browserId, task, maxSteps, credential, waitSeconds }, extra) => taskResult(async () => {
-      await runtime.startTask(browserId, { task, ...(maxSteps ? { maxSteps } : {}), ...(credential ? { credential } : {}) }, callerOf(extra));
-      return await follow(browserId, waitSeconds, extra);
-    }));
+    }, async ({ browserId, task, maxSteps, credential, waitSeconds }, extra) => {
+      const answer = await taskResult(async () => {
+        await runtime.startTask(browserId, { task, ...(maxSteps ? { maxSteps } : {}), ...(credential ? { credential } : {}) }, callerOf(extra));
+        return await follow(browserId, waitSeconds, extra);
+      });
+      return { ...answer, _meta: answer.structuredContent && (answer.structuredContent as TaskRun).status === "running" ? previewMeta(runtime, browserId, sessionOf(extra)) : await previewResult(runtime, browserId, sessionOf(extra)) };
+    });
     server.registerTool("browser_task_wait", {
       description: `Follow the task in this browser: returns when it finishes or after waitSeconds (default and max ${WAIT_CAP_S}), with its status, recent steps, time, model calls and tokens.`,
       inputSchema: { browserId: capability, waitSeconds },
       annotations: READ_ONLY,
       _meta: TRACTION_ONLY,
-    }, ({ browserId, waitSeconds }, extra) => taskResult(() => follow(browserId, waitSeconds, extra)));
+    }, async ({ browserId, waitSeconds }, extra) => {
+      const answer = await taskResult(() => follow(browserId, waitSeconds, extra));
+      return { ...answer, _meta: answer.structuredContent && (answer.structuredContent as TaskRun).status === "running" ? previewMeta(runtime, browserId, sessionOf(extra)) : await previewResult(runtime, browserId, sessionOf(extra)) };
+    });
     server.registerTool("browser_task_cancel", {
       description: "Stop the task running in this browser. Resolves once the agent has stopped.",
       inputSchema: { browserId: capability },
@@ -541,6 +578,25 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     showing(extra, browserId);
     return granted;
   }));
+  registerAppTool(server, "browser_preview", {
+    description: "Picture-only live preview of a headless browser owned by this host-stamped session.",
+    inputSchema: { browserId: capability, width: z.union([z.literal(480), z.literal(1280)]) },
+    annotations: READ_ONLY,
+    _meta: { ...APP_ONLY, [PREVIEW_META_KEY]: "pictures" },
+  }, async ({ browserId, width }, extra) => {
+    const session = sessionOf(extra);
+    if (callerOf(extra) !== "app" || !session) return { content: [], structuredContent: { ok: false, code: "not_owner" } };
+    const access = runtime.previewAccess(session, browserId);
+    if (!access.ok) return { content: [], structuredContent: access };
+    try {
+      const grant = await live.mintCard(browserId, width);
+      const value = "code" in grant ? { ok: false, code: grant.code } : { ok: true, url: `${grant.origin}/p/${grant.token}` };
+      return { content: [], structuredContent: value };
+    } catch (error) {
+      const code = error instanceof BrowserRuntimeError && (error.code === "unknown_browser" || error.code === "browser_closed") ? "source_closed" : "busy";
+      return { content: [], structuredContent: { ok: false, code } };
+    }
+  });
   registerAppTool(server, "browser_frame", {
     description: "A fresh full-quality PNG capture of the active tab, retained for browser_annotate (its frameId is what annotation names). The live picture is not read here: it rides the stream (browser_stream).",
     inputSchema: { browserId: capability }, annotations: READ_ONLY, _meta: APP_ONLY,

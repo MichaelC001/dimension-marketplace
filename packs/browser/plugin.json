@@ -43,6 +43,17 @@
 					],
 					"order": 10
 				}
+			],
+			"toolRenderer": [
+				{ "match": "browser_run", "use": "livePreview" },
+				{ "match": "browser_open", "use": "livePreview" },
+				{ "match": "browser_act", "use": "livePreview" },
+				{ "match": "browser_state", "use": "livePreview" },
+				{ "match": "browser_snapshot", "use": "livePreview" },
+				{ "match": "browser_inspect", "use": "livePreview" },
+				{ "match": "browser_screenshot", "use": "livePreview" },
+				{ "match": "browser_task", "use": "livePreview" },
+				{ "match": "browser_task_wait", "use": "livePreview" }
 			]
 		}
 	}

@@ -728,6 +728,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		this.byId.delete(entry.browserId);
 		if (entry.profile !== null && this.byProfile.get(entry.profile) === entry) this.byProfile.delete(entry.profile);
 		for (const [session, browserId] of this.viewBySession) if (browserId === entry.browserId) this.viewBySession.delete(session);
+		this.previewLast.delete(entry.browserId);
 	}
 
 	bindView(session: string, browserId: string): void {
@@ -737,6 +738,31 @@ export class BrowserRuntime implements BrowserRuntimePort {
 
 	viewOf(session: string): string | undefined {
 		return this.viewBySession.get(session);
+	}
+	previewAccess(session: string, browserId: string): { ok: true; profile: "throwaway" | "saved"; url: string; title: string } | { ok: false; code: "not_owner" | "unknown_source" | "source_closed" | "not_headless" } {
+		const entry = this.byId.get(browserId);
+		if (!entry) return { ok: false, code: "unknown_source" };
+		if (entry.closed) return { ok: false, code: "source_closed" };
+		if (entry.opener.session !== session && this.viewOf(session) !== browserId) return { ok: false, code: "not_owner" };
+		if (entry.engine !== "chromium" || this.options.headless === false) return { ok: false, code: "not_headless" };
+		const state = entry.driver.state();
+		return { ok: true, profile: entry.profile === null ? "throwaway" : "saved", url: state.url, title: state.title };
+	}
+
+	previewSource(session: string): string | undefined {
+		const entries = [...this.byId.values()];
+		return entries.reverse().find(entry => !entry.closed && entry.opener.session === session && entry.engine === "chromium" && this.options.headless !== false)?.browserId;
+	}
+	private readonly previewLast = new Map<string, number>();
+
+	async previewStill(session: string, browserId: string): Promise<string | undefined> {
+		const access = this.previewAccess(session, browserId);
+		if (!access.ok || access.profile !== "throwaway") return undefined;
+		const now = Date.now();
+		if (now - (this.previewLast.get(browserId) ?? 0) < 1_000) return undefined;
+		this.previewLast.set(browserId, now);
+		const jpeg = await this.byId.get(browserId)?.driver.previewStill().catch(() => undefined);
+		return jpeg && jpeg.byteLength <= 64 * 1024 ? Buffer.from(jpeg).toString("base64") : undefined;
 	}
 
 	// -----------------------------------------------------------------------
@@ -873,6 +899,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		entry.viewers += 1;
 		this.watchWheel(entry);
 		this.wake(browserId);
+
 		let ended = false;
 		return () => {
 			if (ended) return;
@@ -882,6 +909,19 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			this.watchWheel(entry);
 		};
 	}
+	previewHolding(browserId: string): () => void {
+		const entry = this.require(browserId);
+		entry.pending += 1;
+		this.wake(browserId);
+		let ended = false;
+		return () => {
+			if (ended) return;
+			ended = true;
+			entry.pending -= 1;
+			entry.lastUsed = performance.now();
+		};
+	}
+
 
 	/** How long `entry` may go without a call: a cell's browser has its own clock (OMP's 1,800 s); every other throwaway has the pack's. */
 	private idleOf(entry: Entry): number {
@@ -953,8 +993,8 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	}
 
 	/** The live picture, for the View's direct channel (stream.ts): the driver's own cast, never queued behind page work. */
-	watchFrames(browserId: string, onFrame: (frame: LiveFrame) => void): () => void {
-		return this.require(browserId).driver.watchFrames(onFrame);
+	watchFrames(browserId: string, onFrame: (frame: LiveFrame) => void, size?: "view" | { maxWidth: 480 | 1280 }): () => void {
+		return this.require(browserId).driver.watchFrames(onFrame, size);
 	}
 
 	/** `state`, but NOT queued behind page work: the live view keeps reading it while a navigation or action is in flight. */

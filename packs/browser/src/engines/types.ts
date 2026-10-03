@@ -130,7 +130,9 @@ export interface EngineDriver {
    * one at once for a page that is not changing, and the cast follows the active tab and a resize. The screencast
    * runs only while at least one listener is subscribed; the returned function unsubscribes.
    */
-  watchFrames(listener: (frame: LiveFrame) => void): () => void;
+  watchFrames(listener: (frame: LiveFrame) => void, size?: "view" | { maxWidth: 480 | 1280 }): () => void;
+  /** A bounded small JPEG for a finished throwaway call, without starting a persistent cast. */
+  previewStill(): Promise<Uint8Array | undefined>;
   /** The human's input on the active tab, in order (already admitted). Throws `ActionNotDispatched` when provably nothing reached the page. */
   input(events: readonly AdmittedInput[]): Promise<void>;
   snapshot(limit: number): Promise<string>;

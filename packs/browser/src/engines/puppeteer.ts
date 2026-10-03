@@ -615,6 +615,11 @@ interface Screencast {
 	frame: LiveFrame | null;
 	onFrame: (event: Protocol.Page.ScreencastFrameEvent) => void;
 }
+/** Private, picture-only cast on its own CDP session; never changes the page or the View cast. */
+interface CardCast extends Screencast {
+	cdp: CDPSession;
+	width: 480 | 1280;
+}
 
 interface DriverParts {
 	browser: Browser;
@@ -666,6 +671,9 @@ class PuppeteerDriver implements EngineDriver {
 	/** Everyone watching: the active tab is cast while this is not empty, and not otherwise. */
 	readonly #watchers = new Set<(frame: LiveFrame) => void>();
 	#cast: Screencast | undefined;
+	readonly #cardWatchers = new Map<480 | 1280, Set<(frame: LiveFrame) => void>>();
+	readonly #cardCasts = new Map<480 | 1280, CardCast>();
+	readonly #cardChains = new Map<480 | 1280, Promise<void>>();
 	/** Screencast start/stop run in order; a tab switch never interleaves with another. */
 	#castChain: Promise<void> = Promise.resolve();
 	#frameSeq = 0;
@@ -856,12 +864,38 @@ class PuppeteerDriver implements EngineDriver {
 		}
 	}
 
-	watchFrames(listener: (frame: LiveFrame) => void): () => void {
+	async previewStill(): Promise<Uint8Array | undefined> {
+		const tab = this.#activeTab();
+		const viewport = this.#viewport;
+		const shot = await tab.cdp.send("Page.captureScreenshot", {
+			format: "jpeg", quality: 50,
+			clip: { x: 0, y: 0, width: viewport.width, height: viewport.height, scale: Math.min(1, 480 / viewport.width) },
+			captureBeyondViewport: false,
+		}).catch(() => undefined);
+		return shot ? Buffer.from(shot.data, "base64") : undefined;
+	}
+
+	watchFrames(listener: (frame: LiveFrame) => void, size: "view" | { maxWidth: 480 | 1280 } = "view"): () => void {
 		this.#assertOpen();
+		if (size !== "view") {
+			const width = size.maxWidth;
+			let watchers = this.#cardWatchers.get(width);
+			if (!watchers) this.#cardWatchers.set(width, watchers = new Set());
+			watchers.add(listener);
+			if (watchers.size === 1) void this.#restartCard(width);
+			else {
+				const shown = this.#cardCasts.get(width)?.frame;
+				if (shown) queueMicrotask(() => { if (watchers.has(listener)) listener(shown); });
+			}
+			return () => {
+				if (!watchers!.delete(listener) || watchers!.size > 0) return;
+				this.#cardWatchers.delete(width);
+				void this.#restartCard(width);
+			};
+		}
 		this.#watchers.add(listener);
 		if (this.#watchers.size === 1) void this.#restartScreencast().catch(() => undefined);
 		else {
-			// A page that is not changing sends nothing more: the newest picture is what a late watcher is owed.
 			const shown = this.#cast?.frame;
 			if (shown) queueMicrotask(() => { if (this.#watchers.has(listener)) listener(shown); });
 		}
@@ -1338,6 +1372,10 @@ class PuppeteerDriver implements EngineDriver {
 		this.#browser.off("disconnected", this.#onDisconnected);
 		this.#watchers.clear();
 		await this.#stopScreencast();
+		await Promise.all([...this.#cardWatchers.keys()].map(width => {
+			this.#cardWatchers.delete(width);
+			return this.#restartCard(width);
+		}));
 		const tabs = [...this.#tabs];
 		await Promise.all(tabs.map((tab) => tab.cdp.detach().catch(() => undefined)));
 
@@ -1522,6 +1560,7 @@ class PuppeteerDriver implements EngineDriver {
 		// person's own tab, which is wherever they put it.
 		if (!tab.foreign) await tab.page.bringToFront().catch(() => undefined);
 		if (this.#watchers.size > 0) await this.#restartScreencast();
+		for (const width of this.#cardWatchers.keys()) void this.#restartCard(width);
 	}
 
 	#tabById(tabId: string): Tab {
@@ -1562,8 +1601,60 @@ class PuppeteerDriver implements EngineDriver {
 			await this.#stopScreencast();
 			await this.#restartScreencast();
 		}
+		for (const width of this.#cardWatchers.keys()) void this.#restartCard(width);
 	}
 
+	/** Serial per-size handoff prevents an old cast's detach from stopping its successor. */
+	#restartCard(width: 480 | 1280): Promise<void> {
+		const step = (this.#cardChains.get(width) ?? Promise.resolve()).then(async () => {
+			const old = this.#cardCasts.get(width);
+			if (old) {
+				this.#cardCasts.delete(width);
+				old.cdp.off("Page.screencastFrame", old.onFrame);
+				await old.cdp.send("Page.stopScreencast").catch(() => undefined);
+				await old.cdp.detach().catch(() => undefined);
+			}
+			const watchers = this.#cardWatchers.get(width);
+			const tab = this.#active;
+			if (this.#closed || !watchers?.size || tab.page.isClosed()) return;
+			const cdp = await tab.page.target().createCDPSession();
+			if (this.#closed || this.#active !== tab || !this.#cardWatchers.get(width)?.size) {
+				await cdp.detach().catch(() => undefined);
+				return;
+			}
+			const cast: CardCast = {
+				cdp, tab, width, viewport: this.#viewport, frame: null,
+				onFrame: event => {
+					void cdp.send("Page.screencastFrameAck", { sessionId: event.sessionId }).catch(() => undefined);
+					if (this.#cardCasts.get(width) !== cast) return;
+					const jpeg = Buffer.from(event.data, "base64");
+					const frame: LiveFrame = { id: `card-${tab.id}-${++this.#frameSeq}`, jpeg, viewport: cast.viewport, capturedAt: Date.now() };
+					cast.frame = frame;
+					for (const watcher of this.#cardWatchers.get(width) ?? []) watcher(frame);
+				},
+			};
+			this.#cardCasts.set(width, cast);
+			cdp.on("Page.screencastFrame", cast.onFrame);
+			await cdp.send("Page.startScreencast", { format: "jpeg", quality: width === 480 ? 50 : 60, maxWidth: width, maxHeight, everyNthFrame: 15 }).catch(() => undefined);
+			void (async () => {
+				await sleep(FIRST_FRAME_WAIT_MS);
+				if (this.#cardCasts.get(width) !== cast || cast.frame !== null) return;
+				const shot = await cdp.send("Page.captureScreenshot", {
+					format: "jpeg", quality: width === 480 ? 50 : 60,
+					clip: { x: 0, y: 0, width: this.#viewport.width, height: this.#viewport.height, scale: width / this.#viewport.width },
+					captureBeyondViewport: false,
+				}).catch(() => null);
+				if (shot && this.#cardCasts.get(width) === cast && cast.frame === null) {
+					const jpeg = Buffer.from(shot.data, "base64");
+					const frame: LiveFrame = { id: `card-${tab.id}-${++this.#frameSeq}`, jpeg, viewport: cast.viewport, capturedAt: Date.now() };
+					cast.frame = frame;
+					for (const watcher of this.#cardWatchers.get(width) ?? []) watcher(frame);
+				}
+			})();
+		});
+		this.#cardChains.set(width, step.catch(() => undefined));
+		return step;
+	}
 	/** Cast the CURRENT active tab, stopping whatever was cast before, while anyone watches. Ordered. */
 	#restartScreencast(): Promise<void> {
 		const step = this.#castChain.then(async () => {
