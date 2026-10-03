@@ -15,25 +15,24 @@
 import "@dimension/mcp-app-kit/annotate/annotate.css";
 import {
 	AnnotationFooter,
-	AnnotationPanel,
 	AnnotationToolbar,
 	DocumentCommentLayer,
+	DocumentNotes,
 	MarkupIcon,
 	MarkupOverlay,
 	markupToolGroups,
-	type PanelItem,
 	useDocumentComments,
 	useImageMarkup,
 	useMarkupShortcuts,
 } from "@dimension/mcp-app-kit/annotate/react";
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import type { ViewerKind } from "../../src/contract";
 import { annotationModes } from "./annotate-modes";
 import { loadDocumentBytes } from "./document-bytes";
 import { ElementPicks } from "./pane-extras-element";
 import { TimelineMarks } from "./pane-extras-timeline";
-import { type AnnotateMode, Column, Footer, type PaneExtrasProps, revisionOf, Strip, useSlot } from "./pane-shared";
+import { type AnnotateMode, Footer, type PaneExtrasProps, revisionOf, Strip, useSlot } from "./pane-shared";
 
 const PICTURE = '[data-slot="viewer-picture"]';
 const TEXT_ROOT = '[data-slot="viewer-text-root"]';
@@ -165,32 +164,37 @@ function TextComments({ app, tab, active, ready, frame, mode }: PaneExtrasProps)
 		rev: revisionOf(tab),
 	});
 
-	const items = useMemo<PanelItem[]>(
-		() =>
-			session.comments.map(comment => {
-				const state = session.states.get(comment.id);
-				return {
-					id: comment.id,
-					heading: comment.anchor.quote,
-					note: comment.note,
-					...(state === "orphan" ? { flag: "outdated" as const } : state === "fuzzy" ? { flag: "reworded" as const } : {}),
-				};
-			}),
-		[session.comments, session.states],
-	);
-
+	const [ranges, setRanges] = useState<ReadonlyMap<number, Range>>(() => new Map());
+	const [hoveredId, setHoveredId] = useState<number | null>(null);
+	const notesHost = active ? frame : null;
 	return (
 		<>
 			{/* Only the tab on screen paints: the highlights are one registry for the whole document. */}
 			<DocumentCommentLayer
 				root={active ? textRoot : null}
+				onRanges={setRanges}
 				comments={session.comments}
-				activeId={session.activeId}
+				activeId={session.openId ?? hoveredId}
 				onComment={session.onComment}
 				onResolved={session.setStates}
 				interactive={commenting}
 				request={request}
 			/>
+			{notesHost && textRoot && createPortal(
+				<DocumentNotes
+					root={textRoot}
+					notesHost={notesHost}
+					ranges={ranges}
+					comments={session.comments}
+					states={session.states}
+					openId={session.openId}
+					onOpen={session.setOpenId}
+					onNote={session.setNote}
+					onRemove={session.remove}
+					onActive={setHoveredId}
+				/>,
+				notesHost,
+			)}
 			{commenting ? (
 				<Strip frame={frame}>
 					{/* Comment is the one tool of a text, so it is always the armed one: the ring says what the bar is for. */}
@@ -221,30 +225,16 @@ function TextComments({ app, tab, active, ready, frame, mode }: PaneExtrasProps)
 				</Strip>
 			) : null}
 			{commenting ? (
-				<Column frame={frame}>
-					<AnnotationPanel
-						title="Notes"
-						items={items}
-						activeId={session.activeId}
-						focus={session.focus}
-						onActive={session.setActiveId}
-						onNote={session.setNote}
-						onRemove={session.remove}
+				<Footer frame={frame}>
+					<AnnotationFooter
 						message={session.message}
 						onMessage={session.setMessage}
 						onSend={() => void session.send()}
 						send={{ busy: session.sending, staged: session.staged }}
 						status={session.status}
-						emptyHint={
-							<>
-								<strong>Add a note</strong>
-								<span>
-									Select some text, then choose <em>Comment</em>, or press <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>M</kbd>.
-								</span>
-							</>
-						}
+						count={session.comments.length}
 					/>
-				</Column>
+				</Footer>
 			) : null}
 		</>
 	);

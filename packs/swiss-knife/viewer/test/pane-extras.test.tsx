@@ -4,8 +4,7 @@
 // text offers the one Comment tool.
 //
 // A picture's notes live where they were made: a popover beside each new mark, a numbered badge once it is closed,
-// and ONE slim footer seated at the end of the pane that carries the send. There is no Notes panel for a picture,
-// in a narrow View or a wide one; a text keeps its panel.
+// and ONE slim footer seated at the end of the pane that carries the send.
 //
 // The REAL `PaneExtras` is mounted (kit hooks, overlay, bar and footer included) in linkedom with the real react-dom
 // under `act`, into the DOM the pane builds around it: a pane holding the mode strip and the stage frame that holds
@@ -106,6 +105,12 @@ beforeAll(async () => {
 	install(globalThis, "HTMLTextAreaElement", window.HTMLTextAreaElement);
 	// No layout in linkedom: the overlay's box is 800 x 600 at the origin.
 	install(window.Element.prototype, "getBoundingClientRect", () => ({ left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600, x: 0, y: 0 }));
+	install(globalThis, "ShadowRoot", window.ShadowRoot);
+	install(globalThis, "NodeFilter", { SHOW_TEXT: 0x4 });
+	install(window, "getComputedStyle", (element: Element) => ({
+		display: ["EM", "STRONG", "B", "I", "SPAN", "A", "CODE"].includes(element.tagName) ? "inline" : "block",
+		overflow: "visible", overflowX: "visible", overflowY: "visible",
+	}));
 	// A narrow View: a text's list goes under the document, into the pane.
 	viewIs(false);
 	restores.push(() => Reflect.deleteProperty(window, "matchMedia"));
@@ -188,12 +193,7 @@ interface Pane {
 	readonly tools: (string | null)[];
 	tool(id: string): HTMLElement | null;
 	readonly overlay: SVGElement | null;
-	/**
-	 * The Notes panel of a text (its list and its send), wherever the View seats it: under the document in the pane, or
-	 * beside it in a wide View, where it is the layer's own element and not the pane's child.
-	 */
-	readonly panel: HTMLElement | null;
-	/** The slim send row a picture seats at the end of the pane. */
+	/** The slim send row seated at the end of the pane. */
 	readonly footer: HTMLElement | null;
 	/** The numbered badge buttons over the marks, in the order they are read. */
 	readonly badges: HTMLButtonElement[];
@@ -254,9 +254,6 @@ function pane(): Pane {
 		get overlay() {
 			return picture.querySelector<SVGElement>("svg[data-markup-overlay]");
 		},
-		get panel() {
-			return env.document.querySelector<HTMLElement>('[data-slot="annotate-panel"]');
-		},
 		get footer() {
 			return footer();
 		},
@@ -308,6 +305,7 @@ const mountAt = (at: Pane, over: Partial<PaneExtrasProps> = {}, kind: ViewerKind
 interface KeyInit {
 	shiftKey?: boolean;
 	ctrlKey?: boolean;
+	altKey?: boolean;
 }
 
 const keyEvent = (key: string, init: KeyInit = {}) =>
@@ -547,30 +545,6 @@ describe("a picture, once its layer is up", () => {
 });
 
 describe("a picture's notes, where they were made", () => {
-	for (const [view, wide] of [
-		["narrow", false],
-		["wide", true],
-	] as const) {
-		test(`has no Notes panel in a ${view} View: no column, no sheet, no list, no heading, before a mark and after it`, async () => {
-			viewIs(wide);
-			const at = pane();
-			await mountAt(at);
-			const nothingBut = (marks: number) => {
-				expect(at.panel === null).toBe(true);
-				expect(env.document.querySelectorAll("li").length).toBe(0);
-				const headings = Array.from(env.document.querySelectorAll("h1, h2, h3, h4, h5, h6, [role=heading]")).map(heading => heading.textContent);
-				expect(headings).not.toContain("Notes");
-				expect(at.badges).toHaveLength(marks);
-			};
-
-			nothingBut(0);
-			await drawShape(at);
-			nothingBut(1);
-			await drawShape(at);
-			nothingBut(2);
-		});
-	}
-
 	test("seats ONE footer at the end of the pane, not in the strip or the frame, from the moment the layer is up", async () => {
 		const at = pane();
 		await mountAt(at);
@@ -795,7 +769,6 @@ describe("a file that did not open", () => {
 		const view = await mountAt(at, { mode: null });
 
 		expect(at.bar === null).toBe(true);
-		expect(at.panel === null).toBe(true);
 		expect(at.footer === null).toBe(true);
 		expect(at.strip.children.length).toBe(0);
 		expect(at.overlay?.getAttribute("data-tool")).toBe("none");
@@ -820,7 +793,6 @@ describe("a file that did not open", () => {
 		await view.render(layer(at, { mode: null }));
 		expect(at.bar === null).toBe(true);
 		expect(at.footer === null).toBe(true);
-		expect(at.panel === null).toBe(true);
 		expect(at.overlay?.getAttribute("data-tool")).toBe("none");
 		expect(at.drawn).toBe(1);
 
@@ -833,7 +805,7 @@ describe("a file that did not open", () => {
 });
 
 describe("a text", () => {
-	test("has one tool, Comment, always the armed one, with its shortcut and a hint on how to use it", async () => {
+	test("offers Comment and a send footer", async () => {
 		const at = pane();
 		await mountAt(at, { mode: "comments" }, "markdown");
 
@@ -841,34 +813,92 @@ describe("a text", () => {
 		expect(at.tools).toEqual(["comment"]);
 		expect(at.checked).toEqual(["comment"]);
 		expect(at.tool("comment")?.getAttribute("title")).toContain("Ctrl+Alt+M");
-		expect(at.bar?.querySelector('[data-slot="annotation-toolbar-hint"]')?.textContent).toContain("Ctrl+Alt+M");
-		expect(at.panel?.querySelector("h2")?.textContent).toBe("Notes");
+		expect(at.footer).not.toBeNull();
+		expect(at.message?.getAttribute("placeholder")).toBe("Anything else for the agent?");
+		expect(at.sendLabel).toBe("Request edits");
 
-		// Pressing it asks for a comment; with nothing selected that is not a way of putting the tool down.
 		await click(at.tool("comment"));
 		expect(at.checked).toEqual(["comment"]);
-		expect(at.panel?.querySelectorAll("li").length).toBe(0);
 	});
 
-	test("keeps its Notes panel under the document in a narrow View and beside it in a wide one", async () => {
-		const narrow = pane();
-		await mountAt(narrow, { mode: "comments" }, "markdown");
-		expect(narrow.element.contains(narrow.panel)).toBe(true);
-		expect(narrow.panel?.getAttribute("data-placement")).toBe("bottom");
-		await env.cleanup();
-
-		viewIs(true);
-		const wide = pane();
-		await mountAt(wide, { mode: "comments" }, "markdown");
-		expect(wide.panel?.getAttribute("data-placement")).toBe("side");
-		expect(wide.panel?.querySelector("h2")?.textContent).toBe("Notes");
+	test("an open or hovered passage owns the active highlight, and leaving restores the ordinary highlight", async () => {
+		const at = pane();
+		const text = slotOf("viewer-text-root");
+		text.textContent = "The quick brown fox";
+		at.frame.append(text);
+		const node = text.firstChild as Text;
+		const selected = {
+			startContainer: node, startOffset: 4, endContainer: node, endOffset: 15,
+			commonAncestorContainer: node, collapsed: false,
+		} as Range;
+		let selection: Range | null = selected;
+		const originalSelection = Object.getOwnPropertyDescriptor(env.document, "getSelection");
+		const originalRange = env.document.createRange;
+		const originalCSS = Object.getOwnPropertyDescriptor(globalThis, "CSS");
+		const originalHighlight = Object.getOwnPropertyDescriptor(globalThis, "Highlight");
+		const paints = new Map<string, Range[]>();
+		class HighlightProbe {
+			readonly ranges: Range[];
+			constructor(...ranges: Range[]) { this.ranges = ranges; }
+		}
+		Object.defineProperty(env.document, "getSelection", { configurable: true, value: () => ({
+			rangeCount: selection === null ? 0 : 1,
+			isCollapsed: selection === null,
+			getRangeAt: () => selection,
+			removeAllRanges: () => { selection = null; },
+		}) });
+		env.document.createRange = () => {
+			let startNode: Node = node;
+			let startOffset = 0;
+			let endNode: Node = node;
+			let endOffset = 0;
+			return {
+				setStart(value: Node, offset: number) { startNode = value; startOffset = offset; },
+				setEnd(value: Node, offset: number) { endNode = value; endOffset = offset; },
+				get startContainer() { return startNode; },
+				get startOffset() { return startOffset; },
+				get endContainer() { return endNode; },
+				get endOffset() { return endOffset; },
+				get collapsed() { return startNode === endNode && startOffset === endOffset; },
+				getClientRects: () => [{ left: 40, right: 120, top: 20, bottom: 38, width: 80, height: 18 }],
+			} as unknown as Range;
+		};
+		Object.defineProperty(globalThis, "CSS", { configurable: true, value: { highlights: {
+			set: (name: string, value: HighlightProbe) => paints.set(name, value.ranges),
+			delete: (name: string) => paints.delete(name),
+		} } });
+		Object.defineProperty(globalThis, "Highlight", { configurable: true, value: HighlightProbe });
+		try {
+			await mountAt(at, { mode: "comments" }, "markdown");
+			await press(env.document, "m", { ctrlKey: true, altKey: true });
+			expect(at.frame.querySelector('[data-slot="note-popover-field"]')).not.toBeNull();
+			expect(paints.get("dimension-comment-active")).toHaveLength(1);
+			await press(at.frame.querySelector('[data-slot="note-popover-field"]') as Element, "Escape");
+			expect(paints.get("dimension-comment-active") ?? []).toHaveLength(0);
+			expect(paints.get("dimension-comment")).toHaveLength(1);
+			const badge = at.frame.querySelector('[data-slot="document-note-badge"]');
+			expect(badge).not.toBeNull();
+			await env.act(async () => void badge?.dispatchEvent(new (win().Event)("pointerover", { bubbles: true })));
+			expect(paints.get("dimension-comment-active")).toHaveLength(1);
+			await env.act(async () => void badge?.dispatchEvent(new (win().Event)("pointerout", { bubbles: true })));
+			expect(paints.get("dimension-comment-active") ?? []).toHaveLength(0);
+			expect(paints.get("dimension-comment")).toHaveLength(1);
+		} finally {
+			env.document.createRange = originalRange;
+			if (originalSelection) Object.defineProperty(env.document, "getSelection", originalSelection);
+			else Reflect.deleteProperty(env.document, "getSelection");
+			if (originalCSS) Object.defineProperty(globalThis, "CSS", originalCSS);
+			else Reflect.deleteProperty(globalThis, "CSS");
+			if (originalHighlight) Object.defineProperty(globalThis, "Highlight", originalHighlight);
+			else Reflect.deleteProperty(globalThis, "Highlight");
+		}
 	});
 
-	test("offers neither bar nor list when the file did not open", async () => {
+	test("offers neither bar nor footer when the file did not open", async () => {
 		const at = pane();
 		await mountAt(at, { mode: null }, "markdown");
 
 		expect(at.bar === null).toBe(true);
-		expect(at.panel === null).toBe(true);
+		expect(at.footer).toBeNull();
 	});
 });

@@ -16,6 +16,7 @@ import * as react from "react";
 import { createElement } from "react";
 import * as jsxDevRuntime from "react/jsx-dev-runtime";
 import * as jsxRuntime from "react/jsx-runtime";
+import * as reactDom from "react-dom";
 import { PICK_FRAME_LIMIT } from "../app/view/document-bytes";
 import type { PaneExtras as PaneExtrasComponent } from "../app/view/pane-extras";
 import type { PaneExtrasProps } from "../app/view/pane-shared";
@@ -31,6 +32,7 @@ for (const [id, real] of [
 	["react", react],
 	["react/jsx-runtime", jsxRuntime],
 	["react/jsx-dev-runtime", jsxDevRuntime],
+	["react-dom", reactDom],
 ] as const) {
 	mock.module(Bun.resolveSync(id, kitSource), () => real);
 }
@@ -58,6 +60,19 @@ beforeAll(async () => {
 	install(globalThis, "HTMLIFrameElement", window.HTMLIFrameElement);
 	// No layout in linkedom: every box is 800 x 600 at the origin.
 	install(window.Element.prototype, "getBoundingClientRect", () => ({ left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600, x: 0, y: 0 }));
+	const frameWindows = new WeakMap<object, { postMessage(data: unknown): void }>();
+	install(window.HTMLIFrameElement.prototype, "contentWindow", undefined);
+	Object.defineProperty(window.HTMLIFrameElement.prototype, "contentWindow", {
+		configurable: true,
+		get(this: HTMLIFrameElement) {
+			let value = frameWindows.get(this);
+			if (value === undefined) {
+				value = { postMessage() {} };
+				frameWindows.set(this, value);
+			}
+			return value;
+		},
+	});
 	// A narrow View: the list goes under the document, into the pane (the width the artifact column really has).
 	install(window, "matchMedia", (query: string) => ({ matches: false, media: query, addEventListener() {}, removeEventListener() {} }));
 	// Dynamic by necessity: react-dom decides once, when it loads, whether there is a DOM, and the layer binds the
@@ -167,6 +182,16 @@ function escape(): Promise<void> {
 	return env.act(async () => void win().dispatchEvent(event));
 }
 
+async function typeNote(field: HTMLTextAreaElement, text: string): Promise<void> {
+	const fire = (type: string): Promise<void> =>
+		env.act(async () => void field.dispatchEvent(new (win().Event)(type, { bubbles: true, cancelable: true })));
+	Object.assign(field, { attachEvent() {}, detachEvent() {} });
+	await fire("focusin");
+	Object.getOwnPropertyDescriptor(win().HTMLTextAreaElement.prototype, "value")?.set?.call(field, text);
+	await fire("input");
+	await fire("keyup");
+}
+
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 
 /** Wait, in `act`, until the pick frame is there: the kit builds its document a few promise turns after Pick comes up. */
@@ -176,6 +201,184 @@ async function pickFrameUp(at: Pane): Promise<void> {
 
 /** Let the build that follows Pick coming up run its course, so that a frame that is merely late would be there. */
 const quiet = () => env.act(async () => sleep(60));
+
+/** Deliver a real picker-protocol message from this frame, not a call directly into the session. */
+async function pageSays(frame: HTMLElement, data: Record<string, unknown>): Promise<void> {
+	const event = Object.assign(new (win().Event)("message"), {
+		data,
+		source: (frame as HTMLIFrameElement).contentWindow,
+		origin: "null",
+	});
+	await env.act(async () => void win().dispatchEvent(event));
+}
+
+function channelOf(at: Pane): string {
+	const matches = [...(at.pickPage ?? "").matchAll(/\)\("([0-9a-f]{32})"\);/g)];
+	const channel = matches[matches.length - 1]?.[1];
+	if (channel === undefined) throw new Error("picker channel unavailable");
+	return channel;
+}
+
+async function pickedPage(at: Pane): Promise<{ frame: HTMLElement; channel: string }> {
+	await pickFrameUp(at);
+	const frame = at.pickFrame;
+	if (frame === null) throw new Error("picker frame unavailable");
+	const channel = channelOf(at);
+	await pageSays(frame, { c: channel, t: "ready", vw: 800, vh: 600 });
+	return { frame, channel };
+}
+
+const noteTarget = {
+	selector: "#needle",
+	matches: 1,
+	tag: "p",
+	text: "hello",
+	attrs: [],
+	style: { color: "rgb(0, 0, 0)", background: "rgba(0, 0, 0, 0)", fontSize: "16px", fontWeight: "400" },
+	box: { x: 30, y: 40, width: 100, height: 20 },
+};
+
+describe("HTML picks as notes in place", () => {
+	test("opens the picked element beside the page, keeps its badge after an outside press, and reopens from that badge", async () => {
+		const at = pane();
+		await mountAt(at, 4096);
+		const { frame, channel } = await pickedPage(at);
+		await pageSays(frame, { c: channel, t: "pick", id: 7, target: noteTarget, steps: { wider: true, narrower: false } });
+		await pageSays(frame, {
+			c: channel, t: "layout", vw: 800, vh: 600, sx: 0, sy: 0,
+			boxes: [{ id: 7, x: 30, y: 40, w: 100, h: 20 }], gone: [],
+		});
+		await env.runFrames();
+
+		const popover = at.frame.querySelector('[data-slot="note-popover"]');
+		expect(popover?.querySelector('[data-slot="note-popover-heading"]')?.textContent).toBe("#needle");
+		expect(popover?.querySelector('[data-slot="note-popover-actions"]')?.textContent).toContain("Wider");
+		expect(at.frame.querySelector('[data-slot="viewer-html-pick-frame"] [data-slot="note-popover"]')).toBeNull();
+		const footer = env.document.querySelector('[data-slot="annotation-footer"]');
+		expect(footer?.querySelector("button")?.textContent).toContain("Request edits · 1");
+		expect(env.document.querySelector('[data-slot="annotation-panel"]')).toBeNull();
+
+		await env.act(async () => {
+			env.document.body.dispatchEvent(new (win().Event)("pointerdown", { bubbles: true, cancelable: true }));
+		});
+		expect(at.frame.querySelector('[data-slot="note-popover"]')).toBeNull();
+		const badge = at.frame.querySelector('[data-slot="element-note-badge"]');
+		expect(badge?.getAttribute("aria-label")?.toLowerCase()).toContain("no note");
+		await env.act(async () => void badge?.dispatchEvent(new (win().Event)("mouseover", { bubbles: true })));
+		expect(at.frame.querySelector('[data-slot="note-card-heading"]')?.textContent).toBe("#needle");
+		await click(badge);
+		expect(at.frame.querySelector('[data-slot="note-popover"] textarea')?.getAttribute("aria-label")).toBe("Note 1");
+		await click(at.frame.querySelector('[data-slot="note-popover-delete"]'));
+		await env.runFrames();
+		expect(at.frame.querySelector('[data-slot="element-note-badge"]')).toBeNull();
+		expect(env.document.querySelector('[data-slot="annotation-footer"] button')?.hasAttribute("disabled")).toBe(true);
+	});
+
+	test("a page reporting unavailable leaves the reading frame and no pick editor", async () => {
+		const at = pane();
+		await mountAt(at, 4096);
+		await pickFrameUp(at);
+		const frame = at.pickFrame;
+		if (frame === null) throw new Error("picker frame unavailable");
+		await pageSays(frame, { c: channelOf(at), t: "unavailable" });
+		await env.runFrames();
+
+		expect(at.pickFrame).toBeNull();
+		expect(at.frame.querySelector('[data-slot="viewer-html-frame"]')).not.toBeNull();
+		expect(at.frame.querySelector('[data-slot="note-popover"]')).toBeNull();
+		expect(env.document.querySelector('[data-slot="viewer-mode-strip"]')?.textContent).toContain("Can't pick from this page");
+	});
+
+	test("Escape while typing in the opened note does not put Pick down", async () => {
+		const at = pane();
+		await mountAt(at, 4096);
+		const { frame, channel } = await pickedPage(at);
+		await pageSays(frame, { c: channel, t: "pick", id: 7, target: noteTarget, steps: { wider: true, narrower: false } });
+		await pageSays(frame, {
+			c: channel, t: "layout", vw: 800, vh: 600, sx: 0, sy: 0,
+			boxes: [{ id: 7, x: 30, y: 40, w: 100, h: 20 }], gone: [],
+		});
+		await env.runFrames();
+		expect(at.frame.querySelector('[data-slot="note-popover"] textarea')).not.toBeNull();
+		const input = env.document.createElement("textarea");
+		env.document.body.append(input);
+		await env.act(async () => {
+			const event = Object.assign(new (win().Event)("keydown", { bubbles: true, cancelable: true }), { key: "Escape" });
+			input.dispatchEvent(event);
+		});
+		expect(at.picking).toBe(true);
+		expect(at.pickFrame).not.toBeNull();
+	});
+
+	test("notes remain navigable after Escape closes the editor and then puts Pick down", async () => {
+		const at = pane();
+		await mountAt(at, 4096);
+		const { frame, channel } = await pickedPage(at);
+		await pageSays(frame, { c: channel, t: "pick", id: 7, target: noteTarget, steps: { wider: true, narrower: false } });
+		await pageSays(frame, {
+			c: channel, t: "layout", vw: 800, vh: 600, sx: 0, sy: 0,
+			boxes: [{ id: 7, x: 30, y: 40, w: 100, h: 20 }], gone: [],
+		});
+		await env.runFrames();
+		await escape();
+		await escape();
+		expect(at.picking).toBe(false);
+		expect(at.pickFrame).toBeNull();
+
+		const navigation = at.frame.querySelector('[data-slot="element-note-navigation"][aria-label="Notes on this page"]');
+		const item = navigation?.querySelector('[data-slot="element-note-navigation-item"]');
+		expect(item?.textContent).toContain("#needle");
+		await click(item ?? null);
+		expect(at.picking).toBe(false);
+		expect(at.frame.querySelector('[data-slot="note-popover-heading"]')?.textContent).toBe("#needle");
+		await click(at.frame.querySelector('[data-slot="note-popover-delete"]'));
+		expect(navigation?.querySelector('[data-slot="element-note-navigation-item"]')).toBeNull();
+	});
+
+	test("a large page keeps its notes readable and editable without rebuilding the pick frame", async () => {
+		const at = pane();
+		await mountAt(at, PICK_FRAME_LIMIT + 1);
+		await click(at.pick);
+		const { frame, channel } = await pickedPage(at);
+		await pageSays(frame, { c: channel, t: "pick", id: 7, target: noteTarget, steps: { wider: true, narrower: false } });
+		await pageSays(frame, {
+			c: channel, t: "layout", vw: 800, vh: 600, sx: 0, sy: 0,
+			boxes: [{ id: 7, x: 30, y: 40, w: 100, h: 20 }], gone: [],
+		});
+		await env.runFrames();
+		await escape();
+		await escape();
+		expect(at.pickFrame).toBeNull();
+		await click(at.frame.querySelector('[data-slot="element-note-navigation-item"]'));
+		const input = at.frame.querySelector<HTMLTextAreaElement>('[data-slot="note-popover"] textarea');
+		expect(input?.getAttribute("aria-label")).toBe("Note 1");
+		if (input === null) throw new Error("note editor unavailable");
+		await typeNote(input, "Keep this paragraph");
+		expect(at.frame.querySelector('[data-slot="element-note-navigation-item"]')?.textContent).toContain("Keep this paragraph");
+		expect(at.pickFrame).toBeNull();
+		await escape();
+		expect(at.frame.querySelector('[data-slot="element-note-navigation-item"]')?.textContent).toContain("#needle");
+		await click(at.frame.querySelector('[data-slot="element-note-navigation-item"]'));
+		expect(at.frame.querySelector<HTMLTextAreaElement>('[data-slot="note-popover"] textarea')?.value).toBe("Keep this paragraph");
+		expect(at.pickFrame).toBeNull();
+	});
+
+	test("an off-layer page retains note navigation and editing without activating the picker", async () => {
+		const at = pane();
+		const mounted = await mountAt(at, 4096);
+		const { frame, channel } = await pickedPage(at);
+		await pageSays(frame, { c: channel, t: "pick", id: 7, target: noteTarget, steps: { wider: true, narrower: false } });
+		await env.runFrames();
+		await mounted.render(createElement(PaneExtras, {
+			app, tab: tabOf(4096), active: true, ready: true, frame: at.frame, mode: "comments",
+		} satisfies PaneExtrasProps));
+		expect(at.pickFrame).toBeNull();
+		await click(at.frame.querySelector('[data-slot="element-note-navigation-item"]'));
+		expect(at.frame.querySelector('[data-slot="element-note-navigation-item"]')?.textContent).toContain("#needle");
+		expect(at.frame.querySelector('[data-slot="note-popover-heading"]')?.textContent).toBe("#needle");
+		expect(at.pickFrame).toBeNull();
+	});
+});
 
 describe("Pick on a page, once its layer is up", () => {
 	const armedAtStart = [
@@ -205,6 +408,7 @@ describe("Pick on a page, once its layer is up", () => {
 		expect(at.pickFrame).toBeNull();
 		expect(at.hint).toBe(true);
 		expect(at.wholePageOff).toBe(true);
+		expect(at.frame.querySelector('[data-slot="note-popover"]')).toBeNull();
 	});
 
 	test("is picked up and put down by Pick on a page over the limit, the pick frame with it", async () => {

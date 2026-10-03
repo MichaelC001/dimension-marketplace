@@ -380,37 +380,6 @@
 	background: var(--fr-text);
 }
 
-/* The annotation sheet under a document (`Column` in pane-shared.tsx, placement "bottom"). The kit's panel fills the box
-   it is put in (flex 1 1 0, a list of the same): in a side column that box is a fixed width and the full height. Under
-   the document nothing gives it a height, so the sheet gives itself one that does not depend on how many notes are in
-   it. The panel is a head, a body and a foot; the body (the empty hint, or the list of notes) is always
-   `--vw-sheet-body` tall and the rows scroll inside it, so what is above the sheet (the picture, the page, the media
-   stage) keeps its height as notes come and go. Sized by what it held, the sheet grew a row's height with each note:
-   78 px of audio stage per note and about 15 px of picture for the first (measured in the live pane). 136 px holds the
-   empty hint in the narrowest column (its title and four lines, about 130 px) and one saved note with the next showing
-   at the edge, so the list is seen to scroll. A pane too short for all of it takes the room from the body, the same
-   whatever the body holds. `border-box`, so the basis is the body's outer height in both states (the hint and the list
-   carry different padding). These rules are unlayered like the kit's, and more specific, so they win; a Tailwind
-   utility on the aside would not, because utilities sit in a layer. The sheet is a band across the foot of the pane, so
-   its edge is a rule above it, not the side column's rule beside it. */
-[data-slot="annotate-panel"][data-placement="bottom"] {
-	--vw-sheet-body: 136px;
-}
-[data-slot="annotate-panel"][data-placement="bottom"] .dam-panel {
-	flex: 0 1 auto;
-	border-inline-start: 0;
-	border-block-start: 1px solid var(--fr-border);
-}
-[data-slot="annotate-panel"][data-placement="bottom"] .dam-list {
-	flex: 0 1 var(--vw-sheet-body);
-	box-sizing: border-box;
-}
-[data-slot="annotate-panel"][data-placement="bottom"] .dam-empty {
-	flex: 0 1 var(--vw-sheet-body);
-	box-sizing: border-box;
-	min-block-size: 0;
-	overflow-y: auto;
-}
 
 /* The transport steps in from an edge the host has something floating over (the companion orb parked in a corner),
    as the annotation footer does: its own 12 px, or the lent inset and a little air, whichever is more. Every control
