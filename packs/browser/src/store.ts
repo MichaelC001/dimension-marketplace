@@ -98,6 +98,16 @@ export class ProfileStore {
 		return existsSync(this.profileDir(slug));
 	}
 
+	/** Reserve a new profile's canonical directory atomically. An existing directory is never treated as ours. */
+	claimNewProfile(slug: string): boolean {
+		try {
+			mkdirSync(this.profileDir(slug), { mode: 0o700 });
+			return true;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+			throw error;
+		}
+	}
 	ensureProfile(slug: string): string {
 		const dir = this.profileDir(slug);
 		mkdirSync(dir, { recursive: true, mode: 0o700 });

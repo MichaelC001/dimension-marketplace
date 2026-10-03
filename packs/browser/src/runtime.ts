@@ -378,6 +378,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	private readonly openers = new Map<string, BrowserOpener>();
 	/** Session-local decisions only: the host supplies no authenticated stable Loop identity. */
 	private readonly profilePermissions = new Map<string, Map<string, { status: "pending" | "granted"; expiresAt: number }>>();
+	private readonly profileEpoch = new Map<string, number>();
 	/** The last passive observation per profile and site, so a page that reloads does not rewrite the same fact. */
 	private readonly lastNoted = new Map<string, { key: string; at: number }>();
 	private readonly connectionListeners = new Set<() => void>();
@@ -457,12 +458,8 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		const profile = named ?? (engine === "chrome-relay" && !attachedElsewhere ? RELAY_PROFILE : null);
 		if (code !== undefined && profile !== null && profile !== RELAY_PROFILE) fail("code_profile_refused", "browser_run cannot use a saved profile; use ordinary browser tools after the person approves access.");
 		if (profile !== null && profile !== RELAY_PROFILE && opener.caller !== "app") {
-			// A new slug belongs to the chat that creates it; existing profiles require explicit human approval.
-			if (!this.store.exists(profile) && opener.session !== undefined) {
-				const permissions = this.profilePermissions.get(opener.session) ?? new Map<string, { status: "pending" | "granted"; expiresAt: number }>();
-				permissions.set(profile, { status: "granted", expiresAt: Number.POSITIVE_INFINITY });
-				this.profilePermissions.set(opener.session, permissions);
-			} else this.requireProfileName(profile, opener.session);
+			if (opener.caller !== "model" || opener.session === undefined) fail("profile_consent_required", "Saved profiles require an authenticated host-stamped model session and human approval.");
+			if (this.store.exists(profile)) this.requireProfileName(profile, opener.session);
 		}
 
 		// The relay is ONE already-running Chrome with ONE cookie jar, chosen by
@@ -504,8 +501,10 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			if (await this.leaveForRoom(options.leaving, opener)) continue;
 			await this.makeRoom(opener.session);
 		}
-
 		assertEngineAvailable(engine);
+		const createdForChat = profile !== null && profile !== RELAY_PROFILE && opener.caller === "model" && this.store.claimNewProfile(profile);
+		if (profile !== null && profile !== RELAY_PROFILE && opener.caller === "model" && !createdForChat) this.requireProfileName(profile, opener.session);
+
 		// A throwaway browser has no name to guard; its slot only counts against the bound. `:` is not a slug character.
 		const slot = profile ?? `ephemeral:${randomBytes(8).toString("hex")}`;
 		const started = this.launch(profile, engine, viewport, opener, code, attach).finally(() => {
@@ -514,7 +513,14 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		});
 		this.opening.set(slot, started);
 		this.openers.set(slot, opener);
+		// Grant a newly created profile only to the chat whose launch actually succeeded.
+		// Never grant merely because its folder did not exist before an asynchronous launch.
 		const entry = await started;
+		if (createdForChat && profile !== null && opener.session !== undefined) {
+			const permissions = this.profilePermissions.get(opener.session) ?? new Map<string, { status: "pending" | "granted"; expiresAt: number }>();
+			permissions.set(profile, { status: "granted", expiresAt: Number.POSITIVE_INFINITY });
+			this.profilePermissions.set(opener.session, permissions);
+		}
 		const state = this.redact(entry, await this.buildState(entry));
 		const { notice } = entry;
 		delete entry.notice;
@@ -1232,6 +1238,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		const entry = this.byId.get(browserId);
 		if (entry === undefined || entry.closed) fail("unknown_browser", "browser is not open");
 		if (caller === "app") return;
+		if (caller !== "model" || session === undefined) fail("profile_consent_required", "A host-stamped model session is required for browser access.");
 		if (entry.profile !== null && entry.profile !== RELAY_PROFILE) this.requireProfileName(entry.profile, session);
 	}
 
@@ -1252,7 +1259,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		});
 	}
 
-	decideProfileConsent(name: string, decision: "allow" | "deny" | "revoke", caller?: ToolCaller, session?: string): void {
+	async decideProfileConsent(name: string, decision: "allow" | "deny" | "revoke", caller?: ToolCaller, session?: string): Promise<void> {
 		if (caller !== "app" || session === undefined) fail("human_only", "Only the person in the Browser View can decide profile access.");
 		const profile = this.resolveProfile(name, "chromium");
 		const permissions = this.profilePermissions.get(session);
@@ -1266,6 +1273,9 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		} else {
 			if (current?.status !== "granted") fail("consent_missing", "There is no grant to revoke.");
 			permissions!.delete(profile);
+			this.profileEpoch.set(profile, (this.profileEpoch.get(profile) ?? 0) + 1);
+			const entry = this.byProfile.get(profile);
+			if (entry?.worker) await this.stopTask(entry);
 		}
 	}
 
@@ -1705,6 +1715,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	 */
 	async actMany(browserId: string, steps: readonly BatchStep[], caller?: ToolCaller): Promise<ActManyResult> {
 		const entry = this.require(browserId);
+		const consentEpoch = entry.profile === null ? 0 : this.profileEpoch.get(entry.profile) ?? 0;
 		if (!Array.isArray(steps) || steps.length < 1 || steps.length > MAX_BATCH_STEPS) fail("bad_action", `actions must be 1-${MAX_BATCH_STEPS} steps`);
 		return await this.serialize(entry, async () => {
 			admitCaller(entry, caller);
@@ -1717,6 +1728,10 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			let valueChars = MAX_EVAL_RESULT_CHARS;
 			let stopped: StepDone | undefined;
 			for (const [index, step] of plan.entries()) {
+				if (caller !== "app" && entry.profile !== null && (this.profileEpoch.get(entry.profile) ?? 0) !== consentEpoch) {
+					stopped = { status: "failed", error: "Profile access was revoked; no further steps were sent." };
+					break;
+				}
 				// The person took over between two steps: the steps not yet sent are not sent.
 				if (index > 0 && caller !== "app" && entry.takenOver) {
 					stopped = { status: "failed", error: TAKEN_OVER_MESSAGES.steps };
@@ -2243,10 +2258,12 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		work: (entry: Entry) => Promise<T>,
 		options: { evenIfClosed?: boolean } = {},
 	): Promise<T> {
+		const consentEpoch = entry.profile === null ? 0 : this.profileEpoch.get(entry.profile) ?? 0;
 		entry.pending += 1;
 		const run = async (): Promise<T> => {
 			try {
 				if (entry.closed && !options.evenIfClosed) this.refuseGone(entry.browserId);
+				if (entry.profile !== null && (this.profileEpoch.get(entry.profile) ?? 0) !== consentEpoch) fail("profile_consent_revoked", "Profile access was revoked while this browser call waited.");
 				return await work(entry);
 			} finally {
 				entry.pending -= 1;

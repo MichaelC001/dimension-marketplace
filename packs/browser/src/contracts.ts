@@ -514,7 +514,7 @@ export interface BrowserRuntimePort {
   /** Pending requests and active grants for the View's host-stamped chat. */
   profileConsents(session?: string): ProfileConsent[];
   /** Human-only decision; the requested profile and session must match a pending request. */
-  decideProfileConsent(name: string, decision: "allow" | "deny" | "revoke", caller?: ToolCaller, session?: string): void;
+  decideProfileConsent(name: string, decision: "allow" | "deny" | "revoke", caller?: ToolCaller, session?: string): Promise<void>;
   /** The browsers this chat holds that are not saved profiles (Private ones, the person's own Chrome), for the View's menu; never another chat's. */
   openBrowsers(asker?: string): Promise<OpenBrowserListing[]>;
   /** The label, colour and avatar of every saved profile that has any observation, for the connection report. */

@@ -90,7 +90,7 @@ const SPACES_META_KEY = "ai.insodimension/spaces";
 /** Publishing and task agents are Traction's: every tool a session is shown costs it tokens on every turn, and a dev session never calls these. */
 const TRACTION_ONLY = { [SPACES_META_KEY]: ["traction"] };
 
-/** Which tools the MODEL is shown for browsing: `code` is `browser_run` (the step tools stay registered for the View), `steps` is the six step tools, `both` is every one. Read once, at start. */
+/** `code` and `both` offer browser_run; ordinary tools remain visible for consented saved profiles, since full-Node cells cannot drive them. */
 export type ModelToolsMode = "code" | "steps" | "both";
 const MODEL_TOOLS_ENV = "DIMENSION_BROWSER_MODEL_TOOLS";
 /** The spaces the pack is lent to: plugin.json `modelSpaces`, read from the manifest itself (the bundle carries it) so a space the manifest gains is offered a way to drive a page without a second edit. */
@@ -117,12 +117,6 @@ function resolveModelTools(raw: string | undefined, hasCodeHost: boolean): Model
   return asked;
 }
 
-/** `_meta` of the six step tools: in `code` mode the model of every space that is offered `browser_run` no longer sees them (the View, which no space gates, still calls them). */
-function stepToolMeta(mode: ModelToolsMode): Record<string, unknown> | undefined {
-  if (mode !== "code") return undefined;
-  const spaces = MODEL_SPACES.filter(space => !CODE_TOOL_SPACES.includes(space));
-  return spaces.length === 0 ? APP_ONLY : { [SPACES_META_KEY]: spaces };
-}
 /** The session a call belongs to, stamped by the host from the lane the call arrived on. */
 const SESSION_META_KEY = "ai.insodimension/session";
 type CallExtra = { _meta?: Record<string, unknown> };
@@ -288,10 +282,8 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
   const server = new McpServer({ name: "dimension-community-browser", version: "0.1.0" });
   // jev's key is read once, as the server is created. This value decides which tools exist and what their descriptions say.
   const jev = options.taskTools ?? taskToolsOffered();
-  // A real runtime brings its own code host: `browser_run` is on by default (the model's one way of driving a page, doc 77 §7.5a). A runtime that is not the pack's (a test's fake) has no browsers to run code on.
-  // A setting that only concerns code and is wrong (DIMENSION_BROWSER_CODE_ISOLATION=process, a non-numeric DIMENSION_BROWSER_CODE_HEAP_MB) turns `browser_run` off and says why on stderr; it never stops the server: every
-  // step tool and the View are unrelated to it, and a server that will not start takes them all down for one line of configuration. With no code host the model keeps the step tools (a registered `browser_run` that only
-  // ever answers with the configuration error would cost the model its description and give it nothing, and in `code` mode it would also have hidden the step tools).
+  // browser_run is available where the code host supports it, but saved profiles use only the ordinary tools.
+  // An invalid code-host setting turns off browser_run without disabling ordinary browser tools.
   let codeHost = options.codeHost;
   let ownHost: CodeHost | undefined;
   let codeHostOff = false;
@@ -305,7 +297,7 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
   }
   const requestedTools = resolveModelTools(options.modelTools ?? process.env[MODEL_TOOLS_ENV], codeHost !== undefined || codeHostOff);
   const modelTools: ModelToolsMode = codeHostOff ? "steps" : requestedTools;
-  const stepMeta = stepToolMeta(modelTools);
+  const stepMeta = undefined; // Saved-profile operations must remain callable in code/build spaces.
   const live = new LiveChannel(runtime);
   const viewDir = options.viewDir ?? fileURLToPath(new URL("./dist/", import.meta.url));
   // A missing built View is a startup error, not an installed pack that opens blank.
@@ -645,7 +637,7 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     inputSchema: { name: profile, decision: z.enum(["allow", "deny", "revoke"]) },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }, _meta: APP_ONLY,
   }, ({ name, decision }, extra) => result(async () => {
-    runtime.decideProfileConsent(name, decision, callerOf(extra), sessionOf(extra));
+    await runtime.decideProfileConsent(name, decision, callerOf(extra), sessionOf(extra));
     return { consents: runtime.profileConsents(sessionOf(extra)) };
   }));
   // The View's Add profile. App-only: an agent that wants a profile of its own names a new short lowercase one in browser_open.
