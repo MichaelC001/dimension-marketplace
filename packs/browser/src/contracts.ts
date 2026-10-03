@@ -440,7 +440,7 @@ export interface BrowserRuntimePort {
    * for anyone else it is refused (`profile_held`), naming whose it is.
    */
   open(options: BrowserOpenOptions, opener?: BrowserOpener): Promise<BrowserState>;
-  state(browserId: string): Promise<BrowserState>;
+  state(browserId: string, guard?: () => void): Promise<BrowserState>;
   /** A fresh PNG capture of the active tab, retained for `annotate`. */
   frame(browserId: string): Promise<BrowserFrame>;
   /**
@@ -466,16 +466,16 @@ export interface BrowserRuntimePort {
   input(browserId: string, events: unknown): Promise<void>;
   tab(browserId: string, request: TabRequest, caller?: ToolCaller): Promise<BrowserState>;
   resize(browserId: string, viewport: Viewport, scale?: number): Promise<BrowserState>;
-  snapshot(browserId: string): Promise<{ state: BrowserState; text: string }>;
+  snapshot(browserId: string, guard?: () => void): Promise<{ state: BrowserState; text: string }>;
   /** Refused (`publish_pending`) while a publish awaits confirmation, unless `caller` is "app". */
-  act(browserId: string, action: BrowserAction, caller?: ToolCaller): Promise<ActionResult>;
+  act(browserId: string, action: BrowserAction, caller?: ToolCaller, guard?: () => void): Promise<ActionResult>;
   /**
    * 1..MAX_BATCH_STEPS steps under ONE lock: refused once (`task_running`, `publish_pending`, as `act`), every step
    * validated before the first runs (`bad_action`/`bad_wait`), then run in order until one is not `completed`.
    */
-  actMany(browserId: string, steps: readonly BatchStep[], caller?: ToolCaller): Promise<ActManyResult>;
+  actMany(browserId: string, steps: readonly BatchStep[], caller?: ToolCaller, guard?: () => void): Promise<ActManyResult>;
   /** A picture for a model: webp, at most 1024 CSS px on its longest edge, never retained (so never annotatable). Read like `snapshot`. */
-  shot(browserId: string, request?: ShotRequest): Promise<ModelShot>;
+  shot(browserId: string, request?: ShotRequest, guard?: () => void): Promise<ModelShot>;
   /** The active tab's log entries since the last call (which marks them read); `[]` when nothing is new. For a model's reads, never the View's. */
   logs(browserId: string): Promise<LogEntry[]>;
   /**
@@ -492,7 +492,7 @@ export interface BrowserRuntimePort {
   /** Serialized and refused (`task_running`, `publish_pending`) like `act`; nothing is changed on the page. `timeout` is a result, not an error. */
   wait(browserId: string, request: WaitRequest, caller?: ToolCaller): Promise<WaitResult>;
   /** Read-only: a fixed page script measures the first match of `selector` (`@<ref> ` prefix reaches an iframe). Nothing the caller wrote runs in the page. */
-  inspect(browserId: string, selector: string): Promise<InspectResult>;
+  inspect(browserId: string, selector: string, guard?: () => void): Promise<InspectResult>;
   runTask(browserId: string, request: TaskRequest, onStep?: (step: TaskStep, run: TaskRun) => void): Promise<TaskRun>;
   cancelTask(browserId: string): Promise<TaskRun>;
   /**
@@ -545,7 +545,7 @@ export interface BrowserRuntimePort {
   /** Settles a pending publish first. Refused (`publish_pending`) while one awaits confirmation, unless `caller` is "app". */
   close(browserId: string, caller?: ToolCaller): Promise<void>;
   waitTask(browserId: string, ms: number): Promise<TaskRun>;
-  startTask(browserId: string, request: TaskRequest, caller?: ToolCaller): Promise<TaskRun>;
+  startTask(browserId: string, request: TaskRequest, caller?: ToolCaller, session?: string, guard?: () => void): Promise<TaskRun>;
   /** `check`: signed in? `post`: fill, verify and park for a confirm. Never submits. `preset` labels the record with the preset the recipe was resolved from. */
   publish(browserId: string, recipe: PublishRecipe, mode: PublishMode, caller?: ToolCaller, preset?: PresetRef): Promise<PublishCheck | PublishRecord>;
   /**

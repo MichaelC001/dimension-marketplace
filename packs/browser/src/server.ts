@@ -354,7 +354,7 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
       fail("publish_pending", "a post awaits confirmation on this browser; post or cancel it before opening a page in it");
     }
     runtime.requireProfileAccess(state.browserId, opener.caller, opener.session);
-    const navigated = await runtime.act(state.browserId, action, opener.caller);
+    const navigated = await runtime.act(state.browserId, action, opener.caller, () => runtime.requireProfileAccess(state.browserId, opener.caller, opener.session));
     if (navigated.status !== "completed") throw new Error(`Opened, but navigating to ${url} ${navigated.status}: ${navigated.error}`);
     return navigated.state;
   };
@@ -398,13 +398,13 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     const caller = callerOf(extra);
     const id = browserId ?? held(extra);
     access(extra, id);
-    const state = stateFor(caller, await runtime.state(id));
-    // The View reads state as it draws: that is the human's browser. The log is the model's, and reading it marks it read.
+    const state = stateFor(caller, await runtime.state(id, () => access(extra, id)));
     if (caller === "app") {
       showing(extra, id);
       return state;
     }
     const logs = await runtime.logs(id);
+    access(extra, id);
     return logs.length === 0 ? state : { ...state, logs };
   }));
   server.registerTool("browser_snapshot", {
@@ -414,7 +414,8 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
   // The text opens with the page's own `# title` and url lines, so the state is not repeated.
   }, ({ browserId }, extra) => respond(extra, async () => {
     access(extra, browserId);
-    const snapshot = await runtime.snapshot(browserId);
+    const snapshot = await runtime.snapshot(browserId, () => access(extra, browserId));
+    access(extra, browserId);
     return { text: snapshot.text, structured: snapshot };
   }));
   server.registerTool("browser_inspect", {
@@ -423,7 +424,8 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     _meta: stepMeta,
   }, ({ browserId, selector }, extra) => respond(extra, async () => {
     access(extra, browserId);
-    const inspection = await runtime.inspect(browserId, selector);
+    const inspection = await runtime.inspect(browserId, selector, () => access(extra, browserId));
+    access(extra, browserId);
     return { text: JSON.stringify(inspection), structured: inspection };
   }));
   server.registerTool("browser_read", {
@@ -438,7 +440,8 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
   }, async ({ browserId, fullPage, selector, scale }, extra) => {
     try {
       access(extra, browserId);
-      const shot = await runtime.shot(browserId, { ...(fullPage ? { fullPage } : {}), ...(selector === undefined ? {} : { selector }), ...(scale === undefined ? {} : { scale }) });
+      const shot = await runtime.shot(browserId, { ...(fullPage ? { fullPage } : {}), ...(selector === undefined ? {} : { selector }), ...(scale === undefined ? {} : { scale }) }, () => access(extra, browserId));
+      access(extra, browserId);
       return { content: [{ type: "image" as const, mimeType: shot.mimeType, data: shot.data }, { type: "text" as const, text: JSON.stringify({ url: shot.url, width: shot.width, height: shot.height, scale: shot.scale }) }] };
     } catch (error) { return failure(error); }
   });
@@ -450,7 +453,7 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
   }, async ({ browserId, actions }, extra) => {
     const answer = await respond(extra, async () => {
       access(extra, browserId);
-      const outcome = await runtime.actMany(browserId, actions, callerOf(extra));
+      const outcome = await runtime.actMany(browserId, actions, callerOf(extra), () => access(extra, browserId));
       return { text: actText(outcome), structured: outcome, isError: outcome.status === "failed" || outcome.status === "unknown" };
     });
     return { ...answer, _meta: await previewResult(runtime, browserId, sessionOf(extra)) };
@@ -472,20 +475,24 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
         }
         runtime.requireSavedProfileAccess(operation.browserId, callerOf(extra), sessionOf(extra));
         if (operation.kind === "state") {
-          const state = await runtime.state(operation.browserId);
+          const state = await runtime.state(operation.browserId, () => runtime.requireSavedProfileAccess(operation.browserId, "model", sessionOf(extra)));
           const logs = await runtime.logs(operation.browserId);
+          runtime.requireSavedProfileAccess(operation.browserId, "model", sessionOf(extra));
           return { content: [{ type: "text", text: JSON.stringify({ ...stateFor("model", state), ...(logs.length ? { logs } : {}) }) }] };
         }
         if (operation.kind === "snapshot") {
-          const snapshot = await runtime.snapshot(operation.browserId);
+          const snapshot = await runtime.snapshot(operation.browserId, () => runtime.requireSavedProfileAccess(operation.browserId, "model", sessionOf(extra)));
+          runtime.requireSavedProfileAccess(operation.browserId, "model", sessionOf(extra));
           return { content: [{ type: "text", text: snapshot.text }] };
         }
         if (operation.kind === "screenshot") {
-          const shot = await runtime.shot(operation.browserId, { ...(operation.fullPage ? { fullPage: true } : {}), ...(operation.selector === undefined ? {} : { selector: operation.selector }), ...(operation.scale === undefined ? {} : { scale: operation.scale }) });
+          const shot = await runtime.shot(operation.browserId, { ...(operation.fullPage ? { fullPage: true } : {}), ...(operation.selector === undefined ? {} : { selector: operation.selector }), ...(operation.scale === undefined ? {} : { scale: operation.scale }) }, () => runtime.requireSavedProfileAccess(operation.browserId, "model", sessionOf(extra)));
+          runtime.requireSavedProfileAccess(operation.browserId, "model", sessionOf(extra));
           return { content: [{ type: "image", mimeType: shot.mimeType, data: shot.data }, { type: "text", text: JSON.stringify({ url: shot.url, width: shot.width, height: shot.height, scale: shot.scale }) }] };
         }
         if (operation.kind === "inspect") {
-          const inspection = await runtime.inspect(operation.browserId, operation.selector);
+          const inspection = await runtime.inspect(operation.browserId, operation.selector, () => runtime.requireSavedProfileAccess(operation.browserId, "model", sessionOf(extra)));
+          runtime.requireSavedProfileAccess(operation.browserId, "model", sessionOf(extra));
           return { content: [{ type: "text", text: JSON.stringify(inspection) }] };
         }
         if (operation.kind === "close") {
@@ -494,7 +501,7 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
         }
         if (extra.signal.aborted) fail("cancelled", "Browser operation was cancelled before dispatch.");
         const actions = z.array(stepSchema).min(1).max(MAX_BATCH_STEPS).parse(operation.actions);
-        const outcome = await runtime.actMany(operation.browserId, actions, "model");
+        const outcome = await runtime.actMany(operation.browserId, actions, "model", () => runtime.requireSavedProfileAccess(operation.browserId, "model", sessionOf(extra)));
         return { ...(outcome.status === "failed" || outcome.status === "unknown" ? { isError: true } : {}), content: [{ type: "text", text: actText(outcome) }] };
       },
       meta: { [APPROVAL_META_KEY]: "exec", [SPACES_META_KEY]: CODE_TOOL_SPACES },
@@ -546,7 +553,7 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     }, async ({ browserId, task, maxSteps, credential, waitSeconds }, extra) => {
       const answer = await taskResult(async () => {
         access(extra, browserId);
-        await runtime.startTask(browserId, { task, ...(maxSteps ? { maxSteps } : {}), ...(credential ? { credential } : {}) }, callerOf(extra));
+        await runtime.startTask(browserId, { task, ...(maxSteps ? { maxSteps } : {}), ...(credential ? { credential } : {}) }, callerOf(extra), sessionOf(extra), () => access(extra, browserId));
         return await follow(browserId, waitSeconds, extra);
       });
       return { ...answer, _meta: answer.structuredContent && (answer.structuredContent as TaskRun).status === "running" ? previewMeta(runtime, browserId, sessionOf(extra)) : await previewResult(runtime, browserId, sessionOf(extra)) };

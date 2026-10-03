@@ -279,6 +279,8 @@ interface Entry {
 	task: TaskRun | null;
 	/** The live task worker, while one runs. */
 	worker: { process: RunningWorker; finished: Promise<TaskRun> } | null;
+	/** Host-stamped session that started the active task; never inferred from browser holder. */
+	taskSession?: string;
 	/** The current or most recent publish (publish.ts). */
 	publish: Publication | null;
 	/**
@@ -378,7 +380,6 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	private readonly openers = new Map<string, BrowserOpener>();
 	/** Session-local decisions only: the host supplies no authenticated stable Loop identity. */
 	private readonly profilePermissions = new Map<string, Map<string, { status: "pending" | "granted"; expiresAt: number }>>();
-	private readonly profileEpoch = new Map<string, number>();
 	/** The last passive observation per profile and site, so a page that reloads does not rewrite the same fact. */
 	private readonly lastNoted = new Map<string, { key: string; at: number }>();
 	private readonly connectionListeners = new Set<() => void>();
@@ -1011,8 +1012,8 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	// Read paths
 	// -----------------------------------------------------------------------
 
-	async state(browserId: string): Promise<BrowserState> {
-		return await this.serialize(this.require(browserId), async (entry) => this.redact(entry, await this.buildState(entry)));
+	async state(browserId: string, guard?: () => void): Promise<BrowserState> {
+		return await this.serialize(this.require(browserId), async (entry) => this.redact(entry, await this.buildState(entry)), { guard });
 	}
 
 	/** The live picture, for the View's direct channel (stream.ts): the driver's own cast, never queued behind page work. */
@@ -1120,7 +1121,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	}
 
 	/** A read like `snapshot`; the picture is for a model, so nothing of it is kept (`entry.frames` holds annotatable frames only). */
-	async shot(browserId: string, request: ShotRequest = {}): Promise<ModelShot> {
+	async shot(browserId: string, request: ShotRequest = {}, guard?: () => void): Promise<ModelShot> {
 		const scale = request.scale;
 		if (scale !== undefined && !(Number.isFinite(scale) && scale > 0 && scale <= 1)) fail("bad_shot", "scale must be above 0 and at most 1");
 		if (request.fullPage && request.selector !== undefined) fail("bad_shot", "pass fullPage or selector, not both");
@@ -1133,7 +1134,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				...(scale === undefined ? {} : { scale }),
 			});
 			return { ...picture, url: this.redact(entry, state.url) };
-		});
+		}, { guard });
 	}
 
 	async logs(browserId: string): Promise<LogEntry[]> {
@@ -1151,7 +1152,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		return entries.filter((log) => log.n > told).length;
 	}
 
-	async snapshot(browserId: string): Promise<{ state: BrowserState; text: string }> {
+	async snapshot(browserId: string, guard?: () => void): Promise<{ state: BrowserState; text: string }> {
 		return await this.serialize(this.require(browserId), async (entry) => {
 			// A page that swaps its document under the read gets one more try; a second swap is reported.
 			for (let attempt = 1; ; attempt += 1) {
@@ -1162,7 +1163,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				if (entry.revision === revision) return this.redact(entry, { state, text });
 				if (attempt === 2) fail("stale_snapshot", "The document changed during inspection.");
 			}
-		});
+		}, { guard });
 	}
 
 	/**
@@ -1280,9 +1281,8 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		} else {
 			if (current?.status !== "granted") fail("consent_missing", "There is no grant to revoke.");
 			permissions!.delete(profile);
-			this.profileEpoch.set(profile, (this.profileEpoch.get(profile) ?? 0) + 1);
 			const entry = this.byProfile.get(profile);
-			if (entry?.worker) await this.stopTask(entry);
+			if (entry?.worker && entry.taskSession === session) await this.stopTask(entry);
 		}
 	}
 
@@ -1697,7 +1697,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	// Actions
 	// -----------------------------------------------------------------------
 
-	async act(browserId: string, input: BrowserAction, caller?: ToolCaller): Promise<ActionResult> {
+	async act(browserId: string, input: BrowserAction, caller?: ToolCaller, guard?: () => void): Promise<ActionResult> {
 		const entry = this.require(browserId);
 		return await this.serialize(entry, async () => {
 			admitCaller(entry, caller);
@@ -1711,7 +1711,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				...(done.credential ? { credential: done.credential } : {}),
 				...(done.dialogs ? { dialogs: done.dialogs } : {}),
 			});
-		});
+		}, { guard });
 	}
 
 	/**
@@ -1720,9 +1720,8 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	 * page; steps run in order until one is not `completed` or the time budget is spent (a host times a call out, and a
 	 * caller that never heard back would send the same submit again). The state is read once, at the end.
 	 */
-	async actMany(browserId: string, steps: readonly BatchStep[], caller?: ToolCaller): Promise<ActManyResult> {
+	async actMany(browserId: string, steps: readonly BatchStep[], caller?: ToolCaller, guard?: () => void): Promise<ActManyResult> {
 		const entry = this.require(browserId);
-		const consentEpoch = entry.profile === null ? 0 : this.profileEpoch.get(entry.profile) ?? 0;
 		if (!Array.isArray(steps) || steps.length < 1 || steps.length > MAX_BATCH_STEPS) fail("bad_action", `actions must be 1-${MAX_BATCH_STEPS} steps`);
 		return await this.serialize(entry, async () => {
 			admitCaller(entry, caller);
@@ -1735,10 +1734,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			let valueChars = MAX_EVAL_RESULT_CHARS;
 			let stopped: StepDone | undefined;
 			for (const [index, step] of plan.entries()) {
-				if (caller !== "app" && entry.profile !== null && (this.profileEpoch.get(entry.profile) ?? 0) !== consentEpoch) {
-					stopped = { status: "failed", error: "Profile access was revoked; no further steps were sent." };
-					break;
-				}
+				guard?.();
 				// The person took over between two steps: the steps not yet sent are not sent.
 				if (index > 0 && caller !== "app" && entry.takenOver) {
 					stopped = { status: "failed", error: TAKEN_OVER_MESSAGES.steps };
@@ -1776,7 +1772,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				...(dialogs.length === 0 ? {} : { dialogs: dialogs.slice(-MAX_BATCH_DIALOGS) }),
 				...(newErrors === 0 ? {} : { newErrors }),
 			});
-		});
+		}, { guard });
 	}
 
 	private runStep(entry: Entry, step: PlannedStep, caller: ToolCaller | undefined, valueChars: number): Promise<StepDone> {
@@ -1924,10 +1920,10 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	}
 
 	/** A read like `snapshot`: the page is not touched, and no task or publish stops it. */
-	async inspect(browserId: string, selector: string): Promise<InspectResult> {
+	async inspect(browserId: string, selector: string, guard?: () => void): Promise<InspectResult> {
 		const entry = this.require(browserId);
 		const css = requireReadSelector(selector);
-		return await this.serialize(entry, async () => this.redact(entry, (await entry.driver.inspect(css)) ?? { found: false as const }));
+		return await this.serialize(entry, async () => this.redact(entry, (await entry.driver.inspect(css)) ?? { found: false as const }), { guard });
 	}
 
 	// -----------------------------------------------------------------------
@@ -1945,9 +1941,9 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	}
 
 	/** Start a task and return as soon as it runs; follow it with `waitTask`. */
-	async startTask(browserId: string, request: TaskRequest, caller?: ToolCaller): Promise<TaskRun> {
+	async startTask(browserId: string, request: TaskRequest, caller?: ToolCaller, session?: string, guard?: () => void): Promise<TaskRun> {
 		const entry = this.require(browserId);
-		const { run } = await this.beginTask(browserId, request, undefined, caller);
+		const { run } = await this.beginTask(browserId, request, undefined, caller, session, guard);
 		return this.redact(entry, cloneTask(run));
 	}
 
@@ -1956,6 +1952,8 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		request: TaskRequest,
 		onStep?: (step: TaskStep, run: TaskRun) => void,
 		caller?: ToolCaller,
+		session?: string,
+		guard?: () => void,
 	): Promise<{ run: TaskRun; finished: Promise<TaskRun> }> {
 		const entry = this.require(browserId);
 		// The task agent takes a browser-level CDP endpoint and acts on the whole
@@ -1982,6 +1980,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			}
 			// `control` refuses the wheel while the page is read, so this holds; it is the last look before a worker is spawned on the page.
 			refuseWhileTakenOver(entry, caller);
+			guard?.();
 			// Resolved (and, for a sign-up, minted) only once the task will run.
 			const credential = request.credential ? resolveCredential(this.store.profileDir(this.savedProfile(entry, "a task credential")), request.credential, this.credentialKey) : undefined;
 			if (credential) entry.secrets.add(credential.password);
@@ -2003,6 +2002,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 					if (onStep) onStep(this.redact(entry, record), this.redact(entry, cloneTask(run)));
 				},
 			);
+			entry.taskSession = caller === "model" ? session : undefined;
 			const finished = worker.done.then((result) => {
 				Object.assign(run, {
 					status: result.status,
@@ -2014,6 +2014,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				// The agent navigated this Chrome: whatever frame was retained is stale.
 				entry.revision += 1;
 				entry.worker = null;
+				entry.taskSession = undefined;
 				entry.lastUsed = performance.now();
 				return run;
 			});
@@ -2023,7 +2024,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			// Returned wrapped so the serializer is released now: the task runs
 			// outside the page queue, and frames keep flowing while it works.
 			return { run, finished };
-		});
+		}, { guard });
 	}
 
 	/**
@@ -2263,14 +2264,13 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	private serialize<T>(
 		entry: Entry,
 		work: (entry: Entry) => Promise<T>,
-		options: { evenIfClosed?: boolean } = {},
+		options: { evenIfClosed?: boolean; guard?: () => void } = {},
 	): Promise<T> {
-		const consentEpoch = entry.profile === null ? 0 : this.profileEpoch.get(entry.profile) ?? 0;
 		entry.pending += 1;
 		const run = async (): Promise<T> => {
 			try {
 				if (entry.closed && !options.evenIfClosed) this.refuseGone(entry.browserId);
-				if (entry.profile !== null && (this.profileEpoch.get(entry.profile) ?? 0) !== consentEpoch) fail("profile_consent_revoked", "Profile access was revoked while this browser call waited.");
+				options.guard?.();
 				return await work(entry);
 			} finally {
 				entry.pending -= 1;
