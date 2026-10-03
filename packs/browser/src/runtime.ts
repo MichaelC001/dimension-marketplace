@@ -1237,9 +1237,9 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	requireProfileAccess(browserId: string, caller?: ToolCaller, session?: string): void {
 		const entry = this.byId.get(browserId);
 		if (entry === undefined || entry.closed) fail("unknown_browser", "browser is not open");
-		if (caller === "app") return;
-		if (caller !== "model" || session === undefined) fail("profile_consent_required", "A host-stamped model session is required for browser access.");
-		if (entry.profile !== null && entry.profile !== RELAY_PROFILE) this.requireProfileName(entry.profile, session);
+		if (caller === "app" || entry.profile === null || entry.profile === RELAY_PROFILE) return;
+		if (caller !== "model" || session === undefined) fail("profile_consent_required", "A host-stamped model session is required for saved-profile access.");
+		this.requireProfileName(entry.profile, session);
 	}
 
 	requireSavedProfileAccess(browserId: string, caller?: ToolCaller, session?: string): void {

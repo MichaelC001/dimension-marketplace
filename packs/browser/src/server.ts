@@ -353,6 +353,7 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     if (opener.caller === "app" && state.publish?.status === "awaiting-confirmation") {
       fail("publish_pending", "a post awaits confirmation on this browser; post or cancel it before opening a page in it");
     }
+    runtime.requireProfileAccess(state.browserId, opener.caller, opener.session);
     const navigated = await runtime.act(state.browserId, action, opener.caller);
     if (navigated.status !== "completed") throw new Error(`Opened, but navigating to ${url} ${navigated.status}: ${navigated.error}`);
     return navigated.state;
