@@ -176,7 +176,7 @@ export interface CodeHostPort {
    */
   run(session: string, o: { code: string; timeoutMs: number; waitMs: number; signal: AbortSignal; onProgress?: (chunk: string) => void; onBrowserActivity?: (browserId: string) => void }): Promise<RunStarted>;
   /** Waits up to `waitMs` for the run to finish; `waitMs` 0 only looks. A finished run stays readable for 10 minutes. An unknown or expired `runId` rejects with an Error whose message says so. */
-  resume(session: string, runId: string, waitMs: number, signal: AbortSignal): Promise<RunStarted>;
+  resume(session: string, runId: string, waitMs: number, signal: AbortSignal, onBrowserActivity?: (browserId: string) => void): Promise<RunStarted>;
   dispose(): Promise<void>;
 }
 export type RunStarted =

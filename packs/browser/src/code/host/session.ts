@@ -93,7 +93,8 @@ class Run {
   /** The process's memory when the cell began, for a runtime that cannot say a worker's own (see `WorkerMemory.own`); growth is only ever measured against a figure of the same `basis`. */
   memoryBase: { mb: number; basis: WorkerMemory["basis"] } | undefined;
   worker: LiveWorker | undefined;
-  constructor(readonly code: string, readonly timeoutMs: number, readonly onProgress: ((chunk: string) => void) | undefined, readonly onBrowserActivity: ((browserId: string) => void) | undefined) {
+  readonly activityListeners = new Set<(browserId: string) => void>();
+  constructor(readonly code: string, readonly timeoutMs: number, readonly onProgress: ((chunk: string) => void) | undefined) {
     this.done.promise.catch(() => undefined);
   }
 }
@@ -236,7 +237,7 @@ export class CodeSession {
     this.#assertOpen();
     if (o.signal.aborted) throw new ToolAbortError();
     if (this.#active !== undefined) throw new Error(busyMessage(this.#active.id));
-    const run = new Run(o.code, o.timeoutMs, o.onProgress, o.onBrowserActivity);
+    const run = new Run(o.code, o.timeoutMs, o.onProgress);
     // Reserved before the first await: a second call arriving while the worker starts is `busy`, not a second cell.
     this.#active = run;
     clearTimeout(this.#idleTimer);
@@ -259,26 +260,31 @@ export class CodeSession {
       this.#afterRun();
       throw error;
     }
-    return await this.#wait(run, o.waitMs, o.signal);
+    return await this.#wait(run, o.waitMs, o.signal, o.onBrowserActivity);
   }
 
-  async resume(runId: string, waitMs: number, signal: AbortSignal): Promise<RunStarted> {
+  async resume(runId: string, waitMs: number, signal: AbortSignal, onBrowserActivity?: (browserId: string) => void): Promise<RunStarted> {
     this.#assertOpen();
     this.#prune();
     const run = this.#active?.id === runId ? this.#active : this.#finished.get(runId);
-    if (run === undefined) {
-      throw new Error(unknownRunMessage(runId, this.#d.timing.finishedTtlMs));
+    if (run === undefined) throw new Error(unknownRunMessage(runId, this.#d.timing.finishedTtlMs));
+    return await this.#wait(run, waitMs, signal, onBrowserActivity);
+  }
+
+  async #wait(run: Run, waitMs: number, signal: AbortSignal, onBrowserActivity?: (browserId: string) => void): Promise<RunStarted> {
+    if (onBrowserActivity) {
+      run.activityListeners.add(onBrowserActivity);
+      if (run.previewBrowserId) onBrowserActivity(run.previewBrowserId);
     }
-    return await this.#wait(run, waitMs, signal);
+    try {
+      const outcome = await settledWithin(run, waitMs, signal);
+      if (outcome === "timeout") return { state: "running", runId: run.id, outputSoFar: run.output, ...(run.previewBrowserId ? { previewBrowserId: run.previewBrowserId } : {}) };
+      if (outcome === "aborted") return await this.#cancel(run);
+      return { state: "done", result: "error" in outcome ? { error: outcome.error } : outcome.result, ...(run.previewBrowserId ? { previewBrowserId: run.previewBrowserId } : {}) };
+    } finally {
+      if (onBrowserActivity) run.activityListeners.delete(onBrowserActivity);
+    }
   }
-
-  async #wait(run: Run, waitMs: number, signal: AbortSignal): Promise<RunStarted> {
-    const outcome = await settledWithin(run, waitMs, signal);
-    if (outcome === "timeout") return { state: "running", runId: run.id, outputSoFar: run.output, ...(run.previewBrowserId ? { previewBrowserId: run.previewBrowserId } : {}) };
-    if (outcome === "aborted") return await this.#cancel(run);
-    return { state: "done", result: "error" in outcome ? { error: outcome.error } : outcome.result, ...(run.previewBrowserId ? { previewBrowserId: run.previewBrowserId } : {}) };
-  }
-
   /** The call that was waiting for this run was cancelled: the cell is told (its pending operations reject), and a worker that does not answer within the grace is terminated. */
   async #cancel(run: Run): Promise<RunStarted> {
     if (run.settled === undefined) {
@@ -532,7 +538,7 @@ export class CodeSession {
   #activity(run: Run, browserId: string): void {
     if (run.previewBrowserId === browserId || run.settled !== undefined) return;
     run.previewBrowserId = browserId;
-    run.onBrowserActivity?.(browserId);
+    for (const listener of run.activityListeners) listener(browserId);
   }
 
   async #request(request: BridgeRequest, run: Run): Promise<HostReply> {

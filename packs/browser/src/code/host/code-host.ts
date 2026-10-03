@@ -148,11 +148,11 @@ export class CodeHost implements CodeHostPort {
     return await this.#session(session).run(o);
   }
 
-  async resume(session: string, runId: string, waitMs: number, signal: AbortSignal): Promise<RunStarted> {
+  async resume(session: string, runId: string, waitMs: number, signal: AbortSignal, onBrowserActivity?: (browserId: string) => void): Promise<RunStarted> {
     if (this.#disposed) throw new Error("the browser code host is shut down");
     const held = this.#sessions.get(session);
     if (held === undefined) throw new Error(unknownRunMessage(runId, this.#timing.finishedTtlMs));
-    return await held.resume(runId, waitMs, signal);
+    return await held.resume(runId, waitMs, signal, onBrowserActivity);
   }
 
   /**

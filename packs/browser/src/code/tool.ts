@@ -22,7 +22,11 @@ const DEFAULT_CELL_SECONDS = 30;
 /** A harness with no host stamp is one anonymous session (doc 77 §7.4.3). */
 export const ANONYMOUS_SESSION = "anonymous";
 
-type CodeCallExtra = { signal: AbortSignal; _meta?: Record<string, unknown> };
+type CodeCallExtra = {
+  signal: AbortSignal;
+  _meta?: Record<string, unknown>;
+  sendNotification?: (notification: { method: "notifications/progress"; params: { progressToken: string | number; progress: number; _meta: Record<string, unknown> } }) => Promise<void>;
+};
 
 /** Where a result over the cap keeps its full text: the text in, the absolute path of the file out (undefined: it could not be written). */
 type SaveSpill = (text: string) => string | undefined;
@@ -122,14 +126,28 @@ export async function runCodeTool(deps: CodeToolDeps, args: BrowserRunArgs, extr
   const session = deps.sessionOf(extra) ?? ANONYMOUS_SESSION;
   // The session's own folder: one session's files are never pruned by another's spills.
   const save: SaveSpill = text => saveSpill(sessionFolder(deps.artifactsDir(), session), text);
+  let acceptingActivity = true;
   try {
     let activeBrowserId: string | undefined;
+    let activitySequence = 0;
+    const progressToken = extra._meta?.progressToken;
+    const onBrowserActivity = (browserId: string): void => {
+      activeBrowserId = browserId;
+      const sequence = ++activitySequence;
+      if ((typeof progressToken !== "string" && typeof progressToken !== "number") || !extra.sendNotification || !deps.preview) return;
+      void deps.preview(session, browserId, true).then(preview => {
+        if (sequence !== activitySequence || !acceptingActivity || preview === undefined || extra.signal.aborted) return;
+        return extra.sendNotification!({
+          method: "notifications/progress",
+          params: { progressToken, progress: 0, _meta: { "ai.insodimension/preview": preview } },
+        });
+      }).catch(() => undefined);
+    };
     const outcome = args.resume !== undefined
-      ? await deps.host.resume(session, args.resume, waitCapMs, extra.signal)
+      ? await deps.host.resume(session, args.resume, waitCapMs, extra.signal, onBrowserActivity)
       : await deps.host.run(session, {
           code: args.code!, timeoutMs: Math.min(300, Math.max(1, args.timeout ?? DEFAULT_CELL_SECONDS)) * 1000,
-          waitMs: waitCapMs, signal: extra.signal,
-          onBrowserActivity: browserId => { activeBrowserId = browserId; },
+          waitMs: waitCapMs, signal: extra.signal, onBrowserActivity,
         });
     const answer = started(outcome, save, waitCapMs);
     const browserId = outcome.previewBrowserId ?? activeBrowserId;
@@ -137,6 +155,8 @@ export async function runCodeTool(deps: CodeToolDeps, args: BrowserRunArgs, extr
     return preview ? { ...answer, _meta: { "ai.insodimension/preview": preview } } : answer;
   } catch (error) {
     return refused(error);
+  } finally {
+    acceptingActivity = false;
   }
 }
 
