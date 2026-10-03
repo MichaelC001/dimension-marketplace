@@ -343,6 +343,8 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     const session = sessionOf(extra);
     return { ...(caller === undefined ? {} : { caller }), ...(session === undefined ? {} : { session }), ...(tool === undefined ? {} : { tool }) };
   };
+  /** Browser ids never bypass the host session's saved-profile decision. */
+  const access = (extra: CallExtra, browserId: string): void => runtime.requireProfileAccess(browserId, callerOf(extra), sessionOf(extra));
   const openAt = async (profile: string | undefined, engine: BrowserEngine | undefined, url: string | undefined, opener: BrowserOpener, leaving?: string): Promise<BrowserState> => {
     // Validate before launching so malformed input cannot strand a browser/profile lock.
     const action = url === undefined ? undefined : navigateStep.parse({ kind: "navigate", url });
@@ -383,6 +385,7 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     if (browserId !== undefined && (profile !== undefined || engine !== undefined || url !== undefined)) {
       fail("bad_view", "profile, engine and url open a NEW browser; pass a browserId alone to show the one you hold");
     }
+    if (browserId !== undefined) access(extra, browserId);
     const state = browserId === undefined ? await openAt(profile, engine, url, openerOf(extra, "browser_view")) : await runtime.state(browserId);
     // The View is mounted on this browser now, for whoever is in this session.
     showing(extra, state.browserId);
@@ -395,6 +398,7 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
   }, ({ browserId }, extra) => result(async () => {
     const caller = callerOf(extra);
     const id = browserId ?? held(extra);
+    access(extra, id);
     const state = stateFor(caller, await runtime.state(id));
     // The View reads state as it draws: that is the human's browser. The log is the model's, and reading it marks it read.
     if (caller === "app") {
@@ -410,6 +414,7 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     _meta: stepMeta,
   // The text opens with the page's own `# title` and url lines, so the state is not repeated.
   }, ({ browserId }, extra) => respond(extra, async () => {
+    access(extra, browserId);
     const snapshot = await runtime.snapshot(browserId);
     return { text: snapshot.text, structured: snapshot };
   }));
@@ -418,6 +423,7 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     inputSchema: { browserId: capability, selector }, annotations: READ_ONLY,
     _meta: stepMeta,
   }, ({ browserId, selector }, extra) => respond(extra, async () => {
+    access(extra, browserId);
     const inspection = await runtime.inspect(browserId, selector);
     return { text: JSON.stringify(inspection), structured: inspection };
   }));
@@ -430,8 +436,9 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     description: "webp image of the active tab, at most 1024 px on its longest edge. fullPage: the whole document; selector: one element (plain CSS or @<ref>); scale 0-1 shrinks it more. The text gives the CSS size shown and scale: a point in the image is at x/scale on the page. Untrusted.",
     inputSchema: { browserId: capability, fullPage: z.boolean().optional(), selector: selector.optional(), scale: z.number().gt(0).max(1).optional() }, annotations: READ_ONLY,
     _meta: stepMeta,
-  }, async ({ browserId, fullPage, selector, scale }) => {
+  }, async ({ browserId, fullPage, selector, scale }, extra) => {
     try {
+      access(extra, browserId);
       const shot = await runtime.shot(browserId, { ...(fullPage ? { fullPage } : {}), ...(selector === undefined ? {} : { selector }), ...(scale === undefined ? {} : { scale }) });
       return { content: [{ type: "image" as const, mimeType: shot.mimeType, data: shot.data }, { type: "text" as const, text: JSON.stringify({ url: shot.url, width: shot.width, height: shot.height, scale: shot.scale }) }] };
     } catch (error) { return failure(error); }
@@ -443,6 +450,7 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     _meta: stepMeta,
   }, async ({ browserId, actions }, extra) => {
     const answer = await respond(extra, async () => {
+      access(extra, browserId);
       const outcome = await runtime.actMany(browserId, actions, callerOf(extra));
       return { text: actText(outcome), structured: outcome, isError: outcome.status === "failed" || outcome.status === "unknown" };
     });
@@ -504,6 +512,7 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
       _meta: TRACTION_ONLY,
     }, async ({ browserId, task, maxSteps, credential, waitSeconds }, extra) => {
       const answer = await taskResult(async () => {
+        access(extra, browserId);
         await runtime.startTask(browserId, { task, ...(maxSteps ? { maxSteps } : {}), ...(credential ? { credential } : {}) }, callerOf(extra));
         return await follow(browserId, waitSeconds, extra);
       });
@@ -515,7 +524,7 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
       annotations: READ_ONLY,
       _meta: TRACTION_ONLY,
     }, async ({ browserId, waitSeconds }, extra) => {
-      const answer = await taskResult(() => follow(browserId, waitSeconds, extra));
+      const answer = await taskResult(() => { access(extra, browserId); return follow(browserId, waitSeconds, extra); });
       return { ...answer, _meta: answer.structuredContent && (answer.structuredContent as TaskRun).status === "running" ? previewMeta(runtime, browserId, sessionOf(extra)) : await previewResult(runtime, browserId, sessionOf(extra)) };
     });
     server.registerTool("browser_task_cancel", {
@@ -523,7 +532,7 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
       inputSchema: { browserId: capability },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       _meta: TRACTION_ONLY,
-    }, ({ browserId }) => result(() => runtime.cancelTask(browserId)));
+    }, ({ browserId }, extra) => result(() => { access(extra, browserId); return runtime.cancelTask(browserId); }));
   } else {
     console.error("[browser] browser_task, browser_task_wait and browser_task_cancel are not offered: TYPESAFE_API_KEY is not set (jev, the optional task hand-off, needs it).");
   }
@@ -538,6 +547,7 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
   // `state` rides along so the View this call shows binds to THIS browser (a
   // tool result is the View's only source of a browserId) and paints the bar.
   }, ({ browserId, recipe, preset, mode }, extra) => result(async () => {
+    access(extra, browserId);
     const resolved = preset !== undefined && recipe === undefined ? resolvePreset(presets, preset)
       : recipe !== undefined && preset === undefined ? { recipe, preset: undefined }
       : fail("bad_publish", "pass exactly one of preset or recipe");
@@ -555,19 +565,19 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     inputSchema: { browserId: capability, publishId: capability, expect: expectSchema.optional() },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     _meta: { ...TRACTION_ONLY, [APPROVAL_META_KEY]: "prompt" },
-  }, ({ browserId, publishId, expect }, extra) => result(() => runtime.confirmPublish(browserId, publishId, callerOf(extra), expect)));
+  }, ({ browserId, publishId, expect }, extra) => result(() => { access(extra, browserId); return runtime.confirmPublish(browserId, publishId, callerOf(extra), expect); }));
   server.registerTool("browser_publish_cancel", {
     description: "Drop a pending publish without submitting anything (the View's Cancel button calls it too).",
     inputSchema: { browserId: capability, publishId: capability },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     _meta: TRACTION_ONLY,
-  }, ({ browserId, publishId }) => result(() => runtime.cancelPublish(browserId, publishId)));
+  }, ({ browserId, publishId }, extra) => result(() => { access(extra, browserId); return runtime.cancelPublish(browserId, publishId); }));
   server.registerTool("browser_publish_wait", {
     description: `Follow a pending publish: returns its record once posted (with url), unknown (may have posted: never retry), failed (nothing submitted), cancelled or expired (unconfirmed after 10 minutes), or after waitSeconds (default and max ${WAIT_CAP_S}) while it still awaits confirmation.`,
     inputSchema: { browserId: capability, publishId: capability, waitSeconds },
     annotations: READ_ONLY,
     _meta: TRACTION_ONLY,
-  }, ({ browserId, publishId, waitSeconds }) => result(() => runtime.waitPublish(browserId, publishId, (waitSeconds ?? WAIT_CAP_S) * 1000)));
+  }, ({ browserId, publishId, waitSeconds }, extra) => result(() => { access(extra, browserId); return runtime.waitPublish(browserId, publishId, (waitSeconds ?? WAIT_CAP_S) * 1000); }));
   registerAppTool(server, "browser_stream", {
     description: "Where the View reads this browser's live pictures and state, and sends the human's mouse and keys: { origin, token } of the pack's loopback listener (GET {origin}/s/{token}, POST {origin}/i/{token}). One token per View, for this browser only; it stops working when the browser closes or the View has been gone a while. Called when the View binds a browser or must reconnect, never per picture.",
     inputSchema: { browserId: capability }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }, _meta: APP_ONLY,
@@ -626,7 +636,17 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     const list = await runtime.profileList(sessionOf(extra));
     // The browsers this chat holds that are not profiles (Private ones, the person's Chrome) are the View's to list and close: a model is not told their ids.
     const browsers = callerOf(extra) === "app" ? await runtime.openBrowsers(sessionOf(extra)) : [];
-    return { text: JSON.stringify(profilesForModel(list)), structured: { profiles: list, browsers } };
+    const consented = callerOf(extra) === "app" ? list : list.map(item => runtime.profileConsents(sessionOf(extra)).some(permission => permission.name === item.name && permission.status === "granted") ? item : { ...item, sites: [] });
+    return { text: JSON.stringify(profilesForModel(consented)), structured: { profiles: callerOf(extra) === "app" ? list : consented, browsers, consents: callerOf(extra) === "app" ? runtime.profileConsents(sessionOf(extra)) : [] } };
+  }));
+  registerAppTool(server, "browser_profile_consent", {
+    title: "Decide Profile Access",
+    description: "Allow, deny or revoke this chat's access to the exact saved profile requested by its agent. The View shows its observed sign-ins before a decision. No model input may decide.",
+    inputSchema: { name: profile, decision: z.enum(["allow", "deny", "revoke"]) },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }, _meta: APP_ONLY,
+  }, ({ name, decision }, extra) => result(async () => {
+    runtime.decideProfileConsent(name, decision, callerOf(extra), sessionOf(extra));
+    return { consents: runtime.profileConsents(sessionOf(extra)) };
   }));
   // The View's Add profile. App-only: an agent that wants a profile of its own names a new short lowercase one in browser_open.
   registerAppTool(server, "browser_profile_add", {
@@ -665,7 +685,7 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     description: "Close this owned browser (stopping any task) and release its profile lock. Persisted logins remain; a throwaway's data is deleted; the user's relay browser is never terminated. Refused while a publish awaits confirmation (confirm, cancel or wait first).",
     inputSchema: { browserId: capability },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-  }, ({ browserId }, extra) => result(async () => { await runtime.close(browserId, callerOf(extra)); return { closed: true }; }));
+  }, ({ browserId }, extra) => result(async () => { access(extra, browserId); await runtime.close(browserId, callerOf(extra)); return { closed: true }; }));
   // The connection report (connection.ts, dimension#1219): the full current map
   // once the host has initialized, then after every observation (a check, a
   // post, a deleted profile). Sends run one at a time and each reads the map

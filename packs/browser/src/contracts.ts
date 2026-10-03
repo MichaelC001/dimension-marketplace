@@ -407,6 +407,8 @@ export interface ProfileHold { by: "person" | "agent"; task: boolean; takenOver:
  * an id is a capability) so the View can reach it and close it.
  */
 export interface ProfileListing { name: string; label: string; colour: ProfileColour; avatar?: string; heldBy: ProfileHolder; hold?: ProfileHold; browserId?: string; sites: ProfileSiteListing[] }
+/** A saved-profile request belongs to one host-stamped chat, not to a browser id. */
+export interface ProfileConsent { name: string; label: string; sites: ProfileSiteListing[]; status: "pending" | "granted"; expiresAt?: number }
 /** A browser this chat holds that is not a saved profile: a Private one, or the person's own Chrome. Only the View is sent these. */
 export interface OpenBrowserListing { browserId: string; kind: "private" | "chrome"; hold: ProfileHold }
 /** What leaving a browser did to it: closed, or kept because something of an agent's (or the person's) still depends on it. */
@@ -507,6 +509,12 @@ export interface BrowserRuntimePort {
   onConnectionsChanged(listener: () => void): () => void;
   /** Every saved profile (never the relay's, never a throwaway), with who holds it relative to `asker`, the chat asking. */
   profileList(asker?: string): Promise<ProfileListing[]>;
+  /** Model access is checked before any saved-profile browser operation, including by-id reads and credentials. */
+  requireProfileAccess(browserId: string, caller?: ToolCaller, session?: string): void;
+  /** Pending requests and active grants for the View's host-stamped chat. */
+  profileConsents(session?: string): ProfileConsent[];
+  /** Human-only decision; the requested profile and session must match a pending request. */
+  decideProfileConsent(name: string, decision: "allow" | "deny" | "revoke", caller?: ToolCaller, session?: string): void;
   /** The browsers this chat holds that are not saved profiles (Private ones, the person's own Chrome), for the View's menu; never another chat's. */
   openBrowsers(asker?: string): Promise<OpenBrowserListing[]>;
   /** The label, colour and avatar of every saved profile that has any observation, for the connection report. */

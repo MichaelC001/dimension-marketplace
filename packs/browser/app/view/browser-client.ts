@@ -25,6 +25,7 @@ import type {
 	OpenBrowserListing,
 	ProfileHold,
 	ProfileListing,
+	ProfileConsent,
 	ProfileSiteListing,
 } from "../../src/contracts";
 import { isProfileColour, resolveProfileMeta } from "../../src/profile-meta";
@@ -35,6 +36,7 @@ import { isRecord, readNumber, readString } from "./json";
 export interface ProfilesAnswer {
 	readonly profiles: ProfileListing[];
 	readonly browsers: OpenBrowserListing[];
+	readonly consents: ProfileConsent[];
 }
 
 const TASK_STATUSES: readonly TaskStatus[] = ["running", "done", "blocked", "failed", "cancelled"];
@@ -233,6 +235,11 @@ function readOpenBrowser(value: unknown): OpenBrowserListing[] {
 	if (browserId === undefined || browserId.length === 0 || hold === undefined || (value.kind !== "private" && value.kind !== "chrome")) return [];
 	return [{ browserId, kind: value.kind, hold }];
 }
+function readConsent(value: unknown): ProfileConsent[] {
+	if (!isRecord(value) || !PROFILE_NAME.test(readString(value, "name") ?? "") || (value.status !== "pending" && value.status !== "granted")) return [];
+	const name = readString(value, "name")!;
+	return [{ name, label: readString(value, "label") ?? name, sites: Array.isArray(value.sites) ? value.sites.flatMap(readSite) : [], status: value.status, ...(typeof value.expiresAt === "number" ? { expiresAt: value.expiresAt } : {}) }];
+}
 
 function readState(tool: string, value: unknown): BrowserState {
 	if (!isRecord(value)) throw new BrowserToolError(tool, "no browser state in the result");
@@ -392,7 +399,10 @@ export class BrowserClient {
 		const tool = "browser_profiles";
 		const answered = await this.call(tool, {});
 		if (!Array.isArray(answered.profiles)) throw new BrowserToolError(tool, "result carried no profiles array");
-		return { profiles: answered.profiles.flatMap(readProfile), browsers: Array.isArray(answered.browsers) ? answered.browsers.flatMap(readOpenBrowser) : [] };
+		return { profiles: answered.profiles.flatMap(readProfile), browsers: Array.isArray(answered.browsers) ? answered.browsers.flatMap(readOpenBrowser) : [], consents: Array.isArray(answered.consents) ? answered.consents.flatMap(readConsent) : [] };
+	}
+	async decideProfileConsent(name: string, decision: "allow" | "deny" | "revoke"): Promise<void> {
+		await this.call("browser_profile_consent", { name, decision });
 	}
 
 	/** Creates a profile from the name the person typed. The refusal (a taken or unusable name) is the runtime's sentence, raised as is. */

@@ -50,6 +50,7 @@ import type {
 	ControlMode,
 	NewProfileRequest,
 	ProfileListing,
+	ProfileConsent,
 	LeaveOutcome,
 	OpenBrowserListing,
 	ActionResult,
@@ -375,6 +376,8 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	private disposed = false;
 	/** The opener of a saved profile whose browser is still launching, so the same chat opening it twice gets one browser. */
 	private readonly openers = new Map<string, BrowserOpener>();
+	/** Session-local decisions only: the host supplies no authenticated stable Loop identity. */
+	private readonly profilePermissions = new Map<string, Map<string, { status: "pending" | "granted"; expiresAt: number }>>();
 	/** The last passive observation per profile and site, so a page that reloads does not rewrite the same fact. */
 	private readonly lastNoted = new Map<string, { key: string; at: number }>();
 	private readonly connectionListeners = new Set<() => void>();
@@ -452,6 +455,15 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		// The relay is the human's own Chrome: there is nothing to make throwaway,
 		// so no profile means the one it has.
 		const profile = named ?? (engine === "chrome-relay" && !attachedElsewhere ? RELAY_PROFILE : null);
+		if (code !== undefined && profile !== null && profile !== RELAY_PROFILE) fail("code_profile_refused", "browser_run cannot use a saved profile; use ordinary browser tools after the person approves access.");
+		if (profile !== null && profile !== RELAY_PROFILE && opener.caller !== "app") {
+			// A new slug belongs to the chat that creates it; existing profiles require explicit human approval.
+			if (!this.store.exists(profile) && opener.session !== undefined) {
+				const permissions = this.profilePermissions.get(opener.session) ?? new Map<string, { status: "pending" | "granted"; expiresAt: number }>();
+				permissions.set(profile, { status: "granted", expiresAt: Number.POSITIVE_INFINITY });
+				this.profilePermissions.set(opener.session, permissions);
+			} else this.requireProfileName(profile, opener.session);
+		}
 
 		// The relay is ONE already-running Chrome with ONE cookie jar, chosen by
 		// the human inside Chrome. Named relay profiles would imply an isolation
@@ -674,6 +686,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	async dispose(): Promise<void> {
 		this.disposed = true;
 		this.connectionListeners.clear();
+		this.profilePermissions.clear();
 		this.profileWatcher?.close();
 		this.profileWatcher = undefined;
 		// The spare task worker waiting for the next task belongs to no browser: it goes with the runtime.
@@ -958,13 +971,21 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			open: async (options, opener, code, attach) => await this.open(options, opener, code, attach),
 			resize: async (browserId, viewport, scale) => await this.resize(browserId, viewport, scale),
 			close: async (browserId) => await this.close(browserId),
-			require: (browserId) => this.require(browserId),
+			require: (browserId) => {
+				const entry = this.require(browserId);
+				if (entry.profile !== null && entry.profile !== RELAY_PROFILE) fail("code_profile_refused", "browser_run cannot use a saved profile");
+				return entry;
+			},
 			peek: (browserId) => {
 				const entry = this.byId.get(browserId);
-				return entry === undefined || entry.closed ? undefined : entry;
+				return entry === undefined || entry.closed || (entry.profile !== null && entry.profile !== RELAY_PROFILE) ? undefined : entry;
 			},
-			browsersOf: (session) => [...this.byId.values()].filter((entry) => !entry.closed && entry.opener.session === session),
-			viewOf: (session) => this.viewOf(session),
+			browsersOf: (session) => [...this.byId.values()].filter((entry) => !entry.closed && (entry.profile === null || entry.profile === RELAY_PROFILE) && entry.opener.session === session),
+			viewOf: (session) => {
+				const id = this.viewOf(session);
+				const entry = id === undefined ? undefined : this.byId.get(id);
+				return entry?.profile === null || entry?.profile === RELAY_PROFILE ? id : undefined;
+			},
 			bindView: (session, browserId) => this.bindView(session, browserId),
 			hold: (entry) => this.holdWork(entry as Entry),
 			working: (entry) => this.working(entry as Entry),
@@ -1195,6 +1216,57 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	/** Keeps the kit's detail document for the browser the human marked in: a throwaway browser's goes with it. */
 	saveAnnotationDetail(browserId: string, json: string): string {
 		return this.require(browserId).annotations.save(json);
+	}
+
+	private requireProfileName(profile: string, session: string | undefined): void {
+		if (session === undefined) fail("profile_consent_required", `Ask the person to approve access to profile "${profile}" in Browser profiles. A host-stamped session is required.`);
+		const permissions = this.profilePermissions.get(session) ?? new Map<string, { status: "pending" | "granted"; expiresAt: number }>();
+		this.profilePermissions.set(session, permissions);
+		const current = permissions.get(profile);
+		if (current?.status === "granted") return;
+		if (current?.status !== "pending" || current.expiresAt <= Date.now()) permissions.set(profile, { status: "pending", expiresAt: Date.now() + 10 * 60_000 });
+		fail("profile_consent_required", `Ask the person to approve access to profile "${profile}" in the Browser profile menu. No browser was opened.`);
+	}
+
+	requireProfileAccess(browserId: string, caller?: ToolCaller, session?: string): void {
+		const entry = this.byId.get(browserId);
+		if (entry === undefined || entry.closed) fail("unknown_browser", "browser is not open");
+		if (caller === "app") return;
+		if (entry.profile !== null && entry.profile !== RELAY_PROFILE) this.requireProfileName(entry.profile, session);
+	}
+
+	profileConsents(session?: string): ProfileConsent[] {
+		if (session === undefined) return [];
+		const permissions = this.profilePermissions.get(session);
+		if (!permissions) return [];
+		const profiles = buildProfileList(this.store, slug => this.holdFact(slug, session), Date.now());
+		const now = Date.now();
+		return profiles.flatMap(profile => {
+			const permission = permissions.get(profile.name);
+			if (!permission) return [];
+			if (permission.status === "pending" && permission.expiresAt <= now) {
+				permissions.delete(profile.name);
+				return [];
+			}
+			return [{ name: profile.name, label: profile.label, sites: profile.sites, status: permission.status, ...(permission.status === "pending" ? { expiresAt: permission.expiresAt } : {}) }];
+		});
+	}
+
+	decideProfileConsent(name: string, decision: "allow" | "deny" | "revoke", caller?: ToolCaller, session?: string): void {
+		if (caller !== "app" || session === undefined) fail("human_only", "Only the person in the Browser View can decide profile access.");
+		const profile = this.resolveProfile(name, "chromium");
+		const permissions = this.profilePermissions.get(session);
+		const current = permissions?.get(profile);
+		if (decision === "allow") {
+			if (current?.status !== "pending" || current.expiresAt <= Date.now()) fail("consent_missing", "The request expired. Ask the agent to request this profile again.");
+			permissions!.set(profile, { status: "granted", expiresAt: Number.POSITIVE_INFINITY });
+		} else if (decision === "deny") {
+			if (current?.status !== "pending") fail("consent_missing", "There is no pending request for this profile.");
+			permissions!.delete(profile);
+		} else {
+			if (current?.status !== "granted") fail("consent_missing", "There is no grant to revoke.");
+			permissions!.delete(profile);
+		}
 	}
 
 	async profileList(asker?: string): Promise<ProfileListing[]> {

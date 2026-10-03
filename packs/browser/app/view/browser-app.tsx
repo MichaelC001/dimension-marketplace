@@ -5,7 +5,7 @@
 // never a URL).
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { App } from "@modelcontextprotocol/ext-apps";
-import type { BrowserAction, BrowserFrame, BrowserState, ControlMode, NewProfileRequest, OpenBrowserListing, ProfileListing, TabOp } from "../../src/contracts";
+import type { BrowserAction, BrowserFrame, BrowserState, ControlMode, NewProfileRequest, OpenBrowserListing, ProfileConsent, ProfileListing, TabOp } from "../../src/contracts";
 import { Icon } from "@fraym/ui/icons";
 import { addressParts, tabLabel } from "../../src/address";
 import { AgentPill, ControlPill, ResultToast, useAgentActive } from "./agent-activity";
@@ -45,6 +45,7 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 	const [profiles, setProfiles] = useState<readonly ProfileListing[] | null>(null);
 	/** The browsers this chat holds that are not saved profiles (a Private one, Your Chrome): read with the profiles. */
 	const [browsers, setBrowsers] = useState<readonly OpenBrowserListing[]>([]);
+	const [consents, setConsents] = useState<readonly ProfileConsent[]>([]);
 	const [profilesError, setProfilesError] = useState<string | null>(null);
 	/** The profile being opened from the menu right now (`""`: a Private browser). */
 	const [switching, setSwitching] = useState<string | null>(null);
@@ -185,6 +186,7 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 				if (!mountedRef.current || profilesSeq.current !== seq) return;
 				setProfiles(answer.profiles);
 				setBrowsers(answer.browsers);
+				setConsents(answer.consents);
 				setProfilesError(null);
 			},
 			cause => {
@@ -197,6 +199,11 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 	useEffect(() => {
 		if (browserId === null) loadProfiles();
 	}, [loadProfiles, browserId]);
+	useEffect(() => {
+		if (!menuOpen) return;
+		const timer = setInterval(loadProfiles, 2_000);
+		return () => clearInterval(timer);
+	}, [menuOpen, loadProfiles]);
 
 	// Remember which task this View saw running, so its end gets a toast.
 	useEffect(() => {
@@ -633,6 +640,10 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 					canTakeOver,
 					onMenu: setMenuOpen,
 					onOpen: loadProfiles,
+					consents,
+					onConsent: (name, decision) => {
+						void client.decideProfileConsent(name, decision).then(loadProfiles, cause => say("error", failureText(cause)));
+					},
 					browsers: browsers.filter(item => item.browserId !== browserId),
 					onSwitch: target => void switchProfile(target),
 					onSwitchBrowser: target => void switchBrowser(target),

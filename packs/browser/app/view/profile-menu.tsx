@@ -6,7 +6,7 @@
 // window later and this stays as it is.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Icon } from "@fraym/ui/icons";
-import type { BrowserEngine, NewProfileRequest, OpenBrowserListing, ProfileHold, ProfileListing, ProfileSiteListing } from "../../src/contracts";
+import type { BrowserEngine, NewProfileRequest, OpenBrowserListing, ProfileConsent, ProfileHold, ProfileListing, ProfileSiteListing } from "../../src/contracts";
 import { defaultColour, type ProfileColour, type ResolvedProfileMeta, resolveProfileMeta } from "../../src/profile-meta";
 import { DEFAULT_PROFILE } from "../../src/profile-name";
 import { AddProfileForm } from "./add-profile-form";
@@ -99,6 +99,8 @@ export interface ProfileSwitcherProps {
 	/** The menu just opened: read the profiles again, who holds each changes. */
 	readonly onOpen: () => void;
 	/** The browsers this chat holds that are not saved profiles and are not the one on screen: a Private browser or Your Chrome left open. */
+	readonly consents: readonly ProfileConsent[];
+	readonly onConsent: (name: string, decision: "allow" | "deny" | "revoke") => void;
 	readonly browsers: readonly OpenBrowserListing[];
 	/** Open `profile` here (`null`: a Private browser). */
 	readonly onSwitch: (profile: string | null) => void;
@@ -253,6 +255,23 @@ export function ProfileSwitcher(props: ProfileSwitcherProps) {
 								</div>
 							)}
 
+							{props.consents.length > 0 && (
+								<div className="bx-pmenu-list" role="group" aria-label="Agent profile access">
+									{props.consents.map(request => (
+										<div className="bx-pmenu-control" key={request.name}>
+											<span className="bx-pmenu-control-text">
+												Agent access to {request.label}: {request.sites.filter(site => site.signedIn === true).map(site => `${site.site}${site.account ? ` (${site.account})` : ""}`).join(", ") || "No observed sign-ins"}
+											</span>
+											{request.status === "pending" ? (
+												<>
+													<button type="button" className="bx-pmenu-control-btn" onClick={() => props.onConsent(request.name, "allow")}>Allow this chat</button>
+													<button type="button" className="bx-pmenu-control-btn" onClick={() => props.onConsent(request.name, "deny")}>Deny</button>
+												</>
+											) : <button type="button" className="bx-pmenu-control-btn" onClick={() => props.onConsent(request.name, "revoke")}>Revoke access</button>}
+										</div>
+									))}
+								</div>
+							)}
 							<div className="bx-menu-sep" role="separator" />
 
 							<div className="bx-pmenu-list" role="group" aria-label="Other profiles">
