@@ -117,6 +117,12 @@ function resolveModelTools(raw: string | undefined, hasCodeHost: boolean): Model
   return asked;
 }
 
+/** `_meta` of ordinary step tools: code/build keeps one model-facing browser_run, other spaces keep their ordinary tools. */
+function stepToolMeta(mode: ModelToolsMode): Record<string, unknown> | undefined {
+  if (mode !== "code") return undefined;
+  const spaces = MODEL_SPACES.filter(space => !CODE_TOOL_SPACES.includes(space));
+  return spaces.length === 0 ? APP_ONLY : { [SPACES_META_KEY]: spaces };
+}
 /** The session a call belongs to, stamped by the host from the lane the call arrived on. */
 const SESSION_META_KEY = "ai.insodimension/session";
 type CallExtra = { _meta?: Record<string, unknown> };
@@ -297,7 +303,7 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
   }
   const requestedTools = resolveModelTools(options.modelTools ?? process.env[MODEL_TOOLS_ENV], codeHost !== undefined || codeHostOff);
   const modelTools: ModelToolsMode = codeHostOff ? "steps" : requestedTools;
-  const stepMeta = undefined; // Saved-profile operations must remain callable in code/build spaces.
+  const stepMeta = stepToolMeta(modelTools);
   const live = new LiveChannel(runtime);
   const viewDir = options.viewDir ?? fileURLToPath(new URL("./dist/", import.meta.url));
   // A missing built View is a startup error, not an installed pack that opens blank.
@@ -456,6 +462,40 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
       preview: async (session, browserId, running) =>
         (running ? previewMeta(runtime, browserId, session) : await previewResult(runtime, browserId, session))?.[PREVIEW_META_KEY]
         ?? { v: 1, source: { kind: "browser", browserId }, at: Date.now() },
+      profileOperation: async (operation, extra) => {
+        if (callerOf(extra) !== "model" || sessionOf(extra) === undefined) fail("profile_consent_required", "A host-stamped model session is required.");
+        if (extra.signal.aborted) fail("cancelled", "Browser operation was cancelled before dispatch.");
+        if (operation.kind === "open") {
+          const state = await openAt(operation.profile, "chromium", operation.url, openerOf(extra, "browser_open"));
+          return { content: [{ type: "text", text: JSON.stringify(stateFor("model", state)) }] };
+        }
+        runtime.requireSavedProfileAccess(operation.browserId, callerOf(extra), sessionOf(extra));
+        if (operation.kind === "state") {
+          const state = await runtime.state(operation.browserId);
+          const logs = await runtime.logs(operation.browserId);
+          return { content: [{ type: "text", text: JSON.stringify({ ...stateFor("model", state), ...(logs.length ? { logs } : {}) }) }] };
+        }
+        if (operation.kind === "snapshot") {
+          const snapshot = await runtime.snapshot(operation.browserId);
+          return { content: [{ type: "text", text: snapshot.text }] };
+        }
+        if (operation.kind === "screenshot") {
+          const shot = await runtime.shot(operation.browserId, { ...(operation.fullPage ? { fullPage: true } : {}), ...(operation.selector === undefined ? {} : { selector: operation.selector }), ...(operation.scale === undefined ? {} : { scale: operation.scale }) });
+          return { content: [{ type: "image", mimeType: shot.mimeType, data: shot.data }, { type: "text", text: JSON.stringify({ url: shot.url, width: shot.width, height: shot.height, scale: shot.scale }) }] };
+        }
+        if (operation.kind === "inspect") {
+          const inspection = await runtime.inspect(operation.browserId, operation.selector);
+          return { content: [{ type: "text", text: JSON.stringify(inspection) }] };
+        }
+        if (operation.kind === "close") {
+          await runtime.close(operation.browserId, "model");
+          return { content: [{ type: "text", text: JSON.stringify({ closed: true }) }] };
+        }
+        if (extra.signal.aborted) fail("cancelled", "Browser operation was cancelled before dispatch.");
+        const actions = z.array(stepSchema).min(1).max(MAX_BATCH_STEPS).parse(operation.actions);
+        const outcome = await runtime.actMany(operation.browserId, actions, "model");
+        return { ...(outcome.status === "failed" || outcome.status === "unknown" ? { isError: true } : {}), content: [{ type: "text", text: actText(outcome) }] };
+      },
       meta: { [APPROVAL_META_KEY]: "exec", [SPACES_META_KEY]: CODE_TOOL_SPACES },
     });
   }

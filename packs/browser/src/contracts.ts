@@ -511,6 +511,8 @@ export interface BrowserRuntimePort {
   profileList(asker?: string): Promise<ProfileListing[]>;
   /** Model access is checked before any saved-profile browser operation, including by-id reads and credentials. */
   requireProfileAccess(browserId: string, caller?: ToolCaller, session?: string): void;
+  /** Typed browser_run ordinary operations are saved-profile-only; refuses relay and throwaway before reading a page. */
+  requireSavedProfileAccess(browserId: string, caller?: ToolCaller, session?: string): void;
   /** Pending requests and active grants for the View's host-stamped chat. */
   profileConsents(session?: string): ProfileConsent[];
   /** Human-only decision; the requested profile and session must match a pending request. */

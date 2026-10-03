@@ -13,7 +13,7 @@ import promptText from "./prompt.md";
 import { saveSpill, sessionFolder } from "./spill.js";
 
 /** What the model reads: OMP's `browser.md` as the pack ports it, without the licence comment that heads the file. */
-export const BROWSER_RUN_DESCRIPTION = promptText.replace(/^<!--[\s\S]*?-->\s*/, "").trim();
+export const BROWSER_RUN_DESCRIPTION = `${promptText.replace(/^<!--[\s\S]*?-->\s*/, "").trim()}\n\nSaved profiles cannot be driven by code. Use profileTool (instead of code/resume): {kind:"open",profile,url?}, then {kind:"state"|"snapshot"|"screenshot"|"inspect"|"act"|"close",browserId,...}. act takes the same ordinary browser_act actions; screenshot takes fullPage/selector/scale; inspect takes selector. A saved profile already on disk needs the person's approval in the Browser profile menu for this chat before it opens; a refusal leaves a pending request. The person sees the exact profile and observed sign-ins. Retry only after they allow. No browser_run code cell can use a saved profile.`;
 
 /** The host times an MCP call out at 30 s and does not reset the timer on progress (doc 77 §7.8, settled by L1); a call waits at most this long. */
 export const RUN_WAIT_CAP_MS = 25_000;
@@ -43,6 +43,8 @@ export interface CodeToolDeps {
   preview?(session: string, browserId: string, running: boolean): Promise<unknown>;
   /** One call's wait, ms. Defaults to {@link RUN_WAIT_CAP_MS}; a test shortens it. */
   waitCapMs?: number;
+  /** Trusted ordinary saved-profile path; never enters the code host or its Node worker. */
+  profileOperation?: (operation: ProfileOperation, extra: CodeCallExtra) => Promise<CallToolResult>;
 }
 
 /**
@@ -111,16 +113,24 @@ function refused(error: unknown): CallToolResult {
   return { isError: true, content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }] };
 }
 
+export type ProfileOperation =
+  | { kind: "open"; profile: string; url?: string }
+  | { kind: "state" | "snapshot" | "close"; browserId: string }
+  | { kind: "screenshot"; browserId: string; fullPage?: boolean; selector?: string; scale?: number }
+  | { kind: "inspect"; browserId: string; selector: string }
+  | { kind: "act"; browserId: string; actions: unknown[] };
+
 export interface BrowserRunArgs {
   code?: string;
   resume?: string;
+  profileTool?: ProfileOperation;
   timeout?: number;
 }
 
 /** One `browser_run` call. Exported for tests; the MCP server reaches it through {@link registerCodeTool}. */
 export async function runCodeTool(deps: CodeToolDeps, args: BrowserRunArgs, extra: CodeCallExtra): Promise<CallToolResult> {
-  if ((args.code === undefined) === (args.resume === undefined)) {
-    return { isError: true, content: [{ type: "text", text: "Pass exactly one of code (a new cell) or resume (the runId of a cell still running)." }] };
+  if ([args.code, args.resume, args.profileTool].filter(value => value !== undefined).length !== 1 || (args.profileTool !== undefined && args.timeout !== undefined)) {
+    return { isError: true, content: [{ type: "text", text: "Pass exactly one of code, resume or profileTool; timeout applies only to code." }] };
   }
   const waitCapMs = deps.waitCapMs ?? RUN_WAIT_CAP_MS;
   const session = deps.sessionOf(extra) ?? ANONYMOUS_SESSION;
@@ -128,6 +138,10 @@ export async function runCodeTool(deps: CodeToolDeps, args: BrowserRunArgs, extr
   const save: SaveSpill = text => saveSpill(sessionFolder(deps.artifactsDir(), session), text);
   let acceptingActivity = true;
   try {
+    if (args.profileTool !== undefined) {
+      if (deps.profileOperation === undefined) return refused(new Error("Saved-profile ordinary operations are unavailable in this server."));
+      return await deps.profileOperation(args.profileTool, extra);
+    }
     let activeBrowserId: string | undefined;
     let activitySequence = 0;
     const progressToken = extra._meta?.progressToken;
@@ -169,6 +183,15 @@ export function registerCodeTool(server: McpServer, deps: CodeToolDeps): void {
       code: z.string().min(1).max(200_000).optional(),
       resume: z.string().max(64).optional(),
       timeout: z.number().min(1).max(300).optional(),
+      profileTool: z.discriminatedUnion("kind", [
+        z.object({ kind: z.literal("open"), profile: z.string().min(1).max(48), url: z.string().max(2048).optional() }).strict(),
+        z.object({ kind: z.literal("state"), browserId: z.string() }).strict(),
+        z.object({ kind: z.literal("snapshot"), browserId: z.string() }).strict(),
+        z.object({ kind: z.literal("screenshot"), browserId: z.string(), fullPage: z.boolean().optional(), selector: z.string().optional(), scale: z.number().gt(0).max(1).optional() }).strict(),
+        z.object({ kind: z.literal("inspect"), browserId: z.string(), selector: z.string() }).strict(),
+        z.object({ kind: z.literal("close"), browserId: z.string() }).strict(),
+        z.object({ kind: z.literal("act"), browserId: z.string(), actions: z.array(z.unknown()).min(1).max(25) }).strict(),
+      ]).optional(),
     },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     _meta: deps.meta,
