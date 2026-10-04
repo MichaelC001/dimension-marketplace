@@ -178,17 +178,17 @@ function classifierRow(route) {
     return { role: "classifier", title: "Classifier", tone: "off", says: "No classifier is connected: a plain rule decides, and nothing is sent.", hint: CLASSIFIER_HINT };
   }
   const name = `${route.provider}/${route.model}`;
-  const hint = route.leavesDevice ? `While voice mode is on, the classifier (${name}) reads your mood. On each message, your last six messages to the agent (scrubbed of code, paths and secrets) and the agent's last spoken line go to ${route.host ?? route.provider}. With voice mode off, nothing is sent.` : `While voice mode is on, the classifier (${name}) runs on this device; nothing leaves it.`;
+  const hint = route.leavesDevice ? `While voice mode is on, the classifier (${name}) reads your mood and judges what is worth saying. On each message, your last six messages to the agent (scrubbed of code, paths and secrets) and the agent's last spoken line go to ${route.host ?? route.provider}. For each line the voice is about to say, the part of the agent's reply it comes from (scrubbed, up to 700 characters) and your last request go there too. With voice mode off, nothing is sent.` : `While voice mode is on, the classifier (${name}) runs on this device; nothing leaves it.`;
   return { role: "classifier", title: "Classifier", tone: "ok", says: `${name} reads your mood and judges what is worth saying.`, hint, disclosure: true };
 }
 function modelRows(models, route) {
   const voiceHint = "Set the voice model in Models to pick the small model that writes what is spoken. Unset, it falls back to your tiny model, then your small one.";
-  const voice = !models ? { role: "voice", title: "Voice model", tone: "off", says: "Not known yet.", hint: voiceHint } : models.chat > 0 ? { role: "voice", title: "Voice model", tone: "ok", says: `${models.chat} chat ${models.chat === 1 ? "model is" : "models are"} connected to write spoken replies.`, hint: voiceHint } : { role: "voice", title: "Voice model", tone: "warn", says: "No chat model is connected, so replies are read out as written, only cleaned up.", hint: voiceHint };
+  const voice = !models ? { role: "voice", title: "Voice model", tone: "off", says: "Not known yet.", hint: voiceHint } : models.chat > 0 ? { role: "voice", title: "Voice model", tone: "ok", says: `${models.chat} chat ${models.chat === 1 ? "model is" : "models are"} connected to write spoken replies.`, hint: voiceHint } : { role: "voice", title: "Voice model", tone: "warn", says: "No chat model is connected, so replies use a bounded, cleaned spoken fallback.", hint: voiceHint };
   const classifier = route !== undefined ? classifierRow(route) : !models ? { role: "classifier", title: "Classifier", tone: "off", says: "Not known yet.", hint: CLASSIFIER_HINT } : models.classifiers.length > 0 ? { role: "classifier", title: "Classifier", tone: "ok", says: `${models.classifiers.join(", ")} can judge what is worth saying.`, hint: CLASSIFIER_HINT } : { role: "classifier", title: "Classifier", tone: "off", says: "None connected: a plain rule decides what is worth saying.", hint: CLASSIFIER_HINT };
   return [voice, classifier];
 }
 var TUNING_KEYS = [
-  { key: "vocalizer.mode", fallback: "brief", what: "What is spoken: brief, assistant (every block in full), all (thinking too) or yield (only the final message)." },
+  { key: "vocalizer.mode", fallback: "conversational", what: "Conversational scales the spoken result to what matters; Brief keeps it to one or two lines. Neither reads the whole summary." },
   { key: "vocalizer.enhanced", fallback: "on when a voice model is connected", what: "Rewrite replies into spoken prose with the small model." },
   { key: "attention.catchUpAfterMinutes", fallback: "60", what: "How long away from an agent before it welcomes you back." },
   { key: "attention.chimes", fallback: "on", what: "A soft tone when a message is waiting." }
@@ -474,7 +474,7 @@ function VoicePane({ store }) {
           }),
           /* @__PURE__ */ jsx("p", {
             className: "vm-sub",
-            children: "Turn voice mode on from the speaker beside the microphone in the composer. It works in any space, with any agent."
+            children: "Open voice options from the small dot left of the composer microphone to turn reply voice on. The microphone itself is for dictation. Voice mode can speak with any agent in any space."
           })
         ]
       }),

@@ -37,8 +37,10 @@ sign-in, key or CLI.
 - **What the classifier is sent.** The classifier reads your mood and judges what is worth saying. When the engine
   reports that it resolves to a remote endpoint, the Models row says so in words: while voice mode is on, on each
   message, your last six messages to the agent (scrubbed of code, paths and secrets) and the agent's last spoken
-  line go to that endpoint's host. With voice mode off, or with no classifier connected, nothing is sent. A
-  classifier that runs on this device is shown as such. This pack only reports it: the engine does the sending.
+  line go to that endpoint's host; and for each line the voice is about to say, the part of the agent's reply it
+  comes from (scrubbed, up to 700 characters) and your last request go there too. With voice mode off, or with no
+  classifier connected, nothing is sent. A classifier that runs on this device is shown as such. This pack only
+  reports it: the engine does the sending.
 - **Read-only.** The pane reads three public root facts (`speech/profiles`, `agents/list`, `models`) through the
   root-fenced Store and writes nothing. Choosing an agent's voice, trying a voice and showing which model the `voice`
   role resolves to each need a door the Store does not give a root seat yet; the pane says how to do them by hand

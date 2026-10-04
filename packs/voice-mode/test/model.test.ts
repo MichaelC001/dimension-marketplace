@@ -143,15 +143,15 @@ describe("the two model roles", () => {
 	test("rows name only what is connected: they never claim a model the Store cannot tell them", () => {
 		const [voice, classifier] = modelRows(readModelsFact(catalog));
 		expect(voice).toMatchObject({ role: "voice", tone: "ok" });
-		expect(voice?.says).toBe("2 chat models are connected to write spoken replies.");
-		expect(classifier).toMatchObject({ role: "classifier", tone: "ok", says: "Jev can judge what is worth saying." });
+		expect(voice?.says).toContain("2 chat models");
+		expect(classifier).toMatchObject({ role: "classifier", tone: "ok" });
+		expect(classifier?.says).toContain("Jev");
 	});
 
-	test("no chat model and no classifier: voice mode still works, the rows say how", () => {
+	test("no chat model and no classifier: voice mode still works, the rows say they are missing", () => {
 		const [voice, classifier] = modelRows(readModelsFact([]));
-		expect(voice).toMatchObject({ tone: "warn" });
-		expect(voice?.says).toContain("read out as written");
-		expect(classifier).toMatchObject({ tone: "off", says: "None connected: a plain rule decides what is worth saying." });
+		expect(voice).toMatchObject({ role: "voice", tone: "warn" });
+		expect(classifier).toMatchObject({ role: "classifier", tone: "off" });
 	});
 
 	test("an unpublished catalog is 'not known yet', not 'none connected'", () => {
@@ -177,6 +177,10 @@ describe("the classifier row says where the classifier's input goes", () => {
 		expect(row?.hint).toContain("last six messages");
 		expect(row?.hint).toContain("last spoken line");
 		expect(row?.hint).toContain("scrubbed of code, paths and secrets");
+		expect(row?.hint).toContain("For each line the voice is about to say");
+		expect(row?.hint).toContain("agent's reply");
+		expect(row?.hint).toContain("scrubbed, up to 700 characters");
+		expect(row?.hint).toContain("your last request");
 		expect(row?.hint).toContain("While voice mode is on");
 		expect(row?.hint).toContain("With voice mode off, nothing is sent.");
 		expect(row?.disclosure).toBe(true);

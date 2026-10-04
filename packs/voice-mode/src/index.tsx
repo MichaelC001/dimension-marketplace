@@ -145,7 +145,7 @@ export default function VoicePane({ store }: VoicePaneProps) {
 					<span>{top.text}</span>
 				</div>
 				<p className="vm-sub">
-					Turn voice mode on from the speaker beside the microphone in the composer. It works in any space, with any agent.
+					Open voice options from the small dot left of the composer microphone to turn reply voice on. The microphone itself is for dictation. Voice mode can speak with any agent in any space.
 				</p>
 			</section>
 

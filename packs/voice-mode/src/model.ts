@@ -310,7 +310,7 @@ function classifierRow(route: ClassifierRoute | null): ModelRow {
 	}
 	const name = `${route.provider}/${route.model}`;
 	const hint = route.leavesDevice
-		? `While voice mode is on, the classifier (${name}) reads your mood. On each message, your last six messages to the agent (scrubbed of code, paths and secrets) and the agent's last spoken line go to ${route.host ?? route.provider}. With voice mode off, nothing is sent.`
+		? `While voice mode is on, the classifier (${name}) reads your mood and judges what is worth saying. On each message, your last six messages to the agent (scrubbed of code, paths and secrets) and the agent's last spoken line go to ${route.host ?? route.provider}. For each line the voice is about to say, the part of the agent's reply it comes from (scrubbed, up to 700 characters) and your last request go there too. With voice mode off, nothing is sent.`
 		: `While voice mode is on, the classifier (${name}) runs on this device; nothing leaves it.`;
 	return { role: "classifier", title: "Classifier", tone: "ok", says: `${name} reads your mood and judges what is worth saying.`, hint, disclosure: true };
 }
@@ -325,7 +325,7 @@ export function modelRows(models: ModelsView | null, route?: ClassifierRoute | n
 		? { role: "voice", title: "Voice model", tone: "off", says: "Not known yet.", hint: voiceHint }
 		: models.chat > 0
 			? { role: "voice", title: "Voice model", tone: "ok", says: `${models.chat} chat ${models.chat === 1 ? "model is" : "models are"} connected to write spoken replies.`, hint: voiceHint }
-			: { role: "voice", title: "Voice model", tone: "warn", says: "No chat model is connected, so replies are read out as written, only cleaned up.", hint: voiceHint };
+			: { role: "voice", title: "Voice model", tone: "warn", says: "No chat model is connected, so replies use a bounded, cleaned spoken fallback.", hint: voiceHint };
 	const classifier: ModelRow = route !== undefined
 		? classifierRow(route)
 		: !models
@@ -345,7 +345,7 @@ export interface TuningKey {
 /** The `voice` block keys of the product config (`~/.inso/config.json`, or the workspace's `.inso/config.json`). The
  *  engine reads them; nothing in the Store carries their values, so the pane lists them and does not pretend to show them. */
 export const TUNING_KEYS: readonly TuningKey[] = [
-	{ key: "vocalizer.mode", fallback: "brief", what: "What is spoken: brief, assistant (every block in full), all (thinking too) or yield (only the final message)." },
+	{ key: "vocalizer.mode", fallback: "conversational", what: "Conversational scales the spoken result to what matters; Brief keeps it to one or two lines. Neither reads the whole summary." },
 	{ key: "vocalizer.enhanced", fallback: "on when a voice model is connected", what: "Rewrite replies into spoken prose with the small model." },
 	{ key: "attention.catchUpAfterMinutes", fallback: "60", what: "How long away from an agent before it welcomes you back." },
 	{ key: "attention.chimes", fallback: "on", what: "A soft tone when a message is waiting." },
