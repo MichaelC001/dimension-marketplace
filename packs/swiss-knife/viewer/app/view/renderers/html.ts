@@ -5,10 +5,11 @@
 //
 // Picking from the page (docs/design/88 section 2) does NOT change this frame. An opaque-origin View
 // cannot read a frame inside it (nested frames inherit its sandbox flags, so none can share its
-// origin), so when the human enters Pick mode the kit adds a SECOND frame over this one, made from
-// this frame's `srcdoc`, sandboxed `allow-scripts` and nothing else, whose document opens with a
-// Content-Security-Policy admitting one script by hash. This frame stays underneath, unchanged, and
-// is shown again when Pick mode ends. Do not add a token to this attribute for the picker's sake.
+// origin), so every readable page also gets, by default, a SECOND frame over this one while Pick is armed
+// (armed from the first frame; only a page past `PICK_FRAME_LIMIT` waits for the Pick tool). It is made from
+// this frame's `srcdoc`, sandboxed `allow-scripts` and nothing else, and its document opens with a
+// Content-Security-Policy admitting one script by hash. This frame stays underneath, unchanged, and is shown
+// again whenever Pick is put down. Do not add a token to this attribute for the picker's sake.
 import type { MountContext, Mounted, Renderer } from "./types";
 
 async function mount(el: HTMLElement, bytes: Uint8Array, ctx: MountContext): Promise<Mounted> {

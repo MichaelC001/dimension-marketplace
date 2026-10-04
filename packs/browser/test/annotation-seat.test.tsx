@@ -123,8 +123,8 @@ const label = (dom: { find: (selector: string) => Element[] }, name: string): El
 async function marked(app: App, client = new BrowserClient(app), onDone = () => {}) {
 	await client.follow("b1");
 	const dom = await mount(<AnnotationSeat app={app} client={client} browserId="b1" frame={FRAME} onDone={onDone} />);
-	await dom.click(label(dom, "Comment pin"));
-	await dom.key(label(dom, "Mark up the page. Arrow keys move the cursor; Enter or Space places a point."), "Enter");
+	await dom.click(label(dom, "Pin"));
+	await dom.key(label(dom, "Draw on the page. Arrow keys move the cursor; Enter or Space places a point."), "Enter");
 	return { dom, client };
 }
 
@@ -223,7 +223,7 @@ describe("the annotation seat", () => {
 		await dom.settle();
 		expect(updates).toHaveLength(1);
 
-		await dom.click(dom.find("button.dam-done")[0] as Element);
+		await dom.click(label(dom, "Done"));
 
 		expect(done).toBe(1);
 		// Exactly the one request, and no take-back after it.
@@ -247,8 +247,8 @@ describe("the Browser around the seat", () => {
 		await dom.settle();
 		await dom.click(label(dom, "Annotate for the agent (Ctrl+Shift+A)"));
 		await dom.settle();
-		await dom.click(label(dom, "Comment pin"));
-		await dom.key(label(dom, "Mark up the page. Arrow keys move the cursor; Enter or Space places a point."), "Enter");
+		await dom.click(label(dom, "Pin"));
+		await dom.key(label(dom, "Draw on the page. Arrow keys move the cursor; Enter or Space places a point."), "Enter");
 		await dom.click(sendButton(dom));
 		await dom.settle();
 		expect(sendButton(dom).textContent).toContain("Added");
