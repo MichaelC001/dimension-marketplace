@@ -101,6 +101,8 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode }: PaneExtr
 	// Notes can be made on a recording that plays; the footer shows while they can be made or there are some to keep.
 	const markable = mode === "timeline" && !failed;
 	const drawable = markable && video !== null;
+	// The pen belongs to a video that can be marked; it must not flicker with the element during a reload.
+	const penUp = markable && kind === "video";
 
 	// Which frame is showing and how long one is, learned from frames reaching the screen. Costs nothing while hidden.
 	const clock = useRef<FrameClock | null>(null);
@@ -200,14 +202,14 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode }: PaneExtr
 		setHint(null);
 	}, [identity]);
 
-	// The pen goes down with the layer (a recording that failed, or would not open) and is the human's to pick up
+	// The pen goes down with the mode (a recording that failed, or would not open) and is the human's to pick up
 	// again; the card's Annotate action is the one ask that picks it up for them, in the tool they last held.
 	useEffect(() => {
-		if (!drawable) setTool(null);
-	}, [drawable]);
+		if (!penUp) setTool(null);
+	}, [penUp]);
 	// biome-ignore lint/correctness/useExhaustiveDependencies: `annotateRequests` is the trigger; the tool is read as it stands.
 	useEffect(() => {
-		if (tab.annotateRequests > 0 && drawable) setTool(tool ?? "box");
+		if (tab.annotateRequests > 0 && penUp) setTool(tool ?? "box");
 	}, [tab.annotateRequests]);
 
 	const seekTo = useCallback(
@@ -429,7 +431,7 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode }: PaneExtr
 			...(kind === "video"
 				? markupToolGroups({
 						tool,
-						onTool: picked => setTool(drawable ? picked : null),
+						onTool: picked => setTool(penUp ? picked : null),
 						canUndo: session.canUndo,
 						canRedo: session.canRedo,
 						onUndo: undo,
@@ -439,7 +441,7 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode }: PaneExtr
 					})
 				: []),
 		],
-		[full, failed, inPoint, kind, tool, drawable, markHere, stretch, undo, redo, session.canUndo, session.canRedo, session.clear, marks.length],
+		[full, failed, inPoint, kind, tool, penUp, markHere, stretch, undo, redo, session.canUndo, session.canRedo, session.clear, marks.length],
 	);
 	const toolbarHint = full
 		? FULL_SENTENCE
