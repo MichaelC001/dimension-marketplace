@@ -397,7 +397,9 @@ not authorize the model to use it. The host must supply current verified chat
 authority; otherwise saved-profile access fails closed. The person decides in
 the Browser View: allow this chat, deny, or grant/revoke standing access for the
 verified Loop. Successfully opening a new profile created by this chat grants
-its creator access; an unsuccessful or revoked launch does not.
+its creator access; an unsuccessful or revoked launch does not. The person's own
+`default` is never created by a model: even before its folder exists, an agent
+asking for it waits for the person's approval.
 
 The first request appears on the blank start page, outside the folded Options:
 there is no need to open another browser to find its approval controls. Requests

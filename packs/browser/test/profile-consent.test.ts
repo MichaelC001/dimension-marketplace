@@ -315,6 +315,56 @@ describeWithChrome("saved-profile consent at the MCP boundary", () => {
 		expect(preview).not.toHaveProperty("url");
 		expect((await r.call("browser_close", { browserId }, person)).isError).toBeFalsy();
 	}, BROWSER_TEST_TIMEOUT_MS);
+	test("a model cannot create the person's default profile on a fresh root: it is refused for approval and made nothing, while any other new name stays its own", async () => {
+		const r = await setup();
+		const store = new ProfileStore(r.rootDir);
+		expect(store.exists("default")).toBe(false);
+		const refused = await r.call("browser_open", { profile: "default" }, model);
+		expect(refused.isError).toBe(true);
+		expect(store.exists("default")).toBe(false);
+		// No grant was left behind: asking again is still a request for the person, not an open.
+		expect(await failureCode(() => r.runtime.open({ profile: "default" }, { caller: "model", session: "chat-a" }))).toBe("profile_consent_required");
+		expect(store.exists("default")).toBe(false);
+		// The person must be able to see the request to decide it although its folder is not on disk yet; the repeated ask is still one row, and looking creates nothing.
+		expect((await r.call("browser_profiles", {}, person)).structuredContent?.consents).toEqual([expect.objectContaining({ name: "default", status: "pending" })]);
+		expect(store.exists("default")).toBe(false);
+		// The person's allow needs a live pending request, so it also proves the refusal raised one.
+		expect((await r.call("browser_profile_consent", { name: "default", decision: "allow", scope: "chat" }, person)).isError).toBeFalsy();
+		expect((await r.call("browser_profiles", {}, person)).structuredContent?.consents).not.toEqual(expect.arrayContaining([expect.objectContaining({ name: "default", status: "pending" })]));
+		const approved = id(await r.call("browser_open", { profile: "default" }, model));
+		expect((await r.call("browser_close", { browserId: approved }, model)).isError).toBeFalsy();
+		// Opened on the person's approval, `default` is on disk and the decided request shows as the chat's grant.
+		expect((await r.call("browser_profiles", {}, person)).structuredContent?.consents).toEqual([expect.objectContaining({ name: "default", status: "granted", scope: "chat" })]);
+		// Any other new name is still the model's to create, and is granted to its creator alone.
+		const created = id(await r.call("browser_open", { profile: "fresh" }, model));
+		expect((await r.call("browser_state", { browserId: created }, model)).isError).toBeFalsy();
+		expect((await r.call("browser_state", { browserId: created }, other)).isError).toBe(true);
+		expect((await r.call("browser_close", { browserId: created }, model)).isError).toBeFalsy();
+	}, BROWSER_TEST_TIMEOUT_MS);
+	test("a model's close of a saved profile, once admitted, finishes and frees the profile even if its authority is withdrawn during teardown", async () => {
+		const r = await setup();
+		const store = new ProfileStore(r.rootDir);
+		await savedProfile(r);
+		expect((await r.call("browser_open", { profile: "work" }, model)).isError).toBe(true);
+		expect((await r.call("browser_profile_consent", { name: "work", decision: "allow", scope: "chat" }, person)).isError).toBeFalsy();
+		const browserId = id(await r.call("browser_open", { profile: "work" }, model));
+		// Authority is current for close()'s admission (guard, then its first assertCurrent) and withdrawn for every look after it.
+		let admitted = false;
+		const withdrawn = new Error("authority withdrawn after close admission");
+		const assertCurrent = () => {
+			if (admitted) throw withdrawn;
+			admitted = true;
+		};
+		const guard = Object.assign(() => { if (admitted) throw withdrawn; }, { assertCurrent });
+		await r.runtime.close(browserId, "model", guard);
+		expect(admitted).toBe(true);
+		expect(await failureCode(() => r.runtime.state(browserId))).toBe("unknown_browser");
+		expect(store.heldElsewhere("work")).toBe(false);
+		// A half-closed entry would still hold the profile for this chat: it opens again as a new browser.
+		const reopened = id(await r.call("browser_open", { profile: "work" }, model));
+		expect(reopened).not.toBe(browserId);
+		expect((await r.call("browser_close", { browserId: reopened }, model)).isError).toBeFalsy();
+	}, BROWSER_TEST_TIMEOUT_MS);
 });
 
 describeWithChrome("host-authenticated saved profile authority", () => {

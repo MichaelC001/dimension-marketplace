@@ -39,7 +39,7 @@ import { existsSync, type FSWatcher, watch } from "node:fs";
 import { join } from "node:path";
 import { type ConnectionObservations, isPublicSite, siteHost } from "./connection.js";
 import { checkNewProfile, cleanAvatar, isProfileColour, matchProfiles, PROFILE_COLOURS, type ResolvedProfileMeta, resolveProfileMeta } from "./profile-meta.js";
-import { profileSlug, RELAY_PROFILE } from "./profile-name.js";
+import { DEFAULT_PROFILE, profileSlug, RELAY_PROFILE } from "./profile-name.js";
 import { buildProfileList, type HoldFact } from "./profile-list.js";
 import { probeFor, readProbe, SETTLE_MS, type SiteProbe, type ProbeVerdict } from "./probes.js";
 import type {
@@ -528,7 +528,8 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			await this.makeRoom(opener.session);
 		}
 		assertEngineAvailable(engine);
-		const createdForChat = profile !== null && profile !== RELAY_PROFILE && opener.caller === "model" && this.store.claimNewProfile(profile);
+		// The person's own `default` is never made by a model: it goes through the same approval as any existing profile, even before its folder exists.
+		const createdForChat = profile !== null && profile !== RELAY_PROFILE && profile !== DEFAULT_PROFILE && opener.caller === "model" && this.store.claimNewProfile(profile);
 		if (createdForChat && profile !== null) this.openingCreations.add(profile);
 		if (profile !== null && profile !== RELAY_PROFILE && opener.caller === "model" && !createdForChat) this.requireProfileName(profile, opener.session);
 
@@ -682,14 +683,14 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				// An agent closing a browser the person took over would end what they are doing in it.
 				refuseWhileTakenOver(entry, caller);
 			}
-			await this.teardown(entry, guard);
+			await this.teardown(entry);
 		}, { evenIfClosed: true });
 		// A throwaway browser's data is gone by the time its close resolves.
 		await Promise.allSettled(this.removals);
 	}
 
 	/** Retain ownership and the lock until the driver confirms shutdown. A throwaway that cannot be stopped is tried again soon. */
-	private async teardown(entry: Entry, guard?: EffectGuard): Promise<void> {
+	private async teardown(entry: Entry): Promise<void> {
 		if (this.byId.get(entry.browserId) !== entry) return;
 		settleOnClose(entry);
 		clearTimeout(entry.wheelTimer);
@@ -700,12 +701,8 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		try {
 			// A task agent drives this Chrome; it stops before the browser does.
 			await this.stopTask(entry);
-			if (guard !== undefined) await guard();
-			guard?.assertCurrent();
 			// One last look at the page the person leaves on: a sign-in done in place never loads a page. It must not hold a close up.
 			await this.probeAtClose(entry);
-			if (guard !== undefined) await guard();
-			guard?.assertCurrent();
 			await this.stopBrowser(entry);
 		} catch (error) {
 			if (entry.profile === null) this.retryClose(entry);
@@ -1351,7 +1348,13 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		if (!permissions && !principal) return [];
 		const now = Date.now();
 		const subject = principal === undefined ? {} : { subject: { workspaceId: principal.workspaceId, id: principal.id, origin: principal.origin } };
-		return buildProfileList(this.store, slug => this.holdFact(slug, session), now).flatMap(profile => {
+		const listed = buildProfileList(this.store, slug => this.holdFact(slug, session), now);
+		// A request can name a profile whose folder does not exist yet (the person's own `default` on a fresh install); the person must still see it to decide it.
+		const onDisk = new Set(listed.map(profile => profile.name));
+		const awaiting = [...(permissions?.entries() ?? [])]
+			.filter(([name, permission]) => permission.status === "pending" && !onDisk.has(name))
+			.map(([name]) => ({ name, label: name === DEFAULT_PROFILE ? "Default" : name, sites: [] }));
+		return [...listed, ...awaiting].flatMap(profile => {
 			const rows: ProfileConsent[] = [];
 			const permission = permissions?.get(profile.name);
 			if (permission?.status === "pending" && (permission.expiresAt <= now || !samePrincipal(permission.principal, principal))) permissions?.delete(profile.name);
