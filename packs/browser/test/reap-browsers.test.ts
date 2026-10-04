@@ -29,7 +29,7 @@ afterEach(async () => {
 describeWithChrome("the sweep and the browsers the runtime launched", () => {
   test.skipIf(process.platform !== "win32")("a saved profile's Chrome and a throwaway's are untouched by a sweep that ends the child a cell left, and still answer", async () => {
     const { runtime } = await createRuntime();
-    const saved = await runtime.open({ profile: "sweep-saved", viewport: VIEWPORT });
+    const saved = await runtime.open({ profile: "sweep-saved", viewport: VIEWPORT }, { caller: "app" });
     const throwaway = await runtime.open({ viewport: VIEWPORT });
     const stranded = spawn(NODE, ["-e", "setTimeout(() => {}, 120000)"], { stdio: "ignore" });
     left.push(stranded.pid!);

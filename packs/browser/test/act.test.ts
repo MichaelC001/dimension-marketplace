@@ -11,6 +11,7 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, test } from "bun:test";
 import { CredentialKey, readCredentials } from "../src/credentials";
+import type { EngineDriver } from "../src/engines/types";
 import {
 	BROWSER_TEST_TIMEOUT_MS,
 	createRuntime,
@@ -43,7 +44,7 @@ describeWithChrome("act", () => {
 		async () => {
 			const fixture = startFixture();
 			const { runtime } = await createRuntime();
-			const { browserId } = await runtime.open({ profile: "act-flow", viewport: VIEWPORT });
+			const { browserId } = await runtime.open({ profile: "act-flow", viewport: VIEWPORT }, { caller: "app" });
 
 			const landed = await perform(runtime, browserId, { kind: "navigate", url: fixture.url("/signup") });
 			expect(landed.url).toBe(fixture.url("/signup"));
@@ -64,7 +65,7 @@ describeWithChrome("act", () => {
 		async () => {
 			const fixture = startFixture();
 			const { runtime } = await createRuntime();
-			const { browserId } = await runtime.open({ profile: "act-miss", viewport: VIEWPORT });
+			const { browserId } = await runtime.open({ profile: "act-miss", viewport: VIEWPORT }, { caller: "app" });
 			await perform(runtime, browserId, { kind: "navigate", url: fixture.url("/signup") });
 
 			const result = await runtime.act(browserId, { kind: "click", selector: "#no-such-button" });
@@ -81,7 +82,7 @@ describeWithChrome("act", () => {
 		async () => {
 			const fixture = startFixture();
 			const { runtime } = await createRuntime();
-			const { browserId } = await runtime.open({ profile: "act-unknown", viewport: VIEWPORT });
+			const { browserId } = await runtime.open({ profile: "act-unknown", viewport: VIEWPORT }, { caller: "app" });
 			await perform(runtime, browserId, { kind: "navigate", url: fixture.url("/guarded") });
 			// Empty field: the guard lets the selection through.
 			await perform(runtime, browserId, { kind: "type", selector: "#pass", text: "first" });
@@ -105,7 +106,7 @@ describeWithChrome("act", () => {
 		async () => {
 			const fixture = startFixture();
 			const { runtime } = await createRuntime();
-			const { browserId } = await runtime.open({ profile: "act-scheme", viewport: VIEWPORT });
+			const { browserId } = await runtime.open({ profile: "act-scheme", viewport: VIEWPORT }, { caller: "app" });
 			await perform(runtime, browserId, { kind: "navigate", url: fixture.url("/signup") });
 
 			for (const url of ['javascript:fetch("/js-ran")', "file:///etc/hosts", "file:///C:/Windows/win.ini"]) {
@@ -124,7 +125,7 @@ describeWithChrome("act", () => {
 		async () => {
 			const fixture = startFixture();
 			const { runtime, rootDir } = await createRuntime();
-			const { browserId } = await runtime.open({ profile: "act-saved", viewport: VIEWPORT });
+			const { browserId } = await runtime.open({ profile: "act-saved", viewport: VIEWPORT }, { caller: "app" });
 			const origin = new URL(fixture.url("/")).origin;
 			const other = new URL(fixture.url("/", "localhost")).origin;
 			const saved = "Saved-Pw_7#fixture";
@@ -181,7 +182,7 @@ describeWithChrome("act", () => {
 		async () => {
 			const fixture = startFixture();
 			const { runtime, rootDir } = await createRuntime();
-			const { browserId } = await runtime.open({ profile: "act-app", viewport: VIEWPORT });
+			const { browserId } = await runtime.open({ profile: "act-app", viewport: VIEWPORT }, { caller: "app" });
 			const saved = "Saved-Pw_app#fixture";
 			await writeFile(join(rootDir, "profiles", "act-app", "credentials.json"), JSON.stringify({ version: 1, origins: { [new URL(fixture.url("/")).origin]: saved } }));
 			await perform(runtime, browserId, { kind: "navigate", url: fixture.url("/") });
@@ -203,7 +204,7 @@ describeWithChrome("act", () => {
 		async () => {
 			const fixture = startFixture();
 			const { runtime, rootDir } = await createRuntime();
-			const { browserId } = await runtime.open({ profile: "act-spoof", viewport: VIEWPORT });
+			const { browserId } = await runtime.open({ profile: "act-spoof", viewport: VIEWPORT }, { caller: "app" });
 			const victim = new URL(fixture.url("/")).origin;
 			const real = new URL(fixture.url("/", "localhost")).origin;
 			const saved = "Victim-Pw_9#fixture";
@@ -238,7 +239,7 @@ describeWithChrome("act", () => {
 		async () => {
 			const fixture = startFixture();
 			const { runtime, rootDir } = await createRuntime();
-			const { browserId } = await runtime.open({ profile: "act-reveal", viewport: VIEWPORT });
+			const { browserId } = await runtime.open({ profile: "act-reveal", viewport: VIEWPORT }, { caller: "app" });
 			const saved = "Revealed-Pw_3#fixture";
 			await writeFile(join(rootDir, "profiles", "act-reveal", "credentials.json"), JSON.stringify({ version: 1, origins: { [new URL(fixture.url("/")).origin]: saved } }));
 			await perform(runtime, browserId, { kind: "navigate", url: fixture.url("/revealable") });
@@ -258,7 +259,7 @@ describeWithChrome("act", () => {
 		async () => {
 			const fixture = startFixture();
 			const { runtime, rootDir } = await createRuntime();
-			const { browserId } = await runtime.open({ profile: "act-framed", viewport: VIEWPORT });
+			const { browserId } = await runtime.open({ profile: "act-framed", viewport: VIEWPORT }, { caller: "app" });
 			const top = new URL(fixture.url("/")).origin;
 			const framed = new URL(fixture.url("/", "localhost")).origin;
 			// Both origins have one; only the iframe's may ever go into the iframe.
@@ -307,11 +308,35 @@ describeWithChrome("act", () => {
 	);
 
 	test(
+		"guarded native fill and submit use the resolved cross-origin iframe rather than the top renderer",
+		async () => {
+			const fixture = startFixture();
+			const { runtime } = await createRuntime();
+			const { browserId } = await runtime.open({ profile: "act-guarded-frame", viewport: VIEWPORT }, { caller: "app" });
+			await perform(runtime, browserId, { kind: "navigate", url: fixture.url("/framed") });
+			const loaded = await waitUntil("the cross-origin form", async () => (await runtime.snapshot(browserId)).text, text => FORM_IN_FRAME.test(text));
+			const frame = frameRef(loaded);
+			expect(loaded).toContain(new URL(fixture.url("/", "localhost")).origin);
+			// Existing real-driver seam: exercise the native guard ABI, not runtime.act's outcome mapping.
+			const seam = runtime as unknown as { byId: Map<string, { driver: EngineDriver }> };
+			const entry = seam.byId.get(browserId);
+			if (!entry) throw new Error("the opened browser has no native driver");
+			const guard = Object.assign(() => undefined, { assertCurrent: () => undefined });
+			await entry.driver.fill(`${frame} #user`, "guarded-frame", guard);
+			await entry.driver.perform({ kind: "click", selector: `${frame} #go` }, undefined, guard);
+			await waitUntil("the guarded iframe form post", () => fixture.submissions().length, count => count === 1);
+			expect(fixture.submissions()).toEqual([{ user: "guarded-frame", pass: "" }]);
+			expect((await runtime.state(browserId)).url).toBe(fixture.url("/framed"));
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
 		"generatePassword mints a password for the FRAME's origin, saves it, types it and never returns it; a retry reuses it, useSavedPassword logs in with it, and a non-password field is refused with nothing saved",
 		async () => {
 			const fixture = startFixture();
 			const { runtime, rootDir } = await createRuntime();
-			const { browserId } = await runtime.open({ profile: "act-generate", viewport: VIEWPORT });
+			const { browserId } = await runtime.open({ profile: "act-generate", viewport: VIEWPORT }, { caller: "app" });
 			const saved = (): Record<string, string> => readCredentials(join(rootDir, "profiles", "act-generate"), new CredentialKey(rootDir));
 			const store = join(rootDir, "profiles", "act-generate", "credentials.json");
 			const framed = new URL(fixture.url("/", "localhost")).origin;
@@ -368,7 +393,7 @@ describeWithChrome("act", () => {
 		async () => {
 			const fixture = startFixture();
 			const { runtime } = await createRuntime();
-			const { browserId } = await runtime.open({ profile: "act-frame-shift", viewport: VIEWPORT });
+			const { browserId } = await runtime.open({ profile: "act-frame-shift", viewport: VIEWPORT }, { caller: "app" });
 			await perform(runtime, browserId, { kind: "navigate", url: fixture.url("/three-frames") });
 			const bothForms = /^@2~[0-9a-f]{8} #user /m;
 			const before = await waitUntil("both form iframes in the snapshot", async () => (await runtime.snapshot(browserId)).text, (text) => bothForms.test(text) && /^@3~[0-9a-f]{8} #user /m.test(text));
@@ -397,7 +422,7 @@ describeWithChrome("act", () => {
 		async () => {
 			const fixture = startFixture();
 			const { runtime, rootDir } = await createRuntime();
-			const { browserId } = await runtime.open({ profile: "act-thief", viewport: VIEWPORT });
+			const { browserId } = await runtime.open({ profile: "act-thief", viewport: VIEWPORT }, { caller: "app" });
 			const saved = "Thief-Pw_4#fixture";
 			await writeFile(join(rootDir, "profiles", "act-thief", "credentials.json"), JSON.stringify({ version: 1, origins: { [new URL(fixture.url("/")).origin]: saved } }));
 			await perform(runtime, browserId, { kind: "navigate", url: fixture.url("/focus-thief") });
@@ -418,10 +443,10 @@ describeWithChrome("act", () => {
 		async () => {
 			const { runtime } = await createRuntime();
 
-			expect(await failureCode(() => runtime.open({ profile: "refused", engine: "browser4", viewport: VIEWPORT }))).toBe(
+			expect(await failureCode(() => runtime.open({ profile: "refused", engine: "browser4", viewport: VIEWPORT }, { caller: "app" }))).toBe(
 				"browser4_tls_verification_disabled",
 			);
-			const opened = await runtime.open({ profile: "refused", viewport: VIEWPORT });
+			const opened = await runtime.open({ profile: "refused", viewport: VIEWPORT }, { caller: "app" });
 			expect((await runtime.state(opened.browserId)).engine).toBe("chromium");
 		},
 		BROWSER_TEST_TIMEOUT_MS,

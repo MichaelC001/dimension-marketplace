@@ -100,7 +100,7 @@ export interface ProfileSwitcherProps {
 	readonly onOpen: () => void;
 	/** The browsers this chat holds that are not saved profiles and are not the one on screen: a Private browser or Your Chrome left open. */
 	readonly consents: readonly ProfileConsent[];
-	readonly onConsent: (name: string, decision: "allow" | "deny" | "revoke") => void;
+	readonly onConsent: (name: string, decision: "allow" | "deny" | "revoke", scope: "chat" | "loop", expectedSubject?: ProfileConsent["subject"]) => void;
 	readonly browsers: readonly OpenBrowserListing[];
 	/** Open `profile` here (`null`: a Private browser). */
 	readonly onSwitch: (profile: string | null) => void;
@@ -112,6 +112,29 @@ export interface ProfileSwitcherProps {
 	readonly onAdd: (request: NewProfileRequest) => Promise<void>;
 	readonly onTakeOver: () => void;
 	readonly onHandBack: () => void;
+}
+
+/** Saved-profile authority belongs to the displayed subject, not an open browser. */
+export function ProfileConsents({ consents, onConsent, menu = false }: Pick<ProfileSwitcherProps, "consents" | "onConsent"> & { readonly menu?: boolean }) {
+	if (consents.length === 0) return null;
+	return (
+		<div className="bx-pmenu-list" role="group" aria-label="Agent profile access">
+			{consents.map(request => (
+				<div className="bx-pmenu-control bx-consent" key={`${request.name}:${request.scope}`}>
+					<span className="bx-pmenu-control-text">
+						{request.status === "granted" ? request.scope === "loop" ? `${request.loopLabel} has standing access` : "This chat has access" : "Agent requests access"} to {request.label}: {request.sites.filter(site => site.signedIn === true).map(site => `${site.site}${site.account ? ` (${site.account})` : ""}`).join(", ") || "No observed sign-ins"}
+					</span>
+					{request.status === "pending" ? (
+						<>
+							<button type="button" role={menu ? "menuitem" : undefined} className="bx-pmenu-control-btn" onClick={() => onConsent(request.name, "allow", "chat", request.subject)}>Allow this chat</button>
+							{request.scope === "loop" && <button type="button" role={menu ? "menuitem" : undefined} className="bx-pmenu-control-btn" onClick={() => onConsent(request.name, "allow", "loop", request.subject)}>Always allow {request.loopLabel}</button>}
+							<button type="button" role={menu ? "menuitem" : undefined} className="bx-pmenu-control-btn" onClick={() => onConsent(request.name, "deny", request.scope, request.subject)}>Deny</button>
+						</>
+					) : <button type="button" role={menu ? "menuitem" : undefined} className="bx-pmenu-control-btn" onClick={() => onConsent(request.name, "revoke", request.scope, request.subject)}>{request.scope === "loop" ? `Revoke ${request.loopLabel}` : "Revoke this chat"}</button>}
+				</div>
+			))}
+		</div>
+	);
 }
 
 export function ProfileSwitcher(props: ProfileSwitcherProps) {
@@ -255,23 +278,7 @@ export function ProfileSwitcher(props: ProfileSwitcherProps) {
 								</div>
 							)}
 
-							{props.consents.length > 0 && (
-								<div className="bx-pmenu-list" role="group" aria-label="Agent profile access">
-									{props.consents.map(request => (
-										<div className="bx-pmenu-control" key={request.name}>
-											<span className="bx-pmenu-control-text">
-												Agent access to {request.label}: {request.sites.filter(site => site.signedIn === true).map(site => `${site.site}${site.account ? ` (${site.account})` : ""}`).join(", ") || "No observed sign-ins"}
-											</span>
-											{request.status === "pending" ? (
-												<>
-													<button type="button" className="bx-pmenu-control-btn" onClick={() => props.onConsent(request.name, "allow")}>Allow this chat</button>
-													<button type="button" className="bx-pmenu-control-btn" onClick={() => props.onConsent(request.name, "deny")}>Deny</button>
-												</>
-											) : <button type="button" className="bx-pmenu-control-btn" onClick={() => props.onConsent(request.name, "revoke")}>Revoke access</button>}
-										</div>
-									))}
-								</div>
-							)}
+							<ProfileConsents consents={props.consents} onConsent={props.onConsent} menu />
 							<div className="bx-menu-sep" role="separator" />
 
 							<div className="bx-pmenu-list" role="group" aria-label="Other profiles">

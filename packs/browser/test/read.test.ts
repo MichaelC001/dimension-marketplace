@@ -128,7 +128,7 @@ describeWithChrome("browser_read", () => {
 		async () => {
 			const fixture = startFixture();
 			const { runtime } = await readRuntime();
-			const opened = await runtime.open({ profile: "signed-in" });
+			const opened = await runtime.open({ profile: "signed-in" }, { caller: "app" });
 			await perform(runtime, opened.browserId, { kind: "navigate", url: fixture.url("/set-cookie") });
 			await perform(runtime, opened.browserId, { kind: "navigate", url: fixture.url("/show-cookie") });
 			expect((await runtime.snapshot(opened.browserId)).text).toContain(`COOKIE:${fixture.cookieValue}`);

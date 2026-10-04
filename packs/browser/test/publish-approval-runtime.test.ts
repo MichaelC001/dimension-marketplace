@@ -19,13 +19,17 @@ import { randomBytes } from "node:crypto";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
+import { z } from "zod";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { ARTIFACTORY_HOST_CONTEXT_EXTENSION_ID, ARTIFACTORY_HOST_CONTEXT_META_KEY, ARTIFACTORY_HOST_CONTEXT_READ_METHOD } from "@dimension/sdk/artifactory";
 import type { BrowserAction, PublishRecipe, PublishRecord } from "../src/contracts";
 import type { EngineDriver, EngineState, FieldRead } from "../src/engines/types";
 import type { BrowserRuntime } from "../src/runtime";
 import { parsePreset } from "../src/presets";
+import { confirm, prepare, validateRecipe } from "../src/publish";
 import { createBrowserServer } from "../src/server";
+import { ProfileStore } from "../src/store";
 import { ActionNotDispatched } from "../src/store";
 import { approvePublish, createRoot, newRuntime, teardown } from "./fixture";
 
@@ -107,6 +111,7 @@ class ComposePage {
 
 	async perform(action: BrowserAction): Promise<Record<string, never>> {
 		if (action.kind === "navigate") {
+			if (action.url === undefined) throw new Error("navigation requires a URL");
 			this.effects.push(`navigate ${action.url}`);
 			this.url = action.url;
 			this.fields.clear();
@@ -191,12 +196,23 @@ async function session(): Promise<Session> {
 	await mkdir(viewDir, { recursive: true });
 	await writeFile(join(viewDir, "index.html"), "<!doctype html><title>view</title>");
 	const server = await createBrowserServer({ runtime, viewDir, presets: [STUB_PRESET] });
-	const client = new Client({ name: "publish-approval-runtime-test", version: "0.0.0" });
+	const client = new Client({ name: "publish-approval-runtime-test", version: "0.0.0" }, { capabilities: { extensions: { [ARTIFACTORY_HOST_CONTEXT_EXTENSION_ID]: {} } } });
+	const token = randomBytes(32).toString("hex");
+	const store = new ProfileStore(rootDir);
+	store.ensureProfile(PROFILE);
+	client.setRequestHandler(z.object({ method: z.literal(ARTIFACTORY_HOST_CONTEXT_READ_METHOD), params: z.object({ sessionId: z.string(), token: z.string() }) }), async request => {
+		if (request.params.sessionId !== "publish-chat" || request.params.token !== token) throw new Error("Unknown host context");
+		return { active: true, sessionId: "publish-chat" };
+	});
 	const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
 	await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
 	clients.push(client);
 	const call: Call = async (name, args, caller) =>
-		(await client.callTool({ name, arguments: args, ...(caller === undefined ? {} : { _meta: { [CALLER]: caller } }) })) as ToolResult;
+		(await client.callTool({ name, arguments: args, _meta: {
+			[CALLER]: caller ?? "app",
+			"ai.insodimension/session": { sessionId: "publish-chat" },
+			[ARTIFACTORY_HOST_CONTEXT_META_KEY]: { sessionId: "publish-chat", token },
+		} })) as ToolResult;
 	return { call, runtime, rootDir, page, browserId };
 }
 
@@ -285,6 +301,8 @@ describe("browser_publish post", () => {
 
 	test("with an approval for the same text it parks typed and unclicked, and parking spends nothing: a cancelled park parks again", async () => {
 		const s = await session();
+		expect((await s.call("browser_open", { profile: PROFILE }, "model")).isError).toBe(true);
+		expect((await s.call("browser_profile_consent", { name: PROFILE, decision: "allow", scope: "chat" }, "app")).isError).toBeFalsy();
 		await approve(s);
 
 		const parked = await park(s);
@@ -335,6 +353,8 @@ describe("browser_publish post", () => {
 describe("browser_publish_confirm", () => {
 	test("with the approval gone since the park it is refused, nothing is clicked, the publish stays pending, and a fresh approval lets that same publish post", async () => {
 		const s = await session();
+		expect((await s.call("browser_open", { profile: PROFILE }, "model")).isError).toBe(true);
+		expect((await s.call("browser_profile_consent", { name: PROFILE, decision: "allow", scope: "chat" }, "app")).isError).toBeFalsy();
 		const { file } = await approve(s);
 		const parked = await park(s);
 		await rm(file);
@@ -356,6 +376,8 @@ describe("browser_publish_confirm", () => {
 
 	test("a confirm refused for another reason (no expect, a wrong expect) spends nothing: the same publish then posts", async () => {
 		const s = await session();
+		expect((await s.call("browser_open", { profile: PROFILE }, "model")).isError).toBe(true);
+		expect((await s.call("browser_profile_consent", { name: PROFILE, decision: "allow", scope: "chat" }, "app")).isError).toBeFalsy();
 		await approve(s);
 		const parked = await park(s);
 
@@ -376,6 +398,8 @@ describe("browser_publish_confirm", () => {
 	for (const caller of ["model", "app"] as const) {
 		test(`the ${caller === "app" ? "View's Post" : "model's confirm"} spends the approval: the posted text cannot be parked again`, async () => {
 			const s = await session();
+			expect((await s.call("browser_open", { profile: PROFILE }, "model")).isError).toBe(true);
+			expect((await s.call("browser_profile_consent", { name: PROFILE, decision: "allow", scope: "chat" }, "app")).isError).toBeFalsy();
 			await approve(s);
 			const parked = await park(s);
 
@@ -427,6 +451,8 @@ describe("browser_publish_confirm", () => {
 		for (const row of failures) {
 			test(`${row.name} gives the approval back: the same text parks and posts afterwards`, async () => {
 				const s = await session();
+				expect((await s.call("browser_open", { profile: PROFILE }, "model")).isError).toBe(true);
+				expect((await s.call("browser_profile_consent", { name: PROFILE, decision: "allow", scope: "chat" }, "app")).isError).toBeFalsy();
 				await approve(s);
 				const parked = await park(s);
 				row.arrange(s);
@@ -471,6 +497,8 @@ describe("an approval bound to a shipped preset", () => {
 	for (const caller of ["model", "app"] as const) {
 		test(`lets that preset post, spent by the ${caller === "app" ? "View's Post" : "model's confirm"}: the record keeps the preset and the post cannot go out again`, async () => {
 			const s = await session();
+			expect((await s.call("browser_open", { profile: PROFILE }, "model")).isError).toBe(true);
+			expect((await s.call("browser_profile_consent", { name: PROFILE, decision: "allow", scope: "chat" }, "app")).isError).toBeFalsy();
 			await approve(s, [TEXT], PROFILE, PRESET);
 			const parked = await park(s, [TEXT], s.browserId, "preset");
 			expect(parked.preset).toMatchObject({ name: PRESET });
@@ -515,5 +543,102 @@ describe("an approval bound to a shipped preset", () => {
 
 		expectRefused(refused, NO_APPROVAL);
 		expect(s.page.effects).toEqual([]);
+	});
+});
+
+describe("publication authority at the actual page boundary", () => {
+	test("revocation while re-reading the parked draft prevents submit", async () => {
+		const page = new ComposePage();
+		const prepared = await prepare(page as unknown as EngineDriver, PROFILE, validateRecipe(recipe()), "post");
+		if (!("record" in prepared)) throw new Error("Expected a parked publication");
+		let authorized = true;
+		let reading!: () => void;
+		let release!: () => void;
+		const entered = new Promise<void>(resolve => { reading = resolve; });
+		const gate = new Promise<void>(resolve => { release = resolve; });
+		const originalRead = page.readField.bind(page);
+		page.readField = async selector => {
+			reading();
+			await gate;
+			return originalRead(selector);
+		};
+		const assertCurrent = () => {
+			if (!authorized) throw new Error("host context revoked");
+		};
+		const settling = confirm(page as unknown as EngineDriver, prepared, Object.assign(assertCurrent, { assertCurrent }));
+		await entered;
+		authorized = false;
+		release();
+		await settling;
+		expect(prepared.record.status).toBe("failed");
+		expect(page.clicks).toBe(0);
+	}, 30_000);
+
+	test("revocation after an accepted click reports unknown and never submits again", async () => {
+		const page = new ComposePage();
+		const prepared = await prepare(page as unknown as EngineDriver, PROFILE, validateRecipe(recipe()), "post");
+		if (!("record" in prepared)) throw new Error("Expected a parked publication");
+		let authorized = true;
+		page.onSubmit = () => {
+			page.url = RECEIPT;
+			authorized = false;
+		};
+		const assertCurrent = () => {
+			if (!authorized) throw new Error("host context revoked");
+		};
+		await confirm(page as unknown as EngineDriver, prepared, Object.assign(assertCurrent, { assertCurrent }));
+		expect(prepared.record.status).toBe("unknown");
+		expect(page.clicks).toBe(1);
+	}, 30_000);
+});
+
+describe("approval ownership across authority loss", () => {
+	test("revocation while the parked draft is re-read prevents submit and restores the unspent approval", async () => {
+		const s = await session();
+		await approve(s);
+		const parked = await park(s);
+		let authorized = true;
+		let reading!: () => void;
+		let release!: () => void;
+		const entered = new Promise<void>(resolve => { reading = resolve; });
+		const gate = new Promise<void>(resolve => { release = resolve; });
+		const read = s.page.readField.bind(s.page);
+		s.page.readField = async selector => {
+			reading();
+			await gate;
+			return read(selector);
+		};
+		const assertCurrent = () => {
+			if (!authorized) throw new Error("host context revoked");
+		};
+		const confirming = s.runtime.confirmPublish(s.browserId, parked.publishId, "app", undefined, Object.assign(assertCurrent, { assertCurrent }));
+		await entered;
+		authorized = false;
+		release();
+		const refused = await confirming;
+		expect(refused.status).toBe("failed");
+		expect(s.page.clicks).toBe(0);
+		s.page.readField = read;
+		const again = await park(s);
+		expect(again.status).toBe("awaiting-confirmation");
+	});
+
+	test("revocation after accepted submit cannot restore the approval or replay the click", async () => {
+		const s = await session();
+		await approve(s);
+		const parked = await park(s);
+		let authorized = true;
+		s.page.onSubmit = () => {
+			s.page.url = RECEIPT;
+			authorized = false;
+		};
+		const assertCurrent = () => {
+			if (!authorized) throw new Error("host context revoked");
+		};
+		const uncertain = await s.runtime.confirmPublish(s.browserId, parked.publishId, "app", undefined, Object.assign(assertCurrent, { assertCurrent }));
+		expect(uncertain.status).toBe("unknown");
+		expect(s.page.clicks).toBe(1);
+		expectRefused(await publish(s), "already used");
+		expect(s.page.clicks).toBe(1);
 	});
 });

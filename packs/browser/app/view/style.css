@@ -821,6 +821,25 @@ kbd {
 	box-shadow: 0 0 0 2px var(--fr-accent);
 }
 
+.bx-consent {
+	flex-wrap: wrap;
+	justify-content: flex-start;
+}
+
+.bx-consent .bx-pmenu-control-text {
+	flex-basis: 100%;
+	overflow-wrap: anywhere;
+}
+
+.bx-consent .bx-pmenu-control-btn {
+	height: auto;
+	min-height: 28px;
+	max-width: 100%;
+	padding-block: 6px;
+	white-space: normal;
+	overflow-wrap: anywhere;
+}
+
 /* The menu's actions stay at its bottom edge while a long list scrolls beneath them. */
 .bx-pmenu-foot {
 	position: sticky;

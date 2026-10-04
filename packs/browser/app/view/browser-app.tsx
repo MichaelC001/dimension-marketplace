@@ -14,6 +14,7 @@ import { BrowserClient, failureText, openFailureText, type ToolMount } from "./b
 import { PageView } from "./page-view";
 import { DEFAULT_PROFILE, RELAY_PROFILE } from "../../src/profile-name";
 import { BlankTab, StartPage } from "./start-page";
+import type { ProfileSwitcherProps } from "./profile-menu";
 import { TabStrip } from "./tab-strip";
 import { PublishBar } from "./publish-bar";
 import { type OmniboxHandle, Toolbar } from "./toolbar";
@@ -200,10 +201,20 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 		if (browserId === null) loadProfiles();
 	}, [loadProfiles, browserId]);
 	useEffect(() => {
-		if (!menuOpen) return;
+		if (!menuOpen && browserId !== null) return;
 		const timer = setInterval(loadProfiles, 2_000);
 		return () => clearInterval(timer);
-	}, [menuOpen, loadProfiles]);
+	}, [menuOpen, browserId, loadProfiles]);
+
+	const onConsent = useCallback<ProfileSwitcherProps["onConsent"]>((name, decision, scope, expectedSubject) => {
+		if (boundRef.current === null) setOpenError(null);
+		void client.decideProfileConsent(name, decision, scope, expectedSubject).then(loadProfiles, cause => {
+			if (!mountedRef.current) return;
+			if (boundRef.current === null) setOpenError(failureText(cause));
+			else say("error", failureText(cause));
+			loadProfiles();
+		});
+	}, [client, loadProfiles, say]);
 
 	// Remember which task this View saw running, so its end gets a toast.
 	useEffect(() => {
@@ -556,6 +567,8 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 			<StartPage
 				profiles={profiles}
 				profilesError={profilesError}
+				consents={consents}
+				onConsent={onConsent}
 				profile={profile}
 				isPrivate={isPrivate}
 				ownChrome={ownChrome}
@@ -641,9 +654,7 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 					onMenu: setMenuOpen,
 					onOpen: loadProfiles,
 					consents,
-					onConsent: (name, decision) => {
-						void client.decideProfileConsent(name, decision).then(loadProfiles, cause => say("error", failureText(cause)));
-					},
+					onConsent,
 					browsers: browsers.filter(item => item.browserId !== browserId),
 					onSwitch: target => void switchProfile(target),
 					onSwitchBrowser: target => void switchBrowser(target),

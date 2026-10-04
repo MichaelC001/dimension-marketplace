@@ -488,7 +488,7 @@ export class LiveChannel {
 		let room = this.#cardRooms.get(key);
 		if (!room) {
 			const clients = new Set<CardClient>();
-			let release: () => void;
+			let release: (() => void) | undefined;
 			let stop: () => void;
 			try {
 				release = this.#source.previewHolding(grant.browserId);

@@ -10,6 +10,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 // Agent Plugins 1.0.0 layout: the pack id is the portable `name`; the
 // Dimension declaration lives under the `ai.insodimension.dimension` extension.
 const manifest = JSON.parse(await readFile(resolve(root, "plugin.json"), "utf8"));
+const pkg = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
 const declared = manifest.extensions?.["ai.insodimension.dimension"]?.artifactories;
 if (!Array.isArray(declared) || declared.length === 0) throw new Error("plugin.json declares no artifactories");
 for (const declaration of declared) {
@@ -25,7 +26,8 @@ const nodeBundle = {
   platform: "node",
   format: "esm",
   target: "node22",
-  packages: "external",
+  // Declared runtime packages install beside the pack; the SDK authoring surface is bundled.
+  external: Object.keys(pkg.dependencies),
   sourcemap: false,
   loader: { ".txt": "text", ".md": "text" },
 };

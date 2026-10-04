@@ -21,12 +21,14 @@
  *  site. Pages are read back from the page, never from a mock.
  */
 import { existsSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, describe, expect, jest, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { ARTIFACTORY_HOST_CONTEXT_EXTENSION_ID, ARTIFACTORY_HOST_CONTEXT_META_KEY, ARTIFACTORY_HOST_CONTEXT_READ_METHOD } from "@dimension/sdk/artifactory";
 import { z } from "zod";
 import type { PublishRecipe } from "../src/contracts";
 import type { BrowserRuntime, BrowserRuntimeOptions } from "../src/runtime";
@@ -105,7 +107,21 @@ async function rig(options: Omit<BrowserRuntimeOptions, "rootDir"> = {}): Promis
 	await mkdir(viewDir, { recursive: true });
 	await writeFile(join(viewDir, "index.html"), "<!doctype html><title>view</title>");
 	const server = await createBrowserServer({ runtime, viewDir, presets: [] });
-	const client = new Client({ name: "profile-control-test", version: "0.0.0" });
+	const client = new Client({ name: "profile-control-test", version: "0.0.0" }, { capabilities: { extensions: { [ARTIFACTORY_HOST_CONTEXT_EXTENSION_ID]: {} } } });
+	const refs = new Map<string, string>();
+	const refFor = (sessionId: string) => {
+		let token = refs.get(sessionId);
+		if (!token) {
+			token = randomBytes(32).toString("hex");
+			refs.set(sessionId, token);
+		}
+		return { sessionId, token };
+	};
+	client.setRequestHandler(z.object({ method: z.literal(ARTIFACTORY_HOST_CONTEXT_READ_METHOD), params: z.object({ sessionId: z.string(), token: z.string() }) }), async request => {
+		const { sessionId, token } = request.params;
+		if (refs.get(sessionId) !== token) throw new Error("Unknown host context");
+		return { active: true, sessionId };
+	});
 	const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
 	await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
 	clients.push(client);
@@ -113,7 +129,7 @@ async function rig(options: Omit<BrowserRuntimeOptions, "rootDir"> = {}): Promis
 		(await client.callTool({
 			name,
 			arguments: args,
-			...(who === undefined ? {} : { _meta: { [CALLER]: who.caller, ...(who.session === undefined ? {} : { [SESSION]: { sessionId: who.session } }) } }),
+			...(who === undefined ? {} : { _meta: { [CALLER]: who.caller, ...(who.session === undefined ? {} : { [SESSION]: { sessionId: who.session }, [ARTIFACTORY_HOST_CONTEXT_META_KEY]: refFor(who.session) }) } }),
 		})) as ToolResult;
 	return { call, runtime, fixture: startFixture(), rootDir };
 }
@@ -209,13 +225,12 @@ describeWithChrome("switching profiles in the View", () => {
 
 			for (const who of [CHAT, VIEW_TWO]) {
 				const asked = refusal(await r.call("browser_open", { profile: "a" }, who));
-				expect(asked).toContain("the human in the View");
 				expect(asked).not.toContain(a.browserId);
 			}
-			expect(await failureCode(() => r.runtime.open({ profile: "a" }, { caller: "model", session: "s-chat" }))).toBe("profile_held");
+			expect(await failureCode(() => r.runtime.open({ profile: "a" }, { caller: "model", session: "s-chat" }))).toBe("profile_consent_required");
 			expect(await failureCode(() => r.runtime.open({ profile: "b" }, { caller: "app", session: "s-view-2" }))).toBe("profile_held");
 			// An unstamped call is nobody's seat.
-			expect(await failureCode(() => r.runtime.open({ profile: "a" }))).toBe("profile_held");
+			expect(await failureCode(() => r.runtime.open({ profile: "a" }))).toBe("profile_consent_required");
 			// The View is told the same of a chat's browser.
 			const taken = refusal(await r.call("browser_open", { profile: "c" }, VIEW));
 			expect(taken).toContain("another chat");
@@ -232,10 +247,12 @@ describeWithChrome("switching profiles in the View", () => {
 			// The holder closes the background one: the chat can have it; the other stays held.
 			expect((await r.call("browser_close", { browserId: a.browserId }, VIEW)).isError).toBeFalsy();
 			expect(entry(await listAs(r, CHAT), "a")?.heldBy).toBeNull();
+			expect((await r.call("browser_open", { profile: "a" }, CHAT)).isError).toBe(true);
+			expect((await r.call("browser_profile_consent", { name: "a", decision: "allow", scope: "chat" }, VIEW_OF_CHAT)).isError).toBeFalsy();
 			const adopted = await open(r, CHAT, { profile: "a" });
 			expect(adopted.browserId).not.toBe(a.browserId);
 			expect(entry(await listAs(r, CHAT), "a")?.heldBy).toBe("this chat");
-			expect(refusal(await r.call("browser_open", { profile: "b" }, CHAT))).toContain("the human in the View");
+			expect((await r.call("browser_open", { profile: "b" }, CHAT)).isError).toBe(true);
 			expect((await stateAs(r, VIEW, b.browserId)).browserId).toBe(b.browserId);
 		},
 		BROWSER_TEST_TIMEOUT_MS,
@@ -291,6 +308,8 @@ describeWithChrome("taking a browser over in the View", () => {
 			const r = await rig();
 			const startedAt = Date.now();
 			await r.runtime.addProfile({ name: "Work", colour: "teal", avatar: "💼" }, "app");
+			expect((await r.call("browser_open", { profile: "work" }, CHAT)).isError).toBe(true);
+			expect((await r.call("browser_profile_consent", { name: "work", decision: "allow", scope: "chat" }, VIEW_OF_CHAT)).isError).toBeFalsy();
 			const opened = await open(r, CHAT, { profile: "work" });
 			const id = opened.browserId;
 			expect(opened.takenOver).toBe(false);
@@ -375,7 +394,7 @@ describeWithChrome("taking a browser over in the View", () => {
 			expect(r.fixture.hits("/show-cookie")).toBe(2);
 			expect((await stateAs(r, CHAT, id)).agentActionAt).toBeGreaterThan(working.agentActionAt ?? Infinity);
 			// Still held by the same seat throughout: nobody else got in while it was the person's.
-			expect(await failureCode(() => r.runtime.open({ profile: "work" }, { caller: "model", session: "s-other" }))).toBe("profile_held");
+			expect(await failureCode(() => r.runtime.open({ profile: "work" }, { caller: "model", session: "s-other" }))).toBe("profile_consent_required");
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);
@@ -777,6 +796,8 @@ describeWithChrome("leaving a browser for another profile in the View", () => {
 			expect(await r.runtime.leave(a.browserId, "app")).toEqual({ closed: true });
 
 			// A saved profile's lock is released only once its Chrome is gone, so another seat getting it proves no Chrome is left on it.
+			expect((await r.call("browser_open", { profile: "a" }, CHAT)).isError).toBe(true);
+			expect((await r.call("browser_profile_consent", { name: "a", decision: "allow", scope: "chat" }, VIEW_OF_CHAT)).isError).toBeFalsy();
 			const taken = await open(r, CHAT, { profile: "a" });
 			expect(taken.browserId).not.toBe(a.browserId);
 			expect(entry(await listAs(r, CHAT), "a")?.heldBy).toBe("this chat");

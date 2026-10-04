@@ -236,9 +236,21 @@ function readOpenBrowser(value: unknown): OpenBrowserListing[] {
 	return [{ browserId, kind: value.kind, hold }];
 }
 function readConsent(value: unknown): ProfileConsent[] {
-	if (!isRecord(value) || !PROFILE_NAME.test(readString(value, "name") ?? "") || (value.status !== "pending" && value.status !== "granted")) return [];
+	if (!isRecord(value) || !PROFILE_NAME.test(readString(value, "name") ?? "") || (value.status !== "pending" && value.status !== "granted") || (value.scope !== "chat" && value.scope !== "loop")) return [];
 	const name = readString(value, "name")!;
-	return [{ name, label: readString(value, "label") ?? name, sites: Array.isArray(value.sites) ? value.sites.flatMap(readSite) : [], status: value.status, ...(typeof value.expiresAt === "number" ? { expiresAt: value.expiresAt } : {}) }];
+	const loopLabel = readString(value, "loopLabel");
+	if (value.scope === "loop" && (loopLabel === undefined || loopLabel.length > 1024)) return [];
+	let subject: ProfileConsent["subject"];
+	if (value.subject !== undefined) {
+		if (!isRecord(value.subject) || Object.keys(value.subject).length !== 3) return [];
+		const workspaceId = readString(value.subject, "workspaceId");
+		const id = readString(value.subject, "id");
+		const origin = readString(value.subject, "origin");
+		if (!workspaceId || workspaceId.length > 1024 || !id || id.length > 1024 || !origin || origin.length > 1024) return [];
+		subject = { workspaceId, id, origin };
+	}
+	if (value.scope === "loop" && subject === undefined) return [];
+	return [{ name, label: readString(value, "label") ?? name, sites: Array.isArray(value.sites) ? value.sites.flatMap(readSite) : [], status: value.status, scope: value.scope, ...(value.scope === "loop" ? { loopLabel } : {}), ...(typeof value.expiresAt === "number" ? { expiresAt: value.expiresAt } : {}), ...(subject === undefined ? {} : { subject }) }];
 }
 
 function readState(tool: string, value: unknown): BrowserState {
@@ -401,8 +413,8 @@ export class BrowserClient {
 		if (!Array.isArray(answered.profiles)) throw new BrowserToolError(tool, "result carried no profiles array");
 		return { profiles: answered.profiles.flatMap(readProfile), browsers: Array.isArray(answered.browsers) ? answered.browsers.flatMap(readOpenBrowser) : [], consents: Array.isArray(answered.consents) ? answered.consents.flatMap(readConsent) : [] };
 	}
-	async decideProfileConsent(name: string, decision: "allow" | "deny" | "revoke"): Promise<void> {
-		await this.call("browser_profile_consent", { name, decision });
+	async decideProfileConsent(name: string, decision: "allow" | "deny" | "revoke", scope: "chat" | "loop", expectedSubject?: ProfileConsent["subject"]): Promise<void> {
+		await this.call("browser_profile_consent", { name, decision, scope, ...(expectedSubject === undefined ? {} : { expectedSubject }) });
 	}
 
 	/** Creates a profile from the name the person typed. The refusal (a taken or unusable name) is the runtime's sentence, raised as is. */

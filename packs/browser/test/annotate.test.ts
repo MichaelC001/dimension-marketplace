@@ -34,7 +34,7 @@ describeWithChrome("annotate", () => {
 		async () => {
 			const fixture = startFixture();
 			const { runtime } = await createRuntime();
-			const opened = await runtime.open({ profile: "annot", viewport: VIEWPORT });
+			const opened = await runtime.open({ profile: "annot", viewport: VIEWPORT }, { caller: "app" });
 			await perform(runtime, opened.browserId, { kind: "navigate", url: fixture.url("/") });
 			const frame = await runtime.frame(opened.browserId);
 
@@ -56,7 +56,7 @@ describeWithChrome("annotate", () => {
 		async () => {
 			const fixture = startFixture();
 			const { runtime } = await createRuntime();
-			const opened = await runtime.open({ profile: "annot-secret", viewport: VIEWPORT });
+			const opened = await runtime.open({ profile: "annot-secret", viewport: VIEWPORT }, { caller: "app" });
 			await perform(runtime, opened.browserId, { kind: "navigate", url: fixture.url("/") });
 			await perform(runtime, opened.browserId, { kind: "type", selector: "#pass", text: "hunter2-secret" });
 			const frame = await runtime.frame(opened.browserId);
@@ -75,7 +75,7 @@ describeWithChrome("annotate", () => {
 		async () => {
 			const fixture = startFixture();
 			const { runtime } = await createRuntime();
-			const opened = await runtime.open({ profile: "annot-order", viewport: VIEWPORT });
+			const opened = await runtime.open({ profile: "annot-order", viewport: VIEWPORT }, { caller: "app" });
 			await perform(runtime, opened.browserId, { kind: "navigate", url: fixture.url("/tall") });
 			const frame = await runtime.frame(opened.browserId);
 
@@ -101,7 +101,7 @@ describeWithChrome("annotate", () => {
 		async () => {
 			const fixture = startFixture();
 			const { runtime } = await createRuntime();
-			const opened = await runtime.open({ profile: "annot-scroll", viewport: VIEWPORT });
+			const opened = await runtime.open({ profile: "annot-scroll", viewport: VIEWPORT }, { caller: "app" });
 			await perform(runtime, opened.browserId, { kind: "navigate", url: fixture.url("/tall") });
 			await perform(runtime, opened.browserId, { kind: "scroll", deltaY: 700 });
 			const frame = await runtime.frame(opened.browserId);
@@ -124,7 +124,7 @@ describeWithChrome("annotate", () => {
 		async () => {
 			const fixture = startFixture();
 			const { runtime } = await createRuntime();
-			const opened = await runtime.open({ profile: "annot-bad", viewport: VIEWPORT });
+			const opened = await runtime.open({ profile: "annot-bad", viewport: VIEWPORT }, { caller: "app" });
 			await perform(runtime, opened.browserId, { kind: "navigate", url: fixture.url("/") });
 			const frame = await runtime.frame(opened.browserId);
 
@@ -143,7 +143,7 @@ describeWithChrome("annotate", () => {
 		async () => {
 			const fixture = startFixture();
 			const { runtime } = await createRuntime();
-			const opened = await runtime.open({ profile: "annot-stale", viewport: VIEWPORT });
+			const opened = await runtime.open({ profile: "annot-stale", viewport: VIEWPORT }, { caller: "app" });
 			await perform(runtime, opened.browserId, { kind: "navigate", url: fixture.url("/") });
 
 			const frame = await runtime.frame(opened.browserId);
@@ -240,7 +240,7 @@ describeWithChrome("annotate", () => {
 		async () => {
 			const { runtime } = await createRuntime();
 			const priv = await runtime.open({ viewport: VIEWPORT });
-			const saved = await runtime.open({ profile: "annot-files", viewport: VIEWPORT });
+			const saved = await runtime.open({ profile: "annot-files", viewport: VIEWPORT }, { caller: "app" });
 			const detail = JSON.stringify({ schema: "dimension.annotation-detail/1", kind: "browser-page", marks: [] });
 
 			const privatePath = runtime.saveAnnotationDetail(priv.browserId, detail);

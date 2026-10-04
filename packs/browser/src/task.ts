@@ -173,6 +173,8 @@ export function startWorker(job: WorkerJob, onStep: (step: WorkerStep) => void):
   const { child, stderr } = takeSpare() ?? spawnWorker();
   keepSpare();
   let result: WorkerResult | undefined;
+  const endpoint = new URL(job.cdpUrl);
+  const privateAddress = (text: string): string => text.replaceAll(job.cdpUrl, "[private CDP endpoint]").replaceAll(endpoint.pathname, "[private CDP route]");
   const lines = createInterface({ input: child.stdout });
   lines.on("line", (text) => {
     let line: Record<string, unknown>;
@@ -184,15 +186,15 @@ export function startWorker(job: WorkerJob, onStep: (step: WorkerStep) => void):
     if (line.type === "step") {
       onStep({
         n: Number(line.n) || 0,
-        action: String(line.action ?? ""),
-        url: String(line.url ?? ""),
+        action: privateAddress(String(line.action ?? "")),
+        url: privateAddress(String(line.url ?? "")),
         elapsedMs: Number(line.elapsedMs) || 0,
         usage: usageOf(line),
       });
     } else if (line.type === "result" && typeof line.status === "string" && FINAL[line.status]) {
       result = {
         status: line.status as WorkerResult["status"],
-        summary: String(line.summary ?? ""),
+        summary: privateAddress(String(line.summary ?? "")),
         steps: Number(line.steps) || 0,
         elapsedMs: Number(line.elapsedMs) || 0,
         usage: usageOf(line),
@@ -208,7 +210,7 @@ export function startWorker(job: WorkerJob, onStep: (step: WorkerStep) => void):
   const done = new Promise<WorkerResult>((resolve) => {
     const finish = (reason: string): void => {
       clearTimeout(killTimer);
-      resolve(result ?? { status: "failed", summary: `${reason}${stderr() ? `: ${stderr().trim().slice(-600)}` : ""}`, steps: 0, elapsedMs: 0, usage: usageOf({}) });
+      resolve(result ?? { status: "failed", summary: privateAddress(`${reason}${stderr() ? `: ${stderr().trim().slice(-600)}` : ""}`), steps: 0, elapsedMs: 0, usage: usageOf({}) });
       // Settled: a pipe a lingering grandchild still holds is ours to let go of.
       lines.close();
       child.stdout.destroy();

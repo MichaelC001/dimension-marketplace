@@ -37,7 +37,7 @@ import { promisify } from "node:util";
 import { setTimeout as sleep } from "node:timers/promises";
 import puppeteer, { TimeoutError } from "puppeteer-core";
 import type { Browser, BrowserContext, CDPSession, ElementHandle, Frame, HTTPRequest, HTTPResponse, JSHandle, KeyInput, Page, Protocol, Target } from "puppeteer-core";
-import { type BrowserAction, type BrowserApp, type BrowserRegion, type DialogType, type ElementInspection, type HandledDialog, type LogEntry, MAX_ELEMENT_ID_CHARS, MAX_ELEMENT_LABEL_CHARS, MAX_ELEMENT_TAG_CHARS, MAX_ELEMENTS_PER_REGION, MAX_LOG_ENTRIES, type ModelShot, type PageElements, type PageScroll, type ShotRequest, type TabInfo, type Viewport } from "../contracts.js";
+import { type BrowserAction, type BrowserApp, type BrowserRegion, type DialogType, type EffectGuard, type ElementInspection, type HandledDialog, type LogEntry, MAX_ELEMENT_ID_CHARS, MAX_ELEMENT_LABEL_CHARS, MAX_ELEMENT_TAG_CHARS, MAX_ELEMENTS_PER_REGION, MAX_LOG_ENTRIES, type ModelShot, type PageElements, type PageScroll, type ShotRequest, type TabInfo, type Viewport } from "../contracts.js";
 import { FaviconCache } from "../favicon.js";
 import { MAX_FRAME_BYTES } from "../image.js";
 import { ActionNotDispatched, BrowserRuntimeError, fail } from "../store.js";
@@ -674,6 +674,7 @@ class PuppeteerDriver implements EngineDriver {
 	readonly #cardWatchers = new Map<480 | 1280, Set<(frame: LiveFrame) => void>>();
 	readonly #cardCasts = new Map<480 | 1280, CardCast>();
 	readonly #cardChains = new Map<480 | 1280, Promise<void>>();
+	readonly #cardRestartDirty = new Set<480 | 1280>();
 	/** Screencast start/stop run in order; a tab switch never interleaves with another. */
 	#castChain: Promise<void> = Promise.resolve();
 	#frameSeq = 0;
@@ -682,6 +683,14 @@ class PuppeteerDriver implements EngineDriver {
 	#closing: Promise<void> | undefined;
 	/** The launch tab while it is still blank and has not been handed to a code worker (`openTab` with `reuseBlank`); then undefined. */
 	#fresh: Tab | undefined;
+	/** Defer automatic setup until guarded creates have identified and retained their own targets. */
+	#guardedOpenCount = 0;
+	readonly #deferredOpenTargets = new Set<Target>();
+
+	/** Exact IDs we created but could not yet register or confirm reclaimed. */
+	readonly #unregisteredOwnedTargets = new Set<string>();
+	/** Retained tabs whose initial viewport/focus setup was interrupted. */
+	readonly #pendingNativeTabSetup = new Set<Tab>();
 
 	constructor(parts: DriverParts) {
 		this.#browser = parts.browser;
@@ -702,6 +711,10 @@ class PuppeteerDriver implements EngineDriver {
 			this.#wire(tab);
 		}
 		this.#onTargetCreated = (target: Target): void => {
+			if (target.type() === "page" && this.#guardedOpenCount > 0) {
+				this.#deferredOpenTargets.add(target);
+				return;
+			}
 			if (target.type() !== "page" || this.#closed || !this.#owns(target)) return;
 			// A site's popup / target=_blank and a task agent's tab become the
 			// active tab, so the human watches where the work happens.
@@ -883,9 +896,12 @@ class PuppeteerDriver implements EngineDriver {
 			if (!watchers) this.#cardWatchers.set(width, watchers = new Set());
 			watchers.add(listener);
 			if (watchers.size === 1) void this.#restartCard(width);
-			else {
-				const shown = this.#cardCasts.get(width)?.frame;
-				if (shown) queueMicrotask(() => { if (watchers.has(listener)) listener(shown); });
+			const cast = this.#cardCasts.get(width);
+			const shown = cast?.frame;
+			if (shown && cast?.tab === this.#active && cast.viewport === this.#viewport) {
+				queueMicrotask(() => {
+					if (watchers.has(listener) && this.#cardCasts.get(width) === cast && cast.tab === this.#active && cast.viewport === this.#viewport) listener(shown);
+				});
 			}
 			return () => {
 				if (!watchers!.delete(listener) || watchers!.size > 0) return;
@@ -960,8 +976,8 @@ class PuppeteerDriver implements EngineDriver {
 	// Publish — reads with fixed scripts, and one guarded fill
 	// -----------------------------------------------------------------------
 
-	async fill(selector: string, text: string): Promise<void> {
-		await withTimeout(this.#type(this.#activeTab().page, selector, text, true), ACTION_TIMEOUT_MS + 5_000, "fill");
+	async fill(selector: string, text: string, guard?: EffectGuard): Promise<void> {
+		await withTimeout(guard === undefined ? this.#type(this.#activeTab().page, selector, text, true) : this.#guardedFill(selector, text, guard), ACTION_TIMEOUT_MS + 5_000, "fill");
 	}
 
 	// Publish reads: hasElement/readField/readText resolve the selector through
@@ -1072,115 +1088,250 @@ class PuppeteerDriver implements EngineDriver {
 	/**
 	 * One native dispatch, never retried, and bounded: an action that has not
 	 * settled in time is reported as an error (the runtime classifies it
-	 * `unknown` — it may still land). Everything that can fail without touching
-	 * the page (validation, element resolution, empty history) throws
-	 * ActionNotDispatched before the first input event.
+	 * `unknown` — it may still land). Validation, element resolution and history
+	 * preparation remain undispatched. Guard refresh may await; assertCurrent
+	 * and the native send share one continuation. Scroll/focus/selection/store
+	 * are effects too: later rejection cannot become ActionNotDispatched.
 	 */
-	async perform(action: BrowserAction, password?: PasswordSource): Promise<PerformOutcome> {
+	async perform(action: BrowserAction, password?: PasswordSource, guard?: EffectGuard): Promise<PerformOutcome> {
 		const tab = this.#activeTab();
 		const seen = tab.dialogs.seq;
-		const outcome = await withTimeout(this.#dispatch(action, password), NAVIGATE_TIMEOUT_MS + 5_000, `${action.kind}`);
+		const outcome = await withTimeout(this.#dispatch(action, password, guard), NAVIGATE_TIMEOUT_MS + 5_000, `${action.kind}`);
 		const dialogs = tab.dialogs.entries.filter((dialog) => dialog.seq > seen).map(({ type, message, handled }) => ({ type, message, handled }));
 		return dialogs.length === 0 ? outcome : { ...outcome, dialogs };
 	}
 
-	async #dispatch(action: BrowserAction, password: PasswordSource | undefined): Promise<PerformOutcome> {
+	async #dispatch(action: BrowserAction, password: PasswordSource | undefined, guard?: EffectGuard): Promise<PerformOutcome> {
 		const tab = this.#activeTab();
 		const page = tab.page;
 		const started = tab.navSeq;
-		switch (action.kind) {
-			case "navigate": {
-				const url = requireField(action.url, "navigate.url");
-				await navigating(tab, page.goto(url, { waitUntil: "domcontentloaded", timeout: NAVIGATE_TIMEOUT_MS }));
-				return NONE;
-			}
-			case "back":
-			case "forward": {
-				const history = await this.#read(() => tab.cdp.send("Page.getNavigationHistory"));
-				const target = history.currentIndex + (action.kind === "back" ? -1 : 1);
-				if (target < 0 || target >= history.entries.length) {
-					throw new ActionNotDispatched("no_history", `there is no page to go ${action.kind} to`);
+		let effectsStarted = false;
+		let delegated = false;
+		try {
+			switch (action.kind) {
+				case "navigate": {
+					const url = requireField(action.url, "navigate.url");
+					delegated = true;
+					await this.#goto(tab, url, {}, guard);
+					return NONE;
 				}
-				const options = { waitUntil: "domcontentloaded" as const, timeout: NAVIGATE_TIMEOUT_MS };
-				await navigating(tab, action.kind === "back" ? page.goBack(options) : page.goForward(options));
-				return NONE;
-			}
-			case "reload":
-				await navigating(tab, page.reload({ waitUntil: "domcontentloaded", timeout: NAVIGATE_TIMEOUT_MS }));
-				return NONE;
-			case "stop":
-				await tab.cdp.send("Page.stopLoading");
-				tab.loading = false;
-				return NONE;
-			case "click": {
-				const options = { button: action.button ?? "left", count: action.clickCount ?? 1 };
-				if (action.selector === undefined) {
-					const x = requireNumber(action.x, "click.x");
-					const y = requireNumber(action.y, "click.y");
-					this.#assertInViewport("click", x, y);
-					await page.mouse.click(x, y, options);
-				} else {
-					const { handle } = await this.#resolve(page, action.selector);
+				case "back":
+				case "forward": {
+					const history = await this.#read(() => tab.cdp.send("Page.getNavigationHistory"));
+					const index = history.currentIndex + (action.kind === "back" ? -1 : 1);
+					const entry = history.entries[index];
+					if (!entry) throw new ActionNotDispatched("no_history", `there is no page to go ${action.kind} to`);
+					if (guard === undefined) {
+						await navigating(tab, action.kind === "back" ? page.goBack({ waitUntil: "domcontentloaded", timeout: NAVIGATE_TIMEOUT_MS }) : page.goForward({ waitUntil: "domcontentloaded", timeout: NAVIGATE_TIMEOUT_MS }));
+					} else {
+						// Public waitForNavigation installs its watcher synchronously; abort
+						// owns its cleanup even when admission fails before the history send.
+						const waiter = new AbortController();
+						const loaded = page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: NAVIGATE_TIMEOUT_MS, signal: waiter.signal });
+						void loaded.catch(() => undefined);
+						try {
+							const admission = guard();
+							if (admission !== undefined) await admission;
+							guard.assertCurrent();
+							effectsStarted = true;
+							const sent = tab.cdp.send("Page.navigateToHistoryEntry", { entryId: entry.id });
+							await navigating(tab, Promise.all([sent, loaded]));
+						} finally {
+							waiter.abort();
+						}
+					}
+					return NONE;
+				}
+				case "reload": {
+					if (guard === undefined) await navigating(tab, page.reload({ waitUntil: "domcontentloaded", timeout: NAVIGATE_TIMEOUT_MS }));
+					else {
+						const waiter = new AbortController();
+						const loaded = page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: NAVIGATE_TIMEOUT_MS, signal: waiter.signal });
+						void loaded.catch(() => undefined);
+						try {
+							const admission = guard();
+							if (admission !== undefined) await admission;
+							guard.assertCurrent();
+							effectsStarted = true;
+							const sent = tab.cdp.send("Page.reload");
+							await navigating(tab, Promise.all([sent, loaded]));
+						} finally {
+							waiter.abort();
+						}
+					}
+					return NONE;
+				}
+				case "stop": {
+					if (guard !== undefined) {
+						const admission = guard();
+						if (admission !== undefined) await admission;
+						guard.assertCurrent();
+					}
+					effectsStarted = true;
+					await tab.cdp.send("Page.stopLoading");
+					tab.loading = false;
+					return NONE;
+				}
+				case "click": {
+					const options = { button: action.button ?? "left", count: action.clickCount ?? 1 };
+					if (action.selector === undefined) {
+						const x = requireNumber(action.x, "click.x");
+						const y = requireNumber(action.y, "click.y");
+						this.#assertInViewport("click", x, y);
+						if (guard !== undefined) {
+							const admission = guard();
+							if (admission !== undefined) await admission;
+							guard.assertCurrent();
+						}
+						effectsStarted = true;
+						// Pinned CdpMouse.click starts move/down/up sends synchronously.
+						await page.mouse.click(x, y, options);
+					} else {
+						const { handle, frame } = await this.#resolve(page, action.selector);
+						try {
+							if (guard === undefined) await handle.click(options);
+							else {
+								const client = (frame as Frame & { readonly client: CDPSession }).client;
+								const backendNodeId = await handle.backendNodeId();
+								// Match Puppeteer's read-only viewport preparation before
+								// pointer dispatch; keep its scrolling behind our own fence.
+								const inViewport = await handle.isIntersectingViewport({ threshold: 1 });
+								if ((frame as Frame & { readonly client: CDPSession }).client !== client) throw new ActionNotDispatched("frame_changed", "the element changed renderer before clicking");
+								const admission = guard();
+								if (admission !== undefined) await admission;
+								guard.assertCurrent();
+								if (!inViewport) {
+									effectsStarted = true;
+									await client.send("DOM.scrollIntoViewIfNeeded", { backendNodeId });
+								}
+								const point = await handle.clickablePoint();
+								const clickAdmission = guard();
+								if (clickAdmission !== undefined) await clickAdmission;
+								guard.assertCurrent();
+								effectsStarted = true;
+								await page.mouse.click(point.x, point.y, options);
+							}
+						} finally {
+							await handle.dispose().catch(() => undefined);
+						}
+					}
+					await this.#settle(tab, started, true);
+					return NONE;
+				}
+				case "hover": {
+					const x = requireNumber(action.x, "hover.x");
+					const y = requireNumber(action.y, "hover.y");
+					this.#assertInViewport("hover", x, y);
+					if (guard !== undefined) {
+						const admission = guard();
+						if (admission !== undefined) await admission;
+						guard.assertCurrent();
+					}
+					effectsStarted = true;
+					await page.mouse.move(x, y);
+					return NONE;
+				}
+				case "insert": {
+					if (action.useSavedPassword || action.generatePassword) {
+						delegated = true;
+						return await this.#typePassword(await this.#focusedField(page), action, password, guard);
+					}
+					const text = requireField(action.text, "insert.text");
+					if (guard !== undefined) {
+						const admission = guard();
+						if (admission !== undefined) await admission;
+						guard.assertCurrent();
+					}
+					effectsStarted = true;
+					await page.keyboard.sendCharacter(text);
+					return NONE;
+				}
+				case "type": {
+					const selector = requireField(action.selector, "type.selector");
+					delegated = true;
+					if (action.useSavedPassword || action.generatePassword) return await this.#typePassword(await this.#resolve(page, selector), action, password, guard);
+					const text = requireField(action.text, "type.text", true);
+					if (guard === undefined) await this.#type(page, selector, text, false);
+					else await this.#guardedFill(selector, text, guard, false);
+					return NONE;
+				}
+				case "select": {
+					const wanted = requireField(action.value, "select.value", true);
+					const selector = requireField(action.selector, "select.selector");
+					delegated = true;
+					if (guard !== undefined) {
+						await this.#guardedSelect(selector, wanted, guard);
+						return NONE;
+					}
+					const { handle } = await this.#resolve(page, selector);
 					try {
-						await handle.click(options);
+						const value = await handle.evaluate((el, wanted) => {
+							if (!(el instanceof HTMLSelectElement)) return null;
+							const option = Array.from(el.options).find((o) => o.value === wanted || o.text.trim() === wanted);
+							return option ? option.value : null;
+						}, wanted);
+						if (value === null) throw new ActionNotDispatched("no_option", `${JSON.stringify(selector)} is not a <select> with an option ${JSON.stringify(wanted)}`);
+						await handle.select(value);
 					} finally {
 						await handle.dispose().catch(() => undefined);
 					}
+					return NONE;
 				}
-				await this.#settle(tab, started, true);
-				return NONE;
-			}
-			case "hover": {
-				const x = requireNumber(action.x, "hover.x");
-				const y = requireNumber(action.y, "hover.y");
-				this.#assertInViewport("hover", x, y);
-				await page.mouse.move(x, y);
-				return NONE;
-			}
-			case "insert":
-				if (action.useSavedPassword || action.generatePassword) return await this.#typePassword(await this.#focusedField(page), action, password);
-				// Whatever has focus receives the text as one native input operation.
-				await page.keyboard.sendCharacter(requireField(action.text, "insert.text"));
-				return NONE;
-			case "type": {
-				const selector = requireField(action.selector, "type.selector");
-				if (action.useSavedPassword || action.generatePassword) return await this.#typePassword(await this.#resolve(page, selector), action, password);
-				await this.#type(page, selector, requireField(action.text, "type.text", true), false);
-				return NONE;
-			}
-			case "select": {
-				const wanted = requireField(action.value, "select.value", true);
-				const { handle } = await this.#resolve(page, requireField(action.selector, "select.selector"));
-				try {
-					const value = await handle.evaluate((el, wanted) => {
-						if (!(el instanceof HTMLSelectElement)) return null;
-						const option = Array.from(el.options).find((o) => o.value === wanted || o.text.trim() === wanted);
-						return option ? option.value : null;
-					}, wanted);
-					if (value === null) {
-						throw new ActionNotDispatched("no_option", `${JSON.stringify(action.selector)} is not a <select> with an option ${JSON.stringify(wanted)}`);
+				case "press": {
+					const key = requireField(action.key, "press.key") as KeyInput;
+					if (guard === undefined) await page.keyboard.press(key);
+					else {
+						const admission = guard();
+						if (admission !== undefined) await admission;
+						guard.assertCurrent();
+						effectsStarted = true;
+						try { await page.keyboard.down(key); }
+						finally {
+							// Release only our key even after revocation; never leave it held.
+							await this.#releaseKey(page, key, guard);
+						}
 					}
-					await handle.select(value);
-				} finally {
-					await handle.dispose().catch(() => undefined);
+					await this.#settle(tab, started, key === "Enter" || key === "Space" || key === " ");
+					return NONE;
 				}
-				return NONE;
+				case "resize":
+					delegated = true;
+					await this.resize({ width: requireNumber(action.width, "resize.width"), height: requireNumber(action.height, "resize.height") }, this.#scale, guard);
+					return NONE;
+				case "scroll": {
+					if (guard !== undefined) {
+						const admission = guard();
+						if (admission !== undefined) await admission;
+						guard.assertCurrent();
+					}
+					effectsStarted = true;
+					await page.mouse.wheel({ deltaX: action.deltaX ?? 0, deltaY: action.deltaY ?? 0 });
+					return NONE;
+				}
+				default:
+					throw new ActionNotDispatched("bad_action", `unsupported action kind ${JSON.stringify((action as BrowserAction).kind)}`);
 			}
-			case "press": {
-				const key = requireField(action.key, "press.key");
-				await page.keyboard.press(key as KeyInput);
-				await this.#settle(tab, started, key === "Enter" || key === "Space" || key === " ");
-				return NONE;
-			}
-			case "resize":
-				await this.resize({ width: requireNumber(action.width, "resize.width"), height: requireNumber(action.height, "resize.height") }, this.#scale);
-				return NONE;
-			case "scroll":
-				await page.mouse.wheel({ deltaX: action.deltaX ?? 0, deltaY: action.deltaY ?? 0 });
-				return NONE;
-			default:
-				throw new ActionNotDispatched("bad_action", `unsupported action kind ${JSON.stringify((action as BrowserAction).kind)}`);
+		} catch (error) {
+			if (guard !== undefined && effectsStarted && error instanceof ActionNotDispatched) throw new Error(`action may have changed the page: ${describe(error)}`);
+			if (guard !== undefined && !effectsStarted && !delegated && !(error instanceof ActionNotDispatched)) throw new ActionNotDispatched("input_not_admitted", describe(error));
+			throw error;
 		}
+	}
+
+	/** Refresh normal key-up authority; revocation still releases only our held key as compensation. */
+	async #releaseKey(page: Page, key: KeyInput, guard: EffectGuard): Promise<void> {
+		let denied = false;
+		let denial: unknown;
+		try {
+			const admission = guard();
+			if (admission !== undefined) await admission;
+			guard.assertCurrent();
+		} catch (error) {
+			denied = true;
+			denial = error;
+		}
+		await page.keyboard.up(key);
+		if (denied) throw denial;
 	}
 
 	/** A coordinate outside the viewport reaches no element: refused, with the way out. */
@@ -1231,8 +1382,102 @@ class PuppeteerDriver implements EngineDriver {
 	// Tabs
 	// -----------------------------------------------------------------------
 
-	async openTab(url?: string, options: OpenTabOptions = {}): Promise<TabRef> {
+	async openTab(url?: string, options: OpenTabOptions = {}, guard?: EffectGuard): Promise<TabRef> {
 		this.#assertOpen();
+		if (guard !== undefined) {
+			let effectsStarted = false;
+			let delegated = false;
+			let root: CDPSession | undefined;
+			let createdTargetId: string | undefined;
+			let retained = false;
+			let creating = false;
+			try {
+				options.signal?.throwIfAborted();
+				const fresh = options.reuseBlank === true ? this.#fresh : undefined;
+				let tab: Tab;
+				if (fresh !== undefined && !fresh.page.isClosed() && fresh.page.url() === "about:blank") {
+					tab = fresh;
+					delegated = true;
+					await this.#activate(tab, guard);
+					effectsStarted = true;
+					this.#fresh = undefined;
+				} else {
+					root = await this.#browser.target().createCDPSession();
+					this.#guardedOpenCount++;
+					creating = true;
+					const admission = guard();
+					if (admission !== undefined) await admission;
+					guard.assertCurrent();
+					effectsStarted = true;
+					const created = await root.send("Target.createTarget", { url: "about:blank" });
+					createdTargetId = created.targetId;
+					this.#unregisteredOwnedTargets.add(created.targetId);
+					// Match browser identity, never URL. Each probe owns its session.
+					const target = await this.#browser.waitForTarget(async (candidate) => {
+						if (candidate.type() !== "page") return false;
+						const probe = await candidate.createCDPSession().catch(() => null);
+						if (probe === null) return false;
+						try {
+							const info = await probe.send("Target.getTargetInfo");
+							return info.targetInfo.targetId === created.targetId;
+						} catch {
+							return false;
+						} finally {
+							await probe.detach().catch(() => undefined);
+						}
+					}, { timeout: NAVIGATE_TIMEOUT_MS });
+					// Register ownership with read-only setup BEFORE any later admission.
+					this.#deferredOpenTargets.delete(target);
+					const adopted = await this.#adopt(target, false, false, true);
+					if (!adopted) throw new Error("the created tab closed before it could be retained");
+					tab = adopted;
+					retained = true;
+					this.#unregisteredOwnedTargets.delete(created.targetId);
+					await this.#activate(tab, guard);
+				}
+				if (options.dialogs !== undefined) tab.dialogs.policy = options.dialogs;
+				if (url !== undefined) {
+					await this.#goto(tab, url, options, guard);
+					const historyAdmission = guard();
+					if (historyAdmission !== undefined) await historyAdmission;
+					guard.assertCurrent();
+					await tab.cdp.send("Page.resetNavigationHistory");
+				}
+				return await this.#refOf(tab);
+			} catch (error) {
+				// Before registration we still own the exact created target: reclaim
+				// it as compensation. Afterwards retain it for state/explicit close.
+				if (!retained && root !== undefined && createdTargetId !== undefined) {
+					const reclaimed = await root.send("Target.closeTarget", { targetId: createdTargetId }).catch(() => null);
+					if (reclaimed?.success) this.#unregisteredOwnedTargets.delete(createdTargetId);
+				}
+				if (effectsStarted && error instanceof ActionNotDispatched) throw new Error(`tab creation or activation may have occurred: ${describe(error)}`);
+				if (!effectsStarted && !delegated && !(error instanceof ActionNotDispatched)) throw new ActionNotDispatched("input_not_admitted", describe(error));
+				throw error;
+			} finally {
+				await root?.detach().catch(() => undefined);
+				if (creating && --this.#guardedOpenCount === 0) {
+					const deferred = [...this.#deferredOpenTargets];
+					this.#deferredOpenTargets.clear();
+					for (const target of deferred) {
+						if (this.#adopting.has(target)) continue;
+						if (this.#unregisteredOwnedTargets.size > 0) {
+							const probe = await target.createCDPSession().catch(() => null);
+							if (probe === null) continue;
+							try {
+								const info = await probe.send("Target.getTargetInfo");
+								if (this.#unregisteredOwnedTargets.has(info.targetInfo.targetId)) continue;
+							} catch {
+								continue;
+							} finally {
+								await probe.detach().catch(() => undefined);
+							}
+						}
+						this.#onTargetCreated(target);
+					}
+				}
+			}
+		}
 		const fresh = options.reuseBlank === true ? this.#fresh : undefined;
 		let tab: Tab;
 		if (fresh !== undefined && !fresh.page.isClosed() && fresh.page.url() === "about:blank") {
@@ -1259,10 +1504,10 @@ class PuppeteerDriver implements EngineDriver {
 		return await Promise.all(this.#tabs.map((tab) => this.#refOf(tab)));
 	}
 
-	async navigateTab(tabId: string, url: string, options: NavigateTabOptions): Promise<TabRef> {
+	async navigateTab(tabId: string, url: string, options: NavigateTabOptions, guard?: EffectGuard): Promise<TabRef> {
 		this.#assertOpen();
 		const tab = this.#tabById(tabId);
-		await this.#goto(tab, url, options);
+		await this.#goto(tab, url, options, guard);
 		return await this.#refOf(tab);
 	}
 
@@ -1283,8 +1528,47 @@ class PuppeteerDriver implements EngineDriver {
 	 * Load `url` in `tab` and wait for `options.waitUntil` (default domcontentloaded, the pack's own tab opens). A page that has not loaded when the
 	 * budget ends or `options.signal` aborts is STOPPED rather than left loading, and the call rejects (the signal's reason when it was the signal).
 	 */
-	async #goto(tab: Tab, url: string, options: NavigateTabOptions): Promise<void> {
+	async #goto(tab: Tab, url: string, options: NavigateTabOptions, guard?: EffectGuard): Promise<void> {
 		const { waitUntil = "domcontentloaded", timeoutMs = NAVIGATE_TIMEOUT_MS, signal } = options;
+		if (guard !== undefined && signal?.aborted) throw new ActionNotDispatched("input_not_admitted", describe(signal.reason));
+		const setupNeeded = this.#pendingNativeTabSetup.has(tab);
+		if (setupNeeded) await this.#prepareOwnedTab(tab, guard);
+		if (guard !== undefined) {
+			let effectsStarted = setupNeeded;
+			let navigation: Promise<unknown> | undefined;
+			const abort = Promise.withResolvers<never>();
+			const onAbort = (): void => abort.reject(signal?.reason);
+			void abort.promise.catch(() => undefined);
+			try {
+				signal?.throwIfAborted();
+				const admission = guard();
+				if (admission !== undefined) await admission;
+				signal?.throwIfAborted();
+				guard.assertCurrent();
+				effectsStarted = true;
+				// Pinned CdpPage.goto -> CdpFrame.goto sends Page.navigate before
+				// its first await; the public method preserves URL policy/waitUntil.
+				navigation = navigating(tab, tab.page.goto(url, { waitUntil, timeout: timeoutMs }));
+				if (signal === undefined) await navigation;
+				else {
+					signal.addEventListener("abort", onAbort, { once: true });
+					if (signal.aborted) onAbort();
+					await Promise.race([navigation, abort.promise]);
+				}
+				return;
+			} catch (error) {
+				if (navigation !== undefined) {
+					void navigation.catch(() => undefined);
+					// Compensate only our dispatched navigation, even after revocation.
+					await tab.cdp.send("Page.stopLoading").catch(() => undefined);
+				}
+				if (effectsStarted && error instanceof ActionNotDispatched) throw new Error(`navigation may have occurred: ${describe(error)}`);
+				if (!effectsStarted && !(error instanceof ActionNotDispatched)) throw new ActionNotDispatched("input_not_admitted", describe(error));
+				throw error;
+			} finally {
+				signal?.removeEventListener("abort", onAbort);
+			}
+		}
 		signal?.throwIfAborted();
 		const navigation = navigating(tab, tab.page.goto(url, { waitUntil, timeout: timeoutMs }));
 		if (signal === undefined) {
@@ -1312,14 +1596,63 @@ class PuppeteerDriver implements EngineDriver {
 		return { tabId: tab.id, targetId: targetIdOf(tab), url: entry?.url ?? tab.page.url(), title: entry?.title ?? "", active: tab === this.#active };
 	}
 
-	async activateTab(tabId: string): Promise<void> {
+	async activateTab(tabId: string, guard?: EffectGuard): Promise<void> {
 		this.#assertOpen();
-		await this.#activate(this.#tabById(tabId));
+		await this.#activate(this.#tabById(tabId), guard);
 	}
 
-	async closeTab(tabId: string): Promise<void> {
+	async closeTab(tabId: string, guard?: EffectGuard): Promise<void> {
 		this.#assertOpen();
 		const tab = this.#tabById(tabId);
+		if (guard !== undefined) {
+			let effectsStarted = false;
+			let delegated = false;
+			let root: CDPSession | undefined;
+			try {
+				if (!tab.foreign && this.#tabs.length === 1) {
+					delegated = true;
+					await this.openTab(undefined, {}, guard);
+					effectsStarted = true;
+				}
+				const next = this.#tabs.find((candidate) => candidate !== tab);
+				if (this.#active === tab && next !== undefined) {
+					delegated = true;
+					await this.#activate(next, guard);
+					effectsStarted = true;
+				}
+				if (tab.foreign) {
+					const admission = guard();
+					if (admission !== undefined) await admission;
+					guard.assertCurrent();
+					this.#forget(tab);
+					return;
+				}
+				root = await this.#browser.target().createCDPSession();
+				const info = await tab.cdp.send("Target.getTargetInfo");
+				const closed = Promise.withResolvers<void>();
+				const onClose = (): void => closed.resolve();
+				tab.page.on("close", onClose);
+				try {
+					const admission = guard();
+					if (admission !== undefined) await admission;
+					guard.assertCurrent();
+					effectsStarted = true;
+					const result = await root.send("Target.closeTarget", { targetId: info.targetInfo.targetId });
+					if (!result.success) throw new Error("Chrome did not confirm the requested tab close");
+					if (!tab.page.isClosed()) await withTimeout(closed.promise, CLOSE_TIMEOUT_MS, "closeTab");
+					this.#forget(tab);
+				} finally {
+					tab.page.off("close", onClose);
+				}
+				return;
+			} catch (error) {
+				if (effectsStarted && error instanceof ActionNotDispatched) throw new Error(`tab effects may have occurred: ${describe(error)}`);
+				if (!effectsStarted && !delegated && !(error instanceof ActionNotDispatched)) throw new ActionNotDispatched("input_not_admitted", describe(error));
+				throw error;
+			} finally {
+				await root?.detach().catch(() => undefined);
+			}
+		}
 		// Never let the browser reach zero tabs: a headful Chrome quits with its
 		// last window, and the human would lose the browser to a tab close.
 		// The person's own page is let go, not closed: it stays open in their browser.
@@ -1380,6 +1713,7 @@ class PuppeteerDriver implements EngineDriver {
 		await Promise.all(tabs.map((tab) => tab.cdp.detach().catch(() => undefined)));
 
 		if (!this.#ownsBrowser) {
+			await this.#closeUnregisteredTargets();
 			await Promise.all(tabs.map((tab) => (tab.foreign || tab.page.isClosed() ? undefined : tab.page.close().catch(() => undefined))));
 			await this.#browser.disconnect().catch(() => undefined);
 			this.#release();
@@ -1400,6 +1734,25 @@ class PuppeteerDriver implements EngineDriver {
 		}
 		this.#release();
 	}
+	/** Lifetime compensation only: never replay a create, and never drop an unconfirmed owned ID. */
+	async #closeUnregisteredTargets(): Promise<void> {
+		if (this.#unregisteredOwnedTargets.size === 0) return;
+		const root = await this.#browser.target().createCDPSession();
+		try {
+			const { targetInfos } = await root.send("Target.getTargets");
+			const live = new Set(targetInfos.map((target) => target.targetId));
+			for (const targetId of this.#unregisteredOwnedTargets) {
+				if (live.has(targetId)) {
+					const result = await withTimeout(root.send("Target.closeTarget", { targetId }), CLOSE_TIMEOUT_MS, "closing an unregistered owned tab");
+					if (!result.success) throw new Error(`Chrome did not confirm closure of owned target ${targetId}`);
+				}
+				this.#unregisteredOwnedTargets.delete(targetId);
+			}
+		} finally {
+			await root.detach().catch(() => undefined);
+		}
+	}
+
 
 	/**
 	 * Hard stop, for a `close` that hung. puppeteer's own close waits for the browser to exit with no bound, so a Chrome that will
@@ -1414,6 +1767,7 @@ class PuppeteerDriver implements EngineDriver {
 			this.#browser.off("targetcreated", this.#onTargetCreated);
 			this.#browser.off("disconnected", this.#onDisconnected);
 			this.#watchers.clear();
+			await this.#closeUnregisteredTargets();
 			const own = this.#tabs.filter((tab) => !tab.foreign && !tab.page.isClosed());
 			if (own.length > 0) await Promise.race([Promise.all(own.map((tab) => tab.page.close().catch(() => undefined))), sleep(KILL_TAB_CLOSE_MS)]);
 			await this.#browser.disconnect().catch(() => undefined);
@@ -1452,24 +1806,27 @@ class PuppeteerDriver implements EngineDriver {
 	}
 
 	/** Make `target` one of our tabs, once, however many paths race to adopt it. */
-	#adopt(target: Target, activate: boolean, foreign = false): Promise<Tab | undefined> {
+	#adopt(target: Target, activate: boolean, foreign = false, readOnlySetup = false): Promise<Tab | undefined> {
 		const known = this.#adopting.get(target);
 		if (known) return known;
 		const work = (async (): Promise<Tab | undefined> => {
 			// Guarded before `target.page()`: a popup that opens a dialog as it loads would block puppeteer's own setup of it forever.
 			const early = await guardPage(await target.createCDPSession(), foreign);
-			const page = await target.page();
+			// Public asPage initializes a new target without the default viewport:
+			// page() would apply it after hidden awaits, before our native fence.
+			const page = readOnlySetup ? await target.asPage() : await target.page();
 			if (!page || this.#closed || page.isClosed()) {
 				await early.cdp.detach().catch(() => undefined);
 				return undefined;
 			}
-			const tab = await prepareTab(page, this.#viewport, this.#scale, early, foreign);
+			const tab = await prepareTab(page, this.#viewport, this.#scale, early, foreign || readOnlySetup);
 			if (foreign) tab.foreign = true;
 			if (this.#closed || page.isClosed()) {
 				await tab.cdp.detach().catch(() => undefined);
 				return undefined;
 			}
 			this.#tabs.push(tab);
+			if (readOnlySetup && !foreign) this.#pendingNativeTabSetup.add(tab);
 			this.#wire(tab);
 			if (activate) await this.#activate(tab);
 			return tab;
@@ -1544,6 +1901,7 @@ class PuppeteerDriver implements EngineDriver {
 		const index = this.#tabs.indexOf(tab);
 		if (index < 0) return;
 		this.#tabs.splice(index, 1);
+		this.#pendingNativeTabSetup.delete(tab);
 		this.#adopting.delete(tab.target);
 		void tab.cdp.detach().catch(() => undefined);
 		if (this.#closed || this.#active !== tab) return;
@@ -1553,7 +1911,52 @@ class PuppeteerDriver implements EngineDriver {
 		else if (this.#ownsBrowser || !tab.foreign) void this.openTab().catch((err) => console.error("Could not replace the last closed tab:", err));
 	}
 
-	async #activate(tab: Tab): Promise<void> {
+	/** Complete only retained native tab setup; every effect has its own admission. */
+	async #prepareOwnedTab(tab: Tab, guard?: EffectGuard, viewport = this.#viewport, scale = this.#scale): Promise<void> {
+		let effectsStarted = false;
+		try {
+			if (guard !== undefined) {
+				const admission = guard();
+				if (admission !== undefined) await admission;
+				guard.assertCurrent();
+			}
+			effectsStarted = true;
+			await tab.page.setViewport({ ...viewport, deviceScaleFactor: scale });
+			if (guard !== undefined) {
+				const admission = guard();
+				if (admission !== undefined) await admission;
+				guard.assertCurrent();
+			}
+			await tab.cdp.send("Emulation.setFocusEmulationEnabled", { enabled: true });
+			this.#pendingNativeTabSetup.delete(tab);
+		} catch (error) {
+			if (effectsStarted && error instanceof ActionNotDispatched) throw new Error(`tab setup may have occurred: ${describe(error)}`);
+			if (guard !== undefined && !effectsStarted && !(error instanceof ActionNotDispatched)) throw new ActionNotDispatched("input_not_admitted", describe(error));
+			throw error;
+		}
+	}
+
+	async #activate(tab: Tab, guard?: EffectGuard): Promise<void> {
+		const setupNeeded = this.#pendingNativeTabSetup.has(tab);
+		if (setupNeeded) await this.#prepareOwnedTab(tab, guard);
+		if (guard !== undefined) {
+			let effectsStarted = setupNeeded;
+			try {
+				const admission = guard();
+				if (admission !== undefined) await admission;
+				guard.assertCurrent();
+				effectsStarted = true;
+				if (!tab.foreign) await tab.cdp.send("Page.bringToFront");
+				this.#active = tab;
+				if (this.#watchers.size > 0) await this.#restartScreencast();
+				for (const width of this.#cardWatchers.keys()) void this.#restartCard(width);
+				return;
+			} catch (error) {
+				if (!effectsStarted) throw error instanceof ActionNotDispatched ? error : new ActionNotDispatched("input_not_admitted", describe(error));
+				if (error instanceof ActionNotDispatched) throw new Error(`tab activation may have occurred: ${describe(error)}`);
+				throw error;
+			}
+		}
 		this.#active = tab;
 		// A hidden tab renders no frames: screenshots crawl and input waits
 		// forever for one. The shown tab is always the front one — except the
@@ -1590,13 +1993,53 @@ class PuppeteerDriver implements EngineDriver {
 	 * Fit the page to the View: every tab gets the new viewport and pixel ratio
 	 * (so a tab switch never shows a stale size) and the live cast restarts.
 	 */
-	async resize(viewport: Viewport, scale: number): Promise<void> {
+	async resize(viewport: Viewport, scale: number, guard?: EffectGuard): Promise<void> {
 		this.#assertOpen();
-		if (viewport.width === this.#viewport.width && viewport.height === this.#viewport.height && scale === this.#scale) return;
+		if (viewport.width === this.#viewport.width && viewport.height === this.#viewport.height && scale === this.#scale && this.#pendingNativeTabSetup.size === 0) return;
+		if (guard !== undefined) {
+			let effectsStarted = false;
+			let delegated = false;
+			try {
+				for (const tab of this.#tabs) {
+					if (tab.foreign) continue;
+					if (this.#pendingNativeTabSetup.has(tab)) {
+						delegated = true;
+						await this.#prepareOwnedTab(tab, guard, viewport, scale);
+						effectsStarted = true;
+						continue;
+					}
+					const admission = guard();
+					if (admission !== undefined) await admission;
+					guard.assertCurrent();
+					effectsStarted = true;
+					// Owned pages are prepared as desktop/no-touch. Pinned
+					// emulateViewport starts metrics/touch sends before any await;
+					// unchanged mobile/touch flags require no implicit reload.
+					await tab.page.setViewport({ ...viewport, deviceScaleFactor: scale });
+				}
+				const admission = guard();
+				if (admission !== undefined) await admission;
+				guard.assertCurrent();
+				this.#viewport = viewport;
+				this.#scale = scale;
+				if (this.#watchers.size > 0) {
+					await this.#stopScreencast();
+					await this.#restartScreencast();
+				}
+				for (const width of this.#cardWatchers.keys()) void this.#restartCard(width);
+				return;
+			} catch (error) {
+				if (!effectsStarted && !delegated) throw error instanceof ActionNotDispatched ? error : new ActionNotDispatched("input_not_admitted", describe(error));
+				if (error instanceof ActionNotDispatched) throw new Error(`viewport changes may have occurred: ${describe(error)}`);
+				throw error;
+			}
+		}
 		this.#viewport = viewport;
 		this.#scale = scale;
 		// The person's own pages (an attach target's) are never resized: their window is theirs.
-		await Promise.all(this.#tabs.filter((tab) => !tab.foreign).map((tab) => tab.page.setViewport({ ...viewport, deviceScaleFactor: scale }).catch(() => undefined)));
+		await Promise.all(this.#tabs.filter((tab) => !tab.foreign).map((tab) => this.#pendingNativeTabSetup.has(tab)
+			? this.#prepareOwnedTab(tab)
+			: tab.page.setViewport({ ...viewport, deviceScaleFactor: scale }).catch(() => undefined)));
 		if (this.#watchers.size > 0) {
 			await this.#stopScreencast();
 			await this.#restartScreencast();
@@ -1606,53 +2049,70 @@ class PuppeteerDriver implements EngineDriver {
 
 	/** Serial per-size handoff prevents an old cast's detach from stopping its successor. */
 	#restartCard(width: 480 | 1280): Promise<void> {
-		const step = (this.#cardChains.get(width) ?? Promise.resolve()).then(async () => {
-			const old = this.#cardCasts.get(width);
-			if (old) {
-				this.#cardCasts.delete(width);
-				old.cdp.off("Page.screencastFrame", old.onFrame);
-				await old.cdp.send("Page.stopScreencast").catch(() => undefined);
-				await old.cdp.detach().catch(() => undefined);
-			}
-			const watchers = this.#cardWatchers.get(width);
-			const tab = this.#active;
-			if (this.#closed || !watchers?.size || tab.page.isClosed()) return;
-			const cdp = await tab.page.target().createCDPSession();
-			if (this.#closed || this.#active !== tab || !this.#cardWatchers.get(width)?.size) {
-				await cdp.detach().catch(() => undefined);
-				return;
-			}
-			const cast: CardCast = {
-				cdp, tab, width, viewport: this.#viewport, frame: null,
-				onFrame: event => {
-					void cdp.send("Page.screencastFrameAck", { sessionId: event.sessionId }).catch(() => undefined);
-					if (this.#cardCasts.get(width) !== cast) return;
-					const jpeg = Buffer.from(event.data, "base64");
-					const frame: LiveFrame = { id: `card-${tab.id}-${++this.#frameSeq}`, jpeg, viewport: cast.viewport, capturedAt: Date.now() };
-					cast.frame = frame;
-					for (const watcher of this.#cardWatchers.get(width) ?? []) watcher(frame);
-				},
-			};
-			this.#cardCasts.set(width, cast);
-			cdp.on("Page.screencastFrame", cast.onFrame);
-			await cdp.send("Page.startScreencast", { format: "jpeg", quality: width === 480 ? 50 : 60, maxWidth: width, maxHeight, everyNthFrame: 15 }).catch(() => undefined);
-			void (async () => {
-				await sleep(FIRST_FRAME_WAIT_MS);
-				if (this.#cardCasts.get(width) !== cast || cast.frame !== null) return;
-				const shot = await cdp.send("Page.captureScreenshot", {
-					format: "jpeg", quality: width === 480 ? 50 : 60,
-					clip: { x: 0, y: 0, width: this.#viewport.width, height: this.#viewport.height, scale: width / this.#viewport.width },
-					captureBeyondViewport: false,
-				}).catch(() => null);
-				if (shot && this.#cardCasts.get(width) === cast && cast.frame === null) {
-					const jpeg = Buffer.from(shot.data, "base64");
-					const frame: LiveFrame = { id: `card-${tab.id}-${++this.#frameSeq}`, jpeg, viewport: cast.viewport, capturedAt: Date.now() };
-					cast.frame = frame;
-					for (const watcher of this.#cardWatchers.get(width) ?? []) watcher(frame);
+		this.#cardRestartDirty.add(width);
+		const pending = this.#cardChains.get(width);
+		if (pending) return pending;
+		// A card shows the current picture, not a history of tab switches.
+		// One drain per size follows the latest selection; actions never queue CDP restarts.
+		const step: Promise<void> = Promise.resolve().then(async () => {
+			while (this.#cardRestartDirty.delete(width)) {
+				const old = this.#cardCasts.get(width);
+				const watchers = this.#cardWatchers.get(width);
+				const tab = this.#active;
+				const viewport = this.#viewport;
+				const wanted = !this.#closed && Boolean(watchers?.size) && !tab.page.isClosed();
+				if (wanted && old?.tab === tab && old.viewport === viewport) continue;
+				if (old) {
+					this.#cardCasts.delete(width);
+					old.cdp.off("Page.screencastFrame", old.onFrame);
+					await old.cdp.send("Page.stopScreencast").catch(() => undefined);
+					await old.cdp.detach().catch(() => undefined);
 				}
-			})();
+				if (!wanted) continue;
+				const cdp = await tab.page.target().createCDPSession();
+				if (this.#closed || this.#active !== tab || this.#viewport !== viewport || !this.#cardWatchers.get(width)?.size) {
+					await cdp.detach().catch(() => undefined);
+					continue;
+				}
+				const scale = Math.min(1, width / viewport.width);
+				const maxHeight = Math.max(1, Math.ceil(viewport.height * scale));
+				const cast: CardCast = {
+					cdp, tab, width, viewport, frame: null,
+					onFrame: event => {
+						void cdp.send("Page.screencastFrameAck", { sessionId: event.sessionId }).catch(() => undefined);
+						if (this.#cardCasts.get(width) !== cast || this.#active !== tab || this.#viewport !== cast.viewport || this.#closed) return;
+						const jpeg = Buffer.from(event.data, "base64");
+						const frame: LiveFrame = { id: `card-${tab.id}-${++this.#frameSeq}`, jpeg, viewport: cast.viewport, capturedAt: Date.now() };
+						cast.frame = frame;
+						for (const watcher of this.#cardWatchers.get(width) ?? []) watcher(frame);
+					},
+				};
+				this.#cardCasts.set(width, cast);
+				cdp.on("Page.screencastFrame", cast.onFrame);
+				await cdp.send("Page.startScreencast", { format: "jpeg", quality: width === 480 ? 50 : 60, maxWidth: width, maxHeight, everyNthFrame: 15 }).catch(() => undefined);
+				void (async () => {
+					await sleep(FIRST_FRAME_WAIT_MS);
+					if (this.#cardCasts.get(width) !== cast || this.#active !== tab || this.#viewport !== cast.viewport || this.#closed || cast.frame !== null) return;
+					const shot = await cdp.send("Page.captureScreenshot", {
+						format: "jpeg", quality: width === 480 ? 50 : 60,
+						clip: { x: 0, y: 0, width: cast.viewport.width, height: cast.viewport.height, scale },
+						captureBeyondViewport: false,
+					}).catch(() => null);
+					if (shot && this.#cardCasts.get(width) === cast && this.#active === tab && this.#viewport === cast.viewport && !this.#closed && cast.frame === null) {
+						const jpeg = Buffer.from(shot.data, "base64");
+						const frame: LiveFrame = { id: `card-${tab.id}-${++this.#frameSeq}`, jpeg, viewport: cast.viewport, capturedAt: Date.now() };
+						cast.frame = frame;
+						for (const watcher of this.#cardWatchers.get(width) ?? []) watcher(frame);
+					}
+				})();
+			}
+		}).catch(() => undefined).finally(() => {
+			if (this.#cardChains.get(width) !== step) return;
+			this.#cardChains.delete(width);
+			// A selection can change after the drain returns but before this finalizer.
+			if (this.#cardRestartDirty.has(width)) return this.#restartCard(width);
 		});
-		this.#cardChains.set(width, step.catch(() => undefined));
+		this.#cardChains.set(width, step);
 		return step;
 	}
 	/** Cast the CURRENT active tab, stopping whatever was cast before, while anyone watches. Ordered. */
@@ -1746,6 +2206,136 @@ class PuppeteerDriver implements EngineDriver {
 		return await send();
 	}
 
+	/** Guarded field replacement: utility-world preparation, then native fences. */
+	async #guardedFill(selector: string, text: string, guard: EffectGuard, refusePassword = true): Promise<void> {
+		const tab = this.#activeTab();
+		const { handle, frame } = await this.#resolve(tab.page, selector);
+		// Pinned puppeteer-core 25.11: api/Frame.ts marks client @internal;
+		// cdp/Frame.ts returns the frame's current renderer session (including OOPIF).
+		// Like utilityWorld below, this is deliberate pinned interop, not a shim.
+		let field: ElementHandle<Element> | undefined;
+		let effectsStarted = false;
+		try {
+			const client = (frame as Frame & { readonly client: CDPSession }).client;
+			// Reuse the pinned utility world: page scripts cannot replace our checks.
+			field = await utilityWorld(frame).adoptHandle(handle);
+			if ((frame as Frame & { readonly client: CDPSession }).client !== client) {
+				throw new ActionNotDispatched("frame_changed", "the field changed renderer before typing");
+			}
+			const target = field.remoteObject().objectId;
+			if (target === undefined) throw new ActionNotDispatched("no_element", "the field has no renderer object");
+			const call = (fn: string) => client.send("Runtime.callFunctionOn", { objectId: target, functionDeclaration: fn, returnByValue: true });
+			const check = await call(`function () {
+				if (!this.isConnected) return "detached";
+				if (this.tagName === "INPUT" && this.type.toLowerCase() === "password") return "password";
+				if (this.readOnly || this.disabled) return "readonly";
+				return "ok";
+			}`);
+			if (check.exceptionDetails) throw new ActionNotDispatched("field_unreadable", "the field could not be checked before typing");
+			if (check.result.value !== "ok" && !(check.result.value === "password" && !refusePassword)) throw new ActionNotDispatched("not_editable", `the field is ${String(check.result.value)}; nothing was typed`);
+			const admission = guard();
+			if (admission !== undefined) await admission;
+			guard.assertCurrent();
+			effectsStarted = true;
+			await client.send("DOM.focus", { objectId: target });
+			const selectAdmission = guard();
+			if (selectAdmission !== undefined) await selectAdmission;
+			guard.assertCurrent();
+			const selected = await call(`function () { return (${String(SELECT_ALL_SCRIPT)})(this); }`);
+			if (selected.exceptionDetails) throw new Error("the field's selection failed after focus");
+			if (!selected.result.value) {
+				const modifier = process.platform === "darwin" ? "Meta" : "Control";
+				const modifierAdmission = guard();
+				if (modifierAdmission !== undefined) await modifierAdmission;
+				guard.assertCurrent();
+				try {
+					await tab.page.keyboard.down(modifier);
+					const keyAdmission = guard();
+					if (keyAdmission !== undefined) await keyAdmission;
+					guard.assertCurrent();
+					try { await tab.page.keyboard.down("KeyA"); }
+					finally { await this.#releaseKey(tab.page, "KeyA", guard); }
+				} finally {
+					// Always release our modifier, even if authority was withdrawn.
+					await this.#releaseKey(tab.page, modifier, guard);
+				}
+			}
+			const inputAdmission = guard();
+			if (inputAdmission !== undefined) await inputAdmission;
+			// Admission can await: re-check target safety afterwards, then make
+			// the synchronous authority assertion at the actual native send.
+			const focus = await call(`function () {
+				if (this.readOnly || this.disabled) return "readonly";
+				return (${String(TYPE_TARGET_SCRIPT)})(this);
+			}`);
+			if (focus.exceptionDetails || (focus.result.value !== "ok" && !(focus.result.value === "password" && !refusePassword))) throw new Error("the field lost its permitted editable focus after selection");
+			guard.assertCurrent();
+			if (text.length > 0) await tab.cdp.send("Input.insertText", { text });
+			else {
+				try { await tab.page.keyboard.down("Backspace"); }
+				finally { await this.#releaseKey(tab.page, "Backspace", guard); }
+			}
+		} catch (error) {
+			// Focus/selection/key effects make every later failure spent/unknown.
+			if (!effectsStarted) throw error instanceof ActionNotDispatched ? error : new ActionNotDispatched("input_not_dispatched", describe(error));
+			if (error instanceof ActionNotDispatched) throw new Error(`publication input may have reached the page: ${describe(error)}`);
+			throw error;
+		} finally {
+			await field?.dispose().catch(() => undefined);
+			await handle.dispose().catch(() => undefined);
+		}
+	}
+
+	/** Select's read is prepared in the owned utility clone; only the fixed mutation is fenced. */
+	async #guardedSelect(selector: string, wanted: string, guard: EffectGuard): Promise<void> {
+		const { handle, frame } = await this.#resolve(this.#activeTab().page, selector);
+		let field: ElementHandle<Element> | undefined;
+		let effectsStarted = false;
+		try {
+			const client = (frame as Frame & { readonly client: CDPSession }).client;
+			field = await utilityWorld(frame).adoptHandle(handle);
+			if ((frame as Frame & { readonly client: CDPSession }).client !== client) throw new ActionNotDispatched("frame_changed", "the select changed renderer");
+			const objectId = field.remoteObject().objectId;
+			if (objectId === undefined) throw new ActionNotDispatched("no_element", "the select has no renderer object");
+			const value = await field.evaluate((el, wanted) => {
+				if (!(el instanceof HTMLSelectElement)) return null;
+				const option = Array.from(el.options).find((candidate) => candidate.value === wanted || candidate.text.trim() === wanted);
+				return option ? option.value : null;
+			}, wanted);
+			if (value === null) throw new ActionNotDispatched("no_option", `${JSON.stringify(selector)} has no option ${JSON.stringify(wanted)}`);
+			const admission = guard();
+			if (admission !== undefined) await admission;
+			guard.assertCurrent();
+			effectsStarted = true;
+			const result = await client.send("Runtime.callFunctionOn", {
+				objectId,
+				functionDeclaration: `function (value) {
+					if (!(this instanceof HTMLSelectElement)) throw new Error("Element is not a <select> element.");
+					if (!this.multiple) {
+						for (const option of this.options) option.selected = false;
+						for (const option of this.options) {
+							if (option.value === value) { option.selected = true; break; }
+						}
+					} else {
+						for (const option of this.options) option.selected = option.value === value;
+					}
+					this.dispatchEvent(new Event("input", { bubbles: true }));
+					this.dispatchEvent(new Event("change", { bubbles: true }));
+				}`,
+				arguments: [{ value }],
+				returnByValue: true,
+			});
+			if (result.exceptionDetails) throw new Error("select failed after native mutation began");
+		} catch (error) {
+			if (!effectsStarted) throw error instanceof ActionNotDispatched ? error : new ActionNotDispatched("input_not_admitted", describe(error));
+			if (error instanceof ActionNotDispatched) throw new Error(`select may have changed the page: ${describe(error)}`);
+			throw error;
+		} finally {
+			await field?.dispose().catch(() => undefined);
+			await handle.dispose().catch(() => undefined);
+		}
+	}
+
 	/**
 	 * Replace a field's content: focus, select all, and ONE native input
 	 * operation — no transient empty value, and the text never appears in argv
@@ -1753,10 +2343,12 @@ class PuppeteerDriver implements EngineDriver {
 	 */
 	async #type(page: Page, selector: string, text: string, refusePassword: boolean): Promise<void> {
 		const { handle } = await this.#resolve(page, selector);
+		let effectsStarted = false;
 		try {
 			if (refusePassword && (await handle.evaluate(IS_PASSWORD_SCRIPT))) {
 				throw new ActionNotDispatched("password_field", `${JSON.stringify(selector)} is a password field, which a publish never reads back; log in with browser_act or browser_task`);
 			}
+			effectsStarted = true;
 			await handle.focus();
 			if (!(await handle.evaluate(SELECT_ALL_SCRIPT))) {
 				const modifier = process.platform === "darwin" ? "Meta" : "Control";
@@ -1776,6 +2368,9 @@ class PuppeteerDriver implements EngineDriver {
 			}
 			if (text.length > 0) await page.keyboard.sendCharacter(text);
 			else await page.keyboard.press("Backspace");
+		} catch (error) {
+			if (effectsStarted && error instanceof ActionNotDispatched) throw new Error(`typing effects may have occurred: ${describe(error)}`);
+			throw error;
 		} finally {
 			await handle.dispose().catch(() => undefined);
 		}
@@ -1792,26 +2387,39 @@ class PuppeteerDriver implements EngineDriver {
 	 * the re-check of type, origin and focus, and the insert are ONE evaluate
 	 * on the field (INSERT_PASSWORD_SCRIPT): the text is bound to that element's
 	 * document, never page-wide input a page could redirect between a check and
-	 * a keystroke. No password is an error, never a fallback. Every refusal is
-	 * a certain non-event.
+	 * a keystroke. No password is an error, never a fallback. Once a generated
+	 * secret may be stored, or focus/insert dispatched, rejection is uncertain.
 	 */
 	async #typePassword(
 		target: { handle: ElementHandle<Element>; frame: Frame },
 		action: BrowserAction,
 		source: PasswordSource | undefined,
+		guard?: EffectGuard,
 	): Promise<PerformOutcome> {
 		const { handle, frame } = target;
 		const flag = action.generatePassword ? "generatePassword" : "useSavedPassword";
 		let field: ElementHandle<Element> | null = null;
+		let effectsStarted = false;
 		try {
 			if (!source) throw new ActionNotDispatched("bad_action", `${flag} needs the profile's password store`);
+			const client = guard === undefined ? undefined : (frame as Frame & { readonly client: CDPSession }).client;
 			field = await utilityWorld(frame).adoptHandle(handle);
+			if (client !== undefined && (frame as Frame & { readonly client: CDPSession }).client !== client) throw new ActionNotDispatched("frame_changed", "the password field changed renderer");
+			const objectId = field.remoteObject().objectId;
+			if (guard !== undefined && objectId === undefined) throw new ActionNotDispatched("no_element", "the password field has no renderer object");
 			const before = await field.evaluate(SAVED_PASSWORD_TARGET_SCRIPT);
 			if (!before.password) {
 				throw new ActionNotDispatched("not_password_field", `${flag} types only into a password field (input type=password), and this field is not one; nothing was typed or saved`);
 			}
 			let value: string | undefined;
 			try {
+				if (guard !== undefined) {
+					const admission = guard();
+					if (admission !== undefined) await admission;
+					guard.assertCurrent();
+					// Reading a saved secret is preparation, not a native/store effect.
+				}
+				if (action.generatePassword) effectsStarted = true;
 				value = source(before.origin);
 			} catch (error) {
 				throw error instanceof BrowserRuntimeError
@@ -1821,10 +2429,32 @@ class PuppeteerDriver implements EngineDriver {
 			if (!value) {
 				throw new ActionNotDispatched("no_saved_password", `no saved password for ${before.origin}; for a sign-up pass generatePassword: true, or pass text`);
 			}
-			const inserted = await field.evaluate(INSERT_PASSWORD_SCRIPT, value, before.origin);
+			let inserted: string;
+			if (guard === undefined) {
+				effectsStarted = true;
+				inserted = await field.evaluate(INSERT_PASSWORD_SCRIPT, value, before.origin);
+			}
+			else {
+				const admission = guard();
+				if (admission !== undefined) await admission;
+				guard.assertCurrent();
+				effectsStarted = true;
+				const result = await client!.send("Runtime.callFunctionOn", {
+					objectId: objectId!,
+					functionDeclaration: `function (value, origin) { return (${String(INSERT_PASSWORD_SCRIPT)})(this, value, origin); }`,
+					arguments: [{ value }, { value: before.origin }],
+					returnByValue: true,
+				});
+				if (result.exceptionDetails) throw new Error("password insertion failed after dispatch");
+				inserted = String(result.result.value);
+			}
 			if (inserted === "inserted") return { passwordOrigin: before.origin };
 			if (inserted === "rejected") throw new ActionNotDispatched("not_password_field", "the password field refused the text; nothing was typed");
 			throw new ActionNotDispatched("focus_moved", `the password field lost ${inserted === "not_password" ? "its password type" : inserted === "origin" ? "its origin" : "focus"} before typing; nothing was typed`);
+		} catch (error) {
+			if (effectsStarted && error instanceof ActionNotDispatched) throw new Error(`password effects may have occurred: ${describe(error)}`);
+			if (guard !== undefined && !effectsStarted && !(error instanceof ActionNotDispatched)) throw new ActionNotDispatched("input_not_admitted", describe(error));
+			throw error;
 		} finally {
 			await field?.dispose().catch(() => undefined);
 			await handle.dispose().catch(() => undefined);

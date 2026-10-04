@@ -21,7 +21,7 @@ describeWithChrome("state", () => {
 		async () => {
 			const fixture = startFixture();
 			const { runtime } = await createRuntime();
-			const { browserId } = await runtime.open({ profile: "bouncer", viewport: VIEWPORT });
+			const { browserId } = await runtime.open({ profile: "bouncer", viewport: VIEWPORT }, { caller: "app" });
 			// Even bounce count: the chain ends on the host it started from.
 			const end = fixture.url("/bounce?left=0");
 

@@ -216,7 +216,7 @@ describe("what the list never contains", () => {
 
 describeWithChrome("who holds a profile", () => {
 	test(
-		"the chat that opened it, the human in a View, another chat — and nobody once it is closed — with only the asking chat's own ids in an answer",
+		"the human's View in its own chat, another chat — and nobody once it is closed — with only the asking chat's own ids in an answer",
 		async () => {
 			const { rootDir } = await rootWith((store) => {
 				store.ensureProfile("work");
@@ -224,17 +224,17 @@ describeWithChrome("who holds a profile", () => {
 				store.ensureProfile("idle");
 			});
 			const runtime = newRuntime(rootDir);
-			const mine = await runtime.open({ profile: "work", viewport: VIEWPORT }, { caller: "model", session: "s-1" });
+			const mine = await runtime.open({ profile: "work", viewport: VIEWPORT }, { caller: "app", session: "s-1" });
 			const theirs = await runtime.open({ profile: "personal", viewport: VIEWPORT }, { caller: "app", session: "s-3" });
 			await runtime.open({ viewport: VIEWPORT }, { caller: "model", session: "s-1" });
 			const heldBy = async (asker?: string) => Object.fromEntries((await runtime.profileList(asker)).map((profile) => [profile.name, profile.heldBy]));
 
 			expect(await heldBy("s-1")).toEqual({ idle: null, personal: "human", work: "this chat" });
-			expect(await heldBy("s-2")).toEqual({ idle: null, personal: "human", work: "another chat" });
+			expect(await heldBy("s-2")).toEqual({ idle: null, personal: "human", work: "human" });
 			// The View in s-3's seat is that chat's own browser: it is "this chat" there.
-			expect(await heldBy("s-3")).toEqual({ idle: null, personal: "this chat", work: "another chat" });
+			expect(await heldBy("s-3")).toEqual({ idle: null, personal: "this chat", work: "human" });
 			// A call with no host stamp is nobody's chat.
-			expect(await heldBy()).toEqual({ idle: null, personal: "human", work: "another chat" });
+			expect(await heldBy()).toEqual({ idle: null, personal: "human", work: "human" });
 			// An id is a capability: an answer carries the browser ids of the asking chat's own browsers (the View reaches and closes what it left open by them) and never another chat's.
 			const idsIn = async (asker?: string) => JSON.stringify(await runtime.profileList(asker));
 			expect(await idsIn("s-1")).toContain(mine.browserId);
@@ -254,7 +254,7 @@ describeWithChrome("who holds a profile", () => {
 		async () => {
 			const { rootDir, store } = await rootWith((s) => s.ensureProfile("work"));
 			const holder = newRuntime(rootDir);
-			await holder.open({ profile: "work", viewport: VIEWPORT }, { caller: "model", session: "s-1" });
+			await holder.open({ profile: "work", viewport: VIEWPORT }, { caller: "app", session: "s-1" });
 			// A second runtime on the same root (another server) sees the lock, not the browser.
 			expect(store.heldElsewhere("work")).toBe(true);
 			expect((await newRuntime(rootDir).profileList("s-1"))[0]?.heldBy).toBe("another chat");
@@ -265,20 +265,20 @@ describeWithChrome("who holds a profile", () => {
 
 describeWithChrome("asking for a profile by name", () => {
 	test(
-		"the same chat gets its own browser back, once or twice at once; anyone else is refused and told whose it is, never its id",
+		"the same View gets its own browser back; a chat's parallel first opens share one browser; anyone else is refused without its id",
 		async () => {
 			const { rootDir } = await rootWith((store) => store.ensureProfile("work"));
 			const runtime = newRuntime(rootDir);
 			const chat = { caller: "model", session: "s-1" } as const;
-			const first = await runtime.open({ profile: "work", viewport: VIEWPORT }, chat);
-			expect((await runtime.open({ profile: "work", viewport: VIEWPORT }, chat)).browserId).toBe(first.browserId);
+			const person = { caller: "app", session: "s-1" } as const;
+			const first = await runtime.open({ profile: "work", viewport: VIEWPORT }, person);
+			expect((await runtime.open({ profile: "work", viewport: VIEWPORT }, person)).browserId).toBe(first.browserId);
 
 			const refused = await codeOf(runtime.open({ profile: "work", viewport: VIEWPORT }, { caller: "model", session: "s-2" }));
-			expect(refused.code).toBe("profile_held");
-			expect(refused.message).toContain("another chat");
+			expect(refused.code).toBe("profile_consent_required");
 			expect(refused.message).not.toContain(first.browserId);
 			// An unstamped call is nobody's chat either.
-			expect((await codeOf(runtime.open({ profile: "work", viewport: VIEWPORT }))).code).toBe("profile_held");
+			expect((await codeOf(runtime.open({ profile: "work", viewport: VIEWPORT }))).code).toBe("profile_consent_required");
 
 			// Parallel tool calls from one chat on a profile that is still starting: one browser.
 			const both = await Promise.all([runtime.open({ profile: "fresh", viewport: VIEWPORT }, chat), runtime.open({ profile: "fresh", viewport: VIEWPORT }, chat)]);
@@ -289,14 +289,14 @@ describeWithChrome("asking for a profile by name", () => {
 	);
 
 	test(
-		"what the refusal says depends on who holds it: the human in the View, or another chat",
+		"an unconsented model cannot open a profile held by the human or learn its browser id",
 		async () => {
 			const { rootDir } = await rootWith((store) => store.ensureProfile("personal"));
 			const runtime = newRuntime(rootDir);
-			await runtime.open({ profile: "personal", viewport: VIEWPORT }, { caller: "app", session: "s-view" });
+			const held = await runtime.open({ profile: "personal", viewport: VIEWPORT }, { caller: "app", session: "s-view" });
 			const refused = await codeOf(runtime.open({ profile: "personal", viewport: VIEWPORT }, { caller: "model", session: "s-other" }));
-			expect(refused.code).toBe("profile_held");
-			expect(refused.message).toContain("the human in the View");
+			expect(refused.code).toBe("profile_consent_required");
+			expect(refused.message).not.toContain(held.browserId);
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);
@@ -306,12 +306,12 @@ describeWithChrome("asking for a profile by name", () => {
 		async () => {
 			const { rootDir, store } = await rootWith((s) => s.saveMeta("acme-work", { label: "Work Account" }));
 			const runtime = newRuntime(rootDir);
-			const opened = await runtime.open({ profile: "  work ACCOUNT ", viewport: VIEWPORT });
+			const opened = await runtime.open({ profile: "  work ACCOUNT ", viewport: VIEWPORT }, { caller: "app" });
 			expect(opened.profile).toBe("acme-work");
 			expect(store.list()).toEqual(["acme-work"]);
 			// The slug still works.
 			await runtime.close(opened.browserId);
-			expect((await runtime.open({ profile: "acme-work", viewport: VIEWPORT })).profile).toBe("acme-work");
+			expect((await runtime.open({ profile: "acme-work", viewport: VIEWPORT }, { caller: "app" })).profile).toBe("acme-work");
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);
@@ -354,18 +354,18 @@ describeWithChrome("asking for a profile by name", () => {
 			});
 			const runtime = newRuntime(rootDir);
 			for (const [name, slug] of [["Work", "work"], ["Default", "default"]] as const) {
-				const opened = await runtime.open({ profile: name, viewport: VIEWPORT });
+				const opened = await runtime.open({ profile: name, viewport: VIEWPORT }, { caller: "app" });
 				expect(opened.profile).toBe(slug);
 				await runtime.close(opened.browserId);
 			}
 			// The other profiles are still reachable, by their own slugs.
-			expect((await runtime.open({ profile: "acme", viewport: VIEWPORT })).profile).toBe("acme");
+			expect((await runtime.open({ profile: "acme", viewport: VIEWPORT }, { caller: "app" })).profile).toBe("acme");
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);
 
 	test(
-		"a profile still launching is refused to another chat as profile_held, naming the holder — the same refusal as one that is already open",
+		"an unconsented chat is refused before ownership checks while a human's profile is launching or already open",
 		async () => {
 			const { rootDir } = await rootWith((store) => store.ensureProfile("work"));
 			const runtime = newRuntime(rootDir);
@@ -373,12 +373,11 @@ describeWithChrome("asking for a profile by name", () => {
 			const starting = runtime.open({ profile: "work", viewport: VIEWPORT }, person);
 			// Same tick: the first open has not finished launching.
 			const byChat = await codeOf(runtime.open({ profile: "work", viewport: VIEWPORT }, { caller: "model", session: "s-other" }));
-			expect(byChat.code).toBe("profile_held");
-			expect(byChat.message).toContain("the human in the View");
+			expect(byChat.code).toBe("profile_consent_required");
 			const first = await starting;
 			const again = await codeOf(runtime.open({ profile: "work", viewport: VIEWPORT }, { caller: "model", session: "s-other" }));
-			// Launching or open, the refusal reads the same.
-			expect(again).toEqual(byChat);
+			expect(again.code).toBe("profile_consent_required");
+			expect(again.message).not.toContain(first.browserId);
 			expect(byChat.message).not.toContain(first.browserId);
 		},
 		BROWSER_TEST_TIMEOUT_MS,
@@ -389,7 +388,7 @@ describeWithChrome("asking for a profile by name", () => {
 		async () => {
 			const { rootDir } = await rootWith((store) => store.ensureProfile("work"));
 			const runtime = newRuntime(rootDir);
-			const created = await runtime.open({ profile: "traction-x-acme", viewport: VIEWPORT });
+			const created = await runtime.open({ profile: "traction-x-acme", viewport: VIEWPORT }, { caller: "app" });
 			expect(created.profile).toBe("traction-x-acme");
 			expect((await runtime.profileList()).map((profile) => profile.name)).toEqual(["traction-x-acme", "work"]);
 		},

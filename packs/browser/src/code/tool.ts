@@ -44,7 +44,7 @@ export interface CodeToolDeps {
   /** One call's wait, ms. Defaults to {@link RUN_WAIT_CAP_MS}; a test shortens it. */
   waitCapMs?: number;
   /** Trusted ordinary saved-profile path; never enters the code host or its Node worker. */
-  profileOperation?: (operation: ProfileOperation, extra: CodeCallExtra) => Promise<CallToolResult>;
+  profileOperation?: (operation: ProfileOperation, extra: CodeCallExtra, onBrowserActivity: (browserId: string) => void) => Promise<CallToolResult>;
 }
 
 /**
@@ -115,7 +115,9 @@ function refused(error: unknown): CallToolResult {
 
 export type ProfileOperation =
   | { kind: "open"; profile: string; url?: string }
-  | { kind: "state" | "snapshot" | "close"; browserId: string }
+  | { kind: "state"; browserId: string }
+  | { kind: "snapshot"; browserId: string }
+  | { kind: "close"; browserId: string }
   | { kind: "screenshot"; browserId: string; fullPage?: boolean; selector?: string; scale?: number }
   | { kind: "inspect"; browserId: string; selector: string }
   | { kind: "act"; browserId: string; actions: unknown[] };
@@ -138,10 +140,6 @@ export async function runCodeTool(deps: CodeToolDeps, args: BrowserRunArgs, extr
   const save: SaveSpill = text => saveSpill(sessionFolder(deps.artifactsDir(), session), text);
   let acceptingActivity = true;
   try {
-    if (args.profileTool !== undefined) {
-      if (deps.profileOperation === undefined) return refused(new Error("Saved-profile ordinary operations are unavailable in this server."));
-      return await deps.profileOperation(args.profileTool, extra);
-    }
     let activeBrowserId: string | undefined;
     let activitySequence = 0;
     const progressToken = extra._meta?.progressToken;
@@ -153,10 +151,16 @@ export async function runCodeTool(deps: CodeToolDeps, args: BrowserRunArgs, extr
         if (sequence !== activitySequence || !acceptingActivity || preview === undefined || extra.signal.aborted) return;
         return extra.sendNotification!({
           method: "notifications/progress",
-          params: { progressToken, progress: 0, _meta: { "ai.insodimension/preview": preview } },
+          params: { progressToken, progress: sequence, _meta: { "ai.insodimension/preview": preview } },
         });
       }).catch(() => undefined);
     };
+    if (args.profileTool !== undefined) {
+      if (deps.profileOperation === undefined) return refused(new Error("Saved-profile ordinary operations are unavailable in this server."));
+      const answer = await deps.profileOperation(args.profileTool, extra, onBrowserActivity);
+      const preview = activeBrowserId ? await deps.preview?.(session, activeBrowserId, false) : undefined;
+      return preview ? { ...answer, _meta: { "ai.insodimension/preview": preview } } : answer;
+    }
     const outcome = args.resume !== undefined
       ? await deps.host.resume(session, args.resume, waitCapMs, extra.signal, onBrowserActivity)
       : await deps.host.run(session, {

@@ -14,12 +14,14 @@
  *  through the real MCP server over an in-memory transport, as a host reaches
  *  it. Chrome only where a browser has to be opened by the new profile's label.
  */
+import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { ARTIFACTORY_HOST_CONTEXT_EXTENSION_ID, ARTIFACTORY_HOST_CONTEXT_META_KEY, ARTIFACTORY_HOST_CONTEXT_READ_METHOD } from "@dimension/sdk/artifactory";
 import { z } from "zod";
 import type { ProfileListing } from "../src/contracts";
 import { MAX_PROFILES_FOR_MODEL, profilesForModel } from "../src/profile-list";
@@ -62,7 +64,21 @@ async function connect(runtime: BrowserRuntime, rootDir: string): Promise<{ clie
 	await mkdir(viewDir, { recursive: true });
 	await writeFile(join(viewDir, "index.html"), "<!doctype html><title>view</title>");
 	const server = await createBrowserServer({ runtime, viewDir, presets: [] });
-	const client = new Client({ name: "profile-add-test", version: "0.0.0" });
+	const client = new Client({ name: "profile-add-test", version: "0.0.0" }, { capabilities: { extensions: { [ARTIFACTORY_HOST_CONTEXT_EXTENSION_ID]: {} } } });
+	const refs = new Map<string, string>();
+	const refFor = (sessionId: string) => {
+		let token = refs.get(sessionId);
+		if (!token) {
+			token = randomBytes(32).toString("hex");
+			refs.set(sessionId, token);
+		}
+		return { sessionId, token };
+	};
+	client.setRequestHandler(z.object({ method: z.literal(ARTIFACTORY_HOST_CONTEXT_READ_METHOD), params: z.object({ sessionId: z.string(), token: z.string() }) }), async request => {
+		const { sessionId, token } = request.params;
+		if (refs.get(sessionId) !== token) throw new Error("Unknown host context");
+		return { active: true, sessionId };
+	});
 	const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
 	await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
 	clients.push(client);
@@ -70,7 +86,7 @@ async function connect(runtime: BrowserRuntime, rootDir: string): Promise<{ clie
 		(await client.callTool({
 			name,
 			arguments: args,
-			...(who === undefined ? {} : { _meta: { [CALLER]: who.caller, ...(who.session === undefined ? {} : { [SESSION]: { sessionId: who.session } }) } }),
+			...(who === undefined ? {} : { _meta: { [CALLER]: who.caller, ...(who.session === undefined ? {} : { [SESSION]: { sessionId: who.session }, [ARTIFACTORY_HOST_CONTEXT_META_KEY]: refFor(who.session) }) } }),
 		})) as ToolResult;
 	return { client, call };
 }
@@ -373,7 +389,7 @@ describe("addProfile", () => {
 		expect(await failureCode(() => runtime.addProfile({ name: "One More" }, "app"))).toBe("too_many_profiles");
 		// The name of the folder that is past the listing: refused, not merged into that profile's label.
 		expect(await failureCode(() => runtime.addProfile({ name: "zz-hidden" }, "app"))).toBe("too_many_profiles");
-		expect(await failureCode(() => runtime.open({ profile: "brand-new" }))).toBe("too_many_profiles");
+		expect(await failureCode(() => runtime.open({ profile: "brand-new" }, { caller: "app" }))).toBe("too_many_profiles");
 		expect(await tree(rootDir)).toEqual(before);
 		expect(store.meta("zz-hidden").label).toBe("Hidden");
 	});
@@ -463,11 +479,11 @@ describeWithChrome("a profile the person just made", () => {
 			await runtime.addProfile({ name: "Work Account", colour: "teal", avatar: "💼" }, "app");
 			await runtime.addProfile({ name: "Work account!" }, "app");
 
-			const first = await runtime.open({ profile: "  work ACCOUNT " });
+			const first = await runtime.open({ profile: "  work ACCOUNT " }, { caller: "app" });
 			expect(first.profile).toBe("work-account");
 			// The View draws the profile as the person made it.
 			expect(first.look).toEqual({ label: "Work Account", colour: "teal", avatar: "💼" });
-			const second = await runtime.open({ profile: "work account!" });
+			const second = await runtime.open({ profile: "work account!" }, { caller: "app" });
 			expect(second.profile).toBe("work-account-2");
 			// Opening made no new profile, and kept what the person chose.
 			expect(store.list()).toEqual(["work-account", "work-account-2"]);

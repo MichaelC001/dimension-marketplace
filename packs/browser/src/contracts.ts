@@ -1,6 +1,14 @@
 import type { ConnectionObservations } from "./connection.js";
 import type { LiveFrame } from "./engines/types.js";
 import type { ProfileColour, ResolvedProfileMeta } from "./profile-meta.js";
+import type { ArtifactoryLoopPrincipal } from "@dimension/sdk/artifactory";
+export type { ArtifactoryLoopPrincipal } from "@dimension/sdk/artifactory";
+
+/** Refresh externally, then assert local authority synchronously in the effect's dispatch continuation. */
+export interface EffectGuard {
+  (): void | Promise<void>;
+  assertCurrent(): void;
+}
 
 /** What the browser IS. `abp` and `browser4` are refused with the reason (see engines/refused.ts). */
 export const BROWSER_ENGINES = ["chromium", "chrome-relay", "abp", "browser4"] as const;
@@ -408,7 +416,7 @@ export interface ProfileHold { by: "person" | "agent"; task: boolean; takenOver:
  */
 export interface ProfileListing { name: string; label: string; colour: ProfileColour; avatar?: string; heldBy: ProfileHolder; hold?: ProfileHold; browserId?: string; sites: ProfileSiteListing[] }
 /** A saved-profile request belongs to one host-stamped chat, not to a browser id. */
-export interface ProfileConsent { name: string; label: string; sites: ProfileSiteListing[]; status: "pending" | "granted"; expiresAt?: number }
+export interface ProfileConsent { name: string; label: string; sites: ProfileSiteListing[]; status: "pending" | "granted"; scope: "chat" | "loop"; subject?: Pick<ArtifactoryLoopPrincipal, "workspaceId" | "id" | "origin">; loopLabel?: string; expiresAt?: number }
 /** A browser this chat holds that is not a saved profile: a Private one, or the person's own Chrome. Only the View is sent these. */
 export interface OpenBrowserListing { browserId: string; kind: "private" | "chrome"; hold: ProfileHold }
 /** What leaving a browser did to it: closed, or kept because something of an agent's (or the person's) still depends on it. */
@@ -439,8 +447,8 @@ export interface BrowserRuntimePort {
    * `opener`: who is asking (the host's stamps). A profile already open for the SAME chat comes back as that browser;
    * for anyone else it is refused (`profile_held`), naming whose it is.
    */
-  open(options: BrowserOpenOptions, opener?: BrowserOpener): Promise<BrowserState>;
-  state(browserId: string, guard?: () => void): Promise<BrowserState>;
+  open(options: BrowserOpenOptions, opener?: BrowserOpener, code?: undefined, attach?: undefined, guard?: EffectGuard): Promise<BrowserState>;
+  state(browserId: string, guard?: EffectGuard): Promise<BrowserState>;
   /** A fresh PNG capture of the active tab, retained for `annotate`. */
   frame(browserId: string): Promise<BrowserFrame>;
   /**
@@ -466,18 +474,18 @@ export interface BrowserRuntimePort {
   input(browserId: string, events: unknown): Promise<void>;
   tab(browserId: string, request: TabRequest, caller?: ToolCaller): Promise<BrowserState>;
   resize(browserId: string, viewport: Viewport, scale?: number): Promise<BrowserState>;
-  snapshot(browserId: string, guard?: () => void): Promise<{ state: BrowserState; text: string }>;
+  snapshot(browserId: string, guard?: EffectGuard): Promise<{ state: BrowserState; text: string }>;
   /** Refused (`publish_pending`) while a publish awaits confirmation, unless `caller` is "app". */
-  act(browserId: string, action: BrowserAction, caller?: ToolCaller, guard?: () => void): Promise<ActionResult>;
+  act(browserId: string, action: BrowserAction, caller?: ToolCaller, guard?: EffectGuard): Promise<ActionResult>;
   /**
    * 1..MAX_BATCH_STEPS steps under ONE lock: refused once (`task_running`, `publish_pending`, as `act`), every step
    * validated before the first runs (`bad_action`/`bad_wait`), then run in order until one is not `completed`.
    */
-  actMany(browserId: string, steps: readonly BatchStep[], caller?: ToolCaller, guard?: () => void): Promise<ActManyResult>;
+  actMany(browserId: string, steps: readonly BatchStep[], caller?: ToolCaller, guard?: EffectGuard): Promise<ActManyResult>;
   /** A picture for a model: webp, at most 1024 CSS px on its longest edge, never retained (so never annotatable). Read like `snapshot`. */
-  shot(browserId: string, request?: ShotRequest, guard?: () => void): Promise<ModelShot>;
+  shot(browserId: string, request?: ShotRequest, guard?: EffectGuard): Promise<ModelShot>;
   /** The active tab's log entries since the last call (which marks them read); `[]` when nothing is new. For a model's reads, never the View's. */
-  logs(browserId: string): Promise<LogEntry[]>;
+  logs(browserId: string, guard?: EffectGuard): Promise<LogEntry[]>;
   /**
    * Remember `browserId` as the browser `session` — the id the HOST stamped on a call, never one a caller passed — has
    * open in its View: what the human opened or is viewing. Forgotten when that browser closes.
@@ -492,9 +500,9 @@ export interface BrowserRuntimePort {
   /** Serialized and refused (`task_running`, `publish_pending`) like `act`; nothing is changed on the page. `timeout` is a result, not an error. */
   wait(browserId: string, request: WaitRequest, caller?: ToolCaller): Promise<WaitResult>;
   /** Read-only: a fixed page script measures the first match of `selector` (`@<ref> ` prefix reaches an iframe). Nothing the caller wrote runs in the page. */
-  inspect(browserId: string, selector: string, guard?: () => void): Promise<InspectResult>;
+  inspect(browserId: string, selector: string, guard?: EffectGuard): Promise<InspectResult>;
   runTask(browserId: string, request: TaskRequest, onStep?: (step: TaskStep, run: TaskRun) => void): Promise<TaskRun>;
-  cancelTask(browserId: string): Promise<TaskRun>;
+  cancelTask(browserId: string, guard?: EffectGuard): Promise<TaskRun>;
   /**
    * The page under the regions the human marked on a frame `frame` (png) captured: url, title, scroll and the elements
    * under each region. Refused (`stale_frame`) once the page has moved on from the frame, (`unknown_frame`) for a frame
@@ -510,13 +518,19 @@ export interface BrowserRuntimePort {
   /** Every saved profile (never the relay's, never a throwaway), with who holds it relative to `asker`, the chat asking. */
   profileList(asker?: string): Promise<ProfileListing[]>;
   /** Model access is checked before any saved-profile browser operation, including by-id reads and credentials. */
-  requireProfileAccess(browserId: string, caller?: ToolCaller, session?: string): void;
+  requireProfileAccess(browserId: string, caller?: ToolCaller, session?: string, allowClosed?: boolean): void;
   /** Typed browser_run ordinary operations are saved-profile-only; refuses relay and throwaway before reading a page. */
-  requireSavedProfileAccess(browserId: string, caller?: ToolCaller, session?: string): void;
+  requireSavedProfileAccess(browserId: string, caller?: ToolCaller, session?: string, allowClosed?: boolean): void;
+  /** Synchronous metadata only, including a saved browser whose close is retryable. */
+  needsProfileAuthority(browserId: string): boolean;
+  /** Install only the principal returned by an authenticated host authority read; undefined denies standing access. */
+  setProfilePrincipal(sessionId: string, principal: ArtifactoryLoopPrincipal | undefined): void;
+  /** Clear this chat's ephemeral authority and grants before stopping its matching task. */
+  endProfileSession(sessionId: string): Promise<void>;
   /** Pending requests and active grants for the View's host-stamped chat. */
   profileConsents(session?: string): ProfileConsent[];
-  /** Human-only decision; the requested profile and session must match a pending request. */
-  decideProfileConsent(name: string, decision: "allow" | "deny" | "revoke", caller?: ToolCaller, session?: string): Promise<void>;
+  /** Human-only decision bound to the displayed stable subject; the expectation never selects authority. */
+  decideProfileConsent(name: string, decision: "allow" | "deny" | "revoke", caller?: ToolCaller, session?: string, scope?: "chat" | "loop", expectedSubject?: ProfileConsent["subject"]): Promise<void>;
   /** The browsers this chat holds that are not saved profiles (Private ones, the person's own Chrome), for the View's menu; never another chat's. */
   openBrowsers(asker?: string): Promise<OpenBrowserListing[]>;
   /** The label, colour and avatar of every saved profile that has any observation, for the connection report. */
@@ -543,18 +557,18 @@ export interface BrowserRuntimePort {
    */
   leave(browserId: string, caller?: ToolCaller): Promise<LeaveOutcome>;
   /** Settles a pending publish first. Refused (`publish_pending`) while one awaits confirmation, unless `caller` is "app". */
-  close(browserId: string, caller?: ToolCaller): Promise<void>;
+  close(browserId: string, caller?: ToolCaller, guard?: EffectGuard): Promise<void>;
   waitTask(browserId: string, ms: number): Promise<TaskRun>;
-  startTask(browserId: string, request: TaskRequest, caller?: ToolCaller, session?: string, guard?: () => void): Promise<TaskRun>;
+  startTask(browserId: string, request: TaskRequest, caller?: ToolCaller, session?: string, guard?: EffectGuard, workerGuard?: EffectGuard): Promise<TaskRun>;
   /** `check`: signed in? `post`: fill, verify and park for a confirm. Never submits. `preset` labels the record with the preset the recipe was resolved from. */
-  publish(browserId: string, recipe: PublishRecipe, mode: PublishMode, caller?: ToolCaller, preset?: PresetRef): Promise<PublishCheck | PublishRecord>;
+  publish(browserId: string, recipe: PublishRecipe, mode: PublishMode, caller?: ToolCaller, preset?: PresetRef, guard?: EffectGuard): Promise<PublishCheck | PublishRecord>;
   /**
    * The Post (the model's confirm or the View's button): re-verify, click submit exactly once, read the receipt from the page.
    * `expect` binds the confirm to what the caller was shown: REQUIRED unless `caller` is "app", and when given (from any
    * caller) it must equal the pending record's origin, profile and field values exactly, else nothing is clicked.
    */
-  confirmPublish(browserId: string, publishId: string, caller?: ToolCaller, expect?: PublishExpectation): Promise<PublishRecord>;
-  cancelPublish(browserId: string, publishId: string): Promise<PublishRecord>;
+  confirmPublish(browserId: string, publishId: string, caller?: ToolCaller, expect?: PublishExpectation, guard?: EffectGuard): Promise<PublishRecord>;
+  cancelPublish(browserId: string, publishId: string, guard?: EffectGuard): Promise<PublishRecord>;
   /** The publish's record once it is terminal or `ms` has passed, whichever is first. */
   waitPublish(browserId: string, publishId: string, ms: number): Promise<PublishRecord>;
   /** Read a public page in this server's own headless reader: a fresh incognito context, never a profile or a Browser View browser. */

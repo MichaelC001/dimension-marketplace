@@ -490,7 +490,7 @@ describeWithChrome("launch", () => {
 			const site = startIdentitySite();
 			try {
 				const { runtime } = await createRuntime();
-				const opened = await runtime.open({ profile: "ua", viewport: { width: 640, height: 480 } });
+				const opened = await runtime.open({ profile: "ua", viewport: { width: 640, height: 480 } }, { caller: "app" });
 				// The fixture passes Chrome's path explicitly, so the app is `custom`.
 				expect(opened.app).toBe("custom");
 				await perform(runtime, opened.browserId, { kind: "navigate", url: site.url });
@@ -525,7 +525,7 @@ describeWithChrome("launch", () => {
 			const site = startIdentitySite();
 			try {
 				const { runtime } = await createRuntime();
-				const opened = await runtime.open({ profile: "sw", viewport: { width: 640, height: 480 } });
+				const opened = await runtime.open({ profile: "sw", viewport: { width: 640, height: 480 } }, { caller: "app" });
 				await perform(runtime, opened.browserId, { kind: "navigate", url: site.url });
 				const view = await site.seen();
 				// The worker ran with the replayed identity before it was let go.

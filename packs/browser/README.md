@@ -373,11 +373,11 @@ saved profile, `{ name, label, colour, heldBy, sites }`:
 `heldBy` is `null` (free), `"this chat"`, `"human"` (the person has it open in a View
 of another chat) or `"another chat"`; never an id. `signedIn: null` is "not known
 now": the last check is over 7 days old, or its time is in the future (an agent
-can ask the person); a site that was only visited is not listed. **A site's account
-(an email, a handle) is shown to the person, not to the model:** the model's answer
-leaves it out until the consent gate (P4) exists. The Browser View reads the same tool
-as the human and gets the same list as structured content, each site with its
-`account`, and so does the dock. Never a cookie, a cookie name, an expiry, a token, a
+can ask the person); a site that was only visited is not listed. **The View shows a
+site's account (an email, a handle) to the person.** An unauthenticated model, or
+one without current approval for that profile, receives no site metadata. The
+Browser View reads the same tool as the human and gets the list as structured
+content, each site with its `account`, and so does the dock. Never a cookie, a cookie name, an expiry, a token, a
 password, whether a saved password exists, or a path; the relay and throwaway
 browsers are never listed. More than 40 profiles: the ones in use and the signed-in
 ones first, the rest counted in `omitted`.
@@ -390,8 +390,21 @@ the profiles' names and labels, never resolved to the closest. A valid name that
 matches nothing is a new profile, as it always was (an account's first sign-in). The
 chat that already holds a profile gets its own browser back; anyone else is refused
 `profile_held`, told whether the human or another chat has it, whether that profile is
-open or still starting. There is no consent step yet: until one exists any agent can
-open any saved profile, `default` included.
+open or still starting.
+
+**Saved-profile approval.** Naming an existing profile, `default` included, does
+not authorize the model to use it. The host must supply current verified chat
+authority; otherwise saved-profile access fails closed. The person decides in
+the Browser View: allow this chat, deny, or grant/revoke standing access for the
+verified Loop. Successfully opening a new profile created by this chat grants
+its creator access; an unsuccessful or revoked launch does not.
+
+The first request appears on the blank start page, outside the folded Options:
+there is no need to open another browser to find its approval controls. Requests
+refresh while the View is blank or the profile menu is open. A decision carries
+the displayed subject's workspace, id and origin; a changed or expired request
+is refused, with the error visible on the blank page rather than a hidden toast.
+The View does not treat a refused decision as approval or open a browser for it.
 
 **The profile menu (the View).** The toolbar's chip is the browser's profile: its avatar (the emoji
 the person chose, else the label's first letter, on the profile's colour) and its label; Private for a

@@ -1,6 +1,6 @@
 import type { AdmittedInput } from "../input.js";
 import type { AttachTarget } from "./attach.js";
-import type { BrowserAction, BrowserApp, BrowserRegion, ElementInspection, HandledDialog, LogEntry, ModelShot, PageElements, PageScroll, ShotRequest, TabInfo, Viewport } from "../contracts.js";
+import type { BrowserAction, BrowserApp, BrowserRegion, EffectGuard, ElementInspection, HandledDialog, LogEntry, ModelShot, PageElements, PageScroll, ShotRequest, TabInfo, Viewport } from "../contracts.js";
 import type { TabRef, WaitUntil } from "../code/contracts.js";
 
 /** Everything below describes the ACTIVE tab unless it says otherwise. */
@@ -155,13 +155,17 @@ export interface EngineDriver {
    * value replaces the field's content. A field that is not a password input,
    * or no password for that origin, is an error and nothing is typed. The
    * result names the origin, never the value.
+   * `guard`: refresh after pure preparation, then assert local authority in
+   * the actual native dispatch continuation. Any error after an effect is spent.
    */
-  perform(action: BrowserAction, password?: PasswordSource): Promise<PerformOutcome>;
+  perform(action: BrowserAction, password?: PasswordSource, guard?: EffectGuard): Promise<PerformOutcome>;
   /**
    * Replace a field's content exactly as `perform({ kind: "type" })` does. A
    * password input is refused with `ActionNotDispatched` before any input event.
+   * With `guard`, resolve the renderer target before admission; any failure
+   * after focus/selection/input starts is uncertain, never `ActionNotDispatched`.
    */
-  fill(selector: string, text: string): Promise<void>;
+  fill(selector: string, text: string, guard?: EffectGuard): Promise<void>;
   /**
    * Resolve when `condition` holds on the active tab (true) or after
    * `timeoutMs` (false). Reads only; a selector takes the `@<ref> ` frame prefix.
@@ -188,11 +192,11 @@ export interface EngineDriver {
    * Open a tab, make it the active one, and navigate it to `url` (already validated) when given. Answers the tab, so the code worker
    * (doc 77 §7.4.3) can adopt it by `targetId`: the engine creates and instruments every tab, the worker never does.
    */
-  openTab(url?: string, options?: OpenTabOptions): Promise<TabRef>;
+  openTab(url?: string, options?: OpenTabOptions, guard?: EffectGuard): Promise<TabRef>;
   /** Every page tab this driver owns, in opening order, as the code worker adopts them. Reads only what the browser process knows (no renderer call). */
   tabs(): Promise<TabRef[]>;
   /** Navigate `tabId` (not necessarily the active one) and wait as `options` say; a page that has not loaded in time is stopped and the call rejects. */
-  navigateTab(tabId: string, url: string, options: NavigateTabOptions): Promise<TabRef>;
+  navigateTab(tabId: string, url: string, options: NavigateTabOptions, guard?: EffectGuard): Promise<TabRef>;
   /** How `tabId` answers its JavaScript dialogs from now on; undefined restores the default (alert and beforeunload accepted, confirm and prompt dismissed). The engine is the one CDP client that answers, so two never both do. */
   setDialogPolicy(tabId: string, policy: DialogPolicy | undefined): void;
   /** Freeze (`Page.setWebLifecycleState` frozen) or thaw `tabId`: an idle tab stops using CPU. Capped at 3 s; throws for an unknown tab. */
@@ -205,11 +209,11 @@ export interface EngineDriver {
    */
   adoptTab(options?: { match?: string; preferVisible?: boolean }): Promise<TabRef>;
   /** Make `tabId` the driven and shown tab. Throws `ActionNotDispatched` for an unknown id. */
-  activateTab(tabId: string): Promise<void>;
+  activateTab(tabId: string, guard?: EffectGuard): Promise<void>;
   /** Close `tabId`. Closing the last tab opens a blank one first: the browser never ends from a tab close. */
-  closeTab(tabId: string): Promise<void>;
+  closeTab(tabId: string, guard?: EffectGuard): Promise<void>;
   /** Set every tab's viewport and pixel ratio (both validated) and restart the live cast at that size. */
-  resize(viewport: Viewport, scale: number): Promise<void>;
+  resize(viewport: Viewport, scale: number, guard?: EffectGuard): Promise<void>;
   /** CDP websocket endpoint of this browser, for an upstream task agent to attach to. */
   cdpEndpoint(): string;
   /** Resolve only after owned resources shut down. Never close foreign browsers. */

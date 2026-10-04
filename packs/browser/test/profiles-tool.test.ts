@@ -9,11 +9,13 @@
  *  The real MCP server over an in-memory transport, the way a host reaches it.
  *  Chrome only where a browser has to be open to be held.
  */
+import { randomBytes } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { ARTIFACTORY_HOST_CONTEXT_EXTENSION_ID, ARTIFACTORY_HOST_CONTEXT_META_KEY, ARTIFACTORY_HOST_CONTEXT_READ_METHOD } from "@dimension/sdk/artifactory";
 import { z } from "zod";
 import type { App } from "@modelcontextprotocol/ext-apps";
 import { BrowserClient } from "../app/view/browser-client";
@@ -88,12 +90,26 @@ async function connect(seed: (store: ProfileStore) => void = () => undefined): P
 	await mkdir(viewDir, { recursive: true });
 	await writeFile(join(viewDir, "index.html"), "<!doctype html><title>view</title>");
 	const server = await createBrowserServer({ runtime, viewDir, presets: [] });
-	const client = new Client({ name: "profiles-tool-test", version: "0.0.0" });
+	const client = new Client({ name: "profiles-tool-test", version: "0.0.0" }, { capabilities: { extensions: { [ARTIFACTORY_HOST_CONTEXT_EXTENSION_ID]: {} } } });
 	const reports: ConnectionReport[] = [];
 	client.fallbackNotificationHandler = async (notification) => {
 		const params = (notification as { method: string; params?: { report?: ConnectionReport | null } }).params;
 		if (notification.method === REPORT && params?.report) reports.push(params.report);
 	};
+	const refs = new Map<string, string>();
+	const refFor = (sessionId: string) => {
+		let token = refs.get(sessionId);
+		if (!token) {
+			token = randomBytes(32).toString("hex");
+			refs.set(sessionId, token);
+		}
+		return { sessionId, token };
+	};
+	client.setRequestHandler(z.object({ method: z.literal(ARTIFACTORY_HOST_CONTEXT_READ_METHOD), params: z.object({ sessionId: z.string(), token: z.string() }) }), async request => {
+		const { sessionId, token } = request.params;
+		if (refs.get(sessionId) !== token) throw new Error("Unknown host context");
+		return { active: true, sessionId };
+	});
 	const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
 	await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
 	clients.push(client);
@@ -102,7 +118,7 @@ async function connect(seed: (store: ProfileStore) => void = () => undefined): P
 			await client.callTool({
 				name,
 				arguments: args,
-				...(who === undefined ? {} : { _meta: { [CALLER]: who.caller, ...(who.session === undefined ? {} : { [SESSION]: { sessionId: who.session } }) } }),
+				...(who === undefined ? {} : { _meta: { [CALLER]: who.caller, ...(who.session === undefined ? {} : { [SESSION]: { sessionId: who.session }, [ARTIFACTORY_HOST_CONTEXT_META_KEY]: refFor(who.session) }) } }),
 			}),
 		);
 	return { call, client, store, reports };
@@ -219,19 +235,20 @@ describeWithChrome("opening a profile by the name an agent was given", () => {
 	const errorOf = (result: ToolResult): string | undefined => (result.isError ? textOf(result) : undefined);
 
 	test(
-		"a label opens it, the same chat asking again gets the same browser, and another chat is told who holds it — in words, never an id",
+		"a consented label opens it, the same chat reuses its browser, and an unconsented stranger gets no browser id",
 		async () => {
 			const { call } = await connect((store) => store.saveMeta("acme-work", { label: "Work Account" }));
+			expect((await call("browser_open", { profile: "work account" }, MODEL)).isError).toBe(true);
+			expect((await call("browser_profile_consent", { name: "acme-work", decision: "allow", scope: "chat" }, VIEW)).isError).toBeFalsy();
 			const first = await call("browser_open", { profile: "work account" }, MODEL);
 			expect(first.structuredContent).toMatchObject({ profile: "acme-work" });
 			const again = await call("browser_open", { profile: "ACME-WORK" }, MODEL);
 			expect(again.structuredContent?.browserId).toBe(first.structuredContent?.browserId);
 
-			const other = errorOf(await call("browser_open", { profile: "Work Account" }, { caller: "model", session: "s-2" }));
-			expect(other).toContain("held by another chat");
+			const stranger = await call("browser_open", { profile: "Work Account" }, { caller: "model", session: "s-2" });
+			expect(stranger.isError).toBe(true);
+			const other = errorOf(stranger);
 			expect(other).not.toContain(String(first.structuredContent?.browserId));
-			// The View's own message for a taken profile still recognises it.
-			expect(other).toMatch(/profile "[^"]*" is already (?:open|in use)/);
 
 			expect(listOf(await call("browser_profiles", {}, { caller: "model", session: "s-2" })).profiles.map((profile) => profile.heldBy)).toEqual(["another chat"]);
 		},
@@ -258,6 +275,8 @@ describeWithChrome("opening a profile by the name an agent was given", () => {
 		"opening a profile after the browser build under it changed tells the person once, in the open result alone",
 		async () => {
 			const { call, store } = await connect((s) => s.saveMeta("work", { app: "msedge" }));
+			expect((await call("browser_open", { profile: "work" }, MODEL)).isError).toBe(true);
+			expect((await call("browser_profile_consent", { name: "work", decision: "allow", scope: "chat" }, VIEW)).isError).toBeFalsy();
 			const opened = await call("browser_open", { profile: "work" }, MODEL);
 			// The test browser is a `custom` build; the profile was last run in Edge.
 			expect(String(opened.structuredContent?.notice)).toMatch(/last opened in Edge; this browser is a custom browser/);
