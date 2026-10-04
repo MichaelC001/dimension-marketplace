@@ -1,46 +1,23 @@
-// The host runs `node app/server.mjs`, never `src/`, so a fence or server change
-// that was not rebuilt does not exist for the user. This pins the committed
-// bundle to the source: the server is rebuilt in memory by `buildServerBundle()`
-// (the very function `scripts/build.mjs` writes the file with) and the
-// tail of it (see below), and its first line, must equal the committed file byte for byte.
-//
-// What is and is not pinned:
-//   - Pinned: everything from the first `// src/` comment to the end of the file.
-//     That is the fence, the path rules, the chunk reader, the server and the stdio
-//     entry, plus the one SDK constant the fence imports: the code that decides
-//     what the viewer opens. esbuild emits that first comment where `src/server.ts`
-//     hoists its imports, so the tail also carries the third-party modules it
-//     places after them (zod, the MCP server); a dependency bump not rebuilt fails
-//     here too. The first line is the `require` shim banner the build sets.
-//   - NOT pinned: the third-party code above that comment (the rest of the MCP
-//     SDK, zod, ext-apps; most of the file). Its bytes belong to the installed
-//     dependency versions, which the lockfile pins. Its module comments and
-//     module-map keys spell the path to `node_modules`, and that spelling depends
-//     on where the dependencies are installed (a worktree resolves them into
-//     another checkout), so `buildServerBundle` writes every such prefix as one
-//     canonical spelling, and this test rewrites the same way on BOTH sides before
-//     comparing. The second test holds the COMMITTED file to that spelling, so a
-//     bundle built elsewhere cannot be committed unnoticed, and the third holds
-//     the spelling to the real distance between this folder and `node_modules`.
-//   - NOT pinned: `app/dist/`, the View. Vite names its chunks by content hash.
+// The host runs `node app/server.mjs`, never `src/`, so compare the committed
+// bundle with the source rebuilt in memory by the production builder.
+// Dependency versions are lockfile-pinned, but only the authored tail (starting
+// at the first `// src/` comment) and banner are compared byte for byte here.
+// The full committed bundle must also already be in portable canonical form.
+// `app/dist/` is built separately and is not part of this assertion.
 import { describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const VIEWER = join(import.meta.dir, "..");
 const COMMITTED = join(VIEWER, "app", "server.mjs");
 /** Where the compared tail starts: esbuild writes one `// <path>` comment per inlined module, and the viewer's own modules live under `src/`. */
 const PACK_MARKER = "\n// src/";
-/** How a bundle spells the way to `node_modules`: any number of `../`, then optionally the directories of an install elsewhere, then `node_modules/`. */
-const DEPENDENCY_PREFIX = /(?:\.\.\/)+(?:[^/\s"']+\/)*?node_modules\//g;
-/** `marketplace/packs/swiss-knife/viewer/` is four folders below the repository root, which holds `node_modules/`. */
 const CANONICAL_PREFIX = "../../../../node_modules/";
 
-/** The compared part of `bundle`: its banner line and its tail, with the install layout and the line endings taken out. */
+/** The compared part of `bundle`: its banner line and authored tail. */
 function packAuthored(bundle: string, label: string): string {
-	const text = bundle.replaceAll("\r\n", "\n").replace(DEPENDENCY_PREFIX, CANONICAL_PREFIX);
+	const text = bundle.replaceAll("\r\n", "\n");
 	const at = text.indexOf(PACK_MARKER);
 	if (at < 0) throw new Error(`${label} has no "// src/" module comment, so the pack's own code cannot be found in it`);
 	return `${text.slice(0, text.indexOf("\n"))}${text.slice(at)}`;
@@ -59,15 +36,17 @@ function firstDifference(committed: string, rebuilt: string): string | undefined
 	return "the texts differ";
 }
 
-async function rebuild(): Promise<string> {
-	// The build script is plain untyped JS outside the TypeScript project; load it by path.
+async function builder(): Promise<{ buildServerBundle: () => Promise<string>; normalizeServerBundle: (text: string) => string }> {
 	const built: unknown = await import(pathToFileURL(join(VIEWER, "scripts", "build.mjs")).href);
-	if (typeof built !== "object" || built === null || !("buildServerBundle" in built) || typeof built.buildServerBundle !== "function") {
-		throw new Error("scripts/build.mjs does not export buildServerBundle()");
+	if (typeof built !== "object" || built === null || !("buildServerBundle" in built) || typeof built.buildServerBundle !== "function" ||
+		!("normalizeServerBundle" in built) || typeof built.normalizeServerBundle !== "function") {
+		throw new Error("scripts/build.mjs must export buildServerBundle() and normalizeServerBundle()");
 	}
-	const text: unknown = await built.buildServerBundle();
-	if (typeof text !== "string") throw new Error("buildServerBundle() did not return the bundle text");
-	return text;
+	return built as { buildServerBundle: () => Promise<string>; normalizeServerBundle: (text: string) => string };
+}
+
+async function rebuild(): Promise<string> {
+	return (await builder()).buildServerBundle();
 }
 
 describe("the committed server bundle", () => {
@@ -80,15 +59,30 @@ describe("the committed server bundle", () => {
 		).toBeUndefined();
 	}, 60_000);
 
-	test("every dependency path in it is the canonical one, not the layout of whoever built it", async () => {
-		const committed = (await readFile(COMMITTED, "utf8")).replaceAll("\r\n", "\n");
-		const odd = [...new Set(committed.match(DEPENDENCY_PREFIX) ?? [])].filter(prefix => prefix !== CANONICAL_PREFIX);
-		expect(odd, `app/server.mjs was built in a non-canonical install; rewrite these prefixes to ${CANONICAL_PREFIX}`).toEqual([]);
-		// And the canonical one really is in use: a file with no dependency paths at all would pass the check above for free.
+	test("committed dependency labels are portable, without rewriting executable strings", async () => {
+		const committed = await readFile(COMMITTED, "utf8");
+		const { normalizeServerBundle } = await builder();
+		expect(normalizeServerBundle(committed), "app/server.mjs contains non-canonical generated dependency labels").toBe(committed);
 		expect(committed).toContain(`// ${CANONICAL_PREFIX}`);
 	});
 
-	test("the canonical spelling is the real way from this folder to the repository's node_modules", () => {
-		expect(existsSync(resolve(VIEWER, CANONICAL_PREFIX, "zod")), `${CANONICAL_PREFIX} from ${VIEWER} does not reach node_modules/zod`).toBe(true);
+	test("Windows donor paths and relative installs produce identical metadata without changing program literals", async () => {
+		const { normalizeServerBundle } = await builder();
+		const suffix = "zod/lib/index.js";
+		const relative = "../../../../../../node_modules/";
+		const absolute = "C:/Users/example/.inso/wt/donor/node_modules/";
+		const bundle = (label: string, literal: string) => [
+			`// ${label}${suffix}`,
+			`  "${label}${suffix}"() {`,
+			`    const runtimePath = "${literal}${suffix}";`,
+			`    return runtimePath;`,
+			`  }`,
+			`  "${label}zod/lib/types.js"(exports) {`,
+			`    return exports;`,
+			`  }`,
+		].join("\n");
+		for (const donor of [absolute, relative]) {
+			expect(normalizeServerBundle(bundle(donor, donor))).toBe(bundle(CANONICAL_PREFIX, donor));
+		}
 	});
 });

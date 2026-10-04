@@ -17,11 +17,14 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const pluginRoot = resolve(root, "..");
 
 /**
- * How the bundle spells the way to `node_modules`: any number of `../`, then
- * optionally the directories of an install elsewhere (a worktree resolves its
- * dependencies into another checkout), then `node_modules/`.
+ * esbuild labels inlined modules with source-path comments and uses the same
+ * paths as keys in its CommonJS/ESM module map. A dependency can resolve from
+ * a relative install or an absolute donor checkout (including another drive).
+ * Match those generated locations only, never path-looking program strings.
  */
-const DEPENDENCY_PREFIX = /(?:\.\.\/)+(?:[^/\s"']+\/)*?node_modules\//g;
+const DEPENDENCY_PATH = /(?:(?:[A-Za-z]:)?\/|(?:\.\.\/)+)(?:[^/\r\n"']+\/)*?node_modules\/([^\r\n"']+)/;
+const MODULE_COMMENT = /^(\/\/ )(.+)$/gm;
+const MODULE_KEY = /^([ \t]*")([^"\r\n]+)("\([^)\r\n]*\) \{)$/gm;
 
 /**
  * The one spelling the committed bundle carries: this folder's distance to the
@@ -29,6 +32,14 @@ const DEPENDENCY_PREFIX = /(?:\.\.\/)+(?:[^/\s"']+\/)*?node_modules\//g;
  * levels down. Whatever install built the bundle, the bytes are the same.
  */
 const CANONICAL_DEPENDENCY_PREFIX = "../../../../node_modules/";
+
+/** Normalize only esbuild's source labels and module-map keys, not bundled program strings. */
+export function normalizeServerBundle(text) {
+	const canonicalize = (path) => path.replace(DEPENDENCY_PATH, (_, suffix) => `${CANONICAL_DEPENDENCY_PREFIX}${suffix}`);
+	return text
+		.replace(MODULE_COMMENT, (line, marker, path) => `${marker}${canonicalize(path)}`)
+		.replace(MODULE_KEY, (line, before, path, after) => `${before}${canonicalize(path)}${after}`);
+}
 
 /** The server bundle text, built from `src/stdio.ts`. Same source, same bytes, from any install. */
 export async function buildServerBundle() {
@@ -51,7 +62,7 @@ export async function buildServerBundle() {
 	});
 	const [output] = result.outputFiles;
 	if (!output) throw new Error("esbuild produced no output for src/stdio.ts");
-	return output.text.replace(DEPENDENCY_PREFIX, CANONICAL_DEPENDENCY_PREFIX);
+	return normalizeServerBundle(output.text);
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

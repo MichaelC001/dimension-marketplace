@@ -1,6 +1,7 @@
-// The video side of marking a moment: a still of the picture at a time (what the agent is
-// shown beside "1. at 0:12.4 - cut the cough"), and the length of one frame (what `,` and `.`
-// step by).
+// The video side of marking: a still of the picture at a time (what the agent is shown beside "1. at 0:12.4 -
+// cut the cough", and the frame a drawing is burned onto), a small one for the film lane, the length of one frame
+// (what `,` and `.` step by), and the geometry of drawing on a frame (where the picture is drawn in its box, and
+// which drawings belong to the frame on screen).
 //
 // A STILL is taken from a second, silent element on the same object URL, never from the
 // player the human is watching. The player stays where it is and keeps playing; nothing
@@ -14,6 +15,25 @@ import { clampTime, type FrameGrab } from "@dimension/mcp-app-kit/annotate";
 /** The long edge of a still, in pixels: enough to read a face or a caption, and ~60 KB. */
 export const FRAME_LONG_EDGE = 768;
 export const FRAME_QUALITY = 0.82;
+/** A filmstrip's frame: small enough that sixteen of them are a few tens of KB, sharp enough to recognise a scene in a 54 px lane. */
+export const THUMB_LONG_EDGE = 160;
+export const THUMB_QUALITY = 0.7;
+
+/** How big a picture is taken, and how hard it is compressed. */
+interface StillShape {
+	readonly longEdge: number;
+	readonly quality: number;
+}
+const FULL_STILL: StillShape = { longEdge: FRAME_LONG_EDGE, quality: FRAME_QUALITY };
+const THUMB_STILL: StillShape = { longEdge: THUMB_LONG_EDGE, quality: THUMB_QUALITY };
+
+/** A small picture of a video: a `data:image/jpeg` URL and its size. */
+export interface Thumbnail {
+	readonly src: string;
+	readonly width: number;
+	readonly height: number;
+}
+
 /** Each wait in a grab (the element opening, a seek landing) gives up after this long. */
 const GRAB_TIMEOUT_MS = 8000;
 /** The silent element is dropped after this long without a grab. */
@@ -70,13 +90,6 @@ function until<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
 }
 
 /**
- * Takes stills of one video. One silent element, opened on first use, one still at a time, let go of when idle.
- *
- * Nothing here can outlive its caller: a still asked for with a `signal` stops when it aborts, and `dispose()` (the
- * pane going away) stops the one in progress, refuses the ones queued behind it, and refuses any later.
- * A video that would not open once will not open again, so the stills still to take do not each wait it out.
- */
-/**
  * A signal that aborts when either of two does. `AbortSignal.any` would say this in one call, but it
  * needs Safari 17.4 and the desktop app's macOS webview is whatever WebKit the machine has; this works
  * everywhere and removes its listeners once it fires.
@@ -99,6 +112,13 @@ function eitherAborts(first: AbortSignal, second: AbortSignal): AbortSignal {
 	return merged.signal;
 }
 
+/**
+ * Takes stills of one video. One silent element, opened on first use, one still at a time, let go of when idle.
+ *
+ * Nothing here can outlive its caller: a still asked for with a `signal` stops when it aborts, and `dispose()` (the
+ * pane going away) stops the one in progress, refuses the ones queued behind it, and refuses any later.
+ * A video that would not open once will not open again, so the stills still to take do not each wait it out.
+ */
 export class FrameGrabber {
 	readonly #source: HTMLVideoElement;
 	readonly #life = new AbortController();
@@ -123,8 +143,13 @@ export class FrameGrabber {
 			// The player's own object URL: the bytes are shared, not copied or read again.
 			clone.src = this.#source.currentSrc;
 			this.#element = clone;
-			this.#clone = opened.then(() => clone);
-			this.#clone.catch(error => {
+			const opening = opened.then(() => clone);
+			this.#clone = opening;
+			opening.catch(error => {
+				// Only the clone still in hand failing is the VIDEO failing. One let go of before it opened (an idle release
+				// strips its source) times out later, long after a newer clone may have replaced it: that late failure is the
+				// old clone's, and must not mark the video unopenable or let go of the newer one mid-use.
+				if (this.#clone !== opening) return;
 				this.#openFailure = error;
 				this.release();
 			});
@@ -132,15 +157,40 @@ export class FrameGrabber {
 		return this.#clone;
 	}
 
+	/** The size in pixels of the picture the video draws, as the player has it (already decoded); 0 x 0 while it has none. */
+	get size(): { readonly width: number; readonly height: number } {
+		return { width: this.#source.videoWidth, height: this.#source.videoHeight };
+	}
+
 	/** A still of the video at `at` seconds. Stills are taken one after another, whoever asks. */
 	grab(at: number, signal?: AbortSignal): Promise<FrameGrab> {
+		return this.#enqueue(async stop => {
+			const still = await this.#take(at, stop, FULL_STILL);
+			const bytes = jpegBytes(still.dataUrl);
+			if (bytes === null) throw new Error("the picture could not be encoded");
+			return { bytes, mimeType: "image/jpeg", width: still.width, height: still.height };
+		}, signal);
+	}
+
+	/**
+	 * A small picture of the video at `at` seconds, ready to be an image's `src`: what a filmstrip is made of. It
+	 * waits its turn in the same line as the full stills, and is as abortable.
+	 */
+	thumbnail(at: number, signal?: AbortSignal): Promise<Thumbnail> {
+		return this.#enqueue(async stop => {
+			const still = await this.#take(at, stop, THUMB_STILL);
+			return { src: still.dataUrl, width: still.width, height: still.height };
+		}, signal);
+	}
+
+	#enqueue<T>(job: (stop: AbortSignal) => Promise<T>, signal: AbortSignal | undefined): Promise<T> {
 		const stop = signal === undefined ? this.#life.signal : eitherAborts(this.#life.signal, signal);
-		const taken = this.#queue.then(() => this.#take(at, stop));
+		const taken = this.#queue.then(() => job(stop));
 		this.#queue = taken.catch(() => undefined);
 		return taken;
 	}
 
-	async #take(at: number, stop: AbortSignal): Promise<FrameGrab> {
+	async #take(at: number, stop: AbortSignal, shape: StillShape): Promise<{ dataUrl: string; width: number; height: number }> {
 		stop.throwIfAborted();
 		window.clearTimeout(this.#idle);
 		try {
@@ -152,16 +202,16 @@ export class FrameGrabber {
 				await landed;
 			}
 			if (clone.videoWidth === 0 || clone.videoHeight === 0) throw new Error("this video has no picture to take");
-			const size = frameSize(clone.videoWidth, clone.videoHeight);
+			const size = frameSize(clone.videoWidth, clone.videoHeight, shape.longEdge);
 			const canvas = document.createElement("canvas");
 			canvas.width = size.width;
 			canvas.height = size.height;
 			const context = canvas.getContext("2d");
 			if (context === null) throw new Error("no 2D canvas");
 			context.drawImage(clone, 0, 0, size.width, size.height);
-			const bytes = jpegBytes(canvas.toDataURL("image/jpeg", FRAME_QUALITY));
-			if (bytes === null) throw new Error("the picture could not be encoded");
-			return { bytes, mimeType: "image/jpeg", width: size.width, height: size.height };
+			const dataUrl = canvas.toDataURL("image/jpeg", shape.quality);
+			if (!dataUrl.startsWith(JPEG_PREFIX)) throw new Error("the picture could not be encoded");
+			return { dataUrl, ...size };
 		} finally {
 			if (!this.#life.signal.aborted) this.#idle = window.setTimeout(() => this.release(), IDLE_MS);
 		}
@@ -265,4 +315,57 @@ export class FrameClock {
 		this.#disposed = true;
 		if (this.#handle !== 0) this.#video.cancelVideoFrameCallback?.(this.#handle);
 	}
+}
+
+// ── drawing on a frame ───────────────────────────────────────────────────
+
+/** A rectangle in px, from the top-left of the box it sits in. */
+export interface DrawnRect {
+	readonly left: number;
+	readonly top: number;
+	readonly width: number;
+	readonly height: number;
+}
+
+const NO_RECT: DrawnRect = { left: 0, top: 0, width: 0, height: 0 };
+
+/**
+ * Where the picture of a `videoWidth`x`videoHeight` video is actually DRAWN in an element `boxWidth`x`boxHeight`
+ * that fits it whole (`object-fit: contain`): the largest rectangle of the video's shape that fits the box,
+ * centred - the bars the box shows beside or above it are not picture, and a drawing there would be on nothing.
+ * Empty for a video with no picture (or a box with no room): there is nothing to draw on.
+ */
+export function drawnRect(videoWidth: number, videoHeight: number, boxWidth: number, boxHeight: number): DrawnRect {
+	const sizes = [videoWidth, videoHeight, boxWidth, boxHeight];
+	if (!sizes.every(size => Number.isFinite(size) && size > 0)) return NO_RECT;
+	const scale = Math.min(boxWidth / videoWidth, boxHeight / videoHeight);
+	const width = videoWidth * scale;
+	const height = videoHeight * scale;
+	return { left: (boxWidth - width) / 2, top: (boxHeight - height) / 2, width, height };
+}
+
+/**
+ * The time to give a drawing made now: the start of the frame the player last put on screen (`showing`) when it is
+ * the frame the playhead is in - so every drawing on one still frame has the same time - and the playhead when it is
+ * not (a seek just landed and the player has not reported the frame yet; `showing` is the old frame's).
+ */
+export function frameAt(showing: number, playhead: number, frameSeconds: number): number {
+	return Math.abs(showing - playhead) < frameSeconds * 1.5 ? showing : playhead;
+}
+
+/**
+ * Where to put the playhead to show the frame that begins at `at`: a tenth of a frame inside it, because a seek to
+ * exactly the boundary lands on either side of it, depending on rounding.
+ */
+export function insideFrame(at: number, frameSeconds: number): number {
+	return at + frameSeconds * 0.1;
+}
+
+/**
+ * Whether a drawing made on the frame at `at` is on screen with the playhead at `playhead`: from a tenth of a frame
+ * before the frame to its end. Stepping to the next frame (`frameStepTarget`) or back leaves it, and so does
+ * playing past it; a seek to `insideFrame(at)` is in it.
+ */
+export function drawnOnFrame(at: number, playhead: number, frameSeconds: number): boolean {
+	return playhead >= at - frameSeconds * 0.1 && playhead < at + frameSeconds;
 }
