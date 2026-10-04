@@ -177,7 +177,7 @@ describe("the classifier row says where the classifier's input goes", () => {
 		expect(row?.hint).toContain("last six messages");
 		expect(row?.hint).toContain("last spoken line");
 		expect(row?.hint).toContain("scrubbed of code, paths and secrets");
-		expect(row?.hint).toContain("For each line the voice is about to say");
+		expect(row?.hint).toMatch(/each line the voice is about to say/i);
 		expect(row?.hint).toContain("agent's reply");
 		expect(row?.hint).toContain("scrubbed, up to 700 characters");
 		expect(row?.hint).toContain("your last request");

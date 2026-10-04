@@ -178,7 +178,7 @@ function classifierRow(route) {
     return { role: "classifier", title: "Classifier", tone: "off", says: "No classifier is connected: a plain rule decides, and nothing is sent.", hint: CLASSIFIER_HINT };
   }
   const name = `${route.provider}/${route.model}`;
-  const hint = route.leavesDevice ? `While voice mode is on, the classifier (${name}) reads your mood and judges what is worth saying. On each message, your last six messages to the agent (scrubbed of code, paths and secrets) and the agent's last spoken line go to ${route.host ?? route.provider}. For each line the voice is about to say, the part of the agent's reply it comes from (scrubbed, up to 700 characters) and your last request go there too. With voice mode off, nothing is sent.` : `While voice mode is on, the classifier (${name}) runs on this device; nothing leaves it.`;
+  const hint = route.leavesDevice ? `While voice mode is on, the classifier (${name}) is asked two things. To read your mood, on each message, your last six messages to the agent (scrubbed of code, paths and secrets) and the agent's last spoken line go to ${route.host ?? route.provider}. To judge what is worth saying, for each line the voice is about to say, the part of the agent's reply it comes from (scrubbed, up to 700 characters) and your last request go there too. With voice mode off, nothing is sent.` : `While voice mode is on, the classifier (${name}) runs on this device; nothing leaves it.`;
   return { role: "classifier", title: "Classifier", tone: "ok", says: `${name} reads your mood and judges what is worth saying.`, hint, disclosure: true };
 }
 function modelRows(models, route) {
