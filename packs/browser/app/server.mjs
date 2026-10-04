@@ -13831,7 +13831,7 @@ var BrowserRuntime = class {
       await this.makeRoom(opener.session);
     }
     assertEngineAvailable(engine);
-    const createdForChat = profile2 !== null && profile2 !== RELAY_PROFILE && opener.caller === "model" && this.store.claimNewProfile(profile2);
+    const createdForChat = profile2 !== null && profile2 !== RELAY_PROFILE && profile2 !== DEFAULT_PROFILE && opener.caller === "model" && this.store.claimNewProfile(profile2);
     if (createdForChat && profile2 !== null) this.openingCreations.add(profile2);
     if (profile2 !== null && profile2 !== RELAY_PROFILE && opener.caller === "model" && !createdForChat) this.requireProfileName(profile2, opener.session);
     const slot = profile2 ?? `ephemeral:${randomBytes9(8).toString("hex")}`;
@@ -13988,12 +13988,12 @@ var BrowserRuntime = class {
         refuseWhilePublishing(entry, caller);
         refuseWhileTakenOver(entry, caller);
       }
-      await this.teardown(entry, guard);
+      await this.teardown(entry);
     }, { evenIfClosed: true });
     await Promise.allSettled(this.removals);
   }
   /** Retain ownership and the lock until the driver confirms shutdown. A throwaway that cannot be stopped is tried again soon. */
-  async teardown(entry, guard) {
+  async teardown(entry) {
     if (this.byId.get(entry.browserId) !== entry) return;
     settleOnClose(entry);
     clearTimeout(entry.wheelTimer);
@@ -14003,11 +14003,7 @@ var BrowserRuntime = class {
     entry.frames.length = 0;
     try {
       await this.stopTask(entry);
-      if (guard !== void 0) await guard();
-      guard?.assertCurrent();
       await this.probeAtClose(entry);
-      if (guard !== void 0) await guard();
-      guard?.assertCurrent();
       await this.stopBrowser(entry);
     } catch (error) {
       if (entry.profile === null) this.retryClose(entry);
@@ -14584,7 +14580,10 @@ var BrowserRuntime = class {
     if (!permissions && !principal) return [];
     const now = Date.now();
     const subject = principal === void 0 ? {} : { subject: { workspaceId: principal.workspaceId, id: principal.id, origin: principal.origin } };
-    return buildProfileList(this.store, (slug) => this.holdFact(slug, session), now).flatMap((profile2) => {
+    const listed = buildProfileList(this.store, (slug) => this.holdFact(slug, session), now);
+    const onDisk = new Set(listed.map((profile2) => profile2.name));
+    const awaiting = [...permissions?.entries() ?? []].filter(([name, permission]) => permission.status === "pending" && !onDisk.has(name)).map(([name]) => ({ name, label: name === DEFAULT_PROFILE ? "Default" : name, sites: [] }));
+    return [...listed, ...awaiting].flatMap((profile2) => {
       const rows = [];
       const permission = permissions?.get(profile2.name);
       if (permission?.status === "pending" && (permission.expiresAt <= now || !samePrincipal(permission.principal, principal))) permissions?.delete(profile2.name);
