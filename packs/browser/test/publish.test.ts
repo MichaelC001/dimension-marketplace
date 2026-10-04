@@ -28,7 +28,7 @@ import { z } from "zod";
 import { ARTIFACTORY_HOST_CONTEXT_EXTENSION_ID, ARTIFACTORY_HOST_CONTEXT_META_KEY, ARTIFACTORY_HOST_CONTEXT_READ_METHOD } from "@dimension/sdk/artifactory";
 import { mkdir, writeFile } from "node:fs/promises";
 import { afterEach, describe, expect, setSystemTime, spyOn, test } from "bun:test";
-import puppeteer, { Frame, type Browser } from "puppeteer-core";
+import puppeteer, { Frame, type Browser, type WaitForSelectorOptions } from "puppeteer-core";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { BrowserAction, PublishRecipe, PublishRecord } from "../src/contracts";
@@ -1198,9 +1198,9 @@ describeWithChrome("native publish authority at dispatch", () => {
 	): Promise<unknown> {
 		const entered = Promise.withResolvers<void>();
 		const original = Frame.prototype.waitForSelector;
-		const wait = spyOn(Frame.prototype, "waitForSelector").mockImplementation(function <Selector extends string>(this: Frame, css: Selector, options) {
+		const wait = spyOn(Frame.prototype, "waitForSelector").mockImplementation(function <Selector extends string>(this: Frame, css: Selector, options: WaitForSelectorOptions | undefined) {
 			if (css === selector) entered.resolve();
-			return original<Selector>.call(this, css, options);
+			return (original<Selector>).call(this, css, options);
 		});
 		try {
 			const action = start();
