@@ -70,7 +70,7 @@ describe("the committed server bundle", () => {
 		const { normalizeServerBundle } = await builder();
 		const suffix = "zod/lib/index.js";
 		const relative = "../../../../../../node_modules/";
-		const absolute = "C:/Users/Sameer Pallav/.inso/wt/donor/node_modules/";
+		const absolute = "C:/Users/example/.inso/wt/donor/node_modules/";
 		const bundle = (label: string, literal: string) => [
 			`// ${label}${suffix}`,
 			`  "${label}${suffix}"() {`,
