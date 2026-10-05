@@ -430,7 +430,8 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     return { ...(caller === undefined ? {} : { caller }), ...(session === undefined ? {} : { session }), ...(tool === undefined ? {} : { tool }) };
   };
   const assertAccess = (extra: CallExtra, browserId: string, allowClosed = false): void => {
-    if (extra.signal?.aborted) fail("cancelled", "Browser operation was cancelled before dispatch.");
+    // The same check runs before the work and, as the guard's `assertCurrent`, after it: it cannot promise that nothing was dispatched.
+    if (extra.signal?.aborted) fail("cancelled", "Browser operation was cancelled; anything already dispatched may have happened.");
     if (callerOf(extra) === "model" && runtime.needsProfileAuthority(browserId)) assertContext(extra);
     runtime.requireProfileAccess(browserId, callerOf(extra), sessionOf(extra), allowClosed);
   };
