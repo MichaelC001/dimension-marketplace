@@ -55,7 +55,9 @@ async function actedAt(browser: CellBrowser): Promise<number> {
 }
 
 /** The clock stands still at `at` (epoch ms) until the test moves it. */
-const clockAt = (at: number): void => setSystemTime(new Date(at));
+const clockAt = (at: number): void => {
+	setSystemTime(new Date(at));
+};
 
 describeWithChrome("a cell driving a browser is an agent acting on it", () => {
 	test(
