@@ -14575,16 +14575,16 @@ var BrowserRuntime = class {
     const entry = this.byId.get(browserId);
     if (entry === void 0) {
       if (allowClosed && this.released.has(browserId)) return;
-      fail("unknown_browser", "browser is not open");
+      this.refuseGone(browserId);
     }
-    if (entry.closed && !allowClosed) fail("unknown_browser", "browser is not open");
+    if (entry.closed && !allowClosed) this.refuseGone(browserId);
     if (caller === "app" || entry.profile === null || entry.profile === RELAY_PROFILE) return;
     if (caller !== "model" || session === void 0) fail("profile_consent_required", "A host-stamped model session is required for saved-profile access.");
     this.requireProfileName(entry.profile, session);
   }
   requireSavedProfileAccess(browserId, caller, session, allowClosed = false) {
     const entry = this.byId.get(browserId);
-    if (entry === void 0 || entry.closed && !allowClosed) fail("unknown_browser", "browser is not open");
+    if (entry === void 0 || entry.closed && !allowClosed) this.refuseGone(browserId);
     if (entry.profile === null || entry.profile === RELAY_PROFILE) fail("profile_required", "This ordinary operation requires a saved profile.");
     this.requireProfileAccess(browserId, caller, session, allowClosed);
   }
