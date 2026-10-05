@@ -263,7 +263,8 @@ class Room {
 class CardClient {
 	#pending: Uint8Array | undefined;
 	#blocked = false;
-	#last = 0;
+	/** When the last picture was written; none yet, so the first is never held to the 250 ms gate (`performance.now()` counts from process start, not from this card). */
+	#last = Number.NEGATIVE_INFINITY;
 	#timer: ReturnType<typeof setTimeout> | undefined;
 	#ended = false;
 	constructor(readonly response: http.ServerResponse, readonly leave: () => void) {

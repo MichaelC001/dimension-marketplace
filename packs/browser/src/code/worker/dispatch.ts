@@ -132,6 +132,13 @@ function bridgeResponse(result: RunResult, details: BridgeDetails): BridgeRespon
 /** `browser.*` from a cell: validated, then `open`/`close`/`tabs`/`active` to the host and `run`/`call` to the tab realm. */
 export function createDispatcher(ports: DispatcherPorts): CellInvoke {
   const { realm, host } = ports;
+  // One dispatcher serves one run (built per run in the worker core): the host learns which page the run drives when it first touches one and again only when it moves to another, not once per call.
+  let announced: string | undefined;
+  const drives = (runId: string, name: string): void => {
+    if (announced === name) return;
+    announced = name;
+    ports.activity?.(runId, name);
+  };
   return async (parameters, { runId, signal }) => {
     const parsed = bridgeRequestSchema.safeParse(parameters);
     if (!parsed.success) throw new ToolError(`browser received invalid arguments: ${summarize(parsed.error)}`);
@@ -166,10 +173,10 @@ export function createDispatcher(ports: DispatcherPorts): CellInvoke {
         return { text: reply.text, details: { ...details, ...reply.details, action: "active", name: found }, ...(reply.images ? { images: reply.images } : {}) };
       }
       case "call":
-        ports.activity?.(runId, name);
+        drives(runId, name);
         return bridgeResponse(await realm.call({ name, chain: request.chain ?? [], timeoutMs, signal }), details);
       case "run":
-        ports.activity?.(runId, name);
+        drives(runId, name);
         return bridgeResponse(await realm.run({ name, ...runTarget(request), timeoutMs, signal }), details);
     }
   };
