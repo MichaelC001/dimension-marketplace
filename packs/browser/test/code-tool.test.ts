@@ -394,10 +394,13 @@ describe("which tools the model is shown", () => {
     for (const name of VIEW_SIDE) expect(tools.has(name)).toBe(true);
     // Everything the model of a code space sees for browsing: browser_run and the four that stay.
     const codeSpaceTools = [...tools].filter(([, meta]) => {
+      // A tool only the View may call never reaches a model: read it from the tool's own visibility, not from a list that goes stale when one is added.
+      const visibility = (meta?.ui as { visibility?: string[] } | undefined)?.visibility;
+      const appOnly = visibility?.length === 1 && visibility[0] === "app";
       const spaces = meta?.[SPACES];
-      return !Array.isArray(spaces) || spaces.includes("code");
+      return !appOnly && (!Array.isArray(spaces) || spaces.includes("code"));
     }).map(([name]) => name).filter(name => name.startsWith("browser_") && !name.startsWith("browser_task") && !name.startsWith("browser_publish"));
-    expect(codeSpaceTools.filter(name => !["browser_stream", "browser_frame", "browser_annotate", "browser_annotation_file", "browser_viewport", "browser_control", "browser_leave", "browser_profile_add", "browser_switch"].includes(name)).sort()).toEqual(["browser_close", "browser_profiles", "browser_read", "browser_run", "browser_view"]);
+    expect(codeSpaceTools.sort()).toEqual(["browser_close", "browser_profiles", "browser_read", "browser_run", "browser_view"]);
   });
 
   test("the spaces the manifest lends the pack to are split between browser_run and the step tools, none in both and none in neither", async () => {
