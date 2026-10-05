@@ -151,3 +151,51 @@ describe("the Voice pane", () => {
 		expect(host.textContent).toContain("No classifier is connected: a plain rule decides, and nothing is sent.");
 	});
 });
+
+const liveProfilesFact = (codexReady: boolean) => ({
+	profiles: [
+		{
+			name: "eleven-turbo",
+			layer: "user",
+			speak: [{ provider: "elevenlabs", model: "eleven_v4_turbo", voice: "v1" }],
+			converse: [
+				{ provider: "codex-live", voice: "sol" },
+				{ provider: "elevenlabs", model: "eleven_v4_turbo", voice: "v1" },
+			],
+		},
+	],
+	providers: [
+		{ id: "codex-live", label: "Live Voice (Codex)", converse: codexReady ? { ready: true } : { ready: false, reason: "needs-key" } },
+		{ id: "elevenlabs", label: "ElevenLabs", speak: { ready: true }, converse: { ready: true } },
+		{ id: "local", label: "On this machine", speak: { ready: true }, listen: { ready: true } },
+	],
+	default: { name: "eleven-turbo", source: "default", why: "your voice.default" },
+});
+
+describe("the Voice pane and Live", () => {
+	test("says which live voice Talk live opens, lists each profile's live choices, and states where the microphone goes", () => {
+		mount({ store: fakeStore({ "speech/profiles": liveProfilesFact(true), "agents/list": [], models: [] }).store });
+		expect(host.textContent).toContain("Talk live uses Live Voice (Codex) for the default voice, eleven-turbo.");
+		expect(host.textContent).toContain("Talk live · uses Live Voice (Codex)");
+		expect(host.textContent).toContain("Talking live sends your microphone audio off this machine to Live Voice (Codex) for as long as a call is open.");
+		// The Live-only provider is described as such, not as a voice that "Does not speak".
+		expect(host.textContent).toContain("Talks live only");
+		expect(host.textContent).not.toContain("Does not speak");
+	});
+
+	test("it follows the engine: Codex becoming ready flips 'falls back' to 'uses' without a reopen", () => {
+		const fake = fakeStore({ "speech/profiles": liveProfilesFact(false), "agents/list": [], models: [] });
+		mount({ store: fake.store });
+		expect(host.textContent).toContain("Talk live uses ElevenLabs for the default voice, eleven-turbo: Live Voice (Codex) is not ready.");
+
+		act(() => fake.set("speech/profiles", liveProfilesFact(true)));
+		expect(host.textContent).toContain("Talk live uses Live Voice (Codex) for the default voice, eleven-turbo.");
+		expect(host.textContent).not.toContain("is not ready");
+	});
+
+	test("an engine that does not talk live gets no Live words at all: nothing is claimed about a feature that is not there", () => {
+		mount({ store: fakeStore({ "speech/profiles": profilesFact(true), "agents/list": [], models: [] }).store });
+		expect(host.textContent).not.toContain("Talk live");
+		expect(host.textContent).not.toContain("microphone audio off this machine");
+	});
+});

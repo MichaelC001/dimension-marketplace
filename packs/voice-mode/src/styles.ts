@@ -75,6 +75,13 @@ export const VOICE_PANE_CSS = `
 	color: var(--fr-text-3);
 	font-size: var(--fr-fs-xs);
 }
+[data-slot="voice-pane"] .vm-livehead {
+	margin-top: 8px;
+	color: var(--fr-text-3);
+	font-size: var(--fr-fs-xs);
+}
+[data-slot="voice-pane"] .vm-livehead span[data-tone="ok"] { color: var(--fr-add); }
+[data-slot="voice-pane"] .vm-livehead span[data-tone="warn"] { color: var(--fr-warn); }
 [data-slot="voice-pane"] .vm-notice {
 	margin-top: 2px;
 	color: var(--fr-text-2);

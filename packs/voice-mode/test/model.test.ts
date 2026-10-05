@@ -3,7 +3,7 @@
  *  about what will actually speak: "speaks with ElevenLabs" when the key is missing, or "cannot speak" when the
  *  on-device voice would. The facts are an untrusted boundary: they come from an engine newer or older than the pane. */
 import { describe, expect, test } from "bun:test";
-import { headline, modelRows, profileViews, readAgents, readModelsFact, readProfilesFact } from "../src/model";
+import { engineView, headline, liveDisclosure, liveHeadline, modelRows, profileViews, readAgents, readModelsFact, readProfilesFact } from "../src/model";
 
 const ELEVEN = { provider: "elevenlabs", model: "eleven_v4_turbo", voice: "EXAVITQu4vr4xnSDxMaL" };
 const KOKORO = { provider: "local", model: "kokoro", voice: "af_heart" };
@@ -243,3 +243,153 @@ describe("the classifier row says where the classifier's input goes", () => {
 		}
 	});
 });
+
+// ---- Live (doc 92) ----------------------------------------------------------------------------------------------
+
+const CODEX = { provider: "codex-live", voice: "sol" };
+const ELEVEN_LIVE = { provider: "elevenlabs", model: "eleven_v4_turbo", voice: "EXAVITQu4vr4xnSDxMaL" };
+
+/** An engine with Live: Codex realtime (a provider that talks live and nothing else) and ElevenLabs (speaks AND talks live). */
+function liveFact(over: { codex?: unknown; elevenLive?: unknown; profiles?: unknown; default?: unknown } = {}) {
+	return {
+		profiles: over.profiles ?? [
+			{ name: "eleven-turbo", layer: "user", speak: [ELEVEN, KOKORO], converse: [CODEX, ELEVEN_LIVE] },
+			{ name: "local", layer: "builtin", speak: [KOKORO] },
+		],
+		providers: [
+			{ id: "codex-live", label: "Live Voice (Codex)", converse: over.codex ?? { ready: true } },
+			{ id: "elevenlabs", label: "ElevenLabs", speak: { ready: true }, converse: over.elevenLive ?? { ready: true } },
+			{ id: "local", label: "On this machine", speak: { ready: true }, listen: { ready: true } },
+		],
+		default: over.default ?? { name: "eleven-turbo", source: "default", why: "your voice.default" },
+	};
+}
+
+describe("reading a profile's live choices", () => {
+	test("they keep their order, a model or voice is optional, and a garbled choice is dropped alone", () => {
+		const view = viewOf(
+			liveFact({
+				profiles: [{ name: "p", layer: "user", speak: [ELEVEN], converse: [CODEX, { nonsense: true }, "junk", { model: "orphan" }, ELEVEN_LIVE] }],
+			}),
+		);
+		expect(view.profiles[0]?.converse).toEqual([CODEX, ELEVEN_LIVE]);
+	});
+
+	test("an engine that predates Live sends none: the profile has no live choices and the pane has nothing to say about it", () => {
+		const view = viewOf(fact());
+		expect(view.profiles.every(profile => profile.converse.length === 0)).toBe(true);
+		expect(view.providers.every(provider => provider.converse === undefined)).toBe(true);
+		expect(liveHeadline(view)).toBeNull();
+	});
+});
+
+describe("what Talk live would open", () => {
+	test("the first READY live choice, not the first listed, and it says what it passed over", () => {
+		const [turbo] = profileViews(viewOf(liveFact({ codex: { ready: false, reason: "needs-key", detail: "Sign in to Codex" } })));
+		expect(turbo?.live.map(step => step.state.text)).toEqual(["Needs an API key", "Ready"]);
+		expect(turbo?.live[0]?.detail).toBe("Sign in to Codex");
+		expect(turbo?.liveWith).toEqual({ label: "ElevenLabs", fellBack: true, because: "Live Voice (Codex)" });
+	});
+
+	test("the first choice ready: it opens it, with no fallback to explain", () => {
+		const [turbo] = profileViews(viewOf(liveFact()));
+		expect(turbo?.liveWith).toEqual({ label: "Live Voice (Codex)", fellBack: false });
+		expect(turbo?.live[0]).toMatchObject({ providerLabel: "Live Voice (Codex)", voice: "sol", ready: true });
+	});
+
+	test("there is no on-device fallback for a live call: every choice down means nothing opens, even with the local voice ready", () => {
+		const view = viewOf(liveFact({ codex: { ready: false, reason: "unavailable" }, elevenLive: { ready: false, reason: "needs-key" } }));
+		const [turbo] = profileViews(view);
+		expect(turbo?.liveWith).toBeNull();
+		expect(profileViews(view)[0]?.speaksWith).not.toBeNull();
+	});
+
+	test("a live choice naming a provider that is not installed, or one that does not talk live, is never ready", () => {
+		const [ghost, mute] = profileViews(
+			viewOf(
+				liveFact({
+					profiles: [
+						{ name: "ghost", layer: "user", speak: [KOKORO], converse: [{ provider: "xai-live", voice: "v" }] },
+						{ name: "mute", layer: "user", speak: [KOKORO], converse: [{ provider: "local" }] },
+					],
+				}),
+			),
+		);
+		expect(ghost?.live[0]).toMatchObject({ providerLabel: "xai-live", ready: false, state: { text: "Not installed" } });
+		expect(mute?.live[0]).toMatchObject({ ready: false, state: { tone: "off", text: "Does not talk live" } });
+		expect(ghost?.liveWith).toBeNull();
+		expect(mute?.liveWith).toBeNull();
+	});
+
+	test("a profile that names no live voice offers no live call", () => {
+		const local = profileViews(viewOf(liveFact())).find(profile => profile.name === "local");
+		expect(local?.live).toEqual([]);
+		expect(local?.liveWith).toBeNull();
+	});
+});
+
+describe("the Live headline", () => {
+	test("names the live voice the default voice would open", () => {
+		expect(liveHeadline(viewOf(liveFact()))).toEqual({ tone: "ok", text: "Talk live uses Live Voice (Codex) for the default voice, eleven-turbo." });
+	});
+
+	test("says when it fell back, and from what", () => {
+		expect(liveHeadline(viewOf(liveFact({ codex: { ready: false, reason: "needs-key" } })))).toEqual({
+			tone: "ok",
+			text: "Talk live uses ElevenLabs for the default voice, eleven-turbo: Live Voice (Codex) is not ready.",
+		});
+	});
+
+	test("warns when the default voice names live choices and none is ready", () => {
+		const view = viewOf(liveFact({ codex: { ready: false }, elevenLive: { ready: false } }));
+		expect(liveHeadline(view)).toEqual({ tone: "warn", text: "Talk live has nothing ready for the default voice, eleven-turbo." });
+	});
+
+	test("says Live is not set up when the default voice names none, while Live exists on this engine", () => {
+		const view = viewOf(liveFact({ default: { name: "local", source: "default", why: "" } }));
+		expect(liveHeadline(view)).toEqual({ tone: "off", text: "Talk live is not set up for the default voice, local: it names no live voice." });
+	});
+
+	test("says nothing when there is no default voice to speak about (the main headline already does)", () => {
+		expect(liveHeadline(viewOf({ ...liveFact(), default: null }))).toBeNull();
+	});
+});
+
+describe("where a live call's microphone audio goes", () => {
+	test("names the provider the default voice would open, and follows a fallback", () => {
+		expect(liveDisclosure(viewOf(liveFact()))).toBe("Talking live sends your microphone audio off this machine to Live Voice (Codex) for as long as a call is open.");
+		expect(liveDisclosure(viewOf(liveFact({ codex: { ready: false, reason: "needs-key" } })))).toContain("to ElevenLabs for as long");
+	});
+
+	test("still says it when nothing is ready or there is no default voice, without naming a provider it cannot name", () => {
+		const generic = "Talking live sends your microphone audio off this machine to the live voice's provider for as long as a call is open.";
+		expect(liveDisclosure(viewOf(liveFact({ codex: { ready: false }, elevenLive: { ready: false } })))).toBe(generic);
+		expect(liveDisclosure(viewOf({ ...liveFact(), default: null }))).toBe(generic);
+	});
+
+	test("says nothing on an engine that does not talk live: no claim about a feature that is not there", () => {
+		expect(liveDisclosure(null)).toBeNull();
+		expect(liveDisclosure(viewOf(fact()))).toBeNull();
+	});
+});
+
+describe("a speech engine row", () => {
+	test("a provider that only talks live says so, instead of 'Does not speak'", () => {
+		const [codex] = viewOf(liveFact()).providers;
+		expect(engineView(codex as never)).toEqual({ primary: { tone: "ok", text: "Live: Ready" }, meta: "Talks live only" });
+	});
+
+	test("a provider that speaks AND talks live keeps speaking as its state, and Live as a second fact", () => {
+		const eleven = viewOf(liveFact({ elevenLive: { ready: false, reason: "needs-key" } })).providers[1];
+		const row = engineView(eleven as never);
+		expect(row.primary).toEqual({ tone: "ok", text: "Speaking: Ready" });
+		expect(row.meta).toBe("Live: Needs an API key");
+	});
+
+	test("engines that predate Live read exactly as they did", () => {
+		const [eleven, local] = viewOf(fact()).providers;
+		expect(engineView(eleven as never)).toEqual({ primary: { tone: "ok", text: "Speaking: Ready" }, meta: "Speaks only" });
+		expect(engineView(local as never)).toEqual({ primary: { tone: "ok", text: "Speaking: Ready" }, meta: "Listening: Ready" });
+	});
+});
+

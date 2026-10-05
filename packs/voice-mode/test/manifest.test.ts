@@ -41,6 +41,16 @@ describe("voice-mode manifest, as a stranger's engine reads it", () => {
 		expect(existsSync(BUNDLE)).toBe(true);
 		expect(existsSync(join(PACK, String(manifest?.icon)))).toBe(true);
 	});
+
+	test("it declares a host version that ships what the pane reads: the live side of `speech/profiles` first exists in 0.11.1, and the engine refuses an install the host cannot satisfy", () => {
+		const range = (document as { extensions?: Record<string, { requires?: { dimension?: string } }> } | undefined)?.extensions?.[
+			"ai.insodimension.dimension"
+		]?.requires?.dimension ?? "";
+		const floor = /^>=\s*(\d+)\.(\d+)\.(\d+)/.exec(range)?.slice(1).map(Number);
+		expect(floor, `requires.dimension is "${range}"`).toBeDefined();
+		const [major = 0, minor = 0, patch = 0] = floor ?? [];
+		expect(major * 1_000_000 + minor * 1_000 + patch).toBeGreaterThanOrEqual(11_001);
+	});
 });
 
 /** The specifiers `HOST_EXTERNALS` resolves, read from the grant source of the pinned kit. */

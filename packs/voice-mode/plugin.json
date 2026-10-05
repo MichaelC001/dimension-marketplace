@@ -1,8 +1,8 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "voice-mode",
-	"version": "0.1.2",
-	"description": "Voice mode for any agent in any space: the Voice pane in Settings shows which speech engines are ready, which voices exist (yours, your workspace's, a plugin's) and which agent sounds like what. The speaking itself is the engine's reply vocalizer; open voice options from the small dot left of the composer microphone to turn it on or off. The microphone itself is for dictation.",
+	"version": "0.1.3",
+	"description": "Voice mode for any agent in any space: the Voice pane in Settings shows which speech engines are ready, which voices exist (yours, your workspace's, a plugin's) and which agent sounds like what, and which live voice Talk live would open. The speaking itself is the engine's reply vocalizer; open voice options from the small dot left of the composer microphone to turn it on or off. The microphone itself is for dictation.",
 	"author": {
 		"name": "Dimension"
 	},
@@ -17,6 +17,7 @@
 	"extensions": {
 		"ai.insodimension.dimension": {
 			"contractVersion": 1,
+			"requires": { "dimension": ">=0.11.1" },
 			"title": "Voice mode",
 			"icon": "assets/icon.svg",
 			"category": "component",

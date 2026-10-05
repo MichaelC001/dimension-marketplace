@@ -36,6 +36,29 @@ The pack has **no transport of its own**. All voice comes from the kit hook `use
 | `notice` / `error` | shown verbatim (a key to connect, a model downloading), with a hint only when the words name the cause |
 | `micLive` | the red dot and **Mic on**, always visible |
 
+### Talk live
+
+Beside **Tap to talk**, the surface offers **Talk live** when the engine can open a realtime voice for the session (the
+profile names a `converse` choice that is ready; doc 92 of the Dimension repository). A realtime model (Codex realtime, or
+an ElevenLabs agent) talks with you and hands anything about the repo to the session's agent, then says the agent's
+answer in its own words. The button names where the microphone goes (`Mic → <voice>`); the call's timer and the same
+name stay on screen while it lasts.
+
+| from `useLiveConversation()` (`src/surface/live.ts` is the only file that touches it) | on screen |
+|---|---|
+| `enginePhase` | the face state and label (`Working` while the agent does the work the voice handed it) and which controls exist. It is the call's own phase, which the engine goes on telling through a mute, so the face keeps showing the voice answering or the agent working |
+| `getOutputLevel()` / `getInputLevel()` | the waveform mark and the jaw (below) |
+| `transcript` | the voice's newest line under the face, yours in the stage; a finished line stays 8 s after the voice stops |
+| `phase` (`muted`) / `muted` / `toggleMute()` / `stop()` | the microphone dot, and **Mute** and **End call** in the top bar; **Muted** and a relaxed face show only while the call is listening |
+| `error` | shown verbatim with **Try again**, which starts the CALL again |
+
+A Live call's voice is the realtime provider's own audio (the browser plays it; Codex realtime streams to the browser
+directly, an ElevenLabs agent through the engine), and nothing times it to words or runs the audio-to-face model on it, so
+there is no word schedule and no model to read: while the voice speaks the mouth gets a playhead that simply runs plus the voice's own loudness (`src/surface/live-mouth.ts`), and the
+animator's "voice with no viseme data yet" path moves the lips with the sound. It is a level-driven mouth, not the
+phoneme-accurate one of the voice conversation. A call and a voice conversation never run at once: either start button
+is gone while the other is open, and Back and Esc end whichever is.
+
 If the host order of `ARKIT_52_NAMES` ever differs from this pack's rig, the model is ignored and the procedural
 mouth is used.
 
@@ -63,7 +86,7 @@ data URL (`vite build` with `assetsInclude: ["**/*.bin"]` and `import ... ?inlin
 
 - `src/index.tsx` — the two components; the only wiring to the host.
 - `src/surface/` — the surface: `surface-model.ts` (pure: phase to screen, Back/Esc), `face-surface.tsx`, `face-door.tsx`,
-  `orb.ts` (the door's dots), `waveform*.ts(x)`, `voice.ts` (hook adapter), `head*.ts` (asset), `styles.ts`.
+  `orb.ts` (the door's dots), `waveform*.ts(x)`, `voice.ts` and `live.ts` (hook adapters), `live-mouth.ts` (how a call moves the mouth), `head*.ts` (asset), `styles.ts`.
 - `src/face/` — the face itself: animator, lip-sync, expressions, WebGL2 dot renderer, captions (see `PROVENANCE.md`
   for the head's licence).
 
@@ -79,13 +102,15 @@ speech provider is ready (a key connected, a model downloaded); until then the s
 - **It opens the microphone and sends audio through the configured speech provider.** Which provider that is, and
   whether your audio leaves this machine, is up to the voice profile you chose; the surface shows the red dot and
   **Mic on** whenever it is open.
-- **Consent.** The microphone opens from one place: the click on **Tap to talk** (or **Try again** after a
-  failure). Mounting the surface, in any state, never starts a conversation. Back to thread and Esc call `stop()`
+- **Talk live sends your microphone to the live voice's provider** (Codex realtime or ElevenLabs, whichever the profile's
+  first ready choice is) for as long as the call is open, and the button says which. The Voice pane in Settings lists it.
+- **Consent.** The microphone opens from one place per conversation: the click on **Tap to talk** or on **Talk live**
+  (or **Try again** after a failure). Mounting the surface, in any state, never starts a conversation. Back to thread and Esc call `stop()`
   (which releases the mic) and mount the `session` surface.
 - **No transport, no storage of its own.** The pack holds no key and no connection; everything it shows comes from
-  the kit's `useVoiceConversation` hook.
+  the kit's `useVoiceConversation` and `useLiveConversation` hooks.
 - **The head is inlined.** A bundle importing an ungranted name is refused whole, so the bundle's runtime imports are
-  exactly `react`, `react/jsx-runtime` and the granted `@fraym/ui` name `useVoiceConversation`.
+  exactly `react`, `react/jsx-runtime` and the granted `@fraym/ui` names `useVoiceConversation`, `useLiveConversation` and `ARKIT_52_NAMES`.
 
 ## Build and test
 

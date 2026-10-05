@@ -4,12 +4,13 @@
 // conversation and leave), and that the mic state on screen is the hook's. The pure phase mapping is in
 // surface-model.test.ts; the door in surface-door.test.tsx.
 import { afterEach, describe, expect, jest, test } from "bun:test";
-import { act } from "react";
+import { act, useState } from "react";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { FaceSurfaceBody } from "../src/surface/face-surface";
 import { type HeadState, loadHead } from "../src/surface/head";
 import type { Intent } from "../src/surface/surface-model";
+import type { FaceLive } from "../src/surface/live";
 import type { FaceVoice } from "../src/surface/voice";
 import { mountPage, unmountAll, unmountRoots } from "./surface-dom";
 
@@ -45,11 +46,35 @@ function fakeVoice(over: Partial<FaceVoice> = {}) {
 	return { voice, calls };
 }
 
-async function mount(over: Partial<FaceVoice> = {}, head: HeadState = { status: "loading" }) {
+function fakeLive(over: Partial<FaceLive> = {}) {
+	const calls = { start: 0, stop: 0, toggleMute: 0 };
+	// The kit shows "muted" over the engine's phase; unless a test says what the engine is doing underneath, it is listening.
+	const shown = over.phase ?? "off";
+	const live: FaceLive = {
+		available: false,
+		voice: null,
+		phase: "off",
+		enginePhase: shown === "muted" ? "listening" : shown,
+		transcript: null,
+		muted: false,
+		seconds: 0,
+		error: null,
+		getInputLevel: () => 0,
+		getOutputLevel: () => 0,
+		start: async () => void calls.start++,
+		stop: () => void calls.stop++,
+		toggleMute: () => void calls.toggleMute++,
+		...over,
+	};
+	return { live, calls };
+}
+
+async function mount(over: Partial<FaceVoice> = {}, head: HeadState = { status: "loading" }, liveOver: Partial<FaceLive> = {}) {
 	const { voice, calls } = fakeVoice(over);
+	const { live, calls: liveCalls } = fakeLive(liveOver);
 	const intents: Intent[] = [];
-	const page = await mountPage(<FaceSurfaceBody voice={voice} head={head} onIntent={(i) => intents.push(i)} />);
-	return { ...page, calls, intents };
+	const page = await mountPage(<FaceSurfaceBody voice={voice} live={live} head={head} onIntent={(i) => intents.push(i)} />);
+	return { ...page, calls, liveCalls, intents };
 }
 
 const PHASES: Partial<FaceVoice>[] = [
@@ -322,5 +347,234 @@ describe("words the host could not send", () => {
 
 		expect(has(view, ".f2f-note")).toBe(false);
 		expect(has(view, ".f2f-usercap")).toBe(false);
+	});
+});
+
+const LOADING: HeadState = { status: "loading" };
+const LIVE_PHASES = ["connecting", "listening", "muted", "working", "speaking", "error"] as const;
+
+describe("Talk live: a second conversation on the same surface, started only by its own click", () => {
+	test("mounting never starts a call or the voice, whatever state either is in", async () => {
+		for (const phase of ["off", ...LIVE_PHASES] as const) {
+			const view = await mount({}, LOADING, { available: true, phase });
+			expect(view.liveCalls.start).toBe(0);
+			expect(view.calls.start).toBe(0);
+			await unmountRoots();
+		}
+	});
+
+	test("offered beside Tap to talk when Live is available, says where the microphone goes, and starts exactly once per click", async () => {
+		const view = await mount({ phase: "idle", supported: true }, LOADING, { available: true, voice: "Sol via codex-live" });
+		expect(view.buttonByText("Tap to talk")).toBeDefined();
+		expect(view.find(".f2f-live")?.textContent).toContain("Mic → Sol via codex-live");
+		await view.press(view.find(".f2f-live"));
+		expect(view.liveCalls.start).toBe(1);
+		expect(view.calls.start).toBe(0);
+	});
+
+	test("not offered where the engine offers no Live, nor while the voice conversation is open", async () => {
+		expect(has(await mount({ phase: "idle", supported: true }), ".f2f-live")).toBe(false);
+		await unmountRoots();
+		for (const phase of ["connecting", "listening", "thinking", "speaking", "error"] as const) {
+			const view = await mount({ phase, error: "x" }, LOADING, { available: true });
+			expect(has(view, ".f2f-live")).toBe(false);
+			await unmountRoots();
+		}
+	});
+
+	test("still offered when the voice conversation is unavailable, since Live has its own route", async () => {
+		jest.useFakeTimers();
+		try {
+			const view = await mount({ phase: "idle", supported: false }, LOADING, { available: true });
+			await act(async () => {
+				jest.advanceTimersByTime(2600);
+			});
+			expect(view.container.textContent).toContain("Voice is not ready");
+			expect(has(view, ".f2f-live")).toBe(true);
+		} finally {
+			jest.useRealTimers();
+		}
+	});
+
+	test("while a call is up it holds the surface: neither start button is offered, and the label is the call's", async () => {
+		for (const phase of ["connecting", "listening", "working", "speaking"] as const) {
+			const view = await mount({ phase: "idle", supported: true }, LOADING, { available: true, phase });
+			expect(view.buttonByText("Tap to talk")).toBeUndefined();
+			expect(has(view, ".f2f-live")).toBe(false);
+			expect(view.find(".f2f-root")?.getAttribute("data-mode")).toBe("live");
+			await unmountRoots();
+		}
+		const working = await mount({}, LOADING, { available: true, phase: "working" });
+		expect(working.find(".f2f-label")?.textContent).toBe("Working");
+	});
+
+	test("the controls act on the CALL: Mute and End call go to Live, never to the voice conversation, and there is no voice mic picker", async () => {
+		const view = await mount({ ...LISTENING, phase: "idle", micLive: false }, LOADING, { available: true, phase: "listening" });
+		expect(has(view, ".f2f-mp")).toBe(false);
+		await view.press(view.buttonByText("Mute"));
+		expect(view.liveCalls.toggleMute).toBe(1);
+		expect(view.calls.toggleMute).toBe(0);
+		await view.press(view.buttonByText("End call"));
+		expect(view.liveCalls.stop).toBe(1);
+		expect(view.calls.stop).toBe(0);
+		expect(view.intents).toEqual([]);
+	});
+
+	test("a muted call reads Unmute and Muted, and its mic dot is off", async () => {
+		const view = await mount({}, LOADING, { available: true, phase: "listening", muted: true });
+		expect(view.buttonByText("Unmute")).toBeDefined();
+		expect(view.find(".f2f-state")?.textContent).toContain("Muted");
+		expect(view.find(".f2f-mic")?.getAttribute("data-on")).toBe("false");
+	});
+
+	test("a person who muted still sees the voice answer: the kit reports 'muted' for the whole call, the face follows what the call is doing", async () => {
+		const view = await mount({}, LOADING, { available: true, phase: "muted", enginePhase: "speaking", muted: true });
+		expect(view.find(".f2f-root")?.getAttribute("data-phase")).toBe("speaking");
+		expect(view.find(".f2f-state")?.textContent).toContain("Speaking");
+		expect(view.find(".f2f-state")?.textContent).not.toContain("Muted");
+		// the microphone is still off, and the button still says how to turn it on
+		expect(view.buttonByText("Unmute")).toBeDefined();
+		expect(view.find(".f2f-mic")?.getAttribute("data-on")).toBe("false");
+	});
+
+	test("End call exists only for a Live call, not for the voice conversation", async () => {
+		expect((await mount({ phase: "listening", micLive: true })).buttonByText("End call")).toBeUndefined();
+	});
+
+	test("Back and Esc hang up the call and leave; nothing is left holding the microphone", async () => {
+		for (const how of ["Back", "Esc"] as const) {
+			const view = await mount({}, LOADING, { available: true, phase: "speaking" });
+			if (how === "Back") await view.press(view.buttonByText("Back to thread"));
+			else await view.key("Escape");
+			expect(view.liveCalls.stop).toBe(1);
+			expect(view.calls.stop).toBe(1);
+			expect(view.intents).toEqual([{ t: "mount", surface: "session" }]);
+			await unmountRoots();
+		}
+	});
+
+	test("a failed call shows the engine's words verbatim and only Try again (a click) starts the CALL again", async () => {
+		const view = await mount({}, LOADING, { available: true, phase: "error", error: "Codex answered 401: invalid API key" });
+		expect(view.container.textContent).toContain("Codex answered 401: invalid API key");
+		expect(view.liveCalls.start).toBe(0);
+		await view.press(view.buttonByText("Try again"));
+		expect(view.liveCalls.start).toBe(1);
+		expect(view.calls.start).toBe(0);
+	});
+
+	test("the status names who the microphone is talking to and the call clock", async () => {
+		const view = await mount({}, LOADING, { available: true, phase: "listening", voice: "Sol via codex-live", seconds: 65 });
+		expect(view.find(".f2f-note")?.textContent).toBe("Live · Sol via codex-live · 1:05");
+	});
+});
+
+describe("the call's words", () => {
+	const line = (over: Partial<NonNullable<FaceLive["transcript"]>> = {}): NonNullable<FaceLive["transcript"]> => ({
+		role: "assistant",
+		text: "Mars is cold and dusty.",
+		turn: 1,
+		final: false,
+		...over,
+	});
+
+	test("the voice's line shows under the face, the person's line in the stage; one at a time", async () => {
+		const said = await mount({}, LOADING, { available: true, phase: "speaking", transcript: line() });
+		expect(said.find(".f2f-livecap")?.textContent).toBe("Mars is cold and dusty.");
+		expect(has(said, ".f2f-usercap")).toBe(false);
+		const heard = await mount({}, LOADING, { available: true, phase: "listening", transcript: line({ role: "user", text: "What is Mars like?" }) });
+		expect(heard.find(".f2f-usercap")?.textContent).toBe("What is Mars like?");
+		expect(has(heard, ".f2f-livecap")).toBe(false);
+	});
+
+	test("a box that centres itself with a transform never carries the fade, whose last frame is `transform: none` and would slide it off", async () => {
+		const view = await mount({}, LOADING, { available: true, phase: "speaking", transcript: line() });
+		const centred = [...view.container.querySelectorAll("[style]")].filter((el) => /translate/.test(el.getAttribute("style") ?? ""));
+		expect(centred.length).toBeGreaterThan(0);
+		expect(centred.filter((el) => el.classList.contains("f2f-fade")).length).toBe(0);
+		expect(view.find(".f2f-livecap")?.textContent).toBe("Mars is cold and dusty.");
+	});
+
+	test("a finished line yields the floor to the face after it has lingered, once the voice has stopped", async () => {
+		jest.useFakeTimers();
+		try {
+			const view = await mount({}, LOADING, { available: true, phase: "listening", transcript: line({ final: true }) });
+			await act(async () => {
+				jest.advanceTimersByTime(7_900);
+			});
+			expect(has(view, ".f2f-livecap")).toBe(true);
+			await act(async () => {
+				jest.advanceTimersByTime(200);
+			});
+			expect(has(view, ".f2f-livecap")).toBe(false);
+		} finally {
+			jest.useRealTimers();
+		}
+	});
+
+	test("a finished line stays as long as the voice is still speaking it: text can arrive faster than it is said", async () => {
+		jest.useFakeTimers();
+		try {
+			const view = await mount({}, LOADING, { available: true, phase: "speaking", transcript: line({ final: true }) });
+			await act(async () => {
+				jest.advanceTimersByTime(60_000);
+			});
+			expect(has(view, ".f2f-livecap")).toBe(true);
+		} finally {
+			jest.useRealTimers();
+		}
+	});
+
+	test("the same hold applies when the person muted: the voice is still speaking the line", async () => {
+		jest.useFakeTimers();
+		try {
+			const view = await mount({}, LOADING, { available: true, phase: "muted", enginePhase: "speaking", muted: true, transcript: line({ final: true }) });
+			await act(async () => {
+				jest.advanceTimersByTime(60_000);
+			});
+			expect(has(view, ".f2f-livecap")).toBe(true);
+		} finally {
+			jest.useRealTimers();
+		}
+	});
+
+	test("a new call is not muted by the last one: its lines show even when they share a role and turn number with a line that already lingered out", async () => {
+		jest.useFakeTimers();
+		try {
+			const { voice } = fakeVoice({});
+			const holder: { set?: (live: FaceLive) => void } = {};
+			function Swap() {
+				const [live, setLive] = useState<FaceLive>(fakeLive({ available: true, phase: "listening", transcript: line({ final: true, turn: 3 }) }).live);
+				holder.set = setLive;
+				return <FaceSurfaceBody voice={voice} live={live} head={LOADING} onIntent={() => undefined} />;
+			}
+			const view = await mountPage(<Swap />);
+			await act(async () => {
+				jest.advanceTimersByTime(8_100);
+			});
+			expect(has(view, ".f2f-livecap")).toBe(false);
+
+			// the call ends (the surface stays up), then another begins; turn numbers restart with every call
+			await act(async () => holder.set?.(fakeLive({ available: true }).live));
+			await act(async () =>
+				holder.set?.(fakeLive({ available: true, phase: "speaking", transcript: line({ final: false, turn: 3, text: "Second call, same turn." }) }).live),
+			);
+
+			expect(view.find(".f2f-livecap")?.textContent).toBe("Second call, same turn.");
+		} finally {
+			jest.useRealTimers();
+		}
+	});
+
+	test("a line still being said stays however long it takes", async () => {
+		jest.useFakeTimers();
+		try {
+			const view = await mount({}, LOADING, { available: true, phase: "speaking", transcript: line({ final: false }) });
+			await act(async () => {
+				jest.advanceTimersByTime(60_000);
+			});
+			expect(has(view, ".f2f-livecap")).toBe(true);
+		} finally {
+			jest.useRealTimers();
+		}
 	});
 });
