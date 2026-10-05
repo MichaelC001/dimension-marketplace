@@ -4,7 +4,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 // src/server.ts
 import { readFile } from "node:fs/promises";
 import { homedir as homedir4 } from "node:os";
-import { join as join3 } from "node:path";
+import { join as join4 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { registerAppResource, registerAppTool, RESOURCE_MIME_TYPE } from "@modelcontextprotocol/ext-apps/server";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -12,9 +12,9 @@ import { z } from "zod";
 
 // src/android/backend.ts
 import { spawn as spawn2 } from "node:child_process";
-import { closeSync, existsSync as existsSync2, fstatSync, mkdirSync, openSync, readSync, statSync, writeSync } from "node:fs";
+import { closeSync, existsSync as existsSync2, fstatSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeSync } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import { join } from "node:path";
+import { join as join2 } from "node:path";
 
 // src/contracts.ts
 var SimulatorError = class extends Error {
@@ -308,6 +308,247 @@ var Adb = class {
 };
 
 // src/android/emulator-boot.ts
+import { join } from "node:path";
+
+// src/android/process-table.ts
+import { execFile as execFile2 } from "node:child_process";
+function processTree(rows, root) {
+  const top = rows.find((row) => row.pid === root);
+  if (top === void 0) return [];
+  const tree = [top];
+  const seen = /* @__PURE__ */ new Set([top.pid]);
+  for (let index = 0; index < tree.length; index++) {
+    const parent = tree[index];
+    if (parent === void 0) break;
+    for (const row of rows) {
+      if (row.ppid !== parent.pid || seen.has(row.pid) || row.startedAtMs < parent.startedAtMs) continue;
+      seen.add(row.pid);
+      tree.push(row);
+    }
+  }
+  return tree;
+}
+function treeUsage(rows, root) {
+  const tree = processTree(rows, root);
+  if (tree.length === 0) return null;
+  return { pids: tree.map((row) => row.pid), cpuSeconds: tree.reduce((sum, row) => sum + row.cpuSeconds, 0), rssBytes: tree.reduce((sum, row) => sum + row.rssBytes, 0) };
+}
+function treePorts(rows, listeners, root) {
+  if (listeners === null) return null;
+  const pids = new Set(processTree(rows, root).map((row) => row.pid));
+  return [...new Set(listeners.filter((listener) => pids.has(listener.pid)).map((listener) => listener.port))];
+}
+var START_TOLERANCE_MS = 5e3;
+function processVerdict(rows, remembered, toleranceMs = START_TOLERANCE_MS) {
+  if (rows === null) return "unknown";
+  const row = rows.find((candidate) => candidate.pid === remembered.pid);
+  if (row === void 0) return "gone";
+  return Math.abs(row.startedAtMs - remembered.startedAt) <= toleranceMs ? "ours" : "reused";
+}
+var MIN_THREADS = 2;
+function suspendedVerdict(sample) {
+  if (sample === null) return "unknown";
+  const { total, suspended } = sample;
+  if (!Number.isInteger(total) || !Number.isInteger(suspended) || suspended < 0 || suspended > total || total < MIN_THREADS) return "unknown";
+  return suspended === total ? "suspended" : "running";
+}
+function emulatorProcess(rows, root) {
+  const [top, ...below] = processTree(rows, root);
+  if (top === void 0) return null;
+  return below.reduce((biggest, row) => row.rssBytes > biggest.rssBytes ? row : biggest, below[0] ?? top);
+}
+function stillInTree(rows, root, expected) {
+  return processTree(rows, root).some((row) => row.pid === expected.pid && row.startedAtMs === expected.startedAtMs);
+}
+function treeSurvivors(rows, killed) {
+  const startedAt = new Map(rows.map((row) => [row.pid, row.startedAtMs]));
+  return killed.filter((member) => startedAt.get(member.pid) === member.startedAtMs).map((member) => member.pid);
+}
+function parseWindowsProcesses(text) {
+  const rows = [];
+  for (const line of text.split(/\r?\n/)) {
+    const [pid, ppid, created, kernel, user, rss] = line.trim().split("|");
+    if (pid === void 0 || ppid === void 0 || created === void 0 || created === "") continue;
+    const startedAtMs = Date.parse(created.replace(/(\.\d{3})\d+/, "$1"));
+    const ticks = Number(kernel) + Number(user);
+    if (!Number.isFinite(startedAtMs) || !Number.isFinite(ticks) || !Number.isInteger(Number(pid)) || !Number.isInteger(Number(ppid))) continue;
+    rows.push({ pid: Number(pid), ppid: Number(ppid), startedAtMs, cpuSeconds: ticks / 1e7, rssBytes: Number(rss) || 0 });
+  }
+  return rows;
+}
+var MONTHS = { Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5, Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11 };
+function parseCpuTime(text) {
+  const [days, clock] = text.includes("-") ? text.split("-", 2) : [void 0, text];
+  const seconds = (clock ?? "").split(":").reduce((total, part) => total * 60 + Number(part), 0);
+  return seconds + (days === void 0 ? 0 : Number(days) * 86400);
+}
+function parsePsProcesses(text) {
+  const rows = [];
+  const line = /^\s*(\d+)\s+(\d+)\s+\w{3}\s+(\w{3})\s+(\d+)\s+(\d{2}):(\d{2}):(\d{2})\s+(\d{4})\s+(\S+)\s+(\d+)\s*$/;
+  for (const raw of text.split(/\r?\n/)) {
+    const match = line.exec(raw);
+    if (match === null) continue;
+    const [, pid, ppid, month, day, hour, minute, second, year, cpu, rss] = match;
+    const monthIndex = MONTHS[month ?? ""];
+    if (monthIndex === void 0) continue;
+    const startedAtMs = new Date(Number(year), monthIndex, Number(day), Number(hour), Number(minute), Number(second)).getTime();
+    rows.push({ pid: Number(pid), ppid: Number(ppid), startedAtMs, cpuSeconds: parseCpuTime(cpu ?? "0"), rssBytes: Number(rss) * 1024 });
+  }
+  return rows;
+}
+function parseThreadCounts(text) {
+  for (const line of text.split(/\r?\n/)) {
+    const match = /^\s*(\d+)\|(\d+)\s*$/.exec(line);
+    if (match?.[1] !== void 0 && match[2] !== void 0) return { total: Number(match[1]), suspended: Number(match[2]) };
+  }
+  return null;
+}
+function parsePsThreadStates(text) {
+  const states = text.split(/\r?\n/).map((line) => line.trim()).filter((line) => line !== "");
+  if (states.length === 0) return null;
+  return { total: states.length, suspended: states.filter((state) => state.startsWith("T")).length };
+}
+function portOf(address) {
+  const port = /:(\d+)$/.exec(address)?.[1];
+  return port === void 0 ? null : Number(port);
+}
+function parseNetstat(text) {
+  const listeners = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const parts = raw.trim().split(/\s+/);
+    if (parts[0] !== "TCP" || parts[3] !== "LISTENING") continue;
+    const port = portOf(parts[1] ?? "");
+    const pid = Number(parts[4]);
+    if (port !== null && Number.isInteger(pid)) listeners.push({ pid, port });
+  }
+  return listeners;
+}
+function parseLsof(text) {
+  const listeners = [];
+  let pid = null;
+  for (const raw of text.split(/\r?\n/)) {
+    if (raw.startsWith("p")) pid = Number(raw.slice(1));
+    else if (raw.startsWith("n") && pid !== null && Number.isInteger(pid)) {
+      const port = portOf(raw.slice(1));
+      if (port !== null) listeners.push({ pid, port });
+    }
+  }
+  return listeners;
+}
+function parseSs(text) {
+  const listeners = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const parts = raw.trim().split(/\s+/);
+    if (parts[0] !== "LISTEN") continue;
+    const port = portOf(parts[3] ?? "");
+    if (port === null) continue;
+    for (const match of raw.matchAll(/pid=(\d+)/g)) listeners.push({ pid: Number(match[1]), port });
+  }
+  return listeners;
+}
+function run(file, args, env, timeoutMs = 2e4) {
+  const { promise, resolve, reject } = Promise.withResolvers();
+  execFile2(file, args, { encoding: "utf8", timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, windowsHide: true, ...env ? { env } : {} }, (error, stdout) => error === null ? resolve(stdout) : reject(error));
+  return promise;
+}
+function encodedCommand(script) {
+  return ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")];
+}
+function windowsThreadsScript(pid) {
+  return [
+    "$ErrorActionPreference = 'Stop'",
+    `$threads = @((Get-Process -Id ${pid}).Threads)`,
+    "$stopped = @($threads | Where-Object { $_.ThreadState -eq 'Wait' -and $_.WaitReason -eq 'Suspended' }).Count",
+    "'{0}|{1}' -f $threads.Count, $stopped"
+  ].join("\n");
+}
+function windowsResumeScript(pid) {
+  return [
+    "$ErrorActionPreference = 'Stop'",
+    "Add-Type -TypeDefinition @'",
+    "using System;",
+    "using System.Runtime.InteropServices;",
+    "public static class SimNt {",
+    '  [DllImport("kernel32.dll")] static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);',
+    '  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);',
+    '  [DllImport("ntdll.dll")] static extern int NtResumeProcess(IntPtr handle);',
+    "  public static int Resume(uint pid) {",
+    "    IntPtr handle = OpenProcess(0x0800, false, pid);",
+    "    if (handle == IntPtr.Zero) return -1;",
+    "    try { return NtResumeProcess(handle); } finally { CloseHandle(handle); }",
+    "  }",
+    "}",
+    "'@",
+    `if ([SimNt]::Resume(${pid}) -ne 0) { exit 1 }`
+  ].join("\n");
+}
+var WINDOWS_PROCESS_SCRIPT = "Get-CimInstance Win32_Process | ForEach-Object { '{0}|{1}|{2:o}|{3}|{4}|{5}' -f $_.ProcessId, $_.ParentProcessId, $_.CreationDate, $_.KernelModeTime, $_.UserModeTime, $_.WorkingSetSize }";
+function nodeProcessTable() {
+  const windows = process.platform === "win32";
+  return {
+    processes: async () => {
+      if (windows) return parseWindowsProcesses(await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", WINDOWS_PROCESS_SCRIPT]));
+      return parsePsProcesses(await run("ps", ["-A", "-o", "pid=,ppid=,lstart=,cputime=,rss="], { ...process.env, LC_ALL: "C" }));
+    },
+    listeners: async () => {
+      try {
+        if (windows) return parseNetstat(await run("netstat", ["-ano", "-p", "tcp"]));
+        if (process.platform === "linux") {
+          try {
+            return parseSs(await run("ss", ["-Hltnp"]));
+          } catch {
+          }
+        }
+        return parseLsof(await run("lsof", ["-nP", "-iTCP", "-sTCP:LISTEN", "-Fpn"]));
+      } catch {
+        return null;
+      }
+    },
+    killTree: async (pid, rows) => {
+      if (windows) {
+        const { promise, resolve } = Promise.withResolvers();
+        execFile2("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true }, () => resolve());
+        await promise;
+        return;
+      }
+      for (const target of [-pid, ...processTree(rows, pid).map((row) => row.pid).reverse()]) {
+        try {
+          process.kill(target, "SIGKILL");
+        } catch {
+        }
+      }
+    },
+    threadStates: async (pid) => {
+      if (!Number.isInteger(pid) || pid <= 0) return null;
+      try {
+        if (windows) return parseThreadCounts(await run("powershell.exe", encodedCommand(windowsThreadsScript(pid)), void 0, 8e3));
+        return parsePsThreadStates(await run("ps", [...process.platform === "linux" ? ["-L"] : [], "-o", "stat=", "-p", String(pid)], { ...process.env, LC_ALL: "C" }, 8e3));
+      } catch {
+        return null;
+      }
+    },
+    resume: async (pid) => {
+      if (!Number.isInteger(pid) || pid <= 0) return false;
+      try {
+        if (windows) await run("powershell.exe", encodedCommand(windowsResumeScript(pid)), void 0, 3e4);
+        else process.kill(pid, "SIGCONT");
+        return true;
+      } catch {
+        return false;
+      }
+    }
+  };
+}
+function isProcessAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === "EPERM";
+  }
+}
+
+// src/android/emulator-boot.ts
 var DEFAULT_MEMORY_MB = 1536;
 var BAKED_SNAPSHOT = "avdslim_clean";
 var SOFTWARE_GPU = "swiftshader_indirect";
@@ -345,6 +586,12 @@ function fallbackNote(sample, gpu) {
   const seconds = Math.round(sample.elapsedMs / 1e3);
   const cpu = sample.cpuSeconds === null ? "" : `, ${sample.cpuSeconds.toFixed(1)} s of CPU`;
   return `Fell back to software graphics: with -gpu ${gpu} the emulator showed no adb device after ${seconds} s${cpu}, which means it is waiting on the host GPU (busy or unavailable). The pack stopped that emulator and relaunched it once with -gpu ${SOFTWARE_GPU}: slower to draw, but it needs no GPU. Set simulator.gpu to ${SOFTWARE_GPU} to skip the wait.`;
+}
+var SUSPEND_POLICY = { firstCheckMs: 8e3, checkMs: 1e4, recheckMs: 5e3, maxResumes: 3 };
+var RESUMED_NOTE = "Resumed a frozen emulator: the emulator process had been suspended by the system (security software, a game's anti-cheat or Game Mode can do that); the pack resumed it. That is not a graphics problem, so the boot went on and was not relaunched.";
+function stillSuspendedReason(avd, attempts) {
+  const tried = attempts === 0 ? "the pack could not resume it" : `resuming it (${attempts} attempt${attempts === 1 ? "" : "s"}) did not last`;
+  return `the emulator process for ${avd} is suspended by the system (security software, a game's anti-cheat or Game Mode can do that) and ${tried}, so it never booted; the pack stopped it. A relaunch, with software graphics too, would be frozen the same way: close what is freezing it, then boot again.`;
 }
 var EMULATOR_SERIAL = /^emulator-(\d+)$/;
 function consolePortOf(serial) {
@@ -395,162 +642,26 @@ function parseAvdName(output) {
   if (lines.some((line) => line.startsWith("KO"))) return null;
   return lines.find((line) => line !== "OK" && !line.startsWith("Android Console")) ?? null;
 }
-
-// src/android/process-table.ts
-import { execFile as execFile2 } from "node:child_process";
-function processTree(rows, root) {
-  const top = rows.find((row) => row.pid === root);
-  if (top === void 0) return [];
-  const tree = [top];
-  const seen = /* @__PURE__ */ new Set([top.pid]);
-  for (let index = 0; index < tree.length; index++) {
-    const parent = tree[index];
-    if (parent === void 0) break;
-    for (const row of rows) {
-      if (row.ppid !== parent.pid || seen.has(row.pid) || row.startedAtMs < parent.startedAtMs) continue;
-      seen.add(row.pid);
-      tree.push(row);
-    }
-  }
-  return tree;
+function avdLockHolder(avdDir, readFile2) {
+  const text = readFile2(join(avdDir, "hardware-qemu.ini.lock", "pid"));
+  const pid = Number(/^\s*(\d+)\s*$/.exec(text ?? "")?.[1]);
+  return Number.isInteger(pid) && pid > 0 ? pid : null;
 }
-function treeUsage(rows, root) {
-  const tree = processTree(rows, root);
-  if (tree.length === 0) return null;
-  return { pids: tree.map((row) => row.pid), cpuSeconds: tree.reduce((sum, row) => sum + row.cpuSeconds, 0), rssBytes: tree.reduce((sum, row) => sum + row.rssBytes, 0) };
+function relaunchBlockers(rows, killed, lockHolder) {
+  const blockers = treeSurvivors(rows, killed);
+  if (lockHolder !== null && !blockers.includes(lockHolder) && rows.some((row) => row.pid === lockHolder)) blockers.push(lockHolder);
+  return blockers;
 }
-function treePorts(rows, listeners, root) {
-  if (listeners === null) return null;
-  const pids = new Set(processTree(rows, root).map((row) => row.pid));
-  return [...new Set(listeners.filter((listener) => pids.has(listener.pid)).map((listener) => listener.port))];
+var LOCK_EXIT_CODE = 253;
+var LOCK_EXIT_WINDOW_MS = 5e3;
+var LAUNCH_MARKER = "the pack launches:";
+function lastLaunchOutput(logText) {
+  const at = logText.lastIndexOf(LAUNCH_MARKER);
+  return at < 0 ? logText : logText.slice(at + LAUNCH_MARKER.length);
 }
-var START_TOLERANCE_MS = 5e3;
-function processVerdict(rows, remembered, toleranceMs = START_TOLERANCE_MS) {
-  if (rows === null) return "unknown";
-  const row = rows.find((candidate) => candidate.pid === remembered.pid);
-  if (row === void 0) return "gone";
-  return Math.abs(row.startedAtMs - remembered.startedAt) <= toleranceMs ? "ours" : "reused";
-}
-function parseWindowsProcesses(text) {
-  const rows = [];
-  for (const line of text.split(/\r?\n/)) {
-    const [pid, ppid, created, kernel, user, rss] = line.trim().split("|");
-    if (pid === void 0 || ppid === void 0 || created === void 0 || created === "") continue;
-    const startedAtMs = Date.parse(created.replace(/(\.\d{3})\d+/, "$1"));
-    const ticks = Number(kernel) + Number(user);
-    if (!Number.isFinite(startedAtMs) || !Number.isFinite(ticks) || !Number.isInteger(Number(pid)) || !Number.isInteger(Number(ppid))) continue;
-    rows.push({ pid: Number(pid), ppid: Number(ppid), startedAtMs, cpuSeconds: ticks / 1e7, rssBytes: Number(rss) || 0 });
-  }
-  return rows;
-}
-var MONTHS = { Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5, Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11 };
-function parseCpuTime(text) {
-  const [days, clock] = text.includes("-") ? text.split("-", 2) : [void 0, text];
-  const seconds = (clock ?? "").split(":").reduce((total, part) => total * 60 + Number(part), 0);
-  return seconds + (days === void 0 ? 0 : Number(days) * 86400);
-}
-function parsePsProcesses(text) {
-  const rows = [];
-  const line = /^\s*(\d+)\s+(\d+)\s+\w{3}\s+(\w{3})\s+(\d+)\s+(\d{2}):(\d{2}):(\d{2})\s+(\d{4})\s+(\S+)\s+(\d+)\s*$/;
-  for (const raw of text.split(/\r?\n/)) {
-    const match = line.exec(raw);
-    if (match === null) continue;
-    const [, pid, ppid, month, day, hour, minute, second, year, cpu, rss] = match;
-    const monthIndex = MONTHS[month ?? ""];
-    if (monthIndex === void 0) continue;
-    const startedAtMs = new Date(Number(year), monthIndex, Number(day), Number(hour), Number(minute), Number(second)).getTime();
-    rows.push({ pid: Number(pid), ppid: Number(ppid), startedAtMs, cpuSeconds: parseCpuTime(cpu ?? "0"), rssBytes: Number(rss) * 1024 });
-  }
-  return rows;
-}
-function portOf(address) {
-  const port = /:(\d+)$/.exec(address)?.[1];
-  return port === void 0 ? null : Number(port);
-}
-function parseNetstat(text) {
-  const listeners = [];
-  for (const raw of text.split(/\r?\n/)) {
-    const parts = raw.trim().split(/\s+/);
-    if (parts[0] !== "TCP" || parts[3] !== "LISTENING") continue;
-    const port = portOf(parts[1] ?? "");
-    const pid = Number(parts[4]);
-    if (port !== null && Number.isInteger(pid)) listeners.push({ pid, port });
-  }
-  return listeners;
-}
-function parseLsof(text) {
-  const listeners = [];
-  let pid = null;
-  for (const raw of text.split(/\r?\n/)) {
-    if (raw.startsWith("p")) pid = Number(raw.slice(1));
-    else if (raw.startsWith("n") && pid !== null && Number.isInteger(pid)) {
-      const port = portOf(raw.slice(1));
-      if (port !== null) listeners.push({ pid, port });
-    }
-  }
-  return listeners;
-}
-function parseSs(text) {
-  const listeners = [];
-  for (const raw of text.split(/\r?\n/)) {
-    const parts = raw.trim().split(/\s+/);
-    if (parts[0] !== "LISTEN") continue;
-    const port = portOf(parts[3] ?? "");
-    if (port === null) continue;
-    for (const match of raw.matchAll(/pid=(\d+)/g)) listeners.push({ pid: Number(match[1]), port });
-  }
-  return listeners;
-}
-function run(file, args, env) {
-  const { promise, resolve, reject } = Promise.withResolvers();
-  execFile2(file, args, { encoding: "utf8", timeout: 2e4, maxBuffer: 16 * 1024 * 1024, windowsHide: true, ...env ? { env } : {} }, (error, stdout) => error === null ? resolve(stdout) : reject(error));
-  return promise;
-}
-var WINDOWS_PROCESS_SCRIPT = "Get-CimInstance Win32_Process | ForEach-Object { '{0}|{1}|{2:o}|{3}|{4}|{5}' -f $_.ProcessId, $_.ParentProcessId, $_.CreationDate, $_.KernelModeTime, $_.UserModeTime, $_.WorkingSetSize }";
-function nodeProcessTable() {
-  const windows = process.platform === "win32";
-  return {
-    processes: async () => {
-      if (windows) return parseWindowsProcesses(await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", WINDOWS_PROCESS_SCRIPT]));
-      return parsePsProcesses(await run("ps", ["-A", "-o", "pid=,ppid=,lstart=,cputime=,rss="], { ...process.env, LC_ALL: "C" }));
-    },
-    listeners: async () => {
-      try {
-        if (windows) return parseNetstat(await run("netstat", ["-ano", "-p", "tcp"]));
-        if (process.platform === "linux") {
-          try {
-            return parseSs(await run("ss", ["-Hltnp"]));
-          } catch {
-          }
-        }
-        return parseLsof(await run("lsof", ["-nP", "-iTCP", "-sTCP:LISTEN", "-Fpn"]));
-      } catch {
-        return null;
-      }
-    },
-    killTree: async (pid, rows) => {
-      if (windows) {
-        const { promise, resolve } = Promise.withResolvers();
-        execFile2("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true }, () => resolve());
-        await promise;
-        return;
-      }
-      for (const target of [-pid, ...processTree(rows, pid).map((row) => row.pid).reverse()]) {
-        try {
-          process.kill(target, "SIGKILL");
-        } catch {
-        }
-      }
-    }
-  };
-}
-function isProcessAlive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return error.code === "EPERM";
-  }
+function isLockRaceExit(exit, logText) {
+  if (exit.code !== LOCK_EXIT_CODE || exit.elapsedMs >= LOCK_EXIT_WINDOW_MS) return false;
+  return logText === null || !/\bFATAL\b/.test(lastLaunchOutput(logText));
 }
 
 // src/android/png.ts
@@ -1059,7 +1170,7 @@ function describeNode(node) {
 }
 
 // src/android/backend.ts
-var DEFAULT_BOOT_TIMING = { pollMs: 1e3, stall: STALL_POLICY, stallCheckMs: 15e3, budgetMs: 24e4, stopGraceMs: 2e4 };
+var DEFAULT_BOOT_TIMING = { pollMs: 1e3, stall: STALL_POLICY, stallCheckMs: 15e3, budgetMs: 24e4, stopGraceMs: 2e4, suspend: SUSPEND_POLICY, relaunchWaitMs: 1e4 };
 var PROBE_COMMAND = [
   "echo V=$(getprop ro.build.version.release)",
   "echo B=$(getprop sys.boot_completed)",
@@ -1207,8 +1318,9 @@ var AndroidBackend = class {
     const avds = await this.avds();
     if (!avds.includes(avd)) fail("unknown_avd", `no AVD named "${avd}". Available: ${avds.join(", ") || "none"}`);
     const before = (await adb.devices()).map(({ serial, state }) => ({ serial, state }));
-    const baked = existsSync2(join(avdHome(), `${avd}.avd`, "snapshots", "avdslim_clean"));
-    const ctx = { avd, request, emulator, adb, observer, before, baked, timing: { ...DEFAULT_BOOT_TIMING, ...this.#deps.timing }, fellBack: false };
+    const avdDir = join2((this.#deps.avdHome ?? avdHome)(), `${avd}.avd`);
+    const baked = existsSync2(join2(avdDir, "snapshots", "avdslim_clean"));
+    const ctx = { avd, request, emulator, adb, observer, before, baked, avdDir, timing: { ...DEFAULT_BOOT_TIMING, ...this.#deps.timing }, fellBack: false, resumes: 0, resumeNoted: false, lockRetried: false };
     const first = await this.#launch(ctx, this.#deps.gpu());
     const ready = this.#supervise(ctx, first);
     ready.catch(() => void 0);
@@ -1220,11 +1332,11 @@ var AndroidBackend = class {
     const readOnly = request.readOnly === true;
     const args = buildEmulatorArgs({ avd, headless: request.headless === true, cold: request.cold === true, bakedSnapshot: ctx.baked, gpu, ...readOnly ? { readOnly } : {} });
     mkdirSync(this.#deps.logDir, { recursive: true });
-    const logPath = join(this.#deps.logDir, `${avd}${readOnly ? ".read-only" : ""}.log`);
+    const logPath = join2(this.#deps.logDir, `${avd}${readOnly ? ".read-only" : ""}.log`);
     const fd = openSync(logPath, existsSync2(logPath) && statSync(logPath).size > LOG_ROTATE_BYTES ? "w" : "a");
     const startedAt = this.#now();
     writeSync(fd, `
---- ${new Date(startedAt).toISOString()} the pack launches: emulator ${args.join(" ")}
+--- ${new Date(startedAt).toISOString()} ${LAUNCH_MARKER} emulator ${args.join(" ")}
 `);
     const child = spawn2(ctx.emulator, args, { detached: true, stdio: ["ignore", fd, fd], windowsHide: true });
     closeSync(fd);
@@ -1234,9 +1346,10 @@ var AndroidBackend = class {
     const exit = Promise.withResolvers();
     child.once("error", spawnError.resolve);
     if (child.pid === void 0) throw failure2(`could not start the emulator: ${(await spawnError.promise).message}`);
-    const launch = { process: { pid: child.pid, startedAt }, gpu, logPath, exited: false, code: null, exit: exit.promise };
+    const launch = { process: { pid: child.pid, startedAt }, gpu, logPath, exited: false, exitedAt: null, code: null, exit: exit.promise };
     const done = (code) => {
       launch.exited = true;
+      launch.exitedAt = this.#now();
       launch.code = code;
       this.#launches.delete(launch.process.pid);
       exit.resolve(code);
@@ -1248,51 +1361,144 @@ var AndroidBackend = class {
     this.#deps.log(`[sim] booting ${avd} (pid ${launch.process.pid}, ${request.headless ? "headless" : "windowed"}, ${request.cold ? "cold" : ctx.baked ? "baked snapshot" : "default snapshot"}, -gpu ${gpu}${readOnly ? ", read-only" : ""}); log ${logPath}`);
     return launch;
   }
-  /** Watch one launch until the device is up, the process dies, the boot stalls or the budget ends; on a stall, relaunch ONCE with software graphics. Anything that fails leaves nothing of the pack's running. */
+  /** Watch one launch until the device is up, the process dies, the boot stalls or the budget ends. A frozen emulator is resumed (never mistaken for a hung GPU); a stall relaunches ONCE with software graphics; an exit that is only a lost race for the AVD's lock starts the emulator once more. Anything that fails leaves nothing of the pack's running. */
   async #supervise(ctx, first) {
     let launch = first;
     for (; ; ) {
       const seen = await this.#watch(ctx, launch);
       const fallenBack = ctx.fellBack ? " (It had already fallen back to software graphics.)" : "";
-      const failure2 = (reason) => new Error(bootFailureMessage(`${reason}${fallenBack}`, { path: launch.logPath, text: readLogTail(launch.logPath) }));
+      const retried = ctx.lockRetried ? " (It had already been started again once, after the AVD's lock was still held.)" : "";
+      const failure2 = (reason) => new Error(bootFailureMessage(`${reason}${fallenBack}${retried}`, { path: launch.logPath, text: readLogTail(launch.logPath) }));
       switch (seen.kind) {
         case "found":
           return this.#finish(ctx, launch, seen.serial, failure2);
         case "exited":
+          if (!ctx.lockRetried && isLockRaceExit({ code: launch.code, elapsedMs: (launch.exitedAt ?? this.#now()) - launch.process.startedAt }, readLogTail(launch.logPath))) {
+            ctx.lockRetried = true;
+            this.#deps.log(`[sim] ${ctx.avd}: the emulator exited with code ${LOCK_EXIT_CODE} right after the spawn and printed no FATAL line: the AVD's lock was still held. Waiting for it, then starting the emulator once more.`);
+            await this.#awaitAvdFree(ctx, []);
+            launch = await this.#launch(ctx, launch.gpu);
+            break;
+          }
           throw failure2(`the emulator for ${ctx.avd} exited with code ${launch.code ?? "?"} before it finished booting.`);
         case "timeout":
           await this.#end(launch);
           throw failure2(`the emulator for ${ctx.avd} did not show up in adb within ${Math.round(ctx.timing.budgetMs / 1e3)} s; the pack stopped it.`);
         case "stalled": {
+          const relaunch = !seen.suspended && !ctx.fellBack && launch.gpu !== SOFTWARE_GPU;
+          const killed = relaunch ? await this.#treeOf(launch) : [];
           await this.#end(launch);
-          const seconds = Math.round(seen.sample.elapsedMs / 1e3);
-          if (ctx.fellBack || launch.gpu === SOFTWARE_GPU) {
+          if (seen.suspended) throw failure2(stillSuspendedReason(ctx.avd, ctx.resumes));
+          if (!relaunch) {
+            const seconds = Math.round(seen.sample.elapsedMs / 1e3);
             throw failure2(`the emulator for ${ctx.avd} showed no sign of booting after ${seconds} s (${seen.sample.cpuSeconds?.toFixed(1) ?? "?"} s of CPU, no adb device, -gpu ${launch.gpu}); the pack stopped it.`);
           }
           const note = fallbackNote(seen.sample, launch.gpu);
           this.#deps.log(`[sim] ${ctx.avd}: ${note}`);
           ctx.observer.note(note);
           ctx.fellBack = true;
+          await this.#awaitAvdFree(ctx, killed);
           launch = await this.#launch(ctx, SOFTWARE_GPU);
           break;
         }
       }
     }
   }
+  /**
+   * Wait for the device to appear. Two clocks tick beside it: the SUSPEND look (the
+   * emulator's threads, first at `suspend.firstCheckMs`, then every `checkMs`, or
+   * `recheckMs` after a resume or a suspended finding) and the STALL verdict (little
+   * CPU for `stall.afterMs`). A resume restarts the stall clock: the time a process
+   * spent frozen says nothing about the GPU.
+   */
   async #watch(ctx, launch) {
     const { timing } = ctx;
-    let nextStallCheck = launch.process.startedAt + timing.stall.afterMs;
+    const spawnedAt = launch.process.startedAt;
+    let stallFrom = spawnedAt;
+    let nextStallCheck = stallFrom + timing.stall.afterMs;
+    let nextSuspendCheck = spawnedAt + timing.suspend.firstCheckMs;
+    let frozen = false;
     for (; ; ) {
       if (launch.exited) return { kind: "exited" };
       const serial = await this.#findSerial(ctx, launch).catch(() => null);
       if (serial !== null) return { kind: "found", serial };
-      if (this.#now() - launch.process.startedAt >= timing.budgetMs) return { kind: "timeout" };
-      if (this.#now() >= nextStallCheck) {
-        nextStallCheck = this.#now() + timing.stallCheckMs;
-        const sample = await this.#sample(launch);
-        if (bootStalled(sample, timing.stall)) return { kind: "stalled", sample };
+      if (this.#now() - spawnedAt >= timing.budgetMs) return { kind: "timeout" };
+      if (this.#now() >= nextSuspendCheck || this.#now() >= nextStallCheck) {
+        const rows = await this.#table.processes().catch(() => null);
+        if (this.#now() >= nextSuspendCheck) {
+          const look = await this.#lookForSuspension(ctx, launch, rows);
+          frozen = look.suspended;
+          nextSuspendCheck = this.#now() + (look.suspended || look.resumed ? timing.suspend.recheckMs : timing.suspend.checkMs);
+          if (look.resumed) {
+            stallFrom = this.#now();
+            nextStallCheck = stallFrom + timing.stall.afterMs;
+          }
+        }
+        if (this.#now() >= nextStallCheck) {
+          nextStallCheck = this.#now() + timing.stallCheckMs;
+          const usage = rows === null ? null : treeUsage(rows, launch.process.pid);
+          const sample = { elapsedMs: this.#now() - stallFrom, alive: !launch.exited, deviceSeen: false, cpuSeconds: usage === null ? null : usage.cpuSeconds };
+          if (bootStalled(sample, timing.stall)) return { kind: "stalled", sample, suspended: frozen };
+        }
       }
       await Promise.race([delay2(timing.pollMs), launch.exit]);
+    }
+  }
+  /**
+   * One look at whether the emulator is frozen, and the resume if it is. `rows` is the
+   * table just read. Only the emulator process under the pack's own launcher is looked at,
+   * and it is resumed only after a second read proves it is STILL that process (same pid,
+   * same start, same parent chain): a pid is a name until its start time agrees.
+   * `suspended` = frozen and not resumed now; `resumed` = the host accepted a resume.
+   */
+  async #lookForSuspension(ctx, launch, rows) {
+    const clear = { suspended: false, resumed: false };
+    const frozen = { suspended: true, resumed: false };
+    if (rows === null || launch.exited) return clear;
+    const verdict = processVerdict(rows, launch.process);
+    if (verdict !== "ours") {
+      if (verdict === "reused") this.#deps.log(`[sim] ${ctx.avd}: not looking at pid ${launch.process.pid}: it started at another time than the pack recorded, so the pid now belongs to something else`);
+      return clear;
+    }
+    const target = emulatorProcess(rows, launch.process.pid);
+    if (target === null) return clear;
+    if (suspendedVerdict(await this.#table.threadStates(target.pid).catch(() => null)) !== "suspended") return clear;
+    this.#deps.log(`[sim] ${ctx.avd}: every thread of the emulator process (pid ${target.pid}) is suspended by the system`);
+    if (ctx.resumes >= ctx.timing.suspend.maxResumes) return frozen;
+    const fresh = await this.#table.processes().catch(() => null);
+    if (fresh === null || launch.exited || processVerdict(fresh, launch.process) !== "ours" || !stillInTree(fresh, launch.process.pid, target)) return frozen;
+    ctx.resumes++;
+    const resumed = await this.#table.resume(target.pid).catch(() => false);
+    this.#deps.log(`[sim] ${ctx.avd}: ${resumed ? "resumed" : "could not resume"} the emulator process (pid ${target.pid}); resume ${ctx.resumes} of ${ctx.timing.suspend.maxResumes}`);
+    if (resumed && !ctx.resumeNoted) {
+      ctx.resumeNoted = true;
+      ctx.observer.note(RESUMED_NOTE);
+    }
+    return { suspended: !resumed, resumed };
+  }
+  /** `launch`'s process and everything under it, as the table shows them now; empty when the table cannot be read. */
+  async #treeOf(launch) {
+    const rows = await this.#table.processes().catch(() => null);
+    return rows === null ? [] : processTree(rows, launch.process.pid);
+  }
+  /**
+   * Before the AVD is launched again: wait (at most `relaunchWaitMs`) until nothing of the
+   * `killed` tree runs and nothing runs under the pid in the AVD's lock. Launched sooner,
+   * the new emulator finds the lock still named and exits at once with code 253. A table
+   * that cannot be read cannot be waited on; the retry after a 253 is the backstop.
+   */
+  async #awaitAvdFree(ctx, killed) {
+    const deadline = this.#now() + ctx.timing.relaunchWaitMs;
+    for (; ; ) {
+      const rows = await this.#table.processes().catch(() => null);
+      if (rows === null) return;
+      const blockers = relaunchBlockers(rows, killed, avdLockHolder(ctx.avdDir, readTextOrNull));
+      if (blockers.length === 0) return;
+      if (this.#now() >= deadline) {
+        this.#deps.log(`[sim] ${ctx.avd}: pid ${blockers.join(", ")} still running ${Math.round(ctx.timing.relaunchWaitMs / 1e3)} s after the kill; starting the emulator anyway`);
+        return;
+      }
+      await delay2(Math.min(ctx.timing.pollMs, 250));
     }
   }
   /** The wait that follows the serial: Android itself reaching `sys.boot_completed`. */
@@ -1325,11 +1531,6 @@ var AndroidBackend = class {
   async #consolePorts(pid) {
     const [rows, listeners] = await Promise.all([this.#table.processes().catch(() => null), this.#table.listeners().catch(() => null)]);
     return rows === null ? null : treePorts(rows, listeners, pid);
-  }
-  async #sample(launch) {
-    const rows = await this.#table.processes().catch(() => null);
-    const usage = rows === null ? null : treeUsage(rows, launch.process.pid);
-    return { elapsedMs: this.#now() - launch.process.startedAt, alive: !launch.exited, deviceSeen: false, cpuSeconds: usage === null ? null : usage.cpuSeconds };
   }
   /** Stop what a boot spawned, and wait (briefly) until it is gone. */
   async #end(launch) {
@@ -1490,8 +1691,15 @@ var AndroidBackend = class {
 function avdHome() {
   const env = process.env;
   if (env.ANDROID_AVD_HOME) return env.ANDROID_AVD_HOME;
-  if (env.ANDROID_USER_HOME) return join(env.ANDROID_USER_HOME, "avd");
-  return join(homedir2(), ".android", "avd");
+  if (env.ANDROID_USER_HOME) return join2(env.ANDROID_USER_HOME, "avd");
+  return join2(homedir2(), ".android", "avd");
+}
+function readTextOrNull(path) {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    return null;
+  }
 }
 function readLogTail(path) {
   try {
@@ -1516,13 +1724,13 @@ function delay2(ms) {
 }
 
 // src/fleet.ts
-import { mkdirSync as mkdirSync2, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync as mkdirSync2, readFileSync as readFileSync2, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 function fileOwnershipStore(path) {
   return {
     read: () => {
       try {
-        const parsed = JSON.parse(readFileSync(path, "utf8"));
+        const parsed = JSON.parse(readFileSync2(path, "utf8"));
         if (!Array.isArray(parsed)) return [];
         return parsed.filter(
           (entry) => typeof entry === "object" && entry !== null && (entry.serial === null || typeof entry.serial === "string") && typeof entry.avd === "string" && typeof entry.pid === "number" && typeof entry.startedAt === "number" && typeof entry.bootedAt === "number" && typeof entry.ownerPid === "number"
@@ -2595,9 +2803,9 @@ Content-Length: 0\r
 };
 
 // src/settings.ts
-import { readFileSync as readFileSync2 } from "node:fs";
+import { readFileSync as readFileSync3 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
-import { join as join2 } from "node:path";
+import { join as join3 } from "node:path";
 var GPU_MODES = ["auto", "host", "swiftshader_indirect", "angle_indirect"];
 var DEFAULT_SETTINGS = { maxDevices: 2, idleMinutes: 15, sdkPath: null, allowPhysical: false, gpu: "auto" };
 var GROUP = "simulator";
@@ -2639,7 +2847,7 @@ var nodeSettingsSource = () => ({
   home: homedir3(),
   readFile: (path) => {
     try {
-      return readFileSync2(path, "utf8");
+      return readFileSync3(path, "utf8");
     } catch {
       return null;
     }
@@ -2647,8 +2855,8 @@ var nodeSettingsSource = () => ({
 });
 function agentConfigPath(source) {
   const dir = source.env.PI_CODING_AGENT_DIR;
-  if (dir) return join2(dir, "config.yml");
-  return join2(source.home, source.env.PI_CONFIG_DIR || ".omp", "agent", "config.yml");
+  if (dir) return join3(dir, "config.yml");
+  return join3(source.home, source.env.PI_CONFIG_DIR || ".omp", "agent", "config.yml");
 }
 function readSettings(source = nodeSettingsSource()) {
   const text = source.readFile(agentConfigPath(source));
@@ -2733,9 +2941,9 @@ async function createSimulatorServer(options = {}) {
   const settings = options.settings ?? (() => readSettings(nodeSettingsSource()));
   const leased = leasedToolchain(settings);
   const toolchain = options.toolchain ?? (() => leased.current());
-  const dataDir = options.dataDir ?? join3(process.env.INSO_HOME ?? join3(homedir4(), ".inso"), "simulator");
-  const backend = options.backend ?? new AndroidBackend({ toolchain, log, logDir: join3(dataDir, "logs"), gpu: () => settings().gpu });
-  const fleet = options.fleet ?? new Fleet({ backend, settings, store: fileOwnershipStore(join3(dataDir, "owned.json")), log });
+  const dataDir = options.dataDir ?? join4(process.env.INSO_HOME ?? join4(homedir4(), ".inso"), "simulator");
+  const backend = options.backend ?? new AndroidBackend({ toolchain, log, logDir: join4(dataDir, "logs"), gpu: () => settings().gpu });
+  const fleet = options.fleet ?? new Fleet({ backend, settings, store: fileOwnershipStore(join4(dataDir, "owned.json")), log });
   async function authorize(serial, allowPhysical) {
     const kind = await backend.kindOf(serial);
     const refusal = physicalAccessRefusal({ serial, kind, callAllows: allowPhysical === true, settingAllows: settings().allowPhysical });
