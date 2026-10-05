@@ -20,11 +20,20 @@ export interface SpeakStep {
 	readonly voice?: string;
 }
 
+/** One live choice of a profile (doc 92): a realtime provider, optionally its model and voice. */
+export interface LiveStep {
+	readonly provider: string;
+	readonly model?: string;
+	readonly voice?: string;
+}
+
 export interface ProfileRow {
 	readonly name: string;
 	readonly layer: VoiceLayer;
 	readonly description?: string;
 	readonly speak: readonly SpeakStep[];
+	/** The live voices the profile names, in fallback order; empty = the profile offers no live call. */
+	readonly converse: readonly LiveStep[];
 }
 
 export interface ProviderRow {
@@ -32,6 +41,8 @@ export interface ProviderRow {
 	readonly label: string;
 	readonly speak?: Readiness;
 	readonly listen?: Readiness;
+	/** Present exactly when the provider talks live. */
+	readonly converse?: Readiness;
 }
 
 export interface DefaultProfile {
@@ -84,13 +95,23 @@ function readStep(value: unknown): SpeakStep | undefined {
 	return { provider, model, ...(voice ? { voice } : {}) };
 }
 
+function readLiveStep(value: unknown): LiveStep | undefined {
+	if (!isRecord(value)) return undefined;
+	const provider = text(value.provider);
+	if (!provider) return undefined;
+	const model = text(value.model);
+	const voice = text(value.voice);
+	return { provider, ...(model ? { model } : {}), ...(voice ? { voice } : {}) };
+}
+
 function readProfile(value: unknown): ProfileRow | undefined {
 	if (!isRecord(value)) return undefined;
 	const name = text(value.name);
 	if (!name || typeof value.layer !== "string" || !Object.hasOwn(LAYERS, value.layer)) return undefined;
 	const description = text(value.description);
 	const speak = Array.isArray(value.speak) ? value.speak.flatMap(step => readStep(step) ?? []) : [];
-	return { name, layer: value.layer as VoiceLayer, speak, ...(description ? { description } : {}) };
+	const converse = Array.isArray(value.converse) ? value.converse.flatMap(step => readLiveStep(step) ?? []) : [];
+	return { name, layer: value.layer as VoiceLayer, speak, converse, ...(description ? { description } : {}) };
 }
 
 function readProvider(value: unknown): ProviderRow | undefined {
@@ -99,7 +120,14 @@ function readProvider(value: unknown): ProviderRow | undefined {
 	if (!id) return undefined;
 	const speak = readReadiness(value.speak);
 	const listen = readReadiness(value.listen);
-	return { id, label: text(value.label) ?? id, ...(speak ? { speak } : {}), ...(listen ? { listen } : {}) };
+	const converse = readReadiness(value.converse);
+	return {
+		id,
+		label: text(value.label) ?? id,
+		...(speak ? { speak } : {}),
+		...(listen ? { listen } : {}),
+		...(converse ? { converse } : {}),
+	};
 }
 
 /** `undefined`: the engine does not say, or said something this pane cannot read (no claim either way, never a throw).
@@ -142,9 +170,18 @@ const REASONS: Readonly<Record<string, string>> = {
 	unavailable: "Unavailable",
 };
 
+/** What a provider can do: speak a reply, listen, or hold a live call. */
+type Lane = "speak" | "listen" | "live";
+
+const ABSENT: Readonly<Record<Lane, string>> = {
+	speak: "Does not speak",
+	listen: "Does not listen",
+	live: "Does not talk live",
+};
+
 /** One readiness as a sentence a person can act on. `undefined` = the provider does not do this at all. */
-export function stateLine(readiness: Readiness | undefined, verb: "speak" | "listen"): StateLine {
-	if (!readiness) return { tone: "off", text: verb === "speak" ? "Does not speak" : "Does not listen" };
+function stateLine(readiness: Readiness | undefined, verb: Lane): StateLine {
+	if (!readiness) return { tone: "off", text: ABSENT[verb] };
 	if (readiness.ready) return { tone: "ok", text: "Ready" };
 	const reason = readiness.reason;
 	return { tone: "warn", text: reason !== undefined && Object.hasOwn(REASONS, reason) ? (REASONS[reason] as string) : "Not ready" };
@@ -153,6 +190,14 @@ export function stateLine(readiness: Readiness | undefined, verb: "speak" | "lis
 export interface ChainStep {
 	readonly providerLabel: string;
 	readonly model: string;
+	readonly voice?: string;
+	readonly state: StateLine;
+	readonly detail?: string;
+	readonly ready: boolean;
+}
+
+export interface LiveStepView {
+	readonly providerLabel: string;
 	readonly voice?: string;
 	readonly state: StateLine;
 	readonly detail?: string;
@@ -169,6 +214,10 @@ export interface ProfileView {
 	/** The entry that will actually speak: the first ready one, or the on-device voice when none is. `fellBack`: it is not
 	 *  the profile's first choice, and `because` names that first choice, which is not ready. */
 	readonly speaksWith: { readonly label: string; readonly fellBack: boolean; readonly because?: string } | null;
+	/** The profile's live choices, in fallback order, each with what it would do right now; empty = the profile offers no live call. */
+	readonly live: readonly LiveStepView[];
+	/** The live voice a call would open: the first ready choice (there is no on-device fallback for a live call). */
+	readonly liveWith: { readonly label: string; readonly fellBack: boolean; readonly because?: string } | null;
 }
 
 export const LAYER_LABELS: Readonly<Record<VoiceLayer, string>> = {
@@ -194,21 +243,42 @@ function stepOf(step: SpeakStep, providers: ReadonlyMap<string, ProviderRow>): C
 	};
 }
 
+function liveStepOf(step: LiveStep, providers: ReadonlyMap<string, ProviderRow>): LiveStepView {
+	const provider = providers.get(step.provider);
+	// Same honesty as speaking: a profile can name a provider that is not installed, and an installed one may not talk live at all.
+	const state: StateLine = provider ? stateLine(provider.converse, "live") : { tone: "warn", text: "Not installed" };
+	const detail = provider?.converse && !provider.converse.ready ? provider.converse.detail : undefined;
+	return {
+		providerLabel: provider?.label ?? step.provider,
+		...(step.voice ? { voice: step.voice } : {}),
+		state,
+		...(detail ? { detail } : {}),
+		ready: state.tone === "ok",
+	};
+}
+
+/**
+ * What a chain of choices would do right now: its first ready step. `fellBack`: it is not the first choice, and `because`
+ * names that first choice, which is not ready. With no ready step it is `lastResort` when there is one (speaking has the
+ * on-device voice; a live call has none), else null.
+ */
+function choiceOf(steps: readonly Pick<ChainStep, "ready" | "providerLabel">[], lastResort?: string): ProfileView["speaksWith"] {
+	const firstReady = steps.findIndex(step => step.ready);
+	const head = steps[0];
+	const because = head && firstReady !== 0 ? head.providerLabel : undefined;
+	const passedOver = because ? { because } : {};
+	const chosen = steps[firstReady];
+	if (chosen) return { label: chosen.providerLabel, fellBack: firstReady > 0, ...passedOver };
+	return lastResort === undefined ? null : { label: lastResort, fellBack: true, ...passedOver };
+}
+
 export function profileViews(view: ProfilesView): ProfileView[] {
 	const providers = new Map(view.providers.map(provider => [provider.id, provider]));
 	const local = providers.get(LOCAL_PROVIDER);
-	const localReady = local?.speak?.ready === true;
+	const onDevice = local?.speak?.ready === true ? (local?.label ?? "On-device voice") : undefined;
 	return view.profiles.map(profile => {
 		const steps = profile.speak.map(step => stepOf(step, providers));
-		const firstReady = steps.findIndex(step => step.ready);
-		const head = steps[0];
-		const because = head && firstReady !== 0 ? head.providerLabel : undefined;
-		const spoken = steps[firstReady];
-		const speaksWith = spoken
-			? { label: spoken.providerLabel, fellBack: firstReady > 0, ...(because ? { because } : {}) }
-			: localReady
-				? { label: local?.label ?? "On-device voice", fellBack: true, ...(because ? { because } : {}) }
-				: null;
+		const live = profile.converse.map(step => liveStepOf(step, providers));
 		return {
 			name: profile.name,
 			layer: profile.layer,
@@ -216,7 +286,9 @@ export function profileViews(view: ProfilesView): ProfileView[] {
 			...(profile.description ? { description: profile.description } : {}),
 			isDefault: view.default?.name === profile.name,
 			steps,
-			speaksWith,
+			speaksWith: choiceOf(steps, onDevice),
+			live,
+			liveWith: choiceOf(live),
 		};
 	});
 }
@@ -241,6 +313,87 @@ export function headline(view: ProfilesView | null): Headline {
 			? `The default voice, ${chosen.name}, speaks with ${chosen.speaksWith.label}${chosen.speaksWith.because ? `: ${chosen.speaksWith.because} is not ready` : ""}.`
 			: `The default voice, ${chosen.name}, speaks with ${chosen.speaksWith.label}.`,
 	};
+}
+
+/** Whether anything on this engine talks live: a provider that does, or a voice that names a live choice. */
+function offersLive(view: ProfilesView): boolean {
+	return view.providers.some(provider => provider.converse !== undefined) || view.profiles.some(profile => profile.converse.length > 0);
+}
+
+/**
+ * The line under the headline about Talk live: which live voice the default voice would open. Null when nothing on this
+ * engine talks live (an older engine, or no live pack installed): the pane says nothing rather than something about a
+ * feature that is not there.
+ */
+export function liveHeadline(view: ProfilesView | null): Headline | null {
+	if (!view) return null;
+	if (!offersLive(view)) return null;
+	const chosen = profileViews(view).find(profile => profile.isDefault);
+	if (!chosen) return null;
+	if (chosen.live.length === 0) {
+		return { tone: "off", text: `Talk live is not set up for the default voice, ${chosen.name}: it names no live voice.` };
+	}
+	if (!chosen.liveWith) return { tone: "warn", text: `Talk live has nothing ready for the default voice, ${chosen.name}.` };
+	return {
+		tone: "ok",
+		text: chosen.liveWith.fellBack
+			? `Talk live uses ${chosen.liveWith.label} for the default voice, ${chosen.name}${chosen.liveWith.because ? `: ${chosen.liveWith.because} is not ready` : ""}.`
+			: `Talk live uses ${chosen.liveWith.label} for the default voice, ${chosen.name}.`,
+	};
+}
+
+/**
+ * Where a Talk live call's microphone audio goes, as a plain sentence the pane SHOWS: a realtime voice is the provider's own
+ * service, so the audio leaves this machine for as long as a call is open. It names the provider the default voice would open
+ * (else says it is the live voice's provider), the same standard as the classifier's disclosure. Null when the pane says
+ * nothing about Live.
+ */
+export function liveDisclosure(view: ProfilesView | null): string | null {
+	if (!view || !offersLive(view)) return null;
+	const label = profileViews(view).find(profile => profile.isDefault)?.liveWith?.label;
+	return `Talking live sends your microphone audio off this machine to ${label ?? "the live voice's provider"} for as long as a call is open.`;
+}
+
+export interface EngineView {
+	/** The right-hand state: what the engine does first (speaks, else talks live). */
+	readonly primary: { readonly tone: Tone; readonly text: string; readonly title?: string };
+	/** The line under its name. */
+	readonly meta: string;
+}
+
+/** `Listening: Needs a download (4 GB)`: the state, and the engine's own words when it is not ready. */
+function said(label: string, verb: Lane, readiness: Readiness): string {
+	const detail = readiness.detail && !readiness.ready ? ` (${readiness.detail})` : "";
+	return `${label}: ${stateLine(readiness, verb).text}${detail}`;
+}
+
+/** The right-hand line of a lane the engine has: its state, and the engine's own words as the tooltip. */
+function laneOf(label: string, verb: Lane, readiness: Readiness): EngineView["primary"] {
+	const state = stateLine(readiness, verb);
+	return { tone: state.tone, text: `${label}: ${state.text}`, ...(readiness.detail ? { title: readiness.detail } : {}) };
+}
+
+/** The right-hand state: what the engine does first (speaks, else talks live). */
+function primaryOf(provider: ProviderRow): EngineView["primary"] {
+	if (provider.speak) return laneOf("Speaking", "speak", provider.speak);
+	if (provider.converse) return laneOf("Live", "live", provider.converse);
+	// A provider that only listens still says plainly that it does not speak.
+	return stateLine(undefined, "speak");
+}
+
+/** The line under the engine's name. */
+function metaOf(provider: ProviderRow): string {
+	const bits: string[] = [];
+	if (provider.listen) bits.push(said("Listening", "listen", provider.listen));
+	// Live is the whole story of a provider that does nothing else; beside speaking it is a second fact.
+	if (provider.converse && provider.speak) bits.push(said("Live", "live", provider.converse));
+	if (bits.length > 0) return bits.join(" · ");
+	return provider.converse ? "Talks live only" : "Speaks only";
+}
+
+/** One speech engine as the pane's list draws it. A provider that only talks live says so instead of "Does not speak". */
+export function engineView(provider: ProviderRow): EngineView {
+	return { primary: primaryOf(provider), meta: metaOf(provider) };
 }
 
 export interface AgentRow {
@@ -349,4 +502,5 @@ export const TUNING_KEYS: readonly TuningKey[] = [
 	{ key: "vocalizer.enhanced", fallback: "on when a voice model is connected", what: "Rewrite replies into spoken prose with the small model." },
 	{ key: "attention.catchUpAfterMinutes", fallback: "60", what: "How long away from an agent before it welcomes you back." },
 	{ key: "attention.chimes", fallback: "on", what: "A soft tone when a message is waiting." },
+	{ key: "live.idleMinutes", fallback: "5", what: "A live call hangs up by itself after this many minutes with nothing said. 0 keeps it open until you end it." },
 ];

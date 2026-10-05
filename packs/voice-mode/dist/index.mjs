@@ -23,6 +23,16 @@ function readStep(value) {
   const voice = text(value.voice);
   return { provider, model, ...voice ? { voice } : {} };
 }
+function readLiveStep(value) {
+  if (!isRecord(value))
+    return;
+  const provider = text(value.provider);
+  if (!provider)
+    return;
+  const model = text(value.model);
+  const voice = text(value.voice);
+  return { provider, ...model ? { model } : {}, ...voice ? { voice } : {} };
+}
 function readProfile(value) {
   if (!isRecord(value))
     return;
@@ -31,7 +41,8 @@ function readProfile(value) {
     return;
   const description = text(value.description);
   const speak = Array.isArray(value.speak) ? value.speak.flatMap((step) => readStep(step) ?? []) : [];
-  return { name, layer: value.layer, speak, ...description ? { description } : {} };
+  const converse = Array.isArray(value.converse) ? value.converse.flatMap((step) => readLiveStep(step) ?? []) : [];
+  return { name, layer: value.layer, speak, converse, ...description ? { description } : {} };
 }
 function readProvider(value) {
   if (!isRecord(value))
@@ -41,7 +52,14 @@ function readProvider(value) {
     return;
   const speak = readReadiness(value.speak);
   const listen = readReadiness(value.listen);
-  return { id, label: text(value.label) ?? id, ...speak ? { speak } : {}, ...listen ? { listen } : {} };
+  const converse = readReadiness(value.converse);
+  return {
+    id,
+    label: text(value.label) ?? id,
+    ...speak ? { speak } : {},
+    ...listen ? { listen } : {},
+    ...converse ? { converse } : {}
+  };
 }
 function readClassifier(value) {
   if (value === null)
@@ -74,9 +92,14 @@ var REASONS = {
   "needs-download": "Needs a download",
   unavailable: "Unavailable"
 };
+var ABSENT = {
+  speak: "Does not speak",
+  listen: "Does not listen",
+  live: "Does not talk live"
+};
 function stateLine(readiness, verb) {
   if (!readiness)
-    return { tone: "off", text: verb === "speak" ? "Does not speak" : "Does not listen" };
+    return { tone: "off", text: ABSENT[verb] };
   if (readiness.ready)
     return { tone: "ok", text: "Ready" };
   const reason = readiness.reason;
@@ -101,17 +124,35 @@ function stepOf(step, providers) {
     ready: state.tone === "ok"
   };
 }
+function liveStepOf(step, providers) {
+  const provider = providers.get(step.provider);
+  const state = provider ? stateLine(provider.converse, "live") : { tone: "warn", text: "Not installed" };
+  const detail = provider?.converse && !provider.converse.ready ? provider.converse.detail : undefined;
+  return {
+    providerLabel: provider?.label ?? step.provider,
+    ...step.voice ? { voice: step.voice } : {},
+    state,
+    ...detail ? { detail } : {},
+    ready: state.tone === "ok"
+  };
+}
+function choiceOf(steps, lastResort) {
+  const firstReady = steps.findIndex((step) => step.ready);
+  const head = steps[0];
+  const because = head && firstReady !== 0 ? head.providerLabel : undefined;
+  const passedOver = because ? { because } : {};
+  const chosen = steps[firstReady];
+  if (chosen)
+    return { label: chosen.providerLabel, fellBack: firstReady > 0, ...passedOver };
+  return lastResort === undefined ? null : { label: lastResort, fellBack: true, ...passedOver };
+}
 function profileViews(view) {
   const providers = new Map(view.providers.map((provider) => [provider.id, provider]));
   const local = providers.get(LOCAL_PROVIDER);
-  const localReady = local?.speak?.ready === true;
+  const onDevice = local?.speak?.ready === true ? local?.label ?? "On-device voice" : undefined;
   return view.profiles.map((profile) => {
     const steps = profile.speak.map((step) => stepOf(step, providers));
-    const firstReady = steps.findIndex((step) => step.ready);
-    const head = steps[0];
-    const because = head && firstReady !== 0 ? head.providerLabel : undefined;
-    const spoken = steps[firstReady];
-    const speaksWith = spoken ? { label: spoken.providerLabel, fellBack: firstReady > 0, ...because ? { because } : {} } : localReady ? { label: local?.label ?? "On-device voice", fellBack: true, ...because ? { because } : {} } : null;
+    const live = profile.converse.map((step) => liveStepOf(step, providers));
     return {
       name: profile.name,
       layer: profile.layer,
@@ -119,7 +160,9 @@ function profileViews(view) {
       ...profile.description ? { description: profile.description } : {},
       isDefault: view.default?.name === profile.name,
       steps,
-      speaksWith
+      speaksWith: choiceOf(steps, onDevice),
+      live,
+      liveWith: choiceOf(live)
     };
   });
 }
@@ -137,6 +180,61 @@ function headline(view) {
     tone: "ok",
     text: chosen.speaksWith.fellBack ? `The default voice, ${chosen.name}, speaks with ${chosen.speaksWith.label}${chosen.speaksWith.because ? `: ${chosen.speaksWith.because} is not ready` : ""}.` : `The default voice, ${chosen.name}, speaks with ${chosen.speaksWith.label}.`
   };
+}
+function offersLive(view) {
+  return view.providers.some((provider) => provider.converse !== undefined) || view.profiles.some((profile) => profile.converse.length > 0);
+}
+function liveHeadline(view) {
+  if (!view)
+    return null;
+  if (!offersLive(view))
+    return null;
+  const chosen = profileViews(view).find((profile) => profile.isDefault);
+  if (!chosen)
+    return null;
+  if (chosen.live.length === 0) {
+    return { tone: "off", text: `Talk live is not set up for the default voice, ${chosen.name}: it names no live voice.` };
+  }
+  if (!chosen.liveWith)
+    return { tone: "warn", text: `Talk live has nothing ready for the default voice, ${chosen.name}.` };
+  return {
+    tone: "ok",
+    text: chosen.liveWith.fellBack ? `Talk live uses ${chosen.liveWith.label} for the default voice, ${chosen.name}${chosen.liveWith.because ? `: ${chosen.liveWith.because} is not ready` : ""}.` : `Talk live uses ${chosen.liveWith.label} for the default voice, ${chosen.name}.`
+  };
+}
+function liveDisclosure(view) {
+  if (!view || !offersLive(view))
+    return null;
+  const label = profileViews(view).find((profile) => profile.isDefault)?.liveWith?.label;
+  return `Talking live sends your microphone audio off this machine to ${label ?? "the live voice's provider"} for as long as a call is open.`;
+}
+function said(label, verb, readiness) {
+  const detail = readiness.detail && !readiness.ready ? ` (${readiness.detail})` : "";
+  return `${label}: ${stateLine(readiness, verb).text}${detail}`;
+}
+function laneOf(label, verb, readiness) {
+  const state = stateLine(readiness, verb);
+  return { tone: state.tone, text: `${label}: ${state.text}`, ...readiness.detail ? { title: readiness.detail } : {} };
+}
+function primaryOf(provider) {
+  if (provider.speak)
+    return laneOf("Speaking", "speak", provider.speak);
+  if (provider.converse)
+    return laneOf("Live", "live", provider.converse);
+  return stateLine(undefined, "speak");
+}
+function metaOf(provider) {
+  const bits = [];
+  if (provider.listen)
+    bits.push(said("Listening", "listen", provider.listen));
+  if (provider.converse && provider.speak)
+    bits.push(said("Live", "live", provider.converse));
+  if (bits.length > 0)
+    return bits.join(" · ");
+  return provider.converse ? "Talks live only" : "Speaks only";
+}
+function engineView(provider) {
+  return { primary: primaryOf(provider), meta: metaOf(provider) };
 }
 function readAgents(raw) {
   if (!Array.isArray(raw))
@@ -191,7 +289,8 @@ var TUNING_KEYS = [
   { key: "vocalizer.mode", fallback: "conversational", what: "Conversational scales the spoken result to what matters; Brief keeps it to one or two lines. Neither reads the whole summary." },
   { key: "vocalizer.enhanced", fallback: "on when a voice model is connected", what: "Rewrite replies into spoken prose with the small model." },
   { key: "attention.catchUpAfterMinutes", fallback: "60", what: "How long away from an agent before it welcomes you back." },
-  { key: "attention.chimes", fallback: "on", what: "A soft tone when a message is waiting." }
+  { key: "attention.chimes", fallback: "on", what: "A soft tone when a message is waiting." },
+  { key: "live.idleMinutes", fallback: "5", what: "A live call hangs up by itself after this many minutes with nothing said. 0 keeps it open until you end it." }
 ];
 
 // src/styles.ts
@@ -265,6 +364,13 @@ var VOICE_PANE_CSS = `
 	color: var(--fr-text-3);
 	font-size: var(--fr-fs-xs);
 }
+[data-slot="voice-pane"] .vm-livehead {
+	margin-top: 8px;
+	color: var(--fr-text-3);
+	font-size: var(--fr-fs-xs);
+}
+[data-slot="voice-pane"] .vm-livehead span[data-tone="ok"] { color: var(--fr-add); }
+[data-slot="voice-pane"] .vm-livehead span[data-tone="warn"] { color: var(--fr-warn); }
 [data-slot="voice-pane"] .vm-notice {
 	margin-top: 2px;
 	color: var(--fr-text-2);
@@ -395,7 +501,41 @@ function Profile({ profile }) {
                 })
               ]
             }, `${step.providerLabel}:${step.model}:${index}`))
-          })
+          }),
+          profile.live.length > 0 ? /* @__PURE__ */ jsxs(Fragment, {
+            children: [
+              /* @__PURE__ */ jsxs("div", {
+                className: "vm-livehead",
+                children: [
+                  "Talk live ·",
+                  " ",
+                  /* @__PURE__ */ jsx("span", {
+                    "data-tone": profile.liveWith ? "ok" : "warn",
+                    children: profile.liveWith ? profile.liveWith.fellBack ? `falls back to ${profile.liveWith.label}` : `uses ${profile.liveWith.label}` : "nothing ready yet"
+                  })
+                ]
+              }),
+              /* @__PURE__ */ jsx("ul", {
+                className: "vm-chain",
+                children: profile.live.map((step, index) => /* @__PURE__ */ jsxs("li", {
+                  children: [
+                    /* @__PURE__ */ jsxs("span", {
+                      children: [
+                        step.providerLabel,
+                        step.voice ? ` · ${step.voice}` : ""
+                      ]
+                    }),
+                    /* @__PURE__ */ jsx("span", {
+                      className: "vm-state",
+                      "data-tone": step.state.tone,
+                      title: step.detail,
+                      children: step.state.text
+                    })
+                  ]
+                }, `${step.providerLabel}:${step.voice ?? ""}:${index}`))
+              })
+            ]
+          }) : null
         ]
       }),
       /* @__PURE__ */ jsx("div", {
@@ -415,8 +555,7 @@ function Engines({ view }) {
   return /* @__PURE__ */ jsx("ul", {
     className: "vm-list",
     children: view.providers.map((provider) => {
-      const speak = stateLine(provider.speak, "speak");
-      const listen = stateLine(provider.listen, "listen");
+      const engine = engineView(provider);
       return /* @__PURE__ */ jsxs("li", {
         className: "vm-row",
         children: [
@@ -429,15 +568,15 @@ function Engines({ view }) {
               }),
               /* @__PURE__ */ jsx("div", {
                 className: "vm-meta",
-                children: provider.listen ? `Listening: ${listen.text}${provider.listen.detail && !provider.listen.ready ? ` (${provider.listen.detail})` : ""}` : "Speaks only"
+                children: engine.meta
               })
             ]
           }),
           /* @__PURE__ */ jsx("div", {
             className: "vm-state",
-            "data-tone": speak.tone,
-            title: provider.speak?.detail,
-            children: provider.speak ? `Speaking: ${speak.text}` : speak.text
+            "data-tone": engine.primary.tone,
+            title: engine.primary.title,
+            children: engine.primary.text
           })
         ]
       }, provider.id);
@@ -455,6 +594,8 @@ function VoicePane({ store }) {
   const voices = useMemo(() => profiles ? profileViews(profiles) : [], [profiles]);
   const top = headline(profiles);
   const defaultName = profiles?.default?.name;
+  const live = liveHeadline(profiles);
+  const liveEgress = liveDisclosure(profiles);
   return /* @__PURE__ */ jsxs("div", {
     "data-slot": "voice-pane",
     children: [
@@ -472,6 +613,22 @@ function VoicePane({ store }) {
               })
             ]
           }),
+          live ? /* @__PURE__ */ jsxs("div", {
+            className: "vm-headline",
+            role: "status",
+            children: [
+              /* @__PURE__ */ jsx(Dot, {
+                tone: live.tone
+              }),
+              /* @__PURE__ */ jsx("span", {
+                children: live.text
+              })
+            ]
+          }) : null,
+          liveEgress ? /* @__PURE__ */ jsx("p", {
+            className: "vm-notice",
+            children: liveEgress
+          }) : null,
           /* @__PURE__ */ jsx("p", {
             className: "vm-sub",
             children: "Open voice options from the small dot left of the composer microphone to turn reply voice on. The microphone itself is for dictation. Voice mode can speak with any agent in any space."
@@ -634,6 +791,24 @@ function VoicePane({ store }) {
                     children: ".inso/voice-profiles/"
                   }),
                   ". It appears above as soon as it is saved."
+                ]
+              }),
+              /* @__PURE__ */ jsxs("li", {
+                children: [
+                  "Choose who talks live with a ",
+                  /* @__PURE__ */ jsx("code", {
+                    children: "converse:"
+                  }),
+                  " list in a voice's ",
+                  /* @__PURE__ */ jsx("code", {
+                    children: ".yml"
+                  }),
+                  ", for example",
+                  " ",
+                  /* @__PURE__ */ jsx("code", {
+                    children: "- { provider: codex-live, voice: sol }"
+                  }),
+                  ": the first ready choice opens the call."
                 ]
               }),
               /* @__PURE__ */ jsxs("li", {

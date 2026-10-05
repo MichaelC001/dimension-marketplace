@@ -11,13 +11,15 @@
 // what each would really speak with, and how to change any of it.
 import { useEffect, useMemo, useSyncExternalStore } from "react";
 import {
+	engineView,
 	headline,
+	liveDisclosure,
+	liveHeadline,
 	modelRows,
 	profileViews,
 	readAgents,
 	readModelsFact,
 	readProfilesFact,
-	stateLine,
 	TUNING_KEYS,
 	type ProfileView,
 	type ProfilesView,
@@ -85,6 +87,33 @@ function Profile({ profile }: { readonly profile: ProfileView }) {
 						</li>
 					))}
 				</ul>
+				{profile.live.length > 0 ? (
+					<>
+						<div className="vm-livehead">
+							Talk live ·{" "}
+							<span data-tone={profile.liveWith ? "ok" : "warn"}>
+								{profile.liveWith
+									? profile.liveWith.fellBack
+										? `falls back to ${profile.liveWith.label}`
+										: `uses ${profile.liveWith.label}`
+									: "nothing ready yet"}
+							</span>
+						</div>
+						<ul className="vm-chain">
+							{profile.live.map((step, index) => (
+								<li key={`${step.providerLabel}:${step.voice ?? ""}:${index}`}>
+									<span>
+										{step.providerLabel}
+										{step.voice ? ` · ${step.voice}` : ""}
+									</span>
+									<span className="vm-state" data-tone={step.state.tone} title={step.detail}>
+										{step.state.text}
+									</span>
+								</li>
+							))}
+						</ul>
+					</>
+				) : null}
 			</div>
 			<div className="vm-state vm-meta" data-tone={profile.speaksWith ? "ok" : "warn"}>
 				{profile.speaksWith
@@ -102,20 +131,15 @@ function Engines({ view }: { readonly view: ProfilesView }) {
 	return (
 		<ul className="vm-list">
 			{view.providers.map(provider => {
-				const speak = stateLine(provider.speak, "speak");
-				const listen = stateLine(provider.listen, "listen");
+				const engine = engineView(provider);
 				return (
 					<li className="vm-row" key={provider.id}>
 						<div className="vm-grow">
 							<div className="vm-name">{provider.label}</div>
-							<div className="vm-meta">
-								{provider.listen
-									? `Listening: ${listen.text}${provider.listen.detail && !provider.listen.ready ? ` (${provider.listen.detail})` : ""}`
-									: "Speaks only"}
-							</div>
+							<div className="vm-meta">{engine.meta}</div>
 						</div>
-						<div className="vm-state" data-tone={speak.tone} title={provider.speak?.detail}>
-							{provider.speak ? `Speaking: ${speak.text}` : speak.text}
+						<div className="vm-state" data-tone={engine.primary.tone} title={engine.primary.title}>
+							{engine.primary.text}
 						</div>
 					</li>
 				);
@@ -136,6 +160,8 @@ export default function VoicePane({ store }: VoicePaneProps) {
 	const voices = useMemo(() => (profiles ? profileViews(profiles) : []), [profiles]);
 	const top = headline(profiles);
 	const defaultName = profiles?.default?.name;
+	const live = liveHeadline(profiles);
+	const liveEgress = liveDisclosure(profiles);
 
 	return (
 		<div data-slot="voice-pane">
@@ -144,6 +170,13 @@ export default function VoicePane({ store }: VoicePaneProps) {
 					<Dot tone={top.tone} />
 					<span>{top.text}</span>
 				</div>
+				{live ? (
+					<div className="vm-headline" role="status">
+						<Dot tone={live.tone} />
+						<span>{live.text}</span>
+					</div>
+				) : null}
+				{liveEgress ? <p className="vm-notice">{liveEgress}</p> : null}
 				<p className="vm-sub">
 					Open voice options from the small dot left of the composer microphone to turn reply voice on. The microphone itself is for dictation. Voice mode can speak with any agent in any space.
 				</p>
@@ -225,6 +258,10 @@ export default function VoicePane({ store }: VoicePaneProps) {
 					<li>
 						Add a voice by dropping a <code>&lt;name&gt;.yml</code> into <code>voice-profiles/</code> beside your agents, or
 						into the workspace's <code>.inso/voice-profiles/</code>. It appears above as soon as it is saved.
+					</li>
+					<li>
+						Choose who talks live with a <code>converse:</code> list in a voice's <code>.yml</code>, for example{" "}
+						<code>{"- { provider: codex-live, voice: sol }"}</code>: the first ready choice opens the call.
 					</li>
 					<li>
 						Tune how it behaves in the <code>voice</code> block of the same <code>config.json</code>:
