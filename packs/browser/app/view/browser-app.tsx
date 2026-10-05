@@ -5,15 +5,17 @@
 // never a URL).
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { App } from "@modelcontextprotocol/ext-apps";
-import type { BrowserAction, BrowserFrame, BrowserState, ControlMode, NewProfileRequest, OpenBrowserListing, ProfileListing, TabOp } from "../../src/contracts";
+import type { BrowserAction, BrowserFrame, BrowserState, ControlMode, NewProfileRequest, OpenBrowserListing, ProfileConsent, ProfileListing, TabOp } from "../../src/contracts";
 import { Icon } from "@fraym/ui/icons";
 import { addressParts, tabLabel } from "../../src/address";
 import { AgentPill, ControlPill, ResultToast, useAgentActive } from "./agent-activity";
 import { AnnotationSeat } from "./annotation-seat";
-import { BrowserClient, failureText, openFailureText, type ToolMount } from "./browser-client";
+import { BrowserClient, failureText, type OpenAttempt, openFailureText, type ToolMount } from "./browser-client";
 import { PageView } from "./page-view";
+import { matchProfiles } from "../../src/profile-meta";
 import { DEFAULT_PROFILE, RELAY_PROFILE } from "../../src/profile-name";
 import { BlankTab, StartPage } from "./start-page";
+import { offered, type ProfileSwitcherProps } from "./profile-menu";
 import { TabStrip } from "./tab-strip";
 import { PublishBar } from "./publish-bar";
 import { type OmniboxHandle, Toolbar } from "./toolbar";
@@ -28,6 +30,20 @@ interface Notice {
 
 /** Actions that start a page load; the View shows them loading immediately. */
 const NAVIGATION: Record<string, true> = { navigate: true, reload: true, back: true, forward: true };
+
+/** What a refused open is about, as the card for it shows it. `refused.profile` is resolved the way the runtime does: by folder name or label among EVERY
+ *  saved profile (a pending request for a profile not yet on disk counts too), and it must name exactly one; only then is that one's PENDING card the
+ *  card the open is about. The address is the one the open carried. `null` while the profiles are unread, while it names none or several, or while that
+ *  profile has no card on screen. */
+function pinnedOpen(refused: OpenAttempt | null, consents: readonly ProfileConsent[], profiles: readonly ProfileListing[] | null): OpenAttempt | null {
+	if (refused === null || profiles === null) return null;
+	const pending = consents.filter(request => request.status === "pending");
+	const known = new Map(offered(profiles).map(profile => [profile.name, { slug: profile.name, label: profile.label }] as const));
+	for (const request of pending) if (!known.has(request.name)) known.set(request.name, { slug: request.name, label: request.label });
+	const matches = matchProfiles(refused.profile, [...known.values()]);
+	if (matches.length !== 1 || !pending.some(request => request.name === matches[0].slug)) return null;
+	return { profile: matches[0].slug, ...(refused.url === undefined ? {} : { url: refused.url }) };
+}
 
 export interface BrowserAppProps {
 	readonly app: App;
@@ -45,6 +61,7 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 	const [profiles, setProfiles] = useState<readonly ProfileListing[] | null>(null);
 	/** The browsers this chat holds that are not saved profiles (a Private one, Your Chrome): read with the profiles. */
 	const [browsers, setBrowsers] = useState<readonly OpenBrowserListing[]>([]);
+	const [consents, setConsents] = useState<readonly ProfileConsent[]>([]);
 	const [profilesError, setProfilesError] = useState<string | null>(null);
 	/** The profile being opened from the menu right now (`""`: a Private browser). */
 	const [switching, setSwitching] = useState<string | null>(null);
@@ -58,6 +75,8 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 	const [openError, setOpenError] = useState<string | null>(null);
 	/** The last browser ended by itself: the start page says so once. */
 	const [closed, setClosed] = useState(false);
+	/** The saved-profile open a host-issued call (a layout pin) asked for and the runtime refused: the profile menu's Allow finishes it. */
+	const [refused, setRefused] = useState<OpenAttempt | null>(null);
 
 	const [annotating, setAnnotating] = useState(false);
 	/** The page frozen into one picture for the human to mark; null until it is captured. */
@@ -73,6 +92,8 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 	const omniRef = useRef<OmniboxHandle | null>(null);
 	const boundRef = useRef<string | null>(null);
 	boundRef.current = browserId;
+	/** Finishes the open of the card the person pressed Allow on (`shown`: what that card said, read at the press). Set each render, so it reads the current picker. */
+	const resumeRef = useRef<(approved: string, shown: OpenAttempt | null) => void>(() => undefined);
 	const mountedRef = useRef(true);
 	useEffect(() => {
 		mountedRef.current = true;
@@ -149,11 +170,17 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 		setSeenSeq(toolState.seq);
 		if ("error" in toolState) {
 			// Told on the start page only: a live browser is never covered by the
-			// failure of a call that was meant to open another.
-			if (browserId === null) setOpenError(toolState.error);
+			// failure of a call that was meant to open another. A refused saved-profile
+			// open is remembered too: the approval card that asks the person about it
+			// says what Allow will also open.
+			if (browserId === null) {
+				setOpenError(toolState.error);
+				setRefused(toolState.attempted ?? null);
+			}
 		} else {
 			setOpened(toolState.state);
 			setOpenError(null);
+			setRefused(null);
 			if (toolState.state.browserId !== browserId) {
 				setBrowserId(toolState.state.browserId);
 				setClosed(false);
@@ -185,6 +212,7 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 				if (!mountedRef.current || profilesSeq.current !== seq) return;
 				setProfiles(answer.profiles);
 				setBrowsers(answer.browsers);
+				setConsents(answer.consents);
 				setProfilesError(null);
 			},
 			cause => {
@@ -197,6 +225,47 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 	useEffect(() => {
 		if (browserId === null) loadProfiles();
 	}, [loadProfiles, browserId]);
+	useEffect(() => {
+		if (!menuOpen && browserId !== null) return;
+		const timer = setInterval(loadProfiles, 2_000);
+		return () => clearInterval(timer);
+	}, [menuOpen, browserId, loadProfiles]);
+
+	// The card for the refused open, once it is on screen. Until then (or when the open names no single pending profile) there is nothing to say
+	// and nothing to finish.
+	const pinned = useMemo(() => pinnedOpen(refused, consents, profiles), [refused, consents, profiles]);
+	const pinnedProfile = pinned?.profile ?? null;
+	// The profile that card is about goes in the picker once, when the card appears (and again for a new refusal); after that the picker is the person's.
+	// Only a refusal that raised a card does this: a held profile or a browser that failed to start leaves Private and Your Chrome as the person chose.
+	useEffect(() => {
+		if (pinnedProfile === null) return;
+		setProfile(pinnedProfile);
+		setPrivate(false);
+		setOwnChrome(false);
+	}, [refused, pinnedProfile]);
+	// A card that was shown and is gone (denied, expired, answered somewhere else) takes its address with it, so a later request for the same profile
+	// never inherits it.
+	const shownFor = useRef<OpenAttempt | null>(null);
+	useEffect(() => {
+		if (refused === null) return;
+		if (pinned !== null) shownFor.current = refused;
+		else if (shownFor.current === refused) setRefused(null);
+	}, [refused, pinned]);
+	const shownRef = useRef<OpenAttempt | null>(null);
+	shownRef.current = pinned;
+	const onConsent = useCallback<ProfileSwitcherProps["onConsent"]>((name, decision, scope, expectedSubject) => {
+		const shown = shownRef.current;
+		if (boundRef.current === null) setOpenError(null);
+		void client.decideProfileConsent(name, decision, scope, expectedSubject).then(() => {
+			loadProfiles();
+			if (decision === "allow" && mountedRef.current) resumeRef.current(name, shown);
+		}, cause => {
+			if (!mountedRef.current) return;
+			if (boundRef.current === null) setOpenError(failureText(cause));
+			else say("error", failureText(cause));
+			loadProfiles();
+		});
+	}, [client, loadProfiles, say]);
 
 	// Remember which task this View saw running, so its end gets a toast.
 	useEffect(() => {
@@ -226,6 +295,7 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 
 	/** Show `next` in this View: a browser just opened, or the one the person switched to. */
 	const adopt = (next: BrowserState) => {
+		setRefused(null);
 		setBrowserId(next.browserId);
 		setOpened(next);
 		setClosed(false);
@@ -235,13 +305,14 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 		input.reset();
 	};
 
-	const open = async (url: string) => {
+	/** Open a browser here: the picker's choice, or `approved` (a saved profile) when a refused pin's profile was just allowed. */
+	const open = async (url: string, approved?: string) => {
 		setOpening(true);
 		setOpenError(null);
 		try {
 			const next = await client.open({
-				engine: ownChrome ? "chrome-relay" : "chromium",
-				profile: ownChrome ? RELAY_PROFILE : isPrivate ? undefined : profile,
+				engine: approved === undefined && ownChrome ? "chrome-relay" : "chromium",
+				profile: approved ?? (ownChrome ? RELAY_PROFILE : isPrivate ? undefined : profile),
 				url: url.length > 0 ? url : undefined,
 			});
 			if (mountedRef.current) adopt(next);
@@ -250,6 +321,14 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 		} finally {
 			if (mountedRef.current) setOpening(false);
 		}
+	};
+	resumeRef.current = (approved, shown) => {
+		// What opens is what the card said when the person pressed Allow, never a refusal that landed after the press.
+		if (shown === null || shown.profile !== approved || boundRef.current !== null || opening) return;
+		// The picker still names that profile: the person has not moved on to something else.
+		if (isPrivate || ownChrome || profile !== shown.profile) return;
+		setRefused(null);
+		void open(shown.url ?? "", shown.profile);
 	};
 
 	// Switching profile opens that profile's browser here, as Chrome does, and leaves the one it was on: the runtime closes it unless an
@@ -549,6 +628,9 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 			<StartPage
 				profiles={profiles}
 				profilesError={profilesError}
+				consents={consents}
+				onConsent={onConsent}
+				opens={pinned}
 				profile={profile}
 				isPrivate={isPrivate}
 				ownChrome={ownChrome}
@@ -633,6 +715,8 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 					canTakeOver,
 					onMenu: setMenuOpen,
 					onOpen: loadProfiles,
+					consents,
+					onConsent,
 					browsers: browsers.filter(item => item.browserId !== browserId),
 					onSwitch: target => void switchProfile(target),
 					onSwitchBrowser: target => void switchBrowser(target),

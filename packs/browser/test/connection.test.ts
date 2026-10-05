@@ -10,6 +10,9 @@
  *  local publish fixture over an in-memory MCP transport, capturing what the
  *  host would receive.
  */
+import { randomBytes } from "node:crypto";
+import { z } from "zod";
+import { ARTIFACTORY_HOST_CONTEXT_EXTENSION_ID, ARTIFACTORY_HOST_CONTEXT_META_KEY, ARTIFACTORY_HOST_CONTEXT_READ_METHOD } from "@dimension/sdk/artifactory";
 import * as fs from "node:fs";
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -92,6 +95,98 @@ describe("connection report", () => {
 		expect(await readFile(join(dir, "connections.json"), "utf8")).toBe(before);
 	});
 
+	test("failed lock initialization releases only its own file so the same profile can be acquired and released again", async () => {
+		const store = await storeAt();
+		const slug = "lock-init-failure";
+		const path = join(store.ensureProfile(slug), "runtime.lock");
+		const realFsync = fs.fsyncSync;
+		const fault = Object.assign(new Error("lock initialization I/O failure"), { code: "EIO" });
+		let injected = false;
+		const syncing = spyOn(fs, "fsyncSync").mockImplementation(fd => {
+			let owned: fs.BigIntStats;
+			let current: fs.BigIntStats;
+			try {
+				owned = fs.fstatSync(fd, { bigint: true });
+				current = fs.lstatSync(path, { bigint: true });
+			} catch {
+				return realFsync(fd);
+			}
+			if (!injected && owned.dev === current.dev && owned.ino === current.ino) {
+				injected = true;
+				throw fault;
+			}
+			return realFsync(fd);
+		});
+		let failed: unknown;
+		try {
+			try {
+				store.acquireLock(slug);
+			} catch (error) {
+				failed = error;
+			}
+		} finally {
+			syncing.mockRestore();
+		}
+		expect(failed).toBe(fault);
+		const acquired = store.acquireLock(slug);
+		expect(store.heldElsewhere(slug)).toBe(true);
+		store.releaseLock(acquired);
+		expect(store.heldElsewhere(slug)).toBe(false);
+		expect(fs.existsSync(path)).toBe(false);
+	});
+
+	test("failed lock initialization and release of the old token preserve a replacement owner's lock", async () => {
+		const store = await storeAt();
+		const slug = "lock-init-replaced";
+		const path = join(store.ensureProfile(slug), "runtime.lock");
+		const replacement = { pid: process.pid, token: "0".repeat(32), at: new Date().toISOString() };
+		const realFsync = fs.fsyncSync;
+		const fault = Object.assign(new Error("lock initialization I/O failure"), { code: "EIO" });
+		let originalToken: string | undefined;
+		const syncing = spyOn(fs, "fsyncSync").mockImplementation(fd => {
+			let owned: fs.BigIntStats;
+			let current: fs.BigIntStats;
+			try {
+				owned = fs.fstatSync(fd, { bigint: true });
+				current = fs.lstatSync(path, { bigint: true });
+			} catch {
+				return realFsync(fd);
+			}
+			if (originalToken === undefined && owned.dev === current.dev && owned.ino === current.ino) {
+				originalToken = z.object({ token: z.string() }).parse(JSON.parse(fs.readFileSync(path, "utf8"))).token;
+				fs.unlinkSync(path);
+				replacement.token = `${originalToken[0] === "0" ? "1" : "0"}${originalToken.slice(1)}`;
+				fs.writeFileSync(path, `${JSON.stringify(replacement)}\n`, { flag: "wx", mode: 0o600 });
+				throw fault;
+			}
+			return realFsync(fd);
+		});
+		let failed: unknown;
+		try {
+			try {
+				store.acquireLock(slug);
+			} catch (error) {
+				failed = error;
+			}
+		} finally {
+			syncing.mockRestore();
+		}
+		expect(failed).toBe(fault);
+		expect(JSON.parse(fs.readFileSync(path, "utf8"))).toEqual(replacement);
+		let blocked: unknown;
+		try {
+			store.acquireLock(slug);
+		} catch (error) {
+			blocked = error;
+		}
+		expect(blocked).toMatchObject({ code: "profile_locked" });
+		if (originalToken === undefined) throw new Error("the original lock was not initialized");
+		store.releaseLock({ path, token: originalToken });
+		expect(JSON.parse(fs.readFileSync(path, "utf8"))).toEqual(replacement);
+		store.releaseLock({ path, token: replacement.token });
+		expect(fs.existsSync(path)).toBe(false);
+	});
+
 	test("an observed sign-out sets signedIn:false, and a deleted profile leaves the report", async () => {
 		const store = await storeAt();
 		store.recordConnection("traction-x-acme", "x.com", { signedIn: true, account: "@acme", observedAt: T });
@@ -170,7 +265,7 @@ interface ToolResult {
 
 interface Session {
 	server: McpServer;
-	call: (name: string, args: Record<string, unknown>) => Promise<ToolResult>;
+	call: (name: string, args: Record<string, unknown>, caller?: "model" | "app") => Promise<ToolResult>;
 	reports: Captured[];
 	/** The first captured report (from `after` on) that satisfies `accept`. */
 	report: (accept: (report: ConnectionReport) => boolean, after?: number) => Promise<ConnectionReport>;
@@ -180,7 +275,7 @@ interface Session {
 	rootDir: string;
 }
 
-async function session(profile: string, seed?: (store: ProfileStore) => void): Promise<Session> {
+async function session(profile: string, seed?: (store: ProfileStore) => void, openerCaller: "model" | "app" = "model"): Promise<Session> {
 	const fixture = startPublishFixture();
 	fixtures.push(fixture);
 	const rootDir = await createRoot();
@@ -194,7 +289,13 @@ async function session(profile: string, seed?: (store: ProfileStore) => void): P
 	const reports: Captured[] = [];
 	// Each waiter is re-checked on every notification: the test awaits the report itself, never a guessed delay.
 	const waiters: Array<() => void> = [];
-	const client = new Client({ name: "connection-test", version: "0.0.0" });
+	const client = new Client({ name: "connection-test", version: "0.0.0" }, { capabilities: { extensions: { [ARTIFACTORY_HOST_CONTEXT_EXTENSION_ID]: {} } } });
+	const sessionId = "connection-chat";
+	const token = randomBytes(32).toString("hex");
+	client.setRequestHandler(z.object({ method: z.literal(ARTIFACTORY_HOST_CONTEXT_READ_METHOD), params: z.object({ sessionId: z.string(), token: z.string() }) }), async request => {
+		if (request.params.sessionId !== sessionId || request.params.token !== token) throw new Error("Unknown host context");
+		return { active: true, sessionId };
+	});
 	client.fallbackNotificationHandler = async (notification) => {
 		reports.push(notification as unknown as Captured);
 		for (const wake of waiters.splice(0)) wake();
@@ -202,7 +303,11 @@ async function session(profile: string, seed?: (store: ProfileStore) => void): P
 	const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
 	await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
 	clients.push(client);
-	const call = async (name: string, args: Record<string, unknown>) => (await client.callTool({ name, arguments: args })) as ToolResult;
+	const call = async (name: string, args: Record<string, unknown>, caller: "model" | "app" = "model") => (await client.callTool({ name, arguments: args, _meta: {
+		"ai.insodimension/caller": caller,
+		"ai.insodimension/session": { sessionId },
+		[ARTIFACTORY_HOST_CONTEXT_META_KEY]: { sessionId, token },
+	} })) as ToolResult;
 	const report = async (accept: (report: ConnectionReport) => boolean, after = 0): Promise<ConnectionReport> => {
 		for (;;) {
 			const found = reports.slice(after).find((note) => note.method === METHOD && note.params.report !== null && accept(note.params.report));
@@ -212,7 +317,7 @@ async function session(profile: string, seed?: (store: ProfileStore) => void): P
 			await promise;
 		}
 	};
-	const opened = await call("browser_open", { profile });
+	const opened = await call("browser_open", { profile }, openerCaller);
 	expect(opened.isError).toBeFalsy();
 	const browserId = opened.structuredContent?.browserId as string;
 	await perform(runtime, browserId, { kind: "navigate", url: fixture.url("/login") });
@@ -340,7 +445,15 @@ describeWithChrome("the server's connection report", () => {
 			const PASSWORD = "Zq7kPw9Lr4tVb8eXm2Na";
 			const s = await session("acme", (store) => {
 				fs.writeFileSync(join(store.ensureProfile("acme"), "credentials.json"), `${JSON.stringify({ version: 1, origins: { "https://example.com": PASSWORD } })}\n`);
-			});
+			}, "app");
+			expect((await s.call("browser_close", { browserId: s.browserId }, "app")).isError).toBeFalsy();
+			expect((await s.call("browser_open", { profile: "acme" }, "model")).isError).toBe(true);
+			expect((await s.call("browser_profile_consent", { name: "acme", decision: "allow", scope: "chat" }, "app")).isError).toBeFalsy();
+			const adopted = await s.call("browser_open", { profile: "acme" }, "model");
+			expect(adopted.isError).toBeFalsy();
+			s.browserId = adopted.structuredContent?.browserId as string;
+			// Chrome keeps no session cookie across a close: the reopened browser signs in again, as the first one did in `session`.
+			expect((await s.call("browser_act", { browserId: s.browserId, actions: [{ kind: "navigate", url: s.fixture.url("/login") }] }, "model")).isError).toBeFalsy();
 			const revealed = recipe(s.fixture, { composeUrl: s.fixture.url(`/compose?v=nav&shown=${encodeURIComponent(`Your new password is ${PASSWORD}`)}`), account: "#shown" });
 			const onDisk = (): string => fs.readFileSync(join(s.store.profileDir("acme"), "connections.json"), "utf8");
 

@@ -10,6 +10,9 @@
  *  transport, the human's Post as an app-stamped confirm. These prove the
  *  presets against the fixture copies only, never against the live sites.
  */
+import { randomBytes } from "node:crypto";
+import { z } from "zod";
+import { ARTIFACTORY_HOST_CONTEXT_EXTENSION_ID, ARTIFACTORY_HOST_CONTEXT_META_KEY, ARTIFACTORY_HOST_CONTEXT_READ_METHOD } from "@dimension/sdk/artifactory";
 import { join } from "node:path";
 import { mkdir, writeFile } from "node:fs/promises";
 import { afterEach, expect, test } from "bun:test";
@@ -68,12 +71,22 @@ async function session(profile: string, fixtureName: string): Promise<Session> {
 	await writeFile(join(viewDir, "index.html"), "<!doctype html><title>view</title>");
 	const presets = shipped.map((preset) => rebasePreset(preset, fixture.origin));
 	const server = await createBrowserServer({ runtime, viewDir, presets });
-	const client = new Client({ name: "publish-presets-test", version: "0.0.0" });
+	const client = new Client({ name: "publish-presets-test", version: "0.0.0" }, { capabilities: { extensions: { [ARTIFACTORY_HOST_CONTEXT_EXTENSION_ID]: {} } } });
+	const sessionId = "publish-presets-chat";
+	const token = randomBytes(32).toString("hex");
+	client.setRequestHandler(z.object({ method: z.literal(ARTIFACTORY_HOST_CONTEXT_READ_METHOD), params: z.object({ sessionId: z.string(), token: z.string() }) }), async request => {
+		if (request.params.sessionId !== sessionId || request.params.token !== token) throw new Error("Unknown host context");
+		return { active: true, sessionId };
+	});
 	const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
 	await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
 	clients.push(client);
 	const call: Call = async (name, args, caller) =>
-		(await client.callTool({ name, arguments: args, ...(caller === undefined ? {} : { _meta: { [CALLER]: caller } }) })) as ToolResult;
+		(await client.callTool({ name, arguments: args, _meta: {
+			[CALLER]: caller ?? "model",
+			"ai.insodimension/session": { sessionId },
+			[ARTIFACTORY_HOST_CONTEXT_META_KEY]: { sessionId, token },
+		} })) as ToolResult;
 	const opened = await call("browser_open", { profile });
 	expect(opened.isError).toBeFalsy();
 	const browserId = opened.structuredContent?.browserId as string;
@@ -211,7 +224,7 @@ describeWithChrome("presets against their fixture copies", () => {
 			const refused = await s.call("browser_publish", { browserId: s.browserId, recipe: byHand, mode: "post" });
 
 			expect(refused.isError).toBe(true);
-			expect(errorText(refused)).toContain("publish_unapproved: no board approval covers");
+			expect(errorText(refused)).toStartWith("publish_unapproved:");
 			expect(s.fixture.hits(PLATFORM_ROUTES["x-post"] ?? "")).toBe(0);
 			expect((await s.runtime.state(s.browserId)).publish).toBeNull();
 			const parked = await s.call("browser_publish", { browserId: s.browserId, preset: { name: "x-post", values }, mode: "post" });

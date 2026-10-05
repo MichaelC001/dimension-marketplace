@@ -10,4 +10,8 @@ dist/
 .dev/
 # The browser pack's Python task worker environment (`cd packs/browser/python && uv sync`).
 packs/browser/python/.venv/
+# Browser pack test fixtures bundle a listener into a temp dir inside the pack (Node must resolve
+# node_modules from there); a run killed before its afterAll leaves one behind.
+packs/browser/.relay-host-*/
+packs/browser/.stream-host-*/
 __pycache__/

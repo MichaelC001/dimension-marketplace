@@ -132,7 +132,7 @@ describeWithChrome("eval", () => {
 		async () => {
 			const fixture = startFixture();
 			const { runtime } = await createRuntime();
-			const { browserId } = await runtime.open({ profile: "signed-in", viewport: VIEWPORT });
+			const { browserId } = await runtime.open({ profile: "signed-in", viewport: VIEWPORT }, { caller: "app" });
 			await runtime.act(browserId, { kind: "navigate", url: fixture.url("/app") });
 
 			const code = await failureCode(() => runtime.actMany(browserId, [{ kind: "navigate", url: fixture.url("/page2") }, { kind: "eval", expression: "document.cookie" }]));

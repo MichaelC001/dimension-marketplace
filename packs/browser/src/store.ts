@@ -16,13 +16,14 @@
  *      after a server that died before it could delete them. They are never
  *      profiles: no lock, no listing, no observations.
  */
-import { randomBytes } from "node:crypto";
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import { closeSync, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { type ConnectionObservations, keepFirst, type SiteObservation, type SiteObservations } from "./connection.js";
 import { PROFILE_NAME, profileSlug } from "./profile-name.js";
+import type { ArtifactoryLoopPrincipal } from "./contracts.js";
 import { cleanAvatar, cleanLabel, isProfileColour, type StoredProfileMeta } from "./profile-meta.js";
 
 /** The most profiles the pack lists and the View will create. */
@@ -33,6 +34,15 @@ const PROFILE_FILE = "profile.json";
 const OWNER_FILE = "owner.pid";
 /** Sites remembered per profile; the oldest observation goes first. */
 const MAX_SITES_PER_PROFILE = 64;
+/** Versioned, fixed-width names keep host identities out of filenames and bound path length. */
+const CONSENT_VERSION = 1;
+function consentFile(principal: ArtifactoryLoopPrincipal, profile: string): string {
+	return createHash("sha256").update(JSON.stringify([CONSENT_VERSION, principal.workspaceId, principal.id, principal.origin, profile])).digest("hex") + ".json";
+}
+function validPrincipal(principal: ArtifactoryLoopPrincipal): boolean {
+	return [principal.workspaceId, principal.id, principal.origin].every(value => typeof value === "string" && value.length > 0 && value.length <= 1024)
+		&& typeof principal.label === "string" && principal.label.length <= 1024;
+}
 const MAX_ACCOUNT_CHARS = 1_024;
 
 export class BrowserRuntimeError extends Error {
@@ -84,6 +94,33 @@ export class ProfileStore {
 		return join(this.rootDir, "profiles");
 	}
 
+	/** A grant is one file per exact subject and profile: distinct grants never overwrite each other. */
+	private get consentRoot(): string { return join(this.rootDir, "profile-consents"); }
+
+	hasLoopConsent(principal: ArtifactoryLoopPrincipal, profile: string): boolean {
+		if (!validPrincipal(principal) || profileSlug(profile) !== profile) return false;
+		try {
+			const raw = readFileSync(join(this.consentRoot, consentFile(principal, profile)), "utf8");
+			// Three 1024-character identity fields still fit when JSON-escaped.
+			if (raw.length > 32 * 1024) return false;
+			const grant: unknown = JSON.parse(raw);
+			if (typeof grant !== "object" || grant === null || Array.isArray(grant)) return false;
+			const value = grant as Record<string, unknown>;
+			return value.version === CONSENT_VERSION && value.workspaceId === principal.workspaceId
+				&& value.id === principal.id && value.origin === principal.origin && value.profile === profile
+				&& value.granted === true && Object.keys(value).length === 6;
+		} catch { return false; }
+	}
+
+	setLoopConsent(principal: ArtifactoryLoopPrincipal, profile: string, granted: boolean): void {
+		if (!validPrincipal(principal) || profileSlug(profile) !== profile) fail("bad_principal", "Invalid Loop subject or profile.");
+		mkdirSync(this.consentRoot, { recursive: true, mode: 0o700 });
+		writeJsonAtomic(this.consentRoot, consentFile(principal, profile), {
+			version: CONSENT_VERSION, workspaceId: principal.workspaceId, id: principal.id,
+			origin: principal.origin, profile, granted,
+		});
+	}
+
 	profileDir(slug: string): string {
 		return join(this.profilesRoot, slug);
 	}
@@ -98,6 +135,16 @@ export class ProfileStore {
 		return existsSync(this.profileDir(slug));
 	}
 
+	/** Reserve a new profile's canonical directory atomically. An existing directory is never treated as ours. */
+	claimNewProfile(slug: string): boolean {
+		try {
+			mkdirSync(this.profileDir(slug), { mode: 0o700 });
+			return true;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+			throw error;
+		}
+	}
 	ensureProfile(slug: string): string {
 		const dir = this.profileDir(slug);
 		mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -221,12 +268,40 @@ export class ProfileStore {
 				`profile "${slug}" is already in use (${who}). Close that browser first (browser_close), or use another profile.`,
 			);
 		}
+		let failure: unknown;
 		try {
-			writeSync(fd, body);
+			writeFileSync(fd, body);
 			fsyncSync(fd);
-		} finally {
-			closeSync(fd);
+		} catch (error) {
+			failure = error;
+			try {
+				// The open descriptor pins our file identity even after a partial write.
+				const owned = fstatSync(fd, { bigint: true });
+				const current = lstatSync(path, { bigint: true });
+				const replacement = readLock(path);
+				if (owned.dev === current.dev && owned.ino === current.ino && (!replacement || replacement.token === token)) unlinkSync(path);
+			} catch (cleanupError) {
+				if ((cleanupError as NodeJS.ErrnoException).code !== "ENOENT") {
+					failure = new AggregateError([error, cleanupError], "Profile lock initialization failed and owned lock cleanup could not be confirmed.");
+				}
+			}
 		}
+		try {
+			closeSync(fd);
+		} catch (error) {
+			if (failure !== undefined) {
+				failure = new AggregateError([failure, error], "Profile lock initialization failed and its descriptor could not be closed.");
+			} else {
+				failure = error;
+				try {
+					// The complete token was written: a close failure must not orphan it.
+					if (readLock(path)?.token === token) unlinkSync(path);
+				} catch (cleanupError) {
+					failure = new AggregateError([error, cleanupError], "Profile lock descriptor close failed and owned lock cleanup could not be confirmed.");
+				}
+			}
+		}
+		if (failure !== undefined) throw failure;
 		return { path, token };
 	}
 

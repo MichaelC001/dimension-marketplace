@@ -16,13 +16,16 @@
  *  signal, so a session that goes quiet is told apart from a live one by calls,
  *  by what a person is looking at, and by nothing else.
  */
+import { randomBytes } from "node:crypto";
+import { z } from "zod";
+import { ARTIFACTORY_HOST_CONTEXT_EXTENSION_ID, ARTIFACTORY_HOST_CONTEXT_META_KEY, ARTIFACTORY_HOST_CONTEXT_READ_METHOD } from "@dimension/sdk/artifactory";
 import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import type { BrowserOpener } from "../src/contracts";
+import type { BrowserOpener, OpeningTool } from "../src/contracts";
 import { taskkillArgs } from "../src/engines/puppeteer";
 import type { BrowserRuntime } from "../src/runtime";
 import { createBrowserServer } from "../src/server";
@@ -48,6 +51,7 @@ function workingPython(): string | undefined {
 }
 
 const PYTHON = workingPython();
+if (PYTHON === undefined) console.warn("[browser tests] the throwaway-lifecycle task tests are SKIPPED, not passed: needs a Python that can import `websockets` (the pack's python/.venv, DIM_BROWSER_PYTHON, or python3/python on the PATH)");
 const describeTasks = chromePath === undefined || PYTHON === undefined ? describe.skip : describe;
 
 const asSession = (session: string, caller: "model" | "app" = "model"): BrowserOpener => ({ caller, session });
@@ -91,9 +95,9 @@ interface RunningChrome {
 }
 
 /** Open a throwaway for `session` and learn which directory under `ephemeral/` it runs in (opens here are one at a time). */
-async function openThrowaway(runtime: BrowserRuntime, rootDir: string, session: string, caller: "model" | "app" = "model"): Promise<Throwaway> {
+async function openThrowaway(runtime: BrowserRuntime, rootDir: string, session: string, caller: "model" | "app" = "model", tool?: OpeningTool): Promise<Throwaway> {
 	const before = await entries(join(rootDir, "ephemeral"));
-	const { browserId } = await runtime.open({ viewport: VIEWPORT }, asSession(session, caller));
+	const { browserId } = await runtime.open({ viewport: VIEWPORT }, { ...asSession(session, caller), ...(tool === undefined ? {} : { tool }) });
 	const dir = (await entries(join(rootDir, "ephemeral"))).find((name) => !before.includes(name));
 	if (dir === undefined) throw new Error("the throwaway browser made no directory");
 	return { browserId, dir };
@@ -130,7 +134,21 @@ async function connect(runtime: BrowserRuntime, rootDir: string): Promise<(sessi
 	await mkdir(viewDir, { recursive: true });
 	await writeFile(join(viewDir, "index.html"), "<!doctype html><title>view</title>");
 	const server = await createBrowserServer({ runtime, viewDir, presets: [] });
-	const client = new Client({ name: "throwaway-lifecycle-test", version: "0.0.0" });
+	const client = new Client({ name: "throwaway-lifecycle-test", version: "0.0.0" }, { capabilities: { extensions: { [ARTIFACTORY_HOST_CONTEXT_EXTENSION_ID]: {} } } });
+	const refs = new Map<string, string>();
+	const refFor = (sessionId: string) => {
+		let token = refs.get(sessionId);
+		if (!token) {
+			token = randomBytes(32).toString("hex");
+			refs.set(sessionId, token);
+		}
+		return { sessionId, token };
+	};
+	client.setRequestHandler(z.object({ method: z.literal(ARTIFACTORY_HOST_CONTEXT_READ_METHOD), params: z.object({ sessionId: z.string(), token: z.string() }) }), async request => {
+		const { sessionId, token } = request.params;
+		if (refs.get(sessionId) !== token) throw new Error("Unknown host context");
+		return { active: true, sessionId };
+	});
 	const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
 	await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
 	clients.push(client);
@@ -138,7 +156,7 @@ async function connect(runtime: BrowserRuntime, rootDir: string): Promise<(sessi
 		const answer = (await client.callTool({
 			name,
 			arguments: args,
-			_meta: { "ai.insodimension/caller": "model", "ai.insodimension/session": { sessionId: session } },
+			_meta: { "ai.insodimension/caller": "model", "ai.insodimension/session": { sessionId: session }, [ARTIFACTORY_HOST_CONTEXT_META_KEY]: refFor(session) },
 		})) as RawToolAnswer;
 		return { ...(answer.isError ? { isError: true } : {}), text: answer.content[0]?.text ?? "", ...(answer.structuredContent === undefined ? {} : { structured: answer.structuredContent }) };
 	};
@@ -208,6 +226,50 @@ describeWithChrome("throwaway browsers a session leaves behind", () => {
 			expect((await refusal(() => runtime.state(b.browserId))).code).toBe("unknown_browser");
 			for (const kept of [a, c, d, e]) expect((await runtime.state(kept.browserId)).browserId).toBe(kept.browserId);
 			expect([...(await chromePidsByThrowaway(rootDir)).keys()].sort()).toEqual([a.dir, c.dir, d.dir, e.dir].sort());
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	// A model's tool list has not both `browser_open` and `browser_view`: a code or build model has browser_view only (doc 77 §7.5a). So the reason a given-up browser's owner reads names the tool that owner opened it with.
+	test(
+		"a browser given up to make room tells its owner to open another with the tool the owner opened it with",
+		async () => {
+			const rootDir = await createRoot();
+			const runtime = newRuntime(rootDir);
+			const opened = async (opener: BrowserOpener): Promise<string> => (await runtime.open({ viewport: VIEWPORT }, opener)).browserId;
+			const byView = await opened({ ...asSession("s1"), tool: "browser_view" });
+			const byOpen = await opened({ ...asSession("s2"), tool: "browser_open" });
+			await opened(asSession("s3"));
+			await opened(asSession("s4"));
+			// Two more opens at a full pool give up the two used least recently, in the order they were opened.
+			await opened(asSession("s5"));
+			await opened(asSession("s6"));
+
+			const toldView = (await refusal(() => runtime.state(byView))).message;
+			expect(toldView).toContain("closed to make room for another chat's (at most 4 are open at once); open a new one with browser_view");
+			expect(toldView).not.toContain("browser_open");
+			expect((await refusal(() => runtime.state(byOpen))).message).toContain("open a new one with browser_open");
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"a throwaway closed on its idle clock says the same: the tool its owner opened it with",
+		async () => {
+			const rootDir = await createRoot();
+			const runtime = newRuntime(rootDir, { throwawayIdleMs: 1_500 });
+			const byView = await openThrowaway(runtime, rootDir, "s1", "model", "browser_view");
+			const byOpen = await openThrowaway(runtime, rootDir, "s2", "model", "browser_open");
+			// Nothing is called meanwhile (a call would restart the idle clock): each is asked after its Chrome is gone, by pid.
+			const chromes = new Map([byView, byOpen].map((browser) => [browser.browserId, chromeOf(rootDir, browser)] as const));
+			const told = async (browser: Throwaway): Promise<string> => {
+				expect(await waitUntilGone((await chromes.get(browser.browserId)!).all, 20_000)).toEqual([]);
+				return (await refusal(() => runtime.state(browser.browserId))).message;
+			};
+			const viewMessage = await told(byView);
+			expect(viewMessage).toContain("closed after 1.5 s with no calls; open a new one with browser_view");
+			expect(viewMessage).not.toContain("browser_open");
+			expect(await told(byOpen)).toContain("closed after 1.5 s with no calls; open a new one with browser_open");
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);
@@ -373,7 +435,7 @@ describeWithChrome("what a full pool never gives up", () => {
 			const rootDir = await createRoot();
 			const runtime = newRuntime(rootDir);
 			const saved: string[] = [];
-			for (let n = 1; n <= 3; n += 1) saved.push((await runtime.open({ profile: `keep-${n}`, viewport: VIEWPORT }, asSession(`s${n}`))).browserId);
+			for (let n = 1; n <= 3; n += 1) saved.push((await runtime.open({ profile: `keep-${n}`, viewport: VIEWPORT }, asSession(`s${n}`, "app"))).browserId);
 			const throwaway = await openThrowaway(runtime, rootDir, "s4");
 
 			// The saved ones were opened first, so they are the least recently used; only a throwaway may be given up, whatever the order.
@@ -384,7 +446,7 @@ describeWithChrome("what a full pool never gives up", () => {
 			expect((await runtime.state(newcomer.browserId)).browserId).toBe(newcomer.browserId);
 			for (const browserId of saved) expect((await runtime.state(browserId)).profile).toMatch(/^keep-/);
 			// The lock is intact: another chat still cannot take a profile that is open.
-			expect((await refusal(() => runtime.open({ profile: "keep-1", viewport: VIEWPORT }, asSession("s9")))).code).toBe("profile_held");
+			expect((await refusal(() => runtime.open({ profile: "keep-1", viewport: VIEWPORT }, asSession("s9")))).code).toBe("profile_consent_required");
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);
@@ -677,10 +739,11 @@ describeWithChrome("a throwaway nobody calls", () => {
 			const rootDir = await createRoot();
 			const runtime = newRuntime(rootDir, { throwawayIdleMs: 2_000 });
 			const taken = await openThrowaway(runtime, rootDir, "s1");
+			// The person takes the wheel at once: finding a Chrome's pids and opening a second browser can outlast a 2 s idle clock on a slow machine, and a browser nobody holds for 2 s is rightly closed.
+			await runtime.control(taken.browserId, "take", "app");
 			const takenChrome = await chromeOf(rootDir, taken);
 			const quiet = await openThrowaway(runtime, rootDir, "s2");
 			const quietChrome = await chromeOf(rootDir, quiet);
-			await runtime.control(taken.browserId, "take", "app");
 
 			// The control first: the browser beside it, with the same silence, really is closed by the clock.
 			expect(await waitUntilGone(quietChrome.all, 15_000)).toEqual([]);
@@ -720,13 +783,13 @@ describeWithChrome("a throwaway nobody calls", () => {
 		async () => {
 			const rootDir = await createRoot();
 			const runtime = newRuntime(rootDir, { throwawayIdleMs: 500 });
-			const { browserId } = await runtime.open({ profile: "stays", viewport: VIEWPORT }, asSession("s1"));
+			const { browserId } = await runtime.open({ profile: "stays", viewport: VIEWPORT }, asSession("s1", "app"));
 
 			// A negative over real time (nothing may happen in six idle timeouts); no signal exists to await.
 			await Bun.sleep(3_000);
 
 			expect((await runtime.state(browserId)).profile).toBe("stays");
-			expect((await refusal(() => runtime.open({ profile: "stays", viewport: VIEWPORT }, asSession("s2")))).code).toBe("profile_held");
+			expect((await refusal(() => runtime.open({ profile: "stays", viewport: VIEWPORT }, asSession("s2")))).code).toBe("profile_consent_required");
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);

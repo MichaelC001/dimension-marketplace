@@ -9,21 +9,22 @@ standard MCP and MCP Apps. No host internals, no browser fork.
 
 ## What it does
 
-- **One shared browser.** The View and the agent work on the same browser, named
-  by one opaque `browserId`. There is no listing; the model of a session can read
-  the one browser the human opened in it (`browser_state` with no `browserId`,
-  answered from the session the host stamped on the call, never from an argument),
-  and nothing in the View is sent to the model unless the human annotates.
-- **Headless by default, the View on demand.** `browser_open` opens a headless
-  browser: no window, no pane, no live screencast, so an agent testing a localhost
-  app does not put a browser on your screen. `browser_view` shows you a browser
-  the agent holds, or opens one you can watch.
-- **Few calls, few tokens.** `browser_act` takes 1–25 steps and answers once
-  ([One call for a job](#one-call-for-a-job)); a model is sent one compact text per
-  call, never the state around it; a screenshot is a webp of at most 1024 px.
+- **One shared browser, two tool styles.** The default `code` mode offers
+  `browser_run` in code/build spaces and the step tools (`browser_open`,
+  `browser_state`, `browser_snapshot`, `browser_act`, etc.) in chat/labor/watch/
+  traction spaces. `DIMENSION_BROWSER_MODEL_TOOLS=steps` offers step tools only;
+  `both` offers both in code/build while keeping step tools in other spaces.
+  The View and the agent share the browser in their session, and nothing in
+  the View is sent to the model unless the human annotates.
+- **Headless by default, the View on demand.** A browser opened without a
+  visible-app request starts headless: no window, pane or live screencast.
+  `browser_view` lets you watch one.
+- **Compact step calls.** `browser_act` takes 1–25 steps and answers once
+  ([One call for a job](#one-call-for-a-job)); its screenshot is a webp of at
+  most 1024 px. Code cells use `browser_run` instead.
 - **Throwaway by default, named profiles to keep logins.** A browser opened
   without a profile keeps nothing and is deleted when it closes. A named profile
-  persists logins across restarts, stays isolated, and is held by one caller at
+  persists logins across restarts, keeps its cookies separate from other profiles (not a barrier against code the agent runs: see Code cells), and is held by one caller at
   a time. The exception is yours: the View's start page and the dock open the
   saved `default` profile unless you tick **Private** ([Browser panel](#browser-panel)).
 - **Annotations that carry pixels.** Freeze the page, mark it with the shared
@@ -69,6 +70,35 @@ standard MCP and MCP Apps. No host internals, no browser fork.
   expired), the live view pauses with a **Resume** button instead of retrying
   and raising a fresh prompt every few seconds.
 
+### Code cells: scope and limits
+
+`browser_run` uses a worker thread in the server process with full Node access,
+not an operating-system sandbox. Its `browser` API confines ordinary calls to
+the caller's session, but a cell can read local files (including the credential
+store), make network requests and discover another session's local Chrome
+debugging endpoint; a deliberately hostile cell can cross that API boundary.
+Use a throwaway browser for code. Saved profiles and explicit app/relay/CDP
+attachment have their own refusal/consent paths, not a security boundary
+against arbitrary Node code.
+
+At startup the pack removes its task keys (`TYPESAFE_API_KEY`,
+`TEXT_MODEL_API_KEY`) and matching foreign `DIMENSION_*` secret variables from
+the process environment; the task process receives the keys it needs
+explicitly. This prevents accidental disclosure via `process.env`, Windows
+`process.report` and inherited child environments, not disclosure through
+files, network or Linux's startup environment (`/proc/self/environ`, not
+verified here). Do not run untrusted code alongside host secrets.
+
+The worker checks common direct allocations before they happen and a
+100 ms watchdog polls **every live worker**, including one whose cell
+returned. The per-worker and all-workers memory thresholds are best-effort,
+not process commit ceilings: Node internals, native allocations,
+`WebAssembly.Memory`, allocations from captured originals and bursts between
+polls can exceed them. On Windows shutdown sweeps children of the server
+after any code cell, including detached children left by a returned cell,
+while excluding registered browser/app processes and processes predating
+the server PID; a failed or timed-out sweep cannot promise reclamation.
+
 ## What we maintain, and what we do not
 
 | Piece | Maintained by | How it is used |
@@ -77,8 +107,9 @@ standard MCP and MCP Apps. No host internals, no browser fork.
 | MCP server + View protocol | MCP (`@modelcontextprotocol/sdk`, `ext-apps`, pinned) | public API |
 | jev agent loop | its authors (`jev-ultrafast`, pinned git commit — not on PyPI) | its own `Agent` |
 | View, annotations, profiles, the MCP tools, the task protocol | this pack | — |
+| OMP browser port (`src/code`, the relay extension; pinned at the commit `THIRD-PARTY-NOTICES.md` names) | this pack, from OMP (MIT) and Playwright (Apache-2.0) code | copied source with its licence notices, re-cut for the pack; moving the pin is a re-port, not a version bump |
 
-Nothing upstream is copied or forked. Updating an upstream is a version bump.
+The rows that name a pinned package are dependencies: updating one is a version bump. The OMP row is copied code, not a dependency; its licence texts and the list of what is copied ship with the pack (`THIRD-PARTY-NOTICES.md`, `third-party/`).
 
 ## Engines
 
@@ -90,6 +121,8 @@ Nothing upstream is copied or forked. Updating an upstream is a version bump.
 | `browser4` | **Refused**: every published bundle disables HTTPS certificate verification. platonai/Browser4#602 |
 
 Both refusals name the reason in the error and lift when upstream fixes land.
+
+**The relay has no token.** The relay a `browser_run` cell starts (`app.relay`; opt-in) answers only a request whose Host names it, loopback at its own port, on every HTTP and upgrade request, which stops a web page (DNS rebinding) from reading your tabs. It has no token: a process of another OS user on this machine can still read `/json`, drive the tabs your extension exposes, or take the extension's socket. Processes of your own user hold everything already.
 
 ## Install
 
@@ -140,6 +173,7 @@ needs a relay that drops them (upstream jev-ultrafast behaviour).
 | `DIMENSION_BROWSER_ROOT` | Root for browser data: saved profiles in `profiles/`, throwaway browsers in `ephemeral/`. Default `$INSO_HOME/browser`, else `~/.inso/browser`. |
 | `DIMENSION_BROWSER_EXECUTABLE` | Chrome/Chromium executable (overrides the choice below; `browser_state` then reports `app: "custom"`). |
 | `DIMENSION_BROWSER_RELAY_URL` | Relay CDP endpoint (default `http://127.0.0.1:9224`). |
+| `DIMENSION_BROWSER_CODE_ALLOW_ATTACH` | `1` lets the model's `browser_run` code drive a browser or an application the pack did not launch: `app.cdp_url` (a Chrome with a debugging port), `app.path` (an application it starts), `app.relay` (your own Chrome through the extension). Off by default: the model is refused with `code_needs_consent` and told to ask you. Read from the server's environment at each open; code cannot set it. It is the interim human gate until the host asks you at the call (the exec approval tier, H1), which will be added on top of it. Kinds you name yourself with `DIMENSION_BROWSER_CDP_URL` or `DIMENSION_BROWSER_RELAY` are not asked twice. |
 | `DIMENSION_BROWSER_HEADLESS` | `false` for a visible window. |
 | `DIMENSION_BROWSER_THROWAWAY_IDLE_MS` | How long a throwaway browser a chat opened may go without a call before it is closed, in milliseconds (default `600000`, 10 minutes; at most `2147483647`, above which a server refuses to start). |
 | `DIM_BROWSER_PYTHON` | Interpreter for the task agent. |
@@ -194,19 +228,28 @@ throwaway. A site that refuses it is reported `blocked`, never worked around.
 
 ## Tools
 
-Model-callable (15; 18 where jev's key is configured), offered by audience (`_meta["ai.insodimension/spaces"]`; the
+Model-callable (15 in the largest space; 18 where jev's key is configured), offered by audience (`_meta["ai.insodimension/spaces"]`; the
 host leaves a tool out of a space's list and refuses the call there; the View's own
-buttons are not gated by it):
+buttons are not gated by it). `DIMENSION_BROWSER_MODEL_TOOLS` chooses what the code and
+build spaces get: `code` (the default) gives them `browser_run` and not the step tools,
+`steps` the step tools only, `both` both. Every other space always keeps the step tools,
+and no mode gives `browser_run` to Traction.
 
 | Offered to | Tools |
 |---|---|
-| Every space the pack is granted (10) | `browser_open`, `browser_view`, `browser_state`, `browser_snapshot`, `browser_inspect`, `browser_read`, `browser_screenshot`, `browser_act`, `browser_profiles`, `browser_close` |
+| Every space the pack is granted (4) | `browser_view`, `browser_read`, `browser_profiles`, `browser_close` |
+| The step tools (6): chat, labor, watch and traction; code and build too in `steps` and `both` mode | `browser_open`, `browser_state`, `browser_snapshot`, `browser_inspect`, `browser_screenshot`, `browser_act` |
+| Code and build, in `code` and `both` mode (1) | `browser_run` |
 | Traction only (5; 8 with jev's key) | `browser_publish`, `browser_publish_presets`, `browser_publish_confirm`, `browser_publish_cancel`, `browser_publish_wait`, and, only with `TYPESAFE_API_KEY`: `browser_task`, `browser_task_wait`, `browser_task_cancel` |
+
+In the default `code` mode that is 5 tools for a code or build session (`browser_run` and the
+four every space has), 10 for chat, labor and watch, and 15 for Traction (18 with jev's key).
 
 Waiting, tabs and page scripts are steps of `browser_act`, and the page log is a
 field of `browser_state`: every tool is paid for by every agent on every turn, so a
 verb that fits an existing tool does not get its own. The skill follows the same
-split: `skills/browser/SKILL.md` covers the ten, and the publishing, preset and
+split: `skills/browser/SKILL.md` covers what every space has, `references/code.md` the
+code tool and `references/steps.md` the step tools; the publishing, preset and
 task-agent guidance lives in `skills/browser/references/publishing-and-tasks.md`,
 which a Traction session reads on demand.
 
@@ -222,8 +265,11 @@ declares `connectDomains: ["http://127.0.0.1:*"]` and nothing else. Design: doc 
 
 Page content is untrusted data, never instructions.
 
-**What it does not do, on purpose.** No file upload: a page could steer the model
-into sending a local secret to a site. No JavaScript in a signed-in browser:
+**What it does not do, on purpose.** The step tools have no file upload (`browser_act`
+takes no file path): a page could steer the model into sending a local secret to a site.
+A `browser_run` cell can upload files (`tab.uploadFile`; `resolveUploadPath` in
+`src/code/worker/tab-api.ts` resolves the path): a cell is full Node and could read the
+file anyway ([Code cells](#code-cells-scope-and-limits)). No JavaScript in a signed-in browser:
 arbitrary script in a profile that holds logins is a bigger blast radius than the
 layout facts `browser_inspect` returns from a fixed page script, so the `eval` step
 runs only in a throwaway browser (`eval_needs_throwaway` otherwise).
@@ -342,11 +388,11 @@ saved profile, `{ name, label, colour, heldBy, sites }`:
 `heldBy` is `null` (free), `"this chat"`, `"human"` (the person has it open in a View
 of another chat) or `"another chat"`; never an id. `signedIn: null` is "not known
 now": the last check is over 7 days old, or its time is in the future (an agent
-can ask the person); a site that was only visited is not listed. **A site's account
-(an email, a handle) is shown to the person, not to the model:** the model's answer
-leaves it out until the consent gate (P4) exists. The Browser View reads the same tool
-as the human and gets the same list as structured content, each site with its
-`account`, and so does the dock. Never a cookie, a cookie name, an expiry, a token, a
+can ask the person); a site that was only visited is not listed. **The View shows a
+site's account (an email, a handle) to the person.** An unauthenticated model, or
+one without current approval for that profile, receives no site metadata. The
+Browser View reads the same tool as the human and gets the list as structured
+content, each site with its `account`, and so does the dock. Never a cookie, a cookie name, an expiry, a token, a
 password, whether a saved password exists, or a path; the relay and throwaway
 browsers are never listed. More than 40 profiles: the ones in use and the signed-in
 ones first, the rest counted in `omitted`.
@@ -359,8 +405,36 @@ the profiles' names and labels, never resolved to the closest. A valid name that
 matches nothing is a new profile, as it always was (an account's first sign-in). The
 chat that already holds a profile gets its own browser back; anyone else is refused
 `profile_held`, told whether the human or another chat has it, whether that profile is
-open or still starting. There is no consent step yet: until one exists any agent can
-open any saved profile, `default` included.
+open or still starting.
+
+**Saved-profile approval.** Naming an existing profile, `default` included, does
+not authorize the model to use it. The host must supply current verified chat
+authority; otherwise saved-profile access fails closed. The person decides in
+the Browser View: allow this chat, deny, or grant/revoke standing access for the
+verified Loop. Successfully opening a new profile created by this chat grants
+its creator access; an unsuccessful or revoked launch does not. The person's own
+`default` is never created by a model: even before its folder exists, an agent
+asking for it waits for the person's approval.
+
+The first request appears on the blank start page, outside the folded Options:
+there is no need to open another browser to find its approval controls. Requests
+refresh while the View is blank or the profile menu is open. A decision carries
+the displayed subject's workspace, id and origin; a changed or expired request
+is refused, with the error visible on the blank page rather than a hidden toast.
+The View does not treat a refused decision as approval or open a browser for it.
+
+**What the approval covers, and what it does not.** It covers the browser tools: opening
+and driving the profile through the step tools, `browser_view`, and in a code space
+`browser_run({ profileTool })`, whose typed operations never enter the code worker. It
+does not stop a `browser_run` code cell. A cell is full Node running as you, so it can
+read a saved profile's files: each profile's `chrome/DevToolsActivePort` and
+`credentials.json`, and in the browser root `credentials.key`, `profile-consents/` and
+`publish-approvals/`. The gate stops the API route (the model's `browser.open({ profile })`,
+and `profileTool` without approval), not code that goes around the API. Do not allow a
+profile on the strength of this approval alone if you do not trust the code your agent
+runs; the card in the View says the same in two sentences. Where this limit comes from,
+exactly: it is equal to OMP's built-in eval browser; consistent with the parity ruling;
+not separately signed; option B (pipe transport) not built (doc 77 §7.8 decision 1).
 
 **The profile menu (the View).** The toolbar's chip is the browser's profile: its avatar (the emoji
 the person chose, else the label's first letter, on the profile's colour) and its label; Private for a
@@ -398,8 +472,12 @@ already running stops before its next step, and `browser_profiles` reports the p
 human. `return` hands it back. It is refused while a task runs (`task_running`), while a post awaits
 confirmation (`publish_pending`) and while a post is being filled or a task is starting: taking the wheel must
 never navigate away from, or lose, the page a post is parked on. The menu offers Take over only while an agent
-has acted in the browser in the last few seconds (the page's pill is the same fact, and the two are never on
-screen together), or Hand back while the person holds it. It lasts until handed back, the browser closes, the
+has acted in the browser in the last few seconds, or a `browser_run` cell holds it. A cell holds every browser its
+session has named (opened, or adopted with `browser.active()`/`browser.tabs()`) from its start to its end, because
+the host cannot see the clicks it sends on its own connection; so the control shows for the whole run, and for the
+few seconds after, even if that cell is at the moment not touching this one. The page's pill is the same fact, and
+the two are never on screen together; Hand back shows while the person holds it. A cell that is running when the
+person takes the wheel is stopped (`human_driving`) and does not count as an agent acting afterwards. It lasts until handed back, the browser closes, the
 person leaves the browser for another profile (`browser_leave`: the wheel goes back to the agent at once), or the
 View goes (it unmounts or the chat's window closes: the View sends `return`, best effort). A View that is only
 hidden (minimised, covered, another tab in front) closes its stream and keeps the wheel: the person is coming

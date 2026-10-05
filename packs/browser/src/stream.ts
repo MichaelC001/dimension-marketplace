@@ -20,11 +20,13 @@ import { encode, KIND_PICTURE, KIND_STATE, PING, PING_QUERY } from "./wire.js";
 /** What the channel needs of the runtime. The runtime's own `watchFrames`, `liveState` and `input` are exactly these. */
 export interface LiveSource {
 	/** Pictures of the browser's active tab until the returned function is called. Throws `unknown_browser`. */
-	watchFrames(browserId: string, onFrame: (frame: LiveFrame) => void): () => void;
+	watchFrames(browserId: string, onFrame: (frame: LiveFrame) => void, size?: "view" | { maxWidth: 480 | 1280 }): () => void;
 	/** The browser's state, not queued behind page work. Throws `unknown_browser` once it is closed. */
 	liveState(browserId: string): Promise<BrowserState>;
 	/** A View is joined to this browser's stream until the returned function is called: the runtime does not give a watched browser up. Throws `unknown_browser`. */
 	viewing(browserId: string): () => void;
+	/** Card reader hold: does not enter the human's View or touch wheel ownership. */
+	previewHolding(browserId: string): () => void;
 	/** One batch of the human's input. Rejects with a `BrowserRuntimeError` whose `code` says why. */
 	input(browserId: string, events: unknown): Promise<void>;
 }
@@ -49,6 +51,10 @@ const STATE_INTERVAL_MS = 250;
  */
 export const HEARTBEAT_MS = 2_000;
 const MAX_TOKENS_PER_BROWSER = 16;
+const MAX_CARD_TOKENS = 4;
+const CARD_FRAME_MS = 250;
+const CARD_HEAD = Buffer.from("--inso-frame\r\ncontent-type: image/jpeg\r\n\r\n");
+const CARD_END = Buffer.from("THE-END");
 /** One input batch is at most 64 small events plus a 4 KiB paste; a body past this is not one. */
 const MAX_BODY_BYTES = 256 * 1024;
 /** A hostile body is read (so the answer reaches the sender) only up to here, then the connection is cut. */
@@ -63,6 +69,10 @@ type Parts = readonly [Uint8Array, Uint8Array];
 
 interface Grant {
 	browserId: string;
+	kind: "view" | "card";
+	width?: 480 | 1280;
+	/** A card token permits only one socket; a new GET ends the old one. */
+	card?: CardClient;
 	/** Epoch ms of the last stream open, stream close or input. */
 	lastUsed: number;
 	/** Streams open on this token. */
@@ -249,12 +259,56 @@ class Room {
 	}
 }
 
+/** A card never accumulates frames: one newest picture waits for drain and the 250 ms gate. Exported for its test: the clock gate cannot be observed over a socket without sleeping. */
+export class CardClient {
+	#pending: Uint8Array | undefined;
+	#blocked = false;
+	/** When the last picture was written; none yet, so the first is never held to the 250 ms gate (`performance.now()` counts from process start, not from this card). */
+	#last = Number.NEGATIVE_INFINITY;
+	#timer: ReturnType<typeof setTimeout> | undefined;
+	#ended = false;
+	constructor(readonly response: http.ServerResponse, readonly leave: () => void) {
+		response.write(CARD_HEAD);
+		response.once("drain", () => { this.#blocked = false; this.#flush(); });
+		response.once("close", () => this.end(false));
+	}
+	offer(jpeg: Uint8Array): void {
+		if (this.#ended || jpeg.byteLength > 2 * 1024 * 1024) return;
+		this.#pending = jpeg;
+		this.#flush();
+	}
+	#flush(): void {
+		if (this.#blocked || this.#ended || !this.#pending) return;
+		const wait = CARD_FRAME_MS - (performance.now() - this.#last);
+		if (wait > 0) {
+			this.#timer ??= setTimeout(() => { this.#timer = undefined; this.#flush(); }, wait);
+			return;
+		}
+		const jpeg = this.#pending;
+		this.#pending = undefined;
+		this.#last = performance.now();
+		this.#blocked = !this.response.write(Buffer.concat([Buffer.from(jpeg), Buffer.from("\r\n"), CARD_HEAD]));
+		if (this.#blocked) this.response.once("drain", () => { this.#blocked = false; this.#flush(); });
+		else this.#flush();
+	}
+	end(deliberate = true): void {
+		if (this.#ended) return;
+		this.#ended = true;
+		clearTimeout(this.#timer);
+		this.#pending = undefined;
+		if (deliberate && !this.response.destroyed) this.response.end(CARD_END);
+		else this.response.destroy();
+		this.leave();
+	}
+}
+
 function isGone(error: unknown): boolean {
 	return error instanceof BrowserRuntimeError && GONE_CODES.has(error.code);
 }
 
+/** The answer to a request that is not for a live token: it ends the connection with the answer, so a body the client never finishes sending cannot keep the socket (the listener has no request timeout; a View's stream is long-lived). */
 function notFound(response: http.ServerResponse, cors: boolean): void {
-	response.writeHead(404, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store", ...(cors ? CORS : {}) });
+	response.writeHead(404, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store", connection: "close", ...(cors ? CORS : {}) });
 	response.end("Not found.\n");
 }
 
@@ -271,6 +325,7 @@ export class LiveChannel {
 	/** In minting order, so the oldest is first. */
 	readonly #grants = new Map<string, Grant>();
 	readonly #rooms = new Map<string, Room>();
+	readonly #cardRooms = new Map<string, { clients: Set<CardClient>; stop: () => void; release: () => void; check: ReturnType<typeof setInterval> }>();
 	#server: http.Server | undefined;
 	#listening: Promise<number> | undefined;
 	#port = 0;
@@ -287,10 +342,26 @@ export class LiveChannel {
 	async mint(browserId: string): Promise<{ origin: string; token: string }> {
 		await this.#source.liveState(browserId);
 		const port = await this.#listen();
-		const mine = [...this.#grants].filter(([, grant]) => grant.browserId === browserId);
-		for (const [token] of mine.slice(0, Math.max(0, mine.length - this.#maxTokens + 1))) this.#grants.delete(token);
+		const mine = [...this.#grants].filter(([, grant]) => grant.browserId === browserId && grant.kind === "view");
+		for (const [token] of mine.slice(0, Math.max(0, mine.length - this.#maxTokens + 1))) this.#revoke(token);
 		const token = randomBytes(24).toString("base64url");
-		this.#grants.set(token, { browserId, lastUsed: Date.now(), open: 0 });
+		this.#grants.set(token, { browserId, kind: "view", lastUsed: Date.now(), open: 0 });
+		this.#sweeper ??= setInterval(() => this.#sweep(), Math.min(1_000, this.#tokenIdleMs));
+		this.#sweeper.unref();
+		return { origin: `http://127.0.0.1:${port}`, token };
+	}
+	/** Card grants cannot evict View grants, and never retain a browser until an image consumer connects. */
+	async mintCard(browserId: string, width: 480 | 1280): Promise<{ origin: string; token: string } | { code: "busy" }> {
+		await this.#source.liveState(browserId);
+		const mine = [...this.#grants].filter(([, grant]) => grant.browserId === browserId && grant.kind === "card");
+		if (mine.length >= MAX_CARD_TOKENS) {
+			const idle = mine.find(([, grant]) => grant.open === 0);
+			if (!idle) return { code: "busy" };
+			this.#revoke(idle[0]);
+		}
+		const port = await this.#listen();
+		const token = randomBytes(24).toString("base64url");
+		this.#grants.set(token, { browserId, kind: "card", width, lastUsed: Date.now(), open: 0 });
 		this.#sweeper ??= setInterval(() => this.#sweep(), Math.min(1_000, this.#tokenIdleMs));
 		this.#sweeper.unref();
 		return { origin: `http://127.0.0.1:${port}`, token };
@@ -299,6 +370,13 @@ export class LiveChannel {
 	/** Every stream ends, every token dies, the listener closes. */
 	async close(): Promise<void> {
 		for (const room of [...this.#rooms.values()]) room.end();
+		for (const room of this.#cardRooms.values()) {
+			clearInterval(room.check);
+			for (const client of [...room.clients]) client.end();
+			room.stop();
+			room.release();
+		}
+		this.#cardRooms.clear();
 		this.#grants.clear();
 		await this.#shutDown();
 	}
@@ -337,8 +415,15 @@ export class LiveChannel {
 	/** Drop every token that has sat idle with no stream; close the listener when none is left. */
 	#sweep(): void {
 		const now = Date.now();
-		for (const [token, grant] of this.#grants) if (grant.open === 0 && now - grant.lastUsed > this.#tokenIdleMs) this.#grants.delete(token);
+		for (const [token, grant] of this.#grants) if (grant.open === 0 && now - grant.lastUsed > this.#tokenIdleMs) this.#revoke(token);
 		this.#closeIfUnused();
+	}
+
+	#revoke(token: string): void {
+		const grant = this.#grants.get(token);
+		if (!grant) return;
+		this.#grants.delete(token);
+		grant.card?.end();
 	}
 
 	#closeIfUnused(): void {
@@ -347,10 +432,17 @@ export class LiveChannel {
 
 	/** The browser is closed: its tokens die and its streams end. */
 	#revokeBrowser(browserId: string): void {
-		for (const [token, grant] of this.#grants) if (grant.browserId === browserId) this.#grants.delete(token);
+		for (const [token, grant] of this.#grants) if (grant.browserId === browserId) this.#revoke(token);
 		const room = this.#rooms.get(browserId);
 		this.#rooms.delete(browserId);
 		room?.end();
+		for (const [key, card] of this.#cardRooms) if (key.startsWith(`${browserId}|`)) {
+			clearInterval(card.check);
+			this.#cardRooms.delete(key);
+			for (const client of [...card.clients]) client.end();
+			card.stop();
+			card.release();
+		}
 		this.#closeIfUnused();
 	}
 
@@ -380,14 +472,62 @@ export class LiveChannel {
 		const url = new URL(request.url ?? "/", `http://127.0.0.1:${this.#port}`);
 		const [empty, route, token, ...more] = url.pathname.split("/");
 		const grant = token === undefined ? undefined : this.#grants.get(token);
-		if (empty !== "" || more.length > 0 || grant === undefined || (route !== "s" && route !== "i")) return notFound(response, true);
+		if (empty !== "" || more.length > 0 || grant === undefined || (route !== "s" && route !== "i" && route !== "p")) return notFound(response, true);
 		if (request.method === "OPTIONS") {
 			response.writeHead(204, { ...CORS, "access-control-allow-methods": "GET, POST", "access-control-allow-headers": "content-type", "access-control-allow-private-network": "true", "access-control-max-age": "600" });
 			return void response.end();
 		}
+		if (route === "p" && grant.kind === "card" && request.method === "GET") return this.#cardStream(request, response, grant);
+		if (grant.kind !== "view") return notFound(response, true);
 		if (route === "s" && request.method === "GET") return this.#stream(request, response, grant, url.searchParams.get("frames") !== "0", url.searchParams.get(PING_QUERY) === "1");
 		if (route === "i" && request.method === "POST") return await this.#input(request, response, grant);
 		return notFound(response, true);
+	}
+
+	#cardStream(request: http.IncomingMessage, response: http.ServerResponse, grant: Grant): void {
+		grant.card?.end();
+		const key = `${grant.browserId}|${grant.width}`;
+		let room = this.#cardRooms.get(key);
+		if (!room) {
+			const clients = new Set<CardClient>();
+			let release: (() => void) | undefined;
+			let stop: () => void;
+			try {
+				release = this.#source.previewHolding(grant.browserId);
+				stop = this.#source.watchFrames(grant.browserId, frame => {
+					for (const client of clients) client.offer(frame.jpeg);
+				}, { maxWidth: grant.width! });
+			} catch (error) {
+				release?.();
+				if (isGone(error)) this.#revokeBrowser(grant.browserId);
+				return notFound(response, true);
+			}
+			const check = setInterval(() => {
+				void this.#source.liveState(grant.browserId).catch(error => {
+					if (isGone(error)) this.#revokeBrowser(grant.browserId);
+				});
+			}, this.#stateIntervalMs);
+			room = { clients, stop, release, check };
+			this.#cardRooms.set(key, room);
+		}
+		grant.open = 1;
+		response.writeHead(200, { "content-type": "multipart/x-mixed-replace; boundary=inso-frame", "cache-control": "no-store", "x-content-type-options": "nosniff", connection: "close" });
+		const current = room;
+		const client = new CardClient(response, () => {
+			current.clients.delete(client);
+			if (grant.card === client) grant.card = undefined;
+			grant.open = 0;
+			grant.lastUsed = Date.now();
+			if (current.clients.size === 0 && this.#cardRooms.get(key) === current) {
+				this.#cardRooms.delete(key);
+				clearInterval(current.check);
+				current.stop();
+				current.release();
+			}
+		});
+		grant.card = client;
+		current.clients.add(client);
+		request.once("close", () => client.end(false));
 	}
 
 	#stream(request: http.IncomingMessage, response: http.ServerResponse, grant: Grant, wantsPictures: boolean, wantsPing: boolean): void {
