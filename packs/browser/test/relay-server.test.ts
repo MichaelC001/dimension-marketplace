@@ -56,30 +56,6 @@ async function upgradeStatus(port: number, path: string, headers: Record<string,
 	return await done.promise;
 }
 
-function decodeChunkedBody(body: string): string {
-	let decoded = "";
-	let offset = 0;
-	while (true) {
-		const lineEnd = body.indexOf("\r\n", offset);
-		if (lineEnd === -1) throw new Error("Invalid chunked response: missing chunk size");
-		const length = Number.parseInt(body.slice(offset, lineEnd).split(";", 1)[0]!, 16);
-		if (!Number.isFinite(length) || length < 0) throw new Error("Invalid chunked response: invalid chunk size");
-		offset = lineEnd + 2;
-		if (length === 0) return decoded;
-		decoded += body.slice(offset, offset + length);
-		offset += length + 2;
-	}
-}
-
-function parseVersion(response: string): Record<string, string> {
-	const boundary = response.indexOf("\r\n\r\n");
-	if (boundary === -1) throw new Error("Invalid HTTP response: missing header boundary");
-	const headers = response.slice(0, boundary);
-	const body = response.slice(boundary + 4);
-	expect(headers).toContain("200");
-	return JSON.parse(/\r\ntransfer-encoding:\s*chunked\b/i.test(headers) ? decodeChunkedBody(body) : body) as Record<string, string>;
-}
-
 /** An extension socket that has said hello, as the extension's own first message does. */
 async function connectExtension(port: number, options: { origin?: string; token?: string } = {}): Promise<WebSocket> {
 	const query = options.token === undefined ? "" : `?token=${encodeURIComponent(options.token)}`;
@@ -136,27 +112,6 @@ describe("the relay's discovery endpoint", () => {
 		const after = (await (await fetch(`http://127.0.0.1:${port}/json/version`)).json()) as { webSocketDebuggerUrl: string; Browser?: string };
 		expect(after.webSocketDebuggerUrl).toBe(`ws://127.0.0.1:${port}/cdp`);
 		expect(after.Browser).toBe("Chrome/151.0.0.0");
-	});
-
-	test("advertises the requested Host authority so a remote Puppeteer client dials the relay", async () => {
-		const port = await startReadyRelay();
-		const response = await rawGet(port, "GET /json/version HTTP/1.1\r\nHost: 100.100.92.97:12803\r\nConnection: close\r\n\r\n");
-		expect(parseVersion(response).webSocketDebuggerUrl).toBe("ws://100.100.92.97:12803/cdp");
-	});
-
-	test("uses the loopback discovery URL when an HTTP/1.0 request has no Host header", async () => {
-		const port = await startReadyRelay();
-		expect(parseVersion(await rawGet(port, "GET /json/version HTTP/1.0\r\n\r\n")).webSocketDebuggerUrl).toBe(`ws://127.0.0.1:${port}/cdp`);
-	});
-
-	test("uses the loopback discovery URL when Host is empty", async () => {
-		const port = await startReadyRelay();
-		expect(parseVersion(await rawGet(port, "GET /json/version HTTP/1.1\r\nHost: \r\nConnection: close\r\n\r\n")).webSocketDebuggerUrl).toBe(`ws://127.0.0.1:${port}/cdp`);
-	});
-
-	test("uses the loopback discovery URL when Host would produce an unusable WebSocket authority", async () => {
-		const port = await startReadyRelay();
-		expect(parseVersion(await rawGet(port, "GET /json/version HTTP/1.1\r\nHost: bad/host@evil\r\nConnection: close\r\n\r\n")).webSocketDebuggerUrl).toBe(`ws://127.0.0.1:${port}/cdp`);
 	});
 
 	test("lists the pages it can attach to, refuses a write, and does not know other paths", async () => {

@@ -305,8 +305,9 @@ function isGone(error: unknown): boolean {
 	return error instanceof BrowserRuntimeError && GONE_CODES.has(error.code);
 }
 
+/** The answer to a request that is not for a live token: it ends the connection with the answer, so a body the client never finishes sending cannot keep the socket (the listener has no request timeout; a View's stream is long-lived). */
 function notFound(response: http.ServerResponse, cors: boolean): void {
-	response.writeHead(404, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store", ...(cors ? CORS : {}) });
+	response.writeHead(404, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store", connection: "close", ...(cors ? CORS : {}) });
 	response.end("Not found.\n");
 }
 

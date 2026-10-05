@@ -1,6 +1,6 @@
 // Copied from OMP (https://github.com/can1357/oh-my-pi, MIT), packages/coding-agent/src/tools/browser/relay/server.ts @ dc5f95d9e1 (Dimension omp fork).
 // Copyright (c) 2025 Mario Zechner; (c) 2025-2026 Can Bölük; (c) 2026 Stencil Labs, Inc. See ../../../../third-party/omp/LICENSE.
-// Changed for the Browser pack: `Bun.serve` and `ServerWebSocket` are `node:http` and the `ws` package (the pack runs on Node), so starting is asynchronous (Node reports a taken port on the listen event); the default tab group is titled "dimension".
+// Changed for the Browser pack: `Bun.serve` and `ServerWebSocket` are `node:http` and the `ws` package (the pack runs on Node), so starting is asynchronous (Node reports a taken port on the listen event); the default tab group is titled "dimension"; every request must carry a Host that names this relay (DNS-rebinding defence, `allowedRelayHost`).
 
 /**
  * HTTP + WebSocket server for the browser relay.
@@ -13,16 +13,18 @@
  * - `WS /cdp` → downstream CDP clients (puppeteer).
  * - `WS /ext` → the Chrome extension (token-gated when configured).
  *
- * Binds loopback only: anything that can reach this port can drive the
- * user's logged-in browser.
+ * Binds loopback only, and answers only a request whose Host names it:
+ * anything that can reach this port can drive the user's logged-in browser.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 import { type RawData, WebSocket, WebSocketServer } from "ws";
 import { RelayBridge } from "./bridge.js";
 
 /** Options for {@link startRelayServer}. */
 export interface RelayServerOptions {
+	/** The port to listen on; 0 takes any free one (the port bound is {@link RelayServer.port}). */
 	port: number;
 	/** Shared secret the extension must present as `?token=`; unset disables the check. */
 	token?: string;
@@ -36,6 +38,7 @@ export interface RelayServerOptions {
 /** A running relay server. */
 export interface RelayServer {
 	bridge: RelayBridge;
+	/** The port the listener is bound to. */
 	port: number;
 	/** Closes every socket and the listener; resolves once the port is free. */
 	stop(): Promise<void>;
@@ -47,15 +50,19 @@ const MAX_PAYLOAD_BYTES = 256 * 1024 * 1024;
 /** Default appearance of the Dimension tab group. */
 const DEFAULT_GROUP = { title: "dimension", color: "cyan" } as const;
 
-/** True when `raw` can serve as the authority of a `ws://` URL: no whitespace,
- *  slashes, userinfo, fragments, or control characters, and URL-parseable. */
-function isWsAuthority(raw: string): boolean {
-	if (/[\s/\\@#?]|[\x00-\x1f]/.test(raw)) return false;
-	try {
-		return new URL(`ws://${raw}`).host.length > 0;
-	} catch {
-		return false;
-	}
+/** The loopback names a client reaches the relay by. */
+const LOOPBACK_HOSTS = ["127.0.0.1", "localhost", "[::1]"] as const;
+
+/**
+ * The `Host` header of a request this relay may answer, lower-cased (DNS names are case-insensitive), or null: one of its loopback names at the port it is bound to, exactly, and nothing else.
+ * A page whose own name an attacker has re-pointed at 127.0.0.1 (DNS rebinding) reaches this port with its own name in Host, and reads the open tabs and the debugger URL if that is let through.
+ * No Host, a trailing dot, userinfo, a path, another port, no port, or another spelling of loopback does not name this relay. Only port 80 may leave the port out, as HTTP does.
+ */
+export function allowedRelayHost(header: string | undefined, port: number): string | null {
+	if (header === undefined) return null;
+	const host = header.toLowerCase();
+	for (const name of LOOPBACK_HOSTS) if (host === `${name}:${port}` || (port === 80 && host === name)) return host;
+	return null;
 }
 
 /** Refuse an upgrade request with a plain HTTP status, then end the socket. */
@@ -89,17 +96,26 @@ export async function startRelayServer(opts: RelayServerOptions): Promise<RelayS
 	const sockets = new Set<WebSocket>();
 	const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_PAYLOAD_BYTES });
 
-	/** What the request is for, from its target and Host header (a client may reach the relay by any loopback name). */
-	const locate = (req: IncomingMessage): { host: string; path: string; url: URL } => {
-		const fallback = `127.0.0.1:${opts.port}`;
-		const rawHost = req.headers.host?.trim();
-		const host = rawHost && isWsAuthority(rawHost) ? rawHost : fallback;
-		const url = new URL(req.url ?? "/", `http://${fallback}`);
-		return { host, path: url.pathname.replace(/\/+$/, "") || "/", url };
+	/** The port the listener is bound to: `opts.port`, or what the system gave for port 0. Set when listening starts, before a request can arrive. */
+	let boundPort = opts.port;
+
+	/** The path and query a request asks for, read against the authority that admitted it; null for a request target that is not a URL (`GET http://[ HTTP/1.1`): `new URL` throws on it, and an error thrown in a listener ends the process. */
+	const locate = (req: IncomingMessage, host: string): { path: string; url: URL } | null => {
+		try {
+			const url = new URL(req.url ?? "/", `http://${host}`);
+			return { path: url.pathname.replace(/\/+$/, "") || "/", url };
+		} catch {
+			return null;
+		}
 	};
 
 	const server: Server = createServer((req, res) => {
-		const { host, path } = locate(req);
+		// First, on every route: a request that does not name this relay is not looked at, not even to say 404 (a rebound page may not learn which paths exist).
+		const host = allowedRelayHost(req.headers.host, boundPort);
+		if (host === null) return sendText(res, 403, "Forbidden");
+		const located = locate(req, host);
+		if (located === null) return sendText(res, 400, "Bad request");
+		const { path } = located;
 		if (path === "/cdp" || path === "/ext") return sendText(res, 426, "websocket upgrade required");
 		if (req.method !== "GET") return sendText(res, 405, "Method not allowed");
 		if (path === "/json/version") {
@@ -111,7 +127,11 @@ export async function startRelayServer(opts: RelayServerOptions): Promise<RelayS
 	});
 
 	server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
-		const { path, url } = locate(req);
+		const host = allowedRelayHost(req.headers.host, boundPort);
+		if (host === null) return refuseUpgrade(socket, 403, "Forbidden");
+		const located = locate(req, host);
+		if (located === null) return refuseUpgrade(socket, 400, "Bad request");
+		const { path, url } = located;
 		if (path === "/cdp") {
 			// Browsers set Origin on websocket upgrades; native CDP clients
 			// don't. Reject any Origin so a web page can't drive the relay.
@@ -153,6 +173,7 @@ export async function startRelayServer(opts: RelayServerOptions): Promise<RelayS
 		server.once("error", onError);
 		server.listen({ host: "127.0.0.1", port: opts.port }, () => {
 			server.off("error", onError);
+			boundPort = (server.address() as AddressInfo).port;
 			resolve();
 		});
 	});
@@ -167,11 +188,11 @@ export async function startRelayServer(opts: RelayServerOptions): Promise<RelayS
 	}, WS_KEEPALIVE_MS);
 	keepalive.unref();
 
-	log("relay listening", { port: opts.port });
+	log("relay listening", { port: boundPort });
 	let stopping: Promise<void> | undefined;
 	return {
 		bridge,
-		port: opts.port,
+		port: boundPort,
 		stop(): Promise<void> {
 			stopping ??= (async () => {
 				clearInterval(keepalive);
