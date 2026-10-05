@@ -2,7 +2,7 @@
 // device, the emulator binary for booting one, scrcpy-server for live video.
 
 import { spawn } from "node:child_process";
-import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readSync, statSync, writeSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { BootHandle, BootObserver, DeviceBackend, OwnedProcess, ResolvedBoot, RunningEmulator, StopOutcome, VideoStream, VideoStreamHandlers, VideoStreamOptions } from "../backend";
@@ -12,8 +12,8 @@ import type { Size } from "../shared/pointer";
 import type { GpuMode } from "../settings";
 import { fixFor, type Toolchain } from "../toolchain";
 import { Adb } from "./adb";
-import { type AdbEntry, type BootSample, bootFailureMessage, bootStalled, buildEmulatorArgs, consolePortOf, fallbackNote, freshEmulators, parseAvdName, pickSerial, SOFTWARE_GPU, STALL_POLICY, type StallPolicy } from "./emulator-boot";
-import { isProcessAlive, nodeProcessTable, type ProcessTable, processVerdict, START_TOLERANCE_MS, treePorts, treeUsage } from "./process-table";
+import { type AdbEntry, type BootSample, avdLockHolder, bootFailureMessage, bootStalled, buildEmulatorArgs, consolePortOf, fallbackNote, freshEmulators, isLockRaceExit, LAUNCH_MARKER, LOCK_EXIT_CODE, parseAvdName, pickSerial, relaunchBlockers, RESUMED_NOTE, SOFTWARE_GPU, STALL_POLICY, type StallPolicy, stillSuspendedReason, SUSPEND_POLICY, type SuspendPolicy } from "./emulator-boot";
+import { emulatorProcess, isProcessAlive, nodeProcessTable, type ProcessRow, type ProcessTable, processTree, processVerdict, START_TOLERANCE_MS, stillInTree, suspendedVerdict, treePorts, treeUsage } from "./process-table";
 import { rawToPng } from "./png";
 import { openVideoSession } from "./scrcpy";
 import { KEYCODES } from "./scrcpy-wire";
@@ -31,9 +31,13 @@ export interface BootTiming {
   readonly budgetMs: number;
   /** How long an emulator asked to close itself gets before its process tree is killed. */
   readonly stopGraceMs: number;
+  /** When the emulator's threads are looked at for a suspend, and how often it may be resumed. */
+  readonly suspend: SuspendPolicy;
+  /** How long a relaunch waits for the killed tree to be gone and the AVD's lock to be let go of. */
+  readonly relaunchWaitMs: number;
 }
 
-export const DEFAULT_BOOT_TIMING: BootTiming = { pollMs: 1_000, stall: STALL_POLICY, stallCheckMs: 15_000, budgetMs: 240_000, stopGraceMs: 20_000 };
+export const DEFAULT_BOOT_TIMING: BootTiming = { pollMs: 1_000, stall: STALL_POLICY, stallCheckMs: 15_000, budgetMs: 240_000, stopGraceMs: 20_000, suspend: SUSPEND_POLICY, relaunchWaitMs: 10_000 };
 
 export interface AndroidBackendDeps {
   /** The toolchain as it is NOW (the caller decides how often it is re-resolved). */
@@ -45,6 +49,8 @@ export interface AndroidBackendDeps {
   readonly gpu: () => GpuMode;
   /** The host's process and listener tables. The real ones unless a test supplies its own. */
   readonly processes?: ProcessTable;
+  /** The AVD directory (`ANDROID_AVD_HOME`, then the SDK's own rule) unless a test points it elsewhere. */
+  readonly avdHome?: () => string;
   readonly timing?: Partial<BootTiming>;
   readonly now?: () => number;
 }
@@ -116,8 +122,16 @@ interface BootContext {
   /** adb's devices before the first spawn. */
   readonly before: readonly AdbEntry[];
   readonly baked: boolean;
+  /** The AVD's own folder: where its snapshots and its lock live. */
+  readonly avdDir: string;
   readonly timing: BootTiming;
   fellBack: boolean;
+  /** Resumes spent so far, across the relaunches of this boot. */
+  resumes: number;
+  /** The tool result already says the emulator was resumed. */
+  resumeNoted: boolean;
+  /** The one start-again after losing a race for the AVD's lock has been used. */
+  lockRetried: boolean;
 }
 
 /** One spawned emulator process. */
@@ -126,6 +140,8 @@ interface Launch {
   readonly gpu: GpuMode;
   readonly logPath: string;
   exited: boolean;
+  /** When it ended, on the pack's clock; null while it runs. */
+  exitedAt: number | null;
   code: number | null;
   /** Settles with the exit code when the process ends. */
   readonly exit: Promise<number | null>;
@@ -135,7 +151,12 @@ type Watch =
   | { readonly kind: "found"; readonly serial: string }
   | { readonly kind: "exited" }
   | { readonly kind: "timeout" }
-  | { readonly kind: "stalled"; readonly sample: BootSample };
+  | {
+      readonly kind: "stalled";
+      readonly sample: BootSample;
+      /** The emulator was found suspended at the last look and was not resumed: a freeze, not a hung GPU. */
+      readonly suspended: boolean;
+    };
 
 export class AndroidBackend implements DeviceBackend {
   readonly platform = "android" as const;
@@ -263,8 +284,9 @@ export class AndroidBackend implements DeviceBackend {
 
     // What adb shows before the spawn is not ours, whatever appears next to it.
     const before = (await adb.devices()).map(({ serial, state }): AdbEntry => ({ serial, state }));
-    const baked = existsSync(join(avdHome(), `${avd}.avd`, "snapshots", "avdslim_clean"));
-    const ctx: BootContext = { avd, request, emulator, adb, observer, before, baked, timing: { ...DEFAULT_BOOT_TIMING, ...this.#deps.timing }, fellBack: false };
+    const avdDir = join((this.#deps.avdHome ?? avdHome)(), `${avd}.avd`);
+    const baked = existsSync(join(avdDir, "snapshots", "avdslim_clean"));
+    const ctx: BootContext = { avd, request, emulator, adb, observer, before, baked, avdDir, timing: { ...DEFAULT_BOOT_TIMING, ...this.#deps.timing }, fellBack: false, resumes: 0, resumeNoted: false, lockRetried: false };
     const first = await this.#launch(ctx, this.#deps.gpu());
     const ready = this.#supervise(ctx, first);
     ready.catch(() => undefined);
@@ -281,7 +303,7 @@ export class AndroidBackend implements DeviceBackend {
     const fd = openSync(logPath, existsSync(logPath) && statSync(logPath).size > LOG_ROTATE_BYTES ? "w" : "a");
     const startedAt = this.#now();
     // The argv, first: the log then shows exactly what the pack asked for.
-    writeSync(fd, `\n--- ${new Date(startedAt).toISOString()} the pack launches: emulator ${args.join(" ")}\n`);
+    writeSync(fd, `\n--- ${new Date(startedAt).toISOString()} ${LAUNCH_MARKER} emulator ${args.join(" ")}\n`);
     const child = spawn(ctx.emulator, args, { detached: true, stdio: ["ignore", fd, fd], windowsHide: true });
     closeSync(fd);
     child.unref();
@@ -291,9 +313,10 @@ export class AndroidBackend implements DeviceBackend {
     child.once("error", spawnError.resolve);
     if (child.pid === undefined) throw failure(`could not start the emulator: ${(await spawnError.promise).message}`);
 
-    const launch: Launch = { process: { pid: child.pid, startedAt }, gpu, logPath, exited: false, code: null, exit: exit.promise };
+    const launch: Launch = { process: { pid: child.pid, startedAt }, gpu, logPath, exited: false, exitedAt: null, code: null, exit: exit.promise };
     const done = (code: number | null): void => {
       launch.exited = true;
+      launch.exitedAt = this.#now();
       launch.code = code;
       this.#launches.delete(launch.process.pid);
       exit.resolve(code);
@@ -306,31 +329,44 @@ export class AndroidBackend implements DeviceBackend {
     return launch;
   }
 
-  /** Watch one launch until the device is up, the process dies, the boot stalls or the budget ends; on a stall, relaunch ONCE with software graphics. Anything that fails leaves nothing of the pack's running. */
+  /** Watch one launch until the device is up, the process dies, the boot stalls or the budget ends. A frozen emulator is resumed (never mistaken for a hung GPU); a stall relaunches ONCE with software graphics; an exit that is only a lost race for the AVD's lock starts the emulator once more. Anything that fails leaves nothing of the pack's running. */
   async #supervise(ctx: BootContext, first: Launch): Promise<DeviceInfo> {
     let launch = first;
     for (;;) {
       const seen = await this.#watch(ctx, launch);
       const fallenBack = ctx.fellBack ? " (It had already fallen back to software graphics.)" : "";
-      const failure = (reason: string): Error => new Error(bootFailureMessage(`${reason}${fallenBack}`, { path: launch.logPath, text: readLogTail(launch.logPath) }));
+      const retried = ctx.lockRetried ? " (It had already been started again once, after the AVD's lock was still held.)" : "";
+      const failure = (reason: string): Error => new Error(bootFailureMessage(`${reason}${fallenBack}${retried}`, { path: launch.logPath, text: readLogTail(launch.logPath) }));
       switch (seen.kind) {
         case "found":
           return this.#finish(ctx, launch, seen.serial, failure);
         case "exited":
+          if (!ctx.lockRetried && isLockRaceExit({ code: launch.code, elapsedMs: (launch.exitedAt ?? this.#now()) - launch.process.startedAt }, readLogTail(launch.logPath))) {
+            ctx.lockRetried = true;
+            this.#deps.log(`[sim] ${ctx.avd}: the emulator exited with code ${LOCK_EXIT_CODE} right after the spawn and printed no FATAL line: the AVD's lock was still held. Waiting for it, then starting the emulator once more.`);
+            await this.#awaitAvdFree(ctx, []);
+            launch = await this.#launch(ctx, launch.gpu);
+            break;
+          }
           throw failure(`the emulator for ${ctx.avd} exited with code ${launch.code ?? "?"} before it finished booting.`);
         case "timeout":
           await this.#end(launch);
           throw failure(`the emulator for ${ctx.avd} did not show up in adb within ${Math.round(ctx.timing.budgetMs / 1000)} s; the pack stopped it.`);
         case "stalled": {
+          const relaunch = !seen.suspended && !ctx.fellBack && launch.gpu !== SOFTWARE_GPU;
+          // What the kill has to be waited out of: read before it, while the tree is still there.
+          const killed = relaunch ? await this.#treeOf(launch) : [];
           await this.#end(launch);
-          const seconds = Math.round(seen.sample.elapsedMs / 1000);
-          if (ctx.fellBack || launch.gpu === SOFTWARE_GPU) {
+          if (seen.suspended) throw failure(stillSuspendedReason(ctx.avd, ctx.resumes));
+          if (!relaunch) {
+            const seconds = Math.round(seen.sample.elapsedMs / 1000);
             throw failure(`the emulator for ${ctx.avd} showed no sign of booting after ${seconds} s (${seen.sample.cpuSeconds?.toFixed(1) ?? "?"} s of CPU, no adb device, -gpu ${launch.gpu}); the pack stopped it.`);
           }
           const note = fallbackNote(seen.sample, launch.gpu);
           this.#deps.log(`[sim] ${ctx.avd}: ${note}`);
           ctx.observer.note(note);
           ctx.fellBack = true;
+          await this.#awaitAvdFree(ctx, killed);
           launch = await this.#launch(ctx, SOFTWARE_GPU);
           break;
         }
@@ -338,20 +374,105 @@ export class AndroidBackend implements DeviceBackend {
     }
   }
 
+  /**
+   * Wait for the device to appear. Two clocks tick beside it: the SUSPEND look (the
+   * emulator's threads, first at `suspend.firstCheckMs`, then every `checkMs`, or
+   * `recheckMs` after a resume or a suspended finding) and the STALL verdict (little
+   * CPU for `stall.afterMs`). A resume restarts the stall clock: the time a process
+   * spent frozen says nothing about the GPU.
+   */
   async #watch(ctx: BootContext, launch: Launch): Promise<Watch> {
     const { timing } = ctx;
-    let nextStallCheck = launch.process.startedAt + timing.stall.afterMs;
+    const spawnedAt = launch.process.startedAt;
+    let stallFrom = spawnedAt;
+    let nextStallCheck = stallFrom + timing.stall.afterMs;
+    let nextSuspendCheck = spawnedAt + timing.suspend.firstCheckMs;
+    let frozen = false;
     for (;;) {
       if (launch.exited) return { kind: "exited" };
       const serial = await this.#findSerial(ctx, launch).catch(() => null);
       if (serial !== null) return { kind: "found", serial };
-      if (this.#now() - launch.process.startedAt >= timing.budgetMs) return { kind: "timeout" };
-      if (this.#now() >= nextStallCheck) {
-        nextStallCheck = this.#now() + timing.stallCheckMs;
-        const sample = await this.#sample(launch);
-        if (bootStalled(sample, timing.stall)) return { kind: "stalled", sample };
+      if (this.#now() - spawnedAt >= timing.budgetMs) return { kind: "timeout" };
+      if (this.#now() >= nextSuspendCheck || this.#now() >= nextStallCheck) {
+        // One read of the table serves both questions.
+        const rows = await this.#table.processes().catch(() => null);
+        if (this.#now() >= nextSuspendCheck) {
+          const look = await this.#lookForSuspension(ctx, launch, rows);
+          frozen = look.suspended;
+          nextSuspendCheck = this.#now() + (look.suspended || look.resumed ? timing.suspend.recheckMs : timing.suspend.checkMs);
+          if (look.resumed) {
+            stallFrom = this.#now();
+            nextStallCheck = stallFrom + timing.stall.afterMs;
+          }
+        }
+        if (this.#now() >= nextStallCheck) {
+          nextStallCheck = this.#now() + timing.stallCheckMs;
+          const usage = rows === null ? null : treeUsage(rows, launch.process.pid);
+          const sample: BootSample = { elapsedMs: this.#now() - stallFrom, alive: !launch.exited, deviceSeen: false, cpuSeconds: usage === null ? null : usage.cpuSeconds };
+          if (bootStalled(sample, timing.stall)) return { kind: "stalled", sample, suspended: frozen };
+        }
       }
       await Promise.race([delay(timing.pollMs), launch.exit]);
+    }
+  }
+
+  /**
+   * One look at whether the emulator is frozen, and the resume if it is. `rows` is the
+   * table just read. Only the emulator process under the pack's own launcher is looked at,
+   * and it is resumed only after a second read proves it is STILL that process (same pid,
+   * same start, same parent chain): a pid is a name until its start time agrees.
+   * `suspended` = frozen and not resumed now; `resumed` = the host accepted a resume.
+   */
+  async #lookForSuspension(ctx: BootContext, launch: Launch, rows: readonly ProcessRow[] | null): Promise<{ readonly suspended: boolean; readonly resumed: boolean }> {
+    const clear = { suspended: false, resumed: false };
+    const frozen = { suspended: true, resumed: false };
+    if (rows === null || launch.exited) return clear;
+    const verdict = processVerdict(rows, launch.process);
+    if (verdict !== "ours") {
+      if (verdict === "reused") this.#deps.log(`[sim] ${ctx.avd}: not looking at pid ${launch.process.pid}: it started at another time than the pack recorded, so the pid now belongs to something else`);
+      return clear;
+    }
+    const target = emulatorProcess(rows, launch.process.pid);
+    if (target === null) return clear;
+    if (suspendedVerdict(await this.#table.threadStates(target.pid).catch(() => null)) !== "suspended") return clear;
+    this.#deps.log(`[sim] ${ctx.avd}: every thread of the emulator process (pid ${target.pid}) is suspended by the system`);
+    if (ctx.resumes >= ctx.timing.suspend.maxResumes) return frozen;
+    const fresh = await this.#table.processes().catch(() => null);
+    if (fresh === null || launch.exited || processVerdict(fresh, launch.process) !== "ours" || !stillInTree(fresh, launch.process.pid, target)) return frozen;
+    ctx.resumes++;
+    const resumed = await this.#table.resume(target.pid).catch(() => false);
+    this.#deps.log(`[sim] ${ctx.avd}: ${resumed ? "resumed" : "could not resume"} the emulator process (pid ${target.pid}); resume ${ctx.resumes} of ${ctx.timing.suspend.maxResumes}`);
+    if (resumed && !ctx.resumeNoted) {
+      ctx.resumeNoted = true;
+      ctx.observer.note(RESUMED_NOTE);
+    }
+    return { suspended: !resumed, resumed };
+  }
+
+  /** `launch`'s process and everything under it, as the table shows them now; empty when the table cannot be read. */
+  async #treeOf(launch: Launch): Promise<ProcessRow[]> {
+    const rows = await this.#table.processes().catch(() => null);
+    return rows === null ? [] : processTree(rows, launch.process.pid);
+  }
+
+  /**
+   * Before the AVD is launched again: wait (at most `relaunchWaitMs`) until nothing of the
+   * `killed` tree runs and nothing runs under the pid in the AVD's lock. Launched sooner,
+   * the new emulator finds the lock still named and exits at once with code 253. A table
+   * that cannot be read cannot be waited on; the retry after a 253 is the backstop.
+   */
+  async #awaitAvdFree(ctx: BootContext, killed: readonly ProcessRow[]): Promise<void> {
+    const deadline = this.#now() + ctx.timing.relaunchWaitMs;
+    for (;;) {
+      const rows = await this.#table.processes().catch(() => null);
+      if (rows === null) return;
+      const blockers = relaunchBlockers(rows, killed, avdLockHolder(ctx.avdDir, readTextOrNull));
+      if (blockers.length === 0) return;
+      if (this.#now() >= deadline) {
+        this.#deps.log(`[sim] ${ctx.avd}: pid ${blockers.join(", ")} still running ${Math.round(ctx.timing.relaunchWaitMs / 1000)} s after the kill; starting the emulator anyway`);
+        return;
+      }
+      await delay(Math.min(ctx.timing.pollMs, 250));
     }
   }
 
@@ -389,12 +510,6 @@ export class AndroidBackend implements DeviceBackend {
   async #consolePorts(pid: number): Promise<number[] | null> {
     const [rows, listeners] = await Promise.all([this.#table.processes().catch(() => null), this.#table.listeners().catch(() => null)]);
     return rows === null ? null : treePorts(rows, listeners, pid);
-  }
-
-  async #sample(launch: Launch): Promise<BootSample> {
-    const rows = await this.#table.processes().catch(() => null);
-    const usage = rows === null ? null : treeUsage(rows, launch.process.pid);
-    return { elapsedMs: this.#now() - launch.process.startedAt, alive: !launch.exited, deviceSeen: false, cpuSeconds: usage === null ? null : usage.cpuSeconds };
   }
 
   /** Stop what a boot spawned, and wait (briefly) until it is gone. */
@@ -590,6 +705,15 @@ function avdHome(): string {
   if (env.ANDROID_AVD_HOME) return env.ANDROID_AVD_HOME;
   if (env.ANDROID_USER_HOME) return join(env.ANDROID_USER_HOME, "avd");
   return join(homedir(), ".android", "avd");
+}
+
+/** A small text file, or null when it cannot be read (no such file is the ordinary case). */
+function readTextOrNull(path: string): string | null {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    return null;
+  }
 }
 
 /** The end of a log file (at most 64 KiB), or null when it cannot be read. */
