@@ -15,6 +15,18 @@ const exitAfterStop = (): void => {
     })
     .finally(() => process.exit());
 };
+let crashing = false;
+const exitAfterCrash =
+  (origin: string) =>
+  (error: unknown): void => {
+    if (crashing) return;
+    crashing = true;
+    console.error(`[sim] ${origin}: ${error instanceof Error ? error.message : String(error)}; stopping what the pack booted, then exiting`);
+    process.exitCode = 1;
+    exitAfterStop();
+  };
+process.on("uncaughtException", exitAfterCrash("uncaught exception"));
+process.on("unhandledRejection", exitAfterCrash("unhandled rejection"));
 // The host ends the conversation by closing our stdin: stop what the pack booted, then leave.
 process.stdin.once("end", exitAfterStop);
 process.once("SIGINT", exitAfterStop);
