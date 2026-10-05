@@ -22,10 +22,15 @@ on a phone the host draws its own "Open on your computer" card for it.
   a viewer is attached and stops a second after the last one leaves. A second
   viewer is handed the cached config and the key frame with the deltas since, so
   it shows a picture at once and nothing restarts.
-- **Boots only what it owns.** The pack records which emulators *it* booted. It
-  stops only those, caps them (`simulator.maxDevices`, default 2), stops an idle
-  one after `simulator.idleMinutes` (default 15), and stops them all on exit. An
-  emulator you started yourself is never stopped.
+- **Boots only what it owns, and owns a process, not a serial.** The pack records
+  the emulator *process* it spawned (`pid` and when it started, plus the serial it
+  answers to, for display). It stops only that process tree, after checking the pid
+  still started when the pack spawned it; a serial alone never stops anything (serials
+  are reused, and an emulator you started yourself once got stopped through one). It
+  caps what it booted (`simulator.maxDevices`, default 2), stops an idle one after
+  `simulator.idleMinutes` (default 15), and stops them all on exit. An emulator you
+  started yourself is never stopped, and an AVD you already run is returned by
+  `device_boot`, not started a second time.
 - **Honest when something is missing.** No adb, no emulator, no AVD, no scrcpy:
   each is its own state in the pane (and a line in `device_list`) with the fix.
   Without scrcpy or WebCodecs the pane says **Shot fallback** and shows still
@@ -36,8 +41,8 @@ on a phone the host draws its own "Open on your computer" card for it.
 | Tool | Does |
 | --- | --- |
 | `device_list` | Running devices (each with `kind`: `emulator` or `physical`), bootable AVDs, missing prerequisites with fixes and every path tried. |
-| `device_boot {avd?, headless?, cold?, waitSeconds?}` | Boot an emulator. Returns within 25 s; call again with the same `avd` to wait. An already running device is returned, not duplicated. A failed boot's error ends with the last 15 lines of the emulator's log. |
-| `device_stop {serial}` | Stop an emulator this pack booted (refused for any other). |
+| `device_boot {avd?, headless?, cold?, readOnly?, waitSeconds?}` | Boot an emulator. Returns within 25 s; call again with the same `avd` to wait. An AVD that already runs (even one you started) is returned as `online`/`booting`, not duplicated and not owned. `readOnly: true` starts a second, throwaway instance (`-read-only`; the result says so). If the host GPU never answers, the boot is stopped and relaunched once with software graphics, and the result says so. A failed boot's error ends with the last 15 lines of the emulator's log. |
+| `device_stop {serial}` | Stop an emulator this pack booted (refused for any other), by the process the pack spawned. |
 | `device_screenshot {serial?, maxEdge?}` | PNG, at most `maxEdge` px on the long edge (default 1024); the text gives the scale to device pixels. |
 | `device_tap {label}` or `{x, y}` | Tap. `label` re-reads UI Automator right before tapping; ambiguous labels are refused with the numbered choices (`occurrence`). |
 | `device_swipe`, `device_type`, `device_key` | Swipe/scroll, type printable ASCII, press home/back/recents/power/volume/enter/delete/tab/escape/menu. |
@@ -110,11 +115,40 @@ release may change the protocol: pin it, and the first Live attach tells you
 loudly if it does (the stream is rejected, the pane falls to Shot).
 
 **avdslim** is optional. The pack boots with avdslim's slimming flags itself
-(`-memory 1536 -gpu auto -no-audio -no-boot-anim -camera-* none -lowram`, and
+(`-memory 1536 -gpu <simulator.gpu> -no-audio -no-boot-anim -camera-* none -lowram`, and
 `-no-snapshot-save`; `-lowram` is an emulator flag, not a `-qemu` passthrough, which
-Android Emulator 37 rejects). A cold boot adds `-no-snapshot-load`. If `avdslim bake <avd>` has made the
-`avdslim_clean` golden snapshot, the pack boots from it (about 1.5 s) unless you
-ask for `cold: true`.
+Android Emulator 37 rejects). It passes **no `-port`**: a forced console port collides
+with an emulator you already run on it, so the emulator takes the first free pair and the
+pack learns which serial is its own (below). A cold boot adds `-no-snapshot-load`. If
+`avdslim bake <avd>` has made the `avdslim_clean` golden snapshot, the pack boots from
+it (about 1.5 s) unless you ask for `cold: true`.
+
+## How a boot is supervised
+
+Everything in `src/android/emulator-boot.ts` and `src/android/process-table.ts` is a
+pure function of plain rows; `src/android/backend.ts` does the I/O.
+
+- **Which serial is ours.** The emulator is a process *tree* (on Windows `emulator.exe`
+  launches `qemu-system-x86_64.exe`, which holds the console port and burns the CPU). The
+  pack lists the TCP listeners of the spawned tree and takes the `emulator-<port>` whose
+  console port the tree owns (`pickSerial`); an emulator you started has a different
+  tree. Where the host cannot list listeners, the single emulator that appeared since the
+  spawn is taken only after its console confirms it is the AVD that was asked for.
+- **A hung boot is not a slow one (`bootStalled`).** With `-gpu auto` on a busy host GPU
+  the qemu process sat at about 0.6 s of CPU for 80+ s with no adb device, while a
+  healthy boot is past 10 s of CPU by then. A process that is alive after 75 s, with no
+  adb device and under 3 s of CPU across its whole tree, is stopped (that tree only,
+  verified) and relaunched once with `-gpu swiftshader_indirect`; the tool result and the
+  pane say it fell back and why. A CPU reading that cannot be taken is never a reason to
+  kill. Set `simulator.gpu` to `swiftshader_indirect` to skip the wait.
+- **A failed boot cleans up its own process and nothing else.** The launcher exiting
+  by itself leaves nothing to kill; a timeout or a stall stops the verified tree. A
+  failure that arrives after the `device_boot` call that waited for it returned is told
+  to the next call for that AVD, once, instead of silently starting another boot.
+- **The ownership file** (`<data>/simulator/owned.json`) holds `{serial, avd, pid,
+  startedAt, bootedAt, ownerPid}`. A crashed pack's emulator is adopted at the next start
+  only when its pid still started when the record says; a record from before ownership
+  was by process cannot be verified and is ignored.
 
 ## How a picture gets from the emulator to the pane
 
@@ -156,13 +190,14 @@ emulator ── adb ── scrcpy-server (H.264 encoder, control socket)
 ## Settings
 
 `simulator.maxDevices` (2), `simulator.idleMinutes` (15), `simulator.sdkPath`
-(empty), `simulator.allowPhysical` (false: the user's key to a physical phone). The
-engine does not hand a pack's MCP server its settings, so the server reads the same
-user config the engine does (`$PI_CODING_AGENT_DIR` or
-`~/<$PI_CONFIG_DIR | .omp>/agent/config.yml`) when it needs a value; the
-environment variables `SIMULATOR_MAX_DEVICES`, `SIMULATOR_IDLE_MINUTES`,
-`SIMULATOR_SDK_PATH`, `SIMULATOR_ALLOW_PHYSICAL` override it. Anything but an
-unambiguous `true`/`on`/`yes`/`1` reads as off.
+(empty), `simulator.allowPhysical` (false: the user's key to a physical phone),
+`simulator.gpu` (`auto`; `host`, `swiftshader_indirect` or `angle_indirect`: the
+emulator's `-gpu` mode). The engine does not hand a pack's MCP server its settings, so
+the server reads the same user config the engine does (`$PI_CODING_AGENT_DIR` or
+`~/<$PI_CONFIG_DIR | .omp>/agent/config.yml`) when it needs a value; the environment
+variables `SIMULATOR_MAX_DEVICES`, `SIMULATOR_IDLE_MINUTES`, `SIMULATOR_SDK_PATH`,
+`SIMULATOR_ALLOW_PHYSICAL`, `SIMULATOR_GPU` override it. Anything but an unambiguous
+`true`/`on`/`yes`/`1` reads as off for `allowPhysical`; an unknown `gpu` reads as `auto`.
 
 `mcp.json` sets an `env` block on purpose: a server entry with an `env` is
 launched with the engine's full environment (so `ANDROID_HOME` and `PATH` are

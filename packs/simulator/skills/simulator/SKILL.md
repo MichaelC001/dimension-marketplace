@@ -10,10 +10,11 @@ One device, shared when you want it to be. The `device_*` tools work with or wit
 ## Start
 
 1. `device_list` first. It lists running devices (`serial`, `kind` emulator or physical, state, display size in px), the AVDs you can boot, and any missing prerequisite with its fix. A missing prerequisite is the answer: report the fix, do not work around it.
-2. No emulator? `device_boot` (`avd` if there is more than one; `headless: true` when the user does not need to watch). It returns within ~20 s: if the state is `booting`, call `device_boot` again with the same `avd` to wait. A cold boot is up to a minute; never poll `device_list` in a loop. If it fails, its error ends with the last lines of the emulator's own log: report them.
+2. No emulator? `device_boot` (`avd` if there is more than one; `headless: true` when the user does not need to watch). It returns within ~20 s: if the state is `booting`, call `device_boot` again with the same `avd` to wait. A cold boot is up to a minute; never poll `device_list` in a loop. Read the lines after the device: they say when the pack fell back to software graphics (the host GPU hung; the boot was relaunched once and is slower to draw but fine to use), or that the device was already running. If it fails, its error ends with the last lines of the emulator's own log: report them.
+   - An AVD that is **already running is returned, not started again**, even one the user started themselves. It is then not booted by this pack, so you cannot stop it (`device_stop` refuses it). Only if the user asks for a second, throwaway copy of the same AVD, pass `readOnly: true` (it starts with `-read-only`, and what it changes is discarded when it stops).
 3. Leave `serial` out only when exactly one **emulator** runs; with several you must pass it. A physical phone is never picked for you (next section).
 
-You may stop only what this pack booted (`device_stop`); a device the user started is theirs and the tool refuses it. The pack also stops its own idle emulators, so do not keep one booted "just in case".
+You may stop only what this pack booted (`device_stop`); a device the user started is theirs and the tool refuses it. The pack stops the emulator process it started, never a serial it merely saw. It also stops its own idle emulators, so do not keep one booted "just in case".
 
 ## A physical phone is the person's own device
 
@@ -51,4 +52,4 @@ The pack owns the adb connection, the live encoder and the emulator's lifecycle.
 
 ## Errors
 
-Every error names its fix. Common ones: `missing_adb` / `missing_emulator` (install the Android SDK tools, set `ANDROID_HOME`; the error lists every path that was tried), `no_emulator` (no emulator runs: `device_boot`), `physical_device` (the target is the person's phone: ask the user, do not retry with `allowPhysical` unless they named it), `device_cap` (stop one of the emulators this pack booted, or raise `simulator.maxDevices`), `not_owned` (the device is the user's: do not stop it), `label_ambiguous` (pass `occurrence`), `ui_dump_failed` (a secure screen or a mid-transition app: retry in a second, or fall back to a screenshot).
+Every error names its fix. Common ones: `missing_adb` / `missing_emulator` (install the Android SDK tools, set `ANDROID_HOME`; the error lists every path that was tried), `no_emulator` (no emulator runs: `device_boot`), `physical_device` (the target is the person's phone: ask the user, do not retry with `allowPhysical` unless they named it), `device_cap` (stop one of the emulators this pack booted, or raise `simulator.maxDevices`), `not_owned` (the device is the user's: do not stop it), `cannot_verify` (the pack could not prove the process is its own, so it stopped nothing: tell the user), `label_ambiguous` (pass `occurrence`), `ui_dump_failed` (a secure screen or a mid-transition app: retry in a second, or fall back to a screenshot).
