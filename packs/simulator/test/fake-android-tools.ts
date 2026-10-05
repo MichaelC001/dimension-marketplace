@@ -22,10 +22,16 @@ export interface FakeDevice {
   readonly afterLaunches?: number;
 }
 
+export interface FakeEmulatorBehaviour {
+  readonly output?: string;
+  readonly exitCode?: number;
+}
+
 export interface FakeWorld {
   readonly avds: readonly string[];
   readonly devices: readonly FakeDevice[];
-  readonly emulator?: { readonly output?: string; readonly exitCode?: number };
+  /** What an emulator process does; `launches[n]` replaces it for the nth launch since the world was set (0 = the first). */
+  readonly emulator?: FakeEmulatorBehaviour & { readonly launches?: readonly FakeEmulatorBehaviour[] };
 }
 
 export interface ToolCall {

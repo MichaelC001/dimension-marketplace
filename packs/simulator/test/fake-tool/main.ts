@@ -25,12 +25,17 @@ interface FakeDevice {
 interface World {
   avds: string[];
   devices: FakeDevice[];
-  emulator?: {
-    /** Printed to the emulator's stdout, which the pack points at its log file. */
-    output?: string;
-    /** Exit with this code right after printing. Absent = stay alive until killed. */
-    exitCode?: number;
+  emulator?: EmulatorBehaviour & {
+    /** By launch (0 = the first emulator process started since the world was set): that launch's own behaviour instead of the one above. A launch past the list's end falls back to it. */
+    launches?: EmulatorBehaviour[];
   };
+}
+
+interface EmulatorBehaviour {
+  /** Printed to the emulator's stdout, which the pack points at its log file. */
+  output?: string;
+  /** Exit with this code right after printing. Absent = stay alive until killed. */
+  exitCode?: number;
 }
 
 /** A fake emulator that outlives its test (a failed assertion) ends itself. */
@@ -123,8 +128,10 @@ async function emulator(): Promise<number | null> {
     return 0;
   }
   log({ kind: "launch", args });
-  if (world.emulator?.output !== undefined) await write(process.stdout, world.emulator.output);
-  if (world.emulator?.exitCode !== undefined) return world.emulator.exitCode;
+  // This launch's own line is already logged: its index is the count before it.
+  const behaviour = world.emulator?.launches?.[launchCount() - 1] ?? world.emulator;
+  if (behaviour?.output !== undefined) await write(process.stdout, behaviour.output);
+  if (behaviour?.exitCode !== undefined) return behaviour.exitCode;
   setTimeout(() => process.exit(0), MAX_LIFETIME_MS);
   setInterval(() => undefined, 1 << 30);
   return null;
