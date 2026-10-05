@@ -3,11 +3,15 @@
 // Why the pack needs them: the Android emulator is a process TREE (on Windows
 // `emulator.exe` launches `qemu-system-x86_64.exe`; the qemu child is what holds the
 // console port and burns the CPU), and a pid is only a name until its START TIME
-// agrees. Three decisions rest on that and nothing else:
+// agrees. Four decisions rest on that and nothing else:
 //
 //   which serial is ours   the spawned tree listens on that serial's console port
 //   is a boot stalled      the tree's CPU time (the launcher alone idles by design)
 //   may this pid be killed it is the process the pack spawned: same pid, same start
+//   is it suspended        every thread of its qemu child sits in a suspended wait
+//                          (the system froze it: not a hung GPU, and waiting does
+//                          not thaw it); the pack may then resume that pid, once it
+//                          has proved it is still the child it looked at
 //
 // Everything with logic is a pure function of rows, so each is proved with plain
 // arrays. `nodeProcessTable()` is the only part that touches the host.
@@ -36,6 +40,10 @@ export interface ProcessTable {
   listeners(): Promise<Listener[] | null>;
   /** Kill `pid` and everything under it. `rows` (the table just read) names the children on hosts that do not kill a tree by themselves. */
   killTree(pid: number, rows: readonly ProcessRow[]): Promise<void>;
+  /** How many threads `pid` has and how many sit in a wait the system imposed (a suspend; never the process's own wait); null when the host cannot say (no such process, not permitted, no tool). A rejection reads as null. */
+  threadStates(pid: number): Promise<ThreadSample | null>;
+  /** Let a suspended `pid` run again. True only when the host accepted the request; a rejection reads as false. */
+  resume(pid: number): Promise<boolean>;
 }
 
 // ── pure questions ───────────────────────────────────────────────────────────
@@ -99,6 +107,57 @@ export function processVerdict(rows: readonly ProcessRow[] | null, remembered: {
   return Math.abs(row.startedAtMs - remembered.startedAt) <= toleranceMs ? "ours" : "reused";
 }
 
+// ── a process the system froze ───────────────────────────────────────────────
+
+/** What the host says of one process's threads. */
+export interface ThreadSample {
+  readonly total: number;
+  /** Threads the system stopped (a suspend; a thread waiting on its own work is not one). */
+  readonly suspended: number;
+}
+
+export type SuspendVerdict =
+  /** Every thread is stopped: the process cannot run until something resumes it. */
+  | "suspended"
+  /** At least one thread is not stopped. */
+  | "running"
+  /** Not enough to say: no reading, or too few threads to tell a frozen process from a tiny idle one. Nothing is done. */
+  | "unknown";
+
+/** A one-thread process whose only thread waits proves nothing; the emulator has dozens. */
+const MIN_THREADS = 2;
+
+/** `suspended` only when there are at least two threads and every one is stopped. A reading the host could not take is never a reason to touch a process. */
+export function suspendedVerdict(sample: ThreadSample | null): SuspendVerdict {
+  if (sample === null) return "unknown";
+  const { total, suspended } = sample;
+  if (!Number.isInteger(total) || !Number.isInteger(suspended) || suspended < 0 || suspended > total || total < MIN_THREADS) return "unknown";
+  return suspended === total ? "suspended" : "running";
+}
+
+/**
+ * The process under `root` that does the emulating: on Windows `emulator.exe` (root)
+ * launches `qemu-system-*.exe`, which holds the memory, the console port and the CPU,
+ * while the launcher idles. The biggest descendant; the root itself when nothing runs
+ * under it yet (or where the launcher became qemu). null when `root` is not running.
+ */
+export function emulatorProcess(rows: readonly ProcessRow[], root: number): ProcessRow | null {
+  const [top, ...below] = processTree(rows, root);
+  if (top === undefined) return null;
+  return below.reduce<ProcessRow>((biggest, row) => (row.rssBytes > biggest.rssBytes ? row : biggest), below[0] ?? top);
+}
+
+/** Is `expected` still running under `root`: the same pid AND the same start time? The proof that a pid looked at a moment ago is still the process that was looked at, not a successor that took the number. */
+export function stillInTree(rows: readonly ProcessRow[], root: number, expected: ProcessRow): boolean {
+  return processTree(rows, root).some(row => row.pid === expected.pid && row.startedAtMs === expected.startedAtMs);
+}
+
+/** Members of a tree that was killed which still run. A pid is a survivor only if it started when the member did: the OS reuses pids, and a successor is somebody else's. */
+export function treeSurvivors(rows: readonly ProcessRow[], killed: readonly ProcessRow[]): number[] {
+  const startedAt = new Map(rows.map(row => [row.pid, row.startedAtMs]));
+  return killed.filter(member => startedAt.get(member.pid) === member.startedAtMs).map(member => member.pid);
+}
+
 // ── parsers (one per host format) ────────────────────────────────────────────
 
 /** PowerShell's `pid|ppid|creation(o)|kernel100ns|user100ns|workingSet` lines. A row with no creation time (the idle process) is dropped. */
@@ -139,6 +198,27 @@ export function parsePsProcesses(text: string): ProcessRow[] {
     rows.push({ pid: Number(pid), ppid: Number(ppid), startedAtMs, cpuSeconds: parseCpuTime(cpu ?? "0"), rssBytes: Number(rss) * 1024 });
   }
   return rows;
+}
+
+/** The `total|suspended` line the PowerShell thread script prints; null when no such line is there (the script failed). */
+export function parseThreadCounts(text: string): ThreadSample | null {
+  for (const line of text.split(/\r?\n/)) {
+    const match = /^\s*(\d+)\|(\d+)\s*$/.exec(line);
+    if (match?.[1] !== undefined && match[2] !== undefined) return { total: Number(match[1]), suspended: Number(match[2]) };
+  }
+  return null;
+}
+
+/**
+ * `ps -L -o stat= -p <pid>` (Linux): one state per thread; a stopped one begins with `T`
+ * (SIGSTOP or a terminal stop; `t` is a debugger's stop, which SIGCONT does not undo).
+ * Without `-L` (macOS, BSD) `ps` prints ONE line for the whole process, which is too few
+ * threads for `suspendedVerdict` to call a process frozen: nothing is resumed there.
+ */
+export function parsePsThreadStates(text: string): ThreadSample | null {
+  const states = text.split(/\r?\n/).map(line => line.trim()).filter(line => line !== "");
+  if (states.length === 0) return null;
+  return { total: states.length, suspended: states.filter(state => state.startsWith("T")).length };
 }
 
 function portOf(address: string): number | null {
@@ -188,10 +268,47 @@ export function parseSs(text: string): Listener[] {
 
 // ── the host ─────────────────────────────────────────────────────────────────
 
-function run(file: string, args: readonly string[], env?: NodeJS.ProcessEnv): Promise<string> {
+function run(file: string, args: readonly string[], env?: NodeJS.ProcessEnv, timeoutMs = 20_000): Promise<string> {
   const { promise, resolve, reject } = Promise.withResolvers<string>();
-  execFile(file, args, { encoding: "utf8", timeout: 20_000, maxBuffer: 16 * 1024 * 1024, windowsHide: true, ...(env ? { env } : {}) }, (error, stdout) => (error === null ? resolve(stdout) : reject(error)));
+  execFile(file, args, { encoding: "utf8", timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, windowsHide: true, ...(env ? { env } : {}) }, (error, stdout) => (error === null ? resolve(stdout) : reject(error)));
   return promise;
+}
+
+/** PowerShell's `-EncodedCommand` (base64 of UTF-16LE): the script reaches it with no quoting to get wrong and no file on disk, and with `-NoProfile -NonInteractive` plus `windowsHide` (see `run`) no window or prompt can appear. */
+function encodedCommand(script: string): string[] {
+  return ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")];
+}
+
+/** Prints `total|suspended`. `ThreadState` Wait with `WaitReason` Suspended is what a suspended process shows on every thread; `WaitReason` throws for a thread that is not waiting, hence the `-and` order. `pid` is checked an integer before it is interpolated. */
+function windowsThreadsScript(pid: number): string {
+  return [
+    "$ErrorActionPreference = 'Stop'",
+    `$threads = @((Get-Process -Id ${pid}).Threads)`,
+    "$stopped = @($threads | Where-Object { $_.ThreadState -eq 'Wait' -and $_.WaitReason -eq 'Suspended' }).Count",
+    "'{0}|{1}' -f $threads.Count, $stopped",
+  ].join("\n");
+}
+
+/** `NtResumeProcess` (ntdll) on a handle opened with PROCESS_SUSPEND_RESUME only: the least access that works. Exit 0 only when the NTSTATUS is success. */
+function windowsResumeScript(pid: number): string {
+  return [
+    "$ErrorActionPreference = 'Stop'",
+    "Add-Type -TypeDefinition @'",
+    "using System;",
+    "using System.Runtime.InteropServices;",
+    "public static class SimNt {",
+    '  [DllImport("kernel32.dll")] static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);',
+    '  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);',
+    '  [DllImport("ntdll.dll")] static extern int NtResumeProcess(IntPtr handle);',
+    "  public static int Resume(uint pid) {",
+    "    IntPtr handle = OpenProcess(0x0800, false, pid);",
+    "    if (handle == IntPtr.Zero) return -1;",
+    "    try { return NtResumeProcess(handle); } finally { CloseHandle(handle); }",
+    "  }",
+    "}",
+    "'@",
+    `if ([SimNt]::Resume(${pid}) -ne 0) { exit 1 }`,
+  ].join("\n");
 }
 
 /** CIM, because `wmic` is gone from current Windows. Operators only (`-f`), no method calls, so it also runs where PowerShell is in constrained-language mode. */
@@ -233,6 +350,27 @@ export function nodeProcessTable(): ProcessTable {
         } catch {
           // already gone
         }
+      }
+    },
+    threadStates: async pid => {
+      if (!Number.isInteger(pid) || pid <= 0) return null;
+      try {
+        // Tighter than the table read: the boot watch waits on this between looks for the device.
+        if (windows) return parseThreadCounts(await run("powershell.exe", encodedCommand(windowsThreadsScript(pid)), undefined, 8_000));
+        return parsePsThreadStates(await run("ps", [...(process.platform === "linux" ? ["-L"] : []), "-o", "stat=", "-p", String(pid)], { ...process.env, LC_ALL: "C" }, 8_000));
+      } catch {
+        return null;
+      }
+    },
+    resume: async pid => {
+      if (!Number.isInteger(pid) || pid <= 0) return false;
+      try {
+        // Compiling the P/Invoke type takes a few seconds on a cold PowerShell.
+        if (windows) await run("powershell.exe", encodedCommand(windowsResumeScript(pid)), undefined, 30_000);
+        else process.kill(pid, "SIGCONT");
+        return true;
+      } catch {
+        return false;
       }
     },
   };

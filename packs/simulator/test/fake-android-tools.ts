@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { BootObserver, OwnedProcess } from "../src/backend";
-import type { Listener, ProcessRow, ProcessTable } from "../src/android/process-table";
+import type { Listener, ProcessRow, ProcessTable, ThreadSample } from "../src/android/process-table";
 
 // ── the fake tools ───────────────────────────────────────────────────────────
 
@@ -129,6 +129,16 @@ export class FakeHost implements ProcessTable {
   cpuSeconds: (index: number) => number = () => 0;
   /** Console ports the nth spawned emulator's tree listens on. */
   consolePorts: (index: number) => number[] = () => [];
+  /** The qemu child the nth spawned launcher has started, if any (the launcher itself idles): it appears in the table under that launcher. */
+  qemuChild: (index: number, launcher: OwnedProcess) => ProcessRow | null = () => null;
+  /** What the host says of a pid's threads; null = it cannot say. */
+  threads: (pid: number) => ThreadSample | null = () => null;
+  /** Whether the host accepts a resume. */
+  resumeAccepted = true;
+  /** Every pid `threadStates` was asked about. */
+  readonly sampled: number[] = [];
+  /** Every pid `resume` was asked to resume. */
+  readonly resumed: number[] = [];
   tableReadable = true;
   listenersReadable = true;
   /** How many times the process table was read. */
@@ -158,13 +168,27 @@ export class FakeHost implements ProcessTable {
     this.processReads++;
     if (!this.tableReadable) throw new Error("the process table cannot be read");
     const mine = this.spawned.flatMap((process, index): ProcessRow[] => (this.killed.includes(process.pid) ? [] : [{ pid: process.pid, ppid: 1, startedAtMs: process.startedAt, cpuSeconds: this.cpuSeconds(index), rssBytes: 1_000_000 }]));
-    return [...mine, ...this.others];
+    const children = this.spawned.flatMap((process, index): ProcessRow[] => {
+      const child = this.killed.includes(process.pid) ? null : this.qemuChild(index, process);
+      return child === null ? [] : [child];
+    });
+    return [...mine, ...children, ...this.others];
   }
 
   async listeners(): Promise<Listener[] | null> {
     if (!this.listenersReadable) return null;
     const mine = this.spawned.flatMap((process, index) => (this.killed.includes(process.pid) ? [] : this.consolePorts(index).map((port): Listener => ({ pid: process.pid, port }))));
     return [...mine, ...this.othersListening];
+  }
+
+  async threadStates(pid: number): Promise<ThreadSample | null> {
+    this.sampled.push(pid);
+    return this.threads(pid);
+  }
+
+  async resume(pid: number): Promise<boolean> {
+    this.resumed.push(pid);
+    return this.resumeAccepted;
   }
 
   async killTree(pid: number): Promise<void> {
