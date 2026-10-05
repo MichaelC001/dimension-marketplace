@@ -80,7 +80,7 @@ class Run {
   output = "";
   /** Actual latest browser touched by this run; never inferred from opening order. */
   previewBrowserId: string | undefined;
-  /** Aborted when the run is cancelled, the person takes the browser over, or its worker is terminated: what every host-side step of the run (an open) waits under. */
+  /** Aborted when the run is cancelled, the person takes the browser over, or the run settles (its answer, or its worker's end): what every host-side step of the run (an open) waits under, so none outlives the cell. */
   readonly controller = new AbortController();
   readonly done = Promise.withResolvers<Outcome>();
   settled: Outcome | undefined;
@@ -304,7 +304,6 @@ export class CodeSession {
   #hung(run: Run): void {
     if (run.settled !== undefined) return;
     run.hung = true;
-    run.controller.abort(new ToolAbortError());
     this.#settle(run, { error: stuckError(run.timeoutMs) });
     if (run.worker !== undefined) this.#recycle(run.worker);
   }
@@ -339,6 +338,8 @@ export class CodeSession {
     if (this.#active === run) this.#active = undefined;
     this.#finished.set(run.id, run);
     this.#prune();
+    // Whatever the cell still has in flight on the host (a `browser.open` waiting for a launch) is told to stop: it would otherwise finish for a cell that is gone.
+    run.controller.abort(new ToolAbortError());
     run.done.resolve(outcome);
     this.#afterRun();
   }
@@ -455,10 +456,7 @@ export class CodeSession {
 
   #overMemory(live: LiveWorker, run: Run | undefined, error: RunError, log: string): void {
     console.error(`[browser-code] ${log}`);
-    if (run !== undefined) {
-      run.controller.abort(new ToolAbortError());
-      this.#settle(run, { error });
-    }
+    if (run !== undefined) this.#settle(run, { error });
     this.#recycle(live);
   }
 
@@ -671,13 +669,12 @@ export class CodeSession {
     } else {
       record.wsEndpoint = made.wsEndpoint;
     }
-    if (!run.holds.has(record.browserId)) {
-      try {
-        run.holds.set(record.browserId, browsers.holdWork(record.browserId));
-      } catch (error) {
-        if (made.created) await this.#dropBrowser(record, true);
-        throw error;
-      }
+    // A cell that ended while the browser was being made takes no hold (`#holdFor`); the browser this very open made is let go with it.
+    try {
+      this.#holdFor(run, record.browserId);
+    } catch (error) {
+      if (made.created) await this.#dropBrowser(record, true);
+      throw error;
     }
     return { record, created: made.created };
   }
@@ -771,8 +768,11 @@ export class CodeSession {
   // Holds, take-over, freeze
   // -----------------------------------------------------------------------
 
+  /** A hold on `browserId` for `run`. A run that has settled takes none: `#settle` already let go of its holds, and one taken after it (by a call that was still in flight) would never be released, leaving the browser counted as working for good. */
   #holdFor(run: Run, browserId: string): void {
-    if (!run.holds.has(browserId)) run.holds.set(browserId, this.#d.browsers.holdWork(browserId));
+    if (run.holds.has(browserId)) return;
+    if (run.settled !== undefined) throw new ToolAbortError();
+    run.holds.set(browserId, this.#d.browsers.holdWork(browserId));
   }
 
   /** The cell counts as a call in flight on every browser the session holds: no idle close, no make-room, and the refusals a page call gets (`task_running`, `publish_pending`, `human_driving`). */
@@ -786,7 +786,7 @@ export class CodeSession {
           continue;
         }
         this.#releaseHolds(run);
-        throw new ToolError(codedMessage(error));
+        throw error instanceof ToolAbortError ? error : new ToolError(codedMessage(error));
       }
     }
   }
@@ -953,10 +953,7 @@ export class CodeSession {
     clearTimeout(this.#pruneTimer);
     const run = this.#active;
     const midRun = run !== undefined && run.settled === undefined;
-    if (run !== undefined && midRun) {
-      run.controller.abort(new ToolAbortError());
-      this.#settle(run, { error: abortError() });
-    }
+    if (run !== undefined && midRun) this.#settle(run, { error: abortError() });
     // A sweep of the freeze state may be mid-way through a browser call; the worker does not wait for it when a cell is running.
     if (midRun) await Promise.all([this.#closeWorker(true), this.#sweeping]);
     else {
