@@ -555,8 +555,8 @@ export class BrowserRuntime implements BrowserRuntimePort {
 					delete entry.notice;
 					// No further authority-dependent work may fail after granting the creator.
 					if (createdForChat && profile !== null && opener.session) {
-						const permissions = this.profilePermissions.get(opener.session) ?? new Map<string, { status: "pending" | "granted"; expiresAt: number }>();
-						permissions.set(profile, { status: "granted", expiresAt: Number.POSITIVE_INFINITY });
+						const permissions = this.profilePermissions.get(opener.session) ?? new Map<string, { status: "pending" | "granted"; expiresAt: number; principal?: ArtifactoryLoopPrincipal }>();
+						permissions.set(profile, { status: "granted", expiresAt: Number.POSITIVE_INFINITY, principal: this.profilePrincipals.get(opener.session) });
 						this.profilePermissions.set(opener.session, permissions);
 					}
 					return completed;
@@ -1290,7 +1290,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		else this.profilePrincipals.set(sessionId, principal);
 		const permissions = this.profilePermissions.get(sessionId);
 		for (const [profile, permission] of permissions ?? []) {
-			if (permission.status === "pending" && !samePrincipal(permission.principal, principal)) permissions!.delete(profile);
+			if (!samePrincipal(permission.principal, principal)) permissions!.delete(profile);
 		}
 	}
 
@@ -1305,8 +1305,9 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	private requireProfileName(profile: string, session: string | undefined): void {
 		if (session === undefined) fail("profile_consent_required", `Ask the person to approve access to profile "${profile}" in Browser profiles. A host-stamped session is required.`);
 		const permissions = this.profilePermissions.get(session);
-		if (permissions?.get(profile)?.status === "granted") return;
 		const principal = this.profilePrincipals.get(session);
+		const standing = permissions?.get(profile);
+		if (standing?.status === "granted" && samePrincipal(standing.principal, principal)) return;
 		if (principal && this.store.hasLoopConsent(principal, profile)) return;
 		const pending = permissions ?? new Map<string, { status: "pending" | "granted"; expiresAt: number; principal?: ArtifactoryLoopPrincipal }>();
 		this.profilePermissions.set(session, pending);
@@ -1383,7 +1384,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				if (!principal || !samePrincipal(current.principal, principal)) fail("consent_missing", "The Loop requesting this profile is no longer verified.");
 				this.store.setLoopConsent(principal, profile, true);
 				permissions!.delete(profile);
-			} else permissions!.set(profile, { status: "granted", expiresAt: Number.POSITIVE_INFINITY });
+			} else permissions!.set(profile, { status: "granted", expiresAt: Number.POSITIVE_INFINITY, principal });
 		} else if (decision === "deny") {
 			if (current?.status !== "pending" || current.expiresAt <= Date.now()) fail("consent_missing", "There is no live pending request for this profile.");
 			permissions!.delete(profile);
