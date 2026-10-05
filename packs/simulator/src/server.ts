@@ -91,7 +91,7 @@ export interface SimulatorServerOptions {
 /** Re-resolved on a short lease: a tool call is not the place to walk the disk every time, `device_list` is. */
 function leasedToolchain(settings: () => SimulatorSettings): { current(): Toolchain; refresh(): Toolchain } {
   let cached: { at: number; value: Toolchain } | null = null;
-  const resolve = (): Toolchain => resolveToolchain(nodeProbe({ home: homedir(), sdkPathSetting: settings().sdkPath }));
+  const resolve = (): Toolchain => resolveToolchain(nodeProbe({ sdkPathSetting: settings().sdkPath }));
   return {
     current: () => {
       if (cached === null || Date.now() - cached.at > 10_000) cached = { at: Date.now(), value: resolve() };

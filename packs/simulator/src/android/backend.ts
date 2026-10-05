@@ -9,7 +9,7 @@ import { join } from "node:path";
 import type { BootHandle, DeviceBackend, VideoStream, VideoStreamHandlers, VideoStreamOptions } from "../backend";
 import { type BootRequest, type DeviceInfo, type DeviceState, fail, type KeyName, type Screenshot, type UiSnapshot } from "../contracts";
 import type { Size } from "../shared/pointer";
-import type { Toolchain } from "../toolchain";
+import { fixFor, type Toolchain } from "../toolchain";
 import { Adb } from "./adb";
 import { rawToPng } from "./png";
 import { openVideoSession } from "./scrcpy";
@@ -98,8 +98,9 @@ export class AndroidBackend implements DeviceBackend {
   }
 
   #adb(): Adb {
-    const path = this.#deps.toolchain().adb;
-    if (path === null) fail("missing_adb", "adb is not installed or not found. Install Android platform-tools, then set ANDROID_HOME (or the simulator.sdkPath setting) to the SDK folder.");
+    const toolchain = this.#deps.toolchain();
+    const path = toolchain.adb;
+    if (path === null) fail("missing_adb", `adb is not installed or not found. ${fixFor(toolchain, "adb")}`);
     let adb = this.#adbs.get(path);
     if (adb === undefined) {
       adb = new Adb(path);
@@ -172,8 +173,9 @@ export class AndroidBackend implements DeviceBackend {
   }
 
   async startBoot(request: BootRequest): Promise<BootHandle> {
-    const { emulator } = this.#deps.toolchain();
-    if (emulator === null) fail("missing_emulator", "the Android emulator is not installed. In Android Studio: SDK Manager -> SDK Tools -> Android Emulator, add a system image, create an AVD in Device Manager; then set ANDROID_HOME (or simulator.sdkPath) if the SDK is not in the default place.");
+    const toolchain = this.#deps.toolchain();
+    const { emulator } = toolchain;
+    if (emulator === null) fail("missing_emulator", `the Android emulator is not installed or not found. ${fixFor(toolchain, "emulator")}`);
     const adb = this.#adb();
     const avds = await this.avds();
     if (avds.length === 0) fail("no_avd", "there is no AVD to boot. Create one in Android Studio -> Device Manager (or `avdmanager create avd`), then call device_boot again.");
@@ -324,8 +326,9 @@ export class AndroidBackend implements DeviceBackend {
   }
 
   async openStream(serial: string, options: VideoStreamOptions, handlers: VideoStreamHandlers): Promise<VideoStream> {
-    const { scrcpyServer } = this.#deps.toolchain();
-    if (scrcpyServer === null) fail("missing_scrcpy", "live video needs scrcpy-server (not found). Download scrcpy 5.0 from https://github.com/Genymobile/scrcpy/releases, unzip it under ~/.inso/tools/mobile-sim/scrcpy/ (or set SCRCPY_SERVER_PATH).");
+    const toolchain = this.#deps.toolchain();
+    const { scrcpyServer } = toolchain;
+    if (scrcpyServer === null) fail("missing_scrcpy", `live video needs scrcpy-server (not found). ${fixFor(toolchain, "scrcpy-server")}`);
     return openVideoSession({ adb: this.#adb(), serverPath: scrcpyServer, log: this.#deps.log }, serial, options, handlers);
   }
 }
