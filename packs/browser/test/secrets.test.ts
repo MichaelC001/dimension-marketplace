@@ -13,7 +13,7 @@ describe("the secrets the pack is started with", () => {
     secrets.take(env);
     expect(env).toEqual({ PATH: "/bin", DIM_BROWSER_PYTHON: "python" });
     expect(secrets.get("TYPESAFE_API_KEY", env)).toBe("sk-a");
-    expect(secrets.environment(env)).toEqual({ PATH: "/bin", DIM_BROWSER_PYTHON: "python", TYPESAFE_API_KEY: "sk-a", TEXT_MODEL_API_KEY: "sk-b" });
+    expect(secrets.taskKeys(env)).toEqual({ TYPESAFE_API_KEY: "sk-a", TEXT_MODEL_API_KEY: "sk-b" });
     // The environment itself, read again, is still clean: handing the keys over does not put them back.
     expect(env.TYPESAFE_API_KEY).toBeUndefined();
   });
@@ -55,6 +55,6 @@ describe("the secrets the pack is started with", () => {
     expect(secrets.get("TYPESAFE_API_KEY", env)).toBeUndefined();
     env.TYPESAFE_API_KEY = "sk-late";
     expect(secrets.get("TYPESAFE_API_KEY", env)).toBe("sk-late");
-    expect(secrets.environment(env).TYPESAFE_API_KEY).toBe("sk-late");
+    expect(secrets.taskKeys(env)).toEqual({ TYPESAFE_API_KEY: "sk-late" });
   });
 });

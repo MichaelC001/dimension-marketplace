@@ -78,11 +78,29 @@ interface Spawned {
   stderr(): string;
 }
 
+/**
+ * What the jev worker is handed of this process's environment: what an interpreter needs to start (where programs and temp files live, locale, Python's own settings), what its HTTP client reads (proxy and
+ * certificate settings, which may name a proxy with its login) and jev's two documented settings that are not keys (`TEXT_MODEL`, `TEXT_MODEL_BASE_URL`, README). Nothing else. The worker is driven by a model that reads page text an attacker can write, and it can run code, so a secret of the host's that happens
+ * to sit in the server's environment (a cloud key, a token) must not be in the worker's. The same idea as the code cell's allow-list (`CELL_ENV`, code/host/code-host.ts), with what Python adds; matched without regard to case,
+ * because Windows has one variable for every spelling of a name and Node reports the one the system holds.
+ */
+const WORKER_ENV =
+  /^(?:PATH|PATHEXT|SYSTEMROOT|WINDIR|COMSPEC|SYSTEMDRIVE|TEMP|TMP|TMPDIR|HOME|USERPROFILE|LANG|LANGUAGE|LC_(?:ALL|CTYPE|NUMERIC|TIME|COLLATE|MONETARY|MESSAGES|PAPER|NAME|ADDRESS|TELEPHONE|MEASUREMENT|IDENTIFICATION)|TZ|PYTHON[A-Z0-9_]*|(?:HTTPS?|ALL|NO)_PROXY|SSL_CERT_(?:FILE|DIR)|REQUESTS_CA_BUNDLE|CURL_CA_BUNDLE|TEXT_MODEL|TEXT_MODEL_BASE_URL)$/i;
+
+/** The environment of a task worker: the allow-listed part of `source`, then `extra` over it (the keys it needs and its own settings). */
+export function taskWorkerEnv(source: NodeJS.ProcessEnv, extra: Record<string, string>): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [name, value] of Object.entries(source)) if (value !== undefined && WORKER_ENV.test(name)) env[name] = value;
+  return { ...env, ...extra };
+}
+
+/** The pack's keys are not in this process's environment any more (secrets.ts took them at start): the worker is handed them here, with its interpreter's settings, and nothing else gets them. */
+const workerEnvironment = (): Record<string, string> => taskWorkerEnv(process.env, { ...launchSecrets.taskKeys(), PYTHONUNBUFFERED: "1", PYTHONIOENCODING: "utf-8" });
+
 function spawnWorker(): Spawned {
   const child = spawn(interpreter(), ["-m", "dim_browser_bridge"], {
     cwd: PYTHON_DIR,
-    // The keys are not in this process's environment any more (secrets.ts took them at start): the worker is handed them here, and nothing else gets them.
-    env: { ...launchSecrets.environment(), PYTHONUNBUFFERED: "1", PYTHONIOENCODING: "utf-8" },
+    env: workerEnvironment(),
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
   });
@@ -111,8 +129,8 @@ function spawnWorker(): Spawned {
  */
 let spare: { worker: Spawned; env: string; idle: NodeJS.Timeout } | undefined;
 
-/** The spare is only good for the environment it was spawned in (interpreter, keys, PYTHONPATH). */
-const envKey = (): string => JSON.stringify(launchSecrets.environment());
+/** The spare is only good for the environment it was spawned in: the interpreter chosen, and what it is handed (keys, PYTHONPATH). */
+const envKey = (): string => JSON.stringify([process.env.DIM_BROWSER_PYTHON, workerEnvironment()]);
 
 /** An idle spare must never keep the server process alive; a running task must. */
 function hold(worker: Spawned, held: boolean): void {

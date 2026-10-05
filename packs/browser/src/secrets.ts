@@ -33,9 +33,14 @@ export class LaunchSecrets {
     return this.#taken[name] ?? env[name];
   }
 
-  /** The environment for a process the pack starts that needs its secrets (the task worker): `env` with the stored secrets in it. */
-  environment(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-    return { ...env, ...this.#taken };
+  /** The keys a process the pack starts for the jev agent needs (the task worker), and nothing else of `env`: each stored one, else what `env` holds now. The caller builds the rest of that process's environment itself. */
+  taskKeys(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
+    const keys: Record<string, string> = {};
+    for (const name of TASK_SECRETS) {
+      const value = this.get(name, env);
+      if (value !== undefined) keys[name] = value;
+    }
+    return keys;
   }
 }
 

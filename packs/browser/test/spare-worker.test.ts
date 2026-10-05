@@ -5,7 +5,7 @@
  *  already running).
  *
  *  The REAL `startWorker` launches the real interpreter on a scripted FAKE worker (test/fake-worker). Each fake worker
- *  records its pid, as an empty file, in FAKE_WORKER_PIDS the moment it starts, and answers a job with its own pid: a job
+ *  records its pid, as an empty file, in PYTHON_FAKE_WORKER_PIDS the moment it starts, and answers a job with its own pid: a job
  *  that was served by a worker which already existed is one whose answer is a pid already on disk.
  */
 import { existsSync } from "node:fs";
@@ -29,7 +29,7 @@ if (!existsSync(PYTHON)) {
 const describeWithPython = existsSync(PYTHON) ? describe : describe.skip;
 const describeWithPythonAndChrome = existsSync(PYTHON) && chromePath !== undefined ? describe : describe.skip;
 
-const ENV_KEYS = ["DIM_BROWSER_PYTHON", "PYTHONPATH", "PYTHONDONTWRITEBYTECODE", "FAKE_WORKER_PIDS", "TYPESAFE_API_KEY"] as const;
+const ENV_KEYS = ["DIM_BROWSER_PYTHON", "PYTHONPATH", "PYTHONDONTWRITEBYTECODE", "PYTHON_FAKE_WORKER_PIDS", "TYPESAFE_API_KEY"] as const;
 const savedEnv: Partial<Record<(typeof ENV_KEYS)[number], string>> = {};
 
 beforeAll(() => {
@@ -60,7 +60,8 @@ afterEach(async () => {
 async function pidDirectory(): Promise<string> {
 	const dir = join(await createRoot(), "worker-pids");
 	await mkdir(dir);
-	process.env.FAKE_WORKER_PIDS = dir;
+	// Named PYTHON_*: the worker is handed only an allow-list of the server's environment (task.ts), and Python's own settings are on it.
+	process.env.PYTHON_FAKE_WORKER_PIDS = dir;
 	return dir;
 }
 
