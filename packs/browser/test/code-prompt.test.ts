@@ -1,7 +1,7 @@
 /** WHAT BREAKS IN THE PRODUCT IF THIS GOES RED: `prompt.md` is the model's only knowledge of the API it writes code against (doc 77 §7.4.2). A method it names
  *  that the facade does not have is a TypeError the model meets on its first try; a method the facade has that it does not name is a feature the model never
  *  uses (the owner's rule: nothing OMP's browser has is lost); and a description that grows past the budget costs every turn of every session that is offered
- *  the tool (doc 77 §7.9: the model set at or under 1,711 tokens, o200k).
+ *  the tool (doc 77 §7.9, amended 2026-10-05: the model set at or under 2,200 tokens, o200k; see MODEL_SET_TOKENS).
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -136,15 +136,26 @@ describe("what the model is made to read", () => {
       .map(tool => ({ name: tool.name, tokens: countTokens(JSON.stringify({ name: tool.name, description: tool.description, input_schema: tool.inputSchema })) }));
   }
 
-  test("the model of a code space is offered browser_run, browser_view, browser_read, browser_profiles and browser_close, and their text is at most 1,711 tokens", async () => {
+  /**
+   * The budgets. Doc 77 §7.9 set the code-space model set at 1,711 tokens and `browser_run`'s description at OMP's 1,089 (o200k).
+   * AMENDED 2026-10-05 by the release lead's ruling (the owner was told; not separately signed): the saved-profile route from code
+   * (`profileTool`, a zod union of about 500 tokens of input schema) is part of the code space, so a code or build space pays 457
+   * tokens more every turn than §7.9 allowed: 2,168 against 1,711, still below the 2,383 before the port, and `browser_run`'s
+   * description alone is 1,128 against OMP's 1,089. Each budget is that measured number plus a fixed margin of 32, so the NEXT growth
+   * still fails here. A lean `profileTool` schema that gives the tokens back is filed for 0.11.2.
+   */
+  const MODEL_SET_TOKENS = 2_200;
+  const DESCRIPTION_TOKENS = 1_160;
+
+  test("the model of a code space is offered browser_run, browser_view, browser_read, browser_profiles and browser_close, and their text is within the budget", async () => {
     const tools = await modelTools();
     expect(tools.map(tool => tool.name).sort()).toEqual(["browser_close", "browser_profiles", "browser_read", "browser_run", "browser_view"]);
     const total = tools.reduce((sum, tool) => sum + tool.tokens, 0);
-    expect(total).toBeLessThanOrEqual(1_711);
+    expect(total).toBeLessThanOrEqual(MODEL_SET_TOKENS);
   });
 
-  test("browser_run's description alone is at most OMP's 1,089 tokens", () => {
-    expect(countTokens(BROWSER_RUN_DESCRIPTION)).toBeLessThanOrEqual(1_089);
+  test("browser_run's description alone is within the budget", () => {
+    expect(countTokens(BROWSER_RUN_DESCRIPTION)).toBeLessThanOrEqual(DESCRIPTION_TOKENS);
   });
 
   /** Everything a code-space model is told about a saved profile, wherever it meets it: the tool's text, the refusal a cell is answered with, and the skill's reference for the code tool. */
