@@ -13646,6 +13646,7 @@ var MAX_RELEASED = 64;
 var VIEW_GONE_MS = 30 * 6e4;
 var MAX_FRAMES_RETAINED = 8;
 var ACT_BUDGET_MS = 2e4;
+var CELL_ACTIVITY_BEAT_MS = 2e3;
 var MAX_BATCH_DIALOGS = 5;
 var MAX_SNAPSHOT_CHARS = 2e4;
 var MAX_ELEMENT_CHARS = 4e3;
@@ -13958,6 +13959,7 @@ var BrowserRuntime = class {
         lastUsed: performance.now(),
         viewers: 0,
         pending: 0,
+        cells: 0,
         idle: void 0,
         retiring: void 0,
         closeFailed: false,
@@ -14290,15 +14292,19 @@ var BrowserRuntime = class {
       }
     }
   }
-  /** One call in flight on `entry`, for a cell: out of idle close and make-room, refused like a page call while a task or a pending publish owns the page. Returns what ends it. */
+  /** One call in flight on `entry`, for a cell: out of idle close and make-room, refused like a page call while a task or a pending publish owns the page. Returns what ends it.
+   *  A cell that drives is an agent acting here, as a step tool is (`admitCaller`): the View offers Take over while it runs and for a few seconds after. */
   holdWork(entry) {
     refuseWhileBusy(entry, void 0, "code");
     entry.pending += 1;
+    entry.cells += 1;
     let held = true;
     return () => {
       if (!held) return;
       held = false;
       entry.pending -= 1;
+      entry.cells -= 1;
+      entry.agentAt = Date.now();
       entry.lastUsed = performance.now();
     };
   }
@@ -15590,7 +15596,7 @@ ${host}`;
       publish: entry.publish ? publishRecord(entry.publish) : null,
       dialogs: state.dialogs,
       takenOver: entry.takenOver,
-      agentActionAt: entry.agentAt
+      agentActionAt: agentActionAt(entry)
     };
   }
   /** State when the page cannot be read (it may be mid-navigation after a failed action). */
@@ -15841,6 +15847,9 @@ function refuseWhileTakenOver(entry, caller, tools = "steps") {
 function admitCaller(entry, caller) {
   refuseWhileBusy(entry, caller);
   if (caller !== "app") entry.agentAt = Date.now();
+}
+function agentActionAt(entry) {
+  return entry.cells > 0 ? Date.now() - Date.now() % CELL_ACTIVITY_BEAT_MS : entry.agentAt;
 }
 function refuseWhilePublishing(entry, caller) {
   if (caller !== "app" && isPending(entry.publish)) {
