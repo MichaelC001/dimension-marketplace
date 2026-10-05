@@ -145,6 +145,19 @@
 						"default": false,
 						"label": "Allow driving a physical phone",
 						"description": "Off (default): the agent and the pane work with emulators only. On: a USB or Wi-Fi phone becomes drivable, but only when the agent is also told to (allowPhysical on the call) after you named that exact phone. A phone is your own device; keep this off unless you want an agent to touch it."
+					},
+					"gpu": {
+						"type": "enum",
+						"values": ["auto", "host", "swiftshader_indirect", "angle_indirect"],
+						"default": "auto",
+						"label": "Emulator graphics",
+						"description": "How the emulator draws (its -gpu mode). Auto uses the host GPU when it can; it can hang while that GPU is busy, and the pack then relaunches the boot once with software graphics (swiftshader_indirect) and says so. Pick swiftshader_indirect to always draw in software: slower, needs no GPU. host forces the host GPU; angle_indirect draws through ANGLE.",
+						"options": [
+							{ "value": "auto", "label": "Auto (host GPU, software if it hangs)" },
+							{ "value": "host", "label": "Host GPU" },
+							{ "value": "swiftshader_indirect", "label": "Software (SwiftShader)" },
+							{ "value": "angle_indirect", "label": "ANGLE" }
+						]
 					}
 				}
 			}
