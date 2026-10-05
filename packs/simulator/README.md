@@ -41,7 +41,7 @@ on a phone the host draws its own "Open on your computer" card for it.
 | Tool | Does |
 | --- | --- |
 | `device_list` | Running devices (each with `kind`: `emulator` or `physical`), bootable AVDs, missing prerequisites with fixes and every path tried. |
-| `device_boot {avd?, headless?, cold?, readOnly?, waitSeconds?}` | Boot an emulator. Returns within 25 s; call again with the same `avd` to wait. An AVD that already runs (even one you started) is returned as `online`/`booting`, not duplicated and not owned. `readOnly: true` starts a second, throwaway instance (`-read-only`; the result says so). If the host GPU never answers, the boot is stopped and relaunched once with software graphics, and the result says so. A failed boot's error ends with the last 15 lines of the emulator's log. |
+| `device_boot {avd?, headless?, cold?, readOnly?, waitSeconds?}` | Boot an emulator. Returns within 25 s; call again with the same `avd` to wait. An AVD that already runs (even one you started) is returned as `online`/`booting`, not duplicated and not owned. `readOnly: true` starts a second, throwaway instance (`-read-only`; the result says so). If the emulator process was suspended by the system, it is resumed and the result says so. If the host GPU never answers, the boot is stopped and relaunched once with software graphics, and the result says so. A failed boot's error ends with the last 15 lines of the emulator's log. |
 | `device_stop {serial}` | Stop an emulator this pack booted (refused for any other), by the process the pack spawned. |
 | `device_screenshot {serial?, maxEdge?}` | PNG, at most `maxEdge` px on the long edge (default 1024); the text gives the scale to device pixels. |
 | `device_tap {label}` or `{x, y}` | Tap. `label` re-reads UI Automator right before tapping; ambiguous labels are refused with the numbered choices (`occurrence`). |
@@ -141,6 +141,32 @@ pure function of plain rows; `src/android/backend.ts` does the I/O.
   verified) and relaunched once with `-gpu swiftshader_indirect`; the tool result and the
   pane say it fell back and why. A CPU reading that cannot be taken is never a reason to
   kill. Set `simulator.gpu` to `swiftshader_indirect` to skip the wait.
+- **A frozen emulator is resumed, not relaunched (`suspendedVerdict`).** The same picture
+  as a hung GPU has another cause. On a Windows PC all 18 threads of the qemu process sat
+  in `Wait, Suspended` at about 0.3 s of CPU, and a relaunch was frozen the same way;
+  `NtResumeProcess` made the very same process run at once. Security software, a game's
+  anti-cheat or Game Mode can suspend a process; the pack cannot tell which did. So 8 s
+  after the spawn, then every 10 s, the pack counts the threads of the emulator process
+  (the biggest process under the launcher; Windows: PowerShell `Get-Process`, hidden and
+  `-EncodedCommand`; Linux: `ps -L`). With at least two threads and every one suspended it
+  resumes that process (`NtResumeProcess`; `SIGCONT`), at most 3 times per boot, 5 s
+  apart, and only after a second table read shows the pid still started when the first
+  read said, under the launcher the pack spawned. The 75 s stall clock starts again at a
+  resume. The tool result then says *"the emulator process had been suspended by the
+  system (…); the pack resumed it"*: something outside the pack had paused the emulator,
+  the pack let it run, and nothing was killed, relaunched or switched to software
+  graphics. If it is suspended again once the 3 resumes are spent, the boot fails with
+  that reason instead of a futile software relaunch. A thread reading that cannot be
+  taken is never a reason to act; macOS and BSD `ps` give one line for the whole process,
+  too little to call it frozen, so nothing is resumed there.
+- **A relaunch waits for the last emulator to let go (`avdLockHolder`,
+  `isLockRaceExit`).** Killing a stalled tree returns before its processes are gone, and
+  an emulator launched into that gap exited with code 253 after a second and no log line:
+  the AVD's lock (`<avd>.avd/hardware-qemu.ini.lock/pid`) still named the process just
+  killed. Before relaunching, the pack waits up to 10 s until every pid of the killed tree
+  (same pid and start time) is gone and the pid in that lock file names nothing running.
+  A launch that still exits with code 253 within 5 s and no `FATAL` line in its own
+  output is that race: the pack waits for the same thing and starts it once more, once.
 - **A failed boot cleans up its own process and nothing else.** The launcher exiting
   by itself leaves nothing to kill; a timeout or a stall stops the verified tree. A
   failure that arrives after the `device_boot` call that waited for it returned is told
