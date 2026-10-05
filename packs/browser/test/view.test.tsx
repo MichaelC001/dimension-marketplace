@@ -37,6 +37,7 @@ const startProps = (over: Partial<StartPageProps> = {}): StartPageProps => ({
 	profiles: [],
 	consents: [],
 	onConsent: noop,
+	opens: null,
 	profilesError: null,
 	profile: "default",
 	isPrivate: false,

@@ -597,6 +597,7 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 				profilesError={profilesError}
 				consents={consents}
 				onConsent={onConsent}
+				opens={refused}
 				profile={profile}
 				isPrivate={isPrivate}
 				ownChrome={ownChrome}

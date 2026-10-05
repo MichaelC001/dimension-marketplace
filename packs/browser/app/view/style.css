@@ -831,6 +831,15 @@ kbd {
 	overflow-wrap: anywhere;
 }
 
+.bx-consent .bx-consent-opens {
+	flex-basis: 100%;
+	overflow-wrap: anywhere;
+}
+
+.bx-consent .bx-consent-opens code {
+	font-family: var(--fr-font-mono, ui-monospace, monospace);
+}
+
 .bx-consent .bx-pmenu-control-btn {
 	height: auto;
 	min-height: 28px;

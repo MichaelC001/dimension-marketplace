@@ -13,6 +13,7 @@ import { Icon } from "@fraym/ui/icons";
 import type { NewProfileRequest, ProfileConsent, ProfileListing } from "../../src/contracts";
 import { DEFAULT_PROFILE } from "../../src/profile-name";
 import { AddProfileForm } from "./add-profile-form";
+import type { OpenAttempt } from "./browser-client";
 import { Overlays } from "./page-view";
 import { ProfileAvatar } from "./profile-avatar";
 import { offered, ProfileConsents, type ProfileSwitcherProps, profileStatus } from "./profile-menu";
@@ -24,6 +25,8 @@ export interface StartPageProps {
 	readonly profilesError: string | null;
 	readonly consents: readonly ProfileConsent[];
 	readonly onConsent: ProfileSwitcherProps["onConsent"];
+	/** The open a host-issued call asked for and the runtime refused: its approval card says what Allow will also open. */
+	readonly opens: OpenAttempt | null;
 	/** The profile (by name) the next browser opens with. */
 	readonly profile: string;
 	/** Open with nothing saved. */
@@ -43,7 +46,7 @@ export interface StartPageProps {
 	readonly onOpen: (url: string) => void;
 }
 
-export function StartPage({ profiles, profilesError, consents, onConsent, profile, isPrivate, ownChrome, opening, error, closed, onProfile, onPrivate, onOwnChrome, onAddProfile, onOpen }: StartPageProps) {
+export function StartPage({ profiles, profilesError, consents, onConsent, opens, profile, isPrivate, ownChrome, opening, error, closed, onProfile, onPrivate, onOwnChrome, onAddProfile, onOpen }: StartPageProps) {
 	const [expanded, setExpanded] = useState(false);
 	const [adding, setAdding] = useState(false);
 	const omniRef = useRef<OmniboxHandle | null>(null);
@@ -111,7 +114,7 @@ export function StartPage({ profiles, profilesError, consents, onConsent, profil
 					)}
 				</div>
 
-				<ProfileConsents consents={consents} onConsent={onConsent} />
+				<ProfileConsents consents={consents} onConsent={onConsent} opens={opens} />
 
 				<section className="bx-options" aria-label="Options">
 					<button type="button" className="bx-options-toggle" aria-expanded={expanded} aria-controls={panelId} onClick={() => setExpanded(open => !open)}>

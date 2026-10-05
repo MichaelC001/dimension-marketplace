@@ -306,11 +306,16 @@ function structured(tool: string, result: CallToolResult): Record<string, unknow
 }
 
 /** The saved profile (and address) an open named, as the host's `ui/notifications/tool-input` delivered it. The View cannot tell who asked
- *  (a person's gesture, a layout pin, a model): it holds this only to say which profile a refusal was about, never to act on its own. */
+ *  (a person's gesture, a layout pin, an agent-written manifest). It holds this to say which profile a refusal was about and to finish that
+ *  open once the person has allowed the profile, with the approval card showing exactly this address. `url` is a normalised http(s) address:
+ *  what the card shows and what is opened are the same string. */
 export interface OpenAttempt {
 	readonly profile: string;
 	readonly url?: string;
 }
+
+/** The longest address a refused open may carry to the approval card; a longer one is dropped (the profile still opens, to a blank tab). */
+const OPEN_ATTEMPT_URL_MAX = 2048;
 
 /** What a host-delivered `ui/notifications/tool-result` tells this View: the
  *  browser its tool opened, or why it opened none (and, for an open that named a saved profile, which one). */
@@ -318,13 +323,28 @@ export type MountResult = { readonly state: BrowserState } | { readonly error: s
 /** A `MountResult` as the host delivered it; `seq` orders them so a repeat still registers. */
 export type ToolMount = MountResult & { readonly seq: number };
 
-/** The open a tool call's arguments name: a saved profile, with its address when it carries one. `null`: no profile named (a Private
- *  browser, a browser shown by id, anything else). */
+/** The open a tool call's arguments name: a saved profile, with its address when it carries a plain web one. `null`: no profile named (a
+ *  Private browser, a browser shown by id, anything else). The address is read through `URL`, so an internationalised host shows as punycode
+ *  and a bidi or control character is percent-encoded: the person reads what will be opened, not a lookalike. Anything that is not http(s)
+ *  is dropped. */
 export function openAttemptOf(args: Record<string, unknown> | undefined): OpenAttempt | null {
 	if (args === undefined || args.browserId !== undefined) return null;
 	const { profile, url } = args;
 	if (typeof profile !== "string" || profile.trim().length === 0) return null;
-	return typeof url === "string" && url.length > 0 ? { profile, url } : { profile };
+	const address = typeof url === "string" ? webAddress(url) : null;
+	return address === null ? { profile } : { profile, url: address };
+}
+
+/** A plain web address, normalised; `null` for anything else: another scheme, one that carries a user name or password (`https://bank.com@evil.test/`
+ *  reads as bank.com), unparseable, or too long to show whole. */
+function webAddress(value: string): string | null {
+	try {
+		const parsed = new URL(value.trim());
+		const web = parsed.protocol === "http:" || parsed.protocol === "https:";
+		return web && parsed.username === "" && parsed.password === "" && parsed.href.length <= OPEN_ATTEMPT_URL_MAX ? parsed.href : null;
+	} catch {
+		return null;
+	}
 }
 
 /** The outcome of the tool that mounted the View (`browser_view`, `browser_publish`), read out of a host-delivered

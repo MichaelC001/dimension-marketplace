@@ -22,7 +22,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { act, type ReactNode } from "react";
 import type { BrowserState, OpenBrowserListing, ProfileConsent, ProfileListing, PublishRecord, TaskRun } from "../src/contracts";
 import { BrowserApp } from "../app/view/browser-app";
-import type { OpenAttempt, ToolMount } from "../app/view/browser-client";
+import { type OpenAttempt, openAttemptOf, type ToolMount } from "../app/view/browser-client";
 import { defaultColour, PROFILE_COLOURS } from "../src/profile-meta";
 import { DEFAULT_PROFILE } from "../src/profile-name";
 import { type Dom, mount, unmountAll } from "./dom-harness";
@@ -1052,12 +1052,23 @@ describe("the start page", () => {
 			if (!found) throw new Error(`no "${text}" option`);
 			return found;
 		};
+		/** The approval card that names `label`. */
+		const cardFor = (dom: Dom, label: string): Element => {
+			const card = dom.find('[aria-label="Agent profile access"] > div').find(el => el.textContent?.includes(` to ${label}:`));
+			if (!card) throw new Error(`no approval card for "${label}"`);
+			return card;
+		};
 		/** `text` on the approval card that names `label`. */
 		const cardButton = (dom: Dom, label: string, text: string): Element => {
-			const card = dom.find('[aria-label="Agent profile access"] > div').find(el => el.textContent?.includes(` to ${label}:`));
-			const found = card === undefined ? undefined : [...card.querySelectorAll("button")].find(el => el.textContent?.trim() === text);
+			const found = [...cardFor(dom, label).querySelectorAll("button")].find(el => el.textContent?.trim() === text);
 			if (!found) throw new Error(`no "${text}" button on the "${label}" approval card`);
 			return found;
+		};
+		/** The open a pin's call named, as main.tsx reads it off the call's arguments and hands the View. */
+		const pinned = (args: Record<string, unknown>): OpenAttempt => {
+			const attempt = openAttemptOf({ engine: "chromium", ...args });
+			if (attempt === null) throw new Error("the call names no saved profile");
+			return attempt;
 		};
 
 		test("puts the profile in the picker beside its approval card and opens nothing; Allow then finishes the pin's open of that profile and address", async () => {
@@ -1158,6 +1169,59 @@ describe("the start page", () => {
 			expect(alerts(dom)).toEqual(["the browser could not start"]);
 			expect(callsTo(host, "browser_open")).toHaveLength(1);
 			expect(dom.find('button[aria-haspopup="menu"]')).toHaveLength(0);
+		});
+
+		test("the card of the profile the pin asked for says which address Allow will also open, in that profile's name; another profile's card does not", async () => {
+			const host = runtime();
+			host.consents = [...host.consents, pending("z-bank", "Bank")];
+			const dom = await mountTool(host, refusedMount(PIN));
+
+			const work = cardFor(dom, "Work account");
+			expect([...work.querySelectorAll("code")].map(el => el.textContent)).toEqual(["https://example.com/"]);
+			expect(work.textContent).toContain("Allow also opens https://example.com/ in Work account.");
+			const bank = cardFor(dom, "Bank");
+			expect([...bank.querySelectorAll("code")]).toHaveLength(0);
+			expect(bank.textContent).not.toContain("Allow also opens");
+			expect(bank.textContent).not.toContain("example.com");
+		});
+
+		test("with no address the card says Allow also opens the profile, and shows none", async () => {
+			const dom = await mountTool(runtime(), refusedMount({ profile: "work" }));
+
+			const work = cardFor(dom, "Work account");
+			expect(work.textContent).toContain("Allow also opens Work account here.");
+			expect([...work.querySelectorAll("code")]).toHaveLength(0);
+		});
+
+		test("an address that is not a plain web one is neither shown nor opened: the card says it opens the profile, and Allow opens it to a blank tab", async () => {
+			const host = runtime();
+			const dom = await mountTool(host, refusedMount(pinned({ profile: "work", url: "javascript:alert(1)" })));
+
+			const work = cardFor(dom, "Work account");
+			expect(work.textContent).toContain("Allow also opens Work account here.");
+			expect([...work.querySelectorAll("code")]).toHaveLength(0);
+			expect(work.textContent).not.toContain("javascript");
+
+			await dom.click(cardButton(dom, "Work account", "Allow this chat"));
+			await dom.settle();
+
+			expect(callsTo(host, "browser_open")).toStrictEqual([{ engine: "chromium", profile: "work" }]);
+		});
+
+		test("the address Allow opens is, byte for byte, the one the card showed, and that is the normalised address, not the text the pin gave", async () => {
+			const raw = "HTTPS://\u0430pple.COM/my file\u202Egnp.exe";
+			const host = runtime();
+			const dom = await mountTool(host, refusedMount(pinned({ profile: "work", url: raw })));
+			const shown = cardFor(dom, "Work account").querySelector("code")?.textContent;
+
+			expect(shown).toBeString();
+			expect(shown).not.toBe(raw);
+			expect(callsTo(host, "browser_open")).toEqual([]);
+
+			await dom.click(cardButton(dom, "Work account", "Allow this chat"));
+			await dom.settle();
+
+			expect(callsTo(host, "browser_open")).toStrictEqual([{ engine: "chromium", profile: "work", url: shown }]);
 		});
 	});
 });
