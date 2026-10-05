@@ -149,7 +149,7 @@ describeWithChrome("browser_read", () => {
 			expect(await runtime.read({ url: fixture.url("/article"), maxChars: 10 })).toMatchObject({ status: "ok" });
 
 			for (const profile of ["one", "two", "three", "four"]) {
-				expect((await runtime.open({ profile })).profile).toBe(profile);
+				expect((await runtime.open({ profile }, { caller: "app" })).profile).toBe(profile);
 			}
 		},
 		BROWSER_TEST_TIMEOUT_MS,

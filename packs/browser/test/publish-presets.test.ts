@@ -83,7 +83,7 @@ async function session(profile: string, fixtureName: string): Promise<Session> {
 	clients.push(client);
 	const call: Call = async (name, args, caller) =>
 		(await client.callTool({ name, arguments: args, _meta: {
-			...(caller === undefined ? {} : { [CALLER]: caller }),
+			[CALLER]: caller ?? "model",
 			"ai.insodimension/session": { sessionId },
 			[ARTIFACTORY_HOST_CONTEXT_META_KEY]: { sessionId, token },
 		} })) as ToolResult;

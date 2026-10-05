@@ -63,13 +63,24 @@ function request(origin: string, route: string, method = "GET", body?: string): 
 		req.end(body);
 	});
 }
-function card(origin: string, token: string): Promise<{ status: number; chunks: Buffer[]; close(): void; next(): Promise<void> }> {
+/** A card client: what it has been sent so far, and `containing(bytes)`, which settles once those bytes have arrived (the stream's first chunk is only its part header, not a picture). */
+function card(origin: string, token: string): Promise<{ status: number; chunks: Buffer[]; close(): void; containing(bytes: Buffer): Promise<void> }> {
 	return new Promise((resolve, reject) => {
 		const req = http.get(`${origin}/p/${token}`, { agent: false }, response => {
 			const chunks: Buffer[] = [];
-			let wake: (() => void) | undefined;
-			response.on("data", chunk => { chunks.push(chunk); wake?.(); wake = undefined; });
-			resolve({ status: response.statusCode ?? 0, chunks, close: () => req.destroy(), next: () => chunks.length ? Promise.resolve() : new Promise(done => { wake = done; }) });
+			const has = (bytes: Buffer): boolean => Buffer.concat(chunks).includes(bytes);
+			let waiting: { bytes: Buffer; done: () => void } | undefined;
+			response.on("data", chunk => {
+				chunks.push(chunk);
+				if (waiting !== undefined && has(waiting.bytes)) { waiting.done(); waiting = undefined; }
+			});
+			const containing = (bytes: Buffer): Promise<void> => {
+				if (has(bytes)) return Promise.resolve();
+				const { promise, resolve: done } = Promise.withResolvers<void>();
+				waiting = { bytes, done };
+				return promise;
+			};
+			resolve({ status: response.statusCode ?? 0, chunks, close: () => req.destroy(), containing });
 		});
 		sockets.push(req);
 		req.on("error", reject);
@@ -105,8 +116,9 @@ test("a card token only streams pictures, cannot enter the View or send input, a
 	]);
 	expect([viewDoor.status, inputDoor.status, wrongPicture.status]).toEqual([404, 404, 404]);
 	expect(source.inputs).toEqual([]);
-	await first.next();
-	expect(Buffer.concat(first.chunks).includes(Buffer.from([0xff, 0xd8, 11]))).toBe(true);
+	const frame = Buffer.from([0xff, 0xd8, 11]);
+	await first.containing(frame);
+	expect(Buffer.concat(first.chunks).includes(frame)).toBe(true);
 	expect(Buffer.concat(second.chunks).includes(Buffer.from([0xff, 0xd8, 11]))).toBe(false);
 	const releasedOne = Promise.withResolvers<void>();
 	source.released.set(1, releasedOne.resolve);

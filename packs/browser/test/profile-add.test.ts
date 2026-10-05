@@ -460,7 +460,8 @@ describe("browser_profile_add, as a host offers it", () => {
 		await call("browser_profile_add", { name: "Work Account", colour: "teal", avatar: "💼" }, VIEW);
 
 		const asView = await call("browser_profiles", {}, VIEW);
-		expect(asView.structuredContent).toEqual({ profiles: [{ name: "work-account", label: "Work Account", colour: "teal", avatar: "💼", heldBy: null, sites: [] }], browsers: [] });
+		// `consents`: what the person has approved so far, sent to the View alone (a model is never told).
+		expect(asView.structuredContent).toEqual({ profiles: [{ name: "work-account", label: "Work Account", colour: "teal", avatar: "💼", heldBy: null, sites: [] }], browsers: [], consents: [] });
 
 		const asModel = await call("browser_profiles", {}, MODEL);
 		expect(asModel.structuredContent).toBeUndefined();

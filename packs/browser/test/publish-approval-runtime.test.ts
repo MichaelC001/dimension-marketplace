@@ -615,8 +615,9 @@ describe("approval ownership across authority loss", () => {
 		await entered;
 		authorized = false;
 		release();
-		const refused = await confirming;
-		expect(refused.status).toBe("failed");
+		// A caller that lost authority is handed the refusal, never the result; what the publication became is read from its record.
+		await expect(confirming).rejects.toThrow("host context revoked");
+		expect((await recordOf(s, parked.publishId)).status).toBe("failed");
 		expect(s.page.clicks).toBe(0);
 		s.page.readField = read;
 		const again = await park(s);
@@ -635,8 +636,8 @@ describe("approval ownership across authority loss", () => {
 		const assertCurrent = () => {
 			if (!authorized) throw new Error("host context revoked");
 		};
-		const uncertain = await s.runtime.confirmPublish(s.browserId, parked.publishId, "app", undefined, Object.assign(assertCurrent, { assertCurrent }));
-		expect(uncertain.status).toBe("unknown");
+		await expect(s.runtime.confirmPublish(s.browserId, parked.publishId, "app", undefined, Object.assign(assertCurrent, { assertCurrent }))).rejects.toThrow("host context revoked");
+		expect((await recordOf(s, parked.publishId)).status).toBe("unknown");
 		expect(s.page.clicks).toBe(1);
 		expectRefused(await publish(s), "already used");
 		expect(s.page.clicks).toBe(1);

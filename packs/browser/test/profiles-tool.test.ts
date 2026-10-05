@@ -159,7 +159,7 @@ describe("what each caller is sent", () => {
 		store.ensureProfile("personal");
 	};
 
-	test("a model gets one compact text and no structured copy; the View gets the same list as structured content, with each site's account", async () => {
+	test("a model gets one compact text and no structured copy, and no site until the person approves; the View gets the same list as structured content, with each site's account", async () => {
 		const { call } = await connect(seed);
 		const asModel = await call("browser_profiles", {}, MODEL);
 		expect(asModel.isError).toBeFalsy();
@@ -167,7 +167,8 @@ describe("what each caller is sent", () => {
 		const listed = listOf(asModel);
 		expect(listed.profiles.map((profile) => profile.name)).toEqual(["personal", "work"]);
 		const seenAt = new Date(NOW - 2 * 3_600_000).toISOString();
-		expect(listed.profiles[1]).toEqual({ name: "work", label: "Work", colour: "blue", heldBy: null, sites: [{ site: "x.com", signedIn: true, seenAt }] });
+		// Which sites a profile is signed in to is the person's to share: until they approve this profile for the chat, the model is sent none.
+		expect(listed.profiles[1]).toEqual({ name: "work", label: "Work", colour: "blue", heldBy: null, sites: [] });
 
 		const asView = await call("browser_profiles", {}, VIEW);
 		expect(asView.structuredContent).toEqual({
@@ -176,28 +177,36 @@ describe("what each caller is sent", () => {
 				{ name: "work", label: "Work", colour: "blue", heldBy: null, sites: [{ site: "x.com", account: "@acmeco", signedIn: true, seenAt }] },
 			],
 			browsers: [],
+			consents: [],
 		});
 		// An unstamped call (no host) is treated as a model.
 		expect((await call("browser_profiles", {})).structuredContent).toBeUndefined();
 	});
 
-	test("a model is never told whose account a site is — no email, no handle — while the View is: until a consent gate exists, accounts are shown to the person, not to the model", async () => {
+	test("a model is never told whose account a site is — no email, no handle — even once the person approves the profile; the View is", async () => {
 		const { call } = await connect((store) => {
 			store.recordConnection("work", "google.com", { signedIn: true, account: "work@acme.com", observedAt: NOW - 1_000 });
 			store.recordConnection("work", "x.com", { signedIn: true, account: "@acmeco", observedAt: NOW - 2_000 });
 			store.recordConnection("work", "bsky.app", { signedIn: true, account: "@acme.bsky.social", observedAt: NOW - 3_000 });
 			store.recordConnection("work", "reddit.com", { signedIn: true, observedAt: NOW - 4_000 });
 		});
+		// The person approves "work" for this chat: the model may then see which sites are signed in, never whose.
+		expect((await call("browser_open", { profile: "work" }, MODEL)).isError).toBe(true);
+		expect((await call("browser_profile_consent", { name: "work", decision: "allow", scope: "chat" }, VIEW)).isError).toBeFalsy();
 		for (const who of [MODEL, undefined]) {
 			const text = textOf(await call("browser_profiles", {}, who));
 			expect(text).not.toMatch(/acme|@/i);
-			// What a model can still act on: which sites are signed in, and when that was seen.
-			expect(listOf({ content: [{ type: "text", text }] }).profiles[0]?.sites.map((site) => [site.site, site.signedIn])).toEqual([
-				["google.com", true],
-				["x.com", true],
-				["bsky.app", true],
-				["reddit.com", true],
-			]);
+			// What an approved model can still act on: which sites are signed in, and when that was seen. A call that carries no host stamp is not that model and is sent none.
+			expect(listOf({ content: [{ type: "text", text }] }).profiles[0]?.sites.map((site) => [site.site, site.signedIn])).toEqual(
+				who === MODEL
+					? [
+							["google.com", true],
+							["x.com", true],
+							["bsky.app", true],
+							["reddit.com", true],
+						]
+					: [],
+			);
 		}
 		const view = JSON.stringify((await call("browser_profiles", {}, VIEW)).structuredContent);
 		for (const account of ["work@acme.com", "@acmeco", "@acme.bsky.social"]) expect(view).toContain(account);
@@ -214,6 +223,9 @@ describe("what each caller is sent", () => {
 
 	test("the dock panel and the lists agree: the report the panel is sent carries the View's label, colour, sites and accounts, and the sites and sign-in state the agent reads", async () => {
 		const { call, reports } = await connect(seed);
+		// The person approves "work" for this chat: from then on the agent reads its sites too.
+		expect((await call("browser_open", { profile: "work" }, MODEL)).isError).toBe(true);
+		expect((await call("browser_profile_consent", { name: "work", decision: "allow", scope: "chat" }, VIEW)).isError).toBeFalsy();
 		// The first report is sent once the host has initialised.
 		await waitUntil("the first report", () => reports, (seen) => seen.length > 0);
 		const agent = listOf(await call("browser_profiles", {}, MODEL)).profiles;

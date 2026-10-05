@@ -110,7 +110,8 @@ test("whatever gets through the door becomes a folder only by the slug rule: uns
 		} catch {
 			filesystem = null;
 		}
-		const refused = await runtime.open({ profile: raw }).then(
+		// The person types a name in the View ("app"): a model is refused a saved profile before any folder is made (profile_consent_required), which is the consent rule's test, not this table's.
+		const refused = await runtime.open({ profile: raw }, { caller: "app" }).then(
 			() => undefined,
 			(error: unknown) => (error instanceof BrowserRuntimeError ? error.code : "other"),
 		);

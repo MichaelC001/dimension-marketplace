@@ -14,7 +14,7 @@ import { producesText } from "../src/code/worker/password-guard";
 import { RunOutput } from "../src/code/worker/run-output";
 import { createTabRealm } from "../src/code/worker/tab-realm";
 import { readImageDimensions } from "../src/code/worker/image-size";
-import { resolveScreenshotDir } from "../src/code/worker/screenshot";
+import { resolveScreenshotDir, shortenPath } from "../src/code/worker/screenshot";
 import { resolveUploadPath, textClickLoopMs } from "../src/code/worker/tab-api";
 import { OpRunner, type RunState, resolveOpTimeouts, resolveWaitTimeout } from "../src/code/worker/tab-ops";
 import { chromePath, type Fixture, type LaunchedChrome, launchChrome, startFixture } from "./code-tab-fixture";
@@ -535,7 +535,8 @@ describeWithChrome("the tab realm drives a page it adopted", () => {
         const lines = captionOf(result).split("\n");
         expect(lines[0]).toBe("Screenshot captured");
         expect(lines[1]).toMatch(/^Saved: image\/png \(.+ KB\) to /);
-        expect(lines[1]).toContain(dest);
+        // The caption prints the path as OMP does: `~` for the home directory (a temp directory under it included), forward slashes.
+        expect(lines[1]).toContain(shortenPath(dest));
         expect(lines[2]).toMatch(/^Model: image\/webp \(.+ KB, \d+x1024\)$/);
       } finally {
         await configured.dispose();

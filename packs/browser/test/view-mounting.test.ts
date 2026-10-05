@@ -41,7 +41,7 @@ interface Calls {
 
 /** Just enough runtime for the server to boot and answer open/view: every call recorded. */
 function recordingRuntime(calls: Calls): BrowserRuntimePort {
-	const runtime: Pick<BrowserRuntimePort, "open" | "state" | "liveState" | "watchFrames" | "viewing" | "act" | "startTask" | "connections" | "profileMeta" | "onConnectionsChanged" | "dispose"> = {
+	const runtime: Pick<BrowserRuntimePort, "open" | "state" | "liveState" | "watchFrames" | "viewing" | "act" | "startTask" | "connections" | "profileMeta" | "onConnectionsChanged" | "requireProfileAccess" | "dispose"> = {
 		open: async (options) => {
 			calls.opened.push(options);
 			return stateOf("o".repeat(32));
@@ -64,6 +64,7 @@ function recordingRuntime(calls: Calls): BrowserRuntimePort {
 		connections: async () => ({}),
 		profileMeta: async () => ({}),
 		onConnectionsChanged: () => () => {},
+		requireProfileAccess: () => {},
 		dispose: async () => {},
 	};
 	return runtime as BrowserRuntimePort;

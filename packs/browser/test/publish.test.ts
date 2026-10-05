@@ -58,7 +58,8 @@ interface ToolResult {
 	content: Array<{ type: string; text?: string }>;
 	structuredContent?: Record<string, unknown>;
 }
-type Call = (name: string, args: Record<string, unknown>, caller?: string) => Promise<ToolResult>;
+/** `caller` undefined is the model driving a saved profile (the only caller that may open one it made); `null` is a call carrying no stamp at all. */
+type Call = (name: string, args: Record<string, unknown>, caller?: string | null) => Promise<ToolResult>;
 
 const clients: Client[] = [];
 const fixtures: PublishFixture[] = [];
@@ -116,7 +117,7 @@ async function session(profile: string, { signIn = true, relay = false } = {}): 
 	clients.push(client);
 	const call: Call = async (name, args, caller) =>
 		(await client.callTool({ name, arguments: args, _meta: {
-			...(caller === undefined ? {} : { [CALLER]: caller }),
+			...(caller === null ? {} : { [CALLER]: caller ?? "model" }),
 			"ai.insodimension/session": { sessionId },
 			[ARTIFACTORY_HOST_CONTEXT_META_KEY]: { sessionId, token },
 		} })) as ToolResult;
@@ -598,7 +599,7 @@ describeWithChrome("browser_publish", () => {
 				["browser_task", { browserId: id, task: "post something else", waitSeconds: 0 }],
 				["browser_publish", { browserId: id, recipe: recipe(s.fixture, "stay"), mode: "check" }],
 			];
-			for (const caller of [undefined, "model"]) {
+			for (const caller of [null, "model"]) {
 				for (const [name, args] of calls) {
 					const refused = await s.call(name, args, caller);
 					expect({ name, caller, isError: refused.isError }).toEqual({ name, caller, isError: true });
@@ -755,7 +756,7 @@ describeWithChrome("browser_publish", () => {
 			const s = await session("pub-close-refused");
 			const parked = await post(s, "nav");
 
-			for (const caller of [undefined, "model"]) {
+			for (const caller of [null, "model"]) {
 				const refused = await s.call("browser_close", { browserId: s.browserId }, caller);
 				expect({ caller, isError: refused.isError }).toEqual({ caller, isError: true });
 			}

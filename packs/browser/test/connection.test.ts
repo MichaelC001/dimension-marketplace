@@ -452,6 +452,8 @@ describeWithChrome("the server's connection report", () => {
 			const adopted = await s.call("browser_open", { profile: "acme" }, "model");
 			expect(adopted.isError).toBeFalsy();
 			s.browserId = adopted.structuredContent?.browserId as string;
+			// Chrome keeps no session cookie across a close: the reopened browser signs in again, as the first one did in `session`.
+			expect((await s.call("browser_act", { browserId: s.browserId, actions: [{ kind: "navigate", url: s.fixture.url("/login") }] }, "model")).isError).toBeFalsy();
 			const revealed = recipe(s.fixture, { composeUrl: s.fixture.url(`/compose?v=nav&shown=${encodeURIComponent(`Your new password is ${PASSWORD}`)}`), account: "#shown" });
 			const onDisk = (): string => fs.readFileSync(join(s.store.profileDir("acme"), "connections.json"), "utf8");
 

@@ -167,17 +167,17 @@ describeWithPythonAndChrome("a task that starts while the runtime is being dispo
 			const runtime = newRuntime(await createRoot());
 			const { browserId } = await runtime.open({ viewport: { width: 640, height: 480 } });
 
-			// The task's start is queued on the browser before dispose begins, so dispose's own first `releaseSpare()` (nothing waits yet)
-			// is behind it: the start runs while dispose is draining the browser's queue, spawns its worker and, right behind it, a spare.
+			// The task's start is queued on the browser before dispose begins. A runtime being disposed refuses a start that reaches its fence (`beginTask`: "runtime has been disposed"), so
+			// no interpreter is born; were a start ever to slip past it, dispose must still release the worker and the spare behind it. Either way nothing may outlive dispose.
 			const started = runtime.startTask(browserId, { task: JSON.stringify({ hold: true }) }).catch(() => undefined);
 			const disposed = runtime.dispose();
 			await Promise.all([started, disposed]);
 
 			try {
-				// Both interpreters record their pid the moment they start, the spare's start-up trailing dispose's return by a moment:
-				// wait for the two to exist, then every one of them must be gone. A spare nothing releases waits for ten minutes.
-				const pids = await waitUntil("the task's worker and its spare to have started", () => readdir(dir), (found) => found.length === 2);
-				for (const pid of pids) {
+				// A real delay, as in the absence check above: an interpreter that was refused cannot be awaited, and a real clock is what its start-up (a fraction of this) would race. A spare would
+				// trail dispose's return by a moment, so wait that out; then every interpreter that ever recorded its pid must be gone.
+				await Bun.sleep(1_000);
+				for (const pid of await readdir(dir)) {
 					await waitUntil(`worker ${pid} to exit`, () => alive(pid), (running) => !running);
 				}
 			} finally {

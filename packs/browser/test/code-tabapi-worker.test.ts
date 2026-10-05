@@ -69,10 +69,10 @@ describeWithChrome("a cell driving a page in the real worker thread", () => {
     if (result.t !== "result" || !result.ok) throw new Error(`the cell failed: ${JSON.stringify(result)}`);
     const printed = result.payload.displays.flatMap(part => (part.type === "text" ? [part.text] : [])).join("\n");
     expect(JSON.parse(printed.slice(printed.indexOf("{")))).toEqual({ distinct: [fixture.url("/form")], out: "submitted:from the worker" });
-    // EVERYTHING the worker said to the host between the run and its answer: the one bridge request for `open`, the cell's printed text (exactly what it printed, nothing else), the result. Not a log, a
-    // progress note or a screenshot per call.
+    // EVERYTHING the worker said to the host between the run and its answer: the one bridge request for `open`, one note naming the page the cell drives (once, not per call: twenty reads, a fill and a click
+    // still say it once), the cell's printed text (exactly what it printed, nothing else), the result. Not a log, a progress note or a screenshot per call.
     const sent = seen.slice(from);
-    expect(sent.filter(m => m.t !== "text").map(m => (m.t === "bridge" ? `bridge:${m.request.action}` : m.t))).toEqual(["bridge:open", "result"]);
+    expect(sent.filter(m => m.t !== "text").map(m => (m.t === "bridge" ? `bridge:${m.request.action}` : m.t))).toEqual(["bridge:open", "activity", "result"]);
     expect(sent.flatMap(m => (m.t === "text" ? [m.chunk] : [])).join("").trim()).toBe(printed.trim());
   }, 30_000);
 });
