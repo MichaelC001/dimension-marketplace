@@ -338,6 +338,17 @@ describe("the host hears which page a run drives", () => {
     expect(realm.called).toHaveLength(21);
     expect(realm.ran).toHaveLength(2);
   });
+
+  test("each run names the page it drives once, even a page an earlier run in the same worker already named", async () => {
+    const { link, realm, run } = await startWorker(request => ({ ok: true, text: "Opened", ...(request.action === "open" ? { attach: handle(request.name ?? "main") } : {}) }));
+    const first = await run('const tab = await browser.open({ name: "main" }); await tab.click(1); await tab.click(2);');
+    // The page is adopted already, so this run drives it without opening it; the host still has to hear that run-2 drives it, or it could not tell which page run-2's preview belongs to.
+    const second = await run('const again = browser.tab("main"); await again.click(3); await again.click(4);');
+    expect([first.ok, second.ok]).toEqual([true, true]);
+    expect(link.fromWorker.filter(message => message.t === "activity")).toEqual([{ t: "activity", runId: "run-1", name: "main" }, { t: "activity", runId: "run-2", name: "main" }]);
+    // Saying less never means doing less: all four clicks still went to the page.
+    expect(realm.called.map(call => [call.name, call.chain.map(step => step.method)])).toEqual([["main", ["click"]], ["main", ["click"]], ["main", ["click"]], ["main", ["click"]]]);
+  });
 });
 
 describe("cancellation, budget and shutdown", () => {
