@@ -15,7 +15,7 @@ import { PageView } from "./page-view";
 import { matchProfiles } from "../../src/profile-meta";
 import { DEFAULT_PROFILE, RELAY_PROFILE } from "../../src/profile-name";
 import { BlankTab, StartPage } from "./start-page";
-import type { ProfileSwitcherProps } from "./profile-menu";
+import { offered, type ProfileSwitcherProps } from "./profile-menu";
 import { TabStrip } from "./tab-strip";
 import { PublishBar } from "./publish-bar";
 import { type OmniboxHandle, Toolbar } from "./toolbar";
@@ -31,13 +31,18 @@ interface Notice {
 /** Actions that start a page load; the View shows them loading immediately. */
 const NAVIGATION: Record<string, true> = { navigate: true, reload: true, back: true, forward: true };
 
-/** What a refused open is about, as the card for it shows it: the ONE pending request that `refused.profile` names (by folder name or label, the way
- *  the runtime resolves it), with the address the open carried. `null` while no such card is on screen. */
-function pinnedOpen(refused: OpenAttempt | null, consents: readonly ProfileConsent[]): OpenAttempt | null {
-	if (refused === null) return null;
-	const pending = new Map(consents.filter(request => request.status === "pending").map(request => [request.name, { slug: request.name, label: request.label }] as const));
-	const matches = matchProfiles(refused.profile, [...pending.values()]);
-	return matches.length === 1 ? { profile: matches[0].slug, ...(refused.url === undefined ? {} : { url: refused.url }) } : null;
+/** What a refused open is about, as the card for it shows it. `refused.profile` is resolved the way the runtime does: by folder name or label among EVERY
+ *  saved profile (a pending request for a profile not yet on disk counts too), and it must name exactly one; only then is that one's PENDING card the
+ *  card the open is about. The address is the one the open carried. `null` while the profiles are unread, while it names none or several, or while that
+ *  profile has no card on screen. */
+function pinnedOpen(refused: OpenAttempt | null, consents: readonly ProfileConsent[], profiles: readonly ProfileListing[] | null): OpenAttempt | null {
+	if (refused === null || profiles === null) return null;
+	const pending = consents.filter(request => request.status === "pending");
+	const known = new Map(offered(profiles).map(profile => [profile.name, { slug: profile.name, label: profile.label }] as const));
+	for (const request of pending) if (!known.has(request.name)) known.set(request.name, { slug: request.name, label: request.label });
+	const matches = matchProfiles(refused.profile, [...known.values()]);
+	if (matches.length !== 1 || !pending.some(request => request.name === matches[0].slug)) return null;
+	return { profile: matches[0].slug, ...(refused.url === undefined ? {} : { url: refused.url }) };
 }
 
 export interface BrowserAppProps {
@@ -228,7 +233,7 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 
 	// The card for the refused open, once it is on screen. Until then (or when the open names no single pending profile) there is nothing to say
 	// and nothing to finish.
-	const pinned = useMemo(() => pinnedOpen(refused, consents), [refused, consents]);
+	const pinned = useMemo(() => pinnedOpen(refused, consents, profiles), [refused, consents, profiles]);
 	const pinnedProfile = pinned?.profile ?? null;
 	// The profile that card is about goes in the picker once, when the card appears (and again for a new refusal); after that the picker is the person's.
 	// Only a refusal that raised a card does this: a held profile or a browser that failed to start leaves Private and Your Chrome as the person chose.
@@ -253,7 +258,7 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 		if (boundRef.current === null) setOpenError(null);
 		void client.decideProfileConsent(name, decision, scope, expectedSubject).then(() => {
 			loadProfiles();
-			if (decision === "allow") resumeRef.current(name, shown);
+			if (decision === "allow" && mountedRef.current) resumeRef.current(name, shown);
 		}, cause => {
 			if (!mountedRef.current) return;
 			if (boundRef.current === null) setOpenError(failureText(cause));

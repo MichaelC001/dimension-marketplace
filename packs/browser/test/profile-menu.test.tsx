@@ -269,9 +269,12 @@ async function withReadsOnDemand(run: (readAgain: () => Promise<void>) => Promis
 			}),
 		);
 	} finally {
-		await unmountAll();
-		globalThis.setInterval = realSet;
-		globalThis.clearInterval = realClear;
+		try {
+			await unmountAll();
+		} finally {
+			globalThis.setInterval = realSet;
+			globalThis.clearInterval = realClear;
+		}
 	}
 }
 
@@ -1068,8 +1071,8 @@ describe("the start page", () => {
 		const refusedMount = (attempted?: OpenAttempt, seq = 1): ToolMount => ({ error: REFUSAL, ...(attempted === undefined ? {} : { attempted }), seq });
 		const pending = (name: string, label: string): ProfileConsent => ({ name, label, sites: [], status: "pending", scope: "chat", expiresAt: Date.now() + 600_000 });
 
-		/** The runtime as the person's decision settles it: an approval is listed pending until decided (granted by Allow, gone by Deny), and an open of a profile that is not granted is refused. `over` fails what it would have answered; `hold` leaves a decision unanswered until it settles. */
-		function runtime(over: { readonly consent?: CallToolResult; readonly open?: CallToolResult; readonly hold?: Promise<void> } = {}): Host {
+		/** The runtime as the person's decision settles it: an approval is listed pending until decided (granted by Allow, gone by Deny), and an open of a saved profile that is not granted is refused (a Private one needs no approval). `over` fails what it would have answered; `hold` leaves a decision unanswered until it settles; `profiles` is what is saved on disk. */
+		function runtime(over: { readonly consent?: CallToolResult; readonly open?: CallToolResult; readonly hold?: Promise<void>; readonly profiles?: ProfileListing[] } = {}): Host {
 			const decide = (call: Call): CallToolResult => {
 				host.consents = host.consents.flatMap<ProfileConsent>(row => {
 					if (row.name !== call.args.name) return [row];
@@ -1077,12 +1080,13 @@ describe("the start page", () => {
 				});
 				return answer({});
 			};
-			const host: Host = fakeHost([WORK_PROFILE, BANK], call => {
+			const host: Host = fakeHost(over.profiles ?? [WORK_PROFILE, BANK], call => {
 				if (call.name === "browser_profile_consent") {
 					if (over.consent !== undefined) return over.consent;
 					return over.hold === undefined ? decide(call) : over.hold.then(() => decide(call));
 				}
 				if (call.name === "browser_open") {
+					if (call.args.profile === undefined) return answer(browserOf("b8", null));
 					const granted = host.consents.some(row => row.name === call.args.profile && row.status === "granted");
 					return granted ? (over.open ?? answer(browserOf("b9", WORK_PROFILE))) : failure(REFUSAL);
 				}
@@ -1300,7 +1304,7 @@ describe("the start page", () => {
 
 		const UNRESOLVED: ReadonlyArray<{ readonly name: string; readonly consents: ProfileConsent[]; readonly named: string; readonly allow: string }> = [
 			{ name: "no pending profile", consents: [pending("work", "Work account")], named: "nobody", allow: "Work account" },
-			{ name: "two pending profiles (labels that differ only in case)", consents: [pending("work-a", "Work"), pending("work-b", "WORK")], named: "work", allow: "Work" },
+			{ name: "two pending profiles (labels that differ only in case)", consents: [pending("work-a", "Shared"), pending("work-b", "SHARED")], named: "shared", allow: "Shared" },
 		];
 		for (const { name, consents, named, allow } of UNRESOLVED) {
 			test(`a pin that names ${name} says nothing on any card, leaves the picker alone, and Allow opens nothing`, async () => {
@@ -1402,5 +1406,85 @@ describe("the start page", () => {
 					expect(callsTo(host, "browser_open")).toEqual([]);
 				}));
 		}
+
+		// Two saved profiles whose names cross: `work` is labelled Personal and `acme` is labelled Work. The runtime resolves "Work" to `work` (an exact
+		// folder name beats any label), so the card of `acme` is not what a pin naming "Work" was about.
+		const PERSONAL = listing("work", "Personal");
+		const ACME = listing("acme", "Work");
+
+		test("a pin's name is resolved among every saved profile, not among the cards: naming the profile whose folder is `work` while only another profile labelled Work has a card says nothing, moves nothing and opens nothing, and a Private tick is kept", async () => {
+			const host = runtime({ profiles: [PERSONAL, ACME] });
+			host.consents = [pending("acme", "Work")];
+			const { dom, deliver } = await mountDelivering(host, null);
+			await dom.click(button(dom, "Options"));
+			await dom.check(optionFor(dom, "Private"), true);
+
+			await deliver(refusedMount({ profile: "Work", url: "https://example.com/" }));
+			await dom.settle();
+
+			expect(dom.text()).not.toContain("Allow also opens");
+			expect(picked(dom)).toEqual(["Default"]);
+
+			await dom.click(cardButton(dom, "Work", "Allow this chat"));
+			await dom.settle();
+
+			expect(callsTo(host, "browser_profile_consent")).toStrictEqual([{ name: "acme", decision: "allow", scope: "chat" }]);
+			expect(callsTo(host, "browser_open")).toEqual([]);
+
+			// Private was still ticked all along.
+			await dom.click(button(dom, "Open"));
+			await dom.settle();
+			expect(callsTo(host, "browser_open")).toStrictEqual([{ engine: "chromium" }]);
+		});
+
+		test("with both profiles' cards showing, a pin naming Work is about the profile whose folder that is: only its card says what Allow opens, and only Allow on its card opens", async () => {
+			const host = runtime({ profiles: [PERSONAL, ACME], open: answer(browserOf("b9", PERSONAL)) });
+			host.consents = [pending("work", "Personal"), pending("acme", "Work")];
+			const dom = await mountTool(host, refusedMount({ profile: "Work", url: "https://example.com/" }));
+			await dom.click(button(dom, "Options"));
+
+			expect(cardFor(dom, "Personal").textContent).toContain("Allow also opens https://example.com/ in Personal.");
+			expect(cardFor(dom, "Work").textContent).not.toContain("Allow also opens");
+			expect(picked(dom)).toEqual(["Personal"]);
+
+			await dom.click(cardButton(dom, "Work", "Allow this chat"));
+			await dom.settle();
+			expect(callsTo(host, "browser_open")).toEqual([]);
+
+			await dom.click(cardButton(dom, "Personal", "Allow this chat"));
+			await dom.settle();
+			expect(callsTo(host, "browser_open")).toStrictEqual([{ engine: "chromium", profile: "work", url: "https://example.com/" }]);
+			expect(chipOf(dom).textContent).toContain("Personal");
+		});
+
+		test("a pending request for a profile that is not saved yet is the card of a pin naming that folder: it gets the sentence and Allow opens it", async () => {
+			const host = runtime({ open: answer(browserOf("b9", listing("fresh", "Fresh start"))) });
+			host.consents = [pending("fresh", "Fresh start")];
+			const dom = await mountTool(host, refusedMount({ profile: "fresh", url: "https://example.com/" }));
+
+			expect(cardFor(dom, "Fresh start").textContent).toContain("Allow also opens https://example.com/ in Fresh start.");
+
+			await dom.click(cardButton(dom, "Fresh start", "Allow this chat"));
+			await dom.settle();
+
+			expect(callsTo(host, "browser_open")).toStrictEqual([{ engine: "chromium", profile: "fresh", url: "https://example.com/" }]);
+			expect(chipOf(dom).textContent).toContain("Fresh start");
+		});
+
+		test("Allow pressed and the View closed before the approval is recorded opens nothing once it is", async () => {
+			const recording = Promise.withResolvers<void>();
+			const host = runtime({ hold: recording.promise });
+			const dom = await mountTool(host, refusedMount(PIN));
+
+			await dom.click(cardButton(dom, "Work account", "Allow this chat"));
+			expect(callsTo(host, "browser_profile_consent")).toHaveLength(1);
+			await unmountAll();
+
+			recording.resolve();
+			// One turn of the event loop drains every promise the recording settles; nothing in that chain waits on a timer.
+			await new Promise<void>(resolve => setTimeout(resolve, 0));
+
+			expect(callsTo(host, "browser_open")).toEqual([]);
+		});
 	});
 });
