@@ -1,0 +1,40 @@
+{
+  "name": "@dimension/community-simulator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "author": "Dimension",
+  "description": "A device simulator MCP App the agent and the human share: an Android emulator you watch and drive in a View beside the conversation, and the agent drives through typed tools.",
+  "engines": { "node": ">=22.12.0" },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check:types": "tsc --noEmit && tsc --noEmit -p src/dock",
+    "test": "bun test test/",
+    "start": "node app/server.mjs"
+  },
+  "dimension": {
+    "name": "simulator",
+    "description": "An Android emulator in a View beside your chat that your agent drives while you watch. Boot, screenshot, tap by label, type, install and launch apps; live H.264 video for you, cheap screenshots for the agent.",
+    "defaultEnabled": false,
+    "category": "artifactory",
+    "keywords": ["simulator", "android", "emulator", "mcp-apps", "mobile"]
+  },
+  "files": ["plugin.json", "ai.insodimension.dimension/", "app/server.mjs", "app/view.html", "dist/", "skills/", "README.md"],
+  "dependencies": {
+    "@modelcontextprotocol/ext-apps": "1.7.5",
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@dimension/sdk": "workspace:*",
+    "@fraym/ui": "workspace:*",
+    "@types/bun": "1.3.14",
+    "@types/node": "^26.1.2",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "esbuild": "^0.21.5",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "typescript": "7.0.2"
+  }
+}
