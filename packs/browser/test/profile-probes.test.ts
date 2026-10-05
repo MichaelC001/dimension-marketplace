@@ -15,8 +15,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
 import { buildConnectionReport } from "../src/connection";
-import { type ProbeReader, probeFor, readProbe, SITE_PROBES, type SiteProbe } from "../src/probes";
-import { SIGN_IN_SITES } from "../src/dock/sites";
+import { type ProbeReader, probeFor, readProbe, type SiteProbe } from "../src/probes";
 import type { BrowserRuntime } from "../src/runtime";
 import { ProfileStore } from "../src/store";
 import { BROWSER_TEST_TIMEOUT_MS, createRoot, describeWithChrome, newRuntime, perform, teardown, waitUntil } from "./fixture";
@@ -135,13 +134,6 @@ describe("what one look at a page decides", () => {
 		const probe = probeOf("x.com");
 		const reader = { ...fakeReader({ present: [probe.signedIn] }), readText: async () => { throw new Error("Execution context was destroyed"); } };
 		expect(await readProbe(reader, probe, "https://x.com/home", 50)).toEqual({ signedIn: true });
-	});
-});
-
-describe("one list of sites", () => {
-	test("every site the dock can sign in to has a probe, and every probe is for a site the dock offers", () => {
-		expect(SITE_PROBES.map((probe) => probe.host).sort()).toEqual(SIGN_IN_SITES.map((site) => site.host).sort());
-		expect(SITE_PROBES.map((probe) => probe.host)).toContain("google.com");
 	});
 });
 

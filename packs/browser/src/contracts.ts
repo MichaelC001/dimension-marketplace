@@ -398,8 +398,8 @@ export interface BrowserOpener { caller?: ToolCaller; session?: string; tool?: O
 export type ProfileHolder = null | "this chat" | "human" | "another chat";
 /**
  * One site a profile was checked on. `signedIn: null`: not known now (the last check is over 7 days old, or its
- * time is in the future). `seenAt`: when it was last looked at, ISO 8601. `account` is the person's: the View and the
- * dock get it, a model's list does not (profile-list.ts `profilesForModel`).
+ * time is in the future). `seenAt`: when it was last looked at, ISO 8601. `account` is the person's: the View gets it,
+ * a model's list does not (profile-list.ts `profilesForModel`).
  */
 export interface ProfileSiteListing { site: string; account?: string; signedIn: boolean | null; seenAt: string }
 /**
