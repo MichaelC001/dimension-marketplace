@@ -10,7 +10,7 @@ import { Icon } from "@fraym/ui/icons";
 import { addressParts, tabLabel } from "../../src/address";
 import { AgentPill, ControlPill, ResultToast, useAgentActive } from "./agent-activity";
 import { AnnotationSeat } from "./annotation-seat";
-import { BrowserClient, failureText, openFailureText, type ToolMount } from "./browser-client";
+import { BrowserClient, failureText, type OpenAttempt, openFailureText, type ToolMount } from "./browser-client";
 import { PageView } from "./page-view";
 import { DEFAULT_PROFILE, RELAY_PROFILE } from "../../src/profile-name";
 import { BlankTab, StartPage } from "./start-page";
@@ -60,6 +60,8 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 	const [openError, setOpenError] = useState<string | null>(null);
 	/** The last browser ended by itself: the start page says so once. */
 	const [closed, setClosed] = useState(false);
+	/** The saved-profile open a host-issued call (a layout pin) asked for and the runtime refused: the profile menu's Allow finishes it. */
+	const [refused, setRefused] = useState<OpenAttempt | null>(null);
 
 	const [annotating, setAnnotating] = useState(false);
 	/** The page frozen into one picture for the human to mark; null until it is captured. */
@@ -75,6 +77,8 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 	const omniRef = useRef<OmniboxHandle | null>(null);
 	const boundRef = useRef<string | null>(null);
 	boundRef.current = browserId;
+	/** Finishes the open a refused pin asked for once the person approves that profile. Set each render, so it reads the current picker. */
+	const resumeRef = useRef<(approved: string) => void>(() => undefined);
 	const mountedRef = useRef(true);
 	useEffect(() => {
 		mountedRef.current = true;
@@ -151,11 +155,22 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 		setSeenSeq(toolState.seq);
 		if ("error" in toolState) {
 			// Told on the start page only: a live browser is never covered by the
-			// failure of a call that was meant to open another.
-			if (browserId === null) setOpenError(toolState.error);
+			// failure of a call that was meant to open another. A refused saved-profile
+			// open also puts that profile in the picker, so the card that asks the
+			// person about it is the one the Open button belongs to.
+			if (browserId === null) {
+				setOpenError(toolState.error);
+				setRefused(toolState.attempted ?? null);
+				if (toolState.attempted !== undefined) {
+					setProfile(toolState.attempted.profile);
+					setPrivate(false);
+					setOwnChrome(false);
+				}
+			}
 		} else {
 			setOpened(toolState.state);
 			setOpenError(null);
+			setRefused(null);
 			if (toolState.state.browserId !== browserId) {
 				setBrowserId(toolState.state.browserId);
 				setClosed(false);
@@ -208,7 +223,10 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 
 	const onConsent = useCallback<ProfileSwitcherProps["onConsent"]>((name, decision, scope, expectedSubject) => {
 		if (boundRef.current === null) setOpenError(null);
-		void client.decideProfileConsent(name, decision, scope, expectedSubject).then(loadProfiles, cause => {
+		void client.decideProfileConsent(name, decision, scope, expectedSubject).then(() => {
+			loadProfiles();
+			if (decision === "allow") resumeRef.current(name);
+		}, cause => {
 			if (!mountedRef.current) return;
 			if (boundRef.current === null) setOpenError(failureText(cause));
 			else say("error", failureText(cause));
@@ -244,6 +262,7 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 
 	/** Show `next` in this View: a browser just opened, or the one the person switched to. */
 	const adopt = (next: BrowserState) => {
+		setRefused(null);
 		setBrowserId(next.browserId);
 		setOpened(next);
 		setClosed(false);
@@ -253,13 +272,14 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 		input.reset();
 	};
 
-	const open = async (url: string) => {
+	/** Open a browser here: the picker's choice, or `approved` (a saved profile) when a refused pin's profile was just allowed. */
+	const open = async (url: string, approved?: string) => {
 		setOpening(true);
 		setOpenError(null);
 		try {
 			const next = await client.open({
-				engine: ownChrome ? "chrome-relay" : "chromium",
-				profile: ownChrome ? RELAY_PROFILE : isPrivate ? undefined : profile,
+				engine: approved === undefined && ownChrome ? "chrome-relay" : "chromium",
+				profile: approved ?? (ownChrome ? RELAY_PROFILE : isPrivate ? undefined : profile),
 				url: url.length > 0 ? url : undefined,
 			});
 			if (mountedRef.current) adopt(next);
@@ -268,6 +288,14 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 		} finally {
 			if (mountedRef.current) setOpening(false);
 		}
+	};
+	resumeRef.current = approved => {
+		const attempt = refused;
+		if (attempt === null || attempt.profile !== approved || boundRef.current !== null || opening) return;
+		// The picker still names the profile the pin asked for: the person has not moved on to something else.
+		if (isPrivate || ownChrome || profile !== attempt.profile) return;
+		setRefused(null);
+		void open(attempt.url ?? "", attempt.profile);
 	};
 
 	// Switching profile opens that profile's browser here, as Chrome does, and leaves the one it was on: the runtime closes it unless an

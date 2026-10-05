@@ -305,11 +305,27 @@ function structured(tool: string, result: CallToolResult): Record<string, unknow
 	return structuredContent;
 }
 
+/** The saved profile (and address) an open named, as the host's `ui/notifications/tool-input` delivered it. The View cannot tell who asked
+ *  (a person's gesture, a layout pin, a model): it holds this only to say which profile a refusal was about, never to act on its own. */
+export interface OpenAttempt {
+	readonly profile: string;
+	readonly url?: string;
+}
+
 /** What a host-delivered `ui/notifications/tool-result` tells this View: the
- *  browser its tool opened, or why it opened none. */
-export type MountResult = { readonly state: BrowserState } | { readonly error: string };
+ *  browser its tool opened, or why it opened none (and, for an open that named a saved profile, which one). */
+export type MountResult = { readonly state: BrowserState } | { readonly error: string; readonly attempted?: OpenAttempt };
 /** A `MountResult` as the host delivered it; `seq` orders them so a repeat still registers. */
 export type ToolMount = MountResult & { readonly seq: number };
+
+/** The open a tool call's arguments name: a saved profile, with its address when it carries one. `null`: no profile named (a Private
+ *  browser, a browser shown by id, anything else). */
+export function openAttemptOf(args: Record<string, unknown> | undefined): OpenAttempt | null {
+	if (args === undefined || args.browserId !== undefined) return null;
+	const { profile, url } = args;
+	if (typeof profile !== "string" || profile.trim().length === 0) return null;
+	return typeof url === "string" && url.length > 0 ? { profile, url } : { profile };
+}
 
 /** The outcome of the tool that mounted the View (`browser_view`, `browser_publish`), read out of a host-delivered
  *  `ui/notifications/tool-result` — the View's ONLY source of a browserId.

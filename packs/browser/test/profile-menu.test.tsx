@@ -20,8 +20,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import type { App } from "@modelcontextprotocol/ext-apps";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { act, type ReactNode } from "react";
-import type { BrowserState, OpenBrowserListing, ProfileListing, PublishRecord, TaskRun } from "../src/contracts";
+import type { BrowserState, OpenBrowserListing, ProfileConsent, ProfileListing, PublishRecord, TaskRun } from "../src/contracts";
 import { BrowserApp } from "../app/view/browser-app";
+import type { OpenAttempt, ToolMount } from "../app/view/browser-client";
 import { defaultColour, PROFILE_COLOURS } from "../src/profile-meta";
 import { DEFAULT_PROFILE } from "../src/profile-name";
 import { type Dom, mount, unmountAll } from "./dom-harness";
@@ -44,6 +45,8 @@ interface Host {
 	profiles: ProfileListing[];
 	/** The browsers this chat holds that are not profiles, as `browser_profiles` lists them for the View. */
 	browsers: OpenBrowserListing[];
+	/** The saved-profile approvals `browser_profiles` lists for the View; a pending one is the card the person presses Allow on. */
+	consents: ProfileConsent[];
 }
 
 const failure = (text: string): CallToolResult => ({ isError: true, content: [{ type: "text", text }] });
@@ -56,13 +59,14 @@ function fakeHost(profiles: ProfileListing[], respond: (call: Call) => CallToolR
 		calls,
 		profiles,
 		browsers: [],
+		consents: [],
 		// The View touches exactly these three App members; the rest of the host surface is not in play.
 		app: {
 			callServerTool: async (request: { name: string; arguments?: Record<string, unknown> }): Promise<CallToolResult> => {
 				const call = { name: request.name, args: request.arguments ?? {} };
 				calls.push(call);
 				if (call.name === "browser_stream") return await new Promise<CallToolResult>(() => {});
-				return call.name === "browser_profiles" ? answer({ profiles: host.profiles, browsers: host.browsers }) : respond(call);
+				return call.name === "browser_profiles" ? answer({ profiles: host.profiles, browsers: host.browsers, consents: host.consents }) : respond(call);
 			},
 			getHostCapabilities: () => ({ updateModelContext: { text: {}, image: {} } }),
 			updateModelContext: async () => ({}),
@@ -211,15 +215,18 @@ function Unfocused({ children }: { readonly children: ReactNode }) {
 	return children;
 }
 
-async function mountView(host: Host, state: BrowserState | null): Promise<Dom> {
+/** The View as the host mounts it: with the tool result that opened a browser, or the one that said why none opened (a refusal can carry the open it was about). */
+async function mountTool(host: Host, toolState: ToolMount | null): Promise<Dom> {
 	const dom = await mount(
 		<Unfocused>
-			<BrowserApp app={host.app} toolState={state === null ? null : { state, seq: 1 }} />
+			<BrowserApp app={host.app} toolState={toolState} />
 		</Unfocused>,
 	);
 	await dom.settle();
 	return dom;
 }
+
+const mountView = (host: Host, state: BrowserState | null): Promise<Dom> => mountTool(host, state === null ? null : { state, seq: 1 });
 
 // ---------------------------------------------------------------------------
 // The chip
@@ -1003,5 +1010,154 @@ describe("the start page", () => {
 
 		expect(dom.find('form[aria-label="New profile"]')).toHaveLength(0);
 		expect(callsTo(host, "browser_profile_add")).toEqual([]);
+	});
+
+	/** A host-issued open of a saved profile (a layout pin) that the runtime refused because the person has not approved that profile. The View hears
+	 *  the refusal and the open it was about; only the person's Allow on that profile's card finishes it. */
+	describe("a pin's open of a saved profile the person has not approved", () => {
+		const REFUSAL = 'profile_consent_required: Ask the person to approve access to profile "work" in the Browser profile menu.';
+		const WORK_PROFILE = listing("work", "Work account", { colour: "teal", avatar: "💼", sites: [site("google.com")] });
+		const PIN: OpenAttempt = { profile: "work", url: "https://example.com/" };
+		const refusedMount = (attempted?: OpenAttempt): ToolMount => ({ error: REFUSAL, ...(attempted === undefined ? {} : { attempted }), seq: 1 });
+		const pending = (name: string, label: string): ProfileConsent => ({ name, label, sites: [], status: "pending", scope: "chat", expiresAt: Date.now() + 600_000 });
+
+		/** The runtime as the person's decision settles it: an approval is listed pending until decided (granted by Allow, gone by Deny), and an open of a profile that is not granted is refused. `over` fails what it would have answered. */
+		function runtime(over: { readonly consent?: CallToolResult; readonly open?: CallToolResult } = {}): Host {
+			const host: Host = fakeHost([WORK_PROFILE, BANK], call => {
+				if (call.name === "browser_profile_consent") {
+					if (over.consent !== undefined) return over.consent;
+					host.consents = host.consents.flatMap<ProfileConsent>(row => {
+						if (row.name !== call.args.name) return [row];
+						return call.args.decision === "allow" ? [{ ...row, status: "granted" as const }] : [];
+					});
+					return answer({});
+				}
+				if (call.name === "browser_open") {
+					const granted = host.consents.some(row => row.name === call.args.profile && row.status === "granted");
+					return granted ? (over.open ?? answer(browserOf("b9", WORK_PROFILE))) : failure(REFUSAL);
+				}
+				return failure(`unexpected ${call.name}`);
+			});
+			host.consents = [pending("work", "Work account")];
+			return host;
+		}
+
+		const radioFor = (dom: Dom, label: string): Element => {
+			const found = dom.find('[role="radio"]').find(el => el.lastChild?.textContent === label);
+			if (!found) throw new Error(`no "${label}" in the profile picker`);
+			return found;
+		};
+		const optionFor = (dom: Dom, text: string): Element => {
+			const found = dom.find("label").find(el => el.textContent?.includes(text))?.querySelector("input");
+			if (!found) throw new Error(`no "${text}" option`);
+			return found;
+		};
+		/** `text` on the approval card that names `label`. */
+		const cardButton = (dom: Dom, label: string, text: string): Element => {
+			const card = dom.find('[aria-label="Agent profile access"] > div').find(el => el.textContent?.includes(` to ${label}:`));
+			const found = card === undefined ? undefined : [...card.querySelectorAll("button")].find(el => el.textContent?.trim() === text);
+			if (!found) throw new Error(`no "${text}" button on the "${label}" approval card`);
+			return found;
+		};
+
+		test("puts the profile in the picker beside its approval card and opens nothing; Allow then finishes the pin's open of that profile and address", async () => {
+			const host = runtime();
+			const dom = await mountTool(host, refusedMount(PIN));
+			await dom.click(button(dom, "Options"));
+
+			expect(alerts(dom)).toEqual([REFUSAL]);
+			expect(dom.find('[role="radio"]').filter(el => el.getAttribute("aria-checked") === "true").map(el => el.lastChild?.textContent)).toEqual(["Work account"]);
+			expect(dom.find('[aria-label="Agent profile access"]')).toHaveLength(1);
+			expect(dom.find('[aria-label="Agent profile access"]')[0]?.textContent).toContain("Agent requests access to Work account");
+			expect(callsTo(host, "browser_open")).toEqual([]);
+
+			await dom.click(cardButton(dom, "Work account", "Allow this chat"));
+			await dom.settle();
+
+			expect(callsTo(host, "browser_profile_consent")).toStrictEqual([{ name: "work", decision: "allow", scope: "chat" }]);
+			expect(callsTo(host, "browser_open")).toStrictEqual([{ engine: "chromium", profile: "work", url: "https://example.com/" }]);
+			expect(chipOf(dom).textContent?.trim()).toBe("💼Work account");
+		});
+
+		const MOVES: ReadonlyArray<{ readonly to: string; readonly move: (dom: Dom) => Promise<void> }> = [
+			{ to: "another saved profile", move: dom => dom.click(radioFor(dom, "Bank")) },
+			{ to: "a Private browser", move: dom => dom.check(optionFor(dom, "Private"), true) },
+			{ to: "their own Chrome", move: dom => dom.check(optionFor(dom, "Use my own Chrome"), true) },
+		];
+		for (const { to, move } of MOVES) {
+			test(`does not finish the open when the person moved the picker to ${to} before pressing Allow`, async () => {
+				const host = runtime();
+				const dom = await mountTool(host, refusedMount(PIN));
+				await dom.click(button(dom, "Options"));
+				await move(dom);
+
+				await dom.click(cardButton(dom, "Work account", "Allow this chat"));
+				await dom.settle();
+
+				expect(callsTo(host, "browser_profile_consent")).toHaveLength(1);
+				expect(callsTo(host, "browser_open")).toEqual([]);
+			});
+		}
+
+		test("does not finish the open for a refusal that was not about a saved profile, even with that profile picked by hand", async () => {
+			const host = runtime();
+			const dom = await mountTool(host, refusedMount());
+			await dom.click(button(dom, "Options"));
+			await dom.click(radioFor(dom, "Work account"));
+
+			await dom.click(cardButton(dom, "Work account", "Allow this chat"));
+			await dom.settle();
+
+			expect(callsTo(host, "browser_profile_consent")).toHaveLength(1);
+			expect(callsTo(host, "browser_open")).toEqual([]);
+		});
+
+		test("does not finish the open when what the person allowed is another profile than the one the pin asked for", async () => {
+			const host = runtime();
+			host.consents = [...host.consents, pending("z-bank", "Bank")];
+			const dom = await mountTool(host, refusedMount(PIN));
+			await dom.click(button(dom, "Options"));
+
+			await dom.click(cardButton(dom, "Bank", "Allow this chat"));
+			await dom.settle();
+
+			expect(callsTo(host, "browser_profile_consent")).toStrictEqual([{ name: "z-bank", decision: "allow", scope: "chat" }]);
+			expect(callsTo(host, "browser_open")).toEqual([]);
+		});
+
+		test("does not open when the person denies the profile", async () => {
+			const host = runtime();
+			const dom = await mountTool(host, refusedMount(PIN));
+
+			await dom.click(cardButton(dom, "Work account", "Deny"));
+			await dom.settle();
+
+			expect(callsTo(host, "browser_profile_consent")).toStrictEqual([{ name: "work", decision: "deny", scope: "chat" }]);
+			expect(callsTo(host, "browser_open")).toEqual([]);
+		});
+
+		test("does not open when the runtime could not record the approval, and says why", async () => {
+			const host = runtime({ consent: failure("could not record the approval") });
+			const dom = await mountTool(host, refusedMount(PIN));
+
+			await dom.click(cardButton(dom, "Work account", "Allow this chat"));
+			await dom.settle();
+
+			expect(alerts(dom)).toEqual(["could not record the approval"]);
+			expect(callsTo(host, "browser_open")).toEqual([]);
+		});
+
+		test("says the runtime's own refusal of the resumed open and does not try again without a new gesture", async () => {
+			const host = runtime({ open: failure("the browser could not start") });
+			const dom = await mountTool(host, refusedMount(PIN));
+
+			await dom.click(cardButton(dom, "Work account", "Allow this chat"));
+			await dom.settle();
+			await dom.settle();
+
+			expect(alerts(dom)).toEqual(["the browser could not start"]);
+			expect(callsTo(host, "browser_open")).toHaveLength(1);
+			expect(dom.find('button[aria-haspopup="menu"]')).toHaveLength(0);
+		});
 	});
 });
