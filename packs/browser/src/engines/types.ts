@@ -1,4 +1,7 @@
-import type { BrowserAction, BrowserApp, BrowserRegion, ElementInspection, HandledDialog, LogEntry, ModelShot, ShotRequest, TabInfo, Viewport } from "../contracts.js";
+import type { AdmittedInput } from "../input.js";
+import type { AttachTarget } from "./attach.js";
+import type { BrowserAction, BrowserApp, BrowserRegion, EffectGuard, ElementInspection, HandledDialog, LogEntry, ModelShot, PageElements, PageScroll, ShotRequest, TabInfo, Viewport } from "../contracts.js";
+import type { TabRef, WaitUntil } from "../code/contracts.js";
 
 /** Everything below describes the ACTIVE tab unless it says otherwise. */
 export interface EngineState {
@@ -17,13 +20,15 @@ export interface EngineState {
   dialogs: HandledDialog[];
 }
 
-/** The latest live frame of the active tab. */
+/** One live picture of the active tab. */
 export interface LiveFrame {
-  /** Changes whenever the frame does. */
+  /** Changes whenever the picture does. */
   id: string;
-  /** Base64 JPEG. */
-  data: string;
-  capturedAt: string;
+  jpeg: Uint8Array;
+  /** The page size (CSS px) it was taken at: a point on the picture maps to the page by this, not by whatever the viewport is now. */
+  viewport: Viewport;
+  /** Epoch ms. */
+  capturedAt: number;
 }
 
 /** A publish field as read from the page. A password input is recognised and never read. */
@@ -121,12 +126,24 @@ export interface EngineDriver {
    */
   evaluate(expression: string, limit: number): Promise<EvalOutcome>;
   /**
-   * The newest screencast frame of the active tab, from memory. The first call
-   * starts the screencast and waits for its first frame.
+   * Live pictures of the active tab for as long as anyone watches: `listener` gets one whenever the page changes and
+   * one at once for a page that is not changing, and the cast follows the active tab and a resize. The screencast
+   * runs only while at least one listener is subscribed; the returned function unsubscribes.
    */
-  liveFrame(): Promise<LiveFrame>;
+  watchFrames(listener: (frame: LiveFrame) => void, size?: "view" | { maxWidth: 480 | 1280 }): () => void;
+  /** A bounded small JPEG for a finished throwaway call, without starting a persistent cast. */
+  previewStill(): Promise<Uint8Array | undefined>;
+  /** The human's input on the active tab, in order (already admitted). Throws `ActionNotDispatched` when provably nothing reached the page. */
+  input(events: readonly AdmittedInput[]): Promise<void>;
   snapshot(limit: number): Promise<string>;
-  elements(region: BrowserRegion, limit: number): Promise<string>;
+  /**
+   * What is on the active tab under each of `regions` (viewport px), one read for all of them: the elements under each
+   * region as separate records (bounded; at most about `limit` characters of them per region), in the order asked, and
+   * where the page is scrolled right now.
+   */
+  elements(regions: readonly BrowserRegion[], limit: number): Promise<{ scroll: PageScroll; regions: PageElements[] }>;
+  /** Where the active tab is scrolled right now and how large its document is. */
+  scroll(): Promise<PageScroll>;
   /**
    * Perform one action on the active tab now, once, never retried. Throws
    * `ActionNotDispatched` when provably nothing reached the page; any other
@@ -138,13 +155,17 @@ export interface EngineDriver {
    * value replaces the field's content. A field that is not a password input,
    * or no password for that origin, is an error and nothing is typed. The
    * result names the origin, never the value.
+   * `guard`: refresh after pure preparation, then assert local authority in
+   * the actual native dispatch continuation. Any error after an effect is spent.
    */
-  perform(action: BrowserAction, password?: PasswordSource): Promise<PerformOutcome>;
+  perform(action: BrowserAction, password?: PasswordSource, guard?: EffectGuard): Promise<PerformOutcome>;
   /**
    * Replace a field's content exactly as `perform({ kind: "type" })` does. A
    * password input is refused with `ActionNotDispatched` before any input event.
+   * With `guard`, resolve the renderer target before admission; any failure
+   * after focus/selection/input starts is uncertain, never `ActionNotDispatched`.
    */
-  fill(selector: string, text: string): Promise<void>;
+  fill(selector: string, text: string, guard?: EffectGuard): Promise<void>;
   /**
    * Resolve when `condition` holds on the active tab (true) or after
    * `timeoutMs` (false). Reads only; a selector takes the `@<ref> ` frame prefix.
@@ -160,20 +181,51 @@ export interface EngineDriver {
   readField(selector: string): Promise<FieldRead>;
   /** The text of the first element matching `selector`, at most `limit` characters; null when absent or a form control (never read). */
   readText(selector: string, limit: number): Promise<string | null>;
+  /**
+   * The `aria-label` of the first element matching `selector`, at most `limit` characters; null when absent or a form control.
+   * The one attribute this reads: a fixed script, with the selector as data. Google's account button has its email only there.
+   */
+  readLabel(selector: string, limit: number): Promise<string | null>;
   /** Absolute hrefs of up to `limit` elements matching `selector` (CSS or `pierce/` only: it is read in-page). */
   linkHrefs(selector: string, limit: number): Promise<string[]>;
-  /** Open a tab, make it the active one, and navigate it to `url` (already validated) when given. */
-  openTab(url?: string): Promise<void>;
+  /**
+   * Open a tab, make it the active one, and navigate it to `url` (already validated) when given. Answers the tab, so the code worker
+   * (doc 77 §7.4.3) can adopt it by `targetId`: the engine creates and instruments every tab, the worker never does.
+   */
+  openTab(url?: string, options?: OpenTabOptions, guard?: EffectGuard): Promise<TabRef>;
+  /** Every page tab this driver owns, in opening order, as the code worker adopts them. Reads only what the browser process knows (no renderer call). */
+  tabs(): Promise<TabRef[]>;
+  /** Navigate `tabId` (not necessarily the active one) and wait as `options` say; a page that has not loaded in time is stopped and the call rejects. */
+  navigateTab(tabId: string, url: string, options: NavigateTabOptions, guard?: EffectGuard): Promise<TabRef>;
+  /** How `tabId` answers its JavaScript dialogs from now on; undefined restores the default (alert and beforeunload accepted, confirm and prompt dismissed). The engine is the one CDP client that answers, so two never both do. */
+  setDialogPolicy(tabId: string, policy: DialogPolicy | undefined): void;
+  /** Freeze (`Page.setWebLifecycleState` frozen) or thaw `tabId`: an idle tab stops using CPU. Capped at 3 s; throws for an unknown tab. */
+  setFrozen(tabId: string, frozen: boolean): Promise<void>;
+  /**
+   * Attach engines only (`EngineOptions.attach`): make one of the page tabs the browser ALREADY has a tab of this driver, and the active one — the
+   * tab in front (`preferVisible`, the default with no `match`) or the first whose URL or title contains `match` — instead of opening a new one.
+   * The person's tab is not resized, restyled or kept rendering, and is never closed by this driver. Idempotent for a page already adopted.
+   * Throws a `ToolError` listing the pages when `match` names none, and for a driver that owns its browser.
+   */
+  adoptTab(options?: { match?: string; preferVisible?: boolean }): Promise<TabRef>;
   /** Make `tabId` the driven and shown tab. Throws `ActionNotDispatched` for an unknown id. */
-  activateTab(tabId: string): Promise<void>;
+  activateTab(tabId: string, guard?: EffectGuard): Promise<void>;
   /** Close `tabId`. Closing the last tab opens a blank one first: the browser never ends from a tab close. */
-  closeTab(tabId: string): Promise<void>;
+  closeTab(tabId: string, guard?: EffectGuard): Promise<void>;
   /** Set every tab's viewport and pixel ratio (both validated) and restart the live cast at that size. */
-  resize(viewport: Viewport, scale: number): Promise<void>;
+  resize(viewport: Viewport, scale: number, guard?: EffectGuard): Promise<void>;
   /** CDP websocket endpoint of this browser, for an upstream task agent to attach to. */
   cdpEndpoint(): string;
   /** Resolve only after owned resources shut down. Never close foreign browsers. */
   close(): Promise<void>;
+  /**
+   * Hard stop, for a `close` that hung or failed: kill the owned browser's whole process tree and resolve only once the browser
+   * process is confirmed gone (`close_failed`-style rejection otherwise). The lease is released only on that confirmation, like
+   * `close`. A driver that owns nothing (the relay, or a browser a cell attached to) lets go of it at once, without waiting on a page that does not
+   * answer, and leaves the browser running: only `application: true` also ends an application the pack started (`AttachTarget.terminate`, a `spawned`
+   * kind: the cell's `close({ kill: true })`). Safe to call while a `close` is still pending.
+   */
+  kill(options?: { application?: boolean }): Promise<void>;
 }
 
 export interface EngineOptions {
@@ -185,10 +237,36 @@ export interface EngineOptions {
   executablePath?: string;
   relayUrl?: string;
   /**
+   * A browser to attach to instead of launching one (a cell's `connected`, `spawned` or `relay` kind). Only with the `chrome-relay` engine. The driver
+   * adopts a page the browser already has (`adoptTab`) rather than opening its own, and closing it disconnects and leaves the browser and its pages alone.
+   */
+  attach?: AttachTarget;
+  /**
    * Release callback, NOT merely a disconnected notification. Call exactly when
    * owned profile resources are confirmed stopped, including failed initialization
    * before anything launched. A failed/unconfirmed shutdown MUST retain the lock.
    * Do not call this for a parent/foreign browser that this driver does not own.
    */
   onClosed(): void;
+  /**
+   * Called when the ACTIVE tab's main frame finishes loading, or navigates within its document (a single-page app's
+   * route change). No url: the runtime asks for the state it wants. Never throws into the driver. `chromium` only.
+   */
+  onPageLoaded?(): void;
+}
+
+/** What the engine answers a dialog with, for a tab whose opener asked: every dialog accepted, or every dialog dismissed. */
+export type DialogPolicy = "accept" | "dismiss";
+
+/** How a tab is navigated: the lifecycle event to wait for, the budget, and an abort (a stalled page is stopped, never left loading). */
+export interface NavigateTabOptions {
+  waitUntil?: WaitUntil;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}
+
+export interface OpenTabOptions extends NavigateTabOptions {
+  /** The browser's launch tab, still blank and never handed out, is used instead of opening a second page. */
+  reuseBlank?: boolean;
+  dialogs?: DialogPolicy;
 }

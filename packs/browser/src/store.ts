@@ -1,31 +1,48 @@
 /**
  * Filesystem state for the browser runtime.
  *
- * Owns four things and nothing else:
+ * Owns five things and nothing else:
  *   1. Profile directory layout + filesystem-safe slug validation.
  *   2. The per-profile process lock (atomic create, owner-token release,
  *      NEVER steals a stale lock and NEVER kills a foreign process).
  *   3. Each profile's sign-in observations (`connections.json`, see
  *      connection.ts), kept in the profile's own directory so a deleted
  *      profile takes them with it and a restart can report them again.
- *   4. Throwaway browser directories (`<root>/ephemeral/<id>`): created for a
+ *   4. Each profile's metadata (`profile.json`: label, colour, avatar, last
+ *      used, the browser build that made it), beside `chrome/`. Optional: a
+ *      profile without one works, with defaults derived from its slug.
+ *   5. Throwaway browser directories (`<root>/ephemeral/<id>`): created for a
  *      browser opened without a profile, deleted when it closes, and swept
  *      after a server that died before it could delete them. They are never
  *      profiles: no lock, no listing, no observations.
  */
-import { randomBytes } from "node:crypto";
-import { closeSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import { closeSync, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import type { ConnectionObservations, SiteObservation, SiteObservations } from "./connection.js";
+import { type ConnectionObservations, keepFirst, type SiteObservation, type SiteObservations } from "./connection.js";
 import { PROFILE_NAME, profileSlug } from "./profile-name.js";
+import type { ArtifactoryLoopPrincipal } from "./contracts.js";
+import { cleanAvatar, cleanLabel, isProfileColour, type StoredProfileMeta } from "./profile-meta.js";
 
+/** The most profiles the pack lists and the View will create. */
+export const MAX_PROFILES = 256;
 const CONNECTIONS_FILE = "connections.json";
+const PROFILE_FILE = "profile.json";
 /** Inside a throwaway directory: the pid of the server that made it. */
 const OWNER_FILE = "owner.pid";
 /** Sites remembered per profile; the oldest observation goes first. */
 const MAX_SITES_PER_PROFILE = 64;
+/** Versioned, fixed-width names keep host identities out of filenames and bound path length. */
+const CONSENT_VERSION = 1;
+function consentFile(principal: ArtifactoryLoopPrincipal, profile: string): string {
+	return createHash("sha256").update(JSON.stringify([CONSENT_VERSION, principal.workspaceId, principal.id, principal.origin, profile])).digest("hex") + ".json";
+}
+function validPrincipal(principal: ArtifactoryLoopPrincipal): boolean {
+	return [principal.workspaceId, principal.id, principal.origin].every(value => typeof value === "string" && value.length > 0 && value.length <= 1024)
+		&& typeof principal.label === "string" && principal.label.length <= 1024;
+}
 const MAX_ACCOUNT_CHARS = 1_024;
 
 export class BrowserRuntimeError extends Error {
@@ -77,6 +94,33 @@ export class ProfileStore {
 		return join(this.rootDir, "profiles");
 	}
 
+	/** A grant is one file per exact subject and profile: distinct grants never overwrite each other. */
+	private get consentRoot(): string { return join(this.rootDir, "profile-consents"); }
+
+	hasLoopConsent(principal: ArtifactoryLoopPrincipal, profile: string): boolean {
+		if (!validPrincipal(principal) || profileSlug(profile) !== profile) return false;
+		try {
+			const raw = readFileSync(join(this.consentRoot, consentFile(principal, profile)), "utf8");
+			// Three 1024-character identity fields still fit when JSON-escaped.
+			if (raw.length > 32 * 1024) return false;
+			const grant: unknown = JSON.parse(raw);
+			if (typeof grant !== "object" || grant === null || Array.isArray(grant)) return false;
+			const value = grant as Record<string, unknown>;
+			return value.version === CONSENT_VERSION && value.workspaceId === principal.workspaceId
+				&& value.id === principal.id && value.origin === principal.origin && value.profile === profile
+				&& value.granted === true && Object.keys(value).length === 6;
+		} catch { return false; }
+	}
+
+	setLoopConsent(principal: ArtifactoryLoopPrincipal, profile: string, granted: boolean): void {
+		if (!validPrincipal(principal) || profileSlug(profile) !== profile) fail("bad_principal", "Invalid Loop subject or profile.");
+		mkdirSync(this.consentRoot, { recursive: true, mode: 0o700 });
+		writeJsonAtomic(this.consentRoot, consentFile(principal, profile), {
+			version: CONSENT_VERSION, workspaceId: principal.workspaceId, id: principal.id,
+			origin: principal.origin, profile, granted,
+		});
+	}
+
 	profileDir(slug: string): string {
 		return join(this.profilesRoot, slug);
 	}
@@ -86,13 +130,28 @@ export class ProfileStore {
 		return join(this.profileDir(slug), "chrome");
 	}
 
+	/** Whether a folder for `slug` is on disk, listed or not (the listing stops at MAX_PROFILES). Creates nothing. */
+	exists(slug: string): boolean {
+		return existsSync(this.profileDir(slug));
+	}
+
+	/** Reserve a new profile's canonical directory atomically. An existing directory is never treated as ours. */
+	claimNewProfile(slug: string): boolean {
+		try {
+			mkdirSync(this.profileDir(slug), { mode: 0o700 });
+			return true;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+			throw error;
+		}
+	}
 	ensureProfile(slug: string): string {
 		const dir = this.profileDir(slug);
 		mkdirSync(dir, { recursive: true, mode: 0o700 });
 		return dir;
 	}
 
-	/** Profiles that have ever been materialized on disk, sorted, bounded. */
+	/** Profiles that have ever been materialized on disk, sorted, at most MAX_PROFILES: beyond that they are not listed (and `addProfile` refuses to make more). */
 	list(): string[] {
 		let entries: string[];
 		try {
@@ -110,7 +169,7 @@ export class ProfileStore {
 				}
 			})
 			.sort()
-			.slice(0, 256);
+			.slice(0, MAX_PROFILES);
 	}
 
 	get ephemeralRoot(): string {
@@ -209,12 +268,40 @@ export class ProfileStore {
 				`profile "${slug}" is already in use (${who}). Close that browser first (browser_close), or use another profile.`,
 			);
 		}
+		let failure: unknown;
 		try {
-			writeSync(fd, body);
+			writeFileSync(fd, body);
 			fsyncSync(fd);
-		} finally {
-			closeSync(fd);
+		} catch (error) {
+			failure = error;
+			try {
+				// The open descriptor pins our file identity even after a partial write.
+				const owned = fstatSync(fd, { bigint: true });
+				const current = lstatSync(path, { bigint: true });
+				const replacement = readLock(path);
+				if (owned.dev === current.dev && owned.ino === current.ino && (!replacement || replacement.token === token)) unlinkSync(path);
+			} catch (cleanupError) {
+				if ((cleanupError as NodeJS.ErrnoException).code !== "ENOENT") {
+					failure = new AggregateError([error, cleanupError], "Profile lock initialization failed and owned lock cleanup could not be confirmed.");
+				}
+			}
 		}
+		try {
+			closeSync(fd);
+		} catch (error) {
+			if (failure !== undefined) {
+				failure = new AggregateError([failure, error], "Profile lock initialization failed and its descriptor could not be closed.");
+			} else {
+				failure = error;
+				try {
+					// The complete token was written: a close failure must not orphan it.
+					if (readLock(path)?.token === token) unlinkSync(path);
+				} catch (cleanupError) {
+					failure = new AggregateError([error, cleanupError], "Profile lock descriptor close failed and owned lock cleanup could not be confirmed.");
+				}
+			}
+		}
+		if (failure !== undefined) throw failure;
 		return { path, token };
 	}
 
@@ -227,6 +314,16 @@ export class ProfileStore {
 		} catch {
 			/* already gone */
 		}
+	}
+
+	/**
+	 * Whether a live process holds this profile's lock right now. Asked of a
+	 * profile this runtime holds no browser for: then it is another server's (or
+	 * another runtime's on this root), and the profile is not free to open.
+	 */
+	heldElsewhere(slug: string): boolean {
+		const pid = readLock(join(this.profileDir(slug), "runtime.lock"))?.pid;
+		return pid !== undefined && processAlive(pid);
 	}
 
 	/** This profile's persisted sign-in observations; none when it was never observed or the file is unreadable. */
@@ -242,7 +339,7 @@ export class ProfileStore {
 		if (typeof stored !== "object" || stored === null) return sites;
 		for (const [host, value] of Object.entries(stored as Record<string, unknown>)) {
 			const site = value as Partial<SiteObservation> | null;
-			if (typeof site?.signedIn !== "boolean" || typeof site.observedAt !== "number" || !Number.isFinite(site.observedAt)) continue;
+			if ((typeof site?.signedIn !== "boolean" && site?.signedIn !== null) || typeof site.observedAt !== "number" || !Number.isFinite(site.observedAt)) continue;
 			const valid: SiteObservation = { signedIn: site.signedIn, observedAt: site.observedAt };
 			if (typeof site.account === "string" && site.account.length <= MAX_ACCOUNT_CHARS) valid.account = site.account;
 			sites[host] = valid;
@@ -251,30 +348,14 @@ export class ProfileStore {
 	}
 
 	/**
-	 * Persist one observation of `host`, replacing that host's last one. Atomic
-	 * and durable: the staging file is fsynced before the rename, so a crash or
-	 * power loss leaves the old file or the new one; a failure at any step
-	 * removes the staging file.
+	 * Persist one observation of `host`, replacing that host's last one. A site
+	 * that was only visited (`signedIn: null`) is the first to go when the
+	 * profile is full: it never pushes out a site that was actually checked.
 	 */
 	recordConnection(slug: string, host: string, observation: SiteObservation): void {
 		const sites = { ...this.connections(slug), [host]: observation };
-		const kept = Object.entries(sites).sort(([, a], [, b]) => b.observedAt - a.observedAt).slice(0, MAX_SITES_PER_PROFILE);
-		const dir = this.ensureProfile(slug);
-		const path = join(dir, CONNECTIONS_FILE);
-		const staging = `${path}.${randomBytes(6).toString("hex")}.tmp`;
-		let fd: number | undefined;
-		try {
-			fd = openSync(staging, "w", 0o600);
-			writeSync(fd, `${JSON.stringify({ sites: Object.fromEntries(kept) })}\n`);
-			fsyncSync(fd);
-			closeSync(fd);
-			fd = undefined;
-			renameSync(staging, path);
-		} catch (error) {
-			if (fd !== undefined) try { closeSync(fd); } catch { /* already closed */ }
-			try { unlinkSync(staging); } catch { /* never created, or already gone */ }
-			throw error;
-		}
+		const kept = Object.entries(sites).sort(([, a], [, b]) => keepFirst(a, b)).slice(0, MAX_SITES_PER_PROFILE);
+		writeJsonAtomic(this.ensureProfile(slug), CONNECTIONS_FILE, { sites: Object.fromEntries(kept) });
 	}
 
 	/** Every on-disk profile that has observations. A deleted profile directory is simply not here. */
@@ -285,6 +366,58 @@ export class ProfileStore {
 			if (Object.keys(sites).length > 0) all[slug] = sites;
 		}
 		return all;
+	}
+
+	/** This profile's metadata: only the fields the rules allow; `{}` when there is no file or it is unreadable. */
+	meta(slug: string): StoredProfileMeta {
+		let parsed: Record<string, unknown>;
+		try {
+			const value: unknown = JSON.parse(readFileSync(join(this.profileDir(slug), PROFILE_FILE), "utf8"));
+			if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+			parsed = value as Record<string, unknown>;
+		} catch {
+			return {};
+		}
+		const meta: StoredProfileMeta = {};
+		const label = cleanLabel(parsed.label);
+		if (label !== undefined) meta.label = label;
+		if (isProfileColour(parsed.colour)) meta.colour = parsed.colour;
+		const avatar = cleanAvatar(parsed.avatar);
+		if (avatar !== undefined) meta.avatar = avatar;
+		if (typeof parsed.lastUsed === "number" && Number.isFinite(parsed.lastUsed) && parsed.lastUsed >= 0) meta.lastUsed = parsed.lastUsed;
+		if (typeof parsed.app === "string" && /^[a-z0-9-]{1,24}$/.test(parsed.app)) meta.app = parsed.app;
+		return meta;
+	}
+
+	/**
+	 * Change some of a profile's metadata, keeping the fields the patch does not
+	 * name. Atomic like the observations. Never renames or moves the folder.
+	 */
+	saveMeta(slug: string, patch: StoredProfileMeta): void {
+		writeJsonAtomic(this.ensureProfile(slug), PROFILE_FILE, { ...this.meta(slug), ...patch });
+	}
+}
+
+/**
+ * Write `value` as `<dir>/<file>`. Atomic and durable: the staging file is
+ * fsynced before the rename, so a crash or power loss leaves the old file or
+ * the new one; a failure at any step removes the staging file.
+ */
+export function writeJsonAtomic(dir: string, file: string, value: unknown): void {
+	const path = join(dir, file);
+	const staging = `${path}.${randomBytes(6).toString("hex")}.tmp`;
+	let fd: number | undefined;
+	try {
+		fd = openSync(staging, "w", 0o600);
+		writeSync(fd, `${JSON.stringify(value)}\n`);
+		fsyncSync(fd);
+		closeSync(fd);
+		fd = undefined;
+		renameSync(staging, path);
+	} catch (error) {
+		if (fd !== undefined) try { closeSync(fd); } catch { /* already closed */ }
+		try { unlinkSync(staging); } catch { /* never created, or already gone */ }
+		throw error;
 	}
 }
 

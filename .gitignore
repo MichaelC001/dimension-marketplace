@@ -4,11 +4,14 @@ dist/
 # build step, because the host loads `dist/index.mjs` at runtime (doc 68 §16.2).
 !packs/*/dist/
 !packs/browser/app/dist/
-!packs/artifactory-general-agent/app/dist/
-!packs/viewer/app/dist/
+!packs/swiss-knife/viewer/app/dist/
 # Local verification harnesses and cached upstream sources: developer scratch,
 # never part of the published pack.
 .dev/
 # The browser pack's Python task worker environment (`cd packs/browser/python && uv sync`).
 packs/browser/python/.venv/
+# Browser pack test fixtures bundle a listener into a temp dir inside the pack (Node must resolve
+# node_modules from there); a run killed before its afterAll leaves one behind.
+packs/browser/.relay-host-*/
+packs/browser/.stream-host-*/
 __pycache__/

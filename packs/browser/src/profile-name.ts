@@ -1,12 +1,12 @@
 /**
  * The profile-name grammar — the ONE rule every door that takes a profile name
  * applies: the MCP tools' input schema (server.ts), the runtime's filesystem
- * slug check (store.ts), and the Browser dock panel's sign-in form (dock/).
+ * slug check (store.ts), and the View's add-profile form (app/view/, through
+ * browser-client.ts).
  *
- * Pure and dependency-free on purpose: the dock panel runs in the host's page,
- * so it cannot reach the rule through store.ts (node:fs) or connection.ts
- * (tldts), and a copy of the regex there would drift from the one the server
- * enforces.
+ * Pure and dependency-free on purpose: the View runs in the host's page, so it
+ * cannot reach the rule through store.ts (node:fs) or connection.ts (tldts),
+ * and a copy of the regex there would drift from the one the server enforces.
  */
 
 /** 1-48 chars of [a-z0-9_-], starting alphanumeric: no dots, separators or drive letters. */
@@ -35,14 +35,4 @@ export function profileSlug(raw: string): string | null {
 /** A saved profile as a person sees it: the implicit one has no name of its own. */
 export function loginSetLabel(profile: string): string {
 	return profile === DEFAULT_PROFILE ? "Default" : profile;
-}
-
-export type NameCheck = { readonly ok: true; readonly slug: string } | { readonly ok: false; readonly problem: string };
-
-/** A name a person typed for a new set of saved logins: its slug, or a plain sentence saying why not. */
-export function checkProfileName(raw: string): NameCheck {
-	const slug = profileSlug(raw);
-	if (slug === null) return { ok: false, problem: "Use letters, numbers, - or _ (up to 48), starting with a letter or number." };
-	if (slug === RELAY_PROFILE) return { ok: false, problem: "That name is reserved. Pick another." };
-	return { ok: true, slug };
 }

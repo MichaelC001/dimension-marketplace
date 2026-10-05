@@ -8,6 +8,10 @@
  *  counts. While it is parked, only the View (`caller: "app"`) may drive the
  *  pinned page.
  *
+ *  Only a post a human approved on the campaign board goes out, so every post
+ *  here is approved first (`approvePublish` writes the board's record), and the
+ *  tests at the end prove that gate against a real page.
+ *
  *  Real Chrome against a local fake site (publish-fixture.ts), driven through
  *  the real MCP server over an in-memory transport so the caller stamp is the
  *  one a host sends. The page counts field writes and submit clicks in its own
@@ -19,19 +23,26 @@
  *  expects "no receipt" does not sit through the real wait.
  */
 import { join } from "node:path";
+import { randomBytes } from "node:crypto";
+import { z } from "zod";
+import { ARTIFACTORY_HOST_CONTEXT_EXTENSION_ID, ARTIFACTORY_HOST_CONTEXT_META_KEY, ARTIFACTORY_HOST_CONTEXT_READ_METHOD } from "@dimension/sdk/artifactory";
 import { mkdir, writeFile } from "node:fs/promises";
-import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
-import puppeteer, { type Browser } from "puppeteer-core";
+import { afterEach, describe, expect, setSystemTime, spyOn, test } from "bun:test";
+import puppeteer, { Frame, type Browser, type WaitForSelectorOptions } from "puppeteer-core";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { BrowserAction, PublishRecipe, PublishRecord } from "../src/contracts";
 import type { EngineDriver } from "../src/engines/types";
+import { createPuppeteerDriver } from "../src/engines/puppeteer";
 import { confirm, prepare, validateRecipe, type Publication } from "../src/publish";
 import type { BrowserRuntime } from "../src/runtime";
 import { createBrowserServer } from "../src/server";
 import { ActionNotDispatched } from "../src/store";
-import { BROWSER_TEST_TIMEOUT_MS, chromePath, createRoot, describeWithChrome, failureCode, newRuntime, perform, racingClock, teardown } from "./fixture";
+import { approvePublish, BROWSER_TEST_TIMEOUT_MS, chromePath, createRoot, describeWithChrome, failureCode, newRuntime, perform, racingClock, teardown } from "./fixture";
 import { type ComposeVariant, type PublishFixture, startPublishFixture } from "./publish-fixture";
+import { withJevKey } from "./jev-key";
+
+withJevKey();
 
 const CALLER = "ai.insodimension/caller";
 const TEXT = "first line\nsecond line — ünïcødé 🚀";
@@ -41,20 +52,27 @@ const TOUCHED = "The page was used in the Browser View while waiting, so it may 
 const CLOSED = "The browser was closed. Nothing was submitted.";
 /** The same, on the relay: the human's own Chrome, where the page can be used outside the View. */
 const SHARED = "This page is in your own Chrome, where it can be used outside the Browser View, so it may have posted there. Check the account.";
+/** What the saved-profile consent gate tells a call that carries no host stamp, before any lock is looked at. */
+const UNSTAMPED = "A host-stamped model session is required for saved-profile access.";
+/** What a model that holds the profile is told while a post awaits the human: the pinned page takes nobody's work but the View's. */
+const PENDING = "a post awaits confirmation on this browser";
 
 interface ToolResult {
 	isError?: boolean;
 	content: Array<{ type: string; text?: string }>;
 	structuredContent?: Record<string, unknown>;
 }
-type Call = (name: string, args: Record<string, unknown>, caller?: string) => Promise<ToolResult>;
+/** `caller` undefined is the model driving a saved profile (the only caller that may open one it made); `null` is a call carrying no stamp at all. */
+type Call = (name: string, args: Record<string, unknown>, caller?: string | null) => Promise<ToolResult>;
 
 const clients: Client[] = [];
 const fixtures: PublishFixture[] = [];
+const nativeDrivers: EngineDriver[] = [];
 /** Stand-ins for the human's own Chrome, which the relay engine attaches to. */
 const humanChromes: Browser[] = [];
 
 afterEach(async () => {
+	for (const driver of nativeDrivers.splice(0)) await driver.close().catch(() => undefined);
 	setSystemTime();
 	for (const client of clients.splice(0)) await client.close().catch(() => undefined);
 	for (const fixture of fixtures.splice(0)) await fixture.stop();
@@ -73,6 +91,8 @@ interface Session {
 	runtime: BrowserRuntime;
 	browserId: string;
 	fixture: PublishFixture;
+	rootDir: string;
+	profile: string;
 }
 
 /**
@@ -89,17 +109,27 @@ async function session(profile: string, { signIn = true, relay = false } = {}): 
 	await mkdir(viewDir, { recursive: true });
 	await writeFile(join(viewDir, "index.html"), "<!doctype html><title>view</title>");
 	const server = await createBrowserServer({ runtime, viewDir });
-	const client = new Client({ name: "publish-test", version: "0.0.0" });
+	const client = new Client({ name: "publish-test", version: "0.0.0" }, { capabilities: { extensions: { [ARTIFACTORY_HOST_CONTEXT_EXTENSION_ID]: {} } } });
+	const sessionId = "publish-chat";
+	const token = randomBytes(32).toString("hex");
+	client.setRequestHandler(z.object({ method: z.literal(ARTIFACTORY_HOST_CONTEXT_READ_METHOD), params: z.object({ sessionId: z.string(), token: z.string() }) }), async request => {
+		if (request.params.sessionId !== sessionId || request.params.token !== token) throw new Error("Unknown host context");
+		return { active: true, sessionId };
+	});
 	const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
 	await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
 	clients.push(client);
 	const call: Call = async (name, args, caller) =>
-		(await client.callTool({ name, arguments: args, ...(caller === undefined ? {} : { _meta: { [CALLER]: caller } }) })) as ToolResult;
+		(await client.callTool({ name, arguments: args, _meta: {
+			...(caller === null ? {} : { [CALLER]: caller ?? "model" }),
+			"ai.insodimension/session": { sessionId },
+			[ARTIFACTORY_HOST_CONTEXT_META_KEY]: { sessionId, token },
+		} })) as ToolResult;
 	const opened = await call("browser_open", { profile, ...(relay ? { engine: "chrome-relay" } : {}) });
 	expect(opened.isError).toBeFalsy();
 	const browserId = opened.structuredContent?.browserId as string;
 	if (signIn) await perform(runtime, browserId, { kind: "navigate", url: fixture.url("/login") });
-	return { call, client, runtime, browserId, fixture };
+	return { call, client, runtime, browserId, fixture, rootDir, profile };
 }
 
 /** A headless Chrome on a throwaway profile with a DevTools port: the endpoint the relay engine attaches to. */
@@ -130,8 +160,20 @@ async function counters(runtime: BrowserRuntime, browserId: string): Promise<{ w
 	return { writes: Number(found[1]), clicks: Number(found[2]), secret: Number(found[3]) };
 }
 
+/** The board's approval of exactly the text `posting` types, for the profile `s` opened. */
+async function approve(s: Session, posting: PublishRecipe): Promise<void> {
+	await approvePublish(s.rootDir, { origin: posting.origin, profile: s.profile, values: posting.fields.map((field) => field.value) });
+}
+
+/** The board approves what `variant` types, then a post of it is asked for: whatever comes back. */
+async function requestPost(s: Session, variant: ComposeVariant, overrides: Partial<PublishRecipe> = {}): Promise<ToolResult> {
+	const posting = recipe(s.fixture, variant, overrides);
+	await approve(s, posting);
+	return await s.call("browser_publish", { browserId: s.browserId, recipe: posting, mode: "post" });
+}
+
 async function post(s: Session, variant: ComposeVariant, overrides: Partial<PublishRecipe> = {}): Promise<PublishRecord> {
-	const parked = await s.call("browser_publish", { browserId: s.browserId, recipe: recipe(s.fixture, variant, overrides), mode: "post" });
+	const parked = await requestPost(s, variant, overrides);
 	expect(parked.isError).toBeFalsy();
 	expect(parked.structuredContent?.status).toBe("awaiting-confirmation");
 	return parked.structuredContent as unknown as PublishRecord;
@@ -159,6 +201,32 @@ async function humanPostsOnThePage(s: Session): Promise<void> {
 	expect(s.fixture.submissions()).toHaveLength(1);
 }
 
+/** The middle of `selector` in page pixels, where the View's mouse would aim. */
+async function centerOf(s: Session, selector: string): Promise<{ x: number; y: number }> {
+	const box = await s.runtime.inspect(s.browserId, selector);
+	if (!box.found) throw new Error(`no ${selector} on the page`);
+	return { x: box.rect.x + box.rect.width / 2, y: box.rect.y + box.rect.height / 2 };
+}
+
+/** One left click as the View's direct channel sends it. */
+const pressAt = ({ x, y }: { x: number; y: number }) => [
+	{ kind: "mouse", type: "down", x, y, buttons: 1 },
+	{ kind: "mouse", type: "up", x, y },
+];
+
+/**
+ * The browser's driver, whose `input` and `state` a test can hold or fail: the only way to stand at an exact point of a press (the real
+ * calls are a few milliseconds).
+ */
+type DriverSeam = { input: EngineDriver["input"]; state: EngineDriver["state"] };
+function driverOf(runtime: BrowserRuntime, browserId: string): DriverSeam {
+	// Reason: test seam into the runtime's private map (as `entryOf` in wait-inspect.test.ts).
+	const seam = runtime as unknown as { byId: Map<string, { driver: DriverSeam }> };
+	const entry = seam.byId.get(browserId);
+	if (!entry) throw new Error("no such browser");
+	return entry.driver;
+}
+
 // ---------------------------------------------------------------------------
 // Real Chrome, real MCP server
 // ---------------------------------------------------------------------------
@@ -170,7 +238,7 @@ describeWithChrome("browser_publish", () => {
 			const s = await session("pub-signed-out", { signIn: false });
 			const result = await racingClock(
 				() => s.fixture.hits("/compose") > 0,
-				s.call("browser_publish", { browserId: s.browserId, recipe: recipe(s.fixture, "nav"), mode: "post" }),
+				requestPost(s, "nav"),
 			);
 
 			expect(result.structuredContent).toMatchObject({ status: "not-signed-in", url: s.fixture.url("/compose?v=nav"), profile: "pub-signed-out" });
@@ -205,7 +273,7 @@ describeWithChrome("browser_publish", () => {
 				profile: "pub-post",
 				fields: [{ selector: "#text", value: TEXT }, { selector: "#rich", value: RICH }],
 			});
-			// The View renders its bar from the state poll: it must show the same record.
+			// The View renders its bar from the state its stream carries: it must show the same record.
 			const { state: _state, ...shown } = parked as PublishRecord & { state?: unknown };
 			expect((await s.runtime.state(s.browserId)).publish).toEqual(shown);
 			const seen = await counters(s.runtime, s.browserId);
@@ -220,11 +288,7 @@ describeWithChrome("browser_publish", () => {
 		"a password field fails the post before anything reaches it",
 		async () => {
 			const s = await session("pub-password");
-			const result = await s.call("browser_publish", {
-				browserId: s.browserId,
-				recipe: recipe(s.fixture, "nav", { fields: [{ selector: "#secret", value: "hunter2" }] }),
-				mode: "post",
-			});
+			const result = await requestPost(s, "nav", { fields: [{ selector: "#secret", value: "hunter2" }] });
 
 			expect(result.structuredContent?.status).toBe("failed");
 			expect(result.structuredContent?.error).toContain("password");
@@ -238,7 +302,7 @@ describeWithChrome("browser_publish", () => {
 		"a page that rewrites what was typed fails field-mismatch and nothing is submitted",
 		async () => {
 			const s = await session("pub-rewrite");
-			const result = await s.call("browser_publish", { browserId: s.browserId, recipe: recipe(s.fixture, "rewrite"), mode: "post" });
+			const result = await requestPost(s, "rewrite");
 
 			expect(result.structuredContent?.status).toBe("failed");
 			expect(result.structuredContent?.error).toContain("field-mismatch");
@@ -526,7 +590,7 @@ describeWithChrome("browser_publish", () => {
 	);
 
 	test(
-		"while a publish awaits the human, an unstamped or model act, tab, task and check are refused publish_pending and leave the page alone; the View's app act still works",
+		"while a publish awaits the human, an unstamped act, tab, task and check are refused by the consent gate and a model's are refused publish_pending; the page is left alone and the View's app act still works",
 		async () => {
 			const s = await session("pub-locked");
 			const parked = await post(s, "nav");
@@ -536,21 +600,24 @@ describeWithChrome("browser_publish", () => {
 			const calls: Array<[string, Record<string, unknown>]> = [
 				["browser_act", { browserId: id, actions: [{ kind: "type", selector: "#text", text: "not what the human saw" }] }],
 				["browser_act", { browserId: id, actions: [{ kind: "tab", op: "new", url: s.fixture.url("/compose?v=stay") }] }],
-				["browser_task", { browserId: id, agent: "jev", task: "post something else", waitSeconds: 0 }],
+				["browser_task", { browserId: id, task: "post something else", waitSeconds: 0 }],
 				["browser_publish", { browserId: id, recipe: recipe(s.fixture, "stay"), mode: "check" }],
 			];
-			for (const caller of [undefined, "model"]) {
+			// An unstamped call never reaches the lock: the consent gate refuses it first. The model, which holds the profile, is the caller the lock refuses.
+			for (const [caller, reason] of [[null, UNSTAMPED], ["model", PENDING]] as const) {
 				for (const [name, args] of calls) {
 					const refused = await s.call(name, args, caller);
-					expect({ name, caller, isError: refused.isError }).toEqual({ name, caller, isError: true });
+					expect({ name, caller, isError: refused.isError, text: refused.content[0]?.text }).toMatchObject({ name, caller, isError: true, text: expect.stringContaining(reason) });
 				}
 			}
 			// The code behind those messages, at each gated runtime entry point.
 			expect(await failureCode(() => s.runtime.act(id, { kind: "type", selector: "#text", text: "x" }, "model"))).toBe("publish_pending");
+			// The lock does not lean on the gate: a runtime call that carries no caller at all is refused by it too.
+			expect(await failureCode(() => s.runtime.act(id, { kind: "type", selector: "#text", text: "x" }))).toBe("publish_pending");
 			expect(await failureCode(() => s.runtime.tab(id, { op: "new" }, "model"))).toBe("publish_pending");
 			// One refusal for a whole batch, before any of its steps reaches the page.
 			expect(await failureCode(() => s.runtime.actMany(id, [{ kind: "type", selector: "#text", text: "x" }, { kind: "click", selector: "#post" }], "model"))).toBe("publish_pending");
-			expect(await failureCode(() => s.runtime.startTask(id, { agent: "jev", task: "post something else" }, "model"))).toBe("publish_pending");
+			expect(await failureCode(() => s.runtime.startTask(id, { task: "post something else" }, "model"))).toBe("publish_pending");
 			expect(await failureCode(() => s.runtime.publish(id, recipe(s.fixture, "stay"), "check", "model"))).toBe("publish_pending");
 
 			const after = await s.runtime.state(id);
@@ -566,6 +633,35 @@ describeWithChrome("browser_publish", () => {
 
 			await humanAct(s, { kind: "type", selector: "#rich", text: "the human's own edit" });
 			expect((await counters(s.runtime, id)).writes).toBeGreaterThan(seen.writes);
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"while a publish awaits the human, an unstamped confirm, cancel and post are refused by the consent gate: nothing is clicked and the publish stays pending",
+		async () => {
+			const s = await session("pub-unstamped-settle");
+			const parked = await post(s, "nav");
+			const shown = { origin: parked.origin, profile: parked.profile, values: parked.fields.map((field) => field.value) };
+			const args = { browserId: s.browserId, publishId: parked.publishId };
+			const seen = await counters(s.runtime, s.browserId);
+			// The confirm names exactly what is parked, so only the gate stands between it and the post.
+			const calls: Array<[string, Record<string, unknown>]> = [
+				["browser_publish_confirm", { ...args, expect: shown }],
+				["browser_publish_cancel", args],
+				["browser_publish", { browserId: s.browserId, recipe: recipe(s.fixture, "nav"), mode: "post" }],
+			];
+
+			for (const [name, input] of calls) {
+				const refused = await s.call(name, input, null);
+				expect({ name, isError: refused.isError, text: refused.content[0]?.text }).toMatchObject({ name, isError: true, text: expect.stringContaining(UNSTAMPED) });
+			}
+
+			expect(seen.clicks).toBe(0);
+			expect(await counters(s.runtime, s.browserId)).toEqual(seen);
+			expect(s.fixture.hits("/submit")).toBe(0);
+			expect(s.fixture.hits("/compose")).toBe(1);
+			expect((await record(s, parked.publishId)).status).toBe("awaiting-confirmation");
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);
@@ -632,11 +728,7 @@ describeWithChrome("browser_publish", () => {
 		"a page that moves focus off the field fails the post and nothing is typed into the element that took focus",
 		async () => {
 			const s = await session("pub-steal");
-			const result = await s.call("browser_publish", {
-				browserId: s.browserId,
-				recipe: recipe(s.fixture, "steal", { fields: [{ selector: "#text", value: TEXT }] }),
-				mode: "post",
-			});
+			const result = await requestPost(s, "steal", { fields: [{ selector: "#text", value: TEXT }] });
 
 			expect(result.structuredContent?.status).toBe("failed");
 			// `#other`'s input events count as writes on this variant.
@@ -695,16 +787,17 @@ describeWithChrome("browser_publish", () => {
 	);
 
 	test(
-		"an unstamped or model browser_close while a publish awaits the human is refused publish_pending and the browser stays open",
+		"while a publish awaits the human, an unstamped browser_close is refused by the consent gate and a model's publish_pending; the browser stays open",
 		async () => {
 			const s = await session("pub-close-refused");
 			const parked = await post(s, "nav");
 
-			for (const caller of [undefined, "model"]) {
+			for (const [caller, reason] of [[null, UNSTAMPED], ["model", PENDING]] as const) {
 				const refused = await s.call("browser_close", { browserId: s.browserId }, caller);
-				expect({ caller, isError: refused.isError }).toEqual({ caller, isError: true });
+				expect({ caller, isError: refused.isError, text: refused.content[0]?.text }).toMatchObject({ caller, isError: true, text: expect.stringContaining(reason) });
 			}
 			expect(await failureCode(() => s.runtime.close(s.browserId, "model"))).toBe("publish_pending");
+			expect(await failureCode(() => s.runtime.close(s.browserId))).toBe("publish_pending");
 
 			// Still open: the human's Post still posts.
 			const confirmed = await s.call("browser_publish_confirm", { browserId: s.browserId, publishId: parked.publishId }, "app");
@@ -741,6 +834,161 @@ describeWithChrome("browser_publish", () => {
 			expect((await s.call("browser_close", { browserId: s.browserId }, "app")).isError).toBeFalsy();
 
 			expect(await waiting).toMatchObject({ status: "unknown", error: TOUCHED });
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"the human clicking the site's own Post on the direct channel, while the bar waits, is the same: the bar's Post is unknown and submits nothing more; hover and wheel on it change nothing",
+		async () => {
+			const s = await session("pub-touched-direct");
+			const parked = await post(s, "nav");
+			const { x, y } = await centerOf(s, "#post");
+
+			await s.runtime.input(s.browserId, [{ kind: "mouse", type: "move", x, y }, { kind: "wheel", x, y, deltaX: 0, deltaY: 10 }]);
+			expect(await record(s, parked.publishId)).toMatchObject({ status: "awaiting-confirmation" });
+
+			await s.runtime.input(s.browserId, [{ kind: "mouse", type: "down", x, y, buttons: 1 }, { kind: "mouse", type: "up", x, y }]);
+			await s.fixture.reached("/landed");
+			const confirmed = await s.call("browser_publish_confirm", { browserId: s.browserId, publishId: parked.publishId }, "app");
+
+			expect(confirmed.structuredContent).toMatchObject({ status: "unknown", error: TOUCHED });
+			expect(s.fixture.submissions()).toHaveLength(1);
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"while the bar's Post is submitting, the human's click, key and mouse move on the page are refused publish_pending and never reach it; input works again once the Post settles",
+		async () => {
+			const s = await session("pub-confirming-input");
+			const parked = await post(s, "stay");
+			const at = await centerOf(s, "#post");
+			const confirming = s.call("browser_publish_confirm", { browserId: s.browserId, publishId: parked.publishId }, "app");
+			// A failed assertion below ends the test with this call still open; its rejection at teardown is not the failure.
+			confirming.catch(() => undefined);
+			// The bar clicked submit and the site keeps its text, so the Post now waits for a receipt that is not coming.
+			await s.fixture.reached("/submit");
+
+			expect(await failureCode(() => s.runtime.input(s.browserId, pressAt(at)))).toBe("publish_pending");
+			expect(await failureCode(() => s.runtime.input(s.browserId, [{ kind: "key", type: "down", key: "Enter", code: "Enter", keyCode: 13 }]))).toBe("publish_pending");
+			expect(await failureCode(() => s.runtime.input(s.browserId, [{ kind: "mouse", type: "move", ...at }]))).toBe("publish_pending");
+
+			const confirmed = await racingClock(() => true, confirming);
+			expect(confirmed.structuredContent).toMatchObject({ status: "unknown" });
+			expect(confirmed.structuredContent?.error).not.toBe(TOUCHED);
+			// The bar's one click is the only one the page ever saw.
+			expect(s.fixture.submissions()).toHaveLength(1);
+			expect((await counters(s.runtime, s.browserId)).clicks).toBe(1);
+
+			await s.runtime.input(s.browserId, pressAt(at));
+			expect((await counters(s.runtime, s.browserId)).clicks).toBe(2);
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"a press still being sent when the bar's Post starts already counts: the Post never clicks submit, and the human's press is the only post",
+		async () => {
+			const s = await session("pub-press-in-flight");
+			const parked = await post(s, "nav");
+			const at = await centerOf(s, "#post");
+			const driver = driverOf(s.runtime, s.browserId);
+			const send = driver.input.bind(driver);
+			const sending = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			driver.input = async (events) => {
+				sending.resolve();
+				await release.promise;
+				await send(events);
+			};
+			const press = s.runtime.input(s.browserId, pressAt(at));
+			try {
+				await sending.promise;
+				const confirmed = await s.call("browser_publish_confirm", { browserId: s.browserId, publishId: parked.publishId }, "app");
+				expect(confirmed.structuredContent).toMatchObject({ status: "unknown", error: TOUCHED });
+			} finally {
+				release.resolve();
+				await press.catch(() => undefined);
+			}
+			await press;
+			await s.fixture.reached("/landed");
+			expect(s.fixture.submissions()).toHaveLength(1);
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"a press that is still reading the page's state when the bar's Post starts is refused publish_pending, and never reaches the page",
+		async () => {
+			const s = await session("pub-press-state-read");
+			const parked = await post(s, "stay");
+			const at = await centerOf(s, "#post");
+			const driver = driverOf(s.runtime, s.browserId);
+			const read = driver.state.bind(driver);
+			const reading = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			// Only the press's own read is held; the Post's reads go straight through.
+			driver.state = async () => {
+				driver.state = read;
+				reading.resolve();
+				await release.promise;
+				return await read();
+			};
+			const press = s.runtime.input(s.browserId, pressAt(at));
+			press.catch(() => undefined);
+			await reading.promise;
+			const confirming = s.call("browser_publish_confirm", { browserId: s.browserId, publishId: parked.publishId }, "app");
+			confirming.catch(() => undefined);
+			// The Post found the page untouched and clicked submit; the site keeps its text, so it now waits for a receipt.
+			await s.fixture.reached("/submit");
+			release.resolve();
+
+			expect(await failureCode(() => press)).toBe("publish_pending");
+
+			const confirmed = await racingClock(() => true, confirming);
+			expect(confirmed.structuredContent).toMatchObject({ status: "unknown" });
+			expect(s.fixture.submissions()).toHaveLength(1);
+			expect((await counters(s.runtime, s.browserId)).clicks).toBe(1);
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"a press the browser provably never received leaves the publish untouched: the bar's Post still posts, once",
+		async () => {
+			const s = await session("pub-press-refused");
+			const parked = await post(s, "nav");
+			const at = await centerOf(s, "#post");
+			driverOf(s.runtime, s.browserId).input = async () => {
+				throw new ActionNotDispatched("unknown_tab", "no active tab");
+			};
+			expect(await failureCode(() => s.runtime.input(s.browserId, pressAt(at)))).toBe("unknown_tab");
+
+			const confirmed = await s.call("browser_publish_confirm", { browserId: s.browserId, publishId: parked.publishId }, "app");
+
+			expect(confirmed.structuredContent).toMatchObject({ status: "posted", url: s.fixture.url("/alice/status/1") });
+			expect(s.fixture.submissions()).toHaveLength(1);
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"a press that errors after it may have reached the page keeps the publish touched: the Post is unknown and clicks nothing",
+		async () => {
+			const s = await session("pub-press-errored");
+			const parked = await post(s, "nav");
+			const at = await centerOf(s, "#post");
+			driverOf(s.runtime, s.browserId).input = async () => {
+				throw new Error("target closed mid-press");
+			};
+			const sent = await s.runtime.input(s.browserId, pressAt(at)).catch((error: unknown) => error);
+			expect(sent).toEqual(new Error("target closed mid-press"));
+
+			const confirmed = await s.call("browser_publish_confirm", { browserId: s.browserId, publishId: parked.publishId }, "app");
+
+			expect(confirmed.structuredContent).toMatchObject({ status: "unknown", error: TOUCHED });
+			expect(s.fixture.submissions()).toHaveLength(0);
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);
@@ -786,11 +1034,7 @@ describeWithChrome("browser_publish", () => {
 		"a shadow-root page that moves focus off the field to another element in the same root fails the post and nothing is typed there",
 		async () => {
 			const s = await session("pub-shadow-steal");
-			const result = await s.call("browser_publish", {
-				browserId: s.browserId,
-				recipe: recipe(s.fixture, "shadow-steal", { fields: [{ selector: "pierce/#inner", value: TEXT }] }),
-				mode: "post",
-			});
+			const result = await requestPost(s, "shadow-steal", { fields: [{ selector: "pierce/#inner", value: TEXT }] });
 
 			expect(result.structuredContent?.status).toBe("failed");
 			// `#decoy`'s input events count as writes: the document's own activeElement is the host either way.
@@ -848,6 +1092,303 @@ describeWithChrome("browser_publish", () => {
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);
+
+	// -----------------------------------------------------------------------
+	// Board approvals: only a post a human approved goes out
+	// -----------------------------------------------------------------------
+
+	test(
+		"text nobody approved never reaches the page: refused publish_unapproved, the compose page's own counters stay 0 and it is not even reloaded",
+		async () => {
+			const s = await session("pub-unapproved");
+			// Stand on the compose page first: its own counters then say whether anything was typed or clicked there.
+			await perform(s.runtime, s.browserId, { kind: "navigate", url: s.fixture.url("/compose?v=nav") });
+			const loads = s.fixture.hits("/compose");
+
+			const refused = await s.call("browser_publish", { browserId: s.browserId, recipe: recipe(s.fixture, "nav"), mode: "post" });
+
+			expect(refused.isError).toBe(true);
+			expect(refused.content[0]?.text).toContain("publish_unapproved: no board approval covers");
+			expect(await counters(s.runtime, s.browserId)).toEqual({ writes: 0, clicks: 0, secret: 0 });
+			expect(s.fixture.hits("/compose")).toBe(loads);
+			expect(s.fixture.hits("/submit")).toBe(0);
+			expect((await s.runtime.state(s.browserId)).publish).toBeNull();
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"an approved post posts exactly once, and a replay of the same text is refused 'already used' before the page is opened",
+		async () => {
+			const s = await session("pub-approved-once");
+			const parked = await post(s, "nav");
+			const shown = { origin: parked.origin, profile: parked.profile, values: parked.fields.map((field) => field.value) };
+
+			const confirmed = await s.call("browser_publish_confirm", { browserId: s.browserId, publishId: parked.publishId, expect: shown }, "model");
+
+			expect(confirmed.structuredContent).toMatchObject({ status: "posted", url: s.fixture.url("/alice/status/1") });
+			expect(s.fixture.submissions()).toEqual([{ text: TEXT, rich: RICH }]);
+			const loads = s.fixture.hits("/compose");
+
+			const replay = await s.call("browser_publish", { browserId: s.browserId, recipe: recipe(s.fixture, "nav"), mode: "post" });
+
+			expect(replay.isError).toBe(true);
+			expect(replay.content[0]?.text).toContain("publish_unapproved");
+			expect(replay.content[0]?.text).toContain("already used");
+			expect(s.fixture.hits("/compose")).toBe(loads);
+			expect(s.fixture.hits("/submit")).toBe(1);
+			expect(s.fixture.submissions()).toHaveLength(1);
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"an edit of the approved text between approval and park is refused before the page is touched, and the approved text still parks",
+		async () => {
+			const s = await session("pub-edited");
+			await approve(s, recipe(s.fixture, "nav"));
+			const edited = recipe(s.fixture, "nav", { fields: [{ selector: "#text", value: `${TEXT}!` }, { selector: "#rich", value: RICH }] });
+
+			const refused = await s.call("browser_publish", { browserId: s.browserId, recipe: edited, mode: "post" });
+
+			expect(refused.isError).toBe(true);
+			expect(refused.content[0]?.text).toContain("publish_unapproved: no board approval covers");
+			expect(s.fixture.hits("/compose")).toBe(0);
+			expect((await s.runtime.state(s.browserId)).publish).toBeNull();
+			// The refused edit spent nothing: the text the human approved parks.
+			const parked = await s.call("browser_publish", { browserId: s.browserId, recipe: recipe(s.fixture, "nav"), mode: "post" });
+			expect(parked.structuredContent?.status).toBe("awaiting-confirmation");
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"the View's Post spends the approval too: the agent cannot post the text the human just posted",
+		async () => {
+			const s = await session("pub-view-post");
+			const parked = await post(s, "nav");
+
+			const confirmed = await s.call("browser_publish_confirm", { browserId: s.browserId, publishId: parked.publishId }, "app");
+
+			expect(confirmed.structuredContent).toMatchObject({ status: "posted", url: s.fixture.url("/alice/status/1") });
+			expect(s.fixture.submissions()).toHaveLength(1);
+			const again = await s.call("browser_publish", { browserId: s.browserId, recipe: recipe(s.fixture, "nav"), mode: "post" });
+			expect(again.isError).toBe(true);
+			expect(again.content[0]?.text).toContain("already used");
+			expect(s.fixture.submissions()).toHaveLength(1);
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"a page that changed since it was shown settles failed and keeps the approval: the same text parks again, unapproved anew, and posts",
+		async () => {
+			const s = await session("pub-changed-keeps");
+			const parked = await post(s, "nav");
+			await humanAct(s, { kind: "navigate", url: parked.composeUrl });
+
+			const failed = await s.call("browser_publish_confirm", { browserId: s.browserId, publishId: parked.publishId }, "app");
+
+			expect(failed.structuredContent?.status).toBe("failed");
+			expect(failed.structuredContent?.error).toContain("changed since shown");
+			expect((await counters(s.runtime, s.browserId)).clicks).toBe(0);
+			expect(s.fixture.hits("/submit")).toBe(0);
+			const again = await s.call("browser_publish", { browserId: s.browserId, recipe: recipe(s.fixture, "nav"), mode: "post" });
+			expect(again.structuredContent?.status).toBe("awaiting-confirmation");
+
+			const posted = await s.call("browser_publish_confirm", { browserId: s.browserId, publishId: again.structuredContent?.publishId as string }, "app");
+
+			expect(posted.structuredContent).toMatchObject({ status: "posted", url: s.fixture.url("/alice/status/1") });
+			expect(s.fixture.submissions()).toEqual([{ text: TEXT, rich: RICH }]);
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+});
+
+// The hand-written publication engine below proves outcome mapping. These
+// exercise the Chrome dispatch boundary itself, where a selector can resolve
+// after the authority under which the action began has disappeared.
+describeWithChrome("native publish authority at dispatch", () => {
+	async function nativePage(): Promise<{ driver: EngineDriver; fixture: PublishFixture }> {
+		const fixture = startPublishFixture();
+		fixtures.push(fixture);
+		const driver = await createPuppeteerDriver("chromium", {
+			profileDirectory: await createRoot(),
+			viewport: { width: 900, height: 700 },
+			headless: true,
+			executablePath: chromePath,
+			onClosed: () => undefined,
+		});
+		nativeDrivers.push(driver);
+		await driver.perform({ kind: "navigate", url: fixture.url("/compose?v=stay") });
+		return { driver, fixture };
+	}
+
+	async function insert(driver: EngineDriver, markup: string): Promise<void> {
+		expect(await driver.evaluate(`document.body.insertAdjacentHTML("beforeend", ${JSON.stringify(markup)})`, 100)).toMatchObject({ ok: true });
+	}
+	// Observe the real Puppeteer selector wait, then let it run unchanged. A
+	// page query alone cannot establish that the action entered resolution.
+	async function lateSelector(
+		selector: string,
+		start: () => Promise<unknown>,
+		withdraw: () => Promise<void>,
+	): Promise<unknown> {
+		const entered = Promise.withResolvers<void>();
+		const original = Frame.prototype.waitForSelector;
+		const wait = spyOn(Frame.prototype, "waitForSelector").mockImplementation(function <Selector extends string>(this: Frame, css: Selector, options: WaitForSelectorOptions | undefined) {
+			if (css === selector) entered.resolve();
+			return (original<Selector>).call(this, css, options);
+		});
+		try {
+			const action = start();
+			await Promise.race([
+				entered.promise,
+				action.then(
+					() => { throw new Error(`action finished before selector ${selector} was awaited`); },
+					error => { throw new Error(`action failed before selector ${selector} was awaited`, { cause: error }); },
+				),
+			]);
+			await withdraw();
+			return await action.then(() => { throw new Error("withdrawn action dispatched"); }, error => error);
+		} finally {
+			wait.mockRestore();
+		}
+	}
+
+	test("late submit resolution after withdrawal does not dispatch a click or POST", async () => {
+		const { driver, fixture } = await nativePage();
+		let authorized = true;
+		const assertCurrent = () => {
+			if (!authorized) throw new ActionNotDispatched("approval_withdrawn", "approval withdrawn");
+		};
+		const error = await lateSelector("#late-post",
+			() => driver.perform({ kind: "click", selector: "#late-post" }, undefined, Object.assign(assertCurrent, { assertCurrent })),
+			async () => {
+				expect(await driver.evaluate(`document.querySelector("#late-post") === null`, 100)).toMatchObject({ ok: true, value: "true" });
+				authorized = false;
+				await insert(driver, `<button id="late-post" onclick="document.querySelector('#post').click()">Post</button>`);
+			});
+		expect(error).toBeInstanceOf(ActionNotDispatched);
+		expect(error).toMatchObject({ code: "approval_withdrawn" });
+		expect(fixture.submissions()).toEqual([]);
+		expect((await driver.state()).title).toContain("clicks:0");
+	}, BROWSER_TEST_TIMEOUT_MS);
+
+	test("late field resolution after withdrawal leaves the real field untouched", async () => {
+		const { driver } = await nativePage();
+		let authorized = true;
+		const assertCurrent = () => {
+			if (!authorized) throw new ActionNotDispatched("approval_withdrawn", "approval withdrawn");
+		};
+		const error = await lateSelector("#late-field",
+			() => driver.fill("#late-field", "should not be typed", Object.assign(assertCurrent, { assertCurrent })),
+			async () => {
+				expect(await driver.evaluate(`document.querySelector("#late-field") === null`, 100)).toMatchObject({ ok: true, value: "true" });
+				authorized = false;
+				await insert(driver, `<textarea id="late-field"></textarea>`);
+			});
+		expect(error).toBeInstanceOf(ActionNotDispatched);
+		expect(error).toMatchObject({ code: "approval_withdrawn" });
+		expect(await driver.readField("#late-field")).toEqual({ state: "value", value: "" });
+	}, BROWSER_TEST_TIMEOUT_MS);
+	test("ordinary late type resolution after withdrawal cannot focus or change the field", async () => {
+		const { driver } = await nativePage();
+		let authorized = true;
+		const assertCurrent = () => {
+			if (!authorized) throw new ActionNotDispatched("authority_revoked", "authority revoked");
+		};
+		const error = await lateSelector("#late-type",
+			() => driver.perform({ kind: "type", selector: "#late-type", text: "must not be typed" }, undefined, Object.assign(assertCurrent, { assertCurrent })),
+			async () => {
+				expect(await driver.evaluate(`document.querySelector("#late-type") === null`, 100)).toMatchObject({ ok: true, value: "true" });
+				authorized = false;
+				await insert(driver, `<input id="late-type" value="kept">`);
+			});
+		expect(error).toBeInstanceOf(ActionNotDispatched);
+		expect(error).toMatchObject({ code: "authority_revoked" });
+		expect(await driver.readField("#late-type")).toEqual({ state: "value", value: "kept" });
+		expect(await driver.evaluate(`document.activeElement?.id !== "late-type"`, 100)).toMatchObject({ ok: true, value: "true" });
+	}, BROWSER_TEST_TIMEOUT_MS);
+
+	test("ordinary late select resolution after withdrawal preserves the selected option and emits no change", async () => {
+		const { driver } = await nativePage();
+		let authorized = true;
+		const assertCurrent = () => {
+			if (!authorized) throw new ActionNotDispatched("authority_revoked", "authority revoked");
+		};
+		const error = await lateSelector("#late-select",
+			() => driver.perform({ kind: "select", selector: "#late-select", value: "after" }, undefined, Object.assign(assertCurrent, { assertCurrent })),
+			async () => {
+				expect(await driver.evaluate(`document.querySelector("#late-select") === null`, 100)).toMatchObject({ ok: true, value: "true" });
+				authorized = false;
+				await insert(driver, `<select id="late-select" onchange="document.title = 'selection changed'"><option value="before" selected>Before</option><option value="after">After</option></select>`);
+			});
+		expect(error).toBeInstanceOf(ActionNotDispatched);
+		expect(error).toMatchObject({ code: "authority_revoked" });
+		expect(await driver.evaluate(`document.querySelector("#late-select").value === "before"`, 100)).toMatchObject({ ok: true, value: "true" });
+		expect((await driver.state()).title).not.toBe("selection changed");
+	}, BROWSER_TEST_TIMEOUT_MS);
+
+	test("local revocation after asynchronous refresh prevents navigation in the dispatch continuation", async () => {
+		const { driver, fixture } = await nativePage();
+		const initialUrl = (await driver.state()).url;
+		let authorized = true;
+		const assertCurrent = () => {
+			if (!authorized) throw new ActionNotDispatched("authority_revoked", "authority revoked");
+		};
+		const guard = Object.assign(async () => {
+			assertCurrent();
+			queueMicrotask(() => { authorized = false; });
+		}, { assertCurrent });
+		await expect(driver.perform({ kind: "navigate", url: fixture.url("/page2") }, undefined, guard)).rejects.toBeInstanceOf(ActionNotDispatched);
+		expect(fixture.hits("/page2")).toBe(0);
+		expect((await driver.state()).url).toBe(initialUrl);
+	}, BROWSER_TEST_TIMEOUT_MS);
+
+
+	test("fill without an authority guard still refuses password fields without typing or submitting", async () => {
+		const { driver, fixture } = await nativePage();
+		await insert(driver, `<input id="guard-password" type="password">`);
+		const refused = await driver.fill("#guard-password", "must not reach the page").then(() => undefined, error => error);
+		expect(refused).toBeInstanceOf(Error);
+		expect(await driver.evaluate(`document.querySelector("#guard-password").value === ""`, 100)).toMatchObject({ ok: true, value: "true" });
+		expect(fixture.submissions()).toEqual([]);
+	}, BROWSER_TEST_TIMEOUT_MS);
+
+	test("guarded fill refuses an actual password field even when page-world input.type is spoofed as text", async () => {
+		const { driver, fixture } = await nativePage();
+		await insert(driver, `<input id="guard-spoof-password" type="password">`);
+		expect(await driver.evaluate(`Object.defineProperty(HTMLInputElement.prototype, "type", { configurable: true, get() { return "text"; } }); document.querySelector("#guard-spoof-password").type === "text"`, 100)).toMatchObject({ ok: true, value: "true" });
+		let authorized = true;
+		const assertCurrent = () => {
+			if (!authorized) throw new ActionNotDispatched("approval_withdrawn", "approval withdrawn");
+		};
+		const refused = await driver.fill("#guard-spoof-password", "must not reach the page", Object.assign(assertCurrent, { assertCurrent })).then(() => undefined, error => error);
+		expect(refused).toBeInstanceOf(Error);
+		expect(await driver.evaluate(`document.querySelector("#guard-spoof-password").value === ""`, 100)).toMatchObject({ ok: true, value: "true" });
+		expect(fixture.submissions()).toEqual([]);
+	}, BROWSER_TEST_TIMEOUT_MS);
+
+	test("authority withdrawn after focus is not classified as undispatched and leaves the field and submission untouched", async () => {
+		const { driver, fixture } = await nativePage();
+		await insert(driver, `<textarea id="guard-focus"></textarea>`);
+		let authorized = true;
+		const assertCurrent = () => {
+			if (!authorized) throw new ActionNotDispatched("approval_withdrawn", "approval withdrawn");
+		};
+		const guard = Object.assign(async () => {
+			const focused = await driver.evaluate(`document.activeElement?.id === "guard-focus"`, 100);
+			if (focused.ok && focused.value === "true") authorized = false;
+			assertCurrent();
+		}, { assertCurrent });
+		const refused = await driver.fill("#guard-focus", "must not be typed", guard).then(() => undefined, error => error);
+		expect(refused).toBeInstanceOf(Error);
+		expect(refused).not.toBeInstanceOf(ActionNotDispatched);
+		expect(await driver.evaluate(`document.activeElement?.id === "guard-focus"`, 100)).toMatchObject({ ok: true, value: "true" });
+		expect(await driver.readField("#guard-focus")).toEqual({ state: "value", value: "" });
+		expect(fixture.submissions()).toEqual([]);
+	}, BROWSER_TEST_TIMEOUT_MS);
 });
 
 // ---------------------------------------------------------------------------

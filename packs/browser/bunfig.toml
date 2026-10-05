@@ -7,5 +7,11 @@ preload = [
 	"../../../fraym/packages/ui/test/test-globals.ts",
 	"../../../fraym/packages/ui/test/pdfjs-test-adapter.ts",
 	"../../../fraym/packages/ui/test/asset-url-test-adapter.ts",
+	"./test/kit-react-preload.ts",
 ]
 telemetry = false
+
+# src/code/prompt.md is the model-facing text of browser_run, imported as text (esbuild does the same through scripts/build.mjs).
+# Bun would otherwise render .md as HTML.
+[loader]
+".md" = "text"

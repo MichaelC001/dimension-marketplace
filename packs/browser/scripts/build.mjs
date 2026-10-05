@@ -10,6 +10,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 // Agent Plugins 1.0.0 layout: the pack id is the portable `name`; the
 // Dimension declaration lives under the `ai.insodimension.dimension` extension.
 const manifest = JSON.parse(await readFile(resolve(root, "plugin.json"), "utf8"));
+const pkg = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
 const declared = manifest.extensions?.["ai.insodimension.dimension"]?.artifactories;
 if (!Array.isArray(declared) || declared.length === 0) throw new Error("plugin.json declares no artifactories");
 for (const declaration of declared) {
@@ -17,16 +18,21 @@ for (const declaration of declared) {
   if (issues.length) throw new Error(issues.map(issue => issue.message).join("\n"));
 }
 await mkdir(resolve(root, "app"), { recursive: true });
-await buildServer({
-  entryPoints: [resolve(root, "src/stdio.ts")],
-  outfile: resolve(root, "app/server.mjs"),
+// Two Node entries, one set of options: the MCP server, and the code worker (a `worker_threads` thread per session that runs the
+// model's `browser_run` cells, doc 77 §7.4.4). The server resolves the worker as `./code-worker.mjs` beside itself. The cell's
+// facade, the model-facing text and the ARIA snapshot bundle are text modules.
+const nodeBundle = {
   bundle: true,
   platform: "node",
   format: "esm",
   target: "node22",
-  packages: "external",
+  // Declared runtime packages install beside the pack; the SDK authoring surface is bundled.
+  external: Object.keys(pkg.dependencies),
   sourcemap: false,
-});
+  loader: { ".txt": "text", ".md": "text" },
+};
+await buildServer({ ...nodeBundle, entryPoints: [resolve(root, "src/stdio.ts")], outfile: resolve(root, "app/server.mjs") });
+await buildServer({ ...nodeBundle, entryPoints: [resolve(root, "src/code/worker/entry.ts")], outfile: resolve(root, "app/code-worker.mjs") });
 await buildView({
   configFile: false,
   root: resolve(root, "app/view"),

@@ -4,25 +4,40 @@
 // the shapes and engine identifiers come from the pack's own contracts module.
 import type { App } from "@modelcontextprotocol/ext-apps";
 import type { CallToolResult, ContentBlock } from "@modelcontextprotocol/sdk/types.js";
-import { BROWSER_APPS, BROWSER_ENGINES, DIALOG_TYPES, PUBLISH_STATUSES, TASK_AGENTS } from "../../src/contracts";
+import { BROWSER_APPS, BROWSER_ENGINES, DIALOG_TYPES, MAX_ELEMENT_ID_CHARS, MAX_ELEMENT_LABEL_CHARS, MAX_ELEMENT_TAG_CHARS, MAX_ELEMENTS_PER_REGION, PUBLISH_STATUSES } from "../../src/contracts";
 import type {
 	BrowserAction,
-	BrowserAnnotation,
+	BrowserAnnotationContext,
 	BrowserEngine,
 	BrowserFrame,
-	UnchangedFrame,
 	BrowserRegion,
 	BrowserState,
 	HandledDialog,
-	FrameFormat,
 	PublishField,
 	PublishRecord,
 	TabInfo,
 	TabOp,
 	TaskRun,
 	TaskStatus,
+	PageElement,
+	ControlMode,
+	NewProfileRequest,
+	OpenBrowserListing,
+	ProfileHold,
+	ProfileListing,
+	ProfileConsent,
+	ProfileSiteListing,
 } from "../../src/contracts";
+import { isProfileColour, resolveProfileMeta } from "../../src/profile-meta";
+import { PROFILE_NAME } from "../../src/profile-name";
 import { isRecord, readNumber, readString } from "./json";
+
+/** What `browser_profiles` tells the View: the saved profiles, and the browsers this chat holds that are not profiles (Private ones, the person's Chrome). */
+export interface ProfilesAnswer {
+	readonly profiles: ProfileListing[];
+	readonly browsers: OpenBrowserListing[];
+	readonly consents: ProfileConsent[];
+}
 
 const TASK_STATUSES: readonly TaskStatus[] = ["running", "done", "blocked", "failed", "cancelled"];
 
@@ -64,16 +79,37 @@ function toolError(tool: string, result: CallToolResult): BrowserToolError {
 	return new BrowserToolError(tool, reason, status === "failed" ? "failed" : null);
 }
 
+/**
+ * One element as the page described it. The page chose every byte of this, so none of it is trusted to be what the
+ * contract says: a field of the wrong type is empty, a string is cut to its bound again, and what is not a record at
+ * all is no element.
+ */
+function readElement(value: unknown): PageElement[] {
+	if (!isRecord(value)) return [];
+	const box = isRecord(value.box) ? value.box : {};
+	return [
+		{
+			tag: (readString(value, "tag") ?? "").slice(0, MAX_ELEMENT_TAG_CHARS),
+			id: (readString(value, "id") ?? "").slice(0, MAX_ELEMENT_ID_CHARS),
+			box: {
+				x: readNumber(box, "x") ?? 0,
+				y: readNumber(box, "y") ?? 0,
+				width: readNumber(box, "width") ?? 0,
+				height: readNumber(box, "height") ?? 0,
+			},
+			label: (readString(value, "label") ?? "").slice(0, MAX_ELEMENT_LABEL_CHARS),
+		},
+	];
+}
+
 function readTask(tool: string, value: unknown): TaskRun {
 	if (!isRecord(value)) throw new BrowserToolError(tool, "result carried no task run");
-	const agent = TASK_AGENTS.find(candidate => candidate === readString(value, "agent"));
 	const status = TASK_STATUSES.find(candidate => candidate === readString(value, "status"));
-	if (!agent || !status) throw new BrowserToolError(tool, "task run carried an unknown agent or status");
+	if (!status) throw new BrowserToolError(tool, "task run carried an unknown status");
 	const usage = isRecord(value.usage) ? value.usage : {};
 	const steps = Array.isArray(value.steps) ? value.steps.filter(isRecord) : [];
 	return {
 		id: readString(value, "id") ?? "",
-		agent,
 		task: readString(value, "task") ?? "",
 		status,
 		summary: readString(value, "summary") ?? "",
@@ -159,6 +195,64 @@ function readDialogs(value: unknown): HandledDialog[] {
 	return dialogs;
 }
 
+/** One site of a profile's listing; what is not a site is dropped, never guessed at. */
+function readSite(value: unknown): ProfileSiteListing[] {
+	if (!isRecord(value)) return [];
+	const site = readString(value, "site");
+	const seenAt = readString(value, "seenAt");
+	if (site === undefined || seenAt === undefined || (typeof value.signedIn !== "boolean" && value.signedIn !== null)) return [];
+	const account = readString(value, "account");
+	return [{ site, ...(account === undefined ? {} : { account }), signedIn: value.signedIn, seenAt }];
+}
+
+/** A hold as the runtime reports it; what is not said is taken as not happening. */
+function readHold(value: unknown): ProfileHold | undefined {
+	if (!isRecord(value)) return undefined;
+	return { by: value.by === "agent" ? "agent" : "person", task: value.task === true, takenOver: value.takenOver === true, post: value.post === true };
+}
+
+/** One saved profile of `browser_profiles` / `browser_profile_add`: zero entries for anything that is not one (a name the runtime would never hand out), so the menu cannot draw a row it cannot open. */
+function readProfile(value: unknown): ProfileListing[] {
+	if (!isRecord(value)) return [];
+	const name = readString(value, "name");
+	if (name === undefined || !PROFILE_NAME.test(name)) return [];
+	const drawn = readString(value, "colour");
+	const { label, colour, avatar } = resolveProfileMeta(name, { label: readString(value, "label"), colour: isProfileColour(drawn) ? drawn : undefined, avatar: readString(value, "avatar") });
+	const heldBy = value.heldBy === "this chat" || value.heldBy === "human" || value.heldBy === "another chat" ? value.heldBy : null;
+	const hold = readHold(value.hold);
+	const browserId = readString(value, "browserId");
+	return [{
+		name, label, colour, ...(avatar === undefined ? {} : { avatar }), heldBy, ...(hold === undefined ? {} : { hold }), ...(browserId === undefined || browserId.length === 0 ? {} : { browserId }),
+		sites: Array.isArray(value.sites) ? value.sites.flatMap(readSite) : [],
+	}];
+}
+
+/** One browser the chat holds that is not a saved profile; anything else is dropped, so the menu never draws a row it cannot reach. */
+function readOpenBrowser(value: unknown): OpenBrowserListing[] {
+	if (!isRecord(value)) return [];
+	const browserId = readString(value, "browserId");
+	const hold = readHold(value.hold);
+	if (browserId === undefined || browserId.length === 0 || hold === undefined || (value.kind !== "private" && value.kind !== "chrome")) return [];
+	return [{ browserId, kind: value.kind, hold }];
+}
+function readConsent(value: unknown): ProfileConsent[] {
+	if (!isRecord(value) || !PROFILE_NAME.test(readString(value, "name") ?? "") || (value.status !== "pending" && value.status !== "granted") || (value.scope !== "chat" && value.scope !== "loop")) return [];
+	const name = readString(value, "name")!;
+	const loopLabel = readString(value, "loopLabel");
+	if (value.scope === "loop" && (loopLabel === undefined || loopLabel.length > 1024)) return [];
+	let subject: ProfileConsent["subject"];
+	if (value.subject !== undefined) {
+		if (!isRecord(value.subject) || Object.keys(value.subject).length !== 3) return [];
+		const workspaceId = readString(value.subject, "workspaceId");
+		const id = readString(value.subject, "id");
+		const origin = readString(value.subject, "origin");
+		if (!workspaceId || workspaceId.length > 1024 || !id || id.length > 1024 || !origin || origin.length > 1024) return [];
+		subject = { workspaceId, id, origin };
+	}
+	if (value.scope === "loop" && subject === undefined) return [];
+	return [{ name, label: readString(value, "label") ?? name, sites: Array.isArray(value.sites) ? value.sites.flatMap(readSite) : [], status: value.status, scope: value.scope, ...(value.scope === "loop" ? { loopLabel } : {}), ...(typeof value.expiresAt === "number" ? { expiresAt: value.expiresAt } : {}), ...(subject === undefined ? {} : { subject }) }];
+}
+
 function readState(tool: string, value: unknown): BrowserState {
 	if (!isRecord(value)) throw new BrowserToolError(tool, "no browser state in the result");
 	const browserId = readString(value, "browserId");
@@ -171,9 +265,13 @@ function readState(tool: string, value: unknown): BrowserState {
 	const engine = BROWSER_ENGINES.find(candidate => candidate === readString(value, "engine"));
 	if (!engine) throw new BrowserToolError(tool, "result carried an unsupported browser engine");
 	const tabs = readTabs(value.tabs);
+	const profile = readString(value, "profile") ?? null;
+	const face = value.look;
+	const drawn = isRecord(face) ? readString(face, "colour") : undefined;
 	return {
 		browserId,
-		profile: readString(value, "profile") ?? null,
+		profile,
+		look: profile === null || !isRecord(face) ? null : resolveProfileMeta(profile, { label: readString(face, "label"), colour: isProfileColour(drawn) ? drawn : undefined, avatar: readString(face, "avatar") }),
 		engine,
 		app: BROWSER_APPS.find(candidate => candidate === readString(value, "app")) ?? null,
 		url: readString(value, "url") ?? "",
@@ -188,7 +286,14 @@ function readState(tool: string, value: unknown): BrowserState {
 		canGoForward: value.canGoForward === true,
 		publish: value.publish === null || value.publish === undefined ? null : readPublish(tool, value.publish),
 		dialogs: readDialogs(value.dialogs),
+		takenOver: value.takenOver === true,
+		agentActionAt: readNumber(value, "agentActionAt") ?? null,
 	};
+}
+
+/** A state that arrived on the live stream, read the way a tool's answer is: a shape this View cannot read is raised, never drawn. */
+export function stateFromStream(value: unknown): BrowserState {
+	return readState("stream", value);
 }
 
 /** The one structured-content door. Every browser tool answers
@@ -200,11 +305,47 @@ function structured(tool: string, result: CallToolResult): Record<string, unknow
 	return structuredContent;
 }
 
+/** The saved profile (and address) an open named, as the host's `ui/notifications/tool-input` delivered it. The View cannot tell who asked
+ *  (a person's gesture, a layout pin, an agent-written manifest). It holds this to say which profile a refusal was about and to finish that
+ *  open once the person has allowed the profile, with the approval card showing exactly this address. `url` is a normalised http(s) address:
+ *  what the card shows and what is opened are the same string. */
+export interface OpenAttempt {
+	readonly profile: string;
+	readonly url?: string;
+}
+
+/** The longest address a refused open may carry to the approval card; a longer one is dropped (the profile still opens, to a blank tab). */
+const OPEN_ATTEMPT_URL_MAX = 2048;
+
 /** What a host-delivered `ui/notifications/tool-result` tells this View: the
- *  browser its tool opened, or why it opened none. */
-export type MountResult = { readonly state: BrowserState } | { readonly error: string };
+ *  browser its tool opened, or why it opened none (and, for an open that named a saved profile, which one). */
+export type MountResult = { readonly state: BrowserState } | { readonly error: string; readonly attempted?: OpenAttempt };
 /** A `MountResult` as the host delivered it; `seq` orders them so a repeat still registers. */
 export type ToolMount = MountResult & { readonly seq: number };
+
+/** The open a tool call's arguments name: a saved profile, with its address when it carries a plain web one. `null`: no profile named (a
+ *  Private browser, a browser shown by id, anything else). The address is read through `URL`, so an internationalised host shows as punycode
+ *  and a bidi or control character is percent-encoded: the person reads what will be opened, not a lookalike. Anything that is not http(s)
+ *  is dropped. */
+export function openAttemptOf(args: Record<string, unknown> | undefined): OpenAttempt | null {
+	if (args === undefined || args.browserId !== undefined) return null;
+	const { profile, url } = args;
+	if (typeof profile !== "string" || profile.trim().length === 0) return null;
+	const address = typeof url === "string" ? webAddress(url) : null;
+	return address === null ? { profile } : { profile, url: address };
+}
+
+/** A plain web address, normalised; `null` for anything else: another scheme, one that carries a user name or password (`https://bank.com@evil.test/`
+ *  reads as bank.com), unparseable, or too long to show whole. */
+function webAddress(value: string): string | null {
+	try {
+		const parsed = new URL(value.trim());
+		const web = parsed.protocol === "http:" || parsed.protocol === "https:";
+		return web && parsed.username === "" && parsed.password === "" && parsed.href.length <= OPEN_ATTEMPT_URL_MAX ? parsed.href : null;
+	} catch {
+		return null;
+	}
+}
 
 /** The outcome of the tool that mounted the View (`browser_view`, `browser_publish`), read out of a host-delivered
  *  `ui/notifications/tool-result` — the View's ONLY source of a browserId.
@@ -221,6 +362,12 @@ export function mountFromToolResult(result: CallToolResult): MountResult | null 
 	}
 }
 
+/** Where one View reads and writes the live channel: `GET {origin}/s/{token}` and `POST {origin}/i/{token}`. */
+export interface StreamGrant {
+	readonly origin: string;
+	readonly token: string;
+}
+
 export interface OpenOptions {
 	/** Omitted: a private browser — nothing is saved. */
 	profile?: string;
@@ -234,7 +381,7 @@ export function failureText(cause: unknown): string {
 }
 
 /** The runtime allows one holder per saved set of logins. Only the text of that
- *  refusal crosses the tool boundary (`profile_in_use` / `profile_locked`), so it
+ *  refusal crosses the tool boundary (`profile_held` / `profile_locked`), so it
  *  is recognised by it. */
 const SET_TAKEN = /profile "[^"]*" is already (?:open|in use)/;
 const SET_TAKEN_TEXT = "That browser is already open. Use it, or open a Private one.";
@@ -285,21 +432,53 @@ export class BrowserClient {
 		return next;
 	}
 
-	private async call(tool: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
+	private async call(tool: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<Record<string, unknown>> {
 		let result: CallToolResult;
 		try {
-			result = await this.app.callServerTool({ name: tool, arguments: args });
+			result = await this.app.callServerTool({ name: tool, arguments: args }, signal === undefined ? undefined : { signal });
 		} catch (cause) {
 			throw new BrowserToolError(tool, failureText(cause));
 		}
 		return structured(tool, result);
 	}
 
-	async profiles(): Promise<string[]> {
-		const payload = await this.call("browser_profiles", {});
-		const profiles = payload.profiles;
-		if (!Array.isArray(profiles)) throw new BrowserToolError("browser_profiles", "result carried no profiles array");
-		return profiles.filter((profile): profile is string => typeof profile === "string");
+	/** Every saved profile with its label, colour, avatar, who holds it and where it is signed in, and the browsers this chat holds that are not profiles: `browser_profiles` answers the View the whole listing. */
+	async profiles(): Promise<ProfilesAnswer> {
+		const tool = "browser_profiles";
+		const answered = await this.call(tool, {});
+		if (!Array.isArray(answered.profiles)) throw new BrowserToolError(tool, "result carried no profiles array");
+		return { profiles: answered.profiles.flatMap(readProfile), browsers: Array.isArray(answered.browsers) ? answered.browsers.flatMap(readOpenBrowser) : [], consents: Array.isArray(answered.consents) ? answered.consents.flatMap(readConsent) : [] };
+	}
+	async decideProfileConsent(name: string, decision: "allow" | "deny" | "revoke", scope: "chat" | "loop", expectedSubject?: ProfileConsent["subject"]): Promise<void> {
+		await this.call("browser_profile_consent", { name, decision, scope, ...(expectedSubject === undefined ? {} : { expectedSubject }) });
+	}
+
+	/** Creates a profile from the name the person typed. The refusal (a taken or unusable name) is the runtime's sentence, raised as is. */
+	async addProfile(request: NewProfileRequest): Promise<ProfileListing> {
+		const tool = "browser_profile_add";
+		const [profile] = readProfile((await this.call(tool, { ...request })).profile);
+		if (profile === undefined) throw new BrowserToolError(tool, "the answer did not describe the new profile");
+		return profile;
+	}
+
+	/** The person takes the browser over (`take`) or hands it back (`return`); answers the state after it. */
+	async control(browserId: string, mode: ControlMode): Promise<BrowserState> {
+		const tool = "browser_control";
+		return readState(tool, await this.call(tool, { browserId, mode }));
+	}
+
+	/** The person leaves the browser for another profile: it is closed unless something depends on it. Answers whether it was closed. */
+	async leave(browserId: string): Promise<boolean> {
+		const tool = "browser_leave";
+		return (await this.call(tool, { browserId })).closed === true;
+	}
+
+	/** The person moves to another profile (none: a Private browser) from the browser `leaving`: opened as `open` does; with the pool full the runtime closes the one left first, when closing it frees a slot. Answers the new browser's state. */
+	async switchProfile(leaving: string, options: { profile?: string; engine?: BrowserEngine }): Promise<BrowserState> {
+		const args: Record<string, unknown> = { leaving };
+		if (options.profile !== undefined) args.profile = options.profile;
+		if (options.engine) args.engine = options.engine;
+		return readState("browser_switch", await this.call("browser_switch", args));
 	}
 
 	async open(options: OpenOptions): Promise<BrowserState> {
@@ -314,27 +493,26 @@ export class BrowserClient {
 		return readState("browser_state", await this.call("browser_state", { browserId }));
 	}
 
-	/** `jpeg`: the latest live screencast frame, answered from memory; with `since`
-	 *  (the frameId on screen) a still page answers `unchanged` and sends no pixels.
-	 *  `png`: a fresh full-quality capture whose frameId can be annotated. */
-	async frame(browserId: string, format: "png"): Promise<BrowserFrame>;
-	async frame(browserId: string, format: "jpeg", since?: string): Promise<BrowserFrame | UnchangedFrame>;
-	async frame(browserId: string, format: FrameFormat, since?: string): Promise<BrowserFrame | UnchangedFrame> {
+	/** A fresh full-quality PNG capture whose frameId can be annotated. The live picture does not come this way: it rides the stream (`stream`). */
+	async frame(browserId: string): Promise<BrowserFrame> {
 		const tool = "browser_frame";
-		const payload = await this.call(tool, since ? { browserId, format, since } : { browserId, format });
+		const payload = await this.call(tool, { browserId });
 		const frameId = readString(payload, "frameId");
 		if (frameId === undefined) throw new BrowserToolError(tool, "frame carried no frameId");
 		const state = readState(tool, payload.state);
-		if (payload.unchanged === true) return { state, frameId, unchanged: true };
 		const data = readString(payload, "data");
 		if (data === undefined || data.length === 0) throw new BrowserToolError(tool, "frame carried no image data");
-		return {
-			state,
-			frameId,
-			mimeType: readString(payload, "mimeType") === "image/png" ? "image/png" : "image/jpeg",
-			data,
-			capturedAt: readString(payload, "capturedAt") ?? new Date().toISOString(),
-		};
+		return { state, frameId, mimeType: "image/png", data, capturedAt: readString(payload, "capturedAt") ?? new Date().toISOString() };
+	}
+
+	/** Where to read this browser's live pictures and state and send the human's input: the pack's own loopback listener. One call per connection, never per picture. */
+	async stream(browserId: string): Promise<StreamGrant> {
+		const tool = "browser_stream";
+		const payload = await this.call(tool, { browserId });
+		const origin = readString(payload, "origin");
+		const token = readString(payload, "token");
+		if (origin === undefined || token === undefined || !/^http:\/\/127\.0\.0\.1:\d+$/.test(origin)) throw new BrowserToolError(tool, "the answer did not say where the live picture is");
+		return { origin, token };
 	}
 
 	/** Sizes every tab's viewport (CSS px) so the page fills the seat 1:1, rendered at
@@ -365,26 +543,49 @@ export class BrowserClient {
 		return readTask(tool, await this.call(tool, { browserId }));
 	}
 
-	async annotate(browserId: string, frameId: string, region: BrowserRegion, note: string): Promise<BrowserAnnotation> {
+	/** The page under the regions the human marked on the png frame `frameId`: its facts and the elements under each region. */
+	async annotate(browserId: string, frameId: string, regions: readonly BrowserRegion[], signal?: AbortSignal): Promise<BrowserAnnotationContext> {
 		const tool = "browser_annotate";
-		const payload = await this.call(tool, { browserId, frameId, region, note });
-		const data = readString(payload, "data");
-		if (data === undefined || data.length === 0) throw new BrowserToolError(tool, "annotation carried no image data");
-		const regionValue = isRecord(payload.region) ? payload.region : {};
+		const payload = await this.call(tool, { browserId, frameId, regions }, signal);
+		const scroll = isRecord(payload.scroll) ? payload.scroll : {};
+		const viewport = isRecord(payload.viewport) ? payload.viewport : {};
+		const entries = Array.isArray(payload.regions) ? payload.regions : [];
 		return {
 			url: readString(payload, "url") ?? "",
-			note: readString(payload, "note") ?? note,
-			region: {
-				x: readNumber(regionValue, "x") ?? region.x,
-				y: readNumber(regionValue, "y") ?? region.y,
-				width: readNumber(regionValue, "width") ?? region.width,
-				height: readNumber(regionValue, "height") ?? region.height,
+			title: readString(payload, "title") ?? "",
+			capturedAt: readString(payload, "capturedAt") ?? "",
+			readAt: readString(payload, "readAt") ?? "",
+			viewport: { width: readNumber(viewport, "width") ?? 0, height: readNumber(viewport, "height") ?? 0 },
+			scroll: {
+				x: readNumber(scroll, "x") ?? 0,
+				y: readNumber(scroll, "y") ?? 0,
+				width: readNumber(scroll, "width") ?? 0,
+				height: readNumber(scroll, "height") ?? 0,
 			},
-			capturedAt: readString(payload, "capturedAt") ?? new Date().toISOString(),
-			mimeType: "image/png",
-			data,
-			elements: readString(payload, "elements") ?? "",
+			regions: entries.map((entry, index) => {
+				const read = isRecord(entry) ? entry : {};
+				const region = isRecord(read.region) ? read.region : {};
+				const asked = regions[index];
+				return {
+					region: {
+						x: readNumber(region, "x") ?? asked?.x ?? 0,
+						y: readNumber(region, "y") ?? asked?.y ?? 0,
+						width: readNumber(region, "width") ?? asked?.width ?? 0,
+						height: readNumber(region, "height") ?? asked?.height ?? 0,
+					},
+					elements: Array.isArray(read.elements) ? read.elements.slice(0, MAX_ELEMENTS_PER_REGION).flatMap(readElement) : [],
+					truncated: read.truncated === true,
+				};
+			}),
 		};
+	}
+
+	/** Keeps the annotation kit's detail document for what was marked in `browserId`; answers the absolute path to read it at. */
+	async annotationFile(browserId: string, json: string): Promise<string> {
+		const tool = "browser_annotation_file";
+		const path = readString(await this.call(tool, { browserId, json }), "path");
+		if (path === undefined || path.length === 0) throw new BrowserToolError(tool, "the tool answered without a path");
+		return path;
 	}
 
 	/** The bar's Post. Answers the settled record: posted, failed or unknown. */

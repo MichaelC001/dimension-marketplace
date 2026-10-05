@@ -13,6 +13,9 @@
  *     Chrome page;
  *   - the real jev worker helpers that build the goal and log fill failures.
  */
+import { randomBytes } from "node:crypto";
+import { z } from "zod";
+import { ARTIFACTORY_HOST_CONTEXT_EXTENSION_ID, ARTIFACTORY_HOST_CONTEXT_META_KEY, ARTIFACTORY_HOST_CONTEXT_READ_METHOD } from "@dimension/sdk/artifactory";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -22,21 +25,28 @@ import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "b
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import puppeteer, { type Browser, type Page } from "puppeteer-core";
-import { resolveCredential } from "../src/credentials";
+import { CredentialKey, readCredentials, resolveCredential } from "../src/credentials";
 import type { BrowserRuntime } from "../src/runtime";
 import { createBrowserServer } from "../src/server";
 import { BrowserRuntimeError } from "../src/store";
 import { BROWSER_TEST_TIMEOUT_MS, chromePath, createRoot, newRuntime, startFixture, teardown } from "./fixture";
+import { withJevKey } from "./jev-key";
+
+withJevKey();
 
 const PYTHON_DIR = fileURLToPath(new URL("../python/", import.meta.url));
-const PYTHON = join(PYTHON_DIR, ".venv", ...(process.platform === "win32" ? ["Scripts", "python.exe"] : ["bin", "python"]));
+const VENV_PYTHON = join(PYTHON_DIR, ".venv", ...(process.platform === "win32" ? ["Scripts", "python.exe"] : ["bin", "python"]));
 const FAKE_WORKER = fileURLToPath(new URL("./fake-worker/", import.meta.url));
+// The scripted FAKE worker needs an interpreter that can import `websockets`: the pack's pinned environment, or the one named in
+// DIM_BROWSER_PYTHON (as profile-control.test.ts does). The REAL worker's tests need the pinned environment itself.
+const PYTHON = process.env.DIM_BROWSER_PYTHON?.trim() || VENV_PYTHON;
 const hasPython = existsSync(PYTHON);
-if (!hasPython) {
-	console.warn(`[browser tests] ${PYTHON} is missing; the credential tests are SKIPPED. Run: cd python && uv sync --python 3.12`);
-}
-const describeWithBoth = chromePath === undefined || !hasPython ? describe.skip : describe;
-const describeWithPython = hasPython ? describe : describe.skip;
+const hasVenv = existsSync(VENV_PYTHON);
+if (!hasPython) console.warn(`[browser tests] ${PYTHON} is missing; the credentials-through-browser_task tests are SKIPPED. Run: cd python && uv sync --python 3.12 (or set DIM_BROWSER_PYTHON)`);
+if (!hasVenv) console.warn(`[browser tests] ${VENV_PYTHON} is missing; the tests of the real worker (the password fill, the jev worker) are SKIPPED. Run: cd python && uv sync --python 3.12`);
+const describeWithFakeWorker = chromePath === undefined || !hasPython ? describe.skip : describe;
+const describeWithRealWorker = chromePath === undefined || !hasVenv ? describe.skip : describe;
+const describeWithPython = hasVenv ? describe : describe.skip;
 
 const SHOP = "https://shop.example";
 
@@ -47,7 +57,7 @@ const SHOP = "https://shop.example";
 /** Run a snippet in the REAL worker package (not the fake one) and return its stdout. */
 function python(code: string, stdin: string): string {
 	const env: Record<string, string | undefined> = { ...process.env, PYTHONPATH: PYTHON_DIR, PYTHONDONTWRITEBYTECODE: "1", PYTHONIOENCODING: "utf-8" };
-	const run = spawnSync(PYTHON, ["-c", code], { cwd: PYTHON_DIR, env, input: stdin, encoding: "utf8", windowsHide: true });
+	const run = spawnSync(VENV_PYTHON, ["-c", code], { cwd: PYTHON_DIR, env, input: stdin, encoding: "utf8", windowsHide: true });
 	if (run.status !== 0) throw new Error(`python exited ${run.status}: ${run.stderr}`);
 	return run.stdout;
 }
@@ -107,11 +117,9 @@ function captureOutput(): { text(): string; restore(): void } {
 	};
 }
 
+/** What the profile has saved, read back through the module that sealed it. */
 function savedPasswords(rootDir: string, profile: string): Record<string, string> {
-	const file = join(rootDir, "profiles", profile, "credentials.json");
-	if (!existsSync(file)) return {};
-	const stored: { origins: Record<string, string> } = JSON.parse(readFileSync(file, "utf8"));
-	return stored.origins;
+	return readCredentials(join(rootDir, "profiles", profile), new CredentialKey(rootDir));
 }
 
 /** A fake-worker script that records the credential it was handed into `credentialOut`, then finishes. */
@@ -151,11 +159,21 @@ async function connect(runtime: BrowserRuntime, rootDir: string): Promise<(name:
 	await mkdir(viewDir, { recursive: true });
 	await writeFile(join(viewDir, "index.html"), "<!doctype html><title>view</title>");
 	const server = await createBrowserServer({ runtime, viewDir });
-	const client = new Client({ name: "credential-test", version: "0.0.0" });
+	const client = new Client({ name: "credential-test", version: "0.0.0" }, { capabilities: { extensions: { [ARTIFACTORY_HOST_CONTEXT_EXTENSION_ID]: {} } } });
+	const sessionId = "credential-chat";
+	const token = randomBytes(32).toString("hex");
+	client.setRequestHandler(z.object({ method: z.literal(ARTIFACTORY_HOST_CONTEXT_READ_METHOD), params: z.object({ sessionId: z.string(), token: z.string() }) }), async request => {
+		if (request.params.sessionId !== sessionId || request.params.token !== token) throw new Error("Unknown host context");
+		return { active: true, sessionId };
+	});
 	const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
 	await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
 	clients.push(client);
-	return async (name, args) => (await client.callTool({ name, arguments: args })) as ToolResult;
+	return async (name, args) => (await client.callTool({ name, arguments: args, _meta: {
+		"ai.insodimension/caller": "model",
+		"ai.insodimension/session": { sessionId },
+		[ARTIFACTORY_HOST_CONTEXT_META_KEY]: { sessionId, token },
+	} })) as ToolResult;
 }
 
 // ---------------------------------------------------------------------------
@@ -191,7 +209,7 @@ afterEach(async () => {
 // The runtime and MCP server: the value reaches the worker and nothing else
 // ---------------------------------------------------------------------------
 
-describeWithBoth("credentials through browser_task", () => {
+describeWithFakeWorker("credentials through browser_task", () => {
 	test(
 		"a signup mints a password only the worker receives; no tool result, task record or log carries it; retries and logins reuse it",
 		async () => {
@@ -204,7 +222,7 @@ describeWithBoth("credentials through browser_task", () => {
 				const opened = await call("browser_open", { profile: "signup" });
 				const browserId = opened.structuredContent?.browserId as string;
 				const task = async (outFile: string, credential: Record<string, unknown>): Promise<ToolResult> => {
-					const result = await call("browser_task", { browserId, agent: "jev", task: script(join(rootDir, outFile)), credential, waitSeconds: 25 });
+					const result = await call("browser_task", { browserId, task: script(join(rootDir, outFile)), credential, waitSeconds: 25 });
 					seen.push(result);
 					return result;
 				};
@@ -243,35 +261,29 @@ describeWithBoth("credentials through browser_task", () => {
 		async () => {
 			const rootDir = await createRoot();
 			const runtime = newRuntime(rootDir);
-			const { browserId } = await runtime.open({ profile: "refusals" });
+			const { browserId } = await runtime.open({ profile: "refusals" }, { caller: "app" });
 			const out = (name: string): string => join(rootDir, `${name}.json`);
-			const signup = await runtime.runTask(browserId, { agent: "jev", task: script(out("signup")), credential: { origin: SHOP, mode: "signup" } });
+			const signup = await runtime.runTask(browserId, { task: script(out("signup")), credential: { origin: SHOP, mode: "signup" } });
 			expect(signup.status).toBe("done");
 			const password = savedPasswords(rootDir, "refusals")[SHOP] as string;
 
 			const noSaved = await refusal(() =>
-				runtime.runTask(browserId, { agent: "jev", task: script(out("login")), credential: { origin: "https://other.example", mode: "login" } }),
+				runtime.runTask(browserId, { task: script(out("login")), credential: { origin: "https://other.example", mode: "login" } }),
 			);
 			expect(noSaved.code).toBe("no_credential");
 			expect(noSaved.message).not.toContain(password);
 
-			// browser-use reads password fields into its model: it never gets one.
-			const browserUse = await refusal(() =>
-				runtime.runTask(browserId, { agent: "browser-use", task: script(out("browser-use")), credential: { origin: SHOP, mode: "login" } }),
-			);
-			expect(browserUse.code).toBe("credential_unsupported");
-
 			// Plain http to a remote host would send the password in clear.
 			const cleartext = await refusal(() =>
-				runtime.runTask(browserId, { agent: "jev", task: script(out("cleartext")), credential: { origin: "http://shop.example", mode: "signup" } }),
+				runtime.runTask(browserId, { task: script(out("cleartext")), credential: { origin: "http://shop.example", mode: "signup" } }),
 			);
 			expect(cleartext.code).toBe("bad_credential");
 
-			for (const name of ["login", "browser-use", "cleartext"]) expect(existsSync(out(name))).toBe(false);
+			for (const name of ["login", "cleartext"]) expect(existsSync(out(name))).toBe(false);
 			expect(savedPasswords(rootDir, "refusals")).toEqual({ [SHOP]: password });
 
 			// http on loopback is where a local app under test lives: allowed.
-			const local = await runtime.runTask(browserId, { agent: "jev", task: script(out("local")), credential: { origin: "http://127.0.0.1:8123", mode: "signup" } });
+			const local = await runtime.runTask(browserId, { task: script(out("local")), credential: { origin: "http://127.0.0.1:8123", mode: "signup" } });
 			expect(local.credential).toEqual({ origin: "http://127.0.0.1:8123", created: true });
 			expect(received(out("local"))).toEqual({ origin: "http://127.0.0.1:8123", password: savedPasswords(rootDir, "refusals")["http://127.0.0.1:8123"] });
 
@@ -279,7 +291,7 @@ describeWithBoth("credentials through browser_task", () => {
 			const file = join(rootDir, "profiles", "refusals", "credentials.json");
 			await writeFile(file, readFileSync(file, "utf8").slice(0, -4));
 			const unreadable = await refusal(() =>
-				runtime.runTask(browserId, { agent: "jev", task: script(out("unreadable")), credential: { origin: SHOP, mode: "login" } }),
+				runtime.runTask(browserId, { task: script(out("unreadable")), credential: { origin: SHOP, mode: "login" } }),
 			);
 			expect(unreadable.code).toBe("credentials_unreadable");
 			expect(unreadable.message).not.toContain(password);
@@ -296,7 +308,7 @@ describeWithBoth("credentials through browser_task", () => {
 /** A password whose characters would break (or inject into) a script that did not pass it as a JSON literal. */
 const AWKWARD = `a"b'c\\d</script>\${x}\`e пароль✓`;
 
-describeWithBoth("the password fill in a real page", () => {
+describeWithRealWorker("the password fill in a real page", () => {
 	async function openPage(url: string): Promise<Page> {
 		const browser = await puppeteer.launch({ executablePath: chromePath, headless: true, userDataDir: await createRoot() });
 		browsers.push(browser);
@@ -480,7 +492,7 @@ describe("the credential store", () => {
 		const file = join(profileDir, "credentials.json");
 		await writeFile(file, body);
 
-		const refused = await refusal(async () => resolveCredential(profileDir, { origin: "https://new.example", mode: "signup" }));
+		const refused = await refusal(async () => resolveCredential(profileDir, { origin: "https://new.example", mode: "signup" }, new CredentialKey(profileDir)));
 
 		expect(refused.code).toBe("credentials_unreadable");
 		expect(refused.message).not.toContain("Old-Secret-1");

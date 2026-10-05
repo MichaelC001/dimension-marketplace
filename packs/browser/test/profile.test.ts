@@ -39,17 +39,17 @@ describeWithChrome("profiles", () => {
 			const fixture = startFixture();
 			const { runtime } = await createRuntime();
 
-			const first = await runtime.open({ profile: "signed-in", viewport: VIEWPORT });
+			const first = await runtime.open({ profile: "signed-in", viewport: VIEWPORT }, { caller: "app" });
 			await perform(runtime, first.browserId, { kind: "navigate", url: fixture.url("/set-cookie") });
 			await runtime.close(first.browserId);
 
-			const reopened = await runtime.open({ profile: "signed-in", viewport: VIEWPORT });
+			const reopened = await runtime.open({ profile: "signed-in", viewport: VIEWPORT }, { caller: "app" });
 			expect(reopened.browserId).not.toBe(first.browserId);
 			await perform(runtime, reopened.browserId, { kind: "navigate", url: fixture.url("/show-cookie") });
 			const persisted = await runtime.snapshot(reopened.browserId);
 			expect(persisted.text).toContain(`COOKIE:${fixture.cookieValue}`);
 
-			const other = await runtime.open({ profile: "other", viewport: VIEWPORT });
+			const other = await runtime.open({ profile: "other", viewport: VIEWPORT }, { caller: "app" });
 			await perform(runtime, other.browserId, { kind: "navigate", url: fixture.url("/show-cookie") });
 			const isolated = await runtime.snapshot(other.browserId);
 			expect(isolated.text).toContain("COOKIE:none");
@@ -67,23 +67,23 @@ describeWithChrome("profiles", () => {
 			// the first caller's browserId, and must never get a second Chrome on
 			// the same user-data dir.
 			const settled = await Promise.allSettled([
-				runtime.open({ profile: "shared", viewport: VIEWPORT }),
-				runtime.open({ profile: "shared", viewport: VIEWPORT }),
+				runtime.open({ profile: "shared", viewport: VIEWPORT }, { caller: "app" }),
+				runtime.open({ profile: "shared", viewport: VIEWPORT }, { caller: "app" }),
 			]);
 			const opened = settled.filter((r): r is PromiseFulfilledResult<BrowserState> => r.status === "fulfilled");
 			const refused = settled.filter((r): r is PromiseRejectedResult => r.status === "rejected");
 			expect(opened).toHaveLength(1);
 			expect(refused).toHaveLength(1);
 			expect(refused[0]?.reason).toBeInstanceOf(BrowserRuntimeError);
-			expect((refused[0]?.reason as BrowserRuntimeError).code).toBe("profile_in_use");
+			expect((refused[0]?.reason as BrowserRuntimeError).code).toBe("profile_held");
 			// The person sees plain words for this refusal, not the runtime's: the View recognises the runtime's real message.
 			expect(openFailureText(refused[0]?.reason)).not.toMatch(/profile/i);
 
 			const live = opened[0]?.value as BrowserState;
 			expect((await runtime.state(live.browserId)).profile).toBe("shared");
 			// Sequentially, too: the refusal is not a race artifact.
-			expect(await failureCode(() => runtime.open({ profile: "shared", viewport: VIEWPORT }))).toBe("profile_in_use");
-			expect(await runtime.profiles()).toEqual(["shared"]);
+			expect(await failureCode(() => runtime.open({ profile: "shared", viewport: VIEWPORT }, { caller: "app" }))).toBe("profile_held");
+			expect((await runtime.profileList()).map((profile) => profile.name)).toEqual(["shared"]);
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);
@@ -92,10 +92,10 @@ describeWithChrome("profiles", () => {
 		"a second runtime cannot steal a held profile, and inherits it after a clean close",
 		async () => {
 			const { runtime, rootDir } = await createRuntime();
-			const holder = await runtime.open({ profile: "exclusive", viewport: VIEWPORT });
+			const holder = await runtime.open({ profile: "exclusive", viewport: VIEWPORT }, { caller: "app" });
 
 			const intruder = newRuntime(rootDir);
-			const stolen = await intruder.open({ profile: "exclusive", viewport: VIEWPORT }).catch((error: unknown) => error);
+			const stolen = await intruder.open({ profile: "exclusive", viewport: VIEWPORT }, { caller: "app" }).catch((error: unknown) => error);
 			expect(stolen).toBeInstanceOf(BrowserRuntimeError);
 			expect((stolen as BrowserRuntimeError).code).toBe("profile_locked");
 			expect(openFailureText(stolen)).not.toMatch(/profile/i);
@@ -104,11 +104,11 @@ describeWithChrome("profiles", () => {
 
 			await runtime.close(holder.browserId);
 
-			const handedOver = await intruder.open({ profile: "exclusive", viewport: VIEWPORT });
+			const handedOver = await intruder.open({ profile: "exclusive", viewport: VIEWPORT }, { caller: "app" });
 			expect(handedOver.profile).toBe("exclusive");
 			// A close releases the lock but never destroys what the profile stores.
 			expect(existsSync(join(rootDir, "profiles", "exclusive", "chrome"))).toBe(true);
-			expect(await intruder.profiles()).toContain("exclusive");
+			expect((await intruder.profileList()).map((profile) => profile.name)).toContain("exclusive");
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);
@@ -131,7 +131,7 @@ describeWithChrome("profiles", () => {
 			const dead = Bun.spawn([process.execPath, "-e", ""]);
 			await dead.exited;
 			await writeLock("orphaned", dead.pid);
-			const reclaimed = await runtime.open({ profile: "orphaned", viewport: VIEWPORT });
+			const reclaimed = await runtime.open({ profile: "orphaned", viewport: VIEWPORT }, { caller: "app" });
 			expect(reclaimed.profile).toBe("orphaned");
 			await runtime.close(reclaimed.browserId);
 
@@ -140,7 +140,7 @@ describeWithChrome("profiles", () => {
 			const live = Bun.spawn([process.execPath, "-e", "process.stdin.resume()"], { stdin: "pipe" });
 			try {
 				await writeLock("held", live.pid);
-				expect(await failureCode(() => runtime.open({ profile: "held", viewport: VIEWPORT }))).toBe(
+				expect(await failureCode(() => runtime.open({ profile: "held", viewport: VIEWPORT }, { caller: "app" }))).toBe(
 					"profile_locked",
 				);
 			} finally {
@@ -161,10 +161,10 @@ describeWithChrome("profiles", () => {
 			// profile. Holding its lock anyway would brick the profile for good:
 			// a live runtime's lock is never taken over, so only closing this
 			// runtime would ever get it back.
-			await expect(broken.open({ profile: "recovered", viewport: VIEWPORT })).rejects.toThrow();
+			await expect(broken.open({ profile: "recovered", viewport: VIEWPORT }, { caller: "app" })).rejects.toThrow();
 
 			const survivor = newRuntime(rootDir);
-			const opened = await survivor.open({ profile: "recovered", viewport: VIEWPORT });
+			const opened = await survivor.open({ profile: "recovered", viewport: VIEWPORT }, { caller: "app" });
 			expect(opened.profile).toBe("recovered");
 			expect((await survivor.state(opened.browserId)).browserId).toBe(opened.browserId);
 		},
@@ -178,12 +178,12 @@ describeWithChrome("profiles", () => {
 
 			// ABP's control port takes commands from any page it visits, so the
 			// driver is refused before it can start a browser holding real logins.
-			expect(await failureCode(() => runtime.open({ profile: "declined", engine: "abp", viewport: VIEWPORT }))).toBe(
+			expect(await failureCode(() => runtime.open({ profile: "declined", engine: "abp", viewport: VIEWPORT }, { caller: "app" }))).toBe(
 				"abp_unauthenticated_control_port",
 			);
 			// The refusal took the profile lock on the way in. Keeping it would
 			// brick the name for every other engine, since a lock is never stolen.
-			const opened = await runtime.open({ profile: "declined", engine: "chromium", viewport: VIEWPORT });
+			const opened = await runtime.open({ profile: "declined", engine: "chromium", viewport: VIEWPORT }, { caller: "app" });
 			expect((await runtime.state(opened.browserId)).engine).toBe("chromium");
 			await runtime.close(opened.browserId);
 		},

@@ -1,0 +1,29 @@
+@import "@fraym/ui/theme.css";
+@import "./viewer.css";
+@source "./**/*.{ts,tsx}";
+
+html,
+body,
+#root {
+	margin: 0;
+	height: 100%;
+	min-height: 100%;
+	color: var(--fr-text);
+}
+
+/* THE GROUND WAITS FOR ITS THEME. Until the shell has laid the host's tokens (`data-theme-ready` on <html>, set by
+   McpAppShell in the same commit, before the first paint that carries them) `--fr-bg` is still the kit's default,
+   dark, and the host's opening surface is already fading over this iframe: an opaque default ground would show as a
+   dark frame over a light host for as long as that first render takes. The iframe is transparent, so until then the
+   host's own themed pane shows through instead, the right colour whichever of the two documents is faster. */
+html[data-theme-ready],
+html[data-theme-ready] body,
+html[data-theme-ready] #root {
+	background: var(--fr-bg);
+}
+
+/* The shell's fallback surface is the same opaque `bg-fr-bg` ground (the opening the View shows from its first
+   paint), and it is born unthemed for the same reason: it gives its ground up until the theme is in. */
+html:not([data-theme-ready]) [data-slot="artifact-opening"] {
+	background: transparent;
+}

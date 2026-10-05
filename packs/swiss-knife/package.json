@@ -1,0 +1,69 @@
+{
+	"name": "@dimension/community-swiss-knife",
+	"version": "0.3.1",
+	"private": true,
+	"type": "module",
+	"author": "Dimension",
+	"description": "Small useful things for the agent, in one switch: `present` shows you a file as a card, the Viewer MCP App opens and annotates it, and a stream rule stops the agent mid-edit when it writes a code comment.",
+	"engines": {
+		"node": ">=22.12.0"
+	},
+	"scripts": {
+		"build": "node scripts/build.mjs && bun viewer/scripts/build.mjs",
+		"check:types": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p viewer/tsconfig.json",
+		"test": "bun test test/ viewer/test/",
+		"start": "node viewer/app/server.mjs"
+	},
+	"dimension": {
+		"name": "swiss-knife",
+		"extensions": [
+			"dist/index.mjs"
+		],
+		"sharedModule": true
+	},
+	"files": [
+		"README.md",
+		"plugin.json",
+		"dist",
+		"rules",
+		"viewer/README.md",
+		"viewer/app/server.mjs",
+		"viewer/app/dist",
+		"ai.insodimension.dimension"
+	],
+	"dependencies": {
+		"@modelcontextprotocol/ext-apps": "1.7.5",
+		"@modelcontextprotocol/sdk": "1.29.0",
+		"zod": "4.4.3"
+	},
+	"//devDependencies": "viewer/src is bundled into viewer/app/server.mjs and viewer/app/view into viewer/app/dist by viewer/scripts/build.mjs, and src is bundled into dist/index.mjs by scripts/build.mjs, so none of this ships. The document parsers (docx-preview, jszip, @aiden0z/pptx-renderer, xlsx) are declared here even though the docx/pptx/xlsx renderers are written elsewhere: one manifest owns the whole dependency set. `xlsx` is SheetJS CE from SheetJS's own CDN because the npm `xlsx` package is frozen at 0.18.5 (2022) with known advisories.",
+	"devDependencies": {
+		"@aiden0z/pptx-renderer": "1.3.0",
+		"@dimension/mcp-app-kit": "workspace:*",
+		"@dimension/sdk": "workspace:*",
+		"@fraym/ui": "workspace:*",
+		"@oh-my-pi/omptype": "workspace:*",
+		"@oh-my-pi/pi-agent-core": "workspace:*",
+		"@oh-my-pi/pi-coding-agent": "workspace:*",
+		"@tailwindcss/vite": "catalog:",
+		"@types/bun": "catalog:",
+		"@types/node": "^26.1.2",
+		"@types/react": "catalog:",
+		"@types/react-dom": "catalog:",
+		"@vitejs/plugin-react": "catalog:",
+		"docx-preview": "0.4.1",
+		"dompurify": "3.4.12",
+		"esbuild": "^0.21.5",
+		"jszip": "3.10.2",
+		"linkedom": "catalog:",
+		"marked": "catalog:",
+		"pdfjs-dist": "^6.1.200",
+		"react": "catalog:",
+		"react-dom": "catalog:",
+		"tailwindcss": "catalog:",
+		"typescript": "catalog:",
+		"vite": "catalog:",
+		"xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+	},
+	"license": "MIT"
+}

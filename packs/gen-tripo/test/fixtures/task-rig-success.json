@@ -1,0 +1,15 @@
+{
+	"kind": "documented",
+	"source": "https://developers.tripo3d.ai/en/docs/animations-rig",
+	"response": {
+		"code": 0,
+		"data": {
+			"task_id": "task_def456",
+			"status": "success",
+			"output": {
+				"model_url": "https://cdn.tripo3d.ai/output/rigged.glb"
+			},
+			"credits_consumed": 30
+		}
+	}
+}

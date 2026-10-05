@@ -1,0 +1,1680 @@
+{
+	"vendor": "Tripo",
+	"apiVersion": "v3",
+	"verified": "2026-10-01",
+	"sources": {
+		"api": "https://developers.tripo3d.ai/en/docs/introduction",
+		"pricing": "https://developers.tripo3d.ai/en/pricing",
+		"billing": "https://developers.tripo3d.ai/en/docs/billing",
+		"tasks": "https://developers.tripo3d.ai/en/docs/task-query",
+		"migration": "https://developers.tripo3d.ai/en/docs/migration-v2-to-v3",
+		"terms": "https://developers.tripo3d.ai/en/terms"
+	},
+	"api": {
+		"baseUrl": "https://openapi.tripo3d.ai/v3"
+	},
+	"credit": {
+		"usd": 0.01
+	},
+	"licences": {
+		"purchased": {
+			"id": "tripo-api-paid",
+			"commercialUse": "yes",
+			"url": "https://developers.tripo3d.ai/en/terms",
+			"note": "Output made with purchased credits: paid accounts own inputs and outputs and Tripo does not train on them (Terms 5.2.2). Do not build a competing model or service from outputs, and do not expose Tripo's 3D service to third parties (3.2)."
+		},
+		"trial": {
+			"id": "tripo-api-trial",
+			"commercialUse": "no",
+			"prototypeOnly": true,
+			"url": "https://developers.tripo3d.ai/en/terms",
+			"note": "Output made with free or trial credits belongs to Tripo (Terms 5.2.1), so it is not cleared for commercial use. Tripo's balance API cannot tell trial credits from purchased ones, so which licence applies follows the account's 'Paid for Tripo credits?' answer on the Connect page; an unanswered or older connection is treated as trial."
+		}
+	},
+	"upload": {
+		"endpoint": "/files",
+		"image": {
+			"extensions": [
+				"png",
+				"jpg",
+				"jpeg"
+			],
+			"maxBytes": 20000000
+		},
+		"model": {
+			"extensions": [
+				"glb",
+				"gltf",
+				"fbx",
+				"obj",
+				"stl"
+			],
+			"maxBytes": 150000000
+		}
+	},
+	"views": [
+		"front",
+		"left",
+		"back",
+		"right"
+	],
+	"outputs": [
+		{
+			"key": "model_urls",
+			"name": "model",
+			"role": "model",
+			"list": true
+		},
+		{
+			"key": "model_url",
+			"name": "model",
+			"role": "model"
+		},
+		{
+			"key": "model",
+			"name": "model",
+			"role": "model"
+		},
+		{
+			"key": "pbr_model_url",
+			"name": "pbr_model",
+			"role": "model"
+		},
+		{
+			"key": "pbr_model",
+			"name": "pbr_model",
+			"role": "model"
+		},
+		{
+			"key": "base_model_url",
+			"name": "base_model",
+			"role": "model"
+		},
+		{
+			"key": "base_model",
+			"name": "base_model",
+			"role": "model"
+		},
+		{
+			"key": "rendered_image_url",
+			"name": "rendered_image",
+			"role": "preview"
+		},
+		{
+			"key": "rendered_image",
+			"name": "rendered_image",
+			"role": "preview"
+		}
+	],
+	"defaultExtension": {
+		"model": "glb",
+		"preview": "png"
+	},
+	"options": {
+		"texture": {
+			"type": "boolean",
+			"default": true,
+			"description": "Generate texture maps. Bare geometry needs texture:false AND pbr:false (pbr:true forces texture on)."
+		},
+		"pbr": {
+			"type": "boolean",
+			"default": true,
+			"description": "PBR maps (base colour, metallic, roughness, normal). true forces texture on."
+		},
+		"texture_quality": {
+			"enum": [
+				"fast",
+				"standard",
+				"detailed",
+				"extreme"
+			],
+			"default": "standard",
+			"description": "standard | detailed (HD) | extreme (8K) | fast. fast needs texture_version v3.5-20260815 and costs the same as standard."
+		},
+		"texture_version": {
+			"enum": [
+				"v3.5-20260815",
+				"v3.0-20250812",
+				"v2.5-20250123"
+			],
+			"description": "Pin the texture model independently of the geometry model. Omit to let Tripo derive it (v3.0-20250812 for v3.x and P-series geometry)."
+		},
+		"delight": {
+			"type": "boolean",
+			"default": true,
+			"description": "Strip baked-in lighting from the reference before texturing. Read by texture v3.5-20260815 only; older texture models ignore it."
+		},
+		"texture_alignment": {
+			"enum": [
+				"original_image",
+				"geometry"
+			],
+			"default": "original_image",
+			"description": "original_image matches the input colours; geometry matches the generated shape."
+		},
+		"texture_seed": {
+			"type": "integer",
+			"description": "Texture seed. Same seed with the same geometry gives the same texture."
+		},
+		"model_seed": {
+			"type": "integer",
+			"description": "Geometry seed. Same seed with the same input gives the same mesh."
+		},
+		"orientation": {
+			"enum": [
+				"default",
+				"align_image"
+			],
+			"default": "default",
+			"description": "align_image aligns the model to the input image viewpoint. Only effective with texture on."
+		},
+		"face_limit": {
+			"type": "integer",
+			"minimum": 1,
+			"description": "Maximum faces. Omit for Tripo's adaptive topology."
+		},
+		"geometry_quality": {
+			"enum": [
+				"standard",
+				"detailed"
+			],
+			"default": "standard",
+			"description": "detailed = Ultra geometry (finer detail, +20 credits)."
+		},
+		"auto_size": {
+			"type": "boolean",
+			"default": false,
+			"description": "Scale the model to real-world metres (AR/VR, game scenes)."
+		},
+		"quad": {
+			"type": "boolean",
+			"default": false,
+			"description": "Quad mesh instead of triangles. Tripo forces the output to FBX and defaults the face limit to 10,000 when face_limit is unset."
+		},
+		"smart_low_poly": {
+			"type": "boolean",
+			"default": false,
+			"description": "Hand-crafted-style low-poly topology. Best on simple subjects; complex ones can fail. face_limit becomes 500-20,000 (quad 500-10,000)."
+		},
+		"generate_parts": {
+			"type": "boolean",
+			"default": false,
+			"description": "Return editable separated parts. Needs texture:false and pbr:false; incompatible with quad and smart_low_poly."
+		},
+		"compress": {
+			"enum": [
+				"geometry"
+			],
+			"description": "geometry = meshopt compression for a smaller file."
+		},
+		"export_orientation": {
+			"enum": [
+				"+x",
+				"-x",
+				"+y",
+				"-y"
+			],
+			"default": "+x",
+			"description": "Forward axis of the exported mesh. Leave unset when the model will be rigged, retargeted or textured later - a later task can come out mis-oriented with status success; set it on the final convert instead."
+		},
+		"export_uv": {
+			"type": "boolean",
+			"default": true,
+			"description": "Unwrap UVs during generation. false = faster and smaller; UVs are then made when texturing."
+		},
+		"enable_image_autofix": {
+			"type": "boolean",
+			"default": false,
+			"description": "Let Tripo clean up a low-resolution or low-quality input image before generating."
+		},
+		"views": {
+			"type": "array",
+			"items": {
+				"enum": [
+					"front",
+					"left",
+					"back",
+					"right"
+				]
+			},
+			"minItems": 2,
+			"maxItems": 4,
+			"uniqueItems": true,
+			"x-local": true,
+			"description": "Which view each entry of input.images is - same length and order as input.images. Omit and the images are taken as [front, left, back, right] in that order (2 images = front+left, 3 = front+left+back). front is mandatory; at least 2 views."
+		},
+		"rig_type": {
+			"enum": [
+				"biped",
+				"quadruped",
+				"hexapod",
+				"octopod",
+				"avian",
+				"serpentine",
+				"aquatic"
+			],
+			"default": "biped",
+			"description": "Skeleton family. Tripo's rig-check (free, not exposed here) recommends one; biped is the default."
+		},
+		"spec": {
+			"enum": [
+				"tripo",
+				"mixamo"
+			],
+			"default": "tripo",
+			"description": "Bone naming: tripo = Tripo native, mixamo = Mixamo-compatible (retargets onto Unity/Unreal Mixamo skeletons)."
+		},
+		"out_format": {
+			"enum": [
+				"glb",
+				"fbx"
+			],
+			"default": "glb",
+			"description": "Output container."
+		},
+		"animation": {
+			"type": "string",
+			"pattern": "^preset:",
+			"description": "One preset clip. v2.5 rigs: preset:idle|walk|run|jump|slash|shoot|hurt|fall|turn|climb|dive, preset:quadruped:walk, preset:hexapod:walk ... ; v1.0 rigs: preset:biped:<name> (90+, e.g. preset:biped:dance_01). Exclusive with animations."
+		},
+		"animations": {
+			"type": "array",
+			"items": {
+				"type": "string",
+				"pattern": "^preset:"
+			},
+			"minItems": 1,
+			"description": "Several preset clips in one task, 10 credits each. Exclusive with animation."
+		},
+		"bake_animation": {
+			"type": "boolean",
+			"default": true,
+			"description": "Bake the animation into the model. glb output only."
+		},
+		"export_with_geometry": {
+			"type": "boolean",
+			"default": true,
+			"description": "Include the mesh in the export."
+		},
+		"animate_in_place": {
+			"type": "boolean",
+			"default": false,
+			"description": "No root displacement while the clip plays."
+		},
+		"segmentation_granularity": {
+			"enum": [
+				"simple",
+				"balanced",
+				"detailed"
+			],
+			"default": "balanced",
+			"description": "v2 only. Ignored when a reference image is supplied."
+		},
+		"split_by_connectivity": {
+			"type": "boolean",
+			"default": true,
+			"description": "v2 only. Split by connected components. Ignored when a reference image is supplied."
+		},
+		"part_names": {
+			"type": "array",
+			"items": {
+				"type": "string"
+			},
+			"description": "Part names from an earlier segmentation task. Omit for all parts."
+		},
+		"completion_mode": {
+			"enum": [
+				"ai_completion",
+				"quick_cap"
+			],
+			"default": "ai_completion",
+			"description": "ai_completion = diffusion fill of missing regions; quick_cap = fast hole sealing, no generation (cheaper)."
+		},
+		"bake": {
+			"type": "boolean",
+			"default": true,
+			"description": "Bake materials/textures into base textures."
+		},
+		"format": {
+			"enum": [
+				"GLTF",
+				"FBX",
+				"USDZ",
+				"OBJ",
+				"STL",
+				"3MF"
+			],
+			"description": "Target format. quad:true forces FBX."
+		},
+		"force_symmetry": {
+			"type": "boolean",
+			"default": false,
+			"description": "Symmetric quad layout. Only with quad:true."
+		},
+		"flatten_bottom": {
+			"type": "boolean",
+			"default": false,
+			"description": "Flatten the base of the model."
+		},
+		"flatten_bottom_threshold": {
+			"type": "number",
+			"default": 0.01,
+			"description": "Flattening depth threshold."
+		},
+		"texture_size": {
+			"type": "integer",
+			"minimum": 1,
+			"default": 4096,
+			"description": "Diffuse texture size in pixels."
+		},
+		"texture_format": {
+			"enum": [
+				"JPEG",
+				"PNG",
+				"WEBP",
+				"BMP",
+				"DPX",
+				"HDR",
+				"OPEN_EXR",
+				"TARGA",
+				"TIFF"
+			],
+			"default": "JPEG",
+			"description": "Texture image format."
+		},
+		"pack_uv": {
+			"type": "boolean",
+			"default": false,
+			"description": "Pack all UVs into one layout."
+		},
+		"export_vertex_colors": {
+			"type": "boolean",
+			"default": false,
+			"description": "Include vertex colours. OBJ and GLTF only."
+		},
+		"pivot_to_center_bottom": {
+			"type": "boolean",
+			"default": false,
+			"description": "Move the pivot to the bottom centre."
+		},
+		"scale_factor": {
+			"type": "number",
+			"default": 1,
+			"description": "Scale applied to the export."
+		},
+		"with_animation": {
+			"type": "boolean",
+			"default": true,
+			"description": "Include skeleton and animation data."
+		},
+		"fbx_preset": {
+			"enum": [
+				"blender",
+				"3dsmax",
+				"mixamo",
+				"bake_scale"
+			],
+			"default": "blender",
+			"description": "FBX compatibility preset; bake_scale bakes the scale transform into the geometry."
+		}
+	},
+	"models": [
+		{
+			"id": "h3.1/image_to_model",
+			"label": "Tripo H3.1 image to 3D - one reference image, PBR, optional quad / parts / smart low-poly",
+			"produces": "model3d",
+			"accepts": [
+				"image"
+			],
+			"maxImages": 1,
+			"options": [
+				"texture",
+				"pbr",
+				"texture_quality",
+				"texture_version",
+				"delight",
+				"texture_alignment",
+				"texture_seed",
+				"model_seed",
+				"orientation",
+				"face_limit",
+				"auto_size",
+				"export_orientation",
+				"export_uv",
+				"geometry_quality",
+				"quad",
+				"smart_low_poly",
+				"generate_parts",
+				"compress",
+				"enable_image_autofix"
+			],
+			"optionOverrides": {
+				"face_limit": {
+					"maximum": 2000000,
+					"description": "Maximum faces. H3.1: 1,500,000 (2,000,000 with geometry_quality detailed); quad: 150,000; smart_low_poly: 500-20,000. Game-ready 50,000-100,000. Omit for adaptive topology."
+				}
+			},
+			"task": {
+				"endpoint": "/generation/image-to-model",
+				"version": "v3.1-20260211",
+				"input": {
+					"field": "input",
+					"kind": "image"
+				},
+				"seed": [
+					"model_seed",
+					"texture_seed"
+				]
+			},
+			"pricing": {
+				"base": 20,
+				"rules": [
+					{
+						"label": "textured",
+						"credits": 10,
+						"whenAny": [
+							{
+								"texture": true
+							},
+							{
+								"pbr": true
+							}
+						]
+					},
+					{
+						"label": "HD texture",
+						"credits": 10,
+						"when": {
+							"texture_quality": "detailed"
+						}
+					},
+					{
+						"label": "8K texture",
+						"credits": 20,
+						"when": {
+							"texture_quality": "extreme"
+						}
+					},
+					{
+						"label": "detailed geometry",
+						"credits": 20,
+						"when": {
+							"geometry_quality": "detailed"
+						}
+					},
+					{
+						"label": "quad",
+						"credits": 5,
+						"when": {
+							"quad": true
+						}
+					},
+					{
+						"label": "smart low-poly",
+						"credits": 10,
+						"when": {
+							"smart_low_poly": true
+						}
+					},
+					{
+						"label": "parts",
+						"credits": 20,
+						"when": {
+							"generate_parts": true
+						}
+					}
+				]
+			},
+			"constraints": [
+				{
+					"when": {
+						"generate_parts": true
+					},
+					"require": {
+						"texture": false,
+						"pbr": false,
+						"quad": false,
+						"smart_low_poly": false
+					},
+					"message": "generate_parts needs texture:false and pbr:false and neither quad nor smart_low_poly (Tripo rejects textured parts with 1004, ignores quad and drops the parts under smart_low_poly)"
+				},
+				{
+					"when": {
+						"texture_quality": "fast"
+					},
+					"require": {
+						"texture_version": "v3.5-20260815"
+					},
+					"message": "texture_quality fast needs texture_version v3.5-20260815 (Tripo answers 1004 otherwise)"
+				}
+			],
+			"priceBasis": "20 credits geometry only, +10 textured (default), +10 HD / +20 8K texture, +20 detailed geometry, +5 quad, +10 smart low-poly, +20 parts; 1 credit = $0.01",
+			"fileRole": "model",
+			"features": [
+				"pbr",
+				"quad",
+				"parts",
+				"smart-low-poly",
+				"hd-texture",
+				"8k-texture",
+				"detailed-geometry",
+				"auto-size",
+				"chainable"
+			]
+		},
+		{
+			"id": "h3.1/multiview_to_model",
+			"label": "Tripo H3.1 multiview to 3D - 2-4 images, order [front, left, back, right] or set options.views",
+			"produces": "model3d",
+			"accepts": [
+				"image"
+			],
+			"maxImages": 4,
+			"options": [
+				"texture",
+				"pbr",
+				"texture_quality",
+				"texture_version",
+				"delight",
+				"texture_alignment",
+				"texture_seed",
+				"model_seed",
+				"orientation",
+				"face_limit",
+				"auto_size",
+				"export_orientation",
+				"export_uv",
+				"geometry_quality",
+				"quad",
+				"smart_low_poly",
+				"generate_parts",
+				"compress",
+				"views"
+			],
+			"optionOverrides": {
+				"face_limit": {
+					"maximum": 2000000,
+					"description": "Maximum faces. H3.1: 1,500,000 (2,000,000 with geometry_quality detailed); quad: 150,000; smart_low_poly: 500-20,000. Game-ready 50,000-100,000. Omit for adaptive topology."
+				}
+			},
+			"task": {
+				"endpoint": "/generation/multiview-to-model",
+				"version": "v3.1-20260211",
+				"input": {
+					"field": "inputs",
+					"kind": "views"
+				},
+				"seed": [
+					"model_seed",
+					"texture_seed"
+				]
+			},
+			"pricing": {
+				"base": 20,
+				"rules": [
+					{
+						"label": "textured",
+						"credits": 10,
+						"whenAny": [
+							{
+								"texture": true
+							},
+							{
+								"pbr": true
+							}
+						]
+					},
+					{
+						"label": "HD texture",
+						"credits": 10,
+						"when": {
+							"texture_quality": "detailed"
+						}
+					},
+					{
+						"label": "8K texture",
+						"credits": 20,
+						"when": {
+							"texture_quality": "extreme"
+						}
+					},
+					{
+						"label": "detailed geometry",
+						"credits": 20,
+						"when": {
+							"geometry_quality": "detailed"
+						}
+					},
+					{
+						"label": "quad",
+						"credits": 5,
+						"when": {
+							"quad": true
+						}
+					},
+					{
+						"label": "smart low-poly",
+						"credits": 10,
+						"when": {
+							"smart_low_poly": true
+						}
+					},
+					{
+						"label": "parts",
+						"credits": 20,
+						"when": {
+							"generate_parts": true
+						}
+					}
+				]
+			},
+			"constraints": [
+				{
+					"when": {
+						"generate_parts": true
+					},
+					"require": {
+						"texture": false,
+						"pbr": false,
+						"quad": false,
+						"smart_low_poly": false
+					},
+					"message": "generate_parts needs texture:false and pbr:false and neither quad nor smart_low_poly (Tripo rejects textured parts with 1004, ignores quad and drops the parts under smart_low_poly)"
+				},
+				{
+					"when": {
+						"texture_quality": "fast"
+					},
+					"require": {
+						"texture_version": "v3.5-20260815"
+					},
+					"message": "texture_quality fast needs texture_version v3.5-20260815 (Tripo answers 1004 otherwise)"
+				}
+			],
+			"priceBasis": "20 credits geometry only, +10 textured (default), +10 HD / +20 8K texture, +20 detailed geometry, +5 quad, +10 smart low-poly, +20 parts; 1 credit = $0.01",
+			"fileRole": "model",
+			"features": [
+				"pbr",
+				"multiview",
+				"quad",
+				"parts",
+				"smart-low-poly",
+				"hd-texture",
+				"8k-texture",
+				"detailed-geometry",
+				"auto-size",
+				"chainable"
+			]
+		},
+		{
+			"id": "p2/image_to_model",
+			"label": "Tripo P2 (preview) image to 3D - clean low-poly topology with quad output",
+			"produces": "model3d",
+			"accepts": [
+				"image"
+			],
+			"maxImages": 1,
+			"options": [
+				"texture",
+				"pbr",
+				"texture_quality",
+				"texture_version",
+				"delight",
+				"texture_alignment",
+				"texture_seed",
+				"model_seed",
+				"orientation",
+				"face_limit",
+				"auto_size",
+				"export_orientation",
+				"export_uv",
+				"quad",
+				"enable_image_autofix"
+			],
+			"optionOverrides": {
+				"face_limit": {
+					"minimum": 48,
+					"maximum": 50000,
+					"description": "Triangles 48-50,000; with quad 48-25,000. Best quality from 150 (simple) / 250 (complex) faces. Omit for adaptive."
+				}
+			},
+			"task": {
+				"endpoint": "/generation/image-to-model",
+				"version": "P2-20260801",
+				"input": {
+					"field": "input",
+					"kind": "image"
+				},
+				"seed": [
+					"model_seed",
+					"texture_seed"
+				]
+			},
+			"pricing": {
+				"base": 100,
+				"rules": [
+					{
+						"label": "textured",
+						"credits": 10,
+						"whenAny": [
+							{
+								"texture": true
+							},
+							{
+								"pbr": true
+							}
+						]
+					},
+					{
+						"label": "HD texture",
+						"credits": 10,
+						"when": {
+							"texture_quality": "detailed"
+						}
+					},
+					{
+						"label": "8K texture",
+						"credits": 20,
+						"when": {
+							"texture_quality": "extreme"
+						}
+					}
+				]
+			},
+			"constraints": [
+				{
+					"when": {
+						"texture_quality": "fast"
+					},
+					"require": {
+						"texture_version": "v3.5-20260815"
+					},
+					"message": "texture_quality fast needs texture_version v3.5-20260815 (Tripo answers 1004 otherwise)"
+				}
+			],
+			"priceBasis": "100 credits geometry only, +10 textured (default), +10 HD / +20 8K texture; Tripo publishes no P2 quad surcharge (priced as 0, the task reports the real figure); 1 credit = $0.01",
+			"fileRole": "model",
+			"features": [
+				"pbr",
+				"quad",
+				"low-poly",
+				"preview",
+				"hd-texture",
+				"8k-texture",
+				"auto-size",
+				"chainable"
+			]
+		},
+		{
+			"id": "p2/multiview_to_model",
+			"label": "Tripo P2 (preview) multiview to 3D - 2-4 images, order [front, left, back, right] or set options.views",
+			"produces": "model3d",
+			"accepts": [
+				"image"
+			],
+			"maxImages": 4,
+			"options": [
+				"texture",
+				"pbr",
+				"texture_quality",
+				"texture_version",
+				"delight",
+				"texture_alignment",
+				"texture_seed",
+				"model_seed",
+				"orientation",
+				"face_limit",
+				"auto_size",
+				"export_orientation",
+				"export_uv",
+				"quad",
+				"views"
+			],
+			"optionOverrides": {
+				"face_limit": {
+					"minimum": 48,
+					"maximum": 50000,
+					"description": "Triangles 48-50,000; with quad 48-25,000. Best quality from 150 (simple) / 250 (complex) faces. Omit for adaptive."
+				}
+			},
+			"task": {
+				"endpoint": "/generation/multiview-to-model",
+				"version": "P2-20260801",
+				"input": {
+					"field": "inputs",
+					"kind": "views"
+				},
+				"seed": [
+					"model_seed",
+					"texture_seed"
+				]
+			},
+			"pricing": {
+				"base": 100,
+				"rules": [
+					{
+						"label": "textured",
+						"credits": 10,
+						"whenAny": [
+							{
+								"texture": true
+							},
+							{
+								"pbr": true
+							}
+						]
+					},
+					{
+						"label": "HD texture",
+						"credits": 10,
+						"when": {
+							"texture_quality": "detailed"
+						}
+					},
+					{
+						"label": "8K texture",
+						"credits": 20,
+						"when": {
+							"texture_quality": "extreme"
+						}
+					}
+				]
+			},
+			"constraints": [
+				{
+					"when": {
+						"texture_quality": "fast"
+					},
+					"require": {
+						"texture_version": "v3.5-20260815"
+					},
+					"message": "texture_quality fast needs texture_version v3.5-20260815 (Tripo answers 1004 otherwise)"
+				}
+			],
+			"priceBasis": "100 credits geometry only, +10 textured (default), +10 HD / +20 8K texture; Tripo publishes no P2 quad surcharge (priced as 0, the task reports the real figure); 1 credit = $0.01",
+			"fileRole": "model",
+			"features": [
+				"pbr",
+				"multiview",
+				"quad",
+				"low-poly",
+				"preview",
+				"hd-texture",
+				"8k-texture",
+				"auto-size",
+				"chainable"
+			]
+		},
+		{
+			"id": "p1/image_to_model",
+			"label": "Tripo P1 image to 3D - low-poly topology (50-20,000 faces), triangles only",
+			"produces": "model3d",
+			"accepts": [
+				"image"
+			],
+			"maxImages": 1,
+			"options": [
+				"texture",
+				"pbr",
+				"texture_quality",
+				"texture_version",
+				"delight",
+				"texture_alignment",
+				"texture_seed",
+				"model_seed",
+				"orientation",
+				"face_limit",
+				"auto_size",
+				"export_orientation",
+				"export_uv",
+				"enable_image_autofix"
+			],
+			"optionOverrides": {
+				"face_limit": {
+					"minimum": 50,
+					"maximum": 20000,
+					"description": "50-20,000 faces. Best quality from 150 (simple) / 250 (complex) faces. Omit for adaptive."
+				}
+			},
+			"task": {
+				"endpoint": "/generation/image-to-model",
+				"version": "P1-20260311",
+				"input": {
+					"field": "input",
+					"kind": "image"
+				},
+				"seed": [
+					"model_seed",
+					"texture_seed"
+				]
+			},
+			"pricing": {
+				"base": 40,
+				"rules": [
+					{
+						"label": "textured",
+						"credits": 10,
+						"whenAny": [
+							{
+								"texture": true
+							},
+							{
+								"pbr": true
+							}
+						]
+					},
+					{
+						"label": "HD texture",
+						"credits": 10,
+						"when": {
+							"texture_quality": "detailed"
+						}
+					},
+					{
+						"label": "8K texture",
+						"credits": 20,
+						"when": {
+							"texture_quality": "extreme"
+						}
+					}
+				]
+			},
+			"constraints": [
+				{
+					"when": {
+						"texture_quality": "fast"
+					},
+					"require": {
+						"texture_version": "v3.5-20260815"
+					},
+					"message": "texture_quality fast needs texture_version v3.5-20260815 (Tripo answers 1004 otherwise)"
+				}
+			],
+			"priceBasis": "40 credits geometry only, +10 textured (default), +10 HD / +20 8K texture; P1 has no quad, parts or smart low-poly; 1 credit = $0.01",
+			"fileRole": "model",
+			"features": [
+				"pbr",
+				"low-poly",
+				"hd-texture",
+				"8k-texture",
+				"auto-size",
+				"chainable"
+			]
+		},
+		{
+			"id": "p1/multiview_to_model",
+			"label": "Tripo P1 multiview to 3D - 2-4 images, order [front, left, back, right] or set options.views",
+			"produces": "model3d",
+			"accepts": [
+				"image"
+			],
+			"maxImages": 4,
+			"options": [
+				"texture",
+				"pbr",
+				"texture_quality",
+				"texture_version",
+				"delight",
+				"texture_alignment",
+				"texture_seed",
+				"model_seed",
+				"orientation",
+				"face_limit",
+				"auto_size",
+				"export_orientation",
+				"export_uv",
+				"views"
+			],
+			"optionOverrides": {
+				"face_limit": {
+					"minimum": 50,
+					"maximum": 20000,
+					"description": "50-20,000 faces. Best quality from 150 (simple) / 250 (complex) faces. Omit for adaptive."
+				}
+			},
+			"task": {
+				"endpoint": "/generation/multiview-to-model",
+				"version": "P1-20260311",
+				"input": {
+					"field": "inputs",
+					"kind": "views"
+				},
+				"seed": [
+					"model_seed",
+					"texture_seed"
+				]
+			},
+			"pricing": {
+				"base": 40,
+				"rules": [
+					{
+						"label": "textured",
+						"credits": 10,
+						"whenAny": [
+							{
+								"texture": true
+							},
+							{
+								"pbr": true
+							}
+						]
+					},
+					{
+						"label": "HD texture",
+						"credits": 10,
+						"when": {
+							"texture_quality": "detailed"
+						}
+					},
+					{
+						"label": "8K texture",
+						"credits": 20,
+						"when": {
+							"texture_quality": "extreme"
+						}
+					}
+				]
+			},
+			"constraints": [
+				{
+					"when": {
+						"texture_quality": "fast"
+					},
+					"require": {
+						"texture_version": "v3.5-20260815"
+					},
+					"message": "texture_quality fast needs texture_version v3.5-20260815 (Tripo answers 1004 otherwise)"
+				}
+			],
+			"priceBasis": "40 credits geometry only, +10 textured (default), +10 HD / +20 8K texture; P1 has no quad, parts or smart low-poly; 1 credit = $0.01",
+			"fileRole": "model",
+			"features": [
+				"pbr",
+				"multiview",
+				"low-poly",
+				"hd-texture",
+				"8k-texture",
+				"auto-size",
+				"chainable"
+			]
+		},
+		{
+			"id": "segmentation/v1.0",
+			"label": "Tripo mesh segmentation v1.0 - split a model into parts; input.from.handle = a Tripo job, or input.model = a local mesh",
+			"produces": "parts",
+			"accepts": [
+				"model3d"
+			],
+			"options": [],
+			"task": {
+				"endpoint": "/mesh/segment",
+				"version": "v1.0-20250506",
+				"input": {
+					"field": "input",
+					"kind": "model"
+				}
+			},
+			"pricing": {
+				"base": 40,
+				"rules": []
+			},
+			"priceBasis": "40 credits per segmentation; 1 credit = $0.01",
+			"fileRole": "part",
+			"features": [
+				"parts",
+				"geometry-based",
+				"chainable"
+			]
+		},
+		{
+			"id": "segmentation/v2.0",
+			"label": "Tripo mesh segmentation v2.0 (beta) - semantic part labels; optional segmentation-mask image in input.images[0]",
+			"produces": "parts",
+			"accepts": [
+				"model3d",
+				"image"
+			],
+			"maxImages": 1,
+			"options": [
+				"segmentation_granularity",
+				"split_by_connectivity"
+			],
+			"task": {
+				"endpoint": "/mesh/segment",
+				"version": "v2.0-20260430",
+				"input": {
+					"field": "input",
+					"kind": "model"
+				},
+				"refImageField": "ref_image"
+			},
+			"pricing": {
+				"base": 55,
+				"rules": [
+					{
+						"label": "reference image",
+						"credits": 30,
+						"when": {
+							"$images": {
+								"min": 1
+							}
+						}
+					}
+				]
+			},
+			"priceBasis": "55 credits semantic segmentation of a model, 85 with a reference image (Tripo lists 'Smart Segmentation (Model) 55 / (Image) 85'; reading Image as the ref_image form is inferred); 1 credit = $0.01",
+			"fileRole": "part",
+			"features": [
+				"parts",
+				"semantic-labels",
+				"beta",
+				"chainable"
+			]
+		},
+		{
+			"id": "completion/v1.0",
+			"label": "Tripo part completion v1.0 - repair or cap segmented parts; input.from.handle = a segmentation job",
+			"produces": "parts",
+			"accepts": [
+				"model3d"
+			],
+			"options": [
+				"part_names",
+				"completion_mode"
+			],
+			"task": {
+				"endpoint": "/mesh/complete",
+				"version": "v1.0-20250506",
+				"input": {
+					"field": "input",
+					"kind": "handle"
+				}
+			},
+			"pricing": {
+				"base": 30,
+				"rules": [
+					{
+						"label": "AI completion",
+						"credits": 20,
+						"when": {
+							"completion_mode": "ai_completion"
+						}
+					}
+				]
+			},
+			"priceBasis": "50 credits AI completion (default), 30 credits quick_cap; 1 credit = $0.01",
+			"fileRole": "part",
+			"features": [
+				"parts",
+				"chainable"
+			]
+		},
+		{
+			"id": "lowpoly/v2.0",
+			"label": "Tripo smart retopology v2.0 - clean low-poly from a high-poly model; input.from.handle = a Tripo job, or input.model = a local mesh",
+			"produces": "retopo",
+			"accepts": [
+				"model3d"
+			],
+			"options": [
+				"face_limit",
+				"quad",
+				"bake",
+				"part_names"
+			],
+			"optionOverrides": {
+				"face_limit": {
+					"description": "Target face count. Required."
+				},
+				"quad": {
+					"description": "Output a quad mesh."
+				}
+			},
+			"required": [
+				"face_limit"
+			],
+			"task": {
+				"endpoint": "/mesh/decimate",
+				"version": "v2.0",
+				"input": {
+					"field": "input",
+					"kind": "model"
+				}
+			},
+			"pricing": {
+				"base": 30,
+				"rules": []
+			},
+			"priceBasis": "30 credits smart retopology (v2.0); 1 credit = $0.01",
+			"fileRole": "model",
+			"features": [
+				"quad",
+				"bake",
+				"parts",
+				"smart-low-poly",
+				"chainable"
+			]
+		},
+		{
+			"id": "lowpoly/v1.0",
+			"label": "Tripo basic decimation v1.0 - reduce faces; input.from.handle = a Tripo job, or input.model = a local mesh",
+			"produces": "retopo",
+			"accepts": [
+				"model3d"
+			],
+			"options": [
+				"face_limit",
+				"quad"
+			],
+			"optionOverrides": {
+				"face_limit": {
+					"description": "Target face count. Required."
+				},
+				"quad": {
+					"description": "Output a quad mesh."
+				}
+			},
+			"required": [
+				"face_limit"
+			],
+			"task": {
+				"endpoint": "/mesh/decimate",
+				"version": "v1.0",
+				"input": {
+					"field": "input",
+					"kind": "model"
+				}
+			},
+			"pricing": {
+				"base": 10,
+				"rules": []
+			},
+			"priceBasis": "10 credits basic decimation (v1.0); 1 credit = $0.01",
+			"fileRole": "model",
+			"features": [
+				"quad",
+				"chainable"
+			]
+		},
+		{
+			"id": "rig/v2.5",
+			"label": "Tripo auto-rig v2.5 - skeleton for any creature type incl. biped; spec tripo|mixamo; input.from.handle = a Tripo job, or input.model = a local mesh",
+			"produces": "rig",
+			"accepts": [
+				"model3d"
+			],
+			"options": [
+				"rig_type",
+				"spec",
+				"out_format"
+			],
+			"task": {
+				"endpoint": "/animations/rig",
+				"version": "v2.5-20260210",
+				"input": {
+					"field": "input",
+					"kind": "model"
+				}
+			},
+			"pricing": {
+				"base": 25,
+				"rules": []
+			},
+			"priceBasis": "25 credits per rig (Tripo's pricing page; the rig docs' sample response shows 30, so the task's reported credits are the figure that counts); 1 credit = $0.01",
+			"fileRole": "rig",
+			"features": [
+				"rig:tripo",
+				"rig:mixamo",
+				"rig:biped",
+				"rig:quadruped",
+				"rig:hexapod",
+				"rig:octopod",
+				"rig:avian",
+				"rig:serpentine",
+				"rig:aquatic",
+				"chainable"
+			]
+		},
+		{
+			"id": "rig/v1.0",
+			"label": "Tripo auto-rig v1.0 - biped only, 90+ retarget presets; spec tripo|mixamo; input.from.handle = a Tripo job, or input.model = a local mesh",
+			"produces": "rig",
+			"accepts": [
+				"model3d"
+			],
+			"options": [
+				"rig_type",
+				"spec",
+				"out_format"
+			],
+			"optionOverrides": {
+				"rig_type": {
+					"enum": [
+						"biped"
+					]
+				}
+			},
+			"task": {
+				"endpoint": "/animations/rig",
+				"version": "v1.0-20240301",
+				"input": {
+					"field": "input",
+					"kind": "model"
+				}
+			},
+			"pricing": {
+				"base": 25,
+				"rules": []
+			},
+			"priceBasis": "25 credits per rig; 1 credit = $0.01",
+			"fileRole": "rig",
+			"features": [
+				"rig:tripo",
+				"rig:mixamo",
+				"rig:biped",
+				"chainable"
+			]
+		},
+		{
+			"id": "retarget",
+			"label": "Tripo animation retarget - preset clips baked onto a rigged model; input.from.handle = a Tripo rig job",
+			"produces": "rig",
+			"accepts": [
+				"model3d"
+			],
+			"options": [
+				"animation",
+				"animations",
+				"out_format",
+				"bake_animation",
+				"export_with_geometry",
+				"animate_in_place"
+			],
+			"task": {
+				"endpoint": "/animations/retarget",
+				"input": {
+					"field": "input",
+					"kind": "handle"
+				}
+			},
+			"pricing": {
+				"base": 0,
+				"rules": [
+					{
+						"label": "animation",
+						"credits": 10,
+						"multiplyBy": "animations"
+					}
+				]
+			},
+			"constraints": [
+				{
+					"oneOf": [
+						"animation",
+						"animations"
+					],
+					"message": "give exactly one of animation (a single preset) or animations (a list)"
+				}
+			],
+			"priceBasis": "10 credits per animation clip; 1 credit = $0.01",
+			"fileRole": "rig",
+			"features": [
+				"preset-animations",
+				"batch",
+				"chainable"
+			]
+		},
+		{
+			"id": "convert",
+			"label": "Tripo format conversion - GLTF/FBX/USDZ/OBJ/STL/3MF with quad, face limit, texture bake; input.from.handle = a Tripo job, or input.model = a local mesh",
+			"produces": "model3d",
+			"accepts": [
+				"model3d"
+			],
+			"options": [
+				"format",
+				"quad",
+				"force_symmetry",
+				"face_limit",
+				"flatten_bottom",
+				"flatten_bottom_threshold",
+				"texture_size",
+				"texture_format",
+				"bake",
+				"pack_uv",
+				"export_vertex_colors",
+				"pivot_to_center_bottom",
+				"scale_factor",
+				"with_animation",
+				"animate_in_place",
+				"part_names",
+				"export_orientation",
+				"fbx_preset"
+			],
+			"optionOverrides": {
+				"face_limit": {
+					"description": "Maximum faces. Omit to keep the original count (10,000 when quad is set)."
+				}
+			},
+			"required": [
+				"format"
+			],
+			"task": {
+				"endpoint": "/models/convert",
+				"input": {
+					"field": "input",
+					"kind": "model"
+				}
+			},
+			"pricing": {
+				"base": 5,
+				"rules": [
+					{
+						"label": "advanced options",
+						"credits": 5,
+						"whenAny": [
+							{
+								"quad": true
+							},
+							{
+								"flatten_bottom": true
+							},
+							{
+								"pivot_to_center_bottom": true
+							},
+							{
+								"face_limit": {
+									"set": true
+								}
+							},
+							{
+								"flatten_bottom_threshold": {
+									"set": true
+								}
+							},
+							{
+								"texture_size": {
+									"set": true
+								}
+							},
+							{
+								"texture_format": {
+									"set": true
+								}
+							},
+							{
+								"scale_factor": {
+									"set": true
+								}
+							}
+						]
+					}
+				]
+			},
+			"constraints": [
+				{
+					"when": {
+						"force_symmetry": true
+					},
+					"require": {
+						"quad": true
+					},
+					"message": "force_symmetry is only valid with quad:true"
+				},
+				{
+					"when": {
+						"export_vertex_colors": true
+					},
+					"require": {
+						"format": {
+							"in": [
+								"OBJ",
+								"GLTF"
+							]
+						}
+					},
+					"message": "export_vertex_colors is only valid for OBJ and GLTF"
+				}
+			],
+			"priceBasis": "5 credits basic conversion, 10 when any of quad, face_limit, flatten_bottom, flatten_bottom_threshold, texture_size, texture_format, pivot_to_center_bottom or scale_factor is set; 1 credit = $0.01",
+			"fileRole": "model",
+			"features": [
+				"fbx",
+				"gltf",
+				"usdz",
+				"obj",
+				"stl",
+				"3mf",
+				"quad",
+				"bake",
+				"chainable"
+			]
+		},
+		{
+			"id": "texture/v3.5",
+			"label": "Tripo texture v3.5 - re-texture a model, fast tier + delight; style from input.prompt or 1 or 4 images; input.from.handle = a Tripo job, or input.model = a local mesh",
+			"produces": "model3d",
+			"accepts": [
+				"model3d",
+				"text",
+				"image"
+			],
+			"maxImages": 4,
+			"options": [
+				"texture_quality",
+				"pbr",
+				"texture_seed",
+				"texture_alignment",
+				"part_names",
+				"bake",
+				"delight"
+			],
+			"task": {
+				"endpoint": "/models/texture",
+				"version": "v3.5-20260815",
+				"input": {
+					"field": "input",
+					"kind": "model"
+				},
+				"texturePromptField": "texture_prompt"
+			},
+			"pricing": {
+				"base": 10,
+				"rules": [
+					{
+						"label": "HD texture",
+						"credits": 10,
+						"when": {
+							"texture_quality": "detailed"
+						}
+					},
+					{
+						"label": "8K texture",
+						"credits": 20,
+						"when": {
+							"texture_quality": "extreme"
+						}
+					}
+				]
+			},
+			"priceBasis": "10 credits fast or standard texture, 20 HD (detailed), 30 8K (extreme); 1 credit = $0.01",
+			"fileRole": "model",
+			"features": [
+				"pbr",
+				"fast",
+				"delight",
+				"hd-texture",
+				"8k-texture",
+				"text-prompt",
+				"image-prompt",
+				"chainable"
+			]
+		},
+		{
+			"id": "texture/v3.0",
+			"label": "Tripo texture v3.0 - re-texture a model; style from input.prompt or 1 or 4 images; input.from.handle = a Tripo job, or input.model = a local mesh",
+			"produces": "model3d",
+			"accepts": [
+				"model3d",
+				"text",
+				"image"
+			],
+			"maxImages": 4,
+			"options": [
+				"texture_quality",
+				"pbr",
+				"texture_seed",
+				"texture_alignment",
+				"part_names",
+				"bake"
+			],
+			"optionOverrides": {
+				"texture_quality": {
+					"enum": [
+						"standard",
+						"detailed",
+						"extreme"
+					]
+				}
+			},
+			"task": {
+				"endpoint": "/models/texture",
+				"version": "v3.0-20250812",
+				"input": {
+					"field": "input",
+					"kind": "model"
+				},
+				"texturePromptField": "texture_prompt"
+			},
+			"pricing": {
+				"base": 10,
+				"rules": [
+					{
+						"label": "HD texture",
+						"credits": 10,
+						"when": {
+							"texture_quality": "detailed"
+						}
+					},
+					{
+						"label": "8K texture",
+						"credits": 20,
+						"when": {
+							"texture_quality": "extreme"
+						}
+					}
+				]
+			},
+			"priceBasis": "10 credits standard texture, 20 HD (detailed), 30 8K (extreme); 1 credit = $0.01",
+			"fileRole": "model",
+			"features": [
+				"pbr",
+				"hd-texture",
+				"8k-texture",
+				"text-prompt",
+				"image-prompt",
+				"chainable"
+			]
+		}
+	]
+}

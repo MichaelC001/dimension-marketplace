@@ -105,7 +105,7 @@ describeWithChrome("browser_read", () => {
 			expect(read).toMatchObject({ status: "ok", url: fixture.url("/article"), title: "fixture article" });
 			expect(read.text).toBe(`Field notes\n\n${ARTICLE_TEXT}`);
 			expect(read.truncated).toBeUndefined();
-			expect(await runtime.profiles()).toEqual([]);
+			expect((await runtime.profileList()).map((profile) => profile.name)).toEqual([]);
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);
@@ -128,7 +128,7 @@ describeWithChrome("browser_read", () => {
 		async () => {
 			const fixture = startFixture();
 			const { runtime } = await readRuntime();
-			const opened = await runtime.open({ profile: "signed-in" });
+			const opened = await runtime.open({ profile: "signed-in" }, { caller: "app" });
 			await perform(runtime, opened.browserId, { kind: "navigate", url: fixture.url("/set-cookie") });
 			await perform(runtime, opened.browserId, { kind: "navigate", url: fixture.url("/show-cookie") });
 			expect((await runtime.snapshot(opened.browserId)).text).toContain(`COOKIE:${fixture.cookieValue}`);
@@ -136,7 +136,7 @@ describeWithChrome("browser_read", () => {
 			expect(await runtime.read({ url: fixture.url("/show-cookie") })).toMatchObject({ status: "ok", text: "COOKIE:none" });
 			expect(await runtime.read({ url: fixture.url("/set-cookie") })).toMatchObject({ status: "ok" });
 			expect(await runtime.read({ url: fixture.url("/show-cookie") })).toMatchObject({ status: "ok", text: "COOKIE:none" });
-			expect(await runtime.profiles()).toEqual(["signed-in"]);
+			expect((await runtime.profileList()).map((profile) => profile.name)).toEqual(["signed-in"]);
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);
@@ -149,7 +149,7 @@ describeWithChrome("browser_read", () => {
 			expect(await runtime.read({ url: fixture.url("/article"), maxChars: 10 })).toMatchObject({ status: "ok" });
 
 			for (const profile of ["one", "two", "three", "four"]) {
-				expect((await runtime.open({ profile })).profile).toBe(profile);
+				expect((await runtime.open({ profile }, { caller: "app" })).profile).toBe(profile);
 			}
 		},
 		BROWSER_TEST_TIMEOUT_MS,

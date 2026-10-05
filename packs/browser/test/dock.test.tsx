@@ -1,110 +1,15 @@
-/** WHAT BREAKS IN THE PRODUCT IF THIS GOES RED: the Browser dock panel tells a
- *  person they are signed in where they are not (or names the wrong account),
- *  or its Sign in opens the live Browser View on the wrong profile or the
- *  wrong site, or fires with no session to open it in, or starts a sign-in on
- *  a profile name the server will refuse — or its "Open a page" bar opens a
- *  browser that forgets their logins (or, when they asked for Private, one that
- *  saves them), or opens on an address the browser cannot load.
+/** WHAT BREAKS IN THE PRODUCT IF THIS GOES RED: the Browser dock tab's "Open a
+ *  page" bar opens a browser that forgets the person's logins (or, when they
+ *  asked for Private, one that saves them), opens on an address the browser
+ *  cannot load, or fires with no session to open it in. The tab offers nothing
+ *  else: the Browser's own profile menu owns profiles and sign-ins.
  *
- *  The panel's data is this pack's own connection report, so every fixture is
- *  built by the server's own `buildConnectionReport` (connection.ts): the two
- *  shapes cannot drift. The component is mounted live on a linkedom document
- *  (`dom-harness.ts`) against a fake host Store that serves one fact and
- *  records every intent.
+ *  The component is mounted live on a linkedom document (`dom-harness.ts`)
+ *  against a fake host Store that records every intent.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { buildConnectionReport, type ConnectionObservations } from "../src/connection";
 import { BrowserAccounts, type BrowserStoreShape } from "../src/dock/browser-accounts";
-import { CONNECTION_KEY, observedAgo, profileRows } from "../src/dock/report";
 import { mount, unmountAll } from "./dom-harness";
-
-const T = 1_790_000_000_000;
-
-/** Two profiles, a signed-out site, an account-less site, a site the panel has no login page for, and the human's own Chrome. */
-const OBSERVED: ConnectionObservations = {
-	work: {
-		"x.com": { signedIn: true, account: "@acme", observedAt: T },
-		"linkedin.com": { signedIn: false, observedAt: T - 60_000 },
-	},
-	alt: {
-		"reddit.com": { signedIn: true, observedAt: T - 1 },
-		"example.org": { signedIn: false, observedAt: T - 2 },
-	},
-	relay: { "x.com": { signedIn: true, account: "@me", observedAt: T } },
-};
-
-/** The host's `PluginConnectionFact` as it would publish this pack's report. */
-const FACT = { connected: true, reported: buildConnectionReport(OBSERVED) };
-
-// ---------------------------------------------------------------------------
-// The report, as the panel reads it
-// ---------------------------------------------------------------------------
-
-describe("profileRows", () => {
-	test("a real connection report becomes profiles → sites with signedIn, account and observedAt, both sorted by name", () => {
-		expect(profileRows(FACT)).toEqual([
-			{
-				name: "alt",
-				sites: [
-					{ host: "example.org", signedIn: false, observedAt: T - 2 },
-					{ host: "reddit.com", signedIn: true, observedAt: T - 1 },
-				],
-			},
-			{
-				name: "work",
-				sites: [
-					{ host: "linkedin.com", signedIn: false, observedAt: T - 60_000 },
-					{ host: "x.com", signedIn: true, account: "@acme", observedAt: T },
-				],
-			},
-		]);
-	});
-
-	test("no fact, a fact without a report, and a report with no profiles are all the empty state", () => {
-		expect(profileRows(undefined)).toEqual([]);
-		expect(profileRows({})).toEqual([]);
-		expect(profileRows({ reported: buildConnectionReport({}) })).toEqual([]);
-	});
-
-	test("a malformed profile or site in the fact is skipped, never rendered or thrown on; its well-formed neighbours survive", () => {
-		const reported = buildConnectionReport(OBSERVED);
-		const damaged = {
-			reported: {
-				profiles: {
-					...reported.profiles,
-					work: { sites: { ...reported.profiles.work?.sites, "bsky.app": { signedIn: "yes", observedAt: T }, "reddit.com": { signedIn: true, observedAt: "now" } } },
-					broken: { sites: null },
-					listed: { sites: [{ signedIn: true, observedAt: T }] },
-				},
-			},
-		};
-		expect(profileRows(damaged)).toEqual(profileRows(FACT));
-		expect(profileRows({ reported: { profiles: [] } })).toEqual([]);
-		expect(profileRows("connected")).toEqual([]);
-	});
-});
-
-describe("observedAgo", () => {
-	const cases: ReadonlyArray<{ readonly name: string; readonly ageMs: number; readonly text: string }> = [
-		{ name: "a clock a little behind the observation", ageMs: -5_000, text: "just now" },
-		{ name: "under a minute", ageMs: 59_000, text: "just now" },
-		{ name: "one minute", ageMs: 60_000, text: "1m ago" },
-		{ name: "59 minutes", ageMs: 59 * 60_000, text: "59m ago" },
-		{ name: "one hour", ageMs: 60 * 60_000, text: "1h ago" },
-		{ name: "23 hours", ageMs: 23 * 3_600_000, text: "23h ago" },
-		{ name: "one day", ageMs: 24 * 3_600_000, text: "1d ago" },
-		{ name: "ten days", ageMs: 240 * 3_600_000, text: "10d ago" },
-	];
-	for (const { name, ageMs, text } of cases) {
-		test(`${name} reads "${text}"`, () => {
-			expect(observedAgo(T, T + ageMs)).toBe(text);
-		});
-	}
-});
-
-// ---------------------------------------------------------------------------
-// The panel, mounted
-// ---------------------------------------------------------------------------
 
 afterEach(unmountAll);
 
@@ -113,13 +18,10 @@ interface Act {
 	readonly payload: unknown;
 }
 
-/** A host Store serving `fact` under this pack's connection key only, logging every intent. */
-function fakeStore(fact: unknown): { readonly store: BrowserStoreShape; readonly acts: readonly Act[] } {
+/** A host Store logging every intent. */
+function fakeStore(): { readonly store: BrowserStoreShape; readonly acts: readonly Act[] } {
 	const acts: Act[] = [];
 	const store: BrowserStoreShape = {
-		watch<T>(key: string) {
-			return { getSnapshot: () => (key === CONNECTION_KEY ? (fact as T) : undefined), subscribe: () => () => {} };
-		},
 		act(intent: string, payload?: unknown) {
 			acts.push({ intent, payload });
 		},
@@ -131,14 +33,6 @@ async function mountPanel(sessionId: string | null, store: BrowserStoreShape) {
 	const dom = await mount(<BrowserAccounts sessionId={sessionId} store={store} />);
 	return {
 		...dom,
-		/** The site line for `label` under profile `profile`. */
-		siteLine: (profile: string, label: string): Element => {
-			const section = dom.find('[data-slot="browser-accounts-profile"]').filter(el => el.querySelector("button")?.textContent === profile);
-			const lines = section.flatMap(el => [...el.querySelectorAll('[data-slot="browser-accounts-site"]')]);
-			const matches = lines.filter(line => line.querySelector("span span span")?.textContent === label);
-			if (matches.length !== 1) throw new Error(`expected one ${label} line under ${profile}, found ${matches.length}`);
-			return matches[0] as Element;
-		},
 		/** The "Open a page" form, its address field and its Private box. */
 		openForm: () => {
 			const form = dom.find('[data-slot="browser-accounts-open"]')[0] as Element;
@@ -152,137 +46,11 @@ async function mountPanel(sessionId: string | null, store: BrowserStoreShape) {
 	};
 }
 
-const signInButton = (line: Element): Element => {
-	const button = [...line.querySelectorAll("button")].find(el => el.textContent?.trim() === "Sign in");
-	if (!button) throw new Error("no Sign in button on the line");
-	return button;
-};
-
 const openBrowser = (args: Record<string, string>): Act => ({ intent: "openArtifactoryView", payload: { tool: "browser_view", args } });
-const openView = (profile: string, url: string): Act => openBrowser({ profile, url });
 
-describe("the Browser panel", () => {
-	test("each site line shows its report state, and its Sign in opens the live View on that profile at that site's login page", async () => {
-		const { store, acts } = fakeStore(FACT);
-		const panel = await mountPanel("session-1", store);
-
-		const x = panel.siteLine("work", "X");
-		expect(x.getAttribute("data-signed-in")).toBe("true");
-		expect(x.textContent).toContain("Signed in");
-		expect(x.textContent).toContain("@acme");
-		const linkedin = panel.siteLine("work", "LinkedIn");
-		expect(linkedin.getAttribute("data-signed-in")).toBe("false");
-		expect(linkedin.textContent).toContain("Signed out");
-		// The human's own Chrome is never a profile here.
-		expect(panel.text()).not.toContain("relay");
-
-		await panel.click(signInButton(linkedin));
-		await panel.click(signInButton(panel.siteLine("alt", "Reddit")));
-		await panel.click(signInButton(panel.siteLine("alt", "example.org")));
-
-		expect(acts).toEqual([
-			openView("work", "https://www.linkedin.com/login"),
-			openView("alt", "https://www.reddit.com/login"),
-			// A site the panel has no login page for opens at the site itself.
-			openView("alt", "https://example.org/"),
-		]);
-	});
-
-	test("a New sign-in opens the View on the typed profile's slug at the chosen site's login page", async () => {
-		const { store, acts } = fakeStore(FACT);
-		const panel = await mountPanel("session-1", store);
-		const form = panel.find('[data-slot="browser-accounts-new"]')[0] as Element;
-		const bluesky = [...form.querySelectorAll('[role="radio"]')].find(el => el.textContent === "Bluesky") as Element;
-
-		await panel.click(bluesky);
-		await panel.type(form.querySelector("input") as Element, "  Personal ");
-		await panel.submit(form);
-
-		expect(acts).toEqual([openView("personal", "https://bsky.app/")]);
-	});
-
-	test("a New sign-in starts with no name, and left that way is for the logins the browser itself opens with", async () => {
-		const { store, acts } = fakeStore({ connected: true, reported: buildConnectionReport({}) });
-		const panel = await mountPanel("session-1", store);
-		const form = panel.find('[data-slot="browser-accounts-new"]')[0] as Element;
-
-		expect((form.querySelector("input") as HTMLInputElement).value).toBe("");
-		expect(form.querySelector('button[type="submit"]')?.hasAttribute("disabled")).toBe(false);
-		await panel.submit(form);
-
-		expect(acts).toEqual([openView("default", "https://x.com/login")]);
-	});
-
-	test("picking a set fills the name as the panel labels it, never the slug, and signing in sends its slug", async () => {
-		const seen = { "x.com": { signedIn: true, observedAt: T } };
-		const { store, acts } = fakeStore({ connected: true, reported: buildConnectionReport({ default: seen, work: seen }) });
-		const panel = await mountPanel("session-1", store);
-		const form = panel.find('[data-slot="browser-accounts-new"]')[0] as Element;
-		const name = form.querySelector("input") as HTMLInputElement;
-		const header = (label: string): Element => {
-			const found = panel.find('[data-slot="browser-accounts-profile"]').map(el => el.querySelector("button") as Element).find(el => el.textContent === label);
-			if (!found) throw new Error(`no "${label}" set`);
-			return found;
-		};
-
-		await panel.click(header("Default"));
-		const defaultShown = name.value;
-		await panel.submit(form);
-		await panel.click(header("work"));
-		const workShown = name.value;
-		await panel.submit(form);
-
-		expect([defaultShown, workShown]).toEqual(["Default", "work"]);
-		expect(acts).toEqual([openView("default", "https://x.com/login"), openView("work", "https://x.com/login")]);
-	});
-
-	test("a New sign-in on a name profileSlug refuses, or on the reserved relay, acts nothing and gives a different reason for each", async () => {
-		const { store, acts } = fakeStore(FACT);
-		const panel = await mountPanel("session-1", store);
-		const form = panel.find('[data-slot="browser-accounts-new"]')[0] as Element;
-		const input = form.querySelector("input") as Element;
-		const problem = () => form.querySelector('[data-slot="browser-accounts-problem"]')?.textContent ?? null;
-
-		await panel.type(input, "Bad Name!");
-		await panel.submit(form);
-		expect(acts).toEqual([]);
-		expect(input.getAttribute("aria-invalid")).toBe("true");
-		const badChars = problem();
-		expect(badChars).toBeTruthy();
-
-		await panel.type(input, "relay");
-		await panel.submit(form);
-		expect(acts).toEqual([]);
-		expect(problem()).toBeTruthy();
-		expect(problem()).not.toBe(badChars);
-	});
-
-	test("with no session every Sign in and Open is disabled and nothing is acted, and the panel says what to do", async () => {
-		const { store, acts } = fakeStore(FACT);
-		const panel = await mountPanel(null, store);
-		const buttons = panel.find("button").filter(el => el.textContent?.trim() === "Sign in");
-
-		// Four site lines plus the New sign-in submit.
-		// Flags, not elements: a failing diff of linkedom nodes never finishes printing.
-		expect(buttons.map(el => el.hasAttribute("disabled"))).toEqual([true, true, true, true, true]);
-		for (const button of buttons) await panel.click(button);
-
-		const form = panel.find('[data-slot="browser-accounts-new"]')[0] as Element;
-		await panel.type(form.querySelector("input") as Element, "work");
-		await panel.submit(form);
-		const open = panel.openForm();
-		await panel.type(open.address, "example.com");
-		await panel.submit(open.form);
-
-		expect(acts).toEqual([]);
-		expect(open.form.querySelector("button")?.hasAttribute("disabled")).toBe(true);
-		expect(panel.find('[data-slot="browser-accounts-hint"]')).toHaveLength(1);
-	});
-});
-
-describe("the Browser panel's Open a page bar", () => {
+describe("the Browser dock tab's Open a page bar", () => {
 	test("a typed address opens the live browser on the person's saved logins, the address made loadable", async () => {
-		const { store, acts } = fakeStore(FACT);
+		const { store, acts } = fakeStore();
 		const panel = await mountPanel("session-1", store);
 		const open = panel.openForm();
 
@@ -293,7 +61,7 @@ describe("the Browser panel's Open a page bar", () => {
 	});
 
 	test("Private opens with no profile at all, so nothing is saved", async () => {
-		const { store, acts } = fakeStore(FACT);
+		const { store, acts } = fakeStore();
 		const panel = await mountPanel("session-1", store);
 		const open = panel.openForm();
 
@@ -306,7 +74,7 @@ describe("the Browser panel's Open a page bar", () => {
 	});
 
 	test("an empty bar opens a blank browser on the saved logins; a bar that is not an address opens nothing and says why", async () => {
-		const { store, acts } = fakeStore(FACT);
+		const { store, acts } = fakeStore();
 		const panel = await mountPanel("session-1", store);
 		const open = panel.openForm();
 
@@ -318,5 +86,18 @@ describe("the Browser panel's Open a page bar", () => {
 		expect(acts).toHaveLength(1);
 		expect(open.problem()).toBeTruthy();
 		expect(open.address.getAttribute("aria-invalid")).toBe("true");
+	});
+
+	test("with no session Open is disabled and nothing is acted, and the tab says what to do", async () => {
+		const { store, acts } = fakeStore();
+		const panel = await mountPanel(null, store);
+		const open = panel.openForm();
+
+		await panel.type(open.address, "example.com");
+		await panel.submit(open.form);
+
+		expect(acts).toEqual([]);
+		expect(open.form.querySelector("button")?.hasAttribute("disabled")).toBe(true);
+		expect(panel.find('[data-slot="browser-accounts-hint"]')).toHaveLength(1);
 	});
 });

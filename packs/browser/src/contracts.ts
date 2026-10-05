@@ -1,11 +1,18 @@
 import type { ConnectionObservations } from "./connection.js";
+import type { LiveFrame } from "./engines/types.js";
+import type { ProfileColour, ResolvedProfileMeta } from "./profile-meta.js";
+import type { ArtifactoryLoopPrincipal } from "@dimension/sdk/artifactory";
+export type { ArtifactoryLoopPrincipal } from "@dimension/sdk/artifactory";
+
+/** Refresh externally, then assert local authority synchronously in the effect's dispatch continuation. */
+export interface EffectGuard {
+  (): void | Promise<void>;
+  assertCurrent(): void;
+}
 
 /** What the browser IS. `abp` and `browser4` are refused with the reason (see engines/refused.ts). */
 export const BROWSER_ENGINES = ["chromium", "chrome-relay", "abp", "browser4"] as const;
 export type BrowserEngine = (typeof BROWSER_ENGINES)[number];
-/** Who drives a whole task at its own speed: upstream agent loops, used as published. */
-export const TASK_AGENTS = ["jev", "browser-use"] as const;
-export type TaskAgent = (typeof TASK_AGENTS)[number];
 /**
  * `signup`: the password the browser saved for this profile + origin, or a
  * strong one it mints and saves. `login`: the saved one only. See credentials.ts.
@@ -16,8 +23,8 @@ export type CredentialMode = (typeof CREDENTIAL_MODES)[number];
 export interface CredentialRequest { origin: string; mode: CredentialMode }
 /** What a task reports about the credential it used — never the value. */
 export interface CredentialUse { origin: string; created: boolean }
-/** Maximum encoded PNG accepted by the host's image model-context contract. */
-export const MAX_ANNOTATION_BYTES = 2_097_152;
+/** Regions one `browser_annotate` reads: the shared annotation kit's mark limit (a page of numbered marks is a brief, past this it is a redraw). */
+export const MAX_ANNOTATION_REGIONS = 24;
 export interface Viewport { width: number; height: number }
 /** What a viewport may be (CSS px): `browser_open`, the View's fit and the `resize` step clamp to these. */
 export const MIN_VIEWPORT: Viewport = { width: 320, height: 240 };
@@ -71,8 +78,9 @@ export interface TabInfo {
 }
 export type TabOp = "new" | "activate" | "close";
 export interface TabRequest { op: TabOp; tabId?: string; url?: string }
-/** `jpeg`: the latest live screencast frame (not annotatable). `png`: a fresh capture, retained for annotation. */
-export type FrameFormat = "jpeg" | "png";
+/** The most events one input batch carries on the direct channel, and the longest text one `text` event inserts. */
+export const MAX_INPUT_BATCH = 64;
+export const MAX_INPUT_TEXT = 4_096;
 /** `failed`: provably nothing happened. `unknown`: dispatched, then errored — may have taken effect. */
 export type ActionStatus = "completed" | "failed" | "unknown";
 /**
@@ -156,7 +164,6 @@ export interface TaskUsage { modelCalls: number; inputTokens: number; outputToke
 export type TaskStatus = "running" | "done" | "blocked" | "failed" | "cancelled";
 export interface TaskRun {
   id: string;
-  agent: TaskAgent;
   task: string;
   status: TaskStatus;
   /** The agent's final message, or the failure reason. */
@@ -175,7 +182,7 @@ export interface TaskRun {
  * never reads or types password inputs). The value is held by the browser and
  * never passes through a tool argument, a result or a model call.
  */
-export interface TaskRequest { agent: TaskAgent; task: string; maxSteps?: number; credential?: CredentialRequest }
+export interface TaskRequest { task: string; maxSteps?: number; credential?: CredentialRequest }
 /** One field of a publish recipe: where to type, exactly what, and an optional caption shown in the View. */
 export interface PublishField {
   selector: string;
@@ -189,6 +196,9 @@ export interface PublishField {
  * stamp did not come through the host and is treated as not-the-human.
  */
 export type ToolCaller = "model" | "app";
+/** `take`: the person has the wheel and an agent's page actions are refused. `return`: the agent may act again. */
+export const CONTROL_MODES = ["take", "return"] as const;
+export type ControlMode = (typeof CONTROL_MODES)[number];
 /**
  * How to post on one site, supplied by the caller as data — the pack itself is
  * platform-agnostic. See publish.ts for the bounds every field is held to.
@@ -287,6 +297,8 @@ export interface BrowserState {
    * chrome-relay browser is always "relay".
    */
   profile: string | null;
+  /** How a person knows that profile: label, colour and avatar (profile-meta.ts). null for a throwaway browser and for the relay. The View's chip draws it; a model is not sent it. */
+  look: ResolvedProfileMeta | null;
   engine: BrowserEngine;
   /** The browser application behind this View; null on chrome-relay (the human's own Chrome). */
   app: BrowserApp | null;
@@ -307,36 +319,110 @@ export interface BrowserState {
   publish: PublishRecord | null;
   /** The last five JavaScript dialogs the browser answered on the active tab, oldest first. */
   dialogs: HandledDialog[];
+  /**
+   * The person in the View took this browser over: an agent's page actions on it are refused (`human_driving`) until they
+   * hand it back. Reads are not. Whoever holds the profile, the person's own input is never refused for this.
+   */
+  takenOver: boolean;
+  /** Epoch ms of the newest page action an agent (anyone but the View) ran here; null when none has. The View shows "working" for a few seconds after it. */
+  agentActionAt: number | null;
+  /** Set by `open` alone, when something a person should know about the profile just opened: the browser build under its logins changed. */
+  notice?: string;
 }
+/** A fresh full-quality capture, retained so it can be annotated (`browser_frame`). Live pictures do not come this way: they ride the direct channel (stream.ts). */
 export interface BrowserFrame {
   state: BrowserState;
   frameId: string;
-  mimeType: "image/png" | "image/jpeg";
-  data: string;
-  capturedAt: string;
-}
-/** The live frame is still the one the caller named in `since`: no pixels are resent. */
-export interface UnchangedFrame {
-  state: BrowserState;
-  frameId: string;
-  unchanged: true;
-}
-export interface BrowserRegion { x: number; y: number; width: number; height: number }
-export interface BrowserAnnotation {
-  url: string;
-  note: string;
-  region: BrowserRegion;
-  capturedAt: string;
   mimeType: "image/png";
   data: string;
-  elements: string;
+  capturedAt: string;
+}
+export interface BrowserRegion { x: number; y: number; width: number; height: number }
+/** Where a page is scrolled and how large it is, in CSS px. */
+export interface PageScroll { x: number; y: number; width: number; height: number }
+/**
+ * What the page says about itself, kept apart field by field: a tag name, an id and an element's words are three
+ * strings the page wrote, so none of them is ever run together with another into one line to be parsed back apart.
+ * An id may hold spaces, a tag name nearly anything (`<a[0,0>` is a tag), and a line cannot tell them from the
+ * sentence around them. The tag and id bounds are the shared annotation kit's own (its tag-name and selector limits);
+ * the words and the count per region are this pack's.
+ */
+export const MAX_ELEMENT_TAG_CHARS = 40;
+export const MAX_ELEMENT_ID_CHARS = 240;
+export const MAX_ELEMENT_LABEL_CHARS = 100;
+export const MAX_ELEMENTS_PER_REGION = 60;
+export interface PageElement {
+  /** Lower-case tag name, at most {@link MAX_ELEMENT_TAG_CHARS}. */
+  tag: string;
+  /** The element's id, at most {@link MAX_ELEMENT_ID_CHARS}; "" when it has none. */
+  id: string;
+  /** Where it is in the viewport, whole CSS px. */
+  box: BrowserRegion;
+  /** What a person would read on it, at most {@link MAX_ELEMENT_LABEL_CHARS}; a password or hidden input is `[redacted input]`, never its value. */
+  label: string;
+}
+/** The elements under one region, in document order; `truncated`: more were there than fit the budget of the answer. */
+export interface PageElements { elements: PageElement[]; truncated: boolean }
+/**
+ * What `browser_annotate` answers: facts about the page under the regions the human marked. No pixels: the picture is
+ * the View's own frame, and the shared annotation kit paints the marks onto it.
+ */
+export interface BrowserAnnotationContext {
+  url: string;
+  title: string;
+  /** When the frame the human marked was captured. */
+  capturedAt: string;
+  /** When the page was read for the elements; a dynamic page may have changed since `capturedAt`. */
+  readAt: string;
+  viewport: Viewport;
+  scroll: PageScroll;
+  /** One entry per requested region, in order: the region as read (clamped to the frame) and the elements under it. */
+  regions: ({ region: BrowserRegion } & PageElements)[];
 }
 export interface BrowserOpenOptions {
   /** Omitted: a throwaway browser, nothing saved, no sign-in kept. Named: the persistent profile of that name. */
   profile?: string;
   engine?: BrowserEngine;
   viewport?: Viewport;
+  /** The View's profile switch only: the browser the person is leaving. With the pool full, it is closed first when leaving it would close it, so the open takes its slot and not an agent's throwaway. */
+  leaving?: string;
 }
+/**
+ * Who opened a browser, from what the HOST stamped on the call: `caller` ("app" is the human, in the View) and the
+ * `session` (the chat). Never from tool input. A call without a stamp has neither, and is nobody's "this chat".
+ */
+/** The tool a model opened a browser with: what it is told to open another with when this one is given up (idle, to make room, left), because those two are not both in every space's list. */
+export type OpeningTool = "browser_open" | "browser_view";
+export interface BrowserOpener { caller?: ToolCaller; session?: string; tool?: OpeningTool }
+/** Who holds a saved profile, as `browser_profiles` tells the asking chat. No ids: only whose it is. */
+export type ProfileHolder = null | "this chat" | "human" | "another chat";
+/**
+ * One site a profile was checked on. `signedIn: null`: not known now (the last check is over 7 days old, or its
+ * time is in the future). `seenAt`: when it was last looked at, ISO 8601. `account` is the person's: the View gets it,
+ * a model's list does not (profile-list.ts `profilesForModel`).
+ */
+export interface ProfileSiteListing { site: string; account?: string; signedIn: boolean | null; seenAt: string }
+/**
+ * Who holds a profile this server has a browser for, in the detail only the View is sent (profile-list.ts
+ * `profilesForModel` takes it out): `by` is who opened it (the person in a View, or an agent), `task` whether a task
+ * agent is running on it, `takenOver` whether the person has the wheel, `post` whether a post awaits their confirmation
+ * (or is being prepared). `heldBy` says whose it is from the asker's side; this says what it is doing.
+ */
+export interface ProfileHold { by: "person" | "agent"; task: boolean; takenOver: boolean; post: boolean }
+/**
+ * One saved profile as an agent or the View reads it. Never a cookie, a password or a path. `avatar`, `hold` and `browserId` are the
+ * View's: `browserId` is the browser this chat holds for the profile (present only when `heldBy` is "this chat", never another chat's:
+ * an id is a capability) so the View can reach it and close it.
+ */
+export interface ProfileListing { name: string; label: string; colour: ProfileColour; avatar?: string; heldBy: ProfileHolder; hold?: ProfileHold; browserId?: string; sites: ProfileSiteListing[] }
+/** A saved-profile request belongs to one host-stamped chat, not to a browser id. */
+export interface ProfileConsent { name: string; label: string; sites: ProfileSiteListing[]; status: "pending" | "granted"; scope: "chat" | "loop"; subject?: Pick<ArtifactoryLoopPrincipal, "workspaceId" | "id" | "origin">; loopLabel?: string; expiresAt?: number }
+/** A browser this chat holds that is not a saved profile: a Private one, or the person's own Chrome. Only the View is sent these. */
+export interface OpenBrowserListing { browserId: string; kind: "private" | "chrome"; hold: ProfileHold }
+/** What leaving a browser did to it: closed, or kept because something of an agent's (or the person's) still depends on it. */
+export interface LeaveOutcome { closed: boolean }
+/** A new profile as a person typed it in the View: a name to show (the folder is derived from it), and optionally a colour and an avatar emoji. */
+export interface NewProfileRequest { name: string; colour?: ProfileColour; avatar?: string }
 /**
  * browser_read: one logged-out read of a public page (see read.ts). There is
  * no profile: every read runs in a fresh incognito context.
@@ -357,24 +443,49 @@ export type ReadResult =
   | { status: "blocked"; url: string; reason: string };
 /** Capability is the opaque browserId; it must never appear in global listings. */
 export interface BrowserRuntimePort {
-  open(options: BrowserOpenOptions): Promise<BrowserState>;
-  state(browserId: string): Promise<BrowserState>;
-  frame(browserId: string, format?: FrameFormat): Promise<BrowserFrame>;
-  frame(browserId: string, format: "jpeg", since: string | undefined): Promise<BrowserFrame | UnchangedFrame>;
+  /**
+   * `opener`: who is asking (the host's stamps). A profile already open for the SAME chat comes back as that browser;
+   * for anyone else it is refused (`profile_held`), naming whose it is.
+   */
+  open(options: BrowserOpenOptions, opener?: BrowserOpener, code?: undefined, attach?: undefined, guard?: EffectGuard): Promise<BrowserState>;
+  state(browserId: string, guard?: EffectGuard): Promise<BrowserState>;
+  /** A fresh PNG capture of the active tab, retained for `annotate`. */
+  frame(browserId: string): Promise<BrowserFrame>;
+  /**
+   * The live picture of the active tab, as the View shows it: `onFrame` gets a JPEG whenever the page changes (and one
+   * at once for a page that is not changing), following the active tab, until the returned function is called. Never
+   * queued behind page work. Throws `unknown_browser`.
+   */
+  watchFrames(browserId: string, onFrame: (frame: LiveFrame) => void, size?: "view" | { maxWidth: 480 | 1280 }): () => void;
+  /** The state as `state` answers it, but NOT queued behind page work: the live view keeps reading it while a navigation or action is in flight. */
+  liveState(browserId: string): Promise<BrowserState>;
+  /**
+   * A View joined this browser's live stream. While any View is joined nobody may give the browser up to make room, and it is never
+   * idle. Returns what ends the watching (idempotent). Throws `unknown_browser`. A count, never a clock: a slow page is still watched.
+   */
+  viewing(browserId: string): () => void;
+  /** A consuming preview holds idle eviction without joining the human's View or wheel. */
+  previewHolding(browserId: string): () => void;
+  /**
+   * The human's own mouse, wheel and keys, applied to the active tab in order. Admitted and bounded first (`bad_input`), refused
+   * while a task owns the page (`task_running`), and a click or key while a publish waits for the Post marks it touched, as `act` does.
+   * Not queued behind page work, so it never waits for a navigation.
+   */
+  input(browserId: string, events: unknown): Promise<void>;
   tab(browserId: string, request: TabRequest, caller?: ToolCaller): Promise<BrowserState>;
   resize(browserId: string, viewport: Viewport, scale?: number): Promise<BrowserState>;
-  snapshot(browserId: string): Promise<{ state: BrowserState; text: string }>;
+  snapshot(browserId: string, guard?: EffectGuard): Promise<{ state: BrowserState; text: string }>;
   /** Refused (`publish_pending`) while a publish awaits confirmation, unless `caller` is "app". */
-  act(browserId: string, action: BrowserAction, caller?: ToolCaller): Promise<ActionResult>;
+  act(browserId: string, action: BrowserAction, caller?: ToolCaller, guard?: EffectGuard): Promise<ActionResult>;
   /**
    * 1..MAX_BATCH_STEPS steps under ONE lock: refused once (`task_running`, `publish_pending`, as `act`), every step
    * validated before the first runs (`bad_action`/`bad_wait`), then run in order until one is not `completed`.
    */
-  actMany(browserId: string, steps: readonly BatchStep[], caller?: ToolCaller): Promise<ActManyResult>;
+  actMany(browserId: string, steps: readonly BatchStep[], caller?: ToolCaller, guard?: EffectGuard): Promise<ActManyResult>;
   /** A picture for a model: webp, at most 1024 CSS px on its longest edge, never retained (so never annotatable). Read like `snapshot`. */
-  shot(browserId: string, request?: ShotRequest): Promise<ModelShot>;
+  shot(browserId: string, request?: ShotRequest, guard?: EffectGuard): Promise<ModelShot>;
   /** The active tab's log entries since the last call (which marks them read); `[]` when nothing is new. For a model's reads, never the View's. */
-  logs(browserId: string): Promise<LogEntry[]>;
+  logs(browserId: string, guard?: EffectGuard): Promise<LogEntry[]>;
   /**
    * Remember `browserId` as the browser `session` — the id the HOST stamped on a call, never one a caller passed — has
    * open in its View: what the human opened or is viewing. Forgotten when that browser closes.
@@ -382,31 +493,82 @@ export interface BrowserRuntimePort {
   bindView(session: string, browserId: string): void;
   /** The browser the human opened or is viewing in `session`, while it is open. */
   viewOf(session: string): string | undefined;
+  /** App-preview authorization accepts only the host-stamped opener or this session's held View. */
+  previewAccess(session: string, browserId: string): { ok: true; profile: "throwaway" | "saved"; url: string; title: string } | { ok: false; code: "not_owner" | "unknown_source" | "source_closed" | "not_headless" };
+  /** A still only for a throwaway owned source, rate-limited by the runtime. */
+  previewStill(session: string, browserId: string): Promise<string | undefined>;
   /** Serialized and refused (`task_running`, `publish_pending`) like `act`; nothing is changed on the page. `timeout` is a result, not an error. */
   wait(browserId: string, request: WaitRequest, caller?: ToolCaller): Promise<WaitResult>;
   /** Read-only: a fixed page script measures the first match of `selector` (`@<ref> ` prefix reaches an iframe). Nothing the caller wrote runs in the page. */
-  inspect(browserId: string, selector: string): Promise<InspectResult>;
+  inspect(browserId: string, selector: string, guard?: EffectGuard): Promise<InspectResult>;
   runTask(browserId: string, request: TaskRequest, onStep?: (step: TaskStep, run: TaskRun) => void): Promise<TaskRun>;
-  cancelTask(browserId: string): Promise<TaskRun>;
-  annotate(browserId: string, frameId: string, region: BrowserRegion, note: string): Promise<BrowserAnnotation>;
+  cancelTask(browserId: string, guard?: EffectGuard): Promise<TaskRun>;
+  /**
+   * The page under the regions the human marked on a frame `frame` (png) captured: url, title, scroll and the elements
+   * under each region. Refused (`stale_frame`) once the page has moved on from the frame, (`unknown_frame`) for a frame
+   * no longer retained. Read-only; the picture is the caller's.
+   */
+  annotate(browserId: string, frameId: string, regions: readonly BrowserRegion[]): Promise<BrowserAnnotationContext>;
+  /** Stores the detail document the shared annotation kit assembles for what the human marked in `browserId`, and answers the absolute path the agent reads it at. A throwaway browser's document is deleted with it. */
+  saveAnnotationDetail(browserId: string, json: string): string;
   /** Every on-disk profile's persisted sign-in observations (connection.ts). */
   connections(): Promise<ConnectionObservations>;
   /** `listener` runs after each new observation is persisted and after a profile with observations is deleted. Returns the unsubscribe. */
   onConnectionsChanged(listener: () => void): () => void;
-  profiles(): Promise<string[]>;
+  /** Every saved profile (never the relay's, never a throwaway), with who holds it relative to `asker`, the chat asking. */
+  profileList(asker?: string): Promise<ProfileListing[]>;
+  /** Model access is checked before any saved-profile browser operation, including by-id reads and credentials. */
+  requireProfileAccess(browserId: string, caller?: ToolCaller, session?: string, allowClosed?: boolean): void;
+  /** Typed browser_run ordinary operations are saved-profile-only; refuses relay and throwaway before reading a page. */
+  requireSavedProfileAccess(browserId: string, caller?: ToolCaller, session?: string, allowClosed?: boolean): void;
+  /** Synchronous metadata only, including a saved browser whose close is retryable. */
+  needsProfileAuthority(browserId: string): boolean;
+  /** Install only the principal returned by an authenticated host authority read; undefined denies standing access. */
+  setProfilePrincipal(sessionId: string, principal: ArtifactoryLoopPrincipal | undefined): void;
+  /** Clear this chat's ephemeral authority and grants before stopping its matching task. */
+  endProfileSession(sessionId: string): Promise<void>;
+  /** Pending requests and active grants for the View's host-stamped chat. */
+  profileConsents(session?: string): ProfileConsent[];
+  /** Human-only decision bound to the displayed stable subject; the expectation never selects authority. */
+  decideProfileConsent(name: string, decision: "allow" | "deny" | "revoke", caller?: ToolCaller, session?: string, scope?: "chat" | "loop", expectedSubject?: ProfileConsent["subject"]): Promise<void>;
+  /** The browsers this chat holds that are not saved profiles (Private ones, the person's own Chrome), for the View's menu; never another chat's. */
+  openBrowsers(asker?: string): Promise<OpenBrowserListing[]>;
+  /** The label, colour and avatar of every saved profile that has any observation, for the connection report. */
+  profileMeta(): Promise<Record<string, ResolvedProfileMeta>>;
+  /**
+   * Create a saved profile from a name a person typed (profile-meta.ts `checkNewProfile`): its label, a folder derived from it, the
+   * colour and avatar they chose. Refused (`bad_profile_name`) with the sentence the View shows when the name is empty, taken,
+   * reserved or could be a path. Nothing is opened. Only `caller` "app" may: a model (or an unstamped call) is refused
+   * (`human_only`) and nothing is made; an agent that wants a profile of its own names a new one in `open`.
+   */
+  addProfile(request: NewProfileRequest, caller?: ToolCaller): Promise<ProfileListing>;
+  /**
+   * The person in the View takes `browserId` over (`take`) or hands it back (`return`). Only `caller` "app" may: a model is refused
+   * (`human_only`). Taking over is refused while a task runs (`task_running`) or a post awaits confirmation (`publish_pending`: it
+   * would navigate away from, or steal, the page being confirmed). Not queued behind page work: it takes effect at once, even
+   * between two steps of an agent's batch. Answers the state after it.
+   */
+  control(browserId: string, mode: ControlMode, caller?: ToolCaller): Promise<BrowserState>;
+  /**
+   * The person in the View leaves `browserId` for another profile. Only `caller` "app" may (`human_only`). The wheel goes back to the
+   * agent at once if they held it. The browser is closed (by the runtime's own close for a browser nobody holds: its chat is told why)
+   * unless an agent opened it, a task runs on it, a post awaits or is being prepared on it, a call is in progress on it, the person had
+   * taken it over, or it is their own Chrome: those stay open, listed in the View's menu, and are closed from there.
+   */
+  leave(browserId: string, caller?: ToolCaller): Promise<LeaveOutcome>;
   /** Settles a pending publish first. Refused (`publish_pending`) while one awaits confirmation, unless `caller` is "app". */
-  close(browserId: string, caller?: ToolCaller): Promise<void>;
+  close(browserId: string, caller?: ToolCaller, guard?: EffectGuard): Promise<void>;
   waitTask(browserId: string, ms: number): Promise<TaskRun>;
-  startTask(browserId: string, request: TaskRequest, caller?: ToolCaller): Promise<TaskRun>;
+  startTask(browserId: string, request: TaskRequest, caller?: ToolCaller, session?: string, guard?: EffectGuard, workerGuard?: EffectGuard): Promise<TaskRun>;
   /** `check`: signed in? `post`: fill, verify and park for a confirm. Never submits. `preset` labels the record with the preset the recipe was resolved from. */
-  publish(browserId: string, recipe: PublishRecipe, mode: PublishMode, caller?: ToolCaller, preset?: PresetRef): Promise<PublishCheck | PublishRecord>;
+  publish(browserId: string, recipe: PublishRecipe, mode: PublishMode, caller?: ToolCaller, preset?: PresetRef, guard?: EffectGuard): Promise<PublishCheck | PublishRecord>;
   /**
    * The Post (the model's confirm or the View's button): re-verify, click submit exactly once, read the receipt from the page.
    * `expect` binds the confirm to what the caller was shown: REQUIRED unless `caller` is "app", and when given (from any
    * caller) it must equal the pending record's origin, profile and field values exactly, else nothing is clicked.
    */
-  confirmPublish(browserId: string, publishId: string, caller?: ToolCaller, expect?: PublishExpectation): Promise<PublishRecord>;
-  cancelPublish(browserId: string, publishId: string): Promise<PublishRecord>;
+  confirmPublish(browserId: string, publishId: string, caller?: ToolCaller, expect?: PublishExpectation, guard?: EffectGuard): Promise<PublishRecord>;
+  cancelPublish(browserId: string, publishId: string, guard?: EffectGuard): Promise<PublishRecord>;
   /** The publish's record once it is terminal or `ms` has passed, whichever is first. */
   waitPublish(browserId: string, publishId: string, ms: number): Promise<PublishRecord>;
   /** Read a public page in this server's own headless reader: a fresh incognito context, never a profile or a Browser View browser. */

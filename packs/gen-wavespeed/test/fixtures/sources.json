@@ -1,0 +1,33 @@
+{
+	"$comment": "Where each fixture came from. Nothing here is a response to a job this pack ran: no task was submitted and no file was uploaded while the pack was written, and no fixture contains an API key.",
+	"catalogue.json": {
+		"kind": "live response",
+		"source": "GET https://api.wavespeed.ai/api/v3/models with the owner's key on 2026-10-02 (1079 models, 1.9 MB); the ten entries of models.json, kept exactly as returned",
+		"docs": "https://wavespeed.ai/docs/list-models"
+	},
+	"prices.json": {
+		"kind": "live responses",
+		"source": "POST https://api.wavespeed.ai/api/v3/model/price on 2026-10-02, one per request the tests quote, recorded by running the pack's own quote() through a forwarding fetch; `request` is exactly what the pack sent, `response` exactly what WaveSpeed answered. Every amount equals the model's documented price table.",
+		"docs": "https://wavespeed.ai/docs/pricing-api"
+	},
+	"errors.json": {
+		"kind": "live responses",
+		"source": "badKey: GET /api/v3/models with a made-up key; unknownModel and badEnum: POST /api/v3/model/price; unknownTask: GET /api/v3/predictions/<made-up id>/result. All on 2026-10-02; none can create or charge a task."
+	},
+	"results-completed.json": {
+		"kind": "WaveSpeed's recorded sample",
+		"source": "the `initialExampleResult` of each model's page https://wavespeed.ai/models/<modelId> (a real completed run WaveSpeed displays), with `outputs` replaced by the page's `cover_url` — the output file of that run (the page stores the list out-of-line). Keyed by model id."
+	},
+	"submit.json": {
+		"kind": "documented sample",
+		"source": "https://wavespeed.ai/docs/submit-task, 'Response'"
+	},
+	"tasks.json": {
+		"kind": "documented shapes",
+		"source": "statuses from https://wavespeed.ai/docs/get-result and https://wavespeed.ai/docs/what-are-predictions; the failed task's `code`/`error` from https://wavespeed.ai/docs/error-codes (1402 Media Access Failed). No failed, timed-out, cancelled or deleted task was available to record."
+	},
+	"upload-ticket.json": {
+		"kind": "documented sample",
+		"source": "https://wavespeed.ai/docs/upload-files-api, 'Response' (hosts replaced by reserved example hosts). Not recorded live: creating a ticket is not read-only."
+	}
+}

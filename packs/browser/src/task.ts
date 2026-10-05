@@ -1,6 +1,6 @@
 /**
- * Runs an upstream agent loop (jev, browser-use) against a browser this pack
- * already holds, through the Python worker in `packs/browser/python`.
+ * Runs the jev agent loop against a browser this pack already holds, through
+ * the Python worker in `packs/browser/python`.
  *
  * The worker is a published-package consumer, nothing more: it constructs the
  * library's own `Agent`, points it at our Chrome's CDP endpoint and reports
@@ -11,7 +11,8 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
 import { join } from "node:path";
-import type { TaskAgent, TaskStatus, TaskUsage } from "./contracts.js";
+import type { TaskStatus, TaskUsage } from "./contracts.js";
+import { launchSecrets } from "./secrets.js";
 import { fail } from "./store.js";
 
 /** `packs/browser/python`, from both `src/task.ts` and the bundled `app/server.mjs`. */
@@ -26,7 +27,6 @@ const SPARE_IDLE_MS = 10 * 60_000;
 export interface WorkerStep { n: number; action: string; url: string; elapsedMs: number; usage: TaskUsage }
 export interface WorkerResult { status: Exclude<TaskStatus, "running">; summary: string; steps: number; elapsedMs: number; usage: TaskUsage }
 export interface WorkerJob {
-  agent: TaskAgent;
   cdpUrl: string;
   task: string;
   maxSteps: number;
@@ -41,6 +41,11 @@ export interface RunningWorker {
   cancel(): void;
 }
 
+/** jev's key: its task tools are offered, and a spare worker kept, only where it is set (doc 77 §6). */
+export function jevKeyConfigured(): boolean {
+  return Boolean(launchSecrets.get("TYPESAFE_API_KEY")?.trim());
+}
+
 function interpreter(): string {
   const configured = process.env.DIM_BROWSER_PYTHON?.trim();
   if (configured) return configured;
@@ -48,7 +53,7 @@ function interpreter(): string {
   if (!existsSync(venv)) {
     fail(
       "python_env_missing",
-      `The jev / browser-use task agents need their pinned Python environment. Run: cd "${PYTHON_DIR}" && uv sync --python 3.12 ` +
+      `The jev task agent needs its pinned Python environment. Run: cd "${PYTHON_DIR}" && uv sync --python 3.12 ` +
         "(or set DIM_BROWSER_PYTHON to an interpreter that has it).",
     );
   }
@@ -73,11 +78,29 @@ interface Spawned {
   stderr(): string;
 }
 
-/** `spare`: the worker preloads browser-use while it waits (DIM_BROWSER_SPARE); a worker spawned for a job does not. */
-function spawnWorker(spare = false): Spawned {
+/**
+ * What the jev worker is handed of this process's environment: what an interpreter needs to start (where programs and temp files live, locale, Python's own settings), what its HTTP client reads (proxy and
+ * certificate settings, which may name a proxy with its login) and jev's two documented settings that are not keys (`TEXT_MODEL`, `TEXT_MODEL_BASE_URL`, README). Nothing else. The worker is driven by a model that reads page text an attacker can write, and it can run code, so a secret of the host's that happens
+ * to sit in the server's environment (a cloud key, a token) must not be in the worker's. The same idea as the code cell's allow-list (`CELL_ENV`, code/host/code-host.ts), with what Python adds; matched without regard to case,
+ * because Windows has one variable for every spelling of a name and Node reports the one the system holds.
+ */
+const WORKER_ENV =
+  /^(?:PATH|PATHEXT|SYSTEMROOT|WINDIR|COMSPEC|SYSTEMDRIVE|TEMP|TMP|TMPDIR|HOME|USERPROFILE|LANG|LANGUAGE|LC_(?:ALL|CTYPE|NUMERIC|TIME|COLLATE|MONETARY|MESSAGES|PAPER|NAME|ADDRESS|TELEPHONE|MEASUREMENT|IDENTIFICATION)|TZ|PYTHON[A-Z0-9_]*|(?:HTTPS?|ALL|NO)_PROXY|SSL_CERT_(?:FILE|DIR)|REQUESTS_CA_BUNDLE|CURL_CA_BUNDLE|TEXT_MODEL|TEXT_MODEL_BASE_URL)$/i;
+
+/** The environment of a task worker: the allow-listed part of `source`, then `extra` over it (the keys it needs and its own settings). */
+export function taskWorkerEnv(source: NodeJS.ProcessEnv, extra: Record<string, string>): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [name, value] of Object.entries(source)) if (value !== undefined && WORKER_ENV.test(name)) env[name] = value;
+  return { ...env, ...extra };
+}
+
+/** The pack's keys are not in this process's environment any more (secrets.ts took them at start): the worker is handed them here, with its interpreter's settings, and nothing else gets them. */
+const workerEnvironment = (): Record<string, string> => taskWorkerEnv(process.env, { ...launchSecrets.taskKeys(), PYTHONUNBUFFERED: "1", PYTHONIOENCODING: "utf-8" });
+
+function spawnWorker(): Spawned {
   const child = spawn(interpreter(), ["-m", "dim_browser_bridge"], {
     cwd: PYTHON_DIR,
-    env: { ...process.env, PYTHONUNBUFFERED: "1", PYTHONIOENCODING: "utf-8", ...(spare ? { DIM_BROWSER_SPARE: "1" } : {}) },
+    env: workerEnvironment(),
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
   });
@@ -89,7 +112,6 @@ function spawnWorker(spare = false): Spawned {
   child.on("error", () => undefined);
   // A pipe error (the worker or a process it spawned dying mid-write) is an
   // 'error' event; unheard, Node throws it and takes the whole MCP server down.
-  // Attached at spawn so an idle spare is covered too, not only a running task.
   child.stdin.on("error", () => undefined);
   child.stdout.on("error", () => undefined);
   child.stderr.on("error", () => undefined);
@@ -97,17 +119,18 @@ function spawnWorker(spare = false): Spawned {
 }
 
 /**
- * One pre-spawned worker, waiting on stdin with browser-use already imported
- * (~4 s of imports), so a browser-use task's clock starts at its first step;
- * a jev task still imports its harness per task (it reads its env at import
- * time) and saves only interpreter start-up. Kept only once tasks are in use:
- * the first task spawns the next spare, every later one takes it and spawns
- * its successor.
+ * One pre-spawned worker, waiting on stdin, so a jev task's clock starts
+ * without the interpreter's start-up. jev's harness reads its env at import
+ * time, so nothing of it can be loaded ahead: start-up is all this saves.
+ * Kept only where jev's key is set and only once tasks are in use: the first
+ * task spawns the next spare, every later one takes it and spawns its
+ * successor. Unused, it exits after SPARE_IDLE_MS (the same ten minutes a
+ * throwaway browser may sit idle), and the runtime lets it go when disposed.
  */
 let spare: { worker: Spawned; env: string; idle: NodeJS.Timeout } | undefined;
 
-/** The spare is only good for the environment it was spawned in (interpreter, keys, PYTHONPATH). */
-const envKey = (): string => JSON.stringify(process.env);
+/** The spare is only good for the environment it was spawned in: the interpreter chosen, and what it is handed (keys, PYTHONPATH). */
+const envKey = (): string => JSON.stringify([process.env.DIM_BROWSER_PYTHON, workerEnvironment()]);
 
 /** An idle spare must never keep the server process alive; a running task must. */
 function hold(worker: Spawned, held: boolean): void {
@@ -117,11 +140,16 @@ function hold(worker: Spawned, held: boolean): void {
   }
 }
 
-function takeSpare(): Spawned | undefined {
-  const taken = spare;
+function detachSpare(): typeof spare {
+  const detached = spare;
   spare = undefined;
+  if (detached) clearTimeout(detached.idle);
+  return detached;
+}
+
+function takeSpare(): Spawned | undefined {
+  const taken = detachSpare();
   if (!taken) return undefined;
-  clearTimeout(taken.idle);
   const { child } = taken.worker;
   if (child.pid !== undefined && child.exitCode === null && child.signalCode === null && taken.env === envKey()) {
     hold(taken.worker, true);
@@ -132,10 +160,10 @@ function takeSpare(): Spawned | undefined {
 }
 
 function keepSpare(): void {
-  if (spare) return;
+  if (spare || !jevKeyConfigured()) return;
   let worker: Spawned;
   try {
-    worker = spawnWorker(true);
+    worker = spawnWorker();
   } catch {
     return; // no interpreter: the next task reports it
   }
@@ -154,10 +182,17 @@ function keepSpare(): void {
   spare = { worker, env: envKey(), idle };
 }
 
+/** Let the waiting spare go: a runtime that is disposed leaves no worker running behind it. */
+export function releaseSpare(): void {
+  detachSpare()?.worker.child.stdin.end();
+}
+
 export function startWorker(job: WorkerJob, onStep: (step: WorkerStep) => void): RunningWorker {
   const { child, stderr } = takeSpare() ?? spawnWorker();
   keepSpare();
   let result: WorkerResult | undefined;
+  const endpoint = new URL(job.cdpUrl);
+  const privateAddress = (text: string): string => text.replaceAll(job.cdpUrl, "[private CDP endpoint]").replaceAll(endpoint.pathname, "[private CDP route]");
   const lines = createInterface({ input: child.stdout });
   lines.on("line", (text) => {
     let line: Record<string, unknown>;
@@ -169,15 +204,15 @@ export function startWorker(job: WorkerJob, onStep: (step: WorkerStep) => void):
     if (line.type === "step") {
       onStep({
         n: Number(line.n) || 0,
-        action: String(line.action ?? ""),
-        url: String(line.url ?? ""),
+        action: privateAddress(String(line.action ?? "")),
+        url: privateAddress(String(line.url ?? "")),
         elapsedMs: Number(line.elapsedMs) || 0,
         usage: usageOf(line),
       });
     } else if (line.type === "result" && typeof line.status === "string" && FINAL[line.status]) {
       result = {
         status: line.status as WorkerResult["status"],
-        summary: String(line.summary ?? ""),
+        summary: privateAddress(String(line.summary ?? "")),
         steps: Number(line.steps) || 0,
         elapsedMs: Number(line.elapsedMs) || 0,
         usage: usageOf(line),
@@ -193,7 +228,7 @@ export function startWorker(job: WorkerJob, onStep: (step: WorkerStep) => void):
   const done = new Promise<WorkerResult>((resolve) => {
     const finish = (reason: string): void => {
       clearTimeout(killTimer);
-      resolve(result ?? { status: "failed", summary: `${reason}${stderr() ? `: ${stderr().trim().slice(-600)}` : ""}`, steps: 0, elapsedMs: 0, usage: usageOf({}) });
+      resolve(result ?? { status: "failed", summary: privateAddress(`${reason}${stderr() ? `: ${stderr().trim().slice(-600)}` : ""}`), steps: 0, elapsedMs: 0, usage: usageOf({}) });
       // Settled: a pipe a lingering grandchild still holds is ours to let go of.
       lines.close();
       child.stdout.destroy();

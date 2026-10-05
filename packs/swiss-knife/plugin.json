@@ -1,0 +1,172 @@
+{
+	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+	"name": "swiss-knife",
+	"version": "0.3.1",
+	"description": "Small useful things in one switch: `present` shows you a file as a card in the thread, the Viewer opens and annotates it, and a stream rule stops the agent mid-edit when it writes a code comment.",
+	"author": {
+		"name": "Dimension"
+	},
+	"license": "MIT",
+	"keywords": [
+		"present",
+		"files",
+		"images",
+		"viewer",
+		"artifactory",
+		"mcp-apps",
+		"documents",
+		"pdf",
+		"docx",
+		"pptx",
+		"xlsx",
+		"audio",
+		"video",
+		"rules",
+		"ttsr",
+		"comments",
+		"code-style",
+		"tools"
+	],
+	"extensions": {
+		"ai.insodimension.dimension": {
+			"contractVersion": 1,
+			"title": "Swiss Knife",
+			"icon": "hammer",
+			"category": "tools",
+			"channel": "canary",
+			"toolLoading": "eager",
+			"requires": {
+				"dimension": ">=0.10.24"
+			},
+			"supersedes": ["viewer", "ban-comments"],
+			"toolRenderer": [
+				{
+					"match": "present",
+					"use": "presentation",
+					"icon": "image",
+					"title": "Present"
+				}
+			],
+			"artifactories": [
+				{
+					"mcpServer": "viewer",
+					"label": "Viewer",
+					"icon": "file",
+					"modelSpaces": [],
+					"grants": ["files:read"],
+					"opens": [
+						{
+							"tool": "view_file",
+							"pathArg": "path",
+							"nameArg": "filename",
+							"ext": ["png", "jpg", "jpeg", "gif", "webp", "avif", "bmp", "ico", "svg"],
+							"mime": ["image/png", "image/jpeg", "image/gif", "image/webp", "image/avif", "image/bmp", "image/x-icon", "image/svg+xml"],
+							"annotates": ["marks"],
+							"label": "Viewer"
+						},
+						{
+							"tool": "view_file",
+							"pathArg": "path",
+							"nameArg": "filename",
+							"ext": ["pdf"],
+							"mime": ["application/pdf"],
+							"annotates": ["text"],
+							"label": "Viewer"
+						},
+						{
+							"tool": "view_file",
+							"pathArg": "path",
+							"nameArg": "filename",
+							"ext": ["docx"],
+							"mime": ["application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
+							"annotates": ["text"],
+							"label": "Viewer"
+						},
+						{
+							"tool": "view_file",
+							"pathArg": "path",
+							"nameArg": "filename",
+							"ext": ["pptx"],
+							"mime": ["application/vnd.openxmlformats-officedocument.presentationml.presentation"],
+							"annotates": ["text"],
+							"label": "Viewer"
+						},
+						{
+							"tool": "view_file",
+							"pathArg": "path",
+							"nameArg": "filename",
+							"ext": ["xlsx", "xlsm"],
+							"mime": ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/vnd.ms-excel.sheet.macroenabled.12"],
+							"annotates": ["text"],
+							"label": "Viewer"
+						},
+						{
+							"tool": "view_file",
+							"pathArg": "path",
+							"nameArg": "filename",
+							"ext": ["md", "markdown", "mdx"],
+							"mime": ["text/markdown"],
+							"annotates": ["text"],
+							"label": "Viewer"
+						},
+						{
+							"tool": "view_file",
+							"pathArg": "path",
+							"nameArg": "filename",
+							"ext": ["html", "htm", "xhtml"],
+							"mime": ["text/html", "application/xhtml+xml"],
+							"annotates": ["element"],
+							"label": "Viewer"
+						},
+						{
+							"tool": "view_file",
+							"pathArg": "path",
+							"nameArg": "filename",
+							"ext": ["txt", "log", "csv", "tsv", "json", "yaml", "yml", "toml", "xml", "css", "js", "mjs", "ts", "tsx", "jsx", "py", "rs", "go", "java", "c", "h", "cpp", "sh", "sql"],
+							"mime": [
+								"text/plain",
+								"text/csv",
+								"text/tab-separated-values",
+								"application/json",
+								"application/yaml",
+								"application/toml",
+								"application/xml",
+								"text/css",
+								"text/javascript",
+								"text/typescript",
+								"text/x-python",
+								"text/x-rust",
+								"text/x-go",
+								"text/x-java",
+								"text/x-c",
+								"text/x-c++",
+								"text/x-shellscript",
+								"application/sql"
+							],
+							"annotates": ["text"],
+							"label": "Viewer"
+						},
+						{
+							"tool": "view_file",
+							"pathArg": "path",
+							"nameArg": "filename",
+							"ext": ["mp3", "wav", "flac", "ogg", "oga", "opus", "m4a", "m4b", "aac", "weba", "mka"],
+							"mime": ["audio/mpeg", "audio/wav", "audio/x-wav", "audio/flac", "audio/x-flac", "audio/ogg", "audio/mp4", "audio/x-m4a", "audio/aac", "audio/webm", "audio/x-matroska"],
+							"annotates": ["timeline"],
+							"label": "Viewer"
+						},
+						{
+							"tool": "view_file",
+							"pathArg": "path",
+							"nameArg": "filename",
+							"ext": ["mp4", "m4v", "mov", "webm", "ogv", "mkv"],
+							"mime": ["video/mp4", "video/x-m4v", "video/quicktime", "video/webm", "video/ogg", "video/x-matroska"],
+							"annotates": ["timeline"],
+							"label": "Viewer"
+						}
+					]
+				}
+			]
+		}
+	}
+}

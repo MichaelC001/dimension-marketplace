@@ -24,7 +24,7 @@
 import { randomBytes } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { accountFromText } from "./connection.js";
-import type { PublishCheck, PublishField, PublishMode, PublishRecipe, PublishRecord, PublishStatus } from "./contracts.js";
+import type { EffectGuard, PublishCheck, PublishField, PublishMode, PublishRecipe, PublishRecord, PublishStatus } from "./contracts.js";
 import { PUBLISH_MODES } from "./contracts.js";
 import type { EngineDriver } from "./engines/types.js";
 import { ActionNotDispatched, fail } from "./store.js";
@@ -212,44 +212,64 @@ function selector(value: unknown, name: string): string {
  * recipe's origin. `check` stops there; `post` fills and verifies every field
  * and returns the parked publication. A signed-out profile types nothing.
  */
-export async function prepare(driver: EngineDriver, profile: string, recipe: Recipe, mode: PublishMode): Promise<PublishCheck | Publication> {
+export async function prepare(driver: EngineDriver, profile: string, recipe: Recipe, mode: PublishMode, guard?: EffectGuard): Promise<PublishCheck | Publication> {
+	if (guard !== undefined) await guard();
+	guard?.assertCurrent();
 	try {
-		await driver.perform({ kind: "navigate", url: recipe.composeUrl });
+		await driver.perform({ kind: "navigate", url: recipe.composeUrl }, undefined, guard);
 	} catch (error) {
-		return { status: "failed", url: await currentUrl(driver), profile, error: `could not open the compose page: ${describe(error)}` };
+		return { status: "failed", url: await currentUrl(driver, guard), profile, error: `could not open the compose page: ${describe(error)}` };
 	}
 	const deadline = Date.now() + SIGNED_IN_WAIT_MS;
 	let signedIn = false;
 	while (!signedIn) {
-		signedIn = originOf(await currentUrl(driver)) === recipe.origin && (await driver.hasElement(recipe.signedIn).catch(() => false));
+		const origin = originOf(await currentUrl(driver, guard));
+		if (guard !== undefined) await guard();
+		guard?.assertCurrent();
+		signedIn = origin === recipe.origin && (await driver.hasElement(recipe.signedIn).catch(() => false));
 		if (signedIn || Date.now() >= deadline) break;
 		await sleep(POLL_MS);
 	}
-	const url = await currentUrl(driver);
+	const url = await currentUrl(driver, guard);
+	guard?.assertCurrent();
 	if (!signedIn) return { status: "not-signed-in", url, profile };
 	// Page text, read only once signed in, only for the connection report; never a reason to fail.
+	if (guard !== undefined) await guard();
+	guard?.assertCurrent();
 	const account = recipe.account === undefined ? undefined : accountFromText(await driver.readText(recipe.account, MAX_ACCOUNT_TEXT_CHARS).catch(() => null));
+	guard?.assertCurrent();
 	if (mode === "check") return { status: "signed-in", url, profile, ...(account === undefined ? {} : { account }) };
 
 	for (const field of recipe.fields) {
 		const failed = (error: string): PublishCheck => ({ status: "failed", url, profile, error: `${error}; nothing was submitted` });
+		if (guard !== undefined) await guard();
+		guard?.assertCurrent();
 		const before = await driver.readField(field.selector).catch((error) => ({ state: "error" as const, error }));
+		guard?.assertCurrent();
 		if (before.state === "error") return failed(`could not read ${JSON.stringify(field.selector)}: ${describe(before.error)}`);
 		if (before.state === "absent") return failed(`${JSON.stringify(field.selector)} is not on the page`);
 		if (before.state === "password") return failed(`${JSON.stringify(field.selector)} is a password field, which a publish never reads back; log in with browser_act or browser_task`);
 		if (before.state === "not-editable") return failed(`${JSON.stringify(field.selector)} is not an input, textarea or editable element`);
+		if (guard !== undefined) await guard();
+		guard?.assertCurrent();
 		try {
-			await driver.fill(field.selector, field.value);
+			await driver.fill(field.selector, field.value, guard);
 		} catch (error) {
 			return failed(`typing into ${JSON.stringify(field.selector)} failed: ${describe(error)}`);
 		}
+		if (guard !== undefined) await guard();
+		guard?.assertCurrent();
 		const after = await driver.readField(field.selector).catch(() => null);
+		guard?.assertCurrent();
 		if (after?.state !== "value" || after.value !== field.value) {
 			return failed(`field-mismatch: ${JSON.stringify(field.selector)} does not read back the exact value typed`);
 		}
 	}
 	// Where the human is about to be shown the values: this tab, this URL. Confirm submits only there.
+	if (guard !== undefined) await guard();
+	guard?.assertCurrent();
 	const shown = await driver.state().catch(() => null);
+	guard?.assertCurrent();
 	if (!shown || originOf(shown.url) !== recipe.origin) {
 		return { status: "failed", url: shown?.url ?? url, profile, error: `the tab left ${recipe.origin} while typing; nothing was submitted` };
 	}
@@ -294,25 +314,31 @@ export function requirePending(publication: Publication | null, publishId: strin
  * Re-verify, click submit exactly once, read the receipt. Always settles the
  * publication; never throws for a page outcome.
  */
-export async function confirm(driver: EngineDriver, publication: Publication): Promise<void> {
+export async function confirm(driver: EngineDriver, publication: Publication, guard?: EffectGuard): Promise<void> {
 	publication.confirming = true;
 	const { recipe } = publication;
+	let submitDispatched = false;
 	try {
 		// The human used the page while waiting and may have pressed the site's own
 		// submit; a site that keeps the text afterwards would look unchanged, so a
 		// click here could post twice. Never click: report it honestly instead.
 		if (publication.touchedWhilePending) return settle(publication, "unknown", { error: TOUCHED_ERROR });
-		const changed = await changedSinceShown(driver, publication);
+		const changed = await changedSinceShown(driver, publication, guard);
+		guard?.assertCurrent();
 		if (changed) {
 			if (publication.sharedPage) return settle(publication, "unknown", { error: SHARED_ERROR });
 			return settle(publication, "failed", { error: `changed since shown: ${changed}; nothing was submitted` });
 		}
 		// What already looks like a receipt is not one: it predates this submit.
-		const before = new Set(await receipts(driver, recipe).catch(() => []));
+		const before = new Set(await receipts(driver, recipe, guard).catch(() => []));
+		if (guard !== undefined) await guard();
+		guard?.assertCurrent();
 		try {
-			await driver.perform({ kind: "click", selector: recipe.submit });
+			submitDispatched = true;
+			await driver.perform({ kind: "click", selector: recipe.submit }, undefined, guard);
 		} catch (error) {
 			if (error instanceof ActionNotDispatched) {
+				submitDispatched = false;
 				const unsure = unsureError(publication);
 				if (unsure) return settle(publication, "unknown", { error: unsure });
 				return settle(publication, "failed", { error: `submit was not clicked: ${describe(error)}; nothing was submitted` });
@@ -321,25 +347,35 @@ export async function confirm(driver: EngineDriver, publication: Publication): P
 		}
 		const deadline = Date.now() + RECEIPT_WAIT_MS;
 		while (Date.now() < deadline) {
-			const found = (await receipts(driver, recipe).catch(() => [])).find((url) => !before.has(url));
+			if (guard !== undefined) await guard();
+			guard?.assertCurrent();
+			const found = (await receipts(driver, recipe, guard).catch(() => [])).find((url) => !before.has(url));
+			guard?.assertCurrent();
 			if (found) return settle(publication, "posted", { url: found });
 			await sleep(POLL_MS);
 		}
 		settle(publication, "unknown", { error: "submitted, but no receipt was seen, so it may have posted; never retried" });
 	} catch (error) {
-		// Reached only by a fault outside the submit's own try: the click may have landed.
-		settle(publication, "unknown", { error: `publishing errored, so it may have posted; never retried (${describe(error)})` });
+		const unsure = unsureError(publication);
+		if (!submitDispatched && !unsure) settle(publication, "failed", { error: `publishing was refused before submit: ${describe(error)}; nothing was submitted` });
+		else settle(publication, "unknown", { error: unsure ?? `publishing errored, so it may have posted; never retried (${describe(error)})` });
 	}
 }
 
 /** Why the page no longer matches what the human was shown, or null. */
-async function changedSinceShown(driver: EngineDriver, publication: Publication): Promise<string | null> {
+async function changedSinceShown(driver: EngineDriver, publication: Publication, guard?: EffectGuard): Promise<string | null> {
 	try {
+		if (guard !== undefined) await guard();
+		guard?.assertCurrent();
 		const state = await driver.state();
+		guard?.assertCurrent();
 		if (state.activeTabId !== publication.record.tabId) return "another tab is active";
 		if (state.url !== publication.record.composeUrl) return `the tab is no longer on ${publication.record.composeUrl}`;
 		for (const field of publication.record.fields) {
+			if (guard !== undefined) await guard();
+			guard?.assertCurrent();
 			const read = await driver.readField(field.selector);
+			guard?.assertCurrent();
 			if (read.state !== "value" || read.value !== field.value) return `${JSON.stringify(field.selector)} no longer holds the value shown`;
 		}
 		return null;
@@ -353,10 +389,13 @@ async function changedSinceShown(driver: EngineDriver, publication: Publication)
  * recipe's template, in page order. Every link is read (bounded) and filtered
  * here, so a page cannot push the real receipt out of a small window.
  */
-async function receipts(driver: EngineDriver, recipe: Recipe): Promise<string[]> {
+async function receipts(driver: EngineDriver, recipe: Recipe, guard?: EffectGuard): Promise<string[]> {
+	if (guard !== undefined) await guard();
+	guard?.assertCurrent();
 	const candidates = recipe.receipt.linkSelector === undefined
 		? [(await driver.state()).url]
 		: await driver.linkHrefs(recipe.receipt.linkSelector, MAX_RECEIPT_LINKS);
+	guard?.assertCurrent();
 	return candidates.filter((url) => url.length <= MAX_URL_CHARS && isReceipt(url, recipe));
 }
 
@@ -432,8 +471,12 @@ function settle(publication: Publication, status: Exclude<PublishStatus, "awaiti
 // Small helpers
 // ---------------------------------------------------------------------------
 
-async function currentUrl(driver: EngineDriver): Promise<string> {
-	return (await driver.state().catch(() => null))?.url ?? "";
+async function currentUrl(driver: EngineDriver, guard?: EffectGuard): Promise<string> {
+	if (guard !== undefined) await guard();
+	guard?.assertCurrent();
+	const state = await driver.state().catch(() => null);
+	guard?.assertCurrent();
+	return state?.url ?? "";
 }
 
 function originOf(url: string): string | null {
