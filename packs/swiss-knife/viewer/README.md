@@ -69,10 +69,12 @@ person is browsing (scrolling, zooming, pinching, playing) again: a finger has n
 | Text, Markdown, PDF, Word, PowerPoint, Excel | **Comment** (`Ctrl+Alt+M`) | Comment (the one tool of a text) |
 | HTML page | **Pick**, **Whole page** | Pick, unless the page is over 2 MiB (below) |
 | Audio | **Moment** (`M`), **Stretch** (`I` then `O`) | nothing to arm: notes go on the waveform |
-| Video | **Moment**, **Stretch** · **Pin, Box, Circle, Arrow, Draw** · **Undo, Redo, Clear** | none: the bar says "Pick a tool to draw" |
+| Video | **Moment**, **Stretch** · **Pin, Box, Circle, Arrow, Draw** · **Undo, Redo, Clear** | none: pick a tool to draw |
 
-What a person adds is a **note** (the list is titled Notes), and the one send action is **Request edits**: it stages
-the request in the composer, and the person presses Enter in the chat.
+What a person adds is a **note** (the list is titled Notes). There is no send button and no row under the content: the
+notes stage themselves in the composer a moment after the person stops changing them, a chip there is the
+confirmation, and the person presses Enter in the chat. A warning or a refusal floats over the bottom of the pane;
+removing every note takes the staged request back.
 
 ## Picking on a page (doc 88)
 

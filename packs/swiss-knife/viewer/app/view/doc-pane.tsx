@@ -135,7 +135,7 @@ export function DocPane({ app, tab, active, theme }: DocPaneProps) {
 	const copyAction = { label: copied ? "Path copied" : "Copy path", onClick: copy };
 
 	return (
-		<div className={active ? "flex h-full min-h-0 flex-col" : "hidden"} data-slot="viewer-pane" data-key={tab.key} data-annotate={modeShown ?? undefined}>
+		<div className={active ? "relative flex h-full min-h-0 flex-col" : "hidden"} data-slot="viewer-pane" data-key={tab.key} data-annotate={modeShown ?? undefined}>
 			<Toolbar
 				filename={tab.filename}
 				path={tab.path}
