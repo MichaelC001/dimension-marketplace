@@ -4,7 +4,7 @@
  *  the tool (doc 77 §7.9: the model set at or under 1,711 tokens, o200k).
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -147,19 +147,31 @@ describe("what the model is made to read", () => {
     expect(countTokens(BROWSER_RUN_DESCRIPTION)).toBeLessThanOrEqual(1_089);
   });
 
-  test("a code-space model that meets a saved profile is told the same way out by the prompt and by the refusal: say so, and open it for the person with browser_view, a tool its space has", async () => {
+  /** Everything a code-space model is told about a saved profile, wherever it meets it: the tool's text, the refusal a cell is answered with, and the skill's reference for the code tool. */
+  const savedProfileTexts = (): Record<string, string> => ({
+    description,
+    refusal: savedProfileRefusal("work"),
+    "skills/browser/references/code.md": readFileSync(new URL("../skills/browser/references/code.md", import.meta.url), "utf8"),
+  });
+
+  test("every tool the saved-profile instructions tell a code-space model to call is a tool its space is offered", async () => {
     const offered = (await modelTools()).map(tool => tool.name);
-    const prompt = lineStartingWith("- Static public page?");
-    const refusal = savedProfileRefusal("work");
-    for (const text of [prompt, refusal]) {
-      expect(text).toMatch(/tell the user/i);
-      expect(text).toContain("browser_view");
-      expect(text).toMatch(/profile/);
+    for (const [where, text] of Object.entries(savedProfileTexts())) {
+      for (const name of identifiers(text, /\b(browser_\w+)\b/g)) expect(offered, `${where} names ${name}`).toContain(name);
     }
-    expect(offered).toContain("browser_view");
-    // The refusal names the profile it was asked for, so the call it suggests can be made as it stands, and says what code can do meanwhile.
-    expect(refusal).toContain('browser_view({ profile: "work" })');
-    expect(refusal).toContain("throwaway");
-    expect(refusal).toContain("relay: true");
+  });
+
+  test("the description, the refusal and the skill send the model down the same route for a saved profile: an argument browser_run really has", async () => {
+    await connected;
+    const run = (await client.listTools()).tools.find(tool => tool.name === "browser_run");
+    const route = "profileTool";
+    expect(Object.keys(run?.inputSchema.properties ?? {})).toContain(route);
+    for (const [where, text] of Object.entries(savedProfileTexts())) expect(text, where).toContain(route);
+  });
+
+  test("nothing the model reads claims that code cannot use a saved profile: a cell runs as the user with full Node, which the person's approval does not limit", () => {
+    // The shape of the claim, not its words: a saved profile, "cannot" and code/cell in one sentence, either way round, or "no code cell can ...".
+    const claim = /\bsaved profiles?\b[^.]*\b(?:cannot|can't)\b[^.]*\b(?:code|cell)\b|\b(?:code|cell)\b[^.]*\b(?:cannot|can't)\b[^.]*\bsaved profiles?\b|\bno [\w ]*(?:code|cell)[\w ]* can\b[^.]*\bsaved profile/i;
+    for (const [where, text] of Object.entries(savedProfileTexts())) expect(text, where).not.toMatch(claim);
   });
 });

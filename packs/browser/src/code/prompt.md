@@ -6,7 +6,8 @@ Changed for the Browser pack: Python lines removed, Eval renamed to browser_run,
 Drive real Chromium tabs by running JavaScript with the global `browser` object; pass `code`.
 
 <instruction>
-- Static public page? Use `browser_read`. Use `browser_run` for interaction, JavaScript execution and logged-in pages. Saved profiles are refused; tell the user to use one in `browser_view({ profile })`.
+- Static public page? Use `browser_read`. Use `browser_run` for interaction, JavaScript execution and logged-in pages.
+- Saved profile: `browser.open({ profile })` is refused; pass `profileTool` instead of `code`/`resume` (its `kind`s are in the schema). `open` is refused until the person approves it in the Browser profile menu; retry once they allow. `act` takes `actions` like `{ kind: "navigate", url }`, `click`, `type`, `press`, `scroll`, `wait`. The approval covers these tools; a code cell runs as the user with full Node. The person can also open it in the Browser View (`browser_view({ profile })`).
 - `await browser.open(options)` returns a `BrowserTab`; `browser.tab(name)` returns an existing handle; `await browser.close(options)` releases tabs.
 - `open` options: `name` (default `main`), `url`, `app`, `viewport`, `wait_until`, `dialogs`, `timeout`, `persist`. `close` options: `name`, `all`, `kill`, `timeout`.
 - Direct tab helpers:

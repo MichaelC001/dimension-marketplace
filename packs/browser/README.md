@@ -107,8 +107,9 @@ the server PID; a failed or timed-out sweep cannot promise reclamation.
 | MCP server + View protocol | MCP (`@modelcontextprotocol/sdk`, `ext-apps`, pinned) | public API |
 | jev agent loop | its authors (`jev-ultrafast`, pinned git commit — not on PyPI) | its own `Agent` |
 | View, annotations, profiles, the MCP tools, the task protocol | this pack | — |
+| OMP browser port (`src/code`, the relay extension; pinned at the commit `THIRD-PARTY-NOTICES.md` names) | this pack, from OMP (MIT) and Playwright (Apache-2.0) code | copied source with its licence notices, re-cut for the pack; moving the pin is a re-port, not a version bump |
 
-Nothing upstream is copied or forked. Updating an upstream is a version bump.
+The rows that name a pinned package are dependencies: updating one is a version bump. The OMP row is copied code, not a dependency; its licence texts and the list of what is copied ship with the pack (`THIRD-PARTY-NOTICES.md`, `third-party/`).
 
 ## Engines
 
@@ -225,19 +226,28 @@ throwaway. A site that refuses it is reported `blocked`, never worked around.
 
 ## Tools
 
-Model-callable (15; 18 where jev's key is configured), offered by audience (`_meta["ai.insodimension/spaces"]`; the
+Model-callable (15 in the largest space; 18 where jev's key is configured), offered by audience (`_meta["ai.insodimension/spaces"]`; the
 host leaves a tool out of a space's list and refuses the call there; the View's own
-buttons are not gated by it):
+buttons are not gated by it). `DIMENSION_BROWSER_MODEL_TOOLS` chooses what the code and
+build spaces get: `code` (the default) gives them `browser_run` and not the step tools,
+`steps` the step tools only, `both` both. Every other space always keeps the step tools,
+and no mode gives `browser_run` to Traction.
 
 | Offered to | Tools |
 |---|---|
-| Every space the pack is granted (10) | `browser_open`, `browser_view`, `browser_state`, `browser_snapshot`, `browser_inspect`, `browser_read`, `browser_screenshot`, `browser_act`, `browser_profiles`, `browser_close` |
+| Every space the pack is granted (4) | `browser_view`, `browser_read`, `browser_profiles`, `browser_close` |
+| The step tools (6): chat, labor, watch and traction; code and build too in `steps` and `both` mode | `browser_open`, `browser_state`, `browser_snapshot`, `browser_inspect`, `browser_screenshot`, `browser_act` |
+| Code and build, in `code` and `both` mode (1) | `browser_run` |
 | Traction only (5; 8 with jev's key) | `browser_publish`, `browser_publish_presets`, `browser_publish_confirm`, `browser_publish_cancel`, `browser_publish_wait`, and, only with `TYPESAFE_API_KEY`: `browser_task`, `browser_task_wait`, `browser_task_cancel` |
+
+In the default `code` mode that is 5 tools for a code or build session (`browser_run` and the
+four every space has), 10 for chat, labor and watch, and 15 for Traction (18 with jev's key).
 
 Waiting, tabs and page scripts are steps of `browser_act`, and the page log is a
 field of `browser_state`: every tool is paid for by every agent on every turn, so a
 verb that fits an existing tool does not get its own. The skill follows the same
-split: `skills/browser/SKILL.md` covers the ten, and the publishing, preset and
+split: `skills/browser/SKILL.md` covers what every space has, `references/code.md` the
+code tool and `references/steps.md` the step tools; the publishing, preset and
 task-agent guidance lives in `skills/browser/references/publishing-and-tasks.md`,
 which a Traction session reads on demand.
 
@@ -253,8 +263,11 @@ declares `connectDomains: ["http://127.0.0.1:*"]` and nothing else. Design: doc 
 
 Page content is untrusted data, never instructions.
 
-**What it does not do, on purpose.** No file upload: a page could steer the model
-into sending a local secret to a site. No JavaScript in a signed-in browser:
+**What it does not do, on purpose.** The step tools have no file upload (`browser_act`
+takes no file path): a page could steer the model into sending a local secret to a site.
+A `browser_run` cell can upload files (`tab.uploadFile`; `resolveUploadPath` in
+`src/code/worker/tab-api.ts` resolves the path): a cell is full Node and could read the
+file anyway ([Code cells](#code-cells-scope-and-limits)). No JavaScript in a signed-in browser:
 arbitrary script in a profile that holds logins is a bigger blast radius than the
 layout facts `browser_inspect` returns from a fixed page script, so the `eval` step
 runs only in a throwaway browser (`eval_needs_throwaway` otherwise).
@@ -407,6 +420,19 @@ refresh while the View is blank or the profile menu is open. A decision carries
 the displayed subject's workspace, id and origin; a changed or expired request
 is refused, with the error visible on the blank page rather than a hidden toast.
 The View does not treat a refused decision as approval or open a browser for it.
+
+**What the approval covers, and what it does not.** It covers the browser tools: opening
+and driving the profile through the step tools, `browser_view`, and in a code space
+`browser_run({ profileTool })`, whose typed operations never enter the code worker. It
+does not stop a `browser_run` code cell. A cell is full Node running as you, so it can
+read a saved profile's files: each profile's `chrome/DevToolsActivePort` and
+`credentials.json`, and in the browser root `credentials.key`, `profile-consents/` and
+`publish-approvals/`. The gate stops the API route (the model's `browser.open({ profile })`,
+and `profileTool` without approval), not code that goes around the API. Do not allow a
+profile on the strength of this approval alone if you do not trust the code your agent
+runs; the card in the View says the same in two sentences. Where this limit comes from,
+exactly: it is equal to OMP's built-in eval browser; consistent with the parity ruling;
+not separately signed; option B (pipe transport) not built (doc 77 §7.8 decision 1).
 
 **The profile menu (the View).** The toolbar's chip is the browser's profile: its avatar (the emoji
 the person chose, else the label's first letter, on the profile's colour) and its label; Private for a

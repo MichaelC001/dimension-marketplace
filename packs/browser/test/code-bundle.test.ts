@@ -22,6 +22,7 @@ const PACK = fileURLToPath(new URL("..", import.meta.url));
 const NODE = process.env.BROWSER_TEST_NODE ?? Bun.which("node");
 /** Whether this Node can read a worker's own memory (`Worker.getHeapStatistics()`, Node 22.16+ and 24). Without it the watchdog reads the whole process: the commit charge on Windows (through a helper), the resident set elsewhere. */
 const WORKER_MEMORY_IS_OWN = NODE !== null && spawnSync(NODE, ["-p", "typeof require('node:worker_threads').Worker.prototype.getHeapStatistics"], { encoding: "utf8" }).stdout.trim() === "function";
+if (NODE === null) console.warn("[browser tests] the built-bundle tests are SKIPPED, not passed: needs a `node` on the PATH (or BROWSER_TEST_NODE=<path to node>)");
 const describeBundle = chromePath === undefined || NODE === null ? describe.skip : describe;
 
 let pages: Pages;

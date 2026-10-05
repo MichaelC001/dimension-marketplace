@@ -123,6 +123,7 @@ export function ProfileConsents({ consents, onConsent, menu = false }: Pick<Prof
 				<div className="bx-pmenu-control bx-consent" key={`${request.name}:${request.scope}`}>
 					<span className="bx-pmenu-control-text">
 						{request.status === "granted" ? request.scope === "loop" ? `${request.loopLabel} has standing access` : "This chat has access" : "Agent requests access"} to {request.label}: {request.sites.filter(site => site.signedIn === true).map(site => `${site.site}${site.account ? ` (${site.account})` : ""}`).join(", ") || "No observed sign-ins"}
+						{request.status === "pending" && ". Allow lets the agent's browser tools use this profile. Code the agent runs on this machine acts as you and can read the profile's files; this approval does not stop that."}
 					</span>
 					{request.status === "pending" ? (
 						<>

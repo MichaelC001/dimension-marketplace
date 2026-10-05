@@ -12,8 +12,8 @@ import { ToolAbortError } from "./errors.js";
 import promptText from "./prompt.md";
 import { saveSpill, sessionFolder } from "./spill.js";
 
-/** What the model reads: OMP's `browser.md` as the pack ports it, without the licence comment that heads the file. */
-export const BROWSER_RUN_DESCRIPTION = `${promptText.replace(/^<!--[\s\S]*?-->\s*/, "").trim()}\n\nSaved profiles cannot be driven by code. Use profileTool (instead of code/resume): {kind:"open",profile,url?}, then {kind:"state"|"snapshot"|"screenshot"|"inspect"|"act"|"close",browserId,...}. act takes the same ordinary browser_act actions; screenshot takes fullPage/selector/scale; inspect takes selector. A saved profile already on disk needs the person's approval in the Browser profile menu for this chat before it opens; a refusal leaves a pending request. The person sees the exact profile and observed sign-ins. Retry only after they allow. No browser_run code cell can use a saved profile.`;
+/** What the model reads: OMP's `browser.md` as the pack ports it, without the licence comment that heads the file. prompt.md is the one place it says how a saved profile is reached (`profileTool`), and what the person's approval covers. */
+export const BROWSER_RUN_DESCRIPTION = promptText.replace(/^<!--[\s\S]*?-->\s*/, "").trim();
 
 /** The host times an MCP call out at 30 s and does not reset the timer on progress (doc 77 §7.8, settled by L1); a call waits at most this long. */
 export const RUN_WAIT_CAP_MS = 25_000;

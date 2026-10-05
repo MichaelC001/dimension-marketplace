@@ -47,8 +47,8 @@ test("a held code call publishes only its latest browser picture status before c
 	expect(final._meta).toEqual({ "ai.insodimension/preview": { source: { kind: "browser", browserId: "newer" }, profile: "throwaway" } });
 	callback?.("after-final");
 	latePreview.resolve({ source: { kind: "browser", browserId: "after-final" } });
-	await Promise.resolve();
-	await Promise.resolve();
+	// The late picture's handler runs several microtasks after the resolve (preview is an async function, then `.then`): a macrotask turn lets all of them run, so a leak would be in `notifications` by now.
+	await new Promise<void>(resolve => setImmediate(resolve));
 	expect(notifications).toHaveLength(1);
 });
 

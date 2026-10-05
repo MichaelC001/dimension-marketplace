@@ -29,6 +29,7 @@ function workingPython(): string | undefined {
 }
 
 const PYTHON = workingPython();
+if (PYTHON === undefined) console.warn("[browser tests] the code-host task freeze tests are SKIPPED, not passed: needs a Python that can import `websockets` (the pack's python/.venv, DIM_BROWSER_PYTHON, or python3/python on the PATH)");
 const describeTasks = chromePath === undefined || PYTHON === undefined ? describe.skip : describe;
 
 /** The code host's port onto the runtime, with every freeze and thaw it is asked for written down. */
