@@ -1,7 +1,7 @@
 import { Button, Input, Pill, useObservable } from "@fraym/ui";
 import { useEffect, useMemo, useState } from "react";
 import { jsx, jsxs } from "react/jsx-runtime";
-//#region ../inso-browser-one-tool-dock-profiles-browser-r13-engine/marketplace/packs/.browser-completion-proof/src/address.ts
+//#region src/address.ts
 var LOCAL_HOST = /^(localhost|127(?:\.\d{1,3}){3}|\[::1\]|0\.0\.0\.0)(:\d{1,5})?(\/|$)/i;
 var IPV4_HOST = /^\d{1,3}(?:\.\d{1,3}){3}(:\d{1,5})?(\/|$)/;
 /** `name.tld` with an optional port and path — the shape an address has
@@ -55,7 +55,7 @@ function guessAddress(raw) {
 	}
 }
 //#endregion
-//#region ../inso-browser-one-tool-dock-profiles-browser-r13-engine/marketplace/packs/.browser-completion-proof/src/profile-name.ts
+//#region src/profile-name.ts
 /**
 * The profile-name grammar — the ONE rule every door that takes a profile name
 * applies: the MCP tools' input schema (server.ts), the runtime's filesystem
@@ -100,7 +100,7 @@ function checkProfileName(raw) {
 	};
 }
 //#endregion
-//#region ../inso-browser-one-tool-dock-profiles-browser-r13-engine/marketplace/packs/.browser-completion-proof/src/profile-meta.ts
+//#region src/profile-meta.ts
 /**
 * What a person calls a saved profile, and how a profile's sign-in observations
 * are read — the ONE rule the agent's list (`browser_profiles`), the host
@@ -164,7 +164,7 @@ function effectiveSignedIn(signedIn, observedAt, now) {
 	return signedIn !== null && age >= -6e4 && age <= 6048e5 ? signedIn : null;
 }
 //#endregion
-//#region ../inso-browser-one-tool-dock-profiles-browser-r13-engine/marketplace/packs/.browser-completion-proof/src/profile-look.ts
+//#region src/profile-look.ts
 /** OKLCH hue (degrees) and chroma of each named colour. */
 var PROFILE_LOOK = {
 	blue: {
@@ -269,22 +269,22 @@ function observedAgo(at, now) {
 	return `${Math.round(hours / 24)}d ago`;
 }
 //#endregion
-//#region ../inso-browser-one-tool-dock-profiles-browser-r13-engine/marketplace/packs/.browser-completion-proof/recipes/bluesky-post.json
+//#region recipes/bluesky-post.json
 var platform$2 = "Bluesky";
 var origin$3 = "https://bsky.app";
 //#endregion
-//#region ../inso-browser-one-tool-dock-profiles-browser-r13-engine/marketplace/packs/.browser-completion-proof/recipes/linkedin-post.json
+//#region recipes/linkedin-post.json
 var platform$1 = "LinkedIn";
 var origin$2 = "https://www.linkedin.com";
 //#endregion
-//#region ../inso-browser-one-tool-dock-profiles-browser-r13-engine/marketplace/packs/.browser-completion-proof/recipes/reddit-comment.json
+//#region recipes/reddit-comment.json
 var platform = "Reddit";
 var origin$1 = "https://www.reddit.com";
 //#endregion
-//#region ../inso-browser-one-tool-dock-profiles-browser-r13-engine/marketplace/packs/.browser-completion-proof/recipes/x-post.json
+//#region recipes/x-post.json
 var origin = "https://x.com";
 //#endregion
-//#region ../inso-browser-one-tool-dock-profiles-browser-r13-engine/marketplace/packs/.browser-completion-proof/src/dock/sites.ts
+//#region src/dock/sites.ts
 /** `connection.ts` keys a site by its registrable domain (tldts). Every preset
 *  origin is either that domain or its `www.` host, so dropping the `www.`
 *  yields the same key without shipping the Public Suffix List into the page. */
@@ -317,7 +317,7 @@ function signInUrl(host) {
 	return BY_HOST.get(host)?.loginUrl ?? `https://${host}/`;
 }
 //#endregion
-//#region ../inso-browser-one-tool-dock-profiles-browser-r13-engine/marketplace/packs/.browser-completion-proof/src/dock/browser-accounts.tsx
+//#region src/dock/browser-accounts.tsx
 var NONE = {
 	getSnapshot: () => void 0,
 	subscribe: () => () => {}
