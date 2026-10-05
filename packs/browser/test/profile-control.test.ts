@@ -735,7 +735,11 @@ describeTasks("taking over while a task runs", () => {
 		async () => {
 			const r = await rig();
 			const id = (await open(r, VIEW_OF_CHAT, { profile: "tasked" })).browserId;
-			const running = await r.call("browser_task", { browserId: id, task: JSON.stringify({ steps: [{ action: "thinking", url: "" }], hold: true }), waitSeconds: 0 }, CHAT);
+			const taskArgs = { browserId: id, task: JSON.stringify({ steps: [{ action: "thinking", url: "" }], hold: true }), waitSeconds: 0 };
+			// The chat's agent may not start a task on a saved profile the person opened until the person approves it for the chat.
+			expect(refusal(await r.call("browser_task", taskArgs, CHAT))).toContain("approve access to profile");
+			expect((await r.call("browser_profile_consent", { name: "tasked", decision: "allow", scope: "chat" }, VIEW_OF_CHAT)).isError).toBeFalsy();
+			const running = await r.call("browser_task", taskArgs, CHAT);
 			expect(running.structuredContent).toMatchObject({ status: "running" });
 
 			expect(await r.runtime.leave(id, "app")).toEqual({ closed: false });
@@ -751,6 +755,9 @@ describeTasks("taking over while a task runs", () => {
 		async () => {
 			const r = await rig();
 			const id = (await open(r, VIEW_OF_CHAT, { profile: "tasked" })).browserId;
+			// The person approves the profile for the chat first (the agent's first look raises the request): only then may its task start.
+			expect(refusal(await r.call("browser_state", { browserId: id }, CHAT))).toContain("approve access to profile");
+			expect((await r.call("browser_profile_consent", { name: "tasked", decision: "allow", scope: "chat" }, VIEW_OF_CHAT)).isError).toBeFalsy();
 			// Hold the task's first look at the page, so the start is provably in flight (the seam of the test above).
 			const seam = r.runtime as unknown as { byId: Map<string, { driver: { state(): Promise<unknown> } }> };
 			const entryOf = seam.byId.get(id);
