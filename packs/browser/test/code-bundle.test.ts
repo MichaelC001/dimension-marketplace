@@ -33,7 +33,9 @@ beforeAll(async () => {
   out = mkdtempSync(join(tmpdir(), "dimension-browser-bundle-"));
   // The shipped layout: the bundles and the built View in app/, the presets beside it, the packages above.
   const app = join(out, "app");
-  const bundle = { bundle: true, platform: "node", format: "esm", target: "node22", packages: "external", sourcemap: false, loader: { ".txt": "text", ".md": "text" } } as const;
+  // Exactly scripts/build.mjs's options: the declared runtime packages stay external (they install beside the pack); the SDK authoring surface (a workspace package whose exports are TypeScript source here) is bundled, so Node never has to run it.
+  const pkg = JSON.parse(readFileSync(join(PACK, "package.json"), "utf8")) as { dependencies: Record<string, string> };
+  const bundle = { bundle: true, platform: "node", format: "esm", target: "node22", external: Object.keys(pkg.dependencies), sourcemap: false, loader: { ".txt": "text", ".md": "text" } } as const;
   await build({ ...bundle, entryPoints: [join(PACK, "src/stdio.ts")], outfile: join(app, "server.mjs"), logLevel: "silent" });
   await build({ ...bundle, entryPoints: [join(PACK, "src/code/worker/entry.ts")], outfile: join(app, "code-worker.mjs"), logLevel: "silent" });
   cpSync(join(PACK, "app/dist"), join(app, "dist"), { recursive: true });

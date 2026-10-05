@@ -159,3 +159,30 @@ describeWithChrome("a saved profile's browser asks for the host stamp before it 
 		await runtime.close(browserId, "app");
 	}, BROWSER_TEST_TIMEOUT_MS);
 });
+
+describeWithChrome("a saved profile's consent check refuses a browser that is gone the way every other call does", () => {
+	// The Browser View reads this phrase as "gone for good" (app/view/use-browser-stream.ts), and the agent is told why a browser it held is gone.
+	const VIEW_GONE = /unknown or already closed browserId/i;
+	const BARE_REFUSAL = "unknown or already closed browserId";
+
+	test("an id the runtime never held is refused in the View's gone phrase alone, and an id it closed carries the recorded reason after it", async () => {
+		const runtime = await runtimeWithSavedProfile();
+		const accesses: Array<[string, (browserId: string) => void]> = [
+			["the person's profile access", (browserId) => runtime.requireProfileAccess(browserId, "app")],
+			["a stamped model's profile access", (browserId) => runtime.requireProfileAccess(browserId, "model", SESSION)],
+			["a stamped model's saved-profile access", (browserId) => runtime.requireSavedProfileAccess(browserId, "model", SESSION)],
+		];
+		const { browserId } = await runtime.open({ profile: "work" }, { caller: "app" });
+		// The person moves to another profile in the View: the runtime closes this browser and records why.
+		expect(await runtime.leave(browserId, "app")).toEqual({ closed: true });
+
+		for (const [name, access] of accesses) {
+			expect(refusalOf(() => access("never-opened")), name).toEqual({ code: "unknown_browser", message: BARE_REFUSAL });
+
+			const closed = refusalOf(() => access(browserId));
+			expect(closed.code, name).toBe("unknown_browser");
+			expect(closed.message, name).toMatch(VIEW_GONE);
+			expect(closed.message, name).toContain("left it for another profile");
+		}
+	}, BROWSER_TEST_TIMEOUT_MS);
+});

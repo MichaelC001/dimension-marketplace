@@ -77,6 +77,8 @@ const CHAT: Who = { caller: "model", session: "s-chat" };
 const VIEW_OF_CHAT: Who = { caller: "app", session: "s-chat" };
 /** Another chat. */
 const OTHER_CHAT: Who = { caller: "model", session: "s-other" };
+/** The View in that other chat's seat: the person approving a profile for it. */
+const VIEW_OF_OTHER: Who = { caller: "app", session: "s-other" };
 
 const PageState = z.object({
 	browserId: z.string(),
@@ -340,11 +342,20 @@ describeWithChrome("taking a browser over in the View", () => {
 				["browser_close", { browserId: id }],
 				["browser_task", { browserId: id, task: "do something", waitSeconds: 0 }],
 			];
-			for (const who of [CHAT, OTHER_CHAT, undefined]) {
+			// A chat the person has not approved for this profile is refused by the consent gate whatever the wheel says, and nothing is asked of the page.
+			expect(refusal(await r.call("browser_act", moves[0]![1], OTHER_CHAT))).toContain("approve access to profile");
+			expect(refusal(await r.call("browser_act", moves[0]![1], undefined))).toContain("host-stamped");
+			// Once the person approves the profile for it, the other chat meets the same wheel as the chat that opened the browser.
+			expect((await r.call("browser_profile_consent", { name: "work", decision: "allow", scope: "chat" }, VIEW_OF_OTHER)).isError).toBeFalsy();
+			for (const who of [CHAT, OTHER_CHAT]) {
 				for (const [name, args] of moves) {
 					const text = refusal(await r.call(name, args, who));
 					expect({ name, who: who?.session, text: text.includes(TOOK_OVER) }).toEqual({ name, who: who?.session, text: true });
 				}
+			}
+			// A call that carries no host stamp is refused for what it is, every way an agent drives the page.
+			for (const [name, args] of moves) {
+				expect({ name, text: refusal(await r.call(name, args, undefined)).includes("host-stamped") }).toEqual({ name, text: true });
 			}
 			// The same refusal at each runtime entry point, as a code.
 			const navigateStep = { kind: "navigate", url: r.fixture.url("/show-cookie") } as const;
@@ -393,8 +404,8 @@ describeWithChrome("taking a browser over in the View", () => {
 			await navigate(r, CHAT, id, "/show-cookie");
 			expect(r.fixture.hits("/show-cookie")).toBe(2);
 			expect((await stateAs(r, CHAT, id)).agentActionAt).toBeGreaterThan(working.agentActionAt ?? Infinity);
-			// Still held by the same seat throughout: nobody else got in while it was the person's.
-			expect(await failureCode(() => r.runtime.open({ profile: "work" }, { caller: "model", session: "s-other" }))).toBe("profile_consent_required");
+			// Still held by the same seat throughout: nobody else got in while it was the person's. The other chat is approved for the profile by now, so what keeps it out is the hold, not the consent gate.
+			expect(await failureCode(() => r.runtime.open({ profile: "work" }, { caller: "model", session: "s-other" }))).toBe("profile_held");
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);
@@ -872,6 +883,9 @@ describeWithChrome("leaving a browser for another profile in the View", () => {
 			const site = startPublishFixture();
 			publishFixtures.push(site);
 			const id = (await open(r, VIEW_OF_CHAT, { profile: "pub" })).browserId;
+			// The chat's agent may not drive a saved profile the person opened until the person approves it for the chat.
+			expect(refusal(await r.call("browser_act", { browserId: id, actions: [{ kind: "navigate", url: site.url("/login") }] }, CHAT))).toContain("approve access to profile");
+			expect((await r.call("browser_profile_consent", { name: "pub", decision: "allow", scope: "chat" }, VIEW_OF_CHAT)).isError).toBeFalsy();
 			expect((await r.call("browser_act", { browserId: id, actions: [{ kind: "navigate", url: site.url("/login") }] }, CHAT)).isError).toBeFalsy();
 			await approve(r, recipe(site), "pub");
 			const parked = await r.call("browser_publish", { browserId: id, recipe: recipe(site), mode: "post" }, CHAT);

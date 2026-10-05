@@ -739,10 +739,11 @@ describeWithChrome("a throwaway nobody calls", () => {
 			const rootDir = await createRoot();
 			const runtime = newRuntime(rootDir, { throwawayIdleMs: 2_000 });
 			const taken = await openThrowaway(runtime, rootDir, "s1");
+			// The person takes the wheel at once: finding a Chrome's pids and opening a second browser can outlast a 2 s idle clock on a slow machine, and a browser nobody holds for 2 s is rightly closed.
+			await runtime.control(taken.browserId, "take", "app");
 			const takenChrome = await chromeOf(rootDir, taken);
 			const quiet = await openThrowaway(runtime, rootDir, "s2");
 			const quietChrome = await chromeOf(rootDir, quiet);
-			await runtime.control(taken.browserId, "take", "app");
 
 			// The control first: the browser beside it, with the same silence, really is closed by the clock.
 			expect(await waitUntilGone(quietChrome.all, 15_000)).toEqual([]);
