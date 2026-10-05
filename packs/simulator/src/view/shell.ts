@@ -184,8 +184,9 @@ export function createShell(root: HTMLElement, handlers: ShellHandlers): Shell {
       panel.hidden = screen.kind === "device";
       if (screen.kind === "device") {
         const live = screen.notes.find(item => item.tool === "scrcpy-server");
-        note.hidden = live === undefined;
-        note.textContent = live === undefined ? "" : `Live video needs scrcpy-server, so this is Shot fallback (still pictures). ${live.fix}`;
+        const lines = [...(live === undefined ? [] : [`Live video needs scrcpy-server, so this is Shot fallback (still pictures). ${live.fix}`]), ...screen.bootNotes];
+        note.hidden = lines.length === 0;
+        note.textContent = lines.join(" ");
         return;
       }
       switch (screen.kind) {
@@ -212,7 +213,11 @@ export function createShell(root: HTMLElement, handlers: ShellHandlers): Shell {
           break;
         }
         case "booting":
-          showPanel(`Booting ${screen.avd}…`, [el("div", "sim-spinner", { role: "progressbar", "aria-label": "Booting" }), el("p", "sim-lede", {}, "A cold boot takes up to a minute. This pane opens the device the moment it is ready.")]);
+          showPanel(`Booting ${screen.avd}…`, [
+            el("div", "sim-spinner", { role: "progressbar", "aria-label": "Booting" }),
+            el("p", "sim-lede", {}, "A cold boot takes up to a minute. This pane opens the device the moment it is ready."),
+            ...screen.notes.map(line => el("p", "sim-lede sim-boot-note", { role: "status" }, line)),
+          ]);
           break;
       }
     },

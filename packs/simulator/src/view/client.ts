@@ -47,10 +47,11 @@ export class SimulatorClient {
     return list;
   }
 
-  /** Boot, or keep waiting for a boot already under way: the tool returns within its wait cap, and says whether it is done. */
-  async boot(avd: string): Promise<{ pending: boolean; device: DeviceInfo }> {
+  /** Boot, or keep waiting for a boot already under way: the tool returns within its wait cap, and says whether it is done. `device` is null while the emulator's serial is not known yet; `notes` is what the boot said about itself. */
+  async boot(avd: string): Promise<{ pending: boolean; device: DeviceInfo | null; notes: string[] }> {
     const value = structured("device_boot", await this.#app.callServerTool({ name: "device_boot", arguments: { avd, waitSeconds: 20 } }));
-    return { pending: value.pending === true, device: value.device as DeviceInfo };
+    const notes = Array.isArray(value.notes) ? value.notes.filter((note): note is string => typeof note === "string") : [];
+    return { pending: value.pending === true, device: (value.device ?? null) as DeviceInfo | null, notes };
   }
 
   async stop(serial: string): Promise<void> {

@@ -207,6 +207,10 @@ select {
 	color: var(--fr-del);
 	font-size: var(--fr-fs-sm);
 	white-space: pre-wrap;
+	/* A failed boot carries the end of the emulator's own log: long lines wrap, a long log scrolls. */
+	overflow-wrap: anywhere;
+	max-height: 40vh;
+	overflow-y: auto;
 }
 
 /* ── stage ──────────────────────────────────────────────────────────── */
@@ -341,6 +345,12 @@ select {
 	margin: 0 0 14px;
 	color: var(--fr-text-2);
 	line-height: 1.5;
+}
+
+/* What a boot says about itself while it runs (fell back to software graphics): not an error, but not to be missed. */
+.sim-boot-note {
+	color: var(--fr-warn);
+	font-size: var(--fr-fs-sm);
 }
 
 .sim-actions {

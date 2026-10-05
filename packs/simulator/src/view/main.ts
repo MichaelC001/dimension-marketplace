@@ -48,7 +48,7 @@ async function main(): Promise<void> {
   /** What the last boot or stop said went wrong; cleared by the next one. */
   let problem: string | null = null;
   let busy = false;
-  let selection: Selection = { serial: null, booting: null };
+  let selection: Selection = { serial: null, booting: null, notes: [] };
   let selectedAvd: string | null = null;
   let attached: string | null = null;
   let attachedPhysical = false;
@@ -127,23 +127,28 @@ async function main(): Promise<void> {
     if (client === null || busy) return;
     busy = true;
     problem = null;
-    selection = { ...selection, booting: name };
+    selection = { ...selection, booting: name, notes: [] };
     selectedAvd = null;
     render();
     const deadline = Date.now() + BOOT_BUDGET_MS;
     try {
       // The tool answers within its wait cap and says whether the device is up: ask again until it is.
+      // It is the SAME call an agent's device_boot makes, so a boot started here gets the same checks and the same words.
       for (;;) {
         const outcome = await client.boot(name);
-        if (!outcome.pending) {
-          selection = { serial: outcome.device.serial, booting: null };
+        if (!outcome.pending && outcome.device !== null) {
+          selection = { serial: outcome.device.serial, booting: null, notes: outcome.notes };
           break;
         }
+        // Said between polls, not only at the end: the person sees "fell back to software graphics" while it is happening.
+        selection = { ...selection, notes: outcome.notes };
+        render();
         if (Date.now() > deadline) throw new Error(`${name} did not finish booting in ${BOOT_BUDGET_MS / 60_000} minutes. Check the emulator, then press Check again.`);
       }
     } catch (error) {
+      // A failed boot says why, with the end of the emulator's own log (the tool's words, unchanged).
       problem = failureText(error);
-      selection = { ...selection, booting: null };
+      selection = { ...selection, booting: null, notes: [] };
     }
     busy = false;
     await refresh();
@@ -157,7 +162,7 @@ async function main(): Promise<void> {
     render();
     try {
       await client.stop(serial);
-      selection = { serial: null, booting: null };
+      selection = { serial: null, booting: null, notes: [] };
     } catch (error) {
       problem = failureText(error);
     }
