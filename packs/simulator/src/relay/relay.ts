@@ -50,6 +50,7 @@ export interface RelayOptions {
   readonly keyframeCooldownMs?: number;
   /** A token nobody is connected with expires after this. */
   readonly tokenIdleMs?: number;
+  readonly physicalRecheckMs?: number;
   readonly stream?: VideoStreamOptions;
   /** Longest edge of a Shot-mode picture. */
   readonly shotEdge?: number;
@@ -67,6 +68,10 @@ const GOP_CAP_BYTES = 1.5 * 1024 * 1024;
 const MAX_INPUT_BYTES = 8 * 1024;
 const ACTIVITY_EVERY_MS = 5_000;
 const MIN_SHOT_INTERVAL_MS = 120;
+const PHYSICAL_RECHECK_MS = 1_000;
+const SANDBOXED_VIEW_ORIGIN = "null";
+const STREAM_PATH = /^\/f\/([A-Za-z0-9_-]{16,64})(?:\?|$)/;
+const PHYSICAL_REVOKED_REASON = "driving a physical phone was turned off in settings (simulator.allowPhysical)";
 
 function mediaFrame(tag: FrameTag, seq: number, at: number, payload: Uint8Array): Buffer {
   const length = FRAME_HEADER_BYTES + payload.length;
@@ -84,7 +89,6 @@ interface Token {
   /** A phone, not an emulator: it streams and takes input only while the setting still allows it. */
   readonly physical: boolean;
   timer: NodeJS.Timeout | undefined;
-  sockets: number;
 }
 
 interface Down {
@@ -188,6 +192,7 @@ abstract class Producer {
 class H264Producer extends Producer {
   #state: "idle" | "starting" | "live" = "idle";
   #stream: VideoStream | null = null;
+  #generation = 0;
   #seq = 0;
   #sessionFrame: Buffer | null = null;
   #configFrame: Buffer | null = null;
@@ -214,15 +219,19 @@ class H264Producer extends Producer {
 
   #start(): void {
     this.#state = "starting";
+    const generation = ++this.#generation;
     const startedAt = this.hub.now();
     this.hub.log(`[sim] encoder start ${this.serial} (h264 max ${this.hub.options.stream.maxSize}px ${this.hub.options.stream.maxFps}fps ${(this.hub.options.stream.bitRate / 1e6).toFixed(1)}Mbps)`);
-    let stream: VideoStream | null = null;
     this.hub.backend
       .openStream(this.serial, this.hub.options.stream, {
-        session: size => this.#onSession(size),
-        packet: packet => this.#onPacket(packet),
+        session: size => {
+          if (this.#generation === generation) this.#onSession(size);
+        },
+        packet: packet => {
+          if (this.#generation === generation) this.#onPacket(packet);
+        },
         closed: (reason, deliberate) => {
-          if (stream !== null && this.#stream !== stream) return; // a replaced session's late close
+          if (this.#generation !== generation) return;
           this.#reset();
           if (!deliberate) {
             this.hub.log(`[sim] encoder lost ${this.serial}: ${reason}`);
@@ -231,19 +240,18 @@ class H264Producer extends Producer {
         },
       })
       .then(opened => {
-        if (this.#state !== "starting") {
-          // The encoder closed (or the producer was stopped) while it was still opening.
+        if (this.#generation !== generation) {
           void opened.close();
           return;
         }
-        stream = opened;
         this.#stream = opened;
         this.#state = "live";
         this.hub.log(`[sim] encoder live ${this.serial} in ${this.hub.now() - startedAt} ms`);
         if (this.viewers.size === 0) this.stopSource("viewers left during start");
       })
       .catch((error: unknown) => {
-        this.#state = "idle";
+        if (this.#generation !== generation) return;
+        this.#reset();
         const reason = error instanceof Error ? error.message : String(error);
         this.hub.log(`[sim] encoder start failed ${this.serial}: ${reason}`);
         this.endViewers(reason);
@@ -251,6 +259,7 @@ class H264Producer extends Producer {
   }
 
   #reset(): void {
+    this.#generation += 1;
     this.#state = "idle";
     this.#stream = null;
     this.#sessionFrame = null;
@@ -385,7 +394,8 @@ class ShotProducer extends Producer {
   protected onAttach(viewer: Viewer): void {
     if (this.#sessionFrame) this.offer(viewer, FrameTag.Session, this.#sessionFrame, () => undefined);
     if (this.#shotFrame) this.offer(viewer, FrameTag.Shot, this.#shotFrame, () => undefined);
-    if (!this.#running) void this.#loop();
+    if (this.#running) this.#stopped = false;
+    else void this.#loop();
   }
 
   protected stopSource(reason: string): void {
@@ -470,10 +480,14 @@ export class FrameRelay {
   #listening: Promise<number> | null = null;
   #port = 0;
   #nextViewer = 1;
+  readonly #physicalRecheckMs: number;
+  readonly #physicalViewers = new Map<Viewer, Producer>();
+  #physicalRecheck: NodeJS.Timeout | undefined;
 
   constructor(options: RelayOptions) {
     this.#opts = options;
     this.#tokenIdleMs = options.tokenIdleMs ?? 60_000;
+    this.#physicalRecheckMs = options.physicalRecheckMs ?? PHYSICAL_RECHECK_MS;
     this.#hub = {
       options: {
         stopGraceMs: options.stopGraceMs ?? 1_000,
@@ -523,7 +537,7 @@ export class FrameRelay {
     }
     const port = await this.#ensureListening();
     const token = randomBytes(24).toString("base64url");
-    const entry: Token = { serial, mode, physical: kind === "physical", timer: undefined, sockets: 0 };
+    const entry: Token = { serial, mode, physical: kind === "physical", timer: undefined };
     this.#tokens.set(token, entry);
     this.#armToken(token, entry);
     return { url: `ws://127.0.0.1:${port}/f/${token}`, mode, downgraded };
@@ -567,25 +581,34 @@ export class FrameRelay {
   }
 
   #upgrade(request: http.IncomingMessage, socket: net.Socket, head: Buffer): void {
+    socket.on("error", () => socket.destroy());
+    try {
+      this.#accept(request, socket, head);
+    } catch (error) {
+      this.#opts.log(`[sim] frames lane dropped an upgrade: ${error instanceof Error ? error.message : String(error)}`);
+      socket.destroy();
+    }
+  }
+
+  #accept(request: http.IncomingMessage, socket: net.Socket, head: Buffer): void {
     const refuse = (status: number, text: string): void => {
       socket.end(`HTTP/1.1 ${status} ${text}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
     };
     // Host and Origin first: a page that is not ours learns nothing about which tokens exist.
     if (request.headers.host !== `127.0.0.1:${this.#port}`) return refuse(403, "Forbidden");
     const origin = request.headers.origin;
-    if (origin !== undefined && origin !== "null") return refuse(403, "Forbidden");
-    const path = /^\/f\/([A-Za-z0-9_-]{16,64})$/.exec(new URL(request.url ?? "/", "http://127.0.0.1").pathname);
-    const token = path?.[1];
+    if (origin !== undefined && origin !== SANDBOXED_VIEW_ORIGIN) return refuse(403, "Forbidden");
+    const token = STREAM_PATH.exec(request.url ?? "")?.[1];
     const entry = token === undefined ? undefined : this.#tokens.get(token);
     if (request.method !== "GET" || token === undefined || entry === undefined) return refuse(404, "Not Found");
-    if (entry.physical && !this.#opts.physicalPermitted()) return refuse(403, "Forbidden");
+    if (entry.physical && !this.#physicalAllowed()) return refuse(403, "Forbidden");
     const key = request.headers["sec-websocket-key"];
     if (request.headers.upgrade?.toLowerCase() !== "websocket" || request.headers["sec-websocket-version"] !== "13" || !validClientKey(key)) return refuse(400, "Bad Request");
 
     socket.write(handshakeResponse(key));
+    this.#tokens.delete(token);
     clearTimeout(entry.timer);
     entry.timer = undefined;
-    entry.sockets += 1;
 
     const producerKey = `${entry.serial}|${entry.mode}`;
     let producer = this.#producers.get(producerKey);
@@ -603,10 +626,8 @@ export class FrameRelay {
           if (viewer === null) return;
           const input = parseInputMessage(message);
           if (input === null) return;
-          if (entry.physical && !this.#opts.physicalPermitted()) {
-            // The person turned the setting off while this pane was open: stop acting on the phone, and say why.
-            viewer.peer.sendText(JSON.stringify({ t: "ended", reason: "driving a physical phone was turned off in settings (simulator.allowPhysical)" }));
-            viewer.peer.close(WS_INTERNAL_ERROR, "physical device not allowed");
+          if (entry.physical && !this.#physicalAllowed()) {
+            this.#revokePhysical();
             return;
           }
           const at = this.#hub.now();
@@ -618,9 +639,8 @@ export class FrameRelay {
         },
         binary: () => undefined,
         closed: () => {
-          entry.sockets -= 1;
-          if (entry.sockets === 0 && this.#tokens.has(token)) this.#armToken(token, entry);
           if (viewer !== null) {
+            this.#unwatchPhysical(viewer);
             if (owner instanceof H264Producer) owner.release(viewer);
             owner.detach(viewer);
           }
@@ -632,7 +652,44 @@ export class FrameRelay {
     );
     viewer = new Viewer(this.#nextViewer++, peer, entry.serial, entry.mode);
     peer.sendText(JSON.stringify({ t: "ready", serial: entry.serial, mode: entry.mode }));
+    if (entry.physical) this.#watchPhysical(viewer, owner);
     owner.attach(viewer);
+  }
+
+  #physicalAllowed(): boolean {
+    try {
+      return this.#opts.physicalPermitted();
+    } catch {
+      return false;
+    }
+  }
+
+  #watchPhysical(viewer: Viewer, producer: Producer): void {
+    this.#physicalViewers.set(viewer, producer);
+    if (this.#physicalRecheck !== undefined) return;
+    this.#physicalRecheck = setInterval(() => {
+      if (!this.#physicalAllowed()) this.#revokePhysical();
+    }, this.#physicalRecheckMs);
+    this.#physicalRecheck.unref();
+  }
+
+  #unwatchPhysical(viewer: Viewer): void {
+    this.#physicalViewers.delete(viewer);
+    if (this.#physicalViewers.size > 0) return;
+    clearInterval(this.#physicalRecheck);
+    this.#physicalRecheck = undefined;
+  }
+
+  #revokePhysical(): void {
+    const producers = new Set<Producer>();
+    for (const [viewer, producer] of [...this.#physicalViewers]) {
+      viewer.peer.sendText(JSON.stringify({ t: "ended", reason: PHYSICAL_REVOKED_REASON }));
+      viewer.peer.close(WS_INTERNAL_ERROR, "physical device not allowed");
+      producers.add(producer);
+    }
+    if (producers.size === 0) return;
+    this.#opts.log("[sim] physical streaming turned off in settings: closing its viewers");
+    for (const producer of producers) producer.close("physical streaming turned off in settings");
   }
 
   async close(): Promise<void> {

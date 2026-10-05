@@ -74,6 +74,10 @@ because it was the only device listed. So:
   `simulator.allowPhysical` setting is on. The refusal names both and says to ask
   the user. The skill tells the agent to pass the flag only for a phone the user
   named in the conversation, and never to unlock it or enter a PIN.
+- Turning `simulator.allowPhysical` off ends a pane that is already streaming a
+  phone: within about two seconds, with no input needed, the socket closes with
+  the reason and the encoder stops. While no physical viewer is attached nothing
+  polls the setting.
 - The pane lists emulators only. **Show physical devices** (off by default,
   disabled while the setting is off) adds phones, each marked "physical device";
   it never picks one for you, and an agent's `device_open` on a phone does not
@@ -191,12 +195,23 @@ emulator ── adb ── scrcpy-server (H.264 encoder, control socket)
 ```
 
 - The View asks `device_stream` for `{url, mode}` and connects. The token is 24
-  random bytes, per View and per connection; the listener exists only while a
-  token or viewer does. A request must carry `Host: 127.0.0.1:<port>` (DNS
-  rebinding), `Origin` absent or `null` (the sandboxed View's own; any real web
-  origin is refused) and a live token. A wrong token and an unknown path are both
-  404. The View's resource declares `_meta.ui.csp.connectDomains: ["ws://127.0.0.1:*"]`,
-  the one thing the host's CSP needs to allow.
+  random bytes, **one-use**: it is deleted by the first successful upgrade, so the
+  one socket it opened is the only one it can ever open, and a reconnect asks
+  `device_stream` for a new one (the View does that on every attempt). A token
+  nobody connects with expires after a minute, and the listener exists only while
+  a token or viewer does. A request must carry `Host: 127.0.0.1:<port>` (DNS
+  rebinding), `Origin` absent or `null` and a live token. A wrong token, an
+  unknown path and a malformed request target are all refused before the token is
+  looked at, and none of them can throw in the server.
+- Two deliberate looseness in that door, because the View cannot be made
+  stricter. `Origin: null` is accepted because the View is a sandboxed iframe
+  and a sandboxed iframe's Origin *is* `null`; it also means a web page can
+  produce that Origin, so the unguessable one-use token, not the Origin, is the
+  barrier (any real web origin is refused). The View's
+  `_meta.ui.csp.connectDomains` is `["ws://127.0.0.1:*"]` with a wildcard port
+  because the relay's port is ephemeral and is not known when the View resource
+  is registered; that lets the View open a WebSocket to any loopback port, not
+  only the relay's.
 - **Frame gate** (shared by the server, per viewer, and the View, per decoder):
   `awaiting-config → awaiting-keyframe → streaming`. A delta is never decoded
   without its key frame, a key frame never without its config.
