@@ -342,9 +342,10 @@ describeWithChrome("taking a browser over in the View", () => {
 				["browser_close", { browserId: id }],
 				["browser_task", { browserId: id, task: "do something", waitSeconds: 0 }],
 			];
-			// A chat the person has not approved for this profile is refused by the consent gate whatever the wheel says, and nothing is asked of the page.
-			expect(refusal(await r.call("browser_act", moves[0]![1], OTHER_CHAT))).toContain("approve access to profile");
-			expect(refusal(await r.call("browser_act", moves[0]![1], undefined))).toContain("host-stamped");
+			// A chat the person has not approved for this profile is refused by the consent gate, every way it drives the page, whatever the wheel says.
+			for (const [name, args] of moves) {
+				expect({ name, text: refusal(await r.call(name, args, OTHER_CHAT)).includes("approve access to profile") }).toEqual({ name, text: true });
+			}
 			// Once the person approves the profile for it, the other chat meets the same wheel as the chat that opened the browser.
 			expect((await r.call("browser_profile_consent", { name: "work", decision: "allow", scope: "chat" }, VIEW_OF_OTHER)).isError).toBeFalsy();
 			for (const who of [CHAT, OTHER_CHAT]) {
@@ -404,8 +405,9 @@ describeWithChrome("taking a browser over in the View", () => {
 			await navigate(r, CHAT, id, "/show-cookie");
 			expect(r.fixture.hits("/show-cookie")).toBe(2);
 			expect((await stateAs(r, CHAT, id)).agentActionAt).toBeGreaterThan(working.agentActionAt ?? Infinity);
-			// Still held by the same seat throughout: nobody else got in while it was the person's. The other chat is approved for the profile by now, so what keeps it out is the hold, not the consent gate.
+			// The profile stays held by the chat that opened it through the take-over and the hand-back: the other chat, approved for the profile by now, is kept out by the hold, not by the consent gate, and is told whose it is.
 			expect(await failureCode(() => r.runtime.open({ profile: "work" }, { caller: "model", session: "s-other" }))).toBe("profile_held");
+			expect(refusal(await r.call("browser_open", { profile: "work" }, OTHER_CHAT))).toContain("held by another chat");
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);
