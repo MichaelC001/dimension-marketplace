@@ -51,6 +51,9 @@ async function main(): Promise<void> {
   let selection: Selection = { serial: null, booting: null };
   let selectedAvd: string | null = null;
   let attached: string | null = null;
+  let attachedPhysical = false;
+  /** "Show physical devices": off at every start. Only the person turns it on, and only then (and with the setting on) does the pane list a phone. */
+  let showPhysical = false;
   let shell: Shell | null = null;
   let stream: LiveStream | null = null;
   let client: SimulatorClient | null = null;
@@ -65,7 +68,8 @@ async function main(): Promise<void> {
     list = fresh;
     failure = null;
     const serial = value.serial;
-    if (typeof serial === "string") selection = { ...selection, serial };
+    // The agent naming a phone does not make the pane show it: only the person's own pick in the picker does.
+    if (typeof serial === "string" && fresh.devices.find(device => device.serial === serial)?.kind !== "physical") selection = { ...selection, serial };
     render();
   });
   app.onhostcontextchanged = context => applyContext({ ...app.getHostContext(), ...context });
@@ -77,6 +81,7 @@ async function main(): Promise<void> {
   function detach(): void {
     stream?.stop();
     attached = null;
+    attachedPhysical = false;
     shell?.status(null);
   }
 
@@ -86,8 +91,9 @@ async function main(): Promise<void> {
     const owner = client;
     const next = shell;
     attached = device.serial;
+    attachedPhysical = device.kind === "physical";
     stream ??= new LiveStream(next.canvas, {
-      acquire: (mode: StreamMode) => owner.stream(attached ?? device.serial, mode),
+      acquire: (mode: StreamMode) => owner.stream(attached ?? device.serial, mode, attachedPhysical),
       onSize: (width, height) => next.aspect(width, height),
       onStatus: status => {
         next.status(status);
@@ -100,8 +106,8 @@ async function main(): Promise<void> {
 
   function render(): void {
     if (shell === null) return;
-    const screen = deriveScreen(list, selection, failure);
-    shell.render(screen, list, selectedAvd, busy, problem);
+    const screen = deriveScreen(list, selection, failure, showPhysical);
+    shell.render(screen, list, selectedAvd, busy, problem, showPhysical);
     if (screen.kind === "device" && screen.device.state === "online") select(screen.device);
     else if (attached !== null) detach();
   }
@@ -172,6 +178,12 @@ async function main(): Promise<void> {
     boot: name => void bootAvd(name),
     stop: serial => void stop(serial),
     refresh: () => void refresh(),
+    showPhysical: show => {
+      showPhysical = show;
+      // Hiding phones also forgets a phone that was picked, so showing them again never re-attaches to it by itself.
+      if (!show && list?.devices.find(device => device.serial === selection.serial)?.kind === "physical") selection = { ...selection, serial: null };
+      render();
+    },
     nav: key => {
       const message: InputMessage = { t: "k", key };
       stream?.send(message);

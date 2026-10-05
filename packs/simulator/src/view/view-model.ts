@@ -15,13 +15,16 @@ export interface ListState {
   readonly avds: readonly { readonly name: string; readonly running: boolean }[];
   readonly toolchain: { readonly adb: string | null; readonly emulator: string | null; readonly scrcpyServer: string | null; readonly missing: readonly MissingTool[] };
   readonly live: boolean;
+  /** The user's `simulator.allowPhysical` setting: without it the pane never lists a phone. */
+  readonly allowPhysical: boolean;
 }
 
 export type Screen =
   | { readonly kind: "loading" }
   | { readonly kind: "unavailable"; readonly reason: string }
   | { readonly kind: "missing-adb"; readonly missing: readonly MissingTool[] }
-  | { readonly kind: "no-device"; readonly avds: readonly string[]; readonly missing: readonly MissingTool[] }
+  /** `hiddenPhones`: attached phones the pane is not listing (emulators only, unless the person asks and the setting allows). `listedPhones`: phones in the picker that nobody picked. */
+  | { readonly kind: "no-device"; readonly avds: readonly string[]; readonly missing: readonly MissingTool[]; readonly hiddenPhones: number; readonly listedPhones: number }
   | { readonly kind: "booting"; readonly avd: string }
   | { readonly kind: "device"; readonly device: DeviceInfo; readonly notes: readonly MissingTool[] };
 
@@ -32,15 +35,27 @@ export interface Selection {
   readonly booting: string | null;
 }
 
-export function deriveScreen(list: ListState | null, selection: Selection, failure: string | null): Screen {
+/**
+ * Online or booting devices the pane may offer: every emulator, and a physical
+ * phone only while the person asked to see phones AND the setting allows driving one.
+ */
+export function usableDevices(list: ListState, showPhysical: boolean): DeviceInfo[] {
+  const phones = showPhysical && list.allowPhysical;
+  return list.devices.filter(device => (device.state === "online" || device.state === "booting") && (device.kind === "emulator" || phones));
+}
+
+export function deriveScreen(list: ListState | null, selection: Selection, failure: string | null, showPhysical: boolean): Screen {
   if (failure !== null && list === null) return { kind: "unavailable", reason: failure };
   if (list === null) return { kind: "loading" };
   if (list.toolchain.adb === null) return { kind: "missing-adb", missing: list.toolchain.missing };
   if (selection.booting !== null) return { kind: "booting", avd: selection.booting };
-  const usable = list.devices.filter(device => device.state === "online" || device.state === "booting");
-  const chosen = usable.find(device => device.serial === selection.serial) ?? usable[0];
+  const usable = usableDevices(list, showPhysical);
+  // A phone is shown only when the person picked it: never as "the first device".
+  const chosen = usable.find(device => device.serial === selection.serial) ?? usable.find(device => device.kind === "emulator");
   if (chosen === undefined) {
-    return { kind: "no-device", avds: list.avds.filter(avd => !avd.running).map(avd => avd.name), missing: list.toolchain.missing.filter(missing => missing.tool !== "scrcpy-server") };
+    const attachedPhones = list.devices.filter(device => device.kind === "physical" && (device.state === "online" || device.state === "booting")).length;
+    const listedPhones = usable.length;
+    return { kind: "no-device", avds: list.avds.filter(avd => !avd.running).map(avd => avd.name), missing: list.toolchain.missing.filter(missing => missing.tool !== "scrcpy-server"), hiddenPhones: attachedPhones - listedPhones, listedPhones };
   }
   if (chosen.state === "booting") return { kind: "booting", avd: chosen.name };
   return { kind: "device", device: chosen, notes: list.toolchain.missing.filter(missing => missing.tool === "scrcpy-server") };
@@ -49,16 +64,16 @@ export function deriveScreen(list: ListState | null, selection: Selection, failu
 export interface PickerOption {
   readonly value: string;
   readonly label: string;
-  readonly group: "running" | "boot";
+  readonly group: "running" | "physical" | "boot";
 }
 
-/** Running devices first; then every AVD that is not running, as "Boot <name>". */
-export function pickerOptions(list: ListState): PickerOption[] {
-  const running = list.devices
-    .filter(device => device.state === "online" || device.state === "booting")
-    .map((device): PickerOption => ({ value: `serial:${device.serial}`, label: `${device.name}  (${device.serial})`, group: "running" }));
+/** Running emulators first; then phones (only when shown), each marked "physical device"; then every AVD that is not running, as "Boot <name>". */
+export function pickerOptions(list: ListState, showPhysical: boolean): PickerOption[] {
+  const usable = usableDevices(list, showPhysical);
+  const running = usable.filter(device => device.kind === "emulator").map((device): PickerOption => ({ value: `serial:${device.serial}`, label: `${device.name}  (${device.serial})`, group: "running" }));
+  const phones = usable.filter(device => device.kind === "physical").map((device): PickerOption => ({ value: `serial:${device.serial}`, label: `${device.name}  (${device.serial})  ·  physical device`, group: "physical" }));
   const bootable = list.avds.filter(avd => !avd.running && list.toolchain.emulator !== null).map((avd): PickerOption => ({ value: `avd:${avd.name}`, label: `Boot ${avd.name}`, group: "boot" }));
-  return [...running, ...bootable];
+  return [...running, ...phones, ...bootable];
 }
 
 export type StreamPhase = "connecting" | "live" | "reconnecting" | "ended";

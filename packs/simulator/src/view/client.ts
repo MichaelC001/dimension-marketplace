@@ -21,9 +21,11 @@ function structured(tool: string, result: Result): Record<string, unknown> {
 }
 
 export function readList(value: Record<string, unknown>): ListState | null {
-  const { devices, avds, toolchain, live } = value;
+  const { devices, avds, toolchain, live, settings } = value;
   if (!Array.isArray(devices) || !Array.isArray(avds) || typeof toolchain !== "object" || toolchain === null) return null;
-  return { devices: devices as DeviceInfo[], avds: avds as ListState["avds"], toolchain: toolchain as ListState["toolchain"], live: live === true };
+  // The setting is the person's key to a phone: absent or unreadable reads as off.
+  const allowPhysical = typeof settings === "object" && settings !== null && "allowPhysical" in settings && settings.allowPhysical === true;
+  return { devices: devices as DeviceInfo[], avds: avds as ListState["avds"], toolchain: toolchain as ListState["toolchain"], live: live === true, allowPhysical };
 }
 
 export interface Grant {
@@ -55,8 +57,9 @@ export class SimulatorClient {
     structured("device_stop", await this.#app.callServerTool({ name: "device_stop", arguments: { serial } }));
   }
 
-  async stream(serial: string, mode: StreamMode): Promise<Grant> {
-    const value = structured("device_stream", await this.#app.callServerTool({ name: "device_stream", arguments: { serial, mode } }));
+  /** `allowPhysical` is the View's half of the phone opt-in: true only for a phone the person picked after turning on Show physical devices. */
+  async stream(serial: string, mode: StreamMode, allowPhysical: boolean): Promise<Grant> {
+    const value = structured("device_stream", await this.#app.callServerTool({ name: "device_stream", arguments: { serial, mode, ...(allowPhysical ? { allowPhysical: true } : {}) } }));
     if (typeof value.url !== "string" || (value.mode !== "h264" && value.mode !== "shot")) throw new ToolError("device_stream answered a shape this View cannot read");
     return { url: value.url, mode: value.mode, downgraded: typeof value.downgraded === "string" ? value.downgraded : null };
   }

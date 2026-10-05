@@ -21,12 +21,14 @@ export interface ShellHandlers {
   boot(avd: string): void;
   stop(serial: string): void;
   refresh(): void;
+  /** The person flipped "Show physical devices". */
+  showPhysical(show: boolean): void;
   nav(key: "back" | "home" | "recents"): void;
 }
 
 export interface Shell {
   readonly canvas: HTMLCanvasElement;
-  render(screen: Screen, list: ListState | null, selectedAvd: string | null, busy: boolean, problem: string | null): void;
+  render(screen: Screen, list: ListState | null, selectedAvd: string | null, busy: boolean, problem: string | null, showPhysical: boolean): void;
   status(status: StreamStatus | null): void;
   aspect(width: number, height: number): void;
 }
@@ -60,12 +62,14 @@ function button(label: string, className: string, onClick: () => void): HTMLButt
   return node;
 }
 
+const GROUP_LABELS: Record<PickerOption["group"], string> = { running: "Running", physical: "Physical devices (your own phone)", boot: "Not running" };
+
 function optionGroups(select: HTMLSelectElement, options: readonly PickerOption[], current: string): void {
   select.replaceChildren();
-  for (const group of ["running", "boot"] as const) {
+  for (const group of ["running", "physical", "boot"] as const) {
     const items = options.filter(option => option.group === group);
     if (items.length === 0) continue;
-    const container = el("optgroup", "", { label: group === "running" ? "Running" : "Not running" });
+    const container = el("optgroup", "", { label: GROUP_LABELS[group] });
     for (const option of items) {
       const node = el("option", "", { value: option.value }, option.label);
       node.selected = option.value === current;
@@ -80,11 +84,16 @@ export function createShell(root: HTMLElement, handlers: ShellHandlers): Shell {
   const bootButton = button("Boot", "sim-btn-primary", () => bootTarget && handlers.boot(bootTarget));
   const stopButton = button("Stop", "", () => stopTarget && handlers.stop(stopTarget));
   const refreshButton = button("Refresh", "sim-btn-quiet", () => handlers.refresh());
+  const physicalToggle = el("input", "", { type: "checkbox", "aria-describedby": "sim-physical-note" });
+  physicalToggle.addEventListener("change", () => handlers.showPhysical(physicalToggle.checked));
+  const physicalNote = el("span", "sim-toggle-note", { id: "sim-physical-note" });
+  const physicalLabel = el("label", "sim-toggle", {}, physicalToggle, el("span", "", {}, "Show physical devices"));
+  const physicalBadge = el("span", "sim-chip", { "data-chip": "physical", title: "A real phone: somebody's own device, not an emulator." }, "Physical device");
   const modeChip = el("span", "sim-chip", { "data-chip": "mode" });
   const fpsChip = el("span", "sim-chip sim-num", { "data-chip": "fps" });
   const latencyChip = el("span", "sim-chip sim-num", { "data-chip": "latency" });
   const chips = el("div", "sim-chips", { "aria-live": "polite" }, modeChip, fpsChip, latencyChip);
-  const bar = el("header", "sim-bar", {}, picker, bootButton, stopButton, refreshButton, el("span", "sim-spacer"), chips);
+  const bar = el("header", "sim-bar", {}, picker, physicalBadge, bootButton, stopButton, refreshButton, physicalLabel, physicalNote, el("span", "sim-spacer"), chips);
 
   const canvas = el("canvas", "sim-canvas", { tabindex: "0", role: "application", "aria-label": "Device screen. Click and drag to touch, type to enter text." });
   const veil = el("div", "sim-veil", { role: "status" });
@@ -151,10 +160,17 @@ export function createShell(root: HTMLElement, handlers: ShellHandlers): Shell {
       veil.hidden = !covered;
       veil.textContent = status.phase === "ended" ? `Stopped${status.detail ? `: ${status.detail}` : ""}` : status.phase === "reconnecting" ? `Reconnecting${status.detail ? ` (${status.detail})` : ""}…` : "Connecting…";
     },
-    render: (screen, list, selectedAvd, busy, problem) => {
+    render: (screen, list, selectedAvd, busy, problem, showPhysical) => {
       problemBanner.hidden = problem === null;
       problemBanner.textContent = problem ?? "";
       const device: DeviceInfo | null = screen.kind === "device" ? screen.device : null;
+      const allowed = list?.allowPhysical === true;
+      physicalToggle.disabled = list === null || !allowed || busy;
+      physicalToggle.checked = allowed && showPhysical;
+      physicalLabel.title = allowed ? "List phones attached over USB or Wi-Fi next to the emulators. A phone is your own device." : "Driving a physical phone is turned off in settings.";
+      physicalNote.hidden = list === null || allowed;
+      physicalNote.textContent = "Off in settings (Simulator → Allow driving a physical phone).";
+      physicalBadge.hidden = device?.kind !== "physical";
       stopTarget = device?.owned === true ? device.serial : null;
       bootTarget = selectedAvd;
       stopButton.hidden = stopTarget === null;
@@ -163,7 +179,7 @@ export function createShell(root: HTMLElement, handlers: ShellHandlers): Shell {
       bootButton.disabled = busy;
       refreshButton.disabled = busy;
       picker.disabled = list === null || busy;
-      if (list !== null) optionGroups(picker, pickerOptions(list), selectedAvd !== null ? `avd:${selectedAvd}` : device !== null ? `serial:${device.serial}` : "");
+      if (list !== null) optionGroups(picker, pickerOptions(list, showPhysical), selectedAvd !== null ? `avd:${selectedAvd}` : device !== null ? `serial:${device.serial}` : "");
       phone.hidden = screen.kind !== "device";
       panel.hidden = screen.kind === "device";
       if (screen.kind === "device") {
@@ -190,6 +206,8 @@ export function createShell(root: HTMLElement, handlers: ShellHandlers): Shell {
           ];
           if (screen.missing.length > 0) body.push(missingList(screen.missing));
           else if (avds.length === 0) body.push(el("p", "sim-missing-fix", {}, "Create one in Android Studio → Device Manager (or with avdmanager), then check again."));
+          if (screen.hiddenPhones > 0) body.push(el("p", "sim-missing-fix", {}, `${screen.hiddenPhones === 1 ? "A physical phone is attached and is" : `${screen.hiddenPhones} physical phones are attached and are`} not shown: the pane lists emulators only, unless Show physical devices is on and allowed in settings.`));
+          if (screen.listedPhones > 0) body.push(el("p", "sim-missing-fix", {}, "Pick your physical phone from the device list to open it here. The pane never opens one for you."));
           showPanel("No device running", body, [...actions, button("Check again", "sim-btn-quiet", () => handlers.refresh())]);
           break;
         }

@@ -78,6 +78,26 @@ select {
 	opacity: 0.55;
 }
 
+.sim-toggle {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	color: var(--fr-text-2);
+	font-size: var(--fr-fs-sm);
+	white-space: nowrap;
+	cursor: pointer;
+}
+
+.sim-toggle:has(input:disabled) {
+	opacity: 0.55;
+	cursor: default;
+}
+
+.sim-toggle-note {
+	color: var(--fr-text-2);
+	font-size: var(--fr-fs-xs);
+}
+
 .sim-btn {
 	height: var(--fr-bar-control, 32px);
 	padding: 0 12px;
@@ -126,6 +146,7 @@ select {
 .sim-chip[hidden],
 .sim-chips[hidden],
 .sim-problem[hidden],
+.sim-toggle-note[hidden],
 .sim-note[hidden],
 .sim-veil[hidden],
 .sim-phone[hidden],
@@ -167,6 +188,14 @@ select {
 .sim-chip[data-chip="mode"][data-kind="ended"] {
 	border-color: var(--fr-del-line);
 	color: var(--fr-del);
+}
+
+/* A real phone: somebody's own device, never styled like the calm states. */
+.sim-chip[data-chip="physical"] {
+	border-color: color-mix(in oklab, var(--fr-warn) 45%, transparent);
+	background: color-mix(in oklab, var(--fr-warn) 12%, transparent);
+	color: var(--fr-warn);
+	font-weight: 500;
 }
 
 .sim-problem {
