@@ -12,8 +12,7 @@ import { z } from "zod";
 
 // src/android/backend.ts
 import { spawn as spawn2 } from "node:child_process";
-import { closeSync, existsSync as existsSync2, fstatSync, mkdirSync, openSync, readSync, statSync } from "node:fs";
-import net2 from "node:net";
+import { closeSync, existsSync as existsSync2, fstatSync, mkdirSync, openSync, readSync, statSync, writeSync } from "node:fs";
 import { homedir as homedir2 } from "node:os";
 import { join } from "node:path";
 
@@ -311,16 +310,15 @@ var Adb = class {
 // src/android/emulator-boot.ts
 var DEFAULT_MEMORY_MB = 1536;
 var BAKED_SNAPSHOT = "avdslim_clean";
+var SOFTWARE_GPU = "swiftshader_indirect";
 function buildEmulatorArgs(input) {
   const args = [
     "-avd",
     input.avd,
-    "-port",
-    String(input.port),
     "-memory",
     String(input.memoryMb ?? DEFAULT_MEMORY_MB),
     "-gpu",
-    "auto",
+    input.gpu,
     "-no-audio",
     "-camera-back",
     "none",
@@ -330,23 +328,229 @@ function buildEmulatorArgs(input) {
     "-lowram"
   ];
   if (input.headless) args.push("-no-window");
+  if (input.readOnly === true) args.push("-read-only");
   if (input.cold) args.push("-no-snapshot-load");
   else if (input.bakedSnapshot) args.push("-snapshot", BAKED_SNAPSHOT);
   args.push("-no-snapshot-save");
   return args;
+}
+var STALL_POLICY = { afterMs: 75e3, maxCpuSeconds: 3 };
+function bootStalled(sample, policy = STALL_POLICY) {
+  if (!sample.alive || sample.deviceSeen) return false;
+  if (sample.elapsedMs < policy.afterMs) return false;
+  if (sample.cpuSeconds === null) return false;
+  return sample.cpuSeconds < policy.maxCpuSeconds;
+}
+function fallbackNote(sample, gpu) {
+  const seconds = Math.round(sample.elapsedMs / 1e3);
+  const cpu = sample.cpuSeconds === null ? "" : `, ${sample.cpuSeconds.toFixed(1)} s of CPU`;
+  return `Fell back to software graphics: with -gpu ${gpu} the emulator showed no adb device after ${seconds} s${cpu}, which means it is waiting on the host GPU (busy or unavailable). The pack stopped that emulator and relaunched it once with -gpu ${SOFTWARE_GPU}: slower to draw, but it needs no GPU. Set simulator.gpu to ${SOFTWARE_GPU} to skip the wait.`;
+}
+var EMULATOR_SERIAL = /^emulator-(\d+)$/;
+function consolePortOf(serial) {
+  const port = EMULATOR_SERIAL.exec(serial)?.[1];
+  return port === void 0 ? null : Number(port);
+}
+function freshEmulators(before, after) {
+  const known = new Map(before.map((entry) => [entry.serial, entry.state]));
+  return after.filter((entry) => consolePortOf(entry.serial) !== null && known.get(entry.serial) !== entry.state).map((entry) => entry.serial);
+}
+function pickSerial(search) {
+  if (search.treePorts !== null) {
+    const ports = search.treePorts;
+    const mine = search.after.filter((entry) => {
+      const port = consolePortOf(entry.serial);
+      return port !== null && ports.includes(port);
+    });
+    const first = mine.sort((a, b) => (consolePortOf(a.serial) ?? 0) - (consolePortOf(b.serial) ?? 0))[0];
+    return first === void 0 ? null : { serial: first.serial, basis: "process" };
+  }
+  const fresh = freshEmulators(search.before, search.after);
+  const only = fresh.length === 1 ? fresh[0] : void 0;
+  return only === void 0 ? null : { serial: only, basis: "diff" };
 }
 function lastLines(text, count) {
   const lines = text.split(/\r?\n/);
   while (lines.length > 0 && lines[lines.length - 1]?.trim() === "") lines.pop();
   return lines.slice(-count);
 }
+function bootFailureHint(logText) {
+  if (logText !== null && /Running multiple emulators with the same AVD/i.test(logText)) {
+    return "That AVD is already running (started by you, or by an earlier boot). device_boot returns the running one instead of starting it again; pass readOnly: true for a second, throwaway instance of it.";
+  }
+  return null;
+}
 function bootFailureMessage(reason, log, count = 15) {
   const tail = log.text === null ? [] : lastLines(log.text, count);
-  if (tail.length === 0) return `${reason}
+  const hint = bootFailureHint(log.text);
+  const head = hint === null ? reason : `${reason} ${hint}`;
+  if (tail.length === 0) return `${head}
 The emulator log (${log.path}) is empty or could not be read.`;
-  return `${reason}
+  return `${head}
 Last ${tail.length} line${tail.length === 1 ? "" : "s"} of the emulator log (${log.path}):
 ${tail.join("\n")}`;
+}
+function parseAvdName(output) {
+  const lines = output.split(/\r?\n/).map((line) => line.trim()).filter((line) => line !== "");
+  if (lines.some((line) => line.startsWith("KO"))) return null;
+  return lines.find((line) => line !== "OK" && !line.startsWith("Android Console")) ?? null;
+}
+
+// src/android/process-table.ts
+import { execFile as execFile2 } from "node:child_process";
+function processTree(rows, root) {
+  const top = rows.find((row) => row.pid === root);
+  if (top === void 0) return [];
+  const tree = [top];
+  const seen = /* @__PURE__ */ new Set([top.pid]);
+  for (let index = 0; index < tree.length; index++) {
+    const parent = tree[index];
+    if (parent === void 0) break;
+    for (const row of rows) {
+      if (row.ppid !== parent.pid || seen.has(row.pid) || row.startedAtMs < parent.startedAtMs) continue;
+      seen.add(row.pid);
+      tree.push(row);
+    }
+  }
+  return tree;
+}
+function treeUsage(rows, root) {
+  const tree = processTree(rows, root);
+  if (tree.length === 0) return null;
+  return { pids: tree.map((row) => row.pid), cpuSeconds: tree.reduce((sum, row) => sum + row.cpuSeconds, 0), rssBytes: tree.reduce((sum, row) => sum + row.rssBytes, 0) };
+}
+function treePorts(rows, listeners, root) {
+  if (listeners === null) return null;
+  const pids = new Set(processTree(rows, root).map((row) => row.pid));
+  return [...new Set(listeners.filter((listener) => pids.has(listener.pid)).map((listener) => listener.port))];
+}
+var START_TOLERANCE_MS = 5e3;
+function processVerdict(rows, remembered, toleranceMs = START_TOLERANCE_MS) {
+  if (rows === null) return "unknown";
+  const row = rows.find((candidate) => candidate.pid === remembered.pid);
+  if (row === void 0) return "gone";
+  return Math.abs(row.startedAtMs - remembered.startedAt) <= toleranceMs ? "ours" : "reused";
+}
+function parseWindowsProcesses(text) {
+  const rows = [];
+  for (const line of text.split(/\r?\n/)) {
+    const [pid, ppid, created, kernel, user, rss] = line.trim().split("|");
+    if (pid === void 0 || ppid === void 0 || created === void 0 || created === "") continue;
+    const startedAtMs = Date.parse(created.replace(/(\.\d{3})\d+/, "$1"));
+    const ticks = Number(kernel) + Number(user);
+    if (!Number.isFinite(startedAtMs) || !Number.isFinite(ticks) || !Number.isInteger(Number(pid)) || !Number.isInteger(Number(ppid))) continue;
+    rows.push({ pid: Number(pid), ppid: Number(ppid), startedAtMs, cpuSeconds: ticks / 1e7, rssBytes: Number(rss) || 0 });
+  }
+  return rows;
+}
+var MONTHS = { Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5, Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11 };
+function parseCpuTime(text) {
+  const [days, clock] = text.includes("-") ? text.split("-", 2) : [void 0, text];
+  const seconds = (clock ?? "").split(":").reduce((total, part) => total * 60 + Number(part), 0);
+  return seconds + (days === void 0 ? 0 : Number(days) * 86400);
+}
+function parsePsProcesses(text) {
+  const rows = [];
+  const line = /^\s*(\d+)\s+(\d+)\s+\w{3}\s+(\w{3})\s+(\d+)\s+(\d{2}):(\d{2}):(\d{2})\s+(\d{4})\s+(\S+)\s+(\d+)\s*$/;
+  for (const raw of text.split(/\r?\n/)) {
+    const match = line.exec(raw);
+    if (match === null) continue;
+    const [, pid, ppid, month, day, hour, minute, second, year, cpu, rss] = match;
+    const monthIndex = MONTHS[month ?? ""];
+    if (monthIndex === void 0) continue;
+    const startedAtMs = new Date(Number(year), monthIndex, Number(day), Number(hour), Number(minute), Number(second)).getTime();
+    rows.push({ pid: Number(pid), ppid: Number(ppid), startedAtMs, cpuSeconds: parseCpuTime(cpu ?? "0"), rssBytes: Number(rss) * 1024 });
+  }
+  return rows;
+}
+function portOf(address) {
+  const port = /:(\d+)$/.exec(address)?.[1];
+  return port === void 0 ? null : Number(port);
+}
+function parseNetstat(text) {
+  const listeners = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const parts = raw.trim().split(/\s+/);
+    if (parts[0] !== "TCP" || parts[3] !== "LISTENING") continue;
+    const port = portOf(parts[1] ?? "");
+    const pid = Number(parts[4]);
+    if (port !== null && Number.isInteger(pid)) listeners.push({ pid, port });
+  }
+  return listeners;
+}
+function parseLsof(text) {
+  const listeners = [];
+  let pid = null;
+  for (const raw of text.split(/\r?\n/)) {
+    if (raw.startsWith("p")) pid = Number(raw.slice(1));
+    else if (raw.startsWith("n") && pid !== null && Number.isInteger(pid)) {
+      const port = portOf(raw.slice(1));
+      if (port !== null) listeners.push({ pid, port });
+    }
+  }
+  return listeners;
+}
+function parseSs(text) {
+  const listeners = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const parts = raw.trim().split(/\s+/);
+    if (parts[0] !== "LISTEN") continue;
+    const port = portOf(parts[3] ?? "");
+    if (port === null) continue;
+    for (const match of raw.matchAll(/pid=(\d+)/g)) listeners.push({ pid: Number(match[1]), port });
+  }
+  return listeners;
+}
+function run(file, args, env) {
+  const { promise, resolve, reject } = Promise.withResolvers();
+  execFile2(file, args, { encoding: "utf8", timeout: 2e4, maxBuffer: 16 * 1024 * 1024, windowsHide: true, ...env ? { env } : {} }, (error, stdout) => error === null ? resolve(stdout) : reject(error));
+  return promise;
+}
+var WINDOWS_PROCESS_SCRIPT = "Get-CimInstance Win32_Process | ForEach-Object { '{0}|{1}|{2:o}|{3}|{4}|{5}' -f $_.ProcessId, $_.ParentProcessId, $_.CreationDate, $_.KernelModeTime, $_.UserModeTime, $_.WorkingSetSize }";
+function nodeProcessTable() {
+  const windows = process.platform === "win32";
+  return {
+    processes: async () => {
+      if (windows) return parseWindowsProcesses(await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", WINDOWS_PROCESS_SCRIPT]));
+      return parsePsProcesses(await run("ps", ["-A", "-o", "pid=,ppid=,lstart=,cputime=,rss="], { ...process.env, LC_ALL: "C" }));
+    },
+    listeners: async () => {
+      try {
+        if (windows) return parseNetstat(await run("netstat", ["-ano", "-p", "tcp"]));
+        if (process.platform === "linux") {
+          try {
+            return parseSs(await run("ss", ["-Hltnp"]));
+          } catch {
+          }
+        }
+        return parseLsof(await run("lsof", ["-nP", "-iTCP", "-sTCP:LISTEN", "-Fpn"]));
+      } catch {
+        return null;
+      }
+    },
+    killTree: async (pid, rows) => {
+      if (windows) {
+        const { promise, resolve } = Promise.withResolvers();
+        execFile2("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true }, () => resolve());
+        await promise;
+        return;
+      }
+      for (const target of [-pid, ...processTree(rows, pid).map((row) => row.pid).reverse()]) {
+        try {
+          process.kill(target, "SIGKILL");
+        } catch {
+        }
+      }
+    }
+  };
+}
+function isProcessAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === "EPERM";
+  }
 }
 
 // src/android/png.ts
@@ -855,6 +1059,7 @@ function describeNode(node) {
 }
 
 // src/android/backend.ts
+var DEFAULT_BOOT_TIMING = { pollMs: 1e3, stall: STALL_POLICY, stallCheckMs: 15e3, budgetMs: 24e4, stopGraceMs: 2e4 };
 var PROBE_COMMAND = [
   "echo V=$(getprop ro.build.version.release)",
   "echo B=$(getprop sys.boot_completed)",
@@ -890,23 +1095,20 @@ function parseProbe(output) {
     characteristics: field("C")
   };
 }
-var CONSOLE_PORTS = { first: 5554, last: 5682 };
-var BOOT_BUDGET_MS = 24e4;
-function listening(port) {
-  const { promise, resolve } = Promise.withResolvers();
-  const probe = net2.createServer();
-  probe.once("error", () => resolve(true));
-  probe.listen(port, "127.0.0.1", () => probe.close(() => resolve(false)));
-  return promise;
-}
+var BOOT_COMPLETED_LOOP = 'while [ "$(getprop sys.boot_completed)" != 1 ]; do sleep 1; done';
+var LOG_ROTATE_BYTES = 1024 * 1024;
 var AndroidBackend = class {
   platform = "android";
   #deps;
   #adbs = /* @__PURE__ */ new Map();
   #static = /* @__PURE__ */ new Map();
   #displays = /* @__PURE__ */ new Map();
+  /** Emulators this backend spawned and still holds the handle of. */
+  #launches = /* @__PURE__ */ new Map();
+  #table;
   constructor(deps) {
     this.#deps = deps;
+    this.#table = deps.processes ?? nodeProcessTable();
   }
   #adb() {
     const toolchain = this.#deps.toolchain();
@@ -930,21 +1132,24 @@ var AndroidBackend = class {
     return Promise.all(
       devices.map(async (device) => {
         const base = { serial: device.serial, platform: "android", owned: false, live: false, viewers: 0 };
+        const emulator = consolePortOf(device.serial) !== null;
         if (device.state !== "device") {
           const state = device.state === "unauthorized" ? "unauthorized" : "offline";
-          return { ...base, kind: classifyDevice({ serial: device.serial }), state, name: device.model ?? device.serial, androidVersion: null, display: null, density: null };
+          const name = (emulator ? await this.#consoleAvd(adb, device.serial) : null) ?? device.model ?? device.serial;
+          return { ...base, kind: classifyDevice({ serial: device.serial }), state, name, androidVersion: null, display: null, density: null };
         }
-        const probe = await this.#probe(adb, device.serial);
-        const display = probe.display ?? this.#displays.get(device.serial) ?? null;
-        if (probe.display) this.#displays.set(device.serial, probe.display);
+        const probe = await this.#probe(adb, device.serial).catch(() => null);
+        const display = probe?.display ?? this.#displays.get(device.serial) ?? null;
+        if (probe?.display) this.#displays.set(device.serial, probe.display);
+        const consoleName = emulator && (probe?.avd ?? null) === null ? await this.#consoleAvd(adb, device.serial) : null;
         return {
           ...base,
           kind: classifyDevice({ serial: device.serial, ...probe }),
-          state: probe.booted ? "online" : "booting",
-          name: probe.avd ?? probe.model ?? device.model ?? device.serial,
-          androidVersion: probe.version,
+          state: probe?.booted === true ? "online" : "booting",
+          name: probe?.avd ?? consoleName ?? probe?.model ?? device.model ?? device.serial,
+          androidVersion: probe?.version ?? null,
           display,
-          density: probe.density
+          density: probe?.density ?? null
         };
       })
     );
@@ -986,76 +1191,231 @@ var AndroidBackend = class {
     child.on("error", () => resolve([]));
     return promise;
   }
-  async startBoot(request) {
+  // ── booting ───────────────────────────────────────────────────────────────
+  //
+  // The pack spawns the emulator WITHOUT a port (it takes the first free pair, so it can never
+  // collide with one the person runs), then learns which serial is its own from the process it
+  // spawned: the tree listens on that console port. Everything it later does to that emulator
+  // (stop, kill after a stall, kill after a failed boot) acts on that process tree, verified by
+  // pid AND start time, and never on a serial.
+  async startBoot(request, observer) {
     const toolchain = this.#deps.toolchain();
     const { emulator } = toolchain;
     if (emulator === null) fail("missing_emulator", `the Android emulator is not installed or not found. ${fixFor(toolchain, "emulator")}`);
     const adb = this.#adb();
+    const { avd } = request;
     const avds = await this.avds();
-    if (avds.length === 0) fail("no_avd", "there is no AVD to boot. Create one in Android Studio -> Device Manager (or `avdmanager create avd`), then call device_boot again.");
-    const avd = request.avd ?? (avds.length === 1 ? avds[0] : void 0);
-    if (avd === void 0) fail("avd_required", `several AVDs exist; pass avd. Available: ${avds.join(", ")}`);
-    if (!avds.includes(avd)) fail("unknown_avd", `no AVD named "${avd}". Available: ${avds.join(", ")}`);
-    const port = await this.#freeConsolePort(adb);
-    const serial = `emulator-${port}`;
+    if (!avds.includes(avd)) fail("unknown_avd", `no AVD named "${avd}". Available: ${avds.join(", ") || "none"}`);
+    const before = (await adb.devices()).map(({ serial, state }) => ({ serial, state }));
     const baked = existsSync2(join(avdHome(), `${avd}.avd`, "snapshots", "avdslim_clean"));
-    const args = buildEmulatorArgs({ avd, port, headless: request.headless === true, cold: request.cold === true, bakedSnapshot: baked });
+    const ctx = { avd, request, emulator, adb, observer, before, baked, timing: { ...DEFAULT_BOOT_TIMING, ...this.#deps.timing }, fellBack: false };
+    const first = await this.#launch(ctx, this.#deps.gpu());
+    const ready = this.#supervise(ctx, first);
+    ready.catch(() => void 0);
+    return { avd, ready };
+  }
+  /** Spawn the emulator and tell the observer which process it is, before anything else can fail. */
+  async #launch(ctx, gpu) {
+    const { avd, request } = ctx;
+    const readOnly = request.readOnly === true;
+    const args = buildEmulatorArgs({ avd, headless: request.headless === true, cold: request.cold === true, bakedSnapshot: ctx.baked, gpu, ...readOnly ? { readOnly } : {} });
     mkdirSync(this.#deps.logDir, { recursive: true });
-    const logPath = join(this.#deps.logDir, `${serial}.log`);
-    const fd = openSync(logPath, "a");
-    const child = spawn2(emulator, args, { detached: true, stdio: ["ignore", fd, fd], windowsHide: true });
+    const logPath = join(this.#deps.logDir, `${avd}${readOnly ? ".read-only" : ""}.log`);
+    const fd = openSync(logPath, existsSync2(logPath) && statSync(logPath).size > LOG_ROTATE_BYTES ? "w" : "a");
+    const startedAt = this.#now();
+    writeSync(fd, `
+--- ${new Date(startedAt).toISOString()} the pack launches: emulator ${args.join(" ")}
+`);
+    const child = spawn2(ctx.emulator, args, { detached: true, stdio: ["ignore", fd, fd], windowsHide: true });
     closeSync(fd);
     child.unref();
-    this.#deps.log(`[sim] booting ${avd} as ${serial} (pid ${child.pid ?? "?"}, ${request.headless ? "headless" : "windowed"}, ${request.cold ? "cold" : baked ? "baked snapshot" : "default snapshot"}); log ${logPath}`);
-    const abort = new AbortController();
     const failure2 = (reason) => new Error(bootFailureMessage(reason, { path: logPath, text: readLogTail(logPath) }));
-    const exited = new Promise((_resolve, reject) => {
-      child.once("exit", (code) => {
-        abort.abort();
-        reject(failure2(`the emulator for ${avd} exited with code ${code ?? "?"} before it finished booting.`));
-      });
-      child.once("error", (error) => reject(failure2(`could not start the emulator: ${error.message}`)));
-    });
-    exited.catch(() => void 0);
-    const booted = adb.run(serial, ["wait-for-device", "shell", 'while [ "$(getprop sys.boot_completed)" != 1 ]; do sleep 1; done'], { timeoutMs: BOOT_BUDGET_MS, maxBuffer: 1024 * 1024, signal: abort.signal }).then(async () => {
-      const info = (await this.list()).find((device) => device.serial === serial);
-      if (info === void 0) throw new Error(`${serial} booted but is not listed by adb`);
-      return info;
-    }).catch((error) => {
-      throw failure2(abort.signal.aborted ? `the emulator for ${avd} exited before it finished booting.` : error instanceof Error ? error.message : String(error));
-    });
-    const ready = Promise.race([booted, exited]);
-    ready.catch(() => void 0);
-    return { serial, avd, pid: child.pid ?? null, ready };
+    const spawnError = Promise.withResolvers();
+    const exit = Promise.withResolvers();
+    child.once("error", spawnError.resolve);
+    if (child.pid === void 0) throw failure2(`could not start the emulator: ${(await spawnError.promise).message}`);
+    const launch = { process: { pid: child.pid, startedAt }, gpu, logPath, exited: false, code: null, exit: exit.promise };
+    const done = (code) => {
+      launch.exited = true;
+      launch.code = code;
+      this.#launches.delete(launch.process.pid);
+      exit.resolve(code);
+    };
+    child.once("exit", done);
+    void spawnError.promise.then(() => done(null));
+    this.#launches.set(launch.process.pid, launch);
+    ctx.observer.spawned(launch.process);
+    this.#deps.log(`[sim] booting ${avd} (pid ${launch.process.pid}, ${request.headless ? "headless" : "windowed"}, ${request.cold ? "cold" : ctx.baked ? "baked snapshot" : "default snapshot"}, -gpu ${gpu}${readOnly ? ", read-only" : ""}); log ${logPath}`);
+    return launch;
   }
-  async #freeConsolePort(adb) {
-    const taken = new Set((await adb.devices()).map((device) => device.serial));
-    for (let port = CONSOLE_PORTS.first; port <= CONSOLE_PORTS.last; port += 2) {
-      if (taken.has(`emulator-${port}`)) continue;
-      if (!await listening(port) && !await listening(port + 1)) return port;
-    }
-    return fail("no_console_port", `no free emulator console port in ${CONSOLE_PORTS.first}-${CONSOLE_PORTS.last}; stop an emulator first.`);
-  }
-  async stop(serial, pid) {
-    const adb = this.#adb();
-    await adb.run(serial, ["emu", "kill"], { timeoutMs: 15e3 }).catch(() => void 0);
-    const deadline = Date.now() + 2e4;
-    while (Date.now() < deadline) {
-      if (!(await adb.devices()).some((device) => device.serial === serial)) {
-        this.#static.delete(serial);
-        this.#displays.delete(serial);
-        return;
+  /** Watch one launch until the device is up, the process dies, the boot stalls or the budget ends; on a stall, relaunch ONCE with software graphics. Anything that fails leaves nothing of the pack's running. */
+  async #supervise(ctx, first) {
+    let launch = first;
+    for (; ; ) {
+      const seen = await this.#watch(ctx, launch);
+      const fallenBack = ctx.fellBack ? " (It had already fallen back to software graphics.)" : "";
+      const failure2 = (reason) => new Error(bootFailureMessage(`${reason}${fallenBack}`, { path: launch.logPath, text: readLogTail(launch.logPath) }));
+      switch (seen.kind) {
+        case "found":
+          return this.#finish(ctx, launch, seen.serial, failure2);
+        case "exited":
+          throw failure2(`the emulator for ${ctx.avd} exited with code ${launch.code ?? "?"} before it finished booting.`);
+        case "timeout":
+          await this.#end(launch);
+          throw failure2(`the emulator for ${ctx.avd} did not show up in adb within ${Math.round(ctx.timing.budgetMs / 1e3)} s; the pack stopped it.`);
+        case "stalled": {
+          await this.#end(launch);
+          const seconds = Math.round(seen.sample.elapsedMs / 1e3);
+          if (ctx.fellBack || launch.gpu === SOFTWARE_GPU) {
+            throw failure2(`the emulator for ${ctx.avd} showed no sign of booting after ${seconds} s (${seen.sample.cpuSeconds?.toFixed(1) ?? "?"} s of CPU, no adb device, -gpu ${launch.gpu}); the pack stopped it.`);
+          }
+          const note = fallbackNote(seen.sample, launch.gpu);
+          this.#deps.log(`[sim] ${ctx.avd}: ${note}`);
+          ctx.observer.note(note);
+          ctx.fellBack = true;
+          launch = await this.#launch(ctx, SOFTWARE_GPU);
+          break;
+        }
       }
-      await new Promise((resolve) => setTimeout(resolve, 500));
     }
-    if (pid !== null) await killTree(pid);
-    this.#static.delete(serial);
   }
-  async identify(serial) {
+  async #watch(ctx, launch) {
+    const { timing } = ctx;
+    let nextStallCheck = launch.process.startedAt + timing.stall.afterMs;
+    for (; ; ) {
+      if (launch.exited) return { kind: "exited" };
+      const serial = await this.#findSerial(ctx, launch).catch(() => null);
+      if (serial !== null) return { kind: "found", serial };
+      if (this.#now() - launch.process.startedAt >= timing.budgetMs) return { kind: "timeout" };
+      if (this.#now() >= nextStallCheck) {
+        nextStallCheck = this.#now() + timing.stallCheckMs;
+        const sample = await this.#sample(launch);
+        if (bootStalled(sample, timing.stall)) return { kind: "stalled", sample };
+      }
+      await Promise.race([delay2(timing.pollMs), launch.exit]);
+    }
+  }
+  /** The wait that follows the serial: Android itself reaching `sys.boot_completed`. */
+  async #finish(ctx, launch, serial, failure2) {
+    ctx.observer.serial(serial);
+    this.#deps.log(`[sim] ${ctx.avd} (pid ${launch.process.pid}) answers as ${serial}`);
+    const abort = new AbortController();
+    void launch.exit.then(() => abort.abort());
+    try {
+      await this.#bootCompleted(ctx.adb, serial, Math.max(1e4, ctx.timing.budgetMs - (this.#now() - launch.process.startedAt)), abort.signal);
+    } catch (error) {
+      if (launch.exited) throw failure2(`the emulator for ${ctx.avd} exited with code ${launch.code ?? "?"} before it finished booting.`);
+      await this.#end(launch);
+      throw failure2(error instanceof Error ? error.message : String(error));
+    }
+    const info = (await this.list()).find((device) => device.serial === serial);
+    if (info === void 0) throw failure2(`${serial} booted but is not listed by adb.`);
+    return info;
+  }
+  /** The serial of the emulator under `launch`, or null while it cannot be told. */
+  async #findSerial(ctx, launch) {
+    const after = (await ctx.adb.devices()).map(({ serial, state }) => ({ serial, state }));
+    if (freshEmulators(ctx.before, after).length === 0) return null;
+    const pick = pickSerial({ before: ctx.before, after, treePorts: await this.#consolePorts(launch.process.pid) });
+    if (pick === null) return null;
+    if (pick.basis === "diff" && await this.#consoleAvd(ctx.adb, pick.serial) !== ctx.avd) return null;
+    return pick.serial;
+  }
+  /** TCP ports the process tree under `pid` listens on; null when the host cannot list processes or listeners. */
+  async #consolePorts(pid) {
+    const [rows, listeners] = await Promise.all([this.#table.processes().catch(() => null), this.#table.listeners().catch(() => null)]);
+    return rows === null ? null : treePorts(rows, listeners, pid);
+  }
+  async #sample(launch) {
+    const rows = await this.#table.processes().catch(() => null);
+    const usage = rows === null ? null : treeUsage(rows, launch.process.pid);
+    return { elapsedMs: this.#now() - launch.process.startedAt, alive: !launch.exited, deviceSeen: false, cpuSeconds: usage === null ? null : usage.cpuSeconds };
+  }
+  /** Stop what a boot spawned, and wait (briefly) until it is gone. */
+  async #end(launch) {
+    await this.#kill(launch.process);
+    await Promise.race([launch.exit, delay2(5e3)]);
+  }
+  /** Kill the tree under `target` if, and only if, it is still the process the pack spawned. */
+  async #kill(target) {
+    const verdict = await this.processState(target);
+    if (verdict !== "ours") {
+      if (verdict !== "gone") this.#deps.log(`[sim] not killing pid ${target.pid}: ${verdict === "reused" ? "it started at another time, so the pid now belongs to something else" : "the process table could not be read, so it cannot be verified"}`);
+      return verdict;
+    }
+    const rows = process.platform === "win32" ? [] : await this.#table.processes().catch(() => []);
+    await this.#table.killTree(target.pid, rows);
+    return verdict;
+  }
+  async processState(target) {
+    const launch = this.#launches.get(target.pid);
+    if (launch !== void 0 && !launch.exited && Math.abs(launch.process.startedAt - target.startedAt) <= START_TOLERANCE_MS) return "ours";
+    return processVerdict(await this.#table.processes().catch(() => null), target);
+  }
+  async serialOf(target) {
     const adb = this.#adb();
-    if (!(await adb.devices()).some((device) => device.serial === serial && device.state === "device")) return null;
-    const probe = await this.#probe(adb, serial).catch(() => null);
-    return probe?.avd ? { avd: probe.avd } : null;
+    const [rows, listeners, devices] = await Promise.all([this.#table.processes().catch(() => null), this.#table.listeners().catch(() => null), adb.devices().catch(() => null)]);
+    if (rows === null || devices === null) return null;
+    const live = this.#launches.get(target.pid);
+    if ((live === void 0 || live.exited) && processVerdict(rows, target) !== "ours") return null;
+    const ports = treePorts(rows, listeners, target.pid);
+    if (ports === null) return null;
+    return pickSerial({ before: [], after: devices.map(({ serial, state }) => ({ serial, state })), treePorts: ports })?.serial ?? null;
+  }
+  async stop(target, serial) {
+    const verdict = await this.processState(target);
+    if (verdict === "unknown") {
+      fail("cannot_verify", `the pack could not read the host's process table, so it cannot prove that pid ${target.pid} is the emulator it started, and it stops nothing it cannot prove. Close the emulator yourself.`);
+    }
+    if (serial !== null) {
+      this.#static.delete(serial);
+      this.#displays.delete(serial);
+    }
+    if (verdict !== "ours") return "already-exited";
+    if (serial !== null && await this.serialOf(target) === serial) {
+      await this.#adb().run(serial, ["emu", "kill"], { timeoutMs: 15e3 }).catch(() => void 0);
+      await this.#exitWithin(target, this.#timing().stopGraceMs);
+    }
+    if (this.#alive(target.pid)) {
+      await this.#kill(target);
+      await this.#exitWithin(target, 5e3);
+    }
+    return "stopped";
+  }
+  #alive(pid) {
+    const launch = this.#launches.get(pid);
+    return launch === void 0 ? isProcessAlive(pid) : !launch.exited;
+  }
+  async #exitWithin(target, ms) {
+    const deadline = this.#now() + ms;
+    while (this.#alive(target.pid) && this.#now() < deadline) await delay2(250);
+  }
+  async runningEmulators() {
+    const adb = this.#adb();
+    const emulators = (await adb.devices()).filter((device) => consolePortOf(device.serial) !== null);
+    const named = await Promise.all(emulators.map(async (device) => ({ serial: device.serial, avd: await this.#consoleAvd(adb, device.serial) })));
+    return named.flatMap((emulator) => emulator.avd === null ? [] : [{ serial: emulator.serial, avd: emulator.avd }]);
+  }
+  /** The emulator's own answer to "which AVD are you?" (`adb -s <serial> emu avd name`): its console replies while Android is still starting, which `getprop` cannot. */
+  async #consoleAvd(adb, serial) {
+    return adb.text(serial, ["emu", "avd", "name"], { timeoutMs: 5e3 }).then(parseAvdName, () => null);
+  }
+  async waitBooted(serial, timeoutMs) {
+    try {
+      await this.#bootCompleted(this.#adb(), serial, timeoutMs);
+    } catch {
+      return null;
+    }
+    return (await this.list()).find((device) => device.serial === serial) ?? null;
+  }
+  #bootCompleted(adb, serial, timeoutMs, signal) {
+    return adb.run(serial, ["wait-for-device", "shell", BOOT_COMPLETED_LOOP], { timeoutMs, maxBuffer: 1024 * 1024, ...signal ? { signal } : {} });
+  }
+  #now() {
+    return (this.#deps.now ?? Date.now)();
+  }
+  #timing() {
+    return { ...DEFAULT_BOOT_TIMING, ...this.#deps.timing };
   }
   async display(serial) {
     const known = this.#displays.get(serial);
@@ -1149,17 +1509,10 @@ function readLogTail(path) {
     return null;
   }
 }
-async function killTree(pid) {
-  if (process.platform !== "win32") {
-    try {
-      process.kill(pid, "SIGKILL");
-    } catch {
-    }
-    return;
-  }
+function delay2(ms) {
   const { promise, resolve } = Promise.withResolvers();
-  spawn2("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true }).on("close", () => resolve());
-  await promise;
+  setTimeout(resolve, ms);
+  return promise;
 }
 
 // src/fleet.ts
@@ -1172,7 +1525,7 @@ function fileOwnershipStore(path) {
         const parsed = JSON.parse(readFileSync(path, "utf8"));
         if (!Array.isArray(parsed)) return [];
         return parsed.filter(
-          (entry) => typeof entry === "object" && entry !== null && typeof entry.serial === "string" && typeof entry.avd === "string" && typeof entry.ownerPid === "number" && typeof entry.bootedAt === "number" && (entry.pid === null || typeof entry.pid === "number")
+          (entry) => typeof entry === "object" && entry !== null && (entry.serial === null || typeof entry.serial === "string") && typeof entry.avd === "string" && typeof entry.pid === "number" && typeof entry.startedAt === "number" && typeof entry.bootedAt === "number" && typeof entry.ownerPid === "number"
         );
       } catch {
         return [];
@@ -1186,8 +1539,8 @@ function fileOwnershipStore(path) {
     }
   };
 }
-var defaultSchedule = (run, ms) => {
-  const handle = setTimeout(run, ms);
+var defaultSchedule = (run2, ms) => {
+  const handle = setTimeout(run2, ms);
   handle.unref();
   return { cancel: () => clearTimeout(handle) };
 };
@@ -1199,13 +1552,21 @@ function processAlive(pid) {
     return error.code === "EPERM";
   }
 }
+var FAILURE_MEMORY_MS = 10 * 6e4;
+var bootKey = (avd, readOnly) => readOnly ? `${avd}#read-only` : avd;
 var Fleet = class {
   #deps;
   #pid;
+  /** By an id of the pack's own (a boot's serial and pid are both unknown or change while it starts). */
   #owned = /* @__PURE__ */ new Map();
   #idle = /* @__PURE__ */ new Map();
   #viewers = /* @__PURE__ */ new Map();
   #booting = /* @__PURE__ */ new Map();
+  #failures = /* @__PURE__ */ new Map();
+  /** Boots the pack itself stopped: their end is not a failure to report. */
+  #stopped = /* @__PURE__ */ new Set();
+  #starting = 0;
+  #seq = 0;
   #reconciled = null;
   constructor(deps) {
     this.#deps = deps;
@@ -1215,7 +1576,11 @@ var Fleet = class {
     return [...this.#owned.values()];
   }
   isOwned(serial) {
-    return this.#owned.has(serial);
+    return this.#keyOf(serial) !== void 0;
+  }
+  #keyOf(serial) {
+    for (const [key, record] of this.#owned) if (record.serial === serial) return key;
+    return void 0;
   }
   /** Adopt what a dead pack left running. Once per process, lazily, before anything that depends on ownership. */
   reconcile() {
@@ -1224,127 +1589,224 @@ var Fleet = class {
   }
   async #adoptOrphans() {
     const alive = this.#deps.isAlive ?? processAlive;
+    const backend = this.#deps.backend;
     const records = this.#deps.store.read();
     let changed = false;
     for (const record of records) {
       if (record.ownerPid !== this.#pid && alive(record.ownerPid)) continue;
-      const identity = await this.#deps.backend.identify(record.serial).catch(() => null);
-      const stillOurs = identity !== null && identity.avd === record.avd && (record.pid === null || alive(record.pid));
       changed = true;
-      if (!stillOurs) {
-        this.#deps.log(`[sim] dropped stale ownership record for ${record.serial} (${record.avd}): not running as that AVD`);
+      const proc = { pid: record.pid, startedAt: record.startedAt };
+      const state = await backend.processState(proc).catch(() => "unknown");
+      if (state !== "ours") {
+        this.#deps.log(`[sim] dropped ownership record for ${record.serial ?? record.avd} (${record.avd}, pid ${record.pid}): ${state === "unknown" ? "the process table could not be read, so it cannot be verified" : state === "reused" ? "that pid is another process now" : "that process is gone"}`);
         continue;
       }
-      this.#owned.set(record.serial, { ...record, ownerPid: this.#pid });
-      this.#deps.log(`[sim] adopted orphan ${record.serial} (${record.avd}) left by pack process ${record.ownerPid}`);
-      this.#schedule(record.serial);
+      let serial = await backend.serialOf(proc).catch(() => null);
+      if (serial === null && record.serial !== null) {
+        const running = await backend.runningEmulators().catch(() => []);
+        if (running.some((emulator) => emulator.serial === record.serial && emulator.avd === record.avd)) serial = record.serial;
+      }
+      if (serial === null) {
+        this.#deps.log(`[sim] stopping unfinished boot of ${record.avd} (pid ${record.pid}) left by pack process ${record.ownerPid}`);
+        await backend.stop(proc, null).catch((error) => this.#deps.log(`[sim] could not stop it: ${error instanceof Error ? error.message : String(error)}`));
+        continue;
+      }
+      const key = `pid-${record.pid}`;
+      this.#owned.set(key, { ...record, serial, ownerPid: this.#pid });
+      this.#deps.log(`[sim] adopted orphan ${serial} (${record.avd}, pid ${record.pid}) left by pack process ${record.ownerPid}`);
+      this.#schedule(key);
     }
     if (changed) this.#persist();
   }
+  /** This pack's records, plus those of OTHER pack processes that are still running. A dead owner's record was adopted (then it is ours) or dropped by `reconcile`: it is never carried forward. */
   #persist() {
-    const others = this.#deps.store.read().filter((record) => record.ownerPid !== this.#pid && !this.#owned.has(record.serial));
-    this.#deps.store.write([...others, ...this.#owned.values()]);
+    const alive = this.#deps.isAlive ?? processAlive;
+    const mine = [...this.#owned.values()];
+    const others = this.#deps.store.read().filter((record) => record.ownerPid !== this.#pid && alive(record.ownerPid) && !mine.some((own) => own.pid === record.pid && own.startedAt === record.startedAt));
+    this.#deps.store.write([...others, ...mine]);
   }
   async boot(request, waitMs) {
     await this.reconcile();
     const backend = this.#deps.backend;
     const avds = await backend.avds();
     const avd = request.avd ?? (avds.length === 1 ? avds[0] : void 0);
-    if (avd !== void 0) {
-      const pending = this.#booting.get(avd);
-      if (pending) return this.#await(pending.handle, pending.settled, waitMs, true);
-      const running = (await backend.list()).find((device) => device.kind === "emulator" && device.name === avd);
-      if (running) {
-        this.touch(running.serial);
-        return { device: { ...running, owned: this.isOwned(running.serial) }, pending: running.state === "booting", reused: true };
-      }
+    if (avd === void 0) {
+      if (avds.length === 0) fail("no_avd", "there is no AVD to boot. Create one in Android Studio -> Device Manager (or `avdmanager create avd`), then call device_boot again.");
+      fail("avd_required", `several AVDs exist; pass avd. Available: ${avds.join(", ")}`);
+    }
+    const readOnly = request.readOnly === true;
+    const key = bootKey(avd, readOnly);
+    const pending = this.#booting.get(key);
+    if (pending) return this.#await(pending, waitMs, true);
+    const failed = this.#takeFailure(avd);
+    if (failed !== null) throw failed;
+    if (!readOnly) {
+      const running = await this.#alreadyRunning(avd, request, waitMs);
+      if (running !== null) return running;
     }
     const cap = this.#deps.settings().maxDevices;
-    if (this.#owned.size >= cap) {
-      const names = [...this.#owned.values()].map((record2) => `${record2.serial} (${record2.avd})`).join(", ");
-      fail("device_cap", `this pack already booted ${this.#owned.size} emulator(s) (cap ${cap}, setting simulator.maxDevices): ${names}. Stop one with device_stop, or raise the cap.`);
+    if (this.#owned.size + this.#starting >= cap) {
+      const names = [...this.#owned.values()].map((record) => `${record.serial ?? "(starting)"} (${record.avd})`).join(", ");
+      fail("device_cap", `this pack already booted ${this.#owned.size + this.#starting} emulator(s) (cap ${cap}, setting simulator.maxDevices): ${names}. Stop one with device_stop, or raise the cap.`);
     }
-    const handle = await backend.startBoot(request);
-    const record = { serial: handle.serial, avd: handle.avd, pid: handle.pid, bootedAt: (this.#deps.now ?? Date.now)(), ownerPid: this.#pid };
-    this.#owned.set(handle.serial, record);
-    this.#persist();
-    this.#schedule(handle.serial);
+    const id = `boot-${++this.#seq}`;
+    const notes = [];
+    if (readOnly) notes.push(`Started read-only (-read-only): this is a second instance of ${avd}, and what it changes is discarded when it stops.`);
+    const observer = {
+      spawned: (proc) => {
+        this.#owned.set(id, { serial: null, avd, pid: proc.pid, startedAt: proc.startedAt, bootedAt: this.#owned.get(id)?.bootedAt ?? (this.#deps.now ?? Date.now)(), ownerPid: this.#pid });
+        this.#persist();
+        this.#schedule(id);
+      },
+      serial: (serial) => {
+        const record = this.#owned.get(id);
+        if (record === void 0) return;
+        this.#owned.set(id, { ...record, serial });
+        this.#persist();
+      },
+      note: (message) => {
+        notes.push(message);
+        this.#deps.log(`[sim] ${avd}: ${message}`);
+      }
+    };
+    this.#starting++;
+    let handle;
+    try {
+      handle = await backend.startBoot({ ...request, avd }, observer);
+    } finally {
+      this.#starting--;
+    }
     const settled = handle.ready.then(
       (device) => {
-        this.#booting.delete(handle.avd);
-        this.#deps.log(`[sim] ${handle.serial} (${handle.avd}) is up`);
+        this.#booting.delete(key);
+        this.#deps.log(`[sim] ${device.serial} (${avd}) is up`);
         return device;
       },
       (error) => {
-        this.#booting.delete(handle.avd);
-        this.#release(handle.serial);
-        this.#deps.log(`[sim] boot of ${handle.serial} (${handle.avd}) failed: ${error instanceof Error ? error.message : String(error)}`);
+        this.#booting.delete(key);
+        this.#release(id);
+        this.#deps.log(`[sim] boot of ${avd} failed: ${error instanceof Error ? error.message : String(error)}`);
+        if (!this.#stopped.delete(id)) this.#failures.set(avd, { error: error instanceof Error ? error : new Error(String(error)), at: (this.#deps.now ?? Date.now)() });
         throw error;
       }
     );
     settled.catch(() => void 0);
-    this.#booting.set(handle.avd, { handle, settled });
-    return this.#await(handle, settled, waitMs, false);
+    const boot = { key: id, avd, notes, settled };
+    this.#booting.set(key, boot);
+    return this.#await(boot, waitMs, false);
   }
-  async #await(handle, settled, waitMs, reused) {
+  /** A boot that failed after the call waiting for it had returned: the next call for that AVD is told, once, rather than silently starting another. */
+  #takeFailure(avd) {
+    const entry = this.#failures.get(avd);
+    if (entry === void 0) return null;
+    this.#failures.delete(avd);
+    if ((this.#deps.now ?? Date.now)() - entry.at > FAILURE_MEMORY_MS) return null;
+    return new Error(`The boot of ${avd} that the earlier device_boot was waiting for failed after that call returned. ${entry.error.message}`);
+  }
+  /**
+   * The emulator that already runs `avd`, whoever started it, or null. Every running emulator is asked which
+   * AVD it is (its console answers while Android is still starting; the device list's name needs Android up),
+   * and either source is enough to refuse a second instance, which the emulator itself would reject anyway.
+   */
+  async #alreadyRunning(avd, request, waitMs) {
+    const backend = this.#deps.backend;
+    const [asked, listed] = await Promise.all([backend.runningEmulators().catch(() => []), backend.list()]);
+    const serials = new Set(asked.filter((emulator) => emulator.avd === avd).map((emulator) => emulator.serial));
+    for (const device2 of listed) if (device2.kind === "emulator" && device2.name === avd) serials.add(device2.serial);
+    const matches = listed.filter((device2) => serials.has(device2.serial));
+    const found = matches.find((device2) => device2.state === "online") ?? matches[0];
+    if (found === void 0) return null;
+    this.touch(found.serial);
+    const notes = [`${found.serial} already runs ${avd}${this.isOwned(found.serial) ? "" : " (not started by this pack)"}: it is returned, not booted again. Pass readOnly: true for a second instance.`];
+    if (request.cold === true || request.headless !== void 0) notes.push("cold and headless were not applied: the device was already running.");
+    const up = found.state === "online" ? found : waitMs > 0 ? await backend.waitBooted(found.serial, waitMs) : null;
+    const device = up === null ? { ...found, state: "booting" } : up;
+    return { avd, device: { ...device, owned: this.isOwned(device.serial) }, pending: up === null, reused: true, notes };
+  }
+  async #await(boot, waitMs, reused) {
     const timeout = Promise.withResolvers();
     const timer = setTimeout(() => timeout.resolve(null), waitMs);
     try {
-      const device = await Promise.race([settled, timeout.promise]);
-      if (device !== null) return { device: { ...device, owned: true }, pending: false, reused };
+      const device = await Promise.race([boot.settled, timeout.promise]);
+      if (device !== null) return { avd: boot.avd, device: { ...device, owned: this.isOwned(device.serial) }, pending: false, reused, notes: [...boot.notes] };
+    } catch (error) {
+      this.#failures.delete(boot.avd);
+      throw error;
     } finally {
       clearTimeout(timer);
     }
-    const placeholder = { serial: handle.serial, platform: "android", kind: "emulator", state: "booting", name: handle.avd, androidVersion: null, display: null, density: null, owned: true, live: false, viewers: 0 };
-    return { device: placeholder, pending: true, reused };
+    const serial = this.#owned.get(boot.key)?.serial ?? null;
+    const placeholder = serial === null ? null : { serial, platform: "android", kind: "emulator", state: "booting", name: boot.avd, androidVersion: null, display: null, density: null, owned: true, live: false, viewers: 0 };
+    return { avd: boot.avd, device: placeholder, pending: true, reused, notes: [...boot.notes] };
   }
+  /** Stop an emulator THIS pack booted: by the process it spawned, after checking it still is that process. */
   async stop(serial) {
     await this.reconcile();
-    const record = this.#owned.get(serial);
-    if (record === void 0) {
+    const key = this.#keyOf(serial);
+    if (key === void 0) {
       fail("not_owned", `${serial} was not booted by this pack, so the pack will not stop it. Close it yourself (its window, or \`adb -s ${serial} emu kill\`).`);
     }
-    this.#deps.log(`[sim] stopping ${serial} (${record.avd})`);
-    await this.#deps.backend.stop(serial, record.pid);
-    this.#release(serial);
-    this.#deps.log(`[sim] stopped ${serial}`);
+    return this.#stopOwned(key);
   }
-  #release(serial) {
-    this.#idle.get(serial)?.cancel();
-    this.#idle.delete(serial);
-    this.#viewers.delete(serial);
-    if (this.#owned.delete(serial)) this.#persist();
+  async #stopOwned(key) {
+    const record = this.#owned.get(key);
+    if (record === void 0) return "already-exited";
+    const name = record.serial ?? record.avd;
+    this.#deps.log(`[sim] stopping ${name} (pid ${record.pid})`);
+    if ([...this.#booting.values()].some((boot) => boot.key === key)) this.#stopped.add(key);
+    let outcome;
+    try {
+      outcome = await this.#deps.backend.stop({ pid: record.pid, startedAt: record.startedAt }, record.serial);
+    } catch (error) {
+      this.#stopped.delete(key);
+      throw error;
+    }
+    this.#release(key);
+    this.#deps.log(outcome === "stopped" ? `[sim] stopped ${name}` : `[sim] ${name} had already exited; nothing was killed`);
+    return outcome;
+  }
+  #release(key) {
+    this.#idle.get(key)?.cancel();
+    this.#idle.delete(key);
+    const record = this.#owned.get(key);
+    if (record?.serial) this.#viewers.delete(record.serial);
+    if (this.#owned.delete(key)) this.#persist();
   }
   /** A tool call, or anything else that shows the device is in use. */
   touch(serial) {
-    if (this.#owned.has(serial)) this.#schedule(serial);
+    const key = this.#keyOf(serial);
+    if (key !== void 0) this.#schedule(key);
   }
   /** A viewer attached or left. With none, the idle clock runs; with one, it does not. */
   setViewers(serial, count) {
     this.#viewers.set(serial, count);
-    if (this.#owned.has(serial)) this.#schedule(serial);
+    const key = this.#keyOf(serial);
+    if (key !== void 0) this.#schedule(key);
   }
-  #schedule(serial) {
-    this.#idle.get(serial)?.cancel();
-    this.#idle.delete(serial);
-    if ((this.#viewers.get(serial) ?? 0) > 0) return;
+  #schedule(key) {
+    this.#idle.get(key)?.cancel();
+    this.#idle.delete(key);
+    const record = this.#owned.get(key);
+    if (record === void 0) return;
+    if (record.serial !== null && (this.#viewers.get(record.serial) ?? 0) > 0) return;
     const minutes = this.#deps.settings().idleMinutes;
     const timer = (this.#deps.schedule ?? defaultSchedule)(() => {
-      this.#deps.log(`[sim] idle-stop ${serial}: no viewer and no tool call for ${minutes} min`);
-      void this.stop(serial).catch((error) => this.#deps.log(`[sim] idle-stop of ${serial} failed: ${error instanceof Error ? error.message : String(error)}`));
+      const name = this.#owned.get(key)?.serial ?? record.avd;
+      this.#deps.log(`[sim] idle-stop ${name}: no viewer and no tool call for ${minutes} min`);
+      void this.#stopOwned(key).catch((error) => this.#deps.log(`[sim] idle-stop of ${name} failed: ${error instanceof Error ? error.message : String(error)}`));
     }, minutes * 6e4);
-    this.#idle.set(serial, timer);
+    this.#idle.set(key, timer);
   }
   /** Pack exit: stop everything this pack booted. Bounded: a hung emulator must not hold the process. */
   async shutdown(budgetMs = 1e4) {
     for (const timer2 of this.#idle.values()) timer2.cancel();
     this.#idle.clear();
-    const serials = [...this.#owned.keys()];
-    if (serials.length === 0) return;
-    this.#deps.log(`[sim] shutdown: stopping ${serials.join(", ")}`);
+    const keys = [...this.#owned.keys()];
+    if (keys.length === 0) return;
+    this.#deps.log(`[sim] shutdown: stopping ${keys.map((key) => this.#owned.get(key)?.serial ?? this.#owned.get(key)?.avd ?? key).join(", ")}`);
     const budget = Promise.withResolvers();
     const timer = setTimeout(() => budget.resolve(), budgetMs);
-    await Promise.race([Promise.allSettled(serials.map((serial) => this.stop(serial))), budget.promise]);
+    await Promise.race([Promise.allSettled(keys.map((key) => this.#stopOwned(key))), budget.promise]);
     clearTimeout(timer);
   }
 };
@@ -2136,9 +2598,10 @@ Content-Length: 0\r
 import { readFileSync as readFileSync2 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
 import { join as join2 } from "node:path";
-var DEFAULT_SETTINGS = { maxDevices: 2, idleMinutes: 15, sdkPath: null, allowPhysical: false };
+var GPU_MODES = ["auto", "host", "swiftshader_indirect", "angle_indirect"];
+var DEFAULT_SETTINGS = { maxDevices: 2, idleMinutes: 15, sdkPath: null, allowPhysical: false, gpu: "auto" };
 var GROUP = "simulator";
-var ENV_KEYS = { maxDevices: "SIMULATOR_MAX_DEVICES", idleMinutes: "SIMULATOR_IDLE_MINUTES", sdkPath: "SIMULATOR_SDK_PATH", allowPhysical: "SIMULATOR_ALLOW_PHYSICAL" };
+var ENV_KEYS = { maxDevices: "SIMULATOR_MAX_DEVICES", idleMinutes: "SIMULATOR_IDLE_MINUTES", sdkPath: "SIMULATOR_SDK_PATH", allowPhysical: "SIMULATOR_ALLOW_PHYSICAL", gpu: "SIMULATOR_GPU" };
 function readGroupScalars(yaml, group) {
   const out = {};
   let inBlock = false;
@@ -2161,6 +2624,10 @@ function scalar(raw) {
   const value = raw.replace(/\s+#.*$/, "").trim();
   const quoted = /^(["'])(.*)\1$/.exec(value);
   return quoted?.[2] ?? value;
+}
+function gpuMode(value) {
+  const wanted = value?.trim().toLowerCase();
+  return GPU_MODES.find((mode) => mode === wanted) ?? DEFAULT_SETTINGS.gpu;
 }
 function positiveInt(value, fallback, min, max) {
   if (value === void 0) return fallback;
@@ -2193,7 +2660,8 @@ function readSettings(source = nodeSettingsSource()) {
     idleMinutes: positiveInt(pick("idleMinutes"), DEFAULT_SETTINGS.idleMinutes, 1, 24 * 60),
     sdkPath: sdk !== void 0 && sdk !== "" ? sdk : null,
     // A safety switch fails closed: only an unambiguous "on" turns it on; anything else, a typo included, is off.
-    allowPhysical: /^(true|on|yes|1)$/i.test(pick("allowPhysical")?.trim() ?? "")
+    allowPhysical: /^(true|on|yes|1)$/i.test(pick("allowPhysical")?.trim() ?? ""),
+    gpu: gpuMode(pick("gpu"))
   };
 }
 
@@ -2224,9 +2692,9 @@ function sessionOf(extra) {
 function failure(error) {
   return { isError: true, content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }] };
 }
-async function respond(extra, run) {
+async function respond(extra, run2) {
   try {
-    const { text, structured } = await run();
+    const { text, structured } = await run2();
     return { content: [{ type: "text", text }], ...callerOf(extra) === "app" ? { structuredContent: structured } : {} };
   } catch (error) {
     return failure(error);
@@ -2240,6 +2708,11 @@ function deviceLine(device) {
   parts.push(device.owned ? "booted by this pack" : "not booted by this pack");
   if (device.live) parts.push(`live (${device.viewers} viewer${device.viewers === 1 ? "" : "s"})`);
   return parts.join("  ");
+}
+function describeBoot(outcome) {
+  const { device } = outcome;
+  const head = device === null ? `${outcome.avd} is booting; its adb serial is not known yet. Call device_boot again (avd: ${outcome.avd}) to wait for it.` : outcome.pending ? `${device.serial} (${device.name}) is booting. Call device_boot again (avd: ${device.name}) to wait for it.` : `${deviceLine(device)}${outcome.reused ? " (already running; not booted again)" : ""}`;
+  return [head, ...outcome.notes].join("\n");
 }
 function leasedToolchain(settings) {
   let cached = null;
@@ -2261,7 +2734,7 @@ async function createSimulatorServer(options = {}) {
   const leased = leasedToolchain(settings);
   const toolchain = options.toolchain ?? (() => leased.current());
   const dataDir = options.dataDir ?? join3(process.env.INSO_HOME ?? join3(homedir4(), ".inso"), "simulator");
-  const backend = options.backend ?? new AndroidBackend({ toolchain, log, logDir: join3(dataDir, "logs") });
+  const backend = options.backend ?? new AndroidBackend({ toolchain, log, logDir: join3(dataDir, "logs"), gpu: () => settings().gpu });
   const fleet = options.fleet ?? new Fleet({ backend, settings, store: fileOwnershipStore(join3(dataDir, "owned.json")), log });
   async function authorize(serial, allowPhysical) {
     const kind = await backend.kindOf(serial);
@@ -2345,20 +2818,19 @@ async function createSimulatorServer(options = {}) {
   server2.registerTool(
     "device_boot",
     {
-      description: `Boot an Android emulator (avd: from device_list; optional when only one AVD exists). headless: no window (nothing on the user's screen). cold: ignore the saved snapshot. Returns within waitSeconds (default ${DEFAULT_WAIT_S}, max ${WAIT_CAP_S}) with state "booting" or "online"; while booting, call device_boot again with the same avd to wait for it. An already running device for that AVD is returned, not duplicated. At most simulator.maxDevices are booted by this pack at once; it stops only what it booted, and an idle one after simulator.idleMinutes.`,
+      description: `Boot an Android emulator (avd: from device_list; optional when only one AVD exists). headless: no window (nothing on the user's screen). cold: ignore the saved snapshot. Returns within waitSeconds (default ${DEFAULT_WAIT_S}, max ${WAIT_CAP_S}) with state "booting" or "online"; while booting, call device_boot again with the same avd to wait for it. An AVD that already runs (even one you did not start) is returned, not booted again; readOnly: true starts a SECOND, throwaway instance of it (its changes are discarded when it stops). If the host GPU never answers, the pack stops that boot and relaunches once with software graphics, and the result says so. Any failure ends with the emulator's own log. At most simulator.maxDevices are booted by this pack at once; it stops only the process it started, and an idle one after simulator.idleMinutes.`,
       inputSchema: {
         avd: z.string().min(1).max(100).optional(),
         headless: z.boolean().optional(),
         cold: z.boolean().optional(),
+        readOnly: z.boolean().optional(),
         waitSeconds: z.number().int().min(0).max(WAIT_CAP_S).optional()
       },
       annotations: { ...WRITES, destructiveHint: false }
     },
-    ({ avd, headless, cold, waitSeconds }, extra) => respond(extra, async () => {
-      const outcome = await fleet.boot({ ...avd === void 0 ? {} : { avd }, ...headless === void 0 ? {} : { headless }, ...cold === void 0 ? {} : { cold } }, (waitSeconds ?? DEFAULT_WAIT_S) * 1e3);
-      const device = outcome.device;
-      const text = outcome.pending ? `${device.serial} (${device.name}) is booting. Call device_boot again (avd: ${device.name}) to wait for it.` : `${deviceLine(device)}${outcome.reused ? " (already running; not booted again)" : ""}`;
-      return { text, structured: { device, pending: outcome.pending, reused: outcome.reused } };
+    ({ avd, headless, cold, readOnly, waitSeconds }, extra) => respond(extra, async () => {
+      const outcome = await fleet.boot({ ...avd === void 0 ? {} : { avd }, ...headless === void 0 ? {} : { headless }, ...cold === void 0 ? {} : { cold }, ...readOnly === void 0 ? {} : { readOnly } }, (waitSeconds ?? DEFAULT_WAIT_S) * 1e3);
+      return { text: describeBoot(outcome), structured: { avd: outcome.avd, device: outcome.device, pending: outcome.pending, reused: outcome.reused, notes: outcome.notes } };
     })
   );
   server2.registerTool(
@@ -2370,8 +2842,8 @@ async function createSimulatorServer(options = {}) {
     },
     ({ serial, allowPhysical }, extra) => respond(extra, async () => {
       await authorize(serial, allowPhysical);
-      await fleet.stop(serial);
-      return { text: `${serial} stopped.`, structured: { serial, stopped: true } };
+      const outcome = await fleet.stop(serial);
+      return { text: outcome === "stopped" ? `${serial} stopped.` : `${serial} had already exited; the pack killed nothing.`, structured: { serial, stopped: true, outcome } };
     })
   );
   server2.registerTool(
@@ -2518,7 +2990,7 @@ async function createSimulatorServer(options = {}) {
     ({ serial, avd, boot, allowPhysical }, extra) => respond(extra, async () => {
       let id = serial;
       if (id !== void 0) await authorize(id, allowPhysical);
-      else if (avd !== void 0 && boot === true) id = (await fleet.boot({ avd }, 1e3)).device.serial;
+      else if (avd !== void 0 && boot === true) id = (await fleet.boot({ avd }, 1e3)).device?.serial;
       if (id === void 0) {
         const pick = selectDefaultDevice(await enriched(), void 0);
         if (pick.ok) id = pick.serial;
