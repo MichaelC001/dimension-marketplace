@@ -1033,7 +1033,8 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			held = false;
 			entry.pending -= 1;
 			entry.cells -= 1;
-			entry.agentAt = Date.now();
+			// The release that follows the person's take-over ends a cell they stopped: nobody is driving, so it says nothing about an agent acting.
+			if (!entry.takenOver) entry.agentAt = Date.now();
 			entry.lastUsed = performance.now();
 		};
 	}

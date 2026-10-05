@@ -1,7 +1,7 @@
 /** WHAT BREAKS IN THE PRODUCT IF THIS GOES RED: the person watching a `browser_run` cell drive a browser in the View is not offered "Take over". The View offers it only while the browser's `agentActionAt` is
  *  recent, and a cell is ONE long call, not a series of timed actions, so the runtime has to keep reporting an agent as acting for as long as a cell holds the browser; if it does not, a cell clicking through
- *  a signed-in page for a minute cannot be stopped by the person at all. And the other way round: the person's own steps, or a cell that was refused because they already have the wheel, must never read as
- *  an agent acting, or the View offers Take over on a browser nobody is driving (or never lets go of one).
+ *  a signed-in page for a minute cannot be stopped by the person at all. And the other way round: the person's own steps, a cell that was refused because they already have the wheel, and the cell they just
+ *  stopped by taking it, must never read as an agent acting, or the View offers Take over on a browser nobody is driving (or never lets go of one).
  *
  *  A cell holds a browser through the code seam (`require`/`hold`), exactly as the code host does for the length of a run. State is read as the View reads it (`browser_state` passes it through unchanged for
  *  the "app" caller), against a real headless Chrome. Cells may hold only a throwaway browser, which is what these tests open. Time is the test's: the runtime stamps with `Date.now()`, so a minute of a cell
@@ -23,6 +23,8 @@ const BEAT_MS = 2_000;
 const PAST_A_BEAT_MS = BEAT_MS + 300;
 /** A cell that runs for a minute: five times what the View keeps offering Take over for after an agent's last action. */
 const A_MINUTE_MS = 60_000;
+/** How long the View keeps offering Take over after an agent's last action (its AGENT_ACTIVE_MS). */
+const VIEW_WINDOW_MS = 12_000;
 
 /** The lifetime a cell's browser has: a long idle clock, not kept for the person. */
 const CELL: CodeLifetime = { idleMs: 1_800_000, persist: false };
@@ -163,6 +165,42 @@ describeWithChrome("a cell driving a browser is an agent acting on it", () => {
 			// Nor does a refusal leave a cell counted: a beat later it still reads as that moment.
 			clockAt(Date.now() + PAST_A_BEAT_MS);
 			expect(await readAt(browser)).toBe(acted);
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"the cell the person's take-over stopped does not read as an agent acting once the wheel is handed back, and the next cell that runs does",
+		async () => {
+			const browser = await cellBrowser();
+			const pages = startFixture();
+			// An agent acted earlier, so there is a value that a wrong stamp would move.
+			await browser.runtime.act(browser.browserId, { kind: "navigate", url: pages.url("/nav") }, "model");
+			const acted = await actedAt(browser);
+
+			const start = Date.now();
+			clockAt(start);
+			const end = hold(browser);
+			await browser.runtime.control(browser.browserId, "take", "app");
+
+			// The code host ends the cell it stopped by releasing its hold, however long after the agent's last action that is.
+			const released = start + VIEW_WINDOW_MS + 1_000;
+			clockAt(released);
+			end();
+			expect(await readAt(browser)).toBe(acted);
+
+			// Handed back, the View still sees the agent's last real action, which is outside the window: it is not offered Take over on a browser nobody is driving.
+			await browser.runtime.control(browser.browserId, "return", "app");
+			const handedBack = await actedAt(browser);
+			expect(handedBack).toBe(acted);
+			expect(released - handedBack).toBeGreaterThan(VIEW_WINDOW_MS);
+
+			// The suppression is the person's wheel, not the browser's history: the agent's next cell is acting, and the moment it ends lingers.
+			clockAt(released + 1_000);
+			const next = hold(browser);
+			clockAt(released + 1_700);
+			next();
+			expect(await actedAt(browser)).toBe(released + 1_700);
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);
