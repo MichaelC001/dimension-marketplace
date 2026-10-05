@@ -1,7 +1,6 @@
 /**
- * How a profile is drawn — the ONE rule the View's chip and menu and the dock panel share, so a profile has the same
- * face in all of them. Pure and dependency-free like profile-meta.ts (the dock runs in the host's page, which does not
- * load the View's stylesheet — so the colours are inline styles built here, not CSS classes).
+ * How a profile is drawn — the ONE rule the View's chip, menu and start page share, so a profile has the same face in
+ * all of them. Pure and dependency-free like profile-meta.ts (the colours are inline styles built here, not CSS classes).
  *
  * A profile's colour is one of the eight names in profile-meta.ts. Here each name becomes an OKLCH hue and chroma, so
  * "blue" is blue in a dark theme and a light one, and `grey` is the only colourless one. An avatar is the one emoji
