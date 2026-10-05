@@ -117,4 +117,15 @@ describe("face-to-face against the @fraym/ui externals grant", () => {
 		const asset = readFileSync(join(PACK, "assets/head-f01.bin"));
 		expect(bundle.includes(asset.toString("base64"))).toBe(true);
 	});
+
+	test("it declares a host version that ships what it reads: Live and its `enginePhase` first exist in 0.11.1, and the engine refuses an install the host cannot satisfy", () => {
+		const manifest = JSON.parse(read(join(PACK, "plugin.json"), "the pack manifest")) as {
+			extensions?: Record<string, { requires?: { dimension?: string } }>;
+		};
+		const range = manifest.extensions?.["ai.insodimension.dimension"]?.requires?.dimension ?? "";
+		const floor = /^>=\s*(\d+)\.(\d+)\.(\d+)/.exec(range)?.slice(1).map(Number);
+		expect(floor, `requires.dimension is "${range}"`).toBeDefined();
+		const [major = 0, minor = 0, patch = 0] = floor ?? [];
+		expect(major * 1_000_000 + minor * 1_000 + patch).toBeGreaterThanOrEqual(11_001);
+	});
 });

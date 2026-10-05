@@ -1,13 +1,14 @@
 // Face to face: one bundle, two components. `FaceSurface` (default export) fills the Chat space's `face`
 // workspace surface; `FaceDoor` (named export, declared with `"export": "FaceDoor"` in plugin.json) is the
 // pinned orb that opens it. This module is the ONLY place the two are wired to the host: the surface's
-// voice comes from the kit hook through `surface/voice.ts`, the head from `surface/head-source.ts`.
+// voice and its Live call come from the kit hooks through `surface/voice.ts` and `surface/live.ts`, the head from `surface/head-source.ts`.
 import { memo, useCallback, useRef } from "react";
 import { FaceSurfaceBody } from "./surface/face-surface";
 import type { Intent } from "./surface/surface-model";
 import { useHead } from "./surface/head";
 import headUrl from "./surface/head-source";
 import { STYLES } from "./surface/styles";
+import { useFaceLive } from "./surface/live";
 import { useFaceVoice } from "./surface/voice";
 
 export { FaceDoor } from "./surface/face-door";
@@ -21,8 +22,9 @@ export interface FaceSurfaceProps {
 
 const Seated = memo(function Seated({ onIntent }: Pick<FaceSurfaceProps, "onIntent">) {
 	const voice = useFaceVoice();
+	const live = useFaceLive();
 	const head = useHead(headUrl);
-	return <FaceSurfaceBody voice={voice} head={head} onIntent={onIntent} />;
+	return <FaceSurfaceBody voice={voice} live={live} head={head} onIntent={onIntent} />;
 });
 
 const FaceSurfaceSeat = memo(

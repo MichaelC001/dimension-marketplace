@@ -95,6 +95,21 @@ export const STYLES = `
 	color: var(--f2f-ink-3); max-width: 100%;
 	display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
 }
+/* a Live call's newest line from the voice, in the caption box under the face: plain text, no word timing to follow */
+.f2f-livecap {
+	margin: 0; text-align: center; color: var(--f2f-ink);
+	font-size: clamp(20px, 3vh, 38px); line-height: 1.45; letter-spacing: -0.01em;
+	display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden;
+}
+/* "Talk live" sits quietly under the primary Tap to talk: it names where the microphone goes */
+.f2f-live {
+	display: inline-flex; flex-direction: column; align-items: center; gap: 3px; margin-top: 12px; cursor: pointer;
+	padding: 8px 16px; border: 0; border-radius: 12px; background: transparent; color: var(--f2f-ink-2);
+	font-size: 14px; font-weight: 500; line-height: 1.2; letter-spacing: -0.005em;
+	transition: background .16s ease, color .16s ease;
+}
+.f2f-live:hover { background: var(--f2f-hover); color: var(--f2f-ink); }
+.f2f-live-dest { font-size: 12px; font-weight: 400; color: var(--f2f-ink-3); }
 /* "sending on silence": a hairline under the words that fills as the quiet runs out (width driven per frame, never a CSS animation) */
 .f2f-silence {
 	display: block; flex: none; width: min(11em, 38%); height: 2px; margin-top: 10px; border-radius: 2px; overflow: hidden; contain: layout paint;
