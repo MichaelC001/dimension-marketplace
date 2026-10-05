@@ -1,0 +1,392 @@
+/* The Simulator pane. Colour, type and motion come from Fraym's --fr-* tokens
+   (bundled from @fraym/ui/theme.css; light/dark follows the document's data-theme
+   that the host sets). Derived colours below are mixes of those tokens, never
+   literals. */
+
+:root {
+	color-scheme: light dark;
+}
+
+html,
+body,
+#root {
+	height: 100%;
+	margin: 0;
+}
+
+body {
+	background: var(--fr-bg);
+	color: var(--fr-text);
+	font-family: var(--fr-font-primary);
+	font-size: var(--fr-fs-base);
+	-webkit-font-smoothing: antialiased;
+}
+
+button,
+select {
+	font: inherit;
+	color: inherit;
+}
+
+.sim-root {
+	--sim-hover: color-mix(in oklab, var(--fr-text) 7%, transparent);
+	--sim-press: color-mix(in oklab, var(--fr-text) 12%, transparent);
+	--sim-ring: color-mix(in oklab, var(--fr-accent) 45%, transparent);
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	min-width: 0;
+	background: var(--fr-bg);
+}
+
+.sim-num {
+	font-variant-numeric: tabular-nums;
+}
+
+:where(.sim-root) :focus-visible {
+	outline: 2px solid var(--fr-accent);
+	outline-offset: 2px;
+}
+
+/* ── bar ────────────────────────────────────────────────────────────── */
+
+.sim-bar {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex: none;
+	padding: 8px 10px;
+	border-bottom: 1px solid var(--fr-border-soft);
+	background: var(--fr-surface);
+}
+
+.sim-spacer {
+	flex: 1;
+}
+
+.sim-picker {
+	min-width: 0;
+	max-width: 260px;
+	height: var(--fr-bar-control, 32px);
+	padding: 0 10px;
+	border: 1px solid var(--fr-border);
+	border-radius: var(--fr-input-r);
+	background: var(--fr-surface-2);
+}
+
+.sim-picker:disabled {
+	opacity: 0.55;
+}
+
+.sim-btn {
+	height: var(--fr-bar-control, 32px);
+	padding: 0 12px;
+	border: 1px solid var(--fr-border);
+	border-radius: var(--fr-input-r);
+	background: var(--fr-surface-2);
+	cursor: pointer;
+}
+
+.sim-btn:hover:not(:disabled) {
+	background: var(--fr-surface-3);
+}
+
+.sim-btn:active:not(:disabled) {
+	background: var(--sim-press);
+}
+
+.sim-btn:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+
+.sim-btn-primary {
+	border-color: transparent;
+	background: var(--fr-accent);
+	color: var(--fr-accent-ink);
+	font-weight: 500;
+}
+
+.sim-btn-primary:hover:not(:disabled) {
+	background: var(--fr-accent-2);
+}
+
+.sim-btn-quiet {
+	border-color: transparent;
+	background: transparent;
+	color: var(--fr-text-2);
+}
+
+.sim-btn-quiet:hover:not(:disabled) {
+	background: var(--sim-hover);
+	color: var(--fr-text);
+}
+
+.sim-btn[hidden],
+.sim-chip[hidden],
+.sim-chips[hidden],
+.sim-problem[hidden],
+.sim-note[hidden],
+.sim-veil[hidden],
+.sim-phone[hidden],
+.sim-panel[hidden] {
+	display: none;
+}
+
+/* ── status chips: honest about what is on screen ───────────────────── */
+
+.sim-chips {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.sim-chip {
+	padding: 2px 8px;
+	border: 1px solid var(--fr-border);
+	border-radius: 999px;
+	background: var(--fr-pill-sunken);
+	color: var(--fr-text-2);
+	font-size: var(--fr-fs-xs);
+	white-space: nowrap;
+}
+
+.sim-chip[data-chip="mode"][data-kind="h264"] {
+	border-color: var(--fr-accent-line);
+	background: var(--fr-accent-dim);
+	color: var(--fr-accent-text);
+}
+
+/* Shot fallback is a degraded mode: amber, never the accent a live picture gets. */
+.sim-chip[data-chip="mode"][data-kind="shot"],
+.sim-chip[data-chip="mode"][data-kind="reconnecting"] {
+	border-color: color-mix(in oklab, var(--fr-warn) 45%, transparent);
+	color: var(--fr-warn);
+}
+
+.sim-chip[data-chip="mode"][data-kind="ended"] {
+	border-color: var(--fr-del-line);
+	color: var(--fr-del);
+}
+
+.sim-problem {
+	flex: none;
+	margin: 0;
+	padding: 8px 12px;
+	border-bottom: 1px solid var(--fr-del-line);
+	background: var(--fr-del-bg);
+	color: var(--fr-del);
+	font-size: var(--fr-fs-sm);
+	white-space: pre-wrap;
+}
+
+/* ── stage ──────────────────────────────────────────────────────────── */
+
+.sim-stage {
+	position: relative;
+	flex: 1;
+	min-height: 0;
+	display: flex;
+}
+
+.sim-phone {
+	flex: 1;
+	min-width: 0;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	padding: 12px;
+	gap: 8px;
+}
+
+.sim-note {
+	flex: none;
+	margin: 0;
+	max-width: 46ch;
+	color: var(--fr-text-2);
+	font-size: var(--fr-fs-xs);
+	text-align: center;
+}
+
+/* The box the phone must fit: container units give the largest bezel of the
+   device's aspect ratio that fits, with no JS layout. */
+.sim-screenbox {
+	flex: 1;
+	min-height: 0;
+	width: 100%;
+	container-type: size;
+	display: grid;
+	place-items: center;
+}
+
+.sim-bezel {
+	--aw: 9;
+	--ah: 19.5;
+	position: relative;
+	box-sizing: border-box;
+	width: min(100cqw, calc(100cqh * var(--aw) / var(--ah)));
+	aspect-ratio: var(--aw) / var(--ah);
+	padding: 7px;
+	border-radius: 30px;
+	background: var(--fr-surface-3);
+	box-shadow: 0 0 0 1px var(--fr-border), 0 10px 30px color-mix(in oklab, var(--fr-bg) 60%, transparent);
+}
+
+.sim-canvas {
+	display: block;
+	width: 100%;
+	height: 100%;
+	border-radius: 24px;
+	background: var(--fr-bg);
+	touch-action: none;
+	user-select: none;
+	cursor: pointer;
+	outline-offset: 3px;
+}
+
+.sim-veil {
+	position: absolute;
+	inset: 7px;
+	display: grid;
+	place-items: center;
+	padding: 16px;
+	border-radius: 24px;
+	background: color-mix(in oklab, var(--fr-bg) 72%, transparent);
+	color: var(--fr-text-2);
+	font-size: var(--fr-fs-sm);
+	text-align: center;
+	pointer-events: none;
+}
+
+.sim-nav {
+	flex: none;
+	display: flex;
+	gap: 6px;
+}
+
+.sim-nav-btn {
+	display: grid;
+	place-items: center;
+	width: 44px;
+	height: 32px;
+	border: 1px solid transparent;
+	border-radius: 999px;
+	background: transparent;
+	color: var(--fr-text-2);
+	cursor: pointer;
+}
+
+.sim-nav-btn:hover {
+	background: var(--sim-hover);
+	color: var(--fr-text);
+}
+
+.sim-nav-btn:active {
+	background: var(--sim-press);
+}
+
+/* ── panels: the empty, missing and booting states ──────────────────── */
+
+.sim-panel {
+	flex: 1;
+	align-self: center;
+	margin: auto;
+	max-width: 520px;
+	padding: 24px;
+	text-align: left;
+}
+
+.sim-panel-title {
+	margin: 0 0 8px;
+	font-size: var(--fr-fs-xl);
+	font-weight: 600;
+	letter-spacing: var(--fr-tracking-tight);
+}
+
+.sim-panel[data-tone="problem"] .sim-panel-title {
+	color: var(--fr-del);
+}
+
+.sim-lede {
+	margin: 0 0 14px;
+	color: var(--fr-text-2);
+	line-height: 1.5;
+}
+
+.sim-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-top: 16px;
+}
+
+.sim-missing {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+	display: grid;
+	gap: 12px;
+}
+
+.sim-missing li {
+	padding: 10px 12px;
+	border: 1px solid var(--fr-border);
+	border-radius: var(--fr-r);
+	background: var(--fr-surface);
+}
+
+.sim-code {
+	font-family: var(--fr-font-mono);
+	font-size: var(--fr-fs-sm);
+	color: var(--fr-text);
+}
+
+.sim-missing-need {
+	color: var(--fr-text-2);
+	font-size: var(--fr-fs-sm);
+}
+
+.sim-missing-fix {
+	margin: 6px 0 0;
+	color: var(--fr-text-2);
+	font-size: var(--fr-fs-sm);
+	line-height: 1.5;
+}
+
+.sim-spinner {
+	width: 22px;
+	height: 22px;
+	margin: 0 0 14px;
+	border: 2px solid var(--fr-border);
+	border-top-color: var(--fr-accent);
+	border-radius: 50%;
+	animation: sim-spin 0.9s linear infinite;
+}
+
+.sim-boot {
+	padding: 24px;
+	color: var(--fr-text-2);
+}
+
+.sim-boot h1 {
+	margin: 0 0 8px;
+	font-size: var(--fr-fs-lg);
+	color: var(--fr-del);
+}
+
+@keyframes sim-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.sim-spinner {
+		animation-duration: 3s;
+	}
+}
+
+[data-fr-motion="reduced"] .sim-spinner {
+	animation-duration: 3s;
+}
