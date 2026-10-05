@@ -66,7 +66,10 @@ export type Delivery = { readonly write: true } | { readonly write: false; reado
  */
 export function deliveryDecision(gate: FrameGate, tag: FrameTag, backlog: number, maxBacklog: number): Delivery {
   const picture = tag === FrameTag.Key || tag === FrameTag.Delta || tag === FrameTag.Shot;
-  if (picture && backlog > maxBacklog) return { write: false, dropped: true, resync: tag === FrameTag.Key || gate.gap() };
+  if (picture && backlog > maxBacklog) {
+    const parkedNow = gate.gap();
+    return { write: false, dropped: true, resync: tag === FrameTag.Key || parkedNow };
+  }
   if (!gate.admit(tag)) return { write: false, dropped: false, resync: false };
   return { write: true };
 }
