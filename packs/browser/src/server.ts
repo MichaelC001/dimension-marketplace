@@ -95,7 +95,7 @@ const SPACES_META_KEY = "ai.insodimension/spaces";
 /** Publishing and task agents are Traction's: every tool a session is shown costs it tokens on every turn, and a dev session never calls these. */
 const TRACTION_ONLY = { [SPACES_META_KEY]: ["traction"] };
 
-/** `code` and `both` offer browser_run; ordinary tools remain visible for consented saved profiles, since full-Node cells cannot drive them. */
+/** `code` and `both` offer browser_run; ordinary tools remain the approved route to a saved profile: a cell's browser API does not open one (a cell can still reach one by going around the API: the approval is not a limit on code). */
 export type ModelToolsMode = "code" | "steps" | "both";
 const MODEL_TOOLS_ENV = "DIMENSION_BROWSER_MODEL_TOOLS";
 /** The spaces the pack is lent to: plugin.json `modelSpaces`, read from the manifest itself (the bundle carries it) so a space the manifest gains is offered a way to drive a page without a second edit. */
@@ -376,7 +376,7 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
   });
   // jev's key is read once, as the server is created. This value decides which tools exist and what their descriptions say.
   const jev = options.taskTools ?? taskToolsOffered();
-  // browser_run is available where the code host supports it, but saved profiles use only the ordinary tools.
+  // browser_run is available where the code host supports it; its API does not open a saved profile (the model reaches one through the approved profileTool; a cell can still go around the API).
   // An invalid code-host setting turns off browser_run without disabling ordinary browser tools.
   let codeHost = options.codeHost;
   let ownHost: CodeHost | undefined;

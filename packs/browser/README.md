@@ -24,7 +24,7 @@ standard MCP and MCP Apps. No host internals, no browser fork.
   most 1024 px. Code cells use `browser_run` instead.
 - **Throwaway by default, named profiles to keep logins.** A browser opened
   without a profile keeps nothing and is deleted when it closes. A named profile
-  persists logins across restarts, stays isolated, and is held by one caller at
+  persists logins across restarts, keeps its cookies separate from other profiles (not a barrier against code the agent runs: see Code cells), and is held by one caller at
   a time. The exception is yours: the View's start page and the dock open the
   saved `default` profile unless you tick **Private** ([Browser panel](#browser-panel)).
 - **Annotations that carry pixels.** Freeze the page, mark it with the shared
@@ -121,6 +121,8 @@ The rows that name a pinned package are dependencies: updating one is a version 
 | `browser4` | **Refused**: every published bundle disables HTTPS certificate verification. platonai/Browser4#602 |
 
 Both refusals name the reason in the error and lift when upstream fixes land.
+
+**The relay has no token.** The relay a `browser_run` cell starts (`app.relay`; opt-in) answers only a request whose Host names it, loopback at its own port, on every HTTP and upgrade request, which stops a web page (DNS rebinding) from reading your tabs. It has no token: a process of another OS user on this machine can still read `/json`, drive the tabs your extension exposes, or take the extension's socket. Processes of your own user hold everything already.
 
 ## Install
 
