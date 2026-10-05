@@ -1,11 +1,4 @@
-// What the timeline layer promises a person marking up a recording (the PANE's part: the seating, the keys, the rules
-// that come from the pane and not from the kit): one toolbar whose tools depend on whether it is a sound or a video, the
-// two tools only a recording has (Moment, Stretch) and when they go off, the keys on the window and whose keys they are,
-// a drawing landing on the frame on screen, choosing a note going to where it is, a note being written where it was made
-// (a popover at its marker on the lane, or beside its drawing over the picture: one place at a time, and never a list), the
-// one footer that carries the message and "Request edits", and the notes outliving the renderer.
-//
-// The REAL `TimelineMarks` is mounted (kit session, toolbar and footer, the transport, the draw layer, the frame clock and
+// The REAL `TimelineMarks` is mounted (kit session, toolbar and notice, the transport, the draw layer, the frame clock and
 // the key decision included) in linkedom with the real react-dom under `act`, into the DOM the pane builds around it: a
 // pane holding the mode strip, and the stage frame that holds the recording's element and the dock under it. Three
 // stand-ins on the way in:
@@ -380,19 +373,11 @@ function rig(kind: Kind) {
 		get pictureNote(): HTMLElement | null {
 			return player.parentElement?.querySelector<HTMLElement>('[data-slot="note-popover"]') ?? null;
 		},
-		/** The notes' one footer: what carries the message and the request. */
-		get footer(): HTMLElement | null {
-			return pane.querySelector<HTMLElement>('[data-slot="annotation-footer"]');
+		get notice(): HTMLElement | null {
+			return pane.querySelector<HTMLElement>('[data-slot="annotation-notice"]');
 		},
-		get message(): HTMLTextAreaElement | null {
-			return pane.querySelector<HTMLTextAreaElement>('[data-slot="annotation-footer"] textarea');
-		},
-		get send(): HTMLButtonElement | null {
-			return pane.querySelector<HTMLButtonElement>('[data-slot="annotation-footer"] button');
-		},
-		/** What the footer's button says: "Request edits", and the number of notes after it when there are some. */
-		get request(): string {
-			return pane.querySelector('[data-slot="annotation-footer"] button .dam-send-face')?.textContent?.trim() ?? "";
+		get notices(): number {
+			return pane.querySelectorAll('[data-slot="annotation-notice"]').length;
 		},
 	};
 }
@@ -432,25 +417,60 @@ function click(element: Element | null): Promise<void> {
 /** The browser telling the layer a seek landed: the layer reads the element's time only when told (no engine seeks here). */
 const landed = (at: Rig): Promise<void> => env.act(async () => at.media.tell("seeked"));
 
-/** Let what a click started (a send is a chain of promises) run to its end. */
-async function settle(): Promise<void> {
-	for (let turn = 0; turn < 8; turn += 1) await env.act(async () => {});
+const HOST_LATENCY_MS = 15;
+const STAGING_PAUSE_MS = 1200;
+const WAIT_LIMIT_MS = 4000;
+const STAGING_TEST_MS = 12_000;
+
+function sleep(ms: number): Promise<void> {
+	const { promise, resolve } = Promise.withResolvers<void>();
+	setTimeout(resolve, ms);
+	return promise;
 }
 
-/**
- * Typing in a field React rendered. The text goes in through the element's own setter (React's value tracking then sees a
- * change), and the events that carry it follow: `input` where react-dom took the browser's path, and a focus-in and a key-up
- * where linkedom's lack of `oninput` sent it down the old-IE one (which watches the field that was last given the focus).
- */
-async function typeInto(field: HTMLTextAreaElement | null, text: string): Promise<void> {
-	if (field === null) throw new Error("nothing to type in");
-	const fire = (type: string): Promise<void> =>
-		env.act(async () => void field.dispatchEvent(new (win().Event)(type, { bubbles: true, cancelable: true })));
-	Object.assign(field, { attachEvent() {}, detachEvent() {} });
-	await fire("focusin");
-	Object.getOwnPropertyDescriptor(win().HTMLTextAreaElement.prototype, "value")?.set?.call(field, text);
-	await fire("input");
-	await fire("keyup");
+async function until(fact: () => boolean, what: string): Promise<void> {
+	const deadline = Date.now() + WAIT_LIMIT_MS;
+	await env.act(async () => {
+		while (!fact()) {
+			if (Date.now() > deadline) throw new Error(`never came about: ${what}`);
+			await sleep(20);
+		}
+	});
+}
+
+function stagingHost(refusal?: Error) {
+	const calls: { parts: number; text: string }[] = [];
+	let answered = 0;
+	const app = {
+		getHostCapabilities: () => ({ updateModelContext: { text: {} } }),
+		updateModelContext: async (params: { content?: { text?: string }[] }) => {
+			const content = params.content ?? [];
+			calls.push({ parts: content.length, text: content.map(part => part.text ?? "").join("\n") });
+			await sleep(HOST_LATENCY_MS);
+			answered += 1;
+			if (refusal !== undefined) throw refusal;
+			return {};
+		},
+	} as unknown as App;
+	return {
+		app,
+		get answered(): number {
+			return answered;
+		},
+		get requests(): string[] {
+			return calls.filter(call => call.parts > 0).map(call => call.text);
+		},
+		get takenBack(): number {
+			return calls.filter(call => call.parts === 0).length;
+		},
+	};
+}
+
+async function note(at: Rig, seconds: number, words: string): Promise<void> {
+	await at.mark(seconds);
+	const made = at.marks.find(mark => mark.at === seconds);
+	if (made === undefined) throw new Error("the note was not made");
+	await env.act(async () => at.lane.onNote(made.id, words));
 }
 
 /** Every note the most one message carries but the last, one a second from the start. */
@@ -482,13 +502,13 @@ describe("the one toolbar", () => {
 		expect(at.view("stretch")).toMatchObject({ label: "Stretch", key: "I", text: null, disabled: false });
 	});
 
-	test.each(KINDS)("a %s whose layer is down has its transport, no bar, no footer, and keys that make nothing", async kind => {
+	test.each(KINDS)("a %s whose layer is down has its transport, no bar, no notice, and keys that make nothing", async kind => {
 		const at = rig(kind);
 		await at.mount({ mode: null });
 		await press("m");
 
 		expect(at.bar).toBeNull();
-		expect(at.footer).toBeNull();
+		expect(at.notice).toBeNull();
 		expect(at.dock.querySelector('[data-slot="viewer-transport"]')).not.toBeNull();
 		// The lane is handed nothing to mark with.
 		if (kind === "video") expect(film?.onSpan).toBeUndefined();
@@ -595,13 +615,13 @@ describe("Moment and Stretch", () => {
 		expect(at.armed).toBeNull();
 	});
 
-	test("a recording that failed with nothing marked offers no footer and no way to comment", async () => {
+	test("a recording that failed with nothing marked offers no notice and no way to comment", async () => {
 		const at = rig("audio");
 		await at.mount();
-		expect(at.footer).not.toBeNull();
+		expect(at.notice).not.toBeNull();
 
 		await at.fail();
-		expect(at.footer).toBeNull();
+		expect(at.notice).toBeNull();
 		expect(wave?.onComment).toBeUndefined();
 	});
 });
@@ -1292,9 +1312,6 @@ describe("keys typed in a text field", () => {
 		const at = rig("video");
 		await at.mount();
 		await at.mark(2);
-		// A textarea of the test's own, outside React's roots: a key pressed at a field React rendered goes down linkedom's
-		// old-IE path (see `typeInto`). The pane only asks whose key it is (a text field's), and the window sees the same
-		// event either way.
 		const field = env.document.createElement("textarea");
 		env.document.body.append(field);
 		at.media.currentTime = 8;
@@ -1313,95 +1330,172 @@ describe("keys typed in a text field", () => {
 	});
 });
 
-describe("the footer", () => {
-	test.each(KINDS)("%s: the layer up has one footer under the content, the message and Request edits, and no list, column or sheet", async kind => {
+function expectNoRequestSurface(at: Rig): void {
+	expect(at.pane.querySelector('[data-slot="annotation-footer"]')).toBeNull();
+	expect(at.pane.querySelector("textarea")).toBeNull();
+	expect(at.pane.textContent).not.toContain("Request edits");
+}
+
+describe("the notice and notes staging by themselves", () => {
+	test.each(KINDS)("%s: the layer up has exactly one notice as the pane's last child, and no footer, message field, Request edits, list or sheet", async kind => {
 		const at = rig(kind);
 		await at.mount();
-		await at.mark(2);
+		expect(at.notices).toBe(1);
 
-		expect(at.pane.querySelectorAll('[data-slot="annotation-footer"]')).toHaveLength(1);
-		expect(at.pane.lastElementChild).toBe(at.footer);
-		expect(at.message).not.toBeNull();
-		expect(at.send).not.toBeNull();
-		// A note is written in a popover where it was made: nothing lists the notes, and the message is the only field.
+		await at.mark(2);
+		expect(at.notices).toBe(1);
+		expect(at.notice).not.toBeNull();
+		expect(at.pane.lastElementChild).toBe(at.notice);
+		expectNoRequestSurface(at);
 		expect(at.pane.querySelector('[data-slot="annotate-panel"]')).toBeNull();
 		expect(at.pane.querySelector("aside")).toBeNull();
-		expect(at.pane.querySelectorAll("textarea")).toHaveLength(1);
 	});
 
-	test("the count on Request edits is the number of notes, drawings and stretches included, and follows undo, the trash and clear", async () => {
-		const at = rig("video");
-		await at.mount();
-		expect(at.request).toBe("Request edits");
-		expect(at.send?.hasAttribute("disabled")).toBe(true);
-
-		await at.mark(1);
-		await env.act(async () => film?.onSpan?.(3, 5));
-		await at.draw(BOX);
-		expect(at.request).toBe("Request edits · 3");
-		expect(at.send?.hasAttribute("disabled")).toBe(false);
-
-		await click(at.tool("undo"));
-		expect(at.request).toBe("Request edits · 2");
-
-		const first = at.marks[0];
-		if (first === undefined) throw new Error("the notes were not made");
-		await env.act(async () => film?.onRemove(first.id));
-		expect(at.request).toBe("Request edits · 1");
-
-		await click(at.tool("clear"));
-		expect(at.request).toBe("Request edits");
-		expect(at.send?.hasAttribute("disabled")).toBe(true);
-	});
-
-	test.each(KINDS)("%s: taking the layer down loses the footer even over the notes it has, and putting it up again brings it back", async kind => {
+	test.each(KINDS)("%s: taking the layer down removes the notice even over the notes it has, and putting it up again restores it", async kind => {
 		const at = rig(kind);
 		await at.mount();
 		await at.mark(2);
-		expect(at.request).toBe("Request edits · 1");
+		expect(at.notices).toBe(1);
 
 		await at.update({ mode: null });
-		expect(at.footer).toBeNull();
+		expect(at.notices).toBe(0);
 
 		await at.update({ mode: "timeline" });
-		expect(at.request).toBe("Request edits · 1");
+		expect(at.notices).toBe(1);
+		expect(at.headings).toEqual(["0:02.0"]);
 	});
 
-	test("a recording that failed keeps the footer over the notes it has, so they can still be requested", async () => {
+	test("a recording that failed keeps the notice over the notes it has, and they still reach the host as text", async () => {
+		const host = stagingHost();
 		const at = rig("video");
-		await at.mount();
-		await at.mark(4);
+		await at.mount({ app: host.app });
+		await note(at, 4, "the dog barks here");
 		await at.fail();
 
-		expect(at.request).toBe("Request edits · 1");
-		expect(at.send?.hasAttribute("disabled")).toBe(false);
-		expect(at.message).not.toBeNull();
+		expect(at.notice).not.toBeNull();
+		expect(at.pane.lastElementChild).toBe(at.notice);
+		expectNoRequestSurface(at);
+		await until(() => host.answered === 1, "the notes of the failed recording staged");
+		expect(host.requests).toHaveLength(1);
+		expect(host.requests[0]).toContain("0:04.0");
+		expect(host.requests[0]).toContain("the dog barks here");
+	}, STAGING_TEST_MS);
+
+	test("marks made in quick succession reach the host as one request once the pause elapses, each with its note", async () => {
+		const host = stagingHost();
+		const at = rig("audio");
+		await at.mount({ app: host.app });
+		await note(at, 2, "cut the cough");
+		await note(at, 9, "lift the music");
+		await note(at, 17, "even out the level");
+		expect(host.requests).toHaveLength(0);
+
+		await until(() => host.answered === 1, "the burst staged");
+		expect(host.requests).toHaveLength(1);
+		for (const words of ["0:02.0", "cut the cough", "0:09.0", "lift the music", "0:17.0", "even out the level"]) {
+			expect(host.requests[0]).toContain(words);
+		}
+	}, STAGING_TEST_MS);
+
+	test("changing a note after the notes were staged stages them again with the new words, and never asks to request again", async () => {
+		const host = stagingHost();
+		const at = rig("audio");
+		await at.mount({ app: host.app });
+		await note(at, 2, "cut the cough");
+		await until(() => host.answered === 1, "the first staging");
+
+		await env.act(async () => at.lane.onNote(at.marks[0]?.id ?? -1, "cut the cough and the sniff"));
+		expect(at.notice?.textContent).toBe("");
+
+		await until(() => host.answered === 2, "the second staging");
+		expect(host.requests[0]).not.toContain("the sniff");
+		expect(host.requests[1]).toContain("cut the cough and the sniff");
+	}, STAGING_TEST_MS);
+
+	test("clearing every mark takes the staged request back, once", async () => {
+		const host = stagingHost();
+		const at = rig("video");
+		await at.mount({ app: host.app });
+		await note(at, 3, "trim the intro");
+		await at.draw(BOX);
+		expect(at.marks).toHaveLength(2);
+		await until(() => host.answered === 1, "the staging");
+		expect(host.takenBack).toBe(0);
+
+		await click(at.tool("clear"));
+		expect(at.marks).toHaveLength(0);
+		await until(() => host.answered === 2, "the request taken back");
+		expect(host.takenBack).toBe(1);
+		expect(host.requests).toHaveLength(1);
+	}, STAGING_TEST_MS);
+
+	test("a host that refuses is explained in the notice", async () => {
+		const host = stagingHost(new Error("the chat is full"));
+		const at = rig("audio");
+		await at.mount({ app: host.app });
+		await note(at, 2, "cut the cough");
+		expect(at.notice?.textContent).toBe("");
+
+		await until(() => host.answered === 1, "the refused staging");
+		expect(at.notice?.textContent).toContain("the chat is full");
+		expect(at.notice?.getAttribute("data-tone")).toBe("error");
+	}, STAGING_TEST_MS);
+
+	test("notes left when the layer is taken down before the pause are not staged behind its back, and are staged once it is up again", async () => {
+		const host = stagingHost();
+		const at = rig("audio");
+		await at.mount({ app: host.app });
+		await note(at, 2, "cut the cough");
+		await at.update({ mode: null });
+		await env.act(() => sleep(STAGING_PAUSE_MS + 300));
+		expect(host.requests).toHaveLength(0);
+
+		await at.update({ mode: "timeline" });
+		await until(() => host.answered === 1, "the staging once the layer is up");
+		expect(host.requests[0]).toContain("cut the cough");
+	}, STAGING_TEST_MS);
+});
+
+describe("the strip's trailing text", () => {
+	test.each(KINDS)("%s: the only trailing text is the full-notes sentence, shown while every note is used and nothing otherwise", async kind => {
+		const at = rig(kind);
+		await at.mount();
+		expect(at.hint).toBe("");
+
+		await nearlyFull(at);
+		expect(at.hint).toBe("");
+
+		await press("i");
+		expect(at.view("stretch").label).toBe("End stretch");
+		expect(at.hint).toBe("");
+		await press("Escape");
+		expect(at.view("stretch").label).toBe("Stretch");
+
+		if (kind === "video") {
+			await press("3");
+			expect(at.armed).toBe("ellipse");
+			expect(at.hint).toBe("");
+			await press("Escape");
+			expect(at.armed).toBeNull();
+		}
+
+		await at.mark(MAX_TIMELINE_MARKS - 1);
+		expect(at.marks).toHaveLength(MAX_TIMELINE_MARKS);
+		expect(at.hint).toBe(FULL_SENTENCE);
+
+		const last = at.marks[MAX_TIMELINE_MARKS - 1];
+		if (last === undefined) throw new Error("the last note was not made");
+		await env.act(async () => at.lane.onRemove(last.id));
+		expect(at.marks).toHaveLength(MAX_TIMELINE_MARKS - 1);
+		expect(at.hint).toBe("");
 	});
 
-	test("Request edits stages the notes with the message beside them, and then says they are added", async () => {
-		const staged: string[] = [];
-		const host = {
-			getHostCapabilities: () => ({ updateModelContext: { text: {} } }),
-			updateModelContext: async (params: { content?: { text?: string }[] }) => {
-				staged.push((params.content ?? []).map(part => part.text ?? "").join("\n"));
-				return {};
-			},
-		} as unknown as App;
-		const at = rig("audio");
-		await at.mount({ app: host });
+	test.each(KINDS)("%s: a recording that failed shows no trailing text", async kind => {
+		const at = rig(kind);
+		await at.mount();
 		await at.mark(2);
-		await env.act(async () => at.lane.onNote(at.marks[0]?.id ?? -1, "cut the cough"));
-		await typeInto(at.message, "keep the rest as it is");
-		expect(at.message?.value).toBe("keep the rest as it is");
-		expect(at.request).toBe("Request edits · 1");
-
-		await click(at.send);
-		await settle();
-		expect(staged).toHaveLength(1);
-		expect(staged[0]).toContain("0:02.0");
-		expect(staged[0]).toContain("cut the cough");
-		expect(staged[0]).toContain("keep the rest as it is");
-		expect(at.request).toMatch(/^Added/);
+		await at.fail();
+		expect(at.hint).toBe("");
 	});
 });
 
