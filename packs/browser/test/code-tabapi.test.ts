@@ -5,7 +5,7 @@
  */
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { Page } from "puppeteer-core";
 import { createCodeEvaluator } from "../src/code/cell/evaluator";
@@ -14,7 +14,7 @@ import { producesText } from "../src/code/worker/password-guard";
 import { RunOutput } from "../src/code/worker/run-output";
 import { createTabRealm } from "../src/code/worker/tab-realm";
 import { readImageDimensions } from "../src/code/worker/image-size";
-import { resolveScreenshotDir, shortenPath } from "../src/code/worker/screenshot";
+import { resolveScreenshotDir } from "../src/code/worker/screenshot";
 import { resolveUploadPath, textClickLoopMs } from "../src/code/worker/tab-api";
 import { OpRunner, type RunState, resolveOpTimeouts, resolveWaitTimeout } from "../src/code/worker/tab-ops";
 import { chromePath, type Fixture, type LaunchedChrome, launchChrome, startFixture } from "./code-tab-fixture";
@@ -28,6 +28,11 @@ function captionOf(result: RunResult): string {
   const first = result.displays[0];
   if (first?.type !== "text") throw new Error("the run printed no caption");
   return first.text;
+}
+
+/** `text` as a regular expression source that matches exactly itself: a temp directory's and a file's name hold `.` and `-`. */
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /** Answer a dialog nobody was going to: a page stuck behind one cannot be closed cleanly. */
@@ -535,8 +540,9 @@ describeWithChrome("the tab realm drives a page it adopted", () => {
         const lines = captionOf(result).split("\n");
         expect(lines[0]).toBe("Screenshot captured");
         expect(lines[1]).toMatch(/^Saved: image\/png \(.+ KB\) to /);
-        // The caption prints the path as OMP does: `~` for the home directory (a temp directory under it included), forward slashes.
-        expect(lines[1]).toContain(shortenPath(dest));
+        // The caption prints the path as OMP does (`~` for the home directory, forward slashes), so it is not compared with the code's own shortener, which would agree with its own bug:
+        // whichever separators it prints, the line ends with this test's unique directory and the saved file.
+        expect(lines[1]).toMatch(new RegExp(`[\\\\/]${escapeRegExp(basename(dir))}[\\\\/]${escapeRegExp(basename(dest))}$`));
         expect(lines[2]).toMatch(/^Model: image\/webp \(.+ KB, \d+x1024\)$/);
       } finally {
         await configured.dispose();

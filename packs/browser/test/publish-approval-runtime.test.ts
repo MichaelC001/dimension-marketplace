@@ -624,6 +624,44 @@ describe("approval ownership across authority loss", () => {
 		expect(again.status).toBe("awaiting-confirmation");
 	});
 
+	test("revocation while the receipts are read just before the click prevents the click and restores the unspent approval", async () => {
+		const s = await session();
+		await approve(s);
+		const parked = await park(s);
+		let authorized = true;
+		let verified = false;
+		const entered = Promise.withResolvers<void>();
+		const gate = Promise.withResolvers<void>();
+		const readField = s.page.readField.bind(s.page);
+		const state = s.page.state.bind(s.page);
+		s.page.readField = async selector => {
+			const read = await readField(selector);
+			verified = true;
+			return read;
+		};
+		// The first page read after the draft is verified is the receipts' read before the click. A failure inside it is swallowed (the receipts seen before are just none), so only the check right before the click can still refuse.
+		s.page.state = async () => {
+			if (verified && authorized) {
+				entered.resolve();
+				await gate.promise;
+			}
+			return state();
+		};
+		const assertCurrent = () => {
+			if (!authorized) throw new Error("host context revoked");
+		};
+		const confirming = s.runtime.confirmPublish(s.browserId, parked.publishId, "app", undefined, Object.assign(() => undefined, { assertCurrent }));
+		await entered.promise;
+		authorized = false;
+		gate.resolve();
+		await expect(confirming).rejects.toThrow("host context revoked");
+		expect(s.page.clicks).toBe(0);
+		expect((await recordOf(s, parked.publishId)).status).toBe("failed");
+		s.page.readField = readField;
+		s.page.state = state;
+		expect((await park(s)).status).toBe("awaiting-confirmation");
+	});
+
 	test("revocation after accepted submit cannot restore the approval or replay the click", async () => {
 		const s = await session();
 		await approve(s);
@@ -640,6 +678,11 @@ describe("approval ownership across authority loss", () => {
 		expect((await recordOf(s, parked.publishId)).status).toBe("unknown");
 		expect(s.page.clicks).toBe(1);
 		expectRefused(await publish(s), "already used");
+		expect(s.page.clicks).toBe(1);
+		// The settled publish is not open to a second confirm, and nothing more reaches the page.
+		const again = await confirmAs(s, parked, "app");
+		expect(again.isError).toBe(true);
+		expect(again.content[0]?.text).toContain("this publish is unknown");
 		expect(s.page.clicks).toBe(1);
 	});
 });

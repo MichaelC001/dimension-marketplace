@@ -8,7 +8,7 @@
 import { afterEach, expect, test } from "bun:test";
 import type { ArtifactoryLoopPrincipal } from "../src/contracts";
 import type { BrowserRuntime } from "../src/runtime";
-import { ProfileStore } from "../src/store";
+import { BrowserRuntimeError, ProfileStore } from "../src/store";
 import { BROWSER_TEST_TIMEOUT_MS, createRoot, describeWithChrome, failureCode, newRuntime, teardown } from "./fixture";
 
 afterEach(teardown, BROWSER_TEST_TIMEOUT_MS);
@@ -40,6 +40,17 @@ async function agentOpensAndLeaves(runtime: BrowserRuntime): Promise<void> {
 }
 
 const agentIsRefused = (runtime: BrowserRuntime) => failureCode(() => runtime.open({ profile: "work" }, asModel));
+
+/** The code and message a refused saved-profile access carries; an access that is let through fails the test. */
+function refusalOf(access: () => void): { code: string; message: string } {
+	try {
+		access();
+	} catch (error) {
+		if (error instanceof BrowserRuntimeError) return { code: error.code, message: error.message };
+		throw error;
+	}
+	throw new Error("expected the access to be refused, but it was let through");
+}
 
 describeWithChrome("a chat's saved-profile approval stays bound to the subject that was approved", () => {
 	test("losing the verified Loop identity drops the approval, and the same identity returning does not bring it back", async () => {
@@ -112,5 +123,39 @@ describeWithChrome("a chat's saved-profile approval stays bound to the subject t
 			await agentOpensAndLeaves(runtime);
 		}
 		await runtime.close(created.browserId, "app");
+	}, BROWSER_TEST_TIMEOUT_MS);
+});
+
+describeWithChrome("a saved profile's browser asks for the host stamp before it asks for any approval", () => {
+	test("an access with no caller stamp or no session is refused whether or not the person allowed the chat; a stamped model without the approval is refused for the approval; the person passes", async () => {
+		const runtime = await runtimeWithSavedProfile();
+		const { browserId } = await runtime.open({ profile: "work" }, { caller: "app" });
+		const unstamped: Array<[string, () => void]> = [
+			["no caller stamp and no session", () => runtime.requireProfileAccess(browserId)],
+			["no caller stamp, with the chat's session", () => runtime.requireProfileAccess(browserId, undefined, SESSION)],
+			["a model with no session", () => runtime.requireProfileAccess(browserId, "model")],
+		];
+		const allRefusedForTheStamp = (): void => {
+			for (const [name, access] of unstamped) {
+				expect({ name, ...refusalOf(access) }).toMatchObject({ name, code: "profile_consent_required", message: expect.stringContaining("host-stamped model session") });
+			}
+		};
+
+		allRefusedForTheStamp();
+		// A model that carries the stamp is asked for the person's approval instead, and told which profile; that also puts the request on the person's menu.
+		expect(refusalOf(() => runtime.requireProfileAccess(browserId, "model", SESSION))).toMatchObject({
+			code: "profile_consent_required",
+			message: expect.stringContaining('approve access to profile "work"'),
+		});
+
+		await runtime.decideProfileConsent("work", "allow", "app", SESSION, "chat", undefined);
+		runtime.requireProfileAccess(browserId, "model", SESSION);
+		// The chat's approval is for a model that carries the stamp; it does not stand in for a call that does not.
+		allRefusedForTheStamp();
+
+		// The person is never asked, with or without a chat.
+		runtime.requireProfileAccess(browserId, "app");
+		runtime.requireProfileAccess(browserId, "app", SESSION);
+		await runtime.close(browserId, "app");
 	}, BROWSER_TEST_TIMEOUT_MS);
 });

@@ -1,8 +1,8 @@
 import http from "node:http";
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import type { BrowserState } from "../src/contracts";
 import type { LiveFrame } from "../src/engines/types";
-import { LiveChannel, type LiveSource } from "../src/stream";
+import { CardClient, LiveChannel, type LiveSource } from "../src/stream";
 import { BrowserRuntimeError } from "../src/store";
 
 const viewport = { width: 800, height: 600 };
@@ -131,3 +131,42 @@ test("a card token only streams pictures, cannot enter the View or send input, a
 	second.close();
 	await releasedAll.promise;
 }, 10_000);
+
+/** The part of a response a card writes to, every write kept where the test can read it. It always has room (`write` answers true), so no picture waits on a drain: only the 250 ms gap can hold one back. */
+class RecordedResponse {
+	readonly writes: Buffer[] = [];
+	destroyed = false;
+	write(chunk: Buffer): boolean {
+		this.writes.push(chunk);
+		return true;
+	}
+	once(): this {
+		return this;
+	}
+	end(): void {
+		this.destroyed = true;
+	}
+	destroy(): void {
+		this.destroyed = true;
+	}
+}
+
+test("a card opened in a young process gets its first picture at once, and the 250 ms gap still holds the next one", () => {
+	// `performance.now()` counts from the process start, not from the card. At 10 ms of uptime a card used to read its first picture as 10 ms into the gap and wait the other 240 ms for it.
+	const clock = spyOn(performance, "now").mockReturnValue(10);
+	const response = new RecordedResponse();
+	const client = new CardClient(response as unknown as http.ServerResponse, () => {});
+	try {
+		// The bytes of the pictures themselves: a card's part header is written when it opens and is not a picture.
+		const first = Buffer.from([0xff, 0xd8, 11]);
+		const second = Buffer.from([0xff, 0xd8, 22]);
+		client.offer(first);
+		expect(Buffer.concat(response.writes).includes(first)).toBe(true);
+		// No time has passed: the next picture is kept for when the gap is over, not sent.
+		client.offer(second);
+		expect(Buffer.concat(response.writes).includes(second)).toBe(false);
+	} finally {
+		client.end(false);
+		clock.mockRestore();
+	}
+});

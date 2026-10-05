@@ -52,6 +52,10 @@ const TOUCHED = "The page was used in the Browser View while waiting, so it may 
 const CLOSED = "The browser was closed. Nothing was submitted.";
 /** The same, on the relay: the human's own Chrome, where the page can be used outside the View. */
 const SHARED = "This page is in your own Chrome, where it can be used outside the Browser View, so it may have posted there. Check the account.";
+/** What the saved-profile consent gate tells a call that carries no host stamp, before any lock is looked at. */
+const UNSTAMPED = "A host-stamped model session is required for saved-profile access.";
+/** What a model that holds the profile is told while a post awaits the human: the pinned page takes nobody's work but the View's. */
+const PENDING = "a post awaits confirmation on this browser";
 
 interface ToolResult {
 	isError?: boolean;
@@ -586,7 +590,7 @@ describeWithChrome("browser_publish", () => {
 	);
 
 	test(
-		"while a publish awaits the human, an unstamped or model act, tab, task and check are refused publish_pending and leave the page alone; the View's app act still works",
+		"while a publish awaits the human, an unstamped act, tab, task and check are refused by the consent gate and a model's are refused publish_pending; the page is left alone and the View's app act still works",
 		async () => {
 			const s = await session("pub-locked");
 			const parked = await post(s, "nav");
@@ -599,14 +603,17 @@ describeWithChrome("browser_publish", () => {
 				["browser_task", { browserId: id, task: "post something else", waitSeconds: 0 }],
 				["browser_publish", { browserId: id, recipe: recipe(s.fixture, "stay"), mode: "check" }],
 			];
-			for (const caller of [null, "model"]) {
+			// An unstamped call never reaches the lock: the consent gate refuses it first. The model, which holds the profile, is the caller the lock refuses.
+			for (const [caller, reason] of [[null, UNSTAMPED], ["model", PENDING]] as const) {
 				for (const [name, args] of calls) {
 					const refused = await s.call(name, args, caller);
-					expect({ name, caller, isError: refused.isError }).toEqual({ name, caller, isError: true });
+					expect({ name, caller, isError: refused.isError, text: refused.content[0]?.text }).toMatchObject({ name, caller, isError: true, text: expect.stringContaining(reason) });
 				}
 			}
 			// The code behind those messages, at each gated runtime entry point.
 			expect(await failureCode(() => s.runtime.act(id, { kind: "type", selector: "#text", text: "x" }, "model"))).toBe("publish_pending");
+			// The lock does not lean on the gate: a runtime call that carries no caller at all is refused by it too.
+			expect(await failureCode(() => s.runtime.act(id, { kind: "type", selector: "#text", text: "x" }))).toBe("publish_pending");
 			expect(await failureCode(() => s.runtime.tab(id, { op: "new" }, "model"))).toBe("publish_pending");
 			// One refusal for a whole batch, before any of its steps reaches the page.
 			expect(await failureCode(() => s.runtime.actMany(id, [{ kind: "type", selector: "#text", text: "x" }, { kind: "click", selector: "#post" }], "model"))).toBe("publish_pending");
@@ -626,6 +633,35 @@ describeWithChrome("browser_publish", () => {
 
 			await humanAct(s, { kind: "type", selector: "#rich", text: "the human's own edit" });
 			expect((await counters(s.runtime, id)).writes).toBeGreaterThan(seen.writes);
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"while a publish awaits the human, an unstamped confirm, cancel and post are refused by the consent gate: nothing is clicked and the publish stays pending",
+		async () => {
+			const s = await session("pub-unstamped-settle");
+			const parked = await post(s, "nav");
+			const shown = { origin: parked.origin, profile: parked.profile, values: parked.fields.map((field) => field.value) };
+			const args = { browserId: s.browserId, publishId: parked.publishId };
+			const seen = await counters(s.runtime, s.browserId);
+			// The confirm names exactly what is parked, so only the gate stands between it and the post.
+			const calls: Array<[string, Record<string, unknown>]> = [
+				["browser_publish_confirm", { ...args, expect: shown }],
+				["browser_publish_cancel", args],
+				["browser_publish", { browserId: s.browserId, recipe: recipe(s.fixture, "nav"), mode: "post" }],
+			];
+
+			for (const [name, input] of calls) {
+				const refused = await s.call(name, input, null);
+				expect({ name, isError: refused.isError, text: refused.content[0]?.text }).toMatchObject({ name, isError: true, text: expect.stringContaining(UNSTAMPED) });
+			}
+
+			expect(seen.clicks).toBe(0);
+			expect(await counters(s.runtime, s.browserId)).toEqual(seen);
+			expect(s.fixture.hits("/submit")).toBe(0);
+			expect(s.fixture.hits("/compose")).toBe(1);
+			expect((await record(s, parked.publishId)).status).toBe("awaiting-confirmation");
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);
@@ -751,16 +787,17 @@ describeWithChrome("browser_publish", () => {
 	);
 
 	test(
-		"an unstamped or model browser_close while a publish awaits the human is refused publish_pending and the browser stays open",
+		"while a publish awaits the human, an unstamped browser_close is refused by the consent gate and a model's publish_pending; the browser stays open",
 		async () => {
 			const s = await session("pub-close-refused");
 			const parked = await post(s, "nav");
 
-			for (const caller of [null, "model"]) {
+			for (const [caller, reason] of [[null, UNSTAMPED], ["model", PENDING]] as const) {
 				const refused = await s.call("browser_close", { browserId: s.browserId }, caller);
-				expect({ caller, isError: refused.isError }).toEqual({ caller, isError: true });
+				expect({ caller, isError: refused.isError, text: refused.content[0]?.text }).toMatchObject({ caller, isError: true, text: expect.stringContaining(reason) });
 			}
 			expect(await failureCode(() => s.runtime.close(s.browserId, "model"))).toBe("publish_pending");
+			expect(await failureCode(() => s.runtime.close(s.browserId))).toBe("publish_pending");
 
 			// Still open: the human's Post still posts.
 			const confirmed = await s.call("browser_publish_confirm", { browserId: s.browserId, publishId: parked.publishId }, "app");

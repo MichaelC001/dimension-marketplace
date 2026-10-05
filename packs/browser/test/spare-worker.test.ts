@@ -1,8 +1,8 @@
 /** WHAT BREAKS IN THE PRODUCT IF THIS GOES RED: every jev task after the first pays a cold Python interpreter start again
  *  (the spare worker the last task left waiting is no longer taken), or the server keeps interpreters it should have let
  *  go: a spare kept for a session with no jev key, one reused by a task whose environment (a rotated key) is not the one
- *  it was started in, or one that outlives the runtime that was disposed (including one a task kept while the dispose was
- *  already running).
+ *  it was started in, or one that outlives the runtime that was disposed (including an interpreter born for a task that was
+ *  queued before the dispose and was not refused by it).
  *
  *  The REAL `startWorker` launches the real interpreter on a scripted FAKE worker (test/fake-worker). Each fake worker
  *  records its pid, as an empty file, in PYTHON_FAKE_WORKER_PIDS the moment it starts, and answers a job with its own pid: a job
@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { releaseSpare, startWorker } from "../src/task";
-import { BROWSER_TEST_TIMEOUT_MS, chromePath, createRoot, newRuntime, teardown, waitUntil } from "./fixture";
+import { BROWSER_TEST_TIMEOUT_MS, chromePath, createRoot, failureCode, newRuntime, teardown, waitUntil } from "./fixture";
 import { withJevKey } from "./jev-key";
 
 withJevKey();
@@ -161,25 +161,25 @@ describeWithPython("the jev worker's spare", () => {
 
 describeWithPythonAndChrome("a task that starts while the runtime is being disposed", () => {
 	test(
-		"leaves no spare worker running once dispose has resolved",
+		"a task queued before dispose is refused disposed and leaves no interpreter",
 		async () => {
 			const dir = await pidDirectory();
 			const runtime = newRuntime(await createRoot());
 			const { browserId } = await runtime.open({ viewport: { width: 640, height: 480 } });
 
-			// The task's start is queued on the browser before dispose begins. A runtime being disposed refuses a start that reaches its fence (`beginTask`: "runtime has been disposed"), so
-			// no interpreter is born; were a start ever to slip past it, dispose must still release the worker and the spare behind it. Either way nothing may outlive dispose.
-			const started = runtime.startTask(browserId, { task: JSON.stringify({ hold: true }) }).catch(() => undefined);
-			const disposed = runtime.dispose();
-			await Promise.all([started, disposed]);
+			// The task's start is queued on the browser before dispose begins (`failureCode` calls it synchronously). The runtime being disposed refuses a start that reaches its fence (`beginTask`:
+			// "runtime has been disposed") with `disposed`, so no interpreter is born. A start that slipped past the fence would resolve instead and the refusal below would go red.
+			const refusal = failureCode(() => runtime.startTask(browserId, { task: JSON.stringify({ hold: true }) }));
+			const disposing = runtime.dispose();
 
 			try {
-				// A real delay, as in the absence check above: an interpreter that was refused cannot be awaited, and a real clock is what its start-up (a fraction of this) would race. A spare would
-				// trail dispose's return by a moment, so wait that out; then every interpreter that ever recorded its pid must be gone.
+				const [code] = await Promise.all([refusal, disposing]);
+				expect(code).toBe("disposed");
+
+				// A real delay, as in the absence check above: a refused start leaves no process to await, and a real clock is what an interpreter's start-up (a fraction of this) would race.
+				// A spare would trail dispose's return by a moment, so wait that out; then no interpreter may ever have recorded its pid.
 				await Bun.sleep(1_000);
-				for (const pid of await readdir(dir)) {
-					await waitUntil(`worker ${pid} to exit`, () => alive(pid), (running) => !running);
-				}
+				expect(await readdir(dir)).toEqual([]);
 			} finally {
 				releaseSpare(); // after the assertions only: a red run must not leave a Python holding the key
 			}

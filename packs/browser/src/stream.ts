@@ -259,8 +259,8 @@ class Room {
 	}
 }
 
-/** A card never accumulates frames: one newest picture waits for drain and the 250 ms gate. */
-class CardClient {
+/** A card never accumulates frames: one newest picture waits for drain and the 250 ms gate. Exported for its test: the clock gate cannot be observed over a socket without sleeping. */
+export class CardClient {
 	#pending: Uint8Array | undefined;
 	#blocked = false;
 	/** When the last picture was written; none yet, so the first is never held to the 250 ms gate (`performance.now()` counts from process start, not from this card). */

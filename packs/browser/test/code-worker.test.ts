@@ -317,6 +317,29 @@ describe("what a tab call hands the cell", () => {
   });
 });
 
+describe("the host hears which page a run drives", () => {
+  test("a run names its page when it first drives one and again only when it moves to another, on call and run alike", async () => {
+    const realm = new FakeRealm();
+    const heard: Array<[string, string]> = [];
+    const invoke = createDispatcher({ realm, host: async () => { throw new Error("must not reach the host"); }, activity: (runId, name) => { heard.push([runId, name]); } });
+    const live = { runId: "r1", signal: new AbortController().signal };
+
+    for (let i = 0; i < 20; i += 1) await invoke({ action: "call", name: "main", chain: [{ method: "url", args: [] }] }, live);
+    expect(heard).toEqual([["r1", "main"]]);
+    // A run on the page it already drives is no news either.
+    await invoke({ action: "run", name: "main", code: "1" }, live);
+    expect(heard).toEqual([["r1", "main"]]);
+    // Moving to another page is news, and so is moving back.
+    await invoke({ action: "call", name: "other", chain: [{ method: "url", args: [] }] }, live);
+    expect(heard).toEqual([["r1", "main"], ["r1", "other"]]);
+    await invoke({ action: "run", name: "main", code: "1" }, live);
+    expect(heard).toEqual([["r1", "main"], ["r1", "other"], ["r1", "main"]]);
+    // Saying less never means doing less: every call and run still went to the page.
+    expect(realm.called).toHaveLength(21);
+    expect(realm.ran).toHaveLength(2);
+  });
+});
+
 describe("cancellation, budget and shutdown", () => {
   test("an abort ends the cell and the host call it waits on, and asks the host for a new worker, as OMP kills its worker on any abort; a late reply changes nothing", async () => {
     const { link, run } = await startWorker(request => (request.name === "stuck" ? "never" : { ok: true, text: "fine" }));

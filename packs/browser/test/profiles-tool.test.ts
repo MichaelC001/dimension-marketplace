@@ -26,6 +26,8 @@ import { BROWSER_TEST_TIMEOUT_MS, createRoot, describeWithChrome, newRuntime, te
 import { ProfileStore } from "../src/store";
 
 const textOf = (result: ToolResult): string => result.content.map((block) => block.text ?? "").join("");
+/** What a model that names a saved profile the person has not approved is told: which profile, and that the person decides. A bare `isError` would also pass for a typo'd name. */
+const approvalRequest = (profile: string): string => `approve access to profile "${profile}"`;
 const CALLER = "ai.insodimension/caller";
 const SESSION = "ai.insodimension/session";
 const SPACES = "ai.insodimension/spaces";
@@ -181,6 +183,13 @@ describe("what each caller is sent", () => {
 		});
 		// An unstamped call (no host) is treated as a model.
 		expect((await call("browser_profiles", {})).structuredContent).toBeUndefined();
+
+		// The person approves "work" for this chat. The model is then sent that profile's site entry whole: where, whether signed in, and when that was seen, and no account.
+		const refused = await call("browser_open", { profile: "work" }, MODEL);
+		expect(refused.isError).toBe(true);
+		expect(textOf(refused)).toContain(approvalRequest("work"));
+		expect((await call("browser_profile_consent", { name: "work", decision: "allow", scope: "chat" }, VIEW)).isError).toBeFalsy();
+		expect(listOf(await call("browser_profiles", {}, MODEL)).profiles[1]).toEqual({ name: "work", label: "Work", colour: "blue", heldBy: null, sites: [{ site: "x.com", signedIn: true, seenAt }] });
 	});
 
 	test("a model is never told whose account a site is — no email, no handle — even once the person approves the profile; the View is", async () => {
@@ -191,7 +200,9 @@ describe("what each caller is sent", () => {
 			store.recordConnection("work", "reddit.com", { signedIn: true, observedAt: NOW - 4_000 });
 		});
 		// The person approves "work" for this chat: the model may then see which sites are signed in, never whose.
-		expect((await call("browser_open", { profile: "work" }, MODEL)).isError).toBe(true);
+		const refused = await call("browser_open", { profile: "work" }, MODEL);
+		expect(refused.isError).toBe(true);
+		expect(textOf(refused)).toContain(approvalRequest("work"));
 		expect((await call("browser_profile_consent", { name: "work", decision: "allow", scope: "chat" }, VIEW)).isError).toBeFalsy();
 		for (const who of [MODEL, undefined]) {
 			const text = textOf(await call("browser_profiles", {}, who));
@@ -224,7 +235,9 @@ describe("what each caller is sent", () => {
 	test("the dock panel and the lists agree: the report the panel is sent carries the View's label, colour, sites and accounts, and the sites and sign-in state the agent reads", async () => {
 		const { call, reports } = await connect(seed);
 		// The person approves "work" for this chat: from then on the agent reads its sites too.
-		expect((await call("browser_open", { profile: "work" }, MODEL)).isError).toBe(true);
+		const refused = await call("browser_open", { profile: "work" }, MODEL);
+		expect(refused.isError).toBe(true);
+		expect(textOf(refused)).toContain(approvalRequest("work"));
 		expect((await call("browser_profile_consent", { name: "work", decision: "allow", scope: "chat" }, VIEW)).isError).toBeFalsy();
 		// The first report is sent once the host has initialised.
 		await waitUntil("the first report", () => reports, (seen) => seen.length > 0);
@@ -250,7 +263,9 @@ describeWithChrome("opening a profile by the name an agent was given", () => {
 		"a consented label opens it, the same chat reuses its browser, and an unconsented stranger gets no browser id",
 		async () => {
 			const { call } = await connect((store) => store.saveMeta("acme-work", { label: "Work Account" }));
-			expect((await call("browser_open", { profile: "work account" }, MODEL)).isError).toBe(true);
+			const unapproved = await call("browser_open", { profile: "work account" }, MODEL);
+			expect(unapproved.isError).toBe(true);
+			expect(textOf(unapproved)).toContain(approvalRequest("acme-work"));
 			expect((await call("browser_profile_consent", { name: "acme-work", decision: "allow", scope: "chat" }, VIEW)).isError).toBeFalsy();
 			const first = await call("browser_open", { profile: "work account" }, MODEL);
 			expect(first.structuredContent).toMatchObject({ profile: "acme-work" });
@@ -287,7 +302,9 @@ describeWithChrome("opening a profile by the name an agent was given", () => {
 		"opening a profile after the browser build under it changed tells the person once, in the open result alone",
 		async () => {
 			const { call, store } = await connect((s) => s.saveMeta("work", { app: "msedge" }));
-			expect((await call("browser_open", { profile: "work" }, MODEL)).isError).toBe(true);
+			const unapproved = await call("browser_open", { profile: "work" }, MODEL);
+			expect(unapproved.isError).toBe(true);
+			expect(textOf(unapproved)).toContain(approvalRequest("work"));
 			expect((await call("browser_profile_consent", { name: "work", decision: "allow", scope: "chat" }, VIEW)).isError).toBeFalsy();
 			const opened = await call("browser_open", { profile: "work" }, MODEL);
 			// The test browser is a `custom` build; the profile was last run in Edge.
