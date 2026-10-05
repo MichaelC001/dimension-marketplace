@@ -1,6 +1,6 @@
 ---
 name: simulator
-description: Drive an Android emulator the user can watch beside the chat — boot it, screenshot, tap by label, swipe, type, press keys, open URLs, install and launch apps, read the screen as a UI tree. Use to test a mobile app, reproduce a bug on a phone, walk a flow, or "look at the emulator".
+description: Drive an Android emulator the user can watch beside the chat — boot it, screenshot, tap by label, swipe, type, press keys, open URLs, install and launch apps, read the screen as a UI tree. Use to test a mobile app, reproduce a bug on a phone, walk a flow, or "look at the emulator". Emulators only: a physical phone is the person's own device and is refused unless they named it.
 ---
 
 # Simulator
@@ -9,11 +9,20 @@ One device, shared when you want it to be. The `device_*` tools work with or wit
 
 ## Start
 
-1. `device_list` first. It lists running devices (`serial`, state, display size in px), the AVDs you can boot, and any missing prerequisite with its fix. A missing prerequisite is the answer: report the fix, do not work around it.
-2. No device? `device_boot` (`avd` if there is more than one; `headless: true` when the user does not need to watch). It returns within ~20 s: if the state is `booting`, call `device_boot` again with the same `avd` to wait. A cold boot is up to a minute; never poll `device_list` in a loop.
-3. Leave `serial` out when exactly one device runs. With several you must pass it.
+1. `device_list` first. It lists running devices (`serial`, `kind` emulator or physical, state, display size in px), the AVDs you can boot, and any missing prerequisite with its fix. A missing prerequisite is the answer: report the fix, do not work around it.
+2. No emulator? `device_boot` (`avd` if there is more than one; `headless: true` when the user does not need to watch). It returns within ~20 s: if the state is `booting`, call `device_boot` again with the same `avd` to wait. A cold boot is up to a minute; never poll `device_list` in a loop. If it fails, its error ends with the last lines of the emulator's own log: report them.
+3. Leave `serial` out only when exactly one **emulator** runs; with several you must pass it. A physical phone is never picked for you (next section).
 
 You may stop only what this pack booted (`device_stop`); a device the user started is theirs and the tool refuses it. The pack also stops its own idle emulators, so do not keep one booted "just in case".
+
+## A physical phone is the person's own device
+
+`device_list` marks every device `emulator` or `physical`. A physical phone (USB or Wi-Fi) holds the person's messages, accounts and lock screen. This pack never picks one for you and refuses every tool call on one (tap, swipe, type, key, open_url, install, launch, ui_tree, screenshot, open, stop, and the pane's own input):
+
+- No `serial` means the one running emulator, never a phone, not even when the phone is the only device. With no emulator the tool answers "no emulator is running": `device_boot` one. Do not get around it by passing the phone's serial.
+- Acting on a phone takes BOTH keys: `allowPhysical: true` on the call AND the user's `simulator.allowPhysical` setting turned on. You cannot turn the setting on; when the refusal says it is off, tell the user and ask.
+- Pass `allowPhysical: true` only when the user named that exact device in this conversation ("use my Pixel", with that phone attached). "Use a device" or "use the emulator" is never that. Told to use an emulator and none runs? Boot one. Never fall back to a phone.
+- Never use a phone to unlock it, dismiss a keyguard, or enter a PIN or password. If its screen asks for one, stop and tell the user.
 
 ## See the screen: cheapest first
 
@@ -42,4 +51,4 @@ The pack owns the adb connection, the live encoder and the emulator's lifecycle.
 
 ## Errors
 
-Every error names its fix. Common ones: `missing_adb` / `missing_emulator` (install the Android SDK tools, set `ANDROID_HOME`), `device_cap` (stop one of the emulators this pack booted, or raise `simulator.maxDevices`), `not_owned` (the device is the user's: do not stop it), `label_ambiguous` (pass `occurrence`), `ui_dump_failed` (a secure screen or a mid-transition app: retry in a second, or fall back to a screenshot).
+Every error names its fix. Common ones: `missing_adb` / `missing_emulator` (install the Android SDK tools, set `ANDROID_HOME`; the error lists every path that was tried), `no_emulator` (no emulator runs: `device_boot`), `physical_device` (the target is the person's phone: ask the user, do not retry with `allowPhysical` unless they named it), `device_cap` (stop one of the emulators this pack booted, or raise `simulator.maxDevices`), `not_owned` (the device is the user's: do not stop it), `label_ambiguous` (pass `occurrence`), `ui_dump_failed` (a secure screen or a mid-transition app: retry in a second, or fall back to a screenshot).

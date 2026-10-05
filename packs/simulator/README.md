@@ -35,8 +35,8 @@ on a phone the host draws its own "Open on your computer" card for it.
 
 | Tool | Does |
 | --- | --- |
-| `device_list` | Running devices, bootable AVDs, missing prerequisites with fixes. |
-| `device_boot {avd?, headless?, cold?, waitSeconds?}` | Boot an emulator. Returns within 25 s; call again with the same `avd` to wait. An already running device is returned, not duplicated. |
+| `device_list` | Running devices (each with `kind`: `emulator` or `physical`), bootable AVDs, missing prerequisites with fixes and every path tried. |
+| `device_boot {avd?, headless?, cold?, waitSeconds?}` | Boot an emulator. Returns within 25 s; call again with the same `avd` to wait. An already running device is returned, not duplicated. A failed boot's error ends with the last 15 lines of the emulator's log. |
 | `device_stop {serial}` | Stop an emulator this pack booted (refused for any other). |
 | `device_screenshot {serial?, maxEdge?}` | PNG, at most `maxEdge` px on the long edge (default 1024); the text gives the scale to device pixels. |
 | `device_tap {label}` or `{x, y}` | Tap. `label` re-reads UI Automator right before tapping; ambiguous labels are refused with the numbered choices (`occurrence`). |
@@ -47,21 +47,50 @@ on a phone the host draws its own "Open on your computer" card for it.
 | `device_open {serial?, avd?, boot?}` | Show the pane beside the conversation. |
 | `device_stream` (app only) | The View's door to the frames lane: a loopback WebSocket address with a one-use token. |
 
-`serial` may be left out when exactly one device runs (or the pane holds one in
-this session). With several, name it.
+Every tool that acts on a device takes `allowPhysical` (see **Physical phones**).
+`serial` may be left out only when exactly one *emulator* runs (or the pane holds
+one in this session). With several, name it.
+
+## Physical phones
+
+A phone attached over USB or Wi-Fi is the person's own device, not a test
+fixture. An agent once asked to use an emulator drove the owner's real phone
+because it was the only device listed. So:
+
+- `device_list` tags each device `emulator` or `physical`
+  (`classifyDevice`: an `emulator-*` serial, or a device reporting qemu).
+  Anything that cannot be shown to be an emulator is physical.
+- Leaving `serial` out selects only an *emulator*, never a phone, even when it is
+  the only device (the tool then says no emulator is running and to call
+  `device_boot`).
+- Every tool that acts on a device (tap, swipe, type, key, open_url, install,
+  launch, ui_tree, screenshot, open, stop) and the pane's frames lane refuse a
+  physical device unless the call passes `allowPhysical: true` **and** the user's
+  `simulator.allowPhysical` setting is on. The refusal names both and says to ask
+  the user. The skill tells the agent to pass the flag only for a phone the user
+  named in the conversation, and never to unlock it or enter a PIN.
+- The pane lists emulators only. **Show physical devices** (off by default,
+  disabled while the setting is off) adds phones, each marked "physical device";
+  it never picks one for you, and an agent's `device_open` on a phone does not
+  switch the pane to it.
 
 ## Prerequisites
 
 | Tool | Needed for | Where it is looked for |
 | --- | --- | --- |
-| **adb** (Android SDK platform-tools) | everything | `simulator.sdkPath` → `$ANDROID_HOME` → `$ANDROID_SDK_ROOT` → the default Android Studio SDK location → `PATH` → `~/.inso/tools/mobile-sim/**` |
-| **emulator** (Android Emulator + an AVD) | booting a device (a running emulator or a USB phone works without it) | the same SDK roots, then `PATH` |
-| **scrcpy-server** | live H.264 video (Shot fallback without it) | `$SCRCPY_SERVER_PATH` → `~/.inso/tools/mobile-sim/**` (and `$INSO_HOME`'s) → next to a `scrcpy` on `PATH` → the package manager's share directory |
+| **adb** (Android SDK platform-tools) | everything | `simulator.sdkPath` → `$ANDROID_HOME` → `$ANDROID_SDK_ROOT` → the default Android Studio SDK location under each home → `PATH` → `<home>/.inso/tools/mobile-sim/**` |
+| **emulator** (Android Emulator + an AVD) | booting a device (a running emulator or a USB phone works without it) | the same SDK roots, then `PATH`, then `<home>/.inso/tools/mobile-sim/**` |
+| **scrcpy-server** | live H.264 video (Shot fallback without it) | `$SCRCPY_SERVER_PATH` → `<home>/.inso/tools/mobile-sim/scrcpy/**` (recursive: the unzipped release is a nested folder) → the rest of `mobile-sim/**` (and `$INSO_HOME`'s) → next to a `scrcpy` on `PATH` → the package manager's share directory |
 
 Nothing is hard-coded: `src/toolchain.ts` resolves the above at run time, and a
-missing tool is reported with the command to get it. The SDK's adb is preferred
-over a scrcpy bundle's own (a second adb binary against the user's server is how
-"adb server version doesn't match" restarts happen).
+missing tool is reported with the command to get it and **every path that was
+tried**. `<home>` is every distinct home: `os.homedir()` (which follows
+`HOME`/`USERPROFILE`), the OS account's own home (`os.userInfo().homedir`) and the
+environment's `HOME`/`USERPROFILE`. The Dimension dev desktop repoints
+`HOME`/`USERPROFILE` at a worktree-local folder, so the tools the user installed
+under their real home are only found through the account's home. The SDK's adb is
+preferred over a scrcpy bundle's own (a second adb binary against the user's
+server is how "adb server version doesn't match" restarts happen).
 
 **Pinned versions this pack was built and measured against** (installed outside
 the repo, under `~/.inso/tools/mobile-sim/`):
@@ -81,9 +110,11 @@ release may change the protocol: pin it, and the first Live attach tells you
 loudly if it does (the stream is rejected, the pane falls to Shot).
 
 **avdslim** is optional. The pack boots with avdslim's slimming flags itself
-(`-no-audio -no-boot-anim -gpu host -camera-* none -no-snapshot-save`, and QEMU's
-`-lowram`). If `avdslim bake <avd>` has made the `avdslim_clean` golden snapshot,
-the pack boots from it (about 1.5 s) unless you ask for `cold: true`.
+(`-memory 1536 -gpu auto -no-audio -no-boot-anim -camera-* none -lowram`, and
+`-no-snapshot-save`; `-lowram` is an emulator flag, not a `-qemu` passthrough, which
+Android Emulator 37 rejects). A cold boot adds `-no-snapshot-load`. If `avdslim bake <avd>` has made the
+`avdslim_clean` golden snapshot, the pack boots from it (about 1.5 s) unless you
+ask for `cold: true`.
 
 ## How a picture gets from the emulator to the pane
 
@@ -125,11 +156,13 @@ emulator ── adb ── scrcpy-server (H.264 encoder, control socket)
 ## Settings
 
 `simulator.maxDevices` (2), `simulator.idleMinutes` (15), `simulator.sdkPath`
-(empty). The engine does not hand a pack's MCP server its settings, so the server
-reads the same user config the engine does (`$PI_CODING_AGENT_DIR` or
+(empty), `simulator.allowPhysical` (false: the user's key to a physical phone). The
+engine does not hand a pack's MCP server its settings, so the server reads the same
+user config the engine does (`$PI_CODING_AGENT_DIR` or
 `~/<$PI_CONFIG_DIR | .omp>/agent/config.yml`) when it needs a value; the
 environment variables `SIMULATOR_MAX_DEVICES`, `SIMULATOR_IDLE_MINUTES`,
-`SIMULATOR_SDK_PATH` override it.
+`SIMULATOR_SDK_PATH`, `SIMULATOR_ALLOW_PHYSICAL` override it. Anything but an
+unambiguous `true`/`on`/`yes`/`1` reads as off.
 
 `mcp.json` sets an `env` block on purpose: a server entry with an `env` is
 launched with the engine's full environment (so `ANDROID_HOME` and `PATH` are
