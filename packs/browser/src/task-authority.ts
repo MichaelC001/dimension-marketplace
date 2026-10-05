@@ -66,7 +66,8 @@ export async function createGuardedTaskEndpoint(
     const address = server.address();
     const expectedHost = address && typeof address !== "string" ? `${HOST}:${address.port}` : "";
     if (closed || claimed || request.url !== route || request.headers.host !== expectedHost ||
-        request.headers.origin !== undefined || request.method !== "GET" || !(socket instanceof Socket) || socket.remoteAddress !== HOST) {
+        // The peer address is read structurally: under Bun the upgrade's socket is a net socket that is not `instanceof` node:net's Socket, so a class check refused every worker.
+        request.headers.origin !== undefined || request.method !== "GET" || !("remoteAddress" in socket) || socket.remoteAddress !== HOST) {
       socket.destroy();
       return;
     }
