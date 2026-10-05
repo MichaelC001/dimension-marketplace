@@ -7095,6 +7095,12 @@ function bridgeResponse(result, details) {
 }
 function createDispatcher(ports) {
   const { realm, host } = ports;
+  let announced;
+  const drives = (runId, name) => {
+    if (announced === name) return;
+    announced = name;
+    ports.activity?.(runId, name);
+  };
   return async (parameters, { runId, signal }) => {
     const parsed = bridgeRequestSchema.safeParse(parameters);
     if (!parsed.success) throw new ToolError(`browser received invalid arguments: ${summarize(parsed.error)}`);
@@ -7127,10 +7133,10 @@ function createDispatcher(ports) {
         return { text: reply.text, details: { ...details, ...reply.details, action: "active", name: found }, ...reply.images ? { images: reply.images } : {} };
       }
       case "call":
-        ports.activity?.(runId, name);
+        drives(runId, name);
         return bridgeResponse(await realm.call({ name, chain: request.chain ?? [], timeoutMs, signal }), details);
       case "run":
-        ports.activity?.(runId, name);
+        drives(runId, name);
         return bridgeResponse(await realm.run({ name, ...runTarget(request), timeoutMs, signal }), details);
     }
   };

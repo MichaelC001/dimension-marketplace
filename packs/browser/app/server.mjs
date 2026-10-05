@@ -13483,7 +13483,6 @@ function startWorker(job, onStep) {
 // src/task-authority.ts
 import { randomBytes as randomBytes8 } from "node:crypto";
 import { createServer as createServer3 } from "node:http";
-import { Socket } from "node:net";
 import { WebSocket as WebSocket2, WebSocketServer as WebSocketServer2 } from "ws";
 var HOST = "127.0.0.1";
 var MAX_MESSAGE = 64 * 1024 * 1024;
@@ -13540,7 +13539,8 @@ async function createGuardedTaskEndpoint(upstreamUrl, authorize) {
   server2.on("upgrade", (request, socket, head) => {
     const address = server2.address();
     const expectedHost = address && typeof address !== "string" ? `${HOST}:${address.port}` : "";
-    if (closed || claimed || request.url !== route || request.headers.host !== expectedHost || request.headers.origin !== void 0 || request.method !== "GET" || !(socket instanceof Socket) || socket.remoteAddress !== HOST) {
+    if (closed || claimed || request.url !== route || request.headers.host !== expectedHost || // The peer address is read structurally: under Bun the upgrade's socket is a net socket that is not `instanceof` node:net's Socket, so a class check refused every worker.
+    request.headers.origin !== void 0 || request.method !== "GET" || !("remoteAddress" in socket) || socket.remoteAddress !== HOST) {
       socket.destroy();
       return;
     }
@@ -16093,7 +16093,8 @@ var CardClient = class {
   }
   #pending;
   #blocked = false;
-  #last = 0;
+  /** When the last picture was written; none yet, so the first is never held to the 250 ms gate (`performance.now()` counts from process start, not from this card). */
+  #last = Number.NEGATIVE_INFINITY;
   #timer;
   #ended = false;
   offer(jpeg) {
@@ -16753,7 +16754,7 @@ async function createBrowserServer(options = {}) {
     return { ...caller === void 0 ? {} : { caller }, ...session === void 0 ? {} : { session }, ...tool === void 0 ? {} : { tool } };
   };
   const assertAccess = (extra, browserId, allowClosed = false) => {
-    if (extra.signal?.aborted) fail("cancelled", "Browser operation was cancelled before dispatch.");
+    if (extra.signal?.aborted) fail("cancelled", "Browser operation was cancelled; anything already dispatched may have happened.");
     if (callerOf(extra) === "model" && runtime.needsProfileAuthority(browserId)) assertContext(extra);
     runtime.requireProfileAccess(browserId, callerOf(extra), sessionOf(extra), allowClosed);
   };
