@@ -1,9 +1,12 @@
 // What an emulator boot is made of, as pure functions: the argv, the verdict that
 // a boot has stalled, the choice of which adb serial is the one this pack started,
+// what to do about an emulator the system froze, what a relaunch has to wait for,
 // and the words a boot is reported in. No process, no file, no clock: the backend
 // does the I/O and feeds these.
 
+import { join } from "node:path";
 import type { GpuMode } from "../settings";
+import { type ProcessRow, treeSurvivors } from "./process-table";
 
 /** The RAM the pack gives a slim emulator (MB): what avdslim boots the same AVDs with. */
 export const DEFAULT_MEMORY_MB = 1536;
@@ -106,6 +109,37 @@ export function fallbackNote(sample: BootSample, gpu: GpuMode): string {
   return `Fell back to software graphics: with -gpu ${gpu} the emulator showed no adb device after ${seconds} s${cpu}, which means it is waiting on the host GPU (busy or unavailable). The pack stopped that emulator and relaunched it once with -gpu ${SOFTWARE_GPU}: slower to draw, but it needs no GPU. Set simulator.gpu to ${SOFTWARE_GPU} to skip the wait.`;
 }
 
+// ── an emulator the system froze ─────────────────────────────────────────────
+
+/**
+ * Measured on Windows: the qemu process of three launches sat with ALL its threads in a
+ * suspended wait (security software, a game's anti-cheat or Game Mode can do that) at
+ * 0.3-0.6 s of CPU, which looks exactly like a hung GPU; waiting does not thaw it and
+ * a relaunch is frozen the same way. Resuming it (NtResumeProcess) made it run at once.
+ */
+export interface SuspendPolicy {
+  /** First look at the emulator's threads, after the spawn: past the launcher starting qemu, long before the stall verdict. */
+  readonly firstCheckMs: number;
+  /** Between looks while it runs. */
+  readonly checkMs: number;
+  /** Between a resume and the look that shows whether it took (and resumes again if it did not). */
+  readonly recheckMs: number;
+  /** Resumes one boot may spend, across its relaunches: an emulator something keeps freezing is reported, not nursed. */
+  readonly maxResumes: number;
+}
+
+export const SUSPEND_POLICY: SuspendPolicy = { firstCheckMs: 8_000, checkMs: 10_000, recheckMs: 5_000, maxResumes: 3 };
+
+/** Said in the tool result when the pack found the emulator suspended and resumed it. */
+export const RESUMED_NOTE =
+  "Resumed a frozen emulator: the emulator process had been suspended by the system (security software, a game's anti-cheat or Game Mode can do that); the pack resumed it. That is not a graphics problem, so the boot went on and was not relaunched.";
+
+/** Why a boot failed when the emulator was still suspended after every resume the pack was allowed (`attempts` of them, whether or not the host accepted each). */
+export function stillSuspendedReason(avd: string, attempts: number): string {
+  const tried = attempts === 0 ? "the pack could not resume it" : `resuming it (${attempts} attempt${attempts === 1 ? "" : "s"}) did not last`;
+  return `the emulator process for ${avd} is suspended by the system (security software, a game's anti-cheat or Game Mode can do that) and ${tried}, so it never booted; the pack stopped it. A relaunch, with software graphics too, would be frozen the same way: close what is freezing it, then boot again.`;
+}
+
 // ── which adb serial is ours ─────────────────────────────────────────────────
 
 export interface AdbEntry {
@@ -195,4 +229,56 @@ export function parseAvdName(output: string): string | null {
   const lines = output.split(/\r?\n/).map(line => line.trim()).filter(line => line !== "");
   if (lines.some(line => line.startsWith("KO"))) return null;
   return lines.find(line => line !== "OK" && !line.startsWith("Android Console")) ?? null;
+}
+
+// ── launching an AVD again ───────────────────────────────────────────────────
+
+/**
+ * The pid the emulator wrote into the AVD's lock (`<avd>.avd/hardware-qemu.ini.lock/pid`,
+ * decimal, no newline) while it runs, or null when there is none or it is not a pid. The
+ * lock outlives a process the pack killed: relaunched at once, the new emulator exits
+ * with code 253 and says nothing. (`multiinstance.lock` beside it is an EMPTY file the OS
+ * holds; it lets go when its holder dies, so waiting for the holder covers it.)
+ */
+export function avdLockHolder(avdDir: string, readFile: (path: string) => string | null): number | null {
+  const text = readFile(join(avdDir, "hardware-qemu.ini.lock", "pid"));
+  const pid = Number(/^\s*(\d+)\s*$/.exec(text ?? "")?.[1]);
+  return Number.isInteger(pid) && pid > 0 ? pid : null;
+}
+
+/**
+ * What still stops an AVD being launched again after its tree was killed: members of that
+ * tree that run (same pid AND start), and the pid in the AVD's lock if something runs under
+ * it (by pid alone: a lock file records no start time). Empty = free to launch.
+ */
+export function relaunchBlockers(rows: readonly ProcessRow[], killed: readonly ProcessRow[], lockHolder: number | null): number[] {
+  const blockers = treeSurvivors(rows, killed);
+  if (lockHolder !== null && !blockers.includes(lockHolder) && rows.some(row => row.pid === lockHolder)) blockers.push(lockHolder);
+  return blockers;
+}
+
+/** The exit code of an emulator that could not take the AVD's lock. */
+export const LOCK_EXIT_CODE = 253;
+
+/** An emulator that dies this soon after its spawn never got to boot anything. */
+export const LOCK_EXIT_WINDOW_MS = 5_000;
+
+/** The line the backend writes into the emulator log before each launch; what follows it is that launch's own output. */
+export const LAUNCH_MARKER = "the pack launches:";
+
+/** The part of an emulator log written by its LAST launch (the log is appended to across launches, and an earlier launch's FATAL is not this one's). */
+export function lastLaunchOutput(logText: string): string {
+  const at = logText.lastIndexOf(LAUNCH_MARKER);
+  return at < 0 ? logText : logText.slice(at + LAUNCH_MARKER.length);
+}
+
+/**
+ * Did this launch lose a race for the AVD's lock rather than fail? Exit code 253 within
+ * seconds of the spawn and no FATAL line in what the launch itself printed. An emulator
+ * that names its reason (a FATAL line) is reported, never retried; a log that cannot be
+ * read does not make the exit a failure of its own.
+ */
+export function isLockRaceExit(exit: { readonly code: number | null; readonly elapsedMs: number }, logText: string | null): boolean {
+  if (exit.code !== LOCK_EXIT_CODE || exit.elapsedMs >= LOCK_EXIT_WINDOW_MS) return false;
+  return logText === null || !/\bFATAL\b/.test(lastLaunchOutput(logText));
 }
