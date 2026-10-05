@@ -7,7 +7,8 @@ import net from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { BootHandle, DeviceBackend, VideoStream, VideoStreamHandlers, VideoStreamOptions } from "../backend";
-import { type BootRequest, type DeviceInfo, type DeviceState, fail, type KeyName, type Screenshot, type UiSnapshot } from "../contracts";
+import { type BootRequest, type DeviceInfo, type DeviceKind, type DeviceState, fail, type KeyName, type Screenshot, type UiSnapshot } from "../contracts";
+import { classifyDevice } from "../device-safety";
 import type { Size } from "../shared/pointer";
 import { fixFor, type Toolchain } from "../toolchain";
 import { Adb } from "./adb";
@@ -32,6 +33,11 @@ interface Probe {
   readonly model: string | null;
   readonly display: Size | null;
   readonly density: number | null;
+  /** `ro.kernel.qemu`, `ro.boot.qemu`, `ro.hardware`, `ro.build.characteristics`: what says whether it is an emulator (see classifyDevice). */
+  readonly kernelQemu: string | null;
+  readonly bootQemu: string | null;
+  readonly hardware: string | null;
+  readonly characteristics: string | null;
 }
 
 /** One `adb shell` instead of six: marker lines, so a missing property cannot shift the rest. */
@@ -41,6 +47,10 @@ const PROBE_COMMAND = [
   "echo A=$(getprop ro.boot.qemu.avd_name)",
   "echo K=$(getprop ro.kernel.qemu.avd_name)",
   "echo M=$(getprop ro.product.model)",
+  "echo Q=$(getprop ro.kernel.qemu)",
+  "echo QB=$(getprop ro.boot.qemu)",
+  "echo H=$(getprop ro.hardware)",
+  "echo C=$(getprop ro.build.characteristics)",
   "wm size",
   "wm density",
 ].join("; ");
@@ -62,6 +72,10 @@ export function parseProbe(output: string): Probe {
     model: field("M"),
     display: lastSize?.[1] && lastSize[2] ? { width: Number(lastSize[1]), height: Number(lastSize[2]) } : null,
     density: lastDensity?.[1] ? Number(lastDensity[1]) : null,
+    kernelQemu: field("Q"),
+    bootQemu: field("QB"),
+    hardware: field("H"),
+    characteristics: field("C"),
   };
 }
 
@@ -110,17 +124,17 @@ export class AndroidBackend implements DeviceBackend {
     for (const serial of this.#static.keys()) if (!live.has(serial)) this.#static.delete(serial);
     return Promise.all(
       devices.map(async (device): Promise<DeviceInfo> => {
-        const kind = device.serial.startsWith("emulator-") ? "emulator" : "device";
-        const base = { serial: device.serial, platform: "android" as const, kind, owned: false, live: false, viewers: 0 };
+        const base = { serial: device.serial, platform: "android" as const, owned: false, live: false, viewers: 0 };
         if (device.state !== "device") {
           const state: DeviceState = device.state === "unauthorized" ? "unauthorized" : "offline";
-          return { ...base, state, name: device.model ?? device.serial, androidVersion: null, display: null, density: null };
+          return { ...base, kind: classifyDevice({ serial: device.serial }), state, name: device.model ?? device.serial, androidVersion: null, display: null, density: null };
         }
         const probe = await this.#probe(adb, device.serial);
         const display = probe.display ?? this.#displays.get(device.serial) ?? null;
         if (probe.display) this.#displays.set(device.serial, probe.display);
         return {
           ...base,
+          kind: classifyDevice({ serial: device.serial, ...probe }),
           state: probe.booted ? "online" : "booting",
           name: probe.avd ?? probe.model ?? device.model ?? device.serial,
           androidVersion: probe.version,
@@ -129,6 +143,18 @@ export class AndroidBackend implements DeviceBackend {
         };
       }),
     );
+  }
+
+  async kindOf(serial: string): Promise<DeviceKind> {
+    // An emulator names itself `emulator-<console port>`: the common case needs no round trip.
+    if (classifyDevice({ serial }) === "emulator") return "emulator";
+    const adb = this.#adb();
+    const listed = (await adb.devices()).find(device => device.serial === serial);
+    if (listed === undefined) fail("not_connected", `${serial} is not connected. Run device_list to see what is, or device_boot to start an emulator.`);
+    if (listed.state !== "device") return classifyDevice({ serial });
+    // Asked of the device itself every time, never cached: a serial (a Wi-Fi address, say) can be reused by a different device. A probe that fails leaves "physical".
+    const probe = await adb.shell(serial, PROBE_COMMAND, { timeoutMs: 10_000 }).then(parseProbe, () => null);
+    return classifyDevice({ serial, ...probe });
   }
 
   async #probe(adb: Adb, serial: string): Promise<Probe> {

@@ -22,7 +22,7 @@ import type { AddressInfo } from "node:net";
 import type net from "node:net";
 import { randomBytes } from "node:crypto";
 import { DEFAULT_VIDEO_OPTIONS, type DeviceBackend, type VideoStream, type VideoStreamOptions } from "../backend";
-import type { VideoPacket } from "../contracts";
+import type { DeviceKind, VideoPacket } from "../contracts";
 import { deliveryDecision, FrameGate, KeyframeThrottle } from "../shared/frame-gate";
 import { FRAME_HEADER_BYTES, FrameTag, type StreamMode, parseInputMessage, sessionPayload, writeFrameHeader, type InputMessage } from "../shared/frame-protocol";
 import { classifyGesture, type Size, toPixels } from "../shared/pointer";
@@ -35,6 +35,14 @@ export interface RelayOptions {
   readonly onViewers: (serial: string, total: number) => void;
   /** A viewer drove the device (the fleet's idle clock, throttled here). */
   readonly onActivity: (serial: string) => void;
+  /**
+   * The safety gate: resolves to the device's kind, or throws the refusal for a
+   * physical phone that the call and the user's setting have not both allowed.
+   * Asked when a View mints a stream; a View never gets a token for a phone otherwise.
+   */
+  readonly authorize: (serial: string, allowPhysical: boolean) => Promise<DeviceKind>;
+  /** Whether the user's setting still allows driving a physical phone: asked again before a View's input is acted on, so turning it off stops a stream already open. */
+  readonly physicalPermitted: () => boolean;
   readonly now?: () => number;
   /** How long the encoder outlives its last viewer (a reloaded View re-attaches within it). */
   readonly stopGraceMs?: number;
@@ -73,6 +81,8 @@ function mediaFrame(tag: FrameTag, seq: number, at: number, payload: Uint8Array)
 interface Token {
   readonly serial: string;
   readonly mode: StreamMode;
+  /** A phone, not an emulator: it streams and takes input only while the setting still allows it. */
+  readonly physical: boolean;
   timer: NodeJS.Timeout | undefined;
   sockets: number;
 }
@@ -502,7 +512,9 @@ export class FrameRelay {
     };
   }
 
-  async mint(serial: string, requested: StreamMode): Promise<StreamGrant> {
+  /** A token for a View to stream `serial`. A physical phone gets one only when `allowPhysical` and the setting both allow it (`authorize` throws the refusal otherwise). */
+  async mint(serial: string, requested: StreamMode, allowPhysical: boolean): Promise<StreamGrant> {
+    const kind = await this.#opts.authorize(serial, allowPhysical);
     let mode = requested;
     let downgraded: string | null = null;
     if (mode === "h264" && !this.#opts.backend.liveAvailable()) {
@@ -511,7 +523,7 @@ export class FrameRelay {
     }
     const port = await this.#ensureListening();
     const token = randomBytes(24).toString("base64url");
-    const entry: Token = { serial, mode, timer: undefined, sockets: 0 };
+    const entry: Token = { serial, mode, physical: kind === "physical", timer: undefined, sockets: 0 };
     this.#tokens.set(token, entry);
     this.#armToken(token, entry);
     return { url: `ws://127.0.0.1:${port}/f/${token}`, mode, downgraded };
@@ -566,6 +578,7 @@ export class FrameRelay {
     const token = path?.[1];
     const entry = token === undefined ? undefined : this.#tokens.get(token);
     if (request.method !== "GET" || token === undefined || entry === undefined) return refuse(404, "Not Found");
+    if (entry.physical && !this.#opts.physicalPermitted()) return refuse(403, "Forbidden");
     const key = request.headers["sec-websocket-key"];
     if (request.headers.upgrade?.toLowerCase() !== "websocket" || request.headers["sec-websocket-version"] !== "13" || !validClientKey(key)) return refuse(400, "Bad Request");
 
@@ -590,6 +603,12 @@ export class FrameRelay {
           if (viewer === null) return;
           const input = parseInputMessage(message);
           if (input === null) return;
+          if (entry.physical && !this.#opts.physicalPermitted()) {
+            // The person turned the setting off while this pane was open: stop acting on the phone, and say why.
+            viewer.peer.sendText(JSON.stringify({ t: "ended", reason: "driving a physical phone was turned off in settings (simulator.allowPhysical)" }));
+            viewer.peer.close(WS_INTERNAL_ERROR, "physical device not allowed");
+            return;
+          }
           const at = this.#hub.now();
           if (at - viewer.lastActivity > ACTIVITY_EVERY_MS) {
             viewer.lastActivity = at;

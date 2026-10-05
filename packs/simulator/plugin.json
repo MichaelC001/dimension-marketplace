@@ -139,6 +139,12 @@
 						"default": "",
 						"label": "Android SDK folder",
 						"description": "Where adb and the emulator live, when ANDROID_HOME is not set. Empty = ANDROID_HOME, then the default SDK location."
+					},
+					"allowPhysical": {
+						"type": "boolean",
+						"default": false,
+						"label": "Allow driving a physical phone",
+						"description": "Off (default): the agent and the pane work with emulators only. On: a USB or Wi-Fi phone becomes drivable, but only when the agent is also told to (allowPhysical on the call) after you named that exact phone. A phone is your own device; keep this off unless you want an agent to touch it."
 					}
 				}
 			}

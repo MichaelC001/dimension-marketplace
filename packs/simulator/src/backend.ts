@@ -6,7 +6,7 @@
 // macOS-host backend that implements this same interface with `xcrun simctl`; see
 // the README for why it is not here.
 
-import type { BootRequest, DeviceInfo, KeyName, Screenshot, UiSnapshot, VideoPacket } from "./contracts";
+import type { BootRequest, DeviceInfo, DeviceKind, KeyName, Screenshot, UiSnapshot, VideoPacket } from "./contracts";
 import type { Size } from "./shared/pointer";
 
 export interface VideoStreamOptions {
@@ -50,6 +50,13 @@ export interface DeviceBackend {
   readonly platform: "android";
 
   list(): Promise<DeviceInfo[]>;
+  /**
+   * Is `serial` an emulator or somebody's own phone? Asked of the device itself on
+   * every call (never cached: a serial can be reused by a different device), and
+   * fail-safe: anything that cannot be shown to be an emulator is `physical`.
+   * Throws `not_connected` for a serial that is not attached at all.
+   */
+  kindOf(serial: string): Promise<DeviceKind>;
   /** Bootable virtual devices (AVD names). */
   avds(): Promise<string[]>;
   /** Start a virtual device. Does not wait for it to finish booting: see `BootHandle.ready`. */

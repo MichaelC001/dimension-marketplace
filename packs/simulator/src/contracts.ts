@@ -3,7 +3,8 @@
 import type { Size } from "./shared/pointer";
 
 export type DevicePlatform = "android";
-export type DeviceKind = "emulator" | "device";
+/** `physical` is somebody's own phone: never driven without the explicit two-key opt-in in device-safety.ts. */
+export type DeviceKind = "emulator" | "physical";
 export type DeviceState = "online" | "booting" | "offline" | "unauthorized";
 
 export interface DeviceInfo {
@@ -11,7 +12,7 @@ export interface DeviceInfo {
   readonly platform: DevicePlatform;
   readonly kind: DeviceKind;
   readonly state: DeviceState;
-  /** The AVD name for an emulator, the model for a device. */
+  /** The AVD name for an emulator, the model for a physical device. */
   readonly name: string;
   readonly androidVersion: string | null;
   /** Physical display in pixels: what tap/swipe/ui-tree coordinates are in. */

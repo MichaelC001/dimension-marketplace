@@ -1,0 +1,92 @@
+// The rule that keeps an agent off the person's own phone. Pure: no adb, no
+// settings file, no clock, so every branch is provable with plain objects.
+//
+// Why it exists: an agent asked to use an EMULATOR once drove the owner's real
+// phone, because it was the only device `adb devices` listed and the skill said
+// "leave serial out when exactly one device runs". Three rules close that:
+//
+//   1. Classification   `classifyDevice` says emulator or physical. Anything that
+//                       cannot be shown to be an emulator is physical (fail safe).
+//   2. Default pick     With no `serial`, only an EMULATOR is chosen
+//                       (`selectDefaultDevice`). A phone is never picked for you,
+//                       not even when it is the only device.
+//   3. Two keys         Acting on a physical device takes BOTH `allowPhysical: true`
+//                       on the call AND the user's `simulator.allowPhysical`
+//                       setting (`physicalAccessRefusal`). The call is the model's
+//                       key; the setting is the person's.
+
+import type { DeviceKind, DeviceState } from "./contracts";
+
+/** What is known about a device when it must be classified. Every property is `null`/absent when it could not be read (offline, unauthorized, probe failed). */
+export interface DeviceIdentity {
+  /** The adb serial. The emulator names itself `emulator-<console port>`; a USB phone reports its hardware serial. */
+  readonly serial: string;
+  /** `getprop ro.kernel.qemu`: "1" on an emulator's kernel. */
+  readonly kernelQemu?: string | null;
+  /** `getprop ro.boot.qemu`: "1" on emulator images since Android 8. */
+  readonly bootQemu?: string | null;
+  /** `getprop ro.hardware`: "ranchu" or "goldfish" on Google's emulator. */
+  readonly hardware?: string | null;
+  /** `getprop ro.build.characteristics`: contains "emulator" on emulator images. */
+  readonly characteristics?: string | null;
+}
+
+const EMULATOR_HARDWARE: Record<string, true> = { ranchu: true, goldfish: true };
+
+/**
+ * Emulator when the serial is `emulator-*`, or the device reports qemu: the
+ * kernel/boot flag, the emulator's hardware name, or the "emulator" build
+ * characteristic. Anything else, including a device whose properties could not
+ * be read, is `physical`.
+ */
+export function classifyDevice(identity: DeviceIdentity): DeviceKind {
+  if (identity.serial.startsWith("emulator-")) return "emulator";
+  if (identity.kernelQemu?.trim() === "1" || identity.bootQemu?.trim() === "1") return "emulator";
+  if (identity.hardware !== undefined && identity.hardware !== null && EMULATOR_HARDWARE[identity.hardware.trim().toLowerCase()] === true) return "emulator";
+  if (identity.characteristics?.toLowerCase().split(",").some(part => part.trim() === "emulator")) return "emulator";
+  return "physical";
+}
+
+export interface PhysicalAccessRequest {
+  readonly serial: string;
+  readonly kind: DeviceKind;
+  /** The call passed `allowPhysical: true`. */
+  readonly callAllows: boolean;
+  /** The user's `simulator.allowPhysical` setting is on. */
+  readonly settingAllows: boolean;
+}
+
+/** `null` = allowed. Otherwise the refusal, worded for the model: it names both keys and says to ask the user. */
+export function physicalAccessRefusal(request: PhysicalAccessRequest): string | null {
+  if (request.kind !== "physical") return null;
+  if (request.callAllows && request.settingAllows) return null;
+  const now = `Right now this call ${request.callAllows ? "passes allowPhysical: true" : "does not pass allowPhysical"} and the simulator.allowPhysical setting is ${request.settingAllows ? "on" : "off"}.`;
+  return `${request.serial} is a physical phone: the person's own device, not an emulator, so it is refused. Acting on it takes BOTH allowPhysical: true on the call AND the simulator.allowPhysical setting turned on by the user. ${now} Ask the user first. Pass allowPhysical only if they named this exact device in this conversation, and never to unlock the phone, dismiss a keyguard or enter a PIN. To use an emulator instead: device_list, then device_boot.`;
+}
+
+export interface SelectableDevice {
+  readonly serial: string;
+  readonly name: string;
+  readonly kind: DeviceKind;
+  readonly state: DeviceState;
+}
+
+export type DefaultDevice =
+  | { readonly ok: true; readonly serial: string }
+  | { readonly ok: false; readonly code: "no_emulator" | "serial_required"; readonly message: string };
+
+/**
+ * The device a call that left `serial` out can only mean: the session's held
+ * emulator, or the one running emulator. Physical devices are never candidates.
+ */
+export function selectDefaultDevice(devices: readonly SelectableDevice[], heldSerial: string | undefined): DefaultDevice {
+  const emulators = devices.filter(device => device.kind === "emulator" && (device.state === "online" || device.state === "booting"));
+  const chosen = emulators.find(device => device.serial === heldSerial) ?? (emulators.length === 1 ? emulators[0] : undefined);
+  if (chosen !== undefined) return { ok: true, serial: chosen.serial };
+  if (emulators.length === 0) {
+    const phones = devices.filter(device => device.kind === "physical");
+    const aside = phones.length === 0 ? "" : ` A physical phone is attached (${phones.map(device => device.serial).join(", ")}); it is the person's own device and is never picked for you.`;
+    return { ok: false, code: "no_emulator", message: `no emulator is running. Call device_boot (device_list shows the AVDs you can boot), or start an emulator yourself.${aside}` };
+  }
+  return { ok: false, code: "serial_required", message: `several emulators are running; pass serial. Running: ${emulators.map(device => `${device.serial} (${device.name})`).join(", ")}` };
+}

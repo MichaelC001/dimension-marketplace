@@ -1,5 +1,5 @@
 // The pack's settings group (`simulator.maxDevices`, `simulator.idleMinutes`,
-// `simulator.sdkPath`) as the server reads it.
+// `simulator.sdkPath`, `simulator.allowPhysical`) as the server reads it.
 //
 // The values live in the user's ordinary config under `<group>.<key>` (the
 // plugin-settings contract), which the engine owns; an MCP server is a separate
@@ -9,7 +9,7 @@
 // An environment variable of the same meaning overrides the file, so a launcher
 // can pin a value without touching the user's config.
 //
-// Only the three scalars this pack declares are read, from the two shapes `omp
+// Only the four scalars this pack declares are read, from the two shapes `omp
 // config set` can leave: a nested `simulator:` block, or a dotted `simulator.key:`.
 
 import { readFileSync } from "node:fs";
@@ -23,12 +23,14 @@ export interface SimulatorSettings {
   readonly idleMinutes: number;
   /** The Android SDK folder; null = ANDROID_HOME / the platform default. */
   readonly sdkPath: string | null;
+  /** The user's key for driving a physical phone (the call's `allowPhysical: true` is the other). Off unless the user turned it on. */
+  readonly allowPhysical: boolean;
 }
 
-export const DEFAULT_SETTINGS: SimulatorSettings = { maxDevices: 2, idleMinutes: 15, sdkPath: null };
+export const DEFAULT_SETTINGS: SimulatorSettings = { maxDevices: 2, idleMinutes: 15, sdkPath: null, allowPhysical: false };
 
 const GROUP = "simulator";
-const ENV_KEYS = { maxDevices: "SIMULATOR_MAX_DEVICES", idleMinutes: "SIMULATOR_IDLE_MINUTES", sdkPath: "SIMULATOR_SDK_PATH" } as const;
+const ENV_KEYS = { maxDevices: "SIMULATOR_MAX_DEVICES", idleMinutes: "SIMULATOR_IDLE_MINUTES", sdkPath: "SIMULATOR_SDK_PATH", allowPhysical: "SIMULATOR_ALLOW_PHYSICAL" } as const;
 
 /** Scalars of one top-level group of a YAML document: `group:` block entries and `group.key:` lines. */
 export function readGroupScalars(yaml: string, group: string): Record<string, string> {
@@ -95,5 +97,7 @@ export function readSettings(source: SettingsSource = nodeSettingsSource()): Sim
     maxDevices: positiveInt(pick("maxDevices"), DEFAULT_SETTINGS.maxDevices, 1, 8),
     idleMinutes: positiveInt(pick("idleMinutes"), DEFAULT_SETTINGS.idleMinutes, 1, 24 * 60),
     sdkPath: sdk !== undefined && sdk !== "" ? sdk : null,
+    // A safety switch fails closed: only an unambiguous "on" turns it on; anything else, a typo included, is off.
+    allowPhysical: /^(true|on|yes|1)$/i.test(pick("allowPhysical")?.trim() ?? ""),
   };
 }
