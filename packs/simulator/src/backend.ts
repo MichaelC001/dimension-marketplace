@@ -36,15 +36,40 @@ export interface VideoStream {
   close(): Promise<void>;
 }
 
-/** What booting hands back: the device is named at once, `ready` settles when it is usable. */
+/** A boot request whose AVD is decided: the fleet resolves "the only AVD" before it asks a backend to start anything. */
+export type ResolvedBoot = BootRequest & { readonly avd: string };
+
+/** A process the pack spawned, named the only way that survives a pid being reused: the pid AND when it started. */
+export interface OwnedProcess {
+  readonly pid: number;
+  /** Epoch ms the process started (the pack's clock at spawn; the OS's start time must agree within a few seconds). */
+  readonly startedAt: number;
+}
+
+/** What a boot tells the fleet while it runs, so the fleet records ownership BEFORE anything can fail. */
+export interface BootObserver {
+  /** The pack spawned the emulator process (again, after a graphics fallback). */
+  spawned(process: OwnedProcess): void;
+  /** The emulator's console was matched to that process: this is the serial it answers to. */
+  serial(serial: string): void;
+  /** Something the person or the agent should be told ("fell back to software graphics"). */
+  note(message: string): void;
+}
+
+/** What booting hands back: the process is already spawned and reported to the observer; `ready` settles when the device is usable. */
 export interface BootHandle {
-  readonly serial: string;
   readonly avd: string;
-  /** The process that owns the VM, when the platform has one to signal. */
-  readonly pid: number | null;
-  /** Resolves when the device accepts input; rejects with the reason it never will. */
+  /** Resolves when the device accepts input; rejects with the reason it never will. A rejected boot has already stopped everything it spawned. */
   readonly ready: Promise<DeviceInfo>;
 }
+
+/** An emulator that is running, and which AVD it says it is (asked of its console, which answers while Android is still starting). */
+export interface RunningEmulator {
+  readonly serial: string;
+  readonly avd: string;
+}
+
+export type StopOutcome = "stopped" | "already-exited";
 
 export interface DeviceBackend {
   readonly platform: "android";
@@ -60,11 +85,20 @@ export interface DeviceBackend {
   /** Bootable virtual devices (AVD names). */
   avds(): Promise<string[]>;
   /** Start a virtual device. Does not wait for it to finish booting: see `BootHandle.ready`. */
-  startBoot(request: BootRequest): Promise<BootHandle>;
-  /** Shut a virtual device down. Callers (the fleet) decide whether the pack may. */
-  stop(serial: string, pid: number | null): Promise<void>;
-  /** Is `serial` running AND is it this virtual device? The identity check before adopting an orphan. */
-  identify(serial: string): Promise<{ readonly avd: string } | null>;
+  startBoot(request: ResolvedBoot, observer: BootObserver): Promise<BootHandle>;
+  /**
+   * Shut down the emulator the pack spawned: act on `process` and nothing else. The serial is never what is
+   * stopped; a process that is gone, or whose pid now belongs to something else, is left alone.
+   */
+  stop(process: OwnedProcess, serial: string | null): Promise<StopOutcome>;
+  /** Is `process` still the process the pack spawned? The check before adopting an orphan or killing anything. */
+  processState(process: OwnedProcess): Promise<"ours" | "gone" | "reused" | "unknown">;
+  /** The serial the emulator under `process` answers to, by its console port; null when it has none yet or the host cannot say. */
+  serialOf(process: OwnedProcess): Promise<string | null>;
+  /** Every running emulator and the AVD it is, asked of each one. Includes emulators the pack did not start. */
+  runningEmulators(): Promise<RunningEmulator[]>;
+  /** Wait up to `timeoutMs` for `serial` to finish booting; null = still booting. */
+  waitBooted(serial: string, timeoutMs: number): Promise<DeviceInfo | null>;
 
   screenshot(serial: string, maxEdge: number): Promise<Screenshot>;
   tap(serial: string, x: number, y: number): Promise<void>;

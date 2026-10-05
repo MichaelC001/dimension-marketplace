@@ -30,6 +30,8 @@ export interface BootRequest {
   readonly headless?: boolean;
   /** Ignore any saved snapshot and boot from scratch. */
   readonly cold?: boolean;
+  /** A SECOND instance of an AVD that already runs: the emulator's own `-read-only` (the emulator itself advises it). Its changes are discarded when it stops. */
+  readonly readOnly?: boolean;
 }
 
 export interface Screenshot {

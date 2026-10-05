@@ -19,7 +19,7 @@ import { AndroidBackend } from "./android/backend";
 import { centerOf, describeNode, findByLabel, isSignificant } from "./android/ui-tree";
 import { type DeviceInfo, type DeviceKind, fail, SimulatorError, type UiSnapshot } from "./contracts";
 import { physicalAccessRefusal, selectDefaultDevice } from "./device-safety";
-import { Fleet, fileOwnershipStore } from "./fleet";
+import { type BootOutcome, Fleet, fileOwnershipStore } from "./fleet";
 import { FrameRelay } from "./relay/relay";
 import { DEVICE_KEYS } from "./shared/frame-protocol";
 import { nodeProbe, resolveToolchain, type Toolchain } from "./toolchain";
@@ -82,6 +82,18 @@ export function deviceLine(device: DeviceInfo): string {
   return parts.join("  ");
 }
 
+/** What device_boot tells the model: the device (or that it is still starting), then every note (graphics fallback, reused device, read-only). */
+export function describeBoot(outcome: BootOutcome): string {
+  const { device } = outcome;
+  const head =
+    device === null
+      ? `${outcome.avd} is booting; its adb serial is not known yet. Call device_boot again (avd: ${outcome.avd}) to wait for it.`
+      : outcome.pending
+        ? `${device.serial} (${device.name}) is booting. Call device_boot again (avd: ${device.name}) to wait for it.`
+        : `${deviceLine(device)}${outcome.reused ? " (already running; not booted again)" : ""}`;
+  return [head, ...outcome.notes].join("\n");
+}
+
 export interface SimulatorServerOptions {
   readonly backend?: DeviceBackend;
   readonly fleet?: Fleet;
@@ -116,7 +128,7 @@ export async function createSimulatorServer(options: SimulatorServerOptions = {}
   const leased = leasedToolchain(settings);
   const toolchain = options.toolchain ?? (() => leased.current());
   const dataDir = options.dataDir ?? join(process.env.INSO_HOME ?? join(homedir(), ".inso"), "simulator");
-  const backend: DeviceBackend = options.backend ?? new AndroidBackend({ toolchain, log, logDir: join(dataDir, "logs") });
+  const backend: DeviceBackend = options.backend ?? new AndroidBackend({ toolchain, log, logDir: join(dataDir, "logs"), gpu: () => settings().gpu });
   const fleet = options.fleet ?? new Fleet({ backend, settings, store: fileOwnershipStore(join(dataDir, "owned.json")), log });
   /** The gate every action on a device passes, the tools here and the frames lane when it mints a stream: a physical phone is refused unless the call AND the user's setting both allow it. Resolves to the device's kind. */
   async function authorize(serial: string, allowPhysical: boolean | undefined): Promise<DeviceKind> {
@@ -219,23 +231,20 @@ export async function createSimulatorServer(options: SimulatorServerOptions = {}
   server.registerTool(
     "device_boot",
     {
-      description: `Boot an Android emulator (avd: from device_list; optional when only one AVD exists). headless: no window (nothing on the user's screen). cold: ignore the saved snapshot. Returns within waitSeconds (default ${DEFAULT_WAIT_S}, max ${WAIT_CAP_S}) with state "booting" or "online"; while booting, call device_boot again with the same avd to wait for it. An already running device for that AVD is returned, not duplicated. At most simulator.maxDevices are booted by this pack at once; it stops only what it booted, and an idle one after simulator.idleMinutes.`,
+      description: `Boot an Android emulator (avd: from device_list; optional when only one AVD exists). headless: no window (nothing on the user's screen). cold: ignore the saved snapshot. Returns within waitSeconds (default ${DEFAULT_WAIT_S}, max ${WAIT_CAP_S}) with state "booting" or "online"; while booting, call device_boot again with the same avd to wait for it. An AVD that already runs (even one you did not start) is returned, not booted again; readOnly: true starts a SECOND, throwaway instance of it (its changes are discarded when it stops). If the host GPU never answers, the pack stops that boot and relaunches once with software graphics, and the result says so. Any failure ends with the emulator's own log. At most simulator.maxDevices are booted by this pack at once; it stops only the process it started, and an idle one after simulator.idleMinutes.`,
       inputSchema: {
         avd: z.string().min(1).max(100).optional(),
         headless: z.boolean().optional(),
         cold: z.boolean().optional(),
+        readOnly: z.boolean().optional(),
         waitSeconds: z.number().int().min(0).max(WAIT_CAP_S).optional(),
       },
       annotations: { ...WRITES, destructiveHint: false },
     },
-    ({ avd, headless, cold, waitSeconds }, extra) =>
+    ({ avd, headless, cold, readOnly, waitSeconds }, extra) =>
       respond(extra, async () => {
-        const outcome = await fleet.boot({ ...(avd === undefined ? {} : { avd }), ...(headless === undefined ? {} : { headless }), ...(cold === undefined ? {} : { cold }) }, (waitSeconds ?? DEFAULT_WAIT_S) * 1000);
-        const device = outcome.device;
-        const text = outcome.pending
-          ? `${device.serial} (${device.name}) is booting. Call device_boot again (avd: ${device.name}) to wait for it.`
-          : `${deviceLine(device)}${outcome.reused ? " (already running; not booted again)" : ""}`;
-        return { text, structured: { device, pending: outcome.pending, reused: outcome.reused } };
+        const outcome = await fleet.boot({ ...(avd === undefined ? {} : { avd }), ...(headless === undefined ? {} : { headless }), ...(cold === undefined ? {} : { cold }), ...(readOnly === undefined ? {} : { readOnly }) }, (waitSeconds ?? DEFAULT_WAIT_S) * 1000);
+        return { text: describeBoot(outcome), structured: { avd: outcome.avd, device: outcome.device, pending: outcome.pending, reused: outcome.reused, notes: outcome.notes } };
       }),
   );
 
@@ -249,8 +258,8 @@ export async function createSimulatorServer(options: SimulatorServerOptions = {}
     ({ serial, allowPhysical }, extra) =>
       respond(extra, async () => {
         await authorize(serial, allowPhysical);
-        await fleet.stop(serial);
-        return { text: `${serial} stopped.`, structured: { serial, stopped: true } };
+        const outcome = await fleet.stop(serial);
+        return { text: outcome === "stopped" ? `${serial} stopped.` : `${serial} had already exited; the pack killed nothing.`, structured: { serial, stopped: true, outcome } };
       }),
   );
 
@@ -417,7 +426,7 @@ export async function createSimulatorServer(options: SimulatorServerOptions = {}
       respond(extra, async () => {
         let id = serial;
         if (id !== undefined) await authorize(id, allowPhysical);
-        else if (avd !== undefined && boot === true) id = (await fleet.boot({ avd }, 1_000)).device.serial;
+        else if (avd !== undefined && boot === true) id = (await fleet.boot({ avd }, 1_000)).device?.serial;
         if (id === undefined) {
           const pick = selectDefaultDevice(await enriched(), undefined);
           if (pick.ok) id = pick.serial;
