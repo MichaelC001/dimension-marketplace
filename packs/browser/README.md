@@ -472,8 +472,10 @@ already running stops before its next step, and `browser_profiles` reports the p
 human. `return` hands it back. It is refused while a task runs (`task_running`), while a post awaits
 confirmation (`publish_pending`) and while a post is being filled or a task is starting: taking the wheel must
 never navigate away from, or lose, the page a post is parked on. The menu offers Take over only while an agent
-has acted in the browser in the last few seconds (the page's pill is the same fact, and the two are never on
-screen together), or Hand back while the person holds it. It lasts until handed back, the browser closes, the
+has acted in the browser in the last few seconds, or a `browser_run` cell holds it (a cell is one long call: the
+runtime reports an agent as acting for the whole run and for the few seconds after; the page's pill is the same
+fact, and the two are never on screen together), or Hand back while the person holds it. A cell that is running
+when the person takes the wheel is stopped (`human_driving`). It lasts until handed back, the browser closes, the
 person leaves the browser for another profile (`browser_leave`: the wheel goes back to the agent at once), or the
 View goes (it unmounts or the chat's window closes: the View sends `return`, best effort). A View that is only
 hidden (minimised, covered, another tab in front) closes its stream and keeps the wheel: the person is coming

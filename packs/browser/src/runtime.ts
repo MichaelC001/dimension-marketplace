@@ -166,6 +166,9 @@ const VIEW_GONE_MS = 30 * 60_000;
 const MAX_FRAMES_RETAINED = 8;
 /** A batch takes no new step after this long: a host times a tool call out (the desktop at 30 s). */
 const ACT_BUDGET_MS = 20_000;
+/** While a cell holds a browser the runtime reports an agent as acting on it, as of the last multiple of this: the View keeps its Take over for the whole run
+ *  (a cell is one long call, not a series of timed actions), and a state read is not different every millisecond, so the stream does not push one every sample. */
+const CELL_ACTIVITY_BEAT_MS = 2_000;
 /** Dialogs a batch reports, as many as a state does. */
 const MAX_BATCH_DIALOGS = 5;
 const MAX_SNAPSHOT_CHARS = 20_000;
@@ -340,6 +343,8 @@ interface Entry {
 	viewers: number;
 	/** Page-work calls queued or running. A browser with one is working, whatever the clocks say. */
 	pending: number;
+	/** Cells holding it right now (the code seam's `hold`). While any does, an agent is acting on it. */
+	cells: number;
 	/** A throwaway's idle timer, or its close retry (never set for a saved profile or the relay, nor for one a person opened). */
 	idle: NodeJS.Timeout | undefined;
 	/** Set once the runtime began closing it for being idle or to make room; cleared again if that close failed. */
@@ -628,7 +633,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				task: null, worker: null, publish: null, secrets: new Set(), logRead: 0, logNoticed: 0, annotations,
 				opener, takenOver: false, starting: null, agentAt: null, look: profile === null || profile === RELAY_PROFILE ? null : resolveProfileMeta(profile, this.store.meta(profile)),
 				probe: { timer: undefined, running: undefined, again: false },
-				lastUsed: performance.now(), viewers: 0, pending: 0, idle: undefined, retiring: undefined, closeFailed: false, wheelTimer: undefined,
+				lastUsed: performance.now(), viewers: 0, pending: 0, cells: 0, idle: undefined, retiring: undefined, closeFailed: false, wheelTimer: undefined,
 			};
 			if (code !== undefined) entry.code = code;
 			if (profile !== null && profile !== RELAY_PROFILE) entry.notice = this.touchProfile(profile, driver.app);
@@ -1016,15 +1021,19 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		}
 	}
 
-	/** One call in flight on `entry`, for a cell: out of idle close and make-room, refused like a page call while a task or a pending publish owns the page. Returns what ends it. */
+	/** One call in flight on `entry`, for a cell: out of idle close and make-room, refused like a page call while a task or a pending publish owns the page. Returns what ends it.
+	 *  A cell that drives is an agent acting here, as a step tool is (`admitCaller`): the View offers Take over while it runs and for a few seconds after. */
 	private holdWork(entry: Entry): () => void {
 		refuseWhileBusy(entry, undefined, "code");
 		entry.pending += 1;
+		entry.cells += 1;
 		let held = true;
 		return () => {
 			if (!held) return;
 			held = false;
 			entry.pending -= 1;
+			entry.cells -= 1;
+			entry.agentAt = Date.now();
 			entry.lastUsed = performance.now();
 		};
 	}
@@ -2463,7 +2472,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			canGoBack: state.canGoBack, canGoForward: state.canGoForward,
 			publish: entry.publish ? publishRecord(entry.publish) : null,
 			dialogs: state.dialogs,
-			takenOver: entry.takenOver, agentActionAt: entry.agentAt,
+			takenOver: entry.takenOver, agentActionAt: agentActionAt(entry),
 		};
 	}
 
@@ -2762,6 +2771,11 @@ function refuseWhileTakenOver(entry: Entry, caller: ToolCaller | undefined, tool
 function admitCaller(entry: Entry, caller: ToolCaller | undefined): void {
 	refuseWhileBusy(entry, caller);
 	if (caller !== "app") entry.agentAt = Date.now();
+}
+
+/** When an agent last acted on `entry`, for the View: while a cell holds it, the start of the current beat (so it reads as acting for the whole run). */
+function agentActionAt(entry: Entry): number | null {
+	return entry.cells > 0 ? Date.now() - (Date.now() % CELL_ACTIVITY_BEAT_MS) : entry.agentAt;
 }
 
 /**
