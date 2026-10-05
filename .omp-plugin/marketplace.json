@@ -439,7 +439,7 @@
 			"pluginId": "example-agents",
 			"title": "Example Agents",
 			"description": "Example Agents - the reference pack for contributing a General Agent: one space, Example Hub, scoped to one sample marketing lead that ships off by default.",
-			"version": "0.1.1",
+			"version": "0.1.2",
 			"author": {
 				"name": "Dimension"
 			},
@@ -460,7 +460,7 @@
 					"id": "example-hub",
 					"label": "Example Hub",
 					"tagline": "A reference space for contributors: the Build workspace, scoped to one General Agent — the Example Hub's marketing lead.",
-					"icon": "megaphone",
+					"icon": "bot",
 					"requires": [
 						"build",
 						"classic-switcher",
