@@ -14304,7 +14304,7 @@ var BrowserRuntime = class {
       held = false;
       entry.pending -= 1;
       entry.cells -= 1;
-      entry.agentAt = Date.now();
+      if (!entry.takenOver) entry.agentAt = Date.now();
       entry.lastUsed = performance.now();
     };
   }
