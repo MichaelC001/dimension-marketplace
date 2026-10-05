@@ -2,7 +2,7 @@
 // device, the emulator binary for booting one, scrcpy-server for live video.
 
 import { spawn } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readSync, statSync } from "node:fs";
 import net from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -11,6 +11,7 @@ import { type BootRequest, type DeviceInfo, type DeviceState, fail, type KeyName
 import type { Size } from "../shared/pointer";
 import { fixFor, type Toolchain } from "../toolchain";
 import { Adb } from "./adb";
+import { bootFailureMessage, buildEmulatorArgs } from "./emulator-boot";
 import { rawToPng } from "./png";
 import { openVideoSession } from "./scrcpy";
 import { KEYCODES } from "./scrcpy-wire";
@@ -62,17 +63,6 @@ export function parseProbe(output: string): Probe {
     display: lastSize?.[1] && lastSize[2] ? { width: Number(lastSize[1]), height: Number(lastSize[2]) } : null,
     density: lastDensity?.[1] ? Number(lastDensity[1]) : null,
   };
-}
-
-/** The flags every boot gets: the memory and CPU the pack would otherwise spend on things a simulator pane never shows. */
-export function emulatorArgs(input: { avd: string; port: number; headless: boolean; cold: boolean; bakedSnapshot: boolean }): string[] {
-  const args = ["-avd", input.avd, "-port", String(input.port), "-no-audio", "-no-boot-anim", "-gpu", "host", "-camera-back", "none", "-camera-front", "none", "-no-snapshot-save"];
-  if (input.headless) args.push("-no-window");
-  if (input.cold) args.push("-no-snapshot-load");
-  else if (input.bakedSnapshot) args.push("-snapshot", "avdslim_clean");
-  // Everything after -qemu goes to QEMU itself: lowram lets the guest boot in a small memory footprint.
-  args.push("-qemu", "-lowram");
-  return args;
 }
 
 const CONSOLE_PORTS = { first: 5554, last: 5682 } as const;
@@ -186,7 +176,7 @@ export class AndroidBackend implements DeviceBackend {
     const port = await this.#freeConsolePort(adb);
     const serial = `emulator-${port}`;
     const baked = existsSync(join(avdHome(), `${avd}.avd`, "snapshots", "avdslim_clean"));
-    const args = emulatorArgs({ avd, port, headless: request.headless === true, cold: request.cold === true, bakedSnapshot: baked });
+    const args = buildEmulatorArgs({ avd, port, headless: request.headless === true, cold: request.cold === true, bakedSnapshot: baked });
 
     mkdirSync(this.#deps.logDir, { recursive: true });
     const logPath = join(this.#deps.logDir, `${serial}.log`);
@@ -197,12 +187,14 @@ export class AndroidBackend implements DeviceBackend {
     this.#deps.log(`[sim] booting ${avd} as ${serial} (pid ${child.pid ?? "?"}, ${request.headless ? "headless" : "windowed"}, ${request.cold ? "cold" : baked ? "baked snapshot" : "default snapshot"}); log ${logPath}`);
 
     const abort = new AbortController();
+    /** Every boot failure carries the end of the emulator's own log: that is where it says what it did not like. */
+    const failure = (reason: string): Error => new Error(bootFailureMessage(reason, { path: logPath, text: readLogTail(logPath) }));
     const exited = new Promise<never>((_resolve, reject) => {
       child.once("exit", code => {
         abort.abort();
-        reject(new Error(`the emulator for ${avd} exited with code ${code ?? "?"} before it finished booting. ${tailOf(logPath)}`));
+        reject(failure(`the emulator for ${avd} exited with code ${code ?? "?"} before it finished booting.`));
       });
-      child.once("error", error => reject(new Error(`could not start the emulator: ${error.message}`)));
+      child.once("error", error => reject(failure(`could not start the emulator: ${error.message}`)));
     });
     exited.catch(() => undefined);
     const booted = adb
@@ -211,6 +203,9 @@ export class AndroidBackend implements DeviceBackend {
         const info = (await this.list()).find(device => device.serial === serial);
         if (info === undefined) throw new Error(`${serial} booted but is not listed by adb`);
         return info;
+      })
+      .catch((error: unknown) => {
+        throw failure(abort.signal.aborted ? `the emulator for ${avd} exited before it finished booting.` : error instanceof Error ? error.message : String(error));
       });
     const ready = Promise.race([booted, exited]);
     ready.catch(() => undefined);
@@ -341,12 +336,21 @@ function avdHome(): string {
   return join(homedir(), ".android", "avd");
 }
 
-function tailOf(path: string): string {
+/** The end of a log file (at most 64 KiB), or null when it cannot be read. */
+function readLogTail(path: string): string | null {
   try {
-    const lines = readFileSync(path, "utf8").trim().split(/\r?\n/);
-    return `Last log lines (${path}): ${lines.slice(-4).join(" | ")}`;
+    const fd = openSync(path, "r");
+    try {
+      const size = fstatSync(fd).size;
+      const length = Math.min(size, 64 * 1024);
+      const buffer = Buffer.alloc(length);
+      readSync(fd, buffer, 0, length, size - length);
+      return buffer.toString("utf8");
+    } finally {
+      closeSync(fd);
+    }
   } catch {
-    return "";
+    return null;
   }
 }
 
