@@ -12,9 +12,12 @@ engine's, not this pack's; this pack is the window onto it.
 One component, `voice-settings`, filling the `settings` slot with the label `Voice`. It shows:
 
 - **A headline** saying whether voice mode can speak, from the speech profiles the engine publishes.
-- **Speech engines**: each installed provider, whether it is ready to speak and to listen, and why not.
+- **Speech engines**: each installed provider, whether it is ready to speak, to listen and to talk live, and why not.
 - **Voices**: every voice profile visible from the workspace (workspace, yours, a plugin's, built-in), its
-  fallback chain step by step, and the voice it would speak with now.
+  fallback chain step by step, and the voice it would speak with now; and, when the voice names live choices, the
+  live voice **Talk live** would open (the first ready one, with no on-device fallback) and why any before it was passed over.
+- **A Talk live line** under the headline: which live voice the default voice opens, or that it names none. It says
+  nothing on an engine with no live voice at all.
 - **Agents**: the voice each agent ships with, and the default for the agent that names none.
 - **Models**: the two small models that make voice mode feel attentive (the `voice` role that rewrites a reply into
   spoken prose, and the `classifier` role). Neither is required. On an engine that says where the `classifier`
@@ -22,7 +25,8 @@ One component, `voice-settings`, filling the `settings` slot with the label `Voi
   the classify models connected and claims nothing more.
 - **Change it**: where to assign an agent a voice (`voice:` in `agent.md`, or `voice.agents.<agent>` in
   `config.json`), where to drop a new voice profile (`voice-profiles/`), and the `voice` block keys that tune
-  behaviour (`vocalizer.mode`, `vocalizer.enhanced`, `attention.catchUpAfterMinutes`, `attention.chimes`).
+  behaviour (`vocalizer.mode`, `vocalizer.enhanced`, `attention.catchUpAfterMinutes`, `attention.chimes`, `live.idleMinutes`), and the
+  `converse:` list that chooses who talks live.
 
 No tools, skills, prompts or rules. The pack imports only `react`.
 
@@ -41,6 +45,11 @@ sign-in, key or CLI.
   comes from (scrubbed, up to 700 characters) and your last request go there too. With voice mode off, or with no
   classifier connected, nothing is sent. A classifier that runs on this device is shown as such. This pack only
   reports it: the engine does the sending.
+- **Talk live sends your microphone to the live voice's provider** for as long as a call is open; the pane says so
+  whenever the engine offers Live. With Codex realtime the browser streams it straight to the provider; the engine
+  holds the call's control channel, which the provider also sends a duplicate of the audio on, and the engine drops that
+  duplicate unparsed and unlogged. With an ElevenLabs agent it goes through the engine, which passes it on unparsed and
+  unlogged.
 - **Read-only.** The pane reads three public root facts (`speech/profiles`, `agents/list`, `models`) through the
   root-fenced Store and writes nothing. Choosing an agent's voice, trying a voice and showing which model the `voice`
   role resolves to each need a door the Store does not give a root seat yet; the pane says how to do them by hand
@@ -50,7 +59,7 @@ sign-in, key or CLI.
 - **It shows facts the engine publishes.** On an engine that publishes none of them the pane says there is no
   speech engine, never throws; a malformed row is dropped.
 - **The tuning values are not shown.** The `voice` block of `config.json` is not in the Store, so the pane lists
-  the keys and their defaults, not what you set.
+  the keys and their defaults, not what you set. Choosing the live voice is likewise by hand, in the voice's `.yml`.
 
 ## Build and test
 
