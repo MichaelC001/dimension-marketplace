@@ -138,7 +138,8 @@ describe("a call that leaves serial out", () => {
       const answer = await session.call(tool.tool, { ...tool.args, allowPhysical: true });
       expect(answer.isError).toBe(true);
       expect(answer.text).toContain("no emulator is running");
-      expect(answer.text).toContain(PHONE_SERIAL);
+      expect(answer.text).toContain(`****${PHONE_SERIAL.slice(-4)}`);
+      expect(answer.text).not.toContain(PHONE_SERIAL);
       expect(answer.text).toContain("never picked for you");
       expect(backend.acts).toEqual([]);
     });

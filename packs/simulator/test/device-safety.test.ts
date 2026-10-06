@@ -77,7 +77,8 @@ describe("selectDefaultDevice: what a call that left serial out can mean", () =>
     expect(pick.code).toBe("no_emulator");
     // The refusal points the model at the way out, and tells it the phone is not the answer.
     expect(pick.message).toContain("device_boot");
-    expect(pick.message).toContain(PHONE);
+    expect(pick.message).toContain(`****${PHONE.slice(-4)}`);
+    expect(pick.message).not.toContain(PHONE);
     expect(pick.message).toContain("never picked for you");
   });
 

@@ -64,6 +64,10 @@ export function physicalAccessRefusal(request: PhysicalAccessRequest): string | 
   return `${request.serial} is a physical phone: the person's own device, not an emulator, so it is refused. Acting on it takes BOTH allowPhysical: true on the call AND the simulator.allowPhysical setting turned on by the user. ${now} Ask the user first. Pass allowPhysical only if they named this exact device in this conversation, and never to unlock the phone, dismiss a keyguard or enter a PIN. To use an emulator instead: device_list, then device_boot.`;
 }
 
+export function redactSerial(serial: string): string {
+  return `****${serial.slice(-4)}`;
+}
+
 export interface SelectableDevice {
   readonly serial: string;
   readonly name: string;
@@ -85,7 +89,7 @@ export function selectDefaultDevice(devices: readonly SelectableDevice[], heldSe
   if (chosen !== undefined) return { ok: true, serial: chosen.serial };
   if (emulators.length === 0) {
     const phones = devices.filter(device => device.kind === "physical");
-    const aside = phones.length === 0 ? "" : ` A physical phone is attached (${phones.map(device => device.serial).join(", ")}); it is the person's own device and is never picked for you.`;
+    const aside = phones.length === 0 ? "" : ` A physical phone is attached (${phones.map(device => redactSerial(device.serial)).join(", ")}); it is the person's own device and is never picked for you.`;
     return { ok: false, code: "no_emulator", message: `no emulator is running. Call device_boot (device_list shows the AVDs you can boot), or start an emulator yourself.${aside}` };
   }
   return { ok: false, code: "serial_required", message: `several emulators are running; pass serial. Running: ${emulators.map(device => `${device.serial} (${device.name})`).join(", ")}` };

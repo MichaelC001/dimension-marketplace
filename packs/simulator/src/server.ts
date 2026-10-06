@@ -18,7 +18,7 @@ import type { DeviceBackend } from "./backend";
 import { AndroidBackend } from "./android/backend";
 import { centerOf, describeNode, findByLabel, isSignificant } from "./android/ui-tree";
 import { type DeviceInfo, type DeviceKind, fail, SimulatorError, type UiSnapshot } from "./contracts";
-import { physicalAccessRefusal, selectDefaultDevice } from "./device-safety";
+import { physicalAccessRefusal, redactSerial, selectDefaultDevice } from "./device-safety";
 import { type BootOutcome, Fleet, fileOwnershipStore } from "./fleet";
 import { FrameRelay } from "./relay/relay";
 import { DEVICE_KEYS } from "./shared/frame-protocol";
@@ -40,6 +40,7 @@ const DEFAULT_WAIT_S = 20;
 const DEFAULT_SHOT_EDGE = 1024;
 const MAX_SHOT_EDGE = 2048;
 const TREE_NODE_LIMIT = 150;
+const LOOPBACK_ANY_PORT_WS = "ws://127.0.0.1:*";
 
 const ALLOW_PHYSICAL_HELP = "A physical phone is the person's own device and is refused by default. Pass true ONLY when the user named that exact device in this conversation (the simulator.allowPhysical setting must also be on). Never use it to unlock the phone, dismiss a keyguard or enter a PIN.";
 const serialArg = z.string().min(1).max(100).optional().describe("An emulator's serial from device_list. Leave it out only when exactly one emulator runs; a physical phone is never picked for you.");
@@ -72,8 +73,10 @@ async function respond(extra: CallExtra, run: () => Promise<{ text: string; stru
   }
 }
 
-export function deviceLine(device: DeviceInfo): string {
-  const parts = [device.serial, device.name, device.state];
+export function deviceLine(device: DeviceInfo, revealPhysical = false): string {
+  const masked = device.kind === "physical" && !revealPhysical;
+  const serial = masked ? redactSerial(device.serial) : device.serial;
+  const parts = [serial, masked && device.name === device.serial ? serial : device.name, device.state];
   parts.push(device.kind === "physical" ? "PHYSICAL PHONE (the person's own device: refused unless allowPhysical)" : "emulator");
   if (device.androidVersion) parts.push(`android ${device.androidVersion}`);
   if (device.display) parts.push(`${device.display.width}x${device.display.height}`);
@@ -130,20 +133,22 @@ export async function createSimulatorServer(options: SimulatorServerOptions = {}
   const dataDir = options.dataDir ?? join(process.env.INSO_HOME ?? join(homedir(), ".inso"), "simulator");
   const backend: DeviceBackend = options.backend ?? new AndroidBackend({ toolchain, log, logDir: join(dataDir, "logs"), gpu: () => settings().gpu });
   const fleet = options.fleet ?? new Fleet({ backend, settings, store: fileOwnershipStore(join(dataDir, "owned.json")), log });
+  const physicalUnlocked = (allowPhysical: boolean | undefined): boolean => settings().allowPhysical && allowPhysical === true;
+
   /** The gate every action on a device passes, the tools here and the frames lane when it mints a stream: a physical phone is refused unless the call AND the user's setting both allow it. Resolves to the device's kind. */
   async function authorize(serial: string, allowPhysical: boolean | undefined): Promise<DeviceKind> {
-    const kind = await backend.kindOf(serial);
+    const kind = await backend.kindOf(serial, physicalUnlocked(allowPhysical));
     const refusal = physicalAccessRefusal({ serial, kind, callAllows: allowPhysical === true, settingAllows: settings().allowPhysical });
     if (refusal !== null) fail("physical_device", refusal);
     return kind;
   }
 
-  // A View's input on a physical phone is acted on only while the setting still allows it: asked at most every 2 s, not per pointer event.
+  const PHYSICAL_RECHECK_MS = 1_000;
   let permittedAt = 0;
   let permitted = false;
   const physicalPermitted = (): boolean => {
     const now = Date.now();
-    if (now - permittedAt > 2_000) {
+    if (now - permittedAt > PHYSICAL_RECHECK_MS) {
       permitted = settings().allowPhysical;
       permittedAt = now;
     }
@@ -167,7 +172,7 @@ export async function createSimulatorServer(options: SimulatorServerOptions = {}
 
   const server = new McpServer({ name: "dimension-community-simulator", version: "0.1.0" });
   // `ws://` is what connect-src needs for a WebSocket: an `http://` source does not cover it.
-  const metadata = { ui: { prefersBorder: false, csp: { connectDomains: ["ws://127.0.0.1:*"] } } };
+  const metadata = { ui: { prefersBorder: false, csp: { connectDomains: [LOOPBACK_ANY_PORT_WS] } } };
   registerAppResource(server, "Simulator", SIMULATOR_VIEW_URI, { _meta: metadata }, async () => ({
     contents: [{ uri: SIMULATOR_VIEW_URI, mimeType: RESOURCE_MIME_TYPE, text: html, _meta: metadata }],
   }));
@@ -175,9 +180,9 @@ export async function createSimulatorServer(options: SimulatorServerOptions = {}
   /** The device the human holds in each session: what a model may name by leaving `serial` out. */
   const held = new Map<string, string>();
 
-  async function enriched(): Promise<DeviceInfo[]> {
+  async function enriched(probePhysical: boolean): Promise<DeviceInfo[]> {
     await fleet.reconcile();
-    const devices = await backend.list();
+    const devices = await backend.list({ probePhysical });
     return devices.map(device => ({ ...device, owned: fleet.isOwned(device.serial), live: relay.isLive(device.serial), viewers: relay.viewerCount(device.serial) }));
   }
 
@@ -189,7 +194,7 @@ export async function createSimulatorServer(options: SimulatorServerOptions = {}
       return serial;
     }
     const session = sessionOf(extra);
-    const pick = selectDefaultDevice(await enriched(), session === undefined ? undefined : held.get(session));
+    const pick = selectDefaultDevice(await enriched(false), session === undefined ? undefined : held.get(session));
     if (!pick.ok) fail(pick.code, pick.message);
     fleet.touch(pick.serial);
     return pick.serial;
@@ -200,9 +205,9 @@ export async function createSimulatorServer(options: SimulatorServerOptions = {}
     if (session !== undefined) held.set(session, serial);
   }
 
-  async function listResult(): Promise<{ text: string; structured: object }> {
+  async function listResult(unlocked: boolean): Promise<{ text: string; structured: object }> {
     const tc = leased.refresh();
-    const [devices, avds] = await Promise.all([tc.adb === null ? Promise.resolve([]) : enriched(), tc.emulator === null ? Promise.resolve([]) : backend.avds()]);
+    const [devices, avds] = await Promise.all([tc.adb === null ? Promise.resolve([]) : enriched(unlocked), tc.emulator === null ? Promise.resolve([]) : backend.avds()]);
     const running = new Set(devices.map(device => device.name));
     const structured = {
       devices,
@@ -211,9 +216,9 @@ export async function createSimulatorServer(options: SimulatorServerOptions = {}
       live: backend.liveAvailable(),
       settings: settings(),
     };
-    const lines = devices.length === 0 ? ["no devices running"] : devices.map(deviceLine);
+    const lines = devices.length === 0 ? ["no devices running"] : devices.map(device => deviceLine(device, unlocked));
     if (avds.length > 0) lines.push(`bootable AVDs: ${avds.map(name => (running.has(name) ? `${name} (running)` : name)).join(", ")}`);
-    if (devices.some(device => device.kind === "physical")) lines.push("A PHYSICAL PHONE is the person's own device: every tool refuses it unless the call passes allowPhysical: true AND the user turned on the simulator.allowPhysical setting. Ask the user first; never use it to unlock a phone.");
+    if (devices.some(device => device.kind === "physical")) lines.push(`A PHYSICAL PHONE is attached. It is the person's own device: ${unlocked ? "" : "the pack did not read it (only adb's own listing is shown, serial masked), and "}every tool refuses it unless the call passes allowPhysical: true AND the user turned on the simulator.allowPhysical setting. Ask the user first; never use it to unlock a phone.`);
     for (const missing of tc.missing) lines.push(`MISSING ${missing.tool}: ${missing.fix}`);
     return { text: lines.join("\n"), structured };
   }
@@ -221,11 +226,11 @@ export async function createSimulatorServer(options: SimulatorServerOptions = {}
   server.registerTool(
     "device_list",
     {
-      description: "Running devices (serial, kind emulator|physical, AVD or model, state online|booting|offline|unauthorized, Android version, display size in px, whether this pack booted it, whether a live viewer is attached), the AVDs device_boot can start, and any missing prerequisite with its fix. Call first. Every other tool takes `serial` from here; leave it out only when exactly one EMULATOR runs. A `physical` device is the person's own phone: it is listed so you can tell the user, but every tool refuses it unless the call passes allowPhysical: true AND the user turned on the simulator.allowPhysical setting. Pass allowPhysical only when the user named that exact device in this conversation; never to unlock the phone, dismiss a keyguard or enter a PIN.",
-      inputSchema: {},
+      description: "Running devices (serial, kind emulator|physical, AVD or model, state online|booting|offline|unauthorized, Android version, display size in px, whether this pack booted it, whether a live viewer is attached), the AVDs device_boot can start, and any missing prerequisite with its fix. Call first. Every other tool takes `serial` from here; leave it out only when exactly one EMULATOR runs. A `physical` device is the person's own phone: it is listed so you can tell the user, but with both keys off nothing is run on it, only adb's own listing (state, model) is shown and its serial is masked to its last 4 characters. Passing allowPhysical: true on this call AND the user's simulator.allowPhysical setting turned on unmasks the serial and reads its details; every other tool refuses a physical device unless both are in place. Pass allowPhysical only when the user named that exact device in this conversation; never to unlock the phone, dismiss a keyguard or enter a PIN.",
+      inputSchema: { allowPhysical: allowPhysicalArg },
       annotations: READ_ONLY,
     },
-    (_args, extra) => respond(extra, listResult),
+    ({ allowPhysical }, extra) => respond(extra, () => listResult(physicalUnlocked(allowPhysical))),
   );
 
   server.registerTool(
@@ -370,7 +375,7 @@ export async function createSimulatorServer(options: SimulatorServerOptions = {}
     "device_install",
     {
       description: "Install (or reinstall, -r) an .apk from an absolute path on this machine, granting its runtime permissions. A large APK can outlast the host's tool timeout; if so, run device_list to see whether it landed.",
-      inputSchema: { serial: serialArg, apk: z.string().min(1).max(1024), allowPhysical: allowPhysicalArg },
+      inputSchema: { serial: serialArg, apk: z.string().min(1).max(1024).describe("Absolute path of a built .apk on a local drive. Relative paths and network paths (UNC, \\\\?\\, //host) are refused."), allowPhysical: allowPhysicalArg },
       annotations: { ...WRITES, destructiveHint: false },
     },
     ({ serial, apk, allowPhysical }, extra) =>
@@ -428,11 +433,11 @@ export async function createSimulatorServer(options: SimulatorServerOptions = {}
         if (id !== undefined) await authorize(id, allowPhysical);
         else if (avd !== undefined && boot === true) id = (await fleet.boot({ avd }, 1_000)).device?.serial;
         if (id === undefined) {
-          const pick = selectDefaultDevice(await enriched(), undefined);
+          const pick = selectDefaultDevice(await enriched(false), undefined);
           if (pick.ok) id = pick.serial;
         }
         if (id !== undefined) bind(extra, id);
-        const listed = await listResult();
+        const listed = await listResult(physicalUnlocked(allowPhysical));
         const text = id === undefined ? `The simulator pane is open; no device is selected.\n${listed.text}` : `The simulator pane is open on ${id}.\n${listed.text}`;
         return { text, structured: { ...listed.structured, serial: id ?? null } };
       }),
@@ -442,7 +447,7 @@ export async function createSimulatorServer(options: SimulatorServerOptions = {}
     server,
     "device_stream",
     {
-      description: "Open the frames lane for the View: a loopback WebSocket address with a one-use token. mode h264 (live video; falls back to shot when scrcpy-server is missing, and says so) or shot (a still picture a few times a second). allowPhysical: the View passes true only for a phone the person picked after turning on Show physical devices; refused unless the simulator.allowPhysical setting is on too.",
+      description: "Open the frames lane for the View: a loopback WebSocket address with a single-use token: valid for one socket; ask again to reconnect. mode h264 (live video; falls back to shot when scrcpy-server is missing, and says so) or shot (a still picture a few times a second). allowPhysical: the View passes true only for a phone the person picked after turning on Show physical devices; refused unless the simulator.allowPhysical setting is on too.",
       inputSchema: { serial: z.string().min(1).max(100), mode: z.enum(["h264", "shot"]).optional(), allowPhysical: allowPhysicalArg },
       annotations: READ_ONLY,
       _meta: APP_ONLY,
