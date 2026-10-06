@@ -239,10 +239,12 @@ export class Fleet {
     if (known === false) return false;
     if (!this.#proving.has(key)) {
       this.#proving.add(key);
-      void this.#ownerRunning(record).then(running => {
-        this.#proving.delete(key);
-        if (!running) this.#persist();
-      });
+      void this.#ownerRunning(record)
+        .then(running => {
+          if (!running) this.#persist();
+        })
+        .catch(error => this.#deps.log(`[sim] could not rewrite the ownership file: ${error instanceof Error ? error.message : String(error)}`))
+        .finally(() => this.#proving.delete(key));
     }
     return true;
   }

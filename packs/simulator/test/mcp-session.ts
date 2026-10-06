@@ -18,7 +18,7 @@ export interface Answer {
 }
 
 export interface McpSession {
-  call(tool: string, args: Record<string, unknown>): Promise<Answer>;
+  call(tool: string, args: Record<string, unknown>, meta?: Record<string, unknown>): Promise<Answer>;
   close(): Promise<void>;
 }
 
@@ -41,8 +41,8 @@ export async function connectServer(folder: ServerFolder, backend: FakeBackend, 
   const client = new Client({ name: "simulator-test", version: "0.0.0" });
   await client.connect(clientSide);
   return {
-    call: async (tool, args) => {
-      const result = await client.callTool({ name: tool, arguments: args });
+    call: async (tool, args, meta) => {
+      const result = await client.callTool({ name: tool, arguments: args, ...(meta === undefined ? {} : { _meta: meta }) });
       const content = Array.isArray(result.content) ? result.content : [];
       const text = content.flatMap(part => (part.type === "text" ? [String(part.text)] : [])).join("\n");
       return { isError: result.isError === true, text, structured: result.structuredContent };

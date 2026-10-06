@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, setSystemTime, spyOn, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import http from "node:http";
 import { Duplex } from "node:stream";
@@ -7,7 +7,8 @@ import type { Screenshot } from "../src/contracts";
 import { FrameRelay, type RelayOptions } from "../src/relay/relay";
 import { decodeFrame, FrameTag, type MediaFrame, type StreamMode } from "../src/shared/frame-protocol";
 import { until } from "./fake-android-tools";
-import { FakeBackend, PHONE_SERIAL } from "./fake-backend";
+import { FakeBackend, PHONE_SERIAL, phoneDevice } from "./fake-backend";
+import { type Answer, connectServer, serverFolder } from "./mcp-session";
 
 const EMULATOR = "emulator-5554";
 const PHONE = PHONE_SERIAL;
@@ -15,6 +16,7 @@ const NEVER_MS = 600_000;
 const PATIENCE_MS = 5_000;
 const CONTROL_TICKS = 5;
 const CLIENT_KEY = "dGhlIHNhbXBsZSBub25jZQ==";
+const REFUSED_SOCKET_GONE_MS = 1_000;
 const TIMING = { stopGraceMs: 25, physicalRecheckMs: 10, tokenIdleMs: NEVER_MS } as const;
 
 const STALE_CONFIG = Buffer.from([0, 0, 0, 1, 0x67, 0x11]);
@@ -100,6 +102,8 @@ interface Target {
   readonly host?: string;
   readonly origin?: string;
   readonly version?: string;
+  readonly head?: Buffer;
+  readonly clientNeverCloses?: boolean;
 }
 
 class FakeServer extends EventEmitter {
@@ -130,7 +134,10 @@ const servers = new Map<number, FakeServer>();
 let nextPort = 41_000;
 
 class ClientSocket extends Duplex {
-  constructor(private readonly toClient: (chunk: Buffer) => void) {
+  constructor(
+    private readonly toClient: (chunk: Buffer) => void,
+    private readonly closesWhenServerDoes: boolean,
+  ) {
     super();
     this.resume();
   }
@@ -151,7 +158,7 @@ class ClientSocket extends Duplex {
   }
 
   override _final(done: () => void): void {
-    this.push(null);
+    if (this.closesWhenServerDoes) this.push(null);
     done();
   }
 }
@@ -164,12 +171,13 @@ class Wire {
   closeCode: number | null = null;
   readonly texts: string[] = [];
   readonly frames: MediaFrame[] = [];
-  readonly socket = new ClientSocket(chunk => this.#feed(chunk));
+  readonly socket: ClientSocket;
   readonly #headSeen = Promise.withResolvers<void>();
   #buffer: Buffer = Buffer.alloc(0);
   #headParsed = false;
 
-  private constructor() {
+  private constructor(clientNeverCloses: boolean) {
+    this.socket = new ClientSocket(chunk => this.#feed(chunk), !clientNeverCloses);
     this.socket.on("close", () => {
       this.closed = true;
       this.#headSeen.resolve();
@@ -178,7 +186,7 @@ class Wire {
 
   static async open(target: Target): Promise<Wire> {
     const url = new URL(target.url);
-    const wire = new Wire();
+    const wire = new Wire(target.clientNeverCloses === true);
     opened.push(wire);
     const server = servers.get(Number(url.port));
     if (server === undefined || server.closed) {
@@ -192,7 +200,7 @@ class Wire {
         "sec-websocket-version": target.version ?? "13",
       };
       if (target.origin !== undefined) headers.origin = target.origin;
-      server.emit("upgrade", { url: target.path ?? url.pathname, method: "GET", headers }, wire.socket, Buffer.alloc(0));
+      server.emit("upgrade", { url: target.path ?? url.pathname, method: "GET", headers }, wire.socket, target.head ?? Buffer.alloc(0));
     }
     await wire.#headSeen.promise;
     return wire;
@@ -443,6 +451,24 @@ describe("a request target the pack cannot parse", () => {
     expect(refused.socket.destroyed).toBe(true);
   });
 
+  const SILENT_CLIENT_REFUSALS: { name: string; target: Omit<Target, "url">; status: number }[] = [
+    { name: "a Host that is not the listener's", target: { host: "evil.example" }, status: 403 },
+    { name: "a token the pack never minted", target: { path: "/f/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" }, status: 404 },
+  ];
+
+  for (const row of SILENT_CLIENT_REFUSALS) {
+    test(`${row.name} is refused ${row.status} and its socket is destroyed by the pack even though the client never closes its own side; the real token still gets in`, async () => {
+      const r = rig();
+      const grant = await r.relay.mint(EMULATOR, "h264", false);
+
+      const refused = await Wire.open({ url: grant.url, clientNeverCloses: true, ...row.target });
+      expect(refused.status).toBe(row.status);
+      await until(() => refused.closed, "the pack to destroy the refused socket", REFUSED_SOCKET_GONE_MS);
+
+      expect((await Wire.open({ url: grant.url })).status).toBe(101);
+    });
+  }
+
   test("a failure while a viewer is being set up costs that one socket, not the process, and the next viewer is served", async () => {
     let failuresLeft = 1;
     const r = rig({
@@ -457,6 +483,25 @@ describe("a request target the pack cannot parse", () => {
     const next = await r.connect(EMULATOR);
     expect(next.status).toBe(101);
     await within(() => next.texts.length > 0, "the ready message");
+  });
+
+  test("an upgrade followed in the same segment by an unmasked frame is closed as a protocol error and attaches no viewer: no encoder starts for it, nothing is left listening, and the next View is served", async () => {
+    const r = rig();
+    const grant = await r.relay.mint(EMULATOR, "h264", false);
+    const unmaskedTextFrame = Buffer.from([0x81, 0x01, 0x78]);
+
+    const doomed = await Wire.open({ url: grant.url, head: unmaskedTextFrame });
+    expect(doomed.status).toBe(101);
+    expect(doomed.closeCode).toBe(1002);
+    expect(r.backend.starts).toHaveLength(0);
+    expect(r.relay.snapshot()).toEqual({ listening: false, tokens: 0, producers: [] });
+
+    const next = await r.connect(EMULATOR);
+    expect(next.status).toBe(101);
+    await within(() => next.texts.length > 0, "the ready message");
+    await startAt(r, 0);
+    expect(r.backend.starts).toHaveLength(1);
+    expect(r.relay.viewerCount(EMULATOR)).toBe(1);
   });
 });
 
@@ -666,5 +711,46 @@ describe("the still-picture poller", () => {
 
     await within(() => r.backend.shotCalls >= 2, "the poller to take another picture for the late viewer");
     expect(second.status).toBe(101);
+  });
+});
+
+function nextTurn(): Promise<void> {
+  const { promise, resolve } = Promise.withResolvers<void>();
+  setImmediate(resolve);
+  return promise;
+}
+
+function streamUrlOf(answer: Answer): string {
+  const structured = answer.structured;
+  if (typeof structured !== "object" || structured === null || !("url" in structured) || typeof structured.url !== "string") throw new Error(`device_stream gave no url: ${answer.text}`);
+  return structured.url;
+}
+
+describe("the pack's own reading of the physical-phone setting", () => {
+  test("turning it off stops a View's next input from reaching the phone even when the wall clock has stepped back since it was last read", async () => {
+    const folder = serverFolder();
+    const backend = new FakeBackend();
+    backend.devices = [phoneDevice()];
+    const settings = { allowPhysical: true };
+    const session = await connectServer(folder, backend, settings);
+
+    try {
+      const grant = await session.call("device_stream", { serial: PHONE, mode: "shot", allowPhysical: true }, { "ai.insodimension/caller": "app" });
+      const view = await Wire.open({ url: streamUrlOf(grant) });
+      expect(view.status).toBe(101);
+
+      setSystemTime(new Date(Date.now() - 10 * 60_000));
+      settings.allowPhysical = false;
+      view.send(JSON.stringify({ t: "k", key: "home" }));
+      await nextTurn();
+      setSystemTime();
+
+      expect(view.endedReason ?? "no ended message was sent").toContain("simulator.allowPhysical");
+      expect(backend.acts.filter(act => act.startsWith("key "))).toEqual([]);
+    } finally {
+      setSystemTime();
+      await session.close();
+      folder.dispose();
+    }
   });
 });

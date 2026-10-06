@@ -592,7 +592,7 @@ export class FrameRelay {
 
   #accept(request: http.IncomingMessage, socket: net.Socket, head: Buffer): void {
     const refuse = (status: number, text: string): void => {
-      socket.end(`HTTP/1.1 ${status} ${text}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
+      socket.end(`HTTP/1.1 ${status} ${text}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`, () => socket.destroy());
     };
     // Host and Origin first: a page that is not ours learns nothing about which tokens exist.
     if (request.headers.host !== `127.0.0.1:${this.#port}`) return refuse(403, "Forbidden");
@@ -650,6 +650,7 @@ export class FrameRelay {
       },
       MAX_INPUT_BYTES,
     );
+    if (!peer.open) return;
     viewer = new Viewer(this.#nextViewer++, peer, entry.serial, entry.mode);
     peer.sendText(JSON.stringify({ t: "ready", serial: entry.serial, mode: entry.mode }));
     if (entry.physical) this.#watchPhysical(viewer, owner);

@@ -148,7 +148,7 @@ export async function createSimulatorServer(options: SimulatorServerOptions = {}
   let permitted = false;
   const physicalPermitted = (): boolean => {
     const now = Date.now();
-    if (now - permittedAt > PHYSICAL_RECHECK_MS) {
+    if (now < permittedAt || now - permittedAt > PHYSICAL_RECHECK_MS) {
       permitted = settings().allowPhysical;
       permittedAt = now;
     }

@@ -25,6 +25,8 @@ const T0 = 1_800_000_000_000;
 class MemoryStore implements OwnershipStore {
   records: OwnedRecord[];
   readonly writes: OwnedRecord[][] = [];
+  failure: Error | null = null;
+  refusedWrites = 0;
 
   constructor(initial: readonly OwnedRecord[] = []) {
     this.records = [...initial];
@@ -35,6 +37,10 @@ class MemoryStore implements OwnershipStore {
   }
 
   write(records: readonly OwnedRecord[]): void {
+    if (this.failure !== null) {
+      this.refusedWrites += 1;
+      throw this.failure;
+    }
     this.records = [...records];
     this.writes.push([...records]);
   }
@@ -51,31 +57,33 @@ interface Rig {
   readonly store: MemoryStore;
   readonly fleet: Fleet;
   readonly timers: FakeTimer[];
+  readonly logs: string[];
   /** Timers that were not cancelled: the idle clocks that are actually running. */
   active(): FakeTimer[];
 }
 
-function rig(options: { settings?: Partial<SimulatorSettings>; stored?: readonly OwnedRecord[]; alive?: readonly number[]; backend?: FakeBackend } = {}): Rig {
+function rig(options: { settings?: Partial<SimulatorSettings>; stored?: readonly OwnedRecord[]; alive?: readonly number[]; isAlive?: (pid: number) => boolean; backend?: FakeBackend } = {}): Rig {
   const backend = options.backend ?? new FakeBackend();
   backend.avdNames = ["Pixel_A", "Pixel_B", "Pixel_C"];
   const store = new MemoryStore(options.stored);
   const timers: FakeTimer[] = [];
+  const logs: string[] = [];
   const alive = new Set(options.alive ?? []);
   const fleet = new Fleet({
     backend,
     store,
-    log: () => undefined,
+    log: line => void logs.push(line),
     settings: () => ({ ...DEFAULT_SETTINGS, ...options.settings }),
     pid: PACK_PID,
     ownerStartedAt: T0,
-    isAlive: pid => alive.has(pid),
+    isAlive: options.isAlive ?? (pid => alive.has(pid)),
     schedule: (run, ms) => {
       const timer: FakeTimer = { run, ms, cancelled: false, cancel: () => void (timer.cancelled = true) };
       timers.push(timer);
       return timer;
     },
   });
-  return { backend, store, fleet, timers, active: () => timers.filter(timer => !timer.cancelled) };
+  return { backend, store, fleet, timers, logs, active: () => timers.filter(timer => !timer.cancelled) };
 }
 
 class HeldStopBackend extends FakeBackend {
@@ -116,6 +124,26 @@ async function bootUp(r: Rig, avd: string, serial: string): Promise<FakeBoot> {
   boot.ready.resolve(info);
   await outcome;
   return boot;
+}
+
+function nextTurn(): Promise<void> {
+  const { promise, resolve } = Promise.withResolvers<void>();
+  setImmediate(resolve);
+  return promise;
+}
+
+async function unhandledRejectionsDuring(run: () => Promise<void>): Promise<unknown[]> {
+  const reasons: unknown[] = [];
+  const collect = (reason: unknown): number => reasons.push(reason);
+  process.on("unhandledRejection", collect);
+  try {
+    await run();
+    await nextTurn();
+    await nextTurn();
+  } finally {
+    process.off("unhandledRejection", collect);
+  }
+  return reasons;
 }
 
 describe("an AVD that already runs", () => {
@@ -628,6 +656,63 @@ describe("a crashed pack's emulators", () => {
     await until(() => !r.store.records.some(item => item.pid === stale.pid) || ownerProofs.length > 20, "the stale record to be dropped");
     expect(r.store.records.map(item => item.avd).sort()).toEqual(["Pixel_A", "Pixel_B"]);
     expect(ownerProofs).toHaveLength(1);
+  });
+
+  test("a store write that fails while a dead sibling's record is dropped in the background is logged, not left as an unhandled rejection, and the next write drops the record", async () => {
+    const r = rig({ alive: [SIBLING_PID] });
+    await bootUp(r, "Pixel_A", "emulator-5556");
+    const stale = record({ pid: 4900, ownerPid: SIBLING_PID, ownerStartedAt: T0 - 3 * 3_600_000, serial: "emulator-5560" });
+    r.backend.processes.set(SIBLING_PID, { startedAt: T0, serial: null });
+    r.store.records = [...r.store.records, stale];
+    const proofHeld = Promise.withResolvers<void>();
+    const processState = r.backend.processState.bind(r.backend);
+    r.backend.processState = async (process, avd) => {
+      if (process.pid === SIBLING_PID) await proofHeld.promise;
+      return processState(process, avd);
+    };
+    await r.fleet.boot({ avd: "Pixel_B" }, 0);
+
+    const unhandled = await unhandledRejectionsDuring(async () => {
+      r.store.failure = new Error("EPERM: operation not permitted, rename 'owned.json'");
+      proofHeld.resolve();
+      await until(() => r.store.refusedWrites > 0, "the background proof to try its write", 2_000);
+    });
+
+    expect(unhandled).toEqual([]);
+    expect(r.logs.filter(line => line.includes("EPERM: operation not permitted"))).toHaveLength(1);
+    expect(r.store.records).toContainEqual(stale);
+
+    r.store.failure = null;
+    r.backend.boots[1]?.observer.serial("emulator-5558");
+    expect(r.store.records.map(item => item.avd).sort()).toEqual(["Pixel_A", "Pixel_B"]);
+  });
+
+  test("a background proof that itself fails is logged, not left as an unhandled rejection, and the sibling is proved again by the next write", async () => {
+    let probes = 0;
+    const isAlive = (pid: number): boolean => {
+      if (pid !== SIBLING_PID) return false;
+      probes += 1;
+      if (probes === 2) throw new Error("the process probe failed");
+      return true;
+    };
+    const r = rig({ isAlive });
+    await bootUp(r, "Pixel_A", "emulator-5556");
+    const stale = record({ pid: 4900, ownerPid: SIBLING_PID, ownerStartedAt: T0 - 3 * 3_600_000, serial: "emulator-5560" });
+    r.backend.processes.set(SIBLING_PID, { startedAt: T0, serial: null });
+    r.store.records = [...r.store.records, stale];
+
+    const unhandled = await unhandledRejectionsDuring(async () => {
+      await r.fleet.boot({ avd: "Pixel_B" }, 0);
+      await until(() => probes >= 2, "the first proof to run", 2_000);
+    });
+
+    expect(unhandled).toEqual([]);
+    expect(r.logs.filter(line => line.includes("the process probe failed"))).toHaveLength(1);
+    expect(r.store.records).toContainEqual(stale);
+
+    r.backend.boots[1]?.observer.serial("emulator-5558");
+    await until(() => !r.store.records.some(item => item.pid === stale.pid), "the stale record to be dropped by the second proof", 2_000);
+    expect(r.store.records.map(item => item.avd).sort()).toEqual(["Pixel_A", "Pixel_B"]);
   });
 });
 

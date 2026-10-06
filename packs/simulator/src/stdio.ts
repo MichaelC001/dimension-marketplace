@@ -19,9 +19,10 @@ let crashing = false;
 const exitAfterCrash =
   (origin: string) =>
   (error: unknown): void => {
+    console.error(`[sim] ${origin}: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
     if (crashing) return;
     crashing = true;
-    console.error(`[sim] ${origin}: ${error instanceof Error ? error.message : String(error)}; stopping what the pack booted, then exiting`);
+    console.error("[sim] stopping what the pack booted, then exiting");
     process.exitCode = 1;
     exitAfterStop();
   };
