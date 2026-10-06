@@ -1938,9 +1938,8 @@ var Fleet = class {
     if (!this.#proving.has(key)) {
       this.#proving.add(key);
       void this.#ownerRunning(record).then((running) => {
-        this.#proving.delete(key);
         if (!running) this.#persist();
-      });
+      }).catch((error) => this.#deps.log(`[sim] could not rewrite the ownership file: ${error instanceof Error ? error.message : String(error)}`)).finally(() => this.#proving.delete(key));
     }
     return true;
   }
@@ -2901,7 +2900,7 @@ var FrameRelay = class {
 Connection: close\r
 Content-Length: 0\r
 \r
-`);
+`, () => socket.destroy());
     };
     if (request.headers.host !== `127.0.0.1:${this.#port}`) return refuse(403, "Forbidden");
     const origin = request.headers.origin;
@@ -2956,6 +2955,7 @@ Content-Length: 0\r
       },
       MAX_INPUT_BYTES
     );
+    if (!peer.open) return;
     viewer = new Viewer(this.#nextViewer++, peer, entry.serial, entry.mode);
     peer.sendText(JSON.stringify({ t: "ready", serial: entry.serial, mode: entry.mode }));
     if (entry.physical) this.#watchPhysical(viewer, owner);
@@ -3162,7 +3162,7 @@ async function createSimulatorServer(options = {}) {
   let permitted = false;
   const physicalPermitted = () => {
     const now = Date.now();
-    if (now - permittedAt > PHYSICAL_RECHECK_MS2) {
+    if (now < permittedAt || now - permittedAt > PHYSICAL_RECHECK_MS2) {
       permitted = settings().allowPhysical;
       permittedAt = now;
     }
@@ -3490,9 +3490,10 @@ var exitAfterStop = () => {
 };
 var crashing = false;
 var exitAfterCrash = (origin) => (error) => {
+  console.error(`[sim] ${origin}: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
   if (crashing) return;
   crashing = true;
-  console.error(`[sim] ${origin}: ${error instanceof Error ? error.message : String(error)}; stopping what the pack booted, then exiting`);
+  console.error("[sim] stopping what the pack booted, then exiting");
   process.exitCode = 1;
   exitAfterStop();
 };
