@@ -12,9 +12,9 @@ import { z } from "zod";
 
 // src/android/backend.ts
 import { spawn as spawn2 } from "node:child_process";
-import { closeSync, existsSync as existsSync2, fstatSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeSync } from "node:fs";
+import { closeSync, existsSync as existsSync2, fstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, statSync, writeSync } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import { join as join2 } from "node:path";
+import { join as join2, posix as posix2, win32 as win322 } from "node:path";
 
 // src/contracts.ts
 var SimulatorError = class extends Error {
@@ -44,13 +44,16 @@ function physicalAccessRefusal(request) {
   const now = `Right now this call ${request.callAllows ? "passes allowPhysical: true" : "does not pass allowPhysical"} and the simulator.allowPhysical setting is ${request.settingAllows ? "on" : "off"}.`;
   return `${request.serial} is a physical phone: the person's own device, not an emulator, so it is refused. Acting on it takes BOTH allowPhysical: true on the call AND the simulator.allowPhysical setting turned on by the user. ${now} Ask the user first. Pass allowPhysical only if they named this exact device in this conversation, and never to unlock the phone, dismiss a keyguard or enter a PIN. To use an emulator instead: device_list, then device_boot.`;
 }
+function redactSerial(serial) {
+  return `****${serial.slice(-4)}`;
+}
 function selectDefaultDevice(devices, heldSerial) {
   const emulators = devices.filter((device) => device.kind === "emulator" && (device.state === "online" || device.state === "booting"));
   const chosen = emulators.find((device) => device.serial === heldSerial) ?? (emulators.length === 1 ? emulators[0] : void 0);
   if (chosen !== void 0) return { ok: true, serial: chosen.serial };
   if (emulators.length === 0) {
     const phones = devices.filter((device) => device.kind === "physical");
-    const aside = phones.length === 0 ? "" : ` A physical phone is attached (${phones.map((device) => device.serial).join(", ")}); it is the person's own device and is never picked for you.`;
+    const aside = phones.length === 0 ? "" : ` A physical phone is attached (${phones.map((device) => redactSerial(device.serial)).join(", ")}); it is the person's own device and is never picked for you.`;
     return { ok: false, code: "no_emulator", message: `no emulator is running. Call device_boot (device_list shows the AVDs you can boot), or start an emulator yourself.${aside}` };
   }
   return { ok: false, code: "serial_required", message: `several emulators are running; pass serial. Running: ${emulators.map((device) => `${device.serial} (${device.name})`).join(", ")}` };
@@ -312,6 +315,9 @@ import { join } from "node:path";
 
 // src/android/process-table.ts
 import { execFile as execFile2 } from "node:child_process";
+function isSignalablePid(pid) {
+  return Number.isSafeInteger(pid) && pid > 1 && pid !== process.pid && pid !== process.ppid;
+}
 function processTree(rows, root) {
   const top = rows.find((row) => row.pid === root);
   if (top === void 0) return [];
@@ -364,15 +370,17 @@ function treeSurvivors(rows, killed) {
   const startedAt = new Map(rows.map((row) => [row.pid, row.startedAtMs]));
   return killed.filter((member) => startedAt.get(member.pid) === member.startedAtMs).map((member) => member.pid);
 }
+var MAX_COMMAND_CHARS = 4096;
 function parseWindowsProcesses(text) {
   const rows = [];
   for (const line of text.split(/\r?\n/)) {
-    const [pid, ppid, created, kernel, user, rss] = line.trim().split("|");
+    const [pid, ppid, created, kernel, user, rss, ...commandParts] = line.trim().split("|");
     if (pid === void 0 || ppid === void 0 || created === void 0 || created === "") continue;
     const startedAtMs = Date.parse(created.replace(/(\.\d{3})\d+/, "$1"));
     const ticks = Number(kernel) + Number(user);
     if (!Number.isFinite(startedAtMs) || !Number.isFinite(ticks) || !Number.isInteger(Number(pid)) || !Number.isInteger(Number(ppid))) continue;
-    rows.push({ pid: Number(pid), ppid: Number(ppid), startedAtMs, cpuSeconds: ticks / 1e7, rssBytes: Number(rss) || 0 });
+    const command = commandParts.join("|").slice(0, MAX_COMMAND_CHARS);
+    rows.push({ pid: Number(pid), ppid: Number(ppid), startedAtMs, cpuSeconds: ticks / 1e7, rssBytes: Number(rss) || 0, ...command === "" ? {} : { command } });
   }
   return rows;
 }
@@ -384,15 +392,16 @@ function parseCpuTime(text) {
 }
 function parsePsProcesses(text) {
   const rows = [];
-  const line = /^\s*(\d+)\s+(\d+)\s+\w{3}\s+(\w{3})\s+(\d+)\s+(\d{2}):(\d{2}):(\d{2})\s+(\d{4})\s+(\S+)\s+(\d+)\s*$/;
+  const line = /^\s*(\d+)\s+(\d+)\s+\w{3}\s+(\w{3})\s+(\d+)\s+(\d{2}):(\d{2}):(\d{2})\s+(\d{4})\s+(\S+)\s+(\d+)(?:\s+(.*?))?\s*$/;
   for (const raw of text.split(/\r?\n/)) {
     const match = line.exec(raw);
     if (match === null) continue;
-    const [, pid, ppid, month, day, hour, minute, second, year, cpu, rss] = match;
+    const [, pid, ppid, month, day, hour, minute, second, year, cpu, rss, args] = match;
     const monthIndex = MONTHS[month ?? ""];
     if (monthIndex === void 0) continue;
     const startedAtMs = new Date(Number(year), monthIndex, Number(day), Number(hour), Number(minute), Number(second)).getTime();
-    rows.push({ pid: Number(pid), ppid: Number(ppid), startedAtMs, cpuSeconds: parseCpuTime(cpu ?? "0"), rssBytes: Number(rss) * 1024 });
+    const command = args?.slice(0, MAX_COMMAND_CHARS) ?? "";
+    rows.push({ pid: Number(pid), ppid: Number(ppid), startedAtMs, cpuSeconds: parseCpuTime(cpu ?? "0"), rssBytes: Number(rss) * 1024, ...command === "" ? {} : { command } });
   }
   return rows;
 }
@@ -462,7 +471,9 @@ function windowsThreadsScript(pid) {
     "'{0}|{1}' -f $threads.Count, $stopped"
   ].join("\n");
 }
-function windowsResumeScript(pid) {
+var RESUME_EXIT = { refused: 1, unreachable: 2, otherProcess: 3 };
+var RESUME_START_TOLERANCE_MS = 10;
+function windowsResumeScript(pid, startedAtMs) {
   return [
     "$ErrorActionPreference = 'Stop'",
     "Add-Type -TypeDefinition @'",
@@ -471,24 +482,31 @@ function windowsResumeScript(pid) {
     "public static class SimNt {",
     '  [DllImport("kernel32.dll")] static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);',
     '  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);',
+    '  [DllImport("kernel32.dll")] static extern bool GetProcessTimes(IntPtr handle, out long created, out long exited, out long kernel, out long user);',
     '  [DllImport("ntdll.dll")] static extern int NtResumeProcess(IntPtr handle);',
-    "  public static int Resume(uint pid) {",
-    "    IntPtr handle = OpenProcess(0x0800, false, pid);",
-    "    if (handle == IntPtr.Zero) return -1;",
-    "    try { return NtResumeProcess(handle); } finally { CloseHandle(handle); }",
+    "  public static int Resume(uint pid, long startedAtMs, long toleranceMs) {",
+    "    IntPtr handle = OpenProcess(0x1800, false, pid);",
+    `    if (handle == IntPtr.Zero) return ${RESUME_EXIT.unreachable};`,
+    "    try {",
+    "      long created, exited, kernel, user;",
+    `      if (!GetProcessTimes(handle, out created, out exited, out kernel, out user)) return ${RESUME_EXIT.unreachable};`,
+    "      long openedStartedMs = (created - 116444736000000000L) / 10000L;",
+    `      if (Math.Abs(openedStartedMs - startedAtMs) > toleranceMs) return ${RESUME_EXIT.otherProcess};`,
+    `      return NtResumeProcess(handle) == 0 ? 0 : ${RESUME_EXIT.refused};`,
+    "    } finally { CloseHandle(handle); }",
     "  }",
     "}",
     "'@",
-    `if ([SimNt]::Resume(${pid}) -ne 0) { exit 1 }`
+    `exit [SimNt]::Resume(${pid}, ${startedAtMs}, ${RESUME_START_TOLERANCE_MS})`
   ].join("\n");
 }
-var WINDOWS_PROCESS_SCRIPT = "Get-CimInstance Win32_Process | ForEach-Object { '{0}|{1}|{2:o}|{3}|{4}|{5}' -f $_.ProcessId, $_.ParentProcessId, $_.CreationDate, $_.KernelModeTime, $_.UserModeTime, $_.WorkingSetSize }";
-function nodeProcessTable() {
+var WINDOWS_PROCESS_SCRIPT = "Get-CimInstance Win32_Process | ForEach-Object { '{0}|{1}|{2:o}|{3}|{4}|{5}|{6}' -f $_.ProcessId, $_.ParentProcessId, $_.CreationDate, $_.KernelModeTime, $_.UserModeTime, $_.WorkingSetSize, ($_.CommandLine -replace '[\\r\\n]+', ' ') }";
+function nodeProcessTable(log = () => void 0) {
   const windows = process.platform === "win32";
   return {
     processes: async () => {
       if (windows) return parseWindowsProcesses(await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", WINDOWS_PROCESS_SCRIPT]));
-      return parsePsProcesses(await run("ps", ["-A", "-o", "pid=,ppid=,lstart=,cputime=,rss="], { ...process.env, LC_ALL: "C" }));
+      return parsePsProcesses(await run("ps", ["-A", "-ww", "-o", "pid=,ppid=,lstart=,cputime=,rss=,args="], { ...process.env, LC_ALL: "C" }));
     },
     listeners: async () => {
       try {
@@ -505,6 +523,7 @@ function nodeProcessTable() {
       }
     },
     killTree: async (pid, rows) => {
+      if (!isSignalablePid(pid)) return;
       if (windows) {
         const { promise, resolve } = Promise.withResolvers();
         execFile2("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true }, () => resolve());
@@ -512,6 +531,7 @@ function nodeProcessTable() {
         return;
       }
       for (const target of [-pid, ...processTree(rows, pid).map((row) => row.pid).reverse()]) {
+        if (!isSignalablePid(Math.abs(target))) continue;
         try {
           process.kill(target, "SIGKILL");
         } catch {
@@ -519,7 +539,7 @@ function nodeProcessTable() {
       }
     },
     threadStates: async (pid) => {
-      if (!Number.isInteger(pid) || pid <= 0) return null;
+      if (!isSignalablePid(pid)) return null;
       try {
         if (windows) return parseThreadCounts(await run("powershell.exe", encodedCommand(windowsThreadsScript(pid)), void 0, 8e3));
         return parsePsThreadStates(await run("ps", [...process.platform === "linux" ? ["-L"] : [], "-o", "stat=", "-p", String(pid)], { ...process.env, LC_ALL: "C" }, 8e3));
@@ -527,19 +547,21 @@ function nodeProcessTable() {
         return null;
       }
     },
-    resume: async (pid) => {
-      if (!Number.isInteger(pid) || pid <= 0) return false;
+    resume: async (pid, startedAtMs) => {
+      if (!isSignalablePid(pid) || !Number.isSafeInteger(startedAtMs)) return false;
       try {
-        if (windows) await run("powershell.exe", encodedCommand(windowsResumeScript(pid)), void 0, 3e4);
+        if (windows) await run("powershell.exe", encodedCommand(windowsResumeScript(pid, startedAtMs)), void 0, 3e4);
         else process.kill(pid, "SIGCONT");
         return true;
-      } catch {
+      } catch (error) {
+        if (error instanceof Error && "code" in error && error.code === RESUME_EXIT.otherProcess) log(`[sim] not resuming pid ${pid}: it started at another time than the pack recorded, so the pid now belongs to something else`);
         return false;
       }
     }
   };
 }
 function isProcessAlive(pid) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
   try {
     process.kill(pid, 0);
     return true;
@@ -641,6 +663,26 @@ function parseAvdName(output) {
   const lines = output.split(/\r?\n/).map((line) => line.trim()).filter((line) => line !== "");
   if (lines.some((line) => line.startsWith("KO"))) return null;
   return lines.find((line) => line !== "OK" && !line.startsWith("Android Console")) ?? null;
+}
+var EMULATOR_IMAGE = /^(?:emulator(?:64)?(?:-(?:x86|arm|arm64|mips|headless))?|qemu-system-[\w.-]+)$/i;
+var COMMAND_TOKEN = /"([^"]*)"|\S+/g;
+function splitCommand(command) {
+  const trimmed = command.trim();
+  const quoted = /^"([^"]*)"/.exec(trimmed);
+  const firstFlag = trimmed.search(/\s[-@]/);
+  const programEnd = quoted !== null ? quoted[0].length : firstFlag < 0 ? trimmed.length : firstFlag;
+  const program = quoted !== null ? quoted[1] ?? "" : trimmed.slice(0, programEnd);
+  const args = [...trimmed.slice(programEnd).matchAll(COMMAND_TOKEN)].map((match) => match[1] ?? match[0]);
+  return { program, args };
+}
+function emulatorLaunchVerdict(row, avd) {
+  if (row.command === void 0) return "unknown";
+  const { program, args } = splitCommand(row.command);
+  const image = (program.split(/[\\/]/).pop() ?? "").replace(/\.exe$/i, "");
+  if (!EMULATOR_IMAGE.test(image)) return "other";
+  const avdAt = args.indexOf("-avd");
+  const named = avdAt >= 0 && args[avdAt + 1] === avd || args.includes(`@${avd}`);
+  return named ? "launch" : "other";
 }
 function avdLockHolder(avdDir, readFile2) {
   const text = readFile2(join(avdDir, "hardware-qemu.ini.lock", "pid"));
@@ -1206,6 +1248,16 @@ function parseProbe(output) {
     characteristics: field("C")
   };
 }
+function apkPathRefusal(apkPath, platform) {
+  const windows = platform === "win32";
+  if (windows && /^[\\/]{2}/.test(apkPath)) {
+    return { code: "apk_path_network", message: `${apkPath} is a network or device path (UNC, \\\\?\\ or //host), which the pack will not open. Pass the absolute path of an .apk on a local drive.` };
+  }
+  if (!(windows ? win322 : posix2).isAbsolute(apkPath)) {
+    return { code: "apk_path_not_absolute", message: `${apkPath} is not an absolute path. Pass the absolute path of a built .apk on this machine.` };
+  }
+  return null;
+}
 var BOOT_COMPLETED_LOOP = 'while [ "$(getprop sys.boot_completed)" != 1 ]; do sleep 1; done';
 var LOG_ROTATE_BYTES = 1024 * 1024;
 var AndroidBackend = class {
@@ -1216,10 +1268,11 @@ var AndroidBackend = class {
   #displays = /* @__PURE__ */ new Map();
   /** Emulators this backend spawned and still holds the handle of. */
   #launches = /* @__PURE__ */ new Map();
+  #exited = /* @__PURE__ */ new Set();
   #table;
   constructor(deps) {
     this.#deps = deps;
-    this.#table = deps.processes ?? nodeProcessTable();
+    this.#table = deps.processes ?? nodeProcessTable(deps.log);
   }
   #adb() {
     const toolchain = this.#deps.toolchain();
@@ -1235,7 +1288,7 @@ var AndroidBackend = class {
   liveAvailable() {
     return this.#deps.toolchain().scrcpyServer !== null;
   }
-  async list() {
+  async list(options = {}) {
     const adb = this.#adb();
     const devices = await adb.devices();
     const live = new Set(devices.map((device) => device.serial));
@@ -1244,8 +1297,8 @@ var AndroidBackend = class {
       devices.map(async (device) => {
         const base = { serial: device.serial, platform: "android", owned: false, live: false, viewers: 0 };
         const emulator = consolePortOf(device.serial) !== null;
-        if (device.state !== "device") {
-          const state = device.state === "unauthorized" ? "unauthorized" : "offline";
+        if (device.state !== "device" || !emulator && options.probePhysical !== true) {
+          const state = device.state === "device" ? "online" : device.state === "unauthorized" ? "unauthorized" : "offline";
           const name = (emulator ? await this.#consoleAvd(adb, device.serial) : null) ?? device.model ?? device.serial;
           return { ...base, kind: classifyDevice({ serial: device.serial }), state, name, androidVersion: null, display: null, density: null };
         }
@@ -1265,12 +1318,12 @@ var AndroidBackend = class {
       })
     );
   }
-  async kindOf(serial) {
+  async kindOf(serial, probeShell = false) {
     if (classifyDevice({ serial }) === "emulator") return "emulator";
     const adb = this.#adb();
     const listed = (await adb.devices()).find((device) => device.serial === serial);
     if (listed === void 0) fail("not_connected", `${serial} is not connected. Run device_list to see what is, or device_boot to start an emulator.`);
-    if (listed.state !== "device") return classifyDevice({ serial });
+    if (listed.state !== "device" || !probeShell) return classifyDevice({ serial });
     const probe = await adb.shell(serial, PROBE_COMMAND, { timeoutMs: 1e4 }).then(parseProbe, () => null);
     return classifyDevice({ serial, ...probe });
   }
@@ -1346,12 +1399,13 @@ var AndroidBackend = class {
     const exit = Promise.withResolvers();
     child.once("error", spawnError.resolve);
     if (child.pid === void 0) throw failure2(`could not start the emulator: ${(await spawnError.promise).message}`);
-    const launch = { process: { pid: child.pid, startedAt }, gpu, logPath, exited: false, exitedAt: null, code: null, exit: exit.promise };
+    const launch = { process: { pid: child.pid, startedAt }, avd, gpu, logPath, exited: false, exitedAt: null, code: null, exit: exit.promise };
     const done = (code) => {
       launch.exited = true;
       launch.exitedAt = this.#now();
       launch.code = code;
       this.#launches.delete(launch.process.pid);
+      this.#exited.add(`${launch.process.pid}@${launch.process.startedAt}`);
       exit.resolve(code);
     };
     child.once("exit", done);
@@ -1468,7 +1522,7 @@ var AndroidBackend = class {
     const fresh = await this.#table.processes().catch(() => null);
     if (fresh === null || launch.exited || processVerdict(fresh, launch.process) !== "ours" || !stillInTree(fresh, launch.process.pid, target)) return frozen;
     ctx.resumes++;
-    const resumed = await this.#table.resume(target.pid).catch(() => false);
+    const resumed = await this.#table.resume(target.pid, target.startedAtMs).catch(() => false);
     this.#deps.log(`[sim] ${ctx.avd}: ${resumed ? "resumed" : "could not resume"} the emulator process (pid ${target.pid}); resume ${ctx.resumes} of ${ctx.timing.suspend.maxResumes}`);
     if (resumed && !ctx.resumeNoted) {
       ctx.resumeNoted = true;
@@ -1514,8 +1568,17 @@ var AndroidBackend = class {
       await this.#end(launch);
       throw failure2(error instanceof Error ? error.message : String(error));
     }
-    const info = (await this.list()).find((device) => device.serial === serial);
-    if (info === void 0) throw failure2(`${serial} booted but is not listed by adb.`);
+    let info;
+    let reason = `${serial} booted but is not listed by adb.`;
+    try {
+      info = (await this.list()).find((device) => device.serial === serial);
+    } catch (error) {
+      reason = `${serial} booted but adb could not list it: ${error instanceof Error ? error.message : String(error)}`;
+    }
+    if (info === void 0) {
+      await this.#end(launch);
+      throw failure2(reason);
+    }
     return info;
   }
   /** The serial of the emulator under `launch`, or null while it cannot be told. */
@@ -1534,24 +1597,30 @@ var AndroidBackend = class {
   }
   /** Stop what a boot spawned, and wait (briefly) until it is gone. */
   async #end(launch) {
-    await this.#kill(launch.process);
+    await this.#kill(launch.process, launch.avd);
     await Promise.race([launch.exit, delay2(5e3)]);
   }
   /** Kill the tree under `target` if, and only if, it is still the process the pack spawned. */
-  async #kill(target) {
-    const verdict = await this.processState(target);
+  async #kill(target, avd) {
+    const verdict = await this.processState(target, avd);
     if (verdict !== "ours") {
-      if (verdict !== "gone") this.#deps.log(`[sim] not killing pid ${target.pid}: ${verdict === "reused" ? "it started at another time, so the pid now belongs to something else" : "the process table could not be read, so it cannot be verified"}`);
+      if (verdict !== "gone") this.#deps.log(`[sim] not killing pid ${target.pid}: ${verdict === "reused" ? "it is not the emulator process the pack launched (another start time, or another program), so the pid now belongs to something else" : "the process table or its command line could not be read, so it cannot be verified"}`);
       return verdict;
     }
     const rows = process.platform === "win32" ? [] : await this.#table.processes().catch(() => []);
     await this.#table.killTree(target.pid, rows);
     return verdict;
   }
-  async processState(target) {
+  async processState(target, avd) {
     const launch = this.#launches.get(target.pid);
     if (launch !== void 0 && !launch.exited && Math.abs(launch.process.startedAt - target.startedAt) <= START_TOLERANCE_MS) return "ours";
-    return processVerdict(await this.#table.processes().catch(() => null), target);
+    if (this.#exited.has(`${target.pid}@${target.startedAt}`)) return "gone";
+    const rows = await this.#table.processes().catch(() => null);
+    const verdict = processVerdict(rows, target);
+    if (verdict !== "ours" || avd === void 0) return verdict;
+    const row = rows?.find((candidate) => candidate.pid === target.pid);
+    const launchVerdict = row === void 0 ? "unknown" : emulatorLaunchVerdict(row, avd);
+    return launchVerdict === "launch" ? "ours" : launchVerdict === "other" ? "reused" : "unknown";
   }
   async serialOf(target) {
     const adb = this.#adb();
@@ -1563,23 +1632,28 @@ var AndroidBackend = class {
     if (ports === null) return null;
     return pickSerial({ before: [], after: devices.map(({ serial, state }) => ({ serial, state })), treePorts: ports })?.serial ?? null;
   }
-  async stop(target, serial) {
-    const verdict = await this.processState(target);
+  async stop(target, serial, options) {
+    const verdict = await this.processState(target, options.avd);
     if (verdict === "unknown") {
-      fail("cannot_verify", `the pack could not read the host's process table, so it cannot prove that pid ${target.pid} is the emulator it started, and it stops nothing it cannot prove. Close the emulator yourself.`);
+      fail("cannot_verify", `the pack could not read the host's process table or the command line of pid ${target.pid}, so it cannot prove that this is the emulator it started, and it stops nothing it cannot prove. Close the emulator yourself.`);
     }
     if (serial !== null) {
       this.#static.delete(serial);
       this.#displays.delete(serial);
     }
     if (verdict !== "ours") return "already-exited";
-    if (serial !== null && await this.serialOf(target) === serial) {
-      await this.#adb().run(serial, ["emu", "kill"], { timeoutMs: 15e3 }).catch(() => void 0);
-      await this.#exitWithin(target, this.#timing().stopGraceMs);
+    const graceMs = options.graceMs ?? this.#timing().stopGraceMs;
+    const { killNow } = options;
+    if (serial !== null && killNow?.aborted !== true) {
+      const consoleSerial = await this.serialOf(target);
+      if (consoleSerial === serial && killNow?.aborted !== true) {
+        await this.#adb().run(serial, ["emu", "kill"], { timeoutMs: options.graceMs === void 0 ? 15e3 : Math.min(15e3, options.graceMs), ...killNow ? { signal: killNow } : {} }).catch(() => void 0);
+        await this.#exitWithin(target, graceMs, killNow);
+      }
     }
     if (this.#alive(target.pid)) {
-      await this.#kill(target);
-      await this.#exitWithin(target, 5e3);
+      await this.#kill(target, options.avd);
+      await this.#exitWithin(target, Math.min(5e3, graceMs));
     }
     return "stopped";
   }
@@ -1587,9 +1661,9 @@ var AndroidBackend = class {
     const launch = this.#launches.get(pid);
     return launch === void 0 ? isProcessAlive(pid) : !launch.exited;
   }
-  async #exitWithin(target, ms) {
+  async #exitWithin(target, ms, killNow) {
     const deadline = this.#now() + ms;
-    while (this.#alive(target.pid) && this.#now() < deadline) await delay2(250);
+    while (this.#alive(target.pid) && this.#now() < deadline && killNow?.aborted !== true) await delay2(250);
   }
   async runningEmulators() {
     const adb = this.#adb();
@@ -1654,14 +1728,24 @@ var AndroidBackend = class {
     if (/Error:|Exception/.test(out)) fail("open_url_failed", `no app on ${serial} could open ${url}: ${out.trim().split("\n").find((line) => /Error/.test(line)) ?? out.trim().slice(0, 160)}`);
   }
   async install(serial, apkPath) {
-    if (!existsSync2(apkPath) || !statSync(apkPath).isFile()) fail("apk_not_found", `no file at ${apkPath}. Pass the absolute path of a built .apk.`);
-    if (!apkPath.toLowerCase().endsWith(".apk")) fail("apk_not_apk", `${apkPath} is not an .apk. For an .aab or split APKs, use bundletool to build a universal .apk first.`);
-    const out = await this.#adb().text(serial, ["install", "-r", "-g", "-t", apkPath], { timeoutMs: 18e4 });
+    const refusal = apkPathRefusal(apkPath, process.platform);
+    if (refusal !== null) fail(refusal.code, refusal.message);
+    let resolved;
+    try {
+      resolved = realpathSync(apkPath);
+    } catch {
+      fail("apk_not_found", `no file at ${apkPath}. Pass the absolute path of a built .apk.`);
+    }
+    const resolvedRefusal = apkPathRefusal(resolved, process.platform);
+    if (resolvedRefusal !== null) fail(resolvedRefusal.code, resolvedRefusal.message);
+    if (!statSync(resolved).isFile()) fail("apk_not_found", `no file at ${apkPath}. Pass the absolute path of a built .apk.`);
+    if (!resolved.toLowerCase().endsWith(".apk")) fail("apk_not_apk", `${apkPath} is not an .apk. For an .aab or split APKs, use bundletool to build a universal .apk first.`);
+    const out = await this.#adb().text(serial, ["install", "-r", "-g", "-t", resolved], { timeoutMs: 18e4 });
     return out.trim().split(/\r?\n/).filter((line) => line !== "").pop() ?? "Success";
   }
   async launch(serial, target) {
     if (!/^[A-Za-z0-9_.]+(\/[A-Za-z0-9_.$]+)?$/.test(target)) fail("bad_package", `"${target}" is not a package name (com.example.app) or a component (com.example.app/.MainActivity).`);
-    const out = target.includes("/") ? await this.#adb().shell(serial, `am start -n ${target}`) : await this.#adb().shell(serial, `monkey -p ${target} -c android.intent.category.LAUNCHER 1`);
+    const out = target.includes("/") ? await this.#adb().shell(serial, `am start -n '${target}'`) : await this.#adb().shell(serial, `monkey -p ${target} -c android.intent.category.LAUNCHER 1`);
     if (/No activities found|Error:|does not exist/.test(out)) fail("launch_failed", `could not launch ${target}: it is not installed on ${serial}, or has no launcher activity. device_install the .apk first.`);
   }
   async uiTree(serial) {
@@ -1733,7 +1817,7 @@ function fileOwnershipStore(path) {
         const parsed = JSON.parse(readFileSync2(path, "utf8"));
         if (!Array.isArray(parsed)) return [];
         return parsed.filter(
-          (entry) => typeof entry === "object" && entry !== null && (entry.serial === null || typeof entry.serial === "string") && typeof entry.avd === "string" && typeof entry.pid === "number" && typeof entry.startedAt === "number" && typeof entry.bootedAt === "number" && typeof entry.ownerPid === "number"
+          (entry) => typeof entry === "object" && entry !== null && (entry.serial === null || typeof entry.serial === "string") && typeof entry.avd === "string" && isEmulatorPid(entry.pid) && Number.isFinite(entry.startedAt) && Number.isFinite(entry.bootedAt) && Number.isSafeInteger(entry.ownerPid) && entry.ownerPid > 0 && Number.isFinite(entry.ownerStartedAt)
         );
       } catch {
         return [];
@@ -1753,6 +1837,7 @@ var defaultSchedule = (run2, ms) => {
   return { cancel: () => clearTimeout(handle) };
 };
 function processAlive(pid) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
   try {
     process.kill(pid, 0);
     return true;
@@ -1762,6 +1847,11 @@ function processAlive(pid) {
 }
 var FAILURE_MEMORY_MS = 10 * 6e4;
 var bootKey = (avd, readOnly) => readOnly ? `${avd}#read-only` : avd;
+var SHUTDOWN_GRACE_MS = 3e3;
+var SHUTDOWN_KILL_FOLLOW_UP_MS = 3e3;
+function isEmulatorPid(pid) {
+  return typeof pid === "number" && Number.isSafeInteger(pid) && pid > 1 && pid !== process.pid && pid !== process.ppid;
+}
 var Fleet = class {
   #deps;
   #pid;
@@ -1776,9 +1866,14 @@ var Fleet = class {
   #starting = 0;
   #seq = 0;
   #reconciled = null;
+  #deciding = /* @__PURE__ */ new Map();
+  #owners = /* @__PURE__ */ new Map();
+  #proving = /* @__PURE__ */ new Set();
+  #ownerStartedAt;
   constructor(deps) {
     this.#deps = deps;
     this.#pid = deps.pid ?? process.pid;
+    this.#ownerStartedAt = deps.ownerStartedAt ?? Math.round(Date.now() - process.uptime() * 1e3);
   }
   owned() {
     return [...this.#owned.values()];
@@ -1796,17 +1891,16 @@ var Fleet = class {
     return this.#reconciled;
   }
   async #adoptOrphans() {
-    const alive = this.#deps.isAlive ?? processAlive;
     const backend = this.#deps.backend;
     const records = this.#deps.store.read();
     let changed = false;
     for (const record of records) {
-      if (record.ownerPid !== this.#pid && alive(record.ownerPid)) continue;
+      if (record.ownerPid !== this.#pid && await this.#ownerRunning(record)) continue;
       changed = true;
       const proc = { pid: record.pid, startedAt: record.startedAt };
-      const state = await backend.processState(proc).catch(() => "unknown");
+      const state = await backend.processState(proc, record.avd).catch(() => "unknown");
       if (state !== "ours") {
-        this.#deps.log(`[sim] dropped ownership record for ${record.serial ?? record.avd} (${record.avd}, pid ${record.pid}): ${state === "unknown" ? "the process table could not be read, so it cannot be verified" : state === "reused" ? "that pid is another process now" : "that process is gone"}`);
+        this.#deps.log(`[sim] dropped ownership record for ${record.serial ?? record.avd} (${record.avd}, pid ${record.pid}): ${state === "unknown" ? "the process table or its command line could not be read, so it cannot be verified" : state === "reused" ? "that pid is not the emulator the record names (another start time, or another program)" : "that process is gone"}`);
         continue;
       }
       let serial = await backend.serialOf(proc).catch(() => null);
@@ -1816,21 +1910,44 @@ var Fleet = class {
       }
       if (serial === null) {
         this.#deps.log(`[sim] stopping unfinished boot of ${record.avd} (pid ${record.pid}) left by pack process ${record.ownerPid}`);
-        await backend.stop(proc, null).catch((error) => this.#deps.log(`[sim] could not stop it: ${error instanceof Error ? error.message : String(error)}`));
+        await backend.stop(proc, null, { avd: record.avd }).catch((error) => this.#deps.log(`[sim] could not stop it: ${error instanceof Error ? error.message : String(error)}`));
         continue;
       }
       const key = `pid-${record.pid}`;
-      this.#owned.set(key, { ...record, serial, ownerPid: this.#pid });
+      this.#owned.set(key, { ...record, serial, ownerPid: this.#pid, ownerStartedAt: this.#ownerStartedAt });
       this.#deps.log(`[sim] adopted orphan ${serial} (${record.avd}, pid ${record.pid}) left by pack process ${record.ownerPid}`);
       this.#schedule(key);
     }
     if (changed) this.#persist();
   }
+  async #ownerRunning(record) {
+    const alive = this.#deps.isAlive ?? processAlive;
+    let running = alive(record.ownerPid);
+    if (running) {
+      const state = await this.#deps.backend.processState({ pid: record.ownerPid, startedAt: record.ownerStartedAt }).catch(() => "unknown");
+      running = state === "ours" || state === "unknown";
+    }
+    this.#owners.set(`${record.ownerPid}@${record.ownerStartedAt}`, running);
+    return running;
+  }
+  #siblingRunning(record) {
+    if (!(this.#deps.isAlive ?? processAlive)(record.ownerPid)) return false;
+    const key = `${record.ownerPid}@${record.ownerStartedAt}`;
+    const known = this.#owners.get(key);
+    if (known === false) return false;
+    if (!this.#proving.has(key)) {
+      this.#proving.add(key);
+      void this.#ownerRunning(record).then((running) => {
+        this.#proving.delete(key);
+        if (!running) this.#persist();
+      });
+    }
+    return true;
+  }
   /** This pack's records, plus those of OTHER pack processes that are still running. A dead owner's record was adopted (then it is ours) or dropped by `reconcile`: it is never carried forward. */
   #persist() {
-    const alive = this.#deps.isAlive ?? processAlive;
     const mine = [...this.#owned.values()];
-    const others = this.#deps.store.read().filter((record) => record.ownerPid !== this.#pid && alive(record.ownerPid) && !mine.some((own) => own.pid === record.pid && own.startedAt === record.startedAt));
+    const others = this.#deps.store.read().filter((record) => record.ownerPid !== this.#pid && this.#siblingRunning(record) && !mine.some((own) => own.pid === record.pid && own.startedAt === record.startedAt));
     this.#deps.store.write([...others, ...mine]);
   }
   async boot(request, waitMs) {
@@ -1844,13 +1961,27 @@ var Fleet = class {
     }
     const readOnly = request.readOnly === true;
     const key = bootKey(avd, readOnly);
+    for (let gate = this.#deciding.get(key); gate !== void 0; gate = this.#deciding.get(key)) await gate;
     const pending = this.#booting.get(key);
     if (pending) return this.#await(pending, waitMs, true);
+    const decision = Promise.withResolvers();
+    this.#deciding.set(key, decision.promise);
+    let decided;
+    try {
+      decided = await this.#decide(avd, key, request, readOnly);
+    } finally {
+      this.#deciding.delete(key);
+      decision.resolve();
+    }
+    if ("running" in decided) return this.#reuse(decided.running, avd, request, waitMs);
+    return this.#await(decided.boot, waitMs, false);
+  }
+  async #decide(avd, key, request, readOnly) {
     const failed = this.#takeFailure(avd);
     if (failed !== null) throw failed;
     if (!readOnly) {
-      const running = await this.#alreadyRunning(avd, request, waitMs);
-      if (running !== null) return running;
+      const running = await this.#findRunning(avd);
+      if (running !== null) return { running };
     }
     const cap = this.#deps.settings().maxDevices;
     if (this.#owned.size + this.#starting >= cap) {
@@ -1862,9 +1993,8 @@ var Fleet = class {
     if (readOnly) notes.push(`Started read-only (-read-only): this is a second instance of ${avd}, and what it changes is discarded when it stops.`);
     const observer = {
       spawned: (proc) => {
-        this.#owned.set(id, { serial: null, avd, pid: proc.pid, startedAt: proc.startedAt, bootedAt: this.#owned.get(id)?.bootedAt ?? (this.#deps.now ?? Date.now)(), ownerPid: this.#pid });
+        this.#owned.set(id, { serial: null, avd, pid: proc.pid, startedAt: proc.startedAt, bootedAt: this.#owned.get(id)?.bootedAt ?? (this.#deps.now ?? Date.now)(), ownerPid: this.#pid, ownerStartedAt: this.#ownerStartedAt });
         this.#persist();
-        this.#schedule(id);
       },
       serial: (serial) => {
         const record = this.#owned.get(id);
@@ -1880,18 +2010,19 @@ var Fleet = class {
     this.#starting++;
     let handle;
     try {
-      handle = await backend.startBoot({ ...request, avd }, observer);
+      handle = await this.#deps.backend.startBoot({ ...request, avd }, observer);
     } finally {
       this.#starting--;
     }
     const settled = handle.ready.then(
       (device) => {
-        this.#booting.delete(key);
+        if (this.#booting.get(key) === boot) this.#booting.delete(key);
         this.#deps.log(`[sim] ${device.serial} (${avd}) is up`);
+        this.#schedule(id);
         return device;
       },
       (error) => {
-        this.#booting.delete(key);
+        if (this.#booting.get(key) === boot) this.#booting.delete(key);
         this.#release(id);
         this.#deps.log(`[sim] boot of ${avd} failed: ${error instanceof Error ? error.message : String(error)}`);
         if (!this.#stopped.delete(id)) this.#failures.set(avd, { error: error instanceof Error ? error : new Error(String(error)), at: (this.#deps.now ?? Date.now)() });
@@ -1901,7 +2032,7 @@ var Fleet = class {
     settled.catch(() => void 0);
     const boot = { key: id, avd, notes, settled };
     this.#booting.set(key, boot);
-    return this.#await(boot, waitMs, false);
+    return { boot };
   }
   /** A boot that failed after the call waiting for it had returned: the next call for that AVD is told, once, rather than silently starting another. */
   #takeFailure(avd) {
@@ -1916,14 +2047,16 @@ var Fleet = class {
    * AVD it is (its console answers while Android is still starting; the device list's name needs Android up),
    * and either source is enough to refuse a second instance, which the emulator itself would reject anyway.
    */
-  async #alreadyRunning(avd, request, waitMs) {
+  async #findRunning(avd) {
     const backend = this.#deps.backend;
     const [asked, listed] = await Promise.all([backend.runningEmulators().catch(() => []), backend.list()]);
     const serials = new Set(asked.filter((emulator) => emulator.avd === avd).map((emulator) => emulator.serial));
-    for (const device2 of listed) if (device2.kind === "emulator" && device2.name === avd) serials.add(device2.serial);
-    const matches = listed.filter((device2) => serials.has(device2.serial));
-    const found = matches.find((device2) => device2.state === "online") ?? matches[0];
-    if (found === void 0) return null;
+    for (const device of listed) if (device.kind === "emulator" && device.name === avd) serials.add(device.serial);
+    const matches = listed.filter((device) => serials.has(device.serial));
+    return matches.find((device) => device.state === "online") ?? matches[0] ?? null;
+  }
+  async #reuse(found, avd, request, waitMs) {
+    const backend = this.#deps.backend;
     this.touch(found.serial);
     const notes = [`${found.serial} already runs ${avd}${this.isOwned(found.serial) ? "" : " (not started by this pack)"}: it is returned, not booted again. Pass readOnly: true for a second instance.`];
     if (request.cold === true || request.headless !== void 0) notes.push("cold and headless were not applied: the device was already running.");
@@ -1956,15 +2089,15 @@ var Fleet = class {
     }
     return this.#stopOwned(key);
   }
-  async #stopOwned(key) {
+  async #stopOwned(key, hurry = {}) {
     const record = this.#owned.get(key);
     if (record === void 0) return "already-exited";
     const name = record.serial ?? record.avd;
     this.#deps.log(`[sim] stopping ${name} (pid ${record.pid})`);
-    if ([...this.#booting.values()].some((boot) => boot.key === key)) this.#stopped.add(key);
+    if (this.#isBooting(key)) this.#stopped.add(key);
     let outcome;
     try {
-      outcome = await this.#deps.backend.stop({ pid: record.pid, startedAt: record.startedAt }, record.serial);
+      outcome = await this.#deps.backend.stop({ pid: record.pid, startedAt: record.startedAt }, record.serial, { avd: record.avd, ...hurry });
     } catch (error) {
       this.#stopped.delete(key);
       throw error;
@@ -1972,6 +2105,9 @@ var Fleet = class {
     this.#release(key);
     this.#deps.log(outcome === "stopped" ? `[sim] stopped ${name}` : `[sim] ${name} had already exited; nothing was killed`);
     return outcome;
+  }
+  #isBooting(key) {
+    return [...this.#booting.values()].some((boot) => boot.key === key);
   }
   #release(key) {
     this.#idle.get(key)?.cancel();
@@ -1996,6 +2132,7 @@ var Fleet = class {
     this.#idle.delete(key);
     const record = this.#owned.get(key);
     if (record === void 0) return;
+    if (this.#isBooting(key)) return;
     if (record.serial !== null && (this.#viewers.get(record.serial) ?? 0) > 0) return;
     const minutes = this.#deps.settings().idleMinutes;
     const timer = (this.#deps.schedule ?? defaultSchedule)(() => {
@@ -2012,10 +2149,19 @@ var Fleet = class {
     const keys = [...this.#owned.keys()];
     if (keys.length === 0) return;
     this.#deps.log(`[sim] shutdown: stopping ${keys.map((key) => this.#owned.get(key)?.serial ?? this.#owned.get(key)?.avd ?? key).join(", ")}`);
-    const budget = Promise.withResolvers();
-    const timer = setTimeout(() => budget.resolve(), budgetMs);
-    await Promise.race([Promise.allSettled(keys.map((key) => this.#stopOwned(key))), budget.promise]);
+    const killNow = new AbortController();
+    const stopped = Promise.allSettled(keys.map((key) => this.#stopOwned(key, { graceMs: SHUTDOWN_GRACE_MS, killNow: killNow.signal })));
+    const overBudget = Promise.withResolvers();
+    const timer = setTimeout(() => overBudget.resolve(true), budgetMs);
+    const late = await Promise.race([stopped.then(() => false), overBudget.promise]);
     clearTimeout(timer);
+    if (!late) return;
+    this.#deps.log(`[sim] shutdown: ${budgetMs} ms passed with emulators still stopping; killing what is left`);
+    killNow.abort();
+    const followUp = Promise.withResolvers();
+    const followUpTimer = setTimeout(() => followUp.resolve(), SHUTDOWN_KILL_FOLLOW_UP_MS);
+    await Promise.race([stopped, followUp.promise]);
+    clearTimeout(followUpTimer);
   }
 };
 
@@ -2113,7 +2259,10 @@ var FrameGate = class {
 };
 function deliveryDecision(gate, tag, backlog, maxBacklog) {
   const picture = tag === FrameTag.Key || tag === FrameTag.Delta || tag === FrameTag.Shot;
-  if (picture && backlog > maxBacklog) return { write: false, dropped: true, resync: tag === FrameTag.Key || gate.gap() };
+  if (picture && backlog > maxBacklog) {
+    const parkedNow = gate.gap();
+    return { write: false, dropped: true, resync: tag === FrameTag.Key || parkedNow };
+  }
   if (!gate.admit(tag)) return { write: false, dropped: false, resync: false };
   return { write: true };
 }
@@ -2297,6 +2446,10 @@ var GOP_CAP_BYTES = 1.5 * 1024 * 1024;
 var MAX_INPUT_BYTES = 8 * 1024;
 var ACTIVITY_EVERY_MS = 5e3;
 var MIN_SHOT_INTERVAL_MS = 120;
+var PHYSICAL_RECHECK_MS = 1e3;
+var SANDBOXED_VIEW_ORIGIN = "null";
+var STREAM_PATH = /^\/f\/([A-Za-z0-9_-]{16,64})(?:\?|$)/;
+var PHYSICAL_REVOKED_REASON = "driving a physical phone was turned off in settings (simulator.allowPhysical)";
 function mediaFrame(tag, seq, at, payload) {
   const length = FRAME_HEADER_BYTES + payload.length;
   const header = frameHeader(OP_BINARY, length);
@@ -2380,6 +2533,7 @@ var Producer = class {
 var H264Producer = class extends Producer {
   #state = "idle";
   #stream = null;
+  #generation = 0;
   #seq = 0;
   #sessionFrame = null;
   #configFrame = null;
@@ -2402,14 +2556,18 @@ var H264Producer = class extends Producer {
   }
   #start() {
     this.#state = "starting";
+    const generation = ++this.#generation;
     const startedAt = this.hub.now();
     this.hub.log(`[sim] encoder start ${this.serial} (h264 max ${this.hub.options.stream.maxSize}px ${this.hub.options.stream.maxFps}fps ${(this.hub.options.stream.bitRate / 1e6).toFixed(1)}Mbps)`);
-    let stream = null;
     this.hub.backend.openStream(this.serial, this.hub.options.stream, {
-      session: (size) => this.#onSession(size),
-      packet: (packet) => this.#onPacket(packet),
+      session: (size) => {
+        if (this.#generation === generation) this.#onSession(size);
+      },
+      packet: (packet) => {
+        if (this.#generation === generation) this.#onPacket(packet);
+      },
       closed: (reason, deliberate) => {
-        if (stream !== null && this.#stream !== stream) return;
+        if (this.#generation !== generation) return;
         this.#reset();
         if (!deliberate) {
           this.hub.log(`[sim] encoder lost ${this.serial}: ${reason}`);
@@ -2417,23 +2575,24 @@ var H264Producer = class extends Producer {
         }
       }
     }).then((opened) => {
-      if (this.#state !== "starting") {
+      if (this.#generation !== generation) {
         void opened.close();
         return;
       }
-      stream = opened;
       this.#stream = opened;
       this.#state = "live";
       this.hub.log(`[sim] encoder live ${this.serial} in ${this.hub.now() - startedAt} ms`);
       if (this.viewers.size === 0) this.stopSource("viewers left during start");
     }).catch((error) => {
-      this.#state = "idle";
+      if (this.#generation !== generation) return;
+      this.#reset();
       const reason = error instanceof Error ? error.message : String(error);
       this.hub.log(`[sim] encoder start failed ${this.serial}: ${reason}`);
       this.endViewers(reason);
     });
   }
   #reset() {
+    this.#generation += 1;
     this.#state = "idle";
     this.#stream = null;
     this.#sessionFrame = null;
@@ -2554,7 +2713,8 @@ var ShotProducer = class extends Producer {
   onAttach(viewer) {
     if (this.#sessionFrame) this.offer(viewer, FrameTag.Session, this.#sessionFrame, () => void 0);
     if (this.#shotFrame) this.offer(viewer, FrameTag.Shot, this.#shotFrame, () => void 0);
-    if (!this.#running) void this.#loop();
+    if (this.#running) this.#stopped = false;
+    else void this.#loop();
   }
   stopSource(reason) {
     if (!this.#running) return;
@@ -2635,9 +2795,13 @@ var FrameRelay = class {
   #listening = null;
   #port = 0;
   #nextViewer = 1;
+  #physicalRecheckMs;
+  #physicalViewers = /* @__PURE__ */ new Map();
+  #physicalRecheck;
   constructor(options) {
     this.#opts = options;
     this.#tokenIdleMs = options.tokenIdleMs ?? 6e4;
+    this.#physicalRecheckMs = options.physicalRecheckMs ?? PHYSICAL_RECHECK_MS;
     this.#hub = {
       options: {
         stopGraceMs: options.stopGraceMs ?? 1e3,
@@ -2683,7 +2847,7 @@ var FrameRelay = class {
     }
     const port = await this.#ensureListening();
     const token = randomBytes(24).toString("base64url");
-    const entry = { serial, mode, physical: kind === "physical", timer: void 0, sockets: 0 };
+    const entry = { serial, mode, physical: kind === "physical", timer: void 0 };
     this.#tokens.set(token, entry);
     this.#armToken(token, entry);
     return { url: `ws://127.0.0.1:${port}/f/${token}`, mode, downgraded };
@@ -2723,6 +2887,15 @@ var FrameRelay = class {
     server2.closeAllConnections();
   }
   #upgrade(request, socket, head) {
+    socket.on("error", () => socket.destroy());
+    try {
+      this.#accept(request, socket, head);
+    } catch (error) {
+      this.#opts.log(`[sim] frames lane dropped an upgrade: ${error instanceof Error ? error.message : String(error)}`);
+      socket.destroy();
+    }
+  }
+  #accept(request, socket, head) {
     const refuse = (status, text) => {
       socket.end(`HTTP/1.1 ${status} ${text}\r
 Connection: close\r
@@ -2732,18 +2905,17 @@ Content-Length: 0\r
     };
     if (request.headers.host !== `127.0.0.1:${this.#port}`) return refuse(403, "Forbidden");
     const origin = request.headers.origin;
-    if (origin !== void 0 && origin !== "null") return refuse(403, "Forbidden");
-    const path = /^\/f\/([A-Za-z0-9_-]{16,64})$/.exec(new URL(request.url ?? "/", "http://127.0.0.1").pathname);
-    const token = path?.[1];
+    if (origin !== void 0 && origin !== SANDBOXED_VIEW_ORIGIN) return refuse(403, "Forbidden");
+    const token = STREAM_PATH.exec(request.url ?? "")?.[1];
     const entry = token === void 0 ? void 0 : this.#tokens.get(token);
     if (request.method !== "GET" || token === void 0 || entry === void 0) return refuse(404, "Not Found");
-    if (entry.physical && !this.#opts.physicalPermitted()) return refuse(403, "Forbidden");
+    if (entry.physical && !this.#physicalAllowed()) return refuse(403, "Forbidden");
     const key = request.headers["sec-websocket-key"];
     if (request.headers.upgrade?.toLowerCase() !== "websocket" || request.headers["sec-websocket-version"] !== "13" || !validClientKey(key)) return refuse(400, "Bad Request");
     socket.write(handshakeResponse(key));
+    this.#tokens.delete(token);
     clearTimeout(entry.timer);
     entry.timer = void 0;
-    entry.sockets += 1;
     const producerKey = `${entry.serial}|${entry.mode}`;
     let producer = this.#producers.get(producerKey);
     if (producer === void 0) {
@@ -2760,9 +2932,8 @@ Content-Length: 0\r
           if (viewer === null) return;
           const input = parseInputMessage(message);
           if (input === null) return;
-          if (entry.physical && !this.#opts.physicalPermitted()) {
-            viewer.peer.sendText(JSON.stringify({ t: "ended", reason: "driving a physical phone was turned off in settings (simulator.allowPhysical)" }));
-            viewer.peer.close(WS_INTERNAL_ERROR, "physical device not allowed");
+          if (entry.physical && !this.#physicalAllowed()) {
+            this.#revokePhysical();
             return;
           }
           const at = this.#hub.now();
@@ -2774,9 +2945,8 @@ Content-Length: 0\r
         },
         binary: () => void 0,
         closed: () => {
-          entry.sockets -= 1;
-          if (entry.sockets === 0 && this.#tokens.has(token)) this.#armToken(token, entry);
           if (viewer !== null) {
+            this.#unwatchPhysical(viewer);
             if (owner instanceof H264Producer) owner.release(viewer);
             owner.detach(viewer);
           }
@@ -2788,7 +2958,40 @@ Content-Length: 0\r
     );
     viewer = new Viewer(this.#nextViewer++, peer, entry.serial, entry.mode);
     peer.sendText(JSON.stringify({ t: "ready", serial: entry.serial, mode: entry.mode }));
+    if (entry.physical) this.#watchPhysical(viewer, owner);
     owner.attach(viewer);
+  }
+  #physicalAllowed() {
+    try {
+      return this.#opts.physicalPermitted();
+    } catch {
+      return false;
+    }
+  }
+  #watchPhysical(viewer, producer) {
+    this.#physicalViewers.set(viewer, producer);
+    if (this.#physicalRecheck !== void 0) return;
+    this.#physicalRecheck = setInterval(() => {
+      if (!this.#physicalAllowed()) this.#revokePhysical();
+    }, this.#physicalRecheckMs);
+    this.#physicalRecheck.unref();
+  }
+  #unwatchPhysical(viewer) {
+    this.#physicalViewers.delete(viewer);
+    if (this.#physicalViewers.size > 0) return;
+    clearInterval(this.#physicalRecheck);
+    this.#physicalRecheck = void 0;
+  }
+  #revokePhysical() {
+    const producers = /* @__PURE__ */ new Set();
+    for (const [viewer, producer] of [...this.#physicalViewers]) {
+      viewer.peer.sendText(JSON.stringify({ t: "ended", reason: PHYSICAL_REVOKED_REASON }));
+      viewer.peer.close(WS_INTERNAL_ERROR, "physical device not allowed");
+      producers.add(producer);
+    }
+    if (producers.size === 0) return;
+    this.#opts.log("[sim] physical streaming turned off in settings: closing its viewers");
+    for (const producer of producers) producer.close("physical streaming turned off in settings");
   }
   async close() {
     for (const producer of this.#producers.values()) {
@@ -2885,6 +3088,7 @@ var DEFAULT_WAIT_S = 20;
 var DEFAULT_SHOT_EDGE = 1024;
 var MAX_SHOT_EDGE = 2048;
 var TREE_NODE_LIMIT = 150;
+var LOOPBACK_ANY_PORT_WS = "ws://127.0.0.1:*";
 var ALLOW_PHYSICAL_HELP = "A physical phone is the person's own device and is refused by default. Pass true ONLY when the user named that exact device in this conversation (the simulator.allowPhysical setting must also be on). Never use it to unlock the phone, dismiss a keyguard or enter a PIN.";
 var serialArg = z.string().min(1).max(100).optional().describe("An emulator's serial from device_list. Leave it out only when exactly one emulator runs; a physical phone is never picked for you.");
 var allowPhysicalArg = z.boolean().optional().describe(ALLOW_PHYSICAL_HELP);
@@ -2908,8 +3112,10 @@ async function respond(extra, run2) {
     return failure(error);
   }
 }
-function deviceLine(device) {
-  const parts = [device.serial, device.name, device.state];
+function deviceLine(device, revealPhysical = false) {
+  const masked = device.kind === "physical" && !revealPhysical;
+  const serial = masked ? redactSerial(device.serial) : device.serial;
+  const parts = [serial, masked && device.name === device.serial ? serial : device.name, device.state];
   parts.push(device.kind === "physical" ? "PHYSICAL PHONE (the person's own device: refused unless allowPhysical)" : "emulator");
   if (device.androidVersion) parts.push(`android ${device.androidVersion}`);
   if (device.display) parts.push(`${device.display.width}x${device.display.height}`);
@@ -2944,17 +3150,19 @@ async function createSimulatorServer(options = {}) {
   const dataDir = options.dataDir ?? join4(process.env.INSO_HOME ?? join4(homedir4(), ".inso"), "simulator");
   const backend = options.backend ?? new AndroidBackend({ toolchain, log, logDir: join4(dataDir, "logs"), gpu: () => settings().gpu });
   const fleet = options.fleet ?? new Fleet({ backend, settings, store: fileOwnershipStore(join4(dataDir, "owned.json")), log });
+  const physicalUnlocked = (allowPhysical) => settings().allowPhysical && allowPhysical === true;
   async function authorize(serial, allowPhysical) {
-    const kind = await backend.kindOf(serial);
+    const kind = await backend.kindOf(serial, physicalUnlocked(allowPhysical));
     const refusal = physicalAccessRefusal({ serial, kind, callAllows: allowPhysical === true, settingAllows: settings().allowPhysical });
     if (refusal !== null) fail("physical_device", refusal);
     return kind;
   }
+  const PHYSICAL_RECHECK_MS2 = 1e3;
   let permittedAt = 0;
   let permitted = false;
   const physicalPermitted = () => {
     const now = Date.now();
-    if (now - permittedAt > 2e3) {
+    if (now - permittedAt > PHYSICAL_RECHECK_MS2) {
       permitted = settings().allowPhysical;
       permittedAt = now;
     }
@@ -2971,14 +3179,14 @@ async function createSimulatorServer(options = {}) {
   const viewPath = options.viewPath ?? fileURLToPath(new URL("./view.html", import.meta.url));
   const html = await readFile(viewPath, "utf8");
   const server2 = new McpServer({ name: "dimension-community-simulator", version: "0.1.0" });
-  const metadata = { ui: { prefersBorder: false, csp: { connectDomains: ["ws://127.0.0.1:*"] } } };
+  const metadata = { ui: { prefersBorder: false, csp: { connectDomains: [LOOPBACK_ANY_PORT_WS] } } };
   registerAppResource(server2, "Simulator", SIMULATOR_VIEW_URI, { _meta: metadata }, async () => ({
     contents: [{ uri: SIMULATOR_VIEW_URI, mimeType: RESOURCE_MIME_TYPE, text: html, _meta: metadata }]
   }));
   const held = /* @__PURE__ */ new Map();
-  async function enriched() {
+  async function enriched(probePhysical) {
     await fleet.reconcile();
-    const devices = await backend.list();
+    const devices = await backend.list({ probePhysical });
     return devices.map((device) => ({ ...device, owned: fleet.isOwned(device.serial), live: relay.isLive(device.serial), viewers: relay.viewerCount(device.serial) }));
   }
   async function target(extra, serial, allowPhysical) {
@@ -2988,7 +3196,7 @@ async function createSimulatorServer(options = {}) {
       return serial;
     }
     const session = sessionOf(extra);
-    const pick = selectDefaultDevice(await enriched(), session === void 0 ? void 0 : held.get(session));
+    const pick = selectDefaultDevice(await enriched(false), session === void 0 ? void 0 : held.get(session));
     if (!pick.ok) fail(pick.code, pick.message);
     fleet.touch(pick.serial);
     return pick.serial;
@@ -2997,9 +3205,9 @@ async function createSimulatorServer(options = {}) {
     const session = sessionOf(extra);
     if (session !== void 0) held.set(session, serial);
   }
-  async function listResult() {
+  async function listResult(unlocked) {
     const tc = leased.refresh();
-    const [devices, avds] = await Promise.all([tc.adb === null ? Promise.resolve([]) : enriched(), tc.emulator === null ? Promise.resolve([]) : backend.avds()]);
+    const [devices, avds] = await Promise.all([tc.adb === null ? Promise.resolve([]) : enriched(unlocked), tc.emulator === null ? Promise.resolve([]) : backend.avds()]);
     const running = new Set(devices.map((device) => device.name));
     const structured = {
       devices,
@@ -3008,20 +3216,20 @@ async function createSimulatorServer(options = {}) {
       live: backend.liveAvailable(),
       settings: settings()
     };
-    const lines = devices.length === 0 ? ["no devices running"] : devices.map(deviceLine);
+    const lines = devices.length === 0 ? ["no devices running"] : devices.map((device) => deviceLine(device, unlocked));
     if (avds.length > 0) lines.push(`bootable AVDs: ${avds.map((name) => running.has(name) ? `${name} (running)` : name).join(", ")}`);
-    if (devices.some((device) => device.kind === "physical")) lines.push("A PHYSICAL PHONE is the person's own device: every tool refuses it unless the call passes allowPhysical: true AND the user turned on the simulator.allowPhysical setting. Ask the user first; never use it to unlock a phone.");
+    if (devices.some((device) => device.kind === "physical")) lines.push(`A PHYSICAL PHONE is attached. It is the person's own device: ${unlocked ? "" : "the pack did not read it (only adb's own listing is shown, serial masked), and "}every tool refuses it unless the call passes allowPhysical: true AND the user turned on the simulator.allowPhysical setting. Ask the user first; never use it to unlock a phone.`);
     for (const missing of tc.missing) lines.push(`MISSING ${missing.tool}: ${missing.fix}`);
     return { text: lines.join("\n"), structured };
   }
   server2.registerTool(
     "device_list",
     {
-      description: "Running devices (serial, kind emulator|physical, AVD or model, state online|booting|offline|unauthorized, Android version, display size in px, whether this pack booted it, whether a live viewer is attached), the AVDs device_boot can start, and any missing prerequisite with its fix. Call first. Every other tool takes `serial` from here; leave it out only when exactly one EMULATOR runs. A `physical` device is the person's own phone: it is listed so you can tell the user, but every tool refuses it unless the call passes allowPhysical: true AND the user turned on the simulator.allowPhysical setting. Pass allowPhysical only when the user named that exact device in this conversation; never to unlock the phone, dismiss a keyguard or enter a PIN.",
-      inputSchema: {},
+      description: "Running devices (serial, kind emulator|physical, AVD or model, state online|booting|offline|unauthorized, Android version, display size in px, whether this pack booted it, whether a live viewer is attached), the AVDs device_boot can start, and any missing prerequisite with its fix. Call first. Every other tool takes `serial` from here; leave it out only when exactly one EMULATOR runs. A `physical` device is the person's own phone: it is listed so you can tell the user, but with both keys off nothing is run on it, only adb's own listing (state, model) is shown and its serial is masked to its last 4 characters. Passing allowPhysical: true on this call AND the user's simulator.allowPhysical setting turned on unmasks the serial and reads its details; every other tool refuses a physical device unless both are in place. Pass allowPhysical only when the user named that exact device in this conversation; never to unlock the phone, dismiss a keyguard or enter a PIN.",
+      inputSchema: { allowPhysical: allowPhysicalArg },
       annotations: READ_ONLY
     },
-    (_args, extra) => respond(extra, listResult)
+    ({ allowPhysical }, extra) => respond(extra, () => listResult(physicalUnlocked(allowPhysical)))
   );
   server2.registerTool(
     "device_boot",
@@ -3149,7 +3357,7 @@ async function createSimulatorServer(options = {}) {
     "device_install",
     {
       description: "Install (or reinstall, -r) an .apk from an absolute path on this machine, granting its runtime permissions. A large APK can outlast the host's tool timeout; if so, run device_list to see whether it landed.",
-      inputSchema: { serial: serialArg, apk: z.string().min(1).max(1024), allowPhysical: allowPhysicalArg },
+      inputSchema: { serial: serialArg, apk: z.string().min(1).max(1024).describe("Absolute path of a built .apk on a local drive. Relative paths and network paths (UNC, \\\\?\\, //host) are refused."), allowPhysical: allowPhysicalArg },
       annotations: { ...WRITES, destructiveHint: false }
     },
     ({ serial, apk, allowPhysical }, extra) => respond(extra, async () => {
@@ -3200,11 +3408,11 @@ async function createSimulatorServer(options = {}) {
       if (id !== void 0) await authorize(id, allowPhysical);
       else if (avd !== void 0 && boot === true) id = (await fleet.boot({ avd }, 1e3)).device?.serial;
       if (id === void 0) {
-        const pick = selectDefaultDevice(await enriched(), void 0);
+        const pick = selectDefaultDevice(await enriched(false), void 0);
         if (pick.ok) id = pick.serial;
       }
       if (id !== void 0) bind(extra, id);
-      const listed = await listResult();
+      const listed = await listResult(physicalUnlocked(allowPhysical));
       const text = id === void 0 ? `The simulator pane is open; no device is selected.
 ${listed.text}` : `The simulator pane is open on ${id}.
 ${listed.text}`;
@@ -3215,7 +3423,7 @@ ${listed.text}`;
     server2,
     "device_stream",
     {
-      description: "Open the frames lane for the View: a loopback WebSocket address with a one-use token. mode h264 (live video; falls back to shot when scrcpy-server is missing, and says so) or shot (a still picture a few times a second). allowPhysical: the View passes true only for a phone the person picked after turning on Show physical devices; refused unless the simulator.allowPhysical setting is on too.",
+      description: "Open the frames lane for the View: a loopback WebSocket address with a single-use token: valid for one socket; ask again to reconnect. mode h264 (live video; falls back to shot when scrcpy-server is missing, and says so) or shot (a still picture a few times a second). allowPhysical: the View passes true only for a phone the person picked after turning on Show physical devices; refused unless the simulator.allowPhysical setting is on too.",
       inputSchema: { serial: z.string().min(1).max(100), mode: z.enum(["h264", "shot"]).optional(), allowPhysical: allowPhysicalArg },
       annotations: READ_ONLY,
       _meta: APP_ONLY
@@ -3280,6 +3488,16 @@ var exitAfterStop = () => {
     process.exitCode = 1;
   }).finally(() => process.exit());
 };
+var crashing = false;
+var exitAfterCrash = (origin) => (error) => {
+  if (crashing) return;
+  crashing = true;
+  console.error(`[sim] ${origin}: ${error instanceof Error ? error.message : String(error)}; stopping what the pack booted, then exiting`);
+  process.exitCode = 1;
+  exitAfterStop();
+};
+process.on("uncaughtException", exitAfterCrash("uncaught exception"));
+process.on("unhandledRejection", exitAfterCrash("unhandled rejection"));
 process.stdin.once("end", exitAfterStop);
 process.once("SIGINT", exitAfterStop);
 process.once("SIGTERM", exitAfterStop);
