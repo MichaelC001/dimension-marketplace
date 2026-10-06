@@ -112,6 +112,15 @@ describe("deliveryDecision: one frame, one viewer", () => {
     expect(deliveryDecision(gate, Key, MAX + 1, MAX)).toEqual({ write: false, dropped: true, resync: true });
   });
 
+  test("a key frame dropped for backlog parks a streaming viewer: the deltas after it are garbage without it, so none are written until the next key frame", () => {
+    const gate = streaming();
+    expect(deliveryDecision(gate, Key, MAX + 1, MAX)).toEqual({ write: false, dropped: true, resync: true });
+    expect(gate.state).toBe("awaiting-keyframe");
+    expect(deliveryDecision(gate, Delta, 0, MAX)).toEqual({ write: false, dropped: false, resync: false });
+    expect(deliveryDecision(gate, Key, 0, MAX)).toEqual({ write: true });
+    expect(deliveryDecision(gate, Delta, 0, MAX)).toEqual({ write: true });
+  });
+
   test("config and session frames are tiny and a viewer cannot decode without them: never dropped for backlog", () => {
     const gate = new FrameGate();
     expect(deliveryDecision(gate, Session, MAX * 100, MAX)).toEqual({ write: true });
