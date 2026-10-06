@@ -95,7 +95,6 @@ describe("a recording that opens", () => {
 		await pending;
 		expect(media.tagName.toLowerCase()).toBe("video");
 		expect(media.getAttribute("controls")).toBeNull();
-		expect(media.getAttribute("preload") ?? Reflect.get(media, "preload")).toBe("auto");
 		expect(el.querySelector('[data-slot="viewer-media-dock"]')).not.toBeNull();
 		// The dock sits AFTER the element's stage: the transport is under the picture, not over it.
 		const parts = [...(el.querySelector(".vw-media")?.children ?? [])].map(child => child.className);
@@ -289,5 +288,27 @@ describe("a pane that goes away while a recording is still opening", () => {
 		expect(revoked).toEqual([]);
 		handle.destroy();
 		expect(revoked).toEqual(["blob:test/1"]);
+	});
+});
+
+describe("HTTP recording sources", () => {
+	test.each([
+		["video", video, "take.mp4", "video/mp4"],
+		["audio", audio, "take.mp3", "audio/mpeg"],
+	] as const)("%s plays the leased URL without making a full-file Blob", async (_kind, renderer, filename, mime) => {
+		const el = stage(dom.document);
+		const url = "http://127.0.0.1:45678/media/0123456789abcdef0123456789abcdef0123456789abcdef";
+		const pending = renderer.mount(el, new Uint8Array(), { ...ctx(filename), mediaSource: { url, mime } });
+		await Promise.resolve();
+		const media = el.querySelector('[data-slot="viewer-media"]');
+		if (media === null) throw new Error("No playback element.");
+		expect(media.getAttribute("src") ?? Reflect.get(media, "src")).toBe(url);
+		media.dispatchEvent(new win.Event("loadedmetadata"));
+		const handle = await pending;
+		expect(made).toEqual([]);
+		handle.destroy();
+		expect(media.getAttribute("src")).toBeNull();
+		expect(el.querySelector('[data-slot="viewer-media"]')).toBeNull();
+		expect(revoked).toEqual([]);
 	});
 });

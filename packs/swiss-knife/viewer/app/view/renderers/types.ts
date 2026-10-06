@@ -28,6 +28,7 @@ export interface MountContext {
 	 * and lets go of what it made, instead of holding it until the wait runs out.
 	 */
 	readonly signal?: AbortSignal;
+	readonly mediaSource?: { readonly url: string; readonly mime: string };
 }
 
 export interface Mounted {

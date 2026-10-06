@@ -2,7 +2,7 @@
 
 A tabbed document viewer beside the conversation (an artifactory, doc 45): images,
 PDF, HTML, Markdown, Word, PowerPoint, Excel, plain text, audio and video, rendered
-offline in a sandboxed frame. It is one part of the Swiss Knife plugin (`../README.md`): this
+without external network access in a sandboxed frame. It is one part of the Swiss Knife plugin (`../README.md`): this
 folder is the deep reference. The View is `app/view` (built to `app/dist`); the MCP server is
 `src/` (bundled to `app/server.mjs`). Both built files are committed.
 
@@ -12,6 +12,10 @@ folder is the deep reference. The View is `app/view` (built to `app/dist`); the 
 |---|---|---|
 | `view_file { path, filename?, annotate? }` | the host on a click (the plugin declares no `modelSpaces`, so no agent is offered it) | Resolves `path` through the fence and mounts the View on it. `annotate: true` picks the annotation tool up as the file opens (the drawing tool last held on a picture or a video frame, Box if none; Pick on a page, which matters for a page too large to start with it in hand) and is ignored for a kind with nothing to annotate. The tools themselves are there either way: an annotatable kind shows its bar from the pane's first frame. |
 | `read_file_chunk { path, offset, length }` | the View only (`visibility: ["app"]`) | Streams a file's bytes to the View, at most 4 MiB a call. |
+| `open_media { path, size, mtimeMs, token }` | the View only (`visibility: ["app"]`) | Admits a recording for HTTP range playback through a fenced loopback capability. The View generates the 192-bit token before opening, so it can cancel pending admission. |
+| `close_media { token }` | the View only (`visibility: ["app"]`) | Revokes the capability, cancels pending admission and stops active streams. Outer View teardown awaits revocation before acknowledging the host. |
+
+The loopback listener belongs to the MCP connection: connection shutdown, stdin EOF and startup failure close it. Removing the outer iframe does not guarantee a React unmount; the View therefore revokes its tokens, including pending admissions, in the awaited host teardown handshake.
 
 ## What `opens` declares
 
@@ -58,7 +62,7 @@ over the panes instead of pushing the one the person is looking at.
 
 The header holds the kind badge, the file name, its size and the path copy: no mode pill, no Done button. Under it
 an annotatable kind shows ONE annotation toolbar (named `Annotation tools`), the same component on every kind, from
-the pane's first frame until the file is known not to have opened (an error, an unavailable or too-large file leaves
+the pane's first frame until the file is known not to have opened (an error or an unavailable file leaves
 nothing to mark, and no bar, list or send button under the error card). There is nothing to click before drawing.
 A drawing tool or Pick wears the accent ring while it is in hand; pressing it again, or Escape, puts it down, and the
 person is browsing (scrolling, zooming, pinching, playing) again: a finger has no other way off an armed overlay.
@@ -119,8 +123,9 @@ and the place the notes sit. The annotation toolbar's **Moment** (`M`) puts a no
 dragged out on the lane (Shift-drag on a waveform). A moment within a quarter second of a note that is there focuses that one instead of stacking.
 Up to 24 notes. The request lists them in time order, and for video carries up to four pictures (below).
 
-* Files are read whole and capped at **64 MiB**; the size is checked before any byte is
-  read, and a larger file says so and offers Copy path.
+* Recordings play through HTTP byte ranges; playback does not download and base64-decode the whole
+  file before opening, and has no recording-size cap. The player preloads metadata and requests
+  the bytes it needs. The View's CSP allows only its server's exact loopback origin for these resources.
 * The kind comes from the file's container signature (content beats a wrong name), and a
   file the viewer cannot decode says so honestly instead of showing a blank player.
 * **Audio is a waveform you can comment on.** The lane draws dense rounded bars mirrored about a baseline (the played
@@ -178,7 +183,7 @@ the host can attest to it. The pack declares `grants: ["files:read"]`, and then:
 
 * the engine stamps `_meta["ai.insodimension/grant"] = { read: [<realpath>] }` on the
   host call that opens the file and on every later call that View instance makes
-  (the `read_file_chunk` calls included), and strips the key from every call it did not
+  (including `read_file_chunk` and `open_media`), and strips the key from every call it did not
   stamp, so a View or a model cannot forge one;
 * the fence reads it as **exactly those files**: the requested path, resolved to its real
   path, must equal a lent real path. Never a folder and everything under it, never a
@@ -189,6 +194,8 @@ the host can attest to it. The pack declares `grants: ["files:read"]`, and then:
 * the fence does not trust the engine's stripping. Any flaw in the grant (not an
   object, `read` not a list, a non-string, relative or tricked entry, more than 8 files)
   is no grant at all, and no grant leaves the roots exactly as they were.
+* every HTTP request rechecks the fence with the host-owned grant retained at admission, verifies
+  the recording's size and modification time, and opens only a regular file. A changed recording must be reopened.
 
 A server that does not declare `files:read` is never stamped, so the viewer stays
 deny-by-default for everything a human did not click.
@@ -197,7 +204,7 @@ deny-by-default for everything a human did not click.
 
 | What | Limit | Where it is held |
 |---|---|---|
-| A recording the viewer plays | 64 MiB, checked before any byte is read | `MAX_MEDIA_BYTES` (`src/contract.ts`) |
+| A recording the viewer plays | No file-size cap; 64 concurrent leases/admissions, 8 concurrent transfers, 64 KiB stream buffers | `media-server.ts` |
 | Any other document | 128 MiB (text: the first 1 MiB) | `DOCUMENT_LIMIT`, `TEXT_LIMIT` (`document-bytes.ts`) |
 | An HTML page that starts with Pick in hand | 2 MiB; larger starts with Pick down | `PICK_FRAME_LIMIT` (`document-bytes.ts`) |
 | A waveform | WAV or strict MP3 only; file 32 MiB, decoded 96 MiB at 22.05 kHz, 8 channels, MP3 545 s; one decode at a time; everything else a flat track | `media-waveform.ts` |

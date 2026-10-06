@@ -7,6 +7,12 @@ function stop(): Promise<void> {
 	stopping ??= server.close();
 	return stopping;
 }
+process.stdin.once("end", () => {
+	void stop().catch(error => {
+		console.error(error);
+		process.exitCode = 1;
+	});
+});
 process.once("SIGINT", () => {
 	void stop().catch(error => {
 		console.error(error);

@@ -19,8 +19,6 @@ export const ANNOTATE_META_KEY = "ai.insodimension.viewer/annotate";
 /** The most bytes one `read_file_chunk` call may return (before base64). */
 export const MAX_CHUNK_BYTES = 4 * 1024 * 1024;
 
-/** The most bytes of a recording the View opens. It plays from ONE `Blob` of the whole file (a truncated one would play, and lie about how long it is), so the size is checked against this BEFORE any byte is read: past it the pane says so and reads nothing. */
-export const MAX_MEDIA_BYTES = 64 * 1024 * 1024;
 
 export const VIEWER_KINDS = ["image", "pdf", "html", "markdown", "docx", "pptx", "xlsx", "text", "audio", "video", "binary"] as const;
 export type ViewerKind = (typeof VIEWER_KINDS)[number];
@@ -49,3 +47,9 @@ export const fileChunkSchema = z.object({
 	eof: z.boolean(),
 });
 export type FileChunk = z.infer<typeof fileChunkSchema>;
+
+export const mediaSourceSchema = z.object({
+	url: z.string().url(),
+	token: z.string().regex(/^[a-f0-9]{48}$/),
+	mime: z.string().min(1),
+});

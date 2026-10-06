@@ -1,23 +1,3 @@
-// Audio and video: a media element playing one `Blob` of the file's bytes.
-//
-// The element is the engine and nothing else. It is drawn with NO native controls: the
-// transport (play, the scrubber, volume, speed) is the React layer's, so playing and
-// marking share one control and look the same in every engine. The renderer's part is
-// the element, a calm card for sound (a recording with nothing to look at), and an empty
-// DOCK under them that the layer fills; `data-slot="viewer-media"` is how the layer finds
-// the element and `viewer-media-dock` where it sits (docs/design/88 section 5).
-//
-// Honesty: a recording this engine cannot play is said so in one sentence, never a blank
-// player. `canPlayType` says whether the CONTAINER is one it knows; the element's own
-// `error` says what went wrong when it tried; the sentence uses both (`media-messages`).
-//
-// Length: a capture whose header never got its length reports `Infinity`. Once it has opened, such a
-// recording is asked properly (`resolveLength`: seek past the end, then back to the start) before the layer
-// reads its length, so the transport and the marks never see it as zero seconds long.
-//
-// Cleanup: `destroy()` pauses, drops the source so the decoder is released, revokes the object URL and
-// removes the DOM. Nothing here outlives it. A pane that goes away while the recording is still opening
-// (`ctx.signal`) gets the same cleanup at once, not when the wait runs out.
 import { KIND_HEAD_BYTES, sniffMedia } from "../../../src/kind";
 import { resolveLength } from "../media-length";
 import { describeMediaError, type MediaTag, OPEN_TIMEOUT_SENTENCE } from "../media-messages";
@@ -50,8 +30,8 @@ export async function mountMedia(el: HTMLElement, bytes: Uint8Array, ctx: MountC
 	const { signal } = ctx;
 	signal?.throwIfAborted();
 	const sniffed = sniffMedia(bytes.subarray(0, KIND_HEAD_BYTES), ctx.filename);
-	const mime = sniffed?.mime;
-	const url = URL.createObjectURL(new Blob([bytes as BlobPart], mime === undefined ? undefined : { type: mime }));
+	const mime = ctx.mediaSource?.mime ?? sniffed?.mime;
+	const url = ctx.mediaSource?.url ?? URL.createObjectURL(new Blob([bytes as BlobPart], mime === undefined ? undefined : { type: mime }));
 
 	const root = document.createElement("div");
 	root.className = "vw-media";
@@ -60,7 +40,8 @@ export async function mountMedia(el: HTMLElement, bytes: Uint8Array, ctx: MountC
 	stage.className = "vw-media-stage";
 	const media = document.createElement(tag);
 	media.dataset.slot = "viewer-media";
-	media.preload = "auto";
+	media.preload = "metadata";
+	media.crossOrigin = "anonymous";
 	media.controls = false;
 	media.setAttribute("aria-label", ctx.filename);
 	stage.append(media);
@@ -87,10 +68,9 @@ export async function mountMedia(el: HTMLElement, bytes: Uint8Array, ctx: MountC
 	const release = (): void => {
 		media.pause();
 		media.removeAttribute("src");
-		// Without this the element keeps its decoder, and the blob its memory, until the garbage collector says otherwise.
-		media.load();
+	media.load();
 		root.remove();
-		URL.revokeObjectURL(url);
+	if (ctx.mediaSource === undefined) URL.revokeObjectURL(url);
 	};
 
 	try {

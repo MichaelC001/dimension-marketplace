@@ -42,13 +42,13 @@ describe("viewer server contract", () => {
 		await rm(base, { recursive: true, force: true });
 	});
 
-	test("view_file is model-visible and mounts the View; read_file_chunk is app-only", async () => {
+	test("view_file is model-visible and mounts the View; recording leases and chunk reads are app-only", async () => {
 		const { tools } = await client.listTools();
 		const toolMeta = z.object({ ui: z.object({ resourceUri: z.string().optional(), visibility: z.array(z.string()).optional() }) });
 		const meta = (name: string) => toolMeta.parse(tools.find(tool => tool.name === name)?._meta);
 		expect(meta("view_file").ui.resourceUri).toBe("ui://viewer/index.html");
 		expect(meta("view_file").ui.visibility).toBeUndefined();
-		expect(meta("read_file_chunk").ui.visibility).toEqual(["app"]);
+		for (const name of ["read_file_chunk", "open_media", "close_media"]) expect(meta(name).ui.visibility).toEqual(["app"]);
 	});
 
 	test("view_file names the real path, the kind and the size, and keys the tab by the real path", async () => {
@@ -86,8 +86,9 @@ describe("viewer server contract", () => {
 	test("secrets, outside paths and traversal are refused with a reason and never leak content", async () => {
 		const refusals = [join(root, ".env"), join(root, "..", "dist", "index.html"), "relative/path.png"];
 		for (const path of refusals) {
-			for (const name of ["view_file", "read_file_chunk"]) {
-				const result = await client.callTool({ name, arguments: name === "view_file" ? { path } : { path, offset: 0, length: 10 } });
+			for (const name of ["view_file", "read_file_chunk", "open_media"]) {
+				const arguments_ = name === "view_file" ? { path } : name === "open_media" ? { path, size: 0, mtimeMs: 0, token: "a".repeat(48) } : { path, offset: 0, length: 10 };
+				const result = await client.callTool({ name, arguments: arguments_ });
 				expect(result.isError).toBe(true);
 				const text = JSON.stringify(result.content);
 				expect(text.length).toBeGreaterThan(20);

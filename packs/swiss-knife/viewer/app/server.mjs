@@ -15502,11 +15502,11 @@ var require_codegen = __commonJS({
         const rhs = this.rhs === void 0 ? "" : ` = ${this.rhs}`;
         return `${varKind} ${this.name}${rhs};` + _n;
       }
-      optimizeNames(names, constants2) {
+      optimizeNames(names, constants3) {
         if (!names[this.name.str])
           return;
         if (this.rhs)
-          this.rhs = optimizeExpr(this.rhs, names, constants2);
+          this.rhs = optimizeExpr(this.rhs, names, constants3);
         return this;
       }
       get names() {
@@ -15523,10 +15523,10 @@ var require_codegen = __commonJS({
       render({ _n }) {
         return `${this.lhs} = ${this.rhs};` + _n;
       }
-      optimizeNames(names, constants2) {
+      optimizeNames(names, constants3) {
         if (this.lhs instanceof code_1.Name && !names[this.lhs.str] && !this.sideEffects)
           return;
-        this.rhs = optimizeExpr(this.rhs, names, constants2);
+        this.rhs = optimizeExpr(this.rhs, names, constants3);
         return this;
       }
       get names() {
@@ -15587,8 +15587,8 @@ var require_codegen = __commonJS({
       optimizeNodes() {
         return `${this.code}` ? this : void 0;
       }
-      optimizeNames(names, constants2) {
-        this.code = optimizeExpr(this.code, names, constants2);
+      optimizeNames(names, constants3) {
+        this.code = optimizeExpr(this.code, names, constants3);
         return this;
       }
       get names() {
@@ -15617,12 +15617,12 @@ var require_codegen = __commonJS({
         }
         return nodes.length > 0 ? this : void 0;
       }
-      optimizeNames(names, constants2) {
+      optimizeNames(names, constants3) {
         const { nodes } = this;
         let i = nodes.length;
         while (i--) {
           const n = nodes[i];
-          if (n.optimizeNames(names, constants2))
+          if (n.optimizeNames(names, constants3))
             continue;
           subtractNames(names, n.names);
           nodes.splice(i, 1);
@@ -15675,12 +15675,12 @@ var require_codegen = __commonJS({
           return void 0;
         return this;
       }
-      optimizeNames(names, constants2) {
+      optimizeNames(names, constants3) {
         var _a3;
-        this.else = (_a3 = this.else) === null || _a3 === void 0 ? void 0 : _a3.optimizeNames(names, constants2);
-        if (!(super.optimizeNames(names, constants2) || this.else))
+        this.else = (_a3 = this.else) === null || _a3 === void 0 ? void 0 : _a3.optimizeNames(names, constants3);
+        if (!(super.optimizeNames(names, constants3) || this.else))
           return;
-        this.condition = optimizeExpr(this.condition, names, constants2);
+        this.condition = optimizeExpr(this.condition, names, constants3);
         return this;
       }
       get names() {
@@ -15703,10 +15703,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.iteration})` + super.render(opts);
       }
-      optimizeNames(names, constants2) {
-        if (!super.optimizeNames(names, constants2))
+      optimizeNames(names, constants3) {
+        if (!super.optimizeNames(names, constants3))
           return;
-        this.iteration = optimizeExpr(this.iteration, names, constants2);
+        this.iteration = optimizeExpr(this.iteration, names, constants3);
         return this;
       }
       get names() {
@@ -15742,10 +15742,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.varKind} ${this.name} ${this.loop} ${this.iterable})` + super.render(opts);
       }
-      optimizeNames(names, constants2) {
-        if (!super.optimizeNames(names, constants2))
+      optimizeNames(names, constants3) {
+        if (!super.optimizeNames(names, constants3))
           return;
-        this.iterable = optimizeExpr(this.iterable, names, constants2);
+        this.iterable = optimizeExpr(this.iterable, names, constants3);
         return this;
       }
       get names() {
@@ -15787,11 +15787,11 @@ var require_codegen = __commonJS({
         (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNodes();
         return this;
       }
-      optimizeNames(names, constants2) {
+      optimizeNames(names, constants3) {
         var _a3, _b;
-        super.optimizeNames(names, constants2);
-        (_a3 = this.catch) === null || _a3 === void 0 ? void 0 : _a3.optimizeNames(names, constants2);
-        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants2);
+        super.optimizeNames(names, constants3);
+        (_a3 = this.catch) === null || _a3 === void 0 ? void 0 : _a3.optimizeNames(names, constants3);
+        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants3);
         return this;
       }
       get names() {
@@ -16092,7 +16092,7 @@ var require_codegen = __commonJS({
     function addExprNames(names, from) {
       return from instanceof code_1._CodeOrName ? addNames(names, from.names) : names;
     }
-    function optimizeExpr(expr, names, constants2) {
+    function optimizeExpr(expr, names, constants3) {
       if (expr instanceof code_1.Name)
         return replaceName(expr);
       if (!canOptimize(expr))
@@ -16107,14 +16107,14 @@ var require_codegen = __commonJS({
         return items;
       }, []));
       function replaceName(n) {
-        const c = constants2[n.str];
+        const c = constants3[n.str];
         if (c === void 0 || names[n.str] !== 1)
           return n;
         delete names[n.str];
         return c;
       }
       function canOptimize(e) {
-        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants2[c.str] !== void 0);
+        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants3[c.str] !== void 0);
       }
     }
     function subtractNames(names, from) {
@@ -31662,7 +31662,6 @@ var VIEWER_VIEW_URI = "ui://viewer/index.html";
 var TAB_META_KEY = "ai.insodimension/tab";
 var ANNOTATE_META_KEY = "ai.insodimension.viewer/annotate";
 var MAX_CHUNK_BYTES = 4 * 1024 * 1024;
-var MAX_MEDIA_BYTES = 64 * 1024 * 1024;
 var VIEWER_KINDS = ["image", "pdf", "html", "markdown", "docx", "pptx", "xlsx", "text", "audio", "video", "binary"];
 var viewedFileSchema = external_exports.object({
   path: external_exports.string().min(1),
@@ -31678,6 +31677,11 @@ var fileChunkSchema = external_exports.object({
   length: external_exports.number().int().nonnegative(),
   size: external_exports.number().int().nonnegative(),
   eof: external_exports.boolean()
+});
+var mediaSourceSchema = external_exports.object({
+  url: external_exports.string().url(),
+  token: external_exports.string().regex(/^[a-f0-9]{48}$/),
+  mime: external_exports.string().min(1)
 });
 
 // src/chunk.ts
@@ -32084,6 +32088,171 @@ function detectKind(filename, head, size = head.length) {
   return sniffed === "binary" || sniffed === "zip" || head.includes(0) ? "binary" : "text";
 }
 
+// src/media-server.ts
+import { randomBytes } from "node:crypto";
+import { constants as constants2 } from "node:fs";
+import { open as open2 } from "node:fs/promises";
+import { createServer } from "node:http";
+import { pipeline } from "node:stream/promises";
+var MAX_LEASES = 64;
+var MAX_TRANSFERS = 8;
+var STREAM_BUFFER_BYTES = 64 * 1024;
+var OPEN_FLAGS2 = constants2.O_RDONLY | (constants2.O_NONBLOCK ?? 0) | (constants2.O_NOFOLLOW ?? 0);
+function matchesRevision(info, size, mtimeMs) {
+  return info.size === size && info.mtimeMs === mtimeMs;
+}
+async function admitRecording(fence, path, size, mtimeMs, meta3) {
+  const verdict = await fence.check(path, meta3);
+  if (!verdict.ok) throw new Error(verdict.reason);
+  const head = await readRange(verdict.real, 0, KIND_HEAD_BYTES);
+  if (!matchesRevision(head, size, mtimeMs)) throw new Error("The file changed. Open it again.");
+  const media = sniffMedia(head.bytes, verdict.real);
+  if (media === void 0) throw new Error("This file is not a supported recording.");
+  return { path: verdict.real, size, mtimeMs, mime: media.mime, meta: meta3, responses: /* @__PURE__ */ new Set() };
+}
+function requestedRange(header, size) {
+  if (header === void 0) return { start: 0, end: size - 1 };
+  const match = /^bytes=(\d*)-(\d*)$/.exec(header);
+  if (match === null || size === 0) return null;
+  if (match[1] === "") {
+    const suffix = Number(match[2]);
+    if (!Number.isSafeInteger(suffix) || suffix <= 0) return null;
+    return { start: Math.max(0, size - suffix), end: size - 1 };
+  }
+  const start = Number(match[1]);
+  const end = match[2] === "" ? size - 1 : Number(match[2]);
+  return validRange(start, end, size);
+}
+function validRange(start, end, size) {
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end)) return null;
+  if (start >= size || end < start) return null;
+  return { start, end: Math.min(end, size - 1) };
+}
+async function streamRecording(req, res, lease) {
+  const file2 = await open2(lease.path, OPEN_FLAGS2);
+  try {
+    const stats = await file2.stat();
+    if (res.destroyed) return;
+    if (!stats.isFile() || !matchesRevision(stats, lease.size, lease.mtimeMs)) {
+      res.writeHead(409).end();
+      return;
+    }
+    const range = requestedRange(req.headers.range, stats.size);
+    if (range === null) {
+      res.writeHead(416, { "Content-Range": `bytes */${stats.size}` }).end();
+      return;
+    }
+    const partial2 = req.headers.range !== void 0;
+    res.writeHead(partial2 ? 206 : 200, {
+      "Content-Type": lease.mime,
+      "Content-Length": range.end - range.start + 1,
+      "Accept-Ranges": "bytes",
+      "Cache-Control": "no-store",
+      "Access-Control-Allow-Origin": "*",
+      "X-Content-Type-Options": "nosniff",
+      ...partial2 ? { "Content-Range": `bytes ${range.start}-${range.end}/${stats.size}` } : {}
+    });
+    if (req.method === "HEAD" || stats.size === 0) res.end();
+    else await pipeline(file2.createReadStream({ start: range.start, end: range.end, highWaterMark: STREAM_BUFFER_BYTES, autoClose: false }), res);
+  } finally {
+    await file2.close();
+  }
+}
+async function startMediaServer(fence) {
+  const leases = /* @__PURE__ */ new Map();
+  const admissions = /* @__PURE__ */ new Map();
+  let active = 0;
+  let host = "";
+  let closing;
+  const server2 = createServer((req, res) => {
+    const origin2 = req.headers.origin;
+    if (req.headers.host !== host || origin2 !== void 0 && origin2 !== "null") {
+      res.writeHead(404).end();
+      return;
+    }
+    const token = /^\/media\/([a-f0-9]{48})$/.exec(req.url ?? "")?.[1];
+    const lease = token === void 0 ? void 0 : leases.get(token);
+    if (lease === void 0) {
+      res.writeHead(404).end();
+      return;
+    }
+    void serve(req, res, lease).catch(() => {
+      if (!res.headersSent) res.writeHead(500).end();
+      else res.destroy();
+    });
+  });
+  server2.requestTimeout = 3e4;
+  server2.headersTimeout = 1e4;
+  server2.maxConnections = 16;
+  async function serve(req, res, lease) {
+    if (req.method !== "GET" && req.method !== "HEAD") {
+      res.writeHead(405, { Allow: "GET, HEAD" }).end();
+      return;
+    }
+    if (active >= MAX_TRANSFERS) {
+      res.writeHead(503).end();
+      return;
+    }
+    active++;
+    lease.responses.add(res);
+    try {
+      const verdict = await fence.check(lease.path, lease.meta);
+      if (!verdict.ok || verdict.real !== lease.path) {
+        res.writeHead(404).end();
+        return;
+      }
+      await streamRecording(req, res, lease);
+    } finally {
+      lease.responses.delete(res);
+      active--;
+    }
+  }
+  await new Promise((resolve, reject) => {
+    server2.once("error", reject);
+    server2.listen(0, "127.0.0.1", () => {
+      server2.off("error", reject);
+      resolve();
+    });
+  });
+  const address = server2.address();
+  if (address === null || typeof address === "string") throw new Error("Media listener did not bind a TCP port");
+  host = `127.0.0.1:${address.port}`;
+  const origin = `http://${host}`;
+  return {
+    origin,
+    async acquire(path, size, mtimeMs, meta3, token = randomBytes(24).toString("hex")) {
+      if (closing !== void 0) throw new Error("The recording server is closed.");
+      if (!/^[a-f0-9]{48}$/.test(token) || leases.has(token) || admissions.has(token)) throw new Error("Invalid recording capability.");
+      if (leases.size + admissions.size >= MAX_LEASES) throw new Error("Close an open recording before opening another.");
+      const admission = { cancelled: false };
+      admissions.set(token, admission);
+      try {
+        const lease = await admitRecording(fence, path, size, mtimeMs, meta3);
+        if (admission.cancelled) throw new Error("Recording opening was cancelled.");
+        leases.set(token, lease);
+        return { url: `${origin}/media/${token}`, token, mime: lease.mime };
+      } finally {
+        admissions.delete(token);
+      }
+    },
+    release(token) {
+      const admission = admissions.get(token);
+      if (admission !== void 0) admission.cancelled = true;
+      for (const response of leases.get(token)?.responses ?? []) response.destroy();
+      leases.delete(token);
+    },
+    close() {
+      closing ??= new Promise((resolve, reject) => {
+        leases.clear();
+        for (const admission of admissions.values()) admission.cancelled = true;
+        server2.close((error51) => error51 ? reject(error51) : resolve());
+        server2.closeAllConnections();
+      });
+      return closing;
+    }
+  };
+}
+
 // src/server.ts
 var MIME = {
   ".js": "text/javascript",
@@ -32110,90 +32279,119 @@ async function createViewerServer(options = {}) {
   const viewDir = options.viewDir ?? fileURLToPath(new URL("./dist/", import.meta.url));
   const html = await readFile(join(viewDir, "index.html"), "utf8");
   const server2 = new McpServer({ name: "dimension-community-viewer", version: "0.1.0" });
-  const metadata = { ui: { prefersBorder: false, permissions: { clipboardWrite: {} } } };
-  N3(server2, "Viewer", VIEWER_VIEW_URI, { _meta: metadata }, async () => ({
-    contents: [{ uri: VIEWER_VIEW_URI, mimeType: p, text: html, _meta: metadata }]
-  }));
-  for (const entry of await readdir(viewDir, { recursive: true, withFileTypes: true })) {
-    if (!entry.isFile() || entry.name === "index.html") continue;
-    const mimeType = MIME[extname(entry.name)];
-    if (mimeType === void 0) throw new Error(`Unsupported viewer View asset: ${entry.name}`);
-    const path = join(entry.parentPath, entry.name);
-    const relative = path.slice(viewDir.replace(/[\\/]$/, "").length + 1).replaceAll("\\", "/");
-    const uri = `ui://viewer/${relative}`;
-    server2.registerResource(relative, uri, { mimeType }, async () => {
-      const bytes = await readFile(path);
-      return {
-        contents: [TEXT_MIME[mimeType] ? { uri, mimeType, text: bytes.toString("utf8") } : { uri, mimeType, blob: bytes.toString("base64") }]
-      };
-    });
-  }
-  K3(
-    server2,
-    "view_file",
-    {
-      title: "View file",
-      description: "Open a file from the user's computer in the viewer beside the conversation, as a tab. Renders images, PDF, HTML, Markdown, Word (.docx), PowerPoint (.pptx), Excel (.xlsx) and plain text, and plays audio and video; other files show a file card. Pass the ABSOLUTE path of a file you created or were pointed at; opening the same file again refreshes its tab. annotate: true opens it ready for the user to mark up (a moment on a recording, an element on a page). Only folders the user allowed are readable (their personal vault and the folders in VIEWER_ROOTS); anything else, and secrets such as .env files and keys, is refused with the reason.",
-      inputSchema: {
-        path: external_exports.string().min(1).max(4096).describe("Absolute path of the file to open"),
-        filename: external_exports.string().min(1).max(255).optional().describe("Name to show in the tab; defaults to the file's own name"),
-        annotate: external_exports.boolean().optional().describe("Open in annotate mode, so the user can mark the file up")
-      },
-      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-      _meta: { ui: { resourceUri: VIEWER_VIEW_URI } }
-    },
-    async ({ path, filename, annotate }, extra) => {
-      const verdict = await fence.check(path, extra._meta);
-      if (!verdict.ok) return failure(verdict.reason);
-      try {
-        const head = await readRange(verdict.real, 0, KIND_HEAD_BYTES);
-        const shown = filename ?? basename(verdict.real);
-        const file2 = {
-          path: verdict.real,
-          filename: shown,
-          kind: detectKind(shown, head.bytes, head.size),
-          size: head.size,
-          mtimeMs: head.mtimeMs
-        };
+  const media = await startMediaServer(fence);
+  server2.server.onclose = () => {
+    void media.close().catch((error51) => console.error(error51));
+  };
+  try {
+    const metadata = { ui: { prefersBorder: false, permissions: { clipboardWrite: {} }, csp: { resourceDomains: [media.origin] } } };
+    N3(server2, "Viewer", VIEWER_VIEW_URI, { _meta: metadata }, async () => ({
+      contents: [{ uri: VIEWER_VIEW_URI, mimeType: p, text: html, _meta: metadata }]
+    }));
+    for (const entry of await readdir(viewDir, { recursive: true, withFileTypes: true })) {
+      if (!entry.isFile() || entry.name === "index.html") continue;
+      const mimeType = MIME[extname(entry.name)];
+      if (mimeType === void 0) throw new Error(`Unsupported viewer View asset: ${entry.name}`);
+      const path = join(entry.parentPath, entry.name);
+      const relative = path.slice(viewDir.replace(/[\\/]$/, "").length + 1).replaceAll("\\", "/");
+      const uri = `ui://viewer/${relative}`;
+      server2.registerResource(relative, uri, { mimeType }, async () => {
+        const bytes = await readFile(path);
         return {
-          content: [{ type: "text", text: `Opened ${file2.filename} (${file2.kind}, ${file2.size} bytes) in the viewer.` }],
-          structuredContent: { ...file2 },
-          _meta: { [TAB_META_KEY]: { key: file2.path }, ...annotate === true ? { [ANNOTATE_META_KEY]: true } : {} }
+          contents: [TEXT_MIME[mimeType] ? { uri, mimeType, text: bytes.toString("utf8") } : { uri, mimeType, blob: bytes.toString("base64") }]
         };
-      } catch (error51) {
-        return failure(`"${path}" cannot be opened: ${describeError(error51)}`);
-      }
+      });
     }
-  );
-  K3(
-    server2,
-    "read_file_chunk",
-    {
-      title: "Read file chunk",
-      description: `Read a byte range of a file the viewer may open, base64-encoded (at most ${MAX_CHUNK_BYTES} bytes per call). The View streams a document through this; it is not for the model.`,
-      inputSchema: {
-        path: external_exports.string().min(1).max(4096),
-        offset: external_exports.number().int().min(0),
-        length: external_exports.number().int().min(0).max(MAX_CHUNK_BYTES)
+    K3(
+      server2,
+      "view_file",
+      {
+        title: "View file",
+        description: "Open a file from the user's computer in the viewer beside the conversation, as a tab. Renders images, PDF, HTML, Markdown, Word (.docx), PowerPoint (.pptx), Excel (.xlsx) and plain text, and plays audio and video; other files show a file card. Pass the ABSOLUTE path of a file you created or were pointed at; opening the same file again refreshes its tab. annotate: true opens it ready for the user to mark up (a moment on a recording, an element on a page). Only folders the user allowed are readable (their personal vault and the folders in VIEWER_ROOTS); anything else, and secrets such as .env files and keys, is refused with the reason.",
+        inputSchema: {
+          path: external_exports.string().min(1).max(4096).describe("Absolute path of the file to open"),
+          filename: external_exports.string().min(1).max(255).optional().describe("Name to show in the tab; defaults to the file's own name"),
+          annotate: external_exports.boolean().optional().describe("Open in annotate mode, so the user can mark the file up")
+        },
+        annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+        _meta: { ui: { resourceUri: VIEWER_VIEW_URI } }
       },
+      async ({ path, filename, annotate }, extra) => {
+        const verdict = await fence.check(path, extra._meta);
+        if (!verdict.ok) return failure(verdict.reason);
+        try {
+          const head = await readRange(verdict.real, 0, KIND_HEAD_BYTES);
+          const shown = filename ?? basename(verdict.real);
+          const file2 = {
+            path: verdict.real,
+            filename: shown,
+            kind: detectKind(shown, head.bytes, head.size),
+            size: head.size,
+            mtimeMs: head.mtimeMs
+          };
+          return {
+            content: [{ type: "text", text: `Opened ${file2.filename} (${file2.kind}, ${file2.size} bytes) in the viewer.` }],
+            structuredContent: { ...file2 },
+            _meta: { [TAB_META_KEY]: { key: file2.path }, ...annotate === true ? { [ANNOTATE_META_KEY]: true } : {} }
+          };
+        } catch (error51) {
+          return failure(`"${path}" cannot be opened: ${describeError(error51)}`);
+        }
+      }
+    );
+    K3(
+      server2,
+      "read_file_chunk",
+      {
+        title: "Read file chunk",
+        description: `Read a byte range of a file the viewer may open, base64-encoded (at most ${MAX_CHUNK_BYTES} bytes per call). The View streams a document through this; it is not for the model.`,
+        inputSchema: {
+          path: external_exports.string().min(1).max(4096),
+          offset: external_exports.number().int().min(0),
+          length: external_exports.number().int().min(0).max(MAX_CHUNK_BYTES)
+        },
+        annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+        _meta: APP_ONLY
+      },
+      async ({ path, offset, length }, extra) => {
+        const verdict = await fence.check(path, extra._meta);
+        if (!verdict.ok) return failure(verdict.reason);
+        try {
+          const chunk = await readChunk(verdict.real, offset, length);
+          return {
+            content: [{ type: "text", text: `Read ${chunk.length} of ${chunk.size} bytes at offset ${chunk.offset}.` }],
+            structuredContent: { ...chunk }
+          };
+        } catch (error51) {
+          return failure(`"${path}" cannot be read: ${describeError(error51)}`);
+        }
+      }
+    );
+    K3(server2, "open_media", {
+      inputSchema: { path: external_exports.string().min(1).max(4096), size: external_exports.number().int().nonnegative(), mtimeMs: external_exports.number(), token: external_exports.string().regex(/^[a-f0-9]{48}$/) },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+      _meta: APP_ONLY
+    }, async ({ path, size, mtimeMs, token }, extra) => {
+      try {
+        const source = await media.acquire(path, size, mtimeMs, extra._meta, token);
+        return { content: [{ type: "text", text: "Recording ready for range playback." }], structuredContent: { ...source } };
+      } catch (error51) {
+        return failure(describeError(error51));
+      }
+    });
+    K3(server2, "close_media", {
+      inputSchema: { token: external_exports.string().regex(/^[a-f0-9]{48}$/) },
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       _meta: APP_ONLY
-    },
-    async ({ path, offset, length }, extra) => {
-      const verdict = await fence.check(path, extra._meta);
-      if (!verdict.ok) return failure(verdict.reason);
-      try {
-        const chunk = await readChunk(verdict.real, offset, length);
-        return {
-          content: [{ type: "text", text: `Read ${chunk.length} of ${chunk.size} bytes at offset ${chunk.offset}.` }],
-          structuredContent: { ...chunk }
-        };
-      } catch (error51) {
-        return failure(`"${path}" cannot be read: ${describeError(error51)}`);
-      }
-    }
-  );
-  return server2;
+    }, async ({ token }) => {
+      media.release(token);
+      return { content: [{ type: "text", text: "Recording released." }], structuredContent: {} };
+    });
+    return server2;
+  } catch (error51) {
+    await media.close();
+    throw error51;
+  }
 }
 
 // src/stdio.ts
@@ -32203,6 +32401,12 @@ function stop() {
   stopping ??= server.close();
   return stopping;
 }
+process.stdin.once("end", () => {
+  void stop().catch((error51) => {
+    console.error(error51);
+    process.exitCode = 1;
+  });
+});
 process.once("SIGINT", () => {
   void stop().catch((error51) => {
     console.error(error51);
