@@ -40,17 +40,17 @@ on a phone the host draws its own "Open on your computer" card for it.
 
 | Tool | Does |
 | --- | --- |
-| `device_list` | Running devices (each with `kind`: `emulator` or `physical`), bootable AVDs, missing prerequisites with fixes and every path tried. |
+| `device_list {allowPhysical?}` | Running devices (each with `kind`: `emulator` or `physical`), bootable AVDs, missing prerequisites with fixes and every path tried. A phone is described by adb's own listing only unless both keys are on (see **Physical phones**). |
 | `device_boot {avd?, headless?, cold?, readOnly?, waitSeconds?}` | Boot an emulator. Returns within 25 s; call again with the same `avd` to wait. An AVD that already runs (even one you started) is returned as `online`/`booting`, not duplicated and not owned. `readOnly: true` starts a second, throwaway instance (`-read-only`; the result says so). If the emulator process was suspended by the system, it is resumed and the result says so. If the host GPU never answers, the boot is stopped and relaunched once with software graphics, and the result says so. A failed boot's error ends with the last 15 lines of the emulator's log. |
 | `device_stop {serial}` | Stop an emulator this pack booted (refused for any other), by the process the pack spawned. |
 | `device_screenshot {serial?, maxEdge?}` | PNG, at most `maxEdge` px on the long edge (default 1024); the text gives the scale to device pixels. |
 | `device_tap {label}` or `{x, y}` | Tap. `label` re-reads UI Automator right before tapping; ambiguous labels are refused with the numbered choices (`occurrence`). |
 | `device_swipe`, `device_type`, `device_key` | Swipe/scroll, type printable ASCII, press home/back/recents/power/volume/enter/delete/tab/escape/menu. |
 | `device_open_url {url}` | Open a URL in whatever handles it. |
-| `device_install {apk}` / `device_launch {package}` | Install (`-r -g -t`) an absolute-path `.apk`; launch by package or component. |
+| `device_install {apk}` / `device_launch {package}` | Install (`-r -g -t`) an `.apk` given by an absolute path on a local drive (relative paths and, on Windows, UNC, `\\?\` and `//host` paths are refused before any file is touched); launch by package or component. |
 | `device_ui_tree {maxNodes?, all?}` | One line per labelled or interactive view: `#12 Button "Sign in" id=login @540,1630 clickable`. |
 | `device_open {serial?, avd?, boot?}` | Show the pane beside the conversation. |
-| `device_stream` (app only) | The View's door to the frames lane: a loopback WebSocket address with a one-use token. |
+| `device_stream` (app only) | The View's door to the frames lane: a loopback WebSocket address with a single-use token (valid for one socket; ask again to reconnect). |
 
 Every tool that acts on a device takes `allowPhysical` (see **Physical phones**).
 `serial` may be left out only when exactly one *emulator* runs (or the pane holds
@@ -74,6 +74,16 @@ because it was the only device listed. So:
   `simulator.allowPhysical` setting is on. The refusal names both and says to ask
   the user. The skill tells the agent to pass the flag only for a phone the user
   named in the conversation, and never to unlock it or enter a PIN.
+- What `device_list` shows of a phone is gated by the same two keys. Without both
+  (`allowPhysical: true` on the call and `simulator.allowPhysical` on), the pack
+  runs no shell on a device whose serial does not start `emulator-`: it is listed
+  from adb's own `devices -l` fields (state, model), classed `physical`, and its
+  serial is masked to `****` plus its last four characters in everything the
+  model reads. With both keys on, the pack reads its details and shows the full
+  serial. The pane reads the structured listing, which keeps the full serial (the
+  model never receives it) but is gathered under the same two keys, so a phone in
+  the picker shows adb's model and state only. A network-attached emulator whose
+  serial is not `emulator-*` therefore also needs both keys to be recognised.
 - Turning `simulator.allowPhysical` off ends a pane that is already streaming a
   phone: within about two seconds, with no input needed, the socket closes with
   the reason and the encoder stops. While no physical viewer is attached nothing
@@ -176,9 +186,28 @@ pure function of plain rows; `src/android/backend.ts` does the I/O.
   failure that arrives after the `device_boot` call that waited for it returned is told
   to the next call for that AVD, once, instead of silently starting another boot.
 - **The ownership file** (`<data>/simulator/owned.json`) holds `{serial, avd, pid,
-  startedAt, bootedAt, ownerPid}`. A crashed pack's emulator is adopted at the next start
-  only when its pid still started when the record says; a record from before ownership
-  was by process cannot be verified and is ignored.
+  startedAt, bootedAt, ownerPid, ownerStartedAt}`. It is a claim to be checked, never an
+  instruction. The reader drops a record whose pid is not a safe integer above 1, or is
+  this process or its parent. A crashed pack's emulator is adopted at the next start
+  only when its previous owner is gone (proved by pid **and** start time, so an unrelated
+  process that took the dead pack's pid does not shield its orphan) and its pid still
+  started when the record says **and** its command line is an `emulator` or `qemu-system-*`
+  launch with `-avd <that AVD>`. A process the host gives no command line for is not
+  touched. A record from before ownership was by process cannot be verified and is
+  ignored. Nothing signals pid 0 or 1, a negative pid, or the pack or its parent.
+- **Two `device_boot` calls for one AVD at the same time join one boot.** The second
+  waits for the first to decide (reuse a running one, or spawn), then joins it.
+- **The idle clock runs only for a device that is up.** It is armed when a boot succeeds
+  and ignored while one is in progress, so a cold boot is not stopped by
+  `simulator.idleMinutes`.
+- **Exit stops what the pack booted.** Each emulator is asked to close for at most 3 s;
+  when the 10 s budget ends, the processes still running are killed (verified by pid and
+  start time first) and the pack waits up to 3 s more for them to go.
+- **A resume names the process it opened.** On Windows the script opens the process,
+  reads its creation time from that same handle and calls `NtResumeProcess` only if it
+  equals the time the pack recorded; otherwise it exits with a distinct code and the
+  pack logs that it did not resume. A launch the pack watched exit is never "ours"
+  again, whatever later takes its pid.
 
 ## How a picture gets from the emulator to the pane
 
@@ -272,6 +301,15 @@ visible), one without gets only the SDK's minimal default.
   both encode.
 - `device_install` of a very large APK can outlast the host's tool timeout
   (30 s on the desktop); `device_list` shows whether it landed.
+- `adb forward` carries scrcpy's video and control sockets on a loopback port that
+  any local process can connect to while the pack connects (up to 10 s), bypassing
+  the token and the physical gate; adb's own port 5037 has the same boundary. A
+  reverse tunnel (the device connects to a listener the pack owns and accepts exactly
+  two connections) would remove it and is not done. The pushed `inso-sim-scrcpy.jar`
+  stays in `/data/local/tmp` on the device.
+- On Unix a resume is a `SIGCONT` sent right after the table read that verified the
+  pid; the start-time check inside the call exists on Windows only. `taskkill` is by
+  pid, after the same verification.
 - The connector's `requires.commands` is checked against `PATH` by the engine,
   which does not know `ANDROID_HOME`: on a machine whose SDK is not on `PATH`, the
   connect state reads "adb is not installed" although the pack finds it itself.
