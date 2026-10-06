@@ -194,6 +194,20 @@ describe("booting: an emulator the system froze", () => {
     expect(await backend.stop(spawned(host, 0), "emulator-5556", { avd: AVD })).toBe("stopped");
   });
 
+  test("the resume carries the start time of the process that was looked at, so the host can refuse a successor that took its pid", async () => {
+    const r = rig(SILENT);
+    const { host, clock } = r;
+    host.cpuSeconds = () => 0.3;
+    host.qemuChild = qemuOf;
+    host.threads = pid => (host.resumed.includes(pid) ? RUNNING : FROZEN);
+    const { end } = await begin(r);
+    clock.jump(9_000);
+    await until(() => host.resumed.length === 1, "the resume");
+
+    expect(host.resumedStartedAt).toEqual([qemuOf(0, spawned(host, 0)).startedAtMs]);
+    await finish(r, 0, end);
+  });
+
   test("a resume gives the boot a fresh stall clock: the time spent frozen is not the GPU's, but a boot still silent 75 s after it is", async () => {
     const r = rig(SILENT);
     const { host, clock } = r;

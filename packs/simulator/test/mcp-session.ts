@@ -14,6 +14,7 @@ import type { FakeBackend } from "./fake-backend";
 export interface Answer {
   readonly isError: boolean;
   readonly text: string;
+  readonly structured: unknown;
 }
 
 export interface McpSession {
@@ -44,7 +45,7 @@ export async function connectServer(folder: ServerFolder, backend: FakeBackend, 
       const result = await client.callTool({ name: tool, arguments: args });
       const content = Array.isArray(result.content) ? result.content : [];
       const text = content.flatMap(part => (part.type === "text" ? [String(part.text)] : [])).join("\n");
-      return { isError: result.isError === true, text };
+      return { isError: result.isError === true, text, structured: result.structuredContent };
     },
     close: async () => {
       await client.close();

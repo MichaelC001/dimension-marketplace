@@ -7,7 +7,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import type { DeviceKind, DeviceState } from "../src/contracts";
-import { classifyDevice, physicalAccessRefusal, type SelectableDevice, selectDefaultDevice } from "../src/device-safety";
+import { classifyDevice, physicalAccessRefusal, redactSerial, type SelectableDevice, selectDefaultDevice } from "../src/device-safety";
 
 const PHONE = "QGL78HORAISCWGVS";
 
@@ -121,4 +121,16 @@ describe("selectDefaultDevice: what a call that left serial out can mean", () =>
     expect(pick.ok).toBe(false);
     if (!pick.ok) expect(pick.code).toBe("no_emulator");
   });
+});
+
+describe("redactSerial", () => {
+  const rows: { name: string; serial: string; masked: string }[] = [
+    { name: "a USB phone's hardware serial", serial: PHONE, masked: "****WGVS" },
+    { name: "a phone attached over the network, address and port", serial: "192.168.1.20:5555", masked: "****5555" },
+  ];
+  for (const row of rows) {
+    test(`${row.name} is shown as four stars and its last four characters, so it can be told apart and not read out`, () => {
+      expect(redactSerial(row.serial)).toBe(row.masked);
+    });
+  }
 });

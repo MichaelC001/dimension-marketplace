@@ -310,6 +310,26 @@ describe("booting: a boot that fails never reaches for somebody else's emulator"
     expect(tools.killRequests()).toEqual([]);
     expect(host.killed).toEqual([spawned(host, 0).pid]);
   });
+
+  const lostAfterBoot: { name: string; mode: "fail" | "empty"; says: string }[] = [
+    { name: "adb cannot answer the listing", mode: "fail", says: "adb could not list it" },
+    { name: "adb no longer lists the device", mode: "empty", says: "is not listed by adb" },
+  ];
+  for (const row of lostAfterBoot) {
+    test(`a boot that completes but ${row.name} is ended by its pid, and the failure says so`, async () => {
+      const ours: FakeDevice = { serial: "emulator-5556", state: "device", avd: AVD, afterLaunches: 1, probe: probeOutput({ avd: AVD, qemu: true, hardware: "ranchu" }) };
+      const { backend, host } = rig({ avds: [AVD], devices: [PERSON, ours], devicesAfterWait: row.mode });
+      host.consolePorts = () => [5556, 5557];
+      const handle = await backend.startBoot({ avd: AVD }, host.observer);
+      const error = failureOf(await settle(handle.ready));
+
+      expect(error.message).toContain("booted but");
+      expect(error.message).toContain(row.says);
+      expect(host.serials).toEqual(["emulator-5556"]);
+      expect(host.killed).toEqual([spawned(host, 0).pid]);
+      expect(tools.killRequests()).toEqual([]);
+    });
+  }
 });
 
 describe("stopping a process the pack remembers (an orphan adopted after a crash)", () => {
@@ -389,6 +409,77 @@ describe("stopping a process the pack remembers (an orphan adopted after a crash
     expect(running(child)).toBe(true);
     child.kill();
   });
+
+  async function adopted(host: FakeHost, command: string | undefined): Promise<{ child: ChildProcess; owned: OwnedProcess }> {
+    const stand = await standIn(host);
+    host.others.push({ pid: stand.owned.pid, ppid: 1, startedAtMs: stand.owned.startedAt + 40, cpuSeconds: 30, rssBytes: 1_000_000, ...(command === undefined ? {} : { command }) });
+    host.othersListening.push({ pid: stand.owned.pid, port: 5556 });
+    return stand;
+  }
+
+  const WITH_CONSOLE: FakeWorld = { avds: [AVD], devices: [PERSON, { serial: "emulator-5556", state: "device", avd: AVD, probe: probeOutput({ avd: AVD, qemu: true, hardware: "ranchu" }) }] };
+
+  test("told to kill now while it waits for the emulator to close itself, it stops waiting and ends the process", async () => {
+    const { backend, host } = rig(WITH_CONSOLE);
+    const { child, owned } = await adopted(host, `"${tools.emulator}" -avd ${AVD}`);
+    const killNow = new AbortController();
+    const stopping = backend.stop(owned, "emulator-5556", { avd: AVD, graceMs: 30_000, killNow: killNow.signal });
+    await until(() => tools.killRequests().length === 1, "the console to be asked to close");
+    expect(host.killed).toEqual([]);
+
+    const told = Date.now();
+    killNow.abort();
+    expect(await stopping).toBe("stopped");
+    expect(Date.now() - told).toBeLessThan(10_000);
+    expect(host.killed).toEqual([owned.pid]);
+    await until(() => !running(child), "the process to end");
+  });
+
+  const launches: { name: string; command: (emulator: string) => string | undefined; outcome: "stopped" | "already-exited" | "cannot_verify" }[] = [
+    { name: "the emulator launch of that AVD", command: emulator => `"${emulator}" -avd ${AVD}`, outcome: "stopped" },
+    { name: "the emulator launch of another AVD", command: emulator => `"${emulator}" -avd Someone_Elses_AVD`, outcome: "already-exited" },
+    { name: "another program given the emulator's flags", command: () => `C:\\Windows\\System32\\notepad.exe -avd ${AVD}`, outcome: "already-exited" },
+    { name: "unreadable (the host gave none)", command: () => undefined, outcome: "cannot_verify" },
+  ];
+  for (const row of launches) {
+    test(`an adopted pid whose command line is ${row.name}: ${row.outcome}`, async () => {
+      const { backend, host } = rig({ avds: [AVD], devices: [PERSON] });
+      const { child, owned } = await adopted(host, row.command(tools.emulator));
+      if (row.outcome === "cannot_verify") await expect(backend.stop(owned, null, { avd: AVD })).rejects.toMatchObject({ code: "cannot_verify" });
+      else expect(await backend.stop(owned, null, { avd: AVD })).toBe(row.outcome);
+
+      expect(host.killed).toEqual(row.outcome === "stopped" ? [owned.pid] : []);
+      if (row.outcome === "stopped") {
+        await until(() => !running(child), "the process to end");
+      } else {
+        expect(running(child)).toBe(true);
+        child.kill();
+      }
+    });
+  }
+
+  test("a pid asked about with no AVD named (the pack that owned a record) is judged by its start time alone; with one, by its command line too", async () => {
+    const { backend, host } = rig({ avds: [AVD], devices: [PERSON] });
+    const owner = { pid: 7300, startedAt: Date.now() };
+    host.others.push({ pid: owner.pid, ppid: 1, startedAtMs: owner.startedAt + 40, cpuSeconds: 1, rssBytes: 1_000_000, command: "bun C:\\inso\\simulator\\server.mjs" });
+
+    expect(await backend.processState(owner)).toBe("ours");
+    expect(await backend.processState(owner, AVD)).toBe("reused");
+    expect(await backend.processState({ pid: owner.pid, startedAt: owner.startedAt - 3 * 3_600_000 })).toBe("reused");
+  });
+
+  test("a launch that exited is gone for good: a process that took its pid a moment later is not it, whatever the table shows", async () => {
+    const world: FakeWorld = { avds: [AVD], devices: [PERSON], emulator: { output: "INFO    | starting\n", exitCode: 1 } };
+    const { backend, host } = rig(world);
+    const handle = await backend.startBoot({ avd: AVD }, host.observer);
+    failureOf(await settle(handle.ready));
+    const exited = spawned(host, 0);
+    host.others.push({ pid: exited.pid, ppid: 1, startedAtMs: exited.startedAt + 100, cpuSeconds: 1, rssBytes: 1_000_000, command: `"${tools.emulator}" -avd ${AVD}` });
+
+    expect(await backend.processState(exited, AVD)).toBe("gone");
+    expect(await backend.stop(exited, null, { avd: AVD })).toBe("already-exited");
+    expect(host.killed).toEqual([]);
+  });
 });
 
 describe("which devices are phones", () => {
@@ -445,4 +536,52 @@ describe("which devices are phones", () => {
       "NETPHONE:5555": "physical",
     });
   });
+
+  test("a list without probing runs no shell on anything that is not an emulator, and builds the phone's entry from adb's own fields", async () => {
+    const { backend } = rig(world);
+    const listed = await backend.list();
+
+    const shelled = new Set(tools.calls().filter(call => call.args[0] === "shell").map(call => call.serial));
+    expect([...shelled]).toEqual(["emulator-5554"]);
+    expect(listed.find(device => device.serial === PHONE)).toMatchObject({ kind: "physical", state: "online", name: "IV2201", androidVersion: null, display: null, density: null });
+    expect(Object.fromEntries(listed.map(device => [device.serial, device.kind]))).toEqual({
+      [PHONE]: "physical",
+      "emulator-5554": "emulator",
+      ZX1PROBEFAIL: "physical",
+      UNAUTH0001: "physical",
+      "10.0.0.9:5555": "physical",
+      "NETPHONE:5555": "physical",
+    });
+  });
+
+  test("a kind asked for without probing runs no shell, so an emulator on the network is a phone until both keys are on", async () => {
+    const { backend } = rig(world);
+    expect(await backend.kindOf("10.0.0.9:5555")).toBe("physical");
+    expect(await backend.kindOf(PHONE)).toBe("physical");
+    expect(tools.calls().filter(call => call.args[0] === "shell")).toEqual([]);
+    expect(await backend.kindOf("10.0.0.9:5555", true)).toBe("emulator");
+  });
+});
+
+describe("launching an app", () => {
+  const world: FakeWorld = { avds: [AVD], devices: [{ serial: "emulator-5556", state: "device", probe: probeOutput({}) }] };
+
+  test("a component goes to the device's shell in single quotes, so the $ of a nested class is not expanded there", async () => {
+    const { backend } = rig(world);
+    await backend.launch("emulator-5556", "com.a/.Main$Inner");
+    expect(tools.calls().filter(call => call.args[0] === "shell").map(call => call.args[1])).toEqual(["am start -n 'com.a/.Main$Inner'"]);
+  });
+
+  const refused: { name: string; target: string }[] = [
+    { name: "a quote that would close the quoting", target: "com.a/.Main'$IFS'reboot" },
+    { name: "a command substitution", target: "com.a/.Main$(reboot)" },
+    { name: "a space", target: "com.a /.Main" },
+  ];
+  for (const row of refused) {
+    test(`${row.name} is refused before the device is asked anything`, async () => {
+      const { backend } = rig(world);
+      await expect(backend.launch("emulator-5556", row.target)).rejects.toMatchObject({ code: "bad_package" });
+      expect(tools.calls()).toEqual([]);
+    });
+  }
 });
