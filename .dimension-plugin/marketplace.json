@@ -895,9 +895,9 @@
 			"source": "./packs/pr-viewer",
 			"pluginId": "pr-viewer",
 			"title": "PR Viewer",
-			"icon": "branch",
+			"icon": "packs/pr-viewer/assets/icon.webp",
 			"description": "PR Viewer — reviews in the dock, from the Store's review keys. Installable and removable like any pack: with it a rail chip opens the review here, without it the browser.",
-			"version": "0.1.4",
+			"version": "0.1.5",
 			"author": {
 				"name": "Dimension"
 			},
@@ -1054,9 +1054,9 @@
 			"source": "./packs/swiss-knife",
 			"pluginId": "swiss-knife",
 			"title": "Swiss Knife",
-			"icon": "hammer",
+			"icon": "packs/swiss-knife/assets/icon.webp",
 			"description": "Small useful things in one switch: `present` shows you a file as a card in the thread, the Viewer opens and annotates it, and a stream rule stops the agent mid-edit when it writes a code comment.",
-			"version": "0.3.1",
+			"version": "0.3.2",
 			"author": {
 				"name": "Dimension"
 			},
