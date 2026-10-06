@@ -1,0 +1,166 @@
+{
+	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+	"name": "simulator",
+	"version": "0.1.0",
+	"description": "An Android emulator in a View beside your chat that your agent drives while you watch. Boot, screenshot, tap by label, type, install and launch apps. Live H.264 video for you, cheap screenshots for the agent.",
+	"keywords": [
+		"simulator",
+		"android",
+		"emulator",
+		"mcp-apps",
+		"mobile"
+	],
+	"extensions": {
+		"ai.insodimension.dimension": {
+			"contractVersion": 1,
+			"title": "Simulator",
+			"icon": "phone",
+			"category": "artifactory",
+			"defaultEnabled": false,
+			"channel": "canary",
+			"artifactories": [
+				{
+					"mcpServer": "simulator",
+					"label": "Simulator",
+					"icon": "phone",
+					"modelSpaces": [
+						"code",
+						"build"
+					]
+				}
+			],
+			"entry": "dist/index.mjs",
+			"type": "component",
+			"components": [
+				{
+					"id": "simulator",
+					"slot": "dock",
+					"label": "Simulator",
+					"icon": "phone",
+					"grants": [
+						"artifactory:open"
+					],
+					"order": 20,
+					"phone": "none"
+				}
+			],
+			"railActions": [
+				{
+					"id": "simulator",
+					"label": "Simulator",
+					"icon": "phone",
+					"order": 30,
+					"phone": "none",
+					"session": {
+						"agent": "coding",
+						"beside": true,
+						"artifactory": {
+							"server": "simulator",
+							"tool": "device_open"
+						}
+					}
+				}
+			],
+			"connect": {
+				"kind": [
+					"cli"
+				],
+				"requires": {
+					"commands": [
+						"adb",
+						"emulator"
+					],
+					"install": {
+						"adb": {
+							"win32": [
+								"winget install --id Google.PlatformTools -e"
+							],
+							"darwin": [
+								"brew install --cask android-platform-tools"
+							],
+							"linux": [
+								"sudo apt-get install -y adb"
+							]
+						}
+					}
+				},
+				"setup": [
+					{
+						"title": "Install the Android SDK tools",
+						"detail": "In Android Studio: SDK Manager → SDK Tools → tick Android SDK Platform-Tools and Android Emulator, then add a system image. adb and emulator must be on your PATH (or set ANDROID_HOME, or the simulator.sdkPath setting, to the SDK folder).",
+						"url": "https://developer.android.com/studio",
+						"urlLabel": "Get Android Studio"
+					},
+					{
+						"title": "Create a device",
+						"detail": "In Android Studio: Device Manager → Create Virtual Device. The Simulator boots it for you; one you start yourself is also usable, and is never stopped by the pack."
+					},
+					{
+						"title": "Add scrcpy for live video (optional)",
+						"detail": "Without scrcpy's server file the pane still works, as still pictures a few times a second (Shot fallback). Unzip scrcpy 5.0 under ~/.inso/tools/mobile-sim/scrcpy/, or set SCRCPY_SERVER_PATH to its scrcpy-server file.",
+						"url": "https://github.com/Genymobile/scrcpy/releases",
+						"urlLabel": "scrcpy releases"
+					}
+				],
+				"verify": "emulator -version"
+			},
+			"settings": {
+				"group": "simulator",
+				"tab": "tools",
+				"title": "Simulator",
+				"keys": {
+					"maxDevices": {
+						"type": "number",
+						"default": 2,
+						"label": "Most emulators at once",
+						"description": "How many emulators this pack will have booted at the same time. It never stops one you started yourself.",
+						"options": [
+							{ "value": "1", "label": "1" },
+							{ "value": "2", "label": "2" },
+							{ "value": "3", "label": "3" },
+							{ "value": "4", "label": "4" }
+						]
+					},
+					"idleMinutes": {
+						"type": "number",
+						"default": 15,
+						"label": "Stop an idle emulator after",
+						"description": "Minutes with no viewer and no tool call before an emulator this pack booted is stopped.",
+						"options": [
+							{ "value": "5", "label": "5 minutes" },
+							{ "value": "15", "label": "15 minutes" },
+							{ "value": "30", "label": "30 minutes" },
+							{ "value": "60", "label": "1 hour" },
+							{ "value": "120", "label": "2 hours" }
+						]
+					},
+					"sdkPath": {
+						"type": "string",
+						"default": "",
+						"label": "Android SDK folder",
+						"description": "Where adb and the emulator live, when ANDROID_HOME is not set. Empty = ANDROID_HOME, then the default SDK location."
+					},
+					"allowPhysical": {
+						"type": "boolean",
+						"default": false,
+						"label": "Allow driving a physical phone",
+						"description": "Off (default): the agent and the pane never drive or read a phone. A USB or Wi-Fi phone still shows up in the device list, from adb's own listing only (state and model, serial masked to its last 4 characters); nothing is run on it. On: a phone becomes drivable, and readable in full, but only when the agent is also told to (allowPhysical on the call) after you named that exact phone. A phone is your own device; keep this off unless you want an agent to touch it."
+					},
+					"gpu": {
+						"type": "enum",
+						"values": ["auto", "host", "swiftshader_indirect", "angle_indirect"],
+						"default": "auto",
+						"label": "Emulator graphics",
+						"description": "How the emulator draws (its -gpu mode). Auto uses the host GPU when it can; it can hang while that GPU is busy, and the pack then relaunches the boot once with software graphics (swiftshader_indirect) and says so. Pick swiftshader_indirect to always draw in software: slower, needs no GPU. host forces the host GPU; angle_indirect draws through ANGLE.",
+						"options": [
+							{ "value": "auto", "label": "Auto (host GPU, software if it hangs)" },
+							{ "value": "host", "label": "Host GPU" },
+							{ "value": "swiftshader_indirect", "label": "Software (SwiftShader)" },
+							{ "value": "angle_indirect", "label": "ANGLE" }
+						]
+					}
+				}
+			}
+		}
+	}
+}
