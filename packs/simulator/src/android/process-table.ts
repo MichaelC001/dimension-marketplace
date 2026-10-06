@@ -26,6 +26,7 @@ export interface ProcessRow {
   /** User + kernel CPU time so far. */
   readonly cpuSeconds: number;
   readonly rssBytes: number;
+  readonly command?: string;
 }
 
 export interface Listener {
@@ -43,7 +44,11 @@ export interface ProcessTable {
   /** How many threads `pid` has and how many sit in a wait the system imposed (a suspend; never the process's own wait); null when the host cannot say (no such process, not permitted, no tool). A rejection reads as null. */
   threadStates(pid: number): Promise<ThreadSample | null>;
   /** Let a suspended `pid` run again. True only when the host accepted the request; a rejection reads as false. */
-  resume(pid: number): Promise<boolean>;
+  resume(pid: number, startedAtMs: number): Promise<boolean>;
+}
+
+export function isSignalablePid(pid: number): boolean {
+  return Number.isSafeInteger(pid) && pid > 1 && pid !== process.pid && pid !== process.ppid;
 }
 
 // ── pure questions ───────────────────────────────────────────────────────────
@@ -160,17 +165,19 @@ export function treeSurvivors(rows: readonly ProcessRow[], killed: readonly Proc
 
 // ── parsers (one per host format) ────────────────────────────────────────────
 
-/** PowerShell's `pid|ppid|creation(o)|kernel100ns|user100ns|workingSet` lines. A row with no creation time (the idle process) is dropped. */
+const MAX_COMMAND_CHARS = 4096;
+
 export function parseWindowsProcesses(text: string): ProcessRow[] {
   const rows: ProcessRow[] = [];
   for (const line of text.split(/\r?\n/)) {
-    const [pid, ppid, created, kernel, user, rss] = line.trim().split("|");
+    const [pid, ppid, created, kernel, user, rss, ...commandParts] = line.trim().split("|");
     if (pid === undefined || ppid === undefined || created === undefined || created === "") continue;
     // 2026-10-01T18:48:41.6052390+05:30: engines differ on more than three fractional digits.
     const startedAtMs = Date.parse(created.replace(/(\.\d{3})\d+/, "$1"));
     const ticks = Number(kernel) + Number(user);
     if (!Number.isFinite(startedAtMs) || !Number.isFinite(ticks) || !Number.isInteger(Number(pid)) || !Number.isInteger(Number(ppid))) continue;
-    rows.push({ pid: Number(pid), ppid: Number(ppid), startedAtMs, cpuSeconds: ticks / 1e7, rssBytes: Number(rss) || 0 });
+    const command = commandParts.join("|").slice(0, MAX_COMMAND_CHARS);
+    rows.push({ pid: Number(pid), ppid: Number(ppid), startedAtMs, cpuSeconds: ticks / 1e7, rssBytes: Number(rss) || 0, ...(command === "" ? {} : { command }) });
   }
   return rows;
 }
@@ -184,18 +191,18 @@ export function parseCpuTime(text: string): number {
   return seconds + (days === undefined ? 0 : Number(days) * 86_400);
 }
 
-/** `ps -A -o pid=,ppid=,lstart=,cputime=,rss=` (run with LC_ALL=C): `  123     1 Mon Oct  6 00:03:12 2026 00:00:01  12345`. `lstart` is local time. */
 export function parsePsProcesses(text: string): ProcessRow[] {
   const rows: ProcessRow[] = [];
-  const line = /^\s*(\d+)\s+(\d+)\s+\w{3}\s+(\w{3})\s+(\d+)\s+(\d{2}):(\d{2}):(\d{2})\s+(\d{4})\s+(\S+)\s+(\d+)\s*$/;
+  const line = /^\s*(\d+)\s+(\d+)\s+\w{3}\s+(\w{3})\s+(\d+)\s+(\d{2}):(\d{2}):(\d{2})\s+(\d{4})\s+(\S+)\s+(\d+)(?:\s+(.*?))?\s*$/;
   for (const raw of text.split(/\r?\n/)) {
     const match = line.exec(raw);
     if (match === null) continue;
-    const [, pid, ppid, month, day, hour, minute, second, year, cpu, rss] = match;
+    const [, pid, ppid, month, day, hour, minute, second, year, cpu, rss, args] = match;
     const monthIndex = MONTHS[month ?? ""];
     if (monthIndex === undefined) continue;
     const startedAtMs = new Date(Number(year), monthIndex, Number(day), Number(hour), Number(minute), Number(second)).getTime();
-    rows.push({ pid: Number(pid), ppid: Number(ppid), startedAtMs, cpuSeconds: parseCpuTime(cpu ?? "0"), rssBytes: Number(rss) * 1024 });
+    const command = args?.slice(0, MAX_COMMAND_CHARS) ?? "";
+    rows.push({ pid: Number(pid), ppid: Number(ppid), startedAtMs, cpuSeconds: parseCpuTime(cpu ?? "0"), rssBytes: Number(rss) * 1024, ...(command === "" ? {} : { command }) });
   }
   return rows;
 }
@@ -289,8 +296,10 @@ function windowsThreadsScript(pid: number): string {
   ].join("\n");
 }
 
-/** `NtResumeProcess` (ntdll) on a handle opened with PROCESS_SUSPEND_RESUME only: the least access that works. Exit 0 only when the NTSTATUS is success. */
-function windowsResumeScript(pid: number): string {
+const RESUME_EXIT = { refused: 1, unreachable: 2, otherProcess: 3 } as const;
+const RESUME_START_TOLERANCE_MS = 10;
+
+function windowsResumeScript(pid: number, startedAtMs: number): string {
   return [
     "$ErrorActionPreference = 'Stop'",
     "Add-Type -TypeDefinition @'",
@@ -299,27 +308,34 @@ function windowsResumeScript(pid: number): string {
     "public static class SimNt {",
     '  [DllImport("kernel32.dll")] static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);',
     '  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);',
+    '  [DllImport("kernel32.dll")] static extern bool GetProcessTimes(IntPtr handle, out long created, out long exited, out long kernel, out long user);',
     '  [DllImport("ntdll.dll")] static extern int NtResumeProcess(IntPtr handle);',
-    "  public static int Resume(uint pid) {",
-    "    IntPtr handle = OpenProcess(0x0800, false, pid);",
-    "    if (handle == IntPtr.Zero) return -1;",
-    "    try { return NtResumeProcess(handle); } finally { CloseHandle(handle); }",
+    "  public static int Resume(uint pid, long startedAtMs, long toleranceMs) {",
+    "    IntPtr handle = OpenProcess(0x1800, false, pid);",
+    `    if (handle == IntPtr.Zero) return ${RESUME_EXIT.unreachable};`,
+    "    try {",
+    "      long created, exited, kernel, user;",
+    `      if (!GetProcessTimes(handle, out created, out exited, out kernel, out user)) return ${RESUME_EXIT.unreachable};`,
+    "      long openedStartedMs = (created - 116444736000000000L) / 10000L;",
+    `      if (Math.Abs(openedStartedMs - startedAtMs) > toleranceMs) return ${RESUME_EXIT.otherProcess};`,
+    `      return NtResumeProcess(handle) == 0 ? 0 : ${RESUME_EXIT.refused};`,
+    "    } finally { CloseHandle(handle); }",
     "  }",
     "}",
     "'@",
-    `if ([SimNt]::Resume(${pid}) -ne 0) { exit 1 }`,
+    `exit [SimNt]::Resume(${pid}, ${startedAtMs}, ${RESUME_START_TOLERANCE_MS})`,
   ].join("\n");
 }
 
 /** CIM, because `wmic` is gone from current Windows. Operators only (`-f`), no method calls, so it also runs where PowerShell is in constrained-language mode. */
-const WINDOWS_PROCESS_SCRIPT = "Get-CimInstance Win32_Process | ForEach-Object { '{0}|{1}|{2:o}|{3}|{4}|{5}' -f $_.ProcessId, $_.ParentProcessId, $_.CreationDate, $_.KernelModeTime, $_.UserModeTime, $_.WorkingSetSize }";
+const WINDOWS_PROCESS_SCRIPT = "Get-CimInstance Win32_Process | ForEach-Object { '{0}|{1}|{2:o}|{3}|{4}|{5}|{6}' -f $_.ProcessId, $_.ParentProcessId, $_.CreationDate, $_.KernelModeTime, $_.UserModeTime, $_.WorkingSetSize, ($_.CommandLine -replace '[\\r\\n]+', ' ') }";
 
-export function nodeProcessTable(): ProcessTable {
+export function nodeProcessTable(log: (message: string) => void = () => undefined): ProcessTable {
   const windows = process.platform === "win32";
   return {
     processes: async () => {
       if (windows) return parseWindowsProcesses(await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", WINDOWS_PROCESS_SCRIPT]));
-      return parsePsProcesses(await run("ps", ["-A", "-o", "pid=,ppid=,lstart=,cputime=,rss="], { ...process.env, LC_ALL: "C" }));
+      return parsePsProcesses(await run("ps", ["-A", "-ww", "-o", "pid=,ppid=,lstart=,cputime=,rss=,args="], { ...process.env, LC_ALL: "C" }));
     },
     listeners: async () => {
       try {
@@ -337,6 +353,7 @@ export function nodeProcessTable(): ProcessTable {
       }
     },
     killTree: async (pid, rows) => {
+      if (!isSignalablePid(pid)) return;
       if (windows) {
         const { promise, resolve } = Promise.withResolvers<void>();
         execFile("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true }, () => resolve());
@@ -345,6 +362,7 @@ export function nodeProcessTable(): ProcessTable {
       }
       // The pack spawns the emulator detached, so it leads its own process group: one signal reaches the launcher and qemu. The listed children cover one that left the group.
       for (const target of [-pid, ...processTree(rows, pid).map(row => row.pid).reverse()]) {
+        if (!isSignalablePid(Math.abs(target))) continue;
         try {
           process.kill(target, "SIGKILL");
         } catch {
@@ -353,7 +371,7 @@ export function nodeProcessTable(): ProcessTable {
       }
     },
     threadStates: async pid => {
-      if (!Number.isInteger(pid) || pid <= 0) return null;
+      if (!isSignalablePid(pid)) return null;
       try {
         // Tighter than the table read: the boot watch waits on this between looks for the device.
         if (windows) return parseThreadCounts(await run("powershell.exe", encodedCommand(windowsThreadsScript(pid)), undefined, 8_000));
@@ -362,14 +380,14 @@ export function nodeProcessTable(): ProcessTable {
         return null;
       }
     },
-    resume: async pid => {
-      if (!Number.isInteger(pid) || pid <= 0) return false;
+    resume: async (pid, startedAtMs) => {
+      if (!isSignalablePid(pid) || !Number.isSafeInteger(startedAtMs)) return false;
       try {
-        // Compiling the P/Invoke type takes a few seconds on a cold PowerShell.
-        if (windows) await run("powershell.exe", encodedCommand(windowsResumeScript(pid)), undefined, 30_000);
+        if (windows) await run("powershell.exe", encodedCommand(windowsResumeScript(pid, startedAtMs)), undefined, 30_000);
         else process.kill(pid, "SIGCONT");
         return true;
-      } catch {
+      } catch (error) {
+        if (error instanceof Error && "code" in error && error.code === RESUME_EXIT.otherProcess) log(`[sim] not resuming pid ${pid}: it started at another time than the pack recorded, so the pid now belongs to something else`);
         return false;
       }
     },
@@ -378,6 +396,7 @@ export function nodeProcessTable(): ProcessTable {
 
 /** Cheap liveness (no table): signal 0. EPERM means it exists and is not ours to signal. */
 export function isProcessAlive(pid: number): boolean {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
   try {
     process.kill(pid, 0);
     return true;

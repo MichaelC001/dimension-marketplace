@@ -157,7 +157,7 @@ async function waitsWithoutLaunching(host: FakeHost): Promise<void> {
 
 /** Stop the emulator the pack has running (so no fake emulator outlives its test) and let the boot that watched it settle. */
 async function finish(r: Rig, index: number, end: Promise<Settled>): Promise<void> {
-  await r.backend.stop(spawned(r.host, index), null);
+  await r.backend.stop(spawned(r.host, index), null, { avd: AVD });
   await end;
 }
 
@@ -191,7 +191,7 @@ describe("booting: an emulator the system froze", () => {
     expect(host.spawned).toHaveLength(1);
     expect(host.killed).toEqual([]);
     expect(host.notes).toHaveLength(1);
-    expect(await backend.stop(spawned(host, 0), "emulator-5556")).toBe("stopped");
+    expect(await backend.stop(spawned(host, 0), "emulator-5556", { avd: AVD })).toBe("stopped");
   });
 
   test("a resume gives the boot a fresh stall clock: the time spent frozen is not the GPU's, but a boot still silent 75 s after it is", async () => {
@@ -489,7 +489,7 @@ describe("launching: an emulator that loses the race for the AVD's lock", () => 
     expect(host.spawned).toHaveLength(2);
     // Nothing was killed: the first process had already exited by itself.
     expect(host.killed).toEqual([]);
-    expect(await backend.stop(spawned(host, 1), "emulator-5556")).toBe("stopped");
+    expect(await backend.stop(spawned(host, 1), "emulator-5556", { avd: AVD })).toBe("stopped");
   });
 
   test("253 twice: one retry, then the boot fails with the exit code and the pack starts nothing else", async () => {
@@ -532,6 +532,6 @@ describe("launching: an emulator that loses the race for the AVD's lock", () => 
     expect(host.spawned).toHaveLength(3);
     // Only the stalled first tree was killed; the second had exited by itself.
     expect(host.killed).toEqual([spawned(host, 0).pid]);
-    expect(await backend.stop(spawned(host, 2), "emulator-5556")).toBe("stopped");
+    expect(await backend.stop(spawned(host, 2), "emulator-5556", { avd: AVD })).toBe("stopped");
   });
 });

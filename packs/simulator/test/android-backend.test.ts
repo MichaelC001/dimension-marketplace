@@ -113,7 +113,7 @@ describe("booting: what the emulator is launched with", () => {
     expect(argv).not.toContain("-read-only");
     expect(argv).not.toContain("-qemu");
     expect(argv).not.toContain("-port");
-    expect(await backend.stop(spawned(host, 0), null)).toBe("stopped");
+    expect(await backend.stop(spawned(host, 0), null, { avd: AVD })).toBe("stopped");
     expect(failureOf(await firstEnd).message).toContain("exited");
 
     // The next boot reads the setting afresh; this one is windowed, warm, and a second instance of the AVD.
@@ -128,7 +128,7 @@ describe("booting: what the emulator is launched with", () => {
     expect(next).not.toContain("-no-snapshot-load");
     expect(next).not.toContain("-qemu");
     expect(next).not.toContain("-port");
-    await backend.stop(spawned(host, 1), null);
+    await backend.stop(spawned(host, 1), null, { avd: AVD });
     await secondEnd;
   });
 });
@@ -165,7 +165,7 @@ describe("booting: a hung host GPU", () => {
     expect(host.notes[0]).toContain("swiftshader_indirect");
 
     // Stopping it later closes THAT console, then ends THAT process: still not the person's emulator.
-    expect(await backend.stop(spawned(host, 1), "emulator-5556")).toBe("stopped");
+    expect(await backend.stop(spawned(host, 1), "emulator-5556", { avd: AVD })).toBe("stopped");
     expect(tools.killRequests()).toEqual(["emulator-5556"]);
     expect(host.killed).toEqual([spawned(host, 0).pid, spawned(host, 1).pid]);
     expect(host.killed).not.toContain(PERSON_PID);
@@ -204,7 +204,7 @@ describe("booting: a hung host GPU", () => {
     expect(host.spawned).toHaveLength(1);
     expect(host.killed).toEqual([]);
 
-    expect(await backend.stop(spawned(host, 0), null)).toBe("stopped");
+    expect(await backend.stop(spawned(host, 0), null, { avd: AVD })).toBe("stopped");
     await end;
   });
 
@@ -221,7 +221,7 @@ describe("booting: a hung host GPU", () => {
     expect(host.spawned).toHaveLength(1);
 
     // The same unreadable table also means stop cannot prove the pid is ours... but the live handle does.
-    expect(await backend.stop(spawned(host, 0), null)).toBe("stopped");
+    expect(await backend.stop(spawned(host, 0), null, { avd: AVD })).toBe("stopped");
     await end;
   });
 });
@@ -306,7 +306,7 @@ describe("booting: a boot that fails never reaches for somebody else's emulator"
     expect(host.serials).toEqual(["emulator-5556"]);
 
     // No listener list: the console cannot be tied to the process, so nothing is asked to close; the process is ended by pid.
-    expect(await backend.stop(spawned(host, 0), "emulator-5556")).toBe("stopped");
+    expect(await backend.stop(spawned(host, 0), "emulator-5556", { avd: AVD })).toBe("stopped");
     expect(tools.killRequests()).toEqual([]);
     expect(host.killed).toEqual([spawned(host, 0).pid]);
   });
@@ -337,10 +337,10 @@ describe("stopping a process the pack remembers (an orphan adopted after a crash
     const world: FakeWorld = { avds: [AVD], devices: [PERSON, { serial: "emulator-5556", state: "device", avd: AVD, probe: probeOutput({ avd: AVD, qemu: true, hardware: "ranchu" }) }] };
     const { backend, host } = rig(world);
     const { child, owned } = await standIn(host);
-    host.others.push({ pid: owned.pid, ppid: 1, startedAtMs: owned.startedAt + 40, cpuSeconds: 30, rssBytes: 1_000_000 });
+    host.others.push({ pid: owned.pid, ppid: 1, startedAtMs: owned.startedAt + 40, cpuSeconds: 30, rssBytes: 1_000_000, command: `"${tools.emulator}" -avd ${AVD}` });
     host.othersListening.push({ pid: owned.pid, port: 5556 });
 
-    expect(await backend.stop(owned, "emulator-5556")).toBe("stopped");
+    expect(await backend.stop(owned, "emulator-5556", { avd: AVD })).toBe("stopped");
     expect(tools.killRequests()).toEqual(["emulator-5556"]);
     expect(host.killed).toEqual([owned.pid]);
     await until(() => !running(child), "the process to end");
@@ -349,11 +349,11 @@ describe("stopping a process the pack remembers (an orphan adopted after a crash
   test("a recorded serial that is not that process's console is never asked to close: the process is still ended, by its pid", async () => {
     const { backend, host } = rig({ avds: [AVD], devices: [PERSON] });
     const { child, owned } = await standIn(host);
-    host.others.push({ pid: owned.pid, ppid: 1, startedAtMs: owned.startedAt + 40, cpuSeconds: 30, rssBytes: 1_000_000 });
+    host.others.push({ pid: owned.pid, ppid: 1, startedAtMs: owned.startedAt + 40, cpuSeconds: 30, rssBytes: 1_000_000, command: `"${tools.emulator}" -avd ${AVD}` });
     host.othersListening.push({ pid: owned.pid, port: 5556 });
 
     // The record says emulator-5554, but that console belongs to the person's tree.
-    expect(await backend.stop(owned, "emulator-5554")).toBe("stopped");
+    expect(await backend.stop(owned, "emulator-5554", { avd: AVD })).toBe("stopped");
     expect(tools.killRequests()).toEqual([]);
     expect(host.killed).toEqual([owned.pid]);
     await until(() => !running(child), "the process to end");
@@ -362,10 +362,10 @@ describe("stopping a process the pack remembers (an orphan adopted after a crash
   test("a pid that started hours after the record is another process now: nothing is killed and nobody is asked to close", async () => {
     const { backend, host } = rig({ avds: [AVD], devices: [PERSON] });
     const { child, owned } = await standIn(host);
-    host.others.push({ pid: owned.pid, ppid: 1, startedAtMs: owned.startedAt + 3 * 3_600_000, cpuSeconds: 30, rssBytes: 1_000_000 });
+    host.others.push({ pid: owned.pid, ppid: 1, startedAtMs: owned.startedAt + 3 * 3_600_000, cpuSeconds: 30, rssBytes: 1_000_000, command: `"${tools.emulator}" -avd ${AVD}` });
     host.othersListening.push({ pid: owned.pid, port: 5554 });
 
-    expect(await backend.stop(owned, "emulator-5554")).toBe("already-exited");
+    expect(await backend.stop(owned, "emulator-5554", { avd: AVD })).toBe("already-exited");
     expect(host.killed).toEqual([]);
     expect(tools.killRequests()).toEqual([]);
     expect(running(child)).toBe(true);
@@ -374,7 +374,7 @@ describe("stopping a process the pack remembers (an orphan adopted after a crash
 
   test("a pid that is not running is left alone", async () => {
     const { backend, host } = rig({ avds: [AVD], devices: [PERSON] });
-    expect(await backend.stop({ pid: 2_000_000_011, startedAt: Date.now() }, "emulator-5556")).toBe("already-exited");
+    expect(await backend.stop({ pid: 2_000_000_011, startedAt: Date.now() }, "emulator-5556", { avd: AVD })).toBe("already-exited");
     expect(host.killed).toEqual([]);
     expect(tools.killRequests()).toEqual([]);
   });
@@ -384,7 +384,7 @@ describe("stopping a process the pack remembers (an orphan adopted after a crash
     const { child, owned } = await standIn(host);
     host.tableReadable = false;
 
-    await expect(backend.stop(owned, "emulator-5556")).rejects.toMatchObject({ code: "cannot_verify" });
+    await expect(backend.stop(owned, "emulator-5556", { avd: AVD })).rejects.toMatchObject({ code: "cannot_verify" });
     expect(host.killed).toEqual([]);
     expect(running(child)).toBe(true);
     child.kill();
@@ -418,7 +418,7 @@ describe("which devices are phones", () => {
   for (const row of kinds) {
     test(`kindOf ${row.serial}: ${row.kind} (${row.why})`, async () => {
       const { backend } = rig(world);
-      expect(await backend.kindOf(row.serial)).toBe(row.kind);
+      expect(await backend.kindOf(row.serial, true)).toBe(row.kind);
     });
   }
 
@@ -435,7 +435,7 @@ describe("which devices are phones", () => {
 
   test("the device list carries the same verdicts, and the owner's phone is never called an emulator", async () => {
     const { backend } = rig(world);
-    const listed = await backend.list();
+    const listed = await backend.list({ probePhysical: true });
     expect(Object.fromEntries(listed.map(device => [device.serial, device.kind]))).toEqual({
       [PHONE]: "physical",
       "emulator-5554": "emulator",

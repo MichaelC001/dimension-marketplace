@@ -71,17 +71,21 @@ export interface RunningEmulator {
 
 export type StopOutcome = "stopped" | "already-exited";
 
+export interface ListOptions {
+  readonly probePhysical?: boolean;
+}
+
+export interface StopOptions {
+  readonly avd: string;
+  readonly graceMs?: number;
+  readonly killNow?: AbortSignal;
+}
+
 export interface DeviceBackend {
   readonly platform: "android";
 
-  list(): Promise<DeviceInfo[]>;
-  /**
-   * Is `serial` an emulator or somebody's own phone? Asked of the device itself on
-   * every call (never cached: a serial can be reused by a different device), and
-   * fail-safe: anything that cannot be shown to be an emulator is `physical`.
-   * Throws `not_connected` for a serial that is not attached at all.
-   */
-  kindOf(serial: string): Promise<DeviceKind>;
+  list(options?: ListOptions): Promise<DeviceInfo[]>;
+  kindOf(serial: string, probeShell?: boolean): Promise<DeviceKind>;
   /** Bootable virtual devices (AVD names). */
   avds(): Promise<string[]>;
   /** Start a virtual device. Does not wait for it to finish booting: see `BootHandle.ready`. */
@@ -90,9 +94,9 @@ export interface DeviceBackend {
    * Shut down the emulator the pack spawned: act on `process` and nothing else. The serial is never what is
    * stopped; a process that is gone, or whose pid now belongs to something else, is left alone.
    */
-  stop(process: OwnedProcess, serial: string | null): Promise<StopOutcome>;
+  stop(process: OwnedProcess, serial: string | null, options: StopOptions): Promise<StopOutcome>;
   /** Is `process` still the process the pack spawned? The check before adopting an orphan or killing anything. */
-  processState(process: OwnedProcess): Promise<"ours" | "gone" | "reused" | "unknown">;
+  processState(process: OwnedProcess, avd?: string): Promise<"ours" | "gone" | "reused" | "unknown">;
   /** The serial the emulator under `process` answers to, by its console port; null when it has none yet or the host cannot say. */
   serialOf(process: OwnedProcess): Promise<string | null>;
   /** Every running emulator and the AVD it is, asked of each one. Includes emulators the pack did not start. */

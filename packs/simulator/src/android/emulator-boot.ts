@@ -231,6 +231,31 @@ export function parseAvdName(output: string): string | null {
   return lines.find(line => line !== "OK" && !line.startsWith("Android Console")) ?? null;
 }
 
+const EMULATOR_IMAGE = /^(?:emulator(?:64)?(?:-(?:x86|arm|arm64|mips|headless))?|qemu-system-[\w.-]+)$/i;
+const COMMAND_TOKEN = /"([^"]*)"|\S+/g;
+
+function splitCommand(command: string): { readonly program: string; readonly args: string[] } {
+  const trimmed = command.trim();
+  const quoted = /^"([^"]*)"/.exec(trimmed);
+  const firstFlag = trimmed.search(/\s[-@]/);
+  const programEnd = quoted !== null ? quoted[0].length : firstFlag < 0 ? trimmed.length : firstFlag;
+  const program = quoted !== null ? (quoted[1] ?? "") : trimmed.slice(0, programEnd);
+  const args = [...trimmed.slice(programEnd).matchAll(COMMAND_TOKEN)].map(match => match[1] ?? match[0]);
+  return { program, args };
+}
+
+export type LaunchVerdict = "launch" | "other" | "unknown";
+
+export function emulatorLaunchVerdict(row: ProcessRow, avd: string): LaunchVerdict {
+  if (row.command === undefined) return "unknown";
+  const { program, args } = splitCommand(row.command);
+  const image = (program.split(/[\\/]/).pop() ?? "").replace(/\.exe$/i, "");
+  if (!EMULATOR_IMAGE.test(image)) return "other";
+  const avdAt = args.indexOf("-avd");
+  const named = (avdAt >= 0 && args[avdAt + 1] === avd) || args.includes(`@${avd}`);
+  return named ? "launch" : "other";
+}
+
 // ── launching an AVD again ───────────────────────────────────────────────────
 
 /**

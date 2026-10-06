@@ -24,7 +24,7 @@
 
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import type { BootHandle, BootObserver, DeviceBackend, StopOutcome } from "./backend";
+import type { BootHandle, BootObserver, DeviceBackend, StopOptions, StopOutcome } from "./backend";
 import { type BootRequest, type DeviceInfo, fail } from "./contracts";
 import type { SimulatorSettings } from "./settings";
 
@@ -38,6 +38,7 @@ export interface OwnedRecord {
   readonly bootedAt: number;
   /** The pack process that booted (or adopted) it. */
   readonly ownerPid: number;
+  readonly ownerStartedAt: number;
 }
 
 export interface OwnershipStore {
@@ -58,10 +59,12 @@ export function fileOwnershipStore(path: string): OwnershipStore {
             entry !== null &&
             (entry.serial === null || typeof entry.serial === "string") &&
             typeof entry.avd === "string" &&
-            typeof entry.pid === "number" &&
-            typeof entry.startedAt === "number" &&
-            typeof entry.bootedAt === "number" &&
-            typeof entry.ownerPid === "number",
+            isEmulatorPid(entry.pid) &&
+            Number.isFinite(entry.startedAt) &&
+            Number.isFinite(entry.bootedAt) &&
+            Number.isSafeInteger(entry.ownerPid) &&
+            entry.ownerPid > 0 &&
+            Number.isFinite(entry.ownerStartedAt),
         );
       } catch {
         return [];
@@ -87,6 +90,7 @@ export interface FleetDeps {
   readonly log: (message: string) => void;
   readonly now?: () => number;
   readonly pid?: number;
+  readonly ownerStartedAt?: number;
   readonly isAlive?: (pid: number) => boolean;
   readonly schedule?: (run: () => void, ms: number) => Timer;
 }
@@ -110,6 +114,7 @@ const defaultSchedule = (run: () => void, ms: number): Timer => {
 };
 
 function processAlive(pid: number): boolean {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
   try {
     process.kill(pid, 0);
     return true;
@@ -132,6 +137,15 @@ interface Boot {
   readonly settled: Promise<DeviceInfo>;
 }
 
+type Decision = { readonly running: DeviceInfo } | { readonly boot: Boot };
+
+const SHUTDOWN_GRACE_MS = 3_000;
+const SHUTDOWN_KILL_FOLLOW_UP_MS = 3_000;
+
+function isEmulatorPid(pid: unknown): pid is number {
+  return typeof pid === "number" && Number.isSafeInteger(pid) && pid > 1 && pid !== process.pid && pid !== process.ppid;
+}
+
 export class Fleet {
   readonly #deps: FleetDeps;
   readonly #pid: number;
@@ -146,10 +160,15 @@ export class Fleet {
   #starting = 0;
   #seq = 0;
   #reconciled: Promise<void> | null = null;
+  readonly #deciding = new Map<string, Promise<void>>();
+  readonly #owners = new Map<string, boolean>();
+  readonly #proving = new Set<string>();
+  readonly #ownerStartedAt: number;
 
   constructor(deps: FleetDeps) {
     this.#deps = deps;
     this.#pid = deps.pid ?? process.pid;
+    this.#ownerStartedAt = deps.ownerStartedAt ?? Math.round(Date.now() - process.uptime() * 1000);
   }
 
   owned(): readonly OwnedRecord[] {
@@ -172,44 +191,66 @@ export class Fleet {
   }
 
   async #adoptOrphans(): Promise<void> {
-    const alive = this.#deps.isAlive ?? processAlive;
     const backend = this.#deps.backend;
     const records = this.#deps.store.read();
     let changed = false;
     for (const record of records) {
-      if (record.ownerPid !== this.#pid && alive(record.ownerPid)) continue; // a living sibling's
+      if (record.ownerPid !== this.#pid && (await this.#ownerRunning(record))) continue;
       changed = true;
       const proc = { pid: record.pid, startedAt: record.startedAt };
-      const state = await backend.processState(proc).catch(() => "unknown" as const);
+      const state = await backend.processState(proc, record.avd).catch(() => "unknown" as const);
       if (state !== "ours") {
-        this.#deps.log(`[sim] dropped ownership record for ${record.serial ?? record.avd} (${record.avd}, pid ${record.pid}): ${state === "unknown" ? "the process table could not be read, so it cannot be verified" : state === "reused" ? "that pid is another process now" : "that process is gone"}`);
+        this.#deps.log(`[sim] dropped ownership record for ${record.serial ?? record.avd} (${record.avd}, pid ${record.pid}): ${state === "unknown" ? "the process table or its command line could not be read, so it cannot be verified" : state === "reused" ? "that pid is not the emulator the record names (another start time, or another program)" : "that process is gone"}`);
         continue;
       }
       let serial = await backend.serialOf(proc).catch(() => null);
       if (serial === null && record.serial !== null) {
-        // The host could not tie a console to the process (no listener list). The process is verified ours; the recorded serial must also still be this AVD.
         const running = await backend.runningEmulators().catch(() => []);
         if (running.some(emulator => emulator.serial === record.serial && emulator.avd === record.avd)) serial = record.serial;
       }
       if (serial === null) {
-        // The pack's own process, verified, that never opened a console: a boot its dead owner did not finish. Nobody will finish it.
         this.#deps.log(`[sim] stopping unfinished boot of ${record.avd} (pid ${record.pid}) left by pack process ${record.ownerPid}`);
-        await backend.stop(proc, null).catch(error => this.#deps.log(`[sim] could not stop it: ${error instanceof Error ? error.message : String(error)}`));
+        await backend.stop(proc, null, { avd: record.avd }).catch(error => this.#deps.log(`[sim] could not stop it: ${error instanceof Error ? error.message : String(error)}`));
         continue;
       }
       const key = `pid-${record.pid}`;
-      this.#owned.set(key, { ...record, serial, ownerPid: this.#pid });
+      this.#owned.set(key, { ...record, serial, ownerPid: this.#pid, ownerStartedAt: this.#ownerStartedAt });
       this.#deps.log(`[sim] adopted orphan ${serial} (${record.avd}, pid ${record.pid}) left by pack process ${record.ownerPid}`);
       this.#schedule(key);
     }
     if (changed) this.#persist();
   }
 
+  async #ownerRunning(record: OwnedRecord): Promise<boolean> {
+    const alive = this.#deps.isAlive ?? processAlive;
+    let running = alive(record.ownerPid);
+    if (running) {
+      const state = await this.#deps.backend.processState({ pid: record.ownerPid, startedAt: record.ownerStartedAt }).catch(() => "unknown" as const);
+      running = state === "ours" || state === "unknown";
+    }
+    this.#owners.set(`${record.ownerPid}@${record.ownerStartedAt}`, running);
+    return running;
+  }
+
+  #siblingRunning(record: OwnedRecord): boolean {
+    if (!(this.#deps.isAlive ?? processAlive)(record.ownerPid)) return false;
+    const key = `${record.ownerPid}@${record.ownerStartedAt}`;
+    const known = this.#owners.get(key);
+    if (known === false) return false;
+    if (!this.#proving.has(key)) {
+      this.#proving.add(key);
+      void this.#ownerRunning(record).then(running => {
+        this.#proving.delete(key);
+        if (!running) this.#persist();
+      });
+    }
+    return true;
+  }
+
   /** This pack's records, plus those of OTHER pack processes that are still running. A dead owner's record was adopted (then it is ours) or dropped by `reconcile`: it is never carried forward. */
   #persist(): void {
-    const alive = this.#deps.isAlive ?? processAlive;
     const mine = [...this.#owned.values()];
-    const others = this.#deps.store.read().filter(record => record.ownerPid !== this.#pid && alive(record.ownerPid) && !mine.some(own => own.pid === record.pid && own.startedAt === record.startedAt));
+    const others = this.#deps.store.read().filter(record => record.ownerPid !== this.#pid && this.#siblingRunning(record) && !mine.some(own => own.pid === record.pid && own.startedAt === record.startedAt));
     this.#deps.store.write([...others, ...mine]);
   }
 
@@ -225,14 +266,30 @@ export class Fleet {
     const readOnly = request.readOnly === true;
     const key = bootKey(avd, readOnly);
 
+    for (let gate = this.#deciding.get(key); gate !== undefined; gate = this.#deciding.get(key)) await gate;
     const pending = this.#booting.get(key);
     if (pending) return this.#await(pending, waitMs, true);
+
+    const decision = Promise.withResolvers<void>();
+    this.#deciding.set(key, decision.promise);
+    let decided: Decision;
+    try {
+      decided = await this.#decide(avd, key, request, readOnly);
+    } finally {
+      this.#deciding.delete(key);
+      decision.resolve();
+    }
+    if ("running" in decided) return this.#reuse(decided.running, avd, request, waitMs);
+    return this.#await(decided.boot, waitMs, false);
+  }
+
+  async #decide(avd: string, key: string, request: BootRequest, readOnly: boolean): Promise<Decision> {
     const failed = this.#takeFailure(avd);
     if (failed !== null) throw failed;
 
     if (!readOnly) {
-      const running = await this.#alreadyRunning(avd, request, waitMs);
-      if (running !== null) return running;
+      const running = await this.#findRunning(avd);
+      if (running !== null) return { running };
     }
 
     const cap = this.#deps.settings().maxDevices;
@@ -246,10 +303,8 @@ export class Fleet {
     if (readOnly) notes.push(`Started read-only (-read-only): this is a second instance of ${avd}, and what it changes is discarded when it stops.`);
     const observer: BootObserver = {
       spawned: proc => {
-        // Written the moment the process exists: whatever fails next, the record names exactly this process.
-        this.#owned.set(id, { serial: null, avd, pid: proc.pid, startedAt: proc.startedAt, bootedAt: this.#owned.get(id)?.bootedAt ?? (this.#deps.now ?? Date.now)(), ownerPid: this.#pid });
+        this.#owned.set(id, { serial: null, avd, pid: proc.pid, startedAt: proc.startedAt, bootedAt: this.#owned.get(id)?.bootedAt ?? (this.#deps.now ?? Date.now)(), ownerPid: this.#pid, ownerStartedAt: this.#ownerStartedAt });
         this.#persist();
-        this.#schedule(id);
       },
       serial: serial => {
         const record = this.#owned.get(id);
@@ -266,18 +321,19 @@ export class Fleet {
     this.#starting++;
     let handle: BootHandle;
     try {
-      handle = await backend.startBoot({ ...request, avd }, observer);
+      handle = await this.#deps.backend.startBoot({ ...request, avd }, observer);
     } finally {
       this.#starting--;
     }
     const settled = handle.ready.then(
       device => {
-        this.#booting.delete(key);
+        if (this.#booting.get(key) === boot) this.#booting.delete(key);
         this.#deps.log(`[sim] ${device.serial} (${avd}) is up`);
+        this.#schedule(id);
         return device;
       },
       (error: unknown) => {
-        this.#booting.delete(key);
+        if (this.#booting.get(key) === boot) this.#booting.delete(key);
         this.#release(id);
         this.#deps.log(`[sim] boot of ${avd} failed: ${error instanceof Error ? error.message : String(error)}`);
         if (!this.#stopped.delete(id)) this.#failures.set(avd, { error: error instanceof Error ? error : new Error(String(error)), at: (this.#deps.now ?? Date.now)() });
@@ -287,7 +343,7 @@ export class Fleet {
     settled.catch(() => undefined);
     const boot: Boot = { key: id, avd, notes, settled };
     this.#booting.set(key, boot);
-    return this.#await(boot, waitMs, false);
+    return { boot };
   }
 
   /** A boot that failed after the call waiting for it had returned: the next call for that AVD is told, once, rather than silently starting another. */
@@ -304,19 +360,20 @@ export class Fleet {
    * AVD it is (its console answers while Android is still starting; the device list's name needs Android up),
    * and either source is enough to refuse a second instance, which the emulator itself would reject anyway.
    */
-  async #alreadyRunning(avd: string, request: BootRequest, waitMs: number): Promise<BootOutcome | null> {
+  async #findRunning(avd: string): Promise<DeviceInfo | null> {
     const backend = this.#deps.backend;
     const [asked, listed] = await Promise.all([backend.runningEmulators().catch(() => []), backend.list()]);
     const serials = new Set(asked.filter(emulator => emulator.avd === avd).map(emulator => emulator.serial));
     for (const device of listed) if (device.kind === "emulator" && device.name === avd) serials.add(device.serial);
     const matches = listed.filter(device => serials.has(device.serial));
-    const found = matches.find(device => device.state === "online") ?? matches[0];
-    if (found === undefined) return null;
+    return matches.find(device => device.state === "online") ?? matches[0] ?? null;
+  }
 
+  async #reuse(found: DeviceInfo, avd: string, request: BootRequest, waitMs: number): Promise<BootOutcome> {
+    const backend = this.#deps.backend;
     this.touch(found.serial);
     const notes = [`${found.serial} already runs ${avd}${this.isOwned(found.serial) ? "" : " (not started by this pack)"}: it is returned, not booted again. Pass readOnly: true for a second instance.`];
     if (request.cold === true || request.headless !== undefined) notes.push("cold and headless were not applied: the device was already running.");
-    // An adb state of `offline` on an emulator is one that is still starting.
     const up = found.state === "online" ? found : waitMs > 0 ? await backend.waitBooted(found.serial, waitMs) : null;
     const device: DeviceInfo = up === null ? { ...found, state: "booting" } : up;
     return { avd, device: { ...device, owned: this.isOwned(device.serial) }, pending: up === null, reused: true, notes };
@@ -350,16 +407,15 @@ export class Fleet {
     return this.#stopOwned(key);
   }
 
-  async #stopOwned(key: string): Promise<StopOutcome> {
+  async #stopOwned(key: string, hurry: Omit<StopOptions, "avd"> = {}): Promise<StopOutcome> {
     const record = this.#owned.get(key);
     if (record === undefined) return "already-exited";
     const name = record.serial ?? record.avd;
     this.#deps.log(`[sim] stopping ${name} (pid ${record.pid})`);
-    // A boot still under way ends in a rejection that is the pack's own doing, not news.
-    if ([...this.#booting.values()].some(boot => boot.key === key)) this.#stopped.add(key);
+    if (this.#isBooting(key)) this.#stopped.add(key);
     let outcome: StopOutcome;
     try {
-      outcome = await this.#deps.backend.stop({ pid: record.pid, startedAt: record.startedAt }, record.serial);
+      outcome = await this.#deps.backend.stop({ pid: record.pid, startedAt: record.startedAt }, record.serial, { avd: record.avd, ...hurry });
     } catch (error) {
       this.#stopped.delete(key);
       throw error;
@@ -367,6 +423,10 @@ export class Fleet {
     this.#release(key);
     this.#deps.log(outcome === "stopped" ? `[sim] stopped ${name}` : `[sim] ${name} had already exited; nothing was killed`);
     return outcome;
+  }
+
+  #isBooting(key: string): boolean {
+    return [...this.#booting.values()].some(boot => boot.key === key);
   }
 
   #release(key: string): void {
@@ -395,6 +455,7 @@ export class Fleet {
     this.#idle.delete(key);
     const record = this.#owned.get(key);
     if (record === undefined) return;
+    if (this.#isBooting(key)) return;
     if (record.serial !== null && (this.#viewers.get(record.serial) ?? 0) > 0) return;
     const minutes = this.#deps.settings().idleMinutes;
     const timer = (this.#deps.schedule ?? defaultSchedule)(() => {
@@ -412,9 +473,18 @@ export class Fleet {
     const keys = [...this.#owned.keys()];
     if (keys.length === 0) return;
     this.#deps.log(`[sim] shutdown: stopping ${keys.map(key => this.#owned.get(key)?.serial ?? this.#owned.get(key)?.avd ?? key).join(", ")}`);
-    const budget = Promise.withResolvers<void>();
-    const timer = setTimeout(() => budget.resolve(), budgetMs);
-    await Promise.race([Promise.allSettled(keys.map(key => this.#stopOwned(key))), budget.promise]);
+    const killNow = new AbortController();
+    const stopped = Promise.allSettled(keys.map(key => this.#stopOwned(key, { graceMs: SHUTDOWN_GRACE_MS, killNow: killNow.signal })));
+    const overBudget = Promise.withResolvers<boolean>();
+    const timer = setTimeout(() => overBudget.resolve(true), budgetMs);
+    const late = await Promise.race([stopped.then(() => false), overBudget.promise]);
     clearTimeout(timer);
+    if (!late) return;
+    this.#deps.log(`[sim] shutdown: ${budgetMs} ms passed with emulators still stopping; killing what is left`);
+    killNow.abort();
+    const followUp = Promise.withResolvers<void>();
+    const followUpTimer = setTimeout(() => followUp.resolve(), SHUTDOWN_KILL_FOLLOW_UP_MS);
+    await Promise.race([stopped, followUp.promise]);
+    clearTimeout(followUpTimer);
   }
 }

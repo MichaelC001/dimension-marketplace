@@ -66,6 +66,7 @@ function rig(options: { settings?: Partial<SimulatorSettings>; stored?: readonly
     log: () => undefined,
     settings: () => ({ ...DEFAULT_SETTINGS, ...options.settings }),
     pid: PACK_PID,
+    ownerStartedAt: T0,
     isAlive: pid => alive.has(pid),
     schedule: (run, ms) => {
       const timer: FakeTimer = { run, ms, cancelled: false, cancel: () => void (timer.cancelled = true) };
@@ -178,7 +179,7 @@ describe("ownership of a boot", () => {
     const boot = r.backend.boots[0];
     if (boot === undefined) throw new Error("no boot");
     // Before the console is matched, before anything can fail, the record names exactly this process.
-    expect(r.store.records).toEqual([{ serial: null, avd: "Pixel_A", pid: boot.process.pid, startedAt: boot.process.startedAt, bootedAt: expect.any(Number) as number, ownerPid: PACK_PID }]);
+    expect(r.store.records).toEqual([{ serial: null, avd: "Pixel_A", pid: boot.process.pid, startedAt: boot.process.startedAt, bootedAt: expect.any(Number) as number, ownerPid: PACK_PID, ownerStartedAt: T0 }]);
 
     boot.ready.reject(new Error("the emulator for Pixel_A exited with code 1 before it finished booting."));
     expect(await failed).toMatchObject({ message: expect.stringContaining("exited with code 1") });
@@ -305,7 +306,7 @@ describe("the idle clock", () => {
 
 describe("a crashed pack's emulators", () => {
   function record(over: Partial<OwnedRecord> = {}): OwnedRecord {
-    return { serial: "emulator-5556", avd: "Pixel_A", pid: 4100, startedAt: T0, bootedAt: T0, ownerPid: DEAD_PID, ...over };
+    return { serial: "emulator-5556", avd: "Pixel_A", pid: 4100, startedAt: T0, bootedAt: T0, ownerPid: DEAD_PID, ownerStartedAt: T0, ...over };
   }
 
   const rows: {
@@ -379,7 +380,10 @@ describe("a crashed pack's emulators", () => {
     {
       name: "its pack is still running: the record is a living sibling's and is left exactly as it is",
       stored: record({ ownerPid: SIBLING_PID }),
-      host: backend => backend.processes.set(4100, { startedAt: T0, serial: "emulator-5556" }),
+      host: backend => {
+        backend.processes.set(4100, { startedAt: T0, serial: "emulator-5556" });
+        backend.processes.set(SIBLING_PID, { startedAt: T0, serial: null });
+      },
       adopted: null,
       stopped: null,
       kept: true,
@@ -406,6 +410,7 @@ describe("a crashed pack's emulators", () => {
     const sibling = record({ pid: 5000, ownerPid: SIBLING_PID, serial: "emulator-5560" });
     const dead = record({ pid: 4100, ownerPid: DEAD_PID });
     const r = rig({ stored: [sibling, dead], alive: [SIBLING_PID] });
+    r.backend.processes.set(SIBLING_PID, { startedAt: T0, serial: null });
     const boot = await bootUp(r, "Pixel_B", "emulator-5558");
     expect(r.store.records.map(item => item.pid).sort()).toEqual([sibling.pid, boot.process.pid].sort());
     await r.fleet.stop("emulator-5558");
@@ -424,7 +429,7 @@ describe("fileOwnershipStore", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  const valid: OwnedRecord = { serial: "emulator-5556", avd: "Pixel_A", pid: 4100, startedAt: T0, bootedAt: T0, ownerPid: PACK_PID };
+  const valid: OwnedRecord = { serial: "emulator-5556", avd: "Pixel_A", pid: 4100, startedAt: T0, bootedAt: T0, ownerPid: PACK_PID, ownerStartedAt: T0 };
 
   test("a file that is missing, corrupt or not a list reads as nothing owned: never a reason to refuse a boot", () => {
     expect(fileOwnershipStore(join(dir, "missing.json")).read()).toEqual([]);

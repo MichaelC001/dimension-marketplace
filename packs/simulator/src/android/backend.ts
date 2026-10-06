@@ -2,17 +2,17 @@
 // device, the emulator binary for booting one, scrcpy-server for live video.
 
 import { spawn } from "node:child_process";
-import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, statSync, writeSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
-import type { BootHandle, BootObserver, DeviceBackend, OwnedProcess, ResolvedBoot, RunningEmulator, StopOutcome, VideoStream, VideoStreamHandlers, VideoStreamOptions } from "../backend";
+import { join, posix, win32 } from "node:path";
+import type { BootHandle, BootObserver, DeviceBackend, ListOptions, OwnedProcess, ResolvedBoot, RunningEmulator, StopOptions, StopOutcome, VideoStream, VideoStreamHandlers, VideoStreamOptions } from "../backend";
 import { type DeviceInfo, type DeviceKind, type DeviceState, fail, type KeyName, type Screenshot, type UiSnapshot } from "../contracts";
 import { classifyDevice } from "../device-safety";
 import type { Size } from "../shared/pointer";
 import type { GpuMode } from "../settings";
 import { fixFor, type Toolchain } from "../toolchain";
 import { Adb } from "./adb";
-import { type AdbEntry, type BootSample, avdLockHolder, bootFailureMessage, bootStalled, buildEmulatorArgs, consolePortOf, fallbackNote, freshEmulators, isLockRaceExit, LAUNCH_MARKER, LOCK_EXIT_CODE, parseAvdName, pickSerial, relaunchBlockers, RESUMED_NOTE, SOFTWARE_GPU, STALL_POLICY, type StallPolicy, stillSuspendedReason, SUSPEND_POLICY, type SuspendPolicy } from "./emulator-boot";
+import { type AdbEntry, type BootSample, avdLockHolder, bootFailureMessage, bootStalled, buildEmulatorArgs, consolePortOf, emulatorLaunchVerdict, fallbackNote, freshEmulators, isLockRaceExit, LAUNCH_MARKER, LOCK_EXIT_CODE, parseAvdName, pickSerial, relaunchBlockers, RESUMED_NOTE, SOFTWARE_GPU, STALL_POLICY, type StallPolicy, stillSuspendedReason, SUSPEND_POLICY, type SuspendPolicy } from "./emulator-boot";
 import { emulatorProcess, isProcessAlive, nodeProcessTable, type ProcessRow, type ProcessTable, processTree, processVerdict, START_TOLERANCE_MS, stillInTree, suspendedVerdict, treePorts, treeUsage } from "./process-table";
 import { rawToPng } from "./png";
 import { openVideoSession } from "./scrcpy";
@@ -108,6 +108,22 @@ export function parseProbe(output: string): Probe {
   };
 }
 
+export interface ApkPathRefusal {
+  readonly code: "apk_path_not_absolute" | "apk_path_network";
+  readonly message: string;
+}
+
+export function apkPathRefusal(apkPath: string, platform: NodeJS.Platform): ApkPathRefusal | null {
+  const windows = platform === "win32";
+  if (windows && /^[\\/]{2}/.test(apkPath)) {
+    return { code: "apk_path_network", message: `${apkPath} is a network or device path (UNC, \\\\?\\ or //host), which the pack will not open. Pass the absolute path of an .apk on a local drive.` };
+  }
+  if (!(windows ? win32 : posix).isAbsolute(apkPath)) {
+    return { code: "apk_path_not_absolute", message: `${apkPath} is not an absolute path. Pass the absolute path of a built .apk on this machine.` };
+  }
+  return null;
+}
+
 const BOOT_COMPLETED_LOOP = 'while [ "$(getprop sys.boot_completed)" != 1 ]; do sleep 1; done';
 /** An emulator log past this is started afresh at the next launch. */
 const LOG_ROTATE_BYTES = 1024 * 1024;
@@ -137,6 +153,7 @@ interface BootContext {
 /** One spawned emulator process. */
 interface Launch {
   readonly process: OwnedProcess;
+  readonly avd: string;
   readonly gpu: GpuMode;
   readonly logPath: string;
   exited: boolean;
@@ -166,11 +183,12 @@ export class AndroidBackend implements DeviceBackend {
   readonly #displays = new Map<string, Size>();
   /** Emulators this backend spawned and still holds the handle of. */
   readonly #launches = new Map<number, Launch>();
+  readonly #exited = new Set<string>();
   readonly #table: ProcessTable;
 
   constructor(deps: AndroidBackendDeps) {
     this.#deps = deps;
-    this.#table = deps.processes ?? nodeProcessTable();
+    this.#table = deps.processes ?? nodeProcessTable(deps.log);
   }
 
   #adb(): Adb {
@@ -189,7 +207,7 @@ export class AndroidBackend implements DeviceBackend {
     return this.#deps.toolchain().scrcpyServer !== null;
   }
 
-  async list(): Promise<DeviceInfo[]> {
+  async list(options: ListOptions = {}): Promise<DeviceInfo[]> {
     const adb = this.#adb();
     const devices = await adb.devices();
     const live = new Set(devices.map(device => device.serial));
@@ -198,9 +216,8 @@ export class AndroidBackend implements DeviceBackend {
       devices.map(async (device): Promise<DeviceInfo> => {
         const base = { serial: device.serial, platform: "android" as const, owned: false, live: false, viewers: 0 };
         const emulator = consolePortOf(device.serial) !== null;
-        if (device.state !== "device") {
-          const state: DeviceState = device.state === "unauthorized" ? "unauthorized" : "offline";
-          // An emulator adb cannot talk to yet still answers on its console: it knows which AVD it is.
+        if (device.state !== "device" || (!emulator && options.probePhysical !== true)) {
+          const state: DeviceState = device.state === "device" ? "online" : device.state === "unauthorized" ? "unauthorized" : "offline";
           const name = (emulator ? await this.#consoleAvd(adb, device.serial) : null) ?? device.model ?? device.serial;
           return { ...base, kind: classifyDevice({ serial: device.serial }), state, name, androidVersion: null, display: null, density: null };
         }
@@ -222,14 +239,13 @@ export class AndroidBackend implements DeviceBackend {
     );
   }
 
-  async kindOf(serial: string): Promise<DeviceKind> {
+  async kindOf(serial: string, probeShell = false): Promise<DeviceKind> {
     // An emulator names itself `emulator-<console port>`: the common case needs no round trip.
     if (classifyDevice({ serial }) === "emulator") return "emulator";
     const adb = this.#adb();
     const listed = (await adb.devices()).find(device => device.serial === serial);
     if (listed === undefined) fail("not_connected", `${serial} is not connected. Run device_list to see what is, or device_boot to start an emulator.`);
-    if (listed.state !== "device") return classifyDevice({ serial });
-    // Asked of the device itself every time, never cached: a serial (a Wi-Fi address, say) can be reused by a different device. A probe that fails leaves "physical".
+    if (listed.state !== "device" || !probeShell) return classifyDevice({ serial });
     const probe = await adb.shell(serial, PROBE_COMMAND, { timeoutMs: 10_000 }).then(parseProbe, () => null);
     return classifyDevice({ serial, ...probe });
   }
@@ -313,12 +329,13 @@ export class AndroidBackend implements DeviceBackend {
     child.once("error", spawnError.resolve);
     if (child.pid === undefined) throw failure(`could not start the emulator: ${(await spawnError.promise).message}`);
 
-    const launch: Launch = { process: { pid: child.pid, startedAt }, gpu, logPath, exited: false, exitedAt: null, code: null, exit: exit.promise };
+    const launch: Launch = { process: { pid: child.pid, startedAt }, avd, gpu, logPath, exited: false, exitedAt: null, code: null, exit: exit.promise };
     const done = (code: number | null): void => {
       launch.exited = true;
       launch.exitedAt = this.#now();
       launch.code = code;
       this.#launches.delete(launch.process.pid);
+      this.#exited.add(`${launch.process.pid}@${launch.process.startedAt}`);
       exit.resolve(code);
     };
     child.once("exit", done);
@@ -440,7 +457,7 @@ export class AndroidBackend implements DeviceBackend {
     const fresh = await this.#table.processes().catch(() => null);
     if (fresh === null || launch.exited || processVerdict(fresh, launch.process) !== "ours" || !stillInTree(fresh, launch.process.pid, target)) return frozen;
     ctx.resumes++;
-    const resumed = await this.#table.resume(target.pid).catch(() => false);
+    const resumed = await this.#table.resume(target.pid, target.startedAtMs).catch(() => false);
     this.#deps.log(`[sim] ${ctx.avd}: ${resumed ? "resumed" : "could not resume"} the emulator process (pid ${target.pid}); resume ${ctx.resumes} of ${ctx.timing.suspend.maxResumes}`);
     if (resumed && !ctx.resumeNoted) {
       ctx.resumeNoted = true;
@@ -489,8 +506,17 @@ export class AndroidBackend implements DeviceBackend {
       await this.#end(launch);
       throw failure(error instanceof Error ? error.message : String(error));
     }
-    const info = (await this.list()).find(device => device.serial === serial);
-    if (info === undefined) throw failure(`${serial} booted but is not listed by adb.`);
+    let info: DeviceInfo | undefined;
+    let reason = `${serial} booted but is not listed by adb.`;
+    try {
+      info = (await this.list()).find(device => device.serial === serial);
+    } catch (error) {
+      reason = `${serial} booted but adb could not list it: ${error instanceof Error ? error.message : String(error)}`;
+    }
+    if (info === undefined) {
+      await this.#end(launch);
+      throw failure(reason);
+    }
     return info;
   }
 
@@ -514,15 +540,15 @@ export class AndroidBackend implements DeviceBackend {
 
   /** Stop what a boot spawned, and wait (briefly) until it is gone. */
   async #end(launch: Launch): Promise<void> {
-    await this.#kill(launch.process);
+    await this.#kill(launch.process, launch.avd);
     await Promise.race([launch.exit, delay(5_000)]);
   }
 
   /** Kill the tree under `target` if, and only if, it is still the process the pack spawned. */
-  async #kill(target: OwnedProcess): Promise<"ours" | "gone" | "reused" | "unknown"> {
-    const verdict = await this.processState(target);
+  async #kill(target: OwnedProcess, avd: string): Promise<"ours" | "gone" | "reused" | "unknown"> {
+    const verdict = await this.processState(target, avd);
     if (verdict !== "ours") {
-      if (verdict !== "gone") this.#deps.log(`[sim] not killing pid ${target.pid}: ${verdict === "reused" ? "it started at another time, so the pid now belongs to something else" : "the process table could not be read, so it cannot be verified"}`);
+      if (verdict !== "gone") this.#deps.log(`[sim] not killing pid ${target.pid}: ${verdict === "reused" ? "it is not the emulator process the pack launched (another start time, or another program), so the pid now belongs to something else" : "the process table or its command line could not be read, so it cannot be verified"}`);
       return verdict;
     }
     // Windows' taskkill /T finds the children itself; elsewhere the listed ones are signalled too.
@@ -531,11 +557,16 @@ export class AndroidBackend implements DeviceBackend {
     return verdict;
   }
 
-  async processState(target: OwnedProcess): Promise<"ours" | "gone" | "reused" | "unknown"> {
-    // A child this process spawned and still holds: the live handle proves the pid is ours, no table needed.
+  async processState(target: OwnedProcess, avd?: string): Promise<"ours" | "gone" | "reused" | "unknown"> {
     const launch = this.#launches.get(target.pid);
     if (launch !== undefined && !launch.exited && Math.abs(launch.process.startedAt - target.startedAt) <= START_TOLERANCE_MS) return "ours";
-    return processVerdict(await this.#table.processes().catch(() => null), target);
+    if (this.#exited.has(`${target.pid}@${target.startedAt}`)) return "gone";
+    const rows = await this.#table.processes().catch(() => null);
+    const verdict = processVerdict(rows, target);
+    if (verdict !== "ours" || avd === undefined) return verdict;
+    const row = rows?.find(candidate => candidate.pid === target.pid);
+    const launchVerdict = row === undefined ? "unknown" : emulatorLaunchVerdict(row, avd);
+    return launchVerdict === "launch" ? "ours" : launchVerdict === "other" ? "reused" : "unknown";
   }
 
   async serialOf(target: OwnedProcess): Promise<string | null> {
@@ -549,25 +580,28 @@ export class AndroidBackend implements DeviceBackend {
     return pickSerial({ before: [], after: devices.map(({ serial, state }): AdbEntry => ({ serial, state })), treePorts: ports })?.serial ?? null;
   }
 
-  async stop(target: OwnedProcess, serial: string | null): Promise<StopOutcome> {
-    const verdict = await this.processState(target);
+  async stop(target: OwnedProcess, serial: string | null, options: StopOptions): Promise<StopOutcome> {
+    const verdict = await this.processState(target, options.avd);
     if (verdict === "unknown") {
-      fail("cannot_verify", `the pack could not read the host's process table, so it cannot prove that pid ${target.pid} is the emulator it started, and it stops nothing it cannot prove. Close the emulator yourself.`);
+      fail("cannot_verify", `the pack could not read the host's process table or the command line of pid ${target.pid}, so it cannot prove that this is the emulator it started, and it stops nothing it cannot prove. Close the emulator yourself.`);
     }
     if (serial !== null) {
       this.#static.delete(serial);
       this.#displays.delete(serial);
     }
-    // Gone: nothing runs. Reused: the pid is somebody else's process now, and is never touched.
     if (verdict !== "ours") return "already-exited";
-    // Ask it to close itself, but only through a console that is demonstrably this process's own.
-    if (serial !== null && (await this.serialOf(target)) === serial) {
-      await this.#adb().run(serial, ["emu", "kill"], { timeoutMs: 15_000 }).catch(() => undefined);
-      await this.#exitWithin(target, this.#timing().stopGraceMs);
+    const graceMs = options.graceMs ?? this.#timing().stopGraceMs;
+    const { killNow } = options;
+    if (serial !== null && killNow?.aborted !== true) {
+      const consoleSerial = await this.serialOf(target);
+      if (consoleSerial === serial && killNow?.aborted !== true) {
+        await this.#adb().run(serial, ["emu", "kill"], { timeoutMs: options.graceMs === undefined ? 15_000 : Math.min(15_000, options.graceMs), ...(killNow ? { signal: killNow } : {}) }).catch(() => undefined);
+        await this.#exitWithin(target, graceMs, killNow);
+      }
     }
     if (this.#alive(target.pid)) {
-      await this.#kill(target);
-      await this.#exitWithin(target, 5_000);
+      await this.#kill(target, options.avd);
+      await this.#exitWithin(target, Math.min(5_000, graceMs));
     }
     return "stopped";
   }
@@ -577,9 +611,9 @@ export class AndroidBackend implements DeviceBackend {
     return launch === undefined ? isProcessAlive(pid) : !launch.exited;
   }
 
-  async #exitWithin(target: OwnedProcess, ms: number): Promise<void> {
+  async #exitWithin(target: OwnedProcess, ms: number, killNow?: AbortSignal): Promise<void> {
     const deadline = this.#now() + ms;
-    while (this.#alive(target.pid) && this.#now() < deadline) await delay(250);
+    while (this.#alive(target.pid) && this.#now() < deadline && killNow?.aborted !== true) await delay(250);
   }
 
   async runningEmulators(): Promise<RunningEmulator[]> {
@@ -659,16 +693,26 @@ export class AndroidBackend implements DeviceBackend {
   }
 
   async install(serial: string, apkPath: string): Promise<string> {
-    if (!existsSync(apkPath) || !statSync(apkPath).isFile()) fail("apk_not_found", `no file at ${apkPath}. Pass the absolute path of a built .apk.`);
-    if (!apkPath.toLowerCase().endsWith(".apk")) fail("apk_not_apk", `${apkPath} is not an .apk. For an .aab or split APKs, use bundletool to build a universal .apk first.`);
-    const out = await this.#adb().text(serial, ["install", "-r", "-g", "-t", apkPath], { timeoutMs: 180_000 });
+    const refusal = apkPathRefusal(apkPath, process.platform);
+    if (refusal !== null) fail(refusal.code, refusal.message);
+    let resolved: string;
+    try {
+      resolved = realpathSync(apkPath);
+    } catch {
+      fail("apk_not_found", `no file at ${apkPath}. Pass the absolute path of a built .apk.`);
+    }
+    const resolvedRefusal = apkPathRefusal(resolved, process.platform);
+    if (resolvedRefusal !== null) fail(resolvedRefusal.code, resolvedRefusal.message);
+    if (!statSync(resolved).isFile()) fail("apk_not_found", `no file at ${apkPath}. Pass the absolute path of a built .apk.`);
+    if (!resolved.toLowerCase().endsWith(".apk")) fail("apk_not_apk", `${apkPath} is not an .apk. For an .aab or split APKs, use bundletool to build a universal .apk first.`);
+    const out = await this.#adb().text(serial, ["install", "-r", "-g", "-t", resolved], { timeoutMs: 180_000 });
     return out.trim().split(/\r?\n/).filter(line => line !== "").pop() ?? "Success";
   }
 
   async launch(serial: string, target: string): Promise<void> {
     if (!/^[A-Za-z0-9_.]+(\/[A-Za-z0-9_.$]+)?$/.test(target)) fail("bad_package", `"${target}" is not a package name (com.example.app) or a component (com.example.app/.MainActivity).`);
     const out = target.includes("/")
-      ? await this.#adb().shell(serial, `am start -n ${target}`)
+      ? await this.#adb().shell(serial, `am start -n '${target}'`)
       : await this.#adb().shell(serial, `monkey -p ${target} -c android.intent.category.LAUNCHER 1`);
     if (/No activities found|Error:|does not exist/.test(out)) fail("launch_failed", `could not launch ${target}: it is not installed on ${serial}, or has no launcher activity. device_install the .apk first.`);
   }
