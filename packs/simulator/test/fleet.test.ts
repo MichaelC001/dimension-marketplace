@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { OwnedProcess, StopOptions, StopOutcome } from "../src/backend";
 import { DEFAULT_SETTINGS, type SimulatorSettings } from "../src/settings";
 import { Fleet, fileOwnershipStore, type OwnedRecord, type OwnershipStore, type Timer } from "../src/fleet";
 import { until } from "./fake-android-tools";
@@ -54,8 +55,8 @@ interface Rig {
   active(): FakeTimer[];
 }
 
-function rig(options: { settings?: Partial<SimulatorSettings>; stored?: readonly OwnedRecord[]; alive?: readonly number[] } = {}): Rig {
-  const backend = new FakeBackend();
+function rig(options: { settings?: Partial<SimulatorSettings>; stored?: readonly OwnedRecord[]; alive?: readonly number[]; backend?: FakeBackend } = {}): Rig {
+  const backend = options.backend ?? new FakeBackend();
   backend.avdNames = ["Pixel_A", "Pixel_B", "Pixel_C"];
   const store = new MemoryStore(options.stored);
   const timers: FakeTimer[] = [];
@@ -75,6 +76,29 @@ function rig(options: { settings?: Partial<SimulatorSettings>; stored?: readonly
     },
   });
   return { backend, store, fleet, timers, active: () => timers.filter(timer => !timer.cancelled) };
+}
+
+class HeldStopBackend extends FakeBackend {
+  readonly entered = Promise.withResolvers<void>();
+  readonly release = Promise.withResolvers<void>();
+  readonly ignoreAbort: boolean;
+  abortedWhenResumed: boolean | null = null;
+
+  constructor(options: { ignoreAbort?: boolean } = {}) {
+    super();
+    this.ignoreAbort = options.ignoreAbort === true;
+  }
+
+  override async stop(process: OwnedProcess, serial: string | null, options?: StopOptions): Promise<StopOutcome> {
+    this.entered.resolve();
+    const killNow = options?.killNow;
+    const told = new Promise<void>(resolve => {
+      if (!this.ignoreAbort) killNow?.addEventListener("abort", () => resolve(), { once: true });
+    });
+    await Promise.race([this.release.promise, told]);
+    this.abortedWhenResumed = killNow?.aborted ?? null;
+    return super.stop(process, serial, options);
+  }
 }
 
 /** Boot `avd` to the end: spawned, console matched to `serial`, up. */
@@ -219,6 +243,63 @@ describe("ownership of a boot", () => {
   });
 });
 
+describe("two device_boot calls for one AVD at once", () => {
+  test("spawn one emulator: the second joins the first's boot, and both are given the device", async () => {
+    const r = rig();
+    const first = r.fleet.boot({ avd: "Pixel_A" }, 2_000);
+    const second = r.fleet.boot({ avd: "Pixel_A" }, 2_000);
+    await until(() => r.backend.boots.length > 0, "the boot to spawn");
+    const boot = r.backend.boots[0];
+    if (boot === undefined) throw new Error("no boot");
+    const device = emulatorDevice("emulator-5556", "Pixel_A");
+    r.backend.devices.push(device);
+    boot.observer.serial("emulator-5556");
+    boot.ready.resolve(device);
+
+    const [a, b] = await Promise.all([first, second]);
+    expect(r.backend.boots).toHaveLength(1);
+    expect([a.reused, b.reused]).toEqual([false, true]);
+    expect([a.device?.serial, b.device?.serial]).toEqual(["emulator-5556", "emulator-5556"]);
+    expect(r.fleet.owned()).toHaveLength(1);
+  });
+
+  test("a caller that finds the device already starting is not held behind the first caller's wait for it", async () => {
+    const r = rig();
+    r.backend.devices = [emulatorDevice("emulator-5554", "Pixel_A", { state: "booting" })];
+    const hold = Promise.withResolvers<void>();
+    r.backend.waitBootedHold = hold.promise;
+    const first = r.fleet.boot({ avd: "Pixel_A" }, 10_000);
+    const second = r.fleet.boot({ avd: "Pixel_A" }, 10_000);
+    await until(() => r.backend.waitBootedCalls.length === 2, "both callers to wait for the device themselves");
+    r.backend.devices = [emulatorDevice("emulator-5554", "Pixel_A")];
+    hold.resolve();
+
+    const outcomes = await Promise.all([first, second]);
+    expect(outcomes.map(outcome => [outcome.reused, outcome.pending])).toEqual([
+      [true, false],
+      [true, false],
+    ]);
+    expect(r.backend.boots).toHaveLength(0);
+  });
+
+  test("a boot that fails is the error of every caller waiting on it, and the next call starts afresh instead of being told of it again", async () => {
+    const r = rig();
+    const first = r.fleet.boot({ avd: "Pixel_A" }, 2_000);
+    const second = r.fleet.boot({ avd: "Pixel_A" }, 2_000);
+    const settled = Promise.allSettled([first, second]);
+    await until(() => r.backend.boots.length > 0, "the boot to spawn");
+    r.backend.boots[0]?.ready.reject(new Error("the emulator never answered"));
+
+    const results = await settled;
+    expect(results.map(result => result.status)).toEqual(["rejected", "rejected"]);
+    for (const result of results) expect(result.status === "rejected" ? String(result.reason) : "").toContain("never answered");
+    expect(r.backend.boots).toHaveLength(1);
+
+    await r.fleet.boot({ avd: "Pixel_A" }, 0);
+    expect(r.backend.boots).toHaveLength(2);
+  });
+});
+
 describe("stopping", () => {
   test("acts on the process the pack spawned (pid and start time), and hands the serial over only as a label", async () => {
     const r = rig();
@@ -260,6 +341,53 @@ describe("stopping", () => {
     expect(r.backend.processes.size).toBe(0);
     expect(r.fleet.owned()).toEqual([]);
   });
+
+  test("names the AVD the process must be the emulator launch of: another program under that pid is left running", async () => {
+    const r = rig();
+    const boot = await bootUp(r, "Pixel_A", "emulator-5556");
+    const entry = r.backend.processes.get(boot.process.pid);
+    if (entry === undefined) throw new Error("no process");
+    entry.avd = "Pixel_Other";
+    expect(await r.fleet.stop("emulator-5556")).toBe("already-exited");
+    expect(r.backend.stopOptions[0]?.avd).toBe("Pixel_A");
+    expect(r.backend.processes.has(boot.process.pid)).toBe(true);
+  });
+
+  test("shutdown: a stop that outlasts the budget is told to kill now, and what it was stopping is gone when shutdown returns", async () => {
+    const backend = new HeldStopBackend();
+    const r = rig({ backend });
+    await bootUp(r, "Pixel_A", "emulator-5556");
+    await r.fleet.shutdown(50);
+    expect(backend.abortedWhenResumed).toBe(true);
+    expect(backend.processes.size).toBe(0);
+    expect(r.fleet.owned()).toEqual([]);
+  });
+
+  test("shutdown: a stop that finishes inside the budget is given a grace to finish in and is not told to kill now", async () => {
+    const backend = new HeldStopBackend();
+    const r = rig({ backend });
+    await bootUp(r, "Pixel_A", "emulator-5556");
+    const done = r.fleet.shutdown(5_000);
+    await backend.entered.promise;
+    backend.release.resolve();
+    await done;
+    expect(backend.abortedWhenResumed).toBe(false);
+    expect(backend.stopOptions[0]?.graceMs).toBeGreaterThan(0);
+    expect(backend.processes.size).toBe(0);
+  });
+
+  test("shutdown: a backend whose stop never returns holds it for the budget and a short follow-up, no longer", async () => {
+    const backend = new HeldStopBackend({ ignoreAbort: true });
+    const r = rig({ backend });
+    await bootUp(r, "Pixel_A", "emulator-5556");
+    let returned = false;
+    const shutdown = r.fleet.shutdown(50).then(() => {
+      returned = true;
+    });
+    await until(() => returned, "shutdown to return", 8_000);
+    await shutdown;
+    backend.release.resolve();
+  }, 15_000);
 });
 
 describe("the idle clock", () => {
@@ -301,6 +429,24 @@ describe("the idle clock", () => {
     r.fleet.touch("emulator-5554");
     r.fleet.setViewers("emulator-5554", 0);
     expect(r.timers).toHaveLength(0);
+  });
+
+  test("does not run while the emulator is still booting, whatever touches it; one clock starts when the boot succeeds", async () => {
+    const r = rig();
+    await r.fleet.boot({ avd: "Pixel_A" }, 0);
+    const boot = r.backend.boots[0];
+    if (boot === undefined) throw new Error("no boot");
+    boot.observer.serial("emulator-5556");
+    r.fleet.touch("emulator-5556");
+    r.fleet.setViewers("emulator-5556", 1);
+    r.fleet.setViewers("emulator-5556", 0);
+    expect(r.timers).toHaveLength(0);
+
+    const device = emulatorDevice("emulator-5556", "Pixel_A");
+    r.backend.devices.push(device);
+    boot.ready.resolve(device);
+    await until(() => r.active().length === 1, "the idle clock to start");
+    expect(r.timers).toHaveLength(1);
   });
 });
 
@@ -388,6 +534,42 @@ describe("a crashed pack's emulators", () => {
       stopped: null,
       kept: true,
     },
+    {
+      name: "its pack's pid is running but started at another time (the pid was reused): that is no living sibling, so the emulator is adopted under this pack's own start time",
+      stored: record({ ownerPid: SIBLING_PID, ownerStartedAt: T0 - 3 * 3_600_000 }),
+      host: backend => {
+        backend.processes.set(4100, { startedAt: T0, serial: "emulator-5556" });
+        backend.processes.set(SIBLING_PID, { startedAt: T0, serial: null });
+      },
+      adopted: "emulator-5556",
+      stopped: null,
+    },
+    {
+      name: "its pack's pid is running and the table cannot be read, so it cannot be shown reused: the record is left as a living sibling's",
+      stored: record({ ownerPid: SIBLING_PID }),
+      host: backend => {
+        backend.processes.set(4100, { startedAt: T0, serial: "emulator-5556" });
+        backend.processes.set(SIBLING_PID, { startedAt: T0, serial: null });
+        backend.tableReadable = false;
+      },
+      adopted: null,
+      stopped: null,
+      kept: true,
+    },
+    {
+      name: "the process started when the record says but its command line is another AVD's launch: dropped, and never stopped",
+      stored: record(),
+      host: backend => backend.processes.set(4100, { startedAt: T0, serial: "emulator-5556", avd: "Pixel_Other" }),
+      adopted: null,
+      stopped: null,
+    },
+    {
+      name: "an unfinished boot whose command line is another AVD's launch: dropped, and never stopped",
+      stored: record({ serial: null }),
+      host: backend => backend.processes.set(4100, { startedAt: T0, serial: null, avd: "Pixel_Other" }),
+      adopted: null,
+      stopped: null,
+    },
   ];
 
   for (const row of rows) {
@@ -402,7 +584,7 @@ describe("a crashed pack's emulators", () => {
       }
       expect(r.backend.stops).toEqual(row.stopped === null ? [] : [{ process: { pid: 4100, startedAt: T0 }, serial: row.stopped.serial }]);
       // What is left in the file: the adopted record (now this pack's), a living sibling's untouched, and nothing else.
-      expect(r.store.records).toEqual(row.kept === true ? [row.stored] : row.adopted === null ? [] : [{ ...row.stored, ownerPid: PACK_PID }]);
+      expect(r.store.records).toEqual(row.kept === true ? [row.stored] : row.adopted === null ? [] : [{ ...row.stored, ownerPid: PACK_PID, ownerStartedAt: T0 }]);
     });
   }
 
@@ -415,6 +597,37 @@ describe("a crashed pack's emulators", () => {
     expect(r.store.records.map(item => item.pid).sort()).toEqual([sibling.pid, boot.process.pid].sort());
     await r.fleet.stop("emulator-5558");
     expect(r.store.records).toEqual([sibling]);
+  });
+
+  test("an unfinished boot left by a dead pack is stopped naming its AVD", async () => {
+    const r = rig({ stored: [record({ serial: null })] });
+    r.backend.processes.set(4100, { startedAt: T0, serial: null });
+    await r.fleet.reconcile();
+    expect(r.backend.stopOptions.map(options => options?.avd)).toEqual(["Pixel_A"]);
+  });
+
+  test("a record a later sibling wrote, whose owner pid is some other process by now, is proved reused once and not carried forward", async () => {
+    const r = rig({ alive: [SIBLING_PID] });
+    await bootUp(r, "Pixel_A", "emulator-5556");
+    const stale = record({ pid: 4900, ownerPid: SIBLING_PID, ownerStartedAt: T0 - 3 * 3_600_000, serial: "emulator-5560" });
+    r.backend.processes.set(SIBLING_PID, { startedAt: T0, serial: null });
+    r.store.records = [...r.store.records, stale];
+    const ownerProofs: number[] = [];
+    const proofHeld = Promise.withResolvers<void>();
+    const processState = r.backend.processState.bind(r.backend);
+    r.backend.processState = async (process, avd) => {
+      if (process.pid === SIBLING_PID) ownerProofs.push(ownerProofs.length + 1);
+      if (ownerProofs.length > 20) await new Promise<never>(() => undefined);
+      if (process.pid === SIBLING_PID) await proofHeld.promise;
+      return processState(process, avd);
+    };
+
+    await r.fleet.boot({ avd: "Pixel_B" }, 0);
+    r.backend.boots[1]?.observer.serial("emulator-5558");
+    proofHeld.resolve();
+    await until(() => !r.store.records.some(item => item.pid === stale.pid) || ownerProofs.length > 20, "the stale record to be dropped");
+    expect(r.store.records.map(item => item.avd).sort()).toEqual(["Pixel_A", "Pixel_B"]);
+    expect(ownerProofs).toHaveLength(1);
   });
 });
 
@@ -454,4 +667,26 @@ describe("fileOwnershipStore", () => {
     store.write([]);
     expect(store.read()).toEqual([]);
   });
+
+  const unusable: { name: string; over: Record<string, unknown> }[] = [
+    { name: "the emulator's pid is 0", over: { pid: 0 } },
+    { name: "the emulator's pid is 1", over: { pid: 1 } },
+    { name: "the emulator's pid is negative", over: { pid: -1 } },
+    { name: "the emulator's pid is fractional", over: { pid: 1.5 } },
+    { name: "the emulator's pid is past what a number holds exactly", over: { pid: 2 ** 60 } },
+    { name: "the emulator's pid is the pack's own", over: { pid: process.pid } },
+    { name: "the emulator's pid is the pack's parent's", over: { pid: process.ppid } },
+    { name: "the owning pack's pid is 0", over: { ownerPid: 0 } },
+    { name: "the owning pack's pid is negative", over: { ownerPid: -1 } },
+    { name: "the owning pack's pid is fractional", over: { ownerPid: 1.5 } },
+    { name: "the emulator's start time is not a number", over: { startedAt: null } },
+    { name: "the owning pack's start time is absent (a record from before it was kept)", over: { ownerStartedAt: undefined } },
+  ];
+  for (const row of unusable) {
+    test(`a record where ${row.name} is not read, so a file can never aim a kill`, () => {
+      const intact: OwnedRecord = { ...valid, pid: 4300 };
+      writeFileSync(join(dir, "owned.json"), JSON.stringify([{ ...valid, ...row.over }, intact]));
+      expect(fileOwnershipStore(join(dir, "owned.json")).read()).toEqual([intact]);
+    });
+  }
 });

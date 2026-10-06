@@ -25,6 +25,7 @@ interface FakeDevice {
 interface World {
   avds: string[];
   devices: FakeDevice[];
+  devicesAfterWait?: "fail" | "empty";
   emulator?: EmulatorBehaviour & {
     /** By launch (0 = the first emulator process started since the world was set): that launch's own behaviour instead of the one above. A launch past the list's end falls back to it. */
     launches?: EmulatorBehaviour[];
@@ -72,6 +73,14 @@ function launchCount(): number {
   }
 }
 
+function waitedForDevice(): boolean {
+  try {
+    return readFileSync(callsPath, "utf8").includes('"args":["wait-for-device"');
+  } catch {
+    return false;
+  }
+}
+
 /** Written and flushed before the process exits: an exit that races a pipe write loses output. */
 async function write(stream: NodeJS.WriteStream, text: string): Promise<void> {
   const { promise, resolve } = Promise.withResolvers<void>();
@@ -91,7 +100,12 @@ async function adb(): Promise<number> {
   const launches = launchCount();
   const visible = world.devices.filter(device => (device.afterLaunches ?? 0) <= launches);
   if (rest[0] === "devices") {
-    const lines = visible.map(device => `${device.serial}\t${device.state}${device.model === undefined ? "" : ` product:p model:${device.model} device:d transport_id:1`}`);
+    const waited = world.devicesAfterWait !== undefined && waitedForDevice();
+    if (waited && world.devicesAfterWait === "fail") {
+      await write(process.stderr, "error: protocol fault (couldn't read status): connection reset\n");
+      return 1;
+    }
+    const lines = waited ? [] : visible.map(device => `${device.serial}\t${device.state}${device.model === undefined ? "" : ` product:p model:${device.model} device:d transport_id:1`}`);
     await write(process.stdout, `List of devices attached\n${lines.join("\n")}${lines.length === 0 ? "" : "\n"}\n`);
     return 0;
   }
@@ -109,6 +123,10 @@ async function adb(): Promise<number> {
     return 0;
   }
   if (rest[0] === "wait-for-device") return 0;
+  if (rest[0] === "install") {
+    await write(process.stdout, "Performing Streamed Install\nSuccess\n");
+    return 0;
+  }
   if (rest[0] === "shell") {
     if (device.probe === undefined) {
       await write(process.stderr, "error: closed\n");

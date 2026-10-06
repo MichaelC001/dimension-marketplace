@@ -2,7 +2,7 @@
 // behind it. It records every call that ACTS on a device, so a test can say
 // "nothing touched the phone" rather than "a mock was called with these args".
 
-import type { BootHandle, BootObserver, DeviceBackend, OwnedProcess, ResolvedBoot, RunningEmulator, StopOutcome, VideoStream } from "../src/backend";
+import type { BootHandle, BootObserver, DeviceBackend, ListOptions, OwnedProcess, ResolvedBoot, RunningEmulator, StopOptions, StopOutcome, VideoStream } from "../src/backend";
 import { type DeviceInfo, fail, type KeyName, type Screenshot, type UiNode, type UiSnapshot } from "../src/contracts";
 import type { Size } from "../src/shared/pointer";
 
@@ -46,21 +46,29 @@ export class FakeBackend implements DeviceBackend {
   /** The host's process table, as the backend sees it. */
   tableReadable = true;
   /** pid -> start time and the console serial the process answers to. */
-  readonly processes = new Map<number, { startedAt: number; serial: string | null }>();
+  readonly processes = new Map<number, { startedAt: number; serial: string | null; avd?: string }>();
   /** Every call that reads or drives a device, as "verb serial ...". */
   readonly acts: string[] = [];
   readonly boots: FakeBoot[] = [];
   readonly stops: { process: OwnedProcess; serial: string | null }[] = [];
+  readonly stopOptions: (StopOptions | undefined)[] = [];
+  readonly listOptions: ListOptions[] = [];
+  readonly probed: string[] = [];
+  readonly waitBootedCalls: string[] = [];
+  waitBootedHold: Promise<void> | null = null;
   #nextPid = 4000;
   #uiReads = 0;
 
-  async list(): Promise<DeviceInfo[]> {
+  async list(options: ListOptions = {}): Promise<DeviceInfo[]> {
+    this.listOptions.push(options);
+    if (options.probePhysical === true) for (const device of this.devices) if (device.kind === "physical") this.probed.push(`list ${device.serial}`);
     return [...this.devices];
   }
 
-  async kindOf(serial: string): Promise<DeviceInfo["kind"]> {
+  async kindOf(serial: string, probeShell = false): Promise<DeviceInfo["kind"]> {
     const device = this.devices.find(candidate => candidate.serial === serial);
     if (device === undefined) fail("not_connected", `${serial} is not connected. Run device_list to see what is, or device_boot to start an emulator.`);
+    if (probeShell && device.kind === "physical") this.probed.push(`kindOf ${serial}`);
     return device.kind;
   }
 
@@ -79,11 +87,13 @@ export class FakeBackend implements DeviceBackend {
     return { avd: request.avd, ready: ready.promise };
   }
 
-  async processState(process: OwnedProcess): Promise<"ours" | "gone" | "reused" | "unknown"> {
+  async processState(process: OwnedProcess, avd?: string): Promise<"ours" | "gone" | "reused" | "unknown"> {
     if (!this.tableReadable) return "unknown";
     const entry = this.processes.get(process.pid);
     if (entry === undefined) return "gone";
-    return Math.abs(entry.startedAt - process.startedAt) <= 5_000 ? "ours" : "reused";
+    if (Math.abs(entry.startedAt - process.startedAt) > 5_000) return "reused";
+    if (avd !== undefined && entry.avd !== undefined && entry.avd !== avd) return "reused";
+    return "ours";
   }
 
   async serialOf(process: OwnedProcess): Promise<string | null> {
@@ -91,9 +101,10 @@ export class FakeBackend implements DeviceBackend {
   }
 
   /** Like the real one: only a process that is verified ours is ended (which ends its boot too); anything else is left alone. */
-  async stop(process: OwnedProcess, serial: string | null): Promise<StopOutcome> {
+  async stop(process: OwnedProcess, serial: string | null, options?: StopOptions): Promise<StopOutcome> {
     this.stops.push({ process, serial });
-    const state = await this.processState(process);
+    this.stopOptions.push(options);
+    const state = await this.processState(process, options?.avd);
     if (state === "unknown") fail("cannot_verify", "the process table cannot be read");
     if (state !== "ours") return "already-exited";
     this.processes.delete(process.pid);
@@ -106,6 +117,8 @@ export class FakeBackend implements DeviceBackend {
   }
 
   async waitBooted(serial: string): Promise<DeviceInfo | null> {
+    this.waitBootedCalls.push(serial);
+    await this.waitBootedHold;
     return this.devices.find(device => device.serial === serial && device.state === "online") ?? null;
   }
 

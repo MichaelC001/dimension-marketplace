@@ -6,9 +6,12 @@
  *  are the questions that decide "is that pid ours", "how busy is our tree" and
  *  "which console port is ours", plus the parsers that feed them.
  */
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import * as childProcess from "node:child_process";
 import {
+  isSignalablePid,
   type Listener,
+  nodeProcessTable,
   parseCpuTime,
   parseLsof,
   parseNetstat,
@@ -16,6 +19,7 @@ import {
   parseSs,
   parseWindowsProcesses,
   type ProcessRow,
+  type ProcessTable,
   processTree,
   processVerdict,
   START_TOLERANCE_MS,
@@ -186,5 +190,181 @@ describe("host process listings", () => {
       { pid: 77, port: 5037 },
       { pid: 78, port: 5037 },
     ]);
+  });
+});
+
+describe("isSignalablePid: a pid the pack may ever signal", () => {
+  const rows: { name: string; pid: number; signalable: boolean }[] = [
+    { name: "a pid above 1", pid: 4242, signalable: true },
+    { name: "the lowest pid above init", pid: 2, signalable: true },
+    { name: "a Windows pid past the signed 32-bit range", pid: 3_000_000_000, signalable: true },
+    { name: "zero", pid: 0, signalable: false },
+    { name: "init", pid: 1, signalable: false },
+    { name: "-1, which signals every process the user may", pid: -1, signalable: false },
+    { name: "a negative pid, which names a process group", pid: -4242, signalable: false },
+    { name: "a fractional pid", pid: 1.5, signalable: false },
+    { name: "NaN", pid: Number.NaN, signalable: false },
+    { name: "infinity", pid: Number.POSITIVE_INFINITY, signalable: false },
+    { name: "an integer past 2**53, which is not exactly a number", pid: 2 ** 60, signalable: false },
+    { name: "the pack's own pid", pid: process.pid, signalable: false },
+    { name: "the pack's parent pid", pid: process.ppid, signalable: false },
+  ];
+  for (const row of rows) {
+    test(`${row.name}: ${row.signalable ? "signalable" : "never"}`, () => {
+      expect(isSignalablePid(row.pid)).toBe(row.signalable);
+    });
+  }
+});
+
+describe("the command line a listing keeps", () => {
+  test("Windows (CIM): the whole command line, a pipe inside it included; a process with none has no command", () => {
+    const text = [
+      '4242|1000|2026-10-01T13:18:41.0000000Z|0|0|2048|"C:\\Program Files\\Sdk\\emulator\\emulator.exe" -avd Pixel_8 -append a|b',
+      "77|4242|2026-10-01T13:18:42.0000000Z|0|0|2048|",
+    ].join("\r\n");
+    const [first, second] = parseWindowsProcesses(text);
+    expect(first?.command).toBe('"C:\\Program Files\\Sdk\\emulator\\emulator.exe" -avd Pixel_8 -append a|b');
+    expect(second?.pid).toBe(77);
+    expect(second).not.toHaveProperty("command");
+  });
+
+  test("Windows (CIM): a command line is cut at 4096 characters", () => {
+    const [only] = parseWindowsProcesses(`4242|1|2026-10-01T13:18:41.0000000Z|0|0|0|${"x".repeat(5000)}`);
+    expect(only?.command).toHaveLength(4096);
+  });
+
+  test("ps -ww: the arguments after the columns, a path with spaces intact; a row with no arguments has no command", () => {
+    const text = [
+      "  123     1 Tue Oct  6 00:03:12 2026 00:00:01  12345 /home/me/My SDK/emulator/qemu-system-x86_64 -avd Pixel_8 -no-window  ",
+      "  124     1 Tue Oct  6 00:03:13 2026 00:00:00      0",
+    ].join("\n");
+    const [first, second] = parsePsProcesses(text);
+    expect(first?.command).toBe("/home/me/My SDK/emulator/qemu-system-x86_64 -avd Pixel_8 -no-window");
+    expect(first?.rssBytes).toBe(12_345 * 1024);
+    expect(second?.pid).toBe(124);
+    expect(second).not.toHaveProperty("command");
+  });
+});
+
+const SIGNAL_FREE_PIDS: readonly number[] = [0, 1, -1, -4242, 1.5, Number.NaN, 2 ** 60, process.pid, process.ppid];
+
+interface HostExec {
+  readonly file: string;
+  readonly args: readonly string[];
+}
+
+interface HostSignal {
+  readonly pid: number;
+  readonly signal: string | number | undefined;
+}
+
+function tableOn(platform: NodeJS.Platform, log: (message: string) => void = () => undefined): ProcessTable {
+  const real = Object.getOwnPropertyDescriptor(process, "platform");
+  Object.defineProperty(process, "platform", { value: platform, configurable: true });
+  try {
+    return nodeProcessTable(log);
+  } finally {
+    if (real !== undefined) Object.defineProperty(process, "platform", real);
+  }
+}
+
+describe("the host's table acts only on a pid it may signal", () => {
+  const execs: HostExec[] = [];
+  const signals: HostSignal[] = [];
+  const spies: { mockRestore(): void }[] = [];
+  let answer: (file: string, args: readonly string[]) => string | number = () => "";
+
+  beforeEach(() => {
+    execs.length = 0;
+    signals.length = 0;
+    answer = () => "";
+    spies.push(
+      spyOn(childProcess, "execFile").mockImplementation(((file: string, args: readonly string[], _options: unknown, done: (error: Error | null, stdout: string) => void) => {
+        execs.push({ file, args });
+        const reply = answer(file, args);
+        const failed = typeof reply === "number" && reply !== 0;
+        done(failed ? Object.assign(new Error(`exit ${reply}`), { code: reply }) : null, typeof reply === "string" ? reply : "");
+        return {} as childProcess.ChildProcess;
+      }) as never),
+      spyOn(process, "kill").mockImplementation(((pid: number, signal?: string | number) => {
+        signals.push({ pid, signal });
+        return true;
+      }) as never),
+    );
+  });
+
+  afterEach(() => {
+    for (const spy of spies.splice(0)) spy.mockRestore();
+  });
+
+  for (const platform of ["win32", "linux"] as const) {
+    test(`${platform}: killTree ends nothing for 0, 1, -1, a group, a fraction, NaN, an unsafe integer, the pack's own pid or its parent's`, async () => {
+      const table = tableOn(platform);
+      for (const pid of SIGNAL_FREE_PIDS) await table.killTree(pid, []);
+      expect(execs).toEqual([]);
+      expect(signals).toEqual([]);
+    });
+
+    test(`${platform}: threadStates reads nothing of such a pid`, async () => {
+      const table = tableOn(platform);
+      for (const pid of SIGNAL_FREE_PIDS) expect(await table.threadStates(pid)).toBeNull();
+      expect(execs).toEqual([]);
+      expect(signals).toEqual([]);
+    });
+
+    test(`${platform}: resume refuses such a pid, and a start time that is not an integer, and acts on neither`, async () => {
+      const table = tableOn(platform);
+      for (const pid of SIGNAL_FREE_PIDS) expect(await table.resume(pid, T0)).toBe(false);
+      for (const startedAt of [Number.NaN, T0 + 0.5, 2 ** 60]) expect(await table.resume(4242, startedAt)).toBe(false);
+      expect(execs).toEqual([]);
+      expect(signals).toEqual([]);
+    });
+  }
+
+  test("win32: a verified pid is ended with its tree by taskkill, and by nothing else", async () => {
+    await tableOn("win32").killTree(4242, []);
+    expect(execs).toEqual([{ file: "taskkill", args: ["/PID", "4242", "/T", "/F"] }]);
+    expect(signals).toEqual([]);
+  });
+
+  test("linux: a verified pid is killed as its process group and with the children listed under it, and a listed child that is init or the pack itself is skipped", async () => {
+    const row = (pid: number, ppid: number, startedAtMs: number): ProcessRow => ({ pid, ppid, startedAtMs, cpuSeconds: 0, rssBytes: 0 });
+    const rows = [row(4242, 1, T0), row(4243, 4242, T0 + 5), row(1, 4242, T0 + 6), row(process.pid, 4242, T0 + 7)];
+    await tableOn("linux").killTree(4242, rows);
+    expect(signals.every(sent => sent.signal === "SIGKILL")).toBe(true);
+    expect(signals.map(sent => sent.pid).sort((a, b) => a - b)).toEqual([-4242, 4242, 4243]);
+    expect(execs).toEqual([]);
+  });
+
+  test("win32: a verified pid's threads are read from the host", async () => {
+    answer = () => "12|3\r\n";
+    expect(await tableOn("win32").threadStates(4242)).toEqual({ total: 12, suspended: 3 });
+  });
+
+  test("linux: a verified pid is resumed with SIGCONT", async () => {
+    expect(await tableOn("linux").resume(4242, T0)).toBe(true);
+    expect(signals).toEqual([{ pid: 4242, signal: "SIGCONT" }]);
+  });
+
+  const resumeExits: { name: string; code: number; resumed: boolean; noted: boolean }[] = [
+    { name: "exit 0: the system accepted the resume", code: 0, resumed: true, noted: false },
+    { name: "exit 1: the system refused it", code: 1, resumed: false, noted: false },
+    { name: "exit 2: the process could not be opened", code: 2, resumed: false, noted: false },
+    { name: "exit 3: the process there started at another time, so it is somebody else's now", code: 3, resumed: false, noted: true },
+  ];
+  for (const row of resumeExits) {
+    test(`win32 resume, ${row.name}`, async () => {
+      const notes: string[] = [];
+      answer = () => row.code;
+      expect(await tableOn("win32", note => notes.push(note)).resume(4242, T0)).toBe(row.resumed);
+      expect(notes).toHaveLength(row.noted ? 1 : 0);
+      if (row.noted) expect(notes[0]).toContain("4242");
+    });
+  }
+
+  test("win32: the script the host runs names the pid and the start time it must find there", async () => {
+    await tableOn("win32").resume(4242, T0);
+    const script = Buffer.from(execs[0]?.args.at(-1) ?? "", "base64").toString("utf16le");
+    expect(script).toContain(`Resume(4242, ${T0},`);
   });
 });

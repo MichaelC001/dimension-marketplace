@@ -16,6 +16,7 @@ import {
   buildEmulatorArgs,
   consolePortOf,
   type EmulatorArgsInput,
+  emulatorLaunchVerdict,
   freshEmulators,
   lastLines,
   parseAvdName,
@@ -198,4 +199,29 @@ describe("the emulator console and the failure report", () => {
     expect(message).toContain("empty or could not be read");
     expect(message).not.toContain("readOnly");
   });
+});
+
+describe("emulatorLaunchVerdict: is this process the emulator launch of that AVD", () => {
+  const AVD = "Pixel_8";
+  const rows: { name: string; command: string | undefined; verdict: "launch" | "other" | "unknown" }[] = [
+    { name: "a quoted Windows path with spaces", command: '"C:\\Program Files\\Android\\Sdk\\emulator\\emulator.exe" -avd Pixel_8 -no-snapshot', verdict: "launch" },
+    { name: "an unquoted unix path with spaces", command: "/home/me/My Android SDK/emulator/emulator -avd Pixel_8 -gpu host", verdict: "launch" },
+    { name: "the qemu child by its Windows path", command: "C:\\Sdk\\emulator\\qemu-system-x86_64.exe -avd Pixel_8 -memory 2048", verdict: "launch" },
+    { name: "the AVD named as @Pixel_8", command: "/opt/sdk/emulator/emulator @Pixel_8", verdict: "launch" },
+    { name: "a launcher by an architecture or headless name, in any case", command: "C:\\Sdk\\emulator\\EMULATOR-HEADLESS.EXE -avd Pixel_8", verdict: "launch" },
+    { name: "another AVD whose name merely starts with this one", command: "/opt/sdk/emulator/emulator -avd Pixel_8_Pro", verdict: "other" },
+    { name: "another AVD named with @, whose name merely starts with this one", command: "/opt/sdk/emulator/emulator @Pixel_8_Pro", verdict: "other" },
+    { name: "this AVD's name as the value of some other flag", command: "/opt/sdk/emulator/emulator -avd Other -timezone Pixel_8", verdict: "other" },
+    { name: "-avd with no value", command: "/opt/sdk/emulator/emulator -avd", verdict: "other" },
+    { name: "emulator-manager, which is not an emulator", command: "C:\\Sdk\\emulator\\emulator-manager.exe -avd Pixel_8", verdict: "other" },
+    { name: "a shell whose arguments happen to spell the emulator's command line", command: "bash -c emulator -avd Pixel_8", verdict: "other" },
+    { name: "another program handed the emulator's flags", command: "C:\\Windows\\notepad.exe -avd Pixel_8", verdict: "other" },
+    { name: "no command line at all", command: undefined, verdict: "unknown" },
+  ];
+  for (const row of rows) {
+    test(`${row.name}: ${row.verdict}`, () => {
+      const process = { pid: 4242, ppid: 1, startedAtMs: 0, cpuSeconds: 0, rssBytes: 0, ...(row.command === undefined ? {} : { command: row.command }) };
+      expect(emulatorLaunchVerdict(process, AVD)).toBe(row.verdict);
+    });
+  }
 });

@@ -30,6 +30,7 @@ export interface FakeEmulatorBehaviour {
 export interface FakeWorld {
   readonly avds: readonly string[];
   readonly devices: readonly FakeDevice[];
+  readonly devicesAfterWait?: "fail" | "empty";
   /** What an emulator process does; `launches[n]` replaces it for the nth launch since the world was set (0 = the first). */
   readonly emulator?: FakeEmulatorBehaviour & { readonly launches?: readonly FakeEmulatorBehaviour[] };
 }
@@ -145,6 +146,7 @@ export class FakeHost implements ProcessTable {
   readonly sampled: number[] = [];
   /** Every pid `resume` was asked to resume. */
   readonly resumed: number[] = [];
+  readonly resumedStartedAt: number[] = [];
   tableReadable = true;
   listenersReadable = true;
   /** How many times the process table was read. */
@@ -192,8 +194,9 @@ export class FakeHost implements ProcessTable {
     return this.threads(pid);
   }
 
-  async resume(pid: number): Promise<boolean> {
+  async resume(pid: number, startedAtMs: number): Promise<boolean> {
     this.resumed.push(pid);
+    this.resumedStartedAt.push(startedAtMs);
     return this.resumeAccepted;
   }
 
