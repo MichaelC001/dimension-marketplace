@@ -7619,18 +7619,13 @@ async function installedPluginRoots(pluginsDir) {
   const modules = join(pluginsDir, "node_modules");
   for (const entry2 of await listDirs(modules)) {
     if (entry2.startsWith("@")) {
-      for (const scoped of await listDirs(join(modules, entry2)))
-        roots.set(`${entry2}/${scoped}`, join(modules, entry2, scoped));
+      for (const scoped of await listDirs(join(modules, entry2))) roots.set(`${entry2}/${scoped}`, join(modules, entry2, scoped));
     } else if (!entry2.startsWith(".")) roots.set(entry2, join(modules, entry2));
   }
   try {
-    const installed = JSON.parse(
-      await readFile(join(pluginsDir, "installed_plugins.json"), "utf8")
-    );
+    const installed = JSON.parse(await readFile(join(pluginsDir, "installed_plugins.json"), "utf8"));
     for (const [id, entries] of Object.entries(installed.plugins ?? {})) {
-      const installPath = entries.find(
-        (entry2) => typeof entry2.installPath === "string"
-      )?.installPath;
+      const installPath = entries.find((entry2) => typeof entry2.installPath === "string")?.installPath;
       if (typeof installPath === "string" && !roots.has(id)) roots.set(id, installPath);
     }
   } catch {
@@ -7659,21 +7654,16 @@ function heldPaths(decl, raw, blocks) {
   const held = /* @__PURE__ */ new Set();
   const { manifest, avatar } = decl;
   if (avatar !== void 0 && !isPlainAvatar(avatar)) held.add("avatar");
-  if (raw.voice !== void 0 && !(typeof raw.voice === "string" && VOICE_NAME_RE.test(raw.voice)))
-    held.add("voice");
+  if (raw.voice !== void 0 && !(typeof raw.voice === "string" && VOICE_NAME_RE.test(raw.voice))) held.add("voice");
   const level = raw.thinkingLevel;
-  if (level !== void 0 && (level === "inherit" || !THINKING_STEPS.includes(String(level))))
-    held.add("engine.thinkingLevel");
+  if (level !== void 0 && (level === "inherit" || !THINKING_STEPS.includes(String(level)))) held.add("engine.thinkingLevel");
   const backend = manifest.memory?.backend;
-  if (backend !== void 0 && (backend === "inherit" || !MEMORY_BACKENDS.includes(backend)))
-    held.add("memory.backend");
+  if (backend !== void 0 && (backend === "inherit" || !MEMORY_BACKENDS.includes(backend))) held.add("memory.backend");
   const model = manifest.engine?.model;
-  if (model !== void 0 && (!Array.isArray(model) || model.length === 0))
-    held.add("engine.model");
+  if (model !== void 0 && (!Array.isArray(model) || model.length === 0)) held.add("engine.model");
   for (const key of ["tools", "skills", "mcp"]) {
     const value = manifest.capabilities?.[key];
-    if (value === "*" || Array.isArray(value) && value.length === 0)
-      held.add(`capabilities.${key}`);
+    if (value === "*" || Array.isArray(value) && value.length === 0) held.add(`capabilities.${key}`);
   }
   const workspace = manifest.workspace;
   if (workspace !== void 0) {
@@ -7684,8 +7674,7 @@ function heldPaths(decl, raw, blocks) {
       held.add("workspace.id");
     }
     const reach = workspace.reach;
-    if (reach !== void 0 && reach !== "none" && !(reach === "all" && backend !== "off"))
-      held.add("workspace.reach");
+    if (reach !== void 0 && reach !== "none" && !(reach === "all" && backend !== "off")) held.add("workspace.reach");
   }
   for (const block of blocks) {
     const canonical = FLAT_ALIASES[block.key];
@@ -7703,11 +7692,7 @@ function rawSettings(frontmatter) {
   };
 }
 function sectionChildren(block) {
-  if (block.children !== null)
-    return block.children.map((child) => ({
-      key: child.key,
-      lines: reindent(child.lines, block.childIndent, 2)
-    }));
+  if (block.children !== null) return block.children.map((child) => ({ key: child.key, lines: reindent(child.lines, block.childIndent, 2) }));
   if (block.inline === "") return [];
   const value = parseYaml2(block.inline);
   if (typeof value !== "object" || value === null || Array.isArray(value)) return [];
@@ -7735,16 +7720,11 @@ function draftFromFile(decl, content, key) {
         return RETIRED_PATHS[path] === void 0 && (!drawn.includes(child.key) || held.has(path));
       });
       if (kept.length > 0) pieces.push(`${block.key}:`, ...kept.flatMap((child) => child.lines));
-    } else if (!["name", "description", "specVersion", "extends"].includes(block.key))
-      pieces.push(...block.lines);
+    } else if (!["name", "description", "specVersion", "extends"].includes(block.key)) pieces.push(...block.lines);
   }
   const drawnOr = (path, value, fallback2) => held.has(path) || value === void 0 ? fallback2 : value;
   const backend = manifest.memory?.backend;
-  const memory = drawnOr(
-    "memory.backend",
-    backend,
-    "inherit"
-  );
+  const memory = drawnOr("memory.backend", backend, "inherit");
   const reach = manifest.workspace?.reach;
   const memoryScope = !held.has("workspace.reach") && reach === "all" && memory !== "off" ? "global" : "project";
   const policy = manifest.workspace?.policy;
@@ -7757,11 +7737,7 @@ function draftFromFile(decl, content, key) {
     voice: typeof raw.voice === "string" && !held.has("voice") ? raw.voice : "",
     personality: manifest.identity?.personality ?? "default",
     promptMode: manifest.identity?.prompt ?? "replace",
-    thinking: drawnOr(
-      "engine.thinkingLevel",
-      raw.thinkingLevel,
-      "inherit"
-    ),
+    thinking: drawnOr("engine.thinkingLevel", raw.thinkingLevel, "inherit"),
     models: held.has("engine.model") ? [] : allowlist(manifest.engine?.model),
     tools: held.has("capabilities.tools") ? [] : allowlist(manifest.capabilities?.tools),
     skills: held.has("capabilities.skills") ? [] : allowlist(manifest.capabilities?.skills),
@@ -7795,8 +7771,7 @@ async function scanAgents(dir, notices) {
     }
     const parsed = parseGeneralAgent(content, path, name);
     if (parsed.ok) found.push({ name, path, content, decl: parsed.decl });
-    else if (parsed.reason === "invalid")
-      notices.push(`${path} is not a valid General Agent: ${parsed.errors.join("; ")}`);
+    else if (parsed.reason === "invalid") notices.push(`${path} is not a valid General Agent: ${parsed.errors.join("; ")}`);
   }
   return found;
 }
@@ -7814,10 +7789,7 @@ async function listAgents(roots) {
     return true;
   };
   const paths = pathsOf(roots.home);
-  if (paths === null)
-    notices.push(
-      "Pack and user agents are not listed: the engine did not tell this server where its home is (INSO_HOME is unset)."
-    );
+  if (paths === null) notices.push("Pack and user agents are not listed: the engine did not tell this server where its home is (INSO_HOME is unset).");
   else {
     for (const [pack, root] of await installedPluginRoots(paths.plugins)) {
       for (const found of await scanAgents(join(root, GENERAL_AGENTS_DIR), notices)) {
@@ -7837,15 +7809,10 @@ async function listAgents(roots) {
     }
   }
   if (roots.workspace === null) {
-    notices.push(
-      roots.workspaceMissing ?? "No workspace is bound, so project agents are not listed. Pack agents and yours are."
-    );
+    notices.push(roots.workspaceMissing ?? "No workspace is bound, so project agents are not listed. Pack agents and yours are.");
   } else {
     for (const dirName of [WRITE_DIR, LEGACY_DIR]) {
-      for (const found of await scanAgents(
-        join(roots.workspace, dirName, GENERAL_AGENTS_DIR),
-        notices
-      )) {
+      for (const found of await scanAgents(join(roots.workspace, dirName, GENERAL_AGENTS_DIR), notices)) {
         if (!claim(found)) continue;
         const legacy = dirName === LEGACY_DIR;
         agents.push({
@@ -7879,13 +7846,7 @@ async function listAgents(roots) {
       });
     }
   }
-  return {
-    workspace: roots.workspace,
-    configDir: WRITE_DIR,
-    userAgentsDir: paths?.userAgents ?? null,
-    agents,
-    notices
-  };
+  return { workspace: roots.workspace, configDir: WRITE_DIR, userAgentsDir: paths?.userAgents ?? null, agents, notices };
 }
 var SaveRefused = class extends Error {
   name = "SaveRefused";
@@ -7895,12 +7856,7 @@ function renderDraft(draft, path) {
   if (problems.length > 0) return { problems };
   const content = toAgentMd(draft, agentHomeWorkspaceId(draft.name));
   const parsed = parseGeneralAgent(content, path, draft.name);
-  if (!parsed.ok)
-    return {
-      problems: [
-        `The agent.md would not load as a General Agent (${parsed.reason}): ${parsed.errors.join("; ")}`
-      ]
-    };
+  if (!parsed.ok) return { problems: [`The agent.md would not load as a General Agent (${parsed.reason}): ${parsed.errors.join("; ")}`] };
   return { content };
 }
 var slash = (path) => path.replaceAll("\\", "/");
@@ -7923,18 +7879,13 @@ async function saveAgent(options) {
   if (target.create) {
     const taken = (await listAgents(roots)).agents.find((agent) => agent.name === draft.name);
     if (taken !== void 0) {
-      throw new SaveRefused(
-        `An agent named "${draft.name}" already exists (${taken.source === "pack" ? `the ${taken.pack} pack ships it` : `${taken.source} agent at ${taken.path}`}). Pick another name.`
-      );
+      throw new SaveRefused(`An agent named "${draft.name}" already exists (${taken.source === "pack" ? `the ${taken.pack} pack ships it` : `${taken.source} agent at ${taken.path}`}). Pick another name.`);
     }
     await mkdir(agentsDir, { recursive: true });
     try {
       await mkdir(dir);
     } catch (error) {
-      if (error.code === "EEXIST")
-        throw new SaveRefused(
-          `${slash(relative(tierRoot, dir))} already exists. Pick another name.`
-        );
+      if (error.code === "EEXIST") throw new SaveRefused(`${slash(relative(tierRoot, dir))} already exists. Pick another name.`);
       throw error;
     }
   } else {
@@ -7942,9 +7893,7 @@ async function saveAgent(options) {
     try {
       existing = await readFile(path, "utf8");
     } catch {
-      throw new SaveRefused(
-        `There is no ${slash(relative(tierRoot, path))} to update. Create it as a new agent.`
-      );
+      throw new SaveRefused(`There is no ${slash(relative(tierRoot, path))} to update. Create it as a new agent.`);
     }
     const current = parseGeneralAgent(existing, path, draft.name);
     if (!current.ok) {
@@ -7953,9 +7902,7 @@ async function saveAgent(options) {
       );
     }
     if (revisionOf(existing) !== target.revision) {
-      throw new SaveRefused(
-        `${draft.name}'s agent.md changed on disk since it was opened here; reopen it so nothing written since is lost.`
-      );
+      throw new SaveRefused(`${draft.name}'s agent.md changed on disk since it was opened here; reopen it so nothing written since is lost.`);
     }
   }
   const temp = join(dir, `.${basename(path)}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`);
