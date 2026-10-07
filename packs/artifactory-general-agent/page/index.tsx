@@ -192,6 +192,7 @@ export function GeneralAgentsPage(props: GeneralAgentsPageProps) {
 				<AgentsHome
 					roster={roster}
 					loading={facts === undefined}
+					listingRead={listing.value !== undefined}
 					listingError={listing.error}
 					activity={activity}
 					usage={usage}
