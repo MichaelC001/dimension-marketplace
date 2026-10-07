@@ -14,7 +14,7 @@ import { z } from "zod";
 import { spawn as spawn2 } from "node:child_process";
 import { closeSync, existsSync as existsSync2, fstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, statSync, writeSync } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import { join as join2, posix as posix2, win32 as win322 } from "node:path";
+import { join as join2, posix as posix2, win32 as win323 } from "node:path";
 
 // src/contracts.ts
 var SimulatorError = class extends Error {
@@ -315,6 +315,7 @@ import { join } from "node:path";
 
 // src/android/process-table.ts
 import { execFile as execFile2 } from "node:child_process";
+import { win32 as win322 } from "node:path";
 function isSignalablePid(pid) {
   return Number.isSafeInteger(pid) && pid > 1 && pid !== process.pid && pid !== process.ppid;
 }
@@ -369,6 +370,25 @@ function stillInTree(rows, root, expected) {
 function treeSurvivors(rows, killed) {
   const startedAt = new Map(rows.map((row) => [row.pid, row.startedAtMs]));
   return killed.filter((member) => startedAt.get(member.pid) === member.startedAtMs).map((member) => member.pid);
+}
+var NOTHING_TO_KILL = { kill: [], skipped: [] };
+function refuseRoot(pid, reason) {
+  return { kill: [], skipped: [{ pid, reason }] };
+}
+function verifiedKillPlan(freshRows, verifiedRows, root) {
+  const tree = processTree(freshRows, root);
+  const freshRoot = tree[0];
+  if (freshRoot === void 0) return NOTHING_TO_KILL;
+  const verifiedRoot = verifiedRows.find((row) => row.pid === root);
+  if (verifiedRoot === void 0) return refuseRoot(root, "the table it was verified in does not show it, so nothing proves it is the process the pack checked");
+  if (verifiedRoot.startedAtMs !== freshRoot.startedAtMs) return refuseRoot(root, "it started at another time than the process the pack verified, so the pid now belongs to something else");
+  const kill = [];
+  const skipped = [];
+  for (const member of [...tree].reverse()) {
+    if (isSignalablePid(member.pid)) kill.push(member);
+    else skipped.push({ pid: member.pid, reason: "it is the pack itself, its parent or a system process" });
+  }
+  return { kill, skipped };
 }
 var MAX_COMMAND_CHARS = 4096;
 function parseWindowsProcesses(text) {
@@ -455,6 +475,16 @@ function parseSs(text) {
   }
   return listeners;
 }
+var WINDOWS_TOOL_PATHS = {
+  powershell: ["System32", "WindowsPowerShell", "v1.0", "powershell.exe"],
+  netstat: ["System32", "netstat.exe"]
+};
+var DEFAULT_SYSTEM_ROOT = "C:\\Windows";
+var DRIVE_ROOTED = /^[A-Za-z]:[\\/]/;
+function windowsToolPath(tool, env = process.env) {
+  const systemRoot = [env.SystemRoot, env.windir].find((candidate) => candidate !== void 0 && DRIVE_ROOTED.test(candidate)) ?? DEFAULT_SYSTEM_ROOT;
+  return win322.join(systemRoot, ...WINDOWS_TOOL_PATHS[tool]);
+}
 function run(file, args, env, timeoutMs = 2e4) {
   const { promise, resolve, reject } = Promise.withResolvers();
   execFile2(file, args, { encoding: "utf8", timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, windowsHide: true, ...env ? { env } : {} }, (error, stdout) => error === null ? resolve(stdout) : reject(error));
@@ -501,16 +531,33 @@ function windowsResumeScript(pid, startedAtMs) {
   ].join("\n");
 }
 var WINDOWS_PROCESS_SCRIPT = "Get-CimInstance Win32_Process | ForEach-Object { '{0}|{1}|{2:o}|{3}|{4}|{5}|{6}' -f $_.ProcessId, $_.ParentProcessId, $_.CreationDate, $_.KernelModeTime, $_.UserModeTime, $_.WorkingSetSize, ($_.CommandLine -replace '[\\r\\n]+', ' ') }";
-function nodeProcessTable(log = () => void 0) {
+function nodeProcessTable(log = () => void 0, env = process.env) {
   const windows = process.platform === "win32";
+  const readProcesses = async () => {
+    if (windows) return parseWindowsProcesses(await run(windowsToolPath("powershell", env), ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", WINDOWS_PROCESS_SCRIPT]));
+    return parsePsProcesses(await run("ps", ["-A", "-ww", "-o", "pid=,ppid=,lstart=,cputime=,rss=,args="], { ...process.env, LC_ALL: "C" }));
+  };
+  const killWindowsTree = async (root, verifiedRows) => {
+    const freshRows = await readProcesses().catch(() => null);
+    if (freshRows === null) {
+      log(`[sim] not killing pid ${root}: the process table could not be read again just before the kill, so its tree cannot be verified`);
+      return;
+    }
+    const plan = verifiedKillPlan(freshRows, verifiedRows, root);
+    for (const { pid, reason } of plan.skipped) log(`[sim] not killing pid ${pid}: ${reason}`);
+    for (const { pid } of plan.kill) {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch (error) {
+        if (error.code !== "ESRCH") log(`[sim] could not end pid ${pid}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  };
   return {
-    processes: async () => {
-      if (windows) return parseWindowsProcesses(await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", WINDOWS_PROCESS_SCRIPT]));
-      return parsePsProcesses(await run("ps", ["-A", "-ww", "-o", "pid=,ppid=,lstart=,cputime=,rss=,args="], { ...process.env, LC_ALL: "C" }));
-    },
+    processes: readProcesses,
     listeners: async () => {
       try {
-        if (windows) return parseNetstat(await run("netstat", ["-ano", "-p", "tcp"]));
+        if (windows) return parseNetstat(await run(windowsToolPath("netstat", env), ["-ano", "-p", "tcp"]));
         if (process.platform === "linux") {
           try {
             return parseSs(await run("ss", ["-Hltnp"]));
@@ -524,12 +571,7 @@ function nodeProcessTable(log = () => void 0) {
     },
     killTree: async (pid, rows) => {
       if (!isSignalablePid(pid)) return;
-      if (windows) {
-        const { promise, resolve } = Promise.withResolvers();
-        execFile2("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true }, () => resolve());
-        await promise;
-        return;
-      }
+      if (windows) return killWindowsTree(pid, rows);
       for (const target of [-pid, ...processTree(rows, pid).map((row) => row.pid).reverse()]) {
         if (!isSignalablePid(Math.abs(target))) continue;
         try {
@@ -541,7 +583,7 @@ function nodeProcessTable(log = () => void 0) {
     threadStates: async (pid) => {
       if (!isSignalablePid(pid)) return null;
       try {
-        if (windows) return parseThreadCounts(await run("powershell.exe", encodedCommand(windowsThreadsScript(pid)), void 0, 8e3));
+        if (windows) return parseThreadCounts(await run(windowsToolPath("powershell", env), encodedCommand(windowsThreadsScript(pid)), void 0, 8e3));
         return parsePsThreadStates(await run("ps", [...process.platform === "linux" ? ["-L"] : [], "-o", "stat=", "-p", String(pid)], { ...process.env, LC_ALL: "C" }, 8e3));
       } catch {
         return null;
@@ -550,7 +592,7 @@ function nodeProcessTable(log = () => void 0) {
     resume: async (pid, startedAtMs) => {
       if (!isSignalablePid(pid) || !Number.isSafeInteger(startedAtMs)) return false;
       try {
-        if (windows) await run("powershell.exe", encodedCommand(windowsResumeScript(pid, startedAtMs)), void 0, 3e4);
+        if (windows) await run(windowsToolPath("powershell", env), encodedCommand(windowsResumeScript(pid, startedAtMs)), void 0, 3e4);
         else process.kill(pid, "SIGCONT");
         return true;
       } catch (error) {
@@ -1253,7 +1295,7 @@ function apkPathRefusal(apkPath, platform) {
   if (windows && /^[\\/]{2}/.test(apkPath)) {
     return { code: "apk_path_network", message: `${apkPath} is a network or device path (UNC, \\\\?\\ or //host), which the pack will not open. Pass the absolute path of an .apk on a local drive.` };
   }
-  if (!(windows ? win322 : posix2).isAbsolute(apkPath)) {
+  if (!(windows ? win323 : posix2).isAbsolute(apkPath)) {
     return { code: "apk_path_not_absolute", message: `${apkPath} is not an absolute path. Pass the absolute path of a built .apk on this machine.` };
   }
   return null;
@@ -1607,7 +1649,7 @@ var AndroidBackend = class {
       if (verdict !== "gone") this.#deps.log(`[sim] not killing pid ${target.pid}: ${verdict === "reused" ? "it is not the emulator process the pack launched (another start time, or another program), so the pid now belongs to something else" : "the process table or its command line could not be read, so it cannot be verified"}`);
       return verdict;
     }
-    const rows = process.platform === "win32" ? [] : await this.#table.processes().catch(() => []);
+    const rows = await this.#table.processes().catch(() => []);
     await this.#table.killTree(target.pid, rows);
     return verdict;
   }

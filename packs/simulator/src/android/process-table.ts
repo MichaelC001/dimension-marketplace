@@ -17,6 +17,7 @@
 // arrays. `nodeProcessTable()` is the only part that touches the host.
 
 import { execFile } from "node:child_process";
+import { win32 } from "node:path";
 
 export interface ProcessRow {
   readonly pid: number;
@@ -39,8 +40,7 @@ export interface ProcessTable {
   processes(): Promise<ProcessRow[]>;
   /** Every TCP listener with its owning pid; null when this host has no way to list them. */
   listeners(): Promise<Listener[] | null>;
-  /** Kill `pid` and everything under it. `rows` (the table just read) names the children on hosts that do not kill a tree by themselves. */
-  killTree(pid: number, rows: readonly ProcessRow[]): Promise<void>;
+  killTree(pid: number, verifiedRows: readonly ProcessRow[]): Promise<void>;
   /** How many threads `pid` has and how many sit in a wait the system imposed (a suspend; never the process's own wait); null when the host cannot say (no such process, not permitted, no tool). A rejection reads as null. */
   threadStates(pid: number): Promise<ThreadSample | null>;
   /** Let a suspended `pid` run again. True only when the host accepted the request; a rejection reads as false. */
@@ -163,6 +163,38 @@ export function treeSurvivors(rows: readonly ProcessRow[], killed: readonly Proc
   return killed.filter(member => startedAt.get(member.pid) === member.startedAtMs).map(member => member.pid);
 }
 
+export interface SkippedProcess {
+  readonly pid: number;
+  readonly reason: string;
+}
+
+export interface KillPlan {
+  readonly kill: readonly ProcessRow[];
+  readonly skipped: readonly SkippedProcess[];
+}
+
+const NOTHING_TO_KILL: KillPlan = { kill: [], skipped: [] };
+
+function refuseRoot(pid: number, reason: string): KillPlan {
+  return { kill: [], skipped: [{ pid, reason }] };
+}
+
+export function verifiedKillPlan(freshRows: readonly ProcessRow[], verifiedRows: readonly ProcessRow[], root: number): KillPlan {
+  const tree = processTree(freshRows, root);
+  const freshRoot = tree[0];
+  if (freshRoot === undefined) return NOTHING_TO_KILL;
+  const verifiedRoot = verifiedRows.find(row => row.pid === root);
+  if (verifiedRoot === undefined) return refuseRoot(root, "the table it was verified in does not show it, so nothing proves it is the process the pack checked");
+  if (verifiedRoot.startedAtMs !== freshRoot.startedAtMs) return refuseRoot(root, "it started at another time than the process the pack verified, so the pid now belongs to something else");
+  const kill: ProcessRow[] = [];
+  const skipped: SkippedProcess[] = [];
+  for (const member of [...tree].reverse()) {
+    if (isSignalablePid(member.pid)) kill.push(member);
+    else skipped.push({ pid: member.pid, reason: "it is the pack itself, its parent or a system process" });
+  }
+  return { kill, skipped };
+}
+
 // ── parsers (one per host format) ────────────────────────────────────────────
 
 const MAX_COMMAND_CHARS = 4096;
@@ -275,6 +307,18 @@ export function parseSs(text: string): Listener[] {
 
 // ── the host ─────────────────────────────────────────────────────────────────
 
+const WINDOWS_TOOL_PATHS = {
+  powershell: ["System32", "WindowsPowerShell", "v1.0", "powershell.exe"],
+  netstat: ["System32", "netstat.exe"],
+} as const;
+const DEFAULT_SYSTEM_ROOT = "C:\\Windows";
+const DRIVE_ROOTED = /^[A-Za-z]:[\\/]/;
+
+export function windowsToolPath(tool: keyof typeof WINDOWS_TOOL_PATHS, env: NodeJS.ProcessEnv = process.env): string {
+  const systemRoot = [env.SystemRoot, env.windir].find((candidate): candidate is string => candidate !== undefined && DRIVE_ROOTED.test(candidate)) ?? DEFAULT_SYSTEM_ROOT;
+  return win32.join(systemRoot, ...WINDOWS_TOOL_PATHS[tool]);
+}
+
 function run(file: string, args: readonly string[], env?: NodeJS.ProcessEnv, timeoutMs = 20_000): Promise<string> {
   const { promise, resolve, reject } = Promise.withResolvers<string>();
   execFile(file, args, { encoding: "utf8", timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, windowsHide: true, ...(env ? { env } : {}) }, (error, stdout) => (error === null ? resolve(stdout) : reject(error)));
@@ -330,16 +374,33 @@ function windowsResumeScript(pid: number, startedAtMs: number): string {
 /** CIM, because `wmic` is gone from current Windows. Operators only (`-f`), no method calls, so it also runs where PowerShell is in constrained-language mode. */
 const WINDOWS_PROCESS_SCRIPT = "Get-CimInstance Win32_Process | ForEach-Object { '{0}|{1}|{2:o}|{3}|{4}|{5}|{6}' -f $_.ProcessId, $_.ParentProcessId, $_.CreationDate, $_.KernelModeTime, $_.UserModeTime, $_.WorkingSetSize, ($_.CommandLine -replace '[\\r\\n]+', ' ') }";
 
-export function nodeProcessTable(log: (message: string) => void = () => undefined): ProcessTable {
+export function nodeProcessTable(log: (message: string) => void = () => undefined, env: NodeJS.ProcessEnv = process.env): ProcessTable {
   const windows = process.platform === "win32";
+  const readProcesses = async (): Promise<ProcessRow[]> => {
+    if (windows) return parseWindowsProcesses(await run(windowsToolPath("powershell", env), ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", WINDOWS_PROCESS_SCRIPT]));
+    return parsePsProcesses(await run("ps", ["-A", "-ww", "-o", "pid=,ppid=,lstart=,cputime=,rss=,args="], { ...process.env, LC_ALL: "C" }));
+  };
+  const killWindowsTree = async (root: number, verifiedRows: readonly ProcessRow[]): Promise<void> => {
+    const freshRows = await readProcesses().catch(() => null);
+    if (freshRows === null) {
+      log(`[sim] not killing pid ${root}: the process table could not be read again just before the kill, so its tree cannot be verified`);
+      return;
+    }
+    const plan = verifiedKillPlan(freshRows, verifiedRows, root);
+    for (const { pid, reason } of plan.skipped) log(`[sim] not killing pid ${pid}: ${reason}`);
+    for (const { pid } of plan.kill) {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") log(`[sim] could not end pid ${pid}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  };
   return {
-    processes: async () => {
-      if (windows) return parseWindowsProcesses(await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", WINDOWS_PROCESS_SCRIPT]));
-      return parsePsProcesses(await run("ps", ["-A", "-ww", "-o", "pid=,ppid=,lstart=,cputime=,rss=,args="], { ...process.env, LC_ALL: "C" }));
-    },
+    processes: readProcesses,
     listeners: async () => {
       try {
-        if (windows) return parseNetstat(await run("netstat", ["-ano", "-p", "tcp"]));
+        if (windows) return parseNetstat(await run(windowsToolPath("netstat", env), ["-ano", "-p", "tcp"]));
         if (process.platform === "linux") {
           try {
             return parseSs(await run("ss", ["-Hltnp"]));
@@ -354,12 +415,7 @@ export function nodeProcessTable(log: (message: string) => void = () => undefine
     },
     killTree: async (pid, rows) => {
       if (!isSignalablePid(pid)) return;
-      if (windows) {
-        const { promise, resolve } = Promise.withResolvers<void>();
-        execFile("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true }, () => resolve());
-        await promise;
-        return;
-      }
+      if (windows) return killWindowsTree(pid, rows);
       // The pack spawns the emulator detached, so it leads its own process group: one signal reaches the launcher and qemu. The listed children cover one that left the group.
       for (const target of [-pid, ...processTree(rows, pid).map(row => row.pid).reverse()]) {
         if (!isSignalablePid(Math.abs(target))) continue;
@@ -374,7 +430,7 @@ export function nodeProcessTable(log: (message: string) => void = () => undefine
       if (!isSignalablePid(pid)) return null;
       try {
         // Tighter than the table read: the boot watch waits on this between looks for the device.
-        if (windows) return parseThreadCounts(await run("powershell.exe", encodedCommand(windowsThreadsScript(pid)), undefined, 8_000));
+        if (windows) return parseThreadCounts(await run(windowsToolPath("powershell", env), encodedCommand(windowsThreadsScript(pid)), undefined, 8_000));
         return parsePsThreadStates(await run("ps", [...(process.platform === "linux" ? ["-L"] : []), "-o", "stat=", "-p", String(pid)], { ...process.env, LC_ALL: "C" }, 8_000));
       } catch {
         return null;
@@ -383,7 +439,7 @@ export function nodeProcessTable(log: (message: string) => void = () => undefine
     resume: async (pid, startedAtMs) => {
       if (!isSignalablePid(pid) || !Number.isSafeInteger(startedAtMs)) return false;
       try {
-        if (windows) await run("powershell.exe", encodedCommand(windowsResumeScript(pid, startedAtMs)), undefined, 30_000);
+        if (windows) await run(windowsToolPath("powershell", env), encodedCommand(windowsResumeScript(pid, startedAtMs)), undefined, 30_000);
         else process.kill(pid, "SIGCONT");
         return true;
       } catch (error) {

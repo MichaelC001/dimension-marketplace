@@ -551,8 +551,7 @@ export class AndroidBackend implements DeviceBackend {
       if (verdict !== "gone") this.#deps.log(`[sim] not killing pid ${target.pid}: ${verdict === "reused" ? "it is not the emulator process the pack launched (another start time, or another program), so the pid now belongs to something else" : "the process table or its command line could not be read, so it cannot be verified"}`);
       return verdict;
     }
-    // Windows' taskkill /T finds the children itself; elsewhere the listed ones are signalled too.
-    const rows = process.platform === "win32" ? [] : await this.#table.processes().catch(() => []);
+    const rows = await this.#table.processes().catch(() => []);
     await this.#table.killTree(target.pid, rows);
     return verdict;
   }
