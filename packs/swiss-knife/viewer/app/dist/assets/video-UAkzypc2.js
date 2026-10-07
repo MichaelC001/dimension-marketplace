@@ -1,1 +1,0 @@
-import{mountMedia as e}from"./media-core-MiUbPOiX.js";var t={mount:(t,n,r)=>e(t,n,r,`video`)};export{t as default};

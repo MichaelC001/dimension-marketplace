@@ -2,14 +2,6 @@
 // cut the cough", and the frame a drawing is burned onto), a small one for the film lane, the length of one frame
 // (what `,` and `.` step by), and the geometry of drawing on a frame (where the picture is drawn in its box, and
 // which drawings belong to the frame on screen).
-//
-// A STILL is taken from a second, silent element on the same object URL, never from the
-// player the human is watching. The player stays where it is and keeps playing; nothing
-// seeks, flashes through four frames or loses its place while "Request edits" works. That
-// is the doc's "seek, wait for `seeked`, draw, restore the playhead" with the restore made
-// unnecessary. It encodes with `toDataURL`, not `toBlob`: the kit measured (paint.ts) that
-// `toBlob` waits for an idle period, ~1 s each, on a page that is quiet while the human
-// reads; the synchronous encoder costs what the pixels cost (a few ms at 768 px).
 import { clampTime, type FrameGrab } from "@dimension/mcp-app-kit/annotate";
 
 /** The long edge of a still, in pixels: enough to read a face or a caption, and ~60 KB. */
@@ -138,9 +130,9 @@ export class FrameGrabber {
 			const clone = document.createElement("video");
 			clone.muted = true;
 			clone.preload = "auto";
+			clone.crossOrigin = this.#source.crossOrigin;
 			clone.playsInline = true;
 			const opened = once(clone, "loadeddata", "opening the video", this.#life.signal);
-			// The player's own object URL: the bytes are shared, not copied or read again.
 			clone.src = this.#source.currentSrc;
 			this.#element = clone;
 			const opening = opened.then(() => clone);

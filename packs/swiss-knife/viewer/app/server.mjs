@@ -15502,11 +15502,11 @@ var require_codegen = __commonJS({
         const rhs = this.rhs === void 0 ? "" : ` = ${this.rhs}`;
         return `${varKind} ${this.name}${rhs};` + _n;
       }
-      optimizeNames(names, constants2) {
+      optimizeNames(names, constants3) {
         if (!names[this.name.str])
           return;
         if (this.rhs)
-          this.rhs = optimizeExpr(this.rhs, names, constants2);
+          this.rhs = optimizeExpr(this.rhs, names, constants3);
         return this;
       }
       get names() {
@@ -15523,10 +15523,10 @@ var require_codegen = __commonJS({
       render({ _n }) {
         return `${this.lhs} = ${this.rhs};` + _n;
       }
-      optimizeNames(names, constants2) {
+      optimizeNames(names, constants3) {
         if (this.lhs instanceof code_1.Name && !names[this.lhs.str] && !this.sideEffects)
           return;
-        this.rhs = optimizeExpr(this.rhs, names, constants2);
+        this.rhs = optimizeExpr(this.rhs, names, constants3);
         return this;
       }
       get names() {
@@ -15587,8 +15587,8 @@ var require_codegen = __commonJS({
       optimizeNodes() {
         return `${this.code}` ? this : void 0;
       }
-      optimizeNames(names, constants2) {
-        this.code = optimizeExpr(this.code, names, constants2);
+      optimizeNames(names, constants3) {
+        this.code = optimizeExpr(this.code, names, constants3);
         return this;
       }
       get names() {
@@ -15617,12 +15617,12 @@ var require_codegen = __commonJS({
         }
         return nodes.length > 0 ? this : void 0;
       }
-      optimizeNames(names, constants2) {
+      optimizeNames(names, constants3) {
         const { nodes } = this;
         let i = nodes.length;
         while (i--) {
           const n = nodes[i];
-          if (n.optimizeNames(names, constants2))
+          if (n.optimizeNames(names, constants3))
             continue;
           subtractNames(names, n.names);
           nodes.splice(i, 1);
@@ -15675,12 +15675,12 @@ var require_codegen = __commonJS({
           return void 0;
         return this;
       }
-      optimizeNames(names, constants2) {
+      optimizeNames(names, constants3) {
         var _a3;
-        this.else = (_a3 = this.else) === null || _a3 === void 0 ? void 0 : _a3.optimizeNames(names, constants2);
-        if (!(super.optimizeNames(names, constants2) || this.else))
+        this.else = (_a3 = this.else) === null || _a3 === void 0 ? void 0 : _a3.optimizeNames(names, constants3);
+        if (!(super.optimizeNames(names, constants3) || this.else))
           return;
-        this.condition = optimizeExpr(this.condition, names, constants2);
+        this.condition = optimizeExpr(this.condition, names, constants3);
         return this;
       }
       get names() {
@@ -15703,10 +15703,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.iteration})` + super.render(opts);
       }
-      optimizeNames(names, constants2) {
-        if (!super.optimizeNames(names, constants2))
+      optimizeNames(names, constants3) {
+        if (!super.optimizeNames(names, constants3))
           return;
-        this.iteration = optimizeExpr(this.iteration, names, constants2);
+        this.iteration = optimizeExpr(this.iteration, names, constants3);
         return this;
       }
       get names() {
@@ -15742,10 +15742,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.varKind} ${this.name} ${this.loop} ${this.iterable})` + super.render(opts);
       }
-      optimizeNames(names, constants2) {
-        if (!super.optimizeNames(names, constants2))
+      optimizeNames(names, constants3) {
+        if (!super.optimizeNames(names, constants3))
           return;
-        this.iterable = optimizeExpr(this.iterable, names, constants2);
+        this.iterable = optimizeExpr(this.iterable, names, constants3);
         return this;
       }
       get names() {
@@ -15787,11 +15787,11 @@ var require_codegen = __commonJS({
         (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNodes();
         return this;
       }
-      optimizeNames(names, constants2) {
+      optimizeNames(names, constants3) {
         var _a3, _b;
-        super.optimizeNames(names, constants2);
-        (_a3 = this.catch) === null || _a3 === void 0 ? void 0 : _a3.optimizeNames(names, constants2);
-        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants2);
+        super.optimizeNames(names, constants3);
+        (_a3 = this.catch) === null || _a3 === void 0 ? void 0 : _a3.optimizeNames(names, constants3);
+        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants3);
         return this;
       }
       get names() {
@@ -16092,7 +16092,7 @@ var require_codegen = __commonJS({
     function addExprNames(names, from) {
       return from instanceof code_1._CodeOrName ? addNames(names, from.names) : names;
     }
-    function optimizeExpr(expr, names, constants2) {
+    function optimizeExpr(expr, names, constants3) {
       if (expr instanceof code_1.Name)
         return replaceName(expr);
       if (!canOptimize(expr))
@@ -16107,14 +16107,14 @@ var require_codegen = __commonJS({
         return items;
       }, []));
       function replaceName(n) {
-        const c = constants2[n.str];
+        const c = constants3[n.str];
         if (c === void 0 || names[n.str] !== 1)
           return n;
         delete names[n.str];
         return c;
       }
       function canOptimize(e) {
-        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants2[c.str] !== void 0);
+        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants3[c.str] !== void 0);
       }
     }
     function subtractNames(names, from) {
@@ -31662,7 +31662,6 @@ var VIEWER_VIEW_URI = "ui://viewer/index.html";
 var TAB_META_KEY = "ai.insodimension/tab";
 var ANNOTATE_META_KEY = "ai.insodimension.viewer/annotate";
 var MAX_CHUNK_BYTES = 4 * 1024 * 1024;
-var MAX_MEDIA_BYTES = 64 * 1024 * 1024;
 var VIEWER_KINDS = ["image", "pdf", "html", "markdown", "docx", "pptx", "xlsx", "text", "audio", "video", "binary"];
 var viewedFileSchema = external_exports.object({
   path: external_exports.string().min(1),
@@ -31678,6 +31677,13 @@ var fileChunkSchema = external_exports.object({
   length: external_exports.number().int().nonnegative(),
   size: external_exports.number().int().nonnegative(),
   eof: external_exports.boolean()
+});
+var MEDIA_TOKEN_PATTERN = /^[a-f0-9]{48}$/;
+var mediaTokenSchema = external_exports.string().regex(MEDIA_TOKEN_PATTERN);
+var mediaSourceSchema = external_exports.object({
+  url: external_exports.string().url(),
+  token: mediaTokenSchema,
+  mime: external_exports.string().min(1)
 });
 
 // src/chunk.ts
@@ -32084,6 +32090,199 @@ function detectKind(filename, head, size = head.length) {
   return sniffed === "binary" || sniffed === "zip" || head.includes(0) ? "binary" : "text";
 }
 
+// src/media-server.ts
+import { constants as constants2 } from "node:fs";
+import { open as open2 } from "node:fs/promises";
+import { createServer } from "node:http";
+import { pipeline } from "node:stream/promises";
+var MAX_LEASES = 64;
+var TRANSFERS_PER_LEASE = 3;
+var MAX_TRANSFERS = MAX_LEASES * TRANSFERS_PER_LEASE;
+var KEEP_ALIVE_HEADROOM = MAX_LEASES;
+var MAX_REMEMBERED_RELEASES = MAX_LEASES * 16;
+var STREAM_BUFFER_BYTES = 64 * 1024;
+var OPEN_FLAGS2 = constants2.O_RDONLY | (constants2.O_NONBLOCK ?? 0) | (constants2.O_NOFOLLOW ?? 0);
+var SANDBOXED_VIEW_ORIGIN = "null";
+function matchesRevision(info, size, mtimeMs) {
+  return info.size === size && info.mtimeMs === mtimeMs;
+}
+async function admitRecording(fence, path, size, mtimeMs, meta3) {
+  const verdict = await fence.check(path, meta3);
+  if (!verdict.ok) throw new Error(verdict.reason);
+  const head = await readRange(verdict.real, 0, KIND_HEAD_BYTES);
+  if (!matchesRevision(head, size, mtimeMs)) throw new Error("The file changed. Open it again.");
+  const media = sniffMedia(head.bytes, verdict.real);
+  if (media === void 0) throw new Error("This file is not a supported recording.");
+  return { path: verdict.real, size, mtimeMs, mime: media.mime, meta: meta3, responses: /* @__PURE__ */ new Set() };
+}
+var RANGE_SPEC = /^(\d*)-(\d*)$/;
+function parseRangeSpec(header) {
+  const equals = header.indexOf("=");
+  if (equals < 0) return "invalid";
+  if (header.slice(0, equals).trim().toLowerCase() !== "bytes") return "ignore";
+  const spec = header.slice(equals + 1).trim();
+  if (spec.includes(",")) return "ignore";
+  const match = RANGE_SPEC.exec(spec);
+  return match === null ? "invalid" : { first: match[1] ?? "", last: match[2] ?? "" };
+}
+function windowOf({ first, last }, size) {
+  if (size === 0) return null;
+  if (first === "") {
+    const suffix = Number(last);
+    return last === "" || suffix === 0 ? null : { start: Math.max(0, size - suffix), end: size - 1 };
+  }
+  const start = Number(first);
+  const end = last === "" ? size - 1 : Number(last);
+  return start >= size || end < start ? null : { start, end: Math.min(end, size - 1) };
+}
+function selectRange(method, header, size) {
+  if (method !== "GET" || header === void 0) return { kind: "whole" };
+  const spec = parseRangeSpec(header);
+  if (spec === "ignore") return { kind: "whole" };
+  const window2 = spec === "invalid" ? null : windowOf(spec, size);
+  return window2 === null ? { kind: "unsatisfiable" } : { kind: "window", window: window2 };
+}
+function responseHead(lease, verdict, size) {
+  const range = verdict.kind === "window" ? verdict.window : { start: 0, end: size - 1 };
+  const headers = {
+    "Content-Type": lease.mime,
+    "Content-Length": range.end - range.start + 1,
+    "Accept-Ranges": "bytes",
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff"
+  };
+  if (verdict.kind === "window") headers["Content-Range"] = `bytes ${range.start}-${range.end}/${size}`;
+  return { status: verdict.kind === "window" ? 206 : 200, headers, range };
+}
+function comesFromView(req, listenerHost) {
+  const origin = req.headers.origin;
+  return req.headers.host === listenerHost && (origin === void 0 || origin === SANDBOXED_VIEW_ORIGIN);
+}
+async function streamRecording(req, res, lease) {
+  const file2 = await open2(lease.path, OPEN_FLAGS2);
+  try {
+    const stats = await file2.stat();
+    if (res.destroyed) return;
+    if (!stats.isFile() || !matchesRevision(stats, lease.size, lease.mtimeMs)) {
+      res.writeHead(409).end();
+      return;
+    }
+    const verdict = selectRange(req.method, req.headers.range, stats.size);
+    if (verdict.kind === "unsatisfiable") {
+      res.writeHead(416, { "Content-Range": `bytes */${stats.size}` }).end();
+      return;
+    }
+    const head = responseHead(lease, verdict, stats.size);
+    res.writeHead(head.status, head.headers);
+    if (req.method === "HEAD" || stats.size === 0) res.end();
+    else await pipeline(file2.createReadStream({ start: head.range.start, end: head.range.end, highWaterMark: STREAM_BUFFER_BYTES, autoClose: false }), res);
+  } finally {
+    await file2.close();
+  }
+}
+async function startMediaServer(fence) {
+  const leases = /* @__PURE__ */ new Map();
+  const pendingAdmissions = /* @__PURE__ */ new Map();
+  const releasedTokens = /* @__PURE__ */ new Set();
+  let active = 0;
+  let host = "";
+  let closing;
+  const server2 = createServer((req, res) => {
+    if (!comesFromView(req, host)) {
+      res.writeHead(404).end();
+      return;
+    }
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    const token = /^\/media\/([a-f0-9]{48})$/.exec(req.url ?? "")?.[1];
+    const lease = token === void 0 ? void 0 : leases.get(token);
+    if (lease === void 0) {
+      res.writeHead(404).end();
+      return;
+    }
+    void serve(req, res, lease).catch(() => {
+      if (!res.headersSent) res.writeHead(500).end();
+      else res.destroy();
+    });
+  });
+  server2.requestTimeout = 3e4;
+  server2.headersTimeout = 1e4;
+  server2.maxConnections = MAX_TRANSFERS + KEEP_ALIVE_HEADROOM;
+  async function serve(req, res, lease) {
+    if (req.method !== "GET" && req.method !== "HEAD") {
+      res.writeHead(405, { Allow: "GET, HEAD" }).end();
+      return;
+    }
+    if (active >= MAX_TRANSFERS) {
+      res.writeHead(503).end();
+      return;
+    }
+    active++;
+    lease.responses.add(res);
+    try {
+      const verdict = await fence.check(lease.path, lease.meta);
+      if (!verdict.ok || verdict.real !== lease.path) {
+        res.writeHead(404).end();
+        return;
+      }
+      await streamRecording(req, res, lease);
+    } finally {
+      lease.responses.delete(res);
+      active--;
+    }
+  }
+  await new Promise((resolve, reject) => {
+    server2.once("error", reject);
+    server2.listen(0, "127.0.0.1", () => {
+      server2.off("error", reject);
+      resolve();
+    });
+  });
+  const address = server2.address();
+  if (address === null || typeof address === "string") throw new Error("Media listener did not bind a TCP port");
+  host = `127.0.0.1:${address.port}`;
+  const origin = `http://${host}`;
+  return {
+    origin,
+    async acquire(path, size, mtimeMs, meta3, token) {
+      if (closing !== void 0) throw new Error("The recording server is closed.");
+      if (!MEDIA_TOKEN_PATTERN.test(token) || leases.has(token) || pendingAdmissions.has(token)) throw new Error("Invalid recording capability.");
+      if (releasedTokens.has(token)) throw new Error("Recording opening was cancelled.");
+      if (leases.size + pendingAdmissions.size >= MAX_LEASES) throw new Error("Close an open recording before opening another.");
+      const admission = { cancelled: false };
+      pendingAdmissions.set(token, admission);
+      try {
+        const lease = await admitRecording(fence, path, size, mtimeMs, meta3);
+        if (admission.cancelled) throw new Error("Recording opening was cancelled.");
+        leases.set(token, lease);
+        return { url: `${origin}/media/${token}`, token, mime: lease.mime };
+      } finally {
+        pendingAdmissions.delete(token);
+      }
+    },
+    release(token) {
+      const admission = pendingAdmissions.get(token);
+      if (admission !== void 0) admission.cancelled = true;
+      for (const response of leases.get(token)?.responses ?? []) response.destroy();
+      leases.delete(token);
+      releasedTokens.add(token);
+      if (releasedTokens.size > MAX_REMEMBERED_RELEASES) {
+        const oldest = releasedTokens.values().next();
+        if (!oldest.done) releasedTokens.delete(oldest.value);
+      }
+    },
+    close() {
+      closing ??= new Promise((resolve, reject) => {
+        for (const lease of leases.values()) for (const response of lease.responses) response.destroy();
+        leases.clear();
+        for (const admission of pendingAdmissions.values()) admission.cancelled = true;
+        server2.close((error51) => error51 ? reject(error51) : resolve());
+        server2.closeAllConnections();
+      });
+      return closing;
+    }
+  };
+}
+
 // src/server.ts
 var MIME = {
   ".js": "text/javascript",
@@ -32110,7 +32309,20 @@ async function createViewerServer(options = {}) {
   const viewDir = options.viewDir ?? fileURLToPath(new URL("./dist/", import.meta.url));
   const html = await readFile(join(viewDir, "index.html"), "utf8");
   const server2 = new McpServer({ name: "dimension-community-viewer", version: "0.1.0" });
-  const metadata = { ui: { prefersBorder: false, permissions: { clipboardWrite: {} } } };
+  const media = await startMediaServer(fence);
+  server2.server.onclose = () => {
+    void media.close().catch((error51) => console.error(error51));
+  };
+  try {
+    await registerViewer(server2, { fence, html, viewDir, media });
+  } catch (error51) {
+    await media.close();
+    throw error51;
+  }
+  return server2;
+}
+async function registerViewer(server2, { fence, html, viewDir, media }) {
+  const metadata = { ui: { prefersBorder: false, permissions: { clipboardWrite: {} }, csp: { resourceDomains: [media.origin] } } };
   N3(server2, "Viewer", VIEWER_VIEW_URI, { _meta: metadata }, async () => ({
     contents: [{ uri: VIEWER_VIEW_URI, mimeType: p, text: html, _meta: metadata }]
   }));
@@ -32193,7 +32405,26 @@ async function createViewerServer(options = {}) {
       }
     }
   );
-  return server2;
+  K3(server2, "open_media", {
+    inputSchema: { path: external_exports.string().min(1).max(4096), size: external_exports.number().int().nonnegative(), mtimeMs: external_exports.number(), token: mediaTokenSchema },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    _meta: APP_ONLY
+  }, async ({ path, size, mtimeMs, token }, extra) => {
+    try {
+      const source = await media.acquire(path, size, mtimeMs, extra._meta, token);
+      return { content: [{ type: "text", text: "Recording ready for range playback." }], structuredContent: { ...source } };
+    } catch (error51) {
+      return failure(describeError(error51));
+    }
+  });
+  K3(server2, "close_media", {
+    inputSchema: { token: mediaTokenSchema },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    _meta: APP_ONLY
+  }, async ({ token }) => {
+    media.release(token);
+    return { content: [{ type: "text", text: "Recording released." }], structuredContent: {} };
+  });
 }
 
 // src/stdio.ts
@@ -32203,16 +32434,13 @@ function stop() {
   stopping ??= server.close();
   return stopping;
 }
-process.once("SIGINT", () => {
+function shutdown() {
   void stop().catch((error51) => {
     console.error(error51);
     process.exitCode = 1;
   });
-});
-process.once("SIGTERM", () => {
-  void stop().catch((error51) => {
-    console.error(error51);
-    process.exitCode = 1;
-  });
-});
+}
+process.stdin.once("end", shutdown);
+process.once("SIGINT", shutdown);
+process.once("SIGTERM", shutdown);
 await server.connect(new StdioServerTransport());

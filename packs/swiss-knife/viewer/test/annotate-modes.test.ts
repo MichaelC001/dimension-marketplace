@@ -26,7 +26,7 @@ const EXPECTED: Readonly<Record<ViewerKind, AnnotateMode | null>> = {
 /** The pane's phases while there is (or is about to be) something to mark. */
 const LIVE_PHASES = ["loading", "ready"] as const;
 /** The pane's phases that leave nothing on screen to mark. */
-const DEAD_PHASES = ["error", "unavailable", "too-large"] as const;
+const DEAD_PHASES = ["error", "unavailable"] as const;
 
 describe("shownMode", () => {
 	for (const phase of LIVE_PHASES) {
@@ -45,7 +45,7 @@ describe("shownMode", () => {
 	}
 
 	test("the mode is derived, not toggled: a repeated or interleaved phase gives the mode a fresh call would", () => {
-		const sequence = ["loading", "ready", "ready", "error", "ready", "too-large", "loading", "unavailable", "ready"];
+		const sequence = ["loading", "ready", "ready", "error", "ready", "loading", "unavailable", "ready"];
 		for (const kind of VIEWER_KINDS) {
 			const seen = sequence.map(phase => shownMode(kind, phase));
 			const fresh = sequence.map(phase => (DEAD_PHASES as readonly string[]).includes(phase) ? null : EXPECTED[kind]);

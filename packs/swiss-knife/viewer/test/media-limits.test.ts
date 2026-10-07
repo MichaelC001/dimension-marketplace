@@ -1,69 +1,7 @@
-// The bounds a recording is held to, and the small pure rules around playing one: the size
-// cap that is decided BEFORE a byte is read, the loudness picture's passes over the samples,
-// the size and timing of a still, the length of a frame, and the one sentence a failure gets
-// (when a waveform is allowed at all is `media-waveform.test.ts`). A recording is played from
-// one Blob of all its bytes, so each of these is a way a big or odd file could otherwise hurt.
 import { describe, expect, test } from "bun:test";
-import { loadDocumentBytes, tooLargeToPlay } from "../app/view/document-bytes";
 import { estimateFrameSeconds, frameSize, frameStepTarget, jpegBytes } from "../app/view/media-frame";
 import { describeMediaError } from "../app/view/media-messages";
 import { bucketPeaks } from "../app/view/media-waveform";
-import type { DocTab } from "../app/view/tabs";
-import { MAX_MEDIA_BYTES } from "../src/contract";
-
-const tab = (over: Partial<DocTab> = {}): DocTab => ({
-	key: "/w/take.mp4",
-	path: "/w/take.mp4",
-	filename: "take.mp4",
-	kind: "video",
-	size: 1024,
-	mtimeMs: 1,
-	revision: 0,
-	annotateRequests: 0,
-	...over,
-});
-
-/** A host that counts the reads asked of it, and refuses each one with a recognisable error. */
-function counting() {
-	const reads: unknown[] = [];
-	const app = {
-		callServerTool: async (params: unknown) => {
-			reads.push(params);
-			throw new Error("a read was attempted");
-		},
-	};
-	return { reads, app: app as never };
-}
-
-describe("the size cap, decided before a byte moves", () => {
-	test("a recording over the cap reads NOTHING, and says what the limit is", async () => {
-		const { reads, app } = counting();
-		const big = tab({ size: MAX_MEDIA_BYTES + 1, key: "/w/big.mp4" });
-		await expect(loadDocumentBytes(app, big)).rejects.toThrow(/plays recordings up to 64\.0 MB/);
-		await expect(loadDocumentBytes(app, tab({ kind: "audio", size: MAX_MEDIA_BYTES * 4, key: "/w/huge.wav" }))).rejects.toThrow(/plays recordings/);
-		expect(reads).toHaveLength(0);
-	});
-
-	test("a recording exactly at the cap is played: the gate is `over`, not `at`", async () => {
-		const { reads, app } = counting();
-		await expect(loadDocumentBytes(app, tab({ size: MAX_MEDIA_BYTES, key: "/w/exact.mp4" }))).rejects.toThrow("a read was attempted");
-		expect(reads).toHaveLength(1);
-	});
-
-	test("the cap is for recordings: a document of the same size is not refused by it", async () => {
-		const { reads, app } = counting();
-		const pdf = tab({ kind: "pdf", size: MAX_MEDIA_BYTES + 1, key: "/w/big.pdf", path: "/w/big.pdf", filename: "big.pdf" });
-		expect(tooLargeToPlay(pdf)).toBe(false);
-		await expect(loadDocumentBytes(app, pdf)).rejects.toThrow("a read was attempted");
-		expect(reads).toHaveLength(1);
-	});
-
-	test("both kinds of recording are held to it", () => {
-		expect(tooLargeToPlay({ kind: "audio", size: MAX_MEDIA_BYTES + 1 })).toBe(true);
-		expect(tooLargeToPlay({ kind: "video", size: MAX_MEDIA_BYTES + 1 })).toBe(true);
-		expect(tooLargeToPlay({ kind: "video", size: MAX_MEDIA_BYTES })).toBe(false);
-	});
-});
 
 describe("bucketPeaks", () => {
 	const ramp = (length: number, level: number): Float32Array => Float32Array.from({ length }, (_, index) => ((index % 2 === 0 ? 1 : -1) * level * (index + 1)) / length);

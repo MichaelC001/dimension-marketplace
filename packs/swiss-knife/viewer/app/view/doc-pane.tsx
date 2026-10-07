@@ -10,15 +10,16 @@
 import type { App } from "@modelcontextprotocol/ext-apps";
 import { cn } from "@fraym/ui/lib/cn";
 import { useEffect, useState } from "react";
-import { MAX_MEDIA_BYTES } from "../../src/contract";
-import { loadDocumentBytes, readLimit, tooLargeToPlay } from "./document-bytes";
+import { createToolCaller } from "@dimension/mcp-app-kit/tools";
+import { mediaSourceSchema } from "../../src/contract";
+import { loadDocumentBytes, readLimit } from "./document-bytes";
 import { shownMode } from "./annotate-modes";
 import { FOCUS } from "./focus-ring";
-import { formatBytes } from "./format";
 import { failureAction, type FailureStage, isRecording } from "./media-failure";
+import { trackMediaWork } from "./media-lifecycle";
 import { loadRenderer } from "./renderers";
 import { Opening } from "./opening";
-import type { Mounted, Theme } from "./renderers/types";
+import type { Mounted, RecordingSource, Theme } from "./renderers/types";
 import { PaneExtras } from "./pane-extras";
 import type { DocTab } from "./tabs";
 import { KIND_LABEL, Toolbar } from "./toolbar";
@@ -29,7 +30,6 @@ type Phase =
 	| { readonly name: "loading"; readonly stage: "read" | "prepare"; readonly loaded: number; readonly total: number }
 	| { readonly name: "ready" }
 	| { readonly name: "unavailable" }
-	| { readonly name: "too-large" }
 	| { readonly name: "error"; readonly message: string; readonly stage: FailureStage };
 
 export interface DocPaneProps {
@@ -56,7 +56,17 @@ export function DocPane({ app, tab, active, theme }: DocPaneProps) {
 	useEffect(() => {
 		if (stage === null) return;
 		const controller = new AbortController();
+		let mediaToken: string | undefined = isRecording(tab.kind)
+			? Array.from(crypto.getRandomValues(new Uint8Array(24)), byte => byte.toString(16).padStart(2, "0")).join("")
+			: undefined;
 		let handle: Mounted | undefined;
+		const tools = createToolCaller(app);
+		const releaseMedia = () => {
+			if (mediaToken === undefined) return;
+			const token = mediaToken;
+			mediaToken = undefined;
+			void trackMediaWork(app, tools.raw("close_media", { token })).catch(() => undefined);
+		};
 		// Where a failure is met, so a recording that cannot be played is told what to do next (`media-failure.ts`).
 		let where: FailureStage = "load";
 		setPhase({ name: "loading", stage: "read", loaded: 0, total: tab.size });
@@ -65,24 +75,26 @@ export function DocPane({ app, tab, active, theme }: DocPaneProps) {
 
 		(async () => {
 			try {
-				// A recording past the cap is not read at all: the size is the server's, and it is decided before a byte moves.
-				if (tooLargeToPlay(tab)) {
-					setPhase({ name: "too-large" });
-					return;
-				}
-				// The renderer's chunk is part of preparing, not of reading, so it loads while the bytes stream in rather
-				// than before them: the opening surface names the stage that is really under way, and `prepare` starts the
-				// moment the bytes are in hand.
-				const reading = loadDocumentBytes(app, tab, {
-					signal: controller.signal,
-					onProgress: (done, total) => setPhase({ name: "loading", stage: "read", loaded: done, total }),
-				}).then(loaded => {
-					if (!controller.signal.aborted) setPhase({ name: "loading", stage: "prepare", loaded: loaded.bytes.length, total: tab.size });
-					return loaded;
-				});
+				let mediaSource: RecordingSource | undefined;
+				const reading = isRecording(tab.kind)
+					? tools.whole("open_media", { path: tab.path, size: tab.size, mtimeMs: tab.mtimeMs, token: mediaToken }).then(result => {
+						if (!controller.signal.aborted) {
+							mediaSource = mediaSourceSchema.parse(result);
+							setPhase({ name: "loading", stage: "prepare", loaded: 0, total: 0 });
+						}
+						return { bytes: new Uint8Array(0) };
+					})
+					: loadDocumentBytes(app, tab, {
+						signal: controller.signal,
+						onProgress: (done, total) => setPhase({ name: "loading", stage: "read", loaded: done, total }),
+					}).then(loaded => {
+						if (!controller.signal.aborted) setPhase({ name: "loading", stage: "prepare", loaded: loaded.bytes.length, total: tab.size });
+						return loaded;
+					});
 				const [renderer, { bytes }] = await Promise.all([loadRenderer(tab.kind), reading]);
 				if (controller.signal.aborted) return;
 				if (renderer === null) {
+					releaseMedia();
 					setPhase({ name: "unavailable" });
 					return;
 				}
@@ -95,9 +107,11 @@ export function DocPane({ app, tab, active, theme }: DocPaneProps) {
 						void app.openLink({ url }).catch(() => undefined);
 					},
 					signal: controller.signal,
+					...(mediaSource === undefined ? {} : { mediaSource }),
 				});
 				if (controller.signal.aborted) {
 					handle.destroy();
+					releaseMedia();
 					return;
 				}
 				setMounted(handle);
@@ -107,12 +121,14 @@ export function DocPane({ app, tab, active, theme }: DocPaneProps) {
 				setPhase({ name: "error", message: error instanceof Error ? error.message : String(error), stage: where });
 				// The read may still be streaming (the renderer failed first): stop it, so its `prepare` cannot take the error card back.
 				controller.abort();
+				releaseMedia();
 			}
 		})();
 
 		return () => {
 			controller.abort();
 			handle?.destroy();
+			releaseMedia();
 			setMounted(null);
 			stage.replaceChildren();
 		};
@@ -159,13 +175,6 @@ export function DocPane({ app, tab, active, theme }: DocPaneProps) {
 					) : null}
 					{phase.name === "unavailable" ? (
 						<Message title="Preview not available" body={`${KIND_LABEL[tab.kind]} files cannot be previewed in this build of the viewer.`} />
-					) : null}
-					{phase.name === "too-large" ? (
-						<Message
-							title="Too large to play here"
-							body={`The viewer plays recordings up to ${formatBytes(MAX_MEDIA_BYTES)}, and this one is ${formatBytes(tab.size)}. Copy its path to open it in a media player.`}
-							action={copyAction}
-						/>
 					) : null}
 					{phase.name === "error" ? (
 						<Message
