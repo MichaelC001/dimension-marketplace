@@ -137,6 +137,8 @@ takes one proposal; the next waits on the home.
 Precedence is the engine's: packs own their names, then the project, then the
 user; a shadowed file is reported.
 
+A General Agent the move left behind in `agents/` (a locked or conflicting folder; the engine says why) still wins its name in the engine, so the page lists it read-only from there, reports the same-name `general-agents/` copy as shadowed, and never offers that copy for editing.
+
 ## The server
 
 | Tool | Who calls it | What it does |
@@ -147,7 +149,7 @@ user; a shadowed file is reported.
 | `list_agents { workspace? }` | the page | All three tiers, each parsed by `@dimension/sdk/general-agent`'s `parseGeneralAgent`, with its tier, path, revision and whether it is editable. |
 | `list_parts { workspace? }` | the page | Skills, MCP servers and tool names read from disk. |
 | `validate_agent { draft }` | the page | The server's verdict on a draft without writing. |
-| `save_agent { draft, create, tier?, revision?, workspace? }` | the page | Serializes with the SAME `src/agent-md.ts` the page previews, re-parses the whole file before anything touches disk, then writes atomically. `create: true` writes a new agent into the user tier; `create: false` rewrites the agent of that tier and is refused unless `revision` still matches. Never rewrites a Loop. |
+| `save_agent { draft, create, tier?, revision?, workspace? }` | the page | Serializes with the SAME `src/agent-md.ts` the page previews, re-parses the whole file before anything touches disk, then writes atomically. `create: true` writes a new agent into the user tier, or into the project tier when `tier: workspace` is given; `create: false` rewrites the agent of that tier and is refused unless `revision` still matches. Never rewrites a Loop. |
 | `agent_home { name, workspace? }` · `save_instructions { name, text, revision, workspace? }` | the page | The agent's home and standing instructions; a save is refused unless `revision` still matches. |
 
 The page's tools are App-only (`_meta.ui.visibility: ["app"]`); the model's are

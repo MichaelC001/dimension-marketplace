@@ -204,8 +204,8 @@ const MODELS: readonly ModelFact[] = [
 function pathOf(seed: Seed): string {
 	const name = seed.draft.name;
 	if (seed.source === "pack") return `${HOME}/plugins/${seed.pack}/general-agents/${name}/agent.md`;
-	if (seed.source === "user") return `${HOME}/agent/agents/${name}/agent.md`;
-	return `${PROJECT}/.inso/agents/${name}/agent.md`;
+	if (seed.source === "user") return `${HOME}/agent/general-agents/${name}/agent.md`;
+	return `${PROJECT}/.inso/general-agents/${name}/agent.md`;
 }
 
 function listedOf(seed: Seed): ListedAgent {
@@ -245,9 +245,9 @@ function homeOf(seed: Seed | undefined, name: string): AgentHome {
 	const canStandAtHome = source !== "workspace";
 	const folder = canStandAtHome ? `${HOME}/workspaces/${homeId}` : null;
 	const text = seed?.instructions ?? "";
-	const dir = seed === undefined ? `${HOME}/agent/agents/${name}` : pathOf(seed).replace(/\/agent\.md$/, "");
+	const dir = seed === undefined ? `${HOME}/agent/general-agents/${name}` : pathOf(seed).replace(/\/agent\.md$/, "");
 	const files: InstructionFile[] = [
-		...(source === "pack" ? [{ kind: "workspace-copy" as const, path: `${PROJECT}/.inso/agents/${name}/AGENTS.md`, exists: false, bytes: 0, wins: false }] : []),
+		...(source === "pack" ? [{ kind: "workspace-copy" as const, path: `${PROJECT}/.inso/general-agents/${name}/AGENTS.md`, exists: false, bytes: 0, wins: false }] : []),
 		...(canStandAtHome ? [{ kind: "home" as const, path: `${folder}/AGENTS.md`, exists: text !== "", bytes: text.length, wins: text !== "" }] : []),
 		{ kind: source === "pack" ? "pack" : "agent-dir", path: `${dir}/AGENTS.md`, exists: text === "", bytes: 0, wins: text === "" },
 	];
@@ -341,7 +341,7 @@ export function fixtureStore(params: URLSearchParams, voiceCells: ReadonlyMap<st
 		switch (name) {
 			case "list_agents": {
 				if (state === "error") throw new Error("The pack's server did not answer (it is still starting).");
-				const listing: AgentListing = { workspace: PROJECT, configDir: ".inso", userAgentsDir: `${HOME}/agent/agents`, agents: seeds.map(listedOf), notices: [] };
+				const listing: AgentListing = { workspace: PROJECT, configDir: ".inso", userAgentsDir: `${HOME}/agent/general-agents`, agents: seeds.map(listedOf), notices: [] };
 				return listing;
 			}
 			case "validate_agent":
@@ -353,7 +353,7 @@ export function fixtureStore(params: URLSearchParams, voiceCells: ReadonlyMap<st
 				if (existing >= 0) seeds[existing] = { ...seeds[existing], ...seed } as Seed;
 				else seeds = [...seeds, seed];
 				publish();
-				return { path: pathOf(seed), relativePath: `agent/agents/${draft.name}/agent.md`, created: existing < 0, tier: "user" };
+				return { path: pathOf(seed), relativePath: `agent/general-agents/${draft.name}/agent.md`, created: existing < 0, tier: "user" };
 			}
 			case "agent_home":
 				return homeOf(

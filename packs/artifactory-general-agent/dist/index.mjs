@@ -1440,6 +1440,9 @@ var TIER_LABEL = {
 function isEditable(agent) {
 	return agent.tier !== "pack" && agent.listed?.editable === true;
 }
+function isUnreadable(agent, listingRead) {
+	return listingRead && agent.tier !== "pack" && agent.listed === void 0;
+}
 /** A scalar written in YAML, unquoted: `"Chief of Staff"` → `Chief of Staff`. */
 function plain(value) {
 	const trimmed = value.trim();
@@ -1998,7 +2001,7 @@ function standing(activity, state, now) {
 /** Memoized: the page re-renders on every coalesced session update, and a card
 *  whose props are the same objects as last time draws the same thing. Its
 *  handlers take the name, so one stable function serves every card. */
-var AgentCard = memo(function AgentCard({ agent, activity, usage, now, face, bridged, catalog, voice, busy, onOpen, onToggle }) {
+var AgentCard = memo(function AgentCard({ agent, activity, usage, now, face, bridged, catalog, voice, busy, unreadable, onOpen, onToggle }) {
 	const [live, setLive] = useState(false);
 	const state = liveStateOf(activity);
 	const stand = standing(activity, state, now);
@@ -2057,7 +2060,7 @@ var AgentCard = memo(function AgentCard({ agent, activity, usage, now, face, bri
 								className: "m-0 line-clamp-2 min-h-[2lh] text-fr-sm leading-relaxed text-pretty text-fr-text-2",
 								children: description || "No description yet."
 							}),
-							agent.listed === void 0 ? /* @__PURE__ */ jsx("p", {
+							unreadable ? /* @__PURE__ */ jsx("p", {
 								className: "m-0 text-fr-xs text-fr-text-3",
 								children: "The page cannot read this agent's file from here, so it is read-only. If it is your own agent, check that its folder is under general-agents/."
 							}) : null
@@ -2321,7 +2324,7 @@ function ProposalsBanner({ proposals, roster, faceOf, bridged, onReview }) {
 		})
 	});
 }
-function AgentsHome({ roster, loading, listingError, activity, usage, catalog, voices, now, faceOf, bridged, proposals, onReview, onOpen, onCreate, onDock, configure, busy, notice }) {
+function AgentsHome({ roster, loading, listingRead, listingError, activity, usage, catalog, voices, now, faceOf, bridged, proposals, onReview, onOpen, onCreate, onDock, configure, busy, notice }) {
 	const [facet, setFacet] = useState("all");
 	const toggle = useCallback((name, on) => void configure?.(name, { enabled: on }), [configure]);
 	const counts = facetCounts(roster);
@@ -2349,6 +2352,7 @@ function AgentsHome({ roster, loading, listingError, activity, usage, catalog, v
 		catalog,
 		voice: voices.get(agent.name),
 		busy: busy.has(agent.name),
+		unreadable: isUnreadable(agent, listingRead),
 		onOpen: agent.listed !== void 0 ? onOpen : void 0,
 		onToggle: configure !== void 0 && isEditable(agent) && agent.fact !== void 0 ? toggle : void 0
 	}, agent.name);
@@ -5639,6 +5643,7 @@ function GeneralAgentsPage(props) {
 		}, profile.draft.key) : /* @__PURE__ */ jsx(AgentsHome, {
 			roster,
 			loading: facts === void 0,
+			listingRead: listing.value !== void 0,
 			listingError: listing.error,
 			activity,
 			usage,

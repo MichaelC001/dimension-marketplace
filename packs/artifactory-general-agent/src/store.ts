@@ -38,6 +38,7 @@ import type { AgentListing, ListedAgent, SaveOutcome, SaveTarget, WritableTier }
 import { type Block, parseExtra, reindent } from "./extra.js";
 import { isRecord } from "./guards.js";
 
+export const LEGACY_AGENTS_DIR = "agents";
 /**
  * The project config dir the Forge reads — the ENGINE's own rule
  * (`getConfigDirName` in omp utils: `PI_CONFIG_DIR`, else `.inso` in the product),
@@ -331,6 +332,21 @@ export async function listAgents(roots: Roots): Promise<AgentListing> {
 		claimed.set(found.name, found.path);
 		return true;
 	};
+	const claimLeftovers = async (agentsDir: string, source: "workspace" | "user", shown: string): Promise<void> => {
+		for (const found of await scanAgents(agentsDir, [])) {
+			if (!claim(found)) continue;
+			agents.push({
+				name: found.name,
+				description: found.decl.description,
+				source,
+				path: found.path,
+				editable: false,
+				readOnlyReason: `It remains in ${shown} after the General Agents move; the engine runs this copy. Move it to ${GENERAL_AGENTS_DIR}/ to edit it.`,
+				...(found.decl.manifest.workspace?.id !== undefined ? { workspaceId: found.decl.manifest.workspace.id } : {}),
+				draft: draftFromFile(found.decl, found.content, `${source}::${found.name}`),
+			});
+		}
+	};
 	const paths = pathsOf(roots.home);
 
 	// The engine's order: packs own their names, then the project, then the user.
@@ -357,6 +373,7 @@ export async function listAgents(roots: Roots): Promise<AgentListing> {
 	if (roots.workspace === null) {
 		notices.push(roots.workspaceMissing ?? "No workspace is bound, so project agents are not listed. Pack agents and yours are.");
 	} else {
+		for (const dirName of [WRITE_DIR, LEGACY_DIR]) await claimLeftovers(join(roots.workspace, dirName, LEGACY_AGENTS_DIR), "workspace", `${dirName}/${LEGACY_AGENTS_DIR}`);
 		for (const dirName of [WRITE_DIR, LEGACY_DIR]) {
 			for (const found of await scanAgents(join(roots.workspace, dirName, GENERAL_AGENTS_DIR), notices)) {
 				if (!claim(found)) continue;
@@ -380,6 +397,7 @@ export async function listAgents(roots: Roots): Promise<AgentListing> {
 		}
 	}
 
+	if (paths !== null) await claimLeftovers(join(paths.agent, LEGACY_AGENTS_DIR), "user", `agent/${LEGACY_AGENTS_DIR}`);
 	if (paths !== null) {
 		for (const found of await scanAgents(paths.userAgents, notices)) {
 			if (!claim(found)) continue;

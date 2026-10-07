@@ -86,6 +86,10 @@ export function isEditable(agent: RosterAgent): boolean {
 	return agent.tier !== "pack" && agent.listed?.editable === true;
 }
 
+export function isUnreadable(agent: RosterAgent, listingRead: boolean): boolean {
+	return listingRead && agent.tier !== "pack" && agent.listed === undefined;
+}
+
 // ── what the extra text says ─────────────────────────────────────────────────
 
 /** A scalar written in YAML, unquoted: `"Chief of Staff"` → `Chief of Staff`. */

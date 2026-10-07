@@ -966,14 +966,11 @@ describe("list_agents", () => {
 		if (WRITE_DIR === ".omp") return;
 		expect(await listed("old")).toMatchObject({ source: "workspace", editable: false });
 	});
-	test("only general-agents directories enter the roster, including the read-only legacy project tier", async () => {
+	test("the general-agents directories of each tier enter the roster, the legacy project tier read-only", async () => {
 		const manifest = (name: string) => PACK_AGENT.replace("name: helper", `name: ${name}`);
 		await put(userFile("mine"), manifest("mine"));
 		await put(projectFile("project"), manifest("project"));
 		await put(join(workspace, ".omp", "general-agents", "legacy", "agent.md"), manifest("legacy"));
-		await put(join(home, "agent", "agents", "old-user", "agent.md"), manifest("old-user"));
-		await put(join(workspace, WRITE_DIR, "agents", "old-project", "agent.md"), manifest("old-project"));
-		await put(join(workspace, ".omp", "agents", "old-legacy", "agent.md"), manifest("old-legacy"));
 		const agents = (await listing()).agents;
 		expect(agents.map(agent => [agent.name, agent.source, agent.editable]).sort()).toEqual([
 			["helper", "pack", false], ["legacy", "workspace", false], ["mine", "user", true], ["project", "workspace", true],
@@ -1006,6 +1003,136 @@ describe("list_agents", () => {
 			expect(description).toContain("/general-agents/");
 			expect(description).not.toContain("/agents/<name>/agent.md");
 		}
+	});
+});
+
+describe("migration leftovers in agents/", () => {
+	type LeftoverTier = "project" | "legacy" | "user";
+	const leftoverDir: Record<LeftoverTier, () => string> = {
+		project: () => join(workspace, WRITE_DIR, "agents"),
+		legacy: () => join(workspace, ".omp", "agents"),
+		user: () => join(home, "agent", "agents"),
+	};
+	const shownIn: Record<LeftoverTier, () => string> = {
+		project: () => `${WRITE_DIR}/agents`,
+		legacy: () => ".omp/agents",
+		user: () => "agent/agents",
+	};
+	const copyFile: Record<"project" | "user", (name: string) => string> = { project: projectFile, user: userFile };
+	const leftoverFile = (tier: LeftoverTier, name: string) => join(leftoverDir[tier](), name, "agent.md");
+	const agentText = (name: string, description: string) => `---\nname: ${name}\ndescription: ${description}\nspecVersion: 1\ngate:\n  approval: write\n---\n${name} body.\n`;
+	const invalidText = (name: string) => `---\nname: ${name}\ndescription: broken\nvoice: Warm_Voice\nspecVersion: 1\ngate:\n  approval: write\n---\nBody.\n`;
+	const shadowedNoticeFor = (seen: AgentListing, path: string) => seen.notices.some(notice => notice.includes(path) && notice.includes("shadowed"));
+
+	const WINS_OVER_COPY: [string, LeftoverTier, "project" | "user", "workspace" | "user"][] = [
+		["a project leftover beats the project's general-agents copy", "project", "project", "workspace"],
+		["a project leftover beats a same-name user general-agents copy", "project", "user", "workspace"],
+		["a legacy .omp leftover beats the project's general-agents copy", "legacy", "project", "workspace"],
+		["a user leftover beats the user's general-agents copy", "user", "user", "user"],
+	];
+
+	test.each(WINS_OVER_COPY)("%s", async (_label, leftoverTier, copyTier, source) => {
+		if (leftoverTier === "legacy" && WRITE_DIR === ".omp") return;
+		const leftover = leftoverFile(leftoverTier, "keeper");
+		const copy = copyFile[copyTier]("keeper");
+		await put(leftover, agentText("keeper", "the leftover"));
+		await put(copy, agentText("keeper", "the shadowed copy"));
+		const seen = await listing();
+		const keepers = seen.agents.filter(agent => agent.name === "keeper");
+		expect(keepers).toHaveLength(1);
+		expect(keepers[0]).toMatchObject({ source, path: leftover, editable: false, description: "the leftover" });
+		expect(keepers[0]?.draft.description).toBe("the leftover");
+		expect(keepers[0]?.revision).toBeUndefined();
+		expect(keepers[0]?.readOnlyReason).toContain(shownIn[leftoverTier]());
+		expect(seen.agents.some(agent => agent.path === copy)).toBe(false);
+		expect(shadowedNoticeFor(seen, copy)).toBe(true);
+	});
+
+	test("a project's general-agents copy keeps its name against a user leftover, which is reported shadowed", async () => {
+		await put(leftoverFile("user", "keeper"), agentText("keeper", "the user leftover"));
+		await put(projectFile("keeper"), agentText("keeper", "the project copy"));
+		const seen = await listing();
+		expect(seen.agents.filter(agent => agent.name === "keeper")).toMatchObject([{ source: "workspace", path: projectFile("keeper"), editable: true }]);
+		expect(shadowedNoticeFor(seen, leftoverFile("user", "keeper"))).toBe(true);
+	});
+
+	test.each<[LeftoverTier, "workspace" | "user"]>([
+		["project", "workspace"],
+		["legacy", "workspace"],
+		["user", "user"],
+	])("a %s leftover with no same-name copy is listed read-only, and nothing is noticed", async (tier, source) => {
+		if (tier === "legacy" && WRITE_DIR === ".omp") return;
+		await put(leftoverFile(tier, "stranded"), agentText("stranded", "only here"));
+		const seen = await listing();
+		const stranded = seen.agents.filter(agent => agent.name === "stranded");
+		expect(stranded).toHaveLength(1);
+		expect(stranded[0]).toMatchObject({ source, path: leftoverFile(tier, "stranded"), editable: false });
+		expect(stranded[0]?.revision).toBeUndefined();
+		expect(seen.notices).toEqual([]);
+	});
+
+	test.each<LeftoverTier>(["project", "user"])("an installed pack's agent outranks a %s leftover of the same name", async tier => {
+		const leftover = leftoverFile(tier, "helper");
+		await put(leftover, agentText("helper", "a leftover impostor"));
+		const seen = await listing();
+		expect(seen.agents.filter(agent => agent.name === "helper")).toMatchObject([{ source: "pack", pack: "helper-pack", editable: false }]);
+		expect(seen.agents.some(agent => agent.path === leftover)).toBe(false);
+		expect(shadowedNoticeFor(seen, leftover)).toBe(true);
+	});
+
+	test("a flat agents/<x>.md file, a dot directory, and folders with no manifest never enter the roster beside a listed leftover, and none is noticed", async () => {
+		const husk = "---\nname: .retired-ghost-42\ndescription: retired\nspecVersion: 1\n---\nRetired.\n";
+		const tiers = ["project", "legacy", "user"] as const;
+		for (const tier of tiers) {
+			await put(leftoverFile(tier, `anchor-${tier}`), agentText(`anchor-${tier}`, "listed"));
+			await put(join(leftoverDir[tier](), "flat-bot.md"), agentText("flat-bot", "a flat file"));
+			await put(leftoverFile(tier, ".retired-ghost-42"), husk);
+			await put(join(leftoverDir[tier](), "notes", "README.md"), "Just notes.\n");
+			await put(leftoverFile(tier, "plain"), "A plain agent file with no frontmatter.\n");
+		}
+		const seen = await listing();
+		expect(seen.agents.map(agent => agent.name).sort()).toEqual(["anchor-legacy", "anchor-project", "anchor-user", "helper"]);
+		expect(seen.notices).toEqual([]);
+	});
+
+	test("an invalid General Agent manifest in agents/ is not noticed and claims no name, while the same fault in general-agents/ is noticed", async () => {
+		const tiers = ["project", "legacy", "user"] as const;
+		const leftovers = tiers.map(tier => leftoverFile(tier, `broken-${tier}`));
+		for (const tier of tiers) {
+			await put(leftoverFile(tier, `broken-${tier}`), invalidText(`broken-${tier}`));
+			await put(leftoverFile(tier, `sound-${tier}`), agentText(`sound-${tier}`, "listed"));
+		}
+		await put(leftoverFile("project", "rival"), invalidText("rival"));
+		await put(projectFile("rival"), agentText("rival", "the valid copy"));
+		await put(projectFile("broken-copy"), invalidText("broken-copy"));
+		const seen = await listing();
+		expect(seen.agents.map(agent => agent.name).sort()).toEqual(["helper", "rival", "sound-legacy", "sound-project", "sound-user"]);
+		expect(seen.agents.find(agent => agent.name === "rival")).toMatchObject({ source: "workspace", path: projectFile("rival"), editable: true });
+		expect(seen.notices.some(notice => notice.includes(projectFile("broken-copy")))).toBe(true);
+		for (const path of [...leftovers, leftoverFile("project", "rival")]) {
+			expect(seen.notices.some(notice => notice.includes(path))).toBe(false);
+		}
+	});
+
+	test("a user general-agents copy that a leftover shadows lists as the leftover — read-only, with no revision — so no save reaches the copy", async () => {
+		await put(userFile("keeper"), agentText("keeper", "the shadowed copy"));
+		const copyBefore = await readFile(userFile("keeper"), "utf8");
+		await put(leftoverFile("user", "keeper"), agentText("keeper", "the leftover"));
+		const opened = await listed("keeper");
+		expect(opened).toMatchObject({ source: "user", path: leftoverFile("user", "keeper"), editable: false });
+		expect(opened.revision).toBeUndefined();
+		expect((await reforge(opened, { description: "edited" })).isError).toBe(true);
+		expect(await readFile(userFile("keeper"), "utf8")).toBe(copyBefore);
+	});
+
+	test.each<["workspace" | "user", LeftoverTier]>([
+		["workspace", "project"],
+		["user", "user"],
+	])("a new %s agent cannot take the name a %s leftover holds, and nothing is written", async (tier, leftoverTier) => {
+		await put(leftoverFile(leftoverTier, "keeper"), agentText("keeper", "the leftover"));
+		const refused = await call("save_agent", { draft: draft({ name: "keeper" }), create: true, tier });
+		expect(refused.isError).toBe(true);
+		await expect(stat(copyFile[tier === "workspace" ? "project" : "user"]("keeper"))).rejects.toThrow();
 	});
 });
 

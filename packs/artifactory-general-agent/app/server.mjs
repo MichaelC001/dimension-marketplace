@@ -7601,6 +7601,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, join, relative } from "node:path";
 import { parse as parseYaml2, stringify as stringifyYaml } from "yaml";
+var LEGACY_AGENTS_DIR = "agents";
 var WRITE_DIR = process.env.PI_CONFIG_DIR?.trim() || ".inso";
 var LEGACY_DIR = ".omp";
 function pathsOf(home) {
@@ -7788,6 +7789,21 @@ async function listAgents(roots) {
     claimed.set(found.name, found.path);
     return true;
   };
+  const claimLeftovers = async (agentsDir, source, shown) => {
+    for (const found of await scanAgents(agentsDir, [])) {
+      if (!claim(found)) continue;
+      agents.push({
+        name: found.name,
+        description: found.decl.description,
+        source,
+        path: found.path,
+        editable: false,
+        readOnlyReason: `It remains in ${shown} after the General Agents move; the engine runs this copy. Move it to ${GENERAL_AGENTS_DIR}/ to edit it.`,
+        ...found.decl.manifest.workspace?.id !== void 0 ? { workspaceId: found.decl.manifest.workspace.id } : {},
+        draft: draftFromFile(found.decl, found.content, `${source}::${found.name}`)
+      });
+    }
+  };
   const paths = pathsOf(roots.home);
   if (paths === null) notices.push("Pack and user agents are not listed: the engine did not tell this server where its home is (INSO_HOME is unset).");
   else {
@@ -7811,6 +7827,7 @@ async function listAgents(roots) {
   if (roots.workspace === null) {
     notices.push(roots.workspaceMissing ?? "No workspace is bound, so project agents are not listed. Pack agents and yours are.");
   } else {
+    for (const dirName of [WRITE_DIR, LEGACY_DIR]) await claimLeftovers(join(roots.workspace, dirName, LEGACY_AGENTS_DIR), "workspace", `${dirName}/${LEGACY_AGENTS_DIR}`);
     for (const dirName of [WRITE_DIR, LEGACY_DIR]) {
       for (const found of await scanAgents(join(roots.workspace, dirName, GENERAL_AGENTS_DIR), notices)) {
         if (!claim(found)) continue;
@@ -7831,6 +7848,7 @@ async function listAgents(roots) {
       }
     }
   }
+  if (paths !== null) await claimLeftovers(join(paths.agent, LEGACY_AGENTS_DIR), "user", `agent/${LEGACY_AGENTS_DIR}`);
   if (paths !== null) {
     for (const found of await scanAgents(paths.userAgents, notices)) {
       if (!claim(found)) continue;
