@@ -11,7 +11,7 @@
 	"extensions": {
 		"ai.insodimension.dimension": {
 			"contractVersion": 1,
-			"requires": { "dimension": ">=0.11.1" },
+			"requires": { "dimension": ">=0.11.3" },
 			"title": "General Agents",
 			"icon": "bot",
 			"artifactories": [

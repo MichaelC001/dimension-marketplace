@@ -55,7 +55,7 @@
 				"component"
 			],
 			"requires": {
-				"dimension": ">=0.11.1"
+				"dimension": ">=0.11.3"
 			}
 		},
 		{
