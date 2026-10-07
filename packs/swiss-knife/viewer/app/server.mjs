@@ -32116,25 +32116,43 @@ async function admitRecording(fence, path, size, mtimeMs, meta3) {
   return { path: verdict.real, size, mtimeMs, mime: media.mime, meta: meta3, responses: /* @__PURE__ */ new Set() };
 }
 var RANGE_SPEC = /^(\d*)-(\d*)$/;
-function selectRange(method, header, size) {
-  if (method !== "GET" || header === void 0) return { kind: "whole" };
+function parseRangeSpec(header) {
   const equals = header.indexOf("=");
-  if (equals < 0) return { kind: "unsatisfiable" };
-  if (header.slice(0, equals).trim().toLowerCase() !== "bytes") return { kind: "whole" };
+  if (equals < 0) return "invalid";
+  if (header.slice(0, equals).trim().toLowerCase() !== "bytes") return "ignore";
   const spec = header.slice(equals + 1).trim();
-  if (spec.includes(",")) return { kind: "whole" };
+  if (spec.includes(",")) return "ignore";
   const match = RANGE_SPEC.exec(spec);
-  if (match === null || size === 0) return { kind: "unsatisfiable" };
-  const [, first = "", last = ""] = match;
+  return match === null ? "invalid" : { first: match[1] ?? "", last: match[2] ?? "" };
+}
+function windowOf({ first, last }, size) {
+  if (size === 0) return null;
   if (first === "") {
     const suffix = Number(last);
-    if (last === "" || suffix === 0) return { kind: "unsatisfiable" };
-    return { kind: "window", window: { start: Math.max(0, size - suffix), end: size - 1 } };
+    return last === "" || suffix === 0 ? null : { start: Math.max(0, size - suffix), end: size - 1 };
   }
   const start = Number(first);
   const end = last === "" ? size - 1 : Number(last);
-  if (start >= size || end < start) return { kind: "unsatisfiable" };
-  return { kind: "window", window: { start, end: Math.min(end, size - 1) } };
+  return start >= size || end < start ? null : { start, end: Math.min(end, size - 1) };
+}
+function selectRange(method, header, size) {
+  if (method !== "GET" || header === void 0) return { kind: "whole" };
+  const spec = parseRangeSpec(header);
+  if (spec === "ignore") return { kind: "whole" };
+  const window2 = spec === "invalid" ? null : windowOf(spec, size);
+  return window2 === null ? { kind: "unsatisfiable" } : { kind: "window", window: window2 };
+}
+function responseHead(lease, verdict, size) {
+  const range = verdict.kind === "window" ? verdict.window : { start: 0, end: size - 1 };
+  const headers = {
+    "Content-Type": lease.mime,
+    "Content-Length": range.end - range.start + 1,
+    "Accept-Ranges": "bytes",
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff"
+  };
+  if (verdict.kind === "window") headers["Content-Range"] = `bytes ${range.start}-${range.end}/${size}`;
+  return { status: verdict.kind === "window" ? 206 : 200, headers, range };
 }
 function comesFromView(req, listenerHost) {
   const origin = req.headers.origin;
@@ -32154,17 +32172,10 @@ async function streamRecording(req, res, lease) {
       res.writeHead(416, { "Content-Range": `bytes */${stats.size}` }).end();
       return;
     }
-    const range = verdict.kind === "window" ? verdict.window : { start: 0, end: stats.size - 1 };
-    res.writeHead(verdict.kind === "window" ? 206 : 200, {
-      "Content-Type": lease.mime,
-      "Content-Length": range.end - range.start + 1,
-      "Accept-Ranges": "bytes",
-      "Cache-Control": "no-store",
-      "X-Content-Type-Options": "nosniff",
-      ...verdict.kind === "window" ? { "Content-Range": `bytes ${range.start}-${range.end}/${stats.size}` } : {}
-    });
+    const head = responseHead(lease, verdict, stats.size);
+    res.writeHead(head.status, head.headers);
     if (req.method === "HEAD" || stats.size === 0) res.end();
-    else await pipeline(file2.createReadStream({ start: range.start, end: range.end, highWaterMark: STREAM_BUFFER_BYTES, autoClose: false }), res);
+    else await pipeline(file2.createReadStream({ start: head.range.start, end: head.range.end, highWaterMark: STREAM_BUFFER_BYTES, autoClose: false }), res);
   } finally {
     await file2.close();
   }
