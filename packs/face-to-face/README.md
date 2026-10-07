@@ -68,7 +68,7 @@ for the pane's session (the hook's `act("ensureSession")`, which carries no mess
 reports it, so pressing it once creates one session and starts the conversation.
 
 **With voice mode.** Voice mode (doc 91 of the Dimension repository) is the reply hook that speaks any session's
-replies from the composer's speaker toggle; the Face is its cascaded-loop front. While a conversation is open for a
+replies once you choose Conversation in the voice panel the composer microphone opens (hold it, or right-click it); the Face is its cascaded-loop front. While a conversation is open for a
 session the voice desk is silent for THAT session, because the conversation's own voice carries its audio and its face frames;
 every other session keeps the desk's behaviour. The kit's `useVoiceConversation` tells the desk when it starts and stops, so
 this pack does nothing for it.
