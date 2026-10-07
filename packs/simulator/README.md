@@ -92,6 +92,14 @@ because it was the only device listed. So:
   disabled while the setting is off) adds phones, each marked "physical device";
   it never picks one for you, and an agent's `device_open` on a phone does not
   switch the pane to it.
+- **What this gate is, and is not.** It stops an agent reaching your phone by
+  mistake, which is the failure that happened. It is not a sandbox against an
+  agent that can write your files or run a shell: `simulator.allowPhysical` lives
+  in your agent config and the pack's ownership record (`owned.json`, which says
+  which emulators it may stop) lives in your Dimension data folder, both ordinary
+  files. Give an agent file-write or shell permission only as you would give it to
+  a person at your keyboard, and keep `simulator.allowPhysical` off unless you are
+  using a phone on purpose.
 
 ## Prerequisites
 
@@ -308,8 +316,10 @@ visible), one without gets only the SDK's minimal default.
   two connections) would remove it and is not done. The pushed `inso-sim-scrcpy.jar`
   stays in `/data/local/tmp` on the device.
 - On Unix a resume is a `SIGCONT` sent right after the table read that verified the
-  pid; the start-time check inside the call exists on Windows only. `taskkill` is by
-  pid, after the same verification.
+  pid; the start-time check inside the call exists on Windows only. A Windows kill
+  reads the table again just before it, then ends each member of the verified tree by
+  its own pid (no `taskkill /T`), the root last; the few milliseconds between that
+  read and each kill are not closed.
 - The connector's `requires.commands` is checked against `PATH` by the engine,
   which does not know `ANDROID_HOME`: on a machine whose SDK is not on `PATH`, the
   connect state reads "adb is not installed" although the pack finds it itself.

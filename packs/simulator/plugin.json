@@ -1,7 +1,7 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "simulator",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "An Android emulator in a View beside your chat that your agent drives while you watch. Boot, screenshot, tap by label, type, install and launch apps. Live H.264 video for you, cheap screenshots for the agent.",
 	"keywords": [
 		"simulator",
@@ -17,7 +17,7 @@
 			"icon": "phone",
 			"category": "artifactory",
 			"defaultEnabled": false,
-			"channel": "canary",
+			"requires": { "dimension": ">=0.11.3" },
 			"artifactories": [
 				{
 					"mcpServer": "simulator",

@@ -25,6 +25,8 @@ import {
   START_TOLERANCE_MS,
   treePorts,
   treeUsage,
+  verifiedKillPlan,
+  windowsToolPath,
 } from "../src/android/process-table";
 
 function row(pid: number, ppid: number, startedAtMs: number, cpuSeconds = 0, rssBytes = 0): ProcessRow {
@@ -52,6 +54,47 @@ describe("processTree", () => {
   test("terminates on a cycle of parent ids", () => {
     const rows = [row(10, 11, T0), row(11, 10, T0 + 1)];
     expect(processTree(rows, 10).map(item => item.pid)).toEqual([10, 11]);
+  });
+});
+
+describe("verifiedKillPlan: what a Windows kill may end", () => {
+  const verifiedRows = [row(4242, 1, T0)];
+
+  test("is the tree the fresh table shows, children before their parents and the root last, and nobody else", () => {
+    const fresh = [
+      row(4242, 1, T0),
+      row(4243, 4242, T0 + 5),
+      row(4244, 4243, T0 + 9),
+      row(4245, 4242, T0 + 6),
+      row(5000, 4242, T0 - 60_000),
+      row(5001, 4243, T0 + 2),
+      row(6000, 1, T0 + 1),
+    ];
+    const plan = verifiedKillPlan(fresh, verifiedRows, 4242);
+    expect(plan.kill.map(item => item.pid)).toEqual([4244, 4245, 4243, 4242]);
+    expect(plan.skipped).toEqual([]);
+  });
+
+  test("is nothing when the root has already gone", () => {
+    expect(verifiedKillPlan([row(6000, 1, T0)], verifiedRows, 4242)).toEqual({ kill: [], skipped: [] });
+  });
+
+  test("refuses the whole tree when the pid now belongs to a process that started at another time than the one verified", () => {
+    const plan = verifiedKillPlan([row(4242, 1, T0 + 60_000), row(4243, 4242, T0 + 60_005)], verifiedRows, 4242);
+    expect(plan.kill).toEqual([]);
+    expect(plan.skipped.map(item => item.pid)).toEqual([4242]);
+  });
+
+  test("refuses the whole tree when the table it was verified in does not show the root", () => {
+    const plan = verifiedKillPlan([row(4242, 1, T0), row(4243, 4242, T0 + 5)], [row(9, 1, T0)], 4242);
+    expect(plan.kill).toEqual([]);
+    expect(plan.skipped.map(item => item.pid)).toEqual([4242]);
+  });
+
+  test("leaves out a member that is the pack itself and still ends the rest", () => {
+    const plan = verifiedKillPlan([row(4242, 1, T0), row(process.pid, 4242, T0 + 5), row(4243, 4242, T0 + 6)], verifiedRows, 4242);
+    expect(plan.kill.map(item => item.pid)).toEqual([4243, 4242]);
+    expect(plan.skipped.map(item => item.pid)).toEqual([process.pid]);
   });
 });
 
@@ -246,6 +289,26 @@ describe("the command line a listing keeps", () => {
   });
 });
 
+describe("windowsToolPath: the Windows helpers are never found by searching the working directory", () => {
+  test("is an absolute path under SystemRoot", () => {
+    expect(windowsToolPath("powershell", { SystemRoot: "D:\\Win" })).toBe("D:\\Win\\System32\\WindowsPowerShell\\v1.0\\powershell.exe");
+    expect(windowsToolPath("netstat", { SystemRoot: "D:\\Win" })).toBe("D:\\Win\\System32\\netstat.exe");
+  });
+
+  const fallbacks: { name: string; env: NodeJS.ProcessEnv; root: string }[] = [
+    { name: "windir when SystemRoot is not set", env: { windir: "E:\\W" }, root: "E:\\W" },
+    { name: "C:\\Windows when neither is set", env: {}, root: "C:\\Windows" },
+    { name: "C:\\Windows when SystemRoot is relative, which would be searched from the working directory", env: { SystemRoot: "Windows" }, root: "C:\\Windows" },
+    { name: "C:\\Windows when SystemRoot is empty", env: { SystemRoot: "", windir: "" }, root: "C:\\Windows" },
+    { name: "windir when SystemRoot is relative", env: { SystemRoot: "..\\x", windir: "E:\\W" }, root: "E:\\W" },
+  ];
+  for (const fallback of fallbacks) {
+    test(`uses ${fallback.name}`, () => {
+      expect(windowsToolPath("netstat", fallback.env)).toBe(`${fallback.root}\\System32\\netstat.exe`);
+    });
+  }
+});
+
 const SIGNAL_FREE_PIDS: readonly number[] = [0, 1, -1, -4242, 1.5, Number.NaN, 2 ** 60, process.pid, process.ppid];
 
 interface HostExec {
@@ -258,11 +321,11 @@ interface HostSignal {
   readonly signal: string | number | undefined;
 }
 
-function tableOn(platform: NodeJS.Platform, log: (message: string) => void = () => undefined): ProcessTable {
+function tableOn(platform: NodeJS.Platform, log: (message: string) => void = () => undefined, env?: NodeJS.ProcessEnv): ProcessTable {
   const real = Object.getOwnPropertyDescriptor(process, "platform");
   Object.defineProperty(process, "platform", { value: platform, configurable: true });
   try {
-    return nodeProcessTable(log);
+    return nodeProcessTable(log, env);
   } finally {
     if (real !== undefined) Object.defineProperty(process, "platform", real);
   }
@@ -273,11 +336,13 @@ describe("the host's table acts only on a pid it may signal", () => {
   const signals: HostSignal[] = [];
   const spies: { mockRestore(): void }[] = [];
   let answer: (file: string, args: readonly string[]) => string | number = () => "";
+  let refuseKill: (pid: number) => Error | null = () => null;
 
   beforeEach(() => {
     execs.length = 0;
     signals.length = 0;
     answer = () => "";
+    refuseKill = () => null;
     spies.push(
       spyOn(childProcess, "execFile").mockImplementation(((file: string, args: readonly string[], _options: unknown, done: (error: Error | null, stdout: string) => void) => {
         execs.push({ file, args });
@@ -288,6 +353,8 @@ describe("the host's table acts only on a pid it may signal", () => {
       }) as never),
       spyOn(process, "kill").mockImplementation(((pid: number, signal?: string | number) => {
         signals.push({ pid, signal });
+        const refusal = refuseKill(pid);
+        if (refusal !== null) throw refusal;
         return true;
       }) as never),
     );
@@ -321,10 +388,69 @@ describe("the host's table acts only on a pid it may signal", () => {
     });
   }
 
-  test("win32: a verified pid is ended with its tree by taskkill, and by nothing else", async () => {
-    await tableOn("win32").killTree(4242, []);
-    expect(execs).toEqual([{ file: "taskkill", args: ["/PID", "4242", "/T", "/F"] }]);
+  const cim = (rows: readonly ProcessRow[]): string => rows.map(item => `${item.pid}|${item.ppid}|${new Date(item.startedAtMs).toISOString()}|0|0|0|`).join("\r\n");
+  const errno = (code: string): Error => Object.assign(new Error(`kill ${code}`), { code });
+  const verifiedRows = [row(4242, 1, T0), row(4290, 4242, T0 + 3)];
+  const freshRows = [row(4242, 1, T0), row(4243, 4242, T0 + 5), row(5000, 4242, T0 - 60_000), row(5001, 4243, T0 + 2), row(6000, 1, T0 + 1)];
+
+  test("win32: a verified pid is ended with the tree the table shows right before the kill: children first, the root last, each by its pid, nothing else", async () => {
+    answer = () => cim(freshRows);
+    await tableOn("win32").killTree(4242, verifiedRows);
+    expect(signals).toEqual([
+      { pid: 4243, signal: "SIGKILL" },
+      { pid: 4242, signal: "SIGKILL" },
+    ]);
+    expect(execs).toHaveLength(1);
+    expect(execs[0]?.file).toEndWith("powershell.exe");
+  });
+
+  test("win32: a pid that now belongs to a process started at another time than the one verified is not ended, nor is anything under it, and the refusal is reported", async () => {
+    const notes: string[] = [];
+    answer = () => cim([row(4242, 1, T0 + 60_000), row(4243, 4242, T0 + 60_005)]);
+    await tableOn("win32", note => notes.push(note)).killTree(4242, verifiedRows);
     expect(signals).toEqual([]);
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toContain("4242");
+  });
+
+  test("win32: a table that cannot be read again ends nothing and says so", async () => {
+    const notes: string[] = [];
+    answer = () => 1;
+    await tableOn("win32", note => notes.push(note)).killTree(4242, verifiedRows);
+    expect(signals).toEqual([]);
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toContain("4242");
+  });
+
+  test("win32: a member that exited while the tree was being ended does not fail the kill, is not reported, and the rest are still ended", async () => {
+    const notes: string[] = [];
+    answer = () => cim(freshRows);
+    refuseKill = pid => (pid === 4243 ? errno("ESRCH") : null);
+    await tableOn("win32", note => notes.push(note)).killTree(4242, verifiedRows);
+    expect(signals.map(sent => sent.pid)).toEqual([4243, 4242]);
+    expect(notes).toEqual([]);
+  });
+
+  test("win32: a member the system refuses is reported and the rest are still ended", async () => {
+    const notes: string[] = [];
+    answer = () => cim(freshRows);
+    refuseKill = pid => (pid === 4243 ? errno("EPERM") : null);
+    await tableOn("win32", note => notes.push(note)).killTree(4242, verifiedRows);
+    expect(signals.map(sent => sent.pid)).toEqual([4243, 4242]);
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toContain("4243");
+  });
+
+  test("win32: every helper the table runs is an absolute path under SystemRoot", async () => {
+    answer = () => cim([row(4242, 1, T0)]);
+    const table = tableOn("win32", () => undefined, { SystemRoot: "D:\\Win" });
+    await table.processes();
+    await table.listeners();
+    await table.threadStates(4242);
+    await table.resume(4242, T0);
+    await table.killTree(4242, [row(4242, 1, T0)]);
+    const powershell = "D:\\Win\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
+    expect(execs.map(run => run.file)).toEqual([powershell, "D:\\Win\\System32\\netstat.exe", powershell, powershell, powershell]);
   });
 
   test("linux: a verified pid is killed as its process group and with the children listed under it, and a listed child that is init or the pack itself is skipped", async () => {
