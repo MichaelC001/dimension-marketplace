@@ -95,6 +95,8 @@ describe("a recording that opens", () => {
 		await pending;
 		expect(media.tagName.toLowerCase()).toBe("video");
 		expect(media.getAttribute("controls")).toBeNull();
+		expect(media.getAttribute("preload") ?? Reflect.get(media, "preload")).toBe("metadata");
+		expect(media.getAttribute("crossorigin") ?? Reflect.get(media, "crossOrigin")).toBe("anonymous");
 		expect(el.querySelector('[data-slot="viewer-media-dock"]')).not.toBeNull();
 		// The dock sits AFTER the element's stage: the transport is under the picture, not over it.
 		const parts = [...(el.querySelector(".vw-media")?.children ?? [])].map(child => child.className);

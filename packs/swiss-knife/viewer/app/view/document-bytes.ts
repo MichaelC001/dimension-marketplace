@@ -40,7 +40,6 @@ export interface DocumentLoadOptions {
 /** How many leading bytes of `tab` are read: all of it, except text, which is capped. */
 export const readLimit = (tab: Pick<DocTab, "kind">): number | undefined => (tab.kind === "text" ? TEXT_LIMIT : undefined);
 
-
 export async function loadDocumentBytes(app: App, tab: DocTab, options: DocumentLoadOptions = {}): Promise<LoadedDocument> {
 	// A file card needs no bytes.
 	if (tab.kind === "binary") return { bytes: new Uint8Array(0), truncated: false };

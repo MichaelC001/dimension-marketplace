@@ -32,6 +32,7 @@ export async function mountMedia(el: HTMLElement, bytes: Uint8Array, ctx: MountC
 	const sniffed = sniffMedia(bytes.subarray(0, KIND_HEAD_BYTES), ctx.filename);
 	const mime = ctx.mediaSource?.mime ?? sniffed?.mime;
 	const url = ctx.mediaSource?.url ?? URL.createObjectURL(new Blob([bytes as BlobPart], mime === undefined ? undefined : { type: mime }));
+	const createdObjectUrl = ctx.mediaSource === undefined;
 
 	const root = document.createElement("div");
 	root.className = "vw-media";
@@ -68,9 +69,9 @@ export async function mountMedia(el: HTMLElement, bytes: Uint8Array, ctx: MountC
 	const release = (): void => {
 		media.pause();
 		media.removeAttribute("src");
-	media.load();
+		media.load();
 		root.remove();
-	if (ctx.mediaSource === undefined) URL.revokeObjectURL(url);
+		if (createdObjectUrl) URL.revokeObjectURL(url);
 	};
 
 	try {

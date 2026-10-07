@@ -121,7 +121,6 @@ describe("the pane for a file that would not open", () => {
 	});
 });
 
-
 // ---- The pane around a document ---------------------------------------------------------------------------------
 
 const BYTES = new Uint8Array([1, 2, 3, 4]);

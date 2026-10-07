@@ -20,10 +20,10 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { readChunk, readRange } from "./chunk";
-import { ANNOTATE_META_KEY, MAX_CHUNK_BYTES, TAB_META_KEY, VIEWER_VIEW_URI, type ViewedFile } from "./contract";
+import { ANNOTATE_META_KEY, MAX_CHUNK_BYTES, mediaTokenSchema, TAB_META_KEY, VIEWER_VIEW_URI, type ViewedFile } from "./contract";
 import { createFence, type Fence } from "./fence";
 import { detectKind, KIND_HEAD_BYTES } from "./kind";
-import { startMediaServer } from "./media-server";
+import { type MediaServer, startMediaServer } from "./media-server";
 
 const MIME: Readonly<Record<string, string>> = {
 	".js": "text/javascript",
@@ -69,6 +69,22 @@ export async function createViewerServer(options: ViewerServerOptions = {}): Pro
 	const media = await startMediaServer(fence);
 	server.server.onclose = () => { void media.close().catch(error => console.error(error)); };
 	try {
+		await registerViewer(server, { fence, html, viewDir, media });
+	} catch (error) {
+		await media.close();
+		throw error;
+	}
+	return server;
+}
+
+interface ViewerParts {
+	readonly fence: Fence;
+	readonly html: string;
+	readonly viewDir: string;
+	readonly media: MediaServer;
+}
+
+async function registerViewer(server: McpServer, { fence, html, viewDir, media }: ViewerParts): Promise<void> {
 	const metadata = { ui: { prefersBorder: false, permissions: { clipboardWrite: {} }, csp: { resourceDomains: [media.origin] } } };
 	registerAppResource(server, "Viewer", VIEWER_VIEW_URI, { _meta: metadata }, async () => ({
 		contents: [{ uri: VIEWER_VIEW_URI, mimeType: RESOURCE_MIME_TYPE, text: html, _meta: metadata }],
@@ -159,7 +175,7 @@ export async function createViewerServer(options: ViewerServerOptions = {}): Pro
 	);
 
 	registerAppTool(server, "open_media", {
-		inputSchema: { path: z.string().min(1).max(4096), size: z.number().int().nonnegative(), mtimeMs: z.number(), token: z.string().regex(/^[a-f0-9]{48}$/) },
+		inputSchema: { path: z.string().min(1).max(4096), size: z.number().int().nonnegative(), mtimeMs: z.number(), token: mediaTokenSchema },
 		annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
 		_meta: APP_ONLY,
 	}, async ({ path, size, mtimeMs, token }, extra) => {
@@ -171,17 +187,11 @@ export async function createViewerServer(options: ViewerServerOptions = {}): Pro
 		}
 	});
 	registerAppTool(server, "close_media", {
-		inputSchema: { token: z.string().regex(/^[a-f0-9]{48}$/) },
+		inputSchema: { token: mediaTokenSchema },
 		annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 		_meta: APP_ONLY,
 	}, async ({ token }) => {
 		media.release(token);
 		return { content: [{ type: "text", text: "Recording released." }], structuredContent: {} };
 	});
-
-	return server;
-	} catch (error) {
-		await media.close();
-		throw error;
-	}
 }

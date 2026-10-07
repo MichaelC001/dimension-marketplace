@@ -31678,9 +31678,11 @@ var fileChunkSchema = external_exports.object({
   size: external_exports.number().int().nonnegative(),
   eof: external_exports.boolean()
 });
+var MEDIA_TOKEN_PATTERN = /^[a-f0-9]{48}$/;
+var mediaTokenSchema = external_exports.string().regex(MEDIA_TOKEN_PATTERN);
 var mediaSourceSchema = external_exports.object({
   url: external_exports.string().url(),
-  token: external_exports.string().regex(/^[a-f0-9]{48}$/),
+  token: mediaTokenSchema,
   mime: external_exports.string().min(1)
 });
 
@@ -32098,6 +32100,7 @@ var MAX_LEASES = 64;
 var MAX_TRANSFERS = 8;
 var STREAM_BUFFER_BYTES = 64 * 1024;
 var OPEN_FLAGS2 = constants2.O_RDONLY | (constants2.O_NONBLOCK ?? 0) | (constants2.O_NOFOLLOW ?? 0);
+var SANDBOXED_VIEW_ORIGIN = "null";
 function matchesRevision(info, size, mtimeMs) {
   return info.size === size && info.mtimeMs === mtimeMs;
 }
@@ -32110,7 +32113,7 @@ async function admitRecording(fence, path, size, mtimeMs, meta3) {
   if (media === void 0) throw new Error("This file is not a supported recording.");
   return { path: verdict.real, size, mtimeMs, mime: media.mime, meta: meta3, responses: /* @__PURE__ */ new Set() };
 }
-function requestedRange(header, size) {
+function satisfiableRange(header, size) {
   if (header === void 0) return { start: 0, end: size - 1 };
   const match = /^bytes=(\d*)-(\d*)$/.exec(header);
   if (match === null || size === 0) return null;
@@ -32128,6 +32131,10 @@ function validRange(start, end, size) {
   if (start >= size || end < start) return null;
   return { start, end: Math.min(end, size - 1) };
 }
+function comesFromView(req, listenerHost) {
+  const origin = req.headers.origin;
+  return req.headers.host === listenerHost && (origin === void 0 || origin === SANDBOXED_VIEW_ORIGIN);
+}
 async function streamRecording(req, res, lease) {
   const file2 = await open2(lease.path, OPEN_FLAGS2);
   try {
@@ -32137,7 +32144,7 @@ async function streamRecording(req, res, lease) {
       res.writeHead(409).end();
       return;
     }
-    const range = requestedRange(req.headers.range, stats.size);
+    const range = satisfiableRange(req.headers.range, stats.size);
     if (range === null) {
       res.writeHead(416, { "Content-Range": `bytes */${stats.size}` }).end();
       return;
@@ -32160,13 +32167,12 @@ async function streamRecording(req, res, lease) {
 }
 async function startMediaServer(fence) {
   const leases = /* @__PURE__ */ new Map();
-  const admissions = /* @__PURE__ */ new Map();
+  const pendingAdmissions = /* @__PURE__ */ new Map();
   let active = 0;
   let host = "";
   let closing;
   const server2 = createServer((req, res) => {
-    const origin2 = req.headers.origin;
-    if (req.headers.host !== host || origin2 !== void 0 && origin2 !== "null") {
+    if (!comesFromView(req, host)) {
       res.writeHead(404).end();
       return;
     }
@@ -32222,21 +32228,21 @@ async function startMediaServer(fence) {
     origin,
     async acquire(path, size, mtimeMs, meta3, token = randomBytes(24).toString("hex")) {
       if (closing !== void 0) throw new Error("The recording server is closed.");
-      if (!/^[a-f0-9]{48}$/.test(token) || leases.has(token) || admissions.has(token)) throw new Error("Invalid recording capability.");
-      if (leases.size + admissions.size >= MAX_LEASES) throw new Error("Close an open recording before opening another.");
+      if (!MEDIA_TOKEN_PATTERN.test(token) || leases.has(token) || pendingAdmissions.has(token)) throw new Error("Invalid recording capability.");
+      if (leases.size + pendingAdmissions.size >= MAX_LEASES) throw new Error("Close an open recording before opening another.");
       const admission = { cancelled: false };
-      admissions.set(token, admission);
+      pendingAdmissions.set(token, admission);
       try {
         const lease = await admitRecording(fence, path, size, mtimeMs, meta3);
         if (admission.cancelled) throw new Error("Recording opening was cancelled.");
         leases.set(token, lease);
         return { url: `${origin}/media/${token}`, token, mime: lease.mime };
       } finally {
-        admissions.delete(token);
+        pendingAdmissions.delete(token);
       }
     },
     release(token) {
-      const admission = admissions.get(token);
+      const admission = pendingAdmissions.get(token);
       if (admission !== void 0) admission.cancelled = true;
       for (const response of leases.get(token)?.responses ?? []) response.destroy();
       leases.delete(token);
@@ -32244,7 +32250,7 @@ async function startMediaServer(fence) {
     close() {
       closing ??= new Promise((resolve, reject) => {
         leases.clear();
-        for (const admission of admissions.values()) admission.cancelled = true;
+        for (const admission of pendingAdmissions.values()) admission.cancelled = true;
         server2.close((error51) => error51 ? reject(error51) : resolve());
         server2.closeAllConnections();
       });
@@ -32284,114 +32290,117 @@ async function createViewerServer(options = {}) {
     void media.close().catch((error51) => console.error(error51));
   };
   try {
-    const metadata = { ui: { prefersBorder: false, permissions: { clipboardWrite: {} }, csp: { resourceDomains: [media.origin] } } };
-    N3(server2, "Viewer", VIEWER_VIEW_URI, { _meta: metadata }, async () => ({
-      contents: [{ uri: VIEWER_VIEW_URI, mimeType: p, text: html, _meta: metadata }]
-    }));
-    for (const entry of await readdir(viewDir, { recursive: true, withFileTypes: true })) {
-      if (!entry.isFile() || entry.name === "index.html") continue;
-      const mimeType = MIME[extname(entry.name)];
-      if (mimeType === void 0) throw new Error(`Unsupported viewer View asset: ${entry.name}`);
-      const path = join(entry.parentPath, entry.name);
-      const relative = path.slice(viewDir.replace(/[\\/]$/, "").length + 1).replaceAll("\\", "/");
-      const uri = `ui://viewer/${relative}`;
-      server2.registerResource(relative, uri, { mimeType }, async () => {
-        const bytes = await readFile(path);
-        return {
-          contents: [TEXT_MIME[mimeType] ? { uri, mimeType, text: bytes.toString("utf8") } : { uri, mimeType, blob: bytes.toString("base64") }]
-        };
-      });
-    }
-    K3(
-      server2,
-      "view_file",
-      {
-        title: "View file",
-        description: "Open a file from the user's computer in the viewer beside the conversation, as a tab. Renders images, PDF, HTML, Markdown, Word (.docx), PowerPoint (.pptx), Excel (.xlsx) and plain text, and plays audio and video; other files show a file card. Pass the ABSOLUTE path of a file you created or were pointed at; opening the same file again refreshes its tab. annotate: true opens it ready for the user to mark up (a moment on a recording, an element on a page). Only folders the user allowed are readable (their personal vault and the folders in VIEWER_ROOTS); anything else, and secrets such as .env files and keys, is refused with the reason.",
-        inputSchema: {
-          path: external_exports.string().min(1).max(4096).describe("Absolute path of the file to open"),
-          filename: external_exports.string().min(1).max(255).optional().describe("Name to show in the tab; defaults to the file's own name"),
-          annotate: external_exports.boolean().optional().describe("Open in annotate mode, so the user can mark the file up")
-        },
-        annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-        _meta: { ui: { resourceUri: VIEWER_VIEW_URI } }
-      },
-      async ({ path, filename, annotate }, extra) => {
-        const verdict = await fence.check(path, extra._meta);
-        if (!verdict.ok) return failure(verdict.reason);
-        try {
-          const head = await readRange(verdict.real, 0, KIND_HEAD_BYTES);
-          const shown = filename ?? basename(verdict.real);
-          const file2 = {
-            path: verdict.real,
-            filename: shown,
-            kind: detectKind(shown, head.bytes, head.size),
-            size: head.size,
-            mtimeMs: head.mtimeMs
-          };
-          return {
-            content: [{ type: "text", text: `Opened ${file2.filename} (${file2.kind}, ${file2.size} bytes) in the viewer.` }],
-            structuredContent: { ...file2 },
-            _meta: { [TAB_META_KEY]: { key: file2.path }, ...annotate === true ? { [ANNOTATE_META_KEY]: true } : {} }
-          };
-        } catch (error51) {
-          return failure(`"${path}" cannot be opened: ${describeError(error51)}`);
-        }
-      }
-    );
-    K3(
-      server2,
-      "read_file_chunk",
-      {
-        title: "Read file chunk",
-        description: `Read a byte range of a file the viewer may open, base64-encoded (at most ${MAX_CHUNK_BYTES} bytes per call). The View streams a document through this; it is not for the model.`,
-        inputSchema: {
-          path: external_exports.string().min(1).max(4096),
-          offset: external_exports.number().int().min(0),
-          length: external_exports.number().int().min(0).max(MAX_CHUNK_BYTES)
-        },
-        annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-        _meta: APP_ONLY
-      },
-      async ({ path, offset, length }, extra) => {
-        const verdict = await fence.check(path, extra._meta);
-        if (!verdict.ok) return failure(verdict.reason);
-        try {
-          const chunk = await readChunk(verdict.real, offset, length);
-          return {
-            content: [{ type: "text", text: `Read ${chunk.length} of ${chunk.size} bytes at offset ${chunk.offset}.` }],
-            structuredContent: { ...chunk }
-          };
-        } catch (error51) {
-          return failure(`"${path}" cannot be read: ${describeError(error51)}`);
-        }
-      }
-    );
-    K3(server2, "open_media", {
-      inputSchema: { path: external_exports.string().min(1).max(4096), size: external_exports.number().int().nonnegative(), mtimeMs: external_exports.number(), token: external_exports.string().regex(/^[a-f0-9]{48}$/) },
-      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
-      _meta: APP_ONLY
-    }, async ({ path, size, mtimeMs, token }, extra) => {
-      try {
-        const source = await media.acquire(path, size, mtimeMs, extra._meta, token);
-        return { content: [{ type: "text", text: "Recording ready for range playback." }], structuredContent: { ...source } };
-      } catch (error51) {
-        return failure(describeError(error51));
-      }
-    });
-    K3(server2, "close_media", {
-      inputSchema: { token: external_exports.string().regex(/^[a-f0-9]{48}$/) },
-      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-      _meta: APP_ONLY
-    }, async ({ token }) => {
-      media.release(token);
-      return { content: [{ type: "text", text: "Recording released." }], structuredContent: {} };
-    });
-    return server2;
+    await registerViewer(server2, { fence, html, viewDir, media });
   } catch (error51) {
     await media.close();
     throw error51;
   }
+  return server2;
+}
+async function registerViewer(server2, { fence, html, viewDir, media }) {
+  const metadata = { ui: { prefersBorder: false, permissions: { clipboardWrite: {} }, csp: { resourceDomains: [media.origin] } } };
+  N3(server2, "Viewer", VIEWER_VIEW_URI, { _meta: metadata }, async () => ({
+    contents: [{ uri: VIEWER_VIEW_URI, mimeType: p, text: html, _meta: metadata }]
+  }));
+  for (const entry of await readdir(viewDir, { recursive: true, withFileTypes: true })) {
+    if (!entry.isFile() || entry.name === "index.html") continue;
+    const mimeType = MIME[extname(entry.name)];
+    if (mimeType === void 0) throw new Error(`Unsupported viewer View asset: ${entry.name}`);
+    const path = join(entry.parentPath, entry.name);
+    const relative = path.slice(viewDir.replace(/[\\/]$/, "").length + 1).replaceAll("\\", "/");
+    const uri = `ui://viewer/${relative}`;
+    server2.registerResource(relative, uri, { mimeType }, async () => {
+      const bytes = await readFile(path);
+      return {
+        contents: [TEXT_MIME[mimeType] ? { uri, mimeType, text: bytes.toString("utf8") } : { uri, mimeType, blob: bytes.toString("base64") }]
+      };
+    });
+  }
+  K3(
+    server2,
+    "view_file",
+    {
+      title: "View file",
+      description: "Open a file from the user's computer in the viewer beside the conversation, as a tab. Renders images, PDF, HTML, Markdown, Word (.docx), PowerPoint (.pptx), Excel (.xlsx) and plain text, and plays audio and video; other files show a file card. Pass the ABSOLUTE path of a file you created or were pointed at; opening the same file again refreshes its tab. annotate: true opens it ready for the user to mark up (a moment on a recording, an element on a page). Only folders the user allowed are readable (their personal vault and the folders in VIEWER_ROOTS); anything else, and secrets such as .env files and keys, is refused with the reason.",
+      inputSchema: {
+        path: external_exports.string().min(1).max(4096).describe("Absolute path of the file to open"),
+        filename: external_exports.string().min(1).max(255).optional().describe("Name to show in the tab; defaults to the file's own name"),
+        annotate: external_exports.boolean().optional().describe("Open in annotate mode, so the user can mark the file up")
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      _meta: { ui: { resourceUri: VIEWER_VIEW_URI } }
+    },
+    async ({ path, filename, annotate }, extra) => {
+      const verdict = await fence.check(path, extra._meta);
+      if (!verdict.ok) return failure(verdict.reason);
+      try {
+        const head = await readRange(verdict.real, 0, KIND_HEAD_BYTES);
+        const shown = filename ?? basename(verdict.real);
+        const file2 = {
+          path: verdict.real,
+          filename: shown,
+          kind: detectKind(shown, head.bytes, head.size),
+          size: head.size,
+          mtimeMs: head.mtimeMs
+        };
+        return {
+          content: [{ type: "text", text: `Opened ${file2.filename} (${file2.kind}, ${file2.size} bytes) in the viewer.` }],
+          structuredContent: { ...file2 },
+          _meta: { [TAB_META_KEY]: { key: file2.path }, ...annotate === true ? { [ANNOTATE_META_KEY]: true } : {} }
+        };
+      } catch (error51) {
+        return failure(`"${path}" cannot be opened: ${describeError(error51)}`);
+      }
+    }
+  );
+  K3(
+    server2,
+    "read_file_chunk",
+    {
+      title: "Read file chunk",
+      description: `Read a byte range of a file the viewer may open, base64-encoded (at most ${MAX_CHUNK_BYTES} bytes per call). The View streams a document through this; it is not for the model.`,
+      inputSchema: {
+        path: external_exports.string().min(1).max(4096),
+        offset: external_exports.number().int().min(0),
+        length: external_exports.number().int().min(0).max(MAX_CHUNK_BYTES)
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      _meta: APP_ONLY
+    },
+    async ({ path, offset, length }, extra) => {
+      const verdict = await fence.check(path, extra._meta);
+      if (!verdict.ok) return failure(verdict.reason);
+      try {
+        const chunk = await readChunk(verdict.real, offset, length);
+        return {
+          content: [{ type: "text", text: `Read ${chunk.length} of ${chunk.size} bytes at offset ${chunk.offset}.` }],
+          structuredContent: { ...chunk }
+        };
+      } catch (error51) {
+        return failure(`"${path}" cannot be read: ${describeError(error51)}`);
+      }
+    }
+  );
+  K3(server2, "open_media", {
+    inputSchema: { path: external_exports.string().min(1).max(4096), size: external_exports.number().int().nonnegative(), mtimeMs: external_exports.number(), token: mediaTokenSchema },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    _meta: APP_ONLY
+  }, async ({ path, size, mtimeMs, token }, extra) => {
+    try {
+      const source = await media.acquire(path, size, mtimeMs, extra._meta, token);
+      return { content: [{ type: "text", text: "Recording ready for range playback." }], structuredContent: { ...source } };
+    } catch (error51) {
+      return failure(describeError(error51));
+    }
+  });
+  K3(server2, "close_media", {
+    inputSchema: { token: mediaTokenSchema },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    _meta: APP_ONLY
+  }, async ({ token }) => {
+    media.release(token);
+    return { content: [{ type: "text", text: "Recording released." }], structuredContent: {} };
+  });
 }
 
 // src/stdio.ts

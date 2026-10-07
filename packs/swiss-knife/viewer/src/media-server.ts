@@ -5,6 +5,7 @@ import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { pipeline } from "node:stream/promises";
 import { readRange } from "./chunk";
+import { MEDIA_TOKEN_PATTERN } from "./contract";
 import type { Fence } from "./fence";
 import { KIND_HEAD_BYTES, sniffMedia } from "./kind";
 
@@ -12,6 +13,7 @@ const MAX_LEASES = 64;
 const MAX_TRANSFERS = 8;
 const STREAM_BUFFER_BYTES = 64 * 1024;
 const OPEN_FLAGS = constants.O_RDONLY | (constants.O_NONBLOCK ?? 0) | (constants.O_NOFOLLOW ?? 0);
+const SANDBOXED_VIEW_ORIGIN = "null";
 
 type Lease = { path: string; size: number; mtimeMs: number; mime: string; meta: unknown; responses: Set<ServerResponse> };
 
@@ -36,7 +38,7 @@ async function admitRecording(fence: Fence, path: string, size: number, mtimeMs:
 	return { path: verdict.real, size, mtimeMs, mime: media.mime, meta, responses: new Set() };
 }
 
-function requestedRange(header: string | undefined, size: number): { start: number; end: number } | null {
+function satisfiableRange(header: string | undefined, size: number): { start: number; end: number } | null {
 	if (header === undefined) return { start: 0, end: size - 1 };
 	const match = /^bytes=(\d*)-(\d*)$/.exec(header);
 	if (match === null || size === 0) return null;
@@ -56,6 +58,11 @@ function validRange(start: number, end: number, size: number): { start: number; 
 	return { start, end: Math.min(end, size - 1) };
 }
 
+function comesFromView(req: IncomingMessage, listenerHost: string): boolean {
+	const origin = req.headers.origin;
+	return req.headers.host === listenerHost && (origin === undefined || origin === SANDBOXED_VIEW_ORIGIN);
+}
+
 async function streamRecording(req: IncomingMessage, res: ServerResponse, lease: Lease): Promise<void> {
 	const file = await open(lease.path, OPEN_FLAGS);
 	try {
@@ -65,7 +72,7 @@ async function streamRecording(req: IncomingMessage, res: ServerResponse, lease:
 			res.writeHead(409).end();
 			return;
 		}
-		const range = requestedRange(req.headers.range, stats.size);
+		const range = satisfiableRange(req.headers.range, stats.size);
 		if (range === null) {
 			res.writeHead(416, { "Content-Range": `bytes */${stats.size}` }).end();
 			return;
@@ -89,13 +96,12 @@ async function streamRecording(req: IncomingMessage, res: ServerResponse, lease:
 
 export async function startMediaServer(fence: Fence): Promise<MediaServer> {
 	const leases = new Map<string, Lease>();
-	const admissions = new Map<string, { cancelled: boolean }>();
+	const pendingAdmissions = new Map<string, { cancelled: boolean }>();
 	let active = 0;
 	let host = "";
 	let closing: Promise<void> | undefined;
 	const server = createServer((req, res) => {
-		const origin = req.headers.origin;
-		if (req.headers.host !== host || (origin !== undefined && origin !== "null")) {
+		if (!comesFromView(req, host)) {
 			res.writeHead(404).end();
 			return;
 		}
@@ -153,21 +159,21 @@ export async function startMediaServer(fence: Fence): Promise<MediaServer> {
 		origin,
 		async acquire(path: string, size: number, mtimeMs: number, meta: unknown, token = randomBytes(24).toString("hex")) {
 			if (closing !== undefined) throw new Error("The recording server is closed.");
-			if (!/^[a-f0-9]{48}$/.test(token) || leases.has(token) || admissions.has(token)) throw new Error("Invalid recording capability.");
-			if (leases.size + admissions.size >= MAX_LEASES) throw new Error("Close an open recording before opening another.");
+			if (!MEDIA_TOKEN_PATTERN.test(token) || leases.has(token) || pendingAdmissions.has(token)) throw new Error("Invalid recording capability.");
+			if (leases.size + pendingAdmissions.size >= MAX_LEASES) throw new Error("Close an open recording before opening another.");
 			const admission = { cancelled: false };
-			admissions.set(token, admission);
+			pendingAdmissions.set(token, admission);
 			try {
 				const lease = await admitRecording(fence, path, size, mtimeMs, meta);
 				if (admission.cancelled) throw new Error("Recording opening was cancelled.");
 				leases.set(token, lease);
 				return { url: `${origin}/media/${token}`, token, mime: lease.mime };
 			} finally {
-				admissions.delete(token);
+				pendingAdmissions.delete(token);
 			}
 		},
 		release(token: string) {
-			const admission = admissions.get(token);
+			const admission = pendingAdmissions.get(token);
 			if (admission !== undefined) admission.cancelled = true;
 			for (const response of leases.get(token)?.responses ?? []) response.destroy();
 			leases.delete(token);
@@ -175,7 +181,7 @@ export async function startMediaServer(fence: Fence): Promise<MediaServer> {
 		close() {
 			closing ??= new Promise<void>((resolve, reject) => {
 				leases.clear();
-				for (const admission of admissions.values()) admission.cancelled = true;
+				for (const admission of pendingAdmissions.values()) admission.cancelled = true;
 				server.close(error => error ? reject(error) : resolve());
 				server.closeAllConnections();
 			});

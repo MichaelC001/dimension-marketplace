@@ -2,7 +2,6 @@
 // cut the cough", and the frame a drawing is burned onto), a small one for the film lane, the length of one frame
 // (what `,` and `.` step by), and the geometry of drawing on a frame (where the picture is drawn in its box, and
 // which drawings belong to the frame on screen).
-//
 import { clampTime, type FrameGrab } from "@dimension/mcp-app-kit/annotate";
 
 /** The long edge of a still, in pixels: enough to read a face or a caption, and ~60 KB. */

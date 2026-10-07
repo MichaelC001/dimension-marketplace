@@ -19,7 +19,7 @@ import { failureAction, type FailureStage, isRecording } from "./media-failure";
 import { trackMediaWork } from "./media-lifecycle";
 import { loadRenderer } from "./renderers";
 import { Opening } from "./opening";
-import type { Mounted, Theme } from "./renderers/types";
+import type { Mounted, RecordingSource, Theme } from "./renderers/types";
 import { PaneExtras } from "./pane-extras";
 import type { DocTab } from "./tabs";
 import { KIND_LABEL, Toolbar } from "./toolbar";
@@ -75,7 +75,7 @@ export function DocPane({ app, tab, active, theme }: DocPaneProps) {
 
 		(async () => {
 			try {
-				let mediaSource: { url: string; mime: string } | undefined;
+				let mediaSource: RecordingSource | undefined;
 				const reading = isRecording(tab.kind)
 					? tools.whole("open_media", { path: tab.path, size: tab.size, mtimeMs: tab.mtimeMs, token: mediaToken }).then(result => {
 						const source = mediaSourceSchema.parse(result);
