@@ -1,12 +1,6 @@
-// The viewer's MCP server: two tools and the View bundle. Each tool passes its
+// The viewer's MCP server: its tools and the View bundle. Each tool passes its
 // call's `_meta` to the fence, which reads the host-lent one-file grant there
 // (doc 86 §5): a human's click may open ONE file the roots do not cover.
-//
-//   view_file        model-visible. Resolves a path through the fence, names what
-//                    it is, and mounts the View. Its RESULT carries the document
-//                    key (`_meta["ai.insodimension/tab"]`) so a host that keeps a
-//                    tab per document can tell one file from another.
-//   read_file_chunk  app-only. The View streams a document's bytes through it.
 //
 // The View itself (`app/dist`) is served as resources under `ui://viewer/`, the
 // way the browser pack does it: the host mounts `index.html` and resolves every

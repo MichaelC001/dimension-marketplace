@@ -13,7 +13,9 @@ folder is the deep reference. The View is `app/view` (built to `app/dist`); the 
 | `view_file { path, filename?, annotate? }` | the host on a click (the plugin declares no `modelSpaces`, so no agent is offered it) | Resolves `path` through the fence and mounts the View on it. `annotate: true` picks the annotation tool up as the file opens (the drawing tool last held on a picture or a video frame, Box if none; Pick on a page, which matters for a page too large to start with it in hand) and is ignored for a kind with nothing to annotate. The tools themselves are there either way: an annotatable kind shows its bar from the pane's first frame. |
 | `read_file_chunk { path, offset, length }` | the View only (`visibility: ["app"]`) | Streams a file's bytes to the View, at most 4 MiB a call. |
 | `open_media { path, size, mtimeMs, token }` | the View only (`visibility: ["app"]`) | Admits a recording for HTTP range playback through a fenced loopback capability. The View generates the 192-bit token before opening, so it can cancel pending admission. |
-| `close_media { token }` | the View only (`visibility: ["app"]`) | Revokes the capability, cancels pending admission and stops active streams. Outer View teardown awaits revocation before acknowledging the host. |
+| `close_media { token }` | the View only (`visibility: ["app"]`) | Revokes the capability, cancels pending admission and stops active streams. A token released before its open arrives is remembered and refused. Outer View teardown awaits revocation before acknowledging the host. |
+
+The capability URL answers `GET` and `HEAD` for one lease. A `Range: bytes=` header with a single range is a 206 (a suffix range counts from the end, an end past the file is clamped); a start past the end, a zero suffix or a malformed range is a 416 with `Content-Range: bytes */size`; a unit other than bytes, a multi-range, or any `Range` on a method other than GET is ignored and the whole file answers 200. Every answer that passes the Host and Origin check carries `Access-Control-Allow-Origin: *`, so the player reads a refusal as a refusal instead of retrying a blocked fetch.
 
 The loopback listener belongs to the MCP connection: connection shutdown, stdin EOF and startup failure close it. Removing the outer iframe does not guarantee a React unmount; the View therefore revokes its tokens, including pending admissions, in the awaited host teardown handshake.
 
@@ -51,7 +53,7 @@ over the iframe from the moment the tab exists until the View's handshake comple
 `@fraym/ui`, the labor-illusion steps; doc 45), and the View shows the SAME component from its very first paint
 (`McpAppShell`'s fallback) until the document is ready, so the host's surface hands over to the View's without a
 blank frame or a different card. The steps are bound to real stages: **Connecting** (no tool result yet), **Reading**
-the file (the bytes streaming in, with the real count of bytes read and a progress line), **Preparing** it (the
+the file (for a document: the bytes streaming in, with the real count of bytes read and a progress line; a recording is admitted for range playback and reads nothing), **Preparing** it (the
 renderer chunk, loaded while the bytes stream, and the decode). The words wait 150 ms before they appear, so a
 file that opens fast shows only the ground; when the document is ready the steps are marked done and the surface
 fades out over it. A View told nothing yet shows Connecting, not "Nothing open": that statement comes only after
@@ -204,10 +206,10 @@ deny-by-default for everything a human did not click.
 
 | What | Limit | Where it is held |
 |---|---|---|
-| A recording the viewer plays | No file-size cap; 64 concurrent leases/admissions, 8 concurrent transfers, 64 KiB stream buffers | `media-server.ts` |
+| A recording the viewer plays | No file-size cap; 64 concurrent leases/admissions, 192 concurrent transfers (three a lease: the player, its frame-capture clone, and the tail range of a file whose index sits at its end), 64 KiB stream buffers | `media-server.ts` |
 | Any other document | 128 MiB (text: the first 1 MiB) | `DOCUMENT_LIMIT`, `TEXT_LIMIT` (`document-bytes.ts`) |
 | An HTML page that starts with Pick in hand | 2 MiB; larger starts with Pick down | `PICK_FRAME_LIMIT` (`document-bytes.ts`) |
-| A waveform | WAV or strict MP3 only; file 32 MiB, decoded 96 MiB at 22.05 kHz, 8 channels, MP3 545 s; one decode at a time; everything else a flat track | `media-waveform.ts` |
+| A waveform | WAV or strict MP3 only; file 32 MiB, decoded 96 MiB at 22.05 kHz, 8 channels, MP3 545 s; one decode at a time; everything else a flat track; a file is read whole only when its first bytes are a WAV, an ID3 tag or an MPEG frame | `media-waveform.ts` |
 | A video filmstrip | 16 thumbnails, 160 px long edge; 4 files cached | `MAX_FILM_SLOTS`, `media-frame.ts`, `media-filmstrip.ts` |
 | Notes on one file | 24 | `MAX_MARKS`, `MAX_COMMENTS`, `MAX_ELEMENT_PICKS`, `MAX_TIMELINE_MARKS` |
 | Pictures in one request | 4, 2 MiB each, 4 MiB together | the host's image caps, held by the kit |

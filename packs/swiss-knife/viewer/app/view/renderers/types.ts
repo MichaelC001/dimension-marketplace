@@ -1,9 +1,6 @@
 // The renderer contract. One module per document kind under `renderers/<kind>.ts`
 // default-exports a `Renderer`; `index.ts` finds them by file name and loads each
 // as its own chunk, so a Word file never pays for the PDF engine.
-//
-// Everything runs inside the View's sandboxed frame (opaque origin, no network),
-// so a renderer may parse untrusted bytes but has nothing to reach with them.
 
 export type Theme = "light" | "dark";
 

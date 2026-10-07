@@ -1,4 +1,4 @@
-// The one door to a document's bytes, for the pane that draws it and for anything
+// The door to a document's bytes, for the pane that draws it and for anything
 // layered on top of it (a markup tool that burns marks into the picture needs the
 // original bytes, not what the screen shows). Streams `read_file_chunk`, and
 // shares one bounded cache, so asking twice costs nothing while the file has not
@@ -6,7 +6,7 @@
 import { createToolCaller } from "@dimension/mcp-app-kit/tools";
 import type { App } from "@modelcontextprotocol/ext-apps";
 import { fileChunkSchema, MAX_CHUNK_BYTES } from "../../src/contract";
-import { ByteCache, loadBytes } from "./bytes";
+import { ByteCache, type ChunkSource, loadBytes } from "./bytes";
 import { formatBytes } from "./format";
 import type { DocTab } from "./tabs";
 
@@ -40,8 +40,19 @@ export interface DocumentLoadOptions {
 /** How many leading bytes of `tab` are read: all of it, except text, which is capped. */
 export const readLimit = (tab: Pick<DocTab, "kind">): number | undefined => (tab.kind === "text" ? TEXT_LIMIT : undefined);
 
+function chunkReader(app: App, tab: DocTab): ChunkSource {
+	const tools = createToolCaller(app);
+	return async (offset, length) => {
+		const result = await tools.raw("read_file_chunk", { path: tab.path, offset, length });
+		if (result.isError) {
+			const text = result.content.map(block => (block.type === "text" ? block.text : "")).join("\n").trim();
+			throw new Error(text || "The file could not be read.");
+		}
+		return fileChunkSchema.parse(result.structuredContent);
+	};
+}
+
 export async function loadDocumentBytes(app: App, tab: DocTab, options: DocumentLoadOptions = {}): Promise<LoadedDocument> {
-	// A file card needs no bytes.
 	if (tab.kind === "binary") return { bytes: new Uint8Array(0), truncated: false };
 	const limit = readLimit(tab);
 	if (limit === undefined && tab.size > DOCUMENT_LIMIT) {
@@ -50,18 +61,12 @@ export async function loadDocumentBytes(app: App, tab: DocTab, options: Document
 	const cacheKey = `${tab.key}\0${tab.size}:${tab.mtimeMs}:${limit ?? "all"}`;
 	const cached = cache.get(cacheKey);
 	if (cached !== undefined) return { bytes: cached, truncated: limit !== undefined && tab.size > limit };
-	const tools = createToolCaller(app);
-	const loaded = await loadBytes(
-		async (offset, length) => {
-			const result = await tools.raw("read_file_chunk", { path: tab.path, offset, length });
-			if (result.isError) {
-				const text = result.content.map(block => (block.type === "text" ? block.text : "")).join("\n").trim();
-				throw new Error(text || "The file could not be read.");
-			}
-			return fileChunkSchema.parse(result.structuredContent);
-		},
-		{ size: tab.size, limit, chunkBytes: CHUNK_BYTES, signal: options.signal, onProgress: options.onProgress },
-	);
+	const loaded = await loadBytes(chunkReader(app, tab), { size: tab.size, limit, chunkBytes: CHUNK_BYTES, signal: options.signal, onProgress: options.onProgress });
 	cache.set(cacheKey, loaded.bytes);
 	return loaded;
+}
+
+export async function loadDocumentHead(app: App, tab: DocTab, length: number, signal?: AbortSignal): Promise<Uint8Array> {
+	const { bytes } = await loadBytes(chunkReader(app, tab), { size: tab.size, limit: length, chunkBytes: CHUNK_BYTES, signal });
+	return bytes;
 }

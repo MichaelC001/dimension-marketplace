@@ -1,4 +1,3 @@
-import { randomBytes } from "node:crypto";
 import { constants } from "node:fs";
 import { open } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -9,8 +8,11 @@ import { MEDIA_TOKEN_PATTERN } from "./contract";
 import type { Fence } from "./fence";
 import { KIND_HEAD_BYTES, sniffMedia } from "./kind";
 
-const MAX_LEASES = 64;
-const MAX_TRANSFERS = 8;
+export const MAX_LEASES = 64;
+const TRANSFERS_PER_LEASE = 3;
+export const MAX_TRANSFERS = MAX_LEASES * TRANSFERS_PER_LEASE;
+const KEEP_ALIVE_HEADROOM = MAX_LEASES;
+const MAX_REMEMBERED_RELEASES = MAX_LEASES * 16;
 const STREAM_BUFFER_BYTES = 64 * 1024;
 const OPEN_FLAGS = constants.O_RDONLY | (constants.O_NONBLOCK ?? 0) | (constants.O_NOFOLLOW ?? 0);
 const SANDBOXED_VIEW_ORIGIN = "null";
@@ -19,7 +21,7 @@ type Lease = { path: string; size: number; mtimeMs: number; mime: string; meta: 
 
 export interface MediaServer {
 	readonly origin: string;
-	acquire(path: string, size: number, mtimeMs: number, meta: unknown, token?: string): Promise<{ url: string; token: string; mime: string }>;
+	acquire(path: string, size: number, mtimeMs: number, meta: unknown, token: string): Promise<{ url: string; token: string; mime: string }>;
 	release(token: string): void;
 	close(): Promise<void>;
 }
@@ -38,24 +40,30 @@ async function admitRecording(fence: Fence, path: string, size: number, mtimeMs:
 	return { path: verdict.real, size, mtimeMs, mime: media.mime, meta, responses: new Set() };
 }
 
-function satisfiableRange(header: string | undefined, size: number): { start: number; end: number } | null {
-	if (header === undefined) return { start: 0, end: size - 1 };
-	const match = /^bytes=(\d*)-(\d*)$/.exec(header);
-	if (match === null || size === 0) return null;
-	if (match[1] === "") {
-		const suffix = Number(match[2]);
-		if (!Number.isSafeInteger(suffix) || suffix <= 0) return null;
-		return { start: Math.max(0, size - suffix), end: size - 1 };
-	}
-	const start = Number(match[1]);
-	const end = match[2] === "" ? size - 1 : Number(match[2]);
-	return validRange(start, end, size);
-}
+type ByteWindow = { start: number; end: number };
+type RangeVerdict = { kind: "whole" } | { kind: "window"; window: ByteWindow } | { kind: "unsatisfiable" };
 
-function validRange(start: number, end: number, size: number): { start: number; end: number } | null {
-	if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end)) return null;
-	if (start >= size || end < start) return null;
-	return { start, end: Math.min(end, size - 1) };
+const RANGE_SPEC = /^(\d*)-(\d*)$/;
+
+function selectRange(method: string | undefined, header: string | undefined, size: number): RangeVerdict {
+	if (method !== "GET" || header === undefined) return { kind: "whole" };
+	const equals = header.indexOf("=");
+	if (equals < 0) return { kind: "unsatisfiable" };
+	if (header.slice(0, equals).trim().toLowerCase() !== "bytes") return { kind: "whole" };
+	const spec = header.slice(equals + 1).trim();
+	if (spec.includes(",")) return { kind: "whole" };
+	const match = RANGE_SPEC.exec(spec);
+	if (match === null || size === 0) return { kind: "unsatisfiable" };
+	const [, first = "", last = ""] = match;
+	if (first === "") {
+		const suffix = Number(last);
+		if (last === "" || suffix === 0) return { kind: "unsatisfiable" };
+		return { kind: "window", window: { start: Math.max(0, size - suffix), end: size - 1 } };
+	}
+	const start = Number(first);
+	const end = last === "" ? size - 1 : Number(last);
+	if (start >= size || end < start) return { kind: "unsatisfiable" };
+	return { kind: "window", window: { start, end: Math.min(end, size - 1) } };
 }
 
 function comesFromView(req: IncomingMessage, listenerHost: string): boolean {
@@ -72,20 +80,19 @@ async function streamRecording(req: IncomingMessage, res: ServerResponse, lease:
 			res.writeHead(409).end();
 			return;
 		}
-		const range = satisfiableRange(req.headers.range, stats.size);
-		if (range === null) {
+		const verdict = selectRange(req.method, req.headers.range, stats.size);
+		if (verdict.kind === "unsatisfiable") {
 			res.writeHead(416, { "Content-Range": `bytes */${stats.size}` }).end();
 			return;
 		}
-		const partial = req.headers.range !== undefined;
-		res.writeHead(partial ? 206 : 200, {
+		const range = verdict.kind === "window" ? verdict.window : { start: 0, end: stats.size - 1 };
+		res.writeHead(verdict.kind === "window" ? 206 : 200, {
 			"Content-Type": lease.mime,
 			"Content-Length": range.end - range.start + 1,
 			"Accept-Ranges": "bytes",
 			"Cache-Control": "no-store",
-			"Access-Control-Allow-Origin": "*",
 			"X-Content-Type-Options": "nosniff",
-			...(partial ? { "Content-Range": `bytes ${range.start}-${range.end}/${stats.size}` } : {}),
+			...(verdict.kind === "window" ? { "Content-Range": `bytes ${range.start}-${range.end}/${stats.size}` } : {}),
 		});
 		if (req.method === "HEAD" || stats.size === 0) res.end();
 		else await pipeline(file.createReadStream({ start: range.start, end: range.end, highWaterMark: STREAM_BUFFER_BYTES, autoClose: false }), res);
@@ -97,6 +104,7 @@ async function streamRecording(req: IncomingMessage, res: ServerResponse, lease:
 export async function startMediaServer(fence: Fence): Promise<MediaServer> {
 	const leases = new Map<string, Lease>();
 	const pendingAdmissions = new Map<string, { cancelled: boolean }>();
+	const releasedTokens = new Set<string>();
 	let active = 0;
 	let host = "";
 	let closing: Promise<void> | undefined;
@@ -105,6 +113,7 @@ export async function startMediaServer(fence: Fence): Promise<MediaServer> {
 			res.writeHead(404).end();
 			return;
 		}
+		res.setHeader("Access-Control-Allow-Origin", "*");
 		const token = /^\/media\/([a-f0-9]{48})$/.exec(req.url ?? "")?.[1];
 		const lease = token === undefined ? undefined : leases.get(token);
 		if (lease === undefined) {
@@ -118,7 +127,7 @@ export async function startMediaServer(fence: Fence): Promise<MediaServer> {
 	});
 	server.requestTimeout = 30_000;
 	server.headersTimeout = 10_000;
-	server.maxConnections = 16;
+	server.maxConnections = MAX_TRANSFERS + KEEP_ALIVE_HEADROOM;
 
 	async function serve(req: IncomingMessage, res: ServerResponse, lease: Lease): Promise<void> {
 		if (req.method !== "GET" && req.method !== "HEAD") {
@@ -157,9 +166,10 @@ export async function startMediaServer(fence: Fence): Promise<MediaServer> {
 	const origin = `http://${host}`;
 	return {
 		origin,
-		async acquire(path: string, size: number, mtimeMs: number, meta: unknown, token = randomBytes(24).toString("hex")) {
+		async acquire(path: string, size: number, mtimeMs: number, meta: unknown, token: string) {
 			if (closing !== undefined) throw new Error("The recording server is closed.");
 			if (!MEDIA_TOKEN_PATTERN.test(token) || leases.has(token) || pendingAdmissions.has(token)) throw new Error("Invalid recording capability.");
+			if (releasedTokens.has(token)) throw new Error("Recording opening was cancelled.");
 			if (leases.size + pendingAdmissions.size >= MAX_LEASES) throw new Error("Close an open recording before opening another.");
 			const admission = { cancelled: false };
 			pendingAdmissions.set(token, admission);
@@ -177,9 +187,15 @@ export async function startMediaServer(fence: Fence): Promise<MediaServer> {
 			if (admission !== undefined) admission.cancelled = true;
 			for (const response of leases.get(token)?.responses ?? []) response.destroy();
 			leases.delete(token);
+			releasedTokens.add(token);
+			if (releasedTokens.size > MAX_REMEMBERED_RELEASES) {
+				const oldest = releasedTokens.values().next();
+				if (!oldest.done) releasedTokens.delete(oldest.value);
+			}
 		},
 		close() {
 			closing ??= new Promise<void>((resolve, reject) => {
+				for (const lease of leases.values()) for (const response of lease.responses) response.destroy();
 				leases.clear();
 				for (const admission of pendingAdmissions.values()) admission.cancelled = true;
 				server.close(error => error ? reject(error) : resolve());

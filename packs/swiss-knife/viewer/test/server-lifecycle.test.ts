@@ -99,10 +99,12 @@ test("stdio EOF after MCP initialization exits successfully without a terminatio
 		await cp(join(viewer, "src"), source, { recursive: true, filter: path => basename(path) !== "dist" });
 		await mkdir(join(source, "dist"));
 		await writeFile(join(source, "dist", "index.html"), "<!doctype html><title>viewer</title>");
-		process_ = launch(join(source, "stdio.ts"));
-		lines = createInterface({ input: process_.child.stdout });
+		const owned = launch(join(source, "stdio.ts"));
+		process_ = owned;
+		const reader = createInterface({ input: owned.child.stdout });
+		lines = reader;
 		const initialized = new Promise<unknown>((resolve, reject) => {
-			lines!.on("line", line => {
+			reader.on("line", line => {
 				try {
 					const message = JSON.parse(line);
 					if (message.id === 1) resolve(message);
@@ -110,7 +112,7 @@ test("stdio EOF after MCP initialization exits successfully without a terminatio
 					reject(error);
 				}
 			});
-			process_!.exited.then(exit => reject(new Error(`stdio exited before initialization: ${JSON.stringify(exit)}`)), reject);
+			owned.exited.then(exit => reject(new Error(`stdio exited before initialization: ${JSON.stringify(exit)}`)), reject);
 		});
 		process_.child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "lifecycle-test", version: "1" } } })}\n`);
 		expect(await bounded(initialized, "MCP initialization")).toMatchObject({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2024-11-05" } });

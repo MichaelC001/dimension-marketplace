@@ -3,9 +3,9 @@
 // can be driven with a stand-in element and a stand-in decoder; the pane (`pane-extras-timeline.tsx`) only seats them.
 import type { App } from "@modelcontextprotocol/ext-apps";
 import { useEffect, useEffectEvent, useState } from "react";
-import { loadDocumentBytes } from "./document-bytes";
+import { loadDocumentBytes, loadDocumentHead } from "./document-bytes";
 import { type LengthSource, readLength } from "./media-length";
-import { decodePeaks, WAVEFORM_MAX_BYTES, waveformAllowed } from "./media-waveform";
+import { decodePeaks, WAVEFORM_MAX_BYTES, WAVEFORM_PROBE_BYTES, waveformAllowed, waveformCouldApply } from "./media-waveform";
 import type { DocTab } from "./tabs";
 
 /** What says a recording's `duration` is now something else: the engine learning it, a new source, or no source at all. */
@@ -70,7 +70,8 @@ export type PeaksLoader = (app: App, tab: DocTab, signal: AbortSignal, duration:
 
 /** The loudness of a recording's file, or `null` for a plain track: every format but a WAV and a strict MP3 (see `waveformAllowed`), and any decode this engine cannot make or whose result is not the sound the file promised. */
 export const loadPeaks: PeaksLoader = async (app, tab, signal, duration) => {
-	// The document cache the pane already filled: the bytes are in memory, not read again.
+	const head = await loadDocumentHead(app, tab, WAVEFORM_PROBE_BYTES, signal);
+	if (!waveformCouldApply(head, duration)) return null;
 	const { bytes } = await loadDocumentBytes(app, tab, { signal });
 	return waveformAllowed(bytes, duration) ? decodePeaks(bytes, signal, { claimedSeconds: duration }) : null;
 };

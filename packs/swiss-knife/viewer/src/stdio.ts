@@ -7,22 +7,13 @@ function stop(): Promise<void> {
 	stopping ??= server.close();
 	return stopping;
 }
-process.stdin.once("end", () => {
+function shutdown(): void {
 	void stop().catch(error => {
 		console.error(error);
 		process.exitCode = 1;
 	});
-});
-process.once("SIGINT", () => {
-	void stop().catch(error => {
-		console.error(error);
-		process.exitCode = 1;
-	});
-});
-process.once("SIGTERM", () => {
-	void stop().catch(error => {
-		console.error(error);
-		process.exitCode = 1;
-	});
-});
+}
+process.stdin.once("end", shutdown);
+process.once("SIGINT", shutdown);
+process.once("SIGTERM", shutdown);
 await server.connect(new StdioServerTransport());

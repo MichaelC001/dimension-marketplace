@@ -78,10 +78,8 @@ export function DocPane({ app, tab, active, theme }: DocPaneProps) {
 				let mediaSource: RecordingSource | undefined;
 				const reading = isRecording(tab.kind)
 					? tools.whole("open_media", { path: tab.path, size: tab.size, mtimeMs: tab.mtimeMs, token: mediaToken }).then(result => {
-						const source = mediaSourceSchema.parse(result);
-						if (controller.signal.aborted) releaseMedia();
-						else {
-							mediaSource = source;
+						if (!controller.signal.aborted) {
+							mediaSource = mediaSourceSchema.parse(result);
 							setPhase({ name: "loading", stage: "prepare", loaded: 0, total: 0 });
 						}
 						return { bytes: new Uint8Array(0) };

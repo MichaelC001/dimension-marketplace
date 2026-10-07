@@ -1,10 +1,10 @@
-import { KIND_HEAD_BYTES, sniffMedia } from "../../../src/kind";
 import { resolveLength } from "../media-length";
 import { describeMediaError, type MediaTag, OPEN_TIMEOUT_SENTENCE } from "../media-messages";
 import type { MountContext, Mounted } from "./types";
 
-/** How long a recording may take to report its length before the pane says it cannot open it. A blob in memory answers at once; this is for an engine that never will. */
+/** How long a recording may take to report its length before the pane says it cannot open it. */
 const OPEN_TIMEOUT_MS = 20_000;
+const NO_SOURCE_SENTENCE = "This recording has no source to play from.";
 
 /** A calm tile for sound: the engine draws nothing for an `<audio>`, and a blank pane would read as broken. */
 function soundCard(filename: string): HTMLElement {
@@ -26,13 +26,11 @@ function soundCard(filename: string): HTMLElement {
 	return card;
 }
 
-export async function mountMedia(el: HTMLElement, bytes: Uint8Array, ctx: MountContext, tag: MediaTag): Promise<Mounted> {
-	const { signal } = ctx;
+export async function mountMedia(el: HTMLElement, ctx: MountContext, tag: MediaTag): Promise<Mounted> {
+	const { signal, mediaSource } = ctx;
+	if (mediaSource === undefined) throw new Error(NO_SOURCE_SENTENCE);
 	signal?.throwIfAborted();
-	const sniffed = sniffMedia(bytes.subarray(0, KIND_HEAD_BYTES), ctx.filename);
-	const mime = ctx.mediaSource?.mime ?? sniffed?.mime;
-	const url = ctx.mediaSource?.url ?? URL.createObjectURL(new Blob([bytes as BlobPart], mime === undefined ? undefined : { type: mime }));
-	const createdObjectUrl = ctx.mediaSource === undefined;
+	const { url, mime } = mediaSource;
 
 	const root = document.createElement("div");
 	root.className = "vw-media";
@@ -71,7 +69,6 @@ export async function mountMedia(el: HTMLElement, bytes: Uint8Array, ctx: MountC
 		media.removeAttribute("src");
 		media.load();
 		root.remove();
-		if (createdObjectUrl) URL.revokeObjectURL(url);
 	};
 
 	try {
@@ -92,7 +89,7 @@ export async function mountMedia(el: HTMLElement, bytes: Uint8Array, ctx: MountC
 			};
 			const failed = (): void => {
 				settle();
-				const known = mime !== undefined && media.canPlayType(mime) !== "";
+				const known = media.canPlayType(mime) !== "";
 				reject(new Error(describeMediaError(tag, mime, known, media.error?.code, media.error?.message)));
 			};
 			// The pane went away while the recording was still opening: stop at once, not when the wait runs out.

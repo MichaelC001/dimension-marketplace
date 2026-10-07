@@ -359,24 +359,28 @@ describe("the opening surface of the pane", () => {
 	});
 });
 
-function mediaApp(gate?: Promise<void>, closing?: (token: string) => Promise<void>) {
+function mediaApp(gate?: Promise<void>, closing?: (token: string) => Promise<void>, refusesReleased = true) {
 	const leases = new Set<string>();
 	const chunks: unknown[] = [];
 	const granted: string[] = [];
+	const requested: string[] = [];
+	const closed: string[] = [];
 	const canceled = new Set<string>();
 	const host = {
 		getHostContext: () => ({ theme: "dark" }),
 		callServerTool: async (call: { name: string; arguments?: Record<string, unknown> }) => {
 			if (call.name === "open_media") {
 				const token = String(call.arguments?.token);
+				requested.push(token);
 				await gate;
-				if (canceled.has(token)) throw new Error("Media admission was canceled.");
+				if (refusesReleased && canceled.has(token)) throw new Error("Media admission was canceled.");
 				leases.add(token);
 				granted.push(token);
 				return { content: [], structuredContent: { token, url: `http://127.0.0.1:45678/media/${token}`, mime: "video/mp4" } };
 			}
 			if (call.name === "close_media") {
 				const token = String(call.arguments?.token);
+				closed.push(token);
 				await closing?.(token);
 				canceled.add(token);
 				leases.delete(token);
@@ -387,7 +391,7 @@ function mediaApp(gate?: Promise<void>, closing?: (token: string) => Promise<voi
 		},
 		openLink: async () => ({}),
 	};
-	return { app: host as unknown as App, leases, chunks, granted };
+	return { app: host as unknown as App, leases, chunks, granted, requested, closed };
 }
 
 describe("streamed recording pane lifecycle", () => {
@@ -408,21 +412,36 @@ describe("streamed recording pane lifecycle", () => {
 		expect(host.leases.size).toBe(0);
 	});
 
-	test("an open result arriving after unmount is immediately released and never mounted", async () => {
+	test("unmounting while the recording is still opening releases the pane's own token once, and the open that then finishes mounts nothing and releases nothing more", async () => {
 		const opening = deferred();
-		const host = mediaApp(opening.promise);
+		const host = mediaApp(opening.promise, undefined, false);
 		let mounts = 0;
 		loadRendererImpl = async () => rendererOf(async () => {
 			mounts++;
 			return mounted();
 		});
 		const view = await env.mount(pane(tabOf("video", { size: 80 * 1024 * 1024 }), host.app));
+		expect(host.requested).toHaveLength(1);
 		await view.unmount();
+		expect(host.closed).toEqual(host.requested);
+		expect(mounts).toBe(0);
 		await env.act(async () => opening.resolve());
-		expect(host.granted).toEqual([]);
-		expect(host.leases.size).toBe(0);
+		expect(host.granted).toEqual(host.requested);
+		expect(host.closed).toEqual(host.requested);
 		expect(mounts).toBe(0);
 		expect(host.chunks).toEqual([]);
+	});
+
+	test("a recording that failed to open is released once, and the pane going away afterwards does not release it again", async () => {
+		const host = mediaApp();
+		loadRendererImpl = async () => rendererOf(async () => {
+			throw new Error("This recording is damaged.");
+		});
+		const view = await env.mount(pane(tabOf("video"), host.app));
+		expect(host.closed).toEqual(host.requested);
+		expect(host.closed).toHaveLength(1);
+		await view.unmount();
+		expect(host.closed).toEqual(host.requested);
 	});
 
 	test("a decoder failure releases the acquired lease while leaving the failure actionable", async () => {

@@ -1,21 +1,16 @@
-// The recording renderers on linkedom, with a stand-in for what linkedom lacks (a media
-// element that can be told it opened or failed). What is held here is what only the
-// renderer owns: the element is the one the layer looks for and has no native controls;
-// the Blob carries the container's own MIME type; a recording that will not open says why
-// in one sentence and leaves NOTHING behind; and `destroy()` lets go of the decoder, the
-// object URL and the DOM. Whether a real engine plays a real file is judged in a real browser.
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import audio from "../app/view/renderers/audio";
 import type { MountContext, Renderer } from "../app/view/renderers/types";
 import video from "../app/view/renderers/video";
 import { installDom, stage, type TestDom } from "./dom";
 
-const ascii = (text: string): number[] => Array.from(text, char => char.charCodeAt(0));
-const zeros = (count: number): number[] => new Array<number>(count).fill(0);
-const MP4 = Uint8Array.from([0, 0, 0, 0x20, ...ascii("ftypisom"), ...zeros(52)]);
-const MKV = Uint8Array.from([0x1a, 0x45, 0xdf, 0xa3, 0xa3, 0x42, 0x82, 0x88, ...ascii("matroska"), ...zeros(52)]);
-const MP3 = Uint8Array.from([...ascii("ID3"), 3, 0, 0, 0, 0, 0, 10, ...zeros(54)]);
-const ctx = (filename: string): MountContext => ({ filename, theme: "dark" });
+const RECORDING_URL = "http://127.0.0.1:45678/media/0123456789abcdef0123456789abcdef0123456789abcdef";
+const MP4 = "video/mp4";
+const MKV = "video/x-matroska";
+const WEBM = "video/webm";
+const MP3 = "audio/mpeg";
+const NO_BYTES = new Uint8Array();
+const ctx = (filename: string, mime: string): MountContext => ({ filename, theme: "dark", mediaSource: { url: RECORDING_URL, mime } });
 
 /** The parts of linkedom's window these tests reach into; it is not the DOM lib's `Window`. */
 interface StubWindow {
@@ -34,7 +29,7 @@ const revoked: string[] = [];
 const original = { create: URL.createObjectURL, revoke: URL.revokeObjectURL };
 let canPlay = "maybe";
 const calls = { pause: 0, load: 0 };
-const STUBBED = ["pause", "load", "play", "canPlayType"] as const;
+const STUBBED = ["pause", "load", "play", "canPlayType", "src"] as const;
 
 beforeAll(() => {
 	dom = installDom();
@@ -49,6 +44,15 @@ beforeAll(() => {
 		},
 		play: async () => undefined,
 		canPlayType: () => canPlay,
+	});
+	Object.defineProperty(win.HTMLElement.prototype, "src", {
+		configurable: true,
+		get: function (this: HTMLElement): string {
+			return this.getAttribute("src") ?? "";
+		},
+		set: function (this: HTMLElement, value: string): void {
+			this.setAttribute("src", value);
+		},
 	});
 	URL.createObjectURL = (blob: Blob | MediaSource) => {
 		made.push(blob as Blob);
@@ -74,9 +78,9 @@ afterEach(() => {
 });
 
 /** Mount, then tell the element what its engine would: it opened, or it failed with this code. */
-async function mounted(renderer: Renderer, bytes: Uint8Array, name: string, outcome: "opened" | { error: number }) {
+async function mounted(renderer: Renderer, mime: string, name: string, outcome: "opened" | { error: number }) {
 	const el = stage(dom.document);
-	const pending = renderer.mount(el, bytes, ctx(name));
+	const pending = renderer.mount(el, NO_BYTES, ctx(name, mime));
 	await Promise.resolve();
 	const media: StubMedia | null = el.querySelector('[data-slot="viewer-media"]');
 	if (media === null) throw new Error("the renderer mounted no media element");
@@ -90,10 +94,14 @@ async function mounted(renderer: Renderer, bytes: Uint8Array, name: string, outc
 }
 
 describe("a recording that opens", () => {
-	test("the element is the one the layer looks for, with no native controls, and a dock under it for the transport", async () => {
-		const { el, media, pending } = await mounted(video, MP4, "take.mp4", "opened");
+	test.each([
+		["video", video, "take.mp4", MP4],
+		["audio", audio, "take.mp3", MP3],
+	] as const)("%s plays the leased URL itself, with no native controls and a dock under it for the transport", async (tag, renderer, filename, mime) => {
+		const { el, media, pending } = await mounted(renderer, mime, filename, "opened");
 		await pending;
-		expect(media.tagName.toLowerCase()).toBe("video");
+		expect(media.tagName.toLowerCase()).toBe(tag);
+		expect(media.getAttribute("src")).toBe(RECORDING_URL);
 		expect(media.getAttribute("controls")).toBeNull();
 		expect(media.getAttribute("preload") ?? Reflect.get(media, "preload")).toBe("metadata");
 		expect(media.getAttribute("crossorigin") ?? Reflect.get(media, "crossOrigin")).toBe("anonymous");
@@ -101,14 +109,7 @@ describe("a recording that opens", () => {
 		// The dock sits AFTER the element's stage: the transport is under the picture, not over it.
 		const parts = [...(el.querySelector(".vw-media")?.children ?? [])].map(child => child.className);
 		expect(parts).toEqual(["vw-media-stage", "vw-media-dock"]);
-	});
-
-	test("the Blob carries the container's own type, so the browser opens the right demuxer", async () => {
-		await (await mounted(video, MP4, "take.mp4", "opened")).pending;
-		await (await mounted(video, MKV, "take.mkv", "opened")).pending;
-		await (await mounted(audio, MP3, "take.mp3", "opened")).pending;
-		expect(made.map(blob => blob.type)).toEqual(["video/mp4", "video/x-matroska", "audio/mpeg"]);
-		expect(made.map(blob => blob.size)).toEqual([MP4.length, MKV.length, MP3.length]);
+		expect(made).toEqual([]);
 	});
 
 	test("a sound gets a card with its name, set as text and never as markup", async () => {
@@ -120,17 +121,17 @@ describe("a recording that opens", () => {
 		expect(card?.querySelector("img")).toBeNull();
 	});
 
-	test("destroy lets go of everything: the decoder, the object URL and the DOM", async () => {
+	test("destroy lets go of the decoder and the DOM, and revokes no URL: the address is the server's, not an object URL's", async () => {
 		const { el, media, pending } = await mounted(video, MP4, "take.mp4", "opened");
 		const handle = await pending;
-		expect(revoked).toEqual([]);
+		expect(media.getAttribute("src")).toBe(RECORDING_URL);
 		handle.destroy();
-		expect(revoked).toEqual(["blob:test/1"]);
 		expect(el.querySelector(".vw-media")).toBeNull();
 		expect(calls.pause).toBeGreaterThan(0);
 		// The source is dropped and the element told to reload with none: that is what frees the decoder.
 		expect(media.getAttribute("src")).toBeNull();
 		expect(calls.load).toBeGreaterThan(0);
+		expect(revoked).toEqual([]);
 	});
 
 	test("it offers no zoom and no pages: a recording has neither", async () => {
@@ -146,10 +147,10 @@ describe("a recording that opens", () => {
 describe("a recording that will not open", () => {
 	test("a viewer that does not know the container says which one, in one sentence, and leaves nothing behind", async () => {
 		canPlay = "";
-		const { el, pending } = await mounted(video, MKV, "take.mkv", { error: 4 });
+		const { el, media, pending } = await mounted(video, MKV, "take.mkv", { error: 4 });
 		await expect(pending).rejects.toThrow("The viewer cannot play Matroska files");
 		expect(el.querySelector(".vw-media")).toBeNull();
-		expect(revoked).toEqual(["blob:test/1"]);
+		expect(media.getAttribute("src")).toBeNull();
 		expect(calls.load).toBeGreaterThan(0);
 	});
 
@@ -171,17 +172,32 @@ describe("a recording that will not open", () => {
 		win.clearTimeout = () => undefined;
 		try {
 			const el = stage(dom.document);
-			const pending = video.mount(el, MP4, ctx("take.mp4"));
+			const pending = video.mount(el, NO_BYTES, ctx("take.mp4", MP4));
 			await Promise.resolve();
 			expect(timers).toHaveLength(1);
 			timers[0]?.();
 			await expect(pending).rejects.toThrow("This file took too long to open.");
 			expect(el.querySelector(".vw-media")).toBeNull();
-			expect(revoked).toEqual(["blob:test/1"]);
+			expect(calls.load).toBeGreaterThan(0);
 		} finally {
 			win.setTimeout = real.set;
 			win.clearTimeout = real.clear;
 		}
+	});
+
+	test.each([
+		["video", video],
+		["audio", audio],
+	] as const)("%s given no source to play from says so in one sentence and appends nothing to the stage", async (_tag, renderer) => {
+		const el = stage(dom.document);
+		const settled = renderer.mount(el, Uint8Array.of(0, 0, 0, 0x20, 0x66, 0x74, 0x79, 0x70), { filename: "take.mp4", theme: "dark" }).then(
+			() => "mounted",
+			(error: unknown) => (error instanceof Error ? error.message : String(error)),
+		);
+		await hop();
+		expect(el.childElementCount).toBe(0);
+		expect(made).toEqual([]);
+		expect(await settled).toBe("This recording has no source to play from.");
 	});
 });
 
@@ -198,7 +214,7 @@ const hop = async (): Promise<void> => {
 describe("a recording that does not say how long it is", () => {
 	test("is asked for its length before anything reads it as zero: sought past the end, then put back at the start with the length it gave", async () => {
 		const el = stage(dom.document);
-		const pending = video.mount(el, MP4, ctx("capture.webm"));
+		const pending = video.mount(el, NO_BYTES, ctx("capture.webm", WEBM));
 		await hop();
 		const media = opening(el, Number.POSITIVE_INFINITY);
 		media.dispatchEvent(new win.Event("loadedmetadata"));
@@ -214,7 +230,7 @@ describe("a recording that does not say how long it is", () => {
 
 	test("one that still will not say after the seek is opened all the same, at the start: it is played, and its marks use the time heard", async () => {
 		const el = stage(dom.document);
-		const pending = audio.mount(el, MP3, ctx("capture.mp3"));
+		const pending = audio.mount(el, NO_BYTES, ctx("capture.mp3", MP3));
 		await hop();
 		const media = opening(el, Number.POSITIVE_INFINITY);
 		media.dispatchEvent(new win.Event("loadedmetadata"));
@@ -229,7 +245,7 @@ describe("a recording that does not say how long it is", () => {
 
 	test("a recording that says its length is not sought at all", async () => {
 		const el = stage(dom.document);
-		const pending = video.mount(el, MP4, ctx("take.mp4"));
+		const pending = video.mount(el, NO_BYTES, ctx("take.mp4", MP4));
 		await hop();
 		const media = opening(el, 90);
 		media.dispatchEvent(new win.Event("loadedmetadata"));
@@ -245,20 +261,19 @@ describe("a pane that goes away while a recording is still opening", () => {
 	test("stops the wait at once, not at the twenty seconds it would run to, and leaves nothing behind", async () => {
 		const controller = new AbortController();
 		const el = stage(dom.document);
-		const pending = video.mount(el, MP4, { ...ctx("take.mp4"), signal: controller.signal });
+		const pending = video.mount(el, NO_BYTES, { ...ctx("take.mp4", MP4), signal: controller.signal });
 		await hop();
 		expect(el.querySelector(".vw-media")).not.toBeNull();
 		controller.abort(gone());
 		await expect(pending).rejects.toThrow("the pane went away");
 		expect(el.querySelector(".vw-media")).toBeNull();
-		expect(revoked).toEqual(["blob:test/1"]);
 		expect(calls.load).toBeGreaterThan(0);
 	});
 
 	test("…and so does a pane that goes while the length is still being asked for", async () => {
 		const controller = new AbortController();
 		const el = stage(dom.document);
-		const pending = video.mount(el, MP4, { ...ctx("capture.webm"), signal: controller.signal });
+		const pending = video.mount(el, NO_BYTES, { ...ctx("capture.webm", WEBM), signal: controller.signal });
 		await hop();
 		const media = opening(el, Number.POSITIVE_INFINITY);
 		media.dispatchEvent(new win.Event("loadedmetadata"));
@@ -266,51 +281,28 @@ describe("a pane that goes away while a recording is still opening", () => {
 		controller.abort(gone());
 		await expect(pending).rejects.toThrow("the pane went away");
 		expect(el.querySelector(".vw-media")).toBeNull();
-		expect(revoked).toEqual(["blob:test/1"]);
+		expect(calls.load).toBeGreaterThan(0);
 	});
 
 	test("one that was gone before it began makes nothing at all", async () => {
 		const controller = new AbortController();
 		controller.abort(gone());
 		const el = stage(dom.document);
-		await expect(video.mount(el, MP4, { ...ctx("take.mp4"), signal: controller.signal })).rejects.toThrow("the pane went away");
-		expect(made).toHaveLength(0);
+		await expect(video.mount(el, NO_BYTES, { ...ctx("take.mp4", MP4), signal: controller.signal })).rejects.toThrow("the pane went away");
 		expect(el.childElementCount).toBe(0);
 	});
 
 	test("a recording that opened before the pane went is the pane's to destroy: abort afterwards does not touch it", async () => {
 		const controller = new AbortController();
 		const el = stage(dom.document);
-		const pending = video.mount(el, MP4, { ...ctx("take.mp4"), signal: controller.signal });
+		const pending = video.mount(el, NO_BYTES, { ...ctx("take.mp4", MP4), signal: controller.signal });
 		await hop();
 		opening(el, 90).dispatchEvent(new win.Event("loadedmetadata"));
 		const handle = await pending;
 		controller.abort(gone());
 		expect(el.querySelector(".vw-media")).not.toBeNull();
-		expect(revoked).toEqual([]);
+		expect(calls.load).toBe(0);
 		handle.destroy();
-		expect(revoked).toEqual(["blob:test/1"]);
-	});
-});
-
-describe("HTTP recording sources", () => {
-	test.each([
-		["video", video, "take.mp4", "video/mp4"],
-		["audio", audio, "take.mp3", "audio/mpeg"],
-	] as const)("%s plays the leased URL without making a full-file Blob", async (_kind, renderer, filename, mime) => {
-		const el = stage(dom.document);
-		const url = "http://127.0.0.1:45678/media/0123456789abcdef0123456789abcdef0123456789abcdef";
-		const pending = renderer.mount(el, new Uint8Array(), { ...ctx(filename), mediaSource: { url, mime } });
-		await Promise.resolve();
-		const media = el.querySelector('[data-slot="viewer-media"]');
-		if (media === null) throw new Error("No playback element.");
-		expect(media.getAttribute("src") ?? Reflect.get(media, "src")).toBe(url);
-		media.dispatchEvent(new win.Event("loadedmetadata"));
-		const handle = await pending;
-		expect(made).toEqual([]);
-		handle.destroy();
-		expect(media.getAttribute("src")).toBeNull();
-		expect(el.querySelector('[data-slot="viewer-media"]')).toBeNull();
-		expect(revoked).toEqual([]);
+		expect(el.querySelector(".vw-media")).toBeNull();
 	});
 });
