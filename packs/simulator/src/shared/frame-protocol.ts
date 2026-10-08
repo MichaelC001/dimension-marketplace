@@ -95,6 +95,20 @@ export function avcCodecString(config: Uint8Array): string | null {
   return null;
 }
 
+/**
+ * The access unit a decoder can START from. The encoder's key frame carries only
+ * the IDR slice; SPS and PPS arrive once, in the Config packet. A WebCodecs
+ * Annex-B decoder configured without a `description` learns them from the
+ * bitstream alone, so a key frame fed bare decodes to nothing and no error.
+ */
+export function keyAccessUnit(config: Uint8Array | null, key: Uint8Array): Uint8Array {
+  if (config === null) return key;
+  const unit = new Uint8Array(config.length + key.length);
+  unit.set(config, 0);
+  unit.set(key, config.length);
+  return unit;
+}
+
 // ── View -> server: input messages (JSON text frames) ───────────────────────
 
 export const DEVICE_KEYS = ["home", "back", "recents", "power", "volumeUp", "volumeDown", "enter", "delete", "tab", "escape", "menu"] as const;

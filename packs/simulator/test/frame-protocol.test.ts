@@ -13,6 +13,7 @@ import {
   FrameTag,
   MAX_INPUT_MESSAGE_BYTES,
   MAX_INPUT_TEXT_CHARS,
+  keyAccessUnit,
   parseInputMessage,
   readSessionPayload,
   sessionPayload,
@@ -104,5 +105,29 @@ describe("avcCodecString", () => {
   test("is null when there is no SPS", () => {
     expect(avcCodecString(Uint8Array.of(0, 0, 0, 1, 0x68, 0xee, 0x3c, 0x80))).toBeNull();
     expect(avcCodecString(new Uint8Array())).toBeNull();
+  });
+});
+
+describe("keyAccessUnit", () => {
+  const nalTypes = (unit: Uint8Array): number[] => {
+    const types: number[] = [];
+    for (let i = 0; i + 4 < unit.length; i++) {
+      if (unit[i] === 0 && unit[i + 1] === 0 && unit[i + 2] === 0 && unit[i + 3] === 1) types.push(unit[i + 4] & 0x1f);
+    }
+    return types;
+  };
+
+  test("a decoder that starts at a key frame sees SPS and PPS before the IDR slice", () => {
+    const config = Uint8Array.of(0, 0, 0, 1, 0x67, 0x42, 0xc0, 0x29, 0, 0, 0, 1, 0x68, 0xce, 0x3c, 0x80);
+    const idr = Uint8Array.of(0, 0, 0, 1, 0x65, 0xb8, 0x00, 0x04);
+    const unit = keyAccessUnit(config, idr);
+    expect(nalTypes(idr)).toEqual([5]);
+    expect(nalTypes(unit)).toEqual([7, 8, 5]);
+    expect(Array.from(unit.subarray(config.length))).toEqual(Array.from(idr));
+  });
+
+  test("with no config yet the key frame is handed over untouched", () => {
+    const idr = Uint8Array.of(0, 0, 0, 1, 0x65, 0xb8);
+    expect(keyAccessUnit(null, idr)).toBe(idr);
   });
 });
