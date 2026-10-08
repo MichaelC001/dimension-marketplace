@@ -14,7 +14,7 @@ describe("converse readiness", () => {
 		const first = await rig.provider.status(rig.ctx);
 		const second = await rig.provider.status(rig.ctx);
 
-		expect(first).toEqual({ speak: { ready: true }, converse: { ready: true } });
+		expect(first).toEqual({ speak: { ready: true }, listen: { ready: true }, converse: { ready: true } });
 		expect(second.converse).toEqual({ ready: true });
 		expect(rig.api.calls).toEqual(["GET /v1/convai/agents"]);
 		expect(rig.api.requests[0]?.headers.get("xi-api-key")).toBe(KEY);

@@ -346,14 +346,23 @@ describe("barge-in and abort", () => {
 });
 
 describe("failures", () => {
-	test("an error frame surfaces its message, then end, and closes the socket", async () => {
+	test.each([
+		{ name: "an unknown reason", frame: { error: "invalid_voice_id", message: "Voice not found: SECRET-PROVIDER-TEXT", code: 1008 }, says: "did not accept the voice request" },
+		{ name: "a rejected key", frame: { error: "invalid_api_key", message: "SECRET-PROVIDER-TEXT" }, says: "rejected the API key" },
+		{ name: "a key without the permission", frame: { error: "missing_permissions", message: "SECRET-PROVIDER-TEXT" }, says: "Text to Speech permission" },
+		{ name: "an exhausted quota", frame: { error: "quota_exceeded", message: "SECRET-PROVIDER-TEXT" }, says: "reached its limit" },
+	])("an error frame is told in plain words, then end, and closes the socket: $name", async ({ frame, says }) => {
 		const { session, socket } = await start();
 		socket.open();
 		session.push("Hi.");
-		socket.receive({ error: "invalid_voice_id", message: "Voice not found", code: 1008 });
+		socket.receive(frame);
 		socket.receive(dialogueAudio(pcmBytes(4_800)));
 
-		expect(await collect(session)).toEqual([{ t: "error", message: "Voice not found" }, { t: "end" }]);
+		const events = await collect(session);
+		expect(events.map(event => event.t)).toEqual(["error", "end"]);
+		const message = ofType(events, "error")[0]!.message;
+		expect(message).toContain(says);
+		expect(message).not.toContain("SECRET-PROVIDER-TEXT");
 		expect(socket.closed).toBe(true);
 	});
 
