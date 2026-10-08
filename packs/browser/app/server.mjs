@@ -4251,6 +4251,7 @@ async function withTimeout(promise, ms, label) {
     clearTimeout(timer);
   }
 }
+var NAVIGATOR_WEBDRIVER_OFF_SWITCH = "--disable-blink-features=AutomationControlled";
 function viewLaunchOptions(input) {
   return {
     executablePath: input.browser.executablePath,
@@ -4259,7 +4260,7 @@ function viewLaunchOptions(input) {
     timeout: input.timeout,
     protocolTimeout: BROWSER_PROTOCOL_TIMEOUT_MS,
     defaultViewport: null,
-    args: [...input.args, ...input.headless && input.userAgent ? [`--user-agent=${input.userAgent}`] : []],
+    args: [...input.args, NAVIGATOR_WEBDRIVER_OFF_SWITCH, ...input.headless && input.userAgent ? [`--user-agent=${input.userAgent}`] : []],
     ignoreDefaultArgs: ["--enable-automation"]
   };
 }
@@ -16397,7 +16398,7 @@ var LiveChannel = class {
 var plugin_default = {
   $schema: "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   name: "browser",
-  version: "0.6.7",
+  version: "0.6.8",
   description: "A real browser beside your chat that your agent drives while you watch. Tabs, persistent logged-in profiles, circle-to-annotate, and an optional fast task agent (jev).",
   keywords: [
     "browser",
