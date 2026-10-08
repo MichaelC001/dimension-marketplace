@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { ElevenLabsError } from "../src/failure.js";
 import { Harness } from "./support.js";
 import { EventLog, frames, hangUpAll, INSTRUCTIONS, makeLiveRig, openConverse, pcm, SIGNED_URL, startCall } from "./live-support.js";
 import { settle, withTimeout } from "./support.js";
@@ -81,6 +82,27 @@ describe("the handshake", () => {
 		);
 		expect(error?.message).toContain("Could not reach");
 		expect(error?.message).not.toContain("SIG-SECRET");
+		expect((error as ElevenLabsError).unreachable).toBe(true);
+	});
+
+	test.each([
+		{ code: 1006, unreachable: true },
+		{ code: 1008, unreachable: undefined },
+		{ code: 1011, unreachable: undefined },
+	])("a socket closed with code $code before the call is accepted rejects the open (unreachable: $unreachable)", async ({ code, unreachable }) => {
+		const rig = await makeLiveRig(harness);
+		const pending = openConverse(rig);
+		const socket = await rig.socket();
+		socket.open();
+		socket.serverClose(code, "closed");
+
+		const error = (await pending.then(
+			() => undefined,
+			(caught: unknown) => caught,
+		)) as ElevenLabsError;
+		expect(error).toBeInstanceOf(ElevenLabsError);
+		expect(error.unreachable).toBe(unreachable);
+		expect(error.status).toBeUndefined();
 	});
 
 	test("an aborted signal closes the half-open socket", async () => {

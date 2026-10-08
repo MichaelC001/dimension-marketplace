@@ -11,7 +11,9 @@ export const SIGNED_URL = "wss://api.elevenlabs.io/v1/convai/conversation?agent_
 
 // ---- the Agents HTTP API -----------------------------------------------------------------------
 
-export type Scope = "full" | "none" | "forbidden" | "invalid-key";
+export type Scope = "full" | "none" | "forbidden" | "invalid-key" | "busy" | "broken";
+
+export const PROVIDER_TEXT = "SECRET-PROVIDER-TEXT";
 
 /** The parts of an agent body the tests read. */
 export interface AgentPayload {
@@ -81,6 +83,8 @@ export class FakeAgentsApi {
 		const path = url.pathname;
 		const body = request.body ? (JSON.parse(request.body) as Record<string, unknown>) : undefined;
 		if (this.scope === "invalid-key") return this.#error(401, { status: "invalid_api_key", message: "Invalid API key" });
+		if (this.scope === "busy") return this.#error(429, { status: "too_many_concurrent_requests", message: PROVIDER_TEXT });
+		if (this.scope === "broken") return this.#error(503, { status: "unavailable", message: PROVIDER_TEXT });
 		if (this.scope === "forbidden") return this.#error(403, { status: "forbidden", message: "Forbidden" });
 		if (this.scope === "none") {
 			return this.#error(401, { status: "missing_permissions", message: "The API key you used is missing the permission convai_read." });

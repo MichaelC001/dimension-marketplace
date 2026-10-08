@@ -1032,8 +1032,8 @@
 			"pluginId": "speech-elevenlabs",
 			"title": "ElevenLabs voice",
 			"icon": "packs/speech-elevenlabs/assets/icon.svg",
-			"description": "ElevenLabs speech provider: an agent's replies spoken by Eleven v4 Turbo (or v4, or Flash v2.5) with word-level caption timing, and live voice conversations through an ElevenLabs agent that hands repository work to your coding agent. Choose it from a voice profile by naming the provider \"elevenlabs\".",
-			"version": "0.2.1",
+			"description": "ElevenLabs speech provider: dictation by Scribe v2 Realtime, an agent's replies spoken by Eleven v4 Turbo (or v4, or Flash v2.5) with word-level caption timing, and live voice conversations through an ElevenLabs agent that hands repository work to your coding agent. Choose it from a voice profile by naming the provider \"elevenlabs\".",
+			"version": "0.3.0",
 			"author": {
 				"name": "Dimension"
 			},

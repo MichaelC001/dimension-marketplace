@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { ElevenLabsError } from "../src/failure.js";
 import { createElevenLabsProvider } from "../src/index.js";
-import { frames, hangUpAll, type LiveRig, makeLiveRig, openConverse, startCall } from "./live-support.js";
+import { frames, hangUpAll, type LiveRig, makeLiveRig, openConverse, PROVIDER_TEXT, startCall } from "./live-support.js";
 import { Harness, KEY, makeRig } from "./support.js";
 
 const harness = new Harness();
@@ -228,5 +229,61 @@ describe("provisioning the one shared agent", () => {
 			provider.openConverse?.(base.ctx, {}, { signal: new AbortController().signal, instructions: "x", agentName: "A", sessionId: "s" }),
 		).rejects.toThrow("ElevenLabs needs an API key");
 		expect(api.requests).toHaveLength(0);
+	});
+});
+
+describe("a call that cannot start says why in a form the engine can classify", () => {
+	test.each([
+		{ scope: "invalid-key", status: 401, says: /^ElevenLabs rejected the API key$/ },
+		{ scope: "none", status: 401, says: /convai read \+ write/ },
+		{ scope: "forbidden", status: 403, says: /convai read \+ write/ },
+		{ scope: "busy", status: 429, says: /busy, or the key has reached its limit/ },
+		{ scope: "broken", status: 503, says: /problem on its side/ },
+	] as const)("$scope: status $status on the error, the pack's sentence as its message, no provider text, and no socket", async ({ scope, status, says }) => {
+		const rig = await makeLiveRig(harness, { scope });
+		const error = (await openConverse(rig).then(
+			() => undefined,
+			(caught: unknown) => caught,
+		)) as ElevenLabsError;
+
+		expect(error).toBeInstanceOf(ElevenLabsError);
+		expect(error.status).toBe(status);
+		expect(error.unreachable).toBeUndefined();
+		expect(error.message).toMatch(says);
+		expect(error.message).not.toContain(PROVIDER_TEXT);
+		expect(error.message).not.toContain(KEY);
+		expect(rig.sockets).toHaveLength(0);
+	});
+
+	test("an agent the account refuses to create over its quota says so, with the status", async () => {
+		const rig = await makeLiveRig(harness);
+		rig.api.refuseAgentCreate = true;
+		const error = (await openConverse(rig).then(
+			() => undefined,
+			(caught: unknown) => caught,
+		)) as ElevenLabsError;
+
+		expect(error.status).toBe(422);
+		expect(error.message).toMatch(/reached its limit/);
+	});
+
+	test("an ElevenLabs that cannot be reached is unreachable, carrying the runtime's network code and none of its words", async () => {
+		const base = await makeRig(harness);
+		const provider = createElevenLabsProvider({
+			fetch: (() => Promise.reject(Object.assign(new Error(`connect failed ${PROVIDER_TEXT}`), { code: "ConnectionRefused" }))) as unknown as typeof fetch,
+			userHome: base.home,
+		});
+		const error = (await provider
+			.openConverse!(base.ctx, {}, { signal: new AbortController().signal, instructions: "x", agentName: "A", sessionId: "s" })
+			.then(
+				() => undefined,
+				(caught: unknown) => caught,
+			)) as ElevenLabsError;
+
+		expect(error).toBeInstanceOf(ElevenLabsError);
+		expect(error.unreachable).toBe(true);
+		expect(error.code).toBe("ConnectionRefused");
+		expect(error.status).toBeUndefined();
+		expect(error.message).not.toContain(PROVIDER_TEXT);
 	});
 });

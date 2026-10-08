@@ -9,15 +9,16 @@ const MAX_AUDIO_EVENT_BYTES = (SAMPLE_RATE / 10) * 2;
 /** An async iterable fed by `push`, completed by `close`. One consumer. */
 export class EventQueue<T extends object> implements AsyncIterable<T> {
 	readonly #items: T[] = [];
-	#waiter: ((result: IteratorResult<T>) => void) | null = null;
+	#waiter: PromiseWithResolvers<IteratorResult<T>> | null = null;
 	#closed = false;
+	#failure: { readonly error: unknown } | null = null;
 
 	push(item: T): void {
 		if (this.#closed) return;
 		const waiter = this.#waiter;
 		if (waiter) {
 			this.#waiter = null;
-			waiter({ value: item, done: false });
+			waiter.resolve({ value: item, done: false });
 		} else this.#items.push(item);
 	}
 
@@ -30,7 +31,16 @@ export class EventQueue<T extends object> implements AsyncIterable<T> {
 		this.#closed = true;
 		const waiter = this.#waiter;
 		this.#waiter = null;
-		waiter?.({ value: undefined, done: true });
+		waiter?.resolve({ value: undefined, done: true });
+	}
+
+	fail(error: unknown): void {
+		if (this.#closed) return;
+		this.#closed = true;
+		const waiter = this.#waiter;
+		this.#waiter = null;
+		if (waiter) waiter.reject(error);
+		else this.#failure = { error };
 	}
 
 	[Symbol.asyncIterator](): AsyncIterator<T> {
@@ -38,10 +48,15 @@ export class EventQueue<T extends object> implements AsyncIterable<T> {
 			next: () => {
 				const item = this.#items.shift();
 				if (item !== undefined) return Promise.resolve({ value: item, done: false });
+				const failure = this.#failure;
+				if (failure) {
+					this.#failure = null;
+					return Promise.reject(failure.error);
+				}
 				if (this.#closed) return Promise.resolve({ value: undefined, done: true });
-				return new Promise<IteratorResult<T>>(resolve => {
-					this.#waiter = resolve;
-				});
+				const waiter = Promise.withResolvers<IteratorResult<T>>();
+				this.#waiter = waiter;
+				return waiter.promise;
 			},
 			return: () => {
 				this.clear();

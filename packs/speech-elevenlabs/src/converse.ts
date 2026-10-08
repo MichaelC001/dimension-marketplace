@@ -21,6 +21,7 @@ import {
 	toolResultFrame,
 	userMessageFrame,
 } from "./convai.js";
+import { ElevenLabsError, unreachableFailure } from "./failure.js";
 import { EventQueue } from "./output.js";
 
 /** The slice of WebSocket a call uses, so a test can stand in for the network. */
@@ -45,6 +46,7 @@ export const DEFAULT_FINAL_HOLD_MS = 8_000;
 /** A final is never held longer than this many holds, even while the agent is audibly still talking. */
 const HOLD_CAP_FACTOR = 4;
 
+const ABNORMAL_CLOSE = 1006;
 const OVERRIDE_REFUSED = /Override for field '([^']+)'/;
 
 export interface RelayOptions {
@@ -131,10 +133,12 @@ class RelaySession implements ConverseSession {
 		ws.onclose = event => this.#onClose(event.code, event.reason);
 		// Once the call is up the close event that follows an error ends it (with its code); before that, nothing else will.
 		ws.onerror = () => {
-			if (!this.#media) this.#failOpening(new Error("Could not reach the ElevenLabs live agent"));
+			if (!this.#media) this.#failOpening(unreachableFailure("the ElevenLabs live agent"));
 		};
 
-		this.#later(OPEN_TIMEOUT_MS, () => this.#failOpening(new Error("ElevenLabs did not answer the live call in time")));
+		this.#later(OPEN_TIMEOUT_MS, () =>
+			this.#failOpening(new ElevenLabsError("ElevenLabs did not answer the live call in time", { unreachable: true, code: "ETIMEDOUT" })),
+		);
 		this.#abort = () => (this.#media ? this.close() : this.#failOpening(options.signal.reason));
 		options.signal.addEventListener("abort", this.#abort, { once: true });
 	}
@@ -188,7 +192,7 @@ class RelaySession implements ConverseSession {
 		if (!this.#media) {
 			// Until ElevenLabs accepts the call only its metadata, or a refusal, means anything.
 			if (frame.kind === "metadata") this.#accept(frame);
-			else if (frame.kind === "error") this.#failOpening(new Error(frame.message));
+			else if (frame.kind === "error") this.#failOpening(new ElevenLabsError(frame.message));
 			return;
 		}
 		this.#onFrame(frame);
@@ -272,7 +276,9 @@ class RelaySession implements ConverseSession {
 	#onClose(code: number, reason: string): void {
 		if (this.#ended) return;
 		if (!this.#media) {
-			this.#failOpening(new Error(describeClose(code, reason, this.#options.onOverrideRefused)));
+			this.#failOpening(
+				new ElevenLabsError(describeClose(code, reason, this.#options.onOverrideRefused), code === ABNORMAL_CLOSE ? { unreachable: true } : {}),
+			);
 		} else if (code === 1000 || code === 1005) {
 			const expired = performance.now() - this.#openedAt >= (MAX_CALL_SECONDS - 5) * 1000;
 			this.#finish(expired ? "expired" : "provider");

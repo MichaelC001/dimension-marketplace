@@ -3,6 +3,7 @@
 // segment is flushed at once; `close_socket` finishes the reply and the server answers `is_final`.
 import type { SpeakEvent, SpeakSession } from "@dimension/sdk/provider";
 import { DialogueTimeline } from "./alignment.js";
+import { handshakeFailureMessage, plainMessage, sentenceFor, verdictOf } from "./failure.js";
 import { SpeakOutput } from "./output.js";
 import {
 	API_HOST,
@@ -12,7 +13,6 @@ import {
 	dialogueHello,
 	dialogueInput,
 	dialogueSocketUrl,
-	describeHandshakeFailure,
 	parseDialogueEvent,
 	SAMPLE_RATE,
 } from "./protocol.js";
@@ -140,7 +140,7 @@ export class DialogueSpeakSession implements SpeakSession {
 		try {
 			(this.#socket ?? this.#connect()).send(dialogueInput(text, this.#options.voice));
 		} catch (error) {
-			this.#fail(error instanceof Error ? error.message : String(error));
+			this.#fail(plainMessage(error, "The ElevenLabs voice connection failed"));
 			return;
 		}
 		this.#outstanding += 1;
@@ -199,7 +199,7 @@ export class DialogueSpeakSession implements SpeakSession {
 				this.#finish();
 				return;
 			case "error":
-				this.#fail(event.message);
+				this.#fail(sentenceFor(verdictOf(undefined, event.reason), "speak"));
 				return;
 		}
 		this.#watch();
@@ -239,7 +239,7 @@ export class DialogueSpeakSession implements SpeakSession {
 				headers: { "xi-api-key": this.#options.apiKey },
 				signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
 			});
-			return describeHandshakeFailure(res.status, await res.text());
+			return handshakeFailureMessage(res.status, await res.text());
 		} catch {
 			return "Could not reach ElevenLabs";
 		}

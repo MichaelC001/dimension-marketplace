@@ -11,6 +11,7 @@ import { dirname, join } from "node:path";
 import type { SpeechReadiness } from "@dimension/sdk/provider";
 import { DEFAULT_VOICES } from "./catalog.js";
 import { agentBody, toolBody } from "./convai.js";
+import { AGENTS_PERMISSION_DETAIL, ElevenLabsError, httpFailure, reachFetch } from "./failure.js";
 import { API_HOST, isRecord } from "./protocol.js";
 
 const RECORD_FILE = join("speech", "elevenlabs-agents.json");
@@ -18,30 +19,6 @@ const REQUEST_TIMEOUT_MS = 15_000;
 const PROBE_TTL_MS = 5 * 60_000;
 /** A failed probe (offline, a blip) is retried soon rather than pinning "unavailable" for minutes. */
 const PROBE_FAILURE_TTL_MS = 30_000;
-
-export const AGENTS_PERMISSION_DETAIL = "the key needs the ElevenLabs Agents permissions (convai read + write)";
-
-/** A non-2xx answer from the Agents API. `message` is safe to show: it never carries the key. */
-export class ConvaiHttpError extends Error {
-	constructor(
-		readonly status: number,
-		message: string,
-	) {
-		super(message);
-		this.name = "ConvaiHttpError";
-	}
-}
-
-/** What ElevenLabs said, reduced to one short sentence (`detail.message`), without quoting the request. */
-function describeFailure(status: number, body: unknown): string {
-	const detail = isRecord(body) && isRecord(body.detail) ? body.detail : undefined;
-	const message = typeof detail?.message === "string" ? detail.message.slice(0, 200) : "";
-	if (status === 401 || status === 403) {
-		const missing = status === 403 || detail?.status === "missing_permissions" || message.includes("permission");
-		return missing ? `ElevenLabs refused the Agents call: ${AGENTS_PERMISSION_DETAIL}` : "ElevenLabs rejected the API key";
-	}
-	return `ElevenLabs Agents answered ${status}${message ? `: ${message}` : ""}`;
-}
 
 interface AgentRecord {
 	readonly version: 1;
@@ -92,7 +69,7 @@ export class Agents {
 		signal: AbortSignal | undefined,
 	): Promise<unknown> {
 		const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
-		const res = await this.#fetch(`https://${API_HOST}${path}`, {
+		const res = await reachFetch(this.#fetch, `https://${API_HOST}${path}`, {
 			method,
 			headers: { "xi-api-key": apiKey, ...(body === undefined ? {} : { "content-type": "application/json" }) },
 			body: body === undefined ? undefined : JSON.stringify(body),
@@ -105,7 +82,7 @@ export class Agents {
 		} catch {
 			json = undefined;
 		}
-		if (!res.ok) throw new ConvaiHttpError(res.status, describeFailure(res.status, json));
+		if (!res.ok) throw httpFailure(res.status, text, "converse");
 		return json;
 	}
 
@@ -157,7 +134,7 @@ export class Agents {
 				// The PATCH doubles as the existence check: a deleted tool is a 404.
 				await this.#call(apiKey, "PATCH", `/v1/convai/tools/${toolId}`, wantedTool, signal);
 			} catch (error) {
-				if (!(error instanceof ConvaiHttpError && error.status === 404)) throw error;
+				if (!(error instanceof ElevenLabsError && error.status === 404)) throw error;
 				toolId = undefined;
 			}
 		}
@@ -176,7 +153,7 @@ export class Agents {
 			try {
 				await this.#call(apiKey, "PATCH", `/v1/convai/agents/${agentId}`, wantedAgent, signal);
 			} catch (error) {
-				if (!(error instanceof ConvaiHttpError && error.status === 404)) throw error;
+				if (!(error instanceof ElevenLabsError && error.status === 404)) throw error;
 				agentId = undefined;
 			}
 		}
@@ -214,7 +191,7 @@ export class Agents {
 		try {
 			return await this.#signedUrl(args, agentId);
 		} catch (error) {
-			if (!(error instanceof ConvaiHttpError && error.status === 404)) throw error;
+			if (!(error instanceof ElevenLabsError && error.status === 404)) throw error;
 			return this.#signedUrl(args, await this.ensure({ ...args, verify: true }));
 		}
 	}
@@ -256,11 +233,11 @@ export class Agents {
 			await this.#call(apiKey, "GET", "/v1/convai/agents?page_size=1", undefined, undefined);
 			return { ready: true };
 		} catch (error) {
-			if (error instanceof ConvaiHttpError && (error.status === 401 || error.status === 403)) {
+			if (error instanceof ElevenLabsError && (error.status === 401 || error.status === 403)) {
 				const permissions = error.message.includes(AGENTS_PERMISSION_DETAIL);
 				return { ready: false, reason: "needs-key", detail: permissions ? AGENTS_PERMISSION_DETAIL : error.message };
 			}
-			const why = error instanceof ConvaiHttpError ? error.message : "could not reach ElevenLabs";
+			const why = error instanceof ElevenLabsError ? error.message : "could not reach ElevenLabs";
 			return { ready: false, reason: "unavailable", detail: why };
 		}
 	}
