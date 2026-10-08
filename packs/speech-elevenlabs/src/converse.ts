@@ -21,7 +21,7 @@ import {
 	toolResultFrame,
 	userMessageFrame,
 } from "./convai.js";
-import { ElevenLabsError, unreachableFailure } from "./failure.js";
+import { ElevenLabsError, sentenceFor, unreachableFailure, verdictOf } from "./failure.js";
 import { EventQueue } from "./output.js";
 
 /** The slice of WebSocket a call uses, so a test can stand in for the network. */
@@ -47,6 +47,7 @@ export const DEFAULT_FINAL_HOLD_MS = 8_000;
 const HOLD_CAP_FACTOR = 4;
 
 const ABNORMAL_CLOSE = 1006;
+const EMBEDDED_STATUS = /:\s(\d{3}):/;
 const OVERRIDE_REFUSED = /Override for field '([^']+)'/;
 
 export interface RelayOptions {
@@ -71,6 +72,21 @@ function describeClose(code: number, reason: string, onOverrideRefused: (() => v
 		return `ElevenLabs ended the call by policy${reason ? `: ${reason}` : ""}`;
 	}
 	return `The ElevenLabs call dropped (code ${code}${reason ? `: ${reason}` : ""})`;
+}
+
+function embeddedStatus(reason: string): number | undefined {
+	const status = Number(EMBEDDED_STATUS.exec(reason)?.[1]);
+	return status >= 400 && status < 600 ? status : undefined;
+}
+
+function openingFailure(code: number, reason: string, onOverrideRefused: (() => void) | undefined): ElevenLabsError {
+	if (code === ABNORMAL_CLOSE) return unreachableFailure("the ElevenLabs live agent");
+	if (code === 1008 && OVERRIDE_REFUSED.test(reason)) {
+		return new ElevenLabsError(describeClose(code, reason, onOverrideRefused));
+	}
+	const status = embeddedStatus(reason);
+	if (status === undefined) return new ElevenLabsError("ElevenLabs ended the call before it started");
+	return new ElevenLabsError(sentenceFor(verdictOf(status, undefined), "converse"), { status });
 }
 
 /** Open the socket, introduce the call, and resolve once ElevenLabs has accepted it (its metadata frame). */
@@ -276,9 +292,7 @@ class RelaySession implements ConverseSession {
 	#onClose(code: number, reason: string): void {
 		if (this.#ended) return;
 		if (!this.#media) {
-			this.#failOpening(
-				new ElevenLabsError(describeClose(code, reason, this.#options.onOverrideRefused), code === ABNORMAL_CLOSE ? { unreachable: true } : {}),
-			);
+			this.#failOpening(openingFailure(code, reason, this.#options.onOverrideRefused));
 		} else if (code === 1000 || code === 1005) {
 			const expired = performance.now() - this.#openedAt >= (MAX_CALL_SECONDS - 5) * 1000;
 			this.#finish(expired ? "expired" : "provider");

@@ -2,6 +2,7 @@
 // URLs, the scope probe), a fake agent socket, builders for the frames the agent sends, and a rig
 // that opens a call the way the engine does. No network, no real home, no real time beyond a few ms.
 import type { ConverseEvent, ConverseOpenOptions, ConverseSession, SpeechProvider, SpeechProviderContext } from "@dimension/sdk/provider";
+import { agentBody, DEFAULT_CONVERSE_VOICE, toolBody } from "../src/convai.js";
 import type { ConvaiSocket } from "../src/converse.js";
 import { createElevenLabsProvider } from "../src/index.js";
 import { FakeHttp, type Harness, jsonResponse, KEY, makeRig, type RecordedRequest, settle, withTimeout } from "./support.js";
@@ -39,9 +40,14 @@ export class FakeAgentsApi {
 	scope: Scope = "full";
 	/** The account refuses to create an agent (a quota, a transient 5xx): the tool step before it still succeeds. */
 	refuseAgentCreate = false;
+	/** Every signed-URL request is refused with this status, whatever the agent id (a wrong agent, a revoked one). */
+	signedUrlRefusal: number | undefined;
 	readonly tools = new Map<string, Record<string, unknown>>();
 	readonly agents = new Map<string, Record<string, unknown>>();
+	readonly created = new Map<string, number>();
+	readonly archived = new Set<string>();
 	#next = 1;
+	#clock = 1_000;
 
 	readonly http = new FakeHttp(request => this.#handle(request));
 
@@ -74,6 +80,41 @@ export class FakeAgentsApi {
 		if (what.tools) this.tools.clear();
 	}
 
+	/** A tool already on the account, as an earlier run (or another machine) left it. */
+	seedTool(config: Record<string, unknown> = toolBody()): string {
+		const id = `tool_${this.#next++}`;
+		this.tools.set(id, config);
+		return id;
+	}
+
+	/** An agent already on the account; by default it holds exactly the body this pack wants. */
+	seedAgent(options: { toolId: string; name?: string; created?: number; archived?: boolean; body?: Record<string, unknown> }): string {
+		const id = `agent_${this.#next++}`;
+		const body = options.body ?? { ...agentBody(options.toolId, "eleven_v4_turbo", DEFAULT_CONVERSE_VOICE), name: options.name ?? "dimension-live" };
+		this.agents.set(id, body);
+		this.created.set(id, options.created ?? this.#clock++);
+		if (options.archived) this.archived.add(id);
+		return id;
+	}
+
+	#list(url: URL, field: "agents" | "tools"): Response {
+		const search = url.searchParams.get("search") ?? "";
+		const size = Number(url.searchParams.get("page_size") ?? "30");
+		const start = Number(url.searchParams.get("cursor") ?? "0");
+		const store = field === "agents" ? this.agents : this.tools;
+		const matching = [...store.entries()].filter(([, body]) => {
+			const config = body.tool_config as { name?: string } | undefined;
+			return String(field === "agents" ? body.name : config?.name).includes(search);
+		});
+		const next = start + size;
+		const rows = matching.slice(start, next).map(([id, body]) =>
+			field === "agents"
+				? { agent_id: id, name: body.name, created_at_unix_secs: this.created.get(id), archived: this.archived.has(id) }
+				: { id, ...body },
+		);
+		return jsonResponse({ [field]: rows, has_more: next < matching.length, next_cursor: next < matching.length ? String(next) : null });
+	}
+
 	#error(status: number, detail: Record<string, unknown>): Response {
 		return jsonResponse({ detail }, status);
 	}
@@ -93,7 +134,9 @@ export class FakeAgentsApi {
 			return this.#error(401, { status: "invalid_api_key", message: "Invalid API key" });
 		}
 		const method = request.method;
-		if (method === "GET" && path === "/v1/convai/agents") return jsonResponse({ agents: [] });
+		if (method === "GET" && (path === "/v1/convai/agents" || path === "/v1/convai/tools")) {
+			return this.#list(url, path.endsWith("agents") ? "agents" : "tools");
+		}
 		if (method === "POST" && path === "/v1/convai/tools") {
 			const id = `tool_${this.#next++}`;
 			this.tools.set(id, body ?? {});
@@ -105,6 +148,7 @@ export class FakeAgentsApi {
 			}
 			const id = `agent_${this.#next++}`;
 			this.agents.set(id, body ?? {});
+			this.created.set(id, this.#clock++);
 			return jsonResponse({ agent_id: id });
 		}
 		const patch = /^\/v1\/convai\/(tools|agents)\/([^/]+)$/.exec(path);
@@ -115,7 +159,16 @@ export class FakeAgentsApi {
 			store.set(id, body ?? {});
 			return jsonResponse({ id });
 		}
+		const read = /^\/v1\/convai\/(tools|agents)\/([^/]+)$/.exec(path);
+		if (method === "GET" && read) {
+			const agents = read[1] === "agents";
+			const id = read[2] ?? "";
+			const held = (agents ? this.agents : this.tools).get(id);
+			if (!held) return this.#error(404, { status: "document_not_found", message: `Document with id ${id} not found.` });
+			return jsonResponse(agents ? { agent_id: id, ...held } : { id, ...held });
+		}
 		if (method === "GET" && path === "/v1/convai/conversation/get-signed-url") {
+			if (this.signedUrlRefusal !== undefined) return this.#error(this.signedUrlRefusal, { status: "document_not_found", code: "agent_not_found", message: PROVIDER_TEXT });
 			const id = url.searchParams.get("agent_id") ?? "";
 			if (!this.agents.has(id)) return this.#error(404, { status: "document_not_found", code: "agent_not_found", message: `Agent with ID '${id}' not found.` });
 			return jsonResponse({ signed_url: SIGNED_URL.replace("agent_1", id) });

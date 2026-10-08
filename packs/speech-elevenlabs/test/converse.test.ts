@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { ElevenLabsError } from "../src/failure.js";
 import { Harness } from "./support.js";
-import { EventLog, frames, hangUpAll, INSTRUCTIONS, makeLiveRig, openConverse, pcm, SIGNED_URL, startCall } from "./live-support.js";
+import { EventLog, frames, hangUpAll, INSTRUCTIONS, makeLiveRig, openConverse, PROVIDER_TEXT, pcm, SIGNED_URL, startCall } from "./live-support.js";
 import { settle, withTimeout } from "./support.js";
 
 const harness = new Harness();
@@ -103,6 +103,37 @@ describe("the handshake", () => {
 		expect(error).toBeInstanceOf(ElevenLabsError);
 		expect(error.unreachable).toBe(unreachable);
 		expect(error.status).toBeUndefined();
+	});
+
+	test("a refusal whose status ElevenLabs wrote into the close reason is carried as that status, in the pack's words", async () => {
+		const rig = await makeLiveRig(harness);
+		const pending = openConverse(rig);
+		const socket = await rig.socket();
+		socket.open();
+		socket.serverClose(3000, `Agent agent_wrong not found: 404: {'type': 'not_found', 'message': '${PROVIDER_TEXT}'}`);
+
+		const error = (await pending.then(
+			() => undefined,
+			(caught: unknown) => caught,
+		)) as ElevenLabsError;
+		expect(error.status).toBe(404);
+		expect(error.unreachable).toBeUndefined();
+		expect(error.message).toBe("ElevenLabs did not accept the Agents call");
+	});
+
+	test("a close before the call starts that names no status says only that the call did not start", async () => {
+		const rig = await makeLiveRig(harness);
+		const pending = openConverse(rig);
+		const socket = await rig.socket();
+		socket.open();
+		socket.serverClose(3000, `went wrong ${PROVIDER_TEXT}`);
+
+		const error = (await pending.then(
+			() => undefined,
+			(caught: unknown) => caught,
+		)) as ElevenLabsError;
+		expect(error.status).toBeUndefined();
+		expect(error.message).toBe("ElevenLabs ended the call before it started");
 	});
 
 	test("an aborted signal closes the half-open socket", async () => {

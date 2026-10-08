@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { agentBody, DEFAULT_CONVERSE_VOICE, toolBody } from "../src/convai.js";
 import { ElevenLabsError } from "../src/failure.js";
 import { createElevenLabsProvider } from "../src/index.js";
 import { frames, hangUpAll, type LiveRig, makeLiveRig, openConverse, PROVIDER_TEXT, startCall } from "./live-support.js";
@@ -35,16 +36,17 @@ describe("provisioning the one shared agent", () => {
 		await openAndHangUp(rig);
 
 		expect(rig.api.calls).toEqual([
+			"GET /v1/convai/tools",
 			"POST /v1/convai/tools",
 			"POST /v1/convai/agents/create",
 			"GET /v1/convai/conversation/get-signed-url",
 		]);
 		const agentId = firstKey(rig.api.agents);
-		expect(rig.api.requests[2]?.url).toContain(`agent_id=${agentId}`);
+		expect(rig.api.requests[3]?.url).toContain(`agent_id=${agentId}`);
 		expect(rig.sockets[0]?.url).toContain(`agent_id=${agentId}`);
 
-		expect(rig.api.toolPayload(0).tool_config).toMatchObject({ type: "client", name: "delegate_to_agent", expects_response: false });
-		const agent = rig.api.agentPayload(1);
+		expect(rig.api.toolPayload(1).tool_config).toMatchObject({ type: "client", name: "delegate_to_agent", expects_response: false });
+		const agent = rig.api.agentPayload(2);
 		const config = agent.conversation_config;
 		expect(agent.name).toBe("dimension-live");
 		expect(config.agent.prompt.tool_ids).toEqual([firstKey(rig.api.tools)]);
@@ -63,7 +65,7 @@ describe("provisioning the one shared agent", () => {
 		const rig = await makeLiveRig(harness);
 		const { socket } = await startCall(rig, { voice: "v" });
 		const sent = socket.frames[0]?.conversation_config_override;
-		const allowed = rig.api.agentPayload(1).platform_settings.overrides.conversation_config_override;
+		const allowed = rig.api.agentPayload(rig.api.calls.indexOf("POST /v1/convai/agents/create")).platform_settings.overrides.conversation_config_override;
 
 		expect(leafPaths(allowed).sort()).toEqual(leafPaths(sent).sort());
 		expect(leafPaths(allowed).sort()).toEqual(["agent.first_message", "agent.prompt.prompt", "tts.voice_id"]);
@@ -175,7 +177,7 @@ describe("provisioning the one shared agent", () => {
 		await writeFile(recordPath(rig), '{"agentId": "agent_1", "tool');
 
 		await openAndHangUp(rig);
-		expect(rig.api.calls.slice(0, 2)).toEqual(["POST /v1/convai/tools", "POST /v1/convai/agents/create"]);
+		expect(rig.api.calls.slice(0, 3)).toEqual(["GET /v1/convai/tools", "POST /v1/convai/tools", "POST /v1/convai/agents/create"]);
 	});
 
 	test("two calls opened together create the agent once", async () => {
@@ -229,6 +231,152 @@ describe("provisioning the one shared agent", () => {
 			provider.openConverse?.(base.ctx, {}, { signal: new AbortController().signal, instructions: "x", agentName: "A", sessionId: "s" }),
 		).rejects.toThrow("ElevenLabs needs an API key");
 		expect(api.requests).toHaveLength(0);
+	});
+});
+
+describe("adopting the account's own agent", () => {
+	const writes = (rig: LiveRig, from = 0) => rig.api.calls.slice(from).filter(call => !call.startsWith("GET "));
+
+	test("a home with no ids adopts the agent already on the account by name: nothing is created or written, and the call connects to it", async () => {
+		const rig = await makeLiveRig(harness);
+		const toolId = rig.api.seedTool();
+		const agentId = rig.api.seedAgent({ toolId });
+
+		await openAndHangUp(rig);
+
+		expect(writes(rig)).toEqual([]);
+		expect(rig.sockets[0]?.url).toContain(`agent_id=${agentId}`);
+		expect(await readRecord(rig)).toMatchObject({ agentId, toolId });
+	});
+
+	test("a wiped engine home finds the agent the first run made instead of making a second", async () => {
+		const rig = await makeLiveRig(harness);
+		await openAndHangUp(rig);
+		const agentId = firstKey(rig.api.agents);
+		await rm(recordPath(rig));
+		rig.restart();
+		const before = rig.api.calls.length;
+
+		await openAndHangUp(rig);
+
+		expect(writes(rig, before)).toEqual([]);
+		expect([rig.api.agents.size, rig.api.tools.size]).toEqual([1, 1]);
+		expect((await readRecord(rig)).agentId).toBe(agentId);
+	});
+
+	test("an adopted agent that differs from the body this pack wants is PATCHed in place, never replaced", async () => {
+		const rig = await makeLiveRig(harness);
+		const toolId = rig.api.seedTool();
+		const wanted = agentBody(toolId, "eleven_v4_turbo", DEFAULT_CONVERSE_VOICE) as { conversation_config: object };
+		const agentId = rig.api.seedAgent({
+			toolId,
+			body: { ...wanted, name: "dimension-live", conversation_config: { ...wanted.conversation_config, turn: { turn_timeout: 7 } } },
+		});
+
+		await openAndHangUp(rig);
+
+		expect(writes(rig)).toEqual([`PATCH /v1/convai/agents/${agentId}`]);
+		expect(rig.api.agentById(agentId).conversation_config.turn.turn_timeout).toBe(-1);
+		expect(rig.api.agents.size).toBe(1);
+	});
+
+	test("an adopted agent speaking another voice model than this call asks for is PATCHed to it", async () => {
+		const rig = await makeLiveRig(harness);
+		const toolId = rig.api.seedTool();
+		const agentId = rig.api.seedAgent({ toolId });
+
+		await openAndHangUp(rig, { model: "eleven_v4" });
+
+		expect(writes(rig)).toEqual([`PATCH /v1/convai/agents/${agentId}`]);
+		expect(rig.api.agentById(agentId).conversation_config.tts.model_id).toBe("eleven_v4");
+	});
+
+	test("an adopted tool whose body drifted is PATCHed in place", async () => {
+		const rig = await makeLiveRig(harness);
+		const toolId = rig.api.seedTool({ tool_config: { ...toolBody().tool_config as object, description: "an older description" } });
+		rig.api.seedAgent({ toolId });
+
+		await openAndHangUp(rig);
+
+		expect(writes(rig)).toEqual([`PATCH /v1/convai/tools/${toolId}`]);
+		expect(rig.api.tools.size).toBe(1);
+	});
+
+	test("an agent that only shares the name, without this pack's tool, is left exactly as it was", async () => {
+		const rig = await makeLiveRig(harness);
+		rig.api.seedTool();
+		const otherTool = rig.api.seedTool({ tool_config: { type: "client", name: "lookup", expects_response: true } });
+		const foreign = rig.api.seedAgent({ toolId: otherTool });
+		const before = JSON.stringify(rig.api.agentById(foreign));
+
+		await openAndHangUp(rig);
+
+		expect(JSON.stringify(rig.api.agentById(foreign))).toBe(before);
+		expect(rig.api.agents.size).toBe(2);
+		expect(rig.sockets[0]?.url).not.toContain(`agent_id=${foreign}`);
+		expect(rig.api.calls).toContain("POST /v1/convai/agents/create");
+	});
+
+	test("of several agents of ours the oldest is adopted, and an archived one never", async () => {
+		const rig = await makeLiveRig(harness);
+		const toolId = rig.api.seedTool();
+		rig.api.seedAgent({ toolId, created: 300 });
+		const oldest = rig.api.seedAgent({ toolId, created: 100 });
+		rig.api.seedAgent({ toolId, created: 1, archived: true });
+
+		await openAndHangUp(rig);
+
+		expect(rig.sockets[0]?.url).toContain(`agent_id=${oldest}`);
+		expect(writes(rig)).toEqual([]);
+	});
+
+	test("the agent is found past the first page of the account's agents", async () => {
+		const rig = await makeLiveRig(harness);
+		const toolId = rig.api.seedTool();
+		for (let at = 0; at < 120; at++) rig.api.seedAgent({ toolId, name: `dimension-live-copy-${at}`, created: 1 + at });
+		const ours = rig.api.seedAgent({ toolId, created: 500 });
+
+		await openAndHangUp(rig);
+
+		expect(rig.sockets[0]?.url).toContain(`agent_id=${ours}`);
+		expect(writes(rig)).toEqual([]);
+	});
+
+	test("a wrong agent id in the record heals through the name without writing to the account", async () => {
+		const rig = await makeLiveRig(harness);
+		await openAndHangUp(rig);
+		const agentId = firstKey(rig.api.agents);
+		await writeFile(recordPath(rig), JSON.stringify({ ...(await readRecord(rig)), agentId: "agent_wrong" }));
+		rig.restart();
+		const before = rig.api.calls.length;
+
+		await openAndHangUp(rig);
+
+		expect(writes(rig, before)).toEqual([]);
+		expect(rig.sockets[1]?.url).toContain(`agent_id=${agentId}`);
+		expect((await readRecord(rig)).agentId).toBe(agentId);
+	});
+
+	test("a signed URL the account keeps refusing is a 404 the error carries, plain, and the healthy agent is not rewritten", async () => {
+		const rig = await makeLiveRig(harness);
+		await openAndHangUp(rig);
+		const agentId = firstKey(rig.api.agents);
+		rig.api.signedUrlRefusal = 404;
+		const before = rig.api.calls.length;
+
+		const error = (await openConverse(rig).then(
+			() => undefined,
+			(caught: unknown) => caught,
+		)) as ElevenLabsError;
+
+		expect(error).toBeInstanceOf(ElevenLabsError);
+		expect(error.status).toBe(404);
+		expect(error.unreachable).toBeUndefined();
+		expect(error.message).toBe("ElevenLabs did not accept the Agents call");
+		expect(error.message).not.toContain(agentId);
+		expect(error.message).not.toContain(PROVIDER_TEXT);
+		expect(writes(rig, before)).toEqual([]);
+		expect(rig.sockets).toHaveLength(1);
 	});
 });
 
