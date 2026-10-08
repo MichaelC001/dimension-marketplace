@@ -1011,6 +1011,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			resize: async (browserId, viewport, scale) => await this.resize(browserId, viewport, scale),
 			close: async (browserId) => await this.close(browserId),
 			require: (browserId) => this.require(browserId),
+			resolveProfile: (raw) => this.resolveProfile(raw, "chromium"),
 			peek: (browserId) => {
 				const entry = this.byId.get(browserId);
 				return entry === undefined || entry.closed ? undefined : entry;

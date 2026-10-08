@@ -158,6 +158,7 @@ describeWithChrome("a tab name stays on the browser it was opened on", () => {
     expect(await throwawaysOf(runtime, "chat-1")).toEqual(throwaway);
     expect((await chromePidsByThrowaway(rootDir)).size).toBe(1);
     expect(await heldBy(runtime, "chat-1", "work")).toBeNull();
+    expect(await runtime.profileList("chat-1")).toEqual([]);
     expect(await valueOf(host, "chat-2", `${openTab(site, "/show-cookie", "a", "work")}; ${cookieOn("a")}`)).toBe("COOKIE:none");
   }, BROWSER_TEST_TIMEOUT_MS);
 
@@ -174,6 +175,7 @@ describeWithChrome("a tab name stays on the browser it was opened on", () => {
     expect(refused.message).toContain(boundElsewhere("other"));
     expect(site.hits("/show-cookie")).toBe(0);
     expect(await heldBy(runtime, "chat-1", "other")).toBeNull();
+    expect((await runtime.profileList("chat-1")).map(listed => listed.name)).toEqual(["work"]);
     expect(await holdersOf(runtime, "chat-1")).toEqual(holders);
     expect(await valueOf(host, "chat-1", `${openTab(site, "/show-cookie")}; ${cookieOn()}`)).toBe(`COOKIE:${site.cookieValue}`);
     expect(await valueOf(host, "chat-2", `${openTab(site, "/show-cookie", "a", "other")}; ${cookieOn("a")}`)).toBe("COOKIE:none");
@@ -264,5 +266,83 @@ describeWithChrome("a tab name stays on the browser it was opened on", () => {
     expect(await throwawaysOf(runtime, "chat-1")).toEqual([]);
     expect(await holdersOf(runtime, "chat-1")).toHaveLength(1);
     expect(await valueOf(host, "chat-1", `${openTab(site, "/show-cookie")}; ${cookieOn()}`)).toBe(`COOKIE:${site.cookieValue}`);
+  }, BROWSER_TEST_TIMEOUT_MS);
+
+  test("a refused open never adopts the saved profile's browser the person has open in this chat's View: it gets no cell clock, and the chat's cells keep working, even after the person takes it over", async () => {
+    const site = startFixture();
+    const { host, runtime } = await start();
+    const person = (await runtime.open({ profile: "work" }, { caller: "app", session: "chat-1" })).browserId;
+    await valueOf(host, "chat-1", `${openTab(site, "/page2")}; 0`);
+    const throwaway = await throwawaysOf(runtime, "chat-1");
+    expect(throwaway).toHaveLength(1);
+    const seam = runtime.codeSeam();
+    expect(seam.peek(person)).toBeDefined();
+    expect(seam.peek(person)?.code).toBeUndefined();
+    expect(await holdersOf(runtime, "chat-1")).toEqual([person]);
+
+    const refused = await failureOf(host, "chat-1", `${openTab(site, "/show-cookie", "main", "work")}; 0`);
+
+    expect(refused.message).toContain(boundElsewhere("work"));
+    expect(site.hits("/show-cookie")).toBe(0);
+    expect(seam.peek(person)).toBeDefined();
+    expect(seam.peek(person)?.code).toBeUndefined();
+    expect(await holdersOf(runtime, "chat-1")).toEqual([person]);
+    expect(await throwawaysOf(runtime, "chat-1")).toEqual(throwaway);
+    expect(await valueOf(host, "chat-1", `browser.tab("main").url()`)).toBe(site.url("/page2"));
+
+    await runtime.control(person, "take", "app");
+
+    expect(await valueOf(host, "chat-1", `browser.tab("main").url()`)).toBe(site.url("/page2"));
+    expect(seam.peek(person)?.code).toBeUndefined();
+  }, BROWSER_TEST_TIMEOUT_MS);
+
+  test("two opens that start together, one on the name the throwaway holds and one for the same profile under a new name: the first is refused, the second gets the profile's Chrome, and the refusal does not close it", async () => {
+    const site = startFixture();
+    const { host, runtime } = await start();
+    await valueOf(host, "chat-1", `${openTab(site, "/signup")}; 0`);
+    const throwaway = await throwawaysOf(runtime, "chat-1");
+    expect(throwaway).toHaveLength(1);
+
+    const outcomes = await valueOf(host, "chat-1", `
+      const settled = await Promise.allSettled([
+        browser.open({ name: "main", profile: "work", url: ${q(site.url("/show-cookie"))} }),
+        browser.open({ name: "w", profile: "work", url: ${q(site.url("/page2"))} }),
+      ]);
+      JSON.stringify(settled.map(one => (one.status === "fulfilled" ? "fulfilled" : String(one.reason?.message ?? one.reason))))`, SLOW_CELL);
+
+    expect(outcomes).toEqual([expect.stringContaining(boundElsewhere("work")), "fulfilled"]);
+    expect(site.hits("/show-cookie")).toBe(0);
+    expect(site.hits("/page2")).toBe(1);
+    expect(await heldBy(runtime, "chat-1", "work")).toBe("this chat");
+    expect(await holdersOf(runtime, "chat-1")).toHaveLength(1);
+    expect(await throwawaysOf(runtime, "chat-1")).toEqual(throwaway);
+    expect(await valueOf(host, "chat-1", `await browser.tab("w").evaluate(() => document.title)`)).toBe("second page");
+    expect(await valueOf(host, "chat-1", `browser.tab("main").url()`)).toBe(site.url("/signup"));
+  }, BROWSER_TEST_TIMEOUT_MS);
+
+  test("a name whose page was closed behind the host is not bound to the throwaway any more: it opens on the saved profile instead of being refused, and the throwaway's other tab is untouched", async () => {
+    const site = startFixture();
+    const { host, runtime } = await start();
+    await valueOf(host, "chat-1", `${openTab(site, "/page2")}; ${openTab(site, "/signup", "keep")}; 0`);
+    const throwaway = await throwawaysOf(runtime, "chat-1");
+    expect(throwaway).toHaveLength(1);
+    const driver = runtime.codeSeam().browsersOf("chat-1")[0]?.driver;
+    if (driver === undefined) throw new Error("the throwaway has no engine driver");
+    const pages = await driver.tabs();
+    const mainPage = pages.find(page => page.url === site.url("/page2"));
+    expect(pages.map(page => page.url).sort()).toEqual([site.url("/page2"), site.url("/signup")].sort());
+    if (mainPage === undefined) throw new Error("the throwaway has no page for tab main");
+
+    await driver.closeTab(mainPage.tabId);
+
+    expect((await driver.tabs()).map(page => page.url)).toEqual([site.url("/signup")]);
+    const text = await textOfCell(host, "chat-1", openTab(site, "/set-cookie", "main", "work"));
+
+    expect(text).toStartWith('Opened tab "main"');
+    expect(site.hits("/set-cookie")).toBe(1);
+    expect(await holdersOf(runtime, "chat-1")).toHaveLength(1);
+    expect(await throwawaysOf(runtime, "chat-1")).toEqual(throwaway);
+    expect(await valueOf(host, "chat-1", `${openTab(site, "/show-cookie")}; ${cookieOn()}`)).toBe(`COOKIE:${site.cookieValue}`);
+    expect(await valueOf(host, "chat-1", `await browser.tab("keep").evaluate(() => document.title)`)).toBe("signup");
   }, BROWSER_TEST_TIMEOUT_MS);
 });

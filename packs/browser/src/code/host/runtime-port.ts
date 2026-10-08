@@ -54,6 +54,8 @@ export interface CodeSeam {
   require(browserId: string): CodeSeamEntry;
   /** The live entry without stamping it as used or throwing: what a clock reads. */
   peek(browserId: string): CodeSeamEntry | undefined;
+  /** The slug a saved profile's name or label means: the runtime's own resolution, which throws what `open` would for an ambiguous or invalid name. Reads only. */
+  resolveProfile(raw: string): string;
   /** The session's open browsers, whoever opened them. */
   browsersOf(session: string): CodeSeamEntry[];
   viewOf(session: string): string | undefined;
@@ -175,6 +177,11 @@ export class RuntimeCodeBrowsers implements CodeBrowserPort {
       // Whatever the open is still waiting for (an application's port, the relay's extension) is not waited for any longer once nobody asks.
       if (joined.waiting === 0 && !joined.settled) joined.controller.abort(new ToolAbortError());
     }
+  }
+
+  isProfileBrowser(browserId: string, profile: string): boolean {
+    const entry = this.#seam.peek(browserId);
+    return entry !== undefined && entry.profile !== null && entry.profile === this.#seam.resolveProfile(profile);
   }
 
   /**

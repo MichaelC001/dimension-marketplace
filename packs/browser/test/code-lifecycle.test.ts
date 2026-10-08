@@ -115,6 +115,10 @@ class FakeBrowsers implements CodeBrowserPort {
     return { browserId: this.#browser.id, created, wsEndpoint: "ws://fake/b1" };
   }
 
+  isProfileBrowser(): boolean {
+    return false;
+  }
+
   async openTab(browserId: string, o: { url?: string }): Promise<TabRef> {
     this.#serial += 1;
     const tab: TabRef = { tabId: `t${this.#serial}`, targetId: `t${this.#serial}`, url: o.url ?? "about:blank", title: "", active: true };

@@ -184,6 +184,8 @@ export type RunStarted =
 // ---- L2 implements on BrowserRuntime (four hooks in runtime.ts); L2 and L4 consume.
 export interface CodeBrowserPort {
   acquire(session: string, req: { kind: BrowserKind; profile?: string; viewport?: { width: number; height: number; scale?: number }; persist?: boolean }, signal: AbortSignal): Promise<AcquiredBrowser>;
+  /** Whether `browserId` is the browser of the saved profile that `profile` (a name or a label, resolved as the runtime resolves it) means. Reads only: nothing is opened, held or adopted. Throws what opening that profile would for a name that is ambiguous or not a profile name. */
+  isProfileBrowser(browserId: string, profile: string): boolean;
   /**
    * Makes a tab of `browserId` the cell's. A browser the pack launched opens a new tab; one it only attached to (connected, spawned, relay) hands over the page the person has in front, or the one whose URL or title contains `target`
    * (`app.target`), as it is, and navigates it when `url` is given. A cmux browser opens a split at `url`, or attaches to the surface the request named.

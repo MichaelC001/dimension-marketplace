@@ -573,23 +573,21 @@ export class CodeSession {
   async #openTab(name: string, kind: BrowserKind, request: BridgeRequest, timeoutMs: number, deadline: AbortSignal, run: Run): Promise<HostReply> {
     const { browsers } = this.#d;
     const existing = this.#tabs.get(name);
-    let acquired: { record: BrowserRecord; created: boolean } | undefined;
     if (existing !== undefined) {
       if (!sameBrowserKind(existing.kind, kind)) {
         throw new ToolError(`Tab ${JSON.stringify(name)} is bound to a different browser (${describeKind(existing.kind)}). Close it first.`);
       }
-      if (request.profile !== undefined) {
-        // A saved profile and a throwaway are both `headless`, so the kind cannot tell them apart. Which browser the profile is (the runtime resolves its name or label) is read from the browser it gives, and the tab must be on that one.
-        acquired = await this.#acquire(kind, request, deadline, run);
-        if (acquired.record.browserId !== existing.browserId) {
-          if (acquired.created) await this.#dropBrowser(acquired.record, true);
-          throw new ToolError(`Tab ${JSON.stringify(name)} is bound to a different browser than the saved profile ${JSON.stringify(request.profile)}. Close it first, or open this one under another name.`);
-        }
+      // A saved profile and a throwaway are both `headless`, so the kind cannot tell them apart: a profile that is named must be the browser the tab is on. The runtime answers that by reading, without opening, holding or adopting anything.
+      if (request.profile === undefined || browsers.isProfileBrowser(existing.browserId, request.profile)) {
+        const reused = await this.#reuse(existing, request, timeoutMs, deadline);
+        if (reused !== undefined) return reused;
+      } else if ((await this.#aliveTab(existing)) !== undefined) {
+        throw new ToolError(`Tab ${JSON.stringify(name)} is bound to a different browser than the saved profile ${JSON.stringify(request.profile)}. Close it first, or open this one under another name.`);
+      } else {
+        this.#forgetTab(existing.name);
       }
-      const reused = await this.#reuse(existing, request, timeoutMs, deadline);
-      if (reused !== undefined) return reused;
     }
-    acquired ??= await this.#acquire(kind, request, deadline, run);
+    const acquired = await this.#acquire(kind, request, deadline, run);
     const { record } = acquired;
     if (!acquired.created && request.viewport !== undefined) await browsers.resize(record.browserId, request.viewport);
     let ref: TabRef;
@@ -614,12 +612,7 @@ export class CodeSession {
   /** `browser.open` on a name the session already holds: refresh the tab's clocks and apply what the call asks (OMP tab-supervisor.ts:302-361). Undefined when the tab is gone, which opens it afresh. */
   async #reuse(existing: NamedTab, request: BridgeRequest, timeoutMs: number, deadline: AbortSignal): Promise<HostReply | undefined> {
     const { browsers } = this.#d;
-    let alive: TabRef | undefined;
-    try {
-      alive = (await browsers.tabs(existing.browserId)).find(tab => tab.tabId === existing.handle.tabId);
-    } catch {
-      alive = undefined;
-    }
+    const alive = await this.#aliveTab(existing);
     if (alive === undefined) {
       this.#forgetTab(existing.name);
       return undefined;
@@ -633,6 +626,15 @@ export class CodeSession {
     const handle: TabHandle = { ...existing.handle, ...ref, created: existing.handle.created };
     this.#tabs.set(existing.name, { ...existing, handle });
     return this.#opened("Reused", existing.name, this.#browsers.get(existing.browserId) ?? { kind: existing.kind }, ref, handle, request);
+  }
+
+  /** The page a named tab was opened on, or undefined when the page (or its browser) is gone. */
+  async #aliveTab(tab: NamedTab): Promise<TabRef | undefined> {
+    try {
+      return (await this.#d.browsers.tabs(tab.browserId)).find(ref => ref.tabId === tab.handle.tabId);
+    } catch {
+      return undefined;
+    }
   }
 
   /**

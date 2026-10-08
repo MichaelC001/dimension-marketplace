@@ -10695,6 +10695,10 @@ var RuntimeCodeBrowsers = class {
       if (joined.waiting === 0 && !joined.settled) joined.controller.abort(new ToolAbortError());
     }
   }
+  isProfileBrowser(browserId, profile2) {
+    const entry = this.#seam.peek(browserId);
+    return entry !== void 0 && entry.profile !== null && entry.profile === this.#seam.resolveProfile(profile2);
+  }
   /**
    * A browser this port made that no open waits for any more: the runtime closes it, and an application the pack started for it goes too (nothing else holds that application: no entry, no idle clock, no retry, and it
    * was started detached). `terminate` exists only for one this open started, so an application that was already running is only let go of.
@@ -11354,22 +11358,20 @@ var CodeSession = class {
   async #openTab(name, kind, request, timeoutMs, deadline, run) {
     const { browsers } = this.#d;
     const existing = this.#tabs.get(name);
-    let acquired;
     if (existing !== void 0) {
       if (!sameBrowserKind(existing.kind, kind)) {
         throw new ToolError(`Tab ${JSON.stringify(name)} is bound to a different browser (${describeKind(existing.kind)}). Close it first.`);
       }
-      if (request.profile !== void 0) {
-        acquired = await this.#acquire(kind, request, deadline, run);
-        if (acquired.record.browserId !== existing.browserId) {
-          if (acquired.created) await this.#dropBrowser(acquired.record, true);
-          throw new ToolError(`Tab ${JSON.stringify(name)} is bound to a different browser than the saved profile ${JSON.stringify(request.profile)}. Close it first, or open this one under another name.`);
-        }
+      if (request.profile === void 0 || browsers.isProfileBrowser(existing.browserId, request.profile)) {
+        const reused = await this.#reuse(existing, request, timeoutMs, deadline);
+        if (reused !== void 0) return reused;
+      } else if (await this.#aliveTab(existing) !== void 0) {
+        throw new ToolError(`Tab ${JSON.stringify(name)} is bound to a different browser than the saved profile ${JSON.stringify(request.profile)}. Close it first, or open this one under another name.`);
+      } else {
+        this.#forgetTab(existing.name);
       }
-      const reused = await this.#reuse(existing, request, timeoutMs, deadline);
-      if (reused !== void 0) return reused;
     }
-    acquired ??= await this.#acquire(kind, request, deadline, run);
+    const acquired = await this.#acquire(kind, request, deadline, run);
     const { record } = acquired;
     if (!acquired.created && request.viewport !== void 0) await browsers.resize(record.browserId, request.viewport);
     let ref;
@@ -11392,12 +11394,7 @@ var CodeSession = class {
   /** `browser.open` on a name the session already holds: refresh the tab's clocks and apply what the call asks (OMP tab-supervisor.ts:302-361). Undefined when the tab is gone, which opens it afresh. */
   async #reuse(existing, request, timeoutMs, deadline) {
     const { browsers } = this.#d;
-    let alive;
-    try {
-      alive = (await browsers.tabs(existing.browserId)).find((tab) => tab.tabId === existing.handle.tabId);
-    } catch {
-      alive = void 0;
-    }
+    const alive = await this.#aliveTab(existing);
     if (alive === void 0) {
       this.#forgetTab(existing.name);
       return void 0;
@@ -11409,6 +11406,14 @@ var CodeSession = class {
     const handle = { ...existing.handle, ...ref, created: existing.handle.created };
     this.#tabs.set(existing.name, { ...existing, handle });
     return this.#opened("Reused", existing.name, this.#browsers.get(existing.browserId) ?? { kind: existing.kind }, ref, handle, request);
+  }
+  /** The page a named tab was opened on, or undefined when the page (or its browser) is gone. */
+  async #aliveTab(tab) {
+    try {
+      return (await this.#d.browsers.tabs(tab.browserId)).find((ref) => ref.tabId === tab.handle.tabId);
+    } catch {
+      return void 0;
+    }
   }
   /**
    * The tab as the worker adopts it. A page of a browser the pack only attached to was adopted, not created. The person's visible tab on a connected or relay browser is not raised for a screenshot unless `app.target`
@@ -14239,6 +14244,7 @@ var BrowserRuntime = class {
       resize: async (browserId, viewport, scale) => await this.resize(browserId, viewport, scale),
       close: async (browserId) => await this.close(browserId),
       require: (browserId) => this.require(browserId),
+      resolveProfile: (raw) => this.resolveProfile(raw, "chromium"),
       peek: (browserId) => {
         const entry = this.byId.get(browserId);
         return entry === void 0 || entry.closed ? void 0 : entry;
