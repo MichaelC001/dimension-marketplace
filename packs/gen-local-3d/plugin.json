@@ -1,7 +1,7 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "gen-local-3d",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "Image-to-3D on this machine's GPU: Pixal3D (single view) and TRELLIS.2 through pixal3d.cpp's trellis-cli. No account, no key, no cost per model.",
 	"author": {
 		"name": "Dimension"
@@ -22,7 +22,8 @@
 			"title": "Local image-to-3D",
 			"icon": "assets/icon.svg",
 			"category": "connector",
-			"defaultEnabled": false,
+			"defaultEnabled": true,
+			"bundled": true,
 			"entry": "index.ts",
 			"providers": {
 				"generation": [
