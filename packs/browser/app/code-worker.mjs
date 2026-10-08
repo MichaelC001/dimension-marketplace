@@ -7838,6 +7838,12 @@ var TEXT_CLICK_LOOP_SLACK_MS = 250;
 function textClickLoopMs(actionOpMs) {
   return Math.max(1, actionOpMs / 2, actionOpMs - TEXT_CLICK_LOOP_SLACK_MS);
 }
+var EVALUATE_HINT = " (tab.evaluate(string): a template literal resolves backslash escapes such as \\n before the page sees them; pass a function, tab.evaluate(() => ...), instead.)";
+function withEvaluateHint(error, source) {
+  if (typeof source !== "string" || !(error instanceof Error) || error.name !== "SyntaxError" || error.message.endsWith(EVALUATE_HINT)) return error;
+  error.message += EVALUATE_HINT;
+  return error;
+}
 async function resolveActionableQueryHandlerClickTarget(handles) {
   const candidates = [];
   for (const handle of handles) {
@@ -8286,6 +8292,8 @@ function createTabApi(c, output, screenshots) {
         const realm = frame.mainRealm?.();
         const rest = args;
         return realm ? realm.evaluate(fn, ...rest) : page.evaluate(fn, ...rest);
+      }).catch((error) => {
+        throw withEvaluateHint(error, fn);
       })
     ),
     scrollIntoView: (selector) => op(

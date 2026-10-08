@@ -7,7 +7,7 @@ Drive real Chromium tabs by running JavaScript with the global `browser` object;
 
 <instruction>
 - Static public page? Use `browser_read`. Use `browser_run` for interaction, JavaScript execution and logged-in pages.
-- Logged-in accounts live in saved profiles: `browser_profiles` lists them (name, label, signed-in sites); `browser.open({ profile: "<name or label>" })` opens one with its sign-ins and keeps them. A profile is open in one place at a time: one held by another chat or its View is refused as `profile_held`. Ask for a profile only by a name or label the user gave or `browser_profiles` showed.
+- Logged-in accounts live in saved profiles: `browser_profiles` lists them (name, label, signed-in sites); `browser.open({ profile: "<name or label>" })` opens one with its sign-ins and keeps them. A profile is open in one place at a time: one held by another chat or its View is refused as `profile_held`. Ask for a profile only by a name or label the user gave or `browser_profiles` showed. An avatar or a missing Sign in button proves no sign-in: open a page only a signed-in user can.
 - `await browser.open(options)` returns a `BrowserTab`; `browser.tab(name)` returns an existing handle; `await browser.close(options)` releases tabs.
 - `open` options: `name` (default `main`), `url`, `profile`, `app`, `viewport`, `wait_until`, `dialogs`, `timeout`, `persist`. `close` options: `name`, `all`, `kill`, `timeout`.
 - Direct tab helpers:
@@ -22,6 +22,7 @@ Drive real Chromium tabs by running JavaScript with the global `browser` object;
 - Selectors accept CSS plus Puppeteer `aria/…`, `text/…`, `xpath/…`, and `pierce/…` query handlers.
 - Navigation and re-renders invalidate observed ids and refs. Re-observe, then act in the same cell.
 - `<select>` needs `tab.select`, not `tab.fill`. Raw request interception lasts only for the current `tab.run`.
+- Unread page: `tab.ariaSnapshot()` first; never guess URLs. `goto` waits for load: do not sleep after it. Pass `tab.evaluate` a function: a template literal resolves backslashes in a string first.
 - Cell state persists: top-level `const`/`let` stay, the last expression is returned, top-level `await` works.
 - `timeout` is the cell's budget in seconds (default 30, max 300). One call returns after at most 25 s: a cell still running continues and the result says `running: <runId>` with its output so far. Call `browser_run({ resume: "<runId>" })` to wait up to 25 s more; start no new cell meanwhile.
 - Output over 50 KiB loses its middle; a footer names the file with all of it.

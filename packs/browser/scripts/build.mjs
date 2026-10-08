@@ -33,6 +33,8 @@ const nodeBundle = {
 };
 await buildServer({ ...nodeBundle, entryPoints: [resolve(root, "src/stdio.ts")], outfile: resolve(root, "app/server.mjs") });
 await buildServer({ ...nodeBundle, entryPoints: [resolve(root, "src/code/worker/entry.ts")], outfile: resolve(root, "app/code-worker.mjs") });
+// The MCP entry: a launcher that checks the runtime before it loads anything (and, under Bun, relaunches under a real Node: src/launch-node.ts). It imports no server code, only the server bundle by URL at run time.
+await buildServer({ ...nodeBundle, entryPoints: [resolve(root, "src/launch.ts")], outfile: resolve(root, "app/launch.mjs") });
 await buildView({
   configFile: false,
   root: resolve(root, "app/view"),

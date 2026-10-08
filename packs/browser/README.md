@@ -135,6 +135,10 @@ npm install
 npm run build
 ```
 
+### Runtime
+
+The server needs Node 22.12 or newer on the host's PATH; the pack does not bundle or install Node, and it never downloads a browser (a missing Chrome is reported when a browser is opened). It starts through `app/launch.mjs`, which stops with one line on an older Node and, when started under Bun, relaunches itself under a real Node: a Bun process that reads stdin from a pipe cannot start the code worker, and `bun run` puts a Bun copy named `node` first on PATH (a dev launch). With no Node 22.12+ to relaunch under, it exits with a line saying so.
+
 ### Task agent (`jev`, optional)
 
 Opening a browser never installs anything. `browser_task` needs the pinned
