@@ -16,7 +16,7 @@
 // slow display never builds a queue of old pictures.
 
 import { FrameGate, KeyframeThrottle } from "../shared/frame-gate";
-import { avcCodecString, decodeFrame, FrameTag, type InputMessage, type MediaFrame, readSessionPayload, type StreamMode } from "../shared/frame-protocol";
+import { avcCodecString, decodeFrame, FrameTag, type InputMessage, keyAccessUnit, type MediaFrame, readSessionPayload, type StreamMode } from "../shared/frame-protocol";
 import type { Grant } from "./client";
 import type { StreamStatus } from "./view-model";
 
@@ -32,6 +32,8 @@ const KEYFRAME_COOLDOWN_MS = 1_000;
 const MAX_DECODE_QUEUE = 8;
 const MAX_RECONNECTS = 8;
 const FRAME_US = 16_667;
+/** A configured decoder that has drawn nothing for this long is not decoding: ask for a key frame once, then give up on video. */
+const SILENCE_MS = 5_000;
 
 export const webCodecsPresent = (): boolean => typeof VideoDecoder !== "undefined" && typeof EncodedVideoChunk !== "undefined";
 
@@ -66,6 +68,8 @@ export class LiveStream {
   #detail: string | null = null;
   #fps = 0;
   #latency: number | null = null;
+  #silence: ReturnType<typeof setTimeout> | undefined;
+  #silenceRetried = false;
 
   constructor(canvas: HTMLCanvasElement, host: StreamHost) {
     const context = canvas.getContext("2d", { alpha: false, desynchronized: true });
@@ -175,7 +179,9 @@ export class LiveStream {
         socket.close();
         return;
       }
-      this.#chain = this.#chain.then(() => this.#handle(frame)).catch(() => undefined);
+      this.#chain = this.#chain.then(() => this.#handle(frame)).catch(error => {
+        this.#detail = error instanceof Error ? error.message : String(error);
+      });
     };
     socket.onclose = () => {
       if (this.#socket !== socket) return;
@@ -275,6 +281,7 @@ export class LiveStream {
     });
     this.#decoder = decoder;
     decoder.configure(decoderConfig);
+    this.#watchPictures();
   }
 
   #fallBackToShots(reason: string): void {
@@ -297,15 +304,32 @@ export class LiveStream {
     this.#timestamp += FRAME_US;
     this.#inflight.set(this.#timestamp, frame.at);
     try {
-      decoder.decode(new EncodedVideoChunk({ type: frame.tag === FrameTag.Key ? "key" : "delta", timestamp: this.#timestamp, data: frame.payload }));
+      decoder.decode(new EncodedVideoChunk({ type: frame.tag === FrameTag.Key ? "key" : "delta", timestamp: this.#timestamp, data: frame.tag === FrameTag.Key ? keyAccessUnit(this.#config, frame.payload) : frame.payload }));
     } catch {
       this.#inflight.delete(this.#timestamp);
       if (this.#gate.gap()) this.requestKeyframe();
     }
   }
 
+  #watchPictures(): void {
+    clearTimeout(this.#silence);
+    this.#silence = setTimeout(() => {
+      this.#silence = undefined;
+      if (this.#stopped || this.#mode !== "h264") return;
+      if (!this.#silenceRetried) {
+        this.#silenceRetried = true;
+        this.requestKeyframe();
+        this.#watchPictures();
+        return;
+      }
+      this.#fallBackToShots("the video decoder produced no pictures in this window");
+    }, SILENCE_MS);
+  }
+
   #closeDecoder(): void {
     const decoder = this.#decoder;
+    clearTimeout(this.#silence);
+    this.#silence = undefined;
     this.#decoder = null;
     if (decoder !== null && decoder.state !== "closed") {
       try {
@@ -317,6 +341,11 @@ export class LiveStream {
   }
 
   #onPicture(picture: VideoFrame): void {
+    if (this.#silence !== undefined) {
+      clearTimeout(this.#silence);
+      this.#silence = undefined;
+    }
+    this.#silenceRetried = false;
     const sentAt = this.#inflight.get(picture.timestamp);
     this.#inflight.delete(picture.timestamp);
     if (sentAt !== undefined) this.#ages.push(Date.now() - sentAt);
