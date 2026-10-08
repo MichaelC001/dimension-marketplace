@@ -1,7 +1,7 @@
 /**
  * The connection report — which profiles are signed in to which sites, as the
  * Browser pack tells its host (dimension#1219) so Traction can show whether an
- * account can post and the dock can list the sites.
+ * account can post.
  *
  * Pure: observations in, report out. Nothing here reads a page, a file or the
  * credential store. A site is only ever in a report because a probe or a

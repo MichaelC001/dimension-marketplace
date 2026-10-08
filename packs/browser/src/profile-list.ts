@@ -7,12 +7,12 @@
  * browser id out for a model: every field below is named here, one by one, and no stored record is passed through. The relay (the
  * human's own Chrome) and the throwaway browsers are not profiles and never appear.
  *
- * The sites are the SAME observations the dock panel shows (connection.ts
+ * The sites are the SAME observations the host connection report carries (connection.ts
  * builds that report), read with the same rules (profile-meta.ts): an
  * observation over 7 days old is not claimed, and a site that was only visited
  * (no check exists for it) is the human's history, not the agent's business, so
  * it is left out here. The listing carries each site's account for the person
- * (the View, the dock); `profilesForModel` is what takes it out for a model.
+ * (the View); `profilesForModel` is what takes it out for a model.
  */
 import { reportableAccount } from "./connection.js";
 import type { ProfileHold, ProfileHolder, ProfileListing, ProfileSiteListing } from "./contracts.js";
@@ -68,8 +68,8 @@ const forModel = ({ avatar: _avatar, hold, browserId: _browserId, ...profile }: 
 });
 
 /**
- * What a model is sent: the listing without any site's account (the View and
- * the dock are sent the whole listing), and, when there are more profiles than
+ * What a model is sent: the listing without any site's account (the View is sent
+ * the whole listing), and, when there are more profiles than
  * it should carry, the ones in use, then the ones signed in somewhere, then
  * the rest, each by name; the remainder counted in `omitted`. Agents leave
  * profiles behind, and every line is tokens on every call.

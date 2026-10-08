@@ -3,8 +3,8 @@
  *  sent the list twice (the host appends `structuredContent` to a model's turn
  *  whenever it differs from the text), or is handed a payload that grows with
  *  every profile an agent ever left behind; or the Browser View, which reads
- *  the same tool as the human, stops getting its list; or the dock panel and
- *  the agent are told different things about the same profile.
+ *  the same tool as the human, stops getting its list; or the connection report
+ *  the host is sent and the agent are told different things about the same profile.
  *
  *  The real MCP server over an in-memory transport, the way a host reaches it.
  *  Chrome only where a browser has to be open to be held.
@@ -18,7 +18,6 @@ import { z } from "zod";
 import type { App } from "@modelcontextprotocol/ext-apps";
 import { BrowserClient } from "../app/view/browser-client";
 import { type ConnectionReport } from "../src/connection";
-import { profileRows } from "../src/dock/report";
 import { createBrowserServer } from "../src/server";
 import { BROWSER_TEST_TIMEOUT_MS, createRoot, describeWithChrome, newRuntime, teardown, waitUntil } from "./fixture";
 import { ProfileStore } from "../src/store";
@@ -194,21 +193,21 @@ describe("what each caller is sent", () => {
 		expect(profiles[1]?.sites.map((site) => [site.site, site.account])).toEqual([["x.com", "@acmeco"]]);
 	});
 
-	test("the dock panel and the lists agree: the report the panel is sent carries the View's label, colour, sites and accounts, and the sites and sign-in state the agent reads", async () => {
+	test("the connection report and the lists agree: the report the host is sent carries the View's label, colour, sites and accounts, and the sites and sign-in state the agent reads", async () => {
 		const { call, reports } = await connect(seed);
 		await waitUntil("the first report", () => reports, (seen) => seen.length > 0);
 		const agent = listOf(await call("browser_profiles", {}, MODEL)).profiles;
 		const person = ViewList.parse((await call("browser_profiles", {}, VIEW)).structuredContent).profiles;
-		const rows = profileRows({ connected: true, reported: reports.at(-1) });
-		expect(rows).toHaveLength(1);
-		const [row] = rows;
+		const profiles = reports.at(-1)?.profiles ?? {};
+		expect(Object.keys(profiles)).toEqual(["work"]);
+		const reported = profiles.work;
 		const mine = person.find((profile) => profile.name === "work");
 		const theirs = agent.find((profile) => profile.name === "work");
-		expect(row).toMatchObject({ name: "work", label: mine?.label, colour: mine?.colour });
-		expect(row?.sites.map(({ host, account, signedIn }) => ({ site: host, ...(account === undefined ? {} : { account }), signedIn }))).toEqual(
-			(mine?.sites ?? []).map(({ site, account, signedIn }) => ({ site, ...(account === undefined ? {} : { account }), signedIn })),
-		);
-		expect(row?.sites.map(({ host, signedIn }) => [host, signedIn])).toEqual((theirs?.sites ?? []).map(({ site, signedIn }) => [site, signedIn]));
+		expect(reported).toMatchObject({ label: mine?.label, colour: mine?.colour });
+		const bySite = <T extends { readonly site: string }>(list: readonly T[]): T[] => [...list].sort((a, b) => a.site.localeCompare(b.site));
+		const fromReport = Object.entries(reported?.sites ?? {}).map(([site, seen]) => ({ site, ...(seen.account === undefined ? {} : { account: seen.account }), signedIn: seen.signedIn }));
+		expect(bySite(fromReport)).toEqual(bySite((mine?.sites ?? []).map(({ site, account, signedIn }) => ({ site, ...(account === undefined ? {} : { account }), signedIn }))));
+		expect(bySite(fromReport.map(({ site, signedIn }) => ({ site, signedIn })))).toEqual(bySite((theirs?.sites ?? []).map(({ site, signedIn }) => ({ site, signedIn }))));
 	});
 });
 

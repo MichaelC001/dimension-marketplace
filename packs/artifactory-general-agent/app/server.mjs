@@ -7474,6 +7474,17 @@ function agentHomeWorkspaceId(agent) {
 function derivesAgentHome(agent, workspaceId) {
   return workspaceId === void 0 || workspaceId === agentHomeWorkspaceId(agent);
 }
+var VOICE_PROFILE_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+function parseVoice(value, errors) {
+  if (value === void 0) return void 0;
+  if (typeof value !== "string" || !VOICE_PROFILE_NAME.test(value)) {
+    errors.push(
+      `voice must be a voice profile name (lowercase letters, digits and dashes), got ${JSON.stringify(value)}`
+    );
+    return void 0;
+  }
+  return value;
+}
 function isAvatarId(id) {
   if (!id.startsWith("plugin:")) return AVATAR_ID_PART.test(id);
   const halves = id.slice("plugin:".length).split("/");
@@ -7563,6 +7574,7 @@ function parseGeneralAgent(content, filePath, dirName) {
     errors.push("title must be a non-empty string");
   }
   const avatar = parseAvatar(raw.avatar, errors);
+  const voice = parseVoice(raw.voice, errors);
   if (errors.length > 0) return rejected("invalid", ...errors);
   const description = typeof raw.description === "string" ? raw.description : "";
   const routing = generalAgentRouting(manifest, description);
@@ -7576,6 +7588,7 @@ function parseGeneralAgent(content, filePath, dirName) {
       // One line on every surface that shows it (a chip, a menu row).
       ...typeof raw.title === "string" ? { title: raw.title.trim().replace(/\s+/g, " ") } : {},
       ...avatar ? { avatar } : {},
+      ...voice ? { voice } : {},
       ...routing ? { routing } : {},
       manifest,
       body: parts.body.trim()
@@ -7588,15 +7601,16 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, join, relative } from "node:path";
 import { parse as parseYaml2, stringify as stringifyYaml } from "yaml";
+var LEGACY_AGENTS_DIR = "agents";
 var WRITE_DIR = process.env.PI_CONFIG_DIR?.trim() || ".inso";
 var LEGACY_DIR = ".omp";
 function pathsOf(home) {
   if (home === null) return null;
   return {
     plugins: join(home, "plugins"),
-    /** The agent dir: skills, settings — and `agents/`, the user tier. */
+    /** The agent dir: skills, settings, and the General Agent user tier. */
     agent: join(home, "agent"),
-    userAgents: join(home, "agent", "agents"),
+    userAgents: join(home, "agent", GENERAL_AGENTS_DIR),
     /** `<home>/workspaces`: every agent home (`home-<name>`) — the engine pins `PI_AGENT_HOMES_DIR` here. */
     homes: join(home, "workspaces")
   };
@@ -7673,7 +7687,10 @@ function rawSettings(frontmatter) {
   const parsed = parseYaml2(frontmatter);
   if (!isRecord(parsed)) return { thinkingLevel: void 0, voice: void 0 };
   const engine = parsed.engine;
-  return { thinkingLevel: isRecord(engine) ? engine.thinkingLevel : void 0, voice: parsed.voice };
+  return {
+    thinkingLevel: isRecord(engine) ? engine.thinkingLevel : void 0,
+    voice: parsed.voice
+  };
 }
 function sectionChildren(block) {
   if (block.children !== null) return block.children.map((child) => ({ key: child.key, lines: reindent(child.lines, block.childIndent, 2) }));
@@ -7745,6 +7762,7 @@ function revisionOf(content) {
 async function scanAgents(dir, notices) {
   const found = [];
   for (const name of await listDirs(dir)) {
+    if (name.startsWith(".")) continue;
     const path = join(dir, name, GENERAL_AGENT_FILE);
     let content;
     try {
@@ -7771,6 +7789,21 @@ async function listAgents(roots) {
     claimed.set(found.name, found.path);
     return true;
   };
+  const claimLeftovers = async (agentsDir, source, shown) => {
+    for (const found of await scanAgents(agentsDir, [])) {
+      if (!claim(found)) continue;
+      agents.push({
+        name: found.name,
+        description: found.decl.description,
+        source,
+        path: found.path,
+        editable: false,
+        readOnlyReason: `It remains in ${shown} after the General Agents move; the engine runs this copy. Move it to ${GENERAL_AGENTS_DIR}/ to edit it.`,
+        ...found.decl.manifest.workspace?.id !== void 0 ? { workspaceId: found.decl.manifest.workspace.id } : {},
+        draft: draftFromFile(found.decl, found.content, `${source}::${found.name}`)
+      });
+    }
+  };
   const paths = pathsOf(roots.home);
   if (paths === null) notices.push("Pack and user agents are not listed: the engine did not tell this server where its home is (INSO_HOME is unset).");
   else {
@@ -7794,8 +7827,9 @@ async function listAgents(roots) {
   if (roots.workspace === null) {
     notices.push(roots.workspaceMissing ?? "No workspace is bound, so project agents are not listed. Pack agents and yours are.");
   } else {
+    for (const dirName of [WRITE_DIR, LEGACY_DIR]) await claimLeftovers(join(roots.workspace, dirName, LEGACY_AGENTS_DIR), "workspace", `${dirName}/${LEGACY_AGENTS_DIR}`);
     for (const dirName of [WRITE_DIR, LEGACY_DIR]) {
-      for (const found of await scanAgents(join(roots.workspace, dirName, "agents"), notices)) {
+      for (const found of await scanAgents(join(roots.workspace, dirName, GENERAL_AGENTS_DIR), notices)) {
         if (!claim(found)) continue;
         const legacy = dirName === LEGACY_DIR;
         agents.push({
@@ -7804,7 +7838,9 @@ async function listAgents(roots) {
           source: "workspace",
           path: found.path,
           editable: !legacy,
-          ...legacy ? { readOnlyReason: `It lives in the legacy ${LEGACY_DIR}/agents; new agents are written only to ${WRITE_DIR}/agents.` } : {},
+          ...legacy ? {
+            readOnlyReason: `It lives in the legacy ${LEGACY_DIR}/${GENERAL_AGENTS_DIR}; new General Agents are written only to ${WRITE_DIR}/${GENERAL_AGENTS_DIR}.`
+          } : {},
           revision: revisionOf(found.content),
           ...found.decl.manifest.workspace?.id !== void 0 ? { workspaceId: found.decl.manifest.workspace.id } : {},
           draft: draftFromFile(found.decl, found.content, `workspace::${found.name}`)
@@ -7812,6 +7848,7 @@ async function listAgents(roots) {
       }
     }
   }
+  if (paths !== null) await claimLeftovers(join(paths.agent, LEGACY_AGENTS_DIR), "user", `agent/${LEGACY_AGENTS_DIR}`);
   if (paths !== null) {
     for (const found of await scanAgents(paths.userAgents, notices)) {
       if (!claim(found)) continue;
@@ -7844,9 +7881,9 @@ var slash = (path) => path.replaceAll("\\", "/");
 async function saveAgent(options) {
   const { roots, draft, target } = options;
   const paths = pathsOf(roots.home);
-  const tier = target.create ? "user" : target.tier;
+  const tier = target.create ? target.tier ?? "user" : target.tier;
   const tierRoot = tier === "user" ? roots.home : roots.workspace;
-  const agentsDir = tier === "user" ? paths?.userAgents : roots.workspace === null ? void 0 : join(roots.workspace, WRITE_DIR, "agents");
+  const agentsDir = tier === "user" ? paths?.userAgents : roots.workspace === null ? void 0 : join(roots.workspace, WRITE_DIR, GENERAL_AGENTS_DIR);
   if (tierRoot === null || agentsDir === void 0) {
     throw new SaveRefused(
       tier === "user" ? "The user tier cannot be reached: the engine did not tell this server where its home is (INSO_HOME is unset)." : "No workspace is bound, so its project agents cannot be rewritten."
@@ -7930,7 +7967,7 @@ function candidatesFor(roots, source, name, agentFile) {
   const homes = pathsOf(roots.home)?.homes;
   const home = homes === void 0 ? [] : [{ kind: "home", path: join2(homes, agentHomeWorkspaceId(name), AGENTS_MD) }];
   if (source === "user") return [...home, sibling];
-  const projectDirs = roots.workspace === null ? [] : [.../* @__PURE__ */ new Set([WRITE_DIR, LEGACY_DIR])].map((dir) => join2(roots.workspace, dir, "agents"));
+  const projectDirs = roots.workspace === null ? [] : [.../* @__PURE__ */ new Set([WRITE_DIR, LEGACY_DIR])].map((dir) => join2(roots.workspace, dir, GENERAL_AGENTS_DIR));
   return [...projectDirs.map((dir) => ({ kind: "workspace-copy", path: join2(dir, name, AGENTS_MD) })), ...home, sibling];
 }
 async function resolveInstructions(roots, source, name, agentFile) {
@@ -8210,7 +8247,7 @@ function createForgeServer(options = {}) {
     "forge_open",
     {
       title: "General Agents",
-      description: `Read the General Agents the user sees on the General Agents page (the rail's General Agents entry): every General Agent the installed packs ship, the user's own, and the workspace's, or one agent by name. \`workspace\` is optional: the absolute path of the directory you are working in, which adds that project's agents (\`<workspace>/${WRITE_DIR}/agents/<name>/agent.md\`) for the rest of this session. It writes nothing; to shape an agent, call forge_propose and the user decides on the page.`,
+      description: `Read the General Agents the user sees on the General Agents page (the rail's General Agents entry): every General Agent the installed packs ship, the user's own, and the workspace's, or one agent by name. \`workspace\` is optional: the absolute path of the directory you are working in, which adds that project's General Agents (\`<workspace>/${WRITE_DIR}/general-agents/<name>/agent.md\`) for the rest of this session. It writes nothing; to shape an agent, call forge_propose and the user decides on the page.`,
       inputSchema: {
         agent: agentName.optional().describe("read this agent"),
         workspace: z.string().min(1).max(1024).optional().describe("absolute path of your working directory")
@@ -8352,14 +8389,14 @@ function createForgeServer(options = {}) {
   server2.registerTool(
     "save_agent",
     {
-      description: `Write the draft. \`create: true\` writes a NEW agent into the user's own agents (\`$INSO_HOME/agent/agents/<name>/agent.md\`, where it gets a home) and refuses a name that is taken anywhere. \`create: false\` rewrites the agent of that name in \`tier\` (\`user\`, or \`workspace\`: <workspace>/${WRITE_DIR}/agents), and is refused unless \`revision\` is the one list_agents gave: the file changed since, otherwise. The merged agent.md must load as a General Agent or nothing is written.`,
+      description: `Write the draft. \`create: true\` writes a NEW General Agent into the user's own \`$INSO_HOME/agent/general-agents/<name>/agent.md\` by default, or into \`<workspace>/${WRITE_DIR}/general-agents/<name>/agent.md\` when \`tier: workspace\` is given, and refuses a name taken anywhere. \`create: false\` rewrites the agent of that name in \`tier\` (\`user\` or \`workspace\`) and is refused unless \`revision\` is the one list_agents gave. The merged agent.md must load as a General Agent or nothing is written.`,
       inputSchema: { draft: draftSchema, create: z.boolean(), tier: z.enum(["workspace", "user"]).optional(), revision: z.string().max(64).optional(), workspace: workspaceArg },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       _meta: APP_ONLY
     },
     async ({ draft, create, tier, revision, workspace }, extra) => {
       let target;
-      if (create) target = { create: true };
+      if (create) target = { create: true, ...tier !== void 0 ? { tier } : {} };
       else if (tier !== void 0 && revision !== void 0) target = { create: false, tier, revision };
       else return fail2("Rewriting an agent names its tier and its revision; both come from list_agents.");
       const roots = rootsOf(extra, workspace);

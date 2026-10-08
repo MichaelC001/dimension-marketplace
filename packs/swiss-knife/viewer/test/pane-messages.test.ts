@@ -3,7 +3,6 @@
 // A file that would not open: the View used to put the server's own error text in a red banner over "Nothing open / Ask
 // the assistant to open a file...": engine words, the path twice, and an empty state that was not true (the human had
 // just asked for a file). It is now the pane for that file, with its name in the bar and one sentence saying what to do.
-// A recording past the size the viewer plays: its sentence must point at what is in front of the human.
 //
 // The annotation mode is not a switch any more: the one bar is part of the pane, so a kind that can be marked is in its
 // mode from the pane's first frame until the document is gone (a file that did not open has nothing to mark). The layer
@@ -17,12 +16,13 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, jest, moc
 import type { App } from "@modelcontextprotocol/ext-apps";
 import { createElement } from "react";
 import type * as DocPaneModule from "../app/view/doc-pane";
+import { finishMediaWork } from "../app/view/media-lifecycle";
 import type { PaneExtrasProps } from "../app/view/pane-shared";
 import type { Mounted, Renderer, Theme } from "../app/view/renderers/types";
 import { actionFromResult } from "../app/view/result";
 import { createViewerStore, type DocTab, type ViewerStore } from "../app/view/tabs";
 import type * as ViewerAppModule from "../app/view/viewer-app";
-import { MAX_MEDIA_BYTES, type ViewerKind } from "../src/contract";
+import type { ViewerKind } from "../src/contract";
 import { installReact, type ReactEnv } from "./media-react";
 import { silencePaneExtras } from "./pane-extras-door";
 
@@ -118,21 +118,6 @@ describe("the pane for a file that would not open", () => {
 		expect(text()).toMatch(/Nothing open/);
 		// Not the surface that stands in for "no tool result yet".
 		expect(container.querySelector('[data-slot="artifact-opening"]')).toBeNull();
-	});
-});
-
-describe("the pane for a recording too large to play", () => {
-	test("says the limit and the size, and points at the button under it - not at a bar that is somewhere else", async () => {
-		const tab = { key: "k", path: "C:\\rec\\big.wav", filename: "big.wav", kind: "audio", size: 67.3 * 1024 * 1024, mtimeMs: 1, revision: 0, annotateRequests: 0 } as const;
-		const { container } = await env.mount(createElement(docPane.DocPane, { app, tab, active: true, theme: "dark" }));
-		const card = container.querySelector('[data-slot="viewer-stage-frame"] [role="alert"]');
-		const sentence = card?.querySelector("p:nth-of-type(2)")?.textContent ?? "";
-		expect(sentence).toContain("64.0 MB");
-		expect(sentence).toContain("67.3 MB");
-		// The way out is copying the path, and the button for it is in this card; the sentence must not send the human elsewhere for it.
-		expect(sentence).toMatch(/copy its path/i);
-		expect(sentence).not.toMatch(/above|below|bar/i);
-		expect([...(card?.querySelectorAll("button") ?? [])].map(button => button.textContent)).toEqual(["Copy path"]);
 	});
 });
 
@@ -274,7 +259,6 @@ describe("the annotation mode of the pane", () => {
 			"The picture is damaged.",
 		],
 		["there is no renderer for the picture in this build", () => tabOf("image"), null, "marks", undefined],
-		["a recording is past the size the viewer plays", () => tabOf("audio", { size: MAX_MEDIA_BYTES + 1 }), null, "timeline", undefined],
 	];
 	test.each(DID_NOT_OPEN)("a document that did not open has nothing to mark: %s", async (_name, tab, renderer, before, says) => {
 		loadRendererImpl = async () => renderer;
@@ -372,5 +356,192 @@ describe("the opening surface of the pane", () => {
 		await env.act(async () => mounting.resolve(mounted()));
 		expect(latest().ready).toBe(true);
 		expect(surfaceUp(container)).toBe(false);
+	});
+});
+
+function mediaApp(gate?: Promise<void>, closing?: (token: string) => Promise<void>, refusesReleased = true) {
+	const leases = new Set<string>();
+	const chunks: unknown[] = [];
+	const granted: string[] = [];
+	const requested: string[] = [];
+	const closed: string[] = [];
+	const canceled = new Set<string>();
+	const host = {
+		getHostContext: () => ({ theme: "dark" }),
+		callServerTool: async (call: { name: string; arguments?: Record<string, unknown> }) => {
+			if (call.name === "open_media") {
+				const token = String(call.arguments?.token);
+				requested.push(token);
+				await gate;
+				if (refusesReleased && canceled.has(token)) throw new Error("Media admission was canceled.");
+				leases.add(token);
+				granted.push(token);
+				return { content: [], structuredContent: { token, url: `http://127.0.0.1:45678/media/${token}`, mime: "video/mp4" } };
+			}
+			if (call.name === "close_media") {
+				const token = String(call.arguments?.token);
+				closed.push(token);
+				await closing?.(token);
+				canceled.add(token);
+				leases.delete(token);
+				return { content: [], structuredContent: {} };
+			}
+			chunks.push(call);
+			throw new Error("A recording must not be downloaded as document chunks.");
+		},
+		openLink: async () => ({}),
+	};
+	return { app: host as unknown as App, leases, chunks, granted, requested, closed };
+}
+
+describe("streamed recording pane lifecycle", () => {
+	test.each(["audio", "video"] as const)("a large %s opens without document chunks and releases its lease on unmount", async kind => {
+		const host = mediaApp();
+		loadRendererImpl = async () => rendererOf(async (stage, bytes, context) => {
+			if (bytes.length !== 0 || context.mediaSource === undefined) throw new Error("No streaming recording source.");
+			const media = stage.ownerDocument.createElement(kind);
+			media.setAttribute("src", context.mediaSource.url);
+			stage.append(media);
+			return { destroy: () => media.remove() };
+		});
+		const view = await env.mount(pane(tabOf(kind, { size: 80 * 1024 * 1024 }), host.app));
+		expect(latest().ready).toBe(true);
+		expect(host.leases.size).toBe(1);
+		expect(host.chunks).toEqual([]);
+		await view.unmount();
+		expect(host.leases.size).toBe(0);
+	});
+
+	test("unmounting while the recording is still opening releases the pane's own token once, and the open that then finishes mounts nothing and releases nothing more", async () => {
+		const opening = deferred();
+		const host = mediaApp(opening.promise, undefined, false);
+		let mounts = 0;
+		loadRendererImpl = async () => rendererOf(async () => {
+			mounts++;
+			return mounted();
+		});
+		const view = await env.mount(pane(tabOf("video", { size: 80 * 1024 * 1024 }), host.app));
+		expect(host.requested).toHaveLength(1);
+		await view.unmount();
+		expect(host.closed).toEqual(host.requested);
+		expect(mounts).toBe(0);
+		await env.act(async () => opening.resolve());
+		expect(host.granted).toEqual(host.requested);
+		expect(host.closed).toEqual(host.requested);
+		expect(mounts).toBe(0);
+		expect(host.chunks).toEqual([]);
+	});
+
+	test("a recording that failed to open is released once, and the pane going away afterwards does not release it again", async () => {
+		const host = mediaApp();
+		loadRendererImpl = async () => rendererOf(async () => {
+			throw new Error("This recording is damaged.");
+		});
+		const view = await env.mount(pane(tabOf("video"), host.app));
+		expect(host.closed).toEqual(host.requested);
+		expect(host.closed).toHaveLength(1);
+		await view.unmount();
+		expect(host.closed).toEqual(host.requested);
+	});
+
+	test("a decoder failure releases the acquired lease while leaving the failure actionable", async () => {
+		const host = mediaApp();
+		loadRendererImpl = async () => rendererOf(async () => {
+			throw new Error("This recording is damaged.");
+		});
+		const view = await env.mount(pane(tabOf("video"), host.app));
+		expect(view.container.querySelector('[role="alert"]')?.textContent).toContain("This recording is damaged.");
+		expect(latest().ready).toBe(false);
+		expect(host.leases.size).toBe(0);
+		expect(host.chunks).toEqual([]);
+	});
+
+	test("outer teardown awaits cancellation but not a blocked admission and never mounts late playback", async () => {
+		const opening = deferred();
+		const closing = deferred();
+		const host = mediaApp(opening.promise, () => closing.promise);
+		let mounts = 0;
+		loadRendererImpl = async () => rendererOf(async () => {
+			mounts++;
+			return mounted();
+		});
+		const view = await env.mount(pane(tabOf("video"), host.app));
+		await view.unmount();
+		let finished = false;
+		const drain = finishMediaWork(host.app).then(() => {
+			finished = true;
+		});
+		try {
+			await env.act(async () => {});
+			expect(finished).toBe(false);
+			await env.act(async () => closing.resolve());
+			expect(finished).toBe(true);
+			await drain;
+			await env.act(async () => opening.resolve());
+			expect(host.granted).toEqual([]);
+			expect(host.leases.size).toBe(0);
+			expect(mounts).toBe(0);
+		} finally {
+			opening.resolve();
+			closing.resolve();
+			await drain;
+		}
+	});
+
+	test("outer teardown waits for every pane's independent release", async () => {
+		const firstClose = deferred();
+		const secondClose = deferred();
+		let firstToken: string | undefined;
+		const host = mediaApp(undefined, token => token === firstToken ? firstClose.promise : secondClose.promise);
+		loadRendererImpl = async () => rendererOf(async () => mounted());
+		const view = await env.mount(createElement("div", null, pane(tabOf("audio"), host.app), pane(tabOf("video"), host.app)));
+		firstToken = host.granted[0];
+		expect(host.leases.size).toBe(2);
+		await view.unmount();
+		let finished = false;
+		const drain = finishMediaWork(host.app).then(() => {
+			finished = true;
+		});
+		try {
+			await env.act(async () => firstClose.resolve());
+			expect([...host.leases]).toEqual([host.granted[1]]);
+			expect(finished).toBe(false);
+			await env.act(async () => secondClose.resolve());
+			await drain;
+			expect(host.leases.size).toBe(0);
+		} finally {
+			firstClose.resolve();
+			secondClose.resolve();
+			await drain;
+		}
+	});
+
+	test("a delayed failed admission cannot hold outer teardown open or mount playback", async () => {
+		const opening = deferred();
+		const host = mediaApp(opening.promise.then(() => {
+			throw new Error("The recording is no longer available.");
+		}));
+		let mounts = 0;
+		loadRendererImpl = async () => rendererOf(async () => {
+			mounts++;
+			return mounted();
+		});
+		const view = await env.mount(pane(tabOf("audio"), host.app));
+		await view.unmount();
+		let finished = false;
+		const drain = finishMediaWork(host.app).then(() => {
+			finished = true;
+		});
+		try {
+			await env.act(async () => {});
+			expect(finished).toBe(true);
+			await drain;
+			await env.act(async () => opening.resolve());
+			expect(host.leases.size).toBe(0);
+			expect(mounts).toBe(0);
+		} finally {
+			opening.resolve();
+			await drain;
+		}
 	});
 });

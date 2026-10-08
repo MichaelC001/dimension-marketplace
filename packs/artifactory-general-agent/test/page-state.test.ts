@@ -21,7 +21,7 @@ import {
 	receiveProposal,
 	saveBlockers,
 } from "../page/profile-state";
-import { allowlistOf, type Facet, inFacet, joinRoster } from "../page/roster";
+import { allowlistOf, type Facet, inFacet, isEditable, isUnreadable, joinRoster, type RosterAgent } from "../page/roster";
 import type { AgentFact, FaceBinding } from "../page/types";
 
 function listed(name: string, source: AgentSource, patch: Partial<AgentDraft> = {}): ListedAgent {
@@ -30,7 +30,7 @@ function listed(name: string, source: AgentSource, patch: Partial<AgentDraft> = 
 		name,
 		description: draft.description,
 		source,
-		path: `/agents/${name}/agent.md`,
+		path: `/general-agents/${name}/agent.md`,
 		editable: source !== "pack",
 		...(source === "pack" ? { pack: "dimension-agents", readOnlyReason: "It ships in a pack." } : { revision: "r1" }),
 		draft,
@@ -67,6 +67,36 @@ describe("the roster and its facets", () => {
 	test("Off is the host's word: only agents the host reports disabled, never ones it says nothing about", () => {
 		expect(names("off", [fact("scribe", "local", false), fact("herald", "local")])).toEqual(["scribe"]);
 		expect(names("off", undefined)).toEqual([]);
+	});
+	test("a host-only migration leftover stays visible but cannot be edited; a visible file restores editability", () => {
+		const leftover = { ...fact("stranded-agent", "local"), description: "A project historian" };
+		const [hostOnly] = joinRoster([leftover], []);
+		expect(isEditable(hostOnly!)).toBe(false);
+		expect(hostOnly?.listed).toBeUndefined();
+		expect(hostOnly).toMatchObject({ name: "stranded-agent", tier: "user", fact: { description: "A project historian" } });
+		const [moved] = joinRoster([leftover], [listed("stranded-agent", "user")]);
+		expect(isEditable(moved!)).toBe(true);
+	});
+});
+
+describe("the hint that a card's file cannot be read from here", () => {
+	const cardOf = (kind: "user" | "workspace" | "pack", fileListed: boolean): RosterAgent => {
+		const name = `${kind}-agent`;
+		const host: AgentFact = { ...fact(name, kind === "workspace" ? "workspace" : "local"), ...(kind === "pack" ? { pluginId: "dimension-agents" } : {}) };
+		const [card] = joinRoster([host], fileListed ? [listed(name, kind)] : []);
+		return card!;
+	};
+
+	test.each<[string, boolean, "user" | "workspace" | "pack", boolean, boolean]>([
+		["is never shown while the listing is loading or failed, on a user agent", false, "user", false, false],
+		["is never shown while the listing is loading or failed, on a project agent", false, "workspace", false, false],
+		["is never shown on a pack agent, whose file the page was never meant to read", true, "pack", false, false],
+		["is shown on a user agent the finished listing does not list", true, "user", false, true],
+		["is shown on a project agent the finished listing does not list", true, "workspace", false, true],
+		["is not shown once the user agent's file is listed", true, "user", true, false],
+		["is not shown once the project agent's file is listed", true, "workspace", true, false],
+	])("%s", (_label, listingRead, kind, fileListed, unreadable) => {
+		expect(isUnreadable(cardOf(kind, fileListed), listingRead)).toBe(unreadable);
 	});
 });
 

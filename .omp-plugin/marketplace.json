@@ -42,7 +42,7 @@
 			"title": "General Agents",
 			"icon": "bot",
 			"description": "General Agents: every agent you can run, as cards with their real faces and their week at a glance. Open one for its whole profile (face, charter, standing instructions, skills, plugins, MCP, tools, memory, home, models and safety) and edit it there, extend a pack's agent into your own, or ask the Machinist to draft one.",
-			"version": "0.4.0",
+			"version": "0.4.1",
 			"author": {
 				"name": "Dimension"
 			},
@@ -53,7 +53,10 @@
 				"general-agents",
 				"agent-builder",
 				"component"
-			]
+			],
+			"requires": {
+				"dimension": ">=0.11.3"
+			}
 		},
 		{
 			"name": "artifactory-system-monitor",
@@ -132,7 +135,7 @@
 			"title": "Browser",
 			"icon": "globe",
 			"description": "A real browser beside your chat that your agent drives while you watch. Tabs, persistent logged-in profiles, circle-to-annotate, and an optional fast task agent (jev).",
-			"version": "0.7.0",
+			"version": "0.7.1",
 			"author": {
 				"name": "Dimension"
 			},
@@ -207,7 +210,7 @@
 			"pluginId": "chat",
 			"title": "Chat",
 			"description": "Chat - your personal assistant, in a room of its own. A calm conversation with Aether, a rail of your past sessions, and a viewer beside it that opens the documents, slides and images it makes. No repo, no branches, no developer chrome: one layout and one space, assembled entirely from marketplace packs.",
-			"version": "0.2.1",
+			"version": "0.2.2",
 			"author": {
 				"name": "Dimension"
 			},
@@ -237,8 +240,7 @@
 						"independent-composer",
 						"classic-start",
 						"swiss-knife",
-						"face-to-face",
-						"voice-mode"
+						"face-to-face"
 					]
 				}
 			]
@@ -494,7 +496,7 @@
 			"title": "Face to face",
 			"icon": "waveform",
 			"description": "Face to face — talk to your agent and watch it answer: a full-screen halftone face that lip-syncs to the real audio, captions every word as it is spoken, and a small living orb that opens it from the Chat space. Where the engine offers it, Talk live puts a realtime voice on the same face: it chats with you and hands the work to your agent.",
-			"version": "0.1.3",
+			"version": "0.1.4",
 			"author": {
 				"name": "Dimension"
 			},
@@ -895,9 +897,9 @@
 			"source": "./packs/pr-viewer",
 			"pluginId": "pr-viewer",
 			"title": "PR Viewer",
-			"icon": "branch",
+			"icon": "packs/pr-viewer/assets/icon.webp",
 			"description": "PR Viewer — reviews in the dock, from the Store's review keys. Installable and removable like any pack: with it a rail chip opens the review here, without it the browser.",
-			"version": "0.1.4",
+			"version": "0.1.5",
 			"author": {
 				"name": "Dimension"
 			},
@@ -1005,6 +1007,31 @@
 			]
 		},
 		{
+			"name": "simulator",
+			"source": "./packs/simulator",
+			"pluginId": "simulator",
+			"title": "Simulator",
+			"icon": "phone",
+			"description": "An Android emulator in a View beside your chat that your agent drives while you watch. Boot, screenshot, tap by label, type, install and launch apps. Live H.264 video for you, cheap screenshots for the agent.",
+			"version": "0.1.3",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-community",
+			"license": "MIT",
+			"category": "artifactory",
+			"tags": [
+				"simulator",
+				"android",
+				"emulator",
+				"mcp-apps",
+				"mobile"
+			],
+			"requires": {
+				"dimension": ">=0.11.3"
+			}
+		},
+		{
 			"name": "slack",
 			"source": "./packs/slack",
 			"pluginId": "slack",
@@ -1054,9 +1081,9 @@
 			"source": "./packs/swiss-knife",
 			"pluginId": "swiss-knife",
 			"title": "Swiss Knife",
-			"icon": "hammer",
+			"icon": "packs/swiss-knife/assets/icon.webp",
 			"description": "Small useful things in one switch: `present` shows you a file as a card in the thread, the Viewer opens and annotates it, and a stream rule stops the agent mid-edit when it writes a code comment.",
-			"version": "0.3.0",
+			"version": "0.3.3",
 			"author": {
 				"name": "Dimension"
 			},
@@ -1210,32 +1237,6 @@
 				"polish",
 				"skill"
 			]
-		},
-		{
-			"name": "voice-mode",
-			"source": "./packs/voice-mode",
-			"pluginId": "voice-mode",
-			"title": "Voice mode",
-			"icon": "packs/voice-mode/assets/icon.svg",
-			"description": "Voice mode for any agent in any space: the Voice pane in Settings shows which speech engines are ready, which voices exist (yours, your workspace's, a plugin's) and which agent sounds like what, and which live voice Talk live would open. The speaking itself is the engine's reply vocalizer; open voice options from the small dot left of the composer microphone to turn it on or off. The microphone itself is for dictation.",
-			"version": "0.1.3",
-			"author": {
-				"name": "Dimension"
-			},
-			"repository": "https://github.com/insodimension/dimension-community",
-			"license": "MIT",
-			"category": "component",
-			"tags": [
-				"voice",
-				"speech",
-				"settings",
-				"voice mode",
-				"voice profile"
-			],
-			"requires": {
-				"dimension": ">=0.11.1"
-			},
-			"channel": "canary"
 		},
 		{
 			"name": "watch",

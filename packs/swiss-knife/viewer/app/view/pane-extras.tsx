@@ -14,7 +14,7 @@
 //     layer sat in, so the slots are looked up again each time it says `ready`.
 import "@dimension/mcp-app-kit/annotate/annotate.css";
 import {
-	AnnotationFooter,
+	AnnotationNotice,
 	AnnotationToolbar,
 	DocumentCommentLayer,
 	DocumentNotes,
@@ -72,6 +72,7 @@ function PictureMarkup({ app, tab, active, ready, frame, mode }: PaneExtrasProps
 		app,
 		file: tab.path,
 		rev: revisionOf(tab),
+		autoStage: active && up,
 		// The document cache the pane already fills: the original bytes, not what the screen shows.
 		loadBytes: async () => (await loadDocumentBytes(app, tab)).bytes,
 	});
@@ -98,8 +99,6 @@ function PictureMarkup({ app, tab, active, ready, frame, mode }: PaneExtrasProps
 		onRedo: session.markup.redo,
 		onExit: () => setTool(null),
 	});
-
-	const armed = session.tool !== null;
 
 	return (
 		<>
@@ -131,20 +130,12 @@ function PictureMarkup({ app, tab, active, ready, frame, mode }: PaneExtrasProps
 							onClear: session.markup.clear,
 							hasMarks: session.markup.marks.length > 0,
 						})}
-						trailing={armed ? "Drag to draw · press the tool again, or Esc, to scroll and zoom" : "Pick a tool to draw"}
 					/>
 				</Strip>
 			) : null}
 			{up ? (
 				<Footer frame={frame}>
-					<AnnotationFooter
-						message={session.message}
-						onMessage={session.setMessage}
-						onSend={() => void session.send()}
-						send={{ busy: session.sending, staged: session.staged }}
-						status={session.status}
-						count={session.markup.marks.length}
-					/>
+					<AnnotationNotice status={session.status} />
 				</Footer>
 			) : null}
 		</>
@@ -162,6 +153,7 @@ function TextComments({ app, tab, active, ready, frame, mode }: PaneExtrasProps)
 		kind: KIND_WORDS[tab.kind] ?? "document",
 		...(PAGE_WORDS[tab.kind] === undefined ? {} : { pageWord: PAGE_WORDS[tab.kind] }),
 		rev: revisionOf(tab),
+		autoStage: active && commenting,
 	});
 
 	const [ranges, setRanges] = useState<ReadonlyMap<number, Range>>(() => new Map());
@@ -220,20 +212,12 @@ function TextComments({ app, tab, active, ready, frame, mode }: PaneExtrasProps)
 								],
 							},
 						]}
-						trailing="Select some text, then Comment, or press Ctrl+Alt+M"
 					/>
 				</Strip>
 			) : null}
 			{commenting ? (
 				<Footer frame={frame}>
-					<AnnotationFooter
-						message={session.message}
-						onMessage={session.setMessage}
-						onSend={() => void session.send()}
-						send={{ busy: session.sending, staged: session.staged }}
-						status={session.status}
-						count={session.comments.length}
-					/>
+					<AnnotationNotice status={session.status} />
 				</Footer>
 			) : null}
 		</>

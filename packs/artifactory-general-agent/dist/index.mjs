@@ -166,6 +166,7 @@ Object.freeze({
 	vibrEnabled: true,
 	railVibr: true,
 	railVibrAllSessions: false,
+	replyVoice: false,
 	maxVisibleBlocks: 10,
 	maxVisibleTurns: 12,
 	collapseMode: "worked",
@@ -785,7 +786,8 @@ function forgeOf(store, workspace) {
 		validate: (draft) => tool("validate_agent", { draft }),
 		save: (draft, target) => tool("save_agent", target.create ? {
 			draft,
-			create: true
+			create: true,
+			...target.tier !== void 0 ? { tier: target.tier } : {}
 		} : {
 			draft,
 			create: false,
@@ -1353,10 +1355,11 @@ function grantPathsIn(text) {
 }
 //#endregion
 //#region page/roster.ts
-/** The host's record, in the tiers the files are read from. A pack's agent
-*  always names its plugin; `provenance: "local"` alone does not mean the
-*  user's own, because a pack linked from disk is `local` too. */
+/** Prefer the engine's explicit scope; preserve the previous display for older engines. */
 function tierOfFact(fact) {
+	if (fact.scope === "plugin") return "pack";
+	if (fact.scope === "project") return "workspace";
+	if (fact.scope === "global") return "user";
 	if (fact.pluginId !== void 0) return "pack";
 	if (fact.provenance === "local") return "user";
 	if (fact.provenance === "workspace") return "workspace";
@@ -1433,9 +1436,12 @@ var TIER_LABEL = {
 	user: "Yours",
 	workspace: "This project"
 };
-/** Whether the page may rewrite this agent's file (and flip its switch). */
+/** A host-only record remains visible, but the page cannot read a file it may edit. */
 function isEditable(agent) {
-	return agent.tier !== "pack" && agent.listed?.editable !== false;
+	return agent.tier !== "pack" && agent.listed?.editable === true;
+}
+function isUnreadable(agent, listingRead) {
+	return listingRead && agent.tier !== "pack" && agent.listed === void 0;
 }
 /** A scalar written in YAML, unquoted: `"Chief of Staff"` → `Chief of Staff`. */
 function plain(value) {
@@ -1995,7 +2001,7 @@ function standing(activity, state, now) {
 /** Memoized: the page re-renders on every coalesced session update, and a card
 *  whose props are the same objects as last time draws the same thing. Its
 *  handlers take the name, so one stable function serves every card. */
-var AgentCard = memo(function AgentCard({ agent, activity, usage, now, face, bridged, catalog, voice, busy, onOpen, onToggle }) {
+var AgentCard = memo(function AgentCard({ agent, activity, usage, now, face, bridged, catalog, voice, busy, unreadable, onOpen, onToggle }) {
 	const [live, setLive] = useState(false);
 	const state = liveStateOf(activity);
 	const stand = standing(activity, state, now);
@@ -2027,31 +2033,38 @@ var AgentCard = memo(function AgentCard({ agent, activity, usage, now, face, bri
 					}),
 					/* @__PURE__ */ jsxs("div", {
 						className: "flex min-w-0 flex-1 flex-col gap-1 pt-0.5",
-						children: [/* @__PURE__ */ jsxs("h3", {
-							className: "m-0 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1",
-							children: [
-								/* @__PURE__ */ jsx("button", {
-									type: "button",
-									onClick: onOpen === void 0 ? void 0 : () => onOpen(agent.name),
-									disabled: onOpen === void 0,
-									title: agent.name,
-									className: cn("min-w-0 fr-overflow text-left text-fr-md font-semibold fr-t-colors after:absolute after:inset-0 after:rounded-lg after:content-[''] focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-fr-accent-line disabled:cursor-default", enabled ? "text-fr-text" : "text-fr-text-2"),
-									children: title
-								}),
-								/* @__PURE__ */ jsx(Badge, {
-									tone: "mute",
-									variant: "soft",
-									children: TIER_LABEL[agent.tier]
-								}),
-								/* @__PURE__ */ jsx(LivePill, {
-									state,
-									count: state === "needs-you" ? activity.needsYou : activity.working
-								})
-							]
-						}), /* @__PURE__ */ jsx("p", {
-							className: "m-0 line-clamp-2 min-h-[2lh] text-fr-sm leading-relaxed text-pretty text-fr-text-2",
-							children: description || "No description yet."
-						})]
+						children: [
+							/* @__PURE__ */ jsxs("h3", {
+								className: "m-0 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1",
+								children: [
+									/* @__PURE__ */ jsx("button", {
+										type: "button",
+										onClick: onOpen === void 0 ? void 0 : () => onOpen(agent.name),
+										disabled: onOpen === void 0,
+										title: agent.name,
+										className: cn("min-w-0 fr-overflow text-left text-fr-md font-semibold fr-t-colors after:absolute after:inset-0 after:rounded-lg after:content-[''] focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-fr-accent-line disabled:cursor-default", enabled ? "text-fr-text" : "text-fr-text-2"),
+										children: title
+									}),
+									/* @__PURE__ */ jsx(Badge, {
+										tone: "mute",
+										variant: "soft",
+										children: TIER_LABEL[agent.tier]
+									}),
+									/* @__PURE__ */ jsx(LivePill, {
+										state,
+										count: state === "needs-you" ? activity.needsYou : activity.working
+									})
+								]
+							}),
+							/* @__PURE__ */ jsx("p", {
+								className: "m-0 line-clamp-2 min-h-[2lh] text-fr-sm leading-relaxed text-pretty text-fr-text-2",
+								children: description || "No description yet."
+							}),
+							unreadable ? /* @__PURE__ */ jsx("p", {
+								className: "m-0 text-fr-xs text-fr-text-3",
+								children: "The page cannot read this agent's file from here, so it is read-only. If it is your own agent, check that its folder is under general-agents/."
+							}) : null
+						]
 					}),
 					onToggle !== void 0 ? /* @__PURE__ */ jsx("span", {
 						className: "relative z-[1] pt-0.5",
@@ -2311,7 +2324,7 @@ function ProposalsBanner({ proposals, roster, faceOf, bridged, onReview }) {
 		})
 	});
 }
-function AgentsHome({ roster, loading, listingError, activity, usage, catalog, voices, now, faceOf, bridged, proposals, onReview, onOpen, onCreate, onDock, configure, busy, notice }) {
+function AgentsHome({ roster, loading, listingRead, listingError, activity, usage, catalog, voices, now, faceOf, bridged, proposals, onReview, onOpen, onCreate, onDock, configure, busy, notice }) {
 	const [facet, setFacet] = useState("all");
 	const toggle = useCallback((name, on) => void configure?.(name, { enabled: on }), [configure]);
 	const counts = facetCounts(roster);
@@ -2339,6 +2352,7 @@ function AgentsHome({ roster, loading, listingError, activity, usage, catalog, v
 		catalog,
 		voice: voices.get(agent.name),
 		busy: busy.has(agent.name),
+		unreadable: isUnreadable(agent, listingRead),
 		onOpen: agent.listed !== void 0 ? onOpen : void 0,
 		onToggle: configure !== void 0 && isEditable(agent) && agent.fact !== void 0 ? toggle : void 0
 	}, agent.name);
@@ -5629,6 +5643,7 @@ function GeneralAgentsPage(props) {
 		}, profile.draft.key) : /* @__PURE__ */ jsx(AgentsHome, {
 			roster,
 			loading: facts === void 0,
+			listingRead: listing.value !== void 0,
 			listingError: listing.error,
 			activity,
 			usage,
