@@ -55,6 +55,12 @@ interface EnsureArgs extends MintArgs {
 	readonly verify?: boolean;
 }
 
+interface Provisioned {
+	readonly agentId: string;
+	readonly toolId: string;
+	readonly settled: boolean;
+}
+
 export function covers(held: unknown, wanted: unknown): boolean {
 	if (Array.isArray(wanted)) {
 		return Array.isArray(held) && held.length === wanted.length && wanted.every((item, at) => covers(held[at], item));
@@ -82,6 +88,10 @@ function createdAt(row: Json): number {
 
 function oldestFirst(a: Json, b: Json): number {
 	return createdAt(a) - createdAt(b) || String(a.agent_id).localeCompare(String(b.agent_id));
+}
+
+function isOwned(row: unknown): row is Json {
+	return isRecord(row) && isRecord(row.access_info) && row.access_info.is_creator === true;
 }
 
 export interface MintArgs {
@@ -165,11 +175,11 @@ export class Agents {
 	 * body differs from what this code wants is PATCHed. `verify` re-checks the remote even when the stored
 	 * hashes match (after a call found the agent gone).
 	 */
-	ensure(args: EnsureArgs): Promise<string> {
+	ensure(args: EnsureArgs): Promise<Provisioned> {
 		return this.#serial(args.home, async () => this.#provision(args, await this.#read(args.home)));
 	}
 
-	async #provision(args: EnsureArgs, stored: AgentRecord | undefined): Promise<string> {
+	async #provision(args: EnsureArgs, stored: AgentRecord | undefined): Promise<Provisioned> {
 		const { apiKey, home, ttsModel, signal, verify = false } = args;
 		const wantedTool = toolBody();
 		const toolHash = hashOf(wantedTool);
@@ -216,6 +226,7 @@ export class Agents {
 
 		const wantedAgent = agentBody(toolId, ttsModel, DEFAULT_CONVERSE_VOICE);
 		const agentHash = hashOf(wantedAgent);
+		let settled = true;
 		if (agentId && heldAgent) {
 			if (!covers(heldAgent, wantedAgent))
 				await this.#call(apiKey, "PATCH", `/v1/convai/agents/${agentId}`, wantedAgent, signal);
@@ -232,6 +243,8 @@ export class Agents {
 					{ ...args, verify: false },
 					{ version: 1, agentId: "", agentHash: "", toolId, toolHash },
 				);
+		} else if (agentId) {
+			settled = false;
 		}
 		if (!agentId) {
 			const created = await this.#call(apiKey, "POST", "/v1/convai/agents/create", wantedAgent, signal);
@@ -248,7 +261,7 @@ export class Agents {
 		) {
 			await this.#write(home, record);
 		}
-		return agentId;
+		return { agentId, toolId, settled };
 	}
 
 	async #settle(
@@ -273,11 +286,15 @@ export class Agents {
 		const rows: Json[] = [];
 		let cursor: string | undefined;
 		for (let page = 0; page < LIST_PAGE_LIMIT; page++) {
-			const query = new URLSearchParams({ search: name, page_size: String(LIST_PAGE_SIZE) });
+			const query = new URLSearchParams({
+				search: name,
+				page_size: String(LIST_PAGE_SIZE),
+				created_by_user_id: "@me",
+			});
 			if (cursor) query.set("cursor", cursor);
 			const body = await this.#call(apiKey, "GET", `/v1/convai/${resource}?${query}`, undefined, signal);
 			const batch = isRecord(body) ? body[resource] : undefined;
-			if (Array.isArray(batch)) rows.push(...batch.filter(isRecord));
+			if (Array.isArray(batch)) rows.push(...batch.filter(isOwned));
 			cursor =
 				isRecord(body) && body.has_more === true && typeof body.next_cursor === "string"
 					? body.next_cursor
@@ -321,13 +338,26 @@ export class Agents {
 	 * account) it is recreated once and the mint retried.
 	 */
 	async mintSignedUrl(args: MintArgs): Promise<string> {
-		const agentId = await this.ensure(args);
+		const provisioned = await this.ensure(args);
 		try {
-			return await this.#signedUrl(args, agentId);
+			return await this.#mint(args, provisioned);
 		} catch (error) {
 			if (!(error instanceof ElevenLabsError && error.status === 404)) throw error;
-			return this.#signedUrl(args, await this.ensure({ ...args, verify: true }));
+			return this.#mint(args, await this.ensure({ ...args, verify: true }));
 		}
+	}
+
+	async #mint(args: MintArgs, { agentId, toolId, settled }: Provisioned): Promise<string> {
+		if (settled) return this.#signedUrl(args, agentId);
+		const [held, url] = await Promise.all([
+			this.#call(args.apiKey, "GET", `/v1/convai/agents/${agentId}`, undefined, args.signal),
+			this.#signedUrl(args, agentId),
+		]);
+		if (!covers(held, { conversation_config: { tts: { model_id: args.ttsModel } } })) {
+			const wanted = agentBody(toolId, args.ttsModel, DEFAULT_CONVERSE_VOICE);
+			await this.#call(args.apiKey, "PATCH", `/v1/convai/agents/${agentId}`, wanted, args.signal);
+		}
+		return url;
 	}
 
 	async #signedUrl({ apiKey, signal }: MintArgs, agentId: string): Promise<string> {

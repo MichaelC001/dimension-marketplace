@@ -42,10 +42,12 @@ export class FakeAgentsApi {
 	refuseAgentCreate = false;
 	/** Every signed-URL request is refused with this status, whatever the agent id (a wrong agent, a revoked one). */
 	signedUrlRefusal: number | undefined;
+	ignoresOwnerFilter = false;
 	readonly tools = new Map<string, Record<string, unknown>>();
 	readonly agents = new Map<string, Record<string, unknown>>();
 	readonly created = new Map<string, number>();
 	readonly archived = new Set<string>();
+	readonly foreign = new Set<string>();
 	#next = 1;
 	#clock = 1_000;
 
@@ -74,6 +76,14 @@ export class FakeAgentsApi {
 		return JSON.parse(JSON.stringify(this.agents.get(id) ?? null));
 	}
 
+	retuneVoice(id: string, modelId: string): void {
+		const held = this.agentById(id);
+		this.agents.set(id, {
+			...held,
+			conversation_config: { ...held.conversation_config, tts: { ...held.conversation_config.tts, model_id: modelId } },
+		});
+	}
+
 	/** Someone deleted the agent (and optionally its tool) in the ElevenLabs dashboard. */
 	deleteRemote(what: { agents?: boolean; tools?: boolean }): void {
 		if (what.agents) this.agents.clear();
@@ -81,19 +91,21 @@ export class FakeAgentsApi {
 	}
 
 	/** A tool already on the account, as an earlier run (or another machine) left it. */
-	seedTool(config: Record<string, unknown> = toolBody()): string {
+	seedTool(config: Record<string, unknown> = toolBody(), options: { foreign?: boolean } = {}): string {
 		const id = `tool_${this.#next++}`;
 		this.tools.set(id, config);
+		if (options.foreign) this.foreign.add(id);
 		return id;
 	}
 
 	/** An agent already on the account; by default it holds exactly the body this pack wants. */
-	seedAgent(options: { toolId: string; name?: string; created?: number; archived?: boolean; body?: Record<string, unknown> }): string {
+	seedAgent(options: { toolId: string; name?: string; created?: number; archived?: boolean; foreign?: boolean; body?: Record<string, unknown> }): string {
 		const id = `agent_${this.#next++}`;
 		const body = options.body ?? { ...agentBody(options.toolId, "eleven_v4_turbo", DEFAULT_CONVERSE_VOICE), name: options.name ?? "dimension-live" };
 		this.agents.set(id, body);
 		this.created.set(id, options.created ?? this.#clock++);
 		if (options.archived) this.archived.add(id);
+		if (options.foreign) this.foreign.add(id);
 		return id;
 	}
 
@@ -102,16 +114,19 @@ export class FakeAgentsApi {
 		const size = Number(url.searchParams.get("page_size") ?? "30");
 		const start = Number(url.searchParams.get("cursor") ?? "0");
 		const store = field === "agents" ? this.agents : this.tools;
-		const matching = [...store.entries()].filter(([, body]) => {
+		const ownedOnly = url.searchParams.get("created_by_user_id") === "@me" && !this.ignoresOwnerFilter;
+		const matching = [...store.entries()].filter(([id, body]) => {
 			const config = body.tool_config as { name?: string } | undefined;
+			if (ownedOnly && this.foreign.has(id)) return false;
 			return String(field === "agents" ? body.name : config?.name).includes(search);
 		});
 		const next = start + size;
-		const rows = matching.slice(start, next).map(([id, body]) =>
-			field === "agents"
-				? { agent_id: id, name: body.name, created_at_unix_secs: this.created.get(id), archived: this.archived.has(id) }
-				: { id, ...body },
-		);
+		const rows = matching.slice(start, next).map(([id, body]) => {
+			const accessInfo = { is_creator: !this.foreign.has(id) };
+			return field === "agents"
+				? { agent_id: id, name: body.name, created_at_unix_secs: this.created.get(id), archived: this.archived.has(id), access_info: accessInfo }
+				: { id, ...body, access_info: accessInfo };
+		});
 		return jsonResponse({ [field]: rows, has_more: next < matching.length, next_cursor: next < matching.length ? String(next) : null });
 	}
 

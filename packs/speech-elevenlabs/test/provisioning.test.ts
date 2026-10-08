@@ -82,7 +82,7 @@ describe("provisioning the one shared agent", () => {
 		rig.restart();
 		const before = rig.api.calls.length;
 		await openAndHangUp(rig);
-		expect(rig.api.calls.slice(before)).toEqual(["GET /v1/convai/conversation/get-signed-url"]);
+		expect(rig.api.calls.slice(before)).toEqual([`GET /v1/convai/agents/${firstKey(rig.api.agents)}`, "GET /v1/convai/conversation/get-signed-url"]);
 	});
 
 	test("the key travels only in the xi-api-key header to api.elevenlabs.io", async () => {
@@ -111,7 +111,7 @@ describe("provisioning the one shared agent", () => {
 		// Same model again: nothing to send.
 		const settled = rig.api.calls.length;
 		await openAndHangUp(rig, { model: "eleven_v4" });
-		expect(rig.api.calls.slice(settled)).toEqual(["GET /v1/convai/conversation/get-signed-url"]);
+		expect(rig.api.calls.slice(settled)).toEqual([`GET /v1/convai/agents/${agentId}`, "GET /v1/convai/conversation/get-signed-url"]);
 	});
 
 	test("a tool whose stored hash no longer matches the body this code wants is PATCHed, not recreated", async () => {
@@ -121,7 +121,11 @@ describe("provisioning the one shared agent", () => {
 		const before = rig.api.calls.length;
 
 		await openAndHangUp(rig);
-		expect(rig.api.calls.slice(before)).toEqual([`PATCH /v1/convai/tools/${firstKey(rig.api.tools)}`, "GET /v1/convai/conversation/get-signed-url"]);
+		expect(rig.api.calls.slice(before)).toEqual([
+			`PATCH /v1/convai/tools/${firstKey(rig.api.tools)}`,
+			`GET /v1/convai/agents/${firstKey(rig.api.agents)}`,
+			"GET /v1/convai/conversation/get-signed-url",
+		]);
 		expect(rig.api.tools.size).toBe(1);
 		expect((await readRecord(rig)).toolHash).not.toBe("from-an-older-pack");
 	});
@@ -377,6 +381,74 @@ describe("adopting the account's own agent", () => {
 		expect(error.message).not.toContain(PROVIDER_TEXT);
 		expect(writes(rig, before)).toEqual([]);
 		expect(rig.sockets).toHaveLength(1);
+	});
+
+	test("an agent and a tool another user of the account created are never adopted or written to: the account gets its own", async () => {
+		const rig = await makeLiveRig(harness);
+		rig.api.ignoresOwnerFilter = true;
+		const sharedTool = rig.api.seedTool(undefined, { foreign: true });
+		const sharedAgent = rig.api.seedAgent({ toolId: sharedTool, foreign: true });
+		const agentBefore = JSON.stringify(rig.api.agentById(sharedAgent));
+		const toolBefore = JSON.stringify(rig.api.tools.get(sharedTool));
+
+		await openAndHangUp(rig);
+
+		expect(JSON.stringify(rig.api.agentById(sharedAgent))).toBe(agentBefore);
+		expect(JSON.stringify(rig.api.tools.get(sharedTool))).toBe(toolBefore);
+		expect([rig.api.agents.size, rig.api.tools.size]).toEqual([2, 2]);
+		expect(rig.sockets[0]?.url).not.toContain(`agent_id=${sharedAgent}`);
+		expect(writes(rig)).toEqual(["POST /v1/convai/tools", "POST /v1/convai/agents/create"]);
+	});
+
+	test("an older agent someone else shared is passed over for the newer one the key's user made", async () => {
+		const rig = await makeLiveRig(harness);
+		rig.api.ignoresOwnerFilter = true;
+		const sharedTool = rig.api.seedTool(undefined, { foreign: true });
+		rig.api.seedAgent({ toolId: sharedTool, foreign: true, created: 1 });
+		const ownTool = rig.api.seedTool();
+		const own = rig.api.seedAgent({ toolId: ownTool, created: 500 });
+
+		await openAndHangUp(rig);
+
+		expect(rig.sockets[0]?.url).toContain(`agent_id=${own}`);
+		expect(writes(rig)).toEqual([]);
+		expect(await readRecord(rig)).toMatchObject({ agentId: own, toolId: ownTool });
+	});
+});
+
+describe("one agent shared by every install on the account", () => {
+	test("another install retuning the agent's voice model is undone before this install's call connects", async () => {
+		const rig = await makeLiveRig(harness);
+		await openAndHangUp(rig, { model: "eleven_v4_turbo" });
+		const agentId = firstKey(rig.api.agents);
+		const toolId = firstKey(rig.api.tools);
+		rig.api.retuneVoice(agentId, "eleven_v4");
+		const before = rig.api.calls.length;
+
+		const pending = openConverse(rig, { model: "eleven_v4_turbo" });
+		const socket = await rig.socket(1);
+		expect(rig.api.agentById(agentId).conversation_config.tts.model_id).toBe("eleven_v4_turbo");
+		socket.open();
+		socket.receive(frames.metadata());
+		(await pending).close();
+
+		expect(rig.api.calls.slice(before)).toEqual([
+			`GET /v1/convai/agents/${agentId}`,
+			"GET /v1/convai/conversation/get-signed-url",
+			`PATCH /v1/convai/agents/${agentId}`,
+		]);
+		expect(rig.api.agentPayload(before + 2).conversation_config.agent.prompt.tool_ids).toEqual([toolId]);
+		expect(rig.api.agents.size).toBe(1);
+	});
+
+	test("a call whose model the agent already holds writes nothing", async () => {
+		const rig = await makeLiveRig(harness);
+		await openAndHangUp(rig, { model: "eleven_v4" });
+		const before = rig.api.calls.length;
+
+		await openAndHangUp(rig, { model: "eleven_v4" });
+
+		expect(rig.api.calls.slice(before).filter(call => !call.startsWith("GET "))).toEqual([]);
 	});
 });
 

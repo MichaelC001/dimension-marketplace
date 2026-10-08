@@ -30,11 +30,11 @@ by naming the provider `elevenlabs`.
   becomes `status`, and neither the close code nor the reason is repeated.
 - **Live calls** (`src/converse.ts`, `src/convai.ts`, `src/agents.ts`). The engine holds the ElevenLabs Agents
   socket and carries microphone audio up and the voice down. A home with no ids (a new machine, a wiped engine home)
-  adopts the agent already on your account called `dimension-live`, when it carries the `delegate_to_agent` client
-  tool (the oldest such agent, never an archived one, never an agent that only shares the name), records its ids and
-  changes it only where it differs from what the code wants; with none on the account it creates the agent and the
-  tool. The persona, first message and voice arrive per call as overrides, so nothing about a session is written to
-  your account.
+  adopts the agent your key's user created on the account called `dimension-live`, when it carries the
+  `delegate_to_agent` client tool, also one your user created (the oldest such agent, never an archived one, never an
+  agent that only shares the name, never one a teammate shared with you), records its ids and changes it only where it
+  differs from what the code wants; with none it creates the agent and the tool. The persona, first message and voice
+  arrive per call as overrides, so nothing about a session is written to your account.
 - **A writing guide** (`src/guide.ts`) for Eleven v4 and v4 Turbo: how to place the short audio tags in square
   brackets, with punctuation and numbers written as words. The engine hands it to the small model that rewrites a
   reply into speech. Flash v2.5 gets none, and the rewriter is then told never to write a bracket.
@@ -48,9 +48,11 @@ No tools, skills, prompts or rules.
 
 ## Who can use it
 
-Anyone, on every release ring. It is off until you enable it (`defaultEnabled: false`) and
-connect a key. You need an ElevenLabs account and an API key with the Text to Speech permission to hear replies and the
-Speech to Text permission to dictate; to talk live the key also needs the Agents (ConvAI) read and write permissions.
+Anyone on the canary release ring (`channel: "canary"`), running Dimension 0.11.1 or newer (`requires.dimension`; the
+pack-provided speech providers, listening and live calls it relies on first ship in that release). It is off until you
+enable it (`defaultEnabled: false`) and connect a key. You need an ElevenLabs account and an API key with the Text to
+Speech permission to hear replies and the Speech to Text permission to dictate; to talk live the key also needs the
+Agents (ConvAI) read and write permissions.
 Voices: Read is optional and lists your own voices in the picker. `ELEVENLABS_API_KEY` in the environment works in place
 of the form.
 
@@ -70,10 +72,14 @@ of the form.
   connected second. A call ends at ElevenLabs' own ceiling of 7200 seconds; a call in which you say nothing is ended
   server-side after 900 seconds as a backstop, and the engine's own idle hang-up acts first.
 - **It uses one agent and one tool on your ElevenLabs account** (`dimension-live`, `delegate_to_agent`). It creates
-  them only when the account holds none, and PATCHes them only when their body differs from what the code wants; the
-  ids (never the key) are kept in `<engine home>/speech/elevenlabs-agents.json`. Deleting the agent remotely is safe:
-  the next call adopts another of yours by name or recreates it. A key without the Agents permissions still speaks
-  and dictates; only live calls report the missing permission.
+  them only when the account holds none of yours, and PATCHes them only when their body differs from what the code
+  wants; the ids (never the key) are kept in `<engine home>/speech/elevenlabs-agents.json`. Deleting the agent remotely
+  is safe: the next call adopts another of yours by name or recreates it. A key without the Agents permissions still
+  speaks and dictates; only live calls report the missing permission.
+- **One agent, one voice model at a time.** Every install that uses your key shares that one agent, and an agent holds
+  a single TTS model (`eleven_v4_turbo` or `eleven_v4`). Before each call connects, the pack reads the agent back and,
+  if another install left a different model on it, PATCHes its own model back, so a call speaks with the model its
+  profile chose. Two installs on different models take turns.
 - **What reaches the agent's mouth.** Progress while your coding agent works goes up as a silent context update
   and is never spoken; a final result is sent as a user message, which speaks, so it waits for the agent to stop
   talking: up to eight seconds by default, stretched to at most 32 seconds while the agent is still speaking, and

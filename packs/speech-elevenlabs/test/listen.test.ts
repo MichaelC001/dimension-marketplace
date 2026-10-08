@@ -426,6 +426,37 @@ describe("mute", () => {
 		expect(sentBytes(first)).toBe(0);
 	});
 
+	test("muting again before the first commit lands keeps the connection, so that utterance's final is not lost", async () => {
+		const { session, first, transcript } = await start();
+		session.push(pcmBytes(6_400));
+		session.mute(true);
+		session.mute(false);
+		session.mute(true);
+
+		expect(first.closed).toBe(false);
+		expect(audioFrames(first).filter(frame => frame.commit)).toHaveLength(1);
+
+		first.receive({ message_type: "committed_transcript", text: "said before the flicker" });
+		await settle();
+		expect(transcript.types).toEqual(["speech-start", "speech-end", "final"]);
+		expect(transcript.texts).toEqual(["said before the flicker"]);
+		expect(first.closed).toBe(true);
+	});
+
+	test("a commit that never lands after muting again still ends the utterance once the wait is over", async () => {
+		const { session, first, transcript } = await start();
+		first.receive({ message_type: "partial_transcript", text: "half a sentence" });
+		session.push(pcmBytes(6_400));
+		session.mute(true);
+		session.mute(false);
+		session.mute(true);
+		await until(() => transcript.types.includes("speech-end"), "the wait for the commit to end");
+
+		expect(transcript.types).toEqual(["speech-start", "partial", "speech-end"]);
+		expect(first.closed).toBe(true);
+		expect(audioFrames(first).filter(frame => frame.commit)).toHaveLength(1);
+	});
+
 	test("muting twice, or unmuting what was never muted, changes nothing", async () => {
 		const { session, network } = await start();
 		session.mute(false);

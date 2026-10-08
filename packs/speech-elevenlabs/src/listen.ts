@@ -74,6 +74,7 @@ class ScribeListenSession implements ListenSession {
 	#retryAt = 0;
 	#lastSentAt = 0;
 	#audioSinceCommit = false;
+	#commitPending = false;
 	#openTimer: Timer | undefined;
 	#muteTimer: Timer | undefined;
 
@@ -119,8 +120,9 @@ class ScribeListenSession implements ListenSession {
 		this.#pending.length = 0;
 		this.#pendingBytes = 0;
 		this.#carry = null;
-		if (live && this.#audioSinceCommit) {
-			this.#commit();
+		if (live && (this.#audioSinceCommit || this.#commitPending)) {
+			if (this.#audioSinceCommit) this.#commit();
+			clearTimeout(this.#muteTimer);
 			this.#muteTimer = setTimeout(() => {
 				this.#endUtterance();
 				this.#releaseSocket();
@@ -210,6 +212,7 @@ class ScribeListenSession implements ListenSession {
 	}
 
 	#onCommitted(text: string): void {
+		this.#commitPending = false;
 		this.#audioSinceCommit = false;
 		if (text !== "") {
 			this.#failures = 0;
@@ -289,6 +292,7 @@ class ScribeListenSession implements ListenSession {
 	#commit(): void {
 		if (this.#ws?.readyState !== SOCKET_OPEN) return;
 		this.#ws.send(COMMIT_FRAME);
+		this.#commitPending = true;
 		this.#audioSinceCommit = false;
 	}
 
@@ -298,6 +302,7 @@ class ScribeListenSession implements ListenSession {
 		this.#ws = null;
 		this.#started = false;
 		this.#audioSinceCommit = false;
+		this.#commitPending = false;
 		this.#backlog.length = 0;
 		this.#backlogBytes = 0;
 		try {
