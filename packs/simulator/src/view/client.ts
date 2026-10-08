@@ -9,6 +9,11 @@ import type { ListState } from "./view-model";
 
 type Result = CallToolResult;
 
+/** A tool that refused, or answered a shape the View cannot read: the message is the tool's own words. */
+class ToolError extends Error {
+  override name = "ToolError";
+}
+
 /** An `isError` result is raised with the tool's own words; the View never substitutes a plausible value. */
 function structured(tool: string, result: Result): Record<string, unknown> {
   if (result.isError === true) {

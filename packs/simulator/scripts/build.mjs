@@ -61,6 +61,10 @@ const view = await build({
   minify: true,
   charset: "utf8",
   plugins: [withoutTailwind],
+  jsx: "automatic",
+  // The View's chrome is the annotation kit's React. The kit's own tsconfig maps `react` to its type declarations for
+  // the type checker; read as a bundler's paths that would resolve React to a .d.ts, so the JSX mode is given here.
+  tsconfigRaw: { compilerOptions: { jsx: "react-jsx" } },
   loader: { ".woff2": "dataurl", ".woff": "dataurl", ".png": "dataurl", ".svg": "dataurl" },
   logLevel: "warning",
 });

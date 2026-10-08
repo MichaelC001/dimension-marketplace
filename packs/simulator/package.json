@@ -26,6 +26,7 @@
     "zod": "4.4.3"
   },
   "devDependencies": {
+    "@dimension/mcp-app-kit": "workspace:*",
     "@dimension/sdk": "workspace:*",
     "@fraym/ui": "workspace:*",
     "@types/bun": "1.3.14",

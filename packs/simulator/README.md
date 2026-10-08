@@ -36,6 +36,48 @@ on a phone the host draws its own "Open on your computer" card for it.
   Without scrcpy or WebCodecs the pane says **Shot fallback** and shows still
   pictures a few times a second. It is never labelled Live.
 
+## The toolbar and annotation
+
+The pane has one bar across the top, the shared annotation kit's
+`AnnotationToolbar` (`@dimension/mcp-app-kit/annotate`, the same bar the Viewer
+and the Browser wear), mounted as a React island over the vanilla pane
+(`src/view/chrome.tsx`; the canvas and the stream never go through a render).
+
+- **Device group.** The device button names the device on screen with a state
+  dot (green running, amber starting, hollow not running; amber glyph for your
+  own phone) and opens the device menu. Then **Boot** (the AVD picked in the
+  menu), **Stop** (only a device this pack booted), **Refresh**, and **Show
+  physical devices**. A disabled control says why in its tooltip and accessible
+  name; the pure rules are `deviceControls` in `view-model.ts`.
+- **Drawing group.** Pin, Box, Circle, Arrow, Draw, then Undo, Redo, Clear
+  (`markupToolGroups`). The armed tool wears the accent ring.
+- **Status.** The bar's trailing slot carries ONE status: `Live H.264 · fps · ms`,
+  `Shot fallback` (amber, the reason in its tooltip), `Reconnecting`, `Stopped`,
+  or, while marking, `Frozen at HH:MM:SS`.
+- **One row at every width.** Under 600 px the device button drops its name to its
+  icon; narrower than the tools themselves, the bar scrolls sideways rather than wrap.
+
+**Marking up the screen.** With no tool in hand the pane drives the device as
+always. Picking a tool up freezes the frame on the canvas into a picture
+(`canvas.toDataURL`, the synchronous encoder) and lays the kit's
+`MarkupOverlay` over it; the screen and the Back/Home/Recents buttons are made
+`inert`, so a stroke never becomes a tap. Escape, or pressing the armed tool
+again, puts it down and returns to live. Put down with no marks, the frame (and
+its undo history) is let go and the next tool freezes a fresh one; with marks, the
+frame and marks are kept (picking a tool up shows them again) until Clear, undo or
+removal takes the last mark, or another device is chosen. The overall message is
+kept across freezes. **Request edits** (`AnnotationFooter`,
+under the stage while a device is shown) stages the frame with the marks burned
+in, each mark's frame-space position, one line naming the device (name, serial,
+Android version, display size, the time it was frozen) and each mark's position
+in the device's own pixels, the ones `device_tap` and `device_swipe` take. It is
+staged in the chat's composer, never sent: you press Enter.
+
+**Keys.** The drawing keys (`1`–`5`, `Ctrl+Z`, `Ctrl+Shift+Z`, `Escape`) are the
+markup's only while a tool is in hand or the focus is in the toolbar. While the
+screen has the keyboard they are the device's: a `1` typed into the emulator
+reaches it.
+
 ## Tools
 
 | Tool | Does |
@@ -89,7 +131,7 @@ because it was the only device listed. So:
   the reason and the encoder stops. While no physical viewer is attached nothing
   polls the setting.
 - The pane lists emulators only. **Show physical devices** (off by default,
-  disabled while the setting is off) adds phones, each marked "physical device";
+  disabled while the setting is off) adds phones to the device menu, each marked "physical";
   it never picks one for you, and an agent's `device_open` on a phone does not
   switch the pane to it.
 - **What this gate is, and is not.** It stops an agent reaching your phone by

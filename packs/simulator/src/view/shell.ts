@@ -1,9 +1,9 @@
-// The pane's DOM: built once, then updated in place. React is not used here on
-// purpose: the part that matters (pictures at 30-60 per second) must never go
-// through a render, and the rest is a bar, a phone and a panel.
+// The pane's DOM: built once, then updated in place. The part that matters
+// (pictures at 30-60 per second) never goes through a render. The toolbar, the
+// markup layer over the screen and the request footer are the shared annotation
+// kit's React components (chrome.tsx), mounted into the three slots made here.
 
-import type { DeviceInfo } from "../contracts";
-import { type ListState, type MissingTool, modeLabel, type PickerOption, pickerOptions, type Screen, type StreamStatus } from "./view-model";
+import type { MissingTool, Screen, StreamStatus } from "./view-model";
 
 type Child = Node | string;
 
@@ -16,21 +16,24 @@ export function el<K extends keyof HTMLElementTagNameMap>(tag: K, className: str
 }
 
 export interface ShellHandlers {
-  /** The picker moved to a running device (`serial`) or an AVD (`avd`). */
-  select(choice: { serial: string } | { avd: string }): void;
   boot(avd: string): void;
-  stop(serial: string): void;
   refresh(): void;
-  /** The person flipped "Show physical devices". */
-  showPhysical(show: boolean): void;
   nav(key: "back" | "home" | "recents"): void;
 }
 
 export interface Shell {
   readonly canvas: HTMLCanvasElement;
-  render(screen: Screen, list: ListState | null, selectedAvd: string | null, busy: boolean, problem: string | null, showPhysical: boolean): void;
+  /** Where the toolbar mounts: the top of the pane. */
+  readonly bar: HTMLElement;
+  /** Over the screen, exactly the canvas's box: where a frozen frame and its marks go. */
+  readonly freeze: HTMLElement;
+  /** Under the stage: the request footer, while a device is on screen. */
+  readonly foot: HTMLElement;
+  render(screen: Screen, problem: string | null): void;
   status(status: StreamStatus | null): void;
   aspect(width: number, height: number): void;
+  /** False while a tool is in hand: the screen and the device buttons take no input, so drawing never reaches the device. */
+  driving(on: boolean): void;
 }
 
 const NAV: readonly { readonly key: "back" | "home" | "recents"; readonly label: string; readonly glyph: string }[] = [
@@ -62,42 +65,12 @@ function button(label: string, className: string, onClick: () => void): HTMLButt
   return node;
 }
 
-const GROUP_LABELS: Record<PickerOption["group"], string> = { running: "Running", physical: "Physical devices (your own phone)", boot: "Not running" };
-
-function optionGroups(select: HTMLSelectElement, options: readonly PickerOption[], current: string): void {
-  select.replaceChildren();
-  for (const group of ["running", "physical", "boot"] as const) {
-    const items = options.filter(option => option.group === group);
-    if (items.length === 0) continue;
-    const container = el("optgroup", "", { label: GROUP_LABELS[group] });
-    for (const option of items) {
-      const node = el("option", "", { value: option.value }, option.label);
-      node.selected = option.value === current;
-      container.append(node);
-    }
-    select.append(container);
-  }
-}
-
 export function createShell(root: HTMLElement, handlers: ShellHandlers): Shell {
-  const picker = el("select", "sim-picker", { "aria-label": "Device" });
-  const bootButton = button("Boot", "sim-btn-primary", () => bootTarget && handlers.boot(bootTarget));
-  const stopButton = button("Stop", "", () => stopTarget && handlers.stop(stopTarget));
-  const refreshButton = button("Refresh", "sim-btn-quiet", () => handlers.refresh());
-  const physicalToggle = el("input", "", { type: "checkbox", "aria-describedby": "sim-physical-note" });
-  physicalToggle.addEventListener("change", () => handlers.showPhysical(physicalToggle.checked));
-  const physicalNote = el("span", "sim-toggle-note", { id: "sim-physical-note" });
-  const physicalLabel = el("label", "sim-toggle", {}, physicalToggle, el("span", "", {}, "Show physical devices"));
-  const physicalBadge = el("span", "sim-chip", { "data-chip": "physical", title: "A real phone: somebody's own device, not an emulator." }, "Physical device");
-  const modeChip = el("span", "sim-chip", { "data-chip": "mode" });
-  const fpsChip = el("span", "sim-chip sim-num", { "data-chip": "fps" });
-  const latencyChip = el("span", "sim-chip sim-num", { "data-chip": "latency" });
-  const chips = el("div", "sim-chips", { "aria-live": "polite" }, modeChip, fpsChip, latencyChip);
-  const bar = el("header", "sim-bar", {}, picker, physicalBadge, bootButton, stopButton, refreshButton, physicalLabel, physicalNote, el("span", "sim-spacer"), chips);
-
+  const bar = el("header", "sim-bar-slot");
   const canvas = el("canvas", "sim-canvas", { tabindex: "0", role: "application", "aria-label": "Device screen. Click and drag to touch, type to enter text." });
   const veil = el("div", "sim-veil", { role: "status" });
-  const bezel = el("div", "sim-bezel", {}, canvas, veil);
+  const freeze = el("div", "sim-freeze-slot");
+  const bezel = el("div", "sim-bezel", {}, canvas, veil, freeze);
   const screenbox = el("div", "sim-screenbox", {}, bezel);
   const navRow = el("nav", "sim-nav", { "aria-label": "Device buttons" });
   for (const item of NAV) {
@@ -110,16 +83,8 @@ export function createShell(root: HTMLElement, handlers: ShellHandlers): Shell {
   const panel = el("section", "sim-panel", { role: "region" });
   const stage = el("main", "sim-stage", {}, phone, panel);
   const problemBanner = el("p", "sim-problem", { role: "alert" });
-  root.replaceChildren(el("div", "sim-root", {}, bar, problemBanner, stage));
-
-  let bootTarget: string | null = null;
-  let stopTarget: string | null = null;
-
-  picker.addEventListener("change", () => {
-    const value = picker.value;
-    if (value.startsWith("serial:")) handlers.select({ serial: value.slice("serial:".length) });
-    else if (value.startsWith("avd:")) handlers.select({ avd: value.slice("avd:".length) });
-  });
+  const foot = el("div", "sim-foot-slot");
+  root.replaceChildren(el("div", "sim-root", {}, bar, problemBanner, stage, foot));
 
   function showPanel(title: string, body: Child[], actions: HTMLElement[] = [], tone: "plain" | "problem" = "plain"): void {
     panel.dataset.tone = tone;
@@ -134,53 +99,28 @@ export function createShell(root: HTMLElement, handlers: ShellHandlers): Shell {
 
   return {
     canvas,
+    bar,
+    freeze,
+    foot,
     aspect: (width, height) => {
       bezel.style.setProperty("--aw", String(width));
       bezel.style.setProperty("--ah", String(height));
     },
     status: status => {
-      if (status === null) {
-        modeChip.textContent = "";
-        fpsChip.textContent = "";
-        latencyChip.textContent = "";
-        chips.hidden = true;
-        veil.hidden = true;
-        return;
-      }
-      chips.hidden = false;
-      modeChip.textContent = modeLabel(status);
-      modeChip.dataset.kind = status.phase !== "live" ? status.phase : status.mode;
-      modeChip.title = status.fallbackReason ?? status.detail ?? "";
-      const live = status.phase === "live";
-      fpsChip.hidden = !live;
-      latencyChip.hidden = !live || status.latencyMs === null;
-      fpsChip.textContent = `${status.fps} fps`;
-      latencyChip.textContent = status.latencyMs === null ? "" : `${status.latencyMs} ms`;
-      const covered = status.phase === "connecting" || status.phase === "reconnecting" || status.phase === "ended";
+      const covered = status !== null && (status.phase === "connecting" || status.phase === "reconnecting" || status.phase === "ended");
       veil.hidden = !covered;
+      if (status === null) return;
       veil.textContent = status.phase === "ended" ? `Stopped${status.detail ? `: ${status.detail}` : ""}` : status.phase === "reconnecting" ? `Reconnecting${status.detail ? ` (${status.detail})` : ""}…` : "Connecting…";
     },
-    render: (screen, list, selectedAvd, busy, problem, showPhysical) => {
+    driving: on => {
+      canvas.inert = !on;
+      navRow.inert = !on;
+    },
+    render: (screen, problem) => {
       problemBanner.hidden = problem === null;
       problemBanner.textContent = problem ?? "";
-      const device: DeviceInfo | null = screen.kind === "device" ? screen.device : null;
-      const allowed = list?.allowPhysical === true;
-      physicalToggle.disabled = list === null || !allowed || busy;
-      physicalToggle.checked = allowed && showPhysical;
-      physicalLabel.title = allowed ? "List phones attached over USB or Wi-Fi next to the emulators. A phone is your own device." : "Driving a physical phone is turned off in settings.";
-      physicalNote.hidden = list === null || allowed;
-      physicalNote.textContent = "Off in settings (Simulator → Allow driving a physical phone).";
-      physicalBadge.hidden = device?.kind !== "physical";
-      stopTarget = device?.owned === true ? device.serial : null;
-      bootTarget = selectedAvd;
-      stopButton.hidden = stopTarget === null;
-      stopButton.disabled = busy;
-      bootButton.hidden = bootTarget === null;
-      bootButton.disabled = busy;
-      refreshButton.disabled = busy;
-      picker.disabled = list === null || busy;
-      if (list !== null) optionGroups(picker, pickerOptions(list, showPhysical), selectedAvd !== null ? `avd:${selectedAvd}` : device !== null ? `serial:${device.serial}` : "");
       phone.hidden = screen.kind !== "device";
+      foot.hidden = screen.kind !== "device";
       panel.hidden = screen.kind === "device";
       if (screen.kind === "device") {
         const live = screen.notes.find(item => item.tool === "scrcpy-server");
