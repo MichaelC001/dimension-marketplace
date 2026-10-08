@@ -22,8 +22,7 @@ body {
 	-webkit-font-smoothing: antialiased;
 }
 
-button,
-select {
+button {
 	font: inherit;
 	color: inherit;
 }
@@ -39,63 +38,235 @@ select {
 	background: var(--fr-bg);
 }
 
-.sim-num {
-	font-variant-numeric: tabular-nums;
-}
-
 :where(.sim-root) :focus-visible {
 	outline: 2px solid var(--fr-accent);
 	outline-offset: 2px;
 }
 
-/* ── bar ────────────────────────────────────────────────────────────── */
+/* ── the toolbar: the shared annotation bar (annotate.css), on one row ── */
+
+.sim-bar-slot {
+	flex: none;
+}
 
 .sim-bar {
-	display: flex;
-	align-items: center;
-	gap: 8px;
+	position: relative;
+}
+
+/* One row at every width: the kit's strip wraps a whole group to a second row, this bar never does. The device name
+   gives way first (below), and a pane narrower than the tools themselves scrolls the bar rather than growing it. */
+.sim-toolbar.dam-strip {
+	flex-wrap: nowrap;
+	overflow-x: auto;
+	overflow-y: hidden;
+	scrollbar-width: none;
+}
+
+.sim-toolbar.dam-strip::-webkit-scrollbar {
+	display: none;
+}
+
+.sim-toolbar [data-tool="device"] .dam-tool-text {
+	max-inline-size: 18ch;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+@media (max-width: 600px) {
+	.sim-toolbar [data-tool="device"].dam-tool-wide {
+		justify-content: center;
+		inline-size: 28px;
+		padding-inline: 0;
+	}
+
+	.sim-toolbar [data-tool="device"] .dam-tool-text {
+		display: none;
+	}
+}
+
+/* Too narrow for words beside the tools: the status is its coloured dot, its words in the tooltip. */
+@media (max-width: 480px) {
+	.sim-status-text {
+		display: none;
+	}
+}
+
+.sim-glyph {
+	position: relative;
+	display: inline-grid;
+	place-items: center;
+}
+
+/* A real phone: somebody's own device, never styled like the calm states. */
+.sim-glyph[data-on],
+.sim-devglyph[data-physical] {
+	color: var(--fr-warn);
+}
+
+.sim-dot {
 	flex: none;
-	padding: 8px 10px;
-	border-bottom: 1px solid var(--fr-border-soft);
+	inline-size: 7px;
+	block-size: 7px;
+	border-radius: 50%;
+	background: var(--fr-text-3);
+}
+
+.sim-devglyph .sim-dot {
+	position: absolute;
+	inset-inline-end: -2px;
+	inset-block-end: -1px;
+	box-shadow: 0 0 0 1.5px var(--fr-surface);
+}
+
+.sim-dot[data-dot="online"] {
+	background: var(--fr-add);
+}
+
+.sim-dot[data-dot="starting"] {
+	background: var(--fr-warn);
+}
+
+.sim-dot[data-dot="off"] {
+	background: transparent;
+	box-shadow: inset 0 0 0 1.5px var(--fr-text-3);
+}
+
+.sim-devglyph .sim-dot[data-dot="off"] {
 	background: var(--fr-surface);
+	box-shadow: 0 0 0 1.5px var(--fr-surface), inset 0 0 0 1.5px var(--fr-text-3);
 }
 
-.sim-spacer {
-	flex: 1;
-}
-
-.sim-picker {
-	min-width: 0;
-	max-width: 260px;
-	height: var(--fr-bar-control, 32px);
-	padding: 0 10px;
-	border: 1px solid var(--fr-border);
-	border-radius: var(--fr-input-r);
-	background: var(--fr-surface-2);
-}
-
-.sim-picker:disabled {
-	opacity: 0.55;
-}
-
-.sim-toggle {
+/* The one status, in the bar's trailing slot: honest about what is on screen. */
+.sim-status {
+	position: relative;
 	display: inline-flex;
 	align-items: center;
 	gap: 6px;
+	max-inline-size: 100%;
+	vertical-align: middle;
 	color: var(--fr-text-2);
-	font-size: var(--fr-fs-sm);
+	font-variant-numeric: tabular-nums;
+}
+
+.sim-status-text {
+	min-inline-size: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.sim-status-dot {
+	flex: none;
+	inline-size: 6px;
+	block-size: 6px;
+	border-radius: 50%;
+	background: currentColor;
+}
+
+.sim-status[data-tone="live"] {
+	color: var(--fr-accent-text, var(--fr-accent));
+}
+
+/* Shot fallback and a reconnect are degraded: amber, never the accent a live picture gets. */
+.sim-status[data-tone="warn"] {
+	color: var(--fr-warn);
+}
+
+.sim-status[data-tone="stop"] {
+	color: var(--fr-del);
+}
+
+.sim-sr {
+	position: absolute;
+	inline-size: 1px;
+	block-size: 1px;
+	overflow: hidden;
+	clip-path: inset(50%);
 	white-space: nowrap;
+}
+
+/* ── the device menu ────────────────────────────────────────────────── */
+
+.sim-menu {
+	position: absolute;
+	z-index: 10;
+	inset-block-start: calc(100% - 2px);
+	inset-inline-start: 8px;
+	box-sizing: border-box;
+	min-inline-size: 240px;
+	max-inline-size: calc(100vw - 16px);
+	max-block-size: 60vh;
+	overflow-y: auto;
+	padding: 4px;
+	border: 1px solid var(--dam-hairline);
+	border-radius: var(--fr-input-r);
+	background: var(--fr-surface);
+	box-shadow: var(--dam-shadow);
+}
+
+.sim-menu-group + .sim-menu-group {
+	margin-block-start: 4px;
+	padding-block-start: 4px;
+	border-block-start: 1px solid var(--dam-hairline);
+}
+
+.sim-menu-head {
+	padding: 4px 8px 2px;
+	color: var(--fr-text-3);
+	font-size: var(--fr-fs-xs);
+}
+
+.sim-menu-item {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	inline-size: 100%;
+	min-block-size: 32px;
+	padding: 0 8px;
+	border: 0;
+	border-radius: calc(var(--fr-input-r) - 2px);
+	background: transparent;
+	text-align: start;
 	cursor: pointer;
 }
 
-.sim-toggle:has(input:disabled) {
-	opacity: 0.55;
-	cursor: default;
+.sim-menu-item:hover,
+.sim-menu-item:focus-visible {
+	background: var(--dam-hover);
 }
 
-.sim-toggle-note {
-	color: var(--fr-text-2);
+.sim-menu-item[aria-checked="true"] {
+	background: var(--fr-accent-dim);
+	color: var(--fr-accent-text, var(--fr-accent));
+}
+
+.sim-menu-name {
+	flex: 1;
+	min-inline-size: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.sim-menu-meta {
+	color: var(--fr-text-3);
 	font-size: var(--fr-fs-xs);
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+
+.sim-menu-tag {
+	padding: 1px 6px;
+	border: 1px solid color-mix(in oklab, var(--fr-warn) 45%, transparent);
+	border-radius: 999px;
+	color: var(--fr-warn);
+	font-size: var(--fr-fs-xs);
+}
+
+.sim-menu-empty {
+	margin: 0;
+	padding: 8px;
+	color: var(--fr-text-2);
+	font-size: var(--fr-fs-sm);
 }
 
 .sim-btn {
@@ -143,59 +314,13 @@ select {
 }
 
 .sim-btn[hidden],
-.sim-chip[hidden],
-.sim-chips[hidden],
 .sim-problem[hidden],
-.sim-toggle-note[hidden],
 .sim-note[hidden],
 .sim-veil[hidden],
 .sim-phone[hidden],
-.sim-panel[hidden] {
+.sim-panel[hidden],
+.sim-foot-slot[hidden] {
 	display: none;
-}
-
-/* ── status chips: honest about what is on screen ───────────────────── */
-
-.sim-chips {
-	display: flex;
-	align-items: center;
-	gap: 6px;
-}
-
-.sim-chip {
-	padding: 2px 8px;
-	border: 1px solid var(--fr-border);
-	border-radius: 999px;
-	background: var(--fr-pill-sunken);
-	color: var(--fr-text-2);
-	font-size: var(--fr-fs-xs);
-	white-space: nowrap;
-}
-
-.sim-chip[data-chip="mode"][data-kind="h264"] {
-	border-color: var(--fr-accent-line);
-	background: var(--fr-accent-dim);
-	color: var(--fr-accent-text);
-}
-
-/* Shot fallback is a degraded mode: amber, never the accent a live picture gets. */
-.sim-chip[data-chip="mode"][data-kind="shot"],
-.sim-chip[data-chip="mode"][data-kind="reconnecting"] {
-	border-color: color-mix(in oklab, var(--fr-warn) 45%, transparent);
-	color: var(--fr-warn);
-}
-
-.sim-chip[data-chip="mode"][data-kind="ended"] {
-	border-color: var(--fr-del-line);
-	color: var(--fr-del);
-}
-
-/* A real phone: somebody's own device, never styled like the calm states. */
-.sim-chip[data-chip="physical"] {
-	border-color: color-mix(in oklab, var(--fr-warn) 45%, transparent);
-	background: color-mix(in oklab, var(--fr-warn) 12%, transparent);
-	color: var(--fr-warn);
-	font-weight: 500;
 }
 
 .sim-problem {
@@ -292,6 +417,29 @@ select {
 	pointer-events: none;
 }
 
+/* Exactly the canvas's box. Empty it lets every touch through to the device; a frozen frame in it takes them all,
+   so a stroke never reaches the device under it. */
+.sim-freeze-slot {
+	position: absolute;
+	inset: 7px;
+	pointer-events: none;
+}
+
+.sim-frozen {
+	position: absolute;
+	inset: 0;
+	pointer-events: auto;
+}
+
+/* Stretched to the box exactly as the canvas is, so a mark lands on the pixel the person saw. */
+.sim-frozen-img {
+	display: block;
+	width: 100%;
+	height: 100%;
+	border-radius: 24px;
+	user-select: none;
+}
+
 .sim-nav {
 	flex: none;
 	display: flex;
@@ -317,6 +465,14 @@ select {
 
 .sim-nav-btn:active {
 	background: var(--sim-press);
+}
+
+.sim-nav[inert] {
+	opacity: 0.4;
+}
+
+.sim-foot-slot {
+	flex: none;
 }
 
 /* ── panels: the empty, missing and booting states ──────────────────── */

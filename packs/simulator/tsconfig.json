@@ -11,6 +11,6 @@
     "skipLibCheck": true,
     "types": ["node", "bun", "react", "react-dom"]
   },
-  "include": ["src/**/*.ts", "test/**/*.ts"],
+  "include": ["src/**/*.ts", "src/**/*.tsx", "test/**/*.ts"],
   "exclude": ["src/dock"]
 }

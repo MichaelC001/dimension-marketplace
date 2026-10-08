@@ -5,7 +5,7 @@
  *  when they picked it: never as "the first device".
  */
 import { describe, expect, test } from "bun:test";
-import { deriveScreen, type ListState, pickerOptions, type Selection, usableDevices } from "../src/view/view-model";
+import { deriveScreen, deviceControls, keepFrozen, type ListState, markFact, markupKeysLive, pickerOptions, type Selection, type StreamStatus, statusLine, usableDevices } from "../src/view/view-model";
 import { emulatorDevice, PHONE_SERIAL, phoneDevice } from "./fake-backend";
 
 const NOTHING_PICKED: Selection = { serial: null, booting: null, notes: [] };
@@ -93,15 +93,81 @@ describe("the device picker", () => {
     ]);
   });
 
-  test("with both switches on, the phone is listed between them, marked as a physical device", () => {
+  test("with both switches on, the phone is listed between them, in its own group", () => {
     const options = pickerOptions(list(devices, true, avds), true);
     expect(options.map(option => option.group)).toEqual(["running", "physical", "boot"]);
-    expect(options[1]?.label).toContain("physical device");
     expect(options[1]?.value).toBe(`serial:${PHONE_SERIAL}`);
   });
 
   test("no AVD is offered for booting when the emulator binary is missing", () => {
     const noEmulator: ListState = { ...list(devices, false, avds), toolchain: { adb: "/sdk/adb", emulator: null, scrcpyServer: null, missing: [] } };
     expect(pickerOptions(noEmulator, false).map(option => option.group)).toEqual(["running"]);
+  });
+});
+
+describe("the toolbar's device controls", () => {
+  const avds = [{ name: "Pixel_6", running: false }];
+  const screenOf = (devices: ListState["devices"], allowPhysical = false) => deriveScreen(list(devices, allowPhysical, avds), NOTHING_PICKED, null, false);
+
+  test("Stop is armed only for a device this pack booted; any other is left running and the button says why", () => {
+    const mine = [emulatorDevice("emulator-5554", "Pixel_8", { owned: true })];
+    const yours = [emulatorDevice("emulator-5554", "Pixel_8", { owned: false })];
+    expect(deviceControls(screenOf(mine), list(mine, false, avds), null, false, false).stop).toMatchObject({ serial: "emulator-5554", disabled: false });
+    const refused = deviceControls(screenOf(yours), list(yours, false, avds), null, false, false).stop;
+    expect(refused).toMatchObject({ serial: null, disabled: true });
+    expect(refused.label).toContain("left running");
+  });
+
+  test("Boot is armed only once an AVD that is not running is picked", () => {
+    const devices = [emulatorDevice("emulator-5554", "Pixel_8")];
+    expect(deviceControls(screenOf(devices), list(devices, false, avds), null, false, false).boot.disabled).toBe(true);
+    expect(deviceControls(screenOf(devices), list(devices, false, avds), "Pixel_6", false, false).boot).toMatchObject({ avd: "Pixel_6", disabled: false });
+  });
+
+  test("Show physical devices is off while the setting is, and its tooltip names the setting", () => {
+    const devices = [emulatorDevice("emulator-5554", "Pixel_8"), phoneDevice()];
+    const off = deviceControls(screenOf(devices), list(devices, false, avds), null, false, true).physical;
+    expect(off).toMatchObject({ on: false, disabled: true });
+    expect(off.label).toContain("Allow driving a physical phone");
+    expect(deviceControls(screenOf(devices, true), list(devices, true, avds), null, false, true).physical).toMatchObject({ on: true, disabled: false });
+  });
+
+  test("while a boot or stop is under way, every device control is held", () => {
+    const devices = [emulatorDevice("emulator-5554", "Pixel_8", { owned: true })];
+    const held = deviceControls(screenOf(devices, true), list(devices, true, avds), "Pixel_6", true, false);
+    expect([held.pickerDisabled, held.boot.disabled, held.stop.disabled, held.refreshDisabled, held.physical.disabled]).toEqual([true, true, true, true, true]);
+  });
+});
+
+describe("the status the toolbar shows", () => {
+  const live = (mode: StreamStatus["mode"]): StreamStatus => ({ phase: "live", mode, fallbackReason: mode === "shot" ? "no scrcpy-server" : null, fps: 3, latencyMs: null, detail: null });
+
+  test("still pictures are never called Live, and say why in the tooltip", () => {
+    const shot = statusLine(live("shot"));
+    expect(shot?.text).not.toContain("Live");
+    expect(shot).toMatchObject({ tone: "warn", title: "no scrcpy-server" });
+    expect(statusLine(live("h264"))?.tone).toBe("live");
+  });
+});
+
+describe("marking up the screen", () => {
+  test("putting the tool down with no marks goes back to live; with marks the frozen frame is kept for them", () => {
+    expect(keepFrozen(null, 0)).toBe(false);
+    expect(keepFrozen(null, 2)).toBe(true);
+    expect(keepFrozen("box", 0)).toBe(true);
+  });
+
+  test("a digit typed into the device is the device's: the drawing keys only work with a tool in hand or the toolbar focused", () => {
+    expect(markupKeysLive(null, false, false)).toBe(false);
+    expect(markupKeysLive(null, true, false)).toBe(true);
+    expect(markupKeysLive("pen", false, false)).toBe(true);
+    expect(markupKeysLive("pen", true, true)).toBe(false);
+  });
+
+  test("a mark is told in the device's own pixels, with the display turned when the frame is landscape", () => {
+    const display = { width: 1080, height: 2400 };
+    expect(markFact({ kind: "pin", at: { x: 0.5, y: 0.25 } }, display, { width: 540, height: 1200 })).toContain("(540, 600)");
+    expect(markFact({ kind: "pin", at: { x: 0.5, y: 0.25 } }, display, { width: 1200, height: 540 })).toContain("(1200, 270)");
+    expect(markFact({ kind: "pin", at: { x: 0.5, y: 0.5 } }, null, { width: 540, height: 1200 })).toBeNull();
   });
 });

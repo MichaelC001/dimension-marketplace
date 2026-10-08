@@ -15,6 +15,7 @@ import "@fraym/ui/theme.css";
 import "./style.css";
 import type { DeviceInfo } from "../contracts";
 import type { InputMessage, StreamMode } from "../shared/frame-protocol";
+import { type Chrome, mountChrome } from "./chrome";
 import { failureText, readList, SimulatorClient } from "./client";
 import { bindInput } from "./input";
 import { createShell, type Shell } from "./shell";
@@ -55,6 +56,7 @@ async function main(): Promise<void> {
   /** "Show physical devices": off at every start. Only the person turns it on, and only then (and with the setting on) does the pane list a phone. */
   let showPhysical = false;
   let shell: Shell | null = null;
+  let chrome: Chrome | null = null;
   let stream: LiveStream | null = null;
   let client: SimulatorClient | null = null;
   let unbind: (() => void) | null = null;
@@ -83,6 +85,7 @@ async function main(): Promise<void> {
     attached = null;
     attachedPhysical = false;
     shell?.status(null);
+    chrome?.update({ status: null });
   }
 
   function select(device: DeviceInfo): void {
@@ -94,9 +97,13 @@ async function main(): Promise<void> {
     attachedPhysical = device.kind === "physical";
     stream ??= new LiveStream(next.canvas, {
       acquire: (mode: StreamMode) => owner.stream(attached ?? device.serial, mode, attachedPhysical),
-      onSize: (width, height) => next.aspect(width, height),
+      onSize: (width, height) => {
+        next.aspect(width, height);
+        chrome?.update({ frame: { width, height } });
+      },
       onStatus: status => {
         next.status(status);
+        chrome?.update({ status });
         // A device that stopped under us: look again rather than show a dead picture.
         if (status.phase === "ended") void refresh();
       },
@@ -105,9 +112,10 @@ async function main(): Promise<void> {
   }
 
   function render(): void {
-    if (shell === null) return;
+    if (shell === null || chrome === null) return;
     const screen = deriveScreen(list, selection, failure, showPhysical);
-    shell.render(screen, list, selectedAvd, busy, problem, showPhysical);
+    shell.render(screen, problem);
+    chrome.update({ screen, list, selectedAvd, busy, showPhysical });
     if (screen.kind === "device" && screen.device.state === "online") select(screen.device);
     else if (attached !== null) detach();
   }
@@ -171,6 +179,15 @@ async function main(): Promise<void> {
   }
 
   shell = createShell(root as HTMLElement, {
+    boot: name => void bootAvd(name),
+    refresh: () => void refresh(),
+    nav: key => {
+      const message: InputMessage = { t: "k", key };
+      stream?.send(message);
+    },
+  });
+  const pane = shell;
+  chrome = mountChrome(app, shell, { screen: deriveScreen(list, selection, failure, showPhysical), list, selectedAvd, busy, showPhysical, status: null, frame: null }, {
     select: choice => {
       if ("serial" in choice) {
         selection = { ...selection, serial: choice.serial };
@@ -189,10 +206,7 @@ async function main(): Promise<void> {
       if (!show && list?.devices.find(device => device.serial === selection.serial)?.kind === "physical") selection = { ...selection, serial: null };
       render();
     },
-    nav: key => {
-      const message: InputMessage = { t: "k", key };
-      stream?.send(message);
-    },
+    driving: on => pane.driving(on),
   });
   unbind = bindInput(shell.canvas, message => stream?.send(message));
   window.addEventListener("pagehide", () => {
