@@ -2,15 +2,6 @@
 // Box in the hand, Escape puts the pen down to scroll and zoom (and the marks stay), a reloaded picture (a theme
 // change) neither takes the pen nor gives it back, a file that did not open offers nothing to draw with, and a
 // text offers the one Comment tool.
-//
-// A picture's notes live where they were made: a popover beside each new mark, a numbered badge once it is closed,
-// and ONE slim footer seated at the end of the pane that carries the send.
-//
-// The REAL `PaneExtras` is mounted (kit hooks, overlay, bar and footer included) in linkedom with the real react-dom
-// under `act`, into the DOM the pane builds around it: a pane holding the mode strip and the stage frame that holds
-// the picture. linkedom has no layout, so the overlay's box is stubbed; the pointer paths are the kit's own tests'
-// (`annotate-gesture.test.ts`) and a real browser's. Marks are placed from the keyboard, the way the overlay
-// supports without a pointer.
 import { dirname, join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, mock, test } from "bun:test";
 import type { App } from "@modelcontextprotocol/ext-apps";
@@ -136,6 +127,7 @@ beforeAll(async () => {
 });
 afterEach(async () => {
 	await env.cleanup();
+	while (inFlight > 0) await sleep(HOST_LATENCY_MS);
 	viewIs(false);
 	focused = null;
 	loads.length = 0;
@@ -152,14 +144,22 @@ afterAll(() => {
 interface StagedContext {
 	readonly content: readonly { readonly type: string; readonly text?: string }[];
 }
+const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+const HOST_LATENCY_MS = 10;
+const PAUSE_PASSED_MS = 1000;
 const staged: StagedContext[] = [];
+let inFlight = 0;
 const app = {
 	getHostCapabilities: () => ({ updateModelContext: { text: {}, image: {} } }),
 	updateModelContext: async (context: StagedContext) => {
 		staged.push(context);
+		inFlight += 1;
+		await sleep(HOST_LATENCY_MS);
+		inFlight -= 1;
 		return {};
 	},
 } as unknown as App;
+const textOf = (context: StagedContext | undefined): string => context?.content.find(block => block.type === "text")?.text ?? "";
 
 const tabOf = (kind: ViewerKind): DocTab => ({
 	path: `/files/sample.${kind}`,
@@ -193,8 +193,7 @@ interface Pane {
 	readonly tools: (string | null)[];
 	tool(id: string): HTMLElement | null;
 	readonly overlay: SVGElement | null;
-	/** The slim send row seated at the end of the pane. */
-	readonly footer: HTMLElement | null;
+	readonly notice: HTMLElement | null;
 	/** The numbered badge buttons over the marks, in the order they are read. */
 	readonly badges: HTMLButtonElement[];
 	/** What each badge is named. */
@@ -203,14 +202,8 @@ interface Pane {
 	readonly popover: HTMLElement | null;
 	/** The field in that popover. */
 	readonly field: HTMLTextAreaElement | null;
-	/** The footer's "Anything else for the agent?" field. */
-	readonly message: HTMLTextAreaElement | null;
-	/** The footer's send. */
-	readonly send: HTMLButtonElement | null;
-	/** What the send says: the ask, the count, or that it is staged. */
-	readonly sendLabel: string;
-	/** The line the footer says about the send. */
-	readonly status: string;
+	readonly noticeText: string;
+	readonly noticeTone: string | null;
 	/** How many marks the picture shows. */
 	readonly drawn: number;
 }
@@ -224,10 +217,9 @@ function pane(): Pane {
 	element.append(strip, frame);
 	env.document.body.append(element);
 	const radios = () => Array.from(strip.querySelectorAll<HTMLElement>('[role="radio"]'));
-	const footer = () => element.querySelector<HTMLElement>('[data-slot="annotation-footer"]');
+	const notice = () => element.querySelector<HTMLElement>('[data-slot="annotation-notice"]');
 	const badges = () => Array.from(picture.querySelectorAll<HTMLButtonElement>('button[data-slot="mark-badge"]'));
 	const popover = () => picture.querySelector<HTMLElement>('[data-slot="note-popover"]');
-	const send = () => footer()?.querySelector<HTMLButtonElement>("button") ?? null;
 	return {
 		frame,
 		strip,
@@ -254,8 +246,8 @@ function pane(): Pane {
 		get overlay() {
 			return picture.querySelector<SVGElement>("svg[data-markup-overlay]");
 		},
-		get footer() {
-			return footer();
+		get notice() {
+			return notice();
 		},
 		get badges() {
 			return badges();
@@ -269,17 +261,11 @@ function pane(): Pane {
 		get field() {
 			return popover()?.querySelector<HTMLTextAreaElement>("textarea") ?? null;
 		},
-		get message() {
-			return footer()?.querySelector<HTMLTextAreaElement>("textarea") ?? null;
+		get noticeText() {
+			return notice()?.textContent ?? "";
 		},
-		get send() {
-			return send();
-		},
-		get sendLabel() {
-			return send()?.querySelector(".dam-send-face:not(.dam-send-sizer)")?.textContent ?? "";
-		},
-		get status() {
-			return footer()?.querySelector('[role="status"]')?.textContent ?? "";
+		get noticeTone() {
+			return notice()?.getAttribute("data-tone") ?? null;
 		},
 		/** How many marks the picture shows. */
 		get drawn() {
@@ -360,10 +346,10 @@ async function type(field: HTMLTextAreaElement, text: string): Promise<void> {
 	});
 }
 
-/** Let a send run to its end: it is a chain of settled promises, so every turn of `act` carries it a step further. */
-async function until(done: () => boolean): Promise<void> {
-	for (let turn = 0; turn < 50 && !done(); turn += 1) await env.act(async () => {});
-	if (!done()) throw new Error("the send never came to an end");
+async function until(done: () => boolean, withinMs = 4000): Promise<void> {
+	const deadline = Date.now() + withinMs;
+	while (!done() && Date.now() < deadline) await env.act(() => sleep(25));
+	if (!done()) throw new Error("what the test waits for never happened");
 }
 
 /**
@@ -380,6 +366,77 @@ async function drawShape(at: Pane): Promise<void> {
 }
 
 const pointerEvents = (overlay: Element | null): string => /pointer-events:\s*(\w+)/.exec(overlay?.getAttribute("style") ?? "")?.[1] ?? "unset";
+
+function expectNoFooter(at: Pane): void {
+	expect(at.element.querySelector('[data-slot="annotation-footer"]')).toBeNull();
+	expect(at.element.querySelector("textarea")).toBeNull();
+	expect(Array.from(at.element.querySelectorAll("button")).some(button => /request edits/i.test(button.textContent ?? ""))).toBe(false);
+}
+
+function commentField(at: Pane): HTMLTextAreaElement {
+	const field = at.frame.querySelector<HTMLTextAreaElement>('[data-slot="note-popover-field"]');
+	if (field === null) throw new Error("no comment is open");
+	return field;
+}
+
+async function withSelectedPassage(at: Pane, body: (paints: Map<string, Range[]>) => Promise<void>): Promise<void> {
+	const text = slotOf("viewer-text-root");
+	text.textContent = "The quick brown fox";
+	at.frame.append(text);
+	const node = text.firstChild as Text;
+	const selected = {
+		startContainer: node, startOffset: 4, endContainer: node, endOffset: 15,
+		commonAncestorContainer: node, collapsed: false,
+	} as Range;
+	let selection: Range | null = selected;
+	const originalSelection = Object.getOwnPropertyDescriptor(env.document, "getSelection");
+	const originalRange = env.document.createRange;
+	const originalCSS = Object.getOwnPropertyDescriptor(globalThis, "CSS");
+	const originalHighlight = Object.getOwnPropertyDescriptor(globalThis, "Highlight");
+	const paints = new Map<string, Range[]>();
+	class HighlightProbe {
+		readonly ranges: Range[];
+		constructor(...ranges: Range[]) { this.ranges = ranges; }
+	}
+	Object.defineProperty(env.document, "getSelection", { configurable: true, value: () => ({
+		rangeCount: selection === null ? 0 : 1,
+		isCollapsed: selection === null,
+		getRangeAt: () => selection,
+		removeAllRanges: () => { selection = null; },
+	}) });
+	env.document.createRange = () => {
+		let startNode: Node = node;
+		let startOffset = 0;
+		let endNode: Node = node;
+		let endOffset = 0;
+		return {
+			setStart(value: Node, offset: number) { startNode = value; startOffset = offset; },
+			setEnd(value: Node, offset: number) { endNode = value; endOffset = offset; },
+			get startContainer() { return startNode; },
+			get startOffset() { return startOffset; },
+			get endContainer() { return endNode; },
+			get endOffset() { return endOffset; },
+			get collapsed() { return startNode === endNode && startOffset === endOffset; },
+			getClientRects: () => [{ left: 40, right: 120, top: 20, bottom: 38, width: 80, height: 18 }],
+		} as unknown as Range;
+	};
+	Object.defineProperty(globalThis, "CSS", { configurable: true, value: { highlights: {
+		set: (name: string, value: HighlightProbe) => paints.set(name, value.ranges),
+		delete: (name: string) => paints.delete(name),
+	} } });
+	Object.defineProperty(globalThis, "Highlight", { configurable: true, value: HighlightProbe });
+	try {
+		await body(paints);
+	} finally {
+		env.document.createRange = originalRange;
+		if (originalSelection) Object.defineProperty(env.document, "getSelection", originalSelection);
+		else Reflect.deleteProperty(env.document, "getSelection");
+		if (originalCSS) Object.defineProperty(globalThis, "CSS", originalCSS);
+		else Reflect.deleteProperty(globalThis, "CSS");
+		if (originalHighlight) Object.defineProperty(globalThis, "Highlight", originalHighlight);
+		else Reflect.deleteProperty(globalThis, "Highlight");
+	}
+}
 
 describe("a picture, once its layer is up", () => {
 	test("has the Box in the hand and its bar in the strip, so a drag draws at once", async () => {
@@ -518,13 +575,13 @@ describe("a picture, once its layer is up", () => {
 		{ held: "a Circle picked with 3", before: () => press(win(), "3"), checked: ["ellipse"], tool: "ellipse", pointer: "auto" },
 	];
 	for (const row of reloads) {
-		test(`keeps ${row.held} when the picture is re-mounted, and the marks and the footer follow it`, async () => {
+		test(`keeps ${row.held} when the picture is re-mounted, and the marks and the notice follow it`, async () => {
 			const at = pane();
 			const view = await mountAt(at);
 			await drawShape(at);
 			await row.before();
-			const footer = at.footer;
-			expect(footer).not.toBeNull();
+			const notice = at.notice;
+			expect(notice).not.toBeNull();
 
 			await view.render(layer(at, { ready: false }));
 			at.remount();
@@ -533,64 +590,54 @@ describe("a picture, once its layer is up", () => {
 			expect(at.checked).toEqual(row.checked);
 			expect(at.overlay?.getAttribute("data-tool")).toBe(row.tool);
 			expect(pointerEvents(at.overlay)).toBe(row.pointer);
-			// The overlay is in the picture that is on screen now, not the one the renderer threw away.
 			expect(at.drawn).toBe(1);
 			expect(at.badges).toHaveLength(1);
-			// The footer is the pane's, not the picture's: the renderer starting over leaves the very same row, still
-			// counting the mark.
-			expect(at.footer === footer).toBe(true);
-			expect(at.sendLabel).toBe("Request edits · 1");
+			expect(at.notice === notice).toBe(true);
 		});
 	}
 });
 
 describe("a picture's notes, where they were made", () => {
-	test("seats ONE footer at the end of the pane, not in the strip or the frame, from the moment the layer is up", async () => {
+	test("seats ONE empty notice at the end of the pane, not in the strip or the frame, from the moment the layer is up", async () => {
 		const at = pane();
 		await mountAt(at);
 
-		// No mark yet, and the way to send is already there.
-		const footers = env.document.querySelectorAll('[data-slot="annotation-footer"]');
-		expect(footers.length).toBe(1);
-		const footer = at.footer;
-		expect(footer?.parentElement === at.element).toBe(true);
-		expect(at.element.lastElementChild === footer).toBe(true);
-		expect(at.strip.contains(footer)).toBe(false);
-		expect(at.frame.contains(footer)).toBe(false);
-		expect(at.message?.getAttribute("placeholder")).toBe("Anything else for the agent?");
-		expect(at.sendLabel).toBe("Request edits");
-		expect(at.send?.hasAttribute("disabled")).toBe(true);
+		expect(env.document.querySelectorAll('[data-slot="annotation-notice"]').length).toBe(1);
+		const notice = at.notice;
+		expect(notice?.parentElement === at.element).toBe(true);
+		expect(at.element.lastElementChild === notice).toBe(true);
+		expect(at.strip.contains(notice)).toBe(false);
+		expect(at.frame.contains(notice)).toBe(false);
+		expect(at.noticeText).toBe("");
 	});
 
-	test("counts the marks on its button and enables it, and the very same footer stays seated as notes are added", async () => {
+	test("has no footer, no message field and no Request edits button, with a mark drawn or not", async () => {
 		const at = pane();
 		await mountAt(at);
-		const footer = at.footer;
+		expectNoFooter(at);
 
 		await drawShape(at);
-		expect(at.sendLabel).toBe("Request edits · 1");
-		expect(at.send?.hasAttribute("disabled")).toBe(false);
-		expect(at.footer === footer).toBe(true);
-
-		await drawShape(at);
-		expect(at.sendLabel).toBe("Request edits · 2");
-		expect(at.send?.hasAttribute("disabled")).toBe(false);
-		// Adding a note does not rebuild the row (a rebuilt one would lose the message a person was typing in it).
-		expect(at.footer === footer).toBe(true);
-		expect(env.document.querySelectorAll('[data-slot="annotation-footer"]').length).toBe(1);
-		expect(at.element.lastElementChild === footer).toBe(true);
+		const field = noteField(at);
+		await type(field, "tighten the corner");
+		await pressIn(field, "Enter");
+		expect(at.popover === null).toBe(true);
+		expect(at.badges).toHaveLength(1);
+		expectNoFooter(at);
 	});
 
-	test("keeps the bar's hint in the strip: how to draw while a tool is in the hand, how to start while none is", async () => {
+	test("carries no hint in the strip: the bar is the tools alone, with a tool in the hand, with the pen down and with another tool", async () => {
 		const at = pane();
 		await mountAt(at);
-		const hint = () => at.strip.querySelector('[data-slot="annotation-toolbar-hint"]')?.textContent ?? "";
+		const hints = () => at.strip.querySelectorAll('[data-slot="annotation-toolbar-hint"]').length;
 
-		expect(hint()).toContain("Drag to draw");
+		expect(at.tools).toEqual(["pin", "box", "ellipse", "arrow", "pen"]);
+		expect(hints()).toBe(0);
 		await press(win(), "Escape");
-		expect(hint()).toBe("Pick a tool to draw");
+		expect(at.checked).toEqual([]);
+		expect(hints()).toBe(0);
 		await click(at.tool("ellipse"));
-		expect(hint()).toContain("Drag to draw");
+		expect(at.checked).toEqual(["ellipse"]);
+		expect(hints()).toBe(0);
 	});
 
 	test("opens a note beside a new mark, its field named for the mark and holding the focus", async () => {
@@ -659,82 +706,100 @@ describe("a picture's notes, where they were made", () => {
 		expect(at.checked).toEqual(["ellipse"]);
 	});
 
-	test("deletes the mark with the note's trash: the badge goes and the footer counts it out", async () => {
+	test("deletes the mark with the note's trash: its badge goes", async () => {
 		const at = pane();
 		await mountAt(at);
 		await drawShape(at);
 		await drawShape(at);
-		expect(at.sendLabel).toBe("Request edits · 2");
-		const footer = at.footer;
 
-		// The second mark's note is the one open.
 		await click(at.popover?.querySelector('[data-slot="note-popover-delete"]') ?? null);
 
 		expect(at.popover === null).toBe(true);
 		expect(at.drawn).toBe(1);
 		expect(at.badgeNames).toEqual(["Note 1: no note"]);
-		expect(at.sendLabel).toBe("Request edits · 1");
 
 		await click(at.badges[0] ?? null);
 		await click(at.popover?.querySelector('[data-slot="note-popover-delete"]') ?? null);
 		expect(at.drawn).toBe(0);
 		expect(at.badges).toHaveLength(0);
-		expect(at.sendLabel).toBe("Request edits");
-		expect(at.send?.hasAttribute("disabled")).toBe(true);
-		expect(at.footer === footer).toBe(true);
 	});
 
-	test("types in the footer's message field as a person, not as a tool: a number there is a letter", async () => {
-		const at = pane();
-		await mountAt(at);
-
-		await pressIn(at.message as HTMLTextAreaElement, "3");
-
-		expect(at.checked).toEqual(["box"]);
-		expect(at.overlay?.getAttribute("data-tool")).toBe("box");
-		// Control: at the picture the same key picks the Circle.
-		await press(at.overlay as SVGElement, "3");
-		expect(at.checked).toEqual(["ellipse"]);
-	});
-
-	test("stages the notes and the message of the picture on Request edits, and says it is staged", async () => {
+	test("stages the notes of the picture by itself once the person pauses, and again when a note changes", async () => {
 		const at = pane();
 		await mountAt(at);
 		await drawShape(at);
-		await type(noteField(at), "make it brighter");
-		await type(at.message as HTMLTextAreaElement, "keep the sky");
+		const field = noteField(at);
+		await type(field, "make it red");
+		await pressIn(field, "Enter");
 		expect(staged).toHaveLength(0);
 
-		await click(at.send);
-		await until(() => at.sendLabel !== "Request edits · 1");
+		await until(() => staged.length === 1 && inFlight === 0);
 
-		expect(staged).toHaveLength(1);
-		const text = staged[0]?.content.find(block => block.type === "text")?.text ?? "";
-		expect(text).toContain("make it brighter");
-		expect(text).toContain("keep the sky");
-		// The bytes are this tab's own file, asked for once.
+		expect(textOf(staged[0])).toContain("make it red");
 		expect(loads.map(tab => tab.path)).toEqual(["/files/sample.image"]);
-		expect(at.sendLabel).toBe("Added · press Enter in the chat");
-		expect(at.send?.hasAttribute("disabled")).toBe(true);
-	});
+		expect(at.noticeText).toBe("");
 
-	test("says in the footer when the picture could not be read, stages nothing and keeps the marks", async () => {
+		await click(at.badges[0] ?? null);
+		await type(noteField(at), "make it blue");
+		await pressIn(noteField(at), "Enter");
+		expect(staged).toHaveLength(1);
+		expect(at.noticeText).toBe("");
+
+		await until(() => staged.length === 2 && inFlight === 0);
+
+		expect(textOf(staged[1])).toContain("make it blue");
+		expect(textOf(staged[1])).not.toContain("make it red");
+		expect(at.noticeText).toBe("");
+	}, 10_000);
+
+	test("takes the request back when the last mark is removed, and the notice stays empty", async () => {
+		const at = pane();
+		await mountAt(at);
+		await drawShape(at);
+		const field = noteField(at);
+		await type(field, "make it red");
+		await pressIn(field, "Enter");
+		await until(() => staged.length === 1 && inFlight === 0);
+
+		await click(at.badges[0] ?? null);
+		await click(at.popover?.querySelector('[data-slot="note-popover-delete"]') ?? null);
+		await until(() => staged.length === 2 && inFlight === 0);
+
+		expect(at.drawn).toBe(0);
+		expect(staged[1]).toEqual({ content: [] });
+		expect(at.noticeText).toBe("");
+	}, 10_000);
+
+	test("says in the notice when the picture could not be read, keeps the marks, and asks again only once a note changes", async () => {
 		bytesFailure = new Error("The file could not be read.");
 		const at = pane();
 		await mountAt(at);
 		await drawShape(at);
-		await type(noteField(at), "make it brighter");
+		const field = noteField(at);
+		await type(field, "make it brighter");
+		await pressIn(field, "Enter");
 
-		await click(at.send);
-		await until(() => at.status !== "");
+		await until(() => at.noticeText !== "");
 
-		expect(at.status).toContain("The file could not be read.");
+		expect(at.noticeText).toContain("The file could not be read.");
+		expect(at.noticeTone).toBe("error");
 		expect(staged).toHaveLength(0);
-		// Nothing was lost, and it can be asked again.
 		expect(at.badgeNames).toEqual(["Note 1: make it brighter"]);
-		expect(at.sendLabel).toBe("Request edits · 1");
-		expect(at.send?.hasAttribute("disabled")).toBe(false);
-	});
+
+		await env.act(() => sleep(PAUSE_PASSED_MS));
+		expect(loads).toHaveLength(1);
+		expect(at.noticeText).toContain("The file could not be read.");
+
+		bytesFailure = null;
+		await click(at.badges[0] ?? null);
+		await type(noteField(at), "make it brighter still");
+		await pressIn(noteField(at), "Enter");
+		await until(() => staged.length === 1 && inFlight === 0);
+
+		expect(textOf(staged[0])).toContain("make it brighter still");
+		expect(loads).toHaveLength(2);
+		expect(at.noticeText).toBe("");
+	}, 15_000);
 
 	test("keeps a tab that is not showing out of the keys: undo, the tool keys and Escape are the one on screen's", async () => {
 		const hidden = pane();
@@ -759,17 +824,41 @@ describe("a picture's notes, where they were made", () => {
 		await press(win(), "Escape");
 		expect(showing.checked).toEqual([]);
 		expect(hidden.checked).toEqual(["box"]);
-		expect(hidden.sendLabel).toBe("Request edits · 1");
 	});
+
+	test("stages only the tab that is showing with its layer up: a hidden tab's marks and a layer taken down stay unsent", async () => {
+		const hidden = pane();
+		const down = pane();
+		const showing = pane();
+		const hiddenView = await mountAt(hidden);
+		await drawShape(hidden);
+		await type(noteField(hidden), "from the hidden tab");
+		await hiddenView.render(layer(hidden, { active: false }));
+		const downView = await mountAt(down);
+		await drawShape(down);
+		await type(noteField(down), "from the layer taken down");
+		await downView.render(layer(down, { mode: null }));
+		await mountAt(showing);
+		await drawShape(showing);
+		await type(noteField(showing), "from the tab on screen");
+
+		await until(() => staged.some(context => textOf(context).includes("from the tab on screen")) && inFlight === 0);
+
+		expect(staged).toHaveLength(1);
+		expect(textOf(staged[0])).not.toContain("from the hidden tab");
+		expect(textOf(staged[0])).not.toContain("from the layer taken down");
+		expect(hidden.badgeNames).toEqual(["Note 1: from the hidden tab"]);
+		expect(down.badgeNames).toEqual(["Note 1: from the layer taken down"]);
+	}, 10_000);
 });
 
 describe("a file that did not open", () => {
-	test("offers no bar, no footer and no pen, and the number keys arm nothing", async () => {
+	test("offers no bar, no notice and no pen, and the number keys arm nothing", async () => {
 		const at = pane();
 		const view = await mountAt(at, { mode: null });
 
 		expect(at.bar === null).toBe(true);
-		expect(at.footer === null).toBe(true);
+		expect(at.notice === null).toBe(true);
 		expect(at.strip.children.length).toBe(0);
 		expect(at.overlay?.getAttribute("data-tool")).toBe("none");
 		expect(pointerEvents(at.overlay)).toBe("none");
@@ -779,7 +868,7 @@ describe("a file that did not open", () => {
 		// The file opens on a second try: the layer comes up with the Box in the hand.
 		await view.render(layer(at, { mode: "marks" }));
 		expect(at.bar).not.toBeNull();
-		expect(at.footer).not.toBeNull();
+		expect(at.notice).not.toBeNull();
 		expect(at.checked).toEqual(["box"]);
 		expect(at.overlay?.getAttribute("data-tool")).toBe("box");
 	});
@@ -792,20 +881,20 @@ describe("a file that did not open", () => {
 
 		await view.render(layer(at, { mode: null }));
 		expect(at.bar === null).toBe(true);
-		expect(at.footer === null).toBe(true);
+		expect(at.notice === null).toBe(true);
 		expect(at.overlay?.getAttribute("data-tool")).toBe("none");
 		expect(at.drawn).toBe(1);
 
 		// Back up, the marks are the person's still, and the pen is the Box again, not the Circle of before.
 		await view.render(layer(at, { mode: "marks" }));
 		expect(at.badges).toHaveLength(1);
-		expect(at.sendLabel).toBe("Request edits · 1");
+		expect(at.notice).not.toBeNull();
 		expect(at.checked).toEqual(["box"]);
 	});
 });
 
 describe("a text", () => {
-	test("offers Comment and a send footer", async () => {
+	test("offers the one armed Comment tool with no hint, no footer and no message field", async () => {
 		const at = pane();
 		await mountAt(at, { mode: "comments" }, "markdown");
 
@@ -813,9 +902,10 @@ describe("a text", () => {
 		expect(at.tools).toEqual(["comment"]);
 		expect(at.checked).toEqual(["comment"]);
 		expect(at.tool("comment")?.getAttribute("title")).toContain("Ctrl+Alt+M");
-		expect(at.footer).not.toBeNull();
-		expect(at.message?.getAttribute("placeholder")).toBe("Anything else for the agent?");
-		expect(at.sendLabel).toBe("Request edits");
+		expect(at.strip.querySelector('[data-slot="annotation-toolbar-hint"]')).toBeNull();
+		expect(at.element.lastElementChild === at.notice).toBe(true);
+		expect(at.noticeText).toBe("");
+		expectNoFooter(at);
 
 		await click(at.tool("comment"));
 		expect(at.checked).toEqual(["comment"]);
@@ -823,52 +913,7 @@ describe("a text", () => {
 
 	test("an open or hovered passage owns the active highlight, and leaving restores the ordinary highlight", async () => {
 		const at = pane();
-		const text = slotOf("viewer-text-root");
-		text.textContent = "The quick brown fox";
-		at.frame.append(text);
-		const node = text.firstChild as Text;
-		const selected = {
-			startContainer: node, startOffset: 4, endContainer: node, endOffset: 15,
-			commonAncestorContainer: node, collapsed: false,
-		} as Range;
-		let selection: Range | null = selected;
-		const originalSelection = Object.getOwnPropertyDescriptor(env.document, "getSelection");
-		const originalRange = env.document.createRange;
-		const originalCSS = Object.getOwnPropertyDescriptor(globalThis, "CSS");
-		const originalHighlight = Object.getOwnPropertyDescriptor(globalThis, "Highlight");
-		const paints = new Map<string, Range[]>();
-		class HighlightProbe {
-			readonly ranges: Range[];
-			constructor(...ranges: Range[]) { this.ranges = ranges; }
-		}
-		Object.defineProperty(env.document, "getSelection", { configurable: true, value: () => ({
-			rangeCount: selection === null ? 0 : 1,
-			isCollapsed: selection === null,
-			getRangeAt: () => selection,
-			removeAllRanges: () => { selection = null; },
-		}) });
-		env.document.createRange = () => {
-			let startNode: Node = node;
-			let startOffset = 0;
-			let endNode: Node = node;
-			let endOffset = 0;
-			return {
-				setStart(value: Node, offset: number) { startNode = value; startOffset = offset; },
-				setEnd(value: Node, offset: number) { endNode = value; endOffset = offset; },
-				get startContainer() { return startNode; },
-				get startOffset() { return startOffset; },
-				get endContainer() { return endNode; },
-				get endOffset() { return endOffset; },
-				get collapsed() { return startNode === endNode && startOffset === endOffset; },
-				getClientRects: () => [{ left: 40, right: 120, top: 20, bottom: 38, width: 80, height: 18 }],
-			} as unknown as Range;
-		};
-		Object.defineProperty(globalThis, "CSS", { configurable: true, value: { highlights: {
-			set: (name: string, value: HighlightProbe) => paints.set(name, value.ranges),
-			delete: (name: string) => paints.delete(name),
-		} } });
-		Object.defineProperty(globalThis, "Highlight", { configurable: true, value: HighlightProbe });
-		try {
+		await withSelectedPassage(at, async paints => {
 			await mountAt(at, { mode: "comments" }, "markdown");
 			await press(env.document, "m", { ctrlKey: true, altKey: true });
 			expect(at.frame.querySelector('[data-slot="note-popover-field"]')).not.toBeNull();
@@ -883,22 +928,29 @@ describe("a text", () => {
 			await env.act(async () => void badge?.dispatchEvent(new (win().Event)("pointerout", { bubbles: true })));
 			expect(paints.get("dimension-comment-active") ?? []).toHaveLength(0);
 			expect(paints.get("dimension-comment")).toHaveLength(1);
-		} finally {
-			env.document.createRange = originalRange;
-			if (originalSelection) Object.defineProperty(env.document, "getSelection", originalSelection);
-			else Reflect.deleteProperty(env.document, "getSelection");
-			if (originalCSS) Object.defineProperty(globalThis, "CSS", originalCSS);
-			else Reflect.deleteProperty(globalThis, "CSS");
-			if (originalHighlight) Object.defineProperty(globalThis, "Highlight", originalHighlight);
-			else Reflect.deleteProperty(globalThis, "Highlight");
-		}
+		});
 	});
 
-	test("offers neither bar nor footer when the file did not open", async () => {
+	test("stages a comment with its note by itself once the person pauses", async () => {
+		const at = pane();
+		await withSelectedPassage(at, async () => {
+			await mountAt(at, { mode: "comments" }, "markdown");
+			await press(env.document, "m", { ctrlKey: true, altKey: true });
+			await type(commentField(at), "tighten this");
+			expect(staged).toHaveLength(0);
+
+			await until(() => staged.length === 1 && inFlight === 0);
+
+			expect(textOf(staged[0])).toContain("tighten this");
+			expect(at.noticeText).toBe("");
+		});
+	}, 10_000);
+
+	test("offers neither bar nor notice when the file did not open", async () => {
 		const at = pane();
 		await mountAt(at, { mode: null }, "markdown");
 
 		expect(at.bar === null).toBe(true);
-		expect(at.footer).toBeNull();
+		expect(at.notice).toBeNull();
 	});
 });

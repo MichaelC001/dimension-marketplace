@@ -31,6 +31,7 @@ import {
 	humanize,
 	inFacet,
 	isEditable,
+	isUnreadable,
 	type RosterAgent,
 	TIER_LABEL,
 } from "./roster";
@@ -166,6 +167,7 @@ const AgentCard = memo(function AgentCard({
 	catalog,
 	voice,
 	busy,
+	unreadable,
 	onOpen,
 	onToggle,
 }: {
@@ -176,6 +178,7 @@ const AgentCard = memo(function AgentCard({
 	readonly face: FaceBinding;
 	readonly bridged: BridgedPresences | undefined;
 	readonly catalog: CatalogFact | undefined;
+	readonly unreadable: boolean;
 	readonly voice: AgentVoice | undefined;
 	readonly busy: boolean;
 	readonly onOpen: ((name: string) => void) | undefined;
@@ -225,6 +228,7 @@ const AgentCard = memo(function AgentCard({
 						<LivePill state={state} count={state === "needs-you" ? activity.needsYou : activity.working} />
 					</h3>
 					<p className="m-0 line-clamp-2 min-h-[2lh] text-fr-sm leading-relaxed text-pretty text-fr-text-2">{description || "No description yet."}</p>
+					{unreadable ? <p className="m-0 text-fr-xs text-fr-text-3">The page cannot read this agent's file from here, so it is read-only. If it is your own agent, check that its folder is under general-agents/.</p> : null}
 				</div>
 				{onToggle !== undefined ? (
 					<span className="relative z-[1] pt-0.5">
@@ -369,6 +373,7 @@ function ProposalsBanner({
 export function AgentsHome({
 	roster,
 	loading,
+	listingRead,
 	listingError,
 	activity,
 	usage,
@@ -388,6 +393,7 @@ export function AgentsHome({
 }: {
 	readonly roster: readonly RosterAgent[];
 	readonly loading: boolean;
+	readonly listingRead: boolean;
 	readonly listingError: string | undefined;
 	readonly activity: ReadonlyMap<string, AgentActivity>;
 	readonly usage: UsageFact | undefined;
@@ -428,6 +434,7 @@ export function AgentsHome({
 			catalog={catalog}
 			voice={voices.get(agent.name)}
 			busy={busy.has(agent.name)}
+			unreadable={isUnreadable(agent, listingRead)}
 			onOpen={agent.listed !== undefined ? onOpen : undefined}
 			onToggle={configure !== undefined && isEditable(agent) && agent.fact !== undefined ? toggle : undefined}
 		/>

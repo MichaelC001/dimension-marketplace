@@ -78,6 +78,7 @@ const nameOf = (control: Element): string => {
 	return label.endsWith("Reset zoom") ? "Reset zoom" : label;
 };
 const focusable = (bar: Element): Element[] => Array.from(bar.querySelectorAll(FOCUSABLE)).filter(control => !control.hasAttribute("disabled"));
+const nameSpan = (bar: HTMLElement): HTMLSpanElement | undefined => Array.from(one(bar, FILE).querySelectorAll("span")).find(span => span.textContent === NAME);
 
 const win = (): Window & typeof globalThis => env.document.defaultView as Window & typeof globalThis;
 
@@ -122,7 +123,6 @@ describe("Copy path", () => {
 		const copies = bar.querySelectorAll(COPY);
 		expect(copies).toHaveLength(1);
 		const copy = one(bar, COPY);
-		// Last in the file group: it follows the name and the size in reading order, and a bar of the controls is not where it lives.
 		expect(file.lastElementChild).toBe(copy);
 		expect(one(bar, CONTROLS).contains(copy)).toBe(false);
 		expect(copy.getAttribute("title")).toBe("Copy path");
@@ -162,11 +162,7 @@ describe("the wrap rules", () => {
 	test.each<[string, (bar: HTMLElement) => Element | undefined, RegExp[]]>([
 		["the bar wraps, so a View too narrow for the file and the controls on one line puts the controls underneath", bar => bar, [/^flex$/, /^flex-wrap$/]],
 		["the file group is the one that gives: it can shrink to nothing (min-w-0), takes the free width (flex-1) and starts from a basis", bar => one(bar, FILE), [/^min-w-0$/, /^flex-1$/, /^basis-/]],
-		[
-			"the name truncates: it may be narrower than its text (min-w-0), and says the whole path when hovered",
-			bar => Array.from(one(bar, FILE).querySelectorAll("span")).find(span => span.getAttribute("title") === PATH),
-			[/^min-w-0$/, /^truncate$/],
-		],
+		["the name truncates: it may be narrower than its text (min-w-0)", bar => nameSpan(bar), [/^min-w-0$/, /^truncate$/]],
 		["the controls group wraps within the bar (flex-wrap, max-w-full) rather than overflowing it", bar => one(bar, CONTROLS), [/^flex-wrap$/, /^max-w-full$/]],
 	])("%s", async (_what, find, required) => {
 		const { bar } = await show(PDF);
@@ -176,10 +172,25 @@ describe("the wrap rules", () => {
 		expect(missing).toEqual([]);
 	});
 
-	test("the name is the file's name, and the title it carries is the path", async () => {
+	test.each<[string, Over, string]>([
+		["a size of megabytes (a PDF)", PDF, `${PATH} · 2.3 MB`],
+		["a size under a kilobyte", { kind: "text", size: 900 }, `${PATH} · 900 B`],
+		["no size (a file that did not open)", {}, PATH],
+	])("the name's title is the path, and the size after it when one is known: %s", async (_what, over, title) => {
+		const { bar } = await show(over);
+		expect(nameSpan(bar)?.getAttribute("title")).toBe(title);
+	});
+
+	test("the size is only in the name's title: it is not drawn beside the name", async () => {
 		const { bar } = await show(PDF);
-		const name = Array.from(one(bar, FILE).querySelectorAll("span")).find(span => span.getAttribute("title") === PATH);
-		expect(name?.textContent).toBe(NAME);
+		expect(bar.textContent).not.toMatch(/\d\s*(B|KB|MB|GB|TB)\b/);
+	});
+
+	test("says in visible text how much of a large text file was read, and says nothing when all of it was", async () => {
+		const whole = await show({ kind: "text", size: 52_000_000 });
+		expect(one(whole.bar, FILE).textContent).not.toContain("showing the first");
+		const head = await show({ kind: "text", size: 52_000_000, shownBytes: 1_048_576 });
+		expect(one(head.bar, FILE).textContent).toContain("showing the first 1.0 MB");
 	});
 });
 

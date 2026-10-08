@@ -26,7 +26,7 @@ import {
 	markNear,
 } from "@dimension/mcp-app-kit/annotate";
 import {
-	AnnotationFooter,
+	AnnotationNotice,
 	AnnotationToolbar,
 	markupToolGroups,
 	type ToolGroupDef,
@@ -156,6 +156,7 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode }: PaneExtr
 		duration,
 		...(grabber === null ? {} : { grabFrame: (at: number) => grabber.grab(insideFrame(at, frameSeconds())) }),
 		stillSize,
+		autoStage: active && mode === "timeline",
 	});
 	const { marks, addMark, addSpan, addShape, writing, openNote, closeNote } = session;
 	const full = marks.length >= MAX_TIMELINE_MARKS;
@@ -443,13 +444,7 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode }: PaneExtr
 		],
 		[full, failed, inPoint, kind, tool, penUp, markHere, stretch, undo, redo, session.canUndo, session.canRedo, session.clear, marks.length],
 	);
-	const toolbarHint = full
-		? FULL_SENTENCE
-		: kind === "audio"
-			? "Double-click the wave to add a note"
-			: tool === null
-				? "Pick a tool to draw"
-				: "Drag to draw · press the tool again, or Esc, to play and scroll";
+	const toolbarHint = full ? FULL_SENTENCE : undefined;
 
 	return (
 		<>
@@ -499,14 +494,7 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode }: PaneExtr
 			) : null}
 			{mode === "timeline" && (markable || marks.length > 0) ? (
 				<Footer frame={frame}>
-					<AnnotationFooter
-						message={session.message}
-						onMessage={session.setMessage}
-						onSend={() => void session.send()}
-						send={{ busy: session.sending, staged: session.staged }}
-						status={session.status}
-						count={marks.length}
-					/>
+					<AnnotationNotice status={session.status} />
 				</Footer>
 			) : null}
 		</>

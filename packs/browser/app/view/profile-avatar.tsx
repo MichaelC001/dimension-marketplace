@@ -1,5 +1,5 @@
 // A profile's face: its colour as a disc, with the emoji the person chose or the label's first letter. The same rule draws it in the
-// chip, the menu, the start page and the dock panel (src/profile-look.ts). A browser that is not a profile (Private, your own Chrome)
+// chip, the menu and the start page (src/profile-look.ts). A browser that is not a profile (Private, your own Chrome)
 // is the same disc in grey with a glyph.
 import type { CSSProperties } from "react";
 import { Icon, type IconName } from "@fraym/ui/icons";

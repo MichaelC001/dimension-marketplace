@@ -386,7 +386,7 @@ function externalUrl(value: string): string | undefined {
  * so a renderer that mounts content lazily (a slide at a time) calls it per piece.
  *
  * CSS is not scrubbed. It cannot run script, and the View's CSP (`connect-src
- * 'self'`, `img-src`/`font-src` limited to `self data: blob:`) is what stops a
+ * 'self'`, `img-src`/`font-src` limited to `self data: blob:` and the viewer's media origin) is what stops a
  * stylesheet fetching; a scrubber that misses one CSS escape would only be
  * false comfort beside it.
  */

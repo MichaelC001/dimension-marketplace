@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "simulator": {
+      "command": "node",
+      "args": ["app/server.mjs"],
+      "env": { "NODE_NO_WARNINGS": "1" }
+    }
+  }
+}

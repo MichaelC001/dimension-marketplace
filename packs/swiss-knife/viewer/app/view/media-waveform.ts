@@ -302,6 +302,14 @@ export function waveformAllowed(file: Uint8Array, claimedSeconds: number): boole
 	return mp3 !== undefined && mp3Allowed(mp3, claimedSeconds);
 }
 
+export const WAVEFORM_PROBE_BYTES = 16;
+
+export function waveformCouldApply(head: Uint8Array, claimedSeconds: number): boolean {
+	if (text4(head, 0) === "RIFF") return true;
+	if (!(claimedSeconds > 0 && claimedSeconds <= WAVEFORM_MP3_MAX_SECONDS)) return false;
+	return text4(head, 0).startsWith("ID3") || (head[0] === 0xff && ((head[1] ?? 0) & 0xe0) === 0xe0);
+}
+
 export interface PeakOptions {
 	readonly signal?: AbortSignal;
 	/** Give the thread back; the default waits a macrotask. */

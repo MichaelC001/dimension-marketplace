@@ -495,6 +495,7 @@ describe("loadPeaks: the file is held to the length the player gave, before the 
 	};
 	/** The MP3 above with one stray byte before its first frame: a sniffer could read other bytes than the ones that were counted. */
 	const STRAY = Uint8Array.from([0x00, ...SONG]);
+	const ID3_SONG = Uint8Array.from([...ascii("ID3"), 3, 0, 0, 0, 0, 0, 0, ...SONG]);
 	const WAV_RATE = 22_050;
 	/** An uncompressed WAV (mono, 16-bit) of `seconds`: its 44-byte header, then silence. */
 	const wavOf = (seconds: number): Uint8Array => {
@@ -518,21 +519,23 @@ describe("loadPeaks: the file is held to the length the player gave, before the 
 
 	let seq = 0;
 	/** An app whose `read_file_chunk` serves `file`, and a tab for it no other test has read (the bytes of a document are cached per key). */
-	function served(file: Uint8Array): { readonly app: App; readonly tab: DocTab; readonly reads: number[] } {
+	function served(file: Uint8Array): { readonly app: App; readonly tab: DocTab; readonly reads: number[]; readonly lengths: number[] } {
 		seq += 1;
 		const reads: number[] = [];
+		const lengths: number[] = [];
 		const app = {
 			callServerTool: async (call: { readonly arguments?: Record<string, unknown> }) => {
 				const offset = Number(call.arguments?.offset ?? 0);
 				const length = Number(call.arguments?.length ?? 0);
 				reads.push(offset);
+				lengths.push(length);
 				const part = file.slice(offset, offset + length);
 				return { content: [], structuredContent: { base64: Buffer.from(part).toString("base64"), offset, length: part.length, size: file.length, eof: offset + part.length >= file.length } };
 			},
 		} as unknown as App;
 		const filename = `take-${seq}.mp3`;
 		const tab: DocTab = { key: `loadpeaks-${seq}`, path: `/music/${filename}`, filename, kind: "audio", size: file.length, mtimeMs: 1, revision: 0, annotateRequests: 0 };
-		return { app, tab, reads };
+		return { app, tab, reads, lengths };
 	}
 
 	/** What the engine's decoder was asked and made to do. */
@@ -587,6 +590,46 @@ describe("loadPeaks: the file is held to the length the player gave, before the 
 		expect(await loadPeaks(app, tab, new AbortController().signal, said)).toBeNull();
 		expect(heard.constructed).toBe(0);
 		expect(heard.decoded).toHaveLength(0);
+	});
+
+	test.each<[string, Uint8Array, number]>([
+		["an Ogg", containerOf(...ascii("OggS"), 0, 2), 10],
+		["a FLAC", containerOf(...ascii("fLaC"), 0, 0, 0, 0x22), 10],
+		["an M4A", containerOf(0, 0, 0, 0x20, ...ascii("ftypM4A ")), 10],
+		["a WebM", containerOf(0x1a, 0x45, 0xdf, 0xa3, 0x9f), 10],
+		["an ID3-fronted MP3 and a player that says 600 s", ID3_SONG, 600],
+		["an MP3 that starts on a frame and a player that says 600 s", SONG, 600],
+		["an ID3-fronted MP3 and a player that has not learned its length", ID3_SONG, 0],
+		["an ID3-fronted MP3 and a player that never says how long it is", ID3_SONG, Number.POSITIVE_INFINITY],
+	])("%s: one read of the head and not another, and the answer is a plain track", async (_what, file, said) => {
+		const heard = install({ length: SONG_DECODED });
+		const { app, tab, reads, lengths } = served(file);
+		expect(await loadPeaks(app, tab, new AbortController().signal, said)).toBeNull();
+		expect(reads).toEqual([0]);
+		expect(lengths[0]).toBeLessThanOrEqual(16);
+		expect(heard.constructed).toBe(0);
+	});
+
+	test("the same ID3-fronted MP3 is read whole once the player gives a length an MP3 may have: the length was all that held it back", async () => {
+		const heard = install({ length: SONG_DECODED });
+		const { app, tab, reads, lengths } = served(ID3_SONG);
+		const peaks = await loadPeaks(app, tab, new AbortController().signal, 2.6);
+		expect(peaks).toHaveLength(WAVEFORM_BUCKETS);
+		expect(reads).toEqual([0, 0]);
+		expect(lengths[0]).toBeLessThanOrEqual(16);
+		expect(lengths[1]).toBe(ID3_SONG.length);
+		expect(heard.decoded).toHaveLength(1);
+	});
+
+	test.each([2, 0, Number.NaN, Number.POSITIVE_INFINITY])("a WAV is read whole after its head whatever the player says it lasts (%p)", async said => {
+		const file = wavOf(2);
+		const heard = install({ length: 2 * WAVEFORM_DECODE_RATE });
+		const { app, tab, reads, lengths } = served(file);
+		await loadPeaks(app, tab, new AbortController().signal, said);
+		expect(reads).toEqual([0, 0]);
+		expect(lengths[0]).toBeLessThanOrEqual(16);
+		expect(lengths[1]).toBe(file.length);
+		expect(heard.decoded).toHaveLength(1);
 	});
 
 	test("an MP3 whose frames play what the player says is decoded, from the file's own bytes, and its loudness comes back", async () => {

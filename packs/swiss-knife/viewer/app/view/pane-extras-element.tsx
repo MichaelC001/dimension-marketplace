@@ -1,6 +1,6 @@
 // The page picker and its notes live in the viewer document; the untrusted page only reports layout.
 import {
-	AnnotationFooter,
+	AnnotationNotice,
 	ElementPicker,
 	ElementToolbar,
 	NotePopover,
@@ -34,7 +34,7 @@ export function ElementPicks({ app, tab, active, ready, frame, mode }: PaneExtra
 	const [unreadable, setUnreadable] = useState(false);
 	// biome-ignore lint/correctness/useExhaustiveDependencies: live and reading are the triggers.
 	useEffect(() => setUnreadable(false), [live, reading]);
-	const session = useElementPicks({ app, file: tab.path, rev: revisionOf(tab) });
+	const session = useElementPicks({ app, file: tab.path, rev: revisionOf(tab), autoStage: active && up });
 	const { picks, retarget } = session;
 	const [openId, setOpenId] = useState<number | null>(null);
 	const [bounds, setBounds] = useState({ width: 0, height: 0 });
@@ -156,14 +156,7 @@ export function ElementPicks({ app, tab, active, ready, frame, mode }: PaneExtra
 			) : null}
 			{up ? (
 				<Footer frame={frame}>
-					<AnnotationFooter
-						message={session.message}
-						onMessage={session.setMessage}
-						onSend={() => void session.send()}
-						send={{ busy: session.sending, staged: session.staged }}
-						status={session.status}
-						count={picks.length}
-					/>
+					<AnnotationNotice status={session.status} />
 				</Footer>
 			) : null}
 		</>

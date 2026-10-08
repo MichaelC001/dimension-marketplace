@@ -8,7 +8,7 @@
 // sound that does come back is checked again against the caps and the player's length before a channel is read. The
 // decodes themselves run one at a time. These are the cases that would hurt the View's memory, one at a time.
 import { afterEach, describe, expect, test } from "bun:test";
-import { decodePeaks, WAVEFORM_BUCKETS, waveformAllowed } from "../app/view/media-waveform";
+import { decodePeaks, WAVEFORM_BUCKETS, WAVEFORM_PROBE_BYTES, waveformAllowed, waveformCouldApply } from "../app/view/media-waveform";
 
 const MIB = 1024 * 1024;
 /** The most bytes of file that are ever decoded. */
@@ -695,6 +695,69 @@ describe("a length that is not a positive finite number allows nothing but a WAV
 		for (const claimed of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
 			for (const [name, file] of Object.entries(files)) expect(waveformAllowed(file, claimed), `${name} at ${claimed}`).toBe(false);
 			expect(waveformAllowed(good, claimed), `a good WAV at ${claimed}`).toBe(true);
+		}
+	});
+});
+
+describe("waveformCouldApply: the head of a file says whether the rest of it is worth reading", () => {
+	const head = (...bytes: number[]): Uint8Array => padded(bytes, WAVEFORM_PROBE_BYTES);
+	const ONE_MP3_LENGTH = [0.001, 1, 60, 545];
+	const NO_MP3_LENGTH = [0, -1, 545.01, 546, 9999, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY];
+
+	test("a RIFF head is worth reading whatever the player says, or has not said yet", () => {
+		for (const claimed of [...ONE_MP3_LENGTH, ...NO_MP3_LENGTH]) expect(waveformCouldApply(head(...ascii("RIFF")), claimed), `RIFF at ${claimed}`).toBe(true);
+	});
+
+	test("an ID3 tag or a frame sync is worth reading only at a length an MP3 may have: finite, above 0 and up to 545 s", () => {
+		const heads: Record<string, Uint8Array> = {
+			"an ID3 tag": id3(100).subarray(0, WAVEFORM_PROBE_BYTES),
+			"a frame sync, 0xFF 0xFB": head(0xff, 0xfb, 0x90, 0x00),
+			"a frame sync, 0xFF 0xE2": head(0xff, 0xe2),
+		};
+		for (const [name, bytes] of Object.entries(heads)) {
+			for (const claimed of ONE_MP3_LENGTH) expect(waveformCouldApply(bytes, claimed), `${name} at ${claimed}`).toBe(true);
+			for (const claimed of NO_MP3_LENGTH) expect(waveformCouldApply(bytes, claimed), `${name} at ${claimed}`).toBe(false);
+		}
+	});
+
+	test("bytes that cannot begin an MP3 or a WAV are not worth reading at any length the player gives", () => {
+		const heads: Record<string, Uint8Array> = {
+			"a sync byte and then no top three bits (0xFF 0x1F)": head(0xff, 0x1f),
+			"a sync byte and then two of the three top bits (0xFF 0xDF)": head(0xff, 0xdf),
+			"a first byte that is not 0xFF (0x00 0xFB)": head(0x00, 0xfb),
+			"a first byte one short of 0xFF (0xFE 0xFB)": head(0xfe, 0xfb),
+			"a lone 0xFF": Uint8Array.of(0xff),
+			"an empty head": new Uint8Array(0),
+			"a tag magic one letter off (ID4)": head(...ascii("ID4"), 3, 0),
+			fLaC: head(...ascii("fLaC")),
+			OggS: head(...ascii("OggS")),
+			"ftyp at byte 4 (M4A)": head(0, 0, 0, 0x20, ...ascii("ftypM4A ")),
+			"1A 45 DF A3 (WebM)": head(0x1a, 0x45, 0xdf, 0xa3, 0x9f),
+			FORM: head(...ascii("FORM"), 0, 0, 0x10, 0, ...ascii("AIFF")),
+		};
+		for (const [name, bytes] of Object.entries(heads)) {
+			for (const claimed of [...ONE_MP3_LENGTH, ...NO_MP3_LENGTH]) expect(waveformCouldApply(bytes, claimed), `${name} at ${claimed}`).toBe(false);
+		}
+	});
+
+	test("it never drops a file the gate would have decoded: the head of each is passed at the lengths the gate passes it at", () => {
+		const everyLength = [0, Number.NaN, Number.POSITIVE_INFINITY, 60];
+		const rows: [string, Uint8Array, readonly number[]][] = [
+			["a WAV", wav({ data: 40_000 }), everyLength],
+			["a WAV with other chunks before its format", wav({ junkBefore: 10 }), everyLength],
+			["an extensible 24-bit WAV", wav({ tag: 0xfffe, subTag: 1, bits: 24, channels: 6, data: 60_000 }), everyLength],
+			["an MP3 from its first byte", mp3(1000), [seconds(1000)]],
+			["an MP3 behind an ID3v2 tag", cat(id3(300), mp3(1000)), [seconds(1000)]],
+			["an MP3 behind a tag with a footer", cat(id3(300, { footer: true }), mp3(1000)), [seconds(1000)]],
+			["an MPEG 2 MP3", mp3(800, { version: 2 }), [seconds(800, { version: 2 })]],
+			["an MPEG 2.5 mono MP3", mp3(800, { version: 0, mono: true }), [seconds(800, { version: 0 })]],
+			["an MP3 at the 545 s ceiling", mp3(22708, thin), [545]],
+		];
+		for (const [name, file, claims] of rows) {
+			for (const claimed of claims) {
+				expect(waveformAllowed(file, claimed), `${name} at ${claimed}: the gate`).toBe(true);
+				expect(waveformCouldApply(file.subarray(0, WAVEFORM_PROBE_BYTES), claimed), `${name} at ${claimed}: the prefilter`).toBe(true);
+			}
 		}
 	});
 });

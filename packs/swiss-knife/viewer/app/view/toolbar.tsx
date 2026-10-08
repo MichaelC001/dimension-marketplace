@@ -49,14 +49,11 @@ export function Toolbar({ filename, path, kind, size, shownBytes, zoom, pager }:
 			<div data-slot="viewer-toolbar" className="flex shrink-0 flex-wrap items-center gap-x-3 px-3 shadow-[inset_0_-1px_0_var(--fr-border-soft)]">
 				<div data-slot="viewer-toolbar-file" className="flex min-h-10 min-w-0 flex-1 basis-72 items-center gap-3">
 					{kind === undefined ? null : <span className="shrink-0 rounded-sm bg-fr-surface-3 px-1.5 py-0.5 text-fr-2xs font-medium text-fr-text-2">{KIND_LABEL[kind]}</span>}
-					<span className="min-w-0 flex-1 truncate text-fr-sm text-fr-text" title={path}>
+					<span className="min-w-0 flex-1 truncate text-fr-sm text-fr-text" title={size === undefined ? path : `${path} · ${formatBytes(size)}`}>
 						{filename}
 					</span>
-					{size === undefined ? null : (
-						<span className="min-w-0 truncate text-fr-xs text-fr-text-3">
-							{formatBytes(size)}
-							{shownBytes === undefined ? "" : ` · showing the first ${formatBytes(shownBytes)}`}
-						</span>
+					{shownBytes === undefined ? null : (
+						<span className="min-w-0 truncate text-fr-xs text-fr-text-3">showing the first {formatBytes(shownBytes)}</span>
 					)}
 					<IconButton className={cn("size-7", FOCUS)} aria-label={copied ? "Path copied" : "Copy path"} title={copied ? "Path copied" : "Copy path"} onClick={copy}>
 						<Icon name={copied ? "check" : "copy"} size={14} />

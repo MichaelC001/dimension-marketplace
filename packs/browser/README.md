@@ -389,10 +389,10 @@ saved profile, `{ name, label, colour, heldBy, sites }`:
 of another chat) or `"another chat"`; never an id. `signedIn: null` is "not known
 now": the last check is over 7 days old, or its time is in the future (an agent
 can ask the person); a site that was only visited is not listed. **The View shows a
-site's account (an email, a handle) to the person.** An unauthenticated model, or
+site's account (an email, a handle) to the person**, on the card that asks for an agent's access to a profile. An unauthenticated model, or
 one without current approval for that profile, receives no site metadata. The
 Browser View reads the same tool as the human and gets the list as structured
-content, each site with its `account`, and so does the dock. Never a cookie, a cookie name, an expiry, a token, a
+content, each site with its `account`. Never a cookie, a cookie name, an expiry, a token, a
 password, whether a saved password exists, or a path; the relay and throwaway
 browsers are never listed. More than 40 profiles: the ones in use and the signed-in
 ones first, the rest counted in `omitted`.
@@ -749,7 +749,7 @@ not publishing: it is not gated here either, so an agent that posts only through
 
 The pack's own MCP server tells the host which profiles are signed in to which
 sites, so a campaign board such as Traction's can say whether an account can
-post (dimension#1219) and the dock panel can list them. It sends the vendor notification
+post (dimension#1219). It sends the vendor notification
 `notifications/ai.insodimension/connection` with
 `{ report: { profiles: { <profile>: { label?, colour?, avatar?, sites: { <host>: { signedIn, account?, observedAt } } } } } }`
 (`observedAt` is epoch ms; `signedIn` is `null` for a site only visited):
@@ -796,36 +796,27 @@ site's page and tested against copies of it, not yet seen on the live sites.
 ## Browser panel
 
 Installing the pack also adds a **Browser** tab to the dock (component
-`browser-accounts`). At the top is an **Open a page** bar: type a website
-address and **Open** shows the live Browser View beside the chat at it (an empty
-bar opens a blank browser; something that is not an address opens nothing and
-the [connection report](#connection-report) with its sites: signed in, signed out
-or not checked, the account, and when the Browser last saw it (a sign-in last seen
-over 7 days ago reads "not checked" with its age: it is never claimed from old data).
-The profile is shown by its label. A site the Browser has never observed is not in
-the report, so it is not listed. **Sign in** on a site, or
-**New sign-in** (pick X, LinkedIn, Reddit, Bluesky or Google and name the logins; left
-empty, they are the `default` set), opens the live Browser View beside the chat
-at that site's login page on that set. You sign in there yourself, and the panel
-shows the account once the Browser observes it, with no agent doing anything.
+`browser-accounts`). It is one **Open a page** bar: type a website address and
+**Open** shows the live Browser View beside the chat at it (an empty bar opens a
+blank browser; something that is not an address opens nothing and says why).
+Nothing else lives in the tab: profiles and signing in belong to the Browser
+itself. Its profile menu switches and adds profiles and summarises where each is
+signed in (the first sites seen signed in, never a site's account); a site's
+account shows only on the card that asks for an agent's access to a profile.
 
-The View's start page and the panel's **Open a page** open on the saved `default`
+The View's start page and the tab's **Open a page** open on the saved `default`
 set, so a person's own browser keeps their logins, unless **Private** is ticked.
 Private sends no profile: a throwaway browser that saves nothing. One browser
 holds a saved set at a time, so a second open of `default` is refused
 (`profile_held`); the start page turns that into "That browser is already
 open. Use it, or open a Private one."
 
-The panel reads only this pack's own connection fact (`plugin/browser/connection`)
-and acts only through `openArtifactoryView` (`browser_view` with
+The tab acts only through `openArtifactoryView` (`browser_view` with
 `{ url?, profile? }`), which its `artifactory:open` grant admits. The host mounts
 the View from a tool's static `_meta.ui`, and `browser_open` has none (it is
-headless), so the panel opens through `browser_view`. The host opens the View in the
-active session, so with no session open the panel's **Open** and **Sign in**
-buttons are disabled. Profile names follow the same rule as `browser_open`
-(`src/profile-name.ts`). The site list takes its origins from the
-shipped presets in `recipes/`. The panel is built by `npm run build` into
-`dist/index.mjs`.
+headless), so the tab opens through `browser_view`. The host opens the View in the
+active session, so with no session open the tab's **Open** button is disabled.
+The tab is built by `npm run build` into `dist/index.mjs`.
 
 ## Tests and benchmark
 

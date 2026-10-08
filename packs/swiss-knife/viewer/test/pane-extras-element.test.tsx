@@ -41,6 +41,13 @@ let env: ReactEnv;
 let PaneExtras: typeof PaneExtrasComponent;
 const restores: (() => void)[] = [];
 
+interface StagedContext {
+	readonly content: readonly { readonly type: string; readonly text?: string }[];
+}
+const sent: StagedContext[] = [];
+const landed: StagedContext[] = [];
+const posted: Record<string, unknown>[] = [];
+
 /** Put a global (or a property of one) in place for the whole file, remembering how to take it out. */
 function install(target: object, name: string, value: unknown): void {
 	const previous = Object.getOwnPropertyDescriptor(target, name);
@@ -67,7 +74,7 @@ beforeAll(async () => {
 		get(this: HTMLIFrameElement) {
 			let value = frameWindows.get(this);
 			if (value === undefined) {
-				value = { postMessage() {} };
+				value = { postMessage: (data: unknown) => void posted.push(data as Record<string, unknown>) };
 				frameWindows.set(this, value);
 			}
 			return value;
@@ -79,7 +86,12 @@ beforeAll(async () => {
 	// kit's React hooks at load.
 	({ PaneExtras } = await import("../app/view/pane-extras"));
 });
-afterEach(() => env.cleanup());
+afterEach(async () => {
+	await env.cleanup();
+	sent.length = 0;
+	landed.length = 0;
+	posted.length = 0;
+});
 afterAll(() => {
 	while (restores.length > 0) restores.pop()?.();
 	env.restore();
@@ -87,7 +99,12 @@ afterAll(() => {
 
 const app = {
 	getHostCapabilities: () => ({ updateModelContext: { text: {}, image: {} } }),
-	updateModelContext: async () => ({}),
+	updateModelContext: async (payload: StagedContext) => {
+		sent.push(payload);
+		await Bun.sleep(5);
+		landed.push(payload);
+		return {};
+	},
 } as unknown as App;
 
 const tabOf = (size: number): DocTab => ({
@@ -194,6 +211,15 @@ async function typeNote(field: HTMLTextAreaElement, text: string): Promise<void>
 
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 
+const AFTER_THE_PAUSE_MS = 900;
+
+async function until(fact: () => boolean): Promise<void> {
+	for (const started = Date.now(); !fact(); ) {
+		if (Date.now() - started > 3000) throw new Error("the awaited fact never came true");
+		await env.act(async () => sleep(5));
+	}
+}
+
 /** Wait, in `act`, until the pick frame is there: the kit builds its document a few promise turns after Pick comes up. */
 async function pickFrameUp(at: Pane): Promise<void> {
 	for (const started = Date.now(); at.pickFrame === null && Date.now() - started < 2000; ) await env.act(async () => sleep(2));
@@ -254,8 +280,6 @@ describe("HTML picks as notes in place", () => {
 		expect(popover?.querySelector('[data-slot="note-popover-heading"]')?.textContent).toBe("#needle");
 		expect(popover?.querySelector('[data-slot="note-popover-actions"]')?.textContent).toContain("Wider");
 		expect(at.frame.querySelector('[data-slot="viewer-html-pick-frame"] [data-slot="note-popover"]')).toBeNull();
-		const footer = env.document.querySelector('[data-slot="annotation-footer"]');
-		expect(footer?.querySelector("button")?.textContent).toContain("Request edits · 1");
 		expect(env.document.querySelector('[data-slot="annotation-panel"]')).toBeNull();
 
 		await env.act(async () => {
@@ -271,7 +295,6 @@ describe("HTML picks as notes in place", () => {
 		await click(at.frame.querySelector('[data-slot="note-popover-delete"]'));
 		await env.runFrames();
 		expect(at.frame.querySelector('[data-slot="element-note-badge"]')).toBeNull();
-		expect(env.document.querySelector('[data-slot="annotation-footer"] button')?.hasAttribute("disabled")).toBe(true);
 	});
 
 	test("a page reporting unavailable leaves the reading frame and no pick editor", async () => {
@@ -377,6 +400,72 @@ describe("HTML picks as notes in place", () => {
 		expect(at.frame.querySelector('[data-slot="element-note-navigation-item"]')?.textContent).toContain("#needle");
 		expect(at.frame.querySelector('[data-slot="note-popover-heading"]')?.textContent).toBe("#needle");
 		expect(at.pickFrame).toBeNull();
+	});
+});
+
+describe("HTML picks staged by themselves", () => {
+	async function pickNeedle(frame: HTMLElement, channel: string): Promise<void> {
+		await pageSays(frame, { c: channel, t: "pick", id: 7, target: noteTarget, steps: { wider: true, narrower: false } });
+		await pageSays(frame, {
+			c: channel, t: "layout", vw: 800, vh: 600, sx: 0, sy: 0,
+			boxes: [{ id: 7, x: 30, y: 40, w: 100, h: 20 }], gone: [],
+		});
+		await env.runFrames();
+	}
+
+	const layer = (at: Pane, mode: PaneExtrasProps["mode"]) =>
+		createElement(PaneExtras, { app, tab: tabOf(4096), active: true, ready: true, frame: at.frame, mode } satisfies PaneExtrasProps);
+
+	test("the pane has no send footer and no message field: its last child is the notice, there while the layer is up", async () => {
+		const at = pane();
+		const mounted = await env.mount(layer(at, "elements"));
+		await pickedPage(at);
+		const viewerPane = env.document.querySelector('[data-slot="viewer-pane"]');
+		expect(viewerPane?.lastElementChild?.getAttribute("data-slot")).toBe("annotation-notice");
+		expect(viewerPane?.querySelector('[data-slot="annotation-footer"]')).toBeNull();
+		expect(viewerPane?.querySelector("textarea")).toBeNull();
+		expect(viewerPane?.textContent).not.toContain("Request edits");
+
+		await mounted.render(layer(at, "comments"));
+		expect(viewerPane?.querySelector('[data-slot="annotation-notice"]')).toBeNull();
+	});
+
+	test("a pick stages by itself once the pause elapses, with the page's answer, and removing it takes the request back", async () => {
+		const at = pane();
+		await env.mount(layer(at, "elements"));
+		const { frame, channel } = await pickedPage(at);
+		await pickNeedle(frame, channel);
+		expect(sent).toHaveLength(0);
+
+		await until(() => posted.some(message => message.t === "describe"));
+		const asked = posted.find(message => message.t === "describe");
+		await pageSays(frame, { c: channel, t: "described", req: asked?.req, vw: 800, vh: 600, items: [{ id: 7, target: noteTarget }] });
+		await until(() => landed.length === 1);
+		await env.act(async () => {});
+		expect(sent).toHaveLength(1);
+		expect(sent[0]?.content.map(block => block.type)).toEqual(["text"]);
+		expect(sent[0]?.content[0]?.text).toContain("#needle");
+
+		await click(at.frame.querySelector('[data-slot="note-popover-delete"]'));
+		expect(sent).toHaveLength(2);
+		expect(sent[1]?.content).toEqual([]);
+		await until(() => landed.length === 2);
+	});
+
+	test("notes made stay unstaged while the layer is down, and stage once it is back up", async () => {
+		const at = pane();
+		const mounted = await env.mount(layer(at, "elements"));
+		const { frame, channel } = await pickedPage(at);
+		await pickNeedle(frame, channel);
+
+		await mounted.render(layer(at, "comments"));
+		await env.act(async () => sleep(AFTER_THE_PAUSE_MS));
+		expect(sent).toHaveLength(0);
+
+		await mounted.render(layer(at, "elements"));
+		await until(() => landed.length === 1);
+		expect(sent).toHaveLength(1);
+		expect(sent[0]?.content[0]?.text).toContain("#needle");
 	});
 });
 
