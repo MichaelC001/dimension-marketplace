@@ -50,8 +50,6 @@ import type {
 	ControlMode,
 	NewProfileRequest,
 	ProfileListing,
-	ProfileConsent,
-	ArtifactoryLoopPrincipal,
 	EffectGuard,
 	LeaveOutcome,
 	OpenBrowserListing,
@@ -112,11 +110,6 @@ import { ActionNotDispatched, fail, MAX_PROFILES, ProfileStore, validateProfile 
 import { type RunningWorker, releaseSpare, startWorker } from "./task.js";
 import { createGuardedTaskEndpoint } from "./task-authority.js";
 import type { CodeLifetime, CodeSeam, EndListener, EndWhy } from "./code/host/runtime-port.js";
-/** Stable authority identity excludes mutable human-facing label. */
-function samePrincipal(a: ProfileConsent["subject"], b: ProfileConsent["subject"]): boolean {
-	return a === b || (a !== undefined && b !== undefined && a.id === b.id && a.workspaceId === b.workspaceId && a.origin === b.origin);
-}
-
 // ---------------------------------------------------------------------------
 // Bounds. Every unbounded thing in a long-lived runtime is a leak or a weapon.
 // ---------------------------------------------------------------------------
@@ -395,11 +388,6 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	private disposed = false;
 	/** The opener of a saved profile whose browser is still launching, so the same chat opening it twice gets one browser. */
 	private readonly openers = new Map<string, BrowserOpener>();
-	/** Only a newly claimed model profile may join its same-chat initial launch before consent exists. */
-	private readonly openingCreations = new Set<string>();
-	/** Chat-local choices and pending requests, never a source of stable identity. */
-	private readonly profilePermissions = new Map<string, Map<string, { status: "pending" | "granted"; expiresAt: number; principal?: ArtifactoryLoopPrincipal }>>();
-	private readonly profilePrincipals = new Map<string, ArtifactoryLoopPrincipal>();
 	/** The last passive observation per profile and site, so a page that reloads does not rewrite the same fact. */
 	private readonly lastNoted = new Map<string, { key: string; at: number }>();
 	private readonly connectionListeners = new Set<() => void>();
@@ -480,12 +468,6 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		// The relay is the human's own Chrome: there is nothing to make throwaway,
 		// so no profile means the one it has.
 		const profile = named ?? (engine === "chrome-relay" && !attachedElsewhere ? RELAY_PROFILE : null);
-		if (code !== undefined && profile !== null && profile !== RELAY_PROFILE) fail("code_profile_refused", "browser_run cannot use a saved profile; use ordinary browser tools after the person approves access.");
-		if (profile !== null && profile !== RELAY_PROFILE && opener.caller !== "app") {
-			if (opener.caller !== "model" || opener.session === undefined) fail("profile_consent_required", "Saved profiles require an authenticated host-stamped model session and human approval.");
-			const ownCreation = this.openingCreations.has(profile) && this.openers.get(profile)?.session === opener.session;
-			if (this.store.exists(profile) && !ownCreation) this.requireProfileName(profile, opener.session);
-		}
 
 		// The relay is ONE already-running Chrome with ONE cookie jar, chosen by
 		// the human inside Chrome. Named relay profiles would imply an isolation
@@ -515,14 +497,14 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				const holder = this.holderOf(this.openers.get(profile) ?? {}, opener.session);
 				if (holder === "this chat") {
 					const { entry } = await launching;
-					return await this.state(entry.browserId, Object.assign(() => guard?.(), { assertCurrent: () => { guard?.assertCurrent(); this.requireProfileAccess(entry.browserId, opener.caller, opener.session); } }));
+					return await this.state(entry.browserId, Object.assign(() => guard?.(), { assertCurrent: () => { guard?.assertCurrent(); this.requireOpen(entry.browserId); } }));
 				}
 				fail("profile_held", heldMessage(profile, holder));
 			}
 			const live = profile === null ? undefined : this.byProfile.get(profile);
 			if (profile !== null && live !== undefined) {
 				const holder = this.holderOf(live.opener, opener.session);
-				if (holder === "this chat") return await this.state(live.browserId, Object.assign(() => guard?.(), { assertCurrent: () => { guard?.assertCurrent(); this.requireProfileAccess(live.browserId, opener.caller, opener.session); } }));
+				if (holder === "this chat") return await this.state(live.browserId, Object.assign(() => guard?.(), { assertCurrent: () => { guard?.assertCurrent(); this.requireOpen(live.browserId); } }));
 				fail("profile_held", heldMessage(profile, holder));
 			}
 			// Count launches in flight too: four concurrent opens must not slip past the bound just because none of them has finished launching yet.
@@ -533,10 +515,6 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			await this.makeRoom(opener.session);
 		}
 		assertEngineAvailable(engine);
-		// The person's own `default` is never made by a model: it goes through the same approval as any existing profile, even before its folder exists.
-		const createdForChat = profile !== null && profile !== RELAY_PROFILE && profile !== DEFAULT_PROFILE && opener.caller === "model" && this.store.claimNewProfile(profile);
-		if (createdForChat && profile !== null) this.openingCreations.add(profile);
-		if (profile !== null && profile !== RELAY_PROFILE && opener.caller === "model" && !createdForChat) this.requireProfileName(profile, opener.session);
 
 		// A throwaway browser has no name to guard; its slot only counts against the bound. `:` is not a slug character.
 		const slot = profile ?? `ephemeral:${randomBytes(8).toString("hex")}`;
@@ -546,24 +524,15 @@ export class BrowserRuntime implements BrowserRuntimePort {
 					const authorize: EffectGuard = Object.assign(() => guard?.(), { assertCurrent: () => {
 						guard?.assertCurrent();
 						if (this.disposed) fail("disposed", "runtime has been disposed");
-						// Only this launch may inspect its new profile before its creator grant exists.
-						if (!createdForChat) this.requireProfileAccess(entry.browserId, opener.caller, opener.session);
 					} });
 					const state = await this.state(entry.browserId, authorize);
 					if (guard !== undefined) await guard();
 					guard?.assertCurrent();
 					// Final local authority and commit share one synchronous continuation.
 					if (this.disposed) fail("disposed", "runtime has been disposed");
-					if (!createdForChat) this.requireProfileAccess(entry.browserId, opener.caller, opener.session);
 					if (entry.closed || this.byId.get(entry.browserId) !== entry) this.refuseGone(entry.browserId);
 					const completed = { entry, state: entry.notice === undefined ? state : { ...state, notice: entry.notice } };
 					delete entry.notice;
-					// No further authority-dependent work may fail after granting the creator.
-					if (createdForChat && profile !== null && opener.session) {
-						const permissions = this.profilePermissions.get(opener.session) ?? new Map<string, { status: "pending" | "granted"; expiresAt: number; principal?: ArtifactoryLoopPrincipal }>();
-						permissions.set(profile, { status: "granted", expiresAt: Number.POSITIVE_INFINITY, principal: this.profilePrincipals.get(opener.session) });
-						this.profilePermissions.set(opener.session, permissions);
-					}
 					return completed;
 				} catch (error) {
 					// Revoked authority must not prevent rollback of the entry this launch owns.
@@ -579,7 +548,6 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			.finally(() => {
 				this.opening.delete(slot);
 				this.openers.delete(slot);
-				if (profile !== null) this.openingCreations.delete(profile);
 			});
 		this.opening.set(slot, started);
 		this.openers.set(slot, opener);
@@ -754,8 +722,6 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	async dispose(): Promise<void> {
 		this.disposed = true;
 		this.connectionListeners.clear();
-		this.profilePermissions.clear();
-		this.profilePrincipals.clear();
 		this.profileWatcher?.close();
 		this.profileWatcher = undefined;
 		// The spare task worker waiting for the next task belongs to no browser: it goes with the runtime.
@@ -1045,14 +1011,10 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			open: async (options, opener, code, attach) => await this.open(options, opener, code, attach),
 			resize: async (browserId, viewport, scale) => await this.resize(browserId, viewport, scale),
 			close: async (browserId) => await this.close(browserId),
-			require: (browserId) => {
-				const entry = this.require(browserId);
-				if (entry.profile !== null && entry.profile !== RELAY_PROFILE) fail("code_profile_refused", "browser_run cannot use a saved profile");
-				return entry;
-			},
+			require: (browserId) => this.require(browserId),
 			peek: (browserId) => {
 				const entry = this.byId.get(browserId);
-				return entry === undefined || entry.closed || (entry.profile !== null && entry.profile !== RELAY_PROFILE) ? undefined : entry;
+				return entry === undefined || entry.closed ? undefined : entry;
 			},
 			browsersOf: (session) => [...this.byId.values()].filter((entry) => !entry.closed && (entry.profile === null || entry.profile === RELAY_PROFILE) && entry.opener.session === session),
 			viewOf: (session) => {
@@ -1294,122 +1256,20 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		return this.require(browserId).annotations.save(json);
 	}
 
-	/** This method receives only the result of the server's authenticated host read, never model-supplied metadata. */
-	setProfilePrincipal(sessionId: string, principal: ArtifactoryLoopPrincipal | undefined): void {
-		if (principal === undefined) this.profilePrincipals.delete(sessionId);
-		else this.profilePrincipals.set(sessionId, principal);
-		const permissions = this.profilePermissions.get(sessionId);
-		for (const [profile, permission] of permissions ?? []) {
-			if (!samePrincipal(permission.principal, principal)) permissions!.delete(profile);
-		}
-	}
-
 	async endProfileSession(sessionId: string): Promise<void> {
-		this.profilePermissions.delete(sessionId);
-		this.profilePrincipals.delete(sessionId);
 		for (const entry of this.byId.values()) {
 			if (entry.worker && entry.taskSession === sessionId) await this.stopTask(entry);
 		}
 	}
 
-	private requireProfileName(profile: string, session: string | undefined): void {
-		if (session === undefined) fail("profile_consent_required", `Ask the person to approve access to profile "${profile}" in Browser profiles. A host-stamped session is required.`);
-		const permissions = this.profilePermissions.get(session);
-		const principal = this.profilePrincipals.get(session);
-		const standing = permissions?.get(profile);
-		if (standing?.status === "granted" && samePrincipal(standing.principal, principal)) return;
-		if (principal && this.store.hasLoopConsent(principal, profile)) return;
-		const pending = permissions ?? new Map<string, { status: "pending" | "granted"; expiresAt: number; principal?: ArtifactoryLoopPrincipal }>();
-		this.profilePermissions.set(session, pending);
-		const current = pending.get(profile);
-		if (current?.status !== "pending" || current.expiresAt <= Date.now() || !samePrincipal(current.principal, principal))
-			pending.set(profile, { status: "pending", expiresAt: Date.now() + 10 * 60_000, principal });
-		fail("profile_consent_required", `Ask the person to approve access to profile "${profile}" in the Browser profile menu. Access is currently blocked; actions dispatched before revocation may already have occurred.`);
-	}
-
-	needsProfileAuthority(browserId: string): boolean {
-		const profile = this.byId.get(browserId)?.profile;
-		return profile !== undefined && profile !== null && profile !== RELAY_PROFILE;
-	}
-
-	requireProfileAccess(browserId: string, caller?: ToolCaller, session?: string, allowClosed = false): void {
+	requireOpen(browserId: string, allowClosed = false): void {
 		if (this.disposed) fail("disposed", "runtime has been disposed");
 		const entry = this.byId.get(browserId);
 		if (entry === undefined) {
 			if (allowClosed && this.released.has(browserId)) return;
-			// The same refusal `require` gives: it says why a browser the runtime closed is gone, and the View reads its wording as "gone for good".
 			this.refuseGone(browserId);
 		}
 		if (entry.closed && !allowClosed) this.refuseGone(browserId);
-		if (caller === "app" || entry.profile === null || entry.profile === RELAY_PROFILE) return;
-		if (caller !== "model" || session === undefined) fail("profile_consent_required", "A host-stamped model session is required for saved-profile access.");
-		this.requireProfileName(entry.profile, session);
-	}
-
-	requireSavedProfileAccess(browserId: string, caller?: ToolCaller, session?: string, allowClosed = false): void {
-		const entry = this.byId.get(browserId);
-		if (entry === undefined || (entry.closed && !allowClosed)) this.refuseGone(browserId);
-		if (entry.profile === null || entry.profile === RELAY_PROFILE) fail("profile_required", "This ordinary operation requires a saved profile.");
-		this.requireProfileAccess(browserId, caller, session, allowClosed);
-	}
-
-	profileConsents(session?: string): ProfileConsent[] {
-		if (session === undefined) return [];
-		const permissions = this.profilePermissions.get(session);
-		const principal = this.profilePrincipals.get(session);
-		if (!permissions && !principal) return [];
-		const now = Date.now();
-		const subject = principal === undefined ? {} : { subject: { workspaceId: principal.workspaceId, id: principal.id, origin: principal.origin } };
-		const listed = buildProfileList(this.store, slug => this.holdFact(slug, session), now);
-		// A request can name a profile whose folder does not exist yet (the person's own `default` on a fresh install); the person must still see it to decide it.
-		const onDisk = new Set(listed.map(profile => profile.name));
-		const awaiting = [...(permissions?.entries() ?? [])]
-			.filter(([name, permission]) => permission.status === "pending" && !onDisk.has(name))
-			.map(([name]) => ({ name, label: name === DEFAULT_PROFILE ? "Default" : name, sites: [] }));
-		return [...listed, ...awaiting].flatMap(profile => {
-			const rows: ProfileConsent[] = [];
-			const permission = permissions?.get(profile.name);
-			if (permission?.status === "pending" && (permission.expiresAt <= now || !samePrincipal(permission.principal, principal))) permissions?.delete(profile.name);
-			else if (permission?.status === "granted") rows.push({ name: profile.name, label: profile.label, sites: profile.sites, status: "granted", scope: "chat", ...subject });
-			else if (permission?.status === "pending") rows.push({ name: profile.name, label: profile.label, sites: profile.sites, status: "pending", scope: principal ? "loop" : "chat", expiresAt: permission.expiresAt, ...(principal ? { loopLabel: principal.label || principal.id } : {}), ...subject });
-			if (principal && this.store.hasLoopConsent(principal, profile.name)) rows.push({ name: profile.name, label: profile.label, sites: profile.sites, status: "granted", scope: "loop", loopLabel: principal.label || principal.id, ...subject });
-			return rows;
-		});
-	}
-
-	async decideProfileConsent(name: string, decision: "allow" | "deny" | "revoke", caller?: ToolCaller, session?: string, scope: "chat" | "loop" = "chat", expectedSubject?: ProfileConsent["subject"]): Promise<void> {
-		if (caller !== "app" || session === undefined) fail("human_only", "Only the person in the Browser View can decide profile access.");
-		if (scope !== "chat" && scope !== "loop") fail("bad_scope", "Unknown consent scope.");
-		const principal = this.profilePrincipals.get(session);
-		if (!samePrincipal(expectedSubject, principal)) fail("consent_missing", "The verified subject changed since this decision was shown. Refresh the Browser profile menu.");
-		const profile = this.resolveProfile(name, "chromium");
-		const permissions = this.profilePermissions.get(session);
-		let current = permissions?.get(profile);
-		if (current?.status === "pending" && !samePrincipal(current.principal, principal)) {
-			permissions?.delete(profile);
-			current = undefined;
-		}
-		if (decision === "allow") {
-			if (current?.status !== "pending" || current.expiresAt <= Date.now()) fail("consent_missing", "The request expired. Ask the agent to request this profile again.");
-			if (scope === "loop") {
-				if (!principal || !samePrincipal(current.principal, principal)) fail("consent_missing", "The Loop requesting this profile is no longer verified.");
-				this.store.setLoopConsent(principal, profile, true);
-				permissions!.delete(profile);
-			} else permissions!.set(profile, { status: "granted", expiresAt: Number.POSITIVE_INFINITY, principal });
-		} else if (decision === "deny") {
-			if (current?.status !== "pending" || current.expiresAt <= Date.now()) fail("consent_missing", "There is no live pending request for this profile.");
-			permissions!.delete(profile);
-		} else {
-			if (scope === "loop") {
-				if (!principal || !this.store.hasLoopConsent(principal, profile)) fail("consent_missing", "There is no Loop grant to revoke.");
-				this.store.setLoopConsent(principal, profile, false);
-			} else {
-				if (current?.status !== "granted") fail("consent_missing", "There is no chat grant to revoke.");
-				permissions!.delete(profile);
-			}
-			const entry = this.byProfile.get(profile);
-			if (entry?.worker && (entry.taskSession === session || (scope === "loop" && entry.taskSession !== undefined && samePrincipal(this.profilePrincipals.get(entry.taskSession), principal)))) await this.stopTask(entry);
-		}
 	}
 
 	async profileList(asker?: string): Promise<ProfileListing[]> {

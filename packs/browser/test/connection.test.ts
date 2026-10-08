@@ -10,9 +10,7 @@
  *  local publish fixture over an in-memory MCP transport, capturing what the
  *  host would receive.
  */
-import { randomBytes } from "node:crypto";
 import { z } from "zod";
-import { ARTIFACTORY_HOST_CONTEXT_EXTENSION_ID, ARTIFACTORY_HOST_CONTEXT_META_KEY, ARTIFACTORY_HOST_CONTEXT_READ_METHOD } from "@dimension/sdk/artifactory";
 import * as fs from "node:fs";
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -265,7 +263,7 @@ interface ToolResult {
 
 interface Session {
 	server: McpServer;
-	call: (name: string, args: Record<string, unknown>, caller?: "model" | "app") => Promise<ToolResult>;
+	call: (name: string, args: Record<string, unknown>) => Promise<ToolResult>;
 	reports: Captured[];
 	/** The first captured report (from `after` on) that satisfies `accept`. */
 	report: (accept: (report: ConnectionReport) => boolean, after?: number) => Promise<ConnectionReport>;
@@ -275,7 +273,7 @@ interface Session {
 	rootDir: string;
 }
 
-async function session(profile: string, seed?: (store: ProfileStore) => void, openerCaller: "model" | "app" = "model"): Promise<Session> {
+async function session(profile: string, seed?: (store: ProfileStore) => void): Promise<Session> {
 	const fixture = startPublishFixture();
 	fixtures.push(fixture);
 	const rootDir = await createRoot();
@@ -289,13 +287,8 @@ async function session(profile: string, seed?: (store: ProfileStore) => void, op
 	const reports: Captured[] = [];
 	// Each waiter is re-checked on every notification: the test awaits the report itself, never a guessed delay.
 	const waiters: Array<() => void> = [];
-	const client = new Client({ name: "connection-test", version: "0.0.0" }, { capabilities: { extensions: { [ARTIFACTORY_HOST_CONTEXT_EXTENSION_ID]: {} } } });
+	const client = new Client({ name: "connection-test", version: "0.0.0" });
 	const sessionId = "connection-chat";
-	const token = randomBytes(32).toString("hex");
-	client.setRequestHandler(z.object({ method: z.literal(ARTIFACTORY_HOST_CONTEXT_READ_METHOD), params: z.object({ sessionId: z.string(), token: z.string() }) }), async request => {
-		if (request.params.sessionId !== sessionId || request.params.token !== token) throw new Error("Unknown host context");
-		return { active: true, sessionId };
-	});
 	client.fallbackNotificationHandler = async (notification) => {
 		reports.push(notification as unknown as Captured);
 		for (const wake of waiters.splice(0)) wake();
@@ -303,10 +296,9 @@ async function session(profile: string, seed?: (store: ProfileStore) => void, op
 	const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
 	await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
 	clients.push(client);
-	const call = async (name: string, args: Record<string, unknown>, caller: "model" | "app" = "model") => (await client.callTool({ name, arguments: args, _meta: {
-		"ai.insodimension/caller": caller,
+	const call = async (name: string, args: Record<string, unknown>) => (await client.callTool({ name, arguments: args, _meta: {
+		"ai.insodimension/caller": "model",
 		"ai.insodimension/session": { sessionId },
-		[ARTIFACTORY_HOST_CONTEXT_META_KEY]: { sessionId, token },
 	} })) as ToolResult;
 	const report = async (accept: (report: ConnectionReport) => boolean, after = 0): Promise<ConnectionReport> => {
 		for (;;) {
@@ -317,7 +309,7 @@ async function session(profile: string, seed?: (store: ProfileStore) => void, op
 			await promise;
 		}
 	};
-	const opened = await call("browser_open", { profile }, openerCaller);
+	const opened = await call("browser_open", { profile });
 	expect(opened.isError).toBeFalsy();
 	const browserId = opened.structuredContent?.browserId as string;
 	await perform(runtime, browserId, { kind: "navigate", url: fixture.url("/login") });
@@ -445,15 +437,7 @@ describeWithChrome("the server's connection report", () => {
 			const PASSWORD = "Zq7kPw9Lr4tVb8eXm2Na";
 			const s = await session("acme", (store) => {
 				fs.writeFileSync(join(store.ensureProfile("acme"), "credentials.json"), `${JSON.stringify({ version: 1, origins: { "https://example.com": PASSWORD } })}\n`);
-			}, "app");
-			expect((await s.call("browser_close", { browserId: s.browserId }, "app")).isError).toBeFalsy();
-			expect((await s.call("browser_open", { profile: "acme" }, "model")).isError).toBe(true);
-			expect((await s.call("browser_profile_consent", { name: "acme", decision: "allow", scope: "chat" }, "app")).isError).toBeFalsy();
-			const adopted = await s.call("browser_open", { profile: "acme" }, "model");
-			expect(adopted.isError).toBeFalsy();
-			s.browserId = adopted.structuredContent?.browserId as string;
-			// Chrome keeps no session cookie across a close: the reopened browser signs in again, as the first one did in `session`.
-			expect((await s.call("browser_act", { browserId: s.browserId, actions: [{ kind: "navigate", url: s.fixture.url("/login") }] }, "model")).isError).toBeFalsy();
+			});
 			const revealed = recipe(s.fixture, { composeUrl: s.fixture.url(`/compose?v=nav&shown=${encodeURIComponent(`Your new password is ${PASSWORD}`)}`), account: "#shown" });
 			const onDisk = (): string => fs.readFileSync(join(s.store.profileDir("acme"), "connections.json"), "utf8");
 

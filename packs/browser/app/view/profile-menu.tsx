@@ -6,11 +6,10 @@
 // window later and this stays as it is.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Icon } from "@fraym/ui/icons";
-import type { BrowserEngine, NewProfileRequest, OpenBrowserListing, ProfileConsent, ProfileHold, ProfileListing, ProfileSiteListing } from "../../src/contracts";
+import type { BrowserEngine, NewProfileRequest, OpenBrowserListing, ProfileHold, ProfileListing, ProfileSiteListing } from "../../src/contracts";
 import { defaultColour, type ProfileColour, type ResolvedProfileMeta, resolveProfileMeta } from "../../src/profile-meta";
 import { DEFAULT_PROFILE } from "../../src/profile-name";
 import { AddProfileForm } from "./add-profile-form";
-import type { OpenAttempt } from "./browser-client";
 import { ProfileAvatar } from "./profile-avatar";
 import { useMenu } from "./use-menu";
 
@@ -106,8 +105,6 @@ export interface ProfileSwitcherProps {
 	/** The menu just opened: read the profiles again, who holds each changes. */
 	readonly onOpen: () => void;
 	/** The browsers this chat holds that are not saved profiles and are not the one on screen: a Private browser or Your Chrome left open. */
-	readonly consents: readonly ProfileConsent[];
-	readonly onConsent: (name: string, decision: "allow" | "deny" | "revoke", scope: "chat" | "loop", expectedSubject?: ProfileConsent["subject"]) => void;
 	readonly browsers: readonly OpenBrowserListing[];
 	/** Open `profile` here (`null`: a Private browser). */
 	readonly onSwitch: (profile: string | null) => void;
@@ -119,36 +116,6 @@ export interface ProfileSwitcherProps {
 	readonly onAdd: (request: NewProfileRequest) => Promise<void>;
 	readonly onTakeOver: () => void;
 	readonly onHandBack: () => void;
-}
-
-/** Saved-profile authority belongs to the displayed subject, not an open browser. `opens`: the open a host-issued call asked for and was refused;
- *  the card for that profile says what Allow will also open, in the same words the View will use, so the person sees the address before they agree. */
-export function ProfileConsents({ consents, onConsent, opens = null, menu = false }: Pick<ProfileSwitcherProps, "consents" | "onConsent"> & { readonly opens?: OpenAttempt | null; readonly menu?: boolean }) {
-	if (consents.length === 0) return null;
-	return (
-		<div className="bx-pmenu-list" role="group" aria-label="Agent profile access">
-			{consents.map(request => (
-				<div className="bx-pmenu-control bx-consent" key={`${request.name}:${request.scope}`}>
-					<span className="bx-pmenu-control-text">
-						{request.status === "granted" ? request.scope === "loop" ? `${request.loopLabel} has standing access` : "This chat has access" : "Agent requests access"} to {request.label}: {request.sites.filter(site => site.signedIn === true).map(site => `${site.site}${site.account ? ` (${site.account})` : ""}`).join(", ") || "No observed sign-ins"}
-						{request.status === "pending" && ". Allow lets the agent's browser tools use this profile. Code the agent runs on this machine acts as you and can read the profile's files; this approval does not stop that."}
-					</span>
-					{request.status === "pending" && opens !== null && opens.profile === request.name && (
-						<span className="bx-consent-opens">
-							{opens.url === undefined ? <>Allow also opens {request.label} here.</> : <>Allow also opens <code>{opens.url}</code> in {request.label}.</>}
-						</span>
-					)}
-					{request.status === "pending" ? (
-						<>
-							<button type="button" role={menu ? "menuitem" : undefined} className="bx-pmenu-control-btn" onClick={() => onConsent(request.name, "allow", "chat", request.subject)}>Allow this chat</button>
-							{request.scope === "loop" && <button type="button" role={menu ? "menuitem" : undefined} className="bx-pmenu-control-btn" onClick={() => onConsent(request.name, "allow", "loop", request.subject)}>Always allow {request.loopLabel}</button>}
-							<button type="button" role={menu ? "menuitem" : undefined} className="bx-pmenu-control-btn" onClick={() => onConsent(request.name, "deny", request.scope, request.subject)}>Deny</button>
-						</>
-					) : <button type="button" role={menu ? "menuitem" : undefined} className="bx-pmenu-control-btn" onClick={() => onConsent(request.name, "revoke", request.scope, request.subject)}>{request.scope === "loop" ? `Revoke ${request.loopLabel}` : "Revoke this chat"}</button>}
-				</div>
-			))}
-		</div>
-	);
 }
 
 export function ProfileSwitcher(props: ProfileSwitcherProps) {
@@ -293,7 +260,6 @@ export function ProfileSwitcher(props: ProfileSwitcherProps) {
 								</div>
 							)}
 
-							<ProfileConsents consents={props.consents} onConsent={props.onConsent} menu />
 							<div className="bx-menu-sep" role="separator" />
 
 							<div className="bx-pmenu-list" role="group" aria-label="Other profiles">

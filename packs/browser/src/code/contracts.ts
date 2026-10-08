@@ -19,8 +19,6 @@
  *     DevTools ports that cannot be discovered from the profile directory. A pipe changes this rule (the worker would be handed a pipe, not a `wsEndpoint`); non-discoverable ports change only the host.
  *  4. Every text OMP prints is OMP's string (matrix rows C9, C10, C11, D8, D9, D16, D22).
  *  5. Errors thrown into the cell keep `name` and `message`; `isAbort` marks cancellation; `recoverTab` asks the host to rebuild the worker (a timeout and a cancel both set it).
- *  6. A saved profile never reaches `acquire` from code without the gate: `acquire` throws `code_needs_consent`. The refusal is {@link savedProfileRefusal}'s text. The gate is advisory against code that goes around
- *     the API (rule 3): it stops the model's `browser.open({ profile })`, not a cell that reads the profile's files.
  */
 
 // ---- the bridge: what the verbatim facade sends. OMP browser.ts:66-88, field for field, plus `profile`.

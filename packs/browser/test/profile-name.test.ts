@@ -2,7 +2,7 @@
  *  types for a profile becomes a path it should not — a folder outside the
  *  profile root, a drive, a hidden entry — or the dock panel starts a sign-in on
  *  a name the runtime then refuses, or a label with a space ("Work Account")
- *  never reaches the runtime that knows which profile it names, or a new profile's folder is made for a caller the host never stamped.
+ *  never reaches the runtime that knows which profile it names.
  *
  *  `profileSlug` (src/profile-name.ts) is the ONE rule for what may be a folder.
  *  `browser_open` takes a slug OR a label, so its door (the input schema) only
@@ -13,18 +13,17 @@
  *  through the door), and the real runtime with no browser to launch (what ever
  *  becomes a folder).
  */
-import { existsSync } from "node:fs";
 import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import type { BrowserOpenOptions, BrowserOpener, BrowserRuntimePort, BrowserState } from "../src/contracts";
+import type { BrowserOpenOptions, BrowserRuntimePort, BrowserState } from "../src/contracts";
 import { MAX_LABEL_CHARS } from "../src/profile-meta";
 import { profileSlug } from "../src/profile-name";
 import { createBrowserServer } from "../src/server";
 import { BrowserRuntimeError, validateProfile } from "../src/store";
-import { createRoot, failureCode, newRuntime, teardown } from "./fixture";
+import { createRoot, newRuntime, teardown } from "./fixture";
 
 const clients: Client[] = [];
 
@@ -111,7 +110,6 @@ test("whatever gets through the door becomes a folder only by the slug rule: uns
 		} catch {
 			filesystem = null;
 		}
-		// The person types a name in the View ("app"): a model is refused a saved profile before any folder is made (profile_consent_required), which is the consent rule's test, not this table's.
 		const refused = await runtime.open({ profile: raw }, { caller: "app" }).then(
 			() => undefined,
 			(error: unknown) => (error instanceof BrowserRuntimeError ? error.code : "other"),
@@ -121,18 +119,4 @@ test("whatever gets through the door becomes a folder only by the slug rule: uns
 	expect(rows).toEqual(NAMES.map(({ raw, slug }) => ({ raw, slug, filesystem: slug, code: slug === null ? "profile_unknown" : null })));
 	// The folders on disk are the valid slugs and nothing else: no `..`, no `a`, no `c:`.
 	expect((await readdir(join(rootDir, "profiles"))).sort()).toEqual([...new Set(NAMES.flatMap(({ slug }) => (slug === null ? [] : [slug])))].sort());
-});
-
-test("a new saved profile is made only for a stamped caller: an unstamped open, or a model with no session, is refused profile_consent_required and no folder is made", async () => {
-	const rootDir = await createRoot();
-	// A valid new slug would otherwise be made, then fail at launch for want of a browser.
-	const runtime = newRuntime(rootDir, { executablePath: join(rootDir, "no-such-chrome") });
-	const callers: ReadonlyArray<{ readonly profile: string; readonly opener: BrowserOpener }> = [
-		{ profile: "unstamped-new", opener: {} },
-		{ profile: "sessionless-new", opener: { caller: "model" } },
-	];
-	for (const { profile, opener } of callers) {
-		expect(await failureCode(() => runtime.open({ profile }, opener))).toBe("profile_consent_required");
-		expect(existsSync(join(rootDir, "profiles", profile))).toBe(false);
-	}
 });
