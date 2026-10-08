@@ -1,7 +1,23 @@
+/** WHAT BREAKS IN THE PRODUCT IF THIS GOES RED: a cell that names a saved
+ *  profile with browser.open({ profile }) does not get the person's logins, or
+ *  gets another profile's, or a held profile is handed over instead of refused
+ *  as profile_held, or a reopen starts a second Chrome, or two racing opens
+ *  start two Chromes on one profile, or a profile combined with app is opened
+ *  or refused as an attach consent instead of the conflict it is; or a tab name
+ *  already bound to one browser is silently served another (the signed-out
+ *  throwaway navigated when the cell asked for a profile, a profile's tab
+ *  answering for a different profile), so logins are set or read in the wrong
+ *  browser, or a refused open leaves a Chrome holding the profile.
+ *
+ *  The real runtime and code host over real headless Chrome and the profile
+ *  fixture site.
+ */
 import { afterEach, expect, test } from "bun:test";
 import type { BrowserRuntime } from "../src/runtime";
-import { failureOf, newRig, valueOf, type Rig } from "./code-host-fixture";
-import { BROWSER_TEST_TIMEOUT_MS, createRoot, describeWithChrome, startFixture, teardown } from "./fixture";
+import { ProfileStore } from "../src/store";
+import { chromePidsByThrowaway } from "./chrome-processes";
+import { cell, failureOf, isFailure, newRig, textOf, valueOf, type Rig } from "./code-host-fixture";
+import { BROWSER_TEST_TIMEOUT_MS, createRoot, describeWithChrome, type Fixture, startFixture, teardown } from "./fixture";
 
 let rig: Rig | undefined;
 
@@ -11,8 +27,10 @@ afterEach(async () => {
   await teardown();
 }, BROWSER_TEST_TIMEOUT_MS);
 
-async function start(): Promise<Rig> {
-  rig = newRig(await createRoot());
+async function start(seed?: (store: ProfileStore) => void): Promise<Rig> {
+  const rootDir = await createRoot();
+  if (seed !== undefined) seed(new ProfileStore(rootDir));
+  rig = newRig(rootDir);
   return rig;
 }
 
@@ -97,5 +115,154 @@ describeWithChrome("a cell opens a saved profile with no approval", () => {
       expect(await runtime.profileList("chat-1")).toEqual([]);
       expect(await runtime.openBrowsers("chat-1")).toEqual([]);
     }
+  }, BROWSER_TEST_TIMEOUT_MS);
+});
+
+const boundElsewhere = (profile: string): string =>
+  `Tab "main" is bound to a different browser than the saved profile "${profile}". Close it first, or open this one under another name.`;
+
+const heldBy = async (runtime: BrowserRuntime, asker: string, profile: string) =>
+  (await runtime.profileList(asker)).find(listed => listed.name === profile)?.heldBy ?? null;
+
+const holdersOf = async (runtime: BrowserRuntime, asker: string): Promise<string[]> =>
+  (await runtime.profileList(asker)).flatMap(listed => (listed.heldBy === "this chat" && listed.browserId !== undefined ? [listed.browserId] : []));
+
+const throwawaysOf = async (runtime: BrowserRuntime, asker: string): Promise<string[]> =>
+  (await runtime.openBrowsers(asker)).map(held => held.browserId);
+
+const openTab = (site: Fixture, path: string, name = "main", profile?: string): string =>
+  `await browser.open({ name: ${q(name)}, ${profile === undefined ? "" : `profile: ${q(profile)}, `}url: ${q(site.url(path))} })`;
+
+const cookieOn = (name = "main"): string =>
+  `await browser.tab(${q(name)}).evaluate(() => document.getElementById("cookie").textContent)`;
+
+const textOfCell = async (host: Rig["host"], session: string, code: string): Promise<string> => {
+  const result = await cell(host, session, code);
+  if (isFailure(result)) throw new Error(`the cell failed: ${result.error.name}: ${result.error.message}`);
+  return textOf(result);
+};
+
+describeWithChrome("a tab name stays on the browser it was opened on", () => {
+  test("a name opened as a throwaway is refused when the cell asks for a saved profile under it: the throwaway tab is untouched and the profile is left free for another chat", async () => {
+    const site = startFixture();
+    const { host, runtime, rootDir } = await start();
+    await valueOf(host, "chat-1", `${openTab(site, "/page2")}; 0`);
+    const throwaway = await throwawaysOf(runtime, "chat-1");
+    expect(throwaway).toHaveLength(1);
+
+    const refused = await failureOf(host, "chat-1", `${openTab(site, "/set-cookie", "main", "work")}; 0`);
+
+    expect(refused.message).toContain(boundElsewhere("work"));
+    expect(site.hits("/set-cookie")).toBe(0);
+    expect(await valueOf(host, "chat-1", `browser.tab("main").url()`)).toBe(site.url("/page2"));
+    expect(await throwawaysOf(runtime, "chat-1")).toEqual(throwaway);
+    expect((await chromePidsByThrowaway(rootDir)).size).toBe(1);
+    expect(await heldBy(runtime, "chat-1", "work")).toBeNull();
+    expect(await valueOf(host, "chat-2", `${openTab(site, "/show-cookie", "a", "work")}; ${cookieOn("a")}`)).toBe("COOKIE:none");
+  }, BROWSER_TEST_TIMEOUT_MS);
+
+  test("a name opened on one saved profile is refused when the cell asks for another profile under it: the tab keeps its own logins and the other profile is left free for another chat", async () => {
+    const site = startFixture();
+    const { host, runtime } = await start();
+    await valueOf(host, "chat-1", `${openTab(site, "/set-cookie", "main", "work")}; 0`);
+    expect(site.hits("/set-cookie")).toBe(1);
+    const holders = await holdersOf(runtime, "chat-1");
+    expect(holders).toHaveLength(1);
+
+    const refused = await failureOf(host, "chat-1", `${openTab(site, "/show-cookie", "main", "other")}; 0`);
+
+    expect(refused.message).toContain(boundElsewhere("other"));
+    expect(site.hits("/show-cookie")).toBe(0);
+    expect(await heldBy(runtime, "chat-1", "other")).toBeNull();
+    expect(await holdersOf(runtime, "chat-1")).toEqual(holders);
+    expect(await valueOf(host, "chat-1", `${openTab(site, "/show-cookie")}; ${cookieOn()}`)).toBe(`COOKIE:${site.cookieValue}`);
+    expect(await valueOf(host, "chat-2", `${openTab(site, "/show-cookie", "a", "other")}; ${cookieOn("a")}`)).toBe("COOKIE:none");
+  }, BROWSER_TEST_TIMEOUT_MS);
+
+  test("asking again for the profile a tab is on, spelled by its label or in another case, reuses that tab on the same browser", async () => {
+    const site = startFixture();
+    const { host, runtime } = await start(store => store.saveMeta("acme-work", { label: "Work Account" }));
+    await valueOf(host, "chat-1", `${openTab(site, "/set-cookie", "main", "acme-work")}; 0`);
+    const holders = await holdersOf(runtime, "chat-1");
+    expect(holders).toHaveLength(1);
+
+    const spellings = ["Work Account", "  work ACCOUNT ", "ACME-WORK"];
+    const reuses: Array<[string, boolean]> = [];
+    for (const spelling of spellings) {
+      const text = await textOfCell(host, "chat-1", openTab(site, "/show-cookie", "main", spelling));
+      reuses.push([spelling, text.startsWith('Reused tab "main"')]);
+    }
+
+    expect(reuses).toEqual(spellings.map(spelling => [spelling, true]));
+    expect(await holdersOf(runtime, "chat-1")).toEqual(holders);
+    expect(await throwawaysOf(runtime, "chat-1")).toEqual([]);
+    expect(await valueOf(host, "chat-1", cookieOn())).toBe(`COOKIE:${site.cookieValue}`);
+  }, BROWSER_TEST_TIMEOUT_MS);
+
+  test("an open with no profile on a tab that is on a saved profile navigates that tab, with the profile's logins", async () => {
+    const site = startFixture();
+    const { host, runtime } = await start();
+    await valueOf(host, "chat-1", `${openTab(site, "/set-cookie", "main", "work")}; 0`);
+    const holders = await holdersOf(runtime, "chat-1");
+    expect(holders).toHaveLength(1);
+
+    const text = await textOfCell(host, "chat-1", openTab(site, "/show-cookie"));
+
+    expect(text).toStartWith('Reused tab "main"');
+    expect(await holdersOf(runtime, "chat-1")).toEqual(holders);
+    expect(await throwawaysOf(runtime, "chat-1")).toEqual([]);
+    expect(await valueOf(host, "chat-1", cookieOn())).toBe(`COOKIE:${site.cookieValue}`);
+  }, BROWSER_TEST_TIMEOUT_MS);
+
+  test("a saved profile opened under a new name while a throwaway holds `main` is a browser of its own, and `main` stays on the throwaway", async () => {
+    const site = startFixture();
+    const { host, runtime } = await start();
+    await valueOf(host, "chat-1", `${openTab(site, "/page2")}; 0`);
+    const throwaway = await throwawaysOf(runtime, "chat-1");
+
+    const text = await textOfCell(host, "chat-1", openTab(site, "/set-cookie", "work-tab", "work"));
+
+    expect(text).toStartWith('Opened tab "work-tab"');
+    expect(site.hits("/set-cookie")).toBe(1);
+    const holders = await holdersOf(runtime, "chat-1");
+    expect(holders).toHaveLength(1);
+    expect(throwaway).not.toContain(holders[0] as string);
+    expect(await throwawaysOf(runtime, "chat-1")).toEqual(throwaway);
+    expect(await valueOf(host, "chat-1", `browser.tab("main").url()`)).toBe(site.url("/page2"));
+    expect(await valueOf(host, "chat-1", `${openTab(site, "/show-cookie", "work-tab")}; ${cookieOn("work-tab")}`)).toBe(`COOKIE:${site.cookieValue}`);
+  }, BROWSER_TEST_TIMEOUT_MS);
+
+  test("a refused open does not take away the profile's browser when another tab of the chat is on it", async () => {
+    const site = startFixture();
+    const { host, runtime } = await start();
+    await valueOf(host, "chat-1", `${openTab(site, "/set-cookie", "work-tab", "work")}; ${openTab(site, "/page2")}; 0`);
+    const holders = await holdersOf(runtime, "chat-1");
+    const throwaway = await throwawaysOf(runtime, "chat-1");
+    expect(holders).toHaveLength(1);
+    expect(throwaway).toHaveLength(1);
+
+    const refused = await failureOf(host, "chat-1", `${openTab(site, "/show-cookie", "main", "work")}; 0`);
+
+    expect(refused.message).toContain(boundElsewhere("work"));
+    expect(site.hits("/show-cookie")).toBe(0);
+    expect(await holdersOf(runtime, "chat-1")).toEqual(holders);
+    expect(await throwawaysOf(runtime, "chat-1")).toEqual(throwaway);
+    expect(await valueOf(host, "chat-1", `${openTab(site, "/show-cookie", "work-tab")}; ${cookieOn("work-tab")}`)).toBe(`COOKIE:${site.cookieValue}`);
+    expect(await valueOf(host, "chat-1", `browser.tab("main").url()`)).toBe(site.url("/page2"));
+  }, BROWSER_TEST_TIMEOUT_MS);
+
+  test("closing the throwaway tab, as the refusal says, lets the same name open on the saved profile, and its login sticks", async () => {
+    const site = startFixture();
+    const { host, runtime } = await start();
+    await valueOf(host, "chat-1", `${openTab(site, "/page2")}; 0`);
+    await failureOf(host, "chat-1", `${openTab(site, "/set-cookie", "main", "work")}; 0`);
+
+    await valueOf(host, "chat-1", `await browser.close({ name: "main" }); 0`);
+    const text = await textOfCell(host, "chat-1", openTab(site, "/set-cookie", "main", "work"));
+
+    expect(text).toStartWith('Opened tab "main"');
+    expect(await throwawaysOf(runtime, "chat-1")).toEqual([]);
+    expect(await holdersOf(runtime, "chat-1")).toHaveLength(1);
+    expect(await valueOf(host, "chat-1", `${openTab(site, "/show-cookie")}; ${cookieOn()}`)).toBe(`COOKIE:${site.cookieValue}`);
   }, BROWSER_TEST_TIMEOUT_MS);
 });

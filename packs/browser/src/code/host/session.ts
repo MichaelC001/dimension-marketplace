@@ -573,14 +573,23 @@ export class CodeSession {
   async #openTab(name: string, kind: BrowserKind, request: BridgeRequest, timeoutMs: number, deadline: AbortSignal, run: Run): Promise<HostReply> {
     const { browsers } = this.#d;
     const existing = this.#tabs.get(name);
+    let acquired: { record: BrowserRecord; created: boolean } | undefined;
     if (existing !== undefined) {
       if (!sameBrowserKind(existing.kind, kind)) {
         throw new ToolError(`Tab ${JSON.stringify(name)} is bound to a different browser (${describeKind(existing.kind)}). Close it first.`);
       }
+      if (request.profile !== undefined) {
+        // A saved profile and a throwaway are both `headless`, so the kind cannot tell them apart. Which browser the profile is (the runtime resolves its name or label) is read from the browser it gives, and the tab must be on that one.
+        acquired = await this.#acquire(kind, request, deadline, run);
+        if (acquired.record.browserId !== existing.browserId) {
+          if (acquired.created) await this.#dropBrowser(acquired.record, true);
+          throw new ToolError(`Tab ${JSON.stringify(name)} is bound to a different browser than the saved profile ${JSON.stringify(request.profile)}. Close it first, or open this one under another name.`);
+        }
+      }
       const reused = await this.#reuse(existing, request, timeoutMs, deadline);
       if (reused !== undefined) return reused;
     }
-    const acquired = await this.#acquire(kind, request, deadline, run);
+    acquired ??= await this.#acquire(kind, request, deadline, run);
     const { record } = acquired;
     if (!acquired.created && request.viewport !== undefined) await browsers.resize(record.browserId, request.viewport);
     let ref: TabRef;

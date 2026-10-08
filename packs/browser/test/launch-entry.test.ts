@@ -1,3 +1,14 @@
+/** WHAT BREAKS IN THE PRODUCT IF THIS GOES RED: the pack does not start, or
+ *  starts under Bun and every browser_run hangs at worker start (Bun cannot
+ *  start the worker while stdin is a flowing pipe), or the launcher relaunches
+ *  itself for ever, or a crashed server reads to the host as a clean exit, or
+ *  with no usable Node the person gets silence instead of one [browser] line
+ *  naming Node.
+ *
+ *  The launcher built from src as app/launch.mjs, run as a host runs it: real
+ *  Bun, real Node 22.12+, real MCP stdio. The tests that need a real Node are
+ *  SKIPPED, not passed, on a machine without one.
+ */
 import { spawnSync } from "node:child_process";
 import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";

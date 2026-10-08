@@ -52,7 +52,7 @@ export interface BridgeRequest {
   all?: boolean;
   kill?: boolean;
   persist?: boolean;
-  /** NEW. A saved profile; refused unless the gate allows (§7.4.5). */
+  /** NEW. A saved profile, opened with no approval of the pack's own; refused with `app` and while another chat holds it (§7.4.5). */
   profile?: string;
 }
 export type BrowserKindTag = "headless" | "spawned" | "connected" | "relay" | "cmux";

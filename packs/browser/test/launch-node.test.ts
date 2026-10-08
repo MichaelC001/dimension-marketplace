@@ -1,3 +1,11 @@
+/** WHAT BREAKS IN THE PRODUCT IF THIS GOES RED: under Bun the launcher
+ *  relaunches the server under the wrong Node or under none: Bun's own bun-node
+ *  shim, a Bun copy named node, the running Bun itself, a Node older than the
+ *  engines floor, a node planted through an empty PATH entry, or nothing when
+ *  Node is only in a standard install folder.
+ *
+ *  pickNode and atLeast over a scripted machine; no process is started.
+ */
 import { readFileSync } from "node:fs";
 import { join, sep } from "node:path";
 import { describe, expect, test } from "bun:test";

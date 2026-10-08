@@ -11354,14 +11354,22 @@ var CodeSession = class {
   async #openTab(name, kind, request, timeoutMs, deadline, run) {
     const { browsers } = this.#d;
     const existing = this.#tabs.get(name);
+    let acquired;
     if (existing !== void 0) {
       if (!sameBrowserKind(existing.kind, kind)) {
         throw new ToolError(`Tab ${JSON.stringify(name)} is bound to a different browser (${describeKind(existing.kind)}). Close it first.`);
       }
+      if (request.profile !== void 0) {
+        acquired = await this.#acquire(kind, request, deadline, run);
+        if (acquired.record.browserId !== existing.browserId) {
+          if (acquired.created) await this.#dropBrowser(acquired.record, true);
+          throw new ToolError(`Tab ${JSON.stringify(name)} is bound to a different browser than the saved profile ${JSON.stringify(request.profile)}. Close it first, or open this one under another name.`);
+        }
+      }
       const reused = await this.#reuse(existing, request, timeoutMs, deadline);
       if (reused !== void 0) return reused;
     }
-    const acquired = await this.#acquire(kind, request, deadline, run);
+    acquired ??= await this.#acquire(kind, request, deadline, run);
     const { record } = acquired;
     if (!acquired.created && request.viewport !== void 0) await browsers.resize(record.browserId, request.viewport);
     let ref;

@@ -77,9 +77,10 @@ not an operating-system sandbox. Its `browser` API confines ordinary calls to
 the caller's session, but a cell can read local files (including the credential
 store), make network requests and discover another session's local Chrome
 debugging endpoint; a deliberately hostile cell can cross that API boundary.
-Use a throwaway browser for code. Saved profiles and explicit app/relay/CDP
-attachment have their own refusal/consent paths, not a security boundary
-against arbitrary Node code.
+Use a throwaway browser for code. An explicit `app.cdp_url`, `app.path` or `app.relay` in a cell is refused
+unless `DIMENSION_BROWSER_CODE_ALLOW_ATTACH=1` (`code_needs_consent`); a saved profile opens with no approval of
+the pack's own (the host's permission mode is the gate), one holder at a time (`profile_held`), and cannot be
+combined with `app`. Neither is a security boundary against arbitrary Node code.
 
 At startup the pack removes its task keys (`TYPESAFE_API_KEY`,
 `TEXT_MODEL_API_KEY`) and matching foreign `DIMENSION_*` secret variables from
@@ -779,8 +780,7 @@ Installing the pack also adds a **Browser** tab to the dock (component
 blank browser; something that is not an address opens nothing and says why).
 Nothing else lives in the tab: profiles and signing in belong to the Browser
 itself. Its profile menu switches and adds profiles and summarises where each is
-signed in (the first sites seen signed in, never a site's account); a site's
-account shows only on the card that asks for an agent's access to a profile.
+signed in (the first sites seen signed in, never a site's account).
 
 The View's start page and the tab's **Open a page** open on the saved `default`
 set, so a person's own browser keeps their logins, unless **Private** is ticked.

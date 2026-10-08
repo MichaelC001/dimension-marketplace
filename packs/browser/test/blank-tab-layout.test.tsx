@@ -1,3 +1,10 @@
+/** WHAT BREAKS IN THE PRODUCT IF THIS GOES RED: a new blank tab in the Browser
+ *  View shows a collapsed address bar where the person types their first
+ *  address, instead of the hero bar.
+ *
+ *  BlankTab rendered with the View's real style.css and measured in a real
+ *  headless Chrome.
+ */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test } from "bun:test";
