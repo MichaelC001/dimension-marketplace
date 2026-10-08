@@ -8028,28 +8028,28 @@ var ATTACH_OPT_IN = "DIMENSION_BROWSER_CODE_ALLOW_ATTACH";
 var ATTACH_REFUSAL = `code_needs_consent: driving a browser or an application you did not launch (app.cdp_url, app.path, app.relay) needs the person's yes, and they have not given it. Do not retry it or look for a way around it: ask the user to set ${ATTACH_OPT_IN}=1 in the browser pack's environment and restart the pack, or open a throwaway browser with browser.open() and no app.`;
 function resolveKind(request, env, cwd, hidden = env.DIMENSION_BROWSER_HEADLESS !== "false") {
   const headless = { kind: "headless", headless: hidden };
+  const app = request.app;
+  const namesApp = Boolean(app?.cdp_url || app?.path || app?.relay);
   if (request.profile !== void 0) {
-    if (request.app?.cdp_url || request.app?.path || request.app?.relay) {
+    if (namesApp) {
       throw new ToolError("A saved profile opens its own Chrome, so it cannot be combined with app. Leave out app, or leave out profile.");
     }
     return headless;
   }
-  const app = request.app;
-  if ((app?.cdp_url || app?.path || app?.relay) && !parseFlag(env[ATTACH_OPT_IN], false)) throw new ToolError(ATTACH_REFUSAL);
+  if (namesApp && !parseFlag(env[ATTACH_OPT_IN], false)) throw new ToolError(ATTACH_REFUSAL);
   if (app?.cdp_url) return { kind: "connected", cdpUrl: trimUrl(app.cdp_url) };
   if (app?.path) {
     const spawned = { kind: "spawned", path: resolveToCwd(app.path, cwd) };
     if (app.args) spawned.args = app.args;
     return spawned;
   }
-  const relayUrl = env.DIMENSION_BROWSER_RELAY_URL;
   if (app?.relay) {
-    const relay = resolveRelayKind({ settingEnabled: true, ...relayUrl === void 0 ? {} : { url: relayUrl } }, env);
+    const relay = resolveRelayKind({ settingEnabled: true, url: env.DIMENSION_BROWSER_RELAY_URL }, env);
     if (relay) return relay;
     throw new ToolError("app.relay is switched off in this environment (DIMENSION_BROWSER_RELAY=0); unset it to drive your own Chrome through the relay.");
   }
   if (app?.relay !== false) {
-    const relay = resolveRelayKind({ settingEnabled: false, ...relayUrl === void 0 ? {} : { url: relayUrl } }, env);
+    const relay = resolveRelayKind({ settingEnabled: false, url: env.DIMENSION_BROWSER_RELAY_URL }, env);
     if (relay) return relay;
   }
   const configuredCdpUrl = env.DIMENSION_BROWSER_CDP_URL?.trim();
@@ -13761,20 +13761,14 @@ var BrowserRuntime = class {
         const holder = this.holderOf(this.openers.get(profile2) ?? {}, opener.session);
         if (holder === "this chat") {
           const { entry } = await launching;
-          return await this.state(entry.browserId, Object.assign(() => guard?.(), { assertCurrent: () => {
-            guard?.assertCurrent();
-            this.requireOpen(entry.browserId);
-          } }));
+          return await this.state(entry.browserId, guardedBy(guard, () => this.requireOpen(entry.browserId)));
         }
         fail("profile_held", heldMessage(profile2, holder));
       }
       const live = profile2 === null ? void 0 : this.byProfile.get(profile2);
       if (profile2 !== null && live !== void 0) {
         const holder = this.holderOf(live.opener, opener.session);
-        if (holder === "this chat") return await this.state(live.browserId, Object.assign(() => guard?.(), { assertCurrent: () => {
-          guard?.assertCurrent();
-          this.requireOpen(live.browserId);
-        } }));
+        if (holder === "this chat") return await this.state(live.browserId, guardedBy(guard, () => this.requireOpen(live.browserId)));
         fail("profile_held", heldMessage(profile2, holder));
       }
       if (this.byId.size + this.opening.size + (this.readerHeld() ? 1 : 0) < MAX_BROWSERS) break;
@@ -13785,10 +13779,9 @@ var BrowserRuntime = class {
     const slot = profile2 ?? `ephemeral:${randomBytes9(8).toString("hex")}`;
     const started2 = this.launch(profile2, engine, viewport, opener, code, attach).then(async (entry) => {
       try {
-        const authorize = Object.assign(() => guard?.(), { assertCurrent: () => {
-          guard?.assertCurrent();
+        const authorize = guardedBy(guard, () => {
           if (this.disposed) fail("disposed", "runtime has been disposed");
-        } });
+        });
         const state = await this.state(entry.browserId, authorize);
         if (guard !== void 0) await guard();
         guard?.assertCurrent();
@@ -15721,6 +15714,12 @@ function nameProfiles(profiles) {
 }
 function heldMessage(profile2, holder) {
   return `profile "${profile2}" is already open, held by ${holder === "human" ? "the human in the View" : "another chat"}. Ask the human to close it, or use another profile.`;
+}
+function guardedBy(guard, check) {
+  return Object.assign(() => guard?.(), { assertCurrent: () => {
+    guard?.assertCurrent();
+    check();
+  } });
 }
 
 // src/stream.ts

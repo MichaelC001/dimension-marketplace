@@ -497,14 +497,14 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				const holder = this.holderOf(this.openers.get(profile) ?? {}, opener.session);
 				if (holder === "this chat") {
 					const { entry } = await launching;
-					return await this.state(entry.browserId, Object.assign(() => guard?.(), { assertCurrent: () => { guard?.assertCurrent(); this.requireOpen(entry.browserId); } }));
+					return await this.state(entry.browserId, guardedBy(guard, () => this.requireOpen(entry.browserId)));
 				}
 				fail("profile_held", heldMessage(profile, holder));
 			}
 			const live = profile === null ? undefined : this.byProfile.get(profile);
 			if (profile !== null && live !== undefined) {
 				const holder = this.holderOf(live.opener, opener.session);
-				if (holder === "this chat") return await this.state(live.browserId, Object.assign(() => guard?.(), { assertCurrent: () => { guard?.assertCurrent(); this.requireOpen(live.browserId); } }));
+				if (holder === "this chat") return await this.state(live.browserId, guardedBy(guard, () => this.requireOpen(live.browserId)));
 				fail("profile_held", heldMessage(profile, holder));
 			}
 			// Count launches in flight too: four concurrent opens must not slip past the bound just because none of them has finished launching yet.
@@ -521,10 +521,9 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		const started = this.launch(profile, engine, viewport, opener, code, attach)
 			.then(async (entry) => {
 				try {
-					const authorize: EffectGuard = Object.assign(() => guard?.(), { assertCurrent: () => {
-						guard?.assertCurrent();
+					const authorize: EffectGuard = guardedBy(guard, () => {
 						if (this.disposed) fail("disposed", "runtime has been disposed");
-					} });
+					});
 					const state = await this.state(entry.browserId, authorize);
 					if (guard !== undefined) await guard();
 					guard?.assertCurrent();
@@ -2710,4 +2709,8 @@ function nameProfiles(profiles: readonly { slug: string; label: string }[]): str
 /** The refusal of a profile someone else holds, open or still launching: whose it is, never an id. The View recognises "is already open". */
 function heldMessage(profile: string, holder: Exclude<ProfileHolder, "this chat" | null>): string {
 	return `profile "${profile}" is already open, held by ${holder === "human" ? "the human in the View" : "another chat"}. Ask the human to close it, or use another profile.`;
+}
+
+function guardedBy(guard: EffectGuard | undefined, check: () => void): EffectGuard {
+	return Object.assign(() => guard?.(), { assertCurrent: () => { guard?.assertCurrent(); check(); } });
 }
