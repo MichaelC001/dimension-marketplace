@@ -5,6 +5,7 @@ import { build as buildServer } from "esbuild";
 import { build as buildView } from "vite";
 import react from "@vitejs/plugin-react";
 import { validateArtifactoryDecl } from "@dimension/sdk/artifactory";
+import { buildAgentPuppeteer } from "./agent-puppeteer.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 // Agent Plugins 1.0.0 layout: the pack id is the portable `name`; the
@@ -35,6 +36,7 @@ await buildServer({ ...nodeBundle, entryPoints: [resolve(root, "src/stdio.ts")],
 await buildServer({ ...nodeBundle, entryPoints: [resolve(root, "src/code/worker/entry.ts")], outfile: resolve(root, "app/code-worker.mjs") });
 // The MCP entry: a launcher that checks the runtime before it loads anything (and, under Bun, relaunches under a real Node: src/launch-node.ts). It imports no server code, only the server bundle by URL at run time.
 await buildServer({ ...nodeBundle, entryPoints: [resolve(root, "src/launch.ts")], outfile: resolve(root, "app/launch.mjs") });
+await buildAgentPuppeteer({ outfile: resolve(root, "app/puppeteer-agent.mjs") });
 await buildView({
   configFile: false,
   root: resolve(root, "app/view"),
