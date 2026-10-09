@@ -1,11 +1,10 @@
 /**
  * What a person calls a saved profile, and how a profile's sign-in observations
  * are read — the ONE rule the agent's list (`browser_profiles`), the host
- * connection report and the dock panel share.
+ * connection report and the View share.
  *
- * Pure and dependency-free on purpose, like profile-name.ts: the dock panel
- * runs in the host's page, so it cannot reach this through store.ts
- * (node:fs). The slug (profile-name.ts) names the folder and never changes;
+ * Pure and dependency-free on purpose, like profile-name.ts: the View runs in
+ * the host's page, so it cannot reach this through store.ts (node:fs). The slug (profile-name.ts) names the folder and never changes;
  * the label, colour and avatar here are separate, free to edit, and optional:
  * a profile with no metadata file gets defaults derived from its slug.
  */

@@ -62,9 +62,13 @@ async function connect(runtime: BrowserRuntime, rootDir: string): Promise<(name:
 	await writeFile(join(viewDir, "index.html"), "<!doctype html><title>view</title>");
 	const server = await createBrowserServer({ runtime, viewDir });
 	const client = new Client({ name: "task-test", version: "0.0.0" });
+	const sessionId = "task-chat";
 	const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
 	await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
-	return async (name, args) => (await client.callTool({ name, arguments: args })) as ToolResult;
+	return async (name, args) => (await client.callTool({ name, arguments: args, _meta: {
+		"ai.insodimension/caller": "model",
+		"ai.insodimension/session": { sessionId },
+	} })) as ToolResult;
 }
 
 /** A promise that resolves once `onStep` has seen `count` steps. */
@@ -109,7 +113,7 @@ describeTasks("tasks", () => {
 		"steps stream to onStep and into state while the task runs, then the final result is recorded",
 		async () => {
 			const { runtime, rootDir } = await createRuntime();
-			const { browserId } = await runtime.open({ profile: "task-steps", viewport: VIEWPORT });
+			const { browserId } = await runtime.open({ profile: "task-steps", viewport: VIEWPORT }, { caller: "app" });
 			const gate = join(rootDir, "finish-task");
 			const steps = [
 				{ action: "open careers page", url: "https://a.example/", modelCalls: 1, inputTokens: 100, outputTokens: 10 },
@@ -155,7 +159,7 @@ describeTasks("tasks", () => {
 		async () => {
 			const fixture = startFixture();
 			const { runtime } = await createRuntime();
-			const { browserId } = await runtime.open({ profile: "task-cancel", viewport: VIEWPORT });
+			const { browserId } = await runtime.open({ profile: "task-cancel", viewport: VIEWPORT }, { caller: "app" });
 			const progress = stepsSeen(1);
 
 			const running = runtime.runTask(
@@ -192,7 +196,7 @@ describeTasks("tasks", () => {
 		"a worker that exits without a result fails the task with its stderr, and a new task can start",
 		async () => {
 			const { runtime } = await createRuntime();
-			const { browserId } = await runtime.open({ profile: "task-crash", viewport: VIEWPORT });
+			const { browserId } = await runtime.open({ profile: "task-crash", viewport: VIEWPORT }, { caller: "app" });
 			const crash = JSON.stringify({ crash: { stderr: "fake worker exploded: TYPESAFE_API_KEY is not set", exit: 3 } });
 
 			const run = await runtime.runTask(browserId, { task: crash });
@@ -213,7 +217,9 @@ describeTasks("tasks", () => {
 			const fixture = startFixture();
 			const { runtime, rootDir } = await createRuntime();
 			const call = await connect(runtime, rootDir);
-			const { browserId } = await runtime.open({ profile: "task-402", viewport: VIEWPORT });
+			const opened = await call("browser_open", { profile: "task-402", viewport: VIEWPORT });
+			expect(opened.isError).toBeFalsy();
+			const browserId = opened.structuredContent?.browserId as string;
 			const failures = [
 				{
 					script: { holdPipes: 30, result: { status: "failed", summary: "Model provider returned HTTP 402; no action executed.", steps: 0 } },
@@ -247,7 +253,7 @@ describeTasks("tasks", () => {
 		async () => {
 			const fixture = startFixture();
 			const { runtime } = await createRuntime();
-			const { browserId } = await runtime.open({ profile: "task-tab", viewport: VIEWPORT });
+			const { browserId } = await runtime.open({ profile: "task-tab", viewport: VIEWPORT }, { caller: "app" });
 			const progress = stepsSeen(1);
 
 			const running = runtime.runTask(
@@ -277,7 +283,7 @@ describeTasks("tasks", () => {
 		async () => {
 			const fixture = startFixture();
 			const { runtime, rootDir } = await createRuntime();
-			const { browserId } = await runtime.open({ profile: "task-bg-tab", viewport: VIEWPORT });
+			const { browserId } = await runtime.open({ profile: "task-bg-tab", viewport: VIEWPORT }, { caller: "app" });
 			const gate = join(rootDir, "finish-task");
 			const progress = stepsSeen(1);
 
@@ -319,7 +325,9 @@ describeTasks("tasks", () => {
 			const fixture = startFixture();
 			const { runtime, rootDir } = await createRuntime();
 			const call = await connect(runtime, rootDir);
-			const { browserId } = await runtime.open({ profile: "task-redact", viewport: VIEWPORT });
+			const opened = await call("browser_open", { profile: "task-redact", viewport: VIEWPORT });
+			expect(opened.isError).toBeFalsy();
+			const browserId = opened.structuredContent?.browserId as string;
 			const store = join(rootDir, "profiles", "task-redact", "credentials.json");
 			const origin = new URL(fixture.url("/")).origin;
 			const results: unknown[] = [];

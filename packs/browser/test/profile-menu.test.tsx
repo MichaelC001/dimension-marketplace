@@ -50,7 +50,7 @@ const failure = (text: string): CallToolResult => ({ isError: true, content: [{ 
 const answer = (structuredContent: object): CallToolResult => ({ content: [], structuredContent: { ...structuredContent } });
 
 /** A host that answers `browser_profiles` with `host.profiles`, never answers `browser_stream`, records every call, and lets `respond` decide the rest. */
-function fakeHost(profiles: ProfileListing[], respond: (call: Call) => CallToolResult = call => failure(`unexpected ${call.name}`)): Host {
+function fakeHost(profiles: ProfileListing[], respond: (call: Call) => CallToolResult | Promise<CallToolResult> = call => failure(`unexpected ${call.name}`)): Host {
 	const calls: Call[] = [];
 	const host: Host = {
 		calls,

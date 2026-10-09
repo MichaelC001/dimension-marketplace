@@ -157,10 +157,14 @@ async function connect(runtime: BrowserRuntime, rootDir: string): Promise<(name:
 	await writeFile(join(viewDir, "index.html"), "<!doctype html><title>view</title>");
 	const server = await createBrowserServer({ runtime, viewDir });
 	const client = new Client({ name: "credential-test", version: "0.0.0" });
+	const sessionId = "credential-chat";
 	const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
 	await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
 	clients.push(client);
-	return async (name, args) => (await client.callTool({ name, arguments: args })) as ToolResult;
+	return async (name, args) => (await client.callTool({ name, arguments: args, _meta: {
+		"ai.insodimension/caller": "model",
+		"ai.insodimension/session": { sessionId },
+	} })) as ToolResult;
 }
 
 // ---------------------------------------------------------------------------
@@ -248,7 +252,7 @@ describeWithFakeWorker("credentials through browser_task", () => {
 		async () => {
 			const rootDir = await createRoot();
 			const runtime = newRuntime(rootDir);
-			const { browserId } = await runtime.open({ profile: "refusals" });
+			const { browserId } = await runtime.open({ profile: "refusals" }, { caller: "app" });
 			const out = (name: string): string => join(rootDir, `${name}.json`);
 			const signup = await runtime.runTask(browserId, { task: script(out("signup")), credential: { origin: SHOP, mode: "signup" } });
 			expect(signup.status).toBe("done");

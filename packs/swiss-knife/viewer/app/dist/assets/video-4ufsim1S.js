@@ -1,1 +1,0 @@
-import{mountMedia as e}from"./media-core-dlQdVCHA.js";var t={mount:(t,n,r)=>e(t,n,r,`video`)};export{t as default};

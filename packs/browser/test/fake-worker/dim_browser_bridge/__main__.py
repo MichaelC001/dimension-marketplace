@@ -12,7 +12,7 @@ The request's `task` field is a JSON script:
    "holdPipes": 30,           # first spawn a process that inherits stdout/stderr and lives that many seconds,
                               # as a daemon an agent library spawns can; the worker itself then exits
    "pidInSummary": true}      # the result's summary is this worker's pid
-Every worker, before it reads its job, records its pid as an empty file in the directory named by FAKE_WORKER_PIDS
+Every worker, before it reads its job, records its pid as an empty file in the directory named by PYTHON_FAKE_WORKER_PIDS
 (when set), so a test can tell a worker spawned ahead of its job (a spare) from one spawned for it.
 Stdin EOF before a job => exit quietly, as the real worker does. Stdin EOF while waiting => a `cancelled` result,
 as the protocol requires.
@@ -44,7 +44,7 @@ def open_tab(cdp_url, url, background):
 
 
 def main():
-    pids = os.environ.get("FAKE_WORKER_PIDS")
+    pids = os.environ.get("PYTHON_FAKE_WORKER_PIDS")
     if pids:
         open(os.path.join(pids, str(os.getpid())), "w").close()
     line = sys.stdin.readline()

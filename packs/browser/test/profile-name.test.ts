@@ -1,6 +1,6 @@
 /** WHAT BREAKS IN THE PRODUCT IF THIS GOES RED: a name a person or an agent
  *  types for a profile becomes a path it should not — a folder outside the
- *  profile root, a drive, a hidden entry — or the dock panel starts a sign-in on
+ *  profile root, a drive, a hidden entry — or the View's add-profile form accepts
  *  a name the runtime then refuses, or a label with a space ("Work Account")
  *  never reaches the runtime that knows which profile it names.
  *
@@ -110,7 +110,7 @@ test("whatever gets through the door becomes a folder only by the slug rule: uns
 		} catch {
 			filesystem = null;
 		}
-		const refused = await runtime.open({ profile: raw }).then(
+		const refused = await runtime.open({ profile: raw }, { caller: "app" }).then(
 			() => undefined,
 			(error: unknown) => (error instanceof BrowserRuntimeError ? error.code : "other"),
 		);

@@ -59,13 +59,6 @@ import { LOOPBACK_EXCEPTIONS } from "./page-log.js";
 export const READER_PRESENTS_AS_CHROME: boolean = false;
 
 /**
- * Launch arguments for a HEADLESS agent browser: `navigator.webdriver` is false in every page and iframe, from the browser
- * itself. Not for a browser with a window: Chrome pins a yellow "unsupported command-line flag" bar to every window it opens
- * with this switch, which changes what the person watching sees and takes 40 px off the page.
- */
-export const AGENT_LAUNCH_ARGS: readonly string[] = ["--disable-blink-features=AutomationControlled"];
-
-/**
  * Switches puppeteer adds by default that a person's Chrome does not carry and a page can observe: `--enable-automation`
  * (webdriver, the infobar), `--disable-popup-blocking` (a `window.open` with no gesture succeeds), `--disable-ipc-flooding-protection`
  * (a `pushState` flood is never throttled), `--allow-pre-commit-input`. The privacy switches in `CHROMIUM_ARGS` (puppeteer.ts) are kept on

@@ -1,5 +1,5 @@
-// The seam a layer on top of the viewer plugs into: markup on a picture, comments
-// on a document. Deliberately its own file: the pane imports these two exports
+// The seam a layer on top of the viewer plugs into: notes on a picture, on a document,
+// on a page or a recording. Deliberately its own file: the pane imports `PaneExtras`
 // and nothing else about what sits on top, and this file is edited without
 // touching the pane.
 //
@@ -14,26 +14,25 @@
 //     layer sat in, so the slots are looked up again each time it says `ready`.
 import "@dimension/mcp-app-kit/annotate/annotate.css";
 import {
-	AnnotationPanel,
+	AnnotationNotice,
+	AnnotationToolbar,
 	DocumentCommentLayer,
+	DocumentNotes,
+	MarkupIcon,
 	MarkupOverlay,
-	MarkupToolbar,
-	type PanelItem,
+	markupToolGroups,
 	useDocumentComments,
 	useImageMarkup,
 	useMarkupShortcuts,
 } from "@dimension/mcp-app-kit/annotate/react";
-import { type ReactNode, useEffect, useMemo } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import type { ViewerKind } from "../../src/contract";
 import { annotationModes } from "./annotate-modes";
 import { loadDocumentBytes } from "./document-bytes";
 import { ElementPicks } from "./pane-extras-element";
 import { TimelineMarks } from "./pane-extras-timeline";
-import { type AnnotateMode, Column, type PaneExtrasProps, revisionOf, Strip, useSlot } from "./pane-shared";
-
-export type { AnnotateMode, PaneExtrasProps };
-export { annotationModes };
+import { type AnnotateMode, Footer, type PaneExtrasProps, revisionOf, Strip, useSlot } from "./pane-shared";
 
 const PICTURE = '[data-slot="viewer-picture"]';
 const TEXT_ROOT = '[data-slot="viewer-text-root"]';
@@ -66,32 +65,40 @@ export function PaneExtras(props: PaneExtrasProps): ReactNode {
 	return <Layer {...props} />;
 }
 
-function PictureMarkup({ app, tab, active, ready, frame, mode, onMode }: PaneExtrasProps) {
+function PictureMarkup({ app, tab, active, ready, frame, mode }: PaneExtrasProps) {
 	const picture = useSlot(frame, ready, PICTURE);
-	const marking = mode === "marks";
+	const up = mode === "marks";
 	const session = useImageMarkup({
 		app,
 		file: tab.path,
 		rev: revisionOf(tab),
+		autoStage: active && up,
 		// The document cache the pane already fills: the original bytes, not what the screen shows.
 		loadBytes: async () => (await loadDocumentBytes(app, tab)).bytes,
 	});
 	const { setTool } = session;
 
-	// Entering the mode arms a tool; leaving it puts the pen down but keeps the marks.
+	// The layer comes up with Box in the hand, so a drag draws at once; it goes down with the layer (a file that did
+	// not open) and the marks stay. Escape, or pressing the armed tool again, puts the pen down to scroll, zoom and
+	// read (an armed overlay owns every touch and drag, so a finger has no other way); it is the human's to pick up
+	// again (a tool button, a number key): a changed file or theme reloads the picture and must not take or give it.
 	useEffect(() => {
-		setTool(marking ? "box" : null);
-	}, [marking, setTool]);
+		setTool(up ? "box" : null);
+	}, [up, setTool]);
+
+	// The card's Annotate action is the one ask that picks the pen up again, in the tool the human last held.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: `annotateRequests` is the trigger; the tool is read as it stands.
+	useEffect(() => {
+		if (tab.annotateRequests > 0 && up) setTool(session.tool ?? "box");
+	}, [tab.annotateRequests]);
 
 	useMarkupShortcuts({
-		enabled: active && marking,
-		onTool: session.setTool,
+		enabled: active && up,
+		onTool: setTool,
 		onUndo: session.markup.undo,
 		onRedo: session.markup.redo,
-		onExit: () => onMode(null),
+		onExit: () => setTool(null),
 	});
-
-	const items = useMemo<PanelItem[]>(() => session.markup.marks.map(mark => ({ id: mark.id, note: mark.note })), [session.markup.marks]);
 
 	return (
 		<>
@@ -102,52 +109,34 @@ function PictureMarkup({ app, tab, active, ready, frame, mode, onMode }: PaneExt
 							marks={session.markup.marks}
 							tool={session.tool}
 							onShape={session.onShape}
-							activeId={session.activeId}
-							label={`Mark up ${tab.filename}`}
+							onNote={session.markup.setNote}
+							onRemove={session.markup.remove}
+							label={`Draw on ${tab.filename}`}
 						/>,
 						picture,
 					)}
-			{marking ? (
+			{up ? (
 				<Strip frame={frame}>
-					<MarkupToolbar
-						tool={session.tool}
-						onTool={session.setTool}
-						canUndo={session.markup.canUndo}
-						canRedo={session.markup.canRedo}
-						onUndo={session.markup.undo}
-						onRedo={session.markup.redo}
-						onClear={session.markup.clear}
-						hasMarks={session.markup.marks.length > 0}
-						onDone={() => onMode(null)}
+					<AnnotationToolbar
+						label="Annotation tools"
 						placement="strip"
+						groups={markupToolGroups({
+							tool: session.tool,
+							onTool: setTool,
+							canUndo: session.markup.canUndo,
+							canRedo: session.markup.canRedo,
+							onUndo: session.markup.undo,
+							onRedo: session.markup.redo,
+							onClear: session.markup.clear,
+							hasMarks: session.markup.marks.length > 0,
+						})}
 					/>
 				</Strip>
 			) : null}
-			{marking ? (
-				<Column frame={frame}>
-					<AnnotationPanel
-						title="Marks"
-						items={items}
-						activeId={session.activeId}
-						focus={session.focus}
-						onActive={session.setActiveId}
-						onNote={session.markup.setNote}
-						onRemove={session.markup.remove}
-						message={session.message}
-						onMessage={session.setMessage}
-						onSend={() => void session.send()}
-						send={{ busy: session.sending, staged: session.staged }}
-						status={session.status}
-						emptyHint={
-							<>
-								<strong>Mark up this picture</strong>
-								<span>
-									Drag to box something, or pick another tool above the picture. Press <kbd>1</kbd>–<kbd>5</kbd> to switch tools.
-								</span>
-							</>
-						}
-					/>
-				</Column>
+			{up ? (
+				<Footer frame={frame}>
+					<AnnotationNotice status={session.status} />
+				</Footer>
 			) : null}
 		</>
 	);
@@ -156,64 +145,80 @@ function PictureMarkup({ app, tab, active, ready, frame, mode, onMode }: PaneExt
 function TextComments({ app, tab, active, ready, frame, mode }: PaneExtrasProps) {
 	const textRoot = useSlot(frame, ready, TEXT_ROOT);
 	const commenting = mode === "comments";
+	// The bar's Comment asks the layer to comment on the selection, as Ctrl+Alt+M does.
+	const [request, setRequest] = useState(0);
 	const session = useDocumentComments({
 		app,
 		file: tab.path,
 		kind: KIND_WORDS[tab.kind] ?? "document",
 		...(PAGE_WORDS[tab.kind] === undefined ? {} : { pageWord: PAGE_WORDS[tab.kind] }),
 		rev: revisionOf(tab),
+		autoStage: active && commenting,
 	});
 
-	const items = useMemo<PanelItem[]>(
-		() =>
-			session.comments.map(comment => {
-				const state = session.states.get(comment.id);
-				return {
-					id: comment.id,
-					heading: comment.anchor.quote,
-					note: comment.note,
-					...(state === "orphan" ? { flag: "outdated" as const } : state === "fuzzy" ? { flag: "reworded" as const } : {}),
-				};
-			}),
-		[session.comments, session.states],
-	);
-
+	const [ranges, setRanges] = useState<ReadonlyMap<number, Range>>(() => new Map());
+	const [hoveredId, setHoveredId] = useState<number | null>(null);
+	const notesHost = active ? frame : null;
 	return (
 		<>
 			{/* Only the tab on screen paints: the highlights are one registry for the whole document. */}
 			<DocumentCommentLayer
 				root={active ? textRoot : null}
+				onRanges={setRanges}
 				comments={session.comments}
-				activeId={session.activeId}
+				activeId={session.openId ?? hoveredId}
 				onComment={session.onComment}
 				onResolved={session.setStates}
 				interactive={commenting}
+				request={request}
 			/>
+			{notesHost && textRoot && createPortal(
+				<DocumentNotes
+					root={textRoot}
+					notesHost={notesHost}
+					ranges={ranges}
+					comments={session.comments}
+					states={session.states}
+					openId={session.openId}
+					onOpen={session.setOpenId}
+					onNote={session.setNote}
+					onRemove={session.remove}
+					onActive={setHoveredId}
+				/>,
+				notesHost,
+			)}
 			{commenting ? (
-				<Column frame={frame}>
-					<AnnotationPanel
-						title="Comments"
-						items={items}
-						activeId={session.activeId}
-						focus={session.focus}
-						onActive={session.setActiveId}
-						onNote={session.setNote}
-						onRemove={session.remove}
-						message={session.message}
-						onMessage={session.setMessage}
-						onSend={() => void session.send()}
-						send={{ busy: session.sending, staged: session.staged }}
-						status={session.status}
-						emptyHint={
-							<>
-								<strong>Comment on the document</strong>
-								<span>
-									Select some text, then choose <em>Comment</em>, or press <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>M</kbd>.
-								</span>
-							</>
-						}
+				<Strip frame={frame}>
+					{/* Comment is the one tool of a text, so it is always the armed one: the ring says what the bar is for. */}
+					<AnnotationToolbar
+						label="Annotation tools"
+						placement="strip"
+						groups={[
+							{
+								id: "comment",
+								label: "Comment tool",
+								kind: "pick",
+								armed: "comment",
+								tools: [
+									{
+										id: "comment",
+										label: "Comment",
+										text: "Comment",
+										icon: <MarkupIcon name="comment" size={15} />,
+										key: "Ctrl+Alt+M",
+										keepFocus: true,
+										onSelect: () => setRequest(count => count + 1),
+									},
+								],
+							},
+						]}
 					/>
-				</Column>
+				</Strip>
+			) : null}
+			{commenting ? (
+				<Footer frame={frame}>
+					<AnnotationNotice status={session.status} />
+				</Footer>
 			) : null}
 		</>
 	);

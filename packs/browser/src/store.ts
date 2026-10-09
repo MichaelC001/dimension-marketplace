@@ -16,8 +16,8 @@
  *      after a server that died before it could delete them. They are never
  *      profiles: no lock, no listing, no observations.
  */
-import { randomBytes } from "node:crypto";
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import { closeSync, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -221,12 +221,40 @@ export class ProfileStore {
 				`profile "${slug}" is already in use (${who}). Close that browser first (browser_close), or use another profile.`,
 			);
 		}
+		let failure: unknown;
 		try {
-			writeSync(fd, body);
+			writeFileSync(fd, body);
 			fsyncSync(fd);
-		} finally {
-			closeSync(fd);
+		} catch (error) {
+			failure = error;
+			try {
+				// The open descriptor pins our file identity even after a partial write.
+				const owned = fstatSync(fd, { bigint: true });
+				const current = lstatSync(path, { bigint: true });
+				const replacement = readLock(path);
+				if (owned.dev === current.dev && owned.ino === current.ino && (!replacement || replacement.token === token)) unlinkSync(path);
+			} catch (cleanupError) {
+				if ((cleanupError as NodeJS.ErrnoException).code !== "ENOENT") {
+					failure = new AggregateError([error, cleanupError], "Profile lock initialization failed and owned lock cleanup could not be confirmed.");
+				}
+			}
 		}
+		try {
+			closeSync(fd);
+		} catch (error) {
+			if (failure !== undefined) {
+				failure = new AggregateError([failure, error], "Profile lock initialization failed and its descriptor could not be closed.");
+			} else {
+				failure = error;
+				try {
+					// The complete token was written: a close failure must not orphan it.
+					if (readLock(path)?.token === token) unlinkSync(path);
+				} catch (cleanupError) {
+					failure = new AggregateError([error, cleanupError], "Profile lock descriptor close failed and owned lock cleanup could not be confirmed.");
+				}
+			}
+		}
+		if (failure !== undefined) throw failure;
 		return { path, token };
 	}
 

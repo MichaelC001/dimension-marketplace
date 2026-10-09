@@ -30,7 +30,7 @@ describeWithChrome("tabs", () => {
 		async () => {
 			const fixture = startFixture();
 			const { runtime } = await createRuntime();
-			const { browserId } = await runtime.open({ profile: "tabs-ops", viewport: VIEWPORT });
+			const { browserId } = await runtime.open({ profile: "tabs-ops", viewport: VIEWPORT }, { caller: "app" });
 			const first = await perform(runtime, browserId, { kind: "navigate", url: fixture.url("/page2") });
 			const firstId = first.activeTabId;
 
@@ -68,7 +68,7 @@ describeWithChrome("tabs", () => {
 		async () => {
 			const fixture = startFixture();
 			const { runtime } = await createRuntime();
-			const { browserId } = await runtime.open({ profile: "tabs-blank", viewport: VIEWPORT });
+			const { browserId } = await runtime.open({ profile: "tabs-blank", viewport: VIEWPORT }, { caller: "app" });
 			const opener = await perform(runtime, browserId, { kind: "navigate", url: fixture.url("/opener") });
 
 			await perform(runtime, browserId, { kind: "click", selector: "#blank" });
@@ -90,7 +90,7 @@ describeWithChrome("tabs", () => {
 		async () => {
 			const fixture = startFixture();
 			const { runtime } = await createRuntime();
-			const { browserId } = await runtime.open({ profile: "tabs-history", viewport: VIEWPORT });
+			const { browserId } = await runtime.open({ profile: "tabs-history", viewport: VIEWPORT }, { caller: "app" });
 			const fresh = await runtime.tab(browserId, { op: "new" });
 			expect(fresh.canGoBack).toBe(false);
 			expect((await runtime.act(browserId, { kind: "back" })).status).toBe("failed");
@@ -121,7 +121,7 @@ describeWithChrome("tabs", () => {
 		async () => {
 			const fixture = startFixture();
 			const { runtime } = await createRuntime();
-			const { browserId } = await runtime.open({ profile: "tabs-insert", viewport: VIEWPORT });
+			const { browserId } = await runtime.open({ profile: "tabs-insert", viewport: VIEWPORT }, { caller: "app" });
 			await perform(runtime, browserId, { kind: "navigate", url: fixture.url("/") });
 			await perform(runtime, browserId, { kind: "click", selector: "#user" });
 
@@ -140,7 +140,7 @@ describeWithChrome("tabs", () => {
 		async () => {
 			const fixture = startFixture();
 			const { runtime } = await createRuntime();
-			const { browserId } = await runtime.open({ profile: "tabs-inflight", viewport: VIEWPORT });
+			const { browserId } = await runtime.open({ profile: "tabs-inflight", viewport: VIEWPORT }, { caller: "app" });
 			await perform(runtime, browserId, { kind: "navigate", url: fixture.url("/page2") });
 			const frames: LiveFrame[] = [];
 			const stop = runtime.watchFrames(browserId, (frame) => frames.push(frame));
@@ -168,7 +168,7 @@ describeWithChrome("tabs", () => {
 		async () => {
 			const fixture = startFixture();
 			const { runtime } = await createRuntime();
-			const { browserId } = await runtime.open({ profile: "tabs-icon", viewport: VIEWPORT });
+			const { browserId } = await runtime.open({ profile: "tabs-icon", viewport: VIEWPORT }, { caller: "app" });
 			await perform(runtime, browserId, { kind: "navigate", url: fixture.url("/with-icon") });
 
 			const state = await waitUntil(

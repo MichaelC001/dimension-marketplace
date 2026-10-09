@@ -590,6 +590,7 @@ kbd {
 /* hero omnibox (start page, blank tab) */
 
 .bx-omni[data-size="hero"] {
+	flex: none;
 	height: 52px;
 	margin: 0;
 	padding: 0 16px;

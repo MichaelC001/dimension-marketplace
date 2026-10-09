@@ -1,7 +1,7 @@
-// How a recording is played: play and pause, the scrubber (the kit's `TimelineBar`, so
-// playing and marking are one control), elapsed over total, volume, speed. Always shown for
-// audio and video, because it is how they are played at all; in timeline mode the same bar
-// also carries the marks and the buttons that make them.
+// How a recording is played: play and pause, the lane under it (a sound's waveform, a video's filmstrip - the kit's
+// `WaveLane` and `FilmLane`, so playing and marking are one control), elapsed over total, volume, speed. Always shown for
+// audio and video, because it is how they are played at all; while the marking layer is up the same lane also carries
+// the notes. The tools that make them (Moment, Stretch, the drawing tools) are the pane's one toolbar, not buttons here.
 //
 // Mounted into the renderer's dock (`data-slot="viewer-media-dock"`), driven by the media
 // element's events. The element is the truth: nothing here keeps a second clock except the
@@ -11,8 +11,8 @@
 // state, and not in a prop: the scrubber paints it into its own DOM and the clock redraws
 // only when its tenths change, so a frame draws none of the buttons, the volume, the speed,
 // the marks or the scrubber itself.
-import { clampTime, formatTimecode, MAX_TIMELINE_MARKS, type TimelineMark } from "@dimension/mcp-app-kit/annotate";
-import { type TimeRange, TimelineBar } from "@dimension/mcp-app-kit/annotate/react";
+import { clampTime, type FilmFrame, formatTimecode, MAX_TIMELINE_MARKS, type TimelineMark } from "@dimension/mcp-app-kit/annotate";
+import { FilmLane, type NoteCloseReason, WaveLane } from "@dimension/mcp-app-kit/annotate/react";
 import { IconButton } from "@fraym/ui/elements/icon-button";
 import { cn } from "@fraym/ui/lib/cn";
 import { type CSSProperties, type ReactElement, type ReactNode, useEffect, useState, useSyncExternalStore } from "react";
@@ -23,8 +23,6 @@ import { describeMediaError, type MediaTag } from "./media-messages";
 /** Speeds the speed button steps through. */
 export const RATES: readonly number[] = [0.5, 0.75, 1, 1.25, 1.5, 2];
 
-const MAX_BUFFERED_SHOWN = 32;
-
 export interface MediaState {
 	/** How far into the recording the player can go: its length, or - for one that does not say - as far as it is known so far. */
 	readonly duration: number;
@@ -34,7 +32,6 @@ export interface MediaState {
 	readonly rate: number;
 	readonly volume: number;
 	readonly muted: boolean;
-	readonly buffered: readonly TimeRange[];
 	/** The element's `MediaError.code`, once playback has failed. */
 	readonly failed: number | null;
 	/** …and the engine's own words about it. */
@@ -42,10 +39,6 @@ export interface MediaState {
 }
 
 function readState(media: HTMLMediaElement): MediaState {
-	const buffered: TimeRange[] = [];
-	for (let index = 0; index < Math.min(media.buffered.length, MAX_BUFFERED_SHOWN); index += 1) {
-		buffered.push({ start: media.buffered.start(index), end: media.buffered.end(index) });
-	}
 	const length = readLength(media);
 	return {
 		duration: length.reach,
@@ -54,7 +47,6 @@ function readState(media: HTMLMediaElement): MediaState {
 		rate: media.playbackRate,
 		volume: media.volume,
 		muted: media.muted,
-		buffered,
 		failed: media.error?.code ?? null,
 		failedDetail: media.error?.message ?? "",
 	};
@@ -69,9 +61,7 @@ function sameState(a: MediaState, b: MediaState): boolean {
 		a.volume === b.volume &&
 		a.muted === b.muted &&
 		a.failed === b.failed &&
-		a.failedDetail === b.failedDetail &&
-		a.buffered.length === b.buffered.length &&
-		a.buffered.every((range, index) => range.start === b.buffered[index]?.start && range.end === b.buffered[index]?.end)
+		a.failedDetail === b.failedDetail
 	);
 }
 
@@ -182,7 +172,7 @@ export function togglePlayback(media: HTMLMediaElement): void {
 
 // ── glyphs ───────────────────────────────────────────────────────────────
 
-type GlyphName = "play" | "pause" | "volume" | "volumeLow" | "muted" | "mark" | "stretch" | "x";
+type GlyphName = "play" | "pause" | "volume" | "volumeLow" | "muted";
 
 const GLYPHS: Readonly<Record<GlyphName, ReactElement>> = {
 	play: <path d="M8 5.2v13.6a.6.6 0 0 0 .92.5l10.6-6.8a.6.6 0 0 0 0-1L8.92 4.7A.6.6 0 0 0 8 5.2Z" fill="currentColor" stroke="none" />,
@@ -195,9 +185,6 @@ const GLYPHS: Readonly<Record<GlyphName, ReactElement>> = {
 	volume: <path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5H4ZM15.5 8.5a5 5 0 0 1 0 7M18 6a8.5 8.5 0 0 1 0 12" />,
 	volumeLow: <path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5H4ZM15.5 8.5a5 5 0 0 1 0 7" />,
 	muted: <path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5H4ZM16 9.5l5 5M21 9.5l-5 5" />,
-	mark: <path d="M6 20.5V4M6 5h11l-2.5 3.5L17 12H6" />,
-	stretch: <path d="M4 7v10M20 7v10M4 12h16M8 9l-4 3 4 3M16 9l4 3-4 3" />,
-	x: <path d="M6 6l12 12M18 6 6 18" />,
 };
 
 function Glyph({ name, size = 16 }: { readonly name: GlyphName; readonly size?: number }): ReactElement {
@@ -221,33 +208,34 @@ function Glyph({ name, size = 16 }: { readonly name: GlyphName; readonly size?: 
 
 const rateLabel = (rate: number): string => `${rate}×`;
 
-/** Said beside the marking buttons while they are off because the marks are all used. */
-export const FULL_SENTENCE = `${MAX_TIMELINE_MARKS} marks is the most one message carries.`;
-
-/** The key that does what a button does, printed where the eye already is. Not part of the button's name; `aria-keyshortcuts` carries it. */
-function Key({ children }: { readonly children: string }): ReactElement {
-	return (
-		<kbd aria-hidden="true" className="hidden rounded bg-fr-surface-3 px-1.5 text-fr-2xs leading-4 text-fr-text-2 sm:inline">
-			{children}
-		</kbd>
-	);
-}
+/** Said in the toolbar while its Moment and Stretch tools are off because the notes are all used. */
+export const FULL_SENTENCE = `${MAX_TIMELINE_MARKS} notes is the most one message carries.`;
 
 // ── the transport ────────────────────────────────────────────────────────
 
-/** What the transport adds in timeline mode: the marks, and the ways to make them. */
+/** What the transport adds when the marking layer is up: the notes, and the ways to make them on the lane. */
 export interface TransportMarking {
-	/** The most marks one message carries are already made. */
+	/** The most notes one message carries are already made. */
 	readonly full: boolean;
 	/** Where a stretch set from the keyboard began, or `null` when none is being set. */
 	readonly inPoint: number | null;
 	/** One line of help for the last thing that could not be done; `null` when there is none. */
 	readonly hint: string | null;
-	readonly onMark: () => void;
-	/** Set the start of a stretch, or - when one is set - end it here. */
-	readonly onStretch: () => void;
-	readonly onCancelStretch: () => void;
 	readonly onSpan: (from: number, to: number) => void;
+	/** A sound's lane adds a note at a time (a double-click, its Comment button): the pane adds the mark and opens its note. */
+	readonly onComment: (at: number) => void;
+}
+
+/** A video's filmstrip as its lane takes it. */
+export interface TransportFilm {
+	/** The thumbnails taken so far. */
+	readonly frames: readonly FilmFrame[];
+	/** No more are coming (the video would not give them, or is not asked): the cells still empty are drawn calm, not waiting. */
+	readonly failed: boolean;
+	/** How many cells the lane draws. */
+	readonly slots: number;
+	/** The lane says how many cells its width holds. */
+	readonly onSlots: (count: number) => void;
 }
 
 export interface MediaTransportProps {
@@ -259,21 +247,25 @@ export interface MediaTransportProps {
 	readonly marks: readonly TimelineMark[];
 	readonly activeId: number | null;
 	readonly onSelectMark: (id: number) => void;
+	/** A key was typed in the note open on the lane. */
+	readonly onNote: (id: number, note: string) => void;
+	/** The note open on the lane, or `null`: it opens as a popover at its marker. */
+	readonly openId: number | null;
+	/** The open note was left (Enter, Escape, a press elsewhere). */
+	readonly onClose: (reason: NoteCloseReason) => void;
+	/** The open note's trash button. */
+	readonly onRemove: (id: number) => void;
 	/** Loudness per slice, for a sound; `undefined` draws a plain track. */
 	readonly waveform?: ArrayLike<number>;
-	/** Present in timeline mode. */
+	/** A video's thumbnails. */
+	readonly film?: TransportFilm;
+	/** Present while the marking layer is up. */
 	readonly marking: TransportMarking | null;
 }
 
-// One focus ring for every control in the strip (`focus-ring.ts`), the same solid accent the scrubber's knob and markers wear.
-const ROUND_BUTTON = cn(
-	"inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 text-fr-sm font-medium transition-colors duration-[var(--fr-motion-fast)] disabled:pointer-events-none disabled:opacity-40",
-	FOCUS,
-);
+const NO_FRAMES: readonly FilmFrame[] = [];
 
-const QUIET_BUTTON = "border-fr-border bg-transparent text-fr-text-2 hover:bg-fr-surface-2 hover:text-fr-text active:bg-fr-surface-3";
-
-export function MediaTransport({ media, kind, filename, live, marks, activeId, onSelectMark, waveform, marking }: MediaTransportProps): ReactNode {
+export function MediaTransport({ media, kind, filename, live, marks, activeId, onSelectMark, onNote, openId, onClose, onRemove, waveform, film, marking }: MediaTransportProps): ReactNode {
 	const state = useMediaState(media);
 	const playhead = useMediaPosition(media, state.playing, live);
 	const seek = (seconds: number): void => {
@@ -291,7 +283,7 @@ export function MediaTransport({ media, kind, filename, live, marks, activeId, o
 	const shownLevel = typed !== null && typed.echo === echo ? typed.level : loud;
 	const failure = state.failed === null ? null : describeMediaError(kind, undefined, true, state.failed, state.failedDetail);
 	// A line of help floats over the picture's foot for its few seconds, so the picture never jumps to make room for it;
-	// while the marks are all used, the same words sit beside the buttons they explain instead.
+	// while the notes are all used, the same words sit in the toolbar beside the tools they explain instead.
 	const floatingHint = marking?.hint !== null && marking?.hint !== undefined && !(marking.full && marking.hint === FULL_SENTENCE);
 
 	return (
@@ -309,20 +301,43 @@ export function MediaTransport({ media, kind, filename, live, marks, activeId, o
 					)}
 				</p>
 			)}
-			<TimelineBar
-				playhead={playhead}
-				duration={state.duration}
-				marks={marks}
-				activeId={activeId}
-				onSeek={seek}
-				onSelectMark={onSelectMark}
-				{...(marking === null ? {} : { onSpan: marking.onSpan })}
-				{...(waveform === undefined ? {} : { waveform })}
-				buffered={state.buffered}
-				inPoint={marking?.inPoint ?? null}
-				disabled={state.failed !== null}
-				label={`Position in ${filename}`}
-			/>
+			{kind === "video" ? (
+				<FilmLane
+					playhead={playhead}
+					duration={state.duration}
+					frames={film?.frames ?? NO_FRAMES}
+					failed={film?.failed ?? false}
+					slots={film?.slots ?? 1}
+					{...(film === undefined ? {} : { onSlots: film.onSlots })}
+					marks={marks}
+					activeId={activeId}
+					onSeek={seek}
+					onSelectMark={onSelectMark}
+					openId={openId}
+					onNote={onNote}
+					onClose={onClose}
+					onRemove={onRemove}
+					{...(marking === null ? {} : { onSpan: marking.onSpan })}
+					inPoint={marking?.inPoint ?? null}
+					label={`Position in ${filename}`}
+				/>
+			) : (
+				<WaveLane
+					playhead={playhead}
+					duration={state.duration}
+					peaks={waveform ?? null}
+					marks={marks}
+					activeId={activeId}
+					onSeek={seek}
+					onSelectMark={onSelectMark}
+					openId={openId}
+					onNote={onNote}
+					onClose={onClose}
+					onRemove={onRemove}
+					{...(marking === null ? {} : { onSpan: marking.onSpan, onComment: marking.onComment, inPoint: marking.inPoint })}
+					label={`Position in ${filename}`}
+				/>
+			)}
 			{marking !== null && state.unbounded ? (
 				<p data-slot="viewer-transport-note" className="pb-1 text-fr-xs text-fr-text-3">
 					{UNBOUNDED_SENTENCE}
@@ -344,53 +359,6 @@ export function MediaTransport({ media, kind, filename, live, marks, activeId, o
 					{/* A recording that does not say how long it is has no total to read out. */}
 					{state.unbounded ? null : ` / ${formatTimecode(state.duration)}`}
 				</span>
-				{marking === null ? null : (
-					// On a narrow View the marking buttons take a row of their own under play, time, speed and volume.
-					<div data-slot="viewer-marking" className="order-last flex basis-full flex-wrap items-center gap-2 sm:order-none sm:basis-auto">
-						<button
-							type="button"
-							className={cn(ROUND_BUTTON, "border-fr-accent-line bg-fr-accent-dim text-fr-accent-text hover:border-fr-accent active:bg-fr-accent-line")}
-							title="Mark this moment (M)"
-							aria-keyshortcuts="M"
-							disabled={marking.full || state.failed !== null}
-							onClick={marking.onMark}
-						>
-							<Glyph name="mark" />
-							Mark
-							<Key>M</Key>
-						</button>
-						{marking.full ? (
-							// Every mark used: a stretch could not be made either, so its button gives way to the reason both are off.
-							<span className="text-fr-xs text-fr-text-3">{FULL_SENTENCE}</span>
-						) : (
-							<span className="inline-flex items-center">
-								<button
-									type="button"
-									className={cn(ROUND_BUTTON, QUIET_BUTTON, marking.inPoint !== null && "rounded-e-none border-e-0")}
-									title={marking.inPoint === null ? "Start a stretch here (I)" : "End the stretch here (O)"}
-									aria-keyshortcuts={marking.inPoint === null ? "I" : "O"}
-									disabled={state.failed !== null}
-									onClick={marking.onStretch}
-								>
-									<Glyph name="stretch" />
-									{marking.inPoint === null ? "Start stretch" : `End stretch · from ${formatTimecode(marking.inPoint)}`}
-									<Key>{marking.inPoint === null ? "I" : "O"}</Key>
-								</button>
-								{marking.inPoint === null ? null : (
-									<button
-										type="button"
-										className={cn(ROUND_BUTTON, QUIET_BUTTON, "rounded-s-none px-2")}
-										aria-label="Cancel the stretch"
-										title="Cancel the stretch (Esc)"
-										onClick={marking.onCancelStretch}
-									>
-										<Glyph name="x" size={14} />
-									</button>
-								)}
-							</span>
-						)}
-					</div>
-				)}
 				<div className="ml-auto flex items-center gap-1">
 					<button
 						type="button"

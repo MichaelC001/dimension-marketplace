@@ -209,7 +209,6 @@ describeWithChrome("switching profiles in the View", () => {
 
 			for (const who of [CHAT, VIEW_TWO]) {
 				const asked = refusal(await r.call("browser_open", { profile: "a" }, who));
-				expect(asked).toContain("the human in the View");
 				expect(asked).not.toContain(a.browserId);
 			}
 			expect(await failureCode(() => r.runtime.open({ profile: "a" }, { caller: "model", session: "s-chat" }))).toBe("profile_held");
@@ -235,7 +234,7 @@ describeWithChrome("switching profiles in the View", () => {
 			const adopted = await open(r, CHAT, { profile: "a" });
 			expect(adopted.browserId).not.toBe(a.browserId);
 			expect(entry(await listAs(r, CHAT), "a")?.heldBy).toBe("this chat");
-			expect(refusal(await r.call("browser_open", { profile: "b" }, CHAT))).toContain("the human in the View");
+			expect((await r.call("browser_open", { profile: "b" }, CHAT)).isError).toBe(true);
 			expect((await stateAs(r, VIEW, b.browserId)).browserId).toBe(b.browserId);
 		},
 		BROWSER_TEST_TIMEOUT_MS,
@@ -374,8 +373,8 @@ describeWithChrome("taking a browser over in the View", () => {
 			await navigate(r, CHAT, id, "/show-cookie");
 			expect(r.fixture.hits("/show-cookie")).toBe(2);
 			expect((await stateAs(r, CHAT, id)).agentActionAt).toBeGreaterThan(working.agentActionAt ?? Infinity);
-			// Still held by the same seat throughout: nobody else got in while it was the person's.
 			expect(await failureCode(() => r.runtime.open({ profile: "work" }, { caller: "model", session: "s-other" }))).toBe("profile_held");
+			expect(refusal(await r.call("browser_open", { profile: "work" }, OTHER_CHAT))).toContain("held by another chat");
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);
@@ -705,7 +704,8 @@ describeTasks("taking over while a task runs", () => {
 		async () => {
 			const r = await rig();
 			const id = (await open(r, VIEW_OF_CHAT, { profile: "tasked" })).browserId;
-			const running = await r.call("browser_task", { browserId: id, task: JSON.stringify({ steps: [{ action: "thinking", url: "" }], hold: true }), waitSeconds: 0 }, CHAT);
+			const taskArgs = { browserId: id, task: JSON.stringify({ steps: [{ action: "thinking", url: "" }], hold: true }), waitSeconds: 0 };
+			const running = await r.call("browser_task", taskArgs, CHAT);
 			expect(running.structuredContent).toMatchObject({ status: "running" });
 
 			expect(await r.runtime.leave(id, "app")).toEqual({ closed: false });

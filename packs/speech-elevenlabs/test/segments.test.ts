@@ -200,7 +200,8 @@ describe("barge-in and abort", () => {
 describe("failures", () => {
 	test.each([
 		{ name: "401 blames the key and does not echo the answer", status: 401, body: `key ${KEY} is not valid`, says: /rejected the API key/ },
-		{ name: "500 names the status", status: 500, body: "upstream exploded", says: /500/ },
+		{ name: "500 says the problem is on its side and does not echo the answer", status: 500, body: "upstream exploded", says: /problem on its side/ },
+		{ name: "429 says it is busy or at its limit", status: 429, body: "slow down", says: /busy, or the key has reached its limit/ },
 	])("a non-2xx answer fails the reply and nothing queued behind it is sent: $name", async ({ status, body, says }) => {
 		const { rig, session } = await start({ respond: () => new Response(body, { status }) });
 		session.push("First.");
@@ -211,13 +212,14 @@ describe("failures", () => {
 		const message = ofType(events, "error")[0]!.message;
 		expect(message).toMatch(says);
 		expect(message).not.toContain(KEY);
+		expect(message).not.toContain(body);
 		await settle();
 		expect(rig.http.requests).toHaveLength(1);
 	});
 
-	test("a request that cannot be made fails the reply with the reason", async () => {
-		const { session } = await start({ respond: () => Promise.reject(new Error("connection reset")) });
+	test("a request that cannot be made fails the reply as unreachable, not with the runtime's own words", async () => {
+		const { session } = await start({ respond: () => Promise.reject(new Error("connection reset by SECRET-RUNTIME-TEXT")) });
 		session.push("Hi.");
-		expect(await collect(session)).toEqual([{ t: "error", message: "connection reset" }, { t: "end" }]);
+		expect(await collect(session)).toEqual([{ t: "error", message: "Could not reach ElevenLabs" }, { t: "end" }]);
 	});
 });

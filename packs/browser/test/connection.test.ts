@@ -10,6 +10,7 @@
  *  local publish fixture over an in-memory MCP transport, capturing what the
  *  host would receive.
  */
+import { z } from "zod";
 import * as fs from "node:fs";
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -90,6 +91,98 @@ describe("connection report", () => {
 		}
 		expect((await readdir(dir)).filter((name) => name.endsWith(".tmp"))).toEqual([]);
 		expect(await readFile(join(dir, "connections.json"), "utf8")).toBe(before);
+	});
+
+	test("failed lock initialization releases only its own file so the same profile can be acquired and released again", async () => {
+		const store = await storeAt();
+		const slug = "lock-init-failure";
+		const path = join(store.ensureProfile(slug), "runtime.lock");
+		const realFsync = fs.fsyncSync;
+		const fault = Object.assign(new Error("lock initialization I/O failure"), { code: "EIO" });
+		let injected = false;
+		const syncing = spyOn(fs, "fsyncSync").mockImplementation(fd => {
+			let owned: fs.BigIntStats;
+			let current: fs.BigIntStats;
+			try {
+				owned = fs.fstatSync(fd, { bigint: true });
+				current = fs.lstatSync(path, { bigint: true });
+			} catch {
+				return realFsync(fd);
+			}
+			if (!injected && owned.dev === current.dev && owned.ino === current.ino) {
+				injected = true;
+				throw fault;
+			}
+			return realFsync(fd);
+		});
+		let failed: unknown;
+		try {
+			try {
+				store.acquireLock(slug);
+			} catch (error) {
+				failed = error;
+			}
+		} finally {
+			syncing.mockRestore();
+		}
+		expect(failed).toBe(fault);
+		const acquired = store.acquireLock(slug);
+		expect(store.heldElsewhere(slug)).toBe(true);
+		store.releaseLock(acquired);
+		expect(store.heldElsewhere(slug)).toBe(false);
+		expect(fs.existsSync(path)).toBe(false);
+	});
+
+	test("failed lock initialization and release of the old token preserve a replacement owner's lock", async () => {
+		const store = await storeAt();
+		const slug = "lock-init-replaced";
+		const path = join(store.ensureProfile(slug), "runtime.lock");
+		const replacement = { pid: process.pid, token: "0".repeat(32), at: new Date().toISOString() };
+		const realFsync = fs.fsyncSync;
+		const fault = Object.assign(new Error("lock initialization I/O failure"), { code: "EIO" });
+		let originalToken: string | undefined;
+		const syncing = spyOn(fs, "fsyncSync").mockImplementation(fd => {
+			let owned: fs.BigIntStats;
+			let current: fs.BigIntStats;
+			try {
+				owned = fs.fstatSync(fd, { bigint: true });
+				current = fs.lstatSync(path, { bigint: true });
+			} catch {
+				return realFsync(fd);
+			}
+			if (originalToken === undefined && owned.dev === current.dev && owned.ino === current.ino) {
+				originalToken = z.object({ token: z.string() }).parse(JSON.parse(fs.readFileSync(path, "utf8"))).token;
+				fs.unlinkSync(path);
+				replacement.token = `${originalToken[0] === "0" ? "1" : "0"}${originalToken.slice(1)}`;
+				fs.writeFileSync(path, `${JSON.stringify(replacement)}\n`, { flag: "wx", mode: 0o600 });
+				throw fault;
+			}
+			return realFsync(fd);
+		});
+		let failed: unknown;
+		try {
+			try {
+				store.acquireLock(slug);
+			} catch (error) {
+				failed = error;
+			}
+		} finally {
+			syncing.mockRestore();
+		}
+		expect(failed).toBe(fault);
+		expect(JSON.parse(fs.readFileSync(path, "utf8"))).toEqual(replacement);
+		let blocked: unknown;
+		try {
+			store.acquireLock(slug);
+		} catch (error) {
+			blocked = error;
+		}
+		expect(blocked).toMatchObject({ code: "profile_locked" });
+		if (originalToken === undefined) throw new Error("the original lock was not initialized");
+		store.releaseLock({ path, token: originalToken });
+		expect(JSON.parse(fs.readFileSync(path, "utf8"))).toEqual(replacement);
+		store.releaseLock({ path, token: replacement.token });
+		expect(fs.existsSync(path)).toBe(false);
 	});
 
 	test("an observed sign-out sets signedIn:false, and a deleted profile leaves the report", async () => {
@@ -195,6 +288,7 @@ async function session(profile: string, seed?: (store: ProfileStore) => void): P
 	// Each waiter is re-checked on every notification: the test awaits the report itself, never a guessed delay.
 	const waiters: Array<() => void> = [];
 	const client = new Client({ name: "connection-test", version: "0.0.0" });
+	const sessionId = "connection-chat";
 	client.fallbackNotificationHandler = async (notification) => {
 		reports.push(notification as unknown as Captured);
 		for (const wake of waiters.splice(0)) wake();
@@ -202,7 +296,10 @@ async function session(profile: string, seed?: (store: ProfileStore) => void): P
 	const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
 	await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
 	clients.push(client);
-	const call = async (name: string, args: Record<string, unknown>) => (await client.callTool({ name, arguments: args })) as ToolResult;
+	const call = async (name: string, args: Record<string, unknown>) => (await client.callTool({ name, arguments: args, _meta: {
+		"ai.insodimension/caller": "model",
+		"ai.insodimension/session": { sessionId },
+	} })) as ToolResult;
 	const report = async (accept: (report: ConnectionReport) => boolean, after = 0): Promise<ConnectionReport> => {
 		for (;;) {
 			const found = reports.slice(after).find((note) => note.method === METHOD && note.params.report !== null && accept(note.params.report));

@@ -38,11 +38,12 @@ import type { AgentListing, ListedAgent, SaveOutcome, SaveTarget, WritableTier }
 import { type Block, parseExtra, reindent } from "./extra.js";
 import { isRecord } from "./guards.js";
 
+export const LEGACY_AGENTS_DIR = "agents";
 /**
  * The project config dir the Forge reads — the ENGINE's own rule
  * (`getConfigDirName` in omp utils: `PI_CONFIG_DIR`, else `.inso` in the product),
- * because the General Agents catalog reads `<workspace>/<that dir>/agents`. A
- * hardcoded `.inso` listed files a dev engine (`.inso-dev`) never reads. Then the
+ * because the General Agents catalog reads `<workspace>/<that dir>/general-agents`.
+ * A hardcoded `.inso` listed files a dev engine (`.inso-dev`) never reads. Then the
  * legacy dir it only reads.
  */
 export const WRITE_DIR = process.env.PI_CONFIG_DIR?.trim() || ".inso";
@@ -53,9 +54,9 @@ export function pathsOf(home: string | null) {
 	if (home === null) return null;
 	return {
 		plugins: join(home, "plugins"),
-		/** The agent dir: skills, settings — and `agents/`, the user tier. */
+		/** The agent dir: skills, settings, and the General Agent user tier. */
 		agent: join(home, "agent"),
-		userAgents: join(home, "agent", "agents"),
+		userAgents: join(home, "agent", GENERAL_AGENTS_DIR),
 		/** `<home>/workspaces`: every agent home (`home-<name>`) — the engine pins `PI_AGENT_HOMES_DIR` here. */
 		homes: join(home, "workspaces"),
 	};
@@ -196,7 +197,10 @@ function rawSettings(frontmatter: string): Raw {
 	const parsed: unknown = parseYaml(frontmatter);
 	if (!isRecord(parsed)) return { thinkingLevel: undefined, voice: undefined };
 	const engine = parsed.engine;
-	return { thinkingLevel: isRecord(engine) ? engine.thinkingLevel : undefined, voice: parsed.voice };
+	return {
+		thinkingLevel: isRecord(engine) ? engine.thinkingLevel : undefined,
+		voice: parsed.voice,
+	};
 }
 
 /** A section's keys as lines at 2 spaces — a flow-style section (`gate: { approval: yolo }`) is re-rendered as a block. */
@@ -300,6 +304,7 @@ interface Found {
 async function scanAgents(dir: string, notices: string[]): Promise<Found[]> {
 	const found: Found[] = [];
 	for (const name of await listDirs(dir)) {
+		if (name.startsWith(".")) continue;
 		const path = join(dir, name, GENERAL_AGENT_FILE);
 		let content: string;
 		try {
@@ -327,6 +332,21 @@ export async function listAgents(roots: Roots): Promise<AgentListing> {
 		claimed.set(found.name, found.path);
 		return true;
 	};
+	const claimLeftovers = async (agentsDir: string, source: "workspace" | "user", shown: string): Promise<void> => {
+		for (const found of await scanAgents(agentsDir, [])) {
+			if (!claim(found)) continue;
+			agents.push({
+				name: found.name,
+				description: found.decl.description,
+				source,
+				path: found.path,
+				editable: false,
+				readOnlyReason: `It remains in ${shown} after the General Agents move; the engine runs this copy. Move it to ${GENERAL_AGENTS_DIR}/ to edit it.`,
+				...(found.decl.manifest.workspace?.id !== undefined ? { workspaceId: found.decl.manifest.workspace.id } : {}),
+				draft: draftFromFile(found.decl, found.content, `${source}::${found.name}`),
+			});
+		}
+	};
 	const paths = pathsOf(roots.home);
 
 	// The engine's order: packs own their names, then the project, then the user.
@@ -353,8 +373,9 @@ export async function listAgents(roots: Roots): Promise<AgentListing> {
 	if (roots.workspace === null) {
 		notices.push(roots.workspaceMissing ?? "No workspace is bound, so project agents are not listed. Pack agents and yours are.");
 	} else {
+		for (const dirName of [WRITE_DIR, LEGACY_DIR]) await claimLeftovers(join(roots.workspace, dirName, LEGACY_AGENTS_DIR), "workspace", `${dirName}/${LEGACY_AGENTS_DIR}`);
 		for (const dirName of [WRITE_DIR, LEGACY_DIR]) {
-			for (const found of await scanAgents(join(roots.workspace, dirName, "agents"), notices)) {
+			for (const found of await scanAgents(join(roots.workspace, dirName, GENERAL_AGENTS_DIR), notices)) {
 				if (!claim(found)) continue;
 				const legacy = dirName === LEGACY_DIR;
 				agents.push({
@@ -363,7 +384,11 @@ export async function listAgents(roots: Roots): Promise<AgentListing> {
 					source: "workspace",
 					path: found.path,
 					editable: !legacy,
-					...(legacy ? { readOnlyReason: `It lives in the legacy ${LEGACY_DIR}/agents; new agents are written only to ${WRITE_DIR}/agents.` } : {}),
+					...(legacy
+						? {
+								readOnlyReason: `It lives in the legacy ${LEGACY_DIR}/${GENERAL_AGENTS_DIR}; new General Agents are written only to ${WRITE_DIR}/${GENERAL_AGENTS_DIR}.`,
+							}
+						: {}),
 					revision: revisionOf(found.content),
 					...(found.decl.manifest.workspace?.id !== undefined ? { workspaceId: found.decl.manifest.workspace.id } : {}),
 					draft: draftFromFile(found.decl, found.content, `workspace::${found.name}`),
@@ -372,6 +397,7 @@ export async function listAgents(roots: Roots): Promise<AgentListing> {
 		}
 	}
 
+	if (paths !== null) await claimLeftovers(join(paths.agent, LEGACY_AGENTS_DIR), "user", `agent/${LEGACY_AGENTS_DIR}`);
 	if (paths !== null) {
 		for (const found of await scanAgents(paths.userAgents, notices)) {
 			if (!claim(found)) continue;
@@ -429,9 +455,14 @@ const slash = (path: string) => path.replaceAll("\\", "/");
 export async function saveAgent(options: SaveOptions): Promise<SaveOutcome> {
 	const { roots, draft, target } = options;
 	const paths = pathsOf(roots.home);
-	const tier: WritableTier = target.create ? "user" : target.tier;
+	const tier: WritableTier = target.create ? (target.tier ?? "user") : target.tier;
 	const tierRoot = tier === "user" ? roots.home : roots.workspace;
-	const agentsDir = tier === "user" ? paths?.userAgents : roots.workspace === null ? undefined : join(roots.workspace, WRITE_DIR, "agents");
+	const agentsDir =
+		tier === "user"
+			? paths?.userAgents
+			: roots.workspace === null
+				? undefined
+				: join(roots.workspace, WRITE_DIR, GENERAL_AGENTS_DIR);
 	if (tierRoot === null || agentsDir === undefined) {
 		throw new SaveRefused(
 			tier === "user"

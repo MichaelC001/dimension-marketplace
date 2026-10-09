@@ -2,5 +2,5 @@
 import { mountMedia } from "./media-core";
 import type { MountContext, Renderer } from "./types";
 
-const renderer: Renderer = { mount: (el: HTMLElement, bytes: Uint8Array, ctx: MountContext) => mountMedia(el, bytes, ctx, "audio") };
+const renderer: Renderer = { mount: (el: HTMLElement, _bytes: Uint8Array, ctx: MountContext) => mountMedia(el, ctx, "audio") };
 export default renderer;

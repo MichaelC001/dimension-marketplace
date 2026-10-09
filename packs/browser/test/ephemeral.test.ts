@@ -44,10 +44,14 @@ async function connect(runtime: BrowserRuntime, rootDir: string): Promise<(name:
 	await writeFile(join(viewDir, "index.html"), "<!doctype html><title>view</title>");
 	const server = await createBrowserServer({ runtime, viewDir, presets: [] });
 	const client = new Client({ name: "ephemeral-test", version: "0.0.0" });
+	const sessionId = "ephemeral-chat";
 	const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
 	await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
 	clients.push(client);
-	return async (name, args, caller) => (await client.callTool({ name, arguments: args, ...(caller === undefined ? {} : { _meta: { "ai.insodimension/caller": caller } }) })) as ToolResult;
+	return async (name, args, caller) => (await client.callTool({ name, arguments: args, _meta: {
+		"ai.insodimension/caller": caller ?? "model",
+		"ai.insodimension/session": { sessionId },
+	} })) as ToolResult;
 }
 
 /** A pid that is provably gone: a child that already exited. */
@@ -93,13 +97,13 @@ describeWithChrome("throwaway browsers", () => {
 			const throwaway = await call("browser_open", {});
 			expect(throwaway.isError).toBeFalsy();
 			expect(throwaway.structuredContent?.profile).toBeNull();
-			// Unstamped, so a model: the list is the compact text; the View (app) is the one given structured content.
+			// The model gets compact text; the View in the same authenticated chat gets structured content.
 			expect((await call("browser_profiles", {})).structuredContent).toBeUndefined();
 			expect(await call("browser_profiles", {}, "app")).toMatchObject({ structuredContent: { profiles: [] } });
 
 			const kept = await call("browser_open", { profile: "kept" });
 			expect(kept.structuredContent?.profile).toBe("kept");
-			expect((await call("browser_profiles", {}, "app")).structuredContent).toMatchObject({ profiles: [{ name: "kept", label: "kept", heldBy: "another chat", sites: [] }] });
+			expect((await call("browser_profiles", {}, "app")).structuredContent).toMatchObject({ profiles: [{ name: "kept", label: "kept", heldBy: "this chat", sites: [] }] });
 			expect((await runtime.profileList()).map((profile) => profile.name)).toEqual(["kept"]);
 		},
 		BROWSER_TEST_TIMEOUT_MS,
@@ -116,8 +120,8 @@ describeWithChrome("throwaway browsers", () => {
 			expect(a.browserId).not.toBe(b.browserId);
 			expect(await entries(ephemeral)).toHaveLength(2);
 
-			await runtime.open({ profile: "shared", viewport: VIEWPORT });
-			expect(await failureCode(() => runtime.open({ profile: "shared", viewport: VIEWPORT }))).toBe("profile_held");
+			await runtime.open({ profile: "shared", viewport: VIEWPORT }, { caller: "app" });
+			expect(await failureCode(() => runtime.open({ profile: "shared", viewport: VIEWPORT }, { caller: "app" }))).toBe("profile_held");
 
 			await runtime.close(a.browserId);
 			expect(await entries(ephemeral)).toHaveLength(1);

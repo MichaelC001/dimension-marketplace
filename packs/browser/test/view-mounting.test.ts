@@ -17,6 +17,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { z } from "zod";
 import type { BrowserAction, BrowserOpenOptions, BrowserRuntimePort, BrowserState, TaskRequest } from "../src/contracts";
 import { BROWSER_VIEW_URI, createBrowserServer } from "../src/server";
+import { BrowserRuntimeError } from "../src/store";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createRoot, teardown } from "./fixture";
 
@@ -37,11 +38,12 @@ interface Calls {
 	read: string[];
 	navigated: string[];
 	tasked: TaskRequest[];
+	gone: string[];
 }
 
 /** Just enough runtime for the server to boot and answer open/view: every call recorded. */
 function recordingRuntime(calls: Calls): BrowserRuntimePort {
-	const runtime: Pick<BrowserRuntimePort, "open" | "state" | "liveState" | "watchFrames" | "viewing" | "act" | "startTask" | "connections" | "profileMeta" | "onConnectionsChanged" | "dispose"> = {
+	const runtime: Pick<BrowserRuntimePort, "open" | "state" | "liveState" | "watchFrames" | "viewing" | "act" | "startTask" | "connections" | "profileMeta" | "onConnectionsChanged" | "requireOpen" | "dispose"> = {
 		open: async (options) => {
 			calls.opened.push(options);
 			return stateOf("o".repeat(32));
@@ -64,6 +66,9 @@ function recordingRuntime(calls: Calls): BrowserRuntimePort {
 		connections: async () => ({}),
 		profileMeta: async () => ({}),
 		onConnectionsChanged: () => () => {},
+		requireOpen: (browserId) => {
+			if (calls.gone.includes(browserId)) throw new BrowserRuntimeError("unknown_browser", "unknown or already closed browserId");
+		},
 		dispose: async () => {},
 	};
 	return runtime as BrowserRuntimePort;
@@ -75,7 +80,7 @@ async function connect(jevKey?: string): Promise<{ client: Client; calls: Calls;
 	const viewDir = join(rootDir, "view");
 	await mkdir(viewDir, { recursive: true });
 	await writeFile(join(viewDir, "index.html"), "<!doctype html><title>view</title>");
-	const calls: Calls = { opened: [], read: [], navigated: [], tasked: [] };
+	const calls: Calls = { opened: [], read: [], navigated: [], tasked: [], gone: [] };
 	const savedKey = process.env.TYPESAFE_API_KEY;
 	if (jevKey === undefined) delete process.env.TYPESAFE_API_KEY;
 	else process.env.TYPESAFE_API_KEY = jevKey;
@@ -172,6 +177,21 @@ test("browser_view with a browserId shows that browser and opens nothing; it nev
 		expect(refused.isError).toBe(true);
 	}
 	expect(calls).toMatchObject({ opened: [], read: [held], navigated: [] });
+});
+
+test("browser_view and browser_task with a browserId that is gone are refused before anything is read or started", async () => {
+	const { client, calls } = await connect("jev-key");
+	const withheld = "d".repeat(32);
+	calls.gone.push(withheld);
+
+	const viewed = await client.callTool({ name: "browser_view", arguments: { browserId: withheld } });
+	const tasked = await client.callTool({ name: "browser_task", arguments: { browserId: withheld, task: "fill the form" } });
+
+	for (const refused of [viewed, tasked]) {
+		expect(refused.isError).toBe(true);
+		expect(JSON.stringify(refused.content)).toContain("unknown or already closed browserId");
+	}
+	expect(calls).toMatchObject({ opened: [], read: [], navigated: [], tasked: [] });
 });
 
 test("browser_view without a browserId opens the browser exactly as browser_open does and navigates to url", async () => {

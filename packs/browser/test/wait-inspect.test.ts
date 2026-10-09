@@ -92,7 +92,7 @@ describeWithChrome("wait", () => {
 		async () => {
 			const fixture = startFixture();
 			const { runtime, rootDir } = await createRuntime();
-			const { browserId } = await runtime.open({ profile: "wait-oracle", viewport: VIEWPORT });
+			const { browserId } = await runtime.open({ profile: "wait-oracle", viewport: VIEWPORT }, { caller: "app" });
 			const saved = "Revealed-Pw_3#fixture";
 			await writeFile(join(rootDir, "profiles", "wait-oracle", "credentials.json"), JSON.stringify({ version: 1, origins: { [new URL(fixture.url("/")).origin]: saved } }));
 

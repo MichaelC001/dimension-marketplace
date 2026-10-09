@@ -4,7 +4,7 @@
 
 export type MediaTag = "audio" | "video";
 
-/** What the human calls the container, by the MIME type the `Blob` was given. */
+/** What the human calls the container, by its MIME type. */
 const FORMAT_NAMES: Readonly<Record<string, string>> = {
 	"audio/mpeg": "MP3",
 	"audio/wav": "WAV",

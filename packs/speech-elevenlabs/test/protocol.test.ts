@@ -1,7 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import {
-	describeHandshakeFailure,
-	describeHttpFailure,
 	dialogueHello,
 	dialogueInput,
 	dialogueSocketUrl,
@@ -113,12 +111,12 @@ describe("parseDialogueEvent", () => {
 		expect(parseDialogueEvent('{"is_final":true}')).toEqual({ kind: "final" });
 	});
 
-	test("an error frame reports its message, falling back to the error code", () => {
+	test("an error frame reports its reason code and never the provider's message", () => {
 		expect(parseDialogueEvent('{"error":"invalid_voice","message":"Voice not found","code":1008}')).toEqual({
 			kind: "error",
-			message: "Voice not found",
+			reason: "invalid_voice",
 		});
-		expect(parseDialogueEvent('{"error":"invalid_voice"}')).toEqual({ kind: "error", message: "invalid_voice" });
+		expect(parseDialogueEvent('{"error":"invalid_voice"}')).toEqual({ kind: "error", reason: "invalid_voice" });
 	});
 
 	test.each([
@@ -166,36 +164,5 @@ describe("parseSegmentLine", () => {
 
 	test.each(["not json", "5", "null", "[]"])("ignored: %p", raw => {
 		expect(parseSegmentLine(raw)).toBeNull();
-	});
-});
-
-describe("failure wording", () => {
-	const SECRET = "sk-secret-in-body";
-
-	test.each([
-		{ name: "401", status: 401, body: `{"detail":{"status":"invalid_api_key","message":"${SECRET}"}}`, says: "rejected the API key" },
-		{ name: "403", status: 403, body: `{"detail":"${SECRET}"}`, says: "rejected the API key" },
-		{ name: "401 lacking a permission is not the key's fault", status: 401, body: `{"detail":{"status":"missing_permissions","message":"${SECRET}"}}`, says: "refused the voice connection" },
-		{ name: "200: the server accepted the request but refused the socket", status: 200, body: SECRET, says: "refused the voice connection" },
-		{ name: "500", status: 500, body: SECRET, says: "answered 500" },
-	])("describeHandshakeFailure $name", ({ status, body, says }) => {
-		const message = describeHandshakeFailure(status, body);
-		expect(message).toContain(says);
-		expect(message).not.toContain(SECRET);
-		if (says === "refused the voice connection") expect(message).not.toContain("rejected the API key");
-	});
-
-	test.each([401, 403])("describeHttpFailure %p blames the key and does not echo the body", status => {
-		const message = describeHttpFailure(status, `{"detail":"${SECRET}"}`);
-		expect(message).toMatch(/rejected the API key/);
-		expect(message).not.toContain(SECRET);
-	});
-
-	test("describeHttpFailure names the status and quotes a bounded slice of the body", () => {
-		expect(describeHttpFailure(500, "")).toBe("ElevenLabs answered 500");
-		const message = describeHttpFailure(502, `bad gateway ${"x".repeat(1_000)}`);
-		expect(message).toContain("502");
-		expect(message).toContain("bad gateway");
-		expect(message.length).toBeLessThan(300);
 	});
 });

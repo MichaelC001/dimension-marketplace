@@ -19,7 +19,7 @@ import { KIND_PICTURE, KIND_PING, KIND_STATE, type Message, PING_QUERY, Reader }
 const VIEWPORT = { width: 800, height: 600 };
 
 function stateOf(browserId: string, over: Partial<BrowserState> = {}): BrowserState {
-	return { browserId, url: "http://page.test/", title: "t", viewport: VIEWPORT, tabs: [], activeTabId: "", loading: false, canGoBack: false, canGoForward: false, task: null, publish: null, dialogs: [], revision: 1, profile: null, engine: "chromium", app: null, ...over } as BrowserState;
+	return { browserId, url: "http://page.test/", title: "t", viewport: VIEWPORT, tabs: [], activeTabId: "", loading: false, canGoBack: false, canGoForward: false, task: null, publish: null, dialogs: [], revision: 1, profile: null, look: null, engine: "chromium", app: null, takenOver: false, agentActionAt: null, ...over };
 }
 
 /** A browser as the listener sees one: frames pushed on demand, state it can change, input it records. */
@@ -30,6 +30,7 @@ class FakeSource implements LiveSource {
 	readonly inputs: Array<{ browserId: string; events: unknown }> = [];
 	inputError: BrowserRuntimeError | null = null;
 	readonly viewers = new Map<string, number>();
+	readonly previewHolds = new Map<string, number>();
 	watchCalls = 0;
 	stateReads = 0;
 	/** While set, a state read never answers, as a renderer stuck in a navigation would leave it. */
@@ -65,6 +66,18 @@ class FakeSource implements LiveSource {
 			if (ended) return;
 			ended = true;
 			this.viewers.set(browserId, this.viewersOf(browserId) - 1);
+		};
+	}
+	previewHolding(browserId: string): () => void {
+		this.require(browserId);
+		this.previewHolds.set(browserId, (this.previewHolds.get(browserId) ?? 0) + 1);
+		let ended = false;
+		return () => {
+			if (ended) return;
+			ended = true;
+			const remaining = (this.previewHolds.get(browserId) ?? 0) - 1;
+			if (remaining === 0) this.previewHolds.delete(browserId);
+			else this.previewHolds.set(browserId, remaining);
 		};
 	}
 	async liveState(browserId: string): Promise<BrowserState> {

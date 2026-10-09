@@ -8,8 +8,10 @@
 // picture was taken at.
 import {
 	AnnotationPanel,
+	AnnotationToolbar,
+	MarkupIcon,
 	MarkupOverlay,
-	MarkupToolbar,
+	markupToolGroups,
 	type PanelItem,
 	useImageMarkup,
 	useMarkupShortcuts,
@@ -87,17 +89,30 @@ export function AnnotationSeat({ app, client, browserId, frame, floats, onDone }
 		<div className="bx-seat-frame">
 			<div className="bx-seat" data-slot="annotation-seat">
 				<div className="bx-seat-main">
-					<MarkupToolbar
-						tool={session.tool}
-						onTool={setTool}
-						canUndo={markup.canUndo}
-						canRedo={markup.canRedo}
-						onUndo={markup.undo}
-						onRedo={markup.redo}
-						onClear={markup.clear}
-						hasMarks={markup.marks.length > 0}
-						onDone={onDone}
+					{/* Unlike the Viewer's always-on bar, this seat REPLACES the live page with a frozen picture, entered on purpose
+					    (the Browser's Annotate toggle), so its bar ends in the labelled way back to the page: Done. It names the
+					    leaving, not a mode. */}
+					<AnnotationToolbar
+						label="Annotation tools"
 						placement="strip"
+						groups={[
+							...markupToolGroups({
+								tool: session.tool,
+								onTool: setTool,
+								canUndo: markup.canUndo,
+								canRedo: markup.canRedo,
+								onUndo: markup.undo,
+								onRedo: markup.redo,
+								onClear: markup.clear,
+								hasMarks: markup.marks.length > 0,
+							}),
+							{
+								id: "seat",
+								label: "Seat",
+								kind: "act",
+								tools: [{ id: "done", label: "Done", text: "Done", key: "Esc", icon: <MarkupIcon name="check" size={15} />, onSelect: onDone }],
+							},
+						]}
 					/>
 					<div className="bx-stage" data-mode="annotate">
 						<div className="bx-page" style={page}>
@@ -114,7 +129,7 @@ export function AnnotationSeat({ app, client, browserId, frame, floats, onDone }
 								tool={session.tool}
 								onShape={session.onShape}
 								activeId={session.activeId}
-								label="Mark up the page"
+								label="Draw on the page"
 							/>
 							{floats === undefined ? null : <div className="bx-floats">{floats}</div>}
 						</div>
@@ -122,7 +137,7 @@ export function AnnotationSeat({ app, client, browserId, frame, floats, onDone }
 				</div>
 				<aside className="bx-seat-panel" data-slot="annotate-panel">
 					<AnnotationPanel
-						title="Marks"
+						title="Notes"
 						items={items}
 						activeId={session.activeId}
 						focus={session.focus}
@@ -136,7 +151,7 @@ export function AnnotationSeat({ app, client, browserId, frame, floats, onDone }
 						status={session.status}
 						emptyHint={
 							<>
-								<strong>Mark up this page</strong>
+								<strong>Add a note</strong>
 								<span>
 									Drag to box something, or pick another tool above the page. Press <kbd>1</kbd>–<kbd>5</kbd> to switch tools.
 								</span>

@@ -219,9 +219,8 @@ describeWithChrome("a saved profile's browser (the View) stays the real browser"
 		const runtime = newRuntime(await createRoot(), { launchArgs: NO_GPU });
 		const { browserId } = await runtime.open({ profile: "person" });
 		const rows = await look(runtime, server, browserId);
-		// No automation-hiding switch: a person signing in to Google must not be disguised (doc 77 §12 decision 2).
-		expect(row(rows, "webdriver")).toMatchObject({ tell: true, value: "true" });
-		expect(row(rows, "iframe-webdriver").tell).toBe(true);
+		expect(row(rows, "webdriver")).toMatchObject({ tell: false, value: "false" });
+		expect(row(rows, "iframe-webdriver").tell).toBe(false);
 		// No fingerprint change: the software renderer is what the page sees.
 		expect(row(rows, "webgl-renderer")).toMatchObject({ tell: true });
 		expect(row(rows, "webgl-renderer").value).toMatch(/swiftshader/i);
@@ -299,12 +298,12 @@ describeWithChrome("the command line Chrome is started with", () => {
 		}
 	}
 
-	test("for a throwaway agent browser is the View's command line less puppeteer's automation switches, plus the one that turns navigator.webdriver off", async () => {
+	test("for a throwaway agent browser is the View's command line less puppeteer's automation switches", async () => {
 		const saved = await spawnedWith(stockPuppeteer, false);
 		// Control: what puppeteer starts Chrome with when only --enable-automation is dropped (the View and a saved profile).
 		expect(saved).toEqual(expect.arrayContaining(["--disable-popup-blocking", "--disable-ipc-flooding-protection", "--allow-pre-commit-input"]));
 		expect(disabledFeatures(saved)).toContain("AcceptCHFrame");
-		expect(saved).not.toContain("--disable-blink-features=AutomationControlled");
+		expect(saved).toContain("--disable-blink-features=AutomationControlled");
 
 		const agent = await spawnedWith(await agentPuppeteer(), true);
 		for (const dropped of ["--enable-automation", "--disable-popup-blocking", "--disable-ipc-flooding-protection", "--allow-pre-commit-input"]) expect(agent).not.toContain(dropped);
@@ -316,6 +315,6 @@ describeWithChrome("the command line Chrome is started with", () => {
 		const savedRest = saved.filter((arg) => !arg.startsWith("--user-data-dir="));
 		const agentRest = agent.filter((arg) => !arg.startsWith("--user-data-dir="));
 		expect(savedRest.filter((arg) => !agentRest.includes(arg)).sort()).toEqual(["--allow-pre-commit-input", "--disable-ipc-flooding-protection", "--disable-popup-blocking"]);
-		expect(agentRest.filter((arg) => !savedRest.includes(arg))).toEqual(["--disable-blink-features=AutomationControlled"]);
+		expect(agentRest.filter((arg) => !savedRest.includes(arg))).toEqual([]);
 	}, BROWSER_TEST_TIMEOUT_MS);
 });

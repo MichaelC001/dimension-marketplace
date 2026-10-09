@@ -47,6 +47,12 @@ export function identityOf(profile: string | null, engine: BrowserEngine, look: 
 	return { kind: "profile", label, colour, ...(avatar === undefined ? {} : { avatar }), detail: profiles === null ? null : signInSummary(listed?.sites ?? []) };
 }
 
+function profileMeaning(kind: Identity["kind"]): string {
+	if (kind === "profile") return "A separate set of logins saved on this computer. It is not linked to your own Chrome or to any Google account.";
+	if (kind === "private") return "Nothing is saved when this browser closes.";
+	return "The Chrome you already use, with your own logins.";
+}
+
 /** What a browser this chat holds is doing, in a row's words; the dot's colour says whether it is the person's or an agent's. */
 function holdLine(hold: ProfileHold | undefined): { readonly line: string; readonly tone: "open" | "agent" } {
 	if (hold?.takenOver) return { line: "You have control", tone: "open" };
@@ -240,6 +246,7 @@ export function ProfileSwitcher(props: ProfileSwitcherProps) {
 									<span className="bx-pmenu-detail">{identity.detail ?? "Checking sign-ins…"}</span>
 								</span>
 							</div>
+							<p className="bx-pmenu-note">{profileMeaning(identity.kind)}</p>
 
 							{showControl && (
 								<div className="bx-pmenu-control" data-on={takenOver || undefined}>

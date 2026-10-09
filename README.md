@@ -78,7 +78,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 that pack's own files (`package.json` for version/description/author/license/
 category/tags, `dimension.plugin.json` for `pluginId`/`title`/`icon`/`requires`
 and the `spaces[]` listings, with asset paths rewritten catalog-root-relative,
-plus a `generalAgents[]` listing from each `general-agents/<name>/agent.md`).
+plus a `generalAgents[]` listing from each `general-agents/<name>/agent.md`, and
+a `providers` listing of the voice and generator providers a pack declares).
 It writes the same bytes to `.omp-plugin/marketplace.json`, the read path every
 Dimension built before oh-my-pi #158 uses. `bun scripts/build-index.ts --check`
 is a CI gate: a pack edited without regenerating fails the build, so the shelf

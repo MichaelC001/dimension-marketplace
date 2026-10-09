@@ -39,7 +39,7 @@ import { existsSync, type FSWatcher, watch } from "node:fs";
 import { join } from "node:path";
 import { type ConnectionObservations, isPublicSite, siteHost } from "./connection.js";
 import { checkNewProfile, cleanAvatar, isProfileColour, matchProfiles, PROFILE_COLOURS, type ResolvedProfileMeta, resolveProfileMeta } from "./profile-meta.js";
-import { profileSlug, RELAY_PROFILE } from "./profile-name.js";
+import { DEFAULT_PROFILE, profileSlug, RELAY_PROFILE } from "./profile-name.js";
 import { buildProfileList, type HoldFact } from "./profile-list.js";
 import { probeFor, readProbe, SETTLE_MS, type SiteProbe, type ProbeVerdict } from "./probes.js";
 import type {
@@ -50,6 +50,7 @@ import type {
 	ControlMode,
 	NewProfileRequest,
 	ProfileListing,
+	EffectGuard,
 	LeaveOutcome,
 	OpenBrowserListing,
 	ActionResult,
@@ -97,6 +98,7 @@ import { CredentialKey, credentialOrigin, resolveCredential, savedPassword, save
 import { assertEngineAvailable, createEngineDriver } from "./engines/index.js";
 import { withTimeout } from "./engines/launch.js";
 import { launchReader } from "./engines/puppeteer.js";
+import type { AttachTarget } from "./engines/attach.js";
 import type { EngineDriver, EngineState, EvalOutcome, LiveFrame, PageReader, PasswordSource, PerformOutcome, WaitCondition } from "./engines/types.js";
 import { AnnotationFiles } from "./annotation-file.js";
 import { clampRegion, MAX_FRAME_BYTES } from "./image.js";
@@ -106,7 +108,8 @@ import { type Publication, cancel, confirm, isPending, prepare, publishRecord, r
 import { blockedReason, DEFAULT_READ_CHARS, MAX_READ_CHARS, READ_TIMEOUT_MS, readPolicy, TIMEOUT_REASON } from "./read.js";
 import { ActionNotDispatched, fail, MAX_PROFILES, ProfileStore, validateProfile } from "./store.js";
 import { type RunningWorker, releaseSpare, startWorker } from "./task.js";
-
+import { createGuardedTaskEndpoint } from "./task-authority.js";
+import type { CodeLifetime, CodeSeam, EndListener, EndWhy } from "./code/host/runtime-port.js";
 // ---------------------------------------------------------------------------
 // Bounds. Every unbounded thing in a long-lived runtime is a leak or a weapon.
 // ---------------------------------------------------------------------------
@@ -156,6 +159,9 @@ const VIEW_GONE_MS = 30 * 60_000;
 const MAX_FRAMES_RETAINED = 8;
 /** A batch takes no new step after this long: a host times a tool call out (the desktop at 30 s). */
 const ACT_BUDGET_MS = 20_000;
+/** While a cell holds a browser the runtime reports an agent as acting on it, as of the last multiple of this: the View keeps its Take over for the whole run
+ *  (a cell is one long call, not a series of timed actions), and a state read is not different every millisecond, so the stream does not push one every sample. */
+const CELL_ACTIVITY_BEAT_MS = 2_000;
 /** Dialogs a batch reports, as many as a state does. */
 const MAX_BATCH_DIALOGS = 5;
 const MAX_SNAPSHOT_CHARS = 20_000;
@@ -266,6 +272,9 @@ interface Entry {
 	viewport: Viewport;
 	driver: EngineDriver;
 	documentId: string;
+	/** Last observed page metadata; preview authorization never starts an asynchronous page read. */
+	url: string;
+	title: string;
 	release(): void;
 	revision: number;
 	frames: FrameRecord[];
@@ -278,6 +287,10 @@ interface Entry {
 	task: TaskRun | null;
 	/** The live task worker, while one runs. */
 	worker: { process: RunningWorker; finished: Promise<TaskRun> } | null;
+	/** Host-stamped session that started the active task; never inferred from browser holder. */
+	taskSession?: string;
+	/** Closed synchronously on cancel/end/revoke, before waiting for worker exit. */
+	taskEndpoint?: { close(): void };
 	/** The current or most recent publish (publish.ts). */
 	publish: Publication | null;
 	/**
@@ -325,12 +338,16 @@ interface Entry {
 	viewers: number;
 	/** Page-work calls queued or running. A browser with one is working, whatever the clocks say. */
 	pending: number;
+	/** Cells holding it right now (the code seam's `hold`). While any does, an agent is acting on it. */
+	cells: number;
 	/** A throwaway's idle timer, or its close retry (never set for a saved profile or the relay, nor for one a person opened). */
 	idle: NodeJS.Timeout | undefined;
 	/** Set once the runtime began closing it for being idle or to make room; cleared again if that close failed. */
 	retiring: Promise<void> | undefined;
 	/** A throwaway's polite close has failed once: it is killed from then on, because puppeteer treats a second close as already done. */
 	closeFailed: boolean;
+	/** Set when a cell's `browser.open` made it (doc 77 §7.4.3): its own idle clock, and `persist` exempts it from idle close and from being closed to make room. */
+	code?: CodeLifetime;
 }
 
 export class BrowserRuntime implements BrowserRuntimePort {
@@ -349,7 +366,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	 */
 	private readonly viewBySession = new Map<string, string>();
 	/** In-flight launches, so a second open cannot race a first one. */
-	private readonly opening = new Map<string, Promise<Entry>>();
+	private readonly opening = new Map<string, Promise<{ entry: Entry; state: BrowserState }>>();
 	/**
 	 * browser_read's headless reader (no profile; a fresh incognito context per
 	 * read). It takes one slot of MAX_BROWSERS while it lives, closes after
@@ -386,6 +403,10 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	private readonly released = new Map<string, string>();
 	/** Watches the profile root for deletions while anyone listens for connection changes. */
 	private profileWatcher: FSWatcher | undefined;
+	/** The code host (src/code/host) hears when a browser ends, and when a View joins one. */
+	private readonly endListeners = new Set<EndListener>();
+	private readonly viewListeners = new Set<(browserId: string) => void>();
+	private seam: CodeSeam | undefined;
 
 	constructor(options: BrowserRuntimeOptions = {}) {
 		this.options = options;
@@ -433,22 +454,28 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	 * With the pool full, the throwaway used least recently that is neither working nor watched is closed first (its Chrome gone before
 	 * this launches); when there is none, the open is refused (`too_many_browsers`) naming the browsers this chat holds.
 	 */
-	async open(options: BrowserOpenOptions, opener: BrowserOpener = {}): Promise<BrowserState> {
+	async open(options: BrowserOpenOptions, opener: BrowserOpener = {}, code?: CodeLifetime, attach?: AttachTarget, guard?: EffectGuard): Promise<BrowserState> {
+		if (this.disposed) fail("disposed", "runtime has been disposed");
+		if (guard !== undefined) await guard();
+		guard?.assertCurrent();
 		if (this.disposed) fail("disposed", "runtime has been disposed");
 		// Only the person's own switch names a browser to leave; the host marks the tool app-only, and the runtime holds the rule itself, like `leave`.
 		if (options.leaving !== undefined && opener.caller !== "app") fail("human_only", "only the person in the View can switch to another browser");
 		const engine = normalizeEngine(options.engine);
 		const named = options.profile === undefined ? undefined : this.resolveProfile(options.profile, engine);
 		const viewport = normalizeViewport(options.viewport);
+		// A connected Chrome or a spawned application (a cell's `attach` target) is nobody's saved profile and not the one relay Chrome: it is attached to like
+		// a throwaway browser, with nothing to launch and nothing of the person's to close.
+		const attachedElsewhere = attach !== undefined && attach.kind !== "relay";
 		// The relay is the human's own Chrome: there is nothing to make throwaway,
 		// so no profile means the one it has.
-		const profile = named ?? (engine === "chrome-relay" ? RELAY_PROFILE : null);
+		const profile = named ?? (engine === "chrome-relay" && !attachedElsewhere ? RELAY_PROFILE : null);
 
 		// The relay is ONE already-running Chrome with ONE cookie jar, chosen by
 		// the human inside Chrome. Named relay profiles would imply an isolation
 		// that does not exist, so the slug "relay" is reserved for it and is the
 		// only slug it accepts. Other engines own their persistent profile data.
-		if (engine === "chrome-relay" && profile !== RELAY_PROFILE) {
+		if (engine === "chrome-relay" && profile !== RELAY_PROFILE && !attachedElsewhere) {
 			fail(
 				"bad_profile",
 				`the chrome-relay engine attaches to the one Chrome already running, so it always uses the reserved profile "${RELAY_PROFILE}"; ` +
@@ -462,18 +489,24 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			// browser_read's reader never keeps the human from a browser: when it holds the last slot it is closed (after any read in progress) first.
 			if (this.byId.size + this.opening.size >= MAX_BROWSERS - 1 && this.readerHeld()) await this.closeReader();
 			if (this.disposed) fail("disposed", "runtime has been disposed");
+			if (guard !== undefined) await guard();
+			guard?.assertCurrent();
+			if (this.disposed) fail("disposed", "runtime has been disposed");
 			// Everything between these checks and the launch below is synchronous: a second open cannot take the slot or the profile in between.
-			const live = profile === null ? undefined : this.byProfile.get(profile);
-			if (profile !== null && live !== undefined) {
-				const holder = this.holderOf(live.opener, opener.session);
-				if (holder === "this chat") return await this.state(live.browserId);
-				fail("profile_held", heldMessage(profile, holder));
-			}
 			const launching = profile === null ? undefined : this.opening.get(profile);
 			if (profile !== null && launching !== undefined) {
 				// The same chat opening it twice at once (parallel tool calls) is one browser, not a refusal.
 				const holder = this.holderOf(this.openers.get(profile) ?? {}, opener.session);
-				if (holder === "this chat") return await this.state((await launching).browserId);
+				if (holder === "this chat") {
+					const { entry } = await launching;
+					return await this.state(entry.browserId, guardedBy(guard, () => this.requireOpen(entry.browserId)));
+				}
+				fail("profile_held", heldMessage(profile, holder));
+			}
+			const live = profile === null ? undefined : this.byProfile.get(profile);
+			if (profile !== null && live !== undefined) {
+				const holder = this.holderOf(live.opener, opener.session);
+				if (holder === "this chat") return await this.state(live.browserId, guardedBy(guard, () => this.requireOpen(live.browserId)));
 				fail("profile_held", heldMessage(profile, holder));
 			}
 			// Count launches in flight too: four concurrent opens must not slip past the bound just because none of them has finished launching yet.
@@ -483,24 +516,46 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			if (await this.leaveForRoom(options.leaving, opener)) continue;
 			await this.makeRoom(opener.session);
 		}
-
 		assertEngineAvailable(engine);
+
 		// A throwaway browser has no name to guard; its slot only counts against the bound. `:` is not a slug character.
 		const slot = profile ?? `ephemeral:${randomBytes(8).toString("hex")}`;
-		const started = this.launch(profile, engine, viewport, opener).finally(() => {
-			this.opening.delete(slot);
-			this.openers.delete(slot);
-		});
+		const started = this.launch(profile, engine, viewport, opener, code, attach)
+			.then(async (entry) => {
+				try {
+					const authorize: EffectGuard = guardedBy(guard, () => {
+						if (this.disposed) fail("disposed", "runtime has been disposed");
+					});
+					const state = await this.state(entry.browserId, authorize);
+					if (guard !== undefined) await guard();
+					guard?.assertCurrent();
+					// Final local authority and commit share one synchronous continuation.
+					if (this.disposed) fail("disposed", "runtime has been disposed");
+					if (entry.closed || this.byId.get(entry.browserId) !== entry) this.refuseGone(entry.browserId);
+					const completed = { entry, state: entry.notice === undefined ? state : { ...state, notice: entry.notice } };
+					delete entry.notice;
+					return completed;
+				} catch (error) {
+					// Revoked authority must not prevent rollback of the entry this launch owns.
+					try {
+						await this.serialize(entry, () => this.teardown(entry), { evenIfClosed: true });
+					} catch (cleanupError) {
+						throw new AggregateError([error, cleanupError], "Browser open failed and owned browser cleanup could not be confirmed; its entry and profile lock remain held.");
+					}
+					await Promise.allSettled(this.removals);
+					throw error;
+				}
+			})
+			.finally(() => {
+				this.opening.delete(slot);
+				this.openers.delete(slot);
+			});
 		this.opening.set(slot, started);
 		this.openers.set(slot, opener);
-		const entry = await started;
-		const state = this.redact(entry, await this.buildState(entry));
-		const { notice } = entry;
-		delete entry.notice;
-		return notice === undefined ? state : { ...state, notice };
+		return (await started).state;
 	}
 
-	private async launch(profile: string | null, engine: BrowserEngine, viewport: Viewport, opener: BrowserOpener): Promise<Entry> {
+	private async launch(profile: string | null, engine: BrowserEngine, viewport: Viewport, opener: BrowserOpener, code?: CodeLifetime, attach?: AttachTarget): Promise<Entry> {
 		// A saved profile is locked while its browser runs; a throwaway one gets a
 		// directory of its own that goes with the browser.
 		let directory: string;
@@ -538,23 +593,27 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				...(this.options.launchArgs ? { launchArgs: this.options.launchArgs } : {}),
 				...(this.options.executablePath ? { executablePath: this.options.executablePath } : {}),
 				...(this.options.relayUrl && engine === "chrome-relay" ? { relayUrl: this.options.relayUrl } : {}),
+				...(attach === undefined ? {} : { attach }),
 			});
 			const initial = await driver.state();
 			if (released) fail("browser_closed", "The browser closed during initialization.");
 			entry = {
 				browserId: randomBytes(24).toString("base64url"),
 				profile, engine, viewport: initial.viewport, documentId: initial.documentId,
+				url: initial.url, title: initial.title,
 				driver, release, revision: 1, frames: [], queue: Promise.resolve(), inputQueue: Promise.resolve(), closed: false,
 				task: null, worker: null, publish: null, secrets: new Set(), logRead: 0, logNoticed: 0, annotations,
 				opener, takenOver: false, starting: null, agentAt: null, look: profile === null || profile === RELAY_PROFILE ? null : resolveProfileMeta(profile, this.store.meta(profile)),
 				probe: { timer: undefined, running: undefined, again: false },
-				lastUsed: performance.now(), viewers: 0, pending: 0, idle: undefined, retiring: undefined, closeFailed: false, wheelTimer: undefined,
+				lastUsed: performance.now(), viewers: 0, pending: 0, cells: 0, idle: undefined, retiring: undefined, closeFailed: false, wheelTimer: undefined,
 			};
+			if (code !== undefined) entry.code = code;
 			if (profile !== null && profile !== RELAY_PROFILE) entry.notice = this.touchProfile(profile, driver.app);
 			this.byId.set(entry.browserId, entry);
 			if (profile !== null) this.byProfile.set(profile, entry);
 			// A person's own Private browser is theirs: no clock closes it (the leak is chats' browsers, and the View stops reading while its tab is hidden).
-			if (profile === null && opener.caller !== "app") this.watchIdle(entry, this.idleMs);
+			// A cell's browser has its own clock even when it is the person's relay Chrome (letting go of an attachment closes nothing of theirs).
+			if ((profile === null || code !== undefined) && opener.caller !== "app") this.watchIdle(entry, this.idleOf(entry));
 			return entry;
 		} catch (error) {
 			// A factory owns rollback until it returns; only its confirmed-close
@@ -585,7 +644,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	}
 
 	/** Refused (`publish_pending`) while a publish awaits confirmation, unless `caller` is "app". */
-	async close(browserId: string, caller?: ToolCaller): Promise<void> {
+	async close(browserId: string, caller?: ToolCaller, guard?: EffectGuard): Promise<void> {
 		// A failed close revokes reads/actions but remains retryable for cleanup.
 		const entry = this.byId.get(browserId);
 		if (!entry) {
@@ -594,6 +653,8 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			fail("unknown_browser", "Unknown or already closed browserId.");
 		}
 		await this.serialize(entry, async () => {
+			if (guard !== undefined) await guard();
+			guard?.assertCurrent();
 			if (!entry.closed) {
 				refuseWhilePublishing(entry, caller);
 				// An agent closing a browser the person took over would end what they are doing in it.
@@ -610,7 +671,9 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		if (this.byId.get(entry.browserId) !== entry) return;
 		settleOnClose(entry);
 		clearTimeout(entry.wheelTimer);
+		const ending = !entry.closed;
 		entry.closed = true;
+		if (ending) this.notifyEnd(entry, entry.retiring === undefined ? "closed" : "retired");
 		entry.frames.length = 0;
 		try {
 			// A task agent drives this Chrome; it stops before the browser does.
@@ -634,6 +697,8 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	 * for done at once, and releasing on that would free the slot of a Chrome that may still be running.
 	 */
 	private async stopBrowser(entry: Entry): Promise<void> {
+		// A cell's `close({ kill: true })` on a spawned application: the driver lets go of it, then ends the process the pack started (only the application is ended on this path; the fallback below never is).
+		if (entry.code?.kill === true) return await entry.driver.kill({ application: true });
 		if (entry.profile !== null) return await entry.driver.close();
 		if (!entry.closeFailed) {
 			try {
@@ -692,6 +757,17 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		if (errors.length > 0) fail("dispose_incomplete", `some browsers did not shut down cleanly: ${errors.join("; ")}`);
 	}
 
+	/**
+	 * The last resort of a server that is being ended hard (stdio.ts, when `dispose` has not finished in time): the process tree of every throwaway browser is killed at once, with no polite close, and the
+	 * call returns when they are gone or `limitMs` has passed. A saved profile's browser is left alone: its lock holds until its own close is confirmed, and a hard kill could cut a write to logins that matter.
+	 * A driver that is already closing is safe to kill (its `kill` is made for a `close` that hung).
+	 */
+	async killThrowaways(limitMs: number): Promise<void> {
+		const drivers = [...this.byId.values()].filter((entry) => entry.profile === null).map((entry) => entry.driver);
+		for (const orphan of this.stranded) drivers.push(orphan.driver);
+		await Promise.allSettled(drivers.map((driver) => withTimeout(driver.kill(), limitMs, "killing a browser")));
+	}
+
 	/** Drop in-memory state and make the capability dead. Does NOT free the lock. */
 	private detach(entry: Entry): void {
 		settleOnClose(entry);
@@ -704,6 +780,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		this.byId.delete(entry.browserId);
 		if (entry.profile !== null && this.byProfile.get(entry.profile) === entry) this.byProfile.delete(entry.profile);
 		for (const [session, browserId] of this.viewBySession) if (browserId === entry.browserId) this.viewBySession.delete(session);
+		this.previewLast.delete(entry.browserId);
 	}
 
 	bindView(session: string, browserId: string): void {
@@ -713,6 +790,27 @@ export class BrowserRuntime implements BrowserRuntimePort {
 
 	viewOf(session: string): string | undefined {
 		return this.viewBySession.get(session);
+	}
+	previewAccess(session: string, browserId: string): { ok: true; profile: "throwaway" | "saved"; url: string; title: string } | { ok: false; code: "not_owner" | "unknown_source" | "source_closed" | "not_headless" } {
+		const entry = this.byId.get(browserId);
+		if (!entry) return { ok: false, code: "unknown_source" };
+		if (entry.closed) return { ok: false, code: "source_closed" };
+		if (entry.opener.session !== session && this.viewOf(session) !== browserId) return { ok: false, code: "not_owner" };
+		if (entry.engine !== "chromium" || this.options.headless === false) return { ok: false, code: "not_headless" };
+		const state = this.redact(entry, { url: entry.url, title: entry.title });
+		return { ok: true, profile: entry.profile === null ? "throwaway" : "saved", url: state.url, title: state.title };
+	}
+
+	private readonly previewLast = new Map<string, number>();
+
+	async previewStill(session: string, browserId: string): Promise<string | undefined> {
+		const access = this.previewAccess(session, browserId);
+		if (!access.ok || access.profile !== "throwaway") return undefined;
+		const now = Date.now();
+		if (now - (this.previewLast.get(browserId) ?? 0) < 1_000) return undefined;
+		this.previewLast.set(browserId, now);
+		const jpeg = await this.byId.get(browserId)?.driver.previewStill().catch(() => undefined);
+		return jpeg && jpeg.byteLength <= 64 * 1024 ? Buffer.from(jpeg).toString("base64") : undefined;
 	}
 
 	// -----------------------------------------------------------------------
@@ -777,15 +875,16 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	private checkIdle(entry: Entry): void {
 		if (entry.closed || entry.retiring !== undefined) return;
 		const quietMs = performance.now() - entry.lastUsed;
+		const idleMs = this.idleOf(entry);
 		// A View joined to its stream is watching it however long the page takes to answer; a call in flight is work; a person who has the
-		// wheel is using the page with no call and, while their document is hidden, no stream. None of these is idle: only handing the wheel
+		// wheel is using the page with no call and, while their document is hidden, no stream; a persisted code browser stays. None of these is idle: only handing the wheel
 		// back (or its fallback, `watchWheel`) lets the clock count.
-		const occupied = this.working(entry) || entry.viewers > 0 || entry.takenOver;
-		if (occupied || quietMs < this.idleMs) {
-			this.watchIdle(entry, occupied ? this.idleMs : this.idleMs - quietMs);
+		const occupied = this.working(entry) || entry.viewers > 0 || entry.takenOver || entry.code?.persist === true;
+		if (occupied || quietMs < idleMs) {
+			this.watchIdle(entry, occupied ? idleMs : idleMs - quietMs);
 			return;
 		}
-		const reason = `it was a throwaway browser, closed after ${this.idleMs / 1_000} s with no calls; open a new one with browser_open`;
+		const reason = `it was a ${entry.code === undefined ? "throwaway" : "code"} browser, closed after ${idleMs / 1_000} s with no calls; open a new one with ${reopenWith(entry)}`;
 		void this.retire(entry, reason).catch((error: unknown) => console.error("An idle throwaway browser was not closed:", describe(error)));
 	}
 
@@ -797,7 +896,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	private pickVictim(): Entry | undefined {
 		let victim: Entry | undefined;
 		for (const entry of this.byId.values()) {
-			if (entry.profile !== null || entry.closed || entry.viewers > 0 || entry.takenOver || this.working(entry)) continue;
+			if (entry.profile !== null || entry.closed || entry.viewers > 0 || entry.takenOver || entry.code?.persist === true || this.working(entry)) continue;
 			const personal = entry.opener.caller === "app";
 			const victimPersonal = victim?.opener.caller === "app";
 			if (victim === undefined || (!personal && victimPersonal) || (personal === victimPersonal && entry.lastUsed < victim.lastUsed)) victim = entry;
@@ -817,7 +916,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		}
 		const victim = this.pickVictim();
 		if (victim === undefined) fail("too_many_browsers", this.refusal(asker, "none can be closed to make room: each is running a task, has a call in progress, is open in a View, is one the person has taken over, is still shutting down, or is a saved profile's"));
-		const reason = `it was a throwaway browser, closed to make room for another chat's (at most ${MAX_BROWSERS} are open at once); open a new one with browser_open`;
+		const reason = `it was a ${victim.code === undefined ? "throwaway" : "code"} browser, closed to make room for another chat's (at most ${MAX_BROWSERS} are open at once); open a new one with ${reopenWith(victim)}`;
 		try {
 			await this.retire(victim, reason);
 		} catch (error) {
@@ -834,6 +933,11 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		return held.length > 0 ? `${why}. You hold ${held.join(", ")}: browser_close the ones you are done with` : `${why}. None is yours; try again shortly`;
 	}
 
+	/** Someone other than a cell is about to use the browser live (a View joined, a task agent began): the code host thaws its tabs, because a frozen page draws nothing and answers no timer. */
+	private wake(browserId: string): void {
+		for (const listener of [...this.viewListeners]) listener(browserId);
+	}
+
 	/**
 	 * A View joined `browserId`'s live stream (stream.ts): while any View is joined nobody may give the browser up, and it is not idle.
 	 * Returns what ends that. A count, not a clock: a View whose page answers slowly is still watching.
@@ -842,6 +946,8 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		const entry = this.require(browserId);
 		entry.viewers += 1;
 		this.watchWheel(entry);
+		this.wake(browserId);
+
 		let ended = false;
 		return () => {
 			if (ended) return;
@@ -851,18 +957,102 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			this.watchWheel(entry);
 		};
 	}
+	previewHolding(browserId: string): () => void {
+		const entry = this.require(browserId);
+		entry.pending += 1;
+		this.wake(browserId);
+		let ended = false;
+		return () => {
+			if (ended) return;
+			ended = true;
+			entry.pending -= 1;
+			entry.lastUsed = performance.now();
+		};
+	}
+
+
+	/** How long `entry` may go without a call: a cell's browser has its own clock (OMP's 1,800 s); every other throwaway has the pack's. */
+	private idleOf(entry: Entry): number {
+		return entry.code?.idleMs ?? this.idleMs;
+	}
+
+	// -----------------------------------------------------------------------
+	// The code seam (src/code/host): a browser a cell opens is an entry like any other
+	// -----------------------------------------------------------------------
+
+	private notifyEnd(entry: Entry, why: EndWhy): void {
+		const reason = this.released.get(entry.browserId);
+		for (const listener of [...this.endListeners]) {
+			try {
+				listener(entry.browserId, why, reason);
+			} catch (error) {
+				console.error("A browser-end listener failed:", describe(error));
+			}
+		}
+	}
+
+	/** One call in flight on `entry`, for a cell: out of idle close and make-room, refused like a page call while a task or a pending publish owns the page. Returns what ends it.
+	 *  A cell that drives is an agent acting here, as a step tool is (`admitCaller`): the View offers Take over while it runs and for a few seconds after. */
+	private holdWork(entry: Entry): () => void {
+		refuseWhileBusy(entry, undefined, "code");
+		entry.pending += 1;
+		entry.cells += 1;
+		let held = true;
+		return () => {
+			if (!held) return;
+			held = false;
+			entry.pending -= 1;
+			entry.cells -= 1;
+			// The release that follows the person's take-over ends a cell they stopped: nobody is driving, so it says nothing about an agent acting.
+			if (!entry.takenOver) entry.agentAt = Date.now();
+			entry.lastUsed = performance.now();
+		};
+	}
+
+	/** The closures the code host drives. The runtime stays the one owner of browsers, locks, sessions and the View's stream; the host owns workers and cells. */
+	codeSeam(): CodeSeam {
+		return (this.seam ??= {
+			open: async (options, opener, code, attach) => await this.open(options, opener, code, attach),
+			resize: async (browserId, viewport, scale) => await this.resize(browserId, viewport, scale),
+			close: async (browserId) => await this.close(browserId),
+			require: (browserId) => this.require(browserId),
+			resolveProfile: (raw) => this.resolveProfile(raw, "chromium"),
+			peek: (browserId) => {
+				const entry = this.byId.get(browserId);
+				return entry === undefined || entry.closed ? undefined : entry;
+			},
+			browsersOf: (session) => [...this.byId.values()].filter((entry) => !entry.closed && (entry.profile === null || entry.profile === RELAY_PROFILE) && entry.opener.session === session),
+			viewOf: (session) => {
+				const id = this.viewOf(session);
+				const entry = id === undefined ? undefined : this.byId.get(id);
+				return entry?.profile === null || entry?.profile === RELAY_PROFILE ? id : undefined;
+			},
+			bindView: (session, browserId) => this.bindView(session, browserId),
+			hold: (entry) => this.holdWork(entry as Entry),
+			working: (entry) => this.working(entry as Entry),
+			serialize: (entry, work) => this.serialize(entry as Entry, work),
+			onEnd: (listener) => {
+				this.endListeners.add(listener);
+				return () => void this.endListeners.delete(listener);
+			},
+			onViewed: (listener) => {
+				this.viewListeners.add(listener);
+				return () => void this.viewListeners.delete(listener);
+			},
+		});
+	}
 
 	// -----------------------------------------------------------------------
 	// Read paths
 	// -----------------------------------------------------------------------
 
-	async state(browserId: string): Promise<BrowserState> {
-		return await this.serialize(this.require(browserId), async (entry) => this.redact(entry, await this.buildState(entry)));
+	async state(browserId: string, guard?: EffectGuard): Promise<BrowserState> {
+		return await this.serialize(this.require(browserId), async (entry) => this.redact(entry, await this.buildState(entry)), { guard });
 	}
 
 	/** The live picture, for the View's direct channel (stream.ts): the driver's own cast, never queued behind page work. */
-	watchFrames(browserId: string, onFrame: (frame: LiveFrame) => void): () => void {
-		return this.require(browserId).driver.watchFrames(onFrame);
+	watchFrames(browserId: string, onFrame: (frame: LiveFrame) => void, size?: "view" | { maxWidth: 480 | 1280 }): () => void {
+		return this.require(browserId).driver.watchFrames(onFrame, size);
 	}
 
 	/** `state`, but NOT queued behind page work: the live view keeps reading it while a navigation or action is in flight. */
@@ -965,7 +1155,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	}
 
 	/** A read like `snapshot`; the picture is for a model, so nothing of it is kept (`entry.frames` holds annotatable frames only). */
-	async shot(browserId: string, request: ShotRequest = {}): Promise<ModelShot> {
+	async shot(browserId: string, request: ShotRequest = {}, guard?: EffectGuard): Promise<ModelShot> {
 		const scale = request.scale;
 		if (scale !== undefined && !(Number.isFinite(scale) && scale > 0 && scale <= 1)) fail("bad_shot", "scale must be above 0 and at most 1");
 		if (request.fullPage && request.selector !== undefined) fail("bad_shot", "pass fullPage or selector, not both");
@@ -978,11 +1168,13 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				...(scale === undefined ? {} : { scale }),
 			});
 			return { ...picture, url: this.redact(entry, state.url) };
-		});
+		}, { guard });
 	}
 
-	async logs(browserId: string): Promise<LogEntry[]> {
+	async logs(browserId: string, guard?: EffectGuard): Promise<LogEntry[]> {
 		const entry = this.require(browserId);
+		if (guard !== undefined) await guard();
+		guard?.assertCurrent();
 		const fresh = entry.driver.logs().filter((log) => log.n > entry.logRead);
 		entry.logRead = Math.max(entry.logRead, fresh.at(-1)?.n ?? 0);
 		return this.redact(entry, fresh);
@@ -996,7 +1188,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		return entries.filter((log) => log.n > told).length;
 	}
 
-	async snapshot(browserId: string): Promise<{ state: BrowserState; text: string }> {
+	async snapshot(browserId: string, guard?: EffectGuard): Promise<{ state: BrowserState; text: string }> {
 		return await this.serialize(this.require(browserId), async (entry) => {
 			// A page that swaps its document under the read gets one more try; a second swap is reported.
 			for (let attempt = 1; ; attempt += 1) {
@@ -1007,7 +1199,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				if (entry.revision === revision) return this.redact(entry, { state, text });
 				if (attempt === 2) fail("stale_snapshot", "The document changed during inspection.");
 			}
-		});
+		}, { guard });
 	}
 
 	/**
@@ -1069,6 +1261,22 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		return this.require(browserId).annotations.save(json);
 	}
 
+	async endProfileSession(sessionId: string): Promise<void> {
+		for (const entry of this.byId.values()) {
+			if (entry.worker && entry.taskSession === sessionId) await this.stopTask(entry);
+		}
+	}
+
+	requireOpen(browserId: string, allowClosed = false): void {
+		if (this.disposed) fail("disposed", "runtime has been disposed");
+		const entry = this.byId.get(browserId);
+		if (entry === undefined) {
+			if (allowClosed && this.released.has(browserId)) return;
+			this.refuseGone(browserId);
+		}
+		if (entry.closed && !allowClosed) this.refuseGone(browserId);
+	}
+
 	async profileList(asker?: string): Promise<ProfileListing[]> {
 		return buildProfileList(this.store, (slug) => this.holdFact(slug, asker), Date.now());
 	}
@@ -1114,7 +1322,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	async addProfile(request: NewProfileRequest, caller?: ToolCaller): Promise<ProfileListing> {
 		if (this.disposed) fail("disposed", "runtime has been disposed");
 		// The tool is app-only at the host, but a plain MCP client does not apply that rule: the runtime holds it itself, like `control`.
-		if (caller !== "app") fail("human_only", "only the person in the View can add a profile; name a new one in browser_open to have a profile of your own");
+		if (caller !== "app") fail("human_only", "only the person in the View can add a profile; to have a profile of your own, name a new short lowercase one when you open a browser");
 		if (typeof request?.name !== "string") fail("bad_profile_name", "Give the profile a name.");
 		if (request.colour !== undefined && !isProfileColour(request.colour)) fail("bad_profile", `colour must be one of: ${PROFILE_COLOURS.join(", ")}`);
 		if (request.avatar !== undefined && cleanAvatar(request.avatar) === undefined) fail("bad_profile", "avatar must be a single emoji");
@@ -1145,6 +1353,8 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		// Not queued behind page work: it must hold before the agent's next step, not after its whole batch.
 		entry.takenOver = mode === "take";
 		this.watchWheel(entry);
+		// The code host holds this browser's tabs in a worker: it drops them, and stops a cell that is using the page (the cell is told human_driving) before the person's first click lands in the middle of it.
+		if (mode === "take") this.notifyEnd(entry, "taken-over");
 		return this.redact(entry, await this.buildState(entry));
 	}
 
@@ -1163,7 +1373,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		clearTimeout(entry.wheelTimer);
 		entry.wheelTimer = undefined;
 		if (this.keptOnLeave(entry, heldWheel)) return { closed: false };
-		await this.retire(entry, "the person left it for another profile in the Browser View, which closed it; open it again with browser_open");
+		await this.retire(entry, `the person left it for another profile in the Browser View, which closed it; open it again with ${reopenWith(entry)}`);
 		return { closed: true };
 	}
 
@@ -1456,20 +1666,21 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	}
 
 	/** One admitted tab operation, under the caller's lock. */
-	private async applyTab(entry: Entry, tab: PlannedTab): Promise<void> {
+	private async applyTab(entry: Entry, tab: PlannedTab, guard?: EffectGuard): Promise<void> {
 		switch (tab.op) {
 			case "new":
 				try {
-					await entry.driver.openTab(tab.url);
+					await entry.driver.openTab(tab.url, undefined, guard);
 				} catch (error) {
+					if (error instanceof ActionNotDispatched) throw error;
 					fail("tab_failed", `opening a new tab${tab.url ? ` at ${tab.url}` : ""} failed: ${describe(error)}`);
 				}
 				break;
 			case "activate":
-				await entry.driver.activateTab(tab.tabId as string);
+				await entry.driver.activateTab(tab.tabId as string, guard);
 				break;
 			case "close":
-				await entry.driver.closeTab(tab.tabId as string);
+				await entry.driver.closeTab(tab.tabId as string, guard);
 				break;
 		}
 	}
@@ -1478,11 +1689,11 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	// Actions
 	// -----------------------------------------------------------------------
 
-	async act(browserId: string, input: BrowserAction, caller?: ToolCaller): Promise<ActionResult> {
+	async act(browserId: string, input: BrowserAction, caller?: ToolCaller, guard?: EffectGuard): Promise<ActionResult> {
 		const entry = this.require(browserId);
 		return await this.serialize(entry, async () => {
 			admitCaller(entry, caller);
-			const done = await this.dispatch(entry, this.admit(entry, input, caller), caller);
+			const done = await this.dispatch(entry, this.admit(entry, input, caller), caller, guard);
 			if (done.status !== "completed") {
 				return this.redact(entry, { status: done.status, error: done.error, state: await this.buildState(entry).catch(() => this.staleState(entry)) });
 			}
@@ -1492,7 +1703,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				...(done.credential ? { credential: done.credential } : {}),
 				...(done.dialogs ? { dialogs: done.dialogs } : {}),
 			});
-		});
+		}, { guard });
 	}
 
 	/**
@@ -1501,7 +1712,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	 * page; steps run in order until one is not `completed` or the time budget is spent (a host times a call out, and a
 	 * caller that never heard back would send the same submit again). The state is read once, at the end.
 	 */
-	async actMany(browserId: string, steps: readonly BatchStep[], caller?: ToolCaller): Promise<ActManyResult> {
+	async actMany(browserId: string, steps: readonly BatchStep[], caller?: ToolCaller, guard?: EffectGuard): Promise<ActManyResult> {
 		const entry = this.require(browserId);
 		if (!Array.isArray(steps) || steps.length < 1 || steps.length > MAX_BATCH_STEPS) fail("bad_action", `actions must be 1-${MAX_BATCH_STEPS} steps`);
 		return await this.serialize(entry, async () => {
@@ -1515,16 +1726,19 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			let valueChars = MAX_EVAL_RESULT_CHARS;
 			let stopped: StepDone | undefined;
 			for (const [index, step] of plan.entries()) {
+				const authorization = guard?.();
+				if (authorization !== undefined) await authorization;
+				guard?.assertCurrent();
 				// The person took over between two steps: the steps not yet sent are not sent.
 				if (index > 0 && caller !== "app" && entry.takenOver) {
-					stopped = { status: "failed", error: TAKEN_OVER_MESSAGE };
+					stopped = { status: "failed", error: TAKEN_OVER_MESSAGES.steps };
 					break;
 				}
 				if (index > 0 && Date.now() >= deadline) {
 					stopped = { status: "timeout", error: `the batch's time budget (${budget} ms) ran out after ${index} of ${plan.length} steps; send the remaining steps in a new call` };
 					break;
 				}
-				const done = await this.runStep(entry, step, caller, valueChars);
+				const done = await this.runStep(entry, step, caller, valueChars, guard);
 				valueChars -= done.value?.length ?? 0;
 				outcomes.push({
 					kind: step.kind,
@@ -1552,19 +1766,19 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				...(dialogs.length === 0 ? {} : { dialogs: dialogs.slice(-MAX_BATCH_DIALOGS) }),
 				...(newErrors === 0 ? {} : { newErrors }),
 			});
-		});
+		}, { guard });
 	}
 
-	private runStep(entry: Entry, step: PlannedStep, caller: ToolCaller | undefined, valueChars: number): Promise<StepDone> {
+	private runStep(entry: Entry, step: PlannedStep, caller: ToolCaller | undefined, valueChars: number, guard?: EffectGuard): Promise<StepDone> {
 		switch (step.kind) {
 			case "wait":
 				return this.waitStep(entry, step);
 			case "tab":
-				return this.tabStep(entry, step);
+				return this.tabStep(entry, step, guard);
 			case "eval":
 				return this.evalStep(entry, step, valueChars);
 			default:
-				return this.dispatch(entry, step, caller);
+				return this.dispatch(entry, step, caller, guard);
 		}
 	}
 
@@ -1609,7 +1823,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	}
 
 	/** One admitted action, dispatched once on the active tab. A failure is a status, never a throw: earlier steps of a batch stay accounted for. */
-	private async dispatch(entry: Entry, action: BrowserAction, caller: ToolCaller | undefined): Promise<Dispatched> {
+	private async dispatch(entry: Entry, action: BrowserAction, caller: ToolCaller | undefined, guard?: EffectGuard): Promise<Dispatched> {
 		// The human driving the pinned page while waiting may hit the site's own submit.
 		const pinned = caller === "app" && TOUCHING_KINDS[action.kind] && isPending(entry.publish) ? entry.publish : null;
 		// Another tab is not the page being confirmed; an unreadable state counts as the pinned one.
@@ -1634,7 +1848,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		}
 		let outcome: PerformOutcome;
 		try {
-			outcome = await entry.driver.perform(action, password);
+			outcome = await entry.driver.perform(action, password, guard);
 			if (touching) touching.touchedWhilePending = true;
 		} catch (error) {
 			const dispatched = !(error instanceof ActionNotDispatched);
@@ -1661,9 +1875,9 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	}
 
 	/** One admitted tab operation: a failure is a status, as for an action. */
-	private async tabStep(entry: Entry, step: PlannedTab): Promise<StepDone> {
+	private async tabStep(entry: Entry, step: PlannedTab, guard?: EffectGuard): Promise<StepDone> {
 		try {
-			await this.applyTab(entry, step);
+			await this.applyTab(entry, step, guard);
 		} catch (error) {
 			return { status: error instanceof ActionNotDispatched ? "failed" : "unknown", error: describe(error) };
 		}
@@ -1700,10 +1914,10 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	}
 
 	/** A read like `snapshot`: the page is not touched, and no task or publish stops it. */
-	async inspect(browserId: string, selector: string): Promise<InspectResult> {
+	async inspect(browserId: string, selector: string, guard?: EffectGuard): Promise<InspectResult> {
 		const entry = this.require(browserId);
 		const css = requireReadSelector(selector);
-		return await this.serialize(entry, async () => this.redact(entry, (await entry.driver.inspect(css)) ?? { found: false as const }));
+		return await this.serialize(entry, async () => this.redact(entry, (await entry.driver.inspect(css)) ?? { found: false as const }), { guard });
 	}
 
 	// -----------------------------------------------------------------------
@@ -1721,9 +1935,9 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	}
 
 	/** Start a task and return as soon as it runs; follow it with `waitTask`. */
-	async startTask(browserId: string, request: TaskRequest, caller?: ToolCaller): Promise<TaskRun> {
+	async startTask(browserId: string, request: TaskRequest, caller?: ToolCaller, session?: string, guard?: EffectGuard, workerGuard?: EffectGuard): Promise<TaskRun> {
 		const entry = this.require(browserId);
-		const { run } = await this.beginTask(browserId, request, undefined, caller);
+		const { run } = await this.beginTask(browserId, request, undefined, caller, session, guard, workerGuard);
 		return this.redact(entry, cloneTask(run));
 	}
 
@@ -1732,6 +1946,9 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		request: TaskRequest,
 		onStep?: (step: TaskStep, run: TaskRun) => void,
 		caller?: ToolCaller,
+		session?: string,
+		guard?: EffectGuard,
+		workerGuard?: EffectGuard,
 	): Promise<{ run: TaskRun; finished: Promise<TaskRun> }> {
 		const entry = this.require(browserId);
 		// The task agent takes a browser-level CDP endpoint and acts on the whole
@@ -1750,14 +1967,24 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			refuseWhilePublishing(entry, caller);
 			refuseWhileTakenOver(entry, caller);
 			entry.starting = "task";
-			let state: EngineState;
+			let endpoint: { url: string; close(): void } | undefined;
 			try {
-				state = await this.refreshState(entry);
-			} finally {
-				entry.starting = null;
-			}
+			const state = await this.refreshState(entry);
 			// `control` refuses the wheel while the page is read, so this holds; it is the last look before a worker is spawned on the page.
 			refuseWhileTakenOver(entry, caller);
+			if (guard !== undefined) await guard();
+			guard?.assertCurrent();
+			if (caller === "model" && entry.profile !== null && entry.profile !== RELAY_PROFILE) {
+				const authorize = workerGuard ?? guard;
+				if (authorize === undefined) fail("profile_consent_required", "Saved-profile tasks require current host authority.");
+				endpoint = await createGuardedTaskEndpoint(entry.driver.cdpEndpoint(), authorize);
+				await authorize();
+				authorize.assertCurrent();
+				if (guard !== undefined) await guard();
+				guard?.assertCurrent();
+			}
+			if (this.disposed) fail("disposed", "runtime has been disposed");
+			if (entry.closed || this.byId.get(entry.browserId) !== entry) this.refuseGone(entry.browserId);
 			// Resolved (and, for a sign-up, minted) only once the task will run.
 			const credential = request.credential ? resolveCredential(this.store.profileDir(this.savedProfile(entry, "a task credential")), request.credential, this.credentialKey) : undefined;
 			if (credential) entry.secrets.add(credential.password);
@@ -1768,7 +1995,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				...(credential ? { credential: { origin: credential.origin, created: credential.created } } : {}),
 			};
 			const worker: RunningWorker = startWorker(
-				{ cdpUrl: entry.driver.cdpEndpoint(), task, maxSteps, startUrl: state.url, ...(credential ? { credential: { origin: credential.origin, password: credential.password } } : {}) },
+				{ cdpUrl: endpoint?.url ?? entry.driver.cdpEndpoint(), task, maxSteps, startUrl: state.url, ...(credential ? { credential: { origin: credential.origin, password: credential.password } } : {}) },
 				(step) => {
 					const record: TaskStep = { n: step.n, action: step.action, url: step.url, elapsedMs: step.elapsedMs };
 					run.steps.push(record);
@@ -1779,7 +2006,11 @@ export class BrowserRuntime implements BrowserRuntimePort {
 					if (onStep) onStep(this.redact(entry, record), this.redact(entry, cloneTask(run)));
 				},
 			);
+			entry.taskSession = caller === "model" ? session : undefined;
+			entry.taskEndpoint = endpoint;
 			const finished = worker.done.then((result) => {
+				endpoint?.close();
+				entry.taskEndpoint = undefined;
 				Object.assign(run, {
 					status: result.status,
 					summary: result.summary,
@@ -1790,15 +2021,23 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				// The agent navigated this Chrome: whatever frame was retained is stale.
 				entry.revision += 1;
 				entry.worker = null;
+				entry.taskSession = undefined;
 				entry.lastUsed = performance.now();
 				return run;
 			});
 			entry.task = run;
 			entry.worker = { process: worker, finished };
+			this.wake(entry.browserId);
 			// Returned wrapped so the serializer is released now: the task runs
 			// outside the page queue, and frames keep flowing while it works.
 			return { run, finished };
-		});
+			} catch (error) {
+				endpoint?.close();
+				throw error;
+			} finally {
+				entry.starting = null;
+			}
+		}, { guard });
 	}
 
 	/**
@@ -1819,13 +2058,16 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		return this.redact(entry, cloneTask(entry.task));
 	}
 
-	async cancelTask(browserId: string): Promise<TaskRun> {
+	async cancelTask(browserId: string, guard?: EffectGuard): Promise<TaskRun> {
 		const entry = this.require(browserId);
+		if (guard !== undefined) await guard();
+		guard?.assertCurrent();
 		const worker = entry.worker;
 		if (!worker) {
 			if (!entry.task) fail("no_task", "no task has run on this browser");
 			return this.redact(entry, cloneTask(entry.task));
 		}
+		entry.taskEndpoint?.close();
 		worker.process.cancel();
 		return this.redact(entry, cloneTask(await worker.finished));
 	}
@@ -1834,6 +2076,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	private async stopTask(entry: Entry): Promise<void> {
 		const worker = entry.worker;
 		if (!worker) return;
+		entry.taskEndpoint?.close();
 		worker.process.cancel();
 		await worker.finished;
 	}
@@ -1842,7 +2085,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	// Publishing — fill, park for a confirm, submit once (publish.ts)
 	// -----------------------------------------------------------------------
 
-	async publish(browserId: string, recipe: PublishRecipe, mode: PublishMode, caller?: ToolCaller, preset?: PresetRef): Promise<PublishCheck | PublishRecord> {
+	async publish(browserId: string, recipe: PublishRecipe, mode: PublishMode, caller?: ToolCaller, preset?: PresetRef, guard?: EffectGuard): Promise<PublishCheck | PublishRecord> {
 		const entry = this.require(browserId);
 		const profile = this.savedProfile(entry, "publishing");
 		const valid = validateRecipe(recipe);
@@ -1859,10 +2102,13 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				// A post the user did not approve is refused before the page is opened: the model cannot even show the human text nobody approved.
 				// Inside the `starting` window, so the wheel cannot be taken while the approval is looked up.
 				if (selected === "post") await this.publishApprovals.require({ origin: valid.origin, profile, ...(preset === undefined ? {} : { preset: preset.name }), values: valid.fields.map((field) => field.value) }, "park");
-				outcome = await prepare(entry.driver, profile, valid, selected);
+				if (guard !== undefined) await guard();
+				guard?.assertCurrent();
+				outcome = await prepare(entry.driver, profile, valid, selected, guard);
 			} finally {
 				entry.starting = null;
 			}
+			guard?.assertCurrent();
 			// `control` refuses the wheel while the fill runs, so this holds; it is the last look before a post is parked on the page.
 			refuseWhileTakenOver(entry, caller);
 			if (!("record" in outcome)) {
@@ -1876,10 +2122,10 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			if (preset !== undefined) outcome.record.preset = { name: preset.name, verified: preset.verified };
 			entry.publish = outcome;
 			return this.redact(entry, publishRecord(outcome));
-		});
+		}, { guard });
 	}
 
-	async confirmPublish(browserId: string, publishId: string, caller?: ToolCaller, expect?: PublishExpectation): Promise<PublishRecord> {
+	async confirmPublish(browserId: string, publishId: string, caller?: ToolCaller, expect?: PublishExpectation, guard?: EffectGuard): Promise<PublishRecord> {
 		const entry = this.require(browserId);
 		return await this.serialize(entry, async () => {
 			const publication = requirePending(entry.publish, publishId);
@@ -1893,21 +2139,28 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			// spending it is the lock: it happens before the click, for the View's Post too, so a post the human pressed cannot be posted again by the agent.
 			const { record } = publication;
 			const spent = await this.publishApprovals.consume({ origin: record.origin, profile: record.profile, ...(record.preset === undefined ? {} : { preset: record.preset.name }), values: record.fields.map((field) => field.value) }, "confirm");
-			await confirm(entry.driver, publication);
+			try {
+				if (guard !== undefined) await guard();
+				guard?.assertCurrent();
+			} catch (error) {
+				await spent.release();
+				throw error;
+			}
+			await confirm(entry.driver, publication, guard);
 			// `failed` is provably nothing submitted: the approval is the user's still, for the confirm that follows. Anything else may have posted.
 			if (publication.record.status === "failed") await spent.release();
 			if (publication.record.status === "posted") this.observeConnection(publication.record.profile, publication.recipe.origin, true, this.redact(entry, publication.account));
 			return this.redact(entry, publishRecord(publication));
-		});
+		}, { guard });
 	}
 
-	async cancelPublish(browserId: string, publishId: string): Promise<PublishRecord> {
+	async cancelPublish(browserId: string, publishId: string, guard?: EffectGuard): Promise<PublishRecord> {
 		const entry = this.require(browserId);
 		return await this.serialize(entry, async () => {
 			const publication = requirePending(entry.publish, publishId);
 			cancel(publication);
 			return this.redact(entry, publishRecord(publication));
-		});
+		}, { guard });
 	}
 
 	/** Not queued: it only reads the record, and must not wait behind a confirm. */
@@ -2041,13 +2294,19 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	private serialize<T>(
 		entry: Entry,
 		work: (entry: Entry) => Promise<T>,
-		options: { evenIfClosed?: boolean } = {},
+		options: { evenIfClosed?: boolean; guard?: EffectGuard } = {},
 	): Promise<T> {
 		entry.pending += 1;
 		const run = async (): Promise<T> => {
 			try {
 				if (entry.closed && !options.evenIfClosed) this.refuseGone(entry.browserId);
-				return await work(entry);
+				const authorization = options.guard?.();
+				if (authorization !== undefined) await authorization;
+				options.guard?.assertCurrent();
+				if (entry.closed && !options.evenIfClosed) this.refuseGone(entry.browserId);
+				const result = await work(entry);
+				options.guard?.assertCurrent();
+				return result;
 			} finally {
 				entry.pending -= 1;
 				entry.lastUsed = performance.now();
@@ -2062,6 +2321,8 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		if (entry.closed) fail("unknown_browser", "Unknown or already closed browserId.");
 		const state = await entry.driver.state();
 		if (entry.closed) fail("unknown_browser", "The browser closed during inspection.");
+		entry.url = state.url;
+		entry.title = state.title;
 		if (state.documentId !== entry.documentId || state.viewport.width !== entry.viewport.width || state.viewport.height !== entry.viewport.height) {
 			entry.revision += 1;
 			entry.documentId = state.documentId;
@@ -2080,7 +2341,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			canGoBack: state.canGoBack, canGoForward: state.canGoForward,
 			publish: entry.publish ? publishRecord(entry.publish) : null,
 			dialogs: state.dialogs,
-			takenOver: entry.takenOver, agentActionAt: entry.agentAt,
+			takenOver: entry.takenOver, agentActionAt: agentActionAt(entry),
 		};
 	}
 
@@ -2343,26 +2604,47 @@ function requireDelta(value: unknown, name: string): number {
 // ---------------------------------------------------------------------------
 
 /** A task's page is its own, and a pending publish pins the page: neither takes another caller's page work. */
-function refuseWhileBusy(entry: Entry, caller: ToolCaller | undefined): void {
+function refuseWhileBusy(entry: Entry, caller: ToolCaller | undefined, tools: Tools = "steps"): void {
 	if (entry.task?.status === "running") {
 		fail("task_running", "a browser_task owns this page; wait for it or cancel it");
 	}
 	refuseWhilePublishing(entry, caller);
-	refuseWhileTakenOver(entry, caller);
+	refuseWhileTakenOver(entry, caller, tools);
 }
 
+/**
+ * The tools of the model that is refused, because the two sets do not share a name: a cell drives a page with `tab.*` and reads it with `tab.observe()`; the step tools read it with browser_snapshot and browser_state, which
+ * a code or build model does not have (doc 77 §7.5a).
+ */
+type Tools = "steps" | "code";
+
 /** What an agent is told when the person has the wheel: why it was refused, and that reading is still open to it. */
-const TAKEN_OVER_MESSAGE = "the person took over this browser in the View, so your actions on it are paused. You can still read it (browser_snapshot, browser_state); ask them to hand it back before you act.";
+const TAKEN_OVER_MESSAGES: Record<Tools, string> = {
+	steps: "the person took over this browser in the View, so your actions on it are paused. You can still read it (browser_snapshot, browser_state); ask them to hand it back before you act.",
+	code: "the person took over this browser in the View, so your actions on it are paused. You can still read it (tab.observe(), tab.url()); ask them to hand it back before you act.",
+};
+
+/** The way back to a browser that was given up, in the words of the model that has to say it: the tool its opener used (a code or build model has `browser_view` and not `browser_open`), a cell's `browser.open` for a code browser, and `browser_view` for the person's own, which every space has. */
+function reopenWith(entry: Entry): string {
+	if (entry.code !== undefined) return "browser.open";
+	if (entry.opener.caller === "app") return "browser_view";
+	return entry.opener.tool ?? "browser_open";
+}
 
 /** The person's wheel: only the View's own input drives a browser they took over. Refused as `human_driving`. */
-function refuseWhileTakenOver(entry: Entry, caller: ToolCaller | undefined): void {
-	if (caller !== "app" && entry.takenOver) fail("human_driving", TAKEN_OVER_MESSAGE);
+function refuseWhileTakenOver(entry: Entry, caller: ToolCaller | undefined, tools: Tools = "steps"): void {
+	if (caller !== "app" && entry.takenOver) fail("human_driving", TAKEN_OVER_MESSAGES[tools]);
 }
 
 /** `refuseWhileBusy`, then notes that an agent is acting on this browser (the View shows it, with a way to take over). */
 function admitCaller(entry: Entry, caller: ToolCaller | undefined): void {
 	refuseWhileBusy(entry, caller);
 	if (caller !== "app") entry.agentAt = Date.now();
+}
+
+/** When an agent last acted on `entry`, for the View: while a cell holds it, the start of the current beat (so it reads as acting for the whole run). */
+function agentActionAt(entry: Entry): number | null {
+	return entry.cells > 0 ? Date.now() - (Date.now() % CELL_ACTIVITY_BEAT_MS) : entry.agentAt;
 }
 
 /**
@@ -2436,4 +2718,8 @@ function nameProfiles(profiles: readonly { slug: string; label: string }[]): str
 /** The refusal of a profile someone else holds, open or still launching: whose it is, never an id. The View recognises "is already open". */
 function heldMessage(profile: string, holder: Exclude<ProfileHolder, "this chat" | null>): string {
 	return `profile "${profile}" is already open, held by ${holder === "human" ? "the human in the View" : "another chat"}. Ask the human to close it, or use another profile.`;
+}
+
+function guardedBy(guard: EffectGuard | undefined, check: () => void): EffectGuard {
+	return Object.assign(() => guard?.(), { assertCurrent: () => { guard?.assertCurrent(); check(); } });
 }

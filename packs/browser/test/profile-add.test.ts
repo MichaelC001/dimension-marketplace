@@ -373,7 +373,7 @@ describe("addProfile", () => {
 		expect(await failureCode(() => runtime.addProfile({ name: "One More" }, "app"))).toBe("too_many_profiles");
 		// The name of the folder that is past the listing: refused, not merged into that profile's label.
 		expect(await failureCode(() => runtime.addProfile({ name: "zz-hidden" }, "app"))).toBe("too_many_profiles");
-		expect(await failureCode(() => runtime.open({ profile: "brand-new" }))).toBe("too_many_profiles");
+		expect(await failureCode(() => runtime.open({ profile: "brand-new" }, { caller: "app" }))).toBe("too_many_profiles");
 		expect(await tree(rootDir)).toEqual(before);
 		expect(store.meta("zz-hidden").label).toBe("Hidden");
 	});
@@ -463,11 +463,11 @@ describeWithChrome("a profile the person just made", () => {
 			await runtime.addProfile({ name: "Work Account", colour: "teal", avatar: "💼" }, "app");
 			await runtime.addProfile({ name: "Work account!" }, "app");
 
-			const first = await runtime.open({ profile: "  work ACCOUNT " });
+			const first = await runtime.open({ profile: "  work ACCOUNT " }, { caller: "model", session: "s-chat" });
 			expect(first.profile).toBe("work-account");
 			// The View draws the profile as the person made it.
 			expect(first.look).toEqual({ label: "Work Account", colour: "teal", avatar: "💼" });
-			const second = await runtime.open({ profile: "work account!" });
+			const second = await runtime.open({ profile: "work account!" }, { caller: "model", session: "s-chat" });
 			expect(second.profile).toBe("work-account-2");
 			// Opening made no new profile, and kept what the person chose.
 			expect(store.list()).toEqual(["work-account", "work-account-2"]);

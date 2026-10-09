@@ -11,8 +11,8 @@
 // at or after the start only, and the transport says so in one sentence.
 import { clampTime, seekForKey } from "@dimension/mcp-app-kit/annotate";
 
-/** What a person is told while they mark a recording that does not say how long it is. */
-export const UNBOUNDED_SENTENCE = "This recording does not say how long it is, so marks use the time you hear.";
+/** What a person is told while they add notes to a recording that does not say how long it is. */
+export const UNBOUNDED_SENTENCE = "This recording does not say how long it is, so notes use the time you hear.";
 
 /** How long the engine is given to learn the length after the seek past the end. */
 export const RESOLVE_MS = 3000;

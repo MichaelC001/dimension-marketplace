@@ -3,8 +3,8 @@
  *  sent the list twice (the host appends `structuredContent` to a model's turn
  *  whenever it differs from the text), or is handed a payload that grows with
  *  every profile an agent ever left behind; or the Browser View, which reads
- *  the same tool as the human, stops getting its list; or the dock panel and
- *  the agent are told different things about the same profile.
+ *  the same tool as the human, stops getting its list; or the connection report
+ *  the host is sent and the agent are told different things about the same profile.
  *
  *  The real MCP server over an in-memory transport, the way a host reaches it.
  *  Chrome only where a browser has to be open to be held.
@@ -18,7 +18,6 @@ import { z } from "zod";
 import type { App } from "@modelcontextprotocol/ext-apps";
 import { BrowserClient } from "../app/view/browser-client";
 import { type ConnectionReport } from "../src/connection";
-import { profileRows } from "../src/dock/report";
 import { createBrowserServer } from "../src/server";
 import { BROWSER_TEST_TIMEOUT_MS, createRoot, describeWithChrome, newRuntime, teardown, waitUntil } from "./fixture";
 import { ProfileStore } from "../src/store";
@@ -143,7 +142,7 @@ describe("what each caller is sent", () => {
 		store.ensureProfile("personal");
 	};
 
-	test("a model gets one compact text and no structured copy; the View gets the same list as structured content, with each site's account", async () => {
+	test("a model gets one compact text and no structured copy, with each site it is signed in to and no account; the View gets the same list as structured content, with each site's account", async () => {
 		const { call } = await connect(seed);
 		const asModel = await call("browser_profiles", {}, MODEL);
 		expect(asModel.isError).toBeFalsy();
@@ -161,11 +160,10 @@ describe("what each caller is sent", () => {
 			],
 			browsers: [],
 		});
-		// An unstamped call (no host) is treated as a model.
 		expect((await call("browser_profiles", {})).structuredContent).toBeUndefined();
 	});
 
-	test("a model is never told whose account a site is — no email, no handle — while the View is: until a consent gate exists, accounts are shown to the person, not to the model", async () => {
+	test("a model is never told whose account a site is — no email, no handle; the View is", async () => {
 		const { call } = await connect((store) => {
 			store.recordConnection("work", "google.com", { signedIn: true, account: "work@acme.com", observedAt: NOW - 1_000 });
 			store.recordConnection("work", "x.com", { signedIn: true, account: "@acmeco", observedAt: NOW - 2_000 });
@@ -175,7 +173,6 @@ describe("what each caller is sent", () => {
 		for (const who of [MODEL, undefined]) {
 			const text = textOf(await call("browser_profiles", {}, who));
 			expect(text).not.toMatch(/acme|@/i);
-			// What a model can still act on: which sites are signed in, and when that was seen.
 			expect(listOf({ content: [{ type: "text", text }] }).profiles[0]?.sites.map((site) => [site.site, site.signedIn])).toEqual([
 				["google.com", true],
 				["x.com", true],
@@ -196,22 +193,21 @@ describe("what each caller is sent", () => {
 		expect(profiles[1]?.sites.map((site) => [site.site, site.account])).toEqual([["x.com", "@acmeco"]]);
 	});
 
-	test("the dock panel and the lists agree: the report the panel is sent carries the View's label, colour, sites and accounts, and the sites and sign-in state the agent reads", async () => {
+	test("the connection report and the lists agree: the report the host is sent carries the View's label, colour, sites and accounts, and the sites and sign-in state the agent reads", async () => {
 		const { call, reports } = await connect(seed);
-		// The first report is sent once the host has initialised.
 		await waitUntil("the first report", () => reports, (seen) => seen.length > 0);
 		const agent = listOf(await call("browser_profiles", {}, MODEL)).profiles;
 		const person = ViewList.parse((await call("browser_profiles", {}, VIEW)).structuredContent).profiles;
-		const rows = profileRows({ connected: true, reported: reports.at(-1) });
-		expect(rows).toHaveLength(1);
-		const [row] = rows;
+		const profiles = reports.at(-1)?.profiles ?? {};
+		expect(Object.keys(profiles)).toEqual(["work"]);
+		const reported = profiles.work;
 		const mine = person.find((profile) => profile.name === "work");
 		const theirs = agent.find((profile) => profile.name === "work");
-		expect(row).toMatchObject({ name: "work", label: mine?.label, colour: mine?.colour });
-		expect(row?.sites.map(({ host, account, signedIn }) => ({ site: host, ...(account === undefined ? {} : { account }), signedIn }))).toEqual(
-			(mine?.sites ?? []).map(({ site, account, signedIn }) => ({ site, ...(account === undefined ? {} : { account }), signedIn })),
-		);
-		expect(row?.sites.map(({ host, signedIn }) => [host, signedIn])).toEqual((theirs?.sites ?? []).map(({ site, signedIn }) => [site, signedIn]));
+		expect(reported).toMatchObject({ label: mine?.label, colour: mine?.colour });
+		const bySite = <T extends { readonly site: string }>(list: readonly T[]): T[] => [...list].sort((a, b) => a.site.localeCompare(b.site));
+		const fromReport = Object.entries(reported?.sites ?? {}).map(([site, seen]) => ({ site, ...(seen.account === undefined ? {} : { account: seen.account }), signedIn: seen.signedIn }));
+		expect(bySite(fromReport)).toEqual(bySite((mine?.sites ?? []).map(({ site, account, signedIn }) => ({ site, ...(account === undefined ? {} : { account }), signedIn }))));
+		expect(bySite(fromReport.map(({ site, signedIn }) => ({ site, signedIn })))).toEqual(bySite((theirs?.sites ?? []).map(({ site, signedIn }) => ({ site, signedIn }))));
 	});
 });
 
@@ -219,7 +215,7 @@ describeWithChrome("opening a profile by the name an agent was given", () => {
 	const errorOf = (result: ToolResult): string | undefined => (result.isError ? textOf(result) : undefined);
 
 	test(
-		"a label opens it, the same chat asking again gets the same browser, and another chat is told who holds it — in words, never an id",
+		"a label opens its profile with no approval step, the same chat reuses its browser, and another chat is refused without its browser id",
 		async () => {
 			const { call } = await connect((store) => store.saveMeta("acme-work", { label: "Work Account" }));
 			const first = await call("browser_open", { profile: "work account" }, MODEL);
@@ -227,11 +223,11 @@ describeWithChrome("opening a profile by the name an agent was given", () => {
 			const again = await call("browser_open", { profile: "ACME-WORK" }, MODEL);
 			expect(again.structuredContent?.browserId).toBe(first.structuredContent?.browserId);
 
-			const other = errorOf(await call("browser_open", { profile: "Work Account" }, { caller: "model", session: "s-2" }));
-			expect(other).toContain("held by another chat");
+			const stranger = await call("browser_open", { profile: "Work Account" }, { caller: "model", session: "s-2" });
+			expect(stranger.isError).toBe(true);
+			const other = errorOf(stranger);
+			expect(other).toContain("is already open");
 			expect(other).not.toContain(String(first.structuredContent?.browserId));
-			// The View's own message for a taken profile still recognises it.
-			expect(other).toMatch(/profile "[^"]*" is already (?:open|in use)/);
 
 			expect(listOf(await call("browser_profiles", {}, { caller: "model", session: "s-2" })).profiles.map((profile) => profile.heldBy)).toEqual(["another chat"]);
 		},

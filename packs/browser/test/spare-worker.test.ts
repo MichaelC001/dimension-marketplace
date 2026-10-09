@@ -1,11 +1,11 @@
 /** WHAT BREAKS IN THE PRODUCT IF THIS GOES RED: every jev task after the first pays a cold Python interpreter start again
  *  (the spare worker the last task left waiting is no longer taken), or the server keeps interpreters it should have let
  *  go: a spare kept for a session with no jev key, one reused by a task whose environment (a rotated key) is not the one
- *  it was started in, or one that outlives the runtime that was disposed (including one a task kept while the dispose was
- *  already running).
+ *  it was started in, or one that outlives the runtime that was disposed (including an interpreter born for a task that was
+ *  queued before the dispose and was not refused by it).
  *
  *  The REAL `startWorker` launches the real interpreter on a scripted FAKE worker (test/fake-worker). Each fake worker
- *  records its pid, as an empty file, in FAKE_WORKER_PIDS the moment it starts, and answers a job with its own pid: a job
+ *  records its pid, as an empty file, in PYTHON_FAKE_WORKER_PIDS the moment it starts, and answers a job with its own pid: a job
  *  that was served by a worker which already existed is one whose answer is a pid already on disk.
  */
 import { existsSync } from "node:fs";
@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { releaseSpare, startWorker } from "../src/task";
-import { BROWSER_TEST_TIMEOUT_MS, chromePath, createRoot, newRuntime, teardown, waitUntil } from "./fixture";
+import { BROWSER_TEST_TIMEOUT_MS, chromePath, createRoot, failureCode, newRuntime, teardown, waitUntil } from "./fixture";
 import { withJevKey } from "./jev-key";
 
 withJevKey();
@@ -29,7 +29,7 @@ if (!existsSync(PYTHON)) {
 const describeWithPython = existsSync(PYTHON) ? describe : describe.skip;
 const describeWithPythonAndChrome = existsSync(PYTHON) && chromePath !== undefined ? describe : describe.skip;
 
-const ENV_KEYS = ["DIM_BROWSER_PYTHON", "PYTHONPATH", "PYTHONDONTWRITEBYTECODE", "FAKE_WORKER_PIDS", "TYPESAFE_API_KEY"] as const;
+const ENV_KEYS = ["DIM_BROWSER_PYTHON", "PYTHONPATH", "PYTHONDONTWRITEBYTECODE", "PYTHON_FAKE_WORKER_PIDS", "TYPESAFE_API_KEY"] as const;
 const savedEnv: Partial<Record<(typeof ENV_KEYS)[number], string>> = {};
 
 beforeAll(() => {
@@ -60,7 +60,8 @@ afterEach(async () => {
 async function pidDirectory(): Promise<string> {
 	const dir = join(await createRoot(), "worker-pids");
 	await mkdir(dir);
-	process.env.FAKE_WORKER_PIDS = dir;
+	// Named PYTHON_*: the worker is handed only an allow-list of the server's environment (task.ts), and Python's own settings are on it.
+	process.env.PYTHON_FAKE_WORKER_PIDS = dir;
 	return dir;
 }
 
@@ -160,25 +161,25 @@ describeWithPython("the jev worker's spare", () => {
 
 describeWithPythonAndChrome("a task that starts while the runtime is being disposed", () => {
 	test(
-		"leaves no spare worker running once dispose has resolved",
+		"a task queued before dispose is refused disposed and leaves no interpreter",
 		async () => {
 			const dir = await pidDirectory();
 			const runtime = newRuntime(await createRoot());
 			const { browserId } = await runtime.open({ viewport: { width: 640, height: 480 } });
 
-			// The task's start is queued on the browser before dispose begins, so dispose's own first `releaseSpare()` (nothing waits yet)
-			// is behind it: the start runs while dispose is draining the browser's queue, spawns its worker and, right behind it, a spare.
-			const started = runtime.startTask(browserId, { task: JSON.stringify({ hold: true }) }).catch(() => undefined);
-			const disposed = runtime.dispose();
-			await Promise.all([started, disposed]);
+			// The task's start is queued on the browser before dispose begins (`failureCode` calls it synchronously). The runtime being disposed refuses a start that reaches its fence (`beginTask`:
+			// "runtime has been disposed") with `disposed`, so no interpreter is born. A start that slipped past the fence would resolve instead and the refusal below would go red.
+			const refusal = failureCode(() => runtime.startTask(browserId, { task: JSON.stringify({ hold: true }) }));
+			const disposing = runtime.dispose();
 
 			try {
-				// Both interpreters record their pid the moment they start, the spare's start-up trailing dispose's return by a moment:
-				// wait for the two to exist, then every one of them must be gone. A spare nothing releases waits for ten minutes.
-				const pids = await waitUntil("the task's worker and its spare to have started", () => readdir(dir), (found) => found.length === 2);
-				for (const pid of pids) {
-					await waitUntil(`worker ${pid} to exit`, () => alive(pid), (running) => !running);
-				}
+				const [code] = await Promise.all([refusal, disposing]);
+				expect(code).toBe("disposed");
+
+				// A real delay, as in the absence check above: a refused start leaves no process to await, and a real clock is what an interpreter's start-up (a fraction of this) would race.
+				// A spare would trail dispose's return by a moment, so wait that out; then no interpreter may ever have recorded its pid.
+				await Bun.sleep(1_000);
+				expect(await readdir(dir)).toEqual([]);
 			} finally {
 				releaseSpare(); // after the assertions only: a red run must not leave a Python holding the key
 			}

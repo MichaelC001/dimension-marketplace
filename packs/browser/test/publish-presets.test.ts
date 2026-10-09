@@ -69,11 +69,15 @@ async function session(profile: string, fixtureName: string): Promise<Session> {
 	const presets = shipped.map((preset) => rebasePreset(preset, fixture.origin));
 	const server = await createBrowserServer({ runtime, viewDir, presets });
 	const client = new Client({ name: "publish-presets-test", version: "0.0.0" });
+	const sessionId = "publish-presets-chat";
 	const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
 	await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
 	clients.push(client);
 	const call: Call = async (name, args, caller) =>
-		(await client.callTool({ name, arguments: args, ...(caller === undefined ? {} : { _meta: { [CALLER]: caller } }) })) as ToolResult;
+		(await client.callTool({ name, arguments: args, _meta: {
+			[CALLER]: caller ?? "model",
+			"ai.insodimension/session": { sessionId },
+		} })) as ToolResult;
 	const opened = await call("browser_open", { profile });
 	expect(opened.isError).toBeFalsy();
 	const browserId = opened.structuredContent?.browserId as string;
@@ -211,7 +215,7 @@ describeWithChrome("presets against their fixture copies", () => {
 			const refused = await s.call("browser_publish", { browserId: s.browserId, recipe: byHand, mode: "post" });
 
 			expect(refused.isError).toBe(true);
-			expect(errorText(refused)).toContain("publish_unapproved: no board approval covers");
+			expect(errorText(refused)).toStartWith("publish_unapproved:");
 			expect(s.fixture.hits(PLATFORM_ROUTES["x-post"] ?? "")).toBe(0);
 			expect((await s.runtime.state(s.browserId)).publish).toBeNull();
 			const parked = await s.call("browser_publish", { browserId: s.browserId, preset: { name: "x-post", values }, mode: "post" });

@@ -197,6 +197,11 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 	useEffect(() => {
 		if (browserId === null) loadProfiles();
 	}, [loadProfiles, browserId]);
+	useEffect(() => {
+		if (!menuOpen && browserId !== null) return;
+		const timer = setInterval(loadProfiles, 2_000);
+		return () => clearInterval(timer);
+	}, [menuOpen, browserId, loadProfiles]);
 
 	// Remember which task this View saw running, so its end gets a toast.
 	useEffect(() => {
@@ -235,6 +240,7 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 		input.reset();
 	};
 
+	/** Open a browser here: the picker's choice. */
 	const open = async (url: string) => {
 		setOpening(true);
 		setOpenError(null);

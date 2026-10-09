@@ -1,4 +1,4 @@
-// Getting a document's bytes into the View. The only door to the disk is the
+// Getting a document's bytes into the View. They arrive through the
 // server's `read_file_chunk`, one base64 chunk per call; this stitches the chunks
 // into one buffer, reports progress, and refuses to stitch a file that changed
 // while it was being read (the halves would not be one document).

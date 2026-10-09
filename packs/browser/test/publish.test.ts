@@ -24,12 +24,13 @@
  */
 import { join } from "node:path";
 import { mkdir, writeFile } from "node:fs/promises";
-import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
-import puppeteer, { type Browser } from "puppeteer-core";
+import { afterEach, describe, expect, setSystemTime, spyOn, test } from "bun:test";
+import puppeteer, { Frame, type Browser, type WaitForSelectorOptions } from "puppeteer-core";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { BrowserAction, PublishRecipe, PublishRecord } from "../src/contracts";
 import type { EngineDriver } from "../src/engines/types";
+import { createPuppeteerDriver } from "../src/engines/puppeteer";
 import { confirm, prepare, validateRecipe, type Publication } from "../src/publish";
 import type { BrowserRuntime } from "../src/runtime";
 import { createBrowserServer } from "../src/server";
@@ -48,20 +49,24 @@ const TOUCHED = "The page was used in the Browser View while waiting, so it may 
 const CLOSED = "The browser was closed. Nothing was submitted.";
 /** The same, on the relay: the human's own Chrome, where the page can be used outside the View. */
 const SHARED = "This page is in your own Chrome, where it can be used outside the Browser View, so it may have posted there. Check the account.";
+/** What a model that holds the profile is told while a post awaits the human: the pinned page takes nobody's work but the View's. */
+const PENDING = "a post awaits confirmation on this browser";
 
 interface ToolResult {
 	isError?: boolean;
 	content: Array<{ type: string; text?: string }>;
 	structuredContent?: Record<string, unknown>;
 }
-type Call = (name: string, args: Record<string, unknown>, caller?: string) => Promise<ToolResult>;
+type Call = (name: string, args: Record<string, unknown>, caller?: string | null) => Promise<ToolResult>;
 
 const clients: Client[] = [];
 const fixtures: PublishFixture[] = [];
+const nativeDrivers: EngineDriver[] = [];
 /** Stand-ins for the human's own Chrome, which the relay engine attaches to. */
 const humanChromes: Browser[] = [];
 
 afterEach(async () => {
+	for (const driver of nativeDrivers.splice(0)) await driver.close().catch(() => undefined);
 	setSystemTime();
 	for (const client of clients.splice(0)) await client.close().catch(() => undefined);
 	for (const fixture of fixtures.splice(0)) await fixture.stop();
@@ -99,11 +104,15 @@ async function session(profile: string, { signIn = true, relay = false } = {}): 
 	await writeFile(join(viewDir, "index.html"), "<!doctype html><title>view</title>");
 	const server = await createBrowserServer({ runtime, viewDir });
 	const client = new Client({ name: "publish-test", version: "0.0.0" });
+	const sessionId = "publish-chat";
 	const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
 	await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
 	clients.push(client);
 	const call: Call = async (name, args, caller) =>
-		(await client.callTool({ name, arguments: args, ...(caller === undefined ? {} : { _meta: { [CALLER]: caller } }) })) as ToolResult;
+		(await client.callTool({ name, arguments: args, _meta: {
+			...(caller === null ? {} : { [CALLER]: caller ?? "model" }),
+			"ai.insodimension/session": { sessionId },
+		} })) as ToolResult;
 	const opened = await call("browser_open", { profile, ...(relay ? { engine: "chrome-relay" } : {}) });
 	expect(opened.isError).toBeFalsy();
 	const browserId = opened.structuredContent?.browserId as string;
@@ -569,7 +578,7 @@ describeWithChrome("browser_publish", () => {
 	);
 
 	test(
-		"while a publish awaits the human, an unstamped or model act, tab, task and check are refused publish_pending and leave the page alone; the View's app act still works",
+		"while a publish awaits the human, an unstamped or a model's act, tab, task and check are refused publish_pending; the page is left alone and the View's app act still works",
 		async () => {
 			const s = await session("pub-locked");
 			const parked = await post(s, "nav");
@@ -582,14 +591,15 @@ describeWithChrome("browser_publish", () => {
 				["browser_task", { browserId: id, task: "post something else", waitSeconds: 0 }],
 				["browser_publish", { browserId: id, recipe: recipe(s.fixture, "stay"), mode: "check" }],
 			];
-			for (const caller of [undefined, "model"]) {
+			for (const caller of [null, "model"] as const) {
 				for (const [name, args] of calls) {
 					const refused = await s.call(name, args, caller);
-					expect({ name, caller, isError: refused.isError }).toEqual({ name, caller, isError: true });
+					expect({ name, caller, isError: refused.isError, text: refused.content[0]?.text }).toMatchObject({ name, caller, isError: true, text: expect.stringContaining(PENDING) });
 				}
 			}
 			// The code behind those messages, at each gated runtime entry point.
 			expect(await failureCode(() => s.runtime.act(id, { kind: "type", selector: "#text", text: "x" }, "model"))).toBe("publish_pending");
+			expect(await failureCode(() => s.runtime.act(id, { kind: "type", selector: "#text", text: "x" }))).toBe("publish_pending");
 			expect(await failureCode(() => s.runtime.tab(id, { op: "new" }, "model"))).toBe("publish_pending");
 			// One refusal for a whole batch, before any of its steps reaches the page.
 			expect(await failureCode(() => s.runtime.actMany(id, [{ kind: "type", selector: "#text", text: "x" }, { kind: "click", selector: "#post" }], "model"))).toBe("publish_pending");
@@ -609,6 +619,31 @@ describeWithChrome("browser_publish", () => {
 
 			await humanAct(s, { kind: "type", selector: "#rich", text: "the human's own edit" });
 			expect((await counters(s.runtime, id)).writes).toBeGreaterThan(seen.writes);
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"while a publish awaits the human, an unstamped confirm that names nothing is refused expect_required and an unstamped post publish_pending: nothing is clicked and the publish stays pending",
+		async () => {
+			const s = await session("pub-unstamped-settle");
+			const parked = await post(s, "nav");
+			const seen = await counters(s.runtime, s.browserId);
+			const calls: Array<[string, Record<string, unknown>, string]> = [
+				["browser_publish_confirm", { browserId: s.browserId, publishId: parked.publishId }, "expect_required"],
+				["browser_publish", { browserId: s.browserId, recipe: recipe(s.fixture, "nav"), mode: "post" }, PENDING],
+			];
+
+			for (const [name, input, reason] of calls) {
+				const refused = await s.call(name, input, null);
+				expect({ name, isError: refused.isError, text: refused.content[0]?.text }).toMatchObject({ name, isError: true, text: expect.stringContaining(reason) });
+			}
+
+			expect(seen.clicks).toBe(0);
+			expect(await counters(s.runtime, s.browserId)).toEqual(seen);
+			expect(s.fixture.hits("/submit")).toBe(0);
+			expect(s.fixture.hits("/compose")).toBe(1);
+			expect((await record(s, parked.publishId)).status).toBe("awaiting-confirmation");
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);
@@ -734,16 +769,17 @@ describeWithChrome("browser_publish", () => {
 	);
 
 	test(
-		"an unstamped or model browser_close while a publish awaits the human is refused publish_pending and the browser stays open",
+		"while a publish awaits the human, an unstamped or a model's browser_close is refused publish_pending; the browser stays open",
 		async () => {
 			const s = await session("pub-close-refused");
 			const parked = await post(s, "nav");
 
-			for (const caller of [undefined, "model"]) {
+			for (const caller of [null, "model"] as const) {
 				const refused = await s.call("browser_close", { browserId: s.browserId }, caller);
-				expect({ caller, isError: refused.isError }).toEqual({ caller, isError: true });
+				expect({ caller, isError: refused.isError, text: refused.content[0]?.text }).toMatchObject({ caller, isError: true, text: expect.stringContaining(PENDING) });
 			}
 			expect(await failureCode(() => s.runtime.close(s.browserId, "model"))).toBe("publish_pending");
+			expect(await failureCode(() => s.runtime.close(s.browserId))).toBe("publish_pending");
 
 			// Still open: the human's Post still posts.
 			const confirmed = await s.call("browser_publish_confirm", { browserId: s.browserId, publishId: parked.publishId }, "app");
@@ -1149,6 +1185,192 @@ describeWithChrome("browser_publish", () => {
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);
+});
+
+// The hand-written publication engine below proves outcome mapping. These
+// exercise the Chrome dispatch boundary itself, where a selector can resolve
+// after the authority under which the action began has disappeared.
+describeWithChrome("native publish authority at dispatch", () => {
+	async function nativePage(): Promise<{ driver: EngineDriver; fixture: PublishFixture }> {
+		const fixture = startPublishFixture();
+		fixtures.push(fixture);
+		const driver = await createPuppeteerDriver("chromium", {
+			profileDirectory: await createRoot(),
+			viewport: { width: 900, height: 700 },
+			headless: true,
+			executablePath: chromePath,
+			onClosed: () => undefined,
+		});
+		nativeDrivers.push(driver);
+		await driver.perform({ kind: "navigate", url: fixture.url("/compose?v=stay") });
+		return { driver, fixture };
+	}
+
+	async function insert(driver: EngineDriver, markup: string): Promise<void> {
+		expect(await driver.evaluate(`document.body.insertAdjacentHTML("beforeend", ${JSON.stringify(markup)})`, 100)).toMatchObject({ ok: true });
+	}
+	// Observe the real Puppeteer selector wait, then let it run unchanged. A
+	// page query alone cannot establish that the action entered resolution.
+	async function lateSelector(
+		selector: string,
+		start: () => Promise<unknown>,
+		withdraw: () => Promise<void>,
+	): Promise<unknown> {
+		const entered = Promise.withResolvers<void>();
+		const original = Frame.prototype.waitForSelector;
+		const wait = spyOn(Frame.prototype, "waitForSelector").mockImplementation(function <Selector extends string>(this: Frame, css: Selector, options: WaitForSelectorOptions | undefined) {
+			if (css === selector) entered.resolve();
+			return (original<Selector>).call(this, css, options);
+		});
+		try {
+			const action = start();
+			await Promise.race([
+				entered.promise,
+				action.then(
+					() => { throw new Error(`action finished before selector ${selector} was awaited`); },
+					error => { throw new Error(`action failed before selector ${selector} was awaited`, { cause: error }); },
+				),
+			]);
+			await withdraw();
+			return await action.then(() => { throw new Error("withdrawn action dispatched"); }, error => error);
+		} finally {
+			wait.mockRestore();
+		}
+	}
+
+	test("late submit resolution after withdrawal does not dispatch a click or POST", async () => {
+		const { driver, fixture } = await nativePage();
+		let authorized = true;
+		const assertCurrent = () => {
+			if (!authorized) throw new ActionNotDispatched("approval_withdrawn", "approval withdrawn");
+		};
+		const error = await lateSelector("#late-post",
+			() => driver.perform({ kind: "click", selector: "#late-post" }, undefined, Object.assign(assertCurrent, { assertCurrent })),
+			async () => {
+				expect(await driver.evaluate(`document.querySelector("#late-post") === null`, 100)).toMatchObject({ ok: true, value: "true" });
+				authorized = false;
+				await insert(driver, `<button id="late-post" onclick="document.querySelector('#post').click()">Post</button>`);
+			});
+		expect(error).toBeInstanceOf(ActionNotDispatched);
+		expect(error).toMatchObject({ code: "approval_withdrawn" });
+		expect(fixture.submissions()).toEqual([]);
+		expect((await driver.state()).title).toContain("clicks:0");
+	}, BROWSER_TEST_TIMEOUT_MS);
+
+	test("late field resolution after withdrawal leaves the real field untouched", async () => {
+		const { driver } = await nativePage();
+		let authorized = true;
+		const assertCurrent = () => {
+			if (!authorized) throw new ActionNotDispatched("approval_withdrawn", "approval withdrawn");
+		};
+		const error = await lateSelector("#late-field",
+			() => driver.fill("#late-field", "should not be typed", Object.assign(assertCurrent, { assertCurrent })),
+			async () => {
+				expect(await driver.evaluate(`document.querySelector("#late-field") === null`, 100)).toMatchObject({ ok: true, value: "true" });
+				authorized = false;
+				await insert(driver, `<textarea id="late-field"></textarea>`);
+			});
+		expect(error).toBeInstanceOf(ActionNotDispatched);
+		expect(error).toMatchObject({ code: "approval_withdrawn" });
+		expect(await driver.readField("#late-field")).toEqual({ state: "value", value: "" });
+	}, BROWSER_TEST_TIMEOUT_MS);
+	test("ordinary late type resolution after withdrawal cannot focus or change the field", async () => {
+		const { driver } = await nativePage();
+		let authorized = true;
+		const assertCurrent = () => {
+			if (!authorized) throw new ActionNotDispatched("authority_revoked", "authority revoked");
+		};
+		const error = await lateSelector("#late-type",
+			() => driver.perform({ kind: "type", selector: "#late-type", text: "must not be typed" }, undefined, Object.assign(assertCurrent, { assertCurrent })),
+			async () => {
+				expect(await driver.evaluate(`document.querySelector("#late-type") === null`, 100)).toMatchObject({ ok: true, value: "true" });
+				authorized = false;
+				await insert(driver, `<input id="late-type" value="kept">`);
+			});
+		expect(error).toBeInstanceOf(ActionNotDispatched);
+		expect(error).toMatchObject({ code: "authority_revoked" });
+		expect(await driver.readField("#late-type")).toEqual({ state: "value", value: "kept" });
+		expect(await driver.evaluate(`document.activeElement?.id !== "late-type"`, 100)).toMatchObject({ ok: true, value: "true" });
+	}, BROWSER_TEST_TIMEOUT_MS);
+
+	test("ordinary late select resolution after withdrawal preserves the selected option and emits no change", async () => {
+		const { driver } = await nativePage();
+		let authorized = true;
+		const assertCurrent = () => {
+			if (!authorized) throw new ActionNotDispatched("authority_revoked", "authority revoked");
+		};
+		const error = await lateSelector("#late-select",
+			() => driver.perform({ kind: "select", selector: "#late-select", value: "after" }, undefined, Object.assign(assertCurrent, { assertCurrent })),
+			async () => {
+				expect(await driver.evaluate(`document.querySelector("#late-select") === null`, 100)).toMatchObject({ ok: true, value: "true" });
+				authorized = false;
+				await insert(driver, `<select id="late-select" onchange="document.title = 'selection changed'"><option value="before" selected>Before</option><option value="after">After</option></select>`);
+			});
+		expect(error).toBeInstanceOf(ActionNotDispatched);
+		expect(error).toMatchObject({ code: "authority_revoked" });
+		expect(await driver.evaluate(`document.querySelector("#late-select").value === "before"`, 100)).toMatchObject({ ok: true, value: "true" });
+		expect((await driver.state()).title).not.toBe("selection changed");
+	}, BROWSER_TEST_TIMEOUT_MS);
+
+	test("local revocation after asynchronous refresh prevents navigation in the dispatch continuation", async () => {
+		const { driver, fixture } = await nativePage();
+		const initialUrl = (await driver.state()).url;
+		let authorized = true;
+		const assertCurrent = () => {
+			if (!authorized) throw new ActionNotDispatched("authority_revoked", "authority revoked");
+		};
+		const guard = Object.assign(async () => {
+			assertCurrent();
+			queueMicrotask(() => { authorized = false; });
+		}, { assertCurrent });
+		await expect(driver.perform({ kind: "navigate", url: fixture.url("/page2") }, undefined, guard)).rejects.toBeInstanceOf(ActionNotDispatched);
+		expect(fixture.hits("/page2")).toBe(0);
+		expect((await driver.state()).url).toBe(initialUrl);
+	}, BROWSER_TEST_TIMEOUT_MS);
+
+
+	test("fill without an authority guard still refuses password fields without typing or submitting", async () => {
+		const { driver, fixture } = await nativePage();
+		await insert(driver, `<input id="guard-password" type="password">`);
+		const refused = await driver.fill("#guard-password", "must not reach the page").then(() => undefined, error => error);
+		expect(refused).toBeInstanceOf(Error);
+		expect(await driver.evaluate(`document.querySelector("#guard-password").value === ""`, 100)).toMatchObject({ ok: true, value: "true" });
+		expect(fixture.submissions()).toEqual([]);
+	}, BROWSER_TEST_TIMEOUT_MS);
+
+	test("guarded fill refuses an actual password field even when page-world input.type is spoofed as text", async () => {
+		const { driver, fixture } = await nativePage();
+		await insert(driver, `<input id="guard-spoof-password" type="password">`);
+		expect(await driver.evaluate(`Object.defineProperty(HTMLInputElement.prototype, "type", { configurable: true, get() { return "text"; } }); document.querySelector("#guard-spoof-password").type === "text"`, 100)).toMatchObject({ ok: true, value: "true" });
+		let authorized = true;
+		const assertCurrent = () => {
+			if (!authorized) throw new ActionNotDispatched("approval_withdrawn", "approval withdrawn");
+		};
+		const refused = await driver.fill("#guard-spoof-password", "must not reach the page", Object.assign(assertCurrent, { assertCurrent })).then(() => undefined, error => error);
+		expect(refused).toBeInstanceOf(Error);
+		expect(await driver.evaluate(`document.querySelector("#guard-spoof-password").value === ""`, 100)).toMatchObject({ ok: true, value: "true" });
+		expect(fixture.submissions()).toEqual([]);
+	}, BROWSER_TEST_TIMEOUT_MS);
+
+	test("authority withdrawn after focus is not classified as undispatched and leaves the field and submission untouched", async () => {
+		const { driver, fixture } = await nativePage();
+		await insert(driver, `<textarea id="guard-focus"></textarea>`);
+		let authorized = true;
+		const assertCurrent = () => {
+			if (!authorized) throw new ActionNotDispatched("approval_withdrawn", "approval withdrawn");
+		};
+		const guard = Object.assign(async () => {
+			const focused = await driver.evaluate(`document.activeElement?.id === "guard-focus"`, 100);
+			if (focused.ok && focused.value === "true") authorized = false;
+			assertCurrent();
+		}, { assertCurrent });
+		const refused = await driver.fill("#guard-focus", "must not be typed", guard).then(() => undefined, error => error);
+		expect(refused).toBeInstanceOf(Error);
+		expect(refused).not.toBeInstanceOf(ActionNotDispatched);
+		expect(await driver.evaluate(`document.activeElement?.id === "guard-focus"`, 100)).toMatchObject({ ok: true, value: "true" });
+		expect(await driver.readField("#guard-focus")).toEqual({ state: "value", value: "" });
+		expect(fixture.submissions()).toEqual([]);
+	}, BROWSER_TEST_TIMEOUT_MS);
 });
 
 // ---------------------------------------------------------------------------

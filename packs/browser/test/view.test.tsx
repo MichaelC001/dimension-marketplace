@@ -190,11 +190,9 @@ interface ContextUpdate {
 	readonly content: readonly unknown[];
 }
 
-/** A host that answers `browser_profiles`, records every call and every context update, and lets `answer` decide the rest. */
 function fakeApp(answer: (call: Call) => CallToolResult): { readonly app: App; readonly calls: Call[]; readonly contexts: ContextUpdate[] } {
 	const calls: Call[] = [];
 	const contexts: ContextUpdate[] = [];
-	// The View touches exactly these three App members; the rest of the host surface is not in play.
 	const app = {
 		callServerTool: async (request: { name: string; arguments?: Record<string, unknown> }): Promise<CallToolResult> => {
 			const call = { name: request.name, args: request.arguments ?? {} };

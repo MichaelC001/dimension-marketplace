@@ -12,4 +12,8 @@ dist/
 packs/browser/python/.venv/
 # The patched puppeteer-core a source run bundles on first use (packs/browser/src/engines/agent-puppeteer.ts).
 packs/browser/.cache/
+# Browser pack test fixtures bundle a listener into a temp dir inside the pack (Node must resolve
+# node_modules from there); a run killed before its afterAll leaves one behind.
+packs/browser/.relay-host-*/
+packs/browser/.stream-host-*/
 __pycache__/

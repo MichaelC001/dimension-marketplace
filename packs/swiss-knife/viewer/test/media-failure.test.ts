@@ -14,7 +14,6 @@ describe("which failures offer which action", () => {
 	const chromiumCouldNotOpen = "PipelineStatus::DEMUXER_ERROR_COULD_NOT_OPEN: FFmpegDemuxer: open context failed";
 	const chromiumNoStreams = "DEMUXER_ERROR_NO_SUPPORTED_STREAMS: FFmpegDemuxer: no supported streams";
 	test.each<[string, RecordingFailure, "try-again" | "copy-path"]>([
-		["too big to be read at all", { where: "too-large" }, "copy-path"],
 		["a read that failed", { where: "load", message: "The connection dropped" }, "try-again"],
 		["the file changed while it was read", { where: "load", message: "The file changed while it was being read. Open it again." }, "try-again"],
 		["a server that answered badly", { where: "load", message: "The viewer server sent a malformed chunk." }, "try-again"],
