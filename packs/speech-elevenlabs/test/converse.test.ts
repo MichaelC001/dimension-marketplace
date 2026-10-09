@@ -201,6 +201,39 @@ describe("what the agent sends becomes neutral events", () => {
 		expect(assistant.every(event => event.final)).toBe(true);
 	});
 
+	test.each([
+		{ name: "a leading tag", sent: "[happy] Hey there! How are you?", shown: "Hey there! How are you?" },
+		{ name: "a tag between two sentences", sent: "Okay. [thoughtful] Let me look.", shown: "Okay. Let me look." },
+		{ name: "a tag glued to the words around it", sent: "Sorry[sighs]that took a while.", shown: "Sorry that took a while." },
+		{ name: "a response that is only a tag", sent: "[laughs]", shown: "" },
+		{ name: "text with no tag", sent: "Let me look at the build.", shown: "Let me look at the build." },
+		{ name: "a bracket that is not a tag", sent: "Items [0] and [3] are done.", shown: "Items [0] and [3] are done." },
+	])("the agent's caption never carries the voice's directions: $name", async ({ sent, shown }) => {
+		const rig = await makeLiveRig(harness);
+		const { socket, log } = await startCall(rig);
+		socket.receive(frames.agent(sent, "r1"));
+		await settle();
+
+		expect(log.of("transcript")).toEqual([{ t: "transcript", role: "assistant", text: shown, turn: 1, final: true }]);
+	});
+
+	test.each([
+		{ name: "a leading tag on a cut-off response", heard: "[happy] Hey Sameer,...", shown: "Hey Sameer,..." },
+		{ name: "a heard prefix that is only a tag", heard: "[happy]", shown: "" },
+		{ name: "text with no tag", heard: "Okay, it looks like...", shown: "Okay, it looks like..." },
+		{ name: "a bracket that is not a tag", heard: "Items [0] and [3]...", shown: "Items [0] and [3]..." },
+	])("what was heard of a cut-off response carries no direction either: $name", async ({ heard, shown }) => {
+		const rig = await makeLiveRig(harness);
+		const { socket, log } = await startCall(rig);
+		socket.receive(frames.agent("[happy] Hey Sameer, I'm doing great, thanks for asking!", "r1"));
+		socket.receive(frames.interruption());
+		socket.receive(frames.correction("[happy] Hey Sameer, I'm doing great, thanks for asking!", heard, "r1"));
+		await settle();
+
+		const corrected = log.of("transcript").at(-1);
+		expect(corrected).toEqual({ t: "transcript", role: "assistant", text: shown, turn: 1, final: true });
+	});
+
 	test("an interruption tells the client to flush playback, once per interruption", async () => {
 		const rig = await makeLiveRig(harness);
 		const { socket, log } = await startCall(rig);

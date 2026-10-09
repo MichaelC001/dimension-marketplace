@@ -10,6 +10,7 @@
 //   - an `interruption` arrives AFTER the agent's audio already burst over the wire (4-7x real time),
 //     so nothing stops by itself: the client must flush on the `interrupt` event.
 import type { ConverseEvent, ConverseMedia, ConversePhase, ConverseSession } from "@dimension/sdk/provider";
+import { stripAudioTags } from "./alignment.js";
 import {
 	type AgentFrame,
 	audioChunkFrame,
@@ -243,13 +244,13 @@ class RelaySession implements ConverseSession {
 					if (this.#responseTurns.size >= 64) this.#responseTurns.clear();
 					this.#responseTurns.set(frame.responseId, turn);
 				}
-				this.#emit({ t: "transcript", role: "assistant", text: frame.text, turn, final: true });
+				this.#emit({ t: "transcript", role: "assistant", text: stripAudioTags(frame.text), turn, final: true });
 				return;
 			}
 			case "correction": {
 				// What the user actually heard of a response that was cut off ("" when none of it was).
 				const turn = (frame.responseId && this.#responseTurns.get(frame.responseId)) || this.#assistantTurn;
-				this.#emit({ t: "transcript", role: "assistant", text: frame.corrected, turn, final: true });
+				this.#emit({ t: "transcript", role: "assistant", text: stripAudioTags(frame.corrected), turn, final: true });
 				return;
 			}
 			case "complete":
