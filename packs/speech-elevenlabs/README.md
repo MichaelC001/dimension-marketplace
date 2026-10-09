@@ -34,7 +34,9 @@ by naming the provider `elevenlabs`.
   `delegate_to_agent` client tool, also one your user created (the oldest such agent, never an archived one, never an
   agent that only shares the name, never one a teammate shared with you), records its ids and changes it only where it
   differs from what the code wants; with none it creates the agent and the tool. The persona, first message and voice
-  arrive per call as overrides, so nothing about a session is written to your account.
+  arrive per call as overrides, so nothing about a session is written to your account. The agent's captions (what it
+  said, and what you heard of a response you cut off) never show the voice's audio tags such as `[happy]`; the
+  voice still performs them.
 - **A writing guide** (`src/guide.ts`) for Eleven v4 and v4 Turbo: how to place the short audio tags in square
   brackets, with punctuation and numbers written as words. The engine hands it to the small model that rewrites a
   reply into speech. Flash v2.5 gets none, and the rewriter is then told never to write a bracket.
