@@ -218,30 +218,21 @@ so sites treat it as one:
     worker, and worker script fetches, carry the User-Agent and no `Sec-CH-UA`
     headers. The binary sends none there either (checked with and without a
     window on Chrome 154), so there is nothing to replay.
-- **No automation switch.** puppeteer's `--enable-automation` is dropped.
-  For the View and every saved profile nothing is added to hide the browser:
-  no stealth plugin, no fingerprint changes, no `AutomationControlled` switch.
-  `navigator.webdriver` stays whatever Chrome itself reports while it is
-  driven over DevTools (`true`), so a person signing in is not disguised
-  (doc 77 §12 decision 2).
-- **A throwaway agent browser is the one exception.** A browser opened
+- **No `--enable-automation`, and `navigator.webdriver` is off.** puppeteer's
+  `--enable-automation` is dropped, and every launch (the View, a saved
+  profile, a throwaway) carries the `AutomationControlled` Blink switch, so
+  Google's sign-in and Cloudflare's check do not read the browser as driven
+  (doc 77 §4, measured 2026-10-08). Nothing else is hidden in the View or a
+  saved profile: no stealth plugin, no fingerprint changes.
+- **A throwaway agent browser is shaped further.** A browser opened
   without a profile holds nothing and is not meant for signing in; it does
   work on the public web that a stock automation browser is turned away from.
-  Nothing stops a person or the model from typing a login into a throwaway,
-  though, and a Google sign-in there would be disguised: sign in through a
-  saved profile (the View), where the rule above holds. **Status of this
-  exception: the lead's reading of the owner's parity ruling with OMP's browser
-  (doc 77 §12 decision 8, 2026-10-02), awaiting his signature; he may flip it.**
-  The owner ruled parity ("no request or feature loss or performance or
-  optimization loss from the OMP version"); he did not sign the reversal of
-  decision 2, the automation-hiding switch, the patched library or the GPU
-  mask. A throwaway presents as the Chrome a person would run
-  (`src/engines/agent-browser.ts`, `src/engines/agent-puppeteer.ts`):
-  - `navigator.webdriver` is `false` in the page and its iframes: the
-    `AutomationControlled` Blink switch, a launch argument, in a headless
-    browser only (Chrome pins an "unsupported command-line flag" bar to every
-    window it opens with it, so a throwaway with a window, `DIMENSION_BROWSER_HEADLESS=false`,
-    reports `true` like the View).
+  **Status: the owner's parity ruling with OMP's browser (doc 77 §12 decision 8,
+  2026-10-02: "no request or feature loss or performance or optimization loss
+  from the OMP version"), and his go of 2026-10-09 ("If the browser pack was
+  already done, reviewed and merged, then just merge it"), relayed by the
+  release lead and recorded on PR #155.** A throwaway presents as the Chrome a
+  person would run (`src/engines/agent-browser.ts`, `src/engines/agent-puppeteer.ts`):
   - The screen, window and orientation agree with the page. Headless Chrome's
     own screen is 800x600, its window 780x580 and its orientation portrait
     whatever the viewport. A device-metrics override, sent to every page
@@ -264,14 +255,17 @@ so sites treat it as one:
     unhandled rejection on a page not served from this machine: it is logged
     for localhost and 127.x pages only (a listener the pack installs there),
     because hearing one anywhere else would need a script in the public page.
-  - While a `browser_task` agent drives the browser, the two driver protections
-    above (no `Runtime.enable`, reads in an isolated world) do not bind it: the
-    task agents attach their own CDP clients, not the patched library, so
-    what they send is what the page can see until the task ends. The launch
-    switches, the screen and the GPU mask stay. Measured with stock puppeteer
-    attached as a stand-in for a task agent's client (the agents themselves
-    were not run): the page's two Runtime rows flag while it is attached and no
-    other row does (`bench/detect-report-2026-10-02.md`).
+  - While a `browser_task` agent or a `browser_run` cell drives the browser, the
+    two driver protections above (no `Runtime.enable`, reads in an isolated
+    world) do not bind it: task agents and the cell's code worker attach their
+    own CDP clients (stock puppeteer-core, not the patched library), so what
+    they send is what the page can see until they detach. The launch switches,
+    the screen and the GPU mask stay. Measured with stock puppeteer attached as a
+    stand-in for a task agent's client (the agents themselves were not run): the
+    page's two Runtime rows flag while it is attached and no other row does
+    (`bench/detect-report-2026-10-02.md`). Measured on the merged tree with a
+    `browser_run` cell: after the cell's worker attached and the page loaded,
+    `cdp-runtime-enabled` and `worker-runtime-enabled` flagged and no other row did.
   - Puppeteer's default popup-blocker, IPC-flooding and pre-commit-input
     switches are left out, so a page sees the defaults of a Chrome a person
     runs. Its `--disable-features` list is kept: the detection page flags
@@ -303,8 +297,8 @@ so sites treat it as one:
   `test/agent-browser.test.ts` runs it against both kinds of browser, and
   `bench/detect-columns.mjs` runs one column of the comparison with OMP's.
   **Not measured:** the cross-realm `toString` gap above; a service worker's
-  GPU; the headful throwaway path (the patched library with a window, no
-  `AutomationControlled` switch) is not run and no test covers it; a real
+  GPU; the headful throwaway path (the patched library with a window) is not
+  run and no test covers it; a real
   GPU-less machine, Linux, macOS and Edge; `browser_task`'s agents themselves
   (browser-use and jev; only a stand-in second CDP client); and what commercial
   bot walls read beyond property tells (`bench/detect-report-2026-10-02.md`).

@@ -1,8 +1,7 @@
 /** WHAT BREAKS IN THE PRODUCT IF THIS GOES RED: an agent that opens a throwaway browser to do real work on the real
  *  web is turned away by the first bot check (a HeadlessChrome User-Agent, `navigator.webdriver`, a 1280x800 page on
  *  an 800x600 "screen", CDP Runtime left on, the driver's own reads showing in a hook on the page's APIs, a software
- *  GPU), while the same Chrome started by hand is not — or the opposite failure, that the person's View or a saved profile stops being the real, honest
- *  browser (doc 77 §12 decision 2: nothing hides automation where a person signs in).
+ *  GPU), while the same Chrome started by hand is not.
  *
  *  These tests load a local page that reads the signals public bot-detection checks read
  *  (`bench/sites/detect.mjs`) in a REAL Chrome, and assert what the page observed. Only a throwaway browser (no

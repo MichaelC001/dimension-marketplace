@@ -7,9 +7,6 @@
  * started by hand passes; this module closes exactly those, once, in the
  * browser itself:
  *
- *  - `navigator.webdriver` (page and iframes; a worker has no such property):
- *    the `AutomationControlled` Blink switch, a launch argument. No page
- *    script is involved.
  *  - a page larger than its own "screen", a window smaller than its page, a
  *    1280x800 desktop page reporting `portrait-primary`: headless Chrome's
  *    virtual screen is 800x600 whatever the viewport. A device-metrics
@@ -29,14 +26,6 @@
  * The User-Agent, its client hints and the workers' view of both are
  * `presentAsHeadful`'s (puppeteer.ts), for the View and for this alike.
  *
- * THE EXCEPTION, and why it is explicit: doc 77 §12 decision 2 refuses the
- * automation-hiding switch so that a person signing in, in the View or a saved
- * profile, is not disguised and Google is not given a reason to challenge a
- * sign-in. That decision stands for the View and every saved profile, which
- * stay the real, honest browser: nothing in this module touches them. It is
- * reversed, on the lead's reading of the owner's parity ruling with OMP's
- * browser (doc 77 §12, awaiting his signature; he may flip it), ONLY for a
- * throwaway browser (no profile; nothing is kept, nobody signs in).
  * `EngineOptions.agent` is the one switch; the runtime sets it from
  * `profile === null`, never from tool input.
  *
