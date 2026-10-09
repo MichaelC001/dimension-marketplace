@@ -15,7 +15,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { Browser, BrowserPlatform, computeExecutablePath } from "@puppeteer/browsers";
 import puppeteer, { type Protocol } from "puppeteer-core";
-import { type BrowserProbe, headfulIdentity, type IdentityProbe, identityPerBinary, resolveBrowser, turnOffPasswordSaving, viewLaunchOptions, withTimeout } from "../src/engines/launch";
+import { type BrowserProbe, headfulIdentity, type IdentityProbe, identityPerBinary, NAVIGATOR_WEBDRIVER_OFF_SWITCH, resolveBrowser, turnOffPasswordSaving, viewLaunchOptions, withTimeout } from "../src/engines/launch";
 import { BROWSER_TEST_TIMEOUT_MS, chromePath, createRoot, createRuntime, describeWithChrome, failureCode, perform, teardown, waitUntil } from "./fixture";
 
 afterEach(teardown, BROWSER_TEST_TIMEOUT_MS);
@@ -77,11 +77,11 @@ describe("viewLaunchOptions", () => {
 	const ua = headfulIdentity({ userAgent: HEADLESS_CHROME_UA, hints: {} }).userAgent;
 
 	for (const headless of [true, false]) {
-		test(`${headless ? "headless" : "headful"}: puppeteer's --enable-automation never reaches the browser, nothing replaces it`, () => {
+		test(`${headless ? "headless" : "headful"}: puppeteer's --enable-automation never reaches the browser and navigator.webdriver is switched off`, () => {
 			const options = viewLaunchOptions({ browser, userDataDir: "profile", headless, args: ["--no-first-run"], userAgent: ua, timeout: 1 });
 			expect(options.ignoreDefaultArgs).toContain("--enable-automation");
 			expect(options.args).not.toContain("--enable-automation");
-			expect(options.args?.some((arg) => arg.includes("AutomationControlled"))).toBe(false);
+			expect(options.args).toContain(NAVIGATOR_WEBDRIVER_OFF_SWITCH);
 			expect(options.args).toContain("--no-first-run");
 		});
 	}
@@ -429,6 +429,23 @@ function startIdentitySite() {
 	};
 }
 
+function startWebdriverSite() {
+	const report: { webdriver?: unknown } = {};
+	const server = Bun.serve({
+		hostname: "127.0.0.1",
+		port: 0,
+		async fetch(request) {
+			const url = new URL(request.url);
+			if (url.pathname === "/report") {
+				Object.assign(report, await request.json());
+				return new Response("ok");
+			}
+			return new Response(`<!doctype html><title>webdriver</title><script>fetch("/report", { method: "POST", body: JSON.stringify({ webdriver: navigator.webdriver }) });</script>`, { headers: { "content-type": "text/html; charset=utf-8" } });
+		},
+	});
+	return { url: `http://127.0.0.1:${server.port}/`, report, stop: () => server.stop(true) };
+}
+
 /** What the binary reports of itself with nothing overridden: a plain headless launch of the same Chrome. */
 async function binaryReport(): Promise<{ seen: Seen; version: string }> {
 	const site = startIdentitySite();
@@ -512,6 +529,23 @@ describeWithChrome("launch", () => {
 				// The cross-site frame really is out of process: its own target in the View.
 				const targets = (await devtools<Protocol.Target.GetTargetsResponse>(endpoint, "Target.getTargets")).targetInfos;
 				expect(targets.filter((target) => target.type === "iframe").map((target) => new URL(target.url).hostname)).toContain("localhost");
+			} finally {
+				site.stop();
+			}
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"the View's Chrome is not announced as automated: navigator.webdriver is false in the page, which is what Google's sign-in and Cloudflare's check read",
+		async () => {
+			const site = startWebdriverSite();
+			try {
+				const { runtime } = await createRuntime();
+				const opened = await runtime.open({ profile: "webdriver", viewport: { width: 640, height: 480 } }, { caller: "app" });
+				await perform(runtime, opened.browserId, { kind: "navigate", url: site.url });
+				await waitUntil("the page's report", () => site.report, (report) => "webdriver" in report);
+				expect(site.report.webdriver).toBe(false);
 			} finally {
 				site.stop();
 			}

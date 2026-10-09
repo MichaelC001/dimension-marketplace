@@ -25,7 +25,6 @@ import type {
 	OpenBrowserListing,
 	ProfileHold,
 	ProfileListing,
-	ProfileConsent,
 	ProfileSiteListing,
 } from "../../src/contracts";
 import { isProfileColour, resolveProfileMeta } from "../../src/profile-meta";
@@ -36,7 +35,6 @@ import { isRecord, readNumber, readString } from "./json";
 export interface ProfilesAnswer {
 	readonly profiles: ProfileListing[];
 	readonly browsers: OpenBrowserListing[];
-	readonly consents: ProfileConsent[];
 }
 
 const TASK_STATUSES: readonly TaskStatus[] = ["running", "done", "blocked", "failed", "cancelled"];
@@ -235,23 +233,6 @@ function readOpenBrowser(value: unknown): OpenBrowserListing[] {
 	if (browserId === undefined || browserId.length === 0 || hold === undefined || (value.kind !== "private" && value.kind !== "chrome")) return [];
 	return [{ browserId, kind: value.kind, hold }];
 }
-function readConsent(value: unknown): ProfileConsent[] {
-	if (!isRecord(value) || !PROFILE_NAME.test(readString(value, "name") ?? "") || (value.status !== "pending" && value.status !== "granted") || (value.scope !== "chat" && value.scope !== "loop")) return [];
-	const name = readString(value, "name")!;
-	const loopLabel = readString(value, "loopLabel");
-	if (value.scope === "loop" && (loopLabel === undefined || loopLabel.length > 1024)) return [];
-	let subject: ProfileConsent["subject"];
-	if (value.subject !== undefined) {
-		if (!isRecord(value.subject) || Object.keys(value.subject).length !== 3) return [];
-		const workspaceId = readString(value.subject, "workspaceId");
-		const id = readString(value.subject, "id");
-		const origin = readString(value.subject, "origin");
-		if (!workspaceId || workspaceId.length > 1024 || !id || id.length > 1024 || !origin || origin.length > 1024) return [];
-		subject = { workspaceId, id, origin };
-	}
-	if (value.scope === "loop" && subject === undefined) return [];
-	return [{ name, label: readString(value, "label") ?? name, sites: Array.isArray(value.sites) ? value.sites.flatMap(readSite) : [], status: value.status, scope: value.scope, ...(value.scope === "loop" ? { loopLabel } : {}), ...(typeof value.expiresAt === "number" ? { expiresAt: value.expiresAt } : {}), ...(subject === undefined ? {} : { subject }) }];
-}
 
 function readState(tool: string, value: unknown): BrowserState {
 	if (!isRecord(value)) throw new BrowserToolError(tool, "no browser state in the result");
@@ -305,47 +286,11 @@ function structured(tool: string, result: CallToolResult): Record<string, unknow
 	return structuredContent;
 }
 
-/** The saved profile (and address) an open named, as the host's `ui/notifications/tool-input` delivered it. The View cannot tell who asked
- *  (a person's gesture, a layout pin, an agent-written manifest). It holds this to say which profile a refusal was about and to finish that
- *  open once the person has allowed the profile, with the approval card showing exactly this address. `url` is a normalised http(s) address:
- *  what the card shows and what is opened are the same string. */
-export interface OpenAttempt {
-	readonly profile: string;
-	readonly url?: string;
-}
-
-/** The longest address a refused open may carry to the approval card; a longer one is dropped (the profile still opens, to a blank tab). */
-const OPEN_ATTEMPT_URL_MAX = 2048;
-
 /** What a host-delivered `ui/notifications/tool-result` tells this View: the
- *  browser its tool opened, or why it opened none (and, for an open that named a saved profile, which one). */
-export type MountResult = { readonly state: BrowserState } | { readonly error: string; readonly attempted?: OpenAttempt };
+ *  browser its tool opened, or why it opened none. */
+export type MountResult = { readonly state: BrowserState } | { readonly error: string };
 /** A `MountResult` as the host delivered it; `seq` orders them so a repeat still registers. */
 export type ToolMount = MountResult & { readonly seq: number };
-
-/** The open a tool call's arguments name: a saved profile, with its address when it carries a plain web one. `null`: no profile named (a
- *  Private browser, a browser shown by id, anything else). The address is read through `URL`, so an internationalised host shows as punycode
- *  and a bidi or control character is percent-encoded: the person reads what will be opened, not a lookalike. Anything that is not http(s)
- *  is dropped. */
-export function openAttemptOf(args: Record<string, unknown> | undefined): OpenAttempt | null {
-	if (args === undefined || args.browserId !== undefined) return null;
-	const { profile, url } = args;
-	if (typeof profile !== "string" || profile.trim().length === 0) return null;
-	const address = typeof url === "string" ? webAddress(url) : null;
-	return address === null ? { profile } : { profile, url: address };
-}
-
-/** A plain web address, normalised; `null` for anything else: another scheme, one that carries a user name or password (`https://bank.com@evil.test/`
- *  reads as bank.com), unparseable, or too long to show whole. */
-function webAddress(value: string): string | null {
-	try {
-		const parsed = new URL(value.trim());
-		const web = parsed.protocol === "http:" || parsed.protocol === "https:";
-		return web && parsed.username === "" && parsed.password === "" && parsed.href.length <= OPEN_ATTEMPT_URL_MAX ? parsed.href : null;
-	} catch {
-		return null;
-	}
-}
 
 /** The outcome of the tool that mounted the View (`browser_view`, `browser_publish`), read out of a host-delivered
  *  `ui/notifications/tool-result` — the View's ONLY source of a browserId.
@@ -447,10 +392,7 @@ export class BrowserClient {
 		const tool = "browser_profiles";
 		const answered = await this.call(tool, {});
 		if (!Array.isArray(answered.profiles)) throw new BrowserToolError(tool, "result carried no profiles array");
-		return { profiles: answered.profiles.flatMap(readProfile), browsers: Array.isArray(answered.browsers) ? answered.browsers.flatMap(readOpenBrowser) : [], consents: Array.isArray(answered.consents) ? answered.consents.flatMap(readConsent) : [] };
-	}
-	async decideProfileConsent(name: string, decision: "allow" | "deny" | "revoke", scope: "chat" | "loop", expectedSubject?: ProfileConsent["subject"]): Promise<void> {
-		await this.call("browser_profile_consent", { name, decision, scope, ...(expectedSubject === undefined ? {} : { expectedSubject }) });
+		return { profiles: answered.profiles.flatMap(readProfile), browsers: Array.isArray(answered.browsers) ? answered.browsers.flatMap(readOpenBrowser) : [] };
 	}
 
 	/** Creates a profile from the name the person typed. The refusal (a taken or unusable name) is the runtime's sentence, raised as is. */

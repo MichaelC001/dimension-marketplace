@@ -38,13 +38,12 @@ interface Calls {
 	read: string[];
 	navigated: string[];
 	tasked: TaskRequest[];
-	/** Browser ids the access check refuses, as the runtime refuses a saved profile's browser to a chat the person has not let reach it. */
-	denied: string[];
+	gone: string[];
 }
 
 /** Just enough runtime for the server to boot and answer open/view: every call recorded. */
 function recordingRuntime(calls: Calls): BrowserRuntimePort {
-	const runtime: Pick<BrowserRuntimePort, "open" | "state" | "liveState" | "watchFrames" | "viewing" | "act" | "startTask" | "connections" | "profileMeta" | "onConnectionsChanged" | "requireProfileAccess" | "dispose"> = {
+	const runtime: Pick<BrowserRuntimePort, "open" | "state" | "liveState" | "watchFrames" | "viewing" | "act" | "startTask" | "connections" | "profileMeta" | "onConnectionsChanged" | "requireOpen" | "dispose"> = {
 		open: async (options) => {
 			calls.opened.push(options);
 			return stateOf("o".repeat(32));
@@ -67,8 +66,8 @@ function recordingRuntime(calls: Calls): BrowserRuntimePort {
 		connections: async () => ({}),
 		profileMeta: async () => ({}),
 		onConnectionsChanged: () => () => {},
-		requireProfileAccess: (browserId) => {
-			if (calls.denied.includes(browserId)) throw new BrowserRuntimeError("profile_consent_required", "denied by the access check");
+		requireOpen: (browserId) => {
+			if (calls.gone.includes(browserId)) throw new BrowserRuntimeError("unknown_browser", "unknown or already closed browserId");
 		},
 		dispose: async () => {},
 	};
@@ -81,7 +80,7 @@ async function connect(jevKey?: string): Promise<{ client: Client; calls: Calls;
 	const viewDir = join(rootDir, "view");
 	await mkdir(viewDir, { recursive: true });
 	await writeFile(join(viewDir, "index.html"), "<!doctype html><title>view</title>");
-	const calls: Calls = { opened: [], read: [], navigated: [], tasked: [], denied: [] };
+	const calls: Calls = { opened: [], read: [], navigated: [], tasked: [], gone: [] };
 	const savedKey = process.env.TYPESAFE_API_KEY;
 	if (jevKey === undefined) delete process.env.TYPESAFE_API_KEY;
 	else process.env.TYPESAFE_API_KEY = jevKey;
@@ -180,20 +179,18 @@ test("browser_view with a browserId shows that browser and opens nothing; it nev
 	expect(calls).toMatchObject({ opened: [], read: [held], navigated: [] });
 });
 
-test("browser_view and browser_task with a browserId the access check refuses are refused before anything is read or started", async () => {
+test("browser_view and browser_task with a browserId that is gone are refused before anything is read or started", async () => {
 	const { client, calls } = await connect("jev-key");
 	const withheld = "d".repeat(32);
-	calls.denied.push(withheld);
+	calls.gone.push(withheld);
 
 	const viewed = await client.callTool({ name: "browser_view", arguments: { browserId: withheld } });
 	const tasked = await client.callTool({ name: "browser_task", arguments: { browserId: withheld, task: "fill the form" } });
 
-	// The access check's own answer, not a refusal of the arguments.
 	for (const refused of [viewed, tasked]) {
 		expect(refused.isError).toBe(true);
-		expect(JSON.stringify(refused.content)).toContain("denied by the access check");
+		expect(JSON.stringify(refused.content)).toContain("unknown or already closed browserId");
 	}
-	// Nothing was read, started or opened. This fake's `state` and `startTask` ignore the guard they are handed, so only the server's own check ahead of the call keeps them from running.
 	expect(calls).toMatchObject({ opened: [], read: [], navigated: [], tasked: [] });
 });
 

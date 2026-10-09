@@ -90,27 +90,31 @@ const ATTACH_REFUSAL =
  */
 export function resolveKind(request: KindRequest, env: KindEnv, cwd: string, hidden: boolean = env.DIMENSION_BROWSER_HEADLESS !== "false"): BrowserKind {
   const headless: BrowserKind = { kind: "headless", headless: hidden };
-  // A saved profile is a Chromium the pack launches itself: no other kind can hold it, so it is chosen before the order.
-  if (request.profile !== undefined) return headless;
   const app = request.app;
-  if ((app?.cdp_url || app?.path || app?.relay) && !parseFlag(env[ATTACH_OPT_IN], false)) throw new ToolError(ATTACH_REFUSAL);
+  const namesApp = Boolean(app?.cdp_url || app?.path || app?.relay);
+  if (request.profile !== undefined) {
+    if (namesApp) {
+      throw new ToolError("A saved profile opens its own Chrome, so it cannot be combined with app. Leave out app, or leave out profile.");
+    }
+    return headless;
+  }
+  if (namesApp && !parseFlag(env[ATTACH_OPT_IN], false)) throw new ToolError(ATTACH_REFUSAL);
   if (app?.cdp_url) return { kind: "connected", cdpUrl: trimUrl(app.cdp_url) };
   if (app?.path) {
     const spawned: BrowserKind = { kind: "spawned", path: resolveToCwd(app.path, cwd) };
     if (app.args) spawned.args = app.args;
     return spawned;
   }
-  const relayUrl = env.DIMENSION_BROWSER_RELAY_URL;
   // Explicit app.relay wins over every setting; DIMENSION_BROWSER_RELAY=0 stays the final kill switch (a relay that is down would otherwise brick the tool).
   if (app?.relay) {
-    const relay = resolveRelayKind({ settingEnabled: true, ...(relayUrl === undefined ? {} : { url: relayUrl }) }, env);
+    const relay = resolveRelayKind({ settingEnabled: true, url: env.DIMENSION_BROWSER_RELAY_URL }, env);
     if (relay) return relay;
     throw new ToolError("app.relay is switched off in this environment (DIMENSION_BROWSER_RELAY=0); unset it to drive your own Chrome through the relay.");
   }
   // Relay before cdpUrl among settings: enabling the opt-out-by-default relay is a deliberate mode selection, while a configured cdpUrl is a
   // standing fallback endpoint. A configured endpoint is a default, not an override: explicit app options win.
   if (app?.relay !== false) {
-    const relay = resolveRelayKind({ settingEnabled: false, ...(relayUrl === undefined ? {} : { url: relayUrl }) }, env);
+    const relay = resolveRelayKind({ settingEnabled: false, url: env.DIMENSION_BROWSER_RELAY_URL }, env);
     if (relay) return relay;
   }
   const configuredCdpUrl = env.DIMENSION_BROWSER_CDP_URL?.trim();

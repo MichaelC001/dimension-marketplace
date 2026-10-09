@@ -151,3 +151,76 @@ export function readPackBlock(packRoot, pkg) {
 	assign(result.source === MANIFEST_FILE ? result.manifest : undefined, BLOCK_FIELDS);
 	return block;
 }
+
+export const GENERATION_MODALITIES = ["video", "voice", "music", "sfx", "image", "model3d", "parts", "rig", "retopo", "texture"];
+
+const SPEECH_FLAGS = ["speak", "listen", "converse", "onDevice"];
+
+export function projectCatalogProviders(declared) {
+	const problems = [];
+	if (declared === undefined) return { problems };
+	const kinds = asObject(declared);
+	if (!kinds) return { problems: ["providers must be an object"] };
+
+	const providers = {};
+
+	const entriesOf = (kind, project) => {
+		const raw = kinds[kind];
+		if (raw === undefined) return undefined;
+		if (!Array.isArray(raw)) {
+			problems.push(`providers.${kind} must be an array`);
+			return undefined;
+		}
+		const projected = [];
+		raw.forEach((value, index) => {
+			const at = `providers.${kind}[${index}]`;
+			const entry = asObject(value);
+			if (!entry) {
+				problems.push(`${at} must be an object`);
+				return;
+			}
+			if (typeof entry.id !== "string" || entry.id.length === 0) {
+				problems.push(`${at}: id is required (a non-empty string)`);
+				return;
+			}
+			const row = project(entry, at);
+			if (row) projected.push(row);
+		});
+		return projected.length > 0 ? projected : undefined;
+	};
+
+	const speech = entriesOf("speech", (entry, at) => {
+		const row = { id: entry.id };
+		for (const flag of SPEECH_FLAGS) {
+			if (entry[flag] === undefined) continue;
+			if (typeof entry[flag] !== "boolean") problems.push(`${at}.${flag} must be true or false`);
+			else row[flag] = entry[flag];
+		}
+		return row;
+	});
+	if (speech) providers.speech = speech;
+
+	const generation = entriesOf("generation", (entry, at) => {
+		const produces = entry.produces;
+		if (!Array.isArray(produces) || produces.length === 0) {
+			problems.push(`${at}.produces must be a non-empty list of: ${GENERATION_MODALITIES.join(", ")}`);
+			return undefined;
+		}
+		const unknown = produces.filter(modality => !GENERATION_MODALITIES.includes(modality));
+		if (unknown.length > 0) {
+			problems.push(
+				`${at}.produces has ${unknown.map(modality => JSON.stringify(modality)).join(", ")}, which ${unknown.length === 1 ? "is" : "are"} not one of: ${GENERATION_MODALITIES.join(", ")}`,
+			);
+			return undefined;
+		}
+		const row = { id: entry.id, produces: [...produces] };
+		if (entry.runtime !== undefined) {
+			if (typeof entry.runtime !== "string" || entry.runtime.length === 0) problems.push(`${at}.runtime must be a non-empty string`);
+			else row.runtime = entry.runtime;
+		}
+		return row;
+	});
+	if (generation) providers.generation = generation;
+
+	return Object.keys(providers).length > 0 ? { providers, problems } : { problems };
+}

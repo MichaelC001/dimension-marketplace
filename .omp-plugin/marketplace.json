@@ -135,7 +135,7 @@
 			"title": "Browser",
 			"icon": "globe",
 			"description": "A real browser beside your chat that your agent drives while you watch. Tabs, persistent logged-in profiles, circle-to-annotate, and an optional fast task agent (jev).",
-			"version": "0.6.8",
+			"version": "0.7.1",
 			"author": {
 				"name": "Dimension"
 			},
@@ -539,7 +539,20 @@
 				"hunyuan",
 				"tripo",
 				"provider"
-			]
+			],
+			"providers": {
+				"generation": [
+					{
+						"id": "fal",
+						"produces": [
+							"model3d",
+							"parts",
+							"retopo"
+						],
+						"runtime": "api"
+					}
+				]
+			}
 		},
 		{
 			"name": "gen-local-3d",
@@ -563,7 +576,18 @@
 				"trellis",
 				"local",
 				"provider"
-			]
+			],
+			"providers": {
+				"generation": [
+					{
+						"id": "local-3d",
+						"produces": [
+							"model3d"
+						],
+						"runtime": "local"
+					}
+				]
+			}
 		},
 		{
 			"name": "gen-tripo",
@@ -586,7 +610,21 @@
 				"rigging",
 				"retopology",
 				"provider"
-			]
+			],
+			"providers": {
+				"generation": [
+					{
+						"id": "tripo",
+						"produces": [
+							"model3d",
+							"parts",
+							"rig",
+							"retopo"
+						],
+						"runtime": "api"
+					}
+				]
+			}
 		},
 		{
 			"name": "gen-wavespeed",
@@ -612,7 +650,18 @@
 				"trellis",
 				"hunyuan",
 				"provider"
-			]
+			],
+			"providers": {
+				"generation": [
+					{
+						"id": "wavespeed",
+						"produces": [
+							"model3d"
+						],
+						"runtime": "api"
+					}
+				]
+			}
 		},
 		{
 			"name": "github",
@@ -1059,8 +1108,8 @@
 			"pluginId": "speech-elevenlabs",
 			"title": "ElevenLabs voice",
 			"icon": "packs/speech-elevenlabs/assets/icon.svg",
-			"description": "ElevenLabs speech provider: an agent's replies spoken by Eleven v4 Turbo (or v4, or Flash v2.5) with word-level caption timing, and live voice conversations through an ElevenLabs agent that hands repository work to your coding agent. Choose it from a voice profile by naming the provider \"elevenlabs\".",
-			"version": "0.2.2",
+			"description": "ElevenLabs speech provider: dictation by Scribe v2 Realtime, an agent's replies spoken by Eleven v4 Turbo (or v4, or Flash v2.5) with word-level caption timing, and live voice conversations through an ElevenLabs agent that hands repository work to your coding agent. Choose it from a voice profile by naming the provider \"elevenlabs\".",
+			"version": "0.3.2",
 			"author": {
 				"name": "Dimension"
 			},
@@ -1073,7 +1122,21 @@
 				"tts",
 				"elevenlabs",
 				"provider"
-			]
+			],
+			"requires": {
+				"dimension": ">=0.11.1"
+			},
+			"channel": "canary",
+			"providers": {
+				"speech": [
+					{
+						"id": "elevenlabs",
+						"speak": true,
+						"listen": true,
+						"converse": true
+					}
+				]
+			}
 		},
 		{
 			"name": "swiss-knife",

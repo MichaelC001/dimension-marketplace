@@ -67,7 +67,7 @@ export type DialogueEvent =
 	| { readonly kind: "unit-done" }
 	/** `is_final`: the reply after `close_socket` is complete. */
 	| { readonly kind: "final" }
-	| { readonly kind: "error"; readonly message: string };
+	| { readonly kind: "error"; readonly reason: string };
 
 /** A frame that is none of these (or not JSON) is ignored: the server may add fields. */
 export function parseDialogueEvent(raw: string): DialogueEvent | null {
@@ -79,7 +79,7 @@ export function parseDialogueEvent(raw: string): DialogueEvent | null {
 	}
 	if (!isRecord(data)) return null;
 	if (typeof data.error === "string") {
-		return { kind: "error", message: typeof data.message === "string" ? data.message : data.error };
+		return { kind: "error", reason: data.error };
 	}
 	if (data.is_final === true) return { kind: "final" };
 	if (data.is_final_audio_for_turn === true) return { kind: "unit-done" };
@@ -136,26 +136,4 @@ export function parseSegmentLine(line: string): SegmentChunk | null {
 			? { chars: a.characters, starts: a.character_start_times_seconds, ends: a.character_end_times_seconds }
 			: undefined;
 	return { ...(pcm ? { pcm } : {}), ...(alignment ? { alignment } : {}) };
-}
-
-// ---- failures -------------------------------------------------------------------------------
-
-/** The sentence a human is shown for a non-2xx answer to a synthesis request. The key is never part of it. */
-export function describeHttpFailure(status: number, body: string): string {
-	if (status === 401 || status === 403) return "ElevenLabs rejected the API key (it needs the Text to Speech permission)";
-	return `ElevenLabs answered ${status}${body ? `: ${body.slice(0, 200)}` : ""}`;
-}
-
-/**
- * Why a socket that never opened failed, read off the answer to `GET /v1/user`. A key limited to
- * Text to Speech cannot read that endpoint, so a "missing_permissions" answer clears the key of
- * blame rather than convicting it.
- */
-export function describeHandshakeFailure(status: number, body: string): string {
-	const permissionOnly = body.includes("missing_permissions");
-	if ((status === 401 || status === 403) && !permissionOnly) return "ElevenLabs rejected the API key";
-	if ((status >= 200 && status < 300) || permissionOnly) {
-		return "ElevenLabs refused the voice connection (check the model, the voice id and the key's Text to Speech permission)";
-	}
-	return `ElevenLabs answered ${status}`;
 }

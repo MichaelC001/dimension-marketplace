@@ -47,7 +47,7 @@ review is the taste check.** No pack merges red.
    | Catalog field | Comes from |
    |---|---|
    | `name` · `source` | your pack's directory name |
-   | `pluginId` · `title` · `icon` · `requires` · `spaces` | `dimension.plugin.json` |
+   | `pluginId` · `title` · `icon` · `requires` · `spaces` · `providers` | `dimension.plugin.json` |
    | `description` · `category` · `tags` | `package.json` → `dimension` block (`description`, `category`, `keywords`), else its top-level fields |
    | `version` · `author` · `license` · `repository` | `package.json` (license/repository default to this repo's) |
 
@@ -55,6 +55,18 @@ review is the taste check.** No pack merges red.
    catalog-root-relative (`assets/icon.svg` → `packs/<you>/assets/icon.svg`) and
    must exist — a screenshot you deleted fails the generator by name. A bare
    glyph name (`"icon": "hammer"`) is passed through untouched.
+
+   A pack that adds a voice or a generator says so in its manifest, under
+   `extensions["ai.insodimension.dimension"].providers`, and the generator
+   copies it onto the entry as `providers` so the Connections page can list and
+   filter the pack before anyone installs it. Only two kinds are carried:
+   `speech` (`{ id, speak?, listen?, converse?, onDevice? }`) and `generation`
+   (`{ id, produces, runtime? }`, where `produces` is a non-empty list of
+   `video`, `voice`, `music`, `sfx`, `image`, `model3d`, `parts`, `rig`,
+   `retopo`, `texture`). A modality outside that list, a provider with no `id`,
+   or a flag that is not `true`/`false` fails the generator by name, and
+   `validate-marketplace.mjs` refuses a catalog whose `providers` differ from
+   the pack's manifest.
 6. **Declare a platform floor if you need one.** A pack that requires a recent
    Dimension says so top-level in `dimension.plugin.json`:
 

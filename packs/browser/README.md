@@ -77,9 +77,10 @@ not an operating-system sandbox. Its `browser` API confines ordinary calls to
 the caller's session, but a cell can read local files (including the credential
 store), make network requests and discover another session's local Chrome
 debugging endpoint; a deliberately hostile cell can cross that API boundary.
-Use a throwaway browser for code. Saved profiles and explicit app/relay/CDP
-attachment have their own refusal/consent paths, not a security boundary
-against arbitrary Node code.
+Use a throwaway browser for code. An explicit `app.cdp_url`, `app.path` or `app.relay` in a cell is refused
+unless `DIMENSION_BROWSER_CODE_ALLOW_ATTACH=1` (`code_needs_consent`); a saved profile opens with no approval of
+the pack's own (the host's permission mode is the gate), one holder at a time (`profile_held`), and cannot be
+combined with `app`. Neither is a security boundary against arbitrary Node code.
 
 At startup the pack removes its task keys (`TYPESAFE_API_KEY`,
 `TEXT_MODEL_API_KEY`) and matching foreign `DIMENSION_*` secret variables from
@@ -134,6 +135,10 @@ Build from inside the Dimension monorepo — `@dimension/sdk` and `@fraym/ui` ar
 npm install
 npm run build
 ```
+
+### Runtime
+
+The server needs Node 22.12 or newer on the host's PATH; the pack does not bundle or install Node, and it never downloads a browser (a missing Chrome is reported when a browser is opened). It starts through `app/launch.mjs`, which stops with one line on an older Node and, when started under Bun, relaunches itself under a real Node: a Bun process that reads stdin from a pipe cannot start the code worker, and `bun run` puts a Bun copy named `node` first on PATH (a dev launch). With no Node 22.12+ to relaunch under, it exits with a line saying so.
 
 ### Task agent (`jev`, optional)
 
@@ -389,8 +394,7 @@ saved profile, `{ name, label, colour, heldBy, sites }`:
 of another chat) or `"another chat"`; never an id. `signedIn: null` is "not known
 now": the last check is over 7 days old, or its time is in the future (an agent
 can ask the person); a site that was only visited is not listed. **The View shows a
-site's account (an email, a handle) to the person**, on the card that asks for an agent's access to a profile. An unauthenticated model, or
-one without current approval for that profile, receives no site metadata. The
+site's account (an email, a handle) to the person.** A model gets each site without its account. The
 Browser View reads the same tool as the human and gets the list as structured
 content, each site with its `account`. Never a cookie, a cookie name, an expiry, a token, a
 password, whether a saved password exists, or a path; the relay and throwaway
@@ -407,34 +411,9 @@ chat that already holds a profile gets its own browser back; anyone else is refu
 `profile_held`, told whether the human or another chat has it, whether that profile is
 open or still starting.
 
-**Saved-profile approval.** Naming an existing profile, `default` included, does
-not authorize the model to use it. The host must supply current verified chat
-authority; otherwise saved-profile access fails closed. The person decides in
-the Browser View: allow this chat, deny, or grant/revoke standing access for the
-verified Loop. Successfully opening a new profile created by this chat grants
-its creator access; an unsuccessful or revoked launch does not. The person's own
-`default` is never created by a model: even before its folder exists, an agent
-asking for it waits for the person's approval.
+**Using a saved profile.** An agent opens any saved profile the same way, with no approval of the pack's own: `browser_open`, `browser_view`, or a `browser_run` cell (`browser.open({ profile: "work" })`). The host's permission mode is the only gate: `browser_run` carries the `exec` tier and the other tools their own, so full access runs without asking and ask-on-commands asks, as for every other tool. One holder per profile still holds (`profile_held`), and the person can take the wheel at any time (`human_driving`). A web page can carry instructions meant for the agent, and the pack does not stop the agent acting inside a signed-in account: that is the cost of hands-free use.
 
-The first request appears on the blank start page, outside the folded Options:
-there is no need to open another browser to find its approval controls. Requests
-refresh while the View is blank or the profile menu is open. A decision carries
-the displayed subject's workspace, id and origin; a changed or expired request
-is refused, with the error visible on the blank page rather than a hidden toast.
-The View does not treat a refused decision as approval or open a browser for it.
-
-**What the approval covers, and what it does not.** It covers the browser tools: opening
-and driving the profile through the step tools, `browser_view`, and in a code space
-`browser_run({ profileTool })`, whose typed operations never enter the code worker. It
-does not stop a `browser_run` code cell. A cell is full Node running as you, so it can
-read a saved profile's files: each profile's `chrome/DevToolsActivePort` and
-`credentials.json`, and in the browser root `credentials.key`, `profile-consents/` and
-`publish-approvals/`. The gate stops the API route (the model's `browser.open({ profile })`,
-and `profileTool` without approval), not code that goes around the API. Do not allow a
-profile on the strength of this approval alone if you do not trust the code your agent
-runs; the card in the View says the same in two sentences. Where this limit comes from,
-exactly: it is equal to OMP's built-in eval browser; consistent with the parity ruling;
-not separately signed; option B (pipe transport) not built (doc 77 §7.8 decision 1).
+A profile's sign-ins are kept in its Chrome folder on disk and are still there after the browser closes and opens again. A `browser_run` cell is full Node running as you, so it can read a profile's files (`chrome/`, `credentials.json`, and in the browser root `credentials.key`); that is equal to OMP's built-in eval browser (doc 77 §7.8 decision 1).
 
 **The profile menu (the View).** The toolbar's chip is the browser's profile: its avatar (the emoji
 the person chose, else the label's first letter, on the profile's colour) and its label; Private for a
@@ -801,8 +780,7 @@ Installing the pack also adds a **Browser** tab to the dock (component
 blank browser; something that is not an address opens nothing and says why).
 Nothing else lives in the tab: profiles and signing in belong to the Browser
 itself. Its profile menu switches and adds profiles and summarises where each is
-signed in (the first sites seen signed in, never a site's account); a site's
-account shows only on the card that asks for an agent's access to a profile.
+signed in (the first sites seen signed in, never a site's account).
 
 The View's start page and the tab's **Open a page** open on the saved `default`
 set, so a person's own browser keeps their logins, unless **Private** is ticked.

@@ -1,8 +1,6 @@
 import type { ConnectionObservations } from "./connection.js";
 import type { LiveFrame } from "./engines/types.js";
 import type { ProfileColour, ResolvedProfileMeta } from "./profile-meta.js";
-import type { ArtifactoryLoopPrincipal } from "@dimension/sdk/artifactory";
-export type { ArtifactoryLoopPrincipal } from "@dimension/sdk/artifactory";
 
 /** Refresh externally, then assert local authority synchronously in the effect's dispatch continuation. */
 export interface EffectGuard {
@@ -415,8 +413,6 @@ export interface ProfileHold { by: "person" | "agent"; task: boolean; takenOver:
  * an id is a capability) so the View can reach it and close it.
  */
 export interface ProfileListing { name: string; label: string; colour: ProfileColour; avatar?: string; heldBy: ProfileHolder; hold?: ProfileHold; browserId?: string; sites: ProfileSiteListing[] }
-/** A saved-profile request belongs to one host-stamped chat, not to a browser id. */
-export interface ProfileConsent { name: string; label: string; sites: ProfileSiteListing[]; status: "pending" | "granted"; scope: "chat" | "loop"; subject?: Pick<ArtifactoryLoopPrincipal, "workspaceId" | "id" | "origin">; loopLabel?: string; expiresAt?: number }
 /** A browser this chat holds that is not a saved profile: a Private one, or the person's own Chrome. Only the View is sent these. */
 export interface OpenBrowserListing { browserId: string; kind: "private" | "chrome"; hold: ProfileHold }
 /** What leaving a browser did to it: closed, or kept because something of an agent's (or the person's) still depends on it. */
@@ -517,20 +513,8 @@ export interface BrowserRuntimePort {
   onConnectionsChanged(listener: () => void): () => void;
   /** Every saved profile (never the relay's, never a throwaway), with who holds it relative to `asker`, the chat asking. */
   profileList(asker?: string): Promise<ProfileListing[]>;
-  /** Model access is checked before any saved-profile browser operation, including by-id reads and credentials. */
-  requireProfileAccess(browserId: string, caller?: ToolCaller, session?: string, allowClosed?: boolean): void;
-  /** Typed browser_run ordinary operations are saved-profile-only; refuses relay and throwaway before reading a page. */
-  requireSavedProfileAccess(browserId: string, caller?: ToolCaller, session?: string, allowClosed?: boolean): void;
-  /** Synchronous metadata only, including a saved browser whose close is retryable. */
-  needsProfileAuthority(browserId: string): boolean;
-  /** Install only the principal returned by an authenticated host authority read; undefined denies standing access. */
-  setProfilePrincipal(sessionId: string, principal: ArtifactoryLoopPrincipal | undefined): void;
-  /** Clear this chat's ephemeral authority and grants before stopping its matching task. */
+  requireOpen(browserId: string, allowClosed?: boolean): void;
   endProfileSession(sessionId: string): Promise<void>;
-  /** Pending requests and active grants for the View's host-stamped chat. */
-  profileConsents(session?: string): ProfileConsent[];
-  /** Human-only decision bound to the displayed stable subject; the expectation never selects authority. */
-  decideProfileConsent(name: string, decision: "allow" | "deny" | "revoke", caller?: ToolCaller, session?: string, scope?: "chat" | "loop", expectedSubject?: ProfileConsent["subject"]): Promise<void>;
   /** The browsers this chat holds that are not saved profiles (Private ones, the person's own Chrome), for the View's menu; never another chat's. */
   openBrowsers(asker?: string): Promise<OpenBrowserListing[]>;
   /** The label, colour and avatar of every saved profile that has any observation, for the connection report. */

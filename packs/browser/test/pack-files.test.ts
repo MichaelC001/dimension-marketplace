@@ -20,10 +20,10 @@ describe("what the pack ships", () => {
   const { files } = read("package.json") as { files: string[] };
   const { mcpServers } = read("ai.insodimension.dimension/mcp.json") as { mcpServers: Record<string, { args: string[] }> };
 
-  test("every bundle the server loads is in the shipped file list: the server itself and its code worker", () => {
-    const server = mcpServers.browser?.args[0];
-    expect(server).toBe("app/server.mjs");
-    const loaded = [server as string, `app/${WORKER_BUNDLE}`];
+  test("every bundle the entry loads is in the shipped file list: the launcher, the server it hands over to, and the code worker", () => {
+    const entry = mcpServers.browser?.args[0];
+    expect(entry).toBe("app/launch.mjs");
+    const loaded = [entry as string, "app/server.mjs", `app/${WORKER_BUNDLE}`];
     expect(loaded.filter(bundle => !ships(files, bundle))).toEqual([]);
   });
 

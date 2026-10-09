@@ -16,7 +16,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { App } from "@modelcontextprotocol/ext-apps";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import type { BrowserState, ProfileConsent, ProfileListing } from "../src/contracts";
+import type { BrowserState, ProfileListing } from "../src/contracts";
 import { BrowserApp } from "../app/view/browser-app";
 import { BrowserClient, mountFromToolResult, type ToolMount } from "../app/view/browser-client";
 import { StartPage, type StartPageProps } from "../app/view/start-page";
@@ -35,9 +35,6 @@ const listing = (name: string, over: Partial<ProfileListing> = {}): ProfileListi
 const noop = () => {};
 const startProps = (over: Partial<StartPageProps> = {}): StartPageProps => ({
 	profiles: [],
-	consents: [],
-	onConsent: noop,
-	opens: null,
 	profilesError: null,
 	profile: "default",
 	isPrivate: false,
@@ -193,16 +190,14 @@ interface ContextUpdate {
 	readonly content: readonly unknown[];
 }
 
-/** A host that answers `browser_profiles`, records every call and every context update, and lets `answer` decide the rest. */
-function fakeApp(answer: (call: Call) => CallToolResult, profileResult: CallToolResult = { content: [], structuredContent: { profiles: [] } }): { readonly app: App; readonly calls: Call[]; readonly contexts: ContextUpdate[] } {
+function fakeApp(answer: (call: Call) => CallToolResult): { readonly app: App; readonly calls: Call[]; readonly contexts: ContextUpdate[] } {
 	const calls: Call[] = [];
 	const contexts: ContextUpdate[] = [];
-	// The View touches exactly these three App members; the rest of the host surface is not in play.
 	const app = {
 		callServerTool: async (request: { name: string; arguments?: Record<string, unknown> }): Promise<CallToolResult> => {
 			const call = { name: request.name, args: request.arguments ?? {} };
 			calls.push(call);
-			return call.name === "browser_profiles" ? profileResult : answer(call);
+			return call.name === "browser_profiles" ? { content: [], structuredContent: { profiles: [] } } : answer(call);
 		},
 		getHostCapabilities: () => ({ updateModelContext: { text: {}, image: {} } }),
 		updateModelContext: async (update: ContextUpdate) => {
@@ -224,38 +219,6 @@ const TAKEN_SENTENCE = "That browser is already open. Use it, or open a Private 
 
 const addressField = (dom: Dom): Element => dom.find('input[aria-label="Address"]')[0] as Element;
 const alerts = (dom: Dom) => dom.find('[role="alert"]').map(el => el.textContent);
-
-describe("profile authorization on a blank View", () => {
-	test("a pending loop request can be decided without opening a browser, and a stale decision stays pending with an error", async () => {
-		const subject = { workspaceId: "workspace-one", id: "loop-17", origin: "agent" };
-		const otherSubject = { workspaceId: "workspace-two", id: "loop-29", origin: "agent" };
-		const consents: ProfileConsent[] = [
-			{ name: "personal", label: "Personal", sites: [], status: "pending", scope: "loop", subject: otherSubject, loopLabel: "Other loop" },
-			{ name: "work", label: "Work", sites: [{ site: "example.com", account: "alex", signedIn: true, seenAt: "2026-10-04T00:00:00Z" }], status: "pending", scope: "loop", subject, loopLabel: "Research loop" },
-		];
-		const { app, calls } = fakeApp(
-			() => failure("This request changed. Review it again before deciding."),
-			{ content: [], structuredContent: { profiles: [], consents } },
-		);
-		const dom = await mount(<BrowserApp app={app} toolState={null} />);
-		await dom.settle();
-
-		expect(dom.find(".bx-start")).toHaveLength(1);
-		expect(dom.text()).toContain("Work: example.com (alex)");
-		expect(button(dom, "Always allow Research loop").closest(".bx-options-panel")).toBeNull();
-		await dom.click(button(dom, "Always allow Research loop"));
-		await dom.settle();
-
-		expect(calls.filter(call => call.name === "browser_profile_consent")).toEqual([
-			{ name: "browser_profile_consent", args: { name: "work", decision: "allow", scope: "loop", expectedSubject: subject } },
-		]);
-		expect(opens(calls)).toEqual([]);
-		expect(alerts(dom)).toEqual(["This request changed. Review it again before deciding."]);
-		expect(dom.text()).toContain("Agent requests access to Work");
-		expect(button(dom, "Always allow Research loop")).toBeTruthy();
-		expect(dom.text()).not.toContain("Research loop has standing access");
-	});
-});
 
 describe("opening from the start page", () => {
 	test("Open goes to the address that was typed, on the person's saved logins, and a refusal is shown, not swallowed", async () => {

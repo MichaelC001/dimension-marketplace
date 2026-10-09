@@ -1,0 +1,6 @@
+description: Dictation by ElevenLabs Scribe v2 Realtime, replies spoken by Eleven v4 Turbo
+speak:
+  - { provider: elevenlabs, model: eleven_v4_turbo, voice: EXAVITQu4vr4xnSDxMaL }
+listen:
+  - { provider: elevenlabs, model: scribe_v2_realtime, language: en }
+turn: { endSilenceMs: 700, bargeIn: true }
