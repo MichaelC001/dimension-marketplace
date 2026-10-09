@@ -40,7 +40,7 @@ describe("catalog", () => {
 		}
 		expect(catalog.freeFormVoice).toBe(true);
 		expect(catalog.audioTags).toBe(true);
-		expect(catalog.listen).toBeUndefined();
+		expect(catalog.listen?.map(model => model.id)).toEqual(["scribe_v2_realtime"]);
 		expect(rig.http.requests).toHaveLength(0);
 	});
 

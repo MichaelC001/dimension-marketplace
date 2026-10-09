@@ -3,8 +3,10 @@
 // voice id ElevenLabs knows is accepted.
 import type { SpeechModelInfo, SpeechProviderCatalog, SpeechVoiceInfo } from "@dimension/sdk/provider";
 import { DEFAULT_CONVERSE_MODEL } from "./convai.js";
+import { httpFailure } from "./failure.js";
 import { AUDIO_TAG_GUIDE } from "./guide.js";
-import { API_HOST, describeHttpFailure, isRecord, modelSupportsAudioTags } from "./protocol.js";
+import { API_HOST, isRecord, modelSupportsAudioTags } from "./protocol.js";
+import { SCRIBE_MODEL } from "./scribe.js";
 
 export const DEFAULT_MODEL = "eleven_v4_turbo";
 
@@ -25,6 +27,14 @@ const MODELS: readonly Omit<SpeechModelInfo, "voices">[] = [
 		id: "eleven_flash_v2_5",
 		label: "Eleven Flash v2.5",
 		description: "Built for low latency. Speaks one sentence per request; audio tags are dropped, not performed.",
+	},
+];
+
+const LISTEN_MODELS: readonly Omit<SpeechModelInfo, "voices">[] = [
+	{
+		id: SCRIBE_MODEL,
+		label: "Scribe v2 Realtime",
+		description: "Streams your microphone and returns the transcript as you speak, in more than 90 languages.",
 	},
 ];
 
@@ -58,6 +68,7 @@ export function buildCatalog(accountVoices: readonly SpeechVoiceInfo[]): SpeechP
 	return {
 		// The same rule openSpeak applies when it decides whether tags reach the voice.
 		speak: MODELS.map(model => ({ ...model, audioTags: modelSupportsAudioTags(model.id), voices })),
+		listen: LISTEN_MODELS,
 		converse: CONVERSE_MODELS_INFO.map(model => ({ ...model, voices })),
 		// The engine holds the agent socket and carries the PCM: the client builds no WebRTC call.
 		converseMedia: "relay",
@@ -74,7 +85,7 @@ async function fetchAccountVoices(apiKey: string, doFetch: typeof fetch): Promis
 		headers: { "xi-api-key": apiKey },
 		signal: AbortSignal.timeout(VOICES_TIMEOUT_MS),
 	});
-	if (!res.ok) throw new Error(describeHttpFailure(res.status, ""));
+	if (!res.ok) throw httpFailure(res.status, "", "speak");
 	const body: unknown = await res.json();
 	if (!isRecord(body) || !Array.isArray(body.voices)) return [];
 	const voices: SpeechVoiceInfo[] = [];

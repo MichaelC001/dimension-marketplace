@@ -27,6 +27,7 @@ jobs:
       # a requirement or a screenshot that is not what ships, so CI refuses the
       # drift instead of publishing it.
       - run: bun scripts/build-index.ts --check
+      - run: bun test scripts/test
       # A changed pack must bump its version: hosts cache installs by version and
       # never re-fetch one they hold (friction #63). A PR compares against its
       # base; a push to main against the commit it replaced.

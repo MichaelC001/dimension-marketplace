@@ -3,8 +3,9 @@
 // Segments are spoken strictly in order, one request at a time.
 import type { SpeakEvent, SpeakSession } from "@dimension/sdk/provider";
 import { WordAssembler } from "./alignment.js";
+import { ElevenLabsError, httpFailure, plainMessage, reachFetch, sentenceFor } from "./failure.js";
 import { SpeakOutput } from "./output.js";
-import { describeHttpFailure, parseSegmentLine, SAMPLE_RATE, segmentBody, segmentUrl } from "./protocol.js";
+import { parseSegmentLine, SAMPLE_RATE, segmentBody, segmentUrl } from "./protocol.js";
 import { SpeakableText } from "./speakable.js";
 
 /** Silence from ElevenLabs during a request before the reply is failed. */
@@ -79,7 +80,7 @@ export class SegmentSpeakSession implements SpeakSession {
 			}
 		} catch (error) {
 			// A cancelled request throws too; the session is already settled then.
-			if (!this.#settled) this.#fail(error instanceof Error ? error.message : String(error));
+			if (!this.#settled) this.#fail(plainMessage(error, "ElevenLabs speech stopped unexpectedly"));
 			return;
 		} finally {
 			this.#running = false;
@@ -94,14 +95,15 @@ export class SegmentSpeakSession implements SpeakSession {
 	async #speak(text: string): Promise<void> {
 		const { apiKey, model, voice } = this.#options;
 		this.#watch();
-		const res = await this.#options.fetch(segmentUrl(voice), {
+		const res = await reachFetch(this.#options.fetch, segmentUrl(voice), {
 			method: "POST",
 			// The key rides a header, never the URL.
 			headers: { "xi-api-key": apiKey, "content-type": "application/json" },
 			body: JSON.stringify(segmentBody(text, model)),
 			signal: this.#abort.signal,
 		});
-		if (!res.ok || !res.body) throw new Error(describeHttpFailure(res.status, await res.text().catch(() => "")));
+		if (!res.ok) throw httpFailure(res.status, await res.text().catch(() => ""), "speak");
+		if (!res.body) throw new ElevenLabsError(sentenceFor("server", "speak"));
 		const words = new WordAssembler();
 		let bytes = 0;
 		const handle = (line: string): void => {

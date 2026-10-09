@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { ElevenLabsError } from "../src/failure.js";
 import { createElevenLabsProvider, createSpeechProvider } from "../src/index.js";
 import {
 	DIALOGUE_MODEL,
@@ -11,6 +12,7 @@ import {
 	openSpeak,
 	openTracked,
 	SEGMENT_MODEL,
+	settle,
 	streamingResponder,
 } from "./support.js";
 
@@ -18,22 +20,24 @@ const harness = new Harness();
 afterEach(() => harness.dispose());
 
 describe("status", () => {
-	test("without a key: not ready, told how to fix it, and no listen entry", async () => {
+	test("without a key: speaking and listening are not ready, told how to fix it", async () => {
 		const rig = await makeRig(harness, { env: {} });
 		const status = await rig.provider.status(rig.ctx);
 
-		expect(status.listen).toBeUndefined();
-		expect(status.speak).toMatchObject({ ready: false, reason: "needs-key" });
-		const detail = status.speak?.ready === false ? status.speak.detail : undefined;
-		expect(detail).toContain("ELEVENLABS_API_KEY");
+		for (const half of [status.speak, status.listen]) {
+			expect(half).toMatchObject({ ready: false, reason: "needs-key" });
+			expect(half?.ready === false ? half.detail : undefined).toContain("ELEVENLABS_API_KEY");
+		}
 	});
 
-	test("speak is ready on a present key without calling out; the key comes from the environment or the connect file", async () => {
+	test("speak and listen are ready on a present key without calling out; the key comes from the environment or the connect file", async () => {
 		const withEnv = await makeRig(harness);
 		const withFile = await makeRig(harness, { env: {}, keyFile: JSON.stringify({ access: "k" }) });
 
 		for (const rig of [withEnv, withFile]) {
-			expect((await rig.provider.status(rig.ctx)).speak).toEqual({ ready: true });
+			const status = await rig.provider.status(rig.ctx);
+			expect(status.speak).toEqual({ ready: true });
+			expect(status.listen).toEqual({ ready: true });
 			// The only request status ever makes is the Agents scope check that `converse` needs.
 			expect(rig.http.requests.every(request => request.url.includes("/v1/convai/"))).toBe(true);
 			expect(rig.network.sockets).toHaveLength(0);
@@ -187,5 +191,76 @@ describe("audio tags", () => {
 		expect(request.url).not.toContain(KEY);
 		expect(request.body).not.toContain(KEY);
 		expect(request.headers.get("xi-api-key")).toBe(KEY);
+	});
+});
+
+describe("openListen", () => {
+	const STARTED = { message_type: "session_started", session_id: "s1", config: {} };
+
+	function openListen(rig: Awaited<ReturnType<typeof makeRig>>, entry: { model: string; language?: string }, signal = new AbortController().signal) {
+		const open = rig.provider.openListen;
+		if (!open) throw new Error("provider has no openListen");
+		return open.call(rig.provider, rig.ctx, entry, { signal, endSilenceMs: 700 });
+	}
+
+	test("without a key it rejects naming the key, carrying status 401, and reaches for nothing", async () => {
+		const rig = await makeRig(harness, { env: {} });
+		const error = (await openListen(rig, { model: "scribe_v2_realtime" }).catch((caught: unknown) => caught)) as ElevenLabsError;
+
+		expect(error).toBeInstanceOf(ElevenLabsError);
+		expect(error.status).toBe(401);
+		expect(error.message).toContain("ELEVENLABS_API_KEY");
+		expect(rig.network.sockets).toHaveLength(0);
+		expect(rig.http.requests).toHaveLength(0);
+	});
+
+	test("a model other than Scribe is refused before anything is opened", async () => {
+		const rig = await makeRig(harness);
+		await expect(openListen(rig, { model: "parakeet" })).rejects.toThrow(/scribe_v2_realtime/);
+		expect(rig.network.sockets).toHaveLength(0);
+	});
+
+	test("an already-aborted signal rejects before anything is opened", async () => {
+		const rig = await makeRig(harness);
+		await expect(openListen(rig, { model: "scribe_v2_realtime" }, AbortSignal.abort())).rejects.toThrow();
+		expect(rig.network.sockets).toHaveLength(0);
+	});
+
+	test("the profile's language reaches Scribe trimmed, a blank one does not, and the session is the engine's to close", async () => {
+		const withLanguage = await makeRig(harness);
+		const pending = openListen(withLanguage, { model: "scribe_v2_realtime", language: " de " });
+		await settle();
+		const socket = withLanguage.network.sockets[0]!;
+		socket.open();
+		socket.receive(STARTED);
+		const session = await pending;
+		expect(new URL(socket.url).searchParams.get("language_code")).toBe("de");
+		expect(socket.headers["xi-api-key"]).toBe(KEY);
+		session.close();
+		expect(socket.closed).toBe(true);
+
+		const blank = await makeRig(harness);
+		const blankPending = openListen(blank, { model: "scribe_v2_realtime", language: "  " });
+		await settle();
+		expect(new URL(blank.network.sockets[0]!.url).searchParams.has("language_code")).toBe(false);
+		blank.network.sockets[0]!.drop();
+		await blankPending.catch(() => undefined);
+	});
+});
+
+describe("what the manifest declares is what the provider implements", () => {
+	test("speak, listen and converse are each declared exactly when the provider can open them", async () => {
+		const manifest = JSON.parse(await Bun.file(join(import.meta.dir, "..", "plugin.json")).text());
+		const [declared] = manifest.extensions["ai.insodimension.dimension"].providers.speech;
+		const rig = await makeRig(harness);
+
+		expect(declared).toEqual({ id: "elevenlabs", speak: true, listen: true, converse: true });
+		expect(typeof rig.provider.openSpeak).toBe("function");
+		expect(typeof rig.provider.openListen).toBe("function");
+		expect(typeof rig.provider.openConverse).toBe("function");
+		const catalog = await rig.provider.catalog(rig.ctx);
+		expect(catalog.speak?.length).toBeGreaterThan(0);
+		expect(catalog.listen?.length).toBeGreaterThan(0);
+		expect(catalog.converse?.length).toBeGreaterThan(0);
 	});
 });
