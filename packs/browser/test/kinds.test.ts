@@ -66,7 +66,7 @@ describe("resolveKind: OMP's order of choice", () => {
 		["cmux comes after the relay", {}, { CMUX_SOCKET_PATH: "/tmp/cmux.sock", DIMENSION_BROWSER_RELAY: "1" }, { kind: "relay", cdpUrl: "http://127.0.0.1:9224" }],
 		["DIMENSION_BROWSER_CMUX=0 turns cmux off", {}, { CMUX_SOCKET_PATH: "/tmp/cmux.sock", DIMENSION_BROWSER_CMUX: "0" }, { kind: "headless", headless: true }],
 		["without a cmux socket the cmux flag alone selects nothing", {}, { DIMENSION_BROWSER_CMUX: "1" }, { kind: "headless", headless: true }],
-		["a saved profile is a Chromium the pack launches, whatever app says", { profile: "work", app: { cdp_url: "http://127.0.0.1:9222" } }, { DIMENSION_BROWSER_RELAY: "1" }, { kind: "headless", headless: true }],
+		["a saved profile is a Chromium the pack launches, whatever the environment names", { profile: "work" }, { DIMENSION_BROWSER_RELAY: "1", DIMENSION_BROWSER_CDP_URL: "http://127.0.0.1:9222", CMUX_SOCKET_PATH: "/tmp/cmux.sock" }, { kind: "headless", headless: true }],
 	];
 	for (const [name, request, env, expected] of rows) {
 		test(name, () => {
@@ -84,6 +84,23 @@ describe("resolveKind: OMP's order of choice", () => {
 		// would be typing into a throwaway without being told. The kill switch stays final, and the model hears it.
 		expect(() => resolveKind({ app: { relay: true } }, { ...ALLOWED, DIMENSION_BROWSER_RELAY: "0" }, CWD)).toThrow(/switched off/);
 		expect(resolveKind({}, { DIMENSION_BROWSER_RELAY: "0" }, CWD)).toEqual({ kind: "headless", headless: true });
+	});
+
+	test("a saved profile cannot be combined with an application: refused in a plain sentence, with the person's yes or without it, and an `app` that names nothing does not count", () => {
+		for (const app of [{ cdp_url: "http://127.0.0.1:9222" }, { path: ABS_EXE }, { relay: true }]) {
+			for (const env of [{}, ALLOWED]) {
+				let refusal = "";
+				try {
+					resolveKind({ profile: "work", app }, env, CWD);
+				} catch (error) {
+					refusal = (error as Error).message;
+				}
+				expect(refusal, JSON.stringify(app)).toMatch(/profile/);
+				expect(refusal, JSON.stringify(app)).not.toContain("code_needs_consent");
+			}
+		}
+		expect(resolveKind({ profile: "work", app: {} }, {}, CWD)).toEqual({ kind: "headless", headless: true });
+		expect(resolveKind({ profile: "work", app: { relay: false } }, {}, CWD)).toEqual({ kind: "headless", headless: true });
 	});
 
 	test("the words a cell is told match OMP's, and two requests for one tab name are the same browser only when they name the same endpoint", () => {

@@ -12,7 +12,6 @@ import { ToolAbortError, ToolError } from "../errors.js";
 import { CmuxBrowsers } from "../kinds/cmux/cmux-browsers.js";
 import { establishKind } from "../kinds/establish.js";
 import { describeKind, sameBrowserKind } from "../kinds/resolve.js";
-import { savedProfileRefusal } from "../refusals.js";
 
 /** OMP's DEFAULT_VIEWPORT (browser/launch.ts:23): a cell's browser is this big unless the cell asks for another. */
 export const CODE_VIEWPORT = { width: 1365, height: 768, scale: 1.25 } as const;
@@ -55,6 +54,8 @@ export interface CodeSeam {
   require(browserId: string): CodeSeamEntry;
   /** The live entry without stamping it as used or throwing: what a clock reads. */
   peek(browserId: string): CodeSeamEntry | undefined;
+  /** The slug a saved profile's name or label means: the runtime's own resolution, which throws what `open` would for an ambiguous or invalid name. Reads only. */
+  resolveProfile(raw: string): string;
   /** The session's open browsers, whoever opened them. */
   browsersOf(session: string): CodeSeamEntry[];
   viewOf(session: string): string | undefined;
@@ -144,10 +145,10 @@ export class RuntimeCodeBrowsers implements CodeBrowserPort {
   }
 
   async acquire(session: string, req: Parameters<CodeBrowserPort["acquire"]>[1], signal: AbortSignal): Promise<AcquiredBrowser> {
-    if (req.profile !== undefined) {
-      throw new BrowserRuntimeError("code_needs_consent", savedProfileRefusal(req.profile));
+    if (req.profile !== undefined && req.kind.kind !== "headless") {
+      throw new ToolError(`A saved profile opens its own Chrome, so it cannot be combined with ${describeKind(req.kind)}. Leave out app, or leave out profile.`);
     }
-    const key = `${session}\u0000${describeKind(req.kind)}`;
+    const key = `${session}\u0000${describeKind(req.kind)}\u0000${req.profile ?? ""}`;
     let launch = this.#launching.get(key);
     const starter = launch === undefined;
     if (launch === undefined) {
@@ -178,6 +179,11 @@ export class RuntimeCodeBrowsers implements CodeBrowserPort {
     }
   }
 
+  isProfileBrowser(browserId: string, profile: string): boolean {
+    const entry = this.#seam.peek(browserId);
+    return entry !== undefined && entry.profile !== null && entry.profile === this.#seam.resolveProfile(profile);
+  }
+
   /**
    * A browser this port made that no open waits for any more: the runtime closes it, and an application the pack started for it goes too (nothing else holds that application: no entry, no idle clock, no retry, and it
    * was started detached). `terminate` exists only for one this open started, so an application that was already running is only let go of.
@@ -192,6 +198,7 @@ export class RuntimeCodeBrowsers implements CodeBrowserPort {
   async #acquire(session: string, kind: BrowserKind, req: Parameters<CodeBrowserPort["acquire"]>[1], signal: AbortSignal): Promise<AcquiredBrowser> {
     if (kind.kind === "cmux") return await this.#cmux.acquire(session, kind, signal);
     if (kind.kind !== "headless") return await this.#acquireAttached(session, kind, req, signal);
+    if (req.profile !== undefined) return await this.#acquireSaved(session, kind, req.profile, req);
     const existing = this.#reusable(session);
     if (existing !== undefined) {
       const entry = this.#seam.require(existing.browserId);
@@ -205,6 +212,20 @@ export class RuntimeCodeBrowsers implements CodeBrowserPort {
     // The browser a cell made is the one `browser_view()` shows when the human has not opened another in this session.
     if (this.#seam.viewOf(session) === undefined) this.#seam.bindView(session, state.browserId);
     return { browserId: state.browserId, created: true, wsEndpoint: entry.driver.cdpEndpoint() };
+  }
+
+  async #acquireSaved(session: string, kind: BrowserKind, profile: string, req: Parameters<CodeBrowserPort["acquire"]>[1]): Promise<AcquiredBrowser> {
+    const size = req.viewport ?? CODE_VIEWPORT;
+    const lifetime = this.#lifetime(req.persist, kind);
+    const state = await this.#seam.open({ profile, engine: "chromium", viewport: { width: size.width, height: size.height } }, { caller: "model", session }, lifetime);
+    const entry = this.#seam.require(state.browserId);
+    const created = entry.code === lifetime;
+    if (!created) {
+      if (entry.code === undefined) entry.code = lifetime;
+      else if (req.persist !== undefined) entry.code.persist = req.persist || this.#never;
+    }
+    if (created && size.scale !== undefined && size.scale !== 1) await this.#seam.resize(state.browserId, { width: size.width, height: size.height }, size.scale);
+    return { browserId: state.browserId, created, wsEndpoint: entry.driver.cdpEndpoint() };
   }
 
   /**

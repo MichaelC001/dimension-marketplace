@@ -14,8 +14,7 @@
  *    headless token taken out, and its own User-Agent client hints, both read
  *    from that binary (`headfulIdentity`), never made up.
  *  - `--enable-automation`, puppeteer's "controlled by automated test
- *    software" switch, is dropped. Nothing is added in its place: no
- *    `AutomationControlled` blink switch, no stealth, no fingerprint changes.
+ *    software" switch, is dropped.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -259,6 +258,8 @@ export async function withTimeout<T>(promise: Promise<T>, ms: number, label: str
 	}
 }
 
+export const NAVIGATOR_WEBDRIVER_OFF_SWITCH = "--disable-blink-features=AutomationControlled";
+
 /**
  * Puppeteer launch options for the View's browser. `userAgent` (headless only;
  * a headful Chrome already sends its own) goes in as `--user-agent`: that
@@ -282,7 +283,7 @@ export function viewLaunchOptions(input: {
 		timeout: input.timeout,
 		protocolTimeout: BROWSER_PROTOCOL_TIMEOUT_MS,
 		defaultViewport: null,
-		args: [...input.args, ...(input.headless && input.userAgent ? [`--user-agent=${input.userAgent}`] : [])],
+		args: [...input.args, NAVIGATOR_WEBDRIVER_OFF_SWITCH, ...(input.headless && input.userAgent ? [`--user-agent=${input.userAgent}`] : [])],
 		ignoreDefaultArgs: ["--enable-automation"],
 	};
 }

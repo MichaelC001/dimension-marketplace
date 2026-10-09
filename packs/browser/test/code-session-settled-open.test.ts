@@ -92,6 +92,10 @@ class GatedBrowsers implements CodeBrowserPort {
     return { browserId: "b1", created: true, wsEndpoint: "ws://fake/b1" };
   }
 
+  isProfileBrowser(): boolean {
+    return false;
+  }
+
   async openTab(_browserId: string, o: { url?: string }): Promise<TabRef> {
     this.#serial += 1;
     return { tabId: `t${this.#serial}`, targetId: `t${this.#serial}`, url: o.url ?? "about:blank", title: "", active: true };

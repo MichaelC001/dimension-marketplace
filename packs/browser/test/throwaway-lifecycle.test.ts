@@ -16,9 +16,6 @@
  *  signal, so a session that goes quiet is told apart from a live one by calls,
  *  by what a person is looking at, and by nothing else.
  */
-import { randomBytes } from "node:crypto";
-import { z } from "zod";
-import { ARTIFACTORY_HOST_CONTEXT_EXTENSION_ID, ARTIFACTORY_HOST_CONTEXT_META_KEY, ARTIFACTORY_HOST_CONTEXT_READ_METHOD } from "@dimension/sdk/artifactory";
 import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -134,21 +131,7 @@ async function connect(runtime: BrowserRuntime, rootDir: string): Promise<(sessi
 	await mkdir(viewDir, { recursive: true });
 	await writeFile(join(viewDir, "index.html"), "<!doctype html><title>view</title>");
 	const server = await createBrowserServer({ runtime, viewDir, presets: [] });
-	const client = new Client({ name: "throwaway-lifecycle-test", version: "0.0.0" }, { capabilities: { extensions: { [ARTIFACTORY_HOST_CONTEXT_EXTENSION_ID]: {} } } });
-	const refs = new Map<string, string>();
-	const refFor = (sessionId: string) => {
-		let token = refs.get(sessionId);
-		if (!token) {
-			token = randomBytes(32).toString("hex");
-			refs.set(sessionId, token);
-		}
-		return { sessionId, token };
-	};
-	client.setRequestHandler(z.object({ method: z.literal(ARTIFACTORY_HOST_CONTEXT_READ_METHOD), params: z.object({ sessionId: z.string(), token: z.string() }) }), async request => {
-		const { sessionId, token } = request.params;
-		if (refs.get(sessionId) !== token) throw new Error("Unknown host context");
-		return { active: true, sessionId };
-	});
+	const client = new Client({ name: "throwaway-lifecycle-test", version: "0.0.0" });
 	const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
 	await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
 	clients.push(client);
@@ -156,7 +139,7 @@ async function connect(runtime: BrowserRuntime, rootDir: string): Promise<(sessi
 		const answer = (await client.callTool({
 			name,
 			arguments: args,
-			_meta: { "ai.insodimension/caller": "model", "ai.insodimension/session": { sessionId: session }, [ARTIFACTORY_HOST_CONTEXT_META_KEY]: refFor(session) },
+			_meta: { "ai.insodimension/caller": "model", "ai.insodimension/session": { sessionId: session } },
 		})) as RawToolAnswer;
 		return { ...(answer.isError ? { isError: true } : {}), text: answer.content[0]?.text ?? "", ...(answer.structuredContent === undefined ? {} : { structured: answer.structuredContent }) };
 	};
@@ -446,7 +429,7 @@ describeWithChrome("what a full pool never gives up", () => {
 			expect((await runtime.state(newcomer.browserId)).browserId).toBe(newcomer.browserId);
 			for (const browserId of saved) expect((await runtime.state(browserId)).profile).toMatch(/^keep-/);
 			// The lock is intact: another chat still cannot take a profile that is open.
-			expect((await refusal(() => runtime.open({ profile: "keep-1", viewport: VIEWPORT }, asSession("s9")))).code).toBe("profile_consent_required");
+			expect((await refusal(() => runtime.open({ profile: "keep-1", viewport: VIEWPORT }, asSession("s9")))).code).toBe("profile_held");
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);
@@ -789,7 +772,7 @@ describeWithChrome("a throwaway nobody calls", () => {
 			await Bun.sleep(3_000);
 
 			expect((await runtime.state(browserId)).profile).toBe("stays");
-			expect((await refusal(() => runtime.open({ profile: "stays", viewport: VIEWPORT }, asSession("s2")))).code).toBe("profile_consent_required");
+			expect((await refusal(() => runtime.open({ profile: "stays", viewport: VIEWPORT }, asSession("s2")))).code).toBe("profile_held");
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);

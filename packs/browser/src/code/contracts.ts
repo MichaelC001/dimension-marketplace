@@ -19,8 +19,6 @@
  *     DevTools ports that cannot be discovered from the profile directory. A pipe changes this rule (the worker would be handed a pipe, not a `wsEndpoint`); non-discoverable ports change only the host.
  *  4. Every text OMP prints is OMP's string (matrix rows C9, C10, C11, D8, D9, D16, D22).
  *  5. Errors thrown into the cell keep `name` and `message`; `isAbort` marks cancellation; `recoverTab` asks the host to rebuild the worker (a timeout and a cancel both set it).
- *  6. A saved profile never reaches `acquire` from code without the gate: `acquire` throws `code_needs_consent`. The refusal is {@link savedProfileRefusal}'s text. The gate is advisory against code that goes around
- *     the API (rule 3): it stops the model's `browser.open({ profile })`, not a cell that reads the profile's files.
  */
 
 // ---- the bridge: what the verbatim facade sends. OMP browser.ts:66-88, field for field, plus `profile`.
@@ -54,7 +52,7 @@ export interface BridgeRequest {
   all?: boolean;
   kill?: boolean;
   persist?: boolean;
-  /** NEW. A saved profile; refused unless the gate allows (§7.4.5). */
+  /** NEW. A saved profile, opened with no approval of the pack's own; refused with `app` and while another chat holds it (§7.4.5). */
   profile?: string;
 }
 export type BrowserKindTag = "headless" | "spawned" | "connected" | "relay" | "cmux";
@@ -186,6 +184,8 @@ export type RunStarted =
 // ---- L2 implements on BrowserRuntime (four hooks in runtime.ts); L2 and L4 consume.
 export interface CodeBrowserPort {
   acquire(session: string, req: { kind: BrowserKind; profile?: string; viewport?: { width: number; height: number; scale?: number }; persist?: boolean }, signal: AbortSignal): Promise<AcquiredBrowser>;
+  /** Whether `browserId` is the browser of the saved profile that `profile` (a name or a label, resolved as the runtime resolves it) means. Reads only: nothing is opened, held or adopted. Throws what opening that profile would for a name that is ambiguous or not a profile name. */
+  isProfileBrowser(browserId: string, profile: string): boolean;
   /**
    * Makes a tab of `browserId` the cell's. A browser the pack launched opens a new tab; one it only attached to (connected, spawned, relay) hands over the page the person has in front, or the one whose URL or title contains `target`
    * (`app.target`), as it is, and navigates it when `url` is given. A cmux browser opens a split at `url`, or attaches to the surface the request named.

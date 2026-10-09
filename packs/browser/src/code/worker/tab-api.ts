@@ -35,6 +35,19 @@ export function textClickLoopMs(actionOpMs: number): number {
   return Math.max(1, actionOpMs / 2, actionOpMs - TEXT_CLICK_LOOP_SLACK_MS);
 }
 
+const EVALUATE_HINT = " (tab.evaluate(string): a template literal resolves backslash escapes such as \\n before the page sees them; pass a function, tab.evaluate(() => ...), instead.)";
+
+/**
+ * A string given to `tab.evaluate` that fails to parse is nearly always a backslash the model's own template literal resolved first (`'\n'` became a real newline inside a page regex or string): the page then reports
+ * "missing /" or "invalid token", which names neither cause nor remedy, and the model retries the same shape. The error keeps the page's text and says what to do. A real page's error is an `Error` whose NAME is
+ * `SyntaxError` and whose message does not say so, so the name is what is read. A function never carries this hint: it is not parsed from the model's text in the page.
+ */
+export function withEvaluateHint(error: unknown, source: unknown): unknown {
+  if (typeof source !== "string" || !(error instanceof Error) || error.name !== "SyntaxError" || error.message.endsWith(EVALUATE_HINT)) return error;
+  error.message += EVALUATE_HINT;
+  return error;
+}
+
 /** The `tab` object `tab.run` code receives (and what a `call` chain is rendered against): OMP's helpers, with OMP's signatures. */
 export interface TabApi {
   readonly name: string;
@@ -609,6 +622,8 @@ export function createTabApi(c: TabApiContext, output: RunOutput, screenshots: P
           const realm = frame.mainRealm?.();
           const rest: unknown[] = args;
           return realm ? realm.evaluate(fn, ...rest) : page.evaluate(fn as never, ...(rest as never[]));
+        }).catch(error => {
+          throw withEvaluateHint(error, fn);
         }),
       ) as never,
     scrollIntoView: selector =>

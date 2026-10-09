@@ -9,13 +9,11 @@
  *  The real MCP server over an in-memory transport, the way a host reaches it.
  *  Chrome only where a browser has to be open to be held.
  */
-import { randomBytes } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { ARTIFACTORY_HOST_CONTEXT_EXTENSION_ID, ARTIFACTORY_HOST_CONTEXT_META_KEY, ARTIFACTORY_HOST_CONTEXT_READ_METHOD } from "@dimension/sdk/artifactory";
 import { z } from "zod";
 import type { App } from "@modelcontextprotocol/ext-apps";
 import { BrowserClient } from "../app/view/browser-client";
@@ -25,8 +23,6 @@ import { BROWSER_TEST_TIMEOUT_MS, createRoot, describeWithChrome, newRuntime, te
 import { ProfileStore } from "../src/store";
 
 const textOf = (result: ToolResult): string => result.content.map((block) => block.text ?? "").join("");
-/** What a model that names a saved profile the person has not approved is told: which profile, and that the person decides. A bare `isError` would also pass for a typo'd name. */
-const approvalRequest = (profile: string): string => `approve access to profile "${profile}"`;
 const CALLER = "ai.insodimension/caller";
 const SESSION = "ai.insodimension/session";
 const SPACES = "ai.insodimension/spaces";
@@ -91,26 +87,12 @@ async function connect(seed: (store: ProfileStore) => void = () => undefined): P
 	await mkdir(viewDir, { recursive: true });
 	await writeFile(join(viewDir, "index.html"), "<!doctype html><title>view</title>");
 	const server = await createBrowserServer({ runtime, viewDir, presets: [] });
-	const client = new Client({ name: "profiles-tool-test", version: "0.0.0" }, { capabilities: { extensions: { [ARTIFACTORY_HOST_CONTEXT_EXTENSION_ID]: {} } } });
+	const client = new Client({ name: "profiles-tool-test", version: "0.0.0" });
 	const reports: ConnectionReport[] = [];
 	client.fallbackNotificationHandler = async (notification) => {
 		const params = (notification as { method: string; params?: { report?: ConnectionReport | null } }).params;
 		if (notification.method === REPORT && params?.report) reports.push(params.report);
 	};
-	const refs = new Map<string, string>();
-	const refFor = (sessionId: string) => {
-		let token = refs.get(sessionId);
-		if (!token) {
-			token = randomBytes(32).toString("hex");
-			refs.set(sessionId, token);
-		}
-		return { sessionId, token };
-	};
-	client.setRequestHandler(z.object({ method: z.literal(ARTIFACTORY_HOST_CONTEXT_READ_METHOD), params: z.object({ sessionId: z.string(), token: z.string() }) }), async request => {
-		const { sessionId, token } = request.params;
-		if (refs.get(sessionId) !== token) throw new Error("Unknown host context");
-		return { active: true, sessionId };
-	});
 	const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
 	await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
 	clients.push(client);
@@ -119,7 +101,7 @@ async function connect(seed: (store: ProfileStore) => void = () => undefined): P
 			await client.callTool({
 				name,
 				arguments: args,
-				...(who === undefined ? {} : { _meta: { [CALLER]: who.caller, ...(who.session === undefined ? {} : { [SESSION]: { sessionId: who.session }, [ARTIFACTORY_HOST_CONTEXT_META_KEY]: refFor(who.session) }) } }),
+				...(who === undefined ? {} : { _meta: { [CALLER]: who.caller, ...(who.session === undefined ? {} : { [SESSION]: { sessionId: who.session } }) } }),
 			}),
 		);
 	return { call, client, store, reports };
@@ -160,7 +142,7 @@ describe("what each caller is sent", () => {
 		store.ensureProfile("personal");
 	};
 
-	test("a model gets one compact text and no structured copy, and no site until the person approves; the View gets the same list as structured content, with each site's account", async () => {
+	test("a model gets one compact text and no structured copy, with each site it is signed in to and no account; the View gets the same list as structured content, with each site's account", async () => {
 		const { call } = await connect(seed);
 		const asModel = await call("browser_profiles", {}, MODEL);
 		expect(asModel.isError).toBeFalsy();
@@ -168,8 +150,7 @@ describe("what each caller is sent", () => {
 		const listed = listOf(asModel);
 		expect(listed.profiles.map((profile) => profile.name)).toEqual(["personal", "work"]);
 		const seenAt = new Date(NOW - 2 * 3_600_000).toISOString();
-		// Which sites a profile is signed in to is the person's to share: until they approve this profile for the chat, the model is sent none.
-		expect(listed.profiles[1]).toEqual({ name: "work", label: "Work", colour: "blue", heldBy: null, sites: [] });
+		expect(listed.profiles[1]).toEqual({ name: "work", label: "Work", colour: "blue", heldBy: null, sites: [{ site: "x.com", signedIn: true, seenAt }] });
 
 		const asView = await call("browser_profiles", {}, VIEW);
 		expect(asView.structuredContent).toEqual({
@@ -178,45 +159,26 @@ describe("what each caller is sent", () => {
 				{ name: "work", label: "Work", colour: "blue", heldBy: null, sites: [{ site: "x.com", account: "@acmeco", signedIn: true, seenAt }] },
 			],
 			browsers: [],
-			consents: [],
 		});
-		// An unstamped call (no host) is treated as a model.
 		expect((await call("browser_profiles", {})).structuredContent).toBeUndefined();
-
-		// The person approves "work" for this chat. The model is then sent that profile's site entry whole: where, whether signed in, and when that was seen, and no account.
-		const refused = await call("browser_open", { profile: "work" }, MODEL);
-		expect(refused.isError).toBe(true);
-		expect(textOf(refused)).toContain(approvalRequest("work"));
-		expect((await call("browser_profile_consent", { name: "work", decision: "allow", scope: "chat" }, VIEW)).isError).toBeFalsy();
-		expect(listOf(await call("browser_profiles", {}, MODEL)).profiles[1]).toEqual({ name: "work", label: "Work", colour: "blue", heldBy: null, sites: [{ site: "x.com", signedIn: true, seenAt }] });
 	});
 
-	test("a model is never told whose account a site is — no email, no handle — even once the person approves the profile; the View is", async () => {
+	test("a model is never told whose account a site is — no email, no handle; the View is", async () => {
 		const { call } = await connect((store) => {
 			store.recordConnection("work", "google.com", { signedIn: true, account: "work@acme.com", observedAt: NOW - 1_000 });
 			store.recordConnection("work", "x.com", { signedIn: true, account: "@acmeco", observedAt: NOW - 2_000 });
 			store.recordConnection("work", "bsky.app", { signedIn: true, account: "@acme.bsky.social", observedAt: NOW - 3_000 });
 			store.recordConnection("work", "reddit.com", { signedIn: true, observedAt: NOW - 4_000 });
 		});
-		// The person approves "work" for this chat: the model may then see which sites are signed in, never whose.
-		const refused = await call("browser_open", { profile: "work" }, MODEL);
-		expect(refused.isError).toBe(true);
-		expect(textOf(refused)).toContain(approvalRequest("work"));
-		expect((await call("browser_profile_consent", { name: "work", decision: "allow", scope: "chat" }, VIEW)).isError).toBeFalsy();
 		for (const who of [MODEL, undefined]) {
 			const text = textOf(await call("browser_profiles", {}, who));
 			expect(text).not.toMatch(/acme|@/i);
-			// What an approved model can still act on: which sites are signed in, and when that was seen. A call that carries no host stamp is not that model and is sent none.
-			expect(listOf({ content: [{ type: "text", text }] }).profiles[0]?.sites.map((site) => [site.site, site.signedIn])).toEqual(
-				who === MODEL
-					? [
-							["google.com", true],
-							["x.com", true],
-							["bsky.app", true],
-							["reddit.com", true],
-						]
-					: [],
-			);
+			expect(listOf({ content: [{ type: "text", text }] }).profiles[0]?.sites.map((site) => [site.site, site.signedIn])).toEqual([
+				["google.com", true],
+				["x.com", true],
+				["bsky.app", true],
+				["reddit.com", true],
+			]);
 		}
 		const view = JSON.stringify((await call("browser_profiles", {}, VIEW)).structuredContent);
 		for (const account of ["work@acme.com", "@acmeco", "@acme.bsky.social"]) expect(view).toContain(account);
@@ -233,12 +195,6 @@ describe("what each caller is sent", () => {
 
 	test("the connection report and the lists agree: the report the host is sent carries the View's label, colour, sites and accounts, and the sites and sign-in state the agent reads", async () => {
 		const { call, reports } = await connect(seed);
-		// The person approves "work" for this chat: from then on the agent reads its sites too.
-		const refused = await call("browser_open", { profile: "work" }, MODEL);
-		expect(refused.isError).toBe(true);
-		expect(textOf(refused)).toContain(approvalRequest("work"));
-		expect((await call("browser_profile_consent", { name: "work", decision: "allow", scope: "chat" }, VIEW)).isError).toBeFalsy();
-		// The first report is sent once the host has initialised.
 		await waitUntil("the first report", () => reports, (seen) => seen.length > 0);
 		const agent = listOf(await call("browser_profiles", {}, MODEL)).profiles;
 		const person = ViewList.parse((await call("browser_profiles", {}, VIEW)).structuredContent).profiles;
@@ -259,13 +215,9 @@ describeWithChrome("opening a profile by the name an agent was given", () => {
 	const errorOf = (result: ToolResult): string | undefined => (result.isError ? textOf(result) : undefined);
 
 	test(
-		"a consented label opens it, the same chat reuses its browser, and an unconsented stranger gets no browser id",
+		"a label opens its profile with no approval step, the same chat reuses its browser, and another chat is refused without its browser id",
 		async () => {
 			const { call } = await connect((store) => store.saveMeta("acme-work", { label: "Work Account" }));
-			const unapproved = await call("browser_open", { profile: "work account" }, MODEL);
-			expect(unapproved.isError).toBe(true);
-			expect(textOf(unapproved)).toContain(approvalRequest("acme-work"));
-			expect((await call("browser_profile_consent", { name: "acme-work", decision: "allow", scope: "chat" }, VIEW)).isError).toBeFalsy();
 			const first = await call("browser_open", { profile: "work account" }, MODEL);
 			expect(first.structuredContent).toMatchObject({ profile: "acme-work" });
 			const again = await call("browser_open", { profile: "ACME-WORK" }, MODEL);
@@ -274,6 +226,7 @@ describeWithChrome("opening a profile by the name an agent was given", () => {
 			const stranger = await call("browser_open", { profile: "Work Account" }, { caller: "model", session: "s-2" });
 			expect(stranger.isError).toBe(true);
 			const other = errorOf(stranger);
+			expect(other).toContain("is already open");
 			expect(other).not.toContain(String(first.structuredContent?.browserId));
 
 			expect(listOf(await call("browser_profiles", {}, { caller: "model", session: "s-2" })).profiles.map((profile) => profile.heldBy)).toEqual(["another chat"]);
@@ -301,10 +254,6 @@ describeWithChrome("opening a profile by the name an agent was given", () => {
 		"opening a profile after the browser build under it changed tells the person once, in the open result alone",
 		async () => {
 			const { call, store } = await connect((s) => s.saveMeta("work", { app: "msedge" }));
-			const unapproved = await call("browser_open", { profile: "work" }, MODEL);
-			expect(unapproved.isError).toBe(true);
-			expect(textOf(unapproved)).toContain(approvalRequest("work"));
-			expect((await call("browser_profile_consent", { name: "work", decision: "allow", scope: "chat" }, VIEW)).isError).toBeFalsy();
 			const opened = await call("browser_open", { profile: "work" }, MODEL);
 			// The test browser is a `custom` build; the profile was last run in Edge.
 			expect(String(opened.structuredContent?.notice)).toMatch(/last opened in Edge; this browser is a custom browser/);

@@ -275,10 +275,10 @@ describeWithChrome("asking for a profile by name", () => {
 			expect((await runtime.open({ profile: "work", viewport: VIEWPORT }, person)).browserId).toBe(first.browserId);
 
 			const refused = await codeOf(runtime.open({ profile: "work", viewport: VIEWPORT }, { caller: "model", session: "s-2" }));
-			expect(refused.code).toBe("profile_consent_required");
+			expect(refused.code).toBe("profile_held");
 			expect(refused.message).not.toContain(first.browserId);
 			// An unstamped call is nobody's chat either.
-			expect((await codeOf(runtime.open({ profile: "work", viewport: VIEWPORT }))).code).toBe("profile_consent_required");
+			expect((await codeOf(runtime.open({ profile: "work", viewport: VIEWPORT }))).code).toBe("profile_held");
 
 			// Parallel tool calls from one chat on a profile that is still starting: one browser.
 			const both = await Promise.all([runtime.open({ profile: "fresh", viewport: VIEWPORT }, chat), runtime.open({ profile: "fresh", viewport: VIEWPORT }, chat)]);
@@ -289,13 +289,13 @@ describeWithChrome("asking for a profile by name", () => {
 	);
 
 	test(
-		"an unconsented model cannot open a profile held by the human or learn its browser id",
+		"a model cannot open a profile held by the human or learn its browser id",
 		async () => {
 			const { rootDir } = await rootWith((store) => store.ensureProfile("personal"));
 			const runtime = newRuntime(rootDir);
 			const held = await runtime.open({ profile: "personal", viewport: VIEWPORT }, { caller: "app", session: "s-view" });
 			const refused = await codeOf(runtime.open({ profile: "personal", viewport: VIEWPORT }, { caller: "model", session: "s-other" }));
-			expect(refused.code).toBe("profile_consent_required");
+			expect(refused.code).toBe("profile_held");
 			expect(refused.message).not.toContain(held.browserId);
 		},
 		BROWSER_TEST_TIMEOUT_MS,
@@ -365,7 +365,7 @@ describeWithChrome("asking for a profile by name", () => {
 	);
 
 	test(
-		"an unconsented chat is refused before ownership checks while a human's profile is launching or already open",
+		"a chat is refused while a human's profile is launching or already open, and told nothing of the browser's id",
 		async () => {
 			const { rootDir } = await rootWith((store) => store.ensureProfile("work"));
 			const runtime = newRuntime(rootDir);
@@ -373,10 +373,10 @@ describeWithChrome("asking for a profile by name", () => {
 			const starting = runtime.open({ profile: "work", viewport: VIEWPORT }, person);
 			// Same tick: the first open has not finished launching.
 			const byChat = await codeOf(runtime.open({ profile: "work", viewport: VIEWPORT }, { caller: "model", session: "s-other" }));
-			expect(byChat.code).toBe("profile_consent_required");
+			expect(byChat.code).toBe("profile_held");
 			const first = await starting;
 			const again = await codeOf(runtime.open({ profile: "work", viewport: VIEWPORT }, { caller: "model", session: "s-other" }));
-			expect(again.code).toBe("profile_consent_required");
+			expect(again.code).toBe("profile_held");
 			expect(again.message).not.toContain(first.browserId);
 			expect(byChat.message).not.toContain(first.browserId);
 		},

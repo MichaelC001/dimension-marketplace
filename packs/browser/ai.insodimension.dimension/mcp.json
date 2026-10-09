@@ -2,7 +2,7 @@
   "mcpServers": {
     "browser": {
       "command": "node",
-      "args": ["app/server.mjs"],
+      "args": ["app/launch.mjs"],
       "env": { "PYTHONIOENCODING": "utf-8" }
     }
   }

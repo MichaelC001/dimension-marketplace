@@ -590,6 +590,7 @@ kbd {
 /* hero omnibox (start page, blank tab) */
 
 .bx-omni[data-size="hero"] {
+	flex: none;
 	height: 52px;
 	margin: 0;
 	padding: 0 16px;
@@ -819,34 +820,6 @@ kbd {
 .bx-pmenu-control-btn:focus-visible {
 	outline: none;
 	box-shadow: 0 0 0 2px var(--fr-accent);
-}
-
-.bx-consent {
-	flex-wrap: wrap;
-	justify-content: flex-start;
-}
-
-.bx-consent .bx-pmenu-control-text {
-	flex-basis: 100%;
-	overflow-wrap: anywhere;
-}
-
-.bx-consent .bx-consent-opens {
-	flex-basis: 100%;
-	overflow-wrap: anywhere;
-}
-
-.bx-consent .bx-consent-opens code {
-	font-family: var(--fr-font-mono, ui-monospace, monospace);
-}
-
-.bx-consent .bx-pmenu-control-btn {
-	height: auto;
-	min-height: 28px;
-	max-width: 100%;
-	padding-block: 6px;
-	white-space: normal;
-	overflow-wrap: anywhere;
 }
 
 /* The menu's actions stay at its bottom edge while a long list scrolls beneath them. */

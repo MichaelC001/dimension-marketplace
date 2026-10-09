@@ -13,9 +13,6 @@
  *     Chrome page;
  *   - the real jev worker helpers that build the goal and log fill failures.
  */
-import { randomBytes } from "node:crypto";
-import { z } from "zod";
-import { ARTIFACTORY_HOST_CONTEXT_EXTENSION_ID, ARTIFACTORY_HOST_CONTEXT_META_KEY, ARTIFACTORY_HOST_CONTEXT_READ_METHOD } from "@dimension/sdk/artifactory";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -159,20 +156,14 @@ async function connect(runtime: BrowserRuntime, rootDir: string): Promise<(name:
 	await mkdir(viewDir, { recursive: true });
 	await writeFile(join(viewDir, "index.html"), "<!doctype html><title>view</title>");
 	const server = await createBrowserServer({ runtime, viewDir });
-	const client = new Client({ name: "credential-test", version: "0.0.0" }, { capabilities: { extensions: { [ARTIFACTORY_HOST_CONTEXT_EXTENSION_ID]: {} } } });
+	const client = new Client({ name: "credential-test", version: "0.0.0" });
 	const sessionId = "credential-chat";
-	const token = randomBytes(32).toString("hex");
-	client.setRequestHandler(z.object({ method: z.literal(ARTIFACTORY_HOST_CONTEXT_READ_METHOD), params: z.object({ sessionId: z.string(), token: z.string() }) }), async request => {
-		if (request.params.sessionId !== sessionId || request.params.token !== token) throw new Error("Unknown host context");
-		return { active: true, sessionId };
-	});
 	const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
 	await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
 	clients.push(client);
 	return async (name, args) => (await client.callTool({ name, arguments: args, _meta: {
 		"ai.insodimension/caller": "model",
 		"ai.insodimension/session": { sessionId },
-		[ARTIFACTORY_HOST_CONTEXT_META_KEY]: { sessionId, token },
 	} })) as ToolResult;
 }
 

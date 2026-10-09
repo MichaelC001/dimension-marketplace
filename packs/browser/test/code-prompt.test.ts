@@ -1,7 +1,7 @@
 /** WHAT BREAKS IN THE PRODUCT IF THIS GOES RED: `prompt.md` is the model's only knowledge of the API it writes code against (doc 77 §7.4.2). A method it names
  *  that the facade does not have is a TypeError the model meets on its first try; a method the facade has that it does not name is a feature the model never
  *  uses (the owner's rule: nothing OMP's browser has is lost); and a description that grows past the budget costs every turn of every session that is offered
- *  the tool (doc 77 §7.9, amended 2026-10-05: the model set at or under 2,200 tokens, o200k; see MODEL_SET_TOKENS).
+ *  the tool (doc 77 §7.9: the model set within MODEL_SET_TOKENS, o200k).
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -12,7 +12,6 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { countTokens } from "gpt-tokenizer/encoding/o200k_base";
 import { CodeCell } from "../src/code/cell/cell.js";
 import type { CodeHostPort } from "../src/code/contracts.js";
-import { savedProfileRefusal } from "../src/code/refusals.js";
 import { BROWSER_RUN_DESCRIPTION } from "../src/code/tool.js";
 import type { BrowserRuntimePort } from "../src/contracts.js";
 import { createBrowserServer } from "../src/server.js";
@@ -86,8 +85,7 @@ describe("the API prompt.md names is the API the facade has", () => {
     const listed = [...new Set([...namedBy(openPart).filter(name => name !== "open"), ...namedBy(closePart)])];
     const schema = Object.keys(bridgeRequestSchema.shape);
     for (const name of listed) expect(schema).toContain(name);
-    // What the bridge takes besides: `action` is the call itself, `code`/`fn`/`args`/`chain` belong to run and call, `profile` is the pack's saved-profile option (refused in this tool).
-    const notOptions = ["action", "code", "fn", "args", "chain", "profile"];
+    const notOptions = ["action", "code", "fn", "args", "chain"];
     expect(listed.sort()).toEqual(schema.filter(name => !notOptions.includes(name)).sort());
   });
 
@@ -136,16 +134,10 @@ describe("what the model is made to read", () => {
       .map(tool => ({ name: tool.name, tokens: countTokens(JSON.stringify({ name: tool.name, description: tool.description, input_schema: tool.inputSchema })) }));
   }
 
-  /**
-   * The budgets. Doc 77 §7.9 set the code-space model set at 1,711 tokens and `browser_run`'s description at OMP's 1,089 (o200k).
-   * AMENDED 2026-10-05 by the release lead's ruling (the owner was told; not separately signed): the saved-profile route from code
-   * (`profileTool`, a zod union of about 500 tokens of input schema) is part of the code space, so a code or build space pays 457
-   * tokens more every turn than §7.9 allowed: 2,168 against 1,711, still below the 2,383 before the port, and `browser_run`'s
-   * description alone is 1,128 against OMP's 1,089. Each budget is that measured number plus a fixed margin of 32, so the NEXT growth
-   * still fails here. A lean `profileTool` schema that gives the tokens back is filed for 0.11.2.
-   */
-  const MODEL_SET_TOKENS = 2_200;
-  const DESCRIPTION_TOKENS = 1_160;
+  // OMP's 1,783 and 1,099, plus 32 of slack, plus 72 for the guidance the transcripts asked for (1,171 - 1,099): read an unseen page with ariaSnapshot first, no sleep after goto, a function (not a string) for evaluate, and no
+  // sign-in proven by an avatar. Two measured jobs (2026-10-08) spent 11 of 18 browser_run calls without them; each call costs more than these tokens cost a turn.
+  const MODEL_SET_TOKENS = 1_783 + 32 + 72;
+  const DESCRIPTION_TOKENS = 1_099 + 32 + 72;
 
   test("the model of a code space is offered browser_run, browser_view, browser_read, browser_profiles and browser_close, and their text is within the budget", async () => {
     const tools = await modelTools();
@@ -158,31 +150,26 @@ describe("what the model is made to read", () => {
     expect(countTokens(BROWSER_RUN_DESCRIPTION)).toBeLessThanOrEqual(DESCRIPTION_TOKENS);
   });
 
-  /** Everything a code-space model is told about a saved profile, wherever it meets it: the tool's text, the refusal a cell is answered with, and the skill's reference for the code tool. */
-  const savedProfileTexts = (): Record<string, string> => ({
+  const modelReads = (): Record<string, string> => ({
     description,
-    refusal: savedProfileRefusal("work"),
     "skills/browser/references/code.md": readFileSync(new URL("../skills/browser/references/code.md", import.meta.url), "utf8"),
   });
 
-  test("every tool the saved-profile instructions tell a code-space model to call is a tool its space is offered", async () => {
+  test("every tool the description and the skill's code reference tell a code-space model to call is a tool its space is offered", async () => {
     const offered = (await modelTools()).map(tool => tool.name);
-    for (const [where, text] of Object.entries(savedProfileTexts())) {
+    for (const [where, text] of Object.entries(modelReads())) {
       for (const name of identifiers(text, /\b(browser_\w+)\b/g)) expect(offered, `${where} names ${name}`).toContain(name);
     }
   });
 
-  test("the description, the refusal and the skill send the model down the same route for a saved profile: an argument browser_run really has", async () => {
+  test("every argument they tell the model to pass to a tool is one that tool takes", async () => {
     await connected;
-    const run = (await client.listTools()).tools.find(tool => tool.name === "browser_run");
-    const route = "profileTool";
-    expect(Object.keys(run?.inputSchema.properties ?? {})).toContain(route);
-    for (const [where, text] of Object.entries(savedProfileTexts())) expect(text, where).toContain(route);
-  });
-
-  test("nothing the model reads claims that code cannot use a saved profile: a cell runs as the user with full Node, which the person's approval does not limit", () => {
-    // The shape of the claim, not its words: a saved profile, "cannot" and code/cell in one sentence, either way round, or "no code cell can ...".
-    const claim = /\bsaved profiles?\b[^.]*\b(?:cannot|can't)\b[^.]*\b(?:code|cell)\b|\b(?:code|cell)\b[^.]*\b(?:cannot|can't)\b[^.]*\bsaved profiles?\b|\bno [\w ]*(?:code|cell)[\w ]* can\b[^.]*\bsaved profile/i;
-    for (const [where, text] of Object.entries(savedProfileTexts())) expect(text, where).not.toMatch(claim);
+    const { tools } = await client.listTools();
+    for (const [where, text] of Object.entries(modelReads())) {
+      for (const match of text.matchAll(/\b(browser_\w+)\(\{\s*(\w+)/g)) {
+        const takes = Object.keys(tools.find(tool => tool.name === match[1])?.inputSchema.properties ?? {});
+        expect(takes, `${where}: ${match[1]}({ ${match[2]} })`).toContain(match[2]!);
+      }
+    }
   });
 });
