@@ -15,6 +15,19 @@ export function stripAudioTags(text: string): string {
 	return text.replace(TAG_PATTERN, " ").replace(/\s+/g, " ").trim();
 }
 
+const CAPTION_TAG_BODY = "[a-z][a-z ,'-]{0,31}";
+const GLUED_CAPTION_TAG = new RegExp(`(?<=\\w)\\[${CAPTION_TAG_BODY}\\](?=\\w)`, "g");
+const BOUNDED_CAPTION_TAG = new RegExp(`(?<!\\w)\\[(${CAPTION_TAG_BODY})\\](?![(\\[])[ \\t]*`, "g");
+const NOT_DIRECTIONS = new Set(["sic", "note", "emphasis added", "citation needed"]);
+
+/** Remove the voice's directions from a caption: a lowercase tag between spaces or punctuation, or glued between two words. Code (`arr[i]`), links (`[text](url)`), upper-case markers (`[TODO]`) and editorial marks (`[sic]`) stay, and line breaks are kept. */
+export function stripCaptionTags(text: string): string {
+	return text
+		.replace(GLUED_CAPTION_TAG, " ")
+		.replace(BOUNDED_CAPTION_TAG, (whole, body: string) => (NOT_DIRECTIONS.has(body) ? whole : ""))
+		.trim();
+}
+
 interface TimedChar {
 	ch: string;
 	s: number;

@@ -208,6 +208,12 @@ describe("what the agent sends becomes neutral events", () => {
 		{ name: "a response that is only a tag", sent: "[laughs]", shown: "" },
 		{ name: "text with no tag", sent: "Let me look at the build.", shown: "Let me look at the build." },
 		{ name: "a bracket that is not a tag", sent: "Items [0] and [3] are done.", shown: "Items [0] and [3] are done." },
+		{ name: "an editorial mark", sent: "He wrote [sic] twice.", shown: "He wrote [sic] twice." },
+		{ name: "an upper-case marker", sent: "[TODO] fix the build.", shown: "[TODO] fix the build." },
+		{ name: "an index in code", sent: "Read arr[i] then stop.", shown: "Read arr[i] then stop." },
+		{ name: "a markdown link", sent: "See [the docs](https://x.y) now.", shown: "See [the docs](https://x.y) now." },
+		{ name: "line breaks around a removed tag", sent: "Line one.\n[happy] Line two.", shown: "Line one.\nLine two." },
+		{ name: "two tags in a row", sent: "[happy] [laughs] Hi there.", shown: "Hi there." },
 	])("the agent's caption never carries the voice's directions: $name", async ({ sent, shown }) => {
 		const rig = await makeLiveRig(harness);
 		const { socket, log } = await startCall(rig);
