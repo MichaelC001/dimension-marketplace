@@ -539,7 +539,20 @@
 				"hunyuan",
 				"tripo",
 				"provider"
-			]
+			],
+			"providers": {
+				"generation": [
+					{
+						"id": "fal",
+						"produces": [
+							"model3d",
+							"parts",
+							"retopo"
+						],
+						"runtime": "api"
+					}
+				]
+			}
 		},
 		{
 			"name": "gen-local-3d",
@@ -563,7 +576,18 @@
 				"trellis",
 				"local",
 				"provider"
-			]
+			],
+			"providers": {
+				"generation": [
+					{
+						"id": "local-3d",
+						"produces": [
+							"model3d"
+						],
+						"runtime": "local"
+					}
+				]
+			}
 		},
 		{
 			"name": "gen-tripo",
@@ -586,7 +610,21 @@
 				"rigging",
 				"retopology",
 				"provider"
-			]
+			],
+			"providers": {
+				"generation": [
+					{
+						"id": "tripo",
+						"produces": [
+							"model3d",
+							"parts",
+							"rig",
+							"retopo"
+						],
+						"runtime": "api"
+					}
+				]
+			}
 		},
 		{
 			"name": "gen-wavespeed",
@@ -612,7 +650,18 @@
 				"trellis",
 				"hunyuan",
 				"provider"
-			]
+			],
+			"providers": {
+				"generation": [
+					{
+						"id": "wavespeed",
+						"produces": [
+							"model3d"
+						],
+						"runtime": "api"
+					}
+				]
+			}
 		},
 		{
 			"name": "github",
@@ -1077,7 +1126,17 @@
 			"requires": {
 				"dimension": ">=0.11.1"
 			},
-			"channel": "canary"
+			"channel": "canary",
+			"providers": {
+				"speech": [
+					{
+						"id": "elevenlabs",
+						"speak": true,
+						"listen": true,
+						"converse": true
+					}
+				]
+			}
 		},
 		{
 			"name": "swiss-knife",
