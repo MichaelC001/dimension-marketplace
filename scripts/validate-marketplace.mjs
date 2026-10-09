@@ -14,7 +14,7 @@ import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { readPackBlock, readPackManifestResult } from "./pack-manifest.mjs";
+import { projectCatalogProviders, readPackBlock, readPackManifestResult } from "./pack-manifest.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const catalogPath = join(root, ".dimension-plugin", "marketplace.json");
@@ -59,6 +59,19 @@ if (!Array.isArray(catalog.plugins) || catalog.plugins.length === 0) {
 	errors.push("catalog.plugins must be a non-empty array");
 }
 
+function providerProblems(label, plugin, manifest) {
+	const declared = projectCatalogProviders(manifest?.providers);
+	const listed = projectCatalogProviders(plugin.providers);
+	const problems = [
+		...declared.problems.map(problem => `plugin "${label}": the pack's manifest ${problem}`),
+		...listed.problems.map(problem => `plugin "${label}": the catalog entry's ${problem}`),
+	];
+	if (JSON.stringify(plugin.providers) !== JSON.stringify(declared.providers)) {
+		problems.push(`plugin "${label}": the catalog's providers differ from what the pack's manifest declares (run scripts/build-index.ts)`);
+	}
+	return problems;
+}
+
 const seen = new Set();
 for (const plugin of catalog.plugins ?? []) {
 	const label = plugin?.name ?? "<unnamed>";
@@ -89,6 +102,7 @@ for (const plugin of catalog.plugins ?? []) {
 			// The field names below are unchanged — the source moved, the shape
 			// did not.
 			const { manifest, source: manifestFile, error: manifestError } = readPackManifestResult(packDir);
+			if (!manifestError) errors.push(...providerProblems(label, plugin, manifest));
 			if (manifestError) {
 				errors.push(`plugin "${label}": ${manifestFile} ${manifestError}`);
 			} else if (manifest) {
