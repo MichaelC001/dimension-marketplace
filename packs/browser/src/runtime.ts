@@ -200,6 +200,7 @@ const NAMED_KEYS: Record<string, true> = {
 };
 /** View input that can press the site's own submit; scroll, hover and navigation cannot. */
 const TOUCHING_KINDS: Partial<Record<BrowserAction["kind"], true>> = { click: true, press: true, type: true, insert: true };
+const BROWSER_WIDE_STEPS: Partial<Record<BatchStep["kind"], true>> = { resize: true };
 /** The same, for the direct channel: a press, a release, a key or pasted text can press the site's own submit; a move and a wheel cannot. */
 const touchesPage = (event: AdmittedInput): boolean => event.kind !== "wheel" && !(event.kind === "mouse" && event.type === "move");
 
@@ -1334,6 +1335,8 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			// The host says a session ended: its holds go with it. It says so rarely — a chat that dies unheard is the idle clock's business, as it has
 			// always been — but what it does say must not leave a hold standing that would block the last live chat's close.
 			for (const key of [...entry.openers.keys()]) if (entry.openers.get(key)?.session === sessionId) entry.openers.delete(key);
+			for (const [tabId, owner] of [...entry.tabOwners]) if (owner === sessionId) entry.tabOwners.delete(tabId);
+			entry.tabActive.delete(sessionId);
 		}
 	}
 
@@ -1815,7 +1818,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			const action = this.admit(entry, input, caller);
 			let done: Dispatched;
 			try {
-				await this.pinTab(entry, caller, session, action.kind === "navigate", guard);
+				if (!BROWSER_WIDE_STEPS[action.kind]) await this.pinTab(entry, caller, session, action.kind === "navigate", guard);
 				done = await this.dispatch(entry, action, caller, guard);
 			} catch (error) {
 				done = { status: "failed", error: describe(error) };
@@ -1909,10 +1912,12 @@ export class BrowserRuntime implements BrowserRuntimePort {
 
 	private async runStep(entry: Entry, step: PlannedStep, caller: ToolCaller | undefined, session: string | undefined, valueChars: number, guard: EffectGuard | undefined, pin: (opening: boolean) => Promise<void>): Promise<StepDone> {
 		if (step.kind === "tab") return await this.tabStep(entry, step, session, guard);
-		try {
-			await pin(step.kind === "navigate");
-		} catch (error) {
-			return { status: "failed", error: describe(error) };
+		if (!BROWSER_WIDE_STEPS[step.kind]) {
+			try {
+				await pin(step.kind === "navigate");
+			} catch (error) {
+				return { status: "failed", error: describe(error) };
+			}
 		}
 		switch (step.kind) {
 			case "wait":

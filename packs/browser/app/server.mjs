@@ -13873,6 +13873,7 @@ var NAMED_KEYS = {
   Space: true
 };
 var TOUCHING_KINDS = { click: true, press: true, type: true, insert: true };
+var BROWSER_WIDE_STEPS = { resize: true };
 var touchesPage = (event) => event.kind !== "wheel" && !(event.kind === "mouse" && event.type === "move");
 function openerKey(opener) {
   return `${opener.caller ?? ""} ${opener.session ?? ""}`;
@@ -14749,6 +14750,8 @@ var BrowserRuntime = class {
     for (const entry of [...this.byId.values()]) {
       if (entry.worker && entry.taskSession === sessionId) await this.stopTask(entry);
       for (const key of [...entry.openers.keys()]) if (entry.openers.get(key)?.session === sessionId) entry.openers.delete(key);
+      for (const [tabId, owner] of [...entry.tabOwners]) if (owner === sessionId) entry.tabOwners.delete(tabId);
+      entry.tabActive.delete(sessionId);
     }
   }
   requireOpen(browserId, allowClosed = false) {
@@ -15173,7 +15176,7 @@ ${host}`;
       const action = this.admit(entry, input, caller);
       let done;
       try {
-        await this.pinTab(entry, caller, session, action.kind === "navigate", guard);
+        if (!BROWSER_WIDE_STEPS[action.kind]) await this.pinTab(entry, caller, session, action.kind === "navigate", guard);
         done = await this.dispatch(entry, action, caller, guard);
       } catch (error) {
         done = { status: "failed", error: describe3(error) };
@@ -15263,10 +15266,12 @@ ${host}`;
   }
   async runStep(entry, step, caller, session, valueChars, guard, pin) {
     if (step.kind === "tab") return await this.tabStep(entry, step, session, guard);
-    try {
-      await pin(step.kind === "navigate");
-    } catch (error) {
-      return { status: "failed", error: describe3(error) };
+    if (!BROWSER_WIDE_STEPS[step.kind]) {
+      try {
+        await pin(step.kind === "navigate");
+      } catch (error) {
+        return { status: "failed", error: describe3(error) };
+      }
     }
     switch (step.kind) {
       case "wait":

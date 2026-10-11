@@ -126,8 +126,10 @@ The browser has real tabs. `browser_state` lists them (`tabs[]` with `id`,
   tab leaves a blank tab, never a closed browser.
 - A shared profile's tabs belong to the chat that opened each: activating or
   closing another chat's tab is refused `not_your_tab`, and a page step with no
-  tab of your own is refused `no_tab_of_yours` (open one first). The user's View
-  may switch or close any tab; the browser is theirs.
+  tab of your own is refused `no_tab_of_yours` — except a navigate, which opens
+  your tab there (as `browser_open` with a `url` does); open one first with
+  `tab new` otherwise. The user's View may switch or close any tab; the browser
+  is theirs.
 - Your steps run on your own active tab, whatever tab is showing. A read
   (`browser_state`, `browser_snapshot`, `browser_screenshot`) shows the tab the
   browser has active right now, so on a shared profile judge a page by the
