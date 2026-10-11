@@ -46,7 +46,8 @@ shows the user a browser you hold.
   always that profile, and a label two profiles share, or a name that is none, is
   refused with the choices: ask the user which, never guess. A profile is one
   Chrome that chats share, each on its own tabs: one another chat or the user
-  already has open is joined, and you get a tab of your own on it. Name a new
+  already has open is joined, and you open tabs of your own on it (`browser_open`
+  with a `url` gives you the first). Name a new
   one (`personal`, `work`, `jobs`…) only to keep logins and cookies across
   sessions. Profiles never share cookies.
 - `engine`: `chromium` (default, a Chrome this pack manages) or `chrome-relay`

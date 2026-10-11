@@ -469,16 +469,16 @@ export interface BrowserRuntimePort {
    * Not queued behind page work, so it never waits for a navigation.
    */
   input(browserId: string, events: unknown): Promise<void>;
-  tab(browserId: string, request: TabRequest, caller?: ToolCaller): Promise<BrowserState>;
+  tab(browserId: string, request: TabRequest, caller?: ToolCaller, session?: string): Promise<BrowserState>;
   resize(browserId: string, viewport: Viewport, scale?: number): Promise<BrowserState>;
   snapshot(browserId: string, guard?: EffectGuard): Promise<{ state: BrowserState; text: string }>;
   /** Refused (`publish_pending`) while a publish awaits confirmation, unless `caller` is "app". */
-  act(browserId: string, action: BrowserAction, caller?: ToolCaller, guard?: EffectGuard): Promise<ActionResult>;
+  act(browserId: string, action: BrowserAction, caller?: ToolCaller, session?: string, guard?: EffectGuard): Promise<ActionResult>;
   /**
    * 1..MAX_BATCH_STEPS steps under ONE lock: refused once (`task_running`, `publish_pending`, as `act`), every step
    * validated before the first runs (`bad_action`/`bad_wait`), then run in order until one is not `completed`.
    */
-  actMany(browserId: string, steps: readonly BatchStep[], caller?: ToolCaller, guard?: EffectGuard): Promise<ActManyResult>;
+  actMany(browserId: string, steps: readonly BatchStep[], caller?: ToolCaller, session?: string, guard?: EffectGuard): Promise<ActManyResult>;
   /** A picture for a model: webp, at most 1024 CSS px on its longest edge, never retained (so never annotatable). Read like `snapshot`. */
   shot(browserId: string, request?: ShotRequest, guard?: EffectGuard): Promise<ModelShot>;
   /** The active tab's log entries since the last call (which marks them read); `[]` when nothing is new. For a model's reads, never the View's. */

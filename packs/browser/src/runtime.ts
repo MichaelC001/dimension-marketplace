@@ -313,6 +313,8 @@ interface Entry {
 	 * which tabs they own (doc 77 §7.4.5): each session opens its own and never drives another's.
 	 */
 	openers: Map<string, BrowserOpener>;
+	tabOwners: Map<string, string>;
+	tabActive: Map<string, string>;
 	/** The person has the wheel: an agent's page actions are refused until they hand it back (`control`). Reads are not. */
 	takenOver: boolean;
 	/** Gives the wheel back when no View has been joined to this browser's stream for VIEW_GONE_MS (`watchWheel`). */
@@ -642,11 +644,16 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				url: initial.url, title: initial.title,
 				driver, release, revision: 1, frames: [], queue: Promise.resolve(), inputQueue: Promise.resolve(), closed: false,
 				task: null, worker: null, publish: null, secrets: new Set(), logRead: 0, logNoticed: 0, annotations,
-				openers, takenOver: false, starting: null, agentAt: null, look: profile === null || profile === RELAY_PROFILE ? null : resolveProfileMeta(profile, this.store.meta(profile)),
+				openers, tabOwners: new Map(), tabActive: new Map(), takenOver: false, starting: null, agentAt: null, look: profile === null || profile === RELAY_PROFILE ? null : resolveProfileMeta(profile, this.store.meta(profile)),
 				probe: { timer: undefined, running: undefined, again: false },
 				lastUsed: performance.now(), viewers: 0, pending: 0, cells: 0, idle: undefined, retiring: undefined, closeFailed: false, wheelTimer: undefined,
 			};
 			if (code !== undefined) entry.code = code;
+			const launchingSession = opener.session;
+			if (launchingSession !== undefined) {
+				for (const tab of initial.tabs) entry.tabOwners.set(tab.id, launchingSession);
+				if (initial.activeTabId !== "") entry.tabActive.set(launchingSession, initial.activeTabId);
+			}
 			if (profile !== null && profile !== RELAY_PROFILE) entry.notice = this.touchProfile(profile, driver.app);
 			this.byId.set(entry.browserId, entry);
 			if (profile !== null) this.byProfile.set(profile, entry);
@@ -1723,37 +1730,75 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		});
 	}
 
-	/**
-	 * Open, show or close a tab. Every read and action works on the active tab.
-	 * Refused while a task runs: switching away from the agent's tab hides it,
-	 * and a hidden tab renders no frames, so the agent would stall.
-	 */
-	async tab(browserId: string, request: TabRequest, caller?: ToolCaller): Promise<BrowserState> {
+	private ownTab(entry: Entry, session: string | undefined, tabId: string): void {
+		if (session === undefined || tabId === "") return;
+		const held = entry.tabOwners.get(tabId);
+		if (held !== undefined && held !== session) return;
+		entry.tabOwners.set(tabId, session);
+		entry.tabActive.set(session, tabId);
+	}
+
+	private async adoptActiveTab(entry: Entry, session: string | undefined): Promise<void> {
+		if (session === undefined) return;
+		const state = await entry.driver.state().catch(() => null);
+		if (state !== null) this.ownTab(entry, session, state.activeTabId);
+	}
+
+	private forgetTab(entry: Entry, tabId: string): void {
+		entry.tabOwners.delete(tabId);
+		for (const [session, active] of [...entry.tabActive]) if (active === tabId) entry.tabActive.delete(session);
+	}
+
+	private async pinTab(entry: Entry, caller: ToolCaller | undefined, session: string | undefined, opening: boolean, guard?: EffectGuard): Promise<void> {
+		if (session === undefined || caller === "app") return;
+		const mine = entry.tabActive.get(session);
+		if (mine !== undefined) {
+			try {
+				await entry.driver.activateTab(mine, guard);
+				return;
+			} catch (error) {
+				if (!(error instanceof ActionNotDispatched)) throw error;
+				entry.tabActive.delete(session);
+			}
+		}
+		if (opening) {
+			this.ownTab(entry, session, (await entry.driver.openTab(undefined, undefined, guard)).tabId);
+			return;
+		}
+		fail("no_tab_of_yours", "no_tab_of_yours: you have no tab of your own in this browser; each chat works on its own tabs. Open one first with tab new ({\"kind\":\"tab\",\"op\":\"new\"}) or browser_open with a url.");
+	}
+
+	async tab(browserId: string, request: TabRequest, caller?: ToolCaller, session?: string): Promise<BrowserState> {
 		const entry = this.require(browserId);
-		const planned = admitTab(request);
 		return await this.serialize(entry, async () => {
 			admitCaller(entry, caller);
-			await this.applyTab(entry, planned);
-			return this.redact(entry, await this.buildState(entry));
+			await this.adoptActiveTab(entry, session);
+			const planned = admitTab(request, entry, session, caller);
+			await this.applyTab(entry, planned, session);
+			const state = await this.buildState(entry);
+			this.ownTab(entry, session, state.activeTabId);
+			return this.redact(entry, state);
 		});
 	}
 
 	/** One admitted tab operation, under the caller's lock. */
-	private async applyTab(entry: Entry, tab: PlannedTab, guard?: EffectGuard): Promise<void> {
+	private async applyTab(entry: Entry, tab: PlannedTab, session?: string, guard?: EffectGuard): Promise<void> {
 		switch (tab.op) {
-			case "new":
-				try {
-					await entry.driver.openTab(tab.url, undefined, guard);
-				} catch (error) {
+			case "new": {
+				const made = await entry.driver.openTab(tab.url, undefined, guard).catch((error: unknown) => {
 					if (error instanceof ActionNotDispatched) throw error;
-					fail("tab_failed", `opening a new tab${tab.url ? ` at ${tab.url}` : ""} failed: ${describe(error)}`);
-				}
+					return fail("tab_failed", `opening a new tab${tab.url ? ` at ${tab.url}` : ""} failed: ${describe(error)}`);
+				});
+				this.ownTab(entry, session, made.tabId);
 				break;
+			}
 			case "activate":
 				await entry.driver.activateTab(tab.tabId as string, guard);
+				this.ownTab(entry, session, tab.tabId as string);
 				break;
 			case "close":
 				await entry.driver.closeTab(tab.tabId as string, guard);
+				this.forgetTab(entry, tab.tabId as string);
 				break;
 		}
 	}
@@ -1762,17 +1807,29 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	// Actions
 	// -----------------------------------------------------------------------
 
-	async act(browserId: string, input: BrowserAction, caller?: ToolCaller, guard?: EffectGuard): Promise<ActionResult> {
+	async act(browserId: string, input: BrowserAction, caller?: ToolCaller, session?: string, guard?: EffectGuard): Promise<ActionResult> {
 		const entry = this.require(browserId);
 		return await this.serialize(entry, async () => {
 			admitCaller(entry, caller);
-			const done = await this.dispatch(entry, this.admit(entry, input, caller), caller, guard);
-			if (done.status !== "completed") {
-				return this.redact(entry, { status: done.status, error: done.error, state: await this.buildState(entry).catch(() => this.staleState(entry)) });
+			await this.adoptActiveTab(entry, session);
+			const action = this.admit(entry, input, caller);
+			let done: Dispatched;
+			try {
+				await this.pinTab(entry, caller, session, action.kind === "navigate", guard);
+				done = await this.dispatch(entry, action, caller, guard);
+			} catch (error) {
+				done = { status: "failed", error: describe(error) };
 			}
+			if (done.status !== "completed") {
+				const failedState = await this.buildState(entry).catch(() => this.staleState(entry));
+				this.ownTab(entry, session, failedState.activeTabId);
+				return this.redact(entry, { status: done.status, error: done.error, state: failedState });
+			}
+			const state = await this.buildState(entry);
+			this.ownTab(entry, session, state.activeTabId);
 			return this.redact(entry, {
 				status: "completed" as const,
-				state: await this.buildState(entry),
+				state,
 				...(done.credential ? { credential: done.credential } : {}),
 				...(done.dialogs ? { dialogs: done.dialogs } : {}),
 			});
@@ -1785,12 +1842,13 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	 * page; steps run in order until one is not `completed` or the time budget is spent (a host times a call out, and a
 	 * caller that never heard back would send the same submit again). The state is read once, at the end.
 	 */
-	async actMany(browserId: string, steps: readonly BatchStep[], caller?: ToolCaller, guard?: EffectGuard): Promise<ActManyResult> {
+	async actMany(browserId: string, steps: readonly BatchStep[], caller?: ToolCaller, session?: string, guard?: EffectGuard): Promise<ActManyResult> {
 		const entry = this.require(browserId);
 		if (!Array.isArray(steps) || steps.length < 1 || steps.length > MAX_BATCH_STEPS) fail("bad_action", `actions must be 1-${MAX_BATCH_STEPS} steps`);
 		return await this.serialize(entry, async () => {
 			admitCaller(entry, caller);
-			const plan = steps.map((step) => this.admitStep(entry, step, caller));
+			await this.adoptActiveTab(entry, session);
+			const plan = steps.map((step) => this.admitStep(entry, step, caller, session));
 			const budget = this.options.actBudgetMs ?? ACT_BUDGET_MS;
 			const deadline = Date.now() + budget;
 			const outcomes: StepOutcome[] = [];
@@ -1798,6 +1856,12 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			// What the batch's eval steps may still return between them.
 			let valueChars = MAX_EVAL_RESULT_CHARS;
 			let stopped: StepDone | undefined;
+			let pinned = false;
+			const pin = async (opening: boolean): Promise<void> => {
+				if (pinned) return;
+				pinned = true;
+				await this.pinTab(entry, caller, session, opening, guard);
+			};
 			for (const [index, step] of plan.entries()) {
 				const authorization = guard?.();
 				if (authorization !== undefined) await authorization;
@@ -1811,7 +1875,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 					stopped = { status: "timeout", error: `the batch's time budget (${budget} ms) ran out after ${index} of ${plan.length} steps; send the remaining steps in a new call` };
 					break;
 				}
-				const done = await this.runStep(entry, step, caller, valueChars, guard);
+				const done = await this.runStep(entry, step, caller, session, valueChars, guard, pin);
 				valueChars -= done.value?.length ?? 0;
 				outcomes.push({
 					kind: step.kind,
@@ -1828,6 +1892,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				}
 			}
 			const state = stopped ? await this.buildState(entry).catch(() => this.staleState(entry)) : await this.buildState(entry);
+			this.ownTab(entry, session, state.activeTabId);
 			const completed = outcomes.filter((outcome) => outcome.status === "completed").length;
 			const newErrors = caller === "app" ? 0 : this.noticeLogs(entry);
 			return this.redact(entry, {
@@ -1842,12 +1907,16 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		}, { guard });
 	}
 
-	private runStep(entry: Entry, step: PlannedStep, caller: ToolCaller | undefined, valueChars: number, guard?: EffectGuard): Promise<StepDone> {
+	private async runStep(entry: Entry, step: PlannedStep, caller: ToolCaller | undefined, session: string | undefined, valueChars: number, guard: EffectGuard | undefined, pin: (opening: boolean) => Promise<void>): Promise<StepDone> {
+		if (step.kind === "tab") return await this.tabStep(entry, step, session, guard);
+		try {
+			await pin(step.kind === "navigate");
+		} catch (error) {
+			return { status: "failed", error: describe(error) };
+		}
 		switch (step.kind) {
 			case "wait":
 				return this.waitStep(entry, step);
-			case "tab":
-				return this.tabStep(entry, step, guard);
 			case "eval":
 				return this.evalStep(entry, step, valueChars);
 			default:
@@ -1870,13 +1939,13 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		return action;
 	}
 
-	private admitStep(entry: Entry, step: BatchStep, caller: ToolCaller | undefined): PlannedStep {
+	private admitStep(entry: Entry, step: BatchStep, caller: ToolCaller | undefined, session: string | undefined): PlannedStep {
 		if (!step || typeof step !== "object") fail("bad_action", "each step must be an object");
 		switch (step.kind) {
 			case "wait":
 				return { kind: "wait", ...validateWait(step) };
 			case "tab":
-				return admitTab(step);
+				return admitTab(step, entry, session, caller);
 			case "eval":
 				return this.admitEval(entry, step);
 			default:
@@ -1948,9 +2017,9 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	}
 
 	/** One admitted tab operation: a failure is a status, as for an action. */
-	private async tabStep(entry: Entry, step: PlannedTab, guard?: EffectGuard): Promise<StepDone> {
+	private async tabStep(entry: Entry, step: PlannedTab, session: string | undefined, guard?: EffectGuard): Promise<StepDone> {
 		try {
-			await this.applyTab(entry, step, guard);
+			await this.applyTab(entry, step, session, guard);
 		} catch (error) {
 			return { status: error instanceof ActionNotDispatched ? "failed" : "unknown", error: describe(error) };
 		}
@@ -2463,12 +2532,17 @@ export class BrowserRuntime implements BrowserRuntimePort {
 // Validation
 // ---------------------------------------------------------------------------
 
-/** A tab request checked before anything runs: its shape, its op, and the tabId that activate and close need. */
-function admitTab(request: TabRequest): PlannedTab {
+function admitTab(request: TabRequest, entry: Entry, session: string | undefined, caller: ToolCaller | undefined): PlannedTab {
 	if (!request || typeof request !== "object") fail("bad_tab", "tab request must be an object");
 	if (request.op !== "new" && request.op !== "activate" && request.op !== "close") fail("bad_tab", "op must be one of: new, activate, close");
 	if (request.op !== "new" && (typeof request.tabId !== "string" || request.tabId.length === 0 || request.tabId.length > MAX_TAB_ID_CHARS)) {
 		fail("bad_tab", `${request.op} needs the tabId from state.tabs`);
+	}
+	if (request.op !== "new" && caller !== "app" && session !== undefined) {
+		const held = entry.tabOwners.get(request.tabId as string);
+		if (held !== undefined && held !== session) {
+			fail("not_your_tab", "not_your_tab: a tab another chat opened is theirs to drive; each chat opens, activates and closes only its own tabs. Open one of yours with tab new ({\"kind\":\"tab\",\"op\":\"new\"}) and work there.");
+		}
 	}
 	const url = request.op === "new" && request.url !== undefined ? normalizeAction({ kind: "navigate", url: request.url }).url : undefined;
 	return { kind: "tab", op: request.op, ...(request.tabId === undefined ? {} : { tabId: request.tabId }), ...(url === undefined ? {} : { url }) };

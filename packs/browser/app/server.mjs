@@ -14135,6 +14135,8 @@ var BrowserRuntime = class {
         logNoticed: 0,
         annotations,
         openers,
+        tabOwners: /* @__PURE__ */ new Map(),
+        tabActive: /* @__PURE__ */ new Map(),
         takenOver: false,
         starting: null,
         agentAt: null,
@@ -14150,6 +14152,11 @@ var BrowserRuntime = class {
         wheelTimer: void 0
       };
       if (code !== void 0) entry.code = code;
+      const launchingSession = opener.session;
+      if (launchingSession !== void 0) {
+        for (const tab of initial.tabs) entry.tabOwners.set(tab.id, launchingSession);
+        if (initial.activeTabId !== "") entry.tabActive.set(launchingSession, initial.activeTabId);
+      }
       if (profile2 !== null && profile2 !== RELAY_PROFILE) entry.notice = this.touchProfile(profile2, driver.app);
       this.byId.set(entry.browserId, entry);
       if (profile2 !== null) this.byProfile.set(profile2, entry);
@@ -15088,53 +15095,99 @@ ${host}`;
       return this.redact(entry, await this.buildState(entry));
     });
   }
-  /**
-   * Open, show or close a tab. Every read and action works on the active tab.
-   * Refused while a task runs: switching away from the agent's tab hides it,
-   * and a hidden tab renders no frames, so the agent would stall.
-   */
-  async tab(browserId, request, caller) {
+  ownTab(entry, session, tabId) {
+    if (session === void 0 || tabId === "") return;
+    const held = entry.tabOwners.get(tabId);
+    if (held !== void 0 && held !== session) return;
+    entry.tabOwners.set(tabId, session);
+    entry.tabActive.set(session, tabId);
+  }
+  async adoptActiveTab(entry, session) {
+    if (session === void 0) return;
+    const state = await entry.driver.state().catch(() => null);
+    if (state !== null) this.ownTab(entry, session, state.activeTabId);
+  }
+  forgetTab(entry, tabId) {
+    entry.tabOwners.delete(tabId);
+    for (const [session, active] of [...entry.tabActive]) if (active === tabId) entry.tabActive.delete(session);
+  }
+  async pinTab(entry, caller, session, opening, guard) {
+    if (session === void 0 || caller === "app") return;
+    const mine = entry.tabActive.get(session);
+    if (mine !== void 0) {
+      try {
+        await entry.driver.activateTab(mine, guard);
+        return;
+      } catch (error) {
+        if (!(error instanceof ActionNotDispatched)) throw error;
+        entry.tabActive.delete(session);
+      }
+    }
+    if (opening) {
+      this.ownTab(entry, session, (await entry.driver.openTab(void 0, void 0, guard)).tabId);
+      return;
+    }
+    fail("no_tab_of_yours", 'no_tab_of_yours: you have no tab of your own in this browser; each chat works on its own tabs. Open one first with tab new ({"kind":"tab","op":"new"}) or browser_open with a url.');
+  }
+  async tab(browserId, request, caller, session) {
     const entry = this.require(browserId);
-    const planned = admitTab(request);
     return await this.serialize(entry, async () => {
       admitCaller(entry, caller);
-      await this.applyTab(entry, planned);
-      return this.redact(entry, await this.buildState(entry));
+      await this.adoptActiveTab(entry, session);
+      const planned = admitTab(request, entry, session, caller);
+      await this.applyTab(entry, planned, session);
+      const state = await this.buildState(entry);
+      this.ownTab(entry, session, state.activeTabId);
+      return this.redact(entry, state);
     });
   }
   /** One admitted tab operation, under the caller's lock. */
-  async applyTab(entry, tab, guard) {
+  async applyTab(entry, tab, session, guard) {
     switch (tab.op) {
-      case "new":
-        try {
-          await entry.driver.openTab(tab.url, void 0, guard);
-        } catch (error) {
+      case "new": {
+        const made = await entry.driver.openTab(tab.url, void 0, guard).catch((error) => {
           if (error instanceof ActionNotDispatched) throw error;
-          fail("tab_failed", `opening a new tab${tab.url ? ` at ${tab.url}` : ""} failed: ${describe3(error)}`);
-        }
+          return fail("tab_failed", `opening a new tab${tab.url ? ` at ${tab.url}` : ""} failed: ${describe3(error)}`);
+        });
+        this.ownTab(entry, session, made.tabId);
         break;
+      }
       case "activate":
         await entry.driver.activateTab(tab.tabId, guard);
+        this.ownTab(entry, session, tab.tabId);
         break;
       case "close":
         await entry.driver.closeTab(tab.tabId, guard);
+        this.forgetTab(entry, tab.tabId);
         break;
     }
   }
   // -----------------------------------------------------------------------
   // Actions
   // -----------------------------------------------------------------------
-  async act(browserId, input, caller, guard) {
+  async act(browserId, input, caller, session, guard) {
     const entry = this.require(browserId);
     return await this.serialize(entry, async () => {
       admitCaller(entry, caller);
-      const done = await this.dispatch(entry, this.admit(entry, input, caller), caller, guard);
-      if (done.status !== "completed") {
-        return this.redact(entry, { status: done.status, error: done.error, state: await this.buildState(entry).catch(() => this.staleState(entry)) });
+      await this.adoptActiveTab(entry, session);
+      const action = this.admit(entry, input, caller);
+      let done;
+      try {
+        await this.pinTab(entry, caller, session, action.kind === "navigate", guard);
+        done = await this.dispatch(entry, action, caller, guard);
+      } catch (error) {
+        done = { status: "failed", error: describe3(error) };
       }
+      if (done.status !== "completed") {
+        const failedState = await this.buildState(entry).catch(() => this.staleState(entry));
+        this.ownTab(entry, session, failedState.activeTabId);
+        return this.redact(entry, { status: done.status, error: done.error, state: failedState });
+      }
+      const state = await this.buildState(entry);
+      this.ownTab(entry, session, state.activeTabId);
       return this.redact(entry, {
         status: "completed",
-        state: await this.buildState(entry),
+        state,
         ...done.credential ? { credential: done.credential } : {},
         ...done.dialogs ? { dialogs: done.dialogs } : {}
       });
@@ -15146,18 +15199,25 @@ ${host}`;
    * page; steps run in order until one is not `completed` or the time budget is spent (a host times a call out, and a
    * caller that never heard back would send the same submit again). The state is read once, at the end.
    */
-  async actMany(browserId, steps, caller, guard) {
+  async actMany(browserId, steps, caller, session, guard) {
     const entry = this.require(browserId);
     if (!Array.isArray(steps) || steps.length < 1 || steps.length > MAX_BATCH_STEPS) fail("bad_action", `actions must be 1-${MAX_BATCH_STEPS} steps`);
     return await this.serialize(entry, async () => {
       admitCaller(entry, caller);
-      const plan = steps.map((step) => this.admitStep(entry, step, caller));
+      await this.adoptActiveTab(entry, session);
+      const plan = steps.map((step) => this.admitStep(entry, step, caller, session));
       const budget = this.options.actBudgetMs ?? ACT_BUDGET_MS;
       const deadline = Date.now() + budget;
       const outcomes = [];
       const dialogs = [];
       let valueChars = MAX_EVAL_RESULT_CHARS;
       let stopped;
+      let pinned = false;
+      const pin = async (opening) => {
+        if (pinned) return;
+        pinned = true;
+        await this.pinTab(entry, caller, session, opening, guard);
+      };
       for (const [index, step] of plan.entries()) {
         const authorization = guard?.();
         if (authorization !== void 0) await authorization;
@@ -15170,7 +15230,7 @@ ${host}`;
           stopped = { status: "timeout", error: `the batch's time budget (${budget} ms) ran out after ${index} of ${plan.length} steps; send the remaining steps in a new call` };
           break;
         }
-        const done = await this.runStep(entry, step, caller, valueChars, guard);
+        const done = await this.runStep(entry, step, caller, session, valueChars, guard, pin);
         valueChars -= done.value?.length ?? 0;
         outcomes.push({
           kind: step.kind,
@@ -15187,6 +15247,7 @@ ${host}`;
         }
       }
       const state = stopped ? await this.buildState(entry).catch(() => this.staleState(entry)) : await this.buildState(entry);
+      this.ownTab(entry, session, state.activeTabId);
       const completed = outcomes.filter((outcome) => outcome.status === "completed").length;
       const newErrors = caller === "app" ? 0 : this.noticeLogs(entry);
       return this.redact(entry, {
@@ -15200,12 +15261,16 @@ ${host}`;
       });
     }, { guard });
   }
-  runStep(entry, step, caller, valueChars, guard) {
+  async runStep(entry, step, caller, session, valueChars, guard, pin) {
+    if (step.kind === "tab") return await this.tabStep(entry, step, session, guard);
+    try {
+      await pin(step.kind === "navigate");
+    } catch (error) {
+      return { status: "failed", error: describe3(error) };
+    }
     switch (step.kind) {
       case "wait":
         return this.waitStep(entry, step);
-      case "tab":
-        return this.tabStep(entry, step, guard);
       case "eval":
         return this.evalStep(entry, step, valueChars);
       default:
@@ -15224,13 +15289,13 @@ ${host}`;
     }
     return action;
   }
-  admitStep(entry, step, caller) {
+  admitStep(entry, step, caller, session) {
     if (!step || typeof step !== "object") fail("bad_action", "each step must be an object");
     switch (step.kind) {
       case "wait":
         return { kind: "wait", ...validateWait(step) };
       case "tab":
-        return admitTab(step);
+        return admitTab(step, entry, session, caller);
       case "eval":
         return this.admitEval(entry, step);
       default:
@@ -15291,9 +15356,9 @@ ${host}`;
     return held ? { status: "completed" } : { status: "timeout", error: `wait timed out after ${step.timeoutMs} ms` };
   }
   /** One admitted tab operation: a failure is a status, as for an action. */
-  async tabStep(entry, step, guard) {
+  async tabStep(entry, step, session, guard) {
     try {
-      await this.applyTab(entry, step, guard);
+      await this.applyTab(entry, step, session, guard);
     } catch (error) {
       return { status: error instanceof ActionNotDispatched ? "failed" : "unknown", error: describe3(error) };
     }
@@ -15766,11 +15831,17 @@ ${host}`;
     return entry.profile;
   }
 };
-function admitTab(request) {
+function admitTab(request, entry, session, caller) {
   if (!request || typeof request !== "object") fail("bad_tab", "tab request must be an object");
   if (request.op !== "new" && request.op !== "activate" && request.op !== "close") fail("bad_tab", "op must be one of: new, activate, close");
   if (request.op !== "new" && (typeof request.tabId !== "string" || request.tabId.length === 0 || request.tabId.length > MAX_TAB_ID_CHARS)) {
     fail("bad_tab", `${request.op} needs the tabId from state.tabs`);
+  }
+  if (request.op !== "new" && caller !== "app" && session !== void 0) {
+    const held = entry.tabOwners.get(request.tabId);
+    if (held !== void 0 && held !== session) {
+      fail("not_your_tab", 'not_your_tab: a tab another chat opened is theirs to drive; each chat opens, activates and closes only its own tabs. Open one of yours with tab new ({"kind":"tab","op":"new"}) and work there.');
+    }
   }
   const url = request.op === "new" && request.url !== void 0 ? normalizeAction({ kind: "navigate", url: request.url }).url : void 0;
   return { kind: "tab", op: request.op, ...request.tabId === void 0 ? {} : { tabId: request.tabId }, ...url === void 0 ? {} : { url } };
@@ -16829,7 +16900,7 @@ async function createBrowserServer(options = {}) {
       fail("publish_pending", "a post awaits confirmation on this browser; post or cancel it before opening a page in it");
     }
     await access(extra, state.browserId);
-    const navigated = await runtime.act(state.browserId, action, opener.caller, accessGuard(extra, state.browserId));
+    const navigated = await runtime.act(state.browserId, action, opener.caller, opener.session, accessGuard(extra, state.browserId));
     assertAccess(extra, state.browserId);
     if (navigated.status !== "completed") throw new Error(`Opened, but navigating to ${url} ${navigated.status}: ${navigated.error}`);
     return navigated.state;
@@ -16931,14 +17002,14 @@ async function createBrowserServer(options = {}) {
     }
   });
   server2.registerTool("browser_act", {
-    description: "Run 1-25 steps in order in the active tab, stopping at the first that does not complete; returns the page's url and title. Steps: navigate (http/https), back, forward, reload, stop, click (selector, or x,y in the viewport; button, clickCount 1-3), hover (x,y), type (replaces the value), insert (into the focused element), select (option value or text), press (key), scroll, resize (width, height), wait (selector visible | text on the page | url substring; timeoutMs default 5000, max 15000), tab (op new | activate | close; tabId from browser_state; url for new), eval (JS in the page's main world; value returned as JSON, at most 8000 chars; throwaway browsers only). A click or Enter that navigates waits up to 1.5 s. JS dialogs are answered (alert/beforeunload accepted, else dismissed) and listed. Status failed: that step did nothing. unknown: sent, then errored, so it may have taken effect: look before retrying a submit. timeout: a wait ran out, or the batch's time budget (send the rest again). newErrors: new page errors (read them in browser_state). A selector may start `@<ref> ` (from browser_snapshot) to reach an iframe. " + (jev ? "Refused while a task runs on the browser. " : "") + "Passwords: type or insert with generatePassword: true (sign-up: mints, saves per profile and origin, types) or useSavedPassword: true (login) instead of text; needs a profile.",
+    description: "Run 1-25 steps in order in your chat's own active tab (a shared profile's tabs belong to the chat that opened them; tab steps drive only your own), stopping at the first that does not complete; returns the page's url and title. Steps: navigate (http/https), back, forward, reload, stop, click (selector, or x,y in the viewport; button, clickCount 1-3), hover (x,y), type (replaces the value), insert (into the focused element), select (option value or text), press (key), scroll, resize (width, height), wait (selector visible | text on the page | url substring; timeoutMs default 5000, max 15000), tab (op new | activate | close; tabId from browser_state; url for new), eval (JS in the page's main world; value returned as JSON, at most 8000 chars; throwaway browsers only). A click or Enter that navigates waits up to 1.5 s. JS dialogs are answered (alert/beforeunload accepted, else dismissed) and listed. Status failed: that step did nothing. unknown: sent, then errored, so it may have taken effect: look before retrying a submit. timeout: a wait ran out, or the batch's time budget (send the rest again). newErrors: new page errors (read them in browser_state). A selector may start `@<ref> ` (from browser_snapshot) to reach an iframe. " + (jev ? "Refused while a task runs on the browser. " : "") + "Passwords: type or insert with generatePassword: true (sign-up: mints, saves per profile and origin, types) or useSavedPassword: true (login) instead of text; needs a profile.",
     inputSchema: { browserId: capability, actions: z3.array(stepSchema).min(1).max(MAX_BATCH_STEPS) },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     _meta: stepMeta
   }, async ({ browserId, actions }, extra) => {
     const answer = await respond(extra, async () => {
       await access(extra, browserId);
-      const outcome = await runtime.actMany(browserId, actions, callerOf(extra), accessGuard(extra, browserId));
+      const outcome = await runtime.actMany(browserId, actions, callerOf(extra), sessionOf(extra), accessGuard(extra, browserId));
       assertAccess(extra, browserId);
       return { text: actText(outcome), structured: outcome, isError: outcome.status === "failed" || outcome.status === "unknown" };
     });
