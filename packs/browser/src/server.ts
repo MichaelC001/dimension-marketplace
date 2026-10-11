@@ -372,7 +372,7 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
       fail("publish_pending", "a post awaits confirmation on this browser; post or cancel it before opening a page in it");
     }
     await access(extra, state.browserId);
-    const navigated = await runtime.act(state.browserId, action, opener.caller, accessGuard(extra, state.browserId));
+    const navigated = await runtime.act(state.browserId, action, opener.caller, opener.session, accessGuard(extra, state.browserId));
     assertAccess(extra, state.browserId);
     if (navigated.status !== "completed") throw new Error(`Opened, but navigating to ${url} ${navigated.status}: ${navigated.error}`);
     return navigated.state;
@@ -471,14 +471,14 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     } catch (error) { return failure(error); }
   });
   server.registerTool("browser_act", {
-    description: "Run 1-25 steps in order in the active tab, stopping at the first that does not complete; returns the page's url and title. Steps: navigate (http/https), back, forward, reload, stop, click (selector, or x,y in the viewport; button, clickCount 1-3), hover (x,y), type (replaces the value), insert (into the focused element), select (option value or text), press (key), scroll, resize (width, height), wait (selector visible | text on the page | url substring; timeoutMs default 5000, max 15000), tab (op new | activate | close; tabId from browser_state; url for new), eval (JS in the page's main world; value returned as JSON, at most 8000 chars; throwaway browsers only). A click or Enter that navigates waits up to 1.5 s. JS dialogs are answered (alert/beforeunload accepted, else dismissed) and listed. Status failed: that step did nothing. unknown: sent, then errored, so it may have taken effect: look before retrying a submit. timeout: a wait ran out, or the batch's time budget (send the rest again). newErrors: new page errors (read them in browser_state). A selector may start `@<ref> ` (from browser_snapshot) to reach an iframe. " + (jev ? "Refused while a task runs on the browser. " : "") + "Passwords: type or insert with generatePassword: true (sign-up: mints, saves per profile and origin, types) or useSavedPassword: true (login) instead of text; needs a profile.",
+    description: "Run 1-25 steps in order in your chat's own active tab (a shared profile's tabs belong to the chat that opened them; tab steps drive only your own), stopping at the first that does not complete; returns the page's url and title. Steps: navigate (http/https), back, forward, reload, stop, click (selector, or x,y in the viewport; button, clickCount 1-3), hover (x,y), type (replaces the value), insert (into the focused element), select (option value or text), press (key), scroll, resize (width, height), wait (selector visible | text on the page | url substring; timeoutMs default 5000, max 15000), tab (op new | activate | close; tabId from browser_state; url for new), eval (JS in the page's main world; value returned as JSON, at most 8000 chars; throwaway browsers only). A click or Enter that navigates waits up to 1.5 s. JS dialogs are answered (alert/beforeunload accepted, else dismissed) and listed. Status failed: that step did nothing. unknown: sent, then errored, so it may have taken effect: look before retrying a submit. timeout: a wait ran out, or the batch's time budget (send the rest again). newErrors: new page errors (read them in browser_state). A selector may start `@<ref> ` (from browser_snapshot) to reach an iframe. " + (jev ? "Refused while a task runs on the browser. " : "") + "Passwords: type or insert with generatePassword: true (sign-up: mints, saves per profile and origin, types) or useSavedPassword: true (login) instead of text; needs a profile.",
     inputSchema: { browserId: capability, actions: z.array(stepSchema).min(1).max(MAX_BATCH_STEPS) },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     _meta: stepMeta,
   }, async ({ browserId, actions }, extra) => {
     const answer = await respond(extra, async () => {
       await access(extra, browserId);
-      const outcome = await runtime.actMany(browserId, actions, callerOf(extra), accessGuard(extra, browserId));
+      const outcome = await runtime.actMany(browserId, actions, callerOf(extra), sessionOf(extra), accessGuard(extra, browserId));
       assertAccess(extra, browserId);
       return { text: actText(outcome), structured: outcome, isError: outcome.status === "failed" || outcome.status === "unknown" };
     });
@@ -715,10 +715,10 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     return stateFor(callerOf(extra), state);
   }));
   server.registerTool("browser_close", {
-    description: "Close this owned browser (stopping any task) and release its profile lock. Persisted logins remain; a throwaway's data is deleted; the user's relay browser is never terminated. Refused while a publish awaits confirmation (confirm, cancel or wait first).",
+    description: "Close this browser (stopping any task) and release its profile lock. Yours alone: a chat's close only releases its own hold while others are on a shared one, and answers closed: false. Persisted logins remain; a throwaway's data is deleted; the user's relay browser is never terminated. Refused while a publish awaits confirmation (confirm, cancel or wait first).",
     inputSchema: { browserId: capability },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-  }, ({ browserId }, extra) => result(async () => { await access(extra, browserId, true); await runtime.close(browserId, callerOf(extra), accessGuard(extra, browserId, true)); return { closed: true }; }));
+  }, ({ browserId }, extra) => result(async () => { await access(extra, browserId, true); return { closed: await runtime.close(browserId, callerOf(extra), accessGuard(extra, browserId, true), openerOf(extra)) }; }));
   // The connection report (connection.ts, dimension#1219): the full current map
   // once the host has initialized, then after every observation (a check, a
   // post, a deleted profile). Sends run one at a time and each reads the map

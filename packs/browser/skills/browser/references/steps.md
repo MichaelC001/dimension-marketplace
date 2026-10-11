@@ -24,11 +24,12 @@ hold; give it `url` (and `profile`) instead to open one for them to watch.
   ask the user). It never shows which account a site is signed in to: ask the
   user if that matters. Pass the name or the label, in any case; an exact name is
   always that profile, and a label two profiles share, or a name that is none, is
-  refused with the choices: ask the user which, never guess. A profile another
-  chat or the user holds, open or still starting, is refused (`profile_held`);
-  your own chat gets the same browser back. Name a new one (`personal`, `work`,
-  `jobs`…) only to keep logins and cookies across sessions. Profiles never share
-  cookies. Saved passwords
+  refused with the choices: ask the user which, never guess. A profile is one
+  Chrome that chats share, each on its own tabs: one another chat or the user
+  already has open is joined, and you open tabs of your own on it (`browser_open`
+  with a `url` gives you the first). Name a new
+  one (`personal`, `work`, `jobs`…) only to keep logins and cookies across
+  sessions. Profiles never share cookies. Saved passwords
   (`generatePassword`, `useSavedPassword`) need a profile: on a throwaway
   browser they fail `profile_required` — close it and open again with a name.
 - `engine`: `chromium` (default, a Chrome this pack manages) or `chrome-relay`
@@ -116,15 +117,25 @@ private-network addresses, including through a redirect.
 
 The browser has real tabs. `browser_state` lists them (`tabs[]` with `id`,
 `title`, `url`, `active`, `loading`) plus `activeTabId`, `canGoBack` and
-`canGoForward`. Every read and action works on the **active** tab. Tabs are steps
-of `browser_act`:
+`canGoForward`. Tabs are steps of `browser_act`:
 
-- `{ kind: "tab", op: "new", url? }` opens a tab and makes it active.
-- `{ kind: "tab", op: "activate", tabId }` switches to a tab.
-- `{ kind: "tab", op: "close", tabId }` closes one; closing the last tab leaves
-  a blank tab, never a closed browser.
+- `{ kind: "tab", op: "new", url? }` opens a tab of yours and makes it active.
+  No tab of your own yet? `browser_open` with a `url` opens your first.
+- `{ kind: "tab", op: "activate", tabId }` switches to one of your own tabs.
+- `{ kind: "tab", op: "close", tabId }` closes one of your own; closing the last
+  tab leaves a blank tab, never a closed browser.
+- A shared profile's tabs belong to the chat that opened each: activating or
+  closing another chat's tab is refused `not_your_tab`, and a page step with no
+  tab of your own is refused `no_tab_of_yours` — except a navigate, which opens
+  your tab there (as `browser_open` with a `url` does); open one first with
+  `tab new` otherwise. The user's View may switch or close any tab; the browser
+  is theirs.
+- Your steps run on your own active tab, whatever tab is showing. A read
+  (`browser_state`, `browser_snapshot`, `browser_screenshot`) shows the tab the
+  browser has active right now, so on a shared profile judge a page by the
+  `url` its own row in `tabs[]` carries.
 - A link or script that opens a new tab/window (target=_blank, popups) becomes
-  the active tab on its own — after such a click, check `browser_state` and
+  your active tab on its own — after such a click, check `browser_state` and
   keep working there.
 - The user can switch tabs in the View; if the page is not what you expect,
   read `browser_state` first.

@@ -200,6 +200,7 @@ const NAMED_KEYS: Record<string, true> = {
 };
 /** View input that can press the site's own submit; scroll, hover and navigation cannot. */
 const TOUCHING_KINDS: Partial<Record<BrowserAction["kind"], true>> = { click: true, press: true, type: true, insert: true };
+const BROWSER_WIDE_STEPS: Partial<Record<BatchStep["kind"], true>> = { resize: true };
 /** The same, for the direct channel: a press, a release, a key or pasted text can press the site's own submit; a move and a wheel cannot. */
 const touchesPage = (event: AdmittedInput): boolean => event.kind !== "wheel" && !(event.kind === "mouse" && event.type === "move");
 
@@ -307,8 +308,14 @@ interface Entry {
 	 * of (`newErrors`), so each is reported once; the View reads neither.
 	 */
 	logRead: number;
-	/** Who opened it, as the host stamped the call: what `heldBy` and a second open of the same profile are judged by. */
-	opener: BrowserOpener;
+	/**
+	 * Who has work on it, one entry per host session (the person's View open is one too), as the host stamped the calls: what `heldBy` and a second
+	 * open of the same profile are judged by. A saved profile is ONE Chrome and one cookie jar, so chats share the browser and are told apart by
+	 * which tabs they own (doc 77 §7.4.5): each session opens its own and never drives another's.
+	 */
+	openers: Map<string, BrowserOpener>;
+	tabOwners: Map<string, string>;
+	tabActive: Map<string, string>;
 	/** The person has the wheel: an agent's page actions are refused until they hand it back (`control`). Reads are not. */
 	takenOver: boolean;
 	/** Gives the wheel back when no View has been joined to this browser's stream for VIEW_GONE_MS (`watchWheel`). */
@@ -346,8 +353,44 @@ interface Entry {
 	retiring: Promise<void> | undefined;
 	/** A throwaway's polite close has failed once: it is killed from then on, because puppeteer treats a second close as already done. */
 	closeFailed: boolean;
-	/** Set when a cell's `browser.open` made it (doc 77 §7.4.3): its own idle clock, and `persist` exempts it from idle close and from being closed to make room. */
+	/** Set when a cell's `browser.open` made it (doc 77 §7.4.3): what the browser IS (its kind, its label, whether closing it ends an application), and `persist` keeps the whole browser. The first open to make it sets these — one browser is one thing; later chats joining it add openers, not a second identity. */
 	code?: CodeLifetime;
+}
+
+/**
+ * Who a browser is open for. The key carries the caller as well as the host session: a chat's own View open (`app`) and its cells (`model`) are two
+ * holds on one session, and letting go of one must never give up the other (the person's eyes outrank a cell's tidy-up).
+ */
+function openerKey(opener: BrowserOpener): string {
+	return `${opener.caller ?? ""} ${opener.session ?? ""}`;
+}
+
+/** Whether `asker`'s session has this browser open — their View, their cells, or both. */
+function openedBy(openers: Map<string, BrowserOpener>, asker: string | undefined): boolean {
+	if (asker === undefined) return false;
+	for (const opener of openers.values()) if (opener.session === asker) return true;
+	return false;
+}
+
+/** Whether the person has this browser open in a View (their open is one of its openers). */
+function personallyOpen(openers: Map<string, BrowserOpener> | undefined): boolean {
+	if (openers === undefined) return false;
+	for (const opener of openers.values()) if (opener.caller === "app") return true;
+	return false;
+}
+
+/** Whether any AGENT has work on this browser: one that did is never closed from under its chat. */
+function openedByAgent(openers: Map<string, BrowserOpener>): boolean {
+	for (const opener of openers.values()) if (opener.caller !== "app") return true;
+	return false;
+}
+
+/** The opener to name in a message: the asker's own when they have one, else the first. */
+function openerFor(openers: Map<string, BrowserOpener>, asker: string | undefined): BrowserOpener {
+	if (asker !== undefined) {
+		for (const opener of openers.values()) if (opener.session === asker) return opener;
+	}
+	return openers.values().next().value ?? {};
 }
 
 export class BrowserRuntime implements BrowserRuntimePort {
@@ -388,8 +431,8 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	/** Throwaway directories being deleted; `close` and `dispose` wait for them. */
 	private readonly removals = new Set<Promise<void>>();
 	private disposed = false;
-	/** The opener of a saved profile whose browser is still launching, so the same chat opening it twice gets one browser. */
-	private readonly openers = new Map<string, BrowserOpener>();
+	/** The sessions whose opens are in flight on a saved profile's slot, so a chat opening it twice at once (or two chats joining) get one browser. */
+	private readonly openers = new Map<string, Map<string, BrowserOpener>>();
 	/** The last passive observation per profile and site, so a page that reloads does not rewrite the same fact. */
 	private readonly lastNoted = new Map<string, { key: string; at: number }>();
 	private readonly connectionListeners = new Set<() => void>();
@@ -433,14 +476,11 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	/**
 	 * Open a browser and mint a fresh capability for it.
 	 *
-	 * With a `profile` it runs on that persistent profile. A profile that is
-	 * already open — or in the middle of opening — is REFUSED. One engine server
-	 * serves many sessions, so returning the live browserId of somebody else's
-	 * browser would hand out their capability; and launching a second Chrome on
-	 * the same user-data dir would fork the cookie jar. So the chat that already
-	 * holds a profile (the host's session stamp on `opener`) gets its own browser
-	 * back, and anyone else is refused (`profile_held`, naming whose it is, never
-	 * an id): the holder closes it, or the caller picks another profile.
+	 * With a `profile` it runs on that persistent profile. One profile is ONE Chrome and ONE cookie jar, so a second open — the same chat's parallel
+	 * call, or a second chat — joins the browser already open (or on its way up) and gets the same capability back, instead of forking the jar with a
+	 * second Chrome. Chats are told apart by the tabs they own on it, not by the browser: each opens its own and never drives another's (doc 77 §7.4.5).
+	 * What is refused is a second PROCESS on the same profile folder (`profile_locked`, from the on-disk `runtime.lock`): two Chromes would fork the
+	 * cookie jar whatever the chats agreed. The id goes to every chat that opens the profile — they share the one browser — and to nobody else.
 	 *
 	 * `profile` is a slug or a label, in any case. An exact slug is always that
 	 * profile; a label that two profiles share is refused (`profile_ambiguous`),
@@ -495,19 +535,18 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			// Everything between these checks and the launch below is synchronous: a second open cannot take the slot or the profile in between.
 			const launching = profile === null ? undefined : this.opening.get(profile);
 			if (profile !== null && launching !== undefined) {
-				// The same chat opening it twice at once (parallel tool calls) is one browser, not a refusal.
-				const holder = this.holderOf(this.openers.get(profile) ?? {}, opener.session);
-				if (holder === "this chat") {
-					const { entry } = await launching;
-					return await this.state(entry.browserId, guardedBy(guard, () => this.requireOpen(entry.browserId)));
-				}
-				fail("profile_held", heldMessage(profile, holder));
+				// One profile is ONE Chrome and one cookie jar, so a second open joins the one on its way up instead of forking it: a chat opening it twice
+				// at once (parallel tool calls) and a second chat are the same case. Each chat works on its own tabs (doc 77 §7.4.5).
+				this.openers.get(profile)?.set(openerKey(opener), opener);
+				const { entry } = await launching;
+				entry.openers.set(openerKey(opener), opener);
+				return await this.state(entry.browserId, guardedBy(guard, () => this.requireOpen(entry.browserId)));
 			}
 			const live = profile === null ? undefined : this.byProfile.get(profile);
 			if (profile !== null && live !== undefined) {
-				const holder = this.holderOf(live.opener, opener.session);
-				if (holder === "this chat") return await this.state(live.browserId, guardedBy(guard, () => this.requireOpen(live.browserId)));
-				fail("profile_held", heldMessage(profile, holder));
+				// Shared: the second chat is added to it and gets the same browser back (with tabs of its own), not a refusal.
+				live.openers.set(openerKey(opener), opener);
+				return await this.state(live.browserId, guardedBy(guard, () => this.requireOpen(live.browserId)));
 			}
 			// Count launches in flight too: four concurrent opens must not slip past the bound just because none of them has finished launching yet.
 			if (this.byId.size + this.opening.size + (this.readerHeld() ? 1 : 0) < MAX_BROWSERS) break;
@@ -520,7 +559,9 @@ export class BrowserRuntime implements BrowserRuntimePort {
 
 		// A throwaway browser has no name to guard; its slot only counts against the bound. `:` is not a slug character.
 		const slot = profile ?? `ephemeral:${randomBytes(8).toString("hex")}`;
-		const started = this.launch(profile, engine, viewport, opener, code, attach)
+		// The chats on their way up on this slot. Joiners above add themselves to it, and it becomes the entry's own set of openers.
+		const openers = new Map<string, BrowserOpener>([[openerKey(opener), opener]]);
+		const started = this.launch(profile, engine, viewport, openers, code, attach)
 			.then(async (entry) => {
 				try {
 					const authorize: EffectGuard = guardedBy(guard, () => {
@@ -551,11 +592,12 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				this.openers.delete(slot);
 			});
 		this.opening.set(slot, started);
-		this.openers.set(slot, opener);
+		this.openers.set(slot, openers);
 		return (await started).state;
 	}
 
-	private async launch(profile: string | null, engine: BrowserEngine, viewport: Viewport, opener: BrowserOpener, code?: CodeLifetime, attach?: AttachTarget): Promise<Entry> {
+	private async launch(profile: string | null, engine: BrowserEngine, viewport: Viewport, openers: Map<string, BrowserOpener>, code?: CodeLifetime, attach?: AttachTarget): Promise<Entry> {
+		const opener = openerFor(openers, undefined);
 		// A saved profile is locked while its browser runs; a throwaway one gets a
 		// directory of its own that goes with the browser.
 		let directory: string;
@@ -603,11 +645,16 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				url: initial.url, title: initial.title,
 				driver, release, revision: 1, frames: [], queue: Promise.resolve(), inputQueue: Promise.resolve(), closed: false,
 				task: null, worker: null, publish: null, secrets: new Set(), logRead: 0, logNoticed: 0, annotations,
-				opener, takenOver: false, starting: null, agentAt: null, look: profile === null || profile === RELAY_PROFILE ? null : resolveProfileMeta(profile, this.store.meta(profile)),
+				openers, tabOwners: new Map(), tabActive: new Map(), takenOver: false, starting: null, agentAt: null, look: profile === null || profile === RELAY_PROFILE ? null : resolveProfileMeta(profile, this.store.meta(profile)),
 				probe: { timer: undefined, running: undefined, again: false },
 				lastUsed: performance.now(), viewers: 0, pending: 0, cells: 0, idle: undefined, retiring: undefined, closeFailed: false, wheelTimer: undefined,
 			};
 			if (code !== undefined) entry.code = code;
+			const launchingSession = opener.session;
+			if (launchingSession !== undefined) {
+				for (const tab of initial.tabs) entry.tabOwners.set(tab.id, launchingSession);
+				if (initial.activeTabId !== "") entry.tabActive.set(launchingSession, initial.activeTabId);
+			}
 			if (profile !== null && profile !== RELAY_PROFILE) entry.notice = this.touchProfile(profile, driver.app);
 			this.byId.set(entry.browserId, entry);
 			if (profile !== null) this.byProfile.set(profile, entry);
@@ -643,27 +690,48 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		this.removals.add(removal);
 	}
 
-	/** Refused (`publish_pending`) while a publish awaits confirmation, unless `caller` is "app". */
-	async close(browserId: string, caller?: ToolCaller, guard?: EffectGuard): Promise<void> {
+	/**
+	 * Let go of a browser. Several chats work on one saved-profile browser at once, each on its own tabs, so a chat's close only ever gives up its own
+	 * hold (`by`) while anyone else is on it — ending another chat's tabs is controlling them (doc 77 §7.4.5). The person's own close is the one gesture
+	 * that ends the browser however many chats are on it: it is theirs to end. Without a `by` the caller wants the browser itself gone. Answers whether
+	 * the browser was closed. Refused (`publish_pending`) while a publish awaits confirmation, unless `caller` is "app".
+	 */
+	async close(browserId: string, caller?: ToolCaller, guard?: EffectGuard, by?: BrowserOpener): Promise<boolean> {
 		// A failed close revokes reads/actions but remains retryable for cleanup.
 		const entry = this.byId.get(browserId);
 		if (!entry) {
 			// Already closed by the runtime (idle, or to make room): what was asked for is true, so it is not an error.
-			if (this.released.has(browserId)) return;
+			if (this.released.has(browserId)) return true;
 			fail("unknown_browser", "Unknown or already closed browserId.");
 		}
+		const mine = by === undefined ? undefined : openerKey(by);
+		let closed = false;
 		await this.serialize(entry, async () => {
 			if (guard !== undefined) await guard();
 			guard?.assertCurrent();
+			if (mine !== undefined && by?.caller !== "app") {
+				// Not this hold's to give up (a caller that never opened this browser): nothing of anyone's is ended by it.
+				if (!entry.openers.has(mine)) return;
+				// Others still have work on it, the person is watching, or they have the wheel: stepping away leaves them alone. No refusal below
+				// may stop this — a chat is always free to leave, and what it leaves is another chat's tabs or the person's own hands.
+				if (entry.openers.size > 1 || entry.viewers > 0 || entry.takenOver) {
+					entry.openers.delete(mine);
+					return;
+				}
+			}
 			if (!entry.closed) {
 				refuseWhilePublishing(entry, caller);
 				// An agent closing a browser the person took over would end what they are doing in it.
 				refuseWhileTakenOver(entry, caller);
 			}
+			// The hold is given up only once the close is admitted: a close that was refused keeps it.
+			if (mine !== undefined) entry.openers.delete(mine);
 			await this.teardown(entry);
+			closed = true;
 		}, { evenIfClosed: true });
 		// A throwaway browser's data is gone by the time its close resolves.
 		await Promise.allSettled(this.removals);
+		return closed;
 	}
 
 	/** Retain ownership and the lock until the driver confirms shutdown. A throwaway that cannot be stopped is tried again soon. */
@@ -795,7 +863,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		const entry = this.byId.get(browserId);
 		if (!entry) return { ok: false, code: "unknown_source" };
 		if (entry.closed) return { ok: false, code: "source_closed" };
-		if (entry.opener.session !== session && this.viewOf(session) !== browserId) return { ok: false, code: "not_owner" };
+		if (!openedBy(entry.openers, session) && this.viewOf(session) !== browserId) return { ok: false, code: "not_owner" };
 		if (entry.engine !== "chromium" || this.options.headless === false) return { ok: false, code: "not_headless" };
 		const state = this.redact(entry, { url: entry.url, title: entry.title });
 		return { ok: true, profile: entry.profile === null ? "throwaway" : "saved", url: state.url, title: state.title };
@@ -897,8 +965,8 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		let victim: Entry | undefined;
 		for (const entry of this.byId.values()) {
 			if (entry.profile !== null || entry.closed || entry.viewers > 0 || entry.takenOver || entry.code?.persist === true || this.working(entry)) continue;
-			const personal = entry.opener.caller === "app";
-			const victimPersonal = victim?.opener.caller === "app";
+			const personal = personallyOpen(entry.openers);
+			const victimPersonal = victim !== undefined && personallyOpen(victim.openers);
 			if (victim === undefined || (!personal && victimPersonal) || (personal === victimPersonal && entry.lastUsed < victim.lastUsed)) victim = entry;
 		}
 		return victim;
@@ -928,7 +996,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 
 	/** Why nothing could be given up. It names what `asker` itself holds, never what anyone else does: an id is a capability. */
 	private refusal(asker: string | undefined, because: string): string {
-		const held = asker === undefined ? [] : [...this.byId.values()].filter((entry) => entry.opener.session === asker && !entry.closed).map((entry) => entry.browserId);
+		const held = asker === undefined ? [] : [...this.byId.values()].filter((entry) => openedBy(entry.openers, asker) && !entry.closed).map((entry) => entry.browserId);
 		const why = `at most ${MAX_BROWSERS} browsers may be open at once, and ${because}`;
 		return held.length > 0 ? `${why}. You hold ${held.join(", ")}: browser_close the ones you are done with` : `${why}. None is yours; try again shortly`;
 	}
@@ -1014,14 +1082,14 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		return (this.seam ??= {
 			open: async (options, opener, code, attach) => await this.open(options, opener, code, attach),
 			resize: async (browserId, viewport, scale) => await this.resize(browserId, viewport, scale),
-			close: async (browserId) => await this.close(browserId),
+			close: async (browserId, session) => await this.close(browserId, undefined, undefined, session),
 			require: (browserId) => this.require(browserId),
 			resolveProfile: (raw) => this.resolveProfile(raw, "chromium"),
 			peek: (browserId) => {
 				const entry = this.byId.get(browserId);
 				return entry === undefined || entry.closed ? undefined : entry;
 			},
-			browsersOf: (session) => [...this.byId.values()].filter((entry) => !entry.closed && (entry.profile === null || entry.profile === RELAY_PROFILE) && entry.opener.session === session),
+			browsersOf: (session) => [...this.byId.values()].filter((entry) => !entry.closed && (entry.profile === null || entry.profile === RELAY_PROFILE) && openedBy(entry.openers, session)),
 			viewOf: (session) => {
 				const id = this.viewOf(session);
 				const entry = id === undefined ? undefined : this.byId.get(id);
@@ -1262,8 +1330,13 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	}
 
 	async endProfileSession(sessionId: string): Promise<void> {
-		for (const entry of this.byId.values()) {
+		for (const entry of [...this.byId.values()]) {
 			if (entry.worker && entry.taskSession === sessionId) await this.stopTask(entry);
+			// The host says a session ended: its holds go with it. It says so rarely — a chat that dies unheard is the idle clock's business, as it has
+			// always been — but what it does say must not leave a hold standing that would block the last live chat's close.
+			for (const key of [...entry.openers.keys()]) if (entry.openers.get(key)?.session === sessionId) entry.openers.delete(key);
+			for (const [tabId, owner] of [...entry.tabOwners]) if (owner === sessionId) entry.tabOwners.delete(tabId);
+			entry.tabActive.delete(sessionId);
 		}
 	}
 
@@ -1284,20 +1357,24 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	/** Who holds `slug` as `asker` sees it, and what that holder is doing. A browser still launching counts; so does one open in another server. */
 	private holdFact(slug: string, asker: string | undefined): HoldFact {
 		const entry = this.byProfile.get(slug);
-		const opener = entry?.opener ?? this.openers.get(slug);
-		if (opener !== undefined) {
-			const heldBy = this.holderOf(opener, asker);
+		const openers = entry?.openers ?? this.openers.get(slug);
+		if (openers !== undefined) {
+			const heldBy = this.holderOf(openers, asker);
 			// A browser still launching has no id yet; another chat's id is never handed over (it is a capability).
-			return { heldBy, hold: this.holdOf(entry, opener), ...(heldBy === "this chat" && entry !== undefined ? { browserId: entry.browserId } : {}) };
+			return { heldBy, hold: this.holdOf(entry, openers), ...(heldBy === "this chat" && entry !== undefined ? { browserId: entry.browserId } : {}) };
 		}
 		// Open in another server (or another runtime on this root): not ours to name, and not free.
 		return { heldBy: this.store.heldElsewhere(slug) ? "another chat" : null };
 	}
 
-	/** What `entry` (absent while it is still launching) is doing, for the View's menu. */
-	private holdOf(entry: Entry | undefined, opener: BrowserOpener): ProfileHold {
+	/**
+	 * What `entry` (absent while it is still launching) is doing, for the View's menu. `by` is who the person should recognise as being on it: they have
+	 * it open themselves when one of its openers is their own, else an agent opened it. Several chats can share one saved-profile browser; the word
+	 * names the person's own presence, not a count.
+	 */
+	private holdOf(entry: Entry | undefined, openers: Map<string, BrowserOpener>): ProfileHold {
 		return {
-			by: opener.caller === "app" ? "person" : "agent",
+			by: personallyOpen(openers) ? "person" : "agent",
 			task: entry?.task?.status === "running",
 			takenOver: entry?.takenOver === true,
 			post: entry !== undefined && (isPending(entry.publish) || entry.starting === "post"),
@@ -1307,9 +1384,9 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	/** The browsers `asker`'s chat holds that are not saved profiles: Private ones and the person's own Chrome. Nothing of another chat's. */
 	async openBrowsers(asker?: string): Promise<OpenBrowserListing[]> {
 		return [...this.byId.values()].flatMap((entry) =>
-			entry.closed || entry.retiring !== undefined || (entry.profile !== null && entry.profile !== RELAY_PROFILE) || this.holderOf(entry.opener, asker) !== "this chat"
+			entry.closed || entry.retiring !== undefined || (entry.profile !== null && entry.profile !== RELAY_PROFILE) || this.holderOf(entry.openers, asker) !== "this chat"
 				? []
-				: [{ browserId: entry.browserId, kind: entry.profile === null ? ("private" as const) : ("chrome" as const), hold: this.holdOf(entry, entry.opener) }],
+				: [{ browserId: entry.browserId, kind: entry.profile === null ? ("private" as const) : ("chrome" as const), hold: this.holdOf(entry, entry.openers) }],
 		);
 	}
 
@@ -1385,7 +1462,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	private async leaveForRoom(browserId: string | undefined, opener: BrowserOpener): Promise<boolean> {
 		if (browserId === undefined) return false;
 		const entry = this.byId.get(browserId);
-		if (entry === undefined || entry.closed || entry.retiring !== undefined || this.holderOf(entry.opener, opener.session) !== "this chat") return false;
+		if (entry === undefined || entry.closed || entry.retiring !== undefined || this.holderOf(entry.openers, opener.session) !== "this chat") return false;
 		if (this.keptOnLeave(entry, entry.takenOver)) return false;
 		return (await this.leave(browserId, "app")).closed;
 	}
@@ -1397,7 +1474,9 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	 * listed in the View's menu and closed from there.
 	 */
 	private keptOnLeave(entry: Entry, heldWheel: boolean): boolean {
-		return entry.opener.caller !== "app" || entry.profile === RELAY_PROFILE || heldWheel || this.working(entry) || isPending(entry.publish);
+		// An AGENT has work on it (any one of its openers, however the person came to be on it too): its chat may be mid-task, so the person's switch
+		// never closes it. A browser only the person opened is theirs to leave behind.
+		return openedByAgent(entry.openers) || entry.profile === RELAY_PROFILE || heldWheel || this.working(entry) || isPending(entry.publish);
 	}
 
 	async connections(): Promise<ConnectionObservations> {
@@ -1464,10 +1543,14 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	// Whose a profile is, and which one a name means
 	// -----------------------------------------------------------------------
 
-	/** `opener`'s browser, from the side of `asker` (a host session id): the same chat, the human in a View, or another chat. */
-	private holderOf(opener: BrowserOpener, asker: string | undefined): Exclude<ProfileHolder, null> {
-		if (asker !== undefined && opener.session === asker) return "this chat";
-		return opener.caller === "app" ? "human" : "another chat";
+	/**
+	 * Who holds a browser, from the side of `asker` (a host session id): this chat when it is one of its openers, else the human when a View has it open,
+	 * else another chat. Several chats can hold one saved-profile browser at once — they work on their own tabs — and each is told its own answer.
+	 */
+	private holderOf(openers: Map<string, BrowserOpener> | undefined, asker: string | undefined): Exclude<ProfileHolder, null> {
+		if (openers === undefined || openers.size === 0) return "another chat";
+		if (openedBy(openers, asker)) return "this chat";
+		return personallyOpen(openers) ? "human" : "another chat";
 	}
 
 	/** Profiles are listed up to MAX_PROFILES; one more would exist where nothing lists it and the duplicate check cannot see it. */
@@ -1650,37 +1733,75 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		});
 	}
 
-	/**
-	 * Open, show or close a tab. Every read and action works on the active tab.
-	 * Refused while a task runs: switching away from the agent's tab hides it,
-	 * and a hidden tab renders no frames, so the agent would stall.
-	 */
-	async tab(browserId: string, request: TabRequest, caller?: ToolCaller): Promise<BrowserState> {
+	private ownTab(entry: Entry, session: string | undefined, tabId: string): void {
+		if (session === undefined || tabId === "") return;
+		const held = entry.tabOwners.get(tabId);
+		if (held !== undefined && held !== session) return;
+		entry.tabOwners.set(tabId, session);
+		entry.tabActive.set(session, tabId);
+	}
+
+	private async adoptActiveTab(entry: Entry, session: string | undefined): Promise<void> {
+		if (session === undefined) return;
+		const state = await entry.driver.state().catch(() => null);
+		if (state !== null) this.ownTab(entry, session, state.activeTabId);
+	}
+
+	private forgetTab(entry: Entry, tabId: string): void {
+		entry.tabOwners.delete(tabId);
+		for (const [session, active] of [...entry.tabActive]) if (active === tabId) entry.tabActive.delete(session);
+	}
+
+	private async pinTab(entry: Entry, caller: ToolCaller | undefined, session: string | undefined, opening: boolean, guard?: EffectGuard): Promise<void> {
+		if (session === undefined || caller === "app") return;
+		const mine = entry.tabActive.get(session);
+		if (mine !== undefined) {
+			try {
+				await entry.driver.activateTab(mine, guard);
+				return;
+			} catch (error) {
+				if (!(error instanceof ActionNotDispatched)) throw error;
+				entry.tabActive.delete(session);
+			}
+		}
+		if (opening) {
+			this.ownTab(entry, session, (await entry.driver.openTab(undefined, undefined, guard)).tabId);
+			return;
+		}
+		fail("no_tab_of_yours", "no_tab_of_yours: you have no tab of your own in this browser; each chat works on its own tabs. Open one first with tab new ({\"kind\":\"tab\",\"op\":\"new\"}) or browser_open with a url.");
+	}
+
+	async tab(browserId: string, request: TabRequest, caller?: ToolCaller, session?: string): Promise<BrowserState> {
 		const entry = this.require(browserId);
-		const planned = admitTab(request);
 		return await this.serialize(entry, async () => {
 			admitCaller(entry, caller);
-			await this.applyTab(entry, planned);
-			return this.redact(entry, await this.buildState(entry));
+			await this.adoptActiveTab(entry, session);
+			const planned = admitTab(request, entry, session, caller);
+			await this.applyTab(entry, planned, session);
+			const state = await this.buildState(entry);
+			this.ownTab(entry, session, state.activeTabId);
+			return this.redact(entry, state);
 		});
 	}
 
 	/** One admitted tab operation, under the caller's lock. */
-	private async applyTab(entry: Entry, tab: PlannedTab, guard?: EffectGuard): Promise<void> {
+	private async applyTab(entry: Entry, tab: PlannedTab, session?: string, guard?: EffectGuard): Promise<void> {
 		switch (tab.op) {
-			case "new":
-				try {
-					await entry.driver.openTab(tab.url, undefined, guard);
-				} catch (error) {
+			case "new": {
+				const made = await entry.driver.openTab(tab.url, undefined, guard).catch((error: unknown) => {
 					if (error instanceof ActionNotDispatched) throw error;
-					fail("tab_failed", `opening a new tab${tab.url ? ` at ${tab.url}` : ""} failed: ${describe(error)}`);
-				}
+					return fail("tab_failed", `opening a new tab${tab.url ? ` at ${tab.url}` : ""} failed: ${describe(error)}`);
+				});
+				this.ownTab(entry, session, made.tabId);
 				break;
+			}
 			case "activate":
 				await entry.driver.activateTab(tab.tabId as string, guard);
+				this.ownTab(entry, session, tab.tabId as string);
 				break;
 			case "close":
 				await entry.driver.closeTab(tab.tabId as string, guard);
+				this.forgetTab(entry, tab.tabId as string);
 				break;
 		}
 	}
@@ -1689,17 +1810,29 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	// Actions
 	// -----------------------------------------------------------------------
 
-	async act(browserId: string, input: BrowserAction, caller?: ToolCaller, guard?: EffectGuard): Promise<ActionResult> {
+	async act(browserId: string, input: BrowserAction, caller?: ToolCaller, session?: string, guard?: EffectGuard): Promise<ActionResult> {
 		const entry = this.require(browserId);
 		return await this.serialize(entry, async () => {
 			admitCaller(entry, caller);
-			const done = await this.dispatch(entry, this.admit(entry, input, caller), caller, guard);
-			if (done.status !== "completed") {
-				return this.redact(entry, { status: done.status, error: done.error, state: await this.buildState(entry).catch(() => this.staleState(entry)) });
+			await this.adoptActiveTab(entry, session);
+			const action = this.admit(entry, input, caller);
+			let done: Dispatched;
+			try {
+				if (!BROWSER_WIDE_STEPS[action.kind]) await this.pinTab(entry, caller, session, action.kind === "navigate", guard);
+				done = await this.dispatch(entry, action, caller, guard);
+			} catch (error) {
+				done = { status: "failed", error: describe(error) };
 			}
+			if (done.status !== "completed") {
+				const failedState = await this.buildState(entry).catch(() => this.staleState(entry));
+				this.ownTab(entry, session, failedState.activeTabId);
+				return this.redact(entry, { status: done.status, error: done.error, state: failedState });
+			}
+			const state = await this.buildState(entry);
+			this.ownTab(entry, session, state.activeTabId);
 			return this.redact(entry, {
 				status: "completed" as const,
-				state: await this.buildState(entry),
+				state,
 				...(done.credential ? { credential: done.credential } : {}),
 				...(done.dialogs ? { dialogs: done.dialogs } : {}),
 			});
@@ -1712,12 +1845,13 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	 * page; steps run in order until one is not `completed` or the time budget is spent (a host times a call out, and a
 	 * caller that never heard back would send the same submit again). The state is read once, at the end.
 	 */
-	async actMany(browserId: string, steps: readonly BatchStep[], caller?: ToolCaller, guard?: EffectGuard): Promise<ActManyResult> {
+	async actMany(browserId: string, steps: readonly BatchStep[], caller?: ToolCaller, session?: string, guard?: EffectGuard): Promise<ActManyResult> {
 		const entry = this.require(browserId);
 		if (!Array.isArray(steps) || steps.length < 1 || steps.length > MAX_BATCH_STEPS) fail("bad_action", `actions must be 1-${MAX_BATCH_STEPS} steps`);
 		return await this.serialize(entry, async () => {
 			admitCaller(entry, caller);
-			const plan = steps.map((step) => this.admitStep(entry, step, caller));
+			await this.adoptActiveTab(entry, session);
+			const plan = steps.map((step) => this.admitStep(entry, step, caller, session));
 			const budget = this.options.actBudgetMs ?? ACT_BUDGET_MS;
 			const deadline = Date.now() + budget;
 			const outcomes: StepOutcome[] = [];
@@ -1725,6 +1859,12 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			// What the batch's eval steps may still return between them.
 			let valueChars = MAX_EVAL_RESULT_CHARS;
 			let stopped: StepDone | undefined;
+			let pinned = false;
+			const pin = async (opening: boolean): Promise<void> => {
+				if (pinned) return;
+				pinned = true;
+				await this.pinTab(entry, caller, session, opening, guard);
+			};
 			for (const [index, step] of plan.entries()) {
 				const authorization = guard?.();
 				if (authorization !== undefined) await authorization;
@@ -1738,7 +1878,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 					stopped = { status: "timeout", error: `the batch's time budget (${budget} ms) ran out after ${index} of ${plan.length} steps; send the remaining steps in a new call` };
 					break;
 				}
-				const done = await this.runStep(entry, step, caller, valueChars, guard);
+				const done = await this.runStep(entry, step, caller, session, valueChars, guard, pin);
 				valueChars -= done.value?.length ?? 0;
 				outcomes.push({
 					kind: step.kind,
@@ -1755,6 +1895,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				}
 			}
 			const state = stopped ? await this.buildState(entry).catch(() => this.staleState(entry)) : await this.buildState(entry);
+			this.ownTab(entry, session, state.activeTabId);
 			const completed = outcomes.filter((outcome) => outcome.status === "completed").length;
 			const newErrors = caller === "app" ? 0 : this.noticeLogs(entry);
 			return this.redact(entry, {
@@ -1769,12 +1910,18 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		}, { guard });
 	}
 
-	private runStep(entry: Entry, step: PlannedStep, caller: ToolCaller | undefined, valueChars: number, guard?: EffectGuard): Promise<StepDone> {
+	private async runStep(entry: Entry, step: PlannedStep, caller: ToolCaller | undefined, session: string | undefined, valueChars: number, guard: EffectGuard | undefined, pin: (opening: boolean) => Promise<void>): Promise<StepDone> {
+		if (step.kind === "tab") return await this.tabStep(entry, step, session, guard);
+		if (!BROWSER_WIDE_STEPS[step.kind]) {
+			try {
+				await pin(step.kind === "navigate");
+			} catch (error) {
+				return { status: "failed", error: describe(error) };
+			}
+		}
 		switch (step.kind) {
 			case "wait":
 				return this.waitStep(entry, step);
-			case "tab":
-				return this.tabStep(entry, step, guard);
 			case "eval":
 				return this.evalStep(entry, step, valueChars);
 			default:
@@ -1797,13 +1944,13 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		return action;
 	}
 
-	private admitStep(entry: Entry, step: BatchStep, caller: ToolCaller | undefined): PlannedStep {
+	private admitStep(entry: Entry, step: BatchStep, caller: ToolCaller | undefined, session: string | undefined): PlannedStep {
 		if (!step || typeof step !== "object") fail("bad_action", "each step must be an object");
 		switch (step.kind) {
 			case "wait":
 				return { kind: "wait", ...validateWait(step) };
 			case "tab":
-				return admitTab(step);
+				return admitTab(step, entry, session, caller);
 			case "eval":
 				return this.admitEval(entry, step);
 			default:
@@ -1875,9 +2022,9 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	}
 
 	/** One admitted tab operation: a failure is a status, as for an action. */
-	private async tabStep(entry: Entry, step: PlannedTab, guard?: EffectGuard): Promise<StepDone> {
+	private async tabStep(entry: Entry, step: PlannedTab, session: string | undefined, guard?: EffectGuard): Promise<StepDone> {
 		try {
-			await this.applyTab(entry, step, guard);
+			await this.applyTab(entry, step, session, guard);
 		} catch (error) {
 			return { status: error instanceof ActionNotDispatched ? "failed" : "unknown", error: describe(error) };
 		}
@@ -2390,12 +2537,17 @@ export class BrowserRuntime implements BrowserRuntimePort {
 // Validation
 // ---------------------------------------------------------------------------
 
-/** A tab request checked before anything runs: its shape, its op, and the tabId that activate and close need. */
-function admitTab(request: TabRequest): PlannedTab {
+function admitTab(request: TabRequest, entry: Entry, session: string | undefined, caller: ToolCaller | undefined): PlannedTab {
 	if (!request || typeof request !== "object") fail("bad_tab", "tab request must be an object");
 	if (request.op !== "new" && request.op !== "activate" && request.op !== "close") fail("bad_tab", "op must be one of: new, activate, close");
 	if (request.op !== "new" && (typeof request.tabId !== "string" || request.tabId.length === 0 || request.tabId.length > MAX_TAB_ID_CHARS)) {
 		fail("bad_tab", `${request.op} needs the tabId from state.tabs`);
+	}
+	if (request.op !== "new" && caller !== "app" && session !== undefined) {
+		const held = entry.tabOwners.get(request.tabId as string);
+		if (held !== undefined && held !== session) {
+			fail("not_your_tab", "not_your_tab: a tab another chat opened is theirs to drive; each chat opens, activates and closes only its own tabs. Open one of yours with tab new ({\"kind\":\"tab\",\"op\":\"new\"}) and work there.");
+		}
 	}
 	const url = request.op === "new" && request.url !== undefined ? normalizeAction({ kind: "navigate", url: request.url }).url : undefined;
 	return { kind: "tab", op: request.op, ...(request.tabId === undefined ? {} : { tabId: request.tabId }), ...(url === undefined ? {} : { url }) };
@@ -2627,8 +2779,9 @@ const TAKEN_OVER_MESSAGES: Record<Tools, string> = {
 /** The way back to a browser that was given up, in the words of the model that has to say it: the tool its opener used (a code or build model has `browser_view` and not `browser_open`), a cell's `browser.open` for a code browser, and `browser_view` for the person's own, which every space has. */
 function reopenWith(entry: Entry): string {
 	if (entry.code !== undefined) return "browser.open";
-	if (entry.opener.caller === "app") return "browser_view";
-	return entry.opener.tool ?? "browser_open";
+	const opener = openerFor(entry.openers, undefined);
+	if (opener.caller === "app") return "browser_view";
+	return opener.tool ?? "browser_open";
 }
 
 /** The person's wheel: only the View's own input drives a browser they took over. Refused as `human_driving`. */
@@ -2713,11 +2866,6 @@ function describe(err: unknown): string {
 function nameProfiles(profiles: readonly { slug: string; label: string }[]): string {
 	const shown = profiles.slice(0, 20).map(({ slug, label }) => (label === slug ? slug : `${label} (${slug})`));
 	return profiles.length > shown.length ? `${shown.join(", ")} and ${profiles.length - shown.length} more` : shown.join(", ");
-}
-
-/** The refusal of a profile someone else holds, open or still launching: whose it is, never an id. The View recognises "is already open". */
-function heldMessage(profile: string, holder: Exclude<ProfileHolder, "this chat" | null>): string {
-	return `profile "${profile}" is already open, held by ${holder === "human" ? "the human in the View" : "another chat"}. Ask the human to close it, or use another profile.`;
 }
 
 function guardedBy(guard: EffectGuard | undefined, check: () => void): EffectGuard {
