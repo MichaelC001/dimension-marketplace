@@ -14210,7 +14210,7 @@ var BrowserRuntime = class {
         refuseWhilePublishing(entry, caller);
         refuseWhileTakenOver(entry, caller);
       }
-      if (by?.caller === "app" && openedByAgent(entry.openers)) {
+      if (by?.caller === "app") {
         this.remember(browserId, `the person closed it in the Browser View; open it again with ${reopenWith(entry)}`);
       }
       if (mine !== void 0) entry.openers.delete(mine);

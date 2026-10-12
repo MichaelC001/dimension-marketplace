@@ -724,7 +724,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				// An agent closing a browser the person took over would end what they are doing in it.
 				refuseWhileTakenOver(entry, caller);
 			}
-			if (by?.caller === "app" && openedByAgent(entry.openers)) {
+			if (by?.caller === "app") {
 				this.remember(browserId, `the person closed it in the Browser View; open it again with ${reopenWith(entry)}`);
 			}
 			// The hold is given up only once the close is admitted: a close that was refused keeps it.

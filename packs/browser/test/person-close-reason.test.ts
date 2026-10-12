@@ -66,6 +66,11 @@ function openedId(result: ToolResult): string {
 	return OpenedSchema.parse(result.structuredContent).browserId;
 }
 
+function learnedId(result: ToolResult): string {
+	if (result.isError) throw new Error(`the state read failed: ${textOf(result)}`);
+	return OpenedSchema.parse(result.structuredContent).browserId;
+}
+
 function refusal(result: ToolResult): string {
 	if (!result.isError) throw new Error(`expected a refusal, got: ${textOf(result).slice(0, 200)}`);
 	return textOf(result);
@@ -82,10 +87,10 @@ function reasonGiven(result: ToolResult): string {
 	return text.slice(GONE.length + 2);
 }
 
-function expectToldPersonClosedIt(reason: string): void {
+function expectToldPersonClosedIt(reason: string, reopenTool: string): void {
 	expect(reason).toMatch(/person/i);
 	expect(reason).toMatch(/closed/i);
-	expect(reason).toContain("browser_open");
+	expect(reason).toContain(`open it again with ${reopenTool}`);
 }
 
 const stateOn = (r: Rig, who: Who, browserId: string): Promise<ToolResult> => r.call("browser_state", { browserId }, who);
@@ -102,8 +107,8 @@ describeWithChrome("what a chat is told when the person closes its browser in th
 			expect(closeAnswer(await r.call("browser_close", { browserId }, PERSON_IN_A))).toEqual({ closed: true });
 
 			for (const chat of [CHAT_A, CHAT_B]) {
-				expectToldPersonClosedIt(reasonGiven(await stateOn(r, chat, browserId)));
-				expectToldPersonClosedIt(reasonGiven(await actOn(r, chat, browserId)));
+				expectToldPersonClosedIt(reasonGiven(await stateOn(r, chat, browserId)), "browser_open");
+				expectToldPersonClosedIt(reasonGiven(await actOn(r, chat, browserId)), "browser_open");
 			}
 		},
 		BROWSER_TEST_TIMEOUT_MS,
@@ -118,7 +123,23 @@ describeWithChrome("what a chat is told when the person closes its browser in th
 
 			expect(closeAnswer(await r.call("browser_close", { browserId }, PERSON_IN_A))).toEqual({ closed: true });
 
-			expectToldPersonClosedIt(reasonGiven(await stateOn(r, CHAT_A, browserId)));
+			expectToldPersonClosedIt(reasonGiven(await stateOn(r, CHAT_A, browserId)), "browser_open");
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"a chat that only read the person's browser through the View, never opening or joining it, is told the person closed it",
+		async () => {
+			const r = await rig();
+			const shown = openedId(await r.call("browser_view", {}, PERSON_IN_A));
+			const browserId = learnedId(await r.call("browser_state", {}, CHAT_A));
+			expect(browserId).toBe(shown);
+
+			expect(closeAnswer(await r.call("browser_close", { browserId }, PERSON_IN_A))).toEqual({ closed: true });
+
+			expectToldPersonClosedIt(reasonGiven(await stateOn(r, CHAT_A, browserId)), "browser_view");
+			expectToldPersonClosedIt(reasonGiven(await actOn(r, CHAT_A, browserId)), "browser_view");
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);
@@ -152,11 +173,12 @@ describeWithChrome("closes that already answer well and must keep answering the 
 	);
 
 	test(
-		"the person closing a browser no chat holds answers closed: true and the next call on it is refused",
+		"the person closing the same browser twice answers closed: true both times, and the id stays refused after",
 		async () => {
 			const r = await rig();
 			const browserId = openedId(await r.call("browser_view", {}, PERSON_ALONE));
 
+			expect(closeAnswer(await r.call("browser_close", { browserId }, PERSON_ALONE))).toEqual({ closed: true });
 			expect(closeAnswer(await r.call("browser_close", { browserId }, PERSON_ALONE))).toEqual({ closed: true });
 
 			expect(refusal(await stateOn(r, PERSON_ALONE, browserId))).toStartWith(GONE);
