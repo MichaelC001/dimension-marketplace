@@ -14210,6 +14210,9 @@ var BrowserRuntime = class {
         refuseWhilePublishing(entry, caller);
         refuseWhileTakenOver(entry, caller);
       }
+      if (by?.caller === "app" && openedByAgent(entry.openers)) {
+        this.remember(browserId, `the person closed it in the Browser View; open it again with ${reopenWith(entry)}`);
+      }
       if (mine !== void 0) entry.openers.delete(mine);
       await this.teardown(entry);
       closed = true;
@@ -16593,7 +16596,7 @@ var LiveChannel = class {
 var plugin_default = {
   $schema: "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   name: "browser",
-  version: "0.8.0",
+  version: "0.8.1",
   description: "A real browser beside your chat that your agent drives while you watch. Tabs, persistent logged-in profiles, circle-to-annotate, and an optional fast task agent (jev).",
   keywords: [
     "browser",
