@@ -384,6 +384,27 @@ describeWithChrome("tabs the person opened", () => {
     expect(tabs.filter(tab => tab.active).map(tab => tab.url)).toEqual([pages.url("/other")]);
     expect(await valueOf(host, "s1", "browser.active().url()")).toBe(pages.url("/other"));
   }, BROWSER_TEST_TIMEOUT_MS);
+
+  test("a page the person opened in the View on a saved profile is what browser.active() reads and browser.tabs() lists, though the cell never opened a browser", async () => {
+    const { host, runtime } = await start();
+    const opened = await runtime.open({ profile: "person-view" }, { caller: "app", session: "s1" });
+    runtime.bindView("s1", opened.browserId);
+    await runtime.act(opened.browserId, { kind: "navigate", url: pages.url("/form") });
+    expect(await valueOf(host, "s1", "browser.active().url()")).toBe(pages.url("/form"));
+    expect(await valueOf(host, "s1", "(await browser.tabs()).map(tab => tab.url).join()")).toBe(pages.url("/form"));
+  }, BROWSER_TEST_TIMEOUT_MS);
+
+  test("browser.active() never adopts a tab another chat opened in a saved profile both chats hold", async () => {
+    const { host, runtime } = await start();
+    const mine = await runtime.open({ profile: "shared-view" }, { caller: "app", session: "s1" });
+    runtime.bindView("s1", mine.browserId);
+    await runtime.act(mine.browserId, { kind: "navigate", url: pages.url("/form") });
+    const theirs = await runtime.open({ profile: "shared-view" }, { caller: "model", session: "s2" });
+    expect(theirs.browserId).toBe(mine.browserId);
+    await runtime.tab(mine.browserId, { op: "new", url: pages.url("/other") }, "model", "s2");
+    const refused = await failureOf(host, "s1", "browser.active().url()");
+    expect(refused.message).toMatch(/another chat/);
+  }, BROWSER_TEST_TIMEOUT_MS);
 });
 
 describeWithChrome("a person takes the browser over while a cell is using it", () => {

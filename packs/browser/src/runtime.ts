@@ -1098,6 +1098,12 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				const entry = id === undefined ? undefined : this.byId.get(id);
 				return entry?.profile === null || entry?.profile === RELAY_PROFILE ? id : undefined;
 			},
+			shownTo: (session) => {
+				const id = this.viewOf(session);
+				const entry = id === undefined ? undefined : this.byId.get(id);
+				return entry === undefined || entry.closed ? undefined : entry;
+			},
+			tabOwner: (browserId, tabId) => this.byId.get(browserId)?.tabOwners.get(tabId),
 			bindView: (session, browserId) => this.bindView(session, browserId),
 			hold: (entry) => this.holdWork(entry as Entry),
 			working: (entry) => this.working(entry as Entry),

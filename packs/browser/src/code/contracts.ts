@@ -217,6 +217,7 @@ export interface CodeBrowserPort {
   activity(browserId: string): { idleMs: number; viewers: number; pending: number; working: boolean } | undefined;
   /** The browser the session already holds (one a cell made, or the person opened in the View), without making one: what `browser.tabs()` and `browser.active()` read. */
   existing(session: string): { browserId: string; wsEndpoint: string; kind: BrowserKind } | undefined;
+  ownedByAnotherChat(browserId: string, tabId: string, session: string): boolean;
   /** A View joined the browser's live stream, or a task agent began driving it: a frozen tab draws nothing and answers no timer, so the host thaws before either looks. */
   onViewed(l: (browserId: string) => void): () => void;
   /** The host is shutting down: let go of what the port holds that the runtime does not (the splits of a cmux browser). The runtime closes its own browsers. */

@@ -767,16 +767,22 @@ export class CodeSession {
 
   /** `browser.active()`: the tab the person is looking at, adopted like an `open` under its own name or one made up from its id. */
   async #activeTab(run: Run): Promise<HostReply> {
+    let heldByAnotherChat = false;
     for (const record of this.#known()) {
       this.#holdFor(run, record.browserId);
       const current = (await this.#d.browsers.tabs(record.browserId)).find(ref => ref.active);
       if (current === undefined) continue;
+      if (this.#d.browsers.ownedByAnotherChat(record.browserId, current.tabId, this.#d.session)) {
+        heldByAnotherChat = true;
+        continue;
+      }
       const named = [...this.#tabs.values()].find(tab => tab.browserId === record.browserId && tab.handle.tabId === current.tabId);
       const name = named?.name ?? `tab-${current.tabId.slice(0, 6)}`;
       const handle = this.#handleFor(current, record, { created: named?.handle.created ?? false });
       this.#tabs.set(name, { name, browserId: record.browserId, kind: record.kind, handle });
       return { text: "", details: { action: "active", name, url: current.url }, attach: handle };
     }
+    if (heldByAnotherChat) throw new ToolError("The page in view belongs to another chat, and each chat works only on its own tabs. Open a tab of your own with browser.open().");
     throw new ToolError("No browser is open in this session. Open one with browser.open() first.");
   }
 

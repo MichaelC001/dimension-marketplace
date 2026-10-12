@@ -60,6 +60,8 @@ export interface CodeSeam {
   /** The session's open browsers, whoever opened them. */
   browsersOf(session: string): CodeSeamEntry[];
   viewOf(session: string): string | undefined;
+  shownTo(session: string): CodeSeamEntry | undefined;
+  tabOwner(browserId: string, tabId: string): string | undefined;
   bindView(session: string, browserId: string): void;
   /** One call in flight: out of idle close and make-room. Throws `task_running`, `publish_pending` (and `human_driving` once the person has the wheel). */
   hold(entry: CodeSeamEntry): () => void;
@@ -348,8 +350,15 @@ export class RuntimeCodeBrowsers implements CodeBrowserPort {
   }
 
   existing(session: string): { browserId: string; wsEndpoint: string; kind: BrowserKind } | undefined {
-    const entry = this.#reusable(session);
+    const shown = this.#seam.shownTo(session);
+    const entry = shown !== undefined && !shown.closed ? shown : this.#reusable(session);
     return entry === undefined ? undefined : { browserId: entry.browserId, wsEndpoint: entry.driver.cdpEndpoint(), kind: entry.code?.kind ?? { kind: "headless", headless: this.#hidden } };
+  }
+
+  ownedByAnotherChat(browserId: string, tabId: string, session: string): boolean {
+    if (this.#cmux.owns(browserId)) return false;
+    const owner = this.#seam.tabOwner(browserId, tabId);
+    return owner !== undefined && owner !== session;
   }
 
   holdWork(browserId: string): () => void {
