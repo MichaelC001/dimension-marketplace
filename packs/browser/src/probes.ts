@@ -73,6 +73,8 @@ const bskyHandle = (href: string): string | undefined => {
 const EMAIL = /[\p{L}\p{N}._%+-]+@[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)+/u;
 /** The email in Google's "Google Account: Jane Doe (jane@gmail.com)". The name is never kept: an email names the account. */
 const googleEmail = (label: string): string | undefined => label.match(EMAIL)?.[0];
+/** The signed-in button's own label, "Google Account: Jane Doe (jane@gmail.com)": the links labelled "Google Account settings" match the marker too, come first on Google's account page, and name nobody. */
+const GOOGLE_ACCOUNT_BUTTON = 'a[aria-label^="Google Account:"]';
 const GOOGLE_MARKER = 'a[aria-label^="Google Account"]';
 
 export const SITE_PROBES: readonly SiteProbe[] = [
@@ -84,7 +86,7 @@ export const SITE_PROBES: readonly SiteProbe[] = [
 	{
 		host: "google.com",
 		signedIn: GOOGLE_MARKER,
-		account: { from: "label", selector: GOOGLE_MARKER, pick: googleEmail },
+		account: { from: "label", selector: GOOGLE_ACCOUNT_BUTTON, pick: googleEmail },
 		loginPaths: [],
 	},
 ];

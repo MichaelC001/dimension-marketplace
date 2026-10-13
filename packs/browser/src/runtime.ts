@@ -40,7 +40,7 @@ import { join } from "node:path";
 import { type ConnectionObservations, isPublicSite, siteHost } from "./connection.js";
 import { checkNewProfile, cleanAvatar, isProfileColour, matchProfiles, PROFILE_COLOURS, type ResolvedProfileMeta, resolveProfileMeta } from "./profile-meta.js";
 import { DEFAULT_PROFILE, profileSlug, RELAY_PROFILE } from "./profile-name.js";
-import { buildProfileList, type HoldFact } from "./profile-list.js";
+import { buildProfileList, profileSites, signedInHosts, type HoldFact } from "./profile-list.js";
 import { probeFor, readProbe, type SiteProbe, type ProbeVerdict } from "./probes.js";
 import { PROBE_DEBOUNCE_MS, RELOOK_MS, SETTLE_MS } from "./probe-timing.js";
 import type {
@@ -122,6 +122,8 @@ const PROBE_CLOSE_MS = 2_500;
 /** The same sign-in fact is not rewritten more often than this; a visit to a site with no probe, less often still. */
 const CHECK_RENOTE_MS = 30_000;
 const VISIT_RENOTE_MS = 10 * 60_000;
+/** The sites a profile is signed in to are read from its file at most this often when nothing was noted (the state that carries them is sampled several times a second; a site's claim also ages out). */
+const SIGNED_IN_CACHE_MS = 60_000;
 /** Remembered "last noted" facts; the table is emptied when it grows past this. */
 const MAX_NOTED = 512;
 /** browser_read's reader browser is closed this long after its last read. */
@@ -441,6 +443,8 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	private readonly openers = new Map<string, Map<string, BrowserOpener>>();
 	/** The last passive observation per profile and site, so a page that reloads does not rewrite the same fact. */
 	private readonly lastNoted = new Map<string, { key: string; at: number }>();
+	/** What `signedInTo` last read from disk per profile; a note written for the profile drops its entry. */
+	private readonly signedInCache = new Map<string, { hosts: string[]; at: number }>();
 	private readonly connectionListeners = new Set<() => void>();
 	/** Profiles with persisted observations, so a deleted one is noticed and reported gone. */
 	private readonly observedProfiles = new Set<string>();
@@ -1512,7 +1516,10 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				this.profileWatcher = watch(this.store.profilesRoot, { persistent: false }, () => {
 					const gone = [...this.observedProfiles].filter((profile) => !existsSync(this.store.profileDir(profile)));
 					if (gone.length === 0) return;
-					for (const profile of gone) this.observedProfiles.delete(profile);
+					for (const profile of gone) {
+						this.observedProfiles.delete(profile);
+						this.signedInCache.delete(profile);
+					}
 					this.connectionsChanged();
 				});
 				this.profileWatcher.on("error", () => {
@@ -1545,6 +1552,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			console.error("Browser sign-in observation was not saved:", describe(error));
 			return;
 		}
+		this.signedInCache.delete(profile);
 		this.observedProfiles.add(profile);
 		this.connectionsChanged();
 	}
@@ -2543,7 +2551,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			canGoBack: state.canGoBack, canGoForward: state.canGoForward,
 			publish: entry.publish ? publishRecord(entry.publish) : null,
 			dialogs: state.dialogs,
-			takenOver: entry.takenOver, agentActionAt: agentActionAt(entry),
+			takenOver: entry.takenOver, agentActionAt: agentActionAt(entry), signedInTo: this.signedInTo(entry.profile),
 		};
 	}
 
@@ -2554,8 +2562,19 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			revision: entry.revision, viewport: entry.viewport, task: entry.task ? cloneTask(entry.task) : null,
 			tabs: [], activeTabId: "", loading: false, canGoBack: false, canGoForward: false,
 			publish: entry.publish ? publishRecord(entry.publish) : null,
-			dialogs: [], takenOver: entry.takenOver, agentActionAt: entry.agentAt,
+			dialogs: [], takenOver: entry.takenOver, agentActionAt: entry.agentAt, signedInTo: this.signedInTo(entry.profile),
 		};
+	}
+
+	/** The sites a saved profile was last seen signed in to, newest first: what the View's chip names. Nothing for a throwaway or the relay. */
+	private signedInTo(profile: string | null): string[] {
+		if (profile === null || profile === RELAY_PROFILE) return [];
+		const now = Date.now();
+		const cached = this.signedInCache.get(profile);
+		if (cached !== undefined && now - cached.at < SIGNED_IN_CACHE_MS) return [...cached.hosts];
+		const hosts = signedInHosts(profileSites(this.store, profile, now));
+		this.signedInCache.set(profile, { hosts, at: now });
+		return [...hosts];
 	}
 
 	/**

@@ -12789,25 +12789,30 @@ function isObject2(value) {
 
 // src/profile-list.ts
 var MAX_PROFILES_FOR_MODEL = 40;
+function profileSites(store, slug, now) {
+  const sites = [];
+  for (const [site, observed] of Object.entries(store.connections(slug))) {
+    const seen = new Date(observed.observedAt);
+    if (observed.signedIn === null || Number.isNaN(seen.getTime())) continue;
+    const account2 = reportableAccount(observed.account);
+    sites.push({
+      site,
+      ...account2 === void 0 ? {} : { account: account2 },
+      signedIn: effectiveSignedIn(observed.signedIn, observed.observedAt, now),
+      seenAt: seen.toISOString()
+    });
+  }
+  return sites.sort((a, b) => b.seenAt.localeCompare(a.seenAt) || a.site.localeCompare(b.site));
+}
+function signedInHosts(sites) {
+  return sites.filter((site) => site.signedIn === true).map((site) => site.site);
+}
 function buildProfileList(store, holdOf, now) {
   return store.list().filter((slug) => slug !== RELAY_PROFILE).map((slug) => {
     const stored = store.meta(slug);
     const { label, colour, avatar } = resolveProfileMeta(slug, stored);
-    const sites = [];
-    for (const [site, observed] of Object.entries(store.connections(slug))) {
-      const seen = new Date(observed.observedAt);
-      if (observed.signedIn === null || Number.isNaN(seen.getTime())) continue;
-      const account2 = reportableAccount(observed.account);
-      sites.push({
-        site,
-        ...account2 === void 0 ? {} : { account: account2 },
-        signedIn: effectiveSignedIn(observed.signedIn, observed.observedAt, now),
-        seenAt: seen.toISOString()
-      });
-    }
-    sites.sort((a, b) => b.seenAt.localeCompare(a.seenAt) || a.site.localeCompare(b.site));
     const { heldBy, hold: hold2, browserId } = holdOf(slug);
-    return { name: slug, label, colour, ...avatar === void 0 ? {} : { avatar }, heldBy, ...hold2 === void 0 ? {} : { hold: hold2 }, ...browserId === void 0 ? {} : { browserId }, sites };
+    return { name: slug, label, colour, ...avatar === void 0 ? {} : { avatar }, heldBy, ...hold2 === void 0 ? {} : { hold: hold2 }, ...browserId === void 0 ? {} : { browserId }, sites: profileSites(store, slug, now) };
   });
 }
 var forModel = ({ avatar: _avatar, hold: hold2, browserId: _browserId, ...profile2 }) => ({
@@ -12876,9 +12881,6 @@ import { join as join15 } from "node:path";
 var PROBE_DEBOUNCE_MS = 400;
 var SETTLE_MS2 = 3e3;
 var RELOOK_MS = 4e3;
-var NOTE_SLACK_MS = 1100;
-var SIGN_IN_NOTED_MS = PROBE_DEBOUNCE_MS + SETTLE_MS2 + NOTE_SLACK_MS;
-var SIGN_OUT_NOTED_MS = PROBE_DEBOUNCE_MS + SETTLE_MS2 + RELOOK_MS + NOTE_SLACK_MS;
 
 // recipes/x-post.json
 var signedIn = '[data-testid="SideNav_AccountSwitcher_Button"]';
@@ -12900,6 +12902,7 @@ var bskyHandle = (href) => {
 };
 var EMAIL = /[\p{L}\p{N}._%+-]+@[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)+/u;
 var googleEmail = (label) => label.match(EMAIL)?.[0];
+var GOOGLE_ACCOUNT_BUTTON = 'a[aria-label^="Google Account:"]';
 var GOOGLE_MARKER = 'a[aria-label^="Google Account"]';
 var SITE_PROBES = [
   { host: "x.com", signedIn, account: { from: "text", selector: account }, loginPaths: ["/login", "/i/flow/login"] },
@@ -12910,7 +12913,7 @@ var SITE_PROBES = [
   {
     host: "google.com",
     signedIn: GOOGLE_MARKER,
-    account: { from: "label", selector: GOOGLE_MARKER, pick: googleEmail },
+    account: { from: "label", selector: GOOGLE_ACCOUNT_BUTTON, pick: googleEmail },
     loginPaths: []
   }
 ];
@@ -13850,6 +13853,7 @@ var APP_NAMES = { chrome: "Chrome", msedge: "Edge", chromium: "Chromium", custom
 var PROBE_CLOSE_MS = 2500;
 var CHECK_RENOTE_MS = 3e4;
 var VISIT_RENOTE_MS = 10 * 6e4;
+var SIGNED_IN_CACHE_MS = 6e4;
 var MAX_NOTED = 512;
 var READER_IDLE_MS = 6e4;
 var THROWAWAY_IDLE_MS = 10 * 6e4;
@@ -13963,6 +13967,8 @@ var BrowserRuntime = class {
   openers = /* @__PURE__ */ new Map();
   /** The last passive observation per profile and site, so a page that reloads does not rewrite the same fact. */
   lastNoted = /* @__PURE__ */ new Map();
+  /** What `signedInTo` last read from disk per profile; a note written for the profile drops its entry. */
+  signedInCache = /* @__PURE__ */ new Map();
   connectionListeners = /* @__PURE__ */ new Set();
   /** Profiles with persisted observations, so a deleted one is noticed and reported gone. */
   observedProfiles = /* @__PURE__ */ new Set();
@@ -14916,7 +14922,10 @@ var BrowserRuntime = class {
         this.profileWatcher = watch(this.store.profilesRoot, { persistent: false }, () => {
           const gone = [...this.observedProfiles].filter((profile2) => !existsSync7(this.store.profileDir(profile2)));
           if (gone.length === 0) return;
-          for (const profile2 of gone) this.observedProfiles.delete(profile2);
+          for (const profile2 of gone) {
+            this.observedProfiles.delete(profile2);
+            this.signedInCache.delete(profile2);
+          }
           this.connectionsChanged();
         });
         this.profileWatcher.on("error", () => {
@@ -14948,6 +14957,7 @@ var BrowserRuntime = class {
       console.error("Browser sign-in observation was not saved:", describe3(error));
       return;
     }
+    this.signedInCache.delete(profile2);
     this.observedProfiles.add(profile2);
     this.connectionsChanged();
   }
@@ -15850,7 +15860,8 @@ ${host}`;
       publish: entry.publish ? publishRecord(entry.publish) : null,
       dialogs: state.dialogs,
       takenOver: entry.takenOver,
-      agentActionAt: agentActionAt(entry)
+      agentActionAt: agentActionAt(entry),
+      signedInTo: this.signedInTo(entry.profile)
     };
   }
   /** State when the page cannot be read (it may be mid-navigation after a failed action). */
@@ -15874,8 +15885,19 @@ ${host}`;
       publish: entry.publish ? publishRecord(entry.publish) : null,
       dialogs: [],
       takenOver: entry.takenOver,
-      agentActionAt: entry.agentAt
+      agentActionAt: entry.agentAt,
+      signedInTo: this.signedInTo(entry.profile)
     };
+  }
+  /** The sites a saved profile was last seen signed in to, newest first: what the View's chip names. Nothing for a throwaway or the relay. */
+  signedInTo(profile2) {
+    if (profile2 === null || profile2 === RELAY_PROFILE) return [];
+    const now = Date.now();
+    const cached = this.signedInCache.get(profile2);
+    if (cached !== void 0 && now - cached.at < SIGNED_IN_CACHE_MS) return [...cached.hosts];
+    const hosts = signedInHosts(profileSites(this.store, profile2, now));
+    this.signedInCache.set(profile2, { hosts, at: now });
+    return [...hosts];
   }
   /**
    * `value` with every saved password of this profile (on disk, plus any this
@@ -16845,7 +16867,7 @@ async function previewResult(runtime, browserId, session) {
 }
 function stateFor(caller, state) {
   if (caller === "app") return state;
-  const { look: _look, ...rest } = state;
+  const { look: _look, signedInTo: _signedInTo, ...rest } = state;
   return { ...rest, tabs: state.tabs.map(({ favicon: _favicon, ...tab }) => tab) };
 }
 function actText(outcome) {

@@ -34,6 +34,15 @@ const PAGES: Record<string, () => Response> = {
 				'<div class="mail-body"><a href="https://evil.example/?authuser=1">a</a><a href="https://evil.example/?authuser=2">b</a><a href="https://accounts.google.com/AccountChooser?authuser=3">c</a></div>',
 			].join(""),
 		),
+	// Google's own account page: links labelled "Google Account settings" come first, the signed-in button with the email after them.
+	"/google-account": () =>
+		page(
+			[
+				'<a aria-label="Google Account settings" href="/settings">Google Account</a>',
+				'<a aria-label="Google Account settings" href="/settings">settings</a>',
+				'<a aria-label="Google Account: Jane Doe  \n(jane@gmail.com)" href="https://accounts.google.com/SignOutOptions?authuser=0">J</a>',
+			].join(""),
+		),
 	"/google-out": () => page('<a href="https://accounts.google.com/ServiceLogin">Sign in</a>'),
 	"/bsky": () => page('<a aria-label="Profile" href="/profile/alice.bsky.social">Profile</a>'),
 	// A form control whose label is not the page's to hand over.

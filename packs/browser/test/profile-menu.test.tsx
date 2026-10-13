@@ -16,13 +16,12 @@
  *  never answers (the state a View mounts with is the state it shows, until a
  *  tool answer replaces it), and the rest is the test's to answer.
  */
-import { afterEach, describe, expect, jest, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import type { App } from "@modelcontextprotocol/ext-apps";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { act, type ReactNode } from "react";
 import type { BrowserState, OpenBrowserListing, ProfileListing, PublishRecord, TaskRun } from "../src/contracts";
 import { BrowserApp } from "../app/view/browser-app";
-import { SIGN_IN_NOTED_MS, SIGN_OUT_NOTED_MS } from "../src/probe-timing";
 import { defaultColour, PROFILE_COLOURS } from "../src/profile-meta";
 import { DEFAULT_PROFILE } from "../src/profile-name";
 import { type Dom, mount, unmountAll } from "./dom-harness";
@@ -138,6 +137,7 @@ function browserOf(browserId: string, profile: ProfileListing | null, over: Part
 		dialogs: [],
 		takenOver: false,
 		agentActionAt: null,
+		signedInTo: profile === null ? [] : profile.sites.filter(listed => listed.signedIn === true).map(listed => listed.site),
 		...over,
 	};
 }
@@ -242,44 +242,19 @@ describe("the profile chip", () => {
 		});
 	}
 
-	test("the chip follows what the pack notes after the page settles, with the menu never opened: a sign-in when it is noted, a sign-out when that is", async () => {
-		jest.useFakeTimers();
-		try {
-			const signedOut = listing("default", "Default");
-			const host = fakeHost([signedOut]);
-			const dom = await mount(
-				<Unfocused>
-					<BrowserApp app={host.app} toolState={{ state: browserOf("b1", signedOut), seq: 1 }} />
-				</Unfocused>,
-			);
-			/** Let `ms` pass on the fake clock (settling costs 20 ms of it), then let what the timers started finish. */
-			const pass = async (ms: number) => {
-				await act(async () => {
-					jest.advanceTimersByTime(ms);
-				});
-				const settled = dom.settle();
-				jest.advanceTimersByTime(20);
-				await settled;
-			};
-			const label = () => chipOf(dom).getAttribute("aria-label");
-			await pass(0);
-			expect(label()).not.toContain("Signed in");
+	for (const { name, signedInTo, label } of [
+		{ name: "a profile with no sign-in", signedInTo: [], label: "Default, No sign-ins yet" },
+		{ name: "one site", signedInTo: ["google.com"], label: "Default, Signed in to google.com" },
+		{ name: "three sites, two named", signedInTo: ["google.com", "x.com", "reddit.com"], label: "Default, Signed in to google.com, x.com +1" },
+	]) {
+		test(`the chip says what the browser's own state says its profile is signed in to, with no read of its own: ${name}`, async () => {
+			const host = fakeHost(SHELF);
+			const dom = await mountView(host, browserOf("b1", listing("default", "Default"), { signedInTo }));
 
-			host.profiles = [listing("default", "Default", { sites: [site("google.com")] })];
-			await pass(SIGN_IN_NOTED_MS - 100);
-			expect(label()).not.toContain("Signed in");
-			await pass(100);
-			expect(label()).toContain("Signed in to google.com");
-
-			host.profiles = [listing("default", "Default", { sites: [site("google.com", false)] })];
-			await pass(SIGN_OUT_NOTED_MS - SIGN_IN_NOTED_MS - 160);
-			expect(label()).toContain("Signed in to google.com");
-			await pass(100);
-			expect(label()).not.toContain("Signed in");
-		} finally {
-			jest.useRealTimers();
-		}
-	});
+			expect(chipOf(dom).getAttribute("aria-label")).toBe(`${label} — profiles`);
+			expect(callsTo(host, "browser_profiles")).toEqual([]);
+		});
+	}
 });
 
 // ---------------------------------------------------------------------------

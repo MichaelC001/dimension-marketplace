@@ -98,23 +98,25 @@ describe("what one look at a page decides", () => {
 
 	test("Google: the email in the account button's label — never the display name, and no email at all is no account", async () => {
 		const probe = probeOf("google.com");
-		const button = 'a[aria-label^="Google Account"]';
-		const email = fakeReader({ present: [button], labels: { [button]: "Google Account: Jane Doe  \n(jane@gmail.com)" } });
+		const marker = probe.signedIn;
+		const button = 'a[aria-label^="Google Account:"]';
+		const email = fakeReader({ present: [marker], labels: { [button]: "Google Account: Jane Doe  \n(jane@gmail.com)" } });
 		expect(await readProbe(email, probe, "https://www.google.com/", 50)).toEqual({ signedIn: true, account: "jane@gmail.com" });
-		const named = fakeReader({ present: [button], labels: { [button]: "Google Account: Jane Doe" } });
+		const named = fakeReader({ present: [marker], labels: { [button]: "Google Account: Jane Doe" } });
 		expect(await readProbe(named, probe, "https://www.google.com/", 50)).toEqual({ signedIn: true });
 	});
 
 	test("Google: no count of other accounts is taken from the page — a mail body holds any link its sender likes, so `authuser` links, foreign or on Google's own host, add nothing", async () => {
 		const probe = probeOf("google.com");
-		const button = 'a[aria-label^="Google Account"]';
+		const marker = probe.signedIn;
+		const button = 'a[aria-label^="Google Account:"]';
 		const forged = [
 			...[1, 2, 3, 4, 5, 6, 7, 8, 9].map((slot) => `https://evil.example/?authuser=${slot}`),
 			"https://accounts.google.com/AccountChooser?authuser=10",
 			"https://mail.google.com/mail/u/11/?authuser=11",
 		];
 		// Whatever selector the probe asks for, the page answers with the sender's links.
-		const reader = { ...fakeReader({ present: [button], labels: { [button]: "Google Account: Jane Doe (jane@gmail.com)" } }), linkHrefs: async () => forged };
+		const reader = { ...fakeReader({ present: [marker], labels: { [button]: "Google Account: Jane Doe (jane@gmail.com)" } }), linkHrefs: async () => forged };
 		expect(await readProbe(reader, probe, "https://mail.google.com/mail/u/0/", 50)).toEqual({ signedIn: true, account: "jane@gmail.com" });
 	});
 
@@ -182,6 +184,27 @@ describeWithChrome("a sign-in the person makes in the View", () => {
 			expect(seenWork).toEqual([{ site: "in.localhost", account: "@alice", signedIn: true, seenAt: seenWork[0]?.seenAt as string }]);
 			expect(Number.isNaN(Date.parse(seenWork[0]?.seenAt as string))).toBe(false);
 			expect(seenPersonal).toEqual([{ site: "out.localhost", signedIn: false, seenAt: seenPersonal[0]?.seenAt as string }]);
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"the state the View streams names the sites its profile is signed in to, so the chip needs no read of its own: a throwaway has none, and a note written after the state was first read shows in the next",
+		async () => {
+			const { site, runtime } = await setup([markerProbe("in.localhost"), markerProbe("out.localhost")]);
+			const throwaway = await runtime.open({ viewport: VIEWPORT }, HUMAN);
+			const work = await runtime.open({ profile: "work", viewport: VIEWPORT }, HUMAN);
+			expect((await runtime.liveState(work.browserId)).signedInTo).toEqual([]);
+			expect((await runtime.liveState(throwaway.browserId)).signedInTo).toEqual([]);
+
+			await perform(runtime, work.browserId, { kind: "navigate", url: site.url("in.localhost", "/signed-in") });
+			await waitUntil("work's sign-in", () => sitesOf(runtime, "work"), (list) => list.length === 1);
+			expect((await runtime.liveState(work.browserId)).signedInTo).toEqual(["in.localhost"]);
+
+			// A site seen signed out is not one it is signed in to.
+			await perform(runtime, work.browserId, { kind: "navigate", url: site.url("out.localhost", "/") });
+			await waitUntil("work's sign-out", () => sitesOf(runtime, "work"), (list) => list.length === 2);
+			expect((await runtime.liveState(work.browserId)).signedInTo).toEqual(["in.localhost"]);
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);
@@ -303,7 +326,7 @@ describeWithChrome("a sign-in the person makes in the View", () => {
 	test(
 		"the shipped Google and Bluesky probes read their accounts off pages with the sites' markup; a form control's label is never read",
 		async () => {
-			const { site, runtime } = await setup([shippedProbeOn("google.com", "g.localhost"), shippedProbeOn("bsky.app", "b.localhost"), { ...markerProbe("ctl.localhost"), account: { from: "label", selector: "#acct", pick: (label: string) => label } }]);
+			const { site, runtime } = await setup([shippedProbeOn("google.com", "g.localhost"), shippedProbeOn("google.com", "m.localhost"), shippedProbeOn("bsky.app", "b.localhost"), { ...markerProbe("ctl.localhost"), account: { from: "label", selector: "#acct", pick: (label: string) => label } }]);
 			const opened = await runtime.open({ profile: "work", viewport: VIEWPORT }, HUMAN);
 			const seen = async (host: string, path: string) => {
 				await perform(runtime, opened.browserId, { kind: "navigate", url: site.url(host, path) });
@@ -311,6 +334,8 @@ describeWithChrome("a sign-in the person makes in the View", () => {
 			};
 			// The page also carries a mail body's worth of `authuser` links: none of them is a count.
 			expect(await seen("g.localhost", "/google")).toMatchObject({ signedIn: true, account: "jane@gmail.com" });
+			// Google's own account page: "Google Account settings" links match the marker first, and name nobody.
+			expect(await seen("m.localhost", "/google-account")).toMatchObject({ signedIn: true, account: "jane@gmail.com" });
 			expect(await seen("b.localhost", "/bsky")).toMatchObject({ signedIn: true, account: "@alice.bsky.social" });
 			const control = await seen("ctl.localhost", "/control");
 			expect(control).toMatchObject({ signedIn: true });

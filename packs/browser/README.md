@@ -506,8 +506,10 @@ A profile's sign-ins are kept in its Chrome folder on disk and are still there a
 
 **The profile menu (the View).** The toolbar's chip is the browser's profile: its avatar (the emoji
 the person chose, else the label's first letter, on the profile's colour) and its label; Private for a
-throwaway browser, Your Chrome for the relay. Its face rides the browser's own state (`look`), so drawing it
-costs no call. Opening the menu reads `browser_profiles` and lists the others, Default first and then by
+throwaway browser, Your Chrome for the relay. Its face rides the browser's own state (`look`) and so do the sites its
+profile is signed in to (`signedInTo`, hosts only, newest first, read from the profile's file at most once a minute and
+again after every note the pack writes, left out of what a model is sent), so drawing the chip costs no call and a sign-in
+the pack notes reaches it on the live stream at once. Opening the menu reads `browser_profiles` and lists the others, Default first and then by
 label, each with where it is signed in or who has it: every profile is one click away, and one another chat also
 has open joins that chat on its browser (a profile is one Chrome, shared per tab); who else is on it is still read
 out to a

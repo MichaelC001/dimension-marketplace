@@ -192,10 +192,10 @@ async function previewResult(runtime: BrowserRuntimePort, browserId: string, ses
 
 
 
-/** A state as its caller reads it: the View draws the tabs' favicons (data: URLs of up to 32 KB each) and the profile's look (label, colour, avatar); a model would pay for every one, every call. */
+/** A state as its caller reads it: the View draws the tabs' favicons (data: URLs of up to 32 KB each), the profile's look (label, colour, avatar) and the sites it is signed in to (the chip); a model would pay for every one, every call. */
 function stateFor(caller: ToolCaller | undefined, state: BrowserState): object {
   if (caller === "app") return state;
-  const { look: _look, ...rest } = state;
+  const { look: _look, signedInTo: _signedInTo, ...rest } = state;
   return { ...rest, tabs: state.tabs.map(({ favicon: _favicon, ...tab }) => tab) };
 }
 
