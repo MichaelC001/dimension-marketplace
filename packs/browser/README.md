@@ -232,8 +232,9 @@ so sites treat it as one:
   reports that. Every headless browser the pack starts, the View and a saved
   profile included, gets a screen of at least 1920x1080 and a window that
   holds its page plus 88 px of tab strip and address bar (`fitScreen` in
-  `src/engines/agent-browser.ts`), for each tab and each popup from its first
-  line, and again on every resize. This is a window where there was none, not
+  `src/engines/agent-browser.ts`): the screen goes to each new tab and popup
+  before its first document runs, the window bounds when the tab is adopted,
+  and both again on every resize. This is a window where there was none, not
   a changed fingerprint: the GPU, the User-Agent, `navigator.webdriver` and
   the driver's own traces are the host's. Measured 2026-10-13 on Dev Dimension,
   Windows, Chrome 154: a sign-in on x.com that a plain Chrome took past the
