@@ -11008,13 +11008,17 @@ var RuntimeCodeBrowsers = class {
     if (this.#cmux.owns(browserId)) return await abortable(this.#cmux.openTab(browserId, o, signal), signal);
     const entry = this.#seam.require(browserId);
     if (this.#attachedEntry(entry)) return await abortable(this.#seam.serialize(entry, () => this.#adopt(entry, o, signal)), signal);
-    return await abortable(this.#seam.serialize(entry, () => entry.driver.openTab(o.url, {
-      waitUntil: o.waitUntil ?? "load",
-      timeoutMs: o.timeoutMs,
-      signal,
-      reuseBlank: true,
-      ...o.dialogs === void 0 ? {} : { dialogs: o.dialogs }
-    })), signal);
+    return await abortable(this.#seam.serialize(entry, async () => {
+      const ref = await entry.driver.openTab(o.url, {
+        waitUntil: o.waitUntil ?? "load",
+        timeoutMs: o.timeoutMs,
+        signal,
+        reuseBlank: true,
+        ...o.dialogs === void 0 ? {} : { dialogs: o.dialogs }
+      });
+      this.#seam.claimTab(browserId, ref.tabId, o.session);
+      return ref;
+    }), signal);
   }
   /** The page the person has in front (or the one `app.target` names), as it is; navigated only when the cell gave a URL. Its dialog policy is set before it navigates, as OMP's worker does. */
   async #adopt(entry, o, signal) {
@@ -11068,8 +11072,7 @@ var RuntimeCodeBrowsers = class {
     return entry === void 0 ? void 0 : { idleMs: performance.now() - entry.lastUsed, viewers: entry.viewers, pending: entry.pending, working: this.#seam.working(entry) };
   }
   existing(session) {
-    const shown2 = this.#seam.shownTo(session);
-    const entry = shown2 !== void 0 && !shown2.closed ? shown2 : this.#reusable(session);
+    const entry = this.#seam.shownTo(session) ?? this.#reusable(session);
     return entry === void 0 ? void 0 : { browserId: entry.browserId, wsEndpoint: entry.driver.cdpEndpoint(), kind: entry.code?.kind ?? { kind: "headless", headless: this.#hidden } };
   }
   ownedByAnotherChat(browserId, tabId, session) {
@@ -11611,6 +11614,7 @@ var CodeSession = class {
     let ref;
     try {
       ref = await browsers.openTab(record.browserId, {
+        session: this.#d.session,
         ...request.url === void 0 ? {} : { url: request.url },
         ...request.wait_until === void 0 ? {} : { waitUntil: request.wait_until },
         ...request.dialogs === void 0 ? {} : { dialogs: request.dialogs },
@@ -11746,17 +11750,17 @@ var CodeSession = class {
   }
   /** Every browser the session holds, including one the person opened in the View that no cell has named yet. */
   #known() {
+    const held = [...this.#browsers.values()];
     const found = this.#d.browsers.existing(this.#d.session);
-    if (found !== void 0 && !this.#browsers.has(found.browserId)) {
-      this.#browsers.set(found.browserId, { browserId: found.browserId, wsEndpoint: found.wsEndpoint, kind: found.kind, createdByCode: false });
-    }
-    return [...this.#browsers.values()];
+    if (found === void 0 || this.#browsers.has(found.browserId)) return held;
+    return [...held, { browserId: found.browserId, wsEndpoint: found.wsEndpoint, kind: found.kind, createdByCode: false }];
   }
   async #listTabs(run) {
     const value = [];
     for (const record of this.#known()) {
       this.#holdFor(run, record.browserId);
       for (const ref of await this.#d.browsers.tabs(record.browserId)) {
+        if (this.#d.browsers.ownedByAnotherChat(record.browserId, ref.tabId, this.#d.session)) continue;
         const named = [...this.#tabs.values()].find((tab) => tab.browserId === record.browserId && tab.handle.tabId === ref.tabId);
         value.push({ ...named === void 0 ? {} : { name: named.name }, id: ref.tabId, url: ref.url, title: ref.title, active: ref.active });
       }
@@ -11777,6 +11781,7 @@ var CodeSession = class {
       const named = [...this.#tabs.values()].find((tab) => tab.browserId === record.browserId && tab.handle.tabId === current.tabId);
       const name = named?.name ?? `tab-${current.tabId.slice(0, 6)}`;
       const handle = this.#handleFor(current, record, { created: named?.handle.created ?? false });
+      this.#browsers.set(record.browserId, record);
       this.#tabs.set(name, { name, browserId: record.browserId, kind: record.kind, handle });
       return { text: "", details: { action: "active", name, url: current.url }, attach: handle };
     }
@@ -14554,6 +14559,10 @@ var BrowserRuntime = class {
         return entry === void 0 || entry.closed ? void 0 : entry;
       },
       tabOwner: (browserId, tabId) => this.byId.get(browserId)?.tabOwners.get(tabId),
+      claimTab: (browserId, tabId, session) => {
+        const owners = this.byId.get(browserId)?.tabOwners;
+        if (owners !== void 0 && !owners.has(tabId)) owners.set(tabId, session);
+      },
       bindView: (session, browserId) => this.bindView(session, browserId),
       hold: (entry) => this.holdWork(entry),
       working: (entry) => this.working(entry),

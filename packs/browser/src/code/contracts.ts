@@ -192,7 +192,7 @@ export interface CodeBrowserPort {
    * Makes a tab of `browserId` the cell's. A browser the pack launched opens a new tab; one it only attached to (connected, spawned, relay) hands over the page the person has in front, or the one whose URL or title contains `target`
    * (`app.target`), as it is, and navigates it when `url` is given. A cmux browser opens a split at `url`, or attaches to the surface the request named.
    */
-  openTab(browserId: string, o: { url?: string; waitUntil?: WaitUntil; dialogs?: "accept" | "dismiss"; timeoutMs: number; target?: string }, signal: AbortSignal): Promise<TabRef>;
+  openTab(browserId: string, o: { session: string; url?: string; waitUntil?: WaitUntil; dialogs?: "accept" | "dismiss"; timeoutMs: number; target?: string }, signal: AbortSignal): Promise<TabRef>;
   /** app.target */
   findTab(browserId: string, match: string): Promise<TabRef | undefined>;
   tabs(browserId: string): Promise<TabRef[]>;

@@ -1104,6 +1104,10 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				return entry === undefined || entry.closed ? undefined : entry;
 			},
 			tabOwner: (browserId, tabId) => this.byId.get(browserId)?.tabOwners.get(tabId),
+			claimTab: (browserId, tabId, session) => {
+				const owners = this.byId.get(browserId)?.tabOwners;
+				if (owners !== undefined && !owners.has(tabId)) owners.set(tabId, session);
+			},
 			bindView: (session, browserId) => this.bindView(session, browserId),
 			hold: (entry) => this.holdWork(entry as Entry),
 			working: (entry) => this.working(entry as Entry),
