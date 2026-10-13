@@ -12872,6 +12872,14 @@ import { randomBytes as randomBytes9 } from "node:crypto";
 import { existsSync as existsSync7, watch } from "node:fs";
 import { join as join15 } from "node:path";
 
+// src/probe-timing.ts
+var PROBE_DEBOUNCE_MS = 400;
+var SETTLE_MS2 = 3e3;
+var RELOOK_MS = 4e3;
+var NOTE_SLACK_MS = 1100;
+var SIGN_IN_NOTED_MS = PROBE_DEBOUNCE_MS + SETTLE_MS2 + NOTE_SLACK_MS;
+var SIGN_OUT_NOTED_MS = PROBE_DEBOUNCE_MS + SETTLE_MS2 + RELOOK_MS + NOTE_SLACK_MS;
+
 // recipes/x-post.json
 var signedIn = '[data-testid="SideNav_AccountSwitcher_Button"]';
 var account = '[data-testid="SideNav_AccountSwitcher_Button"]';
@@ -12909,7 +12917,6 @@ var SITE_PROBES = [
 function probeFor(host, table = SITE_PROBES) {
   return table.find((probe) => probe.host === host);
 }
-var SETTLE_MS2 = 3e3;
 var ACCOUNT_CHARS = 256;
 function decides(probe, url) {
   return url.pathname === "/" || probe.loginPaths.some((path4) => url.pathname === path4 || url.pathname.startsWith(`${path4}/`));
@@ -13840,7 +13847,6 @@ async function createGuardedTaskEndpoint(upstreamUrl, authorize) {
 // src/runtime.ts
 var MAX_BROWSERS = 4;
 var APP_NAMES = { chrome: "Chrome", msedge: "Edge", chromium: "Chromium", custom: "a custom browser" };
-var PROBE_DEBOUNCE_MS = 400;
 var PROBE_CLOSE_MS = 2500;
 var CHECK_RENOTE_MS = 3e4;
 var VISIT_RENOTE_MS = 10 * 6e4;
@@ -14118,7 +14124,7 @@ var BrowserRuntime = class {
         onClosed: release,
         // The passive sign-in look: a saved profile on our own Chrome, never the relay's and never a throwaway.
         ...profile2 !== null && engine === "chromium" ? { onPageLoaded: () => {
-          if (entry !== void 0) this.schedulePageProbe(entry, this.options.probes?.settleMs ?? SETTLE_MS2);
+          if (entry !== void 0) this.schedulePageProbe(entry);
         } } : {},
         ...this.options.headless === void 0 ? {} : { headless: this.options.headless },
         // A browser nobody keeps (no profile) is the agent's own to present as a browser bot checks let through; a saved profile, the View and the relay are the person's and stay as they are (doc 77 §12 decision 2).
@@ -14159,7 +14165,7 @@ var BrowserRuntime = class {
         starting: null,
         agentAt: null,
         look: profile2 === null || profile2 === RELAY_PROFILE ? null : resolveProfileMeta(profile2, this.store.meta(profile2)),
-        probe: { timer: void 0, running: void 0, again: false },
+        probe: { timer: void 0, relook: void 0, running: void 0, again: false },
         lastUsed: performance.now(),
         viewers: 0,
         pending: 0,
@@ -14330,6 +14336,7 @@ var BrowserRuntime = class {
     entry.frames.length = 0;
     entry.worker?.process.cancel();
     clearTimeout(entry.probe.timer);
+    clearTimeout(entry.probe.relook);
     clearTimeout(entry.idle);
     clearTimeout(entry.wheelTimer);
     this.byId.delete(entry.browserId);
@@ -15014,26 +15021,48 @@ var BrowserRuntime = class {
   // -----------------------------------------------------------------------
   // The passive sign-in look
   // -----------------------------------------------------------------------
+  /** How long a page that has just loaded is waited on for its marker. */
+  get pageSettleMs() {
+    return this.options.probes?.settleMs ?? SETTLE_MS2;
+  }
   /** A page just loaded (or changed route) in the active tab: look at it shortly, once however many events come. */
-  schedulePageProbe(entry, settleMs) {
+  schedulePageProbe(entry) {
     if (this.disposed || entry.closed) return;
     clearTimeout(entry.probe.timer);
-    const timer = setTimeout(() => void this.probeLoaded(entry, settleMs), PROBE_DEBOUNCE_MS);
+    clearTimeout(entry.probe.relook);
+    const timer = setTimeout(() => void this.probeLoaded(entry), PROBE_DEBOUNCE_MS);
     timer.unref();
     entry.probe.timer = timer;
   }
-  /** One look at a time per browser; a load that arrives during one earns one more look after it. */
-  async probeLoaded(entry, settleMs) {
+  /**
+   * A look that found no marker where its absence decides is not a verdict yet: a page still drawing (a cold load after a sign-in, a
+   * redirect chain) shows none and is not signed out. That page is looked at once more, as it is, this long after; a page that loads in
+   * the meantime or the browser closing takes its place.
+   */
+  scheduleRelook(entry, missed) {
+    if (this.disposed || entry.closed) return;
+    clearTimeout(entry.probe.relook);
+    const timer = setTimeout(() => void this.probeLoaded(entry, missed), this.options.probes?.relookMs ?? RELOOK_MS);
+    timer.unref();
+    entry.probe.relook = timer;
+  }
+  /**
+   * One look at a time per browser. A load that arrives during one earns a page look after it; a re-look never waits its turn, because a
+   * look that is running means a page has loaded since the miss, and that page's look is the one that counts.
+   */
+  async probeLoaded(entry, missed) {
     const { probe } = entry;
     if (probe.running !== void 0) {
-      probe.again = true;
+      if (missed === void 0) probe.again = true;
       return;
     }
     probe.running = (async () => {
       try {
+        let relook = missed;
         do {
           probe.again = false;
-          await this.probeOnce(entry, settleMs, false);
+          await this.probeOnce(entry, relook === void 0 ? this.pageSettleMs : 0, false, relook);
+          relook = void 0;
         } while (probe.again && !entry.closed && !this.disposed);
       } finally {
         probe.running = void 0;
@@ -15048,6 +15077,7 @@ var BrowserRuntime = class {
   async probeAtClose(entry) {
     if (entry.profile === null || entry.profile === RELAY_PROFILE) return;
     clearTimeout(entry.probe.timer);
+    clearTimeout(entry.probe.relook);
     let timer;
     const giveUp = new Promise((resolve8) => {
       timer = setTimeout(resolve8, PROBE_CLOSE_MS);
@@ -15066,13 +15096,17 @@ var BrowserRuntime = class {
    * its account, or signed out where that decides), any other public site is only "visited". Nothing here throws:
    * a page that changed under a read, or a browser going away, is simply not observed this time.
    */
-  async probeOnce(entry, settleMs, closing) {
+  async probeOnce(entry, settleMs, closing, relook) {
     const profile2 = entry.profile;
     if (profile2 === null || profile2 === RELAY_PROFILE) return;
     let looked;
     try {
       const before = await entry.driver.state();
       if (entry.closed && !closing || before.loading) return;
+      if (relook !== void 0 && (before.url !== relook.url || before.activeTabId !== relook.tabId)) {
+        looked = relook.url;
+        return;
+      }
       looked = before.url;
       const host = siteHost(before.url);
       if (host === null) return;
@@ -15085,6 +15119,10 @@ var BrowserRuntime = class {
       if (verdict === void 0) return;
       const after = await entry.driver.state();
       if (after.url !== before.url || after.activeTabId !== before.activeTabId) return;
+      if (!verdict.signedIn && settleMs > 0) {
+        this.scheduleRelook(entry, { url: before.url, tabId: before.activeTabId });
+        return;
+      }
       this.noteVerdict(entry, profile2, before.url, host, verdict);
     } catch {
     } finally {

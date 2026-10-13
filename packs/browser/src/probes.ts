@@ -18,6 +18,7 @@
  * site's page and tested against a copy of it (test/profile-probes.test.ts),
  * not yet seen on the live site.
  */
+import { SETTLE_MS } from "./probe-timing.js";
 import { accountFromText } from "./connection.js";
 import { account as xAccount, signedIn as xSignedIn } from "../recipes/x-post.json";
 import { signedIn as blueskySignedIn } from "../recipes/bluesky-post.json";
@@ -93,8 +94,6 @@ export function probeFor(host: string, table: readonly SiteProbe[] = SITE_PROBES
 	return table.find((probe) => probe.host === host);
 }
 
-/** How long a missing marker is waited for on a page where its absence decides: a single-page app draws it after `load`. */
-export const SETTLE_MS = 3_000;
 const ACCOUNT_CHARS = 256;
 
 /** Whether a missing marker on `url` is a verdict: the site's front page, or one of its login pages. */

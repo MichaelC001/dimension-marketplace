@@ -16,12 +16,13 @@
  *  never answers (the state a View mounts with is the state it shows, until a
  *  tool answer replaces it), and the rest is the test's to answer.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, jest, test } from "bun:test";
 import type { App } from "@modelcontextprotocol/ext-apps";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { act, type ReactNode } from "react";
 import type { BrowserState, OpenBrowserListing, ProfileListing, PublishRecord, TaskRun } from "../src/contracts";
-import { BrowserApp, SIGN_IN_LOOK_DELAY_MS } from "../app/view/browser-app";
+import { BrowserApp } from "../app/view/browser-app";
+import { SIGN_IN_NOTED_MS, SIGN_OUT_NOTED_MS } from "../src/probe-timing";
 import { defaultColour, PROFILE_COLOURS } from "../src/profile-meta";
 import { DEFAULT_PROFILE } from "../src/profile-name";
 import { type Dom, mount, unmountAll } from "./dom-harness";
@@ -241,18 +242,44 @@ describe("the profile chip", () => {
 		});
 	}
 
-	test("a sign-in the pack notes after the page settles reaches the chip with the menu never opened", async () => {
-		const signedOut = listing("default", "Default");
-		const host = fakeHost([signedOut]);
-		const dom = await mountView(host, browserOf("b1", signedOut));
-		expect(chipOf(dom).getAttribute("aria-label")).not.toContain("Signed in");
+	test("the chip follows what the pack notes after the page settles, with the menu never opened: a sign-in when it is noted, a sign-out when that is", async () => {
+		jest.useFakeTimers();
+		try {
+			const signedOut = listing("default", "Default");
+			const host = fakeHost([signedOut]);
+			const dom = await mount(
+				<Unfocused>
+					<BrowserApp app={host.app} toolState={{ state: browserOf("b1", signedOut), seq: 1 }} />
+				</Unfocused>,
+			);
+			/** Let `ms` pass on the fake clock (settling costs 20 ms of it), then let what the timers started finish. */
+			const pass = async (ms: number) => {
+				await act(async () => {
+					jest.advanceTimersByTime(ms);
+				});
+				const settled = dom.settle();
+				jest.advanceTimersByTime(20);
+				await settled;
+			};
+			const label = () => chipOf(dom).getAttribute("aria-label");
+			await pass(0);
+			expect(label()).not.toContain("Signed in");
 
-		host.profiles = [listing("default", "Default", { sites: [site("google.com")] })];
-		await Bun.sleep(SIGN_IN_LOOK_DELAY_MS + 200);
-		await dom.settle();
+			host.profiles = [listing("default", "Default", { sites: [site("google.com")] })];
+			await pass(SIGN_IN_NOTED_MS - 100);
+			expect(label()).not.toContain("Signed in");
+			await pass(100);
+			expect(label()).toContain("Signed in to google.com");
 
-		expect(chipOf(dom).getAttribute("aria-label")).toContain("Signed in to google.com");
-	}, SIGN_IN_LOOK_DELAY_MS + 5_000);
+			host.profiles = [listing("default", "Default", { sites: [site("google.com", false)] })];
+			await pass(SIGN_OUT_NOTED_MS - SIGN_IN_NOTED_MS - 160);
+			expect(label()).toContain("Signed in to google.com");
+			await pass(100);
+			expect(label()).not.toContain("Signed in");
+		} finally {
+			jest.useRealTimers();
+		}
+	});
 });
 
 // ---------------------------------------------------------------------------
@@ -811,12 +838,12 @@ describe("taking over from the agent", () => {
 	const controlled = (from: BrowserState) => (call: Call): CallToolResult => (call.name === "browser_control" ? answer({ ...from, takenOver: call.args.mode === "take" }) : failure(`unexpected ${call.name}`));
 
 	for (const { name, state, offered } of [
-		{ name: "an agent acted a moment ago", state: agentAt(2_000), offered: true },
-		{ name: "an agent acted long ago", state: agentAt(60_000), offered: false },
-		{ name: "no agent has acted", state: WORK_BROWSER, offered: false },
+		{ name: "an agent acted a moment ago", state: () => agentAt(2_000), offered: true },
+		{ name: "an agent acted long ago", state: () => agentAt(60_000), offered: false },
+		{ name: "no agent has acted", state: () => WORK_BROWSER, offered: false },
 	]) {
 		test(`the page offers Take over when ${name}: ${offered}`, async () => {
-			const dom = await mountView(fakeHost(SHELF), state);
+			const dom = await mountView(fakeHost(SHELF), state());
 
 			expect(controls(dom, "page")).toEqual(offered ? ["Take over"] : []);
 			expect(dom.text().includes("Your agent is working here")).toBe(offered);

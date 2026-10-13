@@ -146,19 +146,21 @@ interface Rig {
 	rootDir: string;
 	runtime: BrowserRuntime;
 	store: ProfileStore;
-	/** Resolves once a look has finished on `url`: the product's own signal, so "nothing was recorded" is a fact, not a wait. */
+	/** Every page a look has finished on, in order: the product's own signal, so "nothing was recorded" is a fact, not a wait. */
+	looks: readonly string[];
+	/** Resolves once a look has finished on `url`. */
 	lookedAt(url: string): Promise<unknown>;
 }
 
-async function setup(table: readonly SiteProbe[], extra: { recordVisit?: (url: string) => boolean; settleMs?: number } = {}): Promise<Rig> {
+async function setup(table: readonly SiteProbe[], extra: { recordVisit?: (url: string) => boolean; settleMs?: number; relookMs?: number } = {}): Promise<Rig> {
 	const site = startProfileSite();
 	sites.push(site);
 	const looks: string[] = [];
 	const rootDir = await createRoot();
 	const runtime = newRuntime(rootDir, {
-		probes: { table, settleMs: extra.settleMs ?? 300, looked: (url) => looks.push(url), ...(extra.recordVisit ? { recordVisit: extra.recordVisit } : {}) },
+		probes: { table, settleMs: extra.settleMs ?? 300, relookMs: extra.relookMs ?? 300, looked: (url) => looks.push(url), ...(extra.recordVisit ? { recordVisit: extra.recordVisit } : {}) },
 	});
-	return { site, rootDir, runtime, store: new ProfileStore(rootDir), lookedAt: (url) => waitUntil(`a look at ${url}`, () => looks, (seen) => seen.includes(url)) };
+	return { site, rootDir, runtime, store: new ProfileStore(rootDir), looks, lookedAt: (url) => waitUntil(`a look at ${url}`, () => looks, (seen) => seen.includes(url)) };
 }
 
 const HUMAN = { caller: "app", session: "s-human" } as const;
@@ -199,6 +201,67 @@ describeWithChrome("a sign-in the person makes in the View", () => {
 			await perform(runtime, opened.browserId, { kind: "navigate", url: site.url("late.localhost", "/late") });
 			const late = await waitUntil("the late marker", () => sitesOf(runtime, "work"), (list) => list.length === 1);
 			expect(late[0]).toMatchObject({ site: "late.localhost", signedIn: true, account: "@late" });
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"a marker drawn after the first look gave up is signed in: the first miss is not a verdict, the page is looked at again as it is",
+		async () => {
+			const { site, runtime } = await setup([markerProbe("slow.localhost", ["/slow"])], { settleMs: 300, relookMs: 2_600 });
+			const opened = await runtime.open({ profile: "work", viewport: VIEWPORT }, HUMAN);
+			await perform(runtime, opened.browserId, { kind: "navigate", url: site.url("slow.localhost", "/slow") });
+
+			// The first look (about 0.7 s after load) finds nothing and, before the fix, wrote "signed out" here; the marker only draws at 1.5 s.
+			const noted = await waitUntil("slow's note", () => sitesOf(runtime, "work"), (list) => list.length === 1);
+			expect(noted[0]).toMatchObject({ site: "slow.localhost", signedIn: true, account: "@slow" });
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"a page that never draws its marker is still signed out, once the re-look has found it missing too",
+		async () => {
+			const { site, runtime } = await setup([markerProbe("out.localhost")], { settleMs: 300, relookMs: 600 });
+			const opened = await runtime.open({ profile: "work", viewport: VIEWPORT }, HUMAN);
+			await perform(runtime, opened.browserId, { kind: "navigate", url: site.url("out.localhost", "/") });
+			const noted = await waitUntil("out's note", () => sitesOf(runtime, "work"), (list) => list.length === 1);
+			expect(noted[0]).toMatchObject({ site: "out.localhost", signedIn: false });
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"a signed-out front page the person leaves before the re-look is not written down: one miss is weak evidence",
+		async () => {
+			const { site, runtime, lookedAt } = await setup([markerProbe("out.localhost")], { settleMs: 300, relookMs: 5_000 });
+			const opened = await runtime.open({ profile: "work", viewport: VIEWPORT }, HUMAN);
+			const out = site.url("out.localhost", "/");
+			await perform(runtime, opened.browserId, { kind: "navigate", url: out });
+			await lookedAt(out);
+			const plain = site.url("plain.localhost", "/plain");
+			await perform(runtime, opened.browserId, { kind: "navigate", url: plain });
+			await lookedAt(plain);
+			expect(await sitesOf(runtime, "work")).toEqual([]);
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"a re-look is of the page that missed: switching to another tab meanwhile never gives that tab a verdict from a look it never had",
+		async () => {
+			const { site, runtime, looks, lookedAt } = await setup([markerProbe("out.localhost"), markerProbe("elsewhere.localhost")], { settleMs: 300, relookMs: 1_500 });
+			const opened = await runtime.open({ profile: "work", viewport: VIEWPORT }, HUMAN);
+			const tabOfFirst = (await perform(runtime, opened.browserId, { kind: "navigate", url: site.url("out.localhost", "/") })).activeTabId;
+			const second = site.url("elsewhere.localhost", "/");
+			await runtime.tab(opened.browserId, { op: "new", url: second });
+			await lookedAt(second);
+			// The second page's own re-look is pending; the person goes back to the first tab, which loads nothing.
+			await runtime.tab(opened.browserId, { op: "activate", tabId: tabOfFirst });
+			const looked = looks.length;
+
+			await waitUntil("the second page's re-look to finish", () => looks.length, (count) => count > looked);
+			expect(await sitesOf(runtime, "work")).toEqual([]);
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);

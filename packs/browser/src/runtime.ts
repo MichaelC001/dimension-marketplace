@@ -41,7 +41,8 @@ import { type ConnectionObservations, isPublicSite, siteHost } from "./connectio
 import { checkNewProfile, cleanAvatar, isProfileColour, matchProfiles, PROFILE_COLOURS, type ResolvedProfileMeta, resolveProfileMeta } from "./profile-meta.js";
 import { DEFAULT_PROFILE, profileSlug, RELAY_PROFILE } from "./profile-name.js";
 import { buildProfileList, type HoldFact } from "./profile-list.js";
-import { probeFor, readProbe, SETTLE_MS, type SiteProbe, type ProbeVerdict } from "./probes.js";
+import { probeFor, readProbe, type SiteProbe, type ProbeVerdict } from "./probes.js";
+import { PROBE_DEBOUNCE_MS, RELOOK_MS, SETTLE_MS } from "./probe-timing.js";
 import type {
 	BrowserApp,
 	BrowserOpener,
@@ -116,8 +117,6 @@ import type { CodeLifetime, CodeSeam, EndListener, EndWhy } from "./code/host/ru
 const MAX_BROWSERS = 4;
 /** The browser applications a profile's logins may have been saved in, as a person names them. */
 const APP_NAMES: Record<string, string> = { chrome: "Chrome", msedge: "Edge", chromium: "Chromium", custom: "a custom browser" };
-/** A page that loads (or changes route) is looked at this long after the last such event, once. */
-const PROBE_DEBOUNCE_MS = 400;
 /** The look at close never holds a close up longer than this. */
 const PROBE_CLOSE_MS = 2_500;
 /** The same sign-in fact is not rewritten more often than this; a visit to a site with no probe, less often still. */
@@ -228,11 +227,12 @@ export interface BrowserRuntimeOptions {
 	 */
 	allowPrivateReadHosts?: readonly string[];
 	/**
-	 * TESTS ONLY: replaces the shipped site probes, how long a missing marker is waited for, and which hosts a
-	 * visit is recorded for (the local fixture is on loopback, which is never a site); `looked` hears the url of
-	 * every page a look finished on, whether it found anything or not. Not reachable from any tool input.
+	 * TESTS ONLY: replaces the shipped site probes, how long a missing marker is waited for, how long after that
+	 * a page that still shows none is looked at again, and which hosts a visit is recorded for (the local fixture
+	 * is on loopback, which is never a site); `looked` hears the url of every page a look finished on, whether it
+	 * found anything or not. Not reachable from any tool input.
 	 */
-	probes?: { table?: readonly SiteProbe[]; settleMs?: number; recordVisit?: (url: string) => boolean; looked?: (url: string) => void };
+	probes?: { table?: readonly SiteProbe[]; settleMs?: number; relookMs?: number; recordVisit?: (url: string) => boolean; looked?: (url: string) => void };
 }
 
 /** A wait step after `validateWait`. */
@@ -262,6 +262,12 @@ interface FrameRecord {
 	/** Where the page was scrolled when the picture was taken. */
 	scroll: PageScroll;
 	capturedAt: string;
+}
+
+/** The page a look found no signed-in marker on: the one its re-look is of. */
+interface MissedPage {
+	readonly url: string;
+	readonly tabId: string;
 }
 
 interface Entry {
@@ -334,8 +340,8 @@ interface Entry {
 	look: ResolvedProfileMeta | null;
 	/** Set at launch when the browser build under this profile changed; handed to the opener once, by `open`. */
 	notice?: string;
-	/** The passive sign-in look: debounced after a page loads, one at a time, once more as the browser closes. */
-	probe: { timer: NodeJS.Timeout | undefined; running: Promise<void> | undefined; again: boolean };
+	/** The passive sign-in look: debounced after a page loads, one at a time, a miss on it looked at once more as the page is, once more as the browser closes. */
+	probe: { timer: NodeJS.Timeout | undefined; relook: NodeJS.Timeout | undefined; running: Promise<void> | undefined; again: boolean };
 	logNoticed: number;
 	/** Where the detail documents of what the human marks in this browser are kept: shared for a saved profile, its own throwaway folder otherwise. */
 	annotations: AnnotationFiles;
@@ -628,7 +634,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			driver = await createEngineDriver(engine, {
 				profileDirectory: directory, viewport, onClosed: release,
 				// The passive sign-in look: a saved profile on our own Chrome, never the relay's and never a throwaway.
-				...(profile !== null && engine === "chromium" ? { onPageLoaded: () => { if (entry !== undefined) this.schedulePageProbe(entry, this.options.probes?.settleMs ?? SETTLE_MS); } } : {}),
+				...(profile !== null && engine === "chromium" ? { onPageLoaded: () => { if (entry !== undefined) this.schedulePageProbe(entry); } } : {}),
 				...(this.options.headless === undefined ? {} : { headless: this.options.headless }),
 				// A browser nobody keeps (no profile) is the agent's own to present as a browser bot checks let through; a saved profile, the View and the relay are the person's and stay as they are (doc 77 §12 decision 2).
 				...(profile === null && engine === "chromium" ? { agent: true } : {}),
@@ -646,7 +652,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				driver, release, revision: 1, frames: [], queue: Promise.resolve(), inputQueue: Promise.resolve(), closed: false,
 				task: null, worker: null, publish: null, secrets: new Set(), logRead: 0, logNoticed: 0, annotations,
 				openers, tabOwners: new Map(), tabActive: new Map(), takenOver: false, starting: null, agentAt: null, look: profile === null || profile === RELAY_PROFILE ? null : resolveProfileMeta(profile, this.store.meta(profile)),
-				probe: { timer: undefined, running: undefined, again: false },
+				probe: { timer: undefined, relook: undefined, running: undefined, again: false },
 				lastUsed: performance.now(), viewers: 0, pending: 0, cells: 0, idle: undefined, retiring: undefined, closeFailed: false, wheelTimer: undefined,
 			};
 			if (code !== undefined) entry.code = code;
@@ -846,6 +852,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		entry.frames.length = 0;
 		entry.worker?.process.cancel();
 		clearTimeout(entry.probe.timer);
+		clearTimeout(entry.probe.relook);
 		clearTimeout(entry.idle);
 		clearTimeout(entry.wheelTimer);
 		this.byId.delete(entry.browserId);
@@ -1623,27 +1630,51 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	// The passive sign-in look
 	// -----------------------------------------------------------------------
 
+	/** How long a page that has just loaded is waited on for its marker. */
+	private get pageSettleMs(): number {
+		return this.options.probes?.settleMs ?? SETTLE_MS;
+	}
+
 	/** A page just loaded (or changed route) in the active tab: look at it shortly, once however many events come. */
-	private schedulePageProbe(entry: Entry, settleMs: number): void {
+	private schedulePageProbe(entry: Entry): void {
 		if (this.disposed || entry.closed) return;
 		clearTimeout(entry.probe.timer);
-		const timer = setTimeout(() => void this.probeLoaded(entry, settleMs), PROBE_DEBOUNCE_MS);
+		clearTimeout(entry.probe.relook);
+		const timer = setTimeout(() => void this.probeLoaded(entry), PROBE_DEBOUNCE_MS);
 		timer.unref();
 		entry.probe.timer = timer;
 	}
 
-	/** One look at a time per browser; a load that arrives during one earns one more look after it. */
-	private async probeLoaded(entry: Entry, settleMs: number): Promise<void> {
+	/**
+	 * A look that found no marker where its absence decides is not a verdict yet: a page still drawing (a cold load after a sign-in, a
+	 * redirect chain) shows none and is not signed out. That page is looked at once more, as it is, this long after; a page that loads in
+	 * the meantime or the browser closing takes its place.
+	 */
+	private scheduleRelook(entry: Entry, missed: MissedPage): void {
+		if (this.disposed || entry.closed) return;
+		clearTimeout(entry.probe.relook);
+		const timer = setTimeout(() => void this.probeLoaded(entry, missed), this.options.probes?.relookMs ?? RELOOK_MS);
+		timer.unref();
+		entry.probe.relook = timer;
+	}
+
+	/**
+	 * One look at a time per browser. A load that arrives during one earns a page look after it; a re-look never waits its turn, because a
+	 * look that is running means a page has loaded since the miss, and that page's look is the one that counts.
+	 */
+	private async probeLoaded(entry: Entry, missed?: MissedPage): Promise<void> {
 		const { probe } = entry;
 		if (probe.running !== undefined) {
-			probe.again = true;
+			if (missed === undefined) probe.again = true;
 			return;
 		}
 		probe.running = (async () => {
 			try {
+				let relook = missed;
 				do {
 					probe.again = false;
-					await this.probeOnce(entry, settleMs, false);
+					await this.probeOnce(entry, relook === undefined ? this.pageSettleMs : 0, false, relook);
+					relook = undefined;
 				} while (probe.again && !entry.closed && !this.disposed);
 			} finally {
 				probe.running = undefined;
@@ -1659,6 +1690,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	private async probeAtClose(entry: Entry): Promise<void> {
 		if (entry.profile === null || entry.profile === RELAY_PROFILE) return;
 		clearTimeout(entry.probe.timer);
+		clearTimeout(entry.probe.relook);
 		let timer: NodeJS.Timeout | undefined;
 		const giveUp = new Promise<void>((resolve) => {
 			timer = setTimeout(resolve, PROBE_CLOSE_MS);
@@ -1675,13 +1707,18 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	 * its account, or signed out where that decides), any other public site is only "visited". Nothing here throws:
 	 * a page that changed under a read, or a browser going away, is simply not observed this time.
 	 */
-	private async probeOnce(entry: Entry, settleMs: number, closing: boolean): Promise<void> {
+	private async probeOnce(entry: Entry, settleMs: number, closing: boolean, relook?: MissedPage): Promise<void> {
 		const profile = entry.profile;
 		if (profile === null || profile === RELAY_PROFILE) return;
 		let looked: string | undefined;
 		try {
 			const before = await entry.driver.state();
 			if ((entry.closed && !closing) || before.loading) return;
+			// A re-look is of the page that missed; the person may have switched tabs (which loads nothing) since.
+			if (relook !== undefined && (before.url !== relook.url || before.activeTabId !== relook.tabId)) {
+				looked = relook.url;
+				return;
+			}
 			looked = before.url;
 			const host = siteHost(before.url);
 			if (host === null) return;
@@ -1695,6 +1732,11 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			// The verdict belongs to the page it was read on: if the person moved on while it was read, it is dropped.
 			const after = await entry.driver.state();
 			if (after.url !== before.url || after.activeTabId !== before.activeTabId) return;
+			// A miss after waiting is only provisional: the look as a page is (`settleMs: 0`, the re-look and the one at close) is the one that makes a miss a verdict.
+			if (!verdict.signedIn && settleMs > 0) {
+				this.scheduleRelook(entry, { url: before.url, tabId: before.activeTabId });
+				return;
+			}
 			this.noteVerdict(entry, profile, before.url, host, verdict);
 		} catch {
 			// Not observed this time; the next page that loads is looked at again.

@@ -8,6 +8,7 @@ import type { App } from "@modelcontextprotocol/ext-apps";
 import type { BrowserAction, BrowserFrame, BrowserState, ControlMode, NewProfileRequest, OpenBrowserListing, ProfileListing, TabOp } from "../../src/contracts";
 import { Icon } from "@fraym/ui/icons";
 import { addressParts, tabLabel } from "../../src/address";
+import { SIGN_IN_NOTED_MS, SIGN_OUT_NOTED_MS } from "../../src/probe-timing";
 import { AgentPill, ControlPill, ResultToast, useAgentActive } from "./agent-activity";
 import { AnnotationSeat } from "./annotation-seat";
 import { BrowserClient, failureText, openFailureText, type ToolMount } from "./browser-client";
@@ -29,8 +30,8 @@ interface Notice {
 /** Actions that start a page load; the View shows them loading immediately. */
 const NAVIGATION: Record<string, true> = { navigate: true, reload: true, back: true, forward: true };
 
-/** The pack looks at a settled page 3 s after it loads (SETTLE_MS) and 0.4 s after the load event (PROBE_DEBOUNCE_MS), then notes what it saw; the View reads the profiles once that note is made. */
-export const SIGN_IN_LOOK_DELAY_MS = 4_500;
+/** After a page settles the pack has noted a sign-in at the first moment and a sign-out at the second: the profile list is read at both, once each, never while the page loads. */
+const SIGN_IN_LOOK_DELAYS_MS: readonly number[] = [SIGN_IN_NOTED_MS, SIGN_OUT_NOTED_MS];
 
 export interface BrowserAppProps {
 	readonly app: App;
@@ -208,8 +209,10 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 	const settledUrl = state !== null && !state.loading ? state.url : null;
 	useEffect(() => {
 		if (browserId === null || settledUrl === null) return;
-		const timer = setTimeout(loadProfiles, SIGN_IN_LOOK_DELAY_MS);
-		return () => clearTimeout(timer);
+		const timers = SIGN_IN_LOOK_DELAYS_MS.map(delay => setTimeout(loadProfiles, delay));
+		return () => {
+			for (const timer of timers) clearTimeout(timer);
+		};
 	}, [browserId, settledUrl, loadProfiles]);
 
 	// Remember which task this View saw running, so its end gets a toast.

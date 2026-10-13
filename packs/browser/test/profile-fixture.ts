@@ -21,6 +21,8 @@ const PAGES: Record<string, () => Response> = {
 	"/deep/page": () => page("<p>settings</p>"),
 	// A single-page app draws its nav after `load`.
 	"/late": () => page("<p>loading</p>", '<script>setTimeout(() => { document.body.insertAdjacentHTML("beforeend", \'<div id="me">Late @late</div>\'); }, 700);</script>'),
+	// A cold single-page app: its account marker is drawn well after the first look has given up waiting.
+	"/slow": () => page("<p>loading</p>", '<script>setTimeout(() => { document.body.insertAdjacentHTML("beforeend", \'<div id="me">Slow @slow</div>\'); }, 1500);</script>'),
 	// A sign-in done in place: no navigation, so no page load to look at.
 	"/flip": () => page('<button id="go" onclick="document.body.insertAdjacentHTML(\'beforeend\', \'<div id=me>Bo @bo</div>\')">Sign in</button>'),
 	"/pw": () => page(`<div id="me">Signed in as ${SAVED_PASSWORD}</div>`),
