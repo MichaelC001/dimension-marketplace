@@ -225,6 +225,25 @@ so sites treat it as one:
   Google's sign-in and Cloudflare's check do not read the browser as driven
   (doc 77 §4, measured 2026-10-08). Nothing else is hidden in the View or a
   saved profile: no stealth plugin, no fingerprint changes.
+- **A window and a screen.** A headless Chrome has neither: its virtual
+  screen is 800x600, its window 780x580, and the View's page (620x782 in the
+  dock) is larger than both, so `outerHeight - innerHeight` is negative and
+  `screen.orientation` says portrait on a desktop page. No person's browser
+  reports that. Every headless browser the pack starts, the View and a saved
+  profile included, gets a screen of at least 1920x1080 and a window that
+  holds its page plus 88 px of tab strip and address bar (`fitScreen` in
+  `src/engines/agent-browser.ts`), for each tab and each popup from its first
+  line, and again on every resize. This is a window where there was none, not
+  a changed fingerprint: the GPU, the User-Agent, `navigator.webdriver` and
+  the driver's own traces are the host's. Measured 2026-10-13 on Dev Dimension,
+  Windows, Chrome 154: a sign-in on x.com that a plain Chrome took past the
+  username step was refused in the View with "Sorry, you are not allowed to log
+  in at this time", the geometry above being the only difference measured
+  between the two browsers (UA, client hints, headers, WebGL, canvas, plugins,
+  languages, permissions, window and navigator properties, `navigator.connection`,
+  media devices, audio, colour depth, touch were equal); with the window fitted
+  X went on to its password step. One attempt each way, and X then limited the
+  account's logins, so it is not proof that the geometry was the cause.
 - **A throwaway agent browser is shaped further.** A browser opened
   without a profile holds nothing and is not meant for signing in; it does
   work on the public web that a stock automation browser is turned away from.
@@ -234,7 +253,8 @@ so sites treat it as one:
   already done, reviewed and merged, then just merge it"), relayed by the
   release lead and recorded on PR #155.** A throwaway presents as the Chrome a
   person would run (`src/engines/agent-browser.ts`, `src/engines/agent-puppeteer.ts`):
-  - The screen, window and orientation agree with the page. Headless Chrome's
+  - The screen, window and orientation agree with the page (the View and a
+    saved profile get this too: see "A window and a screen" above). Headless Chrome's
     own screen is 800x600, its window 780x580 and its orientation portrait
     whatever the viewport. A device-metrics override, sent to every page
     (a popup and a `target=_blank` tab too) before its first document runs,

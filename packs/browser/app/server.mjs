@@ -4096,17 +4096,19 @@ function deviceMetrics(viewport, scale) {
     screenOrientation: { angle: 0, type: "landscapePrimary" }
   };
 }
-async function fitAgentScreen(cdp, viewport, scale) {
+async function fitScreen(cdp, viewport, scale) {
   await cdp.send("Emulation.setDeviceMetricsOverride", deviceMetrics(viewport, scale));
   const { windowId } = await cdp.send("Browser.getWindowForTarget");
   await cdp.send("Browser.setWindowBounds", { windowId, bounds: { left: 0, top: 0, width: viewport.width, height: viewport.height + WINDOW_CHROME_HEIGHT } });
 }
-function shapeTargetEarly(session, targetType, shape) {
+function fitTargetEarly(session, targetType, fit) {
+  if (fit === void 0 || targetType !== "page") return [];
+  return [session.send("Emulation.setDeviceMetricsOverride", deviceMetrics(fit.viewport, fit.scale))];
+}
+function shapeTargetEarly(session, targetType, shape, fit) {
   const mask = shape.graphics ? graphicsMaskExpression(shape.graphics) : void 0;
   if (targetType === "page" || targetType === "iframe") {
-    const sent = [session.send("Page.enable"), session.send("Page.addScriptToEvaluateOnNewDocument", { source: [mask, LOOPBACK_EXCEPTIONS].filter(Boolean).join(";\n") })];
-    if (shape.screen && targetType === "page") sent.push(session.send("Emulation.setDeviceMetricsOverride", deviceMetrics(shape.view.viewport, shape.view.scale)));
-    return sent;
+    return [session.send("Page.enable"), session.send("Page.addScriptToEvaluateOnNewDocument", { source: [mask, LOOPBACK_EXCEPTIONS].filter(Boolean).join(";\n") }), ...fitTargetEarly(session, targetType, fit)];
   }
   if ((targetType === "worker" || targetType === "shared_worker") && mask) return [session.send("Runtime.evaluate", { expression: mask })];
   return [];
@@ -4518,7 +4520,7 @@ var binaryIdentities = identityPerBinary({
     };
   }
 });
-async function presentAsHeadful(browser, identity, shape) {
+async function presentAsHeadful(browser, identity, shape, fit) {
   const root = await browser.target().createCDPSession();
   const connection = root.connection();
   if (!connection) fail("launch_failed", "the browser's DevTools connection is gone");
@@ -4533,7 +4535,7 @@ async function presentAsHeadful(browser, identity, shape) {
       if (!serviceWorker) watch2(child);
       const sent = [child.send("Emulation.setUserAgentOverride", override)];
       if (!serviceWorker) sent.push(child.send("Target.setAutoAttach", autoAttach));
-      if (shape) sent.push(...shapeTargetEarly(child, targetInfo.type, shape));
+      sent.push(...shape ? shapeTargetEarly(child, targetInfo.type, shape, fit) : fitTargetEarly(child, targetInfo.type, fit));
       if (waitingForDebugger) sent.push(child.send("Runtime.runIfWaitingForDebugger"));
       const adopted = Promise.allSettled(sent).then(async () => {
         if (serviceWorker) await session.send("Target.detachFromTarget", { sessionId }).catch(() => void 0);
@@ -4546,8 +4548,8 @@ async function presentAsHeadful(browser, identity, shape) {
   await root.send("Target.setAutoAttach", autoAttach);
   await withTimeout(Promise.all(adopting), ACTION_TIMEOUT_MS, "identity for the open tabs");
 }
-function agentShape(identity, screen, viewport) {
-  return { screen, early: identity !== void 0, graphics: identity?.softwareGraphics ? maskedGraphics(identity.metadata.platform) : void 0, view: { viewport, scale: 1 } };
+function agentShape(identity) {
+  return { early: identity !== void 0, graphics: identity?.softwareGraphics ? maskedGraphics(identity.metadata.platform) : void 0 };
 }
 async function launchChromium(options, release) {
   const userDataDir = options.profileDirectory;
@@ -4580,18 +4582,19 @@ async function launchChromium(options, release) {
   browser.process()?.once("exit", release);
   own(browser);
   let shape;
+  const screen = headless ? { viewport: options.viewport, scale: 1 } : void 0;
   try {
     if (identity) {
       const running = (await browser.version()).split("/").pop() ?? "";
       identity = await binaryIdentities.confirm(resolved.executablePath, identity, running, launchArgs);
     }
-    shape = agent ? agentShape(identity, headless, options.viewport) : void 0;
-    if (identity) await presentAsHeadful(browser, identity, shape);
+    shape = agent ? agentShape(identity) : void 0;
+    if (identity) await presentAsHeadful(browser, identity, shape, screen);
     const pages = await browser.pages();
     if (pages.length === 0) pages.push(await browser.newPage());
     const tabs = [];
-    for (const page of pages) tabs.push(await prepareTab(page, options.viewport, 1, void 0, false, shape));
-    return new PuppeteerDriver({ browser, tabs, viewport: options.viewport, ownsBrowser: true, release, app: resolved.app, ...shape ? { agent: shape } : {}, ...options.onPageLoaded ? { onPageLoaded: options.onPageLoaded } : {} });
+    for (const page of pages) tabs.push(await prepareTab(page, options.viewport, 1, void 0, false, shape, screen));
+    return new PuppeteerDriver({ browser, tabs, viewport: options.viewport, ownsBrowser: true, release, app: resolved.app, ...shape ? { agent: shape } : {}, ...screen ? { screen } : {}, ...options.onPageLoaded ? { onPageLoaded: options.onPageLoaded } : {} });
   } catch (err) {
     try {
       await withTimeout(browser.close(), CLOSE_TIMEOUT_MS, "failed-launch cleanup");
@@ -4645,9 +4648,9 @@ async function launchShapedReader(executablePath, launchArgs) {
     if (!identity) identity = headfulIdentity(await readIdentity(browser));
     identity = await binaryIdentities.confirm(executablePath, identity, running, launchArgs);
     binaryIdentities.learn(executablePath, identity, launchArgs);
-    const shape = agentShape(identity, true, READER_VIEWPORT);
-    await presentAsHeadful(browser, identity, shape);
-    return new PuppeteerReader(browser, shape);
+    const screen = { viewport: READER_VIEWPORT, scale: 1 };
+    await presentAsHeadful(browser, identity, agentShape(identity), screen);
+    return new PuppeteerReader(browser, screen);
   } catch (err) {
     await withTimeout(browser.close(), CLOSE_TIMEOUT_MS, "failed reader launch cleanup").catch(() => void 0);
     throw err;
@@ -4655,12 +4658,12 @@ async function launchShapedReader(executablePath, launchArgs) {
 }
 var PuppeteerReader = class {
   #browser;
-  #shape;
+  #screen;
   /** Set once closing starts, or when a read could not dispose of its context. */
   #spent = false;
-  constructor(browser, shape) {
+  constructor(browser, screen) {
     this.#browser = browser;
-    this.#shape = shape;
+    this.#screen = screen;
   }
   get usable() {
     return !this.#spent && this.#browser.connected;
@@ -4689,7 +4692,7 @@ var PuppeteerReader = class {
     });
     const page = await context.newPage();
     primary = page.target();
-    if (this.#shape?.screen) await fitAgentScreen(await page.createCDPSession(), READER_VIEWPORT, 1);
+    if (this.#screen) await fitScreen(await page.createCDPSession(), this.#screen.viewport, this.#screen.scale);
     let refusal = null;
     const isMainNavigation = (request) => {
       const frame = request.frame();
@@ -4742,7 +4745,7 @@ async function settledRead(page, limit) {
   }
   return await page.evaluate(READ_PAGE_SCRIPT, limit, MAX_READ_FRAMES);
 }
-async function prepareTab(page, viewport, scale = 1, early, foreign = false, agent) {
+async function prepareTab(page, viewport, scale = 1, early, foreign = false, agent, screen) {
   const { cdp, dialogs } = early ?? await guardPage(await page.createCDPSession(), foreign);
   const tab = { id: "", documentId: "", page, target: page.target(), cdp, loading: false, navSeq: 0, dialogs, log: [] };
   cdp.on("Page.frameNavigated", ({ frame }) => {
@@ -4751,7 +4754,7 @@ async function prepareTab(page, viewport, scale = 1, early, foreign = false, age
   try {
     if (!foreign) {
       await page.setViewport({ ...viewport, deviceScaleFactor: scale });
-      if (agent?.screen) await fitAgentScreen(cdp, viewport, scale);
+      if (screen) await fitScreen(cdp, viewport, scale);
       if (agent && !agent.early) await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: LOOPBACK_EXCEPTIONS });
       await cdp.send("Emulation.setFocusEmulationEnabled", { enabled: true });
     }
@@ -4811,6 +4814,7 @@ var PuppeteerDriver = class {
   #scale = 1;
   #ownsBrowser;
   #agent;
+  #screen;
   #terminate;
   #attached;
   #release;
@@ -4845,6 +4849,7 @@ var PuppeteerDriver = class {
     this.#viewport = parts.viewport;
     this.#ownsBrowser = parts.ownsBrowser;
     this.#agent = parts.agent;
+    this.#screen = parts.screen;
     this.#terminate = parts.terminate;
     this.#attached = parts.attached === true;
     this.#release = parts.release;
@@ -5874,7 +5879,7 @@ var PuppeteerDriver = class {
         await early.cdp.detach().catch(() => void 0);
         return void 0;
       }
-      const tab = await prepareTab(page, this.#viewport, this.#scale, early, foreign || readOnlySetup, this.#agent);
+      const tab = await prepareTab(page, this.#viewport, this.#scale, early, foreign || readOnlySetup, this.#agent, this.#screen);
       if (foreign) tab.foreign = true;
       if (this.#closed || page.isClosed()) {
         await tab.cdp.detach().catch(() => void 0);
@@ -6056,9 +6061,7 @@ var PuppeteerDriver = class {
         const admission = guard();
         if (admission !== void 0) await admission;
         guard.assertCurrent();
-        this.#viewport = viewport;
-        this.#scale = scale;
-        if (this.#agent) this.#agent.view = { viewport, scale };
+        this.#setSize(viewport, scale);
         if (this.#watchers.size > 0) {
           await this.#stopScreencast();
           await this.#restartScreencast();
@@ -6071,9 +6074,7 @@ var PuppeteerDriver = class {
         throw error;
       }
     }
-    this.#viewport = viewport;
-    this.#scale = scale;
-    if (this.#agent) this.#agent.view = { viewport, scale };
+    this.#setSize(viewport, scale);
     await Promise.all(this.#tabs.filter((tab) => !tab.foreign).map((tab) => this.#pendingNativeTabSetup.has(tab) ? this.#prepareOwnedTab(tab) : this.#fit(tab, viewport, scale).catch(() => void 0)));
     if (this.#watchers.size > 0) {
       await this.#stopScreencast();
@@ -6081,10 +6082,19 @@ var PuppeteerDriver = class {
     }
     for (const width of this.#cardWatchers.keys()) void this.#restartCard(width);
   }
-  /** One tab's viewport, and for an agent browser the screen and window around it (agent-browser.ts). */
+  /** The size every later tab, popup and early-fitted target is given. */
+  #setSize(viewport, scale) {
+    this.#viewport = viewport;
+    this.#scale = scale;
+    if (this.#screen) {
+      this.#screen.viewport = viewport;
+      this.#screen.scale = scale;
+    }
+  }
+  /** One tab's viewport, and for a headless browser the screen and window around it (agent-browser.ts `fitScreen`). */
   async #fit(tab, viewport, scale) {
     await tab.page.setViewport({ ...viewport, deviceScaleFactor: scale });
-    if (this.#agent?.screen) await fitAgentScreen(tab.cdp, viewport, scale);
+    if (this.#screen) await fitScreen(tab.cdp, viewport, scale);
   }
   /** Serial per-size handoff prevents an old cast's detach from stopping its successor. */
   #restartCard(width) {
