@@ -19,8 +19,8 @@ export interface Identity {
 	readonly label: string;
 	readonly colour: ProfileColour;
 	readonly avatar?: string;
-	/** One line under the name; null until it is known (the profiles have not loaded). */
-	readonly detail: string | null;
+	/** One line under the name. */
+	readonly detail: string;
 }
 
 /** "Signed in to google.com, x.com +2": the sites it was seen signed in to, newest first, never more than two named. */
@@ -222,8 +222,8 @@ export function ProfileSwitcher(props: ProfileSwitcherProps) {
 				type="button"
 				className="bx-profile"
 				data-state={takenOver ? "driving" : undefined}
-				title={identity.detail === null ? identity.label : `${identity.label} · ${identity.detail}`}
-				aria-label={identity.detail === null ? `${identity.label} — profiles` : `${identity.label}, ${identity.detail} — profiles`}
+				title={`${identity.label} · ${identity.detail}`}
+				aria-label={`${identity.label}, ${identity.detail} — profiles`}
 				aria-haspopup="menu"
 				aria-expanded={open}
 				onClick={toggle}
@@ -250,7 +250,7 @@ export function ProfileSwitcher(props: ProfileSwitcherProps) {
 								<ProfileAvatar label={identity.label} colour={identity.colour} avatar={identity.avatar} icon={identity.kind === "private" ? "shield" : identity.kind === "chrome" ? "globe" : undefined} size="lg" />
 								<span className="bx-pmenu-who">
 									<span className="bx-pmenu-name">{identity.label}</span>
-									<span className="bx-pmenu-detail">{identity.detail ?? "Checking sign-ins…"}</span>
+									<span className="bx-pmenu-detail">{identity.detail}</span>
 								</span>
 							</div>
 							<p className="bx-pmenu-note">{profileMeaning(identity.kind)}</p>
