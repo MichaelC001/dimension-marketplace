@@ -21,7 +21,7 @@ import type { App } from "@modelcontextprotocol/ext-apps";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { act, type ReactNode } from "react";
 import type { BrowserState, OpenBrowserListing, ProfileListing, PublishRecord, TaskRun } from "../src/contracts";
-import { BrowserApp } from "../app/view/browser-app";
+import { BrowserApp, SIGN_IN_LOOK_DELAY_MS } from "../app/view/browser-app";
 import { defaultColour, PROFILE_COLOURS } from "../src/profile-meta";
 import { DEFAULT_PROFILE } from "../src/profile-name";
 import { type Dom, mount, unmountAll } from "./dom-harness";
@@ -240,6 +240,19 @@ describe("the profile chip", () => {
 			expect(callsTo(host, "browser_profiles")).toEqual([]);
 		});
 	}
+
+	test("a sign-in the pack notes after the page settles reaches the chip with the menu never opened", async () => {
+		const signedOut = listing("default", "Default");
+		const host = fakeHost([signedOut]);
+		const dom = await mountView(host, browserOf("b1", signedOut));
+		expect(chipOf(dom).getAttribute("aria-label")).not.toContain("Signed in");
+
+		host.profiles = [listing("default", "Default", { sites: [site("google.com")] })];
+		await Bun.sleep(SIGN_IN_LOOK_DELAY_MS + 200);
+		await dom.settle();
+
+		expect(chipOf(dom).getAttribute("aria-label")).toContain("Signed in to google.com");
+	}, SIGN_IN_LOOK_DELAY_MS + 5_000);
 });
 
 // ---------------------------------------------------------------------------

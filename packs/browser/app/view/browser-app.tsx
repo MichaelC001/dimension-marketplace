@@ -29,6 +29,9 @@ interface Notice {
 /** Actions that start a page load; the View shows them loading immediately. */
 const NAVIGATION: Record<string, true> = { navigate: true, reload: true, back: true, forward: true };
 
+/** The pack looks at a settled page 3 s after it loads (SETTLE_MS) and 0.4 s after the load event (PROBE_DEBOUNCE_MS), then notes what it saw; the View reads the profiles once that note is made. */
+export const SIGN_IN_LOOK_DELAY_MS = 4_500;
+
 export interface BrowserAppProps {
 	readonly app: App;
 	/** The result of the tool call that mounted (or re-targeted) this View — the
@@ -202,6 +205,12 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 		const timer = setInterval(loadProfiles, 2_000);
 		return () => clearInterval(timer);
 	}, [menuOpen, browserId, loadProfiles]);
+	const settledUrl = state !== null && !state.loading ? state.url : null;
+	useEffect(() => {
+		if (browserId === null || settledUrl === null) return;
+		const timer = setTimeout(loadProfiles, SIGN_IN_LOOK_DELAY_MS);
+		return () => clearTimeout(timer);
+	}, [browserId, settledUrl, loadProfiles]);
 
 	// Remember which task this View saw running, so its end gets a toast.
 	useEffect(() => {
