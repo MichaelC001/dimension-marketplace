@@ -230,7 +230,7 @@ export interface BrowserRuntimeOptions {
 	 * TESTS ONLY: replaces the shipped site probes, how long a missing marker is waited for, how long after that
 	 * a page that still shows none is looked at again, and which hosts a visit is recorded for (the local fixture
 	 * is on loopback, which is never a site); `looked` hears the url of every page a look finished on, whether it
-	 * found anything or not. Not reachable from any tool input.
+	 * found anything or not, and of the page a dropped re-look was meant for. Not reachable from any tool input.
 	 */
 	probes?: { table?: readonly SiteProbe[]; settleMs?: number; relookMs?: number; recordVisit?: (url: string) => boolean; looked?: (url: string) => void };
 }
