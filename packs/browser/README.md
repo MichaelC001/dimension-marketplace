@@ -827,9 +827,13 @@ post (dimension#1219). It sends the vendor notification
   as the browser closes), or a `browser_publish` result said `signed-in` or
   `not-signed-in`, or a publish reached `posted`. A probe is two selectors for a
   known site (`src/probes.ts`; X, LinkedIn, Reddit, Bluesky, Google): one on the page
-  only when signed in, one that holds who. The marker found is signed in; its
+  only when signed in, one that holds who. The marker found is signed in. Its
   absence is signed out only on the site's front page or a login page, anywhere
-  else no verdict. A site with no probe is recorded as visited (`signedIn: null`:
+  else no verdict, and even there only after the page was looked at twice: once
+  waiting up to 3 s for the marker (a page still drawing, a cold first load after
+  a sign-in, a redirect chain shows none yet), and once more 4 s later as the page
+  is. A page loaded or left in between, or a tab switched, writes nothing. A site
+  with no probe is recorded as visited (`signedIn: null`:
   "not checked"), only for a public site, never replacing a check that was made. A
   site never observed is absent, never `signedIn: false`. A later `not-signed-in`
   sets `signedIn: false`. Nothing is read from the saved passwords, and an
