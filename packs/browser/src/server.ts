@@ -372,7 +372,7 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
       fail("publish_pending", "a post awaits confirmation on this browser; post or cancel it before opening a page in it");
     }
     await access(extra, state.browserId);
-    const navigated = await runtime.act(state.browserId, action, opener.caller, opener.session, accessGuard(extra, state.browserId));
+    const navigated = await runtime.act(state.browserId, action, opener.caller, opener.session, accessGuard(extra, state.browserId), opener.tool === "browser_view");
     assertAccess(extra, state.browserId);
     if (navigated.status !== "completed") throw new Error(`Opened, but navigating to ${url} ${navigated.status}: ${navigated.error}`);
     return navigated.state;

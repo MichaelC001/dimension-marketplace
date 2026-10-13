@@ -15189,10 +15189,10 @@ ${host}`;
   // -----------------------------------------------------------------------
   // Actions
   // -----------------------------------------------------------------------
-  async act(browserId, input, caller, session, guard) {
+  async act(browserId, input, caller, session, guard, opening = false) {
     const entry = this.require(browserId);
     return await this.serialize(entry, async () => {
-      admitCaller(entry, caller);
+      admitCaller(entry, caller, !opening);
       await this.adoptActiveTab(entry, session);
       const action = this.admit(entry, input, caller);
       let done;
@@ -16058,9 +16058,9 @@ function reopenWith(entry) {
 function refuseWhileTakenOver(entry, caller, tools = "steps") {
   if (caller !== "app" && entry.takenOver) fail("human_driving", TAKEN_OVER_MESSAGES[tools]);
 }
-function admitCaller(entry, caller) {
+function admitCaller(entry, caller, noting = true) {
   refuseWhileBusy(entry, caller);
-  if (caller !== "app") entry.agentAt = Date.now();
+  if (noting && caller !== "app") entry.agentAt = Date.now();
 }
 function agentActionAt(entry) {
   return entry.cells > 0 ? Date.now() - Date.now() % CELL_ACTIVITY_BEAT_MS : entry.agentAt;
@@ -16926,7 +16926,7 @@ async function createBrowserServer(options = {}) {
       fail("publish_pending", "a post awaits confirmation on this browser; post or cancel it before opening a page in it");
     }
     await access(extra, state.browserId);
-    const navigated = await runtime.act(state.browserId, action, opener.caller, opener.session, accessGuard(extra, state.browserId));
+    const navigated = await runtime.act(state.browserId, action, opener.caller, opener.session, accessGuard(extra, state.browserId), opener.tool === "browser_view");
     assertAccess(extra, state.browserId);
     if (navigated.status !== "completed") throw new Error(`Opened, but navigating to ${url} ${navigated.status}: ${navigated.error}`);
     return navigated.state;

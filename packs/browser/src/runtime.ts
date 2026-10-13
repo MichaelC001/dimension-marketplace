@@ -1819,10 +1819,10 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	// Actions
 	// -----------------------------------------------------------------------
 
-	async act(browserId: string, input: BrowserAction, caller?: ToolCaller, session?: string, guard?: EffectGuard): Promise<ActionResult> {
+	async act(browserId: string, input: BrowserAction, caller?: ToolCaller, session?: string, guard?: EffectGuard, opening = false): Promise<ActionResult> {
 		const entry = this.require(browserId);
 		return await this.serialize(entry, async () => {
-			admitCaller(entry, caller);
+			admitCaller(entry, caller, !opening);
 			await this.adoptActiveTab(entry, session);
 			const action = this.admit(entry, input, caller);
 			let done: Dispatched;
@@ -2798,10 +2798,10 @@ function refuseWhileTakenOver(entry: Entry, caller: ToolCaller | undefined, tool
 	if (caller !== "app" && entry.takenOver) fail("human_driving", TAKEN_OVER_MESSAGES[tools]);
 }
 
-/** `refuseWhileBusy`, then notes that an agent is acting on this browser (the View shows it, with a way to take over). */
-function admitCaller(entry: Entry, caller: ToolCaller | undefined): void {
+/** `refuseWhileBusy`, then (unless `noting` is false) notes that an agent is acting on this browser (the View shows it, with a way to take over). */
+function admitCaller(entry: Entry, caller: ToolCaller | undefined, noting = true): void {
 	refuseWhileBusy(entry, caller);
-	if (caller !== "app") entry.agentAt = Date.now();
+	if (noting && caller !== "app") entry.agentAt = Date.now();
 }
 
 /** When an agent last acted on `entry`, for the View: while a cell holds it, the start of the current beat (so it reads as acting for the whole run). */
