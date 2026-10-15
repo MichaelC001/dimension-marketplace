@@ -17,7 +17,7 @@ const STREAM_BUFFER_BYTES = 64 * 1024;
 const OPEN_FLAGS = constants.O_RDONLY | (constants.O_NONBLOCK ?? 0) | (constants.O_NOFOLLOW ?? 0);
 const SANDBOXED_VIEW_ORIGIN = "null";
 
-type Lease = { path: string; size: number; mtimeMs: number; mime: string; meta: unknown; responses: Set<ServerResponse> };
+type Lease = { path: string; size: number; mtimeMs: number; mime: string; meta: unknown; responses: Set<ServerResponse>; lastUsed: number };
 
 export interface MediaServer {
 	readonly origin: string;
@@ -37,7 +37,7 @@ async function admitRecording(fence: Fence, path: string, size: number, mtimeMs:
 	if (!matchesRevision(head, size, mtimeMs)) throw new Error("The file changed. Open it again.");
 	const media = sniffMedia(head.bytes, verdict.real);
 	if (media === undefined) throw new Error("This file is not a supported recording.");
-	return { path: verdict.real, size, mtimeMs, mime: media.mime, meta, responses: new Set() };
+	return { path: verdict.real, size, mtimeMs, mime: media.mime, meta, responses: new Set(), lastUsed: 0 };
 }
 
 type ByteWindow = { start: number; end: number };
@@ -122,6 +122,7 @@ export async function startMediaServer(fence: Fence): Promise<MediaServer> {
 	const pendingAdmissions = new Map<string, { cancelled: boolean }>();
 	const releasedTokens = new Set<string>();
 	let active = 0;
+	let clock = 0;
 	let host = "";
 	let closing: Promise<void> | undefined;
 	const server = createServer((req, res) => {
@@ -136,6 +137,7 @@ export async function startMediaServer(fence: Fence): Promise<MediaServer> {
 			res.writeHead(404).end();
 			return;
 		}
+		lease.lastUsed = ++clock;
 		void serve(req, res, lease).catch(() => {
 			if (!res.headersSent) res.writeHead(500).end();
 			else res.destroy();
@@ -169,6 +171,30 @@ export async function startMediaServer(fence: Fence): Promise<MediaServer> {
 		}
 	}
 
+	function release(token: string): void {
+		const admission = pendingAdmissions.get(token);
+		if (admission !== undefined) admission.cancelled = true;
+		for (const response of leases.get(token)?.responses ?? []) response.destroy();
+		leases.delete(token);
+		releasedTokens.add(token);
+		if (releasedTokens.size > MAX_REMEMBERED_RELEASES) {
+			const oldest = releasedTokens.values().next();
+			if (!oldest.done) releasedTokens.delete(oldest.value);
+		}
+	}
+
+	// A pane releases its lease when it closes, but a pane whose page the host removes runs none of its own cleanup,
+	// and nothing here learns that it is gone. So the table must be able to reclaim itself: at the cap, the lease
+	// nobody has used for longest, and that is not streaming right now, makes room for the recording being opened.
+	function leastRecentlyUsedIdle(): string | undefined {
+		let idle: { token: string; lastUsed: number } | undefined;
+		for (const [token, lease] of leases) {
+			if (lease.responses.size > 0) continue;
+			if (idle === undefined || lease.lastUsed < idle.lastUsed) idle = { token, lastUsed: lease.lastUsed };
+		}
+		return idle?.token;
+	}
+
 	await new Promise<void>((resolve, reject) => {
 		server.once("error", reject);
 		server.listen(0, "127.0.0.1", () => {
@@ -186,29 +212,24 @@ export async function startMediaServer(fence: Fence): Promise<MediaServer> {
 			if (closing !== undefined) throw new Error("The recording server is closed.");
 			if (!MEDIA_TOKEN_PATTERN.test(token) || leases.has(token) || pendingAdmissions.has(token)) throw new Error("Invalid recording capability.");
 			if (releasedTokens.has(token)) throw new Error("Recording opening was cancelled.");
-			if (leases.size + pendingAdmissions.size >= MAX_LEASES) throw new Error("Close an open recording before opening another.");
+			if (leases.size + pendingAdmissions.size >= MAX_LEASES) {
+				const idle = leastRecentlyUsedIdle();
+				if (idle === undefined) throw new Error("Close an open recording before opening another.");
+				release(idle);
+			}
 			const admission = { cancelled: false };
 			pendingAdmissions.set(token, admission);
 			try {
 				const lease = await admitRecording(fence, path, size, mtimeMs, meta);
 				if (admission.cancelled) throw new Error("Recording opening was cancelled.");
+				lease.lastUsed = ++clock;
 				leases.set(token, lease);
 				return { url: `${origin}/media/${token}`, token, mime: lease.mime };
 			} finally {
 				pendingAdmissions.delete(token);
 			}
 		},
-		release(token: string) {
-			const admission = pendingAdmissions.get(token);
-			if (admission !== undefined) admission.cancelled = true;
-			for (const response of leases.get(token)?.responses ?? []) response.destroy();
-			leases.delete(token);
-			releasedTokens.add(token);
-			if (releasedTokens.size > MAX_REMEMBERED_RELEASES) {
-				const oldest = releasedTokens.values().next();
-				if (!oldest.done) releasedTokens.delete(oldest.value);
-			}
-		},
+		release,
 		close() {
 			closing ??= new Promise<void>((resolve, reject) => {
 				for (const lease of leases.values()) for (const response of lease.responses) response.destroy();

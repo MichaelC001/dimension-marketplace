@@ -1,13 +1,14 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createHash, randomBytes } from "node:crypto";
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { z } from "zod";
-import { MAX_CHUNK_BYTES, TAB_META_KEY, fileChunkSchema, viewedFileSchema } from "../src/contract";
+import { MAX_CHUNK_BYTES, TAB_META_KEY, fileChunkSchema, mediaSourceSchema, viewedFileSchema } from "../src/contract";
 import { createFence } from "../src/fence";
+import { MAX_LEASES } from "../src/media-server";
 import { createViewerServer } from "../src/server";
 
 const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
@@ -112,5 +113,22 @@ describe("viewer server contract", () => {
 		expect(html.contents[0]?.mimeType).toBe("text/html;profile=mcp-app");
 		const chunk = await client.readResource({ uri: "ui://viewer/assets/chunk.js" });
 		expect(chunk.contents[0]).toMatchObject({ mimeType: "text/javascript", text: "export default 1" });
+	});
+
+	test("an app that opens recordings and never closes them, as a pane the host removed does not, still gets the next one to play", async () => {
+		const header = Buffer.from([0, 0, 0, 32, ...Buffer.from("ftypisom"), ...new Uint8Array(52)]);
+		const recording = join(root, "take.mp4");
+		await writeFile(recording, header);
+		const { size, mtimeMs } = await stat(recording);
+		const urls: string[] = [];
+		for (let opened = 0; opened < MAX_LEASES + 6; opened++) {
+			const result = await client.callTool({ name: "open_media", arguments: { path: recording, size, mtimeMs, token: randomBytes(24).toString("hex") } });
+			expect(result.isError).toBeFalsy();
+			urls.push(mediaSourceSchema.parse(result.structuredContent).url);
+		}
+		const played = await fetch(urls.at(-1)!, { headers: { Range: "bytes=0-11" } });
+		expect(played.status).toBe(206);
+		expect(new Uint8Array(await played.arrayBuffer())).toEqual(new Uint8Array(header.subarray(0, 12)));
+		expect((await fetch(urls[0]!, { headers: { Range: "bytes=0-11" } })).status).toBe(404);
 	});
 });

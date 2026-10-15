@@ -206,7 +206,7 @@ deny-by-default for everything a human did not click.
 
 | What | Limit | Where it is held |
 |---|---|---|
-| A recording the viewer plays | No file-size cap; 64 concurrent leases/admissions, 192 concurrent transfers (three a lease: the player, its frame-capture clone, and the tail range of a file whose index sits at its end), 64 KiB stream buffers | `media-server.ts` |
+| A recording the viewer plays | No file-size cap; 64 concurrent leases/admissions (a pane releases its lease when it closes; when the table is full, the lease nobody has used for longest and that is not streaming is dropped to make room, and only 64 recordings all opening or streaming at once refuse a new one), 192 concurrent transfers (three a lease: the player, its frame-capture clone, and the tail range of a file whose index sits at its end), 64 KiB stream buffers | `media-server.ts` |
 | Any other document | 128 MiB (text: the first 1 MiB) | `DOCUMENT_LIMIT`, `TEXT_LIMIT` (`document-bytes.ts`) |
 | An HTML page that starts with Pick in hand | 2 MiB; larger starts with Pick down | `PICK_FRAME_LIMIT` (`document-bytes.ts`) |
 | A waveform | WAV or strict MP3 only; file 32 MiB, decoded 96 MiB at 22.05 kHz, 8 channels, MP3 545 s; one decode at a time; everything else a flat track; a file is read whole only when its first bytes are a WAV, an ID3 tag or an MPEG frame | `media-waveform.ts` |
