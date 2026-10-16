@@ -6,7 +6,7 @@ import { connect, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createFence, type Fence } from "../src/fence";
-import { MAX_LEASES, MAX_TRANSFERS, startMediaServer, type MediaServer } from "../src/media-server";
+import { LEASE_TTL_MS, MAX_LEASES, MAX_TRANSFERS, startMediaServer, type MediaServer } from "../src/media-server";
 
 const HEADER = Buffer.from([0, 0, 0, 32, ...Buffer.from("ftypisom"), ...new Uint8Array(52)]);
 const TAIL = Buffer.from("selected tail bytes");
@@ -16,6 +16,8 @@ let path: string;
 let server: MediaServer;
 let fence: Fence;
 let allowed: boolean;
+/** The server's clock: a test moves it by hand, so no test waits for time to pass. */
+let clockNow = 0;
 const clients = new Set<Socket>();
 const SLOT_RETRIES = 200;
 
@@ -33,7 +35,8 @@ beforeEach(async () => {
 	allowed = true;
 	const realFence = createFence({ home: directory, env: {}, roots: [directory] });
 	fence = { roots: realFence.roots, check: (requested, meta) => allowed ? realFence.check(requested, meta) : Promise.resolve({ ok: false, reason: "Access withdrawn" }) };
-	server = await startMediaServer(fence);
+	clockNow = 0;
+	server = await startMediaServer(fence, () => clockNow);
 });
 
 afterEach(async () => {
@@ -295,50 +298,72 @@ describe("recording range leases", () => {
 		await expect(server.acquire(path, revision.size - 1, revision.mtimeMs, undefined, freshToken())).rejects.toThrow(/changed/i);
 	});
 
-	test("a full lease table makes room by dropping the least recently used idle lease instead of refusing the recording being opened", async () => {
-		const first = await lease();
-		const second = await lease();
-		for (let index = 2; index < MAX_LEASES; index++) await lease();
-		// The first lease is the oldest, but it was just played, so the second has gone unused longest.
-		expect((await response(first.url, { Range: "bytes=0-11" })).status).toBe(206);
+	test("a full table reclaims a lease that showed no sign of life for the TTL, and refuses nothing it did not need to", async () => {
+		const stale = [];
+		for (let index = 0; index < MAX_LEASES; index++) stale.push(await lease());
+		clockNow += LEASE_TTL_MS + 1;
 		const fresh = await lease();
-		const kept = await response(first.url, { Range: "bytes=0-11" });
-		const dropped = await response(second.url, { Range: "bytes=0-11" });
-		const opened = await response(fresh.url, { Range: "bytes=0-11" });
-		expect(kept.status).toBe(206);
-		expect(dropped.status).toBe(404);
-		expect(opened.status).toBe(206);
-		expect(opened.bytes).toEqual(HEADER.subarray(0, 12));
+		expect((await response(fresh.url, { Range: "bytes=0-11" })).status).toBe(206);
+		expect((await response(stale[0]!.url, { Range: "bytes=0-11" })).status).toBe(404);
 	});
 
-	test("a lease with a stream in progress is never the one dropped to make room", async () => {
+	test("a table of live leases is never reclaimed, and refuses with a sentence that is then true", async () => {
+		for (let index = 0; index < MAX_LEASES; index++) await lease();
+		clockNow += LEASE_TTL_MS - 1;
+		await expect(lease()).rejects.toThrow("Close an open recording before opening another.");
+	});
+
+	test("a pane renewing its lease keeps it through the same wait that reclaims its neighbours", async () => {
+		const kept = await lease();
+		const abandoned = [];
+		for (let index = 1; index < MAX_LEASES; index++) abandoned.push(await lease());
+		clockNow += LEASE_TTL_MS - 1;
+		expect(server.renew(kept.token)).toBe(true);
+		clockNow += 2;
+		const fresh = await lease();
+		expect((await response(kept.url, { Range: "bytes=0-11" })).status).toBe(206);
+		expect((await response(abandoned[0]!.url, { Range: "bytes=0-11" })).status).toBe(404);
+		expect((await response(fresh.url, { Range: "bytes=0-11" })).status).toBe(206);
+	});
+
+	test("a request for a lease counts as a sign of life", async () => {
+		const served = await lease();
+		for (let index = 1; index < MAX_LEASES; index++) await lease();
+		clockNow += LEASE_TTL_MS - 1;
+		expect((await response(served.url, { Range: "bytes=0-11" })).status).toBe(206);
+		clockNow += 2;
+		await lease();
+		expect((await response(served.url, { Range: "bytes=0-11" })).status).toBe(206);
+	});
+
+	test("a lease with a stream in progress is never reclaimed, however long it has been silent", async () => {
 		const playing = await lease();
 		const others = [];
 		for (let index = 1; index < MAX_LEASES; index++) others.push(await lease());
 		const stream = await openStream(playing.url);
-		// After the stream opened, every other lease is used, so the playing one is the oldest by use.
-		for (const other of others) expect((await response(other.url, {}, "HEAD")).status).toBeLessThan(300);
+		clockNow += LEASE_TTL_MS * 10;
 		const fresh = await lease();
 		try {
 			expect(stream.status).toBe(206);
-			// Dropping a lease deletes it and destroys its responses, so a playing lease that still serves was not dropped.
-			expect((await response(playing.url, { Range: "bytes=0-11" })).status).toBe(206);
 			expect((await response(others[0]!.url, { Range: "bytes=0-11" })).status).toBe(404);
 			expect((await response(fresh.url, { Range: "bytes=0-11" })).status).toBe(206);
+			expect(server.renew(playing.token)).toBe(true);
 		} finally {
 			stream.destroy();
 		}
 	});
 
-	test("a table whose every slot is opening or streaming still refuses, and says to close a recording", async () => {
-		const playing = await lease();
-		const stream = await openStream(playing.url);
-		for (let index = 1; index < MAX_LEASES; index++) await openStream((await lease()).url);
-		try {
-			await expect(lease()).rejects.toThrow("Close an open recording before opening another.");
-		} finally {
-			stream.destroy();
-		}
+	test("renewing says whether the server still holds the lease, so a pane can open the recording again", async () => {
+		const held = await lease();
+		expect(server.renew(held.token)).toBe(true);
+		expect(server.renew(freshToken())).toBe(false);
+		server.release(held.token);
+		expect(server.renew(held.token)).toBe(false);
+		const stale = await lease();
+		for (let index = 1; index < MAX_LEASES; index++) await lease();
+		clockNow += LEASE_TTL_MS + 1;
+		await lease();
+		expect(server.renew(stale.token)).toBe(false);
 	});
 
 	test.each([

@@ -11,12 +11,12 @@ import type { App } from "@modelcontextprotocol/ext-apps";
 import { cn } from "@fraym/ui/lib/cn";
 import { useEffect, useState } from "react";
 import { createToolCaller } from "@dimension/mcp-app-kit/tools";
-import { mediaSourceSchema } from "../../src/contract";
+import { mediaSourceSchema, renewedMediaSchema } from "../../src/contract";
 import { loadDocumentBytes, readLimit } from "./document-bytes";
 import { shownMode } from "./annotate-modes";
 import { FOCUS } from "./focus-ring";
 import { failureAction, type FailureStage, isRecording } from "./media-failure";
-import { trackMediaWork } from "./media-lifecycle";
+import { keepRecordingHeld, trackMediaWork } from "./media-lifecycle";
 import { loadRenderer } from "./renderers";
 import { Opening } from "./opening";
 import type { Mounted, RecordingSource, Theme } from "./renderers/types";
@@ -61,7 +61,10 @@ export function DocPane({ app, tab, active, theme }: DocPaneProps) {
 			: undefined;
 		let handle: Mounted | undefined;
 		const tools = createToolCaller(app);
+		let stopRenewing: (() => void) | undefined;
 		const releaseMedia = () => {
+			stopRenewing?.();
+			stopRenewing = undefined;
 			if (mediaToken === undefined) return;
 			const token = mediaToken;
 			mediaToken = undefined;
@@ -80,6 +83,13 @@ export function DocPane({ app, tab, active, theme }: DocPaneProps) {
 					? tools.whole("open_media", { path: tab.path, size: tab.size, mtimeMs: tab.mtimeMs, token: mediaToken }).then(result => {
 						if (!controller.signal.aborted) {
 							mediaSource = mediaSourceSchema.parse(result);
+							const held = mediaToken;
+							if (held !== undefined) {
+								stopRenewing = keepRecordingHeld(
+									async () => renewedMediaSchema.parse(await tools.whole("renew_media", { token: held })).alive,
+									() => setRetry(count => count + 1),
+								);
+							}
 							setPhase({ name: "loading", stage: "prepare", loaded: 0, total: 0 });
 						}
 						return { bytes: new Uint8Array(0) };

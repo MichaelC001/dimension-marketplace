@@ -188,4 +188,12 @@ async function registerViewer(server: McpServer, { fence, html, viewDir, media }
 		media.release(token);
 		return { content: [{ type: "text", text: "Recording released." }], structuredContent: {} };
 	});
+	registerAppTool(server, "renew_media", {
+		inputSchema: { token: mediaTokenSchema },
+		annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+		_meta: APP_ONLY,
+	}, async ({ token }) => {
+		const alive = media.renew(token);
+		return { content: [{ type: "text", text: alive ? "Recording still held." : "Recording no longer held." }], structuredContent: { alive } };
+	});
 }

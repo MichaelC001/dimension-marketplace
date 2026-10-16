@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, setSystemTime, test } from "bun:test";
 import { createHash, randomBytes } from "node:crypto";
 import { mkdir, mkdtemp, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -6,9 +6,9 @@ import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { z } from "zod";
-import { MAX_CHUNK_BYTES, TAB_META_KEY, fileChunkSchema, mediaSourceSchema, viewedFileSchema } from "../src/contract";
+import { MAX_CHUNK_BYTES, TAB_META_KEY, fileChunkSchema, mediaSourceSchema, renewedMediaSchema, viewedFileSchema } from "../src/contract";
 import { createFence } from "../src/fence";
-import { MAX_LEASES } from "../src/media-server";
+import { LEASE_TTL_MS, MAX_LEASES } from "../src/media-server";
 import { createViewerServer } from "../src/server";
 
 const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
@@ -49,7 +49,7 @@ describe("viewer server contract", () => {
 		const meta = (name: string) => toolMeta.parse(tools.find(tool => tool.name === name)?._meta);
 		expect(meta("view_file").ui.resourceUri).toBe("ui://viewer/index.html");
 		expect(meta("view_file").ui.visibility).toBeUndefined();
-		for (const name of ["read_file_chunk", "open_media", "close_media"]) expect(meta(name).ui.visibility).toEqual(["app"]);
+		for (const name of ["read_file_chunk", "open_media", "close_media", "renew_media"]) expect(meta(name).ui.visibility).toEqual(["app"]);
 	});
 
 	test("view_file names the real path, the kind and the size, and keys the tab by the real path", async () => {
@@ -115,20 +115,40 @@ describe("viewer server contract", () => {
 		expect(chunk.contents[0]).toMatchObject({ mimeType: "text/javascript", text: "export default 1" });
 	});
 
-	test("an app that opens recordings and never closes them, as a pane the host removed does not, still gets the next one to play", async () => {
+	test("a pane that vanished without closing is reclaimed once the table is full and its lease went unrenewed, while a renewing pane keeps its recording", async () => {
 		const header = Buffer.from([0, 0, 0, 32, ...Buffer.from("ftypisom"), ...new Uint8Array(52)]);
 		const recording = join(root, "take.mp4");
 		await writeFile(recording, header);
 		const { size, mtimeMs } = await stat(recording);
+		const open = async () => {
+			const token = randomBytes(24).toString("hex");
+			const result = await client.callTool({ name: "open_media", arguments: { path: recording, size, mtimeMs, token } });
+			return { token, result };
+		};
+		const renewed = async (token: string) => renewedMediaSchema.parse((await client.callTool({ name: "renew_media", arguments: { token } })).structuredContent).alive;
+		const range = async (url: string) => (await fetch(url, { headers: { Range: "bytes=0-11" } })).status;
 		const urls: string[] = [];
-		for (let opened = 0; opened < MAX_LEASES + 6; opened++) {
-			const result = await client.callTool({ name: "open_media", arguments: { path: recording, size, mtimeMs, token: randomBytes(24).toString("hex") } });
+		const tokens: string[] = [];
+		for (let opened = 0; opened < MAX_LEASES; opened++) {
+			const { token, result } = await open();
 			expect(result.isError).toBeFalsy();
+			tokens.push(token);
 			urls.push(mediaSourceSchema.parse(result.structuredContent).url);
 		}
-		const played = await fetch(urls.at(-1)!, { headers: { Range: "bytes=0-11" } });
-		expect(played.status).toBe(206);
-		expect(new Uint8Array(await played.arrayBuffer())).toEqual(new Uint8Array(header.subarray(0, 12)));
-		expect((await fetch(urls[0]!, { headers: { Range: "bytes=0-11" } })).status).toBe(404);
+		try {
+			expect((await open()).result.isError).toBe(true);
+			setSystemTime(new Date(Date.now() + LEASE_TTL_MS - 1000));
+			expect(await renewed(tokens[0]!)).toBe(true);
+			setSystemTime(new Date(Date.now() + 2000));
+			const next = await open();
+			expect(next.result.isError).toBeFalsy();
+			expect(await range(mediaSourceSchema.parse(next.result.structuredContent).url)).toBe(206);
+			expect(await range(urls[0]!)).toBe(206);
+			expect(await range(urls[1]!)).toBe(404);
+			expect(await renewed(tokens[0]!)).toBe(true);
+			expect(await renewed(tokens[1]!)).toBe(false);
+		} finally {
+			setSystemTime();
+		}
 	});
 });
