@@ -31685,6 +31685,7 @@ var mediaSourceSchema = external_exports.object({
   token: mediaTokenSchema,
   mime: external_exports.string().min(1)
 });
+var renewedMediaSchema = external_exports.object({ alive: external_exports.boolean() });
 
 // src/chunk.ts
 var nativeFs = { stat, open };
@@ -31727,7 +31728,7 @@ async function readChunk(path, offset, length) {
 import { realpath as nativeRealpath, stat as nativeStat } from "node:fs/promises";
 import * as nodePath from "node:path";
 
-// D:/Gamedev/AI/inso/packages/sdk/src/artifactory/artifactory-decl.ts
+// ../../../../../../packages/sdk/src/artifactory/artifactory-decl.ts
 var ARTIFACTORY_GRANT_META_KEY = "ai.insodimension/grant";
 var PACK_CONNECTION_REPORT_MAX_BYTES = 64 * 1024;
 
@@ -32096,6 +32097,7 @@ import { open as open2 } from "node:fs/promises";
 import { createServer } from "node:http";
 import { pipeline } from "node:stream/promises";
 var MAX_LEASES = 64;
+var LEASE_TTL_MS = 5 * 6e4;
 var TRANSFERS_PER_LEASE = 3;
 var MAX_TRANSFERS = MAX_LEASES * TRANSFERS_PER_LEASE;
 var KEEP_ALIVE_HEADROOM = MAX_LEASES;
@@ -32113,7 +32115,7 @@ async function admitRecording(fence, path, size, mtimeMs, meta3) {
   if (!matchesRevision(head, size, mtimeMs)) throw new Error("The file changed. Open it again.");
   const media = sniffMedia(head.bytes, verdict.real);
   if (media === void 0) throw new Error("This file is not a supported recording.");
-  return { path: verdict.real, size, mtimeMs, mime: media.mime, meta: meta3, responses: /* @__PURE__ */ new Set(), lastUsed: 0 };
+  return { path: verdict.real, size, mtimeMs, mime: media.mime, meta: meta3, responses: /* @__PURE__ */ new Set(), lastSeen: 0 };
 }
 var RANGE_SPEC = /^(\d*)-(\d*)$/;
 function parseRangeSpec(header) {
@@ -32180,12 +32182,11 @@ async function streamRecording(req, res, lease) {
     await file2.close();
   }
 }
-async function startMediaServer(fence) {
+async function startMediaServer(fence, now = Date.now) {
   const leases = /* @__PURE__ */ new Map();
   const pendingAdmissions = /* @__PURE__ */ new Map();
   const releasedTokens = /* @__PURE__ */ new Set();
   let active = 0;
-  let clock = 0;
   let host = "";
   let closing;
   const server2 = createServer((req, res) => {
@@ -32200,7 +32201,7 @@ async function startMediaServer(fence) {
       res.writeHead(404).end();
       return;
     }
-    lease.lastUsed = ++clock;
+    lease.lastSeen = now();
     void serve(req, res, lease).catch(() => {
       if (!res.headersSent) res.writeHead(500).end();
       else res.destroy();
@@ -32243,13 +32244,9 @@ async function startMediaServer(fence) {
       if (!oldest.done) releasedTokens.delete(oldest.value);
     }
   }
-  function leastRecentlyUsedIdle() {
-    let idle;
-    for (const [token, lease] of leases) {
-      if (lease.responses.size > 0) continue;
-      if (idle === void 0 || lease.lastUsed < idle.lastUsed) idle = { token, lastUsed: lease.lastUsed };
-    }
-    return idle?.token;
+  function reapExpired() {
+    const cutoff = now() - LEASE_TTL_MS;
+    for (const [token, lease] of [...leases]) if (lease.responses.size === 0 && lease.lastSeen < cutoff) release(token);
   }
   await new Promise((resolve, reject) => {
     server2.once("error", reject);
@@ -32269,16 +32266,15 @@ async function startMediaServer(fence) {
       if (!MEDIA_TOKEN_PATTERN.test(token) || leases.has(token) || pendingAdmissions.has(token)) throw new Error("Invalid recording capability.");
       if (releasedTokens.has(token)) throw new Error("Recording opening was cancelled.");
       if (leases.size + pendingAdmissions.size >= MAX_LEASES) {
-        const idle = leastRecentlyUsedIdle();
-        if (idle === void 0) throw new Error("Close an open recording before opening another.");
-        release(idle);
+        reapExpired();
+        if (leases.size + pendingAdmissions.size >= MAX_LEASES) throw new Error("Close an open recording before opening another.");
       }
       const admission = { cancelled: false };
       pendingAdmissions.set(token, admission);
       try {
         const lease = await admitRecording(fence, path, size, mtimeMs, meta3);
         if (admission.cancelled) throw new Error("Recording opening was cancelled.");
-        lease.lastUsed = ++clock;
+        lease.lastSeen = now();
         leases.set(token, lease);
         return { url: `${origin}/media/${token}`, token, mime: lease.mime };
       } finally {
@@ -32286,6 +32282,14 @@ async function startMediaServer(fence) {
       }
     },
     release,
+    renew(token) {
+      const lease = leases.get(token);
+      if (lease !== void 0) {
+        lease.lastSeen = now();
+        return true;
+      }
+      return pendingAdmissions.has(token);
+    },
     close() {
       closing ??= new Promise((resolve, reject) => {
         for (const lease of leases.values()) for (const response of lease.responses) response.destroy();
@@ -32440,6 +32444,14 @@ async function registerViewer(server2, { fence, html, viewDir, media }) {
   }, async ({ token }) => {
     media.release(token);
     return { content: [{ type: "text", text: "Recording released." }], structuredContent: {} };
+  });
+  K3(server2, "renew_media", {
+    inputSchema: { token: mediaTokenSchema },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    _meta: APP_ONLY
+  }, async ({ token }) => {
+    const alive = media.renew(token);
+    return { content: [{ type: "text", text: alive ? "Recording still held." : "Recording no longer held." }], structuredContent: { alive } };
   });
 }
 

@@ -55,3 +55,6 @@ export const mediaSourceSchema = z.object({
 	token: mediaTokenSchema,
 	mime: z.string().min(1),
 });
+
+/** The answer to `renew_media`: whether the server still holds the recording the pane renewed. */
+export const renewedMediaSchema = z.object({ alive: z.boolean() });
