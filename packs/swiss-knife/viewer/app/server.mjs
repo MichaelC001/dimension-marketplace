@@ -31727,7 +31727,7 @@ async function readChunk(path, offset, length) {
 import { realpath as nativeRealpath, stat as nativeStat } from "node:fs/promises";
 import * as nodePath from "node:path";
 
-// ../../../../packages/sdk/src/artifactory/artifactory-decl.ts
+// D:/Gamedev/AI/inso/packages/sdk/src/artifactory/artifactory-decl.ts
 var ARTIFACTORY_GRANT_META_KEY = "ai.insodimension/grant";
 var PACK_CONNECTION_REPORT_MAX_BYTES = 64 * 1024;
 
@@ -32113,7 +32113,7 @@ async function admitRecording(fence, path, size, mtimeMs, meta3) {
   if (!matchesRevision(head, size, mtimeMs)) throw new Error("The file changed. Open it again.");
   const media = sniffMedia(head.bytes, verdict.real);
   if (media === void 0) throw new Error("This file is not a supported recording.");
-  return { path: verdict.real, size, mtimeMs, mime: media.mime, meta: meta3, responses: /* @__PURE__ */ new Set() };
+  return { path: verdict.real, size, mtimeMs, mime: media.mime, meta: meta3, responses: /* @__PURE__ */ new Set(), lastUsed: 0 };
 }
 var RANGE_SPEC = /^(\d*)-(\d*)$/;
 function parseRangeSpec(header) {
@@ -32185,6 +32185,7 @@ async function startMediaServer(fence) {
   const pendingAdmissions = /* @__PURE__ */ new Map();
   const releasedTokens = /* @__PURE__ */ new Set();
   let active = 0;
+  let clock = 0;
   let host = "";
   let closing;
   const server2 = createServer((req, res) => {
@@ -32199,6 +32200,7 @@ async function startMediaServer(fence) {
       res.writeHead(404).end();
       return;
     }
+    lease.lastUsed = ++clock;
     void serve(req, res, lease).catch(() => {
       if (!res.headersSent) res.writeHead(500).end();
       else res.destroy();
@@ -32230,6 +32232,25 @@ async function startMediaServer(fence) {
       active--;
     }
   }
+  function release(token) {
+    const admission = pendingAdmissions.get(token);
+    if (admission !== void 0) admission.cancelled = true;
+    for (const response of leases.get(token)?.responses ?? []) response.destroy();
+    leases.delete(token);
+    releasedTokens.add(token);
+    if (releasedTokens.size > MAX_REMEMBERED_RELEASES) {
+      const oldest = releasedTokens.values().next();
+      if (!oldest.done) releasedTokens.delete(oldest.value);
+    }
+  }
+  function leastRecentlyUsedIdle() {
+    let idle;
+    for (const [token, lease] of leases) {
+      if (lease.responses.size > 0) continue;
+      if (idle === void 0 || lease.lastUsed < idle.lastUsed) idle = { token, lastUsed: lease.lastUsed };
+    }
+    return idle?.token;
+  }
   await new Promise((resolve, reject) => {
     server2.once("error", reject);
     server2.listen(0, "127.0.0.1", () => {
@@ -32247,29 +32268,24 @@ async function startMediaServer(fence) {
       if (closing !== void 0) throw new Error("The recording server is closed.");
       if (!MEDIA_TOKEN_PATTERN.test(token) || leases.has(token) || pendingAdmissions.has(token)) throw new Error("Invalid recording capability.");
       if (releasedTokens.has(token)) throw new Error("Recording opening was cancelled.");
-      if (leases.size + pendingAdmissions.size >= MAX_LEASES) throw new Error("Close an open recording before opening another.");
+      if (leases.size + pendingAdmissions.size >= MAX_LEASES) {
+        const idle = leastRecentlyUsedIdle();
+        if (idle === void 0) throw new Error("Close an open recording before opening another.");
+        release(idle);
+      }
       const admission = { cancelled: false };
       pendingAdmissions.set(token, admission);
       try {
         const lease = await admitRecording(fence, path, size, mtimeMs, meta3);
         if (admission.cancelled) throw new Error("Recording opening was cancelled.");
+        lease.lastUsed = ++clock;
         leases.set(token, lease);
         return { url: `${origin}/media/${token}`, token, mime: lease.mime };
       } finally {
         pendingAdmissions.delete(token);
       }
     },
-    release(token) {
-      const admission = pendingAdmissions.get(token);
-      if (admission !== void 0) admission.cancelled = true;
-      for (const response of leases.get(token)?.responses ?? []) response.destroy();
-      leases.delete(token);
-      releasedTokens.add(token);
-      if (releasedTokens.size > MAX_REMEMBERED_RELEASES) {
-        const oldest = releasedTokens.values().next();
-        if (!oldest.done) releasedTokens.delete(oldest.value);
-      }
-    },
+    release,
     close() {
       closing ??= new Promise((resolve, reject) => {
         for (const lease of leases.values()) for (const response of lease.responses) response.destroy();

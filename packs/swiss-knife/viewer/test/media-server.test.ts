@@ -295,14 +295,50 @@ describe("recording range leases", () => {
 		await expect(server.acquire(path, revision.size - 1, revision.mtimeMs, undefined, freshToken())).rejects.toThrow(/changed/i);
 	});
 
-	test("releasing a lease restores capacity after the lease limit is reached", async () => {
+	test("a full lease table makes room by dropping the least recently used idle lease instead of refusing the recording being opened", async () => {
 		const first = await lease();
-		for (let index = 1; index < MAX_LEASES; index++) await lease();
-		await expect(lease()).rejects.toThrow(/Close an open recording/);
-		server.release(first.token);
-		const result = await response((await lease()).url, { Range: "bytes=0-11" });
-		expect(result.status).toBe(206);
-		expect(result.bytes).toEqual(HEADER.subarray(0, 12));
+		const second = await lease();
+		for (let index = 2; index < MAX_LEASES; index++) await lease();
+		// The first lease is the oldest, but it was just played, so the second has gone unused longest.
+		expect((await response(first.url, { Range: "bytes=0-11" })).status).toBe(206);
+		const fresh = await lease();
+		const kept = await response(first.url, { Range: "bytes=0-11" });
+		const dropped = await response(second.url, { Range: "bytes=0-11" });
+		const opened = await response(fresh.url, { Range: "bytes=0-11" });
+		expect(kept.status).toBe(206);
+		expect(dropped.status).toBe(404);
+		expect(opened.status).toBe(206);
+		expect(opened.bytes).toEqual(HEADER.subarray(0, 12));
+	});
+
+	test("a lease with a stream in progress is never the one dropped to make room", async () => {
+		const playing = await lease();
+		const others = [];
+		for (let index = 1; index < MAX_LEASES; index++) others.push(await lease());
+		const stream = await openStream(playing.url);
+		// After the stream opened, every other lease is used, so the playing one is the oldest by use.
+		for (const other of others) expect((await response(other.url, {}, "HEAD")).status).toBeLessThan(300);
+		const fresh = await lease();
+		try {
+			expect(stream.status).toBe(206);
+			// Dropping a lease deletes it and destroys its responses, so a playing lease that still serves was not dropped.
+			expect((await response(playing.url, { Range: "bytes=0-11" })).status).toBe(206);
+			expect((await response(others[0]!.url, { Range: "bytes=0-11" })).status).toBe(404);
+			expect((await response(fresh.url, { Range: "bytes=0-11" })).status).toBe(206);
+		} finally {
+			stream.destroy();
+		}
+	});
+
+	test("a table whose every slot is opening or streaming still refuses, and says to close a recording", async () => {
+		const playing = await lease();
+		const stream = await openStream(playing.url);
+		for (let index = 1; index < MAX_LEASES; index++) await openStream((await lease()).url);
+		try {
+			await expect(lease()).rejects.toThrow("Close an open recording before opening another.");
+		} finally {
+			stream.destroy();
+		}
 	});
 
 	test.each([
