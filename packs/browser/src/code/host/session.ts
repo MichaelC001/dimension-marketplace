@@ -593,6 +593,7 @@ export class CodeSession {
     let ref: TabRef;
     try {
       ref = await browsers.openTab(record.browserId, {
+        session: this.#d.session,
         ...(request.url === undefined ? {} : { url: request.url }),
         ...(request.wait_until === undefined ? {} : { waitUntil: request.wait_until }),
         ...(request.dialogs === undefined ? {} : { dialogs: request.dialogs }),
@@ -703,23 +704,25 @@ export class CodeSession {
     return { text: had ? `Released managed tab ${JSON.stringify(name)}` : `No tab named ${JSON.stringify(name)}`, details: { action: "close", name } };
   }
 
-  /** Releases a named tab: its page closes, and the browser with it when this was the cell's own and no other tab of the session uses it (matrix C11). */
+  /**
+   * Releases a named tab: its page closes, and this chat's hold on the browser with it once no tab of the session uses it (matrix C11). Whether the
+   * browser itself closes is the runtime's to say — several chats work on one saved-profile browser (doc 77 §7.4.5), so one chat's last tab must not
+   * end another's. `kill` (ending an application the pack started) is the maker's alone.
+   */
   async #releaseTab(name: string, kill: boolean): Promise<void> {
     const tab = this.#tabs.get(name);
     if (tab === undefined) return;
     this.#forgetTab(name);
     await this.#d.browsers.closeTab(tab.browserId, tab.handle.tabId).catch(() => undefined);
     const record = this.#browsers.get(tab.browserId);
-    if (record === undefined || !record.createdByCode || [...this.#tabs.values()].some(other => other.browserId === record.browserId)) return;
-    await this.#dropBrowser(record, kill);
+    if (record === undefined || [...this.#tabs.values()].some(other => other.browserId === record.browserId)) return;
+    await this.#dropBrowser(record, kill && record.createdByCode);
   }
 
-  /** Lets go of a browser the cell made: the runtime closes it unless a View has joined it (the person's eyes outrank a cell's tidiness). */
+  /** Lets go of this chat's hold on a browser. It closes only when the runtime agrees: other chats may be working on it, and the person's eyes outrank a cell's tidy-up. */
   async #dropBrowser(record: BrowserRecord, kill: boolean): Promise<void> {
-    const { browsers } = this.#d;
-    if ((browsers.activity(record.browserId)?.viewers ?? 0) > 0) return;
     this.#forgetBrowser(record.browserId);
-    await browsers.release(record.browserId, { kill }).catch((error: unknown) => console.error("A cell's browser did not close:", codedMessage(error)));
+    await this.#d.browsers.release(record.browserId, { kill, by: { caller: "model", session: this.#d.session } }).catch((error: unknown) => console.error("A cell's browser did not close:", codedMessage(error)));
   }
 
   #forgetTab(name: string): void {
@@ -732,6 +735,9 @@ export class CodeSession {
     for (const key of [...this.#frozen]) if (key.startsWith(`${browserId}\u0000`)) this.#frozen.delete(key);
     this.#active?.holds.get(browserId)?.();
     this.#active?.holds.delete(browserId);
+    // The hold goes with the tabs — including when a take-over dropped them and the browser lives on. Letting go is per hold, so this never ends
+    // another chat's work or the person's hands (`#dropBrowser` makes the same call, and a second let-go of the same hold is a no-op).
+    void this.#d.browsers.release(browserId, { kill: false, by: { caller: "model", session: this.#d.session } }).catch(() => undefined);
   }
 
   #forgetBrowser(browserId: string): void {
@@ -741,11 +747,10 @@ export class CodeSession {
 
   /** Every browser the session holds, including one the person opened in the View that no cell has named yet. */
   #known(): BrowserRecord[] {
+    const held = [...this.#browsers.values()];
     const found = this.#d.browsers.existing(this.#d.session);
-    if (found !== undefined && !this.#browsers.has(found.browserId)) {
-      this.#browsers.set(found.browserId, { browserId: found.browserId, wsEndpoint: found.wsEndpoint, kind: found.kind, createdByCode: false });
-    }
-    return [...this.#browsers.values()];
+    if (found === undefined || this.#browsers.has(found.browserId)) return held;
+    return [...held, { browserId: found.browserId, wsEndpoint: found.wsEndpoint, kind: found.kind, createdByCode: false }];
   }
 
   async #listTabs(run: Run): Promise<HostReply> {
@@ -753,6 +758,7 @@ export class CodeSession {
     for (const record of this.#known()) {
       this.#holdFor(run, record.browserId);
       for (const ref of await this.#d.browsers.tabs(record.browserId)) {
+        if (this.#d.browsers.ownedByAnotherChat(record.browserId, ref.tabId, this.#d.session)) continue;
         const named = [...this.#tabs.values()].find(tab => tab.browserId === record.browserId && tab.handle.tabId === ref.tabId);
         value.push({ ...(named === undefined ? {} : { name: named.name }), id: ref.tabId, url: ref.url, title: ref.title, active: ref.active });
       }
@@ -762,16 +768,23 @@ export class CodeSession {
 
   /** `browser.active()`: the tab the person is looking at, adopted like an `open` under its own name or one made up from its id. */
   async #activeTab(run: Run): Promise<HostReply> {
+    let heldByAnotherChat = false;
     for (const record of this.#known()) {
       this.#holdFor(run, record.browserId);
       const current = (await this.#d.browsers.tabs(record.browserId)).find(ref => ref.active);
       if (current === undefined) continue;
+      if (this.#d.browsers.ownedByAnotherChat(record.browserId, current.tabId, this.#d.session)) {
+        heldByAnotherChat = true;
+        continue;
+      }
       const named = [...this.#tabs.values()].find(tab => tab.browserId === record.browserId && tab.handle.tabId === current.tabId);
       const name = named?.name ?? `tab-${current.tabId.slice(0, 6)}`;
       const handle = this.#handleFor(current, record, { created: named?.handle.created ?? false });
+      this.#browsers.set(record.browserId, record);
       this.#tabs.set(name, { name, browserId: record.browserId, kind: record.kind, handle });
       return { text: "", details: { action: "active", name, url: current.url }, attach: handle };
     }
+    if (heldByAnotherChat) throw new ToolError("The page in view belongs to another chat, and each chat works only on its own tabs. Open a tab of your own with browser.open().");
     throw new ToolError("No browser is open in this session. Open one with browser.open() first.");
   }
 

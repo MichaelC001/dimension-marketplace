@@ -133,7 +133,7 @@ function facts(rows: readonly Row[]) {
 		identity: { version: "0.0.0", productLabel: "Test", userName: "tester", planLabel: "dev" },
 		mode: { app: "code", rail: "expanded", activeSurface: "session" },
 		sessions: [{ repo: "app", branch: "main", dot: "", items: rows }],
-		projectLabel: "Projects",
+		workspaceLabel: "Projects",
 		search: { open: false, value: "" },
 	};
 }
@@ -227,7 +227,10 @@ describe("the needs-you strip", () => {
 });
 
 describe("Sweep", () => {
-	const stale = [row("a", "idle", 9 * DAY), row("b", "attached", 30 * DAY), row("keep", "idle", 8 * DAY, false)];
+	let stale: Row[];
+	beforeEach(() => {
+		stale = [row("a", "idle", 9 * DAY), row("b", "attached", 30 * DAY), row("keep", "idle", 8 * DAY, false)];
+	});
 	const sweepButton = () =>
 		[...container.querySelectorAll('[data-bucket="earlier"] button')].find(b => b.textContent?.includes("Sweep"));
 	const confirmButton = () =>

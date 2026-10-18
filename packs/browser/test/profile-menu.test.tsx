@@ -108,13 +108,12 @@ const ROWS_BESIDE_WORK: Array<[text: string, disabled: boolean]> = [
 	["GGamingYour agent has it open", false],
 	["RResearchAn agent task is running", false],
 	["SStreamingYou have control", false],
-	["SStudioIn use by another chat", true],
-	["TTravelOpen in another chat", true],
+	["SStudioAlso in use by another chat", false],
+	["TTravelAlso open in another chat", false],
 ];
 
-const TAKEN_SENTENCE = "That browser is already open. Use it, or open a Private one.";
-/** The runtime's refusal of a profile someone else holds, verbatim (`profile_held`). */
-const HELD_TEXT = `profile "z-bank" is already open, held by another chat. Ask the human to close it, or use another profile.`;
+const LOCKED_TEXT = `profile "z-bank" is already in use (pid 4242 since 2026-09-29T08:00:00.000Z). Close that browser first (browser_close), or use another profile.`;
+const TAKEN_SENTENCE = "That profile's browser is already open in another window. Close it there, or open a Private one.";
 
 /** A browser as the runtime describes it. */
 function browserOf(browserId: string, profile: ProfileListing | null, over: Partial<BrowserState> = {}): BrowserState {
@@ -138,6 +137,7 @@ function browserOf(browserId: string, profile: ProfileListing | null, over: Part
 		dialogs: [],
 		takenOver: false,
 		agentActionAt: null,
+		signedInTo: profile === null ? [] : profile.sites.filter(listed => listed.signedIn === true).map(listed => listed.site),
 		...over,
 	};
 }
@@ -241,6 +241,20 @@ describe("the profile chip", () => {
 			expect(callsTo(host, "browser_profiles")).toEqual([]);
 		});
 	}
+
+	for (const { name, signedInTo, label } of [
+		{ name: "a profile with no sign-in", signedInTo: [], label: "Default, No sign-ins yet" },
+		{ name: "one site", signedInTo: ["google.com"], label: "Default, Signed in to google.com" },
+		{ name: "three sites, two named", signedInTo: ["google.com", "x.com", "reddit.com"], label: "Default, Signed in to google.com, x.com +1" },
+	]) {
+		test(`the chip says what the browser's own state says its profile is signed in to, with no read of its own: ${name}`, async () => {
+			const host = fakeHost(SHELF);
+			const dom = await mountView(host, browserOf("b1", listing("default", "Default"), { signedInTo }));
+
+			expect(chipOf(dom).getAttribute("aria-label")).toBe(`${label} — profiles`);
+			expect(callsTo(host, "browser_profiles")).toEqual([]);
+		});
+	}
 });
 
 // ---------------------------------------------------------------------------
@@ -248,7 +262,7 @@ describe("the profile chip", () => {
 // ---------------------------------------------------------------------------
 
 describe("the profile menu", () => {
-	test("lists the other profiles — Default first, then by label — with where each is signed in and who has it, and the ones held elsewhere cannot be pressed", async () => {
+	test("lists the other profiles — Default first, then by label — with where each is signed in and who has it, the ones a chat holds openable now that they join", async () => {
 		const host = fakeHost(SHELF);
 		const dom = await mountView(host, WORK_BROWSER);
 		await openMenu(dom);
@@ -266,8 +280,8 @@ describe("the profile menu", () => {
 
 		await openMenu(dom);
 		expect(callsTo(host, "browser_profiles")).toHaveLength(1);
-		expect(cannotOpen(rowFor(dom, "Studio"))).toBe(true);
-
+		expect(cannotOpen(rowFor(dom, "Studio"))).toBe(false);
+		expect(rowFor(dom, "Studio").textContent).toBe("SStudioAlso in use by another chat");
 		// The other chat lets go of Studio while the menu is shut.
 		await dom.click(chipOf(dom));
 		host.profiles = SHELF.map(profile => (profile.name === "u-studio" ? { ...profile, heldBy: null } : profile));
@@ -314,19 +328,18 @@ describe("the profile menu", () => {
 		expect(await focusWhileOpening(dom)).toEqual(["DDefaultNo sign-ins yet"]);
 	});
 
-	for (const { name, shelf } of [
-		{ name: "there is no other profile", shelf: [] },
-		{ name: "every other profile is held elsewhere", shelf: [listing("t-travel", "Travel", { heldBy: "human" }), listing("u-studio", "Studio", { heldBy: "another chat" })] },
+	for (const { name, landing } of [
+		{ name: "there is no other profile", landing: "Add profile" },
+		{ name: "the only other profiles are held elsewhere", landing: "SStudioAlso in use by another chat" },
 	]) {
-		test(`focus lands on Add profile, never on Take over, with an agent acting and the control row on top, when ${name}`, async () => {
+		test(`focus lands on ${landing}, never on Take over, with an agent acting and the control row on top, when ${name}`, async () => {
+			const shelf = landing === "Add profile" ? [] : [listing("t-travel", "Travel", { heldBy: "human" }), listing("u-studio", "Studio", { heldBy: "another chat" })];
 			const dom = await mountView(fakeHost(shelf), browserOf("b1", listing(DEFAULT_PROFILE, "Default"), { agentActionAt: Date.now() - 2_000 }));
 
 			const focused = await focusWhileOpening(dom);
 
-			// The agent is acting, so the menu does offer Take over, first in the list ...
 			expect(controls(dom, "menu")).toEqual(["Take over"]);
-			// ... and what Enter would press is Add profile.
-			expect(focused).toEqual(["Add profile"]);
+			expect(focused.at(-1)).toBe(landing);
 		});
 	}
 });
@@ -388,21 +401,20 @@ describe("switching profile from the menu", () => {
 		expect(chipOf(dom).textContent?.trim()).toBe("BBank");
 	});
 
-	test("a profile held elsewhere is listed but pressing it opens nothing", async () => {
-		const host = fakeHost(SHELF, call => (call.name === "browser_switch" ? answer(browserOf("b2", BANK)) : failure(`unexpected ${call.name}`)));
+	test("a profile held elsewhere is pressed and the View joins it, exactly as it opens a free one", async () => {
+		const host = switching();
 		const dom = await mountView(host, WORK_BROWSER);
 		await openMenu(dom);
 
 		await dom.click(rowFor(dom, "Studio"));
-		await dom.click(rowFor(dom, "Travel"));
 		await dom.settle();
 
-		expect(callsTo(host, "browser_switch")).toEqual([]);
-		expect(chipOf(dom).textContent?.trim()).toBe("💼Work account");
+		expect(callsTo(host, "browser_switch")).toStrictEqual([{ leaving: "b1", engine: "chromium", profile: "u-studio" }]);
+		expect(chipOf(dom).textContent?.trim()).toBe("BBank");
 	});
 
-	test("a profile taken in the meantime keeps the current browser and says why, once, in plain words — or the runtime's own words when it is something else", async () => {
-		let reason = HELD_TEXT;
+	test("a profile a second process has keeps the current browser and says why, once, in plain words — or the runtime's own words when it is something else", async () => {
+		let reason = LOCKED_TEXT;
 		const host = fakeHost(SHELF, call => (call.name === "browser_switch" ? failure(reason) : failure(`unexpected ${call.name}`)));
 		const dom = await mountView(host, WORK_BROWSER);
 
@@ -421,7 +433,6 @@ describe("switching profile from the menu", () => {
 			{ leaving: "b1", engine: "chromium", profile: "z-bank" },
 			{ leaving: "b1", engine: "chromium", profile: "z-bank" },
 		]);
-		// The browser on screen was never left: the person is still in it.
 		expect(callsTo(host, "browser_leave")).toEqual([]);
 	});
 
@@ -628,12 +639,12 @@ describe("browsers left open in the background", () => {
 		expect(chipOf(dom).textContent?.trim()).toBe("Private");
 	});
 
-	test("the first focus goes to the first profile that can be opened, else to a browser left open, else to Add profile — never to a close button", async () => {
-		const dom = await mountView(fakeHost([listing("t-travel", "Travel", { heldBy: "human" })]), browserOf("b1", listing(DEFAULT_PROFILE, "Default")));
-		const kept = fakeHost([listing("t-travel", "Travel", { heldBy: "human" })]);
+	test("the first focus goes to the first profile that can be opened — now one held elsewhere too — else to a browser left open, else to Add profile — never to a close button", async () => {
+		const held = await mountView(fakeHost([listing("t-travel", "Travel", { heldBy: "human" })]), browserOf("b1", listing(DEFAULT_PROFILE, "Default")));
+		const kept = fakeHost([]);
 		kept.browsers = [PRIVATE_TASK];
 		const withKept = await mountView(kept, browserOf("b1", listing(DEFAULT_PROFILE, "Default")));
-		for (const [view, expected] of [[dom, "Add profile"], [withKept, "Private browserAn agent task is running"]] as const) {
+		for (const [view, expected] of [[held, "TTravelAlso open in another chat"], [withKept, "Private browserAn agent task is running"]] as const) {
 			await openMenu(view);
 			const initial = view.find("[data-menu-initial]");
 			expect(initial.map(el => el.textContent?.trim())).toEqual([expected]);
@@ -802,12 +813,12 @@ describe("taking over from the agent", () => {
 	const controlled = (from: BrowserState) => (call: Call): CallToolResult => (call.name === "browser_control" ? answer({ ...from, takenOver: call.args.mode === "take" }) : failure(`unexpected ${call.name}`));
 
 	for (const { name, state, offered } of [
-		{ name: "an agent acted a moment ago", state: agentAt(2_000), offered: true },
-		{ name: "an agent acted long ago", state: agentAt(60_000), offered: false },
-		{ name: "no agent has acted", state: WORK_BROWSER, offered: false },
+		{ name: "an agent acted a moment ago", state: () => agentAt(2_000), offered: true },
+		{ name: "an agent acted long ago", state: () => agentAt(60_000), offered: false },
+		{ name: "no agent has acted", state: () => WORK_BROWSER, offered: false },
 	]) {
 		test(`the page offers Take over when ${name}: ${offered}`, async () => {
-			const dom = await mountView(fakeHost(SHELF), state);
+			const dom = await mountView(fakeHost(SHELF), state());
 
 			expect(controls(dom, "page")).toEqual(offered ? ["Take over"] : []);
 			expect(dom.text().includes("Your agent is working here")).toBe(offered);

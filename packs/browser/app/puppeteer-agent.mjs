@@ -50,10 +50,10 @@ var __export = (target, all) => {
     __defProp(target, name, { get: all[name], enumerable: true });
 };
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/environment.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/environment.js
 var isNode, environment;
 var init_environment = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/environment.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/environment.js"() {
     isNode = !!(typeof process !== "undefined" && process.version);
     environment = {
       value: {
@@ -83,7 +83,7 @@ var init_environment = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/third_party/rxjs/rxjs.js
+// ../../../node_modules/puppeteer-core/lib/third_party/rxjs/rxjs.js
 function __extends(d, b2) {
   if (typeof b2 !== "function" && b2 !== null)
     throw new TypeError("Class extends value " + String(b2) + " is not a constructor or null");
@@ -1534,7 +1534,7 @@ function tap(observerOrNext, error, complete) {
 }
 var extendStatics, UnsubscriptionError, Subscription, EMPTY_SUBSCRIPTION, config, timeoutProvider, COMPLETE_NOTIFICATION, context, Subscriber, _bind, ConsumerObserver, SafeSubscriber, EMPTY_OBSERVER, observable, Observable, OperatorSubscriber, ObjectUnsubscribedError, Subject, AnonymousSubject, dateTimestampProvider, ReplaySubject, Action, intervalProvider, AsyncAction, Scheduler, AsyncScheduler, asyncScheduler, async, EMPTY, isArrayLike, iterator, EmptyError, isArray, isArray2, getPrototypeOf, objectProto, getKeys, nodeEventEmitterMethods, eventTargetMethods, jqueryMethods, NEVER, isArray3;
 var init_rxjs = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/third_party/rxjs/rxjs.js"() {
+  "../../../node_modules/puppeteer-core/lib/third_party/rxjs/rxjs.js"() {
     extendStatics = function(d, b2) {
       extendStatics = Object.setPrototypeOf || { __proto__: [] } instanceof Array && function(d2, b22) {
         d2.__proto__ = b22;
@@ -2397,7 +2397,7 @@ var init_rxjs = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/Debug.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/common/Debug.js
 function setLogCapture(value) {
   capturedLogs = [];
   captureLogs = value;
@@ -2407,7 +2407,7 @@ function getCapturedLogs() {
 }
 var DEBUG_PREFIXES, debug, capturedLogs, captureLogs;
 var init_Debug = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/Debug.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/common/Debug.js"() {
     init_environment();
     DEBUG_PREFIXES = {
       cdpSend: "puppeteer:protocol:SEND \u25BA",
@@ -2453,7 +2453,7 @@ var init_Debug = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/third_party/mitt/mitt.js
+// ../../../node_modules/puppeteer-core/lib/third_party/mitt/mitt.js
 function mitt_default(n) {
   return { all: n = n || /* @__PURE__ */ new Map(), on: function(t, e) {
     var i = n.get(t);
@@ -2471,14 +2471,14 @@ function mitt_default(n) {
   } };
 }
 var init_mitt = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/third_party/mitt/mitt.js"() {
+  "../../../node_modules/puppeteer-core/lib/third_party/mitt/mitt.js"() {
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/util/disposable.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/util/disposable.js
 var disposeSymbol, asyncDisposeSymbol, DisposableStackPolyfill, DisposableStack, AsyncDisposableStackPolyfill, AsyncDisposableStack, SuppressedErrorPolyfill, SuppressedError2;
 var init_disposable = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/util/disposable.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/util/disposable.js"() {
     Symbol.dispose ??= Symbol("dispose");
     Symbol.asyncDispose ??= Symbol("asyncDispose");
     disposeSymbol = Symbol.dispose;
@@ -2784,10 +2784,10 @@ var init_disposable = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/EventEmitter.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/common/EventEmitter.js
 var EventEmitter;
 var init_EventEmitter = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/EventEmitter.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/common/EventEmitter.js"() {
     init_mitt();
     init_disposable();
     init_Debug();
@@ -2905,10 +2905,10 @@ var init_EventEmitter = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/util/assert.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/util/assert.js
 var assert;
 var init_assert = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/util/assert.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/util/assert.js"() {
     assert = (value, message) => {
       if (!value) {
         throw new Error(message);
@@ -2917,7 +2917,7 @@ var init_assert = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/util/encoding.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/util/encoding.js
 function stringToTypedArray(string, base64Encoded = false) {
   if (base64Encoded) {
     if ("fromBase64" in Uint8Array) {
@@ -2959,22 +2959,22 @@ function mergeUint8Arrays(items) {
   return result;
 }
 var init_encoding = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/util/encoding.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/util/encoding.js"() {
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/util/version.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/util/version.js
 var packageVersion;
 var init_version = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/util/version.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/util/version.js"() {
     packageVersion = "25.11.0";
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/Errors.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/common/Errors.js
 var PuppeteerError, TimeoutError, TouchError, ProtocolError, UnsupportedOperation, TargetCloseError, ConnectionClosedError;
 var init_Errors = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/Errors.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/common/Errors.js"() {
     PuppeteerError = class extends Error {
       /**
        * @internal
@@ -3027,10 +3027,10 @@ var init_Errors = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/PDFOptions.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/common/PDFOptions.js
 var paperFormats;
 var init_PDFOptions = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/PDFOptions.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/common/PDFOptions.js"() {
     paperFormats = {
       letter: {
         cm: { width: 21.59, height: 27.94 },
@@ -3080,7 +3080,7 @@ var init_PDFOptions = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/util.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/common/util.js
 function evaluationString(fun, ...args) {
   if (isString(fun)) {
     assert(args.length === 0, "Cannot evaluate a string with arguments");
@@ -3260,7 +3260,7 @@ function filterAsync(predicate) {
 }
 var DEFAULT_VIEWPORT, SOURCE_URL, PuppeteerURL, withSourcePuppeteerURLIfNone, getSourcePuppeteerURLIfAvailable, isString, isNumber, isPlainObject, isRegExp, isDate, VALID_DIALOG_TYPES, UTILITY_WORLD_NAME, SOURCE_URL_REGEX, NETWORK_IDLE_TIME, unitToPixels;
 var init_util = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/util.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/common/util.js"() {
     init_rxjs();
     init_environment();
     init_assert();
@@ -3358,10 +3358,10 @@ var init_util = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/api/Browser.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/api/Browser.js
 var WEB_PERMISSION_TO_PROTOCOL_PERMISSION, Browser;
 var init_Browser = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/api/Browser.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/api/Browser.js"() {
     init_rxjs();
     init_Debug();
     init_EventEmitter();
@@ -3533,10 +3533,10 @@ var init_Browser = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/util/Deferred.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/util/Deferred.js
 var Deferred;
 var init_Deferred = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/util/Deferred.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/util/Deferred.js"() {
     init_Errors();
     Deferred = class _Deferred {
       static create(opts) {
@@ -3625,10 +3625,10 @@ var init_Deferred = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/util/Mutex.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/util/Mutex.js
 var MutexGuard, Mutex;
 var init_Mutex = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/util/Mutex.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/util/Mutex.js"() {
     init_Deferred();
     init_disposable();
     MutexGuard = class {
@@ -3670,10 +3670,10 @@ var init_Mutex = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/api/BrowserContext.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/api/BrowserContext.js
 var BrowserContext;
 var init_BrowserContext = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/api/BrowserContext.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/api/BrowserContext.js"() {
     init_rxjs();
     init_Debug();
     init_EventEmitter();
@@ -3828,10 +3828,10 @@ var init_BrowserContext = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/api/CDPSession.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/api/CDPSession.js
 var CDPSessionEvent, CDPSession;
 var init_CDPSession = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/api/CDPSession.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/api/CDPSession.js"() {
     init_EventEmitter();
     (function(CDPSessionEvent2) {
       CDPSessionEvent2.Disconnected = Symbol("CDPSession.Disconnected");
@@ -3859,10 +3859,10 @@ var init_CDPSession = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/api/DeviceRequestPrompt.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/api/DeviceRequestPrompt.js
 var DeviceRequestPrompt;
 var init_DeviceRequestPrompt = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/api/DeviceRequestPrompt.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/api/DeviceRequestPrompt.js"() {
     DeviceRequestPrompt = class {
       /**
        * Current list of selectable devices.
@@ -3872,10 +3872,10 @@ var init_DeviceRequestPrompt = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/api/Dialog.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/api/Dialog.js
 var Dialog;
 var init_Dialog = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/api/Dialog.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/api/Dialog.js"() {
     init_assert();
     Dialog = class {
       #type;
@@ -3947,10 +3947,10 @@ var init_Dialog = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/util/AsyncIterableUtil.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/util/AsyncIterableUtil.js
 var AsyncIterableUtil;
 var init_AsyncIterableUtil = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/util/AsyncIterableUtil.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/util/AsyncIterableUtil.js"() {
     AsyncIterableUtil = class {
       static async *map(iterable, map2) {
         for await (const value of iterable) {
@@ -3979,15 +3979,15 @@ var init_AsyncIterableUtil = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/api/ElementHandleSymbol.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/api/ElementHandleSymbol.js
 var _isElementHandle;
 var init_ElementHandleSymbol = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/api/ElementHandleSymbol.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/api/ElementHandleSymbol.js"() {
     _isElementHandle = Symbol("_isElementHandle");
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/util/ErrorLike.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/util/ErrorLike.js
 function isErrorLike(obj) {
   return typeof obj === "object" && obj !== null && "name" in obj && "message" in obj;
 }
@@ -4007,11 +4007,11 @@ function createProtocolErrorMessage(object) {
   return message;
 }
 var init_ErrorLike = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/util/ErrorLike.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/util/ErrorLike.js"() {
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/util/Function.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/util/Function.js
 function stringifyFunction(fn) {
   let value = fn.toString();
   if (value.match(/^(async )*function(\(|\s)/) || value.match(/^(async )*function\s*\*\s*/)) {
@@ -4030,7 +4030,7 @@ function stringifyFunction(fn) {
 }
 var createdFunctions, createFunction, interpolateFunction;
 var init_Function = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/util/Function.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/util/Function.js"() {
     createdFunctions = /* @__PURE__ */ new Map();
     createFunction = (functionValue) => {
       let fn = createdFunctions.get(functionValue);
@@ -4057,7 +4057,7 @@ var init_Function = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/HandleIterator.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/common/HandleIterator.js
 async function* fastTransposeIteratorHandle(iterator2, size) {
   const env_1 = { stack: [], error: void 0, hasError: false };
   try {
@@ -4122,7 +4122,7 @@ async function* transposeIterableHandle(handle) {
 }
 var __addDisposableResource, __disposeResources, DEFAULT_BATCH_SIZE;
 var init_HandleIterator = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/HandleIterator.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/common/HandleIterator.js"() {
     init_disposable();
     __addDisposableResource = function(env, value, async2) {
       if (value !== null && value !== void 0) {
@@ -4186,10 +4186,10 @@ var init_HandleIterator = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/LazyArg.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/common/LazyArg.js
 var LazyArg;
 var init_LazyArg = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/LazyArg.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/common/LazyArg.js"() {
     LazyArg = class _LazyArg {
       static create = (get) => {
         return new _LazyArg(get);
@@ -4205,10 +4205,10 @@ var init_LazyArg = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/QueryHandler.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/common/QueryHandler.js
 var __addDisposableResource2, __disposeResources2, QueryHandler;
 var init_QueryHandler = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/QueryHandler.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/common/QueryHandler.js"() {
     init_ElementHandleSymbol();
     init_ErrorLike();
     init_Function();
@@ -4425,10 +4425,10 @@ var init_QueryHandler = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/AriaQueryHandler.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/common/AriaQueryHandler.js
 var isKnownAttribute, ATTRIBUTE_REGEXP, parseARIASelector, ARIAQueryHandler;
 var init_AriaQueryHandler = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/AriaQueryHandler.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/common/AriaQueryHandler.js"() {
     init_assert();
     init_AsyncIterableUtil();
     init_QueryHandler();
@@ -4466,10 +4466,10 @@ var init_AriaQueryHandler = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/CSSQueryHandler.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/common/CSSQueryHandler.js
 var CSSQueryHandler;
 var init_CSSQueryHandler = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/CSSQueryHandler.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/common/CSSQueryHandler.js"() {
     init_QueryHandler();
     CSSQueryHandler = class extends QueryHandler {
       static querySelector = (element, selector, { cssQuerySelector }) => {
@@ -4482,18 +4482,18 @@ var init_CSSQueryHandler = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/generated/injected.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/generated/injected.js
 var source;
 var init_injected = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/generated/injected.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/generated/injected.js"() {
     source = '"use strict";var g=Object.defineProperty;var X=Object.getOwnPropertyDescriptor;var Y=Object.getOwnPropertyNames;var G=Object.prototype.hasOwnProperty;var l=(t,e)=>{for(var r in e)g(t,r,{get:e[r],enumerable:!0})},J=(t,e,r,o)=>{if(e&&typeof e=="object"||typeof e=="function")for(let n of Y(e))!G.call(t,n)&&n!==r&&g(t,n,{get:()=>e[n],enumerable:!(o=X(e,n))||o.enumerable});return t};var z=t=>J(g({},"__esModule",{value:!0}),t);var Se={};l(Se,{default:()=>Te});module.exports=z(Se);var b=class extends Error{constructor(e,r){super(e,r),this.name=this.constructor.name}get[Symbol.toStringTag](){return this.constructor.name}},p=class extends b{};var c=class t{static create(e){return new t(e)}static async race(e){let r=new Set;try{let o=e.map(n=>n instanceof t?(n.#s&&r.add(n),n.valueOrThrow()):n);return await Promise.race(o)}finally{for(let o of r)o.reject(new Error("Timeout cleared"))}}#e=!1;#r=!1;#t;#o;#n=new Promise(e=>{this.#o=e});#s;#l;constructor(e){e&&e.timeout>0&&(this.#l=new p(e.message),this.#s=setTimeout(()=>{this.reject(this.#l)},e.timeout))}#i(e){clearTimeout(this.#s),this.#t=e,this.#o()}resolve(e){this.#r||this.#e||(this.#e=!0,this.#i(e))}reject(e){this.#r||this.#e||(this.#r=!0,this.#i(e))}resolved(){return this.#e}finished(){return this.#e||this.#r}value(){return this.#t}#a;valueOrThrow(){return this.#a||(this.#a=(async()=>{if(await this.#n,this.#r)throw this.#t;return this.#t})()),this.#a}};var W=new Map,F=t=>{let e=W.get(t);return e||(e=new Function(`return ${t}`)(),W.set(t,e),e)};var E={};l(E,{ariaQuerySelector:()=>K,ariaQuerySelectorAll:()=>x});var K=(t,e)=>globalThis.__ariaQuerySelector(t,e),x=async function*(t,e){yield*await globalThis.__ariaQuerySelectorAll(t,e)};var v={};l(v,{cssQuerySelector:()=>Z,cssQuerySelectorAll:()=>ee});var Z=(t,e)=>t.querySelector(e),ee=function(t,e){return t.querySelectorAll(e)};var A={};l(A,{CustomQuerySelectorRegistry:()=>y,customQuerySelectors:()=>P});var y=class{#e=new Map;register(e,r){if(!r.queryOne&&r.queryAll){let o=r.queryAll;r.queryOne=(n,i)=>{for(let s of o(n,i))return s;return null}}else if(r.queryOne&&!r.queryAll){let o=r.queryOne;r.queryAll=(n,i)=>{let s=o(n,i);return s?[s]:[]}}else if(!r.queryOne||!r.queryAll)throw new Error("At least one query method must be defined.");this.#e.set(e,{querySelector:r.queryOne,querySelectorAll:r.queryAll})}unregister(e){this.#e.delete(e)}get(e){return this.#e.get(e)}clear(){this.#e.clear()}},P=new y;var R={};l(R,{pierceQuerySelector:()=>te,pierceQuerySelectorAll:()=>re});var te=(t,e)=>{let r=null,o=n=>{let i=document.createTreeWalker(n,NodeFilter.SHOW_ELEMENT);do{let s=i.currentNode;s.shadowRoot&&o(s.shadowRoot),!(s instanceof ShadowRoot)&&s!==n&&!r&&s.matches(e)&&(r=s)}while(!r&&i.nextNode())};return t instanceof Document&&(t=t.documentElement),o(t),r},re=(t,e)=>{let r=[],o=n=>{let i=document.createTreeWalker(n,NodeFilter.SHOW_ELEMENT);do{let s=i.currentNode;s.shadowRoot&&o(s.shadowRoot),!(s instanceof ShadowRoot)&&s!==n&&s.matches(e)&&r.push(s)}while(i.nextNode())};return t instanceof Document&&(t=t.documentElement),o(t),r};var u=(t,e)=>{if(!t)throw new Error(e)};var oe={childList:!0,subtree:!0,attributes:!0};function ne(t){return t.nodeType===Node.ELEMENT_NODE||t.nodeType===Node.DOCUMENT_FRAGMENT_NODE}function se(t){return t.parentNode??t.host??null}function ie(t,e){let r=t,o;for(;o=se(r);){if(e.has(o))return!0;r=o}return!1}var w=class{#e;#r;#t;#o=new WeakSet;#n;constructor(e,r){this.#e=e,this.#r=r}async start(){let e=this.#n=c.create(),r=await this.#e();if(r){e.resolve(r);return}this.#o=new WeakSet,this.#t=new MutationObserver(async o=>{this.#l(o);let n=await this.#e();n&&(e.resolve(n),await this.stop())}),this.#s(this.#r)}#s(e){!this.#t||this.#o.has(e)||(this.#o.add(e),this.#t.observe(e,oe),this.#i(e))}#l(e){let r=new Set;for(let o of e)for(let n of o.addedNodes)ne(n)&&r.add(n);for(let o of r)ie(o,r)||this.#i(o)}#i(e){let r=document.createTreeWalker(e,NodeFilter.SHOW_ELEMENT);do{let{shadowRoot:o}=r.currentNode;o&&this.#s(o)}while(r.nextNode())}async stop(){u(this.#n,"Polling never started."),this.#n.finished()||this.#n.reject(new Error("Polling stopped")),this.#t&&(this.#t.disconnect(),this.#t=void 0)}result(){return u(this.#n,"Polling never started."),this.#n.valueOrThrow()}},N=class{#e;#r;constructor(e){this.#e=e}async start(){let e=this.#r=c.create(),r=await this.#e();if(r){e.resolve(r);return}let o=async()=>{if(e.finished())return;let n=await this.#e();if(!n){window.requestAnimationFrame(o);return}e.resolve(n),await this.stop()};window.requestAnimationFrame(o)}async stop(){u(this.#r,"Polling never started."),this.#r.finished()||this.#r.reject(new Error("Polling stopped"))}result(){return u(this.#r,"Polling never started."),this.#r.valueOrThrow()}},T=class{#e;#r;#t;#o;constructor(e,r){this.#e=e,this.#r=r}async start(){let e=this.#o=c.create(),r=await this.#e();if(r){e.resolve(r);return}this.#t=setInterval(async()=>{let o=await this.#e();o&&(e.resolve(o),await this.stop())},this.#r)}async stop(){u(this.#o,"Polling never started."),this.#o.finished()||this.#o.reject(new Error("Polling stopped")),this.#t&&(clearInterval(this.#t),this.#t=void 0)}result(){return u(this.#o,"Polling never started."),this.#o.valueOrThrow()}};var L={};l(L,{PCombinator:()=>V,pQuerySelector:()=>we,pQuerySelectorAll:()=>B});var a=class{static async*map(e,r){for await(let o of e)yield await r(o)}static async*flatMap(e,r){for await(let o of e)yield*r(o)}static async collect(e){let r=[];for await(let o of e)r.push(o);return r}static async first(e){for await(let r of e)return r}};var C={};l(C,{textQuerySelectorAll:()=>m});var le=new Set(["checkbox","image","radio"]),ae=t=>t instanceof HTMLSelectElement||t instanceof HTMLTextAreaElement||t instanceof HTMLInputElement&&!le.has(t.type),ce=new Set(["SCRIPT","STYLE"]),f=t=>!ce.has(t.nodeName)&&!document.head?.contains(t),O=new WeakMap,H=t=>{for(;t;)O.delete(t),t instanceof ShadowRoot?t=t.host:t=t.parentNode},j=new WeakSet,I,ue=()=>{let t=globalThis.MutationObserver;if(!t)throw new Error("MutationObserver is not available in this environment.");return I||(I=new t(e=>{for(let r of e)H(r.target)})),I},d=t=>{let e=O.get(t);if(e||(e={full:"",immediate:[]},!f(t)))return e;let r="";if(ae(t))e.full=t.value,e.immediate.push(t.value),t.addEventListener("input",o=>{H(o.target)},{once:!0,capture:!0});else{for(let o=t.firstChild;o;o=o.nextSibling){if(o.nodeType===Node.TEXT_NODE){e.full+=o.nodeValue??"",r+=o.nodeValue??"";continue}r&&e.immediate.push(r),r="",o.nodeType===Node.ELEMENT_NODE&&(e.full+=d(o).full)}r&&e.immediate.push(r),t instanceof Element&&t.shadowRoot&&(e.full+=d(t.shadowRoot).full),j.has(t)||(ue().observe(t,{childList:!0,characterData:!0,subtree:!0}),j.add(t))}return O.set(t,e),e};var m=function*(t,e){let r=!1;for(let o of t.childNodes)if(o instanceof Element&&f(o)){let n;o.shadowRoot?n=m(o.shadowRoot,e):n=m(o,e);for(let i of n)yield i,r=!0}r||t instanceof Element&&f(t)&&d(t).full.includes(e)&&(yield t)};var k={};l(k,{checkVisibility:()=>fe,pierce:()=>S,pierceAll:()=>M});var de=["hidden","collapse"],fe=(t,e)=>{if(!t)return e===!1;if(e===void 0)return t;let r=t.nodeType===Node.TEXT_NODE?t.parentElement:t;if(!r)return e===!1;let o=window.getComputedStyle(r),n=o&&!de.includes(o.visibility)&&!me(r);return e===n?t:!1};function me(t){let e=t.getBoundingClientRect();return e.width===0||e.height===0}var he=t=>"shadowRoot"in t&&t.shadowRoot instanceof ShadowRoot;function*S(t){he(t)?yield t.shadowRoot:yield t}function*M(t){t=S(t).next().value,yield t;let e=[document.createTreeWalker(t,NodeFilter.SHOW_ELEMENT)];for(let r of e){let o;for(;o=r.nextNode();)o.shadowRoot&&(yield o.shadowRoot,e.push(document.createTreeWalker(o.shadowRoot,NodeFilter.SHOW_ELEMENT)))}}var _={};l(_,{xpathQuerySelectorAll:()=>D});var D=function*(t,e,r=-1){let n=(t.ownerDocument||document).evaluate(e,t,null,XPathResult.ORDERED_NODE_ITERATOR_TYPE),i=[],s;for(;(s=n.iterateNext())&&(i.push(s),!(r&&i.length===r)););for(let h=0;h<i.length;h++)s=i[h],yield s,i[h]=null};var pe=/[-\\w\\P{ASCII}*]/u,V=(r=>(r.Descendent=">>>",r.Child=">>>>",r))(V||{}),U=t=>"querySelectorAll"in t,q=class{#e;#r=[];#t=void 0;elements;constructor(e,r){this.elements=[e],this.#e=r,this.#o()}async run(){for(typeof this.#t=="string"&&this.#t.trimStart()===":scope"&&this.#o();this.#t!==void 0;this.#o()){let e=this.#t;typeof e=="string"?e[0]&&pe.test(e[0])?this.elements=a.flatMap(this.elements,async function*(r){U(r)&&(yield*r.querySelectorAll(e))}):this.elements=a.flatMap(this.elements,async function*(r){if(!r.parentElement){if(!U(r))return;yield*r.querySelectorAll(e);return}let o=0;for(let n of r.parentElement.children)if(++o,n===r)break;yield*r.parentElement.querySelectorAll(`:scope>:nth-child(${o})${e}`)}):this.elements=a.flatMap(this.elements,async function*(r){switch(e.name){case"text":yield*m(r,e.value);break;case"xpath":yield*D(r,e.value);break;case"aria":yield*x(r,e.value);break;default:let o=P.get(e.name);if(!o)throw new Error(`Unknown selector type: ${e.name}`);yield*o.querySelectorAll(r,e.value)}})}}#o(){if(this.#r.length!==0){this.#t=this.#r.shift();return}if(this.#e.length===0){this.#t=void 0;return}let e=this.#e.shift();switch(e){case">>>>":{this.elements=a.flatMap(this.elements,S),this.#o();break}case">>>":{this.elements=a.flatMap(this.elements,M),this.#o();break}default:this.#r=e,this.#o();break}}},Q=class{#e=new WeakMap;calculate(e,r=[]){if(e===null)return r;e instanceof ShadowRoot&&(e=e.host);let o=this.#e.get(e);if(o)return[...o,...r];let n=0;for(let s=e.previousSibling;s;s=s.previousSibling)++n;let i=this.calculate(e.parentNode,[n]);return this.#e.set(e,i),[...i,...r]}},$=(t,e)=>{if(t.length+e.length===0)return 0;let[r=-1,...o]=t,[n=-1,...i]=e;return r===n?$(o,i):r<n?-1:1},ye=async function*(t){let e=new Set;for await(let o of t)e.add(o);let r=new Q;yield*[...e.values()].map(o=>[o,r.calculate(o)]).sort(([,o],[,n])=>$(o,n)).map(([o])=>o)},B=function(t,e){let r=JSON.parse(e);if(r.some(o=>{let n=0;return o.some(i=>(typeof i=="string"?++n:n=0,n>1))}))throw new Error("Multiple deep combinators found in sequence.");return ye(a.flatMap(r,o=>{let n=new q(t,o);return n.run(),n.elements}))},we=async function(t,e){for await(let r of B(t,e))return r;return null};var Ne=Object.freeze({...E,...A,...R,...L,...C,...k,..._,...v,Deferred:c,createFunction:F,createTextContent:d,IntervalPoller:T,isSuitableNodeForTextMatching:f,MutationPoller:w,RAFPoller:N}),Te=Ne;\n';
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/ScriptInjector.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/common/ScriptInjector.js
 var ScriptInjector, scriptInjector;
 var init_ScriptInjector = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/ScriptInjector.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/common/ScriptInjector.js"() {
     init_injected();
     ScriptInjector = class {
       #updated = false;
@@ -4534,10 +4534,10 @@ var init_ScriptInjector = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/CustomQueryHandler.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/common/CustomQueryHandler.js
 var CustomQueryHandlerRegistry, customQueryHandlers;
 var init_CustomQueryHandler = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/CustomQueryHandler.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/common/CustomQueryHandler.js"() {
     init_assert();
     init_Function();
     init_QueryHandler();
@@ -4626,10 +4626,10 @@ var init_CustomQueryHandler = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/PierceQueryHandler.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/common/PierceQueryHandler.js
 var PierceQueryHandler;
 var init_PierceQueryHandler = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/PierceQueryHandler.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/common/PierceQueryHandler.js"() {
     init_QueryHandler();
     PierceQueryHandler = class extends QueryHandler {
       static querySelector = (element, selector, { pierceQuerySelector }) => {
@@ -4642,10 +4642,10 @@ var init_PierceQueryHandler = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/PQueryHandler.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/common/PQueryHandler.js
 var PQueryHandler;
 var init_PQueryHandler = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/PQueryHandler.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/common/PQueryHandler.js"() {
     init_QueryHandler();
     PQueryHandler = class extends QueryHandler {
       static querySelectorAll = (element, selector, { pQuerySelectorAll }) => {
@@ -4658,7 +4658,7 @@ var init_PQueryHandler = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/third_party/parsel-js/parsel-js.js
+// ../../../node_modules/puppeteer-core/lib/third_party/parsel-js/parsel-js.js
 function gobbleParens(text, offset) {
   let nesting = 0;
   let result = "";
@@ -4803,7 +4803,7 @@ function stringify(listOrNode) {
 }
 var TOKENS, TRIM_TOKENS, getArgumentPatternByType, STRING_PATTERN, ESCAPE_PATTERN;
 var init_parsel_js = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/third_party/parsel-js/parsel-js.js"() {
+  "../../../node_modules/puppeteer-core/lib/third_party/parsel-js/parsel-js.js"() {
     TOKENS = {
       attribute: /\[\s*(?:(?<namespace>\*|[-\w\P{ASCII}]*)\|)?(?<name>[-\w\P{ASCII}]+)\s*(?:(?<operator>\W?=)\s*(?<value>.+?)\s*(\s(?<caseSensitive>[iIsS]))?\s*)?\]/gu,
       id: /#(?<name>[-\w\P{ASCII}]+)/gu,
@@ -4831,7 +4831,7 @@ var init_parsel_js = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/PSelectorParser.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/common/PSelectorParser.js
 function parsePSelectors(selector) {
   let isPureCSS = true;
   let hasAria = false;
@@ -4916,7 +4916,7 @@ function parsePSelectors(selector) {
 }
 var ESCAPE_REGEXP, unquote;
 var init_PSelectorParser = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/PSelectorParser.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/common/PSelectorParser.js"() {
     init_parsel_js();
     TOKENS["nesting"] = /&/g;
     TOKENS["combinator"] = /\s*(>>>>?|[\s>+~])\s*/g;
@@ -4935,10 +4935,10 @@ var init_PSelectorParser = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/TextQueryHandler.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/common/TextQueryHandler.js
 var TextQueryHandler;
 var init_TextQueryHandler = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/TextQueryHandler.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/common/TextQueryHandler.js"() {
     init_QueryHandler();
     TextQueryHandler = class extends QueryHandler {
       static querySelectorAll = (element, selector, { textQuerySelectorAll }) => {
@@ -4948,10 +4948,10 @@ var init_TextQueryHandler = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/XPathQueryHandler.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/common/XPathQueryHandler.js
 var XPathQueryHandler;
 var init_XPathQueryHandler = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/XPathQueryHandler.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/common/XPathQueryHandler.js"() {
     init_QueryHandler();
     XPathQueryHandler = class extends QueryHandler {
       static querySelectorAll = (element, selector, { xpathQuerySelectorAll }) => {
@@ -4967,7 +4967,7 @@ var init_XPathQueryHandler = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/GetQueryHandler.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/common/GetQueryHandler.js
 function getQueryHandlerAndSelector(selector) {
   for (const handlerMap of [
     customQueryHandlers.names().map((name) => {
@@ -5013,7 +5013,7 @@ function getQueryHandlerAndSelector(selector) {
 }
 var BUILTIN_QUERY_HANDLERS, QUERY_SEPARATORS;
 var init_GetQueryHandler = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/GetQueryHandler.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/common/GetQueryHandler.js"() {
     init_AriaQueryHandler();
     init_CSSQueryHandler();
     init_CustomQueryHandler();
@@ -5032,7 +5032,7 @@ var init_GetQueryHandler = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/util/decorators.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/util/decorators.js
 function moveable(Class, _2) {
   let hasDispose = false;
   if (Class.prototype[disposeSymbol]) {
@@ -5171,7 +5171,7 @@ function bubble(events) {
 }
 var __addDisposableResource3, __disposeResources3, instances, bubbleHandlers, bubbleInitializer;
 var init_decorators = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/util/decorators.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/util/decorators.js"() {
     init_disposable();
     init_Mutex();
     __addDisposableResource3 = function(env, value, async2) {
@@ -5252,10 +5252,10 @@ var init_decorators = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/api/JSHandle.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/api/JSHandle.js
 var __runInitializers, __esDecorate, __addDisposableResource4, __disposeResources4, JSHandle;
 var init_JSHandle = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/api/JSHandle.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/api/JSHandle.js"() {
     init_Debug();
     init_util();
     init_decorators();
@@ -5470,7 +5470,7 @@ var init_JSHandle = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/api/locators/locators.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/api/locators/locators.js
 function checkLocatorArray(locators) {
   for (const locator of locators) {
     if (!(locator instanceof Locator)) {
@@ -5481,7 +5481,7 @@ function checkLocatorArray(locators) {
 }
 var __addDisposableResource5, __disposeResources5, LocatorEvent, Locator, FunctionLocator, DelegatedLocator, FilteredLocator, MappedLocator, NodeLocator, RaceLocator, RETRY_DELAY;
 var init_locators = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/api/locators/locators.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/api/locators/locators.js"() {
     init_rxjs();
     init_Debug();
     init_EventEmitter();
@@ -6230,7 +6230,7 @@ var init_locators = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/api/ElementHandle.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/api/ElementHandle.js
 function bindIsolatedHandle(target, _2) {
   return async function(...args) {
     if (this.realm === this.frame.isolatedRealm()) {
@@ -6274,7 +6274,7 @@ function intersectBoundingBox(box, width, height) {
 }
 var __runInitializers2, __esDecorate2, __addDisposableResource6, __disposeResources6, __setFunctionName, MAIN_WORLD_DIRECTIVE, shouldEvaluateInMainWorld, ElementHandle;
 var init_ElementHandle = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/api/ElementHandle.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/api/ElementHandle.js"() {
     init_GetQueryHandler();
     init_LazyArg();
     init_util();
@@ -7612,10 +7612,10 @@ var init_ElementHandle = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/api/Extension.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/api/Extension.js
 var Extension;
 var init_Extension = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/api/Extension.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/api/Extension.js"() {
     Extension = class {
       #id;
       #version;
@@ -7679,10 +7679,10 @@ var init_Extension = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/api/Frame.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/api/Frame.js
 var __runInitializers3, __esDecorate3, __addDisposableResource7, __disposeResources7, FrameEvent, throwIfDetached, MAIN_WORLD_DIRECTIVE2, shouldEvaluateInMainWorld2, Frame;
 var init_Frame = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/api/Frame.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/api/Frame.js"() {
     init_EventEmitter();
     init_GetQueryHandler();
     init_HandleIterator();
@@ -8535,7 +8535,7 @@ var init_Frame = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/api/HTTPRequest.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/api/HTTPRequest.js
 function headersArray(headers) {
   const result = [];
   for (const name of Object.keys(headers)) {
@@ -8561,7 +8561,7 @@ function handleError(error, logger) {
 }
 var DEFAULT_INTERCEPT_RESOLUTION_PRIORITY, HTTPRequest, InterceptResolutionAction, STATUS_TEXTS, errorReasons;
 var init_HTTPRequest = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/api/HTTPRequest.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/api/HTTPRequest.js"() {
     init_Debug();
     init_util();
     init_assert();
@@ -8936,10 +8936,10 @@ var init_HTTPRequest = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/api/HTTPResponse.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/api/HTTPResponse.js
 var HTTPResponse;
 var init_HTTPResponse = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/api/HTTPResponse.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/api/HTTPResponse.js"() {
     HTTPResponse = class {
       /**
        * @internal
@@ -8987,7 +8987,7 @@ var init_HTTPResponse = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/util/incremental-id-generator.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/util/incremental-id-generator.js
 function createIncrementalIdGenerator() {
   let id = 0;
   return () => {
@@ -8998,14 +8998,14 @@ function createIncrementalIdGenerator() {
   };
 }
 var init_incremental_id_generator = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/util/incremental-id-generator.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/util/incremental-id-generator.js"() {
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/api/Input.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/api/Input.js
 var Keyboard, MouseButton, Mouse, Touchscreen;
 var init_Input = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/api/Input.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/api/Input.js"() {
     init_Errors();
     init_incremental_id_generator();
     Keyboard = class {
@@ -9095,10 +9095,10 @@ var init_Input = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/TimeoutSettings.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/common/TimeoutSettings.js
 var DEFAULT_TIMEOUT, TimeoutSettings;
 var init_TimeoutSettings = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/TimeoutSettings.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/common/TimeoutSettings.js"() {
     DEFAULT_TIMEOUT = 3e4;
     TimeoutSettings = class {
       #defaultTimeout;
@@ -9132,7 +9132,7 @@ var init_TimeoutSettings = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/api/Page.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/api/Page.js
 function setDefaultScreenshotOptions(options) {
   options.optimizeForSpeed ??= false;
   options.type ??= "png";
@@ -9170,7 +9170,7 @@ function roundRectangle(clip) {
 }
 var __runInitializers4, __esDecorate4, __addDisposableResource8, __disposeResources8, Page, supportedMetrics;
 var init_Page = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/api/Page.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/api/Page.js"() {
     init_rxjs();
     init_Debug();
     init_Errors();
@@ -10707,10 +10707,10 @@ var init_Page = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/WaitTask.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/common/WaitTask.js
 var WaitTask, TaskManager;
 var init_WaitTask = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/WaitTask.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/common/WaitTask.js"() {
     init_Deferred();
     init_ErrorLike();
     init_Function();
@@ -10887,10 +10887,10 @@ var init_WaitTask = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/api/Realm.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/api/Realm.js
 var Realm;
 var init_Realm = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/api/Realm.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/api/Realm.js"() {
     init_WaitTask();
     init_disposable();
     Realm = class {
@@ -10956,10 +10956,10 @@ var init_Realm = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/api/ScreenRecording.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/api/ScreenRecording.js
 var ScreenRecording;
 var init_ScreenRecording = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/api/ScreenRecording.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/api/ScreenRecording.js"() {
     init_disposable();
     ScreenRecording = class extends ReadableStream {
       /**
@@ -11052,10 +11052,10 @@ var init_ScreenRecording = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/api/Target.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/api/Target.js
 var TargetType, Target;
 var init_Target = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/api/Target.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/api/Target.js"() {
     (function(TargetType2) {
       TargetType2["PAGE"] = "page";
       TargetType2["BACKGROUND_PAGE"] = "background_page";
@@ -11091,10 +11091,10 @@ var init_Target = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/api/WebWorker.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/api/WebWorker.js
 var WebWorkerEvent, WebWorker;
 var init_WebWorker = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/api/WebWorker.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/api/WebWorker.js"() {
     init_Errors();
     init_EventEmitter();
     init_TimeoutSettings();
@@ -11190,9 +11190,9 @@ var init_WebWorker = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/api/api.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/api/api.js
 var init_api = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/api/api.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/api/api.js"() {
     init_Browser();
     init_BrowserContext();
     init_CDPSession();
@@ -11214,10 +11214,10 @@ var init_api = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/Accessibility.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/cdp/Accessibility.js
 var __addDisposableResource9, __disposeResources9, Accessibility, AXNode;
 var init_Accessibility = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/Accessibility.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/cdp/Accessibility.js"() {
     init_Debug();
     __addDisposableResource9 = function(env, value, async2) {
       if (value !== null && value !== void 0) {
@@ -11758,10 +11758,10 @@ var init_Accessibility = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/Binding.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/cdp/Binding.js
 var __addDisposableResource10, __disposeResources10, Binding;
 var init_Binding = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/Binding.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/cdp/Binding.js"() {
     init_JSHandle();
     init_Debug();
     init_disposable();
@@ -11914,10 +11914,10 @@ var init_Binding = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/BluetoothEmulation.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/cdp/BluetoothEmulation.js
 var CdpBluetoothEmulation;
 var init_BluetoothEmulation = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/BluetoothEmulation.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/cdp/BluetoothEmulation.js"() {
     CdpBluetoothEmulation = class {
       #connection;
       constructor(connection) {
@@ -11940,10 +11940,10 @@ var init_BluetoothEmulation = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/ConsoleMessage.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/common/ConsoleMessage.js
 var ConsoleMessage;
 var init_ConsoleMessage = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/ConsoleMessage.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/common/ConsoleMessage.js"() {
     ConsoleMessage = class {
       #type;
       #text;
@@ -12014,10 +12014,10 @@ var init_ConsoleMessage = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/FileChooser.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/common/FileChooser.js
 var FileChooser;
 var init_FileChooser = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/FileChooser.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/common/FileChooser.js"() {
     init_assert();
     FileChooser = class {
       #element;
@@ -12066,10 +12066,10 @@ var init_FileChooser = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/NetworkManagerEvents.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/common/NetworkManagerEvents.js
 var NetworkManagerEvent;
 var init_NetworkManagerEvents = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/NetworkManagerEvents.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/common/NetworkManagerEvents.js"() {
     (function(NetworkManagerEvent2) {
       NetworkManagerEvent2.Request = Symbol("NetworkManager.Request");
       NetworkManagerEvent2.RequestServedFromCache = Symbol("NetworkManager.RequestServedFromCache");
@@ -12080,10 +12080,10 @@ var init_NetworkManagerEvents = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/CallbackRegistry.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/common/CallbackRegistry.js
 var CallbackRegistry, Callback;
 var init_CallbackRegistry = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/CallbackRegistry.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/common/CallbackRegistry.js"() {
     init_Deferred();
     init_ErrorLike();
     init_Debug();
@@ -12207,10 +12207,10 @@ var init_CallbackRegistry = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/CdpSession.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/cdp/CdpSession.js
 var CdpCDPSession;
 var init_CdpSession = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/CdpSession.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/cdp/CdpSession.js"() {
     init_CDPSession();
     init_CallbackRegistry();
     init_Errors();
@@ -12341,13 +12341,13 @@ var init_CdpSession = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/Connection.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/cdp/Connection.js
 function isTargetClosedError(error) {
   return error instanceof TargetCloseError;
 }
 var Connection;
 var init_Connection = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/Connection.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/cdp/Connection.js"() {
     init_CDPSession();
     init_CallbackRegistry();
     init_Debug();
@@ -12598,7 +12598,7 @@ var init_Connection = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/Coverage.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/cdp/Coverage.js
 function convertToDisjointRanges(nestedRanges) {
   const points = [];
   for (const range of nestedRanges) {
@@ -12644,7 +12644,7 @@ function convertToDisjointRanges(nestedRanges) {
 }
 var Coverage, JSCoverage, CSSCoverage;
 var init_Coverage = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/Coverage.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/cdp/Coverage.js"() {
     init_Debug();
     init_EventEmitter();
     init_util();
@@ -12913,10 +12913,10 @@ var init_Coverage = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/Dialog.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/cdp/Dialog.js
 var CdpDialog;
 var init_Dialog2 = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/Dialog.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/cdp/Dialog.js"() {
     init_Dialog();
     CdpDialog = class extends Dialog {
       #client;
@@ -12939,10 +12939,10 @@ var init_Dialog2 = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/EmulationManager.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/cdp/EmulationManager.js
 var __runInitializers5, __esDecorate5, __setFunctionName2, EmulatedState, EmulationManager;
 var init_EmulationManager = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/EmulationManager.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/cdp/EmulationManager.js"() {
     init_CDPSession();
     init_Debug();
     init_assert();
@@ -13438,10 +13438,10 @@ var init_EmulationManager = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/CdpIssue.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/cdp/CdpIssue.js
 var CdpIssue;
 var init_CdpIssue = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/CdpIssue.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/cdp/CdpIssue.js"() {
     CdpIssue = class {
       #code;
       #details;
@@ -13459,10 +13459,10 @@ var init_CdpIssue = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/CdpPreloadScript.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/cdp/CdpPreloadScript.js
 var CdpPreloadScript;
 var init_CdpPreloadScript = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/CdpPreloadScript.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/cdp/CdpPreloadScript.js"() {
     CdpPreloadScript = class {
       /**
        * This is the ID of the preload script returned by
@@ -13496,7 +13496,7 @@ var init_CdpPreloadScript = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/utils.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/cdp/utils.js
 function createConsoleMessage(event, values, targetId) {
   const textTokens = [];
   for (const arg of values) {
@@ -13669,7 +13669,7 @@ function convertConsoleMessageLevel(method) {
 }
 var getErrorDetails, CDP_BINDING_PREFIX;
 var init_utils = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/utils.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/cdp/utils.js"() {
     init_ConsoleMessage();
     init_util();
     init_assert();
@@ -13692,10 +13692,10 @@ var init_utils = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/DeviceRequestPrompt.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/cdp/DeviceRequestPrompt.js
 var CdpDeviceRequestPrompt, CdpDeviceRequestPromptManager;
 var init_DeviceRequestPrompt2 = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/DeviceRequestPrompt.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/cdp/DeviceRequestPrompt.js"() {
     init_DeviceRequestPrompt();
     init_EventEmitter();
     init_assert();
@@ -13834,7 +13834,7 @@ var init_DeviceRequestPrompt2 = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/JSHandle.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/cdp/JSHandle.js
 async function releaseObject(client, remoteObject, logger) {
   if (!remoteObject.objectId) {
     return;
@@ -13845,7 +13845,7 @@ async function releaseObject(client, remoteObject, logger) {
 }
 var CdpJSHandle;
 var init_JSHandle2 = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/JSHandle.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/cdp/JSHandle.js"() {
     init_JSHandle();
     init_Debug();
     init_utils();
@@ -13926,10 +13926,10 @@ var init_JSHandle2 = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/ElementHandle.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/cdp/ElementHandle.js
 var __runInitializers6, __esDecorate6, NON_ELEMENT_NODE_ROLES, CdpElementHandle;
 var init_ElementHandle2 = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/ElementHandle.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/cdp/ElementHandle.js"() {
     init_ElementHandle();
     init_Debug();
     init_environment();
@@ -14120,10 +14120,10 @@ var init_ElementHandle2 = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/ExecutionContext.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/cdp/ExecutionContext.js
 var __addDisposableResource11, __disposeResources11, ExecutionContext, rewriteError2;
 var init_ExecutionContext = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/ExecutionContext.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/cdp/ExecutionContext.js"() {
     init_CDPSession();
     init_AriaQueryHandler();
     init_Debug();
@@ -14575,10 +14575,10 @@ var init_ExecutionContext = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/FrameManagerEvents.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/cdp/FrameManagerEvents.js
 var FrameManagerEvent;
 var init_FrameManagerEvents = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/FrameManagerEvents.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/cdp/FrameManagerEvents.js"() {
     (function(FrameManagerEvent2) {
       FrameManagerEvent2.FrameAttached = Symbol("FrameManager.FrameAttached");
       FrameManagerEvent2.FrameNavigated = Symbol("FrameManager.FrameNavigated");
@@ -14592,19 +14592,19 @@ var init_FrameManagerEvents = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/IsolatedWorlds.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/cdp/IsolatedWorlds.js
 var MAIN_WORLD, PUPPETEER_WORLD;
 var init_IsolatedWorlds = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/IsolatedWorlds.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/cdp/IsolatedWorlds.js"() {
     MAIN_WORLD = Symbol("mainWorld");
     PUPPETEER_WORLD = Symbol("puppeteerWorld");
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/WebWorker.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/cdp/WebWorker.js
 var CdpWebWorker;
 var init_WebWorker2 = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/WebWorker.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/cdp/WebWorker.js"() {
     init_CDPSession();
     init_Target();
     init_WebWorker();
@@ -14723,10 +14723,10 @@ var init_WebWorker2 = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/IsolatedWorld.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/cdp/IsolatedWorld.js
 var IsolatedWorld;
 var init_IsolatedWorld = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/IsolatedWorld.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/cdp/IsolatedWorld.js"() {
     init_rxjs();
     init_Realm();
     init_EventEmitter();
@@ -14910,10 +14910,10 @@ var init_IsolatedWorld = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/LifecycleWatcher.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/cdp/LifecycleWatcher.js
 var puppeteerToProtocolLifecycle, LifecycleWatcher;
 var init_LifecycleWatcher = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/LifecycleWatcher.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/cdp/LifecycleWatcher.js"() {
     init_Frame();
     init_EventEmitter();
     init_NetworkManagerEvents();
@@ -15075,7 +15075,7 @@ var init_LifecycleWatcher = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/Frame.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/cdp/Frame.js
 function referrerPolicyToProtocol(referrerPolicy) {
   return referrerPolicy.replaceAll(/-./g, (match) => {
     return match[1].toUpperCase();
@@ -15083,7 +15083,7 @@ function referrerPolicyToProtocol(referrerPolicy) {
 }
 var __runInitializers7, __esDecorate7, CdpFrame;
 var init_Frame2 = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/Frame.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/cdp/Frame.js"() {
     init_Frame();
     init_Debug();
     init_Errors();
@@ -15439,10 +15439,10 @@ var init_Frame2 = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/FrameTree.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/cdp/FrameTree.js
 var FrameTree;
 var init_FrameTree = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/FrameTree.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/cdp/FrameTree.js"() {
     init_Deferred();
     FrameTree = class {
       #frames = /* @__PURE__ */ new Map();
@@ -15520,10 +15520,10 @@ var init_FrameTree = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/HTTPRequest.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/cdp/HTTPRequest.js
 var CdpHTTPRequest;
 var init_HTTPRequest2 = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/HTTPRequest.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/cdp/HTTPRequest.js"() {
     init_HTTPRequest();
     init_Debug();
     init_encoding();
@@ -15705,10 +15705,10 @@ var init_HTTPRequest2 = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/SecurityDetails.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/common/SecurityDetails.js
 var SecurityDetails;
 var init_SecurityDetails = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/SecurityDetails.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/common/SecurityDetails.js"() {
     SecurityDetails = class {
       #subjectName;
       #issuer;
@@ -15769,7 +15769,7 @@ var init_SecurityDetails = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/util/httpUtils.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/util/httpUtils.js
 function normalizeHeaderValue(name, value) {
   if (!value.includes("\n")) {
     return value;
@@ -15779,14 +15779,14 @@ function normalizeHeaderValue(name, value) {
   }).filter(Boolean).join(name === "set-cookie" ? "\n " : ", ");
 }
 var init_httpUtils = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/util/httpUtils.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/util/httpUtils.js"() {
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/HTTPResponse.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/cdp/HTTPResponse.js
 var CdpHTTPResponse;
 var init_HTTPResponse2 = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/HTTPResponse.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/cdp/HTTPResponse.js"() {
     init_HTTPResponse();
     init_Errors();
     init_SecurityDetails();
@@ -15903,10 +15903,10 @@ var init_HTTPResponse2 = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/NetworkEventManager.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/cdp/NetworkEventManager.js
 var NetworkEventManager;
 var init_NetworkEventManager = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/NetworkEventManager.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/cdp/NetworkEventManager.js"() {
     init_HTTPRequest2();
     NetworkEventManager = class {
       /**
@@ -16061,10 +16061,10 @@ var init_NetworkEventManager = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/NetworkManager.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/cdp/NetworkManager.js
 var NetworkManager;
 var init_NetworkManager = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/NetworkManager.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/cdp/NetworkManager.js"() {
     init_CDPSession();
     init_Debug();
     init_EventEmitter();
@@ -16591,10 +16591,10 @@ var init_NetworkManager = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/FrameManager.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/cdp/FrameManager.js
 var __addDisposableResource12, __disposeResources12, CHROME_EXTENSION_PREFIX, FrameManager;
 var init_FrameManager = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/FrameManager.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/cdp/FrameManager.js"() {
     init_CDPSession();
     init_Frame();
     init_Debug();
@@ -17285,10 +17285,10 @@ var init_FrameManager = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/USKeyboardLayout.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/common/USKeyboardLayout.js
 var _keyDefinitions;
 var init_USKeyboardLayout = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/USKeyboardLayout.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/common/USKeyboardLayout.js"() {
     _keyDefinitions = {
       "0": { keyCode: 48, key: "0", code: "Digit0" },
       "1": { keyCode: 49, key: "1", code: "Digit1" },
@@ -17677,10 +17677,10 @@ var init_USKeyboardLayout = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/Input.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/cdp/Input.js
 var CdpKeyboard, getFlag, getButtonFromPressedButtons, CdpMouse, CdpTouchHandle, CdpTouchscreen;
 var init_Input2 = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/Input.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/cdp/Input.js"() {
     init_Input();
     init_Errors();
     init_USKeyboardLayout();
@@ -18152,10 +18152,10 @@ var init_Input2 = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/ScreenRecording.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/cdp/ScreenRecording.js
 var __runInitializers8, __esDecorate8, CdpScreenRecording;
 var init_ScreenRecording2 = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/ScreenRecording.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/cdp/ScreenRecording.js"() {
     init_CDPSession();
     init_ScreenRecording();
     init_Debug();
@@ -18280,10 +18280,10 @@ var init_ScreenRecording2 = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/Tracing.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/cdp/Tracing.js
 var Tracing;
 var init_Tracing = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/Tracing.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/cdp/Tracing.js"() {
     init_util();
     init_assert();
     init_Deferred();
@@ -18379,10 +18379,10 @@ var init_Tracing = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/WebMCP.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/cdp/WebMCP.js
 var WebMCPTool, WebMCPToolCall, WebMCP;
 var init_WebMCP = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/WebMCP.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/cdp/WebMCP.js"() {
     init_Debug();
     init_EventEmitter();
     init_disposable();
@@ -18653,7 +18653,7 @@ var init_WebMCP = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/Page.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/cdp/Page.js
 function convertSameSiteFromPuppeteerToCdp(sameSite) {
   switch (sameSite) {
     case "Strict":
@@ -18691,7 +18691,7 @@ function convertCookiesPartitionKeyFromPuppeteerToCdp(partitionKey) {
 }
 var __addDisposableResource13, __disposeResources13, CdpPage, supportedMetrics2;
 var init_Page2 = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/Page.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/cdp/Page.js"() {
     init_rxjs();
     init_CDPSession();
     init_Page();
@@ -19670,10 +19670,10 @@ var init_Page2 = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/BrowserContext.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/cdp/BrowserContext.js
 var __addDisposableResource14, __disposeResources14, CdpBrowserContext;
 var init_BrowserContext2 = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/BrowserContext.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/cdp/BrowserContext.js"() {
     init_Browser();
     init_BrowserContext();
     init_assert();
@@ -19856,10 +19856,10 @@ var init_BrowserContext2 = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/Extension.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/cdp/Extension.js
 var CdpExtension;
 var init_Extension2 = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/Extension.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/cdp/Extension.js"() {
     init_api();
     init_Debug();
     init_ErrorLike();
@@ -19931,10 +19931,10 @@ var init_Extension2 = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/Target.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/cdp/Target.js
 var InitializationStatus, CdpTarget, PageTarget, DevToolsTarget, WorkerTarget, OtherTarget;
 var init_Target2 = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/Target.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/cdp/Target.js"() {
     init_Target();
     init_Debug();
     init_Deferred();
@@ -20171,7 +20171,7 @@ var init_Target2 = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/third_party/urlpattern-polyfill/urlpattern-polyfill.js
+// ../../../node_modules/puppeteer-core/lib/third_party/urlpattern-polyfill/urlpattern-polyfill.js
 function Oe(e, t) {
   return (t ? /^[\x00-\xFF]*$/ : /^[\x00-\x7F]*$/).test(e);
 }
@@ -20559,7 +20559,7 @@ function Ae(e, t) {
 }
 var Pe, a, P, Re, Ee, v, b, J, Q, re, C, V, O, Y;
 var init_urlpattern_polyfill = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/third_party/urlpattern-polyfill/urlpattern-polyfill.js"() {
+  "../../../node_modules/puppeteer-core/lib/third_party/urlpattern-polyfill/urlpattern-polyfill.js"() {
     Pe = Object.defineProperty;
     a = (e, t) => Pe(e, "name", { value: t, configurable: true });
     P = class {
@@ -20956,13 +20956,13 @@ var init_urlpattern_polyfill = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/TargetManager.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/cdp/TargetManager.js
 function isPageTargetBecomingPrimary(target, newTargetInfo) {
   return Boolean(target._subtype()) && !newTargetInfo.subtype;
 }
 var TargetManager;
 var init_TargetManager = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/TargetManager.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/cdp/TargetManager.js"() {
     init_urlpattern_polyfill();
     init_CDPSession();
     init_Debug();
@@ -21345,13 +21345,13 @@ var init_TargetManager = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/Browser.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/cdp/Browser.js
 function isDevToolsPageTarget(url) {
   return url.startsWith("devtools://devtools/bundled/devtools_app.html");
 }
 var CdpBrowser;
 var init_Browser2 = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/Browser.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/cdp/Browser.js"() {
     init_Browser();
     init_CDPSession();
     init_EventEmitter();
@@ -21777,7 +21777,7 @@ var init_Browser2 = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/BrowserConnector.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/cdp/BrowserConnector.js
 async function _connectToCdpBrowser(connectionTransport, url, options, logger) {
   const { acceptInsecureCerts = false, networkEnabled = true, issuesEnabled = true, defaultViewport = DEFAULT_VIEWPORT, downloadBehavior, targetFilter, _isPageTarget: isPageTarget, slowMo = 0, protocolTimeout, handleDevToolsAsPage, idGenerator = createIncrementalIdGenerator(), blocklist, allowlist } = options;
   const log = options.logger ?? logger;
@@ -21800,7 +21800,7 @@ async function _connectToCdpBrowser(connectionTransport, url, options, logger) {
   return browser;
 }
 var init_BrowserConnector = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/BrowserConnector.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/cdp/BrowserConnector.js"() {
     init_Debug();
     init_util();
     init_incremental_id_generator();
@@ -21809,10 +21809,10 @@ var init_BrowserConnector = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/ExtensionTransport.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/cdp/ExtensionTransport.js
 var tabTargetInfo, pageTargetInfo, ExtensionTransport;
 var init_ExtensionTransport = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/ExtensionTransport.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/cdp/ExtensionTransport.js"() {
     tabTargetInfo = {
       targetId: "tabTargetId",
       type: "tab",
@@ -21976,10 +21976,10 @@ var init_ExtensionTransport = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/PredefinedNetworkConditions.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/cdp/PredefinedNetworkConditions.js
 var PredefinedNetworkConditions;
 var init_PredefinedNetworkConditions = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/PredefinedNetworkConditions.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/cdp/PredefinedNetworkConditions.js"() {
     PredefinedNetworkConditions = Object.freeze({
       // Generally aligned with DevTools
       // https://source.chromium.org/chromium/chromium/src/+/main:third_party/devtools-frontend/src/front_end/core/sdk/NetworkManager.ts;l=398;drc=225e1240f522ca684473f541ae6dae6cd766dd33.
@@ -22021,15 +22021,15 @@ var init_PredefinedNetworkConditions = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/TargetManageEvents.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/cdp/TargetManageEvents.js
 var init_TargetManageEvents = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/TargetManageEvents.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/cdp/TargetManageEvents.js"() {
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/cdp.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/cdp/cdp.js
 var init_cdp = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/cdp/cdp.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/cdp/cdp.js"() {
     init_Accessibility();
     init_Binding();
     init_BluetoothEmulation();
@@ -22072,14 +22072,14 @@ var init_cdp = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/BrowserWebSocketTransport.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/common/BrowserWebSocketTransport.js
 var BrowserWebSocketTransport_exports = {};
 __export(BrowserWebSocketTransport_exports, {
   BrowserWebSocketTransport: () => BrowserWebSocketTransport
 });
 var BrowserWebSocketTransport;
 var init_BrowserWebSocketTransport = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/BrowserWebSocketTransport.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/common/BrowserWebSocketTransport.js"() {
     init_Debug();
     BrowserWebSocketTransport = class _BrowserWebSocketTransport {
       static create(url, _headers, logger, _options) {
@@ -22122,10 +22122,10 @@ var init_BrowserWebSocketTransport = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/Device.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/common/Device.js
 var knownDevices, knownDevicesByName, KnownDevices;
 var init_Device = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/Device.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/common/Device.js"() {
     knownDevices = [
       {
         name: "Blackberry PlayBook",
@@ -23972,10 +23972,10 @@ var init_Device = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/CDPSession.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/bidi/CDPSession.js
 var BidiCdpSession;
 var init_CDPSession2 = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/CDPSession.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/bidi/CDPSession.js"() {
     init_CDPSession();
     init_Errors();
     init_Deferred();
@@ -24059,7 +24059,7 @@ var init_CDPSession2 = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/Connection.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/bidi/Connection.js
 function createProtocolError(object) {
   let message = `${object.error} ${object.message}`;
   if (object.stacktrace) {
@@ -24072,7 +24072,7 @@ function isCdpEvent(event) {
 }
 var BidiConnection;
 var init_Connection2 = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/Connection.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/bidi/Connection.js"() {
     init_CallbackRegistry();
     init_Debug();
     init_Errors();
@@ -24210,7 +24210,7 @@ var init_Connection2 = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/BidiOverCdp.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/bidi/BidiOverCdp.js
 import { BidiMapper } from "chromium-bidi";
 async function connectBidiOverCdp(cdp, logger) {
   const bidiServerLogger = logger ? (prefix) => {
@@ -24247,7 +24247,7 @@ async function connectBidiOverCdp(cdp, logger) {
 }
 var CdpConnectionAdapter, CDPClientAdapter, NoOpTransport;
 var init_BidiOverCdp = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/BidiOverCdp.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/bidi/BidiOverCdp.js"() {
     init_Errors();
     init_Connection2();
     CdpConnectionAdapter = class {
@@ -24341,10 +24341,10 @@ var init_BidiOverCdp = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/BluetoothEmulation.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/bidi/BluetoothEmulation.js
 var BidiBluetoothEmulation;
 var init_BluetoothEmulation2 = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/BluetoothEmulation.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/bidi/BluetoothEmulation.js"() {
     BidiBluetoothEmulation = class {
       #session;
       #contextId;
@@ -24377,10 +24377,10 @@ var init_BluetoothEmulation2 = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/DeviceRequestPrompt.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/bidi/DeviceRequestPrompt.js
 var BidiDeviceRequestPromptManager, BidiDeviceRequestPrompt;
 var init_DeviceRequestPrompt3 = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/DeviceRequestPrompt.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/bidi/DeviceRequestPrompt.js"() {
     init_DeviceRequestPrompt();
     init_Errors();
     init_Deferred();
@@ -24457,10 +24457,10 @@ var init_DeviceRequestPrompt3 = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/core/Navigation.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/bidi/core/Navigation.js
 var __runInitializers9, __esDecorate9, Navigation;
 var init_Navigation = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/core/Navigation.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/bidi/core/Navigation.js"() {
     init_EventEmitter();
     init_decorators();
     init_disposable();
@@ -24622,10 +24622,10 @@ var init_Navigation = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/core/Realm.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/bidi/core/Realm.js
 var __runInitializers10, __esDecorate10, _a, Realm2, WindowRealm, DedicatedWorkerRealm, SharedWorkerRealm;
 var init_Realm2 = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/core/Realm.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/bidi/core/Realm.js"() {
     init_EventEmitter();
     init_decorators();
     init_disposable();
@@ -24908,10 +24908,10 @@ var init_Realm2 = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/core/Request.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/bidi/core/Request.js
 var __runInitializers11, __esDecorate11, Request;
 var init_Request = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/core/Request.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/bidi/core/Request.js"() {
     init_Errors();
     init_EventEmitter();
     init_decorators();
@@ -25199,10 +25199,10 @@ var init_Request = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/core/UserPrompt.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/bidi/core/UserPrompt.js
 var __runInitializers12, __esDecorate12, UserPrompt;
 var init_UserPrompt = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/core/UserPrompt.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/bidi/core/UserPrompt.js"() {
     init_EventEmitter();
     init_decorators();
     init_disposable();
@@ -25329,10 +25329,10 @@ var init_UserPrompt = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/core/BrowsingContext.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/bidi/core/BrowsingContext.js
 var __runInitializers13, __esDecorate13, BrowsingContext;
 var init_BrowsingContext = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/core/BrowsingContext.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/bidi/core/BrowsingContext.js"() {
     init_EventEmitter();
     init_util();
     init_assert();
@@ -25942,10 +25942,10 @@ var init_BrowsingContext = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/core/UserContext.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/bidi/core/UserContext.js
 var __runInitializers14, __esDecorate14, UserContext;
 var init_UserContext = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/core/UserContext.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/bidi/core/UserContext.js"() {
     init_EventEmitter();
     init_assert();
     init_decorators();
@@ -26143,10 +26143,10 @@ var init_UserContext = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/Deserializer.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/bidi/Deserializer.js
 var BidiDeserializer;
 var init_Deserializer = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/Deserializer.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/bidi/Deserializer.js"() {
     init_Debug();
     BidiDeserializer = class {
       static deserialize(result, logger) {
@@ -26219,10 +26219,10 @@ var init_Deserializer = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/JSHandle.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/bidi/JSHandle.js
 var BidiJSHandle;
 var init_JSHandle3 = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/JSHandle.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/bidi/JSHandle.js"() {
     init_JSHandle();
     init_Errors();
     init_Deserializer();
@@ -26288,10 +26288,10 @@ var init_JSHandle3 = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/ElementHandle.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/bidi/ElementHandle.js
 var __runInitializers15, __esDecorate15, __addDisposableResource15, __disposeResources15, BidiElementHandle;
 var init_ElementHandle3 = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/ElementHandle.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/bidi/ElementHandle.js"() {
     init_ElementHandle();
     init_Errors();
     init_environment();
@@ -26505,10 +26505,10 @@ var init_ElementHandle3 = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/Dialog.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/bidi/Dialog.js
 var BidiDialog;
 var init_Dialog3 = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/Dialog.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/bidi/Dialog.js"() {
     init_Dialog();
     BidiDialog = class _BidiDialog extends Dialog {
       static from(prompt) {
@@ -26533,10 +26533,10 @@ var init_Dialog3 = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/ExposedFunction.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/bidi/ExposedFunction.js
 var __addDisposableResource16, __disposeResources16, ExposableFunction;
 var init_ExposedFunction = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/ExposedFunction.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/bidi/ExposedFunction.js"() {
     init_Debug();
     init_EventEmitter();
     init_disposable();
@@ -26786,10 +26786,10 @@ var init_ExposedFunction = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/HTTPResponse.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/bidi/HTTPResponse.js
 var __runInitializers16, __esDecorate16, BidiHTTPResponse;
 var init_HTTPResponse3 = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/HTTPResponse.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/bidi/HTTPResponse.js"() {
     init_HTTPResponse();
     init_Errors();
     init_SecurityDetails();
@@ -26958,7 +26958,7 @@ ${header.value.value}` : header.value.value;
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/HTTPRequest.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/bidi/HTTPRequest.js
 function getBidiHeaders(rawHeaders) {
   const headers = [];
   for (const [name, value] of Object.entries(rawHeaders ?? [])) {
@@ -26979,7 +26979,7 @@ function getBidiHeaders(rawHeaders) {
 }
 var _a2, requests, BidiHTTPRequest;
 var init_HTTPRequest3 = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/HTTPRequest.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/bidi/HTTPRequest.js"() {
     init_HTTPRequest();
     init_Errors();
     init_encoding();
@@ -27195,10 +27195,10 @@ var init_HTTPRequest3 = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/Serializer.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/bidi/Serializer.js
 var UnserializableError, BidiSerializer;
 var init_Serializer = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/Serializer.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/bidi/Serializer.js"() {
     init_util();
     UnserializableError = class extends Error {
     };
@@ -27301,7 +27301,7 @@ var init_Serializer = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/util.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/bidi/util.js
 function convertConsoleMessageLevel2(method) {
   switch (method) {
     case "group":
@@ -27387,7 +27387,7 @@ function rewriteEvaluationError(error) {
   throw error;
 }
 var init_util2 = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/util.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/bidi/util.js"() {
     init_ConsoleMessage();
     init_Errors();
     init_util();
@@ -27396,10 +27396,10 @@ var init_util2 = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/Realm.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/bidi/Realm.js
 var __addDisposableResource17, __disposeResources17, BidiRealm, BidiFrameRealm, BidiWorkerRealm;
 var init_Realm3 = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/Realm.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/bidi/Realm.js"() {
     init_Realm();
     init_WebWorker();
     init_AriaQueryHandler();
@@ -27733,10 +27733,10 @@ ${sourceUrlComment}
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/WebWorker.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/bidi/WebWorker.js
 var BidiWebWorker;
 var init_WebWorker3 = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/WebWorker.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/bidi/WebWorker.js"() {
     init_WebWorker();
     init_Errors();
     init_Realm3();
@@ -27765,10 +27765,10 @@ var init_WebWorker3 = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/Frame.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/bidi/Frame.js
 var __runInitializers17, __esDecorate17, __setFunctionName3, BidiFrame;
 var init_Frame3 = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/Frame.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/bidi/Frame.js"() {
     init_rxjs();
     init_Frame();
     init_Accessibility();
@@ -28249,10 +28249,10 @@ var init_Frame3 = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/Input.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/bidi/Input.js
 var SourceActionsType, ActionType, getBidiKeyValue, BidiKeyboard, getBidiButton, BidiMouse, BidiTouchHandle, BidiTouchscreen;
 var init_Input3 = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/Input.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/bidi/Input.js"() {
     init_Input();
     init_Errors();
     init_Errors();
@@ -28860,10 +28860,10 @@ var init_Input3 = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/ScreenRecording.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/bidi/ScreenRecording.js
 var __runInitializers18, __esDecorate18, BidiScreenRecording;
 var init_ScreenRecording3 = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/ScreenRecording.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/bidi/ScreenRecording.js"() {
     init_ScreenRecording();
     init_Debug();
     init_environment();
@@ -28991,7 +28991,7 @@ var init_ScreenRecording3 = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/Page.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/bidi/Page.js
 function evaluationExpression(fun, ...args) {
   return `() => {${evaluationString(fun, ...args)}}`;
 }
@@ -29123,7 +29123,7 @@ function convertCookiesPartitionKeyFromPuppeteerToBiDi(partitionKey) {
 }
 var __esDecorate19, __runInitializers19, __addDisposableResource18, __disposeResources18, BidiPage, CDP_SPECIFIC_PREFIX;
 var init_Page3 = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/Page.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/bidi/Page.js"() {
     init_rxjs();
     init_Page();
     init_Coverage();
@@ -29895,10 +29895,10 @@ var init_Page3 = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/Target.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/bidi/Target.js
 var BidiBrowserTarget, BidiPageTarget, BidiFrameTarget, BidiWorkerTarget;
 var init_Target3 = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/Target.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/bidi/Target.js"() {
     init_Target();
     init_Errors();
     init_Page3();
@@ -30030,10 +30030,10 @@ var init_Target3 = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/BrowserContext.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/bidi/BrowserContext.js
 var __esDecorate20, __runInitializers20, __addDisposableResource19, __disposeResources19, BidiBrowserContext;
 var init_BrowserContext3 = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/BrowserContext.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/bidi/BrowserContext.js"() {
     init_Browser();
     init_BrowserContext();
     init_Debug();
@@ -30416,10 +30416,10 @@ var init_BrowserContext3 = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/core/Browser.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/bidi/core/Browser.js
 var __runInitializers21, __esDecorate21, __addDisposableResource20, __disposeResources20, Browser2;
 var init_Browser3 = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/core/Browser.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/bidi/core/Browser.js"() {
     init_Errors();
     init_EventEmitter();
     init_decorators();
@@ -30758,10 +30758,10 @@ var init_Browser3 = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/core/Session.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/bidi/core/Session.js
 var __runInitializers22, __esDecorate22, Session;
 var init_Session = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/core/Session.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/bidi/core/Session.js"() {
     init_EventEmitter();
     init_decorators();
     init_disposable();
@@ -30934,10 +30934,10 @@ var init_Session = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/Browser.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/bidi/Browser.js
 var __esDecorate23, __runInitializers23, __setFunctionName4, BidiBrowser;
 var init_Browser4 = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/Browser.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/bidi/Browser.js"() {
     init_Browser();
     init_Debug();
     init_Errors();
@@ -31292,7 +31292,7 @@ var init_Browser4 = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/bidi.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/bidi/bidi.js
 var bidi_exports = {};
 __export(bidi_exports, {
   BidiBrowser: () => BidiBrowser,
@@ -31320,7 +31320,7 @@ __export(bidi_exports, {
   requests: () => requests
 });
 var init_bidi = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/bidi.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/bidi/bidi.js"() {
     init_BidiOverCdp();
     init_Browser4();
     init_BrowserContext3();
@@ -31337,7 +31337,7 @@ var init_bidi = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/BrowserConnector.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/bidi/BrowserConnector.js
 async function _connectToBiDiBrowser(connectionTransport, url, options, logger) {
   const { acceptInsecureCerts = false, networkEnabled = true, issuesEnabled = true, defaultViewport = DEFAULT_VIEWPORT } = options;
   const { bidiConnection, cdpConnection, closeCallback } = await getBiDiConnection(connectionTransport, url, options, logger);
@@ -31404,7 +31404,7 @@ async function getBiDiConnection(connectionTransport, url, options, logger) {
   };
 }
 var init_BrowserConnector2 = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/bidi/BrowserConnector.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/bidi/BrowserConnector.js"() {
     init_Connection();
     init_Debug();
     init_Errors();
@@ -31413,7 +31413,7 @@ var init_BrowserConnector2 = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/node/NodeWebSocketTransport.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/node/NodeWebSocketTransport.js
 var NodeWebSocketTransport_exports = {};
 __export(NodeWebSocketTransport_exports, {
   DEFAULT_KEEP_ALIVE_INTERVAL_MS: () => DEFAULT_KEEP_ALIVE_INTERVAL_MS,
@@ -31422,7 +31422,7 @@ __export(NodeWebSocketTransport_exports, {
 import NodeWebSocket from "ws";
 var DEFAULT_KEEP_ALIVE_INTERVAL_MS, NodeWebSocketTransport;
 var init_NodeWebSocketTransport = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/node/NodeWebSocketTransport.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/node/NodeWebSocketTransport.js"() {
     init_Debug();
     init_version();
     DEFAULT_KEEP_ALIVE_INTERVAL_MS = 3e4;
@@ -31512,7 +31512,7 @@ var init_NodeWebSocketTransport = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/node/LaunchOptions.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/node/LaunchOptions.js
 var LaunchOptions_exports = {};
 __export(LaunchOptions_exports, {
   convertPuppeteerChannelToBrowsersChannel: () => convertPuppeteerChannelToBrowsersChannel
@@ -31531,11 +31531,11 @@ function convertPuppeteerChannelToBrowsersChannel(channel) {
   }
 }
 var init_LaunchOptions = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/node/LaunchOptions.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/node/LaunchOptions.js"() {
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/BrowserConnector.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/common/BrowserConnector.js
 function assertSupportedUrlRestrictions(options) {
   if (options.blocklist && options.allowlist) {
     throw new Error("Cannot specify both blocklist and allowlist");
@@ -31647,7 +31647,7 @@ async function getWSEndpoint(browserURL, headers) {
 }
 var getWebSocketTransportClass;
 var init_BrowserConnector3 = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/BrowserConnector.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/common/BrowserConnector.js"() {
     init_urlpattern_polyfill();
     init_BrowserConnector2();
     init_BrowserConnector();
@@ -31660,10 +31660,10 @@ var init_BrowserConnector3 = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/Puppeteer.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/common/Puppeteer.js
 var Puppeteer;
 var init_Puppeteer = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/Puppeteer.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/common/Puppeteer.js"() {
     init_BrowserConnector3();
     init_CustomQueryHandler();
     init_Debug();
@@ -31754,10 +31754,10 @@ var init_Puppeteer = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/TaskQueue.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/common/TaskQueue.js
 var TaskQueue;
 var init_TaskQueue = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/TaskQueue.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/common/TaskQueue.js"() {
     TaskQueue = class {
       #chain;
       constructor() {
@@ -31776,9 +31776,9 @@ var init_TaskQueue = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/common.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/common/common.js
 var init_common = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/common/common.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/common/common.js"() {
     init_BrowserWebSocketTransport();
     init_CallbackRegistry();
     init_AriaQueryHandler();
@@ -31811,10 +31811,10 @@ var init_common = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/revisions.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/revisions.js
 var PUPPETEER_REVISIONS;
 var init_revisions = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/revisions.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/revisions.js"() {
     PUPPETEER_REVISIONS = Object.freeze({
       chrome: "153.0.8010.36",
       "chrome-headless-shell": "153.0.8010.36",
@@ -31823,9 +31823,9 @@ var init_revisions = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/util/util.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/util/util.js
 var init_util3 = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/util/util.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/util/util.js"() {
     init_assert();
     init_Deferred();
     init_Mutex();
@@ -31837,9 +31837,9 @@ var init_util3 = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/index-browser.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/index-browser.js
 var init_index_browser = __esm({
-  "../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/index-browser.js"() {
+  "../../../node_modules/puppeteer-core/lib/puppeteer/index-browser.js"() {
     init_api();
     init_cdp();
     init_common();
@@ -31848,7 +31848,7 @@ var init_index_browser = __esm({
   }
 });
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/node-env-setup.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/node-env-setup.js
 init_environment();
 import fs from "node:fs";
 import path from "node:path";
@@ -31915,10 +31915,10 @@ environment.value = {
   }
 };
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/index.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/index.js
 init_index_browser();
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/node/ChromeLauncher.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/node/ChromeLauncher.js
 init_Debug();
 init_assert();
 import { mkdtemp } from "node:fs/promises";
@@ -31926,7 +31926,7 @@ import os from "node:os";
 import path2 from "node:path";
 import { computeSystemExecutablePath, Browser as SupportedBrowsers } from "@puppeteer/browsers";
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/node/BrowserLauncher.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/node/BrowserLauncher.js
 init_rxjs();
 init_Browser2();
 init_Connection();
@@ -31941,7 +31941,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Browser as InstalledBrowser, CDP_WEBSOCKET_ENDPOINT_REGEX, launch, TimeoutError as BrowsersTimeoutError, WEBDRIVER_BIDI_WEBSOCKET_ENDPOINT_REGEX, computeExecutablePath } from "@puppeteer/browsers";
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/node/PipeTransport.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/node/PipeTransport.js
 init_Debug();
 init_EventEmitter();
 init_assert();
@@ -32018,7 +32018,7 @@ var PipeTransport = class {
   }
 };
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/node/BrowserLauncher.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/node/BrowserLauncher.js
 function isWritableDirectory(directory) {
   try {
     accessSync(directory, constants.W_OK);
@@ -32355,10 +32355,10 @@ For (2), check out our guide on configuring puppeteer at https://pptr.dev/guides
   }
 };
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/node/ChromeLauncher.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/node/ChromeLauncher.js
 init_LaunchOptions();
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/node/util/fs.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/node/util/fs.js
 import fs2 from "node:fs";
 var rmOptions = {
   force: true,
@@ -32370,7 +32370,7 @@ async function rm(path4) {
   await fs2.promises.rm(path4, rmOptions);
 }
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/node/ChromeLauncher.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/node/ChromeLauncher.js
 var ChromeLauncher = class extends BrowserLauncher {
   constructor(puppeteer2, logger) {
     super(puppeteer2, "chrome", logger);
@@ -32587,7 +32587,7 @@ function removeMatchingFlags(array, flag) {
   return array;
 }
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/node/FirefoxLauncher.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/node/FirefoxLauncher.js
 init_Debug();
 init_assert();
 import fs3 from "node:fs";
@@ -32736,7 +32736,7 @@ var FirefoxLauncher = class _FirefoxLauncher extends BrowserLauncher {
   }
 };
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/node/PuppeteerNode.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/node/PuppeteerNode.js
 init_Debug();
 init_Puppeteer();
 init_environment();
@@ -32969,7 +32969,7 @@ var PuppeteerNode = class extends Puppeteer {
   }
 };
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/node/ScreenRecorder.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/node/ScreenRecorder.js
 init_rxjs();
 init_CDPSession();
 init_Debug();
@@ -33245,7 +33245,7 @@ var ScreenRecorder = (() => {
   };
 })();
 
-// ../../../../inso-browser-one-tool-dock-profiles-browser-view-stream-2/node_modules/puppeteer-core/lib/puppeteer/puppeteer-core.js
+// ../../../node_modules/puppeteer-core/lib/puppeteer/puppeteer-core.js
 init_environment();
 environment.value.ScreenRecorder = ScreenRecorder;
 var puppeteer = new PuppeteerNode({

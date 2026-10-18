@@ -33,7 +33,7 @@ No skills or prompts (a test keeps those out).
 
 ## Who can use it
 
-Anyone on the canary release ring (`channel: "canary"`); a stable install neither lists nor installs it.
+Anyone on either release ring, stable or canary.
 It is on once installed, in every space (`modelSpaces` is empty and it declares no `spaces`, so it has no
 audience to narrow it), and needs Dimension 0.10.24 or later, the first release whose engine honours the
 rules' `except:` field. No sign-in, CLI or key.

@@ -324,6 +324,8 @@ export interface BrowserState {
   takenOver: boolean;
   /** Epoch ms of the newest page action an agent (anyone but the View) ran here; null when none has. The View shows "working" for a few seconds after it. */
   agentActionAt: number | null;
+  /** The sites this browser's profile was last seen signed in to, newest first: the View's chip names them, so a sign-in the pack notes reaches it on the stream. Empty for a throwaway and for the relay. A model is not sent it. */
+  signedInTo: string[];
   /** Set by `open` alone, when something a person should know about the profile just opened: the browser build under its logins changed. */
   notice?: string;
 }
@@ -440,8 +442,9 @@ export type ReadResult =
 /** Capability is the opaque browserId; it must never appear in global listings. */
 export interface BrowserRuntimePort {
   /**
-   * `opener`: who is asking (the host's stamps). A profile already open for the SAME chat comes back as that browser;
-   * for anyone else it is refused (`profile_held`), naming whose it is.
+   * `opener`: who is asking (the host's stamps). One profile is one Chrome and one cookie jar, so a profile already open — for this chat or any other —
+   * comes back as that browser: chats share it and are told apart by the tabs they own on it. Refused only for a second process on the same profile
+   * folder (`profile_locked`).
    */
   open(options: BrowserOpenOptions, opener?: BrowserOpener, code?: undefined, attach?: undefined, guard?: EffectGuard): Promise<BrowserState>;
   state(browserId: string, guard?: EffectGuard): Promise<BrowserState>;
@@ -468,16 +471,16 @@ export interface BrowserRuntimePort {
    * Not queued behind page work, so it never waits for a navigation.
    */
   input(browserId: string, events: unknown): Promise<void>;
-  tab(browserId: string, request: TabRequest, caller?: ToolCaller): Promise<BrowserState>;
+  tab(browserId: string, request: TabRequest, caller?: ToolCaller, session?: string): Promise<BrowserState>;
   resize(browserId: string, viewport: Viewport, scale?: number): Promise<BrowserState>;
   snapshot(browserId: string, guard?: EffectGuard): Promise<{ state: BrowserState; text: string }>;
   /** Refused (`publish_pending`) while a publish awaits confirmation, unless `caller` is "app". */
-  act(browserId: string, action: BrowserAction, caller?: ToolCaller, guard?: EffectGuard): Promise<ActionResult>;
+  act(browserId: string, action: BrowserAction, caller?: ToolCaller, session?: string, guard?: EffectGuard): Promise<ActionResult>;
   /**
    * 1..MAX_BATCH_STEPS steps under ONE lock: refused once (`task_running`, `publish_pending`, as `act`), every step
    * validated before the first runs (`bad_action`/`bad_wait`), then run in order until one is not `completed`.
    */
-  actMany(browserId: string, steps: readonly BatchStep[], caller?: ToolCaller, guard?: EffectGuard): Promise<ActManyResult>;
+  actMany(browserId: string, steps: readonly BatchStep[], caller?: ToolCaller, session?: string, guard?: EffectGuard): Promise<ActManyResult>;
   /** A picture for a model: webp, at most 1024 CSS px on its longest edge, never retained (so never annotatable). Read like `snapshot`. */
   shot(browserId: string, request?: ShotRequest, guard?: EffectGuard): Promise<ModelShot>;
   /** The active tab's log entries since the last call (which marks them read); `[]` when nothing is new. For a model's reads, never the View's. */
@@ -540,8 +543,8 @@ export interface BrowserRuntimePort {
    * taken it over, or it is their own Chrome: those stay open, listed in the View's menu, and are closed from there.
    */
   leave(browserId: string, caller?: ToolCaller): Promise<LeaveOutcome>;
-  /** Settles a pending publish first. Refused (`publish_pending`) while one awaits confirmation, unless `caller` is "app". */
-  close(browserId: string, caller?: ToolCaller, guard?: EffectGuard): Promise<void>;
+  /** Lets go of one hold (`by`); a chat's close leaves the browser while anyone else is on it, and the person's ends it. Answers whether it was closed. Settles a pending publish first — refused (`publish_pending`) while one awaits confirmation, unless `caller` is "app". */
+  close(browserId: string, caller?: ToolCaller, guard?: EffectGuard, by?: BrowserOpener): Promise<boolean>;
   waitTask(browserId: string, ms: number): Promise<TaskRun>;
   startTask(browserId: string, request: TaskRequest, caller?: ToolCaller, session?: string, guard?: EffectGuard, workerGuard?: EffectGuard): Promise<TaskRun>;
   /** `check`: signed in? `post`: fill, verify and park for a confirm. Never submits. `preset` labels the record with the preset the recipe was resolved from. */

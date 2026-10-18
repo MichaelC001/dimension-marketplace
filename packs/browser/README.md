@@ -24,8 +24,8 @@ standard MCP and MCP Apps. No host internals, no browser fork.
   most 1024 px. Code cells use `browser_run` instead.
 - **Throwaway by default, named profiles to keep logins.** A browser opened
   without a profile keeps nothing and is deleted when it closes. A named profile
-  persists logins across restarts, keeps its cookies separate from other profiles (not a barrier against code the agent runs: see Code cells), and is held by one caller at
-  a time. The exception is yours: the View's start page and the dock open the
+  persists logins across restarts, keeps its cookies separate from other profiles (not a barrier against code the agent runs: see Code cells), and is shared with any
+  other chat that opens it (each on its own tabs). The View's start page and the dock open the
   saved `default` profile unless you tick **Private** ([Browser panel](#browser-panel)).
 - **Annotations that carry pixels.** Freeze the page, mark it with the shared
   annotation kit (pin, box, circle, arrow, pen, a note on each mark); the numbered
@@ -79,7 +79,8 @@ store), make network requests and discover another session's local Chrome
 debugging endpoint; a deliberately hostile cell can cross that API boundary.
 Use a throwaway browser for code. An explicit `app.cdp_url`, `app.path` or `app.relay` in a cell is refused
 unless `DIMENSION_BROWSER_CODE_ALLOW_ATTACH=1` (`code_needs_consent`); a saved profile opens with no approval of
-the pack's own (the host's permission mode is the gate), one holder at a time (`profile_held`), and cannot be
+the pack's own (the host's permission mode is the gate), shared with any other chat that opens it (each on its own
+tabs), and cannot be
 combined with `app`. Neither is a security boundary against arbitrary Node code.
 
 At startup the pack removes its task keys (`TYPESAFE_API_KEY`,
@@ -224,6 +225,26 @@ so sites treat it as one:
   Google's sign-in and Cloudflare's check do not read the browser as driven
   (doc 77 §4, measured 2026-10-08). Nothing else is hidden in the View or a
   saved profile: no stealth plugin, no fingerprint changes.
+- **A window and a screen.** A headless Chrome has neither: its virtual
+  screen is 800x600, its window 780x580, and the View's page (620x782 in the
+  dock) is larger than both, so `outerHeight - innerHeight` is negative and
+  `screen.orientation` says portrait on a desktop page. No person's browser
+  reports that. Every headless browser the pack starts, the View and a saved
+  profile included, gets a screen of at least 1920x1080 and a window that
+  holds its page plus 88 px of tab strip and address bar (`fitScreen` in
+  `src/engines/agent-browser.ts`): the screen goes to each new tab and popup
+  before its first document runs, the window bounds when the tab is adopted,
+  and both again on every resize. This is a window where there was none, not
+  a changed fingerprint: the GPU, the User-Agent, `navigator.webdriver` and
+  the driver's own traces are the host's. Measured 2026-10-13 on Dev Dimension,
+  Windows, Chrome 154: a sign-in on x.com that a plain Chrome took past the
+  username step was refused in the View with "Sorry, you are not allowed to log
+  in at this time", the geometry above being the only difference measured
+  between the two browsers (UA, client hints, headers, WebGL, canvas, plugins,
+  languages, permissions, window and navigator properties, `navigator.connection`,
+  media devices, audio, colour depth, touch were equal); with the window fitted
+  X went on to its password step. One attempt each way, and X then limited the
+  account's logins, so it is not proof that the geometry was the cause.
 - **A throwaway agent browser is shaped further.** A browser opened
   without a profile holds nothing and is not meant for signing in; it does
   work on the public web that a stock automation browser is turned away from.
@@ -233,7 +254,8 @@ so sites treat it as one:
   already done, reviewed and merged, then just merge it"), relayed by the
   release lead and recorded on PR #155.** A throwaway presents as the Chrome a
   person would run (`src/engines/agent-browser.ts`, `src/engines/agent-puppeteer.ts`):
-  - The screen, window and orientation agree with the page. Headless Chrome's
+  - The screen, window and orientation agree with the page (the View and a
+    saved profile get this too: see "A window and a screen" above). Headless Chrome's
     own screen is 800x600, its window 780x580 and its orientation portrait
     whatever the viewport. A device-metrics override, sent to every page
     (a popup and a `target=_blank` tab too) before its first document runs,
@@ -411,8 +433,8 @@ deleted when it closes or the server exits, and any number can be open at once
 `browser_profiles` never lists it. If the server is killed first, the next start
 deletes the directory once its recorded owner (`owner.pid`) is provably dead and
 no Chrome still holds it. Pass `profile` to run on the saved profile of that
-name in `<root>/profiles/<name>`: it keeps logins, is held by one caller at a
-time, and is never deleted. Saved passwords (`generatePassword`,
+name in `<root>/profiles/<name>`: it keeps logins, is shared with any other chat
+that opens it (each on its own tabs), and is never deleted. Saved passwords (`generatePassword`,
 `useSavedPassword`), a `browser_task` `credential` and `browser_publish` need a
 saved profile and fail `profile_required` on a throwaway browser, before
 anything reaches the page.
@@ -494,22 +516,24 @@ always that profile, whatever another profile is labelled (so a label can never 
 profile impossible to open). A label that two profiles share (`profile_ambiguous`), or a
 name that is not a valid name and matches no label (`profile_unknown`), is refused with
 the profiles' names and labels, never resolved to the closest. A valid name that
-matches nothing is a new profile, as it always was (an account's first sign-in). The
-chat that already holds a profile gets its own browser back; anyone else is refused
-`profile_held`, told whether the human or another chat has it, whether that profile is
-open or still starting.
+matches nothing is a new profile, as it always was (an account's first sign-in). Opening
+one that is already open joins that browser: a profile is ONE Chrome and one cookie jar,
+so chats share it and work on their own tabs. Only a second process on the same folder is
+refused (`profile_locked`), because two Chromes would fork the jar.
 
-**Using a saved profile.** An agent opens any saved profile the same way, with no approval of the pack's own: `browser_open`, `browser_view`, or a `browser_run` cell (`browser.open({ profile: "work" })`). The host's permission mode is the only gate: `browser_run` carries the `exec` tier and the other tools their own, so full access runs without asking and ask-on-commands asks, as for every other tool. One holder per profile still holds (`profile_held`), and the person can take the wheel at any time (`human_driving`). A web page can carry instructions meant for the agent, and the pack does not stop the agent acting inside a signed-in account: that is the cost of hands-free use.
+**Using a saved profile.** An agent opens any saved profile the same way, with no approval of the pack's own: `browser_open`, `browser_view`, or a `browser_run` cell (`browser.open({ profile: "work" })`). The host's permission mode is the only gate: `browser_run` carries the `exec` tier and the other tools their own, so full access runs without asking and ask-on-commands asks, as for every other tool. Chats on one profile share its browser and work beside each other on their own tabs (a chat's names reach only its own tabs; `browser.tabs()` lists the browser's, and `browser.active()` takes what is in front), and the person can take the wheel at any time (`human_driving`). A web page can carry instructions meant for the agent, and the pack does not stop the agent acting inside a signed-in account: that is the cost of hands-free use.
 
 A profile's sign-ins are kept in its Chrome folder on disk and are still there after the browser closes and opens again. A `browser_run` cell is full Node running as you, so it can read a profile's files (`chrome/`, `credentials.json`, and in the browser root `credentials.key`); that is equal to OMP's built-in eval browser (doc 77 §7.8 decision 1).
 
 **The profile menu (the View).** The toolbar's chip is the browser's profile: its avatar (the emoji
 the person chose, else the label's first letter, on the profile's colour) and its label; Private for a
-throwaway browser, Your Chrome for the relay. Its face rides the browser's own state (`look`), so drawing it
-costs no call. Opening the menu reads `browser_profiles` and lists the others, Default first and then by
-label, each with where it is signed in or who has it: a profile open here (yours, or your agent's, or one
-an agent task is running on) is one click away; a profile another chat holds, or you hold in another chat's
-View, is shown dimmed and cannot be opened from here (the one-holder lock); its reason is still read out to a
+throwaway browser, Your Chrome for the relay. Its face rides the browser's own state (`look`) and so do the sites its
+profile is signed in to (`signedInTo`, hosts only, newest first, read from the profile's file at most once a minute and
+again after every note the pack writes, left out of what a model is sent), so drawing the chip costs no call and a sign-in
+the pack notes reaches it on the live stream at once. Opening the menu reads `browser_profiles` and lists the others, Default first and then by
+label, each with where it is signed in or who has it: every profile is one click away, and one another chat also
+has open joins that chat on its browser (a profile is one Chrome, shared per tab); who else is on it is still read
+out to a
 keyboard, because the row stays on the arrow keys. A click calls `browser_switch` for that profile (the browser on screen is named as the one being left) and the View
 shows the result, then calls `browser_leave` for the browser it left. The new browser is opened first, so a profile that cannot
 be opened never costs the person the one they are in; only with the pool full does the runtime close the browser being left
@@ -826,9 +850,13 @@ post (dimension#1219). It sends the vendor notification
   as the browser closes), or a `browser_publish` result said `signed-in` or
   `not-signed-in`, or a publish reached `posted`. A probe is two selectors for a
   known site (`src/probes.ts`; X, LinkedIn, Reddit, Bluesky, Google): one on the page
-  only when signed in, one that holds who. The marker found is signed in; its
+  only when signed in, one that holds who. The marker found is signed in. Its
   absence is signed out only on the site's front page or a login page, anywhere
-  else no verdict. A site with no probe is recorded as visited (`signedIn: null`:
+  else no verdict, and even there only after the page was looked at twice: once
+  waiting up to 3 s for the marker (a page still drawing, a cold first load after
+  a sign-in, a redirect chain shows none yet), and once more 4 s later as the page
+  is. A page loaded or left in between, or a tab switched, writes nothing. A site
+  with no probe is recorded as visited (`signedIn: null`:
   "not checked"), only for a public site, never replacing a check that was made. A
   site never observed is absent, never `signedIn: false`. A later `not-signed-in`
   sets `signedIn: false`. Nothing is read from the saved passwords, and an
@@ -872,10 +900,10 @@ signed in (the first sites seen signed in, never a site's account).
 
 The View's start page and the tab's **Open a page** open on the saved `default`
 set, so a person's own browser keeps their logins, unless **Private** is ticked.
-Private sends no profile: a throwaway browser that saves nothing. One browser
-holds a saved set at a time, so a second open of `default` is refused
-(`profile_held`); the start page turns that into "That browser is already
-open. Use it, or open a Private one."
+Private sends no profile: a throwaway browser that saves nothing. A saved set is one
+browser that chats share, each on its own tabs; what is refused is a second process on the
+same folder (`profile_locked`), and the start page turns that into "That profile's browser
+is already open in another window. Close it there, or open a Private one."
 
 The tab acts only through `openArtifactoryView` (`browser_view` with
 `{ url?, profile? }`), which its `artifactory:open` grant admits. The host mounts

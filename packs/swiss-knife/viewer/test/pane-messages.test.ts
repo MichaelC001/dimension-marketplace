@@ -16,7 +16,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, jest, moc
 import type { App } from "@modelcontextprotocol/ext-apps";
 import { createElement } from "react";
 import type * as DocPaneModule from "../app/view/doc-pane";
-import { finishMediaWork } from "../app/view/media-lifecycle";
+import { finishMediaWork, RENEW_EVERY_MS } from "../app/view/media-lifecycle";
 import type { PaneExtrasProps } from "../app/view/pane-shared";
 import type { Mounted, Renderer, Theme } from "../app/view/renderers/types";
 import { actionFromResult } from "../app/view/result";
@@ -366,6 +366,8 @@ function mediaApp(gate?: Promise<void>, closing?: (token: string) => Promise<voi
 	const requested: string[] = [];
 	const closed: string[] = [];
 	const canceled = new Set<string>();
+	const renewed: string[] = [];
+	const bridge = { renewFails: false };
 	const host = {
 		getHostContext: () => ({ theme: "dark" }),
 		callServerTool: async (call: { name: string; arguments?: Record<string, unknown> }) => {
@@ -377,6 +379,12 @@ function mediaApp(gate?: Promise<void>, closing?: (token: string) => Promise<voi
 				leases.add(token);
 				granted.push(token);
 				return { content: [], structuredContent: { token, url: `http://127.0.0.1:45678/media/${token}`, mime: "video/mp4" } };
+			}
+			if (call.name === "renew_media") {
+				const token = String(call.arguments?.token);
+				renewed.push(token);
+				if (bridge.renewFails) throw new Error("The bridge is busy.");
+				return { content: [], structuredContent: { alive: leases.has(token) } };
 			}
 			if (call.name === "close_media") {
 				const token = String(call.arguments?.token);
@@ -391,7 +399,7 @@ function mediaApp(gate?: Promise<void>, closing?: (token: string) => Promise<voi
 		},
 		openLink: async () => ({}),
 	};
-	return { app: host as unknown as App, leases, chunks, granted, requested, closed };
+	return { app: host as unknown as App, leases, chunks, granted, requested, closed, renewed, bridge };
 }
 
 describe("streamed recording pane lifecycle", () => {
@@ -543,5 +551,58 @@ describe("streamed recording pane lifecycle", () => {
 			opening.resolve();
 			await drain;
 		}
+	});
+});
+
+describe("a recording pane proves to the server that it is still there", () => {
+	const playable = () => {
+		loadRendererImpl = async () => rendererOf(async () => mounted());
+	};
+
+	test("it renews its lease every RENEW_EVERY_MS while it is open, and stops the moment it is closed", async () => {
+		jest.useFakeTimers();
+		playable();
+		const host = mediaApp();
+		const view = await env.mount(pane(tabOf("video", { size: 80 * 1024 * 1024 }), host.app));
+		expect(host.renewed).toEqual([]);
+		await env.act(async () => void jest.advanceTimersByTime(RENEW_EVERY_MS));
+		await env.act(async () => void jest.advanceTimersByTime(RENEW_EVERY_MS));
+		expect(host.renewed).toEqual([host.granted[0], host.granted[0]]);
+		await view.unmount();
+		await env.act(async () => void jest.advanceTimersByTime(RENEW_EVERY_MS * 4));
+		expect(host.renewed).toHaveLength(2);
+	});
+
+	test("a server that no longer holds the lease makes the pane open the recording again under a new token, once", async () => {
+		jest.useFakeTimers();
+		playable();
+		const host = mediaApp();
+		await env.mount(pane(tabOf("video", { size: 80 * 1024 * 1024 }), host.app));
+		const first = host.granted[0]!;
+		host.leases.delete(first);
+		await env.act(async () => void jest.advanceTimersByTime(RENEW_EVERY_MS));
+		expect(host.requested).toHaveLength(2);
+		expect(host.requested[1]).not.toBe(first);
+		expect(host.granted).toEqual(host.requested);
+		expect(host.closed).toEqual([first]);
+		expect(latest().ready).toBe(true);
+		await env.act(async () => void jest.advanceTimersByTime(RENEW_EVERY_MS));
+		expect(host.renewed).toEqual([first, host.requested[1]]);
+	});
+
+	test("a renew call that fails is not a verdict: the recording stays open and the next tick asks again", async () => {
+		jest.useFakeTimers();
+		playable();
+		const host = mediaApp();
+		await env.mount(pane(tabOf("video", { size: 80 * 1024 * 1024 }), host.app));
+		host.bridge.renewFails = true;
+		await env.act(async () => void jest.advanceTimersByTime(RENEW_EVERY_MS));
+		expect(host.requested).toHaveLength(1);
+		expect(host.closed).toEqual([]);
+		expect(latest().ready).toBe(true);
+		host.bridge.renewFails = false;
+		await env.act(async () => void jest.advanceTimersByTime(RENEW_EVERY_MS));
+		expect(host.renewed).toHaveLength(2);
+		expect(host.requested).toHaveLength(1);
 	});
 });
