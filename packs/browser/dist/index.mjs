@@ -62,6 +62,10 @@ function guessAddress(raw) {
 * the UI. An agent that passes no profile gets a throwaway browser instead.
 */
 var DEFAULT_PROFILE = "default";
+/** A saved profile as a person sees it: the implicit one has no name of its own. */
+function loginSetLabel(profile) {
+	return profile === "default" ? "Default" : profile;
+}
 var PRIVATE_CHOICE = "";
 var NO_CONNECTION = {
 	getSnapshot: () => void 0,
@@ -74,7 +78,7 @@ function reportedProfiles(fact) {
 	const profiles = ownRecord(ownRecord(ownRecord(fact)?.reported)?.profiles) ?? {};
 	const labelOf = (name) => {
 		const label = ownRecord(profiles[name])?.label;
-		return typeof label === "string" && label.trim() !== "" ? label : name;
+		return typeof label === "string" && label.trim() !== "" ? label : loginSetLabel(name);
 	};
 	const saved = Object.keys(profiles).filter((name) => name !== DEFAULT_PROFILE);
 	return [

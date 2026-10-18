@@ -2908,20 +2908,22 @@ function buildConnectionReport(observations, meta = {}) {
     }
   }
   entries.sort((a, b) => keepFirst(a.site, b.site));
+  const unobserved = Object.keys(meta).filter((profile2) => profile2 !== RELAY_PROFILE && Object.keys(observations[profile2] ?? {}).length === 0);
+  const items = [...entries.map(({ profile: profile2, host, site }) => ({ profile: profile2, observed: { host, site } })), ...unobserved.map((profile2) => ({ profile: profile2 }))];
   const assemble = (count) => {
     const profiles = {};
     for (let i = 0; i < count; i += 1) {
-      const { profile: profile2, host, site } = entries[i];
-      (profiles[profile2] ??= { sites: {}, ...meta[profile2] }).sites[host] = site;
+      const { profile: profile2, observed } = items[i];
+      const listed = profiles[profile2] ??= { sites: {}, ...meta[profile2] };
+      if (observed !== void 0) listed.sites[observed.host] = observed.site;
     }
-    for (const [profile2, own2] of Object.entries(meta)) if (profile2 !== RELAY_PROFILE) profiles[profile2] ??= { sites: {}, ...own2 };
     return { profiles };
   };
   const fits = (report) => Buffer.byteLength(JSON.stringify(report), "utf8") <= PACK_CONNECTION_REPORT_MAX_BYTES;
-  const whole = assemble(entries.length);
+  const whole = assemble(items.length);
   if (fits(whole)) return whole;
   let low = 0;
-  let high = entries.length - 1;
+  let high = items.length - 1;
   while (low < high) {
     const mid = Math.ceil((low + high) / 2);
     if (fits(assemble(mid))) low = mid;
@@ -14877,6 +14879,7 @@ var BrowserRuntime = class {
     this.store.saveMeta(check.slug, { label: check.label, ...request.colour === void 0 ? {} : { colour: request.colour }, ...request.avatar === void 0 ? {} : { avatar: request.avatar } });
     const created = (await this.profileList()).find((profile2) => profile2.name === check.slug);
     if (created === void 0) fail("profile_missing", "the profile was created but cannot be read back");
+    this.observedProfiles.add(check.slug);
     this.connectionsChanged();
     return created;
   }

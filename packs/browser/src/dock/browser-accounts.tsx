@@ -1,7 +1,7 @@
 import { Button, Input, Select, type SelectOption } from "@fraym/ui";
 import { type FormEvent, useMemo, useState, useSyncExternalStore } from "react";
 import { guessAddress } from "../address";
-import { DEFAULT_PROFILE } from "../profile-name";
+import { DEFAULT_PROFILE, loginSetLabel } from "../profile-name";
 
 export const CONNECTION_KEY = "plugin/browser/connection";
 
@@ -36,7 +36,7 @@ function reportedProfiles(fact: unknown): readonly SelectOption[] {
 	const profiles = ownRecord(ownRecord(ownRecord(fact)?.reported)?.profiles) ?? {};
 	const labelOf = (name: string): string => {
 		const label = ownRecord(profiles[name])?.label;
-		return typeof label === "string" && label.trim() !== "" ? label : name;
+		return typeof label === "string" && label.trim() !== "" ? label : loginSetLabel(name);
 	};
 	const saved = Object.keys(profiles).filter(name => name !== DEFAULT_PROFILE);
 	return [

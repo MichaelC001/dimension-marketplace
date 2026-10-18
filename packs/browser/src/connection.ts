@@ -121,12 +121,18 @@ export function reportableAccount(account: string | undefined): string | undefin
 	return account !== undefined && Buffer.byteLength(account, "utf8") <= PACK_CONNECTION_ACCOUNT_MAX_BYTES ? account : undefined;
 }
 
+interface ReportItem {
+	profile: string;
+	observed?: { host: string; site: SiteObservation };
+}
+
 /**
  * The report for `observations`: every profile except `relay`, every observed
- * site, each profile with its `meta` when given. It always fits the host's
- * caps: an account over 256 UTF-8 bytes is omitted, and while the report JSON
- * is over 64 KiB the oldest observations are dropped (a site only visited
- * first, then the oldest checked one).
+ * site, each profile with its `meta` when given, and every profile in `meta`
+ * that has observed nothing, with no sites. It always fits the host's caps: an
+ * account over 256 UTF-8 bytes is omitted, and while the report JSON is over
+ * 64 KiB the profiles that observed nothing are dropped first, then the oldest
+ * observations (a site only visited first, then the oldest checked one).
  */
 export function buildConnectionReport(observations: ConnectionObservations, meta: Record<string, ResolvedProfileMeta> = {}): ConnectionReport {
 	const entries: Array<{ profile: string; host: string; site: SiteObservation }> = [];
@@ -139,23 +145,23 @@ export function buildConnectionReport(observations: ConnectionObservations, meta
 			entries.push({ profile, host, site });
 		}
 	}
-	// Keeping a prefix drops the unchecked first, then the oldest.
 	entries.sort((a, b) => keepFirst(a.site, b.site));
+	const unobserved = Object.keys(meta).filter((profile) => profile !== RELAY_PROFILE && Object.keys(observations[profile] ?? {}).length === 0);
+	const items: ReportItem[] = [...entries.map(({ profile, host, site }) => ({ profile, observed: { host, site } })), ...unobserved.map((profile) => ({ profile }))];
 	const assemble = (count: number): ConnectionReport => {
 		const profiles: ConnectionReport["profiles"] = {};
 		for (let i = 0; i < count; i += 1) {
-			const { profile, host, site } = entries[i];
-			(profiles[profile] ??= { sites: {}, ...meta[profile] }).sites[host] = site;
+			const { profile, observed } = items[i];
+			const listed = (profiles[profile] ??= { sites: {}, ...meta[profile] });
+			if (observed !== undefined) listed.sites[observed.host] = observed.site;
 		}
-		for (const [profile, own] of Object.entries(meta)) if (profile !== RELAY_PROFILE) profiles[profile] ??= { sites: {}, ...own };
 		return { profiles };
 	};
 	const fits = (report: ConnectionReport): boolean => Buffer.byteLength(JSON.stringify(report), "utf8") <= PACK_CONNECTION_REPORT_MAX_BYTES;
-	const whole = assemble(entries.length);
+	const whole = assemble(items.length);
 	if (fits(whole)) return whole;
-	// Dropping entries never grows the JSON: binary-search the largest newest prefix that fits.
 	let low = 0;
-	let high = entries.length - 1;
+	let high = items.length - 1;
 	while (low < high) {
 		const mid = Math.ceil((low + high) / 2);
 		if (fits(assemble(mid))) low = mid;

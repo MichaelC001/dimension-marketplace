@@ -111,13 +111,13 @@ describe("the Browser dock tab's Open a page bar", () => {
 		const panel = await mountPanel("session-1", store);
 
 		expect(panel.openForm().choices()).toEqual([
-			{ value: "default", label: "default" },
+			{ value: "default", label: "Default" },
 			{ value: "", label: "Private — nothing is saved" },
 		]);
 		await panel.act(() => report({ work: { label: "Work" } }));
 
 		expect(panel.openForm().choices()).toEqual([
-			{ value: "default", label: "default" },
+			{ value: "default", label: "Default" },
 			{ value: "work", label: "Work" },
 			{ value: "", label: "Private — nothing is saved" },
 		]);

@@ -881,10 +881,11 @@ post (dimension#1219). It sends the vendor notification
 - **Whole map every time.** Each report replaces the last one, so every send
   carries every profile. It is sent once the host connects (from the
   observations saved before), after every new observation, when the person adds
-  a profile, and when a profile directory with observations is deleted. The host
-  retracts it when the server exits.
+  a profile, and when a profile directory with observations, or one the person
+  added, is deleted. The host retracts it when the server exits.
 - **Within the host's caps.** The report JSON stays at or under 64 KiB, with the
-  visited-only sites dropped first and then the oldest observations, and an
+  profiles that observed nothing dropped first, then the visited-only sites and
+  then the oldest observations, and an
   `account` over 256 UTF-8 bytes is left out rather than cut into a different
   handle.
 - **Never in a tool's way.** A report that cannot be sent is logged. The tool

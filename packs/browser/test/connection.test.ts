@@ -20,7 +20,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { accountFromText, buildConnectionReport, type ConnectionReport, siteHost } from "../src/connection";
 import type { PublishRecipe, PublishRecord } from "../src/contracts";
-import { defaultColour } from "../src/profile-meta";
+import { defaultColour, type ResolvedProfileMeta } from "../src/profile-meta";
 import { createBrowserServer } from "../src/server";
 import { ProfileStore } from "../src/store";
 import { approvePublish, BROWSER_TEST_TIMEOUT_MS, createRoot, describeWithChrome, newRuntime, perform, racingClock, teardown } from "./fixture";
@@ -258,6 +258,15 @@ describe("connection report", () => {
 		expect(capped.profiles.a.sites["x.com"]).toEqual({ signedIn: true, observedAt: T });
 		expect(capped.profiles.b.sites["x.com"].account).toBe(fits);
 	});
+
+	test("profiles that have observed nothing never push the report over 64 KiB, and an observation outranks them", () => {
+		const meta: Record<string, ResolvedProfileMeta> = {};
+		for (let p = 0; p < 256; p += 1) meta[`traction-x-${String(p).padStart(3, "0")}-a-long-account-handle`] = { label: "𝕏".repeat(48), colour: defaultColour("p"), avatar: "👩‍💻" };
+		const report = buildConnectionReport({ seen: { "x.com": { signedIn: true, observedAt: T } } }, { ...meta, seen: { label: "Seen", colour: defaultColour("seen") } });
+		expect(Buffer.byteLength(JSON.stringify(report), "utf8")).toBeLessThanOrEqual(64 * 1024);
+		expect(report.profiles.seen?.sites["x.com"]).toEqual({ signedIn: true, observedAt: T });
+		expect(Object.keys(report.profiles).length).toBeGreaterThan(100);
+	});
 });
 
 // ---------------------------------------------------------------------------
@@ -368,6 +377,11 @@ describeWithChrome("the server's connection report", () => {
 			expect(added.isError).toBeFalsy();
 			const report = await s.report((next) => next.profiles.work !== undefined, mark);
 			expect(report.profiles.work).toEqual({ sites: {}, label: "Work", colour: defaultColour("work") });
+
+			const gone = s.reports.length;
+			await rm(s.store.profileDir("work"), { recursive: true, force: true });
+			const after = await s.report((next) => next.profiles.work === undefined, gone);
+			expect(after.profiles.acme).toBeDefined();
 		},
 		BROWSER_TEST_TIMEOUT_MS,
 	);
