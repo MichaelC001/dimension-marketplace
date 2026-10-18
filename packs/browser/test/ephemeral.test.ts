@@ -10,9 +10,6 @@
  *  null`): its own directory under `<root>/ephemeral`, no lock, gone when it
  *  closes. These tests use real Chrome and real directories in temp roots.
  */
-import { randomBytes } from "node:crypto";
-import { z } from "zod";
-import { ARTIFACTORY_HOST_CONTEXT_EXTENSION_ID, ARTIFACTORY_HOST_CONTEXT_META_KEY, ARTIFACTORY_HOST_CONTEXT_READ_METHOD } from "@dimension/sdk/artifactory";
 import { existsSync } from "node:fs";
 import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -46,20 +43,14 @@ async function connect(runtime: BrowserRuntime, rootDir: string): Promise<(name:
 	await mkdir(viewDir, { recursive: true });
 	await writeFile(join(viewDir, "index.html"), "<!doctype html><title>view</title>");
 	const server = await createBrowserServer({ runtime, viewDir, presets: [] });
-	const client = new Client({ name: "ephemeral-test", version: "0.0.0" }, { capabilities: { extensions: { [ARTIFACTORY_HOST_CONTEXT_EXTENSION_ID]: {} } } });
+	const client = new Client({ name: "ephemeral-test", version: "0.0.0" });
 	const sessionId = "ephemeral-chat";
-	const token = randomBytes(32).toString("hex");
-	client.setRequestHandler(z.object({ method: z.literal(ARTIFACTORY_HOST_CONTEXT_READ_METHOD), params: z.object({ sessionId: z.string(), token: z.string() }) }), async request => {
-		if (request.params.sessionId !== sessionId || request.params.token !== token) throw new Error("Unknown host context");
-		return { active: true, sessionId };
-	});
 	const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
 	await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
 	clients.push(client);
 	return async (name, args, caller) => (await client.callTool({ name, arguments: args, _meta: {
 		"ai.insodimension/caller": caller ?? "model",
 		"ai.insodimension/session": { sessionId },
-		[ARTIFACTORY_HOST_CONTEXT_META_KEY]: { sessionId, token },
 	} })) as ToolResult;
 }
 
@@ -119,7 +110,7 @@ describeWithChrome("throwaway browsers", () => {
 	);
 
 	test(
-		"throwaway browsers coexist without a lock while a saved profile stays exclusive, and closing one leaves the others alone",
+		"throwaway browsers coexist without a lock while a saved profile is one browser the second open joins, and closing one leaves the others alone",
 		async () => {
 			const { runtime, rootDir } = await createRuntime();
 			const ephemeral = join(rootDir, "ephemeral");
@@ -129,8 +120,9 @@ describeWithChrome("throwaway browsers", () => {
 			expect(a.browserId).not.toBe(b.browserId);
 			expect(await entries(ephemeral)).toHaveLength(2);
 
-			await runtime.open({ profile: "shared", viewport: VIEWPORT }, { caller: "app" });
-			expect(await failureCode(() => runtime.open({ profile: "shared", viewport: VIEWPORT }, { caller: "app" }))).toBe("profile_held");
+			const shared = await runtime.open({ profile: "shared", viewport: VIEWPORT }, { caller: "app" });
+			expect((await runtime.open({ profile: "shared", viewport: VIEWPORT }, { caller: "app" })).browserId).toBe(shared.browserId);
+			expect(await entries(join(rootDir, "profiles"))).toEqual(["shared"]);
 
 			await runtime.close(a.browserId);
 			expect(await entries(ephemeral)).toHaveLength(1);

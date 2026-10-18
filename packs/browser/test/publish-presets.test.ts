@@ -10,9 +10,6 @@
  *  transport, the human's Post as an app-stamped confirm. These prove the
  *  presets against the fixture copies only, never against the live sites.
  */
-import { randomBytes } from "node:crypto";
-import { z } from "zod";
-import { ARTIFACTORY_HOST_CONTEXT_EXTENSION_ID, ARTIFACTORY_HOST_CONTEXT_META_KEY, ARTIFACTORY_HOST_CONTEXT_READ_METHOD } from "@dimension/sdk/artifactory";
 import { join } from "node:path";
 import { mkdir, writeFile } from "node:fs/promises";
 import { afterEach, expect, test } from "bun:test";
@@ -71,13 +68,8 @@ async function session(profile: string, fixtureName: string): Promise<Session> {
 	await writeFile(join(viewDir, "index.html"), "<!doctype html><title>view</title>");
 	const presets = shipped.map((preset) => rebasePreset(preset, fixture.origin));
 	const server = await createBrowserServer({ runtime, viewDir, presets });
-	const client = new Client({ name: "publish-presets-test", version: "0.0.0" }, { capabilities: { extensions: { [ARTIFACTORY_HOST_CONTEXT_EXTENSION_ID]: {} } } });
+	const client = new Client({ name: "publish-presets-test", version: "0.0.0" });
 	const sessionId = "publish-presets-chat";
-	const token = randomBytes(32).toString("hex");
-	client.setRequestHandler(z.object({ method: z.literal(ARTIFACTORY_HOST_CONTEXT_READ_METHOD), params: z.object({ sessionId: z.string(), token: z.string() }) }), async request => {
-		if (request.params.sessionId !== sessionId || request.params.token !== token) throw new Error("Unknown host context");
-		return { active: true, sessionId };
-	});
 	const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
 	await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
 	clients.push(client);
@@ -85,7 +77,6 @@ async function session(profile: string, fixtureName: string): Promise<Session> {
 		(await client.callTool({ name, arguments: args, _meta: {
 			[CALLER]: caller ?? "model",
 			"ai.insodimension/session": { sessionId },
-			[ARTIFACTORY_HOST_CONTEXT_META_KEY]: { sessionId, token },
 		} })) as ToolResult;
 	const opened = await call("browser_open", { profile });
 	expect(opened.isError).toBeFalsy();

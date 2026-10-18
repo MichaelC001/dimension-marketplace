@@ -19,10 +19,8 @@ import { randomBytes } from "node:crypto";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
-import { z } from "zod";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { ARTIFACTORY_HOST_CONTEXT_EXTENSION_ID, ARTIFACTORY_HOST_CONTEXT_META_KEY, ARTIFACTORY_HOST_CONTEXT_READ_METHOD } from "@dimension/sdk/artifactory";
 import type { BrowserAction, PublishRecipe, PublishRecord } from "../src/contracts";
 import type { EngineDriver, EngineState, FieldRead } from "../src/engines/types";
 import type { BrowserRuntime } from "../src/runtime";
@@ -196,14 +194,9 @@ async function session(): Promise<Session> {
 	await mkdir(viewDir, { recursive: true });
 	await writeFile(join(viewDir, "index.html"), "<!doctype html><title>view</title>");
 	const server = await createBrowserServer({ runtime, viewDir, presets: [STUB_PRESET] });
-	const client = new Client({ name: "publish-approval-runtime-test", version: "0.0.0" }, { capabilities: { extensions: { [ARTIFACTORY_HOST_CONTEXT_EXTENSION_ID]: {} } } });
-	const token = randomBytes(32).toString("hex");
+	const client = new Client({ name: "publish-approval-runtime-test", version: "0.0.0" });
 	const store = new ProfileStore(rootDir);
 	store.ensureProfile(PROFILE);
-	client.setRequestHandler(z.object({ method: z.literal(ARTIFACTORY_HOST_CONTEXT_READ_METHOD), params: z.object({ sessionId: z.string(), token: z.string() }) }), async request => {
-		if (request.params.sessionId !== "publish-chat" || request.params.token !== token) throw new Error("Unknown host context");
-		return { active: true, sessionId: "publish-chat" };
-	});
 	const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
 	await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
 	clients.push(client);
@@ -211,7 +204,6 @@ async function session(): Promise<Session> {
 		(await client.callTool({ name, arguments: args, _meta: {
 			[CALLER]: caller ?? "app",
 			"ai.insodimension/session": { sessionId: "publish-chat" },
-			[ARTIFACTORY_HOST_CONTEXT_META_KEY]: { sessionId: "publish-chat", token },
 		} })) as ToolResult;
 	return { call, runtime, rootDir, page, browserId };
 }
@@ -301,8 +293,6 @@ describe("browser_publish post", () => {
 
 	test("with an approval for the same text it parks typed and unclicked, and parking spends nothing: a cancelled park parks again", async () => {
 		const s = await session();
-		expect((await s.call("browser_open", { profile: PROFILE }, "model")).isError).toBe(true);
-		expect((await s.call("browser_profile_consent", { name: PROFILE, decision: "allow", scope: "chat" }, "app")).isError).toBeFalsy();
 		await approve(s);
 
 		const parked = await park(s);
@@ -353,8 +343,6 @@ describe("browser_publish post", () => {
 describe("browser_publish_confirm", () => {
 	test("with the approval gone since the park it is refused, nothing is clicked, the publish stays pending, and a fresh approval lets that same publish post", async () => {
 		const s = await session();
-		expect((await s.call("browser_open", { profile: PROFILE }, "model")).isError).toBe(true);
-		expect((await s.call("browser_profile_consent", { name: PROFILE, decision: "allow", scope: "chat" }, "app")).isError).toBeFalsy();
 		const { file } = await approve(s);
 		const parked = await park(s);
 		await rm(file);
@@ -376,8 +364,6 @@ describe("browser_publish_confirm", () => {
 
 	test("a confirm refused for another reason (no expect, a wrong expect) spends nothing: the same publish then posts", async () => {
 		const s = await session();
-		expect((await s.call("browser_open", { profile: PROFILE }, "model")).isError).toBe(true);
-		expect((await s.call("browser_profile_consent", { name: PROFILE, decision: "allow", scope: "chat" }, "app")).isError).toBeFalsy();
 		await approve(s);
 		const parked = await park(s);
 
@@ -398,8 +384,6 @@ describe("browser_publish_confirm", () => {
 	for (const caller of ["model", "app"] as const) {
 		test(`the ${caller === "app" ? "View's Post" : "model's confirm"} spends the approval: the posted text cannot be parked again`, async () => {
 			const s = await session();
-			expect((await s.call("browser_open", { profile: PROFILE }, "model")).isError).toBe(true);
-			expect((await s.call("browser_profile_consent", { name: PROFILE, decision: "allow", scope: "chat" }, "app")).isError).toBeFalsy();
 			await approve(s);
 			const parked = await park(s);
 
@@ -451,8 +435,6 @@ describe("browser_publish_confirm", () => {
 		for (const row of failures) {
 			test(`${row.name} gives the approval back: the same text parks and posts afterwards`, async () => {
 				const s = await session();
-				expect((await s.call("browser_open", { profile: PROFILE }, "model")).isError).toBe(true);
-				expect((await s.call("browser_profile_consent", { name: PROFILE, decision: "allow", scope: "chat" }, "app")).isError).toBeFalsy();
 				await approve(s);
 				const parked = await park(s);
 				row.arrange(s);
@@ -497,8 +479,6 @@ describe("an approval bound to a shipped preset", () => {
 	for (const caller of ["model", "app"] as const) {
 		test(`lets that preset post, spent by the ${caller === "app" ? "View's Post" : "model's confirm"}: the record keeps the preset and the post cannot go out again`, async () => {
 			const s = await session();
-			expect((await s.call("browser_open", { profile: PROFILE }, "model")).isError).toBe(true);
-			expect((await s.call("browser_profile_consent", { name: PROFILE, decision: "allow", scope: "chat" }, "app")).isError).toBeFalsy();
 			await approve(s, [TEXT], PROFILE, PRESET);
 			const parked = await park(s, [TEXT], s.browserId, "preset");
 			expect(parked.preset).toMatchObject({ name: PRESET });

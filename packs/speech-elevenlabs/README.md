@@ -34,7 +34,9 @@ by naming the provider `elevenlabs`.
   `delegate_to_agent` client tool, also one your user created (the oldest such agent, never an archived one, never an
   agent that only shares the name, never one a teammate shared with you), records its ids and changes it only where it
   differs from what the code wants; with none it creates the agent and the tool. The persona, first message and voice
-  arrive per call as overrides, so nothing about a session is written to your account.
+  arrive per call as overrides, so nothing about a session is written to your account. The agent's captions (what it
+  said, and what you heard of a response you cut off) never show the voice's audio tags such as `[happy]`; the
+  voice still performs them.
 - **A writing guide** (`src/guide.ts`) for Eleven v4 and v4 Turbo: how to place the short audio tags in square
   brackets, with punctuation and numbers written as words. The engine hands it to the small model that rewrites a
   reply into speech. Flash v2.5 gets none, and the rewriter is then told never to write a bracket.
@@ -48,8 +50,9 @@ No tools, skills, prompts or rules.
 
 ## Who can use it
 
-Anyone, on every release ring, running Dimension 0.11.1 or newer (`requires.dimension`; the
-pack-provided speech providers, listening and live calls it relies on first ship in that release). It is off until you
+Anyone, on every release ring, running Dimension 0.11.4 or newer (`requires.dimension`). Pack-provided speech
+providers, listening and live calls first ship in 0.11.1, and 0.11.4 is the first release that explains a failed live
+call in plain words instead of showing the provider's own text. It is off until you
 enable it (`defaultEnabled: false`) and connect a key. You need an ElevenLabs account and an API key with the Text to
 Speech permission to hear replies and the Speech to Text permission to dictate; to talk live the key also needs the
 Agents (ConvAI) read and write permissions.

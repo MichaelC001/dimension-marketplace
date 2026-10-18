@@ -10,9 +10,6 @@
  *  JSON-lines protocol through the real interpreter, launched by the real
  *  `startWorker` — only the agent loop is replaced, never the process boundary.
  */
-import { randomBytes } from "node:crypto";
-import { z } from "zod";
-import { ARTIFACTORY_HOST_CONTEXT_EXTENSION_ID, ARTIFACTORY_HOST_CONTEXT_META_KEY, ARTIFACTORY_HOST_CONTEXT_READ_METHOD } from "@dimension/sdk/artifactory";
 import { existsSync } from "node:fs";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -59,24 +56,18 @@ interface ToolResult {
 }
 
 /** The real MCP server over `runtime`, reached the way a host reaches it. */
-async function connect(runtime: BrowserRuntime, rootDir: string): Promise<(name: string, args: Record<string, unknown>, caller?: "model" | "app") => Promise<ToolResult>> {
+async function connect(runtime: BrowserRuntime, rootDir: string): Promise<(name: string, args: Record<string, unknown>) => Promise<ToolResult>> {
 	const viewDir = join(rootDir, "view");
 	await mkdir(viewDir, { recursive: true });
 	await writeFile(join(viewDir, "index.html"), "<!doctype html><title>view</title>");
 	const server = await createBrowserServer({ runtime, viewDir });
-	const client = new Client({ name: "task-test", version: "0.0.0" }, { capabilities: { extensions: { [ARTIFACTORY_HOST_CONTEXT_EXTENSION_ID]: {} } } });
+	const client = new Client({ name: "task-test", version: "0.0.0" });
 	const sessionId = "task-chat";
-	const token = randomBytes(32).toString("hex");
-	client.setRequestHandler(z.object({ method: z.literal(ARTIFACTORY_HOST_CONTEXT_READ_METHOD), params: z.object({ sessionId: z.string(), token: z.string() }) }), async request => {
-		if (request.params.sessionId !== sessionId || request.params.token !== token) throw new Error("Unknown host context");
-		return { active: true, sessionId };
-	});
 	const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
 	await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
-	return async (name, args, caller = "model") => (await client.callTool({ name, arguments: args, _meta: {
-		"ai.insodimension/caller": caller,
+	return async (name, args) => (await client.callTool({ name, arguments: args, _meta: {
+		"ai.insodimension/caller": "model",
 		"ai.insodimension/session": { sessionId },
-		[ARTIFACTORY_HOST_CONTEXT_META_KEY]: { sessionId, token },
 	} })) as ToolResult;
 }
 
@@ -226,11 +217,6 @@ describeTasks("tasks", () => {
 			const fixture = startFixture();
 			const { runtime, rootDir } = await createRuntime();
 			const call = await connect(runtime, rootDir);
-			const human = await call("browser_open", { profile: "task-402", viewport: VIEWPORT }, "app");
-			expect(human.isError).toBeFalsy();
-			expect((await call("browser_close", { browserId: human.structuredContent?.browserId }, "app")).isError).toBeFalsy();
-			expect((await call("browser_open", { profile: "task-402" })).isError).toBe(true);
-			expect((await call("browser_profile_consent", { name: "task-402", decision: "allow", scope: "chat" }, "app")).isError).toBeFalsy();
 			const opened = await call("browser_open", { profile: "task-402", viewport: VIEWPORT });
 			expect(opened.isError).toBeFalsy();
 			const browserId = opened.structuredContent?.browserId as string;
@@ -339,11 +325,6 @@ describeTasks("tasks", () => {
 			const fixture = startFixture();
 			const { runtime, rootDir } = await createRuntime();
 			const call = await connect(runtime, rootDir);
-			const human = await call("browser_open", { profile: "task-redact", viewport: VIEWPORT }, "app");
-			expect(human.isError).toBeFalsy();
-			expect((await call("browser_close", { browserId: human.structuredContent?.browserId }, "app")).isError).toBeFalsy();
-			expect((await call("browser_open", { profile: "task-redact" })).isError).toBe(true);
-			expect((await call("browser_profile_consent", { name: "task-redact", decision: "allow", scope: "chat" }, "app")).isError).toBeFalsy();
 			const opened = await call("browser_open", { profile: "task-redact", viewport: VIEWPORT });
 			expect(opened.isError).toBeFalsy();
 			const browserId = opened.structuredContent?.browserId as string;

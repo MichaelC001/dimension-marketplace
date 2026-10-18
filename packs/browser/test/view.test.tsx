@@ -5,7 +5,8 @@
  *  Private one saves them, or "my own Chrome" opens the wrong kind of browser;
  *  a browser that ended normally is shown as an alarm, or one that could not be
  *  opened is shown as nothing; or a profile shows up in the picker before there
- *  is a second one to pick, or a profile another chat holds can be picked.
+ *  is a second one to pick, or a profile a second PROCESS already has (the one
+ *  refusal that remains) can be picked.
  *
  *  The View is mounted live on a linkedom document (`dom-harness.ts`) against a
  *  fake MCP App host whose `callServerTool` records every browser tool call and
@@ -16,7 +17,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { App } from "@modelcontextprotocol/ext-apps";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import type { BrowserState, ProfileConsent, ProfileListing } from "../src/contracts";
+import type { BrowserState, ProfileListing } from "../src/contracts";
 import { BrowserApp } from "../app/view/browser-app";
 import { BrowserClient, mountFromToolResult, type ToolMount } from "../app/view/browser-client";
 import { StartPage, type StartPageProps } from "../app/view/start-page";
@@ -35,9 +36,6 @@ const listing = (name: string, over: Partial<ProfileListing> = {}): ProfileListi
 const noop = () => {};
 const startProps = (over: Partial<StartPageProps> = {}): StartPageProps => ({
 	profiles: [],
-	consents: [],
-	onConsent: noop,
-	opens: null,
 	profilesError: null,
 	profile: "default",
 	isPrivate: false,
@@ -110,17 +108,17 @@ describe("the start page", () => {
 		await dom.click(radios[1] as Element);
 		expect(picked).toEqual(["work"]);
 	});
-
-	test("a profile another chat holds is shown and cannot be picked; one the agent has open here can", async () => {
+	test("a profile another chat holds is pickable now that chats join it, as is one the person holds in another chat; Private still locks the row", async () => {
 		const picked: string[] = [];
 		const profiles = [listing("default"), listing("held", { heldBy: "another chat" }), listing("elsewhere", { heldBy: "human" }), listing("mine", { heldBy: "this chat", hold: { by: "agent", task: false, takenOver: false } })];
 		const dom = await mount(<StartPage {...startProps({ profiles, onProfile: name => picked.push(name) })} />);
 		await openOptions(dom);
 		const radios = dom.find('[role="radio"]');
-		expect(radios.map(el => [el.lastChild?.textContent, el.hasAttribute("disabled")])).toEqual([["Default", false], ["elsewhere", true], ["held", true], ["mine", false]]);
+		expect(radios.map(el => [el.lastChild?.textContent, el.hasAttribute("disabled")])).toEqual([["Default", false], ["elsewhere", false], ["held", false], ["mine", false]]);
 		await dom.click(radios[1] as Element);
+		await dom.click(radios[2] as Element);
 		await dom.click(radios[3] as Element);
-		expect(picked).toEqual(["mine"]);
+		expect(picked).toEqual(["elsewhere", "held", "mine"]);
 	});
 
 	test("a new profile is named through the shared name rules: a path-like, reserved or taken name is refused with a reason and sends nothing; a good one is sent as typed", async () => {
@@ -193,16 +191,14 @@ interface ContextUpdate {
 	readonly content: readonly unknown[];
 }
 
-/** A host that answers `browser_profiles`, records every call and every context update, and lets `answer` decide the rest. */
-function fakeApp(answer: (call: Call) => CallToolResult, profileResult: CallToolResult = { content: [], structuredContent: { profiles: [] } }): { readonly app: App; readonly calls: Call[]; readonly contexts: ContextUpdate[] } {
+function fakeApp(answer: (call: Call) => CallToolResult): { readonly app: App; readonly calls: Call[]; readonly contexts: ContextUpdate[] } {
 	const calls: Call[] = [];
 	const contexts: ContextUpdate[] = [];
-	// The View touches exactly these three App members; the rest of the host surface is not in play.
 	const app = {
 		callServerTool: async (request: { name: string; arguments?: Record<string, unknown> }): Promise<CallToolResult> => {
 			const call = { name: request.name, args: request.arguments ?? {} };
 			calls.push(call);
-			return call.name === "browser_profiles" ? profileResult : answer(call);
+			return call.name === "browser_profiles" ? { content: [], structuredContent: { profiles: [] } } : answer(call);
 		},
 		getHostCapabilities: () => ({ updateModelContext: { text: {}, image: {} } }),
 		updateModelContext: async (update: ContextUpdate) => {
@@ -215,47 +211,12 @@ function fakeApp(answer: (call: Call) => CallToolResult, profileResult: CallTool
 
 const opens = (calls: readonly Call[]) => calls.filter(call => call.name === "browser_open").map(call => call.args);
 
-/** The runtime's two refusals of a saved set that is already held, verbatim: one holder in this server (`profile_held`, open or still launching), one across servers (`profile_locked`). */
-const SET_TAKEN = {
-	profile_held: `profile "default" is already open, held by another chat. Ask the human to close it, or use another profile.`,
-	profile_locked: `profile "default" is already in use (pid 4242 since 2026-09-29T08:00:00.000Z). Close that browser first (browser_close), or use another profile.`,
-} as const;
-const TAKEN_SENTENCE = "That browser is already open. Use it, or open a Private one.";
+/** The runtime's one remaining opening refusal, verbatim (`profile_locked`: a second PROCESS on the profile folder). A held set is joined, so no other refusal reaches the View. */
+const TAKEN_LOCKED = `profile "default" is already in use (pid 4242 since 2026-09-29T08:00:00.000Z). Close that browser first (browser_close), or use another profile.`;
+const TAKEN_SENTENCE = "That profile's browser is already open in another window. Close it there, or open a Private one.";
 
 const addressField = (dom: Dom): Element => dom.find('input[aria-label="Address"]')[0] as Element;
 const alerts = (dom: Dom) => dom.find('[role="alert"]').map(el => el.textContent);
-
-describe("profile authorization on a blank View", () => {
-	test("a pending loop request can be decided without opening a browser, and a stale decision stays pending with an error", async () => {
-		const subject = { workspaceId: "workspace-one", id: "loop-17", origin: "agent" };
-		const otherSubject = { workspaceId: "workspace-two", id: "loop-29", origin: "agent" };
-		const consents: ProfileConsent[] = [
-			{ name: "personal", label: "Personal", sites: [], status: "pending", scope: "loop", subject: otherSubject, loopLabel: "Other loop" },
-			{ name: "work", label: "Work", sites: [{ site: "example.com", account: "alex", signedIn: true, seenAt: "2026-10-04T00:00:00Z" }], status: "pending", scope: "loop", subject, loopLabel: "Research loop" },
-		];
-		const { app, calls } = fakeApp(
-			() => failure("This request changed. Review it again before deciding."),
-			{ content: [], structuredContent: { profiles: [], consents } },
-		);
-		const dom = await mount(<BrowserApp app={app} toolState={null} />);
-		await dom.settle();
-
-		expect(dom.find(".bx-start")).toHaveLength(1);
-		expect(dom.text()).toContain("Work: example.com (alex)");
-		expect(button(dom, "Always allow Research loop").closest(".bx-options-panel")).toBeNull();
-		await dom.click(button(dom, "Always allow Research loop"));
-		await dom.settle();
-
-		expect(calls.filter(call => call.name === "browser_profile_consent")).toEqual([
-			{ name: "browser_profile_consent", args: { name: "work", decision: "allow", scope: "loop", expectedSubject: subject } },
-		]);
-		expect(opens(calls)).toEqual([]);
-		expect(alerts(dom)).toEqual(["This request changed. Review it again before deciding."]);
-		expect(dom.text()).toContain("Agent requests access to Work");
-		expect(button(dom, "Always allow Research loop")).toBeTruthy();
-		expect(dom.text()).not.toContain("Research loop has standing access");
-	});
-});
 
 describe("opening from the start page", () => {
 	test("Open goes to the address that was typed, on the person's saved logins, and a refusal is shown, not swallowed", async () => {
@@ -304,29 +265,38 @@ describe("opening from the start page", () => {
 		expect(opens(calls)).toStrictEqual([{ engine: "chromium", profile: "default" }, { engine: "chromium" }, { engine: "chrome-relay", profile: "relay" }]);
 	});
 
-	for (const [code, text] of Object.entries(SET_TAKEN)) {
-		test(`a saved set another browser holds (${code}) is one plain sentence with a way out, and Private then opens`, async () => {
-			const { app, calls } = fakeApp(call => {
-				if (call.name !== "browser_open") return failure("connection reset");
-				return call.args.profile === undefined ? { content: [], structuredContent: { ...LIVE, browserId: "b2" } } : failure(text);
-			});
-			const dom = await mount(<BrowserApp app={app} toolState={null} />);
-			await dom.settle();
-
-			await dom.click(button(dom, "Open"));
-			await dom.settle();
-			expect(alerts(dom)).toEqual([TAKEN_SENTENCE]);
-
-			await openOptions(dom);
-			await dom.check(optionBox(dom, "Private"), true);
-			await dom.click(button(dom, "Open"));
-			await dom.settle();
-
-			expect(opens(calls)).toStrictEqual([{ engine: "chromium", profile: "default" }, { engine: "chromium" }]);
-			expect(dom.find(".bx-browser")).toHaveLength(1);
-			expect(dom.text()).not.toContain(TAKEN_SENTENCE);
+	test(`a saved set a second process has (profile_locked) is one plain sentence with a way out, and Private then opens`, async () => {
+		const { app, calls } = fakeApp(call => {
+			if (call.name !== "browser_open") return failure("connection reset");
+			return call.args.profile === undefined ? { content: [], structuredContent: { ...LIVE, browserId: "b2" } } : failure(TAKEN_LOCKED);
 		});
-	}
+		const dom = await mount(<BrowserApp app={app} toolState={null} />);
+		await dom.settle();
+
+		await dom.click(button(dom, "Open"));
+		await dom.settle();
+		expect(alerts(dom)).toEqual([TAKEN_SENTENCE]);
+
+		await openOptions(dom);
+		await dom.check(optionBox(dom, "Private"), true);
+		await dom.click(button(dom, "Open"));
+		await dom.settle();
+
+		expect(opens(calls)).toStrictEqual([{ engine: "chromium", profile: "default" }, { engine: "chromium" }]);
+		expect(dom.find(".bx-browser")).toHaveLength(1);
+		expect(dom.text()).not.toContain(TAKEN_SENTENCE);
+	});
+
+	test("any other opening text is shown as it came, not rewritten", async () => {
+		const held = `profile "default" is already open, held by another chat. Ask the human to close it, or open a Private one.`;
+		const { app } = fakeApp(call => (call.name !== "browser_open" ? failure("connection reset") : failure(held)));
+		const dom = await mount(<BrowserApp app={app} toolState={null} />);
+		await dom.settle();
+
+		await dom.click(button(dom, "Open"));
+		await dom.settle();
+		expect(alerts(dom)).toEqual([held]);
+	});
 });
 
 describe("a browser the host's own tool call failed to open", () => {
@@ -336,8 +306,8 @@ describe("a browser the host's own tool call failed to open", () => {
 		return { ...read, seq: 1 };
 	};
 
-	test("is told on the start page — in plain words for a held set, verbatim otherwise — not dropped", async () => {
-		for (const [text, shown] of [[SET_TAKEN.profile_held, TAKEN_SENTENCE], ["could not launch Chrome", "could not launch Chrome"]] as const) {
+	test("is told on the start page — in plain words for a taken set, verbatim otherwise — not dropped", async () => {
+		for (const [text, shown] of [[TAKEN_LOCKED, TAKEN_SENTENCE], ["could not launch Chrome", "could not launch Chrome"]] as const) {
 			const { app } = fakeApp(() => failure("unexpected"));
 			const dom = await mount(<BrowserApp app={app} toolState={mounted(failure(text))} />);
 			await dom.settle();

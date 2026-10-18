@@ -44,7 +44,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { readPackBlock, readPackManifest } from "./pack-manifest.mjs";
+import { projectCatalogProviders, readPackBlock, readPackManifest } from "./pack-manifest.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const catalogPath = join(root, ".dimension-plugin", "marketplace.json");
@@ -284,6 +284,9 @@ function entryFor(dir: string): Json {
 	if (spaces) entry.spaces = spaces;
 	const generalAgents = generalAgentListings(packRoot, packDir);
 	if (generalAgents) entry.generalAgents = generalAgents;
+	const { providers, problems } = projectCatalogProviders(manifest.providers);
+	if (problems.length > 0) throw new Error(`packs/${dir}: ${problems.join("; ")}`);
+	if (providers) entry.providers = providers;
 	return entry;
 }
 

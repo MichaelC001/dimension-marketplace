@@ -1,7 +1,7 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "router-jev",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "Room router backed by TypeSafe's Jev: when a room post addresses nobody, one System One request decides which agent leads the reply and who else should chime in",
 	"author": {
 		"name": "Dimension"
@@ -20,7 +20,8 @@
 			"title": "Jev room router",
 			"icon": "assets/icon.svg",
 			"category": "connector",
-			"defaultEnabled": false,
+			"defaultEnabled": true,
+			"bundled": true,
 			"entry": "index.ts",
 			"providers": {
 				"router": [

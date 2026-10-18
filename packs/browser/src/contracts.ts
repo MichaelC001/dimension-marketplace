@@ -1,8 +1,6 @@
 import type { ConnectionObservations } from "./connection.js";
 import type { LiveFrame } from "./engines/types.js";
 import type { ProfileColour, ResolvedProfileMeta } from "./profile-meta.js";
-import type { ArtifactoryLoopPrincipal } from "@dimension/sdk/artifactory";
-export type { ArtifactoryLoopPrincipal } from "@dimension/sdk/artifactory";
 
 /** Refresh externally, then assert local authority synchronously in the effect's dispatch continuation. */
 export interface EffectGuard {
@@ -415,8 +413,6 @@ export interface ProfileHold { by: "person" | "agent"; task: boolean; takenOver:
  * an id is a capability) so the View can reach it and close it.
  */
 export interface ProfileListing { name: string; label: string; colour: ProfileColour; avatar?: string; heldBy: ProfileHolder; hold?: ProfileHold; browserId?: string; sites: ProfileSiteListing[] }
-/** A saved-profile request belongs to one host-stamped chat, not to a browser id. */
-export interface ProfileConsent { name: string; label: string; sites: ProfileSiteListing[]; status: "pending" | "granted"; scope: "chat" | "loop"; subject?: Pick<ArtifactoryLoopPrincipal, "workspaceId" | "id" | "origin">; loopLabel?: string; expiresAt?: number }
 /** A browser this chat holds that is not a saved profile: a Private one, or the person's own Chrome. Only the View is sent these. */
 export interface OpenBrowserListing { browserId: string; kind: "private" | "chrome"; hold: ProfileHold }
 /** What leaving a browser did to it: closed, or kept because something of an agent's (or the person's) still depends on it. */
@@ -444,8 +440,9 @@ export type ReadResult =
 /** Capability is the opaque browserId; it must never appear in global listings. */
 export interface BrowserRuntimePort {
   /**
-   * `opener`: who is asking (the host's stamps). A profile already open for the SAME chat comes back as that browser;
-   * for anyone else it is refused (`profile_held`), naming whose it is.
+   * `opener`: who is asking (the host's stamps). One profile is one Chrome and one cookie jar, so a profile already open — for this chat or any other —
+   * comes back as that browser: chats share it and are told apart by the tabs they own on it. Refused only for a second process on the same profile
+   * folder (`profile_locked`).
    */
   open(options: BrowserOpenOptions, opener?: BrowserOpener, code?: undefined, attach?: undefined, guard?: EffectGuard): Promise<BrowserState>;
   state(browserId: string, guard?: EffectGuard): Promise<BrowserState>;
@@ -472,16 +469,16 @@ export interface BrowserRuntimePort {
    * Not queued behind page work, so it never waits for a navigation.
    */
   input(browserId: string, events: unknown): Promise<void>;
-  tab(browserId: string, request: TabRequest, caller?: ToolCaller): Promise<BrowserState>;
+  tab(browserId: string, request: TabRequest, caller?: ToolCaller, session?: string): Promise<BrowserState>;
   resize(browserId: string, viewport: Viewport, scale?: number): Promise<BrowserState>;
   snapshot(browserId: string, guard?: EffectGuard): Promise<{ state: BrowserState; text: string }>;
   /** Refused (`publish_pending`) while a publish awaits confirmation, unless `caller` is "app". */
-  act(browserId: string, action: BrowserAction, caller?: ToolCaller, guard?: EffectGuard): Promise<ActionResult>;
+  act(browserId: string, action: BrowserAction, caller?: ToolCaller, session?: string, guard?: EffectGuard): Promise<ActionResult>;
   /**
    * 1..MAX_BATCH_STEPS steps under ONE lock: refused once (`task_running`, `publish_pending`, as `act`), every step
    * validated before the first runs (`bad_action`/`bad_wait`), then run in order until one is not `completed`.
    */
-  actMany(browserId: string, steps: readonly BatchStep[], caller?: ToolCaller, guard?: EffectGuard): Promise<ActManyResult>;
+  actMany(browserId: string, steps: readonly BatchStep[], caller?: ToolCaller, session?: string, guard?: EffectGuard): Promise<ActManyResult>;
   /** A picture for a model: webp, at most 1024 CSS px on its longest edge, never retained (so never annotatable). Read like `snapshot`. */
   shot(browserId: string, request?: ShotRequest, guard?: EffectGuard): Promise<ModelShot>;
   /** The active tab's log entries since the last call (which marks them read); `[]` when nothing is new. For a model's reads, never the View's. */
@@ -517,20 +514,8 @@ export interface BrowserRuntimePort {
   onConnectionsChanged(listener: () => void): () => void;
   /** Every saved profile (never the relay's, never a throwaway), with who holds it relative to `asker`, the chat asking. */
   profileList(asker?: string): Promise<ProfileListing[]>;
-  /** Model access is checked before any saved-profile browser operation, including by-id reads and credentials. */
-  requireProfileAccess(browserId: string, caller?: ToolCaller, session?: string, allowClosed?: boolean): void;
-  /** Typed browser_run ordinary operations are saved-profile-only; refuses relay and throwaway before reading a page. */
-  requireSavedProfileAccess(browserId: string, caller?: ToolCaller, session?: string, allowClosed?: boolean): void;
-  /** Synchronous metadata only, including a saved browser whose close is retryable. */
-  needsProfileAuthority(browserId: string): boolean;
-  /** Install only the principal returned by an authenticated host authority read; undefined denies standing access. */
-  setProfilePrincipal(sessionId: string, principal: ArtifactoryLoopPrincipal | undefined): void;
-  /** Clear this chat's ephemeral authority and grants before stopping its matching task. */
+  requireOpen(browserId: string, allowClosed?: boolean): void;
   endProfileSession(sessionId: string): Promise<void>;
-  /** Pending requests and active grants for the View's host-stamped chat. */
-  profileConsents(session?: string): ProfileConsent[];
-  /** Human-only decision bound to the displayed stable subject; the expectation never selects authority. */
-  decideProfileConsent(name: string, decision: "allow" | "deny" | "revoke", caller?: ToolCaller, session?: string, scope?: "chat" | "loop", expectedSubject?: ProfileConsent["subject"]): Promise<void>;
   /** The browsers this chat holds that are not saved profiles (Private ones, the person's own Chrome), for the View's menu; never another chat's. */
   openBrowsers(asker?: string): Promise<OpenBrowserListing[]>;
   /** The label, colour and avatar of every saved profile that has any observation, for the connection report. */
@@ -556,8 +541,8 @@ export interface BrowserRuntimePort {
    * taken it over, or it is their own Chrome: those stay open, listed in the View's menu, and are closed from there.
    */
   leave(browserId: string, caller?: ToolCaller): Promise<LeaveOutcome>;
-  /** Settles a pending publish first. Refused (`publish_pending`) while one awaits confirmation, unless `caller` is "app". */
-  close(browserId: string, caller?: ToolCaller, guard?: EffectGuard): Promise<void>;
+  /** Lets go of one hold (`by`); a chat's close leaves the browser while anyone else is on it, and the person's ends it. Answers whether it was closed. Settles a pending publish first — refused (`publish_pending`) while one awaits confirmation, unless `caller` is "app". */
+  close(browserId: string, caller?: ToolCaller, guard?: EffectGuard, by?: BrowserOpener): Promise<boolean>;
   waitTask(browserId: string, ms: number): Promise<TaskRun>;
   startTask(browserId: string, request: TaskRequest, caller?: ToolCaller, session?: string, guard?: EffectGuard, workerGuard?: EffectGuard): Promise<TaskRun>;
   /** `check`: signed in? `post`: fill, verify and park for a confirm. Never submits. `preset` labels the record with the preset the recipe was resolved from. */

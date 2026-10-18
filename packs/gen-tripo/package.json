@@ -1,7 +1,7 @@
 {
 	"name": "@dimension/community-gen-tripo",
 	"author": "Dimension",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "Tripo 3D generation on Tripo's own pay-per-use API: image or multiview to 3D, part separation, retopology, auto-rig, animation retarget and format conversion, chained by Tripo task id",
 	"type": "module",
 	"main": "index.ts",

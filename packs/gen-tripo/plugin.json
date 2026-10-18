@@ -1,7 +1,7 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "gen-tripo",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "Tripo 3D generation on Tripo's own pay-per-use API: image or multiview to 3D, part separation, retopology, auto-rig, animation retarget and format conversion, chained by Tripo task id",
 	"author": {
 		"name": "Dimension"
@@ -21,7 +21,8 @@
 			"title": "Tripo 3D generation",
 			"icon": "assets/icon.svg",
 			"category": "connector",
-			"defaultEnabled": false,
+			"defaultEnabled": true,
+			"bundled": true,
 			"entry": "index.ts",
 			"providers": {
 				"generation": [

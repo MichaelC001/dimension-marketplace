@@ -10,7 +10,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import type { Browser, Page, Target } from "puppeteer-core";
 import { RuntimeCodeBrowsers, type CodeSeam } from "../src/code/host/runtime-port";
 import type { AcquiredBrowser, BrowserKind } from "../src/code/contracts";
-import { savedProfileRefusal } from "../src/code/refusals";
+import { ToolError } from "../src/code/errors";
+import type { establishKind } from "../src/code/kinds/establish";
 import { CmuxBrowsers } from "../src/code/kinds/cmux/cmux-browsers";
 import { findFreeCdpPort } from "../src/code/kinds/cdp";
 import { ensureRelay, probeRelayServer } from "../src/code/kinds/relay/ensure";
@@ -174,10 +175,32 @@ describe("the relay the server started stops with the server", () => {
   }, 60_000);
 });
 
-describe("a cell that asks for a saved profile is refused in the one text the model is taught", () => {
-  test("code_needs_consent, with the words of savedProfileRefusal and no browser touched", async () => {
-    const port = new RuntimeCodeBrowsers({} as CodeSeam);
-    // `{}` is a seam with no methods: any call into the runtime would throw a TypeError instead of this refusal.
-    await expect(port.acquire("s", { kind: { kind: "headless", headless: true }, profile: "work" }, never)).rejects.toMatchObject({ code: "code_needs_consent", message: savedProfileRefusal("work") });
+describe("a saved profile is its own Chrome, so a cell cannot ask for it together with an application", () => {
+  const APPLICATIONS = [
+    { kind: "connected", cdpUrl: "http://127.0.0.1:9" },
+    { kind: "spawned", path: "/usr/bin/app" },
+    { kind: "relay", cdpUrl: "http://127.0.0.1:9" },
+    { kind: "cmux", socketPath: "/tmp/cmux.sock" },
+  ] satisfies BrowserKind[];
+
+  test("the cell is told in a sentence, and the runtime, the application finder and cmux are never touched", async () => {
+    for (const kind of APPLICATIONS) {
+      const touched: string[] = [];
+      const record = (what: string): never => {
+        touched.push(what);
+        throw new Error(`${what} was called`);
+      };
+      const seam = new Proxy({}, { get: (_target, name) => () => record(`seam.${String(name)}`) }) as CodeSeam;
+      const establish = (() => record("establish")) as unknown as typeof establishKind;
+      const cmux = { owns: () => false, acquire: () => record("cmux.acquire"), release: () => record("cmux.release"), onEnd: () => () => undefined } as unknown as CmuxBrowsers;
+      const port = new RuntimeCodeBrowsers(seam, { establish, cmux });
+      const refusal = await port.acquire("s", { kind, profile: "work" }, never).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      expect(refusal, kind.kind).toBeInstanceOf(ToolError);
+      expect((refusal as ToolError).message, kind.kind).toContain("profile");
+      expect(touched, kind.kind).toEqual([]);
+    }
   });
 });

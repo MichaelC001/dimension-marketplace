@@ -15,7 +15,7 @@ import { RunOutput } from "../src/code/worker/run-output";
 import { createTabRealm } from "../src/code/worker/tab-realm";
 import { readImageDimensions } from "../src/code/worker/image-size";
 import { resolveScreenshotDir } from "../src/code/worker/screenshot";
-import { resolveUploadPath, textClickLoopMs } from "../src/code/worker/tab-api";
+import { resolveUploadPath, textClickLoopMs, withEvaluateHint } from "../src/code/worker/tab-api";
 import { OpRunner, type RunState, resolveOpTimeouts, resolveWaitTimeout } from "../src/code/worker/tab-ops";
 import { chromePath, type Fixture, type LaunchedChrome, launchChrome, startFixture } from "./code-tab-fixture";
 import { describeWithChrome } from "./fixture";
@@ -67,6 +67,45 @@ describe("how long a text click keeps trying before the op's own ceiling ends it
     expect(textClickLoopMs(400)).toBe(200);
     expect(textClickLoopMs(100)).toBe(50);
     expect(textClickLoopMs(1)).toBe(1);
+  });
+});
+
+describe("what the model is told when a string given to tab.evaluate does not parse", () => {
+  const regexMessage = "Invalid regular expression: missing /";
+  const hintPhrases = ["template literal", "tab.evaluate(() => ...)"];
+  const pageError = (name: string, message: string): Error => Object.assign(new Error(message), { name });
+  const messageOf = (value: unknown): unknown => (typeof value === "object" && value !== null && "message" in value ? value.message : undefined);
+  const hintedError = (error: unknown, source: unknown): Error => {
+    const result = withEvaluateHint(error, source);
+    if (!(result instanceof Error)) throw new Error("the rejection was expected to stay an Error");
+    return result;
+  };
+
+  test("a string the page rejects as a SyntaxError keeps the page's own text and gains the way out: pass a function, a template literal resolved the backslashes first", () => {
+    const { message } = hintedError(pageError("SyntaxError", regexMessage), "document.body.innerText.split(/\n/)");
+    expect(message).toStartWith(regexMessage);
+    expect(message.length).toBeGreaterThan(regexMessage.length);
+    for (const phrase of hintPhrases) expect(message).toContain(phrase);
+  });
+
+  test.each([
+    { name: "a function that throws a SyntaxError", source: () => 1, error: () => pageError("SyntaxError", "thrown by a function") },
+    { name: "a function that throws an error whose message names SyntaxError", source: () => 1, error: () => pageError("Error", "SyntaxError: thrown by a function") },
+    { name: "a string the page rejects as a ReferenceError", source: "missingGlobal + 1", error: () => pageError("ReferenceError", "missingGlobal is not defined") },
+    { name: "a string the page throws as a bare value", source: "throw 'SyntaxError: not an Error'", error: () => "SyntaxError: not an Error" },
+    { name: "a string the page rejects with a non-Error object that looks like a SyntaxError", source: "1 +", error: () => ({ name: "SyntaxError", message: regexMessage }) },
+  ])("$name passes through untouched", ({ source, error: makeError }) => {
+    const error = makeError();
+    const before = messageOf(error);
+    expect(withEvaluateHint(error, source)).toBe(error);
+    expect(messageOf(error)).toBe(before);
+  });
+
+  test("an error that already carries the hint does not get a second copy when it passes through again", () => {
+    const once = hintedError(pageError("SyntaxError", regexMessage), "1 +");
+    const hinted = once.message;
+    expect(hinted.length).toBeGreaterThan(regexMessage.length);
+    expect(hintedError(once, "1 +").message).toBe(hinted);
   });
 });
 
@@ -645,6 +684,21 @@ describeWithChrome("the tab realm drives a page it adopted", () => {
       expect(await value('await tab.evaluate("document.title.length")')).toBe("Fixture form".length);
       const error = await failure('await tab.evaluate("return 1")');
       expect(error.name === "SyntaxError" || error.message.includes("SyntaxError")).toBe(true);
+    }, 20_000);
+
+    test("a string that cannot parse because the cell's template literal ate a backslash comes back with the page's SyntaxError and the way out; a function that throws the same SyntaxError does not", async () => {
+      await goto("/form");
+      const fromString = await failure("await tab.evaluate(`document.title.split(/\\n/)`)");
+      expect(fromString.name).toBe("SyntaxError");
+      expect(fromString.message).toStartWith("Invalid regular expression: missing /");
+      expect(fromString.message).toContain("template literal");
+      expect(fromString.message).toContain("tab.evaluate(() => ...)");
+
+      const fromFunction = await failure('await tab.evaluate(() => { throw new SyntaxError("thrown by a function"); })');
+      expect(fromFunction.name).toBe("SyntaxError");
+      expect(fromFunction.message).toBe("thrown by a function");
+
+      expect(await value('await tab.evaluate(() => document.title.split("\\n"))')).toEqual(["Fixture form"]);
     }, 20_000);
   });
 

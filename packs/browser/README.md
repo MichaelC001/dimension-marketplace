@@ -24,8 +24,8 @@ standard MCP and MCP Apps. No host internals, no browser fork.
   most 1024 px. Code cells use `browser_run` instead.
 - **Throwaway by default, named profiles to keep logins.** A browser opened
   without a profile keeps nothing and is deleted when it closes. A named profile
-  persists logins across restarts, keeps its cookies separate from other profiles (not a barrier against code the agent runs: see Code cells), and is held by one caller at
-  a time. The exception is yours: the View's start page and the dock open the
+  persists logins across restarts, keeps its cookies separate from other profiles (not a barrier against code the agent runs: see Code cells), and is shared with any
+  other chat that opens it (each on its own tabs). The View's start page and the dock open the
   saved `default` profile unless you tick **Private** ([Browser panel](#browser-panel)).
 - **Annotations that carry pixels.** Freeze the page, mark it with the shared
   annotation kit (pin, box, circle, arrow, pen, a note on each mark); the numbered
@@ -77,9 +77,11 @@ not an operating-system sandbox. Its `browser` API confines ordinary calls to
 the caller's session, but a cell can read local files (including the credential
 store), make network requests and discover another session's local Chrome
 debugging endpoint; a deliberately hostile cell can cross that API boundary.
-Use a throwaway browser for code. Saved profiles and explicit app/relay/CDP
-attachment have their own refusal/consent paths, not a security boundary
-against arbitrary Node code.
+Use a throwaway browser for code. An explicit `app.cdp_url`, `app.path` or `app.relay` in a cell is refused
+unless `DIMENSION_BROWSER_CODE_ALLOW_ATTACH=1` (`code_needs_consent`); a saved profile opens with no approval of
+the pack's own (the host's permission mode is the gate), shared with any other chat that opens it (each on its own
+tabs), and cannot be
+combined with `app`. Neither is a security boundary against arbitrary Node code.
 
 At startup the pack removes its task keys (`TYPESAFE_API_KEY`,
 `TEXT_MODEL_API_KEY`) and matching foreign `DIMENSION_*` secret variables from
@@ -134,6 +136,10 @@ Build from inside the Dimension monorepo — `@dimension/sdk` and `@fraym/ui` ar
 npm install
 npm run build
 ```
+
+### Runtime
+
+The server needs Node 22.12 or newer on the host's PATH; the pack does not bundle or install Node, and it never downloads a browser (a missing Chrome is reported when a browser is opened). It starts through `app/launch.mjs`, which stops with one line on an older Node and, when started under Bun, relaunches itself under a real Node: a Bun process that reads stdin from a pipe cannot start the code worker, and `bun run` puts a Bun copy named `node` first on PATH (a dev launch). With no Node 22.12+ to relaunch under, it exits with a line saying so.
 
 ### Task agent (`jev`, optional)
 
@@ -213,18 +219,106 @@ so sites treat it as one:
     worker, and worker script fetches, carry the User-Agent and no `Sec-CH-UA`
     headers. The binary sends none there either (checked with and without a
     window on Chrome 154), so there is nothing to replay.
-- **No automation switch.** puppeteer's `--enable-automation` is dropped.
-  Nothing is added to hide the browser: no stealth plugin, no fingerprint
-  changes, no `AutomationControlled` switch. `navigator.webdriver` stays
-  whatever Chrome itself reports while it is driven over DevTools.
+- **No `--enable-automation`, and `navigator.webdriver` is off.** puppeteer's
+  `--enable-automation` is dropped, and every launch (the View, a saved
+  profile, a throwaway) carries the `AutomationControlled` Blink switch, so
+  Google's sign-in and Cloudflare's check do not read the browser as driven
+  (doc 77 §4, measured 2026-10-08). Nothing else is hidden in the View or a
+  saved profile: no stealth plugin, no fingerprint changes.
+- **A throwaway agent browser is shaped further.** A browser opened
+  without a profile holds nothing and is not meant for signing in; it does
+  work on the public web that a stock automation browser is turned away from.
+  **Status: the owner's parity ruling with OMP's browser (doc 77 §12 decision 8,
+  2026-10-02: "no request or feature loss or performance or optimization loss
+  from the OMP version"), and his go of 2026-10-09 ("If the browser pack was
+  already done, reviewed and merged, then just merge it"), relayed by the
+  release lead and recorded on PR #155.** A throwaway presents as the Chrome a
+  person would run (`src/engines/agent-browser.ts`, `src/engines/agent-puppeteer.ts`):
+  - The screen, window and orientation agree with the page. Headless Chrome's
+    own screen is 800x600, its window 780x580 and its orientation portrait
+    whatever the viewport. A device-metrics override, sent to every page
+    (a popup and a `target=_blank` tab too) before its first document runs,
+    and the window bounds, made again on every resize.
+  - It is driven by a patched copy of puppeteer-core (`patches/`, built into
+    `app/puppeteer-agent.mjs`; the View and saved profiles keep the stock
+    library): CDP `Runtime.enable`, which stock puppeteer sends in every page,
+    frame and worker and a page can detect, is never sent; puppeteer's own
+    reads of the page run in an isolated world, so a hook a site put on
+    `document.querySelector` never hears them; no script carries a driver name
+    or a file of yours. The patch derives from oh-my-pi's (MIT).
+    Without Runtime events the page log is fed another way: Chrome's own console
+    errors and warnings (a Content-Security-Policy refusal, a request blocked
+    by CORS, and the rest of what Chrome prints itself) come from the Log
+    domain, which puppeteer keeps on and a page cannot detect; what the page
+    prints with `console.*` comes from the Console domain. Both reach the model
+    through `browser_state` (`logs`) and the `newErrors` count in a
+    `browser_act` result. The one thing lost is an uncaught exception or
+    unhandled rejection on a page not served from this machine: it is logged
+    for localhost and 127.x pages only (a listener the pack installs there),
+    because hearing one anywhere else would need a script in the public page.
+  - While a `browser_task` agent or a `browser_run` cell drives the browser, the
+    two driver protections above (no `Runtime.enable`, reads in an isolated
+    world) do not bind it: task agents and the cell's code worker attach their
+    own CDP clients (stock puppeteer-core, not the patched library), so what
+    they send is what the page can see until they detach. The launch switches,
+    the screen and the GPU mask stay. Measured with stock puppeteer attached as a
+    stand-in for a task agent's client (the agents themselves were not run): the
+    page's two Runtime rows flag while it is attached and no other row does
+    (`bench/detect-report-2026-10-02.md`). Measured on the merged tree with a
+    `browser_run` cell: after the cell's worker attached and the page loaded,
+    `cdp-runtime-enabled` and `worker-runtime-enabled` flagged and no other row did.
+  - Puppeteer's default popup-blocker, IPC-flooding and pre-commit-input
+    switches are left out, so a page sees the defaults of a Chrome a person
+    runs. Its `--disable-features` list is kept: the detection page flags
+    nothing with it or without it, and without it Chrome starts one more
+    renderer process in every browser (the omnibox popup features are no longer
+    disabled; 4 throwaways idled at 921 MB private against 738 MB, one sample each).
+  - On a machine with no GPU, WebGL reports a common integrated GPU of the
+    platform instead of SwiftShader, in the page, in each same-origin and
+    cross-origin frame and in each dedicated and shared worker (sent to each
+    before it runs; a service worker is not masked), with the one float shader
+    precision a real GPU reports, and the replaced functions read as native,
+    named code to their own realm's `Function.prototype.toString`. This is the
+    only page script besides the loopback error reporter; it exists only when
+    the binary was seen rendering in software. Texture and uniform limits, the
+    extension list and the rendered image's hash stay SwiftShader's, and so
+    does an error thrown through a replaced function (it names a wrapper
+    frame). **Known gap, measured and open:** a same-origin frame's own
+    `Function.prototype.toString` asked about this window's replaced functions
+    (or this window's about the frame's) answers `function () { [native code] }`
+    with no name. Closing it took a call from every frame into a function the
+    page can replace, which handed a page that wrapped `toString` before making
+    a frame the per-process secret and every masked name; that call was removed
+    (detect row `tostring-wrapper-heard`). The row `native-source-cross-realm`
+    flags on a host with no GPU for the throwaway, as it does for OMP's browser.
+
+  Nothing else is changed: no plugin lists, fonts, audio or hardware numbers
+  are invented, and a Chromium build without H.264 is not made to claim it.
+  `bench/sites/detect.mjs` is a local page that reads these signals,
+  `test/agent-browser.test.ts` runs it against both kinds of browser, and
+  `bench/detect-columns.mjs` runs one column of the comparison with OMP's.
+  **Not measured:** the cross-realm `toString` gap above; a service worker's
+  GPU; the headful throwaway path (the patched library with a window) is not
+  run and no test covers it; a real
+  GPU-less machine, Linux, macOS and Edge; `browser_task`'s agents themselves
+  (browser-use and jev; only a stand-in second CDP client); and what commercial
+  bot walls read beyond property tells (`bench/detect-report-2026-10-02.md`).
 - **Chrome's own password saving is off** in the profiles the pack owns
   (`credentials_enable_service` and `profile.password_manager_enabled` in the
   profile's Preferences, the chrome://settings/passwords toggle). The pack
   keeps its own credentials; Chrome's save prompt — which `--enable-automation`
   used to hide — would take focus from the page after every sign-in.
 
-`browser_read`'s reader is unchanged: its own headless browser, logged out and
-throwaway. A site that refuses it is reported `blocked`, never worked around.
+`browser_read`'s reader is its own headless browser, logged out and throwaway.
+**It is stock puppeteer's Chrome and none of the above is applied to it:** its
+User-Agent says HeadlessChrome, `navigator.webdriver` is `true`, CDP `Runtime`
+is on. A site that refuses it (a bot check, a CAPTCHA, a login wall) is
+reported `blocked`; the reader never retries, never solves a check and never
+works around a refusal. Shaping it like a throwaway is one line,
+`READER_PRESENTS_AS_CHROME` in `src/engines/agent-browser.ts` (`false`), and
+it is OFF on purpose: OMP has no reader, so the owner's parity ruling does not
+reach it, and it waits on his yes (doc 77 §12, "Still open"). The shaped path
+is kept and tested (`launchReader({ presentAsChrome: true })`).
 
 ## Tools
 
@@ -318,8 +412,8 @@ deleted when it closes or the server exits, and any number can be open at once
 `browser_profiles` never lists it. If the server is killed first, the next start
 deletes the directory once its recorded owner (`owner.pid`) is provably dead and
 no Chrome still holds it. Pass `profile` to run on the saved profile of that
-name in `<root>/profiles/<name>`: it keeps logins, is held by one caller at a
-time, and is never deleted. Saved passwords (`generatePassword`,
+name in `<root>/profiles/<name>`: it keeps logins, is shared with any other chat
+that opens it (each on its own tabs), and is never deleted. Saved passwords (`generatePassword`,
 `useSavedPassword`), a `browser_task` `credential` and `browser_publish` need a
 saved profile and fail `profile_required` on a throwaway browser, before
 anything reaches the page.
@@ -389,8 +483,7 @@ saved profile, `{ name, label, colour, heldBy, sites }`:
 of another chat) or `"another chat"`; never an id. `signedIn: null` is "not known
 now": the last check is over 7 days old, or its time is in the future (an agent
 can ask the person); a site that was only visited is not listed. **The View shows a
-site's account (an email, a handle) to the person**, on the card that asks for an agent's access to a profile. An unauthenticated model, or
-one without current approval for that profile, receives no site metadata. The
+site's account (an email, a handle) to the person.** A model gets each site without its account. The
 Browser View reads the same tool as the human and gets the list as structured
 content, each site with its `account`. Never a cookie, a cookie name, an expiry, a token, a
 password, whether a saved password exists, or a path; the relay and throwaway
@@ -402,47 +495,22 @@ always that profile, whatever another profile is labelled (so a label can never 
 profile impossible to open). A label that two profiles share (`profile_ambiguous`), or a
 name that is not a valid name and matches no label (`profile_unknown`), is refused with
 the profiles' names and labels, never resolved to the closest. A valid name that
-matches nothing is a new profile, as it always was (an account's first sign-in). The
-chat that already holds a profile gets its own browser back; anyone else is refused
-`profile_held`, told whether the human or another chat has it, whether that profile is
-open or still starting.
+matches nothing is a new profile, as it always was (an account's first sign-in). Opening
+one that is already open joins that browser: a profile is ONE Chrome and one cookie jar,
+so chats share it and work on their own tabs. Only a second process on the same folder is
+refused (`profile_locked`), because two Chromes would fork the jar.
 
-**Saved-profile approval.** Naming an existing profile, `default` included, does
-not authorize the model to use it. The host must supply current verified chat
-authority; otherwise saved-profile access fails closed. The person decides in
-the Browser View: allow this chat, deny, or grant/revoke standing access for the
-verified Loop. Successfully opening a new profile created by this chat grants
-its creator access; an unsuccessful or revoked launch does not. The person's own
-`default` is never created by a model: even before its folder exists, an agent
-asking for it waits for the person's approval.
+**Using a saved profile.** An agent opens any saved profile the same way, with no approval of the pack's own: `browser_open`, `browser_view`, or a `browser_run` cell (`browser.open({ profile: "work" })`). The host's permission mode is the only gate: `browser_run` carries the `exec` tier and the other tools their own, so full access runs without asking and ask-on-commands asks, as for every other tool. Chats on one profile share its browser and work beside each other on their own tabs (a chat's names reach only its own tabs; `browser.tabs()` lists the browser's, and `browser.active()` takes what is in front), and the person can take the wheel at any time (`human_driving`). A web page can carry instructions meant for the agent, and the pack does not stop the agent acting inside a signed-in account: that is the cost of hands-free use.
 
-The first request appears on the blank start page, outside the folded Options:
-there is no need to open another browser to find its approval controls. Requests
-refresh while the View is blank or the profile menu is open. A decision carries
-the displayed subject's workspace, id and origin; a changed or expired request
-is refused, with the error visible on the blank page rather than a hidden toast.
-The View does not treat a refused decision as approval or open a browser for it.
-
-**What the approval covers, and what it does not.** It covers the browser tools: opening
-and driving the profile through the step tools, `browser_view`, and in a code space
-`browser_run({ profileTool })`, whose typed operations never enter the code worker. It
-does not stop a `browser_run` code cell. A cell is full Node running as you, so it can
-read a saved profile's files: each profile's `chrome/DevToolsActivePort` and
-`credentials.json`, and in the browser root `credentials.key`, `profile-consents/` and
-`publish-approvals/`. The gate stops the API route (the model's `browser.open({ profile })`,
-and `profileTool` without approval), not code that goes around the API. Do not allow a
-profile on the strength of this approval alone if you do not trust the code your agent
-runs; the card in the View says the same in two sentences. Where this limit comes from,
-exactly: it is equal to OMP's built-in eval browser; consistent with the parity ruling;
-not separately signed; option B (pipe transport) not built (doc 77 §7.8 decision 1).
+A profile's sign-ins are kept in its Chrome folder on disk and are still there after the browser closes and opens again. A `browser_run` cell is full Node running as you, so it can read a profile's files (`chrome/`, `credentials.json`, and in the browser root `credentials.key`); that is equal to OMP's built-in eval browser (doc 77 §7.8 decision 1).
 
 **The profile menu (the View).** The toolbar's chip is the browser's profile: its avatar (the emoji
 the person chose, else the label's first letter, on the profile's colour) and its label; Private for a
 throwaway browser, Your Chrome for the relay. Its face rides the browser's own state (`look`), so drawing it
 costs no call. Opening the menu reads `browser_profiles` and lists the others, Default first and then by
-label, each with where it is signed in or who has it: a profile open here (yours, or your agent's, or one
-an agent task is running on) is one click away; a profile another chat holds, or you hold in another chat's
-View, is shown dimmed and cannot be opened from here (the one-holder lock); its reason is still read out to a
+label, each with where it is signed in or who has it: every profile is one click away, and one another chat also
+has open joins that chat on its browser (a profile is one Chrome, shared per tab); who else is on it is still read
+out to a
 keyboard, because the row stays on the arrow keys. A click calls `browser_switch` for that profile (the browser on screen is named as the one being left) and the View
 shows the result, then calls `browser_leave` for the browser it left. The new browser is opened first, so a profile that cannot
 be opened never costs the person the one they are in; only with the pool full does the runtime close the browser being left
@@ -801,15 +869,14 @@ Installing the pack also adds a **Browser** tab to the dock (component
 blank browser; something that is not an address opens nothing and says why).
 Nothing else lives in the tab: profiles and signing in belong to the Browser
 itself. Its profile menu switches and adds profiles and summarises where each is
-signed in (the first sites seen signed in, never a site's account); a site's
-account shows only on the card that asks for an agent's access to a profile.
+signed in (the first sites seen signed in, never a site's account).
 
 The View's start page and the tab's **Open a page** open on the saved `default`
 set, so a person's own browser keeps their logins, unless **Private** is ticked.
-Private sends no profile: a throwaway browser that saves nothing. One browser
-holds a saved set at a time, so a second open of `default` is refused
-(`profile_held`); the start page turns that into "That browser is already
-open. Use it, or open a Private one."
+Private sends no profile: a throwaway browser that saves nothing. A saved set is one
+browser that chats share, each on its own tabs; what is refused is a second process on the
+same folder (`profile_locked`), and the start page turns that into "That profile's browser
+is already open in another window. Close it there, or open a Private one."
 
 The tab acts only through `openArtifactoryView` (`browser_view` with
 `{ url?, profile? }`), which its `artifactory:open` grant admits. The host mounts

@@ -9,6 +9,8 @@ import type { Fence } from "./fence";
 import { KIND_HEAD_BYTES, sniffMedia } from "./kind";
 
 export const MAX_LEASES = 64;
+/** How long a lease may go without a sign of life (a request for it, or its pane renewing it) before a full table may reclaim it. The pane renews every 30 s, so this tolerates a throttled background frame. */
+export const LEASE_TTL_MS = 5 * 60_000;
 const TRANSFERS_PER_LEASE = 3;
 export const MAX_TRANSFERS = MAX_LEASES * TRANSFERS_PER_LEASE;
 const KEEP_ALIVE_HEADROOM = MAX_LEASES;
@@ -17,12 +19,14 @@ const STREAM_BUFFER_BYTES = 64 * 1024;
 const OPEN_FLAGS = constants.O_RDONLY | (constants.O_NONBLOCK ?? 0) | (constants.O_NOFOLLOW ?? 0);
 const SANDBOXED_VIEW_ORIGIN = "null";
 
-type Lease = { path: string; size: number; mtimeMs: number; mime: string; meta: unknown; responses: Set<ServerResponse> };
+type Lease = { path: string; size: number; mtimeMs: number; mime: string; meta: unknown; responses: Set<ServerResponse>; lastSeen: number };
 
 export interface MediaServer {
 	readonly origin: string;
 	acquire(path: string, size: number, mtimeMs: number, meta: unknown, token: string): Promise<{ url: string; token: string; mime: string }>;
 	release(token: string): void;
+	/** A pane saying it still holds `token`. False when the server no longer holds it, so the pane must open the recording again. */
+	renew(token: string): boolean;
 	close(): Promise<void>;
 }
 
@@ -37,7 +41,7 @@ async function admitRecording(fence: Fence, path: string, size: number, mtimeMs:
 	if (!matchesRevision(head, size, mtimeMs)) throw new Error("The file changed. Open it again.");
 	const media = sniffMedia(head.bytes, verdict.real);
 	if (media === undefined) throw new Error("This file is not a supported recording.");
-	return { path: verdict.real, size, mtimeMs, mime: media.mime, meta, responses: new Set() };
+	return { path: verdict.real, size, mtimeMs, mime: media.mime, meta, responses: new Set(), lastSeen: 0 };
 }
 
 type ByteWindow = { start: number; end: number };
@@ -117,7 +121,7 @@ async function streamRecording(req: IncomingMessage, res: ServerResponse, lease:
 	}
 }
 
-export async function startMediaServer(fence: Fence): Promise<MediaServer> {
+export async function startMediaServer(fence: Fence, now: () => number = Date.now): Promise<MediaServer> {
 	const leases = new Map<string, Lease>();
 	const pendingAdmissions = new Map<string, { cancelled: boolean }>();
 	const releasedTokens = new Set<string>();
@@ -136,6 +140,7 @@ export async function startMediaServer(fence: Fence): Promise<MediaServer> {
 			res.writeHead(404).end();
 			return;
 		}
+		lease.lastSeen = now();
 		void serve(req, res, lease).catch(() => {
 			if (!res.headersSent) res.writeHead(500).end();
 			else res.destroy();
@@ -169,6 +174,28 @@ export async function startMediaServer(fence: Fence): Promise<MediaServer> {
 		}
 	}
 
+	function release(token: string): void {
+		const admission = pendingAdmissions.get(token);
+		if (admission !== undefined) admission.cancelled = true;
+		for (const response of leases.get(token)?.responses ?? []) response.destroy();
+		leases.delete(token);
+		releasedTokens.add(token);
+		if (releasedTokens.size > MAX_REMEMBERED_RELEASES) {
+			const oldest = releasedTokens.values().next();
+			if (!oldest.done) releasedTokens.delete(oldest.value);
+		}
+	}
+
+	// A lease is freed by its pane saying so, but a pane can vanish without running any code (its session switched away,
+	// its column collapsed, a reload, a crash), and nothing here would ever learn it. So a lease is only held on proof of
+	// life: a request for it or its pane renewing it. When the table is full, a lease that has
+	// shown none for LEASE_TTL_MS and is not being streamed is reclaimed. A live pane is never reclaimed: a table of 64
+	// live recordings refuses, and the refusal is then true.
+	function reapExpired(): void {
+		const cutoff = now() - LEASE_TTL_MS;
+		for (const [token, lease] of [...leases]) if (lease.responses.size === 0 && lease.lastSeen < cutoff) release(token);
+	}
+
 	await new Promise<void>((resolve, reject) => {
 		server.once("error", reject);
 		server.listen(0, "127.0.0.1", () => {
@@ -186,28 +213,30 @@ export async function startMediaServer(fence: Fence): Promise<MediaServer> {
 			if (closing !== undefined) throw new Error("The recording server is closed.");
 			if (!MEDIA_TOKEN_PATTERN.test(token) || leases.has(token) || pendingAdmissions.has(token)) throw new Error("Invalid recording capability.");
 			if (releasedTokens.has(token)) throw new Error("Recording opening was cancelled.");
-			if (leases.size + pendingAdmissions.size >= MAX_LEASES) throw new Error("Close an open recording before opening another.");
+			if (leases.size + pendingAdmissions.size >= MAX_LEASES) {
+				reapExpired();
+				if (leases.size + pendingAdmissions.size >= MAX_LEASES) throw new Error("Close an open recording before opening another.");
+			}
 			const admission = { cancelled: false };
 			pendingAdmissions.set(token, admission);
 			try {
 				const lease = await admitRecording(fence, path, size, mtimeMs, meta);
 				if (admission.cancelled) throw new Error("Recording opening was cancelled.");
+				lease.lastSeen = now();
 				leases.set(token, lease);
 				return { url: `${origin}/media/${token}`, token, mime: lease.mime };
 			} finally {
 				pendingAdmissions.delete(token);
 			}
 		},
-		release(token: string) {
-			const admission = pendingAdmissions.get(token);
-			if (admission !== undefined) admission.cancelled = true;
-			for (const response of leases.get(token)?.responses ?? []) response.destroy();
-			leases.delete(token);
-			releasedTokens.add(token);
-			if (releasedTokens.size > MAX_REMEMBERED_RELEASES) {
-				const oldest = releasedTokens.values().next();
-				if (!oldest.done) releasedTokens.delete(oldest.value);
+		release,
+		renew(token: string) {
+			const lease = leases.get(token);
+			if (lease !== undefined) {
+				lease.lastSeen = now();
+				return true;
 			}
+			return pendingAdmissions.has(token);
 		},
 		close() {
 			closing ??= new Promise<void>((resolve, reject) => {

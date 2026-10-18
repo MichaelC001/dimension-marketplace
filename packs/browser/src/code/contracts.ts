@@ -2,6 +2,8 @@
 // Copyright (c) 2025 Mario Zechner; (c) 2025-2026 Can Bölük; (c) 2026 Stencil Labs, Inc. See ../../third-party/omp/LICENSE.
 // Changed for the Browser pack: the shapes are OMP's, re-cut as the contract between the lanes of doc 77 §7.7 (the bridge, the host/worker messages, the three ports).
 
+import type { BrowserOpener } from "../contracts.js";
+
 /**
  * The contract between the lanes that build the `browser_run` tool (doc 77 §7.7). L1 froze it in wave 0; a lane may ADD to it,
  * and changing a shape is a message to every lane. Shapes are OMP's wherever OMP has one.
@@ -19,8 +21,6 @@
  *     DevTools ports that cannot be discovered from the profile directory. A pipe changes this rule (the worker would be handed a pipe, not a `wsEndpoint`); non-discoverable ports change only the host.
  *  4. Every text OMP prints is OMP's string (matrix rows C9, C10, C11, D8, D9, D16, D22).
  *  5. Errors thrown into the cell keep `name` and `message`; `isAbort` marks cancellation; `recoverTab` asks the host to rebuild the worker (a timeout and a cancel both set it).
- *  6. A saved profile never reaches `acquire` from code without the gate: `acquire` throws `code_needs_consent`. The refusal is {@link savedProfileRefusal}'s text. The gate is advisory against code that goes around
- *     the API (rule 3): it stops the model's `browser.open({ profile })`, not a cell that reads the profile's files.
  */
 
 // ---- the bridge: what the verbatim facade sends. OMP browser.ts:66-88, field for field, plus `profile`.
@@ -54,7 +54,7 @@ export interface BridgeRequest {
   all?: boolean;
   kill?: boolean;
   persist?: boolean;
-  /** NEW. A saved profile; refused unless the gate allows (§7.4.5). */
+  /** NEW. A saved profile, opened with no approval of the pack's own; refused with `app` and while another chat holds it (§7.4.5). */
   profile?: string;
 }
 export type BrowserKindTag = "headless" | "spawned" | "connected" | "relay" | "cmux";
@@ -186,6 +186,8 @@ export type RunStarted =
 // ---- L2 implements on BrowserRuntime (four hooks in runtime.ts); L2 and L4 consume.
 export interface CodeBrowserPort {
   acquire(session: string, req: { kind: BrowserKind; profile?: string; viewport?: { width: number; height: number; scale?: number }; persist?: boolean }, signal: AbortSignal): Promise<AcquiredBrowser>;
+  /** Whether `browserId` is the browser of the saved profile that `profile` (a name or a label, resolved as the runtime resolves it) means. Reads only: nothing is opened, held or adopted. Throws what opening that profile would for a name that is ambiguous or not a profile name. */
+  isProfileBrowser(browserId: string, profile: string): boolean;
   /**
    * Makes a tab of `browserId` the cell's. A browser the pack launched opens a new tab; one it only attached to (connected, spawned, relay) hands over the page the person has in front, or the one whose URL or title contains `target`
    * (`app.target`), as it is, and navigates it when `url` is given. A cmux browser opens a split at `url`, or attaches to the surface the request named.
@@ -198,7 +200,8 @@ export interface CodeBrowserPort {
   setFrozen(browserId: string, tabId: string, frozen: boolean): Promise<void>;
   /** Counts as a call in flight; throws human_driving, publish_pending, task_running. */
   holdWork(browserId: string): () => void;
-  release(browserId: string, o: { kill: boolean }): Promise<void>;
+  /** Lets go of one hold (`o.by`); with several chats on a saved-profile browser it stays until the last is done. */
+  release(browserId: string, o: { kill: boolean; by?: BrowserOpener }): Promise<void>;
   /** `reason` is the runtime's own account when it closed the browser (idle, to make room): what the cell is told in place of "not alive". */
   onEnd(l: (browserId: string, why: "closed" | "retired" | "taken-over", reason?: string) => void): () => void;
   // ---- ADDED by L2 (the host needs them on reuse, on a View mounting, and for the freeze clock).

@@ -1,7 +1,7 @@
 {
 	"name": "@dimension/community-gen-fal",
 	"author": "Dimension",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "3D generators from fal.ai behind one key: Pixal3D, TRELLIS.2, Rodin 2.5, Meshy-6, Hunyuan 3.1 and Tripo P2, with live option schemas, prices and a quote before every job",
 	"type": "module",
 	"main": "index.ts",

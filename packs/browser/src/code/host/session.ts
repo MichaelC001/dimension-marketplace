@@ -577,8 +577,15 @@ export class CodeSession {
       if (!sameBrowserKind(existing.kind, kind)) {
         throw new ToolError(`Tab ${JSON.stringify(name)} is bound to a different browser (${describeKind(existing.kind)}). Close it first.`);
       }
-      const reused = await this.#reuse(existing, request, timeoutMs, deadline);
-      if (reused !== undefined) return reused;
+      // A saved profile and a throwaway are both `headless`, so the kind cannot tell them apart: a profile that is named must be the browser the tab is on. The runtime answers that by reading, without opening, holding or adopting anything.
+      if (request.profile === undefined || browsers.isProfileBrowser(existing.browserId, request.profile)) {
+        const reused = await this.#reuse(existing, request, timeoutMs, deadline);
+        if (reused !== undefined) return reused;
+      } else if ((await this.#aliveTab(existing)) !== undefined) {
+        throw new ToolError(`Tab ${JSON.stringify(name)} is bound to a different browser than the saved profile ${JSON.stringify(request.profile)}. Close it first, or open this one under another name.`);
+      } else {
+        this.#forgetTab(existing.name);
+      }
     }
     const acquired = await this.#acquire(kind, request, deadline, run);
     const { record } = acquired;
@@ -605,12 +612,7 @@ export class CodeSession {
   /** `browser.open` on a name the session already holds: refresh the tab's clocks and apply what the call asks (OMP tab-supervisor.ts:302-361). Undefined when the tab is gone, which opens it afresh. */
   async #reuse(existing: NamedTab, request: BridgeRequest, timeoutMs: number, deadline: AbortSignal): Promise<HostReply | undefined> {
     const { browsers } = this.#d;
-    let alive: TabRef | undefined;
-    try {
-      alive = (await browsers.tabs(existing.browserId)).find(tab => tab.tabId === existing.handle.tabId);
-    } catch {
-      alive = undefined;
-    }
+    const alive = await this.#aliveTab(existing);
     if (alive === undefined) {
       this.#forgetTab(existing.name);
       return undefined;
@@ -624,6 +626,15 @@ export class CodeSession {
     const handle: TabHandle = { ...existing.handle, ...ref, created: existing.handle.created };
     this.#tabs.set(existing.name, { ...existing, handle });
     return this.#opened("Reused", existing.name, this.#browsers.get(existing.browserId) ?? { kind: existing.kind }, ref, handle, request);
+  }
+
+  /** The page a named tab was opened on, or undefined when the page (or its browser) is gone. */
+  async #aliveTab(tab: NamedTab): Promise<TabRef | undefined> {
+    try {
+      return (await this.#d.browsers.tabs(tab.browserId)).find(ref => ref.tabId === tab.handle.tabId);
+    } catch {
+      return undefined;
+    }
   }
 
   /**
@@ -692,23 +703,25 @@ export class CodeSession {
     return { text: had ? `Released managed tab ${JSON.stringify(name)}` : `No tab named ${JSON.stringify(name)}`, details: { action: "close", name } };
   }
 
-  /** Releases a named tab: its page closes, and the browser with it when this was the cell's own and no other tab of the session uses it (matrix C11). */
+  /**
+   * Releases a named tab: its page closes, and this chat's hold on the browser with it once no tab of the session uses it (matrix C11). Whether the
+   * browser itself closes is the runtime's to say — several chats work on one saved-profile browser (doc 77 §7.4.5), so one chat's last tab must not
+   * end another's. `kill` (ending an application the pack started) is the maker's alone.
+   */
   async #releaseTab(name: string, kill: boolean): Promise<void> {
     const tab = this.#tabs.get(name);
     if (tab === undefined) return;
     this.#forgetTab(name);
     await this.#d.browsers.closeTab(tab.browserId, tab.handle.tabId).catch(() => undefined);
     const record = this.#browsers.get(tab.browserId);
-    if (record === undefined || !record.createdByCode || [...this.#tabs.values()].some(other => other.browserId === record.browserId)) return;
-    await this.#dropBrowser(record, kill);
+    if (record === undefined || [...this.#tabs.values()].some(other => other.browserId === record.browserId)) return;
+    await this.#dropBrowser(record, kill && record.createdByCode);
   }
 
-  /** Lets go of a browser the cell made: the runtime closes it unless a View has joined it (the person's eyes outrank a cell's tidiness). */
+  /** Lets go of this chat's hold on a browser. It closes only when the runtime agrees: other chats may be working on it, and the person's eyes outrank a cell's tidy-up. */
   async #dropBrowser(record: BrowserRecord, kill: boolean): Promise<void> {
-    const { browsers } = this.#d;
-    if ((browsers.activity(record.browserId)?.viewers ?? 0) > 0) return;
     this.#forgetBrowser(record.browserId);
-    await browsers.release(record.browserId, { kill }).catch((error: unknown) => console.error("A cell's browser did not close:", codedMessage(error)));
+    await this.#d.browsers.release(record.browserId, { kill, by: { caller: "model", session: this.#d.session } }).catch((error: unknown) => console.error("A cell's browser did not close:", codedMessage(error)));
   }
 
   #forgetTab(name: string): void {
@@ -721,6 +734,9 @@ export class CodeSession {
     for (const key of [...this.#frozen]) if (key.startsWith(`${browserId}\u0000`)) this.#frozen.delete(key);
     this.#active?.holds.get(browserId)?.();
     this.#active?.holds.delete(browserId);
+    // The hold goes with the tabs — including when a take-over dropped them and the browser lives on. Letting go is per hold, so this never ends
+    // another chat's work or the person's hands (`#dropBrowser` makes the same call, and a second let-go of the same hold is a no-op).
+    void this.#d.browsers.release(browserId, { kill: false, by: { caller: "model", session: this.#d.session } }).catch(() => undefined);
   }
 
   #forgetBrowser(browserId: string): void {

@@ -235,6 +235,10 @@ export interface EngineOptions {
   /** Undefined permits the engine's supported default; explicit values must be honored. */
   headless?: boolean;
   executablePath?: string;
+  /** A throwaway agent browser (no profile; see `agent-browser.ts`). Never set for a saved profile, the View or the relay. */
+  agent?: boolean;
+  /** TESTS ONLY: extra Chrome arguments (a GPU-less Chrome, to see the software renderer masked). Not reachable from any tool input. */
+  launchArgs?: readonly string[];
   relayUrl?: string;
   /**
    * A browser to attach to instead of launching one (a cell's `connected`, `spawned` or `relay` kind). Only with the `chrome-relay` engine. The driver

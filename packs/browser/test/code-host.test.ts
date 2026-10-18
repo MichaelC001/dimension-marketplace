@@ -120,6 +120,7 @@ describeWithChrome("a call returns after the wait and the cell goes on", () => {
 
   test("cancelling the call that waits cancels the cell and the next cell runs", async () => {
     const { host } = await start();
+    expect(await valueOf(host, "s1", "1")).toBe(1);
     const cancel = new AbortController();
     const waiting = host.run("s1", { code: "await new Promise(resolve => setTimeout(resolve, 20000)); 1", timeoutMs: 30_000, waitMs: 25_000, signal: cancel.signal });
     setTimeout(() => cancel.abort(), 300);
@@ -227,12 +228,11 @@ describeWithChrome("a session has its own browser", () => {
 });
 
 describeWithChrome("open and close", () => {
-  test("a name bound to another kind of browser is refused with OMP's text; a saved profile is refused by name, and a connected browser by its websocket URL", async () => {
+  test("a name bound to another kind of browser is refused with OMP's text, and a connected browser by its websocket URL", async () => {
     const { host, rootDir } = await start({ host: { env: { ...process.env, DIMENSION_BROWSER_CODE_ALLOW_ATTACH: "1" } } });
     await valueOf(host, "s1", `await browser.open({ name: "a", url: ${JSON.stringify(pages.url("/other"))} }); 0`);
     const mismatch = await failureOf(host, "s1", 'await browser.open({ name: "a", app: { cdp_url: "http://127.0.0.1:9" } })');
     expect(mismatch.message).toContain('Tab "a" is bound to a different browser (headless hidden). Close it first.');
-    expect((await failureOf(host, "s1", 'await browser.open({ name: "work", profile: "work" })')).message).toContain("code_needs_consent");
     expect((await failureOf(host, "s1", 'await browser.open({ name: "c", app: { cdp_url: "ws://127.0.0.1:9/devtools/browser/x" } })')).message).toContain("must be the HTTP CDP discovery endpoint");
     expect(await liveChromes(rootDir)).toBe(1);
   }, BROWSER_TEST_TIMEOUT_MS);

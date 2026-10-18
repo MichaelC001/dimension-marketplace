@@ -56,7 +56,7 @@ export function buildProfileList(store: ProfileStore, holdOf: (slug: string) => 
 		});
 }
 
-/** A site as a model reads it: no `account`. An email or a handle names the person, and the person's accounts are not model context until a consent gate exists. */
+/** A site as a model reads it: no `account`, since an email or a handle names the person. */
 export type ModelSiteListing = Omit<ProfileSiteListing, "account">;
 export type ModelProfileListing = Omit<ProfileListing, "sites" | "avatar" | "hold" | "browserId"> & { sites: ModelSiteListing[] };
 
