@@ -236,15 +236,21 @@ so sites treat it as one:
   before its first document runs, the window bounds when the tab is adopted,
   and both again on every resize. This is a window where there was none, not
   a changed fingerprint: the GPU, the User-Agent, `navigator.webdriver` and
-  the driver's own traces are the host's. Measured 2026-10-13 on Dev Dimension,
-  Windows, Chrome 154: a sign-in on x.com that a plain Chrome took past the
-  username step was refused in the View with "Sorry, you are not allowed to log
-  in at this time", the geometry above being the only difference measured
-  between the two browsers (UA, client hints, headers, WebGL, canvas, plugins,
-  languages, permissions, window and navigator properties, `navigator.connection`,
-  media devices, audio, colour depth, touch were equal); with the window fitted
-  X went on to its password step. One attempt each way, and X then limited the
-  account's logins, so it is not proof that the geometry was the cause.
+  the driver's own traces are the host's. Measured 2026-10-19 on Windows,
+  Chrome 155, one fresh profile and one well-known public handle per run,
+  stopping at X's password step (no password typed): X's login
+  (`jf.x.com/onboarding/web/actions/begin_login`) answered "We've temporarily
+  limited your login" every time the page saw headless Chrome's own 800x600
+  portrait screen (0.8.0's View, and this build with the screen override off:
+  8 of 8), and went on to the password step every time the page saw the
+  1920x1080 landscape screen (this build: 8 of 8, including 2 with the window
+  left unfitted, so the screen is what X reads, not the window). A plain
+  Chrome typed into by the operating system, a windowed Chrome driven by CDP
+  input alone, a windowed View and a throwaway agent browser all reached the
+  password step; `navigator.webdriver` was `false` in every run. A made-up
+  handle gets "We couldn't find an active X account with that username" from
+  every one of them, refused or not: X judges the browser only for an account
+  that exists, so that test cannot tell them apart.
 - **A throwaway agent browser is shaped further.** A browser opened
   without a profile holds nothing and is not meant for signing in; it does
   work on the public web that a stock automation browser is turned away from.
@@ -767,7 +773,10 @@ preset resolves to an ordinary recipe and takes the same path: the same checks,
 the same parked publish, the same confirm, the receipt from the page. The record
 carries `preset: { name, verified }`, and the confirm bar shows "Unverified
 recipe" while `verified` is false. `browser_publish_presets` lists
-`{ name, platform, verified, fields, needsTarget }`.
+`{ name, platform, verified, fields, needsTarget, signInUrl }`. `signInUrl` is
+the page a person signs in on, on the preset's own site (a preset whose page is
+elsewhere is refused when the server starts): an agent that finds a profile
+signed out opens the View there with `browser_view { profile, url: signInUrl }`.
 
 | Name | Platform | Verified | Needs target |
 | --- | --- | --- | --- |
@@ -858,7 +867,8 @@ post (dimension#1219). It sends the vendor notification
   is. A page loaded or left in between, or a tab switched, writes nothing. A site
   with no probe is recorded as visited (`signedIn: null`:
   "not checked"), only for a public site, never replacing a check that was made. A
-  site never observed is absent, never `signedIn: false`. A later `not-signed-in`
+  site never observed is absent, never `signedIn: false`; a saved profile that
+  has observed nothing is listed with no sites. A later `not-signed-in`
   sets `signedIn: false`. Nothing is read from the saved passwords, and an
   account a page shows is scrubbed of them like every other page read. A
   throwaway browser and the relay are never looked at.
@@ -870,9 +880,9 @@ post (dimension#1219). It sends the vendor notification
   observed or reported.
 - **Whole map every time.** Each report replaces the last one, so every send
   carries every profile. It is sent once the host connects (from the
-  observations saved before), after every new observation, and when a profile
-  directory with observations is deleted. The host retracts it when the server
-  exits.
+  observations saved before), after every new observation, when the person adds
+  a profile, and when a profile directory with observations is deleted. The host
+  retracts it when the server exits.
 - **Within the host's caps.** The report JSON stays at or under 64 KiB, with the
   visited-only sites dropped first and then the oldest observations, and an
   `account` over 256 UTF-8 bytes is left out rather than cut into a different
@@ -891,16 +901,19 @@ site's page and tested against copies of it, not yet seen on the live sites.
 ## Browser panel
 
 Installing the pack also adds a **Browser** tab to the dock (component
-`browser-accounts`). It is one **Open a page** bar: type a website address and
-**Open** shows the live Browser View beside the chat at it (an empty bar opens a
-blank browser; something that is not an address opens nothing and says why).
-Nothing else lives in the tab: profiles and signing in belong to the Browser
-itself. Its profile menu switches and adds profiles and summarises where each is
-signed in (the first sites seen signed in, never a site's account).
+`browser-accounts`). It is one **Open a page** bar: type a website address,
+choose a profile and **Open** shows the live Browser View beside the chat at it
+(an empty bar opens a blank browser; something that is not an address opens
+nothing and says why). The profile list is every saved profile the
+[connection report](#connection-report) names, by its label, then **Private**;
+it follows the report live, so a profile added in the View appears without
+reopening the tab. Signing in and adding profiles belong to the Browser itself:
+its profile menu switches and adds profiles and summarises where each is signed
+in (the first sites seen signed in, never a site's account).
 
-The View's start page and the tab's **Open a page** open on the saved `default`
-set, so a person's own browser keeps their logins, unless **Private** is ticked.
-Private sends no profile: a throwaway browser that saves nothing. A saved set is one
+The View's start page opens on the saved `default` set, and so does the tab
+unless another profile is chosen, so a person's own browser keeps their logins.
+**Private** sends no profile: a throwaway browser that saves nothing. A saved set is one
 browser that chats share, each on its own tabs; what is refused is a second process on the
 same folder (`profile_locked`), and the start page turns that into "That profile's browser
 is already open in another window. Close it there, or open a Private one."

@@ -147,6 +147,7 @@ export function buildConnectionReport(observations: ConnectionObservations, meta
 			const { profile, host, site } = entries[i];
 			(profiles[profile] ??= { sites: {}, ...meta[profile] }).sites[host] = site;
 		}
+		for (const [profile, own] of Object.entries(meta)) if (profile !== RELAY_PROFILE) profiles[profile] ??= { sites: {}, ...own };
 		return { profiles };
 	};
 	const fits = (report: ConnectionReport): boolean => Buffer.byteLength(JSON.stringify(report), "utf8") <= PACK_CONNECTION_REPORT_MAX_BYTES;

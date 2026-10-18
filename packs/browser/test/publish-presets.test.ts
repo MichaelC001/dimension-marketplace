@@ -16,7 +16,7 @@ import { afterEach, expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { PublishRecord } from "../src/contracts";
-import { type PublishPreset, loadPresets } from "../src/presets";
+import { type PublishPreset, loadPresets, parsePreset } from "../src/presets";
 import type { BrowserRuntime } from "../src/runtime";
 import { createBrowserServer } from "../src/server";
 import { approvePublish, BROWSER_TEST_TIMEOUT_MS, createRoot, describeWithChrome, newRuntime, perform, teardown } from "./fixture";
@@ -94,7 +94,7 @@ function errorText(result: ToolResult): string {
 // Discovery
 // ---------------------------------------------------------------------------
 
-test("browser_publish_presets lists the four shipped presets, every one unverified", async () => {
+test("browser_publish_presets lists the four shipped presets, every one unverified, each with the page a person signs in on", async () => {
 	const rootDir = await createRoot();
 	const viewDir = join(rootDir, "view");
 	await mkdir(viewDir, { recursive: true });
@@ -109,11 +109,19 @@ test("browser_publish_presets lists the four shipped presets, every one unverifi
 
 	expect(listed.isError).toBeFalsy();
 	expect(listed.structuredContent?.presets).toEqual([
-		{ name: "bluesky-post", platform: "Bluesky", verified: false, fields: ["Post text"], needsTarget: false },
-		{ name: "linkedin-post", platform: "LinkedIn", verified: false, fields: ["Post text"], needsTarget: false },
-		{ name: "reddit-comment", platform: "Reddit", verified: false, fields: ["Comment"], needsTarget: true },
-		{ name: "x-post", platform: "X", verified: false, fields: ["Post text"], needsTarget: false },
+		{ name: "bluesky-post", platform: "Bluesky", verified: false, fields: ["Post text"], needsTarget: false, signInUrl: "https://bsky.app/" },
+		{ name: "linkedin-post", platform: "LinkedIn", verified: false, fields: ["Post text"], needsTarget: false, signInUrl: "https://www.linkedin.com/login" },
+		{ name: "reddit-comment", platform: "Reddit", verified: false, fields: ["Comment"], needsTarget: true, signInUrl: "https://www.reddit.com/login/" },
+		{ name: "x-post", platform: "X", verified: false, fields: ["Post text"], needsTarget: false, signInUrl: "https://x.com/i/flow/login" },
 	]);
+});
+
+test("a preset's sign-in page is an https page on the preset's own site: one missing, on another site or over http is refused at load", () => {
+	const { signInUrl: _shipped, ...unsigned } = shippedPreset("x-post");
+	expect(() => parsePreset(unsigned, "x-post")).toThrow(/signInUrl/);
+	expect(() => parsePreset({ ...unsigned, signInUrl: "https://login.example/x" }, "x-post")).toThrow(/signInUrl/);
+	expect(() => parsePreset({ ...unsigned, signInUrl: "http://x.com/i/flow/login" }, "x-post")).toThrow(/signInUrl/);
+	expect(parsePreset({ ...unsigned, signInUrl: "https://x.com/login" }, "x-post").signInUrl).toBe("https://x.com/login");
 });
 
 // ---------------------------------------------------------------------------

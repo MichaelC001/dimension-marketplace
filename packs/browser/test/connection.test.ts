@@ -205,6 +205,19 @@ describe("connection report", () => {
 		expect(JSON.stringify(report)).not.toContain("relay");
 	});
 
+	test("every saved profile is named, one that has seen no site with no sites, so a reader can offer it before its first visit", () => {
+		const report = buildConnectionReport(
+			{ acme: { "x.com": { signedIn: true, observedAt: T } } },
+			{ acme: { label: "Acme", colour: defaultColour("acme") }, fresh: { label: "Fresh", colour: defaultColour("fresh") }, relay: { label: "Relay", colour: defaultColour("relay") } },
+		);
+		expect(report).toEqual({
+			profiles: {
+				acme: { sites: { "x.com": { signedIn: true, observedAt: T } }, label: "Acme", colour: defaultColour("acme") },
+				fresh: { sites: {}, label: "Fresh", colour: defaultColour("fresh") },
+			},
+		});
+	});
+
 	test("each report is the whole map: a later observation, on another profile or another site, still carries the first", async () => {
 		const store = await storeAt();
 		store.recordConnection("traction-x-acme", "x.com", { signedIn: true, observedAt: T });
@@ -263,7 +276,7 @@ interface ToolResult {
 
 interface Session {
 	server: McpServer;
-	call: (name: string, args: Record<string, unknown>) => Promise<ToolResult>;
+	call: (name: string, args: Record<string, unknown>, caller?: "model" | "app") => Promise<ToolResult>;
 	reports: Captured[];
 	/** The first captured report (from `after` on) that satisfies `accept`. */
 	report: (accept: (report: ConnectionReport) => boolean, after?: number) => Promise<ConnectionReport>;
@@ -296,8 +309,8 @@ async function session(profile: string, seed?: (store: ProfileStore) => void): P
 	const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
 	await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
 	clients.push(client);
-	const call = async (name: string, args: Record<string, unknown>) => (await client.callTool({ name, arguments: args, _meta: {
-		"ai.insodimension/caller": "model",
+	const call = async (name: string, args: Record<string, unknown>, caller: "model" | "app" = "model") => (await client.callTool({ name, arguments: args, _meta: {
+		"ai.insodimension/caller": caller,
 		"ai.insodimension/session": { sessionId },
 	} })) as ToolResult;
 	const report = async (accept: (report: ConnectionReport) => boolean, after = 0): Promise<ConnectionReport> => {
@@ -330,6 +343,7 @@ function recipe(fixture: PublishFixture, overrides: Partial<PublishRecipe> = {})
 }
 
 const seedAcme = (store: ProfileStore): void => store.recordConnection("traction-x-acme", "x.com", { signedIn: true, account: "@acme", observedAt: T });
+const acmeObserved = (report: ConnectionReport): boolean => report.profiles.acme?.sites["127.0.0.1"] !== undefined;
 /** A profile as the host is told of it: its sites, and the label and colour a profile with no profile.json gets. */
 const ACME = { label: "traction-x-acme", colour: defaultColour("traction-x-acme"), sites: { "x.com": { signedIn: true, account: "@acme", observedAt: T } } };
 
@@ -346,12 +360,25 @@ describeWithChrome("the server's connection report", () => {
 	);
 
 	test(
+		"a profile the person adds is in the next report, before it has visited any site",
+		async () => {
+			const s = await session("acme");
+			const mark = s.reports.length;
+			const added = await s.call("browser_profile_add", { name: "Work" }, "app");
+			expect(added.isError).toBeFalsy();
+			const report = await s.report((next) => next.profiles.work !== undefined, mark);
+			expect(report.profiles.work).toEqual({ sites: {}, label: "Work", colour: defaultColour("work") });
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
 		"a check and a post each send the whole map, with the account read from the page",
 		async () => {
 			const s = await session("acme", seedAcme);
 			const checked = await s.call("browser_publish", { browserId: s.browserId, recipe: recipe(s.fixture), mode: "check" });
 			expect(checked.structuredContent).toMatchObject({ status: "signed-in", account: "@alice" });
-			const afterCheck = await s.report((report) => report.profiles.acme !== undefined);
+			const afterCheck = await s.report(acmeObserved);
 			const seen = afterCheck.profiles.acme.sites["127.0.0.1"];
 			expect(seen).toMatchObject({ signedIn: true, account: "@alice" });
 			expect(afterCheck.profiles["traction-x-acme"]).toEqual(ACME);
@@ -380,7 +407,7 @@ describeWithChrome("the server's connection report", () => {
 			const failed = await s.call("browser_publish", { browserId: s.browserId, recipe: recipe(s.fixture, { origin: unreachable, composeUrl: `${unreachable}/compose` }), mode: "check" });
 			expect(failed.structuredContent?.status).toBe("failed");
 			await s.call("browser_publish", { browserId: s.browserId, recipe: recipe(s.fixture), mode: "check" });
-			const report = await s.report((next) => next.profiles.acme !== undefined);
+			const report = await s.report(acmeObserved);
 			expect(Object.keys(report.profiles.acme.sites)).toEqual(["127.0.0.1"]);
 		},
 		BROWSER_TEST_TIMEOUT_MS,
@@ -444,7 +471,7 @@ describeWithChrome("the server's connection report", () => {
 			const checked = await s.call("browser_publish", { browserId: s.browserId, recipe: revealed, mode: "check" });
 			expect(checked.structuredContent?.status).toBe("signed-in");
 			expect(onDisk()).not.toContain(PASSWORD);
-			const afterCheck = await s.report((report) => report.profiles.acme !== undefined);
+			const afterCheck = await s.report(acmeObserved);
 			expect(afterCheck.profiles.acme.sites["127.0.0.1"].account).toBe("Your new password is [saved password]");
 
 			const mark = s.reports.length;
@@ -472,7 +499,7 @@ describeWithChrome("the server's connection report", () => {
 				expect(checked.structuredContent?.account).toBeUndefined();
 				expect(s.store.connections("acme")["127.0.0.1"]).not.toHaveProperty("account");
 			}
-			const report = await s.report((next) => next.profiles.acme !== undefined);
+			const report = await s.report(acmeObserved);
 			expect(report.profiles.acme.sites["127.0.0.1"]).not.toHaveProperty("account");
 			expect(JSON.stringify(s.reports)).not.toMatch(/@typed|@drafted|@picked|@other/);
 		},

@@ -38,6 +38,7 @@ export interface PublishPreset {
 	/** Exactly one of `composeUrl` (on `origin`) or `composeFrom: "target"` (the caller's page on `origin`). */
 	composeUrl?: string;
 	composeFrom?: "target";
+	signInUrl: string;
 	signedIn: string;
 	/** Optional selector whose text names the signed-in account (for the connection report). */
 	account?: string;
@@ -61,9 +62,10 @@ export interface PresetSummary {
 	verified: boolean;
 	fields: string[];
 	needsTarget: boolean;
+	signInUrl: string;
 }
 
-const PRESET_KEYS: readonly string[] = ["name", "platform", "verified", "verifiedAt", "notes", "origin", "composeUrl", "composeFrom", "signedIn", "account", "fields", "submit", "receipt"];
+const PRESET_KEYS: readonly string[] = ["name", "platform", "verified", "verifiedAt", "notes", "origin", "composeUrl", "composeFrom", "signInUrl", "signedIn", "account", "fields", "submit", "receipt"];
 
 /**
  * Read and check every `*.json` in `dir`. A malformed preset is a startup
@@ -117,6 +119,8 @@ export function parsePreset(input: unknown, where: string): PublishPreset {
 	try {
 		const recipe = toRecipe(preset, labelled.map(() => ""), preset.composeUrl ?? `${String(preset.origin)}/`);
 		const valid = validateRecipe(recipe);
+		const signInUrl = pageOnOrigin(preset.signInUrl, valid.origin);
+		if (signInUrl === undefined) throw new Error(`signInUrl must be a page on ${valid.origin}`);
 		return {
 			name: preset.name,
 			platform: preset.platform,
@@ -125,6 +129,7 @@ export function parsePreset(input: unknown, where: string): PublishPreset {
 			notes: preset.notes,
 			origin: valid.origin,
 			...(preset.composeUrl === undefined ? { composeFrom: "target" as const } : { composeUrl: valid.composeUrl }),
+			signInUrl,
 			signedIn: valid.signedIn,
 			...(valid.account === undefined ? {} : { account: valid.account }),
 			fields: valid.fields.map((field) => ({ label: field.label ?? "", selector: field.selector })),
@@ -144,6 +149,7 @@ export function summarizePresets(presets: readonly PublishPreset[]): PresetSumma
 		verified: preset.verified,
 		fields: preset.fields.map((field) => field.label),
 		needsTarget: preset.composeFrom === "target",
+		signInUrl: preset.signInUrl,
 	}));
 }
 
@@ -184,6 +190,12 @@ function onOrigin(target: string, preset: PublishPreset): string {
 	}
 	if (url.origin !== preset.origin) fail("bad_preset", `target must be a page on ${preset.origin}, got ${url.origin}`);
 	return url.href;
+}
+
+function pageOnOrigin(href: unknown, origin: string): string | undefined {
+	if (typeof href !== "string" || !URL.canParse(href)) return undefined;
+	const url = new URL(href);
+	return url.origin === origin ? url.href : undefined;
 }
 
 function toRecipe(preset: PublishPreset, values: readonly string[], composeUrl: string): PublishRecipe {

@@ -78,7 +78,7 @@ const GOOGLE_ACCOUNT_BUTTON = 'a[aria-label^="Google Account:"]';
 const GOOGLE_MARKER = 'a[aria-label^="Google Account"]';
 
 export const SITE_PROBES: readonly SiteProbe[] = [
-	{ host: "x.com", signedIn: xSignedIn, account: { from: "text", selector: xAccount }, loginPaths: ["/login", "/i/flow/login"] },
+	{ host: "x.com", signedIn: xSignedIn, account: { from: "text", selector: xAccount }, loginPaths: ["/login", "/i/flow/login", "/i/jf/onboarding"] },
 	{ host: "linkedin.com", signedIn: linkedinSignedIn, loginPaths: ["/login", "/uas/login"] },
 	{ host: "reddit.com", signedIn: redditSignedIn, loginPaths: ["/login"] },
 	{ host: "bsky.app", signedIn: blueskySignedIn, account: { from: "href", selector: blueskySignedIn, pick: bskyHandle }, loginPaths: [] },

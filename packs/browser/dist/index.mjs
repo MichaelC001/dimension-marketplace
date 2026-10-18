@@ -1,5 +1,5 @@
-import { Button, Input } from "@fraym/ui";
-import { useMemo, useState } from "react";
+import { Button, Input, Select } from "@fraym/ui";
+import { useMemo, useState, useSyncExternalStore } from "react";
 import { jsx, jsxs } from "react/jsx-runtime";
 //#region src/address.ts
 var LOCAL_HOST = /^(localhost|127(?:\.\d{1,3}){3}|\[::1\]|0\.0\.0\.0)(:\d{1,5})?(\/|$)/i;
@@ -62,23 +62,52 @@ function guessAddress(raw) {
 * the UI. An agent that passes no profile gets a throwaway browser instead.
 */
 var DEFAULT_PROFILE = "default";
-//#endregion
-//#region src/dock/browser-accounts.tsx
-function OpenPageForm({ openPage }) {
+var PRIVATE_CHOICE = "";
+var NO_CONNECTION = {
+	getSnapshot: () => void 0,
+	subscribe: () => () => {}
+};
+function ownRecord(value) {
+	return value !== null && typeof value === "object" && !Array.isArray(value) ? value : void 0;
+}
+function reportedProfiles(fact) {
+	const profiles = ownRecord(ownRecord(ownRecord(fact)?.reported)?.profiles) ?? {};
+	const labelOf = (name) => {
+		const label = ownRecord(profiles[name])?.label;
+		return typeof label === "string" && label.trim() !== "" ? label : name;
+	};
+	const saved = Object.keys(profiles).filter((name) => name !== DEFAULT_PROFILE);
+	return [
+		{
+			value: DEFAULT_PROFILE,
+			label: labelOf(DEFAULT_PROFILE)
+		},
+		...saved.map((name) => ({
+			value: name,
+			label: labelOf(name)
+		})),
+		{
+			value: PRIVATE_CHOICE,
+			label: "Private — nothing is saved"
+		}
+	];
+}
+function OpenPageForm({ openPage, choices }) {
 	const [text, setText] = useState("");
-	const [isPrivate, setPrivate] = useState(false);
+	const [profile, setProfile] = useState(DEFAULT_PROFILE);
 	const [problem, setProblem] = useState(null);
+	const chosen = choices.some((choice) => choice.value === profile) ? profile : DEFAULT_PROFILE;
 	const submit = (event) => {
 		event.preventDefault();
 		if (!openPage) return;
 		if (text.trim().length === 0) {
 			setProblem(null);
-			openPage(null, isPrivate);
+			openPage(null, chosen);
 			return;
 		}
 		const guess = guessAddress(text);
 		setProblem(guess.ok ? null : guess.reason);
-		if (guess.ok) openPage(guess.url, isPrivate);
+		if (guess.ok) openPage(guess.url, chosen);
 	};
 	return /* @__PURE__ */ jsxs("form", {
 		className: "flex flex-col gap-2 border-fr-border-soft border-b px-3 py-2",
@@ -109,13 +138,12 @@ function OpenPageForm({ openPage }) {
 					children: "Open"
 				})]
 			}),
-			/* @__PURE__ */ jsxs("label", {
-				className: "flex items-center gap-2 text-fr-xs text-fr-text-2",
-				children: [/* @__PURE__ */ jsx("input", {
-					type: "checkbox",
-					checked: isPrivate,
-					onChange: (event) => setPrivate(event.target.checked)
-				}), "Private — nothing is saved"]
+			/* @__PURE__ */ jsx(Select, {
+				size: "sm",
+				"aria-label": "Profile",
+				value: chosen,
+				options: choices,
+				onChange: (event) => setProfile(event.target.value)
 			}),
 			problem !== null ? /* @__PURE__ */ jsx("span", {
 				className: "text-fr-xs text-fr-del",
@@ -126,10 +154,13 @@ function OpenPageForm({ openPage }) {
 	});
 }
 function BrowserAccounts({ sessionId, store }) {
-	const openPage = useMemo(() => store && sessionId ? (url, isPrivate) => {
+	const connection = useMemo(() => store?.watch("plugin/browser/connection") ?? NO_CONNECTION, [store]);
+	const fact = useSyncExternalStore(connection.subscribe, connection.getSnapshot, connection.getSnapshot);
+	const choices = useMemo(() => reportedProfiles(fact), [fact]);
+	const openPage = useMemo(() => store && sessionId ? (url, profile) => {
 		const args = {};
 		if (url !== null) args.url = url;
-		if (!isPrivate) args.profile = DEFAULT_PROFILE;
+		if (profile !== PRIVATE_CHOICE) args.profile = profile;
 		store.act("openArtifactoryView", {
 			tool: "browser_view",
 			args
@@ -138,7 +169,10 @@ function BrowserAccounts({ sessionId, store }) {
 	return /* @__PURE__ */ jsxs("div", {
 		className: "flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto",
 		"data-slot": "browser-accounts",
-		children: [/* @__PURE__ */ jsx(OpenPageForm, { openPage }), !openPage ? /* @__PURE__ */ jsx("p", {
+		children: [/* @__PURE__ */ jsx(OpenPageForm, {
+			openPage,
+			choices
+		}), !openPage ? /* @__PURE__ */ jsx("p", {
 			className: "px-3 pb-3 text-fr-xs text-fr-text-3",
 			"data-slot": "browser-accounts-hint",
 			children: "Start or open a chat first — the browser opens beside it."

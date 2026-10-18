@@ -600,7 +600,7 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     return { ...outcome, state: stateFor(callerOf(extra), state) };
   }));
   server.registerTool("browser_publish_presets", {
-    description: "The presets browser_publish accepts as preset: {name, platform, verified, fields (labels of the values, in order), needsTarget (pass target)}. verified false: modelled on the site's page and tested against a copy of it, not yet seen posting on the live site.",
+    description: "The presets browser_publish accepts as preset: {name, platform, verified, fields (labels of the values, in order), needsTarget (pass target), signInUrl (the page the person signs in on: browser_view with the account's profile and this url)}. verified false: modelled on the site's page and tested against a copy of it, not yet seen posting on the live site.",
     inputSchema: {}, annotations: READ_ONLY, _meta: TRACTION_ONLY,
   }, () => result(async () => ({ presets: summarizePresets(presets) })));
   server.registerTool("browser_publish_confirm", {

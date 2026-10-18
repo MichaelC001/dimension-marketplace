@@ -2914,6 +2914,7 @@ function buildConnectionReport(observations, meta = {}) {
       const { profile: profile2, host, site } = entries[i];
       (profiles[profile2] ??= { sites: {}, ...meta[profile2] }).sites[host] = site;
     }
+    for (const [profile2, own2] of Object.entries(meta)) if (profile2 !== RELAY_PROFILE) profiles[profile2] ??= { sites: {}, ...own2 };
     return { profiles };
   };
   const fits = (report) => Buffer.byteLength(JSON.stringify(report), "utf8") <= PACK_CONNECTION_REPORT_MAX_BYTES;
@@ -12679,7 +12680,7 @@ var NAME = /^[a-z0-9][a-z0-9-]{0,47}$/;
 var MAX_PLATFORM_CHARS = 40;
 var MAX_NOTES_CHARS = 2e3;
 var PRESETS_DIR = fileURLToPath4(new URL("../recipes/", import.meta.url));
-var PRESET_KEYS = ["name", "platform", "verified", "verifiedAt", "notes", "origin", "composeUrl", "composeFrom", "signedIn", "account", "fields", "submit", "receipt"];
+var PRESET_KEYS = ["name", "platform", "verified", "verifiedAt", "notes", "origin", "composeUrl", "composeFrom", "signInUrl", "signedIn", "account", "fields", "submit", "receipt"];
 async function loadPresets(dir = PRESETS_DIR) {
   const files = (await readdir2(dir)).filter((file) => extname2(file) === ".json").sort();
   const presets = [];
@@ -12725,6 +12726,8 @@ function parsePreset(input, where) {
   try {
     const recipe = toRecipe(preset, labelled.map(() => ""), preset.composeUrl ?? `${String(preset.origin)}/`);
     const valid = validateRecipe(recipe);
+    const signInUrl = pageOnOrigin(preset.signInUrl, valid.origin);
+    if (signInUrl === void 0) throw new Error(`signInUrl must be a page on ${valid.origin}`);
     return {
       name: preset.name,
       platform: preset.platform,
@@ -12733,6 +12736,7 @@ function parsePreset(input, where) {
       notes: preset.notes,
       origin: valid.origin,
       ...preset.composeUrl === void 0 ? { composeFrom: "target" } : { composeUrl: valid.composeUrl },
+      signInUrl,
       signedIn: valid.signedIn,
       ...valid.account === void 0 ? {} : { account: valid.account },
       fields: valid.fields.map((field) => ({ label: field.label ?? "", selector: field.selector })),
@@ -12749,7 +12753,8 @@ function summarizePresets(presets) {
     platform: preset.platform,
     verified: preset.verified,
     fields: preset.fields.map((field) => field.label),
-    needsTarget: preset.composeFrom === "target"
+    needsTarget: preset.composeFrom === "target",
+    signInUrl: preset.signInUrl
   }));
 }
 function resolvePreset(presets, request) {
@@ -12781,6 +12786,11 @@ function onOrigin(target, preset) {
   }
   if (url.origin !== preset.origin) fail("bad_preset", `target must be a page on ${preset.origin}, got ${url.origin}`);
   return url.href;
+}
+function pageOnOrigin(href, origin) {
+  if (typeof href !== "string" || !URL.canParse(href)) return void 0;
+  const url = new URL(href);
+  return url.origin === origin ? url.href : void 0;
 }
 function toRecipe(preset, values, composeUrl) {
   return {
@@ -12915,7 +12925,7 @@ var googleEmail = (label) => label.match(EMAIL)?.[0];
 var GOOGLE_ACCOUNT_BUTTON = 'a[aria-label^="Google Account:"]';
 var GOOGLE_MARKER = 'a[aria-label^="Google Account"]';
 var SITE_PROBES = [
-  { host: "x.com", signedIn, account: { from: "text", selector: account }, loginPaths: ["/login", "/i/flow/login"] },
+  { host: "x.com", signedIn, account: { from: "text", selector: account }, loginPaths: ["/login", "/i/flow/login", "/i/jf/onboarding"] },
   { host: "linkedin.com", signedIn: signedIn3, loginPaths: ["/login", "/uas/login"] },
   { host: "reddit.com", signedIn: signedIn4, loginPaths: ["/login"] },
   { host: "bsky.app", signedIn: signedIn2, account: { from: "href", selector: signedIn2, pick: bskyHandle }, loginPaths: [] },
@@ -14867,6 +14877,7 @@ var BrowserRuntime = class {
     this.store.saveMeta(check.slug, { label: check.label, ...request.colour === void 0 ? {} : { colour: request.colour }, ...request.avatar === void 0 ? {} : { avatar: request.avatar } });
     const created = (await this.profileList()).find((profile2) => profile2.name === check.slug);
     if (created === void 0) fail("profile_missing", "the profile was created but cannot be read back");
+    this.connectionsChanged();
     return created;
   }
   async control(browserId, mode, caller) {
@@ -16693,7 +16704,7 @@ var LiveChannel = class {
 var plugin_default = {
   $schema: "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   name: "browser",
-  version: "0.8.1",
+  version: "0.8.2",
   description: "A real browser beside your chat that your agent drives while you watch. Tabs, persistent logged-in profiles, circle-to-annotate, and an optional fast task agent (jev).",
   keywords: [
     "browser",
@@ -17230,7 +17241,7 @@ async function createBrowserServer(options = {}) {
     return { ...outcome, state: stateFor(callerOf(extra), state) };
   }));
   server2.registerTool("browser_publish_presets", {
-    description: "The presets browser_publish accepts as preset: {name, platform, verified, fields (labels of the values, in order), needsTarget (pass target)}. verified false: modelled on the site's page and tested against a copy of it, not yet seen posting on the live site.",
+    description: "The presets browser_publish accepts as preset: {name, platform, verified, fields (labels of the values, in order), needsTarget (pass target), signInUrl (the page the person signs in on: browser_view with the account's profile and this url)}. verified false: modelled on the site's page and tested against a copy of it, not yet seen posting on the live site.",
     inputSchema: {},
     annotations: READ_ONLY,
     _meta: TRACTION_ONLY
