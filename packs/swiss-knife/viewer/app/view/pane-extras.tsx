@@ -65,7 +65,7 @@ export function PaneExtras(props: PaneExtrasProps): ReactNode {
 	return <Layer {...props} />;
 }
 
-function PictureMarkup({ app, tab, active, ready, frame, mode }: PaneExtrasProps) {
+function PictureMarkup({ app, tab, active, ready, frame, mode, store }: PaneExtrasProps) {
 	const picture = useSlot(frame, ready, PICTURE);
 	const up = mode === "marks";
 	const session = useImageMarkup({
@@ -75,6 +75,7 @@ function PictureMarkup({ app, tab, active, ready, frame, mode }: PaneExtrasProps
 		autoStage: active && up,
 		// The document cache the pane already fills: the original bytes, not what the screen shows.
 		loadBytes: async () => (await loadDocumentBytes(app, tab)).bytes,
+		store,
 	});
 	const { setTool } = session;
 
@@ -142,7 +143,7 @@ function PictureMarkup({ app, tab, active, ready, frame, mode }: PaneExtrasProps
 	);
 }
 
-function TextComments({ app, tab, active, ready, frame, mode }: PaneExtrasProps) {
+function TextComments({ app, tab, active, ready, frame, mode, store }: PaneExtrasProps) {
 	const textRoot = useSlot(frame, ready, TEXT_ROOT);
 	const commenting = mode === "comments";
 	// The bar's Comment asks the layer to comment on the selection, as Ctrl+Alt+M does.
@@ -154,6 +155,7 @@ function TextComments({ app, tab, active, ready, frame, mode }: PaneExtrasProps)
 		...(PAGE_WORDS[tab.kind] === undefined ? {} : { pageWord: PAGE_WORDS[tab.kind] }),
 		rev: revisionOf(tab),
 		autoStage: active && commenting,
+		store,
 	});
 
 	const [ranges, setRanges] = useState<ReadonlyMap<number, Range>>(() => new Map());

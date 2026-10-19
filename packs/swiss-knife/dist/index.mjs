@@ -168,12 +168,6 @@ function formatByteSize(bytes) {
   return `${shown} ${SIZE_UNITS[unit]}`;
 }
 
-// ../../../fraym/packages/driver/src/types.ts
-var TERMINAL_CONTINUATION_REASONS = Object.assign(
-  /* @__PURE__ */ Object.create(null),
-  { handoff: true, new: true, plan: true, drop: true }
-);
-
 // ../../../fraym/packages/driver/src/theme.ts
 var THEME_TOKEN_CHANNELS = {
   "--fr-accent": "color",
@@ -216,6 +210,12 @@ var THEME_TOKEN_CHANNELS = {
   "--fr-ui-size": "length"
 };
 var THEME_TOKENS = Object.keys(THEME_TOKEN_CHANNELS);
+
+// ../../../fraym/packages/driver/src/types.ts
+var TERMINAL_CONTINUATION_REASONS = Object.assign(
+  /* @__PURE__ */ Object.create(null),
+  { handoff: true, new: true, plan: true, drop: true }
+);
 
 // ../../../packages/sdk/src/artifactory/artifactory-decl.ts
 var PACK_CONNECTION_REPORT_MAX_BYTES = 64 * 1024;

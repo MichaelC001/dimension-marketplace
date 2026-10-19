@@ -16,7 +16,7 @@ import { Footer, type PaneExtrasProps, revisionOf, Strip, useSlot } from "./pane
 const HTML_FRAME = '[data-slot="viewer-html-frame"]';
 const FALLBACK_ANCHOR = { x: 8, y: 28, width: 24, height: 24 };
 
-export function ElementPicks({ app, tab, active, ready, frame, mode }: PaneExtrasProps): ReactNode {
+export function ElementPicks({ app, tab, active, ready, frame, mode, store }: PaneExtrasProps): ReactNode {
 	const slot = useSlot(frame, ready, HTML_FRAME);
 	const reading = slot instanceof HTMLIFrameElement ? slot : null;
 	const up = mode === "elements";
@@ -34,7 +34,7 @@ export function ElementPicks({ app, tab, active, ready, frame, mode }: PaneExtra
 	const [unreadable, setUnreadable] = useState(false);
 	// biome-ignore lint/correctness/useExhaustiveDependencies: live and reading are the triggers.
 	useEffect(() => setUnreadable(false), [live, reading]);
-	const session = useElementPicks({ app, file: tab.path, rev: revisionOf(tab), autoStage: active && up });
+	const session = useElementPicks({ app, file: tab.path, rev: revisionOf(tab), autoStage: active && up, store });
 	const { picks, retarget } = session;
 	const [openId, setOpenId] = useState<number | null>(null);
 	const [bounds, setBounds] = useState({ width: 0, height: 0 });

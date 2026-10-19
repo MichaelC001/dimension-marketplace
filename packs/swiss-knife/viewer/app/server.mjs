@@ -31728,7 +31728,7 @@ async function readChunk(path, offset, length) {
 import { realpath as nativeRealpath, stat as nativeStat } from "node:fs/promises";
 import * as nodePath from "node:path";
 
-// ../../../../../../packages/sdk/src/artifactory/artifactory-decl.ts
+// ../../../../packages/sdk/src/artifactory/artifactory-decl.ts
 var ARTIFACTORY_GRANT_META_KEY = "ai.insodimension/grant";
 var PACK_CONNECTION_REPORT_MAX_BYTES = 64 * 1024;
 
