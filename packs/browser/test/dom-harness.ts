@@ -37,6 +37,8 @@ export interface Dom {
 	readonly check: (input: Element, checked: boolean) => Promise<void>;
 	/** Press `key` with `target` focused, as a keyboard does: the event bubbles from it. */
 	readonly key: (target: Element, key: string) => Promise<void>;
+	readonly choose: (select: Element, value: string) => Promise<void>;
+	readonly act: (change: () => void) => Promise<void>;
 	/** Let pending promises and effects settle (a stream message arriving, a tool call returning). */
 	readonly settle: () => Promise<void>;
 }
@@ -140,6 +142,13 @@ export async function mount(element: ReactElement): Promise<Dom> {
 				target.dispatchEvent(Object.assign(new window.Event("keydown", { bubbles: true, cancelable: true }), { key }));
 			});
 		},
+		choose: async (select, value) => {
+			for (const option of select.querySelectorAll("option")) option.toggleAttribute("selected", option.getAttribute("value") === value);
+			await act(async () => {
+				select.dispatchEvent(new window.Event("change", { bubbles: true }));
+			});
+		},
+		act: change => act(async () => change()),
 		settle: () => act(async () => new Promise<void>(resolve => setTimeout(resolve, 20))),
 	};
 }

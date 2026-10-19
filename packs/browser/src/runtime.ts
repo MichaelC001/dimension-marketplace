@@ -1436,6 +1436,8 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		this.store.saveMeta(check.slug, { label: check.label, ...(request.colour === undefined ? {} : { colour: request.colour }), ...(request.avatar === undefined ? {} : { avatar: request.avatar }) });
 		const created = (await this.profileList()).find((profile) => profile.name === check.slug);
 		if (created === undefined) fail("profile_missing", "the profile was created but cannot be read back");
+		this.observedProfiles.add(check.slug);
+		this.connectionsChanged();
 		return created;
 	}
 

@@ -71,7 +71,7 @@ describe("what one look at a page decides", () => {
 
 	test("no marker on a site's front page or login page is signed out, after waiting for a single-page app to draw it", async () => {
 		const probe = probeOf("x.com");
-		for (const url of ["https://x.com/", "https://x.com/login", "https://x.com/i/flow/login"]) {
+		for (const url of ["https://x.com/", "https://x.com/login", "https://x.com/i/flow/login", "https://x.com/i/jf/onboarding/web?mode=login"]) {
 			const reader = fakeReader({});
 			expect(await readProbe(reader, probe, url, 1234)).toEqual({ signedIn: false });
 			expect(reader.waits).toEqual([1234]);

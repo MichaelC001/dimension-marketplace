@@ -49,6 +49,7 @@ const STUB_PRESET = parsePreset(
 		notes: "the stub compose page",
 		origin: ORIGIN,
 		composeUrl: COMPOSE,
+		signInUrl: `${ORIGIN}/login`,
 		signedIn: "#me",
 		fields: [{ label: "Post text", selector: "#field-0" }],
 		submit: "#post",

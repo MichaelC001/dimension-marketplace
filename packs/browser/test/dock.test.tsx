@@ -8,7 +8,7 @@
  *  against a fake host Store that records every intent.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { BrowserAccounts, type BrowserStoreShape } from "../src/dock/browser-accounts";
+import { BrowserAccounts, type BrowserStoreShape, CONNECTION_KEY } from "../src/dock/browser-accounts";
 import { mount, unmountAll } from "./dom-harness";
 
 afterEach(unmountAll);
@@ -18,28 +18,45 @@ interface Act {
 	readonly payload: unknown;
 }
 
-/** A host Store logging every intent. */
-function fakeStore(): { readonly store: BrowserStoreShape; readonly acts: readonly Act[] } {
+type Reported = Record<string, { readonly label: string }>;
+
+function fakeStore(profiles: Reported = {}): { readonly store: BrowserStoreShape; readonly acts: readonly Act[]; readonly report: (next: Reported) => void } {
 	const acts: Act[] = [];
+	const listeners = new Set<() => void>();
+	let fact: unknown = { connected: true, reported: { profiles: Object.fromEntries(Object.entries(profiles).map(([name, meta]) => [name, { sites: {}, colour: "blue", ...meta }])) } };
 	const store: BrowserStoreShape = {
 		act(intent: string, payload?: unknown) {
 			acts.push({ intent, payload });
 		},
+		watch(key: string) {
+			return {
+				getSnapshot: () => (key === CONNECTION_KEY ? fact : undefined),
+				subscribe: (listener: () => void) => {
+					listeners.add(listener);
+					return () => listeners.delete(listener);
+				},
+			};
+		},
 	};
-	return { store, acts };
+	const report = (next: Reported): void => {
+		fact = { connected: true, reported: { profiles: Object.fromEntries(Object.entries(next).map(([name, meta]) => [name, { sites: {}, colour: "blue", ...meta }])) } };
+		for (const listener of listeners) listener();
+	};
+	return { store, acts, report };
 }
 
 async function mountPanel(sessionId: string | null, store: BrowserStoreShape) {
 	const dom = await mount(<BrowserAccounts sessionId={sessionId} store={store} />);
 	return {
 		...dom,
-		/** The "Open a page" form, its address field and its Private box. */
 		openForm: () => {
 			const form = dom.find('[data-slot="browser-accounts-open"]')[0] as Element;
+			const profile = form.querySelector('[data-slot="select"]') as Element;
 			return {
 				form,
 				address: form.querySelector('[data-slot="input"]') as Element,
-				private: form.querySelector('input[type="checkbox"]') as Element,
+				profile,
+				choices: () => [...profile.querySelectorAll("option")].map(option => ({ value: option.getAttribute("value"), label: option.textContent })),
 				problem: () => form.querySelector('[data-slot="browser-accounts-problem"]')?.textContent ?? null,
 			};
 		},
@@ -65,12 +82,45 @@ describe("the Browser dock tab's Open a page bar", () => {
 		const panel = await mountPanel("session-1", store);
 		const open = panel.openForm();
 
-		await panel.check(open.private, true);
+		await panel.choose(open.profile, "");
 		await panel.type(open.address, "example.com");
 		await panel.submit(open.form);
 
-		// Strict: a `profile` key present with any value, even undefined, is not "no profile".
 		expect(acts).toStrictEqual([openBrowser({ url: "https://example.com/" })]);
+	});
+
+	test("every saved profile the Browser reports is offered by its label, and the page opens in the one chosen", async () => {
+		const { store, acts } = fakeStore({ default: { label: "Default" }, "traction-x-acme": { label: "Acme on X" } });
+		const panel = await mountPanel("session-1", store);
+		const open = panel.openForm();
+
+		expect(open.choices()).toEqual([
+			{ value: "default", label: "Default" },
+			{ value: "traction-x-acme", label: "Acme on X" },
+			{ value: "", label: "Private — nothing is saved" },
+		]);
+		await panel.choose(open.profile, "traction-x-acme");
+		await panel.type(open.address, "x.com/i/flow/login");
+		await panel.submit(open.form);
+
+		expect(acts).toEqual([openBrowser({ url: "https://x.com/i/flow/login", profile: "traction-x-acme" })]);
+	});
+
+	test("the saved logins are offered before the Browser has reported any profile, and a profile it reports later appears without reopening the tab", async () => {
+		const { store, report } = fakeStore();
+		const panel = await mountPanel("session-1", store);
+
+		expect(panel.openForm().choices()).toEqual([
+			{ value: "default", label: "Default" },
+			{ value: "", label: "Private — nothing is saved" },
+		]);
+		await panel.act(() => report({ work: { label: "Work" } }));
+
+		expect(panel.openForm().choices()).toEqual([
+			{ value: "default", label: "Default" },
+			{ value: "work", label: "Work" },
+			{ value: "", label: "Private — nothing is saved" },
+		]);
 	});
 
 	test("an empty bar opens a blank browser on the saved logins; a bar that is not an address opens nothing and says why", async () => {
