@@ -1,7 +1,7 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "rooms-rail",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "The rail of a rooms space, installable: re-exports RAIL_ROOMS from @fraym/ui - the space's own head, direct messages, channels and projects or workspaces in its own words, an Organise menu on the section header, asks on rows.",
 	"author": {
 		"name": "Dimension"
@@ -14,7 +14,7 @@
 	"extensions": {
 		"ai.insodimension.dimension": {
 			"contractVersion": 1,
-			"requires": { "dimension": ">=0.11.12" },
+			"requires": { "dimension": ">=0.11.11" },
 			"title": "Rooms Rail",
 			"icon": "chat",
 			"category": "component",
