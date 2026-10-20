@@ -1,4 +1,4 @@
-import { Button, Input, Select } from "@fraym/ui";
+import { Button, Input } from "@fraym/ui";
 import { useMemo, useState, useSyncExternalStore } from "react";
 import { jsx, jsxs } from "react/jsx-runtime";
 //#region src/address.ts
@@ -67,6 +67,7 @@ function loginSetLabel(profile) {
 	return profile === "default" ? "Default" : profile;
 }
 var PRIVATE_CHOICE = "";
+var PROFILE_SELECT_CLASS = "flex w-full min-w-0 rounded-[var(--fr-input-r)] border border-fr-border bg-fr-surface px-[var(--fr-input-px)] py-1 text-fr-xs text-fr-text outline-none transition-colors duration-[var(--fr-motion-fast)] focus-visible:border-fr-accent-line disabled:cursor-not-allowed disabled:opacity-50";
 var NO_CONNECTION = {
 	getSnapshot: () => void 0,
 	subscribe: () => () => {}
@@ -142,12 +143,18 @@ function OpenPageForm({ openPage, choices }) {
 					children: "Open"
 				})]
 			}),
-			/* @__PURE__ */ jsx(Select, {
-				size: "sm",
+			/* @__PURE__ */ jsx("select", {
+				"data-slot": "select",
+				"data-variant": "default",
+				"data-size": "sm",
 				"aria-label": "Profile",
+				className: PROFILE_SELECT_CLASS,
 				value: chosen,
-				options: choices,
-				onChange: (event) => setProfile(event.target.value)
+				onChange: (event) => setProfile(event.target.value),
+				children: choices.map((choice) => /* @__PURE__ */ jsx("option", {
+					value: choice.value,
+					children: choice.label
+				}, choice.value))
 			}),
 			problem !== null ? /* @__PURE__ */ jsx("span", {
 				className: "text-fr-xs text-fr-del",
