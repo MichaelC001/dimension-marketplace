@@ -1,4 +1,4 @@
-import { Button, Input, Select, type SelectOption } from "@fraym/ui";
+import { Button, Input } from "@fraym/ui";
 import { type FormEvent, useMemo, useState, useSyncExternalStore } from "react";
 import { guessAddress } from "../address";
 import { DEFAULT_PROFILE, loginSetLabel } from "../profile-name";
@@ -6,6 +6,14 @@ import { DEFAULT_PROFILE, loginSetLabel } from "../profile-name";
 export const CONNECTION_KEY = "plugin/browser/connection";
 
 const PRIVATE_CHOICE = "";
+
+const PROFILE_SELECT_CLASS =
+	"flex w-full min-w-0 rounded-[var(--fr-input-r)] border border-fr-border bg-fr-surface px-[var(--fr-input-px)] py-1 text-fr-xs text-fr-text outline-none transition-colors duration-[var(--fr-motion-fast)] focus-visible:border-fr-accent-line disabled:cursor-not-allowed disabled:opacity-50";
+
+interface ProfileOption {
+	readonly value: string;
+	readonly label: string;
+}
 
 export interface ConnectionObservable {
 	getSnapshot(): unknown;
@@ -32,7 +40,7 @@ function ownRecord(value: unknown): Readonly<Record<string, unknown>> | undefine
 	return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Readonly<Record<string, unknown>>) : undefined;
 }
 
-function reportedProfiles(fact: unknown): readonly SelectOption[] {
+function reportedProfiles(fact: unknown): readonly ProfileOption[] {
 	const profiles = ownRecord(ownRecord(ownRecord(fact)?.reported)?.profiles) ?? {};
 	const labelOf = (name: string): string => {
 		const label = ownRecord(profiles[name])?.label;
@@ -46,7 +54,7 @@ function reportedProfiles(fact: unknown): readonly SelectOption[] {
 	];
 }
 
-function OpenPageForm({ openPage, choices }: { readonly openPage: OpenPage | null; readonly choices: readonly SelectOption[] }) {
+function OpenPageForm({ openPage, choices }: { readonly openPage: OpenPage | null; readonly choices: readonly ProfileOption[] }) {
 	const [text, setText] = useState("");
 	const [profile, setProfile] = useState<ProfileChoice>(DEFAULT_PROFILE);
 	const [problem, setProblem] = useState<string | null>(null);
@@ -83,7 +91,21 @@ function OpenPageForm({ openPage, choices }: { readonly openPage: OpenPage | nul
 					Open
 				</Button>
 			</div>
-			<Select size="sm" aria-label="Profile" value={chosen} options={choices} onChange={event => setProfile(event.target.value)} />
+			<select
+				data-slot="select"
+				data-variant="default"
+				data-size="sm"
+				aria-label="Profile"
+				className={PROFILE_SELECT_CLASS}
+				value={chosen}
+				onChange={event => setProfile(event.target.value)}
+			>
+				{choices.map(choice => (
+					<option key={choice.value} value={choice.value}>
+						{choice.label}
+					</option>
+				))}
+			</select>
 			{problem !== null ? (
 				<span className="text-fr-xs text-fr-del" data-slot="browser-accounts-problem">
 					{problem}
