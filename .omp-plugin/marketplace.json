@@ -1037,6 +1037,30 @@
 			]
 		},
 		{
+			"name": "rooms-rail",
+			"source": "./packs/rooms-rail",
+			"pluginId": "rooms-rail",
+			"title": "Rooms Rail",
+			"icon": "chat",
+			"description": "The rail of a rooms space, installable: re-exports RAIL_ROOMS from @fraym/ui - the space's own head, direct messages, channels and projects or workspaces in its own words, an Organise menu on the section header, asks on rows.",
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-community",
+			"license": "MIT",
+			"category": "component",
+			"tags": [
+				"component",
+				"rail",
+				"rooms"
+			],
+			"requires": {
+				"dimension": ">=0.11.12"
+			},
+			"channel": "canary"
+		},
+		{
 			"name": "router-jev",
 			"source": "./packs/router-jev",
 			"pluginId": "router-jev",
