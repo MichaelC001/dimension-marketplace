@@ -9,8 +9,9 @@
 // (`data-slot="viewer-stage-frame"`), or the right-hand column after it.
 import type { App } from "@modelcontextprotocol/ext-apps";
 import { cn } from "@fraym/ui/lib/cn";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { createToolCaller } from "@dimension/mcp-app-kit/tools";
+import { createAnnotationStore } from "@dimension/mcp-app-kit/annotate";
 import { mediaSourceSchema, renewedMediaSchema } from "../../src/contract";
 import { loadDocumentBytes, readLimit } from "./document-bytes";
 import { shownMode } from "./annotate-modes";
@@ -40,6 +41,7 @@ export interface DocPaneProps {
 }
 
 export function DocPane({ app, tab, active, theme }: DocPaneProps) {
+	const store = useMemo(() => createAnnotationStore(app), [app]);
 	// State, not `useRef`: a layer on top needs to RE-RENDER when the stage or the
 	// mounted renderer appears, and a ref change re-renders nothing.
 	const [stage, setStage] = useState<HTMLDivElement | null>(null);
@@ -194,7 +196,7 @@ export function DocPane({ app, tab, active, theme }: DocPaneProps) {
 						/>
 					) : null}
 				</div>
-				<PaneExtras app={app} tab={tab} active={active} ready={phase.name === "ready"} frame={frame} mode={modeShown} />
+				<PaneExtras app={app} store={store} tab={tab} active={active} ready={phase.name === "ready"} frame={frame} mode={modeShown} />
 			</div>
 		</div>
 	);

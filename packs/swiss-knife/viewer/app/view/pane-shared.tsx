@@ -1,5 +1,6 @@
 // The annotation modes, pane props, renderer slot lookup, toolbar and footer seats.
 import type { App } from "@modelcontextprotocol/ext-apps";
+import type { AnnotationStore } from "@dimension/mcp-app-kit/annotate";
 import { type ReactNode, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import type { DocTab } from "./tabs";
@@ -10,6 +11,7 @@ export type AnnotateMode = "marks" | "comments" | "elements" | "timeline";
 
 export interface PaneExtrasProps {
 	readonly app: App;
+	readonly store: AnnotationStore | undefined;
 	readonly tab: DocTab;
 	/** This document's tab is the one showing. */
 	readonly active: boolean;

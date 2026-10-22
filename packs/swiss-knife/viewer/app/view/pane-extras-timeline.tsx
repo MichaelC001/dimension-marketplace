@@ -88,7 +88,7 @@ const MOMENT = "M6 20.5V4M6 5h11l-2.5 3.5L17 12H6";
 const STRETCH = "M4 7v10M20 7v10M4 12h16M8 9l-4 3 4 3M16 9l4 3-4 3";
 const CANCEL = "M6 6l12 12M18 6 6 18";
 
-export function TimelineMarks({ app, tab, active, ready, frame, mode }: PaneExtrasProps): ReactNode {
+export function TimelineMarks({ app, tab, active, ready, frame, mode, store }: PaneExtrasProps): ReactNode {
 	const kind = tab.kind === "video" ? "video" : "audio";
 	const slot = useSlot(frame, ready, MEDIA);
 	const media = slot instanceof HTMLMediaElement ? slot : null;
@@ -157,6 +157,7 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode }: PaneExtr
 		...(grabber === null ? {} : { grabFrame: (at: number) => grabber.grab(insideFrame(at, frameSeconds())) }),
 		stillSize,
 		autoStage: active && mode === "timeline",
+		store,
 	});
 	const { marks, addMark, addSpan, addShape, writing, openNote, closeNote } = session;
 	const full = marks.length >= MAX_TIMELINE_MARKS;
