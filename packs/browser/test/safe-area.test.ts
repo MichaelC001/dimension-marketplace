@@ -1,5 +1,5 @@
 /** WHAT BREAKS IN THE PRODUCT IF THIS GOES RED: the host's assistant orb sits on top of
- *  "Request edits" in the annotation panel. The kit's footer pads itself with the host's
+ *  the annotation notice at the foot of the picture. The kit's notice pads itself with the host's
  *  safe-area numbers, but only if the View puts them on its document; this View has its
  *  own root, so it must do it itself, at connect and whenever the host moves the orb.
  */

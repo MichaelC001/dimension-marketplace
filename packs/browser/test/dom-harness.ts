@@ -1,6 +1,6 @@
 /** A live React tree on a linkedom document — the marketplace's pack convention
  *  (`react`, `react-dom` and `linkedom` come from the Dimension monorepo the pack
- *  is mounted into). Shared by the dock panel's tests and the View's, so the
+ *  is mounted into). Shared by the View's tests, so the
  *  typing and clicking tricks below live once.
  *
  *  A test file calls `afterEach(unmountAll)`: it unmounts every tree and puts the
@@ -9,7 +9,7 @@ import { parseHTML } from "linkedom";
 import { act, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
-const DOM_GLOBALS = ["window", "document", "navigator", "HTMLElement", "HTMLInputElement", "HTMLTextAreaElement", "Event", "ResizeObserver", "IS_REACT_ACT_ENVIRONMENT"] as const;
+const DOM_GLOBALS = ["window", "document", "navigator", "Node", "Element", "HTMLElement", "HTMLInputElement", "HTMLTextAreaElement", "Event", "ResizeObserver", "IS_REACT_ACT_ENVIRONMENT"] as const;
 type DomGlobal = (typeof DOM_GLOBALS)[number];
 let priorDomGlobals: Record<DomGlobal, PropertyDescriptor | undefined> | undefined;
 const roots: Root[] = [];
@@ -82,6 +82,8 @@ export async function mount(element: ReactElement): Promise<Dom> {
 		window,
 		document: window.document,
 		navigator: window.navigator,
+		Node: window.Node,
+		Element: window.Element,
 		HTMLElement: window.HTMLElement,
 		HTMLInputElement: window.HTMLInputElement,
 		HTMLTextAreaElement: window.HTMLTextAreaElement,

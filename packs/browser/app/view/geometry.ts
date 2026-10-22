@@ -1,10 +1,10 @@
 // The View's coordinate arithmetic, kept free of React so it can be reasoned
 // about (and exercised) on its own.
 //
-// One space rules everything: `state.viewport` CSS pixels. The runtime captures
-// at deviceScaleFactor 1 with the viewport only, so the frame PNG's pixels are
-// those same coordinates 1:1 — clicks and scroll targets are expressed in it,
-// whatever size the seat renders the image at.
+// One space rules everything: `state.viewport` CSS pixels, the page's real
+// layout viewport. The frame PNG is that viewport times the pixel ratio, and a
+// mark's page read maps by the natural-to-viewport ratio (`page-annotation.ts`):
+// clicks and scroll targets are CSS pixels whatever size the seat renders it at.
 import type { Viewport } from "../../src/contracts";
 
 export interface Point {

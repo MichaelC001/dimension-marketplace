@@ -16,9 +16,9 @@ export const MAX_FRAME_BYTES = 8 * 1024 * 1024;
  *
  * Non-finite, negative, or zero-sized regions are REFUSED (not silently
  * repaired). A region that starts inside the frame but runs off its edge is
- * clamped to the frame; one that starts entirely outside is refused. A frame is
- * captured at one device pixel per CSS pixel, so `frame` is the viewport the
- * capture was taken at.
+ * clamped to the frame; one that starts entirely outside is refused. Regions and
+ * `frame` are CSS pixels: `frame` is the viewport the capture was taken at, while
+ * the picture itself is that viewport times the page's pixel ratio.
  */
 export function clampRegion(requested: BrowserRegion, frame: Viewport): BrowserRegion {
 	for (const [name, value] of Object.entries(requested)) {

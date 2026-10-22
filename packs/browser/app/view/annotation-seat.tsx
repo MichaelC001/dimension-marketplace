@@ -1,23 +1,23 @@
 // The seat for marking up the page. The human froze the page into one picture; this lays the shared annotation kit
-// over it. The marks, the tool strip, the list with its notes, Request edits, the burned-in picture and its limits
-// are all `@dimension/mcp-app-kit/annotate`. What is the Browser's is what a picture of a PAGE needs beyond that
-// (`page-annotation.ts`): which page, how far it was scrolled, what is under each mark.
+// over it exactly as the Viewer does on a picture: the marks, the tool strip, each note in place beside its mark,
+// staging as the human writes, the burned-in picture and its limits are all `@dimension/mcp-app-kit/annotate`. What
+// is the Browser's is what a picture of a PAGE needs beyond that (`page-annotation.ts`): which page, how far it was
+// scrolled, what is under each mark.
 //
 // The picture is shown at the page's own aspect and the real browser's viewport is never touched while the human
 // marks: nothing here is measured against the page, so the elements read at send time are read at the size the
 // picture was taken at.
 import {
-	AnnotationPanel,
+	AnnotationNotice,
 	AnnotationToolbar,
 	MarkupIcon,
 	MarkupOverlay,
 	markupToolGroups,
-	type PanelItem,
 	useImageMarkup,
 	useMarkupShortcuts,
 } from "@dimension/mcp-app-kit/annotate/react";
 import type { App } from "@modelcontextprotocol/ext-apps";
-import { type CSSProperties, type ReactNode, useEffect, useMemo } from "react";
+import { type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import type { BrowserFrame } from "../../src/contracts";
 import type { BrowserClient } from "./browser-client";
 import { captureName, PAGE_DETAIL_KIND, pageAttach, pageEnrich } from "./page-annotation";
@@ -30,7 +30,7 @@ export interface AnnotationSeatProps {
 	readonly frame: BrowserFrame;
 	/** What floats over the page while it is marked (the agent's pill, a post awaiting its Post). */
 	readonly floats?: ReactNode;
-	/** The human is finished marking. A staged request stays staged; it is theirs to send. */
+	/** The human is finished marking. What was staged stays staged; it is theirs to send. */
 	readonly onDone: () => void;
 }
 
@@ -72,94 +72,84 @@ export function AnnotationSeat({ app, client, browserId, frame, floats, onDone }
 		enrich,
 		attach,
 		detailKind: PAGE_DETAIL_KIND,
+		autoStage: true,
 	});
-	const { markup, setTool } = session;
+	const { markup, setTool, staged, sending, send } = session;
 
 	// Entering arms the box tool: the first thing a person does is drag one.
 	useEffect(() => {
 		setTool("box");
 	}, [setTool]);
-	useMarkupShortcuts({ enabled: true, onTool: setTool, onUndo: markup.undo, onRedo: markup.redo, onExit: onDone });
+	// Leaving unmounts the seat, which clears the kit's quiet-interval staging timer, so what is not yet staged is
+	// staged on the way out. A stage already in flight carries older words and refuses a second send until it
+	// lands: the seat stays until it does, then stages the newest wording and leaves.
+	const [leaving, setLeaving] = useState(false);
+	const done = useCallback(() => {
+		if (sending) {
+			setLeaving(true);
+			return;
+		}
+		if (markup.marks.length > 0 && !staged) void send();
+		onDone();
+	}, [markup.marks.length, staged, sending, send, onDone]);
+	useEffect(() => {
+		if (!leaving || sending) return;
+		if (markup.marks.length > 0 && !staged) void send();
+		onDone();
+	}, [leaving, sending, staged, markup.marks.length, send, onDone]);
+	useMarkupShortcuts({ enabled: true, onTool: setTool, onUndo: markup.undo, onRedo: markup.redo, onExit: done });
 
-	const items = useMemo<PanelItem[]>(() => markup.marks.map(mark => ({ id: mark.id, note: mark.note })), [markup.marks]);
 	const { viewport } = frame.state;
 	const page = { "--vw": viewport.width, "--vh": viewport.height } as CSSProperties;
 
 	return (
-		<div className="bx-seat-frame">
-			<div className="bx-seat" data-slot="annotation-seat">
-				<div className="bx-seat-main">
-					{/* Unlike the Viewer's always-on bar, this seat REPLACES the live page with a frozen picture, entered on purpose
-					    (the Browser's Annotate toggle), so its bar ends in the labelled way back to the page: Done. It names the
-					    leaving, not a mode. */}
-					<AnnotationToolbar
-						label="Annotation tools"
-						placement="strip"
-						groups={[
-							...markupToolGroups({
-								tool: session.tool,
-								onTool: setTool,
-								canUndo: markup.canUndo,
-								canRedo: markup.canRedo,
-								onUndo: markup.undo,
-								onRedo: markup.redo,
-								onClear: markup.clear,
-								hasMarks: markup.marks.length > 0,
-							}),
-							{
-								id: "seat",
-								label: "Seat",
-								kind: "act",
-								tools: [{ id: "done", label: "Done", text: "Done", key: "Esc", icon: <MarkupIcon name="check" size={15} />, onSelect: onDone }],
-							},
-						]}
+		<div className="bx-seat" data-slot="annotation-seat">
+			<AnnotationToolbar
+				label="Annotation tools"
+				placement="strip"
+				groups={[
+					...markupToolGroups({
+						tool: session.tool,
+						onTool: setTool,
+						canUndo: markup.canUndo,
+						canRedo: markup.canRedo,
+						onUndo: markup.undo,
+						onRedo: markup.redo,
+						onClear: markup.clear,
+						hasMarks: markup.marks.length > 0,
+					}),
+					// Unlike the Viewer's always-on bar, this seat REPLACES the live page with a frozen picture, entered on
+					// purpose (the Browser's Annotate toggle), so its bar ends in the labelled way back to the page: Done.
+					{
+						id: "seat",
+						label: "Seat",
+						kind: "act",
+						tools: [{ id: "done", label: "Done", text: "Done", key: "Esc", icon: <MarkupIcon name="check" size={15} />, onSelect: done }],
+					},
+				]}
+			/>
+			<div className="bx-stage" data-mode="annotate">
+				<div className="bx-page" style={page}>
+					<img
+						className="bx-frame"
+						src={`data:${frame.mimeType};base64,${frame.data}`}
+						width={viewport.width}
+						height={viewport.height}
+						alt=""
+						draggable={false}
 					/>
-					<div className="bx-stage" data-mode="annotate">
-						<div className="bx-page" style={page}>
-							<img
-								className="bx-frame"
-								src={`data:${frame.mimeType};base64,${frame.data}`}
-								width={viewport.width}
-								height={viewport.height}
-								alt=""
-								draggable={false}
-							/>
-							<MarkupOverlay
-								marks={markup.marks}
-								tool={session.tool}
-								onShape={session.onShape}
-								activeId={session.activeId}
-								label="Draw on the page"
-							/>
-							{floats === undefined ? null : <div className="bx-floats">{floats}</div>}
-						</div>
-					</div>
-				</div>
-				<aside className="bx-seat-panel" data-slot="annotate-panel">
-					<AnnotationPanel
-						title="Notes"
-						items={items}
-						activeId={session.activeId}
-						focus={session.focus}
-						onActive={session.setActiveId}
+					<MarkupOverlay
+						marks={markup.marks}
+						tool={session.tool}
+						onShape={session.onShape}
 						onNote={markup.setNote}
 						onRemove={markup.remove}
-						message={session.message}
-						onMessage={session.setMessage}
-						onSend={() => void session.send()}
-						send={{ busy: session.sending, staged: session.staged }}
-						status={session.status}
-						emptyHint={
-							<>
-								<strong>Add a note</strong>
-								<span>
-									Drag to box something, or pick another tool above the page. Press <kbd>1</kbd>–<kbd>5</kbd> to switch tools.
-								</span>
-							</>
-						}
+						label="Draw on the page"
 					/>
-				</aside>
+					{floats === undefined ? null : <div className="bx-floats">{floats}</div>}
+				</div>
 			</div>
+			<AnnotationNotice status={session.status} />
 		</div>
 	);
 }
