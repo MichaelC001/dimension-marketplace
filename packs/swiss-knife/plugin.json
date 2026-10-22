@@ -1,7 +1,7 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "swiss-knife",
-	"version": "0.3.7",
+	"version": "0.3.8",
 	"description": "Small useful things in one switch: `present` shows you a file as a card in the thread, the Viewer opens and annotates it, and a stream rule stops the agent mid-edit when it writes a code comment.",
 	"author": {
 		"name": "Dimension"
@@ -53,7 +53,7 @@
 					"label": "Viewer",
 					"icon": "file",
 					"modelSpaces": [],
-					"grants": ["files:read"],
+					"grants": ["files:read", "dictation"],
 					"opens": [
 						{
 							"tool": "view_file",
