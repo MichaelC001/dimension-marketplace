@@ -603,6 +603,8 @@ interface Tab {
 	/** The person's own page, adopted as it was (an attach engine's `adoptTab`): never resized, never kept rendering by us, never closed by this driver. */
 	foreign?: boolean;
 	measured?: Geometry;
+	/** The one renderer measurement in flight, shared by every reader that asks while it runs. */
+	measuring?: Promise<Geometry | undefined>;
 }
 
 /** The last MAX_DIALOGS dialogs answered, oldest first; `seq` counts them since the tab began. */
@@ -702,6 +704,8 @@ interface Screencast {
 	frame: LiveFrame | null;
 	onFrame: (event: Protocol.Page.ScreencastFrameEvent) => void;
 	windowKey?: string;
+	/** The picture size Chrome was asked to cast at (it downscales anything larger); the View cast only. */
+	bounds?: { readonly width: number; readonly height: number };
 }
 /** Private, picture-only cast on its own CDP session; never changes the page or the View cast. */
 interface CardCast extends Screencast {
@@ -842,7 +846,8 @@ class PuppeteerDriver implements EngineDriver {
 		const active = this.#activeTab();
 		// Only browser-process reads here: a renderer-side call (Page.getFrameTree)
 		// stalls until an in-flight navigation commits, which would freeze the
-		// live view for the whole load. The document id is event-tracked instead.
+		// live view for the whole load. The document id is event-tracked instead,
+		// and a foreign tab's size is measured only while no load is in flight (`#geometry`).
 		const [history, { viewport }] = await Promise.all([this.#read(() => active.cdp.send("Page.getNavigationHistory")), this.#geometry(active)]);
 		const current = history.entries[history.currentIndex];
 		if (!current) fail("no_document", "The browser did not report a current navigation entry.");
@@ -1427,13 +1432,32 @@ class PuppeteerDriver implements EngineDriver {
 		);
 	}
 
+	/**
+	 * A foreign tab is the person's own window, so its viewport and pixel ratio are read in its renderer. That renderer
+	 * stalls while a navigation is in flight (the reason `state()` reads only browser-process facts), so a read during
+	 * a load answers from the last measurement rather than waiting; otherwise one measurement runs at a time.
+	 */
 	async #geometry(tab: Tab): Promise<Geometry> {
 		if (!tab.foreign) return { viewport: this.#viewport, scale: this.#scale };
-		const seen = await withTimeout(tab.page.evaluate(GEOMETRY_SCRIPT), GEOMETRY_TIMEOUT_MS, "viewport size").catch(() => undefined);
-		if (seen !== undefined && seen.width > 0 && seen.height > 0) {
-			tab.measured = { viewport: { width: Math.round(seen.width), height: Math.round(seen.height) }, scale: seen.scale > 0 ? seen.scale : 1 };
-		}
+		if (!(tab.loading && tab.measured)) await this.#measure(tab);
 		return tab.measured ?? { viewport: this.#viewport, scale: this.#scale };
+	}
+
+	#measure(tab: Tab): Promise<Geometry | undefined> {
+		tab.measuring ??= withTimeout(tab.page.evaluate(GEOMETRY_SCRIPT), GEOMETRY_TIMEOUT_MS, "viewport size")
+			.then(
+				(seen) => {
+					if (seen.width > 0 && seen.height > 0) {
+						tab.measured = { viewport: { width: Math.round(seen.width), height: Math.round(seen.height) }, scale: seen.scale > 0 ? seen.scale : 1 };
+					}
+					return tab.measured;
+				},
+				() => tab.measured,
+			)
+			.finally(() => {
+				tab.measuring = undefined;
+			});
+		return tab.measuring;
 	}
 
 	async #stillOf(tab: Tab, cdp: CDPSession, quality: number, maxWidth: number): Promise<Buffer | undefined> {
@@ -2243,9 +2267,11 @@ class PuppeteerDriver implements EngineDriver {
 			if (this.#closed || tab.page.isClosed()) return;
 			const geometry = await this.#geometry(tab);
 			if (this.#closed || tab.page.isClosed()) return;
+			const bounds = { width: Math.round(geometry.viewport.width * geometry.scale), height: Math.round(geometry.viewport.height * geometry.scale) };
 			const cast: Screencast = {
 				tab,
 				viewport: geometry.viewport,
+				bounds,
 				frame: null,
 				onFrame: (event) => {
 					// Every picture is acknowledged, or Chrome stops sending them.
@@ -2258,19 +2284,17 @@ class PuppeteerDriver implements EngineDriver {
 			};
 			this.#cast = cast;
 			tab.cdp.on("Page.screencastFrame", cast.onFrame);
-			await tab.cdp
-				.send("Page.startScreencast", {
-					format: "jpeg",
-					quality: SCREENCAST_QUALITY,
-					maxWidth: Math.round(geometry.viewport.width * geometry.scale),
-					maxHeight: Math.round(geometry.viewport.height * geometry.scale),
-					everyNthFrame: 1,
-				})
-				.catch(() => undefined);
+			await this.#castAt(tab, bounds);
 			void this.#stillIfNone(cast);
 		});
 		this.#castChain = step.catch(() => undefined);
 		return step;
+	}
+
+	#castAt(tab: Tab, bounds: { readonly width: number; readonly height: number }): Promise<void> {
+		return tab.cdp
+			.send("Page.startScreencast", { format: "jpeg", quality: SCREENCAST_QUALITY, maxWidth: bounds.width, maxHeight: bounds.height, everyNthFrame: 1 })
+			.then(() => undefined, () => undefined);
 	}
 
 	/** One picture to every watcher, and the newest one kept for a watcher who joins later. */
@@ -2290,9 +2314,20 @@ class PuppeteerDriver implements EngineDriver {
 		this.#emit(cast, jpeg);
 		const windowKey = `${metadata.deviceWidth}x${metadata.deviceHeight}`;
 		if (windowKey === cast.windowKey) return;
+		const first = cast.windowKey === undefined;
 		cast.windowKey = windowKey;
-		void this.#geometry(cast.tab).then(({ viewport }) => {
-			if (this.#cast !== cast || (viewport.width === cast.viewport.width && viewport.height === cast.viewport.height)) return;
+		// The cast began on a measurement of this window: its first picture only names the window that was measured.
+		if (first) return;
+		void this.#measure(cast.tab).then((geometry) => {
+			if (geometry === undefined || this.#cast !== cast) return;
+			const { viewport, scale } = geometry;
+			const bounds = { width: Math.round(viewport.width * scale), height: Math.round(viewport.height * scale) };
+			// Chrome downscales every picture to the bounds the cast began with: a window grown past them is cast at its new size.
+			if (cast.bounds !== undefined && (bounds.width > cast.bounds.width || bounds.height > cast.bounds.height)) {
+				cast.bounds = bounds;
+				void this.#castAt(cast.tab, bounds);
+			}
+			if (viewport.width === cast.viewport.width && viewport.height === cast.viewport.height) return;
 			cast.viewport = viewport;
 			if (cast.frame !== null) this.#emit(cast, cast.frame.jpeg);
 		});

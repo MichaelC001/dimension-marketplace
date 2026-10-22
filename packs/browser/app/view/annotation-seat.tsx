@@ -17,7 +17,7 @@ import {
 	useMarkupShortcuts,
 } from "@dimension/mcp-app-kit/annotate/react";
 import type { App } from "@modelcontextprotocol/ext-apps";
-import { type CSSProperties, type ReactNode, useEffect, useMemo } from "react";
+import { type CSSProperties, type ReactNode, useCallback, useEffect, useMemo } from "react";
 import type { BrowserFrame } from "../../src/contracts";
 import type { BrowserClient } from "./browser-client";
 import { captureName, PAGE_DETAIL_KIND, pageAttach, pageEnrich } from "./page-annotation";
@@ -74,13 +74,19 @@ export function AnnotationSeat({ app, client, browserId, frame, floats, onDone }
 		detailKind: PAGE_DETAIL_KIND,
 		autoStage: true,
 	});
-	const { markup, setTool } = session;
+	const { markup, setTool, staged, sending, send } = session;
 
 	// Entering arms the box tool: the first thing a person does is drag one.
 	useEffect(() => {
 		setTool("box");
 	}, [setTool]);
-	useMarkupShortcuts({ enabled: true, onTool: setTool, onUndo: markup.undo, onRedo: markup.redo, onExit: onDone });
+	// Leaving unmounts the seat, which clears the kit's quiet-interval staging timer: words written in the last
+	// 800 ms are staged now, or Done would drop them.
+	const done = useCallback(() => {
+		if (markup.marks.length > 0 && !staged && !sending) void send();
+		onDone();
+	}, [markup.marks.length, staged, sending, send, onDone]);
+	useMarkupShortcuts({ enabled: true, onTool: setTool, onUndo: markup.undo, onRedo: markup.redo, onExit: done });
 
 	const { viewport } = frame.state;
 	const page = { "--vw": viewport.width, "--vh": viewport.height } as CSSProperties;
@@ -107,7 +113,7 @@ export function AnnotationSeat({ app, client, browserId, frame, floats, onDone }
 						id: "seat",
 						label: "Seat",
 						kind: "act",
-						tools: [{ id: "done", label: "Done", text: "Done", key: "Esc", icon: <MarkupIcon name="check" size={15} />, onSelect: onDone }],
+						tools: [{ id: "done", label: "Done", text: "Done", key: "Esc", icon: <MarkupIcon name="check" size={15} />, onSelect: done }],
 					},
 				]}
 			/>

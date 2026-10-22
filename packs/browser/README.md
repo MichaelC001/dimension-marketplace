@@ -25,8 +25,8 @@ standard MCP and MCP Apps. No host internals, no browser fork.
 - **Throwaway by default, named profiles to keep logins.** A browser opened
   without a profile keeps nothing and is deleted when it closes. A named profile
   persists logins across restarts, keeps its cookies separate from other profiles (not a barrier against code the agent runs: see Code cells), and is shared with any
-  other chat that opens it (each on its own tabs). The View's start page and the dock open the
-  saved `default` profile unless you tick **Private** ([Browser dock entry](#browser-dock-entry)).
+  other chat that opens it (each on its own tabs). The View's start page opens the saved `default` profile unless
+  you tick **Private**; the dock's Browser entry always opens `default` ([Browser dock entry](#browser-dock-entry)).
 - **Annotations that carry pixels.** Freeze the page, mark it with the shared
   annotation kit (pin, box, circle, arrow, pen, a note on each mark); the numbered
   marks are burned into the picture and staged as a chip on your next message,
@@ -130,7 +130,7 @@ Both refusals name the reason in the error and lift when upstream fixes land.
 
 Build from inside the Dimension monorepo — `@dimension/sdk` and `@fraym/ui` are
 `workspace:*` build-time dependencies until they are published. The shipped
-`app/` and `dist/` bundles need neither.
+`app/` bundles need neither.
 
 ```bash
 npm install

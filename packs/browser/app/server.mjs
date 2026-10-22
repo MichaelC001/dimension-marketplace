@@ -5442,13 +5442,29 @@ var PuppeteerDriver = class {
       `${kind} at ${x},${y} is outside the ${width}x${height} viewport, so nothing was ${kind === "click" ? "clicked" : "hovered"}. Scroll it into view with browser_act scroll, then take a new browser_snapshot for its fresh coordinates.`
     );
   }
+  /**
+   * A foreign tab is the person's own window, so its viewport and pixel ratio are read in its renderer. That renderer
+   * stalls while a navigation is in flight (the reason `state()` reads only browser-process facts), so a read during
+   * a load answers from the last measurement rather than waiting; otherwise one measurement runs at a time.
+   */
   async #geometry(tab) {
     if (!tab.foreign) return { viewport: this.#viewport, scale: this.#scale };
-    const seen = await withTimeout(tab.page.evaluate(GEOMETRY_SCRIPT), GEOMETRY_TIMEOUT_MS, "viewport size").catch(() => void 0);
-    if (seen !== void 0 && seen.width > 0 && seen.height > 0) {
-      tab.measured = { viewport: { width: Math.round(seen.width), height: Math.round(seen.height) }, scale: seen.scale > 0 ? seen.scale : 1 };
-    }
+    if (!(tab.loading && tab.measured)) await this.#measure(tab);
     return tab.measured ?? { viewport: this.#viewport, scale: this.#scale };
+  }
+  #measure(tab) {
+    tab.measuring ??= withTimeout(tab.page.evaluate(GEOMETRY_SCRIPT), GEOMETRY_TIMEOUT_MS, "viewport size").then(
+      (seen) => {
+        if (seen.width > 0 && seen.height > 0) {
+          tab.measured = { viewport: { width: Math.round(seen.width), height: Math.round(seen.height) }, scale: seen.scale > 0 ? seen.scale : 1 };
+        }
+        return tab.measured;
+      },
+      () => tab.measured
+    ).finally(() => {
+      tab.measuring = void 0;
+    });
+    return tab.measuring;
   }
   async #stillOf(tab, cdp, quality, maxWidth) {
     try {
@@ -6189,9 +6205,11 @@ var PuppeteerDriver = class {
       if (this.#closed || tab.page.isClosed()) return;
       const geometry = await this.#geometry(tab);
       if (this.#closed || tab.page.isClosed()) return;
+      const bounds = { width: Math.round(geometry.viewport.width * geometry.scale), height: Math.round(geometry.viewport.height * geometry.scale) };
       const cast = {
         tab,
         viewport: geometry.viewport,
+        bounds,
         frame: null,
         onFrame: (event) => {
           void tab.cdp.send("Page.screencastFrameAck", { sessionId: event.sessionId }).catch(() => void 0);
@@ -6203,17 +6221,14 @@ var PuppeteerDriver = class {
       };
       this.#cast = cast;
       tab.cdp.on("Page.screencastFrame", cast.onFrame);
-      await tab.cdp.send("Page.startScreencast", {
-        format: "jpeg",
-        quality: SCREENCAST_QUALITY,
-        maxWidth: Math.round(geometry.viewport.width * geometry.scale),
-        maxHeight: Math.round(geometry.viewport.height * geometry.scale),
-        everyNthFrame: 1
-      }).catch(() => void 0);
+      await this.#castAt(tab, bounds);
       void this.#stillIfNone(cast);
     });
     this.#castChain = step.catch(() => void 0);
     return step;
+  }
+  #castAt(tab, bounds) {
+    return tab.cdp.send("Page.startScreencast", { format: "jpeg", quality: SCREENCAST_QUALITY, maxWidth: bounds.width, maxHeight: bounds.height, everyNthFrame: 1 }).then(() => void 0, () => void 0);
   }
   /** One picture to every watcher, and the newest one kept for a watcher who joins later. */
   #emit(cast, jpeg) {
@@ -6231,9 +6246,18 @@ var PuppeteerDriver = class {
     this.#emit(cast, jpeg);
     const windowKey = `${metadata.deviceWidth}x${metadata.deviceHeight}`;
     if (windowKey === cast.windowKey) return;
+    const first = cast.windowKey === void 0;
     cast.windowKey = windowKey;
-    void this.#geometry(cast.tab).then(({ viewport }) => {
-      if (this.#cast !== cast || viewport.width === cast.viewport.width && viewport.height === cast.viewport.height) return;
+    if (first) return;
+    void this.#measure(cast.tab).then((geometry) => {
+      if (geometry === void 0 || this.#cast !== cast) return;
+      const { viewport, scale } = geometry;
+      const bounds = { width: Math.round(viewport.width * scale), height: Math.round(viewport.height * scale) };
+      if (cast.bounds !== void 0 && (bounds.width > cast.bounds.width || bounds.height > cast.bounds.height)) {
+        cast.bounds = bounds;
+        void this.#castAt(cast.tab, bounds);
+      }
+      if (viewport.width === cast.viewport.width && viewport.height === cast.viewport.height) return;
       cast.viewport = viewport;
       if (cast.frame !== null) this.#emit(cast, cast.frame.jpeg);
     });
