@@ -21,7 +21,7 @@ export const RELAY_PROFILE = "relay";
 
 /**
  * The saved profile a person's own Browser opens (the View's start page and the
- * dock's "Open a page"). They never name it: the word "profile" stays out of
+ * dock's Browser entry). They never name it: the word "profile" stays out of
  * the UI. An agent that passes no profile gets a throwaway browser instead.
  */
 export const DEFAULT_PROFILE = "default";

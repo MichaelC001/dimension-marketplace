@@ -26,7 +26,7 @@ standard MCP and MCP Apps. No host internals, no browser fork.
   without a profile keeps nothing and is deleted when it closes. A named profile
   persists logins across restarts, keeps its cookies separate from other profiles (not a barrier against code the agent runs: see Code cells), and is shared with any
   other chat that opens it (each on its own tabs). The View's start page and the dock open the
-  saved `default` profile unless you tick **Private** ([Browser panel](#browser-panel)).
+  saved `default` profile unless you tick **Private** ([Browser dock entry](#browser-dock-entry)).
 - **Annotations that carry pixels.** Freeze the page, mark it with the shared
   annotation kit (pin, box, circle, arrow, pen, a note on each mark); the numbered
   marks are burned into the picture and staged as a chip on your next message,
@@ -899,32 +899,33 @@ accounts: a page can hold any link its author likes, so such a count proves noth
 Like the presets, the selectors are modelled on each
 site's page and tested against copies of it, not yet seen on the live sites.
 
-## Browser panel
+## Browser dock entry
 
-Installing the pack also adds a **Browser** tab to the dock (component
-`browser-accounts`). It is one **Open a page** bar: type a website address,
-choose a profile and **Open** shows the live Browser View beside the chat at it
-(an empty bar opens a blank browser; something that is not an address opens
-nothing and says why). The profile list is every saved profile the
-[connection report](#connection-report) names, by its label, then **Private**;
-it follows the report live, so a profile added in the View appears without
-reopening the tab. Signing in and adding profiles belong to the Browser itself:
-its profile menu switches and adds profiles and summarises where each is signed
-in (the first sites seen signed in, never a site's account).
+Installing the pack adds **Browser** to the dock's switch menu (component `browser`,
+a dock **launcher**: `launch: { tool: "browser_view", args: { profile: "default" } }`).
+It is not a panel. Choosing it seats nothing in the dock and leaves the dock's current
+panel as it was; it opens the live Browser View as a tab with the Browser icon in the
+artifact column beside the chat, or selects that tab when it is already open. In a
+space whose dock offers nothing but Browser, the top-bar dock control is that entry:
+its button reads **Browser** and opens the View.
 
-The View's start page opens on the saved `default` set, and so does the tab
-unless another profile is chosen, so a person's own browser keeps their logins.
-**Private** sends no profile: a throwaway browser that saves nothing. A saved set is one
-browser that chats share, each on its own tabs; what is refused is a second process on the
-same folder (`profile_locked`), and the start page turns that into "That profile's browser
-is already open in another window. Close it there, or open a Private one."
+The View has its own address bar and profile menu. Signing in, switching and adding
+profiles, and the summary of where each profile is signed in (the first sites seen
+signed in, never a site's account) all belong to the Browser itself.
 
-The tab acts only through `openArtifactoryView` (`browser_view` with
-`{ url?, profile? }`), which its `artifactory:open` grant admits. The host mounts
-the View from a tool's static `_meta.ui`, and `browser_open` has none (it is
-headless), so the tab opens through `browser_view`. The host opens the View in the
-active session, so with no session open the tab's **Open** button is disabled.
-The tab is built by `npm run build` into `dist/index.mjs`.
+The entry opens the saved `default` set, so a person's own browser keeps their logins;
+the View's start page offers **Private** (no profile: a throwaway browser that saves
+nothing). A saved set is one browser that chats share, each on its own tabs, so opening
+the entry again joins the browser already running instead of starting another; what is
+refused is a second process on the same folder (`profile_locked`), and the start page turns
+that into "That profile's browser is already open in another window. Close it there, or open
+a Private one."
+
+The entry acts only through `openArtifactoryView`, which its `artifactory:open` grant admits.
+The host mounts the View from a tool's static `_meta.ui`, and `browser_open` has none (it is
+headless), so the entry opens through `browser_view`. The host opens the View in the active
+session, so with no session open the entry is disabled. The pack ships no dock bundle: the
+entry is manifest data.
 
 ## Tests and benchmark
 
