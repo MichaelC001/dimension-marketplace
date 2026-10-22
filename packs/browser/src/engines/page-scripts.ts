@@ -204,6 +204,11 @@ const SCROLL_SCRIPT = (): PageScroll => {
 	const root = document.documentElement;
 	return { x: Math.round(window.scrollX), y: Math.round(window.scrollY), width: root.scrollWidth, height: root.scrollHeight };
 };
+const GEOMETRY_SCRIPT = (): { width: number; height: number; scale: number } => ({
+	width: window.innerWidth,
+	height: window.innerHeight,
+	scale: window.devicePixelRatio,
+});
 const SELECT_ALL_SCRIPT = (el: Element): boolean => {
 	const field = el as HTMLInputElement | HTMLTextAreaElement;
 	if (typeof field.select !== "function") return false;
@@ -468,6 +473,7 @@ export {
 	READ_PAGE_SCRIPT,
 	ELEMENTS_IN_REGIONS_SCRIPT,
 	SCROLL_SCRIPT,
+	GEOMETRY_SCRIPT,
 	SELECT_ALL_SCRIPT,
 	FAVICON_HREF_SCRIPT,
 	IS_PASSWORD_SCRIPT,

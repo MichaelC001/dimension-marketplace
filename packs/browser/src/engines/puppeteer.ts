@@ -46,6 +46,7 @@ import {
 	ELEMENT_TEXT_SCRIPT,
 	ELEMENTS_IN_REGIONS_SCRIPT,
 	SCROLL_SCRIPT,
+	GEOMETRY_SCRIPT,
 	FAVICON_HREF_SCRIPT,
 	FOCUSED_LEAF_SCRIPT,
 	FRAME_INSET_SCRIPT,
@@ -98,6 +99,7 @@ const KILL_CONFIRM_MS = 5_000;
 /** What a hard stop of an attached browser gives the pages this driver opened itself to close before the connection is dropped. */
 const KILL_TAB_CLOSE_MS = 1_000;
 const FAVICON_SCRIPT_TIMEOUT_MS = 2_000;
+const GEOMETRY_TIMEOUT_MS = 1_000;
 /** How long a freshly started screencast gets to deliver its first picture before one is captured: Chrome sends nothing for a page that is not changing. */
 const FIRST_FRAME_WAIT_MS = 150;
 const SCREENCAST_QUALITY = 70;
@@ -572,6 +574,11 @@ async function settledRead(page: Page, limit: number): Promise<Omit<PageRead, "h
 	return await page.evaluate(READ_PAGE_SCRIPT, limit, MAX_READ_FRAMES);
 }
 
+interface Geometry {
+	viewport: Viewport;
+	scale: number;
+}
+
 /**
  * One page tab. `cdp` is a private session on the tab's target. The main
  * frame's id — the target id — is the tab id. `documentId` is the main frame's
@@ -595,6 +602,7 @@ interface Tab {
 	log: LogEntry[];
 	/** The person's own page, adopted as it was (an attach engine's `adoptTab`): never resized, never kept rendering by us, never closed by this driver. */
 	foreign?: boolean;
+	measured?: Geometry;
 }
 
 /** The last MAX_DIALOGS dialogs answered, oldest first; `seq` counts them since the tab began. */
@@ -693,6 +701,7 @@ interface Screencast {
 	viewport: Viewport;
 	frame: LiveFrame | null;
 	onFrame: (event: Protocol.Page.ScreencastFrameEvent) => void;
+	windowKey?: string;
 }
 /** Private, picture-only cast on its own CDP session; never changes the page or the View cast. */
 interface CardCast extends Screencast {
@@ -834,7 +843,7 @@ class PuppeteerDriver implements EngineDriver {
 		// Only browser-process reads here: a renderer-side call (Page.getFrameTree)
 		// stalls until an in-flight navigation commits, which would freeze the
 		// live view for the whole load. The document id is event-tracked instead.
-		const history = await this.#read(() => active.cdp.send("Page.getNavigationHistory"));
+		const [history, { viewport }] = await Promise.all([this.#read(() => active.cdp.send("Page.getNavigationHistory")), this.#geometry(active)]);
 		const current = history.entries[history.currentIndex];
 		if (!current) fail("no_document", "The browser did not report a current navigation entry.");
 		// Browser-maintained metadata, not document JavaScript: the latter loses
@@ -857,7 +866,7 @@ class PuppeteerDriver implements EngineDriver {
 			title: current.title,
 			// A tab switch is a document change for everything pinned to one.
 			documentId: `${active.id}:${active.documentId}`,
-			viewport: this.#viewport,
+			viewport,
 			tabs,
 			activeTabId: active.id,
 			loading: active.loading,
@@ -868,14 +877,7 @@ class PuppeteerDriver implements EngineDriver {
 	}
 
 	async screenshot(): Promise<Uint8Array> {
-		const { width, height } = this.#viewport;
-		// Annotation frames stay in CSS pixels whatever the render scale: crop
-		// regions, clicks and element lookups all share that one space.
-		const shot = await this.#activeTab().page.screenshot({
-			type: "png",
-			captureBeyondViewport: false,
-			...(this.#scale === 1 ? {} : { clip: { x: 0, y: 0, width, height, scale: 1 / this.#scale } }),
-		});
+		const shot = await this.#activeTab().page.screenshot({ type: "png", captureBeyondViewport: false });
 		if (shot.length > MAX_FRAME_BYTES) {
 			fail("frame_too_large", `screenshot is ${shot.length} bytes, above the ${MAX_FRAME_BYTES} byte limit`);
 		}
@@ -884,7 +886,7 @@ class PuppeteerDriver implements EngineDriver {
 
 	async shotForModel(request: ShotRequest): Promise<Omit<ModelShot, "url">> {
 		const tab = this.#activeTab();
-		const metrics = await this.#read(() => tab.cdp.send("Page.getLayoutMetrics"));
+		const [metrics, { scale: pixelRatio }] = await Promise.all([this.#read(() => tab.cdp.send("Page.getLayoutMetrics")), this.#geometry(tab)]);
 		const view = metrics.cssVisualViewport;
 		// Clip and capture coordinates are the page's (document) CSS pixels, scrolled or not.
 		let region: BrowserRegion = { x: view.pageX, y: view.pageY, width: view.clientWidth, height: view.clientHeight };
@@ -901,7 +903,7 @@ class PuppeteerDriver implements EngineDriver {
 				quality: MODEL_SHOT_QUALITY,
 				captureBeyondViewport: !inView,
 				// The output is the clip's size times its scale times the page's pixel ratio.
-				clip: { x: region.x, y: region.y, width, height, scale: scale / this.#scale },
+				clip: { x: region.x, y: region.y, width, height, scale: scale / pixelRatio },
 			}),
 		);
 		return { mimeType: "image/webp", data: shot.data, width, height, scale: Math.round(scale * 1_000) / 1_000 };
@@ -966,13 +968,7 @@ class PuppeteerDriver implements EngineDriver {
 
 	async previewStill(): Promise<Uint8Array | undefined> {
 		const tab = this.#activeTab();
-		const viewport = this.#viewport;
-		const shot = await tab.cdp.send("Page.captureScreenshot", {
-			format: "jpeg", quality: 50,
-			clip: { x: 0, y: 0, width: viewport.width, height: viewport.height, scale: Math.min(1, 480 / viewport.width) },
-			captureBeyondViewport: false,
-		}).catch(() => undefined);
-		return shot ? Buffer.from(shot.data, "base64") : undefined;
+		return await this.#stillOf(tab, tab.cdp, 50, 480);
 	}
 
 	watchFrames(listener: (frame: LiveFrame) => void, size: "view" | { maxWidth: 480 | 1280 } = "view"): () => void {
@@ -1264,7 +1260,7 @@ class PuppeteerDriver implements EngineDriver {
 					if (action.selector === undefined) {
 						const x = requireNumber(action.x, "click.x");
 						const y = requireNumber(action.y, "click.y");
-						this.#assertInViewport("click", x, y);
+						await this.#assertInViewport(tab, "click", x, y);
 						if (guard !== undefined) {
 							const admission = guard();
 							if (admission !== undefined) await admission;
@@ -1308,7 +1304,7 @@ class PuppeteerDriver implements EngineDriver {
 				case "hover": {
 					const x = requireNumber(action.x, "hover.x");
 					const y = requireNumber(action.y, "hover.y");
-					this.#assertInViewport("hover", x, y);
+					await this.#assertInViewport(tab, "hover", x, y);
 					if (guard !== undefined) {
 						const admission = guard();
 						if (admission !== undefined) await admission;
@@ -1422,13 +1418,38 @@ class PuppeteerDriver implements EngineDriver {
 	}
 
 	/** A coordinate outside the viewport reaches no element: refused, with the way out. */
-	#assertInViewport(kind: "click" | "hover", x: number, y: number): void {
-		const { width, height } = this.#viewport;
+	async #assertInViewport(tab: Tab, kind: "click" | "hover", x: number, y: number): Promise<void> {
+		const { width, height } = (await this.#geometry(tab)).viewport;
 		if (x >= 0 && y >= 0 && x < width && y < height) return;
 		throw new ActionNotDispatched(
 			"off_viewport",
 			`${kind} at ${x},${y} is outside the ${width}x${height} viewport, so nothing was ${kind === "click" ? "clicked" : "hovered"}. Scroll it into view with browser_act scroll, then take a new browser_snapshot for its fresh coordinates.`,
 		);
+	}
+
+	async #geometry(tab: Tab): Promise<Geometry> {
+		if (!tab.foreign) return { viewport: this.#viewport, scale: this.#scale };
+		const seen = await withTimeout(tab.page.evaluate(GEOMETRY_SCRIPT), GEOMETRY_TIMEOUT_MS, "viewport size").catch(() => undefined);
+		if (seen !== undefined && seen.width > 0 && seen.height > 0) {
+			tab.measured = { viewport: { width: Math.round(seen.width), height: Math.round(seen.height) }, scale: seen.scale > 0 ? seen.scale : 1 };
+		}
+		return tab.measured ?? { viewport: this.#viewport, scale: this.#scale };
+	}
+
+	async #stillOf(tab: Tab, cdp: CDPSession, quality: number, maxWidth: number): Promise<Buffer | undefined> {
+		try {
+			const [{ viewport }, metrics] = await Promise.all([this.#geometry(tab), this.#read(() => cdp.send("Page.getLayoutMetrics"))]);
+			const { pageX: x, pageY: y } = metrics.cssVisualViewport;
+			const shot = await cdp.send("Page.captureScreenshot", {
+				format: "jpeg",
+				quality,
+				captureBeyondViewport: false,
+				clip: { x, y, width: viewport.width, height: viewport.height, scale: Math.min(1, maxWidth / viewport.width) },
+			});
+			return Buffer.from(shot.data, "base64");
+		} catch {
+			return undefined;
+		}
 	}
 
 	/**
@@ -2196,14 +2217,9 @@ class PuppeteerDriver implements EngineDriver {
 				void (async () => {
 					await sleep(FIRST_FRAME_WAIT_MS);
 					if (this.#cardCasts.get(width) !== cast || this.#active !== tab || this.#viewport !== cast.viewport || this.#closed || cast.frame !== null) return;
-					const shot = await cdp.send("Page.captureScreenshot", {
-						format: "jpeg", quality: width === 480 ? 50 : 60,
-						clip: { x: 0, y: 0, width: cast.viewport.width, height: cast.viewport.height, scale },
-						captureBeyondViewport: false,
-					}).catch(() => null);
+					const shot = await this.#stillOf(tab, cdp, width === 480 ? 50 : 60, width);
 					if (shot && this.#cardCasts.get(width) === cast && this.#active === tab && this.#viewport === cast.viewport && !this.#closed && cast.frame === null) {
-						const jpeg = Buffer.from(shot.data, "base64");
-						const frame: LiveFrame = { id: `card-${tab.id}-${++this.#frameSeq}`, jpeg, viewport: cast.viewport, capturedAt: Date.now() };
+						const frame: LiveFrame = { id: `card-${tab.id}-${++this.#frameSeq}`, jpeg: shot, viewport: cast.viewport, capturedAt: Date.now() };
 						cast.frame = frame;
 						for (const watcher of this.#cardWatchers.get(width) ?? []) watcher(frame);
 					}
@@ -2225,14 +2241,19 @@ class PuppeteerDriver implements EngineDriver {
 			if (this.#cast?.tab === tab || this.#watchers.size === 0) return;
 			await this.#stopScreencastNow();
 			if (this.#closed || tab.page.isClosed()) return;
+			const geometry = await this.#geometry(tab);
+			if (this.#closed || tab.page.isClosed()) return;
 			const cast: Screencast = {
 				tab,
-				viewport: this.#viewport,
+				viewport: geometry.viewport,
 				frame: null,
 				onFrame: (event) => {
 					// Every picture is acknowledged, or Chrome stops sending them.
 					void tab.cdp.send("Page.screencastFrameAck", { sessionId: event.sessionId }).catch(() => undefined);
-					if (this.#cast === cast) this.#emit(cast, Buffer.from(event.data, "base64"));
+					if (this.#cast !== cast) return;
+					const jpeg = Buffer.from(event.data, "base64");
+					if (tab.foreign) this.#emitFollowingWindow(cast, event.metadata, jpeg);
+					else this.#emit(cast, jpeg);
 				},
 			};
 			this.#cast = cast;
@@ -2241,8 +2262,8 @@ class PuppeteerDriver implements EngineDriver {
 				.send("Page.startScreencast", {
 					format: "jpeg",
 					quality: SCREENCAST_QUALITY,
-					maxWidth: Math.round(this.#viewport.width * this.#scale),
-					maxHeight: Math.round(this.#viewport.height * this.#scale),
+					maxWidth: Math.round(geometry.viewport.width * geometry.scale),
+					maxHeight: Math.round(geometry.viewport.height * geometry.scale),
 					everyNthFrame: 1,
 				})
 				.catch(() => undefined);
@@ -2263,6 +2284,18 @@ class PuppeteerDriver implements EngineDriver {
 				console.error("A live frame listener failed:", error);
 			}
 		}
+	}
+
+	#emitFollowingWindow(cast: Screencast, metadata: Protocol.Page.ScreencastFrameMetadata, jpeg: Uint8Array): void {
+		this.#emit(cast, jpeg);
+		const windowKey = `${metadata.deviceWidth}x${metadata.deviceHeight}`;
+		if (windowKey === cast.windowKey) return;
+		cast.windowKey = windowKey;
+		void this.#geometry(cast.tab).then(({ viewport }) => {
+			if (this.#cast !== cast || (viewport.width === cast.viewport.width && viewport.height === cast.viewport.height)) return;
+			cast.viewport = viewport;
+			if (cast.frame !== null) this.#emit(cast, cast.frame.jpeg);
+		});
 	}
 
 	/** A page that has not painted since the cast began sends nothing: capture one picture so the view is never blank. The cast's own picture wins when it comes first. */
