@@ -3,7 +3,7 @@ import type { App } from "@modelcontextprotocol/ext-apps";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { VIEW_DICTATION_CONTEXT_KEY, VIEW_DICTATION_START_METHOD, VIEW_DICTATION_STOP_METHOD } from "@dimension/sdk/artifactory";
 import * as realExtApps from "@modelcontextprotocol/ext-apps/react";
-import { act } from "react";
+import { act, useState } from "react";
 import * as ReactDomClient from "react-dom/client";
 import * as realPaint from "../../../../packages/mcp-app-kit/src/annotate/paint";
 import type { BrowserFrame } from "../src/contracts";
@@ -191,6 +191,36 @@ async function until(dom: Dom, done: () => boolean, withinMs = 4000): Promise<vo
 
 const textOf = (update: Update | undefined): string => update?.content.find(block => block.type === "text")?.text ?? "";
 
+const QUIET_TIMER_FLOOR_MS = 250;
+
+function holdQuietTimers(): { readonly armed: () => number; readonly release: () => void } {
+	const real = globalThis.setTimeout;
+	let armed = 0;
+	globalThis.setTimeout = ((handler: TimerHandler, delay?: number, ...args: unknown[]) => {
+		if ((delay ?? 0) < QUIET_TIMER_FLOOR_MS) return real(handler as () => void, delay, ...args);
+		armed += 1;
+		return real(() => {}, delay);
+	}) as unknown as typeof setTimeout;
+	return { armed: () => armed, release: () => void (globalThis.setTimeout = real) };
+}
+
+function LeavableSeat({ app, client, onLeft }: { readonly app: App; readonly client: BrowserClient; readonly onLeft: () => void }) {
+	const [seated, setSeated] = useState(true);
+	if (!seated) return null;
+	return (
+		<AnnotationSeat
+			app={app}
+			client={client}
+			browserId="b1"
+			frame={FRAME}
+			onDone={() => {
+				onLeft();
+				setSeated(false);
+			}}
+		/>
+	);
+}
+
 describe("the annotation seat", () => {
 	test("a mark opens its note beside it, and the seat has no side panel, no overall message and no Request edits", async () => {
 		const { app } = host();
@@ -298,6 +328,52 @@ describe("the annotation seat", () => {
 		expect(done).toBe(1);
 		expect(updates).toHaveLength(1);
 		expect(updates[0]?.content.length).toBeGreaterThan(0);
+	});
+
+	for (const leave of [
+		{ name: "Done", press: (dom: Dom) => dom.click(label(dom, "Done")) },
+		{ name: "Esc", press: (dom: Dom) => dom.key(dom.find('[data-slot="annotation-seat"]')[0] as Element, "Escape") },
+	]) {
+		test(`${leave.name} pressed straight after typing, inside the quiet interval, still hands the host the note once before the seat is gone`, async () => {
+			let left = 0;
+			const { app, updates } = host();
+			const client = new BrowserClient(app);
+			await client.follow("b1");
+			const dom = await mount(<LeavableSeat app={app} client={client} onLeft={() => void (left += 1)} />);
+			const quiet = holdQuietTimers();
+			try {
+				await placePin(dom);
+				await dom.type(noteField(dom), "make this bigger");
+			} finally {
+				quiet.release();
+			}
+			expect(quiet.armed()).toBeGreaterThan(0);
+			expect(updates).toEqual([]);
+
+			await leave.press(dom);
+			await until(dom, () => updates.length === 1);
+			await dom.settle();
+
+			expect(left).toBe(1);
+			expect(dom.find('[data-slot="annotation-seat"]')).toHaveLength(0);
+			expect(updates).toHaveLength(1);
+			expect(textOf(updates[0])).toContain("make this bigger");
+		});
+	}
+
+	test("Done with nothing marked leaves without asking the page anything or staging anything", async () => {
+		let left = 0;
+		const { app, calls, updates } = host();
+		const client = new BrowserClient(app);
+		await client.follow("b1");
+		const dom = await mount(<LeavableSeat app={app} client={client} onLeft={() => void (left += 1)} />);
+
+		await dom.click(label(dom, "Done"));
+		await dom.settle();
+
+		expect(left).toBe(1);
+		expect(calls).toEqual([]);
+		expect(updates).toEqual([]);
 	});
 });
 

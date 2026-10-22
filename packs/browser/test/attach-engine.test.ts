@@ -6,6 +6,8 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import puppeteer, { type Page } from "puppeteer-core";
@@ -13,6 +15,7 @@ import { pngSize } from "../src/code/kinds/cmux/png";
 import { KIND_TIMINGS } from "../src/code/kinds/cdp";
 import { establishKind } from "../src/code/kinds/establish";
 import type { ProcessScanner } from "../src/code/kinds/spawned";
+import { readImageDimensions } from "../src/code/worker/image-size";
 import type { AttachTarget } from "../src/engines/attach";
 import { createEngineDriver } from "../src/engines";
 import type { EngineDriver, LiveFrame } from "../src/engines/types";
@@ -224,6 +227,34 @@ async function resizeWindowOf(chromeUrl: string, url: string, size: { width: num
 }
 
 const LARGER_THAN_ANY_HEADLESS_WINDOW = { width: 2600, height: 1800 };
+const STALLED_RENDERER_BUDGET_MS = 500;
+const PICTURE_SIZE_TOLERANCE_PX = 2;
+const SIZE_READERS = 8;
+
+interface HeldPageServer {
+	readonly url: (path: string) => string;
+	readonly requested: Promise<void>;
+	readonly stop: () => Promise<void>;
+}
+
+async function startHeldPageServer(): Promise<HeldPageServer> {
+	const requested = Promise.withResolvers<void>();
+	const server = createServer(() => requested.resolve());
+	const listening = Promise.withResolvers<void>();
+	server.listen(0, "127.0.0.1", () => listening.resolve());
+	await listening.promise;
+	const { port } = server.address() as AddressInfo;
+	return {
+		url: (path) => `http://127.0.0.1:${port}${path}`,
+		requested: requested.promise,
+		stop: async () => {
+			const closed = Promise.withResolvers<void>();
+			server.closeAllConnections();
+			server.close(() => closed.resolve());
+			await closed.promise;
+		},
+	};
+}
 
 describeWithChrome("a page adopted from the person's Chrome is described as it is, not as this driver was configured", () => {
 	async function adoptedForegroundPage(): Promise<{ driver: EngineDriver; chromeUrl: string; pageUrl: string; real: PageGeometry }> {
@@ -292,6 +323,84 @@ describeWithChrome("a page adopted from the person's Chrome is described as it i
 				expect(resized.width).not.toBe(real.width);
 
 				await waitUntil("a picture tagged with the resized window", async () => frames.at(-1)?.viewport, (viewport) => viewport?.width === resized.width && viewport.height === resized.height);
+			} finally {
+				stop();
+			}
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"while the person's page is loading a slow site, state answers at once with the last measured size of their window instead of waiting on the stalled renderer",
+		async () => {
+			const held = await startHeldPageServer();
+			try {
+				const { driver, chromeUrl, pageUrl, real } = await adoptedForegroundPage();
+				expect((await driver.state()).viewport).toEqual({ width: real.width, height: real.height });
+
+				await withPageAt(chromeUrl, pageUrl, async (page) => {
+					await page.evaluate((href) => window.location.assign(href), held.url("/slow"));
+					await held.requested;
+
+					const asked = performance.now();
+					const state = await driver.state();
+					const waited = performance.now() - asked;
+
+					expect(state.loading).toBe(true);
+					expect(state.viewport).toEqual({ width: real.width, height: real.height });
+					expect(waited).toBeLessThan(STALLED_RENDERER_BUDGET_MS);
+				});
+			} finally {
+				await held.stop();
+			}
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"readers asking at once share one measurement of the person's window: its renderer is asked the size once, not once per reader",
+		async () => {
+			const { driver, chromeUrl, pageUrl } = await adoptedForegroundPage();
+			await withPageAt(chromeUrl, pageUrl, async (page) => {
+				await page.evaluate(() => {
+					const read = Object.getOwnPropertyDescriptor(window, "innerWidth")?.get;
+					if (read === undefined) throw new Error("innerWidth is not readable through an accessor here");
+					let reads = 0;
+					Object.defineProperty(window, "innerWidth", { configurable: true, get: () => ((reads += 1), read.call(window)) });
+					Object.defineProperty(window, "sizeReads", { get: () => reads });
+				});
+
+				await Promise.all(Array.from({ length: SIZE_READERS }, () => driver.state()));
+
+				const reads = await page.evaluate(() => Reflect.get(window, "sizeReads"));
+				expect(reads).toBeGreaterThanOrEqual(1);
+				expect(reads).toBeLessThan(SIZE_READERS);
+			});
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"a window the person grows past the size the live picture began at is cast at its new size from then on, not downscaled to the old one",
+		async () => {
+			const { driver, chromeUrl, pageUrl, real } = await adoptedForegroundPage();
+			const frames: LiveFrame[] = [];
+			const stop = driver.watchFrames((frame) => frames.push(frame));
+			try {
+				await waitUntil("the first picture", async () => frames.length, (count) => count >= 1);
+
+				await resizeWindowOf(chromeUrl, pageUrl, { width: 1400, height: 1000 });
+				const grown = await geometryOf(chromeUrl, pageUrl);
+				expect(grown.width).toBeGreaterThan(real.width);
+				expect(grown.height).toBeGreaterThan(real.height);
+
+				const expected = { width: Math.round(grown.width * grown.ratio), height: Math.round(grown.height * grown.ratio) };
+				await waitUntil(
+					"a picture at the grown window's size",
+					async () => readImageDimensions(frames.at(-1)!.jpeg),
+					(size) => size !== undefined && Math.abs(size.width - expected.width) <= PICTURE_SIZE_TOLERANCE_PX && Math.abs(size.height - expected.height) <= PICTURE_SIZE_TOLERANCE_PX,
+					10_000,
+				);
 			} finally {
 				stop();
 			}
