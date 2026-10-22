@@ -686,7 +686,7 @@ kbd {
 	}
 }
 
-/* A profile's face: size, centring and type. Its colours are inline (src/profile-look.ts), the same in the dock panel. */
+/* A profile's face: size, centring and type. Its colours are inline (src/profile-look.ts). */
 .bx-avatar {
 	--size: 30px;
 	flex: none;
@@ -1429,63 +1429,17 @@ kbd {
 	cursor: progress;
 }
 
-/* ── marking the page up ────────────────────────────────────────────────
-   The picture of the page sits in the same stage as the live page, at the page's own aspect; the shared annotation kit
-   (annotate.css) draws the tool strip, the marks and the list. The list is beside the picture when the seat is wide
-   and under it when it is not. Nothing here is measured against the real browser: the seat never resizes the page. */
-
-.bx-seat-frame {
-	flex: 1;
-	min-width: 0;
-	min-height: 0;
-	display: flex;
-	container: bx-seat / inline-size;
-}
-
 .bx-seat {
 	flex: 1;
 	min-width: 0;
 	min-height: 0;
 	display: flex;
-}
-
-.bx-seat-main {
-	flex: 1;
-	min-width: 0;
-	min-height: 0;
-	display: flex;
 	flex-direction: column;
+	position: relative;
 }
 
-.bx-seat-panel {
-	flex: none;
-	width: 300px;
-	min-height: 0;
-	display: flex;
-	flex-direction: column;
-}
-
-@container bx-seat (max-width: 900px) {
-	.bx-seat {
-		flex-direction: column;
-	}
-	/* The kit's panel fills the box it is put in; under the picture nothing gives it a height, so it and its list take
-	   the size of what they hold, and only the list gives way (and scrolls) at the cap. */
-	.bx-seat-panel {
-		width: auto;
-		max-height: min(50%, 360px);
-	}
-	.bx-seat-panel .dam-panel {
-		flex: 0 1 auto;
-		border-inline-start: 0;
-		border-block-start: 1px solid var(--fr-border);
-	}
-	.bx-seat-panel .dam-list {
-		flex: 0 1 auto;
-	}
-	.bx-seat-panel .dam-empty {
-		flex: none;
-	}
+.bx-seat .dam-np {
+	user-select: text;
 }
 
 .bx-frame {

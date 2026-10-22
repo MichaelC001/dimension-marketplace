@@ -1,6 +1,6 @@
 /** WHAT BREAKS IN THE PRODUCT IF THIS GOES RED: the agent cannot find the
- *  browser the person opened for it (the View start page, the dock's "Open a
- *  page") — or, worse, it finds one that is not its own: a second conversation
+ *  browser the person opened for it (the View start page, the dock's Browser
+ *  entry) — or, worse, it finds one that is not its own: a second conversation
  *  driving the first one's signed-in browser.
  *
  *  A browser id is a capability the model normally learns from the call that

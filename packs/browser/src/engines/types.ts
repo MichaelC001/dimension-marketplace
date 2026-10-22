@@ -110,7 +110,7 @@ export interface EngineDriver {
   /** The browser application this driver launched; null when it attached to one it does not own. */
   readonly app: BrowserApp | null;
   state(): Promise<EngineState>;
-  /** Viewport PNG of the active tab, not a full-page image; device scale factor is one. */
+  /** Viewport PNG of the active tab, not a full-page image: the whole visible viewport at the tab's own pixel ratio, so it is `state().viewport` times that ratio in pixels. */
   screenshot(): Promise<Uint8Array>;
   /**
    * A picture for a model: the browser's own webp (jpeg where webp is refused), shrunk so its longest edge is at most
