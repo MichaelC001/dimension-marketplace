@@ -3749,6 +3749,11 @@ var SCROLL_SCRIPT = () => {
   const root = document.documentElement;
   return { x: Math.round(window.scrollX), y: Math.round(window.scrollY), width: root.scrollWidth, height: root.scrollHeight };
 };
+var GEOMETRY_SCRIPT = () => ({
+  width: window.innerWidth,
+  height: window.innerHeight,
+  scale: window.devicePixelRatio
+});
 var SELECT_ALL_SCRIPT = (el) => {
   const field = el;
   if (typeof field.select !== "function") return false;
@@ -4435,6 +4440,7 @@ var CLOSE_TIMEOUT_MS = 15e3;
 var KILL_CONFIRM_MS = 5e3;
 var KILL_TAB_CLOSE_MS = 1e3;
 var FAVICON_SCRIPT_TIMEOUT_MS = 2e3;
+var GEOMETRY_TIMEOUT_MS = 1e3;
 var FIRST_FRAME_WAIT_MS = 150;
 var SCREENCAST_QUALITY = 70;
 var INPUT_TIMEOUT_MS = 5e3;
@@ -4891,7 +4897,7 @@ var PuppeteerDriver = class {
   // -----------------------------------------------------------------------
   async state() {
     const active = this.#activeTab();
-    const history = await this.#read(() => active.cdp.send("Page.getNavigationHistory"));
+    const [history, { viewport }] = await Promise.all([this.#read(() => active.cdp.send("Page.getNavigationHistory")), this.#geometry(active)]);
     const current = history.entries[history.currentIndex];
     if (!current) fail("no_document", "The browser did not report a current navigation entry.");
     const tabs = await Promise.all(
@@ -4912,7 +4918,7 @@ var PuppeteerDriver = class {
       title: current.title,
       // A tab switch is a document change for everything pinned to one.
       documentId: `${active.id}:${active.documentId}`,
-      viewport: this.#viewport,
+      viewport,
       tabs,
       activeTabId: active.id,
       loading: active.loading,
@@ -4922,12 +4928,7 @@ var PuppeteerDriver = class {
     };
   }
   async screenshot() {
-    const { width, height } = this.#viewport;
-    const shot = await this.#activeTab().page.screenshot({
-      type: "png",
-      captureBeyondViewport: false,
-      ...this.#scale === 1 ? {} : { clip: { x: 0, y: 0, width, height, scale: 1 / this.#scale } }
-    });
+    const shot = await this.#activeTab().page.screenshot({ type: "png", captureBeyondViewport: false });
     if (shot.length > MAX_FRAME_BYTES) {
       fail("frame_too_large", `screenshot is ${shot.length} bytes, above the ${MAX_FRAME_BYTES} byte limit`);
     }
@@ -4935,7 +4936,7 @@ var PuppeteerDriver = class {
   }
   async shotForModel(request) {
     const tab = this.#activeTab();
-    const metrics = await this.#read(() => tab.cdp.send("Page.getLayoutMetrics"));
+    const [metrics, { scale: pixelRatio }] = await Promise.all([this.#read(() => tab.cdp.send("Page.getLayoutMetrics")), this.#geometry(tab)]);
     const view = metrics.cssVisualViewport;
     let region = { x: view.pageX, y: view.pageY, width: view.clientWidth, height: view.clientHeight };
     if (request.fullPage) region = { x: 0, y: 0, width: metrics.cssContentSize.width, height: metrics.cssContentSize.height };
@@ -4950,7 +4951,7 @@ var PuppeteerDriver = class {
         quality: MODEL_SHOT_QUALITY,
         captureBeyondViewport: !inView,
         // The output is the clip's size times its scale times the page's pixel ratio.
-        clip: { x: region.x, y: region.y, width, height, scale: scale / this.#scale }
+        clip: { x: region.x, y: region.y, width, height, scale: scale / pixelRatio }
       })
     );
     return { mimeType: "image/webp", data: shot.data, width, height, scale: Math.round(scale * 1e3) / 1e3 };
@@ -5009,14 +5010,7 @@ var PuppeteerDriver = class {
   }
   async previewStill() {
     const tab = this.#activeTab();
-    const viewport = this.#viewport;
-    const shot = await tab.cdp.send("Page.captureScreenshot", {
-      format: "jpeg",
-      quality: 50,
-      clip: { x: 0, y: 0, width: viewport.width, height: viewport.height, scale: Math.min(1, 480 / viewport.width) },
-      captureBeyondViewport: false
-    }).catch(() => void 0);
-    return shot ? Buffer.from(shot.data, "base64") : void 0;
+    return await this.#stillOf(tab, tab.cdp, 50, 480);
   }
   watchFrames(listener, size = "view") {
     this.#assertOpen();
@@ -5287,7 +5281,7 @@ var PuppeteerDriver = class {
           if (action.selector === void 0) {
             const x = requireNumber(action.x, "click.x");
             const y = requireNumber(action.y, "click.y");
-            this.#assertInViewport("click", x, y);
+            await this.#assertInViewport(tab, "click", x, y);
             if (guard !== void 0) {
               const admission = guard();
               if (admission !== void 0) await admission;
@@ -5328,7 +5322,7 @@ var PuppeteerDriver = class {
         case "hover": {
           const x = requireNumber(action.x, "hover.x");
           const y = requireNumber(action.y, "hover.y");
-          this.#assertInViewport("hover", x, y);
+          await this.#assertInViewport(tab, "hover", x, y);
           if (guard !== void 0) {
             const admission = guard();
             if (admission !== void 0) await admission;
@@ -5440,13 +5434,36 @@ var PuppeteerDriver = class {
     if (denied) throw denial;
   }
   /** A coordinate outside the viewport reaches no element: refused, with the way out. */
-  #assertInViewport(kind, x, y) {
-    const { width, height } = this.#viewport;
+  async #assertInViewport(tab, kind, x, y) {
+    const { width, height } = (await this.#geometry(tab)).viewport;
     if (x >= 0 && y >= 0 && x < width && y < height) return;
     throw new ActionNotDispatched(
       "off_viewport",
       `${kind} at ${x},${y} is outside the ${width}x${height} viewport, so nothing was ${kind === "click" ? "clicked" : "hovered"}. Scroll it into view with browser_act scroll, then take a new browser_snapshot for its fresh coordinates.`
     );
+  }
+  async #geometry(tab) {
+    if (!tab.foreign) return { viewport: this.#viewport, scale: this.#scale };
+    const seen = await withTimeout(tab.page.evaluate(GEOMETRY_SCRIPT), GEOMETRY_TIMEOUT_MS, "viewport size").catch(() => void 0);
+    if (seen !== void 0 && seen.width > 0 && seen.height > 0) {
+      tab.measured = { viewport: { width: Math.round(seen.width), height: Math.round(seen.height) }, scale: seen.scale > 0 ? seen.scale : 1 };
+    }
+    return tab.measured ?? { viewport: this.#viewport, scale: this.#scale };
+  }
+  async #stillOf(tab, cdp, quality, maxWidth) {
+    try {
+      const [{ viewport }, metrics] = await Promise.all([this.#geometry(tab), this.#read(() => cdp.send("Page.getLayoutMetrics"))]);
+      const { pageX: x, pageY: y } = metrics.cssVisualViewport;
+      const shot = await cdp.send("Page.captureScreenshot", {
+        format: "jpeg",
+        quality,
+        captureBeyondViewport: false,
+        clip: { x, y, width: viewport.width, height: viewport.height, scale: Math.min(1, maxWidth / viewport.width) }
+      });
+      return Buffer.from(shot.data, "base64");
+    } catch {
+      return void 0;
+    }
   }
   /**
    * After input that can start a navigation: give one a moment to start (only
@@ -6147,15 +6164,9 @@ var PuppeteerDriver = class {
         void (async () => {
           await sleep(FIRST_FRAME_WAIT_MS);
           if (this.#cardCasts.get(width) !== cast || this.#active !== tab || this.#viewport !== cast.viewport || this.#closed || cast.frame !== null) return;
-          const shot = await cdp.send("Page.captureScreenshot", {
-            format: "jpeg",
-            quality: width === 480 ? 50 : 60,
-            clip: { x: 0, y: 0, width: cast.viewport.width, height: cast.viewport.height, scale },
-            captureBeyondViewport: false
-          }).catch(() => null);
+          const shot = await this.#stillOf(tab, cdp, width === 480 ? 50 : 60, width);
           if (shot && this.#cardCasts.get(width) === cast && this.#active === tab && this.#viewport === cast.viewport && !this.#closed && cast.frame === null) {
-            const jpeg = Buffer.from(shot.data, "base64");
-            const frame = { id: `card-${tab.id}-${++this.#frameSeq}`, jpeg, viewport: cast.viewport, capturedAt: Date.now() };
+            const frame = { id: `card-${tab.id}-${++this.#frameSeq}`, jpeg: shot, viewport: cast.viewport, capturedAt: Date.now() };
             cast.frame = frame;
             for (const watcher of this.#cardWatchers.get(width) ?? []) watcher(frame);
           }
@@ -6176,13 +6187,18 @@ var PuppeteerDriver = class {
       if (this.#cast?.tab === tab || this.#watchers.size === 0) return;
       await this.#stopScreencastNow();
       if (this.#closed || tab.page.isClosed()) return;
+      const geometry = await this.#geometry(tab);
+      if (this.#closed || tab.page.isClosed()) return;
       const cast = {
         tab,
-        viewport: this.#viewport,
+        viewport: geometry.viewport,
         frame: null,
         onFrame: (event) => {
           void tab.cdp.send("Page.screencastFrameAck", { sessionId: event.sessionId }).catch(() => void 0);
-          if (this.#cast === cast) this.#emit(cast, Buffer.from(event.data, "base64"));
+          if (this.#cast !== cast) return;
+          const jpeg = Buffer.from(event.data, "base64");
+          if (tab.foreign) this.#emitFollowingWindow(cast, event.metadata, jpeg);
+          else this.#emit(cast, jpeg);
         }
       };
       this.#cast = cast;
@@ -6190,8 +6206,8 @@ var PuppeteerDriver = class {
       await tab.cdp.send("Page.startScreencast", {
         format: "jpeg",
         quality: SCREENCAST_QUALITY,
-        maxWidth: Math.round(this.#viewport.width * this.#scale),
-        maxHeight: Math.round(this.#viewport.height * this.#scale),
+        maxWidth: Math.round(geometry.viewport.width * geometry.scale),
+        maxHeight: Math.round(geometry.viewport.height * geometry.scale),
         everyNthFrame: 1
       }).catch(() => void 0);
       void this.#stillIfNone(cast);
@@ -6210,6 +6226,17 @@ var PuppeteerDriver = class {
         console.error("A live frame listener failed:", error);
       }
     }
+  }
+  #emitFollowingWindow(cast, metadata, jpeg) {
+    this.#emit(cast, jpeg);
+    const windowKey = `${metadata.deviceWidth}x${metadata.deviceHeight}`;
+    if (windowKey === cast.windowKey) return;
+    cast.windowKey = windowKey;
+    void this.#geometry(cast.tab).then(({ viewport }) => {
+      if (this.#cast !== cast || viewport.width === cast.viewport.width && viewport.height === cast.viewport.height) return;
+      cast.viewport = viewport;
+      if (cast.frame !== null) this.#emit(cast, cast.frame.jpeg);
+    });
   }
   /** A page that has not painted since the cast began sends nothing: capture one picture so the view is never blank. The cast's own picture wins when it comes first. */
   async #stillIfNone(cast) {
@@ -9433,7 +9460,7 @@ function formatScreenshot(opts) {
 }
 
 // src/code/kinds/cmux/rpc.ts
-var GEOMETRY_SCRIPT = "(() => ({ innerWidth: window.innerWidth, innerHeight: window.innerHeight, dpr: window.devicePixelRatio||1, scrollX: window.scrollX, scrollY: window.scrollY, scrollWidth: document.documentElement.scrollWidth, scrollHeight: document.documentElement.scrollHeight }))()";
+var GEOMETRY_SCRIPT2 = "(() => ({ innerWidth: window.innerWidth, innerHeight: window.innerHeight, dpr: window.devicePixelRatio||1, scrollX: window.scrollX, scrollY: window.scrollY, scrollWidth: document.documentElement.scrollWidth, scrollHeight: document.documentElement.scrollHeight }))()";
 function cmuxSnapshotToObservation(result2, viewport, geometry) {
   const elements2 = [];
   const refs = result2.refs ?? {};
@@ -10139,7 +10166,7 @@ var CmuxTab = class {
     return result2;
   }
   async #readGeometry(timeoutMs) {
-    const result2 = await this.#request("browser.eval", { script: GEOMETRY_SCRIPT }, timeoutMs);
+    const result2 = await this.#request("browser.eval", { script: GEOMETRY_SCRIPT2 }, timeoutMs);
     return this.#normalizeGeometry(result2.value);
   }
   elementHandle(selector3) {
@@ -16707,7 +16734,7 @@ var LiveChannel = class {
 var plugin_default = {
   $schema: "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   name: "browser",
-  version: "0.8.2",
+  version: "0.9.0",
   description: "A real browser beside your chat that your agent drives while you watch. Tabs, persistent logged-in profiles, circle-to-annotate, and an optional fast task agent (jev).",
   keywords: [
     "browser",
@@ -16718,7 +16745,7 @@ var plugin_default = {
   extensions: {
     "ai.insodimension.dimension": {
       contractVersion: 1,
-      requires: { dimension: ">=0.11.1" },
+      requires: { dimension: ">=0.11.13" },
       title: "Browser",
       icon: "globe",
       artifactories: [
@@ -16726,6 +16753,7 @@ var plugin_default = {
           mcpServer: "browser",
           label: "Browser",
           icon: "globe",
+          grants: ["dictation"],
           modelSpaces: [
             "code",
             "build",
@@ -16736,17 +16764,17 @@ var plugin_default = {
           ]
         }
       ],
-      entry: "dist/index.mjs",
       type: "component",
       components: [
         {
-          id: "browser-accounts",
+          id: "browser",
           slot: "dock",
           label: "Browser",
           icon: "globe",
           grants: [
             "artifactory:open"
           ],
+          launch: { tool: "browser_view", args: { profile: "default" } },
           order: 10
         }
       ],

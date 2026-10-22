@@ -20,6 +20,7 @@
 					"mcpServer": "browser",
 					"label": "Browser",
 					"icon": "globe",
+					"grants": ["dictation"],
 					"modelSpaces": [
 						"code",
 						"build",

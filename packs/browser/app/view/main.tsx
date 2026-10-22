@@ -7,6 +7,7 @@
 // window access, no hard-coded endpoint — every byte of state comes over the
 // bridge. The only kit it draws on is the shared annotation one, for marking
 // up the page.
+import { NoteDictationProvider } from "@dimension/mcp-app-kit/annotate/react";
 import { useApp, useDocumentTheme, useHostStyles } from "@modelcontextprotocol/ext-apps/react";
 import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -59,9 +60,13 @@ function Root() {
 			</div>
 		);
 	}
+	// A mark's note dictates through the host's speech-to-text where it lends it (the `dictation` grant), as the
+	// Viewer's does: this View boots without `McpAppShell`, so it mounts the kit's provider itself.
 	return (
 		<div className="bx-root" data-theme={theme}>
-			<BrowserApp app={app} toolState={toolState} />
+			<NoteDictationProvider app={app}>
+				<BrowserApp app={app} toolState={toolState} />
+			</NoteDictationProvider>
 		</div>
 	);
 }
