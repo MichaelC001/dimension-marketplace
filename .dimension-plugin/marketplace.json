@@ -805,6 +805,35 @@
 			]
 		},
 		{
+			"name": "image",
+			"source": "./packs/image",
+			"pluginId": "image",
+			"title": "Image",
+			"icon": "packs/image/assets/icon.svg",
+			"description": "Image: generate and edit images with the image model role and its fallbacks, name any model for one picture, and make masks and transparent cut-outs locally.",
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-community",
+			"license": "MIT",
+			"category": "core",
+			"tags": [
+				"image",
+				"generation",
+				"edit",
+				"mask",
+				"transparent",
+				"gpt-image",
+				"nano banana",
+				"seedream",
+				"flux"
+			],
+			"requires": {
+				"dimension": ">=0.11.13"
+			}
+		},
+		{
 			"name": "impeccable",
 			"source": "./packs/impeccable",
 			"pluginId": "impeccable",
