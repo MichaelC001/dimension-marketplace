@@ -2322,10 +2322,18 @@ class PuppeteerDriver implements EngineDriver {
 			if (geometry === undefined || this.#cast !== cast) return;
 			const { viewport, scale } = geometry;
 			const bounds = { width: Math.round(viewport.width * scale), height: Math.round(viewport.height * scale) };
-			// Chrome downscales every picture to the bounds the cast began with: a window grown past them is cast at its new size.
+			// Chrome downscales every picture to the bounds the cast began with, and refuses a second startScreencast on a
+			// running cast ("Screencast is already active"): a window grown past them is cast again at its new size, ordered
+			// with every other start and stop.
 			if (cast.bounds !== undefined && (bounds.width > cast.bounds.width || bounds.height > cast.bounds.height)) {
 				cast.bounds = bounds;
-				void this.#castAt(cast.tab, bounds);
+				this.#castChain = this.#castChain
+					.then(async () => {
+						if (this.#cast !== cast) return;
+						await cast.tab.cdp.send("Page.stopScreencast").catch(() => undefined);
+						if (this.#cast === cast) await this.#castAt(cast.tab, bounds);
+					})
+					.catch(() => undefined);
 			}
 			if (viewport.width === cast.viewport.width && viewport.height === cast.viewport.height) return;
 			cast.viewport = viewport;

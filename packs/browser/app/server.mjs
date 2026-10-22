@@ -6255,7 +6255,11 @@ var PuppeteerDriver = class {
       const bounds = { width: Math.round(viewport.width * scale), height: Math.round(viewport.height * scale) };
       if (cast.bounds !== void 0 && (bounds.width > cast.bounds.width || bounds.height > cast.bounds.height)) {
         cast.bounds = bounds;
-        void this.#castAt(cast.tab, bounds);
+        this.#castChain = this.#castChain.then(async () => {
+          if (this.#cast !== cast) return;
+          await cast.tab.cdp.send("Page.stopScreencast").catch(() => void 0);
+          if (this.#cast === cast) await this.#castAt(cast.tab, bounds);
+        }).catch(() => void 0);
       }
       if (viewport.width === cast.viewport.width && viewport.height === cast.viewport.height) return;
       cast.viewport = viewport;
