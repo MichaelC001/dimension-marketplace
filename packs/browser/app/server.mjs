@@ -16745,7 +16745,7 @@ var plugin_default = {
   extensions: {
     "ai.insodimension.dimension": {
       contractVersion: 1,
-      requires: { dimension: ">=0.11.13" },
+      requires: { dimension: ">=0.11.1" },
       title: "Browser",
       icon: "globe",
       artifactories: [
@@ -17067,7 +17067,8 @@ async function createBrowserServer(options = {}) {
     return browserId && url ? { ...answer, _meta: await previewResult(runtime, browserId, sessionOf(extra)) } : answer;
   });
   registerAppTool(server2, "browser_view", {
-    title: "Show Browser",
+    // The View's tab is named by this title (the artifact column prefers a tool's title to the pack's label), so it names the thing, not the verb.
+    title: "Browser",
     description: "Show the human a browser you hold (browserId), or open one they can watch (profile, engine, url). Mounts the Browser View.",
     inputSchema: { browserId: capability.optional(), profile: profile.optional(), engine: z3.enum(BROWSER_ENGINES).optional(), url: z3.string().max(2048).optional() },
     _meta: { ui: { resourceUri: BROWSER_VIEW_URI } }
