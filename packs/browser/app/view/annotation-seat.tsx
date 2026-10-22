@@ -17,7 +17,7 @@ import {
 	useMarkupShortcuts,
 } from "@dimension/mcp-app-kit/annotate/react";
 import type { App } from "@modelcontextprotocol/ext-apps";
-import { type CSSProperties, type ReactNode, useCallback, useEffect, useMemo } from "react";
+import { type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import type { BrowserFrame } from "../../src/contracts";
 import type { BrowserClient } from "./browser-client";
 import { captureName, PAGE_DETAIL_KIND, pageAttach, pageEnrich } from "./page-annotation";
@@ -80,12 +80,23 @@ export function AnnotationSeat({ app, client, browserId, frame, floats, onDone }
 	useEffect(() => {
 		setTool("box");
 	}, [setTool]);
-	// Leaving unmounts the seat, which clears the kit's quiet-interval staging timer: words written in the last
-	// 800 ms are staged now, or Done would drop them.
+	// Leaving unmounts the seat, which clears the kit's quiet-interval staging timer, so what is not yet staged is
+	// staged on the way out. A stage already in flight carries older words and refuses a second send until it
+	// lands: the seat stays until it does, then stages the newest wording and leaves.
+	const [leaving, setLeaving] = useState(false);
 	const done = useCallback(() => {
-		if (markup.marks.length > 0 && !staged && !sending) void send();
+		if (sending) {
+			setLeaving(true);
+			return;
+		}
+		if (markup.marks.length > 0 && !staged) void send();
 		onDone();
 	}, [markup.marks.length, staged, sending, send, onDone]);
+	useEffect(() => {
+		if (!leaving || sending) return;
+		if (markup.marks.length > 0 && !staged) void send();
+		onDone();
+	}, [leaving, sending, staged, markup.marks.length, send, onDone]);
 	useMarkupShortcuts({ enabled: true, onTool: setTool, onUndo: markup.undo, onRedo: markup.redo, onExit: done });
 
 	const { viewport } = frame.state;

@@ -706,6 +706,8 @@ interface Screencast {
 	windowKey?: string;
 	/** The picture size Chrome was asked to cast at (it downscales anything larger); the View cast only. */
 	bounds?: { readonly width: number; readonly height: number };
+	/** The cast began on a size measured for it, not on one cached across a load: its first picture needs no measurement. */
+	fresh?: boolean;
 }
 /** Private, picture-only cast on its own CDP session; never changes the page or the View cast. */
 interface CardCast extends Screencast {
@@ -1443,16 +1445,17 @@ class PuppeteerDriver implements EngineDriver {
 		return tab.measured ?? { viewport: this.#viewport, scale: this.#scale };
 	}
 
+	/** One renderer measurement at a time; `undefined` when it failed (a stalled or torn-down renderer), so a caller can
+	 *  tell a fresh size from the last one. */
 	#measure(tab: Tab): Promise<Geometry | undefined> {
 		tab.measuring ??= withTimeout(tab.page.evaluate(GEOMETRY_SCRIPT), GEOMETRY_TIMEOUT_MS, "viewport size")
 			.then(
 				(seen) => {
-					if (seen.width > 0 && seen.height > 0) {
-						tab.measured = { viewport: { width: Math.round(seen.width), height: Math.round(seen.height) }, scale: seen.scale > 0 ? seen.scale : 1 };
-					}
+					if (!(seen.width > 0 && seen.height > 0)) return undefined;
+					tab.measured = { viewport: { width: Math.round(seen.width), height: Math.round(seen.height) }, scale: seen.scale > 0 ? seen.scale : 1 };
 					return tab.measured;
 				},
-				() => tab.measured,
+				() => undefined,
 			)
 			.finally(() => {
 				tab.measuring = undefined;
@@ -2265,13 +2268,18 @@ class PuppeteerDriver implements EngineDriver {
 			if (this.#cast?.tab === tab || this.#watchers.size === 0) return;
 			await this.#stopScreencastNow();
 			if (this.#closed || tab.page.isClosed()) return;
-			const geometry = await this.#geometry(tab);
+			// A foreign tab is measured for the cast unless a load is in flight; a cast begun on any other size measures
+			// on its first picture instead.
+			const measured = tab.foreign && !(tab.loading && tab.measured) ? await this.#measure(tab) : undefined;
+			const fresh = !tab.foreign || measured !== undefined;
+			const geometry = measured ?? tab.measured ?? { viewport: this.#viewport, scale: this.#scale };
 			if (this.#closed || tab.page.isClosed()) return;
 			const bounds = { width: Math.round(geometry.viewport.width * geometry.scale), height: Math.round(geometry.viewport.height * geometry.scale) };
 			const cast: Screencast = {
 				tab,
 				viewport: geometry.viewport,
 				bounds,
+				fresh,
 				frame: null,
 				onFrame: (event) => {
 					// Every picture is acknowledged, or Chrome stops sending them.
@@ -2314,12 +2322,16 @@ class PuppeteerDriver implements EngineDriver {
 		this.#emit(cast, jpeg);
 		const windowKey = `${metadata.deviceWidth}x${metadata.deviceHeight}`;
 		if (windowKey === cast.windowKey) return;
-		const first = cast.windowKey === undefined;
+		const previous = cast.windowKey;
 		cast.windowKey = windowKey;
-		// The cast began on a measurement of this window: its first picture only names the window that was measured.
-		if (first) return;
+		if (previous === undefined && cast.fresh) return;
 		void this.#measure(cast.tab).then((geometry) => {
-			if (geometry === undefined || this.#cast !== cast) return;
+			if (this.#cast !== cast) return;
+			// A failed read is not this window's size: the next picture asks again.
+			if (geometry === undefined) {
+				if (cast.windowKey === windowKey) cast.windowKey = previous;
+				return;
+			}
 			const { viewport, scale } = geometry;
 			const bounds = { width: Math.round(viewport.width * scale), height: Math.round(viewport.height * scale) };
 			// Chrome downscales every picture to the bounds the cast began with, and refuses a second startScreencast on a

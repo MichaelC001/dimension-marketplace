@@ -5452,15 +5452,16 @@ var PuppeteerDriver = class {
     if (!(tab.loading && tab.measured)) await this.#measure(tab);
     return tab.measured ?? { viewport: this.#viewport, scale: this.#scale };
   }
+  /** One renderer measurement at a time; `undefined` when it failed (a stalled or torn-down renderer), so a caller can
+   *  tell a fresh size from the last one. */
   #measure(tab) {
     tab.measuring ??= withTimeout(tab.page.evaluate(GEOMETRY_SCRIPT), GEOMETRY_TIMEOUT_MS, "viewport size").then(
       (seen) => {
-        if (seen.width > 0 && seen.height > 0) {
-          tab.measured = { viewport: { width: Math.round(seen.width), height: Math.round(seen.height) }, scale: seen.scale > 0 ? seen.scale : 1 };
-        }
+        if (!(seen.width > 0 && seen.height > 0)) return void 0;
+        tab.measured = { viewport: { width: Math.round(seen.width), height: Math.round(seen.height) }, scale: seen.scale > 0 ? seen.scale : 1 };
         return tab.measured;
       },
-      () => tab.measured
+      () => void 0
     ).finally(() => {
       tab.measuring = void 0;
     });
@@ -6203,13 +6204,16 @@ var PuppeteerDriver = class {
       if (this.#cast?.tab === tab || this.#watchers.size === 0) return;
       await this.#stopScreencastNow();
       if (this.#closed || tab.page.isClosed()) return;
-      const geometry = await this.#geometry(tab);
+      const measured = tab.foreign && !(tab.loading && tab.measured) ? await this.#measure(tab) : void 0;
+      const fresh = !tab.foreign || measured !== void 0;
+      const geometry = measured ?? tab.measured ?? { viewport: this.#viewport, scale: this.#scale };
       if (this.#closed || tab.page.isClosed()) return;
       const bounds = { width: Math.round(geometry.viewport.width * geometry.scale), height: Math.round(geometry.viewport.height * geometry.scale) };
       const cast = {
         tab,
         viewport: geometry.viewport,
         bounds,
+        fresh,
         frame: null,
         onFrame: (event) => {
           void tab.cdp.send("Page.screencastFrameAck", { sessionId: event.sessionId }).catch(() => void 0);
@@ -6246,11 +6250,15 @@ var PuppeteerDriver = class {
     this.#emit(cast, jpeg);
     const windowKey = `${metadata.deviceWidth}x${metadata.deviceHeight}`;
     if (windowKey === cast.windowKey) return;
-    const first = cast.windowKey === void 0;
+    const previous = cast.windowKey;
     cast.windowKey = windowKey;
-    if (first) return;
+    if (previous === void 0 && cast.fresh) return;
     void this.#measure(cast.tab).then((geometry) => {
-      if (geometry === void 0 || this.#cast !== cast) return;
+      if (this.#cast !== cast) return;
+      if (geometry === void 0) {
+        if (cast.windowKey === windowKey) cast.windowKey = previous;
+        return;
+      }
       const { viewport, scale } = geometry;
       const bounds = { width: Math.round(viewport.width * scale), height: Math.round(viewport.height * scale) };
       if (cast.bounds !== void 0 && (bounds.width > cast.bounds.width || bounds.height > cast.bounds.height)) {
