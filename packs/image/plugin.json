@@ -1,0 +1,37 @@
+{
+	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+	"name": "image",
+	"version": "0.1.0",
+	"description": "Image: generate and edit images with the image model role and its fallbacks, name any model for one picture, and make masks and transparent cut-outs locally.",
+	"author": {
+		"name": "Dimension"
+	},
+	"license": "MIT",
+	"keywords": [
+		"image",
+		"generation",
+		"edit",
+		"mask",
+		"transparent",
+		"gpt-image",
+		"nano banana",
+		"seedream",
+		"flux"
+	],
+	"extensions": {
+		"ai.insodimension.dimension": {
+			"contractVersion": 1,
+			"requires": { "dimension": ">=0.11.13" },
+			"title": "Image",
+			"icon": "assets/icon.svg",
+			"category": "core",
+			"defaultEnabled": true,
+			"bundled": true,
+			"examples": [
+				"Draw a watercolor fox reading under a lamp",
+				"Use Nano Banana to put this logo on a coffee mug",
+				"Cut the product out of this photo onto a transparent background"
+			]
+		}
+	}
+}

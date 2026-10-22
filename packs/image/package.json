@@ -1,0 +1,14 @@
+{
+	"name": "@dimension/community-image",
+	"author": "Dimension",
+	"version": "0.1.0",
+	"description": "Image: generate and edit images with the image model role and its fallbacks, name any model for one picture, and make masks and transparent cut-outs locally.",
+	"type": "module",
+	"files": [
+		"assets/",
+		"skills/",
+		"plugin.json",
+		"README.md"
+	],
+	"license": "MIT"
+}
