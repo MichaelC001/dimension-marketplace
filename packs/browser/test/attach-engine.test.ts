@@ -8,15 +8,16 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import puppeteer from "puppeteer-core";
+import puppeteer, { type Page } from "puppeteer-core";
+import { pngSize } from "../src/code/kinds/cmux/png";
 import { KIND_TIMINGS } from "../src/code/kinds/cdp";
 import { establishKind } from "../src/code/kinds/establish";
 import type { ProcessScanner } from "../src/code/kinds/spawned";
 import type { AttachTarget } from "../src/engines/attach";
 import { createEngineDriver } from "../src/engines";
-import type { EngineDriver } from "../src/engines/types";
-import { BROWSER_TEST_TIMEOUT_MS, chromePath, describeWithChrome, failureCode } from "./fixture";
-import { alive, gone, killTree, startDebugChrome, startPageServer, stopDebugChromes } from "./kinds-fixture";
+import type { EngineDriver, LiveFrame } from "../src/engines/types";
+import { BROWSER_TEST_TIMEOUT_MS, chromePath, describeWithChrome, failureCode, waitUntil } from "./fixture";
+import { alive, gone, killTree, type PageServer, startDebugChrome, startPageServer, stopDebugChromes } from "./kinds-fixture";
 
 const drivers: EngineDriver[] = [];
 afterEach(async () => {
@@ -36,7 +37,7 @@ async function pagesOf(cdpUrl: string): Promise<PageEntry[]> {
 }
 
 /** The person's Chrome with two tabs on known pages, and a driver attached to it as a cell's `connected` kind would be. */
-async function attachedToPersonsChrome(): Promise<{ driver: EngineDriver; chromeUrl: string; pid: number; pages: Awaited<ReturnType<typeof startPageServer>>; released: () => number }> {
+async function attachedToPersonsChrome(viewport = { width: 640, height: 480 }): Promise<{ driver: EngineDriver; chromeUrl: string; pid: number; pages: PageServer; released: () => number }> {
 	const pages = await startPageServer();
 	const chrome = await startDebugChrome();
 	// The person has two tabs open: the one Chrome started with, and one they opened by hand.
@@ -51,7 +52,7 @@ async function attachedToPersonsChrome(): Promise<{ driver: EngineDriver; chrome
 	let released = 0;
 	const driver = await createEngineDriver("chrome-relay", {
 		profileDirectory: join(tmpdir(), "unused-by-attach"),
-		viewport: { width: 640, height: 480 },
+		viewport,
 		attach: established.attach,
 		onClosed: () => void (released += 1),
 	});
@@ -188,6 +189,115 @@ describeWithChrome("the attach engine on the person's Chrome", () => {
 		expect(await failureCode(() => createEngineDriver("chrome-relay", { profileDirectory: tmpdir(), viewport: { width: 640, height: 480 }, attach: target, onClosed: () => void (released += 1) }))).toBe("attach_failed");
 		expect(released).toBe(1);
 	});
+});
+
+interface PageGeometry {
+	width: number;
+	height: number;
+	ratio: number;
+}
+
+async function withPageAt<T>(chromeUrl: string, url: string, use: (page: Page) => Promise<T>): Promise<T> {
+	const probe = await puppeteer.connect({ browserURL: chromeUrl, defaultViewport: null });
+	try {
+		const page = (await probe.pages()).find((candidate) => candidate.url() === url);
+		if (page === undefined) throw new Error(`the person's Chrome has no page at ${url}`);
+		return await use(page);
+	} finally {
+		await probe.disconnect();
+	}
+}
+
+async function geometryOf(chromeUrl: string, url: string): Promise<PageGeometry> {
+	return await withPageAt(chromeUrl, url, async (page) => {
+		const [width, height, ratio] = (await page.evaluate(() => [innerWidth, innerHeight, devicePixelRatio])) as [number, number, number];
+		return { width, height, ratio };
+	});
+}
+
+async function resizeWindowOf(chromeUrl: string, url: string, size: { width: number; height: number }): Promise<void> {
+	await withPageAt(chromeUrl, url, async (page) => {
+		const cdp = await page.createCDPSession();
+		const { windowId } = await cdp.send("Browser.getWindowForTarget");
+		await cdp.send("Browser.setWindowBounds", { windowId, bounds: { ...size, windowState: "normal" } });
+	});
+}
+
+const LARGER_THAN_ANY_HEADLESS_WINDOW = { width: 2600, height: 1800 };
+
+describeWithChrome("a page adopted from the person's Chrome is described as it is, not as this driver was configured", () => {
+	async function adoptedForegroundPage(): Promise<{ driver: EngineDriver; chromeUrl: string; pageUrl: string; real: PageGeometry }> {
+		const { driver, chromeUrl, pages } = await attachedToPersonsChrome(LARGER_THAN_ANY_HEADLESS_WINDOW);
+		await driver.adoptTab({ match: "Page two" });
+		const pageUrl = pages.url("/two");
+		const real = await geometryOf(chromeUrl, pageUrl);
+		expect(real.width).toBeLessThan(LARGER_THAN_ANY_HEADLESS_WINDOW.width);
+		expect(real.height).toBeLessThan(LARGER_THAN_ANY_HEADLESS_WINDOW.height);
+		return { driver, chromeUrl, pageUrl, real };
+	}
+
+	async function pictureOf(driver: EngineDriver): Promise<{ width: number; height: number } | undefined> {
+		return pngSize(Buffer.from(await driver.screenshot()));
+	}
+
+	test(
+		"state reports the page's own innerWidth x innerHeight and the frozen picture is that size at the page's pixel ratio",
+		async () => {
+			const { driver, real } = await adoptedForegroundPage();
+
+			expect((await driver.state()).viewport).toEqual({ width: real.width, height: real.height });
+			expect(await pictureOf(driver)).toEqual({ width: Math.round(real.width * real.ratio), height: Math.round(real.height * real.ratio) });
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"a cell fitting the driver to another size and ratio changes neither: the page is the person's, and so is the description of it",
+		async () => {
+			const { driver, real } = await adoptedForegroundPage();
+
+			await driver.resize({ width: 500, height: 400 }, 2);
+
+			expect((await driver.state()).viewport).toEqual({ width: real.width, height: real.height });
+			expect(await pictureOf(driver)).toEqual({ width: Math.round(real.width * real.ratio), height: Math.round(real.height * real.ratio) });
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"state follows the person resizing their window",
+		async () => {
+			const { driver, chromeUrl, pageUrl } = await adoptedForegroundPage();
+
+			await resizeWindowOf(chromeUrl, pageUrl, { width: 720, height: 520 });
+			const resized = await geometryOf(chromeUrl, pageUrl);
+
+			expect((await driver.state()).viewport).toEqual({ width: resized.width, height: resized.height });
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"the live picture is tagged with the page's own size from its first frame, and the tag follows the person resizing their window",
+		async () => {
+			const { driver, chromeUrl, pageUrl, real } = await adoptedForegroundPage();
+			const frames: LiveFrame[] = [];
+			const stop = driver.watchFrames((frame) => frames.push(frame));
+			try {
+				await waitUntil("the first picture", async () => frames.length, (count) => count >= 1);
+				expect(frames[0]?.viewport).toEqual({ width: real.width, height: real.height });
+
+				await resizeWindowOf(chromeUrl, pageUrl, { width: 720, height: 520 });
+				const resized = await geometryOf(chromeUrl, pageUrl);
+				expect(resized.width).not.toBe(real.width);
+
+				await waitUntil("a picture tagged with the resized window", async () => frames.at(-1)?.viewport, (viewport) => viewport?.width === resized.width && viewport.height === resized.height);
+			} finally {
+				stop();
+			}
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
 });
 
 /** What a machine with the application not running looks like: no other Chrome on it (a test's, a person's) is taken for the application, so an open starts its own. */

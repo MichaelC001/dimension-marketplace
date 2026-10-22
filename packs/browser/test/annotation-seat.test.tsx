@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import type { App } from "@modelcontextprotocol/ext-apps";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { VIEW_DICTATION_CONTEXT_KEY, VIEW_DICTATION_START_METHOD, VIEW_DICTATION_STOP_METHOD } from "@dimension/sdk/artifactory";
+import * as realExtApps from "@modelcontextprotocol/ext-apps/react";
+import { act } from "react";
+import * as ReactDomClient from "react-dom/client";
 import * as realPaint from "../../../../packages/mcp-app-kit/src/annotate/paint";
 import type { BrowserFrame } from "../src/contracts";
 import { BrowserClient } from "../app/view/browser-client";
@@ -19,10 +23,45 @@ mock.module("../../../../packages/mcp-app-kit/src/annotate/paint.js", () => ({
 		notes: [],
 	}),
 }));
+
+interface ViewHost {
+	app: App | undefined;
+	booting: boolean;
+	readonly created: WeakSet<App>;
+	readonly roots: ReactDomClient.Root[];
+}
+const viewHost: ViewHost = { app: undefined, booting: false, created: new WeakSet(), roots: [] };
+const realCreateRoot = ReactDomClient.createRoot;
+mock.module("react-dom/client", () => ({
+	...ReactDomClient,
+	createRoot: (container: Element, options?: ReactDomClient.RootOptions) => {
+		const root = realCreateRoot(container, options);
+		if (viewHost.booting) viewHost.roots.push(root);
+		return root;
+	},
+}));
+mock.module("@modelcontextprotocol/ext-apps/react", () => ({
+	...realExtApps,
+	useApp: (options: Parameters<typeof realExtApps.useApp>[0]) => {
+		const app = viewHost.app;
+		if (app === undefined) return realExtApps.useApp(options);
+		if (!viewHost.created.has(app)) {
+			viewHost.created.add(app);
+			options?.onAppCreated?.(app);
+		}
+		return { app, isConnected: true, error: null };
+	},
+	useHostStyles: (...args: Parameters<typeof realExtApps.useHostStyles>) => (viewHost.app === undefined ? realExtApps.useHostStyles(...args) : undefined),
+	useDocumentTheme: () => (viewHost.app === undefined ? realExtApps.useDocumentTheme() : "light"),
+}));
 const { AnnotationSeat } = await import("../app/view/annotation-seat");
 const { BrowserApp } = await import("../app/view/browser-app");
 
-afterEach(unmountAll);
+afterEach(async () => {
+	viewHost.app = undefined;
+	for (const root of viewHost.roots.splice(0)) await act(async () => root.unmount());
+	await unmountAll();
+});
 
 const FRAME: BrowserFrame = {
 	frameId: "f1",
@@ -66,9 +105,17 @@ const asked = (args: Record<string, unknown>) =>
 			}))
 		: [];
 
-function host(over: { capabilities?: object; annotate?: (call: Call) => CallToolResult; other?: (call: Call) => CallToolResult } = {}) {
+interface Dictation {
+	readonly offered: boolean;
+	readonly available: boolean;
+}
+
+function host(over: { capabilities?: object; dictation?: Dictation; annotate?: (call: Call) => CallToolResult; other?: (call: Call) => CallToolResult } = {}) {
 	const calls: Call[] = [];
 	const updates: Update[] = [];
+	const listeners = new Map<string, Set<(payload: unknown) => void>>();
+	const lent = { [VIEW_DICTATION_CONTEXT_KEY]: { available: over.dictation?.available ?? false, phase: "idle", text: "" } };
+	const dictationVerbs = over.dictation?.offered === true ? { experimental: { [VIEW_DICTATION_START_METHOD]: {}, [VIEW_DICTATION_STOP_METHOD]: {} } } : {};
 	const app = {
 		callServerTool: async (request: { name: string; arguments?: Record<string, unknown> }): Promise<CallToolResult> => {
 			const call = { name: request.name, args: request.arguments ?? {} };
@@ -90,13 +137,23 @@ function host(over: { capabilities?: object; annotate?: (call: Call) => CallTool
 				}
 			);
 		},
-		getHostCapabilities: () => over.capabilities ?? { updateModelContext: { text: {}, image: {} } },
+		getHostCapabilities: () => over.capabilities ?? { updateModelContext: { text: {}, image: {} }, ...dictationVerbs },
+		getHostContext: () => lent,
+		addEventListener: (name: string, listener: (payload: unknown) => void) => {
+			listeners.set(name, (listeners.get(name) ?? new Set()).add(listener));
+		},
+		removeEventListener: (name: string, listener: (payload: unknown) => void) => {
+			listeners.get(name)?.delete(listener);
+		},
 		updateModelContext: async (update: Update) => {
 			updates.push(update);
 			return {};
 		},
 	} as unknown as App;
-	return { app, calls, updates };
+	const emit = (name: string, payload: unknown) => {
+		for (const listener of listeners.get(name) ?? []) listener(payload);
+	};
+	return { app, calls, updates, emit };
 }
 
 const label = (dom: Dom, name: string): Element => {
@@ -244,17 +301,17 @@ describe("the annotation seat", () => {
 	});
 });
 
+const answerFrames = (call: Call): CallToolResult => {
+	if (call.name === "browser_frame") {
+		const png = call.args.format === "png";
+		return { content: [], structuredContent: { state: FRAME.state, frameId: "f1", mimeType: png ? "image/png" : "image/jpeg", data: "AAAA", capturedAt: FRAME.capturedAt } };
+	}
+	return { content: [], structuredContent: FRAME.state };
+};
+
 describe("the Browser around the seat", () => {
 	test("removing the annotation from the agent while marking leaves the seat and takes back what was staged", async () => {
-		const { app, updates } = host({
-			other: call => {
-				if (call.name === "browser_frame") {
-					const png = call.args.format === "png";
-					return { content: [], structuredContent: { state: FRAME.state, frameId: "f1", mimeType: png ? "image/png" : "image/jpeg", data: "AAAA", capturedAt: FRAME.capturedAt } };
-				}
-				return { content: [], structuredContent: FRAME.state };
-			},
-		});
+		const { app, updates } = host({ other: answerFrames });
 		const dom = await mount(<BrowserApp app={app} toolState={{ state: FRAME.state, seq: 1 }} />);
 		await dom.settle();
 		await dom.click(label(dom, "Annotate for the agent (Ctrl+Shift+A)"));
@@ -270,5 +327,47 @@ describe("the Browser around the seat", () => {
 		expect(updates).toHaveLength(2);
 		expect(updates[1]?.content).toEqual([]);
 		expect(dom.find("[data-slot='annotation-seat']")).toHaveLength(0);
+	});
+});
+
+let viewBoots = 0;
+
+async function bootView(app: App, emit: (name: string, payload: unknown) => void): Promise<Dom> {
+	const harness = await mount(<div />);
+	const harnessRoot = globalThis.document.getElementById("root");
+	if (harnessRoot === null) throw new Error("the harness has no root");
+	harnessRoot.id = "harness-root";
+	const container = globalThis.document.createElement("div");
+	container.id = "root";
+	globalThis.document.body.appendChild(container);
+	viewHost.app = app;
+	viewHost.booting = true;
+	try {
+		await act(async () => {
+			await import(`../app/view/main.tsx?boot=${(viewBoots += 1)}`);
+		});
+	} finally {
+		viewHost.booting = false;
+	}
+	await harness.settle();
+	await act(async () => emit("toolresult", { content: [], structuredContent: { state: FRAME.state } }));
+	await harness.settle();
+	return { ...harness, find: selector => [...container.querySelectorAll(selector)], text: () => container.textContent ?? "" };
+}
+
+describe("the Browser's View, as booted, lends a mark's note the host's dictation", () => {
+	test.each([
+		{ name: "the pack holds the dictation grant and speech-to-text is set up", dictation: { offered: true, available: true }, mics: 1 },
+		{ name: "the pack holds the grant but speech-to-text is not set up", dictation: { offered: true, available: false }, mics: 0 },
+		{ name: "the pack was not granted dictation, so the host offers no verbs", dictation: { offered: false, available: true }, mics: 0 },
+	])("$name: the mics beside the mark's open note are $mics", async ({ dictation, mics }) => {
+		const { app, emit } = host({ dictation, other: answerFrames });
+		const dom = await bootView(app, emit);
+		await dom.click(label(dom, "Annotate for the agent (Ctrl+Shift+A)"));
+		await dom.settle();
+		await placePin(dom);
+
+		expect(dom.find('[data-slot="note-popover"]')).toHaveLength(1);
+		expect(dom.find('[data-slot="note-popover-mic"]')).toHaveLength(mics);
 	});
 });
