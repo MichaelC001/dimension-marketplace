@@ -110,7 +110,7 @@ interface Dictation {
 	readonly available: boolean;
 }
 
-function host(over: { capabilities?: object; dictation?: Dictation; annotate?: (call: Call) => CallToolResult; other?: (call: Call) => CallToolResult } = {}) {
+function host(over: { capabilities?: object; dictation?: Dictation; annotate?: (call: Call) => CallToolResult; other?: (call: Call) => CallToolResult; landing?: (update: Update) => Promise<void> } = {}) {
 	const calls: Call[] = [];
 	const updates: Update[] = [];
 	const listeners = new Map<string, Set<(payload: unknown) => void>>();
@@ -147,6 +147,7 @@ function host(over: { capabilities?: object; dictation?: Dictation; annotate?: (
 		},
 		updateModelContext: async (update: Update) => {
 			updates.push(update);
+			await over.landing?.(update);
 			return {};
 		},
 	} as unknown as App;
@@ -375,6 +376,41 @@ describe("the annotation seat", () => {
 		expect(calls).toEqual([]);
 		expect(updates).toEqual([]);
 	});
+
+	for (const leave of [
+		{ name: "Done", press: (dom: Dom) => dom.click(label(dom, "Done")) },
+		{ name: "Esc", press: (dom: Dom) => dom.key(dom.find('[data-slot="annotation-seat"]')[0] as Element, "Escape") },
+	]) {
+		test(`${leave.name} pressed while the first stage is still in flight keeps the seat until it lands, then stages the words typed meanwhile once and leaves`, async () => {
+			let left = 0;
+			const firstLands = Promise.withResolvers<void>();
+			const { app, updates } = host({ landing: () => (updates.length === 1 ? firstLands.promise : Promise.resolve()) });
+			const client = new BrowserClient(app);
+			await client.follow("b1");
+			const dom = await mount(<LeavableSeat app={app} client={client} onLeft={() => void (left += 1)} />);
+			await placePin(dom);
+			await dom.type(noteField(dom), "make this bigger");
+			await until(dom, () => updates.length === 1);
+
+			await dom.type(noteField(dom), "make this bigger and red");
+			await leave.press(dom);
+			await dom.settle();
+
+			expect(left).toBe(0);
+			expect(dom.find('[data-slot="annotation-seat"]')).toHaveLength(1);
+			expect(updates).toHaveLength(1);
+
+			firstLands.resolve();
+			await until(dom, () => updates.length === 2);
+			await dom.settle();
+
+			expect(left).toBe(1);
+			expect(dom.find('[data-slot="annotation-seat"]')).toHaveLength(0);
+			expect(updates).toHaveLength(2);
+			expect(textOf(updates[0])).not.toContain("and red");
+			expect(textOf(updates[1])).toContain("make this bigger and red");
+		});
+	}
 });
 
 const answerFrames = (call: Call): CallToolResult => {

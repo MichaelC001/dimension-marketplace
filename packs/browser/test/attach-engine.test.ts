@@ -6,7 +6,7 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
-import { createServer } from "node:http";
+import { createServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -234,12 +234,22 @@ const SIZE_READERS = 8;
 interface HeldPageServer {
 	readonly url: (path: string) => string;
 	readonly requested: Promise<void>;
+	readonly release: () => void;
 	readonly stop: () => Promise<void>;
 }
 
 async function startHeldPageServer(): Promise<HeldPageServer> {
 	const requested = Promise.withResolvers<void>();
-	const server = createServer(() => requested.resolve());
+	const held: ServerResponse[] = [];
+	const server = createServer((request, response) => {
+		response.setHeader("content-type", "text/html");
+		if (request.url === "/doc") {
+			response.end('<!doctype html><title>Doc</title><img src="/held.png" width="10" height="10">');
+			return;
+		}
+		held.push(response);
+		requested.resolve();
+	});
 	const listening = Promise.withResolvers<void>();
 	server.listen(0, "127.0.0.1", () => listening.resolve());
 	await listening.promise;
@@ -247,6 +257,9 @@ async function startHeldPageServer(): Promise<HeldPageServer> {
 	return {
 		url: (path) => `http://127.0.0.1:${port}${path}`,
 		requested: requested.promise,
+		release: () => {
+			for (const response of held.splice(0)) response.end("<!doctype html><title>Released</title><h1>released</h1>");
+		},
 		stop: async () => {
 			const closed = Promise.withResolvers<void>();
 			server.closeAllConnections();
@@ -254,6 +267,14 @@ async function startHeldPageServer(): Promise<HeldPageServer> {
 			await closed.promise;
 		},
 	};
+}
+
+function isPictureOf(size: { width: number; height: number } | undefined, window: PageGeometry): boolean {
+	return (
+		size !== undefined &&
+		Math.abs(size.width - Math.round(window.width * window.ratio)) <= PICTURE_SIZE_TOLERANCE_PX &&
+		Math.abs(size.height - Math.round(window.height * window.ratio)) <= PICTURE_SIZE_TOLERANCE_PX
+	);
 }
 
 describeWithChrome("a page adopted from the person's Chrome is described as it is, not as this driver was configured", () => {
@@ -394,15 +415,91 @@ describeWithChrome("a page adopted from the person's Chrome is described as it i
 				expect(grown.width).toBeGreaterThan(real.width);
 				expect(grown.height).toBeGreaterThan(real.height);
 
-				const expected = { width: Math.round(grown.width * grown.ratio), height: Math.round(grown.height * grown.ratio) };
-				await waitUntil(
-					"a picture at the grown window's size",
-					async () => readImageDimensions(frames.at(-1)!.jpeg),
-					(size) => size !== undefined && Math.abs(size.width - expected.width) <= PICTURE_SIZE_TOLERANCE_PX && Math.abs(size.height - expected.height) <= PICTURE_SIZE_TOLERANCE_PX,
-					10_000,
-				);
+				await waitUntil("a picture at the grown window's size", async () => readImageDimensions(frames.at(-1)!.jpeg), (size) => isPictureOf(size, grown), 10_000);
 			} finally {
 				stop();
+			}
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"a live picture begun while the person's page is still loading, on a size cached before they resized their window, measures the window on its first picture and follows it",
+		async () => {
+			const held = await startHeldPageServer();
+			try {
+				const { driver, chromeUrl, pageUrl, real } = await adoptedForegroundPage();
+				expect((await driver.state()).viewport).toEqual({ width: real.width, height: real.height });
+				await resizeWindowOf(chromeUrl, pageUrl, { width: 1400, height: 1000 });
+				const grown = await geometryOf(chromeUrl, pageUrl);
+				expect(grown.width).toBeGreaterThan(real.width);
+				expect(grown.height).toBeGreaterThan(real.height);
+
+				await withPageAt(chromeUrl, pageUrl, async (page) => {
+					await page.evaluate((href) => window.location.assign(href), held.url("/doc"));
+					await held.requested;
+					const loading = await driver.state();
+					expect(loading.loading).toBe(true);
+					expect(loading.viewport).toEqual({ width: real.width, height: real.height });
+
+					const frames: LiveFrame[] = [];
+					const stop = driver.watchFrames((frame) => frames.push(frame));
+					try {
+						await waitUntil("a picture tagged with the grown window", async () => frames.at(-1)?.viewport, (viewport) => viewport?.width === grown.width && viewport.height === grown.height);
+						await waitUntil("a picture at the grown window's size", async () => readImageDimensions(frames.at(-1)!.jpeg), (size) => isPictureOf(size, grown), 10_000);
+					} finally {
+						stop();
+						held.release();
+					}
+				});
+			} finally {
+				await held.stop();
+			}
+		},
+		BROWSER_TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"a window the person grows while their page is navigating is followed once the renderer answers again: a size that could not be read is asked for again on the next picture",
+		async () => {
+			const held = await startHeldPageServer();
+			try {
+				const { driver, chromeUrl, pageUrl, real } = await adoptedForegroundPage();
+				const frames: LiveFrame[] = [];
+				const stop = driver.watchFrames((frame) => frames.push(frame));
+				try {
+					await waitUntil("the first picture", async () => frames.length, (count) => count >= 1);
+					expect(frames[0]?.viewport).toEqual({ width: real.width, height: real.height });
+
+					await withPageAt(chromeUrl, pageUrl, async (page) => {
+						const windowSession = await page.createCDPSession();
+						const { windowId, bounds } = await windowSession.send("Browser.getWindowForTarget");
+						const target = { width: 1400, height: 1000 };
+						const grown: PageGeometry = {
+							width: real.width + target.width - (bounds.width ?? 0),
+							height: real.height + target.height - (bounds.height ?? 0),
+							ratio: real.ratio,
+						};
+						expect(grown.width).toBeGreaterThan(real.width);
+						expect(grown.height).toBeGreaterThan(real.height);
+
+						await page.evaluate((href) => window.location.assign(href), held.url("/slow"));
+						await held.requested;
+						const before = frames.length;
+
+						await windowSession.send("Browser.setWindowBounds", { windowId, bounds: { ...target, windowState: "normal" } });
+						await waitUntil("a picture of the grown window while the navigation is held", async () => frames.length, (count) => count > before);
+						expect((await driver.state()).loading).toBe(true);
+
+						held.release();
+						await waitUntil("a picture tagged with the grown window", async () => frames.at(-1)?.viewport, (viewport) => viewport?.width === grown.width && viewport.height === grown.height);
+						await waitUntil("a picture at the grown window's size", async () => readImageDimensions(frames.at(-1)!.jpeg), (size) => isPictureOf(size, grown), 10_000);
+					});
+				} finally {
+					stop();
+				}
+			} finally {
+				await held.stop();
 			}
 		},
 		BROWSER_TEST_TIMEOUT_MS,
