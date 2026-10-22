@@ -149,7 +149,7 @@
 				"annotations"
 			],
 			"requires": {
-				"dimension": ">=0.11.13"
+				"dimension": ">=0.11.1"
 			}
 		},
 		{
