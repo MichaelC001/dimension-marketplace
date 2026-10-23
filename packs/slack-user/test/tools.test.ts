@@ -9,6 +9,7 @@ import {
 	createSlackReadTool,
 	createSlackToolsTool,
 	createToolCatalog,
+	type SlackCallTool,
 } from "../tools";
 
 const SEARCH: McpTool = {
@@ -75,6 +76,10 @@ function textOf(result: { readonly content: readonly { readonly type: string; re
 	return result.content[0]?.text ?? "";
 }
 
+function run(tool: SlackCallTool, params: Parameters<SlackCallTool["execute"]>[1]) {
+	return tool.execute("c", params, undefined, undefined, NO_CONTEXT);
+}
+
 const policyInYolo = (tool: ToolDefinition<never>, args: unknown) =>
 	resolveApproval(tool as Parameters<typeof resolveApproval>[0], args, "yolo").policy;
 
@@ -82,25 +87,20 @@ test("slack_read refuses a tool Slack does not mark read-only, without calling i
 	const { deps, calls } = harness();
 	const read = createSlackReadTool(deps);
 
-	await expect(
-		read.execute("c", { tool: "slack_send_message", arguments: {} }, undefined, undefined, NO_CONTEXT),
-	).rejects.toThrow("cannot run through slack_read");
-	await expect(read.execute("c", { tool: "slack_read_channel" }, undefined, undefined, NO_CONTEXT)).rejects.toThrow(
+	await expect(run(read, { tool: "slack_send_message", arguments: {} })).rejects.toThrow(
 		"cannot run through slack_read",
 	);
+	await expect(run(read, { tool: "slack_read_channel" })).rejects.toThrow("cannot run through slack_read");
 	expect(calls).toEqual([]);
 });
 
 test("slack_read runs a read-only tool with the arguments it was given", async () => {
 	const { deps, calls } = harness();
 
-	const result = await createSlackReadTool(deps).execute(
-		"c",
-		{ tool: "slack_search_public", arguments: { query: "launch" } },
-		undefined,
-		undefined,
-		NO_CONTEXT,
-	);
+	const result = await run(createSlackReadTool(deps), {
+		tool: "slack_search_public",
+		arguments: { query: "launch" },
+	});
 
 	expect(textOf(result)).toBe("ran slack_search_public");
 	expect(calls).toEqual([{ name: "slack_search_public", args: { query: "launch" } }]);
@@ -109,13 +109,10 @@ test("slack_read runs a read-only tool with the arguments it was given", async (
 test("slack_act runs a write tool", async () => {
 	const { deps, calls } = harness();
 
-	await createSlackActTool(deps).execute(
-		"c",
-		{ tool: "slack_send_message", arguments: { channel: "C1", text: "hi" } },
-		undefined,
-		undefined,
-		NO_CONTEXT,
-	);
+	await run(createSlackActTool(deps), {
+		tool: "slack_send_message",
+		arguments: { channel: "C1", text: "hi" },
+	});
 
 	expect(calls).toEqual([{ name: "slack_send_message", args: { channel: "C1", text: "hi" } }]);
 });
@@ -164,26 +161,14 @@ test("the approval card says so when the account is not known yet, caps a huge v
 
 test("a read-only connection refuses a write tool before anything is sent, and one with no recorded scopes or a write scope proceeds", async () => {
 	const readOnly = harness({ credential: { access: "a", scopes: ["channels:history", "search:read.public"] } });
-	await expect(
-		createSlackActTool(readOnly.deps).execute(
-			"c",
-			{ tool: "slack_send_message", arguments: {} },
-			undefined,
-			undefined,
-			NO_CONTEXT,
-		),
-	).rejects.toThrow("authorized read-only");
+	await expect(run(createSlackActTool(readOnly.deps), { tool: "slack_send_message", arguments: {} })).rejects.toThrow(
+		"authorized read-only",
+	);
 	expect(readOnly.calls).toEqual([]);
 
 	for (const credential of [{ access: "a" }, { access: "a", scopes: ["chat:write"] }]) {
 		const connected = harness({ credential });
-		await createSlackActTool(connected.deps).execute(
-			"c",
-			{ tool: "slack_send_message", arguments: {} },
-			undefined,
-			undefined,
-			NO_CONTEXT,
-		);
+		await run(createSlackActTool(connected.deps), { tool: "slack_send_message", arguments: {} });
 		expect(connected.calls).toHaveLength(1);
 	}
 });
@@ -191,9 +176,7 @@ test("a read-only connection refuses a write tool before anything is sent, and o
 test("an unknown tool name triggers one refresh of the tool list and then names the tools Slack does have", async () => {
 	const { deps, listings } = harness();
 
-	await expect(
-		createSlackReadTool(deps).execute("c", { tool: "slack_teleport" }, undefined, undefined, NO_CONTEXT),
-	).rejects.toThrow(
+	await expect(run(createSlackReadTool(deps), { tool: "slack_teleport" })).rejects.toThrow(
 		'no tool named "slack_teleport". Its tools: slack_search_public, slack_send_message, slack_read_channel',
 	);
 
@@ -205,15 +188,15 @@ test("the tool list is cached until it expires or a refresh is asked for", async
 	const read = createSlackReadTool(deps);
 	const search = { tool: "slack_search_public" };
 
-	await read.execute("c", search, undefined, undefined, NO_CONTEXT);
-	await read.execute("c", search, undefined, undefined, NO_CONTEXT);
+	await run(read, search);
+	await run(read, search);
 	expect(listings.count).toBe(1);
 
 	await createSlackToolsTool(deps).execute("c", { refresh: true }, undefined, undefined, NO_CONTEXT);
 	expect(listings.count).toBe(2);
 
 	clock.now += 301_000;
-	await read.execute("c", search, undefined, undefined, NO_CONTEXT);
+	await run(read, search);
 	expect(listings.count).toBe(3);
 });
 
@@ -240,7 +223,7 @@ test("Slack's refusals reach the agent as actionable errors", async () => {
 		},
 	});
 	const read = createSlackReadTool(unauthorized.deps);
-	const attempt = () => read.execute("c", { tool: "slack_search_public" }, undefined, undefined, NO_CONTEXT);
+	const attempt = () => run(read, { tool: "slack_search_public" });
 	await expect(attempt()).rejects.toBeInstanceOf(SlackSignInError);
 	await expect(attempt()).rejects.toThrow("Slack MCP Server is switched on");
 
@@ -249,24 +232,12 @@ test("Slack's refusals reach the agent as actionable errors", async () => {
 			throw new McpRequestError("Slack's MCP server answered 403: nope", 403);
 		},
 	});
-	await expect(
-		createSlackReadTool(forbidden.deps).execute(
-			"c",
-			{ tool: "slack_search_public" },
-			undefined,
-			undefined,
-			NO_CONTEXT,
-		),
-	).rejects.toThrow("may not have approved the Dimension app");
+	await expect(run(createSlackReadTool(forbidden.deps), { tool: "slack_search_public" })).rejects.toThrow(
+		"may not have approved the Dimension app",
+	);
 
 	const failing = harness({ callTool: async () => ({ text: "channel_not_found", isError: true }) });
-	await expect(
-		createSlackActTool(failing.deps).execute(
-			"c",
-			{ tool: "slack_send_message", arguments: {} },
-			undefined,
-			undefined,
-			NO_CONTEXT,
-		),
-	).rejects.toThrow("Slack slack_send_message failed: channel_not_found");
+	await expect(run(createSlackActTool(failing.deps), { tool: "slack_send_message", arguments: {} })).rejects.toThrow(
+		"Slack slack_send_message failed: channel_not_found",
+	);
 });

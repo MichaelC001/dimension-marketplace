@@ -124,24 +124,24 @@ function toTool(raw: unknown): McpTool[] {
 	];
 }
 
+function renderBlock(block: unknown): string {
+	if (!isRecord(block)) return "";
+	if (block.type === "text" && typeof block.text === "string") return block.text;
+	if (block.type === "image") {
+		return `[image ${typeof block.mimeType === "string" ? block.mimeType : "data"} omitted]`;
+	}
+	if (block.type === "resource" && isRecord(block.resource)) {
+		const { text, uri } = block.resource;
+		if (typeof text === "string") return text;
+		return `[resource ${typeof uri === "string" ? uri : "without uri"}]`;
+	}
+	if (block.type === "resource_link" && typeof block.uri === "string") return `[link ${block.uri}]`;
+	return JSON.stringify(block);
+}
+
 function renderContent(content: unknown): string {
 	if (!Array.isArray(content)) return "";
-	return content
-		.map((block: unknown) => {
-			if (!isRecord(block)) return "";
-			if (block.type === "text" && typeof block.text === "string") return block.text;
-			if (block.type === "image") {
-				return `[image ${typeof block.mimeType === "string" ? block.mimeType : "data"} omitted]`;
-			}
-			if (block.type === "resource" && isRecord(block.resource)) {
-				const { text, uri } = block.resource;
-				return typeof text === "string" ? text : `[resource ${typeof uri === "string" ? uri : "without uri"}]`;
-			}
-			if (block.type === "resource_link" && typeof block.uri === "string") return `[link ${block.uri}]`;
-			return JSON.stringify(block);
-		})
-		.filter(Boolean)
-		.join("\n");
+	return content.map(renderBlock).filter(Boolean).join("\n");
 }
 
 export function createMcpClient(options: McpClientOptions): McpClient {
@@ -243,8 +243,8 @@ export function createMcpClient(options: McpClientOptions): McpClient {
 				throw new McpRequestError("Slack's MCP server returned an unreadable tool list");
 			}
 			tools.push(...result.tools.flatMap(toTool));
-			cursor = typeof result.nextCursor === "string" && result.nextCursor ? result.nextCursor : undefined;
-			if (!cursor) break;
+			if (typeof result.nextCursor !== "string" || !result.nextCursor) break;
+			cursor = result.nextCursor;
 		}
 		return tools;
 	}

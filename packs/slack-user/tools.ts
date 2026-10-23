@@ -38,6 +38,8 @@ const callSchema = type({
 	"arguments?": type("object").describe("That tool's arguments, shaped as its schema in slack_tools shows."),
 });
 
+export type SlackCallTool = ToolDefinition<typeof callSchema>;
+
 function accessOf(tool: McpTool): ToolAccess {
 	return tool.annotations.readOnlyHint === true ? "read" : "write";
 }
@@ -175,7 +177,7 @@ async function invoke(deps: SlackToolDeps, wanted: ToolAccess, params: typeof ca
 	return textResult(truncate(result.text || "(no output)", RESULT_CHARS));
 }
 
-export function createSlackReadTool(deps: SlackToolDeps): ToolDefinition<typeof callSchema> {
+export function createSlackReadTool(deps: SlackToolDeps): SlackCallTool {
 	return {
 		name: "slack_read",
 		label: "Slack (as you): Read",
@@ -203,7 +205,7 @@ export function approvalDetails(identity: SlackIdentity, args: unknown): string[
 	];
 }
 
-export function createSlackActTool(deps: SlackToolDeps): ToolDefinition<typeof callSchema> {
+export function createSlackActTool(deps: SlackToolDeps): SlackCallTool {
 	return {
 		name: "slack_act",
 		label: "Slack (as you): Act",

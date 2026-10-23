@@ -65,7 +65,7 @@ export interface CredentialStore {
 }
 
 function parseCredential(raw: string, path: string): StoredCredential {
-	let json: unknown = null;
+	let json: unknown;
 	try {
 		json = JSON.parse(raw);
 	} catch {
