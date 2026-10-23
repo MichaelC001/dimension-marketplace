@@ -1,3 +1,4 @@
+import type { MCPToolAnnotations } from "@oh-my-pi/pi-coding-agent/mcp/types";
 import { isRecord } from "./type-guards";
 
 const MCP_ENDPOINT = "https://mcp.slack.com/mcp";
@@ -9,11 +10,7 @@ const ERROR_BODY_CHARS = 300;
 const CLIENT_NAME = "dimension-slack-user";
 const CLIENT_VERSION = "1";
 
-export interface McpToolAnnotations {
-	readonly readOnlyHint?: boolean;
-	readonly destructiveHint?: boolean;
-	readonly title?: string;
-}
+type McpToolAnnotations = Readonly<Pick<MCPToolAnnotations, "readOnlyHint" | "destructiveHint" | "title">>;
 
 export interface McpTool {
 	readonly name: string;

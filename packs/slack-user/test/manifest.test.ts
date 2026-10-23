@@ -113,3 +113,15 @@ test("the extension registers exactly the tools the manifest lists", () => {
 
 	expect(registered.sort()).toEqual(dimension.tools.map(tool => tool.name).sort());
 });
+
+test.each(["skills/slack-user/SKILL.md", "rules/slack-user-context.md"])(
+	"%s keeps its whole description through the YAML parser the host loads it with",
+	async path => {
+		const text = (await Bun.file(join(packRoot, path)).text()).replace(/\r\n/g, "\n");
+		const front = /^---\n([\s\S]*?)\n---/.exec(text)?.[1] ?? "";
+		const raw = /^description: (.+)$/m.exec(front)?.[1];
+
+		expect(raw).toBeDefined();
+		expect(Bun.YAML.parse(front)).toMatchObject({ description: raw });
+	},
+);

@@ -1,6 +1,6 @@
 ---
 name: slack-user
-description: Search Slack, read channels, threads and DMs, and send, schedule or react as the signed-in user through Slack's official MCP server. Use when the user wants Slack read or sent in their own name ("check my Slack", "reply to Priya", "what did we decide in #launch"), not as a bot.
+description: Search Slack, read channels, threads and DMs, and send, schedule or react as the signed-in user through Slack's official MCP server. Use when the user wants Slack read or sent in their own name ("check my Slack", "reply to Priya", "what did we decide in the launch channel"), not as a bot.
 ---
 
 # Slack (as you)

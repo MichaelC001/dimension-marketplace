@@ -19,5 +19,5 @@ as the user, in their name. This is not the `slack` bot connector, which posts a
   task needs, and do not repeat private channel or DM content anywhere else.
 - Resolve a channel or person with a read tool before acting on it; do not guess ids.
 - On a sign-in error, point the user to **Plugins, Slack (as you), Connect**. If a call
-  fails for a missing scope, the connection was authorized as Read only: they reconnect
-  and choose Read and send or Everything.
+  fails for a missing scope, the chosen permission level is narrower than the task: they
+  reconnect and choose a wider one (Everything adds canvases, lists, files and channels).

@@ -43,7 +43,7 @@ function harness(
 	const client: McpClient = {
 		async listTools() {
 			listings.count += 1;
-			return options.tools ?? [SEARCH, SEND, UNLABELLED_READ];
+			return [...(options.tools ?? [SEARCH, SEND, UNLABELLED_READ])];
 		},
 		callTool:
 			options.callTool ??
@@ -54,7 +54,6 @@ function harness(
 	};
 	const credential: StoredCredential = options.credential ?? { access: "xoxp-1", scopes: ["chat:write"] };
 	const store: CredentialStore = {
-		read: async () => credential,
 		peek: () => credential,
 		accessToken: async () => credential.access,
 		renewRejected: async () => credential.access,
@@ -76,8 +75,8 @@ function textOf(result: { readonly content: readonly { readonly type: string; re
 	return result.content[0]?.text ?? "";
 }
 
-function run(tool: SlackCallTool, params: Parameters<SlackCallTool["execute"]>[1]) {
-	return tool.execute("c", params, undefined, undefined, NO_CONTEXT);
+function run(tool: SlackCallTool, params: Parameters<SlackCallTool["execute"]>[1], signal?: AbortSignal) {
+	return tool.execute("c", params, signal, undefined, NO_CONTEXT);
 }
 
 const policyInYolo = (tool: ToolDefinition<never>, args: unknown) =>
@@ -240,4 +239,45 @@ test("Slack's refusals reach the agent as actionable errors", async () => {
 	await expect(run(createSlackActTool(failing.deps), { tool: "slack_send_message", arguments: {} })).rejects.toThrow(
 		"Slack slack_send_message failed: channel_not_found",
 	);
+});
+
+test.each([
+	["slack_read", createSlackReadTool, "slack_search_public"],
+	["slack_act", createSlackActTool, "slack_send_message"],
+] as const)(
+	"cancelling %s stops waiting for Slack instead of letting the request run on",
+	async (_name, create, tool) => {
+		const controller = new AbortController();
+		const cancelled = new Error("cancelled");
+		let reachedSlack = false;
+		const { deps } = harness({
+			callTool: (_toolName, _args, signal) => {
+				reachedSlack = true;
+				const answer = Promise.withResolvers<{ text: string; isError: boolean }>();
+				if (!signal) answer.resolve({ text: "Slack answered anyway", isError: false });
+				else if (signal.aborted) answer.reject(cancelled);
+				else signal.addEventListener("abort", () => answer.reject(cancelled), { once: true });
+				return answer.promise;
+			},
+		});
+
+		const pending = run(create(deps), { tool, arguments: {} }, controller.signal);
+		controller.abort();
+
+		await expect(pending).rejects.toBe(cancelled);
+		expect(reachedSlack).toBe(true);
+	},
+);
+
+test("slack_tools describes a tool Slack added after the list was cached, as slack_read and slack_act already do", async () => {
+	const tools: McpTool[] = [SEARCH];
+	const { deps, listings } = harness({ tools });
+	const catalog = createSlackToolsTool(deps);
+	await catalog.execute("c", {}, undefined, undefined, NO_CONTEXT);
+	tools.push(SEND);
+
+	const described = await catalog.execute("c", { tool: "slack_send_message" }, undefined, undefined, NO_CONTEXT);
+
+	expect(textOf(described)).toContain("slack_send_message");
+	expect(listings.count).toBe(2);
 });

@@ -9,7 +9,7 @@ A connector that lets your Dimension agent search, read and send Slack messages 
 - Tools: `slack_tools` (what Slack offers, straight from Slack), `slack_read` (read-only calls), `slack_act` (calls that change Slack; every call asks you first).
 - Skill: `slack-user`.
 - Rule: `slack-user-context`, always on, about sending in your name.
-- Connect flow: OAuth 2.0 with PKCE (no client secret), three permission levels (Read only, Read and send, Everything), a verify probe against `auth.test`, and `connect/slack-app-manifest.json`, the manifest the setup link pre-fills.
+- Connect flow: OAuth 2.0 with PKCE (no client secret by default; an optional field covers an app Slack rejects with `bad_client_secret`), three permission levels (Read only, Read and send, Everything), a verify probe against `auth.test`, and `connect/slack-app-manifest.json`, the manifest the setup link pre-fills.
 
 ## Who can use it
 
@@ -17,7 +17,7 @@ Off by default. It needs a Slack workspace where you may create an app, or where
 
 ## Limits and risks
 
-- It acts as you. A sent message cannot be silently unsent. `slack_act` always asks before running, in every approval mode, and shows the channel, the text and the account.
+- It acts as you. A sent message cannot be silently unsent. `slack_act` always asks before running, in every approval mode, and shows the Slack tool, its arguments (the channel and the text) and the account it acts as. The account is named once Slack has been asked who you are, which `slack_tools` and `slack_read` do; before that the prompt says "the connected Slack account".
 - It can read everything you can read, including private channels and DMs, within the permission level you choose at Connect.
 - Slack decides what the MCP server offers. `slack_tools` reads the list at run time, and a tool counts as read-only only if Slack marks it so.
 - The sign-in is stored in `~/.config/dimension-slack-user/token.json` on this machine. Slack rotates it; an app left unused for about 30 days can be signed out, and you click Connect again.

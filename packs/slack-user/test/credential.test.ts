@@ -160,3 +160,32 @@ test("a missing credential reports that Slack is not connected and a corrupt one
 	await expect(store.accessToken()).rejects.toThrow("is unreadable");
 	expect(store.peek()).toBeNull();
 });
+
+test("a token Slack just issued and then rejects is not renewed again within the cooldown, and is once the cooldown has passed", async () => {
+	await save({ access: "xoxe.old", refresh: "xoxe-1-old", expires: NOW + TWELVE_HOURS_MS, clientId: "1.2" });
+	let clock = NOW;
+	const { fetcher, calls } = tokenEndpoint((_form, call) => renewed(`xoxe.issued-${call}`, `xoxe-1-r${call}`));
+	const store = createCredentialStore({ path, fetch: fetcher, now: () => clock });
+
+	expect(await store.renewRejected("xoxe.old")).toBe("xoxe.issued-1");
+	expect(await store.renewRejected("xoxe.issued-1")).toBe("xoxe.issued-1");
+	expect(await store.renewRejected("xoxe.issued-1")).toBe("xoxe.issued-1");
+	expect(calls).toHaveLength(1);
+
+	clock += 61_000;
+	expect(await store.renewRejected("xoxe.issued-1")).toBe("xoxe.issued-2");
+	expect(calls).toHaveLength(2);
+});
+
+test("a clock that moves backwards does not hold a rejected token's cooldown open", async () => {
+	await save({ access: "xoxe.old", refresh: "xoxe-1-old", expires: NOW + TWELVE_HOURS_MS, clientId: "1.2" });
+	let clock = NOW;
+	const { fetcher, calls } = tokenEndpoint((_form, call) => renewed(`xoxe.issued-${call}`, `xoxe-1-r${call}`));
+	const store = createCredentialStore({ path, fetch: fetcher, now: () => clock });
+
+	expect(await store.renewRejected("xoxe.old")).toBe("xoxe.issued-1");
+	clock = NOW - TWELVE_HOURS_MS;
+
+	expect(await store.renewRejected("xoxe.issued-1")).toBe("xoxe.issued-2");
+	expect(calls).toHaveLength(2);
+});

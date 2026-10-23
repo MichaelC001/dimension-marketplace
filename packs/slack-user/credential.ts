@@ -11,6 +11,7 @@ export const TOKEN_PATH = join(homedir(), ".config", "dimension-slack-user", "to
 const REFRESH_SKEW_MS = 60_000;
 const DEFAULT_ACCESS_LIFETIME_SECONDS = 43_200;
 const RENEWAL_TIMEOUT_MS = 15_000;
+const RENEWED_REJECTED_COOLDOWN_MS = 60_000;
 const CREDENTIAL_FILE_MODE = 0o600;
 const RECONNECT_ERRORS: Record<string, true> = {
 	invalid_refresh_token: true,
@@ -58,7 +59,6 @@ export interface CredentialStoreOptions {
 }
 
 export interface CredentialStore {
-	read(): Promise<StoredCredential>;
 	peek(): StoredCredential | null;
 	accessToken(): Promise<string>;
 	renewRejected(rejectedAccess: string): Promise<string>;
@@ -97,6 +97,7 @@ export function createCredentialStore(options: CredentialStoreOptions): Credenti
 	const http = options.fetch ?? fetch;
 	const now = options.now ?? Date.now;
 	let renewing: Promise<StoredCredential> | null = null;
+	let lastRenewal: { readonly access: string; readonly at: number } | null = null;
 
 	async function read(): Promise<StoredCredential> {
 		let raw: string;
@@ -170,6 +171,7 @@ export function createCredentialStore(options: CredentialStoreOptions): Credenti
 			expires: now() + (body.expires_in ?? DEFAULT_ACCESS_LIFETIME_SECONDS) * 1000,
 		};
 		await persist(renewed);
+		lastRenewal = { access: renewed.access, at: now() };
 		return renewed;
 	}
 
@@ -198,8 +200,12 @@ export function createCredentialStore(options: CredentialStoreOptions): Credenti
 				"Slack rejected the saved sign-in (revoked or expired). Reconnect Slack (as you) in Plugins.",
 			);
 		}
+		if (lastRenewal?.access === rejectedAccess) {
+			const elapsed = now() - lastRenewal.at;
+			if (elapsed >= 0 && elapsed < RENEWED_REJECTED_COOLDOWN_MS) return rejectedAccess;
+		}
 		return (await renewShared(credential)).access;
 	}
 
-	return { read, peek, accessToken, renewRejected };
+	return { peek, accessToken, renewRejected };
 }

@@ -228,3 +228,21 @@ test("a rate limit names how long to wait", async () => {
 
 	await expect(clientFor(fetcher).callTool("slack_send_message", {})).rejects.toThrow("rate limited, retry after 17s");
 });
+
+test("a call the caller already cancelled is cancelled on the wire too, instead of running to the request timeout", async () => {
+	const { fetcher, requests } = fakeSlack(standardServer);
+	const honoringSignal = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) =>
+		init?.signal?.aborted
+			? Promise.reject(new DOMException("aborted", "AbortError"))
+			: fetcher(input, init)) as typeof fetch;
+	const controller = new AbortController();
+	controller.abort();
+
+	await expect(clientFor(honoringSignal).callTool("slack_search_public", {}, controller.signal)).rejects.toMatchObject(
+		{
+			name: "AbortError",
+		},
+	);
+
+	expect(requests.map(request => request.body.method)).toEqual(["initialize", "notifications/initialized"]);
+});

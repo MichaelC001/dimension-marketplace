@@ -145,18 +145,12 @@ export function createSlackToolsTool(deps: SlackToolDeps): ToolDefinition<typeof
 			void deps.identity.warm();
 			const tools = await withSlackErrors(() => deps.catalog.get({ refresh: params.refresh === true }));
 			if (!params.tool) return textResult(listTools(tools));
-			const found = tools.find(candidate => candidate.name === params.tool);
-			if (!found) {
-				throw new Error(
-					`Slack has no tool named "${params.tool}". Its tools: ${tools.map(candidate => candidate.name).join(", ") || "(none)"}.`,
-				);
-			}
-			return textResult(describeTool(found));
+			return textResult(describeTool(await resolveTool(deps.catalog, params.tool)));
 		},
 	};
 }
 
-async function invoke(deps: SlackToolDeps, wanted: ToolAccess, params: typeof callSchema.infer) {
+async function invoke(deps: SlackToolDeps, wanted: ToolAccess, params: typeof callSchema.infer, signal?: AbortSignal) {
 	const tool = await resolveTool(deps.catalog, params.tool);
 	if (wanted === "read" && accessOf(tool) !== "read") {
 		throw new Error(
@@ -172,7 +166,7 @@ async function invoke(deps: SlackToolDeps, wanted: ToolAccess, params: typeof ca
 		}
 	}
 	const args = isRecord(params.arguments) ? params.arguments : {};
-	const result = await withSlackErrors(() => deps.client.callTool(tool.name, args));
+	const result = await withSlackErrors(() => deps.client.callTool(tool.name, args, signal));
 	if (result.isError) throw new Error(`Slack ${tool.name} failed: ${result.text || "no detail given"}`);
 	return textResult(truncate(result.text || "(no output)", RESULT_CHARS));
 }
@@ -185,9 +179,9 @@ export function createSlackReadTool(deps: SlackToolDeps): SlackCallTool {
 			"Run one READ-ONLY Slack tool as the signed-in user: search messages and files, read a channel or thread, find users and channels, read a canvas or list. Refuses any tool slack_tools does not mark [read]. Pass `tool` and its `arguments` exactly as slack_tools shows.",
 		parameters: callSchema,
 		approval: "read",
-		async execute(_toolCallId: string, params: typeof callSchema.infer) {
+		async execute(_toolCallId: string, params: typeof callSchema.infer, signal?: AbortSignal) {
 			void deps.identity.warm();
-			return invoke(deps, "read", params);
+			return invoke(deps, "read", params, signal);
 		},
 	};
 }
@@ -214,8 +208,8 @@ export function createSlackActTool(deps: SlackToolDeps): SlackCallTool {
 		parameters: callSchema,
 		approval: PROMPT_EVERY_MODE,
 		formatApprovalDetails: (args: unknown) => approvalDetails(deps.identity, args),
-		async execute(_toolCallId: string, params: typeof callSchema.infer) {
-			return invoke(deps, "write", params);
+		async execute(_toolCallId: string, params: typeof callSchema.infer, signal?: AbortSignal) {
+			return invoke(deps, "write", params, signal);
 		},
 	};
 }
