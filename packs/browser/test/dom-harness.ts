@@ -42,6 +42,7 @@ export interface Dom {
 	/** Let pending promises and effects settle (a stream message arriving, a tool call returning). */
 	readonly settle: () => Promise<void>;
 	readonly resize: (target: Element, width: number, height: number) => Promise<void>;
+	readonly rerender: (element: ReactElement) => Promise<void>;
 }
 
 const resizeObservers = new Set<StubResizeObserver>();
@@ -164,6 +165,7 @@ export async function mount(element: ReactElement): Promise<Dom> {
 			});
 		},
 		act: change => act(async () => change()),
+		rerender: element => act(async () => root.render(element)),
 		resize: async (target, width, height) => {
 			await act(async () => {
 				for (const observer of [...resizeObservers]) {

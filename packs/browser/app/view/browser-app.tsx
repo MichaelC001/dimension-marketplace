@@ -345,10 +345,7 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 		const wanted = stageViewport(stage);
 		if (wanted === undefined) return;
 		const reported = reportedRef.current;
-		if (reported !== undefined && reported.width === wanted.width && reported.height === wanted.height) {
-			askedRef.current = null;
-			return;
-		}
+		if (reported !== undefined && reported.width === wanted.width && reported.height === wanted.height) return;
 		const key = `${bound}:${wanted.width}x${wanted.height}`;
 		if (askedRef.current === key) return;
 		askedRef.current = key;
@@ -371,9 +368,6 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 		},
 		[fitToStage],
 	);
-	useEffect(() => {
-		askedRef.current = null;
-	}, [browserId]);
 	useEffect(() => {
 		fitToStage();
 	}, [fitToStage, browserId, state?.viewport.width, state?.viewport.height]);

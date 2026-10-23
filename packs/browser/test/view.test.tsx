@@ -458,7 +458,7 @@ function appOnListener(browser: ListeningBrowser, serve: (call: Call) => CallToo
 	app.callServerTool = async request => {
 		if (request.name !== "browser_stream") return await answer(request);
 		calls.push({ name: request.name, args: request.arguments ?? {} });
-		return { content: [], structuredContent: { ...(await channel.mint("b1")) } };
+		return { content: [], structuredContent: { ...(await channel.mint(request.arguments?.browserId as string)) } };
 	};
 	return { app, calls, channel };
 }
@@ -555,36 +555,90 @@ async function mountOnServer(lands?: (asked: Viewport) => Viewport) {
 }
 
 describe("the page is fitted to the stage it is shown in", () => {
-	test("a stage measured while no browser was bound fits the next browser that opens: one resize, to the stage's size", async () => {
-		const { calls, dom } = await mountOnServer();
+	test("the stage size measured for a browser is kept when that browser is closed: the next browser that opens is fitted to it, with one resize", async () => {
+		const { browser, calls, dom } = await mountOnServer();
 		await dom.resize(stageOf(dom), 900, 700);
 		await dom.click(dom.find('button[aria-label="More"]')[0] as Element);
 		await dom.click(button(dom, "Close browser"));
 		await quiet(dom);
 		expect(dom.find(".bx-browser")).toHaveLength(0);
 
+		browser.state = { ...browser.state, browserId: "b2" };
 		const before = calls.length;
 		await dom.click(button(dom, "Open"));
 		await until(dom, () => fitCalls(calls.slice(before)).length > 0);
 		await quiet(dom);
 
-		expect(fitCalls(calls.slice(before))).toEqual([{ browserId: "b1", width: 900, height: 700 }]);
+		expect(fitCalls(calls.slice(before))).toEqual([{ browserId: "b2", width: 900, height: 700 }]);
 	});
 
-	test("a page an agent put back to another size is fitted to the stage again", async () => {
-		const { browser, calls, dom } = await mountOnServer();
+	test("a browser an agent opens into this View is fitted to the stage like any other: one resize, for the new browser, to the stage's size", async () => {
+		const browser = new ListeningBrowser();
+		const { app, calls } = appOnListener(browser, sizingServer(browser));
+		const dom = await mount(<BrowserApp app={app} toolState={{ state: browser.state, seq: 1 }} />);
+		await until(dom, () => browser.watchers === 1);
 		await dom.resize(stageOf(dom), 900, 700);
 		await until(dom, () => pageSize(dom) === "900x700");
-		expect(fitCalls(calls)).toEqual([{ browserId: "b1", width: 900, height: 700 }]);
 
-		browser.state = { ...browser.state, url: "https://agent.example/", title: "Opened by the agent", viewport: { width: 1280, height: 800 } };
+		browser.state = { ...browser.state, browserId: "b2", viewport: LIVE.viewport };
+		await dom.rerender(<BrowserApp app={app} toolState={{ state: browser.state, seq: 2 }} />);
 		await until(dom, () => fitCalls(calls).length > 1);
 		await until(dom, () => pageSize(dom) === "900x700");
 		await quiet(dom);
 
 		expect(fitCalls(calls)).toEqual([
 			{ browserId: "b1", width: 900, height: 700 },
+			{ browserId: "b2", width: 900, height: 700 },
+		]);
+	});
+
+	test("two Views on one browser, each with its own stage size, ask once for their own size and then leave it alone: they do not resize it back and forth", async () => {
+		const browser = new ListeningBrowser();
+		const first = appOnListener(browser, sizingServer(browser));
+		const second = appOnListener(browser, sizingServer(browser));
+		const left = await mount(<BrowserApp app={first.app} toolState={{ state: browser.state, seq: 1 }} />);
+		const right = await mount(<BrowserApp app={second.app} toolState={{ state: browser.state, seq: 1 }} />);
+		await until(right, () => browser.watchers === 2);
+
+		await left.resize(stageOf(left), 900, 700);
+		await until(right, () => pageSize(left) === "900x700" && pageSize(right) === "900x700");
+		await right.resize(stageOf(right), 1100, 650);
+		await until(right, () => pageSize(left) === "1100x650" && pageSize(right) === "1100x650");
+		await quiet(right);
+
+		expect(fitCalls(first.calls)).toEqual([{ browserId: "b1", width: 900, height: 700 }]);
+		expect(fitCalls(second.calls)).toEqual([{ browserId: "b1", width: 1100, height: 650 }]);
+	});
+
+	test("a resize that fails after the View has moved to another browser is not held against the new one: a size change from elsewhere is still left alone", async () => {
+		const browser = new ListeningBrowser();
+		const { app, calls } = appOnListener(browser, sizingServer(browser));
+		const answer = app.callServerTool.bind(app);
+		const refusal = Promise.withResolvers<void>();
+		app.callServerTool = async request => {
+			if (request.name !== "browser_viewport" || request.arguments?.browserId !== "b1") return await answer(request);
+			calls.push({ name: request.name, args: request.arguments });
+			await refusal.promise;
+			return failure("browser b1 is gone");
+		};
+		const dom = await mount(<BrowserApp app={app} toolState={{ state: browser.state, seq: 1 }} />);
+		await until(dom, () => browser.watchers === 1);
+		await dom.resize(stageOf(dom), 900, 700);
+		await until(dom, () => fitCalls(calls).length === 1);
+
+		browser.state = { ...browser.state, browserId: "b2", viewport: LIVE.viewport };
+		await dom.rerender(<BrowserApp app={app} toolState={{ state: browser.state, seq: 2 }} />);
+		await until(dom, () => pageSize(dom) === "900x700");
+		refusal.resolve();
+		await dom.settle();
+
+		browser.state = { ...browser.state, viewport: { width: 1000, height: 700 } };
+		await until(dom, () => pageSize(dom) === "1000x700");
+		await quiet(dom);
+
+		expect(fitCalls(calls)).toEqual([
 			{ browserId: "b1", width: 900, height: 700 },
+			{ browserId: "b2", width: 900, height: 700 },
 		]);
 	});
 
