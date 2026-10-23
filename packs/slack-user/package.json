@@ -1,0 +1,36 @@
+{
+	"name": "@inso/slack-user",
+	"author": "Dimension",
+	"version": "0.1.0",
+	"description": "Slack as you: search, read and send in your own name through Slack's official MCP server (OAuth with PKCE, bring-your-own Slack app)",
+	"type": "module",
+	"main": "index.ts",
+	"scripts": {
+		"check": "biome check . --no-errors-on-unmatched"
+	},
+	"dimension": {
+		"name": "slack-user",
+		"extensions": [
+			"index.ts"
+		]
+	},
+	"files": [
+		"skills/",
+		"rules/",
+		"connect/",
+		"assets/",
+		"index.ts",
+		"credential.ts",
+		"identity.ts",
+		"mcp-client.ts",
+		"tools.ts",
+		"type-guards.ts",
+		"plugin.json",
+		"README.md"
+	],
+	"peerDependencies": {
+		"arktype": "^2.2.0",
+		"@oh-my-pi/pi-coding-agent": "*"
+	},
+	"license": "MIT"
+}

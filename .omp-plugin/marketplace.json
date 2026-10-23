@@ -1159,6 +1159,29 @@
 			]
 		},
 		{
+			"name": "slack-user",
+			"source": "./packs/slack-user",
+			"pluginId": "slack-user",
+			"title": "Slack (as you)",
+			"icon": "packs/slack-user/assets/icon.svg",
+			"description": "Slack as you: search, read and send in your own name through Slack's official MCP server",
+			"version": "0.1.0",
+			"author": {
+				"name": "Dimension"
+			},
+			"repository": "https://github.com/insodimension/dimension-community",
+			"license": "MIT",
+			"category": "connector",
+			"tags": [
+				"slack",
+				"chat",
+				"messaging",
+				"mcp",
+				"oauth",
+				"connector"
+			]
+		},
+		{
 			"name": "speech-elevenlabs",
 			"source": "./packs/speech-elevenlabs",
 			"pluginId": "speech-elevenlabs",
