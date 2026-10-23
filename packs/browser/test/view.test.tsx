@@ -17,9 +17,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { App } from "@modelcontextprotocol/ext-apps";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import type { BrowserState, ProfileListing } from "../src/contracts";
+import { MAX_VIEWPORT, MIN_VIEWPORT, type BrowserState, type ProfileListing, type Viewport } from "../src/contracts";
 import { BrowserApp } from "../app/view/browser-app";
 import { BrowserClient, mountFromToolResult, type ToolMount } from "../app/view/browser-client";
+import { stageViewport } from "../app/view/geometry";
 import { StartPage, type StartPageProps } from "../app/view/start-page";
 import type { LiveFrame } from "../src/engines/types";
 import { BrowserRuntimeError } from "../src/store";
@@ -448,11 +449,11 @@ afterEach(async () => {
 	for (const channel of channels.splice(0)) await channel.close();
 });
 
-/** A host whose `browser_stream` answers with a real listener's address; every other call is recorded and refused. */
-function appOnListener(browser: ListeningBrowser): { app: App; calls: Call[]; channel: LiveChannel } {
+/** A host whose `browser_stream` answers with a real listener's address; every other call is recorded and answered by `serve` (refused by default). */
+function appOnListener(browser: ListeningBrowser, serve: (call: Call) => CallToolResult = () => failure("unexpected")): { app: App; calls: Call[]; channel: LiveChannel } {
 	const channel = new LiveChannel(browser, { stateIntervalMs: 15 });
 	channels.push(channel);
-	const { app, calls } = fakeApp(() => failure("unexpected"));
+	const { app, calls } = fakeApp(serve);
 	const answer = app.callServerTool.bind(app);
 	app.callServerTool = async request => {
 		if (request.name !== "browser_stream") return await answer(request);
@@ -517,5 +518,139 @@ describe("the live connection", () => {
 		await unmountAll();
 		for (let attempt = 0; attempt < 150 && browser.watchers !== 0; attempt += 1) await new Promise(done => setTimeout(done, 20));
 		expect(browser.watchers).toBe(0);
+	});
+});
+
+const QUIET_TICKS = 12;
+
+const stageOf = (dom: Dom): Element => dom.find(".bx-stage")[0] as Element;
+
+const pageSize = (dom: Dom): string => {
+	const style = dom.find(".bx-page")[0]?.getAttribute("style") ?? "";
+	return `${/--vw:\s*(\d+)/.exec(style)?.[1]}x${/--vh:\s*(\d+)/.exec(style)?.[1]}`;
+};
+
+const fitCalls = (calls: readonly Call[]) =>
+	calls.filter(call => call.name === "browser_viewport").map(({ args }) => ({ browserId: args.browserId, width: args.width, height: args.height }));
+
+async function quiet(dom: Dom): Promise<void> {
+	for (let tick = 0; tick < QUIET_TICKS; tick += 1) await dom.settle();
+}
+
+function sizingServer(browser: ListeningBrowser, lands: (asked: Viewport) => Viewport = asked => asked): (call: Call) => CallToolResult {
+	return call => {
+		if (call.name === "browser_viewport") browser.state = { ...browser.state, viewport: lands({ width: call.args.width as number, height: call.args.height as number }) };
+		else if (call.name === "browser_open") browser.state = { ...browser.state, viewport: LIVE.viewport };
+		else if (call.name !== "browser_close") return failure("unexpected");
+		return { content: [], structuredContent: call.name === "browser_close" ? {} : { ...browser.state } };
+	};
+}
+
+async function mountOnServer(lands?: (asked: Viewport) => Viewport) {
+	const browser = new ListeningBrowser();
+	const { app, calls } = appOnListener(browser, sizingServer(browser, lands));
+	const dom = await mount(<BrowserApp app={app} toolState={{ state: browser.state, seq: 1 }} />);
+	await until(dom, () => browser.watchers === 1);
+	return { browser, calls, dom };
+}
+
+describe("the page is fitted to the stage it is shown in", () => {
+	test("a stage measured while no browser was bound fits the next browser that opens: one resize, to the stage's size", async () => {
+		const { calls, dom } = await mountOnServer();
+		await dom.resize(stageOf(dom), 900, 700);
+		await dom.click(dom.find('button[aria-label="More"]')[0] as Element);
+		await dom.click(button(dom, "Close browser"));
+		await quiet(dom);
+		expect(dom.find(".bx-browser")).toHaveLength(0);
+
+		const before = calls.length;
+		await dom.click(button(dom, "Open"));
+		await until(dom, () => fitCalls(calls.slice(before)).length > 0);
+		await quiet(dom);
+
+		expect(fitCalls(calls.slice(before))).toEqual([{ browserId: "b1", width: 900, height: 700 }]);
+	});
+
+	test("a page an agent put back to another size is fitted to the stage again", async () => {
+		const { browser, calls, dom } = await mountOnServer();
+		await dom.resize(stageOf(dom), 900, 700);
+		await until(dom, () => pageSize(dom) === "900x700");
+		expect(fitCalls(calls)).toEqual([{ browserId: "b1", width: 900, height: 700 }]);
+
+		browser.state = { ...browser.state, url: "https://agent.example/", title: "Opened by the agent", viewport: { width: 1280, height: 800 } };
+		await until(dom, () => fitCalls(calls).length > 1);
+		await until(dom, () => pageSize(dom) === "900x700");
+		await quiet(dom);
+
+		expect(fitCalls(calls)).toEqual([
+			{ browserId: "b1", width: 900, height: 700 },
+			{ browserId: "b1", width: 900, height: 700 },
+		]);
+	});
+
+	test("a server that lands on the asked size is not asked again, whatever re-renders the View afterwards", async () => {
+		const { browser, calls, dom } = await mountOnServer();
+		await dom.resize(stageOf(dom), 900, 700);
+		await until(dom, () => pageSize(dom) === "900x700");
+
+		for (const title of ["Second title", "Third title", "Fourth title"]) {
+			browser.state = { ...browser.state, tabs: [{ ...(browser.state.tabs[0] as BrowserState["tabs"][number]), title }] };
+			await until(dom, () => dom.text().includes(title));
+		}
+		await dom.resize(stageOf(dom), 900, 700);
+		await quiet(dom);
+
+		expect(fitCalls(calls)).toEqual([{ browserId: "b1", width: 900, height: 700 }]);
+	});
+
+	test("a server that never lands on the asked size is asked once per stage size, not in a loop", async () => {
+		let drift = 0;
+		const { calls, dom } = await mountOnServer(asked => ({ width: asked.width + (drift += 1), height: asked.height }));
+		await dom.resize(stageOf(dom), 900, 700);
+		await until(dom, () => fitCalls(calls).length > 0);
+		await quiet(dom);
+		expect(fitCalls(calls)).toEqual([{ browserId: "b1", width: 900, height: 700 }]);
+
+		await dom.resize(stageOf(dom), 1000, 700);
+		await until(dom, () => fitCalls(calls).length > 1);
+		await quiet(dom);
+		expect(fitCalls(calls)).toEqual([
+			{ browserId: "b1", width: 900, height: 700 },
+			{ browserId: "b1", width: 1000, height: 700 },
+		]);
+	});
+
+	test("a stage too small to hold a page sends nothing, and the smallest one that can hold it is sent as it is", async () => {
+		const { calls, dom } = await mountOnServer();
+		for (const [width, height] of [
+			[MIN_VIEWPORT.width - 1, 700],
+			[900, MIN_VIEWPORT.height - 1],
+			[MIN_VIEWPORT.width - 1, MIN_VIEWPORT.height - 1],
+		]) {
+			await dom.resize(stageOf(dom), width as number, height as number);
+			await quiet(dom);
+		}
+		expect(fitCalls(calls)).toEqual([]);
+
+		await dom.resize(stageOf(dom), MIN_VIEWPORT.width, MIN_VIEWPORT.height);
+		await until(dom, () => fitCalls(calls).length > 0);
+		await quiet(dom);
+
+		expect(fitCalls(calls)).toEqual([{ browserId: "b1", width: MIN_VIEWPORT.width, height: MIN_VIEWPORT.height }]);
+	});
+});
+
+describe("the size a stage can show a page at", () => {
+	test.each([
+		{ name: "the smallest stage is sent as it is", stage: { width: MIN_VIEWPORT.width, height: MIN_VIEWPORT.height }, fits: { width: MIN_VIEWPORT.width, height: MIN_VIEWPORT.height } },
+		{ name: "one pixel too narrow holds nothing", stage: { width: MIN_VIEWPORT.width - 1, height: 900 }, fits: undefined },
+		{ name: "one pixel too short holds nothing", stage: { width: 900, height: MIN_VIEWPORT.height - 1 }, fits: undefined },
+		{ name: "a fraction of a pixel is dropped, never rounded up", stage: { width: 900.9, height: 700.99 }, fits: { width: 900, height: 700 } },
+		{ name: "the largest page is sent as it is", stage: { width: MAX_VIEWPORT.width, height: MAX_VIEWPORT.height }, fits: { width: MAX_VIEWPORT.width, height: MAX_VIEWPORT.height } },
+		{ name: "a stage past the largest page on both sides is held to it", stage: { width: MAX_VIEWPORT.width + 500, height: MAX_VIEWPORT.height + 500 }, fits: { width: MAX_VIEWPORT.width, height: MAX_VIEWPORT.height } },
+		{ name: "each side is held to its own limit", stage: { width: MAX_VIEWPORT.width + 1, height: 700 }, fits: { width: MAX_VIEWPORT.width, height: 700 } },
+		{ name: "a tall stage keeps its width", stage: { width: 900, height: MAX_VIEWPORT.height + 1 }, fits: { width: 900, height: MAX_VIEWPORT.height } },
+	])("$name", ({ stage, fits }) => {
+		expect(stageViewport(stage)).toEqual(fits);
 	});
 });

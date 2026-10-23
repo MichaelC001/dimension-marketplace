@@ -5,12 +5,13 @@
 // never a URL).
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { App } from "@modelcontextprotocol/ext-apps";
-import type { BrowserAction, BrowserFrame, BrowserState, ControlMode, NewProfileRequest, OpenBrowserListing, ProfileListing, TabOp } from "../../src/contracts";
+import type { BrowserAction, BrowserFrame, BrowserState, ControlMode, NewProfileRequest, OpenBrowserListing, ProfileListing, TabOp, Viewport } from "../../src/contracts";
 import { Icon } from "@fraym/ui/icons";
 import { addressParts, tabLabel } from "../../src/address";
 import { AgentPill, ControlPill, ResultToast, useAgentActive } from "./agent-activity";
 import { AnnotationSeat } from "./annotation-seat";
 import { BrowserClient, failureText, openFailureText, type ToolMount } from "./browser-client";
+import { stageViewport } from "./geometry";
 import { PageView } from "./page-view";
 import { DEFAULT_PROFILE, RELAY_PROFILE } from "../../src/profile-name";
 import { BlankTab, StartPage } from "./start-page";
@@ -332,36 +333,50 @@ export function BrowserApp({ app, toolState }: BrowserAppProps) {
 		}
 	};
 
-	// The page area's size becomes the browser's viewport, so the page fills
-	// it edge to edge and every click maps 1:1. Debounced: a drag-resize sends
-	// one call, not sixty; the last frame stays on screen, fitted, meanwhile.
 	const resizeTimerRef = useRef<number | undefined>(undefined);
-	const sentSizeRef = useRef<{ width: number; height: number } | null>(null);
+	const stageSizeRef = useRef<Viewport | null>(null);
+	const askedRef = useRef<string | null>(null);
+	const reportedRef = useRef<Viewport | undefined>(state?.viewport);
+	reportedRef.current = state?.viewport;
+	const fitToStage = useCallback(() => {
+		const bound = boundRef.current;
+		const stage = stageSizeRef.current;
+		if (bound === null || stage === null) return;
+		const wanted = stageViewport(stage);
+		if (wanted === undefined) return;
+		const reported = reportedRef.current;
+		if (reported !== undefined && reported.width === wanted.width && reported.height === wanted.height) {
+			askedRef.current = null;
+			return;
+		}
+		const key = `${bound}:${wanted.width}x${wanted.height}`;
+		if (askedRef.current === key) return;
+		askedRef.current = key;
+		client.viewport(bound, wanted.width, wanted.height).then(
+			next => {
+				if (live(bound)) stream.push(next);
+			},
+			cause => {
+				if (live(bound)) say("error", `Couldn't resize the page: ${failureText(cause)}`);
+				if (askedRef.current === key) askedRef.current = null;
+			},
+		);
+	}, [client]);
 	const onStageResize = useCallback(
 		(width: number, height: number) => {
+			stageSizeRef.current = { width, height };
+			askedRef.current = null;
 			window.clearTimeout(resizeTimerRef.current);
-			resizeTimerRef.current = window.setTimeout(() => {
-				const bound = boundRef.current;
-				if (bound === null || width < 320 || height < 240) return;
-				const sent = sentSizeRef.current;
-				if (sent !== null && sent.width === width && sent.height === height) return;
-				sentSizeRef.current = { width, height };
-				client.viewport(bound, width, height).then(
-					next => {
-						if (live(bound)) stream.push(next);
-					},
-					cause => {
-						if (live(bound)) say("error", `Couldn't resize the page: ${failureText(cause)}`);
-						sentSizeRef.current = null;
-					},
-				);
-			}, 150);
+			resizeTimerRef.current = window.setTimeout(fitToStage, 150);
 		},
-		[client],
+		[fitToStage],
 	);
 	useEffect(() => {
-		sentSizeRef.current = null;
+		askedRef.current = null;
 	}, [browserId]);
+	useEffect(() => {
+		fitToStage();
+	}, [fitToStage, browserId, state?.viewport.width, state?.viewport.height]);
 
 	const tabOp = async (op: TabOp, options: { tabId?: string; url?: string } = {}) => {
 		const bound = browserId;

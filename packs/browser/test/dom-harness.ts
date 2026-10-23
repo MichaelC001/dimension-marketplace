@@ -41,13 +41,26 @@ export interface Dom {
 	readonly act: (change: () => void) => Promise<void>;
 	/** Let pending promises and effects settle (a stream message arriving, a tool call returning). */
 	readonly settle: () => Promise<void>;
+	readonly resize: (target: Element, width: number, height: number) => Promise<void>;
 }
+
+const resizeObservers = new Set<StubResizeObserver>();
 
 /** Things the View reaches for that linkedom does not have. */
 class StubResizeObserver {
-	observe(): void {}
-	unobserve(): void {}
-	disconnect(): void {}
+	readonly targets = new Set<Element>();
+	constructor(readonly callback: (entries: { target: Element; contentRect: { width: number; height: number } }[]) => void) {}
+	observe(target: Element): void {
+		this.targets.add(target);
+		resizeObservers.add(this);
+	}
+	unobserve(target: Element): void {
+		this.targets.delete(target);
+	}
+	disconnect(): void {
+		this.targets.clear();
+		resizeObservers.delete(this);
+	}
 }
 
 export async function mount(element: ReactElement): Promise<Dom> {
@@ -151,6 +164,13 @@ export async function mount(element: ReactElement): Promise<Dom> {
 			});
 		},
 		act: change => act(async () => change()),
+		resize: async (target, width, height) => {
+			await act(async () => {
+				for (const observer of [...resizeObservers]) {
+					if (observer.targets.has(target)) observer.callback([{ target, contentRect: { width, height } }]);
+				}
+			});
+		},
 		settle: () => act(async () => new Promise<void>(resolve => setTimeout(resolve, 20))),
 	};
 }

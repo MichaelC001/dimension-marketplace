@@ -5,7 +5,7 @@
 // layout viewport. The frame PNG is that viewport times the pixel ratio, and a
 // mark's page read maps by the natural-to-viewport ratio (`page-annotation.ts`):
 // clicks and scroll targets are CSS pixels whatever size the seat renders it at.
-import type { Viewport } from "../../src/contracts";
+import { MAX_VIEWPORT, MIN_VIEWPORT, type Viewport } from "../../src/contracts";
 
 export interface Point {
 	readonly x: number;
@@ -46,5 +46,13 @@ export function toPixelPoint(point: Point, viewport: Viewport): Point {
 	return {
 		x: Math.max(0, Math.min(Math.max(0, viewport.width - 1), Math.round(point.x))),
 		y: Math.max(0, Math.min(Math.max(0, viewport.height - 1), Math.round(point.y))),
+	};
+}
+
+export function stageViewport(stage: Viewport): Viewport | undefined {
+	if (stage.width < MIN_VIEWPORT.width || stage.height < MIN_VIEWPORT.height) return undefined;
+	return {
+		width: Math.min(MAX_VIEWPORT.width, Math.floor(stage.width)),
+		height: Math.min(MAX_VIEWPORT.height, Math.floor(stage.height)),
 	};
 }
