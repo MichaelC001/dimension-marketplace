@@ -70,7 +70,7 @@ export function toolBody(): Record<string, unknown> {
 			type: "client",
 			name: TOOL_NAME,
 			description:
-				"Ask the coding agent to do repository work (anything that touches files, code, tools, tests, builds or verification), then keep chatting.",
+				"Hand a request to the agent that works in the user's session. Use it for anything about the user's work: their files, notes and projects, earlier conversations and decisions, what is done or running or true now, anything that needs a tool, the web, a build or a test, and any question you cannot answer from what you were told in this call. Never answer that you do not know or cannot see something about the user's work: call this instead, then keep chatting.",
 			parameters: {
 				type: "object",
 				properties: { task: { type: "string", description: "The complete request, in plain language" } },

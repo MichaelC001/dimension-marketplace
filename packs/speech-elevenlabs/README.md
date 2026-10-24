@@ -4,7 +4,7 @@
 
 A speech provider for Dimension: dictation by ElevenLabs Scribe v2 Realtime, an agent's replies spoken by ElevenLabs
 (Eleven v4 Turbo by default, or Eleven v4, or Flash v2.5) with word-level caption timing, and **live voice
-conversations** through an ElevenLabs agent that hands repository work to your coding agent. A voice profile picks it
+conversations** through an ElevenLabs agent that hands your requests to your own agent. A voice profile picks it
 by naming the provider `elevenlabs`.
 
 ## What it contains
