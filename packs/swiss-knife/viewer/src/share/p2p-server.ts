@@ -223,7 +223,7 @@ export class P2pServer {
 		this.#states.set(row.id, state);
 		this.#cache.dropWithPrefix(`${row.id}:`);
 		if (row.version !== version) {
-			this.#library.shares.update(row.id, { version });
+			this.#library.shares.update(row.id, { version, versionAt: this.#now() });
 			this.#onVersionChange();
 		}
 		return state;

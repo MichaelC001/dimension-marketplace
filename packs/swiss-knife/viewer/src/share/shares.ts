@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { stat } from "node:fs/promises";
 import { userInfo } from "node:os";
+import { TUNNEL_MAX_ANNOUNCED_SHARES } from "@dimension/artifact-host/tunnel-protocol";
 import {
 	AspError,
 	type Audience,
@@ -145,19 +146,10 @@ export class ShareService {
 		}
 	}
 
-	summarize(row: ShareRow): ShareSummary {
-		const comments = this.#library.comments.forArtifact(row.artifactId).filter(comment => comment.shareId === row.id);
-		return {
-			id: row.id,
-			host: row.host,
-			url: shareUrl(row.baseUrl, row.remoteId),
-			audience: row.audience,
-			version: row.version,
-			...(row.expiresAt === undefined ? {} : { expiresAt: row.expiresAt }),
-			...(row.revokedAt === undefined ? {} : { revokedAt: row.revokedAt }),
-			comments: comments.length,
-			unread: comments.filter(comment => comment.readAt === undefined).length,
-		};
+	summarize(shareId: string): ShareSummary {
+		const summary = this.#library.shares.summary(shareId);
+		if (summary === undefined) throw new ShareError("that share does not exist");
+		return summary;
 	}
 
 	#liveItem(artifactId: string): LibraryItem {
@@ -214,7 +206,7 @@ export class ShareService {
 			const row = input.host === P2P_HOST_ID ? await this.#createP2p(input, item) : await this.#createHosted(input, item);
 			this.#finish(item.id, row.id);
 			this.#options.onSharesChanged();
-			return { ...this.summarize(row), link: this.linkOf(row.id) };
+			return { ...this.summarize(row.id), link: this.linkOf(row.id) };
 		});
 	}
 
@@ -228,6 +220,8 @@ export class ShareService {
 
 	async #createP2p(input: CreateShareInput, item: LibraryItem): Promise<ShareRow> {
 		if (input.audience.kind !== "link") throw new ShareError(OPEN_LINK_ONLY);
+		const live = this.#options.p2p.liveRows().length;
+		if (live >= TUNNEL_MAX_ANNOUNCED_SHARES) throw new ShareError(`this computer already shares ${live} links directly; stop one or use a share server`);
 		const { discovery } = await this.#options.directory.resolveRelay();
 		const refusal = audienceAllowedBy(input.audience, discovery.policy);
 		if (refusal !== undefined) throw new ShareError(refusal);
@@ -248,6 +242,7 @@ export class ShareService {
 				ownerToken: session.token,
 				audience: { kind: "link" },
 				version: 1,
+				versionAt: now,
 				allowComments: input.allowComments,
 				createdAt: now,
 				...(input.expiresInDays === undefined ? {} : { expiresAt: now + input.expiresInDays * DAY_MS }),
@@ -303,6 +298,7 @@ export class ShareService {
 				this.#keepSession(sessionKey, session);
 			}
 			await this.#upload(item.id, sessionKey, session, client, source);
+			const createdAt = this.#now();
 			const row: ShareRow = {
 				id: encodeBase64Url(randomBytes(16)),
 				artifactId: item.id,
@@ -313,8 +309,9 @@ export class ShareService {
 				ownerToken: session.pending.ownerToken,
 				audience: input.audience,
 				version: session.pending.version,
+				versionAt: createdAt,
 				allowComments: input.allowComments,
-				createdAt: this.#now(),
+				createdAt,
 				...(session.expiresAt === undefined ? {} : { expiresAt: session.expiresAt }),
 			};
 			try {
@@ -383,7 +380,7 @@ export class ShareService {
 			else await this.#newHostedVersion(row);
 			this.#options.p2p.announce();
 			this.#finish(row.artifactId, row.id);
-			return this.summarize(this.#library.shares.get(row.id) ?? row);
+			return this.summarize(row.id);
 		});
 	}
 
@@ -408,7 +405,7 @@ export class ShareService {
 			}
 			await this.#upload(row.artifactId, sessionKey, session, client, source);
 			this.#sessions.delete(sessionKey);
-			this.#library.shares.update(row.id, { version: session.pending.version });
+			this.#library.shares.update(row.id, { version: session.pending.version, versionAt: this.#now() });
 		} finally {
 			await source.close();
 		}
@@ -435,7 +432,7 @@ export class ShareService {
 		}
 		this.#library.shares.update(row.id, patch);
 		this.#options.onSharesChanged();
-		return this.summarize(this.#library.shares.get(row.id) ?? row);
+		return this.summarize(row.id);
 	}
 
 	async revoke(shareId: string): Promise<RevokeOutcome> {
@@ -503,7 +500,7 @@ export class ShareService {
 			createdAt: posted.at,
 		});
 		this.#library.comments.markRead([posted.id], at);
-		const stored = this.#library.comments.forArtifact(row.artifactId).find(comment => comment.id === posted.id);
+		const stored = this.#library.comments.get(posted.id);
 		if (stored === undefined) throw new ShareError("the reply was posted but could not be read back");
 		return stored;
 	}

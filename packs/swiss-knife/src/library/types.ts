@@ -19,6 +19,7 @@ export interface ShareRow {
 	readonly ownerToken: string;
 	readonly audience: Audience;
 	readonly version: number;
+	readonly versionAt: EpochMs;
 	readonly allowComments: boolean;
 	readonly createdAt: EpochMs;
 	readonly expiresAt?: EpochMs;
@@ -44,6 +45,8 @@ export interface ShareSummary {
 	readonly url: string;
 	readonly audience: Audience;
 	readonly version: number;
+	readonly versionAt: EpochMs;
+	readonly allowComments: boolean;
 	readonly expiresAt?: EpochMs;
 	readonly revokedAt?: EpochMs;
 	readonly comments: number;
@@ -140,8 +143,9 @@ export interface DiscardOutcome {
 
 export interface LibraryShares {
 	insert(row: ShareRow): void;
-	update(id: string, patch: Partial<Pick<ShareRow, "version" | "audience" | "expiresAt" | "revokedAt" | "allowComments" | "commentsSeenAt">>): void;
+	update(id: string, patch: Partial<Pick<ShareRow, "version" | "versionAt" | "audience" | "expiresAt" | "revokedAt" | "allowComments" | "commentsSeenAt">>): void;
 	get(id: string): ShareRow | undefined;
+	summary(id: string): ShareSummary | undefined;
 	forArtifact(artifactId: ArtifactId): readonly ShareRow[];
 	live(): readonly ShareRow[];
 }
@@ -149,6 +153,8 @@ export interface LibraryShares {
 export interface LibraryComments {
 	upsert(row: CommentRow): boolean;
 	forArtifact(artifactId: ArtifactId, options?: { readonly unread?: boolean }): readonly (CommentRow & { readonly shareUrl: string })[];
+	get(id: string): (CommentRow & { readonly shareUrl: string }) | undefined;
+	latestId(shareId: string): string | undefined;
 	markRead(ids: readonly string[], at: EpochMs): void;
 }
 

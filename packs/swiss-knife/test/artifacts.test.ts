@@ -45,6 +45,7 @@ function share(): ShareRow {
 		ownerToken: "owner",
 		audience: { kind: "link" },
 		version: 1,
+		versionAt: clock,
 		allowComments: true,
 		createdAt: clock,
 	};

@@ -3,8 +3,8 @@ import { Checkbox } from "@fraym/ui/elements/checkbox";
 import { Modal } from "@fraym/ui/elements/popover";
 import { Icon } from "@fraym/ui/icons";
 import { useEffect, useId, useState } from "react";
-import type { LibraryItem } from "../../../../src/library/types";
-import { type DiscardResult, errorText, type LibraryTools } from "./library-tools";
+import type { DiscardOutcome, LibraryItem } from "../../../../src/library/types";
+import { errorText, type LibraryTools } from "./library-tools";
 import { liveShares } from "./query";
 
 export const TRASH_NAME = typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent) ? "Recycle Bin" : "Trash";
@@ -13,7 +13,7 @@ export interface DiscardDialogProps {
 	readonly tools: LibraryTools;
 	readonly item: LibraryItem;
 	readonly onClose: () => void;
-	readonly onDiscarded: (result: DiscardResult) => void;
+	readonly onDiscarded: (result: DiscardOutcome) => void;
 }
 
 export function DiscardDialog({ tools, item, onClose, onDiscarded }: DiscardDialogProps) {

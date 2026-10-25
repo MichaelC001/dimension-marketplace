@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, readdir, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { openDriver, type SqlDriver, type SqlValue } from "../src/library/driver";
 import { createLibrary, type LibraryOptions } from "../src/library/library";
 import { pathKey } from "../src/library/paths";
+import { SCHEMA_VERSION } from "../src/library/schema";
 import type { Library, LibraryQuery, ShareRow } from "../src/library/types";
 import { TINY_PNG, makeTempDir } from "./fixtures";
 
@@ -51,6 +53,7 @@ function shareFor(artifactId: string, id = `share-${artifactId}`): ShareRow {
 		ownerToken: "owner",
 		audience: { kind: "link" },
 		version: 1,
+		versionAt: clock,
 		allowComments: true,
 		createdAt: clock,
 	};
@@ -343,7 +346,38 @@ describe("discard and restore", () => {
 		expect(library.shares.get(`share-${item.id}`)?.revokedAt).toBeDefined();
 	});
 
-	test("a share the host would not revoke is still stopped here and reported", async () => {
+	test("a hosted share the host would not revoke stays live and is reported, and a later discard revokes it", async () => {
+		let reachable = false;
+		const library = await openLibrary({
+			revokeRemote: async share => {
+				if (!reachable) throw new Error("the link could not be revoked: host unreachable");
+				revoked.push(share);
+			},
+		});
+		const item = await library.stamp({ path: await put("page.html", "<p>x</p>"), source: "present" });
+		const hosted: ShareRow = { ...shareFor(item.id), host: "static-host" };
+		library.shares.insert(hosted);
+
+		const first = await library.discard(item.id, { trash: false });
+		expect(first).toMatchObject({
+			revoked: 0,
+			unrevoked: [{ shareId: hosted.id, host: "static-host", reason: "the link could not be revoked: host unreachable" }],
+			item: { state: "discarded" },
+		});
+		expect(first.item.shares.map(share => share.revokedAt)).toEqual([undefined]);
+		expect(library.shares.live().map(share => share.id)).toEqual([hosted.id]);
+		expect(revoked).toEqual([]);
+
+		reachable = true;
+		clock += 1_000;
+		const retry = await library.discard(item.id, { trash: false });
+		expect(retry).toMatchObject({ revoked: 1, unrevoked: [] });
+		expect(revoked.map(share => share.id)).toEqual([hosted.id]);
+		expect(library.shares.get(hosted.id)?.revokedAt).toBe(clock);
+		expect(library.shares.live()).toEqual([]);
+	});
+
+	test("a p2p share is stopped locally even when the relay revoke fails, because the desktop serves it", async () => {
 		const library = await openLibrary({
 			revokeRemote: async () => {
 				throw new Error("the link could not be revoked: relay unreachable");
@@ -351,9 +385,10 @@ describe("discard and restore", () => {
 		});
 		const item = await library.stamp({ path: await put("page.html", "<p>x</p>"), source: "present" });
 		library.shares.insert(shareFor(item.id));
+
 		const outcome = await library.discard(item.id, { trash: false });
-		expect(outcome.revoked).toBe(0);
-		expect(outcome.unrevoked).toEqual([{ shareId: `share-${item.id}`, host: "p2p", reason: "the link could not be revoked: relay unreachable" }]);
+		expect(outcome).toMatchObject({ revoked: 1, unrevoked: [] });
+		expect(library.shares.get(`share-${item.id}`)?.revokedAt).toBe(clock);
 		expect(library.shares.live()).toEqual([]);
 	});
 
@@ -376,6 +411,63 @@ describe("discard and restore", () => {
 		expect(outcome).toMatchObject({ trashed: false, trashError: "gio could not move the file to the trash", item: { state: "discarded" } });
 		expect((await stat(second)).isFile()).toBe(true);
 	});
+
+	test("trash reports a file that is already gone and never reaches the OS hook", async () => {
+		const library = await openLibrary();
+		const file = await put("gone.txt");
+		const item = await library.stamp({ path: file, source: "present" });
+		await rm(file);
+
+		const outcome = await library.discard(item.id, { trash: true });
+		expect(outcome).toMatchObject({ trashed: false, trashError: "the file no longer exists", item: { state: "discarded" } });
+		expect(trashed).toEqual([]);
+	});
+
+	const swaps: readonly { readonly name: string; readonly elsewhere?: string; readonly swap: (folder: string, elsewhere: string) => Promise<void> }[] = [
+		{
+			name: "its folder became a link to another folder holding a file of the same name",
+			elsewhere: "other",
+			swap: async (folder, elsewhere) => {
+				await rm(folder, { recursive: true });
+				await symlink(elsewhere, folder, "junction");
+			},
+		},
+		{
+			name: "its folder became a link into a credentials folder holding a file of the same name",
+			elsewhere: ".ssh",
+			swap: async (folder, elsewhere) => {
+				await rm(folder, { recursive: true });
+				await symlink(elsewhere, folder, "junction");
+			},
+		},
+		{
+			name: "the file became a directory of the same name",
+			swap: async folder => {
+				await rm(join(folder, "notes.txt"));
+				await mkdir(join(folder, "notes.txt"));
+			},
+		},
+	];
+
+	for (const { name, elsewhere, swap } of swaps) {
+		test(`trash leaves the path alone, still discards the artifact and says why when ${name}`, async () => {
+			const library = await openLibrary();
+			const folder = join(root, "files", "stage");
+			const other = join(root, elsewhere ?? "other");
+			await mkdir(folder, { recursive: true });
+			await mkdir(other, { recursive: true });
+			await writeFile(join(folder, "notes.txt"), "the file that was added");
+			await writeFile(join(other, "notes.txt"), "someone else's file");
+			const item = await library.stamp({ path: join(folder, "notes.txt"), source: "present" });
+			await swap(folder, other);
+
+			const outcome = await library.discard(item.id, { trash: true });
+			expect(trashed).toEqual([]);
+			expect(outcome).toMatchObject({ trashed: false, item: { state: "discarded" } });
+			expect(outcome.trashError).toContain("no longer leads to the file that was added");
+			expect((await stat(join(other, "notes.txt"))).isFile()).toBe(true);
+		});
+	}
 
 	test("rows discarded more than 30 days ago are purged on the next open, with their shares", async () => {
 		const library = await openLibrary();
@@ -429,5 +521,159 @@ describe("shares and comments", () => {
 		library.comments.markRead(["c1"], 99);
 		expect(library.comments.forArtifact(item.id, { unread: true }).map(row => row.id)).toEqual(["c2"]);
 		expect(library.get(item.id)?.shares[0]?.unread).toBe(1);
+	});
+});
+
+const SCHEMA_V1 = `
+CREATE TABLE artifacts(
+  id TEXT PRIMARY KEY,
+  path TEXT NOT NULL,
+  path_key TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL COLLATE NOCASE, title TEXT, note TEXT, tags TEXT NOT NULL DEFAULT '[]',
+  kind TEXT NOT NULL, mime TEXT NOT NULL,
+  size INTEGER NOT NULL, mtime_ms REAL NOT NULL,
+  width INTEGER, height INTEGER, duration_ms INTEGER,
+  workspace TEXT, session_id TEXT,
+  source TEXT NOT NULL CHECK(source IN ('present','stamp','human')),
+  starred INTEGER NOT NULL DEFAULT 0,
+  state TEXT NOT NULL DEFAULT 'live' CHECK(state IN ('live','missing','discarded')),
+  created_at INTEGER NOT NULL, presented_at INTEGER NOT NULL,
+  opened_at INTEGER, discarded_at INTEGER, thumb TEXT
+);
+CREATE INDEX artifacts_recent ON artifacts(presented_at DESC, id) WHERE state != 'discarded';
+CREATE INDEX artifacts_ws ON artifacts(workspace, presented_at DESC, id) WHERE state != 'discarded';
+CREATE INDEX artifacts_kind ON artifacts(kind, presented_at DESC, id) WHERE state != 'discarded';
+CREATE INDEX artifacts_live ON artifacts(state) WHERE state != 'discarded';
+CREATE INDEX artifacts_name ON artifacts(name, id) WHERE state != 'discarded';
+CREATE INDEX artifacts_size ON artifacts(size DESC, id) WHERE state != 'discarded';
+CREATE INDEX artifacts_opened ON artifacts(opened_at DESC, id) WHERE state != 'discarded';
+CREATE INDEX artifacts_starred ON artifacts(presented_at DESC, id) WHERE starred = 1 AND state != 'discarded';
+CREATE INDEX artifacts_discarded ON artifacts(discarded_at DESC, id) WHERE state = 'discarded';
+CREATE VIRTUAL TABLE artifacts_fts USING fts5(name, title, note, tags, path,
+  content='artifacts', content_rowid='rowid', tokenize='trigram');
+CREATE TRIGGER artifacts_fts_insert AFTER INSERT ON artifacts BEGIN
+  INSERT INTO artifacts_fts(rowid, name, title, note, tags, path)
+  VALUES (new.rowid, new.name, new.title, new.note, new.tags, new.path);
+END;
+CREATE TRIGGER artifacts_fts_delete AFTER DELETE ON artifacts BEGIN
+  INSERT INTO artifacts_fts(artifacts_fts, rowid, name, title, note, tags, path)
+  VALUES ('delete', old.rowid, old.name, old.title, old.note, old.tags, old.path);
+END;
+CREATE TRIGGER artifacts_fts_update AFTER UPDATE OF name, title, note, tags, path ON artifacts
+WHEN old.name IS NOT new.name OR old.title IS NOT new.title OR old.note IS NOT new.note
+  OR old.tags IS NOT new.tags OR old.path IS NOT new.path BEGIN
+  INSERT INTO artifacts_fts(artifacts_fts, rowid, name, title, note, tags, path)
+  VALUES ('delete', old.rowid, old.name, old.title, old.note, old.tags, old.path);
+  INSERT INTO artifacts_fts(rowid, name, title, note, tags, path)
+  VALUES (new.rowid, new.name, new.title, new.note, new.tags, new.path);
+END;
+CREATE TABLE shares(
+  id TEXT PRIMARY KEY, artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+  host TEXT NOT NULL,
+  remote_id TEXT NOT NULL, base_url TEXT NOT NULL, key TEXT NOT NULL, owner_token TEXT NOT NULL,
+  audience TEXT NOT NULL,
+  version INTEGER NOT NULL, allow_comments INTEGER NOT NULL,
+  created_at INTEGER NOT NULL, expires_at INTEGER, revoked_at INTEGER,
+  comments_seen_at INTEGER
+);
+CREATE INDEX shares_artifact ON shares(artifact_id, created_at);
+CREATE INDEX shares_live ON shares(artifact_id) WHERE revoked_at IS NULL;
+CREATE TABLE comments(
+  id TEXT PRIMARY KEY, share_id TEXT NOT NULL REFERENCES shares(id) ON DELETE CASCADE,
+  author TEXT NOT NULL, body TEXT NOT NULL, anchor TEXT, version INTEGER NOT NULL,
+  created_at INTEGER NOT NULL, read_at INTEGER, resolved_at INTEGER
+);
+CREATE INDEX comments_share ON comments(share_id, created_at);
+CREATE INDEX comments_unread ON comments(share_id) WHERE read_at IS NULL;
+`;
+
+function execute(db: SqlDriver, text: string, ...params: SqlValue[]): void {
+	const statement = db.prepare(text);
+	try {
+		statement.run(...params);
+	} finally {
+		statement.finalize();
+	}
+}
+
+async function writeDatabase(version: number, seed?: (db: SqlDriver) => void): Promise<string> {
+	const directory = join(root, "home", "artifacts");
+	await mkdir(directory, { recursive: true });
+	const file = join(directory, "library.db");
+	const db = await openDriver(file);
+	try {
+		seed?.(db);
+		db.exec(`PRAGMA user_version = ${version}`);
+	} finally {
+		db.close();
+	}
+	return file;
+}
+
+async function userVersion(file: string): Promise<number | undefined> {
+	const db = await openDriver(file);
+	const statement = db.prepare("PRAGMA user_version");
+	try {
+		return statement.get<{ readonly user_version: number }>()?.user_version;
+	} finally {
+		statement.finalize();
+		db.close();
+	}
+}
+
+describe("library.db schema versions", () => {
+	test("a v1 database upgrades in place: the artifact and share survive, an old share's version time is its creation time, and new shares insert", async () => {
+		const file = await put("legacy.txt");
+		const createdAt = clock - 10 * DAY;
+		const database = await writeDatabase(1, db => {
+			db.exec(SCHEMA_V1);
+			execute(
+				db,
+				`INSERT INTO artifacts(id, path, path_key, name, kind, mime, size, mtime_ms, source, created_at, presented_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				"legacy-artifact",
+				file,
+				pathKey(file, process.platform),
+				"legacy.txt",
+				"text",
+				"text/plain",
+				10,
+				createdAt,
+				"present",
+				createdAt,
+				createdAt,
+			);
+			execute(
+				db,
+				`INSERT INTO shares(id, artifact_id, host, remote_id, base_url, key, owner_token, audience, version, allow_comments, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				"legacy-share",
+				"legacy-artifact",
+				"p2p",
+				"remote-legacy",
+				"https://relay.example/p/tunnel",
+				"k".repeat(43),
+				"owner",
+				JSON.stringify({ kind: "link" }),
+				3,
+				1,
+				createdAt,
+			);
+		});
+
+		const library = await openLibrary();
+		expect(library.get("legacy-artifact")).toMatchObject({ name: "legacy.txt", state: "live", shares: [{ id: "legacy-share", version: 3, versionAt: createdAt }] });
+		expect(library.shares.get("legacy-share")).toMatchObject({ createdAt, version: 3, versionAt: createdAt });
+
+		library.shares.insert({ ...shareFor("legacy-artifact", "fresh-share"), versionAt: clock + 5 });
+		expect(library.shares.get("fresh-share")).toMatchObject({ createdAt: clock, versionAt: clock + 5 });
+		expect(library.shares.live().map(share => share.id)).toEqual(["legacy-share", "fresh-share"]);
+		library.close();
+		expect(await userVersion(database)).toBe(SCHEMA_VERSION);
+	});
+
+	test("a database written by a newer Dimension is refused and left at its version", async () => {
+		const newer = SCHEMA_VERSION + 1;
+		const database = await writeDatabase(newer);
+		await expect(openLibrary()).rejects.toThrow(`library.db is schema version ${newer}; this Dimension reads version ${SCHEMA_VERSION}. Update Dimension.`);
+		expect(await userVersion(database)).toBe(newer);
 	});
 });

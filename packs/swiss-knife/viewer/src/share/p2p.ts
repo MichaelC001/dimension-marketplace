@@ -103,12 +103,21 @@ export class P2pRuntime {
 		this.#holds++;
 		try {
 			const client = await this.#clientFor(relay.baseUrl);
-			client.start();
-			const session = await client.whenReady(AbortSignal.timeout(REGISTER_DEADLINE_MS));
-			return await work(session);
+			return await work(await this.#ready(client));
 		} finally {
 			this.#holds--;
 			void this.reconcile();
+		}
+	}
+
+	async #ready(client: TunnelClient): Promise<TunnelSession> {
+		client.start();
+		try {
+			return await client.whenReady(AbortSignal.timeout(REGISTER_DEADLINE_MS));
+		} catch (error) {
+			if (!(await client.refusalSettled())) throw error;
+			client.start();
+			return await client.whenReady(AbortSignal.timeout(REGISTER_DEADLINE_MS));
 		}
 	}
 

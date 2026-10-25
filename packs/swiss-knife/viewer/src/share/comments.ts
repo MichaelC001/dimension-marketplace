@@ -55,10 +55,7 @@ export class CommentSync {
 	#cursor(row: ShareRow): string | undefined {
 		const known = this.#cursors.get(row.id);
 		if (known !== undefined) return known;
-		let latest: string | undefined;
-		for (const comment of this.#options.library.comments.forArtifact(row.artifactId)) {
-			if (comment.shareId === row.id && (latest === undefined || comment.id > latest)) latest = comment.id;
-		}
+		const latest = this.#options.library.comments.latestId(row.id);
 		if (latest !== undefined) this.#cursors.set(row.id, latest);
 		return latest;
 	}

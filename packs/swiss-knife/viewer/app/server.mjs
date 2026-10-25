@@ -31666,7 +31666,7 @@ function hasCode(error51, ...codes) {
 
 // ../src/library/library.ts
 import { constants, statSync } from "node:fs";
-import { mkdir as mkdir2, open, realpath, stat } from "node:fs/promises";
+import { chmod as chmod2, mkdir as mkdir2, open as open2, realpath, stat } from "node:fs/promises";
 import { basename as basename2, isAbsolute, join as join2, resolve as resolve2 } from "node:path";
 
 // ../../../../fraym/packages/driver/src/classify-file.ts
@@ -32105,6 +32105,7 @@ function decodeCursor(text, ordering) {
 }
 
 // ../src/library/driver.ts
+import { chmod, open } from "node:fs/promises";
 function adapt(db) {
   return {
     exec: (sql) => db.exec(sql),
@@ -32124,13 +32125,26 @@ function adapt(db) {
     close: () => db.close()
   };
 }
+var PRIVATE_FILE_MODE = 384;
+var DATABASE_FILE_SUFFIXES = ["", "-wal", "-shm"];
 async function openDriver(file2) {
+  if (process.platform !== "win32") await (await open(file2, "a", PRIVATE_FILE_MODE)).close();
   if (typeof Bun !== "undefined") {
     const { Database } = await import("bun:sqlite");
     return adapt(new Database(file2, { create: true }));
   }
   const { DatabaseSync } = await import("node:sqlite");
   return adapt(new DatabaseSync(file2));
+}
+async function restrictDatabaseFiles(file2) {
+  if (process.platform === "win32") return;
+  for (const suffix of DATABASE_FILE_SUFFIXES) {
+    try {
+      await chmod(file2 + suffix, PRIVATE_FILE_MODE);
+    } catch (error51) {
+      if (!hasCode(error51, "ENOENT")) throw error51;
+    }
+  }
 }
 
 // ../src/library/paths.ts
@@ -32347,18 +32361,33 @@ function sealedChunkSize(plainBytes) {
 function sealedSize(size, chunkBytes = ASP_CHUNK_BYTES) {
   return size + chunkCount(size, chunkBytes) * ASP_TAG_BYTES;
 }
+function hasNativeEncoder(value) {
+  return "toBase64" in value && typeof value.toBase64 === "function";
+}
+function hasNativeDecoder(value) {
+  return "fromBase64" in value && typeof value.fromBase64 === "function";
+}
+var BASE64URL_TEXT = /^[A-Za-z0-9_-]*$/;
+var nativeToBase64 = hasNativeEncoder(Uint8Array.prototype) ? Uint8Array.prototype.toBase64 : void 0;
+var nativeFromBase64 = hasNativeDecoder(Uint8Array) ? Uint8Array.fromBase64 : void 0;
 function encodeBase64Url(bytes) {
+  if (nativeToBase64 !== void 0) return nativeToBase64.call(bytes, { alphabet: "base64url", omitPadding: true });
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
 }
 function decodeBase64Url(text) {
-  if (!/^[A-Za-z0-9_-]*$/.test(text)) throw new AspError("not base64url");
-  const padded = text.replaceAll("-", "+").replaceAll("_", "/") + "=".repeat((4 - text.length % 4) % 4);
-  const binary = atob(padded);
-  const out = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
-  return out;
+  if (!BASE64URL_TEXT.test(text)) throw new AspError("not base64url");
+  try {
+    if (nativeFromBase64 !== void 0) return nativeFromBase64.call(Uint8Array, text, { alphabet: "base64url" });
+    const padded = text.replaceAll("-", "+").replaceAll("_", "/") + "=".repeat((4 - text.length % 4) % 4);
+    const binary = atob(padded);
+    const out = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
+    return out;
+  } catch {
+    throw new AspError("not base64url");
+  }
 }
 async function importContentKey(raw) {
   if (raw.length !== ASP_KEY_BYTES) throw new AspError(`a content key is ${ASP_KEY_BYTES} bytes`);
@@ -32641,6 +32670,7 @@ function shareFromRecord(record2) {
     ownerToken: record2.owner_token,
     audience: readAudience(record2.id, record2.audience),
     version: record2.version,
+    versionAt: record2.version_at,
     allowComments: record2.allow_comments === 1,
     createdAt: record2.created_at,
     ...record2.expires_at === null ? {} : { expiresAt: record2.expires_at },
@@ -32663,7 +32693,7 @@ function commentFromRecord(record2) {
 }
 
 // ../src/library/schema.ts
-var SCHEMA_VERSION = 1;
+var SCHEMA_VERSION = 2;
 var DISCARDED_RETENTION_MS = 30 * 24 * 60 * 60 * 1e3;
 var CONNECTION = `
 PRAGMA busy_timeout = 2000;
@@ -32671,7 +32701,7 @@ PRAGMA journal_mode = WAL;
 PRAGMA synchronous = NORMAL;
 PRAGMA foreign_keys = ON;
 `;
-var SCHEMA_V1 = `
+var SCHEMA = `
 CREATE TABLE artifacts(
   id TEXT PRIMARY KEY,
   path TEXT NOT NULL,
@@ -32719,7 +32749,7 @@ CREATE TABLE shares(
   host TEXT NOT NULL,
   remote_id TEXT NOT NULL, base_url TEXT NOT NULL, key TEXT NOT NULL, owner_token TEXT NOT NULL,
   audience TEXT NOT NULL,
-  version INTEGER NOT NULL, allow_comments INTEGER NOT NULL,
+  version INTEGER NOT NULL, version_at INTEGER NOT NULL, allow_comments INTEGER NOT NULL,
   created_at INTEGER NOT NULL, expires_at INTEGER, revoked_at INTEGER,
   comments_seen_at INTEGER
 );
@@ -32733,6 +32763,12 @@ CREATE TABLE comments(
 CREATE INDEX comments_share ON comments(share_id, created_at);
 CREATE INDEX comments_unread ON comments(share_id) WHERE read_at IS NULL;
 `;
+var MIGRATIONS = {
+  1: `
+ALTER TABLE shares ADD COLUMN version_at INTEGER NOT NULL DEFAULT 0;
+UPDATE shares SET version_at = created_at;
+`
+};
 function readVersion(db) {
   const statement = db.prepare("PRAGMA user_version");
   try {
@@ -32741,15 +32777,25 @@ function readVersion(db) {
     statement.finalize();
   }
 }
+function upgrade(db) {
+  const version2 = readVersion(db);
+  if (version2 === 0) {
+    db.exec(SCHEMA);
+  } else {
+    for (let step = version2; step < SCHEMA_VERSION; step++) {
+      const migration = MIGRATIONS[step];
+      if (migration === void 0) throw new LibraryError(`library.db is schema version ${version2} and has no upgrade path to ${SCHEMA_VERSION}.`);
+      db.exec(migration);
+    }
+  }
+  db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+}
 function prepareDatabase(db, now) {
   db.exec(CONNECTION);
-  if (readVersion(db) === 0) {
+  if (readVersion(db) < SCHEMA_VERSION) {
     db.exec("BEGIN IMMEDIATE");
     try {
-      if (readVersion(db) === 0) {
-        db.exec(SCHEMA_V1);
-        db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
-      }
+      if (readVersion(db) < SCHEMA_VERSION) upgrade(db);
       db.exec("COMMIT");
     } catch (error51) {
       db.exec("ROLLBACK");
@@ -32898,9 +32944,11 @@ var MAX_TAG_CHARS = 48;
 var MAX_FACET_WORKSPACES = 500;
 var CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 var READ_FLAGS = constants.O_RDONLY | (constants.O_NONBLOCK ?? 0);
+var PRIVATE_DIRECTORY_MODE = 448;
 var MEMO_LIMIT = 128;
 var SHARE_COLUMNS = {
   version: "version",
+  versionAt: "version_at",
   audience: "audience",
   expiresAt: "expires_at",
   revokedAt: "revoked_at",
@@ -32920,6 +32968,30 @@ ON CONFLICT(path_key) DO UPDATE SET
   state = 'live', presented_at = ?17, discarded_at = NULL
 WHERE artifacts.state != 'discarded' OR ?16 = 'human' OR excluded.mtime_ms > artifacts.discarded_at
 `;
+var SUMMARY_SELECT = `SELECT s.id, s.artifact_id, s.host, s.remote_id, s.base_url, s.audience, s.version, s.version_at, s.allow_comments, s.expires_at, s.revoked_at,
+	(SELECT COUNT(*) FROM comments c WHERE c.share_id = s.id) AS comments,
+	(SELECT COUNT(*) FROM comments c WHERE c.share_id = s.id AND c.read_at IS NULL) AS unread
+FROM shares s`;
+var COMMENT_SELECT = `SELECT c.*, s.base_url AS share_base_url, s.remote_id AS share_remote_id
+FROM comments c JOIN shares s ON s.id = c.share_id`;
+function summaryFromRecord(record2) {
+  return {
+    id: record2.id,
+    host: record2.host,
+    url: shareUrl(record2.base_url, record2.remote_id),
+    audience: readAudience(record2.id, record2.audience),
+    version: record2.version,
+    versionAt: record2.version_at,
+    allowComments: record2.allow_comments === 1,
+    ...record2.expires_at === null ? {} : { expiresAt: record2.expires_at },
+    ...record2.revoked_at === null ? {} : { revokedAt: record2.revoked_at },
+    comments: record2.comments,
+    unread: record2.unread
+  };
+}
+function commentWithUrl(record2) {
+  return { ...commentFromRecord(record2), shareUrl: shareUrl(record2.share_base_url, record2.share_remote_id) };
+}
 function newId(now) {
   let time3 = "";
   let remaining = now;
@@ -32959,10 +33031,13 @@ async function createLibrary(options2) {
   const trashFile = options2.trash ?? ((path2) => moveToTrash(path2, platform));
   const directory = join2(options2.home, "artifacts");
   const thumbsDirectory = join2(directory, "thumbs");
-  await mkdir2(thumbsDirectory, { recursive: true });
-  const db = await openDriver(join2(directory, "library.db"));
+  await mkdir2(thumbsDirectory, { recursive: true, mode: PRIVATE_DIRECTORY_MODE });
+  if (process.platform !== "win32") await chmod2(directory, PRIVATE_DIRECTORY_MODE);
+  const databaseFile = join2(directory, "library.db");
+  const db = await openDriver(databaseFile);
   try {
     prepareDatabase(db, now());
+    await restrictDatabaseFiles(databaseFile);
   } catch (error51) {
     db.close();
     throw error51;
@@ -32992,24 +33067,9 @@ async function createLibrary(options2) {
   function summariesOf(ids) {
     const byArtifact = /* @__PURE__ */ new Map();
     if (ids.length === 0) return byArtifact;
-    const records = sql(
-      `SELECT s.id, s.artifact_id, s.host, s.remote_id, s.base_url, s.audience, s.version, s.expires_at, s.revoked_at,
-				(SELECT COUNT(*) FROM comments c WHERE c.share_id = s.id) AS comments,
-				(SELECT COUNT(*) FROM comments c WHERE c.share_id = s.id AND c.read_at IS NULL) AS unread
-			FROM shares s WHERE s.artifact_id IN (${placeholders(ids.length)}) ORDER BY s.created_at, s.id`
-    ).all(...ids);
+    const records = sql(`${SUMMARY_SELECT} WHERE s.artifact_id IN (${placeholders(ids.length)}) ORDER BY s.created_at, s.id`).all(...ids);
     for (const record2 of records) {
-      const summary = {
-        id: record2.id,
-        host: record2.host,
-        url: shareUrl(record2.base_url, record2.remote_id),
-        audience: readAudience(record2.id, record2.audience),
-        version: record2.version,
-        ...record2.expires_at === null ? {} : { expiresAt: record2.expires_at },
-        ...record2.revoked_at === null ? {} : { revokedAt: record2.revoked_at },
-        comments: record2.comments,
-        unread: record2.unread
-      };
+      const summary = summaryFromRecord(record2);
       const list = byArtifact.get(record2.artifact_id);
       if (list === void 0) byArtifact.set(record2.artifact_id, [summary]);
       else list.push(summary);
@@ -33130,7 +33190,7 @@ async function createLibrary(options2) {
     if (denyReason(real) !== void 0) throw refuse2("it resolves to a protected location (credentials, keys or engine state)");
     const before = await stat(real);
     if (!before.isFile()) throw refuse2("it is not a regular file");
-    const handle = await open(real, READ_FLAGS);
+    const handle = await open2(real, READ_FLAGS);
     let facts;
     try {
       const opened = await handle.stat();
@@ -33211,9 +33271,9 @@ async function createLibrary(options2) {
   const shares = {
     insert(row) {
       sql(
-        `INSERT INTO shares(id, artifact_id, host, remote_id, base_url, key, owner_token, audience, version, allow_comments,
+        `INSERT INTO shares(id, artifact_id, host, remote_id, base_url, key, owner_token, audience, version, version_at, allow_comments,
 					created_at, expires_at, revoked_at, comments_seen_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).run(
         row.id,
         row.artifactId,
@@ -33224,6 +33284,7 @@ async function createLibrary(options2) {
         row.ownerToken,
         JSON.stringify(row.audience),
         row.version,
+        row.versionAt,
         row.allowComments ? 1 : 0,
         row.createdAt,
         row.expiresAt ?? null,
@@ -33247,6 +33308,10 @@ async function createLibrary(options2) {
     get(id2) {
       const record2 = sql("SELECT * FROM shares WHERE id = ?").get(id2);
       return record2 === void 0 ? void 0 : shareFromRecord(record2);
+    },
+    summary(id2) {
+      const record2 = sql(`${SUMMARY_SELECT} WHERE s.id = ?`).get(id2);
+      return record2 === void 0 ? void 0 : summaryFromRecord(record2);
     },
     forArtifact(artifactId2) {
       return sql("SELECT * FROM shares WHERE artifact_id = ? ORDER BY created_at, id").all(artifactId2).map(shareFromRecord);
@@ -33274,15 +33339,14 @@ async function createLibrary(options2) {
     },
     forArtifact(artifactId2, filter) {
       const unread = filter?.unread === true ? " AND c.read_at IS NULL" : "";
-      const records = sql(
-        `SELECT c.*, s.base_url AS share_base_url, s.remote_id AS share_remote_id
-				FROM comments c JOIN shares s ON s.id = c.share_id
-				WHERE s.artifact_id = ?${unread} ORDER BY c.created_at, c.id`
-      ).all(artifactId2);
-      return records.map((record2) => ({
-        ...commentFromRecord(record2),
-        shareUrl: shareUrl(record2.share_base_url, record2.share_remote_id)
-      }));
+      return sql(`${COMMENT_SELECT} WHERE s.artifact_id = ?${unread} ORDER BY c.created_at, c.id`).all(artifactId2).map(commentWithUrl);
+    },
+    get(id2) {
+      const record2 = sql(`${COMMENT_SELECT} WHERE c.id = ?`).get(id2);
+      return record2 === void 0 ? void 0 : commentWithUrl(record2);
+    },
+    latestId(shareId2) {
+      return sql("SELECT MAX(id) AS id FROM comments WHERE share_id = ?").get(shareId2)?.id ?? void 0;
     },
     markRead(ids, at) {
       for (let start = 0; start < ids.length; start += 500) {
@@ -33291,6 +33355,12 @@ async function createLibrary(options2) {
       }
     }
   };
+  async function verifiedFile(row) {
+    const real = await realpath(row.path);
+    const unchanged = pathKey(real, platform) === row.path_key && denyReason(real) === void 0 && (await stat(real)).isFile();
+    if (!unchanged) throw new LibraryError("the path no longer leads to the file that was added, so it was left in place");
+    return real;
+  }
   async function discard(id2, request) {
     const row = requireRow(id2);
     let revoked = 0;
@@ -33298,11 +33368,14 @@ async function createLibrary(options2) {
     for (const share of liveShares(id2)) {
       try {
         await revokeRemote2(share);
-        revoked++;
       } catch (error51) {
-        unrevoked.push({ shareId: share.id, host: share.host, reason: errorMessage(error51) });
+        if (share.host !== "p2p") {
+          unrevoked.push({ shareId: share.id, host: share.host, reason: errorMessage(error51) });
+          continue;
+        }
       }
       shares.update(share.id, { revokedAt: now() });
+      revoked++;
     }
     if (row.state !== "discarded") {
       sql("UPDATE artifacts SET state = 'discarded', discarded_at = ?, thumb = NULL WHERE id = ?").run(now(), id2);
@@ -33316,7 +33389,7 @@ async function createLibrary(options2) {
     let trashError;
     if (request.trash) {
       try {
-        await trashFile(row.path);
+        await trashFile(await verifiedFile(row));
         trashed = true;
       } catch (error51) {
         trashError = hasCode(error51, "ENOENT") ? "the file no longer exists" : errorMessage(error51);
@@ -33415,7 +33488,7 @@ async function createLibrary(options2) {
 
 // src/chunk.ts
 import { constants as constants2 } from "node:fs";
-import { open as open2, stat as stat2 } from "node:fs/promises";
+import { open as open3, stat as stat2 } from "node:fs/promises";
 
 // src/contract.ts
 var VIEWER_VIEW_URI = "ui://viewer/index.html";
@@ -33448,7 +33521,7 @@ var mediaSourceSchema = external_exports.object({
 var renewedMediaSchema = external_exports.object({ alive: external_exports.boolean() });
 
 // src/chunk.ts
-var nativeFs = { stat: stat2, open: open2 };
+var nativeFs = { stat: stat2, open: open3 };
 var OPEN_FLAGS = constants2.O_RDONLY | (constants2.O_NONBLOCK ?? 0);
 async function readRange(path2, offset, length, fs = nativeFs) {
   if (!Number.isSafeInteger(offset) || offset < 0) throw new RangeError(`offset must be a non-negative integer, got ${offset}`);
@@ -33877,7 +33950,7 @@ function registerLibraryTools(server2, { library, fence, media }) {
 // src/media-server.ts
 import { randomBytes as randomBytes3 } from "node:crypto";
 import { constants as constants3 } from "node:fs";
-import { open as open3, readFile } from "node:fs/promises";
+import { open as open4, readFile } from "node:fs/promises";
 import { extname } from "node:path";
 import { createServer } from "node:http";
 import { pipeline } from "node:stream/promises";
@@ -33947,7 +34020,7 @@ function comesFromView(req, listenerHost) {
   return req.headers.host === listenerHost && (origin === void 0 || origin === SANDBOXED_VIEW_ORIGIN);
 }
 async function streamRecording(req, res, lease) {
-  const file2 = await open3(lease.path, OPEN_FLAGS2);
+  const file2 = await open4(lease.path, OPEN_FLAGS2);
   try {
     const stats = await file2.stat();
     if (res.destroyed) return;
@@ -34120,21 +34193,8 @@ async function startMediaServer(fence, now = Date.now, thumbs) {
 }
 
 // src/share/retry.ts
-var sleepFor = (ms, signal) => new Promise((resolve3, reject) => {
-  if (signal?.aborted) {
-    reject(signal.reason);
-    return;
-  }
-  const timer = setTimeout(() => {
-    signal?.removeEventListener("abort", onAbort);
-    resolve3();
-  }, ms);
-  function onAbort() {
-    clearTimeout(timer);
-    reject(signal?.reason);
-  }
-  signal?.addEventListener("abort", onAbort, { once: true });
-});
+import { setTimeout as delay } from "node:timers/promises";
+var sleepFor = (ms, signal) => delay(ms, void 0, signal ? { signal } : void 0);
 function backoffDelay(attempt, options2) {
   const ceiling = Math.min(options2.maxMs, options2.baseMs * 2 ** attempt);
   return Math.round((options2.random ?? Math.random)() * ceiling);
@@ -34532,10 +34592,7 @@ var CommentSync = class {
   #cursor(row) {
     const known = this.#cursors.get(row.id);
     if (known !== void 0) return known;
-    let latest;
-    for (const comment of this.#options.library.comments.forArtifact(row.artifactId)) {
-      if (comment.shareId === row.id && (latest === void 0 || comment.id > latest)) latest = comment.id;
-    }
+    const latest = this.#options.library.comments.latestId(row.id);
     if (latest !== void 0) this.#cursors.set(row.id, latest);
     return latest;
   }
@@ -34839,7 +34896,8 @@ var TUNNEL_MAX_FRAME_BYTES = 4 * 1024 * 1024;
 var TUNNEL_MAX_ANNOUNCED_SHARES = 500;
 var TUNNEL_NEVER_EXPIRES = 0;
 var HEADER_BYTES = 5;
-var ID_PATTERN = /^[A-Za-z0-9_-]{16,64}$/;
+var ID_SOURCE = "[A-Za-z0-9_-]{16,64}";
+var ID_PATTERN = new RegExp(`^${ID_SOURCE}$`);
 var FORWARDED_RESPONSE_HEADERS = {
   "accept-ranges": true,
   "cache-control": true,
@@ -35076,7 +35134,7 @@ var ChunkCache = class {
 
 // src/share/chunk-source.ts
 import { constants as constants4 } from "node:fs";
-import { open as open4 } from "node:fs/promises";
+import { open as open5 } from "node:fs/promises";
 var FileChangedError = class extends Error {
   name = "FileChangedError";
   constructor() {
@@ -35088,7 +35146,7 @@ function plainChunkBytes(size, index) {
   return Math.max(0, Math.min(ASP_CHUNK_BYTES, size - index * ASP_CHUNK_BYTES));
 }
 async function openChunkSource(path2) {
-  const handle = await open4(path2, OPEN_FLAGS3);
+  const handle = await open5(path2, OPEN_FLAGS3);
   try {
     const first = await handle.stat();
     if (!first.isFile()) throw new Error("only a regular file can be shared");
@@ -35316,7 +35374,7 @@ var P2pServer = class {
     this.#states.set(row.id, state);
     this.#cache.dropWithPrefix(`${row.id}:`);
     if (row.version !== version2) {
-      this.#library.shares.update(row.id, { version: version2 });
+      this.#library.shares.update(row.id, { version: version2, versionAt: this.#now() });
       this.#onVersionChange();
     }
     return state;
@@ -35418,6 +35476,11 @@ var TunnelClient = class {
         this.#abort = void 0;
       }
     });
+  }
+  async refusalSettled() {
+    if (this.#refusal === void 0) return false;
+    await this.#running;
+    return true;
   }
   async stop() {
     const running = this.#running;
@@ -35711,12 +35774,20 @@ var P2pRuntime = class {
     this.#holds++;
     try {
       const client = await this.#clientFor(relay.baseUrl);
-      client.start();
-      const session = await client.whenReady(AbortSignal.timeout(REGISTER_DEADLINE_MS));
-      return await work(session);
+      return await work(await this.#ready(client));
     } finally {
       this.#holds--;
       void this.reconcile();
+    }
+  }
+  async #ready(client) {
+    client.start();
+    try {
+      return await client.whenReady(AbortSignal.timeout(REGISTER_DEADLINE_MS));
+    } catch (error51) {
+      if (!await client.refusalSettled()) throw error51;
+      client.start();
+      return await client.whenReady(AbortSignal.timeout(REGISTER_DEADLINE_MS));
     }
   }
   reconcile() {
@@ -35927,19 +35998,10 @@ var ShareService = class {
       this.#progress.delete(oldest);
     }
   }
-  summarize(row) {
-    const comments = this.#library.comments.forArtifact(row.artifactId).filter((comment) => comment.shareId === row.id);
-    return {
-      id: row.id,
-      host: row.host,
-      url: shareUrl(row.baseUrl, row.remoteId),
-      audience: row.audience,
-      version: row.version,
-      ...row.expiresAt === void 0 ? {} : { expiresAt: row.expiresAt },
-      ...row.revokedAt === void 0 ? {} : { revokedAt: row.revokedAt },
-      comments: comments.length,
-      unread: comments.filter((comment) => comment.readAt === void 0).length
-    };
+  summarize(shareId2) {
+    const summary = this.#library.shares.summary(shareId2);
+    if (summary === void 0) throw new ShareError("that share does not exist");
+    return summary;
   }
   #liveItem(artifactId2) {
     const item = this.#library.get(artifactId2);
@@ -35989,7 +36051,7 @@ var ShareService = class {
       const row = input.host === P2P_HOST_ID ? await this.#createP2p(input, item) : await this.#createHosted(input, item);
       this.#finish(item.id, row.id);
       this.#options.onSharesChanged();
-      return { ...this.summarize(row), link: this.linkOf(row.id) };
+      return { ...this.summarize(row.id), link: this.linkOf(row.id) };
     });
   }
   #checkPolicy(audience, expiresInDays2, policy, oidc, size) {
@@ -36001,6 +36063,8 @@ var ShareService = class {
   }
   async #createP2p(input, item) {
     if (input.audience.kind !== "link") throw new ShareError(OPEN_LINK_ONLY);
+    const live = this.#options.p2p.liveRows().length;
+    if (live >= TUNNEL_MAX_ANNOUNCED_SHARES) throw new ShareError(`this computer already shares ${live} links directly; stop one or use a share server`);
     const { discovery } = await this.#options.directory.resolveRelay();
     const refusal = audienceAllowedBy(input.audience, discovery.policy);
     if (refusal !== void 0) throw new ShareError(refusal);
@@ -36021,6 +36085,7 @@ var ShareService = class {
         ownerToken: session.token,
         audience: { kind: "link" },
         version: 1,
+        versionAt: now,
         allowComments: input.allowComments,
         createdAt: now,
         ...input.expiresInDays === void 0 ? {} : { expiresAt: now + input.expiresInDays * DAY_MS }
@@ -36075,6 +36140,7 @@ var ShareService = class {
         this.#keepSession(sessionKey, session);
       }
       await this.#upload(item.id, sessionKey, session, client, source);
+      const createdAt = this.#now();
       const row = {
         id: encodeBase64Url(randomBytes6(16)),
         artifactId: item.id,
@@ -36085,8 +36151,9 @@ var ShareService = class {
         ownerToken: session.pending.ownerToken,
         audience: input.audience,
         version: session.pending.version,
+        versionAt: createdAt,
         allowComments: input.allowComments,
-        createdAt: this.#now(),
+        createdAt,
         ...session.expiresAt === void 0 ? {} : { expiresAt: session.expiresAt }
       };
       try {
@@ -36150,7 +36217,7 @@ var ShareService = class {
       else await this.#newHostedVersion(row);
       this.#options.p2p.announce();
       this.#finish(row.artifactId, row.id);
-      return this.summarize(this.#library.shares.get(row.id) ?? row);
+      return this.summarize(row.id);
     });
   }
   async #newHostedVersion(row) {
@@ -36174,7 +36241,7 @@ var ShareService = class {
       }
       await this.#upload(row.artifactId, sessionKey, session, client, source);
       this.#sessions.delete(sessionKey);
-      this.#library.shares.update(row.id, { version: session.pending.version });
+      this.#library.shares.update(row.id, { version: session.pending.version, versionAt: this.#now() });
     } finally {
       await source.close();
     }
@@ -36200,7 +36267,7 @@ var ShareService = class {
     }
     this.#library.shares.update(row.id, patch);
     this.#options.onSharesChanged();
-    return this.summarize(this.#library.shares.get(row.id) ?? row);
+    return this.summarize(row.id);
   }
   async revoke(shareId2) {
     const row = this.#library.shares.get(shareId2);
@@ -36264,7 +36331,7 @@ var ShareService = class {
       createdAt: posted.at
     });
     this.#library.comments.markRead([posted.id], at);
-    const stored = this.#library.comments.forArtifact(row.artifactId).find((comment) => comment.id === posted.id);
+    const stored = this.#library.comments.get(posted.id);
     if (stored === void 0) throw new ShareError("the reply was posted but could not be read back");
     return stored;
   }

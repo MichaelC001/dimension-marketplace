@@ -1,3 +1,5 @@
+import { setTimeout as delay } from "node:timers/promises";
+
 export type Sleep = (ms: number, signal?: AbortSignal) => Promise<void>;
 
 export interface BackoffOptions {
@@ -11,22 +13,7 @@ export interface RetryOptions extends BackoffOptions {
 	readonly sleep?: Sleep;
 }
 
-export const sleepFor: Sleep = (ms, signal) =>
-	new Promise<void>((resolve, reject) => {
-		if (signal?.aborted) {
-			reject(signal.reason);
-			return;
-		}
-		const timer = setTimeout(() => {
-			signal?.removeEventListener("abort", onAbort);
-			resolve();
-		}, ms);
-		function onAbort(): void {
-			clearTimeout(timer);
-			reject(signal?.reason);
-		}
-		signal?.addEventListener("abort", onAbort, { once: true });
-	});
+export const sleepFor: Sleep = (ms, signal) => delay(ms, undefined, signal ? { signal } : undefined);
 
 export function backoffDelay(attempt: number, options: BackoffOptions): number {
 	const ceiling = Math.min(options.maxMs, options.baseMs * 2 ** attempt);

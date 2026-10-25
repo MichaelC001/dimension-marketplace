@@ -1,10 +1,10 @@
 import { constants, statSync } from "node:fs";
-import { mkdir, open, realpath, stat } from "node:fs/promises";
+import { chmod, mkdir, open, realpath, stat } from "node:fs/promises";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { classifyFile } from "@dimension/sdk/presentation";
 import { denyReason, textRefusal } from "../../viewer/src/fence";
 import { encodeCursor } from "./cursor";
-import { openDriver, type SqlDriver, type SqlStatement, type SqlValue } from "./driver";
+import { openDriver, restrictDatabaseFiles, type SqlDriver, type SqlStatement, type SqlValue } from "./driver";
 import { errorMessage, hasCode, LibraryError } from "./errors";
 import { pathKey } from "./paths";
 import { EXPIRY_RESOLUTION_MS, LIVE_SHARE_IDS, placeholders, planList } from "./queries";
@@ -62,11 +62,13 @@ const MAX_TAG_CHARS = 48;
 const MAX_FACET_WORKSPACES = 500;
 const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const READ_FLAGS = constants.O_RDONLY | (constants.O_NONBLOCK ?? 0);
+const PRIVATE_DIRECTORY_MODE = 0o700;
 
 const MEMO_LIMIT = 128;
 
-const SHARE_COLUMNS: Record<"version" | "audience" | "expiresAt" | "revokedAt" | "allowComments" | "commentsSeenAt", string> = {
+const SHARE_COLUMNS: Record<"version" | "versionAt" | "audience" | "expiresAt" | "revokedAt" | "allowComments" | "commentsSeenAt", string> = {
 	version: "version",
+	versionAt: "version_at",
 	audience: "audience",
 	expiresAt: "expires_at",
 	revokedAt: "revoked_at",
@@ -87,6 +89,36 @@ ON CONFLICT(path_key) DO UPDATE SET
   state = 'live', presented_at = ?17, discarded_at = NULL
 WHERE artifacts.state != 'discarded' OR ?16 = 'human' OR excluded.mtime_ms > artifacts.discarded_at
 `;
+
+const SUMMARY_SELECT = `SELECT s.id, s.artifact_id, s.host, s.remote_id, s.base_url, s.audience, s.version, s.version_at, s.allow_comments, s.expires_at, s.revoked_at,
+	(SELECT COUNT(*) FROM comments c WHERE c.share_id = s.id) AS comments,
+	(SELECT COUNT(*) FROM comments c WHERE c.share_id = s.id AND c.read_at IS NULL) AS unread
+FROM shares s`;
+
+const COMMENT_SELECT = `SELECT c.*, s.base_url AS share_base_url, s.remote_id AS share_remote_id
+FROM comments c JOIN shares s ON s.id = c.share_id`;
+
+type CommentJoinRecord = CommentRecord & { readonly share_base_url: string; readonly share_remote_id: string };
+
+function summaryFromRecord(record: ShareSummaryRecord): ShareSummary {
+	return {
+		id: record.id,
+		host: record.host,
+		url: shareUrl(record.base_url, record.remote_id),
+		audience: readAudience(record.id, record.audience),
+		version: record.version,
+		versionAt: record.version_at,
+		allowComments: record.allow_comments === 1,
+		...(record.expires_at === null ? {} : { expiresAt: record.expires_at }),
+		...(record.revoked_at === null ? {} : { revokedAt: record.revoked_at }),
+		comments: record.comments,
+		unread: record.unread,
+	};
+}
+
+function commentWithUrl(record: CommentJoinRecord): CommentRow & { readonly shareUrl: string } {
+	return { ...commentFromRecord(record), shareUrl: shareUrl(record.share_base_url, record.share_remote_id) };
+}
 
 function newId(now: number): string {
 	let time = "";
@@ -130,10 +162,13 @@ export async function createLibrary(options: LibraryOptions): Promise<Library> {
 	const trashFile = options.trash ?? ((path: string) => moveToTrash(path, platform));
 	const directory = join(options.home, "artifacts");
 	const thumbsDirectory = join(directory, "thumbs");
-	await mkdir(thumbsDirectory, { recursive: true });
-	const db: SqlDriver = await openDriver(join(directory, "library.db"));
+	await mkdir(thumbsDirectory, { recursive: true, mode: PRIVATE_DIRECTORY_MODE });
+	if (process.platform !== "win32") await chmod(directory, PRIVATE_DIRECTORY_MODE);
+	const databaseFile = join(directory, "library.db");
+	const db: SqlDriver = await openDriver(databaseFile);
 	try {
 		prepareDatabase(db, now());
+		await restrictDatabaseFiles(databaseFile);
 	} catch (error) {
 		db.close();
 		throw error;
@@ -167,24 +202,9 @@ export async function createLibrary(options: LibraryOptions): Promise<Library> {
 	function summariesOf(ids: readonly ArtifactId[]): Map<string, ShareSummary[]> {
 		const byArtifact = new Map<string, ShareSummary[]>();
 		if (ids.length === 0) return byArtifact;
-		const records = sql(
-			`SELECT s.id, s.artifact_id, s.host, s.remote_id, s.base_url, s.audience, s.version, s.expires_at, s.revoked_at,
-				(SELECT COUNT(*) FROM comments c WHERE c.share_id = s.id) AS comments,
-				(SELECT COUNT(*) FROM comments c WHERE c.share_id = s.id AND c.read_at IS NULL) AS unread
-			FROM shares s WHERE s.artifact_id IN (${placeholders(ids.length)}) ORDER BY s.created_at, s.id`,
-		).all<ShareSummaryRecord>(...ids);
+		const records = sql(`${SUMMARY_SELECT} WHERE s.artifact_id IN (${placeholders(ids.length)}) ORDER BY s.created_at, s.id`).all<ShareSummaryRecord>(...ids);
 		for (const record of records) {
-			const summary: ShareSummary = {
-				id: record.id,
-				host: record.host,
-				url: shareUrl(record.base_url, record.remote_id),
-				audience: readAudience(record.id, record.audience),
-				version: record.version,
-				...(record.expires_at === null ? {} : { expiresAt: record.expires_at }),
-				...(record.revoked_at === null ? {} : { revokedAt: record.revoked_at }),
-				comments: record.comments,
-				unread: record.unread,
-			};
+			const summary = summaryFromRecord(record);
 			const list = byArtifact.get(record.artifact_id);
 			if (list === undefined) byArtifact.set(record.artifact_id, [summary]);
 			else list.push(summary);
@@ -402,9 +422,9 @@ export async function createLibrary(options: LibraryOptions): Promise<Library> {
 	const shares: LibraryShares = {
 		insert(row) {
 			sql(
-				`INSERT INTO shares(id, artifact_id, host, remote_id, base_url, key, owner_token, audience, version, allow_comments,
+				`INSERT INTO shares(id, artifact_id, host, remote_id, base_url, key, owner_token, audience, version, version_at, allow_comments,
 					created_at, expires_at, revoked_at, comments_seen_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			).run(
 				row.id,
 				row.artifactId,
@@ -415,6 +435,7 @@ export async function createLibrary(options: LibraryOptions): Promise<Library> {
 				row.ownerToken,
 				JSON.stringify(row.audience),
 				row.version,
+				row.versionAt,
 				row.allowComments ? 1 : 0,
 				row.createdAt,
 				row.expiresAt ?? null,
@@ -438,6 +459,10 @@ export async function createLibrary(options: LibraryOptions): Promise<Library> {
 		get(id) {
 			const record = sql("SELECT * FROM shares WHERE id = ?").get<ShareRecord>(id);
 			return record === undefined ? undefined : shareFromRecord(record);
+		},
+		summary(id) {
+			const record = sql(`${SUMMARY_SELECT} WHERE s.id = ?`).get<ShareSummaryRecord>(id);
+			return record === undefined ? undefined : summaryFromRecord(record);
 		},
 		forArtifact(artifactId) {
 			return sql("SELECT * FROM shares WHERE artifact_id = ? ORDER BY created_at, id").all<ShareRecord>(artifactId).map(shareFromRecord);
@@ -468,15 +493,14 @@ export async function createLibrary(options: LibraryOptions): Promise<Library> {
 		},
 		forArtifact(artifactId, filter) {
 			const unread = filter?.unread === true ? " AND c.read_at IS NULL" : "";
-			const records = sql(
-				`SELECT c.*, s.base_url AS share_base_url, s.remote_id AS share_remote_id
-				FROM comments c JOIN shares s ON s.id = c.share_id
-				WHERE s.artifact_id = ?${unread} ORDER BY c.created_at, c.id`,
-			).all<CommentRecord & { readonly share_base_url: string; readonly share_remote_id: string }>(artifactId);
-			return records.map((record): CommentRow & { readonly shareUrl: string } => ({
-				...commentFromRecord(record),
-				shareUrl: shareUrl(record.share_base_url, record.share_remote_id),
-			}));
+			return sql(`${COMMENT_SELECT} WHERE s.artifact_id = ?${unread} ORDER BY c.created_at, c.id`).all<CommentJoinRecord>(artifactId).map(commentWithUrl);
+		},
+		get(id) {
+			const record = sql(`${COMMENT_SELECT} WHERE c.id = ?`).get<CommentJoinRecord>(id);
+			return record === undefined ? undefined : commentWithUrl(record);
+		},
+		latestId(shareId) {
+			return sql("SELECT MAX(id) AS id FROM comments WHERE share_id = ?").get<{ readonly id: string | null }>(shareId)?.id ?? undefined;
 		},
 		markRead(ids, at) {
 			for (let start = 0; start < ids.length; start += 500) {
@@ -486,6 +510,13 @@ export async function createLibrary(options: LibraryOptions): Promise<Library> {
 		},
 	};
 
+	async function verifiedFile(row: ArtifactRow): Promise<string> {
+		const real = await realpath(row.path);
+		const unchanged = pathKey(real, platform) === row.path_key && denyReason(real) === undefined && (await stat(real)).isFile();
+		if (!unchanged) throw new LibraryError("the path no longer leads to the file that was added, so it was left in place");
+		return real;
+	}
+
 	async function discard(id: ArtifactId, request: { readonly trash: boolean }): Promise<DiscardOutcome> {
 		const row = requireRow(id);
 		let revoked = 0;
@@ -493,11 +524,14 @@ export async function createLibrary(options: LibraryOptions): Promise<Library> {
 		for (const share of liveShares(id)) {
 			try {
 				await revokeRemote(share);
-				revoked++;
 			} catch (error) {
-				unrevoked.push({ shareId: share.id, host: share.host, reason: errorMessage(error) });
+				if (share.host !== "p2p") {
+					unrevoked.push({ shareId: share.id, host: share.host, reason: errorMessage(error) });
+					continue;
+				}
 			}
 			shares.update(share.id, { revokedAt: now() });
+			revoked++;
 		}
 		if (row.state !== "discarded") {
 			sql("UPDATE artifacts SET state = 'discarded', discarded_at = ?, thumb = NULL WHERE id = ?").run(now(), id);
@@ -511,7 +545,7 @@ export async function createLibrary(options: LibraryOptions): Promise<Library> {
 		let trashError: string | undefined;
 		if (request.trash) {
 			try {
-				await trashFile(row.path);
+				await trashFile(await verifiedFile(row));
 				trashed = true;
 			} catch (error) {
 				trashError = hasCode(error, "ENOENT") ? "the file no longer exists" : errorMessage(error);

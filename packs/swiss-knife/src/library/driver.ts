@@ -1,3 +1,6 @@
+import { chmod, open } from "node:fs/promises";
+import { hasCode } from "./errors";
+
 export type SqlValue = string | number | bigint | null | Uint8Array;
 
 export interface SqlRun {
@@ -50,11 +53,26 @@ function adapt(db: NativeDatabase): SqlDriver {
 	};
 }
 
+const PRIVATE_FILE_MODE = 0o600;
+const DATABASE_FILE_SUFFIXES = ["", "-wal", "-shm"] as const;
+
 export async function openDriver(file: string): Promise<SqlDriver> {
+	if (process.platform !== "win32") await (await open(file, "a", PRIVATE_FILE_MODE)).close();
 	if (typeof Bun !== "undefined") {
 		const { Database } = await import("bun:sqlite");
 		return adapt(new Database(file, { create: true }));
 	}
 	const { DatabaseSync } = await import("node:sqlite");
 	return adapt(new DatabaseSync(file));
+}
+
+export async function restrictDatabaseFiles(file: string): Promise<void> {
+	if (process.platform === "win32") return;
+	for (const suffix of DATABASE_FILE_SUFFIXES) {
+		try {
+			await chmod(file + suffix, PRIVATE_FILE_MODE);
+		} catch (error) {
+			if (!hasCode(error, "ENOENT")) throw error;
+		}
+	}
 }

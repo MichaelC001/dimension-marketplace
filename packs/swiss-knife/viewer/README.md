@@ -210,16 +210,25 @@ The pane lives in `app/view/library/`:
   cancelled when its row scrolls away (`poster-queue.ts`); a failed one is not retried this session.
 - **Missing files.** The visible rows are checked with `library_check` (batches of 200, throttled to 300 ms, a row
   not again within a minute) and a gone file shows the warning mark.
-- **Detail drawer.** Preview, title/note/tags edited in place (`library_update` on blur), star, path copy,
-  workspace, dates, size, Open, Share…, Discard… (or Restore in Recently discarded), and the artifact's links with
-  their comments: unread badges, reply (`share_reply`), marked read once shown (`share_mark_read`).
+- **Detail drawer** (Drive's details panel). A header with the kind icon, the name (double-click or ⋯ Rename edits the
+  title), star and a ⋯ menu (Copy path, Rename, Discard…, or Restore in Recently discarded); the preview; Open and
+  Share. Two tabs. Details: "Who has access" (Only you, or one row per live link naming who it lets in, its role,
+  expiry and where it lives, with Copy link and Manage access; never the URL; stopped and expired links fold into
+  "Stopped links"), "File details" (type, size, the containing folder with the full path on hover and a copy button,
+  workspace, who added it, dates) and "Description" with tags (`library_update` on blur or Enter). Comments: one entry
+  per comment with initials, time, a time or page chip and the body, grouped by link when there are several; new ones
+  stay highlighted while shown and are marked read (`share_mark_read`); a reply box at the bottom (`share_reply`).
 - **Discard** explains that the artifact leaves the library and its links stop working; "Also move the file to the
   Recycle Bin/Trash" starts at `library_discard_default`'s answer (ticked unless git tracks the file).
-- **Share…** offers From this computer first (with the line that the link works while this computer is on and
-  Dimension is running), then each configured host; an option a host's policy forbids (public links, sign-in
-  without OIDC, expiry past `maxDays`, a file over `maxBytes`, recipients outside `allowedDomains`) is shown with the
-  host's reason and not offered. Add your server takes a pairing link or URL + token and shows the install command.
-  Create polls `share_progress` every 250 ms while `share_create` runs and ends on the link (with its key) to copy.
+- **Share** (Drive's share dialog). "Add people and domains" (emails and @domains; only on a server with sign-in),
+  "People with access", "General access" (Restricted or Anyone with the link, with Viewer or Commenter), "Shared from"
+  (this computer first, then each host; a host its policy or state rules out is listed with its reason) and "Link
+  expires" (never past `maxDays`). Nothing is made until Copy link or Done: Copy link creates and copies the link with
+  its key, showing `share_progress` (polled every 250 ms) in the footer; Done creates without copying, or just closes
+  when Restricted has nobody added. Manage access opens the same dialog for one link: access, role and expiry apply at
+  once through `share_update`; ⋯ holds Update link (`share_new_version`) and Stop sharing (`share_revoke`); a hosted
+  link whose file changed since its version shows "The file changed since you shared it." Add a server is a step
+  inside the dialog: the two `docker compose` commands to run, then the pairing link (or URL + token).
 - **Keyboard.** `/` search, arrows / Home / End / PageUp / PageDown move, Enter opens, `s` stars, Delete discards,
   Escape closes the drawer; ArrowDown or Enter in the search field moves into the grid.
 

@@ -89,6 +89,12 @@ export class TunnelClient {
 		});
 	}
 
+	async refusalSettled(): Promise<boolean> {
+		if (this.#refusal === undefined) return false;
+		await this.#running;
+		return true;
+	}
+
 	async stop(): Promise<void> {
 		const running = this.#running;
 		this.#abort?.abort();

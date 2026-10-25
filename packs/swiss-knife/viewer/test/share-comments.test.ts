@@ -60,6 +60,7 @@ async function shareRow(overrides: Partial<ShareRow> = {}): Promise<ShareRow> {
 		ownerToken: "owner-token",
 		audience: { kind: "link" },
 		version: 1,
+		versionAt: world.clock.now,
 		allowComments: true,
 		createdAt: world.clock.now,
 		...overrides,

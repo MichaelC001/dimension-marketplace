@@ -1,5 +1,7 @@
 import { type Audience, audienceAllowedBy, type SharePolicy } from "@dimension/sdk/artifact-share";
+import type { ShareSummary } from "../../../../src/library/types";
 import { formatBytes } from "../format";
+import { formatDuration } from "./kinds";
 import type { ShareHost } from "./library-tools";
 
 export interface Choice {
@@ -11,7 +13,12 @@ export interface HostChoice extends Choice {
 	readonly host: ShareHost;
 }
 
-export const INSTALL_COMMAND = "curl -fsSL https://get.insodimension.ai/artifact-host/install.sh | sudo bash -s -- --domain share.example.com";
+const HOST_COMPOSE = "docker compose -f packages/artifact-host/deploy/docker-compose.yml";
+
+export const HOST_SETUP: readonly { readonly label: string; readonly command: string }[] = [
+	{ label: "Start the share server", command: `ARTIFACT_HOST_DOMAIN=share.example.com ARTIFACT_HOST_UPLOAD_TOKEN=$(openssl rand -base64 32) ${HOST_COMPOSE} up -d` },
+	{ label: "Print its pairing link", command: `${HOST_COMPOSE} exec artifact-host /usr/local/bin/artifact-host admin pair` },
+];
 
 const STATUS_REASON: Record<Exclude<ShareHost["status"], "ok">, string> = {
 	unreachable: "This server is not answering right now.",
@@ -33,8 +40,8 @@ export function defaultHost(choices: readonly HostChoice[]): string | null {
 }
 
 export function linkChoice(policy: SharePolicy | undefined): Choice {
-	if (policy !== undefined && (!policy.publicLinks || policy.signinRequired)) return { allowed: false, reason: "This server only allows shares that require signing in." };
-	return { allowed: true };
+	const problem = audienceProblem({ kind: "link" }, policy);
+	return problem === undefined ? { allowed: true } : { allowed: false, reason: problem };
 }
 
 export function signinChoice(host: ShareHost): Choice {
@@ -80,6 +87,27 @@ export function parseRecipients(text: string): { readonly emails: readonly strin
 	return { emails, domains };
 }
 
+const EMAIL = /^[^@\s]+@[a-z0-9-]+(\.[a-z0-9-]+)+$/;
+const DOMAIN = /^[a-z0-9-]+(\.[a-z0-9-]+)+$/;
+
+export function peopleFrom(text: string): { readonly valid: readonly string[]; readonly invalid: readonly string[] } {
+	const valid: string[] = [];
+	const invalid: string[] = [];
+	for (const raw of text.split(/[\s,;]+/)) {
+		const entry = raw.trim().toLowerCase();
+		if (entry === "") continue;
+		const domain = entry.replace(/^@/, "");
+		const person = !entry.startsWith("@") && entry.includes("@") ? (EMAIL.test(entry) ? entry : null) : DOMAIN.test(domain) ? `@${domain}` : null;
+		if (person === null) invalid.push(raw.trim());
+		else if (!valid.includes(person)) valid.push(person);
+	}
+	return { valid, invalid };
+}
+
+export function peopleOf(audience: Audience): readonly string[] {
+	return audience.kind === "link" ? [] : [...(audience.emails ?? []), ...(audience.domains ?? []).map(domain => `@${domain}`)];
+}
+
 export function audienceFrom(kind: Audience["kind"], recipients: string): Audience {
 	if (kind === "link") return { kind: "link" };
 	const { emails, domains } = parseRecipients(recipients);
@@ -92,15 +120,58 @@ export function audienceProblem(audience: Audience, policy: SharePolicy | undefi
 	return refused === undefined ? undefined : `${refused.charAt(0).toUpperCase()}${refused.slice(1)}.`;
 }
 
-export function audienceLabel(audience: Audience): string {
+export function accessLabel(audience: Audience): string {
 	if (audience.kind === "link") return "Anyone with the link";
-	const who = [...(audience.emails ?? []), ...(audience.domains ?? []).map(domain => `@${domain}`)];
-	return who.length === 0 ? "Anyone who signs in" : `Signed in: ${who.join(", ")}`;
+	const emails = audience.emails ?? [];
+	const domains = audience.domains ?? [];
+	const people = emails.length === 1 ? (emails[0] ?? "") : `${emails.length} people`;
+	const at = domains.length === 1 ? (domains[0] ?? "") : `${domains.length} domains`;
+	if (emails.length === 0) return domains.length === 0 ? "Anyone who signs in" : `People at ${at}`;
+	return domains.length === 0 ? people : `${people} and people at ${at}`;
 }
 
-export function displayUrl(url: string): string {
-	const bare = url.split("#")[0] ?? url;
-	return bare.replace(/^https?:\/\//, "");
+export function shareStatus(share: Pick<ShareSummary, "revokedAt" | "expiresAt">, now: number): "live" | "stopped" | "expired" {
+	if (share.revokedAt !== undefined) return "stopped";
+	if (share.expiresAt !== undefined && share.expiresAt <= now) return "expired";
+	return "live";
+}
+
+export function shareDetail(share: Pick<ShareSummary, "host" | "url" | "expiresAt" | "allowComments">, now: number): string {
+	const parts = [share.allowComments ? "Can comment" : "Can view"];
+	if (share.expiresAt !== undefined) parts.push(share.expiresAt <= now ? "Expired" : `Expires ${shortDate(share.expiresAt, now)}`);
+	parts.push(share.host === "p2p" ? "From this computer (works while it is on)" : `On ${hostName(share.url)}`);
+	return parts.join(" · ");
+}
+
+export function fileChanged(share: Pick<ShareSummary, "host" | "versionAt">, mtimeMs: number): boolean {
+	return share.host !== "p2p" && mtimeMs > share.versionAt;
+}
+
+export function hostName(url: string): string {
+	try {
+		return new URL(url).host;
+	} catch {
+		return "a share server";
+	}
+}
+
+export function shortDate(at: number, now: number): string {
+	const sameYear = new Date(at).getFullYear() === new Date(now).getFullYear();
+	return new Date(at).toLocaleDateString(undefined, sameYear ? { month: "short", day: "numeric" } : { year: "numeric", month: "short", day: "numeric" });
+}
+
+export function anchorLabel(anchor: unknown): string | null {
+	if (typeof anchor !== "object" || anchor === null || !("kind" in anchor)) return null;
+	if (anchor.kind === "time" && "startMs" in anchor && typeof anchor.startMs === "number") return formatDuration(anchor.startMs);
+	if (anchor.kind === "page" && "page" in anchor && typeof anchor.page === "number") return `p. ${anchor.page}`;
+	if (anchor.kind === "region") return "Area";
+	return null;
+}
+
+export function initials(name: string): string {
+	const words = (name.split("@")[0] ?? "").trim().split(/[\s._-]+/).filter(word => word !== "");
+	const letters = words.length > 1 ? [words[0], words[words.length - 1]] : [words[0]];
+	return letters.map(word => word?.charAt(0).toUpperCase() ?? "").join("") || "?";
 }
 
 export function parsePairing(text: string): { readonly pairing: string } | null {

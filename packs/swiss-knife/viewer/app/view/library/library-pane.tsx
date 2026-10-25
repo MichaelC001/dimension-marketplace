@@ -8,7 +8,7 @@ import { cn } from "@fraym/ui/lib/cn";
 import type { App } from "@modelcontextprotocol/ext-apps";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { type KeyboardEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
-import type { LibraryFacets, LibraryItem, LibrarySort, ShareSummary } from "../../../../src/library/types";
+import type { DiscardOutcome, LibraryFacets, LibraryItem, LibrarySort, ShareSummary } from "../../../../src/library/types";
 import { FOCUS } from "../focus-ring";
 import type { LibraryTab } from "../tabs";
 import { AddFileDialog } from "./add-file-dialog";
@@ -17,7 +17,7 @@ import { DiscardDialog, TRASH_NAME } from "./discard-dialog";
 import { FilterRail } from "./filter-rail";
 import { LibraryGrid, type LibraryLayout } from "./library-grid";
 import { GridCell, ListRow } from "./library-item";
-import { type ArtifactPatchInput, createLibraryTools, type DiscardResult, errorText, type LinkedShare, thumbUrl } from "./library-tools";
+import { type ArtifactPatchInput, createLibraryTools, errorText, type LinkedShare, thumbUrl } from "./library-tools";
 import { drawPoster, posterCandidate } from "./poster-draw";
 import { PosterQueue } from "./poster-queue";
 import {
@@ -44,7 +44,7 @@ export interface LibraryPaneProps {
 	readonly onOpened: (result: CallToolResult) => void;
 }
 
-type Dialog = { readonly kind: "discard"; readonly item: LibraryItem } | { readonly kind: "share"; readonly item: LibraryItem } | { readonly kind: "add" } | null;
+type Dialog = { readonly kind: "discard"; readonly item: LibraryItem } | { readonly kind: "share"; readonly item: LibraryItem; readonly shareId: string | null } | { readonly kind: "add" } | null;
 
 const SORT_LABEL: Record<LibrarySort, string> = {
 	relevance: "Best match",
@@ -57,7 +57,7 @@ const SORT_LABEL: Record<LibrarySort, string> = {
 const SCOPE_EMPTY: Record<LibraryScope, { readonly title: string; readonly body: string }> = {
 	all: { title: "Your library is empty", body: "Artifacts appear here when an agent presents a file. Add one: paste a file’s path." },
 	starred: { title: "Nothing starred yet", body: "Select an artifact and press S to keep it here." },
-	shared: { title: "Nothing shared yet", body: "Select an artifact and choose Share… to send someone an encrypted link." },
+	shared: { title: "Nothing shared yet", body: "Select an artifact and choose Share to send someone an encrypted link." },
 	discarded: { title: "Nothing discarded", body: "Discarded artifacts wait here for 30 days so you can restore them." },
 };
 
@@ -88,16 +88,21 @@ function summaryOf(share: LinkedShare): ShareSummary {
 		url: share.url,
 		audience: share.audience,
 		version: share.version,
+		versionAt: share.versionAt,
+		allowComments: share.allowComments,
 		comments: share.comments,
 		unread: share.unread,
 		...(share.expiresAt === undefined ? {} : { expiresAt: share.expiresAt }),
 	};
 }
 
-function discardedSentence(result: DiscardResult): string {
+function discardedSentence(result: DiscardOutcome): string {
 	const parts = ["Discarded"];
 	if (result.revoked > 0) parts.push(result.revoked === 1 ? "its link no longer works" : `its ${result.revoked} links no longer work`);
+	const unrevoked = result.unrevoked.length;
+	if (unrevoked > 0) parts.push(unrevoked === 1 ? "one link could not be stopped and may still open until it expires" : `${unrevoked} links could not be stopped and may still open until they expire`);
 	if (result.trashed) parts.push(`the file is in the ${TRASH_NAME}`);
+	else if (result.trashError !== undefined) parts.push(`the file was not moved to the ${TRASH_NAME}: ${result.trashError}`);
 	return `${parts.join("; ")}.`;
 }
 
@@ -338,10 +343,13 @@ export function LibraryPane({ app, request, active, onOpened }: LibraryPaneProps
 
 	const selectedIdRef = useRef(selectedId);
 	selectedIdRef.current = selectedId;
-	const patchShares = useCallback((shares: readonly ShareSummary[]): void => {
-		const current = listRef.current.items.find(item => item.id === selectedIdRef.current);
-		if (current !== undefined) dispatch({ type: "item", item: { ...current, shares } });
+	const patchItemShares = useCallback((id: string, change: (shares: readonly ShareSummary[]) => readonly ShareSummary[]): void => {
+		const current = listRef.current.items.find(item => item.id === id);
+		if (current !== undefined) dispatch({ type: "item", item: { ...current, shares: change(current.shares) } });
 	}, []);
+	const patchShares = useCallback((shares: readonly ShareSummary[]): void => {
+		if (selectedIdRef.current !== null) patchItemShares(selectedIdRef.current, () => shares);
+	}, [patchItemShares]);
 
 	const setScope = (scope: LibraryScope): void => {
 		setFilter(current => ({ ...current, scope }));
@@ -567,7 +575,8 @@ export function LibraryPane({ app, request, active, onOpened }: LibraryPaneProps
 						onClose={() => setSelectedId(null)}
 						onPatch={change => patch(selected, change)}
 						onOpen={() => open(selected)}
-						onShare={() => setDialog({ kind: "share", item: selected })}
+						onShare={() => setDialog({ kind: "share", item: selected, shareId: null })}
+						onManage={shareId => setDialog({ kind: "share", item: selected, shareId })}
 						onDiscard={() => setDialog({ kind: "discard", item: selected })}
 						onRestore={() => restore(selected)}
 						onShares={patchShares}
@@ -592,12 +601,16 @@ export function LibraryPane({ app, request, active, onOpened }: LibraryPaneProps
 			{dialog?.kind === "share" ? (
 				<ShareDialog
 					tools={tools}
-					item={dialog.item}
+					item={shownItem(list.items.find(item => item.id === dialog.item.id) ?? dialog.item, list.checked)}
+					shareId={dialog.shareId}
 					onClose={() => setDialog(null)}
-					onShared={share => {
-						const current = listRef.current.items.find(item => item.id === dialog.item.id);
-						if (current !== undefined) dispatch({ type: "item", item: { ...current, shares: [summaryOf(share), ...current.shares] } });
+					onCreated={share => {
+						patchItemShares(dialog.item.id, shares => [summaryOf(share), ...shares]);
 						setFacetsGeneration(count => count + 1);
+					}}
+					onChanged={share => {
+						patchItemShares(dialog.item.id, shares => shares.map(each => (each.id === share.id ? share : each)));
+						if (share.revokedAt !== undefined) setFacetsGeneration(count => count + 1);
 					}}
 				/>
 			) : null}

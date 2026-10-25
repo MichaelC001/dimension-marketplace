@@ -37,6 +37,18 @@ export function frameSize(width: number, height: number, longEdge: number = FRAM
 	return { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) };
 }
 
+export function drawFrame(video: HTMLVideoElement, longEdge: number): HTMLCanvasElement {
+	if (video.videoWidth === 0 || video.videoHeight === 0) throw new Error("this video has no picture to take");
+	const size = frameSize(video.videoWidth, video.videoHeight, longEdge);
+	const canvas = document.createElement("canvas");
+	canvas.width = size.width;
+	canvas.height = size.height;
+	const context = canvas.getContext("2d");
+	if (context === null) throw new Error("no 2D canvas");
+	context.drawImage(video, 0, 0, size.width, size.height);
+	return canvas;
+}
+
 const JPEG_PREFIX = "data:image/jpeg;base64,";
 
 /** The bytes a `canvas.toDataURL("image/jpeg")` answer carries, or `null` when the answer is not a JPEG (an engine that cannot encode answers `data:,`). */
@@ -49,7 +61,7 @@ export function jpegBytes(dataUrl: string): Uint8Array | null {
 }
 
 /** Resolve on `type`, reject on the element's `error`, on the time running out, or on `signal`. The listeners are always removed. */
-function once(target: HTMLMediaElement, type: string, what: string, signal: AbortSignal): Promise<void> {
+export function once(target: HTMLMediaElement, type: string, what: string, signal: AbortSignal, timeoutMs: number): Promise<void> {
 	const { promise, resolve, reject } = Promise.withResolvers<void>();
 	const finish = (outcome: () => void): void => {
 		window.clearTimeout(timer);
@@ -61,7 +73,7 @@ function once(target: HTMLMediaElement, type: string, what: string, signal: Abor
 	const onDone = (): void => finish(resolve);
 	const onError = (): void => finish(() => reject(new Error(`${what} failed`)));
 	const onAbort = (): void => finish(() => reject(signal.reason));
-	const timer = window.setTimeout(() => finish(() => reject(new Error(`${what} timed out`))), GRAB_TIMEOUT_MS);
+	const timer = window.setTimeout(() => finish(() => reject(new Error(`${what} timed out`))), timeoutMs);
 	if (signal.aborted) {
 		onAbort();
 		return promise;
@@ -132,7 +144,7 @@ export class FrameGrabber {
 			clone.preload = "auto";
 			clone.crossOrigin = this.#source.crossOrigin;
 			clone.playsInline = true;
-			const opened = once(clone, "loadeddata", "opening the video", this.#life.signal);
+			const opened = once(clone, "loadeddata", "opening the video", this.#life.signal, GRAB_TIMEOUT_MS);
 			clone.src = this.#source.currentSrc;
 			this.#element = clone;
 			const opening = opened.then(() => clone);
@@ -189,21 +201,14 @@ export class FrameGrabber {
 			const clone = await until(this.#open(), stop);
 			const target = clampTime(at, clone.duration);
 			if (Math.abs(clone.currentTime - target) > 0.0005) {
-				const landed = once(clone, "seeked", "seeking", stop);
+				const landed = once(clone, "seeked", "seeking", stop, GRAB_TIMEOUT_MS);
 				clone.currentTime = target;
 				await landed;
 			}
-			if (clone.videoWidth === 0 || clone.videoHeight === 0) throw new Error("this video has no picture to take");
-			const size = frameSize(clone.videoWidth, clone.videoHeight, shape.longEdge);
-			const canvas = document.createElement("canvas");
-			canvas.width = size.width;
-			canvas.height = size.height;
-			const context = canvas.getContext("2d");
-			if (context === null) throw new Error("no 2D canvas");
-			context.drawImage(clone, 0, 0, size.width, size.height);
+			const canvas = drawFrame(clone, shape.longEdge);
 			const dataUrl = canvas.toDataURL("image/jpeg", shape.quality);
 			if (!dataUrl.startsWith(JPEG_PREFIX)) throw new Error("the picture could not be encoded");
-			return { dataUrl, ...size };
+			return { dataUrl, width: canvas.width, height: canvas.height };
 		} finally {
 			if (!this.#life.signal.aborted) this.#idle = window.setTimeout(() => this.release(), IDLE_MS);
 		}

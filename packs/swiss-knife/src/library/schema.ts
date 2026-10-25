@@ -1,7 +1,7 @@
 import type { SqlDriver } from "./driver";
 import { LibraryError } from "./errors";
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 export const DISCARDED_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 const CONNECTION = `
@@ -11,7 +11,7 @@ PRAGMA synchronous = NORMAL;
 PRAGMA foreign_keys = ON;
 `;
 
-const SCHEMA_V1 = `
+const SCHEMA = `
 CREATE TABLE artifacts(
   id TEXT PRIMARY KEY,
   path TEXT NOT NULL,
@@ -59,7 +59,7 @@ CREATE TABLE shares(
   host TEXT NOT NULL,
   remote_id TEXT NOT NULL, base_url TEXT NOT NULL, key TEXT NOT NULL, owner_token TEXT NOT NULL,
   audience TEXT NOT NULL,
-  version INTEGER NOT NULL, allow_comments INTEGER NOT NULL,
+  version INTEGER NOT NULL, version_at INTEGER NOT NULL, allow_comments INTEGER NOT NULL,
   created_at INTEGER NOT NULL, expires_at INTEGER, revoked_at INTEGER,
   comments_seen_at INTEGER
 );
@@ -74,6 +74,13 @@ CREATE INDEX comments_share ON comments(share_id, created_at);
 CREATE INDEX comments_unread ON comments(share_id) WHERE read_at IS NULL;
 `;
 
+const MIGRATIONS: Readonly<Record<number, string>> = {
+	1: `
+ALTER TABLE shares ADD COLUMN version_at INTEGER NOT NULL DEFAULT 0;
+UPDATE shares SET version_at = created_at;
+`,
+};
+
 interface VersionRow {
 	readonly user_version: number;
 }
@@ -87,15 +94,26 @@ function readVersion(db: SqlDriver): number {
 	}
 }
 
+function upgrade(db: SqlDriver): void {
+	const version = readVersion(db);
+	if (version === 0) {
+		db.exec(SCHEMA);
+	} else {
+		for (let step = version; step < SCHEMA_VERSION; step++) {
+			const migration = MIGRATIONS[step];
+			if (migration === undefined) throw new LibraryError(`library.db is schema version ${version} and has no upgrade path to ${SCHEMA_VERSION}.`);
+			db.exec(migration);
+		}
+	}
+	db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+}
+
 export function prepareDatabase(db: SqlDriver, now: number): void {
 	db.exec(CONNECTION);
-	if (readVersion(db) === 0) {
+	if (readVersion(db) < SCHEMA_VERSION) {
 		db.exec("BEGIN IMMEDIATE");
 		try {
-			if (readVersion(db) === 0) {
-				db.exec(SCHEMA_V1);
-				db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
-			}
+			if (readVersion(db) < SCHEMA_VERSION) upgrade(db);
 			db.exec("COMMIT");
 		} catch (error) {
 			db.exec("ROLLBACK");

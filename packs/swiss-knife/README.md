@@ -24,7 +24,7 @@ Replaces the separate Viewer and Ban Comments plugins; if you still have them in
 - **Tool `artifacts`**, loaded eagerly. The user's library of files shown or made here: `search` finds one to present
   again, `get` reads one row with its links and comments, and `stamp`, `update`, `discard` and `restore` keep it tidy.
   The Library (the dock's launcher, a pinned tab in the Viewer) is the person's side of the same store: search as you
-  type, a virtualized grid or list, posters for videos and PDFs, a detail drawer, and Share… with the choices of doc 103
+  type, a virtualized grid or list, posters for videos and PDFs, a details drawer, and a Share dialog with the choices of doc 103
   (from this computer by default, your own server, your company's). Depth: `viewer/README.md`, doc 103.
 - **Two stream rules**, `ban-comments` (`.ts .tsx .js .jsx .rs .go`) and `ban-comments-python` (`.py`).
   When the agent writes a code comment in an `edit` or a `write`, the engine stops that output, tells the
@@ -41,9 +41,12 @@ No skills or prompts (a test keeps those out).
 Anyone on either release ring, stable or canary.
 It is on once installed, in every space (`modelSpaces` is empty and it declares no `spaces`, so it has no
 audience to narrow it), and needs Dimension 0.10.24 or later, the first release whose engine honours the
-rules' `except:` field. No sign-in, CLI or key.
+rules' `except:` field. The Library's dock entry is a launcher, which Dimension shows from 0.11.13; on
+an older release the agent's `artifacts` tool still works, but the Library tab has no way in.
+No sign-in, CLI or key.
 
-There is one switch. Turning Swiss Knife off turns off `present`, the Viewer and the comment rule
+There is one switch. Turning Swiss Knife off turns off `present`, the Viewer, the Library, the `artifacts`
+tool and the comment rule
 together; none can be switched on its own. No agent is offered `view_file`: a person opens a file from
 a `present` card or an Open button, and the Viewer is not a tool the model calls.
 
@@ -86,7 +89,7 @@ a `present` card or an Open button, and the Viewer is not a tool the model calls
   OS recycle bin (never delete it outright); a discarded row can be restored for 30 days and is purged after.
   `artifacts` is read-class for `search`, `get` and `comments`, write-class for the rest; secrets are refused when a
   file is stamped, on the path as written and on its real path. Nothing leaves the machine until a person presses
-  Create in Share…; comments that come back are shown to the agent as input, labelled as input.
+  Copy link or Done in the Share dialog; comments that come back are shown to the agent as input, labelled as input.
 
 ## Build and test
 

@@ -6,6 +6,7 @@ import type { ArtifactSource, ArtifactState, CommentRow, ShareRow } from "./type
 export interface ArtifactRow {
 	readonly id: string;
 	readonly path: string;
+	readonly path_key: string;
 	readonly name: string;
 	readonly title: string | null;
 	readonly note: string | null;
@@ -40,6 +41,7 @@ export interface ShareRecord {
 	readonly owner_token: string;
 	readonly audience: string;
 	readonly version: number;
+	readonly version_at: number;
 	readonly allow_comments: number;
 	readonly created_at: number;
 	readonly expires_at: number | null;
@@ -55,6 +57,8 @@ export interface ShareSummaryRecord {
 	readonly base_url: string;
 	readonly audience: string;
 	readonly version: number;
+	readonly version_at: number;
+	readonly allow_comments: number;
 	readonly expires_at: number | null;
 	readonly revoked_at: number | null;
 	readonly comments: number;
@@ -109,6 +113,7 @@ export function shareFromRecord(record: ShareRecord): ShareRow {
 		ownerToken: record.owner_token,
 		audience: readAudience(record.id, record.audience),
 		version: record.version,
+		versionAt: record.version_at,
 		allowComments: record.allow_comments === 1,
 		createdAt: record.created_at,
 		...(record.expires_at === null ? {} : { expiresAt: record.expires_at }),

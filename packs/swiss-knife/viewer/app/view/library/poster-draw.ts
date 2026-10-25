@@ -3,8 +3,9 @@ import { createToolCaller } from "@dimension/mcp-app-kit/tools";
 import { mediaSourceSchema } from "../../../src/contract";
 import type { LibraryItem, ThumbMime } from "../../../../src/library/types";
 import { loadDocumentHead } from "../document-bytes";
-import { frameSize } from "../media-frame";
+import { drawFrame, once } from "../media-frame";
 import { trackMediaWork } from "../media-lifecycle";
+import { KIND_LOOK } from "./kinds";
 
 export const THUMB_LONG_EDGE = 320;
 export const THUMB_MAX_BYTES = 128 * 1024;
@@ -46,31 +47,8 @@ export function encodeThumb(canvas: HTMLCanvasElement): EncodedThumb {
 }
 
 export function posterCandidate(item: LibraryItem): boolean {
-	if (item.hasThumb || item.state !== "live") return false;
-	if (item.kind === "video") return true;
-	return item.kind === "pdf" && item.size > 0 && item.size <= PDF_THUMB_MAX_SOURCE_BYTES;
-}
-
-function waitFor(target: HTMLMediaElement, type: string, signal: AbortSignal): Promise<void> {
-	const { promise, resolve, reject } = Promise.withResolvers<void>();
-	const done = (outcome: () => void): void => {
-		window.clearTimeout(timer);
-		target.removeEventListener(type, onEvent);
-		target.removeEventListener("error", onError);
-		signal.removeEventListener("abort", onAbort);
-		outcome();
-	};
-	const onEvent = (): void => done(resolve);
-	const onError = (): void => done(() => reject(new Error("the video could not be read")));
-	const onAbort = (): void => done(() => reject(signal.reason));
-	const timer = window.setTimeout(() => done(() => reject(new Error("the video took too long to open"))), WAIT_MS);
-	if (signal.aborted) onAbort();
-	else {
-		target.addEventListener(type, onEvent);
-		target.addEventListener("error", onError);
-		signal.addEventListener("abort", onAbort, { once: true });
-	}
-	return promise;
+	if (item.hasThumb || item.state !== "live" || !KIND_LOOK[item.kind].poster) return false;
+	return item.kind === "video" || (item.size > 0 && item.size <= PDF_THUMB_MAX_SOURCE_BYTES);
 }
 
 async function videoPoster(app: App, item: LibraryItem, signal: AbortSignal): Promise<HTMLCanvasElement> {
@@ -83,25 +61,17 @@ async function videoPoster(app: App, item: LibraryItem, signal: AbortSignal): Pr
 		video.preload = "auto";
 		video.crossOrigin = "anonymous";
 		video.playsInline = true;
-		const opened = waitFor(video, "loadeddata", signal);
+		const opened = once(video, "loadeddata", "opening the video", signal, WAIT_MS);
 		video.src = source.url;
 		await opened;
 		const duration = Number.isFinite(video.duration) ? video.duration : 0;
 		const at = Math.min(1, duration * 0.1);
 		if (at > 0) {
-			const landed = waitFor(video, "seeked", signal);
+			const landed = once(video, "seeked", "seeking", signal, WAIT_MS);
 			video.currentTime = at;
 			await landed;
 		}
-		if (video.videoWidth === 0 || video.videoHeight === 0) throw new Error("this video has no picture");
-		const size = frameSize(video.videoWidth, video.videoHeight, THUMB_LONG_EDGE);
-		const canvas = document.createElement("canvas");
-		canvas.width = size.width;
-		canvas.height = size.height;
-		const context = canvas.getContext("2d");
-		if (context === null) throw new Error("no 2D canvas");
-		context.drawImage(video, 0, 0, size.width, size.height);
-		return canvas;
+		return drawFrame(video, THUMB_LONG_EDGE);
 	} finally {
 		video.removeAttribute("src");
 		video.load();

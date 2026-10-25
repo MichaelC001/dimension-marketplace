@@ -2,16 +2,24 @@ import { describe, expect, test } from "bun:test";
 import type { SharePolicy } from "@dimension/sdk/artifact-share";
 import type { ShareHost } from "../app/view/library/library-tools";
 import {
+	accessLabel,
+	anchorLabel,
 	audienceFrom,
 	audienceProblem,
 	defaultExpiry,
 	defaultHost,
-	displayUrl,
 	expiryChoices,
+	fileChanged,
 	hostChoices,
+	hostName,
+	initials,
 	linkChoice,
 	parsePairing,
 	parseRecipients,
+	peopleFrom,
+	peopleOf,
+	shareDetail,
+	shareStatus,
 	signinChoice,
 } from "../app/view/library/share-options";
 
@@ -33,10 +41,11 @@ describe("share options follow the host", () => {
 		expect(defaultHost(hostChoices([host("down", { status: "unreachable" })], 1))).toBeNull();
 	});
 
-	test("a host that forbids public links offers only sign-in", () => {
-		expect(linkChoice({ ...open, publicLinks: false }).allowed).toBe(false);
+	test("a host that forbids public links offers only sign-in, and says so in the SDK's words", () => {
+		expect(linkChoice({ ...open, publicLinks: false })).toEqual({ allowed: false, reason: "This server only allows shares that require signing in." });
 		expect(linkChoice({ ...open, signinRequired: true }).allowed).toBe(false);
 		expect(linkChoice(open).allowed).toBe(true);
+		expect(linkChoice(undefined).allowed).toBe(true);
 	});
 
 	test("sign-in is offered only by a host with sign-in, and says why otherwise", () => {
@@ -66,10 +75,64 @@ describe("share options follow the host", () => {
 		expect(audienceFrom("link", "ignored")).toEqual({ kind: "link" });
 	});
 
-	test("a pairing link needs its token in the fragment; a share URL shows without its key", () => {
+	test("people typed into the share box become emails and @domains; anything else is sent back", () => {
+		expect(peopleFrom("Ana@Example.com, @acme.com; acme.com bob x@y")).toEqual({ valid: ["ana@example.com", "@acme.com"], invalid: ["bob", "x@y"] });
+		const people = peopleOf({ kind: "signin", emails: ["ana@example.com"], domains: ["acme.com"] });
+		expect(people).toEqual(["ana@example.com", "@acme.com"]);
+		expect(audienceFrom("signin", people.join(" "))).toEqual({ kind: "signin", emails: ["ana@example.com"], domains: ["acme.com"] });
+		expect(peopleOf({ kind: "link" })).toEqual([]);
+	});
+
+	test("a pairing link needs its token in the fragment; a share names its server, never its link or key", () => {
 		expect(parsePairing("https://share.example.com/pair#t=abc")).toEqual({ pairing: "https://share.example.com/pair#t=abc" });
 		expect(parsePairing("https://share.example.com/pair")).toBeNull();
 		expect(parsePairing("not a url")).toBeNull();
-		expect(displayUrl("https://share.example.com/a/xyz#k=SECRET")).toBe("share.example.com/a/xyz");
+		expect(hostName("https://share.example.com/a/xyz#k=SECRET")).toBe("share.example.com");
+	});
+});
+
+describe("who has access reads like a person would say it", () => {
+	const now = Date.UTC(2026, 9, 26);
+	const day = 86_400_000;
+	const share = { host: "vps", url: "https://share.example.com/a/xyz", allowComments: true, versionAt: now - day };
+
+	test("an audience is named by who it lets in", () => {
+		expect(accessLabel({ kind: "link" })).toBe("Anyone with the link");
+		expect(accessLabel({ kind: "signin" })).toBe("Anyone who signs in");
+		expect(accessLabel({ kind: "signin", emails: ["ana@example.com"] })).toBe("ana@example.com");
+		expect(accessLabel({ kind: "signin", emails: ["ana@example.com", "bo@example.com"] })).toBe("2 people");
+		expect(accessLabel({ kind: "signin", domains: ["acme.com"] })).toBe("People at acme.com");
+		expect(accessLabel({ kind: "signin", emails: ["ana@example.com"], domains: ["acme.com", "x.io"] })).toBe("ana@example.com and people at 2 domains");
+	});
+
+	test("a share's line says the role, the expiry and where it lives", () => {
+		expect(shareDetail({ ...share, expiresAt: now + 30 * day }, now)).toMatch(/^Can comment · Expires .+ · On share\.example\.com$/);
+		expect(shareDetail({ ...share, host: "p2p", allowComments: false }, now)).toBe("Can view · From this computer (works while it is on)");
+		expect(shareDetail({ ...share, expiresAt: now - 1 }, now)).toBe("Can comment · Expired · On share.example.com");
+	});
+
+	test("a stopped or expired link is not live", () => {
+		expect(shareStatus({}, now)).toBe("live");
+		expect(shareStatus({ expiresAt: now + 1 }, now)).toBe("live");
+		expect(shareStatus({ expiresAt: now }, now)).toBe("expired");
+		expect(shareStatus({ revokedAt: now - 1, expiresAt: now - 1 }, now)).toBe("stopped");
+	});
+
+	test("a hosted share whose file changed after its version was published is out of date; a link from this computer is not", () => {
+		expect(fileChanged(share, now)).toBe(true);
+		expect(fileChanged(share, now - 2 * day)).toBe(false);
+		expect(fileChanged({ ...share, host: "p2p" }, now)).toBe(false);
+	});
+
+	test("a comment's anchor reads as a time or a page, and its author as initials", () => {
+		expect(anchorLabel({ kind: "time", startMs: 70_000 })).toBe("1:10");
+		expect(anchorLabel({ kind: "page", page: 3 })).toBe("p. 3");
+		expect(anchorLabel({ kind: "region", x: 0, y: 0, w: 1, h: 1 })).toBe("Area");
+		expect(anchorLabel(undefined)).toBeNull();
+		expect(anchorLabel({ kind: "time" })).toBeNull();
+		expect(initials("Ana Lima")).toBe("AL");
+		expect(initials("ana.lima@example.com")).toBe("AL");
+		expect(initials("bo")).toBe("B");
+		expect(initials("  ")).toBe("?");
 	});
 });
