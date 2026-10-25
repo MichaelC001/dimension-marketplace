@@ -4,12 +4,12 @@ import { Captions } from "../face/captions";
 import { detectDark, FaceView } from "../face/face-view";
 import { FaceBoundary } from "./face-boundary";
 import type { HeadState } from "./head";
-import type { FaceLive } from "./live";
+import { type FaceLive, LivePresence } from "./live";
 import { LiveMouth } from "./live-mouth";
 import { MicPicker, sameMicVoice } from "./mic-picker";
 import { SilenceBar } from "./silence-bar";
 import { STYLES } from "./styles";
-import { describeLive, describeSurface, type Intent, isLeaveKey, leaveSurface, type LiveCaption, liveHolds, type Problem, type SurfaceView } from "./surface-model";
+import { describeLive, describeSurface, type Intent, isLeaveKey, leaveSurface, liveHolds, type Problem, type SurfaceView } from "./surface-model";
 import type { FaceVoice } from "./voice";
 import { Waveform } from "./waveform";
 
@@ -47,16 +47,25 @@ function MicIcon({ off }: { off?: boolean }) {
 	);
 }
 
-function ProblemCard({ problem, action }: { problem: Problem; action?: { label: string; run: () => void } }) {
+interface CardAction {
+	label: string;
+	run: () => void;
+}
+
+function ProblemCard({ problem, actions }: { problem: Problem; actions?: readonly CardAction[] }) {
 	return (
 		<div className="f2f-card f2f-fade" role="alert">
 			<h2>{problem.title}</h2>
 			<p>{problem.detail}</p>
 			{problem.hint && <p>{problem.hint}</p>}
-			{action && (
-				<button type="button" className="f2f-btn" onClick={action.run}>
-					{action.label}
-				</button>
+			{actions && (
+				<div className="f2f-card-actions">
+					{actions.map((action) => (
+						<button key={action.label} type="button" className="f2f-btn" onClick={action.run}>
+							{action.label}
+						</button>
+					))}
+				</div>
 			)}
 		</div>
 	);
@@ -68,15 +77,12 @@ interface TopBarProps {
 	canMute: boolean;
 	muted: boolean;
 	onToggleMute: () => void;
-	/** Hang up a Live call and stay on the face. Null in the voice conversation, where Back is the way out. */
-	onEnd: (() => void) | null;
-	/** The voice conversation, for its input picker. Null in a Live call, which takes the browser's default microphone. */
-	picker: FaceVoice | null;
+	picker: FaceVoice;
 }
 
-/** Back, the mic status, Mute, End call (Live) and the input picker (voice). It depends on seven things that change when you act, not on the words being said, so it does not re-render with them. */
+/** Back, the mic status, and the voice conversation's Mute and input picker (a Live call's Mute and End are the Live bar's). It depends on six things that change when you act, not on the words being said, so it does not re-render with them. */
 const TopBar = memo(
-	function TopBar({ onBack, micLive, canMute, muted, onToggleMute, onEnd, picker }: TopBarProps) {
+	function TopBar({ onBack, micLive, canMute, muted, onToggleMute, picker }: TopBarProps) {
 		return (
 			<div className="f2f-top">
 				<button type="button" className="f2f-btn" onClick={onBack} aria-label="Back to thread (Esc)">
@@ -96,13 +102,8 @@ const TopBar = memo(
 								<MicIcon off={muted} />
 								{muted ? "Unmute" : "Mute"}
 							</button>
-							{picker && <MicPicker voice={picker} />}
+							<MicPicker voice={picker} />
 						</>
-					)}
-					{onEnd && (
-						<button type="button" className="f2f-btn" onClick={onEnd}>
-							End call
-						</button>
 					)}
 				</div>
 			</div>
@@ -114,8 +115,7 @@ const TopBar = memo(
 		a.canMute === b.canMute &&
 		a.muted === b.muted &&
 		a.onToggleMute === b.onToggleMute &&
-		a.onEnd === b.onEnd &&
-		(a.picker === null || b.picker === null ? a.picker === b.picker : sameMicVoice({ voice: a.picker }, { voice: b.picker })),
+		sameMicVoice({ voice: a.picker }, { voice: b.picker }),
 );
 
 /** The host's theme, read off the first painted background above the surface; re-read when the host flips its
@@ -135,32 +135,6 @@ function useHostDark(root: { current: HTMLElement | null }): boolean {
 		};
 	}, [root]);
 	return dark;
-}
-
-/** A finished line of a Live call stays on screen this long, then yields the floor to the face. */
-const CAPTION_LINGER_MS = 8000;
-
-/**
- * The call's newest line while it is being said, and for a few seconds after it is final. A later line is a new `turn` and shows again.
- * `hold` stops the countdown while the voice is still speaking: a provider that sends its text faster than it says it (ElevenLabs
- * delivers audio and transcript in bursts) would otherwise take the subtitle away mid-sentence.
- */
-function useLingeringCaption(caption: LiveCaption | null, hold: boolean): LiveCaption | null {
-	const [lingered, setLingered] = useState<string | null>(null);
-	const key = caption ? `${caption.role}:${caption.turn}` : null;
-	const final = caption?.final ?? false;
-	useEffect(() => {
-		// No line at all (the call is over, or a new one is connecting): turn numbers restart with every call, so a line that
-		// lingered out in the last one must not hide the first line of the next that happens to share its role and turn.
-		if (key === null) {
-			setLingered(null);
-			return;
-		}
-		if (!final || hold) return;
-		const id = setTimeout(() => setLingered(key), CAPTION_LINGER_MS);
-		return () => clearTimeout(id);
-	}, [key, final, hold]);
-	return caption && key !== lingered ? caption : null;
 }
 
 /** The newest voice, call and view: the per-frame callbacks read them through a ref, so they are never re-created. */
@@ -219,10 +193,8 @@ export function useFrameFeed(latest: { readonly current: Latest }, voice: FaceVo
 	}, [latest, input, mouth]);
 	const getCaptionTime = useCallback(() => latest.current.voice.audioClock(), [latest]);
 	const getWaveLevel = useCallback(() => {
-		const { voice: v, live: l, view: s } = latest.current;
-		const speaking = s.phase === "speaking";
-		if (s.mode === "live") return speaking ? l.getOutputLevel() : l.getInputLevel();
-		return speaking ? v.levels.getAgent() : v.levels.getMic();
+		const { voice: v, view: s } = latest.current;
+		return s.phase === "speaking" ? v.levels.getAgent() : v.levels.getMic();
 	}, [latest]);
 	const getSilence = useCallback(() => latest.current.voice.levels.getSilence(), [latest]);
 
@@ -239,34 +211,27 @@ export function useFrameFeed(latest: { readonly current: Latest }, voice: FaceVo
 	return { animator, getInput, getCaptionTime, getWaveLevel, getSilence, poseSource };
 }
 
-/** What the voice on a Live call is saying, over the face. */
-const ASSISTANT_CAPTION_BOX: CSSProperties = { ...CAPTION_BOX, zIndex: 2, pointerEvents: "none" };
-
-function AssistantCaption({ text }: { text: string }) {
-	return (
-		// The box centres itself with a transform, and `f2f-fade` animates to `transform: none`: the fade goes on the line INSIDE the box.
-		<div style={ASSISTANT_CAPTION_BOX}>
-			<p className="f2f-livecap f2f-fade" aria-live="polite">
-				{text}
-			</p>
-		</div>
-	);
-}
-
 interface StageProps {
 	view: SurfaceView;
 	live: FaceLive;
-	/** The call's lingering line, either speaker; null in the voice conversation. */
-	caption: LiveCaption | null;
 	getSilence: () => number;
 	onTalk: () => void;
 	onLive: () => void;
 }
 
 /** The middle of the surface: what starts a conversation, what stopped one, and the person's own words. */
-function Stage({ view, live, caption, getSilence, onTalk, onLive }: StageProps) {
+function Stage({ view, live, getSilence, onTalk, onLive }: StageProps) {
 	// Live is offered beside Tap to talk while nothing is open (and where the voice conversation is unavailable, since Live has its own route).
 	const liveOffered = live.available && (view.tap === "talk" || view.phase === "unavailable");
+	const actions =
+		view.tap !== "retry"
+			? undefined
+			: view.mode === "live"
+				? [
+						{ label: "Try again", run: onLive },
+						{ label: "Dismiss", run: live.stop },
+					]
+				: [{ label: "Try again", run: onTalk }];
 	return (
 		<div className="f2f-stage">
 			{view.tap === "talk" && (
@@ -281,12 +246,7 @@ function Stage({ view, live, caption, getSilence, onTalk, onLive }: StageProps) 
 					<span className="f2f-live-dest">Mic → {live.voice ?? "the voice provider"}</span>
 				</button>
 			)}
-			{view.problem && (
-				<ProblemCard
-					problem={view.problem}
-					action={view.tap === "retry" ? { label: "Try again", run: view.mode === "live" ? onLive : onTalk } : undefined}
-				/>
-			)}
+			{view.problem && <ProblemCard problem={view.problem} actions={actions} />}
 			{view.userCaption && (
 				<>
 					<p className="f2f-usercap f2f-fade" style={{ margin: 0 }}>
@@ -295,17 +255,12 @@ function Stage({ view, live, caption, getSilence, onTalk, onLive }: StageProps) 
 					<SilenceBar getSilence={getSilence} />
 				</>
 			)}
-			{caption?.role === "user" && (
-				<p className="f2f-usercap f2f-fade" style={{ margin: 0 }}>
-					{caption.text}
-				</p>
-			)}
 		</div>
 	);
 }
 
-/** The status note and the waveform mark with the word beside it. */
-function BottomBar({ view, getWaveLevel }: { view: SurfaceView; getWaveLevel: () => number }) {
+/** The status note, then the call's own surface: the Live bar in a Live call, the waveform mark with the word beside it in the voice conversation. A failed call is the card's, which can try again. */
+function BottomBar({ view, live, getWaveLevel }: { view: SurfaceView; live: FaceLive; getWaveLevel: () => number }) {
 	return (
 		<div className="f2f-bottom">
 			{view.status && (
@@ -313,6 +268,7 @@ function BottomBar({ view, getWaveLevel }: { view: SurfaceView; getWaveLevel: ()
 					{view.status}
 				</span>
 			)}
+			{view.mode === "live" && view.phase !== "error" && <LivePresence live={live} />}
 			{view.label && (
 				<div className="f2f-state">
 					<Waveform getLevel={getWaveLevel} phase={view.phase} />
@@ -325,7 +281,7 @@ function BottomBar({ view, getWaveLevel }: { view: SurfaceView; getWaveLevel: ()
 	);
 }
 
-/** The full-screen face: paper, the face, captions, the waveform mark, and the controls (Tap to talk, Talk live, Mute, End call, Back, Esc). */
+/** The full-screen face: paper, the face, captions, the call's surface, and the controls (Tap to talk, Talk live, Back, Esc). */
 export function FaceSurfaceBody({ voice, live, head, onIntent }: FaceSurfaceBodyProps) {
 	const [graceOver, setGraceOver] = useState(false);
 	const [quality, setQuality] = useState<"high" | "low">("high");
@@ -334,7 +290,6 @@ export function FaceSurfaceBody({ voice, live, head, onIntent }: FaceSurfaceBody
 	// A Live call holds the surface while it lasts; otherwise what is on screen is the voice conversation's state.
 	const view = liveHolds(live) ? describeLive(live) : describeSurface(voice, graceOver);
 	const inLive = view.mode === "live";
-	const caption = useLingeringCaption(view.caption, view.phase === "speaking");
 
 	// Latest voice, call and view, read by the per-frame callbacks without re-creating them.
 	const latest = useRef<Latest>({ voice, live, view });
@@ -369,9 +324,7 @@ export function FaceSurfaceBody({ voice, live, head, onIntent }: FaceSurfaceBody
 		detail: message,
 		hint: "Face to face draws with WebGL2. Turn on hardware acceleration for this window, then reopen it.",
 	});
-	// Whichever conversation the person is in: Mute is its own.
-	const call = inLive ? live : voice;
-	// The voice conversation's words under the face (alone, when the face cannot be drawn). The person's own words and a Live call's line take the floor instead.
+	// The voice conversation's words under the face (alone, when the face cannot be drawn). The person's own words take the floor instead; a Live call's words are the Live bar's.
 	const wordCaptions = !view.userCaption && !inLive ? <Captions words={voice.words} getTime={getCaptionTime} dark={dark} style={CAPTION_BOX} /> : null;
 
 	return (
@@ -411,10 +364,9 @@ export function FaceSurfaceBody({ voice, live, head, onIntent }: FaceSurfaceBody
 				onBack={leave}
 				micLive={view.micLive}
 				canMute={view.canMute}
-				muted={call.muted}
-				onToggleMute={call.toggleMute}
-				onEnd={inLive ? live.stop : null}
-				picker={inLive ? null : voice}
+				muted={voice.muted}
+				onToggleMute={voice.toggleMute}
+				picker={voice}
 			/>
 
 			{faceFailed !== null && (
@@ -422,9 +374,8 @@ export function FaceSurfaceBody({ voice, live, head, onIntent }: FaceSurfaceBody
 					<ProblemCard problem={cannotLoad(faceFailed)} />
 				</div>
 			)}
-			{caption?.role === "assistant" && <AssistantCaption text={caption.text} />}
-			<Stage view={view} live={live} caption={caption} getSilence={getSilence} onTalk={startTalking} onLive={startLive} />
-			<BottomBar view={view} getWaveLevel={getWaveLevel} />
+			<Stage view={view} live={live} getSilence={getSilence} onTalk={startTalking} onLive={startLive} />
+			<BottomBar view={view} live={live} getWaveLevel={getWaveLevel} />
 		</div>
 	);
 }

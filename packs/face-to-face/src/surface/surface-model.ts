@@ -40,11 +40,11 @@ export interface SurfaceView {
 	/** Which conversation this view describes: the voice pipeline (Tap to talk) or a Live call (Talk live). */
 	mode: "voice" | "live";
 	faceState: FaceState;
-	/** The word beside the waveform mark while a conversation is open. */
+	/** The word beside the waveform mark while the voice conversation is open. Empty in a Live call: the Live bar says what the call is doing. */
 	label: string;
 	/** The only control that can start the microphone. */
 	tap: "talk" | "retry" | null;
-	/** Mute is a control of an open conversation. */
+	/** The surface's own Mute is offered. Never in a Live call, whose Mute is the Live bar's. */
 	canMute: boolean;
 	/** A non-fatal word from the engine ("Downloading the voice model (42%)…"), or the reason the person's words were not sent. */
 	status: string | undefined;
@@ -56,8 +56,6 @@ export interface SurfaceView {
 	micLive: boolean;
 	/** The person's words so far, shown while they are talking. */
 	userCaption: string;
-	/** Live only: the newest line of the call, either speaker; null in voice mode, where the words ride `voice.words`. */
-	caption: LiveCaption | null;
 	problem: Problem | null;
 }
 
@@ -122,21 +120,12 @@ export function describeSurface(v: VoiceFacts, probeGraceOver: boolean): Surface
 		micSilent: deaf,
 		userCaption: phase === "listening" && !muted ? v.partial.trim() : "",
 		micLive: v.micLive,
-		caption: null,
 		problem: phase === "error" ? problemOf(v) : phase === "unavailable" ? UNAVAILABLE : null,
 	};
 }
 
 /** What the Live hook says that the surface draws. `phase` is what the call SHOWS (it reads `muted` over everything while the microphone is off); `enginePhase` is what it is DOING underneath, which is what the face must follow. */
-export type LiveFacts = Pick<FaceLive, "phase" | "enginePhase" | "transcript" | "muted" | "seconds" | "error" | "voice">;
-
-export interface LiveCaption {
-	readonly role: "user" | "assistant";
-	readonly text: string;
-	/** Role-local and monotonic: a streaming update repeats the turn with `final: false`. */
-	readonly turn: number;
-	readonly final: boolean;
-}
+export type LiveFacts = Pick<FaceLive, "phase" | "enginePhase" | "muted" | "error" | "voice">;
 
 /** A Live call holds the surface from its first moment until it is over; `off` is the only phase with no call. */
 export function liveHolds(live: Pick<LiveFacts, "phase">): boolean {
@@ -153,29 +142,10 @@ const LIVE_PHASES: Record<LiveFacts["enginePhase"], SurfacePhase> = {
 	error: "error",
 };
 
-/** `m:ss`, the way a call timer reads. */
-export function clock(seconds: number): string {
-	const whole = Math.max(0, Math.floor(seconds));
-	return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
-}
-
-/** `working` is the agent doing the work the voice handed it: the call says so rather than "Thinking". */
-function liveLabel(callPhase: LiveFacts["enginePhase"], muted: boolean): string {
-	if (muted) return "Muted";
-	if (callPhase === "working") return "Working";
-	return LABELS[LIVE_PHASES[callPhase]] ?? "";
-}
-
-/** Who the microphone is talking to, said while the call is up: the one thing the person should always be able to read. */
+/** Who the microphone is talking to, said while the call is up: the one thing the person should always be able to read. The call's clock and its words are the Live bar's. */
 function liveStatus(l: LiveFacts, phase: SurfacePhase): string | undefined {
 	if (phase === "error" || phase === "dormant") return undefined;
-	return ["Live", l.voice, isOpen(phase) ? clock(l.seconds) : null].filter(Boolean).join(" · ");
-}
-
-function liveCaption(transcript: LiveFacts["transcript"]): LiveCaption | null {
-	if (!transcript) return null;
-	const text = transcript.text.trim();
-	return text ? { role: transcript.role, text, turn: transcript.turn, final: transcript.final } : null;
+	return ["Live", l.voice].filter(Boolean).join(" · ");
 }
 
 function liveProblem(error: LiveFacts["error"]): Problem {
@@ -184,7 +154,7 @@ function liveProblem(error: LiveFacts["error"]): Problem {
 	return { title: "Live call stopped", detail, ...(hint ? { hint } : {}) };
 }
 
-/** What a Live call means on screen: the same face states and controls as the voice conversation, with the call's own words. */
+/** What a Live call means on screen: the same face states as the voice conversation. The controls, the clock and the words are the Live bar's, drawn below the face. */
 export function describeLive(l: LiveFacts): SurfaceView {
 	const phase = LIVE_PHASES[l.enginePhase];
 	const open = isOpen(phase);
@@ -196,15 +166,14 @@ export function describeLive(l: LiveFacts): SurfaceView {
 		mode: "live",
 		phase,
 		faceState: open && !muted ? phase : "idle",
-		label: liveLabel(l.enginePhase, muted),
+		label: "",
 		tap: phase === "error" ? "retry" : null,
-		canMute: open,
+		canMute: false,
 		status: liveStatus(l, phase),
 		unsent: false,
 		micSilent: false,
 		micLive: open && !micOff,
 		userCaption: "",
-		caption: liveCaption(l.transcript),
 		problem: phase === "error" ? liveProblem(l.error) : null,
 	};
 }

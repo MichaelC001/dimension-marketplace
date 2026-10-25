@@ -63,7 +63,7 @@ async function feed(latest: Latest, inLive: boolean) {
 	return into.current;
 }
 
-test("a Live call's frames come from the call: a playhead that runs while the voice speaks, and the call's own levels", async () => {
+test("a Live call's frames come from the call: a playhead that runs while the voice speaks, and the call's own level", async () => {
 	const clock = spyOn(performance, "now");
 	try {
 		const call = live("speaking");
@@ -76,7 +76,6 @@ test("a Live call's frames come from the call: a playhead that runs while the vo
 		expect(later.playhead).toBe(0.5);
 		// the voice conversation's clock and levels play no part in a call
 		expect(later.audioRms).not.toBe(0.4);
-		expect(frames.getWaveLevel()).toBe(0.7);
 	} finally {
 		clock.mockRestore();
 	}
@@ -86,7 +85,6 @@ test("while the person talks to a call, the mouth rests and the mic level drives
 	const call = live("listening");
 	const frames = await feed({ voice, live: call, view: describeLive(call) }, true);
 	expect({ ...frames.getInput() }).toMatchObject({ state: "listening", playhead: null, audioRms: 0, micRms: 0.2 });
-	expect(frames.getWaveLevel()).toBe(0.2);
 });
 
 test("the voice conversation's frames still come from the voice: its audio clock and levels", async () => {
@@ -115,7 +113,6 @@ test("a person who muted still sees the mouth follow the voice: the kit shows 'm
 		frames.getInput();
 		clock.mockReturnValue(5_250);
 		expect({ ...frames.getInput() }).toMatchObject({ state: "speaking", playhead: 0.25, audioRms: 0.7 });
-		expect(frames.getWaveLevel()).toBe(0.7);
 	} finally {
 		clock.mockRestore();
 	}

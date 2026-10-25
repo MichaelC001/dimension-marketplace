@@ -1,7 +1,6 @@
 // The surface's rules, with no DOM: what each voice state and each Live call state means on screen, and the two ways out.
 import { describe, expect, test } from "bun:test";
 import {
-	clock,
 	describeLive,
 	describeSurface,
 	hintFor,
@@ -250,23 +249,12 @@ const call = (over: Partial<LiveFacts> = {}): LiveFacts => {
 	return {
 		phase: "listening",
 		enginePhase: shown === "muted" ? "listening" : shown,
-		transcript: null,
 		muted: false,
-		seconds: 0,
 		error: null,
 		voice: null,
 		...over,
 	};
 };
-
-describe("clock: how a call timer reads", () => {
-	test("m:ss with a zero-padded second, minutes unbounded", () => {
-		expect(clock(0)).toBe("0:00");
-		expect(clock(9)).toBe("0:09");
-		expect(clock(65.9)).toBe("1:05");
-		expect(clock(3600)).toBe("60:00");
-	});
-});
 
 describe("describeLive: a realtime call, drawn honestly", () => {
 	test("a call holds the surface in every phase but off, an error included, until it is dismissed", () => {
@@ -276,54 +264,47 @@ describe("describeLive: a realtime call, drawn honestly", () => {
 		}
 	});
 
-	test("each phase drives the face state and the label; the agent working is its own word, not 'Thinking'", () => {
-		const connecting = describeLive(call({ phase: "connecting" }));
-		expect(connecting.label).toBe("Connecting");
-		expect(connecting.faceState).toBe("idle");
-		expect(connecting.canMute).toBe(false);
-		for (const [phase, label, face] of [
-			["listening", "Listening", "listening"],
-			["working", "Working", "thinking"],
-			["speaking", "Speaking", "speaking"],
+	test("each phase drives the face state; the agent working is the face thinking", () => {
+		expect(describeLive(call({ phase: "connecting" })).faceState).toBe("idle");
+		for (const [phase, face] of [
+			["listening", "listening"],
+			["working", "thinking"],
+			["speaking", "speaking"],
 		] as const) {
 			const v = describeLive(call({ phase }));
 			expect(v.mode).toBe("live");
-			expect(v.label).toBe(label);
 			expect(v.faceState).toBe(face);
-			expect(v.canMute).toBe(true);
 			expect(v.micLive).toBe(true); // the microphone stays open while the agent works and the voice answers (barge-in)
 			expect(v.tap).toBeNull();
 		}
 	});
 
-	test("muted while listening: the face relaxes, the label says Muted and the microphone reads off (the flag, or the engine's own 'muted')", () => {
+	test("muted while listening: the face relaxes and the microphone reads off (the flag, or the engine's own 'muted')", () => {
 		for (const muted of [call({ muted: true }), call({ phase: "muted" })]) {
 			const v = describeLive(muted);
-			expect(v.label).toBe("Muted");
 			expect(v.faceState).toBe("idle");
 			expect(v.micLive).toBe(false);
-			expect(v.canMute).toBe(true);
 		}
 	});
 
 	test("muted while the voice answers or the agent works: the kit's phase says 'muted' for all of it, but the face follows the engine underneath", () => {
 		const speaking = describeLive(call({ phase: "muted", muted: true, enginePhase: "speaking" }));
-		expect(speaking).toMatchObject({ phase: "speaking", label: "Speaking", faceState: "speaking", micLive: false, canMute: true });
+		expect(speaking).toMatchObject({ phase: "speaking", faceState: "speaking", micLive: false });
 		const working = describeLive(call({ phase: "muted", muted: true, enginePhase: "working" }));
-		expect(working).toMatchObject({ phase: "thinking", label: "Working", faceState: "thinking", micLive: false });
+		expect(working).toMatchObject({ phase: "thinking", faceState: "thinking", micLive: false });
 		// and unmuted, the same phases keep the microphone on
 		expect(describeLive(call({ enginePhase: "speaking", phase: "speaking" })).micLive).toBe(true);
 	});
 
 	test("a call still connecting or failed shows that, whatever the mute flag says", () => {
-		expect(describeLive(call({ phase: "connecting", muted: true })).label).toBe("Connecting");
+		expect(describeLive(call({ phase: "connecting", muted: true })).phase).toBe("connecting");
 		expect(describeLive(call({ phase: "error", muted: true, error: "x" })).phase).toBe("error");
 	});
 
-	test("the status line says who the microphone is talking to, with the clock only once the call is up", () => {
+	test("the status line says who the microphone is talking to while the call is up, and nothing once it failed", () => {
 		expect(describeLive(call({ phase: "connecting", voice: "Sol via codex-live" })).status).toBe("Live · Sol via codex-live");
-		expect(describeLive(call({ phase: "speaking", voice: "Sol via codex-live", seconds: 65 })).status).toBe("Live · Sol via codex-live · 1:05");
-		expect(describeLive(call({ phase: "listening", voice: null, seconds: 7 })).status).toBe("Live · 0:07");
+		expect(describeLive(call({ phase: "speaking", voice: "Sol via codex-live" })).status).toBe("Live · Sol via codex-live");
+		expect(describeLive(call({ phase: "listening", voice: null })).status).toBe("Live");
 		expect(describeLive(call({ phase: "error", error: "no" })).status).toBeUndefined();
 	});
 
@@ -340,18 +321,10 @@ describe("describeLive: a realtime call, drawn honestly", () => {
 		expect(unsaid.problem?.hint).toBeUndefined();
 	});
 
-	test("the newest line of the call is the caption, either speaker; a blank line is none", () => {
-		const line = { role: "assistant", text: "  Mars is cold and dusty.  ", turn: 3, final: false } as const;
-		expect(describeLive(call({ transcript: line })).caption).toEqual({ role: "assistant", text: "Mars is cold and dusty.", turn: 3, final: false });
-		expect(describeLive(call({ transcript: { ...line, role: "user", final: true } })).caption?.role).toBe("user");
-		expect(describeLive(call({ transcript: { ...line, text: "   " } })).caption).toBeNull();
-		expect(describeLive(call()).caption).toBeNull();
-	});
-
-	test("the voice conversation's view says it is the voice conversation, with no Live caption", () => {
+	test("the voice conversation's view says it is the voice conversation, and keeps its own Mute", () => {
 		const v = describeSurface(facts({ phase: "listening", micLive: true }), false);
 		expect(v.mode).toBe("voice");
-		expect(v.caption).toBeNull();
+		expect(v.canMute).toBe(true);
 		expect(v.micLive).toBe(true);
 	});
 });
