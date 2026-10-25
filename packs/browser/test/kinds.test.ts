@@ -118,7 +118,7 @@ describe("resolveKind: OMP's order of choice", () => {
 });
 
 describe("resolveKind: a cell drives a browser it did not launch only when the person has said yes", () => {
-	// Until the host asks the human at the call (host contract H1, the exec approval tier, not honoured yet) the person's yes is a setting of the pack, read from the host's environment at each open.
+	// The host asks the human at the call (host contract H1, the exec approval tier) only short of full access, so the person's yes to attaching is also a setting of the pack, read from the host's environment at each open.
 	const asks: Array<[string, Parameters<typeof resolveKind>[0]]> = [
 		["app.cdp_url (a connected Chrome)", { app: { cdp_url: "http://127.0.0.1:9222" } }],
 		["app.path (an application it starts)", { app: { path: ABS_EXE } }],
