@@ -74,8 +74,8 @@ export function resolveCmuxKind(options: { surface?: string; settingEnabled?: bo
 
 /**
  * The person's opt-in to a cell driving a browser or an application the pack did not launch. It is read from the host's environment each time a cell opens one, never from the cell: the code worker's own
- * environment is an allowlist that does not carry it, and a cell that sets it in its own cannot reach this process's. Until the host asks the human at the call (the exec approval tier, host contract H1, which
- * `browser_run` declares and the host does not honour yet) this is the one human gate the three model-chosen kinds have; H1 adds the approval on top of it and does not replace it.
+ * environment is an allowlist that does not carry it, and a cell that sets it in its own cannot reach this process's. The host asks the human at the call (the exec approval tier, host contract H1, which
+ * `browser_run` declares) in every mode short of full access; this opt-in stays a gate of its own on top of that approval, not replaced by it.
  */
 export const ATTACH_OPT_IN = "DIMENSION_BROWSER_CODE_ALLOW_ATTACH";
 
