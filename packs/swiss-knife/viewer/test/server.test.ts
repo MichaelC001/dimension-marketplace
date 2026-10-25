@@ -7,6 +7,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { z } from "zod";
 import { MAX_CHUNK_BYTES, TAB_META_KEY, fileChunkSchema, mediaSourceSchema, renewedMediaSchema, viewedFileSchema } from "../src/contract";
+import { removeTree } from "../../test/fixtures";
 import { createFence } from "../src/fence";
 import { LEASE_TTL_MS, MAX_LEASES } from "../src/media-server";
 import { createViewerServer } from "../src/server";
@@ -33,14 +34,14 @@ describe("viewer server contract", () => {
 		await writeFile(join(root, "notes.md"), "# hello");
 		await writeFile(join(root, "large.bin"), large);
 		await writeFile(join(root, ".env"), "TOKEN=SECRET_VALUE_123");
-		const server = await createViewerServer({ viewDir: view, fence: createFence({ home: base, env: { VIEWER_ROOTS: root } }) });
+		const server = await createViewerServer({ viewDir: view, home: base, env: {}, fence: createFence({ home: base, env: { VIEWER_ROOTS: root } }) });
 		const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
 		client = new Client({ name: "test", version: "0" });
 		await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
 	});
 	afterAll(async () => {
 		await client.close();
-		await rm(base, { recursive: true, force: true });
+		await removeTree(base);
 	});
 
 	test("view_file is model-visible and mounts the View; recording leases and chunk reads are app-only", async () => {

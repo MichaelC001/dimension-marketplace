@@ -25,11 +25,20 @@ export interface OpenFailureText {
 	readonly copyPath: boolean;
 }
 
+export const LIBRARY_KEY = "library";
+
+export interface LibraryTab {
+	readonly workspace?: string;
+	readonly query?: string;
+	readonly requests: number;
+}
+
 export interface ViewerState {
 	readonly tabs: readonly DocTab[];
 	readonly activeKey: string | null;
 	/** The last refusal or failure, shown until dismissed or a file opens. */
 	readonly notice: string | null;
+	readonly library: LibraryTab | null;
 }
 
 export type ViewerAction =
@@ -37,11 +46,12 @@ export type ViewerAction =
 	/** A file the server could not open: `path` is the one the error named, when it named one. */
 	| { readonly type: "failed"; readonly failure: OpenFailureText; readonly path?: string }
 	| { readonly type: "refused"; readonly message: string }
+	| { readonly type: "library"; readonly workspace?: string; readonly query?: string }
 	| { readonly type: "activate"; readonly key: string }
 	| { readonly type: "close"; readonly key: string }
 	| { readonly type: "dismiss" };
 
-export const INITIAL_STATE: ViewerState = { tabs: [], activeKey: null, notice: null };
+export const INITIAL_STATE: ViewerState = { tabs: [], activeKey: null, notice: null, library: null };
 
 /** Whether two paths name the same file as far as a name can tell: letter case and the direction of the slashes do not matter. */
 function sameFile(a: string, b: string): boolean {
@@ -59,7 +69,7 @@ export function reduce(state: ViewerState, action: ViewerAction): ViewerState {
 			const at = standing.findIndex(tab => tab.key === action.key);
 			if (at === -1) {
 				const tab: DocTab = { ...action.file, key: action.key, revision: 0, annotateRequests: asked };
-				return { tabs: [...standing, tab], activeKey: action.key, notice: null };
+				return { ...state, tabs: [...standing, tab], activeKey: action.key, notice: null };
 			}
 			// The same file again: focus it, and reload it only if it moved under us (a failed tab always reloads).
 			const existing = standing[at] as DocTab;
@@ -72,7 +82,7 @@ export function reduce(state: ViewerState, action: ViewerAction): ViewerState {
 							return changed ? { ...action.file, key: action.key, revision: existing.revision + 1, annotateRequests } : { ...existing, annotateRequests };
 						})
 					: standing;
-			return { tabs, activeKey: action.key, notice: null };
+			return { ...state, tabs, activeKey: action.key, notice: null };
 		}
 		case "failed": {
 			const { path } = action;
@@ -84,11 +94,21 @@ export function reduce(state: ViewerState, action: ViewerAction): ViewerState {
 			if (there !== undefined && there.failure === undefined) return { ...state, activeKey: there.key, notice: action.failure.message };
 			const filename = path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || path;
 			const failed: DocTab = { path, filename, kind: "binary", size: 0, mtimeMs: 0, key: there?.key ?? path, revision: 0, annotateRequests: 0, failure: action.failure };
-			return { tabs: at === -1 ? [...state.tabs, failed] : state.tabs.map((tab, index) => (index === at ? failed : tab)), activeKey: failed.key, notice: null };
+			return { ...state, tabs: at === -1 ? [...state.tabs, failed] : state.tabs.map((tab, index) => (index === at ? failed : tab)), activeKey: failed.key, notice: null };
 		}
 		case "refused":
 			return { ...state, notice: action.message };
+		case "library": {
+			const requests = (state.library?.requests ?? 0) + 1;
+			const library: LibraryTab = {
+				...(action.workspace === undefined ? {} : { workspace: action.workspace }),
+				...(action.query === undefined ? {} : { query: action.query }),
+				requests,
+			};
+			return { ...state, library, activeKey: LIBRARY_KEY, notice: null };
+		}
 		case "activate":
+			if (action.key === LIBRARY_KEY) return state.library === null ? state : { ...state, activeKey: LIBRARY_KEY };
 			return state.tabs.some(tab => tab.key === action.key) ? { ...state, activeKey: action.key } : state;
 		case "close": {
 			const at = state.tabs.findIndex(tab => tab.key === action.key);
@@ -97,7 +117,7 @@ export function reduce(state: ViewerState, action: ViewerAction): ViewerState {
 			if (state.activeKey !== action.key) return { ...state, tabs };
 			// Closing the front tab shows its right neighbour, else its left one.
 			const next = tabs[at] ?? tabs[at - 1];
-			return { ...state, tabs, activeKey: next?.key ?? null };
+			return { ...state, tabs, activeKey: next?.key ?? (state.library === null ? null : LIBRARY_KEY) };
 		}
 		case "dismiss":
 			return state.notice === null ? state : { ...state, notice: null };

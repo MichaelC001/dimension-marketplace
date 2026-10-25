@@ -285,10 +285,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path) {
-  if (!path)
+function getElementAtPath(obj, path2) {
+  if (!path2)
     return obj;
-  return path.reduce((acc, key) => acc?.[key], obj);
+  return path2.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -616,11 +616,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path, issues) {
+function prefixIssues(path2, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path);
+    iss.path.unshift(path2);
     return iss;
   });
 }
@@ -837,16 +837,16 @@ function flattenError(error51, mapper = (issue2) => issue2.message) {
 }
 function formatError(error51, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error52, path = []) => {
+  const processError = (error52, path2 = []) => {
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path2, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path2, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path2, ...issue2.path]);
       } else {
-        const fullpath = [...path, ...issue2.path];
+        const fullpath = [...path2, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -873,17 +873,17 @@ function formatError(error51, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error51, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error52, path = []) => {
+  const processError = (error52, path2 = []) => {
     var _a3, _b;
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path2, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path2, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path2, ...issue2.path]);
       } else {
-        const fullpath = [...path, ...issue2.path];
+        const fullpath = [...path2, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -915,8 +915,8 @@ function treeifyError(error51, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path) {
+  const path2 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path2) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -2944,42 +2944,42 @@ var init_schemas = __esm({
         }
         doc.write(`const newResult = {};`);
         for (const key of normalized.keys) {
-          const id = ids[key];
+          const id2 = ids[key];
           const k2 = esc(key);
           const schema = shape[key];
           const isOptionalIn = schema?._zod?.optin === "optional";
           const isOptionalOut = schema?._zod?.optout === "optional";
-          doc.write(`const ${id} = ${parseStr(key)};`);
+          doc.write(`const ${id2} = ${parseStr(key)};`);
           if (isOptionalIn && isOptionalOut) {
             doc.write(`
-        if (${id}.issues.length) {
+        if (${id2}.issues.length) {
           if (${k2} in input) {
-            payload.issues = payload.issues.concat(${id}.issues.map(iss => ({
+            payload.issues = payload.issues.concat(${id2}.issues.map(iss => ({
               ...iss,
               path: iss.path ? [${k2}, ...iss.path] : [${k2}]
             })));
           }
         }
         
-        if (${id}.value === undefined) {
+        if (${id2}.value === undefined) {
           if (${k2} in input) {
             newResult[${k2}] = undefined;
           }
         } else {
-          newResult[${k2}] = ${id}.value;
+          newResult[${k2}] = ${id2}.value;
         }
         
       `);
           } else if (!isOptionalIn) {
             doc.write(`
-        const ${id}_present = ${k2} in input;
-        if (${id}.issues.length) {
-          payload.issues = payload.issues.concat(${id}.issues.map(iss => ({
+        const ${id2}_present = ${k2} in input;
+        if (${id2}.issues.length) {
+          payload.issues = payload.issues.concat(${id2}.issues.map(iss => ({
             ...iss,
             path: iss.path ? [${k2}, ...iss.path] : [${k2}]
           })));
         }
-        if (!${id}_present && !${id}.issues.length) {
+        if (!${id2}_present && !${id2}.issues.length) {
           payload.issues.push({
             code: "invalid_type",
             expected: "nonoptional",
@@ -2988,30 +2988,30 @@ var init_schemas = __esm({
           });
         }
 
-        if (${id}_present) {
-          if (${id}.value === undefined) {
+        if (${id2}_present) {
+          if (${id2}.value === undefined) {
             newResult[${k2}] = undefined;
           } else {
-            newResult[${k2}] = ${id}.value;
+            newResult[${k2}] = ${id2}.value;
           }
         }
 
       `);
           } else {
             doc.write(`
-        if (${id}.issues.length) {
-          payload.issues = payload.issues.concat(${id}.issues.map(iss => ({
+        if (${id2}.issues.length) {
+          payload.issues = payload.issues.concat(${id2}.issues.map(iss => ({
             ...iss,
             path: iss.path ? [${k2}, ...iss.path] : [${k2}]
           })));
         }
         
-        if (${id}.value === undefined) {
+        if (${id2}.value === undefined) {
           if (${k2} in input) {
             newResult[${k2}] = undefined;
           }
         } else {
-          newResult[${k2}] = ${id}.value;
+          newResult[${k2}] = ${id2}.value;
         }
         
       `);
@@ -4286,8 +4286,8 @@ var init_be = __esm({
             const sizing = getSizing(issue2.origin);
             if (sizing) {
               const maxValue = Number(issue2.maximum);
-              const unit = getBelarusianPlural(maxValue, sizing.unit.one, sizing.unit.few, sizing.unit.many);
-              return `\u0417\u0430\u043D\u0430\u0434\u0442\u0430 \u0432\u044F\u043B\u0456\u043A\u0456: \u0447\u0430\u043A\u0430\u043B\u0430\u0441\u044F, \u0448\u0442\u043E ${issue2.origin ?? "\u0437\u043D\u0430\u0447\u044D\u043D\u043D\u0435"} \u043F\u0430\u0432\u0456\u043D\u043D\u0430 ${sizing.verb} ${adj}${issue2.maximum.toString()} ${unit}`;
+              const unit2 = getBelarusianPlural(maxValue, sizing.unit.one, sizing.unit.few, sizing.unit.many);
+              return `\u0417\u0430\u043D\u0430\u0434\u0442\u0430 \u0432\u044F\u043B\u0456\u043A\u0456: \u0447\u0430\u043A\u0430\u043B\u0430\u0441\u044F, \u0448\u0442\u043E ${issue2.origin ?? "\u0437\u043D\u0430\u0447\u044D\u043D\u043D\u0435"} \u043F\u0430\u0432\u0456\u043D\u043D\u0430 ${sizing.verb} ${adj}${issue2.maximum.toString()} ${unit2}`;
             }
             return `\u0417\u0430\u043D\u0430\u0434\u0442\u0430 \u0432\u044F\u043B\u0456\u043A\u0456: \u0447\u0430\u043A\u0430\u043B\u0430\u0441\u044F, \u0448\u0442\u043E ${issue2.origin ?? "\u0437\u043D\u0430\u0447\u044D\u043D\u043D\u0435"} \u043F\u0430\u0432\u0456\u043D\u043D\u0430 \u0431\u044B\u0446\u044C ${adj}${issue2.maximum.toString()}`;
           }
@@ -4296,8 +4296,8 @@ var init_be = __esm({
             const sizing = getSizing(issue2.origin);
             if (sizing) {
               const minValue = Number(issue2.minimum);
-              const unit = getBelarusianPlural(minValue, sizing.unit.one, sizing.unit.few, sizing.unit.many);
-              return `\u0417\u0430\u043D\u0430\u0434\u0442\u0430 \u043C\u0430\u043B\u044B: \u0447\u0430\u043A\u0430\u043B\u0430\u0441\u044F, \u0448\u0442\u043E ${issue2.origin} \u043F\u0430\u0432\u0456\u043D\u043D\u0430 ${sizing.verb} ${adj}${issue2.minimum.toString()} ${unit}`;
+              const unit2 = getBelarusianPlural(minValue, sizing.unit.one, sizing.unit.few, sizing.unit.many);
+              return `\u0417\u0430\u043D\u0430\u0434\u0442\u0430 \u043C\u0430\u043B\u044B: \u0447\u0430\u043A\u0430\u043B\u0430\u0441\u044F, \u0448\u0442\u043E ${issue2.origin} \u043F\u0430\u0432\u0456\u043D\u043D\u0430 ${sizing.verb} ${adj}${issue2.minimum.toString()} ${unit2}`;
             }
             return `\u0417\u0430\u043D\u0430\u0434\u0442\u0430 \u043C\u0430\u043B\u044B: \u0447\u0430\u043A\u0430\u043B\u0430\u0441\u044F, \u0448\u0442\u043E ${issue2.origin} \u043F\u0430\u0432\u0456\u043D\u043D\u0430 \u0431\u044B\u0446\u044C ${adj}${issue2.minimum.toString()}`;
           }
@@ -6457,8 +6457,8 @@ var init_hy = __esm({
             const sizing = getSizing(issue2.origin);
             if (sizing) {
               const maxValue = Number(issue2.maximum);
-              const unit = getArmenianPlural(maxValue, sizing.unit.one, sizing.unit.many);
-              return `\u0549\u0561\u0583\u0561\u0566\u0561\u0576\u0581 \u0574\u0565\u056E \u0561\u0580\u056A\u0565\u0584\u2024 \u057D\u057A\u0561\u057D\u057E\u0578\u0582\u0574 \u0567, \u0578\u0580 ${withDefiniteArticle(issue2.origin ?? "\u0561\u0580\u056A\u0565\u0584")} \u056F\u0578\u0582\u0576\u0565\u0576\u0561 ${adj}${issue2.maximum.toString()} ${unit}`;
+              const unit2 = getArmenianPlural(maxValue, sizing.unit.one, sizing.unit.many);
+              return `\u0549\u0561\u0583\u0561\u0566\u0561\u0576\u0581 \u0574\u0565\u056E \u0561\u0580\u056A\u0565\u0584\u2024 \u057D\u057A\u0561\u057D\u057E\u0578\u0582\u0574 \u0567, \u0578\u0580 ${withDefiniteArticle(issue2.origin ?? "\u0561\u0580\u056A\u0565\u0584")} \u056F\u0578\u0582\u0576\u0565\u0576\u0561 ${adj}${issue2.maximum.toString()} ${unit2}`;
             }
             return `\u0549\u0561\u0583\u0561\u0566\u0561\u0576\u0581 \u0574\u0565\u056E \u0561\u0580\u056A\u0565\u0584\u2024 \u057D\u057A\u0561\u057D\u057E\u0578\u0582\u0574 \u0567, \u0578\u0580 ${withDefiniteArticle(issue2.origin ?? "\u0561\u0580\u056A\u0565\u0584")} \u056C\u056B\u0576\u056B ${adj}${issue2.maximum.toString()}`;
           }
@@ -6467,8 +6467,8 @@ var init_hy = __esm({
             const sizing = getSizing(issue2.origin);
             if (sizing) {
               const minValue = Number(issue2.minimum);
-              const unit = getArmenianPlural(minValue, sizing.unit.one, sizing.unit.many);
-              return `\u0549\u0561\u0583\u0561\u0566\u0561\u0576\u0581 \u0583\u0578\u0584\u0580 \u0561\u0580\u056A\u0565\u0584\u2024 \u057D\u057A\u0561\u057D\u057E\u0578\u0582\u0574 \u0567, \u0578\u0580 ${withDefiniteArticle(issue2.origin)} \u056F\u0578\u0582\u0576\u0565\u0576\u0561 ${adj}${issue2.minimum.toString()} ${unit}`;
+              const unit2 = getArmenianPlural(minValue, sizing.unit.one, sizing.unit.many);
+              return `\u0549\u0561\u0583\u0561\u0566\u0561\u0576\u0581 \u0583\u0578\u0584\u0580 \u0561\u0580\u056A\u0565\u0584\u2024 \u057D\u057A\u0561\u057D\u057E\u0578\u0582\u0574 \u0567, \u0578\u0580 ${withDefiniteArticle(issue2.origin)} \u056F\u0578\u0582\u0576\u0565\u0576\u0561 ${adj}${issue2.minimum.toString()} ${unit2}`;
             }
             return `\u0549\u0561\u0583\u0561\u0566\u0561\u0576\u0581 \u0583\u0578\u0584\u0580 \u0561\u0580\u056A\u0565\u0584\u2024 \u057D\u057A\u0561\u057D\u057E\u0578\u0582\u0574 \u0567, \u0578\u0580 ${withDefiniteArticle(issue2.origin)} \u056C\u056B\u0576\u056B ${adj}${issue2.minimum.toString()}`;
           }
@@ -7278,18 +7278,18 @@ var init_ko = __esm({
             const adj = issue2.inclusive ? "\uC774\uD558" : "\uBBF8\uB9CC";
             const suffix = adj === "\uBBF8\uB9CC" ? "\uC774\uC5B4\uC57C \uD569\uB2C8\uB2E4" : "\uC5EC\uC57C \uD569\uB2C8\uB2E4";
             const sizing = getSizing(issue2.origin);
-            const unit = sizing?.unit ?? "\uC694\uC18C";
+            const unit2 = sizing?.unit ?? "\uC694\uC18C";
             if (sizing)
-              return `${issue2.origin ?? "\uAC12"}\uC774 \uB108\uBB34 \uD07D\uB2C8\uB2E4: ${issue2.maximum.toString()}${unit} ${adj}${suffix}`;
+              return `${issue2.origin ?? "\uAC12"}\uC774 \uB108\uBB34 \uD07D\uB2C8\uB2E4: ${issue2.maximum.toString()}${unit2} ${adj}${suffix}`;
             return `${issue2.origin ?? "\uAC12"}\uC774 \uB108\uBB34 \uD07D\uB2C8\uB2E4: ${issue2.maximum.toString()} ${adj}${suffix}`;
           }
           case "too_small": {
             const adj = issue2.inclusive ? "\uC774\uC0C1" : "\uCD08\uACFC";
             const suffix = adj === "\uC774\uC0C1" ? "\uC774\uC5B4\uC57C \uD569\uB2C8\uB2E4" : "\uC5EC\uC57C \uD569\uB2C8\uB2E4";
             const sizing = getSizing(issue2.origin);
-            const unit = sizing?.unit ?? "\uC694\uC18C";
+            const unit2 = sizing?.unit ?? "\uC694\uC18C";
             if (sizing) {
-              return `${issue2.origin ?? "\uAC12"}\uC774 \uB108\uBB34 \uC791\uC2B5\uB2C8\uB2E4: ${issue2.minimum.toString()}${unit} ${adj}${suffix}`;
+              return `${issue2.origin ?? "\uAC12"}\uC774 \uB108\uBB34 \uC791\uC2B5\uB2C8\uB2E4: ${issue2.minimum.toString()}${unit2} ${adj}${suffix}`;
             }
             return `${issue2.origin ?? "\uAC12"}\uC774 \uB108\uBB34 \uC791\uC2B5\uB2C8\uB2E4: ${issue2.minimum.toString()} ${adj}${suffix}`;
           }
@@ -8708,8 +8708,8 @@ var init_ru = __esm({
             const sizing = getSizing(issue2.origin);
             if (sizing) {
               const maxValue = Number(issue2.maximum);
-              const unit = getRussianPlural(maxValue, sizing.unit.one, sizing.unit.few, sizing.unit.many);
-              return `\u0421\u043B\u0438\u0448\u043A\u043E\u043C \u0431\u043E\u043B\u044C\u0448\u043E\u0435 \u0437\u043D\u0430\u0447\u0435\u043D\u0438\u0435: \u043E\u0436\u0438\u0434\u0430\u043B\u043E\u0441\u044C, \u0447\u0442\u043E ${issue2.origin ?? "\u0437\u043D\u0430\u0447\u0435\u043D\u0438\u0435"} \u0431\u0443\u0434\u0435\u0442 \u0438\u043C\u0435\u0442\u044C ${adj}${issue2.maximum.toString()} ${unit}`;
+              const unit2 = getRussianPlural(maxValue, sizing.unit.one, sizing.unit.few, sizing.unit.many);
+              return `\u0421\u043B\u0438\u0448\u043A\u043E\u043C \u0431\u043E\u043B\u044C\u0448\u043E\u0435 \u0437\u043D\u0430\u0447\u0435\u043D\u0438\u0435: \u043E\u0436\u0438\u0434\u0430\u043B\u043E\u0441\u044C, \u0447\u0442\u043E ${issue2.origin ?? "\u0437\u043D\u0430\u0447\u0435\u043D\u0438\u0435"} \u0431\u0443\u0434\u0435\u0442 \u0438\u043C\u0435\u0442\u044C ${adj}${issue2.maximum.toString()} ${unit2}`;
             }
             return `\u0421\u043B\u0438\u0448\u043A\u043E\u043C \u0431\u043E\u043B\u044C\u0448\u043E\u0435 \u0437\u043D\u0430\u0447\u0435\u043D\u0438\u0435: \u043E\u0436\u0438\u0434\u0430\u043B\u043E\u0441\u044C, \u0447\u0442\u043E ${issue2.origin ?? "\u0437\u043D\u0430\u0447\u0435\u043D\u0438\u0435"} \u0431\u0443\u0434\u0435\u0442 ${adj}${issue2.maximum.toString()}`;
           }
@@ -8718,8 +8718,8 @@ var init_ru = __esm({
             const sizing = getSizing(issue2.origin);
             if (sizing) {
               const minValue = Number(issue2.minimum);
-              const unit = getRussianPlural(minValue, sizing.unit.one, sizing.unit.few, sizing.unit.many);
-              return `\u0421\u043B\u0438\u0448\u043A\u043E\u043C \u043C\u0430\u043B\u0435\u043D\u044C\u043A\u043E\u0435 \u0437\u043D\u0430\u0447\u0435\u043D\u0438\u0435: \u043E\u0436\u0438\u0434\u0430\u043B\u043E\u0441\u044C, \u0447\u0442\u043E ${issue2.origin} \u0431\u0443\u0434\u0435\u0442 \u0438\u043C\u0435\u0442\u044C ${adj}${issue2.minimum.toString()} ${unit}`;
+              const unit2 = getRussianPlural(minValue, sizing.unit.one, sizing.unit.few, sizing.unit.many);
+              return `\u0421\u043B\u0438\u0448\u043A\u043E\u043C \u043C\u0430\u043B\u0435\u043D\u044C\u043A\u043E\u0435 \u0437\u043D\u0430\u0447\u0435\u043D\u0438\u0435: \u043E\u0436\u0438\u0434\u0430\u043B\u043E\u0441\u044C, \u0447\u0442\u043E ${issue2.origin} \u0431\u0443\u0434\u0435\u0442 \u0438\u043C\u0435\u0442\u044C ${adj}${issue2.minimum.toString()} ${unit2}`;
             }
             return `\u0421\u043B\u0438\u0448\u043A\u043E\u043C \u043C\u0430\u043B\u0435\u043D\u044C\u043A\u043E\u0435 \u0437\u043D\u0430\u0447\u0435\u043D\u0438\u0435: \u043E\u0436\u0438\u0434\u0430\u043B\u043E\u0441\u044C, \u0447\u0442\u043E ${issue2.origin} \u0431\u0443\u0434\u0435\u0442 ${adj}${issue2.minimum.toString()}`;
           }
@@ -11009,26 +11009,26 @@ function _array(Class2, element, params) {
   });
 }
 // @__NO_SIDE_EFFECTS__
-function _union(Class2, options, params) {
+function _union(Class2, options2, params) {
   return new Class2({
     type: "union",
-    options,
+    options: options2,
     ...normalizeParams(params)
   });
 }
-function _xor(Class2, options, params) {
+function _xor(Class2, options2, params) {
   return new Class2({
     type: "union",
-    options,
+    options: options2,
     inclusive: false,
     ...normalizeParams(params)
   });
 }
 // @__NO_SIDE_EFFECTS__
-function _discriminatedUnion(Class2, discriminator, options, params) {
+function _discriminatedUnion(Class2, discriminator, options2, params) {
   return new Class2({
     type: "union",
-    options,
+    options: options2,
     discriminator,
     ...normalizeParams(params)
   });
@@ -11447,26 +11447,26 @@ function extractDefs(ctx, schema) {
     throw new Error("Unprocessed schema. This is a bug in Zod.");
   const idToSchema = /* @__PURE__ */ new Map();
   for (const entry of ctx.seen.entries()) {
-    const id = ctx.metadataRegistry.get(entry[0])?.id;
-    if (id) {
-      const existing = idToSchema.get(id);
+    const id2 = ctx.metadataRegistry.get(entry[0])?.id;
+    if (id2) {
+      const existing = idToSchema.get(id2);
       if (existing && existing !== entry[0]) {
-        throw new Error(`Duplicate schema id "${id}" detected during JSON Schema conversion. Two different schemas cannot share the same id when converted together.`);
+        throw new Error(`Duplicate schema id "${id2}" detected during JSON Schema conversion. Two different schemas cannot share the same id when converted together.`);
       }
-      idToSchema.set(id, entry[0]);
+      idToSchema.set(id2, entry[0]);
     }
   }
   const makeURI = (entry) => {
     const defsSegment = ctx.target === "draft-2020-12" ? "$defs" : "definitions";
     if (ctx.external) {
       const externalId = ctx.external.registry.get(entry[0])?.id;
-      const uriGenerator = ctx.external.uri ?? ((id2) => id2);
+      const uriGenerator = ctx.external.uri ?? ((id3) => id3);
       if (externalId) {
         return { ref: uriGenerator(externalId) };
       }
-      const id = entry[1].defId ?? entry[1].schema.id ?? `schema${ctx.counter++}`;
-      entry[1].defId = id;
-      return { defId: id, ref: `${uriGenerator("__shared")}#/${defsSegment}/${id}` };
+      const id2 = entry[1].defId ?? entry[1].schema.id ?? `schema${ctx.counter++}`;
+      entry[1].defId = id2;
+      return { defId: id2, ref: `${uriGenerator("__shared")}#/${defsSegment}/${id2}` };
     }
     if (entry[1] === root) {
       return { ref: "#" };
@@ -11514,8 +11514,8 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         continue;
       }
     }
-    const id = ctx.metadataRegistry.get(entry[0])?.id;
-    if (id) {
+    const id2 = ctx.metadataRegistry.get(entry[0])?.id;
+    if (id2) {
       extractToDef(entry);
       continue;
     }
@@ -11611,10 +11611,10 @@ function finalize(ctx, schema) {
   } else {
   }
   if (ctx.external?.uri) {
-    const id = ctx.external.registry.get(schema)?.id;
-    if (!id)
+    const id2 = ctx.external.registry.get(schema)?.id;
+    if (!id2)
       throw new Error("Schema is missing an `id` property");
-    result.$id = ctx.external.uri(id);
+    result.$id = ctx.external.uri(id2);
   }
   Object.assign(result, root.def ?? root.schema);
   const rootMetaId = ctx.metadataRegistry.get(schema)?.id;
@@ -12054,14 +12054,14 @@ var init_json_schema_processors = __esm({
     unionProcessor = (schema, ctx, json2, params) => {
       const def = schema._zod.def;
       const isExclusive = def.inclusive === false;
-      const options = def.options.map((x, i) => process2(x, ctx, {
+      const options2 = def.options.map((x, i) => process2(x, ctx, {
         ...params,
         path: [...params.path, isExclusive ? "oneOf" : "anyOf", i]
       }));
       if (isExclusive) {
-        json2.oneOf = options;
+        json2.oneOf = options2;
       } else {
-        json2.anyOf = options;
+        json2.anyOf = options2;
       }
     };
     intersectionProcessor = (schema, ctx, json2, params) => {
@@ -13212,25 +13212,25 @@ function looseObject(shape, params) {
     ...util_exports.normalizeParams(params)
   });
 }
-function union(options, params) {
+function union(options2, params) {
   return new ZodUnion({
     type: "union",
-    options,
+    options: options2,
     ...util_exports.normalizeParams(params)
   });
 }
-function xor(options, params) {
+function xor(options2, params) {
   return new ZodXor({
     type: "union",
-    options,
+    options: options2,
     inclusive: false,
     ...util_exports.normalizeParams(params)
   });
 }
-function discriminatedUnion(discriminator, options, params) {
+function discriminatedUnion(discriminator, options2, params) {
   return new ZodDiscriminatedUnion({
     type: "union",
-    options,
+    options: options2,
     discriminator,
     ...util_exports.normalizeParams(params)
   });
@@ -14345,13 +14345,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path = ref.slice(1).split("/").filter(Boolean);
-  if (path.length === 0) {
+  const path2 = ref.slice(1).split("/").filter(Boolean);
+  if (path2.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path[0] === defsKey) {
-    const key = path[1];
+  if (path2[0] === defsKey) {
+    const key = path2[1];
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -14652,13 +14652,13 @@ function convertSchema(schema, ctx) {
   let baseSchema = convertBaseSchema(schema, ctx);
   const hasExplicitType = schema.type || schema.enum !== void 0 || schema.const !== void 0;
   if (schema.anyOf && Array.isArray(schema.anyOf)) {
-    const options = schema.anyOf.map((s) => convertSchema(s, ctx));
-    const anyOfUnion = z.union(options);
+    const options2 = schema.anyOf.map((s) => convertSchema(s, ctx));
+    const anyOfUnion = z.union(options2);
     baseSchema = hasExplicitType ? z.intersection(baseSchema, anyOfUnion) : anyOfUnion;
   }
   if (schema.oneOf && Array.isArray(schema.oneOf)) {
-    const options = schema.oneOf.map((s) => convertSchema(s, ctx));
-    const oneOfUnion = z.xor(options);
+    const options2 = schema.oneOf.map((s) => convertSchema(s, ctx));
+    const oneOfUnion = z.xor(options2);
     baseSchema = hasExplicitType ? z.intersection(baseSchema, oneOfUnion) : oneOfUnion;
   }
   if (schema.allOf && Array.isArray(schema.allOf)) {
@@ -15502,11 +15502,11 @@ var require_codegen = __commonJS({
         const rhs = this.rhs === void 0 ? "" : ` = ${this.rhs}`;
         return `${varKind} ${this.name}${rhs};` + _n;
       }
-      optimizeNames(names, constants3) {
+      optimizeNames(names, constants5) {
         if (!names[this.name.str])
           return;
         if (this.rhs)
-          this.rhs = optimizeExpr(this.rhs, names, constants3);
+          this.rhs = optimizeExpr(this.rhs, names, constants5);
         return this;
       }
       get names() {
@@ -15523,10 +15523,10 @@ var require_codegen = __commonJS({
       render({ _n }) {
         return `${this.lhs} = ${this.rhs};` + _n;
       }
-      optimizeNames(names, constants3) {
+      optimizeNames(names, constants5) {
         if (this.lhs instanceof code_1.Name && !names[this.lhs.str] && !this.sideEffects)
           return;
-        this.rhs = optimizeExpr(this.rhs, names, constants3);
+        this.rhs = optimizeExpr(this.rhs, names, constants5);
         return this;
       }
       get names() {
@@ -15587,8 +15587,8 @@ var require_codegen = __commonJS({
       optimizeNodes() {
         return `${this.code}` ? this : void 0;
       }
-      optimizeNames(names, constants3) {
-        this.code = optimizeExpr(this.code, names, constants3);
+      optimizeNames(names, constants5) {
+        this.code = optimizeExpr(this.code, names, constants5);
         return this;
       }
       get names() {
@@ -15617,12 +15617,12 @@ var require_codegen = __commonJS({
         }
         return nodes.length > 0 ? this : void 0;
       }
-      optimizeNames(names, constants3) {
+      optimizeNames(names, constants5) {
         const { nodes } = this;
         let i = nodes.length;
         while (i--) {
           const n = nodes[i];
-          if (n.optimizeNames(names, constants3))
+          if (n.optimizeNames(names, constants5))
             continue;
           subtractNames(names, n.names);
           nodes.splice(i, 1);
@@ -15675,12 +15675,12 @@ var require_codegen = __commonJS({
           return void 0;
         return this;
       }
-      optimizeNames(names, constants3) {
+      optimizeNames(names, constants5) {
         var _a3;
-        this.else = (_a3 = this.else) === null || _a3 === void 0 ? void 0 : _a3.optimizeNames(names, constants3);
-        if (!(super.optimizeNames(names, constants3) || this.else))
+        this.else = (_a3 = this.else) === null || _a3 === void 0 ? void 0 : _a3.optimizeNames(names, constants5);
+        if (!(super.optimizeNames(names, constants5) || this.else))
           return;
-        this.condition = optimizeExpr(this.condition, names, constants3);
+        this.condition = optimizeExpr(this.condition, names, constants5);
         return this;
       }
       get names() {
@@ -15703,10 +15703,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.iteration})` + super.render(opts);
       }
-      optimizeNames(names, constants3) {
-        if (!super.optimizeNames(names, constants3))
+      optimizeNames(names, constants5) {
+        if (!super.optimizeNames(names, constants5))
           return;
-        this.iteration = optimizeExpr(this.iteration, names, constants3);
+        this.iteration = optimizeExpr(this.iteration, names, constants5);
         return this;
       }
       get names() {
@@ -15742,10 +15742,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.varKind} ${this.name} ${this.loop} ${this.iterable})` + super.render(opts);
       }
-      optimizeNames(names, constants3) {
-        if (!super.optimizeNames(names, constants3))
+      optimizeNames(names, constants5) {
+        if (!super.optimizeNames(names, constants5))
           return;
-        this.iterable = optimizeExpr(this.iterable, names, constants3);
+        this.iterable = optimizeExpr(this.iterable, names, constants5);
         return this;
       }
       get names() {
@@ -15787,11 +15787,11 @@ var require_codegen = __commonJS({
         (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNodes();
         return this;
       }
-      optimizeNames(names, constants3) {
+      optimizeNames(names, constants5) {
         var _a3, _b;
-        super.optimizeNames(names, constants3);
-        (_a3 = this.catch) === null || _a3 === void 0 ? void 0 : _a3.optimizeNames(names, constants3);
-        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants3);
+        super.optimizeNames(names, constants5);
+        (_a3 = this.catch) === null || _a3 === void 0 ? void 0 : _a3.optimizeNames(names, constants5);
+        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants5);
         return this;
       }
       get names() {
@@ -16092,7 +16092,7 @@ var require_codegen = __commonJS({
     function addExprNames(names, from) {
       return from instanceof code_1._CodeOrName ? addNames(names, from.names) : names;
     }
-    function optimizeExpr(expr, names, constants3) {
+    function optimizeExpr(expr, names, constants5) {
       if (expr instanceof code_1.Name)
         return replaceName(expr);
       if (!canOptimize(expr))
@@ -16107,14 +16107,14 @@ var require_codegen = __commonJS({
         return items;
       }, []));
       function replaceName(n) {
-        const c = constants3[n.str];
+        const c = constants5[n.str];
         if (c === void 0 || names[n.str] !== 1)
           return n;
         delete names[n.str];
         return c;
       }
       function canOptimize(e) {
-        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants3[c.str] !== void 0);
+        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants5[c.str] !== void 0);
       }
     }
     function subtractNames(names, from) {
@@ -17327,10 +17327,10 @@ var require_resolve = __commonJS({
       }
       return count;
     }
-    function getFullPath(resolver, id = "", normalize) {
+    function getFullPath(resolver, id2 = "", normalize) {
       if (normalize !== false)
-        id = normalizeId(id);
-      const p2 = resolver.parse(id);
+        id2 = normalizeId(id2);
+      const p2 = resolver.parse(id2);
       return _getFullPath(resolver, p2);
     }
     exports.getFullPath = getFullPath;
@@ -17340,13 +17340,13 @@ var require_resolve = __commonJS({
     }
     exports._getFullPath = _getFullPath;
     var TRAILING_SLASH_HASH = /#\/?$/;
-    function normalizeId(id) {
-      return id ? id.replace(TRAILING_SLASH_HASH, "") : "";
+    function normalizeId(id2) {
+      return id2 ? id2.replace(TRAILING_SLASH_HASH, "") : "";
     }
     exports.normalizeId = normalizeId;
-    function resolveUrl(resolver, baseId, id) {
-      id = normalizeId(id);
-      return resolver.resolve(baseId, id);
+    function resolveUrl(resolver, baseId, id2) {
+      id2 = normalizeId(id2);
+      return resolver.resolve(baseId, id2);
     }
     exports.resolveUrl = resolveUrl;
     var ANCHOR = /^[a-z_][-a-z0-9._]*$/i;
@@ -18076,7 +18076,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve.call(this, root, ref);
+      let _sch = resolve3.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a3 = root.localRefs) === null || _a3 === void 0 ? void 0 : _a3[ref];
         const { schemaId } = this.opts;
@@ -18103,7 +18103,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve(root, ref) {
+    function resolve3(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -18116,8 +18116,8 @@ var require_compile = __commonJS({
       if (Object.keys(root.schema).length > 0 && refPath === baseId) {
         return getJsonPointer.call(this, p2, root);
       }
-      const id = (0, resolve_1.normalizeId)(refPath);
-      const schOrRef = this.refs[id] || this.schemas[id];
+      const id2 = (0, resolve_1.normalizeId)(refPath);
+      const schOrRef = this.refs[id2] || this.schemas[id2];
       if (typeof schOrRef == "string") {
         const sch = resolveSchema.call(this, root, schOrRef);
         if (typeof (sch === null || sch === void 0 ? void 0 : sch.schema) !== "object")
@@ -18128,7 +18128,7 @@ var require_compile = __commonJS({
         return;
       if (!schOrRef.validate)
         compileSchema.call(this, schOrRef);
-      if (id === (0, resolve_1.normalizeId)(ref)) {
+      if (id2 === (0, resolve_1.normalizeId)(ref)) {
         const { schema } = schOrRef;
         const { schemaId } = this.opts;
         const schId = schema[schemaId];
@@ -18321,8 +18321,8 @@ var require_utils = __commonJS({
       }
       return ind;
     }
-    function removeDotSegments(path) {
-      let input = path;
+    function removeDotSegments(path2) {
+      let input = path2;
       const output = [];
       let nextSlash = -1;
       let len = 0;
@@ -18574,57 +18574,57 @@ var require_schemes = __commonJS({
         wsComponent.secure = void 0;
       }
       if (wsComponent.resourceName) {
-        const [path, query] = wsComponent.resourceName.split("?");
-        wsComponent.path = path && path !== "/" ? path : void 0;
+        const [path2, query] = wsComponent.resourceName.split("?");
+        wsComponent.path = path2 && path2 !== "/" ? path2 : void 0;
         wsComponent.query = query;
         wsComponent.resourceName = void 0;
       }
       wsComponent.fragment = void 0;
       return wsComponent;
     }
-    function urnParse(urnComponent, options) {
+    function urnParse(urnComponent, options2) {
       if (!urnComponent.path) {
         urnComponent.error = "URN can not be parsed";
         return urnComponent;
       }
       const matches = urnComponent.path.match(URN_REG);
       if (matches) {
-        const scheme = options.scheme || urnComponent.scheme || "urn";
+        const scheme = options2.scheme || urnComponent.scheme || "urn";
         urnComponent.nid = matches[1].toLowerCase();
         urnComponent.nss = matches[2];
-        const urnScheme = `${scheme}:${options.nid || urnComponent.nid}`;
+        const urnScheme = `${scheme}:${options2.nid || urnComponent.nid}`;
         const schemeHandler = getSchemeHandler(urnScheme);
         urnComponent.path = void 0;
         if (schemeHandler) {
-          urnComponent = schemeHandler.parse(urnComponent, options);
+          urnComponent = schemeHandler.parse(urnComponent, options2);
         }
       } else {
         urnComponent.error = urnComponent.error || "URN can not be parsed.";
       }
       return urnComponent;
     }
-    function urnSerialize(urnComponent, options) {
+    function urnSerialize(urnComponent, options2) {
       if (urnComponent.nid === void 0) {
         throw new Error("URN without nid cannot be serialized");
       }
-      const scheme = options.scheme || urnComponent.scheme || "urn";
+      const scheme = options2.scheme || urnComponent.scheme || "urn";
       const nid = urnComponent.nid.toLowerCase();
-      const urnScheme = `${scheme}:${options.nid || nid}`;
+      const urnScheme = `${scheme}:${options2.nid || nid}`;
       const schemeHandler = getSchemeHandler(urnScheme);
       if (schemeHandler) {
-        urnComponent = schemeHandler.serialize(urnComponent, options);
+        urnComponent = schemeHandler.serialize(urnComponent, options2);
       }
       const uriComponent = urnComponent;
       const nss = urnComponent.nss;
-      uriComponent.path = `${nid || options.nid}:${nss}`;
-      options.skipEscape = true;
+      uriComponent.path = `${nid || options2.nid}:${nss}`;
+      options2.skipEscape = true;
       return uriComponent;
     }
-    function urnuuidParse(urnComponent, options) {
+    function urnuuidParse(urnComponent, options2) {
       const uuidComponent = urnComponent;
       uuidComponent.uuid = uuidComponent.nss;
       uuidComponent.nss = void 0;
-      if (!options.tolerant && (!uuidComponent.uuid || !isUUID(uuidComponent.uuid))) {
+      if (!options2.tolerant && (!uuidComponent.uuid || !isUUID(uuidComponent.uuid))) {
         uuidComponent.error = uuidComponent.error || "UUID is not valid.";
       }
       return uuidComponent;
@@ -18724,30 +18724,30 @@ var require_fast_uri = __commonJS({
     "use strict";
     var { normalizeIPv6, removeDotSegments, recomposeAuthority, normalizePercentEncoding, normalizePathEncoding, escapePreservingEscapes, reescapeHostDelimiters, isIPv4, nonSimpleDomain } = require_utils();
     var { SCHEMES, getSchemeHandler } = require_schemes();
-    function normalize(uri, options) {
+    function normalize(uri, options2) {
       if (typeof uri === "string") {
         uri = /** @type {T} */
-        normalizeString(uri, options);
+        normalizeString(uri, options2);
       } else if (typeof uri === "object") {
         uri = /** @type {T} */
-        parse3(serialize(uri, options), options);
+        parse3(serialize(uri, options2), options2);
       }
       return uri;
     }
-    function resolve(baseURI, relativeURI, options) {
-      const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
+    function resolve3(baseURI, relativeURI, options2) {
+      const schemelessOptions = options2 ? Object.assign({ scheme: "null" }, options2) : { scheme: "null" };
       const resolved = resolveComponent(parse3(baseURI, schemelessOptions), parse3(relativeURI, schemelessOptions), schemelessOptions, true);
       schemelessOptions.skipEscape = true;
       return serialize(resolved, schemelessOptions);
     }
-    function resolveComponent(base, relative, options, skipNormalization) {
+    function resolveComponent(base, relative, options2, skipNormalization) {
       const target = {};
       if (!skipNormalization) {
-        base = parse3(serialize(base, options), options);
-        relative = parse3(serialize(relative, options), options);
+        base = parse3(serialize(base, options2), options2);
+        relative = parse3(serialize(relative, options2), options2);
       }
-      options = options || {};
-      if (!options.tolerant && relative.scheme) {
+      options2 = options2 || {};
+      if (!options2.tolerant && relative.scheme) {
         target.scheme = relative.scheme;
         target.userinfo = relative.userinfo;
         target.host = relative.host;
@@ -18793,9 +18793,9 @@ var require_fast_uri = __commonJS({
       target.fragment = relative.fragment;
       return target;
     }
-    function equal(uriA, uriB, options) {
-      const normalizedA = normalizeComparableURI(uriA, options);
-      const normalizedB = normalizeComparableURI(uriB, options);
+    function equal(uriA, uriB, options2) {
+      const normalizedA = normalizeComparableURI(uriA, options2);
+      const normalizedB = normalizeComparableURI(uriB, options2);
       return normalizedA !== void 0 && normalizedB !== void 0 && normalizedA.toLowerCase() === normalizedB.toLowerCase();
     }
     function serialize(cmpts, opts) {
@@ -18815,12 +18815,12 @@ var require_fast_uri = __commonJS({
         secure: cmpts.secure,
         error: ""
       };
-      const options = Object.assign({}, opts);
+      const options2 = Object.assign({}, opts);
       const uriTokens = [];
-      const schemeHandler = getSchemeHandler(options.scheme || component.scheme);
-      if (schemeHandler && schemeHandler.serialize) schemeHandler.serialize(component, options);
+      const schemeHandler = getSchemeHandler(options2.scheme || component.scheme);
+      if (schemeHandler && schemeHandler.serialize) schemeHandler.serialize(component, options2);
       if (component.path !== void 0) {
-        if (!options.skipEscape) {
+        if (!options2.skipEscape) {
           component.path = escapePreservingEscapes(component.path);
           if (component.scheme !== void 0) {
             component.path = component.path.split("%3A").join(":");
@@ -18829,12 +18829,12 @@ var require_fast_uri = __commonJS({
           component.path = normalizePercentEncoding(component.path);
         }
       }
-      if (options.reference !== "suffix" && component.scheme) {
+      if (options2.reference !== "suffix" && component.scheme) {
         uriTokens.push(component.scheme, ":");
       }
       const authority = recomposeAuthority(component);
       if (authority !== void 0) {
-        if (options.reference !== "suffix") {
+        if (options2.reference !== "suffix") {
           uriTokens.push("//");
         }
         uriTokens.push(authority);
@@ -18844,7 +18844,7 @@ var require_fast_uri = __commonJS({
       }
       if (component.path !== void 0) {
         let s = component.path;
-        if (!options.absolutePath && (!schemeHandler || !schemeHandler.absolutePath)) {
+        if (!options2.absolutePath && (!schemeHandler || !schemeHandler.absolutePath)) {
           s = removeDotSegments(s);
         }
         if (authority === void 0 && s[0] === "/" && s[1] === "/") {
@@ -18872,7 +18872,7 @@ var require_fast_uri = __commonJS({
       return void 0;
     }
     function parseWithStatus(uri, opts) {
-      const options = Object.assign({}, opts);
+      const options2 = Object.assign({}, opts);
       const parsed = {
         scheme: void 0,
         userinfo: void 0,
@@ -18884,9 +18884,9 @@ var require_fast_uri = __commonJS({
       };
       let malformedAuthorityOrPort = false;
       let isIP = false;
-      if (options.reference === "suffix") {
-        if (options.scheme) {
-          uri = options.scheme + ":" + uri;
+      if (options2.reference === "suffix") {
+        if (options2.scheme) {
+          uri = options2.scheme + ":" + uri;
         } else {
           uri = "//" + uri;
         }
@@ -18932,12 +18932,12 @@ var require_fast_uri = __commonJS({
         } else {
           parsed.reference = "uri";
         }
-        if (options.reference && options.reference !== "suffix" && options.reference !== parsed.reference) {
-          parsed.error = parsed.error || "URI is not a " + options.reference + " reference.";
+        if (options2.reference && options2.reference !== "suffix" && options2.reference !== parsed.reference) {
+          parsed.error = parsed.error || "URI is not a " + options2.reference + " reference.";
         }
-        const schemeHandler = getSchemeHandler(options.scheme || parsed.scheme);
-        if (!options.unicodeSupport && (!schemeHandler || !schemeHandler.unicodeSupport)) {
-          if (parsed.host && (options.domainHost || schemeHandler && schemeHandler.domainHost) && isIP === false && nonSimpleDomain(parsed.host)) {
+        const schemeHandler = getSchemeHandler(options2.scheme || parsed.scheme);
+        if (!options2.unicodeSupport && (!schemeHandler || !schemeHandler.unicodeSupport)) {
+          if (parsed.host && (options2.domainHost || schemeHandler && schemeHandler.domainHost) && isIP === false && nonSimpleDomain(parsed.host)) {
             try {
               parsed.host = new URL("http://" + parsed.host).hostname;
             } catch (e) {
@@ -18966,7 +18966,7 @@ var require_fast_uri = __commonJS({
           }
         }
         if (schemeHandler && schemeHandler.parse) {
-          schemeHandler.parse(parsed, options);
+          schemeHandler.parse(parsed, options2);
         }
       } else {
         parsed.error = parsed.error || "URI can not be parsed.";
@@ -18998,7 +18998,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve,
+      resolve: resolve3,
       resolveComponent,
       equal,
       serialize,
@@ -19251,15 +19251,15 @@ var require_core = __commonJS({
             this.addSchema(sch, void 0, _meta, _validateSchema);
           return this;
         }
-        let id;
+        let id2;
         if (typeof schema === "object") {
           const { schemaId } = this.opts;
-          id = schema[schemaId];
-          if (id !== void 0 && typeof id != "string") {
+          id2 = schema[schemaId];
+          if (id2 !== void 0 && typeof id2 != "string") {
             throw new Error(`schema ${schemaId} must be string`);
           }
         }
-        key = (0, resolve_1.normalizeId)(key || id);
+        key = (0, resolve_1.normalizeId)(key || id2);
         this._checkUnique(key);
         this.schemas[key] = this._addSchema(schema, _meta, key, _validateSchema, true);
         return this;
@@ -19338,11 +19338,11 @@ var require_core = __commonJS({
           case "object": {
             const cacheKey = schemaKeyRef;
             this._cache.delete(cacheKey);
-            let id = schemaKeyRef[this.opts.schemaId];
-            if (id) {
-              id = (0, resolve_1.normalizeId)(id);
-              delete this.schemas[id];
-              delete this.refs[id];
+            let id2 = schemaKeyRef[this.opts.schemaId];
+            if (id2) {
+              id2 = (0, resolve_1.normalizeId)(id2);
+              delete this.schemas[id2];
+              delete this.refs[id2];
             }
             return this;
           }
@@ -19449,10 +19449,10 @@ var require_core = __commonJS({
         }
       }
       _addSchema(schema, meta3, baseId, validateSchema = this.opts.validateSchema, addSchema = this.opts.addUsedSchema) {
-        let id;
+        let id2;
         const { schemaId } = this.opts;
         if (typeof schema == "object") {
-          id = schema[schemaId];
+          id2 = schema[schemaId];
         } else {
           if (this.opts.jtd)
             throw new Error("schema must be object");
@@ -19462,7 +19462,7 @@ var require_core = __commonJS({
         let sch = this._cache.get(schema);
         if (sch !== void 0)
           return sch;
-        baseId = (0, resolve_1.normalizeId)(id || baseId);
+        baseId = (0, resolve_1.normalizeId)(id2 || baseId);
         const localRefs = resolve_1.getSchemaRefs.call(this, schema, baseId);
         sch = new compile_1.SchemaEnv({ schema, schemaId, meta: meta3, baseId, localRefs });
         this._cache.set(sch.schema, sch);
@@ -19475,9 +19475,9 @@ var require_core = __commonJS({
           this.validateSchema(schema, true);
         return sch;
       }
-      _checkUnique(id) {
-        if (this.schemas[id] || this.refs[id]) {
-          throw new Error(`schema with key or id "${id}" already exists`);
+      _checkUnique(id2) {
+        if (this.schemas[id2] || this.refs[id2]) {
+          throw new Error(`schema with key or id "${id2}" already exists`);
         }
       }
       _compileSchemaEnv(sch) {
@@ -19502,10 +19502,10 @@ var require_core = __commonJS({
     Ajv2.ValidationError = validation_error_1.default;
     Ajv2.MissingRefError = ref_error_1.default;
     exports.default = Ajv2;
-    function checkOptions(checkOpts, options, msg, log = "error") {
+    function checkOptions(checkOpts, options2, msg, log = "error") {
       for (const key in checkOpts) {
         const opt = key;
-        if (opt in options)
+        if (opt in options2)
           this.logger[log](`${msg}: option ${key}. ${checkOpts[opt]}`);
       }
     }
@@ -23598,21 +23598,21 @@ var StdioServerTransport = class {
     this.onclose?.();
   }
   send(message) {
-    return new Promise((resolve) => {
+    return new Promise((resolve3) => {
       const json2 = serializeMessage(message);
       if (this._stdout.write(json2)) {
-        resolve();
+        resolve3();
       } else {
-        this._stdout.once("drain", resolve);
+        this._stdout.once("drain", resolve3);
       }
     });
   }
 };
 
 // src/server.ts
-import { readdir, readFile } from "node:fs/promises";
+import { readdir as readdir3, readFile as readFile4 } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, extname, join } from "node:path";
+import { extname as extname2, join as join5 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // ../../../../node_modules/zod/v3/helpers/util.js
@@ -23974,8 +23974,8 @@ function getErrorMap2() {
 
 // ../../../../node_modules/zod/v3/helpers/parseUtil.js
 var makeIssue = (params) => {
-  const { data, path, errorMaps, issueData } = params;
-  const fullPath = [...path, ...issueData.path || []];
+  const { data, path: path2, errorMaps, issueData } = params;
+  const fullPath = [...path2, ...issueData.path || []];
   const fullIssue = {
     ...issueData,
     path: fullPath
@@ -24090,11 +24090,11 @@ var errorUtil;
 
 // ../../../../node_modules/zod/v3/types.js
 var ParseInputLazyPath = class {
-  constructor(parent, value, path, key) {
+  constructor(parent, value, path2, key) {
     this._cachedPath = [];
     this.parent = parent;
     this.data = value;
-    this._path = path;
+    this._path = path2;
     this._key = key;
   }
   get path() {
@@ -24861,48 +24861,48 @@ var ZodString2 = class _ZodString2 extends ZodType2 {
       ...errorUtil.errToObj(message)
     });
   }
-  jwt(options) {
-    return this._addCheck({ kind: "jwt", ...errorUtil.errToObj(options) });
+  jwt(options2) {
+    return this._addCheck({ kind: "jwt", ...errorUtil.errToObj(options2) });
   }
-  ip(options) {
-    return this._addCheck({ kind: "ip", ...errorUtil.errToObj(options) });
+  ip(options2) {
+    return this._addCheck({ kind: "ip", ...errorUtil.errToObj(options2) });
   }
-  cidr(options) {
-    return this._addCheck({ kind: "cidr", ...errorUtil.errToObj(options) });
+  cidr(options2) {
+    return this._addCheck({ kind: "cidr", ...errorUtil.errToObj(options2) });
   }
-  datetime(options) {
-    if (typeof options === "string") {
+  datetime(options2) {
+    if (typeof options2 === "string") {
       return this._addCheck({
         kind: "datetime",
         precision: null,
         offset: false,
         local: false,
-        message: options
+        message: options2
       });
     }
     return this._addCheck({
       kind: "datetime",
-      precision: typeof options?.precision === "undefined" ? null : options?.precision,
-      offset: options?.offset ?? false,
-      local: options?.local ?? false,
-      ...errorUtil.errToObj(options?.message)
+      precision: typeof options2?.precision === "undefined" ? null : options2?.precision,
+      offset: options2?.offset ?? false,
+      local: options2?.local ?? false,
+      ...errorUtil.errToObj(options2?.message)
     });
   }
   date(message) {
     return this._addCheck({ kind: "date", message });
   }
-  time(options) {
-    if (typeof options === "string") {
+  time(options2) {
+    if (typeof options2 === "string") {
       return this._addCheck({
         kind: "time",
         precision: null,
-        message: options
+        message: options2
       });
     }
     return this._addCheck({
       kind: "time",
-      precision: typeof options?.precision === "undefined" ? null : options?.precision,
-      ...errorUtil.errToObj(options?.message)
+      precision: typeof options2?.precision === "undefined" ? null : options2?.precision,
+      ...errorUtil.errToObj(options2?.message)
     });
   }
   duration(message) {
@@ -24915,12 +24915,12 @@ var ZodString2 = class _ZodString2 extends ZodType2 {
       ...errorUtil.errToObj(message)
     });
   }
-  includes(value, options) {
+  includes(value, options2) {
     return this._addCheck({
       kind: "includes",
       value,
-      position: options?.position,
-      ...errorUtil.errToObj(options?.message)
+      position: options2?.position,
+      ...errorUtil.errToObj(options2?.message)
     });
   }
   startsWith(value, message) {
@@ -26204,7 +26204,7 @@ ZodObject2.lazycreate = (shape, params) => {
 var ZodUnion2 = class extends ZodType2 {
   _parse(input) {
     const { ctx } = this._processInputParams(input);
-    const options = this._def.options;
+    const options2 = this._def.options;
     function handleResults(results) {
       for (const result of results) {
         if (result.result.status === "valid") {
@@ -26225,7 +26225,7 @@ var ZodUnion2 = class extends ZodType2 {
       return INVALID;
     }
     if (ctx.common.async) {
-      return Promise.all(options.map(async (option) => {
+      return Promise.all(options2.map(async (option) => {
         const childCtx = {
           ...ctx,
           common: {
@@ -26246,7 +26246,7 @@ var ZodUnion2 = class extends ZodType2 {
     } else {
       let dirty = void 0;
       const issues = [];
-      for (const option of options) {
+      for (const option of options2) {
         const childCtx = {
           ...ctx,
           common: {
@@ -26376,9 +26376,9 @@ var ZodDiscriminatedUnion2 = class _ZodDiscriminatedUnion extends ZodType2 {
    * @param types an array of object schemas
    * @param params
    */
-  static create(discriminator, options, params) {
+  static create(discriminator, options2, params) {
     const optionsMap = /* @__PURE__ */ new Map();
-    for (const type of options) {
+    for (const type of options2) {
       const discriminatorValues = getDiscriminator(type.shape[discriminator]);
       if (!discriminatorValues.length) {
         throw new Error(`A discriminator value for key \`${discriminator}\` could not be extracted from all schema options`);
@@ -26393,7 +26393,7 @@ var ZodDiscriminatedUnion2 = class _ZodDiscriminatedUnion extends ZodType2 {
     return new _ZodDiscriminatedUnion({
       typeName: ZodFirstPartyTypeKind2.ZodDiscriminatedUnion,
       discriminator,
-      options,
+      options: options2,
       optionsMap,
       ...processCreateParams(params)
     });
@@ -27725,17 +27725,17 @@ var defaultOptions = {
   nameStrategy: "ref",
   openAiAnyTypeName: "OpenAiAnyType"
 };
-var getDefaultOptions = (options) => typeof options === "string" ? {
+var getDefaultOptions = (options2) => typeof options2 === "string" ? {
   ...defaultOptions,
-  name: options
+  name: options2
 } : {
   ...defaultOptions,
-  ...options
+  ...options2
 };
 
 // ../../../../node_modules/zod-to-json-schema/dist/esm/Refs.js
-var getRefs = (options) => {
-  const _options = getDefaultOptions(options);
+var getRefs = (options2) => {
+  const _options = getDefaultOptions(options2);
   const currentPath = _options.name !== void 0 ? [..._options.basePath, _options.definitionPath, _options.name] : _options.basePath;
   return {
     ..._options,
@@ -28472,17 +28472,17 @@ var primitiveMappings = {
 function parseUnionDef(def, refs) {
   if (refs.target === "openApi3")
     return asAnyOf(def, refs);
-  const options = def.options instanceof Map ? Array.from(def.options.values()) : def.options;
-  if (options.every((x) => x._def.typeName in primitiveMappings && (!x._def.checks || !x._def.checks.length))) {
-    const types = options.reduce((types2, x) => {
+  const options2 = def.options instanceof Map ? Array.from(def.options.values()) : def.options;
+  if (options2.every((x) => x._def.typeName in primitiveMappings && (!x._def.checks || !x._def.checks.length))) {
+    const types = options2.reduce((types2, x) => {
       const type = primitiveMappings[x._def.typeName];
       return type && !types2.includes(type) ? [...types2, type] : types2;
     }, []);
     return {
       type: types.length > 1 ? types : types[0]
     };
-  } else if (options.every((x) => x._def.typeName === "ZodLiteral" && !x.description)) {
-    const types = options.reduce((acc, x) => {
+  } else if (options2.every((x) => x._def.typeName === "ZodLiteral" && !x.description)) {
+    const types = options2.reduce((acc, x) => {
       const type = typeof x._def.value;
       switch (type) {
         case "string":
@@ -28501,19 +28501,19 @@ function parseUnionDef(def, refs) {
           return acc;
       }
     }, []);
-    if (types.length === options.length) {
+    if (types.length === options2.length) {
       const uniqueTypes = types.filter((x, i, a) => a.indexOf(x) === i);
       return {
         type: uniqueTypes.length > 1 ? uniqueTypes : uniqueTypes[0],
-        enum: options.reduce((acc, x) => {
+        enum: options2.reduce((acc, x) => {
           return acc.includes(x._def.value) ? acc : [...acc, x._def.value];
         }, [])
       };
     }
-  } else if (options.every((x) => x._def.typeName === "ZodEnum")) {
+  } else if (options2.every((x) => x._def.typeName === "ZodEnum")) {
     return {
       type: "string",
-      enum: options.reduce((acc, x) => [
+      enum: options2.reduce((acc, x) => [
         ...acc,
         ...x._def.values.filter((x2) => !acc.includes(x2))
       ], [])
@@ -28922,21 +28922,21 @@ var addMeta = (def, refs, jsonSchema) => {
 };
 
 // ../../../../node_modules/zod-to-json-schema/dist/esm/zodToJsonSchema.js
-var zodToJsonSchema = (schema, options) => {
-  const refs = getRefs(options);
-  let definitions = typeof options === "object" && options.definitions ? Object.entries(options.definitions).reduce((acc, [name2, schema2]) => ({
+var zodToJsonSchema = (schema, options2) => {
+  const refs = getRefs(options2);
+  let definitions = typeof options2 === "object" && options2.definitions ? Object.entries(options2.definitions).reduce((acc, [name2, schema2]) => ({
     ...acc,
     [name2]: parseDef(schema2._def, {
       ...refs,
       currentPath: [...refs.basePath, refs.definitionPath, name2]
     }, true) ?? parseAnyDef(refs)
   }), {}) : void 0;
-  const name = typeof options === "string" ? options : options?.nameStrategy === "title" ? void 0 : options?.name;
+  const name = typeof options2 === "string" ? options2 : options2?.nameStrategy === "title" ? void 0 : options2?.name;
   const main = parseDef(schema._def, name === void 0 ? refs : {
     ...refs,
     currentPath: [...refs.basePath, refs.definitionPath, name]
   }, false) ?? parseAnyDef(refs);
-  const title = typeof options === "object" && options.name !== void 0 && options.nameStrategy === "title" ? options.name : void 0;
+  const title = typeof options2 === "object" && options2.name !== void 0 && options2.nameStrategy === "title" ? options2.name : void 0;
   if (title !== void 0) {
     main.title = title;
   }
@@ -29303,11 +29303,11 @@ var Protocol = class {
         }
         await this.notification(notification, notificationOptions);
       },
-      sendRequest: async (r2, resultSchema, options) => {
+      sendRequest: async (r2, resultSchema, options2) => {
         if (abortController.signal.aborted) {
           throw new McpError(ErrorCode.ConnectionClosed, "Request was cancelled");
         }
-        const requestOptions = { ...options, relatedRequestId: request.id };
+        const requestOptions = { ...options2, relatedRequestId: request.id };
         if (relatedTaskId && !requestOptions.relatedTask) {
           requestOptions.relatedTask = { taskId: relatedTaskId };
         }
@@ -29476,11 +29476,11 @@ var Protocol = class {
    *
    * @experimental Use `client.experimental.tasks.requestStream()` to access this method.
    */
-  async *requestStream(request, resultSchema, options) {
-    const { task } = options ?? {};
+  async *requestStream(request, resultSchema, options2) {
+    const { task } = options2 ?? {};
     if (!task) {
       try {
-        const result = await this.request(request, resultSchema, options);
+        const result = await this.request(request, resultSchema, options2);
         yield { type: "result", result };
       } catch (error51) {
         yield {
@@ -29492,7 +29492,7 @@ var Protocol = class {
     }
     let taskId;
     try {
-      const createResult = await this.request(request, CreateTaskResultSchema, options);
+      const createResult = await this.request(request, CreateTaskResultSchema, options2);
       if (createResult.task) {
         taskId = createResult.task.taskId;
         yield { type: "taskCreated", task: createResult.task };
@@ -29500,11 +29500,11 @@ var Protocol = class {
         throw new McpError(ErrorCode.InternalError, "Task creation did not return a task");
       }
       while (true) {
-        const task2 = await this.getTask({ taskId }, options);
+        const task2 = await this.getTask({ taskId }, options2);
         yield { type: "taskStatus", task: task2 };
         if (isTerminal(task2.status)) {
           if (task2.status === "completed") {
-            const result = await this.getTaskResult({ taskId }, resultSchema, options);
+            const result = await this.getTaskResult({ taskId }, resultSchema, options2);
             yield { type: "result", result };
           } else if (task2.status === "failed") {
             yield {
@@ -29520,13 +29520,13 @@ var Protocol = class {
           return;
         }
         if (task2.status === "input_required") {
-          const result = await this.getTaskResult({ taskId }, resultSchema, options);
+          const result = await this.getTaskResult({ taskId }, resultSchema, options2);
           yield { type: "result", result };
           return;
         }
         const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-        await new Promise((resolve) => setTimeout(resolve, pollInterval));
-        options?.signal?.throwIfAborted();
+        await new Promise((resolve3) => setTimeout(resolve3, pollInterval));
+        options2?.signal?.throwIfAborted();
       }
     } catch (error51) {
       yield {
@@ -29540,9 +29540,9 @@ var Protocol = class {
    *
    * Do not use this method to emit notifications! Use notification() instead.
    */
-  request(request, resultSchema, options) {
-    const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-    return new Promise((resolve, reject) => {
+  request(request, resultSchema, options2) {
+    const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options2 ?? {};
+    return new Promise((resolve3, reject) => {
       const earlyReject = (error51) => {
         reject(error51);
       };
@@ -29561,15 +29561,15 @@ var Protocol = class {
           return;
         }
       }
-      options?.signal?.throwIfAborted();
+      options2?.signal?.throwIfAborted();
       const messageId = this._requestMessageId++;
       const jsonrpcRequest = {
         ...request,
         jsonrpc: "2.0",
         id: messageId
       };
-      if (options?.onprogress) {
-        this._progressHandlers.set(messageId, options.onprogress);
+      if (options2?.onprogress) {
+        this._progressHandlers.set(messageId, options2.onprogress);
         jsonrpcRequest.params = {
           ...request.params,
           _meta: {
@@ -29609,7 +29609,7 @@ var Protocol = class {
         reject(error51);
       };
       this._responseHandlers.set(messageId, (response) => {
-        if (options?.signal?.aborted) {
+        if (options2?.signal?.aborted) {
           return;
         }
         if (response instanceof Error) {
@@ -29620,18 +29620,18 @@ var Protocol = class {
           if (!parseResult.success) {
             reject(parseResult.error);
           } else {
-            resolve(parseResult.data);
+            resolve3(parseResult.data);
           }
         } catch (error51) {
           reject(error51);
         }
       });
-      options?.signal?.addEventListener("abort", () => {
-        cancel(options?.signal?.reason);
+      options2?.signal?.addEventListener("abort", () => {
+        cancel(options2?.signal?.reason);
       });
-      const timeout = options?.timeout ?? DEFAULT_REQUEST_TIMEOUT_MSEC;
+      const timeout = options2?.timeout ?? DEFAULT_REQUEST_TIMEOUT_MSEC;
       const timeoutHandler = () => cancel(McpError.fromError(ErrorCode.RequestTimeout, "Request timed out", { timeout }));
-      this._setupTimeout(messageId, timeout, options?.maxTotalTimeout, timeoutHandler, options?.resetTimeoutOnProgress ?? false);
+      this._setupTimeout(messageId, timeout, options2?.maxTotalTimeout, timeoutHandler, options2?.resetTimeoutOnProgress ?? false);
       const relatedTaskId = relatedTask?.taskId;
       if (relatedTaskId) {
         const responseResolver = (response) => {
@@ -29664,42 +29664,42 @@ var Protocol = class {
    *
    * @experimental Use `client.experimental.tasks.getTask()` to access this method.
    */
-  async getTask(params, options) {
-    return this.request({ method: "tasks/get", params }, GetTaskResultSchema, options);
+  async getTask(params, options2) {
+    return this.request({ method: "tasks/get", params }, GetTaskResultSchema, options2);
   }
   /**
    * Retrieves the result of a completed task.
    *
    * @experimental Use `client.experimental.tasks.getTaskResult()` to access this method.
    */
-  async getTaskResult(params, resultSchema, options) {
-    return this.request({ method: "tasks/result", params }, resultSchema, options);
+  async getTaskResult(params, resultSchema, options2) {
+    return this.request({ method: "tasks/result", params }, resultSchema, options2);
   }
   /**
    * Lists tasks, optionally starting from a pagination cursor.
    *
    * @experimental Use `client.experimental.tasks.listTasks()` to access this method.
    */
-  async listTasks(params, options) {
-    return this.request({ method: "tasks/list", params }, ListTasksResultSchema, options);
+  async listTasks(params, options2) {
+    return this.request({ method: "tasks/list", params }, ListTasksResultSchema, options2);
   }
   /**
    * Cancels a specific task.
    *
    * @experimental Use `client.experimental.tasks.cancelTask()` to access this method.
    */
-  async cancelTask(params, options) {
-    return this.request({ method: "tasks/cancel", params }, CancelTaskResultSchema, options);
+  async cancelTask(params, options2) {
+    return this.request({ method: "tasks/cancel", params }, CancelTaskResultSchema, options2);
   }
   /**
    * Emits a notification, which is a one-way message that does not expect a response.
    */
-  async notification(notification, options) {
+  async notification(notification, options2) {
     if (!this._transport) {
       throw new Error("Not connected");
     }
     this.assertNotificationCapability(notification.method);
-    const relatedTaskId = options?.relatedTask?.taskId;
+    const relatedTaskId = options2?.relatedTask?.taskId;
     if (relatedTaskId) {
       const jsonrpcNotification2 = {
         ...notification,
@@ -29708,7 +29708,7 @@ var Protocol = class {
           ...notification.params,
           _meta: {
             ...notification.params?._meta || {},
-            [RELATED_TASK_META_KEY]: options.relatedTask
+            [RELATED_TASK_META_KEY]: options2.relatedTask
           }
         }
       };
@@ -29720,7 +29720,7 @@ var Protocol = class {
       return;
     }
     const debouncedMethods = this._options?.debouncedNotificationMethods ?? [];
-    const canDebounce = debouncedMethods.includes(notification.method) && !notification.params && !options?.relatedRequestId && !options?.relatedTask;
+    const canDebounce = debouncedMethods.includes(notification.method) && !notification.params && !options2?.relatedRequestId && !options2?.relatedTask;
     if (canDebounce) {
       if (this._pendingDebouncedNotifications.has(notification.method)) {
         return;
@@ -29735,19 +29735,19 @@ var Protocol = class {
           ...notification,
           jsonrpc: "2.0"
         };
-        if (options?.relatedTask) {
+        if (options2?.relatedTask) {
           jsonrpcNotification2 = {
             ...jsonrpcNotification2,
             params: {
               ...jsonrpcNotification2.params,
               _meta: {
                 ...jsonrpcNotification2.params?._meta || {},
-                [RELATED_TASK_META_KEY]: options.relatedTask
+                [RELATED_TASK_META_KEY]: options2.relatedTask
               }
             }
           };
         }
-        this._transport?.send(jsonrpcNotification2, options).catch((error51) => this._onerror(error51));
+        this._transport?.send(jsonrpcNotification2, options2).catch((error51) => this._onerror(error51));
       });
       return;
     }
@@ -29755,19 +29755,19 @@ var Protocol = class {
       ...notification,
       jsonrpc: "2.0"
     };
-    if (options?.relatedTask) {
+    if (options2?.relatedTask) {
       jsonrpcNotification = {
         ...jsonrpcNotification,
         params: {
           ...jsonrpcNotification.params,
           _meta: {
             ...jsonrpcNotification.params?._meta || {},
-            [RELATED_TASK_META_KEY]: options.relatedTask
+            [RELATED_TASK_META_KEY]: options2.relatedTask
           }
         }
       };
     }
-    await this._transport.send(jsonrpcNotification, options);
+    await this._transport.send(jsonrpcNotification, options2);
   }
   /**
    * Registers a handler to invoke when this protocol object receives a request with the given method.
@@ -29881,12 +29881,12 @@ var Protocol = class {
       }
     } catch {
     }
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve3, reject) => {
       if (signal.aborted) {
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
         return;
       }
-      const timeoutId = setTimeout(resolve, interval);
+      const timeoutId = setTimeout(resolve3, interval);
       signal.addEventListener("abort", () => {
         clearTimeout(timeoutId);
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -30161,8 +30161,8 @@ var ExperimentalServerTasks = class {
    *
    * @experimental
    */
-  requestStream(request, resultSchema, options) {
-    return this._server.requestStream(request, resultSchema, options);
+  requestStream(request, resultSchema, options2) {
+    return this._server.requestStream(request, resultSchema, options2);
   }
   /**
    * Sends a sampling request and returns an AsyncGenerator that yields response messages.
@@ -30207,7 +30207,7 @@ var ExperimentalServerTasks = class {
    *
    * @experimental
    */
-  createMessageStream(params, options) {
+  createMessageStream(params, options2) {
     const clientCapabilities = this._server.getClientCapabilities();
     if ((params.tools || params.toolChoice) && !clientCapabilities?.sampling?.tools) {
       throw new Error("Client does not support sampling tools capability.");
@@ -30230,7 +30230,7 @@ var ExperimentalServerTasks = class {
       if (hasPreviousToolUse) {
         const toolUseIds = new Set(previousContent.filter((c) => c.type === "tool_use").map((c) => c.id));
         const toolResultIds = new Set(lastContent.filter((c) => c.type === "tool_result").map((c) => c.toolUseId));
-        if (toolUseIds.size !== toolResultIds.size || ![...toolUseIds].every((id) => toolResultIds.has(id))) {
+        if (toolUseIds.size !== toolResultIds.size || ![...toolUseIds].every((id2) => toolResultIds.has(id2))) {
           throw new Error("ids of tool_result blocks and tool_use blocks from previous message do not match");
         }
       }
@@ -30238,7 +30238,7 @@ var ExperimentalServerTasks = class {
     return this.requestStream({
       method: "sampling/createMessage",
       params
-    }, CreateMessageResultSchema, options);
+    }, CreateMessageResultSchema, options2);
   }
   /**
    * Sends an elicitation request and returns an AsyncGenerator that yields response messages.
@@ -30282,7 +30282,7 @@ var ExperimentalServerTasks = class {
    *
    * @experimental
    */
-  elicitInputStream(params, options) {
+  elicitInputStream(params, options2) {
     const clientCapabilities = this._server.getClientCapabilities();
     const mode = params.mode ?? "form";
     switch (mode) {
@@ -30303,7 +30303,7 @@ var ExperimentalServerTasks = class {
     return this.requestStream({
       method: "elicitation/create",
       params: normalizedParams
-    }, ElicitResultSchema, options);
+    }, ElicitResultSchema, options2);
   }
   /**
    * Gets the current status of a task.
@@ -30314,8 +30314,8 @@ var ExperimentalServerTasks = class {
    *
    * @experimental
    */
-  async getTask(taskId, options) {
-    return this._server.getTask({ taskId }, options);
+  async getTask(taskId, options2) {
+    return this._server.getTask({ taskId }, options2);
   }
   /**
    * Retrieves the result of a completed task.
@@ -30327,8 +30327,8 @@ var ExperimentalServerTasks = class {
    *
    * @experimental
    */
-  async getTaskResult(taskId, resultSchema, options) {
-    return this._server.getTaskResult({ taskId }, resultSchema, options);
+  async getTaskResult(taskId, resultSchema, options2) {
+    return this._server.getTaskResult({ taskId }, resultSchema, options2);
   }
   /**
    * Lists tasks with optional pagination.
@@ -30339,8 +30339,8 @@ var ExperimentalServerTasks = class {
    *
    * @experimental
    */
-  async listTasks(cursor, options) {
-    return this._server.listTasks(cursor ? { cursor } : void 0, options);
+  async listTasks(cursor, options2) {
+    return this._server.listTasks(cursor ? { cursor } : void 0, options2);
   }
   /**
    * Cancels a running task.
@@ -30350,8 +30350,8 @@ var ExperimentalServerTasks = class {
    *
    * @experimental
    */
-  async cancelTask(taskId, options) {
-    return this._server.cancelTask({ taskId }, options);
+  async cancelTask(taskId, options2) {
+    return this._server.cancelTask({ taskId }, options2);
   }
 };
 
@@ -30395,8 +30395,8 @@ var Server = class extends Protocol {
   /**
    * Initializes this server with the given name and version information.
    */
-  constructor(_serverInfo, options) {
-    super(options);
+  constructor(_serverInfo, options2) {
+    super(options2);
     this._serverInfo = _serverInfo;
     this._loggingLevels = /* @__PURE__ */ new Map();
     this.LOG_LEVEL_SEVERITY = new Map(LoggingLevelSchema.options.map((level, index) => [level, index]));
@@ -30404,9 +30404,9 @@ var Server = class extends Protocol {
       const currentLevel = this._loggingLevels.get(sessionId);
       return currentLevel ? this.LOG_LEVEL_SEVERITY.get(level) < this.LOG_LEVEL_SEVERITY.get(currentLevel) : false;
     };
-    this._capabilities = options?.capabilities ?? {};
-    this._instructions = options?.instructions;
-    this._jsonSchemaValidator = options?.jsonSchemaValidator ?? new AjvJsonSchemaValidator();
+    this._capabilities = options2?.capabilities ?? {};
+    this._instructions = options2?.instructions;
+    this._jsonSchemaValidator = options2?.jsonSchemaValidator ?? new AjvJsonSchemaValidator();
     this.setRequestHandler(InitializeRequestSchema, (request) => this._oninitialize(request));
     this.setNotificationHandler(InitializedNotificationSchema, () => this.oninitialized?.());
     if (this._capabilities.logging) {
@@ -30640,7 +30640,7 @@ var Server = class extends Protocol {
     return this.request({ method: "ping" }, EmptyResultSchema);
   }
   // Implementation
-  async createMessage(params, options) {
+  async createMessage(params, options2) {
     if (params.tools || params.toolChoice) {
       if (!this._clientCapabilities?.sampling?.tools) {
         throw new Error("Client does not support sampling tools capability.");
@@ -30664,15 +30664,15 @@ var Server = class extends Protocol {
       if (hasPreviousToolUse) {
         const toolUseIds = new Set(previousContent.filter((c) => c.type === "tool_use").map((c) => c.id));
         const toolResultIds = new Set(lastContent.filter((c) => c.type === "tool_result").map((c) => c.toolUseId));
-        if (toolUseIds.size !== toolResultIds.size || ![...toolUseIds].every((id) => toolResultIds.has(id))) {
+        if (toolUseIds.size !== toolResultIds.size || ![...toolUseIds].every((id2) => toolResultIds.has(id2))) {
           throw new Error("ids of tool_result blocks and tool_use blocks from previous message do not match");
         }
       }
     }
     if (params.tools) {
-      return this.request({ method: "sampling/createMessage", params }, CreateMessageResultWithToolsSchema, options);
+      return this.request({ method: "sampling/createMessage", params }, CreateMessageResultWithToolsSchema, options2);
     }
-    return this.request({ method: "sampling/createMessage", params }, CreateMessageResultSchema, options);
+    return this.request({ method: "sampling/createMessage", params }, CreateMessageResultSchema, options2);
   }
   /**
    * Creates an elicitation request for the given parameters.
@@ -30681,7 +30681,7 @@ var Server = class extends Protocol {
    * @param options Optional request options.
    * @returns The result of the elicitation request.
    */
-  async elicitInput(params, options) {
+  async elicitInput(params, options2) {
     const mode = params.mode ?? "form";
     switch (mode) {
       case "url": {
@@ -30689,14 +30689,14 @@ var Server = class extends Protocol {
           throw new Error("Client does not support url elicitation.");
         }
         const urlParams = params;
-        return this.request({ method: "elicitation/create", params: urlParams }, ElicitResultSchema, options);
+        return this.request({ method: "elicitation/create", params: urlParams }, ElicitResultSchema, options2);
       }
       case "form": {
         if (!this._clientCapabilities?.elicitation?.form) {
           throw new Error("Client does not support form elicitation.");
         }
         const formParams = params.mode === "form" ? params : { ...params, mode: "form" };
-        const result = await this.request({ method: "elicitation/create", params: formParams }, ElicitResultSchema, options);
+        const result = await this.request({ method: "elicitation/create", params: formParams }, ElicitResultSchema, options2);
         if (result.action === "accept" && result.content && formParams.requestedSchema) {
           try {
             const validator = this._jsonSchemaValidator.getValidator(formParams.requestedSchema);
@@ -30723,7 +30723,7 @@ var Server = class extends Protocol {
    * @param options Optional notification options. Useful when the completion notification should be related to a prior request.
    * @returns A function that emits the completion notification when awaited.
    */
-  createElicitationCompletionNotifier(elicitationId, options) {
+  createElicitationCompletionNotifier(elicitationId, options2) {
     if (!this._clientCapabilities?.elicitation?.url) {
       throw new Error("Client does not support URL elicitation (required for notifications/elicitation/complete)");
     }
@@ -30732,10 +30732,10 @@ var Server = class extends Protocol {
       params: {
         elicitationId
       }
-    }, options);
+    }, options2);
   }
-  async listRoots(params, options) {
-    return this.request({ method: "roots/list", params }, ListRootsResultSchema, options);
+  async listRoots(params, options2) {
+    return this.request({ method: "roots/list", params }, ListRootsResultSchema, options2);
   }
   /**
    * Sends a logging message to the client, if connected.
@@ -30863,7 +30863,7 @@ init_external();
 
 // ../../../../node_modules/@modelcontextprotocol/sdk/dist/esm/server/mcp.js
 var McpServer = class {
-  constructor(serverInfo, options) {
+  constructor(serverInfo, options2) {
     this._registeredResources = {};
     this._registeredResourceTemplates = {};
     this._registeredTools = {};
@@ -30872,7 +30872,7 @@ var McpServer = class {
     this._completionHandlerInitialized = false;
     this._resourceHandlersInitialized = false;
     this._promptHandlersInitialized = false;
-    this.server = new Server(serverInfo, options);
+    this.server = new Server(serverInfo, options2);
   }
   /**
    * Access experimental features.
@@ -31085,7 +31085,7 @@ var McpServer = class {
     let task = createTaskResult.task;
     const pollInterval = task.pollInterval ?? 5e3;
     while (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled") {
-      await new Promise((resolve) => setTimeout(resolve, pollInterval));
+      await new Promise((resolve3) => setTimeout(resolve3, pollInterval));
       const updatedTask = await extra.taskStore.getTask(taskId);
       if (!updatedTask) {
         throw new McpError(ErrorCode.InternalError, `Task ${taskId} not found during polling`);
@@ -31653,76 +31653,206 @@ var EMPTY_COMPLETION_RESULT = {
   }
 };
 
-// src/chunk.ts
-import { constants } from "node:fs";
-import { open, stat } from "node:fs/promises";
+// ../src/library/errors.ts
+var LibraryError = class extends Error {
+  name = "LibraryError";
+};
 
-// src/contract.ts
-var VIEWER_VIEW_URI = "ui://viewer/index.html";
-var TAB_META_KEY = "ai.insodimension/tab";
-var ANNOTATE_META_KEY = "ai.insodimension.viewer/annotate";
-var MAX_CHUNK_BYTES = 4 * 1024 * 1024;
-var VIEWER_KINDS = ["image", "pdf", "html", "markdown", "docx", "pptx", "xlsx", "text", "audio", "video", "binary"];
-var viewedFileSchema = external_exports.object({
-  path: external_exports.string().min(1),
-  filename: external_exports.string().min(1),
-  kind: external_exports.enum(VIEWER_KINDS),
-  size: external_exports.number().int().nonnegative(),
-  mtimeMs: external_exports.number()
-});
-var tabMetaSchema = external_exports.object({ key: external_exports.string().min(1) });
-var fileChunkSchema = external_exports.object({
-  base64: external_exports.string(),
-  offset: external_exports.number().int().nonnegative(),
-  length: external_exports.number().int().nonnegative(),
-  size: external_exports.number().int().nonnegative(),
-  eof: external_exports.boolean()
-});
-var MEDIA_TOKEN_PATTERN = /^[a-f0-9]{48}$/;
-var mediaTokenSchema = external_exports.string().regex(MEDIA_TOKEN_PATTERN);
-var mediaSourceSchema = external_exports.object({
-  url: external_exports.string().url(),
-  token: mediaTokenSchema,
-  mime: external_exports.string().min(1)
-});
-var renewedMediaSchema = external_exports.object({ alive: external_exports.boolean() });
+// ../src/library/library.ts
+import { constants, statSync } from "node:fs";
+import { mkdir as mkdir2, open, realpath, stat } from "node:fs/promises";
+import { basename as basename2, isAbsolute, join as join2, resolve as resolve2 } from "node:path";
 
-// src/chunk.ts
-var nativeFs = { stat, open };
-var OPEN_FLAGS = constants.O_RDONLY | (constants.O_NONBLOCK ?? 0);
-async function readRange(path, offset, length, fs = nativeFs) {
-  if (!Number.isSafeInteger(offset) || offset < 0) throw new RangeError(`offset must be a non-negative integer, got ${offset}`);
-  if (!Number.isSafeInteger(length) || length < 0 || length > MAX_CHUNK_BYTES) {
-    throw new RangeError(`length must be an integer from 0 to ${MAX_CHUNK_BYTES}, got ${length}`);
+// ../../../../fraym/packages/driver/src/classify-file.ts
+var BINARY = { kind: "binary", mime: "application/octet-stream" };
+var TEXT = { kind: "text", mime: "text/plain" };
+var OOXML = "application/vnd.openxmlformats-officedocument";
+var BY_EXTENSION = {
+  png: { kind: "image", mime: "image/png" },
+  jpg: { kind: "image", mime: "image/jpeg" },
+  jpeg: { kind: "image", mime: "image/jpeg" },
+  gif: { kind: "image", mime: "image/gif" },
+  webp: { kind: "image", mime: "image/webp" },
+  avif: { kind: "image", mime: "image/avif" },
+  bmp: { kind: "image", mime: "image/bmp" },
+  svg: { kind: "image", mime: "image/svg+xml" },
+  ico: { kind: "image", mime: "image/x-icon" },
+  pdf: { kind: "pdf", mime: "application/pdf" },
+  docx: { kind: "docx", mime: `${OOXML}.wordprocessingml.document` },
+  pptx: { kind: "pptx", mime: `${OOXML}.presentationml.presentation` },
+  xlsx: { kind: "xlsx", mime: `${OOXML}.spreadsheetml.sheet` },
+  xlsm: { kind: "xlsx", mime: "application/vnd.ms-excel.sheet.macroenabled.12" },
+  md: { kind: "markdown", mime: "text/markdown" },
+  markdown: { kind: "markdown", mime: "text/markdown" },
+  mdx: { kind: "markdown", mime: "text/markdown" },
+  html: { kind: "html", mime: "text/html" },
+  htm: { kind: "html", mime: "text/html" },
+  xhtml: { kind: "html", mime: "application/xhtml+xml" },
+  txt: { kind: "text", mime: "text/plain" },
+  log: { kind: "text", mime: "text/plain" },
+  csv: { kind: "text", mime: "text/csv" },
+  tsv: { kind: "text", mime: "text/tab-separated-values" },
+  json: { kind: "code", mime: "application/json" },
+  yaml: { kind: "code", mime: "application/yaml" },
+  yml: { kind: "code", mime: "application/yaml" },
+  toml: { kind: "code", mime: "application/toml" },
+  xml: { kind: "code", mime: "application/xml" },
+  css: { kind: "code", mime: "text/css" },
+  js: { kind: "code", mime: "text/javascript" },
+  mjs: { kind: "code", mime: "text/javascript" },
+  ts: { kind: "code", mime: "text/typescript" },
+  tsx: { kind: "code", mime: "text/typescript" },
+  jsx: { kind: "code", mime: "text/javascript" },
+  py: { kind: "code", mime: "text/x-python" },
+  rs: { kind: "code", mime: "text/x-rust" },
+  go: { kind: "code", mime: "text/x-go" },
+  java: { kind: "code", mime: "text/x-java" },
+  c: { kind: "code", mime: "text/x-c" },
+  h: { kind: "code", mime: "text/x-c" },
+  cpp: { kind: "code", mime: "text/x-c++" },
+  sh: { kind: "code", mime: "text/x-shellscript" },
+  sql: { kind: "code", mime: "application/sql" },
+  mp3: { kind: "audio", mime: "audio/mpeg" },
+  wav: { kind: "audio", mime: "audio/wav" },
+  ogg: { kind: "audio", mime: "audio/ogg" },
+  flac: { kind: "audio", mime: "audio/flac" },
+  m4a: { kind: "audio", mime: "audio/mp4" },
+  m4b: { kind: "audio", mime: "audio/mp4" },
+  opus: { kind: "audio", mime: "audio/ogg" },
+  oga: { kind: "audio", mime: "audio/ogg" },
+  aac: { kind: "audio", mime: "audio/aac" },
+  weba: { kind: "audio", mime: "audio/webm" },
+  mka: { kind: "audio", mime: "audio/x-matroska" },
+  mp4: { kind: "video", mime: "video/mp4" },
+  m4v: { kind: "video", mime: "video/x-m4v" },
+  webm: { kind: "video", mime: "video/webm" },
+  ogv: { kind: "video", mime: "video/ogg" },
+  mov: { kind: "video", mime: "video/quicktime" },
+  mkv: { kind: "video", mime: "video/x-matroska" },
+  zip: { kind: "archive", mime: "application/zip" },
+  tar: { kind: "archive", mime: "application/x-tar" },
+  gz: { kind: "archive", mime: "application/gzip" },
+  tgz: { kind: "archive", mime: "application/gzip" },
+  "7z": { kind: "archive", mime: "application/x-7z-compressed" },
+  rar: { kind: "archive", mime: "application/vnd.rar" }
+};
+function lookup(extension) {
+  return Object.hasOwn(BY_EXTENSION, extension) ? BY_EXTENSION[extension] : void 0;
+}
+function startsWith(head, bytes, at = 0) {
+  if (head.length < at + bytes.length) return false;
+  for (let index = 0; index < bytes.length; index++) if (head[at + index] !== bytes[index]) return false;
+  return true;
+}
+function byMagic(head) {
+  if (startsWith(head, [137, 80, 78, 71, 13, 10, 26, 10])) return lookup("png");
+  if (startsWith(head, [255, 216, 255])) return lookup("jpg");
+  if (startsWith(head, [71, 73, 70, 56])) return lookup("gif");
+  if (startsWith(head, [82, 73, 70, 70]) && startsWith(head, [87, 69, 66, 80], 8)) {
+    return lookup("webp");
   }
-  if (!(await fs.stat(path)).isFile()) throw new Error("not a regular file");
-  const handle = await fs.open(path, OPEN_FLAGS);
+  if (startsWith(head, [37, 80, 68, 70, 45])) return lookup("pdf");
+  return void 0;
+}
+function looksLikeText(head) {
+  if (head.length === 0) return false;
+  for (const byte of head) {
+    if (byte === 0) return false;
+    if (byte < 9 || byte > 13 && byte < 32 && byte !== 27) return false;
+  }
   try {
-    const stats = await handle.stat();
-    if (!stats.isFile()) throw new Error("not a regular file");
-    const want = Math.min(length, Math.max(0, stats.size - offset));
-    const bytes = Buffer.allocUnsafe(want);
-    let filled = 0;
-    while (filled < want) {
-      const { bytesRead } = await handle.read(bytes, filled, want - filled, offset + filled);
-      if (bytesRead === 0) break;
-      filled += bytesRead;
-    }
-    return { bytes: filled === want ? bytes : bytes.subarray(0, filled), size: stats.size, mtimeMs: stats.mtimeMs };
-  } finally {
-    await handle.close();
+    new TextDecoder("utf-8", { fatal: true }).decode(head, { stream: true });
+    return true;
+  } catch {
+    return false;
   }
 }
-async function readChunk(path, offset, length) {
-  const { bytes, size } = await readRange(path, offset, length);
-  return {
-    base64: bytes.toString("base64"),
-    offset,
-    length: bytes.length,
-    size,
-    eof: offset + bytes.length >= size
-  };
+function extensionOf(name) {
+  const base = name.split(/[\\/]/).pop() ?? name;
+  const dot = base.lastIndexOf(".");
+  return dot > 0 ? base.slice(dot + 1).toLowerCase() : "";
 }
+function classifyFile(name, head) {
+  if (head !== void 0) {
+    const magic = byMagic(head);
+    if (magic !== void 0) return magic;
+  }
+  const named = lookup(extensionOf(name));
+  if (named !== void 0) return named;
+  if (head !== void 0 && looksLikeText(head)) return TEXT;
+  return BINARY;
+}
+
+// ../../../../fraym/packages/driver/src/presentation.ts
+var PRESENTED_KINDS = [
+  "image",
+  "pdf",
+  "docx",
+  "pptx",
+  "xlsx",
+  "markdown",
+  "html",
+  "text",
+  "code",
+  "audio",
+  "video",
+  "archive",
+  "binary"
+];
+var KIND_SET = new Set(PRESENTED_KINDS);
+
+// ../../../../fraym/packages/driver/src/room-types.ts
+var ROOM_UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
+var ROOM_PREVIEW_MAX_BYTES = 8 * 1024 * 1024;
+
+// ../../../../fraym/packages/driver/src/theme.ts
+var THEME_TOKEN_CHANNELS = {
+  "--fr-accent": "color",
+  "--fr-accent-2": "color",
+  "--fr-accent-dim": "color",
+  "--fr-accent-line": "color",
+  "--fr-accent-ink": "color",
+  "--fr-accent-text": "color",
+  "--fr-accent-grad": "paint",
+  "--fr-accent-grad-hover": "paint",
+  "--fr-bg": "color",
+  "--fr-rail": "color",
+  "--fr-surface": "color",
+  "--fr-surface-2": "color",
+  "--fr-surface-3": "color",
+  "--fr-pill-sunken": "color",
+  "--fr-border": "color",
+  "--fr-border-soft": "color",
+  "--fr-btn-hover-bd": "color",
+  "--fr-text": "color",
+  "--fr-text-2": "color",
+  "--fr-text-3": "color",
+  "--fr-add": "color",
+  "--fr-add-bg": "color",
+  "--fr-del": "color",
+  "--fr-del-bg": "color",
+  "--fr-del-line": "color",
+  "--fr-warn": "color",
+  "--fr-warn-ink": "color",
+  "--fr-blue": "color",
+  "--fr-iris": "color",
+  "--fr-scrollbar-thumb": "color",
+  "--fr-scrollbar-thumb-hover": "color",
+  "--fr-switch-thumb-off": "color",
+  "--fr-font-primary": "font",
+  "--fr-font-display": "font",
+  "--fr-font-secondary": "font",
+  "--fr-font-mono": "font",
+  "--fr-r": "length",
+  "--fr-ui-size": "length"
+};
+var THEME_TOKENS = Object.keys(THEME_TOKEN_CHANNELS);
+
+// ../../../../fraym/packages/driver/src/types.ts
+var TERMINAL_CONTINUATION_REASONS = Object.assign(
+  /* @__PURE__ */ Object.create(null),
+  { handoff: true, new: true, plan: true, drop: true, move: true, recover: true }
+);
 
 // src/fence.ts
 import { realpath as nativeRealpath, stat as nativeStat } from "node:fs/promises";
@@ -31732,11 +31862,16 @@ import * as nodePath from "node:path";
 var ARTIFACTORY_GRANT_META_KEY = "ai.insodimension/grant";
 var PACK_CONNECTION_REPORT_MAX_BYTES = 64 * 1024;
 
+// ../../../../packages/sdk/src/type-guards.ts
+function isRecord2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 // src/fence.ts
 var pathApi = (platform) => platform === "win32" ? nodePath.win32 : nodePath.posix;
 var foldsCase = (platform) => platform === "win32" || platform === "darwin";
-var comparable = (path, platform) => foldsCase(platform) ? path.toLowerCase() : path;
-var segmentsOf = (path) => path.toLowerCase().split(/[\\/]+/).filter((part) => part !== "");
+var comparable = (path2, platform) => foldsCase(platform) ? path2.toLowerCase() : path2;
+var segmentsOf = (path2) => path2.toLowerCase().split(/[\\/]+/).filter((part) => part !== "");
 var MANAGED_HOMES = [".inso", ".inso-dev"];
 var MANAGED_FOLDERS = ["vault", "machinist"];
 function configuredRoots(env, home, platform) {
@@ -31813,8 +31948,8 @@ var ENVIRONMENT_FILE = /^(?:\.env.*|.*\.env)$/;
 var OTHER_SECRET_FILE = /^(?:client_secret.*\.json|.*\.tfstate(?:\.backup)?|.*\.kubeconfig|.*\.secret\.json)$/;
 var DATABASE_FILE = /\.(?:db|sqlite3?)(?:-wal|-shm|-journal)?$/;
 var ENGINE_HOME = /^\.(?:inso|omp)(?:-[a-z0-9._-]+)?$/;
-function denyReason(path) {
-  const segments = segmentsOf(path);
+function denyReason(path2) {
+  const segments = segmentsOf(path2);
   const base = segments[segments.length - 1] ?? "";
   for (const segment of segments) if (Object.hasOwn(SECRET_DIRECTORIES, segment)) return `it is inside a credentials folder (${segment})`;
   for (const secret of SECRET_PATHS) {
@@ -31845,14 +31980,14 @@ function textRefusal(requested, platform, what = "viewable") {
 var refuse = (reason) => ({ ok: false, reason });
 var MAX_LENT_FILES = 8;
 var MAX_LENT_PATH = 4096;
-function createFence(options) {
-  const platform = options.platform ?? process.platform;
+function createFence(options2) {
+  const platform = options2.platform ?? process.platform;
   const api = pathApi(platform);
-  const resolveReal = options.realpath ?? nativeRealpath;
-  const isRegularFile = options.isFile ?? (async (path) => (await nativeStat(path)).isFile());
-  const log = options.log ?? (() => void 0);
-  const extra = (options.roots ?? []).filter((root) => api.isAbsolute(root)).map((root) => api.resolve(root));
-  const roots = [.../* @__PURE__ */ new Set([...configuredRoots(options.env ?? {}, options.home, platform), ...extra])];
+  const resolveReal = options2.realpath ?? nativeRealpath;
+  const isRegularFile = options2.isFile ?? (async (path2) => (await nativeStat(path2)).isFile());
+  const log = options2.log ?? (() => void 0);
+  const extra = (options2.roots ?? []).filter((root) => api.isAbsolute(root)).map((root) => api.resolve(root));
+  const roots = [.../* @__PURE__ */ new Set([...configuredRoots(options2.env ?? {}, options2.home, platform), ...extra])];
   const realRootCache = /* @__PURE__ */ new Map();
   async function realRoots() {
     const out = [];
@@ -31875,8 +32010,8 @@ function createFence(options) {
     log(`refused ${JSON.stringify(requested)}: ${cause}`);
     return refuse(outside(requested));
   };
-  async function nearestReal(path) {
-    for (let current = api.dirname(path); ; current = api.dirname(current)) {
+  async function nearestReal(path2) {
+    for (let current = api.dirname(path2); ; current = api.dirname(current)) {
       try {
         return await resolveReal(current);
       } catch {
@@ -31906,6 +32041,14 @@ function createFence(options) {
       return false;
     }
   }
+  async function isIndexed(real) {
+    if (options2.indexed?.isLent(real) !== true) return false;
+    try {
+      return await isRegularFile(real);
+    } catch {
+      return false;
+    }
+  }
   async function check2(requested, meta3) {
     if (typeof requested !== "string" || requested.trim() === "") return refuse("the path is empty");
     if (requested.includes("\0")) return refuse("the path contains a NUL byte");
@@ -31922,14 +32065,14 @@ function createFence(options) {
     } catch (error51) {
       const code = error51 instanceof Error && "code" in error51 && typeof error51.code === "string" ? error51.code : void 0;
       const anchor = await nearestReal(lexical);
-      const within = lent.some((file2) => comparable(file2, platform) === comparable(lexical, platform)) || anchor !== void 0 && [...roots, ...await realRoots()].some((root) => insideRoot(anchor, root, platform));
+      const within = lent.some((file2) => comparable(file2, platform) === comparable(lexical, platform)) || options2.indexed?.isLent(lexical) === true || anchor !== void 0 && [...roots, ...await realRoots()].some((root) => insideRoot(anchor, root, platform));
       if (!within) return refuseOutside(requested, `it does not resolve (${code ?? "unknown error"})`);
       if (code === "ENOENT" || code === "ENOTDIR") return refuse(`no such file: "${requested}"`);
       if (code === "EACCES" || code === "EPERM") return refuse(`"${requested}" cannot be read: permission denied`);
       return refuse(`"${requested}" cannot be resolved${code ? ` (${code})` : ""}`);
     }
     const allowed = await realRoots();
-    if (!allowed.some((root) => insideRoot(real, root, platform)) && !await isLent(real, lent)) {
+    if (!allowed.some((root) => insideRoot(real, root, platform)) && !await isLent(real, lent) && !await isIndexed(real)) {
       return refuseOutside(requested, `it resolves to ${JSON.stringify(real)}`);
     }
     const denied = denyReason(real);
@@ -31938,6 +32081,1423 @@ function createFence(options) {
   }
   return { roots, check: check2 };
 }
+
+// ../src/library/cursor.ts
+function encodeCursor(position) {
+  return Buffer.from(JSON.stringify([position.ordering, position.key, position.id])).toString("base64url");
+}
+function decodeCursor(text, ordering) {
+  const refusal = new RangeError("the page cursor is not valid for this query");
+  let parsed;
+  try {
+    parsed = JSON.parse(Buffer.from(text, "base64url").toString("utf8"));
+  } catch {
+    throw refusal;
+  }
+  if (!Array.isArray(parsed) || parsed.length !== 3) throw refusal;
+  const [cursorOrdering, key, id2] = parsed;
+  if (cursorOrdering !== ordering || typeof id2 !== "string") throw refusal;
+  if (key !== null && typeof key !== "string" && typeof key !== "number") throw refusal;
+  return { ordering, key, id: id2 };
+}
+
+// ../src/library/driver.ts
+async function openDriver(file2) {
+  if (typeof Bun !== "undefined") {
+    const { Database } = await import("bun:sqlite");
+    const db2 = new Database(file2, { create: true });
+    return {
+      exec: (sql) => db2.exec(sql),
+      prepare(sql) {
+        const statement = db2.prepare(sql);
+        return {
+          all(...params) {
+            return statement.all(...params);
+          },
+          get(...params) {
+            return statement.get(...params) ?? void 0;
+          },
+          run: (...params) => ({ changes: statement.run(...params).changes }),
+          finalize: () => statement.finalize()
+        };
+      },
+      close: () => db2.close()
+    };
+  }
+  const { DatabaseSync } = await import("node:sqlite");
+  const db = new DatabaseSync(file2);
+  return {
+    exec: (sql) => db.exec(sql),
+    prepare(sql) {
+      const statement = db.prepare(sql);
+      return {
+        all(...params) {
+          return statement.all(...params);
+        },
+        get(...params) {
+          return statement.get(...params);
+        },
+        run: (...params) => ({ changes: Number(statement.run(...params).changes) }),
+        finalize: () => void 0
+      };
+    },
+    close: () => db.close()
+  };
+}
+
+// ../src/library/paths.ts
+import { resolve } from "node:path";
+function engineHome(env, userHome) {
+  const explicit = env.INSO_HOME?.trim();
+  if (explicit) return resolve(explicit);
+  return resolve(userHome, env.PI_CONFIG_DIR?.trim() || ".inso");
+}
+function pathKey(path2, platform = process.platform) {
+  const slashed = platform === "win32" ? path2.replaceAll("\\", "/") : path2;
+  return platform === "win32" || platform === "darwin" ? slashed.toLowerCase() : slashed;
+}
+
+// ../src/library/search.ts
+var MAX_SEARCH_CHARS = 200;
+var TRIGRAM_CHARS = 3;
+var CONTROL_CHARS = /[\u0000-\u001f\u007f]/g;
+var HIGHEST_CODE_POINT = "\u{10FFFF}";
+function parseSearch(text) {
+  const trimmed = (text ?? "").replace(CONTROL_CHARS, " ").trim().slice(0, MAX_SEARCH_CHARS);
+  if (trimmed === "") return void 0;
+  const terms = trimmed.split(/\s+/).filter((term) => [...term].length >= TRIGRAM_CHARS);
+  if (terms.length > 0) {
+    return { kind: "match", expression: terms.map((term) => `"${term.replaceAll('"', '""')}"`).join(" ") };
+  }
+  return { kind: "prefix", from: trimmed, to: `${trimmed}${HIGHEST_CODE_POINT}` };
+}
+
+// ../src/library/queries.ts
+var DEFAULT_PAGE_SIZE = 50;
+var MAX_PAGE_SIZE = 200;
+var ORDERINGS = {
+  recent: { column: "a.presented_at", idColumn: "a.id", field: "presented_at", descending: true, nullable: false },
+  discarded: { column: "a.discarded_at", idColumn: "a.id", field: "discarded_at", descending: true, nullable: false },
+  name: { column: "a.name", idColumn: "a.id", field: "name", descending: false, nullable: false },
+  size: { column: "a.size", idColumn: "a.id", field: "size", descending: true, nullable: false },
+  opened: { column: "a.opened_at", idColumn: "a.id", field: "opened_at", descending: true, nullable: true },
+  relevance: { column: "score", idColumn: "id", field: "score", descending: false, nullable: false }
+};
+var FULL_TEXT_FROM = "artifacts_fts CROSS JOIN artifacts a ON a.rowid = artifacts_fts.rowid";
+var RELEVANCE = "bm25(artifacts_fts, 8.0, 5.0, 2.0, 2.0, 1.0)";
+var LIVE_SHARE_IDS = "SELECT s.artifact_id FROM shares s WHERE s.revoked_at IS NULL AND (s.expires_at IS NULL OR s.expires_at > ?)";
+var EXPIRY_RESOLUTION_MS = 6e4;
+function resolveOrdering(sort, discarded, matched) {
+  if (sort === "relevance" && matched) return "relevance";
+  if (sort === "name" || sort === "size" || sort === "opened") return sort;
+  return discarded ? "discarded" : "recent";
+}
+function after(ordering, position) {
+  const { column, idColumn, descending, nullable: nullable2 } = ordering;
+  const key = position.key;
+  if (key === null) return { sql: `(${column} IS NULL AND ${idColumn} > ?)`, params: [position.id] };
+  const beyond = descending ? "<" : ">";
+  const bound = `${column} ${beyond}= ? AND (${column} ${beyond} ? OR ${idColumn} > ?)`;
+  const params = [key, key, position.id];
+  return nullable2 ? { sql: `((${bound}) OR ${column} IS NULL)`, params } : { sql: `(${bound})`, params };
+}
+function planList(query, now) {
+  const search = parseSearch(query.q);
+  const fullText = search?.kind === "match" ? search.expression : void 0;
+  const matched = fullText !== void 0;
+  const discarded = query.state === "discarded";
+  const orderingName = resolveOrdering(query.sort, discarded, matched);
+  const ordering = ORDERINGS[orderingName];
+  const limit = Math.min(Math.max(Math.trunc(query.limit ?? DEFAULT_PAGE_SIZE), 1), MAX_PAGE_SIZE);
+  const where = [discarded ? "a.state = 'discarded'" : "a.state != 'discarded'"];
+  const filterParams = [];
+  if (fullText !== void 0) filterParams.push(fullText);
+  if (query.kinds !== void 0 && query.kinds.length > 0) {
+    where.push(`a.kind IN (${query.kinds.map(() => "?").join(", ")})`);
+    filterParams.push(...query.kinds);
+  }
+  if (query.workspace !== void 0) {
+    where.push("a.workspace = ?");
+    filterParams.push(query.workspace);
+  }
+  if (query.starred !== void 0) {
+    where.push("a.starred = ?");
+    filterParams.push(query.starred ? 1 : 0);
+  }
+  let sharedParam = -1;
+  if (query.shared !== void 0) {
+    where.push(`a.id ${query.shared ? "" : "NOT "}IN (${LIVE_SHARE_IDS})`);
+    sharedParam = filterParams.length;
+    filterParams.push(now);
+  }
+  if (search?.kind === "prefix") {
+    where.push("a.name >= ? AND a.name < ?");
+    filterParams.push(search.from, search.to);
+  }
+  const from = matched ? FULL_TEXT_FROM : "artifacts a";
+  const match = matched ? "artifacts_fts MATCH ? AND " : "";
+  const filtered = `${match}${where.join(" AND ")}`;
+  const cursor = query.cursor === void 0 ? void 0 : after(ordering, decodeCursor(query.cursor, orderingName));
+  const direction = ordering.descending ? " DESC" : "";
+  const cursorParams = cursor?.params ?? [];
+  const page = orderingName === "relevance" ? {
+    sql: `WITH hits AS MATERIALIZED (SELECT a.*, ${RELEVANCE} AS score FROM ${from} WHERE ${filtered}) SELECT * FROM hits${cursor === void 0 ? "" : ` WHERE ${cursor.sql}`} ORDER BY score, id LIMIT ?`,
+    params: [...filterParams, ...cursorParams, limit + 1]
+  } : {
+    sql: `SELECT a.* FROM ${from} WHERE ${filtered}${cursor === void 0 ? "" : ` AND ${cursor.sql}`} ORDER BY ${ordering.column}${direction}, ${ordering.idColumn} LIMIT ?`,
+    params: [...filterParams, ...cursorParams, limit + 1]
+  };
+  const countSql = `SELECT COUNT(*) AS n FROM ${from} WHERE ${filtered}`;
+  const countKeyParams = filterParams.map((value, index) => index === sharedParam ? Math.floor(now / EXPIRY_RESOLUTION_MS) : value);
+  return {
+    page,
+    total: { sql: countSql, params: filterParams, key: JSON.stringify([countSql, countKeyParams]) },
+    limit,
+    positionOf(row) {
+      const key = row[ordering.field] ?? null;
+      return { ordering: orderingName, key, id: row.id };
+    }
+  };
+}
+
+// ../src/library/remote.ts
+var REVOKE_TIMEOUT_MS = 15e3;
+var REVOKE_ATTEMPTS = 2;
+var RETRY_PAUSE_MS = 600;
+async function reasonOf(response) {
+  try {
+    const body = await response.json();
+    if (typeof body === "object" && body !== null && "message" in body && typeof body.message === "string" && body.message !== "") return body.message;
+  } catch {
+    return `the server answered ${response.status}`;
+  }
+  return `the server answered ${response.status}`;
+}
+async function deleteOnce(share, url2) {
+  let response;
+  try {
+    response = await fetch(url2, { method: "DELETE", headers: { authorization: `Bearer ${share.ownerToken}` }, signal: AbortSignal.timeout(REVOKE_TIMEOUT_MS) });
+  } catch (error51) {
+    const cause = error51 instanceof Error ? error51.message : String(error51);
+    return { done: false, reason: `${new URL(share.baseUrl).host} could not be reached (${cause})`, retry: true };
+  }
+  if (response.ok || response.status === 404 || response.status === 410) return { done: true };
+  return { done: false, reason: await reasonOf(response), retry: response.status >= 500 || response.status === 429 };
+}
+async function deleteRemoteShare(share) {
+  const url2 = `${share.baseUrl.replace(/\/+$/, "")}/api/v1/shares/${encodeURIComponent(share.remoteId)}`;
+  for (let attempt = 1; ; attempt++) {
+    const outcome = await deleteOnce(share, url2);
+    if (outcome.done) return;
+    if (!outcome.retry || attempt >= REVOKE_ATTEMPTS) throw new Error(`the link could not be revoked: ${outcome.reason}`);
+    await new Promise((resolve3) => setTimeout(resolve3, RETRY_PAUSE_MS));
+  }
+}
+var revokeRemote = (share) => deleteRemoteShare(share);
+
+// ../../../../packages/sdk/src/artifact-share/index.ts
+var ASP_VERSION = 1;
+var ASP_CHUNK_BYTES = 1 << 20;
+var ASP_KEY_BYTES = 32;
+var ASP_PREFIX_BYTES = 4;
+var ASP_NONCE_BYTES = 12;
+var ASP_TAG_BYTES = 16;
+var ASP_MAX_POSTER_BYTES = 64 * 1024;
+var MANIFEST_INDEX = 0xffffffffffffffffn;
+var MAX_NAME = 255;
+var MAX_TITLE = 500;
+var MAX_MIME = 255;
+var MAX_COMMENT_BODY = 8e3;
+var MAX_AUTHOR = 80;
+var encoder = new TextEncoder();
+var decoder = new TextDecoder("utf-8", { fatal: true });
+var SHARE_KINDS = {
+  image: true,
+  pdf: true,
+  docx: true,
+  pptx: true,
+  xlsx: true,
+  markdown: true,
+  html: true,
+  text: true,
+  code: true,
+  audio: true,
+  video: true,
+  archive: true,
+  binary: true
+};
+var AspError = class extends Error {
+  name = "AspError";
+};
+function subtle() {
+  const api = globalThis.crypto?.subtle;
+  if (api === void 0) throw new AspError("WebCrypto is not available in this runtime");
+  return api;
+}
+function randomBytes(length) {
+  return globalThis.crypto.getRandomValues(new Uint8Array(length));
+}
+function asBuffer(bytes) {
+  return bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength && bytes.buffer instanceof ArrayBuffer ? bytes.buffer : Uint8Array.prototype.slice.call(bytes).buffer;
+}
+function generateContentKey() {
+  return randomBytes(ASP_KEY_BYTES);
+}
+function newVersionPrefix() {
+  return randomBytes(ASP_PREFIX_BYTES);
+}
+function chunkCount(size, chunkBytes = ASP_CHUNK_BYTES) {
+  if (!Number.isSafeInteger(size) || size < 0) throw new AspError("size must be a non-negative integer");
+  if (!Number.isSafeInteger(chunkBytes) || chunkBytes <= 0)
+    throw new AspError("chunkBytes must be a positive integer");
+  return Math.max(1, Math.ceil(size / chunkBytes));
+}
+function sealedSize(size, chunkBytes = ASP_CHUNK_BYTES) {
+  return size + chunkCount(size, chunkBytes) * ASP_TAG_BYTES;
+}
+function encodeBase64Url(bytes) {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+}
+function decodeBase64Url(text) {
+  if (!/^[A-Za-z0-9_-]*$/.test(text)) throw new AspError("not base64url");
+  const padded = text.replaceAll("-", "+").replaceAll("_", "/") + "=".repeat((4 - text.length % 4) % 4);
+  const binary = atob(padded);
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
+  return out;
+}
+async function importContentKey(raw) {
+  if (raw.length !== ASP_KEY_BYTES) throw new AspError(`a content key is ${ASP_KEY_BYTES} bytes`);
+  return subtle().importKey("raw", asBuffer(raw), { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+}
+async function deriveCommentKey(raw) {
+  if (raw.length !== ASP_KEY_BYTES) throw new AspError(`a content key is ${ASP_KEY_BYTES} bytes`);
+  const base = await subtle().importKey("raw", asBuffer(raw), "HKDF", false, ["deriveKey"]);
+  return subtle().deriveKey(
+    { name: "HKDF", hash: "SHA-256", salt: new Uint8Array(0), info: encoder.encode("asp1 comments") },
+    base,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"]
+  );
+}
+function nonceFor(prefix, index) {
+  if (prefix.length !== ASP_PREFIX_BYTES) throw new AspError(`a version prefix is ${ASP_PREFIX_BYTES} bytes`);
+  const nonce = new Uint8Array(ASP_NONCE_BYTES);
+  nonce.set(prefix, 0);
+  new DataView(nonce.buffer).setBigUint64(ASP_PREFIX_BYTES, index, false);
+  return nonce;
+}
+function checkVersion(version2) {
+  if (!Number.isSafeInteger(version2) || version2 < 1) throw new AspError("version must be a positive integer");
+}
+function chunkAad(version2, index, isLast) {
+  return encoder.encode(`asp1|chunk|${version2}|${index}|${isLast ? 1 : 0}`);
+}
+async function encrypt(key, nonce, aad, plain) {
+  const sealed = await subtle().encrypt(
+    { name: "AES-GCM", iv: asBuffer(nonce), additionalData: asBuffer(aad), tagLength: ASP_TAG_BYTES * 8 },
+    key,
+    asBuffer(plain)
+  );
+  return new Uint8Array(sealed);
+}
+async function decrypt(key, nonce, aad, sealed) {
+  try {
+    const plain = await subtle().decrypt(
+      { name: "AES-GCM", iv: asBuffer(nonce), additionalData: asBuffer(aad), tagLength: ASP_TAG_BYTES * 8 },
+      key,
+      asBuffer(sealed)
+    );
+    return new Uint8Array(plain);
+  } catch {
+    throw new AspError("the data does not open with this key (wrong link, or it was altered)");
+  }
+}
+async function sealChunk(key, prefix, version2, index, isLast, plain) {
+  checkVersion(version2);
+  if (!Number.isSafeInteger(index) || index < 0) throw new AspError("chunk index must be a non-negative integer");
+  return encrypt(key, nonceFor(prefix, BigInt(index)), chunkAad(version2, index, isLast), plain);
+}
+async function sealManifest(key, prefix, manifest) {
+  const checked = parseManifest(manifest);
+  if (checked === void 0) throw new AspError("the manifest is malformed");
+  const sealed = await encrypt(
+    key,
+    nonceFor(prefix, MANIFEST_INDEX),
+    encoder.encode(`asp1|manifest|${checked.version}`),
+    encoder.encode(JSON.stringify(checked))
+  );
+  const out = new Uint8Array(ASP_PREFIX_BYTES + sealed.length);
+  out.set(prefix, 0);
+  out.set(sealed, ASP_PREFIX_BYTES);
+  return out;
+}
+async function sealComment(commentKey, comment) {
+  const checked = parseComment(comment);
+  if (checked === void 0) throw new AspError("the comment is malformed");
+  const nonce = randomBytes(ASP_NONCE_BYTES);
+  const sealed = await encrypt(
+    commentKey,
+    nonce,
+    encoder.encode("asp1|comment"),
+    encoder.encode(JSON.stringify(checked))
+  );
+  const out = new Uint8Array(ASP_NONCE_BYTES + sealed.length);
+  out.set(nonce, 0);
+  out.set(sealed, ASP_NONCE_BYTES);
+  return out;
+}
+async function openComment(commentKey, sealed) {
+  if (sealed.length <= ASP_NONCE_BYTES + ASP_TAG_BYTES) throw new AspError("the comment is truncated");
+  const plain = await decrypt(
+    commentKey,
+    sealed.subarray(0, ASP_NONCE_BYTES),
+    encoder.encode("asp1|comment"),
+    sealed.subarray(ASP_NONCE_BYTES)
+  );
+  let parsed;
+  try {
+    parsed = JSON.parse(decoder.decode(plain));
+  } catch {
+    throw new AspError("the comment is not JSON");
+  }
+  const comment = parseComment(parsed);
+  if (comment === void 0) throw new AspError("the comment is malformed");
+  return comment;
+}
+function shareLink(link) {
+  const base = link.base.replace(/\/+$/, "");
+  const version2 = link.version === void 0 ? "" : `&v=${link.version}`;
+  return `${base}/a/${encodeURIComponent(link.id)}#k=${encodeBase64Url(link.key)}${version2}`;
+}
+function boundedString(value, max) {
+  return typeof value === "string" && value.length > 0 && value.length <= max ? value : void 0;
+}
+function positiveInt(value) {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : void 0;
+}
+function nonNegativeInt(value) {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : void 0;
+}
+function parseManifest(value) {
+  if (!isRecord2(value) || value.asp !== ASP_VERSION) return void 0;
+  const name = boundedString(value.name, MAX_NAME);
+  const mime = boundedString(value.mime, MAX_MIME);
+  const kind = typeof value.kind === "string" && SHARE_KINDS[value.kind] === true ? value.kind : void 0;
+  const size = nonNegativeInt(value.size);
+  const chunkBytes = positiveInt(value.chunkBytes);
+  const chunks = positiveInt(value.chunks);
+  const version2 = positiveInt(value.version);
+  const createdAt = nonNegativeInt(value.createdAt);
+  if (name === void 0 || mime === void 0 || kind === void 0 || size === void 0 || chunkBytes === void 0 || chunks === void 0 || version2 === void 0 || createdAt === void 0 || chunks !== chunkCount(size, chunkBytes))
+    return void 0;
+  const title = value.title === void 0 ? void 0 : boundedString(value.title, MAX_TITLE);
+  if (value.title !== void 0 && title === void 0) return void 0;
+  const width = value.width === void 0 ? void 0 : positiveInt(value.width);
+  const height = value.height === void 0 ? void 0 : positiveInt(value.height);
+  const durationMs = value.durationMs === void 0 ? void 0 : nonNegativeInt(value.durationMs);
+  const poster = value.poster === void 0 ? void 0 : typeof value.poster === "string" && value.poster.length <= Math.ceil(ASP_MAX_POSTER_BYTES * 4 / 3) + 4 ? value.poster : void 0;
+  if (value.width !== void 0 && width === void 0 || value.height !== void 0 && height === void 0 || value.durationMs !== void 0 && durationMs === void 0 || value.poster !== void 0 && poster === void 0)
+    return void 0;
+  return {
+    asp: 1,
+    name,
+    ...title === void 0 ? {} : { title },
+    kind,
+    mime,
+    size,
+    chunkBytes,
+    chunks,
+    version: version2,
+    createdAt,
+    ...width === void 0 ? {} : { width },
+    ...height === void 0 ? {} : { height },
+    ...durationMs === void 0 ? {} : { durationMs },
+    ...poster === void 0 ? {} : { poster }
+  };
+}
+function parseAnchor(value) {
+  if (!isRecord2(value)) return void 0;
+  const finite = (n) => typeof n === "number" && Number.isFinite(n) && n >= 0;
+  if (value.kind === "time" && finite(value.startMs)) {
+    if (value.endMs === void 0) return { kind: "time", startMs: value.startMs };
+    return finite(value.endMs) && value.endMs >= value.startMs ? { kind: "time", startMs: value.startMs, endMs: value.endMs } : void 0;
+  }
+  if (value.kind === "page") {
+    const page = positiveInt(value.page);
+    return page === void 0 ? void 0 : { kind: "page", page };
+  }
+  if (value.kind === "region" && finite(value.x) && finite(value.y) && finite(value.w) && finite(value.h)) {
+    return value.x <= 1 && value.y <= 1 && value.w <= 1 && value.h <= 1 ? { kind: "region", x: value.x, y: value.y, w: value.w, h: value.h } : void 0;
+  }
+  return void 0;
+}
+function parseComment(value) {
+  if (!isRecord2(value)) return void 0;
+  const author = boundedString(typeof value.author === "string" ? value.author.trim() : value.author, MAX_AUTHOR);
+  const body = boundedString(typeof value.body === "string" ? value.body.trim() : value.body, MAX_COMMENT_BODY);
+  const version2 = positiveInt(value.version);
+  const at = nonNegativeInt(value.at);
+  if (author === void 0 || body === void 0 || version2 === void 0 || at === void 0) return void 0;
+  if (value.anchor === void 0) return { author, body, version: version2, at };
+  const anchor = parseAnchor(value.anchor);
+  return anchor === void 0 ? void 0 : { author, body, anchor, version: version2, at };
+}
+function stringList(value, max) {
+  if (!Array.isArray(value) || value.length > max) return void 0;
+  const out = [];
+  for (const entry of value) {
+    if (typeof entry !== "string" || entry.trim() === "" || entry.length > 320) return void 0;
+    out.push(entry.trim().toLowerCase());
+  }
+  return out;
+}
+function parseAudience(value) {
+  if (!isRecord2(value)) return void 0;
+  if (value.kind === "link") return { kind: "link" };
+  if (value.kind !== "signin") return void 0;
+  const emails = value.emails === void 0 ? void 0 : stringList(value.emails, 500);
+  const domains = value.domains === void 0 ? void 0 : stringList(value.domains, 50);
+  if (value.emails !== void 0 && emails === void 0 || value.domains !== void 0 && domains === void 0)
+    return void 0;
+  return {
+    kind: "signin",
+    ...emails === void 0 || emails.length === 0 ? {} : { emails },
+    ...domains === void 0 || domains.length === 0 ? {} : { domains }
+  };
+}
+function parsePolicy(value) {
+  if (!isRecord2(value)) return void 0;
+  const maxBytes = positiveInt(value.maxBytes);
+  const maxDays = positiveInt(value.maxDays);
+  if (typeof value.publicLinks !== "boolean" || typeof value.signinRequired !== "boolean" || maxBytes === void 0 || maxDays === void 0)
+    return void 0;
+  const allowedDomains = value.allowedDomains === void 0 ? void 0 : stringList(value.allowedDomains, 50);
+  if (value.allowedDomains !== void 0 && allowedDomains === void 0) return void 0;
+  return {
+    publicLinks: value.publicLinks,
+    signinRequired: value.signinRequired,
+    maxBytes,
+    maxDays,
+    ...allowedDomains === void 0 ? {} : { allowedDomains }
+  };
+}
+function parseDiscovery(value) {
+  if (!isRecord2(value) || value.asp !== ASP_VERSION) return void 0;
+  const name = boundedString(value.name, 120);
+  const mode = value.mode === "host" || value.mode === "relay" ? value.mode : void 0;
+  const policy = parsePolicy(value.policy);
+  if (name === void 0 || mode === void 0 || policy === void 0 || !isRecord2(value.auth)) return void 0;
+  const oidc = value.auth.oidc;
+  if (oidc === void 0) return { asp: 1, name, mode, auth: {}, policy };
+  if (!isRecord2(oidc) || typeof oidc.issuer !== "string") return void 0;
+  return { asp: 1, name, mode, auth: { oidc: { issuer: oidc.issuer } }, policy };
+}
+function audienceAllowedBy(audience, policy) {
+  if (audience.kind === "link" && (!policy.publicLinks || policy.signinRequired))
+    return "this server only allows shares that require signing in";
+  if (audience.kind === "signin" && policy.allowedDomains !== void 0 && policy.allowedDomains.length > 0) {
+    const outside = [
+      ...(audience.emails ?? []).filter(
+        (email3) => !policy.allowedDomains?.includes(email3.slice(email3.lastIndexOf("@") + 1))
+      ),
+      ...(audience.domains ?? []).filter((domain2) => !policy.allowedDomains?.includes(domain2))
+    ];
+    if (outside.length > 0) return `this server only shares with ${policy.allowedDomains.join(", ")}`;
+  }
+  return void 0;
+}
+
+// ../src/library/rows.ts
+function readTags(text) {
+  try {
+    const parsed = JSON.parse(text);
+    return Array.isArray(parsed) ? parsed.filter((tag) => typeof tag === "string") : [];
+  } catch {
+    return [];
+  }
+}
+function readAudience(shareId2, text) {
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    parsed = void 0;
+  }
+  const audience = parseAudience(parsed);
+  if (audience === void 0) throw new LibraryError(`share ${shareId2} has an unreadable audience in library.db`);
+  return audience;
+}
+function shareUrl(baseUrl, remoteId) {
+  return `${baseUrl.replace(/\/+$/, "")}/a/${encodeURIComponent(remoteId)}`;
+}
+function shareFromRecord(record2) {
+  return {
+    id: record2.id,
+    artifactId: record2.artifact_id,
+    host: record2.host,
+    remoteId: record2.remote_id,
+    baseUrl: record2.base_url,
+    key: record2.key,
+    ownerToken: record2.owner_token,
+    audience: readAudience(record2.id, record2.audience),
+    version: record2.version,
+    allowComments: record2.allow_comments === 1,
+    createdAt: record2.created_at,
+    ...record2.expires_at === null ? {} : { expiresAt: record2.expires_at },
+    ...record2.revoked_at === null ? {} : { revokedAt: record2.revoked_at },
+    ...record2.comments_seen_at === null ? {} : { commentsSeenAt: record2.comments_seen_at }
+  };
+}
+function commentFromRecord(record2) {
+  return {
+    id: record2.id,
+    shareId: record2.share_id,
+    author: record2.author,
+    body: record2.body,
+    ...record2.anchor === null ? {} : { anchor: JSON.parse(record2.anchor) },
+    version: record2.version,
+    createdAt: record2.created_at,
+    ...record2.read_at === null ? {} : { readAt: record2.read_at },
+    ...record2.resolved_at === null ? {} : { resolvedAt: record2.resolved_at }
+  };
+}
+
+// ../src/library/schema.ts
+var SCHEMA_VERSION = 1;
+var DISCARDED_RETENTION_MS = 30 * 24 * 60 * 60 * 1e3;
+var CONNECTION = `
+PRAGMA busy_timeout = 2000;
+PRAGMA journal_mode = WAL;
+PRAGMA synchronous = NORMAL;
+PRAGMA foreign_keys = ON;
+`;
+var SCHEMA_V1 = `
+CREATE TABLE artifacts(
+  id TEXT PRIMARY KEY,
+  path TEXT NOT NULL,
+  path_key TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL COLLATE NOCASE, title TEXT, note TEXT, tags TEXT NOT NULL DEFAULT '[]',
+  kind TEXT NOT NULL, mime TEXT NOT NULL,
+  size INTEGER NOT NULL, mtime_ms REAL NOT NULL,
+  width INTEGER, height INTEGER, duration_ms INTEGER,
+  workspace TEXT, session_id TEXT,
+  source TEXT NOT NULL CHECK(source IN ('present','stamp','human')),
+  starred INTEGER NOT NULL DEFAULT 0,
+  state TEXT NOT NULL DEFAULT 'live' CHECK(state IN ('live','missing','discarded')),
+  created_at INTEGER NOT NULL, presented_at INTEGER NOT NULL,
+  opened_at INTEGER, discarded_at INTEGER, thumb TEXT
+);
+CREATE INDEX artifacts_recent ON artifacts(presented_at DESC, id) WHERE state != 'discarded';
+CREATE INDEX artifacts_ws ON artifacts(workspace, presented_at DESC, id) WHERE state != 'discarded';
+CREATE INDEX artifacts_kind ON artifacts(kind, presented_at DESC, id) WHERE state != 'discarded';
+CREATE INDEX artifacts_live ON artifacts(state) WHERE state != 'discarded';
+CREATE INDEX artifacts_name ON artifacts(name, id) WHERE state != 'discarded';
+CREATE INDEX artifacts_size ON artifacts(size DESC, id) WHERE state != 'discarded';
+CREATE INDEX artifacts_opened ON artifacts(opened_at DESC, id) WHERE state != 'discarded';
+CREATE INDEX artifacts_starred ON artifacts(presented_at DESC, id) WHERE starred = 1 AND state != 'discarded';
+CREATE INDEX artifacts_discarded ON artifacts(discarded_at DESC, id) WHERE state = 'discarded';
+CREATE VIRTUAL TABLE artifacts_fts USING fts5(name, title, note, tags, path,
+  content='artifacts', content_rowid='rowid', tokenize='trigram');
+CREATE TRIGGER artifacts_fts_insert AFTER INSERT ON artifacts BEGIN
+  INSERT INTO artifacts_fts(rowid, name, title, note, tags, path)
+  VALUES (new.rowid, new.name, new.title, new.note, new.tags, new.path);
+END;
+CREATE TRIGGER artifacts_fts_delete AFTER DELETE ON artifacts BEGIN
+  INSERT INTO artifacts_fts(artifacts_fts, rowid, name, title, note, tags, path)
+  VALUES ('delete', old.rowid, old.name, old.title, old.note, old.tags, old.path);
+END;
+CREATE TRIGGER artifacts_fts_update AFTER UPDATE OF name, title, note, tags, path ON artifacts
+WHEN old.name IS NOT new.name OR old.title IS NOT new.title OR old.note IS NOT new.note
+  OR old.tags IS NOT new.tags OR old.path IS NOT new.path BEGIN
+  INSERT INTO artifacts_fts(artifacts_fts, rowid, name, title, note, tags, path)
+  VALUES ('delete', old.rowid, old.name, old.title, old.note, old.tags, old.path);
+  INSERT INTO artifacts_fts(rowid, name, title, note, tags, path)
+  VALUES (new.rowid, new.name, new.title, new.note, new.tags, new.path);
+END;
+CREATE TABLE shares(
+  id TEXT PRIMARY KEY, artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+  host TEXT NOT NULL,
+  remote_id TEXT NOT NULL, base_url TEXT NOT NULL, key TEXT NOT NULL, owner_token TEXT NOT NULL,
+  audience TEXT NOT NULL,
+  version INTEGER NOT NULL, allow_comments INTEGER NOT NULL,
+  created_at INTEGER NOT NULL, expires_at INTEGER, revoked_at INTEGER,
+  comments_seen_at INTEGER
+);
+CREATE INDEX shares_artifact ON shares(artifact_id, created_at);
+CREATE INDEX shares_live ON shares(artifact_id) WHERE revoked_at IS NULL;
+CREATE TABLE comments(
+  id TEXT PRIMARY KEY, share_id TEXT NOT NULL REFERENCES shares(id) ON DELETE CASCADE,
+  author TEXT NOT NULL, body TEXT NOT NULL, anchor TEXT, version INTEGER NOT NULL,
+  created_at INTEGER NOT NULL, read_at INTEGER, resolved_at INTEGER
+);
+CREATE INDEX comments_share ON comments(share_id, created_at);
+CREATE INDEX comments_unread ON comments(share_id) WHERE read_at IS NULL;
+`;
+function readVersion(db) {
+  const statement = db.prepare("PRAGMA user_version");
+  try {
+    return statement.get()?.user_version ?? 0;
+  } finally {
+    statement.finalize();
+  }
+}
+function prepareDatabase(db, now) {
+  db.exec(CONNECTION);
+  if (readVersion(db) === 0) {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      if (readVersion(db) === 0) {
+        db.exec(SCHEMA_V1);
+        db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+      }
+      db.exec("COMMIT");
+    } catch (error51) {
+      db.exec("ROLLBACK");
+      throw error51;
+    }
+  }
+  const version2 = readVersion(db);
+  if (version2 !== SCHEMA_VERSION) {
+    throw new LibraryError(`library.db is schema version ${version2}; this Dimension reads version ${SCHEMA_VERSION}. Update Dimension.`);
+  }
+  const purge = db.prepare("DELETE FROM artifacts WHERE state = 'discarded' AND discarded_at < ?");
+  try {
+    purge.run(now - DISCARDED_RETENTION_MS);
+  } finally {
+    purge.finalize();
+  }
+}
+
+// ../src/library/trash.ts
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { basename, dirname } from "node:path";
+var execFileAsync = promisify(execFile);
+var TRASH_TIMEOUT_MS = 6e4;
+var GIT_TIMEOUT_MS = 5e3;
+var PATH_VARIABLE = "DIMENSION_TRASH_PATH";
+var WINDOWS_RECYCLE = [
+  "$ProgressPreference = 'SilentlyContinue'",
+  "$ErrorActionPreference = 'Stop'",
+  "try {",
+  "Add-Type -AssemblyName Microsoft.VisualBasic",
+  `[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($env:${PATH_VARIABLE}, 'AllDialogs', 'SendToRecycleBin')`,
+  "} catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }"
+].join("\n");
+var MACOS_FINDER = ["on run argv", 'tell application "Finder" to delete (POSIX file (item 1 of argv) as alias)', "end run"];
+function commandFor(path2, platform) {
+  if (platform === "win32") {
+    const encoded = Buffer.from(WINDOWS_RECYCLE, "utf16le").toString("base64");
+    return {
+      program: "powershell.exe",
+      args: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded],
+      env: { [PATH_VARIABLE]: path2 },
+      tool: "PowerShell"
+    };
+  }
+  if (platform === "darwin") {
+    return { program: "osascript", args: [...MACOS_FINDER.flatMap((line) => ["-e", line]), path2], tool: "Finder" };
+  }
+  return { program: "gio", args: ["trash", "--", path2], tool: "gio" };
+}
+async function run(program, args, options2) {
+  try {
+    await execFileAsync(program, [...args], {
+      env: { ...process.env, ...options2.env },
+      timeout: options2.timeout,
+      windowsHide: true,
+      ...options2.cwd === void 0 ? {} : { cwd: options2.cwd }
+    });
+    return { code: 0, stderr: "" };
+  } catch (error51) {
+    if (error51 instanceof Error && "code" in error51 && typeof error51.code === "number") {
+      return { code: error51.code, stderr: "stderr" in error51 && typeof error51.stderr === "string" ? error51.stderr : "" };
+    }
+    throw error51;
+  }
+}
+async function moveToTrash(path2, platform = process.platform) {
+  const command = commandFor(path2, platform);
+  let outcome;
+  try {
+    outcome = await run(command.program, command.args, { timeout: TRASH_TIMEOUT_MS, ...command.env === void 0 ? {} : { env: command.env } });
+  } catch (error51) {
+    const reason = error51 instanceof Error ? error51.message : String(error51);
+    throw new LibraryError(`${command.tool} could not move the file to the trash: ${reason}`);
+  }
+  if (outcome.code !== 0) {
+    const detail = outcome.stderr.trim().split(/\r?\n/)[0] ?? "";
+    throw new LibraryError(`${command.tool} could not move the file to the trash${detail === "" ? "" : `: ${detail}`}`);
+  }
+}
+async function defaultTrash(path2) {
+  try {
+    const outcome = await run("git", ["ls-files", "--error-unmatch", "--", basename(path2)], { timeout: GIT_TIMEOUT_MS, cwd: dirname(path2) });
+    return outcome.code !== 0;
+  } catch {
+    return true;
+  }
+}
+
+// ../src/library/thumbs.ts
+import { randomBytes as randomBytes2 } from "node:crypto";
+import { mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+
+// ../src/thumbnail.ts
+var MAX_THUMB_BYTES = 150 * 1024;
+var MAX_THUMB_SOURCE_BYTES = 25 * 1024 * 1024;
+
+// ../src/library/thumbs.ts
+var EXTENSIONS = { "image/webp": "webp", "image/png": "png", "image/jpeg": "jpg" };
+var THUMB_CONTENT_TYPES = { webp: "image/webp", png: "image/png", jpg: "image/jpeg" };
+var THUMB_FILE_NAME = /^[A-Za-z0-9]{8,40}\.(webp|png|jpg)$/;
+function matchesMime(bytes, mime) {
+  if (mime === "image/png") return bytes[0] === 137 && bytes[1] === 80 && bytes[2] === 78 && bytes[3] === 71;
+  if (mime === "image/jpeg") return bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255;
+  return Buffer.from(bytes.subarray(0, 4)).toString("latin1") === "RIFF" && Buffer.from(bytes.subarray(8, 12)).toString("latin1") === "WEBP";
+}
+async function writeThumb(directory, id2, bytes, mime) {
+  if (bytes.length === 0 || bytes.length > MAX_THUMB_BYTES) {
+    throw new LibraryError(`a thumbnail is 1 byte to ${MAX_THUMB_BYTES} bytes; this one is ${bytes.length}`);
+  }
+  if (!matchesMime(bytes, mime)) throw new LibraryError(`the thumbnail bytes are not ${mime}`);
+  await mkdir(directory, { recursive: true });
+  const name = `${id2}.${EXTENSIONS[mime]}`;
+  const staging = join(directory, `${name}.${randomBytes2(6).toString("hex")}.tmp`);
+  try {
+    await writeFile(staging, bytes);
+    await rename(staging, join(directory, name));
+  } catch (error51) {
+    await rm(staging, { force: true });
+    throw error51;
+  }
+  await removeThumbs(directory, id2, name);
+  return name;
+}
+async function removeThumbs(directory, id2, keep) {
+  let entries;
+  try {
+    entries = await readdir(directory);
+  } catch (error51) {
+    if (error51 instanceof Error && "code" in error51 && error51.code === "ENOENT") return;
+    throw error51;
+  }
+  const own = entries.filter((entry) => entry !== keep && entry.startsWith(`${id2}.`));
+  await Promise.all(own.map((entry) => rm(join(directory, entry), { force: true })));
+}
+
+// ../src/library/library.ts
+var HEAD_BYTES = 512;
+var CHECK_BATCH = 32;
+var MAX_CHECK_IDS = 200;
+var STATEMENT_CACHE_LIMIT = 256;
+var MAX_TITLE_CHARS = 200;
+var MAX_NOTE_CHARS = 4e3;
+var MAX_TAGS = 24;
+var MAX_TAG_CHARS = 48;
+var MAX_FACET_WORKSPACES = 500;
+var CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+var READ_FLAGS = constants.O_RDONLY | (constants.O_NONBLOCK ?? 0);
+var MEMO_LIMIT = 128;
+var SHARE_COLUMNS = {
+  version: "version",
+  audience: "audience",
+  expiresAt: "expires_at",
+  revokedAt: "revoked_at",
+  allowComments: "allow_comments",
+  commentsSeenAt: "comments_seen_at"
+};
+var UPSERT_ARTIFACT = `
+INSERT INTO artifacts(id, path, path_key, name, title, note, tags, kind, mime, size, mtime_ms, width, height,
+  workspace, session_id, source, created_at, presented_at)
+VALUES (?1, ?2, ?3, ?4, ?5, ?6, COALESCE(?7, '[]'), ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?17)
+ON CONFLICT(path_key) DO UPDATE SET
+  path = excluded.path, name = excluded.name,
+  title = COALESCE(?5, title), note = COALESCE(?6, note), tags = COALESCE(?7, tags),
+  kind = excluded.kind, mime = excluded.mime, size = excluded.size, mtime_ms = excluded.mtime_ms,
+  width = COALESCE(excluded.width, width), height = COALESCE(excluded.height, height),
+  workspace = COALESCE(?14, workspace), session_id = COALESCE(?15, session_id),
+  state = 'live', presented_at = ?17, discarded_at = NULL
+WHERE artifacts.state != 'discarded' OR ?16 = 'human' OR excluded.mtime_ms > artifacts.discarded_at
+`;
+function newId(now) {
+  let time3 = "";
+  let remaining = now;
+  for (let digit = 0; digit < 10; digit++) {
+    time3 = `${CROCKFORD.charAt(remaining % 32)}${time3}`;
+    remaining = Math.floor(remaining / 32);
+  }
+  const random = crypto.getRandomValues(new Uint8Array(10));
+  return time3 + Array.from(random, (byte) => CROCKFORD.charAt(byte % 32)).join("");
+}
+function cleanText(field, value, max) {
+  if (value === void 0 || value === null) return value;
+  const trimmed = value.trim();
+  if ([...trimmed].length > max) throw new LibraryError(`${field} is longer than ${max} characters`);
+  return trimmed === "" ? null : trimmed;
+}
+function cleanTags(tags) {
+  if (tags === void 0) return void 0;
+  const seen = /* @__PURE__ */ new Set();
+  const clean = [];
+  for (const tag of tags) {
+    const trimmed = tag.trim();
+    if (trimmed === "") continue;
+    if ([...trimmed].length > MAX_TAG_CHARS) throw new LibraryError(`a tag is longer than ${MAX_TAG_CHARS} characters`);
+    const folded = trimmed.toLowerCase();
+    if (seen.has(folded)) continue;
+    seen.add(folded);
+    clean.push(trimmed);
+  }
+  if (clean.length > MAX_TAGS) throw new LibraryError(`an artifact takes at most ${MAX_TAGS} tags`);
+  return clean;
+}
+function failureReason(error51) {
+  return error51 instanceof Error ? error51.message : String(error51);
+}
+function hasCode(error51, ...codes) {
+  return error51 instanceof Error && "code" in error51 && typeof error51.code === "string" && codes.includes(error51.code);
+}
+async function createLibrary(options2) {
+  const now = options2.now ?? Date.now;
+  const platform = options2.platform ?? process.platform;
+  const revokeRemote2 = options2.revokeRemote ?? revokeRemote;
+  const trashFile = options2.trash ?? ((path2) => moveToTrash(path2, platform));
+  const directory = join2(options2.home, "artifacts");
+  const thumbsDirectory = join2(directory, "thumbs");
+  await mkdir2(thumbsDirectory, { recursive: true });
+  const db = await openDriver(join2(directory, "library.db"));
+  try {
+    prepareDatabase(db, now());
+  } catch (error51) {
+    db.close();
+    throw error51;
+  }
+  const statements = /* @__PURE__ */ new Map();
+  function releaseStatements() {
+    for (const statement of statements.values()) statement.finalize();
+    statements.clear();
+  }
+  function sql(text) {
+    let statement = statements.get(text);
+    if (statement === void 0) {
+      if (statements.size >= STATEMENT_CACHE_LIMIT) releaseStatements();
+      statement = db.prepare(text);
+      statements.set(text, statement);
+    }
+    return statement;
+  }
+  const placeholders = (count) => Array.from({ length: count }, () => "?").join(", ");
+  function rowOf(id2) {
+    return sql("SELECT * FROM artifacts WHERE id = ?").get(id2);
+  }
+  function requireRow(id2) {
+    const row = rowOf(id2);
+    if (row === void 0) throw new LibraryError(`no artifact ${id2} in the library`);
+    return row;
+  }
+  function summariesOf(ids) {
+    const byArtifact = /* @__PURE__ */ new Map();
+    if (ids.length === 0) return byArtifact;
+    const records = sql(
+      `SELECT s.id, s.artifact_id, s.host, s.remote_id, s.base_url, s.audience, s.version, s.expires_at, s.revoked_at,
+				(SELECT COUNT(*) FROM comments c WHERE c.share_id = s.id) AS comments,
+				(SELECT COUNT(*) FROM comments c WHERE c.share_id = s.id AND c.read_at IS NULL) AS unread
+			FROM shares s WHERE s.artifact_id IN (${placeholders(ids.length)}) ORDER BY s.created_at, s.id`
+    ).all(...ids);
+    for (const record2 of records) {
+      const summary = {
+        id: record2.id,
+        host: record2.host,
+        url: shareUrl(record2.base_url, record2.remote_id),
+        audience: readAudience(record2.id, record2.audience),
+        version: record2.version,
+        ...record2.expires_at === null ? {} : { expiresAt: record2.expires_at },
+        ...record2.revoked_at === null ? {} : { revokedAt: record2.revoked_at },
+        comments: record2.comments,
+        unread: record2.unread
+      };
+      const list = byArtifact.get(record2.artifact_id);
+      if (list === void 0) byArtifact.set(record2.artifact_id, [summary]);
+      else list.push(summary);
+    }
+    return byArtifact;
+  }
+  function itemsOf(rows) {
+    const shares2 = summariesOf(rows.map((row) => row.id));
+    return rows.map((row) => ({
+      id: row.id,
+      path: row.path,
+      name: row.name,
+      ...row.title === null ? {} : { title: row.title },
+      ...row.note === null ? {} : { note: row.note },
+      tags: readTags(row.tags),
+      kind: row.kind,
+      mime: row.mime,
+      size: row.size,
+      mtimeMs: row.mtime_ms,
+      ...row.width === null ? {} : { width: row.width },
+      ...row.height === null ? {} : { height: row.height },
+      ...row.duration_ms === null ? {} : { durationMs: row.duration_ms },
+      ...row.workspace === null ? {} : { workspace: row.workspace },
+      ...row.session_id === null ? {} : { sessionId: row.session_id },
+      source: row.source,
+      starred: row.starred === 1,
+      state: row.state,
+      createdAt: row.created_at,
+      presentedAt: row.presented_at,
+      ...row.opened_at === null ? {} : { openedAt: row.opened_at },
+      ...row.discarded_at === null ? {} : { discardedAt: row.discarded_at },
+      hasThumb: row.thumb !== null,
+      shares: shares2.get(row.id) ?? []
+    }));
+  }
+  function itemOf(row) {
+    const [item] = itemsOf([row]);
+    if (item === void 0) throw new LibraryError(`artifact ${row.id} could not be read`);
+    return item;
+  }
+  const memo = /* @__PURE__ */ new Map();
+  let memoVersion = "";
+  function remembered(key, compute) {
+    const own = sql("SELECT total_changes() AS n").get()?.n ?? 0;
+    const other = sql("PRAGMA data_version").get()?.data_version ?? 0;
+    const version2 = `${own}:${other}`;
+    if (version2 !== memoVersion) {
+      memo.clear();
+      memoVersion = version2;
+    }
+    if (memo.has(key)) return memo.get(key);
+    const fresh = compute();
+    if (memo.size >= MEMO_LIMIT) memo.clear();
+    memo.set(key, fresh);
+    return fresh;
+  }
+  function query(request) {
+    const plan = planList(request, now());
+    const rows = sql(plan.page.sql).all(...plan.page.params);
+    const more = rows.length > plan.limit;
+    const page = more ? rows.slice(0, plan.limit) : rows;
+    const last = page[page.length - 1];
+    const total = remembered(plan.total.key, () => sql(plan.total.sql).get(...plan.total.params)?.n ?? 0);
+    return {
+      items: itemsOf(page),
+      ...more && last !== void 0 ? { next: encodeCursor(plan.positionOf(last)) } : {},
+      total
+    };
+  }
+  function facets(scope) {
+    const moment = now();
+    const bucket = Math.floor(moment / EXPIRY_RESOLUTION_MS);
+    return remembered(`facets ${JSON.stringify([scope.workspace ?? null, scope.state ?? "live", bucket])}`, () => {
+      const view = scope.state === "discarded" ? "a.state = 'discarded'" : "a.state != 'discarded'";
+      const inWorkspace = scope.workspace === void 0 ? "" : " AND a.workspace = ?";
+      const workspaceParams = scope.workspace === void 0 ? [] : [scope.workspace];
+      const kinds = {};
+      for (const row of sql(`SELECT a.kind AS kind, COUNT(*) AS n FROM artifacts a WHERE ${view}${inWorkspace} GROUP BY a.kind`).all(...workspaceParams)) {
+        kinds[row.kind] = row.n;
+      }
+      const workspaces = sql(
+        `SELECT a.workspace AS path, COUNT(*) AS count FROM artifacts a WHERE ${view} AND a.workspace IS NOT NULL GROUP BY a.workspace ORDER BY count DESC, a.workspace LIMIT ${MAX_FACET_WORKSPACES}`
+      ).all();
+      const count = (text, ...params) => sql(text).get(...params)?.n ?? 0;
+      return {
+        kinds,
+        workspaces,
+        starred: count(`SELECT COUNT(*) AS n FROM artifacts a WHERE a.starred = 1 AND a.state != 'discarded'${inWorkspace}`, ...workspaceParams),
+        shared: count(`SELECT COUNT(*) AS n FROM artifacts a WHERE a.state != 'discarded'${inWorkspace} AND a.id IN (${LIVE_SHARE_IDS})`, ...workspaceParams, moment),
+        discarded: count(`SELECT COUNT(*) AS n FROM artifacts a WHERE a.state = 'discarded'${inWorkspace}`, ...workspaceParams)
+      };
+    });
+  }
+  function get(id2) {
+    const row = rowOf(id2);
+    return row === void 0 ? void 0 : itemOf(row);
+  }
+  function getByPath(realPath) {
+    const row = sql("SELECT * FROM artifacts WHERE path_key = ?").get(pathKey(realPath, platform));
+    return row === void 0 ? void 0 : itemOf(row);
+  }
+  async function stamp(input) {
+    const requested = input.path;
+    const refuse2 = (reason) => new LibraryError(`cannot add to the library: ${reason}`);
+    if (typeof requested !== "string" || requested.trim() === "") throw refuse2("the path is empty");
+    if (requested.includes("\0")) throw refuse2("the path contains a NUL byte");
+    if (!isAbsolute(requested)) throw refuse2(`"${requested}" is not an absolute path`);
+    const spelling = textRefusal(requested, platform, "presentable");
+    if (spelling !== void 0) throw refuse2(spelling);
+    const early = denyReason(resolve2(requested));
+    if (early !== void 0) throw refuse2(early);
+    let real;
+    try {
+      real = await realpath(resolve2(requested));
+    } catch (error51) {
+      throw refuse2(hasCode(error51, "ENOENT", "ENOTDIR") ? `no such file: "${requested}"` : `"${requested}" cannot be resolved (${failureReason(error51)})`);
+    }
+    if (denyReason(real) !== void 0) throw refuse2("it resolves to a protected location (credentials, keys or engine state)");
+    const before = await stat(real);
+    if (!before.isFile()) throw refuse2("it is not a regular file");
+    const handle = await open(real, READ_FLAGS);
+    let facts;
+    try {
+      const opened = await handle.stat();
+      if (!opened.isFile()) throw refuse2("it is not a regular file");
+      const head = Buffer.allocUnsafe(Math.min(HEAD_BYTES, opened.size));
+      const { bytesRead } = await handle.read(head, 0, head.length, 0);
+      const { kind, mime } = classifyFile(basename2(real), head.subarray(0, bytesRead));
+      facts = { kind, mime, size: opened.size, mtimeMs: opened.mtimeMs };
+    } finally {
+      await handle.close();
+    }
+    const title = cleanText("title", input.title, MAX_TITLE_CHARS) ?? null;
+    const note = cleanText("note", input.note, MAX_NOTE_CHARS) ?? null;
+    const tags = cleanTags(input.tags);
+    const moment = now();
+    const key = pathKey(real, platform);
+    sql(UPSERT_ARTIFACT).run(
+      newId(moment),
+      real,
+      key,
+      basename2(real),
+      title,
+      note,
+      tags === void 0 ? null : JSON.stringify(tags),
+      facts.kind,
+      facts.mime,
+      facts.size,
+      facts.mtimeMs,
+      input.width ?? null,
+      input.height ?? null,
+      input.workspace ?? null,
+      input.sessionId ?? null,
+      input.source,
+      moment
+    );
+    const row = sql("SELECT * FROM artifacts WHERE path_key = ?").get(key);
+    if (row === void 0) throw new LibraryError(`"${requested}" could not be recorded`);
+    if (input.thumb !== void 0 && row.state !== "discarded") {
+      const name = await writeThumb(thumbsDirectory, row.id, input.thumb.bytes, input.thumb.mime);
+      sql("UPDATE artifacts SET thumb = ? WHERE id = ?").run(name, row.id);
+    }
+    return itemOf(requireRow(row.id));
+  }
+  function update(id2, patch) {
+    requireRow(id2);
+    const sets = [];
+    const params = [];
+    const title = cleanText("title", patch.title, MAX_TITLE_CHARS);
+    if (title !== void 0) {
+      sets.push("title = ?");
+      params.push(title);
+    }
+    const note = cleanText("note", patch.note, MAX_NOTE_CHARS);
+    if (note !== void 0) {
+      sets.push("note = ?");
+      params.push(note);
+    }
+    const tags = cleanTags(patch.tags);
+    if (tags !== void 0) {
+      sets.push("tags = ?");
+      params.push(JSON.stringify(tags));
+    }
+    if (patch.starred !== void 0) {
+      sets.push("starred = ?");
+      params.push(patch.starred ? 1 : 0);
+    }
+    if (patch.durationMs !== void 0) {
+      if (!Number.isFinite(patch.durationMs) || patch.durationMs < 0) throw new LibraryError("durationMs must be a number of milliseconds, zero or more");
+      sets.push("duration_ms = ?");
+      params.push(Math.round(patch.durationMs));
+    }
+    if (sets.length > 0) sql(`UPDATE artifacts SET ${sets.join(", ")} WHERE id = ?`).run(...params, id2);
+    return itemOf(requireRow(id2));
+  }
+  function liveShares(artifactId2) {
+    return sql("SELECT * FROM shares WHERE artifact_id = ? AND revoked_at IS NULL ORDER BY created_at, id").all(artifactId2).map(shareFromRecord);
+  }
+  const shares = {
+    insert(row) {
+      sql(
+        `INSERT INTO shares(id, artifact_id, host, remote_id, base_url, key, owner_token, audience, version, allow_comments,
+					created_at, expires_at, revoked_at, comments_seen_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        row.id,
+        row.artifactId,
+        row.host,
+        row.remoteId,
+        row.baseUrl,
+        row.key,
+        row.ownerToken,
+        JSON.stringify(row.audience),
+        row.version,
+        row.allowComments ? 1 : 0,
+        row.createdAt,
+        row.expiresAt ?? null,
+        row.revokedAt ?? null,
+        row.commentsSeenAt ?? null
+      );
+    },
+    update(id2, patch) {
+      const sets = [];
+      const params = [];
+      for (const field of Object.keys(SHARE_COLUMNS)) {
+        if (!(field in patch)) continue;
+        const value = patch[field];
+        sets.push(`${SHARE_COLUMNS[field]} = ?`);
+        if (field === "audience") params.push(JSON.stringify(value));
+        else if (field === "allowComments") params.push(value === true ? 1 : 0);
+        else params.push(typeof value === "number" ? value : null);
+      }
+      if (sets.length > 0) sql(`UPDATE shares SET ${sets.join(", ")} WHERE id = ?`).run(...params, id2);
+    },
+    get(id2) {
+      const record2 = sql("SELECT * FROM shares WHERE id = ?").get(id2);
+      return record2 === void 0 ? void 0 : shareFromRecord(record2);
+    },
+    forArtifact(artifactId2) {
+      return sql("SELECT * FROM shares WHERE artifact_id = ? ORDER BY created_at, id").all(artifactId2).map(shareFromRecord);
+    },
+    live() {
+      return sql("SELECT * FROM shares WHERE revoked_at IS NULL ORDER BY created_at, id").all().map(shareFromRecord);
+    }
+  };
+  const comments = {
+    upsert(row) {
+      return sql(
+        `INSERT INTO comments(id, share_id, author, body, anchor, version, created_at, read_at, resolved_at)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`
+      ).run(
+        row.id,
+        row.shareId,
+        row.author,
+        row.body,
+        row.anchor === void 0 ? null : JSON.stringify(row.anchor),
+        row.version,
+        row.createdAt,
+        row.readAt ?? null,
+        row.resolvedAt ?? null
+      ).changes > 0;
+    },
+    forArtifact(artifactId2, filter) {
+      const unread = filter?.unread === true ? " AND c.read_at IS NULL" : "";
+      const records = sql(
+        `SELECT c.*, s.base_url AS share_base_url, s.remote_id AS share_remote_id
+				FROM comments c JOIN shares s ON s.id = c.share_id
+				WHERE s.artifact_id = ?${unread} ORDER BY c.created_at, c.id`
+      ).all(artifactId2);
+      return records.map((record2) => ({
+        ...commentFromRecord(record2),
+        shareUrl: shareUrl(record2.share_base_url, record2.share_remote_id)
+      }));
+    },
+    markRead(ids, at) {
+      for (let start = 0; start < ids.length; start += 500) {
+        const batch = ids.slice(start, start + 500);
+        sql(`UPDATE comments SET read_at = ? WHERE read_at IS NULL AND id IN (${placeholders(batch.length)})`).run(at, ...batch);
+      }
+    }
+  };
+  async function discard(id2, request) {
+    const row = requireRow(id2);
+    let revoked = 0;
+    const unrevoked = [];
+    for (const share of liveShares(id2)) {
+      try {
+        await revokeRemote2(share);
+        revoked++;
+      } catch (error51) {
+        unrevoked.push({ shareId: share.id, host: share.host, reason: failureReason(error51) });
+      }
+      shares.update(share.id, { revokedAt: now() });
+    }
+    if (row.state !== "discarded") {
+      sql("UPDATE artifacts SET state = 'discarded', discarded_at = ?, thumb = NULL WHERE id = ?").run(now(), id2);
+    }
+    try {
+      await removeThumbs(thumbsDirectory, id2);
+    } catch (error51) {
+      console.error(`library: thumbnail of ${id2} was not removed: ${failureReason(error51)}`);
+    }
+    let trashed = false;
+    let trashError;
+    if (request.trash) {
+      try {
+        await trashFile(row.path);
+        trashed = true;
+      } catch (error51) {
+        trashError = hasCode(error51, "ENOENT") ? "the file no longer exists" : failureReason(error51);
+      }
+    }
+    return { item: itemOf(requireRow(id2)), trashed, ...trashError === void 0 ? {} : { trashError }, revoked, unrevoked };
+  }
+  function restore(id2) {
+    const row = requireRow(id2);
+    if (row.state !== "discarded") return itemOf(row);
+    const present = statSync(row.path, { throwIfNoEntry: false })?.isFile() === true;
+    sql("UPDATE artifacts SET state = ?, discarded_at = NULL WHERE id = ?").run(present ? "live" : "missing", id2);
+    return itemOf(requireRow(id2));
+  }
+  async function check2(ids) {
+    const wanted = [...new Set(ids)].slice(0, MAX_CHECK_IDS);
+    if (wanted.length === 0) return [];
+    const rows = sql(`SELECT id, path, state, size, mtime_ms FROM artifacts WHERE id IN (${placeholders(wanted.length)})`).all(...wanted);
+    const answers = /* @__PURE__ */ new Map();
+    const changed = [];
+    for (let start = 0; start < rows.length; start += CHECK_BATCH) {
+      await Promise.all(
+        rows.slice(start, start + CHECK_BATCH).map(async (row) => {
+          const known = { id: row.id, state: row.state, size: row.size, mtimeMs: row.mtime_ms };
+          if (row.state === "discarded") {
+            answers.set(row.id, known);
+            return;
+          }
+          let next = known;
+          try {
+            const info = await stat(row.path);
+            next = info.isFile() ? { id: row.id, state: "live", size: info.size, mtimeMs: info.mtimeMs } : { ...known, state: "missing" };
+          } catch (error51) {
+            if (hasCode(error51, "ENOENT", "ENOTDIR")) next = { ...known, state: "missing" };
+          }
+          answers.set(row.id, next);
+          if (next.state !== known.state || next.size !== known.size || next.mtimeMs !== known.mtimeMs) {
+            changed.push({ id: row.id, state: next.state === "missing" ? "missing" : "live", size: next.size, mtimeMs: next.mtimeMs });
+          }
+        })
+      );
+    }
+    if (changed.length > 0) {
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        for (const change of changed) {
+          sql("UPDATE artifacts SET state = ?, size = ?, mtime_ms = ? WHERE id = ? AND state != 'discarded'").run(change.state, change.size, change.mtimeMs, change.id);
+        }
+        db.exec("COMMIT");
+      } catch (error51) {
+        db.exec("ROLLBACK");
+        throw error51;
+      }
+    }
+    return wanted.flatMap((id2) => answers.get(id2) ?? []);
+  }
+  async function setThumb(id2, bytes, mime) {
+    const row = requireRow(id2);
+    if (row.state === "discarded") throw new LibraryError("a discarded artifact keeps no thumbnail");
+    const name = await writeThumb(thumbsDirectory, id2, bytes, mime);
+    sql("UPDATE artifacts SET thumb = ? WHERE id = ?").run(name, id2);
+  }
+  let closed = false;
+  return {
+    home: options2.home,
+    query,
+    facets,
+    get,
+    getByPath,
+    stamp,
+    update,
+    discard,
+    restore,
+    check: check2,
+    markOpened(id2) {
+      sql("UPDATE artifacts SET opened_at = ? WHERE id = ?").run(now(), id2);
+    },
+    setThumb,
+    thumbPath(id2) {
+      const name = sql("SELECT thumb FROM artifacts WHERE id = ? AND state != 'discarded'").get(id2)?.thumb;
+      return name !== null && name !== void 0 && THUMB_FILE_NAME.test(name) ? join2(thumbsDirectory, name) : void 0;
+    },
+    isLent(realPath) {
+      return sql("SELECT 1 AS lent FROM artifacts WHERE path_key = ? AND state != 'discarded'").get(pathKey(realPath, platform)) !== void 0;
+    },
+    shares,
+    comments,
+    close() {
+      if (closed) return;
+      closed = true;
+      releaseStatements();
+      db.close();
+    }
+  };
+}
+
+// src/chunk.ts
+import { constants as constants2 } from "node:fs";
+import { open as open2, stat as stat2 } from "node:fs/promises";
+
+// src/contract.ts
+var VIEWER_VIEW_URI = "ui://viewer/index.html";
+var TAB_META_KEY = "ai.insodimension/tab";
+var ANNOTATE_META_KEY = "ai.insodimension.viewer/annotate";
+var MAX_CHUNK_BYTES = 4 * 1024 * 1024;
+var VIEWER_KINDS = ["image", "pdf", "html", "markdown", "docx", "pptx", "xlsx", "text", "audio", "video", "binary"];
+var viewedFileSchema = external_exports.object({
+  path: external_exports.string().min(1),
+  filename: external_exports.string().min(1),
+  kind: external_exports.enum(VIEWER_KINDS),
+  size: external_exports.number().int().nonnegative(),
+  mtimeMs: external_exports.number()
+});
+var tabMetaSchema = external_exports.object({ key: external_exports.string().min(1) });
+var fileChunkSchema = external_exports.object({
+  base64: external_exports.string(),
+  offset: external_exports.number().int().nonnegative(),
+  length: external_exports.number().int().nonnegative(),
+  size: external_exports.number().int().nonnegative(),
+  eof: external_exports.boolean()
+});
+var MEDIA_TOKEN_PATTERN = /^[a-f0-9]{48}$/;
+var mediaTokenSchema = external_exports.string().regex(MEDIA_TOKEN_PATTERN);
+var mediaSourceSchema = external_exports.object({
+  url: external_exports.string().url(),
+  token: mediaTokenSchema,
+  mime: external_exports.string().min(1)
+});
+var renewedMediaSchema = external_exports.object({ alive: external_exports.boolean() });
+
+// src/chunk.ts
+var nativeFs = { stat: stat2, open: open2 };
+var OPEN_FLAGS = constants2.O_RDONLY | (constants2.O_NONBLOCK ?? 0);
+async function readRange(path2, offset, length, fs = nativeFs) {
+  if (!Number.isSafeInteger(offset) || offset < 0) throw new RangeError(`offset must be a non-negative integer, got ${offset}`);
+  if (!Number.isSafeInteger(length) || length < 0 || length > MAX_CHUNK_BYTES) {
+    throw new RangeError(`length must be an integer from 0 to ${MAX_CHUNK_BYTES}, got ${length}`);
+  }
+  if (!(await fs.stat(path2)).isFile()) throw new Error("not a regular file");
+  const handle = await fs.open(path2, OPEN_FLAGS);
+  try {
+    const stats = await handle.stat();
+    if (!stats.isFile()) throw new Error("not a regular file");
+    const want = Math.min(length, Math.max(0, stats.size - offset));
+    const bytes = Buffer.allocUnsafe(want);
+    let filled = 0;
+    while (filled < want) {
+      const { bytesRead } = await handle.read(bytes, filled, want - filled, offset + filled);
+      if (bytesRead === 0) break;
+      filled += bytesRead;
+    }
+    return { bytes: filled === want ? bytes : bytes.subarray(0, filled), size: stats.size, mtimeMs: stats.mtimeMs };
+  } finally {
+    await handle.close();
+  }
+}
+async function readChunk(path2, offset, length) {
+  const { bytes, size } = await readRange(path2, offset, length);
+  return {
+    base64: bytes.toString("base64"),
+    offset,
+    length: bytes.length,
+    size,
+    eof: offset + bytes.length >= size
+  };
+}
+
+// src/tool-support.ts
+import { basename as basename3 } from "node:path";
 
 // src/kind.ts
 var KIND_HEAD_BYTES = 8192;
@@ -31969,23 +33529,23 @@ function fileExtension(filename) {
   const dot = base.lastIndexOf(".");
   return dot > 0 ? base.slice(dot + 1).toLowerCase() : "";
 }
-var startsWith = (head, signature, at = 0) => head.length >= at + signature.length && signature.every((byte, index) => head[at + index] === byte);
+var startsWith2 = (head, signature, at = 0) => head.length >= at + signature.length && signature.every((byte, index) => head[at + index] === byte);
 var ascii = (text) => Array.from(text, (char) => char.charCodeAt(0));
 function sniff(head) {
-  if (startsWith(head, [137, 80, 78, 71, 13, 10, 26, 10])) return "image";
-  if (startsWith(head, [255, 216, 255])) return "image";
-  if (startsWith(head, ascii("GIF87a")) || startsWith(head, ascii("GIF89a"))) return "image";
-  if (startsWith(head, ascii("RIFF")) && startsWith(head, ascii("WEBP"), 8)) return "image";
-  if (startsWith(head, ascii("ftypavif"), 4) || startsWith(head, ascii("ftypavis"), 4)) return "image";
+  if (startsWith2(head, [137, 80, 78, 71, 13, 10, 26, 10])) return "image";
+  if (startsWith2(head, [255, 216, 255])) return "image";
+  if (startsWith2(head, ascii("GIF87a")) || startsWith2(head, ascii("GIF89a"))) return "image";
+  if (startsWith2(head, ascii("RIFF")) && startsWith2(head, ascii("WEBP"), 8)) return "image";
+  if (startsWith2(head, ascii("ftypavif"), 4) || startsWith2(head, ascii("ftypavis"), 4)) return "image";
   const pdf = ascii("%PDF-");
-  for (let at = 0; at <= Math.min(1024, head.length - pdf.length); at++) if (startsWith(head, pdf, at)) return "pdf";
-  if (startsWith(head, [80, 75, 3, 4]) || startsWith(head, [80, 75, 5, 6])) return "zip";
-  if (startsWith(head, [31, 139])) return "binary";
-  if (startsWith(head, [127, 69, 76, 70])) return "binary";
-  if (startsWith(head, [77, 90])) return "binary";
-  if (startsWith(head, ascii("SQLite format 3\0"))) return "binary";
-  if (startsWith(head, [55, 122, 188, 175, 39, 28]) || startsWith(head, ascii("Rar!"))) return "binary";
-  if (startsWith(head, [208, 207, 17, 224, 161, 177, 26, 225])) return "binary";
+  for (let at = 0; at <= Math.min(1024, head.length - pdf.length); at++) if (startsWith2(head, pdf, at)) return "pdf";
+  if (startsWith2(head, [80, 75, 3, 4]) || startsWith2(head, [80, 75, 5, 6])) return "zip";
+  if (startsWith2(head, [31, 139])) return "binary";
+  if (startsWith2(head, [127, 69, 76, 70])) return "binary";
+  if (startsWith2(head, [77, 90])) return "binary";
+  if (startsWith2(head, ascii("SQLite format 3\0"))) return "binary";
+  if (startsWith2(head, [55, 122, 188, 175, 39, 28]) || startsWith2(head, ascii("Rar!"))) return "binary";
+  if (startsWith2(head, [208, 207, 17, 224, 161, 177, 26, 225])) return "binary";
   return void 0;
 }
 var audio = (mime) => ({ kind: "audio", mime });
@@ -32031,11 +33591,11 @@ function mpegFrameLength(head, at) {
 function isMpegAudioFrame(head) {
   const length = mpegFrameLength(head, 0);
   if (length === void 0) return false;
-  return head.length === length || mpegFrameLength(head, length) !== void 0 || startsWith(head, ascii("TAG"), length);
+  return head.length === length || mpegFrameLength(head, length) !== void 0 || startsWith2(head, ascii("TAG"), length);
 }
 function isId3Tag(head) {
   const major = head[3] ?? 0;
-  return startsWith(head, ascii("ID3")) && major >= 2 && major <= 4 && head.length >= 10 && [6, 7, 8, 9].every((at) => (head[at] ?? 255) < 128);
+  return startsWith2(head, ascii("ID3")) && major >= 2 && major <= 4 && head.length >= 10 && [6, 7, 8, 9].every((at) => (head[at] ?? 255) < 128);
 }
 function isAdtsFrame(head) {
   const b0 = head[0];
@@ -32047,18 +33607,18 @@ function sniffMedia(head, filename) {
   const extension = fileExtension(filename);
   if (isId3Tag(head) || isMpegAudioFrame(head)) return audio("audio/mpeg");
   if (isAdtsFrame(head)) return audio("audio/aac");
-  if (startsWith(head, ascii("RIFF")) && startsWith(head, ascii("WAVE"), 8)) return audio("audio/wav");
-  if (startsWith(head, ascii("fLaC"))) return audio("audio/flac");
-  if (startsWith(head, ascii("OggS")) && head[4] === 0) {
+  if (startsWith2(head, ascii("RIFF")) && startsWith2(head, ascii("WAVE"), 8)) return audio("audio/wav");
+  if (startsWith2(head, ascii("fLaC"))) return audio("audio/flac");
+  if (startsWith2(head, ascii("OggS")) && head[4] === 0) {
     const theora = String.fromCharCode(...head.subarray(0, 256)).includes("\x80theora");
     return extension === "ogv" || theora ? video("video/ogg") : audio("audio/ogg");
   }
-  if (startsWith(head, [26, 69, 223, 163])) {
+  if (startsWith2(head, [26, 69, 223, 163])) {
     const matroska = String.fromCharCode(...head.subarray(0, 64)).includes("matroska");
     if (extension === "weba" || extension === "mka") return audio(matroska ? "audio/x-matroska" : "audio/webm");
     return video(matroska ? "video/x-matroska" : "video/webm");
   }
-  if (startsWith(head, ascii("ftyp"), 4)) {
+  if (startsWith2(head, ascii("ftyp"), 4)) {
     const brand = text4(head, 8);
     const named = extension === "m4a" || extension === "m4b";
     if (isIn(ISO_AUDIO_BRANDS, brand) || named && isIn(ISO_GENERIC_BRANDS, brand)) return audio("audio/mp4");
@@ -32083,17 +33643,254 @@ function detectKind(filename, head, size = head.length) {
     if (sniffed === "zip") return named;
   } else if (named === "image") {
     if (extension === "svg") return head.includes(0) ? "binary" : "image";
-    if (extension === "bmp" && startsWith(head, ascii("BM"))) return "image";
-    if (extension === "ico" && (startsWith(head, [0, 0, 1, 0]) || startsWith(head, [0, 0, 2, 0]))) return "image";
+    if (extension === "bmp" && startsWith2(head, ascii("BM"))) return "image";
+    if (extension === "ico" && (startsWith2(head, [0, 0, 1, 0]) || startsWith2(head, [0, 0, 2, 0]))) return "image";
   } else if (named === "html" || named === "markdown") {
     return head.includes(0) ? "binary" : named;
   }
   return sniffed === "binary" || sniffed === "zip" || head.includes(0) ? "binary" : "text";
 }
 
+// src/tool-support.ts
+var APP_ONLY = { ui: { visibility: ["app"] } };
+var failure = (message) => ({ isError: true, content: [{ type: "text", text: message }] });
+function describeError(error51) {
+  if (error51 instanceof RangeError) return error51.message;
+  if (!(error51 instanceof Error)) return String(error51);
+  const code = "code" in error51 && typeof error51.code === "string" ? ` (${error51.code})` : "";
+  return `${error51.message}${code}`;
+}
+async function openViewedFile(fence, request, meta3) {
+  const verdict = await fence.check(request.path, meta3);
+  if (!verdict.ok) return failure(verdict.reason);
+  try {
+    const head = await readRange(verdict.real, 0, KIND_HEAD_BYTES);
+    const shown = request.filename ?? basename3(verdict.real);
+    const file2 = {
+      path: verdict.real,
+      filename: shown,
+      kind: detectKind(shown, head.bytes, head.size),
+      size: head.size,
+      mtimeMs: head.mtimeMs
+    };
+    return {
+      content: [{ type: "text", text: `Opened ${file2.filename} (${file2.kind}, ${file2.size} bytes) in the viewer.` }],
+      structuredContent: { ...file2 },
+      _meta: { [TAB_META_KEY]: { key: file2.path }, ...request.annotate === true ? { [ANNOTATE_META_KEY]: true } : {} }
+    };
+  } catch (error51) {
+    return failure(`"${request.path}" cannot be opened: ${describeError(error51)}`);
+  }
+}
+
+// src/library-tools.ts
+var LIBRARY_TAB_KEY = "library";
+var READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+var WRITES = { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+var DESTROYS = { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true };
+var THUMB_BASE64_LIMIT = Math.ceil(MAX_THUMB_BYTES * 4 / 3) + 8;
+var id = external_exports.string().min(1).max(64);
+var path = external_exports.string().min(1).max(4096);
+async function answer(run2) {
+  try {
+    const { text, data } = await run2();
+    return { content: [{ type: "text", text }], structuredContent: data };
+  } catch (error51) {
+    return failure(describeError(error51));
+  }
+}
+function registerLibraryTools(server2, { library, fence, media }) {
+  K3(
+    server2,
+    "open_library",
+    {
+      title: "Library",
+      description: "Open the artifact library beside the conversation: every file shown or made, searchable, with shares and comments.",
+      inputSchema: {
+        workspace: path.optional().describe("Show only this workspace's artifacts"),
+        query: external_exports.string().max(200).optional().describe("Start with this search")
+      },
+      annotations: READ_ONLY,
+      _meta: { ui: { resourceUri: VIEWER_VIEW_URI } }
+    },
+    async ({ workspace, query }) => ({
+      content: [{ type: "text", text: "Opened the library." }],
+      structuredContent: { mode: "library", ...workspace === void 0 ? {} : { workspace }, ...query === void 0 ? {} : { query } },
+      _meta: { [TAB_META_KEY]: { key: LIBRARY_TAB_KEY } }
+    })
+  );
+  K3(
+    server2,
+    "library_query",
+    {
+      title: "Query the library",
+      description: "One keyset page of artifacts: filters, sort, search. The View calls this; it is not for the model.",
+      inputSchema: {
+        q: external_exports.string().max(200).optional(),
+        kinds: external_exports.array(external_exports.enum(PRESENTED_KINDS)).max(PRESENTED_KINDS.length).optional(),
+        workspace: path.optional(),
+        state: external_exports.enum(["live", "discarded"]).optional(),
+        starred: external_exports.boolean().optional(),
+        shared: external_exports.boolean().optional(),
+        sort: external_exports.enum(["recent", "name", "size", "opened", "relevance"]).optional(),
+        cursor: external_exports.string().max(512).optional(),
+        limit: external_exports.number().int().min(1).max(200).optional()
+      },
+      annotations: READ_ONLY,
+      _meta: APP_ONLY
+    },
+    (args) => answer(() => {
+      const page = library.query(args);
+      return { text: `${page.items.length} of ${page.total} artifacts.`, data: { ...page } };
+    })
+  );
+  K3(
+    server2,
+    "library_facets",
+    {
+      title: "Library facets",
+      description: "Counts for the Library's filter column.",
+      inputSchema: { workspace: path.optional(), state: external_exports.enum(["live", "discarded"]).optional() },
+      annotations: READ_ONLY,
+      _meta: APP_ONLY
+    },
+    (args) => answer(() => ({ text: "Facets.", data: { ...library.facets(args) } }))
+  );
+  K3(
+    server2,
+    "library_check",
+    {
+      title: "Check artifacts on disk",
+      description: "Stat the files behind these rows and report which are missing.",
+      inputSchema: { ids: external_exports.array(id).min(1).max(200) },
+      annotations: WRITES,
+      _meta: APP_ONLY
+    },
+    ({ ids }) => answer(async () => ({ text: "Checked.", data: { items: await library.check(ids) } }))
+  );
+  K3(
+    server2,
+    "library_update",
+    {
+      title: "Edit an artifact",
+      description: "Set an artifact's title, note, tags, star, or recording length.",
+      inputSchema: {
+        id,
+        title: external_exports.string().max(400).nullable().optional(),
+        note: external_exports.string().max(8e3).nullable().optional(),
+        tags: external_exports.array(external_exports.string().max(100)).max(48).optional(),
+        starred: external_exports.boolean().optional(),
+        durationMs: external_exports.number().min(0).optional()
+      },
+      annotations: WRITES,
+      _meta: APP_ONLY
+    },
+    ({ id: artifactId2, ...patch }) => answer(() => ({ text: "Updated.", data: { item: library.update(artifactId2, patch) } }))
+  );
+  K3(
+    server2,
+    "library_stamp",
+    {
+      title: "Add a file to the library",
+      description: "A person adds one file by path. Secrets are refused.",
+      inputSchema: { path },
+      annotations: WRITES,
+      _meta: APP_ONLY
+    },
+    (args) => answer(async () => ({ text: "Added.", data: { item: await library.stamp({ path: args.path, source: "human" }) } }))
+  );
+  K3(
+    server2,
+    "library_discard",
+    {
+      title: "Discard an artifact",
+      description: "Revoke its shares, drop it from the library and, when asked, move the file to the recycle bin.",
+      inputSchema: { id, trash: external_exports.boolean() },
+      annotations: DESTROYS,
+      _meta: APP_ONLY
+    },
+    ({ id: artifactId2, trash }) => answer(async () => ({ text: "Discarded.", data: { ...await library.discard(artifactId2, { trash }) } }))
+  );
+  K3(
+    server2,
+    "library_discard_default",
+    {
+      title: "Default for Discard's recycle-bin box",
+      description: "True unless git tracks the file.",
+      inputSchema: { id },
+      annotations: READ_ONLY,
+      _meta: APP_ONLY
+    },
+    ({ id: artifactId2 }) => answer(async () => {
+      const item = library.get(artifactId2);
+      if (item === void 0) throw new LibraryError(`no artifact ${artifactId2} in the library`);
+      return { text: "Default.", data: { trash: await defaultTrash(item.path) } };
+    })
+  );
+  K3(
+    server2,
+    "library_restore",
+    {
+      title: "Restore a discarded artifact",
+      description: "Bring a discarded artifact back, within 30 days.",
+      inputSchema: { id },
+      annotations: WRITES,
+      _meta: APP_ONLY
+    },
+    ({ id: artifactId2 }) => answer(() => ({ text: "Restored.", data: { item: library.restore(artifactId2) } }))
+  );
+  K3(
+    server2,
+    "library_open",
+    {
+      title: "Open an artifact",
+      description: "Open an indexed artifact as a document tab: the same answer as view_file.",
+      inputSchema: { id },
+      annotations: READ_ONLY,
+      _meta: APP_ONLY
+    },
+    async ({ id: artifactId2 }, extra) => {
+      const item = library.get(artifactId2);
+      if (item === void 0 || item.state === "discarded") return failure(`no artifact ${artifactId2} in the library`);
+      const opened = await openViewedFile(fence, { path: item.path }, extra._meta);
+      if (opened.isError !== true) library.markOpened(item.id);
+      return opened;
+    }
+  );
+  K3(
+    server2,
+    "library_thumbs",
+    {
+      title: "Thumbnail origin",
+      description: "The loopback origin and capability under which `<base>/<id>` serves a cached thumbnail.",
+      inputSchema: {},
+      annotations: READ_ONLY,
+      _meta: APP_ONLY
+    },
+    () => answer(() => ({ text: "Thumbnail origin.", data: { base: media.thumbBase } }))
+  );
+  K3(
+    server2,
+    "library_set_thumb",
+    {
+      title: "Save a thumbnail",
+      description: "The View draws a poster or a first page once and saves it here.",
+      inputSchema: { id, data: external_exports.string().min(1).max(THUMB_BASE64_LIMIT), mime: external_exports.enum(["image/webp", "image/png", "image/jpeg"]) },
+      annotations: WRITES,
+      _meta: APP_ONLY
+    },
+    ({ id: artifactId2, data, mime }) => answer(async () => {
+      await library.setThumb(artifactId2, Buffer.from(data, "base64"), mime);
+      return { text: "Saved.", data: { ok: true } };
+    })
+  );
+}
+
 // src/media-server.ts
-import { constants as constants2 } from "node:fs";
-import { open as open2 } from "node:fs/promises";
+import { randomBytes as randomBytes3 } from "node:crypto";
+import { constants as constants3 } from "node:fs";
+import { open as open3, readFile } from "node:fs/promises";
+import { extname } from "node:path";
 import { createServer } from "node:http";
 import { pipeline } from "node:stream/promises";
 var MAX_LEASES = 64;
@@ -32103,13 +33900,14 @@ var MAX_TRANSFERS = MAX_LEASES * TRANSFERS_PER_LEASE;
 var KEEP_ALIVE_HEADROOM = MAX_LEASES;
 var MAX_REMEMBERED_RELEASES = MAX_LEASES * 16;
 var STREAM_BUFFER_BYTES = 64 * 1024;
-var OPEN_FLAGS2 = constants2.O_RDONLY | (constants2.O_NONBLOCK ?? 0) | (constants2.O_NOFOLLOW ?? 0);
+var OPEN_FLAGS2 = constants3.O_RDONLY | (constants3.O_NONBLOCK ?? 0) | (constants3.O_NOFOLLOW ?? 0);
 var SANDBOXED_VIEW_ORIGIN = "null";
+var THUMB_ROUTE = /^\/thumbs\/([a-f0-9]{48})\/([A-Za-z0-9]{8,40})(?:\?.*)?$/;
 function matchesRevision(info, size, mtimeMs) {
   return info.size === size && info.mtimeMs === mtimeMs;
 }
-async function admitRecording(fence, path, size, mtimeMs, meta3) {
-  const verdict = await fence.check(path, meta3);
+async function admitRecording(fence, path2, size, mtimeMs, meta3) {
+  const verdict = await fence.check(path2, meta3);
   if (!verdict.ok) throw new Error(verdict.reason);
   const head = await readRange(verdict.real, 0, KIND_HEAD_BYTES);
   if (!matchesRevision(head, size, mtimeMs)) throw new Error("The file changed. Open it again.");
@@ -32161,7 +33959,7 @@ function comesFromView(req, listenerHost) {
   return req.headers.host === listenerHost && (origin === void 0 || origin === SANDBOXED_VIEW_ORIGIN);
 }
 async function streamRecording(req, res, lease) {
-  const file2 = await open2(lease.path, OPEN_FLAGS2);
+  const file2 = await open3(lease.path, OPEN_FLAGS2);
   try {
     const stats = await file2.stat();
     if (res.destroyed) return;
@@ -32182,8 +33980,29 @@ async function streamRecording(req, res, lease) {
     await file2.close();
   }
 }
-async function startMediaServer(fence, now = Date.now) {
+async function startMediaServer(fence, now = Date.now, thumbs) {
+  const thumbCapability = randomBytes3(24).toString("hex");
   const leases = /* @__PURE__ */ new Map();
+  async function serveThumb(req, res, capability, id2) {
+    if (req.method !== "GET" && req.method !== "HEAD") {
+      res.writeHead(405, { Allow: "GET, HEAD" }).end();
+      return;
+    }
+    const path2 = capability === thumbCapability ? thumbs?.thumbPath(id2) : void 0;
+    const type = path2 === void 0 ? void 0 : THUMB_CONTENT_TYPES[extname(path2).slice(1)];
+    if (path2 === void 0 || type === void 0) {
+      res.writeHead(404).end();
+      return;
+    }
+    const bytes = await readFile(path2);
+    res.writeHead(200, {
+      "Content-Type": type,
+      "Content-Length": bytes.length,
+      "Cache-Control": "private, max-age=86400",
+      "X-Content-Type-Options": "nosniff"
+    });
+    res.end(req.method === "HEAD" ? void 0 : bytes);
+  }
   const pendingAdmissions = /* @__PURE__ */ new Map();
   const releasedTokens = /* @__PURE__ */ new Set();
   let active = 0;
@@ -32195,6 +34014,14 @@ async function startMediaServer(fence, now = Date.now) {
       return;
     }
     res.setHeader("Access-Control-Allow-Origin", "*");
+    const thumb = THUMB_ROUTE.exec(req.url ?? "");
+    if (thumb !== null) {
+      void serveThumb(req, res, thumb[1] ?? "", thumb[2] ?? "").catch(() => {
+        if (!res.headersSent) res.writeHead(404).end();
+        else res.destroy();
+      });
+      return;
+    }
     const token = /^\/media\/([a-f0-9]{48})$/.exec(req.url ?? "")?.[1];
     const lease = token === void 0 ? void 0 : leases.get(token);
     if (lease === void 0) {
@@ -32248,11 +34075,11 @@ async function startMediaServer(fence, now = Date.now) {
     const cutoff = now() - LEASE_TTL_MS;
     for (const [token, lease] of [...leases]) if (lease.responses.size === 0 && lease.lastSeen < cutoff) release(token);
   }
-  await new Promise((resolve, reject) => {
+  await new Promise((resolve3, reject) => {
     server2.once("error", reject);
     server2.listen(0, "127.0.0.1", () => {
       server2.off("error", reject);
-      resolve();
+      resolve3();
     });
   });
   const address = server2.address();
@@ -32261,7 +34088,8 @@ async function startMediaServer(fence, now = Date.now) {
   const origin = `http://${host}`;
   return {
     origin,
-    async acquire(path, size, mtimeMs, meta3, token) {
+    thumbBase: `${origin}/thumbs/${thumbCapability}`,
+    async acquire(path2, size, mtimeMs, meta3, token) {
       if (closing !== void 0) throw new Error("The recording server is closed.");
       if (!MEDIA_TOKEN_PATTERN.test(token) || leases.has(token) || pendingAdmissions.has(token)) throw new Error("Invalid recording capability.");
       if (releasedTokens.has(token)) throw new Error("Recording opening was cancelled.");
@@ -32272,7 +34100,7 @@ async function startMediaServer(fence, now = Date.now) {
       const admission = { cancelled: false };
       pendingAdmissions.set(token, admission);
       try {
-        const lease = await admitRecording(fence, path, size, mtimeMs, meta3);
+        const lease = await admitRecording(fence, path2, size, mtimeMs, meta3);
         if (admission.cancelled) throw new Error("Recording opening was cancelled.");
         lease.lastSeen = now();
         leases.set(token, lease);
@@ -32291,16 +34119,2420 @@ async function startMediaServer(fence, now = Date.now) {
       return pendingAdmissions.has(token);
     },
     close() {
-      closing ??= new Promise((resolve, reject) => {
+      closing ??= new Promise((resolve3, reject) => {
         for (const lease of leases.values()) for (const response of lease.responses) response.destroy();
         leases.clear();
         for (const admission of pendingAdmissions.values()) admission.cancelled = true;
-        server2.close((error51) => error51 ? reject(error51) : resolve());
+        server2.close((error51) => error51 ? reject(error51) : resolve3());
         server2.closeAllConnections();
       });
       return closing;
     }
   };
+}
+
+// src/share/retry.ts
+var sleepFor = (ms, signal) => new Promise((resolve3, reject) => {
+  if (signal?.aborted) {
+    reject(signal.reason);
+    return;
+  }
+  const timer = setTimeout(() => {
+    signal?.removeEventListener("abort", onAbort);
+    resolve3();
+  }, ms);
+  function onAbort() {
+    clearTimeout(timer);
+    reject(signal?.reason);
+  }
+  signal?.addEventListener("abort", onAbort, { once: true });
+});
+function backoffDelay(attempt, options2) {
+  const ceiling = Math.min(options2.maxMs, options2.baseMs * 2 ** attempt);
+  return Math.round((options2.random ?? Math.random)() * ceiling);
+}
+function isRetryable(error51) {
+  return typeof error51 === "object" && error51 !== null && "retryable" in error51 && error51.retryable === true;
+}
+async function withRetry(run2, options2, signal) {
+  const sleep = options2.sleep ?? sleepFor;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await run2();
+    } catch (error51) {
+      if (signal?.aborted || !isRetryable(error51) || attempt + 1 >= options2.attempts) throw error51;
+      const hinted = error51.retryAfterMs === void 0 ? 0 : Math.min(error51.retryAfterMs, options2.maxMs);
+      await sleep(Math.max(hinted, backoffDelay(attempt, options2)), signal);
+    }
+  }
+}
+
+// src/share/host-api.ts
+var DEFAULT_RETRY = { attempts: 5, baseMs: 400, maxMs: 15e3 };
+var JSON_TIMEOUT_MS = 3e4;
+var BLOB_TIMEOUT_MS = 12e4;
+var errorBodySchema = external_exports.object({
+  error: external_exports.string().optional(),
+  message: external_exports.string().optional(),
+  missing: external_exports.array(external_exports.number().int().nonnegative()).optional()
+});
+var createdShareSchema = external_exports.object({
+  id: external_exports.string().min(1),
+  ownerToken: external_exports.string().min(1),
+  version: external_exports.number().int().positive(),
+  expiresAt: external_exports.number().int().positive().optional()
+});
+var createdVersionSchema = external_exports.object({ version: external_exports.number().int().positive() });
+var patchedShareSchema = external_exports.object({ expiresAt: external_exports.number().int().nonnegative().nullable().optional() });
+var sealedCommentSchema = external_exports.object({ id: external_exports.string().min(1), at: external_exports.number().int().nonnegative(), sealed: external_exports.string().min(1) });
+var postedCommentSchema = external_exports.object({ id: external_exports.string().min(1), at: external_exports.number().int().nonnegative() });
+var HostRequestError = class extends Error {
+  constructor(message, status, code, retryAfterMs, missing) {
+    super(message);
+    this.status = status;
+    this.code = code;
+    this.retryAfterMs = retryAfterMs;
+    this.missing = missing;
+  }
+  name = "HostRequestError";
+  get retryable() {
+    return this.status === 0 || this.status === 408 || this.status === 425 || this.status === 429 || this.status >= 500;
+  }
+};
+var HostClient = class {
+  baseUrl;
+  #fetch;
+  #retry;
+  constructor(baseUrl, options2 = {}) {
+    this.baseUrl = baseUrl.replace(/\/+$/, "");
+    this.#fetch = options2.fetch ?? fetch;
+    this.#retry = options2.retry ?? DEFAULT_RETRY;
+  }
+  async call(method, path2, init = {}) {
+    const headers = {};
+    if (init.bearer !== void 0) headers.authorization = `Bearer ${init.bearer}`;
+    if (init.accept !== void 0) headers.accept = init.accept;
+    let body;
+    if (init.json !== void 0) {
+      headers["content-type"] = "application/json";
+      body = JSON.stringify(init.json);
+    } else if (init.body !== void 0) {
+      headers["content-type"] = "application/octet-stream";
+      body = init.body;
+    }
+    const timeout = AbortSignal.timeout(init.timeoutMs ?? (init.body === void 0 ? JSON_TIMEOUT_MS : BLOB_TIMEOUT_MS));
+    const signal = init.signal === void 0 ? timeout : AbortSignal.any([init.signal, timeout]);
+    let response;
+    try {
+      response = await this.#fetch(`${this.baseUrl}${path2}`, { method, headers, signal, ...body === void 0 ? {} : { body } });
+    } catch (error51) {
+      if (init.signal?.aborted) throw error51;
+      const cause = error51 instanceof Error ? error51.message : String(error51);
+      throw new HostRequestError(`could not reach ${new URL(this.baseUrl).host}: ${timeout.aborted ? "the request timed out" : cause}`, 0);
+    }
+    if (response.ok) return response;
+    throw await this.#failure(response);
+  }
+  async #failure(response) {
+    let detail = {};
+    try {
+      const parsed = errorBodySchema.safeParse(await response.json());
+      if (parsed.success) detail = parsed.data;
+    } catch {
+      detail = {};
+    }
+    const retryAfter = Number(response.headers.get("retry-after"));
+    return new HostRequestError(
+      detail.message ?? `the server answered ${response.status}`,
+      response.status,
+      detail.error,
+      Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1e3 : void 0,
+      detail.missing
+    );
+  }
+  async #json(schema, response, what) {
+    let payload;
+    try {
+      payload = await response.json();
+    } catch {
+      throw new HostRequestError(`the server's ${what} answer is not JSON`, 502);
+    }
+    const parsed = schema.safeParse(payload);
+    if (!parsed.success) throw new HostRequestError(`the server's ${what} answer is not what a share server sends`, 502);
+    return parsed.data;
+  }
+  async discovery(signal) {
+    const response = await this.call("GET", "/.well-known/dimension-artifacts", { accept: "application/json", timeoutMs: 8e3, ...signal === void 0 ? {} : { signal } });
+    let payload;
+    try {
+      payload = await response.json();
+    } catch {
+      throw new HostRequestError("this address does not answer like a Dimension share server", 502);
+    }
+    const discovery = parseDiscovery(payload);
+    if (discovery === void 0) throw new HostRequestError("this address does not answer like a Dimension share server", 502);
+    return discovery;
+  }
+  async ping(token, signal) {
+    await this.call("GET", "/api/v1/ping", { timeoutMs: 8e3, ...token === void 0 ? {} : { bearer: token }, ...signal === void 0 ? {} : { signal } });
+  }
+  async createShare(token, request, signal) {
+    const response = await this.call("POST", "/api/v1/shares", { json: request, ...token === void 0 ? {} : { bearer: token }, ...signal === void 0 ? {} : { signal } });
+    return this.#json(createdShareSchema, response, "create");
+  }
+  async createVersion(ownerToken, shareId2, request, signal) {
+    const response = await this.call("POST", `/api/v1/shares/${shareId2}/versions`, { bearer: ownerToken, json: request, ...signal === void 0 ? {} : { signal } });
+    return (await this.#json(createdVersionSchema, response, "version")).version;
+  }
+  putManifest(ownerToken, shareId2, version2, sealed, signal) {
+    return withRetry(
+      async () => {
+        await this.call("PUT", `/api/v1/shares/${shareId2}/v/${version2}/manifest`, { bearer: ownerToken, body: sealed, signal });
+      },
+      this.#retry,
+      signal
+    );
+  }
+  putChunk(ownerToken, shareId2, version2, index, sealed, signal) {
+    return withRetry(
+      async () => {
+        await this.call("PUT", `/api/v1/shares/${shareId2}/v/${version2}/chunks/${index}`, { bearer: ownerToken, body: sealed, signal });
+      },
+      this.#retry,
+      signal
+    );
+  }
+  commit(ownerToken, shareId2, version2, signal) {
+    return withRetry(
+      async () => {
+        await this.call("POST", `/api/v1/shares/${shareId2}/v/${version2}/commit`, { bearer: ownerToken, signal });
+      },
+      this.#retry,
+      signal
+    );
+  }
+  async patch(ownerToken, shareId2, patch, signal) {
+    const response = await this.call("PATCH", `/api/v1/shares/${shareId2}`, { bearer: ownerToken, json: patch, ...signal === void 0 ? {} : { signal } });
+    const patched = await this.#json(patchedShareSchema, response, "update");
+    return patched.expiresAt === null || patched.expiresAt === void 0 ? {} : { expiresAt: patched.expiresAt };
+  }
+  async comments(ownerToken, shareId2, after2, signal) {
+    const query = after2 === void 0 ? "" : `?after=${encodeURIComponent(after2)}`;
+    const response = await this.call("GET", `/api/v1/shares/${shareId2}/comments${query}`, {
+      bearer: ownerToken,
+      accept: "application/json",
+      ...signal === void 0 ? {} : { signal }
+    });
+    return this.#json(external_exports.array(sealedCommentSchema), response, "comments");
+  }
+  async postComment(ownerToken, shareId2, sealed, signal) {
+    const response = await this.call("POST", `/api/v1/shares/${shareId2}/comments`, {
+      bearer: ownerToken,
+      json: { sealed },
+      ...signal === void 0 ? {} : { signal }
+    });
+    return this.#json(postedCommentSchema, response, "comment");
+  }
+};
+
+// src/share/hosts.ts
+import { join as join3 } from "node:path";
+
+// src/share/fs-json.ts
+import { mkdir as mkdir3, readFile as readFile2, rename as rename2, rm as rm2, writeFile as writeFile2 } from "node:fs/promises";
+import { dirname as dirname2 } from "node:path";
+import { randomBytes as randomBytes4 } from "node:crypto";
+var StoredFileError = class extends Error {
+  name = "StoredFileError";
+};
+async function readJsonFile(path2, schema) {
+  let text;
+  try {
+    text = await readFile2(path2, "utf8");
+  } catch (error51) {
+    if (error51 instanceof Error && "code" in error51 && error51.code === "ENOENT") return void 0;
+    throw error51;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new StoredFileError(`${path2} is not valid JSON`);
+  }
+  const checked = schema.safeParse(parsed);
+  if (!checked.success) {
+    const issue2 = checked.error.issues[0];
+    throw new StoredFileError(`${path2} is not valid: ${issue2?.path.join(".") || "(root)"} ${issue2?.message ?? ""}`.trim());
+  }
+  return checked.data;
+}
+async function writePrivateJsonFile(path2, value) {
+  await mkdir3(dirname2(path2), { recursive: true });
+  const staged = `${path2}.${randomBytes4(6).toString("hex")}.tmp`;
+  try {
+    await writeFile2(staged, `${JSON.stringify(value, null, "	")}
+`, { mode: 384 });
+    await rename2(staged, path2);
+  } catch (error51) {
+    await rm2(staged, { force: true });
+    throw error51;
+  }
+}
+
+// src/share/hosts.ts
+var DEFAULT_RELAY_URL = "https://share.insodimension.ai";
+var P2P_HOST_ID = "p2p";
+var HOST_KINDS = ["self", "company", "dimension"];
+var HOST_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,47}$/;
+var LOOPBACK_HOSTS = ["localhost", "127.0.0.1", "[::1]"];
+var storedHostSchema = external_exports.looseObject({
+  id: external_exports.string().regex(HOST_ID_PATTERN).refine((id2) => id2 !== P2P_HOST_ID, "p2p is reserved"),
+  kind: external_exports.enum(HOST_KINDS),
+  name: external_exports.string().min(1).max(120),
+  baseUrl: external_exports.string().min(1).max(2048),
+  token: external_exports.string().min(1).max(512).optional(),
+  managed: external_exports.boolean().optional()
+});
+var hostsFileSchema = external_exports.looseObject({
+  relay: external_exports.string().min(1).max(2048).optional(),
+  displayName: external_exports.string().trim().min(1).max(80).optional(),
+  policy: external_exports.looseObject({ only: external_exports.array(external_exports.string()).optional(), p2p: external_exports.boolean().optional() }).optional(),
+  hosts: external_exports.array(storedHostSchema).default([])
+});
+var HostConfigError = class extends Error {
+  name = "HostConfigError";
+};
+function normalizeBaseUrl(raw) {
+  let url2;
+  try {
+    url2 = new URL(raw.trim());
+  } catch {
+    throw new HostConfigError(`"${raw}" is not a web address`);
+  }
+  const loopback = LOOPBACK_HOSTS.includes(url2.hostname);
+  if (url2.protocol !== "https:" && !(url2.protocol === "http:" && loopback)) {
+    throw new HostConfigError("a share server must be reached over https (plain http is only accepted for this computer)");
+  }
+  return `${url2.origin}${url2.pathname.replace(/\/+$/, "")}`;
+}
+function parsePairingLink(link) {
+  let url2;
+  try {
+    url2 = new URL(link.trim());
+  } catch {
+    throw new HostConfigError("that is not a pairing link (expected https://<your server>/pair#t=<token>)");
+  }
+  const token = new URLSearchParams(url2.hash.replace(/^#/, "")).get("t");
+  const prefix = url2.pathname.replace(/\/pair\/?$/, "");
+  if (token === null || token === "" || prefix === url2.pathname) {
+    throw new HostConfigError("that is not a pairing link (expected https://<your server>/pair#t=<token>)");
+  }
+  return { baseUrl: normalizeBaseUrl(`${url2.origin}${prefix}`), token };
+}
+function relayUrlOf(file2) {
+  return normalizeBaseUrl(file2.relay ?? DEFAULT_RELAY_URL);
+}
+function p2pAllowed(file2) {
+  return file2.policy?.p2p ?? file2.policy?.only === void 0;
+}
+function visibleHosts(file2) {
+  const only = file2.policy?.only;
+  return only === void 0 ? file2.hosts : file2.hosts.filter((host) => only.includes(host.id));
+}
+function additionRefusal(file2) {
+  return file2.policy?.only === void 0 ? void 0 : "your administrator limits sharing to approved servers, so another one cannot be added here";
+}
+var HostStore = class {
+  path;
+  #queue = Promise.resolve();
+  constructor(home) {
+    this.path = join3(home, "artifacts", "hosts.json");
+  }
+  async read() {
+    return await readJsonFile(this.path, hostsFileSchema) ?? { hosts: [] };
+  }
+  #update(change) {
+    const run2 = this.#queue.then(async () => {
+      const { file: file2, result } = change(await this.read());
+      await writePrivateJsonFile(this.path, file2);
+      return result;
+    });
+    this.#queue = run2.catch(() => void 0);
+    return run2;
+  }
+  add(host) {
+    return this.#update((file2) => {
+      const refusal = additionRefusal(file2);
+      if (refusal !== void 0) throw new HostConfigError(refusal);
+      const existing = file2.hosts.find((entry) => entry.baseUrl === host.baseUrl);
+      if (existing?.managed === true) throw new HostConfigError("that server is managed by your administrator and is already available");
+      const stored = existing === void 0 ? host : { ...existing, kind: host.kind, name: host.name, ...host.token === void 0 ? {} : { token: host.token } };
+      const hosts = existing === void 0 ? [...file2.hosts, stored] : file2.hosts.map((entry) => entry.id === existing.id ? stored : entry);
+      return { file: { ...file2, hosts }, result: stored };
+    });
+  }
+  remove(id2) {
+    return this.#update((file2) => {
+      const host = file2.hosts.find((entry) => entry.id === id2);
+      if (host === void 0) throw new HostConfigError("that server is not in your list");
+      if (host.managed === true) throw new HostConfigError("that server is managed by your administrator and cannot be removed here");
+      return { file: { ...file2, hosts: file2.hosts.filter((entry) => entry.id !== id2) }, result: void 0 };
+    });
+  }
+};
+
+// src/share/sse.ts
+var MAX_BUFFERED_CHARS = 1 << 20;
+async function* readEvents(body) {
+  const reader = body.getReader();
+  const decoder3 = new TextDecoder();
+  let buffer = "";
+  try {
+    for (; ; ) {
+      const { done, value } = await reader.read();
+      if (done) return;
+      buffer += decoder3.decode(value, { stream: true }).replaceAll("\r\n", "\n");
+      if (buffer.length > MAX_BUFFERED_CHARS) throw new Error("the event stream sent a message that is too large");
+      for (let end = buffer.indexOf("\n\n"); end >= 0; end = buffer.indexOf("\n\n")) {
+        const block = buffer.slice(0, end);
+        buffer = buffer.slice(end + 2);
+        const event = parseBlock(block);
+        if (event !== void 0) yield event;
+      }
+    }
+  } finally {
+    await reader.cancel().catch(() => void 0);
+  }
+}
+function parseBlock(block) {
+  let event = "message";
+  let id2;
+  const data = [];
+  for (const line of block.split("\n")) {
+    if (line === "" || line.startsWith(":")) continue;
+    const colon = line.indexOf(":");
+    const field = colon < 0 ? line : line.slice(0, colon);
+    const value = colon < 0 ? "" : line.slice(colon + 1).replace(/^ /, "");
+    if (field === "event") event = value;
+    else if (field === "id") id2 = value;
+    else if (field === "data") data.push(value);
+  }
+  if (data.length === 0 && event === "message") return void 0;
+  return { event, data: data.join("\n"), ...id2 === void 0 ? {} : { id: id2 } };
+}
+
+// src/share/comments.ts
+var SHARES_PER_STREAM = 200;
+var MAX_STREAMS = 8;
+var CATCH_UP_CONCURRENCY = 4;
+var CATCH_UP_PAGES = 20;
+var STREAM_BACKOFF = { baseMs: 1e3, maxMs: 6e4 };
+var commentEventSchema = external_exports.object({ share: external_exports.string(), id: external_exports.string().min(1), at: external_exports.number().int().nonnegative(), sealed: external_exports.string().min(1) });
+var revokedEventSchema = external_exports.object({ share: external_exports.string(), reason: external_exports.enum(["revoked", "expired"]) });
+var readyEventSchema = external_exports.object({ rejected: external_exports.array(external_exports.object({ id: external_exports.string(), error: external_exports.string() })).default([]) });
+var CommentSync = class {
+  #options;
+  #streams = /* @__PURE__ */ new Map();
+  #keys = /* @__PURE__ */ new Map();
+  #cursors = /* @__PURE__ */ new Map();
+  #closed = false;
+  constructor(options2) {
+    this.#options = options2;
+  }
+  async #commentKey(row) {
+    let key = this.#keys.get(row.id);
+    if (key === void 0) {
+      key = await deriveCommentKey(decodeBase64Url(row.key));
+      this.#keys.set(row.id, key);
+    }
+    return key;
+  }
+  #cursor(row) {
+    const known = this.#cursors.get(row.id);
+    if (known !== void 0) return known;
+    let latest;
+    for (const comment of this.#options.library.comments.forArtifact(row.artifactId)) {
+      if (comment.shareId === row.id && (latest === void 0 || comment.id > latest)) latest = comment.id;
+    }
+    if (latest !== void 0) this.#cursors.set(row.id, latest);
+    return latest;
+  }
+  async #ingest(row, sealed) {
+    const cursor = this.#cursors.get(row.id);
+    if (cursor === void 0 || sealed.id > cursor) this.#cursors.set(row.id, sealed.id);
+    try {
+      const comment = await openComment(await this.#commentKey(row), decodeBase64Url(sealed.sealed));
+      this.#options.library.comments.upsert({
+        id: sealed.id,
+        shareId: row.id,
+        author: comment.author,
+        body: comment.body,
+        ...comment.anchor === void 0 ? {} : { anchor: comment.anchor },
+        version: comment.version,
+        createdAt: sealed.at
+      });
+    } catch {
+      this.#options.log?.("a comment on one of your shares could not be opened and was skipped");
+    }
+  }
+  #markEnded(row, reason) {
+    const now = (this.#options.now ?? Date.now)();
+    if (reason === "revoked") this.#options.library.shares.update(row.id, { revokedAt: now });
+    else if (row.expiresAt === void 0 || row.expiresAt > now) this.#options.library.shares.update(row.id, { expiresAt: now });
+    this.#options.onShareEnded?.();
+  }
+  async catchUp(rows, signal) {
+    const queue = [...rows];
+    const worker = async () => {
+      for (let row = queue.shift(); row !== void 0; row = queue.shift()) {
+        const client = new HostClient(row.baseUrl, this.#options.fetch === void 0 ? {} : { fetch: this.#options.fetch });
+        try {
+          for (let page = 0; page < CATCH_UP_PAGES; page++) {
+            const batch = await client.comments(row.ownerToken, row.remoteId, this.#cursor(row), signal);
+            if (batch.length === 0) break;
+            for (const sealed of batch) await this.#ingest(row, sealed);
+          }
+        } catch (error51) {
+          if (signal?.aborted) return;
+          this.#options.log?.(`could not read comments for a share on ${new URL(row.baseUrl).host}: ${error51 instanceof Error ? error51.message : String(error51)}`);
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(CATCH_UP_CONCURRENCY, queue.length) }, worker));
+  }
+  reconcile(rows) {
+    if (this.#closed) return;
+    const liveIds = new Set(rows.map((row) => row.id));
+    for (const id2 of [...this.#cursors.keys(), ...this.#keys.keys()]) {
+      if (!liveIds.has(id2)) {
+        this.#cursors.delete(id2);
+        this.#keys.delete(id2);
+      }
+    }
+    const desired = /* @__PURE__ */ new Map();
+    const byBase = /* @__PURE__ */ new Map();
+    for (const row of rows) byBase.set(row.baseUrl, [...byBase.get(row.baseUrl) ?? [], row]);
+    for (const [base, group] of byBase) {
+      for (let start = 0; start < group.length; start += SHARES_PER_STREAM) desired.set(`${base}#${start / SHARES_PER_STREAM}`, group.slice(start, start + SHARES_PER_STREAM));
+    }
+    for (const [key, stream] of this.#streams) {
+      const group = desired.get(key);
+      if (group === void 0 || this.#signature(group) !== stream.signature) {
+        stream.abort.abort();
+        this.#streams.delete(key);
+      }
+    }
+    for (const [key, group] of desired) {
+      if (this.#streams.has(key) || this.#streams.size >= MAX_STREAMS) continue;
+      const abort = new AbortController();
+      this.#streams.set(key, { signature: this.#signature(group), abort, done: this.#run(group, abort.signal) });
+    }
+  }
+  #signature(group) {
+    return group.map((row) => `${row.id}:${row.ownerToken.length}`).join(",");
+  }
+  async #run(group, signal) {
+    const fetcher = this.#options.fetch ?? fetch;
+    const backoff = this.#options.backoff ?? STREAM_BACKOFF;
+    const first = group[0];
+    if (first === void 0) return;
+    const relayed = first.host === P2P_HOST_ID;
+    const byRemote = new Map(group.map((row) => [row.remoteId, row]));
+    let attempt = 0;
+    while (!signal.aborted) {
+      try {
+        const shares = group.map((row) => {
+          const after2 = this.#cursor(row);
+          return { id: row.remoteId, ...relayed ? {} : { ownerToken: row.ownerToken }, ...after2 === void 0 ? {} : { after: after2 } };
+        });
+        const response = await fetcher(`${first.baseUrl.replace(/\/+$/, "")}/api/v1/events`, {
+          method: "POST",
+          headers: { "content-type": "application/json", accept: "text/event-stream", ...relayed ? { authorization: `Bearer ${first.ownerToken}` } : {} },
+          body: JSON.stringify({ shares }),
+          signal
+        });
+        if (!response.ok || response.body === null) throw new Error(`the server answered ${response.status}`);
+        for await (const event of readEvents(response.body)) {
+          attempt = 0;
+          await this.#handle(event.event, event.data, byRemote);
+        }
+      } catch (error51) {
+        if (signal.aborted) return;
+        this.#options.log?.(`comment stream from ${new URL(first.baseUrl).host} dropped: ${error51 instanceof Error ? error51.message : String(error51)}`);
+      }
+      try {
+        await sleepFor(Math.max(backoff.baseMs, backoffDelay(attempt++, backoff)), signal);
+      } catch {
+        return;
+      }
+    }
+  }
+  async #handle(event, data, byRemote) {
+    let payload;
+    try {
+      payload = JSON.parse(data);
+    } catch {
+      return;
+    }
+    if (event === "comment") {
+      const parsed = commentEventSchema.safeParse(payload);
+      const row = parsed.success ? byRemote.get(parsed.data.share) : void 0;
+      if (parsed.success && row !== void 0) await this.#ingest(row, parsed.data);
+    } else if (event === "revoked") {
+      const parsed = revokedEventSchema.safeParse(payload);
+      const row = parsed.success ? byRemote.get(parsed.data.share) : void 0;
+      if (parsed.success && row !== void 0) this.#markEnded(row, parsed.data.reason);
+    } else if (event === "ready") {
+      const parsed = readyEventSchema.safeParse(payload);
+      if (!parsed.success) return;
+      for (const rejected of parsed.data.rejected) {
+        const row = byRemote.get(rejected.id);
+        if (row !== void 0 && (rejected.error === "revoked" || rejected.error === "expired")) this.#markEnded(row, rejected.error);
+      }
+    }
+  }
+  async close() {
+    this.#closed = true;
+    const streams = [...this.#streams.values()];
+    this.#streams.clear();
+    for (const stream of streams) stream.abort.abort();
+    await Promise.all(streams.map((stream) => stream.done));
+  }
+};
+
+// src/share/directory.ts
+import { randomBytes as randomBytes5 } from "node:crypto";
+var PROBE_TTL_MS = 3e4;
+var P2P_NAME = "From this computer";
+var HostDirectory = class {
+  store;
+  #options;
+  #probes = /* @__PURE__ */ new Map();
+  constructor(store, options2 = {}) {
+    this.store = store;
+    this.#options = options2;
+  }
+  #client(baseUrl) {
+    return new HostClient(baseUrl, this.#options);
+  }
+  #probe(key, run2) {
+    const now = (this.#options.now ?? Date.now)();
+    const cached2 = this.#probes.get(key);
+    if (cached2 !== void 0 && now - cached2.at < PROBE_TTL_MS) return cached2.result;
+    const result = run2();
+    this.#probes.set(key, { at: now, result });
+    return result;
+  }
+  async #probeHost(host) {
+    const client = this.#client(host.baseUrl);
+    let discovery;
+    try {
+      discovery = await client.discovery();
+    } catch {
+      return { status: "unreachable" };
+    }
+    try {
+      await client.ping(host.token);
+    } catch (error51) {
+      if (error51 instanceof HostRequestError && (error51.status === 401 || error51.status === 403)) return { status: "unauthorized", discovery };
+      return { status: "unreachable", discovery };
+    }
+    return { status: "ok", discovery };
+  }
+  async list() {
+    const file2 = await this.store.read();
+    const allowed = p2pAllowed(file2);
+    const relayBase = relayUrlOf(file2);
+    const stored = visibleHosts(file2);
+    const [relay, ...probes] = await Promise.all([
+      allowed ? this.#probe(`p2p:${relayBase}`, async () => this.#probeRelay(relayBase)) : Promise.resolve({ status: "unreachable" }),
+      ...stored.map((host) => this.#probe(`${host.id}:${host.baseUrl}:${host.token ?? ""}`, () => this.#probeHost(host)))
+    ]);
+    const hosts = [];
+    if (allowed) {
+      hosts.push({
+        id: P2P_HOST_ID,
+        kind: "p2p",
+        name: P2P_NAME,
+        baseUrl: relayBase,
+        status: relay?.status ?? "unreachable",
+        ...relay?.discovery === void 0 ? {} : { policy: relay.discovery.policy },
+        oidc: false,
+        managed: false
+      });
+    }
+    stored.forEach((host, index) => {
+      const probe = probes[index];
+      hosts.push({
+        id: host.id,
+        kind: host.kind,
+        name: host.name,
+        baseUrl: host.baseUrl,
+        status: probe?.status ?? "unreachable",
+        ...probe?.discovery === void 0 ? {} : { policy: probe.discovery.policy },
+        oidc: probe?.discovery?.auth.oidc !== void 0,
+        managed: host.managed === true
+      });
+    });
+    return { hosts, p2pAllowed: allowed };
+  }
+  async #probeRelay(relayBase) {
+    try {
+      return { status: "ok", discovery: await this.#client(relayBase).discovery() };
+    } catch {
+      return { status: "unreachable" };
+    }
+  }
+  async resolve(hostId) {
+    const file2 = await this.store.read();
+    const host = visibleHosts(file2).find((entry) => entry.id === hostId);
+    if (host === void 0) throw new HostConfigError("that server is not available to you");
+    const client = this.#client(host.baseUrl);
+    let discovery;
+    try {
+      discovery = await client.discovery();
+    } catch (error51) {
+      throw new HostConfigError(`${host.name} is not reachable right now: ${error51 instanceof Error ? error51.message : String(error51)}`);
+    }
+    return { host, client, discovery };
+  }
+  async resolveRelay() {
+    const file2 = await this.store.read();
+    if (!p2pAllowed(file2)) throw new HostConfigError("your administrator has turned off sharing from this computer");
+    const baseUrl = relayUrlOf(file2);
+    const client = this.#client(baseUrl);
+    try {
+      return { baseUrl, client, discovery: await client.discovery() };
+    } catch (error51) {
+      throw new HostConfigError(`the relay that makes links from this computer reachable is not available right now: ${error51 instanceof Error ? error51.message : String(error51)}`);
+    }
+  }
+  async add(input) {
+    const refusal = additionRefusal(await this.store.read());
+    if (refusal !== void 0) throw new HostConfigError(refusal);
+    const target = "pairing" in input ? { ...parsePairingLink(input.pairing), kind: input.kind } : { baseUrl: normalizeBaseUrl(input.url), token: input.token?.trim() || void 0, kind: input.kind };
+    const client = this.#client(target.baseUrl);
+    const discovery = await client.discovery().catch((error51) => {
+      throw new HostConfigError(`${target.baseUrl} is not reachable: ${error51 instanceof Error ? error51.message : String(error51)}`);
+    });
+    if (discovery.mode !== "host") throw new HostConfigError("that address is a relay for sharing from a computer; it does not store shares, so it cannot be used as your server");
+    try {
+      await client.ping(target.token);
+    } catch (error51) {
+      if (error51 instanceof HostRequestError && (error51.status === 401 || error51.status === 403)) {
+        throw new HostConfigError(target.token === void 0 ? "that server needs an upload token; paste the pairing link or the token" : "that server did not accept the token");
+      }
+      throw new HostConfigError(`${discovery.name} did not answer the connection check: ${error51 instanceof Error ? error51.message : String(error51)}`);
+    }
+    const stored = await this.store.add({
+      id: `h_${randomBytes5(5).toString("hex")}`,
+      kind: target.kind,
+      name: discovery.name,
+      baseUrl: target.baseUrl,
+      ...target.token === void 0 ? {} : { token: target.token }
+    });
+    this.#probes.clear();
+    return {
+      id: stored.id,
+      kind: stored.kind,
+      name: stored.name,
+      baseUrl: stored.baseUrl,
+      status: "ok",
+      policy: discovery.policy,
+      oidc: discovery.auth.oidc !== void 0,
+      managed: stored.managed === true
+    };
+  }
+  async remove(id2) {
+    await this.store.remove(id2);
+    this.#probes.clear();
+  }
+};
+
+// ../../../../packages/artifact-host/src/tunnel-protocol.ts
+var TUNNEL_PROTOCOL_VERSION = 1;
+var TUNNEL_PATH = "/tunnel";
+var TUNNEL_PING_INTERVAL_MS = 25e3;
+var TUNNEL_MAX_FRAME_BYTES = 4 * 1024 * 1024;
+var TUNNEL_MAX_ANNOUNCED_SHARES = 500;
+var TUNNEL_NEVER_EXPIRES = 0;
+var HEADER_BYTES = 5;
+var SHARE_ID_PATTERN = /^[A-Za-z0-9_-]{16,64}$/;
+var TUNNEL_ID_PATTERN = /^[A-Za-z0-9_-]{16,64}$/;
+var FORWARDED_RESPONSE_HEADERS = {
+  "accept-ranges": true,
+  "cache-control": true,
+  "content-length": true,
+  "content-range": true,
+  "content-type": true,
+  etag: true
+};
+var TunnelProtocolError = class extends Error {
+  name = "TunnelProtocolError";
+};
+var KIND_CODES = {
+  hello: 1,
+  welcome: 2,
+  rejected: 3,
+  request: 4,
+  response: 5,
+  data: 6,
+  end: 7,
+  fail: 8,
+  cancel: 9,
+  credit: 10,
+  shares: 11,
+  ping: 12,
+  pong: 13
+};
+var KIND_BY_CODE = Object.fromEntries(
+  Object.entries(KIND_CODES).map(([kind, code]) => [code, kind])
+);
+var headersSchema = external_exports.record(external_exports.string().max(64), external_exports.string().max(2048));
+var frameId = external_exports.number().int().min(1).max(4294967295);
+var PAYLOAD_SCHEMAS = {
+  hello: external_exports.object({
+    protocol: external_exports.number().int().min(1),
+    client: external_exports.string().min(1).max(120),
+    tunnelId: external_exports.string().regex(TUNNEL_ID_PATTERN).optional(),
+    token: external_exports.string().min(16).max(128).optional()
+  }),
+  welcome: external_exports.object({
+    tunnelId: external_exports.string().regex(TUNNEL_ID_PATTERN),
+    token: external_exports.string().min(16).max(128).optional(),
+    baseUrl: external_exports.string().min(1).max(2048),
+    window: external_exports.number().int().min(1024),
+    maxConcurrent: external_exports.number().int().min(1),
+    bytesPerSecond: external_exports.number().int().min(0)
+  }),
+  rejected: external_exports.object({
+    reason: external_exports.enum(["bad_token", "rate_limited", "unsupported_protocol", "unknown_tunnel", "bad_hello"]),
+    message: external_exports.string().max(500)
+  }),
+  request: external_exports.object({
+    method: external_exports.enum(["GET", "HEAD"]),
+    path: external_exports.string().min(1).max(2048).startsWith("/"),
+    headers: headersSchema,
+    window: external_exports.number().int().min(1024)
+  }),
+  response: external_exports.object({ status: external_exports.number().int().min(100).max(599), headers: headersSchema }),
+  fail: external_exports.object({ status: external_exports.number().int().min(400).max(599), message: external_exports.string().max(500) }),
+  shares: external_exports.object({
+    shares: external_exports.array(
+      external_exports.object({
+        id: external_exports.string().regex(SHARE_ID_PATTERN),
+        comments: external_exports.boolean(),
+        expiresAt: external_exports.number().int().min(0),
+        latest: external_exports.number().int().min(1)
+      })
+    ).max(TUNNEL_MAX_ANNOUNCED_SHARES)
+  })
+};
+var encoder2 = new TextEncoder();
+var decoder2 = new TextDecoder("utf-8", { fatal: true });
+function frameWithPayload(kind, id2, payload) {
+  const out = new Uint8Array(HEADER_BYTES + payload.byteLength);
+  out[0] = KIND_CODES[kind];
+  new DataView(out.buffer).setUint32(1, id2, false);
+  out.set(payload, HEADER_BYTES);
+  return out;
+}
+function jsonFrame(kind, id2, body) {
+  return frameWithPayload(kind, id2, encoder2.encode(JSON.stringify(body)));
+}
+function encodeFrame(frame) {
+  switch (frame.kind) {
+    case "hello": {
+      const { kind: _2, ...body } = frame;
+      return jsonFrame("hello", 0, body);
+    }
+    case "welcome": {
+      const { kind: _2, ...body } = frame;
+      return jsonFrame("welcome", 0, body);
+    }
+    case "rejected": {
+      const { kind: _2, ...body } = frame;
+      return jsonFrame("rejected", 0, body);
+    }
+    case "request": {
+      const { kind: _2, id: id2, ...body } = frame;
+      return jsonFrame("request", id2, body);
+    }
+    case "response": {
+      const { kind: _2, id: id2, ...body } = frame;
+      return jsonFrame("response", id2, body);
+    }
+    case "fail": {
+      const { kind: _2, id: id2, ...body } = frame;
+      return jsonFrame("fail", id2, body);
+    }
+    case "shares":
+      return jsonFrame("shares", 0, { shares: frame.shares });
+    case "data":
+      return frameWithPayload("data", frame.id, frame.bytes);
+    case "end":
+      return frameWithPayload("end", frame.id, new Uint8Array(0));
+    case "cancel":
+      return frameWithPayload("cancel", frame.id, new Uint8Array(0));
+    case "credit": {
+      const payload = new Uint8Array(4);
+      new DataView(payload.buffer).setUint32(0, frame.bytes, false);
+      return frameWithPayload("credit", frame.id, payload);
+    }
+    case "ping":
+      return frameWithPayload("ping", 0, new Uint8Array(0));
+    case "pong":
+      return frameWithPayload("pong", 0, new Uint8Array(0));
+  }
+}
+function parseJsonPayload(kind, payload) {
+  let json2;
+  try {
+    json2 = JSON.parse(decoder2.decode(payload));
+  } catch {
+    throw new TunnelProtocolError(`the ${kind} frame is not JSON`);
+  }
+  const parsed = PAYLOAD_SCHEMAS[kind].safeParse(json2);
+  if (!parsed.success) throw new TunnelProtocolError(`the ${kind} frame is malformed: ${parsed.error.issues[0]?.message ?? "invalid"}`);
+  return parsed.data;
+}
+function requireId(kind, id2) {
+  if (!frameId.safeParse(id2).success) throw new TunnelProtocolError(`the ${kind} frame needs a request id`);
+  return id2;
+}
+function decodeFrame(bytes) {
+  if (bytes.byteLength < HEADER_BYTES) throw new TunnelProtocolError("the frame is shorter than its header");
+  if (bytes.byteLength > TUNNEL_MAX_FRAME_BYTES) throw new TunnelProtocolError("the frame is larger than the limit");
+  const kind = KIND_BY_CODE[bytes[0]];
+  if (kind === void 0) throw new TunnelProtocolError(`unknown frame type ${bytes[0]}`);
+  const id2 = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(1, false);
+  const payload = bytes.subarray(HEADER_BYTES);
+  switch (kind) {
+    case "hello": {
+      const body = parseJsonPayload("hello", payload);
+      return {
+        kind,
+        protocol: body.protocol,
+        client: body.client,
+        ...body.tunnelId === void 0 ? {} : { tunnelId: body.tunnelId },
+        ...body.token === void 0 ? {} : { token: body.token }
+      };
+    }
+    case "welcome": {
+      const body = parseJsonPayload("welcome", payload);
+      return {
+        kind,
+        tunnelId: body.tunnelId,
+        ...body.token === void 0 ? {} : { token: body.token },
+        baseUrl: body.baseUrl,
+        window: body.window,
+        maxConcurrent: body.maxConcurrent,
+        bytesPerSecond: body.bytesPerSecond
+      };
+    }
+    case "rejected":
+      return { kind, ...parseJsonPayload("rejected", payload) };
+    case "request": {
+      const body = parseJsonPayload("request", payload);
+      return { kind, id: requireId(kind, id2), method: body.method, path: body.path, headers: body.headers, window: body.window };
+    }
+    case "response": {
+      const body = parseJsonPayload("response", payload);
+      return { kind, id: requireId(kind, id2), status: body.status, headers: body.headers };
+    }
+    case "fail": {
+      const body = parseJsonPayload("fail", payload);
+      return { kind, id: requireId(kind, id2), status: body.status, message: body.message };
+    }
+    case "shares":
+      return { kind, shares: parseJsonPayload("shares", payload).shares };
+    case "data":
+      return { kind, id: requireId(kind, id2), bytes: payload };
+    case "end":
+      return { kind, id: requireId(kind, id2) };
+    case "cancel":
+      return { kind, id: requireId(kind, id2) };
+    case "credit": {
+      if (payload.byteLength !== 4) throw new TunnelProtocolError("the credit frame must carry four bytes");
+      const bytes2 = new DataView(payload.buffer, payload.byteOffset, 4).getUint32(0, false);
+      return { kind, id: requireId(kind, id2), bytes: bytes2 };
+    }
+    case "ping":
+      return { kind };
+    case "pong":
+      return { kind };
+  }
+}
+function tunnelUrl(relayBase) {
+  const url2 = new URL(TUNNEL_PATH, relayBase.endsWith("/") ? relayBase : `${relayBase}/`);
+  url2.protocol = url2.protocol === "https:" ? "wss:" : "ws:";
+  return url2.href;
+}
+
+// src/share/p2p-server.ts
+import { stat as stat3 } from "node:fs/promises";
+
+// src/share/chunk-cache.ts
+var ChunkCache = class {
+  #entries = /* @__PURE__ */ new Map();
+  #capacityBytes;
+  #bytes = 0;
+  constructor(capacityBytes) {
+    this.#capacityBytes = capacityBytes;
+  }
+  get(key) {
+    const value = this.#entries.get(key);
+    if (value === void 0) return void 0;
+    this.#entries.delete(key);
+    this.#entries.set(key, value);
+    return value;
+  }
+  put(key, value) {
+    const previous = this.#entries.get(key);
+    if (previous !== void 0) this.#bytes -= previous.length;
+    this.#entries.delete(key);
+    this.#entries.set(key, value);
+    this.#bytes += value.length;
+    for (const [oldest, bytes] of this.#entries) {
+      if (this.#bytes <= this.#capacityBytes || oldest === key) break;
+      this.#entries.delete(oldest);
+      this.#bytes -= bytes.length;
+    }
+  }
+  dropWithPrefix(prefix) {
+    for (const [key, bytes] of this.#entries) {
+      if (!key.startsWith(prefix)) continue;
+      this.#entries.delete(key);
+      this.#bytes -= bytes.length;
+    }
+  }
+};
+
+// src/share/manifest.ts
+import { readFile as readFile3 } from "node:fs/promises";
+var MAX_NAME_CHARS = 255;
+var MAX_TITLE_CHARS2 = 500;
+async function posterOf(library, artifactId2) {
+  const path2 = library.thumbPath(artifactId2);
+  if (path2 === void 0) return void 0;
+  try {
+    const bytes = await readFile3(path2);
+    return bytes.length > 0 && bytes.length <= ASP_MAX_POSTER_BYTES ? bytes.toString("base64") : void 0;
+  } catch {
+    return void 0;
+  }
+}
+async function buildManifest(library, item, version2, size) {
+  const poster = await posterOf(library, item.id);
+  const title = item.title?.trim().slice(0, MAX_TITLE_CHARS2);
+  return {
+    asp: 1,
+    name: item.name.slice(0, MAX_NAME_CHARS),
+    ...title === void 0 || title === "" ? {} : { title },
+    kind: item.kind,
+    mime: item.mime,
+    size,
+    chunkBytes: ASP_CHUNK_BYTES,
+    chunks: chunkCount(size),
+    version: version2,
+    createdAt: Date.now(),
+    ...item.width !== void 0 && item.width > 0 ? { width: Math.round(item.width) } : {},
+    ...item.height !== void 0 && item.height > 0 ? { height: Math.round(item.height) } : {},
+    ...item.durationMs !== void 0 && item.durationMs >= 0 ? { durationMs: Math.round(item.durationMs) } : {},
+    ...poster === void 0 ? {} : { poster }
+  };
+}
+
+// src/share/p2p-server.ts
+var ROUTE = /^\/api\/v1\/shares\/([A-Za-z0-9_-]{16,64})(?:\/v\/(\d{1,9})\/(manifest|chunks\/(\d{1,9})))?$/;
+var RANGE = /^bytes=(\d*)-(\d*)$/;
+var CACHE_BYTES = 16 * ASP_CHUNK_BYTES;
+var IMMUTABLE = "public, max-age=31536000, immutable";
+var FOLD_CASE = process.platform === "win32" || process.platform === "darwin";
+var P2pRefusal = class extends Error {
+  constructor(status, code, message) {
+    super(message);
+    this.status = status;
+    this.code = code;
+  }
+  name = "P2pRefusal";
+};
+function refusalResponse(refusal) {
+  return new Response(JSON.stringify({ error: refusal.code, message: refusal.message }), {
+    status: refusal.status,
+    headers: { "content-type": "application/json", "cache-control": "no-store" }
+  });
+}
+function bytesResponse(request, bytes) {
+  const headers = {
+    "content-type": "application/octet-stream",
+    "cache-control": IMMUTABLE,
+    "accept-ranges": "bytes"
+  };
+  const spec = RANGE.exec(request.headers.get("range") ?? "");
+  let status = 200;
+  let body = bytes;
+  if (spec !== null && request.method === "GET") {
+    const [, first = "", last = ""] = spec;
+    const suffix = first === "" ? Number(last) : void 0;
+    const start = suffix === void 0 ? Number(first) : Math.max(0, bytes.length - suffix);
+    const end = suffix !== void 0 || last === "" ? bytes.length - 1 : Math.min(Number(last), bytes.length - 1);
+    if (first === "" && last === "" || start >= bytes.length || end < start || suffix === 0) {
+      return new Response(null, { status: 416, headers: { "content-range": `bytes */${bytes.length}` } });
+    }
+    status = 206;
+    body = bytes.subarray(start, end + 1);
+    headers["content-range"] = `bytes ${start}-${end}/${bytes.length}`;
+  }
+  headers["content-length"] = String(body.length);
+  return new Response(request.method === "HEAD" ? null : body, { status, headers });
+}
+var P2pServer = class {
+  #library;
+  #fence;
+  #store;
+  #now;
+  #onVersionChange;
+  #states = /* @__PURE__ */ new Map();
+  #keys = /* @__PURE__ */ new Map();
+  #locks = /* @__PURE__ */ new Map();
+  #inflight = /* @__PURE__ */ new Map();
+  #cache = new ChunkCache(CACHE_BYTES);
+  constructor(options2) {
+    this.#library = options2.library;
+    this.#fence = options2.fence;
+    this.#store = options2.store;
+    this.#now = options2.now ?? Date.now;
+    this.#onVersionChange = options2.onVersionChange ?? (() => void 0);
+  }
+  async handle(request) {
+    try {
+      return await this.#route(request);
+    } catch (error51) {
+      if (error51 instanceof P2pRefusal) return refusalResponse(error51);
+      throw error51;
+    }
+  }
+  async #route(request) {
+    const match = ROUTE.exec(new URL(request.path, "http://share.invalid").pathname);
+    if (match === null) throw new P2pRefusal(404, "not_found", "There is nothing at this address.");
+    const [, shareId2 = "", version2, leaf, chunkIndex] = match;
+    const row = this.#live(shareId2);
+    const file2 = await this.#file(row);
+    const state = await this.#current(row, file2);
+    if (leaf === void 0) return this.#meta(request, row, state);
+    if (Number(version2) !== state.version) throw new P2pRefusal(404, "not_found", "That version of this share is no longer available.");
+    if (leaf === "manifest") return bytesResponse(request, state.sealedManifest);
+    const index = Number(chunkIndex);
+    if (index >= chunkCount(state.size)) throw new P2pRefusal(404, "not_found", "There is no such part in this share.");
+    return bytesResponse(request, await this.#sealed(row, file2, state, index));
+  }
+  #live(shareId2) {
+    const row = this.#library.shares.get(shareId2);
+    if (row === void 0 || row.host !== "p2p") throw new P2pRefusal(404, "not_found", "This share does not exist.");
+    if (row.revokedAt !== void 0) throw new P2pRefusal(410, "revoked", "The person who shared this has stopped sharing it.");
+    if (row.expiresAt !== void 0 && row.expiresAt <= this.#now()) throw new P2pRefusal(410, "expired", "This link has expired.");
+    return row;
+  }
+  async #file(row) {
+    const item = this.#library.get(row.artifactId);
+    if (item === void 0 || item.state === "discarded") throw new P2pRefusal(410, "revoked", "The person who shared this has stopped sharing it.");
+    const verdict = await this.#fence.check(item.path);
+    const gone = new P2pRefusal(404, "not_found", "The file is no longer on the sharing computer.");
+    if (!verdict.ok) throw gone;
+    const sameFile = FOLD_CASE ? verdict.real.toLowerCase() === item.path.toLowerCase() : verdict.real === item.path;
+    if (!sameFile) throw gone;
+    let info;
+    try {
+      info = await stat3(verdict.real);
+    } catch {
+      throw gone;
+    }
+    if (!info.isFile()) throw gone;
+    return { item, real: verdict.real, fingerprint: { size: info.size, mtimeMs: info.mtimeMs } };
+  }
+  #locked(shareId2, work) {
+    const run2 = (this.#locks.get(shareId2) ?? Promise.resolve()).then(work);
+    const tail = run2.then(
+      () => void 0,
+      () => void 0
+    );
+    this.#locks.set(shareId2, tail);
+    void tail.then(() => {
+      if (this.#locks.get(shareId2) === tail) this.#locks.delete(shareId2);
+    });
+    return run2;
+  }
+  async #key(row) {
+    let key = this.#keys.get(row.id);
+    if (key === void 0) {
+      key = await importContentKey(decodeBase64Url(row.key));
+      this.#keys.set(row.id, key);
+    }
+    return key;
+  }
+  async #load(row) {
+    const cached2 = this.#states.get(row.id);
+    if (cached2 !== void 0) return cached2;
+    const stored = await this.#store.readShare(row.id);
+    if (stored === void 0) return void 0;
+    const loaded = {
+      version: stored.version,
+      prefix: decodeBase64Url(stored.prefix),
+      size: stored.size,
+      mtimeMs: stored.mtimeMs,
+      createdAt: stored.createdAt,
+      sealedManifest: decodeBase64Url(stored.manifest)
+    };
+    this.#states.set(row.id, loaded);
+    return loaded;
+  }
+  async #seal(row, item, fingerprint, version2) {
+    const key = await this.#key(row);
+    const prefix = newVersionPrefix();
+    const manifest = await buildManifest(this.#library, item, version2, fingerprint.size);
+    const sealedManifest = await sealManifest(key, prefix, manifest);
+    await this.#store.writeShare(row.id, {
+      version: version2,
+      prefix: encodeBase64Url(prefix),
+      size: fingerprint.size,
+      mtimeMs: fingerprint.mtimeMs,
+      createdAt: manifest.createdAt,
+      manifest: encodeBase64Url(sealedManifest)
+    });
+    const state = { version: version2, prefix, size: fingerprint.size, mtimeMs: fingerprint.mtimeMs, createdAt: manifest.createdAt, sealedManifest };
+    this.#states.set(row.id, state);
+    this.#cache.dropWithPrefix(`${row.id}:`);
+    if (row.version !== version2) {
+      this.#library.shares.update(row.id, { version: version2 });
+      this.#onVersionChange();
+    }
+    return state;
+  }
+  #current(row, file2) {
+    return this.#locked(row.id, async () => {
+      const loaded = await this.#load(row);
+      if (loaded !== void 0 && loaded.version === row.version && loaded.size === file2.fingerprint.size && loaded.mtimeMs === file2.fingerprint.mtimeMs) {
+        return loaded;
+      }
+      return this.#seal(row, file2.item, file2.fingerprint, Math.max(loaded?.version ?? 0, row.version) + 1);
+    });
+  }
+  create(row, item, fingerprint) {
+    return this.#locked(row.id, async () => {
+      await this.#seal(row, item, fingerprint, row.version);
+    });
+  }
+  newVersion(row) {
+    return this.#locked(row.id, async () => {
+      const file2 = await this.#file(row);
+      const loaded = await this.#load(row);
+      return (await this.#seal(row, file2.item, file2.fingerprint, Math.max(loaded?.version ?? 0, row.version) + 1)).version;
+    });
+  }
+  async forget(shareId2) {
+    this.#states.delete(shareId2);
+    this.#keys.delete(shareId2);
+    this.#cache.dropWithPrefix(`${shareId2}:`);
+    await this.#store.removeShare(shareId2);
+  }
+  #meta(request, row, state) {
+    const body = JSON.stringify({
+      id: row.id,
+      latest: state.version,
+      pinned: null,
+      versions: [{ version: state.version, chunks: chunkCount(state.size), sealedBytes: sealedSize(state.size), createdAt: state.createdAt }],
+      allowComments: row.allowComments,
+      expiresAt: row.expiresAt ?? null
+    });
+    return new Response(request.method === "HEAD" ? null : body, {
+      status: 200,
+      headers: { "content-type": "application/json", "cache-control": "no-cache", "content-length": String(Buffer.byteLength(body)) }
+    });
+  }
+  #sealed(row, file2, state, index) {
+    const id2 = `${row.id}:${state.version}:${index}`;
+    const hit = this.#cache.get(id2);
+    if (hit !== void 0) return Promise.resolve(hit);
+    const pending = this.#inflight.get(id2);
+    if (pending !== void 0) return pending;
+    const work = (async () => {
+      const start = index * ASP_CHUNK_BYTES;
+      const length = Math.min(ASP_CHUNK_BYTES, state.size - start);
+      const read = await readRange(file2.real, start, length);
+      if (read.size !== state.size || read.mtimeMs !== state.mtimeMs || read.bytes.length !== length) {
+        throw new P2pRefusal(409, "changed", "The file changed while it was being read; reload this page.");
+      }
+      const plain = new Uint8Array(read.bytes.buffer, read.bytes.byteOffset, read.bytes.byteLength);
+      const sealed = await sealChunk(await this.#key(row), state.prefix, state.version, index, index === chunkCount(state.size) - 1, plain);
+      this.#cache.put(id2, sealed);
+      return sealed;
+    })().finally(() => this.#inflight.delete(id2));
+    this.#inflight.set(id2, work);
+    return work;
+  }
+};
+
+// src/share/tunnel.ts
+var CLIENT_NAME = "swiss-knife-viewer/1";
+var WELCOME_DEADLINE_MS = 1e4;
+var MAX_DATA_FRAME_BYTES = 128 * 1024;
+var SOCKET_HIGH_WATER_BYTES = 4 * 1024 * 1024;
+var DEFAULT_RECONNECT = { baseMs: 1e3, maxMs: 6e4, rateLimitedMs: 6e4 };
+var SOCKET_OPEN = 1;
+function transmit(socket, frame) {
+  socket.send(encodeFrame(frame));
+}
+var TunnelClient = class {
+  #options;
+  #requests = /* @__PURE__ */ new Map();
+  #waiters = [];
+  #session;
+  #socket;
+  #running;
+  #abort;
+  #refusal;
+  constructor(options2) {
+    this.#options = options2;
+  }
+  start() {
+    if (this.#running !== void 0) return;
+    this.#refusal = void 0;
+    const abort = new AbortController();
+    this.#abort = abort;
+    this.#running = this.#loop(abort.signal).finally(() => {
+      if (this.#abort === abort) {
+        this.#running = void 0;
+        this.#abort = void 0;
+      }
+    });
+  }
+  async stop() {
+    const running = this.#running;
+    this.#abort?.abort();
+    this.#socket?.close(1e3, "stopping");
+    await running;
+    this.#session = void 0;
+    this.#settle(new Error("the connection to the relay was stopped"));
+  }
+  whenReady(signal) {
+    if (this.#refusal !== void 0) return Promise.reject(new Error(this.#refusal));
+    if (this.#session !== void 0 && this.#socket?.readyState === SOCKET_OPEN) return Promise.resolve(this.#session);
+    return new Promise((resolve3, reject) => {
+      const waiter = { resolve: resolve3, reject };
+      this.#waiters.push(waiter);
+      signal.addEventListener(
+        "abort",
+        () => {
+          const at = this.#waiters.indexOf(waiter);
+          if (at >= 0) this.#waiters.splice(at, 1);
+          reject(new Error("the relay did not answer in time"));
+        },
+        { once: true }
+      );
+    });
+  }
+  announce() {
+    const socket = this.#socket;
+    if (this.#session === void 0 || socket === void 0 || socket.readyState !== SOCKET_OPEN) return;
+    transmit(socket, { kind: "shares", shares: this.#options.shares().slice(0, TUNNEL_MAX_ANNOUNCED_SHARES) });
+  }
+  #settle(error51) {
+    for (const waiter of this.#waiters.splice(0)) {
+      if (error51 instanceof Error) waiter.reject(error51);
+      else waiter.resolve(error51);
+    }
+  }
+  async #loop(signal) {
+    const reconnect = this.#options.reconnect ?? DEFAULT_RECONNECT;
+    let attempt = 0;
+    while (!signal.aborted) {
+      const outcome = await this.#connect(signal);
+      this.#socket = void 0;
+      for (const state of this.#requests.values()) {
+        state.cancelled = true;
+        state.wake?.();
+      }
+      this.#requests.clear();
+      if (signal.aborted) return;
+      if (outcome.refusal !== void 0) {
+        this.#refusal = outcome.refusal === "bad_token" ? "the relay refused this computer's credential" : "the relay no longer knows this computer, so earlier links from it are gone";
+        this.#session = void 0;
+        this.#settle(new Error(this.#refusal));
+        await this.#options.onRefused(outcome.refusal);
+        return;
+      }
+      attempt = outcome.registered ? 0 : attempt + 1;
+      const pause = outcome.rateLimited ? reconnect.rateLimitedMs : Math.max(reconnect.baseMs, backoffDelay(attempt, reconnect));
+      try {
+        await sleepFor(pause, signal);
+      } catch {
+        return;
+      }
+    }
+  }
+  #connect(signal) {
+    return new Promise((resolve3) => {
+      const socket = (this.#options.createSocket ?? ((url2) => new WebSocket(url2)))(tunnelUrl(this.#options.relayBase));
+      socket.binaryType = "arraybuffer";
+      this.#socket = socket;
+      let registered = false;
+      let refusal;
+      let rateLimited = false;
+      let lastHeard = Date.now();
+      const welcomeTimer = setTimeout(() => socket.close(4001, "no welcome"), WELCOME_DEADLINE_MS);
+      const pingTimer = setInterval(() => {
+        if (Date.now() - lastHeard > TUNNEL_PING_INTERVAL_MS * 2.5) {
+          socket.close(4002, "silent");
+          return;
+        }
+        if (socket.readyState === SOCKET_OPEN) transmit(socket, { kind: "ping" });
+      }, TUNNEL_PING_INTERVAL_MS);
+      const onAbort = () => socket.close(1e3, "stopping");
+      signal.addEventListener("abort", onAbort, { once: true });
+      socket.onopen = () => {
+        const credentials = this.#options.credentials();
+        transmit(socket, {
+          kind: "hello",
+          protocol: TUNNEL_PROTOCOL_VERSION,
+          client: CLIENT_NAME,
+          ...credentials === void 0 ? {} : { tunnelId: credentials.tunnelId, token: credentials.token }
+        });
+      };
+      socket.onmessage = (event) => {
+        lastHeard = Date.now();
+        let frame;
+        try {
+          frame = decodeFrame(new Uint8Array(event.data));
+        } catch (error51) {
+          this.#options.log?.(`relay sent a frame that was not understood: ${error51 instanceof Error ? error51.message : String(error51)}`);
+          socket.close(1002, "protocol");
+          return;
+        }
+        switch (frame.kind) {
+          case "welcome": {
+            clearTimeout(welcomeTimer);
+            const token = frame.token ?? this.#options.credentials()?.token;
+            if (token === void 0) {
+              socket.close(1002, "no credential");
+              return;
+            }
+            const session = { tunnelId: frame.tunnelId, token, baseUrl: frame.baseUrl };
+            void this.#options.onRegistered(session).then(
+              () => {
+                if (socket.readyState !== SOCKET_OPEN) return;
+                registered = true;
+                this.#session = session;
+                this.announce();
+                this.#settle(session);
+              },
+              (error51) => {
+                this.#options.log?.(`could not save the relay credential: ${error51 instanceof Error ? error51.message : String(error51)}`);
+                socket.close(1011, "persist");
+              }
+            );
+            return;
+          }
+          case "rejected":
+            if (frame.reason === "bad_token" || frame.reason === "unknown_tunnel") refusal = frame.reason;
+            else if (frame.reason === "rate_limited") rateLimited = true;
+            else this.#options.log?.(`relay rejected this client: ${frame.message}`);
+            return;
+          case "request":
+            void this.#serve(socket, frame);
+            return;
+          case "credit": {
+            const state = this.#requests.get(frame.id);
+            if (state !== void 0) {
+              state.allowance += frame.bytes;
+              state.wake?.();
+            }
+            return;
+          }
+          case "cancel": {
+            const state = this.#requests.get(frame.id);
+            if (state !== void 0) {
+              state.cancelled = true;
+              state.wake?.();
+            }
+            return;
+          }
+          default:
+            return;
+        }
+      };
+      socket.onerror = () => void 0;
+      socket.onclose = () => {
+        clearTimeout(welcomeTimer);
+        clearInterval(pingTimer);
+        signal.removeEventListener("abort", onAbort);
+        resolve3({ registered, rateLimited, ...refusal === void 0 ? {} : { refusal } });
+      };
+    });
+  }
+  async #serve(socket, frame) {
+    const state = { allowance: frame.window, cancelled: false };
+    this.#requests.set(frame.id, state);
+    const send = (reply) => {
+      if (socket.readyState === SOCKET_OPEN) transmit(socket, reply);
+    };
+    try {
+      const response = await this.#options.handle({ method: frame.method, path: frame.path, headers: new Headers(frame.headers) });
+      if (state.cancelled) {
+        await response.body?.cancel();
+        return;
+      }
+      const headers = {};
+      for (const [name, value] of response.headers) {
+        if (FORWARDED_RESPONSE_HEADERS[name.toLowerCase()] === true) headers[name.toLowerCase()] = value;
+      }
+      send({ kind: "response", id: frame.id, status: response.status, headers });
+      if (frame.method === "HEAD" || response.body === null) {
+        send({ kind: "end", id: frame.id });
+        return;
+      }
+      const reader = response.body.getReader();
+      try {
+        for (; ; ) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (!await this.#sendData(socket, frame.id, state, value)) {
+            await reader.cancel();
+            return;
+          }
+        }
+      } finally {
+        reader.releaseLock();
+      }
+      send({ kind: "end", id: frame.id });
+    } catch (error51) {
+      this.#options.log?.(`a relayed request failed: ${error51 instanceof Error ? error51.message : String(error51)}`);
+      if (!state.cancelled) send({ kind: "fail", id: frame.id, status: 500, message: "The sharing computer could not answer that request." });
+    } finally {
+      this.#requests.delete(frame.id);
+    }
+  }
+  async #sendData(socket, id2, state, bytes) {
+    let offset = 0;
+    while (offset < bytes.length) {
+      while (state.allowance <= 0 && !state.cancelled) await new Promise((resolve3) => state.wake = resolve3);
+      while (socket.bufferedAmount > SOCKET_HIGH_WATER_BYTES && socket.readyState === SOCKET_OPEN && !state.cancelled) await sleepFor(5);
+      if (state.cancelled || socket.readyState !== SOCKET_OPEN) return false;
+      const length = Math.min(bytes.length - offset, state.allowance, MAX_DATA_FRAME_BYTES);
+      transmit(socket, { kind: "data", id: id2, bytes: bytes.subarray(offset, offset + length) });
+      state.allowance -= length;
+      offset += length;
+    }
+    return true;
+  }
+};
+
+// src/share/p2p.ts
+var REGISTER_DEADLINE_MS = 15e3;
+var P2pRuntime = class {
+  server;
+  #options;
+  #now;
+  #tunnel;
+  #credentials;
+  #holds = 0;
+  #reconciling = Promise.resolve();
+  #closed = false;
+  constructor(options2) {
+    this.#options = options2;
+    this.#now = options2.now ?? Date.now;
+    this.server = new P2pServer({
+      library: options2.library,
+      fence: options2.fence,
+      store: options2.store,
+      now: this.#now,
+      onVersionChange: () => this.#tunnel?.client.announce()
+    });
+  }
+  liveRows() {
+    return this.#options.library.shares.live().filter((row) => row.host === P2P_HOST_ID);
+  }
+  #announced() {
+    const baseUrl = this.#credentials?.baseUrl;
+    return this.liveRows().filter((row) => row.baseUrl === baseUrl).map((row) => ({ id: row.id, comments: row.allowComments, expiresAt: row.expiresAt ?? TUNNEL_NEVER_EXPIRES, latest: row.version }));
+  }
+  async #clientFor(relayBase) {
+    if (this.#tunnel?.relayBase === relayBase) return this.#tunnel.client;
+    await this.#tunnel?.client.stop();
+    const stored = await this.#options.store.readTunnel();
+    this.#credentials = stored?.relay === relayBase ? stored : void 0;
+    const client = new TunnelClient({
+      relayBase,
+      credentials: () => this.#credentials,
+      shares: () => this.#announced(),
+      handle: (request) => this.server.handle(request),
+      onRegistered: async (session) => {
+        const credentials = { relay: relayBase, tunnelId: session.tunnelId, token: session.token, baseUrl: session.baseUrl };
+        if (this.#credentials?.token !== credentials.token || this.#credentials.tunnelId !== credentials.tunnelId) {
+          await this.#options.store.writeTunnel(credentials);
+        }
+        this.#credentials = credentials;
+      },
+      onRefused: () => this.#voidCredentials(),
+      ...this.#options.createSocket === void 0 ? {} : { createSocket: this.#options.createSocket },
+      ...this.#options.reconnect === void 0 ? {} : { reconnect: this.#options.reconnect },
+      ...this.#options.log === void 0 ? {} : { log: this.#options.log }
+    });
+    this.#tunnel = { relayBase, client };
+    return client;
+  }
+  async #voidCredentials() {
+    const dead = this.#credentials?.baseUrl;
+    this.#credentials = void 0;
+    await this.#options.store.clearTunnel();
+    const now = this.#now();
+    for (const row of this.liveRows()) {
+      if (row.baseUrl !== dead) continue;
+      this.#options.library.shares.update(row.id, { revokedAt: now });
+      await this.server.forget(row.id);
+    }
+  }
+  async withTunnel(work) {
+    if (this.#closed) throw new Error("sharing is shutting down");
+    const relay = await this.#options.relay();
+    if (!relay.allowed) throw new Error("your administrator has turned off sharing from this computer");
+    this.#holds++;
+    try {
+      const client = await this.#clientFor(relay.baseUrl);
+      client.start();
+      const session = await client.whenReady(AbortSignal.timeout(REGISTER_DEADLINE_MS));
+      return await work(session);
+    } finally {
+      this.#holds--;
+      void this.reconcile();
+    }
+  }
+  reconcile() {
+    this.#reconciling = this.#reconciling.then(() => this.#reconcileOnce()).catch((error51) => this.#options.log?.(`sharing from this computer: ${error51 instanceof Error ? error51.message : String(error51)}`));
+    return this.#reconciling;
+  }
+  async #reconcileOnce() {
+    if (this.#closed) return;
+    const relay = await this.#options.relay();
+    const now = this.#now();
+    const rows = this.liveRows();
+    const needed = this.#holds > 0 || relay.allowed && rows.some((row) => row.expiresAt === void 0 || row.expiresAt > now);
+    if (needed) {
+      const client = await this.#clientFor(relay.baseUrl);
+      client.start();
+      client.announce();
+    } else {
+      await this.#tunnel?.client.stop();
+    }
+    if (this.#holds > 0) return;
+    const known = new Set(rows.map((row) => row.id));
+    for (const id2 of await this.#options.store.shareIds()) {
+      if (!known.has(id2)) await this.server.forget(id2);
+    }
+  }
+  announce() {
+    this.#tunnel?.client.announce();
+  }
+  async close() {
+    this.#closed = true;
+    await this.#reconciling;
+    await this.#tunnel?.client.stop();
+  }
+};
+
+// src/share/p2p-store.ts
+import { readdir as readdir2, rm as rm3 } from "node:fs/promises";
+import { join as join4 } from "node:path";
+var STATE_ID_PATTERN = /^[A-Za-z0-9_-]{16,64}$/;
+var shareStateSchema = external_exports.object({
+  version: external_exports.number().int().positive(),
+  prefix: external_exports.string().min(1),
+  size: external_exports.number().int().nonnegative(),
+  mtimeMs: external_exports.number(),
+  createdAt: external_exports.number().int().nonnegative(),
+  manifest: external_exports.string().min(1)
+});
+var tunnelSchema = external_exports.object({
+  relay: external_exports.string().min(1),
+  tunnelId: external_exports.string().min(1),
+  token: external_exports.string().min(1),
+  baseUrl: external_exports.string().min(1)
+});
+var P2pStore = class {
+  #dir;
+  #tunnelPath;
+  constructor(home) {
+    this.#dir = join4(home, "artifacts", "p2p");
+    this.#tunnelPath = join4(home, "artifacts", "tunnel.json");
+  }
+  #sharePath(id2) {
+    if (!STATE_ID_PATTERN.test(id2)) throw new StoredFileError("a share id contains characters that cannot name a file");
+    return join4(this.#dir, `${id2}.json`);
+  }
+  async readShare(id2) {
+    try {
+      return await readJsonFile(this.#sharePath(id2), shareStateSchema);
+    } catch (error51) {
+      if (error51 instanceof StoredFileError) return void 0;
+      throw error51;
+    }
+  }
+  writeShare(id2, state) {
+    return writePrivateJsonFile(this.#sharePath(id2), state);
+  }
+  removeShare(id2) {
+    return rm3(this.#sharePath(id2), { force: true });
+  }
+  async shareIds() {
+    try {
+      return (await readdir2(this.#dir)).filter((name) => name.endsWith(".json")).map((name) => name.slice(0, -".json".length));
+    } catch (error51) {
+      if (error51 instanceof Error && "code" in error51 && error51.code === "ENOENT") return [];
+      throw error51;
+    }
+  }
+  async readTunnel() {
+    try {
+      return await readJsonFile(this.#tunnelPath, tunnelSchema);
+    } catch (error51) {
+      if (error51 instanceof StoredFileError) return void 0;
+      throw error51;
+    }
+  }
+  writeTunnel(credentials) {
+    return writePrivateJsonFile(this.#tunnelPath, credentials);
+  }
+  clearTunnel() {
+    return rm3(this.#tunnelPath, { force: true });
+  }
+};
+
+// src/share/shares.ts
+import { randomBytes as randomBytes6 } from "node:crypto";
+import { stat as stat4 } from "node:fs/promises";
+import { userInfo } from "node:os";
+
+// src/share/chunk-source.ts
+import { constants as constants4 } from "node:fs";
+import { open as open4 } from "node:fs/promises";
+var FileChangedError = class extends Error {
+  name = "FileChangedError";
+  constructor() {
+    super("the file changed while it was being read; share it again once it has settled");
+  }
+};
+var OPEN_FLAGS3 = constants4.O_RDONLY | (constants4.O_NONBLOCK ?? 0);
+async function openChunkSource(path2) {
+  const handle = await open4(path2, OPEN_FLAGS3);
+  try {
+    const first = await handle.stat();
+    if (!first.isFile()) throw new Error("only a regular file can be shared");
+    const fingerprint = { size: first.size, mtimeMs: first.mtimeMs };
+    return {
+      ...fingerprint,
+      chunks: chunkCount(first.size),
+      async chunk(index) {
+        const start = index * ASP_CHUNK_BYTES;
+        const length = Math.max(0, Math.min(ASP_CHUNK_BYTES, first.size - start));
+        const bytes = new Uint8Array(length);
+        let filled = 0;
+        while (filled < length) {
+          const { bytesRead } = await handle.read(bytes, filled, length - filled, start + filled);
+          if (bytesRead === 0) throw new FileChangedError();
+          filled += bytesRead;
+        }
+        return bytes;
+      },
+      async verifyUnchanged() {
+        const now = await handle.stat();
+        if (now.size !== fingerprint.size || now.mtimeMs !== fingerprint.mtimeMs) throw new FileChangedError();
+      },
+      close: () => handle.close()
+    };
+  } catch (error51) {
+    await handle.close();
+    throw error51;
+  }
+}
+
+// src/share/upload.ts
+var UPLOAD_CONCURRENCY = 4;
+var COMMIT_ROUNDS = 3;
+function sealedLength(pending, index) {
+  const plain = Math.max(0, Math.min(ASP_CHUNK_BYTES, pending.fingerprint.size - index * ASP_CHUNK_BYTES));
+  return plain + ASP_TAG_BYTES;
+}
+async function uploadMissing(pending, context, sent) {
+  const { client, key, source, signal, onProgress } = context;
+  const inflight = /* @__PURE__ */ new Set();
+  let failure2;
+  for (let index = 0; index < pending.chunks && failure2 === void 0; index++) {
+    if (pending.done.has(index)) continue;
+    while (inflight.size >= UPLOAD_CONCURRENCY) await Promise.race(inflight);
+    if (failure2 !== void 0) break;
+    let sealed;
+    try {
+      sealed = await sealChunk(key, pending.prefix, pending.version, index, index === pending.chunks - 1, await source.chunk(index));
+    } catch (error51) {
+      failure2 = error51;
+      break;
+    }
+    const task = client.putChunk(pending.ownerToken, pending.remoteId, pending.version, index, sealed, signal).then(
+      () => {
+        pending.done.add(index);
+        sent.bytes += sealed.length;
+        onProgress(sent.bytes);
+      },
+      (error51) => {
+        failure2 ??= error51;
+      }
+    ).finally(() => inflight.delete(task));
+    inflight.add(task);
+  }
+  await Promise.all(inflight);
+  if (failure2 !== void 0) throw failure2;
+}
+async function uploadVersion(pending, context) {
+  const { client, source, signal, onProgress } = context;
+  const sent = { bytes: 0 };
+  for (const index of pending.done) sent.bytes += sealedLength(pending, index);
+  onProgress(sent.bytes);
+  await client.putManifest(pending.ownerToken, pending.remoteId, pending.version, pending.sealedManifest, signal);
+  for (let round = 1; ; round++) {
+    await uploadMissing(pending, context, sent);
+    await source.verifyUnchanged();
+    try {
+      await client.commit(pending.ownerToken, pending.remoteId, pending.version, signal);
+      return;
+    } catch (error51) {
+      const missing = error51 instanceof HostRequestError && error51.code === "incomplete" ? error51.missing : void 0;
+      if (missing === void 0 || missing.length === 0 || round >= COMMIT_ROUNDS) throw error51;
+      for (const index of missing) {
+        if (pending.done.delete(index)) sent.bytes -= sealedLength(pending, index);
+      }
+    }
+  }
+}
+
+// src/share/shares.ts
+var DAY_MS = 24 * 60 * 60 * 1e3;
+var MAX_SESSIONS = 8;
+var MAX_PROGRESS_ENTRIES = 64;
+var COMMENT_CATCH_UP_MS = 4e3;
+var MAX_AUTHOR_CHARS = 80;
+var OPEN_LINK_ONLY = "a link from this computer is open to anyone who has it; signing in needs your own server";
+var BUSY = "that file is already being shared; wait for it to finish";
+var ShareError = class extends Error {
+  name = "ShareError";
+};
+function describe3(error51) {
+  return error51 instanceof Error ? error51.message : String(error51);
+}
+function failureMessage(error51) {
+  const known = error51 instanceof ShareError || error51 instanceof HostRequestError || error51 instanceof HostConfigError || error51 instanceof FileChangedError || error51 instanceof StoredFileError;
+  return known ? error51.message : `sharing failed: ${describe3(error51)}`;
+}
+function sameFingerprint(session, source) {
+  return session.pending.fingerprint.size === source.size && session.pending.fingerprint.mtimeMs === source.mtimeMs;
+}
+var ShareService = class {
+  #options;
+  #library;
+  #now;
+  #abort = new AbortController();
+  #running = /* @__PURE__ */ new Set();
+  #progress = /* @__PURE__ */ new Map();
+  #sessions = /* @__PURE__ */ new Map();
+  constructor(options2) {
+    this.#options = options2;
+    this.#library = options2.library;
+    this.#now = options2.now ?? Date.now;
+  }
+  close() {
+    this.#abort.abort();
+  }
+  progress(artifactId2) {
+    return this.#progress.get(artifactId2) ?? { phase: "done", sent: 0, total: 0 };
+  }
+  #report(artifactId2, progress) {
+    this.#progress.delete(artifactId2);
+    this.#progress.set(artifactId2, progress);
+    for (const [oldest] of this.#progress) {
+      if (this.#progress.size <= MAX_PROGRESS_ENTRIES) break;
+      this.#progress.delete(oldest);
+    }
+  }
+  summarize(row) {
+    const comments = this.#library.comments.forArtifact(row.artifactId).filter((comment) => comment.shareId === row.id);
+    return {
+      id: row.id,
+      host: row.host,
+      url: shareUrl(row.baseUrl, row.remoteId),
+      audience: row.audience,
+      version: row.version,
+      ...row.expiresAt === void 0 ? {} : { expiresAt: row.expiresAt },
+      ...row.revokedAt === void 0 ? {} : { revokedAt: row.revokedAt },
+      comments: comments.length,
+      unread: comments.filter((comment) => comment.readAt === void 0).length
+    };
+  }
+  #liveItem(artifactId2) {
+    const item = this.#library.get(artifactId2);
+    if (item === void 0) throw new ShareError("that file is not in your library");
+    if (item.state === "discarded") throw new ShareError("that file was discarded, so it cannot be shared");
+    if (item.state === "missing") throw new ShareError("that file is no longer on this computer");
+    return item;
+  }
+  async #realPath(item) {
+    const verdict = await this.#options.fence.check(item.path);
+    if (!verdict.ok) throw new ShareError(`that file cannot be shared: ${verdict.reason}`);
+    if (this.#library.getByPath(verdict.real)?.id !== item.id) throw new ShareError("that file moved since it was added to your library; open the library to refresh it");
+    return verdict.real;
+  }
+  #liveRow(shareId2) {
+    const row = this.#library.shares.get(shareId2);
+    if (row === void 0) throw new ShareError("that share does not exist");
+    if (row.revokedAt !== void 0) throw new ShareError("that link has been revoked");
+    return row;
+  }
+  linkOf(shareId2) {
+    const row = this.#liveRow(shareId2);
+    return shareLink({ base: row.baseUrl, id: row.remoteId, key: decodeBase64Url(row.key) });
+  }
+  async #track(artifactId2, work) {
+    if (this.#running.has(artifactId2)) throw new ShareError(BUSY);
+    this.#running.add(artifactId2);
+    this.#report(artifactId2, { phase: "sealing", sent: 0, total: 0 });
+    try {
+      return await work();
+    } catch (error51) {
+      const last = this.progress(artifactId2);
+      const message = failureMessage(error51);
+      this.#report(artifactId2, { phase: "failed", sent: last.sent, total: last.total, error: message });
+      throw error51 instanceof ShareError ? error51 : new ShareError(message);
+    } finally {
+      this.#running.delete(artifactId2);
+    }
+  }
+  #finish(artifactId2, shareId2) {
+    const { total } = this.progress(artifactId2);
+    this.#report(artifactId2, { phase: "done", sent: total, total, shareId: shareId2 });
+  }
+  async create(input) {
+    const item = this.#liveItem(input.artifactId);
+    return this.#track(item.id, async () => {
+      const row = input.host === P2P_HOST_ID ? await this.#createP2p(input, item) : await this.#createHosted(input, item);
+      this.#finish(item.id, row.id);
+      this.#options.onSharesChanged();
+      return { ...this.summarize(row), link: this.linkOf(row.id) };
+    });
+  }
+  #checkPolicy(audience, expiresInDays2, policy, oidc, size) {
+    const refusal = audienceAllowedBy(audience, policy);
+    if (refusal !== void 0) throw new ShareError(refusal);
+    if (audience.kind === "signin" && !oidc) throw new ShareError("this server has no sign-in set up, so a link that needs signing in cannot be made here");
+    if (expiresInDays2 !== void 0 && expiresInDays2 > policy.maxDays) throw new ShareError(`this server keeps shares for at most ${policy.maxDays} days`);
+    if (size !== void 0 && size > policy.maxBytes) throw new ShareError(`this server accepts files up to ${policy.maxBytes} bytes; this one is ${size}`);
+  }
+  async #createP2p(input, item) {
+    if (input.audience.kind !== "link") throw new ShareError(OPEN_LINK_ONLY);
+    const { discovery } = await this.#options.directory.resolveRelay();
+    const refusal = audienceAllowedBy(input.audience, discovery.policy);
+    if (refusal !== void 0) throw new ShareError(refusal);
+    const real = await this.#realPath(item);
+    const info = await stat4(real);
+    if (!info.isFile()) throw new ShareError("only a regular file can be shared");
+    const fingerprint = { size: info.size, mtimeMs: info.mtimeMs };
+    return this.#options.p2p.withTunnel(async (session) => {
+      const id2 = encodeBase64Url(randomBytes6(16));
+      const now = this.#now();
+      const row = {
+        id: id2,
+        artifactId: item.id,
+        host: P2P_HOST_ID,
+        remoteId: id2,
+        baseUrl: session.baseUrl,
+        key: encodeBase64Url(generateContentKey()),
+        ownerToken: session.token,
+        audience: { kind: "link" },
+        version: 1,
+        allowComments: input.allowComments,
+        createdAt: now,
+        ...input.expiresInDays === void 0 ? {} : { expiresAt: now + input.expiresInDays * DAY_MS }
+      };
+      await this.#options.p2p.server.create(row, item, fingerprint);
+      try {
+        this.#library.shares.insert(row);
+      } catch (error51) {
+        await this.#options.p2p.server.forget(id2);
+        throw error51;
+      }
+      this.#options.p2p.announce();
+      return row;
+    });
+  }
+  async #createHosted(input, item) {
+    const { host, client, discovery } = await this.#options.directory.resolve(input.host);
+    const source = await openChunkSource(await this.#realPath(item));
+    try {
+      this.#checkPolicy(input.audience, input.expiresInDays, discovery.policy, discovery.auth.oidc !== void 0, source.size);
+      const sessionKey = `create|${item.id}|${host.id}`;
+      const signature = JSON.stringify([input.audience, input.expiresInDays ?? null, input.allowComments, client.baseUrl]);
+      let session = this.#sessions.get(sessionKey);
+      if (session !== void 0 && (session.signature !== signature || !sameFingerprint(session, source))) {
+        this.#dropSession(sessionKey, session);
+        session = void 0;
+      }
+      if (session === void 0) {
+        const keyBytes = generateContentKey();
+        const key = await importContentKey(keyBytes);
+        const requestedExpiry = input.expiresInDays === void 0 ? void 0 : this.#now() + input.expiresInDays * DAY_MS;
+        const created = await client.createShare(
+          host.token,
+          {
+            audience: input.audience,
+            ...requestedExpiry === void 0 ? {} : { expiresAt: requestedExpiry },
+            allowComments: input.allowComments,
+            chunks: source.chunks,
+            sealedBytes: sealedSize(source.size)
+          },
+          this.#abort.signal
+        );
+        const expiresAt = created.expiresAt ?? requestedExpiry;
+        session = {
+          pending: await this.#pendingFor(item, key, created.id, created.ownerToken, created.version, source),
+          keyBytes,
+          key,
+          baseUrl: client.baseUrl,
+          signature,
+          ...expiresAt === void 0 ? {} : { expiresAt }
+        };
+        this.#keepSession(sessionKey, session);
+      }
+      await this.#upload(item.id, sessionKey, session, client, source);
+      const row = {
+        id: encodeBase64Url(randomBytes6(16)),
+        artifactId: item.id,
+        host: host.id,
+        remoteId: session.pending.remoteId,
+        baseUrl: client.baseUrl,
+        key: encodeBase64Url(session.keyBytes),
+        ownerToken: session.pending.ownerToken,
+        audience: input.audience,
+        version: session.pending.version,
+        allowComments: input.allowComments,
+        createdAt: this.#now(),
+        ...session.expiresAt === void 0 ? {} : { expiresAt: session.expiresAt }
+      };
+      try {
+        this.#library.shares.insert(row);
+      } catch (error51) {
+        this.#dropSession(sessionKey, session);
+        throw error51;
+      }
+      this.#sessions.delete(sessionKey);
+      return row;
+    } finally {
+      await source.close();
+    }
+  }
+  async #pendingFor(item, key, remoteId, ownerToken, version2, source) {
+    const prefix = newVersionPrefix();
+    const manifest = await buildManifest(this.#library, item, version2, source.size);
+    return {
+      remoteId,
+      ownerToken,
+      version: version2,
+      prefix,
+      sealedManifest: await sealManifest(key, prefix, manifest),
+      fingerprint: { size: source.size, mtimeMs: source.mtimeMs },
+      chunks: source.chunks,
+      sealedBytes: sealedSize(source.size),
+      done: /* @__PURE__ */ new Set()
+    };
+  }
+  #keepSession(sessionKey, session) {
+    this.#sessions.set(sessionKey, session);
+    for (const [oldestKey, oldest] of this.#sessions) {
+      if (this.#sessions.size <= MAX_SESSIONS) break;
+      this.#dropSession(oldestKey, oldest);
+    }
+  }
+  #dropSession(sessionKey, session) {
+    this.#sessions.delete(sessionKey);
+    void deleteRemoteShare({ baseUrl: session.baseUrl, remoteId: session.pending.remoteId, ownerToken: session.pending.ownerToken }).catch(() => void 0);
+  }
+  async #upload(artifactId2, sessionKey, session, client, source) {
+    const total = session.pending.sealedBytes;
+    this.#report(artifactId2, { phase: "uploading", sent: 0, total });
+    try {
+      await uploadVersion(session.pending, {
+        client,
+        key: session.key,
+        source,
+        signal: this.#abort.signal,
+        onProgress: (sent) => this.#report(artifactId2, { phase: "uploading", sent, total })
+      });
+    } catch (error51) {
+      if (!(error51 instanceof HostRequestError && error51.retryable)) this.#dropSession(sessionKey, session);
+      throw error51;
+    }
+  }
+  async newVersion(shareId2) {
+    const row = this.#liveRow(shareId2);
+    return this.#track(row.artifactId, async () => {
+      if (row.host === P2P_HOST_ID) await this.#options.p2p.server.newVersion(row);
+      else await this.#newHostedVersion(row);
+      this.#options.p2p.announce();
+      this.#finish(row.artifactId, row.id);
+      return this.summarize(this.#library.shares.get(row.id) ?? row);
+    });
+  }
+  async #newHostedVersion(row) {
+    const item = this.#liveItem(row.artifactId);
+    const { client, discovery } = await this.#options.directory.resolve(row.host);
+    const source = await openChunkSource(await this.#realPath(item));
+    try {
+      this.#checkPolicy(row.audience, void 0, discovery.policy, discovery.auth.oidc !== void 0, source.size);
+      const sessionKey = `version|${row.id}`;
+      let session = this.#sessions.get(sessionKey);
+      if (session !== void 0 && !sameFingerprint(session, source)) {
+        this.#sessions.delete(sessionKey);
+        session = void 0;
+      }
+      if (session === void 0) {
+        const version2 = await client.createVersion(row.ownerToken, row.remoteId, { chunks: source.chunks, sealedBytes: sealedSize(source.size) }, this.#abort.signal);
+        const keyBytes = decodeBase64Url(row.key);
+        const key = await importContentKey(keyBytes);
+        session = { pending: await this.#pendingFor(item, key, row.remoteId, row.ownerToken, version2, source), keyBytes, key, baseUrl: client.baseUrl };
+        this.#sessions.set(sessionKey, session);
+      }
+      await this.#upload(row.artifactId, sessionKey, session, client, source);
+      this.#sessions.delete(sessionKey);
+      this.#library.shares.update(row.id, { version: session.pending.version });
+    } finally {
+      await source.close();
+    }
+  }
+  async update(input) {
+    const row = this.#liveRow(input.shareId);
+    const audience = input.audience ?? row.audience;
+    const patch = {};
+    if (input.expiresInDays !== void 0) patch.expiresAt = this.#now() + input.expiresInDays * DAY_MS;
+    if (input.audience !== void 0) patch.audience = input.audience;
+    if (input.allowComments !== void 0) patch.allowComments = input.allowComments;
+    if (row.host === P2P_HOST_ID) {
+      if (audience.kind !== "link") throw new ShareError(OPEN_LINK_ONLY);
+    } else {
+      const { client, discovery } = await this.#options.directory.resolve(row.host);
+      this.#checkPolicy(audience, input.expiresInDays, discovery.policy, discovery.auth.oidc !== void 0, void 0);
+      try {
+        const confirmed = await client.patch(row.ownerToken, row.remoteId, patch, this.#abort.signal);
+        if (confirmed.expiresAt !== void 0) patch.expiresAt = confirmed.expiresAt;
+      } catch (error51) {
+        throw new ShareError(failureMessage(error51));
+      }
+    }
+    this.#library.shares.update(row.id, patch);
+    this.#options.onSharesChanged();
+    return this.summarize(this.#library.shares.get(row.id) ?? row);
+  }
+  async revoke(shareId2) {
+    const row = this.#library.shares.get(shareId2);
+    if (row === void 0) throw new ShareError("that share does not exist");
+    if (row.revokedAt !== void 0) return { shareId: shareId2, revokedAt: row.revokedAt };
+    const revokedAt = this.#now();
+    if (row.host === P2P_HOST_ID) {
+      this.#library.shares.update(row.id, { revokedAt });
+      await this.#options.p2p.server.forget(row.id);
+      let warning;
+      try {
+        await revokeRemote(row);
+      } catch (error51) {
+        warning = describe3(error51);
+      }
+      this.#options.onSharesChanged();
+      return { shareId: shareId2, revokedAt, ...warning === void 0 ? {} : { warning } };
+    }
+    try {
+      await revokeRemote(row);
+    } catch (error51) {
+      throw new ShareError(describe3(error51));
+    }
+    this.#library.shares.update(row.id, { revokedAt });
+    this.#options.onSharesChanged();
+    return { shareId: shareId2, revokedAt };
+  }
+  async comments(artifactId2) {
+    const live = this.#library.shares.forArtifact(artifactId2).filter((row) => row.revokedAt === void 0);
+    await this.#options.sync.catchUp(live, AbortSignal.timeout(COMMENT_CATCH_UP_MS));
+    return this.#library.comments.forArtifact(artifactId2);
+  }
+  markRead(ids) {
+    this.#library.comments.markRead(ids, this.#now());
+  }
+  async reply(shareId2, body, anchor) {
+    const row = this.#liveRow(shareId2);
+    if (!row.allowComments) throw new ShareError("comments are turned off for this link");
+    const author = (await this.#options.displayName?.() ?? userInfo().username).slice(0, MAX_AUTHOR_CHARS);
+    const at = this.#now();
+    let sealed;
+    try {
+      sealed = await sealComment(await deriveCommentKey(decodeBase64Url(row.key)), { author, body, ...anchor === void 0 ? {} : { anchor }, version: row.version, at });
+    } catch (error51) {
+      if (error51 instanceof AspError) throw new ShareError("that reply is empty or longer than 8000 characters");
+      throw error51;
+    }
+    let posted;
+    try {
+      posted = await new HostClient(row.baseUrl).postComment(row.ownerToken, row.remoteId, encodeBase64Url(sealed), this.#abort.signal);
+    } catch (error51) {
+      throw new ShareError(failureMessage(error51));
+    }
+    this.#library.comments.upsert({
+      id: posted.id,
+      shareId: row.id,
+      author,
+      body: body.trim(),
+      ...anchor === void 0 ? {} : { anchor },
+      version: row.version,
+      createdAt: posted.at
+    });
+    this.#library.comments.markRead([posted.id], at);
+    const stored = this.#library.comments.forArtifact(row.artifactId).find((comment) => comment.id === posted.id);
+    if (stored === void 0) throw new ShareError("the reply was posted but could not be read back");
+    return stored;
+  }
+};
+
+// src/share/runtime.ts
+var RECONCILE_INTERVAL_MS = 3e4;
+function startShareRuntime(deps) {
+  const log = deps.log ?? ((message) => console.error(`share: ${message}`));
+  const store = new HostStore(deps.home);
+  const directory = new HostDirectory(store, { ...deps.fetch === void 0 ? {} : { fetch: deps.fetch }, ...deps.retry === void 0 ? {} : { retry: deps.retry } });
+  const p2p = new P2pRuntime({
+    library: deps.library,
+    fence: deps.fence,
+    store: new P2pStore(deps.home),
+    relay: async () => {
+      const file2 = await store.read();
+      return { baseUrl: relayUrlOf(file2), allowed: p2pAllowed(file2) };
+    },
+    log,
+    ...deps.createSocket === void 0 ? {} : { createSocket: deps.createSocket },
+    ...deps.reconnect === void 0 ? {} : { reconnect: deps.reconnect }
+  });
+  const sync = new CommentSync({
+    library: deps.library,
+    log,
+    onShareEnded: () => reconcile(),
+    ...deps.fetch === void 0 ? {} : { fetch: deps.fetch }
+  });
+  const service = new ShareService({
+    library: deps.library,
+    fence: deps.fence,
+    directory,
+    p2p,
+    sync,
+    onSharesChanged: () => reconcile(),
+    displayName: async () => (await store.read()).displayName
+  });
+  function reconcile() {
+    const now = Date.now();
+    sync.reconcile(deps.library.shares.live().filter((row) => row.expiresAt === void 0 || row.expiresAt > now));
+    void p2p.reconcile();
+  }
+  const timer = setInterval(reconcile, deps.reconcileIntervalMs ?? RECONCILE_INTERVAL_MS);
+  timer.unref();
+  reconcile();
+  return {
+    service,
+    directory,
+    p2p,
+    sync,
+    reconcile,
+    async close() {
+      clearInterval(timer);
+      service.close();
+      await sync.close();
+      await p2p.close();
+    }
+  };
+}
+
+// src/share/tools.ts
+var MAX_IDS = 200;
+var audienceSchema = external_exports.object({
+  kind: external_exports.enum(["link", "signin"]),
+  emails: external_exports.array(external_exports.string().max(320)).max(500).optional(),
+  domains: external_exports.array(external_exports.string().max(320)).max(50).optional()
+}).transform((value, context) => {
+  const audience = parseAudience(value);
+  if (audience === void 0) {
+    context.addIssue({ code: "custom", message: "that audience is not valid" });
+    return external_exports.NEVER;
+  }
+  return audience;
+});
+var unit = external_exports.number().min(0).max(1);
+var anchorSchema = external_exports.union([
+  external_exports.object({ kind: external_exports.literal("time"), startMs: external_exports.number().min(0), endMs: external_exports.number().min(0).optional() }),
+  external_exports.object({ kind: external_exports.literal("page"), page: external_exports.number().int().min(1) }),
+  external_exports.object({ kind: external_exports.literal("region"), x: unit, y: unit, w: unit, h: unit })
+]);
+var expiresInDays = external_exports.number().int().min(1).max(3650);
+var shareId = external_exports.string().min(1).max(128);
+var artifactId = external_exports.string().min(1).max(128);
+var options = (title, extra = {}) => ({
+  title,
+  annotations: {
+    readOnlyHint: extra.readOnly ?? false,
+    destructiveHint: extra.destructive ?? false,
+    idempotentHint: extra.readOnly ?? false,
+    openWorldHint: true
+  },
+  _meta: APP_ONLY
+});
+function success2(text, structuredContent) {
+  return { content: [{ type: "text", text }], structuredContent };
+}
+async function guarded(work) {
+  try {
+    return await work();
+  } catch (error51) {
+    if (error51 instanceof ShareError || error51 instanceof HostConfigError || error51 instanceof HostRequestError || error51 instanceof StoredFileError) {
+      return failure(error51.message);
+    }
+    const detail = error51 instanceof Error ? error51.message : String(error51);
+    console.error(`share: ${detail}`);
+    return failure(`sharing failed: ${detail}`);
+  }
+}
+function registerShareTools(server2, runtime) {
+  const { service, directory } = runtime;
+  K3(
+    server2,
+    "share_hosts",
+    { ...options("Share hosts", { readOnly: true }), inputSchema: {} },
+    () => guarded(async () => success2("Share hosts listed.", { ...await directory.list() }))
+  );
+  K3(
+    server2,
+    "share_host_add",
+    {
+      ...options("Add a share server"),
+      inputSchema: {
+        pairing: external_exports.string().min(1).max(4096).optional(),
+        url: external_exports.string().min(1).max(2048).optional(),
+        token: external_exports.string().max(512).optional(),
+        kind: external_exports.enum(["self", "company"]).optional()
+      }
+    },
+    ({ pairing, url: url2, token, kind }) => guarded(async () => {
+      if (pairing === void 0 && url2 === void 0) throw new ShareError("paste the pairing link, or the server address and its token");
+      const host = await directory.add(
+        pairing !== void 0 ? { pairing, kind: kind ?? "self" } : { url: url2, kind: kind ?? "self", ...token === void 0 || token.trim() === "" ? {} : { token } }
+      );
+      runtime.reconcile();
+      return success2(`Added ${host.name}.`, { host });
+    })
+  );
+  K3(
+    server2,
+    "share_host_remove",
+    { ...options("Remove a share server", { destructive: true }), inputSchema: { id: external_exports.string().min(1).max(64) } },
+    ({ id: id2 }) => guarded(async () => {
+      await directory.remove(id2);
+      return success2("Server removed.", {});
+    })
+  );
+  K3(
+    server2,
+    "share_create",
+    {
+      ...options("Share a file"),
+      inputSchema: {
+        artifactId,
+        host: external_exports.string().min(1).max(64),
+        audience: audienceSchema,
+        expiresInDays: expiresInDays.optional(),
+        allowComments: external_exports.boolean()
+      }
+    },
+    (input) => guarded(async () => {
+      const share = await service.create({
+        artifactId: input.artifactId,
+        host: input.host,
+        audience: input.audience,
+        allowComments: input.allowComments,
+        ...input.expiresInDays === void 0 ? {} : { expiresInDays: input.expiresInDays }
+      });
+      return success2("Link created.", { share });
+    })
+  );
+  K3(
+    server2,
+    "share_progress",
+    { ...options("Share progress", { readOnly: true }), inputSchema: { artifactId } },
+    ({ artifactId: id2 }) => guarded(async () => success2("Progress read.", { ...service.progress(id2) }))
+  );
+  K3(
+    server2,
+    "share_update",
+    {
+      ...options("Change a share"),
+      inputSchema: { shareId, audience: audienceSchema.optional(), expiresInDays: expiresInDays.optional(), allowComments: external_exports.boolean().optional() }
+    },
+    (input) => guarded(async () => {
+      const share = await service.update({
+        shareId: input.shareId,
+        ...input.audience === void 0 ? {} : { audience: input.audience },
+        ...input.expiresInDays === void 0 ? {} : { expiresInDays: input.expiresInDays },
+        ...input.allowComments === void 0 ? {} : { allowComments: input.allowComments }
+      });
+      return success2("Share updated.", { share });
+    })
+  );
+  K3(
+    server2,
+    "share_new_version",
+    { ...options("Publish a new version"), inputSchema: { shareId } },
+    ({ shareId: id2 }) => guarded(async () => success2("New version published.", { share: await service.newVersion(id2) }))
+  );
+  K3(
+    server2,
+    "share_revoke",
+    { ...options("Revoke a link", { destructive: true }), inputSchema: { shareId } },
+    ({ shareId: id2 }) => guarded(async () => success2("Link revoked.", { ...await service.revoke(id2) }))
+  );
+  K3(
+    server2,
+    "share_link",
+    { ...options("Read a share link", { readOnly: true }), inputSchema: { shareId } },
+    ({ shareId: id2 }) => guarded(async () => success2("Link read.", { link: service.linkOf(id2) }))
+  );
+  K3(
+    server2,
+    "share_comments",
+    { ...options("Share comments", { readOnly: true }), inputSchema: { artifactId } },
+    ({ artifactId: id2 }) => guarded(async () => success2("Comments read.", { comments: await service.comments(id2) }))
+  );
+  K3(
+    server2,
+    "share_reply",
+    { ...options("Reply to comments"), inputSchema: { shareId, body: external_exports.string().min(1).max(8e3), anchor: anchorSchema.optional() } },
+    ({ shareId: id2, body, anchor }) => guarded(async () => success2("Reply posted.", { comment: await service.reply(id2, body, anchor) }))
+  );
+  K3(
+    server2,
+    "share_mark_read",
+    { ...options("Mark comments read"), inputSchema: { ids: external_exports.array(external_exports.string().min(1).max(128)).max(MAX_IDS) } },
+    ({ ids }) => guarded(async () => {
+      service.markRead(ids);
+      return success2("Marked read.", {});
+    })
+  );
 }
 
 // src/server.ts
@@ -32316,45 +36548,66 @@ var MIME = {
   ".wasm": "application/wasm"
 };
 var TEXT_MIME = { "text/javascript": true, "text/css": true, "application/json": true, "image/svg+xml": true };
-var APP_ONLY = { ui: { visibility: ["app"] } };
-var failure = (message) => ({ isError: true, content: [{ type: "text", text: message }] });
-function describeError(error51) {
-  if (error51 instanceof RangeError) return error51.message;
-  if (!(error51 instanceof Error)) return String(error51);
-  const code = "code" in error51 && typeof error51.code === "string" ? ` (${error51.code})` : "";
-  return `${error51.message}${code}`;
-}
-async function createViewerServer(options = {}) {
-  const fence = options.fence ?? createFence({ home: options.home ?? homedir(), env: options.env ?? process.env, log: (detail) => console.error(`viewer fence: ${detail}`) });
-  const viewDir = options.viewDir ?? fileURLToPath(new URL("./dist/", import.meta.url));
-  const html = await readFile(join(viewDir, "index.html"), "utf8");
-  const server2 = new McpServer({ name: "dimension-community-viewer", version: "0.1.0" });
-  const media = await startMediaServer(fence);
-  server2.server.onclose = () => {
-    void media.close().catch((error51) => console.error(error51));
-  };
+async function openOwnLibrary(home) {
   try {
-    await registerViewer(server2, { fence, html, viewDir, media });
+    return await createLibrary({ home });
   } catch (error51) {
-    await media.close();
+    console.error(`viewer library: the artifact library is unavailable (${describeError(error51)}); documents still open`);
+    return void 0;
+  }
+}
+async function createViewerServer(options2 = {}) {
+  const env = options2.env ?? process.env;
+  const userHome = options2.home ?? homedir();
+  const home = engineHome(env, userHome);
+  const ownedLibrary = options2.library === void 0 ? await openOwnLibrary(home) : void 0;
+  const library = options2.library ?? ownedLibrary;
+  const fence = options2.fence ?? createFence({
+    home: userHome,
+    env,
+    ...library === void 0 ? {} : { indexed: library },
+    log: (detail) => console.error(`viewer fence: ${detail}`)
+  });
+  const viewDir = options2.viewDir ?? fileURLToPath(new URL("./dist/", import.meta.url));
+  const server2 = new McpServer({ name: "dimension-community-viewer", version: "0.1.0" });
+  let media;
+  let share;
+  async function release() {
+    try {
+      await Promise.all([media?.close(), share?.close()]);
+    } finally {
+      ownedLibrary?.close();
+    }
+  }
+  try {
+    const html = await readFile4(join5(viewDir, "index.html"), "utf8");
+    media = await startMediaServer(fence, Date.now, library);
+    share = library === void 0 ? void 0 : startShareRuntime({ library, fence, home });
+    server2.server.onclose = () => {
+      void release().catch((error51) => console.error(error51));
+    };
+    await registerViewer(server2, { fence, html, viewDir, media, library });
+    if (share !== void 0) registerShareTools(server2, share);
+  } catch (error51) {
+    await release();
     throw error51;
   }
   return server2;
 }
-async function registerViewer(server2, { fence, html, viewDir, media }) {
+async function registerViewer(server2, { fence, html, viewDir, media, library }) {
   const metadata = { ui: { prefersBorder: false, permissions: { clipboardWrite: {} }, csp: { resourceDomains: [media.origin] } } };
   N3(server2, "Viewer", VIEWER_VIEW_URI, { _meta: metadata }, async () => ({
     contents: [{ uri: VIEWER_VIEW_URI, mimeType: p, text: html, _meta: metadata }]
   }));
-  for (const entry of await readdir(viewDir, { recursive: true, withFileTypes: true })) {
+  for (const entry of await readdir3(viewDir, { recursive: true, withFileTypes: true })) {
     if (!entry.isFile() || entry.name === "index.html") continue;
-    const mimeType = MIME[extname(entry.name)];
+    const mimeType = MIME[extname2(entry.name)];
     if (mimeType === void 0) throw new Error(`Unsupported viewer View asset: ${entry.name}`);
-    const path = join(entry.parentPath, entry.name);
-    const relative = path.slice(viewDir.replace(/[\\/]$/, "").length + 1).replaceAll("\\", "/");
+    const path2 = join5(entry.parentPath, entry.name);
+    const relative = path2.slice(viewDir.replace(/[\\/]$/, "").length + 1).replaceAll("\\", "/");
     const uri = `ui://viewer/${relative}`;
     server2.registerResource(relative, uri, { mimeType }, async () => {
-      const bytes = await readFile(path);
+      const bytes = await readFile4(path2);
       return {
         contents: [TEXT_MIME[mimeType] ? { uri, mimeType, text: bytes.toString("utf8") } : { uri, mimeType, blob: bytes.toString("base64") }]
       };
@@ -32374,28 +36627,7 @@ async function registerViewer(server2, { fence, html, viewDir, media }) {
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       _meta: { ui: { resourceUri: VIEWER_VIEW_URI } }
     },
-    async ({ path, filename, annotate }, extra) => {
-      const verdict = await fence.check(path, extra._meta);
-      if (!verdict.ok) return failure(verdict.reason);
-      try {
-        const head = await readRange(verdict.real, 0, KIND_HEAD_BYTES);
-        const shown = filename ?? basename(verdict.real);
-        const file2 = {
-          path: verdict.real,
-          filename: shown,
-          kind: detectKind(shown, head.bytes, head.size),
-          size: head.size,
-          mtimeMs: head.mtimeMs
-        };
-        return {
-          content: [{ type: "text", text: `Opened ${file2.filename} (${file2.kind}, ${file2.size} bytes) in the viewer.` }],
-          structuredContent: { ...file2 },
-          _meta: { [TAB_META_KEY]: { key: file2.path }, ...annotate === true ? { [ANNOTATE_META_KEY]: true } : {} }
-        };
-      } catch (error51) {
-        return failure(`"${path}" cannot be opened: ${describeError(error51)}`);
-      }
-    }
+    ({ path: path2, filename, annotate }, extra) => openViewedFile(fence, { path: path2, filename, annotate }, extra._meta)
   );
   K3(
     server2,
@@ -32411,8 +36643,8 @@ async function registerViewer(server2, { fence, html, viewDir, media }) {
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       _meta: APP_ONLY
     },
-    async ({ path, offset, length }, extra) => {
-      const verdict = await fence.check(path, extra._meta);
+    async ({ path: path2, offset, length }, extra) => {
+      const verdict = await fence.check(path2, extra._meta);
       if (!verdict.ok) return failure(verdict.reason);
       try {
         const chunk = await readChunk(verdict.real, offset, length);
@@ -32421,7 +36653,7 @@ async function registerViewer(server2, { fence, html, viewDir, media }) {
           structuredContent: { ...chunk }
         };
       } catch (error51) {
-        return failure(`"${path}" cannot be read: ${describeError(error51)}`);
+        return failure(`"${path2}" cannot be read: ${describeError(error51)}`);
       }
     }
   );
@@ -32429,9 +36661,9 @@ async function registerViewer(server2, { fence, html, viewDir, media }) {
     inputSchema: { path: external_exports.string().min(1).max(4096), size: external_exports.number().int().nonnegative(), mtimeMs: external_exports.number(), token: mediaTokenSchema },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     _meta: APP_ONLY
-  }, async ({ path, size, mtimeMs, token }, extra) => {
+  }, async ({ path: path2, size, mtimeMs, token }, extra) => {
     try {
-      const source = await media.acquire(path, size, mtimeMs, extra._meta, token);
+      const source = await media.acquire(path2, size, mtimeMs, extra._meta, token);
       return { content: [{ type: "text", text: "Recording ready for range playback." }], structuredContent: { ...source } };
     } catch (error51) {
       return failure(describeError(error51));
@@ -32453,6 +36685,7 @@ async function registerViewer(server2, { fence, html, viewDir, media }) {
     const alive = media.renew(token);
     return { content: [{ type: "text", text: alive ? "Recording still held." : "Recording no longer held." }], structuredContent: { alive } };
   });
+  if (library !== void 0) registerLibraryTools(server2, { library, fence, media });
 }
 
 // src/stdio.ts

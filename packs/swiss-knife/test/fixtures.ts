@@ -1,17 +1,31 @@
 // Shared fixtures for the swiss-knife tests: temp dirs, synthetic images, and the
 // fake `pi` the extension factory is loaded with. Not a test file.
 
-import { mkdtemp, realpath } from "node:fs/promises";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { deflateSync } from "node:zlib";
 import * as zod from "@oh-my-pi/omptype/zod";
 import type { PresentedItem } from "@dimension/sdk/presentation";
+import type { Library } from "../src/library/types";
 
 /** A fresh temp directory, already `realpath`ed (Windows hands out 8.3 short names). */
 export async function makeTempDir(): Promise<string> {
 	return realpath(await mkdtemp(join(tmpdir(), "swiss-knife-")));
+}
+
+export async function removeTree(path: string): Promise<void> {
+	for (let attempt = 0; ; attempt++) {
+		try {
+			await rm(path, { recursive: true, force: true });
+			return;
+		} catch (error) {
+			const busy = error instanceof Error && "code" in error && (error.code === "EBUSY" || error.code === "EPERM");
+			if (!busy || attempt >= 30) throw error;
+			await new Promise<void>(resolve => setTimeout(resolve, 100));
+		}
+	}
 }
 
 /** A 1x1 PNG: the smallest valid image, and the seed the synthetic ones are scaled from. */
@@ -169,17 +183,30 @@ export interface ToolResult {
 	};
 }
 
+export interface ToolContext {
+	readonly cwd: string;
+	readonly sessionManager: { getSessionId(): string };
+}
+
+export interface ExtensionDeps {
+	readonly library: () => Promise<Library>;
+}
+
+export function toolContext(cwd: string): ToolContext {
+	return { cwd, sessionManager: { getSessionId: () => "session-under-test" } };
+}
+
 export interface RegisteredTool {
 	readonly name: string;
 	readonly description: string;
-	readonly approval?: string;
+	readonly approval?: string | ((args: unknown) => string);
 	readonly parameters: { safeParse(value: unknown): WireIssue };
 	execute(
 		toolCallId: string,
-		params: { path: string | string[] },
+		params: Record<string, unknown>,
 		signal: AbortSignal | undefined,
 		onUpdate: undefined,
-		ctx: { cwd: string },
+		ctx: ToolContext,
 	): Promise<ToolResult>;
 }
 
@@ -201,14 +228,13 @@ function isRegisteredTool(value: unknown): value is RegisteredTool {
  * against a fake `pi`, returning what it registered. `entry` is a `.ts` source or
  * the shipped `.mjs` bundle: the same factory contract either way.
  */
-export async function loadTools(entry: string): Promise<{ tools: RegisteredTool[]; raw: unknown[] }> {
-	// Runtime-selected module (the source entry or the shipped bundle): a static import cannot name both.
+export async function loadTools(entry: string, deps?: ExtensionDeps): Promise<{ tools: RegisteredTool[]; raw: unknown[] }> {
 	const mod: unknown = await import(pathToFileURL(entry).href);
 	if (typeof mod !== "object" || mod === null || !("default" in mod) || typeof mod.default !== "function") {
 		throw new Error(`${entry} has no default-exported extension factory`);
 	}
-	const factory: (pi: FakePi) => void = mod.default as (pi: FakePi) => void;
+	const factory: (pi: FakePi, deps?: ExtensionDeps) => void = mod.default as (pi: FakePi, deps?: ExtensionDeps) => void;
 	const raw: unknown[] = [];
-	factory({ zod, registerTool: definition => raw.push(definition) });
+	factory({ zod, registerTool: definition => raw.push(definition) }, deps);
 	return { tools: raw.filter(isRegisteredTool), raw };
 }

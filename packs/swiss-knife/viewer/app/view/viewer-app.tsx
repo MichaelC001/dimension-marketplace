@@ -7,8 +7,10 @@ import { useEffect, useState } from "react";
 import { DocPane, FailedPane, Message } from "./doc-pane";
 import { FirstWait, Opening } from "./opening";
 import type { Theme } from "./renderers/types";
+import { actionFromResult } from "./result";
 import { TabStrip } from "./tab-strip";
-import { type ViewerStore, useViewerState } from "./tabs";
+import { LIBRARY_KEY, type ViewerStore, useViewerState } from "./tabs";
+import { LibraryPane } from "./library/library-pane";
 
 /**
  * How long a connected View waits for the tool result that tells it what to open before it says nothing is open. The
@@ -24,19 +26,31 @@ export function ViewerApp({ app, store }: { readonly app: App; readonly store: V
 	// View still waiting on its first tool result; only AFTER it is the real empty state (every document closed). The
 	// files it was first told about are the first wait's (see `opening.tsx`); every file opened later waits on its own.
 	const [first, setFirst] = useState<ReadonlySet<string> | null>(null);
-	if (first === null && (state.tabs.length > 0 || state.notice !== null)) setFirst(new Set(state.tabs.map(tab => tab.key)));
+	if (first === null && (state.tabs.length > 0 || state.notice !== null || state.library !== null)) setFirst(new Set(state.tabs.map(tab => tab.key)));
+	const tabCount = state.tabs.length + (state.library === null ? 0 : 1);
 	return (
 		<div data-slot="viewer-root" className="relative flex h-full min-h-0 flex-col bg-fr-bg text-fr-text">
-			{state.tabs.length > 1 ? (
+			{tabCount > 1 ? (
 				<TabStrip
 					tabs={state.tabs}
+					library={state.library !== null}
 					activeKey={state.activeKey}
 					onActivate={key => store.dispatch({ type: "activate", key })}
 					onClose={key => store.dispatch({ type: "close", key })}
 				/>
 			) : null}
 			<div className="relative min-h-0 flex-1">
-				{state.tabs.length === 0 ? (
+				{state.library !== null ? (
+					<div className={state.activeKey === LIBRARY_KEY ? "absolute inset-0" : "hidden"}>
+						<LibraryPane
+							app={app}
+							request={state.library}
+							active={state.activeKey === LIBRARY_KEY}
+							onOpened={result => store.dispatch(actionFromResult(result))}
+						/>
+					</div>
+				) : null}
+				{state.tabs.length === 0 && state.library === null ? (
 					state.notice !== null ? (
 						<Message title="This file could not be opened" body={state.notice} />
 					) : (
@@ -55,7 +69,7 @@ export function ViewerApp({ app, store }: { readonly app: App; readonly store: V
 					</div>
 				))}
 				{/* With nothing open the notice is the pane's own card (above); this is for news about a file that is NOT the one on screen. It floats over the pane instead of sitting above it: a banner in the flow shoves a pane the human is looking at. */}
-				{state.notice !== null && state.tabs.length > 0 ? (
+				{state.notice !== null && tabCount > 0 ? (
 					<div
 						role="alert"
 						className="absolute inset-x-2 top-2 z-20 flex animate-in items-start gap-2 rounded-md border border-fr-del-line bg-fr-del-bg px-3 py-2 text-fr-sm text-fr-del shadow-md fade-in-0 duration-[var(--fr-motion-base)]"

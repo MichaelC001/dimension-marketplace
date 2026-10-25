@@ -46,6 +46,7 @@
 import { realpath as nativeRealpath, stat as nativeStat } from "node:fs/promises";
 import * as nodePath from "node:path";
 import { ARTIFACTORY_GRANT_META_KEY, type ArtifactoryGrantMeta } from "@dimension/sdk/artifactory";
+import type { Library } from "../../src/library/types";
 
 type Platform = NodeJS.Platform;
 type PathApi = typeof nodePath.posix;
@@ -231,6 +232,7 @@ export interface FenceOptions {
 	readonly isFile?: (path: string) => Promise<boolean>;
 	/** Where the cause of an outside-the-roots refusal goes: it is kept out of the answer. Defaults to nowhere. */
 	readonly log?: (detail: string) => void;
+	readonly indexed?: Pick<Library, "isLent">;
 }
 
 const refuse = (reason: string): FenceVerdict => ({ ok: false, reason });
@@ -324,6 +326,15 @@ export function createFence(options: FenceOptions): Fence {
 		}
 	}
 
+	async function isIndexed(real: string): Promise<boolean> {
+		if (options.indexed?.isLent(real) !== true) return false;
+		try {
+			return await isRegularFile(real);
+		} catch {
+			return false;
+		}
+	}
+
 	async function check(requested: unknown, meta?: unknown): Promise<FenceVerdict> {
 		if (typeof requested !== "string" || requested.trim() === "") return refuse("the path is empty");
 		if (requested.includes("\0")) return refuse("the path contains a NUL byte");
@@ -345,6 +356,7 @@ export function createFence(options: FenceOptions): Fence {
 			// A lent file the human named is theirs to hear about: "no such file" beats "outside the folders" for one they just clicked.
 			const within =
 				lent.some(file => comparable(file, platform) === comparable(lexical, platform)) ||
+				options.indexed?.isLent(lexical) === true ||
 				(anchor !== undefined && [...roots, ...(await realRoots())].some(root => insideRoot(anchor, root, platform)));
 			if (!within) return refuseOutside(requested, `it does not resolve (${code ?? "unknown error"})`);
 			if (code === "ENOENT" || code === "ENOTDIR") return refuse(`no such file: "${requested}"`);
@@ -357,7 +369,7 @@ export function createFence(options: FenceOptions): Fence {
 		// "a credentials folder", which would say what the outside target is. A
 		// lent file is the one other way in, and the deny check below still runs on it.
 		const allowed = await realRoots();
-		if (!allowed.some(root => insideRoot(real, root, platform)) && !(await isLent(real, lent))) {
+		if (!allowed.some(root => insideRoot(real, root, platform)) && !(await isLent(real, lent)) && !(await isIndexed(real))) {
 			return refuseOutside(requested, `it resolves to ${JSON.stringify(real)}`);
 		}
 		const denied = denyReason(real);

@@ -35,8 +35,8 @@ async function bounded<T>(work: Promise<T>, label: string): Promise<T> {
 	}
 }
 
-function launch(script: string): OwnedProcess {
-	const child: ChildProcessWithoutNullStreams = spawn(process.execPath, [script], { cwd: viewer, stdio: "pipe" });
+function launch(script: string, env: NodeJS.ProcessEnv = process.env): OwnedProcess {
+	const child: ChildProcessWithoutNullStreams = spawn(process.execPath, [script], { cwd: viewer, stdio: "pipe", env });
 	let stdout = "";
 	let stderr = "";
 	child.stdout.setEncoding("utf8").on("data", chunk => { stdout += chunk; });
@@ -95,11 +95,13 @@ test("stdio EOF after MCP initialization exits successfully without a terminatio
 	let process_: OwnedProcess | undefined;
 	let lines: Interface | undefined;
 	try {
-		const source = join(directory, "src");
+		const packSource = join(directory, "src");
+		const source = join(directory, "viewer", "src");
+		await cp(join(viewer, "..", "src"), packSource, { recursive: true });
 		await cp(join(viewer, "src"), source, { recursive: true, filter: path => basename(path) !== "dist" });
 		await mkdir(join(source, "dist"));
 		await writeFile(join(source, "dist", "index.html"), "<!doctype html><title>viewer</title>");
-		const owned = launch(join(source, "stdio.ts"));
+		const owned = launch(join(source, "stdio.ts"), { ...process.env, INSO_HOME: join(directory, "home") });
 		process_ = owned;
 		const reader = createInterface({ input: owned.child.stdout });
 		lines = reader;
