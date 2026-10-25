@@ -269,5 +269,34 @@ async function mount(el: HTMLElement, bytes: Uint8Array, ctx: MountContext): Pro
 	};
 }
 
+export async function drawFirstPage(bytes: Uint8Array, longEdge: number, signal: AbortSignal): Promise<HTMLCanvasElement> {
+	signal.throwIfAborted();
+	const { worker, port } = createWorker();
+	const loading = pdfjs.getDocument({ data: bytes.slice(), worker });
+	const stop = () => void loading.destroy();
+	signal.addEventListener("abort", stop, { once: true });
+	try {
+		const doc = await loading.promise;
+		const page = await doc.getPage(1);
+		const natural = page.getViewport({ scale: 1 });
+		const viewport = page.getViewport({ scale: Math.min(4, longEdge / Math.max(natural.width, natural.height)) });
+		const canvas = document.createElement("canvas");
+		canvas.width = Math.max(1, Math.floor(viewport.width));
+		canvas.height = Math.max(1, Math.floor(viewport.height));
+		const context = canvas.getContext("2d");
+		if (context === null) throw new Error("no 2D canvas");
+		context.fillStyle = "white";
+		context.fillRect(0, 0, canvas.width, canvas.height);
+		const task = page.render({ canvasContext: context, canvas, viewport });
+		signal.addEventListener("abort", () => task.cancel(), { once: true });
+		await task.promise;
+		signal.throwIfAborted();
+		return canvas;
+	} finally {
+		signal.removeEventListener("abort", stop);
+		void loading.destroy().finally(() => port.terminate());
+	}
+}
+
 const renderer: Renderer = { mount };
 export default renderer;

@@ -15,6 +15,17 @@ folder is the deep reference. The View is `app/view` (built to `app/dist`); the 
 | `open_media { path, size, mtimeMs, token }` | the View only (`visibility: ["app"]`) | Admits a recording for HTTP range playback through a fenced loopback capability. The View generates the 192-bit token before opening, so it can cancel pending admission. |
 | `close_media { token }` | the View only (`visibility: ["app"]`) | Revokes the capability, cancels pending admission and stops active streams. A token released before its open arrives is remembered and refused. Outer View teardown awaits revocation before acknowledging the host. |
 | `renew_media { token }` | the View only (`visibility: ["app"]`) | The pane saying it still holds `token`; answers `{ alive }`. A lease is held on proof of life: a request for it or this call. A pane that is gone (its session switched away, its column collapsed, a reload) stops calling, so a full table can reclaim the lease after five minutes of silence. `alive: false` means the server no longer holds it and the pane opens the recording again. |
+| `open_library { workspace?, query? }` | the host (the dock's Library launcher, `launch.tool` in `plugin.json`); no agent is offered it | The only library tool that carries the View (`_meta.ui.resourceUri`). Answers `structuredContent { mode: "library", workspace?, query? }` and the tab key `library` (`_meta["ai.insodimension/tab"]`), so the View pins its Library tab. |
+| `library_query { q?, kinds?, workspace?, state?, starred?, shared?, sort?, cursor?, limit? }` | the View only | One keyset page: `{ items: LibraryItem[], next?, total }`. `sort` is `recent` (the default; `discarded_at` for `state: "discarded"`), `name`, `size`, `opened` or `relevance` (best match first; with no searchable text it is `recent`). `q` of three or more characters is a trigram substring match, each whitespace-separated term of three or more must match, shorter terms beside them are ignored; a `q` shorter than three is a name prefix. A cursor belongs to the sort it came from and is refused for another. `limit` is 1 to 200 (default 50). |
+| `library_facets { workspace?, state? }` | the View only | `{ kinds, workspaces, starred, shared, discarded }` for the filter column. |
+| `library_check { ids }` | the View only | Stats up to 200 files in batches of 32, marks a gone file `missing` (and a returned one `live`), refreshes size and mtime, and answers `{ items: [{ id, state, size, mtimeMs }] }`. |
+| `library_update { id, title?, note?, tags?, starred?, durationMs? }` | the View only | `{ item }`. `null` clears a title or note. |
+| `library_stamp { path }` | the View only | A person's Add file: `{ item }`. The deny table refuses secrets; a discarded file comes back for a human add. |
+| `library_discard { id, trash }` / `library_restore { id }` | the View only | `{ item, trashed, trashError?, revoked, unrevoked }`: shares revoked on their host (`unrevoked` names any the host would not revoke; they are stopped here anyway), the thumbnail deleted, and with `trash` the file sent to the OS recycle bin (never deleted outright; a failed trash is `trashError`). Restore works for 30 days. |
+| `library_discard_default { id }` | the View only | `{ trash }`: the Discard dialog's box, ticked unless `git ls-files --error-unmatch` finds the file tracked. |
+| `library_open { id }` | the View only | `view_file`'s answer for the indexed path (same `openViewedFile` function) and records the open. A discarded or unknown id is refused. |
+| `library_thumbs {}` | the View only | `{ base }`: `<base>/<id>` serves the cached thumbnail from the loopback origin. |
+| `library_set_thumb { id, data, mime }` | the View only | The View draws a poster or a PDF's first page once and saves it (at most 150 KiB; the bytes must be the image `mime` names). |
 
 The capability URL answers `GET` and `HEAD` for one lease. A `Range: bytes=` header with a single range is a 206 (a suffix range counts from the end, an end past the file is clamped); a start past the end, a zero suffix or a malformed range is a 416 with `Content-Range: bytes */size`; a unit other than bytes, a multi-range, or any `Range` on a method other than GET is ignored and the whole file answers 200. Every answer that passes the Host and Origin check carries `Access-Control-Allow-Origin: *`, so the player reads a refusal as a refusal instead of retrying a blocked fetch.
 
@@ -177,6 +188,97 @@ Up to 24 notes. The request lists them in time order, and for video carries up t
 * A recording that does not report its length is resolved with one seek; if that fails,
   marks use the time you hear and the transport says so.
 
+## The Library view (doc 103 §4.6)
+
+`open_library` (the dock's Library) opens a pinned **Library** tab in the View's own tab strip; an artifact opened
+from it (`library_open`, dispatched exactly like a `view_file` result) becomes an ordinary document tab beside it.
+The pane lives in `app/view/library/`:
+
+- **Filters and search.** A left rail (kinds with counts, workspaces, Starred, Shared, Recently discarded) from
+  `library_facets`; the search field filters as you type (80 ms debounce). Every list is the server's SQLite answer:
+  each request carries a key, and an answer for a key that is no longer current is dropped (`query.ts`), so a slow
+  older search never overwrites a newer one. Below 760 px the rail folds behind a Filters button and the drawer
+  floats over the grid.
+- **Virtualized grid and list** (`library-grid.tsx`, math in `window.ts`). Fixed row heights; only the rows on
+  screen plus three rows of overscan are mounted, scroll work is coalesced to one animation frame, and the next
+  `library_query` page (cursor paging, 200 a page) is asked for twelve rows before the loaded end. The window size is
+  the same at row 30 000 of 50 000 as at row 0 (`test/library-window.test.ts`, `test/library-grid.test.ts`).
+- **Thumbnails.** `<img loading=lazy>` from the `library_thumbs` origin (`<base>/<id>?v=<presentedAt>-<n>`). A video
+  or a PDF (up to 48 MiB) on screen without one gets a poster drawn in the View: the video's frame at 10 % (at most
+  1 s) through `open_media`, or the PDF's first page with the PDF renderer's pdf.js, encoded WebP (JPEG where WebP
+  is unavailable) at most 320 px and 128 KiB, saved with `library_set_thumb`. One at a time, only for visible rows,
+  cancelled when its row scrolls away (`poster-queue.ts`); a failed one is not retried this session.
+- **Missing files.** The visible rows are checked with `library_check` (batches of 200, throttled to 300 ms, a row
+  not again within a minute) and a gone file shows the warning mark.
+- **Detail drawer** (Drive's details panel). A header with the kind icon, the name (double-click or ⋯ Rename edits the
+  title), star and a ⋯ menu (Copy path, Rename, Discard…, or Restore in Recently discarded); the preview; Open and
+  Share. Two tabs. Details: "Who has access" (Only you, or one row per live link naming who it lets in, its role,
+  expiry and where it lives, with Copy link and Manage access; never the URL; stopped and expired links fold into
+  "Stopped links"), "File details" (type, size, the containing folder with the full path on hover and a copy button,
+  workspace, who added it, dates) and "Description" with tags (`library_update` on blur or Enter). Comments: one entry
+  per comment with initials, time, a time or page chip and the body, grouped by link when there are several; new ones
+  stay highlighted while shown and are marked read (`share_mark_read`); a reply box at the bottom (`share_reply`).
+- **Discard** explains that the artifact leaves the library and its links stop working; "Also move the file to the
+  Recycle Bin/Trash" starts at `library_discard_default`'s answer (ticked unless git tracks the file).
+- **Share** (Drive's share dialog). "Add people and domains" (emails and @domains; only on a server with sign-in),
+  "People with access", "General access" (Restricted or Anyone with the link, with Viewer or Commenter), "Shared from"
+  (this computer first, then each host; a host its policy or state rules out is listed with its reason) and "Link
+  expires" (never past `maxDays`). Nothing is made until Copy link or Done: Copy link creates and copies the link with
+  its key, showing `share_progress` (polled every 250 ms) in the footer; Done creates without copying, or just closes
+  when Restricted has nobody added. Manage access opens the same dialog for one link: access, role and expiry apply at
+  once through `share_update`; ⋯ holds Update link (`share_new_version`) and Stop sharing (`share_revoke`); a hosted
+  link whose file changed since its version shows "The file changed since you shared it." Add a server is a step
+  inside the dialog: the two `docker compose` commands to run, then the pairing link (or URL + token).
+- **Keyboard.** `/` search, arrows / Home / End / PageUp / PageDown move, Enter opens, `s` stars, Delete discards,
+  Escape closes the drawer; ArrowDown or Enter in the search field moves into the grid.
+
+## Sharing (doc 103 §5)
+
+`src/share/` is the share client. `startShareRuntime` (started with the server, closed with its connection) owns
+everything that runs in the background; `registerShareTools` mounts the app-only tools the Library View calls
+(`visibility: ["app"]`: no model is ever offered one, and publishing off the machine stays a human click).
+
+| Tool | Does |
+|---|---|
+| `share_hosts {}` | `{hosts, p2pAllowed}`. Each host: `{id, kind: p2p\|self\|company\|dimension, name, baseUrl, status: ok\|unreachable\|unauthorized, policy?, oidc, managed}`; the status and policy are read from the host's `/.well-known/dimension-artifacts` and `GET /api/v1/ping` and cached 30 s. Never a token. |
+| `share_host_add {pairing}` or `{url, token?, kind}` | Reads the discovery document, refuses a relay-only address, proves the token with `GET /api/v1/ping`, then saves the host. A pairing link is `https://<domain>/pair#t=<token>`. |
+| `share_host_remove {id}` | Refused for a `managed` host. |
+| `share_create {artifactId, host, audience, expiresInDays?, allowComments}` | Resolves when the link exists: `{share: ShareSummary & {link}}`. The link carries the key; it is returned to the View only and never logged. A concurrent `share_progress {artifactId}` answers `{phase: sealing\|uploading\|done\|failed, sent, total, error?, shareId?}` (`sent`/`total` are sealed bytes). If the call outlives the host's tool timeout the upload keeps running and the `done` progress names the `shareId` for `share_link`. |
+| `share_update`, `share_new_version`, `share_revoke`, `share_link` | Change audience/expiry/comments, seal the current file as the next version (same key, new prefix), revoke, read the link again. |
+| `share_comments {artifactId}`, `share_reply`, `share_mark_read` | Read (after a bounded catch-up from every live share), reply as `displayName` from `hosts.json` (else the OS user name), mark read. |
+
+- **`<home>/artifacts/hosts.json`.** `{relay?, displayName?, policy?: {only?: [hostId], p2p?: boolean}, hosts: [{id, kind, name, baseUrl, token?, managed?}]}`,
+  validated with zod and written atomically with mode `0600` on POSIX. IT writes `managed: true` hosts and a
+  `policy`: with `only` set, every other host is hidden and cannot be added, `p2p` defaults to off, and a managed
+  host cannot be removed from the UI. Tokens stay in this file: they are not in any tool answer, error or log.
+  Plain `http` is accepted for this computer only.
+- **Upload.** The file is read 1 MiB at a time on one open handle and sealed with ASP v1 as it goes (a file is never
+  held in memory). A share is created, its manifest PUT, then the chunks with at most four in flight; a chunk is
+  retried with jittered backoff on a network error or a 5xx/429 (five attempts), and a chunk the host already holds
+  is never sent again: after a failure the same `share_create` resumes the same remote share in the same process,
+  and a `409 incomplete` commit re-sends exactly the chunks the host names. The sealed manifest is kept and
+  re-sent byte for byte (its nonce is fixed per version, so it is never sealed twice). A file that changes while it
+  is read fails the share. The host's policy is checked first (`audienceAllowedBy`, `maxBytes`, `maxDays`, sign-in
+  needs OIDC) and refused with the host's own words before anything is created.
+- **From this computer.** `p2p-server.ts` answers the read half of the host API (`GET` share, manifest and chunks
+  with `Range` and `HEAD`) from the original file, sealing a chunk when asked and keeping the last 16 MiB in memory.
+  There is no listener: requests arrive only as frames from the relay tunnel (`tunnel.ts`, the protocol is
+  `@dimension/artifact-host/tunnel-protocol`). Each request resolves the share row (so a revoke or a discard made
+  by the agent's tool in another process answers 410 at once), re-runs the fence on the file and compares the real
+  path with the indexed one. A version is fixed by `(size, mtime)`: when they change the share moves to the next
+  version with a fresh prefix, persisted in `<home>/artifacts/p2p/<shareId>.json` with the sealed manifest, so a
+  restart serves identical bytes and never seals a manifest twice under one nonce. The tunnel runs only while a
+  live, unexpired P2P share exists; it re-registers as the same tunnel (`<home>/artifacts/tunnel.json`, mode `0600`)
+  after a drop or a restart, announces every non-revoked share after each change, streams a response body only
+  within the credit the relay grants, and treats `bad_token`/`unknown_tunnel` as the end of that tunnel: its links
+  are marked revoked and the next P2P share registers a new one.
+- **Comments.** One event stream per host (`POST /api/v1/events`, up to 200 shares each, at most 8 streams), with the
+  tunnel's own stream for P2P shares, reconnecting with the last comment id per share (read from the library, so it
+  survives a restart). Each comment is opened with the key derived from the share's content key and written with
+  `library.comments.upsert`; one that does not open is skipped.
+
+The relay's address is `DEFAULT_RELAY_URL` (`src/share/hosts.ts`) unless `hosts.json` sets `relay`.
+
 ## A click-open is a host-lent, one-file grant
 
 The fence (`src/fence.ts`) answers "which files may a model-callable tool read", and
@@ -214,6 +316,9 @@ deny-by-default for everything a human did not click.
 | A video filmstrip | 16 thumbnails, 160 px long edge; 4 files cached | `MAX_FILM_SLOTS`, `media-frame.ts`, `media-filmstrip.ts` |
 | Notes on one file | 24 | `MAX_MARKS`, `MAX_COMMENTS`, `MAX_ELEMENT_PICKS`, `MAX_TIMELINE_MARKS` |
 | Pictures in one request | 4, 2 MiB each, 4 MiB together | the host's image caps, held by the kit |
+| A share upload | 4 chunks in flight, 1 MiB each; a chunk is tried 5 times (0.4 s base, 15 s cap, jittered) | `UPLOAD_CONCURRENCY` (`upload.ts`), `DEFAULT_RETRY` (`host-api.ts`) |
+| A link from this computer | 16 MiB of sealed chunks cached; 128 KiB data frames; tunnel reconnect 1 s to 60 s, jittered | `P2pServer`, `TunnelClient` |
+| Comment streams | 8 streams, 200 shares each | `MAX_STREAMS`, `SHARES_PER_STREAM` (`comments.ts`) |
 
 ## Accepted risks
 
