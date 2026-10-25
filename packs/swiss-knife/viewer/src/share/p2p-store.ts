@@ -1,6 +1,7 @@
 import { readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
+import { hasCode } from "../../../src/library/errors";
 import { readJsonFile, StoredFileError, writePrivateJsonFile } from "./fs-json";
 
 const STATE_ID_PATTERN = /^[A-Za-z0-9_-]{16,64}$/;
@@ -58,7 +59,7 @@ export class P2pStore {
 		try {
 			return (await readdir(this.#dir)).filter(name => name.endsWith(".json")).map(name => name.slice(0, -".json".length));
 		} catch (error) {
-			if (error instanceof Error && "code" in error && error.code === "ENOENT") return [];
+			if (hasCode(error, "ENOENT")) return [];
 			throw error;
 		}
 	}

@@ -3,6 +3,7 @@ import { registerAppTool } from "@modelcontextprotocol/ext-apps/server";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { errorMessage } from "../../../src/library/errors";
 import { APP_ONLY, failure } from "../tool-support";
 import { StoredFileError } from "./fs-json";
 import { HostRequestError } from "./host-api";
@@ -60,7 +61,7 @@ async function guarded(work: () => Promise<CallToolResult>): Promise<CallToolRes
 		if (error instanceof ShareError || error instanceof HostConfigError || error instanceof HostRequestError || error instanceof StoredFileError) {
 			return failure(error.message);
 		}
-		const detail = error instanceof Error ? error.message : String(error);
+		const detail = errorMessage(error);
 		console.error(`share: ${detail}`);
 		return failure(`sharing failed: ${detail}`);
 	}

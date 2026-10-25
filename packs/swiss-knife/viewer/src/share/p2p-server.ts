@@ -15,7 +15,7 @@ import type { Library, LibraryItem, ShareRow } from "../../../src/library/types"
 import { readRange } from "../chunk";
 import type { Fence } from "../fence";
 import { ChunkCache } from "./chunk-cache";
-import type { Fingerprint } from "./chunk-source";
+import { type Fingerprint, plainChunkBytes } from "./chunk-source";
 import { buildManifest } from "./manifest";
 import type { P2pShareState, P2pStore } from "./p2p-store";
 
@@ -283,7 +283,7 @@ export class P2pServer {
 		if (pending !== undefined) return pending;
 		const work = (async () => {
 			const start = index * ASP_CHUNK_BYTES;
-			const length = Math.min(ASP_CHUNK_BYTES, state.size - start);
+			const length = plainChunkBytes(state.size, index);
 			const read = await readRange(file.real, start, length);
 			if (read.size !== state.size || read.mtimeMs !== state.mtimeMs || read.bytes.length !== length) {
 				throw new P2pRefusal(409, "changed", "The file changed while it was being read; reload this page.");

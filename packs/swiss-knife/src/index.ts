@@ -1,5 +1,6 @@
 import type { AgentToolResult, ExtensionAPI } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import { registerArtifactsTool } from "./artifacts";
+import { errorMessage } from "./library/errors";
 import { stampPresented } from "./library/present-stamp";
 import { sharedLibrary } from "./library/shared";
 import type { Library } from "./library/types";
@@ -28,7 +29,7 @@ export default function swissKnife(pi: ExtensionAPI, deps: SwissKnifeDeps = { li
 			try {
 				await stampPresented(await deps.library(), details, { cwd: ctx.cwd, sessionId: ctx.sessionManager.getSessionId() });
 			} catch (error) {
-				console.error(`library: presented files were not indexed: ${error instanceof Error ? error.message : String(error)}`);
+				console.error(`library: presented files were not indexed: ${errorMessage(error)}`);
 			}
 			return { content: [{ type: "text", text }], details };
 		},

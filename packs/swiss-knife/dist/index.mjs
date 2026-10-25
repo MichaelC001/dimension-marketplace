@@ -224,6 +224,12 @@ var TERMINAL_CONTINUATION_REASONS = Object.assign(
 var LibraryError = class extends Error {
   name = "LibraryError";
 };
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+function hasCode(error, ...codes) {
+  return error instanceof Error && "code" in error && typeof error.code === "string" && codes.includes(error.code);
+}
 
 // src/present.ts
 import { constants } from "node:fs";
@@ -696,7 +702,7 @@ async function stampPresented(library, details, session) {
         ...image === void 0 || thumbMime === void 0 ? {} : { thumb: { bytes: Buffer.from(image.data, "base64"), mime: thumbMime } }
       });
     } catch (error) {
-      console.error(`library: ${item.name} was presented but not indexed: ${error instanceof Error ? error.message : String(error)}`);
+      console.error(`library: ${item.name} was presented but not indexed: ${errorMessage(error)}`);
     }
   }
 }
@@ -729,30 +735,7 @@ function decodeCursor(text, ordering) {
 }
 
 // src/library/driver.ts
-async function openDriver(file) {
-  if (typeof Bun !== "undefined") {
-    const { Database } = await import("bun:sqlite");
-    const db2 = new Database(file, { create: true });
-    return {
-      exec: (sql) => db2.exec(sql),
-      prepare(sql) {
-        const statement = db2.prepare(sql);
-        return {
-          all(...params) {
-            return statement.all(...params);
-          },
-          get(...params) {
-            return statement.get(...params) ?? void 0;
-          },
-          run: (...params) => ({ changes: statement.run(...params).changes }),
-          finalize: () => statement.finalize()
-        };
-      },
-      close: () => db2.close()
-    };
-  }
-  const { DatabaseSync } = await import("node:sqlite");
-  const db = new DatabaseSync(file);
+function adapt(db) {
   return {
     exec: (sql) => db.exec(sql),
     prepare(sql) {
@@ -762,14 +745,22 @@ async function openDriver(file) {
           return statement.all(...params);
         },
         get(...params) {
-          return statement.get(...params);
+          return statement.get(...params) ?? void 0;
         },
         run: (...params) => ({ changes: Number(statement.run(...params).changes) }),
-        finalize: () => void 0
+        finalize: () => statement.finalize?.()
       };
     },
     close: () => db.close()
   };
+}
+async function openDriver(file) {
+  if (typeof Bun !== "undefined") {
+    const { Database } = await import("bun:sqlite");
+    return adapt(new Database(file, { create: true }));
+  }
+  const { DatabaseSync } = await import("node:sqlite");
+  return adapt(new DatabaseSync(file));
 }
 
 // src/library/paths.ts
@@ -814,6 +805,7 @@ var FULL_TEXT_FROM = "artifacts_fts CROSS JOIN artifacts a ON a.rowid = artifact
 var RELEVANCE = "bm25(artifacts_fts, 8.0, 5.0, 2.0, 2.0, 1.0)";
 var LIVE_SHARE_IDS = "SELECT s.artifact_id FROM shares s WHERE s.revoked_at IS NULL AND (s.expires_at IS NULL OR s.expires_at > ?)";
 var EXPIRY_RESOLUTION_MS = 6e4;
+var placeholders = (count) => Array.from({ length: count }, () => "?").join(", ");
 function resolveOrdering(sort, discarded, matched) {
   if (sort === "relevance" && matched) return "relevance";
   if (sort === "name" || sort === "size" || sort === "opened") return sort;
@@ -840,7 +832,7 @@ function planList(query, now) {
   const filterParams = [];
   if (fullText !== void 0) filterParams.push(fullText);
   if (query.kinds !== void 0 && query.kinds.length > 0) {
-    where.push(`a.kind IN (${query.kinds.map(() => "?").join(", ")})`);
+    where.push(`a.kind IN (${placeholders(query.kinds.length)})`);
     filterParams.push(...query.kinds);
   }
   if (query.workspace !== void 0) {
@@ -888,16 +880,13 @@ function planList(query, now) {
 }
 
 // src/library/remote.ts
+import { setTimeout as sleep } from "node:timers/promises";
 var REVOKE_TIMEOUT_MS = 15e3;
 var REVOKE_ATTEMPTS = 2;
 var RETRY_PAUSE_MS = 600;
 async function reasonOf(response) {
-  try {
-    const body = await response.json();
-    if (typeof body === "object" && body !== null && "message" in body && typeof body.message === "string" && body.message !== "") return body.message;
-  } catch {
-    return `the server answered ${response.status}`;
-  }
+  const body = await response.json().catch(() => void 0);
+  if (typeof body === "object" && body !== null && "message" in body && typeof body.message === "string" && body.message !== "") return body.message;
   return `the server answered ${response.status}`;
 }
 async function deleteOnce(share, url) {
@@ -905,8 +894,7 @@ async function deleteOnce(share, url) {
   try {
     response = await fetch(url, { method: "DELETE", headers: { authorization: `Bearer ${share.ownerToken}` }, signal: AbortSignal.timeout(REVOKE_TIMEOUT_MS) });
   } catch (error) {
-    const cause = error instanceof Error ? error.message : String(error);
-    return { done: false, reason: `${new URL(share.baseUrl).host} could not be reached (${cause})`, retry: true };
+    return { done: false, reason: `${new URL(share.baseUrl).host} could not be reached (${errorMessage(error)})`, retry: true };
   }
   if (response.ok || response.status === 404 || response.status === 410) return { done: true };
   return { done: false, reason: await reasonOf(response), retry: response.status >= 500 || response.status === 429 };
@@ -917,16 +905,22 @@ async function deleteRemoteShare(share) {
     const outcome = await deleteOnce(share, url);
     if (outcome.done) return;
     if (!outcome.retry || attempt >= REVOKE_ATTEMPTS) throw new Error(`the link could not be revoked: ${outcome.reason}`);
-    await new Promise((resolve6) => setTimeout(resolve6, RETRY_PAUSE_MS));
+    await sleep(RETRY_PAUSE_MS);
   }
 }
-var revokeRemote = (share) => deleteRemoteShare(share);
+var revokeRemote = deleteRemoteShare;
 
 // ../../../packages/sdk/src/artifact-share/index.ts
 var ASP_CHUNK_BYTES = 1 << 20;
 var ASP_MAX_POSTER_BYTES = 64 * 1024;
+var MAX_POSTER_CHARS = Math.ceil(ASP_MAX_POSTER_BYTES * 4 / 3) + 4;
 var encoder = new TextEncoder();
 var decoder = new TextDecoder("utf-8", { fatal: true });
+var INVALID = Symbol("invalid");
+function optionalField(raw, parse) {
+  if (raw === void 0) return void 0;
+  return parse(raw) ?? INVALID;
+}
 function stringList(value, max) {
   if (!Array.isArray(value) || value.length > max) return void 0;
   const out = [];
@@ -940,10 +934,9 @@ function parseAudience(value) {
   if (!isRecord2(value)) return void 0;
   if (value.kind === "link") return { kind: "link" };
   if (value.kind !== "signin") return void 0;
-  const emails = value.emails === void 0 ? void 0 : stringList(value.emails, 500);
-  const domains = value.domains === void 0 ? void 0 : stringList(value.domains, 50);
-  if (value.emails !== void 0 && emails === void 0 || value.domains !== void 0 && domains === void 0)
-    return void 0;
+  const emails = optionalField(value.emails, (list) => stringList(list, 500));
+  const domains = optionalField(value.domains, (list) => stringList(list, 50));
+  if (emails === INVALID || domains === INVALID) return void 0;
   return {
     kind: "signin",
     ...emails === void 0 || emails.length === 0 ? {} : { emails },
@@ -1164,8 +1157,7 @@ async function moveToTrash(path, platform = process.platform) {
   try {
     outcome = await run(command.program, command.args, { timeout: TRASH_TIMEOUT_MS, ...command.env === void 0 ? {} : { env: command.env } });
   } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    throw new LibraryError(`${command.tool} could not move the file to the trash: ${reason}`);
+    throw new LibraryError(`${command.tool} could not move the file to the trash: ${errorMessage(error)}`);
   }
   if (outcome.code !== 0) {
     const detail = outcome.stderr.trim().split(/\r?\n/)[0] ?? "";
@@ -1207,7 +1199,7 @@ async function removeThumbs(directory, id, keep) {
   try {
     entries = await readdir(directory);
   } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return;
+    if (hasCode(error, "ENOENT")) return;
     throw error;
   }
   const own = entries.filter((entry) => entry !== keep && entry.startsWith(`${id}.`));
@@ -1280,12 +1272,6 @@ function cleanTags(tags) {
   if (clean.length > MAX_TAGS) throw new LibraryError(`an artifact takes at most ${MAX_TAGS} tags`);
   return clean;
 }
-function failureReason(error) {
-  return error instanceof Error ? error.message : String(error);
-}
-function hasCode(error, ...codes) {
-  return error instanceof Error && "code" in error && typeof error.code === "string" && codes.includes(error.code);
-}
 async function createLibrary(options) {
   const now = options.now ?? Date.now;
   const platform = options.platform ?? process.platform;
@@ -1315,7 +1301,6 @@ async function createLibrary(options) {
     }
     return statement;
   }
-  const placeholders = (count) => Array.from({ length: count }, () => "?").join(", ");
   function rowOf(id) {
     return sql("SELECT * FROM artifacts WHERE id = ?").get(id);
   }
@@ -1460,7 +1445,7 @@ async function createLibrary(options) {
     try {
       real = await realpath3(resolve5(requested));
     } catch (error) {
-      throw refuse(hasCode(error, "ENOENT", "ENOTDIR") ? `no such file: "${requested}"` : `"${requested}" cannot be resolved (${failureReason(error)})`);
+      throw refuse(hasCode(error, "ENOENT", "ENOTDIR") ? `no such file: "${requested}"` : `"${requested}" cannot be resolved (${errorMessage(error)})`);
     }
     if (denyReason(real) !== void 0) throw refuse("it resolves to a protected location (credentials, keys or engine state)");
     const before = await stat2(real);
@@ -1635,7 +1620,7 @@ async function createLibrary(options) {
         await revokeRemote2(share);
         revoked++;
       } catch (error) {
-        unrevoked.push({ shareId: share.id, host: share.host, reason: failureReason(error) });
+        unrevoked.push({ shareId: share.id, host: share.host, reason: errorMessage(error) });
       }
       shares.update(share.id, { revokedAt: now() });
     }
@@ -1645,7 +1630,7 @@ async function createLibrary(options) {
     try {
       await removeThumbs(thumbsDirectory, id);
     } catch (error) {
-      console.error(`library: thumbnail of ${id} was not removed: ${failureReason(error)}`);
+      console.error(`library: thumbnail of ${id} was not removed: ${errorMessage(error)}`);
     }
     let trashed = false;
     let trashError;
@@ -1654,7 +1639,7 @@ async function createLibrary(options) {
         await trashFile(row.path);
         trashed = true;
       } catch (error) {
-        trashError = hasCode(error, "ENOENT") ? "the file no longer exists" : failureReason(error);
+        trashError = hasCode(error, "ENOENT") ? "the file no longer exists" : errorMessage(error);
       }
     }
     return { item: itemOf(requireRow(id)), trashed, ...trashError === void 0 ? {} : { trashError }, revoked, unrevoked };
@@ -1774,7 +1759,7 @@ function swissKnife(pi, deps = { library: sharedLibrary }) {
       try {
         await stampPresented(await deps.library(), details, { cwd: ctx.cwd, sessionId: ctx.sessionManager.getSessionId() });
       } catch (error) {
-        console.error(`library: presented files were not indexed: ${error instanceof Error ? error.message : String(error)}`);
+        console.error(`library: presented files were not indexed: ${errorMessage(error)}`);
       }
       return { content: [{ type: "text", text }], details };
     }

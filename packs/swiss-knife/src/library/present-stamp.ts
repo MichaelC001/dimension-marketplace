@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 import type { PresentDetails } from "../present";
+import { errorMessage } from "./errors";
 import type { Library } from "./types";
 
 export interface PresentSession {
@@ -23,7 +24,7 @@ export async function stampPresented(library: Library, details: PresentDetails, 
 				...(image === undefined || thumbMime === undefined ? {} : { thumb: { bytes: Buffer.from(image.data, "base64"), mime: thumbMime } }),
 			});
 		} catch (error) {
-			console.error(`library: ${item.name} was presented but not indexed: ${error instanceof Error ? error.message : String(error)}`);
+			console.error(`library: ${item.name} was presented but not indexed: ${errorMessage(error)}`);
 		}
 	}
 }

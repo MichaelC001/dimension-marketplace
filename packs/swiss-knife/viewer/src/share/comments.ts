@@ -1,5 +1,6 @@
 import { decodeBase64Url, deriveCommentKey, openComment } from "@dimension/sdk/artifact-share";
 import { z } from "zod";
+import { errorMessage } from "../../../src/library/errors";
 import type { Library, ShareRow } from "../../../src/library/types";
 import { HostClient, type SealedComment } from "./host-api";
 import { P2P_HOST_ID } from "./hosts";
@@ -101,7 +102,7 @@ export class CommentSync {
 					}
 				} catch (error) {
 					if (signal?.aborted) return;
-					this.#options.log?.(`could not read comments for a share on ${new URL(row.baseUrl).host}: ${error instanceof Error ? error.message : String(error)}`);
+					this.#options.log?.(`could not read comments for a share on ${new URL(row.baseUrl).host}: ${errorMessage(error)}`);
 				}
 			}
 		};
@@ -168,7 +169,7 @@ export class CommentSync {
 				}
 			} catch (error) {
 				if (signal.aborted) return;
-				this.#options.log?.(`comment stream from ${new URL(first.baseUrl).host} dropped: ${error instanceof Error ? error.message : String(error)}`);
+				this.#options.log?.(`comment stream from ${new URL(first.baseUrl).host} dropped: ${errorMessage(error)}`);
 			}
 			try {
 				await sleepFor(Math.max(backoff.baseMs, backoffDelay(attempt++, backoff)), signal);

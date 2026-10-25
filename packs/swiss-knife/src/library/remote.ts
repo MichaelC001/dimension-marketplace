@@ -1,3 +1,5 @@
+import { setTimeout as sleep } from "node:timers/promises";
+import { errorMessage } from "./errors";
 import type { RevokeRemote } from "./types";
 
 const REVOKE_TIMEOUT_MS = 15_000;
@@ -11,12 +13,8 @@ export interface RemoteShareAddress {
 }
 
 async function reasonOf(response: Response): Promise<string> {
-	try {
-		const body: unknown = await response.json();
-		if (typeof body === "object" && body !== null && "message" in body && typeof body.message === "string" && body.message !== "") return body.message;
-	} catch {
-		return `the server answered ${response.status}`;
-	}
+	const body: unknown = await response.json().catch(() => undefined);
+	if (typeof body === "object" && body !== null && "message" in body && typeof body.message === "string" && body.message !== "") return body.message;
 	return `the server answered ${response.status}`;
 }
 
@@ -25,8 +23,7 @@ async function deleteOnce(share: RemoteShareAddress, url: string): Promise<{ rea
 	try {
 		response = await fetch(url, { method: "DELETE", headers: { authorization: `Bearer ${share.ownerToken}` }, signal: AbortSignal.timeout(REVOKE_TIMEOUT_MS) });
 	} catch (error) {
-		const cause = error instanceof Error ? error.message : String(error);
-		return { done: false, reason: `${new URL(share.baseUrl).host} could not be reached (${cause})`, retry: true };
+		return { done: false, reason: `${new URL(share.baseUrl).host} could not be reached (${errorMessage(error)})`, retry: true };
 	}
 	if (response.ok || response.status === 404 || response.status === 410) return { done: true };
 	return { done: false, reason: await reasonOf(response), retry: response.status >= 500 || response.status === 429 };
@@ -38,8 +35,8 @@ export async function deleteRemoteShare(share: RemoteShareAddress): Promise<void
 		const outcome = await deleteOnce(share, url);
 		if (outcome.done) return;
 		if (!outcome.retry || attempt >= REVOKE_ATTEMPTS) throw new Error(`the link could not be revoked: ${outcome.reason}`);
-		await new Promise<void>(resolve => setTimeout(resolve, RETRY_PAUSE_MS));
+		await sleep(RETRY_PAUSE_MS);
 	}
 }
 
-export const revokeRemote: RevokeRemote = share => deleteRemoteShare(share);
+export const revokeRemote: RevokeRemote = deleteRemoteShare;

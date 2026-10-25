@@ -9,6 +9,7 @@ import {
 	type TunnelFrame,
 	tunnelUrl,
 } from "@dimension/artifact-host/tunnel-protocol";
+import { errorMessage } from "../../../src/library/errors";
 import type { P2pRequest } from "./p2p-server";
 import type { TunnelCredentials } from "./p2p-store";
 import { backoffDelay, sleepFor } from "./retry";
@@ -100,19 +101,19 @@ export class TunnelClient {
 	whenReady(signal: AbortSignal): Promise<TunnelSession> {
 		if (this.#refusal !== undefined) return Promise.reject(new Error(this.#refusal));
 		if (this.#session !== undefined && this.#socket?.readyState === SOCKET_OPEN) return Promise.resolve(this.#session);
-		return new Promise<TunnelSession>((resolve, reject) => {
-			const waiter: Waiter = { resolve, reject };
-			this.#waiters.push(waiter);
-			signal.addEventListener(
-				"abort",
-				() => {
-					const at = this.#waiters.indexOf(waiter);
-					if (at >= 0) this.#waiters.splice(at, 1);
-					reject(new Error("the relay did not answer in time"));
-				},
-				{ once: true },
-			);
-		});
+		const { promise, resolve, reject } = Promise.withResolvers<TunnelSession>();
+		const waiter: Waiter = { resolve, reject };
+		this.#waiters.push(waiter);
+		signal.addEventListener(
+			"abort",
+			() => {
+				const at = this.#waiters.indexOf(waiter);
+				if (at >= 0) this.#waiters.splice(at, 1);
+				reject(new Error("the relay did not answer in time"));
+			},
+			{ once: true },
+		);
+		return promise;
 	}
 
 	announce(): void {
@@ -195,7 +196,7 @@ export class TunnelClient {
 				try {
 					frame = decodeFrame(new Uint8Array(event.data as ArrayBuffer));
 				} catch (error) {
-					this.#options.log?.(`relay sent a frame that was not understood: ${error instanceof Error ? error.message : String(error)}`);
+					this.#options.log?.(`relay sent a frame that was not understood: ${errorMessage(error)}`);
 					socket.close(1002, "protocol");
 					return;
 				}
@@ -217,7 +218,7 @@ export class TunnelClient {
 								this.#settle(session);
 							},
 							(error: unknown) => {
-								this.#options.log?.(`could not save the relay credential: ${error instanceof Error ? error.message : String(error)}`);
+								this.#options.log?.(`could not save the relay credential: ${errorMessage(error)}`);
 								socket.close(1011, "persist");
 							},
 						);
@@ -297,7 +298,7 @@ export class TunnelClient {
 			}
 			send({ kind: "end", id: frame.id });
 		} catch (error) {
-			this.#options.log?.(`a relayed request failed: ${error instanceof Error ? error.message : String(error)}`);
+			this.#options.log?.(`a relayed request failed: ${errorMessage(error)}`);
 			if (!state.cancelled) send({ kind: "fail", id: frame.id, status: 500, message: "The sharing computer could not answer that request." });
 		} finally {
 			this.#requests.delete(frame.id);

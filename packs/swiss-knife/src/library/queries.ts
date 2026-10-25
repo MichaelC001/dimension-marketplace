@@ -31,6 +31,8 @@ const RELEVANCE = "bm25(artifacts_fts, 8.0, 5.0, 2.0, 2.0, 1.0)";
 export const LIVE_SHARE_IDS = "SELECT s.artifact_id FROM shares s WHERE s.revoked_at IS NULL AND (s.expires_at IS NULL OR s.expires_at > ?)";
 export const EXPIRY_RESOLUTION_MS = 60_000;
 
+export const placeholders = (count: number): string => Array.from({ length: count }, () => "?").join(", ");
+
 export interface PlannedStatement {
 	readonly sql: string;
 	readonly params: readonly SqlValue[];
@@ -72,7 +74,7 @@ export function planList(query: LibraryQuery, now: number): ListPlan {
 	const filterParams: SqlValue[] = [];
 	if (fullText !== undefined) filterParams.push(fullText);
 	if (query.kinds !== undefined && query.kinds.length > 0) {
-		where.push(`a.kind IN (${query.kinds.map(() => "?").join(", ")})`);
+		where.push(`a.kind IN (${placeholders(query.kinds.length)})`);
 		filterParams.push(...query.kinds);
 	}
 	if (query.workspace !== undefined) {

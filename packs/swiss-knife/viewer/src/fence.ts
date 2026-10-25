@@ -310,6 +310,14 @@ export function createFence(options: FenceOptions): Fence {
 		return { read: files };
 	}
 
+	async function isPresentFile(real: string): Promise<boolean> {
+		try {
+			return await isRegularFile(real);
+		} catch {
+			return false;
+		}
+	}
+
 	/**
 	 * Whether `real` is a file the host lent: the SAME path as a lent entry, and a
 	 * regular file. A lent entry is what the engine stamped, a real path, and is NOT
@@ -318,21 +326,11 @@ export function createFence(options: FenceOptions): Fence {
 	 */
 	async function isLent(real: string, lent: readonly string[]): Promise<boolean> {
 		const wanted = comparable(real, platform);
-		if (!lent.some(file => comparable(file, platform) === wanted)) return false;
-		try {
-			return await isRegularFile(real);
-		} catch {
-			return false;
-		}
+		return lent.some(file => comparable(file, platform) === wanted) && (await isPresentFile(real));
 	}
 
 	async function isIndexed(real: string): Promise<boolean> {
-		if (options.indexed?.isLent(real) !== true) return false;
-		try {
-			return await isRegularFile(real);
-		} catch {
-			return false;
-		}
+		return options.indexed?.isLent(real) === true && (await isPresentFile(real));
 	}
 
 	async function check(requested: unknown, meta?: unknown): Promise<FenceVerdict> {

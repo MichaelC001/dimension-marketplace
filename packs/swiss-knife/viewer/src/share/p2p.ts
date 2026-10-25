@@ -1,4 +1,5 @@
 import { type AnnouncedShare, TUNNEL_NEVER_EXPIRES } from "@dimension/artifact-host/tunnel-protocol";
+import { errorMessage } from "../../../src/library/errors";
 import type { Library, ShareRow } from "../../../src/library/types";
 import type { Fence } from "../fence";
 import { P2P_HOST_ID } from "./hosts";
@@ -112,7 +113,7 @@ export class P2pRuntime {
 	}
 
 	reconcile(): Promise<void> {
-		this.#reconciling = this.#reconciling.then(() => this.#reconcileOnce()).catch(error => this.#options.log?.(`sharing from this computer: ${error instanceof Error ? error.message : String(error)}`));
+		this.#reconciling = this.#reconciling.then(() => this.#reconcileOnce()).catch(error => this.#options.log?.(`sharing from this computer: ${errorMessage(error)}`));
 		return this.#reconciling;
 	}
 

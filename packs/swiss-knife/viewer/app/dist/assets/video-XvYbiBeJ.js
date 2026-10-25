@@ -1,1 +1,0 @@
-import{mountMedia as e}from"./media-core-ChSYJgva.js";var t={mount:(t,n,r)=>e(t,r,`video`)};export{t as default};

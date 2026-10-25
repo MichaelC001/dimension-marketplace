@@ -5,9 +5,9 @@ import { classifyFile } from "@dimension/sdk/presentation";
 import { denyReason, textRefusal } from "../../viewer/src/fence";
 import { encodeCursor } from "./cursor";
 import { openDriver, type SqlDriver, type SqlStatement, type SqlValue } from "./driver";
-import { LibraryError } from "./errors";
+import { errorMessage, hasCode, LibraryError } from "./errors";
 import { pathKey } from "./paths";
-import { EXPIRY_RESOLUTION_MS, LIVE_SHARE_IDS, planList } from "./queries";
+import { EXPIRY_RESOLUTION_MS, LIVE_SHARE_IDS, placeholders, planList } from "./queries";
 import { revokeRemote as defaultRevokeRemote } from "./remote";
 import {
 	type ArtifactRow,
@@ -22,7 +22,7 @@ import {
 } from "./rows";
 import { prepareDatabase } from "./schema";
 import { moveToTrash } from "./trash";
-import { type ThumbMime, removeThumbs, writeThumb, THUMB_FILE_NAME } from "./thumbs";
+import { removeThumbs, writeThumb, THUMB_FILE_NAME } from "./thumbs";
 import type {
 	ArtifactId,
 	ArtifactPatch,
@@ -39,6 +39,7 @@ import type {
 	ShareRow,
 	ShareSummary,
 	StampInput,
+	ThumbMime,
 	UnrevokedShare,
 } from "./types";
 
@@ -122,14 +123,6 @@ function cleanTags(tags: readonly string[] | undefined): string[] | undefined {
 	return clean;
 }
 
-function failureReason(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
-}
-
-function hasCode(error: unknown, ...codes: readonly string[]): boolean {
-	return error instanceof Error && "code" in error && typeof error.code === "string" && codes.includes(error.code);
-}
-
 export async function createLibrary(options: LibraryOptions): Promise<Library> {
 	const now = options.now ?? Date.now;
 	const platform = options.platform ?? process.platform;
@@ -160,8 +153,6 @@ export async function createLibrary(options: LibraryOptions): Promise<Library> {
 		}
 		return statement;
 	}
-
-	const placeholders = (count: number): string => Array.from({ length: count }, () => "?").join(", ");
 
 	function rowOf(id: ArtifactId): ArtifactRow | undefined {
 		return sql("SELECT * FROM artifacts WHERE id = ?").get<ArtifactRow>(id);
@@ -318,7 +309,7 @@ export async function createLibrary(options: LibraryOptions): Promise<Library> {
 		try {
 			real = await realpath(resolve(requested));
 		} catch (error) {
-			throw refuse(hasCode(error, "ENOENT", "ENOTDIR") ? `no such file: "${requested}"` : `"${requested}" cannot be resolved (${failureReason(error)})`);
+			throw refuse(hasCode(error, "ENOENT", "ENOTDIR") ? `no such file: "${requested}"` : `"${requested}" cannot be resolved (${errorMessage(error)})`);
 		}
 		if (denyReason(real) !== undefined) throw refuse("it resolves to a protected location (credentials, keys or engine state)");
 		const before = await stat(real);
@@ -504,7 +495,7 @@ export async function createLibrary(options: LibraryOptions): Promise<Library> {
 				await revokeRemote(share);
 				revoked++;
 			} catch (error) {
-				unrevoked.push({ shareId: share.id, host: share.host, reason: failureReason(error) });
+				unrevoked.push({ shareId: share.id, host: share.host, reason: errorMessage(error) });
 			}
 			shares.update(share.id, { revokedAt: now() });
 		}
@@ -514,7 +505,7 @@ export async function createLibrary(options: LibraryOptions): Promise<Library> {
 		try {
 			await removeThumbs(thumbsDirectory, id);
 		} catch (error) {
-			console.error(`library: thumbnail of ${id} was not removed: ${failureReason(error)}`);
+			console.error(`library: thumbnail of ${id} was not removed: ${errorMessage(error)}`);
 		}
 		let trashed = false;
 		let trashError: string | undefined;
@@ -523,7 +514,7 @@ export async function createLibrary(options: LibraryOptions): Promise<Library> {
 				await trashFile(row.path);
 				trashed = true;
 			} catch (error) {
-				trashError = hasCode(error, "ENOENT") ? "the file no longer exists" : failureReason(error);
+				trashError = hasCode(error, "ENOENT") ? "the file no longer exists" : errorMessage(error);
 			}
 		}
 		return { item: itemOf(requireRow(id)), trashed, ...(trashError === undefined ? {} : { trashError }), revoked, unrevoked };

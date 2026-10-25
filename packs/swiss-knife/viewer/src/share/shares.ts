@@ -18,6 +18,7 @@ import {
 	sealManifest,
 	shareLink,
 } from "@dimension/sdk/artifact-share";
+import { errorMessage } from "../../../src/library/errors";
 import { deleteRemoteShare, revokeRemote } from "../../../src/library/remote";
 import { shareUrl } from "../../../src/library/rows";
 import type { CommentRow, Library, LibraryItem, ShareRow, ShareSummary } from "../../../src/library/types";
@@ -98,10 +99,6 @@ interface UploadSession {
 	readonly expiresAt?: number;
 }
 
-function describe(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
-}
-
 function failureMessage(error: unknown): string {
 	const known =
 		error instanceof ShareError ||
@@ -109,7 +106,7 @@ function failureMessage(error: unknown): string {
 		error instanceof HostConfigError ||
 		error instanceof FileChangedError ||
 		error instanceof StoredFileError;
-	return known ? error.message : `sharing failed: ${describe(error)}`;
+	return known ? error.message : `sharing failed: ${errorMessage(error)}`;
 }
 
 function sameFingerprint(session: UploadSession, source: ChunkSource): boolean {
@@ -453,7 +450,7 @@ export class ShareService {
 			try {
 				await revokeRemote(row);
 			} catch (error) {
-				warning = describe(error);
+				warning = errorMessage(error);
 			}
 			this.#options.onSharesChanged();
 			return { shareId, revokedAt, ...(warning === undefined ? {} : { warning }) };
@@ -461,7 +458,7 @@ export class ShareService {
 		try {
 			await revokeRemote(row);
 		} catch (error) {
-			throw new ShareError(describe(error));
+			throw new ShareError(errorMessage(error));
 		}
 		this.#library.shares.update(row.id, { revokedAt });
 		this.#options.onSharesChanged();

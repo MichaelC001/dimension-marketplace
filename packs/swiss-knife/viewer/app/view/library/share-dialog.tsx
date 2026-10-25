@@ -139,19 +139,21 @@ export function ShareDialog({ tools, item, onClose, onShared }: ShareDialogProps
 		if (host === undefined || problem !== undefined || working) return;
 		setStage({ name: "working", progress: null });
 		let settled = false;
+		const settle = (): void => {
+			settled = true;
+			window.clearInterval(poll);
+		};
 		const poll = window.setInterval(() => {
 			tools.shareProgress(item.id).then(
 				progress => {
 					if (settled) return;
 					setStage(current => (current.name === "working" ? { name: "working", progress } : current));
 					if (progress.phase === "done" && progress.shareId !== undefined) {
-						settled = true;
-						window.clearInterval(poll);
+						settle();
 						void finishFromProgress(progress.shareId);
 					}
 					if (progress.phase === "failed") {
-						settled = true;
-						window.clearInterval(poll);
+						settle();
 						setStage({ name: "failed", error: progress.error ?? "The share could not be made." });
 					}
 				},
@@ -174,8 +176,7 @@ export function ShareDialog({ tools, item, onClose, onShared }: ShareDialogProps
 			.then(
 				share => {
 					if (settled) return;
-					settled = true;
-					window.clearInterval(poll);
+					settle();
 					setStage({ name: "done", share });
 					onShared(share);
 				},
@@ -185,14 +186,12 @@ export function ShareDialog({ tools, item, onClose, onShared }: ShareDialogProps
 						progress => {
 							if (settled) return;
 							if (progress.phase === "sealing" || progress.phase === "uploading") return;
-							settled = true;
-							window.clearInterval(poll);
+							settle();
 							if (progress.phase === "done" && progress.shareId !== undefined) void finishFromProgress(progress.shareId);
 							else setStage({ name: "failed", error: errorText(cause) });
 						},
 						() => {
-							settled = true;
-							window.clearInterval(poll);
+							settle();
 							setStage({ name: "failed", error: errorText(cause) });
 						},
 					);

@@ -1,5 +1,6 @@
 import { type Audience, type HostDiscovery, parseDiscovery } from "@dimension/sdk/artifact-share";
 import { z } from "zod";
+import { errorMessage } from "../../../src/library/errors";
 import { type RetryOptions, withRetry } from "./retry";
 
 export const DEFAULT_RETRY: RetryOptions = { attempts: 5, baseMs: 400, maxMs: 15_000 };
@@ -104,21 +105,15 @@ export class HostClient {
 			response = await this.#fetch(`${this.baseUrl}${path}`, { method, headers, signal, ...(body === undefined ? {} : { body }) });
 		} catch (error) {
 			if (init.signal?.aborted) throw error;
-			const cause = error instanceof Error ? error.message : String(error);
-			throw new HostRequestError(`could not reach ${new URL(this.baseUrl).host}: ${timeout.aborted ? "the request timed out" : cause}`, 0);
+			throw new HostRequestError(`could not reach ${new URL(this.baseUrl).host}: ${timeout.aborted ? "the request timed out" : errorMessage(error)}`, 0);
 		}
 		if (response.ok) return response;
 		throw await this.#failure(response);
 	}
 
 	async #failure(response: Response): Promise<HostRequestError> {
-		let detail: z.infer<typeof errorBodySchema> = {};
-		try {
-			const parsed = errorBodySchema.safeParse(await response.json());
-			if (parsed.success) detail = parsed.data;
-		} catch {
-			detail = {};
-		}
+		const parsed = errorBodySchema.safeParse(await response.json().catch(() => undefined));
+		const detail: z.infer<typeof errorBodySchema> = parsed.success ? parsed.data : {};
 		const retryAfter = Number(response.headers.get("retry-after"));
 		return new HostRequestError(
 			detail.message ?? `the server answered ${response.status}`,

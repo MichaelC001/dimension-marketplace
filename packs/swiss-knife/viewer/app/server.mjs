@@ -23987,15 +23987,15 @@ var makeIssue = (params) => {
       message: issueData.message
     };
   }
-  let errorMessage = "";
+  let errorMessage2 = "";
   const maps = errorMaps.filter((m2) => !!m2).slice().reverse();
   for (const map2 of maps) {
-    errorMessage = map2(fullIssue, { data, defaultError: errorMessage }).message;
+    errorMessage2 = map2(fullIssue, { data, defaultError: errorMessage2 }).message;
   }
   return {
     ...issueData,
     path: fullPath,
-    message: errorMessage
+    message: errorMessage2
   };
 };
 function addIssueToContext(ctx, issueData) {
@@ -27755,19 +27755,19 @@ var getRefs = (options2) => {
 };
 
 // ../../../../node_modules/zod-to-json-schema/dist/esm/errorMessages.js
-function addErrorMessage(res, key, errorMessage, refs) {
+function addErrorMessage(res, key, errorMessage2, refs) {
   if (!refs?.errorMessages)
     return;
-  if (errorMessage) {
+  if (errorMessage2) {
     res.errorMessage = {
       ...res.errorMessage,
-      [key]: errorMessage
+      [key]: errorMessage2
     };
   }
 }
-function setResponseValueAndErrors(res, key, value, errorMessage, refs) {
+function setResponseValueAndErrors(res, key, value, errorMessage2, refs) {
   res[key] = value;
-  addErrorMessage(res, key, errorMessage, refs);
+  addErrorMessage(res, key, errorMessage2, refs);
 }
 
 // ../../../../node_modules/zod-to-json-schema/dist/esm/getRelativePath.js
@@ -29078,8 +29078,8 @@ var Protocol = class {
                   if (queuedMessage.type === "response") {
                     resolver(message);
                   } else {
-                    const errorMessage = message;
-                    const error51 = new McpError(errorMessage.error.code, errorMessage.error.message, errorMessage.error.data);
+                    const errorMessage2 = message;
+                    const error51 = new McpError(errorMessage2.error.code, errorMessage2.error.message, errorMessage2.error.data);
                     resolver(error51);
                   }
                 } else {
@@ -30474,23 +30474,23 @@ var Server = class extends Protocol {
       const wrappedHandler = async (request, extra) => {
         const validatedRequest = safeParse3(CallToolRequestSchema, request);
         if (!validatedRequest.success) {
-          const errorMessage = validatedRequest.error instanceof Error ? validatedRequest.error.message : String(validatedRequest.error);
-          throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call request: ${errorMessage}`);
+          const errorMessage2 = validatedRequest.error instanceof Error ? validatedRequest.error.message : String(validatedRequest.error);
+          throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call request: ${errorMessage2}`);
         }
         const { params } = validatedRequest.data;
         const result = await Promise.resolve(handler(request, extra));
         if (params.task) {
           const taskValidationResult = safeParse3(CreateTaskResultSchema, result);
           if (!taskValidationResult.success) {
-            const errorMessage = taskValidationResult.error instanceof Error ? taskValidationResult.error.message : String(taskValidationResult.error);
-            throw new McpError(ErrorCode.InvalidParams, `Invalid task creation result: ${errorMessage}`);
+            const errorMessage2 = taskValidationResult.error instanceof Error ? taskValidationResult.error.message : String(taskValidationResult.error);
+            throw new McpError(ErrorCode.InvalidParams, `Invalid task creation result: ${errorMessage2}`);
           }
           return taskValidationResult.data;
         }
         const validationResult = safeParse3(CallToolResultSchema, result);
         if (!validationResult.success) {
-          const errorMessage = validationResult.error instanceof Error ? validationResult.error.message : String(validationResult.error);
-          throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call result: ${errorMessage}`);
+          const errorMessage2 = validationResult.error instanceof Error ? validationResult.error.message : String(validationResult.error);
+          throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call result: ${errorMessage2}`);
         }
         return validationResult.data;
       };
@@ -30988,12 +30988,12 @@ var McpServer = class {
    * @param errorMessage - The error message.
    * @returns The tool error result.
    */
-  createToolError(errorMessage) {
+  createToolError(errorMessage2) {
     return {
       content: [
         {
           type: "text",
-          text: errorMessage
+          text: errorMessage2
         }
       ],
       isError: true
@@ -31011,8 +31011,8 @@ var McpServer = class {
     const parseResult = await safeParseAsync3(schemaToParse, args);
     if (!parseResult.success) {
       const error51 = "error" in parseResult ? parseResult.error : "Unknown error";
-      const errorMessage = getParseErrorMessage(error51);
-      throw new McpError(ErrorCode.InvalidParams, `Input validation error: Invalid arguments for tool ${toolName}: ${errorMessage}`);
+      const errorMessage2 = getParseErrorMessage(error51);
+      throw new McpError(ErrorCode.InvalidParams, `Input validation error: Invalid arguments for tool ${toolName}: ${errorMessage2}`);
     }
     return parseResult.data;
   }
@@ -31036,8 +31036,8 @@ var McpServer = class {
     const parseResult = await safeParseAsync3(outputObj, result.structuredContent);
     if (!parseResult.success) {
       const error51 = "error" in parseResult ? parseResult.error : "Unknown error";
-      const errorMessage = getParseErrorMessage(error51);
-      throw new McpError(ErrorCode.InvalidParams, `Output validation error: Invalid structured content for tool ${toolName}: ${errorMessage}`);
+      const errorMessage2 = getParseErrorMessage(error51);
+      throw new McpError(ErrorCode.InvalidParams, `Output validation error: Invalid structured content for tool ${toolName}: ${errorMessage2}`);
     }
   }
   /**
@@ -31249,8 +31249,8 @@ var McpServer = class {
         const parseResult = await safeParseAsync3(argsObj, request.params.arguments);
         if (!parseResult.success) {
           const error51 = "error" in parseResult ? parseResult.error : "Unknown error";
-          const errorMessage = getParseErrorMessage(error51);
-          throw new McpError(ErrorCode.InvalidParams, `Invalid arguments for prompt ${request.params.name}: ${errorMessage}`);
+          const errorMessage2 = getParseErrorMessage(error51);
+          throw new McpError(ErrorCode.InvalidParams, `Invalid arguments for prompt ${request.params.name}: ${errorMessage2}`);
         }
         const args = parseResult.data;
         const cb = prompt.callback;
@@ -31657,6 +31657,12 @@ var EMPTY_COMPLETION_RESULT = {
 var LibraryError = class extends Error {
   name = "LibraryError";
 };
+function errorMessage(error51) {
+  return error51 instanceof Error ? error51.message : String(error51);
+}
+function hasCode(error51, ...codes) {
+  return error51 instanceof Error && "code" in error51 && typeof error51.code === "string" && codes.includes(error51.code);
+}
 
 // ../src/library/library.ts
 import { constants, statSync } from "node:fs";
@@ -32032,22 +32038,19 @@ function createFence(options2) {
     }
     return { read: files };
   }
-  async function isLent(real, lent) {
-    const wanted = comparable(real, platform);
-    if (!lent.some((file2) => comparable(file2, platform) === wanted)) return false;
+  async function isPresentFile(real) {
     try {
       return await isRegularFile(real);
     } catch {
       return false;
     }
   }
+  async function isLent(real, lent) {
+    const wanted = comparable(real, platform);
+    return lent.some((file2) => comparable(file2, platform) === wanted) && await isPresentFile(real);
+  }
   async function isIndexed(real) {
-    if (options2.indexed?.isLent(real) !== true) return false;
-    try {
-      return await isRegularFile(real);
-    } catch {
-      return false;
-    }
+    return options2.indexed?.isLent(real) === true && await isPresentFile(real);
   }
   async function check2(requested, meta3) {
     if (typeof requested !== "string" || requested.trim() === "") return refuse("the path is empty");
@@ -32102,30 +32105,7 @@ function decodeCursor(text, ordering) {
 }
 
 // ../src/library/driver.ts
-async function openDriver(file2) {
-  if (typeof Bun !== "undefined") {
-    const { Database } = await import("bun:sqlite");
-    const db2 = new Database(file2, { create: true });
-    return {
-      exec: (sql) => db2.exec(sql),
-      prepare(sql) {
-        const statement = db2.prepare(sql);
-        return {
-          all(...params) {
-            return statement.all(...params);
-          },
-          get(...params) {
-            return statement.get(...params) ?? void 0;
-          },
-          run: (...params) => ({ changes: statement.run(...params).changes }),
-          finalize: () => statement.finalize()
-        };
-      },
-      close: () => db2.close()
-    };
-  }
-  const { DatabaseSync } = await import("node:sqlite");
-  const db = new DatabaseSync(file2);
+function adapt(db) {
   return {
     exec: (sql) => db.exec(sql),
     prepare(sql) {
@@ -32135,14 +32115,22 @@ async function openDriver(file2) {
           return statement.all(...params);
         },
         get(...params) {
-          return statement.get(...params);
+          return statement.get(...params) ?? void 0;
         },
         run: (...params) => ({ changes: Number(statement.run(...params).changes) }),
-        finalize: () => void 0
+        finalize: () => statement.finalize?.()
       };
     },
     close: () => db.close()
   };
+}
+async function openDriver(file2) {
+  if (typeof Bun !== "undefined") {
+    const { Database } = await import("bun:sqlite");
+    return adapt(new Database(file2, { create: true }));
+  }
+  const { DatabaseSync } = await import("node:sqlite");
+  return adapt(new DatabaseSync(file2));
 }
 
 // ../src/library/paths.ts
@@ -32187,6 +32175,7 @@ var FULL_TEXT_FROM = "artifacts_fts CROSS JOIN artifacts a ON a.rowid = artifact
 var RELEVANCE = "bm25(artifacts_fts, 8.0, 5.0, 2.0, 2.0, 1.0)";
 var LIVE_SHARE_IDS = "SELECT s.artifact_id FROM shares s WHERE s.revoked_at IS NULL AND (s.expires_at IS NULL OR s.expires_at > ?)";
 var EXPIRY_RESOLUTION_MS = 6e4;
+var placeholders = (count) => Array.from({ length: count }, () => "?").join(", ");
 function resolveOrdering(sort, discarded, matched) {
   if (sort === "relevance" && matched) return "relevance";
   if (sort === "name" || sort === "size" || sort === "opened") return sort;
@@ -32213,7 +32202,7 @@ function planList(query, now) {
   const filterParams = [];
   if (fullText !== void 0) filterParams.push(fullText);
   if (query.kinds !== void 0 && query.kinds.length > 0) {
-    where.push(`a.kind IN (${query.kinds.map(() => "?").join(", ")})`);
+    where.push(`a.kind IN (${placeholders(query.kinds.length)})`);
     filterParams.push(...query.kinds);
   }
   if (query.workspace !== void 0) {
@@ -32261,16 +32250,13 @@ function planList(query, now) {
 }
 
 // ../src/library/remote.ts
+import { setTimeout as sleep } from "node:timers/promises";
 var REVOKE_TIMEOUT_MS = 15e3;
 var REVOKE_ATTEMPTS = 2;
 var RETRY_PAUSE_MS = 600;
 async function reasonOf(response) {
-  try {
-    const body = await response.json();
-    if (typeof body === "object" && body !== null && "message" in body && typeof body.message === "string" && body.message !== "") return body.message;
-  } catch {
-    return `the server answered ${response.status}`;
-  }
+  const body = await response.json().catch(() => void 0);
+  if (typeof body === "object" && body !== null && "message" in body && typeof body.message === "string" && body.message !== "") return body.message;
   return `the server answered ${response.status}`;
 }
 async function deleteOnce(share, url2) {
@@ -32278,8 +32264,7 @@ async function deleteOnce(share, url2) {
   try {
     response = await fetch(url2, { method: "DELETE", headers: { authorization: `Bearer ${share.ownerToken}` }, signal: AbortSignal.timeout(REVOKE_TIMEOUT_MS) });
   } catch (error51) {
-    const cause = error51 instanceof Error ? error51.message : String(error51);
-    return { done: false, reason: `${new URL(share.baseUrl).host} could not be reached (${cause})`, retry: true };
+    return { done: false, reason: `${new URL(share.baseUrl).host} could not be reached (${errorMessage(error51)})`, retry: true };
   }
   if (response.ok || response.status === 404 || response.status === 410) return { done: true };
   return { done: false, reason: await reasonOf(response), retry: response.status >= 500 || response.status === 429 };
@@ -32290,10 +32275,10 @@ async function deleteRemoteShare(share) {
     const outcome = await deleteOnce(share, url2);
     if (outcome.done) return;
     if (!outcome.retry || attempt >= REVOKE_ATTEMPTS) throw new Error(`the link could not be revoked: ${outcome.reason}`);
-    await new Promise((resolve3) => setTimeout(resolve3, RETRY_PAUSE_MS));
+    await sleep(RETRY_PAUSE_MS);
   }
 }
-var revokeRemote = (share) => deleteRemoteShare(share);
+var revokeRemote = deleteRemoteShare;
 
 // ../../../../packages/sdk/src/artifact-share/index.ts
 var ASP_VERSION = 1;
@@ -32303,29 +32288,33 @@ var ASP_PREFIX_BYTES = 4;
 var ASP_NONCE_BYTES = 12;
 var ASP_TAG_BYTES = 16;
 var ASP_MAX_POSTER_BYTES = 64 * 1024;
+var ASP_MAX_COMMENT_BODY = 8e3;
+var ASP_MAX_AUTHOR = 80;
 var MANIFEST_INDEX = 0xffffffffffffffffn;
 var MAX_NAME = 255;
 var MAX_TITLE = 500;
 var MAX_MIME = 255;
-var MAX_COMMENT_BODY = 8e3;
-var MAX_AUTHOR = 80;
+var MAX_POSTER_CHARS = Math.ceil(ASP_MAX_POSTER_BYTES * 4 / 3) + 4;
 var encoder = new TextEncoder();
 var decoder = new TextDecoder("utf-8", { fatal: true });
-var SHARE_KINDS = {
-  image: true,
-  pdf: true,
-  docx: true,
-  pptx: true,
-  xlsx: true,
-  markdown: true,
-  html: true,
-  text: true,
-  code: true,
-  audio: true,
-  video: true,
-  archive: true,
-  binary: true
-};
+var SHARE_KINDS = [
+  "image",
+  "pdf",
+  "docx",
+  "pptx",
+  "xlsx",
+  "markdown",
+  "html",
+  "text",
+  "code",
+  "audio",
+  "video",
+  "archive",
+  "binary"
+];
+function isShareKind(value) {
+  return typeof value === "string" && SHARE_KINDS.includes(value);
+}
 var AspError = class extends Error {
   name = "AspError";
 };
@@ -32351,6 +32340,9 @@ function chunkCount(size, chunkBytes = ASP_CHUNK_BYTES) {
   if (!Number.isSafeInteger(chunkBytes) || chunkBytes <= 0)
     throw new AspError("chunkBytes must be a positive integer");
   return Math.max(1, Math.ceil(size / chunkBytes));
+}
+function sealedChunkSize(plainBytes) {
+  return plainBytes + ASP_TAG_BYTES;
 }
 function sealedSize(size, chunkBytes = ASP_CHUNK_BYTES) {
   return size + chunkCount(size, chunkBytes) * ASP_TAG_BYTES;
@@ -32393,8 +32385,10 @@ function nonceFor(prefix, index) {
 function checkVersion(version2) {
   if (!Number.isSafeInteger(version2) || version2 < 1) throw new AspError("version must be a positive integer");
 }
-function chunkAad(version2, index, isLast) {
-  return encoder.encode(`asp1|chunk|${version2}|${index}|${isLast ? 1 : 0}`);
+function chunkParams(prefix, version2, index, isLast) {
+  checkVersion(version2);
+  if (!Number.isSafeInteger(index) || index < 0) throw new AspError("chunk index must be a non-negative integer");
+  return { nonce: nonceFor(prefix, BigInt(index)), aad: encoder.encode(`asp1|chunk|${version2}|${index}|${isLast ? 1 : 0}`) };
 }
 async function encrypt(key, nonce, aad, plain) {
   const sealed = await subtle().encrypt(
@@ -32416,10 +32410,22 @@ async function decrypt(key, nonce, aad, sealed) {
     throw new AspError("the data does not open with this key (wrong link, or it was altered)");
   }
 }
+function concatBytes(head, tail) {
+  const out = new Uint8Array(head.length + tail.length);
+  out.set(head, 0);
+  out.set(tail, head.length);
+  return out;
+}
+function parseSealedJson(plain, label) {
+  try {
+    return JSON.parse(decoder.decode(plain));
+  } catch {
+    throw new AspError(`the ${label} is not JSON`);
+  }
+}
 async function sealChunk(key, prefix, version2, index, isLast, plain) {
-  checkVersion(version2);
-  if (!Number.isSafeInteger(index) || index < 0) throw new AspError("chunk index must be a non-negative integer");
-  return encrypt(key, nonceFor(prefix, BigInt(index)), chunkAad(version2, index, isLast), plain);
+  const { nonce, aad } = chunkParams(prefix, version2, index, isLast);
+  return encrypt(key, nonce, aad, plain);
 }
 async function sealManifest(key, prefix, manifest) {
   const checked = parseManifest(manifest);
@@ -32430,10 +32436,7 @@ async function sealManifest(key, prefix, manifest) {
     encoder.encode(`asp1|manifest|${checked.version}`),
     encoder.encode(JSON.stringify(checked))
   );
-  const out = new Uint8Array(ASP_PREFIX_BYTES + sealed.length);
-  out.set(prefix, 0);
-  out.set(sealed, ASP_PREFIX_BYTES);
-  return out;
+  return concatBytes(prefix, sealed);
 }
 async function sealComment(commentKey, comment) {
   const checked = parseComment(comment);
@@ -32445,10 +32448,7 @@ async function sealComment(commentKey, comment) {
     encoder.encode("asp1|comment"),
     encoder.encode(JSON.stringify(checked))
   );
-  const out = new Uint8Array(ASP_NONCE_BYTES + sealed.length);
-  out.set(nonce, 0);
-  out.set(sealed, ASP_NONCE_BYTES);
-  return out;
+  return concatBytes(nonce, sealed);
 }
 async function openComment(commentKey, sealed) {
   if (sealed.length <= ASP_NONCE_BYTES + ASP_TAG_BYTES) throw new AspError("the comment is truncated");
@@ -32458,13 +32458,7 @@ async function openComment(commentKey, sealed) {
     encoder.encode("asp1|comment"),
     sealed.subarray(ASP_NONCE_BYTES)
   );
-  let parsed;
-  try {
-    parsed = JSON.parse(decoder.decode(plain));
-  } catch {
-    throw new AspError("the comment is not JSON");
-  }
-  const comment = parseComment(parsed);
+  const comment = parseComment(parseSealedJson(plain, "comment"));
   if (comment === void 0) throw new AspError("the comment is malformed");
   return comment;
 }
@@ -32482,11 +32476,16 @@ function positiveInt(value) {
 function nonNegativeInt(value) {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : void 0;
 }
+var INVALID2 = Symbol("invalid");
+function optionalField(raw, parse3) {
+  if (raw === void 0) return void 0;
+  return parse3(raw) ?? INVALID2;
+}
 function parseManifest(value) {
   if (!isRecord2(value) || value.asp !== ASP_VERSION) return void 0;
   const name = boundedString(value.name, MAX_NAME);
   const mime = boundedString(value.mime, MAX_MIME);
-  const kind = typeof value.kind === "string" && SHARE_KINDS[value.kind] === true ? value.kind : void 0;
+  const kind = isShareKind(value.kind) ? value.kind : void 0;
   const size = nonNegativeInt(value.size);
   const chunkBytes = positiveInt(value.chunkBytes);
   const chunks = positiveInt(value.chunks);
@@ -32494,14 +32493,12 @@ function parseManifest(value) {
   const createdAt = nonNegativeInt(value.createdAt);
   if (name === void 0 || mime === void 0 || kind === void 0 || size === void 0 || chunkBytes === void 0 || chunks === void 0 || version2 === void 0 || createdAt === void 0 || chunks !== chunkCount(size, chunkBytes))
     return void 0;
-  const title = value.title === void 0 ? void 0 : boundedString(value.title, MAX_TITLE);
-  if (value.title !== void 0 && title === void 0) return void 0;
-  const width = value.width === void 0 ? void 0 : positiveInt(value.width);
-  const height = value.height === void 0 ? void 0 : positiveInt(value.height);
-  const durationMs = value.durationMs === void 0 ? void 0 : nonNegativeInt(value.durationMs);
-  const poster = value.poster === void 0 ? void 0 : typeof value.poster === "string" && value.poster.length <= Math.ceil(ASP_MAX_POSTER_BYTES * 4 / 3) + 4 ? value.poster : void 0;
-  if (value.width !== void 0 && width === void 0 || value.height !== void 0 && height === void 0 || value.durationMs !== void 0 && durationMs === void 0 || value.poster !== void 0 && poster === void 0)
-    return void 0;
+  const title = optionalField(value.title, (text) => boundedString(text, MAX_TITLE));
+  const width = optionalField(value.width, positiveInt);
+  const height = optionalField(value.height, positiveInt);
+  const durationMs = optionalField(value.durationMs, nonNegativeInt);
+  const poster = optionalField(value.poster, (text) => typeof text === "string" && text.length <= MAX_POSTER_CHARS ? text : void 0);
+  if (title === INVALID2 || width === INVALID2 || height === INVALID2 || durationMs === INVALID2 || poster === INVALID2) return void 0;
   return {
     asp: 1,
     name,
@@ -32537,8 +32534,8 @@ function parseAnchor(value) {
 }
 function parseComment(value) {
   if (!isRecord2(value)) return void 0;
-  const author = boundedString(typeof value.author === "string" ? value.author.trim() : value.author, MAX_AUTHOR);
-  const body = boundedString(typeof value.body === "string" ? value.body.trim() : value.body, MAX_COMMENT_BODY);
+  const author = boundedString(typeof value.author === "string" ? value.author.trim() : value.author, ASP_MAX_AUTHOR);
+  const body = boundedString(typeof value.body === "string" ? value.body.trim() : value.body, ASP_MAX_COMMENT_BODY);
   const version2 = positiveInt(value.version);
   const at = nonNegativeInt(value.at);
   if (author === void 0 || body === void 0 || version2 === void 0 || at === void 0) return void 0;
@@ -32559,10 +32556,9 @@ function parseAudience(value) {
   if (!isRecord2(value)) return void 0;
   if (value.kind === "link") return { kind: "link" };
   if (value.kind !== "signin") return void 0;
-  const emails = value.emails === void 0 ? void 0 : stringList(value.emails, 500);
-  const domains = value.domains === void 0 ? void 0 : stringList(value.domains, 50);
-  if (value.emails !== void 0 && emails === void 0 || value.domains !== void 0 && domains === void 0)
-    return void 0;
+  const emails = optionalField(value.emails, (list) => stringList(list, 500));
+  const domains = optionalField(value.domains, (list) => stringList(list, 50));
+  if (emails === INVALID2 || domains === INVALID2) return void 0;
   return {
     kind: "signin",
     ...emails === void 0 || emails.length === 0 ? {} : { emails },
@@ -32575,8 +32571,8 @@ function parsePolicy(value) {
   const maxDays = positiveInt(value.maxDays);
   if (typeof value.publicLinks !== "boolean" || typeof value.signinRequired !== "boolean" || maxBytes === void 0 || maxDays === void 0)
     return void 0;
-  const allowedDomains = value.allowedDomains === void 0 ? void 0 : stringList(value.allowedDomains, 50);
-  if (value.allowedDomains !== void 0 && allowedDomains === void 0) return void 0;
+  const allowedDomains = optionalField(value.allowedDomains, (list) => stringList(list, 50));
+  if (allowedDomains === INVALID2) return void 0;
   return {
     publicLinks: value.publicLinks,
     signinRequired: value.signinRequired,
@@ -32826,8 +32822,7 @@ async function moveToTrash(path2, platform = process.platform) {
   try {
     outcome = await run(command.program, command.args, { timeout: TRASH_TIMEOUT_MS, ...command.env === void 0 ? {} : { env: command.env } });
   } catch (error51) {
-    const reason = error51 instanceof Error ? error51.message : String(error51);
-    throw new LibraryError(`${command.tool} could not move the file to the trash: ${reason}`);
+    throw new LibraryError(`${command.tool} could not move the file to the trash: ${errorMessage(error51)}`);
   }
   if (outcome.code !== 0) {
     const detail = outcome.stderr.trim().split(/\r?\n/)[0] ?? "";
@@ -32884,7 +32879,7 @@ async function removeThumbs(directory, id2, keep) {
   try {
     entries = await readdir(directory);
   } catch (error51) {
-    if (error51 instanceof Error && "code" in error51 && error51.code === "ENOENT") return;
+    if (hasCode(error51, "ENOENT")) return;
     throw error51;
   }
   const own = entries.filter((entry) => entry !== keep && entry.startsWith(`${id2}.`));
@@ -32957,12 +32952,6 @@ function cleanTags(tags) {
   if (clean.length > MAX_TAGS) throw new LibraryError(`an artifact takes at most ${MAX_TAGS} tags`);
   return clean;
 }
-function failureReason(error51) {
-  return error51 instanceof Error ? error51.message : String(error51);
-}
-function hasCode(error51, ...codes) {
-  return error51 instanceof Error && "code" in error51 && typeof error51.code === "string" && codes.includes(error51.code);
-}
 async function createLibrary(options2) {
   const now = options2.now ?? Date.now;
   const platform = options2.platform ?? process.platform;
@@ -32992,7 +32981,6 @@ async function createLibrary(options2) {
     }
     return statement;
   }
-  const placeholders = (count) => Array.from({ length: count }, () => "?").join(", ");
   function rowOf(id2) {
     return sql("SELECT * FROM artifacts WHERE id = ?").get(id2);
   }
@@ -33137,7 +33125,7 @@ async function createLibrary(options2) {
     try {
       real = await realpath(resolve2(requested));
     } catch (error51) {
-      throw refuse2(hasCode(error51, "ENOENT", "ENOTDIR") ? `no such file: "${requested}"` : `"${requested}" cannot be resolved (${failureReason(error51)})`);
+      throw refuse2(hasCode(error51, "ENOENT", "ENOTDIR") ? `no such file: "${requested}"` : `"${requested}" cannot be resolved (${errorMessage(error51)})`);
     }
     if (denyReason(real) !== void 0) throw refuse2("it resolves to a protected location (credentials, keys or engine state)");
     const before = await stat(real);
@@ -33312,7 +33300,7 @@ async function createLibrary(options2) {
         await revokeRemote2(share);
         revoked++;
       } catch (error51) {
-        unrevoked.push({ shareId: share.id, host: share.host, reason: failureReason(error51) });
+        unrevoked.push({ shareId: share.id, host: share.host, reason: errorMessage(error51) });
       }
       shares.update(share.id, { revokedAt: now() });
     }
@@ -33322,7 +33310,7 @@ async function createLibrary(options2) {
     try {
       await removeThumbs(thumbsDirectory, id2);
     } catch (error51) {
-      console.error(`library: thumbnail of ${id2} was not removed: ${failureReason(error51)}`);
+      console.error(`library: thumbnail of ${id2} was not removed: ${errorMessage(error51)}`);
     }
     let trashed = false;
     let trashError;
@@ -33331,7 +33319,7 @@ async function createLibrary(options2) {
         await trashFile(row.path);
         trashed = true;
       } catch (error51) {
-        trashError = hasCode(error51, "ENOENT") ? "the file no longer exists" : failureReason(error51);
+        trashError = hasCode(error51, "ENOENT") ? "the file no longer exists" : errorMessage(error51);
       }
     }
     return { item: itemOf(requireRow(id2)), trashed, ...trashError === void 0 ? {} : { trashError }, revoked, unrevoked };
@@ -34155,14 +34143,14 @@ function isRetryable(error51) {
   return typeof error51 === "object" && error51 !== null && "retryable" in error51 && error51.retryable === true;
 }
 async function withRetry(run2, options2, signal) {
-  const sleep = options2.sleep ?? sleepFor;
+  const sleep2 = options2.sleep ?? sleepFor;
   for (let attempt = 0; ; attempt++) {
     try {
       return await run2();
     } catch (error51) {
       if (signal?.aborted || !isRetryable(error51) || attempt + 1 >= options2.attempts) throw error51;
       const hinted = error51.retryAfterMs === void 0 ? 0 : Math.min(error51.retryAfterMs, options2.maxMs);
-      await sleep(Math.max(hinted, backoffDelay(attempt, options2)), signal);
+      await sleep2(Math.max(hinted, backoffDelay(attempt, options2)), signal);
     }
   }
 }
@@ -34227,20 +34215,14 @@ var HostClient = class {
       response = await this.#fetch(`${this.baseUrl}${path2}`, { method, headers, signal, ...body === void 0 ? {} : { body } });
     } catch (error51) {
       if (init.signal?.aborted) throw error51;
-      const cause = error51 instanceof Error ? error51.message : String(error51);
-      throw new HostRequestError(`could not reach ${new URL(this.baseUrl).host}: ${timeout.aborted ? "the request timed out" : cause}`, 0);
+      throw new HostRequestError(`could not reach ${new URL(this.baseUrl).host}: ${timeout.aborted ? "the request timed out" : errorMessage(error51)}`, 0);
     }
     if (response.ok) return response;
     throw await this.#failure(response);
   }
   async #failure(response) {
-    let detail = {};
-    try {
-      const parsed = errorBodySchema.safeParse(await response.json());
-      if (parsed.success) detail = parsed.data;
-    } catch {
-      detail = {};
-    }
+    const parsed = errorBodySchema.safeParse(await response.json().catch(() => void 0));
+    const detail = parsed.success ? parsed.data : {};
     const retryAfter = Number(response.headers.get("retry-after"));
     return new HostRequestError(
       detail.message ?? `the server answered ${response.status}`,
@@ -34350,7 +34332,7 @@ async function readJsonFile(path2, schema) {
   try {
     text = await readFile2(path2, "utf8");
   } catch (error51) {
-    if (error51 instanceof Error && "code" in error51 && error51.code === "ENOENT") return void 0;
+    if (hasCode(error51, "ENOENT")) return void 0;
     throw error51;
   }
   let parsed;
@@ -34594,7 +34576,7 @@ var CommentSync = class {
           }
         } catch (error51) {
           if (signal?.aborted) return;
-          this.#options.log?.(`could not read comments for a share on ${new URL(row.baseUrl).host}: ${error51 instanceof Error ? error51.message : String(error51)}`);
+          this.#options.log?.(`could not read comments for a share on ${new URL(row.baseUrl).host}: ${errorMessage(error51)}`);
         }
       }
     };
@@ -34658,7 +34640,7 @@ var CommentSync = class {
         }
       } catch (error51) {
         if (signal.aborted) return;
-        this.#options.log?.(`comment stream from ${new URL(first.baseUrl).host} dropped: ${error51 instanceof Error ? error51.message : String(error51)}`);
+        this.#options.log?.(`comment stream from ${new URL(first.baseUrl).host} dropped: ${errorMessage(error51)}`);
       }
       try {
         await sleepFor(Math.max(backoff.baseMs, backoffDelay(attempt++, backoff)), signal);
@@ -34745,7 +34727,7 @@ var HostDirectory = class {
     const relayBase = relayUrlOf(file2);
     const stored = visibleHosts(file2);
     const [relay, ...probes] = await Promise.all([
-      allowed ? this.#probe(`p2p:${relayBase}`, async () => this.#probeRelay(relayBase)) : Promise.resolve({ status: "unreachable" }),
+      allowed ? this.#probe(`p2p:${relayBase}`, () => this.#probeRelay(relayBase)) : Promise.resolve({ status: "unreachable" }),
       ...stored.map((host) => this.#probe(`${host.id}:${host.baseUrl}:${host.token ?? ""}`, () => this.#probeHost(host)))
     ]);
     const hosts = [];
@@ -34792,7 +34774,7 @@ var HostDirectory = class {
     try {
       discovery = await client.discovery();
     } catch (error51) {
-      throw new HostConfigError(`${host.name} is not reachable right now: ${error51 instanceof Error ? error51.message : String(error51)}`);
+      throw new HostConfigError(`${host.name} is not reachable right now: ${errorMessage(error51)}`);
     }
     return { host, client, discovery };
   }
@@ -34804,7 +34786,7 @@ var HostDirectory = class {
     try {
       return { baseUrl, client, discovery: await client.discovery() };
     } catch (error51) {
-      throw new HostConfigError(`the relay that makes links from this computer reachable is not available right now: ${error51 instanceof Error ? error51.message : String(error51)}`);
+      throw new HostConfigError(`the relay that makes links from this computer reachable is not available right now: ${errorMessage(error51)}`);
     }
   }
   async add(input) {
@@ -34813,7 +34795,7 @@ var HostDirectory = class {
     const target = "pairing" in input ? { ...parsePairingLink(input.pairing), kind: input.kind } : { baseUrl: normalizeBaseUrl(input.url), token: input.token?.trim() || void 0, kind: input.kind };
     const client = this.#client(target.baseUrl);
     const discovery = await client.discovery().catch((error51) => {
-      throw new HostConfigError(`${target.baseUrl} is not reachable: ${error51 instanceof Error ? error51.message : String(error51)}`);
+      throw new HostConfigError(`${target.baseUrl} is not reachable: ${errorMessage(error51)}`);
     });
     if (discovery.mode !== "host") throw new HostConfigError("that address is a relay for sharing from a computer; it does not store shares, so it cannot be used as your server");
     try {
@@ -34822,7 +34804,7 @@ var HostDirectory = class {
       if (error51 instanceof HostRequestError && (error51.status === 401 || error51.status === 403)) {
         throw new HostConfigError(target.token === void 0 ? "that server needs an upload token; paste the pairing link or the token" : "that server did not accept the token");
       }
-      throw new HostConfigError(`${discovery.name} did not answer the connection check: ${error51 instanceof Error ? error51.message : String(error51)}`);
+      throw new HostConfigError(`${discovery.name} did not answer the connection check: ${errorMessage(error51)}`);
     }
     const stored = await this.store.add({
       id: `h_${randomBytes5(5).toString("hex")}`,
@@ -34857,8 +34839,7 @@ var TUNNEL_MAX_FRAME_BYTES = 4 * 1024 * 1024;
 var TUNNEL_MAX_ANNOUNCED_SHARES = 500;
 var TUNNEL_NEVER_EXPIRES = 0;
 var HEADER_BYTES = 5;
-var SHARE_ID_PATTERN = /^[A-Za-z0-9_-]{16,64}$/;
-var TUNNEL_ID_PATTERN = /^[A-Za-z0-9_-]{16,64}$/;
+var ID_PATTERN = /^[A-Za-z0-9_-]{16,64}$/;
 var FORWARDED_RESPONSE_HEADERS = {
   "accept-ranges": true,
   "cache-control": true,
@@ -34894,11 +34875,11 @@ var PAYLOAD_SCHEMAS = {
   hello: external_exports.object({
     protocol: external_exports.number().int().min(1),
     client: external_exports.string().min(1).max(120),
-    tunnelId: external_exports.string().regex(TUNNEL_ID_PATTERN).optional(),
+    tunnelId: external_exports.string().regex(ID_PATTERN).optional(),
     token: external_exports.string().min(16).max(128).optional()
   }),
   welcome: external_exports.object({
-    tunnelId: external_exports.string().regex(TUNNEL_ID_PATTERN),
+    tunnelId: external_exports.string().regex(ID_PATTERN),
     token: external_exports.string().min(16).max(128).optional(),
     baseUrl: external_exports.string().min(1).max(2048),
     window: external_exports.number().int().min(1024),
@@ -34920,7 +34901,7 @@ var PAYLOAD_SCHEMAS = {
   shares: external_exports.object({
     shares: external_exports.array(
       external_exports.object({
-        id: external_exports.string().regex(SHARE_ID_PATTERN),
+        id: external_exports.string().regex(ID_PATTERN),
         comments: external_exports.boolean(),
         expiresAt: external_exports.number().int().min(0),
         latest: external_exports.number().int().min(1)
@@ -34930,6 +34911,7 @@ var PAYLOAD_SCHEMAS = {
 };
 var encoder2 = new TextEncoder();
 var decoder2 = new TextDecoder("utf-8", { fatal: true });
+var NO_PAYLOAD = new Uint8Array(0);
 function frameWithPayload(kind, id2, payload) {
   const out = new Uint8Array(HEADER_BYTES + payload.byteLength);
   out[0] = KIND_CODES[kind];
@@ -34942,47 +34924,33 @@ function jsonFrame(kind, id2, body) {
 }
 function encodeFrame(frame) {
   switch (frame.kind) {
-    case "hello": {
-      const { kind: _2, ...body } = frame;
-      return jsonFrame("hello", 0, body);
-    }
-    case "welcome": {
-      const { kind: _2, ...body } = frame;
-      return jsonFrame("welcome", 0, body);
-    }
+    case "hello":
+    case "welcome":
     case "rejected": {
-      const { kind: _2, ...body } = frame;
-      return jsonFrame("rejected", 0, body);
+      const { kind, ...body } = frame;
+      return jsonFrame(kind, 0, body);
     }
-    case "request": {
-      const { kind: _2, id: id2, ...body } = frame;
-      return jsonFrame("request", id2, body);
-    }
-    case "response": {
-      const { kind: _2, id: id2, ...body } = frame;
-      return jsonFrame("response", id2, body);
-    }
+    case "request":
+    case "response":
     case "fail": {
-      const { kind: _2, id: id2, ...body } = frame;
-      return jsonFrame("fail", id2, body);
+      const { kind, id: id2, ...body } = frame;
+      return jsonFrame(kind, id2, body);
     }
     case "shares":
       return jsonFrame("shares", 0, { shares: frame.shares });
     case "data":
       return frameWithPayload("data", frame.id, frame.bytes);
     case "end":
-      return frameWithPayload("end", frame.id, new Uint8Array(0));
     case "cancel":
-      return frameWithPayload("cancel", frame.id, new Uint8Array(0));
+      return frameWithPayload(frame.kind, frame.id, NO_PAYLOAD);
     case "credit": {
       const payload = new Uint8Array(4);
       new DataView(payload.buffer).setUint32(0, frame.bytes, false);
       return frameWithPayload("credit", frame.id, payload);
     }
     case "ping":
-      return frameWithPayload("ping", 0, new Uint8Array(0));
     case "pong":
-      return frameWithPayload("pong", 0, new Uint8Array(0));
+      return frameWithPayload(frame.kind, 0, NO_PAYLOAD);
   }
 }
 function parseJsonPayload(kind, payload) {
@@ -35049,7 +35017,6 @@ function decodeFrame(bytes) {
     case "data":
       return { kind, id: requireId(kind, id2), bytes: payload };
     case "end":
-      return { kind, id: requireId(kind, id2) };
     case "cancel":
       return { kind, id: requireId(kind, id2) };
     case "credit": {
@@ -35058,7 +35025,6 @@ function decodeFrame(bytes) {
       return { kind, id: requireId(kind, id2), bytes: bytes2 };
     }
     case "ping":
-      return { kind };
     case "pong":
       return { kind };
   }
@@ -35107,6 +35073,52 @@ var ChunkCache = class {
     }
   }
 };
+
+// src/share/chunk-source.ts
+import { constants as constants4 } from "node:fs";
+import { open as open4 } from "node:fs/promises";
+var FileChangedError = class extends Error {
+  name = "FileChangedError";
+  constructor() {
+    super("the file changed while it was being read; share it again once it has settled");
+  }
+};
+var OPEN_FLAGS3 = constants4.O_RDONLY | (constants4.O_NONBLOCK ?? 0);
+function plainChunkBytes(size, index) {
+  return Math.max(0, Math.min(ASP_CHUNK_BYTES, size - index * ASP_CHUNK_BYTES));
+}
+async function openChunkSource(path2) {
+  const handle = await open4(path2, OPEN_FLAGS3);
+  try {
+    const first = await handle.stat();
+    if (!first.isFile()) throw new Error("only a regular file can be shared");
+    const fingerprint = { size: first.size, mtimeMs: first.mtimeMs };
+    return {
+      ...fingerprint,
+      chunks: chunkCount(first.size),
+      async chunk(index) {
+        const start = index * ASP_CHUNK_BYTES;
+        const length = plainChunkBytes(first.size, index);
+        const bytes = new Uint8Array(length);
+        let filled = 0;
+        while (filled < length) {
+          const { bytesRead } = await handle.read(bytes, filled, length - filled, start + filled);
+          if (bytesRead === 0) throw new FileChangedError();
+          filled += bytesRead;
+        }
+        return bytes;
+      },
+      async verifyUnchanged() {
+        const now = await handle.stat();
+        if (now.size !== fingerprint.size || now.mtimeMs !== fingerprint.mtimeMs) throw new FileChangedError();
+      },
+      close: () => handle.close()
+    };
+  } catch (error51) {
+    await handle.close();
+    throw error51;
+  }
+}
 
 // src/share/manifest.ts
 import { readFile as readFile3 } from "node:fs/promises";
@@ -35358,7 +35370,7 @@ var P2pServer = class {
     if (pending !== void 0) return pending;
     const work = (async () => {
       const start = index * ASP_CHUNK_BYTES;
-      const length = Math.min(ASP_CHUNK_BYTES, state.size - start);
+      const length = plainChunkBytes(state.size, index);
       const read = await readRange(file2.real, start, length);
       if (read.size !== state.size || read.mtimeMs !== state.mtimeMs || read.bytes.length !== length) {
         throw new P2pRefusal(409, "changed", "The file changed while it was being read; reload this page.");
@@ -35418,19 +35430,19 @@ var TunnelClient = class {
   whenReady(signal) {
     if (this.#refusal !== void 0) return Promise.reject(new Error(this.#refusal));
     if (this.#session !== void 0 && this.#socket?.readyState === SOCKET_OPEN) return Promise.resolve(this.#session);
-    return new Promise((resolve3, reject) => {
-      const waiter = { resolve: resolve3, reject };
-      this.#waiters.push(waiter);
-      signal.addEventListener(
-        "abort",
-        () => {
-          const at = this.#waiters.indexOf(waiter);
-          if (at >= 0) this.#waiters.splice(at, 1);
-          reject(new Error("the relay did not answer in time"));
-        },
-        { once: true }
-      );
-    });
+    const { promise: promise2, resolve: resolve3, reject } = Promise.withResolvers();
+    const waiter = { resolve: resolve3, reject };
+    this.#waiters.push(waiter);
+    signal.addEventListener(
+      "abort",
+      () => {
+        const at = this.#waiters.indexOf(waiter);
+        if (at >= 0) this.#waiters.splice(at, 1);
+        reject(new Error("the relay did not answer in time"));
+      },
+      { once: true }
+    );
+    return promise2;
   }
   announce() {
     const socket = this.#socket;
@@ -35505,7 +35517,7 @@ var TunnelClient = class {
         try {
           frame = decodeFrame(new Uint8Array(event.data));
         } catch (error51) {
-          this.#options.log?.(`relay sent a frame that was not understood: ${error51 instanceof Error ? error51.message : String(error51)}`);
+          this.#options.log?.(`relay sent a frame that was not understood: ${errorMessage(error51)}`);
           socket.close(1002, "protocol");
           return;
         }
@@ -35527,7 +35539,7 @@ var TunnelClient = class {
                 this.#settle(session);
               },
               (error51) => {
-                this.#options.log?.(`could not save the relay credential: ${error51 instanceof Error ? error51.message : String(error51)}`);
+                this.#options.log?.(`could not save the relay credential: ${errorMessage(error51)}`);
                 socket.close(1011, "persist");
               }
             );
@@ -35606,7 +35618,7 @@ var TunnelClient = class {
       }
       send({ kind: "end", id: frame.id });
     } catch (error51) {
-      this.#options.log?.(`a relayed request failed: ${error51 instanceof Error ? error51.message : String(error51)}`);
+      this.#options.log?.(`a relayed request failed: ${errorMessage(error51)}`);
       if (!state.cancelled) send({ kind: "fail", id: frame.id, status: 500, message: "The sharing computer could not answer that request." });
     } finally {
       this.#requests.delete(frame.id);
@@ -35708,7 +35720,7 @@ var P2pRuntime = class {
     }
   }
   reconcile() {
-    this.#reconciling = this.#reconciling.then(() => this.#reconcileOnce()).catch((error51) => this.#options.log?.(`sharing from this computer: ${error51 instanceof Error ? error51.message : String(error51)}`));
+    this.#reconciling = this.#reconciling.then(() => this.#reconcileOnce()).catch((error51) => this.#options.log?.(`sharing from this computer: ${errorMessage(error51)}`));
     return this.#reconciling;
   }
   async #reconcileOnce() {
@@ -35787,7 +35799,7 @@ var P2pStore = class {
     try {
       return (await readdir2(this.#dir)).filter((name) => name.endsWith(".json")).map((name) => name.slice(0, -".json".length));
     } catch (error51) {
-      if (error51 instanceof Error && "code" in error51 && error51.code === "ENOENT") return [];
+      if (hasCode(error51, "ENOENT")) return [];
       throw error51;
     }
   }
@@ -35812,55 +35824,11 @@ import { randomBytes as randomBytes6 } from "node:crypto";
 import { stat as stat4 } from "node:fs/promises";
 import { userInfo } from "node:os";
 
-// src/share/chunk-source.ts
-import { constants as constants4 } from "node:fs";
-import { open as open4 } from "node:fs/promises";
-var FileChangedError = class extends Error {
-  name = "FileChangedError";
-  constructor() {
-    super("the file changed while it was being read; share it again once it has settled");
-  }
-};
-var OPEN_FLAGS3 = constants4.O_RDONLY | (constants4.O_NONBLOCK ?? 0);
-async function openChunkSource(path2) {
-  const handle = await open4(path2, OPEN_FLAGS3);
-  try {
-    const first = await handle.stat();
-    if (!first.isFile()) throw new Error("only a regular file can be shared");
-    const fingerprint = { size: first.size, mtimeMs: first.mtimeMs };
-    return {
-      ...fingerprint,
-      chunks: chunkCount(first.size),
-      async chunk(index) {
-        const start = index * ASP_CHUNK_BYTES;
-        const length = Math.max(0, Math.min(ASP_CHUNK_BYTES, first.size - start));
-        const bytes = new Uint8Array(length);
-        let filled = 0;
-        while (filled < length) {
-          const { bytesRead } = await handle.read(bytes, filled, length - filled, start + filled);
-          if (bytesRead === 0) throw new FileChangedError();
-          filled += bytesRead;
-        }
-        return bytes;
-      },
-      async verifyUnchanged() {
-        const now = await handle.stat();
-        if (now.size !== fingerprint.size || now.mtimeMs !== fingerprint.mtimeMs) throw new FileChangedError();
-      },
-      close: () => handle.close()
-    };
-  } catch (error51) {
-    await handle.close();
-    throw error51;
-  }
-}
-
 // src/share/upload.ts
 var UPLOAD_CONCURRENCY = 4;
 var COMMIT_ROUNDS = 3;
 function sealedLength(pending, index) {
-  const plain = Math.max(0, Math.min(ASP_CHUNK_BYTES, pending.fingerprint.size - index * ASP_CHUNK_BYTES));
-  return plain + ASP_TAG_BYTES;
+  return sealedChunkSize(plainChunkBytes(pending.fingerprint.size, index));
 }
 async function uploadMissing(pending, context, sent) {
   const { client, key, source, signal, onProgress } = context;
@@ -35925,12 +35893,9 @@ var BUSY = "that file is already being shared; wait for it to finish";
 var ShareError = class extends Error {
   name = "ShareError";
 };
-function describe3(error51) {
-  return error51 instanceof Error ? error51.message : String(error51);
-}
 function failureMessage(error51) {
   const known = error51 instanceof ShareError || error51 instanceof HostRequestError || error51 instanceof HostConfigError || error51 instanceof FileChangedError || error51 instanceof StoredFileError;
-  return known ? error51.message : `sharing failed: ${describe3(error51)}`;
+  return known ? error51.message : `sharing failed: ${errorMessage(error51)}`;
 }
 function sameFingerprint(session, source) {
   return session.pending.fingerprint.size === source.size && session.pending.fingerprint.mtimeMs === source.mtimeMs;
@@ -36249,7 +36214,7 @@ var ShareService = class {
       try {
         await revokeRemote(row);
       } catch (error51) {
-        warning = describe3(error51);
+        warning = errorMessage(error51);
       }
       this.#options.onSharesChanged();
       return { shareId: shareId2, revokedAt, ...warning === void 0 ? {} : { warning } };
@@ -36257,7 +36222,7 @@ var ShareService = class {
     try {
       await revokeRemote(row);
     } catch (error51) {
-      throw new ShareError(describe3(error51));
+      throw new ShareError(errorMessage(error51));
     }
     this.#library.shares.update(row.id, { revokedAt });
     this.#options.onSharesChanged();
@@ -36404,7 +36369,7 @@ async function guarded(work) {
     if (error51 instanceof ShareError || error51 instanceof HostConfigError || error51 instanceof HostRequestError || error51 instanceof StoredFileError) {
       return failure(error51.message);
     }
-    const detail = error51 instanceof Error ? error51.message : String(error51);
+    const detail = errorMessage(error51);
     console.error(`share: ${detail}`);
     return failure(`sharing failed: ${detail}`);
   }

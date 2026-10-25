@@ -1,6 +1,7 @@
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { randomBytes } from "node:crypto";
+import { hasCode } from "../../../src/library/errors";
 import type { z } from "zod";
 
 export class StoredFileError extends Error {
@@ -12,7 +13,7 @@ export async function readJsonFile<S extends z.ZodType>(path: string, schema: S)
 	try {
 		text = await readFile(path, "utf8");
 	} catch (error) {
-		if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
+		if (hasCode(error, "ENOENT")) return undefined;
 		throw error;
 	}
 	let parsed: unknown;

@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { basename, dirname } from "node:path";
-import { LibraryError } from "./errors";
+import { errorMessage, LibraryError } from "./errors";
 
 const execFileAsync = promisify(execFile);
 
@@ -66,8 +66,7 @@ export async function moveToTrash(path: string, platform: NodeJS.Platform = proc
 	try {
 		outcome = await run(command.program, command.args, { timeout: TRASH_TIMEOUT_MS, ...(command.env === undefined ? {} : { env: command.env }) });
 	} catch (error) {
-		const reason = error instanceof Error ? error.message : String(error);
-		throw new LibraryError(`${command.tool} could not move the file to the trash: ${reason}`);
+		throw new LibraryError(`${command.tool} could not move the file to the trash: ${errorMessage(error)}`);
 	}
 	if (outcome.code !== 0) {
 		const detail = outcome.stderr.trim().split(/\r?\n/)[0] ?? "";

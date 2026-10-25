@@ -1,11 +1,10 @@
 import type { App } from "@modelcontextprotocol/ext-apps";
 import { createToolCaller } from "@dimension/mcp-app-kit/tools";
 import { mediaSourceSchema } from "../../../src/contract";
-import type { LibraryItem } from "../../../../src/library/types";
+import type { LibraryItem, ThumbMime } from "../../../../src/library/types";
 import { loadDocumentHead } from "../document-bytes";
 import { frameSize } from "../media-frame";
 import { trackMediaWork } from "../media-lifecycle";
-import type { ThumbMime } from "./library-tools";
 
 export const THUMB_LONG_EDGE = 320;
 export const THUMB_MAX_BYTES = 128 * 1024;

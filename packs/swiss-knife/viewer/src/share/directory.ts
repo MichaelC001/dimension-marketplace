@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { HostDiscovery, SharePolicy } from "@dimension/sdk/artifact-share";
+import { errorMessage } from "../../../src/library/errors";
 import { HostClient, type HostClientOptions, HostRequestError } from "./host-api";
 import {
 	additionRefusal,
@@ -99,7 +100,7 @@ export class HostDirectory {
 		const relayBase = relayUrlOf(file);
 		const stored = visibleHosts(file);
 		const [relay, ...probes] = await Promise.all([
-			allowed ? this.#probe(`p2p:${relayBase}`, async () => this.#probeRelay(relayBase)) : Promise.resolve<Probe>({ status: "unreachable" }),
+			allowed ? this.#probe(`p2p:${relayBase}`, () => this.#probeRelay(relayBase)) : Promise.resolve<Probe>({ status: "unreachable" }),
 			...stored.map(host => this.#probe(`${host.id}:${host.baseUrl}:${host.token ?? ""}`, () => this.#probeHost(host))),
 		]);
 		const hosts: PublicHost[] = [];
@@ -148,7 +149,7 @@ export class HostDirectory {
 		try {
 			discovery = await client.discovery();
 		} catch (error) {
-			throw new HostConfigError(`${host.name} is not reachable right now: ${error instanceof Error ? error.message : String(error)}`);
+			throw new HostConfigError(`${host.name} is not reachable right now: ${errorMessage(error)}`);
 		}
 		return { host, client, discovery };
 	}
@@ -161,7 +162,7 @@ export class HostDirectory {
 		try {
 			return { baseUrl, client, discovery: await client.discovery() };
 		} catch (error) {
-			throw new HostConfigError(`the relay that makes links from this computer reachable is not available right now: ${error instanceof Error ? error.message : String(error)}`);
+			throw new HostConfigError(`the relay that makes links from this computer reachable is not available right now: ${errorMessage(error)}`);
 		}
 	}
 
@@ -174,7 +175,7 @@ export class HostDirectory {
 				: { baseUrl: normalizeBaseUrl(input.url), token: input.token?.trim() || undefined, kind: input.kind };
 		const client = this.#client(target.baseUrl);
 		const discovery = await client.discovery().catch((error: unknown) => {
-			throw new HostConfigError(`${target.baseUrl} is not reachable: ${error instanceof Error ? error.message : String(error)}`);
+			throw new HostConfigError(`${target.baseUrl} is not reachable: ${errorMessage(error)}`);
 		});
 		if (discovery.mode !== "host") throw new HostConfigError("that address is a relay for sharing from a computer; it does not store shares, so it cannot be used as your server");
 		try {
@@ -183,7 +184,7 @@ export class HostDirectory {
 			if (error instanceof HostRequestError && (error.status === 401 || error.status === 403)) {
 				throw new HostConfigError(target.token === undefined ? "that server needs an upload token; paste the pairing link or the token" : "that server did not accept the token");
 			}
-			throw new HostConfigError(`${discovery.name} did not answer the connection check: ${error instanceof Error ? error.message : String(error)}`);
+			throw new HostConfigError(`${discovery.name} did not answer the connection check: ${errorMessage(error)}`);
 		}
 		const stored = await this.store.add({
 			id: `h_${randomBytes(5).toString("hex")}`,

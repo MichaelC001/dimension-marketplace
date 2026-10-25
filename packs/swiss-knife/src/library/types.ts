@@ -7,6 +7,7 @@ export type ArtifactSource = "present" | "stamp" | "human";
 export type ArtifactState = "live" | "missing" | "discarded";
 export type LibrarySort = "recent" | "name" | "size" | "opened" | "relevance";
 export type ShareHostId = "p2p" | (string & {});
+export type ThumbMime = "image/webp" | "image/png" | "image/jpeg";
 
 export interface ShareRow {
 	readonly id: string;
@@ -112,7 +113,7 @@ export interface StampInput {
 	readonly tags?: readonly string[];
 	readonly width?: number;
 	readonly height?: number;
-	readonly thumb?: { readonly bytes: Uint8Array; readonly mime: "image/webp" | "image/png" | "image/jpeg" };
+	readonly thumb?: { readonly bytes: Uint8Array; readonly mime: ThumbMime };
 }
 
 export interface ArtifactPatch {
@@ -163,7 +164,7 @@ export interface Library {
 	restore(id: ArtifactId): LibraryItem;
 	check(ids: readonly ArtifactId[]): Promise<readonly Pick<LibraryItem, "id" | "state" | "size" | "mtimeMs">[]>;
 	markOpened(id: ArtifactId): void;
-	setThumb(id: ArtifactId, bytes: Uint8Array, mime: "image/webp" | "image/png" | "image/jpeg"): Promise<void>;
+	setThumb(id: ArtifactId, bytes: Uint8Array, mime: ThumbMime): Promise<void>;
 	thumbPath(id: ArtifactId): string | undefined;
 	isLent(realPath: string): boolean;
 	readonly shares: LibraryShares;

@@ -2,10 +2,8 @@ import type { Audience, SharePolicy } from "@dimension/sdk/artifact-share";
 import { createToolCaller } from "@dimension/mcp-app-kit/tools";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { App } from "@modelcontextprotocol/ext-apps";
-import type { CommentRow, LibraryFacets, LibraryItem, LibraryPage, LibraryQuery, ShareSummary } from "../../../../src/library/types";
+import type { CommentRow, LibraryFacets, LibraryItem, LibraryPage, LibraryQuery, ShareSummary, ThumbMime } from "../../../../src/library/types";
 import type { CheckedRow } from "./query";
-
-export type ThumbMime = "image/webp" | "image/png" | "image/jpeg";
 
 export interface ShareHost {
 	readonly id: string;

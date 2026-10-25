@@ -2,9 +2,8 @@ import { randomBytes } from "node:crypto";
 import { mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { MAX_THUMB_BYTES } from "../thumbnail";
-import { LibraryError } from "./errors";
-
-export type ThumbMime = "image/webp" | "image/png" | "image/jpeg";
+import { hasCode, LibraryError } from "./errors";
+import type { ThumbMime } from "./types";
 
 const EXTENSIONS: Record<ThumbMime, string> = { "image/webp": "webp", "image/png": "png", "image/jpeg": "jpg" };
 export const THUMB_CONTENT_TYPES: Record<string, ThumbMime> = { webp: "image/webp", png: "image/png", jpg: "image/jpeg" };
@@ -40,7 +39,7 @@ export async function removeThumbs(directory: string, id: string, keep?: string)
 	try {
 		entries = await readdir(directory);
 	} catch (error) {
-		if (error instanceof Error && "code" in error && error.code === "ENOENT") return;
+		if (hasCode(error, "ENOENT")) return;
 		throw error;
 	}
 	const own = entries.filter(entry => entry !== keep && entry.startsWith(`${id}.`));

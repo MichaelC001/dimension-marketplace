@@ -1,5 +1,5 @@
-import { ASP_CHUNK_BYTES, ASP_TAG_BYTES, sealChunk } from "@dimension/sdk/artifact-share";
-import type { ChunkSource, Fingerprint } from "./chunk-source";
+import { sealChunk, sealedChunkSize } from "@dimension/sdk/artifact-share";
+import { type ChunkSource, type Fingerprint, plainChunkBytes } from "./chunk-source";
 import { type HostClient, HostRequestError } from "./host-api";
 
 export const UPLOAD_CONCURRENCY = 4;
@@ -26,8 +26,7 @@ export interface UploadContext {
 }
 
 function sealedLength(pending: PendingUpload, index: number): number {
-	const plain = Math.max(0, Math.min(ASP_CHUNK_BYTES, pending.fingerprint.size - index * ASP_CHUNK_BYTES));
-	return plain + ASP_TAG_BYTES;
+	return sealedChunkSize(plainChunkBytes(pending.fingerprint.size, index));
 }
 
 async function uploadMissing(pending: PendingUpload, context: UploadContext, sent: { bytes: number }): Promise<void> {
