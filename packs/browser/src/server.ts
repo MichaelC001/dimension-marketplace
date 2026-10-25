@@ -101,12 +101,12 @@ const MODEL_SPACES: readonly string[] = (() => {
   return spaces;
 })();
 /**
- * The spaces whose model is offered `browser_run`. Until host contract H1 (omp fork) maps `ai.insodimension/approval: "exec"` to the exec tier, only the spaces whose agents also have
- * `eval`/`bash` (doc 77 §7.4.5); list every space here once H1 has merged. Where `browser_run` is not offered the step tools stay on the model's list, so no space is left without a way to drive a page.
+ * The spaces whose model is offered `browser_run`. Host contract H1 (omp fork) maps `ai.insodimension/approval: "exec"` to the exec tier, so `browser_run` asks in every mode short of full access.
+ * It is still offered only to the spaces whose agents also have `eval`/`bash` (doc 77 §7.4.5); listing every other space changes what those spaces' models see and is a separate call. Where `browser_run` is not offered the step tools stay on the model's list, so no space is left without a way to drive a page.
  *
  * `traction` is NOT one: its agents hold no code runner on purpose (the X agent's `capabilities.tools` has no `eval` or `bash`, and its manifest says why: an approved draft once sent an agent to `eval browser.open`), and MCP
  * tools are exempt from that list, so a `browser_run` offered to the Traction space would hand the X agent and the CMO exactly the runner their manifests withhold: full Node (doc 77 §7.4.5), outside the approval
- * binding of `browser_publish` and the ask of `browser_publish_confirm`, while `exec` is not yet enforced. The same space also publishes through `browser_open`/`browser_state`/`browser_snapshot`/`browser_screenshot`, which a `browser_run` audience hides.
+ * binding of `browser_publish` and the ask of `browser_publish_confirm`. The same space also publishes through `browser_open`/`browser_state`/`browser_snapshot`/`browser_screenshot`, which a `browser_run` audience hides.
  */
 const CODE_TOOL_SPACES = ["code", "build"];
 
