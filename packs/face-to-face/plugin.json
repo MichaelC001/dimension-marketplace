@@ -16,12 +16,11 @@
 	"extensions": {
 		"ai.insodimension.dimension": {
 			"contractVersion": 1,
-			"requires": { "dimension": ">=0.11.15" },
+			"requires": { "dimension": ">=0.11.16" },
 			"title": "Face to face",
 			"icon": "waveform",
 			"category": "component",
 			"defaultEnabled": true,
-			"channel": "canary",
 			"entry": "dist/index.mjs",
 			"type": "component",
 			"components": [

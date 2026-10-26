@@ -99,11 +99,13 @@ data URL (`vite build` with `assetsInclude: ["**/*.bin"]` and `import ... ?inlin
 
 ## Who can use it
 
-Anyone on the canary release ring (`channel: "canary"`); the pack is hidden on stable. It is on by default
-(`defaultEnabled: true`) and loads only in the Chat space, the one space that opts in. It needs Dimension 0.11.15 or
-newer (`requires.dimension`), because the Live bar it draws (`LivePresence`) is first granted to packs there. To talk you
+Anyone, on every release ring (the pack carries no `channel`; it left the canary ring with 0.1.5). It is on by default
+(`defaultEnabled: true`) and loads only in the Chat space, the one space that opts in. It needs Dimension 0.11.16 or
+newer (`requires.dimension`), because the Live bar it draws (`LivePresence`) is first granted to packs there: on an older
+build the engine skips the pack and the Chat space reports that its Face is unavailable until the app updates. To talk you
 need a voice profile whose speech provider is ready (a key connected, a model downloaded); until then the surface shows
-what is missing.
+what is missing. **Talk live** is offered once the pane has a session (send a first message, or press Tap to talk once):
+the call is placed on a session, and a brand-new Chat has none yet.
 
 ## Limits and risks
 
