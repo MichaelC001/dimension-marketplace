@@ -1,8 +1,8 @@
 {
 	"name": "@inso/slack",
 	"author": "Dimension",
-	"version": "0.1.3",
-	"description": "Slack connector — list channels, read messages, and post messages via the Slack Web API (bot token)",
+	"version": "0.2.0",
+	"description": "Slack connector: a bot app over the Slack Web API, or your own Slack account through Slack's official MCP server (OAuth with PKCE, bring-your-own Slack app)",
 	"type": "module",
 	"main": "index.ts",
 	"scripts": {
@@ -22,7 +22,15 @@
 		"connect/",
 		"assets/",
 		"index.ts",
-		"plugin.json"
+		"bot.ts",
+		"user.ts",
+		"credential.ts",
+		"identity.ts",
+		"mcp-client.ts",
+		"tools.ts",
+		"type-guards.ts",
+		"plugin.json",
+		"README.md"
 	],
 	"peerDependencies": {
 		"arktype": "^2.2.0",

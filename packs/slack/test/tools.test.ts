@@ -148,13 +148,13 @@ test("the approval card says so when the account is not known yet, caps a huge v
 	const unknown = { label: () => undefined, warm: async () => undefined };
 
 	const huge = approvalDetails(unknown, { tool: "slack_send_message", arguments: { text: "x".repeat(5_000) } });
-	expect(huge[1]).toBe("As: the connected Slack account");
+	expect(huge[1]).toBe("As: you (the signed-in Slack account)");
 	expect(huge[2]).toContain("[...1000 more chars]");
 
-	expect(approvalDetails(unknown, null)).toEqual(["Slack tool: (missing)", "As: the connected Slack account"]);
+	expect(approvalDetails(unknown, null)).toEqual(["Slack tool: (missing)", "As: you (the signed-in Slack account)"]);
 	expect(approvalDetails(unknown, { tool: 5, arguments: "nope" })).toEqual([
 		"Slack tool: (missing)",
-		"As: the connected Slack account",
+		"As: you (the signed-in Slack account)",
 	]);
 });
 

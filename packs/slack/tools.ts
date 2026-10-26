@@ -1,6 +1,6 @@
 import type { ToolDefinition } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import { type } from "arktype";
-import { type CredentialStore, SlackSignInError } from "./credential";
+import { CONNECT_PATH, type CredentialStore, SlackSignInError } from "./credential";
 import type { SlackIdentity } from "./identity";
 import { type McpClient, McpRequestError, type McpTool } from "./mcp-client";
 import { isRecord } from "./type-guards";
@@ -78,7 +78,7 @@ async function withSlackErrors<T>(run: () => Promise<T>): Promise<T> {
 		if (!(error instanceof McpRequestError)) throw error;
 		if (error.status === 401) {
 			throw new SlackSignInError(
-				"Slack rejected the saved sign-in even after renewing it. Reconnect Slack (as you) in Plugins. If it keeps happening, open the Slack app's settings and check that Agents, Slack MCP Server is switched on.",
+				`Slack rejected the saved sign-in even after renewing it. Reconnect Slack as you under ${CONNECT_PATH}. If it keeps happening, open the Slack app's settings and check that Agents, Slack MCP Server is switched on.`,
 			);
 		}
 		if (error.status === 403) {
@@ -136,7 +136,7 @@ function textResult(text: string) {
 export function createSlackToolsTool(deps: SlackToolDeps): ToolDefinition<typeof toolsSchema> {
 	return {
 		name: "slack_tools",
-		label: "Slack (as you): Tools",
+		label: "Slack as you: Tools",
 		description:
 			"List what Slack's official MCP server can do for the signed-in user (search messages, files, users and channels; read channels and threads; send, schedule and draft messages; reactions; canvases; lists; file upload), or describe one tool in full. Each tool is marked [read] (changes nothing, run with slack_read) or [write] (changes Slack, run with slack_act). Call this first: the tool set comes from Slack and can change.",
 		parameters: toolsSchema,
@@ -161,7 +161,7 @@ async function invoke(deps: SlackToolDeps, wanted: ToolAccess, params: typeof ca
 		const scopes = deps.store.peek()?.scopes;
 		if (scopes && !scopes.some(scope => scope.endsWith(":write"))) {
 			throw new Error(
-				"This Slack sign-in was authorized read-only. Reconnect Slack (as you) in Plugins and choose Read and send.",
+				`This Slack sign-in was authorized read-only. Reconnect Slack as you under ${CONNECT_PATH} and choose Read and send.`,
 			);
 		}
 	}
@@ -174,7 +174,7 @@ async function invoke(deps: SlackToolDeps, wanted: ToolAccess, params: typeof ca
 export function createSlackReadTool(deps: SlackToolDeps): SlackCallTool {
 	return {
 		name: "slack_read",
-		label: "Slack (as you): Read",
+		label: "Slack as you: Read",
 		description:
 			"Run one READ-ONLY Slack tool as the signed-in user: search messages and files, read a channel or thread, find users and channels, read a canvas or list. Refuses any tool slack_tools does not mark [read]. Pass `tool` and its `arguments` exactly as slack_tools shows.",
 		parameters: callSchema,
@@ -191,7 +191,7 @@ export function approvalDetails(identity: SlackIdentity, args: unknown): string[
 	const callArgs = isRecord(input.arguments) ? input.arguments : {};
 	return [
 		`Slack tool: ${typeof input.tool === "string" ? input.tool : "(missing)"}`,
-		`As: ${identity.label() ?? "the connected Slack account"}`,
+		`As: ${identity.label() ?? "you (the signed-in Slack account)"}`,
 		...Object.entries(callArgs).map(
 			([key, value]) =>
 				`${key}: ${truncate(typeof value === "string" ? value : (JSON.stringify(value) ?? ""), APPROVAL_VALUE_CHARS)}`,
@@ -202,7 +202,7 @@ export function approvalDetails(identity: SlackIdentity, args: unknown): string[
 export function createSlackActTool(deps: SlackToolDeps): SlackCallTool {
 	return {
 		name: "slack_act",
-		label: "Slack (as you): Act",
+		label: "Slack as you: Act",
 		description:
 			"Run one Slack tool that CHANGES Slack, AS THE SIGNED-IN USER and in their name: send, schedule or draft a message, react, create a channel, canvas or list entry, upload a file. The user is asked to approve every call. ALWAYS show the user the exact channel and text first and only proceed on an explicit yes in the current turn. Pass `tool` and `arguments` exactly as slack_tools shows.",
 		parameters: callSchema,

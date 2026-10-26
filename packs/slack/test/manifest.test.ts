@@ -5,7 +5,7 @@ import { join, normalize } from "node:path";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { type } from "arktype";
 import { TOKEN_PATH } from "../credential";
-import slackUserExtension from "../index";
+import slackExtension from "../index";
 
 const CREATE_APP_LINK_PREFIX = "https://api.slack.com/apps?new_app=1&manifest_json=";
 const ASSIST_PROMPT_LIMIT = 8_000;
@@ -13,23 +13,25 @@ const ASSIST_PROMPT_LIMIT = 8_000;
 const packRoot = join(import.meta.dir, "..");
 const shelfRoot = join(packRoot, "..");
 
+const userMethodSchema = type({
+	assist: { prompt: "string", requires: "string[]" },
+	setup: type({ "url?": "string" }).array(),
+	oauth: {
+		authUrl: "string",
+		tokenUrl: "string",
+		scopes: "string[]",
+		usePkce: "boolean",
+		callbackPort: "number",
+		scopeOptions: type({ id: "string", scopes: "string[]", "default?": "boolean" }).array(),
+	},
+	form: type({ id: "string", "required?": "boolean" }).array(),
+	configTarget: "string",
+});
+
 const pluginSchema = type({
 	extensions: {
 		"ai.insodimension.dimension": {
-			connect: {
-				assist: { prompt: "string", requires: "string[]" },
-				setup: type({ "url?": "string" }).array(),
-				oauth: {
-					authUrl: "string",
-					tokenUrl: "string",
-					scopes: "string[]",
-					usePkce: "boolean",
-					callbackPort: "number",
-					scopeOptions: type({ id: "string", scopes: "string[]", "default?": "boolean" }).array(),
-				},
-				form: type({ id: "string", "required?": "boolean" }).array(),
-				configTarget: "string",
-			},
+			connect: { methods: "object[]" },
 			tools: type({ name: "string" }).array(),
 		},
 	},
@@ -44,7 +46,7 @@ const plugin = pluginSchema.assert(await Bun.file(join(packRoot, "plugin.json"))
 const appManifestJson: unknown = await Bun.file(join(packRoot, "connect", "slack-app-manifest.json")).json();
 const app = appSchema.assert(appManifestJson);
 const dimension = plugin.extensions["ai.insodimension.dimension"];
-const { connect } = dimension;
+const connect = userMethodSchema.assert(dimension.connect.methods.find(method => Reflect.get(method, "id") === "user"));
 
 const createAppLink = connect.setup.find(step => step.url?.startsWith(CREATE_APP_LINK_PREFIX))?.url ?? "";
 
@@ -109,12 +111,12 @@ test("the extension registers exactly the tools the manifest lists", () => {
 	const registered: string[] = [];
 	const pi = { registerTool: (tool: { name: string }) => registered.push(tool.name) } as unknown as ExtensionAPI;
 
-	slackUserExtension(pi);
+	slackExtension(pi);
 
 	expect(registered.sort()).toEqual(dimension.tools.map(tool => tool.name).sort());
 });
 
-test.each(["skills/slack-user/SKILL.md", "rules/slack-user-context.md"])(
+test.each(["skills/slack/SKILL.md", "rules/slack-context.md"])(
 	"%s keeps its whole description through the YAML parser the host loads it with",
 	async path => {
 		const text = (await Bun.file(join(packRoot, path)).text()).replace(/\r\n/g, "\n");

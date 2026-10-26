@@ -1,0 +1,91 @@
+import { expect, test } from "bun:test";
+import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
+import { resolveApproval } from "@oh-my-pi/pi-coding-agent/tools/approval";
+import slackExtension from "../index";
+import { dimension } from "./support/pack";
+
+interface RegisteredTool {
+	readonly name: string;
+	readonly approval?: unknown;
+	readonly formatApprovalDetails?: (args: unknown) => string[];
+}
+
+const registered: RegisteredTool[] = [];
+slackExtension({ registerTool: (tool: RegisteredTool) => registered.push(tool) } as unknown as ExtensionAPI);
+
+const APPROVAL_MODES = ["always-ask", "write", "yolo"] as const;
+
+interface Send {
+	readonly tool: string;
+	readonly asBot: boolean;
+	readonly args: Record<string, unknown>;
+	readonly shown: string[];
+}
+
+const SENDS: Send[] = [
+	{
+		tool: "slack_post_message",
+		asBot: true,
+		args: { channel: "C0123ABCD", text: "the deploy is done" },
+		shown: ["C0123ABCD", "the deploy is done"],
+	},
+	{
+		tool: "slack_reply_thread",
+		asBot: true,
+		args: { channel: "C0123ABCD", threadTs: "1700000000.000100", text: "on it" },
+		shown: ["C0123ABCD", "1700000000.000100", "on it"],
+	},
+	{
+		tool: "slack_edit_message",
+		asBot: true,
+		args: { channel: "C0123ABCD", messageTs: "1700000000.000200", text: "fixed the typo" },
+		shown: ["C0123ABCD", "1700000000.000200", "fixed the typo"],
+	},
+	{
+		tool: "slack_delete_message",
+		asBot: true,
+		args: { channel: "C0123ABCD", messageTs: "1700000000.000300" },
+		shown: ["C0123ABCD", "1700000000.000300"],
+	},
+	{
+		tool: "slack_act",
+		asBot: false,
+		args: { tool: "slack_send_message", arguments: { channel: "C0123ABCD", text: "back in five" } },
+		shown: ["slack_send_message", "C0123ABCD", "back in five"],
+	},
+];
+
+function registeredTool(name: string): RegisteredTool {
+	const found = registered.find(tool => tool.name === name);
+	if (!found) throw new Error(`the extension did not register ${name}`);
+	return found;
+}
+
+test("the extension registers each of the 12 tools plugin.json lists once, and every one has a tool card", () => {
+	const names = registered.map(tool => tool.name).sort();
+
+	expect(names).toHaveLength(12);
+	expect(names).toEqual(dimension.tools.map(tool => tool.name).sort());
+	expect(names).toEqual(dimension.toolRenderer.map(card => card.match).sort());
+});
+
+test.each(SENDS)("$tool stops for a human click in every approval mode", ({ tool, args }) => {
+	const policies = APPROVAL_MODES.map(
+		mode => resolveApproval(registeredTool(tool) as Parameters<typeof resolveApproval>[0], args, mode).policy,
+	);
+
+	expect(policies).toEqual(["prompt", "prompt", "prompt"]);
+});
+
+test.each(SENDS)(
+	"$tool's approval card says whether it sends as the bot or as you, and shows what it sends",
+	({ tool, asBot, args, shown }) => {
+		const card = registeredTool(tool).formatApprovalDetails?.(args) ?? [];
+		const sendsAs = card.find(line => line.startsWith("As:"));
+
+		expect(sendsAs).toBeDefined();
+		if (asBot) expect(sendsAs).toMatch(/bot/i);
+		else expect(sendsAs).not.toMatch(/bot/i);
+		for (const value of shown) expect(card.join("\n")).toContain(value);
+	},
+);

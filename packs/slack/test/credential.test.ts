@@ -132,7 +132,7 @@ test("Slack answering 200 with ok false for a dead refresh token tells the user 
 	const store = createCredentialStore({ path, fetch: fetcher, now: () => NOW });
 
 	await expect(store.accessToken()).rejects.toBeInstanceOf(SlackSignInError);
-	await expect(store.accessToken()).rejects.toThrow("Reconnect Slack (as you)");
+	await expect(store.accessToken()).rejects.toThrow("Reconnect Slack as you");
 	expect(await saved()).toEqual(credential);
 });
 
@@ -149,7 +149,7 @@ test("a rejected token that cannot renew itself says to reconnect", async () => 
 	await save({ access: "xoxp-revoked", refresh: "", clientId: "1.2" });
 	const store = createCredentialStore({ path, now: () => NOW });
 
-	await expect(store.renewRejected("xoxp-revoked")).rejects.toThrow("Reconnect Slack (as you)");
+	await expect(store.renewRejected("xoxp-revoked")).rejects.toThrow("Reconnect Slack as you");
 });
 
 test("a missing credential reports that Slack is not connected and a corrupt one that it is unreadable", async () => {

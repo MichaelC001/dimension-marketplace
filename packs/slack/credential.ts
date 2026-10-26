@@ -7,6 +7,7 @@ import { type } from "arktype";
 
 export const TOKEN_ENDPOINT = "https://slack.com/api/oauth.v2.user.access";
 export const TOKEN_PATH = join(homedir(), ".config", "dimension-slack-user", "token.json");
+export const CONNECT_PATH = "Plugins, Slack, Connect, As you";
 
 const REFRESH_SKEW_MS = 60_000;
 const DEFAULT_ACCESS_LIFETIME_SECONDS = 43_200;
@@ -74,7 +75,7 @@ function parseCredential(raw: string, path: string): StoredCredential {
 	const parsed = storedCredential(json);
 	if (parsed instanceof type.errors) {
 		throw new SlackSignInError(
-			`The saved Slack sign-in at ${path} is unreadable. Reconnect Slack (as you) in Plugins.`,
+			`The saved Slack sign-in at ${path} is unreadable. Reconnect Slack as you under ${CONNECT_PATH}.`,
 		);
 	}
 	return parsed;
@@ -84,11 +85,11 @@ function renewalFailure(status: number, body: RenewalResponse | null): SlackSign
 	const code = body?.error;
 	if (code && RECONNECT_ERRORS[code] === true) {
 		return new SlackSignInError(
-			`Slack refused to renew the sign-in (${code}). It was revoked or has been unused too long. Reconnect Slack (as you) in Plugins.`,
+			`Slack refused to renew the sign-in (${code}). It was revoked or has been unused too long. Reconnect Slack as you under ${CONNECT_PATH}.`,
 		);
 	}
 	return new SlackSignInError(
-		`Slack could not renew the sign-in (${code ?? `HTTP ${status}`}). Try again, or reconnect Slack (as you).`,
+		`Slack could not renew the sign-in (${code ?? `HTTP ${status}`}). Try again, or reconnect Slack as you under ${CONNECT_PATH}.`,
 	);
 }
 
@@ -104,9 +105,7 @@ export function createCredentialStore(options: CredentialStoreOptions): Credenti
 		try {
 			raw = await readFile(path, "utf-8");
 		} catch {
-			throw new SlackSignInError(
-				"Slack (as you) isn't connected yet. Open Plugins, choose Slack (as you), and click Connect.",
-			);
+			throw new SlackSignInError(`Slack as you isn't connected yet. Connect it under ${CONNECT_PATH}.`);
 		}
 		return parseCredential(raw, path);
 	}
@@ -128,7 +127,7 @@ export function createCredentialStore(options: CredentialStoreOptions): Credenti
 		} catch (cause) {
 			await rm(staging, { force: true });
 			throw new SlackSignInError(
-				`Slack renewed the sign-in but it could not be saved to ${path} (${cause instanceof Error ? cause.message : String(cause)}). Reconnect Slack (as you).`,
+				`Slack renewed the sign-in but it could not be saved to ${path} (${cause instanceof Error ? cause.message : String(cause)}). Reconnect Slack as you under ${CONNECT_PATH}.`,
 			);
 		}
 	}
@@ -138,7 +137,7 @@ export function createCredentialStore(options: CredentialStoreOptions): Credenti
 		if (current.access !== stale.access) return current;
 		if (!current.refresh || !current.clientId) {
 			throw new SlackSignInError(
-				"Slack no longer accepts the saved sign-in and it cannot renew itself. Reconnect Slack (as you) in Plugins.",
+				`Slack no longer accepts the saved sign-in and it cannot renew itself. Reconnect Slack as you under ${CONNECT_PATH}.`,
 			);
 		}
 		const form = new URLSearchParams({
@@ -197,7 +196,7 @@ export function createCredentialStore(options: CredentialStoreOptions): Credenti
 		if (credential.access !== rejectedAccess) return credential.access;
 		if (!credential.refresh) {
 			throw new SlackSignInError(
-				"Slack rejected the saved sign-in (revoked or expired). Reconnect Slack (as you) in Plugins.",
+				`Slack rejected the saved sign-in (revoked or expired). Reconnect Slack as you under ${CONNECT_PATH}.`,
 			);
 		}
 		if (lastRenewal?.access === rejectedAccess) {
