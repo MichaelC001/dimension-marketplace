@@ -1,6 +1,6 @@
 // src/artifacts.ts
 import { realpath as realpath2 } from "node:fs/promises";
-import { resolve as resolve2 } from "node:path";
+import { resolve as resolve3 } from "node:path";
 
 // ../../../fraym/packages/driver/src/classify-file.ts
 var BINARY = { kind: "binary", mime: "application/octet-stream" };
@@ -231,10 +231,95 @@ function hasCode(error, ...codes) {
   return error instanceof Error && "code" in error && typeof error.code === "string" && codes.includes(error.code);
 }
 
+// src/library/workspace-root.ts
+import { readFileSync, statSync } from "node:fs";
+import { basename, dirname, join, relative, resolve } from "node:path";
+var SESSION_ORIGIN_FILE = "inso-session-origin";
+var MAX_HOPS = 4;
+var owners = /* @__PURE__ */ new Map();
+function workspaceRoot(cwd) {
+  const start = resolve(cwd);
+  const known = owners.get(start);
+  if (known !== void 0) return known;
+  let home = start;
+  for (let hops = MAX_HOPS; hops > 0; hops -= 1) {
+    const linked = linkedWorktreeOf(home);
+    if (linked === void 0) break;
+    const origin = readText(join(linked.gitDir, SESSION_ORIGIN_FILE))?.trim();
+    const mapsSubpath = !origin || sameFolder(origin, linked.mainCheckout);
+    home = mapsSubpath ? join(linked.mainCheckout, relative(linked.root, home)) : resolve(origin);
+  }
+  owners.set(start, home);
+  return home;
+}
+function linkedWorktreeOf(cwd) {
+  let dir = cwd;
+  for (; ; ) {
+    const dotGit = join(dir, ".git");
+    const entry = entryAt(dotGit);
+    if (entry === "directory") return void 0;
+    if (entry === "file") {
+      const linked = readLinkedWorktree(dir, dotGit);
+      if (linked !== "not-linked") return linked;
+    }
+    const parent = dirname(dir);
+    if (parent === dir) return void 0;
+    dir = parent;
+  }
+}
+function readLinkedWorktree(root, dotGit) {
+  const gitDirRef = /^gitdir:\s*(.+)$/m.exec(readText(dotGit) ?? "")?.[1]?.trim();
+  if (!gitDirRef) return "not-linked";
+  const gitDir = resolve(root, gitDirRef);
+  const commonRef = readText(join(gitDir, "commondir"))?.trim();
+  if (!commonRef) return "not-linked";
+  const commonDir = resolve(gitDir, commonRef);
+  const configured = coreWorktree(readText(join(commonDir, "config")));
+  const mainCheckout = configured ? resolve(commonDir, configured) : basename(commonDir) === ".git" ? dirname(commonDir) : void 0;
+  return mainCheckout ? { root, gitDir, mainCheckout } : void 0;
+}
+function entryAt(path) {
+  try {
+    const entry = statSync(path, { throwIfNoEntry: false });
+    return entry?.isDirectory() ? "directory" : entry ? "file" : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function coreWorktree(config) {
+  if (!config) return void 0;
+  let inCore = false;
+  for (const raw of config.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line.startsWith("[")) {
+      inCore = /^\[\s*core\s*\]/i.test(line);
+      continue;
+    }
+    if (!inCore) continue;
+    const value = /^worktree\s*=\s*(.*)$/i.exec(line)?.[1]?.trim();
+    if (value) return value.replace(/^"(.*)"$/, "$1");
+  }
+  return void 0;
+}
+function sameFolder(left, right) {
+  const fold = (path) => {
+    const slashed = resolve(path).replaceAll("\\", "/").replace(/\/+$/, "");
+    return process.platform === "win32" || process.platform === "darwin" ? slashed.toLowerCase() : slashed;
+  };
+  return fold(left) === fold(right);
+}
+function readText(file) {
+  try {
+    return readFileSync(file, "utf8");
+  } catch {
+    return void 0;
+  }
+}
+
 // src/present.ts
 import { constants } from "node:fs";
 import { open, realpath, stat } from "node:fs/promises";
-import { basename, resolve } from "node:path";
+import { basename as basename2, resolve as resolve2 } from "node:path";
 
 // ../../../packages/sdk/src/artifactory/artifactory-decl.ts
 var PACK_CONNECTION_REPORT_MAX_BYTES = 64 * 1024;
@@ -421,7 +506,7 @@ async function presentOne(requested, run2, thumbBudget) {
   if (typeof requested !== "string") return { refused: "it is not a path" };
   const textual = textRefusal2(requested, run2.platform);
   if (textual !== void 0) return { refused: textual };
-  const lexical = resolve(run2.cwd, requested);
+  const lexical = resolve2(run2.cwd, requested);
   const early = denyReason(lexical);
   if (early !== void 0) return { refused: early };
   let real;
@@ -453,7 +538,7 @@ async function presentOne(requested, run2, thumbBudget) {
     if (swapped !== void 0) return { refused: swapped };
     const head = Buffer.allocUnsafe(Math.min(HEAD_BYTES, opened.size));
     const { bytesRead } = await handle.read(head, 0, head.length, 0);
-    const fileName = basename(real);
+    const fileName = basename2(real);
     const { kind, mime } = classifyFile(fileName, head.subarray(0, bytesRead));
     run2.seen.add(real);
     const name = oneLine(fileName, MAX_ECHO);
@@ -569,7 +654,7 @@ async function locate(library, params, cwd) {
     return found2;
   }
   if (params.path === void 0) throw new LibraryError("pass id or path");
-  const lexical = resolve2(cwd, params.path);
+  const lexical = resolve3(cwd, params.path);
   const real = await realpath2(lexical).catch(() => lexical);
   const found = library.getByPath(real);
   if (found === void 0) throw new LibraryError(`${oneLine(params.path, MAX_PATH)} is not in the library`);
@@ -592,7 +677,7 @@ async function runArtifacts(library, params, context) {
       const page = library.query({
         ...query === void 0 || query === "" ? {} : { q: query, sort: "relevance" },
         ...params.kind === void 0 ? {} : { kinds: [params.kind] },
-        ...everywhere ? {} : { workspace: resolve2(cwd) },
+        ...everywhere ? {} : { workspace: workspaceRoot(cwd) },
         limit: Math.min(params.limit ?? DEFAULT_LIMIT, MAX_LIMIT)
       });
       if (page.items.length === 0) return everywhere ? "No artifacts found." : "No artifacts found in this workspace (workspace: all searches every workspace).";
@@ -605,9 +690,9 @@ async function runArtifacts(library, params, context) {
     case "stamp": {
       if (params.path === void 0) throw new LibraryError("stamp needs a path");
       const item = await library.stamp({
-        path: resolve2(cwd, params.path),
+        path: resolve3(cwd, params.path),
         source: "stamp",
-        workspace: resolve2(cwd),
+        workspace: workspaceRoot(cwd),
         ...context.sessionId === void 0 ? {} : { sessionId: context.sessionId },
         ...params.title === void 0 ? {} : { title: params.title },
         ...params.note === void 0 ? {} : { note: params.note },
@@ -685,9 +770,8 @@ function registerArtifactsTool(pi, library) {
 }
 
 // src/library/present-stamp.ts
-import { resolve as resolve3 } from "node:path";
 async function stampPresented(library, details, session) {
-  const workspace = resolve3(session.cwd);
+  const workspace = workspaceRoot(session.cwd);
   for (const item of details.presentation.items) {
     const image = item.thumb === void 0 ? void 0 : details.images?.[item.thumb];
     const thumbMime = image?.mimeType === "image/png" || image?.mimeType === "image/jpeg" ? image.mimeType : void 0;
@@ -711,9 +795,9 @@ async function stampPresented(library, details, session) {
 import { homedir } from "node:os";
 
 // src/library/library.ts
-import { constants as constants2, statSync } from "node:fs";
+import { constants as constants2, statSync as statSync2 } from "node:fs";
 import { chmod as chmod2, mkdir as mkdir2, open as open3, realpath as realpath3, stat as stat2 } from "node:fs/promises";
-import { basename as basename2, isAbsolute, join as join2, resolve as resolve5 } from "node:path";
+import { basename as basename3, isAbsolute, join as join3, resolve as resolve5 } from "node:path";
 
 // src/library/cursor.ts
 function encodeCursor(position) {
@@ -1142,6 +1226,23 @@ function prepareDatabase(db, now) {
   } finally {
     purge.finalize();
   }
+  rehomeWorkspaces(db);
+}
+function rehomeWorkspaces(db) {
+  const distinct = db.prepare("SELECT DISTINCT workspace FROM artifacts WHERE workspace IS NOT NULL");
+  let moves;
+  try {
+    moves = distinct.all().map(({ workspace }) => [workspace, workspaceRoot(workspace)]).filter(([from, to]) => from !== to);
+  } finally {
+    distinct.finalize();
+  }
+  if (moves.length === 0) return;
+  const update = db.prepare("UPDATE artifacts SET workspace = ? WHERE workspace = ?");
+  try {
+    for (const [from, to] of moves) update.run(to, from);
+  } finally {
+    update.finalize();
+  }
 }
 
 // src/library/trash.ts
@@ -1207,7 +1308,7 @@ async function moveToTrash(path, platform = process.platform) {
 // src/library/thumbs.ts
 import { randomBytes } from "node:crypto";
 import { mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join as join2 } from "node:path";
 var EXTENSIONS = { "image/webp": "webp", "image/png": "png", "image/jpeg": "jpg" };
 var THUMB_FILE_NAME = /^[A-Za-z0-9]{8,40}\.(webp|png|jpg)$/;
 function matchesMime(bytes, mime) {
@@ -1222,10 +1323,10 @@ async function writeThumb(directory, id, bytes, mime) {
   if (!matchesMime(bytes, mime)) throw new LibraryError(`the thumbnail bytes are not ${mime}`);
   await mkdir(directory, { recursive: true });
   const name = `${id}.${EXTENSIONS[mime]}`;
-  const staging = join(directory, `${name}.${randomBytes(6).toString("hex")}.tmp`);
+  const staging = join2(directory, `${name}.${randomBytes(6).toString("hex")}.tmp`);
   try {
     await writeFile(staging, bytes);
-    await rename(staging, join(directory, name));
+    await rename(staging, join2(directory, name));
   } catch (error) {
     await rm(staging, { force: true });
     throw error;
@@ -1242,7 +1343,7 @@ async function removeThumbs(directory, id, keep) {
     throw error;
   }
   const own = entries.filter((entry) => entry !== keep && entry.startsWith(`${id}.`));
-  await Promise.all(own.map((entry) => rm(join(directory, entry), { force: true })));
+  await Promise.all(own.map((entry) => rm(join2(directory, entry), { force: true })));
 }
 
 // src/library/library.ts
@@ -1342,11 +1443,11 @@ async function createLibrary(options) {
   const platform = options.platform ?? process.platform;
   const revokeRemote2 = options.revokeRemote ?? revokeRemote;
   const trashFile = options.trash ?? ((path) => moveToTrash(path, platform));
-  const directory = join2(options.home, "artifacts");
-  const thumbsDirectory = join2(directory, "thumbs");
+  const directory = join3(options.home, "artifacts");
+  const thumbsDirectory = join3(directory, "thumbs");
   await mkdir2(thumbsDirectory, { recursive: true, mode: PRIVATE_DIRECTORY_MODE });
   if (process.platform !== "win32") await chmod2(directory, PRIVATE_DIRECTORY_MODE);
-  const databaseFile = join2(directory, "library.db");
+  const databaseFile = join3(directory, "library.db");
   const db = await openDriver(databaseFile);
   try {
     prepareDatabase(db, now());
@@ -1510,7 +1611,7 @@ async function createLibrary(options) {
       if (!opened.isFile()) throw refuse("it is not a regular file");
       const head = Buffer.allocUnsafe(Math.min(HEAD_BYTES2, opened.size));
       const { bytesRead } = await handle.read(head, 0, head.length, 0);
-      const { kind, mime } = classifyFile(basename2(real), head.subarray(0, bytesRead));
+      const { kind, mime } = classifyFile(basename3(real), head.subarray(0, bytesRead));
       facts = { kind, mime, size: opened.size, mtimeMs: opened.mtimeMs };
     } finally {
       await handle.close();
@@ -1524,7 +1625,7 @@ async function createLibrary(options) {
       newId(moment),
       real,
       key,
-      basename2(real),
+      basename3(real),
       title,
       note,
       tags === void 0 ? null : JSON.stringify(tags),
@@ -1713,7 +1814,7 @@ async function createLibrary(options) {
   function restore(id) {
     const row = requireRow(id);
     if (row.state !== "discarded") return itemOf(row);
-    const present = statSync(row.path, { throwIfNoEntry: false })?.isFile() === true;
+    const present = statSync2(row.path, { throwIfNoEntry: false })?.isFile() === true;
     sql("UPDATE artifacts SET state = ?, discarded_at = NULL WHERE id = ?").run(present ? "live" : "missing", id);
     return itemOf(requireRow(id));
   }
@@ -1783,7 +1884,7 @@ async function createLibrary(options) {
     setThumb,
     thumbPath(id) {
       const name = sql("SELECT thumb FROM artifacts WHERE id = ? AND state != 'discarded'").get(id)?.thumb;
-      return name !== null && name !== void 0 && THUMB_FILE_NAME.test(name) ? join2(thumbsDirectory, name) : void 0;
+      return name !== null && name !== void 0 && THUMB_FILE_NAME.test(name) ? join3(thumbsDirectory, name) : void 0;
     },
     isLent(realPath) {
       return sql("SELECT 1 AS lent FROM artifacts WHERE path_key = ? AND state != 'discarded'").get(pathKey(realPath, platform)) !== void 0;

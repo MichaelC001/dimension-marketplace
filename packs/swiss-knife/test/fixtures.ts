@@ -1,10 +1,12 @@
 // Shared fixtures for the swiss-knife tests: temp dirs, synthetic images, and the
 // fake `pi` the extension factory is loaded with. Not a test file.
 
-import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 import { deflateSync } from "node:zlib";
 import * as zod from "@oh-my-pi/omptype/zod";
 import type { PresentedItem } from "@dimension/sdk/presentation";
@@ -237,4 +239,43 @@ export async function loadTools(entry: string, deps?: ExtensionDeps): Promise<{ 
 	const raw: unknown[] = [];
 	factory({ zod, registerTool: definition => raw.push(definition) }, deps);
 	return { tools: raw.filter(isRegisteredTool), raw };
+}
+
+const GIT_FLAGS = ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false", "-c", "protocol.file.allow=always"];
+const execFileAsync = promisify(execFile);
+
+function isolatedGitEnv(): NodeJS.ProcessEnv {
+	const env: NodeJS.ProcessEnv = {};
+	for (const [key, value] of Object.entries(process.env)) {
+		if (!/^GIT_/i.test(key)) env[key] = value;
+	}
+	return { ...env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+}
+
+export async function git(cwd: string, ...args: string[]): Promise<string> {
+	const { stdout } = await execFileAsync("git", [...GIT_FLAGS, ...args], { cwd, env: isolatedGitEnv() });
+	return stdout.trim();
+}
+
+export async function initRepo(dir: string, files: Readonly<Record<string, string | Uint8Array>>): Promise<string> {
+	await mkdir(dir, { recursive: true });
+	await git(dir, "init", "-q", "-b", "main");
+	for (const [name, content] of Object.entries(files)) {
+		const file = join(dir, name);
+		await mkdir(dirname(file), { recursive: true });
+		await writeFile(file, content);
+	}
+	await git(dir, "add", "-A");
+	await git(dir, "commit", "-q", "--allow-empty", "-m", "seed");
+	return dir;
+}
+
+export async function addWorktree(repo: string, dir: string): Promise<string> {
+	await mkdir(dirname(dir), { recursive: true });
+	await git(repo, "worktree", "add", "-q", "--detach", dir);
+	return dir;
+}
+
+export async function worktreeGitDir(worktree: string): Promise<string> {
+	return resolve(await git(worktree, "rev-parse", "--absolute-git-dir"));
 }
