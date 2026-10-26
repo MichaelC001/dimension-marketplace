@@ -359,7 +359,6 @@ interface Entry {
 	pending: number;
 	/** Cells holding it right now (the code seam's `hold`). While any does, an agent is acting on it. */
 	cells: number;
-	/** A throwaway's idle timer, or its close retry (never set for a saved profile or the relay, nor for one a person opened). */
 	idle: NodeJS.Timeout | undefined;
 	/** Set once the runtime began closing it for being idle or to make room; cleared again if that close failed. */
 	retiring: Promise<void> | undefined;
@@ -799,7 +798,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		entry.idle = setTimeout(() => {
 			void this.serialize(entry, () => this.teardown(entry), { evenIfClosed: true })
 				.then(() => Promise.allSettled(this.removals))
-				.catch((error: unknown) => console.error("A throwaway browser still would not close:", describe(error)));
+				.catch((error: unknown) => console.error("A browser still would not close:", describe(error)));
 		}, Math.min(this.idleMs, CLOSE_RETRY_MS));
 		entry.idle.unref();
 	}

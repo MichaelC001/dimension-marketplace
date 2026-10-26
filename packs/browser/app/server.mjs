@@ -14379,7 +14379,7 @@ var BrowserRuntime = class {
     if (this.disposed) return;
     clearTimeout(entry.idle);
     entry.idle = setTimeout(() => {
-      void this.serialize(entry, () => this.teardown(entry), { evenIfClosed: true }).then(() => Promise.allSettled(this.removals)).catch((error) => console.error("A throwaway browser still would not close:", describe3(error)));
+      void this.serialize(entry, () => this.teardown(entry), { evenIfClosed: true }).then(() => Promise.allSettled(this.removals)).catch((error) => console.error("A browser still would not close:", describe3(error)));
     }, Math.min(this.idleMs, CLOSE_RETRY_MS));
     entry.idle.unref();
   }
