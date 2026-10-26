@@ -749,7 +749,6 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		return closed;
 	}
 
-	/** Retain ownership and the lock until the driver confirms shutdown. */
 	private async teardown(entry: Entry): Promise<void> {
 		if (this.byId.get(entry.browserId) !== entry) return;
 		settleOnClose(entry);
@@ -1361,11 +1360,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	async endProfileSession(sessionId: string): Promise<void> {
 		for (const entry of [...this.byId.values()]) {
 			if (entry.worker && entry.taskSession === sessionId) await this.stopTask(entry);
-			const wasHolding = [...entry.openers.values()].some((opener) => opener.session === sessionId);
-			for (const key of [...entry.openers.keys()]) if (entry.openers.get(key)?.session === sessionId) entry.openers.delete(key);
-			for (const [tabId, owner] of [...entry.tabOwners]) if (owner === sessionId) entry.tabOwners.delete(tabId);
-			entry.tabActive.delete(sessionId);
-			if (wasHolding && entry.openers.size === 0) this.watchUnheld(entry);
+			if (releaseSessionHolds(entry, sessionId) && entry.openers.size === 0) this.watchUnheld(entry);
 		}
 	}
 
@@ -2875,6 +2870,18 @@ function timerMs(name: string, value: number | undefined, fallback: number): num
 
 function isSavedProfile(entry: Entry): boolean {
 	return entry.profile !== null && entry.profile !== RELAY_PROFILE;
+}
+
+function releaseSessionHolds(entry: Entry, sessionId: string): boolean {
+	let wasHolding = false;
+	for (const [key, opener] of [...entry.openers]) {
+		if (opener.session !== sessionId) continue;
+		entry.openers.delete(key);
+		wasHolding = true;
+	}
+	for (const [tabId, owner] of [...entry.tabOwners]) if (owner === sessionId) entry.tabOwners.delete(tabId);
+	entry.tabActive.delete(sessionId);
+	return wasHolding;
 }
 
 /** The person's wheel: only the View's own input drives a browser they took over. Refused as `human_driving`. */
