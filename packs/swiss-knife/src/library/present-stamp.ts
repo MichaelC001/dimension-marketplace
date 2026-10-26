@@ -1,4 +1,3 @@
-import { resolve } from "node:path";
 import type { PresentDetails } from "../present";
 import { errorMessage } from "./errors";
 import type { Library } from "./types";
@@ -9,7 +8,7 @@ export interface PresentSession {
 }
 
 export async function stampPresented(library: Library, details: PresentDetails, session: PresentSession): Promise<void> {
-	const workspace = resolve(session.cwd);
+	const workspace = library.workspaceOf(session.cwd);
 	for (const item of details.presentation.items) {
 		const image = item.thumb === undefined ? undefined : details.images?.[item.thumb];
 		const thumbMime = image?.mimeType === "image/png" || image?.mimeType === "image/jpeg" ? image.mimeType : undefined;

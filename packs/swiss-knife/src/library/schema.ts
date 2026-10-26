@@ -1,7 +1,8 @@
 import type { SqlDriver } from "./driver";
 import { LibraryError } from "./errors";
+import type { WorkspaceResolver } from "./workspace-root";
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 export const DISCARDED_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 const CONNECTION = `
@@ -74,11 +75,15 @@ CREATE INDEX comments_share ON comments(share_id, created_at);
 CREATE INDEX comments_unread ON comments(share_id) WHERE read_at IS NULL;
 `;
 
-const MIGRATIONS: Readonly<Record<number, string>> = {
-	1: `
+type Migration = (db: SqlDriver, workspaceOf: WorkspaceResolver) => void;
+
+const MIGRATIONS: Readonly<Record<number, Migration>> = {
+	1: db =>
+		db.exec(`
 ALTER TABLE shares ADD COLUMN version_at INTEGER NOT NULL DEFAULT 0;
 UPDATE shares SET version_at = created_at;
-`,
+`),
+	2: rehomeWorkspaces,
 };
 
 interface VersionRow {
@@ -94,7 +99,7 @@ function readVersion(db: SqlDriver): number {
 	}
 }
 
-function upgrade(db: SqlDriver): void {
+function upgrade(db: SqlDriver, workspaceOf: WorkspaceResolver): void {
 	const version = readVersion(db);
 	if (version === 0) {
 		db.exec(SCHEMA);
@@ -102,18 +107,18 @@ function upgrade(db: SqlDriver): void {
 		for (let step = version; step < SCHEMA_VERSION; step++) {
 			const migration = MIGRATIONS[step];
 			if (migration === undefined) throw new LibraryError(`library.db is schema version ${version} and has no upgrade path to ${SCHEMA_VERSION}.`);
-			db.exec(migration);
+			migration(db, workspaceOf);
 		}
 	}
 	db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
 }
 
-export function prepareDatabase(db: SqlDriver, now: number): void {
+export function prepareDatabase(db: SqlDriver, now: number, workspaceOf: WorkspaceResolver): void {
 	db.exec(CONNECTION);
 	if (readVersion(db) < SCHEMA_VERSION) {
 		db.exec("BEGIN IMMEDIATE");
 		try {
-			if (readVersion(db) < SCHEMA_VERSION) upgrade(db);
+			if (readVersion(db) < SCHEMA_VERSION) upgrade(db, workspaceOf);
 			db.exec("COMMIT");
 		} catch (error) {
 			db.exec("ROLLBACK");
@@ -129,5 +134,25 @@ export function prepareDatabase(db: SqlDriver, now: number): void {
 		purge.run(now - DISCARDED_RETENTION_MS);
 	} finally {
 		purge.finalize();
+	}
+}
+
+function rehomeWorkspaces(db: SqlDriver, workspaceOf: WorkspaceResolver): void {
+	const distinct = db.prepare("SELECT DISTINCT workspace FROM artifacts WHERE workspace IS NOT NULL");
+	let moves: [from: string, to: string][];
+	try {
+		moves = distinct
+			.all<{ readonly workspace: string }>()
+			.map(({ workspace }): [string, string] => [workspace, workspaceOf(workspace)])
+			.filter(([from, to]) => from !== to);
+	} finally {
+		distinct.finalize();
+	}
+	if (moves.length === 0) return;
+	const update = db.prepare("UPDATE artifacts SET workspace = ? WHERE workspace = ?");
+	try {
+		for (const [from, to] of moves) update.run(to, from);
+	} finally {
+		update.finalize();
 	}
 }

@@ -160,6 +160,7 @@ export interface LibraryComments {
 
 export interface Library {
 	readonly home: string;
+	workspaceOf(cwd: string): string;
 	query(query: LibraryQuery): LibraryPage;
 	facets(scope: { readonly workspace?: string; readonly state?: "live" | "discarded" }): LibraryFacets;
 	get(id: ArtifactId): LibraryItem | undefined;

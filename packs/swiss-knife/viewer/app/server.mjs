@@ -18076,7 +18076,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve3.call(this, root, ref);
+      let _sch = resolve4.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a3 = root.localRefs) === null || _a3 === void 0 ? void 0 : _a3[ref];
         const { schemaId } = this.opts;
@@ -18103,7 +18103,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve3(root, ref) {
+    function resolve4(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -18734,55 +18734,55 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve3(baseURI, relativeURI, options2) {
+    function resolve4(baseURI, relativeURI, options2) {
       const schemelessOptions = options2 ? Object.assign({ scheme: "null" }, options2) : { scheme: "null" };
       const resolved = resolveComponent(parse3(baseURI, schemelessOptions), parse3(relativeURI, schemelessOptions), schemelessOptions, true);
       schemelessOptions.skipEscape = true;
       return serialize(resolved, schemelessOptions);
     }
-    function resolveComponent(base, relative, options2, skipNormalization) {
+    function resolveComponent(base, relative2, options2, skipNormalization) {
       const target = {};
       if (!skipNormalization) {
         base = parse3(serialize(base, options2), options2);
-        relative = parse3(serialize(relative, options2), options2);
+        relative2 = parse3(serialize(relative2, options2), options2);
       }
       options2 = options2 || {};
-      if (!options2.tolerant && relative.scheme) {
-        target.scheme = relative.scheme;
-        target.userinfo = relative.userinfo;
-        target.host = relative.host;
-        target.port = relative.port;
-        target.path = removeDotSegments(relative.path || "");
-        target.query = relative.query;
+      if (!options2.tolerant && relative2.scheme) {
+        target.scheme = relative2.scheme;
+        target.userinfo = relative2.userinfo;
+        target.host = relative2.host;
+        target.port = relative2.port;
+        target.path = removeDotSegments(relative2.path || "");
+        target.query = relative2.query;
       } else {
-        if (relative.userinfo !== void 0 || relative.host !== void 0 || relative.port !== void 0) {
-          target.userinfo = relative.userinfo;
-          target.host = relative.host;
-          target.port = relative.port;
-          target.path = removeDotSegments(relative.path || "");
-          target.query = relative.query;
+        if (relative2.userinfo !== void 0 || relative2.host !== void 0 || relative2.port !== void 0) {
+          target.userinfo = relative2.userinfo;
+          target.host = relative2.host;
+          target.port = relative2.port;
+          target.path = removeDotSegments(relative2.path || "");
+          target.query = relative2.query;
         } else {
-          if (!relative.path) {
+          if (!relative2.path) {
             target.path = base.path;
-            if (relative.query !== void 0) {
-              target.query = relative.query;
+            if (relative2.query !== void 0) {
+              target.query = relative2.query;
             } else {
               target.query = base.query;
             }
           } else {
-            if (relative.path[0] === "/") {
-              target.path = removeDotSegments(relative.path);
+            if (relative2.path[0] === "/") {
+              target.path = removeDotSegments(relative2.path);
             } else {
               if ((base.userinfo !== void 0 || base.host !== void 0 || base.port !== void 0) && !base.path) {
-                target.path = "/" + relative.path;
+                target.path = "/" + relative2.path;
               } else if (!base.path) {
-                target.path = relative.path;
+                target.path = relative2.path;
               } else {
-                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative.path;
+                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative2.path;
               }
               target.path = removeDotSegments(target.path);
             }
-            target.query = relative.query;
+            target.query = relative2.query;
           }
           target.userinfo = base.userinfo;
           target.host = base.host;
@@ -18790,7 +18790,7 @@ var require_fast_uri = __commonJS({
         }
         target.scheme = base.scheme;
       }
-      target.fragment = relative.fragment;
+      target.fragment = relative2.fragment;
       return target;
     }
     function equal(uriA, uriB, options2) {
@@ -18998,7 +18998,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve: resolve3,
+      resolve: resolve4,
       resolveComponent,
       equal,
       serialize,
@@ -23598,12 +23598,12 @@ var StdioServerTransport = class {
     this.onclose?.();
   }
   send(message) {
-    return new Promise((resolve3) => {
+    return new Promise((resolve4) => {
       const json2 = serializeMessage(message);
       if (this._stdout.write(json2)) {
-        resolve3();
+        resolve4();
       } else {
-        this._stdout.once("drain", resolve3);
+        this._stdout.once("drain", resolve4);
       }
     });
   }
@@ -23612,7 +23612,7 @@ var StdioServerTransport = class {
 // src/server.ts
 import { readdir as readdir3, readFile as readFile4 } from "node:fs/promises";
 import { homedir } from "node:os";
-import { extname as extname2, join as join5 } from "node:path";
+import { extname as extname2, join as join6 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // ../../../../node_modules/zod/v3/helpers/util.js
@@ -29525,7 +29525,7 @@ var Protocol = class {
           return;
         }
         const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-        await new Promise((resolve3) => setTimeout(resolve3, pollInterval));
+        await new Promise((resolve4) => setTimeout(resolve4, pollInterval));
         options2?.signal?.throwIfAborted();
       }
     } catch (error51) {
@@ -29542,7 +29542,7 @@ var Protocol = class {
    */
   request(request, resultSchema, options2) {
     const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options2 ?? {};
-    return new Promise((resolve3, reject) => {
+    return new Promise((resolve4, reject) => {
       const earlyReject = (error51) => {
         reject(error51);
       };
@@ -29620,7 +29620,7 @@ var Protocol = class {
           if (!parseResult.success) {
             reject(parseResult.error);
           } else {
-            resolve3(parseResult.data);
+            resolve4(parseResult.data);
           }
         } catch (error51) {
           reject(error51);
@@ -29881,12 +29881,12 @@ var Protocol = class {
       }
     } catch {
     }
-    return new Promise((resolve3, reject) => {
+    return new Promise((resolve4, reject) => {
       if (signal.aborted) {
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
         return;
       }
-      const timeoutId = setTimeout(resolve3, interval);
+      const timeoutId = setTimeout(resolve4, interval);
       signal.addEventListener("abort", () => {
         clearTimeout(timeoutId);
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -31085,7 +31085,7 @@ var McpServer = class {
     let task = createTaskResult.task;
     const pollInterval = task.pollInterval ?? 5e3;
     while (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled") {
-      await new Promise((resolve3) => setTimeout(resolve3, pollInterval));
+      await new Promise((resolve4) => setTimeout(resolve4, pollInterval));
       const updatedTask = await extra.taskStore.getTask(taskId);
       if (!updatedTask) {
         throw new McpError(ErrorCode.InternalError, `Task ${taskId} not found during polling`);
@@ -31665,9 +31665,9 @@ function hasCode(error51, ...codes) {
 }
 
 // ../src/library/library.ts
-import { constants, statSync } from "node:fs";
+import { constants, statSync as statSync2 } from "node:fs";
 import { chmod as chmod2, mkdir as mkdir2, open as open2, realpath, stat } from "node:fs/promises";
-import { basename as basename2, isAbsolute, join as join2, resolve as resolve2 } from "node:path";
+import { basename as basename3, isAbsolute, join as join3, resolve as resolve3 } from "node:path";
 
 // ../../../../fraym/packages/driver/src/classify-file.ts
 var BINARY = { kind: "binary", mime: "application/octet-stream" };
@@ -31891,8 +31891,8 @@ function configuredRoots(env, home, platform) {
 }
 function insideRoot(target, root, platform) {
   const api = pathApi(platform);
-  const relative = api.relative(comparable(root, platform), comparable(target, platform));
-  return relative === "" || relative !== ".." && !relative.startsWith(`..${api.sep}`) && !api.isAbsolute(relative);
+  const relative2 = api.relative(comparable(root, platform), comparable(target, platform));
+  return relative2 === "" || relative2 !== ".." && !relative2.startsWith(`..${api.sep}`) && !api.isAbsolute(relative2);
 }
 var SECRET_DIRECTORIES = {
   ".ssh": true,
@@ -32068,8 +32068,8 @@ function createFence(options2) {
     } catch (error51) {
       const code = error51 instanceof Error && "code" in error51 && typeof error51.code === "string" ? error51.code : void 0;
       const anchor = await nearestReal(lexical);
-      const within = lent.some((file2) => comparable(file2, platform) === comparable(lexical, platform)) || options2.indexed?.isLent(lexical) === true || anchor !== void 0 && [...roots, ...await realRoots()].some((root) => insideRoot(anchor, root, platform));
-      if (!within) return refuseOutside(requested, `it does not resolve (${code ?? "unknown error"})`);
+      const within2 = lent.some((file2) => comparable(file2, platform) === comparable(lexical, platform)) || options2.indexed?.isLent(lexical) === true || anchor !== void 0 && [...roots, ...await realRoots()].some((root) => insideRoot(anchor, root, platform));
+      if (!within2) return refuseOutside(requested, `it does not resolve (${code ?? "unknown error"})`);
       if (code === "ENOENT" || code === "ENOTDIR") return refuse(`no such file: "${requested}"`);
       if (code === "EACCES" || code === "EPERM") return refuse(`"${requested}" cannot be read: permission denied`);
       return refuse(`"${requested}" cannot be resolved${code ? ` (${code})` : ""}`);
@@ -32693,7 +32693,7 @@ function commentFromRecord(record2) {
 }
 
 // ../src/library/schema.ts
-var SCHEMA_VERSION = 2;
+var SCHEMA_VERSION = 3;
 var DISCARDED_RETENTION_MS = 30 * 24 * 60 * 60 * 1e3;
 var CONNECTION = `
 PRAGMA busy_timeout = 2000;
@@ -32764,10 +32764,11 @@ CREATE INDEX comments_share ON comments(share_id, created_at);
 CREATE INDEX comments_unread ON comments(share_id) WHERE read_at IS NULL;
 `;
 var MIGRATIONS = {
-  1: `
+  1: (db) => db.exec(`
 ALTER TABLE shares ADD COLUMN version_at INTEGER NOT NULL DEFAULT 0;
 UPDATE shares SET version_at = created_at;
-`
+`),
+  2: rehomeWorkspaces
 };
 function readVersion(db) {
   const statement = db.prepare("PRAGMA user_version");
@@ -32777,7 +32778,7 @@ function readVersion(db) {
     statement.finalize();
   }
 }
-function upgrade(db) {
+function upgrade(db, workspaceOf) {
   const version2 = readVersion(db);
   if (version2 === 0) {
     db.exec(SCHEMA);
@@ -32785,17 +32786,17 @@ function upgrade(db) {
     for (let step = version2; step < SCHEMA_VERSION; step++) {
       const migration = MIGRATIONS[step];
       if (migration === void 0) throw new LibraryError(`library.db is schema version ${version2} and has no upgrade path to ${SCHEMA_VERSION}.`);
-      db.exec(migration);
+      migration(db, workspaceOf);
     }
   }
   db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
 }
-function prepareDatabase(db, now) {
+function prepareDatabase(db, now, workspaceOf) {
   db.exec(CONNECTION);
   if (readVersion(db) < SCHEMA_VERSION) {
     db.exec("BEGIN IMMEDIATE");
     try {
-      if (readVersion(db) < SCHEMA_VERSION) upgrade(db);
+      if (readVersion(db) < SCHEMA_VERSION) upgrade(db, workspaceOf);
       db.exec("COMMIT");
     } catch (error51) {
       db.exec("ROLLBACK");
@@ -32811,6 +32812,22 @@ function prepareDatabase(db, now) {
     purge.run(now - DISCARDED_RETENTION_MS);
   } finally {
     purge.finalize();
+  }
+}
+function rehomeWorkspaces(db, workspaceOf) {
+  const distinct = db.prepare("SELECT DISTINCT workspace FROM artifacts WHERE workspace IS NOT NULL");
+  let moves;
+  try {
+    moves = distinct.all().map(({ workspace }) => [workspace, workspaceOf(workspace)]).filter(([from, to]) => from !== to);
+  } finally {
+    distinct.finalize();
+  }
+  if (moves.length === 0) return;
+  const update = db.prepare("UPDATE artifacts SET workspace = ? WHERE workspace = ?");
+  try {
+    for (const [from, to] of moves) update.run(to, from);
+  } finally {
+    update.finalize();
   }
 }
 
@@ -32932,6 +32949,171 @@ async function removeThumbs(directory, id2, keep) {
   await Promise.all(own.map((entry) => rm(join(directory, entry), { force: true })));
 }
 
+// ../src/library/workspace-root.ts
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { basename as basename2, dirname as dirname2, join as join2, relative, resolve as resolve2 } from "node:path";
+var SESSION_ORIGIN_FILE = "inso-session-origin";
+var MAX_HOPS = 4;
+var RELOAD_MIN_MS = 5e3;
+var ProjectsFile = external_exports.object({ projects: external_exports.array(external_exports.object({ path: external_exports.string().trim().min(1) }).loose()) }).loose();
+var OwnersFile = external_exports.object({
+  owners: external_exports.record(external_exports.string(), external_exports.object({ root: external_exports.string().min(1), origin: external_exports.string().min(1), mapsSubpaths: external_exports.boolean().optional() }).loose())
+}).loose();
+function createWorkspaceResolver(options2) {
+  const projectsFile = options2.projectsFile ?? join2(options2.home, "projects.json");
+  const ledgerFile = join2(options2.home, "worktree-owners.json");
+  const now = options2.now ?? Date.now;
+  const placed = /* @__PURE__ */ new Map();
+  let roots = [];
+  let owners = /* @__PURE__ */ new Map();
+  let stamps;
+  let checkedAt = Number.NEGATIVE_INFINITY;
+  function refresh() {
+    const moment = now();
+    if (moment - checkedAt < RELOAD_MIN_MS) return;
+    checkedAt = moment;
+    const next = `${fileStamp(projectsFile)}|${fileStamp(ledgerFile)}`;
+    if (next === stamps) return;
+    stamps = next;
+    roots = readRoots(projectsFile);
+    owners = readOwners(ledgerFile);
+    placed.clear();
+  }
+  return (cwd) => {
+    refresh();
+    const start = resolve2(cwd);
+    const known = placed.get(start);
+    if (known !== void 0) return known;
+    const chain = ownershipChain(start, owners);
+    let claimed;
+    for (const { at, worktree } of chain) {
+      claimed = roots.find(({ base }) => within(at, base) && (worktree === void 0 || within(base, worktree)))?.path;
+      if (claimed !== void 0) break;
+    }
+    const answer2 = claimed ?? chain[chain.length - 1]?.path ?? start;
+    placed.set(start, answer2);
+    return answer2;
+  };
+}
+function ownershipChain(start, owners) {
+  const chain = [];
+  let home = start;
+  for (let hops = MAX_HOPS; hops > 0; hops -= 1) {
+    const linked = linkedWorktreeOf(home);
+    if (linked === void 0) {
+      const gone = recordedOwnerOf(owners, home);
+      if (gone === void 0 || existsSync(gone.root)) break;
+      chain.push({ path: home, at: comparable2(home), worktree: comparable2(gone.root) });
+      home = gone.mapsSubpaths ? join2(gone.origin, relative(gone.root, home)) : resolve2(gone.origin);
+      continue;
+    }
+    chain.push({ path: home, at: comparable2(home), worktree: comparable2(linked.root) });
+    const origin = readText(join2(linked.gitDir, SESSION_ORIGIN_FILE))?.trim();
+    const mapsSubpaths = !origin || comparable2(origin) === comparable2(linked.mainCheckout);
+    home = mapsSubpaths ? join2(linked.mainCheckout, relative(linked.root, home)) : resolve2(origin);
+  }
+  chain.push({ path: home, at: comparable2(home) });
+  return chain;
+}
+function recordedOwnerOf(owners, cwd) {
+  let at = comparable2(cwd);
+  for (; ; ) {
+    const hit = owners.get(at);
+    if (hit !== void 0) return hit;
+    const cut = at.lastIndexOf("/");
+    if (cut <= 0 || /^[a-z]:$/i.test(at.slice(0, cut))) return void 0;
+    at = at.slice(0, cut);
+  }
+}
+function linkedWorktreeOf(cwd) {
+  let dir = cwd;
+  for (; ; ) {
+    const dotGit = join2(dir, ".git");
+    const entry = entryAt(dotGit);
+    if (entry === "directory") return void 0;
+    if (entry === "file") {
+      const linked = readLinkedWorktree(dir, dotGit);
+      if (linked !== "not-linked") return linked;
+    }
+    const parent = dirname2(dir);
+    if (parent === dir) return void 0;
+    dir = parent;
+  }
+}
+function readLinkedWorktree(root, dotGit) {
+  const gitDirRef = /^gitdir:\s*(.+)$/m.exec(readText(dotGit) ?? "")?.[1]?.trim();
+  if (!gitDirRef) return "not-linked";
+  const gitDir = resolve2(root, gitDirRef);
+  const commonRef = readText(join2(gitDir, "commondir"))?.trim();
+  if (!commonRef) return "not-linked";
+  const commonDir = resolve2(gitDir, commonRef);
+  const configured = coreWorktree(readText(join2(commonDir, "config")));
+  const mainCheckout = configured ? resolve2(commonDir, configured) : basename2(commonDir) === ".git" ? dirname2(commonDir) : void 0;
+  return mainCheckout ? { root, gitDir, mainCheckout } : void 0;
+}
+function coreWorktree(config2) {
+  if (!config2) return void 0;
+  let inCore = false;
+  for (const raw of config2.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line.startsWith("[")) {
+      inCore = /^\[\s*core\s*\]/i.test(line);
+      continue;
+    }
+    if (!inCore) continue;
+    const value = /^worktree\s*=\s*(.*)$/i.exec(line)?.[1]?.trim();
+    if (value) return value.replace(/^"(.*)"$/, "$1");
+  }
+  return void 0;
+}
+function readRoots(file2) {
+  const parsed = ProjectsFile.safeParse(readJson(file2));
+  if (!parsed.success) return [];
+  return parsed.data.projects.map(({ path: path2 }) => ({ path: resolve2(path2), base: comparable2(path2) })).sort((left, right) => right.base.length - left.base.length);
+}
+function readOwners(file2) {
+  const parsed = OwnersFile.safeParse(readJson(file2));
+  if (!parsed.success) return /* @__PURE__ */ new Map();
+  return new Map(Object.entries(parsed.data.owners).map(([key, { root, origin, mapsSubpaths }]) => [key, { root, origin, mapsSubpaths: mapsSubpaths === true }]));
+}
+function comparable2(value) {
+  const flat = resolve2(value).replaceAll("\\", "/").replace(/\/+$/, "");
+  return process.platform === "win32" || process.platform === "darwin" ? flat.toLowerCase() : flat;
+}
+function within(inner, outer) {
+  return inner === outer || inner.startsWith(`${outer}/`);
+}
+function entryAt(path2) {
+  try {
+    const entry = statSync(path2, { throwIfNoEntry: false });
+    return entry?.isDirectory() ? "directory" : entry ? "file" : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function fileStamp(file2) {
+  try {
+    const stat5 = statSync(file2);
+    return `${stat5.mtimeMs}:${stat5.size}`;
+  } catch {
+    return "";
+  }
+}
+function readJson(file2) {
+  try {
+    return JSON.parse(readFileSync(file2, "utf8"));
+  } catch {
+    return void 0;
+  }
+}
+function readText(file2) {
+  try {
+    return readFileSync(file2, "utf8");
+  } catch {
+    return void 0;
+  }
+}
+
 // ../src/library/library.ts
 var HEAD_BYTES = 512;
 var CHECK_BATCH = 32;
@@ -33029,14 +33211,15 @@ async function createLibrary(options2) {
   const platform = options2.platform ?? process.platform;
   const revokeRemote2 = options2.revokeRemote ?? revokeRemote;
   const trashFile = options2.trash ?? ((path2) => moveToTrash(path2, platform));
-  const directory = join2(options2.home, "artifacts");
-  const thumbsDirectory = join2(directory, "thumbs");
+  const directory = join3(options2.home, "artifacts");
+  const thumbsDirectory = join3(directory, "thumbs");
   await mkdir2(thumbsDirectory, { recursive: true, mode: PRIVATE_DIRECTORY_MODE });
   if (process.platform !== "win32") await chmod2(directory, PRIVATE_DIRECTORY_MODE);
-  const databaseFile = join2(directory, "library.db");
+  const databaseFile = join3(directory, "library.db");
+  const workspaceOf = createWorkspaceResolver({ home: options2.home, ...options2.projectsFile === void 0 ? {} : { projectsFile: options2.projectsFile } });
   const db = await openDriver(databaseFile);
   try {
-    prepareDatabase(db, now());
+    prepareDatabase(db, now(), workspaceOf);
     await restrictDatabaseFiles(databaseFile);
   } catch (error51) {
     db.close();
@@ -33179,11 +33362,11 @@ async function createLibrary(options2) {
     if (!isAbsolute(requested)) throw refuse2(`"${requested}" is not an absolute path`);
     const spelling = textRefusal(requested, platform, "presentable");
     if (spelling !== void 0) throw refuse2(spelling);
-    const early = denyReason(resolve2(requested));
+    const early = denyReason(resolve3(requested));
     if (early !== void 0) throw refuse2(early);
     let real;
     try {
-      real = await realpath(resolve2(requested));
+      real = await realpath(resolve3(requested));
     } catch (error51) {
       throw refuse2(hasCode(error51, "ENOENT", "ENOTDIR") ? `no such file: "${requested}"` : `"${requested}" cannot be resolved (${errorMessage(error51)})`);
     }
@@ -33197,7 +33380,7 @@ async function createLibrary(options2) {
       if (!opened.isFile()) throw refuse2("it is not a regular file");
       const head = Buffer.allocUnsafe(Math.min(HEAD_BYTES, opened.size));
       const { bytesRead } = await handle.read(head, 0, head.length, 0);
-      const { kind, mime } = classifyFile(basename2(real), head.subarray(0, bytesRead));
+      const { kind, mime } = classifyFile(basename3(real), head.subarray(0, bytesRead));
       facts = { kind, mime, size: opened.size, mtimeMs: opened.mtimeMs };
     } finally {
       await handle.close();
@@ -33211,7 +33394,7 @@ async function createLibrary(options2) {
       newId(moment),
       real,
       key,
-      basename2(real),
+      basename3(real),
       title,
       note,
       tags === void 0 ? null : JSON.stringify(tags),
@@ -33400,7 +33583,7 @@ async function createLibrary(options2) {
   function restore(id2) {
     const row = requireRow(id2);
     if (row.state !== "discarded") return itemOf(row);
-    const present = statSync(row.path, { throwIfNoEntry: false })?.isFile() === true;
+    const present = statSync2(row.path, { throwIfNoEntry: false })?.isFile() === true;
     sql("UPDATE artifacts SET state = ?, discarded_at = NULL WHERE id = ?").run(present ? "live" : "missing", id2);
     return itemOf(requireRow(id2));
   }
@@ -33455,6 +33638,7 @@ async function createLibrary(options2) {
   let closed = false;
   return {
     home: options2.home,
+    workspaceOf,
     query,
     facets,
     get,
@@ -33470,7 +33654,7 @@ async function createLibrary(options2) {
     setThumb,
     thumbPath(id2) {
       const name = sql("SELECT thumb FROM artifacts WHERE id = ? AND state != 'discarded'").get(id2)?.thumb;
-      return name !== null && name !== void 0 && THUMB_FILE_NAME.test(name) ? join2(thumbsDirectory, name) : void 0;
+      return name !== null && name !== void 0 && THUMB_FILE_NAME.test(name) ? join3(thumbsDirectory, name) : void 0;
     },
     isLent(realPath) {
       return sql("SELECT 1 AS lent FROM artifacts WHERE path_key = ? AND state != 'discarded'").get(pathKey(realPath, platform)) !== void 0;
@@ -33558,7 +33742,7 @@ async function readChunk(path2, offset, length) {
 }
 
 // src/tool-support.ts
-import { basename as basename3 } from "node:path";
+import { basename as basename4 } from "node:path";
 
 // src/kind.ts
 var KIND_HEAD_BYTES = 8192;
@@ -33726,7 +33910,7 @@ async function openViewedFile(fence, request, meta3) {
   if (!verdict.ok) return failure(verdict.reason);
   try {
     const head = await readRange(verdict.real, 0, KIND_HEAD_BYTES);
-    const shown = request.filename ?? basename3(verdict.real);
+    const shown = request.filename ?? basename4(verdict.real);
     const file2 = {
       path: verdict.real,
       filename: shown,
@@ -34136,11 +34320,11 @@ async function startMediaServer(fence, now = Date.now, thumbs) {
     const cutoff = now() - LEASE_TTL_MS;
     for (const [token, lease] of [...leases]) if (lease.responses.size === 0 && lease.lastSeen < cutoff) release(token);
   }
-  await new Promise((resolve3, reject) => {
+  await new Promise((resolve4, reject) => {
     server2.once("error", reject);
     server2.listen(0, "127.0.0.1", () => {
       server2.off("error", reject);
-      resolve3();
+      resolve4();
     });
   });
   const address = server2.address();
@@ -34180,11 +34364,11 @@ async function startMediaServer(fence, now = Date.now, thumbs) {
       return pendingAdmissions.has(token);
     },
     close() {
-      closing ??= new Promise((resolve3, reject) => {
+      closing ??= new Promise((resolve4, reject) => {
         for (const lease of leases.values()) for (const response of lease.responses) response.destroy();
         leases.clear();
         for (const admission of pendingAdmissions.values()) admission.cancelled = true;
-        server2.close((error51) => error51 ? reject(error51) : resolve3());
+        server2.close((error51) => error51 ? reject(error51) : resolve4());
         server2.closeAllConnections();
       });
       return closing;
@@ -34378,11 +34562,11 @@ var HostClient = class {
 };
 
 // src/share/hosts.ts
-import { join as join3 } from "node:path";
+import { join as join4 } from "node:path";
 
 // src/share/fs-json.ts
 import { mkdir as mkdir3, readFile as readFile2, rename as rename2, rm as rm2, writeFile as writeFile2 } from "node:fs/promises";
-import { dirname as dirname2 } from "node:path";
+import { dirname as dirname3 } from "node:path";
 import { randomBytes as randomBytes4 } from "node:crypto";
 var StoredFileError = class extends Error {
   name = "StoredFileError";
@@ -34409,7 +34593,7 @@ async function readJsonFile(path2, schema) {
   return checked.data;
 }
 async function writePrivateJsonFile(path2, value) {
-  await mkdir3(dirname2(path2), { recursive: true });
+  await mkdir3(dirname3(path2), { recursive: true });
   const staged = `${path2}.${randomBytes4(6).toString("hex")}.tmp`;
   try {
     await writeFile2(staged, `${JSON.stringify(value, null, "	")}
@@ -34488,7 +34672,7 @@ var HostStore = class {
   path;
   #queue = Promise.resolve();
   constructor(home) {
-    this.path = join3(home, "artifacts", "hosts.json");
+    this.path = join4(home, "artifacts", "hosts.json");
   }
   async read() {
     return await readJsonFile(this.path, hostsFileSchema) ?? { hosts: [] };
@@ -35493,8 +35677,8 @@ var TunnelClient = class {
   whenReady(signal) {
     if (this.#refusal !== void 0) return Promise.reject(new Error(this.#refusal));
     if (this.#session !== void 0 && this.#socket?.readyState === SOCKET_OPEN) return Promise.resolve(this.#session);
-    const { promise: promise2, resolve: resolve3, reject } = Promise.withResolvers();
-    const waiter = { resolve: resolve3, reject };
+    const { promise: promise2, resolve: resolve4, reject } = Promise.withResolvers();
+    const waiter = { resolve: resolve4, reject };
     this.#waiters.push(waiter);
     signal.addEventListener(
       "abort",
@@ -35547,7 +35731,7 @@ var TunnelClient = class {
     }
   }
   #connect(signal) {
-    return new Promise((resolve3) => {
+    return new Promise((resolve4) => {
       const socket = (this.#options.createSocket ?? ((url2) => new WebSocket(url2)))(tunnelUrl(this.#options.relayBase));
       socket.binaryType = "arraybuffer";
       this.#socket = socket;
@@ -35641,7 +35825,7 @@ var TunnelClient = class {
         clearTimeout(welcomeTimer);
         clearInterval(pingTimer);
         signal.removeEventListener("abort", onAbort);
-        resolve3({ registered, rateLimited, ...refusal === void 0 ? {} : { refusal } });
+        resolve4({ registered, rateLimited, ...refusal === void 0 ? {} : { refusal } });
       };
     });
   }
@@ -35690,7 +35874,7 @@ var TunnelClient = class {
   async #sendData(socket, id2, state, bytes) {
     let offset = 0;
     while (offset < bytes.length) {
-      while (state.allowance <= 0 && !state.cancelled) await new Promise((resolve3) => state.wake = resolve3);
+      while (state.allowance <= 0 && !state.cancelled) await new Promise((resolve4) => state.wake = resolve4);
       while (socket.bufferedAmount > SOCKET_HIGH_WATER_BYTES && socket.readyState === SOCKET_OPEN && !state.cancelled) await sleepFor(5);
       if (state.cancelled || socket.readyState !== SOCKET_OPEN) return false;
       const length = Math.min(bytes.length - offset, state.allowance, MAX_DATA_FRAME_BYTES);
@@ -35825,7 +36009,7 @@ var P2pRuntime = class {
 
 // src/share/p2p-store.ts
 import { readdir as readdir2, rm as rm3 } from "node:fs/promises";
-import { join as join4 } from "node:path";
+import { join as join5 } from "node:path";
 var STATE_ID_PATTERN = /^[A-Za-z0-9_-]{16,64}$/;
 var shareStateSchema = external_exports.object({
   version: external_exports.number().int().positive(),
@@ -35845,12 +36029,12 @@ var P2pStore = class {
   #dir;
   #tunnelPath;
   constructor(home) {
-    this.#dir = join4(home, "artifacts", "p2p");
-    this.#tunnelPath = join4(home, "artifacts", "tunnel.json");
+    this.#dir = join5(home, "artifacts", "p2p");
+    this.#tunnelPath = join5(home, "artifacts", "tunnel.json");
   }
   #sharePath(id2) {
     if (!STATE_ID_PATTERN.test(id2)) throw new StoredFileError("a share id contains characters that cannot name a file");
-    return join4(this.#dir, `${id2}.json`);
+    return join5(this.#dir, `${id2}.json`);
   }
   async readShare(id2) {
     try {
@@ -36612,7 +36796,7 @@ async function createViewerServer(options2 = {}) {
     }
   }
   try {
-    const html = await readFile4(join5(viewDir, "index.html"), "utf8");
+    const html = await readFile4(join6(viewDir, "index.html"), "utf8");
     media = await startMediaServer(fence, Date.now, library);
     share = library === void 0 ? void 0 : startShareRuntime({ library, fence, home });
     server2.server.onclose = () => {
@@ -36635,10 +36819,10 @@ async function registerViewer(server2, { fence, html, viewDir, media, library })
     if (!entry.isFile() || entry.name === "index.html") continue;
     const mimeType = MIME[extname2(entry.name)];
     if (mimeType === void 0) throw new Error(`Unsupported viewer View asset: ${entry.name}`);
-    const path2 = join5(entry.parentPath, entry.name);
-    const relative = path2.slice(viewDir.replace(/[\\/]$/, "").length + 1).replaceAll("\\", "/");
-    const uri = `ui://viewer/${relative}`;
-    server2.registerResource(relative, uri, { mimeType }, async () => {
+    const path2 = join6(entry.parentPath, entry.name);
+    const relative2 = path2.slice(viewDir.replace(/[\\/]$/, "").length + 1).replaceAll("\\", "/");
+    const uri = `ui://viewer/${relative2}`;
+    server2.registerResource(relative2, uri, { mimeType }, async () => {
       const bytes = await readFile4(path2);
       return {
         contents: [TEXT_MIME[mimeType] ? { uri, mimeType, text: bytes.toString("utf8") } : { uri, mimeType, blob: bytes.toString("base64") }]
