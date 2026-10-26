@@ -10,7 +10,7 @@ One component, `chat-thread`, filling the `thread` slot (`dist/index.mjs`). No t
 
 ## Who can use it
 
-Anyone, on every release ring (no `channel`), on by default. It loads in the Chat space, which requires it, as the space's `thread` section.
+Anyone on the canary release ring for now (`"channel": "canary"`; hidden on stable until the Chat set is promoted with 0.11.16), on by default. It loads in the Chat space, which requires it, as the space's `thread` section.
 
 ## Limits and risks
 

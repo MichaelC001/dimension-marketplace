@@ -10,7 +10,7 @@ One component, `chat-rail`, filling the `rail` slot (`dist/index.mjs`). No tools
 
 ## Who can use it
 
-Anyone, on every release ring (no `channel`), on by default, on Dimension 0.11.1 or newer (`requires.dimension`). It loads in the Chat space, which requires it.
+Anyone on the canary release ring for now (`"channel": "canary"`; hidden on stable until the Chat set is promoted with 0.11.16), on by default, on Dimension 0.11.1 or newer (`requires.dimension`). It loads in the Chat space, which requires it.
 
 ## Limits and risks
 
