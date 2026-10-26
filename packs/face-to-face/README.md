@@ -40,24 +40,31 @@ The pack has **no transport of its own**. All voice comes from the kit hook `use
 
 Beside **Tap to talk**, the surface offers **Talk live** when the engine can open a realtime voice for the session (the
 profile names a `converse` choice that is ready; doc 92 of the Dimension repository). A realtime model (Codex realtime, or
-an ElevenLabs agent) talks with you and hands anything about the repo to the session's agent, then says the agent's
-answer in its own words. The button names where the microphone goes (`Mic → <voice>`); the call's timer and the same
-name stay on screen while it lasts.
+an ElevenLabs agent) talks with you and hands anything about your work to the session's agent, then says the agent's
+answer in its own words. The button names where the microphone goes (`Mic → <voice>`); the same name stays on screen
+while the call lasts.
+
+**The call itself is the kit's own Live bar, drawn below the face**: the orb with its eyes, the waves that flow out of it as
+either side speaks, the two-line caption, the call's clock, and Mute and End. It is the bar you see above the composer
+when you press Live there (`LivePresence`, granted in `host-externals.ts`), so a call looks and behaves the same in both
+places and this pack carries no second copy of it. Its Mute, End and clock reveal on hover or keyboard focus and stay
+visible on touch.
 
 | from `useLiveConversation()` (`src/surface/live.ts` is the only file that touches it) | on screen |
 |---|---|
-| `enginePhase` | the face state and label (`Working` while the agent does the work the voice handed it) and which controls exist. It is the call's own phase, which the engine goes on telling through a mute, so the face keeps showing the voice answering or the agent working |
-| `getOutputLevel()` / `getInputLevel()` | the waveform mark and the jaw (below) |
-| `transcript` | the voice's newest line under the face, yours in the stage; a finished line stays 8 s after the voice stops |
-| `phase` (`muted`) / `muted` / `toggleMute()` / `stop()` | the microphone dot, and **Mute** and **End call** in the top bar; **Muted** and a relaxed face show only while the call is listening |
-| `error` | shown verbatim with **Try again**, which starts the CALL again |
+| the whole call | the Live bar below the face: phase prompt or the newest line (either speaker; a finished line stays while the voice is still saying it, then fades), the clock, **Mute**, **End call** |
+| `enginePhase` | the face state. It is the call's own phase, which the engine goes on telling through a mute, so the face keeps showing the voice answering or the agent working |
+| `getOutputLevel()` / `getInputLevel()` | the jaw (below); the Live bar reads the same levels for its waves |
+| `phase` (`muted`) / `muted` | the microphone dot in the top bar and a relaxed face while the call is listening |
+| `voice` | the status note above the bar: **Live · <voice>**, always visible |
+| `error` | the card, verbatim, with **Try again** (starts the CALL again) and **Dismiss** (hangs up, which clears the failure and offers Tap to talk and Talk live again); the bar steps aside for it |
 
 A Live call's voice is the realtime provider's own audio (the browser plays it; Codex realtime streams to the browser
 directly, an ElevenLabs agent through the engine), and nothing times it to words or runs the audio-to-face model on it, so
 there is no word schedule and no model to read: while the voice speaks the mouth gets a playhead that simply runs plus the voice's own loudness (`src/surface/live-mouth.ts`), and the
 animator's "voice with no viseme data yet" path moves the lips with the sound. It is a level-driven mouth, not the
 phoneme-accurate one of the voice conversation. A call and a voice conversation never run at once: either start button
-is gone while the other is open, and Back and Esc end whichever is.
+is gone while the other is open, and Back and Esc end whichever is. The voice conversation keeps its own waveform mark, captions, Mute and microphone picker.
 
 If the host order of `ARKIT_52_NAMES` ever differs from this pack's rig, the model is ignored and the procedural
 mouth is used.
@@ -92,10 +99,13 @@ data URL (`vite build` with `assetsInclude: ["**/*.bin"]` and `import ... ?inlin
 
 ## Who can use it
 
-Anyone on the canary release ring (`channel: "canary"`); the pack is hidden on stable. It is on by default
-(`defaultEnabled: true`) and loads only in the Chat space, the one space that opts in. It needs Dimension 0.11.1 or
-newer (`requires.dimension`), because the voice hook it uses first ships there. To talk you need a voice profile whose
-speech provider is ready (a key connected, a model downloaded); until then the surface shows what is missing.
+Anyone, on every release ring (the pack carries no `channel`; it left the canary ring with 0.1.5). It is on by default
+(`defaultEnabled: true`) and loads only in the Chat space, the one space that opts in. It needs Dimension 0.11.16 or
+newer (`requires.dimension`), because the Live bar it draws (`LivePresence`) is first granted to packs there: on an older
+build the engine skips the pack and the Face's place in the Chat space reads "This space surface is not installed" (its text says to reinstall; updating Dimension is the fix). To talk you
+need a voice profile whose speech provider is ready (a key connected, a model downloaded); until then the surface shows
+what is missing. **Talk live** is offered once the pane has a session (send a first message, or press Tap to talk once):
+the call is placed on a session, and a brand-new Chat has none yet.
 
 ## Limits and risks
 
@@ -110,7 +120,7 @@ speech provider is ready (a key connected, a model downloaded); until then the s
 - **No transport, no storage of its own.** The pack holds no key and no connection; everything it shows comes from
   the kit's `useVoiceConversation` and `useLiveConversation` hooks.
 - **The head is inlined.** A bundle importing an ungranted name is refused whole, so the bundle's runtime imports are
-  exactly `react`, `react/jsx-runtime` and the granted `@fraym/ui` names `useVoiceConversation`, `useLiveConversation` and `ARKIT_52_NAMES`.
+  exactly `react`, `react/jsx-runtime` and the granted `@fraym/ui` names `useVoiceConversation`, `useLiveConversation`, `LivePresence` and `ARKIT_52_NAMES`.
 
 ## Build and test
 

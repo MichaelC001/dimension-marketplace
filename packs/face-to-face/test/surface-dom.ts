@@ -66,7 +66,7 @@ function installDom(): HTMLElement {
 		Event: window.Event,
 		MutationObserver: Watcher,
 		IntersectionObserver: Watcher,
-		getComputedStyle: () => ({ backgroundColor: "" }),
+		getComputedStyle: () => ({ backgroundColor: "", getPropertyValue: () => "" }),
 		requestAnimationFrame: raf,
 		cancelAnimationFrame: () => {},
 		IS_REACT_ACT_ENVIRONMENT: true,

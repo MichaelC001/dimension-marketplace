@@ -1,11 +1,13 @@
-// The ONE file that touches the kit's Live hook (doc 92 §4). Everything else in the pack talks to `FaceLive`, a
+// The ONE file that touches the kit's Live surface (doc 92 §4): the hook and the Live bar. Everything else in the pack talks to `FaceLive`, a
 // structural slice of `LiveConversation`, so the surface's state logic runs against a fake in tests and the pack
 // never depends on more of the hook than it draws and drives.
 //
 // Live is a REALTIME voice that talks with the person while the real session works behind it. It shares the
 // Face's mouth and nothing else with the voice conversation: nothing times a call's voice to words or runs the
 // audio-to-face model on it, so the mouth follows the voice's loudness instead (see `live-mouth.ts`).
-import { type LiveConversation, useLiveConversation } from "@fraym/ui";
+import { type LiveConversation, LivePresence, useLiveConversation } from "@fraym/ui";
+
+export { LivePresence };
 
 export type FaceLive = Pick<
 	LiveConversation,

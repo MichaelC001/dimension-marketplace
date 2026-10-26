@@ -95,12 +95,6 @@ export const STYLES = `
 	color: var(--f2f-ink-3); max-width: 100%;
 	display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
 }
-/* a Live call's newest line from the voice, in the caption box under the face: plain text, no word timing to follow */
-.f2f-livecap {
-	margin: 0; text-align: center; color: var(--f2f-ink);
-	font-size: clamp(20px, 3vh, 38px); line-height: 1.45; letter-spacing: -0.01em;
-	display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden;
-}
 /* "Talk live" sits quietly under the primary Tap to talk: it names where the microphone goes */
 .f2f-live {
 	display: inline-flex; flex-direction: column; align-items: center; gap: 3px; margin-top: 12px; cursor: pointer;
@@ -127,7 +121,7 @@ export const STYLES = `
 .f2f-card h2 { margin: 0 0 6px; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; color: var(--f2f-ink); }
 .f2f-card p { margin: 0; font-size: 14.5px; line-height: 1.55; color: var(--f2f-ink-2); overflow-wrap: anywhere; }
 .f2f-card p + p { margin-top: 8px; font-size: 13.5px; color: var(--f2f-ink-3); }
-.f2f-card .f2f-btn { margin-top: 14px; }
+.f2f-card-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 14px; }
 .f2f-state { display: flex; align-items: center; gap: 14px; min-height: 34px; }
 .f2f-label { min-width: 6.5em; font-size: 13px; font-weight: 500; letter-spacing: .02em; color: var(--f2f-ink-2); text-transform: none; }
 /* fixed size, so layout and paint are contained: a bar growing every frame re-lays-out these 56x34px, never the page */
