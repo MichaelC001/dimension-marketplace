@@ -761,7 +761,7 @@ describeWithChrome("a throwaway nobody calls", () => {
 	);
 
 	test(
-		"is not the case for a saved profile: its browser and lock stay until it is closed",
+		"is not the case for a saved profile: the throwaway clock does not govern it, so its browser and lock stay past it (its own clock is profileIdleMs)",
 		async () => {
 			const rootDir = await createRoot();
 			const runtime = newRuntime(rootDir, { throwawayIdleMs: 500 });

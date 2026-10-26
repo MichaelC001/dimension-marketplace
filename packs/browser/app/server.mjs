@@ -13942,6 +13942,8 @@ var SIGNED_IN_CACHE_MS = 6e4;
 var MAX_NOTED = 512;
 var READER_IDLE_MS = 6e4;
 var THROWAWAY_IDLE_MS = 10 * 6e4;
+var PROFILE_IDLE_MS = 30 * 6e4;
+var UNHELD_IDLE_MS = 5 * 6e4;
 var MAX_TIMER_MS2 = 2147483647;
 var GRACEFUL_CLOSE_MS = 2e4;
 var CLOSE_RETRY_MS = 3e4;
@@ -14059,6 +14061,8 @@ var BrowserRuntime = class {
   observedProfiles = /* @__PURE__ */ new Set();
   /** How long a throwaway may go without a call before it is closed (see THROWAWAY_IDLE_MS). */
   idleMs;
+  profileIdleMs;
+  unheldIdleMs;
   /** How long a taken-over browser may have no View joined before the wheel is given back (see VIEW_GONE_MS). */
   viewGoneMs;
   /** Why a browser the runtime closed on its own is gone, by id, so the chat that held it is told rather than sent "unknown". */
@@ -14071,14 +14075,10 @@ var BrowserRuntime = class {
   seam;
   constructor(options = {}) {
     this.options = options;
-    this.idleMs = options.throwawayIdleMs ?? THROWAWAY_IDLE_MS;
-    if (!Number.isFinite(this.idleMs) || this.idleMs <= 0 || this.idleMs > MAX_TIMER_MS2) {
-      throw new RangeError(`throwawayIdleMs must be a number of milliseconds above 0 and at most ${MAX_TIMER_MS2}, got ${String(options.throwawayIdleMs)}`);
-    }
-    this.viewGoneMs = options.viewGoneMs ?? VIEW_GONE_MS;
-    if (!Number.isFinite(this.viewGoneMs) || this.viewGoneMs <= 0 || this.viewGoneMs > MAX_TIMER_MS2) {
-      throw new RangeError(`viewGoneMs must be a number of milliseconds above 0 and at most ${MAX_TIMER_MS2}, got ${String(options.viewGoneMs)}`);
-    }
+    this.idleMs = timerMs("throwawayIdleMs", options.throwawayIdleMs, THROWAWAY_IDLE_MS);
+    this.profileIdleMs = timerMs("profileIdleMs", options.profileIdleMs, PROFILE_IDLE_MS);
+    this.unheldIdleMs = timerMs("unheldIdleMs", options.unheldIdleMs, UNHELD_IDLE_MS);
+    this.viewGoneMs = timerMs("viewGoneMs", options.viewGoneMs, VIEW_GONE_MS);
     this.store = new ProfileStore(options.rootDir);
     this.annotationFiles = new AnnotationFiles(join15(this.store.rootDir, "annotations"));
     this.credentialKey = new CredentialKey(this.store.rootDir);
@@ -14275,7 +14275,8 @@ var BrowserRuntime = class {
       if (profile2 !== null && profile2 !== RELAY_PROFILE) entry.notice = this.touchProfile(profile2, driver.app);
       this.byId.set(entry.browserId, entry);
       if (profile2 !== null) this.byProfile.set(profile2, entry);
-      if ((profile2 === null || code !== void 0) && opener.caller !== "app") this.watchIdle(entry, this.idleOf(entry));
+      const chatsOwnClock = (profile2 === null || code !== void 0) && opener.caller !== "app";
+      if (isSavedProfile(entry) || chatsOwnClock) this.watchIdle(entry, this.idleOf(entry));
       return entry;
     } catch (error) {
       if (driver) {
@@ -14317,6 +14318,7 @@ var BrowserRuntime = class {
         if (!entry.openers.has(mine)) return;
         if (entry.openers.size > 1 || entry.viewers > 0 || entry.takenOver) {
           entry.openers.delete(mine);
+          if (entry.openers.size === 0) this.watchUnheld(entry);
           return;
         }
       }
@@ -14334,7 +14336,7 @@ var BrowserRuntime = class {
     await Promise.allSettled(this.removals);
     return closed;
   }
-  /** Retain ownership and the lock until the driver confirms shutdown. A throwaway that cannot be stopped is tried again soon. */
+  /** Retain ownership and the lock until the driver confirms shutdown. */
   async teardown(entry) {
     if (this.byId.get(entry.browserId) !== entry) return;
     settleOnClose(entry);
@@ -14348,7 +14350,7 @@ var BrowserRuntime = class {
       await this.probeAtClose(entry);
       await this.stopBrowser(entry);
     } catch (error) {
-      if (entry.profile === null) this.retryClose(entry);
+      this.retryClose(entry);
       throw error;
     }
     this.markUsed(entry);
@@ -14374,7 +14376,6 @@ var BrowserRuntime = class {
     }
     await entry.driver.kill();
   }
-  /** A throwaway holds a slot and may hold a Chrome, and its chat may never call it again: try to stop it again soon, and again if that fails. */
   retryClose(entry) {
     if (this.disposed) return;
     clearTimeout(entry.idle);
@@ -14517,13 +14518,20 @@ var BrowserRuntime = class {
     if (entry.closed || entry.retiring !== void 0) return;
     const quietMs = performance.now() - entry.lastUsed;
     const idleMs = this.idleOf(entry);
-    const occupied = this.working(entry) || entry.viewers > 0 || entry.takenOver || entry.code?.persist === true;
+    const keptByHolder = entry.code?.persist === true && entry.openers.size > 0;
+    const occupied = this.working(entry) || entry.viewers > 0 || entry.takenOver || keptByHolder;
     if (occupied || quietMs < idleMs) {
       this.watchIdle(entry, occupied ? idleMs : idleMs - quietMs);
       return;
     }
-    const reason2 = `it was a ${entry.code === void 0 ? "throwaway" : "code"} browser, closed after ${idleMs / 1e3} s with no calls; open a new one with ${reopenWith(entry)}`;
-    void this.retire(entry, reason2).catch((error) => console.error("An idle throwaway browser was not closed:", describe3(error)));
+    const what = isSavedProfile(entry) ? `the browser of the saved profile "${entry.profile}" (its sign-ins are kept)` : `a ${entry.code === void 0 ? "throwaway" : "code"} browser`;
+    const reason2 = `it was ${what}, closed after ${idleMs / 1e3} s with no calls; open a new one with ${reopenWith(entry)}`;
+    void this.retire(entry, reason2).catch((error) => console.error("An idle browser was not closed:", describe3(error)));
+  }
+  watchUnheld(entry) {
+    if (entry.closed || entry.retiring !== void 0 || entry.profile === RELAY_PROFILE || this.disposed) return;
+    clearTimeout(entry.idle);
+    this.watchIdle(entry, Math.max(0, this.idleOf(entry) - (performance.now() - entry.lastUsed)));
   }
   /**
    * The throwaway to give up when the pool is full: the one used least recently that nothing is happening on, that no View has joined and
@@ -14600,9 +14608,9 @@ var BrowserRuntime = class {
       entry.lastUsed = performance.now();
     };
   }
-  /** How long `entry` may go without a call: a cell's browser has its own clock (OMP's 1,800 s); every other throwaway has the pack's. */
   idleOf(entry) {
-    return entry.code?.idleMs ?? this.idleMs;
+    const own2 = entry.code?.idleMs ?? (isSavedProfile(entry) ? this.profileIdleMs : this.idleMs);
+    return entry.openers.size === 0 ? Math.min(own2, this.unheldIdleMs) : own2;
   }
   // -----------------------------------------------------------------------
   // The code seam (src/code/host): a browser a cell opens is an entry like any other
@@ -14877,9 +14885,11 @@ var BrowserRuntime = class {
   async endProfileSession(sessionId) {
     for (const entry of [...this.byId.values()]) {
       if (entry.worker && entry.taskSession === sessionId) await this.stopTask(entry);
+      const wasHolding = [...entry.openers.values()].some((opener) => opener.session === sessionId);
       for (const key of [...entry.openers.keys()]) if (entry.openers.get(key)?.session === sessionId) entry.openers.delete(key);
       for (const [tabId, owner] of [...entry.tabOwners]) if (owner === sessionId) entry.tabOwners.delete(tabId);
       entry.tabActive.delete(sessionId);
+      if (wasHolding && entry.openers.size === 0) this.watchUnheld(entry);
     }
   }
   requireOpen(browserId, allowClosed = false) {
@@ -16211,6 +16221,16 @@ function reopenWith(entry) {
   if (opener.caller === "app") return "browser_view";
   return opener.tool ?? "browser_open";
 }
+function timerMs(name, value, fallback) {
+  const ms = value ?? fallback;
+  if (!Number.isFinite(ms) || ms <= 0 || ms > MAX_TIMER_MS2) {
+    throw new RangeError(`${name} must be a number of milliseconds above 0 and at most ${MAX_TIMER_MS2}, got ${String(value)}`);
+  }
+  return ms;
+}
+function isSavedProfile(entry) {
+  return entry.profile !== null && entry.profile !== RELAY_PROFILE;
+}
 function refuseWhileTakenOver(entry, caller, tools = "steps") {
   if (caller !== "app" && entry.takenOver) fail("human_driving", TAKEN_OVER_MESSAGES[tools]);
 }
@@ -16770,7 +16790,7 @@ var LiveChannel = class {
 var plugin_default = {
   $schema: "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   name: "browser",
-  version: "0.9.1",
+  version: "0.9.3",
   description: "A real browser beside your chat that your agent drives while you watch. Tabs, persistent logged-in profiles, circle-to-annotate, and an optional fast task agent (jev).",
   keywords: [
     "browser",
@@ -17006,7 +17026,9 @@ async function createBrowserServer(options = {}) {
     ...process.env.DIMENSION_BROWSER_EXECUTABLE ? { executablePath: process.env.DIMENSION_BROWSER_EXECUTABLE } : {},
     ...process.env.DIMENSION_BROWSER_RELAY_URL ? { relayUrl: process.env.DIMENSION_BROWSER_RELAY_URL } : {},
     ...process.env.DIMENSION_BROWSER_HEADLESS === void 0 ? {} : { headless: process.env.DIMENSION_BROWSER_HEADLESS !== "false" },
-    ...process.env.DIMENSION_BROWSER_THROWAWAY_IDLE_MS ? { throwawayIdleMs: Number(process.env.DIMENSION_BROWSER_THROWAWAY_IDLE_MS) } : {}
+    ...process.env.DIMENSION_BROWSER_THROWAWAY_IDLE_MS ? { throwawayIdleMs: Number(process.env.DIMENSION_BROWSER_THROWAWAY_IDLE_MS) } : {},
+    ...process.env.DIMENSION_BROWSER_PROFILE_IDLE_MS ? { profileIdleMs: Number(process.env.DIMENSION_BROWSER_PROFILE_IDLE_MS) } : {},
+    ...process.env.DIMENSION_BROWSER_UNHELD_IDLE_MS ? { unheldIdleMs: Number(process.env.DIMENSION_BROWSER_UNHELD_IDLE_MS) } : {}
   });
   const server2 = new McpServer({ name: "dimension-community-browser", version: "0.1.0" });
   server2.server.setNotificationHandler(z3.object({

@@ -42,15 +42,11 @@ async function chromeProcesses(): Promise<OsProcess[]> {
 		.map((match) => ({ pid: Number(match[1]), command: match[2] as string }));
 }
 
-/**
- * The live Chrome browsers under `root`, by the name of the throwaway directory each runs in. One OS query for all of them,
- * because on Windows each query costs a second.
- */
-export async function chromePidsByThrowaway(root: string): Promise<Map<string, ThrowawayChrome>> {
+function groupByDirectory(processes: readonly OsProcess[], root: string, directory: RegExp): Map<string, ThrowawayChrome> {
 	const byDirectory = new Map<string, ThrowawayChrome>();
-	for (const entry of await chromeProcesses()) {
+	for (const entry of processes) {
 		if (!entry.command.includes(root)) continue;
-		const match = /ephemeral[\\/]([0-9a-f]+)[\\/]/i.exec(entry.command);
+		const match = directory.exec(entry.command);
 		if (match === null) continue;
 		const name = match[1] as string;
 		const known = byDirectory.get(name) ?? { main: undefined, all: [] };
@@ -59,6 +55,18 @@ export async function chromePidsByThrowaway(root: string): Promise<Map<string, T
 		byDirectory.set(name, known);
 	}
 	return byDirectory;
+}
+
+/**
+ * The live Chrome browsers under `root`, by the name of the throwaway directory each runs in. One OS query for all of them,
+ * because on Windows each query costs a second.
+ */
+export async function chromePidsByThrowaway(root: string): Promise<Map<string, ThrowawayChrome>> {
+	return groupByDirectory(await chromeProcesses(), root, /ephemeral[\\/]([0-9a-f]+)[\\/]/i);
+}
+
+export async function chromePidsByProfile(root: string): Promise<Map<string, ThrowawayChrome>> {
+	return groupByDirectory(await chromeProcesses(), root, /profiles[\\/]([a-z0-9_-]+)[\\/]chrome/i);
 }
 
 /** Whether the OS still has a process with this pid. Signal 0 delivers nothing; it only asks. */

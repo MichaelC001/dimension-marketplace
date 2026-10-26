@@ -182,6 +182,8 @@ needs a relay that drops them (upstream jev-ultrafast behaviour).
 | `DIMENSION_BROWSER_CODE_ALLOW_ATTACH` | `1` lets the model's `browser_run` code drive a browser or an application the pack did not launch: `app.cdp_url` (a Chrome with a debugging port), `app.path` (an application it starts), `app.relay` (your own Chrome through the extension). Off by default: the model is refused with `code_needs_consent` and told to ask you. Read from the server's environment at each open; code cannot set it. It is the interim human gate until the host asks you at the call (the exec approval tier, H1), which will be added on top of it. Kinds you name yourself with `DIMENSION_BROWSER_CDP_URL` or `DIMENSION_BROWSER_RELAY` are not asked twice. |
 | `DIMENSION_BROWSER_HEADLESS` | `false` for a visible window. |
 | `DIMENSION_BROWSER_THROWAWAY_IDLE_MS` | How long a throwaway browser a chat opened may go without a call before it is closed, in milliseconds (default `600000`, 10 minutes; at most `2147483647`, above which a server refuses to start). |
+| `DIMENSION_BROWSER_PROFILE_IDLE_MS` | How long a saved profile's browser may go without a call (and with no View joined and nobody holding the wheel) before it is closed politely, in milliseconds (default `1800000`, 30 minutes; at most `2147483647`, above which a server refuses to start). Its logins and folder stay; the chat that comes back is told it was closed and to open it again. |
+| `DIMENSION_BROWSER_UNHELD_IDLE_MS` | How long a browser nobody holds any more (its last chat closed it or its session ended) may go without a call before it is closed, in milliseconds (default `300000`, 5 minutes; the shorter of this and the browser's own idle limit applies; same bounds as above). |
 | `DIM_BROWSER_PYTHON` | Interpreter for the task agent. |
 
 ### How the browser launches
@@ -459,31 +461,52 @@ back before anything is sealed under it, and it is never made while a profile al
 (that key was lost, and a new one would orphan every password). The sealed store is written as the pack writes
 every file: staged, fsynced, renamed over the old one.
 
-**How a throwaway ends.** One server serves every chat on an engine, and the host
-stamps each call with its session (`ai.insodimension/session`) but sends the
-server no word when a session ends, so a forgotten `browser_close` cannot be seen
-as such. A throwaway a chat opened is therefore closed when (1) `browser_close`
-says so, (2) it has had no call for 10 minutes (nothing queued or running on it,
-no task driving it, no View joined to its stream; `DIMENSION_BROWSER_THROWAWAY_IDLE_MS`
-changes the 10 minutes), or (3) the pool (4 browsers) is full and another open, or
-a `browser_read`, needs the slot: the one used longest ago that nothing is
-happening on is given up. A saved profile, a browser with a task or a call
-running, and one a View has joined are never given up; the Private browser a
-person opened from the View is never closed for being quiet and is given up only
-when no chat's browser can be, and never while its View is joined. When nothing
-can be given up, `browser_open` is refused (`too_many_browsers`), naming the
-browsers the asking chat holds and only those. The open takes at most one victim:
-if that browser will not close, the open is refused instead of moving on to the
-next chat's. A chat that returns to a browser closed this way is told so (and to
-`browser_open` again) instead of "unknown browser", and `browser_close` on it
-succeeds. By then its Chrome process has exited and its directory is deleted.
+**How a browser ends.** One server serves every chat on an engine, and the host
+stamps each call with its session (`ai.insodimension/session`) but tells the
+server a session ended only when its conversation is deleted or continued into a
+new one, so a forgotten `browser_close` cannot be seen as such. A browser a chat
+opened is therefore closed when (1) `browser_close` says so (on a saved profile
+several chats and the View share, a chat's close gives up only its own hold), (2)
+it has had no call for its idle limit (nothing queued or running on it, no task
+driving it, no View joined to its stream, nobody holding the wheel): 10 minutes
+for a throwaway (`DIMENSION_BROWSER_THROWAWAY_IDLE_MS`) and 30 minutes for a saved
+profile's browser, however it was opened, by a chat's `browser_open`, by a cell
+or by the person in the View (`DIMENSION_BROWSER_PROFILE_IDLE_MS`), (3) nobody
+holds it any more, because the host said its last holder's session ended or the
+last chat closed it while a View was watching: it is closed once it has had no
+call for 5 minutes (`DIMENSION_BROWSER_UNHELD_IDLE_MS`; the shorter of that and
+the browser's own limit applies, and a persisted cell browser is no exception,
+since `persist` is a promise to a holder), or (4) the pool (4 browsers) is full
+and another open, or a `browser_read`, needs the slot: the throwaway used longest
+ago that nothing is happening on is given up. A saved profile is closed politely
+when it idles, never to make room: its logins and its folder stay, its lock is
+released once its Chrome has exited, and the chat that comes back is told so
+(`its sign-ins are kept`). A browser with a task or a call running, and one a View
+has joined, are never given up; the Private browser a person opened from the View
+is never closed for being quiet while someone holds it and is given up for room
+only when no chat's browser can be, and never while its View is joined. When
+nothing can be given up, `browser_open` is refused (`too_many_browsers`), naming
+the browsers the asking chat holds and only those. The open takes at most one
+victim: if that browser will not close, the open is refused instead of moving on
+to the next chat's. A chat that returns to a browser closed this way is told so
+(and to `browser_open` again) instead of "unknown browser", and `browser_close`
+on it succeeds. By then its Chrome process has exited and a throwaway's directory
+is deleted.
 
 A close that hangs does not keep a slot. The polite close gets 20 s; after that the
 throwaway's whole process tree is killed and its slot is freed only once the
 process is seen to exit. A close that still cannot be confirmed is tried again
 every 30 s (or each idle period, if shorter), whether it came from `browser_close`,
-the idle timeout or an eviction. A saved profile is never killed: its lock holds
-until its Chrome is provably gone.
+the idle timeout or an eviction, a saved profile's included. A saved profile is never
+killed: its lock holds until its Chrome is provably gone.
+
+When the server itself ends, its browsers go with it. A host closing the server's
+stdin (or sending SIGTERM) gets a polite stop inside the host's 2 s window, and a
+server killed hard (`SIGKILL`) takes its Chrome trees with it on Windows, where the
+server runs in a kill-on-close job that every process it starts inherits: measured
+with a saved profile's Chrome and a throwaway's, no Chrome of the pack was left 6 s
+after the server was killed. A browser or application a cell started detached on
+purpose (`app.path`) is the person's and is left open.
 
 **A profile has a name and a label.** The name is the folder (`[a-z0-9_-]`, 48
 characters) and never changes. The label ("Work Account"), a colour from a fixed
