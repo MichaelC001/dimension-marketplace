@@ -984,7 +984,7 @@
 			"title": "PR Viewer",
 			"icon": "packs/pr-viewer/assets/icon.webp",
 			"description": "PR Viewer — reviews in the dock, from the Store's review keys. Installable and removable like any pack: with it a rail chip opens the review here, without it the browser.",
-			"version": "0.1.5",
+			"version": "0.1.6",
 			"author": {
 				"name": "Dimension"
 			},
@@ -997,7 +997,8 @@
 				"reviews",
 				"pull-request",
 				"store"
-			]
+			],
+			"standalone": true
 		},
 		{
 			"name": "product-psychology",
@@ -1340,7 +1341,7 @@
 			"title": "Triage Rail",
 			"icon": "bolt",
 			"description": "A session rail for threads, not folders: a violet Needs-you strip (oldest wait first), Now / Today / Yesterday / This week / Earlier groups, unread rows emphasised, and one Sweep that archives idle sessions older than a week. Built from @fraym/ui primitives and the rail slot's specVersion 2 channels only - no shipped rail inside.",
-			"version": "0.1.4",
+			"version": "0.1.5",
 			"author": {
 				"name": "Dimension"
 			},
@@ -1355,7 +1356,8 @@
 			],
 			"requires": {
 				"dimension": ">=0.11.1"
-			}
+			},
+			"standalone": true
 		},
 		{
 			"name": "ui-skills",

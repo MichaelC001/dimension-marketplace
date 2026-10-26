@@ -47,7 +47,7 @@ export const MANIFEST_FILE = "plugin.json";
 export const LEGACY_MANIFEST_FILE = "dimension.plugin.json";
 
 /** The metadata keys the catalog reads off a pack, in no particular order. */
-const BLOCK_FIELDS = ["description", "keywords", "category", "defaultEnabled", "toolLoading"];
+const BLOCK_FIELDS = ["description", "keywords", "category", "defaultEnabled", "toolLoading", "standalone", "partOf"];
 
 /** The subset of those that spec §5.4 puts at a manifest's TOP level, where
  *  they are portable across hosts rather than Dimension-specific. */

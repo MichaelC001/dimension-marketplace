@@ -280,6 +280,9 @@ function entryFor(dir: string): Json {
 	// declares nothing keeps a byte-identical entry.
 	const channel = asString(manifest.channel);
 	if (channel) entry.channel = channel;
+	if (block.standalone === true) entry.standalone = true;
+	const partOf = asString(block.partOf);
+	if (partOf) entry.partOf = partOf;
 	const spaces = spaceListings(manifest, packDir);
 	if (spaces) entry.spaces = spaces;
 	const generalAgents = generalAgentListings(packRoot, packDir);
