@@ -1,8 +1,8 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "slack",
-	"version": "0.1.3",
-	"description": "Slack connector — list channels, read messages, and post via the Slack Web API",
+	"version": "0.2.0",
+	"description": "Slack for your agent, two ways: a bot app you add to channels, or your own account through Slack's official MCP server. Connect one or both.",
 	"author": {
 		"name": "Dimension"
 	},
@@ -12,7 +12,9 @@
 		"chat",
 		"messaging",
 		"webhook",
-		"connector"
+		"connector",
+		"mcp",
+		"oauth"
 	],
 	"extensions": {
 		"ai.insodimension.dimension": {
@@ -22,67 +24,282 @@
 			"category": "connector",
 			"defaultEnabled": false,
 			"examples": [
-				"Post a message to #general letting the team know the deploy is done",
-				"Summarize the last 20 messages in the #incidents channel",
-				"Find the message where someone shared the staging URL in #engineering"
+				"Post a message to #general as the bot letting the team know the deploy is done",
+				"Search Slack for what we decided about the launch date and summarize it",
+				"Draft a reply to Priya's message in the thread, show it to me, and send it as me once I approve"
+			],
+			"supersedes": [
+				"slack-user"
 			],
 			"connect": {
-				"kind": [
-					"form"
-				],
-				"setup": [
+				"methods": [
 					{
-						"title": "Create a Slack app",
-						"detail": "At api.slack.com/apps click \"Create New App\" → \"From scratch\", give it a name (e.g. \"Dimension\"), and pick the workspace you want it to act in.",
-						"url": "https://api.slack.com/apps",
-						"urlLabel": "Open Slack apps"
-					},
-					{
-						"title": "Add Bot Token Scopes",
-						"detail": "In your app: OAuth & Permissions → Scopes → Bot Token Scopes → add channels:read, groups:read, channels:history, groups:history, and chat:write. These let the bot list channels, read history, and post."
-					},
-					{
-						"title": "Install the app to your workspace",
-						"detail": "OAuth & Permissions → Install App → Install to Workspace → Allow. This generates the bot token."
-					},
-					{
-						"title": "Copy the Bot User OAuth Token",
-						"detail": "Still on OAuth & Permissions, copy the \"Bot User OAuth Token\" (it starts with xoxb-) and paste it into the form below. It stays on this machine. Note: invite the bot into any channel with /invite before it can read or post there."
-					}
-				],
-				"form": [
-					{
-						"id": "botToken",
-						"label": "Bot User OAuth Token",
-						"secret": true,
-						"placeholder": "xoxb-…",
-						"help": "From your Slack app's OAuth & Permissions page (starts with xoxb-). Install the app to your workspace first to generate it.",
-						"helpUrl": "https://api.slack.com/apps",
-						"helpUrlLabel": "Open Slack apps"
-					}
-				],
-				"configTemplate": "connect/token.template.json",
-				"configTarget": "~/.config/dimension-slack/token.json",
-				"verify": {
-					"http": "https://slack.com/api/auth.test",
-					"expect": "\"ok\"\\s*:\\s*true",
-					"failures": [
-						{
-							"match": "invalid_auth|not_authed|token_revoked|account_inactive",
-							"title": "Reconnect Slack — the bot token is invalid or revoked",
-							"detail": "Reinstall the app to your workspace and paste the fresh xoxb- token.",
-							"url": "https://api.slack.com/apps",
-							"urlLabel": "Open Slack apps"
-						},
-						{
-							"match": "missing_scope",
-							"title": "Add the missing bot scopes",
-							"detail": "OAuth & Permissions → Bot Token Scopes → add channels:read, channels:history, chat:write — then reinstall the app.",
-							"url": "https://api.slack.com/apps",
-							"urlLabel": "Open Slack apps"
+						"id": "bot",
+						"label": "A Slack bot app",
+						"detail": "Posts as a bot app you add to channels, and takes a bot token you paste in.",
+						"kind": [
+							"form"
+						],
+						"setup": [
+							{
+								"title": "Create a Slack app",
+								"detail": "At api.slack.com/apps click \"Create New App\" → \"From scratch\", give it a name (e.g. \"Dimension\"), and pick the workspace you want it to act in.",
+								"url": "https://api.slack.com/apps",
+								"urlLabel": "Open Slack apps"
+							},
+							{
+								"title": "Add Bot Token Scopes",
+								"detail": "In your app: OAuth & Permissions → Scopes → Bot Token Scopes → add channels:read, groups:read, channels:history, groups:history, and chat:write. These let the bot list channels, read history, and post."
+							},
+							{
+								"title": "Install the app to your workspace",
+								"detail": "OAuth & Permissions → Install App → Install to Workspace → Allow. This generates the bot token."
+							},
+							{
+								"title": "Copy the Bot User OAuth Token",
+								"detail": "Still on OAuth & Permissions, copy the \"Bot User OAuth Token\" (it starts with xoxb-) and paste it into the form below. It stays on this machine. Note: invite the bot into any channel with /invite before it can read or post there."
+							}
+						],
+						"form": [
+							{
+								"id": "botToken",
+								"label": "Bot User OAuth Token",
+								"secret": true,
+								"placeholder": "xoxb-…",
+								"help": "From your Slack app's OAuth & Permissions page (starts with xoxb-). Install the app to your workspace first to generate it.",
+								"helpUrl": "https://api.slack.com/apps",
+								"helpUrlLabel": "Open Slack apps"
+							}
+						],
+						"configTemplate": "connect/token.template.json",
+						"configTarget": "~/.config/dimension-slack/token.json",
+						"verify": {
+							"http": "https://slack.com/api/auth.test",
+							"expect": "\"ok\"\\s*:\\s*true",
+							"failures": [
+								{
+									"match": "invalid_auth|not_authed|token_revoked|account_inactive",
+									"title": "Reconnect Slack — the bot token is invalid or revoked",
+									"detail": "Reinstall the app to your workspace and paste the fresh xoxb- token.",
+									"url": "https://api.slack.com/apps",
+									"urlLabel": "Open Slack apps"
+								},
+								{
+									"match": "missing_scope",
+									"title": "Add the missing bot scopes",
+									"detail": "OAuth & Permissions → Bot Token Scopes → add channels:read, channels:history, chat:write — then reinstall the app.",
+									"url": "https://api.slack.com/apps",
+									"urlLabel": "Open Slack apps"
+								}
+							]
 						}
-					]
-				}
+					},
+					{
+						"id": "user",
+						"label": "As you",
+						"detail": "Searches, reads and sends in your own name through Slack's official MCP server, and needs your own Slack app.",
+						"kind": [
+							"oauth"
+						],
+						"assist": {
+							"label": "Set up with your agent",
+							"requires": [
+								"browser"
+							],
+							"prompt": "Help me connect Slack as me, using the Browser plugin. I want to stay in control of every sign-in and approval.\n\nRules:\n- Never ask for, read, type or reveal a password, a 2FA code or the app's Client Secret. If Slack needs me to sign in, open the sign-in page in the Browser view and wait for me to finish.\n- Say what you are about to do before each step, and take a screenshot after it so I can follow along. Use browser_view so I can watch.\n- If a page does not match what I describe, observe it and adapt. If you are unsure, ask me. If Slack blocks a step (admin approval, a workspace policy), stop and tell me exactly what it says. Do not retry or work around it.\n\nSteps:\n1. Call browser_profiles. If a saved profile is already signed in to Slack, ask me whether to use it. Otherwise open a new profile at https://slack.com/signin, ask me to sign in to the workspace I want, and wait.\n2. Open this link. It opens Slack's Create an app dialog with Dimension's app manifest already filled in (user permissions to read and send as me, MCP on, PKCE on, redirect http://localhost:53682/callback):\nhttps://api.slack.com/apps?new_app=1&manifest_json=%7B%22display_information%22%3A%7B%22name%22%3A%22Dimension%20(as%20you)%22%2C%22description%22%3A%22Lets%20your%20Dimension%20agent%20read%20and%20send%20Slack%20messages%20as%20you%2C%20through%20Slack's%20MCP%20server.%22%7D%2C%22oauth_config%22%3A%7B%22redirect_urls%22%3A%5B%22http%3A%2F%2Flocalhost%3A53682%2Fcallback%22%5D%2C%22scopes%22%3A%7B%22user%22%3A%5B%22canvases%3Aread%22%2C%22canvases%3Awrite%22%2C%22channels%3Ahistory%22%2C%22channels%3Aread%22%2C%22channels%3Awrite%22%2C%22chat%3Awrite%22%2C%22emoji%3Aread%22%2C%22files%3Aread%22%2C%22files%3Awrite%22%2C%22groups%3Ahistory%22%2C%22groups%3Aread%22%2C%22groups%3Awrite%22%2C%22im%3Ahistory%22%2C%22im%3Aread%22%2C%22im%3Awrite%22%2C%22lists%3Aread%22%2C%22lists%3Awrite%22%2C%22mpim%3Ahistory%22%2C%22mpim%3Aread%22%2C%22mpim%3Awrite%22%2C%22reactions%3Aread%22%2C%22reactions%3Awrite%22%2C%22search%3Aread.files%22%2C%22search%3Aread.im%22%2C%22search%3Aread.mpim%22%2C%22search%3Aread.private%22%2C%22search%3Aread.public%22%2C%22search%3Aread.users%22%2C%22users%3Aread%22%2C%22users%3Aread.email%22%5D%7D%2C%22pkce_enabled%22%3Atrue%7D%2C%22settings%22%3A%7B%22org_deploy_enabled%22%3Afalse%2C%22socket_mode_enabled%22%3Afalse%2C%22token_rotation_enabled%22%3Atrue%2C%22is_mcp_enabled%22%3Atrue%7D%7D\n3. Choose the workspace I name (ask me if there is more than one), click Next, check that the summary shows the user scopes and no errors, then click Create.\n4. On the new app's Basic Information page, find App Credentials and read ONLY the Client ID (it looks like 1234567890.1234567890123). Do not open or copy the Client Secret.\n5. Give me the Client ID and tell me what to do next: open Plugins, choose Slack, click Connect, pick As you, paste the Client ID, pick Read and send, and click Allow when Slack asks. If Slack says an admin must approve the app, tell me who to ask.\n6. Close the browser tab you opened."
+						},
+						"setup": [
+							{
+								"title": "Create the Slack app (one click)",
+								"detail": "This opens Slack's Create an app screen with everything filled in: the permissions to read and send as you, MCP switched on, PKCE on, and the localhost sign-in address. Pick your workspace, click Next, then Create.",
+								"url": "https://api.slack.com/apps?new_app=1&manifest_json=%7B%22display_information%22%3A%7B%22name%22%3A%22Dimension%20(as%20you)%22%2C%22description%22%3A%22Lets%20your%20Dimension%20agent%20read%20and%20send%20Slack%20messages%20as%20you%2C%20through%20Slack's%20MCP%20server.%22%7D%2C%22oauth_config%22%3A%7B%22redirect_urls%22%3A%5B%22http%3A%2F%2Flocalhost%3A53682%2Fcallback%22%5D%2C%22scopes%22%3A%7B%22user%22%3A%5B%22canvases%3Aread%22%2C%22canvases%3Awrite%22%2C%22channels%3Ahistory%22%2C%22channels%3Aread%22%2C%22channels%3Awrite%22%2C%22chat%3Awrite%22%2C%22emoji%3Aread%22%2C%22files%3Aread%22%2C%22files%3Awrite%22%2C%22groups%3Ahistory%22%2C%22groups%3Aread%22%2C%22groups%3Awrite%22%2C%22im%3Ahistory%22%2C%22im%3Aread%22%2C%22im%3Awrite%22%2C%22lists%3Aread%22%2C%22lists%3Awrite%22%2C%22mpim%3Ahistory%22%2C%22mpim%3Aread%22%2C%22mpim%3Awrite%22%2C%22reactions%3Aread%22%2C%22reactions%3Awrite%22%2C%22search%3Aread.files%22%2C%22search%3Aread.im%22%2C%22search%3Aread.mpim%22%2C%22search%3Aread.private%22%2C%22search%3Aread.public%22%2C%22search%3Aread.users%22%2C%22users%3Aread%22%2C%22users%3Aread.email%22%5D%7D%2C%22pkce_enabled%22%3Atrue%7D%2C%22settings%22%3A%7B%22org_deploy_enabled%22%3Afalse%2C%22socket_mode_enabled%22%3Afalse%2C%22token_rotation_enabled%22%3Atrue%2C%22is_mcp_enabled%22%3Atrue%7D%7D",
+								"urlLabel": "Open the prefilled Slack app"
+							},
+							{
+								"title": "Get it approved, if Slack asks",
+								"detail": "Some workspaces make you ask an admin before an app can sign anyone in. If Slack says so, send them the app's page and wait. Dimension cannot get around that."
+							},
+							{
+								"title": "Copy the Client ID",
+								"detail": "On the app's Basic Information page, under App Credentials, copy the Client ID. It is not a secret, and you do not need the Client Secret.",
+								"url": "https://api.slack.com/apps",
+								"urlLabel": "Open your Slack apps"
+							},
+							{
+								"title": "Paste it below, choose what Dimension may do, and click Connect",
+								"detail": "Slack opens in your browser: click Allow. Port 53682 must be free while you connect. If this sign-in goes unused for about 30 days Slack can sign it out; click Connect again."
+							}
+						],
+						"form": [
+							{
+								"id": "clientId",
+								"label": "Client ID",
+								"placeholder": "1234567890.1234567890123",
+								"help": "From your Slack app's Basic Information page, under App Credentials. It is not a secret.",
+								"helpUrl": "https://api.slack.com/apps",
+								"helpUrlLabel": "Open your Slack apps"
+							},
+							{
+								"id": "clientSecret",
+								"label": "Client Secret (leave blank)",
+								"secret": true,
+								"required": false,
+								"help": "Leave this blank. The app uses PKCE, which needs no secret. Fill it in only if Slack rejects the connection with bad_client_secret."
+							}
+						],
+						"oauth": {
+							"provider": "slack",
+							"authUrl": "https://slack.com/oauth/v2_user/authorize",
+							"tokenUrl": "https://slack.com/api/oauth.v2.user.access",
+							"scopes": [
+								"channels:history",
+								"channels:read",
+								"groups:history",
+								"groups:read",
+								"im:history",
+								"im:read",
+								"mpim:history",
+								"mpim:read",
+								"search:read.public",
+								"search:read.private",
+								"search:read.im",
+								"search:read.mpim",
+								"search:read.files",
+								"search:read.users",
+								"users:read",
+								"users:read.email",
+								"files:read",
+								"emoji:read",
+								"reactions:read",
+								"canvases:read",
+								"lists:read",
+								"chat:write",
+								"reactions:write"
+							],
+							"usePkce": true,
+							"callbackPort": 53682,
+							"allowPortFallback": false,
+							"tokenAuth": "body",
+							"scopeOptions": [
+								{
+									"id": "read",
+									"label": "Read only",
+									"detail": "Search and read channels, threads, DMs, files, canvases and lists. Nothing can be sent.",
+									"scopes": [
+										"channels:history",
+										"channels:read",
+										"groups:history",
+										"groups:read",
+										"im:history",
+										"im:read",
+										"mpim:history",
+										"mpim:read",
+										"search:read.public",
+										"search:read.private",
+										"search:read.im",
+										"search:read.mpim",
+										"search:read.files",
+										"search:read.users",
+										"users:read",
+										"users:read.email",
+										"files:read",
+										"emoji:read",
+										"reactions:read",
+										"canvases:read",
+										"lists:read"
+									]
+								},
+								{
+									"id": "send",
+									"label": "Read and send",
+									"detail": "Everything above, plus sending and scheduling messages and adding reactions, as you. Every send asks you first.",
+									"scopes": [
+										"channels:history",
+										"channels:read",
+										"groups:history",
+										"groups:read",
+										"im:history",
+										"im:read",
+										"mpim:history",
+										"mpim:read",
+										"search:read.public",
+										"search:read.private",
+										"search:read.im",
+										"search:read.mpim",
+										"search:read.files",
+										"search:read.users",
+										"users:read",
+										"users:read.email",
+										"files:read",
+										"emoji:read",
+										"reactions:read",
+										"canvases:read",
+										"lists:read",
+										"chat:write",
+										"reactions:write"
+									],
+									"default": true
+								},
+								{
+									"id": "full",
+									"label": "Everything",
+									"detail": "Adds creating channels, writing canvases and lists, and uploading files.",
+									"scopes": [
+										"channels:history",
+										"channels:read",
+										"groups:history",
+										"groups:read",
+										"im:history",
+										"im:read",
+										"mpim:history",
+										"mpim:read",
+										"search:read.public",
+										"search:read.private",
+										"search:read.im",
+										"search:read.mpim",
+										"search:read.files",
+										"search:read.users",
+										"users:read",
+										"users:read.email",
+										"files:read",
+										"emoji:read",
+										"reactions:read",
+										"canvases:read",
+										"lists:read",
+										"chat:write",
+										"reactions:write",
+										"channels:write",
+										"groups:write",
+										"im:write",
+										"mpim:write",
+										"canvases:write",
+										"files:write",
+										"lists:write"
+									]
+								}
+							]
+						},
+						"configTarget": "~/.config/dimension-slack-user/token.json",
+						"verify": {
+							"http": "https://slack.com/api/auth.test",
+							"expect": "\"ok\"\\s*:\\s*true",
+							"failures": [
+								{
+									"match": "invalid_auth|not_authed|token_revoked|token_expired|account_inactive",
+									"title": "Reconnect Slack (as you)",
+									"detail": "Slack no longer accepts the saved sign-in. Click Connect again and allow access."
+								},
+								{
+									"match": "app_not_approved|app_not_admin_approved|team_access_not_granted|access_denied",
+									"title": "Your workspace has not approved this app",
+									"detail": "Ask a workspace admin to approve the Dimension app, then click Connect again.",
+									"url": "https://api.slack.com/apps",
+									"urlLabel": "Open your Slack apps"
+								}
+							]
+						}
+					}
+				]
 			},
 			"toolRenderer": [
 				{
@@ -138,6 +355,24 @@
 					"use": "summary",
 					"icon": "slack",
 					"title": "Slack users"
+				},
+				{
+					"match": "slack_tools",
+					"use": "summary",
+					"icon": "slack",
+					"title": "Slack tools"
+				},
+				{
+					"match": "slack_read",
+					"use": "summary",
+					"icon": "slack",
+					"title": "Slack read"
+				},
+				{
+					"match": "slack_act",
+					"use": "summary",
+					"icon": "slack",
+					"title": "Slack action"
 				}
 			],
 			"skillCard": {
@@ -182,6 +417,18 @@
 				{
 					"name": "slack_list_users",
 					"description": "List workspace members. Returns id/@name/real name per line (deleted + bots flagged). Requires the users:read scope."
+				},
+				{
+					"name": "slack_tools",
+					"description": "List what Slack's official MCP server can do for you, or describe one tool in full. Each tool is marked read or write."
+				},
+				{
+					"name": "slack_read",
+					"description": "Run one read-only Slack tool as you: search, read a channel or thread, find users and channels, read a canvas."
+				},
+				{
+					"name": "slack_act",
+					"description": "Run one Slack tool that changes Slack as you: send, schedule, react, create. DESTRUCTIVE: you are asked to approve every call."
 				}
 			]
 		}
