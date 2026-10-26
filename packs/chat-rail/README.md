@@ -14,7 +14,7 @@ Anyone, on every release ring (no `channel`), on by default, on Dimension 0.11.1
 
 ## Limits and risks
 
-- **Collections are kept in the webview's `localStorage`** (`src/collections-store.ts`, the pack's only persistence): per window profile, not synced across machines, and lost on reinstall. The file says this is interim until a pack-state door exists.
+- **Collections are kept in the webview's `localStorage`** (`src/collections-store.ts`, the pack's only persistence): shared by the app's windows (one origin) but not synced across machines, and lost on reinstall. The file says this is interim until a pack-state door exists.
 - It lists sessions the host gives it and nothing else: no files, no repositories.
 
 ## Build and test

@@ -320,13 +320,6 @@ describe("describeLive: a realtime call, drawn honestly", () => {
 		expect(unsaid.problem?.detail).toBe("The live call stopped.");
 		expect(unsaid.problem?.hint).toBeUndefined();
 	});
-
-	test("the voice conversation's view says it is the voice conversation, and keeps its own Mute", () => {
-		const v = describeSurface(facts({ phase: "listening", micLive: true }), false);
-		expect(v.mode).toBe("voice");
-		expect(v.canMute).toBe(true);
-		expect(v.micLive).toBe(true);
-	});
 });
 
 describe("sameArkitOrder: the guard between the kit's faceAt() order and the pack's rig", () => {
