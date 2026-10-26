@@ -17,9 +17,12 @@ import {
 import { type AnnotationModel, annotationModelFor, classifyFile, type OpenHandlerFact, pickHandler } from "@dimension/sdk/presentation";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { validateComponentDecl } from "@dimension/sdk/assembly/contracts";
+import type { ComponentDecl } from "@dimension/sdk/assembly/component-decl";
 import { z } from "zod";
+import { removeTree } from "../../test/fixtures";
 import { annotationModes, MODEL_FOR_MODE } from "../app/view/annotate-modes";
-import type { ViewerKind } from "../src/contract";
+import { VIEWER_VIEW_URI, type ViewerKind } from "../src/contract";
 import { detectKind } from "../src/kind";
 import { createViewerServer } from "../src/server";
 
@@ -114,9 +117,10 @@ describe("the declaration", () => {
 
 	test("every entry names a public tool of the real server that takes the declared path and name arguments", async () => {
 		const base = await mkdtemp(join(tmpdir(), "viewer-manifest-"));
+		const home = await mkdtemp(join(tmpdir(), "viewer-manifest-home-"));
 		try {
 			await writeFile(join(base, "index.html"), "<!doctype html><title>viewer</title>");
-			const server = await createViewerServer({ viewDir: base });
+			const server = await createViewerServer({ viewDir: base, home, env: {} });
 			const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
 			const client = new Client({ name: "test", version: "0" });
 			await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
@@ -136,11 +140,47 @@ describe("the declaration", () => {
 			expect(Object.keys(tools.find(tool => tool.name === "view_file")?.inputSchema.properties ?? {})).toContain("annotate");
 		} finally {
 			await rm(base, { recursive: true, force: true });
+			await removeTree(home);
 		}
 	});
 
 	test("every annotation model it names is one the platform defines", () => {
 		for (const open of opens) for (const model of open.annotates ?? []) expect(ARTIFACT_ANNOTATION_MODELS).toContain(model);
+	});
+});
+
+describe("the Library launcher", () => {
+	const declared: readonly Omit<ComponentDecl, "plugin" | "type">[] = manifest.extensions["ai.insodimension.dimension"].components;
+
+	test("is a dock launcher the SDK validates against the pack's one artifactory", () => {
+		expect(declared.map(component => component.id)).toEqual(["library"]);
+		for (const component of declared) {
+			expect(validateComponentDecl({ ...component, plugin: manifest.name, type: "component" }, [decl.mcpServer])).toEqual([]);
+		}
+	});
+
+	test("launches a tool of the real server that carries the View and answers in library mode", async () => {
+		const base = await mkdtemp(join(tmpdir(), "viewer-launcher-"));
+		const home = await mkdtemp(join(tmpdir(), "viewer-launcher-home-"));
+		try {
+			await writeFile(join(base, "index.html"), "<!doctype html><title>viewer</title>");
+			const server = await createViewerServer({ viewDir: base, home, env: {} });
+			const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+			const client = new Client({ name: "test", version: "0" });
+			await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
+			const { tools } = await client.listTools();
+			for (const component of declared) {
+				const tool = tools.find(candidate => candidate.name === component.launch?.tool);
+				expect(tool, `${component.launch?.tool} is a tool of the server`).toBeDefined();
+				expect(z.object({ ui: z.object({ resourceUri: z.string() }) }).parse(tool?._meta).ui.resourceUri).toBe(VIEWER_VIEW_URI);
+				const opened = await client.callTool({ name: component.launch?.tool ?? "", arguments: component.launch?.args ?? {} });
+				expect(opened.structuredContent).toEqual({ mode: "library" });
+			}
+			await client.close();
+		} finally {
+			await removeTree(base);
+			await removeTree(home);
+		}
 	});
 });
 

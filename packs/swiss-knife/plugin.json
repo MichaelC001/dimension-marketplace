@@ -1,14 +1,18 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "swiss-knife",
-	"version": "0.3.9",
-	"description": "Small useful things in one switch: `present` shows you a file as a card in the thread, the Viewer opens and annotates it, and a stream rule stops the agent mid-edit when it writes a code comment.",
+	"version": "0.4.0",
+	"description": "Small useful things in one switch: `present` shows you a file as a card in the thread, the Viewer opens and annotates it, the Library finds every file you or your agent made and shares it privately, and a stream rule stops the agent mid-edit when it writes a code comment.",
 	"author": {
 		"name": "Dimension"
 	},
 	"license": "MIT",
 	"keywords": [
 		"present",
+		"library",
+		"artifacts",
+		"search",
+		"share",
 		"files",
 		"images",
 		"viewer",
@@ -165,6 +169,18 @@
 							"label": "Viewer"
 						}
 					]
+				}
+			],
+			"type": "component",
+			"components": [
+				{
+					"id": "library",
+					"slot": "dock",
+					"label": "Library",
+					"icon": "grid",
+					"grants": ["artifactory:open"],
+					"launch": { "tool": "open_library" },
+					"order": 20
 				}
 			]
 		}

@@ -1,6 +1,7 @@
 // A `view_file` tool result, read as the action it stands for. The result is the
 // only thing the host hands this View, so it is parsed at the boundary: a result
 // that is not ours (or a server older than this View) opens nothing and says so.
+import { z } from "zod";
 import { ANNOTATE_META_KEY, TAB_META_KEY, tabMetaSchema, viewedFileSchema } from "../../src/contract";
 import type { OpenFailureText, ViewerAction } from "./tabs";
 
@@ -53,10 +54,17 @@ export function describeOpenFailure(text: string): { readonly failure: OpenFailu
 	return path === undefined ? { failure } : { failure, path };
 }
 
+const libraryOpenSchema = z.object({ mode: z.literal("library"), workspace: z.string().min(1).optional(), query: z.string().optional() });
+
 export function actionFromResult(result: ResultLike): ViewerAction {
 	if (result.isError) {
 		const text = (result.content ?? []).map(block => (block.type === "text" ? (block.text ?? "") : "")).join("\n").trim();
 		return { type: "failed", ...describeOpenFailure(text) };
+	}
+	const library = libraryOpenSchema.safeParse(result.structuredContent);
+	if (library.success) {
+		const { workspace, query } = library.data;
+		return { type: "library", ...(workspace === undefined ? {} : { workspace }), ...(query === undefined ? {} : { query }) };
 	}
 	const file = viewedFileSchema.safeParse(result.structuredContent);
 	if (!file.success) return { type: "refused", message: "The viewer server answered with something this View does not understand." };

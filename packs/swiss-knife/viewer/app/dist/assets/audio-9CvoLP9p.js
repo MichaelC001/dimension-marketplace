@@ -1,0 +1,1 @@
+import{mountMedia as e}from"./media-core-BVV6xzhZ.js";var t={mount:(t,n,r)=>e(t,r,`audio`)};export{t as default};
