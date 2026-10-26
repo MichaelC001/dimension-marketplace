@@ -191,7 +191,7 @@ export function approvalDetails(identity: SlackIdentity, args: unknown): string[
 	const callArgs = isRecord(input.arguments) ? input.arguments : {};
 	return [
 		`Slack tool: ${typeof input.tool === "string" ? input.tool : "(missing)"}`,
-		`As: ${identity.label() ?? "the connected Slack account"}`,
+		`As: ${identity.label() ?? "you (the signed-in Slack account)"}`,
 		...Object.entries(callArgs).map(
 			([key, value]) =>
 				`${key}: ${truncate(typeof value === "string" ? value : (JSON.stringify(value) ?? ""), APPROVAL_VALUE_CHARS)}`,

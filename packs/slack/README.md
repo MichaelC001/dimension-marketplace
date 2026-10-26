@@ -28,7 +28,7 @@ Off by default. The bot option needs a Slack workspace where you can create and 
 ## Limits and risks
 
 - **The bot acts as the bot.** It only sees channels it was invited to, and `slack_edit_message` and `slack_delete_message` only work on its own messages unless the token has admin scopes. A deleted message cannot be recovered.
-- **As you acts as you.** A sent message cannot be silently unsent. `slack_act` always asks before running, in every approval mode, and shows the Slack tool, its arguments (the channel and the text) and the account it acts as. The account is named once Slack has been asked who you are, which `slack_tools` and `slack_read` do; before that the prompt says "the connected Slack account".
+- **As you acts as you.** A sent message cannot be silently unsent. `slack_act` always asks before running, in every approval mode, and shows the Slack tool, its arguments (the channel and the text) and the account it acts as. The account is named once Slack has been asked who you are, which `slack_tools` and `slack_read` do; before that the prompt says "you (the signed-in Slack account)".
 - Every bot send names the identity on its approval card too: `As: the Slack bot app`.
 - As you can read everything you can read, including private channels and DMs, within the permission level you choose at Connect.
 - Slack decides what the MCP server offers. `slack_tools` reads the list at run time, and a tool counts as read-only only if Slack marks it so.

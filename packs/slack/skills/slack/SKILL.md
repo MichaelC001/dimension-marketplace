@@ -154,7 +154,11 @@ No client secret is needed.
 - **Confirm the exact channel, the exact text and the identity with the user before
   every message-sending call**: `slack_post_message`, `slack_reply_thread` and
   `slack_act`. A post is visible to the channel and cannot be silently undone. A reply
-  in a thread, a draft and a reaction count as sends.
+  in a thread and a draft are sends, and as you so is a reaction: each needs the user's
+  yes in the conversation. `slack_act` also asks for approval itself on every call. The
+  bot's `slack_add_reaction` is not prompted in write and yolo mode, but it is still a
+  visible mark under the bot's name, so confirm the channel, the message and the emoji
+  first.
 - **Before `slack_edit_message`, confirm the exact channel, message `ts` and the new
   text.** The edit replaces the original and only works on the bot's own messages.
 - **`slack_delete_message` is irreversible.** Confirm the exact channel and message `ts`
