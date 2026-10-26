@@ -1,5 +1,6 @@
 import type { SqlDriver } from "./driver";
 import { LibraryError } from "./errors";
+import { workspaceRoot } from "./workspace-root";
 
 export const SCHEMA_VERSION = 2;
 export const DISCARDED_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
@@ -129,5 +130,32 @@ export function prepareDatabase(db: SqlDriver, now: number): void {
 		purge.run(now - DISCARDED_RETENTION_MS);
 	} finally {
 		purge.finalize();
+	}
+	rehomeWorkspaces(db);
+}
+
+/**
+ * Rows stamped before the library resolved worktrees carry the worktree folder as their
+ * workspace. Move each to the workspace its worktree belongs to while the worktree still
+ * exists to say so; a removed worktree keeps its old label. One pass over the distinct
+ * values, file reads only.
+ */
+function rehomeWorkspaces(db: SqlDriver): void {
+	const distinct = db.prepare("SELECT DISTINCT workspace FROM artifacts WHERE workspace IS NOT NULL");
+	let moves: [from: string, to: string][];
+	try {
+		moves = distinct
+			.all<{ readonly workspace: string }>()
+			.map(({ workspace }): [string, string] => [workspace, workspaceRoot(workspace)])
+			.filter(([from, to]) => from !== to);
+	} finally {
+		distinct.finalize();
+	}
+	if (moves.length === 0) return;
+	const update = db.prepare("UPDATE artifacts SET workspace = ? WHERE workspace = ?");
+	try {
+		for (const [from, to] of moves) update.run(to, from);
+	} finally {
+		update.finalize();
 	}
 }
