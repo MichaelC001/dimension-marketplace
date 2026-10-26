@@ -22,15 +22,17 @@ Slack can act as one of two identities. Each is connected on its own under
 - Words like "post an announcement", "notify #deploys" or a message the user wants to
   come from the bot mean **the bot app**.
 - Only one is connected: use it and say which identity the message will go out as.
-  Never fall back to the other identity for a send without telling the user.
+- Never retry a send as the other identity when one fails, and never describe one
+  identity's tool as the other's.
 - Both are connected and the identity of a **send** is not clear from the request: ask
   which one, naming both, before drafting anything. Do not guess.
 - Both are connected and the task is only reading: use **as you** for search, DMs and
   private channels, and the bot app for a channel it is already in. Either is fine
   when both can see it.
-- A call that says Slack is not connected, or that its sign-in or token was rejected,
-  names the Connect path to point the user to. Give that path as written. If the user
-  wants the other identity, point them to the other Connect option instead.
+- A call that says Slack is not connected, or that its sign-in or token was rejected
+  (`invalid_auth`, `token_revoked`, `not_authed`, or a sign-in error), names the
+  Connect path to point the user to. Give that path as written. If the user wants the
+  other identity, point them to the other Connect option instead.
 
 Every message-sending call names the identity in its confirmation. Before any send,
 show the user the exact channel (or person), the exact text, and who it sends as
@@ -63,8 +65,8 @@ first set: add `reactions:write` (for `slack_add_reaction`) and `users:read` (fo
   `id  #name  - topic` per line. Large workspaces paginate: pass the printed
   `next cursor` back as `cursor` to fetch the next page.
 - `slack_read_messages`: recent messages in a channel, most recent first. Returns
-  `ts  user  text` per line. **`ts` is the message id**: quote it when referencing a
-  specific message. Takes `channel` (id) and optional `limit`.
+  `ts  user  text` per line. **`ts` is the message id**: quote it exactly when
+  referencing a specific message. Takes `channel` (id) and optional `limit`.
 - `slack_post_message`: post to a channel. Takes `channel` (id or `#name`) and `text`
   (Slack mrkdwn). **Sends a real, visible message as the bot.**
 - `slack_read_thread`: replies in a thread, oldest first. Takes `channel`, `threadTs`
@@ -119,7 +121,9 @@ arguments, and this skill does not copy them because they change.
 
 ### As-you workflow
 
-1. `slack_tools` once per task. Read the schema of the tool you will use first.
+1. `slack_tools` once per task. Read the schema of the tool you will use first. The
+   tool set and every argument schema come from Slack and can change, so never guess a
+   tool name or an argument.
 2. Resolve names to ids with a read tool (a channel from its name, a person from a
    name or email). Never guess an id.
 3. Read with `slack_read`. Page through long results with the cursor Slack returns.
@@ -137,7 +141,7 @@ No client secret is needed.
 
 - **Read only, Read and send, Everything** is chosen at Connect. A call failing for a
   missing scope means the connection is narrower than the task: reconnect and pick a
-  wider one.
+  wider one (Everything adds canvases, lists, files and channels).
 - **403 from Slack** usually means the workspace has not approved the app, or the app's
   Agents, Slack MCP Server switch is off. An admin fixes the first; the app settings
   page the second.
@@ -157,10 +161,13 @@ No client secret is needed.
   with the user, and that they accept it cannot be recovered, before calling. Deleting
   or editing as the user is not offered unless Slack's tool list includes it; if it
   does, treat it as irreversible and confirm the exact message first.
-- **As you sends in the user's name, to real people.** Never send unprompted, never as
-  a test, never more than was approved.
-- Private channels and DMs are readable as you. Use what the task needs and do not
-  carry it elsewhere.
+- **Never send unprompted or for effect, as either identity.** No test pings, no "just
+  checking", no replies the user did not ask for, and never more than was approved.
+  When unsure whether to send, draft and ask. As you sends in the user's name, to real
+  people.
+- Private channels and DMs are readable as you. Reading and searching is private to the
+  user: quote only what the task needs, and do not repeat private channel or DM content
+  anywhere else.
 - Resolve channel names to ids with `slack_list_channels` (bot) or a read tool (as
   you) rather than guessing. Posting to the wrong channel is the common mistake.
 - The Web API returns HTTP 200 even on failure (`{"ok":false,"error":"..."}`). The bot
