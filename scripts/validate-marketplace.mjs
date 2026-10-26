@@ -21,6 +21,7 @@ const catalogPath = join(root, ".dimension-plugin", "marketplace.json");
 /** One-release compatibility copy for clients that only know `.omp-plugin`. */
 const legacyCatalogPath = join(root, ".omp-plugin", "marketplace.json");
 const errors = [];
+const PLUGIN_ID = /^[a-z0-9][a-z0-9.-]*$/;
 
 const catalogRaw = readFileSync(catalogPath, "utf8");
 const catalog = JSON.parse(catalogRaw);
@@ -103,6 +104,13 @@ for (const plugin of catalog.plugins ?? []) {
 			// did not.
 			const { manifest, source: manifestFile, error: manifestError } = readPackManifestResult(packDir);
 			if (!manifestError) errors.push(...providerProblems(label, plugin, manifest));
+			const declaredListing = readPackBlock(packDir);
+			if (declaredListing.standalone !== undefined && declaredListing.standalone !== true) {
+				errors.push(`plugin "${label}": the pack's standalone must be true when present; omit it for a pack that is not standalone`);
+			}
+			if (declaredListing.partOf !== undefined && (typeof declaredListing.partOf !== "string" || !PLUGIN_ID.test(declaredListing.partOf))) {
+				errors.push(`plugin "${label}": the pack's partOf must be the plugin id of the pack it belongs to`);
+			}
 			if (manifestError) {
 				errors.push(`plugin "${label}": ${manifestFile} ${manifestError}`);
 			} else if (manifest) {
@@ -254,6 +262,21 @@ for (const plugin of catalog.plugins ?? []) {
 		errors.push(
 			`plugin "${label}": channel must be "stable" or "canary" (got ${JSON.stringify(plugin.channel)}); omit it for a pack that ships to everyone`,
 		);
+	}
+	if (plugin.standalone === true && !["component", "components", "layout", "layouts"].includes(String(plugin.category).toLowerCase())) {
+		errors.push(`plugin "${label}": standalone applies to component and layout packs only (category is ${JSON.stringify(plugin.category)})`);
+	}
+	if (typeof plugin.partOf === "string") {
+		if (plugin.partOf === plugin.name || plugin.partOf === plugin.pluginId) {
+			errors.push(`plugin "${label}": partOf cannot name the pack itself`);
+		} else {
+			const owner = catalog.plugins.find(other => other !== plugin && (other.pluginId ?? other.name) === plugin.partOf);
+			if (!owner) {
+				errors.push(`plugin "${label}": partOf "${plugin.partOf}" names no pack in this catalog`);
+			} else if (!(owner.spaces ?? []).some(space => (space.requires ?? []).some(id => id === plugin.name || id === plugin.pluginId))) {
+				errors.push(`plugin "${label}": no space of "${plugin.partOf}" requires this pack, so the host would not treat it as a part`);
+			}
+		}
 	}
 }
 
