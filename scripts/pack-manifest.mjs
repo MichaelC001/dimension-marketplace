@@ -119,7 +119,7 @@ export function readPackManifest(packRoot) {
 
 /**
  * The merged METADATA view the catalog reads: `description`, `keywords`,
- * `category`, `defaultEnabled`, `toolLoading`.
+ * `category`, `defaultEnabled`, `toolLoading`, `standalone`, `partOf`.
  *
  * Layered WEAKEST FIRST, in the engine's own order, so this shelf and the host
  * that installs from it resolve a field the same way:

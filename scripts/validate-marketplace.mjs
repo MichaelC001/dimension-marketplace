@@ -269,8 +269,13 @@ for (const plugin of catalog.plugins ?? []) {
 	if (typeof plugin.partOf === "string") {
 		if (plugin.partOf === plugin.name || plugin.partOf === plugin.pluginId) {
 			errors.push(`plugin "${label}": partOf cannot name the pack itself`);
-		} else if (!catalog.plugins.some(other => other !== plugin && (other.pluginId ?? other.name) === plugin.partOf)) {
-			errors.push(`plugin "${label}": partOf "${plugin.partOf}" names no pack in this catalog`);
+		} else {
+			const owner = catalog.plugins.find(other => other !== plugin && (other.pluginId ?? other.name) === plugin.partOf);
+			if (!owner) {
+				errors.push(`plugin "${label}": partOf "${plugin.partOf}" names no pack in this catalog`);
+			} else if (!(owner.spaces ?? []).some(space => (space.requires ?? []).some(id => id === plugin.name || id === plugin.pluginId))) {
+				errors.push(`plugin "${label}": no space of "${plugin.partOf}" requires this pack, so the host would not treat it as a part`);
+			}
 		}
 	}
 }
