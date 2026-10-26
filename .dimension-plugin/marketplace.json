@@ -135,7 +135,7 @@
 			"title": "Browser",
 			"icon": "globe",
 			"description": "A real browser beside your chat that your agent drives while you watch. Tabs, persistent logged-in profiles, circle-to-annotate, and an optional fast task agent (jev).",
-			"version": "0.9.1",
+			"version": "0.9.2",
 			"author": {
 				"name": "Dimension"
 			},
@@ -1222,8 +1222,8 @@
 			"pluginId": "swiss-knife",
 			"title": "Swiss Knife",
 			"icon": "packs/swiss-knife/assets/icon.webp",
-			"description": "Small useful things in one switch: `present` shows you a file as a card in the thread, the Viewer opens and annotates it, and a stream rule stops the agent mid-edit when it writes a code comment.",
-			"version": "0.3.9",
+			"description": "Small useful things in one switch: `present` shows you a file as a card in the thread, the Viewer opens and annotates it, the Library finds every file you or your agent made and shares it privately, and a stream rule stops the agent mid-edit when it writes a code comment.",
+			"version": "0.4.0",
 			"author": {
 				"name": "Dimension"
 			},
@@ -1232,6 +1232,10 @@
 			"category": "tools",
 			"tags": [
 				"present",
+				"library",
+				"artifacts",
+				"search",
+				"share",
 				"files",
 				"images",
 				"viewer",

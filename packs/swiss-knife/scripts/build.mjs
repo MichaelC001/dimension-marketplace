@@ -30,6 +30,7 @@ export async function buildBundle() {
 		target: "node22",
 		sourcemap: false,
 		legalComments: "none",
+		external: ["bun:sqlite", "node:sqlite"],
 		logLevel: "error",
 		// The driver package's tsconfig chain names an ES target esbuild does not know;
 		// the bundle's own target is set above.

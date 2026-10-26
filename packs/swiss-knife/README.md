@@ -21,6 +21,11 @@ Replaces the separate Viewer and Ban Comments plugins; if you still have them in
   picture or on a video frame, comments on text, a pick of an element on a page, a moment or a stretch of a
   recording (on a waveform for audio, on a filmstrip for video). A file opens behind one continuous opening surface
   instead of a flash. The card's Open and Annotate buttons come from the `opens` rows in `plugin.json`. Depth: `viewer/README.md` in this plugin's folder.
+- **Tool `artifacts`**, loaded eagerly. The user's library of files shown or made here: `search` finds one to present
+  again, `get` reads one row with its links and comments, and `stamp`, `update`, `discard` and `restore` keep it tidy.
+  The Library (the dock's launcher, a pinned tab in the Viewer) is the person's side of the same store: search as you
+  type, a virtualized grid or list, posters for videos and PDFs, a details drawer, and a Share dialog with the choices of doc 103
+  (from this computer by default, your own server, your company's). Depth: `viewer/README.md`, doc 103.
 - **Two stream rules**, `ban-comments` (`.ts .tsx .js .jsx .rs .go`) and `ban-comments-python` (`.py`).
   When the agent writes a code comment in an `edit` or a `write`, the engine stops that output, tells the
   model to delete the comment and carry its meaning in names, types and structure, and the model writes
@@ -36,9 +41,12 @@ No skills or prompts (a test keeps those out).
 Anyone on either release ring, stable or canary.
 It is on once installed, in every space (`modelSpaces` is empty and it declares no `spaces`, so it has no
 audience to narrow it), and needs Dimension 0.10.24 or later, the first release whose engine honours the
-rules' `except:` field. No sign-in, CLI or key.
+rules' `except:` field. The Library's dock entry is a launcher, which Dimension shows from 0.11.13; on
+an older release the agent's `artifacts` tool still works, but the Library tab has no way in.
+No sign-in, CLI or key.
 
-There is one switch. Turning Swiss Knife off turns off `present`, the Viewer and the comment rule
+There is one switch. Turning Swiss Knife off turns off `present`, the Viewer, the Library, the `artifacts`
+tool and the comment rule
 together; none can be switched on its own. No agent is offered `view_file`: a person opens a file from
 a `present` card or an Open button, and the Viewer is not a tool the model calls.
 
@@ -70,6 +78,18 @@ a `present` card or an Open button, and the Viewer is not a tool the model calls
 - **Context cost.** `present` is in context on every turn: a budget of 115 tokens, held by
   `test/context-cost.test.ts`. The rules cost 0 until they fire (the engine files a stream rule as
   resident 0); the same test runs the engine's own bucketing to prove neither is a prompt rule.
+- **The library's own cost.** `artifacts` is the second eager tool; its wire entry (name, description, parameters and
+  the intent field) is held to 240 tokens by the same test. The Library tab, its thumbnails and its search cost
+  nothing until it is opened: they run in the Viewer's server and the View, never in the model's context.
+- **The library is local and bounded.** One SQLite file with FTS5 trigram search, `<home>/artifacts/library.db`
+  (one row per file, never a copy of it). A 50 000-row library answers a search in under 2 ms, a first page in
+  about 1 ms and the filter counts in about 15 ms the first time after a change, then from memory until the next
+  write. A row is created by `present`, by the agent's `artifacts stamp`, or by a person's Add file; `artifacts
+  discard` and the Library's Discard revoke every live link, drop the thumbnail and, when asked, send the file to the
+  OS recycle bin (never delete it outright); a discarded row can be restored for 30 days and is purged after.
+  `artifacts` is read-class for `search`, `get` and `comments`, write-class for the rest; secrets are refused when a
+  file is stamped, on the path as written and on its real path. Nothing leaves the machine until a person presses
+  Copy link or Done in the Share dialog; comments that come back are shown to the agent as input, labelled as input.
 
 ## Build and test
 

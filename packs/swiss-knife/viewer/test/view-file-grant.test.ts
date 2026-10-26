@@ -8,6 +8,7 @@ import { ARTIFACTORY_GRANT_META_KEY } from "@dimension/sdk/artifactory";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { ANNOTATE_META_KEY, fileChunkSchema, TAB_META_KEY, viewedFileSchema } from "../src/contract";
+import { removeTree } from "../../test/fixtures";
 import { createFence } from "../src/fence";
 import { createViewerServer } from "../src/server";
 
@@ -35,14 +36,14 @@ describe("the viewer server honours a host-lent file", () => {
 		await writeFile(granted, "# LENT_CONTENT");
 		await writeFile(sibling, "# SIBLING_CONTENT");
 		await writeFile(secret, "TOKEN=SECRET_VALUE_123");
-		const server = await createViewerServer({ viewDir: view, fence: createFence({ home: base, env: { VIEWER_ROOTS: root } }) });
+		const server = await createViewerServer({ viewDir: view, home: base, env: {}, fence: createFence({ home: base, env: { VIEWER_ROOTS: root } }) });
 		const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
 		client = new Client({ name: "test", version: "0" });
 		await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
 	});
 	afterAll(async () => {
 		await client.close();
-		await rm(base, { recursive: true, force: true });
+		await removeTree(base);
 	});
 
 	const view = (path: string, meta?: Record<string, unknown>, extra: Record<string, unknown> = {}) =>

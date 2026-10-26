@@ -1,23 +1,18 @@
-// The viewer's MCP server: its tools and the View bundle. Each tool passes its
-// call's `_meta` to the fence, which reads the host-lent one-file grant there
-// (doc 86 §5): a human's click may open ONE file the roots do not cover.
-//
-// The View itself (`app/dist`) is served as resources under `ui://viewer/`, the
-// way the browser pack does it: the host mounts `index.html` and resolves every
-// chunk it names through `resources/read`.
 import { readdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, extname, join } from "node:path";
+import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { registerAppResource, registerAppTool, RESOURCE_MIME_TYPE } from "@modelcontextprotocol/ext-apps/server";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { readChunk, readRange } from "./chunk";
-import { ANNOTATE_META_KEY, MAX_CHUNK_BYTES, mediaTokenSchema, TAB_META_KEY, VIEWER_VIEW_URI, type ViewedFile } from "./contract";
+import { createLibrary, engineHome, type Library } from "../../src/library";
+import { readChunk } from "./chunk";
+import { MAX_CHUNK_BYTES, mediaTokenSchema, VIEWER_VIEW_URI } from "./contract";
 import { createFence, type Fence } from "./fence";
-import { detectKind, KIND_HEAD_BYTES } from "./kind";
+import { registerLibraryTools } from "./library-tools";
 import { type MediaServer, startMediaServer } from "./media-server";
+import { registerShareTools, type ShareRuntime, startShareRuntime } from "./share";
+import { APP_ONLY, describeError, failure, openViewedFile } from "./tool-support";
 
 const MIME: Readonly<Record<string, string>> = {
 	".js": "text/javascript",
@@ -32,40 +27,61 @@ const MIME: Readonly<Record<string, string>> = {
 };
 const TEXT_MIME: Readonly<Record<string, true>> = { "text/javascript": true, "text/css": true, "application/json": true, "image/svg+xml": true };
 
-const APP_ONLY = { ui: { visibility: ["app"] as ("app" | "model")[] } };
-
 export interface ViewerServerOptions {
-	/** Where the built View lives; defaults to `dist/` beside the server. */
 	readonly viewDir?: string;
 	readonly fence?: Fence;
 	readonly env?: NodeJS.ProcessEnv;
 	readonly home?: string;
+	readonly library?: Library;
 }
 
-const failure = (message: string): CallToolResult => ({ isError: true, content: [{ type: "text", text: message }] });
-
-function describeError(error: unknown): string {
-	if (error instanceof RangeError) return error.message;
-	if (!(error instanceof Error)) return String(error);
-	const code = "code" in error && typeof error.code === "string" ? ` (${error.code})` : "";
-	return `${error.message}${code}`;
+async function openOwnLibrary(home: string): Promise<Library | undefined> {
+	try {
+		return await createLibrary({ home });
+	} catch (error) {
+		console.error(`viewer library: the artifact library is unavailable (${describeError(error)}); documents still open`);
+		return undefined;
+	}
 }
 
 export async function createViewerServer(options: ViewerServerOptions = {}): Promise<McpServer> {
-	// An outside-the-roots refusal says one sentence to the caller; its cause goes to stderr, which the host keeps (stdout is the protocol).
+	const env = options.env ?? process.env;
+	const userHome = options.home ?? homedir();
+	const home = engineHome(env, userHome);
+	const ownedLibrary = options.library === undefined ? await openOwnLibrary(home) : undefined;
+	const library = options.library ?? ownedLibrary;
 	const fence =
-		options.fence ?? createFence({ home: options.home ?? homedir(), env: options.env ?? process.env, log: detail => console.error(`viewer fence: ${detail}`) });
+		options.fence ??
+		createFence({
+			home: userHome,
+			env,
+			...(library === undefined ? {} : { indexed: library }),
+			log: detail => console.error(`viewer fence: ${detail}`),
+		});
 	const viewDir = options.viewDir ?? fileURLToPath(new URL("./dist/", import.meta.url));
-	// A missing built View is a startup error, not an installed pack that opens blank.
-	const html = await readFile(join(viewDir, "index.html"), "utf8");
 	const server = new McpServer({ name: "dimension-community-viewer", version: "0.1.0" });
 
-	const media = await startMediaServer(fence);
-	server.server.onclose = () => { void media.close().catch(error => console.error(error)); };
+	let media: MediaServer | undefined;
+	let share: ShareRuntime | undefined;
+	async function release(): Promise<void> {
+		try {
+			await Promise.all([media?.close(), share?.close()]);
+		} finally {
+			ownedLibrary?.close();
+		}
+	}
+
 	try {
-		await registerViewer(server, { fence, html, viewDir, media });
+		const html = await readFile(join(viewDir, "index.html"), "utf8");
+		media = await startMediaServer(fence, Date.now, library);
+		share = library === undefined ? undefined : startShareRuntime({ library, fence, home });
+		server.server.onclose = () => {
+			void release().catch(error => console.error(error));
+		};
+		await registerViewer(server, { fence, html, viewDir, media, library });
+		if (share !== undefined) registerShareTools(server, share);
 	} catch (error) {
-		await media.close();
+		await release();
 		throw error;
 	}
 	return server;
@@ -76,9 +92,10 @@ interface ViewerParts {
 	readonly html: string;
 	readonly viewDir: string;
 	readonly media: MediaServer;
+	readonly library: Library | undefined;
 }
 
-async function registerViewer(server: McpServer, { fence, html, viewDir, media }: ViewerParts): Promise<void> {
+async function registerViewer(server: McpServer, { fence, html, viewDir, media, library }: ViewerParts): Promise<void> {
 	const metadata = { ui: { prefersBorder: false, permissions: { clipboardWrite: {} }, csp: { resourceDomains: [media.origin] } } };
 	registerAppResource(server, "Viewer", VIEWER_VIEW_URI, { _meta: metadata }, async () => ({
 		contents: [{ uri: VIEWER_VIEW_URI, mimeType: RESOURCE_MIME_TYPE, text: html, _meta: metadata }],
@@ -115,28 +132,7 @@ async function registerViewer(server: McpServer, { fence, html, viewDir, media }
 			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 			_meta: { ui: { resourceUri: VIEWER_VIEW_URI } },
 		},
-		async ({ path, filename, annotate }, extra) => {
-			const verdict = await fence.check(path, extra._meta);
-			if (!verdict.ok) return failure(verdict.reason);
-			try {
-				const head = await readRange(verdict.real, 0, KIND_HEAD_BYTES);
-				const shown = filename ?? basename(verdict.real);
-				const file: ViewedFile = {
-					path: verdict.real,
-					filename: shown,
-					kind: detectKind(shown, head.bytes, head.size),
-					size: head.size,
-					mtimeMs: head.mtimeMs,
-				};
-				return {
-					content: [{ type: "text", text: `Opened ${file.filename} (${file.kind}, ${file.size} bytes) in the viewer.` }],
-					structuredContent: { ...file },
-					_meta: { [TAB_META_KEY]: { key: file.path }, ...(annotate === true ? { [ANNOTATE_META_KEY]: true } : {}) },
-				};
-			} catch (error) {
-				return failure(`"${path}" cannot be opened: ${describeError(error)}`);
-			}
-		},
+		({ path, filename, annotate }, extra) => openViewedFile(fence, { path, filename, annotate }, extra._meta),
 	);
 
 	registerAppTool(
@@ -196,4 +192,6 @@ async function registerViewer(server: McpServer, { fence, html, viewDir, media }
 		const alive = media.renew(token);
 		return { content: [{ type: "text", text: alive ? "Recording still held." : "Recording no longer held." }], structuredContent: { alive } };
 	});
+
+	if (library !== undefined) registerLibraryTools(server, { library, fence, media });
 }

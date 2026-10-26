@@ -111,7 +111,7 @@ const UNSAFE_IN_A_LINE = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u
  * would act on (a file name may carry any of it) becomes a space, and the result
  * is cut to `max` code points, never inside a surrogate pair.
  */
-function oneLine(text: string, max: number): string {
+export function oneLine(text: string, max: number): string {
 	const flat = text.replace(UNSAFE_IN_A_LINE, " ");
 	if (flat.length <= max) return flat; // fewer UTF-16 units than `max` is fewer code points
 	let units = 0;

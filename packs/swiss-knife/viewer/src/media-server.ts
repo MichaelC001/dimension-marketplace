@@ -1,8 +1,12 @@
+import { randomBytes } from "node:crypto";
 import { constants } from "node:fs";
-import { open } from "node:fs/promises";
+import { open, readFile } from "node:fs/promises";
+import { extname } from "node:path";
 import { createServer } from "node:http";
 import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from "node:http";
 import { pipeline } from "node:stream/promises";
+import { THUMB_CONTENT_TYPES } from "../../src/library/thumbs";
+import type { Library } from "../../src/library/types";
 import { readRange } from "./chunk";
 import { MEDIA_TOKEN_PATTERN } from "./contract";
 import type { Fence } from "./fence";
@@ -18,11 +22,13 @@ const MAX_REMEMBERED_RELEASES = MAX_LEASES * 16;
 const STREAM_BUFFER_BYTES = 64 * 1024;
 const OPEN_FLAGS = constants.O_RDONLY | (constants.O_NONBLOCK ?? 0) | (constants.O_NOFOLLOW ?? 0);
 const SANDBOXED_VIEW_ORIGIN = "null";
+const THUMB_ROUTE = /^\/thumbs\/([a-f0-9]{48})\/([A-Za-z0-9]{8,40})(?:\?.*)?$/;
 
 type Lease = { path: string; size: number; mtimeMs: number; mime: string; meta: unknown; responses: Set<ServerResponse>; lastSeen: number };
 
 export interface MediaServer {
 	readonly origin: string;
+	readonly thumbBase: string;
 	acquire(path: string, size: number, mtimeMs: number, meta: unknown, token: string): Promise<{ url: string; token: string; mime: string }>;
 	release(token: string): void;
 	/** A pane saying it still holds `token`. False when the server no longer holds it, so the pane must open the recording again. */
@@ -121,8 +127,31 @@ async function streamRecording(req: IncomingMessage, res: ServerResponse, lease:
 	}
 }
 
-export async function startMediaServer(fence: Fence, now: () => number = Date.now): Promise<MediaServer> {
+export async function startMediaServer(fence: Fence, now: () => number = Date.now, thumbs?: Pick<Library, "thumbPath">): Promise<MediaServer> {
+	const thumbCapability = randomBytes(24).toString("hex");
 	const leases = new Map<string, Lease>();
+
+	async function serveThumb(req: IncomingMessage, res: ServerResponse, capability: string, id: string): Promise<void> {
+		if (req.method !== "GET" && req.method !== "HEAD") {
+			res.writeHead(405, { Allow: "GET, HEAD" }).end();
+			return;
+		}
+		const path = capability === thumbCapability ? thumbs?.thumbPath(id) : undefined;
+		const type = path === undefined ? undefined : THUMB_CONTENT_TYPES[extname(path).slice(1)];
+		if (path === undefined || type === undefined) {
+			res.writeHead(404).end();
+			return;
+		}
+		const bytes = await readFile(path);
+		res.writeHead(200, {
+			"Content-Type": type,
+			"Content-Length": bytes.length,
+			"Cache-Control": "private, max-age=86400",
+			"X-Content-Type-Options": "nosniff",
+		});
+		res.end(req.method === "HEAD" ? undefined : bytes);
+	}
+
 	const pendingAdmissions = new Map<string, { cancelled: boolean }>();
 	const releasedTokens = new Set<string>();
 	let active = 0;
@@ -134,6 +163,14 @@ export async function startMediaServer(fence: Fence, now: () => number = Date.no
 			return;
 		}
 		res.setHeader("Access-Control-Allow-Origin", "*");
+		const thumb = THUMB_ROUTE.exec(req.url ?? "");
+		if (thumb !== null) {
+			void serveThumb(req, res, thumb[1] ?? "", thumb[2] ?? "").catch(() => {
+				if (!res.headersSent) res.writeHead(404).end();
+				else res.destroy();
+			});
+			return;
+		}
 		const token = /^\/media\/([a-f0-9]{48})$/.exec(req.url ?? "")?.[1];
 		const lease = token === undefined ? undefined : leases.get(token);
 		if (lease === undefined) {
@@ -209,6 +246,7 @@ export async function startMediaServer(fence: Fence, now: () => number = Date.no
 	const origin = `http://${host}`;
 	return {
 		origin,
+		thumbBase: `${origin}/thumbs/${thumbCapability}`,
 		async acquire(path: string, size: number, mtimeMs: number, meta: unknown, token: string) {
 			if (closing !== undefined) throw new Error("The recording server is closed.");
 			if (!MEDIA_TOKEN_PATTERN.test(token) || leases.has(token) || pendingAdmissions.has(token)) throw new Error("Invalid recording capability.");

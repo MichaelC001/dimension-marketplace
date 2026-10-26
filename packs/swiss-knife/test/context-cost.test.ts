@@ -21,6 +21,8 @@ import { loadTools } from "./fixtures";
 // the same change that makes the tool dearer: that is the point of the number.
 const BUDGET = 115;
 
+const ARTIFACTS_BUDGET = 240;
+
 const DIST = join(import.meta.dir, "..", "dist", "index.mjs");
 const PACK = join(import.meta.dir, "..");
 
@@ -28,20 +30,36 @@ const PACK = join(import.meta.dir, "..");
 // same name/description/parameters it reads, and the rest of that type is never touched.
 type AgentTools = Parameters<typeof normalizeTools>[0];
 
-async function wireEntry(injectIntent: boolean) {
+async function wireEntry(name: string, injectIntent: boolean) {
 	const { raw } = await loadTools(DIST);
-	const [entry] = normalizeTools(raw as unknown as AgentTools, { injectIntent }) ?? [];
-	if (entry === undefined) throw new Error("the shipped bundle registered no tool");
+	const entries = normalizeTools(raw as unknown as AgentTools, { injectIntent }) ?? [];
+	const entry = entries.find(candidate => candidate.name === name);
+	if (entry === undefined) throw new Error(`the shipped bundle registered no ${name} tool`);
 	return entry;
+}
+
+interface WireEntry {
+	readonly name: string;
+	readonly description: string;
+	readonly parameters: unknown;
+}
+
+function wireTokens(entry: WireEntry): number {
+	const json = JSON.stringify({ name: entry.name, description: entry.description, parameters: entry.parameters });
+	return new Tokenizer(null).countTokens(json, "strict");
 }
 
 describe("the context cost of the shipped `present` tool", () => {
 	test("its wire entry stays inside the token budget", async () => {
-		const entry = await wireEntry(true);
-		const json = JSON.stringify({ name: entry.name, description: entry.description, parameters: entry.parameters });
-		const tokens = new Tokenizer(null).countTokens(json, "strict");
+		const entry = await wireEntry("present", true);
+		const tokens = wireTokens(entry);
 		expect(tokens, `present now costs ${tokens} resident tokens; raise BUDGET deliberately if that is intended`).toBeLessThanOrEqual(BUDGET);
 		expect(entry.name).toBe("present");
+	});
+
+	test("the `artifacts` wire entry stays inside its own budget", async () => {
+		const tokens = wireTokens(await wireEntry("artifacts", true));
+		expect(tokens, `artifacts now costs ${tokens} resident tokens; raise ARTIFACTS_BUDGET deliberately if that is intended`).toBeLessThanOrEqual(ARTIFACTS_BUDGET);
 	});
 
 	for (const folder of ["skills", "prompts"]) {
@@ -96,7 +114,7 @@ describe("the context cost of the shipped rules", () => {
 
 /** The required and declared field names of a tool's wire schema, read off its JSON (what is sent). */
 async function wireFields(injectIntent: boolean): Promise<{ required: string[]; properties: string[]; schema: unknown }> {
-	const schema: unknown = JSON.parse(JSON.stringify((await wireEntry(injectIntent)).parameters));
+	const schema: unknown = JSON.parse(JSON.stringify((await wireEntry("present", injectIntent)).parameters));
 	const required: string[] = [];
 	const properties: string[] = [];
 	if (typeof schema === "object" && schema !== null) {

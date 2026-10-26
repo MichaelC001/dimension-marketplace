@@ -54,6 +54,7 @@ export async function buildServerBundle() {
 		format: "esm",
 		target: "node22",
 		sourcemap: false,
+		external: ["bun:sqlite", "node:sqlite"],
 		// The SDK's tsconfig chain names an ES target esbuild does not know, and esbuild
 		// warns on every build; the bundle's own target is set above.
 		tsconfigRaw: "{}",
