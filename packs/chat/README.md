@@ -22,7 +22,7 @@ It talks to the General Agent `aether` in the `inso-personal` workspace. It has 
 
 ## Who can use it
 
-Anyone, on every release ring: none of the eight packs it requires, and not this one, carries a `channel`. It is on by default. The Face needs Dimension 0.11.16 or newer (`face-to-face` `requires.dimension`); on an older build the engine skips that pack and the Face's place reads "This space surface is not installed", with text that says to reinstall, which does not help: the fix is updating Dimension. To talk, a voice profile must name a ready speech provider; **Talk live** needs a Live-capable provider (an ElevenLabs key with the Agents permissions, or Codex realtime) and a session in the pane, which a brand-new Chat does not have yet: send a first message, or press **Tap to talk** once.
+Anyone on the canary release ring for now: this pack and three of the packs it requires (`chat-rail`, `chat-thread`, `face-to-face`) carry `"channel": "canary"` and are hidden on stable until the release that carries `LivePresence` (0.11.16) has been promoted; the other five it requires carry no `channel`. It is on by default. The Face needs Dimension 0.11.16 or newer (`face-to-face` `requires.dimension`); on an older build the engine skips that pack and the Face's place reads "This space surface is not installed", with text that says to reinstall, which does not help: the fix is updating Dimension. To talk, a voice profile must name a ready speech provider; **Talk live** needs a Live-capable provider (an ElevenLabs key with the Agents permissions, or Codex realtime) and a session in the pane, which a brand-new Chat does not have yet: send a first message, or press **Tap to talk** once.
 
 ## Limits and risks
 

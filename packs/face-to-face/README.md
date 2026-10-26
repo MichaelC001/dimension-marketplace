@@ -99,7 +99,7 @@ data URL (`vite build` with `assetsInclude: ["**/*.bin"]` and `import ... ?inlin
 
 ## Who can use it
 
-Anyone, on every release ring (the pack carries no `channel`; it left the canary ring with 0.1.5). It is on by default
+Anyone on the canary release ring for now (`"channel": "canary"`; hidden on stable until the Chat set is promoted with 0.11.16). It is on by default
 (`defaultEnabled: true`) and loads only in the Chat space, the one space that opts in. It needs Dimension 0.11.16 or
 newer (`requires.dimension`), because the Live bar it draws (`LivePresence`) is first granted to packs there: on an older
 build the engine skips the pack and the Face's place in the Chat space reads "This space surface is not installed" (its text says to reinstall; updating Dimension is the fix). To talk you
