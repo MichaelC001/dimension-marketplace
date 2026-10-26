@@ -14336,7 +14336,6 @@ var BrowserRuntime = class {
     await Promise.allSettled(this.removals);
     return closed;
   }
-  /** Retain ownership and the lock until the driver confirms shutdown. */
   async teardown(entry) {
     if (this.byId.get(entry.browserId) !== entry) return;
     settleOnClose(entry);
@@ -14885,11 +14884,7 @@ var BrowserRuntime = class {
   async endProfileSession(sessionId) {
     for (const entry of [...this.byId.values()]) {
       if (entry.worker && entry.taskSession === sessionId) await this.stopTask(entry);
-      const wasHolding = [...entry.openers.values()].some((opener) => opener.session === sessionId);
-      for (const key of [...entry.openers.keys()]) if (entry.openers.get(key)?.session === sessionId) entry.openers.delete(key);
-      for (const [tabId, owner] of [...entry.tabOwners]) if (owner === sessionId) entry.tabOwners.delete(tabId);
-      entry.tabActive.delete(sessionId);
-      if (wasHolding && entry.openers.size === 0) this.watchUnheld(entry);
+      if (releaseSessionHolds(entry, sessionId) && entry.openers.size === 0) this.watchUnheld(entry);
     }
   }
   requireOpen(browserId, allowClosed = false) {
@@ -16230,6 +16225,17 @@ function timerMs(name, value, fallback) {
 }
 function isSavedProfile(entry) {
   return entry.profile !== null && entry.profile !== RELAY_PROFILE;
+}
+function releaseSessionHolds(entry, sessionId) {
+  let wasHolding = false;
+  for (const [key, opener] of [...entry.openers]) {
+    if (opener.session !== sessionId) continue;
+    entry.openers.delete(key);
+    wasHolding = true;
+  }
+  for (const [tabId, owner] of [...entry.tabOwners]) if (owner === sessionId) entry.tabOwners.delete(tabId);
+  entry.tabActive.delete(sessionId);
+  return wasHolding;
 }
 function refuseWhileTakenOver(entry, caller, tools = "steps") {
   if (caller !== "app" && entry.takenOver) fail("human_driving", TAKEN_OVER_MESSAGES[tools]);
