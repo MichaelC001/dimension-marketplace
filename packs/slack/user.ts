@@ -4,7 +4,7 @@ import { createIdentity } from "./identity";
 import { createMcpClient } from "./mcp-client";
 import { createSlackActTool, createSlackReadTool, createSlackToolsTool, createToolCatalog } from "./tools";
 
-export default function slackUserExtension(pi: ExtensionAPI): void {
+export function registerSlackUser(pi: ExtensionAPI): void {
 	const store = createCredentialStore({ path: TOKEN_PATH });
 	const client = createMcpClient({
 		accessToken: () => store.accessToken(),

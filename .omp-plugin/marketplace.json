@@ -1147,8 +1147,8 @@
 			"pluginId": "slack",
 			"title": "Slack",
 			"icon": "packs/slack/assets/icon.svg",
-			"description": "Slack connector — list channels, read messages, and post via the Slack Web API",
-			"version": "0.1.3",
+			"description": "Slack for your agent, two ways: a bot app you add to channels, or your own account through Slack's official MCP server. Connect one or both.",
+			"version": "0.2.0",
 			"author": {
 				"name": "Dimension"
 			},
@@ -1160,30 +1160,9 @@
 				"chat",
 				"messaging",
 				"webhook",
-				"connector"
-			]
-		},
-		{
-			"name": "slack-user",
-			"source": "./packs/slack-user",
-			"pluginId": "slack-user",
-			"title": "Slack (as you)",
-			"icon": "packs/slack-user/assets/icon.svg",
-			"description": "Slack as you: search, read and send in your own name through Slack's official MCP server",
-			"version": "0.1.0",
-			"author": {
-				"name": "Dimension"
-			},
-			"repository": "https://github.com/insodimension/dimension-community",
-			"license": "MIT",
-			"category": "connector",
-			"tags": [
-				"slack",
-				"chat",
-				"messaging",
+				"connector",
 				"mcp",
-				"oauth",
-				"connector"
+				"oauth"
 			]
 		},
 		{
