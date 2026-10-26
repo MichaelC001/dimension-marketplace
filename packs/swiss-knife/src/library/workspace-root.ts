@@ -1,24 +1,17 @@
-import { readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
+import { z } from "zod";
 
-/**
- * The workspace a session's cwd belongs to, for stamping and scoping library rows.
- *
- * A session in a linked worktree (`~/.inso/wt/<repo>-<task>`) works on the repository
- * the worktree was cut from, and the rail lists it under that workspace. The library
- * follows the same rule as the engine's `worktreeOwner` (packages/engine/src/cwd-workspace.ts):
- * the engine's origin marker when it names somewhere other than the main checkout,
- * else the same subpath of git's main checkout, resolved again while that still sits
- * in a linked worktree. File reads only, never throws, memoised per cwd.
- *
- * A pack cannot import the engine, so this mirrors OMP's `linkedWorktreeOf`
- * (packages/coding-agent/src/registry/agent-scope.ts). Keep the two in step.
- */
-
-/** The marker a session worktree records its origin in, inside its private git dir. */
 const SESSION_ORIGIN_FILE = "inso-session-origin";
-/** The same bound as the engine's ownership chain: a hand-edited cycle ends here. */
 const MAX_HOPS = 4;
+const RELOAD_MIN_MS = 5_000;
+
+const ProjectsFile = z.object({ projects: z.array(z.object({ path: z.string().trim().min(1) }).loose()) }).loose();
+const OwnersFile = z
+	.object({
+		owners: z.record(z.string(), z.object({ root: z.string().min(1), origin: z.string().min(1), mapsSubpaths: z.boolean().optional() }).loose()),
+	})
+	.loose();
 
 interface LinkedWorktree {
 	readonly root: string;
@@ -26,22 +19,100 @@ interface LinkedWorktree {
 	readonly mainCheckout: string;
 }
 
-const owners = new Map<string, string>();
+interface ChainLink {
+	readonly path: string;
+	readonly at: string;
+	readonly worktree?: string;
+}
 
-export function workspaceRoot(cwd: string): string {
-	const start = resolve(cwd);
-	const known = owners.get(start);
-	if (known !== undefined) return known;
+interface RecordedOwner {
+	readonly root: string;
+	readonly origin: string;
+	readonly mapsSubpaths: boolean;
+}
+
+interface Root {
+	readonly path: string;
+	readonly base: string;
+}
+
+export interface WorkspaceResolverOptions {
+	readonly home: string;
+	readonly projectsFile?: string;
+	readonly now?: () => number;
+}
+
+export type WorkspaceResolver = (cwd: string) => string;
+
+export function createWorkspaceResolver(options: WorkspaceResolverOptions): WorkspaceResolver {
+	const projectsFile = options.projectsFile ?? join(options.home, "projects.json");
+	const ledgerFile = join(options.home, "worktree-owners.json");
+	const now = options.now ?? Date.now;
+	const placed = new Map<string, string>();
+	let roots: readonly Root[] = [];
+	let owners: ReadonlyMap<string, RecordedOwner> = new Map();
+	let stamps: string | undefined;
+	let checkedAt = Number.NEGATIVE_INFINITY;
+
+	function refresh(): void {
+		const moment = now();
+		if (moment - checkedAt < RELOAD_MIN_MS) return;
+		checkedAt = moment;
+		const next = `${fileStamp(projectsFile)}|${fileStamp(ledgerFile)}`;
+		if (next === stamps) return;
+		stamps = next;
+		roots = readRoots(projectsFile);
+		owners = readOwners(ledgerFile);
+		placed.clear();
+	}
+
+	return cwd => {
+		refresh();
+		const start = resolve(cwd);
+		const known = placed.get(start);
+		if (known !== undefined) return known;
+		const chain = ownershipChain(start, owners);
+		let claimed: string | undefined;
+		for (const { at, worktree } of chain) {
+			claimed = roots.find(({ base }) => within(at, base) && (worktree === undefined || within(base, worktree)))?.path;
+			if (claimed !== undefined) break;
+		}
+		const answer = claimed ?? chain[chain.length - 1]?.path ?? start;
+		placed.set(start, answer);
+		return answer;
+	};
+}
+
+function ownershipChain(start: string, owners: ReadonlyMap<string, RecordedOwner>): readonly ChainLink[] {
+	const chain: ChainLink[] = [];
 	let home = start;
 	for (let hops = MAX_HOPS; hops > 0; hops -= 1) {
 		const linked = linkedWorktreeOf(home);
-		if (linked === undefined) break;
+		if (linked === undefined) {
+			const gone = recordedOwnerOf(owners, home);
+			if (gone === undefined || existsSync(gone.root)) break;
+			chain.push({ path: home, at: comparable(home), worktree: comparable(gone.root) });
+			home = gone.mapsSubpaths ? join(gone.origin, relative(gone.root, home)) : resolve(gone.origin);
+			continue;
+		}
+		chain.push({ path: home, at: comparable(home), worktree: comparable(linked.root) });
 		const origin = readText(join(linked.gitDir, SESSION_ORIGIN_FILE))?.trim();
-		const mapsSubpath = !origin || sameFolder(origin, linked.mainCheckout);
-		home = mapsSubpath ? join(linked.mainCheckout, relative(linked.root, home)) : resolve(origin);
+		const mapsSubpaths = !origin || comparable(origin) === comparable(linked.mainCheckout);
+		home = mapsSubpaths ? join(linked.mainCheckout, relative(linked.root, home)) : resolve(origin);
 	}
-	owners.set(start, home);
-	return home;
+	chain.push({ path: home, at: comparable(home) });
+	return chain;
+}
+
+function recordedOwnerOf(owners: ReadonlyMap<string, RecordedOwner>, cwd: string): RecordedOwner | undefined {
+	let at = comparable(cwd);
+	for (;;) {
+		const hit = owners.get(at);
+		if (hit !== undefined) return hit;
+		const cut = at.lastIndexOf("/");
+		if (cut <= 0 || /^[a-z]:$/i.test(at.slice(0, cut))) return undefined;
+		at = at.slice(0, cut);
+	}
 }
 
 function linkedWorktreeOf(cwd: string): LinkedWorktree | undefined {
@@ -60,9 +131,6 @@ function linkedWorktreeOf(cwd: string): LinkedWorktree | undefined {
 	}
 }
 
-/** A gitlink FILE read as a linked worktree: the worktree, `undefined` for a worktree with
- *  no main checkout (bare repository), or `"not-linked"` for a gitlink with no `commondir`
- *  (a submodule checkout, or an unreadable one). */
 function readLinkedWorktree(root: string, dotGit: string): LinkedWorktree | undefined | "not-linked" {
 	const gitDirRef = /^gitdir:\s*(.+)$/m.exec(readText(dotGit) ?? "")?.[1]?.trim();
 	if (!gitDirRef) return "not-linked";
@@ -75,16 +143,6 @@ function readLinkedWorktree(root: string, dotGit: string): LinkedWorktree | unde
 	return mainCheckout ? { root, gitDir, mainCheckout } : undefined;
 }
 
-function entryAt(path: string): "file" | "directory" | undefined {
-	try {
-		const entry = statSync(path, { throwIfNoEntry: false });
-		return entry?.isDirectory() ? "directory" : entry ? "file" : undefined;
-	} catch {
-		return undefined;
-	}
-}
-
-/** `core.worktree` from a git config file's text: a section-aware line scan. */
 function coreWorktree(config: string | undefined): string | undefined {
 	if (!config) return undefined;
 	let inCore = false;
@@ -101,12 +159,53 @@ function coreWorktree(config: string | undefined): string | undefined {
 	return undefined;
 }
 
-function sameFolder(left: string, right: string): boolean {
-	const fold = (path: string) => {
-		const slashed = resolve(path).replaceAll("\\", "/").replace(/\/+$/, "");
-		return process.platform === "win32" || process.platform === "darwin" ? slashed.toLowerCase() : slashed;
-	};
-	return fold(left) === fold(right);
+function readRoots(file: string): readonly Root[] {
+	const parsed = ProjectsFile.safeParse(readJson(file));
+	if (!parsed.success) return [];
+	return parsed.data.projects
+		.map(({ path }) => ({ path: resolve(path), base: comparable(path) }))
+		.sort((left, right) => right.base.length - left.base.length);
+}
+
+function readOwners(file: string): ReadonlyMap<string, RecordedOwner> {
+	const parsed = OwnersFile.safeParse(readJson(file));
+	if (!parsed.success) return new Map();
+	return new Map(Object.entries(parsed.data.owners).map(([key, { root, origin, mapsSubpaths }]) => [key, { root, origin, mapsSubpaths: mapsSubpaths === true }]));
+}
+
+function comparable(value: string): string {
+	const flat = resolve(value).replaceAll("\\", "/").replace(/\/+$/, "");
+	return process.platform === "win32" || process.platform === "darwin" ? flat.toLowerCase() : flat;
+}
+
+function within(inner: string, outer: string): boolean {
+	return inner === outer || inner.startsWith(`${outer}/`);
+}
+
+function entryAt(path: string): "file" | "directory" | undefined {
+	try {
+		const entry = statSync(path, { throwIfNoEntry: false });
+		return entry?.isDirectory() ? "directory" : entry ? "file" : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function fileStamp(file: string): string {
+	try {
+		const stat = statSync(file);
+		return `${stat.mtimeMs}:${stat.size}`;
+	} catch {
+		return "";
+	}
+}
+
+function readJson(file: string): unknown {
+	try {
+		return JSON.parse(readFileSync(file, "utf8"));
+	} catch {
+		return undefined;
+	}
 }
 
 function readText(file: string): string | undefined {

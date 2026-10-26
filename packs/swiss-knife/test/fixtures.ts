@@ -279,3 +279,24 @@ export async function addWorktree(repo: string, dir: string): Promise<string> {
 export async function worktreeGitDir(worktree: string): Promise<string> {
 	return resolve(await git(worktree, "rev-parse", "--absolute-git-dir"));
 }
+
+export async function registerProjects(file: string, paths: readonly string[]): Promise<void> {
+	await mkdir(dirname(file), { recursive: true });
+	await writeFile(file, JSON.stringify({ projects: paths.map(path => ({ path })) }));
+}
+
+export interface WorktreeOwnerRecord {
+	readonly root: string;
+	readonly origin: string;
+	readonly mapsSubpaths: boolean;
+}
+
+function ledgerKey(root: string): string {
+	const flat = resolve(root).replaceAll("\\", "/").replace(/\/+$/, "");
+	return process.platform === "win32" || process.platform === "darwin" ? flat.toLowerCase() : flat;
+}
+
+export async function recordWorktreeOwner(home: string, owner: WorktreeOwnerRecord): Promise<void> {
+	await mkdir(home, { recursive: true });
+	await writeFile(join(home, "worktree-owners.json"), JSON.stringify({ version: 1, owners: { [ledgerKey(owner.root)]: owner } }));
+}

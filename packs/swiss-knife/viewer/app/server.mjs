@@ -32068,8 +32068,8 @@ function createFence(options2) {
     } catch (error51) {
       const code = error51 instanceof Error && "code" in error51 && typeof error51.code === "string" ? error51.code : void 0;
       const anchor = await nearestReal(lexical);
-      const within = lent.some((file2) => comparable(file2, platform) === comparable(lexical, platform)) || options2.indexed?.isLent(lexical) === true || anchor !== void 0 && [...roots, ...await realRoots()].some((root) => insideRoot(anchor, root, platform));
-      if (!within) return refuseOutside(requested, `it does not resolve (${code ?? "unknown error"})`);
+      const within2 = lent.some((file2) => comparable(file2, platform) === comparable(lexical, platform)) || options2.indexed?.isLent(lexical) === true || anchor !== void 0 && [...roots, ...await realRoots()].some((root) => insideRoot(anchor, root, platform));
+      if (!within2) return refuseOutside(requested, `it does not resolve (${code ?? "unknown error"})`);
       if (code === "ENOENT" || code === "ENOTDIR") return refuse(`no such file: "${requested}"`);
       if (code === "EACCES" || code === "EPERM") return refuse(`"${requested}" cannot be read: permission denied`);
       return refuse(`"${requested}" cannot be resolved${code ? ` (${code})` : ""}`);
@@ -32692,93 +32692,8 @@ function commentFromRecord(record2) {
   };
 }
 
-// ../src/library/workspace-root.ts
-import { readFileSync, statSync } from "node:fs";
-import { basename, dirname, join, relative, resolve as resolve2 } from "node:path";
-var SESSION_ORIGIN_FILE = "inso-session-origin";
-var MAX_HOPS = 4;
-var owners = /* @__PURE__ */ new Map();
-function workspaceRoot(cwd) {
-  const start = resolve2(cwd);
-  const known = owners.get(start);
-  if (known !== void 0) return known;
-  let home = start;
-  for (let hops = MAX_HOPS; hops > 0; hops -= 1) {
-    const linked = linkedWorktreeOf(home);
-    if (linked === void 0) break;
-    const origin = readText(join(linked.gitDir, SESSION_ORIGIN_FILE))?.trim();
-    const mapsSubpath = !origin || sameFolder(origin, linked.mainCheckout);
-    home = mapsSubpath ? join(linked.mainCheckout, relative(linked.root, home)) : resolve2(origin);
-  }
-  owners.set(start, home);
-  return home;
-}
-function linkedWorktreeOf(cwd) {
-  let dir = cwd;
-  for (; ; ) {
-    const dotGit = join(dir, ".git");
-    const entry = entryAt(dotGit);
-    if (entry === "directory") return void 0;
-    if (entry === "file") {
-      const linked = readLinkedWorktree(dir, dotGit);
-      if (linked !== "not-linked") return linked;
-    }
-    const parent = dirname(dir);
-    if (parent === dir) return void 0;
-    dir = parent;
-  }
-}
-function readLinkedWorktree(root, dotGit) {
-  const gitDirRef = /^gitdir:\s*(.+)$/m.exec(readText(dotGit) ?? "")?.[1]?.trim();
-  if (!gitDirRef) return "not-linked";
-  const gitDir = resolve2(root, gitDirRef);
-  const commonRef = readText(join(gitDir, "commondir"))?.trim();
-  if (!commonRef) return "not-linked";
-  const commonDir = resolve2(gitDir, commonRef);
-  const configured = coreWorktree(readText(join(commonDir, "config")));
-  const mainCheckout = configured ? resolve2(commonDir, configured) : basename(commonDir) === ".git" ? dirname(commonDir) : void 0;
-  return mainCheckout ? { root, gitDir, mainCheckout } : void 0;
-}
-function entryAt(path2) {
-  try {
-    const entry = statSync(path2, { throwIfNoEntry: false });
-    return entry?.isDirectory() ? "directory" : entry ? "file" : void 0;
-  } catch {
-    return void 0;
-  }
-}
-function coreWorktree(config2) {
-  if (!config2) return void 0;
-  let inCore = false;
-  for (const raw of config2.split(/\r?\n/)) {
-    const line = raw.trim();
-    if (line.startsWith("[")) {
-      inCore = /^\[\s*core\s*\]/i.test(line);
-      continue;
-    }
-    if (!inCore) continue;
-    const value = /^worktree\s*=\s*(.*)$/i.exec(line)?.[1]?.trim();
-    if (value) return value.replace(/^"(.*)"$/, "$1");
-  }
-  return void 0;
-}
-function sameFolder(left, right) {
-  const fold = (path2) => {
-    const slashed = resolve2(path2).replaceAll("\\", "/").replace(/\/+$/, "");
-    return process.platform === "win32" || process.platform === "darwin" ? slashed.toLowerCase() : slashed;
-  };
-  return fold(left) === fold(right);
-}
-function readText(file2) {
-  try {
-    return readFileSync(file2, "utf8");
-  } catch {
-    return void 0;
-  }
-}
-
 // ../src/library/schema.ts
-var SCHEMA_VERSION = 2;
+var SCHEMA_VERSION = 3;
 var DISCARDED_RETENTION_MS = 30 * 24 * 60 * 60 * 1e3;
 var CONNECTION = `
 PRAGMA busy_timeout = 2000;
@@ -32849,10 +32764,11 @@ CREATE INDEX comments_share ON comments(share_id, created_at);
 CREATE INDEX comments_unread ON comments(share_id) WHERE read_at IS NULL;
 `;
 var MIGRATIONS = {
-  1: `
+  1: (db) => db.exec(`
 ALTER TABLE shares ADD COLUMN version_at INTEGER NOT NULL DEFAULT 0;
 UPDATE shares SET version_at = created_at;
-`
+`),
+  2: rehomeWorkspaces
 };
 function readVersion(db) {
   const statement = db.prepare("PRAGMA user_version");
@@ -32862,7 +32778,7 @@ function readVersion(db) {
     statement.finalize();
   }
 }
-function upgrade(db) {
+function upgrade(db, workspaceOf) {
   const version2 = readVersion(db);
   if (version2 === 0) {
     db.exec(SCHEMA);
@@ -32870,17 +32786,17 @@ function upgrade(db) {
     for (let step = version2; step < SCHEMA_VERSION; step++) {
       const migration = MIGRATIONS[step];
       if (migration === void 0) throw new LibraryError(`library.db is schema version ${version2} and has no upgrade path to ${SCHEMA_VERSION}.`);
-      db.exec(migration);
+      migration(db, workspaceOf);
     }
   }
   db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
 }
-function prepareDatabase(db, now) {
+function prepareDatabase(db, now, workspaceOf) {
   db.exec(CONNECTION);
   if (readVersion(db) < SCHEMA_VERSION) {
     db.exec("BEGIN IMMEDIATE");
     try {
-      if (readVersion(db) < SCHEMA_VERSION) upgrade(db);
+      if (readVersion(db) < SCHEMA_VERSION) upgrade(db, workspaceOf);
       db.exec("COMMIT");
     } catch (error51) {
       db.exec("ROLLBACK");
@@ -32897,13 +32813,12 @@ function prepareDatabase(db, now) {
   } finally {
     purge.finalize();
   }
-  rehomeWorkspaces(db);
 }
-function rehomeWorkspaces(db) {
+function rehomeWorkspaces(db, workspaceOf) {
   const distinct = db.prepare("SELECT DISTINCT workspace FROM artifacts WHERE workspace IS NOT NULL");
   let moves;
   try {
-    moves = distinct.all().map(({ workspace }) => [workspace, workspaceRoot(workspace)]).filter(([from, to]) => from !== to);
+    moves = distinct.all().map(({ workspace }) => [workspace, workspaceOf(workspace)]).filter(([from, to]) => from !== to);
   } finally {
     distinct.finalize();
   }
@@ -32919,7 +32834,7 @@ function rehomeWorkspaces(db) {
 // ../src/library/trash.ts
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { basename as basename2, dirname as dirname2 } from "node:path";
+import { basename, dirname } from "node:path";
 var execFileAsync = promisify(execFile);
 var TRASH_TIMEOUT_MS = 6e4;
 var GIT_TIMEOUT_MS = 5e3;
@@ -32979,7 +32894,7 @@ async function moveToTrash(path2, platform = process.platform) {
 }
 async function defaultTrash(path2) {
   try {
-    const outcome = await run("git", ["ls-files", "--error-unmatch", "--", basename2(path2)], { timeout: GIT_TIMEOUT_MS, cwd: dirname2(path2) });
+    const outcome = await run("git", ["ls-files", "--error-unmatch", "--", basename(path2)], { timeout: GIT_TIMEOUT_MS, cwd: dirname(path2) });
     return outcome.code !== 0;
   } catch {
     return true;
@@ -32989,7 +32904,7 @@ async function defaultTrash(path2) {
 // ../src/library/thumbs.ts
 import { randomBytes as randomBytes2 } from "node:crypto";
 import { mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
-import { join as join2 } from "node:path";
+import { join } from "node:path";
 
 // ../src/thumbnail.ts
 var MAX_THUMB_BYTES = 150 * 1024;
@@ -33011,10 +32926,10 @@ async function writeThumb(directory, id2, bytes, mime) {
   if (!matchesMime(bytes, mime)) throw new LibraryError(`the thumbnail bytes are not ${mime}`);
   await mkdir(directory, { recursive: true });
   const name = `${id2}.${EXTENSIONS[mime]}`;
-  const staging = join2(directory, `${name}.${randomBytes2(6).toString("hex")}.tmp`);
+  const staging = join(directory, `${name}.${randomBytes2(6).toString("hex")}.tmp`);
   try {
     await writeFile(staging, bytes);
-    await rename(staging, join2(directory, name));
+    await rename(staging, join(directory, name));
   } catch (error51) {
     await rm(staging, { force: true });
     throw error51;
@@ -33031,7 +32946,172 @@ async function removeThumbs(directory, id2, keep) {
     throw error51;
   }
   const own = entries.filter((entry) => entry !== keep && entry.startsWith(`${id2}.`));
-  await Promise.all(own.map((entry) => rm(join2(directory, entry), { force: true })));
+  await Promise.all(own.map((entry) => rm(join(directory, entry), { force: true })));
+}
+
+// ../src/library/workspace-root.ts
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { basename as basename2, dirname as dirname2, join as join2, relative, resolve as resolve2 } from "node:path";
+var SESSION_ORIGIN_FILE = "inso-session-origin";
+var MAX_HOPS = 4;
+var RELOAD_MIN_MS = 5e3;
+var ProjectsFile = external_exports.object({ projects: external_exports.array(external_exports.object({ path: external_exports.string().trim().min(1) }).loose()) }).loose();
+var OwnersFile = external_exports.object({
+  owners: external_exports.record(external_exports.string(), external_exports.object({ root: external_exports.string().min(1), origin: external_exports.string().min(1), mapsSubpaths: external_exports.boolean().optional() }).loose())
+}).loose();
+function createWorkspaceResolver(options2) {
+  const projectsFile = options2.projectsFile ?? join2(options2.home, "projects.json");
+  const ledgerFile = join2(options2.home, "worktree-owners.json");
+  const now = options2.now ?? Date.now;
+  const placed = /* @__PURE__ */ new Map();
+  let roots = [];
+  let owners = /* @__PURE__ */ new Map();
+  let stamps;
+  let checkedAt = Number.NEGATIVE_INFINITY;
+  function refresh() {
+    const moment = now();
+    if (moment - checkedAt < RELOAD_MIN_MS) return;
+    checkedAt = moment;
+    const next = `${fileStamp(projectsFile)}|${fileStamp(ledgerFile)}`;
+    if (next === stamps) return;
+    stamps = next;
+    roots = readRoots(projectsFile);
+    owners = readOwners(ledgerFile);
+    placed.clear();
+  }
+  return (cwd) => {
+    refresh();
+    const start = resolve2(cwd);
+    const known = placed.get(start);
+    if (known !== void 0) return known;
+    const chain = ownershipChain(start, owners);
+    let claimed;
+    for (const { at, worktree } of chain) {
+      claimed = roots.find(({ base }) => within(at, base) && (worktree === void 0 || within(base, worktree)))?.path;
+      if (claimed !== void 0) break;
+    }
+    const answer2 = claimed ?? chain[chain.length - 1]?.path ?? start;
+    placed.set(start, answer2);
+    return answer2;
+  };
+}
+function ownershipChain(start, owners) {
+  const chain = [];
+  let home = start;
+  for (let hops = MAX_HOPS; hops > 0; hops -= 1) {
+    const linked = linkedWorktreeOf(home);
+    if (linked === void 0) {
+      const gone = recordedOwnerOf(owners, home);
+      if (gone === void 0 || existsSync(gone.root)) break;
+      chain.push({ path: home, at: comparable2(home), worktree: comparable2(gone.root) });
+      home = gone.mapsSubpaths ? join2(gone.origin, relative(gone.root, home)) : resolve2(gone.origin);
+      continue;
+    }
+    chain.push({ path: home, at: comparable2(home), worktree: comparable2(linked.root) });
+    const origin = readText(join2(linked.gitDir, SESSION_ORIGIN_FILE))?.trim();
+    const mapsSubpaths = !origin || comparable2(origin) === comparable2(linked.mainCheckout);
+    home = mapsSubpaths ? join2(linked.mainCheckout, relative(linked.root, home)) : resolve2(origin);
+  }
+  chain.push({ path: home, at: comparable2(home) });
+  return chain;
+}
+function recordedOwnerOf(owners, cwd) {
+  let at = comparable2(cwd);
+  for (; ; ) {
+    const hit = owners.get(at);
+    if (hit !== void 0) return hit;
+    const cut = at.lastIndexOf("/");
+    if (cut <= 0 || /^[a-z]:$/i.test(at.slice(0, cut))) return void 0;
+    at = at.slice(0, cut);
+  }
+}
+function linkedWorktreeOf(cwd) {
+  let dir = cwd;
+  for (; ; ) {
+    const dotGit = join2(dir, ".git");
+    const entry = entryAt(dotGit);
+    if (entry === "directory") return void 0;
+    if (entry === "file") {
+      const linked = readLinkedWorktree(dir, dotGit);
+      if (linked !== "not-linked") return linked;
+    }
+    const parent = dirname2(dir);
+    if (parent === dir) return void 0;
+    dir = parent;
+  }
+}
+function readLinkedWorktree(root, dotGit) {
+  const gitDirRef = /^gitdir:\s*(.+)$/m.exec(readText(dotGit) ?? "")?.[1]?.trim();
+  if (!gitDirRef) return "not-linked";
+  const gitDir = resolve2(root, gitDirRef);
+  const commonRef = readText(join2(gitDir, "commondir"))?.trim();
+  if (!commonRef) return "not-linked";
+  const commonDir = resolve2(gitDir, commonRef);
+  const configured = coreWorktree(readText(join2(commonDir, "config")));
+  const mainCheckout = configured ? resolve2(commonDir, configured) : basename2(commonDir) === ".git" ? dirname2(commonDir) : void 0;
+  return mainCheckout ? { root, gitDir, mainCheckout } : void 0;
+}
+function coreWorktree(config2) {
+  if (!config2) return void 0;
+  let inCore = false;
+  for (const raw of config2.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line.startsWith("[")) {
+      inCore = /^\[\s*core\s*\]/i.test(line);
+      continue;
+    }
+    if (!inCore) continue;
+    const value = /^worktree\s*=\s*(.*)$/i.exec(line)?.[1]?.trim();
+    if (value) return value.replace(/^"(.*)"$/, "$1");
+  }
+  return void 0;
+}
+function readRoots(file2) {
+  const parsed = ProjectsFile.safeParse(readJson(file2));
+  if (!parsed.success) return [];
+  return parsed.data.projects.map(({ path: path2 }) => ({ path: resolve2(path2), base: comparable2(path2) })).sort((left, right) => right.base.length - left.base.length);
+}
+function readOwners(file2) {
+  const parsed = OwnersFile.safeParse(readJson(file2));
+  if (!parsed.success) return /* @__PURE__ */ new Map();
+  return new Map(Object.entries(parsed.data.owners).map(([key, { root, origin, mapsSubpaths }]) => [key, { root, origin, mapsSubpaths: mapsSubpaths === true }]));
+}
+function comparable2(value) {
+  const flat = resolve2(value).replaceAll("\\", "/").replace(/\/+$/, "");
+  return process.platform === "win32" || process.platform === "darwin" ? flat.toLowerCase() : flat;
+}
+function within(inner, outer) {
+  return inner === outer || inner.startsWith(`${outer}/`);
+}
+function entryAt(path2) {
+  try {
+    const entry = statSync(path2, { throwIfNoEntry: false });
+    return entry?.isDirectory() ? "directory" : entry ? "file" : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function fileStamp(file2) {
+  try {
+    const stat5 = statSync(file2);
+    return `${stat5.mtimeMs}:${stat5.size}`;
+  } catch {
+    return "";
+  }
+}
+function readJson(file2) {
+  try {
+    return JSON.parse(readFileSync(file2, "utf8"));
+  } catch {
+    return void 0;
+  }
+}
+function readText(file2) {
+  try {
+    return readFileSync(file2, "utf8");
+  } catch {
+    return void 0;
+  }
 }
 
 // ../src/library/library.ts
@@ -33136,9 +33216,10 @@ async function createLibrary(options2) {
   await mkdir2(thumbsDirectory, { recursive: true, mode: PRIVATE_DIRECTORY_MODE });
   if (process.platform !== "win32") await chmod2(directory, PRIVATE_DIRECTORY_MODE);
   const databaseFile = join3(directory, "library.db");
+  const workspaceOf = createWorkspaceResolver({ home: options2.home, ...options2.projectsFile === void 0 ? {} : { projectsFile: options2.projectsFile } });
   const db = await openDriver(databaseFile);
   try {
-    prepareDatabase(db, now());
+    prepareDatabase(db, now(), workspaceOf);
     await restrictDatabaseFiles(databaseFile);
   } catch (error51) {
     db.close();
@@ -33557,6 +33638,7 @@ async function createLibrary(options2) {
   let closed = false;
   return {
     home: options2.home,
+    workspaceOf,
     query,
     facets,
     get,

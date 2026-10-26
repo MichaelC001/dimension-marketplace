@@ -4,7 +4,6 @@ import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent/extensibility/exten
 import { formatByteSize, PRESENTED_KINDS, type PresentedKind } from "@dimension/sdk/presentation";
 import { LibraryError } from "./library/errors";
 import type { CommentRow, Library, LibraryItem, ShareSummary } from "./library/types";
-import { workspaceRoot } from "./library/workspace-root";
 import { oneLine } from "./present";
 
 export const ARTIFACT_OPS = ["search", "get", "stamp", "update", "discard", "restore", "comments"] as const;
@@ -126,7 +125,7 @@ export async function runArtifacts(library: Library, params: ArtifactsParams, co
 			const page = library.query({
 				...(query === undefined || query === "" ? {} : { q: query, sort: "relevance" as const }),
 				...(params.kind === undefined ? {} : { kinds: [params.kind] }),
-				...(everywhere ? {} : { workspace: workspaceRoot(cwd) }),
+				...(everywhere ? {} : { workspace: library.workspaceOf(cwd) }),
 				limit: Math.min(params.limit ?? DEFAULT_LIMIT, MAX_LIMIT),
 			});
 			if (page.items.length === 0) return everywhere ? "No artifacts found." : "No artifacts found in this workspace (workspace: all searches every workspace).";
@@ -141,7 +140,7 @@ export async function runArtifacts(library: Library, params: ArtifactsParams, co
 			const item = await library.stamp({
 				path: resolve(cwd, params.path),
 				source: "stamp",
-				workspace: workspaceRoot(cwd),
+				workspace: library.workspaceOf(cwd),
 				...(context.sessionId === undefined ? {} : { sessionId: context.sessionId }),
 				...(params.title === undefined ? {} : { title: params.title }),
 				...(params.note === undefined ? {} : { note: params.note }),

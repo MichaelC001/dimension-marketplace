@@ -23,6 +23,7 @@ import {
 import { prepareDatabase } from "./schema";
 import { moveToTrash } from "./trash";
 import { removeThumbs, writeThumb, THUMB_FILE_NAME } from "./thumbs";
+import { createWorkspaceResolver } from "./workspace-root";
 import type {
 	ArtifactId,
 	ArtifactPatch,
@@ -45,6 +46,7 @@ import type {
 
 export interface LibraryOptions {
 	readonly home: string;
+	readonly projectsFile?: string;
 	readonly now?: () => number;
 	readonly platform?: NodeJS.Platform;
 	readonly revokeRemote?: RevokeRemote;
@@ -165,9 +167,10 @@ export async function createLibrary(options: LibraryOptions): Promise<Library> {
 	await mkdir(thumbsDirectory, { recursive: true, mode: PRIVATE_DIRECTORY_MODE });
 	if (process.platform !== "win32") await chmod(directory, PRIVATE_DIRECTORY_MODE);
 	const databaseFile = join(directory, "library.db");
+	const workspaceOf = createWorkspaceResolver({ home: options.home, ...(options.projectsFile === undefined ? {} : { projectsFile: options.projectsFile }) });
 	const db: SqlDriver = await openDriver(databaseFile);
 	try {
-		prepareDatabase(db, now());
+		prepareDatabase(db, now(), workspaceOf);
 		await restrictDatabaseFiles(databaseFile);
 	} catch (error) {
 		db.close();
@@ -618,6 +621,7 @@ export async function createLibrary(options: LibraryOptions): Promise<Library> {
 
 	return {
 		home: options.home,
+		workspaceOf,
 		query,
 		facets,
 		get,
