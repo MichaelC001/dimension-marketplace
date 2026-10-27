@@ -289,6 +289,8 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     ...(process.env.DIMENSION_BROWSER_RELAY_URL ? { relayUrl: process.env.DIMENSION_BROWSER_RELAY_URL } : {}),
     ...(process.env.DIMENSION_BROWSER_HEADLESS === undefined ? {} : { headless: process.env.DIMENSION_BROWSER_HEADLESS !== "false" }),
     ...(process.env.DIMENSION_BROWSER_THROWAWAY_IDLE_MS ? { throwawayIdleMs: Number(process.env.DIMENSION_BROWSER_THROWAWAY_IDLE_MS) } : {}),
+    ...(process.env.DIMENSION_BROWSER_PROFILE_IDLE_MS ? { profileIdleMs: Number(process.env.DIMENSION_BROWSER_PROFILE_IDLE_MS) } : {}),
+    ...(process.env.DIMENSION_BROWSER_UNHELD_IDLE_MS ? { unheldIdleMs: Number(process.env.DIMENSION_BROWSER_UNHELD_IDLE_MS) } : {}),
   });
   const server = new McpServer({ name: "dimension-community-browser", version: "0.1.0" });
   server.server.setNotificationHandler(z.object({

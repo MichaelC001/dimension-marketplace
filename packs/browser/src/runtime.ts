@@ -136,6 +136,8 @@ const READER_IDLE_MS = 60_000;
  * browser is told what happened (`released`), not that its id is unknown.
  */
 const THROWAWAY_IDLE_MS = 10 * 60_000;
+const PROFILE_IDLE_MS = 30 * 60_000;
+const UNHELD_IDLE_MS = 5 * 60_000;
 /** The longest delay a timer holds: a larger one fires after 1 ms, which would turn the idle check into a busy loop. */
 const MAX_TIMER_MS = 2_147_483_647;
 /**
@@ -220,6 +222,8 @@ export interface BrowserRuntimeOptions {
 	actBudgetMs?: number;
 	/** How long a throwaway browser a chat opened may go without a call (and with no View joined) before it is closed; defaults to THROWAWAY_IDLE_MS, at most 2147483647 (a timer's limit). */
 	throwawayIdleMs?: number;
+	profileIdleMs?: number;
+	unheldIdleMs?: number;
 	/** How long a browser the person took over may go with no View joined before the wheel goes back to the agent (a fallback for a View that vanished without handing it back); defaults to VIEW_GONE_MS, at most 2147483647. */
 	viewGoneMs?: number;
 	/**
@@ -355,7 +359,6 @@ interface Entry {
 	pending: number;
 	/** Cells holding it right now (the code seam's `hold`). While any does, an agent is acting on it. */
 	cells: number;
-	/** A throwaway's idle timer, or its close retry (never set for a saved profile or the relay, nor for one a person opened). */
 	idle: NodeJS.Timeout | undefined;
 	/** Set once the runtime began closing it for being idle or to make room; cleared again if that close failed. */
 	retiring: Promise<void> | undefined;
@@ -450,6 +453,8 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	private readonly observedProfiles = new Set<string>();
 	/** How long a throwaway may go without a call before it is closed (see THROWAWAY_IDLE_MS). */
 	private readonly idleMs: number;
+	private readonly profileIdleMs: number;
+	private readonly unheldIdleMs: number;
 	/** How long a taken-over browser may have no View joined before the wheel is given back (see VIEW_GONE_MS). */
 	private readonly viewGoneMs: number;
 	/** Why a browser the runtime closed on its own is gone, by id, so the chat that held it is told rather than sent "unknown". */
@@ -463,14 +468,10 @@ export class BrowserRuntime implements BrowserRuntimePort {
 
 	constructor(options: BrowserRuntimeOptions = {}) {
 		this.options = options;
-		this.idleMs = options.throwawayIdleMs ?? THROWAWAY_IDLE_MS;
-		if (!Number.isFinite(this.idleMs) || this.idleMs <= 0 || this.idleMs > MAX_TIMER_MS) {
-			throw new RangeError(`throwawayIdleMs must be a number of milliseconds above 0 and at most ${MAX_TIMER_MS}, got ${String(options.throwawayIdleMs)}`);
-		}
-		this.viewGoneMs = options.viewGoneMs ?? VIEW_GONE_MS;
-		if (!Number.isFinite(this.viewGoneMs) || this.viewGoneMs <= 0 || this.viewGoneMs > MAX_TIMER_MS) {
-			throw new RangeError(`viewGoneMs must be a number of milliseconds above 0 and at most ${MAX_TIMER_MS}, got ${String(options.viewGoneMs)}`);
-		}
+		this.idleMs = timerMs("throwawayIdleMs", options.throwawayIdleMs, THROWAWAY_IDLE_MS);
+		this.profileIdleMs = timerMs("profileIdleMs", options.profileIdleMs, PROFILE_IDLE_MS);
+		this.unheldIdleMs = timerMs("unheldIdleMs", options.unheldIdleMs, UNHELD_IDLE_MS);
+		this.viewGoneMs = timerMs("viewGoneMs", options.viewGoneMs, VIEW_GONE_MS);
 		this.store = new ProfileStore(options.rootDir);
 		this.annotationFiles = new AnnotationFiles(join(this.store.rootDir, "annotations"));
 		this.credentialKey = new CredentialKey(this.store.rootDir);
@@ -668,9 +669,8 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			if (profile !== null && profile !== RELAY_PROFILE) entry.notice = this.touchProfile(profile, driver.app);
 			this.byId.set(entry.browserId, entry);
 			if (profile !== null) this.byProfile.set(profile, entry);
-			// A person's own Private browser is theirs: no clock closes it (the leak is chats' browsers, and the View stops reading while its tab is hidden).
-			// A cell's browser has its own clock even when it is the person's relay Chrome (letting go of an attachment closes nothing of theirs).
-			if ((profile === null || code !== undefined) && opener.caller !== "app") this.watchIdle(entry, this.idleOf(entry));
+			const chatsOwnClock = (profile === null || code !== undefined) && opener.caller !== "app";
+			if (isSavedProfile(entry) || chatsOwnClock) this.watchIdle(entry, this.idleOf(entry));
 			return entry;
 		} catch (error) {
 			// A factory owns rollback until it returns; only its confirmed-close
@@ -726,6 +726,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 				// may stop this — a chat is always free to leave, and what it leaves is another chat's tabs or the person's own hands.
 				if (entry.openers.size > 1 || entry.viewers > 0 || entry.takenOver) {
 					entry.openers.delete(mine);
+					if (entry.openers.size === 0) this.watchUnheld(entry);
 					return;
 				}
 			}
@@ -747,7 +748,6 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		return closed;
 	}
 
-	/** Retain ownership and the lock until the driver confirms shutdown. A throwaway that cannot be stopped is tried again soon. */
 	private async teardown(entry: Entry): Promise<void> {
 		if (this.byId.get(entry.browserId) !== entry) return;
 		settleOnClose(entry);
@@ -763,7 +763,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 			await this.probeAtClose(entry);
 			await this.stopBrowser(entry);
 		} catch (error) {
-			if (entry.profile === null) this.retryClose(entry);
+			this.retryClose(entry);
 			throw error;
 		}
 		this.markUsed(entry);
@@ -792,14 +792,13 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		await entry.driver.kill();
 	}
 
-	/** A throwaway holds a slot and may hold a Chrome, and its chat may never call it again: try to stop it again soon, and again if that fails. */
 	private retryClose(entry: Entry): void {
 		if (this.disposed) return;
 		clearTimeout(entry.idle);
 		entry.idle = setTimeout(() => {
 			void this.serialize(entry, () => this.teardown(entry), { evenIfClosed: true })
 				.then(() => Promise.allSettled(this.removals))
-				.catch((error: unknown) => console.error("A throwaway browser still would not close:", describe(error)));
+				.catch((error: unknown) => console.error("A browser still would not close:", describe(error)));
 		}, Math.min(this.idleMs, CLOSE_RETRY_MS));
 		entry.idle.unref();
 	}
@@ -958,16 +957,21 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		if (entry.closed || entry.retiring !== undefined) return;
 		const quietMs = performance.now() - entry.lastUsed;
 		const idleMs = this.idleOf(entry);
-		// A View joined to its stream is watching it however long the page takes to answer; a call in flight is work; a person who has the
-		// wheel is using the page with no call and, while their document is hidden, no stream; a persisted code browser stays. None of these is idle: only handing the wheel
-		// back (or its fallback, `watchWheel`) lets the clock count.
-		const occupied = this.working(entry) || entry.viewers > 0 || entry.takenOver || entry.code?.persist === true;
+		const keptByHolder = entry.code?.persist === true && entry.openers.size > 0;
+		const occupied = this.working(entry) || entry.viewers > 0 || entry.takenOver || keptByHolder;
 		if (occupied || quietMs < idleMs) {
 			this.watchIdle(entry, occupied ? idleMs : idleMs - quietMs);
 			return;
 		}
-		const reason = `it was a ${entry.code === undefined ? "throwaway" : "code"} browser, closed after ${idleMs / 1_000} s with no calls; open a new one with ${reopenWith(entry)}`;
-		void this.retire(entry, reason).catch((error: unknown) => console.error("An idle throwaway browser was not closed:", describe(error)));
+		const what = isSavedProfile(entry) ? `the browser of the saved profile "${entry.profile}" (its sign-ins are kept)` : `a ${entry.code === undefined ? "throwaway" : "code"} browser`;
+		const reason = `it was ${what}, closed after ${idleMs / 1_000} s with no calls; open a new one with ${reopenWith(entry)}`;
+		void this.retire(entry, reason).catch((error: unknown) => console.error("An idle browser was not closed:", describe(error)));
+	}
+
+	private watchUnheld(entry: Entry): void {
+		if (entry.closed || entry.retiring !== undefined || entry.profile === RELAY_PROFILE || this.disposed) return;
+		clearTimeout(entry.idle);
+		this.watchIdle(entry, Math.max(0, this.idleOf(entry) - (performance.now() - entry.lastUsed)));
 	}
 
 	/**
@@ -1052,10 +1056,9 @@ export class BrowserRuntime implements BrowserRuntimePort {
 		};
 	}
 
-
-	/** How long `entry` may go without a call: a cell's browser has its own clock (OMP's 1,800 s); every other throwaway has the pack's. */
 	private idleOf(entry: Entry): number {
-		return entry.code?.idleMs ?? this.idleMs;
+		const own = entry.code?.idleMs ?? (isSavedProfile(entry) ? this.profileIdleMs : this.idleMs);
+		return entry.openers.size === 0 ? Math.min(own, this.unheldIdleMs) : own;
 	}
 
 	// -----------------------------------------------------------------------
@@ -1356,11 +1359,7 @@ export class BrowserRuntime implements BrowserRuntimePort {
 	async endProfileSession(sessionId: string): Promise<void> {
 		for (const entry of [...this.byId.values()]) {
 			if (entry.worker && entry.taskSession === sessionId) await this.stopTask(entry);
-			// The host says a session ended: its holds go with it. It says so rarely — a chat that dies unheard is the idle clock's business, as it has
-			// always been — but what it does say must not leave a hold standing that would block the last live chat's close.
-			for (const key of [...entry.openers.keys()]) if (entry.openers.get(key)?.session === sessionId) entry.openers.delete(key);
-			for (const [tabId, owner] of [...entry.tabOwners]) if (owner === sessionId) entry.tabOwners.delete(tabId);
-			entry.tabActive.delete(sessionId);
+			if (releaseSessionHolds(entry, sessionId) && entry.openers.size === 0) this.watchUnheld(entry);
 		}
 	}
 
@@ -2858,6 +2857,30 @@ function reopenWith(entry: Entry): string {
 	const opener = openerFor(entry.openers, undefined);
 	if (opener.caller === "app") return "browser_view";
 	return opener.tool ?? "browser_open";
+}
+
+function timerMs(name: string, value: number | undefined, fallback: number): number {
+	const ms = value ?? fallback;
+	if (!Number.isFinite(ms) || ms <= 0 || ms > MAX_TIMER_MS) {
+		throw new RangeError(`${name} must be a number of milliseconds above 0 and at most ${MAX_TIMER_MS}, got ${String(value)}`);
+	}
+	return ms;
+}
+
+function isSavedProfile(entry: Entry): boolean {
+	return entry.profile !== null && entry.profile !== RELAY_PROFILE;
+}
+
+function releaseSessionHolds(entry: Entry, sessionId: string): boolean {
+	let wasHolding = false;
+	for (const [key, opener] of [...entry.openers]) {
+		if (opener.session !== sessionId) continue;
+		entry.openers.delete(key);
+		wasHolding = true;
+	}
+	for (const [tabId, owner] of [...entry.tabOwners]) if (owner === sessionId) entry.tabOwners.delete(tabId);
+	entry.tabActive.delete(sessionId);
+	return wasHolding;
 }
 
 /** The person's wheel: only the View's own input drives a browser they took over. Refused as `human_driving`. */

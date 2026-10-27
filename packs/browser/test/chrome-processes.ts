@@ -47,10 +47,18 @@ async function chromeProcesses(): Promise<OsProcess[]> {
  * because on Windows each query costs a second.
  */
 export async function chromePidsByThrowaway(root: string): Promise<Map<string, ThrowawayChrome>> {
+	return groupByDirectory(await chromeProcesses(), root, /ephemeral[\\/]([0-9a-f]+)[\\/]/i);
+}
+
+export async function chromePidsByProfile(root: string): Promise<Map<string, ThrowawayChrome>> {
+	return groupByDirectory(await chromeProcesses(), root, /profiles[\\/]([a-z0-9_-]+)[\\/]chrome/i);
+}
+
+function groupByDirectory(processes: readonly OsProcess[], root: string, directory: RegExp): Map<string, ThrowawayChrome> {
 	const byDirectory = new Map<string, ThrowawayChrome>();
-	for (const entry of await chromeProcesses()) {
+	for (const entry of processes) {
 		if (!entry.command.includes(root)) continue;
-		const match = /ephemeral[\\/]([0-9a-f]+)[\\/]/i.exec(entry.command);
+		const match = directory.exec(entry.command);
 		if (match === null) continue;
 		const name = match[1] as string;
 		const known = byDirectory.get(name) ?? { main: undefined, all: [] };
