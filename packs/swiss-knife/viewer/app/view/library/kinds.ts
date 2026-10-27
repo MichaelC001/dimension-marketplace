@@ -46,7 +46,7 @@ export function fullDate(at: number): string {
 }
 
 export function formatDuration(ms: number): string {
-	const seconds = Math.round(ms / 1000);
+	const seconds = Math.max(0, Math.floor(ms / 1000));
 	const minutes = Math.floor(seconds / 60);
 	const hours = Math.floor(minutes / 60);
 	const pad = (value: number) => String(value).padStart(2, "0");
