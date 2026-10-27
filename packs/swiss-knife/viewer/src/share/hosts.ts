@@ -80,7 +80,7 @@ export function p2pAllowed(file: HostsFile): boolean {
 
 export function cloudAllowed(file: HostsFile): boolean {
 	const only = file.policy?.only;
-	return only === undefined ? file.policy?.p2p !== false : only.includes(CLOUD_HOST_ID);
+	return file.policy?.p2p !== false && (only === undefined || only.includes(CLOUD_HOST_ID));
 }
 
 export function visibleHosts(file: HostsFile): readonly StoredHost[] {

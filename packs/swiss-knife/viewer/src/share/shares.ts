@@ -386,7 +386,7 @@ export class ShareService {
 
 	async #newHostedVersion(row: ShareRow): Promise<void> {
 		const item = this.#liveItem(row.artifactId);
-		const { client, discovery } = await this.#options.directory.resolve(row.host);
+		const { client, discovery } = await this.#options.directory.resolve(row.host, row.baseUrl);
 		const source = await openChunkSource(await this.#realPath(item));
 		try {
 			this.#checkPolicy(row.audience, undefined, discovery.policy, discovery.auth.oidc !== undefined, source.size);
@@ -421,7 +421,7 @@ export class ShareService {
 		if (row.host === P2P_HOST_ID) {
 			if (audience.kind !== "link") throw new ShareError(OPEN_LINK_ONLY);
 		} else {
-			const { client, discovery } = await this.#options.directory.resolve(row.host);
+			const { client, discovery } = await this.#options.directory.resolve(row.host, row.baseUrl);
 			this.#checkPolicy(audience, input.expiresInDays, discovery.policy, discovery.auth.oidc !== undefined, undefined);
 			try {
 				const confirmed = await client.patch(row.ownerToken, row.remoteId, patch, this.#abort.signal);

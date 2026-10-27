@@ -19,6 +19,7 @@ export interface ShareHost {
 export interface ShareHosts {
 	readonly hosts: readonly ShareHost[];
 	readonly p2pAllowed: boolean;
+	readonly cloudAllowed: boolean;
 }
 
 export interface ShareProgress {

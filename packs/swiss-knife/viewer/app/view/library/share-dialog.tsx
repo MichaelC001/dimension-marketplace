@@ -1,10 +1,10 @@
 import type { Audience } from "@dimension/sdk/artifact-share";
 import { MenuItem } from "@fraym/ui/components/menu";
+import { Badge } from "@fraym/ui/elements/badge";
 import { Button } from "@fraym/ui/elements/button";
 import { IconButton } from "@fraym/ui/elements/icon-button";
 import { Input } from "@fraym/ui/elements/input";
 import { Modal } from "@fraym/ui/elements/popover";
-import { Radio } from "@fraym/ui/elements/radio";
 import { Select } from "@fraym/ui/elements/select";
 import { Tip } from "@fraym/ui/elements/tooltip";
 import { Icon, type IconName } from "@fraym/ui/icons";
@@ -19,20 +19,22 @@ import { MenuSeparator, MoreMenu } from "./more-menu";
 import {
 	audienceFrom,
 	audienceProblem,
+	CLOUD_HOST,
 	defaultExpiry,
 	defaultHost,
 	expiryChoices,
 	fileChanged,
-	type HostChoice,
 	hostChoices,
 	hostName,
 	initials,
 	linkChoice,
 	OWN_SERVER_PROMPT,
+	type Place,
+	placeOf,
+	placesOf,
 	parsePairing,
 	peopleFrom,
 	peopleOf,
-	placeOf,
 	shortDate,
 	signinChoice,
 } from "./share-options";
@@ -44,7 +46,6 @@ const SAVED_HOLD_MS = 2400;
 const CURRENT = "current";
 const NEVER = "never";
 const PAIRING = "pairing";
-const P2P_TIP = "The link opens only while this computer is on and Dimension is running. When it sleeps or Dimension closes, people see that it is not available until you are back.";
 
 export interface ShareDialogProps {
 	readonly tools: LibraryTools;
@@ -65,27 +66,6 @@ type Status =
 	| { readonly kind: "failed"; readonly error: string };
 
 const IDLE: Status = { kind: "idle" };
-
-interface Place {
-	readonly id: string;
-	readonly icon: IconName;
-	readonly title: string;
-	readonly detail: string;
-	readonly badge?: { readonly text: string; readonly tip?: string };
-	readonly allowed: boolean;
-	readonly reason?: string;
-}
-
-function placeFor(choice: HostChoice): Place {
-	const { host } = choice;
-	const base = { id: host.id, allowed: choice.allowed, ...(choice.reason === undefined ? {} : { reason: choice.reason }) };
-	if (host.kind === "dimension") {
-		const days = host.policy?.maxDays;
-		return { ...base, icon: "cloud", title: "Dimension cloud", detail: days === undefined ? "Always on. An encrypted copy is kept on Dimension's server." : `Always on. An encrypted copy is kept on Dimension's server for up to ${days} days.`, badge: { text: "Recommended" } };
-	}
-	if (host.kind === "p2p") return { ...base, icon: "computer", title: "This computer", detail: "Nothing is uploaded. The file is sent straight from here, encrypted.", badge: { text: "Only while it is on", tip: P2P_TIP } };
-	return { ...base, icon: "box", title: host.name, detail: `Your ${host.kind === "company" ? "company's " : ""}server at ${hostName(host.baseUrl)}. Always on.` };
-}
 
 function progressText(progress: ShareProgress | null): string {
 	const percent = progress === null || progress.total === 0 ? null : Math.min(100, Math.round((progress.sent / progress.total) * 100));
@@ -114,10 +94,6 @@ function Avatar({ children, icon }: { readonly children?: ReactNode; readonly ic
 	);
 }
 
-function unavailable(id: string, icon: IconName, title: string, detail: string, reason: string): Place {
-	return { id, icon, title, detail, allowed: false, reason };
-}
-
 export function ShareDialog({ tools, item, shareId, onClose, onCreated, onChanged }: ShareDialogProps) {
 	const [ownId, setOwnId] = useState(shareId);
 	const [own, setOwn] = useState<ShareSummary | null>(null);
@@ -134,6 +110,8 @@ export function ShareDialog({ tools, item, shareId, onClose, onCreated, onChange
 	const [status, setStatus] = useState<Status>(IDLE);
 	const [stopNote, setStopNote] = useState<string | null>(null);
 	const [link, setLink] = useState<string | null>(null);
+	const [linkError, setLinkError] = useState<string | null>(null);
+	const [linkReload, setLinkReload] = useState(0);
 	const links = useRef(new Map<string, string>());
 	const polling = useRef(0);
 	const titleId = useId();
@@ -170,23 +148,24 @@ export function ShareDialog({ tools, item, shareId, onClose, onCreated, onChange
 			return;
 		}
 		let live = true;
+		setLinkError(null);
 		tools.link(existingId).then(
 			found => {
 				links.current.set(existingId, found);
 				if (live) setLink(found);
 			},
 			cause => {
-				if (live) setStatus({ kind: "failed", error: errorText(cause) });
+				if (live) setLinkError(errorText(cause));
 			},
 		);
 		return () => {
 			live = false;
 		};
-	}, [tools, existingId]);
+	}, [tools, existingId, linkReload]);
 
 	const choices = hosts === null ? [] : hostChoices(hosts.hosts, item.size);
 	const pairing = hostId === PAIRING;
-	const chosen = pairing ? undefined : (choices.find(choice => choice.host.id === hostId && choice.allowed) ?? choices.find(choice => choice.host.id === defaultHost(choices)));
+	const chosen = pairing ? undefined : hostId === null ? choices.find(choice => choice.host.id === defaultHost(choices)) : choices.find(choice => choice.host.id === hostId && choice.allowed);
 	const host = existing === undefined ? chosen?.host : hosts?.hosts.find(each => each.id === existing.host);
 	const policy = host?.policy;
 	const linkOk = linkChoice(policy).allowed;
@@ -213,7 +192,7 @@ export function ShareDialog({ tools, item, shareId, onClose, onCreated, onChange
 		if (canCreate || creating || existing !== undefined) return undefined;
 		if (hosts === null) return undefined;
 		if (pairing) return "Connect your server first.";
-		if (host === undefined) return "None of these can take the link right now.";
+		if (host === undefined) return hostId === null ? "None of these can take the link right now." : "The place you picked cannot take the link right now.";
 		if (needsPeople) return "Add someone, or choose Anyone with the link.";
 		return problem;
 	};
@@ -383,20 +362,7 @@ export function ShareDialog({ tools, item, shareId, onClose, onCreated, onChange
 	const closing = creating ? () => undefined : onClose;
 	const hint = blocked();
 
-	const places = ((): readonly Place[] => {
-		if (hosts === null) return [];
-		const off = "Your administrator turned this off.";
-		const down = hosts.p2pAllowed ? "Not answering right now. Try again in a moment." : off;
-		const cloud = choices.find(choice => choice.host.kind === "dimension");
-		const p2p = choices.find(choice => choice.host.kind === "p2p");
-		return [
-			cloud === undefined ? unavailable("cloud", "cloud", "Dimension cloud", "Always on. An encrypted copy is kept on Dimension's server.", down) : placeFor(cloud),
-			p2p === undefined ? unavailable("p2p", "computer", "This computer", "Nothing is uploaded. The file is sent straight from here, encrypted.", off) : placeFor(p2p),
-			...choices.filter(choice => choice.host.kind === "self" || choice.host.kind === "company").map(placeFor),
-		];
-	})();
-	const ownServers = places.length - 2;
-	const retryable = places.some(place => !place.allowed && place.reason?.startsWith("Not answering") === true);
+	const { places, servers, retryable } = hosts === null ? { places: [], servers: 0, retryable: false } : placesOf(hosts, choices);
 
 	return (
 		<Modal aria-labelledby={titleId} onClose={closing} trapFocus className="w-[min(560px,calc(100vw-32px))]">
@@ -447,9 +413,20 @@ export function ShareDialog({ tools, item, shareId, onClose, onCreated, onChange
 							{existing !== undefined ? (
 								<section className="min-w-0">
 									<Heading>Link</Heading>
-									{link === null ? <p className="text-fr-sm text-fr-text-3">Reading the link…</p> : <CopyField text={link} label="link" />}
+									{link !== null ? (
+										<CopyField text={link} label="link" />
+									) : linkError !== null ? (
+										<p role="alert" className="text-fr-sm text-fr-del">
+											{linkError}{" "}
+											<button type="button" className={cn("rounded-sm text-fr-accent-text hover:underline", FOCUS)} onClick={() => setLinkReload(count => count + 1)}>
+												Try again
+											</button>
+										</p>
+									) : (
+										<p className="text-fr-sm text-fr-text-3">Reading the link…</p>
+									)}
 									<p className="mt-1.5 flex min-w-0 items-center gap-1.5 text-fr-xs text-fr-text-3">
-										<Icon name={existing.host === "p2p" ? "computer" : existing.host === "cloud" ? "cloud" : "box"} size={12} className="shrink-0" />
+										<Icon name={existing.host === "p2p" ? "computer" : existing.host === CLOUD_HOST ? "cloud" : "box"} size={12} className="shrink-0" />
 										<span className="truncate">{placeOf(existing)}</span>
 									</p>
 								</section>
@@ -468,13 +445,19 @@ export function ShareDialog({ tools, item, shareId, onClose, onCreated, onChange
 									) : (
 										<div role="radiogroup" aria-label="Where the link lives" className="flex flex-col gap-2">
 											{places.map(place => (
-												<PlaceOption key={place.id} place={place} selected={!pairing && host?.id === place.id} disabled={locked} onSelect={() => setHostId(place.id)} />
+												<PlaceCard key={place.id} place={place} selected={!pairing && host?.id === place.id} disabled={locked} onSelect={() => setHostId(place.id)} />
 											))}
-											{managed ? null : ownServers === 0 || pairing ? (
-												<OwnServer tools={tools} selected={pairing} disabled={locked} onSelect={() => setHostId(PAIRING)} onAdded={added => {
-													setHostId(added.id);
-													setReload(count => count + 1);
-												}} />
+											{managed ? null : servers === 0 || pairing ? (
+												<OwnServer
+													tools={tools}
+													selected={pairing}
+													disabled={locked}
+													onSelect={() => setHostId(PAIRING)}
+													onAdded={added => {
+														setHostId(added.id);
+														setReload(count => count + 1);
+													}}
+												/>
 											) : (
 												<button type="button" className={cn("self-start rounded-sm text-fr-xs text-fr-accent-text hover:underline", FOCUS)} disabled={locked} onClick={() => setHostId(PAIRING)}>
 													Connect another server
@@ -582,44 +565,46 @@ export function ShareDialog({ tools, item, shareId, onClose, onCreated, onChange
 	);
 }
 
-function PlaceOption({ place, selected, disabled, onSelect }: { readonly place: Place; readonly selected: boolean; readonly disabled: boolean; readonly onSelect: () => void }) {
+const OWN_SERVER: Place = {
+	id: PAIRING,
+	icon: "box",
+	title: "Your own server",
+	detail: "A VPS or your company's server. Links stay up while this computer is off, and you choose who can sign in.",
+	allowed: true,
+};
+
+function PlaceCard({ place, selected, disabled, onSelect, children }: { readonly place: Place; readonly selected: boolean; readonly disabled: boolean; readonly onSelect: () => void; readonly children?: ReactNode }) {
 	const off = disabled || !place.allowed;
 	return (
 		<div
-			role="radio"
-			aria-checked={selected}
-			aria-disabled={off}
-			tabIndex={off ? -1 : 0}
 			data-slot="share-place"
-			onClick={off ? undefined : onSelect}
-			onKeyDown={event => {
-				if (!off && (event.key === " " || event.key === "Enter")) {
-					event.preventDefault();
-					onSelect();
-				}
-			}}
 			className={cn(
-				"flex items-start gap-3 rounded-lg border px-3 py-2.5 transition-colors",
+				"rounded-lg border transition-colors",
 				selected ? "border-fr-accent bg-fr-accent/5" : "border-fr-border",
-				off ? "cursor-not-allowed opacity-60" : "cursor-pointer hover:border-fr-control-edge-hover",
-				FOCUS,
+				!off && !selected && "hover:border-fr-control-edge-hover",
+				!place.allowed && "opacity-60",
 			)}
 		>
-			<Radio decorative checked={selected} className="mt-0.5" />
-			<Icon name={place.icon} size={16} className="mt-0.5 shrink-0 text-fr-text-2" />
-			<div className="min-w-0 flex-1">
-				<div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-					<span className="text-fr-sm font-medium text-fr-text">{place.title}</span>
-					{place.badge === undefined || !place.allowed ? null : (
-						<Tip label={place.badge.tip} contentClassName="max-w-72 [&>span]:whitespace-normal">
-							<span className="rounded-full bg-fr-surface-3 px-2 py-0.5 text-fr-2xs text-fr-text-2" tabIndex={place.badge.tip === undefined ? undefined : 0}>
-								{place.badge.text}
-							</span>
-						</Tip>
-					)}
-				</div>
-				<p className="mt-0.5 text-fr-xs text-fr-text-3">{place.allowed || place.reason === undefined ? place.detail : place.reason}</p>
+			<div className="flex items-start gap-3 px-3 py-2.5">
+				<button type="button" role="radio" aria-checked={selected} disabled={off} onClick={onSelect} className={cn("flex min-w-0 flex-1 items-start gap-3 rounded-md text-left disabled:cursor-not-allowed", FOCUS)}>
+					<span aria-hidden className={cn("mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border", selected ? "border-fr-accent bg-fr-accent" : "border-fr-control-edge")}>
+						{selected ? <span className="size-1.5 rounded-full bg-fr-accent-ink" /> : null}
+					</span>
+					<Icon name={place.icon} size={16} className="mt-0.5 shrink-0 text-fr-text-2" />
+					<span className="min-w-0 flex-1">
+						<span className="block text-fr-sm font-medium text-fr-text">{place.title}</span>
+						<span className="mt-0.5 block text-fr-xs text-fr-text-3">{place.allowed || place.reason === undefined ? place.detail : place.reason}</span>
+					</span>
+				</button>
+				{place.badge === undefined || !place.allowed ? null : (
+					<Tip label={place.badge.tip} contentClassName="max-w-72 [&>span]:whitespace-normal">
+						<Badge variant="soft" tone="mute" className="shrink-0" tabIndex={place.badge.tip === undefined ? undefined : 0}>
+							{place.badge.text}
+						</Badge>
+					</Tip>
+				)}
 			</div>
+			{children === undefined ? null : <div className="pb-3 pl-[4.25rem] pr-3">{children}</div>}
 		</div>
 	);
 }
@@ -652,55 +637,31 @@ function OwnServer({ tools, selected, disabled, onSelect, onAdded }: { readonly 
 	};
 
 	return (
-		<div
-			role="radio"
-			aria-checked={selected}
-			aria-disabled={disabled}
-			tabIndex={disabled || selected ? -1 : 0}
-			data-slot="share-place"
-			onClick={disabled || selected ? undefined : onSelect}
-			onKeyDown={event => {
-				if (!disabled && !selected && (event.key === " " || event.key === "Enter")) {
-					event.preventDefault();
-					onSelect();
-				}
-			}}
-			className={cn(
-				"flex items-start gap-3 rounded-lg border px-3 py-2.5 transition-colors",
-				selected ? "border-fr-accent bg-fr-accent/5" : "cursor-pointer border-fr-border hover:border-fr-control-edge-hover",
-				FOCUS,
-			)}
-		>
-			<Radio decorative checked={selected} className="mt-0.5" />
-			<Icon name="box" size={16} className="mt-0.5 shrink-0 text-fr-text-2" />
-			<div className="min-w-0 flex-1">
-				<span className="text-fr-sm font-medium text-fr-text">Your own server</span>
-				<p className="mt-0.5 text-fr-xs text-fr-text-3">A VPS or your company's server. Links stay up while this computer is off, and you choose who can sign in.</p>
-				{selected ? (
-					<form onSubmit={connect} className="mt-3 flex flex-col gap-2.5">
-						<Button type="button" variant="outline" size="sm" className="self-start" disabled={disabled || asked} onClick={ask}>
-							<Icon name="bot" size={14} />
-							{asked ? "Asked the agent" : "Ask an agent to set it up"}
+		<PlaceCard place={OWN_SERVER} selected={selected} disabled={disabled} onSelect={onSelect}>
+			{selected ? (
+				<form onSubmit={connect} className="flex flex-col gap-2.5">
+					<Button type="button" variant="outline" size="sm" className="self-start" disabled={disabled || asked} onClick={ask}>
+						<Icon name="bot" size={14} />
+						{asked ? "Asked the agent" : "Ask an agent to set it up"}
+					</Button>
+					<p className="text-fr-xs text-fr-text-3">
+						{asked ? "The agent in this conversation is setting it up. When it gives you a pairing link, paste it here." : "The agent installs the server on your machine and gives you a pairing link. No commands to type."}
+					</p>
+					<div className="flex items-center gap-2">
+						<Input aria-label="Pairing link" className="min-w-0 flex-1" value={pairing} onChange={event => setPairing(event.target.value)} placeholder="Paste the pairing link" spellCheck={false} disabled={busy || disabled} aria-invalid={pairing.trim() !== "" && paired === null} />
+						<Button type="submit" size="sm" loading={busy} loadingText="Checking…" disabled={paired === null || disabled}>
+							Connect
 						</Button>
-						<p className="text-fr-xs text-fr-text-3">
-							{asked ? "The agent in this conversation is setting it up. When it gives you a pairing link, paste it here." : "The agent installs the server on your machine and gives you a pairing link. No commands to type."}
+					</div>
+					{pairing.trim() !== "" && paired === null ? <p className="text-fr-xs text-fr-warn">A pairing link starts with https:// and ends with #t= and a token.</p> : null}
+					{error === null ? null : (
+						<p role="alert" className="text-fr-xs text-fr-del">
+							{error}
 						</p>
-						<div className="flex items-center gap-2">
-							<Input aria-label="Pairing link" className="min-w-0 flex-1" value={pairing} onChange={event => setPairing(event.target.value)} placeholder="Paste the pairing link" spellCheck={false} disabled={busy || disabled} aria-invalid={pairing.trim() !== "" && paired === null} />
-							<Button type="submit" size="sm" loading={busy} loadingText="Checking…" disabled={paired === null || disabled}>
-								Connect
-							</Button>
-						</div>
-						{pairing.trim() !== "" && paired === null ? <p className="text-fr-xs text-fr-warn">A pairing link starts with https:// and ends with #t= and a token.</p> : null}
-						{error === null ? null : (
-							<p role="alert" className="text-fr-xs text-fr-del">
-								{error}
-							</p>
-						)}
-					</form>
-				) : null}
-			</div>
-		</div>
+					)}
+				</form>
+			) : undefined}
+		</PlaceCard>
 	);
 }
 

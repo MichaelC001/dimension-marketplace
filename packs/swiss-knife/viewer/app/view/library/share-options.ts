@@ -2,16 +2,19 @@ import { type Audience, audienceAllowedBy, type SharePolicy } from "@dimension/s
 import type { ShareSummary } from "../../../../src/library/types";
 import { formatBytes } from "../format";
 import { formatDuration } from "./kinds";
-import type { ShareHost } from "./library-tools";
+import type { ShareHost, ShareHosts } from "./library-tools";
 
 export interface Choice {
 	readonly allowed: boolean;
 	readonly reason?: string;
+	readonly retry?: true;
 }
 
 export interface HostChoice extends Choice {
 	readonly host: ShareHost;
 }
+
+export const CLOUD_HOST = "cloud";
 
 export const OWN_SERVER_PROMPT = [
 	"Set up my own share server for Dimension's Library, so the links I share keep working while my computer is off.",
@@ -20,21 +23,64 @@ export const OWN_SERVER_PROMPT = [
 	"Give me that pairing link and tell me to paste it under Your own server in the Share dialog.",
 ].join(" ");
 
-const STATUS_REASON: Record<Exclude<ShareHost["status"], "ok">, string> = {
-	unreachable: "Not answering right now. Try again in a moment.",
-	unauthorized: "This server no longer accepts the saved token; paste a new pairing link.",
-};
+const UNREACHABLE = "Not answering right now. Try again in a moment.";
+const ADMIN_OFF = "Your administrator turned this off.";
+const CLOUD_DETAIL = "Always on. An encrypted copy is kept on Dimension's server";
+const P2P_DETAIL = "Nothing is uploaded. The file is sent straight from here, encrypted.";
+const P2P_TIP = "The link opens only while this computer is on and Dimension is running. When it sleeps or Dimension closes, people see that it is not available until you are back.";
 
-const PLACE_ORDER: Record<ShareHost["kind"], number> = { dimension: 0, p2p: 1, self: 2, company: 2 };
+function placeRank(host: ShareHost): number {
+	if (host.id === CLOUD_HOST) return 0;
+	return host.kind === "p2p" ? 1 : 2;
+}
 
 export function hostChoices(hosts: readonly ShareHost[], size: number): readonly HostChoice[] {
-	const ordered = [...hosts].sort((a, b) => PLACE_ORDER[a.kind] - PLACE_ORDER[b.kind]);
+	const ordered = [...hosts].sort((a, b) => placeRank(a) - placeRank(b));
 	return ordered.map(host => {
-		if (host.status !== "ok") return { host, allowed: false, reason: STATUS_REASON[host.status] };
+		if (host.status === "unreachable") return { host, allowed: false, reason: UNREACHABLE, retry: true };
+		if (host.status === "unauthorized") return { host, allowed: false, reason: "This server no longer accepts the saved token; paste a new pairing link." };
 		const maxBytes = host.kind === "p2p" ? 0 : (host.policy?.maxBytes ?? 0);
-		if (Number.isFinite(maxBytes) && maxBytes > 0 && size > maxBytes) return { host, allowed: false, reason: `This file is ${formatBytes(size)}; ${host.kind === "dimension" ? "Dimension cloud" : "this server"} takes files up to ${formatBytes(maxBytes)}.` };
+		if (Number.isFinite(maxBytes) && maxBytes > 0 && size > maxBytes) return { host, allowed: false, reason: `This file is ${formatBytes(size)}; ${host.id === CLOUD_HOST ? "Dimension cloud" : "this server"} takes files up to ${formatBytes(maxBytes)}.` };
 		return { host, allowed: true };
 	});
+}
+
+export interface Place extends Choice {
+	readonly id: string;
+	readonly icon: "cloud" | "computer" | "box";
+	readonly title: string;
+	readonly detail: string;
+	readonly badge?: { readonly text: string; readonly tip?: string };
+}
+
+export interface Places {
+	readonly places: readonly Place[];
+	readonly servers: number;
+	readonly retryable: boolean;
+}
+
+function cloudPlace(choice: Choice, maxDays: number | undefined): Place {
+	return { ...choice, id: CLOUD_HOST, icon: "cloud", title: "Dimension cloud", detail: maxDays === undefined ? `${CLOUD_DETAIL}.` : `${CLOUD_DETAIL} for up to ${maxDays} days.`, badge: { text: "Recommended" } };
+}
+
+function p2pPlace(choice: Choice): Place {
+	return { ...choice, id: "p2p", icon: "computer", title: "This computer", detail: P2P_DETAIL, badge: { text: "Only while it is on", tip: P2P_TIP } };
+}
+
+function serverPlace({ host, ...choice }: HostChoice): Place {
+	return { ...choice, id: host.id, icon: "box", title: host.name, detail: `Your ${host.kind === "company" ? "company's " : ""}server at ${hostName(host.baseUrl)}. Always on.` };
+}
+
+export function placesOf(listing: ShareHosts, choices: readonly HostChoice[]): Places {
+	const cloud = choices.find(choice => choice.host.id === CLOUD_HOST);
+	const p2p = choices.find(choice => choice.host.kind === "p2p");
+	const servers = choices.filter(choice => choice !== cloud && choice !== p2p);
+	const places = [
+		cloud === undefined ? cloudPlace(listing.cloudAllowed ? { allowed: false, reason: UNREACHABLE, retry: true } : { allowed: false, reason: ADMIN_OFF }, undefined) : cloudPlace(cloud, cloud.host.policy?.maxDays),
+		p2pPlace(p2p ?? { allowed: false, reason: ADMIN_OFF }),
+		...servers.map(serverPlace),
+	];
+	return { places, servers: servers.length, retryable: places.some(place => place.retry === true) };
 }
 
 export function defaultHost(choices: readonly HostChoice[]): string | null {
@@ -147,7 +193,7 @@ export function shareDetail(share: Pick<ShareSummary, "host" | "url" | "expiresA
 
 export function placeOf(share: Pick<ShareSummary, "host" | "url">): string {
 	if (share.host === "p2p") return "From this computer (works while it is on)";
-	if (share.host === "cloud") return "On Dimension cloud";
+	if (share.host === CLOUD_HOST) return "On Dimension cloud";
 	return `On ${hostName(share.url)}`;
 }
 

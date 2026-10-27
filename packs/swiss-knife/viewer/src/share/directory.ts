@@ -36,6 +36,7 @@ export interface PublicHost {
 export interface HostListing {
 	readonly hosts: readonly PublicHost[];
 	readonly p2pAllowed: boolean;
+	readonly cloudAllowed: boolean;
 }
 
 export type HostAddition = { readonly pairing: string; readonly kind: "self" | "company" } | { readonly url: string; readonly token?: string; readonly kind: "self" | "company" };
@@ -55,9 +56,8 @@ const PROBE_TTL_MS = 30_000;
 const P2P_NAME = "From this computer";
 const CLOUD_NAME = "Dimension cloud";
 
-function cloudHost(file: HostsFile, discovery: HostDiscovery): StoredHost {
-	const baseUrl = relayUrlOf(file);
-	return { id: CLOUD_HOST_ID, kind: "dimension", name: baseUrl === DEFAULT_RELAY_URL ? CLOUD_NAME : discovery.name, baseUrl };
+function cloudHost(baseUrl: string): StoredHost {
+	return { id: CLOUD_HOST_ID, kind: "dimension", name: CLOUD_NAME, baseUrl };
 }
 
 export interface DirectoryOptions extends HostClientOptions {
@@ -83,8 +83,16 @@ export class HostDirectory {
 		const cached = this.#probes.get(key);
 		if (cached !== undefined && now - cached.at < PROBE_TTL_MS) return cached.result;
 		const result = run();
-		this.#probes.set(key, { at: now, result });
+		const entry = { at: now, result };
+		this.#probes.set(key, entry);
+		void result.then(probe => {
+			if (probe.status !== "ok" && this.#probes.get(key) === entry) this.#probes.delete(key);
+		});
 		return result;
+	}
+
+	#cloudOffered(file: HostsFile): boolean {
+		return cloudAllowed(file) && relayUrlOf(file) === DEFAULT_RELAY_URL;
 	}
 
 	async #probeHost(host: StoredHost): Promise<Probe> {
@@ -107,7 +115,7 @@ export class HostDirectory {
 	async list(): Promise<HostListing> {
 		const file = await this.store.read();
 		const allowed = p2pAllowed(file);
-		const cloud = cloudAllowed(file);
+		const cloud = this.#cloudOffered(file);
 		const relayBase = relayUrlOf(file);
 		const stored = visibleHosts(file);
 		const [relay, ...probes] = await Promise.all([
@@ -128,8 +136,7 @@ export class HostDirectory {
 			});
 		}
 		if (cloud && relay?.discovery?.mode === "host") {
-			const host = cloudHost(file, relay.discovery);
-			hosts.push({ ...host, status: relay.status, policy: relay.discovery.policy, oidc: relay.discovery.auth.oidc !== undefined, managed: false });
+			hosts.push({ ...cloudHost(relayBase), status: relay.status, policy: relay.discovery.policy, oidc: relay.discovery.auth.oidc !== undefined, managed: false });
 		}
 		stored.forEach((host, index) => {
 			const probe = probes[index];
@@ -144,7 +151,7 @@ export class HostDirectory {
 				managed: host.managed === true,
 			});
 		});
-		return { hosts, p2pAllowed: allowed };
+		return { hosts, p2pAllowed: allowed, cloudAllowed: cloud };
 	}
 
 	async #probeRelay(relayBase: string): Promise<Probe> {
@@ -155,9 +162,9 @@ export class HostDirectory {
 		}
 	}
 
-	async resolve(hostId: string): Promise<ResolvedHost> {
+	async resolve(hostId: string, at?: string): Promise<ResolvedHost> {
 		const file = await this.store.read();
-		if (hostId === CLOUD_HOST_ID) return this.#resolveCloud(file);
+		if (hostId === CLOUD_HOST_ID) return this.#resolveCloud(file, at);
 		const host = visibleHosts(file).find(entry => entry.id === hostId);
 		if (host === undefined) throw new HostConfigError("that server is not available to you");
 		const client = this.#client(host.baseUrl);
@@ -170,9 +177,11 @@ export class HostDirectory {
 		return { host, client, discovery };
 	}
 
-	async #resolveCloud(file: HostsFile): Promise<ResolvedHost> {
+	async #resolveCloud(file: HostsFile, at: string | undefined): Promise<ResolvedHost> {
 		if (!cloudAllowed(file)) throw new HostConfigError("your administrator limits sharing to approved servers, so Dimension cloud is not available");
-		const client = this.#client(relayUrlOf(file));
+		if (at === undefined && !this.#cloudOffered(file)) throw new HostConfigError(`${CLOUD_NAME} is not offered when sharing goes through another relay`);
+		const baseUrl = at ?? relayUrlOf(file);
+		const client = this.#client(baseUrl);
 		let discovery: HostDiscovery;
 		try {
 			discovery = await client.discovery();
@@ -180,7 +189,7 @@ export class HostDirectory {
 			throw new HostConfigError(`${CLOUD_NAME} is not reachable right now: ${errorMessage(error)}`);
 		}
 		if (discovery.mode !== "host") throw new HostConfigError(`${CLOUD_NAME} is not available yet`);
-		return { host: cloudHost(file, discovery), client, discovery };
+		return { host: cloudHost(baseUrl), client, discovery };
 	}
 
 	async resolveRelay(): Promise<{ readonly baseUrl: string; readonly client: HostClient; readonly discovery: HostDiscovery }> {
