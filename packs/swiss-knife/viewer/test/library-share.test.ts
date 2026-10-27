@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { SharePolicy } from "@dimension/sdk/artifact-share";
-import type { ShareHost } from "../app/view/library/library-tools";
+import type { ShareHost, ShareHosts } from "../app/view/library/library-tools";
 import {
 	accessLabel,
 	anchorLabel,
@@ -18,6 +18,8 @@ import {
 	parseRecipients,
 	peopleFrom,
 	peopleOf,
+	placeOf,
+	placesOf,
 	shareDetail,
 	shareStatus,
 	signinChoice,
@@ -26,12 +28,48 @@ import {
 const open: SharePolicy = { publicLinks: true, signinRequired: false, maxBytes: 0, maxDays: 0 };
 const host = (id: string, extra: Partial<ShareHost> = {}): ShareHost => ({ id, kind: "self", name: id, baseUrl: `https://${id}.example`, status: "ok", oidc: false, managed: false, policy: open, ...extra });
 const p2p = host("p2p", { kind: "p2p", name: "From this computer" });
+const cloud = host("cloud", { kind: "dimension", name: "Dimension cloud", baseUrl: "https://share.insodimension.ai" });
 
 describe("share options follow the host", () => {
-	test("from this computer comes first and is the default", () => {
+	test("without Dimension cloud, from this computer comes first and is the default", () => {
 		const choices = hostChoices([host("vps"), p2p], 100);
 		expect(choices.map(choice => choice.host.id)).toEqual(["p2p", "vps"]);
 		expect(defaultHost(choices)).toBe("p2p");
+	});
+
+	test("Dimension cloud comes first and is the default, then this computer, then your own servers, whatever order the hosts arrive in", () => {
+		const vps = host("vps");
+		const corp = host("corp", { kind: "company" });
+		const legacy = host("legacy", { kind: "dimension", name: "Legacy cloud" });
+		for (const arrival of [
+			[vps, corp, p2p, cloud, legacy],
+			[cloud, p2p, vps, corp, legacy],
+			[legacy, corp, vps, cloud, p2p],
+		]) {
+			const choices = hostChoices(arrival, 100);
+			expect(choices.slice(0, 2).map(choice => choice.host.id)).toEqual(["cloud", "p2p"]);
+			expect(choices.slice(2).map(choice => choice.host.id).sort()).toEqual(["corp", "legacy", "vps"]);
+			expect(defaultHost(choices)).toBe("cloud");
+		}
+		const down = { status: "unreachable" } as const;
+		expect(defaultHost(hostChoices([vps, p2p, { ...cloud, ...down }], 100))).toBe("p2p");
+		expect(defaultHost(hostChoices([vps, { ...p2p, ...down }, { ...cloud, ...down }], 100))).toBe("vps");
+	});
+
+	test("a file over the limit is refused by Dimension cloud and your own servers in their own words, but a link from this computer has no limit", () => {
+		const limited = { ...open, maxBytes: 1024 };
+		const hosts = [host("vps", { policy: limited }), host("legacy", { kind: "dimension", policy: limited }), { ...p2p, policy: limited }, { ...cloud, policy: limited }];
+		const verdict = (size: number) => Object.fromEntries(hostChoices(hosts, size).map(choice => [choice.host.id, choice]));
+		expect(Object.values(verdict(1024)).map(choice => choice.allowed)).toEqual([true, true, true, true]);
+		const over = verdict(4096);
+		expect(over.cloud?.allowed).toBe(false);
+		expect(over.cloud?.reason).toContain("Dimension cloud takes files up to 1.0 KB");
+		for (const server of [over.vps, over.legacy]) {
+			expect(server?.allowed).toBe(false);
+			expect(server?.reason).toContain("this server takes files up to 1.0 KB");
+			expect(server?.reason).not.toContain("Dimension cloud");
+		}
+		expect(verdict(50 * 2 ** 30).p2p?.allowed).toBe(true);
 	});
 
 	test("a host that is down, refuses the token, or takes smaller files is shown but not offered, with its reason", () => {
@@ -88,6 +126,82 @@ describe("share options follow the host", () => {
 		expect(parsePairing("https://share.example.com/pair")).toBeNull();
 		expect(parsePairing("not a url")).toBeNull();
 		expect(hostName("https://share.example.com/a/xyz#k=SECRET")).toBe("share.example.com");
+	});
+});
+
+describe("the places the share dialog offers", () => {
+	const listing = (hosts: readonly ShareHost[], extra: Partial<ShareHosts> = {}): ShareHosts => ({ hosts, p2pAllowed: true, cloudAllowed: true, ...extra });
+	const vps = host("vps");
+	const corp = host("corp", { kind: "company", name: "Corp share" });
+	const legacy = host("legacy", { kind: "dimension", name: "Legacy cloud" });
+
+	test("are always Dimension cloud, this computer, then each of your servers, with the cloud's retention and any refusal on its card", () => {
+		const hosts = [vps, p2p, legacy, corp, { ...cloud, policy: { ...open, maxDays: 30, maxBytes: 1024 } }];
+		const fits = placesOf(listing(hosts), hostChoices(hosts, 100));
+		expect(fits.places.map(place => place.id)).toEqual(["cloud", "p2p", "vps", "legacy", "corp"]);
+		expect(fits.places.map(place => place.title)).toEqual(["Dimension cloud", "This computer", "vps", "Legacy cloud", "Corp share"]);
+		expect(fits.places.every(place => place.allowed)).toBe(true);
+		expect(fits.places[0]?.detail).toContain("up to 30 days");
+		expect(fits.servers).toBe(3);
+		expect(fits.retryable).toBe(false);
+		const tooBig = placesOf(listing(hosts), hostChoices(hosts, 4096));
+		expect(tooBig.places[0]).toMatchObject({ id: "cloud", allowed: false });
+		expect(tooBig.places[0]?.reason).toContain("Dimension cloud takes files up to 1.0 KB");
+		expect(tooBig.places[1]).toMatchObject({ id: "p2p", allowed: true });
+	});
+
+	test("a cloud that did not answer can be retried, one the administrator turned off cannot, and a stored cloud-kind server is never mistaken for it", () => {
+		const hosts = [legacy, p2p];
+		const retryable = placesOf(listing(hosts), hostChoices(hosts, 100));
+		expect(retryable.places.map(place => place.id)).toEqual(["cloud", "p2p", "legacy"]);
+		expect(retryable.places[0]).toMatchObject({ allowed: false, reason: "Not answering right now. Try again in a moment.", retry: true });
+		expect(retryable.places[2]).toMatchObject({ allowed: true, title: "Legacy cloud" });
+		expect(retryable.retryable).toBe(true);
+		const off = placesOf(listing(hosts, { cloudAllowed: false }), hostChoices(hosts, 100));
+		expect(off.places[0]).toMatchObject({ id: "cloud", allowed: false, reason: "Your administrator turned this off." });
+		expect(off.places[0]?.retry).toBeUndefined();
+		expect(off.retryable).toBe(false);
+		expect(off.servers).toBe(1);
+	});
+
+	test("this computer is still listed when the administrator turned it off, with the reason and nothing to retry", () => {
+		const hosts = [cloud, vps];
+		const result = placesOf(listing(hosts, { p2pAllowed: false }), hostChoices(hosts, 100));
+		expect(result.places.map(place => place.id)).toEqual(["cloud", "p2p", "vps"]);
+		expect(result.places[1]).toMatchObject({ allowed: false, reason: "Your administrator turned this off." });
+		expect(result.places[1]?.retry).toBeUndefined();
+		expect(result.retryable).toBe(false);
+	});
+
+	test("a server that is down can be retried, one that refuses the token cannot, and either leaves the others usable", () => {
+		const down = { ...vps, status: "unreachable" } as const;
+		const refused = { ...corp, status: "unauthorized" } as const;
+		const downResult = placesOf(listing([cloud, p2p, down]), hostChoices([cloud, p2p, down], 100));
+		expect(downResult.places[2]).toMatchObject({ id: "vps", allowed: false, retry: true });
+		expect(downResult.retryable).toBe(true);
+		expect(downResult.places.slice(0, 2).every(place => place.allowed)).toBe(true);
+		const refusedResult = placesOf(listing([cloud, p2p, refused]), hostChoices([cloud, p2p, refused], 100));
+		expect(refusedResult.places[2]).toMatchObject({ id: "corp", allowed: false });
+		expect(refusedResult.places[2]?.reason).toContain("pairing link");
+		expect(refusedResult.places[2]?.retry).toBeUndefined();
+		expect(refusedResult.retryable).toBe(false);
+	});
+});
+
+describe("where a share lives reads like a person would say it", () => {
+	const url = "https://share.insodimension.ai/a/xyz";
+	const now = Date.UTC(2026, 9, 26);
+
+	test("a link from this computer, one on Dimension cloud and one on your own server are told apart, whatever address they carry", () => {
+		expect(placeOf({ host: "p2p", url: "https://t-1.share.insodimension.ai/a/xyz" })).toBe("From this computer (works while it is on)");
+		expect(placeOf({ host: "cloud", url })).toBe("On Dimension cloud");
+		expect(placeOf({ host: "h_1a2b3c", url: "https://share.example.com/a/xyz" })).toBe("On share.example.com");
+		expect(placeOf({ host: "h_1a2b3c", url })).toBe("On share.insodimension.ai");
+		expect(placeOf({ host: "h_1a2b3c", url: "not a url" })).toBe("On a share server");
+	});
+
+	test("a cloud share's line says so instead of naming the address", () => {
+		expect(shareDetail({ host: "cloud", url, allowComments: false }, now)).toBe("Can view · On Dimension cloud");
 	});
 });
 

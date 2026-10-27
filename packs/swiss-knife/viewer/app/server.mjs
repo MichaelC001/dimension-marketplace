@@ -34608,11 +34608,12 @@ async function writePrivateJsonFile(path2, value) {
 // src/share/hosts.ts
 var DEFAULT_RELAY_URL = "https://share.insodimension.ai";
 var P2P_HOST_ID = "p2p";
+var CLOUD_HOST_ID = "cloud";
 var HOST_KINDS = ["self", "company", "dimension"];
 var HOST_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,47}$/;
 var LOOPBACK_HOSTS = ["localhost", "127.0.0.1", "[::1]"];
 var storedHostSchema = external_exports.looseObject({
-  id: external_exports.string().regex(HOST_ID_PATTERN).refine((id2) => id2 !== P2P_HOST_ID, "p2p is reserved"),
+  id: external_exports.string().regex(HOST_ID_PATTERN).refine((id2) => id2 !== P2P_HOST_ID && id2 !== CLOUD_HOST_ID, "p2p and cloud are reserved"),
   kind: external_exports.enum(HOST_KINDS),
   name: external_exports.string().min(1).max(120),
   baseUrl: external_exports.string().min(1).max(2048),
@@ -34660,6 +34661,10 @@ function relayUrlOf(file2) {
 }
 function p2pAllowed(file2) {
   return file2.policy?.p2p ?? file2.policy?.only === void 0;
+}
+function cloudAllowed(file2) {
+  const only = file2.policy?.only;
+  return file2.policy?.p2p !== false && (only === void 0 || only.includes(CLOUD_HOST_ID));
 }
 function visibleHosts(file2) {
   const only = file2.policy?.only;
@@ -34927,6 +34932,10 @@ var CommentSync = class {
 import { randomBytes as randomBytes5 } from "node:crypto";
 var PROBE_TTL_MS = 3e4;
 var P2P_NAME = "From this computer";
+var CLOUD_NAME = "Dimension cloud";
+function cloudHost(baseUrl) {
+  return { id: CLOUD_HOST_ID, kind: "dimension", name: CLOUD_NAME, baseUrl };
+}
 var HostDirectory = class {
   store;
   #options;
@@ -34943,8 +34952,15 @@ var HostDirectory = class {
     const cached2 = this.#probes.get(key);
     if (cached2 !== void 0 && now - cached2.at < PROBE_TTL_MS) return cached2.result;
     const result = run2();
-    this.#probes.set(key, { at: now, result });
+    const entry = { at: now, result };
+    this.#probes.set(key, entry);
+    void result.then((probe) => {
+      if (probe.status !== "ok" && this.#probes.get(key) === entry) this.#probes.delete(key);
+    });
     return result;
+  }
+  #cloudOffered(file2) {
+    return cloudAllowed(file2) && relayUrlOf(file2) === DEFAULT_RELAY_URL;
   }
   async #probeHost(host) {
     const client = this.#client(host.baseUrl);
@@ -34965,10 +34981,11 @@ var HostDirectory = class {
   async list() {
     const file2 = await this.store.read();
     const allowed = p2pAllowed(file2);
+    const cloud = this.#cloudOffered(file2);
     const relayBase = relayUrlOf(file2);
     const stored = visibleHosts(file2);
     const [relay, ...probes] = await Promise.all([
-      allowed ? this.#probe(`p2p:${relayBase}`, () => this.#probeRelay(relayBase)) : Promise.resolve({ status: "unreachable" }),
+      allowed || cloud ? this.#probe(`p2p:${relayBase}`, () => this.#probeRelay(relayBase)) : Promise.resolve({ status: "unreachable" }),
       ...stored.map((host) => this.#probe(`${host.id}:${host.baseUrl}:${host.token ?? ""}`, () => this.#probeHost(host)))
     ]);
     const hosts = [];
@@ -34984,6 +35001,9 @@ var HostDirectory = class {
         managed: false
       });
     }
+    if (cloud && relay?.discovery?.mode === "host") {
+      hosts.push({ ...cloudHost(relayBase), status: relay.status, policy: relay.discovery.policy, oidc: relay.discovery.auth.oidc !== void 0, managed: false });
+    }
     stored.forEach((host, index) => {
       const probe = probes[index];
       hosts.push({
@@ -34997,7 +35017,7 @@ var HostDirectory = class {
         managed: host.managed === true
       });
     });
-    return { hosts, p2pAllowed: allowed };
+    return { hosts, p2pAllowed: allowed, cloudAllowed: cloud };
   }
   async #probeRelay(relayBase) {
     try {
@@ -35006,8 +35026,9 @@ var HostDirectory = class {
       return { status: "unreachable" };
     }
   }
-  async resolve(hostId) {
+  async resolve(hostId, at) {
     const file2 = await this.store.read();
+    if (hostId === CLOUD_HOST_ID) return this.#resolveCloud(file2, at);
     const host = visibleHosts(file2).find((entry) => entry.id === hostId);
     if (host === void 0) throw new HostConfigError("that server is not available to you");
     const client = this.#client(host.baseUrl);
@@ -35018,6 +35039,20 @@ var HostDirectory = class {
       throw new HostConfigError(`${host.name} is not reachable right now: ${errorMessage(error51)}`);
     }
     return { host, client, discovery };
+  }
+  async #resolveCloud(file2, at) {
+    if (!cloudAllowed(file2)) throw new HostConfigError("your administrator limits sharing to approved servers, so Dimension cloud is not available");
+    if (at === void 0 && !this.#cloudOffered(file2)) throw new HostConfigError(`${CLOUD_NAME} is not offered when sharing goes through another relay`);
+    const baseUrl = at ?? relayUrlOf(file2);
+    const client = this.#client(baseUrl);
+    let discovery;
+    try {
+      discovery = await client.discovery();
+    } catch (error51) {
+      throw new HostConfigError(`${CLOUD_NAME} is not reachable right now: ${errorMessage(error51)}`);
+    }
+    if (discovery.mode !== "host") throw new HostConfigError(`${CLOUD_NAME} is not available yet`);
+    return { host: cloudHost(baseUrl), client, discovery };
   }
   async resolveRelay() {
     const file2 = await this.store.read();
@@ -36406,7 +36441,7 @@ var ShareService = class {
   }
   async #newHostedVersion(row) {
     const item = this.#liveItem(row.artifactId);
-    const { client, discovery } = await this.#options.directory.resolve(row.host);
+    const { client, discovery } = await this.#options.directory.resolve(row.host, row.baseUrl);
     const source = await openChunkSource(await this.#realPath(item));
     try {
       this.#checkPolicy(row.audience, void 0, discovery.policy, discovery.auth.oidc !== void 0, source.size);
@@ -36440,7 +36475,7 @@ var ShareService = class {
     if (row.host === P2P_HOST_ID) {
       if (audience.kind !== "link") throw new ShareError(OPEN_LINK_ONLY);
     } else {
-      const { client, discovery } = await this.#options.directory.resolve(row.host);
+      const { client, discovery } = await this.#options.directory.resolve(row.host, row.baseUrl);
       this.#checkPolicy(audience, input.expiresInDays, discovery.policy, discovery.auth.oidc !== void 0, void 0);
       try {
         const confirmed = await client.patch(row.ownerToken, row.remoteId, patch, this.#abort.signal);
