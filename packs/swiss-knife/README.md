@@ -89,7 +89,7 @@ a `present` card or an Open button, and the Viewer is not a tool the model calls
   OS recycle bin (never delete it outright); a discarded row can be restored for 30 days and is purged after.
   `artifacts` is read-class for `search`, `get` and `comments`, write-class for the rest; secrets are refused when a
   file is stamped, on the path as written and on its real path. Nothing leaves the machine until a person presses
-  Copy link or Done in the Share dialog; comments that come back are shown to the agent as input, labelled as input.
+  Create link in the Share dialog; comments that come back are shown to the agent as input, labelled as input.
 
 ## Build and test
 

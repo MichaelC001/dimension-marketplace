@@ -86,9 +86,10 @@ export interface LibraryTools {
 	readonly comments: (artifactId: string, signal?: AbortSignal) => Promise<readonly ShareComment[]>;
 	readonly reply: (shareId: string, body: string) => Promise<ShareComment>;
 	readonly markRead: (ids: readonly string[]) => Promise<void>;
+	readonly askAgent: (text: string) => Promise<void>;
 }
 
-export function createLibraryTools(app: Pick<App, "callServerTool">): LibraryTools {
+export function createLibraryTools(app: Pick<App, "callServerTool" | "sendMessage">): LibraryTools {
 	const tools = createToolCaller(app);
 	const options = (signal: AbortSignal | undefined) => (signal === undefined ? undefined : { signal });
 	return {
@@ -120,6 +121,10 @@ export function createLibraryTools(app: Pick<App, "callServerTool">): LibraryToo
 		reply: (shareId, body) => tools.call("share_reply", { shareId, body }, "comment"),
 		markRead: async ids => {
 			await tools.whole("share_mark_read", { ids });
+		},
+		askAgent: async text => {
+			const result = await app.sendMessage({ role: "user", content: [{ type: "text", text }] });
+			if (result.isError === true) throw new Error("The conversation did not take the message.");
 		},
 	};
 }

@@ -220,15 +220,18 @@ The pane lives in `app/view/library/`:
   stay highlighted while shown and are marked read (`share_mark_read`); a reply box at the bottom (`share_reply`).
 - **Discard** explains that the artifact leaves the library and its links stop working; "Also move the file to the
   Recycle Bin/Trash" starts at `library_discard_default`'s answer (ticked unless git tracks the file).
-- **Share** (Drive's share dialog). "Add people and domains" (emails and @domains; only on a server with sign-in),
-  "People with access", "General access" (Restricted or Anyone with the link, with Viewer or Commenter), "Shared from"
-  (this computer first, then each host; a host its policy or state rules out is listed with its reason) and "Link
-  expires" (never past `maxDays`). Nothing is made until Copy link or Done: Copy link creates and copies the link with
-  its key, showing `share_progress` (polled every 250 ms) in the footer; Done creates without copying, or just closes
-  when Restricted has nobody added. Manage access opens the same dialog for one link: access, role and expiry apply at
-  once through `share_update`; ⋯ holds Update link (`share_new_version`) and Stop sharing (`share_revoke`); a hosted
-  link whose file changed since its version shows "The file changed since you shared it." Add a server is a step
-  inside the dialog: the two `docker compose` commands to run, then the pairing link (or URL + token).
+- **Share.** "Where the link lives" is three choices, each one card: **Dimension cloud** (default when it answers:
+  an encrypted copy on Dimension's server, always on, the server's `maxDays`), **This computer** (nothing uploaded;
+  its "Only while it is on" chip's tooltip says the link opens only while the computer is on and Dimension runs), and
+  **Your own server** (each paired host by name; with none, one card whose "Ask an agent to set it up" sends
+  `OWN_SERVER_PROMPT` to this conversation through `ui/message`, and whose field takes the pairing link the agent
+  hands back). A choice that cannot take the file says why on its card (not answering, too large, turned off by an
+  administrator). "Who can open it" is Anyone with the link, with Can comment or Can only view; "Only people I add"
+  and the people field appear only on a server with sign-in. "Link expires" never passes `maxDays`. Nothing is made
+  until Create link, which shows `share_progress` (polled every 250 ms) in the footer, then copies the link and keeps
+  it on screen. An existing link opens the same dialog with the link to copy, where it lives, and access, role and
+  expiry that apply at once through `share_update`; ⋯ holds Update link (`share_new_version`) and Stop sharing
+  (`share_revoke`); a hosted link whose file changed since its version shows "The file changed since you shared it."
 - **Keyboard.** `/` search, arrows / Home / End / PageUp / PageDown move, Enter opens, `s` stars, Delete discards,
   Escape closes the drawer; ArrowDown or Enter in the search field moves into the grid.
 
@@ -277,7 +280,10 @@ everything that runs in the background; `registerShareTools` mounts the app-only
   survives a restart). Each comment is opened with the key derived from the share's content key and written with
   `library.comments.upsert`; one that does not open is skipped.
 
-The relay's address is `DEFAULT_RELAY_URL` (`src/share/hosts.ts`) unless `hosts.json` sets `relay`.
+The relay's address is `DEFAULT_RELAY_URL` (`src/share/hosts.ts`) unless `hosts.json` sets `relay`. When the relay's
+discovery says `mode: "host"` (Dimension's own server is both), the same address is also offered as the built-in
+`cloud` host, "Dimension cloud": no token, the server's per-IP quotas. `policy.only` must list `cloud` to keep it, and
+`p2p: false` turns it off with this computer. The server runs from `scripts/vps/setup-artifact-host.sh` in the root repo.
 
 ## A click-open is a host-lent, one-file grant
 

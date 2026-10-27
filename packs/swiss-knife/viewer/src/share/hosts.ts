@@ -4,6 +4,7 @@ import { readJsonFile, writePrivateJsonFile } from "./fs-json";
 
 export const DEFAULT_RELAY_URL = "https://share.insodimension.ai";
 export const P2P_HOST_ID = "p2p";
+export const CLOUD_HOST_ID = "cloud";
 export const HOST_KINDS = ["self", "company", "dimension"] as const;
 export type HostKind = (typeof HOST_KINDS)[number];
 
@@ -11,7 +12,10 @@ const HOST_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,47}$/;
 const LOOPBACK_HOSTS = ["localhost", "127.0.0.1", "[::1]"];
 
 const storedHostSchema = z.looseObject({
-	id: z.string().regex(HOST_ID_PATTERN).refine(id => id !== P2P_HOST_ID, "p2p is reserved"),
+	id: z
+		.string()
+		.regex(HOST_ID_PATTERN)
+		.refine(id => id !== P2P_HOST_ID && id !== CLOUD_HOST_ID, "p2p and cloud are reserved"),
 	kind: z.enum(HOST_KINDS),
 	name: z.string().min(1).max(120),
 	baseUrl: z.string().min(1).max(2048),
@@ -72,6 +76,11 @@ export function relayUrlOf(file: HostsFile): string {
 
 export function p2pAllowed(file: HostsFile): boolean {
 	return file.policy?.p2p ?? file.policy?.only === undefined;
+}
+
+export function cloudAllowed(file: HostsFile): boolean {
+	const only = file.policy?.only;
+	return only === undefined ? file.policy?.p2p !== false : only.includes(CLOUD_HOST_ID);
 }
 
 export function visibleHosts(file: HostsFile): readonly StoredHost[] {

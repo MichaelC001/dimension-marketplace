@@ -13,24 +13,26 @@ export interface HostChoice extends Choice {
 	readonly host: ShareHost;
 }
 
-const HOST_COMPOSE = "docker compose -f packages/artifact-host/deploy/docker-compose.yml";
-
-export const HOST_SETUP: readonly { readonly label: string; readonly command: string }[] = [
-	{ label: "Start the share server", command: `ARTIFACT_HOST_DOMAIN=share.example.com ARTIFACT_HOST_UPLOAD_TOKEN=$(openssl rand -base64 32) ${HOST_COMPOSE} up -d` },
-	{ label: "Print its pairing link", command: `${HOST_COMPOSE} exec artifact-host /usr/local/bin/artifact-host admin pair` },
-];
+export const OWN_SERVER_PROMPT = [
+	"Set up my own share server for Dimension's Library, so the links I share keep working while my computer is off.",
+	"Ask me which machine to use (a VPS I can reach over SSH, or a company server) and which web address it should have.",
+	"Install artifact-host from the Dimension repo there (packages/artifact-host/deploy: the install script, or Docker Compose with Caddy for HTTPS), check it answers at https://<address>/.well-known/dimension-artifacts, then print its pairing link with `artifact-host admin pair`.",
+	"Give me that pairing link and tell me to paste it under Your own server in the Share dialog.",
+].join(" ");
 
 const STATUS_REASON: Record<Exclude<ShareHost["status"], "ok">, string> = {
-	unreachable: "This server is not answering right now.",
-	unauthorized: "This server no longer accepts the saved token; add it again with a new pairing link.",
+	unreachable: "Not answering right now. Try again in a moment.",
+	unauthorized: "This server no longer accepts the saved token; paste a new pairing link.",
 };
 
+const PLACE_ORDER: Record<ShareHost["kind"], number> = { dimension: 0, p2p: 1, self: 2, company: 2 };
+
 export function hostChoices(hosts: readonly ShareHost[], size: number): readonly HostChoice[] {
-	const ordered = [...hosts.filter(host => host.kind === "p2p"), ...hosts.filter(host => host.kind !== "p2p")];
+	const ordered = [...hosts].sort((a, b) => PLACE_ORDER[a.kind] - PLACE_ORDER[b.kind]);
 	return ordered.map(host => {
 		if (host.status !== "ok") return { host, allowed: false, reason: STATUS_REASON[host.status] };
-		const maxBytes = host.policy?.maxBytes ?? 0;
-		if (Number.isFinite(maxBytes) && maxBytes > 0 && size > maxBytes) return { host, allowed: false, reason: `This file is ${formatBytes(size)}; this server takes files up to ${formatBytes(maxBytes)}.` };
+		const maxBytes = host.kind === "p2p" ? 0 : (host.policy?.maxBytes ?? 0);
+		if (Number.isFinite(maxBytes) && maxBytes > 0 && size > maxBytes) return { host, allowed: false, reason: `This file is ${formatBytes(size)}; ${host.kind === "dimension" ? "Dimension cloud" : "this server"} takes files up to ${formatBytes(maxBytes)}.` };
 		return { host, allowed: true };
 	});
 }
@@ -139,8 +141,14 @@ export function shareStatus(share: Pick<ShareSummary, "revokedAt" | "expiresAt">
 export function shareDetail(share: Pick<ShareSummary, "host" | "url" | "expiresAt" | "allowComments">, now: number): string {
 	const parts = [share.allowComments ? "Can comment" : "Can view"];
 	if (share.expiresAt !== undefined) parts.push(share.expiresAt <= now ? "Expired" : `Expires ${shortDate(share.expiresAt, now)}`);
-	parts.push(share.host === "p2p" ? "From this computer (works while it is on)" : `On ${hostName(share.url)}`);
+	parts.push(placeOf(share));
 	return parts.join(" · ");
+}
+
+export function placeOf(share: Pick<ShareSummary, "host" | "url">): string {
+	if (share.host === "p2p") return "From this computer (works while it is on)";
+	if (share.host === "cloud") return "On Dimension cloud";
+	return `On ${hostName(share.url)}`;
 }
 
 export function fileChanged(share: Pick<ShareSummary, "host" | "versionAt">, mtimeMs: number): boolean {

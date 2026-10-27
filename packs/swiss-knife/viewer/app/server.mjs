@@ -34608,11 +34608,12 @@ async function writePrivateJsonFile(path2, value) {
 // src/share/hosts.ts
 var DEFAULT_RELAY_URL = "https://share.insodimension.ai";
 var P2P_HOST_ID = "p2p";
+var CLOUD_HOST_ID = "cloud";
 var HOST_KINDS = ["self", "company", "dimension"];
 var HOST_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,47}$/;
 var LOOPBACK_HOSTS = ["localhost", "127.0.0.1", "[::1]"];
 var storedHostSchema = external_exports.looseObject({
-  id: external_exports.string().regex(HOST_ID_PATTERN).refine((id2) => id2 !== P2P_HOST_ID, "p2p is reserved"),
+  id: external_exports.string().regex(HOST_ID_PATTERN).refine((id2) => id2 !== P2P_HOST_ID && id2 !== CLOUD_HOST_ID, "p2p and cloud are reserved"),
   kind: external_exports.enum(HOST_KINDS),
   name: external_exports.string().min(1).max(120),
   baseUrl: external_exports.string().min(1).max(2048),
@@ -34660,6 +34661,10 @@ function relayUrlOf(file2) {
 }
 function p2pAllowed(file2) {
   return file2.policy?.p2p ?? file2.policy?.only === void 0;
+}
+function cloudAllowed(file2) {
+  const only = file2.policy?.only;
+  return only === void 0 ? file2.policy?.p2p !== false : only.includes(CLOUD_HOST_ID);
 }
 function visibleHosts(file2) {
   const only = file2.policy?.only;
@@ -34927,6 +34932,11 @@ var CommentSync = class {
 import { randomBytes as randomBytes5 } from "node:crypto";
 var PROBE_TTL_MS = 3e4;
 var P2P_NAME = "From this computer";
+var CLOUD_NAME = "Dimension cloud";
+function cloudHost(file2, discovery) {
+  const baseUrl = relayUrlOf(file2);
+  return { id: CLOUD_HOST_ID, kind: "dimension", name: baseUrl === DEFAULT_RELAY_URL ? CLOUD_NAME : discovery.name, baseUrl };
+}
 var HostDirectory = class {
   store;
   #options;
@@ -34965,10 +34975,11 @@ var HostDirectory = class {
   async list() {
     const file2 = await this.store.read();
     const allowed = p2pAllowed(file2);
+    const cloud = cloudAllowed(file2);
     const relayBase = relayUrlOf(file2);
     const stored = visibleHosts(file2);
     const [relay, ...probes] = await Promise.all([
-      allowed ? this.#probe(`p2p:${relayBase}`, () => this.#probeRelay(relayBase)) : Promise.resolve({ status: "unreachable" }),
+      allowed || cloud ? this.#probe(`p2p:${relayBase}`, () => this.#probeRelay(relayBase)) : Promise.resolve({ status: "unreachable" }),
       ...stored.map((host) => this.#probe(`${host.id}:${host.baseUrl}:${host.token ?? ""}`, () => this.#probeHost(host)))
     ]);
     const hosts = [];
@@ -34983,6 +34994,10 @@ var HostDirectory = class {
         oidc: false,
         managed: false
       });
+    }
+    if (cloud && relay?.discovery?.mode === "host") {
+      const host = cloudHost(file2, relay.discovery);
+      hosts.push({ ...host, status: relay.status, policy: relay.discovery.policy, oidc: relay.discovery.auth.oidc !== void 0, managed: false });
     }
     stored.forEach((host, index) => {
       const probe = probes[index];
@@ -35008,6 +35023,7 @@ var HostDirectory = class {
   }
   async resolve(hostId) {
     const file2 = await this.store.read();
+    if (hostId === CLOUD_HOST_ID) return this.#resolveCloud(file2);
     const host = visibleHosts(file2).find((entry) => entry.id === hostId);
     if (host === void 0) throw new HostConfigError("that server is not available to you");
     const client = this.#client(host.baseUrl);
@@ -35018,6 +35034,18 @@ var HostDirectory = class {
       throw new HostConfigError(`${host.name} is not reachable right now: ${errorMessage(error51)}`);
     }
     return { host, client, discovery };
+  }
+  async #resolveCloud(file2) {
+    if (!cloudAllowed(file2)) throw new HostConfigError("your administrator limits sharing to approved servers, so Dimension cloud is not available");
+    const client = this.#client(relayUrlOf(file2));
+    let discovery;
+    try {
+      discovery = await client.discovery();
+    } catch (error51) {
+      throw new HostConfigError(`${CLOUD_NAME} is not reachable right now: ${errorMessage(error51)}`);
+    }
+    if (discovery.mode !== "host") throw new HostConfigError(`${CLOUD_NAME} is not available yet`);
+    return { host: cloudHost(file2, discovery), client, discovery };
   }
   async resolveRelay() {
     const file2 = await this.store.read();
