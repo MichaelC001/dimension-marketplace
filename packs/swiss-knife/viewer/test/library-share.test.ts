@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { SharePolicy } from "@dimension/sdk/artifact-share";
+import { formatDuration } from "../app/view/library/kinds";
 import type { ShareHost, ShareHosts } from "../app/view/library/library-tools";
 import {
 	accessLabel,
@@ -248,5 +249,20 @@ describe("who has access reads like a person would say it", () => {
 		expect(initials("ana.lima@example.com")).toBe("AL");
 		expect(initials("bo")).toBe("B");
 		expect(initials("  ")).toBe("?");
+	});
+
+	test("a pinned moment reads the same as the player's clock", () => {
+		const playerClock = [
+			{ ms: 0, clock: "0:00" },
+			{ ms: 999, clock: "0:00" },
+			{ ms: 59_999, clock: "0:59" },
+			{ ms: 60_000, clock: "1:00" },
+			{ ms: 72_830, clock: "1:12" },
+			{ ms: 104_867, clock: "1:44" },
+			{ ms: 3_599_999, clock: "59:59" },
+			{ ms: 3_600_000, clock: "1:00:00" },
+		];
+		expect(playerClock.map(({ ms }) => ({ ms, anchor: anchorLabel({ kind: "time", startMs: ms }) }))).toEqual(playerClock.map(({ ms, clock }) => ({ ms, anchor: clock })));
+		expect(playerClock.map(({ ms }) => ({ ms, duration: formatDuration(ms) }))).toEqual(playerClock.map(({ ms, clock }) => ({ ms, duration: clock })));
 	});
 });
