@@ -203,6 +203,8 @@ export class RuntimeCodeBrowsers implements CodeBrowserPort {
     if (kind.kind === "cmux") return await this.#cmux.acquire(session, kind, signal);
     if (kind.kind !== "headless") return await this.#acquireAttached(session, kind, req, signal);
     if (req.profile !== undefined) return await this.#acquireSaved(session, kind, req.profile, req);
+    const shown = this.#seam.shownTo(session);
+    if (shown !== undefined && shown.profile !== null && shown.engine === "chromium") return await this.#acquireSaved(session, kind, shown.profile, req);
     const existing = this.#reusable(session);
     if (existing !== undefined) {
       const entry = this.#seam.require(existing.browserId);

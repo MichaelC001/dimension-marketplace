@@ -334,11 +334,12 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     const session = sessionOf(extra);
     if (session !== undefined) runtime.bindView(session, browserId);
   };
-  /** The browser the human holds in this call's session: what a model may ask for by leaving browserId out. */
-  const held = (extra: CallExtra): string => {
+  const heldId = (extra: CallExtra): string | undefined => {
     const session = sessionOf(extra);
-    return (session === undefined ? undefined : runtime.viewOf(session)) ?? fail("no_view", "no browser is open in this session; call browser_view");
+    return session === undefined ? undefined : runtime.viewOf(session);
   };
+  /** The browser the human holds in this call's session: what a model may ask for by leaving browserId out. */
+  const held = (extra: CallExtra): string => heldId(extra) ?? fail("no_view", "no browser is open in this session; call browser_view");
   /** Who is opening, from the host's stamps alone: the human in the View ("app"), and the chat. */
   const openerOf = (extra: CallExtra, tool?: OpeningTool): BrowserOpener => {
     const caller = callerOf(extra);
@@ -356,13 +357,8 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
   const access = async (extra: CallExtra, browserId: string, allowClosed = false): Promise<void> => {
     assertAccess(extra, browserId, allowClosed);
   };
-  const openAt = async (profile: string | undefined, engine: BrowserEngine | undefined, url: string | undefined, opener: BrowserOpener, extra: CallExtra, leaving?: string, activity?: { signal: AbortSignal; opened: (browserId: string) => void }): Promise<BrowserState> => {
-    const action = url === undefined ? undefined : navigateStep.parse({ kind: "navigate", url });
-    activity?.signal.throwIfAborted();
-    const state = await runtime.open({ ...(profile === undefined ? {} : { profile }), ...(engine ? { engine } : {}), ...(leaving === undefined ? {} : { leaving }) }, opener);
-    activity?.opened(state.browserId);
-    activity?.signal.throwIfAborted();
-    if (!action) return state;
+  const navigateOpened = async (state: BrowserState, url: string, opener: BrowserOpener, extra: CallExtra): Promise<BrowserState> => {
+    const action = navigateStep.parse({ kind: "navigate", url });
     if (opener.caller === "app" && state.publish?.status === "awaiting-confirmation") {
       fail("publish_pending", "a post awaits confirmation on this browser; post or cancel it before opening a page in it");
     }
@@ -371,6 +367,19 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     assertAccess(extra, state.browserId);
     if (navigated.status !== "completed") throw new Error(`Opened, but navigating to ${url} ${navigated.status}: ${navigated.error}`);
     return navigated.state;
+  };
+  const openAt = async (profile: string | undefined, engine: BrowserEngine | undefined, url: string | undefined, opener: BrowserOpener, extra: CallExtra, leaving?: string, activity?: { signal: AbortSignal; opened: (browserId: string) => void }): Promise<BrowserState> => {
+    if (url !== undefined) navigateStep.parse({ kind: "navigate", url });
+    activity?.signal.throwIfAborted();
+    const state = await runtime.open({ ...(profile === undefined ? {} : { profile }), ...(engine ? { engine } : {}), ...(leaving === undefined ? {} : { leaving }) }, opener);
+    activity?.opened(state.browserId);
+    activity?.signal.throwIfAborted();
+    return url === undefined ? state : await navigateOpened(state, url, opener, extra);
+  };
+  const showHeld = async (browserId: string, url: string | undefined, opener: BrowserOpener, extra: CallExtra): Promise<BrowserState> => {
+    await access(extra, browserId);
+    const state = await runtime.state(browserId, accessGuard(extra, browserId));
+    return url === undefined ? state : await navigateOpened(state, url, opener, extra);
   };
   // Opening never mounts the View: the host mounts it from a tool's STATIC `_meta.ui`, so a headless browser is
   // one whose opener has none. `browser_view` and `browser_publish` are the mounting tools.
@@ -391,16 +400,18 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
   registerAppTool(server, "browser_view", {
     // The View's tab is named by this title (the artifact column prefers a tool's title to the pack's label), so it names the thing, not the verb.
     title: "Browser",
-    description: "Show the human a browser you hold (browserId), or open one they can watch (profile, engine, url). Mounts the Browser View.",
+    description: "Show the human a browser you hold (browserId), or open one (profile, engine, url). With none of browserId, profile or engine it shows the browser already open here, going to url when given. Mounts the Browser View.",
     inputSchema: { browserId: capability.optional(), profile: profile.optional(), engine: z.enum(BROWSER_ENGINES).optional(), url: z.string().max(2048).optional() },
     _meta: { ui: { resourceUri: BROWSER_VIEW_URI }, [APPROVAL_SUMMARY_META_KEY]: ["Open the browser with your {profile} profile", "Go to {url}"] },
   // The result is a BrowserState: the View binds to whichever browser it names (a tool result is its only source of a browserId).
   }, ({ browserId, profile, engine, url }, extra) => result(async () => {
     if (browserId !== undefined && (profile !== undefined || engine !== undefined || url !== undefined)) {
-      fail("bad_view", "profile, engine and url open a NEW browser; pass a browserId alone to show the one you hold");
+      fail("bad_view", "browserId shows the browser you hold: pass it alone, without profile, engine or url");
     }
     if (browserId !== undefined) await access(extra, browserId);
-    const state = browserId === undefined ? await openAt(profile, engine, url, openerOf(extra, "browser_view"), extra) : await runtime.state(browserId, accessGuard(extra, browserId));
+    const shownId = browserId === undefined && profile === undefined && engine === undefined ? heldId(extra) : undefined;
+    const opener = openerOf(extra, "browser_view");
+    const state = browserId !== undefined ? await runtime.state(browserId, accessGuard(extra, browserId)) : shownId !== undefined ? await showHeld(shownId, url, opener, extra) : await openAt(profile, engine, url, opener, extra);
     assertAccess(extra, state.browserId);
     // The View is mounted on this browser now, for whoever is in this session.
     showing(extra, state.browserId);
@@ -488,7 +499,7 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
       preview: async (session, browserId, running) =>
         (running ? previewMeta(runtime, browserId, session) : await previewResult(runtime, browserId, session))?.[PREVIEW_META_KEY]
         ?? { v: 1, source: { kind: "browser", browserId }, at: Date.now() },
-      meta: { [APPROVAL_META_KEY]: "exec", [SPACES_META_KEY]: BROWSER_RUN_SPACES },
+      meta: { [APPROVAL_META_KEY]: "exec", [APPROVAL_SUMMARY_META_KEY]: "Let your agent browse the web for you", [SPACES_META_KEY]: BROWSER_RUN_SPACES },
     });
   }
   // Hosts time tool calls out (the desktop at 30 s), and a task can take

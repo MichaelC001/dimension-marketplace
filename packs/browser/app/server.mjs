@@ -11017,6 +11017,8 @@ var RuntimeCodeBrowsers = class {
     if (kind.kind === "cmux") return await this.#cmux.acquire(session, kind, signal);
     if (kind.kind !== "headless") return await this.#acquireAttached(session, kind, req, signal);
     if (req.profile !== void 0) return await this.#acquireSaved(session, kind, req.profile, req);
+    const shown2 = this.#seam.shownTo(session);
+    if (shown2 !== void 0 && shown2.profile !== null && shown2.engine === "chromium") return await this.#acquireSaved(session, kind, shown2.profile, req);
     const existing = this.#reusable(session);
     if (existing !== void 0) {
       const entry2 = this.#seam.require(existing.browserId);
@@ -12324,7 +12326,7 @@ async function runCodeTool(deps, args, extra) {
 }
 function registerCodeTool(server2, deps) {
   server2.registerTool("browser_run", {
-    title: "Run Browser Code",
+    title: "Use the Browser",
     description: BROWSER_RUN_DESCRIPTION,
     inputSchema: {
       code: z2.string().min(1).max(2e5).optional(),
@@ -16796,7 +16798,7 @@ var LiveChannel = class {
 var plugin_default = {
   $schema: "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   name: "browser",
-  version: "0.9.6",
+  version: "0.9.7",
   description: "A real browser beside your chat that your agent drives while you watch. Tabs, persistent logged-in profiles, circle-to-annotate, and an optional fast task agent (jev).",
   keywords: [
     "browser",
@@ -17082,10 +17084,11 @@ async function createBrowserServer(options = {}) {
     const session = sessionOf(extra);
     if (session !== void 0) runtime.bindView(session, browserId);
   };
-  const held = (extra) => {
+  const heldId = (extra) => {
     const session = sessionOf(extra);
-    return (session === void 0 ? void 0 : runtime.viewOf(session)) ?? fail("no_view", "no browser is open in this session; call browser_view");
+    return session === void 0 ? void 0 : runtime.viewOf(session);
   };
+  const held = (extra) => heldId(extra) ?? fail("no_view", "no browser is open in this session; call browser_view");
   const openerOf = (extra, tool) => {
     const caller = callerOf(extra);
     const session = sessionOf(extra);
@@ -17102,13 +17105,8 @@ async function createBrowserServer(options = {}) {
   const access = async (extra, browserId, allowClosed = false) => {
     assertAccess(extra, browserId, allowClosed);
   };
-  const openAt = async (profile2, engine, url, opener, extra, leaving, activity) => {
-    const action = url === void 0 ? void 0 : navigateStep.parse({ kind: "navigate", url });
-    activity?.signal.throwIfAborted();
-    const state = await runtime.open({ ...profile2 === void 0 ? {} : { profile: profile2 }, ...engine ? { engine } : {}, ...leaving === void 0 ? {} : { leaving } }, opener);
-    activity?.opened(state.browserId);
-    activity?.signal.throwIfAborted();
-    if (!action) return state;
+  const navigateOpened = async (state, url, opener, extra) => {
+    const action = navigateStep.parse({ kind: "navigate", url });
     if (opener.caller === "app" && state.publish?.status === "awaiting-confirmation") {
       fail("publish_pending", "a post awaits confirmation on this browser; post or cancel it before opening a page in it");
     }
@@ -17117,6 +17115,19 @@ async function createBrowserServer(options = {}) {
     assertAccess(extra, state.browserId);
     if (navigated.status !== "completed") throw new Error(`Opened, but navigating to ${url} ${navigated.status}: ${navigated.error}`);
     return navigated.state;
+  };
+  const openAt = async (profile2, engine, url, opener, extra, leaving, activity) => {
+    if (url !== void 0) navigateStep.parse({ kind: "navigate", url });
+    activity?.signal.throwIfAborted();
+    const state = await runtime.open({ ...profile2 === void 0 ? {} : { profile: profile2 }, ...engine ? { engine } : {}, ...leaving === void 0 ? {} : { leaving } }, opener);
+    activity?.opened(state.browserId);
+    activity?.signal.throwIfAborted();
+    return url === void 0 ? state : await navigateOpened(state, url, opener, extra);
+  };
+  const showHeld = async (browserId, url, opener, extra) => {
+    await access(extra, browserId);
+    const state = await runtime.state(browserId, accessGuard(extra, browserId));
+    return url === void 0 ? state : await navigateOpened(state, url, opener, extra);
   };
   server2.registerTool("browser_open", {
     title: "Open Browser",
@@ -17135,16 +17146,18 @@ async function createBrowserServer(options = {}) {
   registerAppTool(server2, "browser_view", {
     // The View's tab is named by this title (the artifact column prefers a tool's title to the pack's label), so it names the thing, not the verb.
     title: "Browser",
-    description: "Show the human a browser you hold (browserId), or open one they can watch (profile, engine, url). Mounts the Browser View.",
+    description: "Show the human a browser you hold (browserId), or open one (profile, engine, url). With none of browserId, profile or engine it shows the browser already open here, going to url when given. Mounts the Browser View.",
     inputSchema: { browserId: capability.optional(), profile: profile.optional(), engine: z3.enum(BROWSER_ENGINES).optional(), url: z3.string().max(2048).optional() },
     _meta: { ui: { resourceUri: BROWSER_VIEW_URI }, [APPROVAL_SUMMARY_META_KEY]: ["Open the browser with your {profile} profile", "Go to {url}"] }
     // The result is a BrowserState: the View binds to whichever browser it names (a tool result is its only source of a browserId).
   }, ({ browserId, profile: profile2, engine, url }, extra) => result(async () => {
     if (browserId !== void 0 && (profile2 !== void 0 || engine !== void 0 || url !== void 0)) {
-      fail("bad_view", "profile, engine and url open a NEW browser; pass a browserId alone to show the one you hold");
+      fail("bad_view", "browserId shows the browser you hold: pass it alone, without profile, engine or url");
     }
     if (browserId !== void 0) await access(extra, browserId);
-    const state = browserId === void 0 ? await openAt(profile2, engine, url, openerOf(extra, "browser_view"), extra) : await runtime.state(browserId, accessGuard(extra, browserId));
+    const shownId = browserId === void 0 && profile2 === void 0 && engine === void 0 ? heldId(extra) : void 0;
+    const opener = openerOf(extra, "browser_view");
+    const state = browserId !== void 0 ? await runtime.state(browserId, accessGuard(extra, browserId)) : shownId !== void 0 ? await showHeld(shownId, url, opener, extra) : await openAt(profile2, engine, url, opener, extra);
     assertAccess(extra, state.browserId);
     showing(extra, state.browserId);
     return stateFor(callerOf(extra), state);
@@ -17235,7 +17248,7 @@ async function createBrowserServer(options = {}) {
       sessionOf,
       artifactsDir: () => options.codeArtifactsDir ?? join16(process.env.DIMENSION_BROWSER_ROOT || defaultRootDir(), "artifacts"),
       preview: async (session, browserId, running) => (running ? previewMeta(runtime, browserId, session) : await previewResult(runtime, browserId, session))?.[PREVIEW_META_KEY] ?? { v: 1, source: { kind: "browser", browserId }, at: Date.now() },
-      meta: { [APPROVAL_META_KEY]: "exec", [SPACES_META_KEY]: BROWSER_RUN_SPACES }
+      meta: { [APPROVAL_META_KEY]: "exec", [APPROVAL_SUMMARY_META_KEY]: "Let your agent browse the web for you", [SPACES_META_KEY]: BROWSER_RUN_SPACES }
     });
   }
   const WAIT_CAP_S = 25;

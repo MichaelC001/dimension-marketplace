@@ -163,7 +163,7 @@ export async function runCodeTool(deps: CodeToolDeps, args: BrowserRunArgs, extr
 /** Registers `browser_run`: the model's one way of driving a page by code (doc 77 §7.4.2). */
 export function registerCodeTool(server: McpServer, deps: CodeToolDeps): void {
   server.registerTool("browser_run", {
-    title: "Run Browser Code",
+    title: "Use the Browser",
     description: BROWSER_RUN_DESCRIPTION,
     inputSchema: {
       code: z.string().min(1).max(200_000).optional(),
