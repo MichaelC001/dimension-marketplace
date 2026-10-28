@@ -143,7 +143,6 @@ describeWithChrome("the code worker as the product runs it (a Node worker thread
         expect(refused.ok).toBe(false);
         if (refused.ok) return;
         expect(refused.message).toStartWith('"#pw" is a password field');
-        // A cell runs only where browser_run is offered, and there the step tools and Traction's task tools are not: the routes are the person's, and browser_view is a tool every space has.
         expect(refused.message).toContain("Ask the user");
         expect(refused.message).toContain("browser_view({ profile })");
         for (const hidden of ["browser_act", "browser_open", "browser_task"]) expect(refused.message).not.toContain(hidden);

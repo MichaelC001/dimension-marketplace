@@ -35,10 +35,8 @@
  * Boundary, stated so nobody reads more into it than is there: the record is a
  * file under the user's home. It keeps a model that holds browser tools out of
  * the publish door; it cannot stop a process that can write files as this user
- * (an agent with a code runner or a file writer). Traction's platform agents
- * hold neither (their `capabilities.tools` allowlists); its CMO keeps `write`
- * for its desk notes, so a CMO talked into it could write one. It also covers
- * only what is hashed: origin, profile, preset and values, NOT the page a
+ * (an agent with a code runner or a file writer, which Traction's agents are).
+ * It also covers only what is hashed: origin, profile, preset and values, NOT the page a
  * `needsTarget` preset posts on, so no surface may approve such a preset until
  * the binding covers the target (a v2 domain tag).
  */
