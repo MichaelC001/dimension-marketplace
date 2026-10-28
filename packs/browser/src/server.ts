@@ -100,15 +100,8 @@ const MODEL_SPACES: readonly string[] = (() => {
   if (spaces === undefined || spaces.length === 0) throw new Error("plugin.json lends the browser server to no space (artifactories[].modelSpaces)");
   return spaces;
 })();
-/**
- * The spaces whose model is offered `browser_run`. Host contract H1 (omp fork) maps `ai.insodimension/approval: "exec"` to the exec tier, so `browser_run` asks in every mode short of full access.
- * It is still offered only to the spaces whose agents also have `eval`/`bash` (doc 77 §7.4.5); listing every other space changes what those spaces' models see and is a separate call. Where `browser_run` is not offered the step tools stay on the model's list, so no space is left without a way to drive a page.
- *
- * `traction` is NOT one: its agents hold no code runner on purpose (the X agent's `capabilities.tools` has no `eval` or `bash`, and its manifest says why: an approved draft once sent an agent to `eval browser.open`), and MCP
- * tools are exempt from that list, so a `browser_run` offered to the Traction space would hand the X agent and the CMO exactly the runner their manifests withhold: full Node (doc 77 §7.4.5), outside the approval
- * binding of `browser_publish` and the ask of `browser_publish_confirm`. The same space also publishes through `browser_open`/`browser_state`/`browser_snapshot`/`browser_screenshot`, which a `browser_run` audience hides.
- */
 const CODE_TOOL_SPACES = ["code", "build"];
+const BROWSER_RUN_SPACES = [...CODE_TOOL_SPACES, "traction"];
 
 function resolveModelTools(raw: string | undefined, hasCodeHost: boolean): ModelToolsMode {
   const asked = raw?.trim().toLowerCase() ?? "";
@@ -249,7 +242,6 @@ function nextStep(summary: string): string {
 
 /**
  * Whether this server registers `browser_task`, `browser_task_wait` and `browser_task_cancel`. Read once, as the server is created. jev is the one task agent and it needs its key, so the tools exist only where `jevKeyConfigured()`.
- * They are Traction's (`TRACTION_ONLY`) and a cell never runs in that space, so no text a cell can read names them.
  */
 export function taskToolsOffered(): boolean {
   return jevKeyConfigured();
@@ -495,7 +487,7 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
       preview: async (session, browserId, running) =>
         (running ? previewMeta(runtime, browserId, session) : await previewResult(runtime, browserId, session))?.[PREVIEW_META_KEY]
         ?? { v: 1, source: { kind: "browser", browserId }, at: Date.now() },
-      meta: { [APPROVAL_META_KEY]: "exec", [SPACES_META_KEY]: CODE_TOOL_SPACES },
+      meta: { [APPROVAL_META_KEY]: "exec", [SPACES_META_KEY]: BROWSER_RUN_SPACES },
     });
   }
   // Hosts time tool calls out (the desktop at 30 s), and a task can take

@@ -10,10 +10,11 @@ standard MCP and MCP Apps. No host internals, no browser fork.
 ## What it does
 
 - **One shared browser, two tool styles.** The default `code` mode offers
-  `browser_run` in code/build spaces and the step tools (`browser_open`,
+  `browser_run` in code/build/traction spaces and the step tools (`browser_open`,
   `browser_state`, `browser_snapshot`, `browser_act`, etc.) in chat/labor/watch/
-  traction spaces. `DIMENSION_BROWSER_MODEL_TOOLS=steps` offers step tools only;
-  `both` offers both in code/build while keeping step tools in other spaces.
+  traction spaces, so Traction has both. `DIMENSION_BROWSER_MODEL_TOOLS=steps`
+  offers step tools only; `both` offers both in code/build while keeping step
+  tools in other spaces.
   The View and the agent share the browser in their session, and nothing in
   the View is sent to the model unless the human annotates.
 - **Headless by default, the View on demand.** A browser opened without a
@@ -351,22 +352,22 @@ is kept and tested (`launchReader({ presentAsChrome: true })`).
 
 ## Tools
 
-Model-callable (15 in the largest space; 18 where jev's key is configured), offered by audience (`_meta["ai.insodimension/spaces"]`; the
+Model-callable (16 in the largest space; 19 where jev's key is configured), offered by audience (`_meta["ai.insodimension/spaces"]`; the
 host leaves a tool out of a space's list and refuses the call there; the View's own
 buttons are not gated by it). `DIMENSION_BROWSER_MODEL_TOOLS` chooses what the code and
 build spaces get: `code` (the default) gives them `browser_run` and not the step tools,
 `steps` the step tools only, `both` both. Every other space always keeps the step tools,
-and no mode gives `browser_run` to Traction.
+and Traction also gets `browser_run` wherever the mode offers it.
 
 | Offered to | Tools |
 |---|---|
 | Every space the pack is granted (4) | `browser_view`, `browser_read`, `browser_profiles`, `browser_close` |
 | The step tools (6): chat, labor, watch and traction; code and build too in `steps` and `both` mode | `browser_open`, `browser_state`, `browser_snapshot`, `browser_inspect`, `browser_screenshot`, `browser_act` |
-| Code and build, in `code` and `both` mode (1) | `browser_run` |
+| Code, build and traction, in `code` and `both` mode (1) | `browser_run` |
 | Traction only (5; 8 with jev's key) | `browser_publish`, `browser_publish_presets`, `browser_publish_confirm`, `browser_publish_cancel`, `browser_publish_wait`, and, only with `TYPESAFE_API_KEY`: `browser_task`, `browser_task_wait`, `browser_task_cancel` |
 
 In the default `code` mode that is 5 tools for a code or build session (`browser_run` and the
-four every space has), 10 for chat, labor and watch, and 15 for Traction (18 with jev's key).
+four every space has), 10 for chat, labor and watch, and 16 for Traction (19 with jev's key).
 
 Waiting, tabs and page scripts are steps of `browser_act`, and the page log is a
 field of `browser_state`: every tool is paid for by every agent on every turn, so a
@@ -862,11 +863,12 @@ no surface should approve one before it does.
 
 What this does not cover: a process that can write files as you. An agent with
 a code runner or a file writer can write an approval, so a host that lends this
-pack to such an agent gets the Allow card and nothing more; give the agents that
-publish neither. (Traction's platform agents hold neither; its CMO keeps `write`
-for its desk notes and so is inside this limit.) Posting with `browser_act` or `browser_task` is page driving,
-not publishing: it is not gated here either, so an agent that posts only through
-`browser_publish` should not hold them.
+pack to such an agent gets the Allow card and nothing more. Traction's agents
+hold `bash`, `write` and `browser_run` (an owner decision, 2026-10-28), so for
+them the approval binds the publish tools only; what stops an unapproved send is
+the confirm's Allow card, `browser_run`'s exec-tier ask and the Traction rules.
+Posting with `browser_act`, `browser_run` or `browser_task` is page driving, not
+publishing: it is not gated here either.
 
 ## Connection report
 

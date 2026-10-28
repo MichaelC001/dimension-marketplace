@@ -45,7 +45,7 @@ const scripted = (async (input: RequestInfo | URL, init?: RequestInit) => {
 }) as typeof fetch;
 
 async function sealed(body: string, version = 1): Promise<string> {
-	return encodeBase64Url(await sealComment(await deriveCommentKey(keyBytes), { author: "Ana", body, anchor: { kind: "time", startMs: 2000 }, version, at: 5 }));
+	return encodeBase64Url(await sealComment(await deriveCommentKey(keyBytes), { author: "Ana", body, anchor: { startMs: 2000 }, version, at: 5 }));
 }
 
 async function shareRow(overrides: Partial<ShareRow> = {}): Promise<ShareRow> {
@@ -101,7 +101,7 @@ describe("mirroring comments from a host's event stream", () => {
 		await until(() => world.library.shares.get(row.id)?.revokedAt !== undefined, "the revocation to be recorded");
 		const comments = world.library.comments.forArtifact(row.artifactId);
 		expect(comments).toHaveLength(1);
-		expect(comments[0]).toMatchObject({ id: "c1", author: "Ana", body: "first", anchor: { kind: "time", startMs: 2000 }, version: 1, createdAt: 100, shareId: row.id });
+		expect(comments[0]).toMatchObject({ id: "c1", author: "Ana", body: "first", anchor: { startMs: 2000 }, version: 1, createdAt: 100, shareId: row.id });
 		expect(comments[0]?.readAt).toBeUndefined();
 		expect(recorded[0]?.url).toBe("https://host.example/api/v1/events");
 		expect(recorded[0]?.headers.get("authorization")).toBeNull();

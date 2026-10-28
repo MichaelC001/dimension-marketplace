@@ -1,6 +1,7 @@
 import { realpath } from "node:fs/promises";
 import { resolve } from "node:path";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
+import { anchorLabel, type CommentAnchor, shapeExtent } from "@dimension/sdk/artifact-share";
 import { formatByteSize, PRESENTED_KINDS, type PresentedKind } from "@dimension/sdk/presentation";
 import { LibraryError } from "./library/errors";
 import type { CommentRow, Library, LibraryItem, ShareSummary } from "./library/types";
@@ -111,8 +112,19 @@ function requireId(params: ArtifactsParams): string {
 	return params.id;
 }
 
+const percent = (unit: number): number => Math.round(unit * 100);
+
+function anchorDetail(anchor: CommentAnchor | undefined): string | null {
+	const label = anchorLabel(anchor);
+	if (label === null || anchor?.shape === undefined) return label;
+	const { left, top, right, bottom } = shapeExtent(anchor.shape);
+	const where = anchor.shape.kind === "pin" ? `at x ${percent(left)}%, y ${percent(top)}%` : `over x ${percent(left)}–${percent(right)}%, y ${percent(top)}–${percent(bottom)}%`;
+	return `${label} (${where} of the ${anchor.page === undefined ? (anchor.startMs === undefined ? "picture" : "frame") : "page"})`;
+}
+
 function describeComment(comment: CommentRow, now: number): string {
-	const anchor = comment.anchor === undefined ? "" : ` · ${oneLine(JSON.stringify(comment.anchor), 80)}`;
+	const where = anchorDetail(comment.anchor);
+	const anchor = where === null ? "" : ` · ${oneLine(where, 160)}`;
 	return `${oneLine(comment.author, 60)} · ${relativeAge(comment.createdAt, now)} · v${comment.version}${anchor} · ${oneLine(comment.body, MAX_COMMENT)}`;
 }
 

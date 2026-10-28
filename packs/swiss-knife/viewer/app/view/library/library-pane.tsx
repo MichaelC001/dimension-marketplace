@@ -6,13 +6,13 @@ import { Select } from "@fraym/ui/elements/select";
 import { Icon } from "@fraym/ui/icons";
 import { cn } from "@fraym/ui/lib/cn";
 import type { App } from "@modelcontextprotocol/ext-apps";
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { type KeyboardEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
 import type { DiscardOutcome, LibraryFacets, LibraryItem, LibrarySort, ShareSummary } from "../../../../src/library/types";
 import { FOCUS } from "../focus-ring";
+import type { Theme } from "../renderers/types";
 import type { LibraryTab } from "../tabs";
 import { AddFileDialog } from "./add-file-dialog";
-import { DetailDrawer } from "./detail-drawer";
+import { ArtifactPage } from "./artifact-page";
 import { DiscardDialog, TRASH_NAME } from "./discard-dialog";
 import { FilterRail } from "./filter-rail";
 import { LibraryGrid, type LibraryLayout } from "./library-grid";
@@ -41,7 +41,7 @@ export interface LibraryPaneProps {
 	readonly app: App;
 	readonly request: LibraryTab;
 	readonly active: boolean;
-	readonly onOpened: (result: CallToolResult) => void;
+	readonly theme: Theme;
 }
 
 type Dialog = { readonly kind: "discard"; readonly item: LibraryItem } | { readonly kind: "share"; readonly item: LibraryItem; readonly shareId: string | null } | { readonly kind: "add" } | null;
@@ -57,7 +57,7 @@ const SORT_LABEL: Record<LibrarySort, string> = {
 const SCOPE_EMPTY: Record<LibraryScope, { readonly title: string; readonly body: string }> = {
 	all: { title: "Your library is empty", body: "Artifacts appear here when an agent presents a file. Add one: paste a file’s path." },
 	starred: { title: "Nothing starred yet", body: "Select an artifact and press S to keep it here." },
-	shared: { title: "Nothing shared yet", body: "Select an artifact and choose Share to send someone an encrypted link." },
+	shared: { title: "Nothing shared yet", body: "Open an artifact and choose Share to send someone an encrypted link." },
 	discarded: { title: "Nothing discarded", body: "Discarded artifacts wait here for 30 days so you can restore them." },
 };
 
@@ -106,7 +106,7 @@ function discardedSentence(result: DiscardOutcome): string {
 	return `${parts.join("; ")}.`;
 }
 
-export function LibraryPane({ app, request, active, onOpened }: LibraryPaneProps) {
+export function LibraryPane({ app, request, active, theme }: LibraryPaneProps) {
 	const tools = useMemo(() => createLibraryTools(app), [app]);
 	const now = useMinuteClock();
 	const root = useRef<HTMLDivElement>(null);
@@ -123,6 +123,7 @@ export function LibraryPane({ app, request, active, onOpened }: LibraryPaneProps
 	const [thumbBase, setThumbBase] = useState<string | null>(null);
 	const [bumps, setBumps] = useState<Readonly<Record<string, number>>>({});
 	const [selectedId, setSelectedId] = useState<string | null>(null);
+	const [page, setPage] = useState<LibraryItem | null>(null);
 	const [dialog, setDialog] = useState<Dialog>(null);
 	const [railOpen, setRailOpen] = useState(false);
 	const [toast, setToast] = useState<string | null>(null);
@@ -299,26 +300,25 @@ export function LibraryPane({ app, request, active, onOpened }: LibraryPaneProps
 	);
 
 	const selectedIndex = useMemo(() => (selectedId === null ? -1 : list.items.findIndex(item => item.id === selectedId)), [list.items, selectedId]);
-	const selectedRow = selectedIndex >= 0 ? list.items[selectedIndex] : undefined;
-	const selected = selectedRow === undefined ? null : shownItem(selectedRow, list.checked);
+	const pageRow = page === null ? undefined : (list.items.find(item => item.id === page.id) ?? page);
+	const pageShown = pageRow === undefined ? null : shownItem(pageRow, list.checked);
 
 	const thumbFor = useCallback(
 		(item: LibraryItem): string | null => (item.hasThumb && thumbBase !== null ? thumbUrl(thumbBase, item, bumps[item.id] ?? 0) : null),
 		[thumbBase, bumps],
 	);
 
-	const open = useCallback(
-		(item: LibraryItem): void => {
-			tools.open(item.id).then(onOpened, cause => setToast(errorText(cause)));
-		},
-		[tools, onOpened],
-	);
+	const openPage = useCallback((item: LibraryItem): void => {
+		setSelectedId(item.id);
+		setPage(item);
+	}, []);
 
 	const patch = useCallback(
 		(item: LibraryItem, change: ArtifactPatchInput): void => {
 			tools.update(item.id, change).then(
 				updated => {
 					dispatch({ type: "item", item: updated });
+					setPage(current => (current?.id === updated.id ? updated : current));
 					if (change.starred !== undefined) setFacetsGeneration(count => count + 1);
 				},
 				cause => setToast(errorText(cause)),
@@ -330,8 +330,9 @@ export function LibraryPane({ app, request, active, onOpened }: LibraryPaneProps
 	const restore = useCallback(
 		(item: LibraryItem): void => {
 			tools.restore(item.id).then(
-				() => {
+				restored => {
 					dispatch({ type: "remove", id: item.id });
+					setPage(current => (current?.id === restored.id ? restored : current));
 					setFacetsGeneration(count => count + 1);
 					setToast("Restored to the library.");
 				},
@@ -341,14 +342,15 @@ export function LibraryPane({ app, request, active, onOpened }: LibraryPaneProps
 		[tools],
 	);
 
-	const selectedIdRef = useRef(selectedId);
-	selectedIdRef.current = selectedId;
+	const pageIdRef = useRef<string | null>(null);
+	pageIdRef.current = page?.id ?? null;
 	const patchItemShares = useCallback((id: string, change: (shares: readonly ShareSummary[]) => readonly ShareSummary[]): void => {
 		const current = listRef.current.items.find(item => item.id === id);
 		if (current !== undefined) dispatch({ type: "item", item: { ...current, shares: change(current.shares) } });
+		setPage(shown => (shown?.id === id ? { ...shown, shares: change(shown.shares) } : shown));
 	}, []);
 	const patchShares = useCallback((shares: readonly ShareSummary[]): void => {
-		if (selectedIdRef.current !== null) patchItemShares(selectedIdRef.current, () => shares);
+		if (pageIdRef.current !== null) patchItemShares(pageIdRef.current, () => shares);
 	}, [patchItemShares]);
 
 	const setScope = (scope: LibraryScope): void => {
@@ -368,7 +370,7 @@ export function LibraryPane({ app, request, active, onOpened }: LibraryPaneProps
 	};
 
 	const onRootKey = (event: KeyboardEvent<HTMLDivElement>): void => {
-		if (dialog !== null || event.defaultPrevented) return;
+		if (page !== null || dialog !== null || event.defaultPrevented) return;
 		const target = event.target as HTMLElement;
 		const typing = target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable;
 		if (event.key === "/" && !typing) {
@@ -415,6 +417,7 @@ export function LibraryPane({ app, request, active, onOpened }: LibraryPaneProps
 
 	return (
 		<div ref={root} data-slot="library-pane" className="relative flex h-full min-h-0 bg-fr-bg text-fr-text" onKeyDown={onRootKey}>
+			<div className="flex min-h-0 min-w-0 flex-1" inert={page !== null}>
 			{compact ? null : <div className="w-52 shrink-0 border-r border-fr-border-soft bg-fr-rail">{rail}</div>}
 			{compact && railOpen ? (
 				<>
@@ -530,12 +533,13 @@ export function LibraryPane({ app, request, active, onOpened }: LibraryPaneProps
 							selectedIndex={selectedIndex}
 							label={filter.scope === "discarded" ? "Recently discarded" : "Artifacts"}
 							renderItem={renderItem}
-							onSelect={index => setSelectedId(list.items[index]?.id ?? null)}
+							onSelect={index => {
+								const item = list.items[index];
+								setSelectedId(item?.id ?? null);
+							}}
 							onOpen={index => {
 								const item = list.items[index];
-								if (item === undefined) return;
-								if (item.state === "discarded") setSelectedId(item.id);
-								else open(item);
+								if (item !== undefined) openPage(item);
 							}}
 							onKey={onGridKey}
 							onRange={onRange}
@@ -563,25 +567,28 @@ export function LibraryPane({ app, request, active, onOpened }: LibraryPaneProps
 					)}
 				</div>
 			</div>
-			{selected === null ? null : (
-				<div className={cn("min-h-0 border-l border-fr-border-soft", compact ? "absolute inset-y-0 right-0 z-30 w-[min(340px,100%)] shadow-xl" : "w-80 shrink-0")}>
-					<DetailDrawer
-						key={selected.id}
-						tools={tools}
-						item={selected}
-						thumb={thumbFor(selected)}
-						active={active}
-						now={now}
-						onClose={() => setSelectedId(null)}
-						onPatch={change => patch(selected, change)}
-						onOpen={() => open(selected)}
-						onShare={() => setDialog({ kind: "share", item: selected, shareId: null })}
-						onManage={shareId => setDialog({ kind: "share", item: selected, shareId })}
-						onDiscard={() => setDialog({ kind: "discard", item: selected })}
-						onRestore={() => restore(selected)}
-						onShares={patchShares}
-					/>
-				</div>
+			</div>
+			{pageShown === null ? null : (
+				<ArtifactPage
+					key={pageShown.id}
+					app={app}
+					tools={tools}
+					item={pageShown}
+					thumb={thumbFor(pageShown)}
+					active={active}
+					now={now}
+					theme={theme}
+					onBack={() => {
+						setPage(null);
+						window.requestAnimationFrame(() => root.current?.querySelector<HTMLElement>('[data-slot="library-grid"]')?.focus());
+					}}
+					onPatch={change => patch(pageShown, change)}
+					onShare={() => setDialog({ kind: "share", item: pageShown, shareId: null })}
+					onManage={shareId => setDialog({ kind: "share", item: pageShown, shareId })}
+					onDiscard={() => setDialog({ kind: "discard", item: pageShown })}
+					onRestore={() => restore(pageShown)}
+					onShares={patchShares}
+				/>
 			)}
 			{dialog?.kind === "discard" ? (
 				<DiscardDialog
@@ -591,6 +598,7 @@ export function LibraryPane({ app, request, active, onOpened }: LibraryPaneProps
 					onDiscarded={result => {
 						const at = list.items.findIndex(item => item.id === dialog.item.id);
 						if (selectedId === dialog.item.id) setSelectedId(list.items[at + 1]?.id ?? list.items[at - 1]?.id ?? null);
+						if (page?.id === dialog.item.id) setPage(null);
 						dispatch({ type: "remove", id: dialog.item.id });
 						setFacetsGeneration(count => count + 1);
 						setDialog(null);
@@ -624,7 +632,7 @@ export function LibraryPane({ app, request, active, onOpened }: LibraryPaneProps
 						setFilter(current => ({ ...current, q: "", kinds: [], scope: "all", workspace: undefined, sort: DEFAULT_FILTER.sort }));
 						setGeneration(count => count + 1);
 						setFacetsGeneration(count => count + 1);
-						setSelectedId(item.id);
+						openPage(item);
 					}}
 				/>
 			) : null}

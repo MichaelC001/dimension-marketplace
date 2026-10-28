@@ -7,7 +7,7 @@
 // window access, no hard-coded endpoint — every byte of state comes over the
 // bridge. The only kit it draws on is the shared annotation one, for marking
 // up the page.
-import { NoteDictationProvider } from "@dimension/mcp-app-kit/annotate/react";
+import { NoteDictationProvider } from "@dimension/mcp-app-kit/react";
 import { useApp, useDocumentTheme, useHostStyles } from "@modelcontextprotocol/ext-apps/react";
 import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";

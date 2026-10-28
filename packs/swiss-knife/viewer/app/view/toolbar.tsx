@@ -33,9 +33,10 @@ export interface ToolbarProps {
 	readonly shownBytes?: number;
 	readonly zoom?: { readonly factor: number; readonly onStep: (direction: "in" | "out") => void; readonly onReset: () => void };
 	readonly pager?: { readonly page: number; readonly count: number; readonly onGoto: (page: number) => void };
+	readonly bare?: boolean;
 }
 
-export function Toolbar({ filename, path, kind, size, shownBytes, zoom, pager }: ToolbarProps) {
+export function Toolbar({ filename, path, kind, size, shownBytes, zoom, pager, bare = false }: ToolbarProps) {
 	const { copied, copy } = useCopied(path);
 	return (
 		<>
@@ -46,7 +47,13 @@ export function Toolbar({ filename, path, kind, size, shownBytes, zoom, pager }:
 			    the controls on one line puts the controls underneath, whole, and the name keeps the rest of the file's
 			    facts on its row. A row is one touch target tall, the rule under it drawn inside the last row (a border
 			    would make one row 41). The DOM order is the reading order and the tab order in both layouts. */}
+			{bare && shownBytes === undefined && pager === undefined && zoom === undefined ? null : (
 			<div data-slot="viewer-toolbar" className="flex shrink-0 flex-wrap items-center gap-x-3 px-3 shadow-[inset_0_-1px_0_var(--fr-border-soft)]">
+				{bare ? (
+					<div data-slot="viewer-toolbar-file" className="flex min-h-10 min-w-0 flex-1 items-center">
+						{shownBytes === undefined ? null : <span className="min-w-0 truncate text-fr-xs text-fr-text-3">showing the first {formatBytes(shownBytes)}</span>}
+					</div>
+				) : (
 				<div data-slot="viewer-toolbar-file" className="flex min-h-10 min-w-0 flex-1 basis-72 items-center gap-3">
 					{kind === undefined ? null : <span className="shrink-0 rounded-sm bg-fr-surface-3 px-1.5 py-0.5 text-fr-2xs font-medium text-fr-text-2">{KIND_LABEL[kind]}</span>}
 					<span className="min-w-0 flex-1 truncate text-fr-sm text-fr-text" title={size === undefined ? path : `${path} · ${formatBytes(size)}`}>
@@ -59,6 +66,7 @@ export function Toolbar({ filename, path, kind, size, shownBytes, zoom, pager }:
 						<Icon name={copied ? "check" : "copy"} size={14} />
 					</IconButton>
 				</div>
+				)}
 				{pager || zoom ? (
 					<div data-slot="viewer-toolbar-controls" className="flex min-h-10 max-w-full flex-wrap items-center gap-x-3">
 						{pager ? (
@@ -96,6 +104,7 @@ export function Toolbar({ filename, path, kind, size, shownBytes, zoom, pager }:
 					</div>
 				) : null}
 			</div>
+			)}
 			{/* The annotation tools dock here (`Strip` in pane-shared), in the flow between this bar and the document. */}
 			<div data-slot="viewer-mode-strip" className="shrink-0 empty:hidden" />
 		</>

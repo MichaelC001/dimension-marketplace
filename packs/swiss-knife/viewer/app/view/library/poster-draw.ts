@@ -1,9 +1,9 @@
 import type { App } from "@modelcontextprotocol/ext-apps";
+import { drawFrame, waitForMediaEvent } from "@dimension/mcp-app-kit/annotate";
 import { createToolCaller } from "@dimension/mcp-app-kit/tools";
 import { mediaSourceSchema } from "../../../src/contract";
 import type { LibraryItem, ThumbMime } from "../../../../src/library/types";
 import { loadDocumentHead } from "../document-bytes";
-import { drawFrame, once } from "../media-frame";
 import { trackMediaWork } from "../media-lifecycle";
 import { KIND_LOOK } from "./kinds";
 
@@ -61,13 +61,13 @@ async function videoPoster(app: App, item: LibraryItem, signal: AbortSignal): Pr
 		video.preload = "auto";
 		video.crossOrigin = "anonymous";
 		video.playsInline = true;
-		const opened = once(video, "loadeddata", "opening the video", signal, WAIT_MS);
+		const opened = waitForMediaEvent(video, "loadeddata", "opening the video", signal, WAIT_MS);
 		video.src = source.url;
 		await opened;
 		const duration = Number.isFinite(video.duration) ? video.duration : 0;
 		const at = Math.min(1, duration * 0.1);
 		if (at > 0) {
-			const landed = once(video, "seeked", "seeking", signal, WAIT_MS);
+			const landed = waitForMediaEvent(video, "seeked", "seeking", signal, WAIT_MS);
 			video.currentTime = at;
 			await landed;
 		}

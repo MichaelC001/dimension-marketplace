@@ -44,11 +44,3 @@ export function relativeAge(at: number, now: number): string {
 export function fullDate(at: number): string {
 	return new Date(at).toLocaleString(undefined, { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
-
-export function formatDuration(ms: number): string {
-	const seconds = Math.max(0, Math.floor(ms / 1000));
-	const minutes = Math.floor(seconds / 60);
-	const hours = Math.floor(minutes / 60);
-	const pad = (value: number) => String(value).padStart(2, "0");
-	return hours > 0 ? `${hours}:${pad(minutes % 60)}:${pad(seconds % 60)}` : `${minutes}:${pad(seconds % 60)}`;
-}

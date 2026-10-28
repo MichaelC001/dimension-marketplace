@@ -24,8 +24,9 @@ Replaces the separate Viewer and Ban Comments plugins; if you still have them in
 - **Tool `artifacts`**, loaded eagerly. The user's library of files shown or made here: `search` finds one to present
   again, `get` reads one row with its links and comments, and `stamp`, `update`, `discard` and `restore` keep it tidy.
   The Library (the dock's launcher, a pinned tab in the Viewer) is the person's side of the same store: search as you
-  type, a virtualized grid or list, posters for videos and PDFs, a details drawer, and a Share dialog with the choices of doc 103
-  (from this computer by default, your own server, your company's). Depth: `viewer/README.md`, doc 103.
+  type, a virtualized grid or list, posters for videos and PDFs, a page per file (the file large; View, Comments, Share
+  and Details on top; shared comments drawn on the file), and a Share dialog with the choices of doc 103 (Dimension
+  cloud, this computer, your own server). Depth: `viewer/README.md`, doc 103.
 - **Two stream rules**, `ban-comments` (`.ts .tsx .js .jsx .rs .go`) and `ban-comments-python` (`.py`).
   When the agent writes a code comment in an `edit` or a `write`, the engine stops that output, tells the
   model to delete the comment and carry its meaning in names, types and structure, and the model writes

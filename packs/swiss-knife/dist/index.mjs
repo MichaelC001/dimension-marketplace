@@ -8,6 +8,167 @@ var __export = (target, all) => {
 import { realpath as realpath2 } from "node:fs/promises";
 import { resolve as resolve2 } from "node:path";
 
+// ../../../packages/sdk/src/type-guards.ts
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// ../../../packages/sdk/src/artifact-share/index.ts
+var ASP_CHUNK_BYTES = 1 << 20;
+var ASP_MAX_POSTER_BYTES = 64 * 1024;
+var MAX_POSTER_CHARS = Math.ceil(ASP_MAX_POSTER_BYTES * 4 / 3) + 4;
+var encoder = new TextEncoder();
+var decoder = new TextDecoder("utf-8", { fatal: true });
+var ASP_MAX_PEN_POINTS = 256;
+var ASP_MAX_QUOTE = 1e3;
+var ASP_MAX_QUOTE_CONTEXT = 200;
+function hasNativeEncoder(value) {
+  return "toBase64" in value && typeof value.toBase64 === "function";
+}
+function hasNativeDecoder(value) {
+  return "fromBase64" in value && typeof value.fromBase64 === "function";
+}
+var nativeToBase64 = hasNativeEncoder(Uint8Array.prototype) ? Uint8Array.prototype.toBase64 : void 0;
+var nativeFromBase64 = hasNativeDecoder(Uint8Array) ? Uint8Array.fromBase64 : void 0;
+function boundedString(value, max) {
+  return typeof value === "string" && value.length > 0 && value.length <= max ? value : void 0;
+}
+function positiveInt(value) {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : void 0;
+}
+var INVALID = Symbol("invalid");
+function optionalField(raw, parse3) {
+  if (raw === void 0) return void 0;
+  return parse3(raw) ?? INVALID;
+}
+function parsePoint(value) {
+  if (!isRecord(value)) return void 0;
+  const unit = (n) => typeof n === "number" && Number.isFinite(n) && n >= 0 && n <= 1;
+  return unit(value.x) && unit(value.y) ? { x: value.x, y: value.y } : void 0;
+}
+function parseShape(value) {
+  if (!isRecord(value)) return void 0;
+  if (value.kind === "pin") {
+    const at = parsePoint(value.at);
+    return at === void 0 ? void 0 : { kind: "pin", at };
+  }
+  if (value.kind === "box" || value.kind === "ellipse" || value.kind === "arrow") {
+    const from = parsePoint(value.from);
+    const to = parsePoint(value.to);
+    return from === void 0 || to === void 0 ? void 0 : { kind: value.kind, from, to };
+  }
+  if (value.kind === "pen" && Array.isArray(value.points) && value.points.length >= 2 && value.points.length <= ASP_MAX_PEN_POINTS) {
+    const points = [];
+    for (const raw of value.points) {
+      const point = parsePoint(raw);
+      if (point === void 0) return void 0;
+      points.push(point);
+    }
+    return { kind: "pen", points };
+  }
+  return void 0;
+}
+function parseQuote(value) {
+  if (!isRecord(value)) return void 0;
+  const quote = boundedString(value.quote, ASP_MAX_QUOTE);
+  const fits = (text) => typeof text === "string" && text.length <= ASP_MAX_QUOTE_CONTEXT;
+  return quote !== void 0 && fits(value.prefix) && fits(value.suffix) ? { quote, prefix: value.prefix, suffix: value.suffix } : void 0;
+}
+function millis(value) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER ? Math.round(value) : void 0;
+}
+function regionShape(value) {
+  const unit = (n) => typeof n === "number" && Number.isFinite(n) && n >= 0 && n <= 1;
+  if (!unit(value.x) || !unit(value.y) || !unit(value.w) || !unit(value.h)) return void 0;
+  return { kind: "box", from: { x: value.x, y: value.y }, to: { x: Math.min(1, value.x + value.w), y: Math.min(1, value.y + value.h) } };
+}
+function shapeExtent(shape) {
+  const points = shape.kind === "pin" ? [shape.at] : shape.kind === "pen" ? shape.points : [shape.from, shape.to];
+  const xs = points.map((point) => point.x);
+  const ys = points.map((point) => point.y);
+  return { left: Math.min(...xs), top: Math.min(...ys), right: Math.max(...xs), bottom: Math.max(...ys) };
+}
+function parseCommentAnchor(value) {
+  if (!isRecord(value)) return void 0;
+  const startMs = optionalField(value.startMs, millis);
+  const endMs = optionalField(value.endMs, millis);
+  const page = optionalField(value.page, positiveInt);
+  const text = optionalField(value.text, parseQuote);
+  const drawn = optionalField(value.shape, parseShape);
+  const shape = drawn === void 0 && text === void 0 && value.kind === "region" ? regionShape(value) ?? INVALID : drawn;
+  if (startMs === INVALID || endMs === INVALID || page === INVALID || shape === INVALID || text === INVALID) return void 0;
+  if (endMs !== void 0 && (startMs === void 0 || endMs < startMs)) return void 0;
+  if (startMs === void 0 && page === void 0 && shape === void 0 && text === void 0) return void 0;
+  return {
+    ...startMs === void 0 ? {} : { startMs },
+    ...endMs === void 0 ? {} : { endMs },
+    ...page === void 0 ? {} : { page },
+    ...shape === void 0 ? {} : { shape },
+    ...text === void 0 ? {} : { text }
+  };
+}
+var LABEL_QUOTE_CHARS = 40;
+var SHAPE_WORDS = {
+  pin: "a pin",
+  box: "a box",
+  ellipse: "a circle",
+  arrow: "an arrow",
+  pen: "a drawing"
+};
+function formatDuration(ms) {
+  const seconds = Math.max(0, Math.floor(ms / 1e3));
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+  const pad = (value) => String(value).padStart(2, "0");
+  return hours > 0 ? `${hours}:${pad(minutes % 60)}:${pad(seconds % 60)}` : `${minutes}:${pad(seconds % 60)}`;
+}
+function timeWords(anchor) {
+  if (anchor.startMs === void 0) return null;
+  const start = formatDuration(anchor.startMs);
+  if (anchor.endMs === void 0) return start;
+  const end = formatDuration(anchor.endMs);
+  return end === start ? start : `${start}-${end}`;
+}
+function quoteWords(quote) {
+  const flat = quote.trim().replace(/\s+/g, " ");
+  return flat.length > LABEL_QUOTE_CHARS ? `${flat.slice(0, LABEL_QUOTE_CHARS)}\u2026` : flat;
+}
+function anchorLabel(anchor) {
+  if (anchor === void 0) return null;
+  const time3 = timeWords(anchor);
+  const page = anchor.page === void 0 ? null : `p. ${anchor.page}`;
+  if (anchor.text !== void 0) return `on \u201C${quoteWords(anchor.text.quote)}\u201D${page === null ? "" : ` on ${page}`}`;
+  if (anchor.shape !== void 0) {
+    const shape = SHAPE_WORDS[anchor.shape.kind];
+    if (page !== null) return `${shape} on ${page}`;
+    if (time3 !== null) return `${shape} at ${time3}`;
+    return shape;
+  }
+  return time3 ?? page;
+}
+function stringList(value, max) {
+  if (!Array.isArray(value) || value.length > max) return void 0;
+  const out = [];
+  for (const entry of value) {
+    if (typeof entry !== "string" || entry.trim() === "" || entry.length > 320) return void 0;
+    out.push(entry.trim().toLowerCase());
+  }
+  return out;
+}
+function parseAudience(value) {
+  if (!isRecord(value)) return void 0;
+  if (value.kind === "link") return { kind: "link" };
+  if (value.kind !== "signin") return void 0;
+  const emails = optionalField(value.emails, (list) => stringList(list, 500));
+  const domains = optionalField(value.domains, (list) => stringList(list, 50));
+  if (emails === INVALID || domains === INVALID) return void 0;
+  return {
+    kind: "signin",
+    ...emails === void 0 || emails.length === 0 ? {} : { emails },
+    ...domains === void 0 || domains.length === 0 ? {} : { domains }
+  };
+}
+
 // ../../../fraym/packages/driver/src/classify-file.ts
 var BINARY = { kind: "binary", mime: "application/octet-stream" };
 var TEXT = { kind: "text", mime: "text/plain" };
@@ -244,11 +405,6 @@ import { basename, resolve } from "node:path";
 
 // ../../../packages/sdk/src/artifactory/artifactory-decl.ts
 var PACK_CONNECTION_REPORT_MAX_BYTES = 64 * 1024;
-
-// ../../../packages/sdk/src/type-guards.ts
-function isRecord2(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 // viewer/src/fence.ts
 var segmentsOf = (path) => path.toLowerCase().split(/[\\/]+/).filter((part) => part !== "");
@@ -585,8 +741,17 @@ function requireId(params) {
   if (params.id === void 0) throw new LibraryError(`${params.op} needs an id`);
   return params.id;
 }
+var percent = (unit) => Math.round(unit * 100);
+function anchorDetail(anchor) {
+  const label = anchorLabel(anchor);
+  if (label === null || anchor?.shape === void 0) return label;
+  const { left, top, right, bottom } = shapeExtent(anchor.shape);
+  const where = anchor.shape.kind === "pin" ? `at x ${percent(left)}%, y ${percent(top)}%` : `over x ${percent(left)}\u2013${percent(right)}%, y ${percent(top)}\u2013${percent(bottom)}%`;
+  return `${label} (${where} of the ${anchor.page === void 0 ? anchor.startMs === void 0 ? "picture" : "frame" : "page"})`;
+}
 function describeComment(comment, now) {
-  const anchor = comment.anchor === void 0 ? "" : ` \xB7 ${oneLine(JSON.stringify(comment.anchor), 80)}`;
+  const where = anchorDetail(comment.anchor);
+  const anchor = where === null ? "" : ` \xB7 ${oneLine(where, 160)}`;
   return `${oneLine(comment.author, 60)} \xB7 ${relativeAge(comment.createdAt, now)} \xB7 v${comment.version}${anchor} \xB7 ${oneLine(comment.body, MAX_COMMENT)}`;
 }
 async function runArtifacts(library, params, context) {
@@ -929,48 +1094,6 @@ async function deleteRemoteShare(share) {
 }
 var revokeRemote = deleteRemoteShare;
 
-// ../../../packages/sdk/src/artifact-share/index.ts
-var ASP_CHUNK_BYTES = 1 << 20;
-var ASP_MAX_POSTER_BYTES = 64 * 1024;
-var MAX_POSTER_CHARS = Math.ceil(ASP_MAX_POSTER_BYTES * 4 / 3) + 4;
-var encoder = new TextEncoder();
-var decoder = new TextDecoder("utf-8", { fatal: true });
-function hasNativeEncoder(value) {
-  return "toBase64" in value && typeof value.toBase64 === "function";
-}
-function hasNativeDecoder(value) {
-  return "fromBase64" in value && typeof value.fromBase64 === "function";
-}
-var nativeToBase64 = hasNativeEncoder(Uint8Array.prototype) ? Uint8Array.prototype.toBase64 : void 0;
-var nativeFromBase64 = hasNativeDecoder(Uint8Array) ? Uint8Array.fromBase64 : void 0;
-var INVALID = Symbol("invalid");
-function optionalField(raw, parse3) {
-  if (raw === void 0) return void 0;
-  return parse3(raw) ?? INVALID;
-}
-function stringList(value, max) {
-  if (!Array.isArray(value) || value.length > max) return void 0;
-  const out = [];
-  for (const entry of value) {
-    if (typeof entry !== "string" || entry.trim() === "" || entry.length > 320) return void 0;
-    out.push(entry.trim().toLowerCase());
-  }
-  return out;
-}
-function parseAudience(value) {
-  if (!isRecord2(value)) return void 0;
-  if (value.kind === "link") return { kind: "link" };
-  if (value.kind !== "signin") return void 0;
-  const emails = optionalField(value.emails, (list) => stringList(list, 500));
-  const domains = optionalField(value.domains, (list) => stringList(list, 50));
-  if (emails === INVALID || domains === INVALID) return void 0;
-  return {
-    kind: "signin",
-    ...emails === void 0 || emails.length === 0 ? {} : { emails },
-    ...domains === void 0 || domains.length === 0 ? {} : { domains }
-  };
-}
-
 // src/library/rows.ts
 function readTags(text) {
   try {
@@ -1014,12 +1137,13 @@ function shareFromRecord(record2) {
   };
 }
 function commentFromRecord(record2) {
+  const anchor = record2.anchor === null ? void 0 : parseCommentAnchor(JSON.parse(record2.anchor));
   return {
     id: record2.id,
     shareId: record2.share_id,
     author: record2.author,
     body: record2.body,
-    ...record2.anchor === null ? {} : { anchor: JSON.parse(record2.anchor) },
+    ...anchor === void 0 ? {} : { anchor },
     version: record2.version,
     createdAt: record2.created_at,
     ...record2.read_at === null ? {} : { readAt: record2.read_at },

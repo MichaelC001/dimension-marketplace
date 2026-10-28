@@ -1,10 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import type { SharePolicy } from "@dimension/sdk/artifact-share";
-import { formatDuration } from "../app/view/library/kinds";
+import { anchorLabel, formatDuration, type SharePolicy } from "@dimension/sdk/artifact-share";
 import type { ShareHost, ShareHosts } from "../app/view/library/library-tools";
 import {
 	accessLabel,
-	anchorLabel,
 	audienceFrom,
 	audienceProblem,
 	defaultExpiry,
@@ -239,12 +237,14 @@ describe("who has access reads like a person would say it", () => {
 		expect(fileChanged({ ...share, host: "p2p" }, now)).toBe(false);
 	});
 
-	test("a comment's anchor reads as a time or a page, and its author as initials", () => {
-		expect(anchorLabel({ kind: "time", startMs: 70_000 })).toBe("1:10");
-		expect(anchorLabel({ kind: "page", page: 3 })).toBe("p. 3");
-		expect(anchorLabel({ kind: "region", x: 0, y: 0, w: 1, h: 1 })).toBe("Area");
+	test("a comment's anchor reads as a time, a page, a drawing or a passage, and its author as initials", () => {
+		expect(anchorLabel({ startMs: 70_000 })).toBe("1:10");
+		expect(anchorLabel({ startMs: 12_000, endMs: 20_000 })).toBe("0:12-0:20");
+		expect(anchorLabel({ page: 3 })).toBe("p. 3");
+		expect(anchorLabel({ page: 3, shape: { kind: "box", from: { x: 0, y: 0 }, to: { x: 1, y: 1 } } })).toBe("a box on p. 3");
+		expect(anchorLabel({ startMs: 12_000, shape: { kind: "pin", at: { x: 0.5, y: 0.5 } } })).toBe("a pin at 0:12");
+		expect(anchorLabel({ text: { quote: "the second paragraph", prefix: "", suffix: "" } })).toBe("on “the second paragraph”");
 		expect(anchorLabel(undefined)).toBeNull();
-		expect(anchorLabel({ kind: "time" })).toBeNull();
 		expect(initials("Ana Lima")).toBe("AL");
 		expect(initials("ana.lima@example.com")).toBe("AL");
 		expect(initials("bo")).toBe("B");
@@ -262,7 +262,7 @@ describe("who has access reads like a person would say it", () => {
 			{ ms: 3_599_999, clock: "59:59" },
 			{ ms: 3_600_000, clock: "1:00:00" },
 		];
-		expect(playerClock.map(({ ms }) => ({ ms, anchor: anchorLabel({ kind: "time", startMs: ms }) }))).toEqual(playerClock.map(({ ms, clock }) => ({ ms, anchor: clock })));
+		expect(playerClock.map(({ ms }) => ({ ms, anchor: anchorLabel({ startMs: ms }) }))).toEqual(playerClock.map(({ ms, clock }) => ({ ms, anchor: clock })));
 		expect(playerClock.map(({ ms }) => ({ ms, duration: formatDuration(ms) }))).toEqual(playerClock.map(({ ms, clock }) => ({ ms, duration: clock })));
 	});
 });

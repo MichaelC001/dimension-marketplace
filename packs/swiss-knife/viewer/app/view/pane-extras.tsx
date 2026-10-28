@@ -31,6 +31,7 @@ import type { ViewerKind } from "../../src/contract";
 import { annotationModes } from "./annotate-modes";
 import { loadDocumentBytes } from "./document-bytes";
 import { ElementPicks } from "./pane-extras-element";
+import { SharedLayers } from "./pane-extras-shared";
 import { TimelineMarks } from "./pane-extras-timeline";
 import { type AnnotateMode, Footer, type PaneExtrasProps, revisionOf, Strip, useSlot } from "./pane-shared";
 
@@ -62,7 +63,12 @@ export function PaneExtras(props: PaneExtrasProps): ReactNode {
 	const mode = annotationModes(props.tab.kind)[0];
 	if (mode === undefined) return null;
 	const Layer = LAYERS[mode];
-	return <Layer {...props} />;
+	return (
+		<>
+			<Layer {...props} />
+			<SharedLayers {...props} />
+		</>
+	);
 }
 
 function PictureMarkup({ app, tab, active, ready, frame, mode, store }: PaneExtrasProps) {
