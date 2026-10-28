@@ -87,6 +87,14 @@ Context: reviewing upstream claude-video's RGB-thumbnail fix against this engine
 `parse_captions` dropped every line that was only digits, to skip SRT cue indices → a real auto-caption cue with the text `20` vanished and the transcript read "at least / hours" → read a cue as the block under its timing line up to the next empty line, so indices and identifiers fall outside any block and numbers inside one are kept. Verified on two real YouTube auto-caption files: identical output on one, the lost `20` restored on the other. See [pipeline.md](pipeline.md#rolling-captions).
 Context: the same pass added entity decoding and time-scoped rolling-duplicate collapse.
 
+### 2026-10-28 — `which("yt-dlp")` on Windows runs a `.cmd` or a file in the current directory
+The PATH fallback resolved through `shutil.which`, which searches the working directory first and returns `.cmd`/`.bat` wrappers → a repo that ships `yt-dlp.bat` would run it with the user's rights → the engine scans PATH itself and accepts only an absolute `yt-dlp.exe` (an executable file elsewhere) that is outside the working directory. See [pipeline.md](pipeline.md#portability-notes).
+Context: code-health review of the self-provisioning change.
+
+### 2026-10-28 — A 403 must not be able to trigger an install into the user's virtualenv
+The upgrade-on-403 ran `pip install -U` into whatever interpreter the engine used, on every refusal, in every process → a remote site could make the engine rewrite a venv it did not create, and two runs could race pip → upgrades are limited to once per 24 hours per interpreter, installs hold one cross-process lock, and inside a virtualenv pip targets `<user cache>/inso-watch/yt-dlp`, put on the yt-dlp child's `PYTHONPATH`. See [pipeline.md](pipeline.md#portability-notes).
+Context: the same review; a copy that is present but dies on an import error is now reinstalled once under the same limit.
+
 ---
 
 ## Append-only rules

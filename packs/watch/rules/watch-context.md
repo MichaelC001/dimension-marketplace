@@ -34,7 +34,9 @@ makes the answer grounded rather than a guess from the title.
   directories; `watch op:cleanup` clears them on request.
 - If `ffmpeg` is missing, point the user at the connect flow
   (Plugins → Watch → Install) rather than improvising an install. `yt-dlp`
-  needs no setup: the engine installs it into its own Python the first time a
-  URL needs it, and upgrades it once when a site refuses it with a 403 or
-  sign-in. If that automatic install fails, relay the manual command in the
+  needs no setup: the engine installs it the first time a URL needs it (into
+  the user account, or a pack-owned directory when Python is a virtual
+  environment) and upgrades it at most once a day when a site refuses it with
+  a 403 or sign-in. The report's `Software changed on this run` line says when
+  it did. If that automatic install fails, relay the manual command in the
   error; do not improvise another.

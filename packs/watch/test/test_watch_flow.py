@@ -8,6 +8,7 @@ import pytest
 
 import media
 import watch
+import ytdlp
 
 URL = "https://example.test/watch?v=abc"
 DIAGNOSTIC = "[UNTRUSTED-MEDIA-TEXT inline kind=tool-diagnostic] ERROR: HTTP Error 403: Forbidden"
@@ -16,7 +17,7 @@ INSTALL_FAILURE = "\n".join([
     "yt-dlp is not installed and installing it automatically failed.",
     "  [UNTRUSTED-MEDIA-TEXT inline kind=tool-diagnostic] ERROR: no network",
     "Install it yourself, then retry:",
-    "  Windows: py -m pip install -U yt-dlp",
+    f'  Any OS:  "{sys.executable}" -m pip install -U yt-dlp',
 ])
 CAPTIONS_VTT = "\n".join([
     "WEBVTT",
@@ -164,3 +165,28 @@ def test_a_failed_download_is_never_swallowed_for_a_local_file(
     assert fake.fetch_calls == []
     assert fake.download_calls == [str(clip)]
     assert capsys.readouterr().out == ""
+
+
+def test_the_report_says_when_software_was_installed_or_upgraded_on_this_run(
+    monkeypatch, capsys, arm_media
+):
+    note = "upgraded yt-dlp 2026.10.26 for this user account (pip --user, /usr/bin/python3)"
+    monkeypatch.setattr(ytdlp, "_events", [note])
+    arm_media(captions_text=CAPTIONS_VTT, download_error="download must not be attempted")
+
+    invoke(monkeypatch, "--json", URL, "--detail", "transcript")
+
+    payload = json.loads(capsys.readouterr().out)
+    assert f"- **Software changed on this run:** {note}" in payload["report"].splitlines()
+
+
+def test_the_report_names_no_software_change_when_nothing_was_installed(
+    monkeypatch, capsys, arm_media
+):
+    monkeypatch.setattr(ytdlp, "_events", [])
+    arm_media(captions_text=CAPTIONS_VTT, download_error="download must not be attempted")
+
+    invoke(monkeypatch, "--json", URL, "--detail", "transcript")
+
+    payload = json.loads(capsys.readouterr().out)
+    assert "Software changed" not in payload["report"]

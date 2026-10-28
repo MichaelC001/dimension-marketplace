@@ -147,12 +147,23 @@ handled in code, not documentation.
   yt-dlp` puts `yt-dlp.exe` in the interpreter's `Scripts` directory, which is
   usually not on PATH, so a PATH lookup fails on a machine where the install
   succeeded. `ytdlp.py` runs `python -m yt_dlp` under the interpreter the engine
-  already runs in when that module is importable, else the `yt-dlp` on PATH,
-  else it runs `pip install -U yt-dlp` into that interpreter (`--user`, or the
-  virtual environment itself; no shell; 240 s bound) and continues. Only the
-  latest yt-dlp is supported: a 403 or sign-in refusal upgrades it once and
-  retries once. Children run in a fresh empty directory so a project that
-  contains a `yt_dlp` or `pip` package cannot shadow the real one.
+  already runs in when that module is importable. Failing that it takes the
+  `yt-dlp` on PATH only when it cannot be planted: an absolute path outside the
+  working directory, `yt-dlp.exe` on Windows, never a `.cmd`/`.bat`. Failing
+  that it runs `pip install -U yt-dlp` (no shell; 240 s bound) under one
+  cross-process lock, so concurrent runs never race pip. The target is
+  `--user`, except inside a virtual environment: the engine never writes to one
+  it did not create, so it installs into `<user cache>/inso-watch/yt-dlp`
+  (`--target`) and puts that directory on the yt-dlp child's `PYTHONPATH`.
+- **Upgrades and repairs are rate-limited.** Only the latest yt-dlp is
+  supported, so a 403 or sign-in refusal upgrades it and retries once, but at
+  most once per 24 hours per interpreter (stamp file in the user cache; a failed
+  attempt counts). A yt-dlp that is present but dies on an import error
+  (`Traceback` ending in `ModuleNotFoundError`/`ImportError`) is reinstalled
+  with `--force-reinstall` once, under the same limit. The report carries a
+  `Software changed on this run` line for every install, upgrade or reinstall.
+  Children run in a fresh empty directory so a project that contains a `yt_dlp`
+  or `pip` package cannot shadow the real one.
 - **Reused `--out-dir`.** Media and partial downloads left by an earlier run
   are removed before a download, so a failed fetch cannot silently analyse the
   previous video under the new URL.

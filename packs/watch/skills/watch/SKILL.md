@@ -26,7 +26,7 @@ This skill is **self-improving**. Every run must end with a gotcha review (see
 ## Pre-flight — ALWAYS (before any mode)
 
 - [ ] **PF-1. Read [references/gotchas.md](references/gotchas.md).** Exit: you can state the 3 most recent dated entries in one sentence each.
-- [ ] **PF-2. Confirm `ffmpeg` is present.** It is the one tool the user installs (Plugins → Watch → Install). `yt-dlp` needs no setup: the engine runs it from its own Python and installs it there the first time a URL needs it. Exit: a `watch` call runs, or you pointed the user at the connect flow for `ffmpeg` rather than improvising an install.
+- [ ] **PF-2. Confirm `ffmpeg` is present.** It is the one tool the user installs (Plugins → Watch → Install). `yt-dlp` needs no setup: the engine installs it the first time a URL needs it (for the user account, or into a pack-owned directory when Python is a virtual environment) and the report's `Software changed on this run` line says when it did. Exit: a `watch` call runs, or you pointed the user at the connect flow for `ffmpeg` rather than improvising an install.
 - [ ] **PF-3. Separate source from question.** `/watch <url|path> <question>` → source, question. Exit: both written down; if there is no question, the deliverable is a summary.
 - [ ] **PF-4. Pick the mode.** Exit: one of `Survey` / `Focus` / `Cue sweep` written down.
 
@@ -159,8 +159,8 @@ Use today's absolute date (the user's current date) — never relative.
 | `Unrecognized option 'vsync'` | An ffmpeg 9 build. Should be impossible here — `media.vfr_flag()` probes and picks `-fps_mode`. If you see it, the probe regressed: log a gotcha. |
 | `UnicodeDecodeError` / `charmap` on Windows | Every subprocess goes through `proc.py`, which pins UTF-8, and stdout is reconfigured at startup. If it recurs, a new subprocess call bypasses `proc.run` / `proc.spawn`. |
 | `ffprobe` blocked but ffmpeg runs (WDAC / Smart App Control) | Handled: metadata falls back to parsing the `ffmpeg -i` banner. The report's **Video** line names which probe was used. |
-| `yt-dlp is not installed and installing it automatically failed` | The first URL run installs yt-dlp with `pip install -U yt-dlp` into the engine's own Python and that failed (offline, no pip, or a distro Python that refuses pip installs). The message lists the manual command per OS: relay the one for this machine rather than improvising. |
-| yt-dlp: sign-in / 403 / DRM | The engine already upgraded yt-dlp once and retried once. What is left is region-locked, private, or a client the build cannot impersonate. Tell the user plainly; do not retry in a loop. |
+| `yt-dlp is not installed and installing it automatically failed` | The first URL run installs yt-dlp with `pip install -U yt-dlp` (`--user`, or a pack-owned directory when Python is a virtual environment) and that failed (offline, no pip, or a distro Python that refuses pip installs). The message lists the manual command for this interpreter and per OS: relay the one for this machine rather than improvising. |
+| yt-dlp: sign-in / 403 / DRM | The engine already tried one upgrade (at most one per 24 hours) and retried once. What is left is region-locked, private, or a client the build cannot impersonate. Tell the user plainly; do not retry in a loop. |
 | Transcript says `blocked (… key present …)` | By design — a cloud STT key alone transmits nothing. Re-run with `allowRemoteTranscription`, or install a local Whisper CLI. |
 | `0 frames` with `uniform fallback` | Scene detection found no cuts (a static screen recording). Expected; uniform sampling covered it. |
 | Frames all look identical | Dedup is off or the threshold is too low for this content. The **Frames** line reports how many were dropped. |

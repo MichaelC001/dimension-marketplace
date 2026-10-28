@@ -31,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).parent.resolve()))
 import media  # noqa: E402
 import safety  # noqa: E402
 import transcript as tx  # noqa: E402
+import ytdlp  # noqa: E402
 
 # Windows consoles default to a legacy code page (cp1252) that cannot encode
 # the arrows and box characters in this report, so a finished run would die on
@@ -343,6 +344,8 @@ def emit_report(
         print(f"- **Frame size:** {args.resolution}px wide "
               f"(~{args.resolution * args.resolution // 750 // 2} tokens each)")
     print(f"- **Transcript:** {len(segments)} segments via {source_label}")
+    for note in ytdlp.provisioning_notes():
+        print(f"- **Software changed on this run:** {note}")
     if media_error:
         print()
         print(f"> **Frames unavailable.** The media download failed after the "

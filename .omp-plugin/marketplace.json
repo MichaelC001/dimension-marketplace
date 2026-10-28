@@ -1373,7 +1373,7 @@
 			"title": "Watch",
 			"icon": "packs/watch/assets/icon.svg",
 			"description": "Watch a video by URL or local path: ffmpeg frame sampling plus a timestamped transcript (captions, local Whisper, or a consent-gated cloud API)",
-			"version": "0.3.0",
+			"version": "0.3.1",
 			"author": {
 				"name": "Dimension"
 			},
