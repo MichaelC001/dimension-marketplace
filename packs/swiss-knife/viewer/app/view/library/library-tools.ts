@@ -1,4 +1,4 @@
-import type { Audience, SharePolicy } from "@dimension/sdk/artifact-share";
+import type { Audience, CommentAnchor, SharePolicy } from "@dimension/sdk/artifact-share";
 import { createToolCaller } from "@dimension/mcp-app-kit/tools";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { App } from "@modelcontextprotocol/ext-apps";
@@ -85,7 +85,7 @@ export interface LibraryTools {
 	readonly revoke: (shareId: string) => Promise<RevokeOutcome>;
 	readonly link: (shareId: string) => Promise<string>;
 	readonly comments: (artifactId: string, signal?: AbortSignal) => Promise<readonly ShareComment[]>;
-	readonly reply: (shareId: string, body: string) => Promise<ShareComment>;
+	readonly reply: (shareId: string, body: string, anchor?: CommentAnchor) => Promise<ShareComment>;
 	readonly markRead: (ids: readonly string[]) => Promise<void>;
 	readonly askAgent: (text: string) => Promise<void>;
 }
@@ -119,7 +119,7 @@ export function createLibraryTools(app: Pick<App, "callServerTool" | "sendMessag
 		revoke: shareId => tools.whole<RevokeOutcome>("share_revoke", { shareId }),
 		link: shareId => tools.call("share_link", { shareId }, "link"),
 		comments: (artifactId, signal) => tools.call("share_comments", { artifactId }, "comments", options(signal)),
-		reply: (shareId, body) => tools.call("share_reply", { shareId, body }, "comment"),
+		reply: (shareId, body, anchor) => tools.call("share_reply", { shareId, body, ...(anchor === undefined ? {} : { anchor }) }, "comment"),
 		markRead: async ids => {
 			await tools.whole("share_mark_read", { ids });
 		},

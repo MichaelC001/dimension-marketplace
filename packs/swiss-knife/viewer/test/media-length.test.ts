@@ -4,7 +4,8 @@
 // moment that was not at 0:00 - the agent was told wrong times with full confidence. These hold
 // the length to what the element says, and to what the engine learns when it is asked properly.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { keySeek, type LengthSource, type MediaLength, readLength, resolveLength, seekTarget } from "../app/view/media-length";
+import { type LengthSource, type MediaLength, readLength } from "@dimension/mcp-app-kit/annotate";
+import { keySeek, resolveLength, seekTarget } from "../app/view/media-length";
 import { installDom, type TestDom } from "./dom";
 
 let dom: TestDom;

@@ -4,8 +4,8 @@
 // first takes back a stretch half set, the second puts the drawing tool down. And a key held with
 // Ctrl or Cmd belongs to the browser, bar undo and redo on a video that can be drawn on.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import type { MediaLength } from "@dimension/mcp-app-kit/annotate";
 import { decideKey, type KeyAction, type KeyInput, keyOwner, NOBODY } from "../app/view/media-keys";
-import type { MediaLength } from "../app/view/media-length";
 import { installDom, type TestDom } from "./dom";
 
 const BOUNDED: MediaLength = { duration: 90, reach: 90, unbounded: false };

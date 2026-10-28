@@ -1,11 +1,18 @@
 // What the timeline pane keeps about a recording that must not restart or re-render more often than the recording
 // itself changes: how long it says it is, whether it has failed, and the picture of its loudness. Their own file so they
 // can be driven with a stand-in element and a stand-in decoder; the pane (`pane-extras-timeline.tsx`) only seats them.
+import {
+	decodePeaks,
+	type LengthSource,
+	readLength,
+	WAVEFORM_MAX_BYTES,
+	WAVEFORM_PROBE_BYTES,
+	waveformAllowed,
+	waveformCouldApply,
+} from "@dimension/mcp-app-kit/annotate";
 import type { App } from "@modelcontextprotocol/ext-apps";
 import { useEffect, useEffectEvent, useState } from "react";
 import { loadDocumentBytes, loadDocumentHead } from "./document-bytes";
-import { type LengthSource, readLength } from "./media-length";
-import { decodePeaks, WAVEFORM_MAX_BYTES, WAVEFORM_PROBE_BYTES, waveformAllowed, waveformCouldApply } from "./media-waveform";
 import type { DocTab } from "./tabs";
 
 /** What says a recording's `duration` is now something else: the engine learning it, a new source, or no source at all. */

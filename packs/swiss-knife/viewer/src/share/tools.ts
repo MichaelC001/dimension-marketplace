@@ -1,4 +1,4 @@
-import { type Audience, parseAudience } from "@dimension/sdk/artifact-share";
+import { ASP_MAX_PEN_POINTS, ASP_MAX_QUOTE, ASP_MAX_QUOTE_CONTEXT, type Audience, parseAudience } from "@dimension/sdk/artifact-share";
 import { registerAppTool } from "@modelcontextprotocol/ext-apps/server";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
@@ -29,11 +29,28 @@ const audienceSchema = z
 	});
 
 const unit = z.number().min(0).max(1);
-const anchorSchema = z.union([
-	z.object({ kind: z.literal("time"), startMs: z.number().min(0), endMs: z.number().min(0).optional() }),
-	z.object({ kind: z.literal("page"), page: z.number().int().min(1) }),
-	z.object({ kind: z.literal("region"), x: unit, y: unit, w: unit, h: unit }),
+const point = z.object({ x: unit, y: unit });
+const shapeSchema = z.union([
+	z.object({ kind: z.literal("pin"), at: point }),
+	z.object({ kind: z.enum(["box", "ellipse", "arrow"]), from: point, to: point }),
+	z.object({ kind: z.literal("pen"), points: z.array(point).min(2).max(ASP_MAX_PEN_POINTS) }),
 ]);
+const quoteSchema = z.object({
+	quote: z.string().min(1).max(ASP_MAX_QUOTE),
+	prefix: z.string().max(ASP_MAX_QUOTE_CONTEXT),
+	suffix: z.string().max(ASP_MAX_QUOTE_CONTEXT),
+});
+const millis = z.number().int().min(0);
+const anchorSchema = z
+	.object({
+		startMs: millis.optional(),
+		endMs: millis.optional(),
+		page: z.number().int().min(1).optional(),
+		shape: shapeSchema.optional(),
+		text: quoteSchema.optional(),
+	})
+	.refine(anchor => anchor.endMs === undefined || (anchor.startMs !== undefined && anchor.endMs >= anchor.startMs), "endMs needs a startMs at or before it")
+	.refine(anchor => anchor.startMs !== undefined || anchor.page !== undefined || anchor.shape !== undefined || anchor.text !== undefined, "an anchor needs a time, a page, a shape or a passage");
 
 const expiresInDays = z.number().int().min(1).max(3650);
 const shareId = z.string().min(1).max(128);

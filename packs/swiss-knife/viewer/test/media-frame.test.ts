@@ -8,7 +8,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import {
 	drawnOnFrame,
-	drawnRect,
 	FRAME_LONG_EDGE,
 	FRAME_QUALITY,
 	FrameGrabber,
@@ -17,7 +16,8 @@ import {
 	insideFrame,
 	THUMB_LONG_EDGE,
 	THUMB_QUALITY,
-} from "../app/view/media-frame";
+} from "@dimension/mcp-app-kit/annotate";
+import { drawnRect } from "../app/view/media-frame";
 import { installDom, type TestDom } from "./dom";
 
 interface StubWindow {

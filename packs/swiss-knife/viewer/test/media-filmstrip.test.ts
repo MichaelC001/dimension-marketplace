@@ -5,16 +5,49 @@
 // never asked of a video that has shown it will not give one (or is too big to decode a second time).
 // FilmstripCache: tested alone, with small bounds so the eviction order is visible. useFilmstrip: rendered for real
 // (linkedom + react-dom under `act`); the grabber is a stand-in whose every picture the test delivers, or fails, by hand.
-import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
-import { type FilmFrame, filmSlotTimes, MAX_FILM_SLOTS } from "@dimension/mcp-app-kit/annotate";
+import { dirname } from "node:path";
+import { afterAll, afterEach, beforeAll, describe, expect, mock, spyOn, test } from "bun:test";
+import {
+	type FilmFrame,
+	FILMSTRIP_FILES,
+	FILMSTRIP_FRAMES_PER_FILE,
+	FilmstripCache,
+	filmable,
+	filmSlotTimes,
+	FrameGrabber,
+	MAX_FILM_SLOTS,
+	type Thumbnail,
+	type ThumbnailSource,
+} from "@dimension/mcp-app-kit/annotate";
+import type * as KitReact from "@dimension/mcp-app-kit/annotate/react";
+import type { FilmstripOptions } from "@dimension/mcp-app-kit/annotate/react";
+import * as react from "react";
 import { createElement, type ReactElement } from "react";
-import { FILMSTRIP_FILES, FILMSTRIP_FRAMES_PER_FILE, FilmstripCache, type FilmstripOptions, filmable, type ThumbnailSource, useFilmstrip } from "../app/view/media-filmstrip";
-import { FrameGrabber, type Thumbnail } from "../app/view/media-frame";
+import * as jsxDevRuntime from "react/jsx-dev-runtime";
+import * as jsxRuntime from "react/jsx-runtime";
+import * as reactDom from "react-dom";
 import { installReact, type ReactEnv } from "./media-react";
 
+const KIT = "@dimension/mcp-app-kit/annotate/react";
+
+// The kit's tsconfig maps `react` and its JSX runtimes onto their type declarations, which bun cannot load as code, and
+// bun applies that map to the kit's sources wherever they are imported from. The map's targets are mocked with the real
+// modules (the same instances this file uses, so there is one React): that is what lets the kit's hook be read here.
+const kitSource = dirname(Bun.resolveSync(KIT, import.meta.dir));
+for (const [id, real] of [
+	["react", react],
+	["react/jsx-runtime", jsxRuntime],
+	["react/jsx-dev-runtime", jsxDevRuntime],
+	["react-dom", reactDom],
+] as const) {
+	mock.module(Bun.resolveSync(id, kitSource), () => real);
+}
+
 let env: ReactEnv;
+let useFilmstrip: typeof KitReact.useFilmstrip;
 beforeAll(async () => {
 	env = await installReact();
+	({ useFilmstrip } = await import(KIT));
 });
 afterEach(() => env.cleanup());
 afterAll(() => env.restore());
