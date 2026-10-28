@@ -32,5 +32,11 @@ makes the answer grounded rather than a guess from the title.
   third party is the user's decision; ask first.
 - **Never `rm -rf` a path from a watch report.** The tool prunes its own run
   directories; `watch op:cleanup` clears them on request.
-- If `ffmpeg` or `yt-dlp` is missing, point the user at the connect flow
-  (Plugins → Watch → Install) rather than improvising an install.
+- If `ffmpeg` is missing, point the user at the connect flow
+  (Plugins → Watch → Install) rather than improvising an install. `yt-dlp`
+  needs no setup: the engine installs it the first time a URL needs it (into
+  the user account, or a pack-owned directory when Python is a virtual
+  environment) and upgrades it at most once a day when a site refuses it with
+  a 403 or sign-in. The report's `Software changed on this run` line says when
+  it did. If that automatic install fails, relay the manual command in the
+  error; do not improvise another.

@@ -75,6 +75,26 @@ Context: PR #228 review found it by reading whisper's own `utils.py` rather than
 A timeout or cancel killed the Python wrapper while yt-dlp/ffmpeg kept downloading and writing frames → kill the TREE (`taskkill /t /f` on Windows, negative-pid `SIGKILL` on POSIX with `detached: true` so the group exists).
 Context: PR #228 review.
 
+### 2026-10-28 — `pip install yt-dlp` succeeded and the engine still said "yt-dlp is not on PATH"
+On Windows the pip install put `yt-dlp.exe` in the interpreter's `Scripts` directory, which is not on PATH, so `shutil.which("yt-dlp")` failed while `python -m yt_dlp` worked (measured: 6 caption segments once the directory was on PATH) → the engine owns the resolution: module under its own interpreter, then PATH, then `pip install -U yt-dlp` into that interpreter. See [pipeline.md](pipeline.md#portability-notes).
+Context: making the plugin work by default for every agent; the connect flow's own install hint was the thing that broke it.
+
+### 2026-10-28 — A gray thumbnail cannot tell a red slide from a green one
+Two flat slides, `#C83C3C` and `#3C833C`, were "near-identical" and one was deleted → both have the same luminance, and the dedup thumbnail kept only luminance although this file's own prose promised differently-coloured slides survive → keep the three RGB channels (`format=rgb24`). Verified: gray merged the pair (kept 1, dropped 1); the RGB thumbnail keeps both. See [pipeline.md](pipeline.md#deduplication).
+Context: reviewing upstream claude-video's RGB-thumbnail fix against this engine.
+
+### 2026-10-28 — A digits-only line filter ate "20" from "at least 20 hours"
+`parse_captions` dropped every line that was only digits, to skip SRT cue indices → a real auto-caption cue with the text `20` vanished and the transcript read "at least / hours" → read a cue as the block under its timing line up to the next empty line, so indices and identifiers fall outside any block and numbers inside one are kept. Verified on two real YouTube auto-caption files: identical output on one, the lost `20` restored on the other. See [pipeline.md](pipeline.md#rolling-captions).
+Context: the same pass added entity decoding and time-scoped rolling-duplicate collapse.
+
+### 2026-10-28 — `which("yt-dlp")` on Windows runs a `.cmd` or a file in the current directory
+The PATH fallback resolved through `shutil.which`, which searches the working directory first and returns `.cmd`/`.bat` wrappers → a repo that ships `yt-dlp.bat` would run it with the user's rights → the engine scans PATH itself and accepts only an absolute `yt-dlp.exe` (an executable file elsewhere) that is outside the working directory. See [pipeline.md](pipeline.md#portability-notes).
+Context: code-health review of the self-provisioning change.
+
+### 2026-10-28 — A 403 must not be able to trigger an install into the user's virtualenv
+The upgrade-on-403 ran `pip install -U` into whatever interpreter the engine used, on every refusal, in every process → a remote site could make the engine rewrite a venv it did not create, and two runs could race pip → upgrades are limited to once per 24 hours per interpreter, installs hold one cross-process lock, and inside a virtualenv pip targets `<user cache>/inso-watch/yt-dlp`, put on the yt-dlp child's `PYTHONPATH`. See [pipeline.md](pipeline.md#portability-notes).
+Context: the same review; a copy that is present but dies on an import error is now reinstalled once under the same limit.
+
 ---
 
 ## Append-only rules
