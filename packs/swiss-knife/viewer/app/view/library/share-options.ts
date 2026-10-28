@@ -1,7 +1,6 @@
 import { type Audience, audienceAllowedBy, type SharePolicy } from "@dimension/sdk/artifact-share";
 import type { ShareSummary } from "../../../../src/library/types";
 import { formatBytes } from "../format";
-import { formatDuration } from "./kinds";
 import type { ShareHost, ShareHosts } from "./library-tools";
 
 export interface Choice {
@@ -212,14 +211,6 @@ export function hostName(url: string): string {
 export function shortDate(at: number, now: number): string {
 	const sameYear = new Date(at).getFullYear() === new Date(now).getFullYear();
 	return new Date(at).toLocaleDateString(undefined, sameYear ? { month: "short", day: "numeric" } : { year: "numeric", month: "short", day: "numeric" });
-}
-
-export function anchorLabel(anchor: unknown): string | null {
-	if (typeof anchor !== "object" || anchor === null || !("kind" in anchor)) return null;
-	if (anchor.kind === "time" && "startMs" in anchor && typeof anchor.startMs === "number") return formatDuration(anchor.startMs);
-	if (anchor.kind === "page" && "page" in anchor && typeof anchor.page === "number") return `p. ${anchor.page}`;
-	if (anchor.kind === "region") return "Area";
-	return null;
 }
 
 export function initials(name: string): string {

@@ -145,13 +145,13 @@ describe("revoking and commenting", () => {
 	test("a reply is sealed under the comment key, posted, and stored as read", async () => {
 		const created = await runtime.service.create({ artifactId: item.id, host: "h1", audience: link, allowComments: true });
 		const key = parseShareLink(created.link)?.key ?? new Uint8Array();
-		const reply = await runtime.service.reply(created.id, "  looks great  ", { kind: "time", startMs: 1500 });
-		expect(reply).toMatchObject({ body: "looks great", anchor: { kind: "time", startMs: 1500 }, shareId: created.id });
+		const reply = await runtime.service.reply(created.id, "  looks great  ", { startMs: 1500 });
+		expect(reply).toMatchObject({ body: "looks great", anchor: { startMs: 1500 }, shareId: created.id });
 		expect(reply.readAt).toBeDefined();
 		const posted = host.shares.get(FIRST_SHARE)?.comments ?? [];
 		expect(posted).toHaveLength(1);
 		const opened = await openComment(await deriveCommentKey(key), decodeBase64Url(posted[0]?.sealed ?? ""));
-		expect(opened).toMatchObject({ body: "looks great", anchor: { kind: "time", startMs: 1500 }, version: 1 });
+		expect(opened).toMatchObject({ body: "looks great", anchor: { startMs: 1500 }, version: 1 });
 		expect((await runtime.service.comments(item.id)).map(comment => comment.id)).toEqual([reply.id]);
 		await expect(runtime.service.reply(created.id, "", undefined)).rejects.toThrow("empty or longer");
 	});

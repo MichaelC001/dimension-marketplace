@@ -1,5 +1,5 @@
 import type { PresentedKind } from "@dimension/sdk/presentation";
-import { parseAudience } from "@dimension/sdk/artifact-share";
+import { parseAudience, parseCommentAnchor } from "@dimension/sdk/artifact-share";
 import { LibraryError } from "./errors";
 import type { ArtifactSource, ArtifactState, CommentRow, ShareRow } from "./types";
 
@@ -123,12 +123,13 @@ export function shareFromRecord(record: ShareRecord): ShareRow {
 }
 
 export function commentFromRecord(record: CommentRecord): CommentRow {
+	const anchor = record.anchor === null ? undefined : parseCommentAnchor(JSON.parse(record.anchor));
 	return {
 		id: record.id,
 		shareId: record.share_id,
 		author: record.author,
 		body: record.body,
-		...(record.anchor === null ? {} : { anchor: JSON.parse(record.anchor) as unknown }),
+		...(anchor === undefined ? {} : { anchor }),
 		version: record.version,
 		createdAt: record.created_at,
 		...(record.read_at === null ? {} : { readAt: record.read_at }),

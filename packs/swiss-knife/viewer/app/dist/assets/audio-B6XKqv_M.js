@@ -1,1 +1,0 @@
-import{mountMedia as e}from"./media-core-vcm3G09u.js";var t={mount:(t,n,r)=>e(t,r,`audio`)};export{t as default};

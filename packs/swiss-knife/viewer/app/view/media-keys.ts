@@ -5,8 +5,8 @@
 // too. Those keys are THEIRS: this module says what a recording does with a key only after it has
 // checked whose key it is. The decision is a pure function of the key, where the playhead is, the
 // length, and whether marking is on and a stretch is half set, so each rule can be held to a test.
-import { type MarkTool, shortcutIntent } from "@dimension/mcp-app-kit/annotate";
-import { keySeek, type MediaLength } from "./media-length";
+import { type MarkTool, type MediaLength, shortcutIntent, type TimelineKeyAction, timelineKeyAction } from "@dimension/mcp-app-kit/annotate";
+import { keySeek } from "./media-length";
 import type { MediaTag } from "./media-messages";
 
 /** What the focused element takes for itself. */
@@ -37,13 +37,7 @@ export type KeyAction =
 	| { readonly do: "toggle" }
 	| { readonly do: "seek"; readonly to: number }
 	| { readonly do: "step"; readonly direction: 1 | -1 }
-	| { readonly do: "mark" }
-	| { readonly do: "set-in" }
-	/** `O` with a start already set: end the stretch here. */
-	| { readonly do: "end-stretch" }
-	/** `O` with no start set: say how a stretch is made. */
-	| { readonly do: "needs-start" }
-	| { readonly do: "cancel-stretch" }
+	| { readonly do: TimelineKeyAction }
 	/** Escape with a drawing tool in hand: put it down, so the picture can be played, scrolled and read again. */
 	| { readonly do: "disarm" }
 	/** A number key: pick that drawing tool. */
@@ -74,15 +68,11 @@ export interface KeyInput {
 	readonly owner: KeyOwner;
 }
 
-/**
- * The drawing keys a video takes: the number keys that pick a tool, and undo and redo. The letter keys the picture
- * also has for tools (R, O, A, P) are NOT taken here: O ends a stretch on a recording, and one key cannot be both.
- */
 function drawingKey(key: string, modifier: boolean, shift: boolean): KeyAction | null {
-	const intent = shortcutIntent(key, modifier, shift);
+	const intent = shortcutIntent(key, modifier, shift, false);
 	if (intent === null) return null;
 	if (intent.kind === "undo" || intent.kind === "redo") return { do: intent.kind };
-	return intent.kind === "tool" && /^[1-5]$/.test(key) ? { do: "tool", tool: intent.tool } : null;
+	return intent.kind === "tool" ? { do: "tool", tool: intent.tool } : null;
 }
 
 /** What the recording does with the key, or `null` when the key is not the recording's to answer. */
@@ -98,8 +88,8 @@ export function decideKey({ key, shift, modifier, repeat, position, length, kind
 	}
 	if (kind === "video" && (key === "," || key === ".")) return { do: "step", direction: key === "," ? -1 : 1 };
 	if (key === "Escape") {
-		// A stretch half set is taken back first, as a half-dragged one is; a second Escape puts the drawing tool down.
-		if (inPoint !== null) return { do: "cancel-stretch" };
+		const cancel = timelineKeyAction(key, inPoint);
+		if (cancel !== null) return { do: cancel };
 		return armed ? { do: "disarm" } : null;
 	}
 	if (!marking) return null;
@@ -107,8 +97,7 @@ export function decideKey({ key, shift, modifier, repeat, position, length, kind
 	// a held I or O would set and reset a stretch, a held number would pick the tool again and again. What a held key
 	// repeats on purpose - the seeks, the frame steps, undo and redo - is decided above.
 	if (repeat) return null;
-	if (key === "m") return { do: "mark" };
-	if (key === "i") return { do: "set-in" };
-	if (key === "o") return inPoint === null ? { do: "needs-start" } : { do: "end-stretch" };
+	const stretch = timelineKeyAction(key, inPoint);
+	if (stretch !== null) return { do: stretch };
 	return drawing ? drawingKey(key, false, shift) : null;
 }

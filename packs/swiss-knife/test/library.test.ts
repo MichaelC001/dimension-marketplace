@@ -508,7 +508,7 @@ describe("shares and comments", () => {
 		const library = await openLibrary();
 		const item = await library.stamp({ path: await put("deck.pptx"), source: "present" });
 		library.shares.insert(shareFor(item.id));
-		const comment = (id: string, createdAt: number) => ({ id, shareId: `share-${item.id}`, author: "Ana", body: `body ${id}`, version: 1, createdAt, anchor: { kind: "time", startMs: 1500 } });
+		const comment = (id: string, createdAt: number) => ({ id, shareId: `share-${item.id}`, author: "Ana", body: `body ${id}`, version: 1, createdAt, anchor: { startMs: 1500 } });
 		expect(library.comments.upsert(comment("c1", 10))).toBe(true);
 		expect(library.comments.upsert(comment("c1", 10))).toBe(false);
 		expect(library.comments.upsert(comment("c2", 20))).toBe(true);
@@ -516,7 +516,7 @@ describe("shares and comments", () => {
 		expect(library.get(item.id)?.shares[0]).toMatchObject({ unread: 2, url: `https://relay.example/p/tunnel/a/remote-share-${item.id}`, audience: { kind: "link" } });
 		const listed = library.comments.forArtifact(item.id);
 		expect(listed.map(row => row.id)).toEqual(["c1", "c2"]);
-		expect(listed[0]).toMatchObject({ anchor: { kind: "time", startMs: 1500 }, shareUrl: `https://relay.example/p/tunnel/a/remote-share-${item.id}` });
+		expect(listed[0]).toMatchObject({ anchor: { startMs: 1500 }, shareUrl: `https://relay.example/p/tunnel/a/remote-share-${item.id}` });
 
 		library.comments.markRead(["c1"], 99);
 		expect(library.comments.forArtifact(item.id, { unread: true }).map(row => row.id)).toEqual(["c2"]);
@@ -621,42 +621,46 @@ async function userVersion(file: string): Promise<number | undefined> {
 	}
 }
 
+function seedLegacyShare(db: SqlDriver, file: string, createdAt: number): void {
+	execute(
+		db,
+		`INSERT INTO artifacts(id, path, path_key, name, kind, mime, size, mtime_ms, source, created_at, presented_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"legacy-artifact",
+		file,
+		pathKey(file, process.platform),
+		"legacy.txt",
+		"text",
+		"text/plain",
+		10,
+		createdAt,
+		"present",
+		createdAt,
+		createdAt,
+	);
+	execute(
+		db,
+		`INSERT INTO shares(id, artifact_id, host, remote_id, base_url, key, owner_token, audience, version, allow_comments, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"legacy-share",
+		"legacy-artifact",
+		"p2p",
+		"remote-legacy",
+		"https://relay.example/p/tunnel",
+		"k".repeat(43),
+		"owner",
+		JSON.stringify({ kind: "link" }),
+		3,
+		1,
+		createdAt,
+	);
+}
+
 describe("library.db schema versions", () => {
 	test("a v1 database upgrades in place: the artifact and share survive, an old share's version time is its creation time, and new shares insert", async () => {
 		const file = await put("legacy.txt");
 		const createdAt = clock - 10 * DAY;
 		const database = await writeDatabase(1, db => {
 			db.exec(SCHEMA_V1);
-			execute(
-				db,
-				`INSERT INTO artifacts(id, path, path_key, name, kind, mime, size, mtime_ms, source, created_at, presented_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				"legacy-artifact",
-				file,
-				pathKey(file, process.platform),
-				"legacy.txt",
-				"text",
-				"text/plain",
-				10,
-				createdAt,
-				"present",
-				createdAt,
-				createdAt,
-			);
-			execute(
-				db,
-				`INSERT INTO shares(id, artifact_id, host, remote_id, base_url, key, owner_token, audience, version, allow_comments, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				"legacy-share",
-				"legacy-artifact",
-				"p2p",
-				"remote-legacy",
-				"https://relay.example/p/tunnel",
-				"k".repeat(43),
-				"owner",
-				JSON.stringify({ kind: "link" }),
-				3,
-				1,
-				createdAt,
-			);
+			seedLegacyShare(db, file, createdAt);
 		});
 
 		const library = await openLibrary();
@@ -668,6 +672,48 @@ describe("library.db schema versions", () => {
 		expect(library.shares.live().map(share => share.id)).toEqual(["legacy-share", "fresh-share"]);
 		library.close();
 		expect(await userVersion(database)).toBe(SCHEMA_VERSION);
+	});
+
+	test("comments an older Dimension stored in the published anchor form read back as the anchors they mean, and one that cannot be read keeps its words", async () => {
+		const file = await put("legacy.txt");
+		const createdAt = clock - 10 * DAY;
+		const stored: ReadonlyArray<readonly [id: string, anchor: string | null]> = [
+			["c1", JSON.stringify({ kind: "time", startMs: 70_000, endMs: 75_000 })],
+			["c2", JSON.stringify({ kind: "page", page: 3 })],
+			["c3", JSON.stringify({ kind: "region", x: 0.25, y: 0.5, w: 0.25, h: 0.125 })],
+			["c4", JSON.stringify({ startMs: 1500, shape: { kind: "pin", at: { x: 0.5, y: 0.5 } } })],
+			["c5", JSON.stringify({ kind: "region", x: 1.2, y: 0, w: 0.1, h: 0.1 })],
+			["c6", JSON.stringify({ startMs: 5000, endMs: 4000 })],
+			["c7", null],
+		];
+		await writeDatabase(1, db => {
+			db.exec(SCHEMA_V1);
+			seedLegacyShare(db, file, createdAt);
+			stored.forEach(([id, anchor], index) => {
+				execute(
+					db,
+					`INSERT INTO comments(id, share_id, author, body, anchor, version, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+					id,
+					"legacy-share",
+					"Ana",
+					`body ${id}`,
+					anchor,
+					1,
+					createdAt + index,
+				);
+			});
+		});
+
+		const library = await openLibrary();
+		expect(library.comments.forArtifact("legacy-artifact").map(row => ({ id: row.id, body: row.body, anchor: row.anchor }))).toEqual([
+			{ id: "c1", body: "body c1", anchor: { startMs: 70_000, endMs: 75_000 } },
+			{ id: "c2", body: "body c2", anchor: { page: 3 } },
+			{ id: "c3", body: "body c3", anchor: { shape: { kind: "box", from: { x: 0.25, y: 0.5 }, to: { x: 0.5, y: 0.625 } } } },
+			{ id: "c4", body: "body c4", anchor: { startMs: 1500, shape: { kind: "pin", at: { x: 0.5, y: 0.5 } } } },
+			{ id: "c5", body: "body c5", anchor: undefined },
+			{ id: "c6", body: "body c6", anchor: undefined },
+			{ id: "c7", body: "body c7", anchor: undefined },
+		]);
 	});
 
 	test("a database written by a newer Dimension is refused and left at its version", async () => {

@@ -6,16 +6,17 @@
 // Rendered for real (linkedom + react-dom under `act`) over a real <video> element whose layout is stubbed (linkedom has
 // no layout): the box, the stage offset and the picture's size are numbers the test sets, and a ResizeObserver stand-in
 // is fired by hand for the video or its stage. The kit's overlay is a stand-in that records the props it is drawn with
-// (it is the kit's own test subject); everything else - the transport's playhead, the frame maths - is the real thing.
+// (it is the kit's own test subject); everything else - the pane's playhead (a small host owns it here), the frame maths - is the real thing.
 // Bun cannot lift a module mock, so the file puts the real kit back when it is done.
 import { dirname } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, mock, test } from "bun:test";
-import type { MarkShape, TimelineMark } from "@dimension/mcp-app-kit/annotate";
+import type { MarkShape, PlayheadSource, TimelineMark } from "@dimension/mcp-app-kit/annotate";
 import type { MarkupOverlayProps } from "@dimension/mcp-app-kit/annotate/react";
 import * as react from "react";
-import { createElement, type ReactElement } from "react";
+import { createElement, type ReactElement, type ReactNode } from "react";
 import * as jsxDevRuntime from "react/jsx-dev-runtime";
 import * as jsxRuntime from "react/jsx-runtime";
+import * as reactDom from "react-dom";
 import type * as Draw from "../app/view/media-draw";
 import { installReact, type ReactEnv } from "./media-react";
 
@@ -30,6 +31,7 @@ for (const [id, real] of [
 	["react", react],
 	["react/jsx-runtime", jsxRuntime],
 	["react/jsx-dev-runtime", jsxDevRuntime],
+	["react-dom", reactDom],
 ] as const) {
 	mock.module(Bun.resolveSync(id, kitSource), () => real);
 }
@@ -37,6 +39,7 @@ for (const [id, real] of [
 let env: ReactEnv;
 let DrawLayer: typeof Draw.DrawLayer;
 let realKit: Record<string, unknown>;
+let useMediaPosition: (media: HTMLMediaElement, live: boolean) => PlayheadSource;
 const restores: (() => void)[] = [];
 
 /** Put a global in place for the whole file, remembering how to take it out. */
@@ -105,6 +108,7 @@ beforeAll(async () => {
 	install(globalThis, "ResizeObserver", WatchedSizes);
 	// Dynamic by necessity: the kit binds React when it loads, and react-dom (loaded by `installReact`) decides once, then, whether there is a DOM.
 	realKit = { ...(await import(KIT)) };
+	useMediaPosition = realKit.useMediaPosition as typeof useMediaPosition;
 	mock.module(KIT, () => ({ ...realKit, MarkupOverlay: StandInOverlay }));
 	({ DrawLayer } = await import("../app/view/media-draw"));
 });
@@ -199,8 +203,15 @@ function rig(over: Partial<Footage> = {}, staged = true): Rig {
 /** One frame is a tenth of a second: far from the float edges of the frame maths, and a plain number to read a test by. */
 const FRAME = 0.1;
 
-function layer(video: HTMLVideoElement, over: Partial<Draw.DrawLayerProps> = {}): ReactElement {
-	return createElement(DrawLayer, { video, live: true, marks: [], tool: null, activeId: null, filename: "clip.mp4", frameSeconds: () => FRAME, drawingTime: playhead => playhead, onBegin: () => {}, onShape: () => undefined, openId: null, onOpen: () => {}, onNote: () => {}, onRemove: () => {}, ...over });
+type HostProps = Omit<Draw.DrawLayerProps, "playhead"> & { readonly live: boolean };
+
+function Host({ live, ...props }: HostProps): ReactNode {
+	const playhead = useMediaPosition(props.video, live);
+	return createElement(DrawLayer, { ...props, playhead });
+}
+
+function layer(video: HTMLVideoElement, over: Partial<HostProps> = {}): ReactElement {
+	return createElement(Host, { video, live: true, marks: [], tool: null, activeId: null, filename: "clip.mp4", frameSeconds: () => FRAME, drawingTime: playhead => playhead, onBegin: () => {}, onShape: () => undefined, openId: null, onOpen: () => {}, onNote: () => {}, onRemove: () => {}, ...over });
 }
 
 /** Where the layer sits, as the numbers its wrapper's style gives (px), and the rest of that style. */

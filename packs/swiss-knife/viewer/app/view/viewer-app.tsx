@@ -7,7 +7,6 @@ import { useEffect, useState } from "react";
 import { DocPane, FailedPane, Message } from "./doc-pane";
 import { FirstWait, Opening } from "./opening";
 import type { Theme } from "./renderers/types";
-import { actionFromResult } from "./result";
 import { TabStrip } from "./tab-strip";
 import { LIBRARY_KEY, type ViewerStore, useViewerState } from "./tabs";
 import { LibraryPane } from "./library/library-pane";
@@ -42,12 +41,7 @@ export function ViewerApp({ app, store }: { readonly app: App; readonly store: V
 			<div className="relative min-h-0 flex-1">
 				{state.library !== null ? (
 					<div className={state.activeKey === LIBRARY_KEY ? "absolute inset-0" : "hidden"}>
-						<LibraryPane
-							app={app}
-							request={state.library}
-							active={state.activeKey === LIBRARY_KEY}
-							onOpened={result => store.dispatch(actionFromResult(result))}
-						/>
+						<LibraryPane app={app} request={state.library} active={state.activeKey === LIBRARY_KEY} theme={theme} />
 					</div>
 				) : null}
 				{state.tabs.length === 0 && state.library === null ? (

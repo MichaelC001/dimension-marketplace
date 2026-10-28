@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { estimateFrameSeconds, frameSize, frameStepTarget, jpegBytes } from "../app/view/media-frame";
+import { bucketPeaks, estimateFrameSeconds, frameSize, frameStepTarget, jpegBytes } from "@dimension/mcp-app-kit/annotate";
 import { describeMediaError } from "../app/view/media-messages";
-import { bucketPeaks } from "../app/view/media-waveform";
 
 describe("bucketPeaks", () => {
 	const ramp = (length: number, level: number): Float32Array => Float32Array.from({ length }, (_, index) => ((index % 2 === 0 ? 1 : -1) * level * (index + 1)) / length);

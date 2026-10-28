@@ -32329,6 +32329,9 @@ var SHARE_KINDS = [
 function isShareKind(value) {
   return typeof value === "string" && SHARE_KINDS.includes(value);
 }
+var ASP_MAX_PEN_POINTS = 256;
+var ASP_MAX_QUOTE = 1e3;
+var ASP_MAX_QUOTE_CONTEXT = 200;
 var AspError = class extends Error {
   name = "AspError";
 };
@@ -32475,7 +32478,7 @@ async function sealComment(commentKey, comment) {
     commentKey,
     nonce,
     encoder.encode("asp1|comment"),
-    encoder.encode(JSON.stringify(checked))
+    encoder.encode(JSON.stringify(checked.anchor === void 0 ? checked : { ...checked, anchor: wireAnchor(checked.anchor) }))
   );
   return concatBytes(nonce, sealed);
 }
@@ -32545,21 +32548,81 @@ function parseManifest(value) {
     ...poster === void 0 ? {} : { poster }
   };
 }
-function parseAnchor(value) {
+function parsePoint(value) {
   if (!isRecord2(value)) return void 0;
-  const finite = (n) => typeof n === "number" && Number.isFinite(n) && n >= 0;
-  if (value.kind === "time" && finite(value.startMs)) {
-    if (value.endMs === void 0) return { kind: "time", startMs: value.startMs };
-    return finite(value.endMs) && value.endMs >= value.startMs ? { kind: "time", startMs: value.startMs, endMs: value.endMs } : void 0;
+  const unit2 = (n) => typeof n === "number" && Number.isFinite(n) && n >= 0 && n <= 1;
+  return unit2(value.x) && unit2(value.y) ? { x: value.x, y: value.y } : void 0;
+}
+function parseShape(value) {
+  if (!isRecord2(value)) return void 0;
+  if (value.kind === "pin") {
+    const at = parsePoint(value.at);
+    return at === void 0 ? void 0 : { kind: "pin", at };
   }
-  if (value.kind === "page") {
-    const page = positiveInt(value.page);
-    return page === void 0 ? void 0 : { kind: "page", page };
+  if (value.kind === "box" || value.kind === "ellipse" || value.kind === "arrow") {
+    const from = parsePoint(value.from);
+    const to = parsePoint(value.to);
+    return from === void 0 || to === void 0 ? void 0 : { kind: value.kind, from, to };
   }
-  if (value.kind === "region" && finite(value.x) && finite(value.y) && finite(value.w) && finite(value.h)) {
-    return value.x <= 1 && value.y <= 1 && value.w <= 1 && value.h <= 1 ? { kind: "region", x: value.x, y: value.y, w: value.w, h: value.h } : void 0;
+  if (value.kind === "pen" && Array.isArray(value.points) && value.points.length >= 2 && value.points.length <= ASP_MAX_PEN_POINTS) {
+    const points = [];
+    for (const raw of value.points) {
+      const point2 = parsePoint(raw);
+      if (point2 === void 0) return void 0;
+      points.push(point2);
+    }
+    return { kind: "pen", points };
   }
   return void 0;
+}
+function parseQuote(value) {
+  if (!isRecord2(value)) return void 0;
+  const quote = boundedString(value.quote, ASP_MAX_QUOTE);
+  const fits = (text) => typeof text === "string" && text.length <= ASP_MAX_QUOTE_CONTEXT;
+  return quote !== void 0 && fits(value.prefix) && fits(value.suffix) ? { quote, prefix: value.prefix, suffix: value.suffix } : void 0;
+}
+function millis(value) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER ? Math.round(value) : void 0;
+}
+function regionShape(value) {
+  const unit2 = (n) => typeof n === "number" && Number.isFinite(n) && n >= 0 && n <= 1;
+  if (!unit2(value.x) || !unit2(value.y) || !unit2(value.w) || !unit2(value.h)) return void 0;
+  return { kind: "box", from: { x: value.x, y: value.y }, to: { x: Math.min(1, value.x + value.w), y: Math.min(1, value.y + value.h) } };
+}
+function shapeExtent(shape) {
+  const points = shape.kind === "pin" ? [shape.at] : shape.kind === "pen" ? shape.points : [shape.from, shape.to];
+  const xs = points.map((point2) => point2.x);
+  const ys = points.map((point2) => point2.y);
+  return { left: Math.min(...xs), top: Math.min(...ys), right: Math.max(...xs), bottom: Math.max(...ys) };
+}
+function shapeBounds(shape) {
+  const { left, top, right, bottom } = shapeExtent(shape);
+  return { x: left, y: top, w: right - left, h: bottom - top };
+}
+function wireAnchor(anchor) {
+  if (anchor.startMs !== void 0) return { kind: "time", ...anchor };
+  if (anchor.page !== void 0) return { kind: "page", ...anchor };
+  const region = anchor.shape === void 0 ? { x: 0, y: 0, w: 1, h: 1 } : shapeBounds(anchor.shape);
+  return { kind: "region", ...region, ...anchor };
+}
+function parseCommentAnchor(value) {
+  if (!isRecord2(value)) return void 0;
+  const startMs = optionalField(value.startMs, millis);
+  const endMs = optionalField(value.endMs, millis);
+  const page = optionalField(value.page, positiveInt);
+  const text = optionalField(value.text, parseQuote);
+  const drawn = optionalField(value.shape, parseShape);
+  const shape = drawn === void 0 && text === void 0 && value.kind === "region" ? regionShape(value) ?? INVALID2 : drawn;
+  if (startMs === INVALID2 || endMs === INVALID2 || page === INVALID2 || shape === INVALID2 || text === INVALID2) return void 0;
+  if (endMs !== void 0 && (startMs === void 0 || endMs < startMs)) return void 0;
+  if (startMs === void 0 && page === void 0 && shape === void 0 && text === void 0) return void 0;
+  return {
+    ...startMs === void 0 ? {} : { startMs },
+    ...endMs === void 0 ? {} : { endMs },
+    ...page === void 0 ? {} : { page },
+    ...shape === void 0 ? {} : { shape },
+    ...text === void 0 ? {} : { text }
+  };
 }
 function parseComment(value) {
   if (!isRecord2(value)) return void 0;
@@ -32569,7 +32632,7 @@ function parseComment(value) {
   const at = nonNegativeInt(value.at);
   if (author === void 0 || body === void 0 || version2 === void 0 || at === void 0) return void 0;
   if (value.anchor === void 0) return { author, body, version: version2, at };
-  const anchor = parseAnchor(value.anchor);
+  const anchor = parseCommentAnchor(value.anchor);
   return anchor === void 0 ? void 0 : { author, body, anchor, version: version2, at };
 }
 function stringList(value, max) {
@@ -32679,12 +32742,13 @@ function shareFromRecord(record2) {
   };
 }
 function commentFromRecord(record2) {
+  const anchor = record2.anchor === null ? void 0 : parseCommentAnchor(JSON.parse(record2.anchor));
   return {
     id: record2.id,
     shareId: record2.share_id,
     author: record2.author,
     body: record2.body,
-    ...record2.anchor === null ? {} : { anchor: JSON.parse(record2.anchor) },
+    ...anchor === void 0 ? {} : { anchor },
     version: record2.version,
     createdAt: record2.created_at,
     ...record2.read_at === null ? {} : { readAt: record2.read_at },
@@ -36627,11 +36691,25 @@ var audienceSchema = external_exports.object({
   return audience;
 });
 var unit = external_exports.number().min(0).max(1);
-var anchorSchema = external_exports.union([
-  external_exports.object({ kind: external_exports.literal("time"), startMs: external_exports.number().min(0), endMs: external_exports.number().min(0).optional() }),
-  external_exports.object({ kind: external_exports.literal("page"), page: external_exports.number().int().min(1) }),
-  external_exports.object({ kind: external_exports.literal("region"), x: unit, y: unit, w: unit, h: unit })
+var point = external_exports.object({ x: unit, y: unit });
+var shapeSchema = external_exports.union([
+  external_exports.object({ kind: external_exports.literal("pin"), at: point }),
+  external_exports.object({ kind: external_exports.enum(["box", "ellipse", "arrow"]), from: point, to: point }),
+  external_exports.object({ kind: external_exports.literal("pen"), points: external_exports.array(point).min(2).max(ASP_MAX_PEN_POINTS) })
 ]);
+var quoteSchema = external_exports.object({
+  quote: external_exports.string().min(1).max(ASP_MAX_QUOTE),
+  prefix: external_exports.string().max(ASP_MAX_QUOTE_CONTEXT),
+  suffix: external_exports.string().max(ASP_MAX_QUOTE_CONTEXT)
+});
+var millis2 = external_exports.number().int().min(0);
+var anchorSchema = external_exports.object({
+  startMs: millis2.optional(),
+  endMs: millis2.optional(),
+  page: external_exports.number().int().min(1).optional(),
+  shape: shapeSchema.optional(),
+  text: quoteSchema.optional()
+}).refine((anchor) => anchor.endMs === void 0 || anchor.startMs !== void 0 && anchor.endMs >= anchor.startMs, "endMs needs a startMs at or before it").refine((anchor) => anchor.startMs !== void 0 || anchor.page !== void 0 || anchor.shape !== void 0 || anchor.text !== void 0, "an anchor needs a time, a page, a shape or a passage");
 var expiresInDays = external_exports.number().int().min(1).max(3650);
 var shareId = external_exports.string().min(1).max(128);
 var artifactId = external_exports.string().min(1).max(128);

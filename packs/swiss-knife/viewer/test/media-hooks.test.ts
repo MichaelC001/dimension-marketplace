@@ -15,7 +15,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test
 import type { App } from "@modelcontextprotocol/ext-apps";
 import { createElement } from "react";
 import { loadPeaks, type PeaksLoader, useDuration, useFailed, useWaveform } from "../app/view/media-hooks";
-import { WAVEFORM_BUCKETS, WAVEFORM_DECODE_RATE, WAVEFORM_MAX_BYTES } from "../app/view/media-waveform";
+import { WAVEFORM_BUCKETS, WAVEFORM_DECODE_RATE, WAVEFORM_MAX_BYTES } from "@dimension/mcp-app-kit/annotate";
 import type { DocTab } from "../app/view/tabs";
 import { installReact, type ReactEnv } from "./media-react";
 

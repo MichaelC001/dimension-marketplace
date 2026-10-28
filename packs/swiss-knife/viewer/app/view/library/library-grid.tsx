@@ -147,8 +147,10 @@ export function LibraryGrid({ items, layout, selectedIndex, label, footer, rende
 					width: geometry.cellWidth,
 					height: geometry.rowHeight,
 				}}
-				onClick={() => onSelect(index)}
-				onDoubleClick={() => onOpen(index)}
+				onClick={() => {
+					onSelect(index);
+					onOpen(index);
+				}}
 			>
 				{renderItem(item, index, selected)}
 			</div>,
