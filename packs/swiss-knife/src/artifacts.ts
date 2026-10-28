@@ -1,5 +1,5 @@
 import { realpath } from "node:fs/promises";
-import { resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import { anchorLabel, type CommentAnchor, shapeExtent } from "@dimension/sdk/artifact-share";
 import { formatByteSize, PRESENTED_KINDS, type PresentedKind } from "@dimension/sdk/presentation";
@@ -101,15 +101,10 @@ async function locate(library: Library, params: ArtifactsParams, cwd: string): P
 	}
 	if (params.path === undefined) throw new LibraryError("pass id or path");
 	const lexical = resolve(cwd, params.path);
-	const real = await realpath(lexical).catch(() => lexical);
+	const real = await realpath(lexical).catch(async () => join(await realpath(dirname(lexical)).catch(() => dirname(lexical)), basename(lexical)));
 	const found = library.getByPath(real);
 	if (found === undefined) throw new LibraryError(`${oneLine(params.path, MAX_PATH)} is not in the library`);
 	return found;
-}
-
-function requireId(params: ArtifactsParams): string {
-	if (params.id === undefined) throw new LibraryError(`${params.op} needs an id`);
-	return params.id;
 }
 
 const percent = (unit: number): number => Math.round(unit * 100);
@@ -162,7 +157,7 @@ export async function runArtifacts(library: Library, params: ArtifactsParams, co
 			return `Added ${describeItem(item, now)}`;
 		}
 		case "update": {
-			const item = library.update(requireId(params), {
+			const item = library.update((await locate(library, params, cwd)).id, {
 				...(params.title === undefined ? {} : { title: params.title }),
 				...(params.note === undefined ? {} : { note: params.note }),
 				...(params.tags === undefined ? {} : { tags: params.tags }),
@@ -171,7 +166,7 @@ export async function runArtifacts(library: Library, params: ArtifactsParams, co
 			return `Updated ${describeItem(item, now)}`;
 		}
 		case "discard": {
-			const outcome = await library.discard(requireId(params), { trash: params.trash === true });
+			const outcome = await library.discard((await locate(library, params, cwd)).id, { trash: params.trash === true });
 			const lines = [`Discarded ${oneLine(outcome.item.name, MAX_NAME)}.`];
 			if (outcome.revoked > 0) lines.push(`${outcome.revoked} share link${outcome.revoked === 1 ? "" : "s"} revoked.`);
 			for (const share of outcome.unrevoked) lines.push(`A ${share.host} link could not be revoked remotely: ${oneLine(share.reason, MAX_FIELD)}`);
@@ -180,9 +175,9 @@ export async function runArtifacts(library: Library, params: ArtifactsParams, co
 			return lines.join(" ");
 		}
 		case "restore":
-			return `Restored ${describeItem(library.restore(requireId(params)), now)}`;
+			return `Restored ${describeItem(library.restore((await locate(library, params, cwd)).id), now)}`;
 		case "comments": {
-			const found = library.comments.forArtifact(requireId(params), { unread: params.unread === true });
+			const found = library.comments.forArtifact((await locate(library, params, cwd)).id, { unread: params.unread === true });
 			if (found.length === 0) return params.unread === true ? "No new comments." : "No comments.";
 			library.comments.markRead(
 				found.map(comment => comment.id),
