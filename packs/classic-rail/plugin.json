@@ -1,8 +1,8 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "classic-rail",
-	"version": "0.1.1",
-	"description": "The shipped session rail, installable: re-exports RAIL_CLASSIC from @fraym/ui - project grouping, rail actions, search, the full row model.",
+	"version": "0.1.2",
+	"description": "The standard session list as an installable part: projects, search and every row.",
 	"author": {
 		"name": "Dimension"
 	},

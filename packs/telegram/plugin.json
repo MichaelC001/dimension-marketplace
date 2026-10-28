@@ -1,8 +1,8 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "telegram",
-	"version": "0.1.4",
-	"description": "Telegram connector — send messages, read updates, inspect chats via the Bot API",
+	"version": "0.1.5",
+	"description": "Let your agent send Telegram messages, read new ones and look at chats, using a bot you create.",
 	"author": {
 		"name": "Dimension"
 	},

@@ -1,8 +1,8 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "teams",
-	"version": "0.1.4",
-	"description": "Microsoft Teams connector — list teams/channels and post channel messages via Microsoft Graph",
+	"version": "0.1.5",
+	"description": "Let your agent list your Microsoft Teams teams and channels and post messages to a channel.",
 	"author": {
 		"name": "Dimension"
 	},

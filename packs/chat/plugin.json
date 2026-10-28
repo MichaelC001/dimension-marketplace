@@ -1,8 +1,8 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "chat",
-	"version": "0.2.4",
-	"description": "Chat - your personal assistant, in a room of its own. A calm conversation with Aether, a rail of your past sessions, and a viewer beside it that opens the documents, slides and images it makes. No repo, no branches, no developer chrome: one layout and one space, assembled entirely from marketplace packs.",
+	"version": "0.2.5",
+	"description": "A calm space for talking to Aether, with no code or branches in sight, your past sessions listed and a viewer for the documents, slides and images it makes.",
 	"author": {
 		"name": "Dimension"
 	},

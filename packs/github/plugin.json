@@ -1,8 +1,8 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "github",
-	"version": "0.1.1",
-	"description": "GitHub connector — issues, PRs, releases, repos, and search via the gh CLI",
+	"version": "0.1.2",
+	"description": "Let your agent work with GitHub issues, pull requests, releases and repositories, using the gh tool on your computer.",
 	"author": {
 		"name": "Dimension"
 	},

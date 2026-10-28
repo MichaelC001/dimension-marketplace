@@ -1,8 +1,8 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "classic-dock",
-	"version": "0.1.1",
-	"description": "The shipped dock COLUMN as a pack — tab strip, resize handle, panel body. Fills the `dock-column` contract (a `dock` component is an instrument, i.e. one tab).",
+	"version": "0.1.2",
+	"description": "The standard right-hand panel as an installable part: its tab strip, resize handle and panel body.",
 	"author": {
 		"name": "Dimension"
 	},

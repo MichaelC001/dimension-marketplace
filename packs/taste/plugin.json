@@ -1,8 +1,8 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "taste",
-	"version": "0.1.2",
-	"description": "Taste — anti-slop frontend skill: brief-first design reads, real design systems, no templated AI aesthetics",
+	"version": "0.1.3",
+	"description": "Helps your agent design interfaces that look considered: it reads your brief first, uses real design systems and avoids generic AI looks.",
 	"author": {
 		"name": "Dimension"
 	},

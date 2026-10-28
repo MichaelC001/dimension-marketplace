@@ -1,8 +1,8 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "swiss-knife",
-	"version": "0.5.0",
-	"description": "Small useful things in one switch: `present` shows you a file as a card in the thread, the Viewer opens and annotates it, the Library finds every file you or your agent made and shares it privately, and a stream rule stops the agent mid-edit when it writes a code comment.",
+	"version": "0.5.1",
+	"description": "A few small helpers in one switch: your agent can show you files as cards you can open and mark up, a library finds every file you have made, and it stops the agent adding code comments.",
 	"author": {
 		"name": "Dimension"
 	},

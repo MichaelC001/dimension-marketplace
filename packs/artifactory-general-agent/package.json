@@ -1,6 +1,6 @@
 {
   "name": "@dimension/community-general-agent",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "private": true,
   "type": "module",
   "author": "Dimension",
@@ -17,7 +17,6 @@
   },
   "dimension": {
     "name": "artifactory-general-agent",
-    "description": "General Agents: every agent you can run, as cards with their real faces and their week at a glance. Open one for its whole profile and edit it there, extend a pack's agent into your own, or ask the Machinist to draft one.",
     "defaultEnabled": false,
     "category": "artifactory",
     "keywords": [

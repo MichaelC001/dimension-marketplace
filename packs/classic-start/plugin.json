@@ -1,8 +1,8 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "classic-start",
-	"version": "0.1.1",
-	"description": "The shipped START SURFACE as a pack — the session surface's front door: hero composer, Project · Work strip, popover menus. Fills the `start` contract (a SECTION like `thread`/`composer`, resolved inside the session surface). The hero sentence comes from the space's `workspace.startCopy`, never from the kit.",
+	"version": "0.1.2",
+	"description": "The standard start screen as an installable part: the big message box and the project and where-to-work menus.",
 	"author": {
 		"name": "Dimension"
 	},

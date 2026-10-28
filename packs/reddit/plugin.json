@@ -1,8 +1,8 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "reddit",
-	"version": "0.1.4",
-	"description": "Reddit connector — feeds, posts, comments, search, submit, vote, and inbox via the Reddit OAuth API",
+	"version": "0.1.5",
+	"description": "Let your agent read Reddit feeds, posts, comments and your inbox, search, and post or vote when you ask.",
 	"author": {
 		"name": "Dimension"
 	},
