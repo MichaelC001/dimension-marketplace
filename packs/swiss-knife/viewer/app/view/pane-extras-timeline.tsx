@@ -1,69 +1,42 @@
-// The layer for audio and video (docs/design/88 section 3): the transport that plays a
-// recording, and - once the layer is up - the notes on it.
-//
-// What lives HERE is the seating and the rules that come from the pane rather than the kit:
-//   * the transport is ALWAYS shown, mounted into the dock the renderer left under the
-//     element (`viewer-media-dock`): a recording is played with it, annotating or not;
-//   * the pane's one toolbar (`AnnotationToolbar`, the same bar every kind has) is seated in the mode strip from the
-//     moment the layer is up: Moment and Stretch for a sound; for a video those, then the drawing tools and
-//     undo - nothing to switch on first;
-//   * notes belong to the recording and outlive the renderer: the session sits in the component that never
-//     unmounts, and the element and dock are looked up again each time the renderer says `ready` (a theme change
-//     re-mounts it);
-//   * a recording the player has failed on cannot be marked: no tools that make notes, no keys that make them -
-//     only the notes already made, if there are any, so they are not lost;
-//   * a note is written where it was made, and there is no list: a moment, a stretch (and a drawing on a player that
-//     failed) open as a popover at their marker on the lane, a drawing's beside the drawing over the picture. The
-//     session says which note is open (`writing`); the footer under the content is the one place the message to the
-//     agent and "Request edits" live;
-//   * only the tab on screen plays and paints: a hidden tab's media is paused, its frames are not animated, its
-//     waveform is not started and its filmstrip is not taken (one already running finishes).
 import {
-	formatTimecode,
+	drawnOnFrame,
+	frameAt,
+	frameSize,
+	frameStepTarget,
+	FULL_SENTENCE,
+	insideFrame,
 	type MarkShape,
 	type MarkTool,
-	MAX_TIMELINE_MARKS,
-	markNear,
+	readLength,
+	togglePlayback,
 } from "@dimension/mcp-app-kit/annotate";
 import {
 	AnnotationNotice,
 	AnnotationToolbar,
 	markupToolGroups,
 	type ToolGroupDef,
+	useFilmstrip,
+	useFrameClock,
+	useFrameGrabber,
+	useMediaPosition,
 	useTimelineMarks,
+	useTimelineTools,
 } from "@dimension/mcp-app-kit/annotate/react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { DrawLayer } from "./media-draw";
-import { useFilmstrip } from "./media-filmstrip";
-import {
-	DEFAULT_FRAME_SECONDS,
-	FrameClock,
-	FrameGrabber,
-	drawnOnFrame,
-	frameAt,
-	frameSize,
-	frameStepTarget,
-	insideFrame,
-} from "./media-frame";
 import { useDuration, useFailed, useWaveform } from "./media-hooks";
 import { decideKey, keyOwner } from "./media-keys";
-import { readLength, seekTarget } from "./media-length";
-import { FULL_SENTENCE, MediaTransport, type TransportMarking, togglePlayback } from "./media-transport";
+import { seekTarget } from "./media-length";
+import { MediaTransport, type TransportMarking } from "./media-transport";
+import { SharedFrameMarks, SharedLane } from "./pane-extras-shared";
 import { Footer, type PaneExtrasProps, revisionOf, Strip, useSlot } from "./pane-shared";
 
 const MEDIA = '[data-slot="viewer-media"]';
 const DOCK = '[data-slot="viewer-media-dock"]';
-/** How long a line of help stays under the buttons. */
-const HINT_MS = 4000;
-/** Cells the film lane is drawn with until it has measured itself and said what its width holds. */
 const FILM_SLOTS_AT_FIRST = 8;
+const NO_TIMES: readonly never[] = [];
 
-/**
- * Whether the page is visible at all: a View the host has folded away animates nothing. It does NOT pause the
- * recording: a folded panel keeps playing like any player in a background tab, and only choosing another tab
- * inside the viewer stops the sound.
- */
 function usePageVisible(): boolean {
 	const [visible, setVisible] = useState(() => document.visibilityState !== "hidden");
 	useEffect(() => {
@@ -74,22 +47,9 @@ function usePageVisible(): boolean {
 	return visible;
 }
 
-// ── the glyphs of the two tools only a recording has ─────────────────────
-
-function ToolGlyph({ path }: { readonly path: string }): ReactNode {
-	return (
-		<svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
-			<path d={path} />
-		</svg>
-	);
-}
-
-const MOMENT = "M6 20.5V4M6 5h11l-2.5 3.5L17 12H6";
-const STRETCH = "M4 7v10M20 7v10M4 12h16M8 9l-4 3 4 3M16 9l4 3-4 3";
-const CANCEL = "M6 6l12 12M18 6 6 18";
-
-export function TimelineMarks({ app, tab, active, ready, frame, mode, store }: PaneExtrasProps): ReactNode {
+export function TimelineMarks({ app, tab, active, ready, frame, mode, store, shared }: PaneExtrasProps): ReactNode {
 	const kind = tab.kind === "video" ? "video" : "audio";
+	const identity = `${tab.path}\u0000${revisionOf(tab)}`;
 	const slot = useSlot(frame, ready, MEDIA);
 	const media = slot instanceof HTMLMediaElement ? slot : null;
 	const video = media instanceof HTMLVideoElement ? media : null;
@@ -98,56 +58,18 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode, store }: P
 	const failed = useFailed(media);
 	const visible = usePageVisible();
 	const live = active && visible;
-	// Notes can be made on a recording that plays; the footer shows while they can be made or there are some to keep.
 	const markable = mode === "timeline" && !failed;
 	const drawable = markable && video !== null;
-	// The pen belongs to a video that can be marked; it must not flicker with the element during a reload.
 	const penUp = markable && kind === "video";
 
-	// Which frame is showing and how long one is, learned from frames reaching the screen. Costs nothing while hidden.
-	const clock = useRef<FrameClock | null>(null);
-	useEffect(() => {
-		if (video === null || !live) return;
-		const watcher = new FrameClock(video);
-		clock.current = watcher;
-		return () => {
-			watcher.dispose();
-			clock.current = null;
-		};
-	}, [video, live]);
-	const frameSeconds = useCallback(() => clock.current?.frameSeconds ?? DEFAULT_FRAME_SECONDS, []);
-	// The time a drawing made with the playhead at `playhead` is stamped with: the start of the frame on screen (`frameAt`).
-	// The draw layer reads it too, so the number on a shape while it is drawn is the place it takes once it is a note.
-	const drawingTime = useCallback(
-		(playhead: number) => frameAt(clock.current?.showing ?? playhead, playhead, frameSeconds()),
-		[frameSeconds],
-	);
+	const playhead = useMediaPosition(media, live);
+	const clock = useFrameClock(video, live);
+	const { frameSeconds } = clock;
+	const drawingTime = useCallback((position: number) => frameAt(clock.showing(position), position, frameSeconds()), [clock, frameSeconds]);
 
-	// Pictures come from silent second elements, so the player never moves while "Request edits" works or the film
-	// lane fills in, and the filmstrip's long line of small pictures never holds up the few big ones a send needs.
-	// Each is made when the element is found and let go of when the element goes (a theme change re-mounts it) or the
-	// pane does: a picture being taken then stops at once, and the note it was for goes as a time (and boxes) only.
-	const [grabber, setGrabber] = useState<FrameGrabber | null>(null);
-	const [stripGrabber, setStripGrabber] = useState<FrameGrabber | null>(null);
-	useEffect(() => {
-		if (video === null) {
-			setGrabber(null);
-			setStripGrabber(null);
-			return;
-		}
-		const stills = new FrameGrabber(video);
-		const strip = new FrameGrabber(video);
-		setGrabber(stills);
-		setStripGrabber(strip);
-		return () => {
-			stills.dispose();
-			strip.dispose();
-		};
-	}, [video]);
-	const stillSize = useCallback(
-		() => (video === null || video.videoWidth === 0 ? null : frameSize(video.videoWidth, video.videoHeight)),
-		[video],
-	);
+	const grabber = useFrameGrabber(video);
+	const stripGrabber = useFrameGrabber(video);
+	const stillSize = useCallback(() => (video === null || video.videoWidth === 0 ? null : frameSize(video.videoWidth, video.videoHeight)), [video]);
 	const session = useTimelineMarks({
 		app,
 		file: tab.path,
@@ -159,53 +81,27 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode, store }: P
 		autoStage: active && mode === "timeline",
 		store,
 	});
-	const { marks, addMark, addSpan, addShape, writing, openNote, closeNote } = session;
-	const full = marks.length >= MAX_TIMELINE_MARKS;
+	const { marks, addShape, writing, openNote, closeNote } = session;
+	const tools = useTimelineTools({ media, marks, addMark: session.addMark, addSpan: session.addSpan, markable });
+	const { full, say, press, reset } = tools;
 
-	// Only the tab on screen plays. Coming back does not resume: the human pressed pause by leaving.
 	useEffect(() => {
 		if (!active) media?.pause();
 	}, [active, media]);
 
-	// ── the lane's pictures: a sound's waveform, a video's filmstrip ───────────────────────────────────────
 	const waveform = useWaveform(app, tab, kind === "audio" && live && ready, media);
 	const [slots, setSlots] = useState(FILM_SLOTS_AT_FIRST);
-	const filmstrip = useFilmstrip({
-		source: stripGrabber,
-		key: `${tab.path}\u0000${revisionOf(tab)}`,
-		duration,
-		slots,
-		enabled: video !== null && live && !failed,
-	});
-	// A player that failed takes no pictures either: its empty cells are not waiting for any.
-	const film = useMemo(
-		() => ({ frames: filmstrip.frames, failed: filmstrip.failed || failed, slots, onSlots: setSlots }),
-		[filmstrip, failed, slots],
-	);
+	const filmstrip = useFilmstrip({ source: stripGrabber, key: identity, duration, slots, enabled: video !== null && live && !failed });
+	const film = useMemo(() => ({ frames: filmstrip.frames, failed: filmstrip.failed || failed, slots, onSlots: setSlots }), [filmstrip, failed, slots]);
 
-	// ── marking ─────────────────────────────────────────────────────────────────
-	const [inPoint, setInPoint] = useState<number | null>(null);
-	const [hint, setHint] = useState<string | null>(null);
 	const [tool, setTool] = useState<MarkTool | null>(null);
-	const hintTimer = useRef<number | undefined>(undefined);
-	useEffect(() => () => window.clearTimeout(hintTimer.current), []);
-	const say = useCallback((text: string) => {
-		setHint(text);
-		window.clearTimeout(hintTimer.current);
-		hintTimer.current = window.setTimeout(() => setHint(null), HINT_MS);
-	}, []);
-	// A different recording: a stretch begun on the old one is not begun here.
-	const identity = `${tab.path}\u0000${revisionOf(tab)}`;
 	const previous = useRef(identity);
 	useEffect(() => {
 		if (previous.current === identity) return;
 		previous.current = identity;
-		setInPoint(null);
-		setHint(null);
-	}, [identity]);
+		reset();
+	}, [identity, reset]);
 
-	// The pen goes down with the mode (a recording that failed, or would not open) and is the human's to pick up
-	// again; the card's Annotate action is the one ask that picks it up for them, in the tool they last held.
 	useEffect(() => {
 		if (!penUp) setTool(null);
 	}, [penUp]);
@@ -221,50 +117,6 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode, store }: P
 		[media],
 	);
 
-	const markHere = useCallback(() => {
-		if (media === null) return;
-		const at = media.currentTime;
-		const already = markNear(marks, at);
-		const id = addMark(at);
-		if (id === undefined) say(FULL_SENTENCE);
-		else if (already !== undefined) say(`Note ${[...marks].findIndex(mark => mark.id === already.id) + 1} is already here.`);
-	}, [media, marks, addMark, say]);
-
-	const makeSpan = useCallback(
-		(from: number, to: number) => {
-			if (addSpan(from, to) === undefined) say(FULL_SENTENCE);
-		},
-		[addSpan, say],
-	);
-
-	const stretch = useCallback(() => {
-		if (media === null) return;
-		const at = media.currentTime;
-		if (inPoint === null) {
-			setInPoint(at);
-			return;
-		}
-		if (Math.abs(at - inPoint) < 0.1) {
-			say("Move the playhead on from where the stretch starts, then end it.");
-			return;
-		}
-		makeSpan(inPoint, at);
-		setInPoint(null);
-	}, [media, inPoint, makeSpan, say]);
-
-	// The lane's own gesture for a note (a double-click on the wave, its Comment button): the session opens the new note,
-	// and the lane hangs its popover from the pin.
-	const commentAt = useCallback(
-		(at: number): void => {
-			if (addMark(at) === undefined) say(FULL_SENTENCE);
-		},
-		[addMark, say],
-	);
-
-	// A finished shape on the frame on screen. Drawing stops the film first: the frame is the one the human saw. The shape
-	// is stamped at that frame's start, and a layer shows it only while the playhead is inside the frame (`drawnOnFrame`):
-	// a pause lands anywhere in the frame (and a refresh late), so the paused playhead is put just inside the frame the shape
-	// belongs to, or the box would vanish the moment the pen is lifted. Nothing moves when it is there already.
 	const drawShape = useCallback(
 		(shape: MarkShape, aspect: number): number | undefined => {
 			if (video === null) return undefined;
@@ -282,8 +134,6 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode, store }: P
 		[video, addShape, drawingTime, frameSeconds, seekTo, full, say],
 	);
 
-	// Where a note is looked at: a drawing on the frame it was drawn on (a tenth of a frame inside, so the seek lands on
-	// it and not on the one before), with the film held there so it is there to be seen.
 	const goTo = useCallback(
 		(id: number) => {
 			const mark = marks.find(entry => entry.id === id);
@@ -298,7 +148,24 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode, store }: P
 		[marks, media, seekTo, frameSeconds],
 	);
 
-	// Choosing a note (its marker on the lane): the playhead goes to it and its note opens.
+	const sharedTimes = shared?.places.times ?? NO_TIMES;
+	const sharedFrames = shared?.places.frames ?? NO_TIMES;
+	const sharedPicked = shared?.openId ?? null;
+	const sharedOpen = sharedPicked === null ? undefined : sharedTimes.find(thread => thread.id === sharedPicked);
+	const sharedOpenId = sharedOpen?.id;
+	const sharedOpenAt = sharedOpen?.at;
+	const sharedOpenDrawn = sharedOpen?.drawn === true;
+	useEffect(() => {
+		if (!active || sharedOpenId === undefined || sharedOpenAt === undefined) return;
+		if (sharedOpenDrawn && video !== null) {
+			video.pause();
+			seekTo(insideFrame(sharedOpenAt, frameSeconds()));
+		} else {
+			seekTo(sharedOpenAt);
+		}
+	}, [active, sharedOpenId, sharedOpenAt, sharedOpenDrawn, video, seekTo, frameSeconds]);
+	const sharedLaneId = sharedOpen !== undefined && !(sharedOpenDrawn && video !== null) ? sharedOpen.id : null;
+
 	const selectMark = useCallback(
 		(id: number) => {
 			goTo(id);
@@ -311,20 +178,18 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode, store }: P
 		(direction: 1 | -1) => {
 			if (video === null) return;
 			video.pause();
-			const target = frameStepTarget(clock.current?.showing ?? video.currentTime, frameSeconds(), direction);
+			const target = frameStepTarget(clock.showing(video.currentTime), frameSeconds(), direction);
 			video.currentTime = seekTarget(target, readLength(video));
 		},
-		[video, frameSeconds],
+		[video, clock, frameSeconds],
 	);
 
-	// ── the keyboard ────────────────────────────────────────────────────────────
 	const { undo, redo } = session;
+	const { inPoint } = tools;
 	useEffect(() => {
 		if (!active || media === null) return;
 		const onKey = (event: KeyboardEvent): void => {
-			// Something already answered it (the scrubber's own arrows, the drawing surface's), or it is Alt's.
 			if (event.defaultPrevented || event.altKey) return;
-			// Whose key it is comes first: text being typed, a button's Space, a slider's or tab bar's arrows and Home and End are theirs.
 			const action = decideKey({
 				key: event.key.length === 1 ? event.key.toLowerCase() : event.key,
 				shift: event.shiftKey,
@@ -354,23 +219,14 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode, store }: P
 					stepFrame(action.direction);
 					break;
 				case "mark":
-					event.preventDefault();
-					markHere();
-					break;
 				case "set-in":
-					event.preventDefault();
-					setInPoint(media.currentTime);
-					break;
 				case "needs-start":
-					event.preventDefault();
-					say("Press I where the stretch starts, then O where it ends.");
-					break;
 				case "end-stretch":
 					event.preventDefault();
-					stretch();
+					press(action.do);
 					break;
 				case "cancel-stretch":
-					setInPoint(null);
+					press(action.do);
 					break;
 				case "disarm":
 					setTool(null);
@@ -391,45 +247,21 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode, store }: P
 		};
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
-	}, [active, media, kind, markable, drawable, tool, inPoint, markHere, stretch, stepFrame, say, undo, redo]);
+	}, [active, media, kind, markable, drawable, tool, inPoint, press, stepFrame, undo, redo]);
 
-	// ── what is drawn ──────────────────────────────────────────────────────────
 	const transportMarking = useMemo<TransportMarking | null>(
-		() => (markable ? { full, inPoint, hint, onSpan: makeSpan, onComment: commentAt } : null),
-		[markable, full, inPoint, hint, makeSpan, commentAt],
+		() => (markable ? { full, inPoint, hint: tools.hint, onSpan: tools.makeSpan, onComment: tools.commentAt } : null),
+		[markable, full, inPoint, tools.hint, tools.makeSpan, tools.commentAt],
 	);
 
-	// Where the open note hangs from. A drawing's goes beside the drawing, over the picture, wherever the picture can be
-	// drawn on; every other note - and a drawing on a player that failed, which has no picture to show it - hangs from its
-	// marker on the lane. One surface at a time, so a note never has two popovers.
 	const writingMark = writing === null ? undefined : marks.find(mark => mark.id === writing.id);
 	const pictureId = writingMark?.shape !== undefined && drawable ? writingMark.id : null;
 	const laneId = writingMark !== undefined && pictureId === null ? writingMark.id : null;
 	const onPictureNote = useCallback((id: number | null) => (id === null ? closeNote("outside") : openNote(id)), [openNote, closeNote]);
 
-	// The one toolbar: the two tools a recording has, and for a video the picture's drawing tools and undo.
 	const groups = useMemo<ToolGroupDef[]>(
 		() => [
-			{
-				id: "timeline",
-				label: "Moment and stretch",
-				kind: "act",
-				tools: [
-					{ id: "moment", label: "Moment", icon: <ToolGlyph path={MOMENT} />, key: "M", disabled: full || failed, onSelect: markHere },
-					{
-						id: "stretch",
-						label: inPoint === null ? "Stretch" : "End stretch",
-						icon: <ToolGlyph path={STRETCH} />,
-						...(inPoint === null ? {} : { text: `from ${formatTimecode(inPoint)}` }),
-						key: inPoint === null ? "I" : "O",
-						disabled: full || failed,
-						onSelect: stretch,
-					},
-					...(inPoint === null
-						? []
-						: [{ id: "cancel-stretch", label: "Cancel stretch", icon: <ToolGlyph path={CANCEL} />, key: "Esc", onSelect: () => setInPoint(null) }]),
-				],
-			},
+			tools.group,
 			...(kind === "video"
 				? markupToolGroups({
 						tool,
@@ -443,7 +275,7 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode, store }: P
 					})
 				: []),
 		],
-		[full, failed, inPoint, kind, tool, penUp, markHere, stretch, undo, redo, session.canUndo, session.canRedo, session.clear, marks.length],
+		[tools.group, kind, tool, penUp, undo, redo, session.canUndo, session.canRedo, session.clear, marks.length],
 	);
 	const toolbarHint = full ? FULL_SENTENCE : undefined;
 
@@ -456,7 +288,7 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode, store }: P
 							media={media}
 							kind={kind}
 							filename={tab.filename}
-							live={live}
+							playhead={playhead}
 							marks={marks}
 							activeId={writingMark?.id ?? null}
 							onSelectMark={selectMark}
@@ -467,13 +299,28 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode, store }: P
 							{...(waveform === undefined ? {} : { waveform })}
 							{...(kind === "video" ? { film } : {})}
 							marking={transportMarking}
+							{...(shared === undefined || sharedTimes.length === 0
+								? {}
+								: {
+										under: (
+											<SharedLane
+												duration={duration}
+												threads={sharedTimes}
+												openId={sharedLaneId}
+												onSelect={shared.onOpen}
+												onOpen={shared.onOpen}
+												onReply={shared.onReply}
+												filename={tab.filename}
+											/>
+										),
+									})}
 						/>,
 						dock,
 					)}
 			{video === null ? null : (
 				<DrawLayer
 					video={video}
-					live={live}
+					playhead={playhead}
 					marks={marks}
 					tool={tool}
 					activeId={pictureId}
@@ -486,6 +333,18 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode, store }: P
 					onOpen={onPictureNote}
 					onNote={session.setNote}
 					onRemove={session.remove}
+				/>
+			)}
+			{video === null || shared === undefined || !active || sharedFrames.length === 0 ? null : (
+				<SharedFrameMarks
+					video={video}
+					playhead={playhead}
+					clock={clock}
+					frames={shared.places.frames}
+					openId={shared.openId}
+					onOpen={shared.onOpen}
+					onReply={shared.onReply}
+					filename={tab.filename}
 				/>
 			)}
 			{mode === "timeline" ? (

@@ -197,8 +197,7 @@ The pane lives in `app/view/library/`:
 - **Filters and search.** A left rail (kinds with counts, workspaces, Starred, Shared, Recently discarded) from
   `library_facets`; the search field filters as you type (80 ms debounce). Every list is the server's SQLite answer:
   each request carries a key, and an answer for a key that is no longer current is dropped (`query.ts`), so a slow
-  older search never overwrites a newer one. Below 760 px the rail folds behind a Filters button and the drawer
-  floats over the grid.
+  older search never overwrites a newer one. Below 760 px the rail folds behind a Filters button.
 - **Virtualized grid and list** (`library-grid.tsx`, math in `window.ts`). Fixed row heights; only the rows on
   screen plus three rows of overscan are mounted, scroll work is coalesced to one animation frame, and the next
   `library_query` page (cursor paging, 200 a page) is asked for twelve rows before the loaded end. The window size is
@@ -210,14 +209,20 @@ The pane lives in `app/view/library/`:
   cancelled when its row scrolls away (`poster-queue.ts`); a failed one is not retried this session.
 - **Missing files.** The visible rows are checked with `library_check` (batches of 200, throttled to 300 ms, a row
   not again within a minute) and a gone file shows the warning mark.
-- **Detail drawer** (Drive's details panel). A header with the kind icon, the name (double-click or ⋯ Rename edits the
-  title), star and a ⋯ menu (Copy path, Rename, Discard…, or Restore in Recently discarded); the preview; Open and
-  Share. Two tabs. Details: "Who has access" (Only you, or one row per live link naming who it lets in, its role,
-  expiry and where it lives, with Copy link and Manage access; never the URL; stopped and expired links fold into
-  "Stopped links"), "File details" (type, size, the containing folder with the full path on hover and a copy button,
-  workspace, who added it, dates) and "Description" with tags (`library_update` on blur or Enter). Comments: one entry
-  per comment with initials, time, a time or page chip and the body, grouped by link when there are several; new ones
-  stay highlighted while shown and are marked read (`share_mark_read`); a reply box at the bottom (`share_reply`).
+- **Artifact page** (`library/artifact-page.tsx`). Clicking or Enter on a card opens the file on its own page, drawn by
+  the same document renderer as a tab. One bar on top: back to the Library, the name (rename in place), star, and View,
+  Comments (count and unread dot), Share and Details. Comments, Share and Details open as sheets under the bar, never a
+  side panel. Details: "File details" (type, size, the containing folder with the full path on hover and a copy
+  button, workspace, who added it, dates), "Description" with tags (`library_update` on blur or Enter), and Discard…
+  or Restore. Share: "Who has access" (one row per live link naming who it lets in, its role, expiry and where it
+  lives, with Copy link and Manage access; never the URL) and Share…. Comments: every thread in place order,
+  numbered as on the file; picking one closes the sheet and opens it where it sits.
+- **Shared comments on the file.** People's comments are drawn on the artifact by the annotation kit's comment layer:
+  numbered marks on the picture or page, on the timeline lane at their time, drawings on the frame at their time and
+  highlighted passages (`artifact-threads.ts` groups a link's comments by anchor into threads). Clicking a mark seeks
+  there and opens its thread: author, time, body, and a reply field that posts through `share_reply` with the
+  thread's anchor so the reply joins it. New ones stay highlighted while shown and are marked read
+  (`share_mark_read`). The owner's own annotation for the agent works on the page as in a tab.
 - **Discard** explains that the artifact leaves the library and its links stop working; "Also move the file to the
   Recycle Bin/Trash" starts at `library_discard_default`'s answer (ticked unless git tracks the file).
 - **Share.** "Where the link lives" is three choices, each one card: **Dimension cloud** (default when it answers:
@@ -233,7 +238,7 @@ The pane lives in `app/view/library/`:
   expiry that apply at once through `share_update`; ⋯ holds Update link (`share_new_version`) and Stop sharing
   (`share_revoke`); a hosted link whose file changed since its version shows "The file changed since you shared it."
 - **Keyboard.** `/` search, arrows / Home / End / PageUp / PageDown move, Enter opens, `s` stars, Delete discards,
-  Escape closes the drawer; ArrowDown or Enter in the search field moves into the grid.
+  Escape closes an open sheet, then the artifact page; ArrowDown or Enter in the search field moves into the grid.
 
 ## Sharing (doc 103 §5)
 
@@ -319,7 +324,7 @@ deny-by-default for everything a human did not click.
 | Any other document | 128 MiB (text: the first 1 MiB) | `DOCUMENT_LIMIT`, `TEXT_LIMIT` (`document-bytes.ts`) |
 | An HTML page that starts with Pick in hand | 2 MiB; larger starts with Pick down | `PICK_FRAME_LIMIT` (`document-bytes.ts`) |
 | A waveform | WAV or strict MP3 only; file 32 MiB, decoded 96 MiB at 22.05 kHz, 8 channels, MP3 545 s; one decode at a time; everything else a flat track; a file is read whole only when its first bytes are a WAV, an ID3 tag or an MPEG frame | `media-waveform.ts` |
-| A video filmstrip | 16 thumbnails, 160 px long edge; 4 files cached | `MAX_FILM_SLOTS`, `media-frame.ts`, `media-filmstrip.ts` |
+| A video filmstrip | 16 thumbnails, 160 px long edge; 4 files cached | `MAX_FILM_SLOTS`, `FilmstripCache` (the kit: `film-geometry.ts`, `filmstrip.ts`) |
 | Notes on one file | 24 | `MAX_MARKS`, `MAX_COMMENTS`, `MAX_ELEMENT_PICKS`, `MAX_TIMELINE_MARKS` |
 | Pictures in one request | 4, 2 MiB each, 4 MiB together | the host's image caps, held by the kit |
 | A share upload | 4 chunks in flight, 1 MiB each; a chunk is tried 5 times (0.4 s base, 15 s cap, jittered) | `UPLOAD_CONCURRENCY` (`upload.ts`), `DEFAULT_RETRY` (`host-api.ts`) |

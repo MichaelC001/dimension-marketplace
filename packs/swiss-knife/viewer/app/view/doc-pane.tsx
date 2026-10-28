@@ -11,7 +11,7 @@ import type { App } from "@modelcontextprotocol/ext-apps";
 import { cn } from "@fraym/ui/lib/cn";
 import { useEffect, useMemo, useState } from "react";
 import { createToolCaller } from "@dimension/mcp-app-kit/tools";
-import { createAnnotationStore } from "@dimension/mcp-app-kit/annotate";
+import { createAnnotationStore } from "@dimension/mcp-app-kit/annotate/store";
 import { mediaSourceSchema, renewedMediaSchema } from "../../src/contract";
 import { loadDocumentBytes, readLimit } from "./document-bytes";
 import { shownMode } from "./annotate-modes";
@@ -22,6 +22,7 @@ import { loadRenderer } from "./renderers";
 import { Opening } from "./opening";
 import type { Mounted, RecordingSource, Theme } from "./renderers/types";
 import { PaneExtras } from "./pane-extras";
+import type { SharedLayer } from "./pane-shared";
 import type { DocTab } from "./tabs";
 import { KIND_LABEL, Toolbar } from "./toolbar";
 import { useCopied } from "./use-copied";
@@ -38,9 +39,11 @@ export interface DocPaneProps {
 	readonly tab: DocTab;
 	readonly active: boolean;
 	readonly theme: Theme;
+	readonly embedded?: boolean;
+	readonly shared?: SharedLayer;
 }
 
-export function DocPane({ app, tab, active, theme }: DocPaneProps) {
+export function DocPane({ app, tab, active, theme, embedded = false, shared }: DocPaneProps) {
 	const store = useMemo(() => createAnnotationStore(app), [app]);
 	// State, not `useRef`: a layer on top needs to RE-RENDER when the stage or the
 	// mounted renderer appears, and a ref change re-renders nothing.
@@ -165,6 +168,7 @@ export function DocPane({ app, tab, active, theme }: DocPaneProps) {
 	return (
 		<div className={active ? "relative flex h-full min-h-0 flex-col" : "hidden"} data-slot="viewer-pane" data-key={tab.key} data-annotate={modeShown ?? undefined}>
 			<Toolbar
+				bare={embedded}
 				filename={tab.filename}
 				path={tab.path}
 				kind={tab.kind}
@@ -196,7 +200,7 @@ export function DocPane({ app, tab, active, theme }: DocPaneProps) {
 						/>
 					) : null}
 				</div>
-				<PaneExtras app={app} store={store} tab={tab} active={active} ready={phase.name === "ready"} frame={frame} mode={modeShown} />
+				<PaneExtras app={app} store={store} tab={tab} active={active} ready={phase.name === "ready"} frame={frame} mode={modeShown} {...(shared === undefined ? {} : { shared })} />
 			</div>
 		</div>
 	);

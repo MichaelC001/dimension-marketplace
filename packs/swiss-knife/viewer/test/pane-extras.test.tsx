@@ -9,6 +9,7 @@ import * as react from "react";
 import { createElement } from "react";
 import * as jsxDevRuntime from "react/jsx-dev-runtime";
 import * as jsxRuntime from "react/jsx-runtime";
+import * as reactDom from "react-dom";
 import type { ViewerKind } from "../src/contract";
 import * as realBytes from "../app/view/document-bytes";
 import type { PaneExtras as PaneExtrasComponent } from "../app/view/pane-extras";
@@ -25,6 +26,7 @@ for (const [id, real] of [
 	["react", react],
 	["react/jsx-runtime", jsxRuntime],
 	["react/jsx-dev-runtime", jsxDevRuntime],
+	["react-dom", reactDom],
 ] as const) {
 	mock.module(Bun.resolveSync(id, kitSource), () => real);
 }

@@ -1,8 +1,10 @@
 // The annotation modes, pane props, renderer slot lookup, toolbar and footer seats.
 import type { App } from "@modelcontextprotocol/ext-apps";
 import type { AnnotationStore } from "@dimension/mcp-app-kit/annotate";
+import type { ThreadPlaces, ThreadReply } from "@dimension/mcp-app-kit/annotate/react";
 import { type ReactNode, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
+import type { PlacedThread } from "./library/artifact-threads";
 import type { DocTab } from "./tabs";
 
 /** The annotation modes: marks on a picture, comments on text, picked elements on a page, notes on a recording's
@@ -21,6 +23,15 @@ export interface PaneExtrasProps {
 	readonly frame: HTMLElement | null;
 	/** The mode the layer is up in: the kind's primary mode while there is something to mark, `null` while it did not open. */
 	readonly mode: AnnotateMode | null;
+	readonly shared?: SharedLayer;
+}
+
+export interface SharedLayer {
+	readonly threads: readonly PlacedThread[];
+	readonly places: ThreadPlaces<PlacedThread>;
+	readonly openId: string | null;
+	readonly onOpen: (id: string | null) => void;
+	readonly onReply: ThreadReply;
 }
 
 /** The element a renderer marked with `selector`, looked up again whenever it re-mounts. */

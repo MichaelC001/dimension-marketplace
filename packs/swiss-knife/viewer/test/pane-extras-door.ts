@@ -14,6 +14,7 @@ import { mock } from "bun:test";
 import * as react from "react";
 import * as jsxDevRuntime from "react/jsx-dev-runtime";
 import * as jsxRuntime from "react/jsx-runtime";
+import * as reactDom from "react-dom";
 import type * as PaneExtrasModule from "../app/view/pane-extras";
 import type { PaneExtrasProps } from "../app/view/pane-shared";
 
@@ -28,6 +29,7 @@ export async function silencePaneExtras(stand: (props: PaneExtrasProps) => null 
 		["react", react],
 		["react/jsx-runtime", jsxRuntime],
 		["react/jsx-dev-runtime", jsxDevRuntime],
+		["react-dom", reactDom],
 	] as const) {
 		mock.module(Bun.resolveSync(id, kitSource), () => real);
 	}

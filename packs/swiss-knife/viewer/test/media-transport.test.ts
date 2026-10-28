@@ -7,21 +7,22 @@
 // it; when the lane took the position as a prop, every frame rebuilt its waveform, cells and markers).
 //
 // Rendered for real (linkedom + react-dom under `act`) over a stand-in media element; animation frames are a queue the
-// test runs by hand. Two stand-ins on the way in: the IconButton (every one in the strip counts its own renders, which
-// is how "the strip was not drawn again" is seen) and the kit's two lanes (each counts its renders, records the props it
+// test runs by hand. Stand-ins on the way in: the kit's Transport (counts its own renders, which is how "the strip was
+// not drawn again" is seen; it draws the real one) and the kit's two lanes (each counts its renders, records the props it
 // is drawn with, so a seek, a note or a stretch can be sent to the transport the way the lane sends it, and listens to
 // the playhead it is given the way the real lane does: writing the value into its own node, drawing nothing). The real
-// lanes are the kit's own test subjects. Bun cannot lift a module mock, so both stay installed for the rest of the run:
-// the lanes' stand-in sits over the REAL kit module (spread under them), so a test that loads the kit's other React
-// parts after this file still finds them; and no other viewer test renders the kit's lanes or the IconButton.
+// lanes are the kit's own test subjects. Bun cannot lift a module mock, so they stay installed for the rest of the run:
+// the stand-ins sit over the REAL kit module (spread under them), so a test that loads the kit's other React parts after
+// this file still finds them. The pane owns the playhead (`useMediaPosition`), so a small host here owns it for the transport.
 import { dirname } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, mock, test } from "bun:test";
-import { type FilmFrame, formatTimecode, type TimelineMark } from "@dimension/mcp-app-kit/annotate";
-import type { FilmLaneProps, NoteCloseReason, WaveLaneProps } from "@dimension/mcp-app-kit/annotate/react";
+import { createPlayhead, type FilmFrame, FULL_SENTENCE, formatTimecode, type TimelineMark } from "@dimension/mcp-app-kit/annotate";
+import type { FilmLaneProps, NoteCloseReason, TransportProps, WaveLaneProps } from "@dimension/mcp-app-kit/annotate/react";
 import * as react from "react";
 import { createElement, type ReactNode, useEffect, useRef } from "react";
 import * as jsxDevRuntime from "react/jsx-dev-runtime";
 import * as jsxRuntime from "react/jsx-runtime";
+import * as reactDom from "react-dom";
 import { UNBOUNDED_SENTENCE } from "../app/view/media-length";
 import type * as Transport from "../app/view/media-transport";
 import { installReact, type ReactEnv } from "./media-react";
@@ -37,6 +38,7 @@ for (const [id, real] of [
 	["react", react],
 	["react/jsx-runtime", jsxRuntime],
 	["react/jsx-dev-runtime", jsxDevRuntime],
+	["react-dom", reactDom],
 ] as const) {
 	mock.module(Bun.resolveSync(id, kitSource), () => real);
 }
@@ -47,7 +49,8 @@ type LaneProps = FilmLaneProps | WaveLaneProps;
 
 let env: ReactEnv;
 let transport: typeof Transport;
-/** How many times any button of the strip has been drawn. */
+let useMediaPosition: (media: HTMLMediaElement, live: boolean) => Transport.MediaTransportProps["playhead"];
+/** How many times the strip of buttons has been drawn. */
 let buttonRenders = 0;
 /** How many times either lane has been drawn. */
 let laneRenders = 0;
@@ -73,15 +76,17 @@ beforeAll(async () => {
 	env = await installReact();
 	// Dynamic by necessity: the kit binds React when it loads, and react-dom (loaded by `installReact`) decides once, then, whether there is a DOM.
 	const realKit = await import(KIT);
-	// The transport binds these modules when it loads, so the stand-ins are installed first (and it is imported after).
-	mock.module("@fraym/ui/elements/icon-button", () => ({
-		IconButton: ({ children, variant: _variant, toggled: _toggled, asChild: _asChild, ...rest }: Record<string, unknown>) => {
-			buttonRenders += 1;
-			return createElement("button", rest, children as ReactNode);
-		},
-	}));
+	// Taken BEFORE the mock goes in: `mock.module` rewrites the exports of a module that is already loaded IN PLACE, so
+	// `realKit.Transport` read afterwards is the stand-in itself, and a stand-in that draws "the real one" through that
+	// name draws itself, forever.
+	const { Transport: RealTransport, useMediaPosition: realUseMediaPosition } = realKit;
+	useMediaPosition = realUseMediaPosition;
 	mock.module(KIT, () => ({
 		...realKit,
+		Transport: (props: TransportProps) => {
+			buttonRenders += 1;
+			return createElement(RealTransport, props);
+		},
 		FilmLane: (props: FilmLaneProps) => {
 			film = props;
 			return useStandIn("film-lane", props);
@@ -157,9 +162,16 @@ interface Over {
 	readonly onRemove?: (id: number) => void;
 }
 
+type HostProps = Omit<Transport.MediaTransportProps, "playhead"> & { readonly live: boolean };
+
+function Host({ live, ...props }: HostProps): ReactNode {
+	const playhead = useMediaPosition(props.media, live);
+	return createElement(transport.MediaTransport, { ...props, playhead });
+}
+
 function transportOf(media: FakeMedia, over: Over = {}) {
 	const { kind = "video", live = true, filename = "clip.mp4", marks = [], activeId = null, onSelectMark = () => {}, onNote = () => {}, openId = null, onClose = () => {}, onRemove = () => {}, marking = null } = over;
-	return createElement(transport.MediaTransport, {
+	return createElement(Host, {
 		media: asElement(media),
 		kind,
 		filename,
@@ -224,7 +236,7 @@ function filmLane(): FilmLaneProps {
 const slider = (container: HTMLElement) => container.querySelector('[role="slider"]');
 const heard = (container: HTMLElement) => Number(slider(container)?.getAttribute("aria-valuenow"));
 /** The elapsed time the clock prints (the part before the total). */
-const clock = (container: HTMLElement) => container.querySelector('[data-slot="viewer-time"]')?.firstElementChild?.textContent;
+const clock = (container: HTMLElement) => container.querySelector('[data-slot="transport-time"]')?.firstElementChild?.textContent;
 const hintOf = (container: HTMLElement) => container.querySelector('[data-slot="viewer-transport-hint"]');
 const buttonNamed = (container: HTMLElement, name: RegExp): Element | null =>
 	Array.from(container.querySelectorAll("button")).find(button => name.test(button.getAttribute("aria-label") ?? "")) ?? null;
@@ -483,7 +495,7 @@ describe("what the strip offers", () => {
 			media.seekable = rangesEndingAt(40);
 		}
 		const { container } = await env.mount(transportOf(media, { marking }));
-		expect(container.querySelector('[data-slot="viewer-time"]')?.textContent).toBe(text);
+		expect(container.querySelector('[data-slot="transport-time"]')?.textContent).toBe(text);
 		expect(container.querySelector('[data-slot="viewer-transport-note"]')?.textContent ?? null).toBe(sentence);
 	});
 });
@@ -503,7 +515,7 @@ describe("the hint over the picture", () => {
 		["with nothing to say while they are all used: drawn nowhere", true, null, false],
 	] as const)("%s", async (_what, full, said, floats) => {
 		// The constant is the transport's own: what the pane toolbar says in its place.
-		const hint = said === "SENTENCE" ? transport.FULL_SENTENCE : said;
+		const hint = said === "SENTENCE" ? FULL_SENTENCE : said;
 		const { container } = await env.mount(transportOf(new FakeMedia(), { marking: markingOf({ full, hint }).marking }));
 		const node = hintOf(container);
 		expect(node?.getAttribute("role")).toBe("status");
@@ -607,7 +619,7 @@ describe.each(KINDS)("a seek from the %s lane", kind => {
 
 describe("the playhead", () => {
 	test("tells its watchers when it moves, and not when it is put where it already is", () => {
-		const playhead = transport.createPlayhead(2);
+		const playhead = createPlayhead(2);
 		let told = 0;
 		const stop = playhead.subscribe(() => {
 			told += 1;

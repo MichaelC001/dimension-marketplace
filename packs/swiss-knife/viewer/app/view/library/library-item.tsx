@@ -1,9 +1,10 @@
+import { formatDuration } from "@dimension/sdk/artifact-share";
 import { Icon } from "@fraym/ui/icons";
 import { cn } from "@fraym/ui/lib/cn";
 import { memo, useState } from "react";
 import type { LibraryItem } from "../../../../src/library/types";
 import { formatBytes } from "../format";
-import { formatDuration, KIND_LOOK, relativeAge } from "./kinds";
+import { KIND_LOOK, relativeAge } from "./kinds";
 import { liveShares, unreadCount } from "./query";
 
 export interface ItemViewProps {

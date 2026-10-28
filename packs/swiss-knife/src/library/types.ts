@@ -1,4 +1,4 @@
-import type { Audience } from "@dimension/sdk/artifact-share";
+import type { Audience, CommentAnchor } from "@dimension/sdk/artifact-share";
 import type { PresentedKind } from "@dimension/sdk/presentation";
 
 export type ArtifactId = string;
@@ -32,7 +32,7 @@ export interface CommentRow {
 	readonly shareId: string;
 	readonly author: string;
 	readonly body: string;
-	readonly anchor?: unknown;
+	readonly anchor?: CommentAnchor;
 	readonly version: number;
 	readonly createdAt: EpochMs;
 	readonly readAt?: EpochMs;

@@ -14,12 +14,11 @@
 //     for the pane to seek to its frame (a drawing that is not on screen has no place to hang a popover from).
 // The overlay is the kit's: it takes no input unless a tool is armed, so with none in hand a click on the picture
 // still plays and pauses it, and the badges on the drawings are the only parts of it a press reaches.
-import { frameKey, type MarkShape, type MarkTool, type TimelineMark } from "@dimension/mcp-app-kit/annotate";
+import { drawnOnFrame, frameKey, type MarkShape, type MarkTool, type PlayheadSource, type TimelineMark } from "@dimension/mcp-app-kit/annotate";
 import { MarkupOverlay } from "@dimension/mcp-app-kit/annotate/react";
 import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
-import { type DrawnRect, drawnOnFrame, drawnRect } from "./media-frame";
-import { useMediaPosition, useMediaState } from "./media-transport";
+import { type DrawnRect, drawnRect } from "./media-frame";
 
 const NO_RECT: DrawnRect = { left: 0, top: 0, width: 0, height: 0 };
 
@@ -72,8 +71,7 @@ export function useDrawnRect(video: HTMLVideoElement): DrawnRect {
 
 export interface DrawLayerProps {
 	readonly video: HTMLVideoElement;
-	/** The pane is on screen and the page is visible: only then is the playhead animated. */
-	readonly live: boolean;
+	readonly playhead: PlayheadSource;
 	/** Every note on the recording, in time order; the ones with a shape are the drawings. */
 	readonly marks: readonly TimelineMark[];
 	/** The armed drawing tool, or `null` to show the drawings without taking input. */
@@ -102,10 +100,8 @@ export interface DrawLayerProps {
 	readonly onRemove: (id: number) => void;
 }
 
-export function DrawLayer({ video, live, marks, tool, activeId, filename, frameSeconds, drawingTime, onBegin, onShape, openId, onOpen, onNote, onRemove }: DrawLayerProps): ReactNode {
+export function DrawLayer({ video, playhead, marks, tool, activeId, filename, frameSeconds, drawingTime, onBegin, onShape, openId, onOpen, onNote, onRemove }: DrawLayerProps): ReactNode {
 	const stage = video.parentElement;
-	const state = useMediaState(video);
-	const playhead = useMediaPosition(video, state.playing, live);
 	const rect = useDrawnRect(video);
 
 	// What the playhead says that the layer draws, as a string, so it is drawn again when THAT changes and not each frame:

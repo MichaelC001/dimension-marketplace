@@ -15,15 +15,15 @@
 // them working.
 import { dirname } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, mock, test } from "bun:test";
-import { formatMarkTime, type MarkShape, MAX_TIMELINE_MARKS, type TimelineMark } from "@dimension/mcp-app-kit/annotate";
+import { formatMarkTime, FrameGrabber, frameStepTarget, FULL_SENTENCE, insideFrame, type MarkShape, MAX_TIMELINE_MARKS, type TimelineMark } from "@dimension/mcp-app-kit/annotate";
 import type { FilmLaneProps, MarkupOverlayProps, WaveLaneProps } from "@dimension/mcp-app-kit/annotate/react";
 import type { App } from "@modelcontextprotocol/ext-apps";
 import * as react from "react";
 import { createElement } from "react";
 import * as jsxDevRuntime from "react/jsx-dev-runtime";
 import * as jsxRuntime from "react/jsx-runtime";
+import * as reactDom from "react-dom";
 import type { TimelineMarks as TimelineMarksComponent } from "../app/view/pane-extras-timeline";
-import { FrameGrabber, frameStepTarget, insideFrame } from "../app/view/media-frame";
 import type { PaneExtrasProps } from "../app/view/pane-shared";
 import type { DocTab } from "../app/view/tabs";
 import { installReact, type ReactEnv } from "./media-react";
@@ -39,6 +39,7 @@ for (const [id, real] of [
 	["react", react],
 	["react/jsx-runtime", jsxRuntime],
 	["react/jsx-dev-runtime", jsxDevRuntime],
+	["react-dom", reactDom],
 ] as const) {
 	mock.module(Bun.resolveSync(id, kitSource), () => real);
 }
@@ -55,7 +56,6 @@ const PLAYED = [1.8, 1.84, 1.88, 1.92, 1.96];
 
 let env: ReactEnv;
 let TimelineMarks: typeof TimelineMarksComponent;
-let FULL_SENTENCE: string;
 const restores: (() => void)[] = [];
 
 /** The props each stand-in was last drawn with. */
@@ -186,7 +186,6 @@ beforeAll(async () => {
 		},
 	}));
 	({ TimelineMarks } = await import("../app/view/pane-extras-timeline"));
-	({ FULL_SENTENCE } = await import("../app/view/media-transport"));
 });
 afterEach(async () => {
 	await env.cleanup();
@@ -509,7 +508,7 @@ describe("the one toolbar", () => {
 
 		expect(at.bar).toBeNull();
 		expect(at.notice).toBeNull();
-		expect(at.dock.querySelector('[data-slot="viewer-transport"]')).not.toBeNull();
+		expect(at.dock.querySelector('[data-slot="transport"]')).not.toBeNull();
 		// The lane is handed nothing to mark with.
 		if (kind === "video") expect(film?.onSpan).toBeUndefined();
 		else expect(wave?.onComment).toBeUndefined();
@@ -1553,7 +1552,7 @@ describe("notes and their recording", () => {
 		const second = at.replaceMedia();
 		await at.update({ ready: true });
 		expect(at.headings).toEqual(["0:04.0"]);
-		expect(at.dock.querySelector('[data-slot="viewer-transport"]')).not.toBeNull();
+		expect(at.dock.querySelector('[data-slot="transport"]')).not.toBeNull();
 
 		first.currentTime = 20;
 		second.currentTime = 9;

@@ -16796,7 +16796,7 @@ var LiveChannel = class {
 var plugin_default = {
   $schema: "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   name: "browser",
-  version: "0.9.4",
+  version: "0.9.5",
   description: "A real browser beside your chat that your agent drives while you watch. Tabs, persistent logged-in profiles, circle-to-annotate, and an optional fast task agent (jev).",
   keywords: [
     "browser",
