@@ -934,6 +934,12 @@ artifact column beside the chat, or selects that tab when it is already open. In
 space whose dock offers nothing but Browser, the top-bar dock control is that entry:
 its button reads **Browser** and opens the View.
 
+Opening it follows the chat's permission mode, like the agent's own `browser_view`: Full
+access and Ask on commands open it at once; Ask on edits & commands asks first, in the words
+`browser_view` declares (`ai.insodimension/approvalSummary`): "Open the browser with your
+default profile". **Always allow** is saved as `tools.approval.mcp__browser_view: allow`
+(Settings, General, Advanced, Approvals) and holds across restarts.
+
 The View has its own address bar and profile menu. Signing in, switching and adding
 profiles, and the summary of where each profile is signed in (the first sites seen
 signed in, never a site's account) all belong to the Browser itself.

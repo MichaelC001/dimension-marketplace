@@ -86,6 +86,7 @@ const READ_ONLY = { readOnlyHint: true, destructiveHint: false, openWorldHint: f
 const CALLER_META_KEY = "ai.insodimension/caller";
 /** A tool carrying `"prompt"` here makes the host ask the human before every call, in every permission mode. */
 const APPROVAL_META_KEY = "ai.insodimension/approval";
+const APPROVAL_SUMMARY_META_KEY = "ai.insodimension/approvalSummary";
 /** The spaces whose MODEL may see and call a tool: the host leaves it out of every other space's tool list and refuses the call. The View is never gated by it. */
 const SPACES_META_KEY = "ai.insodimension/spaces";
 /** Publishing and task agents are Traction's: every tool a session is shown costs it tokens on every turn, and a dev session never calls these. */
@@ -392,7 +393,7 @@ export async function createBrowserServer(options: BrowserServerOptions = {}): P
     title: "Browser",
     description: "Show the human a browser you hold (browserId), or open one they can watch (profile, engine, url). Mounts the Browser View.",
     inputSchema: { browserId: capability.optional(), profile: profile.optional(), engine: z.enum(BROWSER_ENGINES).optional(), url: z.string().max(2048).optional() },
-    _meta: { ui: { resourceUri: BROWSER_VIEW_URI } },
+    _meta: { ui: { resourceUri: BROWSER_VIEW_URI }, [APPROVAL_SUMMARY_META_KEY]: ["Open the browser with your {profile} profile", "Go to {url}"] },
   // The result is a BrowserState: the View binds to whichever browser it names (a tool result is its only source of a browserId).
   }, ({ browserId, profile, engine, url }, extra) => result(async () => {
     if (browserId !== undefined && (profile !== undefined || engine !== undefined || url !== undefined)) {
