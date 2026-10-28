@@ -136,7 +136,7 @@ export class RuntimeCodeBrowsers implements CodeBrowserPort {
     return entry.code?.kind !== undefined && entry.code.kind.kind !== "headless";
   }
 
-  /** The throwaway Chromium a session already holds: one browser per session (doc 77 §7.4.3 rule 1). The saved profile a person is shown is joined before this is asked. */
+  /** The throwaway Chromium a session already holds: one browser per session (doc 77 §7.4.3 rule 1). A saved profile's is never the cell's. */
   #reusable(session: string): CodeSeamEntry | undefined {
     const shown = this.#seam.viewOf(session);
     const candidates = this.#seam.browsersOf(session).filter(entry => entry.profile === null && entry.engine === "chromium" && !entry.closed);

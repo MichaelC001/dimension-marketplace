@@ -10958,7 +10958,7 @@ var RuntimeCodeBrowsers = class {
   #attachedEntry(entry) {
     return entry.code?.kind !== void 0 && entry.code.kind.kind !== "headless";
   }
-  /** The throwaway Chromium a session already holds: one browser per session (doc 77 §7.4.3 rule 1). The saved profile a person is shown is joined before this is asked. */
+  /** The throwaway Chromium a session already holds: one browser per session (doc 77 §7.4.3 rule 1). A saved profile's is never the cell's. */
   #reusable(session) {
     const shown2 = this.#seam.viewOf(session);
     const candidates = this.#seam.browsersOf(session).filter((entry) => entry.profile === null && entry.engine === "chromium" && !entry.closed);
@@ -17146,7 +17146,7 @@ async function createBrowserServer(options = {}) {
   registerAppTool(server2, "browser_view", {
     // The View's tab is named by this title (the artifact column prefers a tool's title to the pack's label), so it names the thing, not the verb.
     title: "Browser",
-    description: "Show the human a browser you hold (browserId), or open one (profile, engine, url); no arguments shows the one open here. Mounts the Browser View.",
+    description: "Show the human a browser you hold (browserId), or open one (profile, engine, url). With none of browserId, profile or engine it shows the browser already open here, going to url when given. Mounts the Browser View.",
     inputSchema: { browserId: capability.optional(), profile: profile.optional(), engine: z3.enum(BROWSER_ENGINES).optional(), url: z3.string().max(2048).optional() },
     _meta: { ui: { resourceUri: BROWSER_VIEW_URI }, [APPROVAL_SUMMARY_META_KEY]: ["Open the browser with your {profile} profile", "Go to {url}"] }
     // The result is a BrowserState: the View binds to whichever browser it names (a tool result is its only source of a browserId).

@@ -555,7 +555,7 @@ refused (`profile_locked`), because two Chromes would fork the jar.
 
 A profile's sign-ins are kept in its Chrome folder on disk and are still there after the browser closes and opens again. A `browser_run` cell is full Node running as you, so it can read a profile's files (`chrome/`, `credentials.json`, and in the browser root `credentials.key`); that is equal to OMP's built-in eval browser (doc 77 §7.8 decision 1).
 
-**Where `browser.open` lands.** With no `profile` and no `app`, a `browser_run` cell's `browser.open` opens a tab in the browser the chat already holds: the one the person is shown (`browser_view`, the dock's Browser panel), a saved profile's included, else the chat's own throwaway, so "open this in the browser panel" lands in the panel. `browser_view` with no arguments shows that same browser instead of opening a second one. Name a `profile` or an `app` to go somewhere else.
+**Where `browser.open` lands.** With no `profile` and no `app`, a `browser_run` cell's `browser.open` opens a tab in the saved Chromium profile the person is shown (`browser_view`, the dock's Browser panel), else in the chat's own throwaway, so "open this in the browser panel" lands in the panel. `browser_view` with none of `browserId`, `profile` or `engine` shows the browser already open here instead of opening a second one, and goes to `url` in it when one is given. Name a `profile` or an `app` to go somewhere else.
 
 **The profile menu (the View).** The toolbar's chip is the browser's profile: its avatar (the emoji
 the person chose, else the label's first letter, on the profile's colour) and its label; Private for a
