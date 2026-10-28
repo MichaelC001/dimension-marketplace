@@ -1,8 +1,8 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "brand-marks",
-	"version": "0.2.0",
-	"description": "Brand Marks — ten presence avatars (X, Reddit, YouTube, Discord, Y Combinator, Product Hunt, Bluesky, Threads, Instagram, TikTok) for the avatar slot: the official mark, unmodified at rest, with container-only motion that follows the session.",
+	"version": "0.2.1",
+	"description": "Ten brand avatars for your agents (X, Reddit, YouTube, Discord, Y Combinator, Product Hunt, Bluesky, Threads, Instagram and TikTok) that move while the agent works.",
 	"author": {
 		"name": "Dimension"
 	},

@@ -6,7 +6,7 @@ var __export = (target, all) => {
 
 // src/artifacts.ts
 import { realpath as realpath2 } from "node:fs/promises";
-import { resolve as resolve2 } from "node:path";
+import { basename as basename2, dirname, join, resolve as resolve2 } from "node:path";
 
 // ../../../packages/sdk/src/type-guards.ts
 function isRecord(value) {
@@ -732,14 +732,10 @@ async function locate(library, params, cwd) {
   }
   if (params.path === void 0) throw new LibraryError("pass id or path");
   const lexical = resolve2(cwd, params.path);
-  const real = await realpath2(lexical).catch(() => lexical);
+  const real = await realpath2(lexical).catch(async () => join(await realpath2(dirname(lexical)).catch(() => dirname(lexical)), basename2(lexical)));
   const found = library.getByPath(real);
   if (found === void 0) throw new LibraryError(`${oneLine(params.path, MAX_PATH)} is not in the library`);
   return found;
-}
-function requireId(params) {
-  if (params.id === void 0) throw new LibraryError(`${params.op} needs an id`);
-  return params.id;
 }
 var percent = (unit) => Math.round(unit * 100);
 function anchorDetail(anchor) {
@@ -788,7 +784,7 @@ async function runArtifacts(library, params, context) {
       return `Added ${describeItem(item, now)}`;
     }
     case "update": {
-      const item = library.update(requireId(params), {
+      const item = library.update((await locate(library, params, cwd)).id, {
         ...params.title === void 0 ? {} : { title: params.title },
         ...params.note === void 0 ? {} : { note: params.note },
         ...params.tags === void 0 ? {} : { tags: params.tags },
@@ -797,7 +793,7 @@ async function runArtifacts(library, params, context) {
       return `Updated ${describeItem(item, now)}`;
     }
     case "discard": {
-      const outcome = await library.discard(requireId(params), { trash: params.trash === true });
+      const outcome = await library.discard((await locate(library, params, cwd)).id, { trash: params.trash === true });
       const lines = [`Discarded ${oneLine(outcome.item.name, MAX_NAME)}.`];
       if (outcome.revoked > 0) lines.push(`${outcome.revoked} share link${outcome.revoked === 1 ? "" : "s"} revoked.`);
       for (const share of outcome.unrevoked) lines.push(`A ${share.host} link could not be revoked remotely: ${oneLine(share.reason, MAX_FIELD)}`);
@@ -806,9 +802,9 @@ async function runArtifacts(library, params, context) {
       return lines.join(" ");
     }
     case "restore":
-      return `Restored ${describeItem(library.restore(requireId(params)), now)}`;
+      return `Restored ${describeItem(library.restore((await locate(library, params, cwd)).id), now)}`;
     case "comments": {
-      const found = library.comments.forArtifact(requireId(params), { unread: params.unread === true });
+      const found = library.comments.forArtifact((await locate(library, params, cwd)).id, { unread: params.unread === true });
       if (found.length === 0) return params.unread === true ? "No new comments." : "No comments.";
       library.comments.markRead(
         found.map((comment) => comment.id),
@@ -883,7 +879,7 @@ import { homedir } from "node:os";
 // src/library/library.ts
 import { constants as constants2, statSync as statSync2 } from "node:fs";
 import { chmod as chmod2, mkdir as mkdir2, open as open3, realpath as realpath3, stat as stat2 } from "node:fs/promises";
-import { basename as basename3, isAbsolute, join as join3, resolve as resolve5 } from "node:path";
+import { basename as basename4, isAbsolute, join as join4, resolve as resolve5 } from "node:path";
 
 // src/library/cursor.ts
 function encodeCursor(position) {
@@ -1353,7 +1349,7 @@ async function moveToTrash(path, platform = process.platform) {
 // src/library/thumbs.ts
 import { randomBytes } from "node:crypto";
 import { mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join as join2 } from "node:path";
 var EXTENSIONS = { "image/webp": "webp", "image/png": "png", "image/jpeg": "jpg" };
 var THUMB_FILE_NAME = /^[A-Za-z0-9]{8,40}\.(webp|png|jpg)$/;
 function matchesMime(bytes, mime) {
@@ -1368,10 +1364,10 @@ async function writeThumb(directory, id, bytes, mime) {
   if (!matchesMime(bytes, mime)) throw new LibraryError(`the thumbnail bytes are not ${mime}`);
   await mkdir(directory, { recursive: true });
   const name = `${id}.${EXTENSIONS[mime]}`;
-  const staging = join(directory, `${name}.${randomBytes(6).toString("hex")}.tmp`);
+  const staging = join2(directory, `${name}.${randomBytes(6).toString("hex")}.tmp`);
   try {
     await writeFile(staging, bytes);
-    await rename(staging, join(directory, name));
+    await rename(staging, join2(directory, name));
   } catch (error51) {
     await rm(staging, { force: true });
     throw error51;
@@ -1388,12 +1384,12 @@ async function removeThumbs(directory, id, keep) {
     throw error51;
   }
   const own = entries.filter((entry) => entry !== keep && entry.startsWith(`${id}.`));
-  await Promise.all(own.map((entry) => rm(join(directory, entry), { force: true })));
+  await Promise.all(own.map((entry) => rm(join2(directory, entry), { force: true })));
 }
 
 // src/library/workspace-root.ts
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { basename as basename2, dirname, join as join2, relative, resolve as resolve4 } from "node:path";
+import { basename as basename3, dirname as dirname2, join as join3, relative, resolve as resolve4 } from "node:path";
 
 // ../../../node_modules/zod/v4/classic/external.js
 var external_exports = {};
@@ -15917,8 +15913,8 @@ var OwnersFile = external_exports.object({
   owners: external_exports.record(external_exports.string(), external_exports.object({ root: external_exports.string().min(1), origin: external_exports.string().min(1), mapsSubpaths: external_exports.boolean().optional() }).loose())
 }).loose();
 function createWorkspaceResolver(options) {
-  const projectsFile = options.projectsFile ?? join2(options.home, "projects.json");
-  const ledgerFile = join2(options.home, "worktree-owners.json");
+  const projectsFile = options.projectsFile ?? join3(options.home, "projects.json");
+  const ledgerFile = join3(options.home, "worktree-owners.json");
   const now = options.now ?? Date.now;
   const placed = /* @__PURE__ */ new Map();
   let roots = [];
@@ -15961,13 +15957,13 @@ function ownershipChain(start, owners) {
       const gone = recordedOwnerOf(owners, home);
       if (gone === void 0 || existsSync(gone.root)) break;
       chain.push({ path: home, at: comparable(home), worktree: comparable(gone.root) });
-      home = gone.mapsSubpaths ? join2(gone.origin, relative(gone.root, home)) : resolve4(gone.origin);
+      home = gone.mapsSubpaths ? join3(gone.origin, relative(gone.root, home)) : resolve4(gone.origin);
       continue;
     }
     chain.push({ path: home, at: comparable(home), worktree: comparable(linked.root) });
-    const origin = readText(join2(linked.gitDir, SESSION_ORIGIN_FILE))?.trim();
+    const origin = readText(join3(linked.gitDir, SESSION_ORIGIN_FILE))?.trim();
     const mapsSubpaths = !origin || comparable(origin) === comparable(linked.mainCheckout);
-    home = mapsSubpaths ? join2(linked.mainCheckout, relative(linked.root, home)) : resolve4(origin);
+    home = mapsSubpaths ? join3(linked.mainCheckout, relative(linked.root, home)) : resolve4(origin);
   }
   chain.push({ path: home, at: comparable(home) });
   return chain;
@@ -15985,14 +15981,14 @@ function recordedOwnerOf(owners, cwd) {
 function linkedWorktreeOf(cwd) {
   let dir = cwd;
   for (; ; ) {
-    const dotGit = join2(dir, ".git");
+    const dotGit = join3(dir, ".git");
     const entry = entryAt(dotGit);
     if (entry === "directory") return void 0;
     if (entry === "file") {
       const linked = readLinkedWorktree(dir, dotGit);
       if (linked !== "not-linked") return linked;
     }
-    const parent = dirname(dir);
+    const parent = dirname2(dir);
     if (parent === dir) return void 0;
     dir = parent;
   }
@@ -16001,11 +15997,11 @@ function readLinkedWorktree(root, dotGit) {
   const gitDirRef = /^gitdir:\s*(.+)$/m.exec(readText(dotGit) ?? "")?.[1]?.trim();
   if (!gitDirRef) return "not-linked";
   const gitDir = resolve4(root, gitDirRef);
-  const commonRef = readText(join2(gitDir, "commondir"))?.trim();
+  const commonRef = readText(join3(gitDir, "commondir"))?.trim();
   if (!commonRef) return "not-linked";
   const commonDir = resolve4(gitDir, commonRef);
-  const configured = coreWorktree(readText(join2(commonDir, "config")));
-  const mainCheckout = configured ? resolve4(commonDir, configured) : basename2(commonDir) === ".git" ? dirname(commonDir) : void 0;
+  const configured = coreWorktree(readText(join3(commonDir, "config")));
+  const mainCheckout = configured ? resolve4(commonDir, configured) : basename3(commonDir) === ".git" ? dirname2(commonDir) : void 0;
   return mainCheckout ? { root, gitDir, mainCheckout } : void 0;
 }
 function coreWorktree(config2) {
@@ -16168,11 +16164,11 @@ async function createLibrary(options) {
   const platform = options.platform ?? process.platform;
   const revokeRemote2 = options.revokeRemote ?? revokeRemote;
   const trashFile = options.trash ?? ((path) => moveToTrash(path, platform));
-  const directory = join3(options.home, "artifacts");
-  const thumbsDirectory = join3(directory, "thumbs");
+  const directory = join4(options.home, "artifacts");
+  const thumbsDirectory = join4(directory, "thumbs");
   await mkdir2(thumbsDirectory, { recursive: true, mode: PRIVATE_DIRECTORY_MODE });
   if (process.platform !== "win32") await chmod2(directory, PRIVATE_DIRECTORY_MODE);
-  const databaseFile = join3(directory, "library.db");
+  const databaseFile = join4(directory, "library.db");
   const workspaceOf = createWorkspaceResolver({ home: options.home, ...options.projectsFile === void 0 ? {} : { projectsFile: options.projectsFile } });
   const db = await openDriver(databaseFile);
   try {
@@ -16337,7 +16333,7 @@ async function createLibrary(options) {
       if (!opened.isFile()) throw refuse("it is not a regular file");
       const head = Buffer.allocUnsafe(Math.min(HEAD_BYTES2, opened.size));
       const { bytesRead } = await handle.read(head, 0, head.length, 0);
-      const { kind, mime } = classifyFile(basename3(real), head.subarray(0, bytesRead));
+      const { kind, mime } = classifyFile(basename4(real), head.subarray(0, bytesRead));
       facts = { kind, mime, size: opened.size, mtimeMs: opened.mtimeMs };
     } finally {
       await handle.close();
@@ -16351,7 +16347,7 @@ async function createLibrary(options) {
       newId(moment),
       real,
       key,
-      basename3(real),
+      basename4(real),
       title,
       note,
       tags === void 0 ? null : JSON.stringify(tags),
@@ -16611,7 +16607,7 @@ async function createLibrary(options) {
     setThumb,
     thumbPath(id) {
       const name = sql("SELECT thumb FROM artifacts WHERE id = ? AND state != 'discarded'").get(id)?.thumb;
-      return name !== null && name !== void 0 && THUMB_FILE_NAME.test(name) ? join3(thumbsDirectory, name) : void 0;
+      return name !== null && name !== void 0 && THUMB_FILE_NAME.test(name) ? join4(thumbsDirectory, name) : void 0;
     },
     isLent(realPath) {
       return sql("SELECT 1 AS lent FROM artifacts WHERE path_key = ? AND state != 'discarded'").get(pathKey(realPath, platform)) !== void 0;

@@ -14,8 +14,8 @@
 			"pluginId": "agents-best-practices",
 			"title": "Agents Best Practices",
 			"icon": "packs/agents-best-practices/assets/icon.svg",
-			"description": "Agents Best Practices — provider-neutral agent-harness architecture: loops, tools, permissions, planning, memory, compaction, evals, safety",
-			"version": "0.1.1",
+			"description": "Guidance for building reliable AI agents: how they loop, use tools, plan, remember and stay safe.",
+			"version": "0.1.2",
 			"author": {
 				"name": "Dimension"
 			},
@@ -41,8 +41,8 @@
 			"pluginId": "artifactory-general-agent",
 			"title": "General Agents",
 			"icon": "bot",
-			"description": "General Agents: every agent you can run, as cards with their real faces and their week at a glance. Open one for its whole profile (face, charter, standing instructions, skills, plugins, MCP, tools, memory, home, models and safety) and edit it there, extend a pack's agent into your own, or ask the Machinist to draft one.",
-			"version": "0.4.1",
+			"description": "See every agent you can run as a card with its face and its week at a glance, open one to edit it, or ask the Machinist to draft a new one.",
+			"version": "0.4.2",
 			"author": {
 				"name": "Dimension"
 			},
@@ -64,8 +64,8 @@
 			"pluginId": "artifactory-system-monitor",
 			"title": "System Monitor",
 			"icon": "monitor",
-			"description": "System Monitor as an MCP App — the reference server from modelcontextprotocol/ext-apps, unmodified. A model-facing tool plus an app-only tool the View polls through the consent gate: the second Phase 4 pilot.",
-			"version": "0.1.2",
+			"description": "A live system monitor your agent can read and show beside your chat, as an example app for Dimension.",
+			"version": "0.1.3",
 			"author": {
 				"name": "Dimension"
 			},
@@ -86,8 +86,8 @@
 			"pluginId": "artifactory-threejs",
 			"title": "Three.js",
 			"icon": "box",
-			"description": "Three.js scenes as an MCP App — the reference server from modelcontextprotocol/ext-apps, unmodified, hosted by the Dimension engine and rendered in the artifact-view seat. The Phase 4 pilot: zero code of its own, just packaging.",
-			"version": "0.1.2",
+			"description": "3D scenes your agent can build and show beside your chat, using the standard Three.js example app.",
+			"version": "0.1.3",
 			"author": {
 				"name": "Dimension"
 			},
@@ -109,8 +109,8 @@
 			"pluginId": "brand-marks",
 			"title": "Brand Marks",
 			"icon": "packs/brand-marks/assets/icon.svg",
-			"description": "Brand Marks — ten presence avatars (X, Reddit, YouTube, Discord, Y Combinator, Product Hunt, Bluesky, Threads, Instagram, TikTok) for the avatar slot: the official mark, unmodified at rest, with container-only motion that follows the session.",
-			"version": "0.2.0",
+			"description": "Ten brand avatars for your agents (X, Reddit, YouTube, Discord, Y Combinator, Product Hunt, Bluesky, Threads, Instagram and TikTok) that move while the agent works.",
+			"version": "0.2.1",
 			"author": {
 				"name": "Dimension"
 			},
@@ -157,8 +157,8 @@
 			"source": "./packs/build",
 			"pluginId": "build",
 			"title": "Build",
-			"description": "Build - the assembled workspace. The Code space rebuilt entirely from marketplace packs: rail, thread, composer, start surface, dock, environment and switcher are all replaceable parts. Install it beside Code and swap any one of them without touching the app.",
-			"version": "0.1.7",
+			"description": "A workspace for coding put together entirely from plugins. Install it beside Code and swap any part without touching the app.",
+			"version": "0.1.8",
 			"author": {
 				"name": "Dimension"
 			},
@@ -209,8 +209,8 @@
 			"source": "./packs/chat",
 			"pluginId": "chat",
 			"title": "Chat",
-			"description": "Chat - your personal assistant, in a room of its own. A calm conversation with Aether, a rail of your past sessions, and a viewer beside it that opens the documents, slides and images it makes. No repo, no branches, no developer chrome: one layout and one space, assembled entirely from marketplace packs.",
-			"version": "0.2.4",
+			"description": "A calm space for talking to Aether, with no code or branches in sight, your past sessions listed and a viewer for the documents, slides and images it makes.",
+			"version": "0.2.5",
 			"author": {
 				"name": "Dimension"
 			},
@@ -255,8 +255,8 @@
 			"pluginId": "chat-rail",
 			"title": "Chat Rail",
 			"icon": "panel",
-			"description": "The Chat session rail: only your conversations, newest first, with a search box, a New session button and collections you make yourself to group them. No repos, branches, PR chips or recaps. Built from @fraym/ui primitives and the rail slot's channels only - no shipped rail inside.",
-			"version": "0.1.5",
+			"description": "The session list for the Chat space: only your conversations, newest first, with search, a New session button and collections you make yourself.",
+			"version": "0.1.6",
 			"author": {
 				"name": "Dimension"
 			},
@@ -281,8 +281,8 @@
 			"pluginId": "chat-thread",
 			"title": "Chat Thread",
 			"icon": "messageSquare",
-			"description": "Chat thread - the conversation and nothing else: your words, the assistant's words, and one quiet 'Worked for' line per turn. Built from the kit's StoreThread part; no tool rows except a card for a file the assistant shows you, no shipped thread inside.",
-			"version": "0.1.3",
+			"description": "The conversation view for the Chat space: your words and the assistant's, one quiet \"Worked for\" line per turn and a card for any file it shows you.",
+			"version": "0.1.4",
 			"author": {
 				"name": "Dimension"
 			},
@@ -303,8 +303,8 @@
 			"pluginId": "classic-dock",
 			"title": "Classic Dock",
 			"icon": "layers",
-			"description": "The shipped dock COLUMN as a pack — tab strip, resize handle, panel body. Fills the `dock-column` contract (a `dock` component is an instrument, i.e. one tab).",
-			"version": "0.1.1",
+			"description": "The standard right-hand panel as an installable part: its tab strip, resize handle and panel body.",
+			"version": "0.1.2",
 			"author": {
 				"name": "Dimension"
 			},
@@ -323,8 +323,8 @@
 			"pluginId": "classic-environment",
 			"title": "Classic Environment",
 			"icon": "layers",
-			"description": "The shipped environment card, installable: re-exports ENVIRONMENT_CLASSIC from @fraym/ui - live SCM scan, submodule pins, worktree verbs, Push.",
-			"version": "0.1.1",
+			"description": "The standard project panel as an installable part, with live git status, worktree actions and Push.",
+			"version": "0.1.2",
 			"author": {
 				"name": "Dimension"
 			},
@@ -343,8 +343,8 @@
 			"pluginId": "classic-rail",
 			"title": "Classic Rail",
 			"icon": "list",
-			"description": "The shipped session rail, installable: re-exports RAIL_CLASSIC from @fraym/ui - project grouping, rail actions, search, the full row model.",
-			"version": "0.1.1",
+			"description": "The standard session list as an installable part: projects, search and every row.",
+			"version": "0.1.2",
 			"author": {
 				"name": "Dimension"
 			},
@@ -363,8 +363,8 @@
 			"pluginId": "classic-start",
 			"title": "Classic Start",
 			"icon": "plus",
-			"description": "The shipped START SURFACE as a pack — the session surface's front door: hero composer, Project · Work strip, popover menus. Fills the `start` contract (a SECTION like `thread`/`composer`, resolved inside the session surface). The hero sentence comes from the space's `workspace.startCopy`, never from the kit.",
-			"version": "0.1.1",
+			"description": "The standard start screen as an installable part: the big message box and the project and where-to-work menus.",
+			"version": "0.1.2",
 			"author": {
 				"name": "Dimension"
 			},
@@ -383,8 +383,8 @@
 			"pluginId": "classic-switcher",
 			"title": "Classic Switcher",
 			"icon": "layers",
-			"description": "The shipped switcher rail as a pack — the far-left column of space marks.",
-			"version": "0.1.1",
+			"description": "The standard space switcher column as an installable part.",
+			"version": "0.1.2",
 			"author": {
 				"name": "Dimension"
 			},
@@ -403,8 +403,8 @@
 			"pluginId": "classic-workspace",
 			"title": "Classic Workspace Host",
 			"icon": "columns",
-			"description": "The shipped workspace host as a pack — the center pane's splits, tiling and overlays. The first marketplace part to ever fill the `workspace` contract.",
-			"version": "0.1.1",
+			"description": "The standard centre pane as an installable part: its splits, tiling and overlays.",
+			"version": "0.1.2",
 			"author": {
 				"name": "Dimension"
 			},
@@ -423,8 +423,8 @@
 			"pluginId": "discord",
 			"title": "Discord",
 			"icon": "packs/discord/assets/icon.svg",
-			"description": "Discord connector — list servers/channels, read and send messages via a bot token",
-			"version": "0.1.4",
+			"description": "Let your agent read and send messages in your Discord servers, using a bot you create.",
+			"version": "0.1.5",
 			"author": {
 				"name": "Dimension"
 			},
@@ -444,8 +444,8 @@
 			"source": "./packs/example-agents",
 			"pluginId": "example-agents",
 			"title": "Example Agents",
-			"description": "Example Agents - the reference pack for contributing a General Agent: one space, Example Hub, scoped to one sample marketing lead that ships off by default.",
-			"version": "0.1.3",
+			"description": "An example of how to share an agent: one space with a sample marketing lead that starts switched off.",
+			"version": "0.1.4",
 			"author": {
 				"name": "Dimension"
 			},
@@ -499,8 +499,8 @@
 			"pluginId": "face-to-face",
 			"title": "Face to face",
 			"icon": "waveform",
-			"description": "Face to face — talk to your agent and watch it answer: a full-screen halftone face that lip-syncs to the real audio, captions every word as it is spoken, and a small living orb that opens it from the Chat space. Where the engine offers it, Talk live puts a realtime voice on the same face, with the same live call bar the composer shows below it: it chats with you and hands the work to your agent.",
-			"version": "0.1.6",
+			"description": "Talk to your agent and watch it answer: a full-screen face that lip-syncs to the real audio and captions every word as it is spoken. Where available, Talk live adds a real-time voice.",
+			"version": "0.1.7",
 			"author": {
 				"name": "Dimension"
 			},
@@ -524,8 +524,8 @@
 			"pluginId": "gen-fal",
 			"title": "fal.ai generators",
 			"icon": "packs/gen-fal/assets/icon.svg",
-			"description": "3D generators from fal.ai behind one key: Pixal3D, TRELLIS.2, Rodin 2.5, Meshy-6, Hunyuan 3.1 (image-to-3D, part splitter, smart topology) and Tripo P2, with live option schemas, prices and a quote before every job",
-			"version": "0.1.1",
+			"description": "Turn pictures into 3D models with the generators on fal.ai, using one key. You see the price before every job.",
+			"version": "0.1.2",
 			"author": {
 				"name": "Dimension"
 			},
@@ -564,8 +564,8 @@
 			"pluginId": "gen-local-3d",
 			"title": "Local image-to-3D",
 			"icon": "packs/gen-local-3d/assets/icon.svg",
-			"description": "Image-to-3D on this machine's GPU: Pixal3D (single view) and TRELLIS.2 through pixal3d.cpp's trellis-cli. No account, no key, no cost per model.",
-			"version": "0.1.1",
+			"description": "Turn pictures into 3D models on your own graphics card. No account, no key and no per-model cost.",
+			"version": "0.1.2",
 			"author": {
 				"name": "Dimension"
 			},
@@ -599,8 +599,8 @@
 			"pluginId": "gen-tripo",
 			"title": "Tripo 3D generation",
 			"icon": "packs/gen-tripo/assets/icon.svg",
-			"description": "Tripo 3D generation on Tripo's own pay-per-use API: image or multiview to 3D, part separation, retopology, auto-rig, animation retarget and format conversion, chained by Tripo task id",
-			"version": "0.1.1",
+			"description": "Make 3D models from one or more pictures with Tripo, then split, rig, animate and convert them. You pay Tripo per use with your own key.",
+			"version": "0.1.2",
 			"author": {
 				"name": "Dimension"
 			},
@@ -636,8 +636,8 @@
 			"pluginId": "gen-wavespeed",
 			"title": "WaveSpeed generators",
 			"icon": "packs/gen-wavespeed/assets/icon.svg",
-			"description": "3D generators from WaveSpeed AI behind one key: Tripo P2 and H3.1, Meshy 6 and 7.1, Rodin 2.5, TRELLIS.2 and Hunyuan3D 3 / 3.1, with live option schemas, live prices and a quote before every job",
-			"version": "0.1.1",
+			"description": "Turn pictures into 3D models with the generators on WaveSpeed AI, using one key. You see the price before every job.",
+			"version": "0.1.2",
 			"author": {
 				"name": "Dimension"
 			},
@@ -673,8 +673,8 @@
 			"pluginId": "github",
 			"title": "GitHub",
 			"icon": "packs/github/assets/icon.svg",
-			"description": "GitHub connector — issues, PRs, releases, repos, and search via the gh CLI",
-			"version": "0.1.1",
+			"description": "Let your agent work with GitHub issues, pull requests, releases and repositories, using the gh tool on your computer.",
+			"version": "0.1.2",
 			"author": {
 				"name": "Dimension"
 			},
@@ -697,8 +697,8 @@
 			"pluginId": "gmail",
 			"title": "Gmail",
 			"icon": "packs/gmail/assets/icon.svg",
-			"description": "Email connector — read/search/compose/reply over IMAP/SMTP via himalaya",
-			"version": "0.1.2",
+			"description": "Let your agent read, search, write and reply to email in your mailbox.",
+			"version": "0.1.3",
 			"author": {
 				"name": "Dimension"
 			},
@@ -720,8 +720,8 @@
 			"pluginId": "google-calendar",
 			"title": "Google Calendar",
 			"icon": "packs/google-calendar/assets/icon.png",
-			"description": "Manage Google Calendar events and schedules",
-			"version": "0.1.4",
+			"description": "Let your agent manage your Google Calendar events and schedule.",
+			"version": "0.1.5",
 			"author": {
 				"name": "Dimension"
 			},
@@ -743,8 +743,8 @@
 			"pluginId": "google-drive",
 			"title": "Google Drive",
 			"icon": "packs/google-drive/assets/icon.svg",
-			"description": "Google Drive connector — list/search/read files via OAuth",
-			"version": "0.1.3",
+			"description": "Let your agent list, search and read the files in your Google Drive.",
+			"version": "0.1.4",
 			"author": {
 				"name": "Dimension"
 			},
@@ -765,8 +765,8 @@
 			"pluginId": "google-meet",
 			"title": "Google Meet",
 			"icon": "packs/google-meet/assets/icon.svg",
-			"description": "Create Google Meet spaces, read conference records/recordings/transcripts, and live-transcribe a call",
-			"version": "0.1.3",
+			"description": "Create Google Meet meetings, read their recordings and transcripts, and transcribe a call as it happens.",
+			"version": "0.1.4",
 			"author": {
 				"name": "Dimension"
 			},
@@ -789,8 +789,8 @@
 			"pluginId": "google-workspace",
 			"title": "Google Workspace",
 			"icon": "packs/google-workspace/assets/icon.svg",
-			"description": "Google Workspace connector — read/write Sheets, Docs, and Slides via OAuth",
-			"version": "0.1.2",
+			"description": "Let your agent read and edit your Google Sheets, Docs and Slides.",
+			"version": "0.1.3",
 			"author": {
 				"name": "Dimension"
 			},
@@ -814,8 +814,8 @@
 			"pluginId": "image",
 			"title": "Image",
 			"icon": "packs/image/assets/icon.svg",
-			"description": "Image: generate and edit images with the image model role and its fallbacks, name any model for one picture, and make masks and transparent cut-outs locally.",
-			"version": "0.1.0",
+			"description": "Make and edit images, and cut out transparent backgrounds on your computer. Pick any model for a single picture.",
+			"version": "0.1.1",
 			"author": {
 				"name": "Dimension"
 			},
@@ -843,8 +843,8 @@
 			"pluginId": "impeccable",
 			"title": "Impeccable",
 			"icon": "packs/impeccable/assets/icon.svg",
-			"description": "Impeccable — design guidance for AI agents: 23 design commands (craft, polish, audit, critique, bolder, quieter, distill…), anti-slop rules, and a deterministic anti-pattern detector",
-			"version": "3.9.2",
+			"description": "Design guidance for your agent: commands to craft, polish, critique and audit a design, plus rules that keep it from producing generic-looking work.",
+			"version": "3.9.3",
 			"author": {
 				"name": "Paul Bakaus (upstream) / Dimension (port)"
 			},
@@ -869,8 +869,8 @@
 			"source": "./packs/independent-composer",
 			"pluginId": "independent-composer",
 			"title": "Independent Composer",
-			"description": "A composer built independently on the bricks tier — Fraym primitives + tokens + the store channels. Ships no shipped-implementation import.",
-			"version": "0.1.2",
+			"description": "An example message box built only from the public UI parts, to show how to build your own.",
+			"version": "0.1.3",
 			"author": {
 				"name": "Dimension"
 			},
@@ -892,8 +892,8 @@
 			"pluginId": "independent-rail",
 			"title": "Independent Rail",
 			"icon": "panel",
-			"description": "Independent session rail assembled from the published PARTS (SessionRail, the rail chrome, and the three assembly hooks) - imports no shipped rail implementation. Speaks the rail slot's specVersion 2 channel contract.",
-			"version": "0.1.2",
+			"description": "An example session list built only from the public UI parts, to show how to build your own.",
+			"version": "0.1.3",
 			"author": {
 				"name": "Dimension"
 			},
@@ -915,8 +915,8 @@
 			"pluginId": "independent-thread",
 			"title": "Independent Thread",
 			"icon": "messageSquare",
-			"description": "Independent thread section assembled from the published PARTS (Thread, SectionSessionScope, PresenceSurface, OpeningThreadSkeleton) — no shipped implementation imported.",
-			"version": "0.1.1",
+			"description": "An example conversation view built only from the public UI parts, to show how to build your own.",
+			"version": "0.1.2",
 			"author": {
 				"name": "Dimension"
 			},
@@ -935,8 +935,8 @@
 			"pluginId": "last30days",
 			"title": "last30days",
 			"icon": "packs/last30days/assets/icon.svg",
-			"description": "last30days — research what people actually said about any topic in the last 30 days across Reddit, X, YouTube, TikTok, Hacker News, and the web",
-			"version": "0.1.1",
+			"description": "Research what people actually said about any topic in the last 30 days across Reddit, X, YouTube, TikTok, Hacker News and the web.",
+			"version": "0.1.2",
 			"author": {
 				"name": "Dimension"
 			},
@@ -961,8 +961,8 @@
 			"source": "./packs/mochi-mark",
 			"pluginId": "mochi-mark",
 			"title": "Mochi Mark",
-			"description": "A mark component drawn in a declared slot of a plugin layout — the import-surface FLOOR: react only, zero @fraym/ui.",
-			"version": "0.1.2",
+			"description": "A tiny example icon that shows how a plugin draws in the space switcher.",
+			"version": "0.1.3",
 			"author": {
 				"name": "Dimension"
 			},
@@ -983,8 +983,8 @@
 			"pluginId": "pr-viewer",
 			"title": "PR Viewer",
 			"icon": "packs/pr-viewer/assets/icon.webp",
-			"description": "PR Viewer — reviews in the dock, from the Store's review keys. Installable and removable like any pack: with it a rail chip opens the review here, without it the browser.",
-			"version": "0.1.6",
+			"description": "See a pull request's review in the right-hand panel; with it installed, review chips open here instead of in your browser.",
+			"version": "0.1.7",
 			"author": {
 				"name": "Dimension"
 			},
@@ -1006,8 +1006,8 @@
 			"pluginId": "product-psychology",
 			"title": "Product Psychology",
 			"icon": "packs/product-psychology/assets/icon.svg",
-			"description": "Product Psychology — audit conversion & comprehension, map remembered journeys, research users, and ethics-gate persuasion",
-			"version": "0.1.3",
+			"description": "Find where people get lost or drop off in your product, research your users, and check persuasion for ethics.",
+			"version": "0.1.4",
 			"author": {
 				"name": "Dimension"
 			},
@@ -1032,8 +1032,8 @@
 			"source": "./packs/pulse-mark",
 			"pluginId": "pulse-mark",
 			"title": "Pulse Mark",
-			"description": "The Store's demo component: a mark with zero Fraym UI reading `sessions/list` through the one granted binding, selector-gated to a single boolean — the zero-import tier demonstrated.",
-			"version": "0.1.2",
+			"description": "An example icon that lights up when any session is busy, to show how a plugin can read live session data.",
+			"version": "0.1.3",
 			"author": {
 				"name": "Dimension"
 			},
@@ -1054,8 +1054,8 @@
 			"pluginId": "reddit",
 			"title": "Reddit",
 			"icon": "packs/reddit/assets/icon.svg",
-			"description": "Reddit connector — feeds, posts, comments, search, submit, vote, and inbox via the Reddit OAuth API",
-			"version": "0.1.4",
+			"description": "Let your agent read Reddit feeds, posts, comments and your inbox, search, and post or vote when you ask.",
+			"version": "0.1.5",
 			"author": {
 				"name": "Dimension"
 			},
@@ -1076,8 +1076,8 @@
 			"pluginId": "rooms-rail",
 			"title": "Rooms Rail",
 			"icon": "chat",
-			"description": "The rail of a rooms space, installable: re-exports RAIL_ROOMS from @fraym/ui - the space's own head, direct messages, channels and projects or workspaces in its own words, an Organise menu on the section header, asks on rows.",
-			"version": "0.1.2",
+			"description": "The session list for rooms spaces: the space's own header, direct messages, channels and projects, an Organise menu and a marker on rows that need you.",
+			"version": "0.1.3",
 			"author": {
 				"name": "Dimension"
 			},
@@ -1100,8 +1100,8 @@
 			"pluginId": "router-jev",
 			"title": "Jev room router",
 			"icon": "packs/router-jev/assets/icon.svg",
-			"description": "Room router backed by TypeSafe's Jev: when a room post addresses nobody, one System One request decides which agent leads the reply and who else should chime in",
-			"version": "0.1.1",
+			"description": "Uses the Jev model to decide, when you post in a room without naming anyone, which agent answers first and who else joins in.",
+			"version": "0.1.2",
 			"author": {
 				"name": "Dimension"
 			},
@@ -1122,8 +1122,8 @@
 			"pluginId": "simulator",
 			"title": "Simulator",
 			"icon": "phone",
-			"description": "An Android emulator in a View beside your chat that your agent drives while you watch. Boot, screenshot, tap by label, type, install and launch apps. Live H.264 video for you, cheap screenshots for the agent.",
-			"version": "0.1.4",
+			"description": "An Android phone emulator beside your chat that your agent can drive while you watch: tap, type, install and open apps.",
+			"version": "0.1.5",
 			"author": {
 				"name": "Dimension"
 			},
@@ -1147,8 +1147,8 @@
 			"pluginId": "slack",
 			"title": "Slack",
 			"icon": "packs/slack/assets/icon.svg",
-			"description": "Slack for your agent, two ways: a bot app you add to channels, or your own account through Slack's official MCP server. Connect one or both.",
-			"version": "0.2.0",
+			"description": "Let your agent use Slack two ways: as a bot app you add to channels, or as you through your own account. Connect one or both.",
+			"version": "0.2.1",
 			"author": {
 				"name": "Dimension"
 			},
@@ -1171,8 +1171,8 @@
 			"pluginId": "speech-elevenlabs",
 			"title": "ElevenLabs voice",
 			"icon": "packs/speech-elevenlabs/assets/icon.svg",
-			"description": "ElevenLabs speech provider: dictation by Scribe v2 Realtime, an agent's replies spoken by Eleven v4 Turbo (or v4, or Flash v2.5) with word-level caption timing, and live voice conversations through an ElevenLabs agent that hands your requests to your own agent. Choose it from a voice profile by naming the provider \"elevenlabs\".",
-			"version": "0.3.4",
+			"description": "Dictate, hear replies and talk live in ElevenLabs voices. Paste your own ElevenLabs API key to connect; until then it is idle and sends nothing.",
+			"version": "0.3.5",
 			"author": {
 				"name": "Dimension"
 			},
@@ -1206,8 +1206,8 @@
 			"pluginId": "swiss-knife",
 			"title": "Swiss Knife",
 			"icon": "packs/swiss-knife/assets/icon.webp",
-			"description": "Small useful things in one switch: `present` shows you a file as a card in the thread, the Viewer opens and annotates it, the Library finds every file you or your agent made and shares it privately, and a stream rule stops the agent mid-edit when it writes a code comment.",
-			"version": "0.5.0",
+			"description": "A few small helpers in one switch: your agent can show you files as cards you can open and mark up, a library finds every file you have made, and it stops the agent adding code comments.",
+			"version": "0.5.2",
 			"author": {
 				"name": "Dimension"
 			},
@@ -1248,8 +1248,8 @@
 			"pluginId": "taste",
 			"title": "Taste",
 			"icon": "packs/taste/assets/icon.svg",
-			"description": "Taste — anti-slop frontend skill: brief-first design reads, real design systems, no templated AI aesthetics",
-			"version": "0.1.2",
+			"description": "Helps your agent design interfaces that look considered: it reads your brief first, uses real design systems and avoids generic AI looks.",
+			"version": "0.1.3",
 			"author": {
 				"name": "Dimension"
 			},
@@ -1274,8 +1274,8 @@
 			"pluginId": "teams",
 			"title": "Microsoft Teams",
 			"icon": "packs/teams/assets/icon.svg",
-			"description": "Microsoft Teams connector — list teams/channels and post channel messages via Microsoft Graph",
-			"version": "0.1.4",
+			"description": "Let your agent list your Microsoft Teams teams and channels and post messages to a channel.",
+			"version": "0.1.5",
 			"author": {
 				"name": "Dimension"
 			},
@@ -1297,8 +1297,8 @@
 			"pluginId": "telegram",
 			"title": "Telegram",
 			"icon": "packs/telegram/assets/icon.svg",
-			"description": "Telegram connector — send messages, read updates, inspect chats via the Bot API",
-			"version": "0.1.4",
+			"description": "Let your agent send Telegram messages, read new ones and look at chats, using a bot you create.",
+			"version": "0.1.5",
 			"author": {
 				"name": "Dimension"
 			},
@@ -1319,8 +1319,8 @@
 			"pluginId": "triage-rail",
 			"title": "Triage Rail",
 			"icon": "bolt",
-			"description": "A session rail for threads, not folders: a violet Needs-you strip (oldest wait first), Now / Today / Yesterday / This week / Earlier groups, unread rows emphasised, and one Sweep that archives idle sessions older than a week. Built from @fraym/ui primitives and the rail slot's specVersion 2 channels only - no shipped rail inside.",
-			"version": "0.1.5",
+			"description": "A session list built around what needs you: a Needs-you strip with the oldest wait first, then Now, Today, Yesterday and earlier groups, plus one Sweep to archive idle sessions older than a week.",
+			"version": "0.1.6",
 			"author": {
 				"name": "Dimension"
 			},
@@ -1344,8 +1344,8 @@
 			"pluginId": "ui-skills",
 			"title": "UI Skills",
 			"icon": "packs/ui-skills/assets/icon.svg",
-			"description": "UI Skills — opinionated interface-polish skills: baseline UI discipline, accessibility fixes, metadata audits, motion performance",
-			"version": "0.1.1",
+			"description": "Skills that polish interfaces: solid basics, accessibility fixes, page-metadata checks and smoother animation.",
+			"version": "0.1.2",
 			"author": {
 				"name": "Dimension"
 			},
@@ -1372,8 +1372,8 @@
 			"pluginId": "watch",
 			"title": "Watch",
 			"icon": "packs/watch/assets/icon.svg",
-			"description": "Watch a video by URL or local path: ffmpeg frame sampling plus a timestamped transcript (captions, local Whisper, or a consent-gated cloud API)",
-			"version": "0.3.1",
+			"description": "Let your agent watch a video from a link or a file: it samples frames and reads a transcript with timestamps.",
+			"version": "0.3.2",
 			"author": {
 				"name": "Dimension"
 			},
@@ -1396,8 +1396,8 @@
 			"pluginId": "whatsapp",
 			"title": "WhatsApp",
 			"icon": "packs/whatsapp/assets/icon.svg",
-			"description": "WhatsApp connector — send text messages and templates via the Meta WhatsApp Cloud API",
-			"version": "0.1.3",
+			"description": "Let your agent send WhatsApp text messages and message templates through your WhatsApp Business account.",
+			"version": "0.1.4",
 			"author": {
 				"name": "Dimension"
 			},
@@ -1418,8 +1418,8 @@
 			"pluginId": "x",
 			"title": "X",
 			"icon": "packs/x/assets/icon.svg",
-			"description": "X (Twitter) connector — mentions, timelines, search, threads, and posting via the official X API v2",
-			"version": "0.2.5",
+			"description": "Let your agent read your X (Twitter) mentions and timelines, search, and post.",
+			"version": "0.2.6",
 			"author": {
 				"name": "Dimension"
 			},
@@ -1441,8 +1441,8 @@
 			"pluginId": "youtube",
 			"title": "YouTube",
 			"icon": "packs/youtube/assets/icon.svg",
-			"description": "Search YouTube, inspect videos and channels, manage playlists, and read/post comments",
-			"version": "0.1.4",
+			"description": "Let your agent search YouTube, look at videos and channels, manage playlists and read or post comments.",
+			"version": "0.1.5",
 			"author": {
 				"name": "Dimension"
 			},

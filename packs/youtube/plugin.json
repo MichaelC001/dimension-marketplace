@@ -1,8 +1,8 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "youtube",
-	"version": "0.1.4",
-	"description": "Search YouTube, inspect videos and channels, manage playlists, and read/post comments",
+	"version": "0.1.5",
+	"description": "Let your agent search YouTube, look at videos and channels, manage playlists and read or post comments.",
 	"author": {
 		"name": "Dimension"
 	},

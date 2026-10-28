@@ -1,8 +1,8 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "watch",
-	"version": "0.3.1",
-	"description": "Watch a video by URL or local path: ffmpeg frame sampling plus a timestamped transcript (captions, local Whisper, or a consent-gated cloud API)",
+	"version": "0.3.2",
+	"description": "Let your agent watch a video from a link or a file: it samples frames and reads a transcript with timestamps.",
 	"author": {
 		"name": "Dimension"
 	},

@@ -1,8 +1,8 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "simulator",
-	"version": "0.1.4",
-	"description": "An Android emulator in a View beside your chat that your agent drives while you watch. Boot, screenshot, tap by label, type, install and launch apps. Live H.264 video for you, cheap screenshots for the agent.",
+	"version": "0.1.5",
+	"description": "An Android phone emulator beside your chat that your agent can drive while you watch: tap, type, install and open apps.",
 	"keywords": [
 		"simulator",
 		"android",

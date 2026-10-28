@@ -248,7 +248,7 @@ function entryFor(dir: string): Json {
 	const block = readPackBlock(packRoot, pkg);
 
 	const description = asString(block.description) ?? asString(pkg.description);
-	if (!description) throw new Error(`packs/${dir}: a description is required (package.json dimension.description)`);
+	if (!description) throw new Error(`packs/${dir}: a description is required (plugin.json description)`);
 
 	const entry: Json = { name: dir, source: `./${packDir}` };
 	const pluginId = asString(manifest.plugin);

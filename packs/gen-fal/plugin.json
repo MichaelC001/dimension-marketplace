@@ -1,8 +1,8 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "gen-fal",
-	"version": "0.1.1",
-	"description": "3D generators from fal.ai behind one key: Pixal3D, TRELLIS.2, Rodin 2.5, Meshy-6, Hunyuan 3.1 (image-to-3D, part splitter, smart topology) and Tripo P2, with live option schemas, prices and a quote before every job",
+	"version": "0.1.2",
+	"description": "Turn pictures into 3D models with the generators on fal.ai, using one key. You see the price before every job.",
 	"author": {
 		"name": "Dimension"
 	},

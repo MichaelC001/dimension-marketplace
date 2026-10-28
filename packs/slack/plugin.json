@@ -1,8 +1,8 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "slack",
-	"version": "0.2.0",
-	"description": "Slack for your agent, two ways: a bot app you add to channels, or your own account through Slack's official MCP server. Connect one or both.",
+	"version": "0.2.1",
+	"description": "Let your agent use Slack two ways: as a bot app you add to channels, or as you through your own account. Connect one or both.",
 	"author": {
 		"name": "Dimension"
 	},

@@ -1,8 +1,8 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "gen-wavespeed",
-	"version": "0.1.1",
-	"description": "3D generators from WaveSpeed AI behind one key: Tripo P2 and H3.1, Meshy 6 and 7.1, Rodin 2.5, TRELLIS.2 and Hunyuan3D 3 / 3.1, with live option schemas, live prices and a quote before every job",
+	"version": "0.1.2",
+	"description": "Turn pictures into 3D models with the generators on WaveSpeed AI, using one key. You see the price before every job.",
 	"author": {
 		"name": "Dimension"
 	},
