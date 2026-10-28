@@ -1,7 +1,7 @@
 {
 	"name": "@dimension/brand-marks",
 	"author": "Dimension",
-	"version": "0.2.0",
+	"version": "0.2.1",
 	"description": "Brand Marks — ten presence avatars (X, Reddit, YouTube, Discord, Y Combinator, Product Hunt, Bluesky, Threads, Instagram, TikTok) for the avatar slot: the official mark, unmodified at rest, with container-only motion that follows the session.",
 	"license": "MIT",
 	"type": "module",
@@ -9,7 +9,6 @@
 	"private": true,
 	"dimension": {
 		"name": "brand-marks",
-		"description": "Brand Marks — ten presence avatars (X, Reddit, YouTube, Discord, Y Combinator, Product Hunt, Bluesky, Threads, Instagram, TikTok) for the avatar slot: the official mark, unmodified at rest, with container-only motion that follows the session.",
 		"category": "component",
 		"keywords": [
 			"avatar",

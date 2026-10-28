@@ -1,8 +1,8 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "pr-viewer",
-	"version": "0.1.6",
-	"description": "PR Viewer — reviews in the dock, from the Store's review keys. Installable and removable like any pack: with it a rail chip opens the review here, without it the browser.",
+	"version": "0.1.7",
+	"description": "See a pull request's review in the right-hand panel; with it installed, review chips open here instead of in your browser.",
 	"author": {
 		"name": "Dimension"
 	},

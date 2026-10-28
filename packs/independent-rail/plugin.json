@@ -1,8 +1,8 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "independent-rail",
-	"version": "0.1.2",
-	"description": "Independent session rail assembled from the published PARTS (SessionRail, the rail chrome, and the three assembly hooks) - imports no shipped rail implementation. Speaks the rail slot's specVersion 2 channel contract.",
+	"version": "0.1.3",
+	"description": "An example session list built only from the public UI parts, to show how to build your own.",
 	"author": {
 		"name": "Dimension"
 	},

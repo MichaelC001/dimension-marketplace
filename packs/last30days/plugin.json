@@ -1,8 +1,8 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "last30days",
-	"version": "0.1.1",
-	"description": "last30days — research what people actually said about any topic in the last 30 days across Reddit, X, YouTube, TikTok, Hacker News, and the web",
+	"version": "0.1.2",
+	"description": "Research what people actually said about any topic in the last 30 days across Reddit, X, YouTube, TikTok, Hacker News and the web.",
 	"author": {
 		"name": "Dimension"
 	},

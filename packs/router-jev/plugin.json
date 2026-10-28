@@ -1,8 +1,8 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "router-jev",
-	"version": "0.1.1",
-	"description": "Room router backed by TypeSafe's Jev: when a room post addresses nobody, one System One request decides which agent leads the reply and who else should chime in",
+	"version": "0.1.2",
+	"description": "Uses the Jev model to decide, when you post in a room without naming anyone, which agent answers first and who else joins in.",
 	"author": {
 		"name": "Dimension"
 	},

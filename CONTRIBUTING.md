@@ -48,7 +48,8 @@ review is the taste check.** No pack merges red.
    |---|---|
    | `name` · `source` | your pack's directory name |
    | `pluginId` · `title` · `icon` · `requires` · `spaces` · `providers` | `dimension.plugin.json` |
-   | `description` · `category` · `tags` | `package.json` → `dimension` block (`description`, `category`, `keywords`), else its top-level fields |
+   | `description` | `plugin.json` top-level `description`, else `package.json`'s top-level one. This is your store copy: plain words, one or two short sentences on what the pack does for the person. The Dimension monorepo's `--words` gate refuses doc numbers, tool or op names, backticks, file names, config keys and internal terms. |
+   | `category` · `tags` | `package.json` → `dimension` block (`category`, `keywords`), else its top-level fields |
    | `version` · `author` · `license` · `repository` | `package.json` (license/repository default to this repo's) |
 
    `icon` and every `spaces[].screenshots` entry is rewritten
@@ -110,10 +111,12 @@ fact has to live in the index — and why the index has to be generated.
    `requires.plugins` (`board`, `analytics`, `workbench`, `session-tools`,
    `general-chat`) are host-bundled plugins with no directory under `packs/`
    — do not go looking for them. A copy must edit, at minimum:
-   - `package.json` — `name`, `description`, and the `dimension` block (`name`,
-     `description`, `category`, `keywords`); it is what the generated catalog
-     entry quotes, so this copy is your store copy (`omp` is the pre-rename
-     spelling of the same block and is still read).
+   - `package.json` — `name` and the `dimension` block (`name`, `category`,
+     `keywords`); `omp` is the pre-rename spelling of the same block and is
+     still read.
+   - `plugin.json` — `description`: the store copy the generated catalog entry
+     quotes and the plugin card shows. Write what the pack does for the person
+     in plain words.
    - `dimension.plugin.json` — see below.
    - `src/index.ts` — for a component its **default** export is what the host
      loads as the component; `mochi-mark/src/index.ts` says so in a comment.

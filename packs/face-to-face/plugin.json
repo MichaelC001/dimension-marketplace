@@ -1,8 +1,8 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "face-to-face",
-	"version": "0.1.6",
-	"description": "Face to face — talk to your agent and watch it answer: a full-screen halftone face that lip-syncs to the real audio, captions every word as it is spoken, and a small living orb that opens it from the Chat space. Where the engine offers it, Talk live puts a realtime voice on the same face, with the same live call bar the composer shows below it: it chats with you and hands the work to your agent.",
+	"version": "0.1.7",
+	"description": "Talk to your agent and watch it answer: a full-screen face that lip-syncs to the real audio and captions every word as it is spoken. Where available, Talk live adds a real-time voice.",
 	"author": {
 		"name": "Dimension"
 	},

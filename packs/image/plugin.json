@@ -1,8 +1,8 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "image",
-	"version": "0.1.0",
-	"description": "Image: generate and edit images with the image model role and its fallbacks, name any model for one picture, and make masks and transparent cut-outs locally.",
+	"version": "0.1.1",
+	"description": "Make and edit images, and cut out transparent backgrounds on your computer. Pick any model for a single picture.",
 	"author": {
 		"name": "Dimension"
 	},

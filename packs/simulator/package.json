@@ -1,6 +1,6 @@
 {
   "name": "@dimension/community-simulator",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "private": true,
   "type": "module",
   "author": "Dimension",
@@ -14,7 +14,6 @@
   },
   "dimension": {
     "name": "simulator",
-    "description": "An Android emulator in a View beside your chat that your agent drives while you watch. Boot, screenshot, tap by label, type, install and launch apps; live H.264 video for you, cheap screenshots for the agent.",
     "defaultEnabled": false,
     "category": "artifactory",
     "keywords": ["simulator", "android", "emulator", "mcp-apps", "mobile"]

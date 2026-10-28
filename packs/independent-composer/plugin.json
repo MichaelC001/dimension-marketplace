@@ -1,8 +1,8 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "independent-composer",
-	"version": "0.1.2",
-	"description": "A composer built independently on the bricks tier — Fraym primitives + tokens + the store channels. Ships no shipped-implementation import.",
+	"version": "0.1.3",
+	"description": "An example message box built only from the public UI parts, to show how to build your own.",
 	"author": {
 		"name": "Dimension"
 	},

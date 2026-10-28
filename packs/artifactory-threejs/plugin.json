@@ -1,8 +1,8 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "artifactory-threejs",
-	"version": "0.1.2",
-	"description": "Three.js scenes as an MCP App — the reference server from modelcontextprotocol/ext-apps, unmodified, hosted by the Dimension engine and rendered in the artifact-view seat. The Phase 4 pilot: zero code of its own, just packaging.",
+	"version": "0.1.3",
+	"description": "3D scenes your agent can build and show beside your chat, using the standard Three.js example app.",
 	"author": {
 		"name": "Dimension"
 	},
