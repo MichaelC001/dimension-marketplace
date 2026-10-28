@@ -242,7 +242,6 @@ function nextStep(summary: string): string {
 
 /**
  * Whether this server registers `browser_task`, `browser_task_wait` and `browser_task_cancel`. Read once, as the server is created. jev is the one task agent and it needs its key, so the tools exist only where `jevKeyConfigured()`.
- * They are Traction's (`TRACTION_ONLY`) and a cell never runs in that space, so no text a cell can read names them.
  */
 export function taskToolsOffered(): boolean {
   return jevKeyConfigured();

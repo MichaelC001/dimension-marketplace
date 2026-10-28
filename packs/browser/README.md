@@ -863,11 +863,12 @@ no surface should approve one before it does.
 
 What this does not cover: a process that can write files as you. An agent with
 a code runner or a file writer can write an approval, so a host that lends this
-pack to such an agent gets the Allow card and nothing more; give the agents that
-publish neither. (Traction's platform agents hold neither; its CMO keeps `write`
-for its desk notes and so is inside this limit.) Posting with `browser_act` or `browser_task` is page driving,
-not publishing: it is not gated here either, so an agent that posts only through
-`browser_publish` should not hold them.
+pack to such an agent gets the Allow card and nothing more. Traction's agents
+hold `bash`, `write` and `browser_run` (an owner decision, 2026-10-28), so for
+them the approval binds the publish tools only; what stops an unapproved send is
+the confirm's Allow card, `browser_run`'s exec-tier ask and the Traction rules.
+Posting with `browser_act`, `browser_run` or `browser_task` is page driving, not
+publishing: it is not gated here either.
 
 ## Connection report
 
