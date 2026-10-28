@@ -16796,7 +16796,7 @@ var LiveChannel = class {
 var plugin_default = {
   $schema: "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   name: "browser",
-  version: "0.9.3",
+  version: "0.9.4",
   description: "A real browser beside your chat that your agent drives while you watch. Tabs, persistent logged-in profiles, circle-to-annotate, and an optional fast task agent (jev).",
   keywords: [
     "browser",
@@ -16914,6 +16914,7 @@ var MODEL_SPACES = (() => {
   return spaces;
 })();
 var CODE_TOOL_SPACES = ["code", "build"];
+var BROWSER_RUN_SPACES = [...CODE_TOOL_SPACES, "traction"];
 function resolveModelTools(raw, hasCodeHost) {
   const asked = raw?.trim().toLowerCase() ?? "";
   if (asked !== "" && asked !== "code" && asked !== "steps" && asked !== "both") throw new Error(`${MODEL_TOOLS_ENV} must be code, steps or both (got "${raw}")`);
@@ -17233,7 +17234,7 @@ async function createBrowserServer(options = {}) {
       sessionOf,
       artifactsDir: () => options.codeArtifactsDir ?? join16(process.env.DIMENSION_BROWSER_ROOT || defaultRootDir(), "artifacts"),
       preview: async (session, browserId, running) => (running ? previewMeta(runtime, browserId, session) : await previewResult(runtime, browserId, session))?.[PREVIEW_META_KEY] ?? { v: 1, source: { kind: "browser", browserId }, at: Date.now() },
-      meta: { [APPROVAL_META_KEY]: "exec", [SPACES_META_KEY]: CODE_TOOL_SPACES }
+      meta: { [APPROVAL_META_KEY]: "exec", [SPACES_META_KEY]: BROWSER_RUN_SPACES }
     });
   }
   const WAIT_CAP_S = 25;

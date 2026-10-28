@@ -1,6 +1,6 @@
 /**
  * WHAT BREAKS IN THE PRODUCT IF THIS GOES RED: a model is told to call a tool it does not have. The pack lends different tools to different spaces (doc 77 §7.5a): in the default mode a code or build model has
- * `browser_run`, `browser_view`, `browser_read`, `browser_profiles` and `browser_close`; chat, labor and watch have the six step tools besides the last four; Traction has the step tools and its publish set; and
+ * `browser_run`, `browser_view`, `browser_read`, `browser_profiles` and `browser_close`; chat, labor and watch have the six step tools besides the last four; Traction has the step tools, `browser_run` and its publish set; and
  * `DIMENSION_BROWSER_MODEL_TOOLS` changes that for everyone. Every text a model can read that names a tool - a tool's own description, the skill, the annotation chip, the refusals a cell gets - is
  * checked here against the tools THAT model has: for every mode, with and without jev's key, for every space the manifest lends the pack to.
  *
@@ -79,11 +79,13 @@ for (const mode of MODES) for (const taskTools of [false, true]) offers.set(`${m
 const withoutComments = (source: string): string => source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`\\])\/\/.*$/gm, "$1");
 
 describe("the tools each space is offered are the ones the real server lists", () => {
-  test("in the default mode a code or build model has browser_run and browser_view, browser_read, browser_profiles, browser_close - and no step tool, and Traction has the step tools and no browser_run", () => {
+  test("in the default mode a code or build model has browser_run and browser_view, browser_read, browser_profiles, browser_close - and no step tool, and Traction has the step tools, browser_run and the publish set", () => {
     const offer = offers.get("code/no jev")!;
     for (const space of ["code", "build"]) expect(offer[space]!.map(tool => tool.name).sort()).toEqual(["browser_close", "browser_profiles", "browser_read", "browser_run", "browser_view"]);
-    expect(offer.traction!.map(tool => tool.name)).toContain("browser_open");
-    expect(offer.traction!.map(tool => tool.name)).not.toContain("browser_run");
+    expect(offer.traction!.map(tool => tool.name)).toEqual(expect.arrayContaining([
+      "browser_open", "browser_state", "browser_snapshot", "browser_inspect", "browser_screenshot", "browser_act", "browser_run",
+      "browser_publish", "browser_publish_presets", "browser_publish_confirm", "browser_publish_cancel", "browser_publish_wait",
+    ]));
   });
 });
 
