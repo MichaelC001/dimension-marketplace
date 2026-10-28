@@ -16796,7 +16796,7 @@ var LiveChannel = class {
 var plugin_default = {
   $schema: "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   name: "browser",
-  version: "0.9.5",
+  version: "0.9.6",
   description: "A real browser beside your chat that your agent drives while you watch. Tabs, persistent logged-in profiles, circle-to-annotate, and an optional fast task agent (jev).",
   keywords: [
     "browser",
@@ -16905,6 +16905,7 @@ var APP_ONLY = { ui: { visibility: ["app"] } };
 var READ_ONLY = { readOnlyHint: true, destructiveHint: false, openWorldHint: false };
 var CALLER_META_KEY = "ai.insodimension/caller";
 var APPROVAL_META_KEY = "ai.insodimension/approval";
+var APPROVAL_SUMMARY_META_KEY = "ai.insodimension/approvalSummary";
 var SPACES_META_KEY = "ai.insodimension/spaces";
 var TRACTION_ONLY = { [SPACES_META_KEY]: ["traction"] };
 var MODEL_TOOLS_ENV = "DIMENSION_BROWSER_MODEL_TOOLS";
@@ -17136,7 +17137,7 @@ async function createBrowserServer(options = {}) {
     title: "Browser",
     description: "Show the human a browser you hold (browserId), or open one they can watch (profile, engine, url). Mounts the Browser View.",
     inputSchema: { browserId: capability.optional(), profile: profile.optional(), engine: z3.enum(BROWSER_ENGINES).optional(), url: z3.string().max(2048).optional() },
-    _meta: { ui: { resourceUri: BROWSER_VIEW_URI } }
+    _meta: { ui: { resourceUri: BROWSER_VIEW_URI }, [APPROVAL_SUMMARY_META_KEY]: ["Open the browser with your {profile} profile", "Go to {url}"] }
     // The result is a BrowserState: the View binds to whichever browser it names (a tool result is its only source of a browserId).
   }, ({ browserId, profile: profile2, engine, url }, extra) => result(async () => {
     if (browserId !== void 0 && (profile2 !== void 0 || engine !== void 0 || url !== void 0)) {
