@@ -402,6 +402,13 @@ describe("which tools the model is shown", () => {
     expect(codeSpaceTools.sort()).toEqual(["browser_close", "browser_profiles", "browser_read", "browser_run", "browser_view"]);
   });
 
+  test("browser_run is titled 'Use the Browser' and declares the plain-words approval summary the host shows in place of the cell's code", async () => {
+    const { client } = await connect(fakeHost(() => shown()), "code");
+    const tool = (await client.listTools()).tools.find(listedTool => listedTool.name === "browser_run");
+    expect(tool?.title).toBe("Use the Browser");
+    expect(tool?._meta?.["ai.insodimension/approvalSummary"]).toBe("Let your agent browse the web for you");
+  });
+
   test("every space the manifest lends the pack to is offered a way to drive a page, and traction alone is offered both browser_run and the step tools", async () => {
     const manifest = JSON.parse(await readFile(new URL("../plugin.json", import.meta.url), "utf8")) as { extensions: Record<string, { artifactories: Array<{ mcpServer: string; modelSpaces: string[] }> }> };
     const declared = manifest.extensions["ai.insodimension.dimension"]!.artifactories.find(artifactory => artifactory.mcpServer === "browser")!.modelSpaces;

@@ -37,13 +37,15 @@ interface Calls {
 	opened: BrowserOpenOptions[];
 	read: string[];
 	navigated: string[];
+	actedOn: string[];
 	tasked: TaskRequest[];
 	gone: string[];
+	views: Map<string, string>;
 }
 
 /** Just enough runtime for the server to boot and answer open/view: every call recorded. */
 function recordingRuntime(calls: Calls): BrowserRuntimePort {
-	const runtime: Pick<BrowserRuntimePort, "open" | "state" | "liveState" | "watchFrames" | "viewing" | "act" | "startTask" | "connections" | "profileMeta" | "onConnectionsChanged" | "requireOpen" | "dispose"> = {
+	const runtime: Pick<BrowserRuntimePort, "open" | "state" | "liveState" | "watchFrames" | "viewing" | "act" | "startTask" | "connections" | "profileMeta" | "onConnectionsChanged" | "requireOpen" | "viewOf" | "bindView" | "dispose"> = {
 		open: async (options) => {
 			calls.opened.push(options);
 			return stateOf("o".repeat(32));
@@ -57,6 +59,7 @@ function recordingRuntime(calls: Calls): BrowserRuntimePort {
 		viewing: () => () => {},
 		act: async (browserId, action: BrowserAction) => {
 			calls.navigated.push(action.url ?? "");
+			calls.actedOn.push(browserId);
 			return { status: "completed", state: stateOf(browserId, action.url) };
 		},
 		startTask: async (_browserId, request) => {
@@ -70,6 +73,10 @@ function recordingRuntime(calls: Calls): BrowserRuntimePort {
 			if (calls.gone.includes(browserId)) throw new BrowserRuntimeError("unknown_browser", "unknown or already closed browserId");
 		},
 		dispose: async () => {},
+		viewOf: (session) => calls.views.get(session),
+		bindView: (session, browserId) => {
+			calls.views.set(session, browserId);
+		},
 	};
 	return runtime as BrowserRuntimePort;
 }
@@ -80,7 +87,7 @@ async function connect(jevKey?: string): Promise<{ client: Client; calls: Calls;
 	const viewDir = join(rootDir, "view");
 	await mkdir(viewDir, { recursive: true });
 	await writeFile(join(viewDir, "index.html"), "<!doctype html><title>view</title>");
-	const calls: Calls = { opened: [], read: [], navigated: [], tasked: [], gone: [] };
+	const calls: Calls = { opened: [], read: [], navigated: [], actedOn: [], tasked: [], gone: [], views: new Map() };
 	const savedKey = process.env.TYPESAFE_API_KEY;
 	if (jevKey === undefined) delete process.env.TYPESAFE_API_KEY;
 	else process.env.TYPESAFE_API_KEY = jevKey;
@@ -209,6 +216,74 @@ test("browser_view without a browserId opens the browser exactly as browser_open
 		expect((await client.callTool({ name: "browser_view", arguments: { profile } })).isError).toBe(true);
 	}
 	expect(calls.opened).toHaveLength(1);
+});
+
+const SESSION = "ai.insodimension/session";
+const inSession = (sessionId: string) => ({ _meta: { [SESSION]: { sessionId } } });
+const HELD = "p".repeat(32);
+
+test("browser_view with no arguments shows the browser the chat already holds and opens no second one", async () => {
+	const { client, calls } = await connect();
+	calls.views.set("chat-a", HELD);
+
+	const shown = await client.callTool({ name: "browser_view", arguments: {}, ...inSession("chat-a") });
+
+	expect(shown.isError).toBeFalsy();
+	expect(shown.structuredContent).toMatchObject({ browserId: HELD, url: "http://held.test/" });
+	expect(calls).toMatchObject({ opened: [], read: [HELD], navigated: [] });
+	expect(calls.views.get("chat-a")).toBe(HELD);
+});
+
+test("browser_view with only a url navigates the browser the chat already holds instead of opening one", async () => {
+	const { client, calls } = await connect();
+	calls.views.set("chat-a", HELD);
+
+	const shown = await client.callTool({ name: "browser_view", arguments: { url: "http://app.test/" }, ...inSession("chat-a") });
+
+	expect(shown.isError).toBeFalsy();
+	expect(shown.structuredContent).toMatchObject({ browserId: HELD, url: "http://app.test/" });
+	expect(calls).toMatchObject({ opened: [], actedOn: [HELD], navigated: ["http://app.test/"] });
+});
+
+test("browser_view with a profile or an engine opens a new browser even when the chat holds one, and the View moves to it", async () => {
+	const { client, calls } = await connect();
+	calls.views.set("chat-a", HELD);
+
+	for (const arguments_ of [{ profile: "work" }, { engine: "chromium" }]) {
+		const opened = await client.callTool({ name: "browser_view", arguments: arguments_, ...inSession("chat-a") });
+		expect(opened.isError).toBeFalsy();
+		expect(opened.structuredContent).toMatchObject({ browserId: "o".repeat(32) });
+	}
+
+	expect(calls).toMatchObject({ opened: [{ profile: "work" }, { engine: "chromium" }], read: [], navigated: [] });
+	expect(calls.views.get("chat-a")).toBe("o".repeat(32));
+});
+
+test("browser_view with no arguments opens a browser when this chat holds none: another chat's browser and an unstamped call are not it", async () => {
+	const { client, calls } = await connect();
+	calls.views.set("chat-a", HELD);
+
+	const own = await client.callTool({ name: "browser_view", arguments: {}, ...inSession("chat-b") });
+	const unstamped = await client.callTool({ name: "browser_view", arguments: {} });
+
+	for (const opened of [own, unstamped]) {
+		expect(opened.isError).toBeFalsy();
+		expect(opened.structuredContent).toMatchObject({ browserId: "o".repeat(32) });
+	}
+	expect(calls).toMatchObject({ opened: [{}, {}], read: [], navigated: [] });
+	expect(calls.views.get("chat-a")).toBe(HELD);
+});
+
+test("browser_view refuses a url that is not http or https before it opens or navigates anything, held browser or not", async () => {
+	const { client, calls } = await connect();
+
+	const nothingHeld = await client.callTool({ name: "browser_view", arguments: { url: "file:///etc/hosts" }, ...inSession("chat-a") });
+	calls.views.set("chat-a", HELD);
+	const held = await client.callTool({ name: "browser_view", arguments: { url: "javascript:alert(1)" }, ...inSession("chat-a") });
+
+	expect(nothingHeld.isError).toBe(true);
+	expect(held.isError).toBe(true);
+	expect(calls).toMatchObject({ opened: [], navigated: [], actedOn: [] });
 });
 
 test("browser_stream is the View's own tool: a model is never offered it, and the View gets the address and token of a listener that serves its browser", async () => {
