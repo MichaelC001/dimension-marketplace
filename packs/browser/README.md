@@ -557,6 +557,8 @@ A profile's sign-ins are kept in its Chrome folder on disk and are still there a
 
 **Where `browser.open` lands.** With no `profile` and no `app`, a `browser_run` cell's `browser.open` opens a tab in the saved Chromium profile the person is shown (`browser_view`, the dock's Browser panel), else in the chat's own throwaway, so "open this in the browser panel" lands in the panel. `browser_view` with none of `browserId`, `profile` or `engine` shows the browser already open here instead of opening a second one, and goes to `url` in it when one is given. Name a `profile` or an `app` to go somewhere else.
 
+**Where the reply says the tab is.** The `Opened tab` and `Reused tab` lines name the browser as it stands when the reply is made, never as it stood at the first open. A browser the chat is shown whose live stream a View has joined is `the Browser panel the person is watching (profile "default")`, or `(private browser)` for a throwaway. A saved profile nobody is watching is `a saved-profile browser that is not on screen (profile "work"; browser_view shows it in the Browser panel)`. A throwaway nobody is watching keeps `headless browser (hidden)`. Closing the panel or opening it later changes the next reply, because a View joining or leaving the stream is what the words read.
+
 **The profile menu (the View).** The toolbar's chip is the browser's profile: its avatar (the emoji
 the person chose, else the label's first letter, on the profile's colour) and its label; Private for a
 throwaway browser, Your Chrome for the relay. Its face rides the browser's own state (`look`) and so do the sites its

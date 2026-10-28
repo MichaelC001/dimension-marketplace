@@ -95,6 +95,7 @@ export interface TabHandle extends TabRef {
 export interface CmuxConnection { socketPath: string; password?: string; relayId?: string; relayToken?: string }
 /** What `acquire` answers: the browser, whether this call made it, its CDP endpoint, and the words `Opened tab "main" on <label>` ends in when the browser is not a plain headless one (a spawned application names its pid). */
 export interface AcquiredBrowser { browserId: string; created: boolean; wsEndpoint: string; label?: string }
+export interface BrowserStanding { profile: string | null; onPanel: boolean }
 
 // ---- host <-> worker (OMP tab-protocol.ts:83-137, minus tool-call/tool-reply, plus bridge for open/close)
 /**
@@ -217,6 +218,7 @@ export interface CodeBrowserPort {
   activity(browserId: string): { idleMs: number; viewers: number; pending: number; working: boolean } | undefined;
   /** The browser the session already holds (one a cell made, or the person opened in the View), without making one: what `browser.tabs()` and `browser.active()` read. */
   existing(session: string): { browserId: string; wsEndpoint: string; kind: BrowserKind } | undefined;
+  standing(session: string, browserId: string): BrowserStanding | undefined;
   ownedByAnotherChat(browserId: string, tabId: string, session: string): boolean;
   /** A View joined the browser's live stream, or a task agent began driving it: a frozen tab draws nothing and answers no timer, so the host thaws before either looks. */
   onViewed(l: (browserId: string) => void): () => void;

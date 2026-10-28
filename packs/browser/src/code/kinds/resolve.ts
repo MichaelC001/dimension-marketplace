@@ -10,7 +10,7 @@
 import { homedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
 import { DEFAULT_RELAY_URL } from "../../engines/attach.js";
-import type { BrowserKind, BridgeRequest } from "../contracts.js";
+import type { BrowserKind, BridgeRequest, BrowserStanding } from "../contracts.js";
 import { ToolError } from "../errors.js";
 
 /** The environment the kinds read. Names are the pack's (matrix H2-H6, H12); `CMUX_*` are cmux's own. */
@@ -155,10 +155,10 @@ export function describeKind(kind: BrowserKind): string {
 }
 
 /** What `Opened tab "main" on <this>` says (OMP's `describeBrowser`). `pid` is the spawned application's process, `shared` is absent in the pack (no shared daemon). */
-export function describeBrowser(kind: BrowserKind, facts: { pid?: number; cdpUrl?: string } = {}): string {
+export function describeBrowser(kind: BrowserKind, facts: { pid?: number; cdpUrl?: string; standing?: BrowserStanding } = {}): string {
   switch (kind.kind) {
     case "headless":
-      return `headless browser (${kind.headless ? "hidden" : "visible"})`;
+      return describeHeadless(kind.headless, facts.standing);
     case "spawned":
       return `spawned ${kind.path} (pid ${facts.pid ?? "?"})`;
     case "connected":
@@ -168,4 +168,14 @@ export function describeBrowser(kind: BrowserKind, facts: { pid?: number; cdpUrl
     case "cmux":
       return `cmux browser (${kind.surface ?? "split"})`;
   }
+}
+
+function describeHeadless(hidden: boolean, standing: BrowserStanding | undefined): string {
+  if (standing?.onPanel === true) {
+    return `the Browser panel the person is watching (${standing.profile === null ? "private browser" : `profile ${JSON.stringify(standing.profile)}`})`;
+  }
+  if (standing?.profile != null && hidden) {
+    return `a saved-profile browser that is not on screen (profile ${JSON.stringify(standing.profile)}; browser_view shows it in the Browser panel)`;
+  }
+  return `headless browser (${hidden ? "hidden" : "visible"})`;
 }

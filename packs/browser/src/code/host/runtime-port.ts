@@ -7,7 +7,7 @@ import type { BrowserEngine, BrowserOpenOptions, BrowserOpener, BrowserState, Vi
 import type { AttachTarget } from "../../engines/attach.js";
 import type { EngineDriver } from "../../engines/types.js";
 import { BrowserRuntimeError } from "../../store.js";
-import type { AcquiredBrowser, BrowserKind, CodeBrowserPort, TabRef, WaitUntil } from "../contracts.js";
+import type { AcquiredBrowser, BrowserKind, BrowserStanding, CodeBrowserPort, TabRef, WaitUntil } from "../contracts.js";
 import { ToolAbortError, ToolError } from "../errors.js";
 import { CmuxBrowsers } from "../kinds/cmux/cmux-browsers.js";
 import { establishKind } from "../kinds/establish.js";
@@ -359,6 +359,13 @@ export class RuntimeCodeBrowsers implements CodeBrowserPort {
   existing(session: string): { browserId: string; wsEndpoint: string; kind: BrowserKind } | undefined {
     const entry = this.#seam.shownTo(session) ?? this.#reusable(session);
     return entry === undefined ? undefined : { browserId: entry.browserId, wsEndpoint: entry.driver.cdpEndpoint(), kind: entry.code?.kind ?? { kind: "headless", headless: this.#hidden } };
+  }
+
+  standing(session: string, browserId: string): BrowserStanding | undefined {
+    if (this.#cmux.owns(browserId)) return undefined;
+    const entry = this.#seam.peek(browserId);
+    if (entry === undefined) return undefined;
+    return { profile: entry.profile, onPanel: entry.viewers > 0 && this.#seam.shownTo(session)?.browserId === browserId };
   }
 
   ownedByAnotherChat(browserId: string, tabId: string, session: string): boolean {
