@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Media acquisition and frame extraction: yt-dlp + ffmpeg, defensively.
 
-Every subprocess call here decodes as UTF-8 with `errors="replace"`. That is
-not cosmetic: ffmpeg emits the source's own metadata on stderr, and on a
-Windows console Python otherwise decodes it as cp1252 and raises
-UnicodeDecodeError on the first non-ASCII video title.
+Every subprocess call here goes through proc.py, which decodes as UTF-8 with
+`errors="replace"`. That is not cosmetic: ffmpeg emits the source's own
+metadata on stderr, and on a Windows console Python otherwise decodes it as
+cp1252 and raises UnicodeDecodeError on the first non-ASCII video title.
 
 Two capability probes run once per process and are cached:
 
@@ -15,9 +15,13 @@ Two capability probes run once per process and are cached:
   Control) can block `ffprobe.exe` while allowing `ffmpeg.exe` from the same
   install directory. `shutil.which()` answers "does the file exist", not "may
   I run it", so we probe and fall back to parsing the `ffmpeg -i` banner.
+
+yt-dlp is provisioned by ytdlp.py: it runs under the engine's own interpreter
+and is installed there on first use, so only ffmpeg must be present.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import shutil
@@ -25,7 +29,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+import proc
 import safety
+import ytdlp
 from urllib.parse import urlparse
 
 MAX_FPS = 2.0
@@ -50,27 +56,20 @@ _BANNER_AUDIO = re.compile(r"Stream #\d+:\d+.*?: Audio:")
 _caps: dict[str, bool] = {}
 
 
-def _run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
-    """subprocess.run with encoding pinned. See module docstring."""
-    return subprocess.run(
-        cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", **kw
-    )
-
-
 def require(binary: str) -> None:
     if shutil.which(binary) is None:
         raise SystemExit(
             f"{binary} is not on PATH.\n"
-            f"  macOS:   brew install {'ffmpeg' if binary.startswith('ff') else binary}\n"
-            f"  Windows: winget install {'Gyan.FFmpeg' if binary.startswith('ff') else 'yt-dlp.yt-dlp'}\n"
-            f"  Linux:   apt install {'ffmpeg' if binary.startswith('ff') else binary}"
+            "  macOS:   brew install ffmpeg\n"
+            "  Windows: winget install Gyan.FFmpeg\n"
+            "  Linux:   apt install ffmpeg"
         )
 
 
 def vfr_flag() -> list[str]:
     """Return the variable-frame-rate flag this ffmpeg actually accepts."""
     if "fps_mode" not in _caps:
-        probe = _run(
+        probe = proc.run(
             ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi",
              "-i", "nullsrc=s=16x16:d=0.1", "-fps_mode", "vfr", "-frames:v", "1",
              "-f", "null", "-"]
@@ -96,7 +95,7 @@ def _ffprobe_usable() -> bool:
             _caps["ffprobe"] = False
         else:
             try:
-                _caps["ffprobe"] = _run(["ffprobe", "-version"]).returncode == 0
+                _caps["ffprobe"] = proc.spawn(["ffprobe", "-version"]).returncode == 0
             except OSError:
                 # WinError 4551 = blocked by Application Control policy.
                 _caps["ffprobe"] = False
@@ -145,7 +144,7 @@ def format_time(seconds: float) -> str:
 
 def _metadata_via_banner(video_path: str) -> dict:
     """Recover duration/resolution from `ffmpeg -i` when ffprobe is unusable."""
-    result = _run(["ffmpeg", "-hide_banner", "-i", str(Path(video_path).resolve())])
+    result = proc.run(["ffmpeg", "-hide_banner", "-i", str(Path(video_path).resolve())])
     err = result.stderr or ""
     duration = 0.0
     if m := _BANNER_DURATION.search(err):
@@ -167,7 +166,7 @@ def get_metadata(video_path: str) -> dict:
     if not _ffprobe_usable():
         return _metadata_via_banner(video_path)
     try:
-        result = _run([
+        result = proc.spawn([
             "ffprobe", "-v", "quiet", "-print_format", "json",
             "-show_format", "-show_streams", str(Path(video_path).resolve()),
         ])
@@ -203,15 +202,26 @@ def _pick(out_dir: Path, exts: tuple[str, ...]) -> Path | None:
     return None
 
 
+SUBTITLE_PREFERENCE = (".en.", ".en-orig.", ".en-US.", ".en-GB.")
+
+
+def _subtitle_rank(path: Path) -> tuple[int, str]:
+    for rank, marker in enumerate(SUBTITLE_PREFERENCE):
+        if marker in path.name:
+            return rank, path.name
+    return len(SUBTITLE_PREFERENCE), path.name
+
+
 def _pick_subtitle(out_dir: Path) -> Path | None:
-    candidates = sorted(out_dir.glob("video*.vtt"))
-    if not candidates:
-        return None
-    preferred = [
-        c for c in candidates
-        if any(m in c.name for m in (".en.", ".en-US.", ".en-GB.", ".en-orig."))
-    ]
-    return preferred[0] if preferred else candidates[0]
+    return min(out_dir.glob("video*.vtt"), key=_subtitle_rank, default=None)
+
+
+def _clear_stale_media(out_dir: Path) -> None:
+    """Drop media (and partials) a previous run left in a reused --out-dir."""
+    for stale in out_dir.glob("video*"):
+        if stale.is_file() and stale.suffix not in (".vtt", ".json"):
+            with contextlib.suppress(OSError):
+                stale.unlink()
 
 
 def _read_info(out_dir: Path, url: str) -> dict:
@@ -239,10 +249,9 @@ _SUB_ARGS = [
 
 def fetch_captions(url: str, out_dir: Path) -> dict:
     """Metadata + captions with no media download."""
-    require("yt-dlp")
     out_dir.mkdir(parents=True, exist_ok=True)
-    _run([
-        "yt-dlp", "--skip-download", "--write-info-json", *_SUB_ARGS,
+    ytdlp.run([
+        "--skip-download", "--write-info-json", *_SUB_ARGS,
         "--no-playlist", "--ignore-errors",
         "-P", f"home:{out_dir}", "-o", "video.%(ext)s", "--", url,
     ])
@@ -273,11 +282,11 @@ def download(source: str, out_dir: Path, audio_only: bool = False) -> dict:
             "info": {"title": path.name, "url": str(path)},
         }
 
-    require("yt-dlp")
     out_dir.mkdir(parents=True, exist_ok=True)
+    _clear_stale_media(out_dir)
     fmt = "ba/bestaudio" if audio_only else "bv*[height<=720]+ba/b[height<=720]/bv+ba/b"
-    result = _run([
-        "yt-dlp", "-N", "8", "-f", fmt, "--merge-output-format", "mp4",
+    result = ytdlp.run([
+        "-N", "8", "-f", fmt, "--merge-output-format", "mp4",
         "--write-info-json", *_SUB_ARGS, "--no-playlist", "--ignore-errors",
         "-P", f"home:{out_dir}", "-o", "video.%(ext)s", "--", source,
     ])
@@ -374,8 +383,10 @@ def dedup(frames: list[dict]) -> tuple[list[dict], int]:
     previous one) is what catches a slow fade: each step is under threshold,
     but the cumulative drift is not.
 
-    One ffmpeg call renders every frame to a 16x16 gray thumbnail on stdout;
+    One ffmpeg call renders every frame to a 16x16 RGB thumbnail on stdout;
     the comparison itself is pure stdlib, so there is no image dependency.
+    Colour channels are kept: two slides that differ only in hue can share a
+    luminance, and a gray thumbnail would merge them.
     """
     if len(frames) < 2:
         return frames, 0
@@ -393,13 +404,13 @@ def dedup(frames: list[dict]) -> tuple[list[dict], int]:
     proc = subprocess.run(
         ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "concat",
          "-safe", "0", "-i", str(concat), "-vf",
-         f"scale={DEDUP_THUMB}:{DEDUP_THUMB},format=gray",
+         f"scale={DEDUP_THUMB}:{DEDUP_THUMB},format=rgb24",
          *passthrough_flag(), "-f", "rawvideo", "-"],
         capture_output=True,
     )
     concat.unlink(missing_ok=True)
 
-    size = DEDUP_THUMB * DEDUP_THUMB
+    size = DEDUP_THUMB * DEDUP_THUMB * 3
     blob = proc.stdout or b""
     if proc.returncode != 0 or len(blob) < size * len(frames):
         # Keeping every frame is the safe direction -- but say so. A silent
@@ -464,7 +475,7 @@ def extract_scene(
     cmd += ["-frames:v", str(CANDIDATE_CEILING)]
     cmd += ["-q:v", "4", str(out_dir / "frame_%05d.jpg")]
 
-    result = _run(cmd)
+    result = proc.run(cmd)
     if result.returncode != 0:
         raise SystemExit("scene extraction failed: "
                          + safety.labeled_diagnostic(result.stderr))
@@ -488,7 +499,7 @@ def extract_keyframes(
     cmd += ["-frames:v", str(CANDIDATE_CEILING)]
     cmd += ["-q:v", "4", str(out_dir / "frame_%05d.jpg")]
 
-    result = _run(cmd)
+    result = proc.run(cmd)
     if result.returncode != 0:
         raise SystemExit("keyframe extraction failed: "
                          + safety.labeled_diagnostic(result.stderr))
@@ -504,7 +515,7 @@ def extract_uniform(
 ) -> list[dict]:
     require("ffmpeg")
     _clear(out_dir)
-    result = _run([
+    result = proc.run([
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
         *_range_args(start, end), "-i", str(Path(video).resolve()),
         "-vf", f"fps={fps},{_scale(resolution)}",
@@ -546,7 +557,7 @@ def extract_at(
     failed = 0
     for i, ts in enumerate(wanted):
         path = out_dir / f"cue_{i:04d}.jpg"
-        result = _run([
+        result = proc.run([
             "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
             "-ss", f"{ts:.3f}", "-i", str(Path(video).resolve()),
             "-vf", _scale(resolution), "-frames:v", "1", "-q:v", "4", str(path),

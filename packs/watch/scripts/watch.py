@@ -158,6 +158,7 @@ def main() -> int:
     dl: dict = {"video_path": None, "subtitle_path": None, "info": {}}
     segments: list[dict] = []
     source_label = "none"
+    media_error: str | None = None
 
     # Captions first: on a captioned URL at transcript detail this is the whole
     # job, and no media is ever downloaded.
@@ -178,7 +179,14 @@ def main() -> int:
         if url_source:
             print(f"[watch] downloading {'audio' if audio_only else 'video'}...",
                   file=sys.stderr)
-            dl = media.download(args.source, work / "download", audio_only=audio_only)
+            try:
+                dl = media.download(args.source, work / "download", audio_only=audio_only)
+            except SystemExit as exc:
+                if not segments:
+                    raise
+                media_error = " ".join(str(exc).split())
+                print(f"[watch] media unavailable, continuing with the captions: "
+                      f"{media_error}", file=sys.stderr)
         else:
             dl = media.download(args.source, work / "download")
             if dl.get("subtitle_path") and not segments:
@@ -260,7 +268,7 @@ def main() -> int:
     with contextlib.redirect_stdout(buffer):
         emit_report(args, info, meta, duration, focused, span_start, span_end,
                     span, frames, fmeta, cue_frames, cues_dropped, segments,
-                    source_label, work, managed)
+                    source_label, work, managed, media_error)
     report = buffer.getvalue()
 
     if not args.json:
@@ -297,6 +305,7 @@ def main() -> int:
 def emit_report(
     args, info, meta, duration, focused, span_start, span_end, span,
     frames, fmeta, cue_frames, cues_dropped, segments, source_label, work, managed,
+    media_error,
 ) -> None:
     print()
     print("# watch report")
@@ -334,6 +343,11 @@ def emit_report(
         print(f"- **Frame size:** {args.resolution}px wide "
               f"(~{args.resolution * args.resolution // 750 // 2} tokens each)")
     print(f"- **Transcript:** {len(segments)} segments via {source_label}")
+    if media_error:
+        print()
+        print(f"> **Frames unavailable.** The media download failed after the "
+              f"captions were fetched, so this report carries the transcript "
+              f"only. {media_error}")
 
     if duration > 600 and not focused and args.detail in ("efficient", "balanced"):
         per = duration / max(1, len(frames))

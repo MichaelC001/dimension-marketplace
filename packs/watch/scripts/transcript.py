@@ -16,21 +16,23 @@ YouTube's auto-captions arrive as a rolling window: each spoken line is
 re-rendered two or three times as the caption box scrolls. Naive prefix
 matching misses the transition cue that repeats the tail of the previous one,
 so every line ends up duplicated. `_collapse_rolling` compares whole lines
-against the last line kept and collapses only exact matches -- a genuine
-repetition split across two different cues survives.
+against the last line kept and collapses only exact matches that start within
+ROLLING_GAP_SECONDS of that line's previous showing -- the same words said
+again after a pause are speech, and survive.
 """
 from __future__ import annotations
 
+import html
 import json
 import os
 import re
 import shutil
-import subprocess
 import sys
 import urllib.error
 import urllib.request
 import uuid
 
+import proc
 import safety
 from pathlib import Path
 
@@ -41,6 +43,7 @@ from pathlib import Path
 _STAMP = r"(?:\d{1,3}:)?\d{1,2}:\d{2}[.,]\d{1,3}"
 _CUE = re.compile(rf"({_STAMP})\s*-->\s*({_STAMP})")
 _TAG = re.compile(r"<[^>]+>")
+ROLLING_GAP_SECONDS = 0.25
 
 # 25 MB is the documented upload ceiling for both Groq and OpenAI audio
 # endpoints; stay under it with headroom for multipart overhead.
@@ -68,42 +71,50 @@ def _collapse_rolling(cues: list[dict]) -> list[dict]:
     """Drop lines the caption renderer repeated, keep lines a speaker repeated."""
     out: list[dict] = []
     last_line: str | None = None
+    last_end = float("-inf")
     for cue in cues:
         kept: list[str] = []
         for line in cue["text"].split("\n"):
             line = line.strip()
-            if not line or line == last_line:
+            if not line:
+                continue
+            if line == last_line and cue["start"] <= last_end + ROLLING_GAP_SECONDS:
+                last_end = max(last_end, cue["end"])
                 continue
             kept.append(line)
             last_line = line
+            last_end = cue["end"]
         if kept:
             out.append({**cue, "text": " ".join(kept)})
     return out
 
 
 def parse_captions(path: str | Path) -> list[dict]:
-    """Parse a VTT or SRT file into de-duplicated timestamped segments."""
-    raw = Path(path).read_text(encoding="utf-8", errors="replace")
+    """Parse a VTT or SRT file into de-duplicated timestamped segments.
+
+    A cue's text is the block of lines under its timing line, up to the next
+    truly empty line. A whitespace-only line stays inside the block (YouTube
+    pads its rolling captions with them), and anything outside a block -- the
+    WEBVTT header, NOTE/STYLE blocks, cue identifiers -- is never caption text.
+    """
+    lines = Path(path).read_text(encoding="utf-8-sig", errors="replace").splitlines()
     cues: list[dict] = []
     current: dict | None = None
-    for line in raw.splitlines():
+    for line in lines:
         if match := _CUE.search(line):
-            if current and current["text"].strip():
-                cues.append(current)
             current = {
                 "start": _stamp(match.group(1)),
                 "end": _stamp(match.group(2)),
                 "text": "",
             }
-            continue
-        if current is None:
-            continue
-        text = _TAG.sub("", line).strip()
-        if text and not text.isdigit():
-            current["text"] += (text + "\n")
-    if current and current["text"].strip():
-        cues.append(current)
-    return _collapse_rolling(cues)
+            cues.append(current)
+        elif not line:
+            current = None
+        elif current is not None:
+            text = html.unescape(_TAG.sub("", line)).replace("\xa0", " ").strip()
+            if text:
+                current["text"] += text + "\n"
+    return _collapse_rolling([cue for cue in cues if cue["text"].strip()])
 
 
 def filter_range(segments: list[dict], start: float | None,
@@ -130,11 +141,10 @@ def format_transcript(segments: list[dict]) -> str:
 
 def extract_audio(video: str, dest: Path) -> Path:
     """Mono 16 kHz 64 kbps mp3 -- roughly 0.5 MB per minute."""
-    result = subprocess.run(
+    result = proc.run(
         ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
          "-i", str(Path(video).resolve()), "-vn", "-ac", "1", "-ar", "16000",
          "-b:a", "64k", str(dest)],
-        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     if result.returncode != 0 or not dest.exists():
         raise SystemExit("audio extraction failed: "
@@ -151,10 +161,9 @@ def local_backend() -> str | None:
 
 
 def transcribe_local(audio: Path, tool: str, work: Path) -> list[dict]:
-    result = subprocess.run(
+    result = proc.run(
         [tool, str(audio), "--model", "base", "--output_format", "vtt",
          "--output_dir", str(work)],
-        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     produced = work / (audio.stem + ".vtt")
     if result.returncode != 0 or not produced.exists():
