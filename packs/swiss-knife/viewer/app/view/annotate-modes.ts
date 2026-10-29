@@ -19,9 +19,20 @@ export const MODEL_FOR_MODE: Readonly<Record<AnnotateMode, ArtifactAnnotationMod
 	timeline: "timeline",
 };
 
+export interface CommentWords {
+	readonly subject: string;
+	readonly pageWord?: string;
+}
+
+interface KindAnnotation {
+	readonly modes: readonly AnnotateMode[];
+	readonly words?: CommentWords;
+}
+
 /**
- * Which modes the annotation bar offers for a kind; the first is the one the pane is in (`shownMode`). Empty: there
- * is nothing to annotate.
+ * What each kind declares about its annotation: the modes the annotation bar offers (the first is the one the pane is
+ * in, `shownMode`; empty: there is nothing to annotate) and, for a kind commented on as text, the words its request
+ * to the agent uses for it.
  *
  * A kind is listed only when its renderer puts what the human sees where a layer can reach it: a picture in a box
  * sized to its drawn pixels, or text in a `viewer-text-root` element (Word's is an open shadow root: the kit reads
@@ -32,22 +43,28 @@ export const MODEL_FOR_MODE: Readonly<Record<AnnotateMode, ArtifactAnnotationMod
  * a policy that admits only the hash of the picker script: that script reports layout and the View draws every
  * outline itself. A recording offers `timeline`. Every kind is named, so a new one cannot be added without deciding.
  */
-const MODES: Readonly<Record<ViewerKind, readonly AnnotateMode[]>> = {
-	image: ["marks"],
-	html: ["elements"],
-	audio: ["timeline"],
-	video: ["timeline"],
-	markdown: ["comments"],
-	text: ["comments"],
-	pdf: ["comments"],
-	docx: ["comments"],
-	pptx: ["comments"],
-	xlsx: ["comments"],
-	binary: [],
+const ANNOTATIONS: Readonly<Record<ViewerKind, KindAnnotation>> = {
+	image: { modes: ["marks"] },
+	html: { modes: ["elements"] },
+	audio: { modes: ["timeline"] },
+	video: { modes: ["timeline"] },
+	markdown: { modes: ["comments"], words: { subject: "Markdown document" } },
+	text: { modes: ["comments"], words: { subject: "text file" } },
+	pdf: { modes: ["comments"], words: { subject: "PDF" } },
+	docx: { modes: ["comments"], words: { subject: "Word document" } },
+	pptx: { modes: ["comments"], words: { subject: "PowerPoint presentation", pageWord: "slide" } },
+	xlsx: { modes: ["comments"], words: { subject: "Excel workbook", pageWord: "sheet" } },
+	binary: { modes: [] },
 };
 
+const GENERIC_WORDS: CommentWords = { subject: "document" };
+
 export function annotationModes(kind: ViewerKind): readonly AnnotateMode[] {
-	return MODES[kind];
+	return ANNOTATIONS[kind].modes;
+}
+
+export function commentWords(kind: ViewerKind): CommentWords {
+	return ANNOTATIONS[kind].words ?? GENERIC_WORDS;
 }
 
 const NOTHING_TO_MARK: Readonly<Record<string, true>> = { error: true, unavailable: true };
@@ -61,5 +78,5 @@ const NOTHING_TO_MARK: Readonly<Record<string, true>> = { error: true, unavailab
  * brings the layer back. Derived, so a second `ready` cannot toggle it off.
  */
 export function shownMode(kind: ViewerKind, phase: string): AnnotateMode | null {
-	return Object.hasOwn(NOTHING_TO_MARK, phase) ? null : (MODES[kind][0] ?? null);
+	return Object.hasOwn(NOTHING_TO_MARK, phase) ? null : (ANNOTATIONS[kind].modes[0] ?? null);
 }

@@ -4,7 +4,7 @@
 // (a live proof found them under a failed recording; the same rule had been missing for pictures and text).
 import { describe, expect, test } from "bun:test";
 import { VIEWER_KINDS, type ViewerKind } from "../src/contract";
-import { annotationModes, shownMode } from "../app/view/annotate-modes";
+import { annotationModes, commentWords, shownMode } from "../app/view/annotate-modes";
 import type { AnnotateMode } from "../app/view/pane-shared";
 
 /** What a person annotates in each kind: the table a reader of the pane would draw. Typed over every kind, so a new
@@ -69,6 +69,14 @@ describe("the modes table the pane seats its layers from", () => {
 		for (const kind of VIEWER_KINDS) {
 			const expected = EXPECTED[kind];
 			expect(annotationModes(kind), kind).toEqual(expected === null ? [] : [expected]);
+		}
+	});
+});
+
+describe("the words a kind's request uses", () => {
+	test("every kind commented on as text names itself, so its request never falls back to 'document'", () => {
+		for (const kind of VIEWER_KINDS) {
+			if (EXPECTED[kind] === "comments") expect(commentWords(kind).subject, kind).not.toBe("document");
 		}
 	});
 });
