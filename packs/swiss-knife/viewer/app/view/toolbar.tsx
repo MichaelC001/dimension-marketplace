@@ -106,7 +106,7 @@ export function Toolbar({ filename, path, kind, size, shownBytes, zoom, pager, b
 			</div>
 			)}
 			{/* The annotation tools dock here (`Strip` in pane-shared), in the flow between this bar and the document. */}
-			<div data-slot="viewer-mode-strip" className="shrink-0 empty:hidden" />
+			<div data-slot="viewer-mode-strip" className="shrink-0 empty:hidden [--dam-strip-inset:0.75rem]" />
 		</>
 	);
 }

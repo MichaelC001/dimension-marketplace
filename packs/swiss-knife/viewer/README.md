@@ -89,6 +89,14 @@ person is browsing (scrolling, zooming, pinching, playing) again: a finger has n
 | Audio | **Moment** (`M`), **Stretch** (`I` then `O`) | nothing to arm: notes go on the waveform |
 | Video | **Moment**, **Stretch** · **Pin, Box, Circle, Arrow, Draw** · **Undo, Redo, Clear** | none: pick a tool to draw |
 
+A kind declares its annotation in one place, its entry in `app/view/annotate-modes.ts`: the mode the bar is in and,
+for a kind commented on as text, the words its request to the agent uses (`Markdown document`, `PDF`, `slide` for a
+PowerPoint page). The bar is never drawn by the kind. Each mode names the kit's data for the one toolbar (`markupToolGroups`,
+`commentToolGroups`, the Pick and timeline groups) and the pane seats `AnnotationToolbar` with it in the
+`viewer-mode-strip` slot, which sets the bar's side inset (`--dam-strip-inset`) to the header's own 12 px so the
+first tool lines up with the kind badge above it. A text's one Comment tool, its shortcut and its words are the kit's
+`commentToolGroups` and `COMMENT_KEY`, the same data the shared-file page (`packages/artifact-host`) draws.
+
 What a person adds is a **note** (the list is titled Notes). There is no send button and no row under the content: the
 notes stage themselves in the composer a moment after the person stops changing them, a chip there is the
 confirmation, and the person presses Enter in the chat. A warning or a refusal floats over the bottom of the pane;
