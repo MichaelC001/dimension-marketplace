@@ -548,7 +548,6 @@ function createUploadFileTool(): ToolDefinition<typeof uploadFileSchema> {
 			if (!started.file_id) throw new Error("Slack did not return an address to upload the file to.");
 			const sent = await fetch(address, { method: "POST", body: file.bytes, signal, redirect: "error" });
 			if (!sent.ok) throw new Error(`Slack did not accept the file bytes (${sent.status}).`);
-			signal?.throwIfAborted();
 			try {
 				await slackPost(
 					"files.completeUploadExternal",

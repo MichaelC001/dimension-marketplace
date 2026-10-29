@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { join } from "node:path";
+import { canHardLink } from "./support/hard-link";
 import { BOT_TOKEN } from "./support/shipped-extension";
 import { UPLOAD_FILE_ID, UPLOAD_URL } from "./support/upload-fixture";
 import { jsonBody, runUpload, type SlackRequest, STARTED } from "./support/upload-run";
@@ -392,4 +393,30 @@ test.each(tokenRefusals)("$name's saved file is refused as a token even when the
 	expect(run.outcome.ok).toBe(false);
 	expect(run.outcome.text).toContain("is a saved Slack token");
 	expect(run.requests).toEqual([]);
+});
+
+const HARD_LINKED_TOKENS = [
+	["the bot token", "bot"],
+	["the As you sign-in", "user"],
+] as const;
+
+const hardLinkRefusals = await Promise.all(
+	HARD_LINKED_TOKENS.map(async ([name, token]) => ({
+		name,
+		run: canHardLink
+			? await runUpload({
+					userSignedIn: true,
+					linkedTokens: { "quarterly-notes.json": token },
+					params: () => ({ channel: CHANNEL, path: "quarterly-notes.json" }),
+				})
+			: null,
+	})),
+);
+
+test.skipIf(!canHardLink).each(hardLinkRefusals)("a hard link in the session's folder to $name's saved file is refused as a token, whatever it is named, and nothing is sent", ({
+	run,
+}) => {
+	expect(run?.outcome.ok).toBe(false);
+	expect(run?.outcome.text).toContain("is a saved Slack token");
+	expect(run?.requests).toEqual([]);
 });

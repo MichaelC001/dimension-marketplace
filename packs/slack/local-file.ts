@@ -1,5 +1,5 @@
-import { open, realpath, stat } from "node:fs/promises";
-import { basename, isAbsolute, relative, resolve, sep } from "node:path";
+import { lstat, open, realpath, stat } from "node:fs/promises";
+import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 
@@ -14,16 +14,13 @@ function inside(root: string, target: string): string | null {
 	return rel;
 }
 
-function sameLocation(a: string, b: string): boolean {
-	return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
-}
-
-async function realOrSelf(path: string): Promise<string> {
-	try {
-		return await realpath(path);
-	} catch {
-		return path;
+async function linkOnTheWay(base: string, named: string): Promise<boolean> {
+	let at = base;
+	for (const part of named.split(sep)) {
+		at = join(at, part);
+		if ((await lstat(at)).isSymbolicLink()) return true;
 	}
+	return false;
 }
 
 export async function readUploadable(root: string, requested: string, forbidden: readonly string[]): Promise<UploadableFile> {
@@ -42,26 +39,30 @@ export async function readUploadable(root: string, requested: string, forbidden:
 	if (rel.split(sep).some(part => part.startsWith("."))) {
 		throw new Error(`${requested} is in a hidden file or folder, so it is not uploaded.`);
 	}
-	const asked = inside(resolve(root), lexical) ?? inside(realRoot, lexical);
-	if (asked === null || !sameLocation(asked, rel)) {
+	const lexicalRoot = resolve(root);
+	const viaLexical = inside(lexicalRoot, lexical);
+	const named = viaLexical ?? inside(realRoot, lexical);
+	if (named === null) {
+		throw new Error(`${requested} cannot be matched to the session's folder; give a path inside it.`);
+	}
+	if (await linkOnTheWay(viaLexical === null ? realRoot : lexicalRoot, named)) {
 		throw new Error(`${requested} goes through a link, so it is not uploaded.`);
 	}
-	const secrets = await Promise.all(forbidden.map(realOrSelf));
-	if (secrets.some(secret => sameLocation(secret, real))) {
-		throw new Error(`${requested} is a saved Slack token, so it is not uploaded.`);
-	}
 	if (!(await stat(real)).isFile()) throw new Error(`${requested} is not a file.`);
+	const secrets = await Promise.all(forbidden.map(path => stat(path, { bigint: true }).catch(() => null)));
 	const handle = await open(real, "r");
 	try {
-		const { size } = await handle.stat();
+		const info = await handle.stat({ bigint: true });
+		if (secrets.some(secret => secret !== null && secret.ino !== 0n && secret.ino === info.ino && secret.dev === info.dev)) {
+			throw new Error(`${requested} is a saved Slack token, so it is not uploaded.`);
+		}
+		const size = Number(info.size);
 		if (size === 0) throw new Error(`${requested} is empty.`);
 		if (size > MAX_UPLOAD_BYTES) throw new Error(`${requested} is ${size} bytes; the limit is ${MAX_UPLOAD_BYTES}.`);
-		const bytes = await handle.readFile();
-		if (bytes.byteLength === 0) throw new Error(`${requested} is empty.`);
-		if (bytes.byteLength > MAX_UPLOAD_BYTES) {
-			throw new Error(`${requested} is ${bytes.byteLength} bytes; the limit is ${MAX_UPLOAD_BYTES}.`);
-		}
-		return { name: basename(real), bytes };
+		const buffer = Buffer.allocUnsafe(size + 1);
+		const { bytesRead } = await handle.read(buffer, 0, size + 1, 0);
+		if (bytesRead !== size) throw new Error(`${requested} changed while it was being read.`);
+		return { name: basename(real), bytes: buffer.subarray(0, size) };
 	} finally {
 		await handle.close();
 	}

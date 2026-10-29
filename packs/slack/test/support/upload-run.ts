@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { link, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { type } from "arktype";
@@ -39,6 +39,7 @@ export interface UploadScenario {
 	readonly redirectTo?: string;
 	readonly abortOn?: AbortPoint;
 	readonly withoutContext?: boolean;
+	readonly linkedTokens?: Readonly<Record<string, "bot" | "user">>;
 }
 
 export interface UploadWire {
@@ -98,6 +99,9 @@ export async function runUpload(scenario: UploadScenario): Promise<UploadRun> {
 			const credential = credentialTarget(home, "user");
 			await mkdir(dirname(credential), { recursive: true });
 			await writeFile(credential, userCredentialFile(USER_TOKEN, NEVER_EXPIRES));
+		}
+		for (const [name, token] of Object.entries(scenario.linkedTokens ?? {})) {
+			await link(credentialTarget(home, token), join(folder, name));
 		}
 		const wire: UploadWire = {
 			folder,

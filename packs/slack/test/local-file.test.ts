@@ -1,8 +1,21 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, symlink, truncate, writeFile } from "node:fs/promises";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import {
+	appendFile,
+	type FileHandle,
+	link,
+	mkdir,
+	mkdtemp,
+	open,
+	rm,
+	stat,
+	symlink,
+	truncate,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { MAX_UPLOAD_BYTES, readUploadable } from "../local-file";
+import { canHardLink } from "./support/hard-link";
 
 const BYTES = Uint8Array.from({ length: 1024 }, (_, index) => (index * 37 + 11) % 256);
 
@@ -41,6 +54,41 @@ const canLinkFiles = await (async () => {
 		await rm(probe, { recursive: true, force: true });
 	}
 })();
+
+const caseInsensitiveDisk = await (async () => {
+	const probe = await mkdtemp(join(tmpdir(), "slack-local-file-probe-"));
+	try {
+		await writeFile(join(probe, "probe.txt"), "x");
+		await stat(join(probe, "PROBE.TXT"));
+		return true;
+	} catch {
+		return false;
+	} finally {
+		await rm(probe, { recursive: true, force: true });
+	}
+})();
+
+const handlePrototype = await (async () => {
+	const handle = await open(import.meta.path, "r");
+	try {
+		return Object.getPrototypeOf(handle) as FileHandle;
+	} finally {
+		await handle.close();
+	}
+})();
+
+function afterTheSizeIsRead(change: () => Promise<void>): () => void {
+	const realStat = handlePrototype.stat;
+	const spy = spyOn(handlePrototype, "stat").mockImplementation((async function (
+		this: FileHandle,
+		options?: { bigint: true },
+	) {
+		const info = await realStat.call(this, options);
+		await change();
+		return info;
+	}) as FileHandle["stat"]);
+	return () => spy.mockRestore();
+}
 
 type Request = (folder: string) => string;
 
@@ -92,6 +140,18 @@ test("a file of exactly the size limit is accepted and one byte over is refused 
 	const refusal = readUploadable(root, "over.bin", []);
 	await expect(refusal).rejects.toThrow(String(MAX_UPLOAD_BYTES + 1));
 	await expect(refusal).rejects.toThrow(String(MAX_UPLOAD_BYTES));
+});
+
+test("an oversize file is refused on its size alone, without any of it being read", async () => {
+	await putSized(join(root, "over.bin"), MAX_UPLOAD_BYTES + 1);
+	const read = spyOn(handlePrototype, "read");
+
+	try {
+		await expect(readUploadable(root, "over.bin", [])).rejects.toThrow(`over.bin is ${MAX_UPLOAD_BYTES + 1} bytes`);
+		expect(read).not.toHaveBeenCalled();
+	} finally {
+		read.mockRestore();
+	}
 });
 
 test("a one byte file is accepted and an empty file is refused", async () => {
@@ -178,13 +238,25 @@ test.skipIf(!canLinkFiles)("a link to a file inside the folder is refused as a l
 	expect((await readUploadable(root, "real.md", [])).name).toBe("real.md");
 });
 
-test.skipIf(process.platform !== "win32")("on Windows a request that differs from the real name only in letter case is not mistaken for a link", async () => {
+test.skipIf(!caseInsensitiveDisk)("on a case-insensitive disk a request that differs from the real name only in letter case is accepted, not mistaken for a link", async () => {
 	await put(join(root, "docs", "readme.md"), BYTES);
 
 	const uploadable = await readUploadable(root, "DOCS/README.MD", []);
 
-	expect(uploadable.name).toBe("readme.md");
+	expect(uploadable.name.toLowerCase()).toBe("readme.md");
 	expect(uploadable.bytes.equals(BYTES)).toBe(true);
+});
+
+test.skipIf(process.platform !== "win32")("on Windows an absolute request spelled with the \\\\?\\ prefix cannot be checked for links, so it is refused, for a plain file and for a path through a link alike", async () => {
+	await put(join(root, "report.md"), BYTES);
+	await put(join(root, "docs", "a.md"));
+	await symlink(join(root, "docs"), join(root, "alias"), "junction");
+
+	for (const file of ["report.md", join("alias", "a.md")]) {
+		await expect(readUploadable(root, `\\\\?\\${join(root, file)}`, [])).rejects.toThrow(
+			"cannot be matched to the session's folder",
+		);
+	}
 });
 
 test("a saved token file is refused by name even though it sits in the folder, while its neighbour uploads", async () => {
@@ -208,6 +280,31 @@ test("a saved token file is refused when the token's home is spelled through a l
 	await expect(readUploadable(stowed, "dimension-slack/token.json", forbidden)).rejects.toThrow(
 		"is a saved Slack token",
 	);
+});
+
+test.skipIf(!canHardLink)("a hard link in the folder to a saved token file is refused as a saved token, whatever it is named", async () => {
+	const token = join(base, "config", "token.json");
+	await put(token, '{"access":"xoxb-secret"}');
+	await link(token, join(root, "quarterly-notes.json"));
+
+	await expect(readUploadable(root, "quarterly-notes.json", [token])).rejects.toThrow(
+		"quarterly-notes.json is a saved Slack token",
+	);
+});
+
+test.each([
+	["grows", (path: string) => appendFile(path, " and then some")],
+	["shrinks", (path: string) => truncate(path, 3)],
+])("a file that %s between its size being read and its bytes being read is refused, not uploaded cut short or padded", async (_, change) => {
+	const path = join(root, "report.md");
+	await put(path, BYTES);
+	const restore = afterTheSizeIsRead(() => change(path));
+
+	try {
+		await expect(readUploadable(root, "report.md", [])).rejects.toThrow("report.md changed while it was being read.");
+	} finally {
+		restore();
+	}
 });
 
 test("a token file that is not saved forbids nothing", async () => {
