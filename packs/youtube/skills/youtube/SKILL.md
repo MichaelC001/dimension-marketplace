@@ -127,8 +127,10 @@ repeated searches; per-id `youtube_get_video`/`youtube_channel_stats` reads cost
 These are intentionally **not** implemented — say so honestly if asked, rather
 than pretending:
 
-- **Video upload** (`videos.insert`) — needs a resumable multipart media upload
-  (large binary streaming, distinct machinery); deferred to a later version.
+- **Video upload through the API** (`videos.insert`) — needs a resumable multipart media upload
+  (large binary streaming, distinct machinery). A finished film goes up through YouTube Studio
+  in the person's own browser instead: see the `youtube-package`, `youtube-thumbnail` and
+  `youtube-studio-upload` skills, which need the Browser plugin.
 - **Live chat** (`liveChat*`) — requires an active broadcast and long-poll
   streaming, which doesn't fit a request/response tool.
 - **Caption text download** (`captions.download`) — API-restricted to videos you
