@@ -1499,7 +1499,6 @@ function humanize(slug) {
 function displayName(agent) {
 	return agent.fact?.title ?? defaultDisplayName(agent);
 }
-/** What the agent is called when the person has chosen no name for it. */
 function defaultDisplayName(agent) {
 	return (agent.fact?.titleOverride === void 0 ? agent.fact?.title : void 0) ?? (agent.listed ? extraScalar(agent.listed.draft.extra, "title") : null) ?? humanize(agent.name);
 }
@@ -3136,7 +3135,6 @@ function DisplayNameRow({ agent, configure, renaming }) {
 	const override = agent.fact?.titleOverride;
 	const fallback = defaultDisplayName(agent);
 	const [typed, setTyped] = useState(null);
-	useEffect(() => setTyped(null), [override]);
 	const commit = (title) => void configure(agent.name, { title });
 	return /* @__PURE__ */ jsx(FieldRow, {
 		label: "Display name",
@@ -3146,10 +3144,11 @@ function DisplayNameRow({ agent, configure, renaming }) {
 			children: [/* @__PURE__ */ jsx(Input, {
 				value: typed ?? override ?? "",
 				placeholder: fallback,
-				maxLength: 48,
 				disabled: renaming,
 				"aria-label": "Display name",
-				onChange: (event) => setTyped(event.target.value),
+				onChange: (event) => {
+					if ([...event.target.value].length <= 48) setTyped(event.target.value);
+				},
 				onBlur: () => {
 					const title = displayNameToWrite(typed, override);
 					if (title === void 0) setTyped(null);
@@ -3161,7 +3160,11 @@ function DisplayNameRow({ agent, configure, renaming }) {
 				size: "sm",
 				variant: "ghost",
 				disabled: renaming,
-				onClick: () => commit(""),
+				onMouseDown: (event) => event.preventDefault(),
+				onClick: () => {
+					setTyped(null);
+					commit("");
+				},
 				children: ["Use ", fallback]
 			}) : null]
 		})
@@ -3197,7 +3200,7 @@ function IdentitySection({ draft, set, editable, creating, errors, face, bridged
 						agent: rosterAgent,
 						configure,
 						renaming
-					}) : null,
+					}, rosterAgent.fact.titleOverride ?? "") : null,
 					/* @__PURE__ */ jsxs(FieldRow, {
 						label: "What it is for",
 						hint: "One line. Rooms route to it by this when it declares no card.",

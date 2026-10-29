@@ -153,7 +153,6 @@ export function displayName(agent: RosterAgent): string {
 	return agent.fact?.title ?? defaultDisplayName(agent);
 }
 
-/** What the agent is called when the person has chosen no name for it. */
 export function defaultDisplayName(agent: RosterAgent): string {
 	const manifestTitle = agent.fact?.titleOverride === undefined ? agent.fact?.title : undefined;
 	return manifestTitle ?? (agent.listed ? extraScalar(agent.listed.draft.extra, "title") : null) ?? humanize(agent.name);

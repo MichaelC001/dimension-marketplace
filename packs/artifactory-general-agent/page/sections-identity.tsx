@@ -3,7 +3,7 @@
 // charter, and the standing instructions that follow it from workspace to
 // workspace. Each is drawn as the thing it is (a face, a choice, a file).
 import { Badge, Button, Icon, Input, Textarea, cn } from "@fraym/ui";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { heldByExtra, normalizeTypedName, type Personality, type PromptMode } from "../src/agent-md";
 import type { AgentHome, InstructionFile, ListedAgent } from "../src/contracts";
 import { ChoiceCard, ChoiceGroup, FaceTile, FieldRow, PANEL, Section } from "./chrome";
@@ -98,7 +98,6 @@ function GalleryFace({
 	);
 }
 
-
 function DisplayNameRow({
 	agent,
 	configure,
@@ -111,7 +110,6 @@ function DisplayNameRow({
 	const override = agent.fact?.titleOverride;
 	const fallback = defaultDisplayName(agent);
 	const [typed, setTyped] = useState<string | null>(null);
-	useEffect(() => setTyped(null), [override]);
 	const commit = (title: string) => void configure(agent.name, { title });
 	return (
 		<FieldRow label="Display name" hint={`What it is called on screen and by itself, in new sessions. Empty keeps ${fallback}.`}>
@@ -119,10 +117,11 @@ function DisplayNameRow({
 				<Input
 					value={typed ?? override ?? ""}
 					placeholder={fallback}
-					maxLength={DISPLAY_NAME_MAX_LENGTH}
 					disabled={renaming}
 					aria-label="Display name"
-					onChange={event => setTyped(event.target.value)}
+					onChange={event => {
+						if ([...event.target.value].length <= DISPLAY_NAME_MAX_LENGTH) setTyped(event.target.value);
+					}}
 					onBlur={() => {
 						const title = displayNameToWrite(typed, override);
 						if (title === undefined) setTyped(null);
@@ -132,7 +131,16 @@ function DisplayNameRow({
 					className="max-w-md"
 				/>
 				{override !== undefined ? (
-					<Button size="sm" variant="ghost" disabled={renaming} onClick={() => commit("")}>
+					<Button
+						size="sm"
+						variant="ghost"
+						disabled={renaming}
+						onMouseDown={event => event.preventDefault()}
+						onClick={() => {
+							setTyped(null);
+							commit("");
+						}}
+					>
 						Use {fallback}
 					</Button>
 				) : null}
@@ -187,7 +195,7 @@ export function IdentitySection({
 					)}
 				</FieldRow>
 				{!creating && rosterAgent?.fact !== undefined && configure !== undefined ? (
-					<DisplayNameRow agent={rosterAgent} configure={configure} renaming={renaming} />
+					<DisplayNameRow key={rosterAgent.fact.titleOverride ?? ""} agent={rosterAgent} configure={configure} renaming={renaming} />
 				) : null}
 				<FieldRow label="What it is for" hint="One line. Rooms route to it by this when it declares no card.">
 					<div className="flex items-center gap-2">
