@@ -3,7 +3,9 @@ import { type } from "arktype";
 import { CONNECT_PATH, type CredentialStore, SlackSignInError } from "./credential";
 import type { SlackIdentity } from "./identity";
 import { type McpClient, McpRequestError, type McpTool } from "./mcp-client";
+import type { NativeRoutes } from "./native-routes";
 import { isRecord } from "./type-guards";
+import type { WebApiClient } from "./web-api";
 
 const CATALOG_TTL_MS = 300_000;
 const SUMMARY_CHARS = 160;
@@ -24,6 +26,8 @@ export interface SlackToolDeps {
 	readonly catalog: SlackToolCatalog;
 	readonly store: CredentialStore;
 	readonly identity: SlackIdentity;
+	readonly api: WebApiClient;
+	readonly routes: NativeRoutes;
 }
 
 const toolsSchema = type({
@@ -166,7 +170,10 @@ async function invoke(deps: SlackToolDeps, wanted: ToolAccess, params: typeof ca
 		}
 	}
 	const args = isRecord(params.arguments) ? params.arguments : {};
-	const result = await withSlackErrors(() => deps.client.callTool(tool.name, args, signal));
+	const route = wanted === "write" ? deps.routes.get(tool.name) : undefined;
+	const result = route
+		? await route.run(args, deps.api, signal)
+		: await withSlackErrors(() => deps.client.callTool(tool.name, args, signal));
 	if (result.isError) throw new Error(`Slack ${tool.name} failed: ${result.text || "no detail given"}`);
 	return textResult(truncate(result.text || "(no output)", RESULT_CHARS));
 }

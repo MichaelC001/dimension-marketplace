@@ -26,7 +26,7 @@ const CALLS: readonly (readonly [string, Record<string, unknown>])[] = [
 	["slack_read_messages", { channel: "C0123" }],
 	["slack_read", { tool: "slack_search_public", arguments: { query: "launch" } }],
 	["slack_post_message", { channel: "C0123", text: "from the bot" }],
-	["slack_act", { tool: "slack_send_message", arguments: { channel: "C0123", text: "from me" } }],
+	["slack_act", { tool: "slack_send_message", arguments: { channel_id: "C0123", message: "from me" } }],
 	["slack_read_thread", { channel: "C0123", threadTs: "1700000000.000100" }],
 	["slack_reply_thread", { channel: "C0123", threadTs: "1700000000.000100", text: "bot reply" }],
 	["slack_add_reaction", { channel: "C0123", messageTs: "1700000000.000100", emoji: "thumbsup" }],
@@ -90,6 +90,9 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
 		return Response.json({ jsonrpc: "2.0", id: call.id, result });
 	}
 	if (endpoint === `${BOT_API}auth.test`) return Response.json({ ok: true, user: "ada", team: "Acme" });
+	if (endpoint === `${BOT_API}conversations.info`) {
+		return Response.json({ ok: true, channel: { id: "C0123", is_ext_shared: false, is_pending_ext_shared: false } });
+	}
 	if (endpoint.startsWith(BOT_API)) return Response.json({ ok: true, channel: "C0123", ts: "1700000000.000900" });
 	throw new Error(`unexpected request to ${url}`);
 }) as typeof fetch;

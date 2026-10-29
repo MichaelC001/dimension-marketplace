@@ -119,6 +119,14 @@ sign-in. Whatever the user can see in Slack, this can read. Whatever it sends ap
 Both call tools take `{ tool, arguments }`. Slack defines the tools and their
 arguments, and this skill does not copy them because they change.
 
+`slack_send_message` and `slack_schedule_message` go straight to Slack's Web API with the
+user's sign-in instead of through the MCP server, so the message appears exactly as
+written, with no "Sent using" footer. They take `channel_id`, `message`, `thread_ts`,
+`reply_broadcast` (send also `unfurl_app_links`; schedule also `post_at`) and refuse
+anything else, including `draft_id` (send without it, or leave the draft for the user to
+send from Slack). They refuse channels and people outside the workspace (Slack Connect).
+A user id works as `channel_id` for a direct message.
+
 ### As-you workflow
 
 1. `slack_tools` once per task. Read the schema of the tool you will use first. The
