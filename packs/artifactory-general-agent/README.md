@@ -42,7 +42,7 @@ export `GeneralAgentsPage`) is mounted in a seat with two grants:
 | Grant | What it opens |
 |---|---|
 | `artifactory:call` | `store.call("callOwnServerTool", { tool, args })`: this pack's own server's App-only tools, answered with their structured result or refused with their own words |
-| `agents:configure` | `store.call("configureGeneralAgent", { name, enabled?, listed? })`: the Capabilities page's two switches |
+| `agents:configure` | `store.call("configureGeneralAgent", { name, enabled?, listed?, title? })`: the Capabilities page's two switches, and the display name (blank text clears it) |
 
 ## What the page reads
 
@@ -97,7 +97,7 @@ the thing it is:
 
 | Section | Drawn as |
 |---|---|
-| Identity | name and line; a face gallery (every first-party vibr and every contributed face the host lends); personality and how it speaks as choice cards |
+| Identity | name (the id, fixed) and **Display name** (what the agent is called on screen and by itself in new sessions; any agent, a pack's included; stored as the per-user `generalAgents.titles` overlay, never in a manifest; empty returns the default); its line; a face gallery (every first-party vibr and every contributed face the host lends); personality and how it speaks as choice cards |
 | Voice | the voice it speaks with now and why (with a play button); who decides, as a ladder (this project, you, the agent's own file, default), the in-use row marked; every voice profile as a card with its fallback chain, the layer it comes from and what is in the way, each playable before you choose. A pick at *this project* or *you* applies at once; a pick at *the agent's own file* is part of Save. Pack agents get the first two. |
 | Charter | an editor under the `agent.md` file card |
 | Standing instructions | the in-force `AGENTS.md` as a file card, every candidate tier as a chip, and an editor for the file a save writes |

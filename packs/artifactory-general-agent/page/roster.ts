@@ -146,10 +146,17 @@ export function humanize(slug: string): string {
 	return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
-/** What the agent is called on screen: the host's `title`, the file's own
- *  `title:`, else its name read as words. */
+/** What the agent is called on screen: the host's `title` (the person's own
+ *  name for it when they chose one), the file's own `title:`, else its name
+ *  read as words. */
 export function displayName(agent: RosterAgent): string {
-	return agent.fact?.title ?? (agent.listed ? extraScalar(agent.listed.draft.extra, "title") : null) ?? humanize(agent.name);
+	return agent.fact?.title ?? defaultDisplayName(agent);
+}
+
+/** What the agent is called when the person has chosen no name for it. */
+export function defaultDisplayName(agent: RosterAgent): string {
+	const manifestTitle = agent.fact?.titleOverride === undefined ? agent.fact?.title : undefined;
+	return manifestTitle ?? (agent.listed ? extraScalar(agent.listed.draft.extra, "title") : null) ?? humanize(agent.name);
 }
 
 /** An agent named by its id (a lineage entry), as a person reads it. */

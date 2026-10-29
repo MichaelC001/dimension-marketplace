@@ -127,7 +127,7 @@ export function GeneralAgentsPage(props: GeneralAgentsPageProps) {
 	// Stable between renders (they reach every card), so a card is skipped when
 	// nothing it draws changed.
 	const configure = useCallback(
-		async (name: string, patch: { readonly enabled?: boolean; readonly listed?: boolean }) => {
+		async (name: string, patch: AgentConfigurePatch) => {
 			setBusy(current => new Set([...current, name]));
 			setNotice(undefined);
 			try {
