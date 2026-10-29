@@ -83,6 +83,7 @@ export interface LibraryItem {
 export interface LibraryQuery {
 	readonly q?: string;
 	readonly kinds?: readonly PresentedKind[];
+	readonly tags?: readonly string[];
 	readonly workspace?: string;
 	readonly state?: "live" | "discarded";
 	readonly starred?: boolean;
@@ -101,6 +102,7 @@ export interface LibraryPage {
 export interface LibraryFacets {
 	readonly kinds: Readonly<Partial<Record<PresentedKind, number>>>;
 	readonly workspaces: readonly { readonly path: string; readonly count: number }[];
+	readonly tags: readonly { readonly tag: string; readonly count: number }[];
 	readonly starred: number;
 	readonly shared: number;
 	readonly discarded: number;

@@ -1,4 +1,5 @@
 import type { PresentedKind } from "@dimension/sdk/presentation";
+import { foldAsciiCase } from "../../../../src/library/tags";
 import type { ArtifactState, LibraryItem, LibraryPage, LibraryQuery, LibrarySort } from "../../../../src/library/types";
 
 export type LibraryScope = "all" | "starred" | "shared" | "discarded";
@@ -6,6 +7,7 @@ export type LibraryScope = "all" | "starred" | "shared" | "discarded";
 export interface LibraryFilter {
 	readonly q: string;
 	readonly kinds: readonly PresentedKind[];
+	readonly tags: readonly string[];
 	readonly workspace: string | undefined;
 	readonly scope: LibraryScope;
 	readonly sort: LibrarySort;
@@ -14,13 +16,14 @@ export interface LibraryFilter {
 export const PAGE_SIZE = 200;
 export const SEARCH_DEBOUNCE_MS = 80;
 
-export const DEFAULT_FILTER: LibraryFilter = { q: "", kinds: [], workspace: undefined, scope: "all", sort: "relevance" };
+export const DEFAULT_FILTER: LibraryFilter = { q: "", kinds: [], tags: [], workspace: undefined, scope: "all", sort: "relevance" };
 
 export function queryArgs(filter: LibraryFilter, cursor?: string): LibraryQuery {
 	const q = filter.q.trim();
 	return {
 		...(q === "" ? {} : { q }),
 		...(filter.kinds.length === 0 ? {} : { kinds: filter.kinds }),
+		...(filter.tags.length === 0 ? {} : { tags: filter.tags }),
 		...(filter.workspace === undefined ? {} : { workspace: filter.workspace }),
 		...(filter.scope === "discarded" ? { state: "discarded" as const } : {}),
 		...(filter.scope === "starred" ? { starred: true } : {}),
@@ -37,6 +40,16 @@ export function filterKey(filter: LibraryFilter, generation: number): string {
 
 export function toggleKind(kinds: readonly PresentedKind[], kind: PresentedKind): readonly PresentedKind[] {
 	return kinds.includes(kind) ? kinds.filter(each => each !== kind) : [...kinds, kind];
+}
+
+export function hasTag(tags: readonly string[], tag: string): boolean {
+	const key = foldAsciiCase(tag);
+	return tags.some(each => foldAsciiCase(each) === key);
+}
+
+export function toggleTag(tags: readonly string[], tag: string): readonly string[] {
+	const key = foldAsciiCase(tag);
+	return hasTag(tags, tag) ? tags.filter(each => foldAsciiCase(each) !== key) : [...tags, tag];
 }
 
 export interface CheckedRow {

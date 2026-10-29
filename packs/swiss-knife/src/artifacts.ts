@@ -132,6 +132,7 @@ export async function runArtifacts(library: Library, params: ArtifactsParams, co
 			const page = library.query({
 				...(query === undefined || query === "" ? {} : { q: query, sort: "relevance" as const }),
 				...(params.kind === undefined ? {} : { kinds: [params.kind] }),
+				...(params.tags === undefined ? {} : { tags: params.tags }),
 				...(everywhere ? {} : { workspace: library.workspaceOf(cwd) }),
 				limit: Math.min(params.limit ?? DEFAULT_LIMIT, MAX_LIMIT),
 			});
@@ -213,7 +214,7 @@ export function registerArtifactsTool(pi: ExtensionAPI, library: () => Promise<L
 			return parsed.success ? APPROVAL[parsed.data.op] : "write";
 		},
 		description:
-			"The user's library of files shown or made here. search finds one to present again; discard trash:true also recycles the file.",
+			"The user's library of files shown or made here. search finds one to present again (tags: all must match); discard trash:true also recycles the file.",
 		parameters,
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const text = await runArtifacts(await library(), params, {

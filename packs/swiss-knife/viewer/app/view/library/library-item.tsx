@@ -5,13 +5,15 @@ import { memo, useState } from "react";
 import type { LibraryItem } from "../../../../src/library/types";
 import { formatBytes } from "../format";
 import { KIND_LOOK, relativeAge } from "./kinds";
-import { liveShares, unreadCount } from "./query";
+import { hasTag, liveShares, unreadCount } from "./query";
 
 export interface ItemViewProps {
 	readonly item: LibraryItem;
 	readonly selected: boolean;
 	readonly thumb: string | null;
 	readonly now: number;
+	readonly activeTags: readonly string[];
+	readonly onTag: (tag: string) => void;
 }
 
 export function ThumbOrIcon({ item, thumb, iconSize, className }: { readonly item: LibraryItem; readonly thumb: string | null; readonly iconSize: number; readonly className?: string }) {
@@ -56,6 +58,45 @@ function Badges({ item }: { readonly item: LibraryItem }) {
 	);
 }
 
+const GRID_CHIP = "bg-black/65 text-white";
+const LIST_CHIP = "bg-fr-surface-3 text-fr-text-2";
+const ACTIVE_CHIP = "bg-fr-accent text-fr-accent-ink";
+
+function TagChips({ tags, limit, activeTags, onTag, tone, className }: { readonly tags: readonly string[]; readonly limit: number; readonly activeTags: readonly string[]; readonly onTag: (tag: string) => void; readonly tone: string; readonly className?: string }) {
+	if (tags.length === 0) return null;
+	const shown = tags.slice(0, limit);
+	const hidden = tags.slice(limit);
+	return (
+		<div className={cn("flex min-w-0 items-center gap-1", className)}>
+			{shown.map(tag => {
+				const active = hasTag(activeTags, tag);
+				return (
+					<button
+						key={tag}
+						type="button"
+						tabIndex={-1}
+						title={active ? `Stop filtering by “${tag}”` : `Filter by “${tag}”`}
+						aria-pressed={active}
+						onMouseDown={event => event.preventDefault()}
+						onClick={event => {
+							event.stopPropagation();
+							onTag(tag);
+						}}
+						className={cn("min-w-0 max-w-24 truncate rounded-sm px-1.5 text-fr-2xs leading-[18px] hover:opacity-80", active ? ACTIVE_CHIP : tone)}
+					>
+						{tag}
+					</button>
+				);
+			})}
+			{hidden.length === 0 ? null : (
+				<span title={hidden.join(", ")} className={cn("shrink-0 rounded-sm px-1 text-fr-2xs leading-[18px] tabular-nums", tone)}>
+					+{hidden.length}
+				</span>
+			)}
+		</div>
+	);
+}
+
 function metaLine(item: LibraryItem, now: number): string {
 	const parts = [KIND_LOOK[item.kind].label, formatBytes(item.size)];
 	if (item.durationMs !== undefined) parts.push(formatDuration(item.durationMs));
@@ -63,7 +104,7 @@ function metaLine(item: LibraryItem, now: number): string {
 	return parts.join(" · ");
 }
 
-export const GridCell = memo(function GridCell({ item, selected, thumb, now }: ItemViewProps) {
+export const GridCell = memo(function GridCell({ item, selected, thumb, now, activeTags, onTag }: ItemViewProps) {
 	const title = item.title ?? item.name;
 	return (
 		<div
@@ -79,10 +120,18 @@ export const GridCell = memo(function GridCell({ item, selected, thumb, now }: I
 				{item.kind === "video" && item.durationMs !== undefined ? (
 					<span className="absolute bottom-1.5 right-1.5 rounded-sm bg-black/65 px-1 text-fr-2xs leading-4 text-white tabular-nums">{formatDuration(item.durationMs)}</span>
 				) : null}
+				<TagChips
+					tags={item.tags}
+					limit={2}
+					activeTags={activeTags}
+					onTag={onTag}
+					tone={GRID_CHIP}
+					className={cn("absolute bottom-1.5 left-1.5", item.kind === "video" && item.durationMs !== undefined ? "max-w-[calc(100%-3.75rem)]" : "max-w-[calc(100%-0.75rem)]")}
+				/>
 			</div>
 			<div className="flex min-h-0 flex-1 flex-col justify-center gap-0.5 px-2.5">
 				<div className="flex min-w-0 items-center gap-1.5">
-					<span className="min-w-0 flex-1 truncate text-fr-sm font-medium text-fr-text" title={item.path}>
+					<span className="min-w-0 flex-1 truncate text-fr-sm font-medium text-fr-text" title={item.note === undefined ? item.path : `${item.note}\n${item.path}`}>
 						{title}
 					</span>
 					<Badges item={item} />
@@ -93,7 +142,7 @@ export const GridCell = memo(function GridCell({ item, selected, thumb, now }: I
 	);
 });
 
-export const ListRow = memo(function ListRow({ item, selected, thumb, now }: ItemViewProps) {
+export const ListRow = memo(function ListRow({ item, selected, thumb, now, activeTags, onTag }: ItemViewProps) {
 	const title = item.title ?? item.name;
 	return (
 		<div
@@ -108,11 +157,14 @@ export const ListRow = memo(function ListRow({ item, selected, thumb, now }: Ite
 				<ThumbOrIcon item={item} thumb={thumb} iconSize={15} />
 			</div>
 			<div className="flex min-w-0 flex-1 flex-col">
-				<span className="truncate text-fr-sm text-fr-text">{title}</span>
+				<span className="truncate text-fr-sm text-fr-text" title={item.note}>
+					{title}
+				</span>
 				<span className="truncate text-fr-xs text-fr-text-3" title={item.path}>
 					{item.path}
 				</span>
 			</div>
+			<TagChips tags={item.tags} limit={2} activeTags={activeTags} onTag={onTag} tone={LIST_CHIP} className="hidden shrink-0 md:flex" />
 			<div className="flex shrink-0 items-center gap-1.5">
 				<Badges item={item} />
 			</div>

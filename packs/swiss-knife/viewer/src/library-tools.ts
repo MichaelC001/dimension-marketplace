@@ -5,6 +5,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { defaultTrash } from "../../src/library/trash";
 import { LibraryError } from "../../src/library/errors";
+import { MAX_TAGS } from "../../src/library/tags";
 import type { Library } from "../../src/library/types";
 import { MAX_THUMB_BYTES } from "../../src/thumbnail";
 import { TAB_META_KEY, VIEWER_VIEW_URI } from "./contract";
@@ -72,6 +73,7 @@ export function registerLibraryTools(server: McpServer, { library, fence, media 
 			inputSchema: {
 				q: z.string().max(200).optional(),
 				kinds: z.array(z.enum(PRESENTED_KINDS)).max(PRESENTED_KINDS.length).optional(),
+				tags: z.array(z.string().max(100)).max(MAX_TAGS).optional(),
 				workspace: path.optional(),
 				state: z.enum(["live", "discarded"]).optional(),
 				starred: z.boolean().optional(),

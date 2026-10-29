@@ -44,7 +44,7 @@ describe("library query arguments", () => {
 	});
 
 	test("each filter maps to its own argument, the search trimmed, a cursor carried", () => {
-		const args = queryArgs({ q: "  deck ", kinds: ["pdf", "pptx"], workspace: "/work", scope: "discarded", sort: "name" }, "c1");
+		const args = queryArgs({ q: "  deck ", kinds: ["pdf", "pptx"], tags: [], workspace: "/work", scope: "discarded", sort: "name" }, "c1");
 		expect(args).toEqual({ q: "deck", kinds: ["pdf", "pptx"], workspace: "/work", state: "discarded", sort: "name", cursor: "c1", limit: PAGE_SIZE });
 		expect(queryArgs({ ...DEFAULT_FILTER, scope: "starred" }).starred).toBe(true);
 		expect(queryArgs({ ...DEFAULT_FILTER, scope: "shared" }).shared).toBe(true);
