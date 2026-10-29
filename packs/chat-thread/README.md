@@ -2,7 +2,7 @@
 
 ## What it is
 
-The Chat space's conversation and nothing else: your words, the assistant's words, and one quiet "Worked for" line per turn. It is built from the kit's `StoreThread` part, with no tool rows except a card for a file the assistant shows you, and no shipped thread inside.
+The Chat space's conversation and nothing else: your words, the assistant's words, and one quiet "Worked for" line per turn. It is built from the kit's `StoreThread` part, with no tool rows except a card for a file or an interface the assistant shows you, and no shipped thread inside.
 
 ## What it contains
 
@@ -14,7 +14,7 @@ Anyone on the canary release ring for now (`"channel": "canary"`; hidden on stab
 
 ## Limits and risks
 
-- It hides tool activity by design: what the agent ran is summarised as the "Worked for" line, not listed, apart from a card for a file the assistant shows you.
+- It hides tool activity by design: what the agent ran is summarised as the "Worked for" line, not listed, apart from a card for a file the assistant shows you and an interface it draws (`render_ui`, pack `generative-ui`). Both are drawn by the kit, so this pack carries no code for them.
 - It shows the conversation the host gives it and holds no data of its own.
 
 ## Build and test

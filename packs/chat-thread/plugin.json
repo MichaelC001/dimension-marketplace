@@ -1,8 +1,8 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "chat-thread",
-	"version": "0.1.4",
-	"description": "The conversation view for the Chat space: your words and the assistant's, one quiet \"Worked for\" line per turn and a card for any file it shows you.",
+	"version": "0.1.5",
+	"description": "The conversation view for the Chat space: your words and the assistant's, one quiet \"Worked for\" line per turn and a card for any file or interface it shows you.",
 	"author": {
 		"name": "Dimension"
 	},
