@@ -70,7 +70,7 @@ export function inspectImage(path) {
 }
 
 function ffmpeg(args) {
-	const result = spawnSync(process.env.FFMPEG || "ffmpeg", ["-hide_banner", "-loglevel", "error", "-y", ...args], { encoding: "utf8" });
+	const result = spawnSync(process.env.FFMPEG || "ffmpeg", ["-hide_banner", "-loglevel", "error", "-nostdin", "-y", ...args], { encoding: "utf8", timeout: 120_000, windowsHide: true });
 	if (result.error) return { ok: false, message: `ffmpeg could not start (${result.error.message}); install it or set FFMPEG=<path>` };
 	return result.status === 0 ? { ok: true } : { ok: false, message: (result.stderr || `ffmpeg exited ${result.status}`).trim().split("\n").slice(-3).join(" | ") };
 }
@@ -82,7 +82,7 @@ export function encodeJpeg(input, output, maxBytes = LIMITS.targetBytes) {
 	for (const quality of QUALITY_LADDER) {
 		const run = ffmpeg(["-i", input, "-vf", `scale=${LIMITS.width}:${LIMITS.height}:flags=lanczos:force_original_aspect_ratio=disable,format=yuvj420p`, "-frames:v", "1", "-q:v", String(quality), output]);
 		if (!run.ok) return { ok: false, message: run.message };
-		if (statSync(output).size <= maxBytes) return { ok: true, quality, ...inspectImage(output) };
+		if (statSync(output).size <= maxBytes) return { ...inspectImage(output), ok: true, quality };
 	}
 	return { ok: false, message: `no quality up to the lowest fit ${maxBytes} bytes; simplify the image (fewer gradients, less texture)` };
 }
@@ -97,7 +97,7 @@ export function phoneSheet(output, images) {
 		images
 			.map((_, index) => `[${index}:v]scale=${width}:${height}:flags=area,drawbox=x=iw-${margin}-${badgeWidth}:y=ih-${margin}-20:w=${badgeWidth}:h=20:color=black@0.8:t=fill,pad=${width + gap * 2}:${height + gap * 2}:${gap}:${gap}:color=0x202020[r${width}_${index}]`)
 			.join(";");
-	const stack = width => images.map((_, index) => `[r${width}_${index}]`).join("") + `hstack=inputs=${images.length}[h${width}]`;
+	const stack = width => (images.length === 1 ? `[r${width}_0]copy[h${width}]` : images.map((_, index) => `[r${width}_${index}]`).join("") + `hstack=inputs=${images.length}[h${width}]`);
 	const wide = 336 + 16;
 	const graph = `${row(168, 94, 36, 4, 8)};${stack(168)};${row(336, 188, 40, 8, 8)};${stack(336)};[h168]pad=${wide * images.length}:ih:0:0:color=0x202020[a];[a][h336]vstack=inputs=2[sheet]`;
 	const run = ffmpeg([...images.flatMap(image => ["-i", image]), "-filter_complex", graph, "-map", "[sheet]", "-frames:v", "1", output]);

@@ -360,6 +360,8 @@ build spaces get: `code` (the default) gives them `browser_run` and not the step
 and Traction and Video also get `browser_run` wherever the mode offers it. Video needs it for
 `tab.uploadFile`: the step tools have no file step, so a session with only those cannot hand a file to a page.
 
+`browser_run` is an exec-tier tool: the host asks the person before each run, and a cell has full Node access in the server's worker as the person's own account. Giving it to the video space is deliberate (the Studio upload needs `tab.uploadFile`, which the step tools lack) and it widens what a video session can do to the machine and to any saved profile it opens. `DIMENSION_BROWSER_MODEL_TOOLS=steps` offers the step tools only.
+
 | Offered to | Tools |
 |---|---|
 | Every space the pack is granted (4) | `browser_view`, `browser_read`, `browser_profiles`, `browser_close` |

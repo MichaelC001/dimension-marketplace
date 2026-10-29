@@ -74,8 +74,8 @@ const videoIdOnPage = () => studio.run(async ({ page }) => page.evaluate(() => {
   const links = [];
   const walk = root => { for (const el of root.querySelectorAll("*")) { if (typeof el.href === "string") links.push(el.href); if (el.shadowRoot) walk(el.shadowRoot); } };
   walk(document);
-  const hit = links.map(link => /youtu\.be\/([A-Za-z0-9_-]{11})|[?&]v=([A-Za-z0-9_-]{11})/.exec(link)).find(Boolean);
-  return hit ? (hit[1] ?? hit[2]) : null;
+  const ids = [...new Set(links.map(link => /youtu\.be\/([A-Za-z0-9_-]{11})|[?&]v=([A-Za-z0-9_-]{11})/.exec(link)).filter(Boolean).map(hit => hit[1] ?? hit[2]))];
+  return ids.length === 1 ? ids[0] : null;
 }));
 ```
 
@@ -99,7 +99,7 @@ must("description", PUBLISH.description.text, await setBox("description-textarea
 display(readback);
 ```
 
-`PUBLISH` is the parsed `receipts/publish.json`: read the file in the agent and hand the strings to the cell as data (a `const PUBLISH = {...}` line at the top of the cell), never retype a description. If `description` does not read back identical, the line breaks were changed: insert it line by line, pressing Enter between lines, and read it again. Studio fills the title with the file name first; `setBox` replaces it.
+`PUBLISH` is the parsed `receipts/publish.json`. Load it in the cell from the file (`const PUBLISH = JSON.parse((await import("node:fs")).readFileSync("<absolute path of receipts/publish.json>", "utf8"))`), never retype or re-quote it into the cell: a description is text from a model and the web, and a hand-built string literal is how it would become code. If `description` does not read back identical, the line breaks were changed: insert it line by line, pressing Enter between lines, and read it again. Studio fills the title with the file name first; `setBox` replaces it. `videoIdOnPage` answers only when the page shows exactly one video id; with none or several, find the id by hand.
 
 ## 5. Thumbnail
 
@@ -137,7 +137,7 @@ const videoId = await videoIdOnPage();
 display({ videoId });
 ```
 
-Public goes through the person first (see the skill). Press the page's last button (**Save** for private and unlisted, **Publish** for public) only once `videoId` is not null. The upload and processing take as long as the file: wait in cells of at most 300 s (`studio.waitForSelector(..., { timeout })`), and `browser_run({ resume })` when a cell is still running.
+Before the last button, make the cell check what the page says rather than what you meant: `if ((await isOn(VISIBILITY_LABEL)) !== true) throw new Error("visibility is not set")`, where `VISIBILITY_LABEL` is Private, Unlisted or Public. A `public` or `scheduled` package needs the person's yes in this conversation naming the title and the channel, and the cell throws unless a `CONFIRMED` constant you set from their reply equals that title. Press the page's last button (**Save** for private and unlisted, **Publish** for public) only once `videoId` is not null. The upload and processing take as long as the file: wait in cells of at most 300 s (`studio.waitForSelector(..., { timeout })`), and `browser_run({ resume })` when a cell is still running.
 
 ## 9. Read it back
 

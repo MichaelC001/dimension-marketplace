@@ -21,6 +21,7 @@ Off by default; turn it on in Plugins. The connector needs a Google sign-in thro
 
 - **The upload has not been run against a signed-in Studio.** The way it finds elements, attaches a file, replaces text and reads it back was exercised on a stand-in page built like Studio. The labels come from YouTube's help pages and public automation projects. Studio changes its markup; the skill reads the page first and stops when a field will not read back.
 - **It never handles your password.** Sign-in, two-step verification and CAPTCHA are yours, in the Browser View.
+- **The upload runs `browser_run`, which has full Node access** on your machine and uses whichever saved browser profile you let it open, including its Google sign-in. The host asks before each run. Use a profile you are happy for the agent to act in, and watch in the Browser View.
 - **Public needs your yes.** A private or unlisted upload is the default and can be deleted; a public one is asked for by title and channel.
 - **Disclosure is your decision.** The skill sets out what YouTube says must carry the AI label and records your answer with reasons; it cannot tell whether a clip looks real, and commentary clips carry a fair-use judgement that is yours.
 - **Thumbnails are 1280×720.** YouTube recommends larger; the Motion plugin's stills are this size. Custom thumbnails need a verified channel. The overlay zones and the title and thumbnail statistics the skills quote are third-party measurements, labelled as such, and can change.

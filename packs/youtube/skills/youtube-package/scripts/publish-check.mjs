@@ -3,9 +3,9 @@
 // receipts/publish.json before anything is uploaded. Read-only: it never writes into a production.
 // Zero dependencies; runs on node >= 22 and on bun.
 //
-//   node publish-check.mjs chapters <production-dir> [--duration <seconds>] [--intro-title <text>] [--min-seconds 10] [--merge-short]
+//   node publish-check.mjs chapters <production-dir> [--duration <seconds>] [--intro-title <text> | --intro-title-file <path>] [--min-seconds 10] [--merge-short]
 //   node publish-check.mjs check    <production-dir> [--file receipts/publish.json] [--stage package|upload] [--no-files] [--json]
-//   node publish-check.mjs title    <text...>
+//   node publish-check.mjs title    <text...> | --file <path>
 //
 // Exit code: 0 clean (warnings allowed), 1 findings with errors, 2 bad usage.
 //
@@ -15,9 +15,22 @@
 // agent and the person; this only refuses a package that breaks a rule YouTube states in writing.
 
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+
+/** The sha256 of a file read in 8 MB blocks, so a master of any size is hashed without being held in memory. */
+function sha256File(path) {
+	const hash = createHash("sha256");
+	const buffer = Buffer.allocUnsafe(8 * 1024 * 1024);
+	const descriptor = openSync(path, "r");
+	try {
+		for (let read = readSync(descriptor, buffer, 0, buffer.length, null); read > 0; read = readSync(descriptor, buffer, 0, buffer.length, null)) hash.update(buffer.subarray(0, read));
+	} finally {
+		closeSync(descriptor);
+	}
+	return hash.digest("hex");
+}
 
 export const RULES = {
 	titleMaxChars: 100,
@@ -321,7 +334,10 @@ function checkMaster(directory, publish, findings, options, duration) {
 	if (isText(master.editRevision) && body.editRevision !== master.editRevision) findings.error("master-stale", "master.editRevision", "the render receipt is for a different edit revision than the package records");
 	const bytes = statSync(file).size;
 	if (typeof body.output?.bytes === "number" && body.output.bytes !== bytes) findings.error("master-replaced", "master.path", `${master.path} is ${bytes} bytes, its render receipt says ${body.output.bytes}: the file changed after the render`);
-	if (typeof body.output?.sha256 === "string" && typeof master.sha256 === "string" && body.output.sha256 !== master.sha256) findings.error("master-hash", "master.sha256", "master.sha256 differs from the render receipt");
+	if (typeof body.output?.sha256 === "string") {
+		if (sha256File(file) !== body.output.sha256) findings.error("master-replaced", "master.path", `${master.path} does not hash to the sha256 its render receipt records: the file changed after the render`);
+		if (typeof master.sha256 === "string" && body.output.sha256 !== master.sha256) findings.error("master-hash", "master.sha256", "master.sha256 differs from the render receipt");
+	}
 	if (duration > 0 && duration < 1) findings.warn("master-short", "master.durationSeconds", "under a second");
 }
 
@@ -446,7 +462,8 @@ function checkThumbnail(directory, publish, findings, options, titleText) {
 		if (!existsSync(file)) return findings.error("thumbnail-file-missing", `${path}.path`, `${variant.path} does not exist`);
 		const bytes = readFileSync(file);
 		if (bytes.length !== variant.bytes) findings.error("thumbnail-changed", `${path}.bytes`, `${variant.path} is ${bytes.length} bytes, the package says ${variant.bytes}: it changed after it was measured`);
-		else if (typeof variant.sha256 === "string" && sha256(bytes) !== variant.sha256) findings.error("thumbnail-hash", `${path}.sha256`, `${variant.path} differs from the file that was measured`);
+		else if (typeof variant.sha256 !== "string") findings.error("thumbnail-hash-missing", `${path}.sha256`, "sha256 is required so a change after measurement is caught (thumbnail-pack.mjs inspect prints it)");
+		else if (sha256(bytes) !== variant.sha256) findings.error("thumbnail-hash", `${path}.sha256`, `${variant.path} differs from the file that was measured`);
 	});
 	if (!isText(thumbnail.chosen) || !ids.has(thumbnail.chosen)) findings.error("thumbnail-chosen", "thumbnail.chosen", "thumbnail.chosen must be the id of the variant to upload as the thumbnail (a, b or c)");
 }
@@ -493,8 +510,10 @@ function checkCredits(publish, findings, assets) {
 	const text = publish.description?.text ?? "";
 	for (const asset of assets) {
 		if (!NEEDS_CREDIT_LICENSES.has(asset.license) && !(asset.attributionRequired === true)) continue;
-		if (isText(asset.attribution) && !text.includes(asset.attribution)) findings.error("credit-absent", "description.text", `the credit line for "${asset.id}" (${JSON.stringify(asset.attribution)}) is not in the description`);
-		if (asset.license === "commentary" && isText(asset.sourceUrl) && !text.includes(asset.sourceUrl)) findings.error("commentary-source-absent", "description.text", `the source of commentary clip "${asset.id}" (${asset.sourceUrl}) is not in the description`);
+		if (!isText(asset.attribution)) findings.error("credit-missing", "description.text", `"${asset.id}" needs a credit line and its record has no attribution`);
+		else if (!text.includes(asset.attribution)) findings.error("credit-absent", "description.text", `the credit line for "${asset.id}" (${JSON.stringify(asset.attribution)}) is not in the description`);
+		if (asset.license === "commentary" && !isText(asset.sourceUrl)) findings.error("commentary-source-missing", "description.text", `commentary clip "${asset.id}" has no sourceUrl in its record`);
+		else if (asset.license === "commentary" && !text.includes(asset.sourceUrl)) findings.error("commentary-source-absent", "description.text", `the source of commentary clip "${asset.id}" (${asset.sourceUrl}) is not in the description`);
 	}
 }
 
@@ -502,7 +521,7 @@ function checkCaptions(directory, publish, findings, options, duration) {
 	const captions = publish.captions;
 	if (!isRecord(captions)) return findings.error("captions-missing", "captions", "captions is required: the SRT to upload, or { file: null, reason } when there is no speech");
 	if (captions.file === null) return isText(captions.reason) ? undefined : findings.error("captions-reason", "captions.reason", "say why there is no caption file");
-	if (!isProductionPath(captions.file) || !captions.file.endsWith(".srt")) return findings.error("captions-path", "captions.file", "captions.file must be a .srt under renders/");
+	if (!isProductionPath(captions.file) || !captions.file.startsWith("renders/") || !captions.file.endsWith(".srt")) return findings.error("captions-path", "captions.file", "captions.file must be a .srt under renders/");
 	if (!isText(captions.language)) findings.error("captions-language", "captions.language", "captions.language must match settings.language so the track is filed under the spoken language");
 	else if (captions.language !== publish.settings?.language) findings.warn("captions-language-differs", "captions.language", `captions are ${captions.language}, the video language is ${publish.settings?.language}`);
 	if (captions.reviewed !== true) findings.warn("captions-unreviewed", "captions.reviewed", "read the SRT against the script and the claim list (names, product terms, numbers) and set reviewed: true");
@@ -518,10 +537,10 @@ function checkCaptions(directory, publish, findings, options, duration) {
 /** YouTube's A/B test: up to 3 titles and/or thumbnails, desktop Studio, not for private, made-for-kids or Shorts (help answer 16391400). */
 function checkAbTest(publish, findings) {
 	const plan = publish.thumbnail?.abTest;
-	if (plan === undefined || plan.run !== true) return;
+	if (!isRecord(plan) || plan.run !== true) return;
 	if (!["thumbnail", "title", "title-and-thumbnail"].includes(plan.target)) return findings.error("ab-test-target", "thumbnail.abTest.target", 'target is "thumbnail", "title" or "title-and-thumbnail"');
 	if (publish.settings?.visibility === "private") findings.error("ab-test-private", "settings.visibility", "YouTube does not run an A/B test on a private video; publish it unlisted or public, or set abTest.run to false");
-	const variantIds = new Set((publish.thumbnail?.variants ?? []).map(variant => variant.id));
+	const variantIds = new Set((publish.thumbnail?.variants ?? []).filter(isRecord).map(variant => variant.id));
 	if (plan.target !== "title") {
 		if (!Array.isArray(plan.order) || plan.order.length < 2 || plan.order.length > 3 || plan.order.some(id => !variantIds.has(id))) findings.error("ab-test-order", "thumbnail.abTest.order", "order lists 2 or 3 variant ids, the one to show by default first");
 		else if (plan.order[0] !== publish.thumbnail?.chosen) findings.error("ab-test-first", "thumbnail.abTest.order", "the first variant uploaded is the default when the test is inconclusive, so it must be thumbnail.chosen");
@@ -567,6 +586,10 @@ function findPlaceholders(value, path, findings) {
 export function checkPublish(directory, options = {}) {
 	const settings = { files: options.files !== false, file: options.file ?? "receipts/publish.json", stage: options.stage === "package" ? "package" : "upload" };
 	const findings = new Findings();
+	if (!isProductionPath(settings.file)) {
+		findings.error("file-path", "file", "--file must be a production-relative path such as receipts/publish.json");
+		return { ok: false, ...summarize(findings) };
+	}
 	const target = join(directory, settings.file);
 	const loaded = readJson(target);
 	if (loaded.error) {
@@ -610,6 +633,12 @@ function flag(argv, name) {
 	return index === -1 ? undefined : argv[index + 1];
 }
 
+/** Free text comes from a flag, or from a file named by the flag with -file added: model-written text never has to pass through a shell string. */
+function textFlag(argv, name) {
+	const file = flag(argv, `${name}-file`);
+	return file !== undefined ? readFileSync(file, "utf8").trim() : flag(argv, name);
+}
+
 function runChapters(argv) {
 	const directory = argv[0];
 	if (!directory) return usage();
@@ -621,7 +650,7 @@ function runChapters(argv) {
 	const durationFlag = flag(argv, "--duration");
 	const result = buildChapters(edl.value, {
 		...(durationFlag !== undefined ? { durationSeconds: Number(durationFlag) } : {}),
-		...(flag(argv, "--intro-title") !== undefined ? { introTitle: flag(argv, "--intro-title") } : {}),
+		...(textFlag(argv, "--intro-title") !== undefined ? { introTitle: textFlag(argv, "--intro-title") } : {}),
 		...(flag(argv, "--min-seconds") !== undefined ? { minSeconds: Number(flag(argv, "--min-seconds")) } : {}),
 		mergeShort: argv.includes("--merge-short"),
 	});
@@ -645,7 +674,8 @@ function runCheck(argv) {
 }
 
 function runTitle(argv) {
-	const text = argv.join(" ").trim();
+	const fileFlag = flag(argv, "--file");
+	const text = (fileFlag !== undefined ? readFileSync(fileFlag, "utf8") : argv.join(" ")).trim();
 	if (!text) return usage();
 	const length = chars(text);
 	console.log(JSON.stringify({ text, chars: length, lengthScore: titleLengthScore(length), findings: lintTitle(text) }, null, 2));
@@ -653,7 +683,7 @@ function runTitle(argv) {
 }
 
 function usage() {
-	console.error("usage: publish-check.mjs chapters <production-dir> [--duration s] [--intro-title text] [--min-seconds 10] [--merge-short]\n       publish-check.mjs check <production-dir> [--file receipts/publish.json] [--stage package|upload] [--no-files] [--json]\n       publish-check.mjs title <text...>");
+	console.error("usage: publish-check.mjs chapters <production-dir> [--duration s] [--intro-title text | --intro-title-file path] [--min-seconds 10] [--merge-short]\n       publish-check.mjs check <production-dir> [--file receipts/publish.json] [--stage package|upload] [--no-files] [--json]\n       publish-check.mjs title <text...> | --file <path>");
 	return 2;
 }
 

@@ -37,7 +37,7 @@ Write at least five options across at least two patterns, so the choice is a com
 
 Ship an option at **22 of 30 or more with accuracy and risk both 4 or more**. If none reaches it, write better options; do not pass a lower one. Put the winner in `title.chosen`, word for word the same as its option.
 
-`node <SKILL_DIR>/scripts/publish-check.mjs title "<text>"` prints the length, the length score and every lint warning for one title. Run it on each option before scoring.
+`node "<SKILL_DIR>/scripts/publish-check.mjs" title --file <file holding the title>` prints the length, the length score and every lint warning for one title. Run it on each option before scoring. A title is model-written text: pass it in a file, never inside a quoted shell argument, where `$(...)`, backticks and `"` still act.
 
 ### Proof for the title
 
@@ -50,7 +50,7 @@ The first lines are all a viewer sees before "more" on a phone, and they tell th
 1. **Open with one or two sentences that say what the film shows and what the viewer gets**, with the main phrase in the first 150 characters. The gate warns if `description.primaryKeyword` is not there. No link, no hashtag, no timestamp list and no "In this video" in those lines.
 2. **Pick one or two main words** and use them in the title and the description (YouTube, answer 12948449). Each video needs its own description; never paste one across films.
 3. **Chapters as one unbroken block** after the hook. Build them from the edit's markers, never by hand:
-   `node <SKILL_DIR>/scripts/publish-check.mjs chapters <production-dir> --intro-title "<name of the opening>"`
+   `node "<SKILL_DIR>/scripts/publish-check.mjs" chapters "<production-dir>" --intro-title-file <file holding the name of the opening>`
    It reads `edl.json`, adds a `00:00` chapter when the first marker is later, uses hours only from one hour up, and reports what it did. If a marker is too close to the next one it names it; fix the marker in the edit (or pass `--merge-short` to fold short ones into the chapter before). A film under 30 s has no chapters and its description carries no timestamp lines. Chapter titles are the marker labels: rename a marker in the edit, not here.
 4. **Sources.** Each claim in the film that rests on a page gets its link, labelled. Copy them from the ledger's `sourceUrl` rows; do not add one the film does not use. `description.sources[].url` must appear in `description.text`.
 5. **Credits.** Every asset that needs a credit has its credit line in the description, word for word (see [disclosure-and-credits.md](disclosure-and-credits.md)).

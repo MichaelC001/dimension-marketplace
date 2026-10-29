@@ -28,12 +28,12 @@ Read these from the production folder (its name is the production id):
 | `renders/*.srt` | captions |
 | `brief.md` | who it is for and what it promises |
 
-**Stop and tell the person, with the exact missing thing, when:** there is no final render receipt; the edit changed after the render (the gate says `master-stale`); the claim list has a claim with no proof that the title or description would repeat; an asset record has no licence. Do not invent around any of them.
+**Stop and tell the person, with the exact missing thing, when:** there is no final render receipt; the edit has changed since the render (the gate catches a master that no longer hashes to its receipt and a runtime that drifts from the edit by more than a second, `master-replaced` and `master-duration-drift`; it does not read the edit's own revision, so ask the person whether the edit changed after the last render); the claim list has a claim with no proof that the title or description would repeat; an asset record has no licence. Do not invent around any of them.
 
 ## Order of work
 
-1. **Chapters.** `node <SKILL_DIR>/scripts/publish-check.mjs chapters <production-dir> --intro-title "<name of the opening>"`. It prints the block to paste, and what it had to do. A marker too close to the next one is a fix in the edit, not here. A film under 30 s has no chapters; leave `description.chapters` empty and put no timestamps in the text.
-2. **Titles.** Write at least five options in at least two patterns, lint each with `publish-check.mjs title "<text>"`, score them, choose one. Rules and the scoring table: [references/title-and-description.md](references/title-and-description.md).
+1. **Chapters.** Text from a model or a page never goes inside a shell string. Write the name of the opening to a small file and run `node "<SKILL_DIR>/scripts/publish-check.mjs" chapters "<production-dir>" --intro-title-file <that file>`. It prints the block to paste, and what it had to do. A marker too close to the next one is a fix in the edit, not here. A film under 30 s has no chapters; leave `description.chapters` empty and put no timestamps in the text.
+2. **Titles.** Write at least five options in at least two patterns, lint each (`node "<SKILL_DIR>/scripts/publish-check.mjs" title --file <file holding one title>`), score them, choose one. Rules and the scoring table: [references/title-and-description.md](references/title-and-description.md).
 3. **Description.** A hook that names what the film shows with the main phrase in its first 150 characters, then the chapters block, then sources, then credits, then at most three hashtags. One plain line about AI when the film carries the label.
 4. **Sources and credits.** Each claim that rests on a page gets its link from `receipts/claims.json`. Each asset that needs a credit has its credit line in the description word for word; each commentary clip also has its source URL. [references/disclosure-and-credits.md](references/disclosure-and-credits.md).
 5. **Disclosure.** Assess every generated, commentary or unknown asset against YouTube's AI-use rules, show the person the result, record verdicts. Same reference.
