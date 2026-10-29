@@ -37,12 +37,13 @@ button reveals it). The rail draws the entry only while the pack is enabled: it
 ships `defaultEnabled: false`, so turn it on in Capabilities → Plugins.
 
 The component (`components[general-agents-page]`, `slot: workspace-surface`,
-export `GeneralAgentsPage`) is mounted in a seat with two grants:
+export `GeneralAgentsPage`) is mounted in a seat with three grants:
 
 | Grant | What it opens |
 |---|---|
 | `artifactory:call` | `store.call("callOwnServerTool", { tool, args })`: this pack's own server's App-only tools, answered with their structured result or refused with their own words |
-| `agents:configure` | `store.call("configureGeneralAgent", { name, enabled?, listed?, title? })`: the Capabilities page's two switches, and the display name (blank text clears it) |
+| `agents:configure` | `store.call("configureGeneralAgent", { name, enabled?, listed? })`: the Capabilities page's two switches |
+| `agents:rename` | `store.call("configureGeneralAgent", { name, title })`: the display name (blank text clears it). Its own grant because the text reaches the agent's system prompt, which the switches never do |
 
 ## What the page reads
 
