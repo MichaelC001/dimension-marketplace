@@ -1,10 +1,10 @@
-import { canOpenSession, openSession } from "@dimension/mcp-app-kit/sessions";
+import { canOpenSession, describeSession, openSession } from "@dimension/mcp-app-kit/sessions";
 import { Button } from "@fraym/ui/elements/button";
 import { IconButton } from "@fraym/ui/elements/icon-button";
 import { Icon } from "@fraym/ui/icons";
 import { cn } from "@fraym/ui/lib/cn";
 import type { App } from "@modelcontextprotocol/ext-apps";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { FOCUS } from "../focus-ring";
 import { useCopied } from "../use-copied";
 import { errorText } from "./library-tools";
@@ -15,8 +15,27 @@ export function sessionLabel(sessionId: string): string {
 	return sessionId.length > SHOWN_ID_CHARS ? `…${sessionId.slice(-SHOWN_ID_CHARS)}` : sessionId;
 }
 
+function useSessionTitle(app: Pick<App, "request" | "getHostCapabilities">, sessionId: string): string | null {
+	const [title, setTitle] = useState<{ readonly id: string; readonly text: string } | null>(null);
+	const listed = canOpenSession(app);
+	useEffect(() => {
+		if (!listed) return;
+		let live = true;
+		describeSession(app, sessionId)
+			.then(result => {
+				if (live && result.title.trim() !== "") setTitle({ id: sessionId, text: result.title });
+			})
+			.catch(() => {});
+		return () => {
+			live = false;
+		};
+	}, [app, listed, sessionId]);
+	return title?.id === sessionId ? title.text : null;
+}
+
 export function SessionRow({ app, sessionId }: { readonly app: Pick<App, "request" | "getHostCapabilities">; readonly sessionId: string }) {
 	const { copied, copy } = useCopied(sessionId);
+	const title = useSessionTitle(app, sessionId);
 	const [refusal, setRefusal] = useState<string | null>(null);
 	const [opening, setOpening] = useState(false);
 	const open = (): void => {
@@ -30,9 +49,15 @@ export function SessionRow({ app, sessionId }: { readonly app: Pick<App, "reques
 		<>
 			<dt className="text-fr-text-3">Made in</dt>
 			<dd className="flex min-w-0 items-center gap-1">
-				<code title={sessionId} className="min-w-0 truncate rounded-sm bg-fr-surface-2 px-1.5 py-0.5 font-mono text-fr-text-2">
-					{sessionLabel(sessionId)}
-				</code>
+				{title === null ? (
+					<code title={sessionId} className="min-w-0 truncate rounded-sm bg-fr-surface-2 px-1.5 py-0.5 font-mono text-fr-text-2">
+						{sessionLabel(sessionId)}
+					</code>
+				) : (
+					<span title={`${title}\n${sessionId}`} className="min-w-0 truncate text-fr-text">
+						{title}
+					</span>
+				)}
 				<IconButton className={cn("size-6 shrink-0", FOCUS)} aria-label={copied ? "Session id copied" : "Copy session id"} title={copied ? "Session id copied" : sessionId} onClick={copy}>
 					<Icon name={copied ? "check" : "copy"} size={12} />
 				</IconButton>
