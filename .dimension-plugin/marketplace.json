@@ -675,7 +675,7 @@
 			"title": "Generative UI",
 			"icon": "grid",
 			"description": "Generative UI: the assistant shows you a designed interface (a trip plan, a comparison, a checklist, a schedule, a summary with numbers) instead of a wall of text. A closed palette of blocks, drawn in your theme, with buttons that answer back.",
-			"version": "0.1.0",
+			"version": "0.1.1",
 			"author": {
 				"name": "Dimension"
 			},

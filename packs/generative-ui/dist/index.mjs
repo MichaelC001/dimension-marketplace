@@ -261,7 +261,8 @@ var PALETTE = {
     check(node, path, issue) {
       const labels = Array.isArray(node.labels) ? node.labels.length : 0;
       const series = Array.isArray(node.series) ? node.series : [];
-      if (node.kind === "donut" && series.length > 1) issue(`${path}.series`, "a donut takes exactly one series");
+      if (String(node.kind).trim().toLowerCase() === "donut" && series.length > 1)
+        issue(`${path}.series`, "a donut takes exactly one series");
       series.forEach((entry, index) => {
         const values = isRecord(entry) && Array.isArray(entry.values) ? entry.values.length : labels;
         if (values !== labels)
@@ -391,7 +392,8 @@ function safeUrl(value, schemes) {
   }
   if (!schemes.includes(parsed.protocol)) return void 0;
   if (parsed.username !== "" || parsed.password !== "") return void 0;
-  return parsed.hostname === "" ? void 0 : parsed.href;
+  if (parsed.hostname === "" || parsed.href.length > L.maxUrl) return void 0;
+  return parsed.href;
 }
 var INVALID = Symbol("invalid");
 function fail(run, path, message) {
