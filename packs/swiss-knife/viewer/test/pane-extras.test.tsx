@@ -898,6 +898,39 @@ describe("a file that did not open", () => {
 	});
 });
 
+describe("the annotation bar of every kind", () => {
+	const sharedBar = async (groups: readonly Kit.ToolGroupDef[]) => {
+		const shared = await env.mount(createElement(kit.AnnotationToolbar, { label: "Annotation tools", placement: "strip", groups }));
+		return shared.container.querySelector('[role="toolbar"]')?.outerHTML;
+	};
+
+	test("a Markdown document's bar is the shared toolbar drawing the kit's comment group, nothing the pane made up", async () => {
+		const at = pane();
+		await mountAt(at, { mode: "comments" }, "markdown");
+
+		expect(at.tools).toEqual(["comment"]);
+		expect(at.bar?.outerHTML).toBe(await sharedBar(kit.commentToolGroups({ onComment: () => {} })));
+	});
+
+	test("a picture's bar is the same toolbar drawing the kit's drawing group, unchanged", async () => {
+		const at = pane();
+		await mountAt(at, { mode: "marks" }, "image");
+		const drawing = kit.markupToolGroups({
+			tool: "box",
+			onTool: () => {},
+			canUndo: false,
+			canRedo: false,
+			onUndo: () => {},
+			onRedo: () => {},
+			onClear: () => {},
+			hasMarks: false,
+		});
+
+		expect(at.tools).toEqual(["pin", "box", "ellipse", "arrow", "pen"]);
+		expect(at.bar?.outerHTML).toBe(await sharedBar(drawing));
+	});
+});
+
 describe("a text", () => {
 	test("offers the one armed Comment tool with no hint, no footer and no message field", async () => {
 		const at = pane();
@@ -914,44 +947,6 @@ describe("a text", () => {
 
 		await click(at.tool("comment"));
 		expect(at.checked).toEqual(["comment"]);
-	});
-
-	test("is the shared toolbar drawing the kit's comment group, nothing the pane made up", async () => {
-		const at = pane();
-		await mountAt(at, { mode: "comments" }, "markdown");
-		const shared = await env.mount(
-			createElement(kit.AnnotationToolbar, {
-				label: "Annotation tools",
-				placement: "strip",
-				groups: kit.commentToolGroups({ onComment: () => {} }),
-			}),
-		);
-
-		expect(at.bar?.outerHTML).toBe(shared.container.querySelector('[role="toolbar"]')?.outerHTML);
-	});
-
-	test("the shared toolbar draws a picture's drawing tools the same way the pane's bar does", async () => {
-		const at = pane();
-		await mountAt(at, { mode: "marks" }, "image");
-		const shared = await env.mount(
-			createElement(kit.AnnotationToolbar, {
-				label: "Annotation tools",
-				placement: "strip",
-				groups: kit.markupToolGroups({
-					tool: "box",
-					onTool: () => {},
-					canUndo: false,
-					canRedo: false,
-					onUndo: () => {},
-					onRedo: () => {},
-					onClear: () => {},
-					hasMarks: false,
-				}),
-			}),
-		);
-
-		expect(at.tools).toEqual(["pin", "box", "ellipse", "arrow", "pen"]);
-		expect(at.bar?.outerHTML).toBe(shared.container.querySelector('[role="toolbar"]')?.outerHTML);
 	});
 
 	test("a comment made from the bar's Comment tool reaches the agent as the request the shortcut makes", async () => {
