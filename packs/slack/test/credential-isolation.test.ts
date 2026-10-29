@@ -31,12 +31,21 @@ const USER_TOOLS = ["slack_tools", "slack_read", "slack_act"];
 
 const SLACK_API = "https://slack.com/api/";
 const TOKEN_ENDPOINT = `${SLACK_API}oauth.v2.user.access`;
-const AS_YOU_ENDPOINTS = [`${SLACK_API}auth.test`, TOKEN_ENDPOINT];
+const AS_YOU_ENDPOINTS = [
+	`${SLACK_API}auth.test`,
+	TOKEN_ENDPOINT,
+	`${SLACK_API}conversations.info`,
+	`${SLACK_API}conversations.open`,
+	`${SLACK_API}chat.postMessage`,
+	`${SLACK_API}chat.scheduleMessage`,
+	`${SLACK_API}chat.getPermalink`,
+];
 const MCP_ENDPOINT = "https://mcp.slack.com/mcp";
 
 const bearer = (token: string) => `Bearer ${token}`;
 const isBotMethod = (request: SeenRequest) =>
-	request.endpoint.startsWith(SLACK_API) && !AS_YOU_ENDPOINTS.includes(request.endpoint);
+	request.endpoint.startsWith(SLACK_API) &&
+	(!AS_YOU_ENDPOINTS.includes(request.endpoint) || request.authorization === bearer(BOT_TOKEN));
 const isMcp = (request: SeenRequest) => request.endpoint === MCP_ENDPOINT;
 const carrying = (run: ExtensionRun, token: string) =>
 	run.requests.filter(request => request.authorization === bearer(token));
@@ -128,4 +137,16 @@ test("an unreadable bot token file does not disturb the As you tools", () => {
 test("an unreadable As you sign-in file does not disturb the bot tools", () => {
 	expect(notWorking(userFileGarbage, BOT_TOOLS)).toEqual([]);
 	expect(tokensSent(userFileGarbage.requests)).toEqual([bearer(BOT_TOKEN)]);
+});
+
+test("an As you send reaches Slack's Web API with the sign-in's token and the message untouched, never through the MCP server", () => {
+	const posted = userOnly.requests.filter(request => request.endpoint === `${SLACK_API}chat.postMessage`);
+	const sentThroughMcp = userOnly.requests.filter(
+		request => isMcp(request) && request.rpc === "tools/call" && request.body.includes('"slack_send_message"'),
+	);
+
+	expect(posted).toHaveLength(1);
+	expect(posted[0]?.authorization).toBe(bearer(USER_TOKEN));
+	expect(new URLSearchParams(posted[0]?.body).get("markdown_text")).toBe("from me");
+	expect(sentThroughMcp).toEqual([]);
 });

@@ -26,7 +26,7 @@ const CALLS: readonly (readonly [string, Record<string, unknown>])[] = [
 	["slack_read_messages", { channel: "C0123" }],
 	["slack_read", { tool: "slack_search_public", arguments: { query: "launch" } }],
 	["slack_post_message", { channel: "C0123", text: "from the bot" }],
-	["slack_act", { tool: "slack_send_message", arguments: { channel: "C0123", text: "from me" } }],
+	["slack_act", { tool: "slack_send_message", arguments: { channel_id: "C0123", message: "from me" } }],
 	["slack_read_thread", { channel: "C0123", threadTs: "1700000000.000100" }],
 	["slack_reply_thread", { channel: "C0123", threadTs: "1700000000.000100", text: "bot reply" }],
 	["slack_add_reaction", { channel: "C0123", messageTs: "1700000000.000100", emoji: "thumbsup" }],
