@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import type { ToolDefinition } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import { type } from "arktype";
+import { resolveUploadable } from "./local-file";
 
 const CONFIG_TARGET = join(homedir(), ".config", "dimension-slack", "token.json");
 const CONNECT_PATH = "Plugins, Slack, Connect, A Slack bot app";
@@ -174,6 +175,16 @@ const listUsersSchema = type({
 	"cursor?": type("string").describe(
 		"Pagination cursor from a previous call's 'next cursor' line — omit for the first page.",
 	),
+});
+
+const uploadFileSchema = type({
+	channel: type("string").describe("Channel id (e.g. C0123ABCD) to share the file in. The bot must be a member."),
+	path: type("string").describe(
+		"The file to upload: a path inside the session's folder, relative or absolute. Hidden files and folders, and anything outside the folder, are refused.",
+	),
+	"title?": type("string").describe("The title Slack shows for the file. Defaults to the file name."),
+	"comment?": type("string").describe("A message posted with the file — Slack mrkdwn is supported."),
+	"threadTs?": type("string").describe("The `ts` of a parent message to share the file under, as a thread reply."),
 });
 
 function createListChannelsTool(): ToolDefinition<typeof listChannelsSchema> {
@@ -468,6 +479,81 @@ function createListUsersTool(): ToolDefinition<typeof listUsersSchema> {
 	};
 }
 
+const UPLOAD_SCOPE_HINT = "Add the files:write Bot Token Scope in your Slack app (OAuth & Permissions), then reinstall it.";
+
+function uploadFailure(error: unknown): Error {
+	const failure = error instanceof Error ? error : new Error(String(error));
+	if (failure.message.includes("missing_scope")) return new Error(`${failure.message}. ${UPLOAD_SCOPE_HINT}`);
+	if (failure.message.includes("not_in_channel")) {
+		return new Error(`${failure.message}. Invite the bot to the channel with /invite.`);
+	}
+	return failure;
+}
+
+function createUploadFileTool(): ToolDefinition<typeof uploadFileSchema> {
+	return {
+		name: "slack_upload_file",
+		label: "Slack bot: Upload File",
+		description:
+			"Upload a file from the session's folder to a Slack channel AS THE BOT APP, optionally with a message and in a thread. DESTRUCTIVE — this shares a real file with everyone in the channel; ALWAYS confirm the exact channel, file and message with the user before calling. The bot must be a member of the channel and its Slack app needs the files:write Bot Token Scope. Files outside the session's folder, hidden files and empty or oversized files (25 MB) are refused. Returns the file id.",
+		parameters: uploadFileSchema,
+		approval: PROMPT_EVERY_MODE,
+		formatApprovalDetails(args: unknown) {
+			const thread = approvalArg(args, "threadTs");
+			const comment = approvalArg(args, "comment");
+			return [
+				AS_BOT,
+				`Channel: ${approvalArg(args, "channel")}`,
+				`File: ${approvalArg(args, "path")}`,
+				...(thread === "(missing)" ? [] : [`Thread: ${thread}`]),
+				...(comment === "(missing)" ? [] : [`Message:\n${comment}`]),
+			];
+		},
+		async execute(
+			_toolCallId: string,
+			params: typeof uploadFileSchema.infer,
+			signal?: AbortSignal,
+			_onUpdate?: unknown,
+			context?: { readonly cwd: string },
+		) {
+			try {
+				const file = await resolveUploadable(context?.cwd ?? process.cwd(), params.path);
+				const bytes = await readFile(file.path);
+				const started = await slackGet<{ upload_url?: string; file_id?: string }>(
+					"files.getUploadURLExternal",
+					new URLSearchParams({ filename: file.name, length: String(file.size) }),
+					"files.getUploadURLExternal",
+				);
+				if (typeof started.upload_url !== "string" || !started.upload_url.startsWith("https://") || !started.file_id) {
+					throw new Error("Slack did not return an address to upload the file to.");
+				}
+				const sent = await fetch(started.upload_url, { method: "POST", body: bytes, signal });
+				if (!sent.ok) throw new Error(`Slack did not accept the file bytes (${sent.status}).`);
+				await slackPost(
+					"files.completeUploadExternal",
+					{
+						files: [{ id: started.file_id, title: params.title ?? file.name }],
+						channel_id: params.channel,
+						initial_comment: params.comment,
+						thread_ts: params.threadTs,
+					},
+					"files.completeUploadExternal",
+				);
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: `Uploaded ${file.name} (${file.size} bytes) to ${params.channel}${params.threadTs ? " in the thread" : ""} — file ${started.file_id}`,
+						},
+					],
+				};
+			} catch (error) {
+				throw uploadFailure(error);
+			}
+		},
+	};
+}
+
 export function registerSlackBot(pi: ExtensionAPI): void {
 	pi.registerTool(createListChannelsTool());
 	pi.registerTool(createReadMessagesTool());
@@ -478,4 +564,5 @@ export function registerSlackBot(pi: ExtensionAPI): void {
 	pi.registerTool(createEditMessageTool());
 	pi.registerTool(createDeleteMessageTool());
 	pi.registerTool(createListUsersTool());
+	pi.registerTool(createUploadFileTool());
 }

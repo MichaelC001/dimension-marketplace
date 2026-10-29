@@ -10,7 +10,7 @@ Slack can act as one of two identities. Each is connected on its own under
 
 | | A Slack bot app | As you |
 | --- | --- | --- |
-| Tools | `slack_list_channels`, `slack_read_messages`, `slack_post_message`, `slack_read_thread`, `slack_reply_thread`, `slack_add_reaction`, `slack_edit_message`, `slack_delete_message`, `slack_list_users` | `slack_tools`, `slack_read`, `slack_act` |
+| Tools | `slack_list_channels`, `slack_read_messages`, `slack_post_message`, `slack_read_thread`, `slack_reply_thread`, `slack_add_reaction`, `slack_edit_message`, `slack_delete_message`, `slack_list_users`, `slack_upload_file` | `slack_tools`, `slack_read`, `slack_act` |
 | Sends as | the bot app, a separate Slack user | the user, in their own name |
 | Can see | only the channels the bot was invited to | whatever the user can see, including private channels and DMs |
 | Connect with | **Plugins, Slack, Connect, A Slack bot app** | **Plugins, Slack, Connect, As you** |
@@ -82,6 +82,11 @@ first set: add `reactions:write` (for `slack_add_reaction`) and `users:read` (fo
 - `slack_list_users`: workspace members. Returns `id  @name  real name` per line, with
   deleted accounts and bots flagged in `[...]`. Takes optional `limit` and `cursor`.
   Needs `users:read`.
+- `slack_upload_file`: share a file from the session's folder. Takes `channel` (id),
+  `path`, and optional `title`, `comment` (a message posted with the file) and
+  `threadTs` (to share it as a thread reply). **Shares a real file as the bot.** Needs
+  the `files:write` bot scope. Hidden files, anything outside the session's folder, and
+  files over 25 MB are refused.
 
 ### Bot usage patterns
 

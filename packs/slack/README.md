@@ -13,7 +13,7 @@ This pack replaces the separate `slack-user` pack. If you had `slack-user` insta
 
 ## What it contains
 
-- Bot tools: `slack_list_channels`, `slack_read_messages`, `slack_post_message`, `slack_read_thread`, `slack_reply_thread`, `slack_add_reaction`, `slack_edit_message`, `slack_delete_message`, `slack_list_users`. Posting, replying, editing and deleting always ask you first.
+- Bot tools: `slack_list_channels`, `slack_read_messages`, `slack_post_message`, `slack_read_thread`, `slack_reply_thread`, `slack_add_reaction`, `slack_edit_message`, `slack_delete_message`, `slack_list_users`, `slack_upload_file`. Posting, replying, editing, deleting and uploading always ask you first. `slack_upload_file` shares a file from the session's folder (hidden files, anything outside the folder, and files over 25 MB are refused) and needs the `files:write` bot scope; without it the error says what to add.
 - As-you tools: `slack_tools` (what Slack offers, straight from Slack), `slack_read` (read-only calls), `slack_act` (calls that change Slack; every call asks you first).
 - Skill: `slack`, covering both identities and how to choose between them.
 - Rule: `slack-context`, always on, saying which identity a call acts as, that every send names its identity, and how to choose when both are connected.
