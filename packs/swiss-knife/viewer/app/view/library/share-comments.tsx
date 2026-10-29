@@ -1,4 +1,4 @@
-import { CommentThread, threadLine } from "@dimension/mcp-app-kit/annotate/react";
+import { CommentThread, Face, threadAuthor, threadLine } from "@dimension/mcp-app-kit/annotate/react";
 import { Button } from "@fraym/ui/elements/button";
 import { Select } from "@fraym/ui/elements/select";
 import { Textarea } from "@fraym/ui/elements/textarea";
@@ -157,12 +157,11 @@ export function CommentsView({ data, shares, now, openId, onPick }: CommentsView
 									className={cn("-mx-2 flex w-[calc(100%+1rem)] items-start gap-2.5 rounded-lg px-2 py-2 text-left hover:bg-fr-surface-2", openId === thread.id && "bg-fr-surface-2", FOCUS)}
 								>
 									<span aria-hidden className="dam-root shrink-0">
-										<span className="dam-badge" data-tone="thread">
-											{thread.ordinal}
-										</span>
+										<Face name={threadAuthor(thread)} />
 									</span>
 									<span className="min-w-0 flex-1">
 										<span className="flex min-w-0 items-baseline gap-1.5 text-fr-xs">
+											<span className="shrink-0 tabular-nums text-fr-text-3">{`#${thread.ordinal}`}</span>
 											<span className="min-w-0 truncate font-medium text-fr-text">{first?.author}</span>
 											<span className="shrink-0 text-fr-text-3">{thread.entries[0]?.when}</span>
 											{thread.heading === undefined ? null : <span className="min-w-0 truncate rounded-sm bg-fr-surface-3 px-1.5 text-fr-2xs leading-5 tabular-nums text-fr-text-2">{thread.heading}</span>}
