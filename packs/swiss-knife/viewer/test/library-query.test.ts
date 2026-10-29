@@ -3,6 +3,7 @@ import {
 	checkBatches,
 	DEFAULT_FILTER,
 	filterKey,
+	hasTag,
 	INITIAL_LIST,
 	type ListAction,
 	type ListState,
@@ -12,6 +13,7 @@ import {
 	reduceList,
 	shownItem,
 	toggleKind,
+	toggleTag,
 } from "../app/view/library/query";
 import type { LibraryItem, LibraryPage } from "../../src/library/types";
 
@@ -44,8 +46,8 @@ describe("library query arguments", () => {
 	});
 
 	test("each filter maps to its own argument, the search trimmed, a cursor carried", () => {
-		const args = queryArgs({ q: "  deck ", kinds: ["pdf", "pptx"], workspace: "/work", scope: "discarded", sort: "name" }, "c1");
-		expect(args).toEqual({ q: "deck", kinds: ["pdf", "pptx"], workspace: "/work", state: "discarded", sort: "name", cursor: "c1", limit: PAGE_SIZE });
+		const args = queryArgs({ q: "  deck ", kinds: ["pdf", "pptx"], tags: ["Demo", "launch"], workspace: "/work", scope: "discarded", sort: "name" }, "c1");
+		expect(args).toEqual({ q: "deck", kinds: ["pdf", "pptx"], tags: ["Demo", "launch"], workspace: "/work", state: "discarded", sort: "name", cursor: "c1", limit: PAGE_SIZE });
 		expect(queryArgs({ ...DEFAULT_FILTER, scope: "starred" }).starred).toBe(true);
 		expect(queryArgs({ ...DEFAULT_FILTER, scope: "shared" }).shared).toBe(true);
 	});
@@ -58,6 +60,15 @@ describe("library query arguments", () => {
 	test("toggling a kind adds it once and takes it out again", () => {
 		expect(toggleKind(toggleKind([], "pdf"), "video")).toEqual(["pdf", "video"]);
 		expect(toggleKind(["pdf", "video"], "pdf")).toEqual(["video"]);
+	});
+
+	test("a tag is selected whatever its case, and toggling it in another case takes it out instead of adding a twin", () => {
+		expect(hasTag(["Film", "launch"], "FILM")).toBe(true);
+		expect(hasTag(["film"], "films")).toBe(false);
+		expect(toggleTag(["launch"], "Film")).toEqual(["launch", "Film"]);
+		expect(toggleTag(["Film", "launch"], "FILM")).toEqual(["launch"]);
+		expect(toggleTag(toggleTag([], "film"), "Film")).toEqual([]);
+		expect(toggleTag(["film"], "films")).toEqual(["film", "films"]);
 	});
 });
 

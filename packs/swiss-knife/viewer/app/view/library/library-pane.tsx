@@ -33,6 +33,7 @@ import {
 	SEARCH_DEBOUNCE_MS,
 	shownItem,
 	toggleKind,
+	toggleTag,
 } from "./query";
 import { ShareDialog } from "./share-dialog";
 import { type RowRange, wantsNextPage } from "./window";
@@ -319,7 +320,7 @@ export function LibraryPane({ app, request, active, theme }: LibraryPaneProps) {
 				updated => {
 					dispatch({ type: "item", item: updated });
 					setPage(current => (current?.id === updated.id ? updated : current));
-					if (change.starred !== undefined) setFacetsGeneration(count => count + 1);
+					if (change.starred !== undefined || change.tags !== undefined) setFacetsGeneration(count => count + 1);
 				},
 				cause => setToast(errorText(cause)),
 			);
@@ -390,14 +391,16 @@ export function LibraryPane({ app, request, active, theme }: LibraryPaneProps) {
 		if (selectedId === null && list.items[0] !== undefined) setSelectedId(list.items[0].id);
 	};
 
+	const onTag = useCallback((tag: string): void => setFilter(current => ({ ...current, tags: toggleTag(current.tags, tag) })), []);
+
 	const renderItem = (item: LibraryItem, _index: number, isSelected: boolean) => {
 		const shown = shownItem(item, list.checked);
 		const Cell = layout === "grid" ? GridCell : ListRow;
-		return <Cell item={shown} selected={isSelected} thumb={thumbFor(shown)} now={now} />;
+		return <Cell item={shown} selected={isSelected} thumb={thumbFor(shown)} now={now} activeTags={filter.tags} onTag={onTag} />;
 	};
 
 	const searching = filter.q.trim() !== "";
-	const filtered = searching || filter.kinds.length > 0 || filter.workspace !== undefined;
+	const filtered = searching || filter.kinds.length > 0 || filter.tags.length > 0 || filter.workspace !== undefined;
 	const rail = (
 		<FilterRail
 			filter={filter}
@@ -406,6 +409,8 @@ export function LibraryPane({ app, request, active, theme }: LibraryPaneProps) {
 			onScope={setScope}
 			onKind={(kind: PresentedKind) => setFilter(current => ({ ...current, kinds: toggleKind(current.kinds, kind) }))}
 			onClearKinds={() => setFilter(current => ({ ...current, kinds: [] }))}
+			onTag={onTag}
+			onClearTags={() => setFilter(current => ({ ...current, tags: [] }))}
 			onWorkspace={workspace => {
 				setFilter(current => ({ ...current, workspace }));
 				setRailOpen(false);
@@ -510,7 +515,7 @@ export function LibraryPane({ app, request, active, theme }: LibraryPaneProps) {
 									variant="outline"
 									onClick={() => {
 										setDraft("");
-										setFilter(current => ({ ...current, q: "", kinds: [], workspace: undefined }));
+										setFilter(current => ({ ...current, q: "", kinds: [], tags: [], workspace: undefined }));
 									}}
 								>
 									Clear filters
@@ -629,7 +634,7 @@ export function LibraryPane({ app, request, active, theme }: LibraryPaneProps) {
 					onAdded={item => {
 						setDialog(null);
 						setDraft("");
-						setFilter(current => ({ ...current, q: "", kinds: [], scope: "all", workspace: undefined, sort: DEFAULT_FILTER.sort }));
+						setFilter(current => ({ ...current, q: "", kinds: [], tags: [], scope: "all", workspace: undefined, sort: DEFAULT_FILTER.sort }));
 						setGeneration(count => count + 1);
 						setFacetsGeneration(count => count + 1);
 						openPage(item);

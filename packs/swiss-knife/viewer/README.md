@@ -16,8 +16,8 @@ folder is the deep reference. The View is `app/view` (built to `app/dist`); the 
 | `close_media { token }` | the View only (`visibility: ["app"]`) | Revokes the capability, cancels pending admission and stops active streams. A token released before its open arrives is remembered and refused. Outer View teardown awaits revocation before acknowledging the host. |
 | `renew_media { token }` | the View only (`visibility: ["app"]`) | The pane saying it still holds `token`; answers `{ alive }`. A lease is held on proof of life: a request for it or this call. A pane that is gone (its session switched away, its column collapsed, a reload) stops calling, so a full table can reclaim the lease after five minutes of silence. `alive: false` means the server no longer holds it and the pane opens the recording again. |
 | `open_library { workspace?, query? }` | the host (the dock's Library launcher, `launch.tool` in `plugin.json`); no agent is offered it | The only library tool that carries the View (`_meta.ui.resourceUri`). Answers `structuredContent { mode: "library", workspace?, query? }` and the tab key `library` (`_meta["ai.insodimension/tab"]`), so the View pins its Library tab. |
-| `library_query { q?, kinds?, workspace?, state?, starred?, shared?, sort?, cursor?, limit? }` | the View only | One keyset page: `{ items: LibraryItem[], next?, total }`. `sort` is `recent` (the default; `discarded_at` for `state: "discarded"`), `name`, `size`, `opened` or `relevance` (best match first; with no searchable text it is `recent`). `q` of three or more characters is a trigram substring match, each whitespace-separated term of three or more must match, shorter terms beside them are ignored; a `q` shorter than three is a name prefix. A cursor belongs to the sort it came from and is refused for another. `limit` is 1 to 200 (default 50). |
-| `library_facets { workspace?, state? }` | the View only | `{ kinds, workspaces, starred, shared, discarded }` for the filter column. |
+| `library_query { q?, kinds?, tags?, workspace?, state?, starred?, shared?, sort?, cursor?, limit? }` | the View only | One keyset page: `{ items: LibraryItem[], next?, total }`. `sort` is `recent` (the default; `discarded_at` for `state: "discarded"`), `name`, `size`, `opened` or `relevance` (best match first; with no searchable text it is `recent`). `q` of three or more characters is a trigram substring match, each whitespace-separated term of three or more must match, shorter terms beside them are ignored; a `q` shorter than three is a name prefix. `tags` (at most 24) keeps the files that carry every one of them: whole-tag equality, case-insensitive for A to Z, decided in SQL by a `json_each` predicate on the row's tag list. A cursor belongs to the sort it came from and is refused for another. `limit` is 1 to 200 (default 50). |
+| `library_facets { workspace?, state? }` | the View only | `{ kinds, workspaces, tags, starred, shared, discarded }` for the filter column. `tags` is `[{ tag, count }]` for the files in scope, most used first (at most 200), one entry per tag whatever its capitals. |
 | `library_check { ids }` | the View only | Stats up to 200 files in batches of 32, marks a gone file `missing` (and a returned one `live`), refreshes size and mtime, and answers `{ items: [{ id, state, size, mtimeMs }] }`. |
 | `library_update { id, title?, note?, tags?, starred?, durationMs? }` | the View only | `{ item }`. `null` clears a title or note. |
 | `library_stamp { path }` | the View only | A person's Add file: `{ item }`. The deny table refuses secrets; a discarded file comes back for a human add. |
@@ -194,8 +194,11 @@ Up to 24 notes. The request lists them in time order, and for video carries up t
 from it (`library_open`, dispatched exactly like a `view_file` result) becomes an ordinary document tab beside it.
 The pane lives in `app/view/library/`:
 
-- **Filters and search.** A left rail (kinds with counts, workspaces, Starred, Shared, Recently discarded) from
-  `library_facets`; the search field filters as you type (80 ms debounce). Every list is the server's SQLite answer:
+- **Filters and search.** A left rail (kinds with counts, tags, workspaces, Starred, Shared, Recently discarded) from
+  `library_facets`; the search field filters as you type (80 ms debounce). Tags are a multi-select: a file must carry
+  every tag picked (`filter.tags` becomes `library_query`'s `tags`), the twelve most used show first with "Show all"
+  for the rest, and a picked tag stays listed and can be cleared. A tag chip on a card or row (two at most, then "+N")
+  does the same as the rail entry, and never opens the file. Every list is the server's SQLite answer:
   each request carries a key, and an answer for a key that is no longer current is dropped (`query.ts`), so a slow
   older search never overwrites a newer one. Below 760 px the rail folds behind a Filters button.
 - **Virtualized grid and list** (`library-grid.tsx`, math in `window.ts`). Fixed row heights; only the rows on
@@ -213,12 +216,12 @@ The pane lives in `app/view/library/`:
   the same document renderer as a tab. One bar on top: back to the Library, the name (rename in place), star, and View,
   Comments (count and unread dot), Share and Details. Comments, Share and Details open as sheets under the bar, never a
   side panel. Details: "File details" (type, size, the containing folder with the full path on hover and a copy
-  button, workspace, who added it, dates), "Description" with tags (`library_update` on blur or Enter), and Discard…
+  button, workspace, who added it, "Made in" for a file an agent presented or stamped (the session's title from `ai.insodimension/session/describe`, or `…` and the id's last eight characters when no title comes back, with Copy and an Open button that asks the host for that session through `ai.insodimension/session/open`; both verbs sit under the `session:open` grant the Viewer artifactory declares and are used only when the host offers them), dates), "Description" with tags (`library_update` on blur or Enter), and Discard…
   or Restore. Share: "Who has access" (one row per live link naming who it lets in, its role, expiry and where it
   lives, with Copy link and Manage access; never the URL) and Share…. Comments: every thread in place order,
-  numbered as on the file; picking one closes the sheet and opens it where it sits.
+  each row wearing its author's face and its number as on the file; picking one closes the sheet and opens it where it sits.
 - **Shared comments on the file.** People's comments are drawn on the artifact by the annotation kit's comment layer:
-  numbered marks on the picture or page, on the timeline lane at their time, drawings on the frame at their time and
+  marks wearing the commenter's face (initials on a colour their name picks) on the picture or page, on the timeline lane at their time, drawings on the frame at their time and
   highlighted passages (`artifact-threads.ts` groups a link's comments by anchor into threads). Clicking a mark seeks
   there and opens its thread: author, time, body, and a reply field that posts through `share_reply` with the
   thread's anchor so the reply joins it. New ones stay highlighted while shown and are marked read

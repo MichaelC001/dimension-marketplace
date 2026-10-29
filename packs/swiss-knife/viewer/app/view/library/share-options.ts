@@ -213,12 +213,6 @@ export function shortDate(at: number, now: number): string {
 	return new Date(at).toLocaleDateString(undefined, sameYear ? { month: "short", day: "numeric" } : { year: "numeric", month: "short", day: "numeric" });
 }
 
-export function initials(name: string): string {
-	const words = (name.split("@")[0] ?? "").trim().split(/[\s._-]+/).filter(word => word !== "");
-	const letters = words.length > 1 ? [words[0], words[words.length - 1]] : [words[0]];
-	return letters.map(word => word?.charAt(0).toUpperCase() ?? "").join("") || "?";
-}
-
 export function parsePairing(text: string): { readonly pairing: string } | null {
 	const trimmed = text.trim();
 	try {

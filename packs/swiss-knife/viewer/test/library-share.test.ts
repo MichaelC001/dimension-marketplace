@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { initials } from "@dimension/mcp-app-kit/annotate";
 import { anchorLabel, formatDuration, type SharePolicy } from "@dimension/sdk/artifact-share";
 import type { ShareHost, ShareHosts } from "../app/view/library/library-tools";
 import {
@@ -11,7 +12,6 @@ import {
 	fileChanged,
 	hostChoices,
 	hostName,
-	initials,
 	linkChoice,
 	parsePairing,
 	parseRecipients,
