@@ -43,6 +43,19 @@ function Heading({ children }: { readonly children: string }) {
 	return <div className="px-2 pb-1 pt-4 text-fr-2xs font-semibold uppercase tracking-wide text-fr-text-3">{children}</div>;
 }
 
+function ClearableHeading({ children, canClear, onClear }: { readonly children: string; readonly canClear: boolean; readonly onClear: () => void }) {
+	return (
+		<div className="flex items-center justify-between pr-1">
+			<Heading>{children}</Heading>
+			{canClear ? (
+				<button type="button" onClick={onClear} className={cn("mt-3 rounded-sm px-1 text-fr-2xs text-fr-text-3 hover:text-fr-text", FOCUS)}>
+					Clear
+				</button>
+			) : null}
+		</div>
+	);
+}
+
 const TAGS_PREVIEW = 12;
 
 export function FilterRail({ filter, facets, workspaces, onScope, onKind, onClearKinds, onTag, onClearTags, onWorkspace }: FilterRailProps) {
@@ -52,7 +65,8 @@ export function FilterRail({ filter, facets, workspaces, onScope, onKind, onClea
 	for (const kind of KIND_ORDER) all += kindCounts[kind] ?? 0;
 	const present = KIND_ORDER.filter(kind => (kindCounts[kind] ?? 0) > 0 || filter.kinds.includes(kind));
 	const tagFacets = facets?.tags ?? [];
-	const chosen = filter.tags.filter(tag => !tagFacets.some(facet => hasTag([facet.tag], tag)));
+	const facetTags = tagFacets.map(facet => facet.tag);
+	const chosen = filter.tags.filter(tag => !hasTag(facetTags, tag));
 	const crowded = tagFacets.length > TAGS_PREVIEW;
 	const listed = crowded && !allTags ? tagFacets.filter((facet, index) => index < TAGS_PREVIEW || hasTag(filter.tags, facet.tag)) : tagFacets;
 	return (
@@ -63,14 +77,9 @@ export function FilterRail({ filter, facets, workspaces, onScope, onKind, onClea
 			<RailButton icon="trash" label="Recently discarded" count={facets?.discarded} active={filter.scope === "discarded"} onClick={() => onScope("discarded")} />
 			{present.length > 0 ? (
 				<>
-					<div className="flex items-center justify-between pr-1">
-						<Heading>Kinds</Heading>
-						{filter.kinds.length > 0 ? (
-							<button type="button" onClick={onClearKinds} className={cn("mt-3 rounded-sm px-1 text-fr-2xs text-fr-text-3 hover:text-fr-text", FOCUS)}>
-								Clear
-							</button>
-						) : null}
-					</div>
+					<ClearableHeading canClear={filter.kinds.length > 0} onClear={onClearKinds}>
+						Kinds
+					</ClearableHeading>
 					{present.map(kind => (
 						<RailButton key={kind} icon={KIND_LOOK[kind].icon} label={KIND_LOOK[kind].plural} count={kindCounts[kind] ?? 0} active={filter.kinds.includes(kind)} onClick={() => onKind(kind)} />
 					))}
@@ -78,14 +87,9 @@ export function FilterRail({ filter, facets, workspaces, onScope, onKind, onClea
 			) : null}
 			{tagFacets.length > 0 || chosen.length > 0 ? (
 				<>
-					<div className="flex items-center justify-between pr-1">
-						<Heading>Tags</Heading>
-						{filter.tags.length > 0 ? (
-							<button type="button" onClick={onClearTags} className={cn("mt-3 rounded-sm px-1 text-fr-2xs text-fr-text-3 hover:text-fr-text", FOCUS)}>
-								Clear
-							</button>
-						) : null}
-					</div>
+					<ClearableHeading canClear={filter.tags.length > 0} onClear={onClearTags}>
+						Tags
+					</ClearableHeading>
 					{chosen.map(tag => (
 						<RailButton key={tag} icon="hash" label={tag} active onClick={() => onTag(tag)} />
 					))}

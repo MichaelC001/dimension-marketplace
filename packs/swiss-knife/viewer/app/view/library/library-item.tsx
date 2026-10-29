@@ -61,11 +61,12 @@ function Badges({ item }: { readonly item: LibraryItem }) {
 const GRID_CHIP = "bg-black/65 text-white";
 const LIST_CHIP = "bg-fr-surface-3 text-fr-text-2";
 const ACTIVE_CHIP = "bg-fr-accent text-fr-accent-ink";
+const CHIP_LIMIT = 2;
 
-function TagChips({ tags, limit, activeTags, onTag, tone, className }: { readonly tags: readonly string[]; readonly limit: number; readonly activeTags: readonly string[]; readonly onTag: (tag: string) => void; readonly tone: string; readonly className?: string }) {
+function TagChips({ tags, activeTags, onTag, tone, className }: { readonly tags: readonly string[]; readonly activeTags: readonly string[]; readonly onTag: (tag: string) => void; readonly tone: string; readonly className?: string }) {
 	if (tags.length === 0) return null;
-	const shown = tags.slice(0, limit);
-	const hidden = tags.slice(limit);
+	const shown = tags.slice(0, CHIP_LIMIT);
+	const hidden = tags.slice(CHIP_LIMIT);
 	return (
 		<div className={cn("flex min-w-0 items-center gap-1", className)}>
 			{shown.map(tag => {
@@ -106,6 +107,7 @@ function metaLine(item: LibraryItem, now: number): string {
 
 export const GridCell = memo(function GridCell({ item, selected, thumb, now, activeTags, onTag }: ItemViewProps) {
 	const title = item.title ?? item.name;
+	const timed = item.kind === "video" && item.durationMs !== undefined;
 	return (
 		<div
 			data-slot="library-cell"
@@ -117,16 +119,15 @@ export const GridCell = memo(function GridCell({ item, selected, thumb, now, act
 		>
 			<div className={cn("relative h-[136px] shrink-0 overflow-hidden border-b border-fr-border-soft", item.state === "missing" && "opacity-50")}>
 				<ThumbOrIcon item={item} thumb={thumb} iconSize={30} />
-				{item.kind === "video" && item.durationMs !== undefined ? (
+				{timed ? (
 					<span className="absolute bottom-1.5 right-1.5 rounded-sm bg-black/65 px-1 text-fr-2xs leading-4 text-white tabular-nums">{formatDuration(item.durationMs)}</span>
 				) : null}
 				<TagChips
 					tags={item.tags}
-					limit={2}
 					activeTags={activeTags}
 					onTag={onTag}
 					tone={GRID_CHIP}
-					className={cn("absolute bottom-1.5 left-1.5", item.kind === "video" && item.durationMs !== undefined ? "max-w-[calc(100%-3.75rem)]" : "max-w-[calc(100%-0.75rem)]")}
+					className={cn("absolute bottom-1.5 left-1.5", timed ? "max-w-[calc(100%-3.75rem)]" : "max-w-[calc(100%-0.75rem)]")}
 				/>
 			</div>
 			<div className="flex min-h-0 flex-1 flex-col justify-center gap-0.5 px-2.5">
@@ -164,7 +165,7 @@ export const ListRow = memo(function ListRow({ item, selected, thumb, now, activ
 					{item.path}
 				</span>
 			</div>
-			<TagChips tags={item.tags} limit={2} activeTags={activeTags} onTag={onTag} tone={LIST_CHIP} className="hidden shrink-0 md:flex" />
+			<TagChips tags={item.tags} activeTags={activeTags} onTag={onTag} tone={LIST_CHIP} className="hidden shrink-0 md:flex" />
 			<div className="flex shrink-0 items-center gap-1.5">
 				<Badges item={item} />
 			</div>

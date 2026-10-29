@@ -11,15 +11,14 @@ import { errorText } from "./library-tools";
 
 const SHOWN_ID_CHARS = 8;
 
-export function sessionLabel(sessionId: string): string {
+function sessionLabel(sessionId: string): string {
 	return sessionId.length > SHOWN_ID_CHARS ? `…${sessionId.slice(-SHOWN_ID_CHARS)}` : sessionId;
 }
 
-function useSessionTitle(app: Pick<App, "request" | "getHostCapabilities">, sessionId: string): string | null {
+function useSessionTitle(app: Pick<App, "request">, sessionId: string, enabled: boolean): string | null {
 	const [title, setTitle] = useState<{ readonly id: string; readonly text: string } | null>(null);
-	const listed = canOpenSession(app);
 	useEffect(() => {
-		if (!listed) return;
+		if (!enabled) return;
 		let live = true;
 		describeSession(app, sessionId)
 			.then(result => {
@@ -29,13 +28,14 @@ function useSessionTitle(app: Pick<App, "request" | "getHostCapabilities">, sess
 		return () => {
 			live = false;
 		};
-	}, [app, listed, sessionId]);
+	}, [app, enabled, sessionId]);
 	return title?.id === sessionId ? title.text : null;
 }
 
 export function SessionRow({ app, sessionId }: { readonly app: Pick<App, "request" | "getHostCapabilities">; readonly sessionId: string }) {
 	const { copied, copy } = useCopied(sessionId);
-	const title = useSessionTitle(app, sessionId);
+	const canOpen = canOpenSession(app);
+	const title = useSessionTitle(app, sessionId, canOpen);
 	const [refusal, setRefusal] = useState<string | null>(null);
 	const [opening, setOpening] = useState(false);
 	const open = (): void => {
@@ -61,7 +61,7 @@ export function SessionRow({ app, sessionId }: { readonly app: Pick<App, "reques
 				<IconButton className={cn("size-6 shrink-0", FOCUS)} aria-label={copied ? "Session id copied" : "Copy session id"} title={copied ? "Session id copied" : sessionId} onClick={copy}>
 					<Icon name={copied ? "check" : "copy"} size={12} />
 				</IconButton>
-				{canOpenSession(app) ? (
+				{canOpen ? (
 					<Button type="button" size="sm" variant="outline" disabled={opening} onClick={open}>
 						<Icon name="chat" size={12} />
 						Open
