@@ -364,7 +364,7 @@ export class RuntimeCodeBrowsers implements CodeBrowserPort {
   standing(session: string, browserId: string): BrowserStanding | undefined {
     if (this.#cmux.owns(browserId)) return undefined;
     const entry = this.#seam.peek(browserId);
-    if (entry === undefined) return undefined;
+    if (entry === undefined || entry.engine !== "chromium") return undefined;
     return { profile: entry.profile, onPanel: entry.viewers > 0 && this.#seam.shownTo(session)?.browserId === browserId };
   }
 

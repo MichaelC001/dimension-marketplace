@@ -7,6 +7,7 @@ import { z } from "zod";
 import type { BrowserStanding } from "../src/code/contracts";
 import { RuntimeCodeBrowsers, type CodeSeam, type CodeSeamEntry } from "../src/code/host/runtime-port";
 import type { CmuxBrowsers } from "../src/code/kinds/cmux/cmux-browsers";
+import type { BrowserEngine } from "../src/contracts";
 import { createBrowserServer } from "../src/server";
 import { newRig, type Rig } from "./code-host-fixture";
 import { BROWSER_TEST_TIMEOUT_MS, createRoot, describeWithChrome, type Fixture, startFixture, teardown } from "./fixture";
@@ -174,12 +175,13 @@ describeWithChrome("a cell is told whether the person can see the browser it ope
 interface Held {
   profile: string | null;
   viewers: number;
+  engine?: BrowserEngine;
 }
 
 function portOver(held: Record<string, Held>, shown: Record<string, string>, cmux?: CmuxBrowsers): RuntimeCodeBrowsers {
   const entry = (browserId: string | undefined): CodeSeamEntry | undefined => {
     const found = browserId === undefined ? undefined : held[browserId];
-    return browserId === undefined || found === undefined ? undefined : ({ browserId, profile: found.profile, viewers: found.viewers } as unknown as CodeSeamEntry);
+    return browserId === undefined || found === undefined ? undefined : ({ browserId, profile: found.profile, viewers: found.viewers, engine: found.engine ?? "chromium" } as unknown as CodeSeamEntry);
   };
   const seam = {
     peek: (browserId: string) => entry(browserId),
@@ -194,6 +196,8 @@ test("standing: a browser is on the panel only while a View is joined to it and 
     unwatched: { profile: "default", viewers: 0 },
     throwaway: { profile: null, viewers: 2 },
     elsewhere: { profile: "work", viewers: 1 },
+    ownChrome: { profile: "relay", viewers: 1, engine: "chrome-relay" },
+    personal: { profile: "personal", viewers: 1, engine: "chromium" },
   };
   const cases: Array<{ name: string; session: string; browserId: string; shown: Record<string, string>; standing: BrowserStanding | undefined }> = [
     { name: "a saved profile shown to the session and watched", session: "chat-a", browserId: "saved", shown: { "chat-a": "saved" }, standing: { profile: "default", onPanel: true } },
@@ -202,6 +206,8 @@ test("standing: a browser is on the panel only while a View is joined to it and 
     { name: "watched, but shown to another session only", session: "chat-b", browserId: "saved", shown: { "chat-a": "saved" }, standing: { profile: "default", onPanel: false } },
     { name: "watched, but the session is shown a different browser", session: "chat-a", browserId: "elsewhere", shown: { "chat-a": "saved" }, standing: { profile: "work", onPanel: false } },
     { name: "watched, but the session is shown nothing", session: "chat-a", browserId: "saved", shown: {}, standing: { profile: "default", onPanel: false } },
+    { name: "the person's own relay Chrome, watched and shown to the session", session: "chat-a", browserId: "ownChrome", shown: { "chat-a": "ownChrome" }, standing: undefined },
+    { name: "a chromium saved profile, watched and shown to the session, as the relay one is", session: "chat-a", browserId: "personal", shown: { "chat-a": "personal" }, standing: { profile: "personal", onPanel: true } },
     { name: "a browser that is gone", session: "chat-a", browserId: "closed", shown: { "chat-a": "saved" }, standing: undefined },
   ];
 

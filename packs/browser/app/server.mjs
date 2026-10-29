@@ -11165,7 +11165,7 @@ var RuntimeCodeBrowsers = class {
   standing(session, browserId) {
     if (this.#cmux.owns(browserId)) return void 0;
     const entry = this.#seam.peek(browserId);
-    if (entry === void 0) return void 0;
+    if (entry === void 0 || entry.engine !== "chromium") return void 0;
     return { profile: entry.profile, onPanel: entry.viewers > 0 && this.#seam.shownTo(session)?.browserId === browserId };
   }
   ownedByAnotherChat(browserId, tabId, session) {
