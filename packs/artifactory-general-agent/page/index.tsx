@@ -1,7 +1,7 @@
 // The General Agents page (C-A): a `workspace-surface` component the host
 // mounts on the Code space's `page` surface when the rail's General Agents
 // entry is chosen, in a seat granted `artifactory:call` (its own server's
-// App-only tools) and `agents:configure` (the switches and the display name). It reads the host's
+// App-only tools), `agents:configure` (the switches) and `agents:rename` (the display name). It reads the host's
 // facts from the fenced Store and draws every agent as a card, then one agent
 // as a profile to read, edit, create from or extend.
 import { agentPresenceFace } from "@fraym/ui";
