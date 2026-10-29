@@ -6,6 +6,8 @@ For a session whose tool list has `browser_run`. If you cannot see it, this file
 
 `await browser.open({ name, url })` opens (or reuses) this session's headless browser, a throwaway: nothing is saved, and it closes after 30 minutes with no calls (`persist: true` keeps it). The Browser View shows it when the user opens the View in this session, and the user can watch and drive it there. Close it with `browser.close({ all: true })`.
 
+When the user's Browser panel is already showing a saved profile, `open` without `profile` joins that browser instead of making a throwaway. The reply says where the tab is: on the Browser panel the person is watching, on a saved-profile browser that is not on screen (call `browser_view` to show it), or on a hidden headless browser. Pass that on as the reply says it.
+
 To work as a signed-in account, pass `profile`: `await browser.open({ name, url, profile: "work" })` opens that saved profile with its sign-ins and keeps what the page signs in to. `browser_profiles` lists the names, labels and signed-in sites. A profile is one Chrome that chats share, each on its own tabs: opening one another chat already has joins that browser and gives you a tab of your own. A profile opens its own Chrome, so it is not combined with `app`.
 
 ## What a cell does not do for you

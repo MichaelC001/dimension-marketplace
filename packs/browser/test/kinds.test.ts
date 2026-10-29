@@ -13,6 +13,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import type { BrowserStanding } from "../src/code/contracts";
 import { connectAttached } from "../src/engines/attach";
 import { KIND_TIMINGS, waitForCdp } from "../src/code/kinds/cdp";
 import { establishKind, normalizeConnectedCdpUrl } from "../src/code/kinds/establish";
@@ -114,6 +115,29 @@ describe("resolveKind: OMP's order of choice", () => {
 		expect(sameBrowserKind({ kind: "connected", cdpUrl: "http://a:1" }, { kind: "connected", cdpUrl: "http://a:1" })).toBe(true);
 		expect(sameBrowserKind({ kind: "connected", cdpUrl: "http://a:1" }, { kind: "connected", cdpUrl: "http://a:2" })).toBe(false);
 		expect(sameBrowserKind({ kind: "relay", cdpUrl: "http://a:1" }, { kind: "connected", cdpUrl: "http://a:1" })).toBe(false);
+	});
+
+	test("a headless browser is described by who can see it: the panel the person watches, a saved profile off screen, or a throwaway nobody watches", () => {
+		const hidden = { kind: "headless", headless: true } as const;
+		const visible = { kind: "headless", headless: false } as const;
+		const cases: Array<{ name: string; kind: Parameters<typeof describeBrowser>[0]; standing: BrowserStanding; says: string }> = [
+			{ name: "a saved profile on the panel", kind: hidden, standing: { profile: "default", onPanel: true }, says: 'the Browser panel the person is watching (profile "default")' },
+			{ name: "a throwaway on the panel", kind: hidden, standing: { profile: null, onPanel: true }, says: "the Browser panel the person is watching (private browser)" },
+			{ name: "the panel wins over a visible launch setting", kind: visible, standing: { profile: "work", onPanel: true }, says: 'the Browser panel the person is watching (profile "work")' },
+			{ name: "a saved profile nobody watches", kind: hidden, standing: { profile: "work", onPanel: false }, says: 'a saved-profile browser that is not on screen (profile "work"; browser_view shows it in the Browser panel)' },
+			{ name: "a throwaway nobody watches", kind: hidden, standing: { profile: null, onPanel: false }, says: "headless browser (hidden)" },
+			{ name: "a saved profile nobody watches when the launch is visible", kind: visible, standing: { profile: "work", onPanel: false }, says: "headless browser (visible)" },
+			{ name: "a throwaway nobody watches when the launch is visible", kind: visible, standing: { profile: null, onPanel: false }, says: "headless browser (visible)" },
+		];
+		for (const { name, kind, standing, says } of cases) expect(describeBrowser(kind, { standing }), name).toBe(says);
+	});
+
+	test("a browser that is not headless is described by what it is, whatever the panel shows", () => {
+		const standing = { profile: "default", onPanel: true };
+		expect(describeBrowser({ kind: "connected", cdpUrl: "http://127.0.0.1:9222" }, { standing })).toBe("connected http://127.0.0.1:9222");
+		expect(describeBrowser({ kind: "relay", cdpUrl: "http://127.0.0.1:9224" }, { standing })).toBe("relay http://127.0.0.1:9224");
+		expect(describeBrowser({ kind: "spawned", path: ABS_EXE }, { pid: 4242, standing })).toBe(`spawned ${ABS_EXE} (pid 4242)`);
+		expect(describeBrowser({ kind: "cmux", socketPath: "/s" }, { standing })).toBe("cmux browser (split)");
 	});
 });
 

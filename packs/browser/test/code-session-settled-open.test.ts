@@ -133,6 +133,10 @@ class GatedBrowsers implements CodeBrowserPort {
     return this.viewBrowser === undefined ? undefined : { browserId: this.viewBrowser, wsEndpoint: `ws://fake/${this.viewBrowser}`, kind: HEADLESS };
   }
 
+  standing(): undefined {
+    return undefined;
+  }
+
   ownedByAnotherChat(): boolean {
     return false;
   }

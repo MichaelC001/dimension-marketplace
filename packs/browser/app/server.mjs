@@ -8391,7 +8391,7 @@ function describeKind(kind) {
 function describeBrowser(kind, facts = {}) {
   switch (kind.kind) {
     case "headless":
-      return `headless browser (${kind.headless ? "hidden" : "visible"})`;
+      return describeHeadless(kind.headless, facts.standing);
     case "spawned":
       return `spawned ${kind.path} (pid ${facts.pid ?? "?"})`;
     case "connected":
@@ -8401,6 +8401,15 @@ function describeBrowser(kind, facts = {}) {
     case "cmux":
       return `cmux browser (${kind.surface ?? "split"})`;
   }
+}
+function describeHeadless(hidden, standing) {
+  if (standing?.onPanel === true) {
+    return `the Browser panel the person is watching (${standing.profile === null ? "private browser" : `profile ${JSON.stringify(standing.profile)}`})`;
+  }
+  if (standing?.profile != null && hidden) {
+    return `a saved-profile browser that is not on screen (profile ${JSON.stringify(standing.profile)}; browser_view shows it in the Browser panel)`;
+  }
+  return `headless browser (${hidden ? "hidden" : "visible"})`;
 }
 
 // src/code/kinds/cmux/cmux-browsers.ts
@@ -11153,6 +11162,12 @@ var RuntimeCodeBrowsers = class {
     const entry = this.#seam.shownTo(session) ?? this.#reusable(session);
     return entry === void 0 ? void 0 : { browserId: entry.browserId, wsEndpoint: entry.driver.cdpEndpoint(), kind: entry.code?.kind ?? { kind: "headless", headless: this.#hidden } };
   }
+  standing(session, browserId) {
+    if (this.#cmux.owns(browserId)) return void 0;
+    const entry = this.#seam.peek(browserId);
+    if (entry === void 0 || entry.engine !== "chromium") return void 0;
+    return { profile: entry.profile, onPanel: entry.viewers > 0 && this.#seam.shownTo(session)?.browserId === browserId };
+  }
   ownedByAnotherChat(browserId, tabId, session) {
     if (this.#cmux.owns(browserId)) return false;
     const owner = this.#seam.tabOwner(browserId, tabId);
@@ -11675,7 +11690,7 @@ var CodeSession = class {
     const existing = this.#tabs.get(name);
     if (existing !== void 0) {
       if (!sameBrowserKind(existing.kind, kind)) {
-        throw new ToolError(`Tab ${JSON.stringify(name)} is bound to a different browser (${describeKind(existing.kind)}). Close it first.`);
+        throw new ToolError(`Tab ${JSON.stringify(name)} is bound to a different browser, ${this.#nameOf(this.#browsers.get(existing.browserId) ?? existing)}. Close it first.`);
       }
       if (request.profile === void 0 || browsers.isProfileBrowser(existing.browserId, request.profile)) {
         const reused = await this.#reuse(existing, request, timeoutMs, deadline);
@@ -11721,7 +11736,7 @@ var CodeSession = class {
     const ref = request.url === void 0 ? alive : await browsers.navigateTab(existing.browserId, existing.handle.tabId, { url: request.url, ...request.wait_until === void 0 ? {} : { waitUntil: request.wait_until }, timeoutMs }, deadline);
     const handle = { ...existing.handle, ...ref, created: existing.handle.created };
     this.#tabs.set(existing.name, { ...existing, handle });
-    return this.#opened("Reused", existing.name, this.#browsers.get(existing.browserId) ?? { kind: existing.kind }, ref, handle, request);
+    return this.#opened("Reused", existing.name, this.#browsers.get(existing.browserId) ?? existing, ref, handle, request);
   }
   /** The page a named tab was opened on, or undefined when the page (or its browser) is gone. */
   async #aliveTab(tab) {
@@ -11747,12 +11762,16 @@ var CodeSession = class {
       ...kind.kind === "cmux" ? { cmux: { socketPath: kind.socketPath, ...kind.password === void 0 ? {} : { password: kind.password }, ...kind.relayId === void 0 ? {} : { relayId: kind.relayId }, ...kind.relayToken === void 0 ? {} : { relayToken: kind.relayToken } } } : {}
     };
   }
-  #opened(verb, name, record, ref, handle, request) {
+  #nameOf(browser) {
+    if (browser.label !== void 0) return browser.label;
+    const standing = browser.kind.kind === "headless" ? this.#d.browsers.standing(this.#d.session, browser.browserId) : void 0;
+    return describeBrowser(browser.kind, standing === void 0 ? {} : { standing });
+  }
+  #opened(verb, name, browser, ref, handle, request) {
     const size = request.viewport ?? CODE_VIEWPORT;
-    const { kind } = record;
     return {
-      text: [`${verb} tab ${JSON.stringify(name)} on ${record.label ?? describeBrowser(kind)}`, `URL: ${ref.url}`, ref.title ? `Title: ${ref.title}` : null].filter((line) => line !== null).join("\n"),
-      details: { action: "open", name, browser: kind.kind, url: ref.url, viewport: { width: size.width, height: size.height, ...size.scale === void 0 ? {} : { deviceScaleFactor: size.scale } } },
+      text: [`${verb} tab ${JSON.stringify(name)} on ${this.#nameOf(browser)}`, `URL: ${ref.url}`, ref.title ? `Title: ${ref.title}` : null].filter((line) => line !== null).join("\n"),
+      details: { action: "open", name, browser: browser.kind.kind, url: ref.url, viewport: { width: size.width, height: size.height, ...size.scale === void 0 ? {} : { deviceScaleFactor: size.scale } } },
       attach: handle
     };
   }
@@ -16798,7 +16817,7 @@ var LiveChannel = class {
 var plugin_default = {
   $schema: "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   name: "browser",
-  version: "0.9.7",
+  version: "0.9.8",
   description: "A real browser beside your chat that your agent drives while you watch. Tabs, persistent logged-in profiles, circle-to-annotate, and an optional fast task agent (jev).",
   keywords: [
     "browser",

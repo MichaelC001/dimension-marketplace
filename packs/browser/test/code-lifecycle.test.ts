@@ -163,6 +163,10 @@ class FakeBrowsers implements CodeBrowserPort {
     return this.#browser === undefined ? undefined : { browserId: this.#browser.id, wsEndpoint: "ws://fake/b1", kind: { kind: "headless", headless: true } };
   }
 
+  standing(): undefined {
+    return undefined;
+  }
+
   ownedByAnotherChat(): boolean {
     return false;
   }

@@ -7,7 +7,7 @@ import { randomBytes } from "node:crypto";
 import { BrowserRuntimeError } from "../../store.js";
 import type { BridgeRequest, BridgeResponse, BrowserKind, CodeBrowserPort, CodeTabInfo, HostToWorker, RunError, RunResult, RunStarted, TabHandle, TabRef, WorkerToHost } from "../contracts.js";
 import { ToolAbortError, ToolError } from "../errors.js";
-import { describeBrowser, describeKind, sameBrowserKind } from "../kinds/resolve.js";
+import { describeBrowser, sameBrowserKind } from "../kinds/resolve.js";
 import { CODE_VIEWPORT, codedMessage } from "./runtime-port.js";
 import type { SpawnWorker, WorkerHandle, WorkerMemory } from "./transport.js";
 import type { HostMemory, Member, Overrun } from "./host-memory.js";
@@ -575,7 +575,7 @@ export class CodeSession {
     const existing = this.#tabs.get(name);
     if (existing !== undefined) {
       if (!sameBrowserKind(existing.kind, kind)) {
-        throw new ToolError(`Tab ${JSON.stringify(name)} is bound to a different browser (${describeKind(existing.kind)}). Close it first.`);
+        throw new ToolError(`Tab ${JSON.stringify(name)} is bound to a different browser, ${this.#nameOf(this.#browsers.get(existing.browserId) ?? existing)}. Close it first.`);
       }
       // A saved profile and a throwaway are both `headless`, so the kind cannot tell them apart: a profile that is named must be the browser the tab is on. The runtime answers that by reading, without opening, holding or adopting anything.
       if (request.profile === undefined || browsers.isProfileBrowser(existing.browserId, request.profile)) {
@@ -626,7 +626,7 @@ export class CodeSession {
       : await browsers.navigateTab(existing.browserId, existing.handle.tabId, { url: request.url, ...(request.wait_until === undefined ? {} : { waitUntil: request.wait_until }), timeoutMs }, deadline);
     const handle: TabHandle = { ...existing.handle, ...ref, created: existing.handle.created };
     this.#tabs.set(existing.name, { ...existing, handle });
-    return this.#opened("Reused", existing.name, this.#browsers.get(existing.browserId) ?? { kind: existing.kind }, ref, handle, request);
+    return this.#opened("Reused", existing.name, this.#browsers.get(existing.browserId) ?? existing, ref, handle, request);
   }
 
   /** The page a named tab was opened on, or undefined when the page (or its browser) is gone. */
@@ -655,12 +655,17 @@ export class CodeSession {
     };
   }
 
-  #opened(verb: "Opened" | "Reused", name: string, record: { kind: BrowserKind; label?: string }, ref: TabRef, handle: TabHandle, request: BridgeRequest): HostReply {
+  #nameOf(browser: { browserId: string; kind: BrowserKind; label?: string }): string {
+    if (browser.label !== undefined) return browser.label;
+    const standing = browser.kind.kind === "headless" ? this.#d.browsers.standing(this.#d.session, browser.browserId) : undefined;
+    return describeBrowser(browser.kind, standing === undefined ? {} : { standing });
+  }
+
+  #opened(verb: "Opened" | "Reused", name: string, browser: { browserId: string; kind: BrowserKind; label?: string }, ref: TabRef, handle: TabHandle, request: BridgeRequest): HostReply {
     const size = request.viewport ?? CODE_VIEWPORT;
-    const { kind } = record;
     return {
-      text: [`${verb} tab ${JSON.stringify(name)} on ${record.label ?? describeBrowser(kind)}`, `URL: ${ref.url}`, ref.title ? `Title: ${ref.title}` : null].filter(line => line !== null).join("\n"),
-      details: { action: "open", name, browser: kind.kind, url: ref.url, viewport: { width: size.width, height: size.height, ...(size.scale === undefined ? {} : { deviceScaleFactor: size.scale }) } },
+      text: [`${verb} tab ${JSON.stringify(name)} on ${this.#nameOf(browser)}`, `URL: ${ref.url}`, ref.title ? `Title: ${ref.title}` : null].filter(line => line !== null).join("\n"),
+      details: { action: "open", name, browser: browser.kind.kind, url: ref.url, viewport: { width: size.width, height: size.height, ...(size.scale === undefined ? {} : { deviceScaleFactor: size.scale }) } },
       attach: handle,
     };
   }
