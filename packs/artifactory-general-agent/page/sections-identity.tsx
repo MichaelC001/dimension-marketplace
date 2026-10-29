@@ -2,14 +2,17 @@
 // of every face the host can paint, still until pointed at), how it talks, its
 // charter, and the standing instructions that follow it from workspace to
 // workspace. Each is drawn as the thing it is (a face, a choice, a file).
-import { Badge, Icon, Input, Textarea, cn } from "@fraym/ui";
+import { Badge, Button, Icon, Input, Textarea, cn } from "@fraym/ui";
 import { useState } from "react";
 import { heldByExtra, normalizeTypedName, type Personality, type PromptMode } from "../src/agent-md";
 import type { AgentHome, InstructionFile, ListedAgent } from "../src/contracts";
 import { ChoiceCard, ChoiceGroup, FaceTile, FieldRow, PANEL, Section } from "./chrome";
+import { DISPLAY_NAME_MAX_LENGTH, displayNameToWrite } from "./display-name";
 import { faceOptions } from "./faces";
+import type { AgentConfigurePatch } from "./forge";
 import type { SectionProps } from "./profile";
 import type { FieldErrors } from "./profile-state";
+import { defaultDisplayName, type RosterAgent } from "./roster";
 import type { BridgedPresences, FaceBinding } from "./types";
 
 /** The Machinist set this and the human has not decided yet. */
@@ -95,6 +98,57 @@ function GalleryFace({
 	);
 }
 
+function DisplayNameRow({
+	agent,
+	configure,
+	renaming,
+}: {
+	readonly agent: RosterAgent;
+	readonly configure: (name: string, patch: AgentConfigurePatch) => Promise<void>;
+	readonly renaming: boolean;
+}) {
+	const override = agent.fact?.titleOverride;
+	const fallback = defaultDisplayName(agent);
+	const [typed, setTyped] = useState<string | null>(null);
+	const commit = (title: string) => void configure(agent.name, { title });
+	return (
+		<FieldRow label="Display name" hint={`What it is called on screen and by itself, in new sessions. Empty keeps ${fallback}.`}>
+			<div className="flex items-center gap-2">
+				<Input
+					value={typed ?? override ?? ""}
+					placeholder={fallback}
+					disabled={renaming}
+					aria-label="Display name"
+					onChange={event => {
+						if ([...event.target.value].length <= DISPLAY_NAME_MAX_LENGTH) setTyped(event.target.value);
+					}}
+					onBlur={() => {
+						const title = displayNameToWrite(typed, override);
+						if (title === undefined) setTyped(null);
+						else commit(title);
+					}}
+					onKeyDown={event => event.key === "Enter" && event.currentTarget.blur()}
+					className="max-w-md"
+				/>
+				{override !== undefined ? (
+					<Button
+						size="sm"
+						variant="ghost"
+						disabled={renaming}
+						onMouseDown={event => event.preventDefault()}
+						onClick={() => {
+							setTyped(null);
+							commit("");
+						}}
+					>
+						Use {fallback}
+					</Button>
+				) : null}
+			</div>
+		</FieldRow>
+	);
+}
+
 export function IdentitySection({
 	draft,
 	set,
@@ -104,6 +158,9 @@ export function IdentitySection({
 	face,
 	bridged,
 	marked,
+	rosterAgent,
+	configure,
+	renaming,
 }: SectionProps & {
 	readonly creating: boolean;
 	readonly errors: FieldErrors;
@@ -111,6 +168,9 @@ export function IdentitySection({
 	readonly faceOf: (name: string) => FaceBinding;
 	readonly bridged: BridgedPresences | undefined;
 	readonly marked: ReadonlySet<string>;
+	readonly rosterAgent: RosterAgent | undefined;
+	readonly configure: ((name: string, patch: AgentConfigurePatch) => Promise<void>) | undefined;
+	readonly renaming: boolean;
 }) {
 	const heldFace = heldByExtra(draft).has("avatar");
 	const faces = faceOptions(bridged);
@@ -134,6 +194,9 @@ export function IdentitySection({
 						<span className="inline-flex items-center rounded-sm bg-fr-surface-3 px-2 py-1 font-secondary text-fr-sm text-fr-text">{draft.name}</span>
 					)}
 				</FieldRow>
+				{!creating && rosterAgent?.fact !== undefined && configure !== undefined ? (
+					<DisplayNameRow key={rosterAgent.fact.titleOverride ?? ""} agent={rosterAgent} configure={configure} renaming={renaming} />
+				) : null}
 				<FieldRow label="What it is for" hint="One line. Rooms route to it by this when it declares no card.">
 					<div className="flex items-center gap-2">
 						<Input value={draft.description} disabled={!editable} placeholder="Writes our changelog in my voice" aria-invalid={errors.description !== undefined} onChange={event => set({ description: event.target.value })} />

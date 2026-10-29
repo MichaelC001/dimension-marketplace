@@ -42,7 +42,7 @@
 			"title": "General Agents",
 			"icon": "bot",
 			"description": "See every agent you can run as a card with its face and its week at a glance, open one to edit it, or ask the Machinist to draft a new one.",
-			"version": "0.4.2",
+			"version": "0.4.3",
 			"author": {
 				"name": "Dimension"
 			},
@@ -55,7 +55,7 @@
 				"component"
 			],
 			"requires": {
-				"dimension": ">=0.11.3"
+				"dimension": ">=0.11.19"
 			}
 		},
 		{

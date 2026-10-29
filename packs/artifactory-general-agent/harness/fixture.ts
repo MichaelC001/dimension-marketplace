@@ -19,6 +19,7 @@ interface Seed {
 	readonly pack?: string;
 	readonly draft: Partial<AgentDraft> & Pick<AgentDraft, "name" | "description" | "charter">;
 	readonly fact: { readonly enabled: boolean; readonly listed: boolean; readonly title?: string; readonly avatar?: AgentFact["avatar"] };
+	readonly titleOverride?: string;
 	readonly instructions?: string;
 }
 
@@ -228,7 +229,8 @@ function factOf(seed: Seed): AgentFact {
 	return {
 		name: seed.draft.name,
 		description: seed.draft.description,
-		...(seed.fact.title ? { title: seed.fact.title } : {}),
+		...((seed.titleOverride ?? seed.fact.title) ? { title: seed.titleOverride ?? seed.fact.title } : {}),
+		...(seed.titleOverride ? { titleOverride: seed.titleOverride } : {}),
 		provenance: seed.source === "pack" ? "dimension" : seed.source === "user" ? "local" : "workspace",
 		...(seed.pack ? { pluginId: seed.pack } : {}),
 		enabled: seed.fact.enabled,
@@ -382,12 +384,15 @@ export function fixtureStore(params: URLSearchParams, voiceCells: ReadonlyMap<st
 			? {}
 			: {
 					call: async (intent: string, payload: unknown) => {
-						const body = payload as { tool?: string; args?: Record<string, unknown>; name?: string; enabled?: boolean; listed?: boolean };
+						const body = payload as { tool?: string; args?: Record<string, unknown>; name?: string; enabled?: boolean; listed?: boolean; title?: string };
 						if (intent === "configureGeneralAgent") {
 							const at = seeds.findIndex(seed => seed.draft.name === body.name);
 							const seed = seeds[at];
 							if (seed === undefined) throw new Error(`No agent named ${body.name}`);
-							seeds[at] = { ...seed, fact: { ...seed.fact, ...(body.enabled !== undefined ? { enabled: body.enabled } : {}), ...(body.listed !== undefined ? { listed: body.listed } : {}) } };
+							const { titleOverride: _previous, ...unnamed } = seed;
+							const title = body.title?.trim();
+							const named = body.title === undefined ? seed : title ? { ...unnamed, titleOverride: title } : unnamed;
+							seeds[at] = { ...named, fact: { ...seed.fact, ...(body.enabled !== undefined ? { enabled: body.enabled } : {}), ...(body.listed !== undefined ? { listed: body.listed } : {}) } };
 							publish();
 							return undefined;
 						}

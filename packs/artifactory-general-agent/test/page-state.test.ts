@@ -21,7 +21,8 @@ import {
 	receiveProposal,
 	saveBlockers,
 } from "../page/profile-state";
-import { allowlistOf, type Facet, inFacet, isEditable, isUnreadable, joinRoster, type RosterAgent } from "../page/roster";
+import { displayNameToWrite } from "../page/display-name";
+import { allowlistOf, defaultDisplayName, displayName, type Facet, inFacet, isEditable, isUnreadable, joinRoster, type RosterAgent } from "../page/roster";
 import type { AgentFact, FaceBinding } from "../page/types";
 
 function listed(name: string, source: AgentSource, patch: Partial<AgentDraft> = {}): ListedAgent {
@@ -326,5 +327,37 @@ describe("the parts of Other settings a proposal moved", () => {
 
 	test("an agent the proposal started has every key it set marked", () => {
 		expect(changedExtraPaths("", "title: Scout\nengine:\n  profile: fast")).toEqual(["title", "engine.profile"]);
+	});
+});
+
+describe("a display name the person chose", () => {
+	const companion = listed("aether", "pack", { extra: "title: Companion" });
+	const named = (override?: string): RosterAgent => {
+		const host = { ...fact("aether", "dimension"), title: override ?? "Companion", ...(override === undefined ? {} : { titleOverride: override }) };
+		return joinRoster([host], [companion])[0] as RosterAgent;
+	};
+
+	test("is what the page calls the agent, and clearing it returns the name the agent shipped with", () => {
+		expect(displayName(named("Juno"))).toBe("Juno");
+		expect(displayName(named())).toBe("Companion");
+		expect(defaultDisplayName(named("Juno"))).toBe("Companion");
+		expect(defaultDisplayName(named())).toBe("Companion");
+	});
+
+	test("never changes the id, and a nameless agent falls back to its id read as words", () => {
+		expect(named("Juno").name).toBe("aether");
+		const bare = joinRoster([{ ...fact("herald", "local"), title: "Juno", titleOverride: "Juno" }], [listed("herald", "user")])[0] as RosterAgent;
+		expect(displayName(bare)).toBe("Juno");
+		expect(defaultDisplayName(bare)).toBe("Herald");
+	});
+
+	test("is written only when the text moved the name: trimmed, one-spaced, and blank clears an existing one", () => {
+		expect(displayNameToWrite(null, undefined)).toBeUndefined();
+		expect(displayNameToWrite("Juno", undefined)).toBe("Juno");
+		expect(displayNameToWrite("  Chief   of  Staff ", undefined)).toBe("Chief of Staff");
+		expect(displayNameToWrite(" Juno ", "Juno")).toBeUndefined();
+		expect(displayNameToWrite("", "Juno")).toBe("");
+		expect(displayNameToWrite("   ", "Juno")).toBe("");
+		expect(displayNameToWrite("   ", undefined)).toBeUndefined();
 	});
 });

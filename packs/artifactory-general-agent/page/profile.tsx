@@ -11,7 +11,7 @@ import type { ListedAgent } from "../src/contracts";
 import { FaceTile, GrantLock, type Vital, VitalsStrip, ViewColumn } from "./chrome";
 import { faceWash } from "./faces";
 import { usePolled } from "./facts";
-import { errorText, type Forge } from "./forge";
+import { type AgentConfigurePatch, errorText, type Forge } from "./forge";
 import { LivePill, usageOf } from "./home";
 import { type AgentActivity, agoLabel, liveStateOf, money, NO_ACTIVITY, tokenLabel } from "./kpis";
 import { saveProfile } from "./profile-save";
@@ -131,7 +131,7 @@ export function AgentProfile({
 	readonly faceOf: (name: string) => FaceBinding;
 	readonly bridged: BridgedPresences | undefined;
 	readonly onDock: (() => void) | undefined;
-	readonly configure: ((name: string, patch: { readonly enabled?: boolean; readonly listed?: boolean }) => Promise<void>) | undefined;
+	readonly configure: ((name: string, patch: AgentConfigurePatch) => Promise<void>) | undefined;
 	readonly busy: ReadonlySet<string>;
 	readonly notice: string | undefined;
 	/** What the voice lane lends the page; its absence is a state the section draws. */
@@ -374,7 +374,20 @@ export function AgentProfile({
 				) : null}
 			</nav>
 
-			<IdentitySection draft={draft} set={set} editable={editable} creating={creating} errors={errors} face={face} faceOf={faceOf} bridged={bridged} marked={marked} />
+			<IdentitySection
+				draft={draft}
+				set={set}
+				editable={editable}
+				creating={creating}
+				errors={errors}
+				face={face}
+				faceOf={faceOf}
+				bridged={bridged}
+				marked={marked}
+				rosterAgent={rosterAgent}
+				configure={configure}
+				renaming={fact !== undefined && busy.has(fact.name)}
+			/>
 			<VoiceSection draft={draft} set={set} editable={editable} agentName={agentName} savedVoice={state.agent?.draft.voice ?? ""} creating={creating} kit={voice} hasWorkspace={hasWorkspace} marked={marked} />
 			<CharterSection draft={draft} set={set} editable={editable} errors={errors} agent={state.agent} marked={marked} />
 			<InstructionsSection home={home.value} error={home.error} creating={creating} text={instructionsText} onText={setInstructions} editable={editable} />

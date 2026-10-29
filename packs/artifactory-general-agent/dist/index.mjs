@@ -97,6 +97,7 @@ Object.freeze({
 		blurb: "Uncapped at your display's native refresh, every effect on. Costs the most."
 	})
 });
+Object.freeze({ rail: "low" });
 /** Vibr presence avatar ids — the allowlist a persisted {@link FraymUiConfig.avatar}
 *  is validated against. Mirrors `@fraym/vibr`'s `AvatarId` union by hand because this
 *  contract package stays dependency-free (`@fraym/vibr` needs React, and non-React
@@ -125,8 +126,7 @@ var AVATAR_IDS = [
 	"mochi",
 	"none"
 ];
-/** First-install defaults: recent (within 3d) sessions, sorted by activity. */
-var DEFAULT_SESSION_FILTERS = Object.freeze({
+Object.freeze({
 	status: "All",
 	project: "All",
 	activity: "3d",
@@ -181,12 +181,16 @@ Object.freeze({
 	showTokenUsage: true,
 	cacheMarkers: "off",
 	cacheMarkersHandled: {},
+	phoneReviewedMarks: {},
+	phoneRecentActions: [],
 	toolOutputDefault: "none",
 	showReasoning: true,
 	groupConsecutiveTools: true,
 	groupThreshold: 2,
 	toolGroupIconStack: true,
 	toolGroupIconStackMax: 5,
+	toolLivePreview: true,
+	showAdvancedPluginStats: false,
 	telemetry: {},
 	studioPersona: "",
 	layout: void 0,
@@ -194,8 +198,10 @@ Object.freeze({
 	composerSendWhileRunning: "steer",
 	keybindingOverrides: {},
 	customProviderBrands: {},
-	sessionFilters: { ...DEFAULT_SESSION_FILTERS },
+	spaceSessionFilters: {},
 	sessionRailStyle: "classic",
+	railSections: {},
+	railEntries: {},
 	railWidth: void 0,
 	threadWidth: "default",
 	textOverflow: "fade",
@@ -206,7 +212,9 @@ Object.freeze({
 	usageWarnEnabled: true,
 	usageWarnThreshold: 60,
 	usageWarnRedThreshold: 90,
-	usageWarnDismissed: {}
+	usageWarnDismissed: {},
+	environmentSetupJob: null,
+	environmentMoves: {}
 });
 Object.freeze({});
 //#endregion
@@ -1485,10 +1493,14 @@ function humanize(slug) {
 	const words = slug.replace(/-+/g, " ").trim();
 	return words.charAt(0).toUpperCase() + words.slice(1);
 }
-/** What the agent is called on screen: the host's `title`, the file's own
-*  `title:`, else its name read as words. */
+/** What the agent is called on screen: the host's `title` (the person's own
+*  name for it when they chose one), the file's own `title:`, else its name
+*  read as words. */
 function displayName(agent) {
-	return agent.fact?.title ?? (agent.listed ? extraScalar(agent.listed.draft.extra, "title") : null) ?? humanize(agent.name);
+	return agent.fact?.title ?? defaultDisplayName(agent);
+}
+function defaultDisplayName(agent) {
+	return (agent.fact?.titleOverride === void 0 ? agent.fact?.title : void 0) ?? (agent.listed ? extraScalar(agent.listed.draft.extra, "title") : null) ?? humanize(agent.name);
 }
 /** An agent named by its id (a lineage entry), as a person reads it. */
 function titleOf(name, roster) {
@@ -3021,6 +3033,13 @@ function flowList(names) {
 	return `[${names.join(", ")}]`;
 }
 //#endregion
+//#region page/display-name.ts
+function displayNameToWrite(typed, override) {
+	if (typed === null) return void 0;
+	const next = typed.replace(/\s+/g, " ").trim();
+	return next === (override ?? "") ? void 0 : next;
+}
+//#endregion
 //#region page/sections-identity.tsx
 /** The Machinist set this and the human has not decided yet. */
 function ProposedBadge() {
@@ -3112,7 +3131,46 @@ function GalleryFace({ id, label, checked, disabled, bridged, onPick, skin, acce
 		})]
 	});
 }
-function IdentitySection({ draft, set, editable, creating, errors, face, bridged, marked }) {
+function DisplayNameRow({ agent, configure, renaming }) {
+	const override = agent.fact?.titleOverride;
+	const fallback = defaultDisplayName(agent);
+	const [typed, setTyped] = useState(null);
+	const commit = (title) => void configure(agent.name, { title });
+	return /* @__PURE__ */ jsx(FieldRow, {
+		label: "Display name",
+		hint: `What it is called on screen and by itself, in new sessions. Empty keeps ${fallback}.`,
+		children: /* @__PURE__ */ jsxs("div", {
+			className: "flex items-center gap-2",
+			children: [/* @__PURE__ */ jsx(Input, {
+				value: typed ?? override ?? "",
+				placeholder: fallback,
+				disabled: renaming,
+				"aria-label": "Display name",
+				onChange: (event) => {
+					if ([...event.target.value].length <= 48) setTyped(event.target.value);
+				},
+				onBlur: () => {
+					const title = displayNameToWrite(typed, override);
+					if (title === void 0) setTyped(null);
+					else commit(title);
+				},
+				onKeyDown: (event) => event.key === "Enter" && event.currentTarget.blur(),
+				className: "max-w-md"
+			}), override !== void 0 ? /* @__PURE__ */ jsxs(Button, {
+				size: "sm",
+				variant: "ghost",
+				disabled: renaming,
+				onMouseDown: (event) => event.preventDefault(),
+				onClick: () => {
+					setTyped(null);
+					commit("");
+				},
+				children: ["Use ", fallback]
+			}) : null]
+		})
+	});
+}
+function IdentitySection({ draft, set, editable, creating, errors, face, bridged, marked, rosterAgent, configure, renaming }) {
 	const heldFace = heldByExtra(draft).has("avatar");
 	const faces = faceOptions(bridged);
 	const current = draft.vibr === "" ? null : draft.vibr;
@@ -3123,33 +3181,41 @@ function IdentitySection({ draft, set, editable, creating, errors, face, bridged
 		children: [
 			/* @__PURE__ */ jsxs("div", {
 				className: cn(PANEL, "flex flex-col gap-5 p-4"),
-				children: [/* @__PURE__ */ jsx(FieldRow, {
-					label: "Name",
-					hint: creating ? "Its id: lowercase letters, digits and dashes. It cannot change once written." : "Its id. Fixed once written.",
-					children: creating ? /* @__PURE__ */ jsxs(Fragment, { children: [/* @__PURE__ */ jsx(Input, {
-						value: draft.name,
-						placeholder: "release-herald",
-						"aria-invalid": errors.name !== void 0,
-						onChange: (event) => set({ name: normalizeTypedName(event.target.value) }),
-						className: "max-w-md font-secondary"
-					}), /* @__PURE__ */ jsx(InlineError, { text: errors.name })] }) : /* @__PURE__ */ jsx("span", {
-						className: "inline-flex items-center rounded-sm bg-fr-surface-3 px-2 py-1 font-secondary text-fr-sm text-fr-text",
-						children: draft.name
+				children: [
+					/* @__PURE__ */ jsx(FieldRow, {
+						label: "Name",
+						hint: creating ? "Its id: lowercase letters, digits and dashes. It cannot change once written." : "Its id. Fixed once written.",
+						children: creating ? /* @__PURE__ */ jsxs(Fragment, { children: [/* @__PURE__ */ jsx(Input, {
+							value: draft.name,
+							placeholder: "release-herald",
+							"aria-invalid": errors.name !== void 0,
+							onChange: (event) => set({ name: normalizeTypedName(event.target.value) }),
+							className: "max-w-md font-secondary"
+						}), /* @__PURE__ */ jsx(InlineError, { text: errors.name })] }) : /* @__PURE__ */ jsx("span", {
+							className: "inline-flex items-center rounded-sm bg-fr-surface-3 px-2 py-1 font-secondary text-fr-sm text-fr-text",
+							children: draft.name
+						})
+					}),
+					!creating && rosterAgent?.fact !== void 0 && configure !== void 0 ? /* @__PURE__ */ jsx(DisplayNameRow, {
+						agent: rosterAgent,
+						configure,
+						renaming
+					}, rosterAgent.fact.titleOverride ?? "") : null,
+					/* @__PURE__ */ jsxs(FieldRow, {
+						label: "What it is for",
+						hint: "One line. Rooms route to it by this when it declares no card.",
+						children: [/* @__PURE__ */ jsxs("div", {
+							className: "flex items-center gap-2",
+							children: [/* @__PURE__ */ jsx(Input, {
+								value: draft.description,
+								disabled: !editable,
+								placeholder: "Writes our changelog in my voice",
+								"aria-invalid": errors.description !== void 0,
+								onChange: (event) => set({ description: event.target.value })
+							}), marked.has("description") ? /* @__PURE__ */ jsx(ProposedBadge, {}) : null]
+						}), /* @__PURE__ */ jsx(InlineError, { text: errors.description })]
 					})
-				}), /* @__PURE__ */ jsxs(FieldRow, {
-					label: "What it is for",
-					hint: "One line. Rooms route to it by this when it declares no card.",
-					children: [/* @__PURE__ */ jsxs("div", {
-						className: "flex items-center gap-2",
-						children: [/* @__PURE__ */ jsx(Input, {
-							value: draft.description,
-							disabled: !editable,
-							placeholder: "Writes our changelog in my voice",
-							"aria-invalid": errors.description !== void 0,
-							onChange: (event) => set({ description: event.target.value })
-						}), marked.has("description") ? /* @__PURE__ */ jsx(ProposedBadge, {}) : null]
-					}), /* @__PURE__ */ jsx(InlineError, { text: errors.description })]
-				})]
+				]
 			}),
 			/* @__PURE__ */ jsxs("div", {
 				className: cn(PANEL, "flex flex-col gap-3 p-4"),
@@ -5377,7 +5443,10 @@ function AgentProfile({ state, onChange, onClose, onExtend, onDecide, onSaved, f
 				face,
 				faceOf,
 				bridged,
-				marked
+				marked,
+				rosterAgent,
+				configure,
+				renaming: fact !== void 0 && busy.has(fact.name)
 			}),
 			/* @__PURE__ */ jsx(VoiceSection, {
 				draft,
