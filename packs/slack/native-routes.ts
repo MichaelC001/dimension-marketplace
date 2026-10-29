@@ -56,6 +56,23 @@ function optionalFlag(tool: string, args: Args, key: string): boolean | undefine
 	return value;
 }
 
+interface Fields {
+	readonly message: string;
+	readonly channelId: string;
+	readonly threadTs: string | undefined;
+	readonly broadcast: boolean | undefined;
+}
+
+function readFields(tool: string, args: Args, supported: readonly string[]): Fields {
+	refuseUnsupported(tool, args, supported);
+	return {
+		message: requiredText(tool, args, "message"),
+		channelId: requiredText(tool, args, "channel_id"),
+		threadTs: optionalText(tool, args, "thread_ts"),
+		broadcast: optionalFlag(tool, args, "reply_broadcast"),
+	};
+}
+
 async function withHints<T>(run: () => Promise<T>): Promise<T> {
 	try {
 		return await run();
@@ -63,32 +80,43 @@ async function withHints<T>(run: () => Promise<T>): Promise<T> {
 		if (!(error instanceof SlackApiError)) throw error;
 		const hint =
 			error.code === "missing_scope"
-				? `The Slack app is missing a scope. Paste the app manifest from ${CONNECT_PATH} into the Slack app again, reinstall it and reconnect.`
+				? `This sign-in lacks a scope. Reconnect Slack as you under ${CONNECT_PATH} and choose Read and send or Everything. If the Slack app itself lacks it, paste the app manifest from the same page into the app again and reinstall it first.`
 				: HINTS[error.code];
 		throw hint ? new Error(`${error.message}. ${hint}`) : error;
 	}
 }
 
+const OUTSIDE_WORKSPACE = "is outside this workspace (Slack Connect). Dimension does not send there as you.";
+
+async function refuseStranger(api: WebApiClient, userId: string, signal?: AbortSignal): Promise<void> {
+	const found = await api.call("users.info", { user: userId }, signal);
+	if (!isRecord(found.user)) {
+		throw new Error(`Slack did not describe ${userId}, so Dimension cannot tell whether that person is outside this workspace.`);
+	}
+	if (found.user.is_stranger === true) throw new Error(`${userId} ${OUTSIDE_WORKSPACE}`);
+}
+
 async function targetConversation(api: WebApiClient, tool: string, channelId: string, signal?: AbortSignal): Promise<string> {
-	let channel = channelId;
 	if (USER_ID.test(channelId)) {
-		const opened = await api.call("conversations.open", { users: channelId }, signal);
-		const id = isRecord(opened.channel) ? opened.channel.id : undefined;
-		if (typeof id !== "string") throw new Error(`Slack did not open a direct message with ${channelId}.`);
-		channel = id;
-	} else if (!CONVERSATION_ID.test(channelId)) {
+		await refuseStranger(api, channelId, signal);
+		return channelId;
+	}
+	if (!CONVERSATION_ID.test(channelId)) {
 		throw new Error(
-			`${tool} needs "channel_id" as a Slack id: C or G for a channel, a user id starting with U for a direct message. Find one with slack_search_channels or slack_search_users.`,
+			`${tool} needs "channel_id" as a Slack id: C or G for a channel, D for a direct message, or a user id starting with U or W to message that person. Find one with slack_search_channels or slack_search_users.`,
 		);
 	}
-	const info = await api.call("conversations.info", { channel }, signal);
-	const conversation = isRecord(info.channel) ? info.channel : {};
-	if (conversation.is_ext_shared === true || conversation.is_pending_ext_shared === true) {
-		throw new Error(
-			`${channel} is shared outside this workspace (Slack Connect). Dimension does not send there as you.`,
-		);
+	const info = await api.call("conversations.info", { channel: channelId }, signal);
+	if (!isRecord(info.channel)) {
+		throw new Error(`Slack did not describe ${channelId}, so Dimension cannot tell whether it is shared outside this workspace.`);
 	}
-	return channel;
+	if (info.channel.is_ext_shared === true || info.channel.is_pending_ext_shared === true) {
+		throw new Error(`${channelId} ${OUTSIDE_WORKSPACE}`);
+	}
+	if (info.channel.is_im === true && typeof info.channel.user === "string") {
+		await refuseStranger(api, info.channel.user, signal);
+	}
+	return channelId;
 }
 
 async function permalinkOf(
@@ -112,29 +140,26 @@ function report(lines: readonly (string | undefined)[]): McpToolResult {
 const sendMessage: NativeRoute = {
 	run: (args, api, signal) =>
 		withHints(async () => {
-			refuseUnsupported(SEND_TOOL, args, SEND_ARGUMENTS);
-			const message = requiredText(SEND_TOOL, args, "message");
-			const channelId = requiredText(SEND_TOOL, args, "channel_id");
-			const threadTs = optionalText(SEND_TOOL, args, "thread_ts");
-			const broadcast = optionalFlag(SEND_TOOL, args, "reply_broadcast");
+			const fields = readFields(SEND_TOOL, args, SEND_ARGUMENTS);
 			const unfurlApps = optionalFlag(SEND_TOOL, args, "unfurl_app_links");
-			const channel = await targetConversation(api, SEND_TOOL, channelId, signal);
+			const channel = await targetConversation(api, SEND_TOOL, fields.channelId, signal);
 			const posted = await api.call(
 				"chat.postMessage",
 				{
 					channel,
-					markdown_text: message,
-					thread_ts: threadTs,
-					reply_broadcast: broadcast,
+					markdown_text: fields.message,
+					thread_ts: fields.threadTs,
+					reply_broadcast: fields.broadcast,
 					unfurl_app_links: unfurlApps === true,
 				},
 				signal,
 			);
 			const ts = typeof posted.ts === "string" ? posted.ts : undefined;
-			const link = ts ? await permalinkOf(api, channel, ts, signal) : undefined;
+			const where = typeof posted.channel === "string" ? posted.channel : channel;
+			const link = ts ? await permalinkOf(api, where, ts, signal) : undefined;
 			return report([
 				"Message sent.",
-				`Channel: ${channel}`,
+				`Channel: ${where}`,
 				ts ? `Message TS: ${ts}` : undefined,
 				link ? `Link: ${link}` : undefined,
 			]);
@@ -144,25 +169,27 @@ const sendMessage: NativeRoute = {
 const scheduleMessage: NativeRoute = {
 	run: (args, api, signal) =>
 		withHints(async () => {
-			refuseUnsupported(SCHEDULE_TOOL, args, SCHEDULE_ARGUMENTS);
-			const message = requiredText(SCHEDULE_TOOL, args, "message");
-			const channelId = requiredText(SCHEDULE_TOOL, args, "channel_id");
-			const threadTs = optionalText(SCHEDULE_TOOL, args, "thread_ts");
-			const broadcast = optionalFlag(SCHEDULE_TOOL, args, "reply_broadcast");
+			const fields = readFields(SCHEDULE_TOOL, args, SCHEDULE_ARGUMENTS);
 			const postAt = args.post_at;
 			if (typeof postAt !== "number" || !Number.isInteger(postAt)) {
 				throw new Error(`${SCHEDULE_TOOL} needs "post_at" as a whole Unix timestamp in seconds.`);
 			}
-			const channel = await targetConversation(api, SCHEDULE_TOOL, channelId, signal);
+			const channel = await targetConversation(api, SCHEDULE_TOOL, fields.channelId, signal);
 			const scheduled = await api.call(
 				"chat.scheduleMessage",
-				{ channel, markdown_text: message, post_at: postAt, thread_ts: threadTs, reply_broadcast: broadcast },
+				{
+					channel,
+					markdown_text: fields.message,
+					post_at: postAt,
+					thread_ts: fields.threadTs,
+					reply_broadcast: fields.broadcast,
+				},
 				signal,
 			);
 			const id = typeof scheduled.scheduled_message_id === "string" ? scheduled.scheduled_message_id : undefined;
 			return report([
 				"Message scheduled.",
-				`Channel: ${channel}`,
+				`Channel: ${typeof scheduled.channel === "string" ? scheduled.channel : channel}`,
 				`Scheduled for: ${new Date(postAt * 1000).toISOString()}`,
 				id ? `Scheduled message id: ${id}` : undefined,
 			]);

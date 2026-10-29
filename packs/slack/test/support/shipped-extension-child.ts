@@ -90,6 +90,9 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
 		return Response.json({ jsonrpc: "2.0", id: call.id, result });
 	}
 	if (endpoint === `${BOT_API}auth.test`) return Response.json({ ok: true, user: "ada", team: "Acme" });
+	if (endpoint === `${BOT_API}conversations.info`) {
+		return Response.json({ ok: true, channel: { id: "C0123", is_ext_shared: false, is_pending_ext_shared: false } });
+	}
 	if (endpoint.startsWith(BOT_API)) return Response.json({ ok: true, channel: "C0123", ts: "1700000000.000900" });
 	throw new Error(`unexpected request to ${url}`);
 }) as typeof fetch;

@@ -35,7 +35,7 @@ const AS_YOU_ENDPOINTS = [
 	`${SLACK_API}auth.test`,
 	TOKEN_ENDPOINT,
 	`${SLACK_API}conversations.info`,
-	`${SLACK_API}conversations.open`,
+	`${SLACK_API}users.info`,
 	`${SLACK_API}chat.postMessage`,
 	`${SLACK_API}chat.scheduleMessage`,
 	`${SLACK_API}chat.getPermalink`,
