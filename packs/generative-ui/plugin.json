@@ -1,0 +1,52 @@
+{
+	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+	"name": "generative-ui",
+	"version": "0.1.0",
+	"description": "Generative UI: the assistant shows you a designed interface (a trip plan, a comparison, a checklist, a schedule, a summary with numbers) instead of a wall of text. A closed palette of blocks, drawn in your theme, with buttons that answer back.",
+	"author": {
+		"name": "Dimension"
+	},
+	"license": "MIT",
+	"keywords": [
+		"generative ui",
+		"interface",
+		"cards",
+		"checklist",
+		"comparison",
+		"itinerary",
+		"chart",
+		"tools"
+	],
+	"extensions": {
+		"ai.insodimension.dimension": {
+			"contractVersion": 1,
+			"title": "Generative UI",
+			"icon": "grid",
+			"category": "tools",
+			"channel": "canary",
+			"toolLoading": "eager",
+			"requires": {
+				"dimension": ">=0.11.19"
+			},
+			"tools": [
+				{
+					"name": "render_ui",
+					"description": "Show the user a designed interface (plan, comparison, checklist, schedule, numbers) built from a fixed palette of blocks."
+				}
+			],
+			"toolRenderer": [
+				{
+					"match": "render_ui",
+					"use": "generativeUi",
+					"icon": "grid",
+					"title": "Interface"
+				}
+			],
+			"examples": [
+				"Plan three days in Lisbon for me",
+				"Compare these two laptops side by side",
+				"Make me a packing checklist for a week of hiking"
+			]
+		}
+	}
+}

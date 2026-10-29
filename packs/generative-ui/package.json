@@ -1,0 +1,40 @@
+{
+	"name": "@dimension/community-generative-ui",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"author": "Dimension",
+	"description": "Generative UI: the agent shows you a designed interface (a plan, a comparison, a checklist, a schedule, numbers) instead of a wall of text. A closed palette of blocks, drawn in your theme.",
+	"engines": {
+		"node": ">=22.13.0"
+	},
+	"scripts": {
+		"build": "node scripts/build.mjs",
+		"check:types": "tsc --noEmit -p tsconfig.json",
+		"test": "bun test test/"
+	},
+	"dimension": {
+		"name": "generative-ui",
+		"optIn": true,
+		"toolLoading": "eager",
+		"sharedModule": true,
+		"extensions": [
+			"dist/index.mjs"
+		]
+	},
+	"files": [
+		"README.md",
+		"plugin.json",
+		"dist"
+	],
+	"devDependencies": {
+		"@dimension/sdk": "workspace:*",
+		"@oh-my-pi/pi-coding-agent": "workspace:*",
+		"@types/bun": "catalog:",
+		"@types/node": "^26.1.2",
+		"esbuild": "^0.21.5",
+		"typescript": "catalog:",
+		"zod": "4.4.3"
+	},
+	"license": "MIT"
+}
