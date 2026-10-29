@@ -271,11 +271,15 @@ var PALETTE = {
   },
   button: {
     group: "Interactive",
-    fields: { label: label(60), message: label(L.maxMessage), "variant?": pick("primary", "secondary") }
+    fields: {
+      label: label(60),
+      message: { k: "str", max: L.maxMessage, inline: false, noCommand: true },
+      "variant?": pick("primary", "secondary")
+    }
   },
   link: {
     group: "Media",
-    fields: { label: label(), url: { k: "url", schemes: ["https:", "mailto:"] }, "detail?": label() }
+    fields: { label: label(), url: { k: "url", schemes: ["https:"] }, "detail?": label() }
   },
   image: {
     group: "Media",
@@ -387,7 +391,6 @@ function safeUrl(value, schemes) {
   }
   if (!schemes.includes(parsed.protocol)) return void 0;
   if (parsed.username !== "" || parsed.password !== "") return void 0;
-  if (parsed.protocol === "mailto:") return parsed.pathname === "" ? void 0 : parsed.href;
   return parsed.hostname === "" ? void 0 : parsed.href;
 }
 var INVALID = Symbol("invalid");
@@ -417,6 +420,12 @@ function parseString(raw, field, path, run) {
   const value = cleanText(raw, field.inline);
   if (value.length > field.max)
     return fail(run, path, `is too long (${value.length} characters, the limit is ${field.max})`);
+  if (field.noCommand === true && /^[/!]/.test(value))
+    return fail(
+      run,
+      path,
+      "starts with / or !, which the host reads as a command; a button message is plain words the user would type"
+    );
   if (ACTIVE_MARKUP.test(value)) {
     return fail(
       run,
@@ -426,11 +435,11 @@ function parseString(raw, field, path, run) {
   }
   if (field.inline) {
     for (const match of value.matchAll(INLINE_LINK)) {
-      if (safeUrl(match[2], ["https:", "mailto:"]) === void 0) {
+      if (safeUrl(match[2], ["https:"]) === void 0) {
         return fail(
           run,
           path,
-          `has a link with a URL that is not allowed (${JSON.stringify(match[2]).slice(0, 60)}); only https: and mailto: links are rendered`
+          `has a link with a URL that is not allowed (${JSON.stringify(match[2]).slice(0, 60)}); only https: links are rendered`
         );
       }
     }
@@ -530,7 +539,7 @@ function parseFields(source, fields, path, run, depth, owner) {
     const key = optional ? declared.slice(0, -1) : declared;
     known.add(key);
     const raw = source[key];
-    if (raw === void 0 || raw === null && field.k !== "num" && field.k !== "cell") {
+    if (raw === void 0 || raw === null && (optional || field.k !== "num" && field.k !== "cell")) {
       if (!optional) bad = fail(run, `${path}.${key}`, `is required (${describeField(field)})`) === INVALID || bad;
       continue;
     }
@@ -700,6 +709,15 @@ function parseUiSpec(input) {
   const blocks = parseNodes(input.blocks, "blocks", run, 1);
   if (blocks === INVALID || run.issues.length > 0) return reject();
   const spec = title === void 0 ? { v: UI_SPEC_VERSION, blocks } : { v: UI_SPEC_VERSION, title, blocks };
+  const drawn = JSON.stringify(spec).length;
+  if (drawn > L.maxSpecBytes) {
+    fail(
+      run,
+      "(root)",
+      `is ${Math.ceil(drawn / 1024)} KiB once drawn, the limit is ${L.maxSpecBytes / 1024} KiB; cut detail or split the interface`
+    );
+    return reject();
+  }
   return {
     ok: true,
     spec,
