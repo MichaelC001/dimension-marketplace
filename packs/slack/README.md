@@ -43,4 +43,4 @@ Off by default. The bot option needs a Slack workspace where you can create and 
 bun test marketplace/packs/slack
 ```
 
-Run from the Dimension monorepo root. The tests use a local fake of Slack's MCP server and token endpoint and never call Slack.
+Run from the Dimension monorepo root. The tests use local fakes of Slack's MCP server, Web API and token endpoint and never call Slack.
