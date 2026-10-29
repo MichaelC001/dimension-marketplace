@@ -5,6 +5,7 @@ import { openDriver, type SqlDriver, type SqlValue } from "../src/library/driver
 import { createLibrary, type LibraryOptions } from "../src/library/library";
 import { pathKey } from "../src/library/paths";
 import { SCHEMA_VERSION } from "../src/library/schema";
+import { MAX_TAGS } from "../src/library/tags";
 import type { Library, LibraryQuery, ShareRow } from "../src/library/types";
 import { TINY_PNG, makeTempDir } from "./fixtures";
 
@@ -313,6 +314,184 @@ describe("search", () => {
 		expect(cursor).toBeDefined();
 		expect(() => library.query({ sort: "size", limit: 1, cursor: cursor as string })).toThrow(/cursor/);
 		expect(() => library.query({ cursor: "not-a-cursor" })).toThrow(/cursor/);
+	});
+});
+
+describe("tags", () => {
+	interface TagSpec {
+		readonly name: string;
+		readonly tags: readonly string[];
+		readonly workspace?: string;
+	}
+
+	const CATALOGUE: readonly TagSpec[] = [
+		{ name: "a", tags: ["film", "launch", "Draft"] },
+		{ name: "b", tags: ["film", "launch"] },
+		{ name: "c", tags: ["films", "launch"] },
+		{ name: "d", tags: ["Film"] },
+		{ name: "e", tags: [] },
+		{ name: "f", tags: ["short film", "Launch"] },
+		{ name: "g", tags: ["Éclair"] },
+	];
+
+	const SHELF: readonly TagSpec[] = [
+		{ name: "a", tags: ["Zine", "launch"], workspace: "alpha" },
+		{ name: "b", tags: ["zine", "launch", "apple"], workspace: "alpha" },
+		{ name: "c", tags: ["ZINE", "launch", "retro"], workspace: "beta" },
+		{ name: "d", tags: ["retro", "zine"], workspace: "beta" },
+		{ name: "e", tags: [], workspace: "alpha" },
+		{ name: "g", tags: ["zine"], workspace: "beta" },
+	];
+
+	const ROTATION: readonly (readonly string[])[] = [["film", "x"], ["Film"], ["films"]];
+
+	async function seedTags(library: Library, specs: readonly TagSpec[]): Promise<Record<string, string>> {
+		const ids: Record<string, string> = {};
+		for (const { name, tags, workspace } of specs) {
+			clock += 1_000;
+			const item = await library.stamp({
+				path: await put(`${name}.txt`),
+				source: "present",
+				tags,
+				...(workspace === undefined ? {} : { workspace: join(root, workspace) }),
+			});
+			ids[name] = item.id;
+		}
+		return ids;
+	}
+
+	function namesOf(library: Library, ids: Record<string, string>, query: LibraryQuery): string[] {
+		const nameOf = new Map(Object.entries(ids).map(([name, id]) => [id, name]));
+		return allIds(library, query)
+			.map(id => nameOf.get(id) ?? id)
+			.sort();
+	}
+
+	async function seedRotation(library: Library): Promise<(...indexes: number[]) => string[]> {
+		const ids: string[] = [];
+		for (let index = 0; index < 15; index++) {
+			clock += 1_000;
+			const name = `item-${String(index).padStart(2, "0")}.${index % 5 === 4 ? "md" : "txt"}`;
+			const item = await library.stamp({
+				path: await put(name, "x".repeat(index % 4)),
+				source: "present",
+				workspace: join(root, index < 8 ? "alpha" : "beta"),
+				tags: ROTATION[index % 3] as readonly string[],
+			});
+			ids.push(item.id);
+			if (index % 3 === 0) library.markOpened(item.id);
+		}
+		return (...indexes) => indexes.map(index => ids[index] as string).sort();
+	}
+
+	const tagCounts = (facets: { readonly tags: readonly { readonly tag: string; readonly count: number }[] }): [string, number][] => facets.tags.map(({ tag, count }) => [tag.toLowerCase(), count]);
+
+	const filters: ReadonlyArray<{ readonly name: string; readonly tags: readonly string[]; readonly expected: readonly string[] }> = [
+		{ name: "a whole tag is not matched inside a longer one or a phrase", tags: ["film"], expected: ["a", "b", "d"] },
+		{ name: "the requested case does not matter", tags: ["FILM"], expected: ["a", "b", "d"] },
+		{ name: "the stored case does not matter", tags: ["launch"], expected: ["a", "b", "c", "f"] },
+		{ name: "spaces around a requested tag are ignored", tags: [" film "], expected: ["a", "b", "d"] },
+		{ name: "two tags need both", tags: ["film", "launch"], expected: ["a", "b"] },
+		{ name: "three tags need all three, in any order and case", tags: ["Launch", "DRAFT", "film"], expected: ["a"] },
+		{ name: "one tag nobody carries empties the answer", tags: ["film", "absent"], expected: [] },
+		{ name: "a tag of several words is one tag", tags: ["short film"], expected: ["f"] },
+		{ name: "a plural is another tag", tags: ["films"], expected: ["c"] },
+		{ name: "a non-ASCII tag matches as written", tags: ["Éclair"], expected: ["g"] },
+		{ name: "no tags filter nothing", tags: [], expected: ["a", "b", "c", "d", "e", "f", "g"] },
+		{ name: "blank tags filter nothing", tags: ["", "   "], expected: ["a", "b", "c", "d", "e", "f", "g"] },
+	];
+
+	for (const { name, tags, expected } of filters) {
+		test(`filtering by tags: ${name}`, async () => {
+			const library = await openLibrary();
+			const ids = await seedTags(library, CATALOGUE);
+			expect(namesOf(library, ids, { tags })).toEqual(expected);
+			expect(library.query({ tags }).total).toBe(expected.length);
+		});
+	}
+
+	test("the filter takes at most the tags an artifact can carry, counting a tag once whatever its case", async () => {
+		const library = await openLibrary();
+		const every = Array.from({ length: MAX_TAGS }, (_, index) => `t${index}`);
+		const item = await library.stamp({ path: await put("full.txt"), source: "present", tags: every });
+		expect(allIds(library, { tags: every })).toEqual([item.id]);
+		expect(allIds(library, { tags: [...every, "T0"] })).toEqual([item.id]);
+		expect(() => library.query({ tags: [...every, "extra"] })).toThrow(`filter by at most ${MAX_TAGS} tags`);
+	});
+
+	test("paging a tag filter covers exactly the matching rows for every sort, with an honest total", async () => {
+		const library = await openLibrary();
+		const at = await seedRotation(library);
+		const film = at(0, 1, 3, 4, 6, 7, 9, 10, 12, 13);
+		for (const sort of ["recent", "name", "size", "opened"] as const) {
+			const query = { tags: ["film"], sort } as const;
+			const whole = allIds(library, query);
+			expect([...whole].sort()).toEqual(film);
+			for (const limit of [1, 4]) expect(pagedIds(library, query, limit)).toEqual(whole);
+			expect(library.query({ ...query, limit: 4 }).total).toBe(film.length);
+		}
+		expect(pagedIds(library, { tags: ["FILM", "x"] }, 2).sort()).toEqual(at(0, 3, 6, 9, 12));
+	});
+
+	test("the filter holds inside the discarded and shared scopes, page by page", async () => {
+		const library = await openLibrary();
+		const at = await seedRotation(library);
+		const idOf = (index: number): string => at(index)[0] as string;
+		for (const index of [0, 1, 2]) await library.discard(idOf(index), { trash: false });
+		for (const index of [3, 5, 6]) library.shares.insert(shareFor(idOf(index)));
+
+		const discarded = { tags: ["FILM"], state: "discarded" } as const;
+		expect(pagedIds(library, discarded, 1).sort()).toEqual(at(0, 1));
+		expect(library.query(discarded).total).toBe(2);
+		expect(pagedIds(library, { tags: ["films"], state: "discarded" }, 1)).toEqual(at(2));
+
+		expect(pagedIds(library, { tags: ["film"] }, 3).sort()).toEqual(at(3, 4, 6, 7, 9, 10, 12, 13));
+		const shared = { tags: ["film"], shared: true } as const;
+		expect(pagedIds(library, shared, 1).sort()).toEqual(at(3, 6));
+		expect(library.query(shared).total).toBe(2);
+		const unshared = { tags: ["film"], shared: false } as const;
+		expect(pagedIds(library, unshared, 2).sort()).toEqual(at(4, 7, 9, 10, 12, 13));
+		expect(library.query(unshared).total).toBe(6);
+	});
+
+	test("the filter narrows a kind, workspace, starred or text search further and never widens it", async () => {
+		const library = await openLibrary();
+		const at = await seedRotation(library);
+		for (const index of [0, 9, 11, 12]) library.update(at(index)[0] as string, { starred: true });
+
+		expect(pagedIds(library, { tags: ["film"], kinds: ["markdown"] }, 1).sort()).toEqual(at(4, 9));
+		expect(pagedIds(library, { tags: ["film"], kinds: ["markdown"], workspace: join(root, "alpha") }, 1)).toEqual(at(4));
+		expect(pagedIds(library, { tags: ["film"], workspace: join(root, "beta"), starred: true }, 1).sort()).toEqual(at(9, 12));
+
+		const searched = { q: "item-1", tags: ["film"], sort: "relevance" } as const;
+		expect(pagedIds(library, searched, 1).sort()).toEqual(at(10, 12, 13));
+		expect(library.query(searched).total).toBe(3);
+	});
+
+	test("tag facets count each tag over the items in scope, folding case into one entry, most used first", async () => {
+		const library = await openLibrary();
+		await seedTags(library, SHELF);
+		expect(tagCounts(library.facets({}))).toEqual([
+			["zine", 5],
+			["launch", 3],
+			["retro", 2],
+			["apple", 1],
+		]);
+		expect(tagCounts(library.facets({ workspace: join(root, "beta") }))).toEqual([
+			["zine", 3],
+			["retro", 2],
+			["launch", 1],
+		]);
+	});
+
+	test("a discarded item leaves the tag counts and a tag only it carried leaves the list", async () => {
+		const library = await openLibrary();
+		const ids = await seedTags(library, SHELF);
+		expect(Object.fromEntries(tagCounts(library.facets({})))).toEqual({ zine: 5, launch: 3, retro: 2, apple: 1 });
+
+		await library.discard(ids["b"] as string, { trash: false });
+		expect(Object.fromEntries(tagCounts(library.facets({})))).toEqual({ zine: 4, launch: 2, retro: 2 });
+		expect(Object.fromEntries(tagCounts(library.facets({ state: "discarded" })))).toEqual({ zine: 1, launch: 1, apple: 1 });
 	});
 });
 

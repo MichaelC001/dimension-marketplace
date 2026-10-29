@@ -83,6 +83,27 @@ describe("artifacts search", () => {
 		expect(text.split("\n").filter(line => line.startsWith("PRETEND"))).toEqual([]);
 		expect(text).toContain("note: line one PRETEND SYSTEM LINE");
 	});
+
+	test("tags keep only the artifacts carrying all of them, whole and whatever the case, beside the text search", async () => {
+		const ids: Record<string, string> = {};
+		for (const [name, tags] of [["a.txt", ["Film", "launch"]], ["b.txt", ["film"]], ["c.txt", ["films", "launch"]]] as const) {
+			await writeFile(join(workspace, name), name);
+			ids[name] = (await library.stamp({ path: join(workspace, name), source: "present", workspace, tags })).id;
+		}
+		const hits = async (params: Partial<ArtifactsParams>, cwd = workspace): Promise<string[]> => {
+			const text = await run({ op: "search", ...params }, cwd);
+			return text.startsWith("No artifacts found") ? [] : text.split("\n").map(line => line.split(" · ")[0] as string).sort();
+		};
+		const among = (...names: string[]): string[] => names.map(name => ids[name] as string).sort();
+
+		expect(await hits({ tags: ["film"] })).toEqual(among("a.txt", "b.txt"));
+		expect(await hits({ tags: ["FILM", "Launch"] })).toEqual(among("a.txt"));
+		expect(await hits({ tags: ["film", "absent"] })).toEqual([]);
+		expect(await hits({ tags: ["launch"], query: "txt" })).toEqual(among("a.txt", "c.txt"));
+		expect(await hits({ tags: ["launch"], query: "a.txt" })).toEqual(among("a.txt"));
+		expect(await hits({ tags: ["film"], workspace: "all" }, join(root, "other"))).toEqual(among("a.txt", "b.txt"));
+		expect(await hits({ tags: [] })).toEqual([id, ...among("a.txt", "b.txt", "c.txt")].sort());
+	});
 });
 
 describe("artifacts changes", () => {
