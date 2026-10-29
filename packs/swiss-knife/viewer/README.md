@@ -216,12 +216,12 @@ The pane lives in `app/view/library/`:
   the same document renderer as a tab. One bar on top: back to the Library, the name (rename in place), star, and View,
   Comments (count and unread dot), Share and Details. Comments, Share and Details open as sheets under the bar, never a
   side panel. Details: "File details" (type, size, the containing folder with the full path on hover and a copy
-  button, workspace, who added it, "Made in" for a file an agent presented or stamped (the session id's last eight characters with Copy, and an Open button that asks the host for that session through `ai.insodimension/session/open` under the `session:open` grant the Viewer artifactory declares; drawn only when the host offers the verb; the host exposes no session title to a View), dates), "Description" with tags (`library_update` on blur or Enter), and Discard…
+  button, workspace, who added it, "Made in" for a file an agent presented or stamped (the session's title from `ai.insodimension/session/describe`, or `…` and the id's last eight characters when no title comes back, with Copy and an Open button that asks the host for that session through `ai.insodimension/session/open`; both verbs sit under the `session:open` grant the Viewer artifactory declares and are used only when the host offers them), dates), "Description" with tags (`library_update` on blur or Enter), and Discard…
   or Restore. Share: "Who has access" (one row per live link naming who it lets in, its role, expiry and where it
   lives, with Copy link and Manage access; never the URL) and Share…. Comments: every thread in place order,
-  numbered as on the file; picking one closes the sheet and opens it where it sits.
+  each row wearing its author's face and its number as on the file; picking one closes the sheet and opens it where it sits.
 - **Shared comments on the file.** People's comments are drawn on the artifact by the annotation kit's comment layer:
-  numbered marks on the picture or page, on the timeline lane at their time, drawings on the frame at their time and
+  marks wearing the commenter's face (initials on a colour their name picks) on the picture or page, on the timeline lane at their time, drawings on the frame at their time and
   highlighted passages (`artifact-threads.ts` groups a link's comments by anchor into threads). Clicking a mark seeks
   there and opens its thread: author, time, body, and a reply field that posts through `share_reply` with the
   thread's anchor so the reply joins it. New ones stay highlighted while shown and are marked read
