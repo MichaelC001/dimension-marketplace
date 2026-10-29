@@ -48,6 +48,24 @@ const SENDS: Send[] = [
 		shown: ["C0123ABCD", "1700000000.000300"],
 	},
 	{
+		tool: "slack_upload_file",
+		asBot: true,
+		args: {
+			channel: "C0123ABCD",
+			path: "reports/q3-numbers.pdf",
+			title: "Board pack",
+			threadTs: "1700000000.000400",
+			comment: "the Q3 numbers you asked for",
+		},
+		shown: [
+			"C0123ABCD",
+			"reports/q3-numbers.pdf",
+			"Board pack",
+			"1700000000.000400",
+			"the Q3 numbers you asked for",
+		],
+	},
+	{
 		tool: "slack_act",
 		asBot: false,
 		args: { tool: "slack_send_message", arguments: { channel: "C0123ABCD", text: "back in five" } },
@@ -61,10 +79,10 @@ function registeredTool(name: string): RegisteredTool {
 	return found;
 }
 
-test("the extension registers each of the 12 tools plugin.json lists once, and every one has a tool card", () => {
+test("the extension registers each of the 13 tools plugin.json lists once, and every one has a tool card", () => {
 	const names = registered.map(tool => tool.name).sort();
 
-	expect(names).toHaveLength(12);
+	expect(names).toHaveLength(13);
 	expect(names).toEqual(dimension.tools.map(tool => tool.name).sort());
 	expect(names).toEqual(dimension.toolRenderer.map(card => card.match).sort());
 });
@@ -89,3 +107,15 @@ test.each(SENDS)(
 		for (const value of shown) expect(card.join("\n")).toContain(value);
 	},
 );
+
+test("slack_upload_file's approval card names the bot, the channel and the file, and shows no title, thread or message line when there are none", () => {
+	const args = { channel: "C0123ABCD", path: "reports/q3-numbers.pdf" };
+	const card = registeredTool("slack_upload_file").formatApprovalDetails?.(args) ?? [];
+	const text = card.join("\n");
+
+	expect(card).toContain("As: the Slack bot app");
+	expect(text).toContain("C0123ABCD");
+	expect(text).toContain("reports/q3-numbers.pdf");
+	expect(card.filter(line => /^(Title|Thread|Message):/.test(line))).toEqual([]);
+	expect(text).not.toContain("(missing)");
+});

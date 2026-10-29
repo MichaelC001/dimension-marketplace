@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { type } from "arktype";
 import { connectMethod, packRoot } from "./pack";
+import { UPLOAD_FILE_NAME, UPLOAD_FILE_TEXT } from "./upload-fixture";
 
 const CHILD = join(import.meta.dir, "shipped-extension-child.ts");
 const CHILD_TIMEOUT_MS = 60_000;
@@ -56,6 +57,10 @@ export function userCredentialFile(access: string, expires: number): string {
 	});
 }
 
+export function credentialTarget(home: string, id: "bot" | "user"): string {
+	return join(home, connectMethod(id).configTarget.replace(CONFIG_TARGET_HOME_PREFIX, ""));
+}
+
 async function readIfPresent(path: string): Promise<string | null> {
 	try {
 		return await readFile(path, "utf-8");
@@ -69,17 +74,17 @@ export async function runInFreshProcessWithHome(files: {
 	readonly user?: string;
 }): Promise<ExtensionRun> {
 	const home = await mkdtemp(join(tmpdir(), "slack-pack-home-"));
-	const target = (id: "bot" | "user") =>
-		join(home, connectMethod(id).configTarget.replace(CONFIG_TARGET_HOME_PREFIX, ""));
+	const folder = await mkdtemp(join(tmpdir(), "slack-pack-folder-"));
 	try {
+		await writeFile(join(folder, UPLOAD_FILE_NAME), UPLOAD_FILE_TEXT);
 		for (const id of ["bot", "user"] as const) {
 			const content = files[id];
 			if (content === undefined) continue;
-			await mkdir(dirname(target(id)), { recursive: true });
-			await writeFile(target(id), content);
+			await mkdir(dirname(credentialTarget(home, id)), { recursive: true });
+			await writeFile(credentialTarget(home, id), content);
 		}
 		const child = Bun.spawn([process.execPath, CHILD], {
-			env: { ...process.env, HOME: home, USERPROFILE: home, SLACK_TEST_HOME: home },
+			env: { ...process.env, HOME: home, USERPROFILE: home, SLACK_TEST_HOME: home, SLACK_TEST_FOLDER: folder },
 			stdout: "pipe",
 			stderr: "pipe",
 			timeout: CHILD_TIMEOUT_MS,
@@ -95,13 +100,16 @@ export async function runInFreshProcessWithHome(files: {
 		return {
 			outcomes: output.outcomes,
 			requests: output.requests,
-			files: { bot: await readIfPresent(target("bot")), user: await readIfPresent(target("user")) },
+			files: {
+				bot: await readIfPresent(credentialTarget(home, "bot")),
+				user: await readIfPresent(credentialTarget(home, "user")),
+			},
 			tree: entries
 				.filter(entry => entry.isFile())
 				.map(entry => relative(home, join(entry.parentPath, entry.name)).replaceAll("\\", "/"))
 				.sort(),
 		};
 	} finally {
-		await rm(home, { recursive: true, force: true });
+		await Promise.all([rm(home, { recursive: true, force: true }), rm(folder, { recursive: true, force: true })]);
 	}
 }

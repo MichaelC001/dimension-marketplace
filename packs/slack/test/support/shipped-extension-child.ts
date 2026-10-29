@@ -3,6 +3,7 @@ import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { type } from "arktype";
 import { TOKEN_PATH } from "../../credential";
 import slackExtension from "../../index";
+import { UPLOAD_FILE_ID, UPLOAD_FILE_NAME, UPLOAD_URL } from "./upload-fixture";
 
 const BOT_API = "https://slack.com/api/";
 const TOKEN_ENDPOINT = "https://slack.com/api/oauth.v2.user.access";
@@ -33,6 +34,7 @@ const CALLS: readonly (readonly [string, Record<string, unknown>])[] = [
 	["slack_edit_message", { channel: "C0123", messageTs: "1700000000.000100", text: "bot edit" }],
 	["slack_delete_message", { channel: "C0123", messageTs: "1700000000.000100" }],
 	["slack_list_users", {}],
+	["slack_upload_file", { channel: "C0123", path: UPLOAD_FILE_NAME }],
 ];
 
 const rpcCall = type({ "id?": "number", method: "string", "params?": { "name?": "string" } });
@@ -56,9 +58,12 @@ interface SeenRequest {
 }
 
 const home = process.env.SLACK_TEST_HOME;
+const folder = process.env.SLACK_TEST_FOLDER;
 const fromHome = home === undefined ? null : relative(home, TOKEN_PATH);
-if (fromHome === null || fromHome.startsWith("..") || isAbsolute(fromHome)) {
-	process.stderr.write(`refusing to run: the credential path ${TOKEN_PATH} is not under the test home ${home}\n`);
+if (fromHome === null || fromHome.startsWith("..") || isAbsolute(fromHome) || folder === undefined) {
+	process.stderr.write(
+		`refusing to run: the credential path ${TOKEN_PATH} is not under the test home ${home}, or there is no test folder\n`,
+	);
 	process.exit(2);
 }
 
@@ -90,6 +95,10 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
 		return Response.json({ jsonrpc: "2.0", id: call.id, result });
 	}
 	if (endpoint === `${BOT_API}auth.test`) return Response.json({ ok: true, user: "ada", team: "Acme" });
+	if (endpoint === `${BOT_API}files.getUploadURLExternal`) {
+		return Response.json({ ok: true, upload_url: UPLOAD_URL, file_id: UPLOAD_FILE_ID });
+	}
+	if (endpoint === UPLOAD_URL) return new Response(null, { status: 200 });
 	if (endpoint === `${BOT_API}conversations.info`) {
 		return Response.json({ ok: true, channel: { id: "C0123", is_ext_shared: false, is_pending_ext_shared: false } });
 	}
@@ -107,7 +116,7 @@ for (const [name, params] of CALLS) {
 	const tool = tools.get(name);
 	if (!tool) throw new Error(`the extension did not register ${name}`);
 	try {
-		const result = await tool.execute("call", params, undefined, undefined, {});
+		const result = await tool.execute("call", params, undefined, undefined, { cwd: folder });
 		outcomes[name] = { ok: true, text: result.content[0]?.text ?? "" };
 	} catch (error) {
 		outcomes[name] = { ok: false, text: error instanceof Error ? error.message : String(error) };

@@ -15,6 +15,7 @@ import {
 	USER_TOKEN,
 	userCredentialFile,
 } from "./support/shipped-extension";
+import { UPLOAD_FILE_TEXT, UPLOAD_URL } from "./support/upload-fixture";
 
 const BOT_TOOLS = [
 	"slack_list_channels",
@@ -26,6 +27,7 @@ const BOT_TOOLS = [
 	"slack_edit_message",
 	"slack_delete_message",
 	"slack_list_users",
+	"slack_upload_file",
 ];
 const USER_TOOLS = ["slack_tools", "slack_read", "slack_act"];
 
@@ -47,9 +49,12 @@ const isBotMethod = (request: SeenRequest) =>
 	request.endpoint.startsWith(SLACK_API) &&
 	(!AS_YOU_ENDPOINTS.includes(request.endpoint) || request.authorization === bearer(BOT_TOKEN));
 const isMcp = (request: SeenRequest) => request.endpoint === MCP_ENDPOINT;
+const isUpload = (request: SeenRequest) => request.endpoint === UPLOAD_URL;
 const carrying = (run: ExtensionRun, token: string) =>
 	run.requests.filter(request => request.authorization === bearer(token));
-const tokensSent = (requests: readonly SeenRequest[]) => [...new Set(requests.map(request => request.authorization))];
+const tokensSent = (requests: readonly SeenRequest[]) => [
+	...new Set(requests.filter(request => !isUpload(request)).map(request => request.authorization)),
+];
 const notRefusing = (run: ExtensionRun, tools: readonly string[], connectOption: string) =>
 	tools.filter(name => {
 		const outcome = run.outcomes[name];
@@ -83,7 +88,7 @@ test("with only the As you sign-in saved, the As you tools work and send only th
 
 test("with only the bot token saved, slack_tools, slack_read and slack_act refuse naming As you, and nothing but the bot tools' own requests is made", () => {
 	expect(notRefusing(botOnly, USER_TOOLS, connectPath("user"))).toEqual([]);
-	expect(botOnly.requests.filter(request => !isBotMethod(request))).toEqual([]);
+	expect(botOnly.requests.filter(request => !isBotMethod(request) && !isUpload(request))).toEqual([]);
 });
 
 test("with only the bot token saved, written the way Connect writes it, the bot tools work and send only the bot token", () => {
@@ -149,4 +154,16 @@ test("an As you send reaches Slack's Web API with the sign-in's token and the me
 	expect(posted[0]?.authorization).toBe(bearer(USER_TOKEN));
 	expect(new URLSearchParams(posted[0]?.body).get("markdown_text")).toBe("from me");
 	expect(sentThroughMcp).toEqual([]);
+});
+
+test.each([
+	["only the bot token saved", botOnly],
+	["both saved", both],
+	["an unreadable As you sign-in file", userFileGarbage],
+])("with %s, the file's bytes reach Slack's upload address once, as given, with no token of either kind", (_, run) => {
+	const uploads = run.requests.filter(isUpload);
+
+	expect(uploads).toHaveLength(1);
+	expect(uploads[0]?.authorization).toBeNull();
+	expect(uploads[0]?.body).toBe(UPLOAD_FILE_TEXT);
 });

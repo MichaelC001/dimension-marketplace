@@ -1,7 +1,7 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "slack",
-	"version": "0.2.2",
+	"version": "0.3.0",
 	"description": "Let your agent use Slack two ways: as a bot app you add to channels, or as you through your own account. Connect one or both.",
 	"author": {
 		"name": "Dimension"
@@ -50,7 +50,7 @@
 							},
 							{
 								"title": "Add Bot Token Scopes",
-								"detail": "In your app: OAuth & Permissions → Scopes → Bot Token Scopes → add channels:read, groups:read, channels:history, groups:history, and chat:write. These let the bot list channels, read history, and post."
+								"detail": "In your app: OAuth & Permissions → Scopes → Bot Token Scopes → add channels:read, groups:read, channels:history, groups:history, and chat:write. These let the bot list channels, read history, and post. To let it upload files too, also add files:write."
 							},
 							{
 								"title": "Install the app to your workspace",
@@ -352,6 +352,12 @@
 					"title": "Slack delete"
 				},
 				{
+					"match": "slack_upload_file",
+					"use": "summary",
+					"icon": "slack",
+					"title": "Slack upload"
+				},
+				{
 					"match": "slack_list_users",
 					"use": "summary",
 					"icon": "slack",
@@ -414,6 +420,10 @@
 				{
 					"name": "slack_delete_message",
 					"description": "Delete a Slack message (chat.delete). IRREVERSIBLE — confirm the exact channel and message ts with the user; it cannot be undone."
+				},
+				{
+					"name": "slack_upload_file",
+					"description": "Upload a file from the session's folder to a Slack channel as the bot, optionally with a message and in a thread. DESTRUCTIVE — confirm the channel, file and message with the user first. Needs the files:write bot scope."
 				},
 				{
 					"name": "slack_list_users",
