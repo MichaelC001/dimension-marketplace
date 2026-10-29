@@ -385,11 +385,11 @@ describe("which tools the model is shown", () => {
     new Map((await client.listTools()).tools.map(tool => [tool.name, tool._meta as Record<string, unknown> | undefined]));
   const SPACES = "ai.insodimension/spaces";
 
-  test("code: browser_run is offered with the exec approval tier to code, build and traction, and the step tools go to chat, labor, watch and traction", async () => {
+  test("code: browser_run is offered with the exec approval tier to code, build, traction and video, and the step tools go to chat, labor, watch, traction and video", async () => {
     const { client } = await connect(fakeHost(() => shown()), "code");
     const tools = await listed(client);
-    expect(tools.get("browser_run")).toMatchObject({ "ai.insodimension/approval": "exec", [SPACES]: ["code", "build", "traction"] });
-    for (const name of STEP_TOOLS) expect(tools.get(name)?.[SPACES]).toEqual(["chat", "labor", "watch", "traction"]);
+    expect(tools.get("browser_run")).toMatchObject({ "ai.insodimension/approval": "exec", [SPACES]: ["code", "build", "traction", "video"] });
+    for (const name of STEP_TOOLS) expect(tools.get(name)?.[SPACES]).toEqual(["chat", "labor", "watch", "traction", "video"]);
     for (const name of VIEW_SIDE) expect(tools.has(name)).toBe(true);
     // Everything the model of a code space sees for browsing: browser_run and the four that stay.
     const codeSpaceTools = [...tools].filter(([, meta]) => {
@@ -409,7 +409,7 @@ describe("which tools the model is shown", () => {
     expect(tool?._meta?.["ai.insodimension/approvalSummary"]).toBe("Let your agent browse the web for you");
   });
 
-  test("every space the manifest lends the pack to is offered a way to drive a page, and traction alone is offered both browser_run and the step tools", async () => {
+  test("every space the manifest lends the pack to is offered a way to drive a page, and traction and video alone are offered both browser_run and the step tools", async () => {
     const manifest = JSON.parse(await readFile(new URL("../plugin.json", import.meta.url), "utf8")) as { extensions: Record<string, { artifactories: Array<{ mcpServer: string; modelSpaces: string[] }> }> };
     const declared = manifest.extensions["ai.insodimension.dimension"]!.artifactories.find(artifactory => artifactory.mcpServer === "browser")!.modelSpaces;
     const { client } = await connect(fakeHost(() => shown()), "code");
@@ -417,7 +417,7 @@ describe("which tools the model is shown", () => {
     const withCode = tools.get("browser_run")?.[SPACES] as string[];
     const withSteps = tools.get("browser_act")?.[SPACES] as string[];
     expect([...new Set([...withCode, ...withSteps])].sort()).toEqual([...declared].sort());
-    expect(withCode.filter(space => withSteps.includes(space))).toEqual(["traction"]);
+    expect(withCode.filter(space => withSteps.includes(space))).toEqual(["traction", "video"]);
   });
 
   test("steps: the six step tools for everyone and no browser_run", async () => {

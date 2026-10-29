@@ -79,13 +79,16 @@ for (const mode of MODES) for (const taskTools of [false, true]) offers.set(`${m
 const withoutComments = (source: string): string => source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`\\])\/\/.*$/gm, "$1");
 
 describe("the tools each space is offered are the ones the real server lists", () => {
-  test("in the default mode a code or build model has browser_run and browser_view, browser_read, browser_profiles, browser_close - and no step tool, and Traction has the step tools, browser_run and the publish set", () => {
+  test("in the default mode a code or build model has browser_run and browser_view, browser_read, browser_profiles, browser_close - and no step tool, Traction has the step tools, browser_run and the publish set, and Video has the step tools and browser_run but no publish tool", () => {
     const offer = offers.get("code/no jev")!;
     for (const space of ["code", "build"]) expect(offer[space]!.map(tool => tool.name).sort()).toEqual(["browser_close", "browser_profiles", "browser_read", "browser_run", "browser_view"]);
     expect(offer.traction!.map(tool => tool.name)).toEqual(expect.arrayContaining([
       "browser_open", "browser_state", "browser_snapshot", "browser_inspect", "browser_screenshot", "browser_act", "browser_run",
       "browser_publish", "browser_publish_presets", "browser_publish_confirm", "browser_publish_cancel", "browser_publish_wait",
     ]));
+    const video = offer.video!.map(tool => tool.name);
+    expect(video).toEqual(expect.arrayContaining(["browser_open", "browser_state", "browser_snapshot", "browser_inspect", "browser_screenshot", "browser_act", "browser_run", "browser_view", "browser_read", "browser_profiles", "browser_close"]));
+    expect(video.filter(name => name.startsWith("browser_publish") || name.startsWith("browser_task"))).toEqual([]);
   });
 });
 

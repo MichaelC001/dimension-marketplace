@@ -16817,7 +16817,7 @@ var LiveChannel = class {
 var plugin_default = {
   $schema: "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   name: "browser",
-  version: "0.9.8",
+  version: "0.9.9",
   description: "A real browser beside your chat that your agent drives while you watch. Tabs, persistent logged-in profiles, circle-to-annotate, and an optional fast task agent (jev).",
   keywords: [
     "browser",
@@ -16843,7 +16843,8 @@ var plugin_default = {
             "chat",
             "labor",
             "watch",
-            "traction"
+            "traction",
+            "video"
           ]
         }
       ],
@@ -16936,7 +16937,7 @@ var MODEL_SPACES = (() => {
   return spaces;
 })();
 var CODE_TOOL_SPACES = ["code", "build"];
-var BROWSER_RUN_SPACES = [...CODE_TOOL_SPACES, "traction"];
+var BROWSER_RUN_SPACES = [...CODE_TOOL_SPACES, "traction", "video"];
 function resolveModelTools(raw, hasCodeHost) {
   const asked = raw?.trim().toLowerCase() ?? "";
   if (asked !== "" && asked !== "code" && asked !== "steps" && asked !== "both") throw new Error(`${MODEL_TOOLS_ENV} must be code, steps or both (got "${raw}")`);

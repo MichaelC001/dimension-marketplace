@@ -102,7 +102,7 @@ const MODEL_SPACES: readonly string[] = (() => {
   return spaces;
 })();
 const CODE_TOOL_SPACES = ["code", "build"];
-const BROWSER_RUN_SPACES = [...CODE_TOOL_SPACES, "traction"];
+const BROWSER_RUN_SPACES = [...CODE_TOOL_SPACES, "traction", "video"];
 
 function resolveModelTools(raw: string | undefined, hasCodeHost: boolean): ModelToolsMode {
   const asked = raw?.trim().toLowerCase() ?? "";
