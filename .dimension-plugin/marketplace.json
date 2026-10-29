@@ -1148,7 +1148,7 @@
 			"title": "Slack",
 			"icon": "packs/slack/assets/icon.svg",
 			"description": "Let your agent use Slack two ways: as a bot app you add to channels, or as you through your own account. Connect one or both.",
-			"version": "0.2.1",
+			"version": "0.2.2",
 			"author": {
 				"name": "Dimension"
 			},
@@ -1163,7 +1163,10 @@
 				"connector",
 				"mcp",
 				"oauth"
-			]
+			],
+			"requires": {
+				"dimension": ">=0.11.17"
+			}
 		},
 		{
 			"name": "speech-elevenlabs",
