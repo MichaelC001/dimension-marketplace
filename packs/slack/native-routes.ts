@@ -88,17 +88,25 @@ async function withHints<T>(run: () => Promise<T>): Promise<T> {
 
 const OUTSIDE_WORKSPACE = "is outside this workspace (Slack Connect). Dimension does not send there as you.";
 
-async function refuseStranger(api: WebApiClient, userId: string, signal?: AbortSignal): Promise<void> {
-	const found = await api.call("users.info", { user: userId }, signal);
+async function refuseOutsider(api: WebApiClient, userId: string, signal?: AbortSignal): Promise<void> {
+	const [me, found] = await Promise.all([
+		api.call("auth.test", {}, signal),
+		api.call("users.info", { user: userId }, signal),
+	]);
+	if (typeof me.team_id !== "string") {
+		throw new Error("Slack did not say which workspace this sign-in belongs to, so Dimension cannot tell whether that person is outside it.");
+	}
 	if (!isRecord(found.user)) {
 		throw new Error(`Slack did not describe ${userId}, so Dimension cannot tell whether that person is outside this workspace.`);
 	}
-	if (found.user.is_stranger === true) throw new Error(`${userId} ${OUTSIDE_WORKSPACE}`);
+	if (found.user.is_stranger === true || found.user.team_id !== me.team_id) {
+		throw new Error(`${userId} ${OUTSIDE_WORKSPACE}`);
+	}
 }
 
 async function targetConversation(api: WebApiClient, tool: string, channelId: string, signal?: AbortSignal): Promise<string> {
 	if (USER_ID.test(channelId)) {
-		await refuseStranger(api, channelId, signal);
+		await refuseOutsider(api, channelId, signal);
 		return channelId;
 	}
 	if (!CONVERSATION_ID.test(channelId)) {
@@ -113,8 +121,11 @@ async function targetConversation(api: WebApiClient, tool: string, channelId: st
 	if (info.channel.is_ext_shared === true || info.channel.is_pending_ext_shared === true) {
 		throw new Error(`${channelId} ${OUTSIDE_WORKSPACE}`);
 	}
-	if (info.channel.is_im === true && typeof info.channel.user === "string") {
-		await refuseStranger(api, info.channel.user, signal);
+	if (info.channel.is_im === true) {
+		if (typeof info.channel.user !== "string") {
+			throw new Error(`Slack did not say who ${channelId} is a conversation with, so Dimension cannot tell whether that person is outside this workspace.`);
+		}
+		await refuseOutsider(api, info.channel.user, signal);
 	}
 	return channelId;
 }

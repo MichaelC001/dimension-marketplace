@@ -27,7 +27,8 @@ const ROUTES = [
 ] as const;
 
 const workspace: Answers = {
-	"users.info": params => ({ ok: true, user: { id: params.user, is_stranger: false } }),
+	"auth.test": () => ({ ok: true, team_id: "T1" }),
+	"users.info": params => ({ ok: true, user: { id: params.user, team_id: "T1" } }),
 	"conversations.info": params => ({
 		ok: true,
 		channel: { id: params.channel, is_ext_shared: false, is_pending_ext_shared: false },
@@ -288,6 +289,7 @@ for (const route of ROUTES) {
 			expect(calls[1]?.method).toBe(route.write);
 			expect(calls[1]?.params.channel).toBe(id);
 			expect(methods()).not.toContain("users.info");
+			expect(methods()).not.toContain("auth.test");
 			expect(methods()).not.toContain("conversations.open");
 		},
 	);
@@ -296,27 +298,29 @@ for (const route of ROUTES) {
 		["a user id", "U0123ABC"],
 		["an enterprise user id", "W0123ABC"],
 	] as const)(
-		`${route.tool} to %s checks the person and writes to the user id, without opening or looking up a conversation`,
+		`${route.tool} to %s makes exactly the workspace and person checks and then one write to the user id`,
 		async (_name, userId) => {
 			const { api, calls, methods } = fakeSlack();
 
 			await run(route.tool, args({ channel_id: userId }), api);
 
-			expect(calls.slice(0, 2)).toEqual([
+			expect(calls.slice(0, 2).sort((a, b) => a.method.localeCompare(b.method))).toEqual([
+				{ method: "auth.test", params: {} },
 				{ method: "users.info", params: { user: userId } },
-				{ method: route.write, params: expect.objectContaining({ channel: userId }) },
 			]);
+			expect(calls[2]).toEqual({ method: route.write, params: expect.objectContaining({ channel: userId }) });
+			expect(methods().filter(method => method === route.write)).toHaveLength(1);
 			expect(methods()).not.toContain("conversations.open");
 			expect(methods()).not.toContain("conversations.info");
 		},
 	);
 
 	test.each([
-		["has the stranger flag false", { is_stranger: false }],
-		["has no stranger flag", {}],
-	] as const)(`${route.tool} messages a person who %s`, async (_name, flags) => {
+		["no stranger flag", {}],
+		["the stranger flag false", { is_stranger: false }],
+	] as const)(`${route.tool} messages a person in this workspace who has %s`, async (_name, flags) => {
 		const { api, methods } = fakeSlack({
-			"users.info": params => ({ ok: true, user: { id: params.user, ...flags } }),
+			"users.info": params => ({ ok: true, user: { id: params.user, team_id: "T1", ...flags } }),
 		});
 
 		await run(route.tool, args({ channel_id: "U0123ABC" }), api);
@@ -324,16 +328,45 @@ for (const route of ROUTES) {
 		expect(methods()).toContain(route.write);
 	});
 
-	test(`${route.tool} to a person outside the workspace is refused as Slack Connect and nothing is written`, async () => {
-		const { api, methods } = fakeSlack({
-			"users.info": params => ({ ok: true, user: { id: params.user, is_stranger: true } }),
-		});
+	test.each([
+		["is in another workspace and has no stranger flag", { team_id: "T2" }],
+		["is in another workspace and has the stranger flag false", { team_id: "T2", is_stranger: false }],
+		["has the stranger flag set", { team_id: "T1", is_stranger: true }],
+		["has no workspace", {}],
+		["has a workspace that is not text", { team_id: 1 }],
+		["has a null workspace", { team_id: null }],
+	] as const)(
+		`${route.tool} to a person who %s is refused as Slack Connect and nothing is written`,
+		async (_name, fields) => {
+			const { api, methods } = fakeSlack({
+				"users.info": params => ({ ok: true, user: { id: params.user, ...fields } }),
+			});
 
-		const refusal = await failure(run(route.tool, args({ channel_id: "U0123ABC" }), api));
+			const refusal = await failure(run(route.tool, args({ channel_id: "U0123ABC" }), api));
 
-		expect(refusal.message).toContain("Slack Connect");
-		expect(methods()).not.toContain(route.write);
-	});
+			expect(refusal.message).toContain("Slack Connect");
+			expect(methods()).not.toContain(route.write);
+		},
+	);
+
+	test.each([
+		["no workspace id", {}],
+		["a workspace id that is not text", { team_id: 7 }],
+		["a null workspace id", { team_id: null }],
+	] as const)(
+		`${route.tool} to a person is refused when Slack answers who-am-I with %s, even for someone with no workspace either`,
+		async (_name, answer) => {
+			const { api, methods } = fakeSlack({
+				"auth.test": () => ({ ok: true, ...answer }),
+				"users.info": params => ({ ok: true, user: { id: params.user } }),
+			});
+
+			const refusal = await failure(run(route.tool, args({ channel_id: "U0123ABC" }), api));
+
+			expect(refusal.message).toStartWith("Slack did not say which workspace this sign-in belongs to");
+			expect(methods()).not.toContain(route.write);
+		},
+	);
 
 	test.each([
 		["no user", {}],
@@ -394,29 +427,34 @@ for (const route of ROUTES) {
 			"users.info": params => describe(String(params.user)),
 		});
 
-	test(`${route.tool} to a direct message also checks the other person and writes when they are inside the workspace`, async () => {
-		const { api, calls } = directMessageWith("U0999XYZ", user => ({ ok: true, user: { id: user } }));
+	test(`${route.tool} to a direct message also checks the other person and writes when they are in this workspace`, async () => {
+		const { api, calls } = directMessageWith("U0999XYZ", user => ({ ok: true, user: { id: user, team_id: "T1" } }));
 
 		await run(route.tool, args({ channel_id: "D0123ABC" }), api);
 
-		expect(calls.slice(0, 3)).toEqual([
-			{ method: "conversations.info", params: { channel: "D0123ABC" } },
+		expect(calls[0]).toEqual({ method: "conversations.info", params: { channel: "D0123ABC" } });
+		expect(calls.slice(1, 3).sort((a, b) => a.method.localeCompare(b.method))).toEqual([
+			{ method: "auth.test", params: {} },
 			{ method: "users.info", params: { user: "U0999XYZ" } },
-			{ method: route.write, params: expect.objectContaining({ channel: "D0123ABC" }) },
 		]);
+		expect(calls[3]).toEqual({ method: route.write, params: expect.objectContaining({ channel: "D0123ABC" }) });
 	});
 
-	test(`${route.tool} to a direct message with a person outside the workspace is refused as Slack Connect and nothing is written`, async () => {
-		const { api, methods } = directMessageWith("U0999XYZ", user => ({
-			ok: true,
-			user: { id: user, is_stranger: user === "U0999XYZ" },
-		}));
+	test.each([
+		["is in another workspace and has no stranger flag", { team_id: "T2" }],
+		["has the stranger flag set", { team_id: "T1", is_stranger: true }],
+		["has no workspace", {}],
+	] as const)(
+		`${route.tool} to a direct message with a person who %s is refused as Slack Connect and nothing is written`,
+		async (_name, fields) => {
+			const { api, methods } = directMessageWith("U0999XYZ", user => ({ ok: true, user: { id: user, ...fields } }));
 
-		const refusal = await failure(run(route.tool, args({ channel_id: "D0123ABC" }), api));
+			const refusal = await failure(run(route.tool, args({ channel_id: "D0123ABC" }), api));
 
-		expect(refusal.message).toContain("Slack Connect");
-		expect(methods()).not.toContain(route.write);
-	});
+			expect(refusal.message).toContain("Slack Connect");
+			expect(methods()).not.toContain(route.write);
+		},
+	);
 
 	test(`${route.tool} to a direct message whose other person Slack will not describe is refused and nothing is written`, async () => {
 		const { api, methods } = directMessageWith("U0999XYZ", () => ({ ok: true }));
@@ -426,6 +464,24 @@ for (const route of ROUTES) {
 		expect(refusal.message).toStartWith("Slack did not describe U0999XYZ");
 		expect(methods()).not.toContain(route.write);
 	});
+
+	test.each([
+		["no user", {}],
+		["a user that is not text", { user: 5 }],
+		["a null user", { user: null }],
+	] as const)(
+		`${route.tool} to a direct message Slack describes with %s is refused instead of assumed to be with someone inside the workspace`,
+		async (_name, extra) => {
+			const { api, methods } = fakeSlack({
+				"conversations.info": params => ({ ok: true, channel: { id: params.channel, is_im: true, ...extra } }),
+			});
+
+			const refusal = await failure(run(route.tool, args({ channel_id: "D0123ABC" }), api));
+
+			expect(refusal.message).toStartWith("Slack did not say who D0123ABC is a conversation with");
+			expect(methods()).not.toContain(route.write);
+		},
+	);
 
 	test(`${route.tool} reports the conversation Slack wrote to, which for a person is the direct message Slack opened`, async () => {
 		const { api } = fakeSlack({
@@ -504,6 +560,7 @@ for (const route of ROUTES) {
 	test.each([
 		["a conversation lookup", "conversations.info", "C0123ABC"],
 		["a person lookup", "users.info", "U0123ABC"],
+		["a workspace lookup", "auth.test", "U0123ABC"],
 	] as const)(
 		`${route.tool} lets a lost sign-in on %s through unchanged so the agent sees how to reconnect`,
 		async (_name, method, id) => {
