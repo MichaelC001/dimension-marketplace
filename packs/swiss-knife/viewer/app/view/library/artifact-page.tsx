@@ -24,6 +24,7 @@ import { ThumbOrIcon } from "./library-item";
 import { type ArtifactPatchInput, errorText, type LibraryTools } from "./library-tools";
 import { MenuSeparator, MoreMenu } from "./more-menu";
 import { parseTags } from "./query";
+import { SessionRow } from "./session-row";
 import { CommentsView, useArtifactComments, useSeenAfter } from "./share-comments";
 import { AccessList } from "./share-list";
 
@@ -208,7 +209,7 @@ function containingFolder(path: string): string {
 	return path.replace(/[\\/]+[^\\/]*$/, "");
 }
 
-function DetailsView({ item, onPatch, onDiscard, onRestore }: Pick<ArtifactPageProps, "item" | "onPatch" | "onDiscard" | "onRestore">) {
+function DetailsView({ app, item, onPatch, onDiscard, onRestore }: Pick<ArtifactPageProps, "app" | "item" | "onPatch" | "onDiscard" | "onRestore">) {
 	const { copied, copy } = useCopied(item.path);
 	const look = KIND_LOOK[item.kind];
 	const discarded = item.state === "discarded";
@@ -236,6 +237,7 @@ function DetailsView({ item, onPatch, onDiscard, onRestore }: Pick<ArtifactPageP
 						</Fact>
 					)}
 					<Fact label="Added by">{item.source === "human" ? "You" : "An agent"}</Fact>
+					{item.sessionId === undefined ? null : <SessionRow app={app} sessionId={item.sessionId} />}
 					<Fact label="Added">{fullDate(item.createdAt)}</Fact>
 					<Fact label="Last presented">{fullDate(item.presentedAt)}</Fact>
 					{item.openedAt === undefined ? null : <Fact label="Last opened">{fullDate(item.openedAt)}</Fact>}
@@ -441,7 +443,7 @@ export function ArtifactPage(props: ArtifactPageProps) {
 						<div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4">
 							{view === "comments" ? <CommentsView data={data} shares={item.shares} now={now} openId={openId} onPick={pick} /> : null}
 							{view === "share" ? <ShareView tools={tools} item={item} now={now} onShare={props.onShare} onManage={props.onManage} /> : null}
-							{view === "details" ? <DetailsView item={item} onPatch={onPatch} onDiscard={props.onDiscard} onRestore={onRestore} /> : null}
+							{view === "details" ? <DetailsView app={app} item={item} onPatch={onPatch} onDiscard={props.onDiscard} onRestore={onRestore} /> : null}
 						</div>
 					</div>
 				)}

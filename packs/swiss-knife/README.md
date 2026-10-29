@@ -22,10 +22,11 @@ Replaces the separate Viewer and Ban Comments plugins; if you still have them in
   recording (on a waveform for audio, on a filmstrip for video). A file opens behind one continuous opening surface
   instead of a flash. The card's Open and Annotate buttons come from the `opens` rows in `plugin.json`. Depth: `viewer/README.md` in this plugin's folder.
 - **Tool `artifacts`**, loaded eagerly. The user's library of files shown or made here: `search` finds one to present
-  again, `get` reads one row with its links and comments, and `stamp`, `update`, `discard` and `restore` keep it tidy.
+  again (by text, kind and `tags`: a file must carry every tag given, whole-tag, case-insensitive for A to Z), `get` reads one row with its links and comments, and `stamp`, `update`, `discard` and `restore` keep it tidy.
+  The Library icon (`assets/library.svg`) is the face of its card, titled per op ("Library · search"), and of the `present` card.
   The Library (the dock's launcher, a pinned tab in the Viewer) is the person's side of the same store: search as you
-  type, a virtualized grid or list, posters for videos and PDFs, a page per file (the file large; View, Comments, Share
-  and Details on top; shared comments drawn on the file), and a Share dialog with the choices of doc 103 (Dimension
+  type, filter by kind, tag and workspace (a tag chip on a card filters by it), a virtualized grid or list, posters for videos and PDFs, a page per file (the file large; View, Comments, Share
+  and Details on top; shared comments drawn on the file; Details names the session that made the file and opens it), and a Share dialog with the choices of doc 103 (Dimension
   cloud, this computer, your own server). Depth: `viewer/README.md`, doc 103.
 - **Two stream rules**, `ban-comments` (`.ts .tsx .js .jsx .rs .go`) and `ban-comments-python` (`.py`).
   When the agent writes a code comment in an `edit` or a `write`, the engine stops that output, tells the

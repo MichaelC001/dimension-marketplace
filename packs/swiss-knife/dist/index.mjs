@@ -759,6 +759,7 @@ async function runArtifacts(library, params, context) {
       const page = library.query({
         ...query === void 0 || query === "" ? {} : { q: query, sort: "relevance" },
         ...params.kind === void 0 ? {} : { kinds: [params.kind] },
+        ...params.tags === void 0 ? {} : { tags: params.tags },
         ...everywhere ? {} : { workspace: library.workspaceOf(cwd) },
         limit: Math.min(params.limit ?? DEFAULT_LIMIT, MAX_LIMIT)
       });
@@ -838,7 +839,7 @@ function registerArtifactsTool(pi, library) {
       const parsed = parameters.safeParse(args);
       return parsed.success ? APPROVAL[parsed.data.op] : "write";
     },
-    description: "The user's library of files shown or made here. search finds one to present again; discard trash:true also recycles the file.",
+    description: "The user's library of files shown or made here. search finds one to present again (tags: all must match); discard trash:true also recycles the file.",
     parameters,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const text = await runArtifacts(await library(), params, {
@@ -970,6 +971,27 @@ function parseSearch(text) {
   return { kind: "prefix", from: trimmed, to: `${trimmed}${HIGHEST_CODE_POINT}` };
 }
 
+// src/library/tags.ts
+var MAX_TAGS = 24;
+var MAX_TAG_CHARS = 48;
+var MAX_FACET_TAGS = 200;
+var ASCII_UPPER = /[A-Z]/g;
+var HAS_TAGS = "a.tags != '[]'";
+var CARRIES_TAG = "EXISTS (SELECT 1 FROM json_each(a.tags) WHERE lower(value) = ?)";
+function foldAsciiCase(tag) {
+  return tag.trim().replace(ASCII_UPPER, (letter) => letter.toLowerCase());
+}
+function tagPredicates(tags) {
+  const wanted = /* @__PURE__ */ new Set();
+  for (const tag of tags ?? []) {
+    const folded = foldAsciiCase(tag);
+    if (folded !== "") wanted.add(folded);
+  }
+  if (wanted.size === 0) return { clauses: [], params: [] };
+  if (wanted.size > MAX_TAGS) throw new LibraryError(`filter by at most ${MAX_TAGS} tags`);
+  return { clauses: [HAS_TAGS, ...Array.from(wanted, () => CARRIES_TAG)], params: [...wanted] };
+}
+
 // src/library/queries.ts
 var DEFAULT_PAGE_SIZE = 50;
 var MAX_PAGE_SIZE = 200;
@@ -1015,6 +1037,9 @@ function planList(query, now) {
     where.push(`a.kind IN (${placeholders(query.kinds.length)})`);
     filterParams.push(...query.kinds);
   }
+  const tagFilter = tagPredicates(query.tags);
+  where.push(...tagFilter.clauses);
+  filterParams.push(...tagFilter.params);
   if (query.workspace !== void 0) {
     where.push("a.workspace = ?");
     filterParams.push(query.workspace);
@@ -16074,8 +16099,6 @@ var MAX_CHECK_IDS = 200;
 var STATEMENT_CACHE_LIMIT = 256;
 var MAX_TITLE_CHARS = 200;
 var MAX_NOTE_CHARS = 4e3;
-var MAX_TAGS = 24;
-var MAX_TAG_CHARS = 48;
 var MAX_FACET_WORKSPACES = 500;
 var CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 var READ_FLAGS = constants2.O_RDONLY | (constants2.O_NONBLOCK ?? 0);
@@ -16289,10 +16312,14 @@ async function createLibrary(options) {
       const workspaces = sql(
         `SELECT a.workspace AS path, COUNT(*) AS count FROM artifacts a WHERE ${view} AND a.workspace IS NOT NULL GROUP BY a.workspace ORDER BY count DESC, a.workspace LIMIT ${MAX_FACET_WORKSPACES}`
       ).all();
+      const tags = sql(
+        `SELECT MIN(j.value) AS tag, COUNT(*) AS count FROM artifacts a, json_each(a.tags) j WHERE ${view}${inWorkspace} AND ${HAS_TAGS} GROUP BY lower(j.value) ORDER BY count DESC, lower(j.value) LIMIT ${MAX_FACET_TAGS}`
+      ).all(...workspaceParams);
       const count = (text, ...params) => sql(text).get(...params)?.n ?? 0;
       return {
         kinds,
         workspaces,
+        tags,
         starred: count(`SELECT COUNT(*) AS n FROM artifacts a WHERE a.starred = 1 AND a.state != 'discarded'${inWorkspace}`, ...workspaceParams),
         shared: count(`SELECT COUNT(*) AS n FROM artifacts a WHERE a.state != 'discarded'${inWorkspace} AND a.id IN (${LIVE_SHARE_IDS})`, ...workspaceParams, moment),
         discarded: count(`SELECT COUNT(*) AS n FROM artifacts a WHERE a.state = 'discarded'${inWorkspace}`, ...workspaceParams)

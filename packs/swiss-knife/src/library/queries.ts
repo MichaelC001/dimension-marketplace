@@ -2,6 +2,7 @@ import { type CursorKey, type CursorPosition, decodeCursor } from "./cursor";
 import type { SqlValue } from "./driver";
 import type { ArtifactRow } from "./rows";
 import { parseSearch } from "./search";
+import { tagPredicates } from "./tags";
 import type { LibraryQuery } from "./types";
 
 export const DEFAULT_PAGE_SIZE = 50;
@@ -77,6 +78,9 @@ export function planList(query: LibraryQuery, now: number): ListPlan {
 		where.push(`a.kind IN (${placeholders(query.kinds.length)})`);
 		filterParams.push(...query.kinds);
 	}
+	const tagFilter = tagPredicates(query.tags);
+	where.push(...tagFilter.clauses);
+	filterParams.push(...tagFilter.params);
 	if (query.workspace !== undefined) {
 		where.push("a.workspace = ?");
 		filterParams.push(query.workspace);

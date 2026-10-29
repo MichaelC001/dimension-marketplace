@@ -1,3 +1,4 @@
+import { initials } from "@dimension/mcp-app-kit/annotate";
 import type { Audience } from "@dimension/sdk/artifact-share";
 import { MenuItem } from "@fraym/ui/components/menu";
 import { Badge } from "@fraym/ui/elements/badge";
@@ -26,7 +27,6 @@ import {
 	fileChanged,
 	hostChoices,
 	hostName,
-	initials,
 	linkChoice,
 	OWN_SERVER_PROMPT,
 	type Place,

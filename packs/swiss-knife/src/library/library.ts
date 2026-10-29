@@ -21,6 +21,7 @@ import {
 	readAudience,
 } from "./rows";
 import { prepareDatabase } from "./schema";
+import { HAS_TAGS, MAX_FACET_TAGS, MAX_TAG_CHARS, MAX_TAGS } from "./tags";
 import { moveToTrash } from "./trash";
 import { removeThumbs, writeThumb, THUMB_FILE_NAME } from "./thumbs";
 import { createWorkspaceResolver } from "./workspace-root";
@@ -59,8 +60,6 @@ const MAX_CHECK_IDS = 200;
 const STATEMENT_CACHE_LIMIT = 256;
 const MAX_TITLE_CHARS = 200;
 const MAX_NOTE_CHARS = 4000;
-const MAX_TAGS = 24;
-const MAX_TAG_CHARS = 48;
 const MAX_FACET_WORKSPACES = 500;
 const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const READ_FLAGS = constants.O_RDONLY | (constants.O_NONBLOCK ?? 0);
@@ -297,10 +296,14 @@ export async function createLibrary(options: LibraryOptions): Promise<Library> {
 			const workspaces = sql(
 				`SELECT a.workspace AS path, COUNT(*) AS count FROM artifacts a WHERE ${view} AND a.workspace IS NOT NULL GROUP BY a.workspace ORDER BY count DESC, a.workspace LIMIT ${MAX_FACET_WORKSPACES}`,
 			).all<{ readonly path: string; readonly count: number }>();
+			const tags = sql(
+				`SELECT MIN(j.value) AS tag, COUNT(*) AS count FROM artifacts a, json_each(a.tags) j WHERE ${view}${inWorkspace} AND ${HAS_TAGS} GROUP BY lower(j.value) ORDER BY count DESC, lower(j.value) LIMIT ${MAX_FACET_TAGS}`,
+			).all<{ readonly tag: string; readonly count: number }>(...workspaceParams);
 			const count = (text: string, ...params: readonly SqlValue[]): number => sql(text).get<{ readonly n: number }>(...params)?.n ?? 0;
 			return {
 				kinds,
 				workspaces,
+				tags,
 				starred: count(`SELECT COUNT(*) AS n FROM artifacts a WHERE a.starred = 1 AND a.state != 'discarded'${inWorkspace}`, ...workspaceParams),
 				shared: count(`SELECT COUNT(*) AS n FROM artifacts a WHERE a.state != 'discarded'${inWorkspace} AND a.id IN (${LIVE_SHARE_IDS})`, ...workspaceParams, moment),
 				discarded: count(`SELECT COUNT(*) AS n FROM artifacts a WHERE a.state = 'discarded'${inWorkspace}`, ...workspaceParams),

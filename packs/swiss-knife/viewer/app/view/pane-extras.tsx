@@ -16,9 +16,9 @@ import "@dimension/mcp-app-kit/annotate/annotate.css";
 import {
 	AnnotationNotice,
 	AnnotationToolbar,
+	commentToolGroups,
 	DocumentCommentLayer,
 	DocumentNotes,
-	MarkupIcon,
 	MarkupOverlay,
 	markupToolGroups,
 	useDocumentComments,
@@ -27,8 +27,7 @@ import {
 } from "@dimension/mcp-app-kit/annotate/react";
 import { type ReactNode, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import type { ViewerKind } from "../../src/contract";
-import { annotationModes } from "./annotate-modes";
+import { annotationModes, commentWords } from "./annotate-modes";
 import { loadDocumentBytes } from "./document-bytes";
 import { ElementPicks } from "./pane-extras-element";
 import { SharedLayers } from "./pane-extras-shared";
@@ -37,19 +36,6 @@ import { type AnnotateMode, Footer, type PaneExtrasProps, revisionOf, Strip, use
 
 const PICTURE = '[data-slot="viewer-picture"]';
 const TEXT_ROOT = '[data-slot="viewer-text-root"]';
-
-/** What the human calls each kind, for the sentence that opens the request. */
-const KIND_WORDS: Readonly<Partial<Record<ViewerKind, string>>> = {
-	markdown: "Markdown document",
-	text: "text file",
-	pdf: "PDF",
-	docx: "Word document",
-	pptx: "PowerPoint presentation",
-	xlsx: "Excel workbook",
-};
-
-/** What a page hint is called in a kind that has one: a PDF's default is "page". */
-const PAGE_WORDS: Readonly<Partial<Record<ViewerKind, string>>> = { pptx: "slide", xlsx: "sheet" };
 
 /** The layer that seats each mode (docs/design/88 section 5): which modes a kind offers is `annotate-modes.ts`. */
 const LAYERS: Readonly<Record<AnnotateMode, (props: PaneExtrasProps) => ReactNode>> = {
@@ -154,11 +140,12 @@ function TextComments({ app, tab, active, ready, frame, mode, store }: PaneExtra
 	const commenting = mode === "comments";
 	// The bar's Comment asks the layer to comment on the selection, as Ctrl+Alt+M does.
 	const [request, setRequest] = useState(0);
+	const words = commentWords(tab.kind);
 	const session = useDocumentComments({
 		app,
 		file: tab.path,
-		kind: KIND_WORDS[tab.kind] ?? "document",
-		...(PAGE_WORDS[tab.kind] === undefined ? {} : { pageWord: PAGE_WORDS[tab.kind] }),
+		kind: words.subject,
+		...(words.pageWord === undefined ? {} : { pageWord: words.pageWord }),
 		rev: revisionOf(tab),
 		autoStage: active && commenting,
 		store,
@@ -197,29 +184,10 @@ function TextComments({ app, tab, active, ready, frame, mode, store }: PaneExtra
 			)}
 			{commenting ? (
 				<Strip frame={frame}>
-					{/* Comment is the one tool of a text, so it is always the armed one: the ring says what the bar is for. */}
 					<AnnotationToolbar
 						label="Annotation tools"
 						placement="strip"
-						groups={[
-							{
-								id: "comment",
-								label: "Comment tool",
-								kind: "pick",
-								armed: "comment",
-								tools: [
-									{
-										id: "comment",
-										label: "Comment",
-										text: "Comment",
-										icon: <MarkupIcon name="comment" size={15} />,
-										key: "Ctrl+Alt+M",
-										keepFocus: true,
-										onSelect: () => setRequest(count => count + 1),
-									},
-								],
-							},
-						]}
+						groups={commentToolGroups({ onComment: () => setRequest(count => count + 1) })}
 					/>
 				</Strip>
 			) : null}
