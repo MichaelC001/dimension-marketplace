@@ -10,6 +10,7 @@ import { createElement } from "react";
 import * as jsxDevRuntime from "react/jsx-dev-runtime";
 import * as jsxRuntime from "react/jsx-runtime";
 import * as reactDom from "react-dom";
+import type * as Kit from "@dimension/mcp-app-kit/annotate/react";
 import type { ViewerKind } from "../src/contract";
 import * as realBytes from "../app/view/document-bytes";
 import type { PaneExtras as PaneExtrasComponent } from "../app/view/pane-extras";
@@ -68,6 +69,7 @@ mock.module(paintFile, () => ({
 
 let env: ReactEnv;
 let PaneExtras: typeof PaneExtrasComponent;
+let kit: typeof Kit;
 const restores: (() => void)[] = [];
 /** Who has the focus: linkedom has no focus of its own, so the shim below keeps the count. */
 let focused: Element | null = null;
@@ -126,6 +128,7 @@ beforeAll(async () => {
 	// Dynamic by necessity: react-dom decides once, when it loads, whether there is a DOM, and the layer binds the
 	// kit's React hooks at load.
 	({ PaneExtras } = await import("../app/view/pane-extras"));
+	kit = await import("@dimension/mcp-app-kit/annotate/react");
 });
 afterEach(async () => {
 	await env.cleanup();
@@ -912,6 +915,85 @@ describe("a text", () => {
 		await click(at.tool("comment"));
 		expect(at.checked).toEqual(["comment"]);
 	});
+
+	test("is the shared toolbar drawing the kit's comment group, nothing the pane made up", async () => {
+		const at = pane();
+		await mountAt(at, { mode: "comments" }, "markdown");
+		const shared = await env.mount(
+			createElement(kit.AnnotationToolbar, {
+				label: "Annotation tools",
+				placement: "strip",
+				groups: kit.commentToolGroups({ onComment: () => {} }),
+			}),
+		);
+
+		expect(at.bar?.outerHTML).toBe(shared.container.querySelector('[role="toolbar"]')?.outerHTML);
+	});
+
+	test("the shared toolbar draws a picture's drawing tools the same way the pane's bar does", async () => {
+		const at = pane();
+		await mountAt(at, { mode: "marks" }, "image");
+		const shared = await env.mount(
+			createElement(kit.AnnotationToolbar, {
+				label: "Annotation tools",
+				placement: "strip",
+				groups: kit.markupToolGroups({
+					tool: "box",
+					onTool: () => {},
+					canUndo: false,
+					canRedo: false,
+					onUndo: () => {},
+					onRedo: () => {},
+					onClear: () => {},
+					hasMarks: false,
+				}),
+			}),
+		);
+
+		expect(at.tools).toEqual(["pin", "box", "ellipse", "arrow", "pen"]);
+		expect(at.bar?.outerHTML).toBe(shared.container.querySelector('[role="toolbar"]')?.outerHTML);
+	});
+
+	test("a comment made from the bar's Comment tool reaches the agent as the request the shortcut makes", async () => {
+		const requestFrom = async (comment: (at: Pane) => Promise<void>): Promise<string> => {
+			const at = pane();
+			let request = "";
+			await withSelectedPassage(at, async () => {
+				await mountAt(at, { mode: "comments" }, "markdown");
+				await comment(at);
+				await type(commentField(at), "tighten this");
+				await until(() => staged.length === 1 && inFlight === 0);
+				request = textOf(staged[0]);
+			});
+			staged.length = 0;
+			await env.cleanup();
+			return request;
+		};
+
+		const fromBar = await requestFrom(at => click(at.tool("comment")));
+		const fromShortcut = await requestFrom(() => press(env.document, "m", { ctrlKey: true, altKey: true }));
+
+		expect(fromBar).toContain("— Markdown document, 1 comment.");
+		expect(fromBar).toContain('1. "quick brown" — "tighten this"');
+		expect(fromBar).toBe(fromShortcut);
+	}, 15_000);
+
+	for (const [kind, subject] of [
+		["pdf", "PDF"],
+		["pptx", "PowerPoint presentation"],
+		["text", "text file"],
+	] as const) {
+		test(`a comment on a ${kind} names the kind its configuration declares`, async () => {
+			const at = pane();
+			await withSelectedPassage(at, async () => {
+				await mountAt(at, { mode: "comments" }, kind);
+				await click(at.tool("comment"));
+				await type(commentField(at), "tighten this");
+				await until(() => staged.length === 1 && inFlight === 0);
+				expect(textOf(staged[0])).toContain(`— ${subject}, 1 comment.`);
+			});
+		}, 10_000);
+	}
 
 	test("an open or hovered passage owns the active highlight, and leaving restores the ordinary highlight", async () => {
 		const at = pane();
