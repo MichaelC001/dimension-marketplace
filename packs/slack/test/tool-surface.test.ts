@@ -53,10 +53,17 @@ const SENDS: Send[] = [
 		args: {
 			channel: "C0123ABCD",
 			path: "reports/q3-numbers.pdf",
+			title: "Board pack",
 			threadTs: "1700000000.000400",
 			comment: "the Q3 numbers you asked for",
 		},
-		shown: ["C0123ABCD", "reports/q3-numbers.pdf", "1700000000.000400", "the Q3 numbers you asked for"],
+		shown: [
+			"C0123ABCD",
+			"reports/q3-numbers.pdf",
+			"Board pack",
+			"1700000000.000400",
+			"the Q3 numbers you asked for",
+		],
 	},
 	{
 		tool: "slack_act",
@@ -101,7 +108,7 @@ test.each(SENDS)(
 	},
 );
 
-test("slack_upload_file's approval card names the bot, the channel and the file, and shows no thread or message line when there are none", () => {
+test("slack_upload_file's approval card names the bot, the channel and the file, and shows no title, thread or message line when there are none", () => {
 	const args = { channel: "C0123ABCD", path: "reports/q3-numbers.pdf" };
 	const card = registeredTool("slack_upload_file").formatApprovalDetails?.(args) ?? [];
 	const text = card.join("\n");
@@ -109,6 +116,6 @@ test("slack_upload_file's approval card names the bot, the channel and the file,
 	expect(card).toContain("As: the Slack bot app");
 	expect(text).toContain("C0123ABCD");
 	expect(text).toContain("reports/q3-numbers.pdf");
-	expect(card.filter(line => /^(Thread|Message):/.test(line))).toEqual([]);
+	expect(card.filter(line => /^(Title|Thread|Message):/.test(line))).toEqual([]);
 	expect(text).not.toContain("(missing)");
 });

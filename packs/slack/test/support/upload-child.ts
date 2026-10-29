@@ -11,9 +11,9 @@ interface RegisteredTool {
 	execute(
 		id: string,
 		params: Record<string, unknown>,
-		signal: undefined,
+		signal: AbortSignal,
 		onUpdate: undefined,
-		context: { readonly cwd: string },
+		context: { readonly cwd: string } | undefined,
 	): Promise<{ readonly content: readonly { readonly text?: string }[] }>;
 }
 
@@ -33,8 +33,10 @@ if (scenario === null || fromHome === null || fromHome.startsWith("..") || isAbs
 }
 
 const seen: SeenRequest[] = [];
+const cancellation = new AbortController();
 
-globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+async function fakeFetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
+	if (init?.signal?.aborted) throw init.signal.reason;
 	const url = String(input);
 	const body = init?.body;
 	const bytes =
@@ -49,12 +51,28 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
 		headers: Object.fromEntries(new Headers(init?.headers)),
 		body: bytes.toString("base64"),
 	});
-	if (!url.startsWith(SLACK_API)) return new Response(null, { status: scenario.upload });
-	const method = url.slice(SLACK_API.length).split("?")[0];
-	if (method === "files.getUploadURLExternal") return Response.json(scenario.start);
-	if (method === "files.completeUploadExternal") return Response.json(scenario.complete);
-	throw new Error(`unexpected request to ${url}`);
-}) as typeof fetch;
+	if (url.startsWith(SLACK_API)) {
+		const method = url.slice(SLACK_API.length).split("?")[0];
+		if (method === "files.getUploadURLExternal") return Response.json(scenario.start);
+		if (method === "files.completeUploadExternal") {
+			if (scenario.abortOn === "complete") {
+				cancellation.abort(new Error("the upload was cancelled"));
+				if (init?.signal) throw init.signal.reason;
+			}
+			return Response.json(scenario.complete);
+		}
+		throw new Error(`unexpected request to ${url}`);
+	}
+	if (scenario.redirectTo !== undefined && url !== scenario.redirectTo) {
+		if (init?.redirect === "error") throw new TypeError("fetch failed: the server answered with a redirect");
+		if (init?.redirect === "manual") return new Response(null, { status: 307, headers: { location: scenario.redirectTo } });
+		return await fakeFetch(scenario.redirectTo, init);
+	}
+	if (scenario.abortOn === "upload") cancellation.abort(new Error("the upload was cancelled"));
+	return new Response(null, { status: scenario.upload });
+}
+
+globalThis.fetch = fakeFetch as typeof fetch;
 
 const tools = new Map<string, RegisteredTool>();
 registerSlackBot({ registerTool: (tool: RegisteredTool) => tools.set(tool.name, tool) } as unknown as ExtensionAPI);
@@ -64,7 +82,8 @@ if (!tool) throw new Error("the extension did not register slack_upload_file");
 
 let outcome: { ok: boolean; text: string };
 try {
-	const result = await tool.execute("call", scenario.params, undefined, undefined, { cwd: scenario.folder });
+	const context = scenario.withoutContext ? undefined : { cwd: scenario.folder };
+	const result = await tool.execute("call", scenario.params, cancellation.signal, undefined, context);
 	outcome = { ok: true, text: result.content[0]?.text ?? "" };
 } catch (error) {
 	outcome = { ok: false, text: error instanceof Error ? error.message : String(error) };

@@ -2,7 +2,14 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { type } from "arktype";
-import { BOT_TOKEN, botCredentialFile, credentialTarget } from "./shipped-extension";
+import {
+	BOT_TOKEN,
+	botCredentialFile,
+	credentialTarget,
+	NEVER_EXPIRES,
+	USER_TOKEN,
+	userCredentialFile,
+} from "./shipped-extension";
 import { UPLOAD_FILE_ID, UPLOAD_URL } from "./upload-fixture";
 
 const CHILD = join(import.meta.dir, "upload-child.ts");
@@ -17,14 +24,21 @@ export interface Folders {
 	readonly beside: string;
 }
 
+export type AbortPoint = "upload" | "complete";
+
 export interface UploadScenario {
 	readonly signedIn?: boolean;
+	readonly userSignedIn?: boolean;
+	readonly folderInHome?: string;
 	readonly inside?: Readonly<Record<string, Content>>;
 	readonly beside?: Readonly<Record<string, Content>>;
 	readonly params: (folders: Folders) => Record<string, unknown>;
 	readonly start?: unknown;
 	readonly upload?: number;
 	readonly complete?: unknown;
+	readonly redirectTo?: string;
+	readonly abortOn?: AbortPoint;
+	readonly withoutContext?: boolean;
 }
 
 export interface UploadWire {
@@ -33,6 +47,9 @@ export interface UploadWire {
 	readonly start: unknown;
 	readonly upload: number;
 	readonly complete: unknown;
+	readonly redirectTo?: string;
+	readonly abortOn?: AbortPoint;
+	readonly withoutContext?: boolean;
 }
 
 const outputSchema = type({
@@ -68,14 +85,19 @@ async function writeTree(root: string, files: Readonly<Record<string, Content>> 
 export async function runUpload(scenario: UploadScenario): Promise<UploadRun> {
 	const home = await mkdtemp(join(tmpdir(), "slack-pack-home-"));
 	const beside = await mkdtemp(join(tmpdir(), "slack-pack-upload-"));
-	const folder = join(beside, "session");
+	const folder = scenario.folderInHome === undefined ? join(beside, "session") : join(home, scenario.folderInHome);
 	try {
-		await mkdir(folder);
+		await mkdir(folder, { recursive: true });
 		await Promise.all([writeTree(folder, scenario.inside), writeTree(beside, scenario.beside)]);
 		if (scenario.signedIn !== false) {
 			const credential = credentialTarget(home, "bot");
 			await mkdir(dirname(credential), { recursive: true });
 			await writeFile(credential, await botCredentialFile(BOT_TOKEN));
+		}
+		if (scenario.userSignedIn === true) {
+			const credential = credentialTarget(home, "user");
+			await mkdir(dirname(credential), { recursive: true });
+			await writeFile(credential, userCredentialFile(USER_TOKEN, NEVER_EXPIRES));
 		}
 		const wire: UploadWire = {
 			folder,
@@ -83,6 +105,9 @@ export async function runUpload(scenario: UploadScenario): Promise<UploadRun> {
 			start: scenario.start ?? STARTED,
 			upload: scenario.upload ?? 200,
 			complete: scenario.complete ?? { ok: true },
+			redirectTo: scenario.redirectTo,
+			abortOn: scenario.abortOn,
+			withoutContext: scenario.withoutContext,
 		};
 		const child = Bun.spawn([process.execPath, CHILD], {
 			env: {
@@ -95,6 +120,7 @@ export async function runUpload(scenario: UploadScenario): Promise<UploadRun> {
 			stdout: "pipe",
 			stderr: "pipe",
 			timeout: CHILD_TIMEOUT_MS,
+			cwd: folder,
 		});
 		const [stdout, stderr, code] = await Promise.all([
 			new Response(child.stdout).text(),

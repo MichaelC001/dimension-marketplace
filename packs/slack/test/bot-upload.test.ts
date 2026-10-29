@@ -15,7 +15,9 @@ const COMPLETE = `POST ${SLACK_API}files.completeUploadExternal`;
 
 const label = (request: SlackRequest) => `${request.method} ${request.url.split("?")[0]}`;
 
-const [full, bare] = await Promise.all([
+const ACCENTED_TEXT = "héllo wörld — 日本語 🚀\n";
+
+const [full, bare, accented] = await Promise.all([
 	runUpload({
 		inside: { "report.bin": FILE_BYTES },
 		params: () => ({
@@ -30,6 +32,10 @@ const [full, bare] = await Promise.all([
 		inside: { "exports/report.bin": FILE_BYTES },
 		params: () => ({ channel: CHANNEL, path: "exports/report.bin" }),
 	}),
+	runUpload({
+		inside: { "notes.txt": ACCENTED_TEXT },
+		params: () => ({ channel: CHANNEL, path: "notes.txt" }),
+	}),
 ]);
 const [ask, send, complete] = full.requests;
 
@@ -38,12 +44,20 @@ test("sharing a file makes exactly three Slack calls in order: ask for an addres
 	expect(full.requests.map(label)).toEqual([ASK, SEND, COMPLETE]);
 });
 
-test("the upload address is requested under the file's name and exact length, signed with the bot token", () => {
+test("the upload address is requested under the file's name and the exact length of the bytes then sent, signed with the bot token", () => {
 	const query = new URL(ask?.url ?? "").searchParams;
 
 	expect(query.get("filename")).toBe("report.bin");
 	expect(query.get("length")).toBe(String(FILE_BYTES.length));
+	expect(query.get("length")).toBe(String(send?.bytes.byteLength));
 	expect(ask?.headers.authorization).toBe(`Bearer ${BOT_TOKEN}`);
+});
+
+test("the announced length of a text file with multi-byte characters counts bytes, not characters", () => {
+	const [accentedAsk, accentedSend] = accented.requests;
+
+	expect(accentedSend?.bytes.toString("utf8")).toBe(ACCENTED_TEXT);
+	expect(new URL(accentedAsk?.url ?? "").searchParams.get("length")).toBe(String(Buffer.byteLength(ACCENTED_TEXT)));
 });
 
 test("the file's bytes reach the upload address unmodified, and nothing sent there carries the bot token", () => {
@@ -129,6 +143,16 @@ const REFUSED: readonly Refusal[] = [
 		path: () => "missing.csv",
 		says: "There is no file at missing.csv.",
 	},
+	{
+		name: "a file that does not exist and is named like Slack's missing_scope error",
+		path: () => "missing_scope.txt",
+		says: "There is no file at missing_scope.txt.",
+	},
+	{
+		name: "a file that does not exist and is named like Slack's not_in_channel error",
+		path: () => "not_in_channel.txt",
+		says: "There is no file at not_in_channel.txt.",
+	},
 ];
 
 const refusals = await Promise.all(
@@ -143,11 +167,16 @@ const refusals = await Promise.all(
 	})),
 );
 
-test.each(refusals)("$name is refused before any Slack call is made, even with no bot token saved", ({ run, says }) => {
-	expect(run.outcome.ok).toBe(false);
-	expect(run.outcome.text).toContain(says);
-	expect(run.requests).toEqual([]);
-});
+test.each(refusals)(
+	"$name is refused before any Slack call is made, even with no bot token saved, and never blamed on the Slack app",
+	({ run, says }) => {
+		expect(run.outcome.ok).toBe(false);
+		expect(run.outcome.text).toContain(says);
+		expect(run.outcome.text).not.toContain("files:write");
+		expect(run.outcome.text).not.toContain("/invite");
+		expect(run.requests).toEqual([]);
+	},
+);
 
 interface Failure {
 	readonly name: string;
@@ -158,6 +187,14 @@ interface Failure {
 	readonly silent: readonly string[];
 	readonly sent: string[];
 }
+
+const HOSTILE_ADDRESSES: readonly (readonly [string, string])[] = [
+	["a host that only starts with Slack's", "https://files.slack.com.evil.example/upload/v1/x"],
+	["a host that only ends like Slack's", "https://evilslack.com/upload/v1/x"],
+	["a Slack name used as credentials for another host", "https://files.slack.com@evil.example/upload/v1/x"],
+	["a Slack name only in the query", "https://evil.example/upload/v1/x?host=files.slack.com"],
+	["an address that is not a URL", "files.slack.com/upload/v1/x"],
+];
 
 const FAILURES: readonly Failure[] = [
 	{
@@ -202,6 +239,20 @@ const FAILURES: readonly Failure[] = [
 		silent: [],
 		sent: [ASK],
 	},
+	...HOSTILE_ADDRESSES.map(([name, upload_url]) => ({
+		name: `an upload address on ${name}`,
+		start: { ...STARTED, upload_url },
+		says: ["Slack did not return an address to upload the file to."],
+		silent: [],
+		sent: [ASK],
+	})),
+	{
+		name: "an upload address that is not a string",
+		start: { ...STARTED, upload_url: 42 },
+		says: ["Slack did not return an address to upload the file to."],
+		silent: [],
+		sent: [ASK],
+	},
 	{
 		name: "an upload address that answers 500",
 		upload: 500,
@@ -234,4 +285,111 @@ test.each(failures)("$name fails the tool with Slack's reason and nothing past t
 	for (const text of says) expect(run.outcome.text).toContain(text);
 	for (const text of silent) expect(run.outcome.text).not.toContain(text);
 	expect(run.requests.map(label)).toEqual(sent);
+});
+
+const ACCEPTED = [
+	"https://files.slack.com/upload/v1/x",
+	"https://slack.com/upload/v1/x",
+	"https://upload.files.slack.com/v1/x",
+];
+
+const accepted = await Promise.all(
+	ACCEPTED.map(async address => ({
+		address,
+		run: await runUpload({
+			inside: { "report.bin": FILE_BYTES },
+			params: () => ({ channel: CHANNEL, path: "report.bin" }),
+			start: { ...STARTED, upload_url: address },
+		}),
+	})),
+);
+
+test.each(accepted)("an upload address of $address receives the file's bytes and the upload is completed", ({
+	address,
+	run,
+}) => {
+	expect(run.outcome.ok).toBe(true);
+	expect(run.requests.map(label)).toEqual([ASK, `POST ${address}`, COMPLETE]);
+	expect(run.requests[1]?.bytes.equals(FILE_BYTES)).toBe(true);
+});
+
+const EVIL_REDIRECT = "https://evil.example/collect";
+
+const [redirected, cancelled, cancelledWhileCompleting, noContext] = await Promise.all([
+	runUpload({
+		inside: { "report.bin": FILE_BYTES },
+		params: () => ({ channel: CHANNEL, path: "report.bin" }),
+		redirectTo: EVIL_REDIRECT,
+	}),
+	runUpload({
+		inside: { "report.bin": FILE_BYTES },
+		params: () => ({ channel: CHANNEL, path: "report.bin" }),
+		abortOn: "upload",
+	}),
+	runUpload({
+		inside: { "report.bin": FILE_BYTES },
+		params: () => ({ channel: CHANNEL, path: "report.bin" }),
+		abortOn: "complete",
+	}),
+	runUpload({
+		inside: { "report.bin": FILE_BYTES },
+		params: () => ({ channel: CHANNEL, path: "report.bin" }),
+		withoutContext: true,
+	}),
+]);
+
+test("an upload address that redirects elsewhere is not followed, so the file's bytes never reach the other host and nothing is shared", () => {
+	expect(redirected.outcome.ok).toBe(false);
+	expect(redirected.requests.map(label)).toEqual([ASK, SEND]);
+});
+
+test("an upload cancelled after the bytes were sent is not completed, so nothing is shared", () => {
+	expect(cancelled.outcome.ok).toBe(false);
+	expect(cancelled.outcome.text).toContain("cancelled");
+	expect(cancelled.requests.map(label)).toEqual([ASK, SEND]);
+});
+
+test("an upload cancelled while Slack is completing it fails as cancelled instead of reporting a shared file", () => {
+	expect(cancelledWhileCompleting.outcome.ok).toBe(false);
+	expect(cancelledWhileCompleting.outcome.text).toContain("cancelled");
+});
+
+test("an upload called without the session's folder fails and sends nothing, even from a process whose own folder holds the file", () => {
+	expect(noContext.outcome.ok).toBe(false);
+	expect(noContext.requests).toEqual([]);
+});
+
+const SAVED_TOKENS: readonly (readonly [string, string])[] = [
+	["the bot token", "dimension-slack/token.json"],
+	["the As you sign-in", "dimension-slack-user/token.json"],
+];
+
+const [tokenControl, ...tokenRefusals] = await Promise.all([
+	runUpload({
+		userSignedIn: true,
+		folderInHome: ".config",
+		inside: { "dimension-slack/notes.txt": "notes next to the token" },
+		params: () => ({ channel: CHANNEL, path: "dimension-slack/notes.txt" }),
+	}),
+	...SAVED_TOKENS.map(async ([name, path]) => ({
+		name,
+		run: await runUpload({
+			userSignedIn: true,
+			folderInHome: ".config",
+			params: () => ({ channel: CHANNEL, path }),
+		}),
+	})),
+]);
+
+test("a session folder that holds the saved tokens still uploads the files next to them", () => {
+	expect(tokenControl.outcome.ok).toBe(true);
+	expect(tokenControl.requests.map(label)).toEqual([ASK, SEND, COMPLETE]);
+});
+
+test.each(tokenRefusals)("$name's saved file is refused as a token even when the session is in the folder that holds it, and nothing is sent", ({
+	run,
+}) => {
+	expect(run.outcome.ok).toBe(false);
+	expect(run.outcome.text).toContain("is a saved Slack token");
+	expect(run.requests).toEqual([]);
 });
