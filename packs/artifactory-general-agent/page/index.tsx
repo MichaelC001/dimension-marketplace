@@ -1,7 +1,7 @@
 // The General Agents page (C-A): a `workspace-surface` component the host
 // mounts on the Code space's `page` surface when the rail's General Agents
 // entry is chosen, in a seat granted `artifactory:call` (its own server's
-// App-only tools) and `agents:configure` (the two switches). It reads the host's
+// App-only tools) and `agents:configure` (the switches and the display name). It reads the host's
 // facts from the fenced Store and draws every agent as a card, then one agent
 // as a profile to read, edit, create from or extend.
 import { agentPresenceFace } from "@fraym/ui";
@@ -9,7 +9,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ListedAgent, StoredProposal } from "../src/contracts";
 import { rememberFaces } from "./faces";
 import { useActivity, useFact, useNow, usePolled } from "./facts";
-import { errorText, forgeOf } from "./forge";
+import { type AgentConfigurePatch, errorText, forgeOf } from "./forge";
 import { AgentsHome } from "./home";
 import { AgentProfile } from "./profile";
 import { acceptProposal, discardProposal, extendFrom, openBlank, openListed, type ProfileState, proposalsForProfile, proposalsToReview, receiveProposal } from "./profile-state";
