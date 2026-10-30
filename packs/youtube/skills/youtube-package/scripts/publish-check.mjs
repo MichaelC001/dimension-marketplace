@@ -445,8 +445,9 @@ function checkThumbnail(directory, publish, findings, options, titleText) {
 	}
 	const variants = Array.isArray(thumbnail.variants) ? thumbnail.variants : [];
 	if (variants.length === 0 && options.stage === "package") return;
-	if (variants.length < 2) findings.error("thumbnail-variants", "thumbnail.variants", "YouTube's A/B test takes 2 or 3 thumbnails; the brief is for 3");
-	else if (variants.length < 3) findings.warn("thumbnail-variants", "thumbnail.variants", "3 variants is the brief; 2 is the least a test needs");
+	const testsThumbnails = isRecord(thumbnail.abTest) && thumbnail.abTest.run === true && thumbnail.abTest.target !== "title";
+	if (variants.length < (testsThumbnails ? 2 : 1)) findings.error("thumbnail-variants", "thumbnail.variants", testsThumbnails ? "thumbnail.abTest plans a thumbnail test and YouTube's A/B test takes 2 or 3 thumbnails; list 2 or 3 variants, or set abTest.run to false for one thumbnail" : "at least one thumbnail variant is required");
+	else if (testsThumbnails && variants.length < 3) findings.warn("thumbnail-variants", "thumbnail.variants", "3 variants is the brief; 2 is the least a test needs");
 	const ids = new Set();
 	variants.forEach((variant, index) => {
 		const path = `thumbnail.variants[${index}]`;
