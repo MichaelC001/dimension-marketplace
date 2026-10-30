@@ -53,7 +53,7 @@ export function ViewerApp({ app, store }: { readonly app: App; readonly store: V
 					)
 				) : null}
 				{state.tabs.map(tab => (
-					<div key={tab.key} className={tab.key === state.activeKey ? "absolute inset-0" : "hidden"}>
+					<div key={tab.key} className={tab.key === state.activeKey ? "absolute inset-0 flex min-h-0 flex-col" : "hidden"}>
 						{tab.failure === undefined ? (
 							<FirstWait of={first?.has(tab.key) === true}>
 								<LibraryDocTab app={app} tab={tab} active={tab.key === state.activeKey} theme={theme} />

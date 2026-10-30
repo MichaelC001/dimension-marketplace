@@ -2,7 +2,7 @@ import type { App } from "@modelcontextprotocol/ext-apps";
 import { useEffect, useState } from "react";
 import type { DiscardOutcome, LibraryItem, ShareSummary } from "../../../../src/library/types";
 import type { Theme } from "../renderers/types";
-import type { DocTab } from "../tabs";
+import type { SharedLayer } from "../pane-shared";
 import { ArtifactPage } from "./artifact-page";
 import { DiscardDialog } from "./discard-dialog";
 import { type ArtifactPatchInput, errorText, type LibraryTools, type LinkedShare } from "./library-tools";
@@ -16,7 +16,7 @@ export interface ArtifactSurfaceProps {
 	readonly active: boolean;
 	readonly now: number;
 	readonly theme: Theme;
-	readonly tab?: DocTab;
+	readonly onLayer?: (shared: SharedLayer) => void;
 	readonly onBack?: () => void;
 	readonly onPatched: (item: LibraryItem, change: ArtifactPatchInput) => void;
 	readonly onRestored: (item: LibraryItem) => void;
@@ -57,7 +57,7 @@ export function useMinuteClock(): number {
  * dialogs. The library's grid opens it over itself; a document the Viewer opened as its own tab wears it too, so a file
  * the agent presented shares and shows its comments the same way wherever it is open.
  */
-export function ArtifactSurface({ app, tools, item, thumb, active, now, theme, tab, onBack, onPatched, onRestored, onDiscarded, onShares, onError }: ArtifactSurfaceProps) {
+export function ArtifactSurface({ app, tools, item, thumb, active, now, theme, onLayer, onBack, onPatched, onRestored, onDiscarded, onShares, onError }: ArtifactSurfaceProps) {
 	const [dialog, setDialog] = useState<Dialog>(null);
 	const patch = (change: ArtifactPatchInput): void => {
 		tools.update(item.id, change).then(updated => onPatched(updated, change), cause => onError(errorText(cause)));
@@ -75,7 +75,7 @@ export function ArtifactSurface({ app, tools, item, thumb, active, now, theme, t
 				active={active}
 				now={now}
 				theme={theme}
-				{...(tab === undefined ? {} : { tab })}
+				{...(onLayer === undefined ? {} : { onLayer })}
 				{...(onBack === undefined ? {} : { onBack })}
 				onPatch={patch}
 				onShare={() => setDialog({ kind: "share", shareId: null })}

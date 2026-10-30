@@ -34407,6 +34407,22 @@ function registerLibraryTools(server2, { library, fence, media }) {
   );
   K3(
     server2,
+    "library_item_at",
+    {
+      title: "The artifact at a path",
+      description: "The library's live artifact for a file the View has open, with its links, so a document tab wears the same Share and Comments as the library's page; `item` is null for a file the library does not hold.",
+      inputSchema: { path },
+      annotations: READ_ONLY,
+      _meta: APP_ONLY
+    },
+    ({ path: requested }) => answer(async () => {
+      const verdict = await fence.check(requested);
+      const item = verdict.ok ? library.getByPath(verdict.real) : void 0;
+      return { text: "Looked up.", data: { item: item === void 0 || item.state === "discarded" ? null : item } };
+    })
+  );
+  K3(
+    server2,
     "library_open",
     {
       title: "Open an artifact",
@@ -36502,6 +36518,17 @@ var COMMENT_CATCH_UP_MS = 4e3;
 var MAX_AUTHOR_CHARS = 80;
 var OPEN_LINK_ONLY = "a link from this computer is open to anyone who has it; signing in needs your own server";
 var BUSY = "that file is already being shared; wait for it to finish";
+function audienceKey(audience) {
+  if (audience.kind === "link") return "link";
+  const sorted = (values) => [...values ?? []].map((value) => value.toLowerCase()).sort();
+  return JSON.stringify(["signin", sorted(audience.emails), sorted(audience.domains)]);
+}
+function sameLink(shares, host, audience, now) {
+  const wanted = audienceKey(audience);
+  return shares.find(
+    (share) => share.host === host && share.revokedAt === void 0 && (share.expiresAt === void 0 || share.expiresAt > now) && audienceKey(share.audience) === wanted
+  );
+}
 var ShareError = class extends Error {
   name = "ShareError";
 };
@@ -36586,13 +36613,31 @@ var ShareService = class {
     const { total } = this.progress(artifactId2);
     this.#report(artifactId2, { phase: "done", sent: total, total, shareId: shareId2 });
   }
+  /**
+   * One file, one link per server and audience: sharing a file that already has that link publishes the current file
+   * to it as a new version when the file changed since, so the people who have it and their comments carry over.
+   */
   async create(input) {
     const item = this.#liveItem(input.artifactId);
+    const existing = sameLink(item.shares, input.host, input.audience, this.#now());
+    if (existing !== void 0) return this.#reuse(item, existing.id, input.allowComments);
     return this.#track(item.id, async () => {
       const row = input.host === P2P_HOST_ID ? await this.#createP2p(input, item) : await this.#createHosted(input, item);
       this.#finish(item.id, row.id);
       this.#options.onSharesChanged();
-      return { ...this.summarize(row.id), link: this.linkOf(row.id) };
+      return { ...this.summarize(row.id), link: this.linkOf(row.id), outcome: "created" };
+    });
+  }
+  async #reuse(item, shareId2, allowComments) {
+    const row = this.#liveRow(shareId2);
+    if (row.allowComments !== allowComments) await this.update({ shareId: shareId2, allowComments });
+    const changed = row.host !== P2P_HOST_ID && (await stat4(await this.#realPath(item))).mtimeMs > row.versionAt;
+    if (!changed) return { ...this.summarize(shareId2), link: this.linkOf(shareId2), outcome: "unchanged" };
+    return this.#track(item.id, async () => {
+      await this.#publishVersion(row);
+      this.#finish(item.id, row.id);
+      this.#options.onSharesChanged();
+      return { ...this.summarize(shareId2), link: this.linkOf(shareId2), outcome: "updated" };
     });
   }
   #checkPolicy(audience, expiresInDays2, policy, oidc, size) {
@@ -36754,12 +36799,15 @@ var ShareService = class {
   async newVersion(shareId2) {
     const row = this.#liveRow(shareId2);
     return this.#track(row.artifactId, async () => {
-      if (row.host === P2P_HOST_ID) await this.#options.p2p.server.newVersion(row);
-      else await this.#newHostedVersion(row);
-      this.#options.p2p.announce();
+      await this.#publishVersion(row);
       this.#finish(row.artifactId, row.id);
       return this.summarize(row.id);
     });
+  }
+  async #publishVersion(row) {
+    if (row.host === P2P_HOST_ID) await this.#options.p2p.server.newVersion(row);
+    else await this.#newHostedVersion(row);
+    this.#options.p2p.announce();
   }
   async #newHostedVersion(row) {
     const item = this.#liveItem(row.artifactId);
@@ -37055,7 +37103,8 @@ function registerShareTools(server2, runtime) {
         allowComments: input.allowComments,
         ...input.expiresInDays === void 0 ? {} : { expiresInDays: input.expiresInDays }
       });
-      return success2("Link created.", { share });
+      const said = { created: "Link created.", updated: `The existing link now shows the current file as version ${share.version}.`, unchanged: "The file already has this link." };
+      return success2(said[share.outcome], { share });
     })
   );
   K3(
