@@ -11,11 +11,12 @@ import {
 	parseTags,
 	queryArgs,
 	reduceList,
+	reloadLoaded,
 	shownItem,
 	toggleKind,
 	toggleTag,
 } from "../app/view/library/query";
-import type { LibraryItem, LibraryPage } from "../../src/library/types";
+import type { LibraryItem, LibraryPage, LibraryQuery } from "../../src/library/types";
 
 const item = (id: string, extra: Partial<LibraryItem> = {}): LibraryItem => ({
 	id,
@@ -150,6 +151,106 @@ describe("library list: rows change in place", () => {
 		expect(shownItem(state.items[1] as LibraryItem, state.checked)).toBe(state.items[1] as LibraryItem);
 		expect(reduceList(state, { type: "checked", rows: [{ id: "1", state: "missing", size: 10, mtimeMs: 1 }] })).toBe(state);
 	});
+});
+
+describe("library list: refreshing in place", () => {
+	const loaded = play({ type: "request", key: "k" }, { type: "page", key: "k", page: page(["1", "2"], "c1", 5), append: false });
+	const refreshing = play({ type: "request", key: "k" }, { type: "page", key: "k", page: page(["1", "2"], "c1", 5), append: false }, { type: "stale" }, { type: "refresh", key: "k" });
+
+	test("a refresh swaps the rows without the list ever going back to loading", () => {
+		const seen: ListState[] = [loaded];
+		for (const action of [{ type: "stale" }, { type: "refresh", key: "k" }, { type: "refreshed", key: "k", page: page(["0", "1", "2"], "c1", 6) }] satisfies ListAction[]) {
+			seen.push(reduceList(seen[seen.length - 1] as ListState, action));
+		}
+		expect(seen.map(state => state.phase)).toEqual(["ready", "ready", "ready", "ready"]);
+		expect(ids(seen[2] as ListState)).toEqual(["1", "2"]);
+		const done = seen[3] as ListState;
+		expect(ids(done)).toEqual(["0", "1", "2"]);
+		expect(done).toMatchObject({ total: 6, next: "c1", refreshing: false, stale: false });
+	});
+
+	test("a next page is refused while a refresh reads, and asked for again once it lands", () => {
+		expect(reduceList(refreshing, { type: "more", key: "k" })).toBe(refreshing);
+		const landed = reduceList(refreshing, { type: "refreshed", key: "k", page: page(["1", "2"], "c1", 5) });
+		expect(reduceList(landed, { type: "more", key: "k" }).loadingMore).toBe(true);
+	});
+
+	test("a new search wins over a refresh in flight: the old answer is dropped and nothing is left stale", () => {
+		const typed = play(
+			{ type: "request", key: "k" },
+			{ type: "page", key: "k", page: page(["1", "2"], undefined, 2), append: false },
+			{ type: "stale" },
+			{ type: "refresh", key: "k" },
+			{ type: "stale" },
+			{ type: "request", key: "k2" },
+		);
+		expect(typed).toMatchObject({ key: "k2", phase: "loading", refreshing: false, stale: false });
+		const late = reduceList(typed, { type: "refreshed", key: "k", page: page(["old"], undefined, 1) });
+		expect(late).toBe(typed);
+		expect(ids(reduceList(late, { type: "page", key: "k2", page: page(["new"], undefined, 1), append: false }))).toEqual(["new"]);
+	});
+
+	test("a refresh answer for an earlier search never lands on the refresh of the current one", () => {
+		const state = play(
+			{ type: "request", key: "k" },
+			{ type: "page", key: "k", page: page(["a"], undefined, 1), append: false },
+			{ type: "stale" },
+			{ type: "refresh", key: "k" },
+			{ type: "request", key: "k2" },
+			{ type: "page", key: "k2", page: page(["b"], undefined, 1), append: false },
+			{ type: "stale" },
+			{ type: "refresh", key: "k2" },
+		);
+		const late = reduceList(state, { type: "refreshed", key: "k", page: page(["a", "a2"], undefined, 2) });
+		expect(late).toBe(state);
+		expect(ids(reduceList(late, { type: "refreshed", key: "k2", page: page(["b", "b2"], undefined, 2) }))).toEqual(["b", "b2"]);
+	});
+
+	test("an edit or removal that lands while a refresh reads leaves the list stale, so the older read is followed by a newer one", () => {
+		const edited = reduceList(refreshing, { type: "item", item: item("2", { starred: true }) });
+		expect(edited.stale).toBe(true);
+		const landed = reduceList(edited, { type: "refreshed", key: "k", page: page(["1", "2"], "c1", 5) });
+		expect(landed).toMatchObject({ refreshing: false, stale: true });
+		expect(reduceList(refreshing, { type: "remove", id: "2" }).stale).toBe(true);
+		expect(reduceList(loaded, { type: "item", item: item("2", { starred: true }) }).stale).toBe(false);
+		expect(reduceList(loaded, { type: "remove", id: "2" }).stale).toBe(false);
+	});
+});
+
+describe("reloading the rows that were loaded", () => {
+	const rows = (from: number, count: number): string[] => Array.from({ length: count }, (_, index) => `r${from + index}`);
+	const pages = [page(rows(0, PAGE_SIZE), "c1", 550), page(rows(PAGE_SIZE, PAGE_SIZE), "c2", 550), page(rows(2 * PAGE_SIZE, 150), undefined, 550)];
+	const served = () => {
+		const calls: LibraryQuery[] = [];
+		const read = async (args: LibraryQuery): Promise<LibraryPage> => {
+			calls.push(args);
+			const found = pages[args.cursor === undefined ? 0 : Number(args.cursor.slice(1))];
+			if (found === undefined) throw new Error(`no page for ${args.cursor}`);
+			return found;
+		};
+		return { calls, read };
+	};
+	const filter = { ...DEFAULT_FILTER, q: "hero" };
+
+	const cases = [
+		{ name: "one page that was loaded is one page read", count: PAGE_SIZE, cursors: [undefined], rows: 200, next: "c1" },
+		{ name: "less than a page loaded is still one page read, never truncated to fewer rows than the server answers", count: 3, cursors: [undefined], rows: 200, next: "c1" },
+		{ name: "two pages loaded are two pages read, following the cursor", count: 2 * PAGE_SIZE, cursors: [undefined, "c1"], rows: 400, next: "c2" },
+		{ name: "one row into the third page reads the third page", count: 2 * PAGE_SIZE + 1, cursors: [undefined, "c1", "c2"], rows: 550, next: undefined },
+		{ name: "more rows than exist stops when the cursor runs out", count: 5000, cursors: [undefined, "c1", "c2"], rows: 550, next: undefined },
+	] as const;
+
+	for (const each of cases) {
+		test(each.name, async () => {
+			const { calls, read } = served();
+			const result = await reloadLoaded(read, filter, each.count);
+			expect(calls.map(call => call.cursor)).toEqual([...each.cursors]);
+			expect(calls.every(call => call.q === "hero" && call.limit === PAGE_SIZE)).toBe(true);
+			expect(result.items.map(row => row.id)).toEqual(rows(0, each.rows));
+			expect(result.next).toBe(each.next);
+			expect(result.total).toBe(550);
+		});
+	}
 });
 
 describe("library helpers", () => {

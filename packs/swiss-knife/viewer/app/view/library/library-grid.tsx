@@ -87,20 +87,22 @@ export function LibraryGrid({ items, layout, selectedIndex, label, footer, rende
 		onRangeRef.current(itemRange(rows, geometry, items.length), itemRange(seenRows, geometry, items.length), geometry);
 	}, [rows, geometry, items, box.height]);
 
-	const reveal = useRef({ geometry, height: box.height, sync });
-	reveal.current = { geometry, height: box.height, sync };
+	const selectedItem = selectedIndex >= 0 ? items[selectedIndex] : undefined;
+	const selectedId = selectedItem?.id;
+	const reveal = useRef({ geometry, height: box.height, sync, index: selectedIndex });
+	reveal.current = { geometry, height: box.height, sync, index: selectedIndex };
 	const measured = box.height > 0;
-	// biome-ignore lint/correctness/useExhaustiveDependencies: a reveal follows the selection and the first measure only; paging and resizes must not pull the scroll back to it.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: a reveal follows the selected row and the first measure only; paging, resizes and rows moving under the selection must not pull the scroll back to it.
 	useLayoutEffect(() => {
 		const element = scroller.current;
-		const { geometry: shape, height, sync: resync } = reveal.current;
-		if (element === null || selectedIndex < 0 || height === 0) return;
-		const top = revealScrollTop(selectedIndex, element.scrollTop, height, shape);
+		const { geometry: shape, height, sync: resync, index } = reveal.current;
+		if (element === null || selectedId === undefined || height === 0) return;
+		const top = revealScrollTop(index, element.scrollTop, height, shape);
 		if (top !== null) {
 			element.scrollTop = top;
 			resync();
 		}
-	}, [selectedIndex, measured]);
+	}, [selectedId, measured]);
 
 	const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
 		if (event.target !== event.currentTarget || event.altKey || event.ctrlKey || event.metaKey) return;
@@ -157,7 +159,6 @@ export function LibraryGrid({ items, layout, selectedIndex, label, footer, rende
 		);
 	}
 
-	const selectedItem = selectedIndex >= 0 ? items[selectedIndex] : undefined;
 	return (
 		<div
 			ref={scroller}

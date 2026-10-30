@@ -32518,6 +32518,11 @@ async function deleteRemoteShare(share) {
 }
 var revokeRemote = deleteRemoteShare;
 
+// ../src/library/revision.ts
+function revisionMarker(own, foreign) {
+  return `${own}:${foreign}`;
+}
+
 // ../../../../packages/sdk/src/artifact-share/index.ts
 var ASP_VERSION = 1;
 var ASP_CHUNK_BYTES = 1 << 20;
@@ -33581,10 +33586,18 @@ async function createLibrary(options2) {
   }
   const memo = /* @__PURE__ */ new Map();
   let memoVersion = "";
-  function remembered(key, compute) {
+  function revision() {
     const own = sql("SELECT total_changes() AS n").get()?.n ?? 0;
     const other = sql("PRAGMA data_version").get()?.data_version ?? 0;
-    const version2 = `${own}:${other}`;
+    return revisionMarker(own, other);
+  }
+  function witnessed(write) {
+    const before = revision();
+    const value = write();
+    return { value, span: { before, after: revision() } };
+  }
+  function remembered(key, compute) {
+    const version2 = revision();
     if (version2 !== memoVersion) {
       memo.clear();
       memoVersion = version2;
@@ -33923,13 +33936,15 @@ async function createLibrary(options2) {
     const row = requireRow(id2);
     if (row.state === "discarded") throw new LibraryError("a discarded artifact keeps no thumbnail");
     const name = await writeThumb(thumbsDirectory, id2, bytes, mime);
-    sql("UPDATE artifacts SET thumb = ? WHERE id = ?").run(name, id2);
+    return witnessed(() => sql("UPDATE artifacts SET thumb = ? WHERE id = ?").run(name, id2)).span;
   }
   let closed = false;
   return {
     home: options2.home,
     workspaceOf,
     query,
+    revision,
+    witnessed,
     facets,
     get,
     getByPath,
@@ -34294,6 +34309,18 @@ function registerLibraryTools(server2, { library, fence, media }) {
   );
   K3(
     server2,
+    "library_revision",
+    {
+      title: "Library revision",
+      description: "A marker that changes whenever anything in the library changes, from this process or another. The View reads it on an interval and refreshes when it moves; it is not for the model.",
+      inputSchema: {},
+      annotations: READ_ONLY,
+      _meta: APP_ONLY
+    },
+    () => answer(() => ({ text: "Revision.", data: { revision: library.revision() } }))
+  );
+  K3(
+    server2,
     "library_check",
     {
       title: "Check artifacts on disk",
@@ -34321,7 +34348,10 @@ function registerLibraryTools(server2, { library, fence, media }) {
       annotations: WRITES,
       _meta: APP_ONLY
     },
-    ({ id: artifactId2, ...patch }) => answer(() => ({ text: "Updated.", data: { item: library.update(artifactId2, patch) } }))
+    ({ id: artifactId2, ...patch }) => answer(() => {
+      const { value: item, span } = library.witnessed(() => library.update(artifactId2, patch));
+      return { text: "Updated.", data: { item, revision: span } };
+    })
   );
   K3(
     server2,
@@ -34380,7 +34410,7 @@ function registerLibraryTools(server2, { library, fence, media }) {
     "library_open",
     {
       title: "Open an artifact",
-      description: "Open an indexed artifact as a document tab: the same answer as view_file.",
+      description: "Open an indexed artifact as a document tab: view_file's answer, plus the `revision` span of recording the open.",
       inputSchema: { id },
       annotations: READ_ONLY,
       _meta: APP_ONLY
@@ -34389,8 +34419,9 @@ function registerLibraryTools(server2, { library, fence, media }) {
       const item = library.get(artifactId2);
       if (item === void 0 || item.state === "discarded") return failure(`no artifact ${artifactId2} in the library`);
       const opened = await openViewedFile(fence, { path: item.path }, extra._meta);
-      if (opened.isError !== true) library.markOpened(item.id);
-      return opened;
+      if (opened.isError === true) return opened;
+      const { span } = library.witnessed(() => library.markOpened(item.id));
+      return { ...opened, structuredContent: { ...opened.structuredContent, revision: span } };
     }
   );
   K3(
@@ -34416,8 +34447,8 @@ function registerLibraryTools(server2, { library, fence, media }) {
       _meta: APP_ONLY
     },
     ({ id: artifactId2, data, mime }) => answer(async () => {
-      await library.setThumb(artifactId2, Buffer.from(data, "base64"), mime);
-      return { text: "Saved.", data: { ok: true } };
+      const revision = await library.setThumb(artifactId2, Buffer.from(data, "base64"), mime);
+      return { text: "Saved.", data: { ok: true, revision } };
     })
   );
 }
@@ -36811,7 +36842,7 @@ var ShareService = class {
     return this.#library.comments.forArtifact(artifactId2);
   }
   markRead(ids) {
-    this.#library.comments.markRead(ids, this.#now());
+    return this.#library.witnessed(() => this.#library.comments.markRead(ids, this.#now())).span;
   }
   async reply(shareId2, body, anchor) {
     const row = this.#liveRow(shareId2);
@@ -37084,10 +37115,7 @@ function registerShareTools(server2, runtime) {
     server2,
     "share_mark_read",
     { ...options("Mark comments read"), inputSchema: { ids: external_exports.array(external_exports.string().min(1).max(128)).max(MAX_IDS) } },
-    ({ ids }) => guarded(async () => {
-      service.markRead(ids);
-      return success2("Marked read.", {});
-    })
+    ({ ids }) => guarded(async () => success2("Marked read.", { revision: service.markRead(ids) }))
   );
 }
 

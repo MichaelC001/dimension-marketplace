@@ -385,6 +385,7 @@ export function ArtifactPage(props: ArtifactPageProps) {
 								key={tab.id}
 								type="button"
 								role="tab"
+								title={tab.label}
 								aria-selected={selected}
 								aria-controls={tab.id === "view" ? undefined : sheetId}
 								onClick={() => toggle(tab.id)}
@@ -395,7 +396,7 @@ export function ArtifactPage(props: ArtifactPageProps) {
 								)}
 							>
 								<Icon name={tab.icon} size={13} />
-								<span className="hidden sm:inline">{tab.label}</span>
+								<span className="sr-only sm:not-sr-only">{tab.label}</span>
 								{tab.id === "comments" && commentCount > 0 ? <span className="tabular-nums text-fr-text-3">{commentCount}</span> : null}
 								{tab.id === "comments" && unread > 0 ? (
 									<span className="size-1.5 rounded-full bg-fr-accent" title={`${unread} new`}>

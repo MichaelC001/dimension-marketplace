@@ -12,8 +12,8 @@ let env: ReactEnv;
 let grid: typeof GridModule;
 const scrolls = new WeakMap<object, number>();
 
-const items: readonly LibraryItem[] = Array.from({ length: ROWS }, (_, index) => ({
-	id: `a${index}`,
+const itemAt = (id: string, index: number): LibraryItem => ({
+	id,
 	path: `/work/${index}.png`,
 	name: `${index}.png`,
 	tags: [],
@@ -28,7 +28,9 @@ const items: readonly LibraryItem[] = Array.from({ length: ROWS }, (_, index) =>
 	presentedAt: 1,
 	hasThumb: false,
 	shares: [],
-}));
+});
+
+const items: readonly LibraryItem[] = Array.from({ length: ROWS }, (_, index) => itemAt(`a${index}`, index));
 
 beforeAll(async () => {
 	env = await installReact();
@@ -54,21 +56,23 @@ afterAll(() => {
 	env.restore();
 });
 
+function gridOf(rows: readonly LibraryItem[], layout: GridModule.LibraryLayout, ranges: RowRange[], selectedIndex: number) {
+	return createElement(grid.LibraryGrid, {
+		items: rows,
+		layout,
+		selectedIndex,
+		label: "Artifacts",
+		footer: null,
+		renderItem: item => createElement("span", null, item.name),
+		onSelect: () => undefined,
+		onOpen: () => undefined,
+		onKey: () => undefined,
+		onRange: mounted => void ranges.push(mounted),
+	});
+}
+
 function render(layout: GridModule.LibraryLayout, ranges: RowRange[], selectedIndex = -1) {
-	return env.mount(
-		createElement(grid.LibraryGrid, {
-			items,
-			layout,
-			selectedIndex,
-			label: "Artifacts",
-			footer: null,
-			renderItem: item => createElement("span", null, item.name),
-			onSelect: () => undefined,
-			onOpen: () => undefined,
-			onKey: () => undefined,
-			onRange: mounted => void ranges.push(mounted),
-		}),
-	);
+	return env.mount(gridOf(items, layout, ranges, selectedIndex));
 }
 
 const options = (container: HTMLElement) => [...container.querySelectorAll('[role="option"]')];
@@ -120,5 +124,36 @@ describe("the library grid with 50 000 rows", () => {
 		expect(positions(container)).toContain(40_001);
 		const listbox = container.querySelector('[role="listbox"]');
 		expect(listbox?.getAttribute("aria-activedescendant")).toBe(`${grid.OPTION_ID_PREFIX}a40000`);
+	});
+
+	test("rows inserted or removed above the selected row shift its index but do not scroll: a view scrolled away from the selection stays where it is", async () => {
+		const view = await env.mount(gridOf(items, "list", [], 100));
+		const scroller = view.container.querySelector('[data-slot="library-grid"]') as HTMLElement;
+		scroller.scrollTop = 0;
+		await env.act(async () => {
+			scroller.dispatchEvent(new window.Event("scroll"));
+		});
+		await env.runFrames();
+		expect(positions(view.container)[0]).toBe(1);
+
+		const above = Array.from({ length: 3 }, (_, index) => itemAt(`new${index}`, index));
+		await view.render(gridOf([...above, ...items], "list", [], 103));
+		expect(scroller.scrollTop).toBe(0);
+		expect(positions(view.container)[0]).toBe(1);
+
+		await view.render(gridOf(items, "list", [], 100));
+		expect(scroller.scrollTop).toBe(0);
+		expect(positions(view.container)[0]).toBe(1);
+	});
+
+	test("moving the selection to another row below the view scrolls to it", async () => {
+		const view = await env.mount(gridOf(items, "list", [], 0));
+		expect(positions(view.container)).not.toContain(101);
+
+		await view.render(gridOf(items, "list", [], 100));
+
+		expect(positions(view.container)).toContain(101);
+		const listbox = view.container.querySelector('[role="listbox"]');
+		expect(listbox?.getAttribute("aria-activedescendant")).toBe(`${grid.OPTION_ID_PREFIX}a100`);
 	});
 });

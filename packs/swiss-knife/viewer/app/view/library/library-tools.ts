@@ -3,6 +3,7 @@ import { createToolCaller } from "@dimension/mcp-app-kit/tools";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { App } from "@modelcontextprotocol/ext-apps";
 import type { CommentRow, DiscardOutcome, LibraryFacets, LibraryItem, LibraryPage, LibraryQuery, ShareSummary, ThumbMime } from "../../../../src/library/types";
+import { type RevisionSpan, spanOf } from "../../../../src/library/revision";
 import type { CheckedRow } from "./query";
 
 export interface ShareHost {
@@ -65,6 +66,8 @@ export interface RevokeOutcome {
 
 export interface LibraryTools {
 	readonly query: (args: LibraryQuery, signal?: AbortSignal) => Promise<LibraryPage>;
+	readonly revision: (signal?: AbortSignal) => Promise<string>;
+	readonly onWrite: (listener: (span: RevisionSpan) => void) => () => void;
 	readonly facets: (scope: { readonly workspace?: string; readonly state?: "live" | "discarded" }, signal?: AbortSignal) => Promise<LibraryFacets>;
 	readonly check: (ids: readonly string[], signal?: AbortSignal) => Promise<readonly ({ readonly id: string } & CheckedRow)[]>;
 	readonly update: (id: string, patch: ArtifactPatchInput) => Promise<LibraryItem>;
@@ -92,20 +95,35 @@ export interface LibraryTools {
 
 export function createLibraryTools(app: Pick<App, "callServerTool" | "sendMessage">): LibraryTools {
 	const tools = createToolCaller(app);
+	const listeners = new Set<(span: RevisionSpan) => void>();
+	const announce = (content: unknown): void => {
+		const span = spanOf(content);
+		if (span === undefined) return;
+		for (const listener of listeners) listener(span);
+	};
 	const options = (signal: AbortSignal | undefined) => (signal === undefined ? undefined : { signal });
 	return {
 		query: (args, signal) => tools.whole<LibraryPage>("library_query", { ...args }, options(signal)),
 		facets: (scope, signal) => tools.whole<LibraryFacets>("library_facets", { ...scope }, options(signal)),
+		revision: signal => tools.call("library_revision", {}, "revision", options(signal)),
 		check: (ids, signal) => tools.call("library_check", { ids }, "items", options(signal)),
-		update: (id, patch) => tools.call("library_update", { id, ...patch }, "item"),
+		update: async (id, patch) => {
+			const answer = await tools.whole<{ readonly item: LibraryItem }>("library_update", { id, ...patch });
+			announce(answer);
+			return answer.item;
+		},
 		stamp: path => tools.call("library_stamp", { path }, "item"),
 		discardDefault: id => tools.call("library_discard_default", { id }, "trash"),
 		discard: (id, trash) => tools.whole<DiscardOutcome>("library_discard", { id, trash }),
 		restore: id => tools.call("library_restore", { id }, "item"),
-		open: id => tools.raw("library_open", { id }),
+		open: async id => {
+			const result = await tools.raw("library_open", { id });
+			announce(result.structuredContent);
+			return result;
+		},
 		thumbsBase: () => tools.call("library_thumbs", {}, "base"),
 		setThumb: async (id, data, mime) => {
-			await tools.whole("library_set_thumb", { id, data, mime });
+			announce(await tools.whole("library_set_thumb", { id, data, mime }));
 		},
 		hosts: () => tools.whole<ShareHosts>("share_hosts", {}),
 		addHost: pairing => tools.call("share_host_add", { ...pairing }, "host"),
@@ -121,7 +139,11 @@ export function createLibraryTools(app: Pick<App, "callServerTool" | "sendMessag
 		comments: (artifactId, signal) => tools.call("share_comments", { artifactId }, "comments", options(signal)),
 		reply: (shareId, body, anchor) => tools.call("share_reply", { shareId, body, ...(anchor === undefined ? {} : { anchor }) }, "comment"),
 		markRead: async ids => {
-			await tools.whole("share_mark_read", { ids });
+			announce(await tools.whole("share_mark_read", { ids }));
+		},
+		onWrite: listener => {
+			listeners.add(listener);
+			return () => void listeners.delete(listener);
 		},
 		askAgent: async text => {
 			const result = await app.sendMessage({ role: "user", content: [{ type: "text", text }] });

@@ -107,6 +107,19 @@ export function registerLibraryTools(server: McpServer, { library, fence, media 
 
 	registerAppTool(
 		server,
+		"library_revision",
+		{
+			title: "Library revision",
+			description: "A marker that changes whenever anything in the library changes, from this process or another. The View reads it on an interval and refreshes when it moves; it is not for the model.",
+			inputSchema: {},
+			annotations: READ_ONLY,
+			_meta: APP_ONLY,
+		},
+		() => answer(() => ({ text: "Revision.", data: { revision: library.revision() } })),
+	);
+
+	registerAppTool(
+		server,
 		"library_check",
 		{
 			title: "Check artifacts on disk",
@@ -135,7 +148,11 @@ export function registerLibraryTools(server: McpServer, { library, fence, media 
 			annotations: WRITES,
 			_meta: APP_ONLY,
 		},
-		({ id: artifactId, ...patch }) => answer(() => ({ text: "Updated.", data: { item: library.update(artifactId, patch) } })),
+		({ id: artifactId, ...patch }) =>
+			answer(() => {
+				const { value: item, span } = library.witnessed(() => library.update(artifactId, patch));
+				return { text: "Updated.", data: { item, revision: span } };
+			}),
 	);
 
 	registerAppTool(
@@ -200,7 +217,7 @@ export function registerLibraryTools(server: McpServer, { library, fence, media 
 		"library_open",
 		{
 			title: "Open an artifact",
-			description: "Open an indexed artifact as a document tab: the same answer as view_file.",
+			description: "Open an indexed artifact as a document tab: view_file's answer, plus the `revision` span of recording the open.",
 			inputSchema: { id },
 			annotations: READ_ONLY,
 			_meta: APP_ONLY,
@@ -209,8 +226,9 @@ export function registerLibraryTools(server: McpServer, { library, fence, media 
 			const item = library.get(artifactId);
 			if (item === undefined || item.state === "discarded") return failure(`no artifact ${artifactId} in the library`);
 			const opened = await openViewedFile(fence, { path: item.path }, extra._meta);
-			if (opened.isError !== true) library.markOpened(item.id);
-			return opened;
+			if (opened.isError === true) return opened;
+			const { span } = library.witnessed(() => library.markOpened(item.id));
+			return { ...opened, structuredContent: { ...opened.structuredContent, revision: span } };
 		},
 	);
 
@@ -239,8 +257,8 @@ export function registerLibraryTools(server: McpServer, { library, fence, media 
 		},
 		({ id: artifactId, data, mime }) =>
 			answer(async () => {
-				await library.setThumb(artifactId, Buffer.from(data, "base64"), mime);
-				return { text: "Saved.", data: { ok: true } };
+				const revision = await library.setThumb(artifactId, Buffer.from(data, "base64"), mime);
+				return { text: "Saved.", data: { ok: true, revision } };
 			}),
 	);
 }

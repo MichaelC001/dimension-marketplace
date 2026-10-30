@@ -1,5 +1,6 @@
 import type { Audience, CommentAnchor } from "@dimension/sdk/artifact-share";
 import type { PresentedKind } from "@dimension/sdk/presentation";
+import type { RevisionSpan } from "./revision";
 
 export type ArtifactId = string;
 export type EpochMs = number;
@@ -164,6 +165,8 @@ export interface Library {
 	readonly home: string;
 	workspaceOf(cwd: string): string;
 	query(query: LibraryQuery): LibraryPage;
+	revision(): string;
+	witnessed<T>(write: () => T): { readonly value: T; readonly span: RevisionSpan };
 	facets(scope: { readonly workspace?: string; readonly state?: "live" | "discarded" }): LibraryFacets;
 	get(id: ArtifactId): LibraryItem | undefined;
 	getByPath(realPath: string): LibraryItem | undefined;
@@ -173,7 +176,7 @@ export interface Library {
 	restore(id: ArtifactId): LibraryItem;
 	check(ids: readonly ArtifactId[]): Promise<readonly Pick<LibraryItem, "id" | "state" | "size" | "mtimeMs">[]>;
 	markOpened(id: ArtifactId): void;
-	setThumb(id: ArtifactId, bytes: Uint8Array, mime: ThumbMime): Promise<void>;
+	setThumb(id: ArtifactId, bytes: Uint8Array, mime: ThumbMime): Promise<RevisionSpan>;
 	thumbPath(id: ArtifactId): string | undefined;
 	isLent(realPath: string): boolean;
 	readonly shares: LibraryShares;

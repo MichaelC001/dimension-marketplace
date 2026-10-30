@@ -18,14 +18,15 @@ folder is the deep reference. The View is `app/view` (built to `app/dist`); the 
 | `open_library { workspace?, query? }` | the host (the dock's Library launcher, `launch.tool` in `plugin.json`); no agent is offered it | The only library tool that carries the View (`_meta.ui.resourceUri`). Answers `structuredContent { mode: "library", workspace?, query? }` and the tab key `library` (`_meta["ai.insodimension/tab"]`), so the View pins its Library tab. |
 | `library_query { q?, kinds?, tags?, workspace?, state?, starred?, shared?, sort?, cursor?, limit? }` | the View only | One keyset page: `{ items: LibraryItem[], next?, total }`. `sort` is `recent` (the default; `discarded_at` for `state: "discarded"`), `name`, `size`, `opened` or `relevance` (best match first; with no searchable text it is `recent`). `q` of three or more characters is a trigram substring match, each whitespace-separated term of three or more must match, shorter terms beside them are ignored; a `q` shorter than three is a name prefix. `tags` (at most 24) keeps the files that carry every one of them: whole-tag equality, case-insensitive for A to Z, decided in SQL by a `json_each` predicate on the row's tag list. A cursor belongs to the sort it came from and is refused for another. `limit` is 1 to 200 (default 50). |
 | `library_facets { workspace?, state? }` | the View only | `{ kinds, workspaces, tags, starred, shared, discarded }` for the filter column. `tags` is `[{ tag, count }]` for the files in scope, most used first (at most 200), one entry per tag whatever its capitals. |
+| `library_revision {}` | the View only | `{ revision }`: one marker, `<total_changes>:<data_version>` of the store's connection, that moves on any write to `library.db`: this process's, or another process's commit (the comment stream, a second window). The View reads it every 3 s while its document is visible and its tab is the one in front, and reloads the list in place when it moves. |
 | `library_check { ids }` | the View only | Stats up to 200 files in batches of 32, marks a gone file `missing` (and a returned one `live`), refreshes size and mtime, and answers `{ items: [{ id, state, size, mtimeMs }] }`. |
-| `library_update { id, title?, note?, tags?, starred?, durationMs? }` | the View only | `{ item }`. `null` clears a title or note. |
+| `library_update { id, title?, note?, tags?, starred?, durationMs? }` | the View only | `{ item, revision }`. `null` clears a title or note. `revision` is `{ before, after }`, the marker read either side of the write itself; every tool that records a write of the View's own (this one, `library_open`, `library_set_thumb`, `share_mark_read`) answers with one. |
 | `library_stamp { path }` | the View only | A person's Add file: `{ item }`. The deny table refuses secrets; a discarded file comes back for a human add. |
 | `library_discard { id, trash }` / `library_restore { id }` | the View only | `{ item, trashed, trashError?, revoked, unrevoked }`: shares revoked on their host (`unrevoked` names any the host would not revoke; they are stopped here anyway), the thumbnail deleted, and with `trash` the file sent to the OS recycle bin (never deleted outright; a failed trash is `trashError`). Restore works for 30 days. |
 | `library_discard_default { id }` | the View only | `{ trash }`: the Discard dialog's box, ticked unless `git ls-files --error-unmatch` finds the file tracked. |
-| `library_open { id }` | the View only | `view_file`'s answer for the indexed path (same `openViewedFile` function) and records the open. A discarded or unknown id is refused. |
+| `library_open { id }` | the View only | `view_file`'s answer for the indexed path (same `openViewedFile` function) with the `revision` span of recording the open. A discarded or unknown id is refused. |
 | `library_thumbs {}` | the View only | `{ base }`: `<base>/<id>` serves the cached thumbnail from the loopback origin. |
-| `library_set_thumb { id, data, mime }` | the View only | The View draws a poster or a PDF's first page once and saves it (at most 150 KiB; the bytes must be the image `mime` names). |
+| `library_set_thumb { id, data, mime }` | the View only | The View draws a poster or a PDF's first page once and saves it (at most 150 KiB; the bytes must be the image `mime` names). Answers `{ ok, revision }`, the span of the one row update after the file is written. |
 
 The capability URL answers `GET` and `HEAD` for one lease. A `Range: bytes=` header with a single range is a 206 (a suffix range counts from the end, an end past the file is clamped); a start past the end, a zero suffix or a malformed range is a 416 with `Content-Range: bytes */size`; a unit other than bytes, a multi-range, or any `Range` on a method other than GET is ignored and the whole file answers 200. Every answer that passes the Host and Origin check carries `Access-Control-Allow-Origin: *`, so the player reads a refusal as a refusal instead of retrying a blocked fetch.
 
@@ -220,9 +221,23 @@ The pane lives in `app/view/library/`:
   cancelled when its row scrolls away (`poster-queue.ts`); a failed one is not retried this session.
 - **Missing files.** The visible rows are checked with `library_check` (batches of 200, throttled to 300 ms, a row
   not again within a minute) and a gone file shows the warning mark.
+- **Staying current.** The spec gives a View no server push, so `use-change-poll.ts` reads `library_revision` every 3 s
+  (a read starts only when the last has settled, a hidden document or a Library tab that is not in front does not read
+  and reads at once when it is shown again, with the marker it held, so a change made meanwhile is caught on that first
+  read; unmount stops it). When the marker moves, the list is marked stale and `use-library-refresh.ts` re-asks for the
+  pages already loaded (up to 200 rows a call, as many calls as pages, so a list scrolled to row 600 is still 600 rows)
+  and swaps them in without the loading bar, and only while the tab is in front; the selection, the scroll position
+  (the grid scrolls to the selected row only when the selection moves to another row, never because a refresh shifted
+  its index), an open artifact page (its shares, comment and unread counts, title and star) and the filter rail's counts
+  follow. A refresh waits for a page in flight and the next page waits for it; a new filter drops it (`query.ts`, the
+  same key as any answer); one that fails keeps the rows on screen and is tried again on the next beat. The open
+  Comments sheet refetches when the item's comment or unread count moves. The View's own writes do not reload the list:
+  each answers with its `revision` span (`src/library/revision.ts`), and the poll takes the span's `after` as the marker
+  it holds only when `before` is the marker it last read and no other connection committed inside the span. A comment
+  ingested, or a commit from another process, before or during the write still moves the marker and still reloads.
 - **Artifact page** (`library/artifact-page.tsx`). Clicking or Enter on a card opens the file on its own page, drawn by
   the same document renderer as a tab. One bar on top: back to the Library, the name (rename in place), star, and View,
-  Comments (count and unread dot), Share and Details. Comments, Share and Details open as sheets under the bar, never a
+  Comments (count and unread dot), Share and Details, each named by its text at every width (visually hidden below `sm`, with a tooltip). Comments, Share and Details open as sheets under the bar, never a
   side panel. Details: "File details" (type, size, the containing folder with the full path on hover and a copy
   button, workspace, who added it, "Made in" for a file an agent presented or stamped (the session's title from `ai.insodimension/session/describe`, or `…` and the id's last eight characters when no title comes back, with Copy and an Open button that asks the host for that session through `ai.insodimension/session/open`; both verbs sit under the `session:open` grant the Viewer artifactory declares and are used only when the host offers them), dates), "Description" with tags (`library_update` on blur or Enter), and Discard…
   or Restore. Share: "Who has access" (one row per live link naming who it lets in, its role, expiry and where it
@@ -294,7 +309,8 @@ everything that runs in the background; `registerShareTools` mounts the app-only
 - **Comments.** One event stream per host (`POST /api/v1/events`, up to 200 shares each, at most 8 streams), with the
   tunnel's own stream for P2P shares, reconnecting with the last comment id per share (read from the library, so it
   survives a restart). Each comment is opened with the key derived from the share's content key and written with
-  `library.comments.upsert`; one that does not open is skipped.
+  `library.comments.upsert`; one that does not open is skipped. An open Library sees the write on its next
+  `library_revision` read (see Staying current above).
 
 The relay's address is `DEFAULT_RELAY_URL` (`src/share/hosts.ts`) unless `hosts.json` sets `relay`. When the relay's
 discovery says `mode: "host"` (Dimension's own server is both), the same address is also offered as the built-in

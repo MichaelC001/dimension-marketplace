@@ -201,9 +201,6 @@ export function registerShareTools(server: McpServer, runtime: ShareRuntime): vo
 		"share_mark_read",
 		{ ...options("Mark comments read"), inputSchema: { ids: z.array(z.string().min(1).max(128)).max(MAX_IDS) } },
 		({ ids }) =>
-			guarded(async () => {
-				service.markRead(ids);
-				return success("Marked read.", {});
-			}),
+			guarded(async () => success("Marked read.", { revision: service.markRead(ids) })),
 	);
 }
