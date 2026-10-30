@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { createLibrary } from "../../src/library";
 import { removeTree, TINY_PNG } from "../../test/fixtures";
 import { TAB_META_KEY, VIEWER_VIEW_URI } from "../src/contract";
 import { createViewerServer } from "../src/server";
@@ -74,6 +75,7 @@ describe("the tools the host and the View see", () => {
 			"library_open",
 			"library_query",
 			"library_restore",
+			"library_revision",
 			"library_set_thumb",
 			"library_stamp",
 			"library_thumbs",
@@ -168,5 +170,36 @@ describe("thumbnails over the loopback origin", () => {
 		const refused = await call("library_set_thumb", { id: added.id, data: Buffer.from("not a png").toString("base64"), mime: "image/png" });
 		expect(refused.isError).toBe(true);
 		expect(textOf(refused)).toContain("not image/png");
+	});
+});
+
+describe("the revision the open View polls", () => {
+	test("it moves after a write through the tools and after a write on another connection, and holds still for reads", async () => {
+		const revision = async (): Promise<string> => String(structured(await call("library_revision")).revision);
+		const note = join(outside, "note.md");
+		const other = join(outside, "other.md");
+		await writeFile(note, "# note");
+		await writeFile(other, "# other");
+		const second = await createLibrary({ home: join(base, ".inso") });
+		try {
+			const start = await revision();
+			expect(await revision()).toBe(start);
+			await call("library_query", {});
+			await call("library_facets", {});
+			expect(await revision()).toBe(start);
+
+			const added = itemOf(await call("library_stamp", { path: note }));
+			const afterStamp = await revision();
+			expect(afterStamp).not.toBe(start);
+
+			await call("library_update", { id: added.id, starred: true });
+			const afterUpdate = await revision();
+			expect(afterUpdate).not.toBe(afterStamp);
+
+			await second.stamp({ path: other, source: "human" });
+			expect(await revision()).not.toBe(afterUpdate);
+		} finally {
+			second.close();
+		}
 	});
 });
