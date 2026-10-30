@@ -12,7 +12,7 @@ Path: `<production>/receipts/publish.json`. The production id is the folder name
 | `master` | package | the final render this package is for; copy from the `render` result and its `-final` receipt |
 | `title` | package | at least 3 scored options; `chosen` is one of them, word for word |
 | `thumbnail.brief` | package | what the image says and shows |
-| `thumbnail.variants`, `chosen`, `abTest` | thumbnail | filled after the stills pass the phone sheet; `abTest` records the person's choice |
+| `thumbnail.variants`, `chosen`, `abTest` | thumbnail | filled after the stills pass the phone sheet; one variant is a complete package; `abTest` is present only when the person chose to run a test |
 | `description` | package | `text` is exactly what gets pasted; `chapters` mirrors its chapter lines |
 | `tags` | package | may be `[]` |
 | `captions` | package | the SRT to upload, or `{ "file": null, "reason": "..." }` |
@@ -49,11 +49,11 @@ Path: `<production>/receipts/publish.json`. The production id is the folder name
 
   "thumbnail": {
     "brief": { "concept": "...", "focalSubject": "the words", "text": "CUT IS DATA", "palette": ["#ffdd33", "#0b0b10"], "emotion": "confident" },
-    "variants": [
+    "variants": [                                  // one variant is a valid package (id "a"); a thumbnail test needs 2 or 3, and 3 is recommended
       { "id": "a", "role": "subject-led", "path": "renders/thumbnails/<production>-a.png", "format": "png", "width": 1280, "height": 720, "bytes": 162196, "sha256": "...", "phoneCheck": true, "composition": "media/motion/thumb-a" }
     ],
     "chosen": "b",                                // the id of the variant to upload as the thumbnail
-    "abTest": { "run": true, "target": "thumbnail", "order": ["b", "a", "c"] }  // target: thumbnail | title | title-and-thumbnail; with a title test add "titles": [chosen title, then 1 or 2 other scored options]
+    "abTest": { "run": true, "target": "thumbnail", "order": ["b", "a", "c"] }  // omit for a plain upload; target: thumbnail | title | title-and-thumbnail; with a title test add "titles": [chosen title, then 1 or 2 other scored options]
   },
 
   "description": {
@@ -103,7 +103,7 @@ Path: `<production>/receipts/publish.json`. The production id is the folder name
 
 ## Closed vocabularies
 
-`pattern` is free text (see [title-and-description.md](title-and-description.md) for the usual ones). `variants[].id` is `a`, `b` or `c`. `alteredContent.assets[].verdict` is `disclose` or `no-disclosure`, and `category` takes one of:
+`pattern` is free text (see [title-and-description.md](title-and-description.md) for the usual ones). `variants[].id` is `a`, `b` or `c`; a package with one thumbnail uses `a`. `alteredContent.assets[].verdict` is `disclose` or `no-disclosure`, and `category` takes one of:
 
 | verdict | categories |
 |---|---|
@@ -114,7 +114,7 @@ Path: `<production>/receipts/publish.json`. The production id is the folder name
 
 ## Stages
 
-`check --stage package` skips the thumbnail variants (the thumbnail skill has not run yet); everything else is enforced. `check` (the default stage, `upload`) refuses a package without 2 or 3 measured variants, and it re-reads every file it names: a thumbnail whose bytes or hash changed since it was measured, a master that no longer matches its render receipt, and a caption file that runs past the end of the film are findings.
+`check --stage package` skips the thumbnail variants (the thumbnail skill has not run yet); everything else is enforced. `check` (the default stage, `upload`) refuses a package with no measured variant, and it re-reads every file it names: a thumbnail whose bytes or hash changed since it was measured, a master that no longer matches its render receipt, and a caption file that runs past the end of the film are findings. The variant count belongs to the A/B test and not to every package: one variant with no `thumbnail.abTest` (or `abTest.run: false`) is clean, with no error and no warning. When `abTest.run` is true and its target is `thumbnail` or `title-and-thumbnail`, the gate asks for 2 or 3 variants (2 draws a warning, since 3 is the recommended number for a test). A `title` test has its own rule on titles and asks nothing of the thumbnails.
 
 ## What the gate does not decide
 

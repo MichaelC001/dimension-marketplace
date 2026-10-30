@@ -1,11 +1,11 @@
 ---
 name: youtube-thumbnail
-description: "Design three 1280x720 YouTube thumbnail variants for a finished film as HyperFrames compositions, render them as stills with the motion pack, check them against YouTube's overlay zones and at phone size, and record them in receipts/publish.json. Use when a title is chosen and someone says make the thumbnail, design the cover, give me thumbnail options, or set up a thumbnail A/B test. Not for the title or description (youtube-package) or the upload (youtube-studio-upload)."
+description: "Design 1280x720 YouTube thumbnails for a finished film as HyperFrames compositions (one thumbnail, or three variants for an A/B test), render them as stills with the motion pack, check them against YouTube's overlay zones and at phone size, and record them in receipts/publish.json. Use when a title is chosen and someone says make the thumbnail, design the cover, give me thumbnail options, or set up a thumbnail A/B test. Not for the title or description (youtube-package) or the upload (youtube-studio-upload)."
 ---
 
 # YouTube thumbnail
 
-Three thumbnails that differ in idea, built as flat HyperFrames compositions, rendered to stills with the motion pack, and recorded with their measurements in `receipts/publish.json`. There is no image tool in this job: a thumbnail is the same kind of graphic as any other in the film, so it goes through `motion_new`, `motion_write_file`, `motion_lint` and `motion_frames`.
+One thumbnail, or three that differ in idea for an A/B test, built as flat HyperFrames compositions, rendered to stills with the motion pack, and recorded with their measurements in `receipts/publish.json`. There is no image tool in this job: a thumbnail is the same kind of graphic as any other in the film, so it goes through `motion_new`, `motion_write_file`, `motion_lint` and `motion_frames`.
 
 `<SKILL_DIR>` is the folder this SKILL.md is in. Scripts run with `node` (22 or newer) or `bun` and need `ffmpeg` on the PATH (or `FFMPEG=<path>`). The compositions and the template are in [references/composition.md](references/composition.md); read it before the first write.
 
@@ -24,16 +24,16 @@ Three thumbnails that differ in idea, built as flat HyperFrames compositions, re
 ## Order of work
 
 1. **Brief.** One concept, the focal subject, the words (up to 4, not just the title again), two or three colours with their hex values, the feeling you want. Write it into `thumbnail.brief`: `concept`, `focalSubject`, `text`, `palette`, `emotion`.
-2. **Compose three.** `motion_new` each as `thumb-a`, `thumb-b`, `thumb-c`: width 1280, height 720, fps 30, durationSeconds 1. Replace `index.html` with `motion_write_file` using the flat-layer template. The ideas to vary: subject-led (a), typographic (b), concept or contrast (c). Rules in [references/composition.md](references/composition.md).
+2. **Compose.** One thumbnail is a normal upload and the right answer when the person asked for exactly one: make `thumb-a` only and go on with that one. Make three, `thumb-a`, `thumb-b`, `thumb-c`, only when the person wants an A/B test; YouTube's test takes up to three and three is the recommended number for a test. `motion_new` each: width 1280, height 720, fps 30, durationSeconds 1. Replace `index.html` with `motion_write_file` using the flat-layer template. For three, the ideas to vary: subject-led (a), typographic (b), concept or contrast (c). Rules in [references/composition.md](references/composition.md).
 3. **Lint.** `motion_lint` on each: zero errors and the browser check must have run. Fix and repeat.
 4. **Look.** `motion_frames` with `atSeconds: [0.5]`. Read the image. Does it say one thing?
 5. **Zones.** For each: `node <SKILL_DIR>/scripts/thumbnail-pack.mjs zones <out.png> <still>`, then look at the copy. Any word or face under a shaded box is a fix.
-6. **Phone.** `node <SKILL_DIR>/scripts/thumbnail-pack.mjs phone <sheet.png> <a> <b> <c>` (a new file name each time), then look. At 168 px wide you must be able to read each word and name each subject. Only then is `phoneCheck` true.
-7. **Measure.** `node <SKILL_DIR>/scripts/thumbnail-pack.mjs inspect <a> <b> <c>` gives size, bytes, sha256 and whether there is an alpha channel; a problem is listed in `problems`. Over 2 MB: `encode <in> <out.jpg>`.
-8. **Record.** Add `thumbnail.variants[]` (`id`, `role`, `path` under `renders/`, `format`, `width`, `height`, `bytes`, `sha256`, `phoneCheck`, `composition`), `thumbnail.chosen`, and `thumbnail.abTest` when the person wants a test. Write the file, then `node <SKILL_DIR>/../youtube-package/scripts/publish-check.mjs check <production-dir>` with no `--stage`; it re-reads the files and refuses a variant changed since it was measured.
-9. **Pick with the person.** Show the three at phone size with the title beside them and say which you would ship and why in one sentence. They choose; `chosen` is theirs.
+6. **Phone.** `node <SKILL_DIR>/scripts/thumbnail-pack.mjs phone <sheet.png> <a> [<b> <c>]` (a new file name each time), then look. At 168 px wide you must be able to read each word and name each subject. Only then is `phoneCheck` true.
+7. **Measure.** `node <SKILL_DIR>/scripts/thumbnail-pack.mjs inspect <a> [<b> <c>]` gives size, bytes, sha256 and whether there is an alpha channel; a problem is listed in `problems`. Over 2 MB: `encode <in> <out.jpg>`.
+8. **Record.** Add `thumbnail.variants[]` (`id`, `role`, `path` under `renders/`, `format`, `width`, `height`, `bytes`, `sha256`, `phoneCheck`, `composition`), `thumbnail.chosen`, and `thumbnail.abTest` only when the person wants a test. One variant with no `abTest` is a complete package. The gate holds the variant count to the test: with `abTest.run` and a target of `thumbnail` or `title-and-thumbnail` it needs 2 or 3 variants (3 is recommended and 2 draws a warning); with no test it asks for the one you made and nothing more. Write the file, then `node <SKILL_DIR>/../youtube-package/scripts/publish-check.mjs check <production-dir>` with no `--stage`; it re-reads the files and refuses a variant changed since it was measured.
+9. **Pick with the person.** With one, show it at phone size with the title beside it and say in one sentence why it works; with three, show them at phone size with the title beside them and say which you would ship and why. They choose; `chosen` is theirs.
 
-## Variants at a glance
+## Variants at a glance (for a three-variant test; a single thumbnail is `a`)
 
 | | Idea | Words |
 |---|---|---|
@@ -55,4 +55,4 @@ Bottom-right x 930 to 1280, y 520 to 720 (the length badge): no word, no face. T
 
 ## What you leave behind
 
-Three stills under `renders/`, the compositions under `media/motion/thumb-*`, the variants and brief in `receipts/publish.json`, and an answer that shows the phone sheet and names the one you recommend.
+One still, or three for a test, under `renders/`, the compositions under `media/motion/thumb-*`, the variants and brief in `receipts/publish.json`, and an answer that shows the phone sheet and, with three, names the one you recommend.
