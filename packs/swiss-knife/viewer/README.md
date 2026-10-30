@@ -18,6 +18,7 @@ folder is the deep reference. The View is `app/view` (built to `app/dist`); the 
 | `open_library { workspace?, query? }` | the host (the dock's Library launcher, `launch.tool` in `plugin.json`); no agent is offered it | The only library tool that carries the View (`_meta.ui.resourceUri`). Answers `structuredContent { mode: "library", workspace?, query? }` and the tab key `library` (`_meta["ai.insodimension/tab"]`), so the View pins its Library tab. |
 | `library_query { q?, kinds?, tags?, workspace?, state?, starred?, shared?, sort?, cursor?, limit? }` | the View only | One keyset page: `{ items: LibraryItem[], next?, total }`. `sort` is `recent` (the default; `discarded_at` for `state: "discarded"`), `name`, `size`, `opened` or `relevance` (best match first; with no searchable text it is `recent`). `q` of three or more characters is a trigram substring match, each whitespace-separated term of three or more must match, shorter terms beside them are ignored; a `q` shorter than three is a name prefix. `tags` (at most 24) keeps the files that carry every one of them: whole-tag equality, case-insensitive for A to Z, decided in SQL by a `json_each` predicate on the row's tag list. A cursor belongs to the sort it came from and is refused for another. `limit` is 1 to 200 (default 50). |
 | `library_facets { workspace?, state? }` | the View only | `{ kinds, workspaces, tags, starred, shared, discarded }` for the filter column. `tags` is `[{ tag, count }]` for the files in scope, most used first (at most 200), one entry per tag whatever its capitals. |
+| `library_revision {}` | the View only | `{ revision }`: one marker, `<total_changes>:<data_version>` of the store's connection, that moves on any write to `library.db`: this process's, or another process's commit (the comment stream, a second window). The View reads it every 3 s while its document is visible and reloads the list in place when it moves. |
 | `library_check { ids }` | the View only | Stats up to 200 files in batches of 32, marks a gone file `missing` (and a returned one `live`), refreshes size and mtime, and answers `{ items: [{ id, state, size, mtimeMs }] }`. |
 | `library_update { id, title?, note?, tags?, starred?, durationMs? }` | the View only | `{ item }`. `null` clears a title or note. |
 | `library_stamp { path }` | the View only | A person's Add file: `{ item }`. The deny table refuses secrets; a discarded file comes back for a human add. |
@@ -220,9 +221,17 @@ The pane lives in `app/view/library/`:
   cancelled when its row scrolls away (`poster-queue.ts`); a failed one is not retried this session.
 - **Missing files.** The visible rows are checked with `library_check` (batches of 200, throttled to 300 ms, a row
   not again within a minute) and a gone file shows the warning mark.
+- **Staying current.** The spec gives a View no server push, so `use-change-poll.ts` reads `library_revision` every 3 s
+  (a read starts only when the last has settled, a hidden document does not read, and unmount stops it). When the
+  marker moves, the list is marked stale and `use-library-refresh.ts` re-asks for the pages already loaded (up to 200
+  rows a call, as many calls as pages, so a list scrolled to row 600 is still 600 rows) and swaps them in without
+  the loading bar; the selection, the scroll position, an open artifact page (its shares, comment and unread counts,
+  title and star) and the filter rail's counts follow. A refresh waits for a page in flight and the next page waits
+  for it; a new filter drops it (`query.ts`, the same key as any answer); one that fails keeps the rows on screen and
+  is tried again on the next beat. The open Comments sheet refetches when the item's comment or unread count moves.
 - **Artifact page** (`library/artifact-page.tsx`). Clicking or Enter on a card opens the file on its own page, drawn by
   the same document renderer as a tab. One bar on top: back to the Library, the name (rename in place), star, and View,
-  Comments (count and unread dot), Share and Details. Comments, Share and Details open as sheets under the bar, never a
+  Comments (count and unread dot), Share and Details, each named by its text at every width (visually hidden below `sm`, with a tooltip). Comments, Share and Details open as sheets under the bar, never a
   side panel. Details: "File details" (type, size, the containing folder with the full path on hover and a copy
   button, workspace, who added it, "Made in" for a file an agent presented or stamped (the session's title from `ai.insodimension/session/describe`, or `…` and the id's last eight characters when no title comes back, with Copy and an Open button that asks the host for that session through `ai.insodimension/session/open`; both verbs sit under the `session:open` grant the Viewer artifactory declares and are used only when the host offers them), dates), "Description" with tags (`library_update` on blur or Enter), and Discard…
   or Restore. Share: "Who has access" (one row per live link naming who it lets in, its role, expiry and where it
@@ -294,7 +303,8 @@ everything that runs in the background; `registerShareTools` mounts the app-only
 - **Comments.** One event stream per host (`POST /api/v1/events`, up to 200 shares each, at most 8 streams), with the
   tunnel's own stream for P2P shares, reconnecting with the last comment id per share (read from the library, so it
   survives a restart). Each comment is opened with the key derived from the share's content key and written with
-  `library.comments.upsert`; one that does not open is skipped.
+  `library.comments.upsert`; one that does not open is skipped. An open Library sees the write on its next
+  `library_revision` read (see Staying current above).
 
 The relay's address is `DEFAULT_RELAY_URL` (`src/share/hosts.ts`) unless `hosts.json` sets `relay`. When the relay's
 discovery says `mode: "host"` (Dimension's own server is both), the same address is also offered as the built-in
