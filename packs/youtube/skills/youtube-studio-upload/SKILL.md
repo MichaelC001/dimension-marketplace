@@ -9,7 +9,7 @@ The YouTube Data API connector here has no upload (a resumable media upload is a
 
 Cell code and the helpers are in [references/studio-cells.md](references/studio-cells.md); Studio's labels and where each came from are in [references/studio-ui.md](references/studio-ui.md). `<SKILL_DIR>` is the folder this SKILL.md is in.
 
-**What has and has not been proven.** The mechanics (finding elements across shadow roots, attaching a file by absolute path, replacing text and reading it back, clicking by accessible name) were run against a stand-in page built like Studio. This skill has **not** been run against a signed-in Studio. Treat every label as a hint, look before you act, and read back after.
+**What has and has not been proven.** The whole run was done once against a signed-in Studio on 31 October 2026: a film uploaded Unlisted, every field set and read back, subtitles uploaded with timing, and the oEmbed check. A custom thumbnail has not been seen to take: that channel needed phone verification first. Studio's labels change, so treat every label as a hint, look before you act, and read back after.
 
 ## Before you touch the browser
 
@@ -27,12 +27,12 @@ Cell code and the helpers are in [references/studio-cells.md](references/studio-
 
 ## Run it
 
-Follow [references/studio-cells.md](references/studio-cells.md): open Studio, define the helpers, Create, Upload videos, attach the master, then for each field set it and read it back into `readback`. The order Studio itself follows, from YouTube's help: Details (title, description, thumbnail, playlist, audience, age restriction; under Show more: paid promotion, altered content, tags, language, licence, category, comments), Video elements (subtitles, end screen, cards), Checks, Visibility. The video is saved as private if the window closes before Visibility is chosen.
+Follow [references/studio-cells.md](references/studio-cells.md): open Studio, define the helpers, Create, Upload videos, attach the master, then for each field set it and read it back into `readback`. The order Studio itself follows, from YouTube's help: Details (title, description, thumbnail, playlist, audience, age restriction; under Show more: paid promotion, altered content (shown as AI use), tags, language, licence, category, comments), Video elements (subtitles, end screen, cards), Checks, Visibility. The video is saved as private if the window closes before Visibility is chosen.
 
 What each setting comes from in `publish.json`: `title.chosen`, `description.text`, `thumbnail.chosen`, `settings.madeForKids` (false), `settings.ageRestricted`, `settings.paidPromotion`, `settings.alteredContent.disclose`, `tags`, `settings.language`, `settings.category`, `settings.license`, `settings.allowEmbedding`, `settings.notifySubscribers`, `settings.visibility`.
 
 - **Playlist.** If `settings.playlist` is set and the YouTube connector is connected, use it after the upload: `youtube_list_playlists` to find the exact title, confirm, then `youtube_playlist_add`. It is steadier than Studio's menu. Not connected: do it in Studio and read it back.
-- **Captions.** After the video exists, Studio's Subtitles page takes the SRT (`captions.file`) as an upload with timing. This part is the least certain of the whole run: do it, then read the language row's status; if it does not take, say so and leave the file path for the person.
+- **Captions.** On the Video elements page, the Subtitles row takes the SRT (`captions.file`) as an upload with timing ([studio-cells.md](references/studio-cells.md) §7). Check the first cues' times in the editor against the SRT, then read the language row on the Subtitles page after the upload. If it does not take, say so and leave the file path for the person.
 - **A/B test.** Only if `thumbnail.abTest.run`. Studio offers it on desktop for channels with advanced features and not for private videos; if the control is missing, say so and keep the chosen thumbnail.
 - **End screen.** Set it in the editor only if the person asked; it needs a film of 25 s or more.
 - **Scheduled.** The date and time pickers are the least stable part of Studio. Set everything else, stop at the Schedule choice, `browser_view`, and ask the person to set the time.
@@ -40,15 +40,17 @@ What each setting comes from in `publish.json`: `title.chosen`, `description.tex
 
 ## Prove it
 
-1. The video id comes from the Visibility page or the "Video published" dialog, 11 characters. Without one you have not uploaded anything.
-2. Open the edit page for that id and read back title, description, thumbnail, audience, visibility and the altered-content answer. Each goes into `readback` as `{ field, expected, actual, ok }`.
+1. The video id comes from the "Video link" on the Visibility page or in the "Video published" dialog, 11 characters. Pages link other videos too, so take it from that link's text. Without one you have not uploaded anything.
+2. Open the edit page for that id and read back every field you set: title, description, thumbnail, audience, visibility, age restriction, paid promotion, the altered-content answer, tags, language, licence, embedding, notify, category, and the subtitles row. Each goes into `readback` as `{ field, expected, actual, ok }`.
 3. Cross-check from outside Studio: for a public or unlisted video, `browser_read` of `https://www.youtube.com/oembed?url=https://youtu.be/<id>&format=json` returns its title (a private video answers 4xx). With the connector connected, `youtube_get_video` reads title, description and tags of your own video, private included.
 4. Write `upload` into `receipts/publish.json`: `videoId`, `url` (`https://youtu.be/<id>`), `visibility`, `uploadedAt`, `profile` (the label the person knows, never a password or token), `channelId` when known, `readback`, and `oembed` when you have it. Then `check` again: it refuses a bad id or url, a visibility that is not one of the four, an empty readback, and any row with `ok: false`.
 5. Say the link, the visibility, what was read back and what was not.
 
 ## Stop and ask
 
-Stop, say what you saw, and ask when: Studio shows a sign-in or verification step; there is more than one channel and the person has not named one; the page shows an upload or thumbnail limit, or says the account is not verified for custom thumbnails; a field will not read back after one retry; a dialog you did not expect appears; Checks reports a claim; the person's `visibility` was `public` and they have not said yes in this conversation.
+Stop, say what you saw, and ask when: Studio shows a sign-in or verification step; there is more than one channel and the person has not named one; the page shows an upload limit; a field will not read back after one retry; a dialog you did not expect appears; Checks reports a claim; the person's `visibility` was `public` and they have not said yes in this conversation.
+
+A thumbnail limit, or "verify your phone number" for custom thumbnails, stops the thumbnail only: press Cancel, finish the rest at the visibility they approved, record the thumbnail row as `ok: false` with what the page showed, and tell them. Verifying the phone is theirs; once it is done, the thumbnail goes on from the edit page and its row is read back again.
 
 ## Without `browser_run`
 
