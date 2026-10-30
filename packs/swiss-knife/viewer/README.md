@@ -175,13 +175,14 @@ Up to 24 notes. The request lists them in time order, and for video carries up t
   shares: a decode cannot be cancelled, so three panes opening three recordings would otherwise hold three at once. It
   starts only for the tab on screen once the file is ready and its length is known, and the work after the decode runs
   in slices of about 6 ms that give the thread back.
-* **Video is a filmstrip you can draw on.** Under the picture the lane shows a time ruler and up to 16 frame
-  thumbnails spaced in proportion to time (about one per 96 px of width, fewer when narrow), the playhead through them
+* **Video is a filmstrip you can draw on.** Under the picture the lane shows a time ruler and up to 48 frame
+  thumbnails spaced in proportion to time (one per frame drawn 54 px tall in the video's own shape: about one per 96 px
+  for widescreen, one per 30 px for a portrait recording, fewer when narrow), each shown whole, the playhead through them
   and the notes on top (a pin for a moment, a rounded square for a drawing, a bracket for a stretch); a click seeks and a drag selects a
   stretch. The thumbnails are taken lazily once the pane is ready and on screen, one after another through a silent second
   element (the player never moves), abortable, small (long edge 160 px, JPEG 0.7), each fading in as it arrives;
   a frame that cannot be taken stays a neutral placeholder and never fails the pane. They are cached per file (4 files,
-  48 pictures each), so a theme change does not take them again.
+  144 pictures each), so a theme change does not take them again.
 * **Drawing on a frame.** The picture is an image, so the toolbar's Pin, Box, Circle, Arrow and Draw (keys `1`-`5`)
   work on it once one is picked (none starts in hand, so a click on the picture still plays and pauses it). The first
   press on the picture pauses the film, because a box on a frame that has gone is a box on the wrong picture. A drawing
@@ -351,7 +352,7 @@ deny-by-default for everything a human did not click.
 | Any other document | 128 MiB (text: the first 1 MiB) | `DOCUMENT_LIMIT`, `TEXT_LIMIT` (`document-bytes.ts`) |
 | An HTML page that starts with Pick in hand | 2 MiB; larger starts with Pick down | `PICK_FRAME_LIMIT` (`document-bytes.ts`) |
 | A waveform | WAV or strict MP3 only; file 32 MiB, decoded 96 MiB at 22.05 kHz, 8 channels, MP3 545 s; one decode at a time; everything else a flat track; a file is read whole only when its first bytes are a WAV, an ID3 tag or an MPEG frame | `WAVEFORM_*`, `loadPeaks` (the kit: `media/waveform.ts`, `media/peaks.ts`; the pane's `media-waveform.ts` reads the tab's bytes) |
-| A video filmstrip | 16 thumbnails, 160 px long edge; 4 files cached | `MAX_FILM_SLOTS`, `FilmstripCache` (the kit: `media/filmstrip.ts`) |
+| A video filmstrip | 48 thumbnails, 160 px long edge; 4 files cached | `MAX_FILM_SLOTS`, `FilmstripCache` (the kit: `media/filmstrip.ts`) |
 | Notes on one file | 24 | `MAX_MARKS`, `MAX_COMMENTS`, `MAX_ELEMENT_PICKS`, `MAX_TIMELINE_MARKS` |
 | Pictures in one request | 4, 2 MiB each, 4 MiB together | the host's image caps, held by the kit |
 | A share upload | 4 chunks in flight, 1 MiB each; a chunk is tried 5 times (0.4 s base, 15 s cap, jittered) | `UPLOAD_CONCURRENCY` (`upload.ts`), `DEFAULT_RETRY` (`host-api.ts`) |
