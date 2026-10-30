@@ -1,7 +1,7 @@
 {
 	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
 	"name": "slack",
-	"version": "0.3.0",
+	"version": "0.3.1",
 	"description": "Let your agent use Slack two ways: as a bot app you add to channels, or as you through your own account. Connect one or both.",
 	"author": {
 		"name": "Dimension"
@@ -213,7 +213,7 @@
 								{
 									"id": "send",
 									"label": "Read and send",
-									"detail": "Everything above, plus sending and scheduling messages and adding reactions, as you. Every send asks you first.",
+									"detail": "Everything above, plus sending and scheduling messages and adding reactions, as you. In Ask and Write mode every send asks you first (Always allow on the card stops it asking for the rest of that session); in Full access nothing asks.",
 									"scopes": [
 										"channels:history",
 										"channels:read",
@@ -399,7 +399,7 @@
 				},
 				{
 					"name": "slack_post_message",
-					"description": "Post a message to a Slack channel. DESTRUCTIVE — confirm the channel and text with the user first. Returns the posted ts + channel."
+					"description": "Post a message to a Slack channel. Sends a real message: post only what was asked for. Returns the posted ts + channel."
 				},
 				{
 					"name": "slack_read_thread",
@@ -407,7 +407,7 @@
 				},
 				{
 					"name": "slack_reply_thread",
-					"description": "Reply inside a Slack thread. DESTRUCTIVE — confirm the channel, thread, and text with the user first. Returns the reply ts + channel."
+					"description": "Reply inside a Slack thread. Sends a real message: reply only with what was asked for. Returns the reply ts + channel."
 				},
 				{
 					"name": "slack_add_reaction",
@@ -415,15 +415,15 @@
 				},
 				{
 					"name": "slack_edit_message",
-					"description": "Edit a Slack message the bot posted (chat.update). DESTRUCTIVE — confirm the channel, ts, and new text with the user first."
+					"description": "Edit a Slack message the bot posted (chat.update). Replaces the visible text: edit only what was asked for."
 				},
 				{
 					"name": "slack_delete_message",
-					"description": "Delete a Slack message (chat.delete). IRREVERSIBLE — confirm the exact channel and message ts with the user; it cannot be undone."
+					"description": "Delete a Slack message (chat.delete). It cannot be undone: delete only the exact message that was asked for."
 				},
 				{
 					"name": "slack_upload_file",
-					"description": "Upload a file from the session's folder to a Slack channel as the bot, optionally with a message and in a thread. DESTRUCTIVE — confirm the channel, file and message with the user first. Needs the files:write bot scope."
+					"description": "Upload a file from the session's folder to a Slack channel as the bot, optionally with a message and in a thread. Shares a real file: upload only what was asked for. Needs the files:write bot scope."
 				},
 				{
 					"name": "slack_list_users",
@@ -439,7 +439,7 @@
 				},
 				{
 					"name": "slack_act",
-					"description": "Run one Slack tool that changes Slack as you: send, schedule, react, create. DESTRUCTIVE: you are asked to approve every call."
+					"description": "Run one Slack tool that changes Slack as you: send, schedule, react, create. DESTRUCTIVE: in Ask and Write mode you are asked to approve each call (Always allow on the card waives that for the rest of the session); in Full access nothing asks."
 				}
 			]
 		}

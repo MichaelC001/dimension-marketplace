@@ -1,8 +1,11 @@
 // Cross-pack guard for the "asks in every mode" gate: a representative publish,
-// send or irreversible-delete tool from each connector pack must resolve to a
-// prompt in yolo mode, and the low-stakes writes that were deliberately left
-// ungated must keep auto-approving there. One or two tools per pack, not an
-// inventory — each pack's own tests own its full surface.
+// send or irreversible-delete tool from each connector pack that keeps that gate
+// must resolve to a prompt in yolo mode, and the low-stakes writes that were
+// deliberately left ungated must keep auto-approving there. One or two tools per
+// pack, not an inventory — each pack's own tests own its full surface. Slack is
+// not in the first list on purpose: its sends are tier exec (ask in Ask and Write
+// mode, run in Full access) so an unattended autonomy never waits on a card, and
+// the Slack pack's own tests pin all three modes.
 //
 // Every pack is loaded through its default-exported factory and decided by the
 // engine's own `resolveApproval` (the packs' `@oh-my-pi/pi-coding-agent` peer).
@@ -78,7 +81,6 @@ test.each([
 	"x_delete",
 	"discord_send_message",
 	"discord_delete_message",
-	"slack_post_message",
 	"teams_send_channel_message",
 	"telegram_send_message",
 	"telegram_delete_message",
