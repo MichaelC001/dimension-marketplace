@@ -5,15 +5,17 @@ import { useEffect, useRef, useState } from "react";
 import type { ShareSummary } from "../../../../src/library/types";
 import { copyText } from "../copy";
 import { errorText, type LibraryTools } from "./library-tools";
-import { accessLabel, shareDetail, shareStatus, shortDate } from "./share-options";
+import { accessLabel, fileChanged, shareDetail, shareStatus, shortDate } from "./share-options";
 
 export interface AccessListProps {
 	readonly tools: LibraryTools;
 	readonly shares: readonly ShareSummary[];
 	readonly now: number;
+	readonly mtimeMs: number;
 	readonly canShare: boolean;
 	readonly onShare: () => void;
 	readonly onManage: (shareId: string) => void;
+	readonly onShares: (shares: readonly ShareSummary[]) => void;
 }
 
 function Badge({ icon, muted }: { readonly icon: IconName; readonly muted?: boolean }) {
@@ -24,10 +26,11 @@ function Badge({ icon, muted }: { readonly icon: IconName; readonly muted?: bool
 	);
 }
 
-export function AccessList({ tools, shares, now, canShare, onShare, onManage }: AccessListProps) {
+export function AccessList({ tools, shares, now, mtimeMs, canShare, onShare, onManage, onShares }: AccessListProps) {
 	const links = useRef(new Map<string, string>());
 	const [copied, setCopied] = useState<string | null>(null);
 	const [busy, setBusy] = useState<string | null>(null);
+	const [updating, setUpdating] = useState<string | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const timer = useRef(0);
 	useEffect(() => () => window.clearTimeout(timer.current), []);
@@ -59,6 +62,19 @@ export function AccessList({ tools, shares, now, canShare, onShare, onManage }: 
 		timer.current = window.setTimeout(() => setCopied(null), 1800);
 	};
 
+	const updateLink = async (shareId: string): Promise<void> => {
+		setError(null);
+		setUpdating(shareId);
+		try {
+			const next = await tools.newVersion(shareId);
+			onShares(shares.map(each => (each.id === next.id ? next : each)));
+		} catch (cause) {
+			setError(errorText(cause));
+		} finally {
+			setUpdating(null);
+		}
+	};
+
 	return (
 		<div className="flex flex-col gap-3">
 			{live.length === 0 ? (
@@ -75,7 +91,9 @@ export function AccessList({ tools, shares, now, canShare, onShare, onManage }: 
 					) : null}
 				</div>
 			) : (
-				live.map(share => (
+				live.map(share => {
+					const outdated = fileChanged(share, mtimeMs);
+					return (
 					<div key={share.id} data-slot="library-share-row" className="flex items-start gap-2.5">
 						<Badge icon={share.audience.kind === "link" ? "globe" : "user"} />
 						<div className="min-w-0 flex-1">
@@ -83,18 +101,30 @@ export function AccessList({ tools, shares, now, canShare, onShare, onManage }: 
 								{accessLabel(share.audience)}
 							</div>
 							<div className="text-fr-xs leading-snug text-fr-text-3">{shareDetail(share, now)}</div>
+							{outdated ? (
+								<div data-slot="library-share-outdated" className="mt-1 flex items-center gap-1.5 text-fr-xs leading-snug text-fr-warn">
+									<Icon name="refresh" size={12} className="shrink-0" />
+									The file changed since you shared it.
+								</div>
+							) : null}
 							<div className="-ml-1.5 mt-1 flex items-center gap-1">
 								<Button type="button" size="sm" variant="ghost" className="h-6 px-1.5 text-fr-xs" loading={busy === share.id} onClick={() => void copyLink(share.id)}>
 									<Icon name={copied === share.id ? "check" : "link"} size={12} />
 									{copied === share.id ? "Link copied" : "Copy link"}
 								</Button>
+								{outdated ? (
+									<Button type="button" size="sm" variant="ghost" className="h-6 px-1.5 text-fr-xs" loading={updating === share.id} onClick={() => void updateLink(share.id)}>
+										Update link
+									</Button>
+								) : null}
 								<Button type="button" size="sm" variant="ghost" className="h-6 px-1.5 text-fr-xs" onClick={() => onManage(share.id)}>
 									Manage access
 								</Button>
 							</div>
 						</div>
 					</div>
-				))
+					);
+				})
 			)}
 			{error === null ? null : (
 				<p role="alert" className="text-fr-xs text-fr-del">

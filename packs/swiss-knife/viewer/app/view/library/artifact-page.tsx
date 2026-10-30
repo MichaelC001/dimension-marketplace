@@ -265,11 +265,11 @@ function DetailsView({ app, item, onPatch, onDiscard, onRestore }: Pick<Artifact
 	);
 }
 
-function ShareView({ tools, item, now, onShare, onManage }: Pick<ArtifactPageProps, "tools" | "item" | "now" | "onShare" | "onManage">) {
+function ShareView({ tools, item, now, onShare, onManage, onShares }: Pick<ArtifactPageProps, "tools" | "item" | "now" | "onShare" | "onManage" | "onShares">) {
 	const canShare = item.state === "live";
 	return (
 		<div className="flex flex-col gap-4">
-			<AccessList tools={tools} shares={item.shares} now={now} canShare={canShare} onShare={onShare} onManage={onManage} />
+			<AccessList tools={tools} shares={item.shares} now={now} mtimeMs={item.mtimeMs} canShare={canShare} onShare={onShare} onManage={onManage} onShares={onShares} />
 			{canShare ? (
 				<div className="flex border-t border-fr-border-soft pt-3">
 					<Button type="button" size="sm" onClick={onShare}>
@@ -443,7 +443,7 @@ export function ArtifactPage(props: ArtifactPageProps) {
 						</div>
 						<div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4">
 							{view === "comments" ? <CommentsView data={data} shares={item.shares} now={now} openId={openId} onPick={pick} /> : null}
-							{view === "share" ? <ShareView tools={tools} item={item} now={now} onShare={props.onShare} onManage={props.onManage} /> : null}
+							{view === "share" ? <ShareView tools={tools} item={item} now={now} onShare={props.onShare} onManage={props.onManage} onShares={onShares} /> : null}
 							{view === "details" ? <DetailsView app={app} item={item} onPatch={onPatch} onDiscard={props.onDiscard} onRestore={onRestore} /> : null}
 						</div>
 					</div>

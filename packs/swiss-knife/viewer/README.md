@@ -242,7 +242,8 @@ The pane lives in `app/view/library/`:
   side panel. Details: "File details" (type, size, the containing folder with the full path on hover and a copy
   button, workspace, who added it, "Made in" for a file an agent presented or stamped (the session's title from `ai.insodimension/session/describe`, or `…` and the id's last eight characters when no title comes back, with Copy and an Open button that asks the host for that session through `ai.insodimension/session/open`; both verbs sit under the `session:open` grant the Viewer artifactory declares and are used only when the host offers them), dates), "Description" with tags (`library_update` on blur or Enter), and Discard…
   or Restore. Share: "Who has access" (one row per live link naming who it lets in, its role, expiry and where it
-  lives, with Copy link and Manage access; never the URL) and Share…. Comments: every thread in place order,
+  lives, with Copy link and Manage access; never the URL; a hosted link whose file changed since its version also says
+  "The file changed since you shared it." and offers Update link, `share_new_version`, in the row) and Share…. Comments: every thread in place order,
   each row wearing its author's face and its number as on the file; picking one closes the sheet and opens it where it sits.
 - **Shared comments on the file.** People's comments are drawn on the artifact by the annotation kit's comment layer:
   marks wearing the commenter's face (initials on a colour their name picks) on the picture or page, on the timeline lane at their time, drawings on the frame at their time and
