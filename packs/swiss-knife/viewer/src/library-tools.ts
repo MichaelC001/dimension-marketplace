@@ -107,6 +107,19 @@ export function registerLibraryTools(server: McpServer, { library, fence, media 
 
 	registerAppTool(
 		server,
+		"library_revision",
+		{
+			title: "Library revision",
+			description: "A marker that changes whenever anything in the library changes, from this process or another. The View reads it on an interval and refreshes when it moves; it is not for the model.",
+			inputSchema: {},
+			annotations: READ_ONLY,
+			_meta: APP_ONLY,
+		},
+		() => answer(() => ({ text: "Revision.", data: { revision: library.revision() } })),
+	);
+
+	registerAppTool(
+		server,
 		"library_check",
 		{
 			title: "Check artifacts on disk",

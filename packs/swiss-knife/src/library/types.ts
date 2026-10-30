@@ -164,6 +164,7 @@ export interface Library {
 	readonly home: string;
 	workspaceOf(cwd: string): string;
 	query(query: LibraryQuery): LibraryPage;
+	revision(): string;
 	facets(scope: { readonly workspace?: string; readonly state?: "live" | "discarded" }): LibraryFacets;
 	get(id: ArtifactId): LibraryItem | undefined;
 	getByPath(realPath: string): LibraryItem | undefined;

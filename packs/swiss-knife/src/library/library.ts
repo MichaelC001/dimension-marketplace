@@ -253,10 +253,14 @@ export async function createLibrary(options: LibraryOptions): Promise<Library> {
 	const memo = new Map<string, unknown>();
 	let memoVersion = "";
 
-	function remembered<T>(key: string, compute: () => T): T {
+	function revision(): string {
 		const own = sql("SELECT total_changes() AS n").get<{ readonly n: number }>()?.n ?? 0;
 		const other = sql("PRAGMA data_version").get<{ readonly data_version: number }>()?.data_version ?? 0;
-		const version = `${own}:${other}`;
+		return `${own}:${other}`;
+	}
+
+	function remembered<T>(key: string, compute: () => T): T {
+		const version = revision();
 		if (version !== memoVersion) {
 			memo.clear();
 			memoVersion = version;
@@ -626,6 +630,7 @@ export async function createLibrary(options: LibraryOptions): Promise<Library> {
 		home: options.home,
 		workspaceOf,
 		query,
+		revision,
 		facets,
 		get,
 		getByPath,
