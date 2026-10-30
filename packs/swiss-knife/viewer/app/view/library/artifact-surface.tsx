@@ -1,8 +1,8 @@
 import type { App } from "@modelcontextprotocol/ext-apps";
 import { useEffect, useState } from "react";
 import type { DiscardOutcome, LibraryItem, ShareSummary } from "../../../../src/library/types";
-import type { Theme } from "../renderers/types";
 import type { SharedLayer } from "../pane-shared";
+import type { Theme } from "../renderers/types";
 import { ArtifactPage } from "./artifact-page";
 import { DiscardDialog } from "./discard-dialog";
 import { type ArtifactPatchInput, errorText, type LibraryTools, type LinkedShare } from "./library-tools";
@@ -21,26 +21,20 @@ export interface ArtifactSurfaceProps {
 	readonly onPatched: (item: LibraryItem, change: ArtifactPatchInput) => void;
 	readonly onRestored: (item: LibraryItem) => void;
 	readonly onDiscarded: (item: LibraryItem, outcome: DiscardOutcome) => void;
-	/** The item's links changed; `counted` when the set of open links did (a link made or stopped), not only a detail of one. */
-	readonly onShares: (shares: readonly ShareSummary[], counted: boolean) => void;
+	/**
+	 * The item's links changed, as an update to apply to the links as they stand then (a share can take minutes, so never
+	 * to the list it started from); `counted` when the set of open links did (a link made or stopped), not only a detail.
+	 */
+	readonly onShares: (change: (shares: readonly ShareSummary[]) => readonly ShareSummary[], counted: boolean) => void;
 	readonly onError: (text: string) => void;
 }
 
 type Dialog = { readonly kind: "discard" } | { readonly kind: "share"; readonly shareId: string | null } | null;
 
-export function summaryOf(share: LinkedShare): ShareSummary {
-	return {
-		id: share.id,
-		host: share.host,
-		url: share.url,
-		audience: share.audience,
-		version: share.version,
-		versionAt: share.versionAt,
-		allowComments: share.allowComments,
-		comments: share.comments,
-		unread: share.unread,
-		...(share.expiresAt === undefined ? {} : { expiresAt: share.expiresAt }),
-	};
+function summaryOf(share: ShareSummary | LinkedShare): ShareSummary {
+	if (!("link" in share)) return share;
+	const { link: _link, outcome: _outcome, ...summary } = share;
+	return summary;
 }
 
 export function useMinuteClock(): number {
@@ -82,7 +76,7 @@ export function ArtifactSurface({ app, tools, item, thumb, active, now, theme, o
 				onManage={shareId => setDialog({ kind: "share", shareId })}
 				onDiscard={() => setDialog({ kind: "discard" })}
 				onRestore={restore}
-				onShares={shares => onShares(shares, false)}
+				onShares={shares => onShares(() => shares, false)}
 			/>
 			{dialog?.kind === "discard" ? (
 				<DiscardDialog
@@ -101,10 +95,10 @@ export function ArtifactSurface({ app, tools, item, thumb, active, now, theme, o
 					item={item}
 					shareId={dialog.shareId}
 					onClose={() => setDialog(null)}
-					onCreated={share => onShares([summaryOf(share), ...item.shares], true)}
+					onCreated={share => onShares(shares => [summaryOf(share), ...shares], true)}
 					onChanged={share =>
 						onShares(
-							item.shares.map(each => (each.id === share.id ? share : each)),
+							shares => shares.map(each => (each.id === share.id ? summaryOf(share) : each)),
 							share.revokedAt !== undefined,
 						)
 					}

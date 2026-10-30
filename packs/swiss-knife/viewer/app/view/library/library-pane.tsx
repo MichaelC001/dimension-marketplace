@@ -17,6 +17,7 @@ import { DiscardDialog, TRASH_NAME } from "./discard-dialog";
 import { FilterRail } from "./filter-rail";
 import { LibraryGrid, type LibraryLayout } from "./library-grid";
 import { GridCell, ListRow } from "./library-item";
+import { LibraryToast } from "./library-toast";
 import { type ArtifactPatchInput, createLibraryTools, errorText, thumbUrl } from "./library-tools";
 import { drawPoster, posterCandidate } from "./poster-draw";
 import { PosterQueue } from "./poster-queue";
@@ -65,7 +66,6 @@ const COMPACT_WIDTH = 760;
 const CHECK_FRESH_MS = 60_000;
 const CHECK_BATCH = 200;
 const CHECK_THROTTLE_MS = 300;
-const TOAST_MS = 5000;
 const PAGE_LOOKAHEAD_ROWS = 12;
 
 function filterFrom(request: LibraryTab): LibraryFilter {
@@ -188,12 +188,6 @@ export function LibraryPane({ app, request, active, theme }: LibraryPaneProps) {
 		};
 	}, [tools]);
 
-	useEffect(() => {
-		if (toast === null) return;
-		const timer = window.setTimeout(() => setToast(null), TOAST_MS);
-		return () => window.clearTimeout(timer);
-	}, [toast]);
-
 	const posters = useMemo(
 		() =>
 			new PosterQueue<LibraryItem>(async (item, signal) => {
@@ -315,10 +309,10 @@ export function LibraryPane({ app, request, active, theme }: LibraryPaneProps) {
 		setToast(discardedSentence(result));
 	};
 
-	const patchItemShares = useCallback((id: string, shares: readonly ShareSummary[]): void => {
+	const patchItemShares = useCallback((id: string, change: (shares: readonly ShareSummary[]) => readonly ShareSummary[]): void => {
 		const current = listRef.current.items.find(item => item.id === id);
-		if (current !== undefined) dispatch({ type: "item", item: { ...current, shares } });
-		setPage(shown => (shown?.id === id ? { ...shown, shares } : shown));
+		if (current !== undefined) dispatch({ type: "item", item: { ...current, shares: change(current.shares) } });
+		setPage(shown => (shown?.id === id ? { ...shown, shares: change(shown.shares) } : shown));
 	}, []);
 
 	const setScope = (scope: LibraryScope): void => {
@@ -529,14 +523,7 @@ export function LibraryPane({ app, request, active, theme }: LibraryPaneProps) {
 							}
 						/>
 					)}
-					{toast === null ? null : (
-						<div role="status" className="absolute inset-x-0 bottom-3 z-20 mx-auto flex w-fit max-w-[90%] items-center gap-2 rounded-lg border border-fr-border bg-fr-surface px-3 py-2 text-fr-sm text-fr-text shadow-lg">
-							<span className="min-w-0 [overflow-wrap:anywhere]">{toast}</span>
-							<button type="button" aria-label="Dismiss" onClick={() => setToast(null)} className={cn("shrink-0 rounded-sm p-0.5 text-fr-text-3 hover:bg-fr-surface-3", FOCUS)}>
-								<Icon name="x" size={12} />
-							</button>
-						</div>
-					)}
+					{toast === null ? null : <LibraryToast text={toast} onDismiss={() => setToast(null)} />}
 				</div>
 			</div>
 			</div>
@@ -557,8 +544,8 @@ export function LibraryPane({ app, request, active, theme }: LibraryPaneProps) {
 					onPatched={patched}
 					onRestored={restored}
 					onDiscarded={discarded}
-					onShares={(shares, counted) => {
-						patchItemShares(pageShown.id, shares);
+					onShares={(change, counted) => {
+						patchItemShares(pageShown.id, change);
 						if (counted) setFacetsGeneration(count => count + 1);
 					}}
 					onError={setToast}

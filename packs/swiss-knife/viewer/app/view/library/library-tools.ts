@@ -23,15 +23,19 @@ export interface ShareHosts {
 	readonly cloudAllowed: boolean;
 }
 
+export type ShareOutcome = "created" | "updated" | "unchanged";
+
 export interface ShareProgress {
 	readonly phase: "sealing" | "uploading" | "done" | "failed";
 	readonly sent: number;
 	readonly total: number;
 	readonly error?: string;
 	readonly shareId?: string;
+	readonly share?: ShareSummary;
+	readonly outcome?: ShareOutcome;
 }
 
-export type LinkedShare = ShareSummary & { readonly link: string; readonly outcome: "created" | "updated" | "unchanged" };
+export type LinkedShare = ShareSummary & { readonly link: string; readonly outcome: ShareOutcome };
 export type ShareComment = CommentRow & { readonly shareUrl: string };
 
 export interface ShareRequest {

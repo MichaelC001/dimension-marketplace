@@ -34417,8 +34417,10 @@ function registerLibraryTools(server2, { library, fence, media }) {
     },
     ({ path: requested }) => answer(async () => {
       const verdict = await fence.check(requested);
-      const item = verdict.ok ? library.getByPath(verdict.real) : void 0;
-      return { text: "Looked up.", data: { item: item === void 0 || item.state === "discarded" ? null : item } };
+      const found = verdict.ok ? library.getByPath(verdict.real) : void 0;
+      if (found === void 0 || found.state === "discarded") return { text: "Not in the library.", data: { item: null } };
+      await library.check([found.id]);
+      return { text: "Looked up.", data: { item: library.get(found.id) ?? null } };
     })
   );
   K3(
@@ -36452,6 +36454,11 @@ import { randomBytes as randomBytes6 } from "node:crypto";
 import { stat as stat4 } from "node:fs/promises";
 import { userInfo } from "node:os";
 
+// ../src/library/versions.ts
+function fileChanged(share, mtimeMs) {
+  return share.host !== "p2p" && mtimeMs > share.versionAt;
+}
+
 // src/share/upload.ts
 var UPLOAD_CONCURRENCY = 4;
 var COMMIT_ROUNDS = 3;
@@ -36609,9 +36616,9 @@ var ShareService = class {
       this.#running.delete(artifactId2);
     }
   }
-  #finish(artifactId2, shareId2) {
+  #finish(artifactId2, shareId2, outcome) {
     const { total } = this.progress(artifactId2);
-    this.#report(artifactId2, { phase: "done", sent: total, total, shareId: shareId2 });
+    this.#report(artifactId2, { phase: "done", sent: total, total, shareId: shareId2, share: this.summarize(shareId2), outcome });
   }
   /**
    * One file, one link per server and audience: sharing a file that already has that link publishes the current file
@@ -36620,25 +36627,22 @@ var ShareService = class {
   async create(input) {
     const item = this.#liveItem(input.artifactId);
     const existing = sameLink(item.shares, input.host, input.audience, this.#now());
-    if (existing !== void 0) return this.#reuse(item, existing.id, input.allowComments);
     return this.#track(item.id, async () => {
-      const row = input.host === P2P_HOST_ID ? await this.#createP2p(input, item) : await this.#createHosted(input, item);
-      this.#finish(item.id, row.id);
+      const { id: id2, outcome } = existing !== void 0 ? { id: existing.id, outcome: await this.#reuse(item, existing.id, input) } : { id: (input.host === P2P_HOST_ID ? await this.#createP2p(input, item) : await this.#createHosted(input, item)).id, outcome: "created" };
+      this.#finish(item.id, id2, outcome);
       this.#options.onSharesChanged();
-      return { ...this.summarize(row.id), link: this.linkOf(row.id), outcome: "created" };
+      return { ...this.summarize(id2), link: this.linkOf(id2), outcome };
     });
   }
-  async #reuse(item, shareId2, allowComments) {
+  async #reuse(item, shareId2, input) {
+    const before = this.#liveRow(shareId2);
+    if (before.allowComments !== input.allowComments || input.expiresInDays !== void 0) {
+      await this.update({ shareId: shareId2, allowComments: input.allowComments, ...input.expiresInDays === void 0 ? {} : { expiresInDays: input.expiresInDays } });
+    }
     const row = this.#liveRow(shareId2);
-    if (row.allowComments !== allowComments) await this.update({ shareId: shareId2, allowComments });
-    const changed = row.host !== P2P_HOST_ID && (await stat4(await this.#realPath(item))).mtimeMs > row.versionAt;
-    if (!changed) return { ...this.summarize(shareId2), link: this.linkOf(shareId2), outcome: "unchanged" };
-    return this.#track(item.id, async () => {
-      await this.#publishVersion(row);
-      this.#finish(item.id, row.id);
-      this.#options.onSharesChanged();
-      return { ...this.summarize(shareId2), link: this.linkOf(shareId2), outcome: "updated" };
-    });
+    if (!fileChanged(row, (await stat4(await this.#realPath(item))).mtimeMs)) return "unchanged";
+    await this.#publishVersion(row);
+    return "updated";
   }
   #checkPolicy(audience, expiresInDays2, policy, oidc, size) {
     const refusal = audienceAllowedBy(audience, policy);
@@ -36800,7 +36804,7 @@ var ShareService = class {
     const row = this.#liveRow(shareId2);
     return this.#track(row.artifactId, async () => {
       await this.#publishVersion(row);
-      this.#finish(row.artifactId, row.id);
+      this.#finish(row.artifactId, row.id, "updated");
       return this.summarize(row.id);
     });
   }

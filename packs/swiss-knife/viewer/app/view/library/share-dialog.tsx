@@ -12,6 +12,7 @@ import { Icon, type IconName } from "@fraym/ui/icons";
 import { cn } from "@fraym/ui/lib/cn";
 import { type FormEvent, type ReactNode, useEffect, useId, useRef, useState } from "react";
 import type { LibraryItem, ShareSummary } from "../../../../src/library/types";
+import { fileChanged } from "../../../../src/library/versions";
 import { copyText } from "../copy";
 import { FOCUS } from "../focus-ring";
 import { CopyField } from "./copy-field";
@@ -24,7 +25,6 @@ import {
 	defaultExpiry,
 	defaultHost,
 	expiryChoices,
-	fileChanged,
 	hostChoices,
 	hostName,
 	linkChoice,
@@ -247,38 +247,18 @@ export function ShareDialog({ tools, item, shareId, onClose, onCreated, onChange
 			reject(new Error(error));
 		};
 		let linking = false;
-		const fromProgress = (id: string): void => {
-			if (linking) return;
+		const fromProgress = (progress: ShareProgress): void => {
+			const { share, outcome } = progress;
+			if (linking || share === undefined || outcome === undefined) return;
 			linking = true;
-			tools.link(id).then(found => {
-				const at = Date.now();
-				const known = item.shares.find(share => share.id === id);
-				if (known !== undefined) {
-					finish({ ...known, version: known.version + 1, versionAt: at, link: found, outcome: "updated" });
-					return;
-				}
-				finish({
-					id,
-					host: made.host,
-					url: found.split("#")[0] ?? found,
-					audience: made.audience,
-					version: 1,
-					versionAt: at,
-					allowComments: made.allowComments,
-					comments: 0,
-					unread: 0,
-					...(made.expiresInDays === undefined ? {} : { expiresAt: at + made.expiresInDays * DAY_MS }),
-					link: found,
-					outcome: "created",
-				});
-			}, cause => fail(errorText(cause)));
+			tools.link(share.id).then(link => finish({ ...share, link, outcome }), cause => fail(errorText(cause)));
 		};
 		polling.current = window.setInterval(() => {
 			tools.shareProgress(item.id).then(
 				progress => {
 					if (settled) return;
 					setStatus(current => (current.kind === "creating" ? { kind: "creating", progress } : current));
-					if (progress.phase === "done" && progress.shareId !== undefined) fromProgress(progress.shareId);
+					if (progress.phase === "done") fromProgress(progress);
 					if (progress.phase === "failed") fail(progress.error ?? "The link could not be made.");
 				},
 				() => undefined,
@@ -289,7 +269,7 @@ export function ShareDialog({ tools, item, shareId, onClose, onCreated, onChange
 			tools.shareProgress(item.id).then(
 				progress => {
 					if (settled || progress.phase === "sealing" || progress.phase === "uploading") return;
-					if (progress.phase === "done" && progress.shareId !== undefined) fromProgress(progress.shareId);
+					if (progress.phase === "done" && progress.share !== undefined) fromProgress(progress);
 					else fail(errorText(cause));
 				},
 				() => fail(errorText(cause)),

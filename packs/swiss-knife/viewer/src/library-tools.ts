@@ -225,8 +225,10 @@ export function registerLibraryTools(server: McpServer, { library, fence, media 
 		({ path: requested }) =>
 			answer(async () => {
 				const verdict = await fence.check(requested);
-				const item = verdict.ok ? library.getByPath(verdict.real) : undefined;
-				return { text: "Looked up.", data: { item: item === undefined || item.state === "discarded" ? null : item } };
+				const found = verdict.ok ? library.getByPath(verdict.real) : undefined;
+				if (found === undefined || found.state === "discarded") return { text: "Not in the library.", data: { item: null } };
+				await library.check([found.id]);
+				return { text: "Looked up.", data: { item: library.get(found.id) ?? null } };
 			}),
 	);
 
