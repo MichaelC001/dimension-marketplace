@@ -33581,10 +33581,13 @@ async function createLibrary(options2) {
   }
   const memo = /* @__PURE__ */ new Map();
   let memoVersion = "";
-  function remembered(key, compute) {
+  function revision() {
     const own = sql("SELECT total_changes() AS n").get()?.n ?? 0;
     const other = sql("PRAGMA data_version").get()?.data_version ?? 0;
-    const version2 = `${own}:${other}`;
+    return `${own}:${other}`;
+  }
+  function remembered(key, compute) {
+    const version2 = revision();
     if (version2 !== memoVersion) {
       memo.clear();
       memoVersion = version2;
@@ -33930,6 +33933,7 @@ async function createLibrary(options2) {
     home: options2.home,
     workspaceOf,
     query,
+    revision,
     facets,
     get,
     getByPath,
@@ -34291,6 +34295,18 @@ function registerLibraryTools(server2, { library, fence, media }) {
       _meta: APP_ONLY
     },
     (args) => answer(() => ({ text: "Facets.", data: { ...library.facets(args) } }))
+  );
+  K3(
+    server2,
+    "library_revision",
+    {
+      title: "Library revision",
+      description: "A marker that changes whenever anything in the library changes, from this process or another. The View reads it on an interval and refreshes when it moves; it is not for the model.",
+      inputSchema: {},
+      annotations: READ_ONLY,
+      _meta: APP_ONLY
+    },
+    () => answer(() => ({ text: "Revision.", data: { revision: library.revision() } }))
   );
   K3(
     server2,
