@@ -128,7 +128,7 @@ function listTools(tools: readonly McpTool[]): string {
 			left.name.localeCompare(right.name),
 	);
 	return [
-		`Slack tools (${tools.length}). [read] run with slack_read; [write] change Slack and run with slack_act, which asks the user first. Pass a tool name to slack_tools for its full description and arguments.`,
+		`Slack tools (${tools.length}). [read] run with slack_read; [write] change Slack and run with slack_act, which asks the user first in Ask and Write mode and runs without asking in Full access. Pass a tool name to slack_tools for its full description and arguments.`,
 		...ordered.map(summarize),
 	].join("\n");
 }
@@ -158,7 +158,7 @@ async function invoke(deps: SlackToolDeps, wanted: ToolAccess, params: typeof ca
 	const tool = await resolveTool(deps.catalog, params.tool);
 	if (wanted === "read" && accessOf(tool) !== "read") {
 		throw new Error(
-			`"${tool.name}" is not marked read-only by Slack, so it cannot run through slack_read. Run it with slack_act: it asks the user before anything is sent.`,
+			`"${tool.name}" is not marked read-only by Slack, so it cannot run through slack_read. Run it with slack_act: in Ask and Write mode it asks the user before anything is sent.`,
 		);
 	}
 	if (accessOf(tool) === "write") {

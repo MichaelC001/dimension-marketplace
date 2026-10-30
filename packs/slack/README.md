@@ -14,7 +14,7 @@ This pack replaces the separate `slack-user` pack. If you had `slack-user` insta
 ## What it contains
 
 - Bot tools: `slack_list_channels`, `slack_read_messages`, `slack_post_message`, `slack_read_thread`, `slack_reply_thread`, `slack_add_reaction`, `slack_edit_message`, `slack_delete_message`, `slack_list_users`, `slack_upload_file`. In Ask and Write mode posting, replying, editing, deleting and uploading ask you first; in Full access they run. `slack_upload_file` shares a file from the session's folder (hidden files, anything outside the folder or reached through a link, the saved Slack tokens, and files over 25 MB are refused) and needs the `files:write` bot scope; without it the error says what to add.
-- As-you tools: `slack_tools` (what Slack offers, straight from Slack), `slack_read` (read-only calls), `slack_act` (calls that change Slack; in Ask and Write mode every call asks you first).
+- As-you tools: `slack_tools` (what Slack offers, straight from Slack), `slack_read` (read-only calls), `slack_act` (calls that change Slack; in Ask and Write mode every call asks you first, and in Full access none does).
 - Skill: `slack`, covering both identities and how to choose between them.
 - Rule: `slack-context`, always on, saying which identity a call acts as, to send only what was asked for, and how to choose when both are connected.
 - Connect flows:
@@ -28,7 +28,7 @@ Off by default. The bot option needs a Slack workspace where you can create and 
 ## Limits and risks
 
 - **The bot acts as the bot.** It only sees channels it was invited to, and `slack_edit_message` and `slack_delete_message` only work on its own messages unless the token has admin scopes. A deleted message cannot be recovered.
-- **As you acts as you.** A sent message cannot be silently unsent. In Ask and Write mode `slack_act` asks before running and shows the Slack tool, its arguments (the channel and the text) and the account it acts as; in Full access nothing stops it, so an unattended autonomy is never stuck on a card. The account is named once Slack has been asked who you are, which `slack_tools` and `slack_read` do; before that the prompt says "you (the signed-in Slack account)".
+- **As you acts as you.** A sent message cannot be silently unsent. In Ask and Write mode `slack_act` asks before running and shows the Slack tool, its arguments (the channel and the text) and the account it acts as; choosing Always allow on that card stops it asking for the rest of the session. In Full access nothing stops it, so an unattended autonomy is never stuck on a card. The account is named once Slack has been asked who you are, which `slack_tools` and `slack_read` do; before that the prompt says "you (the signed-in Slack account)".
 - Every bot send names the identity on its approval card too (Ask and Write mode): `As: the Slack bot app`.
 - As you can read everything you can read, including private channels and DMs, within the permission level you choose at Connect.
 - Slack decides what the MCP server offers. `slack_tools` reads the list at run time, and a tool counts as read-only only if Slack marks it so.

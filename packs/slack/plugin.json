@@ -213,7 +213,7 @@
 								{
 									"id": "send",
 									"label": "Read and send",
-									"detail": "Everything above, plus sending and scheduling messages and adding reactions, as you. In Ask and Write mode every send asks you first.",
+									"detail": "Everything above, plus sending and scheduling messages and adding reactions, as you. In Ask and Write mode every send asks you first (Always allow on the card stops it asking for the rest of that session); in Full access nothing asks.",
 									"scopes": [
 										"channels:history",
 										"channels:read",
@@ -439,7 +439,7 @@
 				},
 				{
 					"name": "slack_act",
-					"description": "Run one Slack tool that changes Slack as you: send, schedule, react, create. DESTRUCTIVE: you are asked to approve every call."
+					"description": "Run one Slack tool that changes Slack as you: send, schedule, react, create. DESTRUCTIVE: in Ask and Write mode you are asked to approve each call (Always allow on the card waives that for the rest of the session); in Full access nothing asks."
 				}
 			]
 		}
