@@ -77,6 +77,7 @@ export function ArtifactSurface({ app, tools, item, thumb, active, now, theme, o
 				onDiscard={() => setDialog({ kind: "discard" })}
 				onRestore={restore}
 				onShares={shares => onShares(() => shares, false)}
+				onShareChanged={share => onShares(shares => shares.map(each => (each.id === share.id ? share : each)), false)}
 			/>
 			{dialog?.kind === "discard" ? (
 				<DiscardDialog

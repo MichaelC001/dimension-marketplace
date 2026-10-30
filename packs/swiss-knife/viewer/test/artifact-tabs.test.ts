@@ -79,6 +79,7 @@ async function tabsOf(shares: readonly ShareSummary[]): Promise<Element[]> {
 			onDiscard: nothing,
 			onRestore: nothing,
 			onShares: nothing,
+			onShareChanged: nothing,
 		}),
 	);
 	return [...container.querySelectorAll('[role="tablist"] [role="tab"]')];

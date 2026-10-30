@@ -12,12 +12,11 @@ export interface AccessListProps {
 	readonly tools: LibraryTools;
 	readonly shares: readonly ShareSummary[];
 	readonly now: number;
-	/** The file's own modification time: a link made before it shows an older version and offers to update. */
 	readonly mtimeMs: number;
 	readonly canShare: boolean;
 	readonly onShare: () => void;
 	readonly onManage: (shareId: string) => void;
-	readonly onUpdated: (share: ShareSummary) => void;
+	readonly onChanged: (share: ShareSummary) => void;
 }
 
 function Badge({ icon, muted }: { readonly icon: IconName; readonly muted?: boolean }) {
@@ -28,10 +27,11 @@ function Badge({ icon, muted }: { readonly icon: IconName; readonly muted?: bool
 	);
 }
 
-export function AccessList({ tools, shares, now, mtimeMs, canShare, onShare, onManage, onUpdated }: AccessListProps) {
+export function AccessList({ tools, shares, now, mtimeMs, canShare, onShare, onManage, onChanged }: AccessListProps) {
 	const links = useRef(new Map<string, string>());
 	const [copied, setCopied] = useState<string | null>(null);
 	const [busy, setBusy] = useState<string | null>(null);
+	const [updating, setUpdating] = useState<string | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const timer = useRef(0);
 	useEffect(() => () => window.clearTimeout(timer.current), []);
@@ -63,19 +63,16 @@ export function AccessList({ tools, shares, now, mtimeMs, canShare, onShare, onM
 		timer.current = window.setTimeout(() => setCopied(null), 1800);
 	};
 
-	const update = (shareId: string): void => {
+	const updateLink = async (shareId: string): Promise<void> => {
 		setError(null);
-		setBusy(`update:${shareId}`);
-		tools.newVersion(shareId).then(
-			summary => {
-				setBusy(null);
-				onUpdated(summary);
-			},
-			cause => {
-				setBusy(null);
-				setError(errorText(cause));
-			},
-		);
+		setUpdating(shareId);
+		try {
+			onChanged(await tools.newVersion(shareId));
+		} catch (cause) {
+			setError(errorText(cause));
+		} finally {
+			setUpdating(null);
+		}
 	};
 
 	return (
@@ -94,7 +91,9 @@ export function AccessList({ tools, shares, now, mtimeMs, canShare, onShare, onM
 					) : null}
 				</div>
 			) : (
-				live.map(share => (
+				live.map(share => {
+					const outdated = fileChanged(share, mtimeMs);
+					return (
 					<div key={share.id} data-slot="library-share-row" className="flex items-start gap-2.5">
 						<Badge icon={share.audience.kind === "link" ? "globe" : "user"} />
 						<div className="min-w-0 flex-1">
@@ -102,13 +101,10 @@ export function AccessList({ tools, shares, now, mtimeMs, canShare, onShare, onM
 								{accessLabel(share.audience)}
 							</div>
 							<div className="text-fr-xs leading-snug text-fr-text-3">{shareDetail(share, now)}</div>
-							{canShare && fileChanged(share, mtimeMs) ? (
-								<div data-slot="library-share-stale" className="mt-1.5 flex items-center gap-2 rounded-md bg-fr-warn/10 px-2 py-1 text-fr-xs text-fr-warn">
-									<span className="min-w-0 flex-1">The file changed since this link shows version {share.version}.</span>
-									<Button type="button" size="sm" className="h-6 shrink-0 px-2 text-fr-xs" loading={busy === `update:${share.id}`} onClick={() => update(share.id)}>
-										<Icon name="refresh" size={12} />
-										Update link
-									</Button>
+							{outdated ? (
+								<div data-slot="library-share-outdated" className="mt-1 flex items-center gap-1.5 text-fr-xs leading-snug text-fr-warn">
+									<Icon name="refresh" size={12} className="shrink-0" />
+									The file changed since you shared it.
 								</div>
 							) : null}
 							<div className="-ml-1.5 mt-1 flex items-center gap-1">
@@ -116,13 +112,19 @@ export function AccessList({ tools, shares, now, mtimeMs, canShare, onShare, onM
 									<Icon name={copied === share.id ? "check" : "link"} size={12} />
 									{copied === share.id ? "Link copied" : "Copy link"}
 								</Button>
+								{outdated ? (
+									<Button type="button" size="sm" variant="ghost" className="h-6 px-1.5 text-fr-xs" loading={updating === share.id} onClick={() => void updateLink(share.id)}>
+										Update link
+									</Button>
+								) : null}
 								<Button type="button" size="sm" variant="ghost" className="h-6 px-1.5 text-fr-xs" onClick={() => onManage(share.id)}>
 									Manage access
 								</Button>
 							</div>
 						</div>
 					</div>
-				))
+					);
+				})
 			)}
 			{error === null ? null : (
 				<p role="alert" className="text-fr-xs text-fr-del">
