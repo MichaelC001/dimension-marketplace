@@ -1,15 +1,14 @@
-import type { PlayheadSource } from "@dimension/mcp-app-kit/annotate";
 import {
 	CommentHighlights,
 	CommentMarks,
 	CommentTimeline,
-	type FrameClockReader,
 	type FrameThread,
 	type ThreadReply,
 	type TimeThread,
 	TrackedLayer,
-	useShownOnFrame,
 } from "@dimension/mcp-app-kit/annotate/react";
+import type { FrameClockReader, PlayheadSource } from "@dimension/mcp-app-kit/media";
+import { useShownOnFrame } from "@dimension/mcp-app-kit/media/react";
 import { type ReactNode, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import type { PlacedThread } from "./library/artifact-threads";

@@ -1,5 +1,5 @@
 import type { App } from "@modelcontextprotocol/ext-apps";
-import { drawFrame, waitForMediaEvent } from "@dimension/mcp-app-kit/annotate";
+import { drawFrame, releaseMedia, waitForMediaEvent } from "@dimension/mcp-app-kit/media";
 import { createToolCaller } from "@dimension/mcp-app-kit/tools";
 import { mediaSourceSchema } from "../../../src/contract";
 import type { LibraryItem, ThumbMime } from "../../../../src/library/types";
@@ -73,8 +73,7 @@ async function videoPoster(app: App, item: LibraryItem, signal: AbortSignal): Pr
 		}
 		return drawFrame(video, THUMB_LONG_EDGE);
 	} finally {
-		video.removeAttribute("src");
-		video.load();
+		releaseMedia(video);
 		void trackMediaWork(app, tools.raw("close_media", { token })).catch(() => undefined);
 	}
 }

@@ -13,21 +13,23 @@
 // the playhead it is given the way the real lane does: writing the value into its own node, drawing nothing). The real
 // lanes are the kit's own test subjects. Bun cannot lift a module mock, so they stay installed for the rest of the run:
 // the stand-ins sit over the REAL kit module (spread under them), so a test that loads the kit's other React parts after
-// this file still finds them. The pane owns the playhead (`useMediaPosition`), so a small host here owns it for the transport.
+// this file still finds them. The pane owns the player (`useMediaPlayer`), so a small host here owns it for the transport.
 import { dirname } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, mock, test } from "bun:test";
-import { createPlayhead, type FilmFrame, FULL_SENTENCE, formatTimecode, type TimelineMark } from "@dimension/mcp-app-kit/annotate";
+import { FULL_SENTENCE, formatTimecode, type TimelineMark } from "@dimension/mcp-app-kit/annotate";
 import type { FilmLaneProps, NoteCloseReason, TransportProps, WaveLaneProps } from "@dimension/mcp-app-kit/annotate/react";
+import type { FilmFrame, MediaPlayer } from "@dimension/mcp-app-kit/media";
 import * as react from "react";
 import { createElement, type ReactNode, useEffect, useRef } from "react";
 import * as jsxDevRuntime from "react/jsx-dev-runtime";
 import * as jsxRuntime from "react/jsx-runtime";
 import * as reactDom from "react-dom";
-import { UNBOUNDED_SENTENCE } from "../app/view/media-length";
+import { UNBOUNDED_SENTENCE } from "../app/view/media-messages";
 import type * as Transport from "../app/view/media-transport";
 import { installReact, type ReactEnv } from "./media-react";
 
 const KIT = "@dimension/mcp-app-kit/annotate/react";
+const MEDIA_KIT = "@dimension/mcp-app-kit/media/react";
 
 // The kit's tsconfig maps `react` and its JSX runtimes onto their type declarations, which bun cannot load as code, and
 // bun applies that map to the kit's sources wherever they are imported from. The map's targets are mocked with the real
@@ -49,7 +51,7 @@ type LaneProps = FilmLaneProps | WaveLaneProps;
 
 let env: ReactEnv;
 let transport: typeof Transport;
-let useMediaPosition: (media: HTMLMediaElement, live: boolean) => Transport.MediaTransportProps["playhead"];
+let useMediaPlayer: (media: HTMLMediaElement, options: { readonly active: boolean }) => MediaPlayer;
 /** How many times the strip of buttons has been drawn. */
 let buttonRenders = 0;
 /** How many times either lane has been drawn. */
@@ -79,8 +81,8 @@ beforeAll(async () => {
 	// Taken BEFORE the mock goes in: `mock.module` rewrites the exports of a module that is already loaded IN PLACE, so
 	// `realKit.Transport` read afterwards is the stand-in itself, and a stand-in that draws "the real one" through that
 	// name draws itself, forever.
-	const { Transport: RealTransport, useMediaPosition: realUseMediaPosition } = realKit;
-	useMediaPosition = realUseMediaPosition;
+	const { Transport: RealTransport } = realKit;
+	useMediaPlayer = (await import(MEDIA_KIT)).useMediaPlayer;
 	mock.module(KIT, () => ({
 		...realKit,
 		Transport: (props: TransportProps) => {
@@ -148,7 +150,6 @@ const asElement = (media: FakeMedia): HTMLMediaElement => media as unknown as HT
 
 interface Over {
 	readonly kind?: Kind;
-	readonly live?: boolean;
 	readonly filename?: string;
 	readonly marks?: readonly TimelineMark[];
 	readonly activeId?: number | null;
@@ -162,20 +163,19 @@ interface Over {
 	readonly onRemove?: (id: number) => void;
 }
 
-type HostProps = Omit<Transport.MediaTransportProps, "playhead"> & { readonly live: boolean };
+type HostProps = Omit<Transport.MediaTransportProps, "player"> & { readonly media: HTMLMediaElement };
 
-function Host({ live, ...props }: HostProps): ReactNode {
-	const playhead = useMediaPosition(props.media, live);
-	return createElement(transport.MediaTransport, { ...props, playhead });
+function Host({ media, ...props }: HostProps): ReactNode {
+	const player = useMediaPlayer(media, { active: true });
+	return createElement(transport.MediaTransport, { ...props, player });
 }
 
 function transportOf(media: FakeMedia, over: Over = {}) {
-	const { kind = "video", live = true, filename = "clip.mp4", marks = [], activeId = null, onSelectMark = () => {}, onNote = () => {}, openId = null, onClose = () => {}, onRemove = () => {}, marking = null } = over;
+	const { kind = "video", filename = "clip.mp4", marks = [], activeId = null, onSelectMark = () => {}, onNote = () => {}, openId = null, onClose = () => {}, onRemove = () => {}, marking = null } = over;
 	return createElement(Host, {
 		media: asElement(media),
 		kind,
 		filename,
-		live,
 		marks,
 		activeId,
 		onSelectMark,
@@ -580,13 +580,18 @@ describe.each(KINDS)("the %s transport's playhead", kind => {
 describe("the playhead's frames", () => {
 	test("are asked for only while the recording plays and is on screen", async () => {
 		const media = new FakeMedia();
-		const { render } = await env.mount(transportOf(media));
+		await env.mount(transportOf(media));
 		expect(env.pendingFrames()).toBe(0);
 		await startPlaying(media);
 		expect(env.pendingFrames()).toBe(1);
-		await render(transportOf(media, { live: false }));
-		expect(env.pendingFrames()).toBe(0);
-		await render(transportOf(media, { live: true }));
+		Object.defineProperty(env.document, "visibilityState", { value: "hidden", configurable: true });
+		try {
+			await env.act(async () => void env.document.dispatchEvent(new (env.document.defaultView as Window & typeof globalThis).Event("visibilitychange")));
+			expect(env.pendingFrames()).toBe(0);
+		} finally {
+			Reflect.deleteProperty(env.document, "visibilityState");
+		}
+		await env.act(async () => void env.document.dispatchEvent(new (env.document.defaultView as Window & typeof globalThis).Event("visibilitychange")));
 		expect(env.pendingFrames()).toBe(1);
 		await env.act(async () => media.pause());
 		expect(env.pendingFrames()).toBe(0);
@@ -614,24 +619,5 @@ describe.each(KINDS)("a seek from the %s lane", kind => {
 		await env.act(async () => laneOf(kind).onSeek(asked));
 		expect(media.currentTime).toBe(landed);
 		expect(heard(container)).toBe(landed);
-	});
-});
-
-describe("the playhead", () => {
-	test("tells its watchers when it moves, and not when it is put where it already is", () => {
-		const playhead = createPlayhead(2);
-		let told = 0;
-		const stop = playhead.subscribe(() => {
-			told += 1;
-		});
-		playhead.set(2);
-		expect(told).toBe(0);
-		playhead.set(2.5);
-		expect(told).toBe(1);
-		expect(playhead.get()).toBe(2.5);
-		stop();
-		playhead.set(9);
-		expect(told).toBe(1);
-		expect(playhead.get()).toBe(9);
 	});
 });

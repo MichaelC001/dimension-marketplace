@@ -12,6 +12,7 @@ import { cn } from "@fraym/ui/lib/cn";
 import { useEffect, useMemo, useState } from "react";
 import { createToolCaller } from "@dimension/mcp-app-kit/tools";
 import { createAnnotationStore } from "@dimension/mcp-app-kit/annotate/store";
+import type { MediaSource } from "@dimension/mcp-app-kit/media";
 import { mediaSourceSchema, renewedMediaSchema } from "../../src/contract";
 import { loadDocumentBytes, readLimit } from "./document-bytes";
 import { shownMode } from "./annotate-modes";
@@ -20,7 +21,7 @@ import { failureAction, type FailureStage, isRecording } from "./media-failure";
 import { keepRecordingHeld, trackMediaWork } from "./media-lifecycle";
 import { loadRenderer } from "./renderers";
 import { Opening } from "./opening";
-import type { Mounted, RecordingSource, Theme } from "./renderers/types";
+import type { Mounted, Theme } from "./renderers/types";
 import { PaneExtras } from "./pane-extras";
 import type { SharedLayer } from "./pane-shared";
 import type { DocTab } from "./tabs";
@@ -83,7 +84,7 @@ export function DocPane({ app, tab, active, theme, embedded = false, shared }: D
 
 		(async () => {
 			try {
-				let mediaSource: RecordingSource | undefined;
+				let mediaSource: MediaSource | undefined;
 				const reading = isRecording(tab.kind)
 					? tools.whole("open_media", { path: tab.path, size: tab.size, mtimeMs: tab.mtimeMs, token: mediaToken }).then(result => {
 						if (!controller.signal.aborted) {

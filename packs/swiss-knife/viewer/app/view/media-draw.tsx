@@ -14,8 +14,9 @@
 //     for the pane to seek to its frame (a drawing that is not on screen has no place to hang a popover from).
 // The overlay is the kit's: it takes no input unless a tool is armed, so with none in hand a click on the picture
 // still plays and pauses it, and the badges on the drawings are the only parts of it a press reaches.
-import { drawnOnFrame, frameKey, type MarkShape, type MarkTool, type PlayheadSource, type TimelineMark } from "@dimension/mcp-app-kit/annotate";
+import { frameKey, type MarkShape, type MarkTool, type TimelineMark } from "@dimension/mcp-app-kit/annotate";
 import { MarkupOverlay } from "@dimension/mcp-app-kit/annotate/react";
+import { drawnOnFrame, type PlayheadSource } from "@dimension/mcp-app-kit/media";
 import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { type DrawnRect, drawnRect } from "./media-frame";

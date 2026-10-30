@@ -3,10 +3,9 @@
 // each have their own use for some of them. Escape has two jobs that must come in order: the
 // first takes back a stretch half set, the second puts the drawing tool down. And a key held with
 // Ctrl or Cmd belongs to the browser, bar undo and redo on a video that can be drawn on.
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import type { MediaLength } from "@dimension/mcp-app-kit/annotate";
-import { decideKey, type KeyAction, type KeyInput, keyOwner, NOBODY } from "../app/view/media-keys";
-import { installDom, type TestDom } from "./dom";
+import { describe, expect, test } from "bun:test";
+import { type MediaLength, NOBODY } from "@dimension/mcp-app-kit/media";
+import { decideKey, type KeyAction, type KeyInput } from "../app/view/media-keys";
 
 const BOUNDED: MediaLength = { duration: 90, reach: 90, unbounded: false };
 const UNBOUNDED: MediaLength = { duration: Number.POSITIVE_INFINITY, reach: 40, unbounded: true };
@@ -236,53 +235,5 @@ describe("a key held down: what repeats on purpose repeats, what makes a note is
 		const slider = { typing: false, presses: false, navigates: true };
 		for (const key of [" ", "ArrowLeft", "Home", ",", "Escape"]) expect(press(key, { owner: typing, repeat: true, inPoint: 3, armed: true }), `${key} typing`).toBeNull();
 		for (const key of ["ArrowLeft", "ArrowRight", "Home", "End"]) expect(press(key, { owner: slider, repeat: true }), `${key} slider`).toBeNull();
-	});
-});
-
-describe("keyOwner reads whose key it is from the focused element", () => {
-	let dom: TestDom;
-	beforeAll(() => {
-		dom = installDom();
-	});
-	afterAll(() => dom.restore());
-
-	const make = (html: string): HTMLElement => {
-		const holder = dom.document.createElement("div");
-		holder.innerHTML = html;
-		dom.document.body.append(holder);
-		return holder.firstElementChild as HTMLElement;
-	};
-
-	test("a text box, a text area and a select are typing", () => {
-		for (const html of ["<input type='text'>", "<textarea></textarea>", "<select><option>a</option></select>"]) {
-			expect(keyOwner(make(html)).typing, html).toBe(true);
-		}
-	});
-
-	test("an editable region is typing, whatever it is made of", () => {
-		const editable = make("<div>notes</div>");
-		Object.defineProperty(editable, "isContentEditable", { value: true });
-		expect(keyOwner(editable).typing).toBe(true);
-	});
-
-	test("a button, a link, and anything inside one press; a bare div does not", () => {
-		expect(keyOwner(make("<button>Play</button>")).presses).toBe(true);
-		expect(keyOwner(make("<a href='https://example.com'>x</a>")).presses).toBe(true);
-		const inside = make("<button><span>icon</span></button>").firstElementChild;
-		expect(keyOwner(inside).presses).toBe(true);
-		expect(keyOwner(make("<a>no target</a>")).presses).toBe(false);
-		expect(keyOwner(make("<div>plain</div>"))).toEqual(NOBODY);
-	});
-
-	test("a slider, a tab and a list box navigate; so does anything inside a tab bar", () => {
-		for (const html of ["<div role='slider'></div>", "<div role='tab'></div>", "<ul role='listbox'><li>a</li></ul>"]) {
-			expect(keyOwner(make(html)).navigates, html).toBe(true);
-		}
-		expect(keyOwner(make("<div role='tablist'><span>inside</span></div>").firstElementChild).navigates).toBe(true);
-	});
-
-	test("nothing focused, or something that is not an element, belongs to nobody", () => {
-		expect(keyOwner(null)).toEqual(NOBODY);
-		expect(keyOwner(new EventTarget())).toEqual(NOBODY);
 	});
 });

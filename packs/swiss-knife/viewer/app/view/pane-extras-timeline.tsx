@@ -1,34 +1,20 @@
-import {
-	drawnOnFrame,
-	frameAt,
-	frameSize,
-	frameStepTarget,
-	FULL_SENTENCE,
-	insideFrame,
-	type MarkShape,
-	type MarkTool,
-	readLength,
-	togglePlayback,
-} from "@dimension/mcp-app-kit/annotate";
+import { FULL_SENTENCE, type MarkShape, type MarkTool } from "@dimension/mcp-app-kit/annotate";
 import {
 	AnnotationNotice,
 	AnnotationToolbar,
 	markupToolGroups,
 	type ToolGroupDef,
-	useFilmstrip,
-	useFrameClock,
-	useFrameGrabber,
-	useMediaPosition,
 	useTimelineMarks,
 	useTimelineTools,
 } from "@dimension/mcp-app-kit/annotate/react";
+import { frameSize, insideFrame, keyOwner, readLength } from "@dimension/mcp-app-kit/media";
+import { useFilmstrip, useFrameGrabber, useMediaPlayer, useMediaSelect, usePageVisible } from "@dimension/mcp-app-kit/media/react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { DrawLayer } from "./media-draw";
-import { useDuration, useFailed, useWaveform } from "./media-hooks";
-import { decideKey, keyOwner } from "./media-keys";
-import { seekTarget } from "./media-length";
+import { decideKey } from "./media-keys";
 import { MediaTransport, type TransportMarking } from "./media-transport";
+import { useWaveform } from "./media-waveform";
 import { SharedFrameMarks, SharedLane } from "./pane-extras-shared";
 import { Footer, type PaneExtrasProps, revisionOf, Strip, useSlot } from "./pane-shared";
 
@@ -37,16 +23,6 @@ const DOCK = '[data-slot="viewer-media-dock"]';
 const FILM_SLOTS_AT_FIRST = 8;
 const NO_TIMES: readonly never[] = [];
 
-function usePageVisible(): boolean {
-	const [visible, setVisible] = useState(() => document.visibilityState !== "hidden");
-	useEffect(() => {
-		const update = (): void => setVisible(document.visibilityState !== "hidden");
-		document.addEventListener("visibilitychange", update);
-		return () => document.removeEventListener("visibilitychange", update);
-	}, []);
-	return visible;
-}
-
 export function TimelineMarks({ app, tab, active, ready, frame, mode, store, shared }: PaneExtrasProps): ReactNode {
 	const kind = tab.kind === "video" ? "video" : "audio";
 	const identity = `${tab.path}\u0000${revisionOf(tab)}`;
@@ -54,18 +30,17 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode, store, sha
 	const media = slot instanceof HTMLMediaElement ? slot : null;
 	const video = media instanceof HTMLVideoElement ? media : null;
 	const dock = useSlot(frame, ready, DOCK);
-	const duration = useDuration(media);
-	const failed = useFailed(media);
+	const player = useMediaPlayer(media, { active });
+	const duration = useMediaSelect(player, state => state.duration);
+	const failed = useMediaSelect(player, state => state.failed !== null);
 	const visible = usePageVisible();
 	const live = active && visible;
 	const markable = mode === "timeline" && !failed;
 	const drawable = markable && video !== null;
 	const penUp = markable && kind === "video";
 
-	const playhead = useMediaPosition(media, live);
-	const clock = useFrameClock(video, live);
+	const { playhead, clock } = player;
 	const { frameSeconds } = clock;
-	const drawingTime = useCallback((position: number) => frameAt(clock.showing(position), position, frameSeconds()), [clock, frameSeconds]);
 
 	const grabber = useFrameGrabber(video);
 	const stripGrabber = useFrameGrabber(video);
@@ -85,11 +60,7 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode, store, sha
 	const tools = useTimelineTools({ media, marks, addMark: session.addMark, addSpan: session.addSpan, markable });
 	const { full, say, press, reset } = tools;
 
-	useEffect(() => {
-		if (!active) media?.pause();
-	}, [active, media]);
-
-	const waveform = useWaveform(app, tab, kind === "audio" && live && ready, media);
+	const waveform = useWaveform(app, tab, kind === "audio" && live && ready, player);
 	const [slots, setSlots] = useState(FILM_SLOTS_AT_FIRST);
 	const filmstrip = useFilmstrip({ source: stripGrabber, key: identity, duration, slots, enabled: video !== null && live && !failed });
 	const film = useMemo(() => ({ frames: filmstrip.frames, failed: filmstrip.failed || failed, slots, onSlots: setSlots }), [filmstrip, failed, slots]);
@@ -110,42 +81,24 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode, store, sha
 		if (tab.annotateRequests > 0 && penUp) setTool(tool ?? "box");
 	}, [tab.annotateRequests]);
 
-	const seekTo = useCallback(
-		(seconds: number) => {
-			if (media !== null) media.currentTime = seekTarget(seconds, readLength(media));
-		},
-		[media],
-	);
-
 	const drawShape = useCallback(
 		(shape: MarkShape, aspect: number): number | undefined => {
 			if (video === null) return undefined;
-			video.pause();
-			const seconds = frameSeconds();
-			const at = drawingTime(video.currentTime);
-			const id = addShape(shape, at, aspect);
-			if (id === undefined) {
-				if (full) say(FULL_SENTENCE);
-				return undefined;
-			}
-			if (!drawnOnFrame(at, video.currentTime, seconds)) seekTo(insideFrame(at, seconds));
+			const id = player.stamp(at => addShape(shape, at, aspect));
+			if (id === undefined && full) say(FULL_SENTENCE);
 			return id;
 		},
-		[video, addShape, drawingTime, frameSeconds, seekTo, full, say],
+		[video, player, addShape, full, say],
 	);
 
 	const goTo = useCallback(
 		(id: number) => {
 			const mark = marks.find(entry => entry.id === id);
 			if (mark === undefined) return;
-			if (mark.shape === undefined) {
-				seekTo(mark.at);
-				return;
-			}
-			media?.pause();
-			seekTo(insideFrame(mark.at, frameSeconds()));
+			if (mark.shape === undefined) player.seek(mark.at);
+			else player.showFrame(mark.at);
 		},
-		[marks, media, seekTo, frameSeconds],
+		[marks, player],
 	);
 
 	const sharedTimes = shared?.places.times ?? NO_TIMES;
@@ -157,13 +110,9 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode, store, sha
 	const sharedOpenDrawn = sharedOpen?.drawn === true;
 	useEffect(() => {
 		if (!active || sharedOpenId === undefined || sharedOpenAt === undefined) return;
-		if (sharedOpenDrawn && video !== null) {
-			video.pause();
-			seekTo(insideFrame(sharedOpenAt, frameSeconds()));
-		} else {
-			seekTo(sharedOpenAt);
-		}
-	}, [active, sharedOpenId, sharedOpenAt, sharedOpenDrawn, video, seekTo, frameSeconds]);
+		if (sharedOpenDrawn && video !== null) player.showFrame(sharedOpenAt);
+		else player.seek(sharedOpenAt);
+	}, [active, sharedOpenId, sharedOpenAt, sharedOpenDrawn, video, player]);
 	const sharedLaneId = sharedOpen !== undefined && !(sharedOpenDrawn && video !== null) ? sharedOpen.id : null;
 
 	const selectMark = useCallback(
@@ -172,16 +121,6 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode, store, sha
 			openNote(id);
 		},
 		[goTo, openNote],
-	);
-
-	const stepFrame = useCallback(
-		(direction: 1 | -1) => {
-			if (video === null) return;
-			video.pause();
-			const target = frameStepTarget(clock.showing(video.currentTime), frameSeconds(), direction);
-			video.currentTime = seekTarget(target, readLength(video));
-		},
-		[video, clock, frameSeconds],
 	);
 
 	const { undo, redo } = session;
@@ -208,15 +147,15 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode, store, sha
 			switch (action.do) {
 				case "toggle":
 					event.preventDefault();
-					togglePlayback(media);
+					player.toggle();
 					break;
 				case "seek":
 					event.preventDefault();
-					media.currentTime = action.to;
+					player.seek(action.to);
 					break;
 				case "step":
 					event.preventDefault();
-					stepFrame(action.direction);
+					player.stepFrame(action.direction);
 					break;
 				case "mark":
 				case "set-in":
@@ -247,7 +186,7 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode, store, sha
 		};
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
-	}, [active, media, kind, markable, drawable, tool, inPoint, press, stepFrame, undo, redo]);
+	}, [active, media, player, kind, markable, drawable, tool, inPoint, press, undo, redo]);
 
 	const transportMarking = useMemo<TransportMarking | null>(
 		() => (markable ? { full, inPoint, hint: tools.hint, onSpan: tools.makeSpan, onComment: tools.commentAt } : null),
@@ -285,10 +224,9 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode, store, sha
 				? null
 				: createPortal(
 						<MediaTransport
-							media={media}
+							player={player}
 							kind={kind}
 							filename={tab.filename}
-							playhead={playhead}
 							marks={marks}
 							activeId={writingMark?.id ?? null}
 							onSelectMark={selectMark}
@@ -326,7 +264,7 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode, store, sha
 					activeId={pictureId}
 					filename={tab.filename}
 					frameSeconds={frameSeconds}
-					drawingTime={drawingTime}
+					drawingTime={player.drawingTime}
 					onBegin={() => video.pause()}
 					onShape={drawShape}
 					openId={pictureId}
