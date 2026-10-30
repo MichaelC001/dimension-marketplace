@@ -1,0 +1,1 @@
+import{mountMedia as e}from"./media-core-DwUCnAl2.js";var t={mount:(t,n,r)=>e(t,r,`video`)};export{t as default};

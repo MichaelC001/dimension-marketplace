@@ -1315,6 +1315,11 @@ async function deleteRemoteShare(share) {
 }
 var revokeRemote = deleteRemoteShare;
 
+// src/library/revision.ts
+function revisionMarker(own, foreign) {
+  return `${own}:${foreign}`;
+}
+
 // src/library/rows.ts
 function readTags(text2) {
   try {
@@ -16474,7 +16479,12 @@ async function createLibrary(options) {
   function revision() {
     const own = sql("SELECT total_changes() AS n").get()?.n ?? 0;
     const other = sql("PRAGMA data_version").get()?.data_version ?? 0;
-    return `${own}:${other}`;
+    return revisionMarker(own, other);
+  }
+  function witnessed(write) {
+    const before = revision();
+    const value = write();
+    return { value, span: { before, after: revision() } };
   }
   function remembered(key, compute) {
     const version2 = revision();
@@ -16816,7 +16826,7 @@ async function createLibrary(options) {
     const row = requireRow(id);
     if (row.state === "discarded") throw new LibraryError("a discarded artifact keeps no thumbnail");
     const name = await writeThumb(thumbsDirectory, id, bytes, mime);
-    sql("UPDATE artifacts SET thumb = ? WHERE id = ?").run(name, id);
+    return witnessed(() => sql("UPDATE artifacts SET thumb = ? WHERE id = ?").run(name, id)).span;
   }
   let closed = false;
   return {
@@ -16824,6 +16834,7 @@ async function createLibrary(options) {
     workspaceOf,
     query,
     revision,
+    witnessed,
     facets,
     get,
     getByPath,
