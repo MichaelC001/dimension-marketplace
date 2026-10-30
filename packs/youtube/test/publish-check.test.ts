@@ -228,7 +228,7 @@ function validPackage(dir: string): Publish {
 	};
 }
 
-function gate(edit?: Edit, options?: { files?: boolean }) {
+function gate(edit?: Edit, options?: { files?: boolean; stage?: "package" | "upload" }) {
 	const root = mkdtempSync(join(tmpdir(), "youtube-publish-"));
 	made.push(root);
 	const dir = join(root, PRODUCTION);
@@ -246,6 +246,13 @@ function recordAsset(dir: string, asset: Record<string, string>) {
 
 function recordVerdict(publish: Publish, id: string, verdict: Record<string, unknown>) {
 	publish.settings.alteredContent.assets.push({ id, reason: "assessed by the person and the agent", ...verdict });
+}
+
+function planThumbnails(count: number, abTest?: Record<string, unknown>): Edit {
+	return publish => {
+		publish.thumbnail.variants = publish.thumbnail.variants.slice(0, count);
+		if (abTest) publish.thumbnail.abTest = { titles: publish.title.options.slice(0, 2).map((option: { text: string }) => option.text), ...abTest };
+	};
 }
 
 describe("checkPublish on a production folder", () => {
@@ -266,10 +273,12 @@ describe("checkPublish on a production folder", () => {
 	});
 
 	test.each([
-		{ name: "a thumbnail of a different length", retouched: "thumbnail a, retouched after the phone check", codes: ["thumbnail-changed"] },
-		{ name: "a thumbnail of the same length with other bytes", retouched: "thumbnail Z bytes", codes: ["thumbnail-hash"] },
-	])("refuses $name than the one measured", ({ retouched, codes }) => {
+		{ name: "a thumbnail of a different length", variants: 3, retouched: "thumbnail a, retouched after the phone check", codes: ["thumbnail-changed"] },
+		{ name: "a thumbnail of the same length with other bytes", variants: 3, retouched: "thumbnail Z bytes", codes: ["thumbnail-hash"] },
+		{ name: "the only thumbnail of a one-thumbnail package, of a different length", variants: 1, retouched: "thumbnail a, retouched after the phone check", codes: ["thumbnail-changed"] },
+	])("refuses $name than the one measured", ({ variants, retouched, codes }) => {
 		const result = gate((publish, dir) => {
+			publish.thumbnail.variants = publish.thumbnail.variants.slice(0, variants);
 			put(dir, publish.thumbnail.variants[0].path, retouched);
 		});
 
@@ -337,6 +346,51 @@ describe("checkPublish on a production folder", () => {
 		});
 
 		expect(refusals(result)).toEqual(codes);
+	});
+
+	test.each([
+		{ name: "no A/B test", abTest: undefined },
+		{ name: "an A/B test switched off", abTest: { run: false, target: "thumbnail", order: ["a"] } },
+		{ name: "a title-only A/B test", abTest: { run: true, target: "title" } },
+	])("a single thumbnail under $name is a complete package", ({ abTest }) => {
+		const result = gate(planThumbnails(1, abTest));
+
+		expect(result.errors).toEqual([]);
+		expect(result.ok).toBe(true);
+		expect(codesOf(result.warnings)).not.toContain("thumbnail-variants");
+	});
+
+	test.each([
+		{ target: "thumbnail" },
+		{ target: "title-and-thumbnail" },
+	])("refuses a single thumbnail under a $target A/B test, which needs 2 or 3 to compare", ({ target }) => {
+		const result = gate(planThumbnails(1, { run: true, target, order: ["a"] }));
+
+		expect(refusals(result)).toEqual(["thumbnail-variants", "ab-test-order"]);
+		expect(result.ok).toBe(false);
+	});
+
+	test.each([
+		{ name: "2 thumbnails under a thumbnail A/B test warn that 3 is the brief", count: 2, abTest: { run: true, target: "thumbnail", order: ["a", "b"] }, warnings: ["thumbnail-variants"] },
+		{ name: "2 thumbnails under a title-and-thumbnail A/B test warn that 3 is the brief", count: 2, abTest: { run: true, target: "title-and-thumbnail", order: ["a", "b"] }, warnings: ["thumbnail-variants"] },
+		{ name: "3 thumbnails under a thumbnail A/B test are clean", count: 3, abTest: { run: true, target: "thumbnail", order: ["a", "b", "c"] }, warnings: [] },
+		{ name: "2 thumbnails with no A/B test are clean", count: 2, abTest: undefined, warnings: [] },
+		{ name: "3 thumbnails with no A/B test are clean", count: 3, abTest: undefined, warnings: [] },
+	])("$name", ({ count, abTest, warnings }) => {
+		const result = gate(planThumbnails(count, abTest));
+
+		expect(result.errors).toEqual([]);
+		expect(codesOf(result.warnings).filter(code => code === "thumbnail-variants")).toEqual(warnings);
+	});
+
+	test.each([
+		{ name: "the upload stage refuses it", options: {}, ok: false, codes: ["thumbnail-variants"] },
+		{ name: "the package stage, before the thumbnails exist, lets it through", options: { stage: "package" as const }, ok: true, codes: [] },
+	])("a package with no thumbnail at all: $name", ({ options, ok, codes }) => {
+		const result = gate(planThumbnails(0), options);
+
+		expect(result.ok).toBe(ok);
+		expect(refusals(result).filter(code => code === "thumbnail-variants")).toEqual(codes);
 	});
 
 	test.each([
