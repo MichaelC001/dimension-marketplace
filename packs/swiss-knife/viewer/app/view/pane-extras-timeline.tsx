@@ -81,8 +81,6 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode, store, sha
 		if (tab.annotateRequests > 0 && penUp) setTool(tool ?? "box");
 	}, [tab.annotateRequests]);
 
-	const seekTo = useCallback((seconds: number) => void player.seek(seconds), [player]);
-
 	const drawShape = useCallback(
 		(shape: MarkShape, aspect: number): number | undefined => {
 			if (video === null) return undefined;
@@ -97,10 +95,10 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode, store, sha
 		(id: number) => {
 			const mark = marks.find(entry => entry.id === id);
 			if (mark === undefined) return;
-			if (mark.shape === undefined) seekTo(mark.at);
+			if (mark.shape === undefined) player.seek(mark.at);
 			else player.showFrame(mark.at);
 		},
-		[marks, player, seekTo],
+		[marks, player],
 	);
 
 	const sharedTimes = shared?.places.times ?? NO_TIMES;
@@ -113,8 +111,8 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode, store, sha
 	useEffect(() => {
 		if (!active || sharedOpenId === undefined || sharedOpenAt === undefined) return;
 		if (sharedOpenDrawn && video !== null) player.showFrame(sharedOpenAt);
-		else seekTo(sharedOpenAt);
-	}, [active, sharedOpenId, sharedOpenAt, sharedOpenDrawn, video, player, seekTo]);
+		else player.seek(sharedOpenAt);
+	}, [active, sharedOpenId, sharedOpenAt, sharedOpenDrawn, video, player]);
 	const sharedLaneId = sharedOpen !== undefined && !(sharedOpenDrawn && video !== null) ? sharedOpen.id : null;
 
 	const selectMark = useCallback(
