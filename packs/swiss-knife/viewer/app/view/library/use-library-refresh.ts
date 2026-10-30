@@ -9,6 +9,7 @@ export function useLibraryRefresh(tools: LibraryTools, filter: LibraryFilter, li
 	const latest = useRef(filter);
 	latest.current = filter;
 	const running = useRef<AbortController | null>(null);
+	const retry = useRef<number | undefined>(undefined);
 	const { key, stale, phase, loadingMore, refreshing } = list;
 	const loaded = list.items.length;
 	const idle = key !== null && phase === "ready" && !loadingMore && !refreshing;
@@ -19,7 +20,13 @@ export function useLibraryRefresh(tools: LibraryTools, filter: LibraryFilter, li
 	}, [dispatch, onMoved]);
 	useChangePoll(tools.revision, REVISION_POLL_MS, moved);
 
-	useEffect(() => () => running.current?.abort(), [key]);
+	useEffect(
+		() => () => {
+			running.current?.abort();
+			window.clearTimeout(retry.current);
+		},
+		[key],
+	);
 
 	useEffect(() => {
 		if (!stale || !idle || key === null) return;
@@ -28,7 +35,10 @@ export function useLibraryRefresh(tools: LibraryTools, filter: LibraryFilter, li
 		dispatch({ type: "refresh", key });
 		reloadLoaded(args => tools.query(args, controller.signal), latest.current, loaded).then(
 			page => dispatch({ type: "refreshed", key, page }),
-			() => dispatch({ type: "refreshed", key }),
+			() => {
+				dispatch({ type: "refreshed", key });
+				if (!controller.signal.aborted) retry.current = window.setTimeout(() => dispatch({ type: "stale" }), REVISION_POLL_MS);
+			},
 		);
 	}, [tools, dispatch, stale, idle, key, loaded]);
 }
