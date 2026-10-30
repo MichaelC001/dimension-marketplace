@@ -63,6 +63,7 @@ export function MediaTransport({ player, kind, filename, marks, activeId, onSele
 					frames={film?.frames ?? NO_FRAMES}
 					failed={film?.failed ?? false}
 					slots={film?.slots ?? 1}
+					aspect={state.aspect}
 					{...(film === undefined ? {} : { onSlots: film.onSlots })}
 					marks={marks}
 					activeId={activeId}
