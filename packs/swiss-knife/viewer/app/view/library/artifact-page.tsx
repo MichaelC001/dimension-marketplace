@@ -38,7 +38,10 @@ export interface ArtifactPageProps {
 	readonly active: boolean;
 	readonly now: number;
 	readonly theme: Theme;
-	readonly onBack: () => void;
+	/** A document the Viewer already has open as its own tab: shown as it is instead of opened again by id. */
+	readonly tab?: DocTab;
+	/** Back to the library grid; a document tab has no grid to go back to. */
+	readonly onBack?: () => void;
 	readonly onPatch: (patch: ArtifactPatchInput) => void;
 	readonly onShare: () => void;
 	readonly onManage: (shareId: string) => void;
@@ -49,13 +52,13 @@ export interface ArtifactPageProps {
 
 type Doc = { readonly phase: "opening" } | { readonly phase: "open"; readonly tab: DocTab } | { readonly phase: "failed"; readonly failure: OpenFailureText };
 
-function useArtifactDoc(tools: LibraryTools, item: LibraryItem): { readonly doc: Doc; readonly retry: () => void } {
+function useArtifactDoc(tools: LibraryTools, item: LibraryItem, given: DocTab | undefined): { readonly doc: Doc; readonly retry: () => void } {
 	const [doc, setDoc] = useState<Doc>({ phase: "opening" });
 	const [attempt, setAttempt] = useState(0);
-	const discarded = item.state === "discarded";
+	const skip = item.state === "discarded" || given !== undefined;
 	// biome-ignore lint/correctness/useExhaustiveDependencies: `attempt` is a retrigger token; a changed file reopens through `presentedAt`.
 	useEffect(() => {
-		if (discarded) return;
+		if (skip) return;
 		let live = true;
 		setDoc(current => (current.phase === "open" ? current : { phase: "opening" }));
 		tools.open(item.id).then(
@@ -80,7 +83,7 @@ function useArtifactDoc(tools: LibraryTools, item: LibraryItem): { readonly doc:
 		return () => {
 			live = false;
 		};
-	}, [tools, item.id, item.presentedAt, discarded, attempt]);
+	}, [tools, item.id, item.presentedAt, skip, attempt]);
 	return { doc, retry: useCallback(() => setAttempt(count => count + 1), []) };
 }
 
@@ -265,11 +268,20 @@ function DetailsView({ app, item, onPatch, onDiscard, onRestore }: Pick<Artifact
 	);
 }
 
-function ShareView({ tools, item, now, onShare, onManage }: Pick<ArtifactPageProps, "tools" | "item" | "now" | "onShare" | "onManage">) {
+function ShareView({ tools, item, now, onShare, onManage, onShares }: Pick<ArtifactPageProps, "tools" | "item" | "now" | "onShare" | "onManage" | "onShares">) {
 	const canShare = item.state === "live";
 	return (
 		<div className="flex flex-col gap-4">
-			<AccessList tools={tools} shares={item.shares} now={now} canShare={canShare} onShare={onShare} onManage={onManage} />
+			<AccessList
+				tools={tools}
+				shares={item.shares}
+				now={now}
+				mtimeMs={item.mtimeMs}
+				canShare={canShare}
+				onShare={onShare}
+				onManage={onManage}
+				onUpdated={summary => onShares(item.shares.map(share => (share.id === summary.id ? summary : share)))}
+			/>
 			{canShare ? (
 				<div className="flex border-t border-fr-border-soft pt-3">
 					<Button type="button" size="sm" onClick={onShare}>
@@ -303,7 +315,8 @@ export function ArtifactPage(props: ArtifactPageProps) {
 	const [renaming, setRenaming] = useState(false);
 	const [openId, setOpenId] = useState<string | null>(null);
 	const { copied, copy } = useCopied(item.path);
-	const { doc, retry } = useArtifactDoc(tools, item);
+	const { doc: opened, retry } = useArtifactDoc(tools, item, props.tab);
+	const doc: Doc = props.tab === undefined ? opened : { phase: "open", tab: props.tab };
 	const sheetId = useId();
 	const sheet = useRef<HTMLDivElement>(null);
 	const bar = useRef<HTMLElement>(null);
@@ -358,10 +371,16 @@ export function ArtifactPage(props: ArtifactPageProps) {
 
 	return (
 		<div data-slot="artifact-page" className="absolute inset-0 z-30 flex min-h-0 flex-col bg-fr-bg text-fr-text" onKeyDown={onKeyDown}>
-			<header ref={bar} data-slot="artifact-bar" className="relative z-20 flex h-11 shrink-0 items-center gap-1.5 pl-1.5 pr-2 shadow-[inset_0_-1px_0_var(--fr-border-soft)]">
-				<IconButton className={cn("size-7", FOCUS)} aria-label="Back to the library" title="Back to the library" onClick={onBack}>
-					<Icon name="back" size={15} />
-				</IconButton>
+			<header
+				ref={bar}
+				data-slot="artifact-bar"
+				className={cn("relative z-20 flex h-11 shrink-0 items-center gap-1.5 pr-2 shadow-[inset_0_-1px_0_var(--fr-border-soft)]", onBack === undefined ? "pl-3" : "pl-1.5")}
+			>
+				{onBack === undefined ? null : (
+					<IconButton className={cn("size-7", FOCUS)} aria-label="Back to the library" title="Back to the library" onClick={onBack}>
+						<Icon name="back" size={15} />
+					</IconButton>
+				)}
 				<Icon name={look.icon} size={15} className="shrink-0 text-fr-text-3" />
 				{renaming ? (
 					<RenameField value={item.title ?? ""} placeholder={item.name} onCommit={title => onPatch({ title: title === "" ? null : title })} onDone={() => setRenaming(false)} />
@@ -443,7 +462,7 @@ export function ArtifactPage(props: ArtifactPageProps) {
 						</div>
 						<div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4">
 							{view === "comments" ? <CommentsView data={data} shares={item.shares} now={now} openId={openId} onPick={pick} /> : null}
-							{view === "share" ? <ShareView tools={tools} item={item} now={now} onShare={props.onShare} onManage={props.onManage} /> : null}
+							{view === "share" ? <ShareView tools={tools} item={item} now={now} onShare={props.onShare} onManage={props.onManage} onShares={onShares} /> : null}
 							{view === "details" ? <DetailsView app={app} item={item} onPatch={onPatch} onDiscard={props.onDiscard} onRestore={onRestore} /> : null}
 						</div>
 					</div>

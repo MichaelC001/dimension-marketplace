@@ -237,7 +237,8 @@ export function ShareDialog({ tools, item, shareId, onClose, onCreated, onChange
 			links.current.set(share.id, share.link);
 			setOwnId(share.id);
 			setOwn(share);
-			onCreated(share);
+			if (share.outcome === "created") onCreated(share);
+			else onChanged(share);
 			resolve(share);
 		};
 		const fail = (error: string): void => {
@@ -251,6 +252,11 @@ export function ShareDialog({ tools, item, shareId, onClose, onCreated, onChange
 			linking = true;
 			tools.link(id).then(found => {
 				const at = Date.now();
+				const known = item.shares.find(share => share.id === id);
+				if (known !== undefined) {
+					finish({ ...known, version: known.version + 1, versionAt: at, link: found, outcome: "updated" });
+					return;
+				}
 				finish({
 					id,
 					host: made.host,
@@ -263,6 +269,7 @@ export function ShareDialog({ tools, item, shareId, onClose, onCreated, onChange
 					unread: 0,
 					...(made.expiresInDays === undefined ? {} : { expiresAt: at + made.expiresInDays * DAY_MS }),
 					link: found,
+					outcome: "created",
 				});
 			}, cause => fail(errorText(cause)));
 		};
@@ -301,7 +308,8 @@ export function ShareDialog({ tools, item, shareId, onClose, onCreated, onChange
 		}
 		setLink(share.link);
 		const copied = await copyText(share.link);
-		setStatus({ kind: "saved", text: copied ? "Link created and copied" : "Link created. Copy it below." });
+		const done = { created: "Link created", updated: `The link you already shared now shows this version (v${share.version})`, unchanged: "This file already has this link" }[share.outcome];
+		setStatus({ kind: "saved", text: copied ? `${done} and copied` : `${done}. Copy it below.` });
 	};
 
 	const updateLink = (): void => {

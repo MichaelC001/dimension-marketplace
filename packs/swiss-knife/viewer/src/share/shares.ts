@@ -43,6 +43,20 @@ const MAX_AUTHOR_CHARS = 80;
 const OPEN_LINK_ONLY = "a link from this computer is open to anyone who has it; signing in needs your own server";
 const BUSY = "that file is already being shared; wait for it to finish";
 
+function audienceKey(audience: Audience): string {
+	if (audience.kind === "link") return "link";
+	const sorted = (values: readonly string[] | undefined) => [...(values ?? [])].map(value => value.toLowerCase()).sort();
+	return JSON.stringify(["signin", sorted(audience.emails), sorted(audience.domains)]);
+}
+
+/** The link a new share of this file would duplicate: open, on the same server, for the same people. */
+export function sameLink(shares: readonly ShareSummary[], host: string, audience: Audience, now: number): ShareSummary | undefined {
+	const wanted = audienceKey(audience);
+	return shares.find(
+		share => share.host === host && share.revokedAt === undefined && (share.expiresAt === undefined || share.expiresAt > now) && audienceKey(share.audience) === wanted,
+	);
+}
+
 export class ShareError extends Error {
 	override readonly name = "ShareError";
 }
@@ -72,7 +86,8 @@ export interface ShareUpdateInput {
 	readonly allowComments?: boolean;
 }
 
-export type CreatedShare = ShareSummary & { readonly link: string };
+export type ShareOutcome = "created" | "updated" | "unchanged";
+export type CreatedShare = ShareSummary & { readonly link: string; readonly outcome: ShareOutcome };
 export type CommentWithUrl = CommentRow & { readonly shareUrl: string };
 
 export interface RevokeOutcome {
@@ -201,13 +216,32 @@ export class ShareService {
 		this.#report(artifactId, { phase: "done", sent: total, total, shareId });
 	}
 
+	/**
+	 * One file, one link per server and audience: sharing a file that already has that link publishes the current file
+	 * to it as a new version when the file changed since, so the people who have it and their comments carry over.
+	 */
 	async create(input: CreateShareInput): Promise<CreatedShare> {
 		const item = this.#liveItem(input.artifactId);
+		const existing = sameLink(item.shares, input.host, input.audience, this.#now());
+		if (existing !== undefined) return this.#reuse(item, existing.id, input.allowComments);
 		return this.#track(item.id, async () => {
 			const row = input.host === P2P_HOST_ID ? await this.#createP2p(input, item) : await this.#createHosted(input, item);
 			this.#finish(item.id, row.id);
 			this.#options.onSharesChanged();
-			return { ...this.summarize(row.id), link: this.linkOf(row.id) };
+			return { ...this.summarize(row.id), link: this.linkOf(row.id), outcome: "created" };
+		});
+	}
+
+	async #reuse(item: LibraryItem, shareId: string, allowComments: boolean): Promise<CreatedShare> {
+		const row = this.#liveRow(shareId);
+		if (row.allowComments !== allowComments) await this.update({ shareId, allowComments });
+		const changed = row.host !== P2P_HOST_ID && (await stat(await this.#realPath(item))).mtimeMs > row.versionAt;
+		if (!changed) return { ...this.summarize(shareId), link: this.linkOf(shareId), outcome: "unchanged" };
+		return this.#track(item.id, async () => {
+			await this.#publishVersion(row);
+			this.#finish(item.id, row.id);
+			this.#options.onSharesChanged();
+			return { ...this.summarize(shareId), link: this.linkOf(shareId), outcome: "updated" };
 		});
 	}
 
@@ -377,12 +411,16 @@ export class ShareService {
 	async newVersion(shareId: string): Promise<ShareSummary> {
 		const row = this.#liveRow(shareId);
 		return this.#track(row.artifactId, async () => {
-			if (row.host === P2P_HOST_ID) await this.#options.p2p.server.newVersion(row);
-			else await this.#newHostedVersion(row);
-			this.#options.p2p.announce();
+			await this.#publishVersion(row);
 			this.#finish(row.artifactId, row.id);
 			return this.summarize(row.id);
 		});
+	}
+
+	async #publishVersion(row: ShareRow): Promise<void> {
+		if (row.host === P2P_HOST_ID) await this.#options.p2p.server.newVersion(row);
+		else await this.#newHostedVersion(row);
+		this.#options.p2p.announce();
 	}
 
 	async #newHostedVersion(row: ShareRow): Promise<void> {

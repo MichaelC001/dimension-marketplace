@@ -145,7 +145,8 @@ export function registerShareTools(server: McpServer, runtime: ShareRuntime): vo
 					allowComments: input.allowComments,
 					...(input.expiresInDays === undefined ? {} : { expiresInDays: input.expiresInDays }),
 				});
-				return success("Link created.", { share });
+				const said = { created: "Link created.", updated: `The existing link now shows the current file as version ${share.version}.`, unchanged: "The file already has this link." };
+				return success(said[share.outcome], { share });
 			}),
 	);
 

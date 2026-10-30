@@ -214,6 +214,24 @@ export function registerLibraryTools(server: McpServer, { library, fence, media 
 
 	registerAppTool(
 		server,
+		"library_item_at",
+		{
+			title: "The artifact at a path",
+			description: "The library's live artifact for a file the View has open, with its links, so a document tab wears the same Share and Comments as the library's page; `item` is null for a file the library does not hold.",
+			inputSchema: { path },
+			annotations: READ_ONLY,
+			_meta: APP_ONLY,
+		},
+		({ path: requested }) =>
+			answer(async () => {
+				const verdict = await fence.check(requested);
+				const item = verdict.ok ? library.getByPath(verdict.real) : undefined;
+				return { text: "Looked up.", data: { item: item === undefined || item.state === "discarded" ? null : item } };
+			}),
+	);
+
+	registerAppTool(
+		server,
 		"library_open",
 		{
 			title: "Open an artifact",
