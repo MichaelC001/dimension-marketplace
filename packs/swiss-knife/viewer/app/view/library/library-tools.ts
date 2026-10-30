@@ -65,6 +65,7 @@ export interface RevokeOutcome {
 
 export interface LibraryTools {
 	readonly query: (args: LibraryQuery, signal?: AbortSignal) => Promise<LibraryPage>;
+	readonly revision: (signal?: AbortSignal) => Promise<string>;
 	readonly facets: (scope: { readonly workspace?: string; readonly state?: "live" | "discarded" }, signal?: AbortSignal) => Promise<LibraryFacets>;
 	readonly check: (ids: readonly string[], signal?: AbortSignal) => Promise<readonly ({ readonly id: string } & CheckedRow)[]>;
 	readonly update: (id: string, patch: ArtifactPatchInput) => Promise<LibraryItem>;
@@ -96,6 +97,7 @@ export function createLibraryTools(app: Pick<App, "callServerTool" | "sendMessag
 	return {
 		query: (args, signal) => tools.whole<LibraryPage>("library_query", { ...args }, options(signal)),
 		facets: (scope, signal) => tools.whole<LibraryFacets>("library_facets", { ...scope }, options(signal)),
+		revision: signal => tools.call("library_revision", {}, "revision", options(signal)),
 		check: (ids, signal) => tools.call("library_check", { ids }, "items", options(signal)),
 		update: (id, patch) => tools.call("library_update", { id, ...patch }, "item"),
 		stamp: path => tools.call("library_stamp", { path }, "item"),

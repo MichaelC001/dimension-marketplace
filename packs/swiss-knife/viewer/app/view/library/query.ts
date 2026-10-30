@@ -38,6 +38,16 @@ export function filterKey(filter: LibraryFilter, generation: number): string {
 	return `${generation}:${JSON.stringify(queryArgs(filter))}`;
 }
 
+export async function reloadLoaded(read: (args: LibraryQuery) => Promise<LibraryPage>, filter: LibraryFilter, count: number): Promise<LibraryPage> {
+	let page = await read(queryArgs(filter));
+	const items = [...page.items];
+	while (items.length < count && page.next !== undefined) {
+		page = await read(queryArgs(filter, page.next));
+		items.push(...page.items);
+	}
+	return { items, ...(page.next === undefined ? {} : { next: page.next }), total: page.total };
+}
+
 export function toggleKind(kinds: readonly PresentedKind[], kind: PresentedKind): readonly PresentedKind[] {
 	return kinds.includes(kind) ? kinds.filter(each => each !== kind) : [...kinds, kind];
 }
@@ -66,6 +76,8 @@ export interface ListState {
 	readonly phase: "idle" | "loading" | "ready" | "failed";
 	readonly error: string | null;
 	readonly loadingMore: boolean;
+	readonly stale: boolean;
+	readonly refreshing: boolean;
 	readonly checked: Readonly<Record<string, CheckedRow>>;
 }
 
@@ -74,19 +86,22 @@ export type ListAction =
 	| { readonly type: "more"; readonly key: string }
 	| { readonly type: "page"; readonly key: string; readonly page: LibraryPage; readonly append: boolean }
 	| { readonly type: "failed"; readonly key: string; readonly error: string }
+	| { readonly type: "stale" }
+	| { readonly type: "refresh"; readonly key: string }
+	| { readonly type: "refreshed"; readonly key: string; readonly page?: LibraryPage }
 	| { readonly type: "item"; readonly item: LibraryItem }
 	| { readonly type: "remove"; readonly id: string }
 	| { readonly type: "thumb"; readonly id: string }
 	| { readonly type: "checked"; readonly rows: readonly ({ readonly id: string } & CheckedRow)[] };
 
-export const INITIAL_LIST: ListState = { key: null, items: [], next: undefined, total: 0, phase: "idle", error: null, loadingMore: false, checked: {} };
+export const INITIAL_LIST: ListState = { key: null, items: [], next: undefined, total: 0, phase: "idle", error: null, loadingMore: false, stale: false, refreshing: false, checked: {} };
 
 export function reduceList(state: ListState, action: ListAction): ListState {
 	switch (action.type) {
 		case "request":
-			return { ...state, key: action.key, phase: "loading", error: null, loadingMore: false };
+			return { ...state, key: action.key, phase: "loading", error: null, loadingMore: false, stale: false, refreshing: false };
 		case "more":
-			if (action.key !== state.key || state.next === undefined || state.loadingMore) return state;
+			if (action.key !== state.key || state.next === undefined || state.loadingMore || state.refreshing) return state;
 			return { ...state, loadingMore: true };
 		case "page": {
 			if (action.key !== state.key) return state;
@@ -97,6 +112,16 @@ export function reduceList(state: ListState, action: ListAction): ListState {
 		case "failed":
 			if (action.key !== state.key) return state;
 			return { ...state, phase: "failed", error: action.error, loadingMore: false };
+		case "stale":
+			if (state.key === null || state.stale) return state;
+			return { ...state, stale: true };
+		case "refresh":
+			if (action.key !== state.key || state.phase !== "ready" || state.loadingMore || state.refreshing) return state;
+			return { ...state, stale: false, refreshing: true };
+		case "refreshed":
+			if (action.key !== state.key || !state.refreshing) return state;
+			if (action.page === undefined) return { ...state, refreshing: false };
+			return { ...state, items: action.page.items, next: action.page.next, total: action.page.total, refreshing: false };
 		case "item": {
 			const at = state.items.findIndex(item => item.id === action.item.id);
 			if (at === -1) return state;
@@ -104,12 +129,12 @@ export function reduceList(state: ListState, action: ListAction): ListState {
 			items[at] = action.item;
 			const checked: Record<string, CheckedRow> = { ...state.checked };
 			delete checked[action.item.id];
-			return { ...state, items, checked };
+			return { ...state, items, checked, stale: state.stale || state.refreshing };
 		}
 		case "remove": {
 			const at = state.items.findIndex(item => item.id === action.id);
 			if (at === -1) return state;
-			return { ...state, items: state.items.filter(item => item.id !== action.id), total: Math.max(0, state.total - 1) };
+			return { ...state, items: state.items.filter(item => item.id !== action.id), total: Math.max(0, state.total - 1), stale: state.stale || state.refreshing };
 		}
 		case "thumb": {
 			const at = state.items.findIndex(item => item.id === action.id);

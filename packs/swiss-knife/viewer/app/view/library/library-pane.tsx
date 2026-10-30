@@ -36,6 +36,7 @@ import {
 	toggleTag,
 } from "./query";
 import { ShareDialog } from "./share-dialog";
+import { useLibraryRefresh } from "./use-library-refresh";
 import { type RowRange, wantsNextPage } from "./window";
 
 export interface LibraryPaneProps {
@@ -197,6 +198,9 @@ export function LibraryPane({ app, request, active, theme }: LibraryPaneProps) {
 		return () => controller.abort();
 	}, [tools, filter.workspace, facetState, facetsGeneration]);
 
+	const refreshFacets = useCallback((): void => setFacetsGeneration(count => count + 1), []);
+	useLibraryRefresh(tools, filter, list, dispatch, refreshFacets);
+
 	useEffect(() => {
 		let live = true;
 		tools.thumbsBase().then(
@@ -243,7 +247,7 @@ export function LibraryPane({ app, request, active, theme }: LibraryPaneProps) {
 		const current = listRef.current;
 		const key = current.key;
 		const cursor = current.next;
-		if (key === null || cursor === undefined || current.phase !== "ready" || inflightCursor.current === cursor) return;
+		if (key === null || cursor === undefined || current.phase !== "ready" || current.refreshing || inflightCursor.current === cursor) return;
 		inflightCursor.current = cursor;
 		dispatch({ type: "more", key });
 		const controller = new AbortController();

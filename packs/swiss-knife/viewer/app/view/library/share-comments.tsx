@@ -35,6 +35,7 @@ export function useArtifactComments({ tools, artifactId, shares, now, onShares }
 	const [error, setError] = useState<string | null>(null);
 	const [fresh, setFresh] = useState<ReadonlySet<string>>(() => new Set());
 	const unreadTotal = shares.reduce((sum, share) => sum + share.unread, 0);
+	const commentTotal = shares.reduce((sum, share) => sum + share.comments, 0);
 	const latest = useRef({ shares, onShares });
 	latest.current = { shares, onShares };
 	const marking = useRef(new Set<string>());
@@ -53,7 +54,7 @@ export function useArtifactComments({ tools, artifactId, shares, now, onShares }
 			},
 		);
 		return () => controller.abort();
-	}, [tools, artifactId, shares.length, unreadTotal]);
+	}, [tools, artifactId, shares.length, unreadTotal, commentTotal]);
 
 	const add = useCallback((comment: ShareComment): void => {
 		setComments(rows => [...(rows ?? []), { ...comment, readAt: comment.readAt ?? Date.now() }]);
