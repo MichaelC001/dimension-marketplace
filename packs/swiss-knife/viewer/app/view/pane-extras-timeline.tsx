@@ -7,7 +7,7 @@ import {
 	useTimelineMarks,
 	useTimelineTools,
 } from "@dimension/mcp-app-kit/annotate/react";
-import { drawnOnFrame, frameAt, frameSize, insideFrame, keyOwner, readLength } from "@dimension/mcp-app-kit/media";
+import { frameSize, insideFrame, keyOwner, readLength } from "@dimension/mcp-app-kit/media";
 import { useFilmstrip, useFrameGrabber, useMediaPlayer, useMediaSelect, usePageVisible } from "@dimension/mcp-app-kit/media/react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -41,7 +41,6 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode, store, sha
 
 	const { playhead, clock } = player;
 	const { frameSeconds } = clock;
-	const drawingTime = useCallback((position: number) => frameAt(clock.showing(position), position, frameSeconds()), [clock, frameSeconds]);
 
 	const grabber = useFrameGrabber(video);
 	const stripGrabber = useFrameGrabber(video);
@@ -87,32 +86,21 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode, store, sha
 	const drawShape = useCallback(
 		(shape: MarkShape, aspect: number): number | undefined => {
 			if (video === null) return undefined;
-			video.pause();
-			const seconds = frameSeconds();
-			const at = drawingTime(video.currentTime);
-			const id = addShape(shape, at, aspect);
-			if (id === undefined) {
-				if (full) say(FULL_SENTENCE);
-				return undefined;
-			}
-			if (!drawnOnFrame(at, video.currentTime, seconds)) seekTo(insideFrame(at, seconds));
+			const id = player.stamp(at => addShape(shape, at, aspect));
+			if (id === undefined && full) say(FULL_SENTENCE);
 			return id;
 		},
-		[video, addShape, drawingTime, frameSeconds, seekTo, full, say],
+		[video, player, addShape, full, say],
 	);
 
 	const goTo = useCallback(
 		(id: number) => {
 			const mark = marks.find(entry => entry.id === id);
 			if (mark === undefined) return;
-			if (mark.shape === undefined) {
-				seekTo(mark.at);
-				return;
-			}
-			player.pause();
-			seekTo(insideFrame(mark.at, frameSeconds()));
+			if (mark.shape === undefined) seekTo(mark.at);
+			else player.showFrame(mark.at);
 		},
-		[marks, player, seekTo, frameSeconds],
+		[marks, player, seekTo],
 	);
 
 	const sharedTimes = shared?.places.times ?? NO_TIMES;
@@ -124,13 +112,9 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode, store, sha
 	const sharedOpenDrawn = sharedOpen?.drawn === true;
 	useEffect(() => {
 		if (!active || sharedOpenId === undefined || sharedOpenAt === undefined) return;
-		if (sharedOpenDrawn && video !== null) {
-			video.pause();
-			seekTo(insideFrame(sharedOpenAt, frameSeconds()));
-		} else {
-			seekTo(sharedOpenAt);
-		}
-	}, [active, sharedOpenId, sharedOpenAt, sharedOpenDrawn, video, seekTo, frameSeconds]);
+		if (sharedOpenDrawn && video !== null) player.showFrame(sharedOpenAt);
+		else seekTo(sharedOpenAt);
+	}, [active, sharedOpenId, sharedOpenAt, sharedOpenDrawn, video, player, seekTo]);
 	const sharedLaneId = sharedOpen !== undefined && !(sharedOpenDrawn && video !== null) ? sharedOpen.id : null;
 
 	const selectMark = useCallback(
@@ -282,7 +266,7 @@ export function TimelineMarks({ app, tab, active, ready, frame, mode, store, sha
 					activeId={pictureId}
 					filename={tab.filename}
 					frameSeconds={frameSeconds}
-					drawingTime={drawingTime}
+					drawingTime={player.drawingTime}
 					onBegin={() => video.pause()}
 					onShape={drawShape}
 					openId={pictureId}

@@ -1,6 +1,6 @@
 import { FULL_SENTENCE, type TimelineMark } from "@dimension/mcp-app-kit/annotate";
 import { FilmLane, type NoteCloseReason, Transport, WaveLane } from "@dimension/mcp-app-kit/annotate/react";
-import { type FilmFrame, type MediaPlayer } from "@dimension/mcp-app-kit/media";
+import type { FilmFrame, MediaPlayer } from "@dimension/mcp-app-kit/media";
 import { useMediaState } from "@dimension/mcp-app-kit/media/react";
 import { cn } from "@fraym/ui/lib/cn";
 import type { ReactNode } from "react";
