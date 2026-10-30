@@ -71,7 +71,7 @@ function parseShape(value) {
 function parseQuote(value) {
   if (!isRecord(value)) return void 0;
   const quote = boundedString(value.quote, ASP_MAX_QUOTE);
-  const fits = (text) => typeof text === "string" && text.length <= ASP_MAX_QUOTE_CONTEXT;
+  const fits = (text2) => typeof text2 === "string" && text2.length <= ASP_MAX_QUOTE_CONTEXT;
   return quote !== void 0 && fits(value.prefix) && fits(value.suffix) ? { quote, prefix: value.prefix, suffix: value.suffix } : void 0;
 }
 function millis(value) {
@@ -82,8 +82,8 @@ function regionShape(value) {
   if (!unit(value.x) || !unit(value.y) || !unit(value.w) || !unit(value.h)) return void 0;
   return { kind: "box", from: { x: value.x, y: value.y }, to: { x: Math.min(1, value.x + value.w), y: Math.min(1, value.y + value.h) } };
 }
-function shapeExtent(shape) {
-  const points = shape.kind === "pin" ? [shape.at] : shape.kind === "pen" ? shape.points : [shape.from, shape.to];
+function shapeExtent(shape2) {
+  const points = shape2.kind === "pin" ? [shape2.at] : shape2.kind === "pen" ? shape2.points : [shape2.from, shape2.to];
   const xs = points.map((point) => point.x);
   const ys = points.map((point) => point.y);
   return { left: Math.min(...xs), top: Math.min(...ys), right: Math.max(...xs), bottom: Math.max(...ys) };
@@ -93,18 +93,18 @@ function parseCommentAnchor(value) {
   const startMs = optionalField(value.startMs, millis);
   const endMs = optionalField(value.endMs, millis);
   const page = optionalField(value.page, positiveInt);
-  const text = optionalField(value.text, parseQuote);
+  const text2 = optionalField(value.text, parseQuote);
   const drawn = optionalField(value.shape, parseShape);
-  const shape = drawn === void 0 && text === void 0 && value.kind === "region" ? regionShape(value) ?? INVALID : drawn;
-  if (startMs === INVALID || endMs === INVALID || page === INVALID || shape === INVALID || text === INVALID) return void 0;
+  const shape2 = drawn === void 0 && text2 === void 0 && value.kind === "region" ? regionShape(value) ?? INVALID : drawn;
+  if (startMs === INVALID || endMs === INVALID || page === INVALID || shape2 === INVALID || text2 === INVALID) return void 0;
   if (endMs !== void 0 && (startMs === void 0 || endMs < startMs)) return void 0;
-  if (startMs === void 0 && page === void 0 && shape === void 0 && text === void 0) return void 0;
+  if (startMs === void 0 && page === void 0 && shape2 === void 0 && text2 === void 0) return void 0;
   return {
     ...startMs === void 0 ? {} : { startMs },
     ...endMs === void 0 ? {} : { endMs },
     ...page === void 0 ? {} : { page },
-    ...shape === void 0 ? {} : { shape },
-    ...text === void 0 ? {} : { text }
+    ...shape2 === void 0 ? {} : { shape: shape2 },
+    ...text2 === void 0 ? {} : { text: text2 }
   };
 }
 var LABEL_QUOTE_CHARS = 40;
@@ -139,10 +139,10 @@ function anchorLabel(anchor) {
   const page = anchor.page === void 0 ? null : `p. ${anchor.page}`;
   if (anchor.text !== void 0) return `on \u201C${quoteWords(anchor.text.quote)}\u201D${page === null ? "" : ` on ${page}`}`;
   if (anchor.shape !== void 0) {
-    const shape = SHAPE_WORDS[anchor.shape.kind];
-    if (page !== null) return `${shape} on ${page}`;
-    if (time3 !== null) return `${shape} at ${time3}`;
-    return shape;
+    const shape2 = SHAPE_WORDS[anchor.shape.kind];
+    if (page !== null) return `${shape2} on ${page}`;
+    if (time3 !== null) return `${shape2} at ${time3}`;
+    return shape2;
   }
   return time3 ?? page;
 }
@@ -289,6 +289,11 @@ function classifyFile(name, head) {
   return BINARY;
 }
 
+// ../../../fraym/packages/driver/src/type-guards.ts
+function isRecord2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 // ../../../fraym/packages/driver/src/presentation.ts
 var PRESENTED_KINDS = [
   "image",
@@ -333,6 +338,201 @@ function formatByteSize(bytes) {
   const shown = unit > 0 && value < 10 ? Math.round(value * 10) / 10 : Math.round(value);
   return `${shown} ${SIZE_UNITS[unit]}`;
 }
+
+// ../../../fraym/packages/driver/src/generative-ui.ts
+var UI_LIMITS = {
+  maxSpecBytes: 48 * 1024,
+  maxNodes: 400,
+  maxDepth: 8,
+  maxBlocks: 60,
+  maxChildren: 60,
+  maxButtons: 12,
+  maxIssues: 8,
+  maxTitle: 120,
+  maxLabel: 160,
+  maxText: 2e3,
+  maxCell: 400,
+  maxMessage: 500,
+  maxUrl: 2048,
+  maxItems: 100,
+  maxTableRows: 200,
+  maxTableColumns: 12,
+  maxOptions: 6,
+  maxTabs: 12,
+  maxLabels: 60,
+  maxSeries: 6
+};
+var UI_TONES = ["neutral", "muted", "info", "success", "warning", "danger"];
+var L = UI_LIMITS;
+var label = (max = L.maxLabel) => ({ k: "str", max, inline: false });
+var text = (max = L.maxText) => ({ k: "str", max, inline: true });
+var pick = (...values) => ({ k: "enum", values });
+var int = (min, max) => ({ k: "int", min, max });
+var flag = { k: "bool" };
+var tone = { k: "enum", values: UI_TONES };
+var kids = { k: "nodes" };
+var items = (of, max = L.maxItems, min = 1) => ({ k: "list", of, min, max });
+var shape = (fields, shorthand) => shorthand === void 0 ? { k: "shape", fields } : { k: "shape", fields, shorthand };
+var PALETTE = {
+  stack: {
+    group: "Layout",
+    fields: { children: kids, "direction?": pick("column", "row"), "gap?": pick("sm", "md", "lg") }
+  },
+  grid: { group: "Layout", fields: { children: kids, "columns?": int(1, 4) } },
+  card: {
+    group: "Layout",
+    fields: { "title?": label(), "subtitle?": label(), "tone?": tone, children: kids }
+  },
+  tabs: {
+    group: "Layout",
+    fields: { tabs: items(shape({ label: label(60), children: kids }), L.maxTabs) }
+  },
+  collapse: { group: "Layout", fields: { title: label(), "open?": flag, children: kids } },
+  divider: { group: "Layout", fields: {} },
+  heading: { group: "Text", fields: { text: label(200), "level?": int(1, 3) } },
+  text: { group: "Text", fields: { text: text(), "tone?": tone } },
+  callout: { group: "Text", fields: { "tone?": tone, "title?": label(), text: text() } },
+  tags: {
+    group: "Text",
+    fields: { items: items(shape({ text: label(60), "tone?": tone }, "text"), 30) }
+  },
+  list: {
+    group: "Lists",
+    fields: {
+      "ordered?": flag,
+      items: items(shape({ text: text(400), "detail?": text(400) }, "text"))
+    }
+  },
+  checklist: {
+    group: "Lists",
+    fields: {
+      "title?": label(),
+      items: items(shape({ text: text(300), "detail?": text(300), "checked?": flag }, "text")),
+      "submit?": label(60)
+    }
+  },
+  kv: {
+    group: "Lists",
+    fields: {
+      "columns?": int(1, 2),
+      items: items(shape({ label: label(80), value: text(400), "detail?": text(300) }))
+    }
+  },
+  timeline: {
+    group: "Lists",
+    fields: {
+      items: items(
+        shape({ "time?": label(60), title: label(200), "detail?": text(600), "tag?": label(40), "tone?": tone })
+      )
+    }
+  },
+  table: {
+    group: "Data",
+    fields: {
+      "caption?": label(),
+      columns: items(
+        shape({ label: label(60), "align?": pick("start", "center", "end") }, "label"),
+        L.maxTableColumns
+      ),
+      rows: items({ k: "list", of: { k: "cell" }, min: 0, max: L.maxTableColumns }, L.maxTableRows)
+    },
+    check(node, path, issue2) {
+      const columns = Array.isArray(node.columns) ? node.columns.length : 0;
+      const rows = Array.isArray(node.rows) ? node.rows : [];
+      rows.forEach((row, index) => {
+        if (Array.isArray(row) && row.length > columns) {
+          issue2(`${path}.rows[${index}]`, `has ${row.length} cells but there are only ${columns} columns`);
+        }
+      });
+    }
+  },
+  comparison: {
+    group: "Data",
+    fields: {
+      options: items(
+        shape({
+          name: label(80),
+          "tagline?": label(),
+          "recommended?": flag,
+          "facts?": items(shape({ label: label(80), value: text(300) }), 12, 0),
+          "pros?": items(text(300), 8, 0),
+          "cons?": items(text(300), 8, 0)
+        }),
+        L.maxOptions,
+        2
+      )
+    }
+  },
+  stats: {
+    group: "Data",
+    fields: {
+      items: items(
+        shape({
+          label: label(80),
+          value: label(40),
+          "unit?": label(16),
+          "delta?": label(40),
+          "trend?": pick("up", "down", "flat"),
+          "detail?": label(),
+          "tone?": tone
+        }),
+        12
+      )
+    }
+  },
+  progress: {
+    group: "Data",
+    fields: {
+      label: label(),
+      value: { k: "num", nullable: false },
+      "max?": { k: "num", nullable: false },
+      "detail?": label(),
+      "tone?": tone
+    }
+  },
+  chart: {
+    group: "Data",
+    fields: {
+      kind: pick("bar", "line", "donut"),
+      "title?": label(),
+      labels: items(label(40), L.maxLabels),
+      series: items(
+        shape({ name: label(60), values: items({ k: "num", nullable: true }, L.maxLabels) }),
+        L.maxSeries
+      ),
+      "unit?": label(16)
+    },
+    check(node, path, issue2) {
+      const labels = Array.isArray(node.labels) ? node.labels.length : 0;
+      const series = Array.isArray(node.series) ? node.series : [];
+      if (String(node.kind).trim().toLowerCase() === "donut" && series.length > 1)
+        issue2(`${path}.series`, "a donut takes exactly one series");
+      series.forEach((entry, index) => {
+        const values = isRecord2(entry) && Array.isArray(entry.values) ? entry.values.length : labels;
+        if (values !== labels)
+          issue2(`${path}.series[${index}].values`, `has ${values} values but there are ${labels} labels`);
+      });
+    }
+  },
+  button: {
+    group: "Interactive",
+    fields: {
+      label: label(60),
+      message: { k: "str", max: L.maxMessage, inline: false, noCommand: true },
+      "variant?": pick("primary", "secondary")
+    }
+  },
+  link: {
+    group: "Media",
+    fields: { label: label(), url: { k: "url", schemes: ["https:"] }, "detail?": label() }
+  },
+  image: {
+    group: "Media",
+    fields: { url: { k: "url", schemes: ["https:"] }, alt: label(200), "caption?": label() }
+  }
+};
+var UI_NODE_TYPES = Object.keys(PALETTE);
+var INVALID2 = Symbol("invalid");
 
 // ../../../fraym/packages/driver/src/room-types.ts
 var ROOM_UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
@@ -544,8 +744,8 @@ function textRefusal2(requested, platform) {
   return textRefusal(requested, platform, "presentable");
 }
 var UNSAFE_IN_A_LINE = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g;
-function oneLine(text, max) {
-  const flat = text.replace(UNSAFE_IN_A_LINE, " ");
+function oneLine(text2, max) {
+  const flat = text2.replace(UNSAFE_IN_A_LINE, " ");
   if (flat.length <= max) return flat;
   let units = 0;
   let points = 0;
@@ -632,7 +832,7 @@ async function presentPaths(input, options) {
   const all = typeof input === "string" ? [input] : input;
   const requested = all.slice(0, MAX_PRESENTED_ITEMS);
   const lines = [];
-  const items = [];
+  const items2 = [];
   const images = [];
   const run2 = {
     cwd: options.cwd,
@@ -655,16 +855,16 @@ async function presentPaths(input, options) {
       thumbBytes += thumb.bytes;
       images.push({ data: thumb.data, mimeType: thumb.mimeType });
     }
-    items.push(thumb === void 0 ? item : { ...item, thumb: images.length - 1 });
+    items2.push(thumb === void 0 ? item : { ...item, thumb: images.length - 1 });
     lines.push(`Presented ${item.name} (${PRESENTED_KIND_LABELS[item.kind]}, ${formatByteSize(item.size)}).`);
   }
   if (all.length > requested.length) {
     lines.push(`Only the first ${requested.length} of ${all.length} paths were presented.`);
   }
-  if (items.length === 0) throw new Error(lines.join("\n") || "Nothing to present: pass the path of a file.");
+  if (items2.length === 0) throw new Error(lines.join("\n") || "Nothing to present: pass the path of a file.");
   return {
     text: lines.join("\n"),
-    details: { presentation: { items }, ...images.length > 0 ? { images } : {} }
+    details: { presentation: { items: items2 }, ...images.length > 0 ? { images } : {} }
   };
 }
 
@@ -739,11 +939,11 @@ async function locate(library, params, cwd) {
 }
 var percent = (unit) => Math.round(unit * 100);
 function anchorDetail(anchor) {
-  const label = anchorLabel(anchor);
-  if (label === null || anchor?.shape === void 0) return label;
+  const label2 = anchorLabel(anchor);
+  if (label2 === null || anchor?.shape === void 0) return label2;
   const { left, top, right, bottom } = shapeExtent(anchor.shape);
   const where = anchor.shape.kind === "pin" ? `at x ${percent(left)}%, y ${percent(top)}%` : `over x ${percent(left)}\u2013${percent(right)}%, y ${percent(top)}\u2013${percent(bottom)}%`;
-  return `${label} (${where} of the ${anchor.page === void 0 ? anchor.startMs === void 0 ? "picture" : "frame" : "page"})`;
+  return `${label2} (${where} of the ${anchor.page === void 0 ? anchor.startMs === void 0 ? "picture" : "frame" : "page"})`;
 }
 function describeComment(comment, now) {
   const where = anchorDetail(comment.anchor);
@@ -842,12 +1042,12 @@ function registerArtifactsTool(pi, library) {
     description: "The user's library of files shown or made here. search finds one to present again (tags: all must match); discard trash:true also recycles the file.",
     parameters,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const text = await runArtifacts(await library(), params, {
+      const text2 = await runArtifacts(await library(), params, {
         cwd: ctx.cwd,
         sessionId: ctx.sessionManager.getSessionId(),
         now: Date.now()
       });
-      return { content: [{ type: "text", text }] };
+      return { content: [{ type: "text", text: text2 }] };
     }
   });
 }
@@ -886,11 +1086,11 @@ import { basename as basename4, isAbsolute, join as join4, resolve as resolve5 }
 function encodeCursor(position) {
   return Buffer.from(JSON.stringify([position.ordering, position.key, position.id])).toString("base64url");
 }
-function decodeCursor(text, ordering) {
+function decodeCursor(text2, ordering) {
   const refusal = new RangeError("the page cursor is not valid for this query");
   let parsed;
   try {
-    parsed = JSON.parse(Buffer.from(text, "base64url").toString("utf8"));
+    parsed = JSON.parse(Buffer.from(text2, "base64url").toString("utf8"));
   } catch {
     throw refusal;
   }
@@ -961,8 +1161,8 @@ var MAX_SEARCH_CHARS = 200;
 var TRIGRAM_CHARS = 3;
 var CONTROL_CHARS = /[\u0000-\u001f\u007f]/g;
 var HIGHEST_CODE_POINT = "\u{10FFFF}";
-function parseSearch(text) {
-  const trimmed = (text ?? "").replace(CONTROL_CHARS, " ").trim().slice(0, MAX_SEARCH_CHARS);
+function parseSearch(text2) {
+  const trimmed = (text2 ?? "").replace(CONTROL_CHARS, " ").trim().slice(0, MAX_SEARCH_CHARS);
   if (trimmed === "") return void 0;
   const terms = trimmed.split(/\s+/).filter((term) => [...term].length >= TRIGRAM_CHARS);
   if (terms.length > 0) {
@@ -1116,18 +1316,18 @@ async function deleteRemoteShare(share) {
 var revokeRemote = deleteRemoteShare;
 
 // src/library/rows.ts
-function readTags(text) {
+function readTags(text2) {
   try {
-    const parsed = JSON.parse(text);
+    const parsed = JSON.parse(text2);
     return Array.isArray(parsed) ? parsed.filter((tag) => typeof tag === "string") : [];
   } catch {
     return [];
   }
 }
-function readAudience(shareId, text) {
+function readAudience(shareId, text2) {
   let parsed;
   try {
-    parsed = JSON.parse(text);
+    parsed = JSON.parse(text2);
   } catch {
     parsed = void 0;
   }
@@ -1553,7 +1753,7 @@ __export(external_exports, {
   httpUrl: () => httpUrl,
   includes: () => _includes,
   instanceof: () => _instanceof,
-  int: () => int,
+  int: () => int2,
   int32: () => int32,
   int64: () => int64,
   intersection: () => intersection,
@@ -2066,7 +2266,7 @@ __export(util_exports, {
   optionalKeys: () => optionalKeys,
   parsedType: () => parsedType,
   partial: () => partial,
-  pick: () => pick,
+  pick: () => pick2,
   prefixIssues: () => prefixIssues,
   primitiveTypes: () => primitiveTypes,
   promiseAllObject: () => promiseAllObject,
@@ -2386,9 +2586,9 @@ function stringifyPrimitive(value) {
     return `"${value}"`;
   return `${value}`;
 }
-function optionalKeys(shape) {
-  return Object.keys(shape).filter((k) => {
-    return shape[k]._zod.optin === "optional" && shape[k]._zod.optout === "optional";
+function optionalKeys(shape2) {
+  return Object.keys(shape2).filter((k) => {
+    return shape2[k]._zod.optin === "optional" && shape2[k]._zod.optout === "optional";
   });
 }
 var NUMBER_FORMAT_RANGES = {
@@ -2402,7 +2602,7 @@ var BIGINT_FORMAT_RANGES = {
   int64: [/* @__PURE__ */ BigInt("-9223372036854775808"), /* @__PURE__ */ BigInt("9223372036854775807")],
   uint64: [/* @__PURE__ */ BigInt(0), /* @__PURE__ */ BigInt("18446744073709551615")]
 };
-function pick(schema, mask) {
+function pick2(schema, mask) {
   const currDef = schema._zod.def;
   const checks = currDef.checks;
   const hasChecks = checks && checks.length > 0;
@@ -2452,15 +2652,15 @@ function omit(schema, mask) {
   });
   return clone(schema, def);
 }
-function extend(schema, shape) {
-  if (!isPlainObject(shape)) {
+function extend(schema, shape2) {
+  if (!isPlainObject(shape2)) {
     throw new Error("Invalid input to extend: expected a plain object");
   }
   const checks = schema._zod.def.checks;
   const hasChecks = checks && checks.length > 0;
   if (hasChecks) {
     const existingShape = schema._zod.def.shape;
-    for (const key in shape) {
+    for (const key in shape2) {
       if (Object.getOwnPropertyDescriptor(existingShape, key) !== void 0) {
         throw new Error("Cannot overwrite keys on object schemas containing refinements. Use `.safeExtend()` instead.");
       }
@@ -2468,20 +2668,20 @@ function extend(schema, shape) {
   }
   const def = mergeDefs(schema._zod.def, {
     get shape() {
-      const _shape = { ...schema._zod.def.shape, ...shape };
+      const _shape = { ...schema._zod.def.shape, ...shape2 };
       assignProp(this, "shape", _shape);
       return _shape;
     }
   });
   return clone(schema, def);
 }
-function safeExtend(schema, shape) {
-  if (!isPlainObject(shape)) {
+function safeExtend(schema, shape2) {
+  if (!isPlainObject(shape2)) {
     throw new Error("Invalid input to safeExtend: expected a plain object");
   }
   const def = mergeDefs(schema._zod.def, {
     get shape() {
-      const _shape = { ...schema._zod.def.shape, ...shape };
+      const _shape = { ...schema._zod.def.shape, ...shape2 };
       assignProp(this, "shape", _shape);
       return _shape;
     }
@@ -2515,7 +2715,7 @@ function partial(Class2, schema, mask) {
   const def = mergeDefs(schema._zod.def, {
     get shape() {
       const oldShape = schema._zod.def.shape;
-      const shape = { ...oldShape };
+      const shape2 = { ...oldShape };
       if (mask) {
         for (const key in mask) {
           if (!(key in oldShape)) {
@@ -2523,21 +2723,21 @@ function partial(Class2, schema, mask) {
           }
           if (!mask[key])
             continue;
-          shape[key] = Class2 ? new Class2({
+          shape2[key] = Class2 ? new Class2({
             type: "optional",
             innerType: oldShape[key]
           }) : oldShape[key];
         }
       } else {
         for (const key in oldShape) {
-          shape[key] = Class2 ? new Class2({
+          shape2[key] = Class2 ? new Class2({
             type: "optional",
             innerType: oldShape[key]
           }) : oldShape[key];
         }
       }
-      assignProp(this, "shape", shape);
-      return shape;
+      assignProp(this, "shape", shape2);
+      return shape2;
     },
     checks: []
   });
@@ -2547,29 +2747,29 @@ function required(Class2, schema, mask) {
   const def = mergeDefs(schema._zod.def, {
     get shape() {
       const oldShape = schema._zod.def.shape;
-      const shape = { ...oldShape };
+      const shape2 = { ...oldShape };
       if (mask) {
         for (const key in mask) {
-          if (!(key in shape)) {
+          if (!(key in shape2)) {
             throw new Error(`Unrecognized key: "${key}"`);
           }
           if (!mask[key])
             continue;
-          shape[key] = new Class2({
+          shape2[key] = new Class2({
             type: "nonoptional",
             innerType: oldShape[key]
           });
         }
       } else {
         for (const key in oldShape) {
-          shape[key] = new Class2({
+          shape2[key] = new Class2({
             type: "nonoptional",
             innerType: oldShape[key]
           });
         }
       }
-      assignProp(this, "shape", shape);
-      return shape;
+      assignProp(this, "shape", shape2);
+      return shape2;
     }
   });
   return clone(schema, def);
@@ -4442,10 +4642,10 @@ var $ZodObject = /* @__PURE__ */ $constructor("$ZodObject", (inst, def) => {
   }
   const _normalized = cached(() => normalizeDef(def));
   defineLazy(inst._zod, "propValues", () => {
-    const shape = def.shape;
+    const shape2 = def.shape;
     const propValues = {};
-    for (const key in shape) {
-      const field = shape[key]._zod;
+    for (const key in shape2) {
+      const field = shape2[key]._zod;
       if (field.values) {
         propValues[key] ?? (propValues[key] = /* @__PURE__ */ new Set());
         for (const v of field.values)
@@ -4471,9 +4671,9 @@ var $ZodObject = /* @__PURE__ */ $constructor("$ZodObject", (inst, def) => {
     }
     payload.value = {};
     const proms = [];
-    const shape = value.shape;
+    const shape2 = value.shape;
     for (const key of value.keys) {
-      const el = shape[key];
+      const el = shape2[key];
       const isOptionalIn = el._zod.optin === "optional";
       const isOptionalOut = el._zod.optout === "optional";
       const r = el._zod.run({ value: input[key], issues: [] }, ctx);
@@ -4493,7 +4693,7 @@ var $ZodObjectJIT = /* @__PURE__ */ $constructor("$ZodObjectJIT", (inst, def) =>
   $ZodObject.init(inst, def);
   const superParse = inst._zod.parse;
   const _normalized = cached(() => normalizeDef(def));
-  const generateFastpass = (shape) => {
+  const generateFastpass = (shape2) => {
     const doc = new Doc(["shape", "payload", "ctx"]);
     const normalized = _normalized.value;
     const parseStr = (key) => {
@@ -4510,7 +4710,7 @@ var $ZodObjectJIT = /* @__PURE__ */ $constructor("$ZodObjectJIT", (inst, def) =>
     for (const key of normalized.keys) {
       const id = ids[key];
       const k = esc(key);
-      const schema = shape[key];
+      const schema = shape2[key];
       const isOptionalIn = schema?._zod?.optin === "optional";
       const isOptionalOut = schema?._zod?.optout === "optional";
       doc.write(`const ${id} = ${parseStr(key)};`);
@@ -4584,7 +4784,7 @@ var $ZodObjectJIT = /* @__PURE__ */ $constructor("$ZodObjectJIT", (inst, def) =>
     doc.write(`payload.value = newResult;`);
     doc.write(`return payload;`);
     const fn = doc.compile();
-    return (payload, ctx) => fn(shape, payload, ctx);
+    return (payload, ctx) => fn(shape2, payload, ctx);
   };
   let fastpass;
   const isObject2 = isObject;
@@ -4901,7 +5101,7 @@ function handleIntersectionResults(result, left, right) {
 }
 var $ZodTuple = /* @__PURE__ */ $constructor("$ZodTuple", (inst, def) => {
   $ZodType.init(inst, def);
-  const items = def.items;
+  const items2 = def.items;
   inst._zod.parse = (payload, ctx) => {
     const input = payload.value;
     if (!Array.isArray(input)) {
@@ -4915,8 +5115,8 @@ var $ZodTuple = /* @__PURE__ */ $constructor("$ZodTuple", (inst, def) => {
     }
     payload.value = [];
     const proms = [];
-    const optinStart = getTupleOptStart(items, "optin");
-    const optoutStart = getTupleOptStart(items, "optout");
+    const optinStart = getTupleOptStart(items2, "optin");
+    const optoutStart = getTupleOptStart(items2, "optout");
     if (!def.rest) {
       if (input.length < optinStart) {
         payload.issues.push({
@@ -4929,10 +5129,10 @@ var $ZodTuple = /* @__PURE__ */ $constructor("$ZodTuple", (inst, def) => {
         });
         return payload;
       }
-      if (input.length > items.length) {
+      if (input.length > items2.length) {
         payload.issues.push({
           code: "too_big",
-          maximum: items.length,
+          maximum: items2.length,
           inclusive: true,
           input,
           inst,
@@ -4940,9 +5140,9 @@ var $ZodTuple = /* @__PURE__ */ $constructor("$ZodTuple", (inst, def) => {
         });
       }
     }
-    const itemResults = new Array(items.length);
-    for (let i = 0; i < items.length; i++) {
-      const r = items[i]._zod.run({ value: input[i], issues: [] }, ctx);
+    const itemResults = new Array(items2.length);
+    for (let i = 0; i < items2.length; i++) {
+      const r = items2[i]._zod.run({ value: input[i], issues: [] }, ctx);
       if (r instanceof Promise) {
         proms.push(r.then((rr) => {
           itemResults[i] = rr;
@@ -4952,8 +5152,8 @@ var $ZodTuple = /* @__PURE__ */ $constructor("$ZodTuple", (inst, def) => {
       }
     }
     if (def.rest) {
-      let i = items.length - 1;
-      const rest = input.slice(items.length);
+      let i = items2.length - 1;
+      const rest = input.slice(items2.length);
       for (const el of rest) {
         i++;
         const result = def.rest._zod.run({ value: el, issues: [] }, ctx);
@@ -4965,14 +5165,14 @@ var $ZodTuple = /* @__PURE__ */ $constructor("$ZodTuple", (inst, def) => {
       }
     }
     if (proms.length) {
-      return Promise.all(proms).then(() => handleTupleResults(itemResults, payload, items, input, optoutStart));
+      return Promise.all(proms).then(() => handleTupleResults(itemResults, payload, items2, input, optoutStart));
     }
-    return handleTupleResults(itemResults, payload, items, input, optoutStart);
+    return handleTupleResults(itemResults, payload, items2, input, optoutStart);
   };
 });
-function getTupleOptStart(items, key) {
-  for (let i = items.length - 1; i >= 0; i--) {
-    if (items[i]._zod[key] !== "optional")
+function getTupleOptStart(items2, key) {
+  for (let i = items2.length - 1; i >= 0; i--) {
+    if (items2[i]._zod[key] !== "optional")
       return i + 1;
   }
   return 0;
@@ -4983,8 +5183,8 @@ function handleTupleResult(result, final, index) {
   }
   final.value[index] = result.value;
 }
-function handleTupleResults(itemResults, final, items, input, optoutStart) {
-  for (let i = 0; i < items.length; i++) {
+function handleTupleResults(itemResults, final, items2, input, optoutStart) {
+  for (let i = 0; i < items2.length; i++) {
     const r = itemResults[i];
     const isPresent = i < input.length;
     if (r.issues.length) {
@@ -4997,7 +5197,7 @@ function handleTupleResults(itemResults, final, items, input, optoutStart) {
     final.value[i] = r.value;
   }
   for (let i = final.value.length - 1; i >= input.length; i--) {
-    if (items[i]._zod.optout === "optional" && final.value[i] === void 0) {
+    if (items2[i]._zod.optout === "optional" && final.value[i] === void 0) {
       final.value.length = i;
     } else {
       break;
@@ -9053,8 +9253,8 @@ function ko_default() {
 }
 
 // ../../../node_modules/zod/v4/locales/lt.js
-var capitalizeFirstCharacter = (text) => {
-  return text.charAt(0).toUpperCase() + text.slice(1);
+var capitalizeFirstCharacter = (text2) => {
+  return text2.charAt(0).toUpperCase() + text2.slice(1);
 };
 function getUnitTypeFromNumber(number4) {
   const abs = Math.abs(number4);
@@ -12517,13 +12717,13 @@ function _intersection(Class2, left, right) {
   });
 }
 // @__NO_SIDE_EFFECTS__
-function _tuple(Class2, items, _paramsOrRest, _params) {
+function _tuple(Class2, items2, _paramsOrRest, _params) {
   const hasRest = _paramsOrRest instanceof $ZodType;
   const params = hasRest ? _params : _paramsOrRest;
   const rest = hasRest ? _paramsOrRest : null;
   return new Class2({
     type: "tuple",
-    items,
+    items: items2,
     rest,
     ...normalizeParams(params)
   });
@@ -13434,14 +13634,14 @@ var objectProcessor = (schema, ctx, _json, params) => {
   const def = schema._zod.def;
   json2.type = "object";
   json2.properties = {};
-  const shape = def.shape;
-  for (const key in shape) {
-    json2.properties[key] = process2(shape[key], ctx, {
+  const shape2 = def.shape;
+  for (const key in shape2) {
+    json2.properties[key] = process2(shape2[key], ctx, {
       ...params,
       path: [...params.path, "properties", key]
     });
   }
-  const allKeys = new Set(Object.keys(shape));
+  const allKeys = new Set(Object.keys(shape2));
   const requiredKeys = new Set([...allKeys].filter((key) => {
     const v = def.shape[key]._zod;
     if (ctx.io === "input") {
@@ -13912,7 +14112,7 @@ __export(schemas_exports2, {
   hostname: () => hostname2,
   httpUrl: () => httpUrl,
   instanceof: () => _instanceof,
-  int: () => int,
+  int: () => int2,
   int32: () => int32,
   int64: () => int64,
   intersection: () => intersection,
@@ -14567,10 +14767,10 @@ var ZodNumber = /* @__PURE__ */ $constructor("ZodNumber", (inst, def) => {
       return this.check(_lte(value, params));
     },
     int(params) {
-      return this.check(int(params));
+      return this.check(int2(params));
     },
     safe(params) {
-      return this.check(int(params));
+      return this.check(int2(params));
     },
     positive(params) {
       return this.check(_gt(0, params));
@@ -14608,7 +14808,7 @@ var ZodNumberFormat = /* @__PURE__ */ $constructor("ZodNumberFormat", (inst, def
   $ZodNumberFormat.init(inst, def);
   ZodNumber.init(inst, def);
 });
-function int(params) {
+function int2(params) {
   return _int(ZodNumberFormat, params);
 }
 function float32(params) {
@@ -14762,8 +14962,8 @@ function array(element, params) {
   return _array(ZodArray, element, params);
 }
 function keyof(schema) {
-  const shape = schema._zod.def.shape;
-  return _enum2(Object.keys(shape));
+  const shape2 = schema._zod.def.shape;
+  return _enum2(Object.keys(shape2));
 }
 var ZodObject = /* @__PURE__ */ $constructor("ZodObject", (inst, def) => {
   $ZodObjectJIT.init(inst, def);
@@ -14814,26 +15014,26 @@ var ZodObject = /* @__PURE__ */ $constructor("ZodObject", (inst, def) => {
     }
   });
 });
-function object(shape, params) {
+function object(shape2, params) {
   const def = {
     type: "object",
-    shape: shape ?? {},
+    shape: shape2 ?? {},
     ...util_exports.normalizeParams(params)
   };
   return new ZodObject(def);
 }
-function strictObject(shape, params) {
+function strictObject(shape2, params) {
   return new ZodObject({
     type: "object",
-    shape,
+    shape: shape2,
     catchall: never(),
     ...util_exports.normalizeParams(params)
   });
 }
-function looseObject(shape, params) {
+function looseObject(shape2, params) {
   return new ZodObject({
     type: "object",
-    shape,
+    shape: shape2,
     catchall: unknown(),
     ...util_exports.normalizeParams(params)
   });
@@ -14898,13 +15098,13 @@ var ZodTuple = /* @__PURE__ */ $constructor("ZodTuple", (inst, def) => {
     rest
   });
 });
-function tuple(items, _paramsOrRest, _params) {
+function tuple(items2, _paramsOrRest, _params) {
   const hasRest = _paramsOrRest instanceof $ZodType;
   const params = hasRest ? _params : _paramsOrRest;
   const rest = hasRest ? _paramsOrRest : null;
   return new ZodTuple({
     type: "tuple",
-    items,
+    items: items2,
     rest,
     ...util_exports.normalizeParams(params)
   });
@@ -15708,21 +15908,21 @@ function convertBaseSchema(schema, ctx) {
       break;
     }
     case "object": {
-      const shape = {};
+      const shape2 = {};
       const properties = schema.properties || {};
       const requiredSet = new Set(schema.required || []);
       for (const [key, propSchema] of Object.entries(properties)) {
         const propZodSchema = convertSchema(propSchema, ctx);
-        shape[key] = requiredSet.has(key) ? propZodSchema : propZodSchema.optional();
+        shape2[key] = requiredSet.has(key) ? propZodSchema : propZodSchema.optional();
       }
       if (schema.propertyNames) {
         const keySchema = convertSchema(schema.propertyNames, ctx);
         const valueSchema = schema.additionalProperties && typeof schema.additionalProperties === "object" ? convertSchema(schema.additionalProperties, ctx) : z.any();
-        if (Object.keys(shape).length === 0) {
+        if (Object.keys(shape2).length === 0) {
           zodSchema = z.record(keySchema, valueSchema);
           break;
         }
-        const objectSchema2 = z.object(shape).passthrough();
+        const objectSchema2 = z.object(shape2).passthrough();
         const recordSchema = z.looseRecord(keySchema, valueSchema);
         zodSchema = z.intersection(objectSchema2, recordSchema);
         break;
@@ -15737,8 +15937,8 @@ function convertBaseSchema(schema, ctx) {
           looseRecords.push(z.looseRecord(keySchema, patternValue));
         }
         const schemasToIntersect = [];
-        if (Object.keys(shape).length > 0) {
-          schemasToIntersect.push(z.object(shape).passthrough());
+        if (Object.keys(shape2).length > 0) {
+          schemasToIntersect.push(z.object(shape2).passthrough());
         }
         schemasToIntersect.push(...looseRecords);
         if (schemasToIntersect.length === 0) {
@@ -15754,7 +15954,7 @@ function convertBaseSchema(schema, ctx) {
         }
         break;
       }
-      const objectSchema = z.object(shape);
+      const objectSchema = z.object(shape2);
       if (schema.additionalProperties === false) {
         zodSchema = objectSchema.strict();
       } else if (typeof schema.additionalProperties === "object") {
@@ -15766,10 +15966,10 @@ function convertBaseSchema(schema, ctx) {
     }
     case "array": {
       const prefixItems = schema.prefixItems;
-      const items = schema.items;
+      const items2 = schema.items;
       if (prefixItems && Array.isArray(prefixItems)) {
         const tupleItems = prefixItems.map((item) => convertSchema(item, ctx));
-        const rest = items && typeof items === "object" && !Array.isArray(items) ? convertSchema(items, ctx) : void 0;
+        const rest = items2 && typeof items2 === "object" && !Array.isArray(items2) ? convertSchema(items2, ctx) : void 0;
         if (rest) {
           zodSchema = z.tuple(tupleItems).rest(rest);
         } else {
@@ -15781,8 +15981,8 @@ function convertBaseSchema(schema, ctx) {
         if (typeof schema.maxItems === "number") {
           zodSchema = zodSchema.check(z.maxLength(schema.maxItems));
         }
-      } else if (Array.isArray(items)) {
-        const tupleItems = items.map((item) => convertSchema(item, ctx));
+      } else if (Array.isArray(items2)) {
+        const tupleItems = items2.map((item) => convertSchema(item, ctx));
         const rest = schema.additionalItems && typeof schema.additionalItems === "object" ? convertSchema(schema.additionalItems, ctx) : void 0;
         if (rest) {
           zodSchema = z.tuple(tupleItems).rest(rest);
@@ -15795,8 +15995,8 @@ function convertBaseSchema(schema, ctx) {
         if (typeof schema.maxItems === "number") {
           zodSchema = zodSchema.check(z.maxLength(schema.maxItems));
         }
-      } else if (items !== void 0) {
-        const element = convertSchema(items, ctx);
+      } else if (items2 !== void 0) {
+        const element = convertSchema(items2, ctx);
         let arraySchema = z.array(element);
         if (typeof schema.minItems === "number") {
           arraySchema = arraySchema.min(schema.minItems);
@@ -16206,12 +16406,12 @@ async function createLibrary(options) {
     for (const statement of statements.values()) statement.finalize();
     statements.clear();
   }
-  function sql(text) {
-    let statement = statements.get(text);
+  function sql(text2) {
+    let statement = statements.get(text2);
     if (statement === void 0) {
       if (statements.size >= STATEMENT_CACHE_LIMIT) releaseStatements();
-      statement = db.prepare(text);
-      statements.set(text, statement);
+      statement = db.prepare(text2);
+      statements.set(text2, statement);
     }
     return statement;
   }
@@ -16271,10 +16471,13 @@ async function createLibrary(options) {
   }
   const memo = /* @__PURE__ */ new Map();
   let memoVersion = "";
-  function remembered(key, compute) {
+  function revision() {
     const own = sql("SELECT total_changes() AS n").get()?.n ?? 0;
     const other = sql("PRAGMA data_version").get()?.data_version ?? 0;
-    const version2 = `${own}:${other}`;
+    return `${own}:${other}`;
+  }
+  function remembered(key, compute) {
+    const version2 = revision();
     if (version2 !== memoVersion) {
       memo.clear();
       memoVersion = version2;
@@ -16315,7 +16518,7 @@ async function createLibrary(options) {
       const tags = sql(
         `SELECT MIN(j.value) AS tag, COUNT(*) AS count FROM artifacts a, json_each(a.tags) j WHERE ${view}${inWorkspace} AND ${HAS_TAGS} GROUP BY lower(j.value) ORDER BY count DESC, lower(j.value) LIMIT ${MAX_FACET_TAGS}`
       ).all(...workspaceParams);
-      const count = (text, ...params) => sql(text).get(...params)?.n ?? 0;
+      const count = (text2, ...params) => sql(text2).get(...params)?.n ?? 0;
       return {
         kinds,
         workspaces,
@@ -16620,6 +16823,7 @@ async function createLibrary(options) {
     home: options.home,
     workspaceOf,
     query,
+    revision,
     facets,
     get,
     getByPath,
@@ -16673,13 +16877,13 @@ function swissKnife(pi, deps = { library: sharedLibrary }) {
       path: z2.union([z2.string(), z2.array(z2.string())]).describe("Absolute file path, or an array of up to 12 paths.")
     }),
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const { text, details } = await presentPaths(params.path, { cwd: ctx.cwd, signal });
+      const { text: text2, details } = await presentPaths(params.path, { cwd: ctx.cwd, signal });
       try {
         await stampPresented(await deps.library(), details, { cwd: ctx.cwd, sessionId: ctx.sessionManager.getSessionId() });
       } catch (error51) {
         console.error(`library: presented files were not indexed: ${errorMessage(error51)}`);
       }
-      return { content: [{ type: "text", text }], details };
+      return { content: [{ type: "text", text: text2 }], details };
     }
   });
   registerArtifactsTool(pi, deps.library);
