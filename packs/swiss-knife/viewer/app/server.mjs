@@ -419,9 +419,9 @@ function stringifyPrimitive(value) {
     return `"${value}"`;
   return `${value}`;
 }
-function optionalKeys(shape) {
-  return Object.keys(shape).filter((k2) => {
-    return shape[k2]._zod.optin === "optional" && shape[k2]._zod.optout === "optional";
+function optionalKeys(shape2) {
+  return Object.keys(shape2).filter((k2) => {
+    return shape2[k2]._zod.optin === "optional" && shape2[k2]._zod.optout === "optional";
   });
 }
 function pick(schema, mask) {
@@ -474,15 +474,15 @@ function omit(schema, mask) {
   });
   return clone(schema, def);
 }
-function extend(schema, shape) {
-  if (!isPlainObject(shape)) {
+function extend(schema, shape2) {
+  if (!isPlainObject(shape2)) {
     throw new Error("Invalid input to extend: expected a plain object");
   }
   const checks = schema._zod.def.checks;
   const hasChecks = checks && checks.length > 0;
   if (hasChecks) {
     const existingShape = schema._zod.def.shape;
-    for (const key in shape) {
+    for (const key in shape2) {
       if (Object.getOwnPropertyDescriptor(existingShape, key) !== void 0) {
         throw new Error("Cannot overwrite keys on object schemas containing refinements. Use `.safeExtend()` instead.");
       }
@@ -490,20 +490,20 @@ function extend(schema, shape) {
   }
   const def = mergeDefs(schema._zod.def, {
     get shape() {
-      const _shape = { ...schema._zod.def.shape, ...shape };
+      const _shape = { ...schema._zod.def.shape, ...shape2 };
       assignProp(this, "shape", _shape);
       return _shape;
     }
   });
   return clone(schema, def);
 }
-function safeExtend(schema, shape) {
-  if (!isPlainObject(shape)) {
+function safeExtend(schema, shape2) {
+  if (!isPlainObject(shape2)) {
     throw new Error("Invalid input to safeExtend: expected a plain object");
   }
   const def = mergeDefs(schema._zod.def, {
     get shape() {
-      const _shape = { ...schema._zod.def.shape, ...shape };
+      const _shape = { ...schema._zod.def.shape, ...shape2 };
       assignProp(this, "shape", _shape);
       return _shape;
     }
@@ -537,7 +537,7 @@ function partial(Class2, schema, mask) {
   const def = mergeDefs(schema._zod.def, {
     get shape() {
       const oldShape = schema._zod.def.shape;
-      const shape = { ...oldShape };
+      const shape2 = { ...oldShape };
       if (mask) {
         for (const key in mask) {
           if (!(key in oldShape)) {
@@ -545,21 +545,21 @@ function partial(Class2, schema, mask) {
           }
           if (!mask[key])
             continue;
-          shape[key] = Class2 ? new Class2({
+          shape2[key] = Class2 ? new Class2({
             type: "optional",
             innerType: oldShape[key]
           }) : oldShape[key];
         }
       } else {
         for (const key in oldShape) {
-          shape[key] = Class2 ? new Class2({
+          shape2[key] = Class2 ? new Class2({
             type: "optional",
             innerType: oldShape[key]
           }) : oldShape[key];
         }
       }
-      assignProp(this, "shape", shape);
-      return shape;
+      assignProp(this, "shape", shape2);
+      return shape2;
     },
     checks: []
   });
@@ -569,29 +569,29 @@ function required(Class2, schema, mask) {
   const def = mergeDefs(schema._zod.def, {
     get shape() {
       const oldShape = schema._zod.def.shape;
-      const shape = { ...oldShape };
+      const shape2 = { ...oldShape };
       if (mask) {
         for (const key in mask) {
-          if (!(key in shape)) {
+          if (!(key in shape2)) {
             throw new Error(`Unrecognized key: "${key}"`);
           }
           if (!mask[key])
             continue;
-          shape[key] = new Class2({
+          shape2[key] = new Class2({
             type: "nonoptional",
             innerType: oldShape[key]
           });
         }
       } else {
         for (const key in oldShape) {
-          shape[key] = new Class2({
+          shape2[key] = new Class2({
             type: "nonoptional",
             innerType: oldShape[key]
           });
         }
       }
-      assignProp(this, "shape", shape);
-      return shape;
+      assignProp(this, "shape", shape2);
+      return shape2;
     }
   });
   return clone(schema, def);
@@ -2092,9 +2092,9 @@ function handleIntersectionResults(result, left, right) {
   result.value = merged.data;
   return result;
 }
-function getTupleOptStart(items, key) {
-  for (let i = items.length - 1; i >= 0; i--) {
-    if (items[i]._zod[key] !== "optional")
+function getTupleOptStart(items2, key) {
+  for (let i = items2.length - 1; i >= 0; i--) {
+    if (items2[i]._zod[key] !== "optional")
       return i + 1;
   }
   return 0;
@@ -2105,8 +2105,8 @@ function handleTupleResult(result, final, index) {
   }
   final.value[index] = result.value;
 }
-function handleTupleResults(itemResults, final, items, input, optoutStart) {
-  for (let i = 0; i < items.length; i++) {
+function handleTupleResults(itemResults, final, items2, input, optoutStart) {
+  for (let i = 0; i < items2.length; i++) {
     const r2 = itemResults[i];
     const isPresent = i < input.length;
     if (r2.issues.length) {
@@ -2119,7 +2119,7 @@ function handleTupleResults(itemResults, final, items, input, optoutStart) {
     final.value[i] = r2.value;
   }
   for (let i = final.value.length - 1; i >= input.length; i--) {
-    if (items[i]._zod.optout === "optional" && final.value[i] === void 0) {
+    if (items2[i]._zod.optout === "optional" && final.value[i] === void 0) {
       final.value.length = i;
     } else {
       break;
@@ -2878,10 +2878,10 @@ var init_schemas = __esm({
       }
       const _normalized = cached(() => normalizeDef(def));
       defineLazy(inst._zod, "propValues", () => {
-        const shape = def.shape;
+        const shape2 = def.shape;
         const propValues = {};
-        for (const key in shape) {
-          const field = shape[key]._zod;
+        for (const key in shape2) {
+          const field = shape2[key]._zod;
           if (field.values) {
             propValues[key] ?? (propValues[key] = /* @__PURE__ */ new Set());
             for (const v2 of field.values)
@@ -2907,9 +2907,9 @@ var init_schemas = __esm({
         }
         payload.value = {};
         const proms = [];
-        const shape = value.shape;
+        const shape2 = value.shape;
         for (const key of value.keys) {
-          const el = shape[key];
+          const el = shape2[key];
           const isOptionalIn = el._zod.optin === "optional";
           const isOptionalOut = el._zod.optout === "optional";
           const r2 = el._zod.run({ value: input[key], issues: [] }, ctx);
@@ -2929,7 +2929,7 @@ var init_schemas = __esm({
       $ZodObject.init(inst, def);
       const superParse = inst._zod.parse;
       const _normalized = cached(() => normalizeDef(def));
-      const generateFastpass = (shape) => {
+      const generateFastpass = (shape2) => {
         const doc = new Doc(["shape", "payload", "ctx"]);
         const normalized = _normalized.value;
         const parseStr = (key) => {
@@ -2946,7 +2946,7 @@ var init_schemas = __esm({
         for (const key of normalized.keys) {
           const id2 = ids[key];
           const k2 = esc(key);
-          const schema = shape[key];
+          const schema = shape2[key];
           const isOptionalIn = schema?._zod?.optin === "optional";
           const isOptionalOut = schema?._zod?.optout === "optional";
           doc.write(`const ${id2} = ${parseStr(key)};`);
@@ -3020,7 +3020,7 @@ var init_schemas = __esm({
         doc.write(`payload.value = newResult;`);
         doc.write(`return payload;`);
         const fn = doc.compile();
-        return (payload, ctx) => fn(shape, payload, ctx);
+        return (payload, ctx) => fn(shape2, payload, ctx);
       };
       let fastpass;
       const isObject2 = isObject;
@@ -3210,7 +3210,7 @@ var init_schemas = __esm({
     });
     $ZodTuple = /* @__PURE__ */ $constructor("$ZodTuple", (inst, def) => {
       $ZodType.init(inst, def);
-      const items = def.items;
+      const items2 = def.items;
       inst._zod.parse = (payload, ctx) => {
         const input = payload.value;
         if (!Array.isArray(input)) {
@@ -3224,8 +3224,8 @@ var init_schemas = __esm({
         }
         payload.value = [];
         const proms = [];
-        const optinStart = getTupleOptStart(items, "optin");
-        const optoutStart = getTupleOptStart(items, "optout");
+        const optinStart = getTupleOptStart(items2, "optin");
+        const optoutStart = getTupleOptStart(items2, "optout");
         if (!def.rest) {
           if (input.length < optinStart) {
             payload.issues.push({
@@ -3238,10 +3238,10 @@ var init_schemas = __esm({
             });
             return payload;
           }
-          if (input.length > items.length) {
+          if (input.length > items2.length) {
             payload.issues.push({
               code: "too_big",
-              maximum: items.length,
+              maximum: items2.length,
               inclusive: true,
               input,
               inst,
@@ -3249,9 +3249,9 @@ var init_schemas = __esm({
             });
           }
         }
-        const itemResults = new Array(items.length);
-        for (let i = 0; i < items.length; i++) {
-          const r2 = items[i]._zod.run({ value: input[i], issues: [] }, ctx);
+        const itemResults = new Array(items2.length);
+        for (let i = 0; i < items2.length; i++) {
+          const r2 = items2[i]._zod.run({ value: input[i], issues: [] }, ctx);
           if (r2 instanceof Promise) {
             proms.push(r2.then((rr) => {
               itemResults[i] = rr;
@@ -3261,8 +3261,8 @@ var init_schemas = __esm({
           }
         }
         if (def.rest) {
-          let i = items.length - 1;
-          const rest = input.slice(items.length);
+          let i = items2.length - 1;
+          const rest = input.slice(items2.length);
           for (const el of rest) {
             i++;
             const result = def.rest._zod.run({ value: el, issues: [] }, ctx);
@@ -3274,9 +3274,9 @@ var init_schemas = __esm({
           }
         }
         if (proms.length) {
-          return Promise.all(proms).then(() => handleTupleResults(itemResults, payload, items, input, optoutStart));
+          return Promise.all(proms).then(() => handleTupleResults(itemResults, payload, items2, input, optoutStart));
         }
-        return handleTupleResults(itemResults, payload, items, input, optoutStart);
+        return handleTupleResults(itemResults, payload, items2, input, optoutStart);
       };
     });
     $ZodRecord = /* @__PURE__ */ $constructor("$ZodRecord", (inst, def) => {
@@ -7344,8 +7344,8 @@ var capitalizeFirstCharacter, error28;
 var init_lt = __esm({
   "../../../../node_modules/zod/v4/locales/lt.js"() {
     init_util();
-    capitalizeFirstCharacter = (text) => {
-      return text.charAt(0).toUpperCase() + text.slice(1);
+    capitalizeFirstCharacter = (text2) => {
+      return text2.charAt(0).toUpperCase() + text2.slice(1);
     };
     error28 = () => {
       const Sizable = {
@@ -11042,13 +11042,13 @@ function _intersection(Class2, left, right) {
   });
 }
 // @__NO_SIDE_EFFECTS__
-function _tuple(Class2, items, _paramsOrRest, _params) {
+function _tuple(Class2, items2, _paramsOrRest, _params) {
   const hasRest = _paramsOrRest instanceof $ZodType;
   const params = hasRest ? _params : _paramsOrRest;
   const rest = hasRest ? _paramsOrRest : null;
   return new Class2({
     type: "tuple",
-    items,
+    items: items2,
     rest,
     ...normalizeParams(params)
   });
@@ -12020,14 +12020,14 @@ var init_json_schema_processors = __esm({
       const def = schema._zod.def;
       json2.type = "object";
       json2.properties = {};
-      const shape = def.shape;
-      for (const key in shape) {
-        json2.properties[key] = process2(shape[key], ctx, {
+      const shape2 = def.shape;
+      for (const key in shape2) {
+        json2.properties[key] = process2(shape2[key], ctx, {
           ...params,
           path: [...params.path, "properties", key]
         });
       }
-      const allKeys = new Set(Object.keys(shape));
+      const allKeys = new Set(Object.keys(shape2));
       const requiredKeys = new Set([...allKeys].filter((key) => {
         const v2 = def.shape[key]._zod;
         if (ctx.io === "input") {
@@ -13185,29 +13185,29 @@ function array(element, params) {
   return _array(ZodArray, element, params);
 }
 function keyof(schema) {
-  const shape = schema._zod.def.shape;
-  return _enum2(Object.keys(shape));
+  const shape2 = schema._zod.def.shape;
+  return _enum2(Object.keys(shape2));
 }
-function object(shape, params) {
+function object(shape2, params) {
   const def = {
     type: "object",
-    shape: shape ?? {},
+    shape: shape2 ?? {},
     ...util_exports.normalizeParams(params)
   };
   return new ZodObject(def);
 }
-function strictObject(shape, params) {
+function strictObject(shape2, params) {
   return new ZodObject({
     type: "object",
-    shape,
+    shape: shape2,
     catchall: never(),
     ...util_exports.normalizeParams(params)
   });
 }
-function looseObject(shape, params) {
+function looseObject(shape2, params) {
   return new ZodObject({
     type: "object",
-    shape,
+    shape: shape2,
     catchall: unknown(),
     ...util_exports.normalizeParams(params)
   });
@@ -13242,13 +13242,13 @@ function intersection(left, right) {
     right
   });
 }
-function tuple(items, _paramsOrRest, _params) {
+function tuple(items2, _paramsOrRest, _params) {
   const hasRest = _paramsOrRest instanceof $ZodType;
   const params = hasRest ? _params : _paramsOrRest;
   const rest = hasRest ? _paramsOrRest : null;
   return new ZodTuple({
     type: "tuple",
-    items,
+    items: items2,
     rest,
     ...util_exports.normalizeParams(params)
   });
@@ -14538,21 +14538,21 @@ function convertBaseSchema(schema, ctx) {
       break;
     }
     case "object": {
-      const shape = {};
+      const shape2 = {};
       const properties = schema.properties || {};
       const requiredSet = new Set(schema.required || []);
       for (const [key, propSchema] of Object.entries(properties)) {
         const propZodSchema = convertSchema(propSchema, ctx);
-        shape[key] = requiredSet.has(key) ? propZodSchema : propZodSchema.optional();
+        shape2[key] = requiredSet.has(key) ? propZodSchema : propZodSchema.optional();
       }
       if (schema.propertyNames) {
         const keySchema = convertSchema(schema.propertyNames, ctx);
         const valueSchema = schema.additionalProperties && typeof schema.additionalProperties === "object" ? convertSchema(schema.additionalProperties, ctx) : z.any();
-        if (Object.keys(shape).length === 0) {
+        if (Object.keys(shape2).length === 0) {
           zodSchema = z.record(keySchema, valueSchema);
           break;
         }
-        const objectSchema2 = z.object(shape).passthrough();
+        const objectSchema2 = z.object(shape2).passthrough();
         const recordSchema = z.looseRecord(keySchema, valueSchema);
         zodSchema = z.intersection(objectSchema2, recordSchema);
         break;
@@ -14567,8 +14567,8 @@ function convertBaseSchema(schema, ctx) {
           looseRecords.push(z.looseRecord(keySchema, patternValue));
         }
         const schemasToIntersect = [];
-        if (Object.keys(shape).length > 0) {
-          schemasToIntersect.push(z.object(shape).passthrough());
+        if (Object.keys(shape2).length > 0) {
+          schemasToIntersect.push(z.object(shape2).passthrough());
         }
         schemasToIntersect.push(...looseRecords);
         if (schemasToIntersect.length === 0) {
@@ -14584,7 +14584,7 @@ function convertBaseSchema(schema, ctx) {
         }
         break;
       }
-      const objectSchema = z.object(shape);
+      const objectSchema = z.object(shape2);
       if (schema.additionalProperties === false) {
         zodSchema = objectSchema.strict();
       } else if (typeof schema.additionalProperties === "object") {
@@ -14596,10 +14596,10 @@ function convertBaseSchema(schema, ctx) {
     }
     case "array": {
       const prefixItems = schema.prefixItems;
-      const items = schema.items;
+      const items2 = schema.items;
       if (prefixItems && Array.isArray(prefixItems)) {
         const tupleItems = prefixItems.map((item) => convertSchema(item, ctx));
-        const rest = items && typeof items === "object" && !Array.isArray(items) ? convertSchema(items, ctx) : void 0;
+        const rest = items2 && typeof items2 === "object" && !Array.isArray(items2) ? convertSchema(items2, ctx) : void 0;
         if (rest) {
           zodSchema = z.tuple(tupleItems).rest(rest);
         } else {
@@ -14611,8 +14611,8 @@ function convertBaseSchema(schema, ctx) {
         if (typeof schema.maxItems === "number") {
           zodSchema = zodSchema.check(z.maxLength(schema.maxItems));
         }
-      } else if (Array.isArray(items)) {
-        const tupleItems = items.map((item) => convertSchema(item, ctx));
+      } else if (Array.isArray(items2)) {
+        const tupleItems = items2.map((item) => convertSchema(item, ctx));
         const rest = schema.additionalItems && typeof schema.additionalItems === "object" ? convertSchema(schema.additionalItems, ctx) : void 0;
         if (rest) {
           zodSchema = z.tuple(tupleItems).rest(rest);
@@ -14625,8 +14625,8 @@ function convertBaseSchema(schema, ctx) {
         if (typeof schema.maxItems === "number") {
           zodSchema = zodSchema.check(z.maxLength(schema.maxItems));
         }
-      } else if (items !== void 0) {
-        const element = convertSchema(items, ctx);
+      } else if (items2 !== void 0) {
+        const element = convertSchema(items2, ctx);
         let arraySchema = z.array(element);
         if (typeof schema.minItems === "number") {
           arraySchema = arraySchema.min(schema.minItems);
@@ -15544,9 +15544,9 @@ var require_codegen = __commonJS({
       }
     };
     var Label = class extends Node {
-      constructor(label) {
+      constructor(label2) {
         super();
-        this.label = label;
+        this.label = label2;
         this.names = {};
       }
       render({ _n }) {
@@ -15554,14 +15554,14 @@ var require_codegen = __commonJS({
       }
     };
     var Break = class extends Node {
-      constructor(label) {
+      constructor(label2) {
         super();
-        this.label = label;
+        this.label = label2;
         this.names = {};
       }
       render({ _n }) {
-        const label = this.label ? ` ${this.label}` : "";
-        return `break${label};` + _n;
+        const label2 = this.label ? ` ${this.label}` : "";
+        return `break${label2};` + _n;
       }
     };
     var Throw = class extends Node {
@@ -15973,12 +15973,12 @@ var require_codegen = __commonJS({
         return this._endBlockNode(For);
       }
       // `label` statement
-      label(label) {
-        return this._leafNode(new Label(label));
+      label(label2) {
+        return this._leafNode(new Label(label2));
       }
       // `break` statement
-      break(label) {
-        return this._leafNode(new Break(label));
+      break(label2) {
+        return this._leafNode(new Break(label2));
       }
       // `return` statement
       return(value) {
@@ -16097,14 +16097,14 @@ var require_codegen = __commonJS({
         return replaceName(expr);
       if (!canOptimize(expr))
         return expr;
-      return new code_1._Code(expr._items.reduce((items, c) => {
+      return new code_1._Code(expr._items.reduce((items2, c) => {
         if (c instanceof code_1.Name)
           c = replaceName(c);
         if (c instanceof code_1._Code)
-          items.push(...c._items);
+          items2.push(...c._items);
         else
-          items.push(c);
-        return items;
+          items2.push(c);
+        return items2;
       }, []));
       function replaceName(n) {
         const c = constants5[n.str];
@@ -16262,7 +16262,7 @@ var require_util = __commonJS({
         mergeNames: (gen, from, to) => gen.if((0, codegen_1._)`${to} !== true && ${from} !== undefined`, () => gen.assign(to, (0, codegen_1._)`${from} === true ? true : ${to} > ${from} ? ${to} : ${from}`)),
         mergeToName: (gen, from, to) => gen.if((0, codegen_1._)`${to} !== true`, () => gen.assign(to, from === true ? true : (0, codegen_1._)`${to} > ${from} ? ${to} : ${from}`)),
         mergeValues: (from, to) => from === true ? true : Math.max(from, to),
-        resultToName: (gen, items) => gen.var("items", items)
+        resultToName: (gen, items2) => gen.var("items", items2)
       })
     };
     function evaluatedPropsToName(gen, ps) {
@@ -16770,13 +16770,13 @@ var require_defaults = __commonJS({
     var codegen_1 = require_codegen();
     var util_1 = require_util();
     function assignDefaults(it, ty) {
-      const { properties, items } = it.schema;
+      const { properties, items: items2 } = it.schema;
       if (ty === "object" && properties) {
         for (const key in properties) {
           assignDefault(it, key, properties[key].default);
         }
-      } else if (ty === "array" && Array.isArray(items)) {
-        items.forEach((sch, i) => assignDefault(it, i, sch.default));
+      } else if (ty === "array" && Array.isArray(items2)) {
+        items2.forEach((sch, i) => assignDefault(it, i, sch.default));
       }
     }
     exports.assignDefaults = assignDefaults;
@@ -17580,11 +17580,11 @@ var require_validate = __commonJS({
         gen.return((0, codegen_1._)`${names_1.default.errors} === 0`);
       }
     }
-    function assignEvaluated({ gen, evaluated, props, items }) {
+    function assignEvaluated({ gen, evaluated, props, items: items2 }) {
       if (props instanceof codegen_1.Name)
         gen.assign((0, codegen_1._)`${evaluated}.props`, props);
-      if (items instanceof codegen_1.Name)
-        gen.assign((0, codegen_1._)`${evaluated}.items`, items);
+      if (items2 instanceof codegen_1.Name)
+        gen.assign((0, codegen_1._)`${evaluated}.items`, items2);
     }
     function schemaKeywords(it, types, typeErrors, errsCount) {
       const { gen, schema, data, allErrors, opts, self } = it;
@@ -18047,12 +18047,12 @@ var require_compile = __commonJS({
           validate.source = { validateName, validateCode, scopeValues: gen._values };
         }
         if (this.opts.unevaluated) {
-          const { props, items } = schemaCxt;
+          const { props, items: items2 } = schemaCxt;
           validate.evaluated = {
             props: props instanceof codegen_1.Name ? void 0 : props,
-            items: items instanceof codegen_1.Name ? void 0 : items,
+            items: items2 instanceof codegen_1.Name ? void 0 : items2,
             dynamicProps: props instanceof codegen_1.Name,
-            dynamicItems: items instanceof codegen_1.Name
+            dynamicItems: items2 instanceof codegen_1.Name
           };
           if (validate.source)
             validate.source.evaluated = (0, codegen_1.stringify)(validate.evaluated);
@@ -19413,7 +19413,7 @@ var require_core = __commonJS({
       errorsText(errors = this.errors, { separator = ", ", dataVar = "data" } = {}) {
         if (!errors || errors.length === 0)
           return "No errors";
-        return errors.map((e) => `${dataVar}${e.instancePath} ${e.message}`).reduce((text, msg) => text + separator + msg);
+        return errors.map((e) => `${dataVar}${e.instancePath} ${e.message}`).reduce((text2, msg) => text2 + separator + msg);
       }
       $dataMetaSchema(metaSchema, keywordsJsonPointers) {
         const rules = this.RULES.all;
@@ -19758,8 +19758,8 @@ var require_ref = __commonJS({
               it.items = util_1.mergeEvaluated.items(gen, schEvaluated.items, it.items);
             }
           } else {
-            const items = gen.var("items", (0, codegen_1._)`${source}.evaluated.items`);
-            it.items = util_1.mergeEvaluated.items(gen, items, it.items, codegen_1.Name);
+            const items2 = gen.var("items", (0, codegen_1._)`${source}.evaluated.items`);
+            it.items = util_1.mergeEvaluated.items(gen, items2, it.items, codegen_1.Name);
           }
         }
       }
@@ -20299,28 +20299,28 @@ var require_additionalItems = __commonJS({
       error: error51,
       code(cxt) {
         const { parentSchema, it } = cxt;
-        const { items } = parentSchema;
-        if (!Array.isArray(items)) {
+        const { items: items2 } = parentSchema;
+        if (!Array.isArray(items2)) {
           (0, util_1.checkStrictMode)(it, '"additionalItems" is ignored when "items" is not an array of schemas');
           return;
         }
-        validateAdditionalItems(cxt, items);
+        validateAdditionalItems(cxt, items2);
       }
     };
-    function validateAdditionalItems(cxt, items) {
+    function validateAdditionalItems(cxt, items2) {
       const { gen, schema, data, keyword, it } = cxt;
       it.items = true;
       const len = gen.const("len", (0, codegen_1._)`${data}.length`);
       if (schema === false) {
-        cxt.setParams({ len: items.length });
-        cxt.pass((0, codegen_1._)`${len} <= ${items.length}`);
+        cxt.setParams({ len: items2.length });
+        cxt.pass((0, codegen_1._)`${len} <= ${items2.length}`);
       } else if (typeof schema == "object" && !(0, util_1.alwaysValidSchema)(it, schema)) {
-        const valid = gen.var("valid", (0, codegen_1._)`${len} <= ${items.length}`);
+        const valid = gen.var("valid", (0, codegen_1._)`${len} <= ${items2.length}`);
         gen.if((0, codegen_1.not)(valid), () => validateItems(valid));
         cxt.ok(valid);
       }
       function validateItems(valid) {
-        gen.forRange("i", items.length, len, (i) => {
+        gen.forRange("i", items2.length, len, (i) => {
           cxt.subschema({ keyword, dataProp: i, dataPropType: util_1.Type.Num }, valid);
           if (!it.allErrors)
             gen.if((0, codegen_1.not)(valid), () => gen.break());
@@ -23627,9 +23627,9 @@ var util;
     throw new Error();
   }
   util2.assertNever = assertNever2;
-  util2.arrayToEnum = (items) => {
+  util2.arrayToEnum = (items2) => {
     const obj = {};
-    for (const item of items) {
+    for (const item of items2) {
       obj[item] = item;
     }
     return obj;
@@ -25873,9 +25873,9 @@ var ZodObject2 = class _ZodObject extends ZodType2 {
   _getCached() {
     if (this._cached !== null)
       return this._cached;
-    const shape = this._def.shape();
-    const keys = util.objectKeys(shape);
-    this._cached = { shape, keys };
+    const shape2 = this._def.shape();
+    const keys = util.objectKeys(shape2);
+    this._cached = { shape: shape2, keys };
     return this._cached;
   }
   _parse(input) {
@@ -25890,7 +25890,7 @@ var ZodObject2 = class _ZodObject extends ZodType2 {
       return INVALID;
     }
     const { status, ctx } = this._processInputParams(input);
-    const { shape, keys: shapeKeys } = this._getCached();
+    const { shape: shape2, keys: shapeKeys } = this._getCached();
     const extraKeys = [];
     if (!(this._def.catchall instanceof ZodNever2 && this._def.unknownKeys === "strip")) {
       for (const key in ctx.data) {
@@ -25901,7 +25901,7 @@ var ZodObject2 = class _ZodObject extends ZodType2 {
     }
     const pairs = [];
     for (const key of shapeKeys) {
-      const keyValidator = shape[key];
+      const keyValidator = shape2[key];
       const value = ctx.data[key];
       pairs.push({
         key: { status: "valid", value: key },
@@ -26107,27 +26107,27 @@ var ZodObject2 = class _ZodObject extends ZodType2 {
     });
   }
   pick(mask) {
-    const shape = {};
+    const shape2 = {};
     for (const key of util.objectKeys(mask)) {
       if (mask[key] && this.shape[key]) {
-        shape[key] = this.shape[key];
+        shape2[key] = this.shape[key];
       }
     }
     return new _ZodObject({
       ...this._def,
-      shape: () => shape
+      shape: () => shape2
     });
   }
   omit(mask) {
-    const shape = {};
+    const shape2 = {};
     for (const key of util.objectKeys(this.shape)) {
       if (!mask[key]) {
-        shape[key] = this.shape[key];
+        shape2[key] = this.shape[key];
       }
     }
     return new _ZodObject({
       ...this._def,
-      shape: () => shape
+      shape: () => shape2
     });
   }
   /**
@@ -26174,27 +26174,27 @@ var ZodObject2 = class _ZodObject extends ZodType2 {
     return createZodEnum(util.objectKeys(this.shape));
   }
 };
-ZodObject2.create = (shape, params) => {
+ZodObject2.create = (shape2, params) => {
   return new ZodObject2({
-    shape: () => shape,
+    shape: () => shape2,
     unknownKeys: "strip",
     catchall: ZodNever2.create(),
     typeName: ZodFirstPartyTypeKind2.ZodObject,
     ...processCreateParams(params)
   });
 };
-ZodObject2.strictCreate = (shape, params) => {
+ZodObject2.strictCreate = (shape2, params) => {
   return new ZodObject2({
-    shape: () => shape,
+    shape: () => shape2,
     unknownKeys: "strict",
     catchall: ZodNever2.create(),
     typeName: ZodFirstPartyTypeKind2.ZodObject,
     ...processCreateParams(params)
   });
 };
-ZodObject2.lazycreate = (shape, params) => {
+ZodObject2.lazycreate = (shape2, params) => {
   return new ZodObject2({
-    shape,
+    shape: shape2,
     unknownKeys: "strip",
     catchall: ZodNever2.create(),
     typeName: ZodFirstPartyTypeKind2.ZodObject,
@@ -26522,18 +26522,18 @@ var ZodTuple2 = class _ZodTuple extends ZodType2 {
       });
       status.dirty();
     }
-    const items = [...ctx.data].map((item, itemIndex) => {
+    const items2 = [...ctx.data].map((item, itemIndex) => {
       const schema = this._def.items[itemIndex] || this._def.rest;
       if (!schema)
         return null;
       return schema._parse(new ParseInputLazyPath(ctx, item, ctx.path, itemIndex));
     }).filter((x) => !!x);
     if (ctx.common.async) {
-      return Promise.all(items).then((results) => {
+      return Promise.all(items2).then((results) => {
         return ParseStatus.mergeArray(status, results);
       });
     } else {
-      return ParseStatus.mergeArray(status, items);
+      return ParseStatus.mergeArray(status, items2);
     }
   }
   get items() {
@@ -26837,10 +26837,10 @@ var ZodFunction2 = class _ZodFunction extends ZodType2 {
   returnType() {
     return this._def.returns;
   }
-  args(...items) {
+  args(...items2) {
     return new _ZodFunction({
       ...this._def,
-      args: ZodTuple2.create(items).rest(ZodUnknown2.create())
+      args: ZodTuple2.create(items2).rest(ZodUnknown2.create())
     });
   }
   returns(returnType) {
@@ -27537,10 +27537,10 @@ var ZodMiniObject = /* @__PURE__ */ $constructor("ZodMiniObject", (inst, def) =>
   defineLazy(inst, "shape", () => def.shape);
 });
 // @__NO_SIDE_EFFECTS__
-function object2(shape, params) {
+function object2(shape2, params) {
   const def = {
     type: "object",
-    shape: shape ?? {},
+    shape: shape2 ?? {},
     ...normalizeParams(params)
   };
   return new ZodMiniObject(def);
@@ -27555,16 +27555,16 @@ function isZ4Schema(s) {
   const schema = s;
   return !!schema._zod;
 }
-function objectFromShape(shape) {
-  const values = Object.values(shape);
+function objectFromShape(shape2) {
+  const values = Object.values(shape2);
   if (values.length === 0)
     return object2({});
   const allV4 = values.every(isZ4Schema);
   const allV3 = values.every((s) => !isZ4Schema(s));
   if (allV4)
-    return object2(shape);
+    return object2(shape2);
   if (allV3)
-    return objectType(shape);
+    return objectType(shape2);
   throw new Error("Mixed Zod versions detected in object shape.");
 }
 function safeParse3(schema, data) {
@@ -28618,9 +28618,9 @@ function parseObjectDef(def, refs) {
     properties: {}
   };
   const required2 = [];
-  const shape = def.shape();
-  for (const propName in shape) {
-    let propDef = shape[propName];
+  const shape2 = def.shape();
+  for (const propName in shape2) {
+    let propDef = shape2[propName];
     if (propDef === void 0 || propDef._def === void 0) {
       continue;
     }
@@ -28726,14 +28726,14 @@ function parsePromiseDef(def, refs) {
 
 // ../../../../node_modules/zod-to-json-schema/dist/esm/parsers/set.js
 function parseSetDef(def, refs) {
-  const items = parseDef(def.valueType._def, {
+  const items2 = parseDef(def.valueType._def, {
     ...refs,
     currentPath: [...refs.currentPath, "items"]
   });
   const schema = {
     type: "array",
     uniqueItems: true,
-    items
+    items: items2
   };
   if (def.minSize) {
     setResponseValueAndErrors(schema, "minItems", def.minSize.value, def.minSize.message, refs);
@@ -29006,8 +29006,8 @@ function toJsonSchemaCompat(schema, opts) {
   });
 }
 function getMethodLiteral(schema) {
-  const shape = getObjectShape(schema);
-  const methodSchema = shape?.method;
+  const shape2 = getObjectShape(schema);
+  const methodSchema = shape2?.method;
   if (!methodSchema) {
     throw new Error("Schema is missing a method literal");
   }
@@ -30065,9 +30065,9 @@ var M = external_exports.object({ protocolVersion: external_exports.string().des
 var C = "ui/resourceUri";
 var p = "text/html;profile=mcp-app";
 function K3(Z, $, J, X) {
-  let V = J._meta, D = V.ui, L = V[C], W = V;
-  if (D?.resourceUri && !L) W = { ...V, [C]: D.resourceUri };
-  else if (L && !D?.resourceUri) W = { ...V, ui: { ...D, resourceUri: L } };
+  let V = J._meta, D = V.ui, L2 = V[C], W = V;
+  if (D?.resourceUri && !L2) W = { ...V, [C]: D.resourceUri };
+  else if (L2 && !D?.resourceUri) W = { ...V, ui: { ...D, resourceUri: L2 } };
   return Z.registerTool($, { ...J, _meta: W }, X);
 }
 function N3(Z, $, J, X, V) {
@@ -30451,8 +30451,8 @@ var Server = class extends Protocol {
    * Override request handler registration to enforce server-side validation for tools/call.
    */
   setRequestHandler(requestSchema, handler) {
-    const shape = getObjectShape(requestSchema);
-    const methodSchema = shape?.method;
+    const shape2 = getObjectShape(requestSchema);
+    const methodSchema = shape2?.method;
     if (!methodSchema) {
       throw new Error("Schema is missing a method literal");
     }
@@ -31612,10 +31612,10 @@ function getZodSchemaObject(schema) {
   return schema;
 }
 function promptArgumentsFromSchema(schema) {
-  const shape = getObjectShape(schema);
-  if (!shape)
+  const shape2 = getObjectShape(schema);
+  if (!shape2)
     return [];
-  return Object.entries(shape).map(([name, field]) => {
+  return Object.entries(shape2).map(([name, field]) => {
     const description = getSchemaDescription(field);
     const isOptional = isSchemaOptional(field);
     return {
@@ -31626,8 +31626,8 @@ function promptArgumentsFromSchema(schema) {
   });
 }
 function getMethodValue(schema) {
-  const shape = getObjectShape(schema);
-  const methodSchema = shape?.method;
+  const shape2 = getObjectShape(schema);
+  const methodSchema = shape2?.method;
   if (!methodSchema) {
     throw new Error("Schema is missing a method literal");
   }
@@ -31789,6 +31789,11 @@ function classifyFile(name, head) {
   return BINARY;
 }
 
+// ../../../../fraym/packages/driver/src/type-guards.ts
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 // ../../../../fraym/packages/driver/src/presentation.ts
 var PRESENTED_KINDS = [
   "image",
@@ -31806,6 +31811,201 @@ var PRESENTED_KINDS = [
   "binary"
 ];
 var KIND_SET = new Set(PRESENTED_KINDS);
+
+// ../../../../fraym/packages/driver/src/generative-ui.ts
+var UI_LIMITS = {
+  maxSpecBytes: 48 * 1024,
+  maxNodes: 400,
+  maxDepth: 8,
+  maxBlocks: 60,
+  maxChildren: 60,
+  maxButtons: 12,
+  maxIssues: 8,
+  maxTitle: 120,
+  maxLabel: 160,
+  maxText: 2e3,
+  maxCell: 400,
+  maxMessage: 500,
+  maxUrl: 2048,
+  maxItems: 100,
+  maxTableRows: 200,
+  maxTableColumns: 12,
+  maxOptions: 6,
+  maxTabs: 12,
+  maxLabels: 60,
+  maxSeries: 6
+};
+var UI_TONES = ["neutral", "muted", "info", "success", "warning", "danger"];
+var L = UI_LIMITS;
+var label = (max = L.maxLabel) => ({ k: "str", max, inline: false });
+var text = (max = L.maxText) => ({ k: "str", max, inline: true });
+var pick2 = (...values) => ({ k: "enum", values });
+var int2 = (min, max) => ({ k: "int", min, max });
+var flag = { k: "bool" };
+var tone = { k: "enum", values: UI_TONES };
+var kids = { k: "nodes" };
+var items = (of, max = L.maxItems, min = 1) => ({ k: "list", of, min, max });
+var shape = (fields, shorthand) => shorthand === void 0 ? { k: "shape", fields } : { k: "shape", fields, shorthand };
+var PALETTE = {
+  stack: {
+    group: "Layout",
+    fields: { children: kids, "direction?": pick2("column", "row"), "gap?": pick2("sm", "md", "lg") }
+  },
+  grid: { group: "Layout", fields: { children: kids, "columns?": int2(1, 4) } },
+  card: {
+    group: "Layout",
+    fields: { "title?": label(), "subtitle?": label(), "tone?": tone, children: kids }
+  },
+  tabs: {
+    group: "Layout",
+    fields: { tabs: items(shape({ label: label(60), children: kids }), L.maxTabs) }
+  },
+  collapse: { group: "Layout", fields: { title: label(), "open?": flag, children: kids } },
+  divider: { group: "Layout", fields: {} },
+  heading: { group: "Text", fields: { text: label(200), "level?": int2(1, 3) } },
+  text: { group: "Text", fields: { text: text(), "tone?": tone } },
+  callout: { group: "Text", fields: { "tone?": tone, "title?": label(), text: text() } },
+  tags: {
+    group: "Text",
+    fields: { items: items(shape({ text: label(60), "tone?": tone }, "text"), 30) }
+  },
+  list: {
+    group: "Lists",
+    fields: {
+      "ordered?": flag,
+      items: items(shape({ text: text(400), "detail?": text(400) }, "text"))
+    }
+  },
+  checklist: {
+    group: "Lists",
+    fields: {
+      "title?": label(),
+      items: items(shape({ text: text(300), "detail?": text(300), "checked?": flag }, "text")),
+      "submit?": label(60)
+    }
+  },
+  kv: {
+    group: "Lists",
+    fields: {
+      "columns?": int2(1, 2),
+      items: items(shape({ label: label(80), value: text(400), "detail?": text(300) }))
+    }
+  },
+  timeline: {
+    group: "Lists",
+    fields: {
+      items: items(
+        shape({ "time?": label(60), title: label(200), "detail?": text(600), "tag?": label(40), "tone?": tone })
+      )
+    }
+  },
+  table: {
+    group: "Data",
+    fields: {
+      "caption?": label(),
+      columns: items(
+        shape({ label: label(60), "align?": pick2("start", "center", "end") }, "label"),
+        L.maxTableColumns
+      ),
+      rows: items({ k: "list", of: { k: "cell" }, min: 0, max: L.maxTableColumns }, L.maxTableRows)
+    },
+    check(node, path2, issue2) {
+      const columns = Array.isArray(node.columns) ? node.columns.length : 0;
+      const rows = Array.isArray(node.rows) ? node.rows : [];
+      rows.forEach((row, index) => {
+        if (Array.isArray(row) && row.length > columns) {
+          issue2(`${path2}.rows[${index}]`, `has ${row.length} cells but there are only ${columns} columns`);
+        }
+      });
+    }
+  },
+  comparison: {
+    group: "Data",
+    fields: {
+      options: items(
+        shape({
+          name: label(80),
+          "tagline?": label(),
+          "recommended?": flag,
+          "facts?": items(shape({ label: label(80), value: text(300) }), 12, 0),
+          "pros?": items(text(300), 8, 0),
+          "cons?": items(text(300), 8, 0)
+        }),
+        L.maxOptions,
+        2
+      )
+    }
+  },
+  stats: {
+    group: "Data",
+    fields: {
+      items: items(
+        shape({
+          label: label(80),
+          value: label(40),
+          "unit?": label(16),
+          "delta?": label(40),
+          "trend?": pick2("up", "down", "flat"),
+          "detail?": label(),
+          "tone?": tone
+        }),
+        12
+      )
+    }
+  },
+  progress: {
+    group: "Data",
+    fields: {
+      label: label(),
+      value: { k: "num", nullable: false },
+      "max?": { k: "num", nullable: false },
+      "detail?": label(),
+      "tone?": tone
+    }
+  },
+  chart: {
+    group: "Data",
+    fields: {
+      kind: pick2("bar", "line", "donut"),
+      "title?": label(),
+      labels: items(label(40), L.maxLabels),
+      series: items(
+        shape({ name: label(60), values: items({ k: "num", nullable: true }, L.maxLabels) }),
+        L.maxSeries
+      ),
+      "unit?": label(16)
+    },
+    check(node, path2, issue2) {
+      const labels = Array.isArray(node.labels) ? node.labels.length : 0;
+      const series = Array.isArray(node.series) ? node.series : [];
+      if (String(node.kind).trim().toLowerCase() === "donut" && series.length > 1)
+        issue2(`${path2}.series`, "a donut takes exactly one series");
+      series.forEach((entry, index) => {
+        const values = isRecord(entry) && Array.isArray(entry.values) ? entry.values.length : labels;
+        if (values !== labels)
+          issue2(`${path2}.series[${index}].values`, `has ${values} values but there are ${labels} labels`);
+      });
+    }
+  },
+  button: {
+    group: "Interactive",
+    fields: {
+      label: label(60),
+      message: { k: "str", max: L.maxMessage, inline: false, noCommand: true },
+      "variant?": pick2("primary", "secondary")
+    }
+  },
+  link: {
+    group: "Media",
+    fields: { label: label(), url: { k: "url", schemes: ["https:"] }, "detail?": label() }
+  },
+  image: {
+    group: "Media",
+    fields: { url: { k: "url", schemes: ["https:"] }, alt: label(200), "caption?": label() }
+  }
+};
+var UI_NODE_TYPES = Object.keys(PALETTE);
+var INVALID2 = Symbol("invalid");
 
 // ../../../../fraym/packages/driver/src/room-types.ts
 var ROOM_UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
@@ -32089,11 +32289,11 @@ function createFence(options2) {
 function encodeCursor(position) {
   return Buffer.from(JSON.stringify([position.ordering, position.key, position.id])).toString("base64url");
 }
-function decodeCursor(text, ordering) {
+function decodeCursor(text2, ordering) {
   const refusal = new RangeError("the page cursor is not valid for this query");
   let parsed;
   try {
-    parsed = JSON.parse(Buffer.from(text, "base64url").toString("utf8"));
+    parsed = JSON.parse(Buffer.from(text2, "base64url").toString("utf8"));
   } catch {
     throw refusal;
   }
@@ -32164,8 +32364,8 @@ var MAX_SEARCH_CHARS = 200;
 var TRIGRAM_CHARS = 3;
 var CONTROL_CHARS = /[\u0000-\u001f\u007f]/g;
 var HIGHEST_CODE_POINT = "\u{10FFFF}";
-function parseSearch(text) {
-  const trimmed = (text ?? "").replace(CONTROL_CHARS, " ").trim().slice(0, MAX_SEARCH_CHARS);
+function parseSearch(text2) {
+  const trimmed = (text2 ?? "").replace(CONTROL_CHARS, " ").trim().slice(0, MAX_SEARCH_CHARS);
   if (trimmed === "") return void 0;
   const terms = trimmed.split(/\s+/).filter((term) => [...term].length >= TRIGRAM_CHARS);
   if (terms.length > 0) {
@@ -32403,11 +32603,11 @@ function encodeBase64Url(bytes) {
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
 }
-function decodeBase64Url(text) {
-  if (!BASE64URL_TEXT.test(text)) throw new AspError("not base64url");
+function decodeBase64Url(text2) {
+  if (!BASE64URL_TEXT.test(text2)) throw new AspError("not base64url");
   try {
-    if (nativeFromBase64 !== void 0) return nativeFromBase64.call(Uint8Array, text, { alphabet: "base64url" });
-    const padded = text.replaceAll("-", "+").replaceAll("_", "/") + "=".repeat((4 - text.length % 4) % 4);
+    if (nativeFromBase64 !== void 0) return nativeFromBase64.call(Uint8Array, text2, { alphabet: "base64url" });
+    const padded = text2.replaceAll("-", "+").replaceAll("_", "/") + "=".repeat((4 - text2.length % 4) % 4);
     const binary = atob(padded);
     const out = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
@@ -32472,11 +32672,11 @@ function concatBytes(head, tail) {
   out.set(tail, head.length);
   return out;
 }
-function parseSealedJson(plain, label) {
+function parseSealedJson(plain, label2) {
   try {
     return JSON.parse(decoder.decode(plain));
   } catch {
-    throw new AspError(`the ${label} is not JSON`);
+    throw new AspError(`the ${label2} is not JSON`);
   }
 }
 async function sealChunk(key, prefix, version2, index, isLast, plain) {
@@ -32532,10 +32732,10 @@ function positiveInt(value) {
 function nonNegativeInt(value) {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : void 0;
 }
-var INVALID2 = Symbol("invalid");
+var INVALID3 = Symbol("invalid");
 function optionalField(raw, parse3) {
   if (raw === void 0) return void 0;
-  return parse3(raw) ?? INVALID2;
+  return parse3(raw) ?? INVALID3;
 }
 function parseManifest(value) {
   if (!isRecord2(value) || value.asp !== ASP_VERSION) return void 0;
@@ -32549,12 +32749,12 @@ function parseManifest(value) {
   const createdAt = nonNegativeInt(value.createdAt);
   if (name === void 0 || mime === void 0 || kind === void 0 || size === void 0 || chunkBytes === void 0 || chunks === void 0 || version2 === void 0 || createdAt === void 0 || chunks !== chunkCount(size, chunkBytes))
     return void 0;
-  const title = optionalField(value.title, (text) => boundedString(text, MAX_TITLE));
+  const title = optionalField(value.title, (text2) => boundedString(text2, MAX_TITLE));
   const width = optionalField(value.width, positiveInt);
   const height = optionalField(value.height, positiveInt);
   const durationMs = optionalField(value.durationMs, nonNegativeInt);
-  const poster = optionalField(value.poster, (text) => typeof text === "string" && text.length <= MAX_POSTER_CHARS ? text : void 0);
-  if (title === INVALID2 || width === INVALID2 || height === INVALID2 || durationMs === INVALID2 || poster === INVALID2) return void 0;
+  const poster = optionalField(value.poster, (text2) => typeof text2 === "string" && text2.length <= MAX_POSTER_CHARS ? text2 : void 0);
+  if (title === INVALID3 || width === INVALID3 || height === INVALID3 || durationMs === INVALID3 || poster === INVALID3) return void 0;
   return {
     asp: 1,
     name,
@@ -32602,7 +32802,7 @@ function parseShape(value) {
 function parseQuote(value) {
   if (!isRecord2(value)) return void 0;
   const quote = boundedString(value.quote, ASP_MAX_QUOTE);
-  const fits = (text) => typeof text === "string" && text.length <= ASP_MAX_QUOTE_CONTEXT;
+  const fits = (text2) => typeof text2 === "string" && text2.length <= ASP_MAX_QUOTE_CONTEXT;
   return quote !== void 0 && fits(value.prefix) && fits(value.suffix) ? { quote, prefix: value.prefix, suffix: value.suffix } : void 0;
 }
 function millis(value) {
@@ -32613,14 +32813,14 @@ function regionShape(value) {
   if (!unit2(value.x) || !unit2(value.y) || !unit2(value.w) || !unit2(value.h)) return void 0;
   return { kind: "box", from: { x: value.x, y: value.y }, to: { x: Math.min(1, value.x + value.w), y: Math.min(1, value.y + value.h) } };
 }
-function shapeExtent(shape) {
-  const points = shape.kind === "pin" ? [shape.at] : shape.kind === "pen" ? shape.points : [shape.from, shape.to];
+function shapeExtent(shape2) {
+  const points = shape2.kind === "pin" ? [shape2.at] : shape2.kind === "pen" ? shape2.points : [shape2.from, shape2.to];
   const xs = points.map((point2) => point2.x);
   const ys = points.map((point2) => point2.y);
   return { left: Math.min(...xs), top: Math.min(...ys), right: Math.max(...xs), bottom: Math.max(...ys) };
 }
-function shapeBounds(shape) {
-  const { left, top, right, bottom } = shapeExtent(shape);
+function shapeBounds(shape2) {
+  const { left, top, right, bottom } = shapeExtent(shape2);
   return { x: left, y: top, w: right - left, h: bottom - top };
 }
 function wireAnchor(anchor) {
@@ -32634,18 +32834,18 @@ function parseCommentAnchor(value) {
   const startMs = optionalField(value.startMs, millis);
   const endMs = optionalField(value.endMs, millis);
   const page = optionalField(value.page, positiveInt);
-  const text = optionalField(value.text, parseQuote);
+  const text2 = optionalField(value.text, parseQuote);
   const drawn = optionalField(value.shape, parseShape);
-  const shape = drawn === void 0 && text === void 0 && value.kind === "region" ? regionShape(value) ?? INVALID2 : drawn;
-  if (startMs === INVALID2 || endMs === INVALID2 || page === INVALID2 || shape === INVALID2 || text === INVALID2) return void 0;
+  const shape2 = drawn === void 0 && text2 === void 0 && value.kind === "region" ? regionShape(value) ?? INVALID3 : drawn;
+  if (startMs === INVALID3 || endMs === INVALID3 || page === INVALID3 || shape2 === INVALID3 || text2 === INVALID3) return void 0;
   if (endMs !== void 0 && (startMs === void 0 || endMs < startMs)) return void 0;
-  if (startMs === void 0 && page === void 0 && shape === void 0 && text === void 0) return void 0;
+  if (startMs === void 0 && page === void 0 && shape2 === void 0 && text2 === void 0) return void 0;
   return {
     ...startMs === void 0 ? {} : { startMs },
     ...endMs === void 0 ? {} : { endMs },
     ...page === void 0 ? {} : { page },
-    ...shape === void 0 ? {} : { shape },
-    ...text === void 0 ? {} : { text }
+    ...shape2 === void 0 ? {} : { shape: shape2 },
+    ...text2 === void 0 ? {} : { text: text2 }
   };
 }
 function parseComment(value) {
@@ -32674,7 +32874,7 @@ function parseAudience(value) {
   if (value.kind !== "signin") return void 0;
   const emails = optionalField(value.emails, (list) => stringList(list, 500));
   const domains = optionalField(value.domains, (list) => stringList(list, 50));
-  if (emails === INVALID2 || domains === INVALID2) return void 0;
+  if (emails === INVALID3 || domains === INVALID3) return void 0;
   return {
     kind: "signin",
     ...emails === void 0 || emails.length === 0 ? {} : { emails },
@@ -32688,7 +32888,7 @@ function parsePolicy(value) {
   if (typeof value.publicLinks !== "boolean" || typeof value.signinRequired !== "boolean" || maxBytes === void 0 || maxDays === void 0)
     return void 0;
   const allowedDomains = optionalField(value.allowedDomains, (list) => stringList(list, 50));
-  if (allowedDomains === INVALID2) return void 0;
+  if (allowedDomains === INVALID3) return void 0;
   return {
     publicLinks: value.publicLinks,
     signinRequired: value.signinRequired,
@@ -32724,18 +32924,18 @@ function audienceAllowedBy(audience, policy) {
 }
 
 // ../src/library/rows.ts
-function readTags(text) {
+function readTags(text2) {
   try {
-    const parsed = JSON.parse(text);
+    const parsed = JSON.parse(text2);
     return Array.isArray(parsed) ? parsed.filter((tag) => typeof tag === "string") : [];
   } catch {
     return [];
   }
 }
-function readAudience(shareId2, text) {
+function readAudience(shareId2, text2) {
   let parsed;
   try {
-    parsed = JSON.parse(text);
+    parsed = JSON.parse(text2);
   } catch {
     parsed = void 0;
   }
@@ -33316,12 +33516,12 @@ async function createLibrary(options2) {
     for (const statement of statements.values()) statement.finalize();
     statements.clear();
   }
-  function sql(text) {
-    let statement = statements.get(text);
+  function sql(text2) {
+    let statement = statements.get(text2);
     if (statement === void 0) {
       if (statements.size >= STATEMENT_CACHE_LIMIT) releaseStatements();
-      statement = db.prepare(text);
-      statements.set(text, statement);
+      statement = db.prepare(text2);
+      statements.set(text2, statement);
     }
     return statement;
   }
@@ -33425,7 +33625,7 @@ async function createLibrary(options2) {
       const tags = sql(
         `SELECT MIN(j.value) AS tag, COUNT(*) AS count FROM artifacts a, json_each(a.tags) j WHERE ${view}${inWorkspace} AND ${HAS_TAGS} GROUP BY lower(j.value) ORDER BY count DESC, lower(j.value) LIMIT ${MAX_FACET_TAGS}`
       ).all(...workspaceParams);
-      const count = (text, ...params) => sql(text).get(...params)?.n ?? 0;
+      const count = (text2, ...params) => sql(text2).get(...params)?.n ?? 0;
       return {
         kinds,
         workspaces,
@@ -33865,7 +34065,7 @@ function fileExtension(filename) {
   return dot > 0 ? base.slice(dot + 1).toLowerCase() : "";
 }
 var startsWith2 = (head, signature, at = 0) => head.length >= at + signature.length && signature.every((byte, index) => head[at + index] === byte);
-var ascii = (text) => Array.from(text, (char) => char.charCodeAt(0));
+var ascii = (text2) => Array.from(text2, (char) => char.charCodeAt(0));
 function sniff(head) {
   if (startsWith2(head, [137, 80, 78, 71, 13, 10, 26, 10])) return "image";
   if (startsWith2(head, [255, 216, 255])) return "image";
@@ -34028,8 +34228,8 @@ var id = external_exports.string().min(1).max(64);
 var path = external_exports.string().min(1).max(4096);
 async function answer(run2) {
   try {
-    const { text, data } = await run2();
-    return { content: [{ type: "text", text }], structuredContent: data };
+    const { text: text2, data } = await run2();
+    return { content: [{ type: "text", text: text2 }], structuredContent: data };
   } catch (error51) {
     return failure(describeError(error51));
   }
@@ -34663,16 +34863,16 @@ var StoredFileError = class extends Error {
   name = "StoredFileError";
 };
 async function readJsonFile(path2, schema) {
-  let text;
+  let text2;
   try {
-    text = await readFile2(path2, "utf8");
+    text2 = await readFile2(path2, "utf8");
   } catch (error51) {
     if (hasCode(error51, "ENOENT")) return void 0;
     throw error51;
   }
   let parsed;
   try {
-    parsed = JSON.parse(text);
+    parsed = JSON.parse(text2);
   } catch {
     throw new StoredFileError(`${path2} is not valid JSON`);
   }
@@ -36750,8 +36950,8 @@ var options = (title, extra = {}) => ({
   },
   _meta: APP_ONLY
 });
-function success2(text, structuredContent) {
-  return { content: [{ type: "text", text }], structuredContent };
+function success2(text2, structuredContent) {
+  return { content: [{ type: "text", text: text2 }], structuredContent };
 }
 async function guarded(work) {
   try {

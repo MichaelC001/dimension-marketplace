@@ -15,7 +15,8 @@
 // them working.
 import { dirname } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, mock, test } from "bun:test";
-import { formatMarkTime, FrameGrabber, frameStepTarget, FULL_SENTENCE, insideFrame, type MarkShape, MAX_TIMELINE_MARKS, type TimelineMark } from "@dimension/mcp-app-kit/annotate";
+import { formatMarkTime, FULL_SENTENCE, type MarkShape, MAX_TIMELINE_MARKS, type TimelineMark } from "@dimension/mcp-app-kit/annotate";
+import { FrameGrabber, frameStepTarget, insideFrame } from "@dimension/mcp-app-kit/media";
 import type { FilmLaneProps, MarkupOverlayProps, WaveLaneProps } from "@dimension/mcp-app-kit/annotate/react";
 import type { App } from "@modelcontextprotocol/ext-apps";
 import * as react from "react";

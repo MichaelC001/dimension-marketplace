@@ -2,12 +2,9 @@
 // default-exports a `Renderer`; `index.ts` finds them by file name and loads each
 // as its own chunk, so a Word file never pays for the PDF engine.
 
-export type Theme = "light" | "dark";
+import type { MediaSource } from "@dimension/mcp-app-kit/media";
 
-export interface RecordingSource {
-	readonly url: string;
-	readonly mime: string;
-}
+export type Theme = "light" | "dark";
 
 export interface MountContext {
 	/** The name to show; also what a renderer may sniff a format from. */
@@ -30,7 +27,7 @@ export interface MountContext {
 	 * and lets go of what it made, instead of holding it until the wait runs out.
 	 */
 	readonly signal?: AbortSignal;
-	readonly mediaSource?: RecordingSource;
+	readonly mediaSource?: MediaSource;
 }
 
 export interface Mounted {

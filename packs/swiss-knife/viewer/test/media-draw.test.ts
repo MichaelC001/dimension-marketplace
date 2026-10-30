@@ -10,8 +10,9 @@
 // Bun cannot lift a module mock, so the file puts the real kit back when it is done.
 import { dirname } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, mock, test } from "bun:test";
-import type { MarkShape, PlayheadSource, TimelineMark } from "@dimension/mcp-app-kit/annotate";
+import type { MarkShape, TimelineMark } from "@dimension/mcp-app-kit/annotate";
 import type { MarkupOverlayProps } from "@dimension/mcp-app-kit/annotate/react";
+import type { PlayheadSource } from "@dimension/mcp-app-kit/media";
 import * as react from "react";
 import { createElement, type ReactElement, type ReactNode } from "react";
 import * as jsxDevRuntime from "react/jsx-dev-runtime";
@@ -21,6 +22,7 @@ import type * as Draw from "../app/view/media-draw";
 import { installReact, type ReactEnv } from "./media-react";
 
 const KIT = "@dimension/mcp-app-kit/annotate/react";
+const MEDIA_KIT = "@dimension/mcp-app-kit/media/react";
 
 // The kit's tsconfig maps `react` and its JSX runtimes onto their type declarations, which bun cannot load as code, and
 // bun applies that map to the kit's sources wherever they are imported from. The map's targets are mocked with the real
@@ -39,7 +41,7 @@ for (const [id, real] of [
 let env: ReactEnv;
 let DrawLayer: typeof Draw.DrawLayer;
 let realKit: Record<string, unknown>;
-let useMediaPosition: (media: HTMLMediaElement, live: boolean) => PlayheadSource;
+let useMediaPlayer: (media: HTMLMediaElement, options: { readonly active: boolean }) => { readonly playhead: PlayheadSource };
 const restores: (() => void)[] = [];
 
 /** Put a global in place for the whole file, remembering how to take it out. */
@@ -108,7 +110,7 @@ beforeAll(async () => {
 	install(globalThis, "ResizeObserver", WatchedSizes);
 	// Dynamic by necessity: the kit binds React when it loads, and react-dom (loaded by `installReact`) decides once, then, whether there is a DOM.
 	realKit = { ...(await import(KIT)) };
-	useMediaPosition = realKit.useMediaPosition as typeof useMediaPosition;
+	useMediaPlayer = (await import(MEDIA_KIT)).useMediaPlayer;
 	mock.module(KIT, () => ({ ...realKit, MarkupOverlay: StandInOverlay }));
 	({ DrawLayer } = await import("../app/view/media-draw"));
 });
@@ -203,15 +205,15 @@ function rig(over: Partial<Footage> = {}, staged = true): Rig {
 /** One frame is a tenth of a second: far from the float edges of the frame maths, and a plain number to read a test by. */
 const FRAME = 0.1;
 
-type HostProps = Omit<Draw.DrawLayerProps, "playhead"> & { readonly live: boolean };
+type HostProps = Omit<Draw.DrawLayerProps, "playhead">;
 
-function Host({ live, ...props }: HostProps): ReactNode {
-	const playhead = useMediaPosition(props.video, live);
+function Host(props: HostProps): ReactNode {
+	const { playhead } = useMediaPlayer(props.video, { active: true });
 	return createElement(DrawLayer, { ...props, playhead });
 }
 
 function layer(video: HTMLVideoElement, over: Partial<HostProps> = {}): ReactElement {
-	return createElement(Host, { video, live: true, marks: [], tool: null, activeId: null, filename: "clip.mp4", frameSeconds: () => FRAME, drawingTime: playhead => playhead, onBegin: () => {}, onShape: () => undefined, openId: null, onOpen: () => {}, onNote: () => {}, onRemove: () => {}, ...over });
+	return createElement(Host, { video, marks: [], tool: null, activeId: null, filename: "clip.mp4", frameSeconds: () => FRAME, drawingTime: playhead => playhead, onBegin: () => {}, onShape: () => undefined, openId: null, onOpen: () => {}, onNote: () => {}, onRemove: () => {}, ...over });
 }
 
 /** Where the layer sits, as the numbers its wrapper's style gives (px), and the rest of that style. */
@@ -530,7 +532,7 @@ describe("which drawings are on screen", () => {
 
 	test("follows a playing video's frames, but only while the pane is on screen", async () => {
 		const at = rig();
-		const mounted = await env.mount(layer(at.video, { marks: MARKS }));
+		await env.mount(layer(at.video, { marks: MARKS }));
 		expect(env.pendingFrames()).toBe(0); // paused: nothing to follow
 
 		at.footage.paused = false;
@@ -546,11 +548,16 @@ describe("which drawings are on screen", () => {
 		await env.runFrames();
 		expect(overlays).toHaveLength(drawn);
 
-		await mounted.render(layer(at.video, { marks: MARKS, live: false }));
-		expect(env.pendingFrames()).toBe(0);
-		at.footage.currentTime = 9.03;
-		await env.runFrames();
-		expect(shown()).toEqual([12, 13]); // a hidden pane costs no frames, so it does not move
+		Object.defineProperty(env.document, "visibilityState", { value: "hidden", configurable: true });
+		try {
+			await env.act(async () => void env.document.dispatchEvent(new (win().Event)("visibilitychange")));
+			expect(env.pendingFrames()).toBe(0);
+			at.footage.currentTime = 9.03;
+			await env.runFrames();
+			expect(shown()).toEqual([12, 13]); // a hidden page costs no frames, so it does not move
+		} finally {
+			Reflect.deleteProperty(env.document, "visibilityState");
+		}
 	});
 
 	test("is drawn again when what the playhead shows changes, and not for each frame within it", async () => {

@@ -1,9 +1,10 @@
-import { clampTime, type FilmFrame, FULL_SENTENCE, type Playhead, type TimelineMark } from "@dimension/mcp-app-kit/annotate";
-import { FilmLane, type NoteCloseReason, Transport, useMediaState, WaveLane } from "@dimension/mcp-app-kit/annotate/react";
+import { FULL_SENTENCE, type TimelineMark } from "@dimension/mcp-app-kit/annotate";
+import { FilmLane, type NoteCloseReason, Transport, WaveLane } from "@dimension/mcp-app-kit/annotate/react";
+import { type FilmFrame, type MediaPlayer } from "@dimension/mcp-app-kit/media";
+import { useMediaState } from "@dimension/mcp-app-kit/media/react";
 import { cn } from "@fraym/ui/lib/cn";
 import type { ReactNode } from "react";
-import { UNBOUNDED_SENTENCE } from "./media-length";
-import { describeMediaError, type MediaTag } from "./media-messages";
+import { describeMediaError, type MediaTag, UNBOUNDED_SENTENCE } from "./media-messages";
 
 export interface TransportMarking {
 	readonly full: boolean;
@@ -21,10 +22,9 @@ export interface TransportFilm {
 }
 
 export interface MediaTransportProps {
-	readonly media: HTMLMediaElement;
+	readonly player: MediaPlayer;
 	readonly kind: MediaTag;
 	readonly filename: string;
-	readonly playhead: Playhead;
 	readonly marks: readonly TimelineMark[];
 	readonly activeId: number | null;
 	readonly onSelectMark: (id: number) => void;
@@ -40,18 +40,15 @@ export interface MediaTransportProps {
 
 const NO_FRAMES: readonly FilmFrame[] = [];
 
-export function MediaTransport({ media, kind, filename, playhead, marks, activeId, onSelectMark, onNote, openId, onClose, onRemove, waveform, film, marking, under }: MediaTransportProps): ReactNode {
-	const state = useMediaState(media);
-	const seek = (seconds: number): void => {
-		const to = clampTime(seconds, state.duration);
-		media.currentTime = to;
-		playhead.set(to);
-	};
+export function MediaTransport({ player, kind, filename, marks, activeId, onSelectMark, onNote, openId, onClose, onRemove, waveform, film, marking, under }: MediaTransportProps): ReactNode {
+	const state = useMediaState(player);
+	const { playhead } = player;
+	const seek = (seconds: number): void => void player.seek(seconds);
 	const failure = state.failed === null ? null : describeMediaError(kind, undefined, true, state.failed, state.failedDetail);
 	const floatingHint = marking?.hint !== null && marking?.hint !== undefined && !(marking.full && marking.hint === FULL_SENTENCE);
 
 	return (
-		<Transport media={media} state={state} playhead={playhead} failure={failure}>
+		<Transport player={player} failure={failure}>
 			{marking === null ? null : (
 				<p role="status" data-slot="viewer-transport-hint" className={cn("pointer-events-none absolute inset-x-3 bottom-full mb-2 flex justify-center", !floatingHint && "sr-only")}>
 					{marking.hint === null ? null : (
@@ -62,7 +59,7 @@ export function MediaTransport({ media, kind, filename, playhead, marks, activeI
 			{kind === "video" ? (
 				<FilmLane
 					playhead={playhead}
-					duration={state.duration}
+					duration={state.reach}
 					frames={film?.frames ?? NO_FRAMES}
 					failed={film?.failed ?? false}
 					slots={film?.slots ?? 1}
@@ -82,7 +79,7 @@ export function MediaTransport({ media, kind, filename, playhead, marks, activeI
 			) : (
 				<WaveLane
 					playhead={playhead}
-					duration={state.duration}
+					duration={state.reach}
 					peaks={waveform ?? null}
 					marks={marks}
 					activeId={activeId}
