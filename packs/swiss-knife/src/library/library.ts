@@ -9,6 +9,7 @@ import { errorMessage, hasCode, LibraryError } from "./errors";
 import { pathKey } from "./paths";
 import { EXPIRY_RESOLUTION_MS, LIVE_SHARE_IDS, placeholders, planList } from "./queries";
 import { revokeRemote as defaultRevokeRemote } from "./remote";
+import { type RevisionSpan, revisionMarker } from "./revision";
 import {
 	type ArtifactRow,
 	type CommentRecord,
@@ -256,7 +257,13 @@ export async function createLibrary(options: LibraryOptions): Promise<Library> {
 	function revision(): string {
 		const own = sql("SELECT total_changes() AS n").get<{ readonly n: number }>()?.n ?? 0;
 		const other = sql("PRAGMA data_version").get<{ readonly data_version: number }>()?.data_version ?? 0;
-		return `${own}:${other}`;
+		return revisionMarker(own, other);
+	}
+
+	function witnessed<T>(write: () => T): { readonly value: T; readonly span: RevisionSpan } {
+		const before = revision();
+		const value = write();
+		return { value, span: { before, after: revision() } };
 	}
 
 	function remembered<T>(key: string, compute: () => T): T {
@@ -617,11 +624,11 @@ export async function createLibrary(options: LibraryOptions): Promise<Library> {
 		return wanted.flatMap(id => answers.get(id) ?? []);
 	}
 
-	async function setThumb(id: ArtifactId, bytes: Uint8Array, mime: ThumbMime): Promise<void> {
+	async function setThumb(id: ArtifactId, bytes: Uint8Array, mime: ThumbMime): Promise<RevisionSpan> {
 		const row = requireRow(id);
 		if (row.state === "discarded") throw new LibraryError("a discarded artifact keeps no thumbnail");
 		const name = await writeThumb(thumbsDirectory, id, bytes, mime);
-		sql("UPDATE artifacts SET thumb = ? WHERE id = ?").run(name, id);
+		return witnessed(() => sql("UPDATE artifacts SET thumb = ? WHERE id = ?").run(name, id)).span;
 	}
 
 	let closed = false;
@@ -631,6 +638,7 @@ export async function createLibrary(options: LibraryOptions): Promise<Library> {
 		workspaceOf,
 		query,
 		revision,
+		witnessed,
 		facets,
 		get,
 		getByPath,

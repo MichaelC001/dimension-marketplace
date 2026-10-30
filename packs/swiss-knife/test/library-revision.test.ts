@@ -2,8 +2,9 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, rm, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createLibrary } from "../src/library/library";
+import { isOwnWrite } from "../src/library/revision";
 import type { CommentRow, Library, ShareRow } from "../src/library/types";
-import { makeTempDir } from "./fixtures";
+import { makeTempDir, TINY_PNG } from "./fixtures";
 
 let root: string;
 let clock: number;
@@ -107,5 +108,73 @@ describe("the library's change marker", () => {
 
 		expect(viewer.query({}).total).toBe(2);
 		expect(viewer.facets({}).kinds.markdown).toBe(2);
+	});
+});
+
+describe("the span a write is witnessed across", () => {
+	test("it runs from the marker read before the write to the one read after, and is the caller's own", async () => {
+		const library = await openLibrary();
+		const item = await library.stamp({ path: await put("deck.md"), source: "present" });
+		const before = library.revision();
+
+		const { value, span } = library.witnessed(() => library.update(item.id, { starred: true }));
+
+		expect(value.starred).toBe(true);
+		expect(span.before).toBe(before);
+		expect(span.after).toBe(library.revision());
+		expect(span.after).not.toBe(before);
+		expect(isOwnWrite(span, before)).toBe(true);
+	});
+
+	test("a commit by another connection while the write runs makes the span foreign, so it is not the caller's own", async () => {
+		const viewer = await openLibrary();
+		const item = await viewer.stamp({ path: await put("deck.md"), source: "present" });
+		viewer.shares.insert(shareFor(item.id));
+		const sync = await openLibrary();
+
+		const { span } = viewer.witnessed(() => {
+			viewer.update(item.id, { starred: true });
+			sync.comments.upsert(commentOn(item.id, "c1"));
+		});
+
+		expect(span.after).not.toBe(span.before);
+		expect(isOwnWrite(span, span.before)).toBe(false);
+	});
+
+	test("a write is not recognised against a marker that predates a comment this connection ingested, though no other connection wrote", async () => {
+		const library = await openLibrary();
+		const item = await library.stamp({ path: await put("deck.md"), source: "present" });
+		library.shares.insert(shareFor(item.id));
+		const last = library.revision();
+		expect(library.comments.upsert(commentOn(item.id, "c1"))).toBe(true);
+
+		const { span } = library.witnessed(() => library.update(item.id, { starred: true }));
+
+		expect(span.before).not.toBe(last);
+		expect(isOwnWrite(span, last)).toBe(false);
+		expect(isOwnWrite(span, span.before)).toBe(true);
+	});
+
+	test("a thumbnail's span brackets its row update and is the caller's own", async () => {
+		const library = await openLibrary();
+		const item = await library.stamp({ path: await put("clip.png"), source: "present" });
+		const before = library.revision();
+
+		const span = await library.setThumb(item.id, TINY_PNG, "image/png");
+
+		expect(span.before).toBe(before);
+		expect(span.after).toBe(library.revision());
+		expect(span.after).not.toBe(before);
+		expect(isOwnWrite(span, before)).toBe(true);
+		expect(library.get(item.id)?.hasThumb).toBe(true);
+	});
+
+	test("a discarded artifact is refused a thumbnail rather than given a span", async () => {
+		const library = await openLibrary();
+		const item = await library.stamp({ path: await put("clip.png"), source: "present" });
+		await library.discard(item.id, { trash: false });
+
+		await expect(library.setThumb(item.id, TINY_PNG, "image/png")).rejects.toThrow(/keeps no thumbnail/);
+		expect(library.get(item.id)?.hasThumb).toBe(false);
 	});
 });

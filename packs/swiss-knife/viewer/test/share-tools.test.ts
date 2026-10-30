@@ -4,6 +4,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import type { ShareRow } from "../../src/library/types";
 import { registerShareTools, type ShareRuntime, startShareRuntime } from "../src/share";
 import { FakeHost, makeWorld, randomFile, type World } from "./share-fixtures";
 
@@ -80,5 +81,38 @@ describe("the share tools the Library View calls", () => {
 		const revoked = await call("share_revoke", { shareId: share.id });
 		expect(revoked.isError).toBeFalsy();
 		expect((await call("share_link", { shareId: share.id })).isError).toBe(true);
+	});
+
+	test("share_mark_read answers with the markers on either side of the marking, and marking a read comment moves nothing", async () => {
+		const item = await world.addFile("notes.bin", "content");
+		const share: ShareRow = {
+			id: `share-${item.id}`,
+			artifactId: item.id,
+			host: "h1",
+			remoteId: "remoteshare0123456789",
+			baseUrl: "https://host.example",
+			key: "k".repeat(43),
+			ownerToken: "owner-token",
+			audience: { kind: "link" },
+			version: 1,
+			versionAt: world.clock.now,
+			allowComments: true,
+			createdAt: world.clock.now,
+		};
+		world.library.shares.insert(share);
+		world.library.comments.upsert({ id: "c1", shareId: share.id, author: "Ana", body: "first", version: 1, createdAt: world.clock.now });
+		const unread = world.library.revision();
+
+		const marked = await call("share_mark_read", { ids: ["c1"] });
+		const read = world.library.revision();
+
+		expect(marked.isError).toBeFalsy();
+		expect(read).not.toBe(unread);
+		expect(marked.structuredContent).toEqual({ revision: { before: unread, after: read } });
+		expect(world.library.get(item.id)?.shares[0]).toMatchObject({ comments: 1, unread: 0 });
+
+		const again = await call("share_mark_read", { ids: ["c1", "no-such-comment"] });
+
+		expect(again.structuredContent).toEqual({ revision: { before: read, after: read } });
 	});
 });

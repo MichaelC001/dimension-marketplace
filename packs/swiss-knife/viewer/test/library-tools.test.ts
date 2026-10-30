@@ -38,6 +38,10 @@ function textOf(result: Awaited<ReturnType<typeof call>>): string {
 	return typeof block === "object" && block !== null && "text" in block ? String(block.text) : "";
 }
 
+async function revision(): Promise<string> {
+	return String(structured(await call("library_revision")).revision);
+}
+
 beforeAll(async () => {
 	base = await realpath(await mkdtemp(join(tmpdir(), "viewer-library-")));
 	allowed = join(base, "allowed");
@@ -124,13 +128,16 @@ describe("an indexed artifact is one lent file", () => {
 		expect(sibling.isError).toBe(true);
 	});
 
-	test("library_open is exactly view_file's answer and records the open", async () => {
+	test("library_open is view_file's answer plus the span of recording the open", async () => {
 		const hero = join(outside, "hero.png");
 		const added = itemOf(await call("library_stamp", { path: hero }));
 		const viaFile = await call("view_file", { path: hero });
+		const before = await revision();
 		const viaLibrary = await call("library_open", { id: added.id });
+		const after = await revision();
 		expect(viaLibrary.isError).not.toBe(true);
-		expect(viaLibrary.structuredContent).toEqual(viaFile.structuredContent);
+		expect(before).not.toBe(after);
+		expect(structured(viaLibrary)).toEqual({ ...structured(viaFile), revision: { before, after } });
 		expect(viaLibrary.content).toEqual(viaFile.content);
 		expect(viaLibrary._meta).toEqual(viaFile._meta);
 
@@ -138,6 +145,23 @@ describe("an indexed artifact is one lent file", () => {
 		expect(queried.total).toBe(1);
 		expect(JSON.stringify(queried.items)).toContain('"openedAt"');
 		expect((await call("library_open", { id: "nope" })).isError).toBe(true);
+	});
+
+	test("an open that is refused records nothing and carries no revision", async () => {
+		const gone = join(outside, "gone.md");
+		await writeFile(gone, "# gone");
+		const added = itemOf(await call("library_stamp", { path: gone }));
+		await rm(gone);
+		const before = await revision();
+
+		const unreadable = await call("library_open", { id: added.id });
+		const unknown = await call("library_open", { id: "nope" });
+
+		expect(unreadable.isError).toBe(true);
+		expect(unknown.isError).toBe(true);
+		expect(unreadable.structuredContent).toBeUndefined();
+		expect(unknown.structuredContent).toBeUndefined();
+		expect(await revision()).toBe(before);
 	});
 });
 
@@ -175,7 +199,6 @@ describe("thumbnails over the loopback origin", () => {
 
 describe("the revision the open View polls", () => {
 	test("it moves after a write through the tools and after a write on another connection, and holds still for reads", async () => {
-		const revision = async (): Promise<string> => String(structured(await call("library_revision")).revision);
 		const note = join(outside, "note.md");
 		const other = join(outside, "other.md");
 		await writeFile(note, "# note");
@@ -201,5 +224,34 @@ describe("the revision the open View polls", () => {
 		} finally {
 			second.close();
 		}
+	});
+});
+
+describe("the span an app-only write answers with", () => {
+	test("library_update answers with the item and the markers on either side of its write", async () => {
+		const note = join(outside, "span-update.md");
+		await writeFile(note, "# span");
+		const added = itemOf(await call("library_stamp", { path: note }));
+		const before = await revision();
+
+		const updated = await call("library_update", { id: added.id, starred: true });
+		const after = await revision();
+
+		expect(before).not.toBe(after);
+		expect(itemOf(updated).id).toBe(added.id);
+		expect(structured(updated).revision).toEqual({ before, after });
+	});
+
+	test("library_set_thumb answers ok with the markers on either side of its row update", async () => {
+		const poster = join(outside, "span-thumb.png");
+		await writeFile(poster, TINY_PNG);
+		const added = itemOf(await call("library_stamp", { path: poster }));
+		const before = await revision();
+
+		const saved = await call("library_set_thumb", { id: added.id, data: TINY_PNG.toString("base64"), mime: "image/png" });
+		const after = await revision();
+
+		expect(before).not.toBe(after);
+		expect(structured(saved)).toEqual({ ok: true, revision: { before, after } });
 	});
 });

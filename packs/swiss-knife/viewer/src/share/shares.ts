@@ -21,6 +21,7 @@ import {
 } from "@dimension/sdk/artifact-share";
 import { errorMessage } from "../../../src/library/errors";
 import { deleteRemoteShare, revokeRemote } from "../../../src/library/remote";
+import type { RevisionSpan } from "../../../src/library/revision";
 import { shareUrl } from "../../../src/library/rows";
 import type { CommentRow, Library, LibraryItem, ShareRow, ShareSummary } from "../../../src/library/types";
 import type { Fence } from "../fence";
@@ -468,8 +469,8 @@ export class ShareService {
 		return this.#library.comments.forArtifact(artifactId);
 	}
 
-	markRead(ids: readonly string[]): void {
-		this.#library.comments.markRead(ids, this.#now());
+	markRead(ids: readonly string[]): RevisionSpan {
+		return this.#library.witnessed(() => this.#library.comments.markRead(ids, this.#now())).span;
 	}
 
 	async reply(shareId: string, body: string, anchor?: CommentAnchor): Promise<CommentWithUrl> {

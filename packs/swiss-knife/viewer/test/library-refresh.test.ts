@@ -23,10 +23,13 @@ interface ServedQuery {
 interface ServerState {
 	rows: LibraryItem[];
 	revision: number;
+	foreign: number;
 	holding: boolean;
+	holdingRevision: boolean;
 	failing: boolean;
 	pageRows: number;
 	comments: unknown[];
+	midWrite: (() => void) | null;
 }
 
 let env: ReactEnv;
@@ -41,6 +44,7 @@ let queries: ServedQuery[];
 let held: ServedQuery[];
 let revisionReads: number;
 let commentFetches: number;
+let heldRevisions: (() => void)[];
 
 const row = (id: string, extra: Partial<LibraryItem> = {}): LibraryItem => ({
 	id,
@@ -94,6 +98,8 @@ function pageAt(cursor: string | undefined, starredOnly: boolean) {
 	return { items: rows.slice(offset, end), ...(end < rows.length ? { next: `c${end}` } : {}), total: rows.length };
 }
 
+const marker = (): string => `${server.revision}:${server.foreign}`;
+
 const app = {
 	callServerTool: (params: { name: string; arguments?: Record<string, unknown> }, options?: { signal?: AbortSignal }): Promise<CallToolResult> => {
 		const args = params.arguments ?? {};
@@ -117,7 +123,15 @@ const app = {
 			}
 			case "library_revision":
 				revisionReads += 1;
-				return Promise.resolve(structured({ revision: String(server.revision) }));
+				if (server.holdingRevision) return new Promise<CallToolResult>(resolve => heldRevisions.push(() => resolve(structured({ revision: marker() }))));
+				return Promise.resolve(structured({ revision: marker() }));
+			case "library_update": {
+				const before = marker();
+				server.revision += 1;
+				server.rows = server.rows.map(each => (each.id === args.id ? { ...each, starred: args.starred === true } : each));
+				server.midWrite?.();
+				return Promise.resolve(structured({ item: server.rows.find(each => each.id === args.id), revision: { before, after: marker() } }));
+			}
 			case "library_facets":
 				return Promise.resolve(structured({ kinds: {}, workspaces: [], tags: [], starred: 0, shared: 0, discarded: 0 }));
 			case "library_thumbs":
@@ -162,11 +176,12 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-	server = { rows: [], revision: 1, holding: false, failing: false, pageRows: PAGE_ROWS, comments: [] };
+	server = { rows: [], revision: 1, foreign: 0, holding: false, holdingRevision: false, failing: false, pageRows: PAGE_ROWS, comments: [], midWrite: null };
 	queries = [];
 	held = [];
 	revisionReads = 0;
 	commentFetches = 0;
+	heldRevisions = [];
 });
 
 afterEach(async () => {
@@ -209,16 +224,37 @@ const releaseAll = async (): Promise<void> => {
 	}
 };
 
+const releaseRevisions = async (): Promise<void> => {
+	while (heldRevisions.length > 0) {
+		heldRevisions.shift()?.();
+		await settle();
+	}
+};
+
 function fire(target: Element | null, type: string, init: object = {}): Promise<void> {
 	if (target === null) throw new Error(`nothing to send ${type} to`);
 	const view = env.document.defaultView as Window & typeof globalThis;
 	return env.act(async () => void target.dispatchEvent(Object.assign(new view.Event(type, { bubbles: true, cancelable: true }), init)));
 }
 
+const libraryPane = (active: boolean) => createElement(pane.LibraryPane, { app, request: { requests: 0 }, active, theme: "dark" });
+
 async function mountPane(): Promise<HTMLElement> {
-	const { container } = await env.mount(createElement(pane.LibraryPane, { app, request: { requests: 0 }, active: true, theme: "dark" }));
+	const { container } = await env.mount(libraryPane(true));
 	await settle();
 	return container;
+}
+
+async function mountTab(): Promise<{ readonly container: HTMLElement; readonly show: (active: boolean) => Promise<void> }> {
+	const { container, render } = await env.mount(libraryPane(true));
+	await settle();
+	return {
+		container,
+		show: async active => {
+			await render(libraryPane(active));
+			await settle();
+		},
+	};
 }
 
 const options = (container: HTMLElement) => [...container.querySelectorAll('[role="option"]')];
@@ -538,5 +574,124 @@ describe("an open artifact page follows the library too", () => {
 		expect(showing(container, "tighten the landing")).toBe(true);
 		expect(showing(container, "No comments yet")).toBe(false);
 		expect(commentFetches).toBe(2);
+	});
+});
+
+describe("a write the Library made itself is not a change to follow", () => {
+	const mountSelecting = async (): Promise<HTMLElement> => {
+		server.rows = [row("a"), row("b"), row("c")];
+		const container = await mountPane();
+		await fire(container.querySelector('[data-slot="library-grid"]'), "keydown", { key: "ArrowRight" });
+		expect(option(container, "a")?.getAttribute("aria-selected")).toBe("true");
+		return container;
+	};
+	const starSelected = async (container: HTMLElement): Promise<void> => {
+		await fire(container.querySelector('[data-slot="library-grid"]'), "keydown", { key: "s" });
+		await settle();
+		expect(container.querySelectorAll('[role="option"] [title="Starred"]')).toHaveLength(1);
+	};
+
+	test("alone, it is not read back as a change: the beats after it ask for no rows and nothing says it is loading", async () => {
+		const container = await mountSelecting();
+		await starSelected(container);
+		await beat();
+		await beat();
+
+		expect(queries).toHaveLength(1);
+		expect(flashing(container)).toBe(false);
+	});
+
+	test("made after another process changed the library, it does not hide that change: the next beat reloads in place and the new row arrives", async () => {
+		const container = await mountSelecting();
+		server.foreign += 1;
+		server.rows = [row("fresh"), ...server.rows];
+		await starSelected(container);
+		await beat();
+
+		expect(queries).toHaveLength(2);
+		expect(showing(container, "fresh.png")).toBe(true);
+		expect(flashing(container)).toBe(false);
+	});
+
+	test("with another process's commit landing inside it, that commit is not hidden either", async () => {
+		const container = await mountSelecting();
+		server.midWrite = () => {
+			server.foreign += 1;
+			server.rows = [row("fresh"), ...server.rows];
+		};
+		await starSelected(container);
+		await beat();
+
+		expect(queries).toHaveLength(2);
+		expect(showing(container, "fresh.png")).toBe(true);
+		expect(flashing(container)).toBe(false);
+	});
+});
+
+describe("a Library behind another tab", () => {
+	test("asks nothing while it is behind; shown again after a change it reloads the rows it holds once, in place, and not again", async () => {
+		server.rows = [row("a"), row("b"), row("c")];
+		const { container, show } = await mountTab();
+		expect(queries).toHaveLength(1);
+
+		await show(false);
+		const readsBefore = revisionReads;
+		for (let beats = 0; beats < 4; beats += 1) await beat();
+		server.rows = [row("fresh"), ...server.rows];
+		server.revision += 1;
+		for (let beats = 0; beats < 4; beats += 1) await beat();
+		expect(revisionReads).toBe(readsBefore);
+		expect(queries).toHaveLength(1);
+		expect(showing(container, "fresh.png")).toBe(false);
+
+		server.holding = true;
+		await show(true);
+		expect(held.map(query => query.cursor)).toEqual([undefined]);
+		expect(showing(container, "a.png")).toBe(true);
+		expect(flashing(container)).toBe(false);
+
+		await releaseAll();
+		expect(showing(container, "fresh.png")).toBe(true);
+		expect(loadedRows(container)).toBe(4);
+		expect(flashing(container)).toBe(false);
+		await beat();
+		await beat();
+		expect(queries).toHaveLength(2);
+	});
+
+	test("shown again with nothing changed meanwhile, it asks for no rows at all", async () => {
+		server.rows = [row("a"), row("b")];
+		const { container, show } = await mountTab();
+		await show(false);
+		await beat();
+		await beat();
+		await show(true);
+		await beat();
+
+		expect(queries).toHaveLength(1);
+		expect(flashing(container)).toBe(false);
+	});
+
+	test("a change that a read already out brought in as the tab was left waits until the tab is shown, then reloads once", async () => {
+		server.rows = [row("a"), row("b")];
+		const { container, show } = await mountTab();
+		server.holdingRevision = true;
+		await beat();
+		expect(heldRevisions).toHaveLength(1);
+
+		await show(false);
+		server.rows = [row("fresh"), ...server.rows];
+		server.revision += 1;
+		await releaseRevisions();
+		await beat();
+		expect(queries).toHaveLength(1);
+		expect(showing(container, "fresh.png")).toBe(false);
+
+		server.holdingRevision = false;
+		await show(true);
+		expect(queries).toHaveLength(2);
+		expect(showing(container, "fresh.png")).toBe(true);
+		await beat();
+		expect(queries).toHaveLength(2);
 	});
 });

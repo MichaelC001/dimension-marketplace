@@ -3,9 +3,9 @@ import type { LibraryTools } from "./library-tools";
 import { type LibraryFilter, type ListAction, type ListState, reloadLoaded } from "./query";
 import { useChangePoll } from "./use-change-poll";
 
-export const REVISION_POLL_MS = 3000;
+const REVISION_POLL_MS = 3000;
 
-export function useLibraryRefresh(tools: LibraryTools, filter: LibraryFilter, list: ListState, dispatch: Dispatch<ListAction>, onMoved: () => void): void {
+export function useLibraryRefresh(tools: LibraryTools, filter: LibraryFilter, list: ListState, dispatch: Dispatch<ListAction>, onMoved: () => void, active: boolean): void {
 	const latest = useRef(filter);
 	latest.current = filter;
 	const running = useRef<AbortController | null>(null);
@@ -18,7 +18,8 @@ export function useLibraryRefresh(tools: LibraryTools, filter: LibraryFilter, li
 		dispatch({ type: "stale" });
 		onMoved();
 	}, [dispatch, onMoved]);
-	useChangePoll(tools.revision, REVISION_POLL_MS, moved);
+	const adopt = useChangePoll(tools.revision, REVISION_POLL_MS, moved, active);
+	useEffect(() => tools.onWrite(adopt), [tools, adopt]);
 
 	useEffect(
 		() => () => {
@@ -29,7 +30,7 @@ export function useLibraryRefresh(tools: LibraryTools, filter: LibraryFilter, li
 	);
 
 	useEffect(() => {
-		if (!stale || !idle || key === null) return;
+		if (!stale || !idle || !active || key === null) return;
 		const controller = new AbortController();
 		running.current = controller;
 		dispatch({ type: "refresh", key });
@@ -40,5 +41,5 @@ export function useLibraryRefresh(tools: LibraryTools, filter: LibraryFilter, li
 				if (!controller.signal.aborted) retry.current = window.setTimeout(() => dispatch({ type: "stale" }), REVISION_POLL_MS);
 			},
 		);
-	}, [tools, dispatch, stale, idle, key, loaded]);
+	}, [tools, dispatch, stale, idle, active, key, loaded]);
 }
