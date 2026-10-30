@@ -76,6 +76,7 @@ describe("the tools the host and the View see", () => {
 			"library_discard",
 			"library_discard_default",
 			"library_facets",
+			"library_item_at",
 			"library_open",
 			"library_query",
 			"library_restore",

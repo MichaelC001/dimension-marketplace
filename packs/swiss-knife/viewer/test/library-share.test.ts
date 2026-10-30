@@ -9,7 +9,6 @@ import {
 	defaultExpiry,
 	defaultHost,
 	expiryChoices,
-	fileChanged,
 	hostChoices,
 	hostName,
 	linkChoice,
@@ -23,6 +22,7 @@ import {
 	shareStatus,
 	signinChoice,
 } from "../app/view/library/share-options";
+import { fileChanged } from "../../src/library/versions";
 
 const open: SharePolicy = { publicLinks: true, signinRequired: false, maxBytes: 0, maxDays: 0 };
 const host = (id: string, extra: Partial<ShareHost> = {}): ShareHost => ({ id, kind: "self", name: id, baseUrl: `https://${id}.example`, status: "ok", oidc: false, managed: false, policy: open, ...extra });

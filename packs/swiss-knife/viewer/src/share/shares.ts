@@ -24,6 +24,7 @@ import { deleteRemoteShare, revokeRemote } from "../../../src/library/remote";
 import type { RevisionSpan } from "../../../src/library/revision";
 import { shareUrl } from "../../../src/library/rows";
 import type { CommentRow, Library, LibraryItem, ShareRow, ShareSummary } from "../../../src/library/types";
+import { fileChanged } from "../../../src/library/versions";
 import type { Fence } from "../fence";
 import { type ChunkSource, FileChangedError, openChunkSource } from "./chunk-source";
 import type { CommentSync } from "./comments";
@@ -43,6 +44,20 @@ const MAX_AUTHOR_CHARS = 80;
 const OPEN_LINK_ONLY = "a link from this computer is open to anyone who has it; signing in needs your own server";
 const BUSY = "that file is already being shared; wait for it to finish";
 
+function audienceKey(audience: Audience): string {
+	if (audience.kind === "link") return "link";
+	const sorted = (values: readonly string[] | undefined) => [...(values ?? [])].map(value => value.toLowerCase()).sort();
+	return JSON.stringify(["signin", sorted(audience.emails), sorted(audience.domains)]);
+}
+
+/** The link a new share of this file would duplicate: open, on the same server, for the same people. */
+function sameLink(shares: readonly ShareSummary[], host: string, audience: Audience, now: number): ShareSummary | undefined {
+	const wanted = audienceKey(audience);
+	return shares.find(
+		share => share.host === host && share.revokedAt === undefined && (share.expiresAt === undefined || share.expiresAt > now) && audienceKey(share.audience) === wanted,
+	);
+}
+
 export class ShareError extends Error {
 	override readonly name = "ShareError";
 }
@@ -54,6 +69,9 @@ export interface ShareProgress {
 	readonly sent: number;
 	readonly total: number;
 	readonly error?: string;
+	/** On `done`: the link as it now stands and what the share did to it, so a View that lost the call's answer reads the truth. */
+	readonly share?: ShareSummary;
+	readonly outcome?: ShareOutcome;
 	readonly shareId?: string;
 }
 
@@ -72,7 +90,8 @@ export interface ShareUpdateInput {
 	readonly allowComments?: boolean;
 }
 
-export type CreatedShare = ShareSummary & { readonly link: string };
+export type ShareOutcome = "created" | "updated" | "unchanged";
+export type CreatedShare = ShareSummary & { readonly link: string; readonly outcome: ShareOutcome };
 export type CommentWithUrl = CommentRow & { readonly shareUrl: string };
 
 export interface RevokeOutcome {
@@ -196,19 +215,38 @@ export class ShareService {
 		}
 	}
 
-	#finish(artifactId: string, shareId: string): void {
+	#finish(artifactId: string, shareId: string, outcome: ShareOutcome): void {
 		const { total } = this.progress(artifactId);
-		this.#report(artifactId, { phase: "done", sent: total, total, shareId });
+		this.#report(artifactId, { phase: "done", sent: total, total, shareId, share: this.summarize(shareId), outcome });
 	}
 
+	/**
+	 * One file, one link per server and audience: sharing a file that already has that link publishes the current file
+	 * to it as a new version when the file changed since, so the people who have it and their comments carry over.
+	 */
 	async create(input: CreateShareInput): Promise<CreatedShare> {
 		const item = this.#liveItem(input.artifactId);
+		const existing = sameLink(item.shares, input.host, input.audience, this.#now());
 		return this.#track(item.id, async () => {
-			const row = input.host === P2P_HOST_ID ? await this.#createP2p(input, item) : await this.#createHosted(input, item);
-			this.#finish(item.id, row.id);
+			const { id, outcome } =
+				existing !== undefined
+					? { id: existing.id, outcome: await this.#reuse(item, existing.id, input) }
+					: { id: (input.host === P2P_HOST_ID ? await this.#createP2p(input, item) : await this.#createHosted(input, item)).id, outcome: "created" as const };
+			this.#finish(item.id, id, outcome);
 			this.#options.onSharesChanged();
-			return { ...this.summarize(row.id), link: this.linkOf(row.id) };
+			return { ...this.summarize(id), link: this.linkOf(id), outcome };
 		});
+	}
+
+	async #reuse(item: LibraryItem, shareId: string, input: CreateShareInput): Promise<ShareOutcome> {
+		const before = this.#liveRow(shareId);
+		if (before.allowComments !== input.allowComments || input.expiresInDays !== undefined) {
+			await this.update({ shareId, allowComments: input.allowComments, ...(input.expiresInDays === undefined ? {} : { expiresInDays: input.expiresInDays }) });
+		}
+		const row = this.#liveRow(shareId);
+		if (!fileChanged(row, (await stat(await this.#realPath(item))).mtimeMs)) return "unchanged";
+		await this.#publishVersion(row);
+		return "updated";
 	}
 
 	#checkPolicy(audience: Audience, expiresInDays: number | undefined, policy: SharePolicy, oidc: boolean, size: number | undefined): void {
@@ -377,12 +415,16 @@ export class ShareService {
 	async newVersion(shareId: string): Promise<ShareSummary> {
 		const row = this.#liveRow(shareId);
 		return this.#track(row.artifactId, async () => {
-			if (row.host === P2P_HOST_ID) await this.#options.p2p.server.newVersion(row);
-			else await this.#newHostedVersion(row);
-			this.#options.p2p.announce();
-			this.#finish(row.artifactId, row.id);
+			await this.#publishVersion(row);
+			this.#finish(row.artifactId, row.id, "updated");
 			return this.summarize(row.id);
 		});
+	}
+
+	async #publishVersion(row: ShareRow): Promise<void> {
+		if (row.host === P2P_HOST_ID) await this.#options.p2p.server.newVersion(row);
+		else await this.#newHostedVersion(row);
+		this.#options.p2p.announce();
 	}
 
 	async #newHostedVersion(row: ShareRow): Promise<void> {

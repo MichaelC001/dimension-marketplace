@@ -38,7 +38,13 @@ export interface ArtifactPageProps {
 	readonly active: boolean;
 	readonly now: number;
 	readonly theme: Theme;
-	readonly onBack: () => void;
+	/**
+	 * Bar only: the host draws the document itself (a document tab the Viewer already has open) and is handed the
+	 * comment layer to put on it, so the document never waits for the library and is never opened twice.
+	 */
+	readonly onLayer?: (shared: SharedLayer) => void;
+	/** Back to the library grid; a document tab has no grid to go back to. */
+	readonly onBack?: () => void;
 	readonly onPatch: (patch: ArtifactPatchInput) => void;
 	readonly onShare: () => void;
 	readonly onManage: (shareId: string) => void;
@@ -50,13 +56,13 @@ export interface ArtifactPageProps {
 
 type Doc = { readonly phase: "opening" } | { readonly phase: "open"; readonly tab: DocTab } | { readonly phase: "failed"; readonly failure: OpenFailureText };
 
-function useArtifactDoc(tools: LibraryTools, item: LibraryItem): { readonly doc: Doc; readonly retry: () => void } {
+function useArtifactDoc(tools: LibraryTools, item: LibraryItem, barOnly: boolean): { readonly doc: Doc; readonly retry: () => void } {
 	const [doc, setDoc] = useState<Doc>({ phase: "opening" });
 	const [attempt, setAttempt] = useState(0);
-	const discarded = item.state === "discarded";
+	const skip = item.state === "discarded" || barOnly;
 	// biome-ignore lint/correctness/useExhaustiveDependencies: `attempt` is a retrigger token; a changed file reopens through `presentedAt`.
 	useEffect(() => {
-		if (discarded) return;
+		if (skip) return;
 		let live = true;
 		setDoc(current => (current.phase === "open" ? current : { phase: "opening" }));
 		tools.open(item.id).then(
@@ -81,7 +87,7 @@ function useArtifactDoc(tools: LibraryTools, item: LibraryItem): { readonly doc:
 		return () => {
 			live = false;
 		};
-	}, [tools, item.id, item.presentedAt, discarded, attempt]);
+	}, [tools, item.id, item.presentedAt, skip, attempt]);
 	return { doc, retry: useCallback(() => setAttempt(count => count + 1), []) };
 }
 
@@ -304,7 +310,8 @@ export function ArtifactPage(props: ArtifactPageProps) {
 	const [renaming, setRenaming] = useState(false);
 	const [openId, setOpenId] = useState<string | null>(null);
 	const { copied, copy } = useCopied(item.path);
-	const { doc, retry } = useArtifactDoc(tools, item);
+	const barOnly = props.onLayer !== undefined;
+	const { doc, retry } = useArtifactDoc(tools, item, barOnly);
 	const sheetId = useId();
 	const sheet = useRef<HTMLDivElement>(null);
 	const bar = useRef<HTMLElement>(null);
@@ -357,12 +364,22 @@ export function ArtifactPage(props: ArtifactPageProps) {
 		setView("view");
 	};
 
-	return (
-		<div data-slot="artifact-page" className="absolute inset-0 z-30 flex min-h-0 flex-col bg-fr-bg text-fr-text" onKeyDown={onKeyDown}>
-			<header ref={bar} data-slot="artifact-bar" className="relative z-20 flex h-11 shrink-0 items-center gap-1.5 pl-1.5 pr-2 shadow-[inset_0_-1px_0_var(--fr-border-soft)]">
-				<IconButton className={cn("size-7", FOCUS)} aria-label="Back to the library" title="Back to the library" onClick={onBack}>
-					<Icon name="back" size={15} />
-				</IconButton>
+	const reportLayer = useRef(props.onLayer);
+	reportLayer.current = props.onLayer;
+	useEffect(() => reportLayer.current?.(shared), [shared]);
+
+	const chrome = (
+		<>
+			<header
+				ref={bar}
+				data-slot="artifact-bar"
+				className={cn("relative z-20 flex h-11 shrink-0 items-center gap-1.5 pr-2 shadow-[inset_0_-1px_0_var(--fr-border-soft)]", onBack === undefined ? "pl-3" : "pl-1.5")}
+			>
+				{onBack === undefined ? null : (
+					<IconButton className={cn("size-7", FOCUS)} aria-label="Back to the library" title="Back to the library" onClick={onBack}>
+						<Icon name="back" size={15} />
+					</IconButton>
+				)}
 				<Icon name={look.icon} size={15} className="shrink-0 text-fr-text-3" />
 				{renaming ? (
 					<RenameField value={item.title ?? ""} placeholder={item.name} onCommit={title => onPatch({ title: title === "" ? null : title })} onDone={() => setRenaming(false)} />
@@ -456,6 +473,20 @@ export function ArtifactPage(props: ArtifactPageProps) {
 					This file is no longer where it was; it may have been moved, renamed or deleted.
 				</p>
 			) : null}
+		</>
+	);
+
+	if (barOnly) {
+		return (
+			<div data-slot="artifact-page" data-bar-only="" className="relative z-30 flex shrink-0 flex-col bg-fr-bg text-fr-text" onKeyDown={onKeyDown}>
+				{chrome}
+			</div>
+		);
+	}
+
+	return (
+		<div data-slot="artifact-page" className="absolute inset-0 z-30 flex min-h-0 flex-col bg-fr-bg text-fr-text" onKeyDown={onKeyDown}>
+			{chrome}
 			<div data-slot="artifact-body" className="relative min-h-0 flex-1">
 				{discarded ? (
 					<div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center">

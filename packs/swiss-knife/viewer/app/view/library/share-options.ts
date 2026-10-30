@@ -196,10 +196,6 @@ export function placeOf(share: Pick<ShareSummary, "host" | "url">): string {
 	return `On ${hostName(share.url)}`;
 }
 
-export function fileChanged(share: Pick<ShareSummary, "host" | "versionAt">, mtimeMs: number): boolean {
-	return share.host !== "p2p" && mtimeMs > share.versionAt;
-}
-
 export function hostName(url: string): string {
 	try {
 		return new URL(url).host;

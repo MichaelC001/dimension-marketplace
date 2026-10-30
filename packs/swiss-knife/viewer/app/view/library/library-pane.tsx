@@ -12,12 +12,13 @@ import { FOCUS } from "../focus-ring";
 import type { Theme } from "../renderers/types";
 import type { LibraryTab } from "../tabs";
 import { AddFileDialog } from "./add-file-dialog";
-import { ArtifactPage } from "./artifact-page";
+import { ArtifactSurface, useMinuteClock } from "./artifact-surface";
 import { DiscardDialog, TRASH_NAME } from "./discard-dialog";
 import { FilterRail } from "./filter-rail";
 import { LibraryGrid, type LibraryLayout } from "./library-grid";
 import { GridCell, ListRow } from "./library-item";
-import { type ArtifactPatchInput, createLibraryTools, errorText, type LinkedShare, thumbUrl } from "./library-tools";
+import { LibraryToast } from "./library-toast";
+import { type ArtifactPatchInput, createLibraryTools, errorText, thumbUrl } from "./library-tools";
 import { drawPoster, posterCandidate } from "./poster-draw";
 import { PosterQueue } from "./poster-queue";
 import {
@@ -34,7 +35,6 @@ import {
 	toggleKind,
 	toggleTag,
 } from "./query";
-import { ShareDialog } from "./share-dialog";
 import { useLibraryRefresh } from "./use-library-refresh";
 import { type RowRange, wantsNextPage } from "./window";
 
@@ -45,7 +45,7 @@ export interface LibraryPaneProps {
 	readonly theme: Theme;
 }
 
-type Dialog = { readonly kind: "discard"; readonly item: LibraryItem } | { readonly kind: "share"; readonly item: LibraryItem; readonly shareId: string | null } | { readonly kind: "add" } | null;
+type Dialog = { readonly kind: "discard"; readonly item: LibraryItem } | { readonly kind: "add" } | null;
 
 const SORT_LABEL: Record<LibrarySort, string> = {
 	relevance: "Best match",
@@ -66,35 +66,10 @@ const COMPACT_WIDTH = 760;
 const CHECK_FRESH_MS = 60_000;
 const CHECK_BATCH = 200;
 const CHECK_THROTTLE_MS = 300;
-const TOAST_MS = 5000;
 const PAGE_LOOKAHEAD_ROWS = 12;
 
 function filterFrom(request: LibraryTab): LibraryFilter {
 	return { ...DEFAULT_FILTER, q: request.query ?? "", workspace: request.workspace };
-}
-
-function useMinuteClock(): number {
-	const [now, setNow] = useState(() => Date.now());
-	useEffect(() => {
-		const timer = window.setInterval(() => setNow(Date.now()), 60_000);
-		return () => window.clearInterval(timer);
-	}, []);
-	return now;
-}
-
-function summaryOf(share: LinkedShare): ShareSummary {
-	return {
-		id: share.id,
-		host: share.host,
-		url: share.url,
-		audience: share.audience,
-		version: share.version,
-		versionAt: share.versionAt,
-		allowComments: share.allowComments,
-		comments: share.comments,
-		unread: share.unread,
-		...(share.expiresAt === undefined ? {} : { expiresAt: share.expiresAt }),
-	};
 }
 
 function discardedSentence(result: DiscardOutcome): string {
@@ -213,12 +188,6 @@ export function LibraryPane({ app, request, active, theme }: LibraryPaneProps) {
 		};
 	}, [tools]);
 
-	useEffect(() => {
-		if (toast === null) return;
-		const timer = window.setTimeout(() => setToast(null), TOAST_MS);
-		return () => window.clearTimeout(timer);
-	}, [toast]);
-
 	const posters = useMemo(
 		() =>
 			new PosterQueue<LibraryItem>(async (item, signal) => {
@@ -308,48 +277,43 @@ export function LibraryPane({ app, request, active, theme }: LibraryPaneProps) {
 		setPage(item);
 	}, []);
 
+	const patched = useCallback((updated: LibraryItem, change: ArtifactPatchInput): void => {
+		dispatch({ type: "item", item: updated });
+		setPage(current => (current?.id === updated.id ? updated : current));
+		if (change.starred !== undefined || change.tags !== undefined) setFacetsGeneration(count => count + 1);
+	}, []);
+
 	const patch = useCallback(
 		(item: LibraryItem, change: ArtifactPatchInput): void => {
 			tools.update(item.id, change).then(
-				updated => {
-					dispatch({ type: "item", item: updated });
-					setPage(current => (current?.id === updated.id ? updated : current));
-					if (change.starred !== undefined || change.tags !== undefined) setFacetsGeneration(count => count + 1);
-				},
+				updated => patched(updated, change),
 				cause => setToast(errorText(cause)),
 			);
 		},
-		[tools],
+		[tools, patched],
 	);
 
-	const restore = useCallback(
-		(item: LibraryItem): void => {
-			tools.restore(item.id).then(
-				restored => {
-					dispatch({ type: "remove", id: item.id });
-					setPage(current => (current?.id === restored.id ? restored : current));
-					setFacetsGeneration(count => count + 1);
-					setToast("Restored to the library.");
-				},
-				cause => setToast(errorText(cause)),
-			);
-		},
-		[tools],
-	);
+	const restored = useCallback((item: LibraryItem): void => {
+		dispatch({ type: "remove", id: item.id });
+		setPage(current => (current?.id === item.id ? item : current));
+		setFacetsGeneration(count => count + 1);
+		setToast("Restored to the library.");
+	}, []);
 
-	const pageIdRef = useRef<string | null>(null);
-	pageIdRef.current = page?.id ?? null;
+	const discarded = (item: LibraryItem, result: DiscardOutcome): void => {
+		const at = list.items.findIndex(each => each.id === item.id);
+		if (selectedId === item.id) setSelectedId(list.items[at + 1]?.id ?? list.items[at - 1]?.id ?? null);
+		if (page?.id === item.id) setPage(null);
+		dispatch({ type: "remove", id: item.id });
+		setFacetsGeneration(count => count + 1);
+		setToast(discardedSentence(result));
+	};
+
 	const patchItemShares = useCallback((id: string, change: (shares: readonly ShareSummary[]) => readonly ShareSummary[]): void => {
 		const current = listRef.current.items.find(item => item.id === id);
 		if (current !== undefined) dispatch({ type: "item", item: { ...current, shares: change(current.shares) } });
 		setPage(shown => (shown?.id === id ? { ...shown, shares: change(shown.shares) } : shown));
 	}, []);
-	const patchShares = useCallback((shares: readonly ShareSummary[]): void => {
-		if (pageIdRef.current !== null) patchItemShares(pageIdRef.current, () => shares);
-	}, [patchItemShares]);
-	const replaceShare = useCallback((id: string, share: ShareSummary): void => {
-		patchItemShares(id, shares => shares.map(each => (each.id === share.id ? share : each)));
-	}, [patchItemShares]);
 
 	const setScope = (scope: LibraryScope): void => {
 		setFilter(current => ({ ...current, scope }));
@@ -559,19 +523,12 @@ export function LibraryPane({ app, request, active, theme }: LibraryPaneProps) {
 							}
 						/>
 					)}
-					{toast === null ? null : (
-						<div role="status" className="absolute inset-x-0 bottom-3 z-20 mx-auto flex w-fit max-w-[90%] items-center gap-2 rounded-lg border border-fr-border bg-fr-surface px-3 py-2 text-fr-sm text-fr-text shadow-lg">
-							<span className="min-w-0 [overflow-wrap:anywhere]">{toast}</span>
-							<button type="button" aria-label="Dismiss" onClick={() => setToast(null)} className={cn("shrink-0 rounded-sm p-0.5 text-fr-text-3 hover:bg-fr-surface-3", FOCUS)}>
-								<Icon name="x" size={12} />
-							</button>
-						</div>
-					)}
+					{toast === null ? null : <LibraryToast text={toast} onDismiss={() => setToast(null)} />}
 				</div>
 			</div>
 			</div>
 			{pageShown === null ? null : (
-				<ArtifactPage
+				<ArtifactSurface
 					key={pageShown.id}
 					app={app}
 					tools={tools}
@@ -584,13 +541,14 @@ export function LibraryPane({ app, request, active, theme }: LibraryPaneProps) {
 						setPage(null);
 						window.requestAnimationFrame(() => root.current?.querySelector<HTMLElement>('[data-slot="library-grid"]')?.focus());
 					}}
-					onPatch={change => patch(pageShown, change)}
-					onShare={() => setDialog({ kind: "share", item: pageShown, shareId: null })}
-					onManage={shareId => setDialog({ kind: "share", item: pageShown, shareId })}
-					onDiscard={() => setDialog({ kind: "discard", item: pageShown })}
-					onRestore={() => restore(pageShown)}
-					onShares={patchShares}
-					onShareChanged={share => replaceShare(pageShown.id, share)}
+					onPatched={patched}
+					onRestored={restored}
+					onDiscarded={discarded}
+					onShares={(change, counted) => {
+						patchItemShares(pageShown.id, change);
+						if (counted) setFacetsGeneration(count => count + 1);
+					}}
+					onError={setToast}
 				/>
 			)}
 			{dialog?.kind === "discard" ? (
@@ -599,29 +557,8 @@ export function LibraryPane({ app, request, active, theme }: LibraryPaneProps) {
 					item={dialog.item}
 					onClose={() => setDialog(null)}
 					onDiscarded={result => {
-						const at = list.items.findIndex(item => item.id === dialog.item.id);
-						if (selectedId === dialog.item.id) setSelectedId(list.items[at + 1]?.id ?? list.items[at - 1]?.id ?? null);
-						if (page?.id === dialog.item.id) setPage(null);
-						dispatch({ type: "remove", id: dialog.item.id });
-						setFacetsGeneration(count => count + 1);
 						setDialog(null);
-						setToast(discardedSentence(result));
-					}}
-				/>
-			) : null}
-			{dialog?.kind === "share" ? (
-				<ShareDialog
-					tools={tools}
-					item={shownItem(list.items.find(item => item.id === dialog.item.id) ?? dialog.item, list.checked)}
-					shareId={dialog.shareId}
-					onClose={() => setDialog(null)}
-					onCreated={share => {
-						patchItemShares(dialog.item.id, shares => [summaryOf(share), ...shares]);
-						setFacetsGeneration(count => count + 1);
-					}}
-					onChanged={share => {
-						replaceShare(dialog.item.id, share);
-						if (share.revokedAt !== undefined) setFacetsGeneration(count => count + 1);
+						discarded(dialog.item, result);
 					}}
 				/>
 			) : null}

@@ -3,9 +3,10 @@ import { Icon, type IconName } from "@fraym/ui/icons";
 import { cn } from "@fraym/ui/lib/cn";
 import { useEffect, useRef, useState } from "react";
 import type { ShareSummary } from "../../../../src/library/types";
+import { fileChanged } from "../../../../src/library/versions";
 import { copyText } from "../copy";
 import { errorText, type LibraryTools } from "./library-tools";
-import { accessLabel, fileChanged, shareDetail, shareStatus, shortDate } from "./share-options";
+import { accessLabel, shareDetail, shareStatus, shortDate } from "./share-options";
 
 export interface AccessListProps {
 	readonly tools: LibraryTools;

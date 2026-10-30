@@ -23,15 +23,19 @@ export interface ShareHosts {
 	readonly cloudAllowed: boolean;
 }
 
+export type ShareOutcome = "created" | "updated" | "unchanged";
+
 export interface ShareProgress {
 	readonly phase: "sealing" | "uploading" | "done" | "failed";
 	readonly sent: number;
 	readonly total: number;
 	readonly error?: string;
 	readonly shareId?: string;
+	readonly share?: ShareSummary;
+	readonly outcome?: ShareOutcome;
 }
 
-export type LinkedShare = ShareSummary & { readonly link: string };
+export type LinkedShare = ShareSummary & { readonly link: string; readonly outcome: ShareOutcome };
 export type ShareComment = CommentRow & { readonly shareUrl: string };
 
 export interface ShareRequest {
@@ -76,6 +80,7 @@ export interface LibraryTools {
 	readonly discard: (id: string, trash: boolean) => Promise<DiscardOutcome>;
 	readonly restore: (id: string) => Promise<LibraryItem>;
 	readonly open: (id: string) => Promise<CallToolResult>;
+	readonly itemAt: (path: string) => Promise<LibraryItem | null>;
 	readonly thumbsBase: () => Promise<string>;
 	readonly setThumb: (id: string, data: string, mime: ThumbMime) => Promise<void>;
 	readonly hosts: () => Promise<ShareHosts>;
@@ -121,6 +126,7 @@ export function createLibraryTools(app: Pick<App, "callServerTool" | "sendMessag
 			announce(result.structuredContent);
 			return result;
 		},
+		itemAt: path => tools.call<LibraryItem | null>("library_item_at", { path }, "item"),
 		thumbsBase: () => tools.call("library_thumbs", {}, "base"),
 		setThumb: async (id, data, mime) => {
 			announce(await tools.whole("library_set_thumb", { id, data, mime }));

@@ -4,11 +4,12 @@
 import type { App } from "@modelcontextprotocol/ext-apps";
 import { Icon } from "@fraym/ui/icons";
 import { useEffect, useState } from "react";
-import { DocPane, FailedPane, Message } from "./doc-pane";
+import { FailedPane, Message } from "./doc-pane";
 import { FirstWait, Opening } from "./opening";
 import type { Theme } from "./renderers/types";
 import { TabStrip } from "./tab-strip";
 import { LIBRARY_KEY, type ViewerStore, useViewerState } from "./tabs";
+import { LibraryDocTab } from "./library/library-doc-tab";
 import { LibraryPane } from "./library/library-pane";
 
 /**
@@ -52,10 +53,10 @@ export function ViewerApp({ app, store }: { readonly app: App; readonly store: V
 					)
 				) : null}
 				{state.tabs.map(tab => (
-					<div key={tab.key} className={tab.key === state.activeKey ? "absolute inset-0" : "hidden"}>
+					<div key={tab.key} className={tab.key === state.activeKey ? "absolute inset-0 flex min-h-0 flex-col" : "hidden"}>
 						{tab.failure === undefined ? (
 							<FirstWait of={first?.has(tab.key) === true}>
-								<DocPane app={app} tab={tab} active={tab.key === state.activeKey} theme={theme} />
+								<LibraryDocTab app={app} tab={tab} active={tab.key === state.activeKey} theme={theme} />
 							</FirstWait>
 						) : (
 							<FailedPane tab={tab} failure={tab.failure} active={tab.key === state.activeKey} />
