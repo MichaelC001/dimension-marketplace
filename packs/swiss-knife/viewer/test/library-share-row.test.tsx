@@ -15,7 +15,6 @@ afterAll(() => env.restore());
 
 const NOW = 10;
 const MTIME = 1_000;
-const NOTICE_TEXT = "The file changed since you shared it.";
 const ROW = '[data-slot="library-share-row"]';
 const NOTICE = '[data-slot="library-share-outdated"]';
 const ALERT = '[role="alert"]';
@@ -55,25 +54,30 @@ function last<T>(list: readonly T[]): T {
 }
 
 async function show(shares: readonly ShareSummary[], tools: LibraryTools = fakeTools(shares).tools) {
-	const recorded: (readonly ShareSummary[])[] = [];
-	const props = (current: readonly ShareSummary[]): AccessListProps => ({
+	const changed: ShareSummary[] = [];
+	let shown = shares;
+	const props = (): AccessListProps => ({
 		tools,
-		shares: current,
+		shares: shown,
 		now: NOW,
 		mtimeMs: MTIME,
 		canShare: true,
 		onShare: () => undefined,
 		onManage: () => undefined,
-		onShares: next => void recorded.push(next),
+		onChanged: next => void changed.push(next),
 	});
-	const { container, render } = await env.mount(createElement(AccessList, props(shares)));
-	return { container, recorded, parentShows: (current: readonly ShareSummary[]) => render(createElement(AccessList, props(current))) };
+	const { container, render } = await env.mount(createElement(AccessList, props()));
+	const replace = (next: ShareSummary): Promise<void> => {
+		shown = shown.map(each => (each.id === next.id ? next : each));
+		return render(createElement(AccessList, props()));
+	};
+	return { container, changed, replace };
 }
 
 const rowsOf = (container: Element): Element[] => [...container.querySelectorAll(ROW)];
-const noticeOf = (row: Element): string | undefined => row.querySelector(NOTICE)?.textContent?.trim();
+const hasNotice = (row: Element): boolean => row.querySelector(NOTICE) !== null;
 const updateOf = (row: Element): HTMLButtonElement | undefined => [...row.querySelectorAll("button")].find(button => button.textContent?.includes("Update link"));
-const noticesIn = (container: Element): (string | undefined)[] => rowsOf(container).map(noticeOf);
+const noticesIn = (container: Element): boolean[] => rowsOf(container).map(hasNotice);
 
 function press(button: HTMLButtonElement | undefined): Promise<void> {
 	if (button === undefined) throw new Error("there is no Update link to press");
@@ -97,7 +101,7 @@ describe("a link whose file changed says so on the Share tab", () => {
 	])("%s", async (_what, only, outdated) => {
 		const { container } = await show([only]);
 		const row = rowAt(container, 0);
-		expect(noticeOf(row)).toBe(outdated ? NOTICE_TEXT : undefined);
+		expect(hasNotice(row)).toBe(outdated);
 		expect(updateOf(row) !== undefined).toBe(outdated);
 	});
 
@@ -110,26 +114,27 @@ describe("a link whose file changed says so on the Share tab", () => {
 });
 
 describe("Update link", () => {
-	test("re-seals the one link asked, hands the parent the whole list with only that link replaced, and the notice is gone once the parent shows it", async () => {
+	test("re-seals the one link asked, hands the parent exactly the summary the host returned, and the notice is gone once the parent shows it", async () => {
 		const mine = share("mine", "p2p", 0);
 		const stale = share("stale", "cloud", MTIME - 1);
 		const gone = share("gone", "cloud", 0, { revokedAt: NOW - 5 });
 		const fresh = share("fresh", "files", MTIME + 5);
 		const list = [mine, stale, gone, fresh];
 		const { tools, asked } = fakeTools(list);
-		const { container, recorded, parentShows } = await show(list, tools);
+		const { container, changed, replace } = await show(list, tools);
 
 		await press(updateOf(rowAt(container, 1)));
 
 		expect(asked).toEqual(["stale"]);
-		expect(recorded).toHaveLength(1);
-		expect(last(recorded)).toEqual([mine, reissued(stale), gone, fresh]);
+		expect(changed).toEqual([reissued(stale)]);
+		expect(hasNotice(rowAt(container, 1))).toBe(true);
 
-		await parentShows(last(recorded));
+		await replace(last(changed));
 		expect(rowsOf(container)).toHaveLength(3);
-		expect(noticesIn(container)).toEqual([undefined, undefined, undefined]);
+		expect(noticesIn(container)).toEqual([false, false, false]);
 		expect([...container.querySelectorAll("button")].some(button => button.textContent?.includes("Update link"))).toBe(false);
 		expect(asked).toEqual(["stale"]);
+		expect(changed).toEqual([reissued(stale)]);
 	});
 
 	test("while the host is re-sealing, the button is busy and a second press starts nothing; it is free again afterwards", async () => {
@@ -139,29 +144,30 @@ describe("Update link", () => {
 			settle = resolve;
 		});
 		const { tools, asked } = fakeTools([stale], () => pending);
-		const { container, recorded } = await show([stale], tools);
+		const { container, changed } = await show([stale], tools);
 
 		await press(updateOf(rowAt(container, 0)));
 		expect(updateOf(rowAt(container, 0))?.getAttribute("aria-busy")).toBe("true");
+		expect(changed).toHaveLength(0);
 		await press(updateOf(rowAt(container, 0)));
 		expect(asked).toEqual(["stale"]);
 
 		await env.act(async () => settle(reissued(stale)));
-		expect(recorded).toHaveLength(1);
+		expect(changed).toEqual([reissued(stale)]);
 		expect(updateOf(rowAt(container, 0))?.getAttribute("aria-busy")).toBeNull();
 	});
 
 	test("a refusal from the host shows in the alert, tells the parent nothing, and leaves the link ready to be updated again", async () => {
 		const stale = share("stale", "cloud", MTIME - 1);
 		const { tools, asked } = fakeTools([stale], () => Promise.reject(new Error("The share server is unreachable")));
-		const { container, recorded } = await show([stale], tools);
+		const { container, changed } = await show([stale], tools);
 		expect(container.querySelector(ALERT)).toBeNull();
 
 		await press(updateOf(rowAt(container, 0)));
 
 		expect(container.querySelector(ALERT)?.textContent).toBe("The share server is unreachable");
-		expect(recorded).toHaveLength(0);
-		expect(noticeOf(rowAt(container, 0))).toBe(NOTICE_TEXT);
+		expect(changed).toHaveLength(0);
+		expect(hasNotice(rowAt(container, 0))).toBe(true);
 		const again = updateOf(rowAt(container, 0));
 		expect(again?.getAttribute("aria-busy")).toBeNull();
 		expect(again?.hasAttribute("disabled")).toBe(false);
@@ -171,34 +177,35 @@ describe("Update link", () => {
 	test("a retry that works clears the earlier refusal", async () => {
 		const stale = share("stale", "cloud", MTIME - 1);
 		const { tools, asked } = fakeTools([stale], (found, attempt) => (attempt === 1 ? Promise.reject(new Error("The share server is unreachable")) : Promise.resolve(reissued(found))));
-		const { container, recorded } = await show([stale], tools);
+		const { container, changed } = await show([stale], tools);
 
 		await press(updateOf(rowAt(container, 0)));
 		expect(container.querySelector(ALERT)).not.toBeNull();
+		expect(changed).toHaveLength(0);
 		await press(updateOf(rowAt(container, 0)));
 
 		expect(container.querySelector(ALERT)).toBeNull();
 		expect(asked).toEqual(["stale", "stale"]);
-		expect(last(recorded)).toEqual([reissued(stale)]);
+		expect(changed).toEqual([reissued(stale)]);
 	});
 
 	test("with two outdated links, updating one leaves the other's notice in place until it is updated too", async () => {
 		const first = share("first", "cloud", MTIME - 1);
 		const second = share("second", "files", MTIME - 2, { audience: { kind: "signin", emails: ["pat@example.com"] } });
 		const { tools, asked } = fakeTools([first, second]);
-		const { container, recorded, parentShows } = await show([first, second], tools);
-		expect(noticesIn(container)).toEqual([NOTICE_TEXT, NOTICE_TEXT]);
+		const { container, changed, replace } = await show([first, second], tools);
+		expect(noticesIn(container)).toEqual([true, true]);
 
 		await press(updateOf(rowAt(container, 1)));
 		expect(asked).toEqual(["second"]);
-		expect(last(recorded)).toEqual([first, reissued(second)]);
-		await parentShows(last(recorded));
-		expect(noticesIn(container)).toEqual([NOTICE_TEXT, undefined]);
+		expect(changed).toEqual([reissued(second)]);
+		await replace(last(changed));
+		expect(noticesIn(container)).toEqual([true, false]);
 
 		await press(updateOf(rowAt(container, 0)));
 		expect(asked).toEqual(["second", "first"]);
-		expect(last(recorded)).toEqual([reissued(first), reissued(second)]);
-		await parentShows(last(recorded));
-		expect(noticesIn(container)).toEqual([undefined, undefined]);
+		expect(changed).toEqual([reissued(second), reissued(first)]);
+		await replace(last(changed));
+		expect(noticesIn(container)).toEqual([false, false]);
 	});
 });

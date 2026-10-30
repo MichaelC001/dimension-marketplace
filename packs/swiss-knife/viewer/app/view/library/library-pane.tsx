@@ -347,6 +347,9 @@ export function LibraryPane({ app, request, active, theme }: LibraryPaneProps) {
 	const patchShares = useCallback((shares: readonly ShareSummary[]): void => {
 		if (pageIdRef.current !== null) patchItemShares(pageIdRef.current, () => shares);
 	}, [patchItemShares]);
+	const replaceShare = useCallback((id: string, share: ShareSummary): void => {
+		patchItemShares(id, shares => shares.map(each => (each.id === share.id ? share : each)));
+	}, [patchItemShares]);
 
 	const setScope = (scope: LibraryScope): void => {
 		setFilter(current => ({ ...current, scope }));
@@ -587,6 +590,7 @@ export function LibraryPane({ app, request, active, theme }: LibraryPaneProps) {
 					onDiscard={() => setDialog({ kind: "discard", item: pageShown })}
 					onRestore={() => restore(pageShown)}
 					onShares={patchShares}
+					onShareChanged={share => replaceShare(pageShown.id, share)}
 				/>
 			)}
 			{dialog?.kind === "discard" ? (
@@ -616,7 +620,7 @@ export function LibraryPane({ app, request, active, theme }: LibraryPaneProps) {
 						setFacetsGeneration(count => count + 1);
 					}}
 					onChanged={share => {
-						patchItemShares(dialog.item.id, shares => shares.map(each => (each.id === share.id ? share : each)));
+						replaceShare(dialog.item.id, share);
 						if (share.revokedAt !== undefined) setFacetsGeneration(count => count + 1);
 					}}
 				/>

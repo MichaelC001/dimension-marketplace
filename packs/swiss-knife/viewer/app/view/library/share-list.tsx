@@ -15,7 +15,7 @@ export interface AccessListProps {
 	readonly canShare: boolean;
 	readonly onShare: () => void;
 	readonly onManage: (shareId: string) => void;
-	readonly onShares: (shares: readonly ShareSummary[]) => void;
+	readonly onChanged: (share: ShareSummary) => void;
 }
 
 function Badge({ icon, muted }: { readonly icon: IconName; readonly muted?: boolean }) {
@@ -26,7 +26,7 @@ function Badge({ icon, muted }: { readonly icon: IconName; readonly muted?: bool
 	);
 }
 
-export function AccessList({ tools, shares, now, mtimeMs, canShare, onShare, onManage, onShares }: AccessListProps) {
+export function AccessList({ tools, shares, now, mtimeMs, canShare, onShare, onManage, onChanged }: AccessListProps) {
 	const links = useRef(new Map<string, string>());
 	const [copied, setCopied] = useState<string | null>(null);
 	const [busy, setBusy] = useState<string | null>(null);
@@ -66,8 +66,7 @@ export function AccessList({ tools, shares, now, mtimeMs, canShare, onShare, onM
 		setError(null);
 		setUpdating(shareId);
 		try {
-			const next = await tools.newVersion(shareId);
-			onShares(shares.map(each => (each.id === next.id ? next : each)));
+			onChanged(await tools.newVersion(shareId));
 		} catch (cause) {
 			setError(errorText(cause));
 		} finally {
